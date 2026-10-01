@@ -2394,8 +2394,7 @@ function conyard(k: Kit) {
     k.pipe(P.rust, [[hx0 + 0.05, Y0 + 0.07, hz1 + 0.03], [hx1 - 0.35, Y0 + 0.07, hz1 + 0.03], [hx1 - 0.35, Y0 + 0.07, hz1 + 0.25], [hx1 - 0.35, Y0 + 0.2, hz1 + 0.25]], 0.014, 8);
     k.pipe(P.galv, [[hx0 + 0.05, Y0 + 0.11, hz1 + 0.03], [hx1 - 0.36, Y0 + 0.11, hz1 + 0.03]], 0.008, 6);
   } else if (R === 'asia') {
-    const top = block(k, { x0: hx0, x1: hx1, z0: hz0, z1: hz1, h: 0.48, door: -0.75, roof: 'asian', rise: 0.3 });
-    void top;
+    block(k, { x0: hx0, x1: hx1, z0: hz0, z1: hz1, h: 0.48, door: -0.75, roof: 'asian', rise: 0.3 });
     // red/green columned portico with its own small roof
     for (let i = 0; i < 4; i++) k.cyl(P.accent, 0.018, 0.24, -0.95 + i * 0.13, Y0, hz1 + 0.14, 10);
     k.box(P.white, 0.48, 0.02, 0.17, -0.755, Y0, hz1 + 0.085);
@@ -2768,7 +2767,6 @@ function power(k: Kit) {
     ladder(k, 'x', 1, tz, Y0 + 0.05, Y0 + 1.25, tx + 0.09);
     k.blinkLight(tx, Y0 + 1.75, tz, 0.016, 1.5, 0);
     const mirror = P.mats.col(0xbcd6ee, 0.3, 0.3);
-    let n = 0;
     for (let i = 0; i < 5; i++)
       for (let j = 0; j < 4; j++) {
         const hx = -0.82 + i * 0.4 + (j % 2) * 0.08;
@@ -2780,13 +2778,10 @@ function power(k: Kit) {
           k.box(P.dark, 0.2, 0.01, 0.14, 0, -0.008, 0);
           k.box(mirror, 0.195, 0.004, 0.135, 0, 0.002, 0);
         }, 0.55);
-        n++;
       }
-    for (let j = 0; j < 2; j++)
-      for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 2; i++) {
         const hx = 0.2 + i * 0.25;
-        const hz = -0.25 + j * 0.0;
-        if (j > 0) continue;
+        const hz = -0.25;
         const ry = Math.atan2(tx - hx, tz - hz);
         k.cyl(P.galv, 0.008, 0.09, hx, Y0, hz, 6);
         k.at(hx, Y0 + 0.1, hz, ry, () => {
@@ -2794,14 +2789,12 @@ function power(k: Kit) {
           k.box(mirror, 0.155, 0.004, 0.105, 0, 0.002, 0);
         }, 0.55);
       }
-    void n;
     // power block
     const top = block(k, { x0: 0.1, x1: 0.95, z0: -0.95, z1: -0.45, h: 0.34, floors: 1, equip: 1 });
     k.cyl(P.wall2, 0.04, 0.45, 0.82, top - 0.03, -0.82, 10);
     k.emit(0.82, top + 0.47, -0.82, 'steam');
     transformer(k, -0.15, Y0, -0.62, Math.PI / 2, 1.1);
     planter(k, -0.85, -0.1, 0.12, 0.12, 'palm', Y0);
-    for (let i = 0; i < 3; i++) k.cyl(P.wood, 0.007, 0.5, -0.92 + i * 0.0, Y0, 0.0 - i * 0.0, 5);
     k.height = 1.4;
   }
 }
@@ -2978,8 +2971,7 @@ function refinery(k: Kit) {
   const oz1 = 1.2;
   if (R === 'asia') block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1, h: 0.36, floors: 2, roof: 'asian', rise: 0.18, door: -1.07 });
   else if (R === 'mideast') {
-    const top = block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1 - 0.1, h: 0.34, floors: 2, equip: 1 });
-    void top;
+    block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1 - 0.1, h: 0.34, floors: 2, equip: 1 });
     arcade(k, P.wall2, ox0, ox1, Y0, 0.2, oz1 - 0.02, 0.03, 4, 0.11, 0.08);
     k.box(P.wall2, ox1 - ox0, 0.02, 0.12, (ox0 + ox1) / 2, Y0 + 0.2, oz1 - 0.06);
     k.box(P.tile, ox1 - ox0 - 0.02, 0.025, 0.004, (ox0 + ox1) / 2, Y0 + 0.16, oz1 - 0.003);
@@ -3368,8 +3360,7 @@ function radar(k: Kit) {
     for (let i = 0; i < 4; i++) k.box(P.concrete, 0.2, 0.14, 0.02, 0.1 + i * 0.22, Y0, 0.95, 6);
     k.height = 1.15;
   } else if (R === 'asia') {
-    const top = block(k, { x0: -0.95, x1: 0.1, z0: 0.0, z1: 0.95, h: 0.36, floors: 1, door: -0.4, equip: 1 });
-    void top;
+    block(k, { x0: -0.95, x1: 0.1, z0: 0.0, z1: 0.95, h: 0.36, floors: 1, door: -0.4, equip: 1 });
     // square white tower with rotating AESA panel
     const tx = 0.45;
     const tz = -0.45;
