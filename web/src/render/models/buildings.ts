@@ -1337,6 +1337,25 @@ function flatRoof(k: Kit, x0: number, x1: number, z0: number, z1: number, y: num
     k.box(ct, t + 0.016, ch, D - 2 * t, x0 + t / 2, y + ph, cz);
     k.box(P.pier, W + 0.018, 0.006, t + 0.018, cx, y + ph - 0.006, z1 - t / 2);
     k.box(P.pier, t + 0.018, 0.006, D + 0.018, x1 - t / 2, y + ph - 0.006, cz);
+    if (W * D > 0.3) {
+      // safety rail along the back and left edges (roof access side)
+      const yr = y + ph + ch;
+      const pts: P2[] = [
+        [x0 + 0.012, z1 - 0.06],
+        [x0 + 0.012, z0 + 0.012],
+        [x1 - 0.06, z0 + 0.012],
+      ];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [ax, az] = pts[i];
+        const [bx, bz] = pts[i + 1];
+        const n = Math.max(1, Math.round(Math.hypot(bx - ax, bz - az) / 0.16));
+        for (let j = 0; j <= n; j++) {
+          if (j === 0 && i > 0) continue;
+          k.box(P.yellow, 0.005, 0.045, 0.005, ax + ((bx - ax) * j) / n, yr, az + ((bz - az) * j) / n);
+        }
+        k.bar(P.yellow, [ax, yr + 0.045, az], [bx, yr + 0.045, bz], 0.006);
+      }
+    }
   }
 }
 
