@@ -106,7 +106,7 @@ export class MainMenu {
     const cards = FACTIONS.map(
       (f) => `
       <button class="fcard${f.id === st.faction ? ' sel' : ''}" data-f="${f.id}">
-        <div class="fc-head">${flagHtml(f.flag)}<b>${f.name}</b></div>
+        <div class="fc-head">${flagHtml(f.id)}<b>${f.name}</b></div>
         <div class="fc-doc">${f.doctrine}</div>
         <ul>${f.bonuses.map((b) => `<li>${b}</li>`).join('')}</ul>
         <div class="fc-sig">${f.signature.map((id) => `<span>${DEFS[id]?.name ?? id}</span>`).join('')}</div>

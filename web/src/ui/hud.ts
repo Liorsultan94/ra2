@@ -3,6 +3,7 @@ import { TPS, type Category, type Def, type Entity } from '../sim/types';
 import type { World } from '../sim/world';
 import type { CameoFactory } from '../render/cameo';
 import { styleFor, type GameRenderer } from '../render/renderer';
+import { flagDataUrl } from '../render/flags';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -88,7 +89,7 @@ export class Hud {
     this.shownCredits = world.players[player].credits;
     const f = FACTION_INFO[world.players[player].faction];
     this.root.style.setProperty('--faction', '#' + f.accent.toString(16).padStart(6, '0'));
-    (this.sidebar.querySelector('.sb-faction') as HTMLElement).innerHTML = `${flagHtml(f.flag)}<span>${f.name}</span>`;
+    (this.sidebar.querySelector('.sb-faction') as HTMLElement).innerHTML = `${flagHtml(f.id)}<span>${f.name}</span>`;
     this.buildCameos();
     this.setTab('building');
   }
@@ -517,8 +518,8 @@ export function hpColor(k: number) {
   return k > 0.5 ? '#3ee05a' : k > 0.25 ? '#f2d02e' : '#f0452e';
 }
 
-export function flagHtml(colors: number[]) {
-  return `<i class="flag">${colors.map((c) => `<b style="background:#${c.toString(16).padStart(6, '0')}"></b>`).join('')}</i>`;
+export function flagHtml(faction: string) {
+  return `<img class="flag" src="${flagDataUrl(faction)}" alt="">`;
 }
 
 function roleName(r: string) {
