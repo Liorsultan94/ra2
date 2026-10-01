@@ -22,16 +22,45 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'cannon', damage: 62, range: 5.5, rof: 42, warhead: 'cannon', projectile: 'shell', speed: 0.9, air: 'no' , flight: 'shell', munition: 'tankShell' },
   { id: 'cannonHeavy', damage: 76, range: 6, rof: 44, warhead: 'cannon', projectile: 'shell', speed: 0.95, air: 'no' , flight: 'shell', munition: 'tankShell' },
   { id: 'flak', damage: 20, range: 7, rof: 6, warhead: 'flak', projectile: 'instant', air: 'only' },
-  { id: 'sam', damage: 80, range: 9, rof: 45, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only' , flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo'], pk: 0.8, pkHypersonic: 0.3 } },
-  { id: 'ironDome', damage: 80, range: 10, rof: 30, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'interceptor', munition: 'interceptor', intercept: { kinds: ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic'], pk: 0.9, pkHypersonic: 0.35 } },
+  { id: 'sam', damage: 80, range: 9, rof: 45, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only' , flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.8, pkHypersonic: 0.3, pkBy: { cruise: 0.7 }, ceiling: 9 } },
+  // ---- national air & missile defence (all also engage aircraft). pk per engagement; heavy missiles need several hits.
+  // Iron Dome: Tamir interceptors, superb vs rockets / shells / cruise missiles; cues David's Sling Stunners vs ballistic threats
+  { id: 'ironDome', damage: 80, range: 10, rof: 26, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'interceptor', munition: 'interceptor', intercept: { kinds: ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'], pk: 0.92, pkHypersonic: 0.35, pkBy: { ballistic: 0.55, cruise: 0.85 }, ceiling: 6, layer: { kinds: ['ballistic', 'hypersonic'], weapon: 'stunner' } } },
+  { id: 'stunner', damage: 80, range: 10, rof: 26, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic'], pk: 0.8, pkHypersonic: 0.45, ceiling: 12 } },
+  // Patriot PAC-3 MSE: hit-to-kill, the best ballistic-missile killer
+  { id: 'patriot', damage: 85, range: 11, rof: 34, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.75, pkBy: { ballistic: 0.92, hypersonic: 0.45, cruise: 0.7 }, ceiling: 12 } },
+  // S-400 / HQ-9 / Bavar-373: long-range area defence, solid but slower to reload
+  { id: 's400', damage: 90, range: 13, rof: 50, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.72, pkBy: { ballistic: 0.82, hypersonic: 0.4, cruise: 0.6 }, ceiling: 13 } },
+  { id: 'hq9', damage: 85, range: 12, rof: 46, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.75, pkBy: { ballistic: 0.8, hypersonic: 0.35, cruise: 0.65 }, ceiling: 12 } },
+  { id: 'bavar', damage: 80, range: 12, rof: 50, warhead: 'missile', projectile: 'rocket', speed: 0.65, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.72, pkBy: { ballistic: 0.75, hypersonic: 0.3, cruise: 0.6 }, ceiling: 11 } },
+  // IRIS-T SLM / Hisar-O: fast-reacting medium-range defence, deadly vs cruise missiles and rockets, weak vs ballistic
+  { id: 'irisT', damage: 80, range: 9, rof: 32, warhead: 'missile', projectile: 'rocket', speed: 0.75, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.85, pkBy: { ballistic: 0.6, hypersonic: 0.2, cruise: 0.9 }, ceiling: 8 } },
+  { id: 'hisar', damage: 75, range: 8, rof: 34, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.8, pkBy: { ballistic: 0.6, hypersonic: 0.2, cruise: 0.85 }, ceiling: 6 } },
+  // Cheongung II (KM-SAM Block 2): hit-to-kill upgrade, good vs ballistic missiles
+  { id: 'kmsam', damage: 80, range: 10, rof: 42, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.78, pkBy: { ballistic: 0.85, hypersonic: 0.35, cruise: 0.75 }, ceiling: 11 } },
   { id: 'atgm', damage: 95, range: 7, rof: 55, warhead: 'rocket', projectile: 'rocket', speed: 0.5, air: 'no' , flight: 'topAttack', munition: 'atgm' },
-  { id: 'laser', damage: 40, range: 7, rof: 16, warhead: 'laser', projectile: 'beam', air: 'yes' , intercept: { kinds: ['mortar', 'artillery', 'rocketSalvo'], pk: 0.45 } },
+  { id: 'laser', damage: 40, range: 7, rof: 16, warhead: 'laser', projectile: 'beam', air: 'yes' , intercept: { kinds: ['mortar', 'artillery', 'rocketSalvo', 'cruise'], pk: 0.45, pkBy: { cruise: 0.3 }, ceiling: 6 } },
   { id: 'howitzer', damage: 95, range: 10, minRange: 3, rof: 90, warhead: 'artillery', projectile: 'artillery', speed: 0.25, splash: 1.2, air: 'no' , flight: 'artillery', munition: 'artilleryShell' },
   { id: 'k9', damage: 80, range: 11, minRange: 3, rof: 64, burst: 2, burstDelay: 8, warhead: 'artillery', projectile: 'artillery', speed: 0.28, splash: 1.2, air: 'no' , flight: 'artillery', munition: 'artilleryShell' },
   { id: 'tos', damage: 40, range: 9, minRange: 3, rof: 140, burst: 6, burstDelay: 3, warhead: 'thermo', projectile: 'artillery', speed: 0.22, splash: 2, air: 'no' , flight: 'rocketSalvo', munition: 'thermoRocket' },
   { id: 'mortar', damage: 55, range: 9, minRange: 2, rof: 60, warhead: 'artillery', projectile: 'artillery', speed: 0.2, splash: 1, air: 'no', precise: true , flight: 'mortar', munition: 'mortarBomb' },
-  { id: 'dfMissile', damage: 340, range: 16, minRange: 5, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.45, splash: 1.6, air: 'no', precise: true , flight: 'hypersonic', munition: 'hypersonic' },
+  // ---- strike missiles. interceptHp = successful intercepts needed to destroy one round.
+  { id: 'dfMissile', damage: 340, range: 16, minRange: 5, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.45, splash: 1.6, air: 'no', precise: true , flight: 'hypersonic', munition: 'hypersonic', interceptHp: 2 },
   { id: 'fateh', damage: 260, range: 15, minRange: 5, rof: 250, warhead: 'missile', projectile: 'missile', speed: 0.35, splash: 2, air: 'no' , flight: 'ballistic', munition: 'ballistic' },
+  // Khorramshahr-4: heavy liquid-fuelled MRBM, 1.5 t warhead, very high apogee, slow to reload. Takes 3 intercepts.
+  { id: 'khorramshahr', damage: 560, range: 20, minRange: 7, rof: 520, warhead: 'missile', projectile: 'missile', speed: 0.3, splash: 3, air: 'no', flight: 'ballistic', munition: 'heavyBallistic', interceptHp: 3, apogee: 1.0, flightTime: 1.4 },
+  // Iskander-M: depressed quasi-ballistic trajectory (seen late, below the radar horizon) with a weaving terminal phase
+  { id: 'iskander', damage: 330, range: 17, minRange: 5, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.4, splash: 1.8, air: 'no', precise: true, flight: 'ballistic', munition: 'quasiBallistic', interceptHp: 2, apogee: 0.55, flightTime: 0.9, maneuver: 1.1, lowObservable: 0.75 },
+  // PrSM (HIMARS): fast, precise, flat trajectory
+  { id: 'prsm', damage: 250, range: 16, minRange: 5, rof: 220, warhead: 'missile', projectile: 'missile', speed: 0.45, splash: 1.4, air: 'no', precise: true, flight: 'ballistic', munition: 'quasiBallistic', apogee: 0.7, flightTime: 0.8 },
+  // LORA: sea / land based theatre missile with a manoeuvring warhead
+  { id: 'lora', damage: 300, range: 18, minRange: 5, rof: 280, warhead: 'missile', projectile: 'missile', speed: 0.4, splash: 1.6, air: 'no', precise: true, flight: 'ballistic', munition: 'quasiBallistic', interceptHp: 2, apogee: 0.85, maneuver: 0.5 },
+  { id: 'hyunmoo', damage: 320, range: 18, minRange: 5, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.4, splash: 1.8, air: 'no', precise: true, flight: 'ballistic', munition: 'quasiBallistic', interceptHp: 2 },
+  { id: 'tayfun', damage: 300, range: 18, minRange: 5, rof: 290, warhead: 'missile', projectile: 'missile', speed: 0.42, splash: 1.8, air: 'no', precise: true, flight: 'ballistic', munition: 'quasiBallistic', interceptHp: 2, apogee: 0.8, flightTime: 0.9 },
+  // cruise missiles: slow and fragile but terrain-hugging - defences only see them at a fraction of their range
+  { id: 'tomahawk', damage: 300, range: 22, minRange: 6, rof: 320, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.6, air: 'no', precise: true, flight: 'cruise', munition: 'cruiseMissile', lowObservable: 0.4 },
+  { id: 'taurus', damage: 360, range: 20, minRange: 6, rof: 340, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.3, air: 'no', precise: true, flight: 'cruise', munition: 'stealthCruise', lowObservable: 0.3 },
+  { id: 'neptune', damage: 280, range: 19, minRange: 6, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.6, air: 'no', precise: true, flight: 'cruise', munition: 'cruiseMissile', lowObservable: 0.45 },
   { id: 'autocannon', damage: 16, range: 5.5, rof: 7, warhead: 'flak', projectile: 'instant', air: 'yes' },
   { id: 'heliMissile', damage: 105, range: 7, rof: 70, burst: 2, burstDelay: 10, warhead: 'missile', projectile: 'rocket', speed: 0.55, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'airMissile', damage: 95, range: 8, rof: 70, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'yes' , flight: 'airMissile', munition: 'airMissile' },
@@ -238,6 +267,8 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-35A Lightning II', sight: 11, desc: 'Fifth-generation stealth fighter and sensor node. Hits ground and air.' },
     robot: { name: 'Vision 60 Robot Dog', model: 'robodog' },
     uav: { name: 'MQ-9 Reaper' },
+    himars: { name: 'M142 HIMARS (PrSM)', model: 'missile_truck', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
+    typhon: { name: 'Typhon MRC (Tomahawk)', model: 'missile_truck', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
     mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 0.55, desc: 'Front-engined heavy tank with Trophy active protection.' },
@@ -249,6 +280,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'AH-64D Saraf' },
     fighter: { name: 'F-35I Adir' },
     uav: { name: 'Hermes 450' },
+    lora: { name: 'LORA Launcher', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   china: {
     mbt: { name: 'Type 99A' },
@@ -256,7 +288,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     aa: { name: 'PGZ-09' },
     arty: { name: 'PLZ-05' },
     swarm: { name: 'Swarm Drone Carrier', model: 'swarm', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 8, speed: 2.0, turnRate: 0.1, turret: false, weapon: 'swarmLaunch', prereq: ['factory', 'airfield'], desc: 'Launches coordinated kamikaze drone swarms.', aiWeight: 3, aiTag: 'main' },
-    df: { name: 'DF-17 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, turret: false, weapon: 'dfMissile', prereq: ['factory', 'tech'], desc: 'Hypersonic glide vehicle on a ballistic booster. Very hard to intercept.', aiWeight: 1, aiTag: 'arty' },
+    df: { name: 'DF-17 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, turret: false, weapon: 'dfMissile', prereq: ['factory', 'tech'], desc: 'Hypersonic glide vehicle on a ballistic booster. Very hard to intercept - takes 2 hits.', aiWeight: 1, aiTag: 'arty' },
     heli: { name: 'Z-10' },
     fighter: { name: 'J-20' },
     robot: { name: 'Armed Robot Dog', model: 'robodog' },
@@ -272,6 +304,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Su-35' },
     robot: { name: 'Uran-9 UGV', model: 'ugv', hp: 260, weapon: 'autocannon', speed: 2.3 },
     uav: { name: 'Orion' },
+    iskander: { name: '9K720 Iskander-M', model: 'missile_truck', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   germany: {
     mbt: { name: 'Leopard 2A8', model: 'mbt_heavy', cost: 1000, buildTime: 11, hp: 540, speed: 2.4, weapon: 'cannonHeavy', desc: 'Superior tank with modular composite armor.' },
@@ -283,6 +316,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Eurofighter Typhoon' },
     robot: { name: 'Mission Master UGV', model: 'ugv' },
     uav: { name: 'Heron TP' },
+    taurus: { name: 'Taurus KEPD 350 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'taurus', prereq: ['factory', 'tech'], desc: 'Stealthy bunker-busting cruise missile. Terrain-following; defences spot it only at a third of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   korea: {
     mbt: { name: 'K2 Black Panther' },
@@ -293,6 +327,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-15K Slam Eagle' },
     robot: { name: 'Robot Dog', model: 'robodog' },
     uav: { name: 'KUS-FS' },
+    hyunmoo: { name: 'Hyunmoo-2 TEL', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'hyunmoo', prereq: ['factory', 'tech'], desc: 'Precision ballistic missile with a heavy warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   ukraine: {
     mbt: { name: 'T-84 Oplot' },
@@ -305,6 +340,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'THeMIS UGV', model: 'ugv' },
     uav: { name: 'Bayraktar TB2' },
+    neptune: { name: 'R-360 Neptune Launcher', model: 'missile_truck', category: 'vehicle', cost: 1600, buildTime: 16, hp: 200, armor: 'light', sight: 6, speed: 1.8, turnRate: 0.08, weapon: 'neptune', prereq: ['factory', 'tech'], desc: 'Sea-skimming cruise missile. Hugs the ground; defences spot it only at half range.', aiWeight: 1, aiTag: 'arty' },
   },
   turkey: {
     mbt: { name: 'Altay' },
@@ -316,6 +352,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'T129 ATAK' },
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'Barkan UGV', model: 'ugv' },
+    tayfun: { name: 'Tayfun TEL', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   iran: {
     mbt: { name: 'Karrar' },
@@ -325,6 +362,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     arty: { name: 'Raad-2' },
     shahedl: { name: 'Shahed-136 Launcher', model: 'container', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 6, speed: 1.9, turnRate: 0.1, turret: false, weapon: 'shahedLaunch', prereq: ['factory', 'airfield'], desc: 'Container launcher for long-range loitering munitions.', aiWeight: 3, aiTag: 'arty' },
     fateh: { name: 'Fateh-110 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1300, buildTime: 15, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, turret: false, weapon: 'fateh', prereq: ['factory', 'tech'], desc: 'Road-mobile ballistic missile.', aiWeight: 1, aiTag: 'arty' },
+    khorramshahr: { name: 'Khorramshahr-4 TEL', model: 'missile_truck', category: 'vehicle', cost: 2600, buildTime: 26, hp: 260, armor: 'light', sight: 6, speed: 1.4, turnRate: 0.07, turret: false, weapon: 'khorramshahr', prereq: ['factory', 'tech'], desc: 'Heavy MRBM with a huge warhead. Slow to reload; it takes 3 successful intercepts to bring one down.', aiWeight: 1, aiTag: 'arty' },
     heli: { name: 'AH-1J Cobra', hp: 360 },
     fighter: { remove: true },
     robot: { name: 'Armed UGV', model: 'ugv' },
@@ -333,18 +371,18 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
 };
 
 const FACTION_BUILDINGS: Partial<Record<Faction, Record<string, Partial<BldTpl>>>> = {
-  usa: { def_aa: { name: 'Patriot Battery' } },
-  israel: { def_aa: { name: 'Iron Dome Battery', weapon: 'ironDome', desc: 'Intercepts rockets, artillery, missiles and drones. Best interception rate.' } },
-  china: { def_aa: { name: 'HQ-9 Battery' } },
-  russia: { def_aa: { name: 'S-400 Battery' } },
-  germany: { def_aa: { name: 'IRIS-T SLM Battery' } },
+  usa: { def_aa: { name: 'Patriot Battery', weapon: 'patriot', desc: 'PAC-3 hit-to-kill interceptors: the best ballistic-missile killer. Also downs aircraft, rockets and cruise missiles. Needs power.' } },
+  israel: { def_aa: { name: 'Iron Dome Battery', weapon: 'ironDome', desc: "Tamir interceptors shred rockets, shells, mortars and cruise missiles; cues David's Sling Stunners against ballistic missiles. Needs power." } },
+  china: { def_aa: { name: 'HQ-9 Battery', weapon: 'hq9', desc: 'Long-range area air and missile defence. Needs power.' } },
+  russia: { def_aa: { name: 'S-400 Battery', weapon: 's400', desc: 'Very long-range area air and missile defence, slow to reload. Needs power.' } },
+  germany: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },
   korea: {
     def_gun: { name: 'SGR-A1 Sentry', model: 'sentry', cost: 400, hp: 650, sight: 9, desc: 'Automated thermal-tracking sentry gun. Hits infantry and drones.' },
-    def_aa: { name: 'Cheongung KM-SAM' },
+    def_aa: { name: 'Cheongung II KM-SAM', weapon: 'kmsam', desc: 'Hit-to-kill medium-range SAM, good against ballistic missiles. Needs power.' },
   },
-  ukraine: { def_aa: { name: 'IRIS-T SLM Battery' } },
-  turkey: { def_aa: { name: 'Hisar-O Battery' } },
-  iran: { def_aa: { name: 'Bavar-373 Battery' } },
+  ukraine: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },
+  turkey: { def_aa: { name: 'Hisar-O Battery', weapon: 'hisar', desc: 'Short-range rapid SAM, strong against cruise missiles and rockets. Needs power.' } },
+  iran: { def_aa: { name: 'Bavar-373 Battery', weapon: 'bavar', desc: 'Long-range area air and missile defence. Needs power.' } },
 };
 
 // ---------------------------------------------------------------- generation

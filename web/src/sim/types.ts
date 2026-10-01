@@ -21,10 +21,11 @@ export type Flight =
   | 'interceptor' // Iron Dome style interceptor
   | 'airMissile' // air-launched guided missile
   | 'ballistic' // boost, apogee, steep terminal dive
-  | 'hypersonic'; // boost then manoeuvring glide
+  | 'hypersonic' // boost then manoeuvring glide
+  | 'cruise'; // subsonic, terrain-hugging, dog-leg route, pop-up and terminal dive
 
 /** Flights that air defences can shoot down. */
-export const INTERCEPTABLE: Flight[] = ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic'];
+export const INTERCEPTABLE: Flight[] = ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'];
 export type Category = 'building' | 'defense' | 'infantry' | 'vehicle' | 'air';
 export const CATEGORIES: Category[] = ['building', 'defense', 'infantry', 'vehicle', 'air'];
 
@@ -43,8 +44,25 @@ export interface WeaponDef {
   air: 'no' | 'yes' | 'only'; // can it hit aircraft?
   flight?: Flight; // physical model for travelling projectiles
   munition?: string; // visual munition kind (render)
-  /** Air-defence weapons: projectile flights they can engage and kill probability per engagement. */
-  intercept?: { kinds: Flight[]; pk: number; pkHypersonic?: number };
+  /**
+   * Air-defence weapons: projectile flights they can engage and the hit probability per engagement.
+   * pkBy overrides pk per threat flight (pkHypersonic is the legacy hypersonic override).
+   * ceiling: highest altitude (above the battery) it can engage at, so high-apogee missiles are only
+   * vulnerable in their terminal dive (default 9).
+   * layer: fire a different interceptor (another weapon id, with its own pk / munition) at these
+   * threat kinds, e.g. Iron Dome batteries cueing David's Sling Stunners against ballistic missiles.
+   */
+  intercept?: { kinds: Flight[]; pk: number; pkHypersonic?: number; pkBy?: Partial<Record<Flight, number>>; ceiling?: number; layer?: { kinds: Flight[]; weapon: string } };
+  /** Interceptable munitions: successful intercepts needed to destroy one round (default 1). */
+  interceptHp?: number;
+  /** Interceptable munitions: fraction of a defence's range at which it is detected (cruise missiles; default 1). */
+  lowObservable?: number;
+  /** Analytic flights: apogee (arc height) multiplier, e.g. < 1 for depressed quasi-ballistic trajectories. */
+  apogee?: number;
+  /** Analytic flights: flight-time multiplier (> 1 = slower). */
+  flightTime?: number;
+  /** Ballistic: amplitude (tiles) of evasive weaving in the terminal phase; interceptors lose pk against it. */
+  maneuver?: number;
   spawn?: string; // unit launched by a 'spawn' weapon (drones)
   precise?: boolean; // artillery without scatter
 }
@@ -247,7 +265,21 @@ export interface Projectile {
   maxSpeed: number;
   turn: number; // guided: max turn per tick (rad)
   phase: number;
-  engaged: number; // interceptors currently assigned to this projectile
+  engaged: number; // interceptors currently in flight towards this projectile (recounted every tick)
+  /** Interceptable munitions: intercepts still needed to destroy it (starts at the weapon's interceptHp). */
+  hp: number;
+  maxHp: number;
+  /** Times this round was hit by an interceptor and survived (render: damaged = hits > 0 -> smoke, sparks, wobble). */
+  hits: number;
+  // aim error from intercept damage: the impact point drifts from (dbx, dby) at progress dk to (dox, doy) at impact
+  dox: number;
+  doy: number;
+  dbx: number;
+  dby: number;
+  dk: number;
+  // cruise missiles: dog-leg waypoint (control point of the ground track)
+  wx: number;
+  wy: number;
   dead: boolean;
 }
 
@@ -270,7 +302,12 @@ export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
   | { t: 'impact'; x: number; y: number; z: number; weapon: string; air?: boolean; direct?: boolean }
   | { t: 'launch'; id: number; flight: Flight; weapon: string; x: number; y: number; z: number; owner: number; sourceId: number }
-  | { t: 'airburst'; x: number; y: number; z: number; kind: 'kill' | 'miss' | 'expire'; weapon: string; victim?: Flight }
+  /**
+   * Something exploded in the sky. kind: 'kill' = the threat was destroyed; 'hit' = the interceptor struck the
+   * threat but it survived (hpLeft > 0, it flies on damaged); 'miss' / 'expire' = interceptor self-destructed.
+   * victimId / victimWeapon / hpLeft / maxHp are set for 'kill' and 'hit'.
+   */
+  | { t: 'airburst'; x: number; y: number; z: number; kind: 'kill' | 'hit' | 'miss' | 'expire'; weapon: string; victim?: Flight; victimId?: number; victimWeapon?: string; hpLeft?: number; maxHp?: number }
   | { t: 'intercept'; x: number; y: number; id: number }
   | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building' }
   | { t: 'placed'; id: number; owner: number }

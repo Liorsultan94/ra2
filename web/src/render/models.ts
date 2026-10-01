@@ -1,17 +1,17 @@
 import { DEFS } from '../sim/defs';
 import type { FogOfWar } from './fog';
-import { AIRCRAFT, createMunition } from './models/aircraft';
+import { AIRCRAFT, createMunition as createBaseMunition } from './models/aircraft';
 import { BUILDINGS } from './models/buildings';
 import { overrideModel } from './models/gltf';
 import { INFANTRY } from './models/infantry';
+import { EXTRA_MUNITIONS, createExtraMunition, type ExtraMunitionKind } from './models/munitions';
 import { createModel as legacyModel } from './models/legacy';
 import type { Builder } from './models/registry';
-import type { Model, ModelStyle } from './models/types';
+import type { Model, ModelStyle, MunitionKind, MunitionModel } from './models/types';
 import { VEHICLES } from './models/vehicles';
 
 export type { AnimState, Model, ModelStyle, MunitionKind, MunitionModel, Region } from './models/types';
 export { FACTION_REGION } from './models/types';
-export { createMunition };
 export { loadModelOverrides } from './models/gltf';
 
 let footprints: Map<string, { w: number; h: number }> | null = null;
@@ -40,4 +40,10 @@ export function createModel(key: string, style: ModelStyle, fog: FogOfWar | null
     }
   }
   return legacyModel(key, style, fog) as Model;
+}
+
+/** Projectile visual: the newer missile families live in munitions.ts, the rest in aircraft.ts. */
+export function createMunition(kind: MunitionKind | ExtraMunitionKind, team: number): MunitionModel | null {
+  if (EXTRA_MUNITIONS.has(kind)) return createExtraMunition(kind as ExtraMunitionKind, team);
+  return createBaseMunition(kind as MunitionKind, team);
 }

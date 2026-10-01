@@ -1,4 +1,4 @@
-import { buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
+import { WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { Rng } from './rng';
 import { TPS, type Entity, type Player } from './types';
 import type { Controller, World } from './world';
@@ -22,6 +22,16 @@ const CFG: Record<Difficulty, DiffCfg> = {
   hard: { think: 10, firstWave: 9, waveGrowth: 3, maxWave: 24, defenses: 5, tech: true, queueDepth: 3, harvesters: 2 },
 };
 
+/** Long-range strike missile launchers (ballistic / hypersonic / cruise): the AI uses them for standoff strikes. */
+function isStrike(def: string) {
+  const w = unitDef(def)?.weapon;
+  const f = w ? WEAPONS[w]?.flight : undefined;
+  return f === 'ballistic' || f === 'hypersonic' || f === 'cruise';
+}
+
+/** Missile-defence batteries the AI wants once the enemy fields strike missiles. */
+const MISSILE_DEFENSE: Record<Difficulty, number> = { easy: 1, normal: 2, hard: 4 };
+
 const BUILD_ORDER: [string, number][] = [
   ['power', 1],
   ['refinery', 1],
@@ -41,6 +51,7 @@ const BUILD_ORDER: [string, number][] = [
 
 export class AIController implements Controller {
   private cfg: DiffCfg;
+  private difficulty: Difficulty;
   private rng: Rng;
   private waveSize: number;
   private lastWave = 0;
@@ -52,6 +63,7 @@ export class AIController implements Controller {
     difficulty: Difficulty,
   ) {
     this.cfg = CFG[difficulty];
+    this.difficulty = difficulty;
     this.rng = new Rng(9001 + pid * 77);
     this.waveSize = this.cfg.firstWave;
   }
@@ -109,15 +121,24 @@ export class AIController implements Controller {
     }
     if (p.queues.defense.length === 0 && !p.ready.defense && this.count(buildings, 'factory') > 0 && p.credits > 1200) {
       const defenses = buildings.filter((b) => buildingDef(b.def).category === 'defense').length;
-      if (defenses < this.cfg.defenses) {
+      // enemy strike missiles in play: add missile-defence batteries on top of the usual defences
+      const sams = this.count(buildings, 'def_aa');
+      const wantSam = sams < MISSILE_DEFENSE[this.difficulty] && this.enemyStrikeUnits() > 0;
+      if (defenses < this.cfg.defenses || wantSam) {
         const order = ['def_gun', 'def_aa', 'def_at', 'def_gun', 'def_at', 'def_aa'];
-        const role = order[defenses % order.length];
+        const role = wantSam ? 'def_aa' : order[defenses % order.length];
         const pick = factionDefByRole(p.faction, role);
         const alt = factionDefByRole(p.faction, 'def_gun');
         if (w.canBuild(this.pid, pick.id)) w.issue(this.pid, { type: 'produce', def: pick.id });
         else if (w.canBuild(this.pid, alt.id)) w.issue(this.pid, { type: 'produce', def: alt.id });
       }
     }
+  }
+
+  private enemyStrikeUnits() {
+    let n = 0;
+    for (const e of this.world.list) if (!e.dead && e.kind === 'unit' && this.world.isEnemy(this.pid, e.owner) && isStrike(e.def)) n++;
+    return n;
   }
 
   private nextBuilding(buildings: Entity[]): string | null {
@@ -148,7 +169,8 @@ export class AIController implements Controller {
       const dx = enemy[0] - bx;
       const dy = enemy[1] - by;
       const len = Math.hypot(dx, dy) || 1;
-      const off = 6 + this.rng.int(3);
+      // missile defence sits close to the base it protects; other defences face the enemy
+      const off = (d.role === 'def_aa' ? 2 : 6) + this.rng.int(3);
       const side = (this.rng.next() - 0.5) * 8;
       bx += (dx / len) * off - (dy / len) * side;
       by += (dy / len) * off + (dx / len) * side;
@@ -297,9 +319,16 @@ export class AIController implements Controller {
 
   private manageArmy(buildings: Entity[], units: Entity[]) {
     const w = this.world;
+    // strike launchers stand off and fire at enemy structures instead of joining the assault waves
+    const strike = units.filter((u) => isStrike(u.def));
+    for (const u of strike) {
+      if (u.order.type !== 'idle') continue;
+      const t = this.pickStrikeTarget(u);
+      if (t) w.issue(this.pid, { type: 'attack', ids: [u.id], target: t.id });
+    }
     const army = units.filter((u) => {
       const d = unitDef(u.def);
-      return !!d.weapon && !d.harvester && !d.temp;
+      return !!d.weapon && !d.harvester && !d.temp && !isStrike(u.def);
     });
     if (army.length === 0) return;
 
@@ -346,6 +375,24 @@ export class AIController implements Controller {
       const target = this.pickTarget(deep[0]);
       if (target) w.issue(this.pid, { type: 'move', ids: deep.map((u) => u.id), x: target.x, y: target.y, attackMove: true });
     }
+  }
+
+  /** Strike target: nearest enemy structure, preferring high-value ones (production, tech, air defence). */
+  private pickStrikeTarget(from: Entity): Entity | null {
+    const w = this.world;
+    let best: Entity | null = null;
+    let bd = Infinity;
+    for (const e of w.list) {
+      if (e.dead || e.kind !== 'building' || !w.isEnemy(this.pid, e.owner)) continue;
+      const role = buildingDef(e.def).role;
+      const bonus = role === 'factory' || role === 'tech' || role === 'def_aa' || role === 'conyard' ? 8 : role === 'refinery' || role === 'airfield' ? 5 : 0;
+      const d = Math.hypot(e.x - from.x, e.y - from.y) - bonus;
+      if (d < bd) {
+        bd = d;
+        best = e;
+      }
+    }
+    return best;
   }
 
   private pickTarget(from?: Entity): Entity | null {
