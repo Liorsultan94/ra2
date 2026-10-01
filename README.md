@@ -1,5 +1,7 @@
 # Red Alert 2 mod for OpenRA
 
+> **New:** [`web/`](web/) contains *Iron Front*, a standalone browser RTS inspired by Red Alert 2 (TypeScript + Three.js). See [web/README.md](web/README.md).
+
 [![Continuous Integration](https://github.com/OpenRA/ra2/workflows/Continuous%20Integration/badge.svg)](https://github.com/OpenRA/ra2/actions/workflows/ci.yml)
 
 Consult the [wiki](https://github.com/OpenRA/ra2/wiki) for instructions on how to install and use this.
