@@ -59,15 +59,19 @@ function pileGeo(seed: number, n: number, col: (k: number, y: number) => THREE.C
 interface Slot {
   tile: number;
   k: number;
-  mesh: THREE.InstancedMesh;
-  index: number;
   base: THREE.Matrix4;
+}
+
+/** One instanced mesh per deposit and piece type, compacted to the pieces still present. */
+interface Batch {
+  mesh: THREE.InstancedMesh;
+  slots: Slot[];
+  tiles: number[];
 }
 
 export class Resources {
   readonly group = new THREE.Group();
-  private slots: Slot[] = [];
-  private meshes: THREE.InstancedMesh[] = [];
+  private batches: Batch[] = [];
   private cache: Uint8Array;
   private beacon: THREE.MeshStandardMaterial;
 
@@ -78,7 +82,7 @@ export class Resources {
   ) {
     const m = map;
     this.cache = new Uint8Array(m.w * m.h).fill(255);
-    const shadows = quality !== 'low';
+    const shadows = quality === 'high';
 
     // materials
     const oreRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.15, flatShading: true }));
@@ -91,9 +95,13 @@ export class Resources {
     // geometries: rubble piles (several chunks each) and single nuggets / crystals
     const rust = (k: number) => new THREE.Color().setRGB(0.3 + hash2(k, 1, 9) * 0.1, 0.17 + hash2(k, 2, 9) * 0.05, 0.11 + hash2(k, 3, 9) * 0.04);
     // lithium-bearing pegmatite: grey-blue host rock with pale spodumene chunks
-    const pale = (k: number) => (k % 2 ? new THREE.Color().setRGB(0.36 + hash2(k, 1, 8) * 0.08, 0.42 + hash2(k, 2, 8) * 0.06, 0.5 + hash2(k, 3, 8) * 0.08) : new THREE.Color().setRGB(0.62 + hash2(k, 1, 8) * 0.1, 0.7 + hash2(k, 2, 8) * 0.08, 0.78 + hash2(k, 3, 8) * 0.08));
-    const orePile = pileGeo(3, 4, rust);
-    const gemPile = pileGeo(17, 4, pale);
+    const pale = (k: number) =>
+      k % 2
+        ? new THREE.Color().setRGB(0.3 + hash2(k, 1, 8) * 0.06, 0.35 + hash2(k, 2, 8) * 0.05, 0.42 + hash2(k, 3, 8) * 0.06)
+        : new THREE.Color().setRGB(0.52 + hash2(k, 1, 8) * 0.08, 0.58 + hash2(k, 2, 8) * 0.06, 0.66 + hash2(k, 3, 8) * 0.06);
+    const chunks = quality === 'high' ? 4 : 3;
+    const orePile = pileGeo(3, chunks, rust);
+    const gemPile = pileGeo(17, chunks, pale);
     const nugget = (() => {
       const b = new GeoBuilder();
       for (let k = 0; k < 2; k++) {
@@ -124,8 +132,25 @@ export class Resources {
 
     // every tile that can ever hold ore gets slots (ore regrows around the rigs)
     const candidate = (i: number) => m.oreKind[i] > 0 || m.oreMines.some((mm) => Math.abs((i % m.w) - mm.x) <= 3 && Math.abs(Math.floor(i / m.w) - mm.y) <= 3);
-    const tiles: number[] = [];
-    for (let i = 0; i < m.w * m.h; i++) if (candidate(i) && m.tiles[i] !== Tile.Water && m.tiles[i] !== Tile.Rock && !m.blocked[i]) tiles.push(i);
+    // deposit = nearest rig (tiles without a rig nearby form their own group per 16x16 cell)
+    const groups = new Map<string, number[]>();
+    for (let i = 0; i < m.w * m.h; i++) {
+      if (!candidate(i) || m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Rock || m.blocked[i]) continue;
+      const x = i % m.w;
+      const y = Math.floor(i / m.w);
+      let key = `c${Math.floor(x / 16)},${Math.floor(y / 16)}`;
+      let bd = 9;
+      m.oreMines.forEach((mm, k) => {
+        const d = Math.max(Math.abs(x - mm.x), Math.abs(y - mm.y));
+        if (d < bd) {
+          bd = d;
+          key = `m${k}`;
+        }
+      });
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = []));
+      g.push(i);
+    }
     const kindOf = (i: number) => {
       if (m.oreKind[i]) return m.oreKind[i];
       let best = 1;
@@ -139,49 +164,49 @@ export class Resources {
       }
       return best;
     };
-    let nOre = 0;
-    let nGem = 0;
-    for (const i of tiles) (kindOf(i) === 2 ? nGem++ : nOre++);
-    const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, n: number, cast: boolean) => {
-      const im = new THREE.InstancedMesh(geo, mat, Math.max(1, n));
-      im.castShadow = cast;
-      im.receiveShadow = true;
-      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      im.frustumCulled = false;
-      this.meshes.push(im);
-      this.group.add(im);
-      return im;
-    };
-    const oreR = mk(orePile, oreRubbleMat, nOre * 3, shadows);
-    const oreN = mk(nugget, oreNuggetMat, nOre * 2, false);
-    const gemR = mk(gemPile, gemRubbleMat, nGem * 3, shadows);
-    const gemC = mk(crystal, gemCrystalMat, nGem * 2, false);
-    const counters = new Map<THREE.InstancedMesh, number>();
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
-    for (const i of tiles) {
-      const x = i % m.w;
-      const y = Math.floor(i / m.w);
-      const gem = kindOf(i) === 2;
-      for (let k = 0; k < PER; k++) {
-        const nug = k >= 3;
-        const ox = x + 0.15 + hash2(x, y, 100 + k) * 0.7;
-        const oy = y + 0.15 + hash2(x, y, 200 + k) * 0.7;
-        e.set((hash2(x, y, 300 + k) - 0.5) * 0.3, hash2(x, y, 400 + k) * 6.28, (hash2(x, y, 500 + k) - 0.5) * 0.3);
-        q.setFromEuler(e);
-        const s = nug ? 0.13 + hash2(x, y, 600 + k) * 0.08 : 0.22 + hash2(x, y, 600 + k) * 0.14;
-        const base = new THREE.Matrix4().compose(new THREE.Vector3(ox, surfaceHeight(m, ox, oy) - 0.02, oy), q, new THREE.Vector3(s, s * (nug ? 1 : 0.8), s));
-        const mesh = gem ? (nug ? gemC : gemR) : nug ? oreN : oreR;
-        const index = counters.get(mesh) ?? 0;
-        counters.set(mesh, index + 1);
-        this.slots.push({ tile: i, k, mesh, index, base });
+    for (const tiles of groups.values()) {
+      // split the group by kind, then by piece type
+      for (const gem of [false, true]) {
+        const kt = tiles.filter((i) => (kindOf(i) === 2) === gem);
+        if (!kt.length) continue;
+        for (const nug of [false, true]) {
+          const slots: Slot[] = [];
+          for (const i of kt) {
+            const x = i % m.w;
+            const y = Math.floor(i / m.w);
+            for (let k = nug ? 3 : 0; k < (nug ? PER : 3); k++) {
+              const ox = x + 0.15 + hash2(x, y, 100 + k) * 0.7;
+              const oy = y + 0.15 + hash2(x, y, 200 + k) * 0.7;
+              e.set((hash2(x, y, 300 + k) - 0.5) * 0.3, hash2(x, y, 400 + k) * 6.28, (hash2(x, y, 500 + k) - 0.5) * 0.3);
+              q.setFromEuler(e);
+              const sc = nug ? 0.13 + hash2(x, y, 600 + k) * 0.08 : 0.22 + hash2(x, y, 600 + k) * 0.14;
+              const base = new THREE.Matrix4().compose(new THREE.Vector3(ox, surfaceHeight(m, ox, oy) - 0.02, oy), q, new THREE.Vector3(sc, sc * (nug ? 1 : 0.8), sc));
+              slots.push({ tile: i, k, base });
+            }
+          }
+          const geo = gem ? (nug ? crystal : gemPile) : nug ? nugget : orePile;
+          const mat = gem ? (nug ? gemCrystalMat : gemRubbleMat) : nug ? oreNuggetMat : oreRubbleMat;
+          const im = new THREE.InstancedMesh(geo, mat, slots.length);
+          im.castShadow = shadows && !nug;
+          im.receiveShadow = true;
+          im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+          // bounds from every slot (before compaction), so culling stays valid as pieces vanish
+          slots.forEach((sl, k) => im.setMatrixAt(k, sl.base));
+          im.computeBoundingSphere();
+          im.computeBoundingBox();
+          im.name = 'resources';
+          this.group.add(im);
+          this.batches.push({ mesh: im, slots, tiles: [...new Set(slots.map((sl) => sl.tile))] });
+        }
       }
     }
 
     // survey stakes around each deposit + drilling rigs
     this.beacon = new THREE.MeshStandardMaterial({ color: 0xff8a20, emissive: 0xff7010, emissiveIntensity: 2, toneMapped: false });
     fog.apply(this.beacon);
-    this.buildRigs(fog, shadows);
+    this.buildRigs(fog, quality !== 'low');
     this.update(true);
   }
 
@@ -293,27 +318,27 @@ export class Resources {
     }
   }
 
-  private zero = new THREE.Matrix4().makeScale(0, 0, 0);
   private tmp = new THREE.Matrix4();
   private sc = new THREE.Matrix4();
 
   /** Sync rubble with the simulation's ore amounts. */
   update(force = false) {
     const m = this.map;
-    let dirty = false;
-    for (const s of this.slots) {
-      const amt = m.ore[s.tile];
-      if (!force && this.cache[s.tile] === amt) continue;
-      const visible = amt > s.k * (ORE_MAX / PER) * 0.75;
-      if (visible) {
+    for (const b of this.batches) {
+      if (!force && !b.tiles.some((t) => this.cache[t] !== m.ore[t])) continue;
+      let n = 0;
+      for (const s of b.slots) {
+        const amt = m.ore[s.tile];
+        if (amt <= s.k * (ORE_MAX / PER) * 0.75) continue;
         const f = 0.5 + 0.5 * Math.min(1, amt / ORE_MAX);
         this.tmp.copy(s.base).multiply(this.sc.makeScale(f, f, f));
-        s.mesh.setMatrixAt(s.index, this.tmp);
-      } else s.mesh.setMatrixAt(s.index, this.zero);
-      dirty = true;
+        b.mesh.setMatrixAt(n++, this.tmp);
+      }
+      b.mesh.count = n;
+      b.mesh.visible = n > 0;
+      b.mesh.instanceMatrix.needsUpdate = true;
     }
-    for (const s of this.slots) this.cache[s.tile] = m.ore[s.tile];
-    if (dirty) for (const im of this.meshes) im.instanceMatrix.needsUpdate = true;
+    for (const b of this.batches) for (const t of b.tiles) this.cache[t] = m.ore[t];
   }
 
   animate(time: number) {

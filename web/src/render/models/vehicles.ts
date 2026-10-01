@@ -517,6 +517,8 @@ interface Tpl {
   wheeled: boolean;
   custom?: CustomAnim;
   bob: number;
+  /** Hull rock per main-gun shot (0 = none, 1 = 120 mm MBT, ~1.4 = SPH, ~0.25 = autocannon). */
+  kick: number;
   stats: { tris: number; meshes: number };
   key: string;
   decals: DecalSpec | null;
@@ -554,6 +556,7 @@ class Bld {
   tw?: number;
   wheeled = false;
   bob = 1;
+  kick = 0;
   custom?: CustomAnim;
   private mi = 0;
   extraTris = 0;
@@ -694,6 +697,7 @@ class Bld {
       wheeled: this.wheeled,
       custom: this.custom,
       bob: this.bob,
+      kick: this.kick || (this.mi > 0 ? 0.18 : 0),
       stats: { tris: Math.round(tris), meshes },
       key: '',
       decals: this.layoutDecals(ray),
@@ -1499,6 +1503,7 @@ interface GunOpt {
 function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) {
   const piv = b.part(tur, x, y, z, 'gunpiv');
   piv.g.rotation.z = o.elev ?? 0.02;
+  b.kick = Math.max(b.kick, o.brake === 'arty' ? 1.4 : clamp(o.r / 0.018, 0.6, 1.2));
   if (o.mantlet) {
     const [mw, mh, md] = o.mantlet;
     tur.cbox(mw, mh, md, 0.008, x - mw / 2 + 0.01, y, z, CAMO);
@@ -1537,6 +1542,7 @@ function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) 
 
 /** Autocannon / small gun barrel pointing +X in a recoil group, muzzle at the tip. */
 function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: number, r: number, opts: { brake?: boolean; shroud?: number; paint?: number } = {}) {
+  b.kick = Math.max(b.kick, clamp(r / 0.04, 0.15, 0.3));
   const rec = b.part(parent, x, y, z, 'recoil');
   const paint = opts.paint ?? mt(K.gun);
   rec.cx(r, r * 1.15, len, len / 2, 0, 0, paint, 8);

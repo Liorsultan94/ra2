@@ -14,6 +14,7 @@ import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
+import { CombatOverlay } from './overlay';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
 
@@ -135,6 +136,8 @@ export class GameRenderer {
   readonly effects: Effects;
   readonly debris: Debris;
   readonly marks: GroundMarks;
+  /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
+  readonly overlay: CombatOverlay;
   readonly target = new THREE.Vector3();
   zoom = 1;
   private composer: EffectComposer | null = null;
@@ -150,9 +153,6 @@ export class GameRenderer {
   private ghost: THREE.Group | null = null;
   private ghostKey = '';
   private ghostTiles: THREE.Mesh[] = [];
-  private ringGeo = new THREE.RingGeometry(0.92, 1.05, 32).rotateX(-Math.PI / 2);
-  private boxRingGeo = new THREE.RingGeometry(0.95, 1.05, 4, 1, Math.PI / 4).rotateX(-Math.PI / 2);
-  private ringMats = new Map<string, THREE.MeshBasicMaterial>();
   private burnt: THREE.MeshStandardMaterial;
   private streakGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
   private streakMat = new THREE.MeshBasicMaterial({ color: 0xffd28a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
@@ -172,6 +172,8 @@ export class GameRenderer {
   private lastUpAt = -1e9;
   private lastFt = 0;
   selection = new Set<number>();
+  /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
+  hover = -1;
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
 
@@ -230,6 +232,8 @@ export class GameRenderer {
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
     this.scene.add(this.debris.group, this.marks.group);
+    this.overlay = new CombatOverlay(map);
+    this.scene.add(this.overlay.group);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
     // ---- quality ladder: drop resolution first, then the expensive effects
@@ -334,12 +338,47 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ camera
 
+  private sunDir = SUN_DIR.clone();
   private sunRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
   private sunUp = new THREE.Vector3().crossVectors(SUN_DIR, this.sunRight).normalize();
   private corner = new THREE.Vector3();
   private camFwd = new THREE.Vector3();
+  /** Unit vector from the view target towards the camera (rotates with the 90 degree view steps). */
+  readonly camDir = CAM_DIR.clone();
+  /** Camera yaw in radians (0 = classic view from +X/+Z); animates towards yawGoal. */
+  yaw = 0;
+  private yawGoal = 0;
+  private yawClock = 0;
+
+  /** Rotate the view by 90 degree steps (animated). */
+  rotateView(steps: number) {
+    this.yawGoal += steps * (Math.PI / 2);
+  }
+  /** Settled 90 degree view step 0..3 (where the rotation is heading). */
+  get viewStep(): number {
+    return ((Math.round(this.yawGoal / (Math.PI / 2)) % 4) + 4) % 4;
+  }
+  get rotating(): boolean {
+    return Math.abs(this.yawGoal - this.yaw) > 1e-3;
+  }
 
   private updateCamera() {
+    // animate the view rotation on real time (render dt may be slowed by cinematics)
+    const now = performance.now();
+    const rdt = this.yawClock ? Math.min(0.1, (now - this.yawClock) / 1000) : 0;
+    this.yawClock = now;
+    if (this.yaw !== this.yawGoal) {
+      const d = this.yawGoal - this.yaw;
+      this.yaw = Math.abs(d) < 0.002 ? this.yawGoal : this.yaw + d * Math.min(1, rdt * 9);
+    }
+    const hl = Math.hypot(CAM_DIR.x, CAM_DIR.z);
+    const ca = Math.PI / 4 + this.yaw;
+    this.camDir.set(Math.cos(ca) * hl, CAM_DIR.y, Math.sin(ca) * hl);
+    // the sun turns with the view so the scene is always lit from the upper left of the screen
+    this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
+    this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
+    const D = this.camDir;
     const aspect = this.width / Math.max(1, this.height);
     const vh = BASE_VIEW / this.zoom;
     this.camera.left = (-vh * aspect) / 2;
@@ -351,13 +390,13 @@ export class GameRenderer {
     const shake = this.effects?.shake ?? 0;
     const sx = shake ? (Math.random() - 0.5) * shake : 0;
     const sz = shake ? (Math.random() - 0.5) * shake : 0;
-    this.camera.position.set(this.target.x + CAM_DIR.x * CAM_DIST + sx, ty + CAM_DIR.y * CAM_DIST, this.target.z + CAM_DIR.z * CAM_DIST + sz);
+    this.camera.position.set(this.target.x + D.x * CAM_DIST + sx, ty + D.y * CAM_DIST, this.target.z + D.z * CAM_DIST + sz);
     this.camera.lookAt(this.target.x + sx, ty, this.target.z + sz);
     this.camera.updateMatrixWorld();
     this.fitShadow(ty);
     const u = this.fog.uniforms;
     u.fogTarget.value.set(this.target.x, ty, this.target.z);
-    u.fogView.value.copy(CAM_DIR).negate();
+    u.fogView.value.copy(D).negate();
     u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
   }
@@ -410,10 +449,10 @@ export class GameRenderer {
       sc.far = 140;
       sc.updateProjectionMatrix();
     }
-    const cz = this.target.x * -SUN_DIR.x + ty * -SUN_DIR.y + this.target.z * -SUN_DIR.z;
-    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(SUN_DIR, -cz);
+    const cz = this.target.x * -this.sunDir.x + ty * -this.sunDir.y + this.target.z * -this.sunDir.z;
+    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(this.sunDir, -cz);
     this.sun.target.position.copy(c);
-    this.sun.position.copy(c).addScaledVector(SUN_DIR, 70);
+    this.sun.position.copy(c).addScaledVector(this.sunDir, 70);
     this.sun.target.updateMatrixWorld();
     this.sun.updateMatrixWorld();
   }
@@ -425,8 +464,10 @@ export class GameRenderer {
   panPixels(dx: number, dy: number) {
     const vh = BASE_VIEW / this.zoom;
     const wpp = vh / this.height;
-    const right = new THREE.Vector3(1, 0, -1).normalize();
-    const up = new THREE.Vector3(-1, 0, -1).normalize();
+    // screen right / screen up on the ground plane for the current view rotation
+    const ca = Math.PI / 4 + this.yaw;
+    const right = new THREE.Vector3(Math.sin(ca), 0, -Math.cos(ca));
+    const up = new THREE.Vector3(-Math.cos(ca), 0, -Math.sin(ca));
     const elev = Math.asin(CAM_DIR.y);
     this.target.addScaledVector(right, dx * wpp);
     this.target.addScaledVector(up, (-dy * wpp) / Math.sin(elev));
@@ -436,6 +477,19 @@ export class GameRenderer {
   centerOn(x: number, y: number) {
     this.target.set(x, 0, y);
     this.clampTarget();
+  }
+
+  /** Ground point the camera must look at so the 3D point (x, height h, y) lands in the screen centre. */
+  focusPoint(x: number, h: number, y: number): { x: number; y: number } {
+    const D = this.camDir;
+    const g = standHeight(this.world.map, Math.max(0, Math.min(this.world.map.w - 0.01, x)), Math.max(0, Math.min(this.world.map.h - 0.01, y)));
+    const s = (g - h) / D.y;
+    return { x: x + D.x * s, y: y + D.z * s };
+  }
+
+  /** Screen pixels per world unit at the current zoom. */
+  pixelsPerUnit(): number {
+    return this.height / (BASE_VIEW / this.zoom);
   }
 
   private clampTarget() {
@@ -536,16 +590,6 @@ export class GameRenderer {
     this.scene.remove(v.model.root);
     if (v.ring) this.scene.remove(v.ring);
     this.visuals.delete(v.id);
-  }
-
-  private ringMat(color: number) {
-    const key = color.toString(16);
-    let m = this.ringMats.get(key);
-    if (!m) {
-      m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false });
-      this.ringMats.set(key, m);
-    }
-    return m;
   }
 
   private tmpQ = new THREE.Quaternion();
@@ -742,30 +786,16 @@ export class GameRenderer {
     if (e.repairing && Math.random() < dt * 3) this.effects.spark(root.position.x + (Math.random() - 0.5) * bd.w, root.position.y + (v.model.height ?? 0.6) * Math.random(), root.position.z + (Math.random() - 0.5) * bd.h, 0x80ff80);
   }
 
+  /** Selection / hover rings live in the combat overlay (src/render/overlay.ts). */
   private updateRing(e: Entity, v: Visual, d: (typeof DEFS)[string]) {
-    const sel = this.selection.has(e.id) && v.visible;
-    if (sel && !v.ring) {
-      const own = e.owner === this.viewer;
-      const mat = this.ringMat(own ? 0x5dff7a : e.owner < 0 ? 0xffe060 : 0xff4040);
-      if (e.kind === 'building') {
-        const bd = buildingDef(e.def);
-        v.ring = new THREE.Mesh(this.boxRingGeo, mat);
-        v.ring.scale.set((bd.w / 2) * 1.414 * 0.98, 1, (bd.h / 2) * 1.414 * 0.98);
-      } else {
-        v.ring = new THREE.Mesh(this.ringGeo, mat);
-        v.ring.scale.setScalar(Math.max(0.28, (d as { radius?: number }).radius! * 1.25));
-      }
-      v.ring.renderOrder = 2;
-      this.scene.add(v.ring);
-    } else if (!sel && v.ring) {
-      this.scene.remove(v.ring);
-      v.ring = null;
-    }
-    if (v.ring) {
-      const rp = v.model.root.position;
-      const gy = e.kind === 'unit' && unitDef(e.def).air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
-      v.ring.position.set(rp.x, gy + 0.04, rp.z);
-    }
+    const sel = this.selection.has(e.id);
+    if (!v.visible || (!sel && this.hover !== e.id)) return;
+    const rp = v.model.root.position;
+    const air = e.kind === 'unit' && unitDef(e.def).air;
+    const gy = air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
+    const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
+    const bd = e.kind === 'building' ? buildingDef(e.def) : null;
+    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4);
   }
 
   // ------------------------------------------------------------------ wrecks
@@ -1290,6 +1320,7 @@ export class GameRenderer {
       this.fog.update(p.explored, p.visible, dt);
     }
     this.syncEntities(alpha, dt);
+    this.overlay.endFrame();
     this.updateWrecks(dt);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);

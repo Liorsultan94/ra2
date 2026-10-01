@@ -371,9 +371,9 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const fenceMat = fog.apply(new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 0.95, map: tex.planks }));
   if (posts.length) {
     const postGeo = new THREE.BoxGeometry(0.03, 0.16, 0.03).translate(0, 0.07, 0);
-    out.push(...chunkedInstances(postGeo, fenceMat, posts, 24, { castShadow: false }));
+    out.push(...chunkedInstances(postGeo, fenceMat, posts, 48, { castShadow: false }));
     const railGeo = new THREE.BoxGeometry(1, 0.014, 0.012);
-    out.push(...chunkedInstances(railGeo, fenceMat, rails, 24, { castShadow: false }));
+    out.push(...chunkedInstances(railGeo, fenceMat, rails, 48, { castShadow: false }));
   }
 
   // ------------------------------------------------------- power lines
@@ -463,7 +463,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     });
     for (let i = 0; i < tops.length - 1; i++) for (let k = 0; k < 2; k++) catenary(tops[i][k], tops[i + 1][k], 0.06, 6);
   }
-  if (poleInst.length) out.push(...chunkedInstances(pole.build(), fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 })), poleInst, 32, { castShadow: shadows }));
+  if (poleInst.length) out.push(...chunkedInstances(pole.build(), fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 })), poleInst, 48, { castShadow: shadows }));
   if (cable.length) {
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(cable, 3));

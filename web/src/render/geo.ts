@@ -158,3 +158,42 @@ export function chunkedInstances(
   }
   return out;
 }
+
+/**
+ * Zoom-driven level of detail for the scenery. The renderer uses an
+ * orthographic camera, so detail depends on how many world units the view
+ * spans rather than on per-object distance: when zoomed out, instanced
+ * chunks swap to lighter geometry and the smallest clutter is hidden.
+ * `Terrain` feeds the current view span in (from the ground's
+ * onBeforeRender), so the renderer needs no changes.
+ */
+export class SceneryLod {
+  private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number }[] = [];
+  private state = -1;
+  private last = -1;
+
+  /**
+   * Register meshes: they use `lo` once the view spans more than `loSpan`
+   * world units and are hidden beyond `hideSpan`.
+   */
+  add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity) {
+    this.entries.push({ meshes, hi, lo, loSpan, hideSpan });
+    this.state = -1;
+  }
+
+  /** View height in world units (orthographic span). */
+  update(span: number) {
+    // a little hysteresis so a pinch hovering at a threshold doesn't flicker
+    if (this.last >= 0 && Math.abs(span - this.last) < 0.4 && this.state >= 0) return;
+    this.last = span;
+    this.state = 1;
+    for (const e of this.entries) {
+      const geo = e.lo && span > e.loSpan ? e.lo : e.hi;
+      const vis = span <= e.hideSpan;
+      for (const m of e.meshes) {
+        if (m.geometry !== geo) m.geometry = geo;
+        m.visible = vis;
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
+import { SceneryLod } from './geo';
 import { Ground } from './ground';
 import { buildLayout, type Layout } from './layout';
 import { Resources } from './resources';
@@ -19,6 +20,8 @@ export class Terrain {
   water!: THREE.Mesh;
   readonly layout: Layout;
   readonly ground: Ground;
+  /** Zoom-driven level of detail for vegetation and rocks. */
+  readonly lod: SceneryLod;
   private waterMat!: THREE.ShaderMaterial;
   private resources: Resources;
   readonly minimapImage: HTMLCanvasElement;
@@ -33,15 +36,25 @@ export class Terrain {
     const trees = treeSpots(map, quality);
     this.ground = new Ground(map, this.layout, trees.map((t) => ({ x: t.x, y: t.y, r: canopyRadius(t) })), fog, quality);
     this.group.add(this.ground.mesh);
+    // Zoom-based LOD: the ground chunks report the view span (orthographic
+    // camera) every frame; the vegetation and rocks switch models from it.
+    const lod = new SceneryLod();
+    this.lod = lod;
+    const onBefore = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+      const oc = cam as THREE.OrthographicCamera;
+      if (oc.isOrthographicCamera) lod.update((oc.top - oc.bottom) / oc.zoom);
+      else if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) lod.update(cam.position.y * 0.9);
+    };
+    for (const c of this.ground.chunks) c.onBeforeRender = onBefore;
     // dark skirt far below so the map edge doesn't show the void
-    const skirt = new THREE.Mesh(new THREE.PlaneGeometry(map.w * 6, map.h * 6), new THREE.MeshBasicMaterial({ color: 0x050607 }));
+    const skirt = new THREE.Mesh(new THREE.PlaneGeometry(map.w * 6, map.h * 6), fog.apply(new THREE.MeshBasicMaterial({ color: 0x050607 })));
     skirt.rotation.x = -Math.PI / 2;
     skirt.position.set(map.w / 2, -2, map.h / 2);
     skirt.name = 'skirt';
     this.group.add(skirt);
     this.buildWater();
-    for (const o of buildVegetation(map, this.layout, trees, fog, quality)) this.group.add(o);
-    for (const o of buildRocks(map, this.layout, fog, quality)) this.group.add(o);
+    for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod)) this.group.add(o);
+    for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(o);
     for (const o of buildScenery(map, this.layout, fog, quality)) this.group.add(o);
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
@@ -120,6 +133,8 @@ export class Terrain {
     });
     const geo = new THREE.PlaneGeometry(m.w, m.h, 1, 1);
     geo.rotateX(-Math.PI / 2);
+    // shared smoky shroud / haze instead of the plain darkening above
+    this.fog.upgradeShader(this.waterMat);
     this.water = new THREE.Mesh(geo, this.waterMat);
     this.water.position.set(m.w / 2, WATER_LEVEL, m.h / 2);
     this.water.renderOrder = 1;

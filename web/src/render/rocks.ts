@@ -3,7 +3,7 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { chunkedInstances, type Inst } from './geo';
+import { chunkedInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
@@ -99,16 +99,20 @@ function finishRock(g: THREE.BufferGeometry, disp: Float32Array, seed: number): 
   return g;
 }
 
-export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.Object3D[] {
+export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod): THREE.Object3D[] {
   const tex = rockTexture(quality === 'low' ? 128 : 256);
   const mat = fog.apply(
     new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.92, metalness: 0, flatShading: true }),
   );
   const shadows = quality !== 'low';
-  const big = [rockGeo(2, 11, { strata: 9, cuts: 7 }), rockGeo(2, 23, { strata: 7, cuts: 6 }), rockGeo(1, 37, { cuts: 6 })];
-  const mid = [rockGeo(1, 41), rockGeo(1, 53)];
-  const small = rockGeo(0, 61, { cuts: 3 });
-  const lists: Inst[][] = [[], [], [], [], [], []];
+  // [full, lite] pairs: the lite model is the same rock at a lower subdivision
+  const low = quality === 'low';
+  const pair = (d: number, seed: number, opts: Parameters<typeof rockGeo>[2] = {}): [THREE.BufferGeometry, THREE.BufferGeometry | null] => {
+    const lo = d > 0 ? rockGeo(d - 1, seed, opts) : null;
+    return [low && lo ? lo : rockGeo(d, seed, opts), low ? null : lo];
+  };
+  const geos = [pair(2, 11, { strata: 9, cuts: 7 }), pair(2, 23, { strata: 7, cuts: 6 }), pair(1, 41), pair(0, 61, { cuts: 3 })];
+  const lists: Inst[][] = [[], [], [], []];
   const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === Tile.Rock;
 
   for (let y = 0; y < m.h; y++) {
@@ -132,7 +136,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         const cz = y + 0.5 + (hash2(x, y, 2) - 0.5) * 0.4;
         const s = 0.3 + hash2(x, y, 3) * 0.22;
         const h = groundHeight(m, cx, cz);
-        lists[Math.floor(hash2(x, y, 4) * 3)].push({
+        lists[hash2(x, y, 4) < 0.5 ? 0 : 1].push({
           x: cx,
           y: h - s * 0.3,
           z: cz,
@@ -148,7 +152,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
           const bx = x + hash2(x, y, 10 + j * 7);
           const bz = y + hash2(x, y, 11 + j * 7);
           const bs = 0.14 + hash2(x, y, 12 + j * 7) * 0.16;
-          lists[3 + (hash2(x, y, 13 + j) < 0.5 ? 0 : 1)].push({ x: bx, y: groundHeight(m, bx, bz) - bs * 0.2, z: bz, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
+          lists[2].push({ x: bx, y: groundHeight(m, bx, bz) - bs * 0.2, z: bz, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
         }
         continue;
       }
@@ -170,7 +174,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         if (m.ore[i]) continue;
         const s = (near ? 0.06 + hash2(x, y, 50 + k) * 0.1 : 0.05 + hash2(x, y, 50 + k) * 0.07) * (t === Tile.Sand ? 0.9 : 1);
         const wet = t === Tile.Sand ? 0.75 : 1;
-        lists[5].push({
+        lists[3].push({
           x: px,
           y: surfaceHeight(m, px, pz) - s * 0.25,
           z: pz,
@@ -184,11 +188,14 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       }
     }
   }
-  const geos = [...big, ...mid, small];
   const out: THREE.Object3D[] = [];
-  geos.forEach((g, k) => {
+  const loSpan = quality === 'high' ? 19 : 14.5;
+  geos.forEach(([hi, lo], k) => {
     if (!lists[k].length) return;
-    out.push(...chunkedInstances(g, mat, lists[k], 24, { castShadow: shadows && k < 5, receiveShadow: true, name: 'rocks' }));
+    const ims = chunkedInstances(hi, mat, lists[k], 32, { castShadow: shadows && k < 3, receiveShadow: true, name: 'rocks' });
+    out.push(...ims);
+    // scree is hidden when zoomed far out
+    lod.add(ims, hi, lo, loSpan, k === 3 ? loSpan + 6 : Infinity);
   });
   return out;
 }

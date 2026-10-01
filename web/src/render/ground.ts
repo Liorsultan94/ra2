@@ -54,7 +54,9 @@ const smooth = (e0: number, e1: number, x: number) => {
 };
 
 export class Ground {
-  readonly mesh: THREE.Mesh;
+  /** The ground, split into square chunks so off-screen parts are culled. */
+  readonly mesh = new THREE.Group();
+  readonly chunks: THREE.Mesh[] = [];
   readonly material: THREE.MeshStandardMaterial;
   /** Painted control maps, also reused for the minimap. */
   readonly splat: Uint8Array;
@@ -125,7 +127,7 @@ export class Ground {
     mat.customProgramCacheKey = () => 'terrain-splat-1';
     this.material = mat;
 
-    // mesh
+    // mesh: one height field (so normals are continuous), cut into chunks
     const nx = m.w * SUB + 1;
     const ny = m.h * SUB + 1;
     const pos = new Float32Array(nx * ny * 3);
@@ -136,25 +138,52 @@ export class Ground {
         pos[k + 1] = surfaceHeight(m, i / SUB, j / SUB);
         pos[k + 2] = j / SUB;
       }
-    const idx = new Uint32Array((nx - 1) * (ny - 1) * 6);
-    let o = 0;
-    for (let j = 0; j < ny - 1; j++)
-      for (let i = 0; i < nx - 1; i++) {
-        const a = j * nx + i;
-        const b = a + 1;
-        const c = a + nx;
-        const d = c + 1;
-        // alternate the diagonal to avoid a visible grain
-        if ((i + j) & 1) idx.set([a, c, b, b, c, d], o);
-        else idx.set([a, c, d, a, d, b], o);
-        o += 6;
+    const nor = new Float32Array(nx * ny * 3);
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        const h = (ii: number, jj: number) => pos[(Math.max(0, Math.min(ny - 1, jj)) * nx + Math.max(0, Math.min(nx - 1, ii))) * 3 + 1];
+        const dx = (h(i + 1, j) - h(i - 1, j)) * SUB * 0.5;
+        const dz = (h(i, j + 1) - h(i, j - 1)) * SUB * 0.5;
+        const l = Math.hypot(dx, 1, dz);
+        nor.set([-dx / l, 1 / l, -dz / l], (j * nx + i) * 3);
       }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.computeVertexNormals();
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.receiveShadow = true;
+    const CH = 24 * SUB; // chunk size in vertices
+    for (let cj = 0; cj < ny - 1; cj += CH)
+      for (let ci = 0; ci < nx - 1; ci += CH) {
+        const cw = Math.min(CH, nx - 1 - ci) + 1;
+        const chh = Math.min(CH, ny - 1 - cj) + 1;
+        const cpos = new Float32Array(cw * chh * 3);
+        const cnor = new Float32Array(cw * chh * 3);
+        for (let j = 0; j < chh; j++)
+          for (let i = 0; i < cw; i++) {
+            const src = ((cj + j) * nx + ci + i) * 3;
+            cpos.set(pos.subarray(src, src + 3), (j * cw + i) * 3);
+            cnor.set(nor.subarray(src, src + 3), (j * cw + i) * 3);
+          }
+        const idx = new Uint16Array((cw - 1) * (chh - 1) * 6);
+        let o = 0;
+        for (let j = 0; j < chh - 1; j++)
+          for (let i = 0; i < cw - 1; i++) {
+            const a = j * cw + i;
+            const b = a + 1;
+            const c = a + cw;
+            const d = c + 1;
+            // alternate the diagonal to avoid a visible grain
+            if ((ci + i + cj + j) & 1) idx.set([a, c, b, b, c, d], o);
+            else idx.set([a, c, d, a, d, b], o);
+            o += 6;
+          }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(cpos, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(cnor, 3));
+        geo.setIndex(new THREE.BufferAttribute(idx, 1));
+        geo.computeBoundingSphere();
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.receiveShadow = true;
+        mesh.name = 'ground';
+        this.chunks.push(mesh);
+        this.mesh.add(mesh);
+      }
     this.mesh.name = 'ground';
   }
 

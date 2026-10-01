@@ -18,6 +18,8 @@ const FinalShader = {
     shadowTint: { value: new THREE.Vector3(-0.012, 0.0, 0.022) },
     highTint: { value: new THREE.Vector3(0.03, 0.012, -0.03) },
     vignette: { value: 0.3 },
+    tDistort: { value: null as THREE.Texture | null },
+    distortOn: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -32,6 +34,8 @@ const FinalShader = {
     uniform vec3 shadowTint;
     uniform vec3 highTint;
     uniform float vignette;
+    uniform sampler2D tDistort;
+    uniform float distortOn;
     varying vec2 vUv;
 
     float lumaOf( vec3 c ) { c = c / ( 1.0 + c ); return dot( c, vec3( 0.299, 0.587, 0.114 ) ); }
@@ -79,7 +83,10 @@ const FinalShader = {
     }
 
     void main() {
-      vec3 c = sampleAA( vUv );
+      // heat haze / shockwave refraction (UV offsets from a low-res distortion buffer)
+      vec2 uv = vUv;
+      if ( distortOn > 0.5 ) uv = clamp( uv + texture2D( tDistort, vUv ).rg, vec2( 0.001 ), vec2( 0.999 ) );
+      vec3 c = sampleAA( uv );
       c = toSRGB( aces( c ) );
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
       // split toning: cool shadows, warm highlights
@@ -96,8 +103,16 @@ const FinalShader = {
     }`,
 };
 
+/** Source of the screen-space distortion buffer (see fx/haze.ts). */
+export interface DistortionSource {
+  render(renderer: THREE.WebGLRenderer): THREE.Texture | null;
+  setSize(w: number, h: number): void;
+}
+
 export class FinalPass extends Pass {
   readonly uniforms: typeof FinalShader.uniforms;
+  /** Optional heat haze / shockwave distortion, rendered right before the final quad. */
+  haze: DistortionSource | null = null;
   private material: THREE.ShaderMaterial;
   private quad: FullScreenQuad;
 
@@ -117,10 +132,14 @@ export class FinalPass extends Pass {
 
   setSize(width: number, height: number) {
     this.uniforms.resolution.value.set(width, height);
+    this.haze?.setSize(width, height);
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
     this.uniforms.tDiffuse.value = readBuffer.texture;
+    const d = this.haze ? this.haze.render(renderer) : null;
+    this.uniforms.tDistort.value = d;
+    this.uniforms.distortOn.value = d ? 1 : 0;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }
