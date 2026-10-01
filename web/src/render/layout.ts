@@ -136,9 +136,9 @@ export function buildLayout(m: GameMap): Layout {
   // ---- paved roads and dirt tracks: hand-placed via points, routed around
   // rocks, trees, structures and water so nothing paved disappears under them
   const route = makeRouter(m);
-  const hwy0 = [v(0, 71.5), v(8, 79.6), s0, v(30.5, 72.5), v(37.5, 64.5), v(41, 57.5), bc.a0, bc.e0];
+  const hwy0 = [v(0, 71.5), v(8, 79.6), s0, v(24, 76.5), v(30, 58.5), v(37.5, 56.5), bc.a0, bc.e0];
   const ctryA0 = [s0, v(30.5, 84.5), v(52.5, 82.5), v(64.5, 76.5), v(70, 77.8), bs.a0, bs.e0];
-  const ctryA1 = [bs.e1, bs.a1, v(80.6, 66), v(80.2, 60), v(77.5, 51.5), v(83.5, 33.5), s1];
+  const ctryA1 = [bs.e1, bs.a1, v(80.6, 66), v(80.2, 60), v(81, 52), v(83.5, 33.5), s1];
   // (the rock ridges are not exactly point symmetric, so mirrored roads are routed on their own)
   const roadSrc: { pts: V2[]; width: number; variant: 0 | 1 }[] = [
     { pts: hwy0, width: 1.05, variant: 0 },
@@ -443,13 +443,24 @@ function makeRouter(m: GameMap) {
       }
     }
   }
+  // ore fields (and the ground around the rigs where ore regrows) are expensive
+  const oreArea = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    if (!m.oreKind[i] && !m.ore[i]) continue;
+    const x = i % W;
+    const y = (i / W) | 0;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < W && y + dy < H) oreArea[(y + dy) * W + x + dx] = 1;
+  }
+  for (const mm of m.oreMines)
+    for (let y = mm.y - 4; y <= mm.y + 4; y++) for (let x = mm.x - 4; x <= mm.x + 4; x++) if (x >= 0 && y >= 0 && x < W && y < H) oreArea[y * W + x] = 1;
   const vh = (x: number, y: number) => m.heights[y * (W + 1) + x];
   const cost = (i: number) => {
     const x = i % W;
     const y = (i / W) | 0;
     const d = near[i];
     const slope = Math.max(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1)) - Math.min(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1));
-    return 1 + (d < 1.5 ? 6 : d < 2.5 ? 1.5 : 0) + slope * 6 + (m.ore[i] || m.oreKind[i] ? 6 : 0) + (m.tiles[i] === Tile.Sand ? 1 : 0);
+    return 1 + (d < 1.5 ? 6 : d < 2.5 ? 1.5 : 0) + slope * 6 + (oreArea[i] ? 25 : 0) + (m.tiles[i] === Tile.Sand ? 1 : 0);
   };
   /** Is a disc of radius r around (x, y) clear of hard tiles? */
   const free = (x: number, y: number, r: number) => {
@@ -470,7 +481,7 @@ function makeRouter(m: GameMap) {
     for (let y = cy - 4; y <= cy + 4; y++)
       for (let x = cx - 4; x <= cx + 4; x++) {
         if (isHard(x, y)) continue;
-        const d = Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) - Math.min(near[y * W + x], 3) * 0.3;
+        const d = Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) - Math.min(near[y * W + x], 3) * 0.3 + oreArea[y * W + x] * 6;
         if (d < bd) {
           bd = d;
           best = y * W + x;
@@ -562,7 +573,23 @@ function makeRouter(m: GameMap) {
   const clearSeg = (p: V2, q: V2, r: number) => {
     const L = Math.hypot(q.x - p.x, q.y - p.y);
     const n = Math.max(1, Math.ceil(L / 0.2));
-    for (let k = 0; k <= n; k++) if (!free(p.x + ((q.x - p.x) * k) / n, p.y + ((q.y - p.y) * k) / n, r)) return false;
+    for (let k = 0; k <= n; k++) {
+      const x = p.x + ((q.x - p.x) * k) / n;
+      const y = p.y + ((q.y - p.y) * k) / n;
+      if (!free(x, y, r)) return false;
+      // short cuts must not clip ore fields either
+      for (const [ox, oy] of [
+        [0, 0],
+        [r, 0],
+        [-r, 0],
+        [0, r],
+        [0, -r],
+      ]) {
+        const tx = Math.floor(x + ox);
+        const ty = Math.floor(y + oy);
+        if (tx >= 0 && ty >= 0 && tx < W && ty < H && (m.oreKind[ty * W + tx] || m.ore[ty * W + tx])) return false;
+      }
+    }
     return true;
   };
   /**
@@ -581,25 +608,23 @@ function makeRouter(m: GameMap) {
     const trail: V2[] = [];
     while (vias.length > 2 && onHard(vias[0])) lead.push(vias.shift()!);
     while (vias.length > 2 && onHard(vias[vias.length - 1])) trail.unshift(vias.pop()!);
-    const cells: number[] = [];
     const ids = vias.map(snap);
-    for (let k = 0; k < ids.length - 1; k++) {
-      const seg = astar(ids[k], ids[k + 1]);
-      cells.push(...(k ? seg.slice(1) : seg));
-    }
     const centre = (i: number) => v((i % W) + 0.5, ((i / W) | 0) + 0.5);
-    // string pulling with clearance
-    const pulled: V2[] = [centre(cells[0])];
-    let i = 0;
-    while (i < cells.length - 1) {
-      let j = Math.min(cells.length - 1, i + 1);
-      for (let k = cells.length - 1; k > i + 1; k--)
-        if (clearSeg(centre(cells[i]), centre(cells[k]), r)) {
-          j = k;
-          break;
-        }
-      pulled.push(centre(cells[j]));
-      i = j;
+    // A* per leg, then string pulling with clearance (per leg, so it never skips a via)
+    const pulled: V2[] = [centre(ids[0])];
+    for (let leg = 0; leg < ids.length - 1; leg++) {
+      const cells = astar(ids[leg], ids[leg + 1]);
+      let i = 0;
+      while (i < cells.length - 1) {
+        let j = i + 1;
+        for (let k = cells.length - 1; k > i + 1; k--)
+          if (clearSeg(centre(cells[i]), centre(cells[k]), r)) {
+            j = k;
+            break;
+          }
+        pulled.push(centre(cells[j]));
+        i = j;
+      }
     }
     const first = vias[0];
     const last = vias[vias.length - 1];

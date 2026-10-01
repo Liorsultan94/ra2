@@ -84,6 +84,8 @@ export interface Model {
   damageFx?: { pos: THREE.Vector3; kind: 'smoke' | 'fire' | 'spark'; at: number }[];
   /** Aircraft: empty objects at the rear (flare / chaff dispensers); use getWorldPosition() to spawn flares (they follow the bank / roll). */
   flareDispensers?: THREE.Object3D[];
+  /** Buildings: local-space lamp/floodlight points for night mode (shared per template, read-only). */
+  nightLights?: { pos: THREE.Vector3; color: number; intensity: number }[];
 
   // ---- legacy fields (older builders) ----
   spinners?: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; speed: number }[];

@@ -139,7 +139,8 @@ export class Outskirts {
         const dr = g.tint[k + 3] / 255;
         for (let j = 0; j < 3; j++) {
           const c = (lush[j] * (1 - dr) + dryC[j] * dr) * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
-          data[(py * size + px) * 3 + j] = Math.min(1, c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
+          // a touch darker: the splat shader's detail maps darken the flat palette colours
+          data[(py * size + px) * 3 + j] = Math.min(1, 0.88 * c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
         }
       }
     return { data, size };
@@ -228,7 +229,8 @@ export class Outskirts {
         const o = this.outside(x, y);
         const jitter = o <= 0 ? 0 : (valueNoise(x * 0.25, y * 0.25, 77) - 0.5) * 6;
         const near = o <= 0 ? 0 : this.wetNear(x, y);
-        let blend = o <= 0 ? 0 : smoothstep(4, 18, o + jitter) * (1 - near);
+        // farmland starts just past the edge so the seam reads as a field boundary, not a smear
+        let blend = o <= 0 ? 0 : smoothstep(1.5, 11, o + jitter * 0.6) * (1 - near);
         if (o > 0 && near <= 0 && this.edgeHeight(x < 0 ? -x : x > w ? 2 * w - x : x, y < 0 ? -y : y > h ? 2 * h - y : y) < -0.05) blend = 1;
         this.terrainColor(x, y, t, near > 0);
         const i = (py * size + px) * 4;

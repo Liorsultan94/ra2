@@ -1301,11 +1301,11 @@ const FRAG_LIGHT = `
   float bxS = 0.0;
   if ( bxSoot > 0.0 ) {
     // scorch blotches with upward streaks; the ground apron stays clean
-    vec3 sp = vBxP * vec3( 6.0, 2.6, 6.0 );
-    float n = bxV( sp ) * 0.65 + bxV( sp * 2.9 + 7.0 ) * 0.35;
-    bxS = bxSoot * smoothstep( 0.62 - 0.3 * bxSoot, 0.82 - 0.2 * bxSoot, n ) * smoothstep( 0.045, 0.1, vBxP.y );
+    vec3 sp = vBxP * vec3( 4.0, 2.0, 4.0 );
+    float n = bxV( sp ) * 0.6 + bxV( sp * 2.7 + 7.0 ) * 0.3 + bxV( sp * 7.3 + 3.0 ) * 0.1;
+    bxS = bxSoot * smoothstep( 0.7 - 0.28 * bxSoot, 0.95 - 0.2 * bxSoot, n ) * smoothstep( 0.045, 0.1, vBxP.y );
   }
-  outgoingLight *= ( 1.0 - 0.7 * bxS ) * ( 1.0 - 0.8 * bxK );
+  outgoingLight *= ( 1.0 - 0.62 * bxS ) * ( 1.0 - 0.8 * bxK );
   #ifdef BX_FRONT
   // inside faces seen through a cut / the open top: the interior is in shade
   if ( ! gl_FrontFacing ) outgoingLight *= 0.38;
@@ -1645,7 +1645,7 @@ export class BuildFx {
         U.bxP.value[k].set(99, 0, 0, 0);
       }
     }
-    U.bxSoot.value = smooth(0.15, 0.9, d);
+    U.bxSoot.value = 0.85 * smooth(0.2, 0.95, d);
     // overlays (lazily built per template variant and tier)
     for (let k = 0; k < 4; k++) {
       const on = d >= TIER[k] && s.built >= 1;
