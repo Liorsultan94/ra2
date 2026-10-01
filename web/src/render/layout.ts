@@ -145,7 +145,22 @@ export function buildLayout(m: GameMap): Layout {
     { pts: ctryA0, width: 0.8, variant: 1 },
     { pts: ctryA1, width: 0.8, variant: 1 },
   ];
-  const roads: Road[] = [...roadSrc, ...roadSrc.map((r) => ({ ...r, pts: rev(mirAll(r.pts)) }))].map((r) => ({ ...r, pts: route(r.pts, r.width) }));
+  // roads lead up to the bases but stop short of the construction area
+  const baseR = 8.5;
+  const inBase = (p: V2) => m.starts.some((st) => Math.hypot(p.x - st.x - 0.5, p.y - st.y - 0.5) < baseR);
+  const roads: Road[] = [];
+  for (const r of [...roadSrc, ...roadSrc.map((r) => ({ ...r, pts: rev(mirAll(r.pts)) }))]) {
+    let run: V2[] = [];
+    const flush = () => {
+      if (run.length * 0.25 > 2) roads.push({ ...r, pts: run });
+      run = [];
+    };
+    for (const p of route(r.pts, r.width)) {
+      if (inBase(p)) flush();
+      else run.push(p);
+    }
+    flush();
+  }
 
   const tr0: V2[][] = [
     // village lane, from the western road through the village to the highway
