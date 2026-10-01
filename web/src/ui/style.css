@@ -1552,3 +1552,21 @@ input[type='range'] {
     height: 100%;
   }
 }
+.sb-faction {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  gap: 6px;
+}
+.sb-faction span {
+  min-width: 0;
+}
+.sb-faction span,
+.sb-faction small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-faction small {
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+}

@@ -21,6 +21,7 @@ export function emitDamageFx(fx: Effects, m: Model, damage: number, dt: number, 
   const pts = m.damageFx;
   if (!pts || !pts.length) return false;
   const mw = m.root.matrixWorld;
+  dt *= fx.rate;
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
     if (damage < p.at) continue;

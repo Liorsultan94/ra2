@@ -24,6 +24,7 @@
  * Pitch reference (MIDI): D1 = 26, D2 = 38, D3 = 50, D4 = 62, D5 = 74.
  */
 import { Bank, Patch, clamp, env, glide, midiHz, rng32 } from './core';
+import { makeDrumKit, makeShepard, type DrumKit } from './samples';
 
 export type MusicMode = 'menu' | 'battle';
 export type StingerKind = 'heavy' | 'dread';
@@ -74,22 +75,16 @@ const LAYER_MIX: number[][] = [
   [1, 0, 1, 1],
 ];
 
-/** Shepard riser: a voice is born every cycle and rises SHEP_OCT octaves over its life */
+/** Shepard riser: SHEP_OCT octave-spaced voices, each rising one octave per loop of 2 bars */
 const SHEP_OCT = 4;
 const SHEP_BASE = 110;
-const SHEP_CYCLE_BARS = 2;
+const SHEP_LOOP = (60 / BATTLE_BPM) * 8;
 
 interface Live {
   p: Patch;
   end: number;
   mode: MusicMode;
   layer: number;
-}
-
-function makeHann(n: number): Float32Array {
-  const c = new Float32Array(n);
-  for (let i = 0; i < n; i++) c[i] = Math.pow(Math.sin((Math.PI * i) / (n - 1)), 2);
-  return c;
 }
 
 export class MusicEngine {
@@ -112,7 +107,7 @@ export class MusicEngine {
   private fadeEnd = 0;
   private lastI = 0;
   private readonly layerTarget = [1, 1, 0, 0];
-  private shepNext = 0;
+  private shepEnd = 0;
   private stabStep = -1;
   private stingAt = -1e9;
   private readonly stingKindAt: Record<StingerKind, number> = { heavy: -1e9, dread: -1e9 };
@@ -138,13 +133,15 @@ export class MusicEngine {
   private readonly droneLp: Record<MusicMode, BiquadFilterNode>;
   private readonly shep: GainNode;
   private readonly sting: GainNode;
-  private readonly hann = makeHann(256);
+  private readonly kit: DrumKit;
+  private shepBuf: AudioBuffer | null = null;
 
   constructor(
     private readonly ctx: BaseAudioContext,
     private readonly bank: Bank,
     out: AudioNode,
   ) {
+    this.kit = makeDrumKit(ctx);
     // Rumble filter: nothing below ~28 Hz leaves the music (saves headroom).
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
@@ -177,7 +174,7 @@ export class MusicEngine {
     this.combatR = this.pan(this.layer[L.Combat], 0.5);
     // Shared tone shaping for the drones and the ostinato: one filter per bus
     // instead of one per note.
-    this.droneLp = { battle: this.lp(this.layer[L.Bed], 220, 1.1), menu: this.lp(this.bus.menu, 170, 1.2) };
+    this.droneLp = { battle: this.lp(this.layer[L.Bed], 400, 1.1), menu: this.lp(this.bus.menu, 300, 1.2) };
     const ostDrive = ctx.createWaveShaper();
     ostDrive.curve = bank.curve(1.6);
     ostDrive.connect(this.layer[L.Alert]);
@@ -379,7 +376,7 @@ export class MusicEngine {
     this.planned = 0;
     this.levelBar = this.bar;
     this.fadeEnd = t;
-    this.shepNext = t;
+    this.shepEnd = 0;
     const mix = LAYER_MIX[0];
     for (let i = 0; i < 4; i++) {
       const g = this.layer[i].gain;
@@ -430,6 +427,7 @@ export class MusicEngine {
       const g = this.layer[i].gain;
       g.setTargetAtTime(mix[i], t, dur / 3.5);
       if (mix[i] === 0) this.killWhere((l) => l.layer === i, t + dur * 1.2);
+      if (mix[i] === 0 && i === L.Alert) this.shepEnd = 0;
       this.layerTarget[i] = mix[i];
     }
     this.level = lv;
@@ -454,7 +452,7 @@ export class MusicEngine {
     const rnd = this.rnd;
 
     // shared filters follow the intensity
-    this.droneLp.battle.frequency.setTargetAtTime(200 + 500 * I, t, barLen / 2);
+    this.droneLp.battle.frequency.setTargetAtTime(380 + 700 * I, t, barLen / 2);
     this.ostLp.frequency.setTargetAtTime(450 + 1500 * I, t, barLen / 3);
 
     // bed: an 8-bar D pedal plus a cluster pad that follows the harmony
@@ -474,13 +472,7 @@ export class MusicEngine {
 
     // alert: Shepard riser births and dissonant brass swells
     if (this.on(L.Alert)) {
-      const cycle = barLen * SHEP_CYCLE_BARS;
-      if (t >= this.shepNext - 1e-3) {
-        const fresh = this.shepNext <= t - cycle * 0.5 || !this.live.some((l) => l.layer === L.Alert && l.end > t + cycle);
-        if (fresh) for (const ph of [0.25, 0.5, 0.75]) this.shepVoice(t, cycle * SHEP_OCT, ph);
-        this.shepVoice(t, cycle * SHEP_OCT, 0);
-        this.shepNext = t + cycle;
-      }
+      if (this.shepEnd < t + barLen) this.shepard(t);
       const brassBar = this.level === 2 ? pb % 2 === 0 : pb === 2 || pb === 6;
       if (brassBar) this.brass(t, barLen * 1.5, this.layer[L.Alert], 38 + r, 0.7 + 0.3 * I);
     }
@@ -672,7 +664,7 @@ export class MusicEngine {
     g.gain.setValueAtTime(v, t + dur);
     g.gain.linearRampToValueAtTime(0, t + dur + fade);
     const sub = p.osc('sine', midiHz(midi), t, end);
-    const sg = p.gain(0.16);
+    const sg = p.gain(0.06);
     sub.connect(sg);
     sg.connect(g);
     const sawG = p.gain(0.075);
@@ -681,26 +673,30 @@ export class MusicEngine {
       o.detune.value = det;
       o.connect(sawG);
     }
-    const upper = p.osc('sawtooth', midiHz(midi + 12 + up0), t, end);
+    sawG.connect(g);
+    // dissonant upper voice one octave higher, outside the shared filter so it stays audible
+    const um = midi + 24;
+    const upper = p.osc('sawtooth', midiHz(um + up0), t, end);
     if (up1 !== up0) {
-      upper.frequency.setValueAtTime(midiHz(midi + 12 + up0), t + dur * 0.3);
-      upper.frequency.exponentialRampToValueAtTime(midiHz(midi + 12 + up1), t + dur);
+      upper.frequency.setValueAtTime(midiHz(um + up0), t + dur * 0.3);
+      upper.frequency.exponentialRampToValueAtTime(midiHz(um + up1), t + dur);
     }
+    const ulp = p.filter('lowpass', 900, 0.8);
     const ug = p.gain(0);
     ug.gain.setValueAtTime(0, t);
-    ug.gain.linearRampToValueAtTime(0.05, t + dur * 0.5);
-    ug.gain.linearRampToValueAtTime(0.03, t + dur + fade);
-    upper.connect(ug);
-    ug.connect(sawG);
-    sawG.connect(g);
+    ug.gain.linearRampToValueAtTime(0.035, t + dur * 0.5);
+    ug.gain.linearRampToValueAtTime(0.02, t + dur + fade);
+    upper.connect(ulp);
+    ulp.connect(ug);
+    ug.connect(g);
     g.connect(this.droneLp[mode]);
     this.track(p, mode === 'battle' ? L.Bed : -1);
     // slow cutoff wander for the menu drone (battle follows the intensity instead)
     if (mode === 'menu') {
       const f = this.droneLp.menu.frequency;
-      f.setTargetAtTime(150 + this.rnd() * 60, t, dur * 0.1);
-      f.setTargetAtTime(320 + this.rnd() * 200, t + dur * 0.35, dur * 0.15);
-      f.setTargetAtTime(160 + this.rnd() * 60, t + dur * 0.75, dur * 0.1);
+      f.setTargetAtTime(260 + this.rnd() * 80, t, dur * 0.1);
+      f.setTargetAtTime(520 + this.rnd() * 300, t + dur * 0.35, dur * 0.15);
+      f.setTargetAtTime(280 + this.rnd() * 80, t + dur * 0.75, dur * 0.1);
     }
   }
 
@@ -714,7 +710,7 @@ export class MusicEngine {
     lp.frequency.linearRampToValueAtTime(1100, t + dur * 0.7);
     lp.frequency.linearRampToValueAtTime(600, t + dur + rel);
     const g = p.gain(0);
-    const pk = 0.026 * v;
+    const pk = 0.04 * v;
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(pk, t + 0.7);
     g.gain.setValueAtTime(pk, t + dur);
@@ -729,20 +725,30 @@ export class MusicEngine {
     this.track(p, L.Bed);
   }
 
-  /** Clock tick (hi) / tock (lo). */
-  private tickTock(t: number, dest: AudioNode, hi: boolean, v: number): void {
-    const p = this.patch();
-    p.nh(dest, t, { type: 'bandpass', f: hi ? 3600 : 2600, q: 5, a: 0.001, d: 0.022, peak: 0.55 * v });
-    p.th(dest, t, { type: 'triangle', f: hi ? 1650 : 1240, a: 0.001, d: 0.028, peak: 0.035 * v });
-    p.finish();
+  /** Play a pre-rendered one-shot. */
+  private hit(buf: AudioBuffer, t: number, dest: AudioNode, v: number, rate = 1): void {
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    s.playbackRate.value = rate;
+    const g = this.ctx.createGain();
+    g.gain.value = v;
+    s.connect(g);
+    g.connect(dest);
+    s.onended = () => {
+      s.disconnect();
+      g.disconnect();
+    };
+    s.start(t);
   }
 
-  /** Muffled low thump (heartbeat). Has a 2nd harmonic so small speakers still hear it. */
+  /** Clock tick (hi) / tock (lo). */
+  private tickTock(t: number, dest: AudioNode, hi: boolean, v: number): void {
+    this.hit(this.kit.tick, t, dest, 0.16 * v, hi ? 1 : 0.72);
+  }
+
+  /** Muffled low thump (heartbeat). */
   private thump(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: 70, f2: 42, glide: 0.13, a: 0.006, d: 0.24, peak: 0.42 * v });
-    p.th(dest, t, { type: 'triangle', f: 132, f2: 88, glide: 0.07, a: 0.004, d: 0.09, peak: 0.09 * v });
-    p.finish();
+    this.hit(this.kit.thump, t, dest, 0.42 * v);
   }
 
   /** Dissonant stab: low pizzicato minor 2nd, or a high tritone piano dyad. */
@@ -824,19 +830,16 @@ export class MusicEngine {
     p.finish();
   }
 
-  /** One Shepard voice; `phase` 0..1 starts it part-way through its life. */
-  private shepVoice(t: number, life: number, phase: number): void {
+  /** Endless Shepard-tone riser (a pre-rendered seamless loop), runs until its layer is cut. */
+  private shepard(t: number): void {
+    if (!this.shepBuf) this.shepBuf = makeShepard(this.ctx, SHEP_LOOP, SHEP_BASE, SHEP_OCT);
     const p = this.patch();
-    const rest = life * (1 - phase);
-    const f0 = SHEP_BASE * Math.pow(2, SHEP_OCT * phase);
-    const o = p.osc('triangle', f0, t, t + rest + 0.02);
-    o.frequency.setValueAtTime(f0, t);
-    o.frequency.exponentialRampToValueAtTime(SHEP_BASE * Math.pow(2, SHEP_OCT), t + rest);
     const g = p.gain(0);
-    const i0 = Math.min(this.hann.length - 2, Math.round(phase * (this.hann.length - 1)));
-    g.gain.setValueCurveAtTime(i0 === 0 ? this.hann : this.hann.subarray(i0), t, rest);
-    o.connect(g);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(1, t + 1.5);
+    p.sample(this.shepBuf, t, t + 1800, true).connect(g);
     g.connect(this.shep);
+    this.shepEnd = t + 1800;
     this.track(p, L.Alert);
   }
 
@@ -861,11 +864,7 @@ export class MusicEngine {
 
   /** War drum. `size` > 1 is a smaller, higher drum. */
   private taiko(t: number, dest: AudioNode, v: number, size: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: 96 * size, f2: 50 * size, glide: 0.17, a: 0.003, d: 0.55 / size, peak: 0.5 * v });
-    p.th(dest, t, { type: 'triangle', f: 200 * size, f2: 120 * size, glide: 0.05, d: 0.1, peak: 0.1 * v });
-    p.nh(dest, t, { kind: 'pink', type: 'lowpass', f: 1000, a: 0.001, d: 0.06, peak: 0.28 * v });
-    p.finish();
+    this.hit(this.kit.taiko, t, dest, 0.5 * v, size);
   }
 
   /** Dissonant brass-like swell (root, tritone, octave) that blooms and is clipped short. */
@@ -921,26 +920,16 @@ export class MusicEngine {
 
   /** Metal anvil / snare-like backbeat. */
   private anvil(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: 1046, a: 0.001, d: 0.32, peak: 0.035 * v });
-    p.th(dest, t, { f: 1046 * 2.76, a: 0.001, d: 0.14, peak: 0.02 * v });
-    p.nh(dest, t, { type: 'bandpass', f: 1500, q: 0.9, a: 0.001, d: 0.12, peak: 0.3 * v });
-    p.nh(dest, t, { type: 'highpass', f: 5000, a: 0.001, d: 0.04, peak: 0.1 * v });
-    p.finish();
+    this.hit(this.kit.anvil, t, dest, 0.12 * v);
   }
 
   private shaker(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.nh(dest, t, { type: 'highpass', f: 7000, q: 0.7, a: 0.004, d: 0.035, peak: 0.08 * v });
-    p.finish();
+    this.hit(this.kit.shaker, t, dest, 0.06 * v, 0.9 + this.rnd() * 0.2);
   }
 
-  /** Distorted low pulse with a sub drop. */
+  /** Distorted low pulse with a sub drop (transposed with the harmony). */
   private lowPulse(t: number, dest: AudioNode, midi: number, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { type: 'sawtooth', f: midiHz(midi), lp: 650, drive: 4, a: 0.004, hold: 0.05, d: 0.32, peak: 0.07 * v });
-    p.th(dest, t, { f: 58, f2: 36, glide: 0.2, a: 0.004, d: 0.4, peak: 0.32 * v });
-    p.finish();
+    this.hit(this.kit.pulse, t, dest, 0.33 * v, Math.pow(2, (midi - 26) / 12));
   }
 
   /** Alarm-like horn call note with a drooping tail. */

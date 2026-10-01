@@ -470,6 +470,11 @@ export class Effects {
     this.lights.flash(x, y, z, power, color, life);
   }
 
+  /** Emission rate multiplier for continuous emitters (quality x adaptive budget). */
+  get rate() {
+    return (this.quality === 'low' ? 0.5 : this.quality === 'medium' ? 0.75 : 1) * this.budget;
+  }
+
   private q(n: number) {
     return Math.max(1, Math.round(n * (this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.75 : 1) * this.budget));
   }

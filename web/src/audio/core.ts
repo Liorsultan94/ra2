@@ -249,6 +249,16 @@ export class Patch {
     return o;
   }
 
+  /** Play an arbitrary buffer (optionally looped) from t0 to t1. */
+  sample(buf: AudioBuffer, t0: number, t1: number, loop = false, rate = 1): AudioBufferSourceNode {
+    const s = this.add(this.ctx.createBufferSource());
+    s.buffer = buf;
+    s.loop = loop;
+    s.playbackRate.value = rate;
+    this.sched(s, t0, t1, 0);
+    return s;
+  }
+
   noise(kind: NoiseKind, t0: number, t1: number, rate = 1): AudioBufferSourceNode {
     const s = this.add(this.ctx.createBufferSource());
     const buf = this.bank.buffer(kind);
