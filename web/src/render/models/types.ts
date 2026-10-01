@@ -49,6 +49,8 @@ export interface AnimState {
   damage: number; // 0 = pristine .. 1 = destroyed
   built: number; // building construction progress 0..1 (1 = done)
   powered: boolean; // buildings: false when the owner is low on power
+  /** Ground vehicles: terrain roughness under the hull, 0 (bridge / smooth) .. 1 (ore field, broken ground); set by the renderer's unit pose (render/unitpose.ts). */
+  rough?: number;
 }
 
 export interface Model {

@@ -2750,7 +2750,142 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
       bank.add(o);
     }
   }
+  // wingtip vortex / vapour trail anchors (jets): the outermost skin points of the wing, ~30 % of the length from the tail
+  if (kind === 'jet') {
+    for (const s of [-1, 1]) {
+      const o = new THREE.Object3D();
+      o.userData.vapor = s;
+      o.position.set(ab.min.x + L * 0.3, cy + Hh * 0.05, s < 0 ? ab.min.z + Wd * 0.02 : ab.max.z - Wd * 0.02);
+      bank.add(o);
+    }
+  }
   return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind, fx };
+}
+
+/** Per-instance copy of a shared (possibly fog-patched) material. */
+function ownMat(m: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const c = m.clone();
+  c.onBeforeCompile = m.onBeforeCompile;
+  c.customProgramCacheKey = m.customProgramCacheKey;
+  return c;
+}
+
+// ------------------------------------------------------------ wingtip vapour
+
+const VN = 14; // samples per trail
+const VSTEP = 0.028; // seconds between samples
+let vaporMat: THREE.MeshBasicMaterial | null = null;
+const _vw = new THREE.Vector3();
+const _vl = new THREE.Vector3();
+const _vinv = new THREE.Matrix4();
+
+/**
+ * Two short white ribbons trailing from the wingtips. History is kept in world
+ * space and rebuilt in root-local space each frame (the mesh rides on the
+ * root), so no scene bookkeeping is needed; idle trails cost nothing.
+ */
+class Vapor {
+  private mesh: THREE.Mesh;
+  private pos: Float32Array;
+  private col: Float32Array;
+  private hist = new Float32Array(2 * VN * 6); // [tip][sample] -> two world points (left / right edge)
+  private str = new Float32Array(VN);
+  private n = 0;
+  private acc = 0;
+  private level = 0;
+  private live = false;
+  private hw: number;
+  constructor(
+    private root: THREE.Object3D,
+    private tips: THREE.Object3D[],
+  ) {
+    vaporMat ??= new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    const verts = 2 * VN * 2;
+    this.pos = new Float32Array(verts * 3);
+    this.col = new Float32Array(verts * 4);
+    const idx: number[] = [];
+    for (let t = 0; t < 2; t++) {
+      for (let i = 0; i < VN - 1; i++) {
+        const a = (t * VN + i) * 2;
+        idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, vaporMat);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    mesh.renderOrder = 4;
+    mesh.userData.bk = 'vapor';
+    const own = vaporMat;
+    // the wreck code repaints every mesh charred: never draw the trail with anything but its own material
+    mesh.onBeforeRender = () => geo.setDrawRange(0, mesh.material === own ? Infinity : 0);
+    this.mesh = mesh;
+    root.add(mesh);
+    const span = Math.abs(tips[0].position.z - tips[1].position.z);
+    this.hw = Math.max(0.006, span * 0.022);
+  }
+
+  update(dt: number, target: number, bank: THREE.Object3D) {
+    this.level += (target - this.level) * Math.min(1, dt * 6);
+    if (this.level < 0.01 && !this.live) return;
+    if (dt <= 0) return;
+    this.root.updateMatrixWorld(true);
+    // advance the history
+    this.acc += dt;
+    if (this.acc >= VSTEP || this.n === 0) {
+      this.acc = 0;
+      this.hist.copyWithin(6, 0, VN * 6 - 6);
+      this.hist.copyWithin(VN * 6 + 6, VN * 6, 2 * VN * 6 - 6);
+      this.str.copyWithin(1, 0, VN - 1);
+      this.n = Math.min(VN, this.n + 1);
+    }
+    // head sample = current tips, ribbon width across the (banked) span
+    _vl.setFromMatrixColumn(bank.matrixWorld, 2).normalize().multiplyScalar(this.hw);
+    for (let t = 0; t < 2; t++) {
+      _vw.setFromMatrixPosition(this.tips[t].matrixWorld);
+      const o = t * VN * 6;
+      this.hist[o] = _vw.x - _vl.x;
+      this.hist[o + 1] = _vw.y - _vl.y;
+      this.hist[o + 2] = _vw.z - _vl.z;
+      this.hist[o + 3] = _vw.x + _vl.x;
+      this.hist[o + 4] = _vw.y + _vl.y;
+      this.hist[o + 5] = _vw.z + _vl.z;
+    }
+    this.str[0] = this.level;
+    // rebuild in root-local space; fade with age
+    _vinv.copy(this.root.matrixWorld).invert();
+    let any = false;
+    for (let t = 0; t < 2; t++) {
+      for (let i = 0; i < VN; i++) {
+        const j = Math.min(i, this.n - 1);
+        const age = i / (VN - 1);
+        const a = i < this.n ? this.str[j] * (1 - age) * (1 - age * 0.3) * 0.6 : 0;
+        if (a > 0.01) any = true;
+        for (let e = 0; e < 2; e++) {
+          const h = t * VN * 6 + j * 6 + e * 3;
+          _vw.set(this.hist[h], this.hist[h + 1], this.hist[h + 2]).applyMatrix4(_vinv);
+          const v = (t * VN + i) * 2 + e;
+          this.pos[v * 3] = _vw.x;
+          this.pos[v * 3 + 1] = _vw.y;
+          this.pos[v * 3 + 2] = _vw.z;
+          this.col[v * 4] = 1;
+          this.col[v * 4 + 1] = 1;
+          this.col[v * 4 + 2] = 1;
+          // the head end tapers in so the trail grows out of the tip
+          this.col[v * 4 + 3] = i === 0 ? 0 : a;
+        }
+      }
+    }
+    this.live = any || this.level >= 0.01;
+    this.mesh.visible = this.live;
+    if (!this.live) this.n = 0;
+    const g = this.mesh.geometry;
+    g.attributes.position.needsUpdate = true;
+    g.attributes.color.needsUpdate = true;
+  }
 }
 
 function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
@@ -2766,7 +2901,11 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   const strobes: THREE.Object3D[] = [];
   const plumes: THREE.Object3D[] = [];
   const flares: THREE.Object3D[] = [];
+  const tips: THREE.Object3D[] = [];
   const glow: THREE.Material[] = [];
+  // per-instance rotor materials (blades fade into the blur disc as the rotor spools up)
+  let bladeM: THREE.MeshStandardMaterial | null = null;
+  const discMs = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   let bank: THREE.Object3D | null = null;
   let abMat: THREE.MeshStandardMaterial | null = null;
   root.traverse((o) => {
@@ -2776,7 +2915,15 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     if (u.bank) bank = o;
     if (u.plume) plumes.push(o);
     if (u.flare) flares.push(o);
+    if (u.vapor) tips.push(o);
     if (o instanceof THREE.Mesh) {
+      if (u.bk === 'blade') o.material = bladeM ??= ownMat(o.material as THREE.MeshStandardMaterial);
+      else if (u.bk === 'disc') {
+        const src = o.material as THREE.MeshStandardMaterial;
+        let m = discMs.get(src);
+        if (!m) discMs.set(src, (m = ownMat(src)));
+        o.material = m;
+      }
       if (u.bk === 'strobe') strobes.push(o);
       else if (u.bk === 'glow') {
         abMat ??= nozzleGlow(fog);
@@ -2795,21 +2942,67 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   for (const s of spins) s.rotation.y += Math.random() * TAU;
   let roll = 0;
   let pitch = 0;
+  let pv = 0;
   let ab = 0.3;
+  let lastSp = 0;
+  let accS = 0;
+  let lastY = NaN;
+  let climb = 0;
+  let rpm = 0.8;
+  const discList = [...discMs.values()];
+  const vapor = kind === 'jet' && tips.length === 2 ? new Vapor(root, tips) : null;
   const anim = (s: AnimState) => {
     const dt = s.dt;
     if (!(s.dead > 0)) wear.update(s.damage);
-    for (const sp of spins) sp.rotation.y += (sp.userData.spin as number) * dt;
+    const sp = Math.max(0, s.speed || 0);
+    if (dt > 0) {
+      // smoothed acceleration and climb rate (the renderer has already placed the root this frame)
+      accS += (clamp((sp - lastSp) / Math.max(dt, 1e-3), -6, 6) - accS) * Math.min(1, dt * 4);
+      const y = root.position.y;
+      if (lastY === lastY) climb += (clamp((y - lastY) / Math.max(dt, 1e-3), -4, 4) - climb) * Math.min(1, dt * 4);
+      lastY = y;
+    }
+    lastSp = sp;
+    // rotor RPM: hover ~0.8, rising with forward speed and climb (collective); spin follows it
+    if (discList.length || bladeM) {
+      const tr = clamp(0.78 + sp * 0.12 + Math.max(0, climb) * 0.2, 0.7, 1.05);
+      rpm += (tr - rpm) * Math.min(1, dt * 1.5);
+    }
+    for (const sp_ of spins) sp_.rotation.y += (sp_.userData.spin as number) * dt * (0.6 + rpm * 0.45);
+    if (bladeM || discList.length) {
+      // past ~90 % RPM the eye only sees the blurred disc: fade the blades, strengthen the disc
+      const f = clamp((rpm - 0.86) / 0.14, 0, 1);
+      const bl = f * f * (3 - 2 * f);
+      if (bladeM) bladeM.opacity = 0.72 * (1 - 0.82 * bl);
+      for (const m of discList) m.opacity = 0.75 + 0.85 * bl;
+    }
     const b = bank as THREE.Object3D | null;
     const k = Math.min(1, dt * 4);
     if (b) {
       const turn = Number.isFinite(s.turn) ? s.turn : 0;
       const maxRoll = kind === 'jet' ? 0.75 : kind === 'heli' ? 0.3 : kind === 'quad' ? 0.45 : 0.4;
       roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) - roll) * k;
-      const sp = Math.max(0, s.speed || 0);
-      const pitchT = kind === 'heli' ? -Math.min(1, sp / 3) * 0.13 : kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
-      pitch += (pitchT - pitch) * k;
+      if (kind === 'heli') {
+        // nose down to fly forward (more while accelerating), nose-up flare while slowing; a damped spring so it settles
+        const pitchT = -Math.min(1, sp / 3) * 0.13 - clamp(accS * 0.08, -0.17, 0.12);
+        let h = Math.min(dt, 0.1);
+        while (h > 1e-5) {
+          const st = Math.min(h, 1 / 60);
+          h -= st;
+          pv += (34 * (pitchT - pitch) - 6.4 * pv) * st;
+          pitch += pv * st;
+        }
+      } else {
+        const pitchT = kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
+        pitch += (pitchT - pitch) * k;
+      }
       b.rotation.set(roll, 0, pitch);
+      if (kind === 'heli') {
+        // gentle hover sway, fading out in forward flight
+        const hov = 1 - Math.min(1, sp / 1.5);
+        b.rotation.x += hov * 0.02 * Math.sin(s.time * 0.73 + phase);
+        b.rotation.z += hov * 0.012 * Math.sin(s.time * 0.51 + phase * 2);
+      }
       // badly hit airframes struggle: a shaky, lopsided attitude (helicopters most)
       const dmg = s.dead > 0 ? 1 : s.damage || 0;
       if (dmg > 0.5) {
@@ -2818,7 +3011,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
         b.rotation.z += w * 0.03 * Math.sin(s.time * 1.7 + phase * 3);
         b.rotation.y = w * 0.05 * Math.sin(s.time * 1.1 + phase);
       }
-      if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012;
+      if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012 + Math.sin(s.time * 0.37 + phase * 3) * 0.008;
       else if (kind === 'quad') b.position.y = Math.sin(s.time * 3.1 + phase) * 0.006;
       else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008;
     }
@@ -2827,15 +3020,23 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     const on = ts < 0.06 || (ts > 0.16 && ts < 0.22);
     for (const o of strobes) o.visible = on;
     if (abMat || plumes.length) {
-      const sp = Math.max(0, s.speed || 0);
-      const target = clamp(sp / 5, 0, 1);
+      // throttle: cruise ~0.75, afterburner pushes past 1 while accelerating or climbing
+      const target = kind === 'jet' ? clamp(0.75 * Math.min(1, sp / 4.5) + Math.max(0, accS) * 0.22 + Math.max(0, climb) * 0.35, 0, 1.35) : clamp(sp / 5, 0, 1);
       ab += (target - ab) * Math.min(1, dt * 2.5);
-      if (abMat) (abMat as THREE.MeshStandardMaterial).emissiveIntensity = 1.4 + ab * 3.6 + Math.sin(s.time * 37 + phase) * 0.25 * ab;
+      // flame flicker: two incommensurate fast sines + a slow breath
+      const fl = Math.sin(s.time * 37 + phase) * 0.6 + Math.sin(s.time * 61.7 + phase * 3) * 0.4;
+      if (abMat) (abMat as THREE.MeshStandardMaterial).emissiveIntensity = 1.4 + ab * 3.6 + fl * 0.35 * ab;
       for (const p of plumes) {
         const f = ab > 0.15 ? (ab - 0.15) / 0.85 : 0;
         p.visible = f > 0.02;
-        p.scale.set(0.35 + f * (0.85 + Math.sin(s.time * 29 + phase) * 0.08), 0.7 + f * 0.3, 0.7 + f * 0.3);
+        p.scale.set(0.35 + f * (0.85 + fl * 0.09), 0.7 + f * 0.3 + fl * 0.03 * f, 0.7 + f * 0.3 + fl * 0.03 * f);
       }
+    }
+    if (vapor && b) {
+      // wingtip vortices in hard turns (and hard pull-ups) at speed
+      const turn = Number.isFinite(s.turn) ? Math.abs(s.turn) : 0;
+      const g = clamp((turn - 0.4) / 0.45, 0, 1) + clamp((Math.abs(climb) - 1.2) / 1.5, 0, 0.6);
+      vapor.update(dt, s.dead > 0 ? 0 : clamp(g, 0, 1) * clamp(sp / 3, 0, 1), b);
     }
   };
   // initial state

@@ -5,7 +5,8 @@ import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent } from '../sim/types';
 import { World } from '../sim/world';
 import { CameoFactory } from '../render/cameo';
-import { BASE_VIEW, GameRenderer, type Quality } from '../render/renderer';
+import { CinematicDirector, type CineShot } from '../render/cinematic';
+import { GameRenderer, type Quality } from '../render/renderer';
 import { Hud } from '../ui/hud';
 
 export interface GameOptions {
@@ -15,6 +16,7 @@ export interface GameOptions {
   credits: number;
   quality: Quality;
   attract?: boolean; // AI vs AI demo behind the main menu
+  cinematic?: boolean; // slow-motion camera moments on big events (default on)
   seed?: number;
 }
 
@@ -55,6 +57,8 @@ export class Game {
   private lastGroupTap = { g: -1, t: 0 };
   private destroyed = false;
   private disposers: (() => void)[] = [];
+  readonly cine = new CinematicDirector();
+  private mmFrame = 0;
 
   constructor(
     container: HTMLElement,
@@ -85,7 +89,10 @@ export class Game {
       onCommand: (c) => this.onCommand(c),
       onMinimap: (x, y) => this.renderer.centerOn(x, y),
       onSelectType: (id) => this.select([...this.renderer.selection].filter((s) => this.world.get(s)?.def === id)),
+      onRotate: (steps) => this.rotateView(steps),
+      onLayout: () => this.resize(),
     });
+    this.cine.enabled = opts.cinematic ?? true;
     if (attract) this.hud.root.classList.add('attract');
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
@@ -104,6 +111,12 @@ export class Game {
     const onResize = () => this.resize();
     window.addEventListener('resize', onResize);
     this.disposers.push(() => window.removeEventListener('resize', onResize));
+    if (typeof ResizeObserver !== 'undefined') {
+      // the sidebar can collapse / expand without a window resize
+      const ro = new ResizeObserver(() => this.resize());
+      ro.observe(this.hud.viewWrap);
+      this.disposers.push(() => ro.disconnect());
+    }
     this.resize();
     // zoom depends on the view size (phones get a closer, RA2-like view)
     this.renderer.setZoom(this.renderer.defaultZoom(attract));
@@ -126,8 +139,11 @@ export class Game {
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
+    if (this.cine.active) this.cine.update(dt, this.renderer);
+    this.hud.setCinematic(this.cine.active);
+    const ts = this.cine.timeScale;
     if (!this.paused) {
-      this.acc += dt * 1000 * this.speed;
+      this.acc += dt * 1000 * this.speed * ts;
       let steps = 0;
       while (this.acc >= TICK_MS && steps < 6) {
         this.world.step();
@@ -138,9 +154,9 @@ export class Game {
       if (steps >= 6) this.acc = 0;
     }
     const alpha = this.paused ? 1 : Math.min(1, this.acc / TICK_MS);
-    this.updateCamera(dt);
+    if (!this.cine.active) this.updateCamera(dt);
     if (this.local >= 0) this.updateHover();
-    this.renderer.render(alpha, this.paused ? 0 : dt);
+    this.renderer.render(alpha, this.paused ? 0 : dt * ts);
     this.hud.drawOverlay(alpha, this.hover, this.groupOf, now / 1000);
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
@@ -149,11 +165,79 @@ export class Game {
       this.pruneSelection();
     }
     this.mmTimer -= dt;
-    if (this.mmTimer <= 0 && this.local >= 0) {
-      this.mmTimer = 0.25;
-      this.hud.drawMinimap();
+    if (this.local >= 0) {
+      if (this.mmTimer <= 0) {
+        this.mmTimer = 0.25;
+        this.hud.drawMinimap();
+      }
+      // sweep + view frustum at ~30 fps
+      if (++this.mmFrame % 2 === 0) this.hud.tickMinimap(now / 1000);
     }
   };
+
+  /** Rotate the camera by 90 degree steps (Q / E, or the on-screen buttons). */
+  rotateView(steps: number) {
+    if (this.cine.active) this.cine.skip();
+    this.renderer.rotateView(steps);
+    this.sfx('click', undefined, undefined, 0.5);
+  }
+
+  /** Settings toggle: cinematic moments on / off. */
+  setCinematic(on: boolean) {
+    this.cine.enabled = on;
+    if (!on) this.cine.skip();
+  }
+
+  // ------------------------------------------------------------ cinematics
+
+  /** Is a ground point on screen or just outside it? */
+  private nearView(x: number, y: number, margin = 0.25) {
+    const s = this.renderer.project(x, standHeight(this.world.map, x, y), y);
+    const r = this.hud.viewWrap.getBoundingClientRect();
+    return s.x > -r.width * margin && s.x < r.width * (1 + margin) && s.y > -r.height * margin && s.y < r.height * (1 + margin);
+  }
+
+  /** Start a slow-motion camera moment for big events the player can see. */
+  private considerCinematic(ev: SimEvent) {
+    const c = this.cine;
+    if (!c.enabled || c.active || this.paused || this.ended) return;
+    // never fight the player for the camera
+    if (this.drag || this.pinch || this.touches.size || this.mode === 'place' || this.renderer.rotating) return;
+    if ([...this.keys].some((k) => k.startsWith('Arrow'))) return;
+    const r = this.renderer;
+    let shot: CineShot | null = null;
+    if (ev.t === 'launch') {
+      if (ev.flight !== 'ballistic' && ev.flight !== 'hypersonic') return;
+      if (!(ev.owner === this.local || this.visibleToLocal(ev.x, ev.y)) || !this.nearView(ev.x, ev.y)) return;
+      const pid = ev.id;
+      const sx = ev.x;
+      const sy = ev.y;
+      const sz = ev.z;
+      shot = {
+        label: 'launch',
+        push: 1.3,
+        duration: 2.4,
+        focus: () => {
+          // between the launcher and the climbing missile
+          const p = this.world.projectiles.find((q) => q.id === pid);
+          if (!p) return null;
+          return r.focusPoint(sx + (p.x - sx) * 0.4, sz + (p.z - sz) * 0.4, sy + (p.y - sy) * 0.4);
+        },
+      };
+    } else if (ev.t === 'airburst') {
+      if (ev.kind !== 'kill' || (ev.victim !== 'ballistic' && ev.victim !== 'hypersonic')) return;
+      if (!this.visibleToLocal(ev.x, ev.y) || !this.nearView(ev.x, ev.y, 0.15)) return;
+      const f = r.focusPoint(ev.x, ev.z, ev.y);
+      shot = { label: 'intercept', push: 1.35, duration: 2.1, focus: () => f };
+    } else if (ev.t === 'impact') {
+      const w = WEAPONS[ev.weapon];
+      if (!w || !(w.flight === 'ballistic' || w.flight === 'hypersonic' || w.damage >= 400)) return;
+      if (!this.visibleToLocal(ev.x, ev.y) || !this.nearView(ev.x, ev.y, 0.15)) return;
+      const f = { x: ev.x, y: ev.y };
+      shot = { label: 'impact', push: 1.25, duration: 2.0, focus: () => f };
+    }
+    if (shot) c.trigger(shot, r, performance.now() / 1000);
+  }
 
   private attractT = 0;
 
@@ -208,6 +292,7 @@ export class Game {
 
   private onEvent(ev: SimEvent) {
     this.renderer.handleEvent(ev);
+    if (ev.t === 'launch' || ev.t === 'airburst' || ev.t === 'impact') this.considerCinematic(ev);
     const mine = 'owner' in ev && ev.owner === this.local;
     switch (ev.t) {
       case 'launch': {
@@ -324,6 +409,7 @@ export class Game {
   private finish(win: boolean) {
     if (this.ended) return;
     this.ended = true;
+    this.cine.cancel(this.renderer);
     if (this.local < 0) {
       // restart the attract demo
       setTimeout(() => this.cb.onMenu(), 4000);
@@ -450,12 +536,12 @@ export class Game {
     const r = this.renderer;
     let best: Entity | null = null;
     let bd = Infinity;
-    const scale = this.hud.viewWrap.getBoundingClientRect().height / (BASE_VIEW / r.zoom);
     for (const e of w.list) {
       if (e.dead || e.kind !== 'unit' || !r.isShown(e.id)) continue;
       const d = unitDef(e.def);
       if (d.temp) continue;
       const p = r.entityPos(e, 1);
+      const scale = r.pixelsPerUnit(p);
       const s = r.project(p.x, p.y + r.visualHeight(e.id) * 0.45, p.z);
       const rad = Math.max(13, d.radius * scale * 1.5);
       const dist = Math.hypot(s.x - sx, s.y - sy);
@@ -478,8 +564,10 @@ export class Game {
       if (e.dead || e.kind !== 'building' || !r.isShown(e.id)) continue;
       const d = buildingDef(e.def);
       const p = r.entityPos(e, 1);
+      const scale = r.pixelsPerUnit(p);
       const c = r.project(p.x, p.y + r.visualHeight(e.id) * 0.5, p.z);
-      if (Math.abs(c.x - sx) < d.w * scale * 0.55 && Math.abs(c.y - sy) < d.h * scale * 0.45) return e;
+      const span = (d.w + d.h) / 2;
+      if (Math.abs(c.x - sx) < span * scale * 0.55 && Math.abs(c.y - sy) < span * scale * 0.45) return e;
     }
     return null;
   }
@@ -585,7 +673,7 @@ export class Game {
         cursor: 'move',
         run: () => {
           this.issue({ type: 'rally', id: sel.id, x: g.x, y: g.y });
-          this.renderer.effects.marker(g.x, standHeight(this.world.map, g.x, g.y), g.y, false);
+          this.renderer.overlay.order('rally', g.x, g.y);
           this.sfx('ack');
         },
       };
@@ -598,11 +686,24 @@ export class Game {
     this.issue(cmd);
     this.sfx('ack');
     const r = this.renderer;
+    const ids = 'ids' in cmd ? cmd.ids : [];
     if (target) {
+      const tid = target.id;
+      const big = target.kind === 'building' ? Math.max(buildingDef(target.def).w, buildingDef(target.def).h) * 0.75 : Math.max(1, unitDef(target.def).radius * 2.2);
+      const follow = () => {
+        const t = this.world.get(tid);
+        if (!t || t.dead) return null;
+        const p = r.entityPos(t, 1);
+        if (t.kind === 'unit' && unitDef(t.def).air) p.y = standHeight(this.world.map, p.x, p.z);
+        return p;
+      };
       const p = r.entityPos(target, 1);
-      r.effects.marker(p.x, p.y, p.z, attack);
+      r.overlay.order(attack ? 'attack' : 'move', p.x, p.z, follow, big);
+      this.hud.orderLine(ids, p.x, p.z, tid, attack ? 'attack' : 'other');
     } else if (g) {
-      r.effects.marker(g.x, standHeight(this.world.map, g.x, g.y), g.y, attack);
+      const am = cmd.type === 'move' && !!cmd.attackMove;
+      r.overlay.order(am ? 'attackMove' : 'move', g.x, g.y);
+      this.hud.orderLine(ids, g.x, g.y, -1, am ? 'attackMove' : 'move');
     }
   }
 
@@ -611,6 +712,7 @@ export class Game {
     if (this.mouse.type === 'touch' && this.mode === 'place') return;
     const t = this.pick(this.mouse.x, this.mouse.y);
     this.hover = t ? t.id : -1;
+    this.renderer.hover = this.mouse.type === 'mouse' ? this.hover : -1;
     if (this.drag?.box) return;
     const a = this.contextAction(this.mouse.x, this.mouse.y, this.keys.has('Control') || this.keys.has('Meta'));
     this.hud.setCursor(a.cursor);
@@ -634,8 +736,11 @@ export class Game {
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
     on(view, 'contextmenu', (e) => e.preventDefault());
+    // any tap / click skips a cinematic moment (the tap on the map is swallowed)
+    on(window, 'pointerdown', () => this.cine.skip(), { capture: true });
     on(view, 'pointerdown', (e) => {
       this.audio.unlock();
+      if (this.cine.active) return;
       if (this.local < 0) return;
       const p = local(e);
       this.mouse = { x: p.x, y: p.y, inside: true, type: e.pointerType };
@@ -676,7 +781,7 @@ export class Game {
           this.renderer.setZoom((this.pinch.zoom * dist) / Math.max(1, this.pinch.dist));
           const cx = (a.x + b.x) / 2;
           const cy = (a.y + b.y) / 2;
-          this.renderer.panPixels(this.pinch.cx - cx, this.pinch.cy - cy);
+          this.renderer.panDrag(this.pinch.cx, this.pinch.cy, cx, cy);
           this.pinch.cx = cx;
           this.pinch.cy = cy;
           return;
@@ -694,7 +799,7 @@ export class Game {
           clearTimeout(d.longTimer);
           this.hud.setCursor('pan');
         }
-        this.renderer.panPixels(-(p.x - d.sx), -(p.y - d.sy));
+        this.renderer.panDrag(d.sx, d.sy, p.x, p.y);
         d.sx = p.x;
         d.sy = p.y;
         return;
@@ -835,6 +940,10 @@ export class Game {
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
+    if (down && this.cine.active) {
+      this.cine.skip();
+      return;
+    }
     if (this.local < 0 || (this.paused && down)) return;
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
@@ -888,8 +997,14 @@ export class Game {
       case 'd':
         if (units.length) this.issue({ type: 'deploy', ids: units.map((u) => u.id) });
         break;
-      case 'q':
+      case 'w':
         this.onCommand('selectArmy');
+        break;
+      case 'q':
+        this.rotateView(-1);
+        break;
+      case 'e':
+        this.rotateView(1);
         break;
       case 'h': {
         const cy = this.world.list.find((b) => !b.dead && b.owner === this.local && b.kind === 'building');

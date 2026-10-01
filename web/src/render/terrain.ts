@@ -22,6 +22,7 @@ export class Terrain {
   readonly ground: Ground;
   /** Zoom-driven level of detail for vegetation and rocks. */
   readonly lod: SceneryLod;
+  private camera: THREE.Camera | null = null;
   private waterMat!: THREE.ShaderMaterial;
   private resources: Resources;
   readonly minimapImage: HTMLCanvasElement;
@@ -41,6 +42,7 @@ export class Terrain {
     const lod = new SceneryLod();
     this.lod = lod;
     const onBefore = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+      this.camera = cam;
       const oc = cam as THREE.OrthographicCamera;
       if (oc.isOrthographicCamera) lod.update((oc.top - oc.bottom) / oc.zoom);
       else if ((cam as THREE.PerspectiveCamera).isPerspectiveCamera) lod.update(cam.position.y * 0.9);
@@ -194,6 +196,8 @@ export class Terrain {
   }
 
   update(time: number) {
+    // cull the scatter to last frame's view (the margin covers the lag)
+    if (this.camera) this.lod.cull(this.camera);
     this.waterMat.uniforms.time.value = time;
     windTime.value = time;
     this.resources.animate(time);

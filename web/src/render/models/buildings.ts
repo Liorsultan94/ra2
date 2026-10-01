@@ -7,6 +7,8 @@ import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
 import { drawFlag } from '../flags';
 import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
+import { bldTex, type BldTexKind } from './bldtex';
+import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -278,7 +280,7 @@ class Mats {
     return m;
   }
   /** Textured PBR material (procedural texture from textures.ts), tinted per vertex. */
-  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1): SMat {
+  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1.6): SMat {
     const real = this.cached(`tex:${kind}:${JSON.stringify(opts)}:${rough}:${metal}:${nScale}`, false, () => {
       const set = pbr(kind, opts);
       return new THREE.MeshStandardMaterial({
@@ -293,6 +295,31 @@ class Mats {
     });
     return this.virt(real, new THREE.Color(tint), uv);
   }
+  /** Building surface texture from bldtex.ts (cladding / plates), tinted per vertex. */
+  btex(kind: BldTexKind, tint = 0xffffff, uv = 2.5, rough = 1, metal = 0.25, nScale = 1.4): SMat {
+    const real = this.cached(`btex:${kind}:${rough}:${metal}:${nScale}`, false, () => {
+      const set = bldTex(kind);
+      return new THREE.MeshStandardMaterial({
+        map: set.map,
+        normalMap: set.normalMap,
+        roughnessMap: set.roughnessMap,
+        roughness: rough,
+        metalness: metal,
+        vertexColors: true,
+        normalScale: new THREE.Vector2(nScale, nScale),
+      });
+    });
+    return this.virt(real, new THREE.Color(tint), uv);
+  }
+  /** National insignia / flag decals (shared atlas, alpha tested). */
+  decal(): SMat {
+    const m = this.cached('decal', false, () => {
+      const mm = makeDecalMaterial();
+      mm.userData.uv = 0;
+      return mm;
+    });
+    return m;
+  }
   /** Plain colour: bucketed by roughness / metalness into a few shared vertex coloured materials. */
   col(color: number, rough = 0.7, metal = 0.1, double = false): SMat {
     let b: string;
@@ -300,9 +327,27 @@ class Mats {
     let mt: number;
     if (double) [b, r, mt] = ['dbl', 0.8, 0.05];
     else if (rough < 0.2 && metal > 0.5) [b, r, mt] = ['gloss', 0.08, 0.85];
-    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.42, 0.65];
-    else [b, r, mt] = ['paint', 0.7, 0.12];
-    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide }));
+    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.32, 0.8];
+    else [b, r, mt] = ['paint', 0.66, 0.14];
+    if (b === 'metal' || b === 'paint') {
+      // weathered steel plates / worn paint: normal + roughness detail at no extra draw call
+      const kind: BldTexKind = b === 'metal' ? 'plate' : 'paint';
+      const real = this.cached(`vc:${b}`, false, () => {
+        const set = bldTex(kind);
+        // roughness maps average ~0.45 (plate) / ~0.62 (paint): scale them to the bucket value
+        return new THREE.MeshStandardMaterial({
+          map: set.map,
+          normalMap: set.normalMap,
+          roughnessMap: set.roughnessMap,
+          roughness: b === 'metal' ? r / 0.45 : r / 0.62,
+          metalness: mt,
+          vertexColors: true,
+          normalScale: new THREE.Vector2(b === 'metal' ? 1.1 : 0.6, b === 'metal' ? 1.1 : 0.6),
+        });
+      });
+      return this.virt(real, new THREE.Color(color), b === 'metal' ? 4 : 3);
+    }
+    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide, envMapIntensity: b === 'gloss' ? 1.6 : 1 }));
     return this.virt(real, new THREE.Color(color), 0);
   }
   /** Emissive lamp (one shared per-owner material; colour/intensity via vertex colours). */
@@ -332,11 +377,11 @@ class Mats {
         map: set.map,
         normalMap: set.normalMap,
         roughnessMap: set.roughnessMap,
-        roughness: 1,
-        metalness: 0.35,
+        roughness: 0.75,
+        metalness: 0.45,
         emissiveMap: set.emissiveMap ?? null,
         emissive: 0xffffff,
-        emissiveIntensity: curtain ? 0.7 : 0.9,
+        emissiveIntensity: curtain ? 1.15 : 1.45,
       });
       mm.userData.uv = 0;
       mm.userData.baseEI = mm.emissiveIntensity;
@@ -444,6 +489,10 @@ interface Pal {
   mash: SMat;
   tile: SMat; // decorative tile band (mideast) / dancheong band (asia)
   dome: SMat; // dome cladding
+  nation: SMat; // national accent colour (bold secondary band)
+  clad: SMat; // composite / steel wall cladding (ribbed panels, bolt rows)
+  pier: SMat; // dark structural trim: corner pilasters, plinths
+  emb: SMat; // insignia decal atlas
   mats: Mats;
   s: ModelStyle;
   T: TexSet;
@@ -530,6 +579,10 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     corr: () => T.corr(0xffffff),
     corrRust: () => T.corrRust(0xffffff),
     brick: () => T.brick(0xffffff),
+    nation: () => M.col(s.accent, 0.55, 0.2),
+    clad: () => M.btex('clad', R === 'east' ? 0xb8bcb0 : R === 'mideast' ? 0xe0d4bc : R === 'asia' ? 0xe4e8ea : 0xc4ccd2),
+    pier: () => M.col(R === 'mideast' ? 0x8a7656 : R === 'east' ? 0x5e5c56 : R === 'asia' ? 0x4c5458 : 0x3e4448, 0.6, 0.2),
+    emb: () => M.decal(),
     mats: () => M,
     s: () => s,
     T: () => T,
@@ -543,7 +596,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.concreteDark(0xffffff),
         wallB: () => T.concreteDark(0xe8e2d4),
         wall2: () => ukr ? T.plaster(0xe2cf92) : T.brick(0xffffff),
-        base: () => T.concreteDark(0x9a968e),
+        base: () => T.concreteDark(0x7e7a72),
         trim: () => T.concrete(0xb8b4aa),
         roof: () => T.asphalt(0xb0aaa0),
         pitch: () => T.corr(0xa8a8a0, 1.6),
@@ -568,7 +621,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.plaster(0xf2f2ee),
         wallB: () => T.plaster(0xe6e8e6),
         wall2: () => T.concrete(0xd8dcdc),
-        base: () => T.concrete(0x8e9294),
+        base: () => T.concrete(0x6e7274),
         trim: () => M.col(trimC, 0.55, 0.1),
         roof: () => T.concrete(0xa2a8aa),
         pitch: () => T.tiles(kor ? 0x6d7f9e : 0x5fae96),
@@ -592,7 +645,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.plaster(tur ? 0xeee2c8 : 0xe6cfa2),
         wallB: () => T.plaster(tur ? 0xe2d4b4 : 0xdcc396),
         wall2: () => T.sandstone(tur ? 0xf0e4cc : 0xffffff),
-        base: () => T.sandstone(0xb8a27a),
+        base: () => T.sandstone(0x9a8460),
         trim: () => T.sandstone(0xf4e8d0),
         roof: () => T.plaster(0xd6c6a6),
         pitch: () => T.plaster(0xd0bc96),
@@ -618,9 +671,9 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         R: () => 'west',
         wall: () => isr ? T.sandstone(0xfaf2e0, 2.2) : T.concrete(wallT),
         wallB: () => T.concrete(shade(wallT, 0.93)),
-        wall2: () => T.panel(ger ? 0x9ea694 : isr ? 0xc8ccd0 : 0xa9b4bc),
-        base: () => T.concrete(0x8e8c88),
-        trim: () => M.col(0x8a9096, 0.4, 0.6),
+        wall2: () => M.btex('clad', ger ? 0x9ea694 : isr ? 0xd2d6d8 : 0xa9b4bc),
+        base: () => T.concrete(0x6e6c68),
+        trim: () => M.col(0x5a6066, 0.4, 0.6),
         roof: () => T.concrete(0x8e9092, 1.6),
         pitch: () => T.corr(ger ? 0x6c7466 : 0x8a9298),
         slab: () => T.concrete(0xd8d6d0, 1.2),
@@ -686,6 +739,28 @@ class Kit {
   private bins = new Map<THREE.Object3D, Map<Mat, THREE.BufferGeometry[]>>();
   /** Project texture UVs in the primitive's local frame instead of building space. */
   luv = false;
+  /**
+   * Vertical stretch of everything above the ground slab (root level only:
+   * animated / turret parts keep their proportions, their pivots move up).
+   * Makes the structures taller and chunkier relative to the units.
+   */
+  sy = 1;
+  wy(y: number) {
+    return y <= Y0 ? y : Y0 + (y - Y0) * this.sy;
+  }
+  private warp(geo: THREE.BufferGeometry) {
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, this.wy(p.getY(i)));
+    const n = geo.attributes.normal;
+    if (n)
+      for (let i = 0; i < n.count; i++) {
+        const x = n.getX(i);
+        const y = n.getY(i) / this.sy;
+        const z = n.getZ(i);
+        const l = Math.hypot(x, y, z) || 1;
+        n.setXYZ(i, x / l, y / l, z / l);
+      }
+  }
   local(fn: () => void) {
     const prev = this.luv;
     this.luv = true;
@@ -736,6 +811,7 @@ class Kit {
     o.name = name;
     const m = this.T.clone().multiply(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, 'YXZ')), new THREE.Vector3(1, 1, 1)));
     m.decompose(o.position, o.quaternion, o.scale);
+    if (this.cur === this.root) o.position.y = this.wy(o.position.y);
     this.cur.add(o);
     return o;
   }
@@ -744,13 +820,14 @@ class Kit {
   }
   emit(x: number, y: number, z: number, kind: 'smoke' | 'steam' | 'spark' | 'fire') {
     const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
+    if (this.cur === this.root) v.y = this.wy(v.y);
     this.emitters.push({ pos: v, kind });
   }
   /** Record a point (current frame) into one of the fx record lists. */
   mark(list: 'elec' | 'blinks', x: number, y: number, z: number) {
     if (this.cur !== this.root) return;
     const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
-    this.rec[list].push(v.x, v.y, v.z);
+    this.rec[list].push(v.x, this.wy(v.y), v.z);
   }
   /** Current frame has no tilt and a quarter-turn yaw only (AABBs stay exact). */
   private axisAligned() {
@@ -765,7 +842,7 @@ class Kit {
     if (real.userData.baseEI || !this.axisAligned()) return;
     const a = new THREE.Vector3(x - w / 2, y, z - d / 2).applyMatrix4(this.T);
     const b = new THREE.Vector3(x + w / 2, y + h, z + d / 2).applyMatrix4(this.T);
-    this.rec.walls.push(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.min(a.z, b.z), Math.max(a.x, b.x), Math.max(a.y, b.y), Math.max(a.z, b.z));
+    this.rec.walls.push(Math.min(a.x, b.x), this.wy(Math.min(a.y, b.y)), Math.min(a.z, b.z), Math.max(a.x, b.x), this.wy(Math.max(a.y, b.y)), Math.max(a.z, b.z));
   }
 
   // ------------------------------------------------------------ core
@@ -777,6 +854,7 @@ class Kit {
     const scale = uv ?? (mv.userData.uv as number | undefined) ?? 3;
     if (scale > 0 && this.luv) worldUV(geo, scale);
     geo.applyMatrix4(this.T);
+    if (this.sy !== 1 && this.cur === this.root) this.warp(geo);
     if (scale > 0 && !this.luv) worldUV(geo, scale);
     else if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     for (const name of Object.keys(geo.attributes)) if (!KEEP.has(name)) geo.deleteAttribute(name);
@@ -982,7 +1060,7 @@ class Kit {
       // lit window pane: remember it for soot streaks / broken glass
       const p = (face === 'z' ? new THREE.Vector3(c, y, at) : new THREE.Vector3(at, y, c)).applyMatrix4(this.T);
       const n = (face === 'z' ? new THREE.Vector3(0, 0, sign) : new THREE.Vector3(sign, 0, 0)).transformDirection(this.T);
-      if (Math.abs(n.y) < 0.1) this.rec.wins.push(p.x, p.y, p.z, n.x, n.z, w, h);
+      if (Math.abs(n.y) < 0.1) this.rec.wins.push(p.x, this.wy(p.y), p.z, n.x, n.z, w, h * this.sy);
     }
     const a = c - w / 2;
     const b = c + w / 2;
@@ -1246,12 +1324,109 @@ function flatRoof(k: Kit, x0: number, x1: number, z0: number, z1: number, y: num
     mer(z0 + t, z1 - t, x0 + t / 2, false);
     k.box(P.trim, W + 0.01, 0.01, 0.01, cx, y + ph - 0.012, z1 + 0.003);
     k.box(P.trim, 0.01, 0.01, D + 0.01, x1 + 0.003, y + ph - 0.012, cz);
+    // team coloured band under the merlons: reads from the high camera
+    k.box(P.team, W + 0.012, 0.014, 0.008, cx, y + ph - 0.03, z1 + 0.004);
+    k.box(P.team, 0.008, 0.014, D + 0.012, x1 + 0.004, y + ph - 0.03, cz);
   } else {
-    const ct = P.R === 'east' ? P.concrete : P.trim;
-    k.box(ct, W + 0.008, 0.008, t + 0.01, cx, y + ph, z1 - t / 2);
-    k.box(ct, W + 0.008, 0.008, t + 0.01, cx, y + ph, z0 + t / 2);
-    k.box(ct, t + 0.01, 0.008, D - 2 * t, x1 - t / 2, y + ph, cz);
-    k.box(ct, t + 0.01, 0.008, D - 2 * t, x0 + t / 2, y + ph, cz);
+    // team coloured coping: outlines every roof in the owner's colour from above
+    const ct = P.team;
+    const ch = 0.014;
+    k.box(ct, W + 0.016, ch, t + 0.016, cx, y + ph, z1 - t / 2);
+    k.box(ct, W + 0.016, ch, t + 0.016, cx, y + ph, z0 + t / 2);
+    k.box(ct, t + 0.016, ch, D - 2 * t, x1 - t / 2, y + ph, cz);
+    k.box(ct, t + 0.016, ch, D - 2 * t, x0 + t / 2, y + ph, cz);
+    k.box(P.pier, W + 0.018, 0.006, t + 0.018, cx, y + ph - 0.006, z1 - t / 2);
+    k.box(P.pier, t + 0.018, 0.006, D + 0.018, x1 - t / 2, y + ph - 0.006, cz);
+  }
+}
+
+/**
+ * National roundel painted on a flat roof (dark field with a team coloured
+ * frame), in the front part of the roof. Returns false when the roof is too small.
+ */
+function roofEmblem(k: Kit, x0: number, x1: number, z0: number, z1: number, y: number): boolean {
+  const P = k.P;
+  const f = P.s.faction;
+  const W = x1 - x0;
+  const D = z1 - z0;
+  const sz = Math.min(W * 0.46, D * 0.42, 0.46);
+  if (f === 'neutral' || sz < 0.2) return false;
+  const cell = roundelCell(f);
+  const ew = cell.aspect > 1.4 ? Math.min(W - 0.12, sz * 1.7) : sz;
+  const cx = x0 + W * 0.5;
+  const cz = z1 - D * 0.08 - sz / 2 - 0.04;
+  k.box(P.dark, ew + 0.03, 0.004, sz + 0.03, cx, y, cz);
+  const fr = 0.016;
+  k.box(P.team, ew + 0.05, 0.006, fr, cx, y, cz + sz / 2 + 0.018);
+  k.box(P.team, ew + 0.05, 0.006, fr, cx, y, cz - sz / 2 - 0.018);
+  k.box(P.team, fr, 0.006, sz + 0.02, cx + ew / 2 + 0.018, y, cz);
+  k.box(P.team, fr, 0.006, sz + 0.02, cx - ew / 2 - 0.018, y, cz);
+  const dh = cell.aspect > 1.4 ? Math.min(sz * 0.9, (ew * 0.92) / cell.aspect) : sz * 0.86;
+  k.decal(P.emb, cx, y + 0.0055, cz, dh * cell.aspect, dh, cell.r);
+  return true;
+}
+
+/** Flag sign board on a wall: team frame, dark backing, national flag. */
+function wallEmblem(k: Kit, face: Face, sign: number, c: number, y: number, at: number, w: number, cell?: Cell) {
+  const P = k.P;
+  if (P.s.faction === 'neutral') return;
+  const cl = cell ?? flagPatchCell(P.s.faction);
+  const h = w / cl.aspect;
+  faceBox(k, P.team, face, sign, c, y - 0.016, at, w + 0.04, h + 0.032, 0.012);
+  faceBox(k, P.dark, face, sign, c, y - 0.008, at, w + 0.016, h + 0.016, 0.016);
+  k.panel(P.emb, face, sign, c, y, at + sign * 0.0175, w, h, cl.r);
+}
+
+/**
+ * Exterior dressing of a rectangular structure on its visible faces (+Z, +X):
+ * dark corner pilasters with hazard striped bases, wall-pack lamps, a utility
+ * cabinet with its conduit, a louvred vent and roof-corner warning lights.
+ */
+function dress(k: Kit, x0: number, x1: number, z0: number, z1: number, y0: number, h: number, o: { cab?: boolean; vent?: boolean; beacons?: boolean } = {}) {
+  const P = k.P;
+  const W = x1 - x0;
+  const D = z1 - z0;
+  if (W < 0.25 || D < 0.25 || h < 0.12) return;
+  const pw = 0.034;
+  // corner pilasters (the three corners the camera sees)
+  for (const [px, pz] of [
+    [x1, z1],
+    [x0, z1],
+    [x1, z0],
+  ] as P2[]) {
+    k.box(P.pier, pw, h + 0.004, pw, px - Math.sign(px - (x0 + x1) / 2) * (pw / 2 - 0.008), y0, pz - Math.sign(pz - (z0 + z1) / 2) * (pw / 2 - 0.008));
+  }
+  // impact-protection stripes at the exposed corner
+  k.box(P.hazard, pw + 0.006, 0.07, pw + 0.006, x1 - pw / 2 + 0.008, y0, z1 - pw / 2 + 0.008, 9);
+  // wall-pack lamps under the first floor line
+  const ly = y0 + Math.min(h * 0.86, 0.21);
+  for (const a of W > 0.6 ? [x0 + 0.1, x1 - 0.1] : [(x0 + x1) / 2]) {
+    faceBox(k, P.dark, 'z', 1, a, ly, z1, 0.034, 0.022, 0.02);
+    faceBox(k, P.lamp, 'z', 1, a, ly - 0.004, z1 + 0.004, 0.026, 0.005, 0.016);
+  }
+  for (const a of D > 0.6 ? [z0 + 0.1, z1 - 0.1] : [(z0 + z1) / 2]) {
+    faceBox(k, P.dark, 'x', 1, a, ly, x1, 0.034, 0.022, 0.02);
+    faceBox(k, P.lamp, 'x', 1, a, ly - 0.004, x1 + 0.004, 0.026, 0.005, 0.016);
+  }
+  if (o.cab !== false && D > 0.35) {
+    // electrical cabinet + conduit up to the roof on the +X face
+    const cz = z0 + 0.08;
+    faceBox(k, P.galv, 'x', 1, cz, y0, x1, 0.07, 0.1, 0.03);
+    faceBox(k, P.team, 'x', 1, cz, y0 + 0.08, x1 + 0.0005, 0.072, 0.012, 0.031);
+    faceBox(k, P.green_l, 'x', 1, cz + 0.022, y0 + 0.064, x1 + 0.03, 0.008, 0.008, 0.004);
+    k.box(P.steel, 0.012, h - 0.1, 0.012, x1 + 0.009, y0 + 0.1, cz - 0.022);
+    for (let yy = y0 + 0.16; yy < y0 + h - 0.04; yy += 0.12) k.box(P.dark, 0.016, 0.006, 0.02, x1 + 0.009, yy, cz - 0.022);
+  }
+  if (o.vent !== false && W > 0.45) {
+    // louvred intake on the +Z face, high up
+    const vx = x0 + 0.13;
+    const vy = y0 + h - 0.11;
+    faceBox(k, P.pier, 'z', 1, vx, vy, z1, 0.1, 0.07, 0.014);
+    for (let i = 0; i < 4; i++) faceBox(k, P.galv, 'z', 1, vx, vy + 0.008 + i * 0.015, z1 + 0.006, 0.084, 0.006, 0.014);
+  }
+  if (o.beacons !== false && h >= 0.32) {
+    k.sph(P.red_l, 0.011, x1 - 0.012, y0 + h + 0.055, z1 - 0.012, 6, 4);
+    k.sph(P.red_l, 0.011, x0 + 0.012, y0 + h + 0.055, z0 + 0.012, 6, 4);
   }
 }
 
@@ -1388,6 +1563,8 @@ interface BlockOpt {
   rise?: number;
   parapet?: number;
   pm?: Mat;
+  emblem?: boolean; // roundel on the flat roof (default on when it fits)
+  sign?: boolean; // flag board on the +Z facade
 }
 
 /** Regional building block: walls, windows on the visible faces, team band, roof. Returns the roof top height. */
@@ -1424,17 +1601,23 @@ function block(k: Kit, o: BlockOpt): number {
     k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
     if (W > 0.8) k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
   }
-  // team band
+  // bold team band with dark keylines and a national accent stripe below
   if (o.band !== false) {
-    const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.035 : 0.03);
-    k.box(P.team, W + 0.008, 0.022, D + 0.008, cx, by, cz);
+    const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.05 : 0.044);
+    k.box(P.dark, W + 0.01, 0.006, D + 0.01, cx, by + 0.044, cz);
+    k.box(P.team, W + 0.012, 0.044, D + 0.012, cx, by, cz);
+    k.box(P.dark, W + 0.01, 0.006, D + 0.01, cx, by - 0.006, cz);
+    if (h > 0.3) k.box(P.nation, W + 0.009, 0.014, D + 0.009, cx, by - 0.02, cz);
   }
+  dress(k, x0, x1, z0, z1, y0, h, { beacons: (o.roof ?? 'flat') === 'flat' });
+  if (o.sign !== false && W >= 0.6 && h >= 0.24) wallEmblem(k, 'z', 1, x1 - 0.16, y0 + h - 0.15, z1, 0.13);
   const top = y0 + h;
   const roof = o.roof ?? 'flat';
   if (roof === 'flat') {
     const ph = o.parapet ?? 0.035;
     flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? (P.R === 'west' ? P.wall2 : wall));
-    if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, z1, top + 0.01, o.equip ?? 2);
+    const emb = o.emblem !== false && D >= 0.55 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
+    if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, emb ? z0 + D * 0.42 : z1, top + 0.01, o.equip ?? 2);
     return top + ph + 0.01;
   }
   if (roof === 'gable') {
@@ -2026,10 +2209,15 @@ function dashes(k: Kit, m: Mat, x0: number, z0: number, x1: number, z1: number, 
 
 const tplCache = new Map<string, Tpl>();
 
+/** Vertical stretch per building (the pump jack keeps its exact linkage geometry). */
+const STRETCH: Record<string, number> = { conyard: 1.2, power: 1.2, refinery: 1.2, barracks: 1.22, factory: 1.18, radar: 1.18, airfield: 1.18, tech: 1.2, bunker: 1.12, sentry: 1.1, sam: 1.08, atgm: 1.15, oil: 1 };
+
 function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d: number, fn: (k: Kit) => void): Tpl {
   const P = makePal(s, fog);
   const k = new Kit(P, strHash(key + ':' + s.faction));
+  k.sy = STRETCH[key] ?? 1;
   fn(k);
+  k.height = k.wy(k.height);
   k.finish();
   k.root.name = 'building:' + key;
   return {

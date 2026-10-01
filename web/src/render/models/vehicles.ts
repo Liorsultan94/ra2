@@ -1652,6 +1652,7 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
   const wheelSets = q('wheels') as THREE.InstancedMesh[];
   const body = q('body')[0];
   const bodyY = body ? body.position.y : 0;
+  const bodyX = body ? body.position.x : 0;
   const whips = q('whip');
   const spins = q('spin');
   const custom = t.custom ? t.custom(q, model) : undefined;
@@ -1659,7 +1660,18 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
   let turnAcc = 0;
   let lastSpeed = 0;
   let acc = 0;
+  // sprung hull state: pitch / roll / fore-aft shove and their velocities
   let pitch = 0;
+  let roll = 0;
+  let shove = 0;
+  let pv = 0;
+  let rv = 0;
+  let xv = 0;
+  let lastFired = Infinity;
+  const wheeled = t.wheeled;
+  // wheeled hulls ride softer and bouncier than tracked ones
+  const SK = wheeled ? 62 : 115;
+  const SC = 2 * (wheeled ? 0.26 : 0.42) * Math.sqrt(SK);
   let steer = 0;
   let lastD = NaN;
   let lastT = NaN;
@@ -1690,12 +1702,55 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
       }
     }
     if (body) {
+      const bob = t.bob;
       const sp = Math.min(1, s.speed / 1.5);
-      const target = clamp(acc * 0.012, -0.035, 0.035) * t.bob;
-      pitch += (target - pitch) * Math.min(1, dt * 8);
-      body.rotation.z = pitch;
-      body.rotation.x = clamp(s.turn * s.speed * 0.025, -0.03, 0.03) * t.bob;
-      body.position.y = bodyY + (s.moving ? Math.sin(s.dist * 21 + ph) * 0.0022 * sp * t.bob : 0);
+      // main gun shot: the hull rocks away from the gun (nose up for a shot over the front,
+      // rolls away from a side shot) and is shoved back a touch, then settles on its springs
+      if (s.fired < lastFired && s.fired < 0.25 && t.kick > 0 && bob > 0 && s.dead <= 0) {
+        const ta = tur ? tur.rotation.y : 0;
+        const imp = t.kick * 0.85 * (wheeled ? 1.25 : 1);
+        pv += imp * Math.cos(ta);
+        rv += imp * Math.sin(ta);
+        xv -= t.kick * 0.25 * Math.cos(ta);
+      }
+      lastFired = s.fired;
+      // load transfer: squat under acceleration, dive under braking, lean out of turns
+      const pT = clamp(acc * 0.014, -0.045, 0.045) * bob;
+      const rT = clamp(s.turn * s.speed * 0.03, -0.04, 0.04) * bob;
+      let h = Math.min(dt, 0.1);
+      while (h > 1e-5) {
+        const st = Math.min(h, 1 / 60);
+        h -= st;
+        pv += (SK * (pT - pitch) - SC * pv) * st;
+        pitch += pv * st;
+        rv += (SK * (rT - roll) - SC * rv) * st;
+        roll += rv * st;
+        xv += (SK * 1.5 * -shove - SC * 1.2 * xv) * st;
+        shove += xv * st;
+      }
+      // ground bounce: proportional to speed and the roughness under the hull (AnimState.rough)
+      let by = 0;
+      let bp = 0;
+      let br = 0;
+      if (s.moving && bob > 0) {
+        const rough = s.rough ?? 0.35;
+        const d = s.dist;
+        if (wheeled) {
+          const a = (0.25 + rough) * sp * bob;
+          by = (Math.sin(d * 7.3 + ph) * 0.6 + Math.sin(d * 15.1 + ph * 2) * 0.4) * 0.0055 * a;
+          bp = (Math.sin(d * 5.2 + ph * 3) * 0.7 + Math.sin(d * 11.7 + ph) * 0.3) * 0.016 * a;
+          br = Math.sin(d * 6.1 + ph * 5) * 0.012 * a;
+        } else {
+          const a = (0.2 + rough) * sp * bob;
+          by = Math.sin(d * 21 + ph) * 0.0022 * sp * bob + (Math.sin(d * 33 + ph * 2) * 0.6 + Math.sin(d * 12.7 + ph) * 0.4) * 0.0028 * a;
+          bp = (Math.sin(d * 8.3 + ph * 3) * 0.6 + Math.sin(d * 19.7 + ph) * 0.4) * 0.009 * a;
+          br = Math.sin(d * 10.9 + ph * 5) * 0.005 * a;
+        }
+      }
+      body.rotation.z = pitch + bp;
+      body.rotation.x = roll + br;
+      body.position.y = bodyY + by;
+      body.position.x = bodyX + shove;
     }
     const dmg = s.dead > 0 ? 1 : s.damage;
     if (s.dead <= 0) wear.update(dmg);

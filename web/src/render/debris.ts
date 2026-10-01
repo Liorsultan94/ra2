@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { standHeight, type GameMap } from '../sim/map';
+import { Tile, WATER_LEVEL, standHeight, type GameMap } from '../sim/map';
 import type { Effects } from './effects';
 import type { FogOfWar } from './fog';
 
@@ -10,7 +10,7 @@ import type { FogOfWar } from './fog';
  * Rendered as a few InstancedMeshes (one per material) for performance.
  */
 
-export type DebrisKind = 'metal' | 'concrete' | 'dirt' | 'burnt' | 'glass';
+export type DebrisKind = 'metal' | 'concrete' | 'dirt' | 'burnt' | 'glass' | 'brass';
 
 interface Chunk {
   kind: DebrisKind;
@@ -41,6 +41,7 @@ export class Debris {
   readonly group = new THREE.Group();
   private meshes = new Map<DebrisKind, THREE.InstancedMesh>();
   private chunks: Chunk[] = [];
+  private counts = new Map<DebrisKind, number>();
   private m4 = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private e = new THREE.Euler();
@@ -48,7 +49,7 @@ export class Debris {
   private s = new THREE.Vector3();
 
   constructor(
-    private map: GameMap,
+    readonly map: GameMap,
     private effects: Effects,
     fog: FogOfWar,
   ) {
@@ -67,12 +68,16 @@ export class Debris {
       concrete: new THREE.MeshStandardMaterial({ color: 0x8e8a82, roughness: 0.95, flatShading: true }),
       dirt: new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 1, flatShading: true }),
       glass: new THREE.MeshStandardMaterial({ color: 0x9fb6c4, roughness: 0.1, metalness: 0.3, flatShading: true }),
+      brass: new THREE.MeshStandardMaterial({ color: 0xd8a040, roughness: 0.3, metalness: 0.9, emissive: 0x3a2400 }),
     };
+    // shell casings: little cylinders (unit length along Y)
+    const casingGeo = new THREE.CylinderGeometry(0.3, 0.3, 1.2, 6);
     for (const k of Object.keys(mats) as DebrisKind[]) {
       fog.apply(mats[k]);
-      const im = new THREE.InstancedMesh(geo, mats[k], MAX_PER_KIND);
+      const im = new THREE.InstancedMesh(k === 'brass' ? casingGeo : geo, mats[k], k === 'brass' ? 300 : MAX_PER_KIND);
+      if (k === 'brass') im.castShadow = false;
       im.count = 0;
-      im.castShadow = true;
+      im.castShadow = k !== 'brass';
       im.frustumCulled = false;
       im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       this.meshes.set(k, im);
@@ -117,9 +122,15 @@ export class Debris {
     }
   }
 
+  /** Throw a single piece with an explicit velocity (shell casings). */
+  eject(kind: DebrisKind, x: number, y: number, z: number, vx: number, vy: number, vz: number, size: number, life = 4) {
+    if (this.chunks.length > MAX_PER_KIND * 4) return;
+    this.chunks.push({ kind, x, y, z, vx, vy, vz, rx: Math.random() * 6, ry: Math.random() * 6, rz: Math.random() * 6, wx: this.rnd(-20, 20), wy: this.rnd(-6, 6), wz: this.rnd(-20, 20), sx: size, sy: size, sz: size, life: 0, max: life, smoke: false, rest: false });
+  }
+
   update(dt: number) {
     const G = 9.5;
-    const counts = new Map<DebrisKind, number>();
+    const counts = this.counts;
     for (const k of this.meshes.keys()) counts.set(k, 0);
     let w = 0;
     for (let i = 0; i < this.chunks.length; i++) {
@@ -138,6 +149,12 @@ export class Debris {
         const gz = Math.max(0, Math.min(this.map.h - 0.01, c.z));
         const ground = standHeight(this.map, gx, gz) + c.sy * 0.3;
         if (c.y <= ground) {
+          if (ground <= WATER_LEVEL + 0.32 && this.map.tiles[Math.floor(gz) * this.map.w + Math.floor(gx)] === Tile.Water) {
+            // plop: sink without bouncing, small splash for bigger pieces
+            if (c.sx > 0.05 && c.vy < -2) this.effects.splash(c.x, WATER_LEVEL, c.z, 0.25 + c.sx * 2);
+            c.life = c.max;
+            continue;
+          }
           c.y = ground;
           if (c.vy < -1.2) {
             // bounce with energy loss and friction
@@ -152,13 +169,16 @@ export class Debris {
             c.vx = c.vy = c.vz = 0;
           }
         }
-        if (c.smoke && Math.random() < dt * 25) this.effects.smoke(c.x, c.y, c.z, 0.35, true);
+        if (c.smoke && Math.random() < dt * 25) {
+          this.effects.smoke(c.x, c.y, c.z, 0.35, true);
+          if (c.kind === 'burnt' && c.life < 2.5 && Math.random() < 0.5) this.effects.flame(c.x, c.y, c.z, 0.35);
+        }
       }
       // sink into the ground at the end of life
       const fade = c.life > c.max - 1.2 ? (c.max - c.life) / 1.2 : 1;
       const im = this.meshes.get(c.kind)!;
       const n = counts.get(c.kind)!;
-      if (n >= MAX_PER_KIND) continue;
+      if (n >= im.instanceMatrix.count) continue;
       this.e.set(c.rx, c.ry, c.rz);
       this.q.setFromEuler(this.e);
       this.p.set(c.x, c.y - (1 - fade) * c.sy * 0.6, c.z);

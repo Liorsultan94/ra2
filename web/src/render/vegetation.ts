@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Tile, WATER_LEVEL, type GameMap } from '../sim/map';
 import { fbm, hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo';
+import { CulledInstances, GeoBuilder, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { Leaf, foliageAtlas, leafCell } from './terraintex';
@@ -31,8 +31,8 @@ export interface TreeSpot {
   rot: number;
 }
 
-const CHUNK = 32;
-const PLANT_CHUNK = 32;
+/** Culling cell size (tiles). */
+const CELL = 4;
 
 /** Deterministic tree placement for every tree tile of the map. */
 export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeSpot[] {
@@ -321,12 +321,10 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   lists.forEach((list, sp) => {
     if (!list.length) return;
     const [hi, lo] = geos[sp as Species];
-    const ims = chunkedInstances(hi, mat, list, CHUNK, { castShadow: shadows, receiveShadow: true, name: 'trees' });
-    for (const im of ims) {
-      im.customDepthMaterial = depth;
-      out.push(im);
-    }
-    lod.add(ims, hi, lo, treeLo);
+    const ci = new CulledInstances(hi, mat, list, m.w, m.h, CELL, { castShadow: shadows, receiveShadow: true, name: 'trees' });
+    ci.mesh.customDepthMaterial = depth;
+    out.push(ci.mesh);
+    lod.addCulled(ci, lo, treeLo);
   });
 
   // ---- ground cover
@@ -435,12 +433,10 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   ];
   for (const [g, lo, list, cast, loSpan, hideSpan] of groups) {
     if (!list.length) continue;
-    const ims = chunkedInstances(g, mat, list, PLANT_CHUNK, { castShadow: cast, receiveShadow: true, name: 'plants' });
-    for (const im of ims) {
-      im.customDepthMaterial = depth;
-      out.push(im);
-    }
-    lod.add(ims, g, lo, loSpan, hideSpan);
+    const ci = new CulledInstances(g, mat, list, m.w, m.h, CELL, { castShadow: cast, receiveShadow: true, name: 'plants' });
+    ci.mesh.customDepthMaterial = depth;
+    out.push(ci.mesh);
+    lod.addCulled(ci, lo, loSpan, hideSpan);
   }
   return out;
 }

@@ -13,12 +13,14 @@ export interface Settings {
   sfx: number;
   music: number;
   voice: boolean;
+  /** Slow-motion camera moments on big events (missile launches, interceptions, huge blasts). */
+  cinematic: boolean;
 }
 
 const KEY = 'ironfront.settings.v1';
 
 export function loadSettings(): Settings {
-  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true };
+  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...def, ...JSON.parse(raw) };
@@ -175,7 +177,8 @@ export class MainMenu {
               <li><kbd>Ctrl</kbd>+click force attack / attack-move</li>
               <li><kbd>A</kbd> attack-move · <kbd>S</kbd> stop · <kbd>D</kbd> deploy</li>
               <li><kbd>Ctrl+1-9</kbd> make group · <kbd>1-9</kbd> select group</li>
-              <li><kbd>Q</kbd> select army · <kbd>H</kbd> home · <kbd>R</kbd> repair · <kbd>X</kbd> sell</li>
+              <li><kbd>W</kbd> select army · <kbd>H</kbd> home · <kbd>R</kbd> repair · <kbd>X</kbd> sell</li>
+              <li><kbd>Q</kbd> / <kbd>E</kbd> rotate the view 90°</li>
               <li><kbd>Arrows</kbd> / screen edge scroll · <kbd>Wheel</kbd> zoom</li>
               <li>Shift+click a build icon to queue 5 · right-click to cancel</li>
             </ul>
@@ -184,6 +187,7 @@ export class MainMenu {
               <li><kbd>Tap</kbd> select / command · <kbd>Drag</kbd> scroll</li>
               <li><kbd>Long-press + drag</kbd> box select (or the box tool)</li>
               <li><kbd>Pinch</kbd> zoom · long-press a build icon to cancel</li>
+              <li>Rotate buttons (top right) turn the view · tap to skip a cinematic</li>
             </ul>
           </div>
         </div>
@@ -215,6 +219,7 @@ function settingsHtml(st: Settings) {
       <label>Sound effects<input type="range" min="0" max="1" step="0.05" data-s="sfx" value="${st.sfx}"></label>
       <label>Music<input type="range" min="0" max="1" step="0.05" data-s="music" value="${st.music}"></label>
       <label class="chk"><input type="checkbox" data-s="voice"${st.voice ? ' checked' : ''}> Announcer voice</label>
+      <label class="chk"><input type="checkbox" data-s="cinematic"${st.cinematic ? ' checked' : ''}> Cinematic moments (slow-motion on big missile strikes)</label>
       <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
@@ -226,6 +231,7 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
     inp.addEventListener('input', () => {
       const k = inp.dataset.s!;
       if (k === 'voice') st.voice = (inp as HTMLInputElement).checked;
+      else if (k === 'cinematic') st.cinematic = (inp as HTMLInputElement).checked;
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
       else if (k === 'sfx') st.sfx = Number(inp.value);
       else if (k === 'music') st.music = Number(inp.value);

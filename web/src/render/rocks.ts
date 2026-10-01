@@ -3,7 +3,7 @@ import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { chunkedInstances, type Inst, type SceneryLod } from './geo';
+import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
@@ -192,10 +192,10 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   const loSpan = quality === 'high' ? 19 : 14.5;
   geos.forEach(([hi, lo], k) => {
     if (!lists[k].length) return;
-    const ims = chunkedInstances(hi, mat, lists[k], 32, { castShadow: shadows && k < 3, receiveShadow: true, name: 'rocks' });
-    out.push(...ims);
+    const ci = new CulledInstances(hi, mat, lists[k], m.w, m.h, 4, { castShadow: shadows && k < 3, receiveShadow: true, name: 'rocks' });
+    out.push(ci.mesh);
     // scree is hidden when zoomed far out
-    lod.add(ims, hi, lo, loSpan, k === 3 ? loSpan + 6 : Infinity);
+    lod.addCulled(ci, lo, loSpan, k === 3 ? loSpan + 6 : Infinity);
   });
   return out;
 }

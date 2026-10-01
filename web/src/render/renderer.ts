@@ -15,14 +15,20 @@ import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
 import { CombatOverlay } from './overlay';
+import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
+import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
 export type Quality = 'low' | 'medium' | 'high';
 
 // ~35 degree elevation: a touch lower than before so units and buildings show more of their sides (RA2-like)
 const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
 const CAM_DIST = 80;
+/** Perspective camera (C&C3-like): vertical field of view and pitch range (far zoom .. close zoom), degrees. */
+const PERSP_FOV = 38;
+const PITCH_FAR = 56;
+const PITCH_NEAR = 47;
 /** World units visible vertically at zoom 1 (game.ts picking relies on this). */
 export const BASE_VIEW = 22;
 export const MIN_ZOOM = 0.5;
@@ -125,12 +131,15 @@ const MUNITION_FALLBACK: Record<string, MunitionKind> = {
   airMissile: 'airMissile',
   ballistic: 'ballistic',
   hypersonic: 'hypersonic',
+  cruise: 'airMissile',
 };
 
 export class GameRenderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera: THREE.OrthographicCamera;
+  readonly camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  /** ?cam=ortho keeps the classic orthographic view. */
+  readonly perspective: boolean;
   readonly fog: FogOfWar;
   readonly terrain: Terrain;
   readonly effects: Effects;
@@ -196,7 +205,8 @@ export class GameRenderer {
     this.renderer.info.autoReset = false;
 
     this.scene.background = new THREE.Color(0x2a2824);
-    this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
+    this.perspective = !/[?&]cam=ortho\b/.test(location.search);
+    this.camera = this.perspective ? new THREE.PerspectiveCamera(PERSP_FOV, 1, 0.5, 400) : new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -231,6 +241,7 @@ export class GameRenderer {
     this.marks = new GroundMarks(map, this.fog);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
+    this.effects.setView(this.target);
     this.scene.add(this.debris.group, this.marks.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
@@ -277,6 +288,7 @@ export class GameRenderer {
       this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
       this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
       this.composer.addPass(this.finalPass);
+      this.finalPass.haze = this.effects.enableHaze(this.camera);
     }
     this.applyLevel(this.level, false);
 
@@ -317,11 +329,17 @@ export class GameRenderer {
     if (this.gtao) this.gtao.enabled = s.gtao;
     if (this.bloom) this.bloom.enabled = s.bloom;
     this.usePost = !!this.composer && s.post;
+    this.effects.budget = 1 - 0.45 * (level / Math.max(1, this.ladder.length - 1));
     if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
       this.sun.shadow.mapSize.set(s.shadow, s.shadow);
       this.sun.shadow.map?.dispose();
       this.sun.shadow.map = null;
     }
+  }
+
+  /** Camera shake (0.03 small .. 0.45 huge); with a position (tile x, y) it fades with distance from the view centre. */
+  shake(amount: number, x?: number, y?: number) {
+    this.effects.addShake(amount, x, y);
   }
 
   /** Current governor state, for debugging / screenshots. */
@@ -361,6 +379,12 @@ export class GameRenderer {
   get rotating(): boolean {
     return Math.abs(this.yawGoal - this.yaw) > 1e-3;
   }
+  /** Camera elevation above the horizon (radians); the perspective camera tilts lower when zoomed in. */
+  elevation(): number {
+    if (!this.perspective) return Math.asin(CAM_DIR.y);
+    const k = Math.max(0, Math.min(1, (this.zoom - 0.8) / (MAX_ZOOM - 0.8)));
+    return THREE.MathUtils.degToRad(PITCH_FAR + (PITCH_NEAR - PITCH_FAR) * k);
+  }
 
   private updateCamera() {
     // animate the view rotation on real time (render dt may be slowed by cinematics)
@@ -371,9 +395,9 @@ export class GameRenderer {
       const d = this.yawGoal - this.yaw;
       this.yaw = Math.abs(d) < 0.002 ? this.yawGoal : this.yaw + d * Math.min(1, rdt * 9);
     }
-    const hl = Math.hypot(CAM_DIR.x, CAM_DIR.z);
+    const elev = this.elevation();
     const ca = Math.PI / 4 + this.yaw;
-    this.camDir.set(Math.cos(ca) * hl, CAM_DIR.y, Math.sin(ca) * hl);
+    this.camDir.set(Math.cos(ca) * Math.cos(elev), Math.sin(elev), Math.sin(ca) * Math.cos(elev));
     // the sun turns with the view so the scene is always lit from the upper left of the screen
     this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
     this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
@@ -381,17 +405,27 @@ export class GameRenderer {
     const D = this.camDir;
     const aspect = this.width / Math.max(1, this.height);
     const vh = BASE_VIEW / this.zoom;
-    this.camera.left = (-vh * aspect) / 2;
-    this.camera.right = (vh * aspect) / 2;
-    this.camera.top = vh / 2;
-    this.camera.bottom = -vh / 2;
-    this.camera.updateProjectionMatrix();
+    let dist = CAM_DIST;
+    const cam = this.camera;
+    if (cam instanceof THREE.PerspectiveCamera) {
+      // dolly zoom: the view height at the target matches the orthographic BASE_VIEW / zoom
+      dist = vh / (2 * Math.tan(THREE.MathUtils.degToRad(PERSP_FOV / 2)));
+      cam.aspect = aspect;
+      cam.near = Math.max(0.3, dist * 0.2);
+      cam.far = dist + 260;
+    } else {
+      cam.left = (-vh * aspect) / 2;
+      cam.right = (vh * aspect) / 2;
+      cam.top = vh / 2;
+      cam.bottom = -vh / 2;
+    }
+    cam.updateProjectionMatrix();
     const ty = groundHeight(this.world.map, this.target.x, this.target.z);
-    const shake = this.effects?.shake ?? 0;
-    const sx = shake ? (Math.random() - 0.5) * shake : 0;
-    const sz = shake ? (Math.random() - 0.5) * shake : 0;
-    this.camera.position.set(this.target.x + D.x * CAM_DIST + sx, ty + D.y * CAM_DIST, this.target.z + D.z * CAM_DIST + sz);
-    this.camera.lookAt(this.target.x + sx, ty, this.target.z + sz);
+    const so = this.effects?.shakeOffset();
+    const sx = so ? so.x : 0;
+    const sz = so ? so.z : 0;
+    cam.position.set(this.target.x + D.x * dist + sx, ty + D.y * dist, this.target.z + D.z * dist + sz);
+    cam.lookAt(this.target.x + sx, ty, this.target.z + sz);
     this.camera.updateMatrixWorld();
     this.fitShadow(ty);
     const u = this.fog.uniforms;
@@ -410,19 +444,29 @@ export class GameRenderer {
     if (!this.sun.castShadow) return;
     const R = this.sunRight;
     const U = this.sunUp;
-    this.camera.getWorldDirection(this.camFwd);
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
     let maxY = -Infinity;
+    // footprint of the view frustum on two height slabs; rays diverge with the perspective camera,
+    // so far corners are pulled in to keep the shadow map resolution on what matters
+    const reach = 18 + BASE_VIEW / this.zoom;
+    const tx0 = this.target.x;
+    const tz0 = this.target.z;
     for (const nx of [-1, 1])
       for (const ny of [-1, 1]) {
         this.corner.set(nx, ny, -1).unproject(this.camera);
+        this.camFwd.set(nx, ny, 1).unproject(this.camera).sub(this.corner).normalize();
         for (const hy of [ty - 1.5, ty + 3.5]) {
-          const t = (hy - this.corner.y) / this.camFwd.y;
-          const px = this.corner.x + this.camFwd.x * t;
+          const t = this.camFwd.y < -1e-4 ? (hy - this.corner.y) / this.camFwd.y : 1e4;
+          let px = this.corner.x + this.camFwd.x * t;
           const py = hy;
-          const pz = this.corner.z + this.camFwd.z * t;
+          let pz = this.corner.z + this.camFwd.z * t;
+          const dd = Math.hypot(px - tx0, pz - tz0);
+          if (dd > reach) {
+            px = tx0 + ((px - tx0) * reach) / dd;
+            pz = tz0 + ((pz - tz0) * reach) / dd;
+          }
           const a = px * R.x + py * R.y + pz * R.z;
           const b = px * U.x + py * U.y + pz * U.z;
           minX = Math.min(minX, a);
@@ -468,7 +512,7 @@ export class GameRenderer {
     const ca = Math.PI / 4 + this.yaw;
     const right = new THREE.Vector3(Math.sin(ca), 0, -Math.cos(ca));
     const up = new THREE.Vector3(-Math.cos(ca), 0, -Math.sin(ca));
-    const elev = Math.asin(CAM_DIR.y);
+    const elev = this.elevation();
     this.target.addScaledVector(right, dx * wpp);
     this.target.addScaledVector(up, (-dy * wpp) / Math.sin(elev));
     this.clampTarget();
@@ -487,9 +531,36 @@ export class GameRenderer {
     return { x: x + D.x * s, y: y + D.z * s };
   }
 
-  /** Screen pixels per world unit at the current zoom. */
-  pixelsPerUnit(): number {
-    return this.height / (BASE_VIEW / this.zoom);
+  /** Screen pixels per world unit at the view target, or at world point p (perspective shrinks with depth). */
+  pixelsPerUnit(p?: { x: number; y: number; z: number }): number {
+    const base = this.height / (BASE_VIEW / this.zoom);
+    const cam = this.camera;
+    if (!p || !(cam instanceof THREE.PerspectiveCamera)) return base;
+    cam.getWorldDirection(this.camFwd);
+    const depth = (p.x - cam.position.x) * this.camFwd.x + (p.y - cam.position.y) * this.camFwd.y + (p.z - cam.position.z) * this.camFwd.z;
+    const ty = groundHeight(this.world.map, this.target.x, this.target.z);
+    const ref = (this.target.x - cam.position.x) * this.camFwd.x + (ty - cam.position.y) * this.camFwd.y + (this.target.z - cam.position.z) * this.camFwd.z;
+    return (base * ref) / Math.max(0.5, depth);
+  }
+
+  /** Intersection of the view ray through a screen point with the horizontal plane at height h. */
+  screenToPlane(sx: number, sy: number, h: number): { x: number; y: number } {
+    this.ndc.set((sx / this.width) * 2 - 1, -(sy / this.height) * 2 + 1);
+    this.ray.setFromCamera(this.ndc, this.camera);
+    const o = this.ray.ray.origin;
+    const d = this.ray.ray.direction;
+    const t = (o.y - h) / Math.max(1e-4, -d.y);
+    return { x: o.x + d.x * t, y: o.z + d.z * t };
+  }
+
+  /** Drag-scroll: move the view so the ground under (x0, y0) ends up under (x1, y1). */
+  panDrag(x0: number, y0: number, x1: number, y1: number) {
+    const h = groundHeight(this.world.map, this.target.x, this.target.z);
+    const a = this.screenToPlane(x0, y0, h);
+    const b = this.screenToPlane(x1, y1, h);
+    this.target.x += a.x - b.x;
+    this.target.z += a.y - b.y;
+    this.clampTarget();
   }
 
   private clampTarget() {
@@ -592,9 +663,7 @@ export class GameRenderer {
     this.visuals.delete(v.id);
   }
 
-  private tmpQ = new THREE.Quaternion();
-  private tmpQ2 = new THREE.Quaternion();
-  private tmpN = new THREE.Vector3();
+  private airShadows = new AirShadows();
   private yAxis = new THREE.Vector3(0, 1, 0);
 
   private legacyAnim(m: Model, s: AnimState) {
@@ -610,6 +679,7 @@ export class GameRenderer {
   private syncEntities(alpha: number, dt: number) {
     const w = this.world;
     const seen = new Set<number>();
+    this.airShadows.begin(this.scene);
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -637,8 +707,6 @@ export class GameRenderer {
         const h = groundHeight(w.map, e.x, e.y);
         root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
         const k = e.buildAnim;
-        const ease = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3);
-        root.scale.set(1, Math.max(0.02, ease), 1);
         a.built = k;
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
         a.moving = false;
@@ -673,14 +741,14 @@ export class GameRenderer {
             const climb = (e.z - e.pz) * TPS;
             root.rotation.z = Math.max(-0.9, Math.min(0.4, climb * 0.25));
           }
+          if (vis) {
+            const sz = v.model.size;
+            this.airShadows.add(w.map, p.x, p.z, yaw, p.y - standHeight(w.map, p.x, p.z), sz ? sz.x : 0.6, sz ? sz.z : 0.5, !ud.fixedWing && d.model !== 'uav' && d.model !== 'heavy_uav' && d.model !== 'shahed');
+          }
         } else if (ud.category === 'vehicle') {
-          const m = w.map;
-          const hx = standHeight(m, p.x + 0.35, p.z) - standHeight(m, p.x - 0.35, p.z);
-          const hz = standHeight(m, p.x, p.z + 0.35) - standHeight(m, p.x, p.z - 0.35);
-          this.tmpN.set(-hx / 0.7, 1, -hz / 0.7).normalize();
-          this.tmpQ.setFromUnitVectors(this.yAxis, this.tmpN);
-          this.tmpQ2.setFromAxisAngle(this.yAxis, yaw);
-          root.quaternion.copy(this.tmpQ).multiply(this.tmpQ2);
+          poseGroundVehicle(v.model, a, w.map, p, yaw, dt, vis);
+        } else if (v.model.infantry) {
+          poseInfantry(v.model, a, w.map, p, yaw, dt);
         } else {
           root.rotation.set(0, yaw, 0);
         }
@@ -695,6 +763,7 @@ export class GameRenderer {
       }
       this.updateRing(e, v, d);
     }
+    this.airShadows.end();
     for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
   }
 
@@ -737,7 +806,9 @@ export class GameRenderer {
       }
     }
     // battle damage
-    if (ud.category !== 'infantry' && e.hp < e.maxHp * 0.4) {
+    if (ud.category !== 'infantry' && emitDamageFx(this.effects, m, v.anim.damage, dt, ud.harvester || ud.mcv ? 1.3 : 1)) {
+      // model-specific damage points (smoke columns, fires, sparks)
+    } else if (ud.category !== 'infantry' && e.hp < e.maxHp * 0.4) {
       v.fxTimer -= dt;
       if (v.fxTimer <= 0) {
         v.fxTimer = 0.14;
@@ -754,7 +825,9 @@ export class GameRenderer {
     }
     if (e.jammedUntil > this.world.tick && Math.random() < dt * 8) this.effects.spark(p.x, p.y, p.z, 0x70b0ff);
     // rotor downwash kicks up dust under low-flying helicopters
-    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.4 && Math.random() < dt * 6) this.effects.dust(p.x, standHeight(this.world.map, p.x, p.z), p.z, 1.5);
+    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2));
+    // decoy flares when a missile is homing in
+    if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
   }
 
   private buildingFx(e: Entity, v: Visual, dt: number) {
@@ -772,7 +845,9 @@ export class GameRenderer {
         else this.effects.smoke(wp.x, wp.y, wp.z, em.kind === 'steam' ? 0.9 : 0.6, em.kind === 'smoke');
       }
     }
-    if (e.hp < e.maxHp * 0.55) {
+    if (e.buildAnim >= 1 && emitDamageFx(this.effects, v.model, v.anim.damage, dt, Math.max(1, Math.sqrt(bd.w * bd.h) * 0.8))) {
+      // model-specific damage points
+    } else if (e.hp < e.maxHp * 0.55) {
       v.fxTimer -= dt;
       if (v.fxTimer <= 0) {
         v.fxTimer = 0.12;
@@ -883,7 +958,7 @@ export class GameRenderer {
           if (Math.random() < dt * 30) this.effects.dust(w.x + (Math.random() - 0.5) * w.w, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d, 3);
           if (Math.random() < dt * 8) this.debris.burst('concrete', w.x + (Math.random() - 0.5) * w.w, w.y + w.h * (1 - k), w.z + (Math.random() - 0.5) * w.d, 2, 2, 0.08);
         } else if (w.t < 25 && Math.random() < dt * 10) {
-          this.effects.smoke(w.x + (Math.random() - 0.5) * w.w * 0.8, w.y + 0.2, w.z + (Math.random() - 0.5) * w.d * 0.8, 1.4);
+          this.effects.column(w.x + (Math.random() - 0.5) * w.w * 0.8, w.y + 0.2, w.z + (Math.random() - 0.5) * w.d * 0.8, 1.4);
           if (w.t < 14 && Math.random() < 0.6) this.effects.flame(w.x + (Math.random() - 0.5) * w.w * 0.7, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d * 0.7, 1.3);
         }
         if (w.t > w.max - 3) r.position.y -= dt * 0.15;
@@ -894,7 +969,8 @@ export class GameRenderer {
       } else {
         // burning vehicle wreck
         if (w.t < 9 && Math.random() < dt * 14) this.effects.flame(w.x + (Math.random() - 0.5) * 0.4 * w.size, w.y + 0.3, w.z + (Math.random() - 0.5) * 0.4 * w.size, 0.9 * w.size);
-        if (w.t < 20 && Math.random() < dt * 8) this.effects.smoke(w.x, w.y + 0.4, w.z, 1.0 * w.size);
+        if (w.t < 22 && Math.random() < dt * 7) this.effects.column(w.x, w.y + 0.4, w.z, (w.t < 9 ? 1.1 : 0.8) * w.size);
+        if (w.t < 9) this.effects.burnGlow(w.x, w.y + 0.3, w.z, 2.6 * w.size * Math.min(1, (9 - w.t) / 3));
         if (w.t > w.max - 2.5) r.position.y = w.y - (w.t - (w.max - 2.5)) * 0.25;
       }
       const tt = w.turret;
@@ -963,7 +1039,14 @@ export class GameRenderer {
       if (vel.lengthSq() > 1e-6) {
         v.obj.lookAt(pos.clone().add(vel));
         v.obj.rotateY(-Math.PI / 2);
+        if (p.hits > 0) {
+          // damaged rounds wobble as they fly on
+          const wk = Math.min(1, p.hits / Math.max(1, p.maxHp)) * 0.45;
+          v.obj.rotateZ(Math.sin(this.time * 17 + p.id) * wk);
+          v.obj.rotateY(Math.cos(this.time * 13 + p.id * 2) * wk);
+        }
       }
+      if ((p.flight === 'sam' || p.flight === 'airMissile') && p.targetId >= 0) this.effects.threaten(p.targetId);
       if (v.streak) {
         v.streak.visible = visible;
         const from = v.first ? pos.clone().addScaledVector(vel, -0.03) : v.last;
@@ -977,7 +1060,8 @@ export class GameRenderer {
         const k = p.T > 0 ? p.age / p.T : 0;
         const boost =
           p.flight === 'ballistic' ? k < 0.4 : p.flight === 'hypersonic' ? k < 0.3 : p.flight === 'rocketSalvo' ? k < 0.6 : p.flight === 'artillery' || p.flight === 'mortar' || p.flight === 'shell' ? false : true;
-        this.effects.trail(v.last, pos, p.flight, boost);
+        this.effects.trail(v.last, pos, p.flight, boost, p.age / TPS + p.id * 0.37);
+        if (p.hits > 0) this.effects.damagedTrail(v.last, pos, p.hits / Math.max(1, p.maxHp));
       }
       v.last.copy(pos);
       v.first = false;
@@ -1053,6 +1137,9 @@ export class GameRenderer {
       case 'hypersonic':
         p = BLASTS.ballistic;
         break;
+      case 'cruise':
+        p = w.damage >= 300 ? BLASTS.ballistic : BLASTS.missile;
+        break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
         break;
@@ -1081,15 +1168,21 @@ export class GameRenderer {
           case 'instant': {
             const t = this.world.get(ev.targetId);
             fx.muzzle(pos, dir, wpn.warhead === 'flak' ? 0.55 : 0.35);
-            fx.tracer(pos, tp, !(t && t.kind === 'unit' && unitDef(t.def).air));
+            const inf = src.kind === 'unit' && unitDef(src.def).category === 'infantry';
+            fx.tracer(pos, tp, !(t && t.kind === 'unit' && unitDef(t.def).air), inf ? 1 : 2, wpn.warhead === 'flak');
+            const sv = inf ? undefined : this.visuals.get(src.id);
+            if (sv && sv.visible) ejectCasing(fx, sv.model, dir.x, dir.z, wpn.warhead === 'flak');
             break;
           }
           case 'beam':
             fx.laser(pos, tp);
             break;
-          case 'shell':
+          case 'shell': {
             fx.muzzle(pos, dir, 1.3);
+            const sv = this.visuals.get(src.id);
+            if (sv && sv.visible) ejectCasing(fx, sv.model, dir.x, dir.z, true);
             break;
+          }
           case 'artillery':
             fx.muzzle(pos, dir, wpn.flight === 'mortar' ? 0.7 : 1.7);
             break;
@@ -1113,7 +1206,11 @@ export class GameRenderer {
       }
       case 'airburst': {
         if (!this.visibleAt(ev.x, ev.y)) break;
-        const big = ev.victim === 'ballistic' || ev.victim === 'hypersonic';
+        if (ev.kind === 'hit') {
+          fx.airHit(ev.x, ev.z, ev.y, ev.maxHp ? 1 - (ev.hpLeft ?? 0) / ev.maxHp : 0.5);
+          break;
+        }
+        const big = ev.victim === 'ballistic' || ev.victim === 'hypersonic' || (ev.kind === 'kill' && (ev.maxHp ?? 1) >= 3);
         fx.airburst(ev.x, ev.z, ev.y, ev.kind === 'kill', standHeight(this.world.map, ev.x, ev.y), big);
         break;
       }
