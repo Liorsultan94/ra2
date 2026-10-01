@@ -5,6 +5,7 @@ import type { FogOfWar } from '../fog';
 import { pbr, worldUV, type TexKind, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
+import { drawFlag } from '../flags';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -224,101 +225,10 @@ function texStencil(text: string, color: string) {
 }
 function texFlag(cols: number[], faction: string) {
   return canvasTex('flag' + cols.join(',') + faction, 96, 64, (c, w, h) => {
+    if (drawFlag(c, faction, w, h)) return;
     for (let i = 0; i < 3; i++) {
       c.fillStyle = css(cols[i] ?? 0x888888);
       c.fillRect(0, (i * h) / 3, w, h / 3 + 1);
-    }
-    // a few recognisable emblems on top of the three bands
-    if (faction === 'usa') {
-      for (let i = 0; i < 13; i++) {
-        c.fillStyle = i % 2 ? '#ffffff' : '#b22234';
-        c.fillRect(0, (i * h) / 13, w, h / 13 + 1);
-      }
-      c.fillStyle = '#3c3b6e';
-      c.fillRect(0, 0, w * 0.42, h * 0.54);
-      c.fillStyle = '#ffffff';
-      for (let i = 0; i < 5; i++) for (let j = 0; j < 4; j++) c.fillRect(4 + i * 7.5, 4 + j * 8, 2, 2);
-    } else if (faction === 'israel') {
-      c.fillStyle = '#ffffff';
-      c.fillRect(0, 0, w, h);
-      c.fillStyle = '#0038b8';
-      c.fillRect(0, h * 0.1, w, h * 0.14);
-      c.fillRect(0, h * 0.76, w, h * 0.14);
-      c.strokeStyle = '#0038b8';
-      c.lineWidth = 3;
-      for (const r of [0, Math.PI]) {
-        c.beginPath();
-        for (let k = 0; k < 3; k++) {
-          const a = r + (k / 3) * TAU - Math.PI / 2;
-          const x = w / 2 + Math.cos(a) * 12;
-          const y = h / 2 + Math.sin(a) * 12;
-          if (k) c.lineTo(x, y);
-          else c.moveTo(x, y);
-        }
-        c.closePath();
-        c.stroke();
-      }
-    } else if (faction === 'china') {
-      c.fillStyle = '#de2910';
-      c.fillRect(0, 0, w, h);
-      c.fillStyle = '#ffde00';
-      const star = (x: number, y: number, r: number) => {
-        c.beginPath();
-        for (let k = 0; k < 10; k++) {
-          const rr = k % 2 ? r * 0.4 : r;
-          const a = (k / 10) * TAU - Math.PI / 2;
-          if (k) c.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
-          else c.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
-        }
-        c.closePath();
-        c.fill();
-      };
-      star(16, 16, 10);
-      star(32, 6, 3);
-      star(38, 13, 3);
-      star(38, 22, 3);
-      star(32, 29, 3);
-    } else if (faction === 'korea') {
-      c.fillStyle = '#ffffff';
-      c.fillRect(0, 0, w, h);
-      c.fillStyle = '#cd2e3a';
-      c.beginPath();
-      c.arc(w / 2, h / 2, 14, Math.PI, TAU);
-      c.fill();
-      c.fillStyle = '#0047a0';
-      c.beginPath();
-      c.arc(w / 2, h / 2, 14, 0, Math.PI);
-      c.fill();
-      c.fillStyle = '#111';
-      for (const [x, y] of [
-        [16, 12],
-        [80, 12],
-        [16, 52],
-        [80, 52],
-      ])
-        c.fillRect(x - 6, y - 5, 12, 10);
-    } else if (faction === 'turkey') {
-      c.fillStyle = '#e30a17';
-      c.fillRect(0, 0, w, h);
-      c.fillStyle = '#ffffff';
-      c.beginPath();
-      c.arc(34, h / 2, 16, 0, TAU);
-      c.fill();
-      c.fillStyle = '#e30a17';
-      c.beginPath();
-      c.arc(38, h / 2, 13, 0, TAU);
-      c.fill();
-      c.fillStyle = '#ffffff';
-      c.beginPath();
-      c.arc(56, h / 2, 5, 0, TAU);
-      c.fill();
-    } else if (faction === 'iran') {
-      c.fillStyle = '#da0000';
-      c.beginPath();
-      c.arc(w / 2, h / 2, 7, 0, TAU);
-      c.fill();
-    } else if (faction === 'germany' || faction === 'russia' || faction === 'ukraine') {
-      // plain tricolours / bicolour: the three bands are already right
     }
   });
 }

@@ -301,16 +301,13 @@ kbd {
   text-overflow: ellipsis;
 }
 .flag {
-  display: inline-flex;
-  flex-direction: column;
-  width: 26px;
-  height: 17px;
+  display: inline-block;
+  width: 27px;
+  height: 18px;
   flex: none;
+  object-fit: fill;
   border: 1px solid rgba(0, 0, 0, 0.6);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
-}
-.flag b {
-  flex: 1;
 }
 
 .icon-btn {
