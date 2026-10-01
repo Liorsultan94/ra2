@@ -4,6 +4,7 @@ import { AudioSystem } from './audio/audio';
 import { FACTIONS } from './sim/defs';
 import type { Faction } from './sim/types';
 import { Game, type GameOptions } from './game/game';
+import { loadModelOverrides } from './render/models';
 import { MainMenu, loadSettings, resolveQuality, showEndScreen, showPauseMenu, type Settings } from './ui/menu';
 
 const app = document.getElementById('app')!;
@@ -104,6 +105,7 @@ function startBattle(opts: GameOptions) {
 
 // Debug/test hook: ?play=usa,russia,normal jumps straight into a battle.
 const params = new URLSearchParams(location.search);
+await loadModelOverrides(import.meta.env.BASE_URL);
 const play = params.get('play');
 const demo = params.get('demo');
 if (demo) {

@@ -207,9 +207,21 @@ export class Game {
     this.renderer.handleEvent(ev);
     const mine = 'owner' in ev && ev.owner === this.local;
     switch (ev.t) {
+      case 'launch': {
+        if (!this.visibleToLocal(ev.x, ev.y)) break;
+        const f = ev.flight;
+        const snd: Sfx = f === 'sam' || f === 'interceptor' || f === 'ballistic' || f === 'hypersonic' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
+        this.sfx(snd, ev.x, ev.y, f === 'ballistic' || f === 'hypersonic' ? 1 : 0.75);
+        break;
+      }
+      case 'airburst':
+        if (this.visibleToLocal(ev.x, ev.y)) this.sfx(ev.kind === 'kill' ? (ev.victim === 'ballistic' || ev.victim === 'hypersonic' ? 'explosionLarge' : 'explosionMedium') : 'explosionSmall', ev.x, ev.y, 0.8);
+        break;
       case 'fire': {
         if (!this.visibleToLocal(ev.x, ev.y) && !this.visibleToLocal(ev.tx, ev.ty)) break;
         const w = WEAPONS[ev.weapon];
+        if (w.flight && w.flight !== 'shell' && w.flight !== 'artillery' && w.flight !== 'mortar') break; // launch event plays it
+        if (ev.targetId < 0 && w.projectile !== 'beam') break;
         const snd: Sfx =
           w.projectile === 'beam' ? 'laser'
           : w.projectile === 'spawn' ? 'droneLaunch'
@@ -228,7 +240,8 @@ export class Game {
         const w = WEAPONS[ev.weapon];
         if (w.projectile === 'instant' && w.damage < 30) break;
         if (w.projectile === 'beam') break;
-        this.sfx(w.damage >= 200 ? 'explosionLarge' : w.damage >= 70 || w.splash ? 'explosionMedium' : 'explosionSmall', ev.x, ev.y, 0.8);
+        const big = w.damage >= 200 || w.warhead === 'thermo';
+        this.sfx(big ? 'explosionLarge' : w.damage >= 70 || w.splash ? 'explosionMedium' : 'explosionSmall', ev.x, ev.y, big ? 1 : 0.8);
         break;
       }
       case 'intercept':
@@ -339,7 +352,10 @@ export class Game {
   }
 
   private pruneSelection() {
-    for (const id of this.renderer.selection) if (!this.world.get(id)) this.renderer.selection.delete(id);
+    for (const id of this.renderer.selection) {
+      const e = this.world.get(id);
+      if (!e || e.inside >= 0) this.renderer.selection.delete(id);
+    }
   }
 
   private setMode(m: Mode) {
@@ -515,6 +531,11 @@ export class Game {
       }
       if (units.length === 1 && units[0].id === target.id && unitDef(target.def).mcv) {
         return { cursor: 'deploy', run: () => this.issue({ type: 'deploy', ids: [target.id] }) };
+      }
+      const cap = target.kind === 'unit' ? (unitDef(target.def).transport ?? 0) : 0;
+      const riders = units.filter((u) => unitDef(u.def).category === 'infantry');
+      if (cap && riders.length && target.passengers.length < cap) {
+        return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: riders.map((u) => u.id), target: target.id }, target, false) };
       }
       return { cursor: 'select', run: () => this.select([target.id], this.keys.has('Shift')) };
     }

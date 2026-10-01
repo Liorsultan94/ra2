@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import type { Debris, DebrisKind } from './debris';
 import type { FogOfWar } from './fog';
+import type { GroundMarks } from './marks';
 
 function makeSpriteTexture(kind: 'glow' | 'smoke'): THREE.Texture {
   const s = 64;
@@ -206,6 +208,45 @@ interface Timed {
   alpha0?: number;
 }
 
+/** How an explosion looks. Sizes are in tiles. */
+export interface BlastProfile {
+  size: number; // overall scale
+  fire: number; // fireball particle count multiplier (0 = none)
+  fireColor?: 'normal' | 'thermo' | 'laser' | 'white';
+  sparks: number;
+  smoke: number; // smoke cloud amount
+  column?: boolean; // tall rising smoke column
+  dirt: number; // earth thrown up (0 = none)
+  ring: number; // ground shockwave dust ring radius (0 = none)
+  debris?: { kind: DebrisKind; n: number; power: number; size: number }[];
+  crater: number; // crater decal radius
+  scorch: number;
+  light: number;
+  shake: number;
+  afterburn?: number; // seconds of lingering flames (thermobaric)
+}
+
+export const BLASTS: Record<string, BlastProfile> = {
+  bullet: { size: 0.15, fire: 0, sparks: 3, smoke: 0, dirt: 0.3, ring: 0, crater: 0, scorch: 0, light: 0, shake: 0 },
+  flak: { size: 0.3, fire: 0.4, sparks: 6, smoke: 0.3, dirt: 0, ring: 0, crater: 0, scorch: 0, light: 0.6, shake: 0 },
+  airSmall: { size: 0.5, fire: 0.6, sparks: 8, smoke: 0.6, dirt: 0, ring: 0, crater: 0, scorch: 0, light: 1.5, shake: 0 },
+  shell: { size: 0.75, fire: 0.8, sparks: 10, smoke: 0.8, dirt: 1, ring: 0, debris: [{ kind: 'dirt', n: 6, power: 3, size: 0.06 }], crater: 0.35, scorch: 0, light: 3, shake: 0.03 },
+  heat: { size: 0.7, fire: 0.7, sparks: 22, smoke: 0.7, dirt: 0.5, ring: 0, crater: 0.25, scorch: 0.35, light: 3, shake: 0.02 },
+  artillery: { size: 1.3, fire: 1, sparks: 12, smoke: 1.2, column: true, dirt: 2.4, ring: 1.6, debris: [{ kind: 'dirt', n: 14, power: 5, size: 0.08 }], crater: 0.75, scorch: 0.6, light: 6, shake: 0.12 },
+  mortar: { size: 1.0, fire: 0.8, sparks: 10, smoke: 1, dirt: 1.8, ring: 1.0, debris: [{ kind: 'dirt', n: 8, power: 4, size: 0.07 }], crater: 0.55, scorch: 0.4, light: 4, shake: 0.06 },
+  rocket: { size: 1.0, fire: 1, sparks: 10, smoke: 1, dirt: 1.4, ring: 1.0, debris: [{ kind: 'dirt', n: 8, power: 4, size: 0.07 }], crater: 0.5, scorch: 0.5, light: 4, shake: 0.06 },
+  thermo: { size: 1.7, fire: 2.6, fireColor: 'thermo', sparks: 10, smoke: 1.6, column: true, dirt: 1, ring: 2.6, crater: 0.6, scorch: 1.4, light: 10, shake: 0.2, afterburn: 2.5 },
+  missile: { size: 1.4, fire: 1.3, sparks: 14, smoke: 1.4, column: true, dirt: 2, ring: 1.8, debris: [{ kind: 'dirt', n: 12, power: 5, size: 0.08 }], crater: 0.8, scorch: 0.8, light: 7, shake: 0.14 },
+  ballistic: { size: 2.6, fire: 2.4, fireColor: 'white', sparks: 30, smoke: 2.6, column: true, dirt: 3.5, ring: 3.8, debris: [{ kind: 'dirt', n: 30, power: 8, size: 0.12 }, { kind: 'concrete', n: 10, power: 7, size: 0.1 }], crater: 1.6, scorch: 2, light: 16, shake: 0.45 },
+  drone: { size: 0.75, fire: 0.9, sparks: 14, smoke: 0.8, dirt: 0.8, ring: 0.6, debris: [{ kind: 'metal', n: 5, power: 3, size: 0.04 }], crater: 0.3, scorch: 0.45, light: 3.5, shake: 0.04 },
+  shahed: { size: 1.6, fire: 1.8, sparks: 20, smoke: 1.6, column: true, dirt: 2, ring: 2.2, debris: [{ kind: 'dirt', n: 14, power: 6, size: 0.09 }, { kind: 'metal', n: 6, power: 5, size: 0.05 }], crater: 0.9, scorch: 1.1, light: 9, shake: 0.2 },
+  laser: { size: 0.4, fire: 0.5, fireColor: 'laser', sparks: 14, smoke: 0.3, dirt: 0, ring: 0, crater: 0, scorch: 0.2, light: 2, shake: 0 },
+  vehicle: { size: 1.4, fire: 1.6, sparks: 26, smoke: 1.6, column: true, dirt: 0.8, ring: 1.4, debris: [{ kind: 'metal', n: 14, power: 6, size: 0.07 }, { kind: 'burnt', n: 8, power: 4, size: 0.09 }], crater: 0.5, scorch: 0.9, light: 9, shake: 0.18 },
+  bigVehicle: { size: 2.0, fire: 2.2, sparks: 34, smoke: 2.2, column: true, dirt: 1, ring: 2.2, debris: [{ kind: 'metal', n: 22, power: 7, size: 0.08 }, { kind: 'burnt', n: 12, power: 5, size: 0.1 }], crater: 0.7, scorch: 1.3, light: 12, shake: 0.3 },
+  aircraft: { size: 1.3, fire: 1.6, sparks: 24, smoke: 1.3, dirt: 0, ring: 0, debris: [{ kind: 'metal', n: 12, power: 4, size: 0.05 }], crater: 0, scorch: 0, light: 7, shake: 0.08 },
+  building: { size: 2.0, fire: 2, sparks: 24, smoke: 2.4, column: true, dirt: 1.2, ring: 2.6, debris: [{ kind: 'concrete', n: 26, power: 6, size: 0.12 }, { kind: 'metal', n: 8, power: 5, size: 0.07 }, { kind: 'glass', n: 6, power: 5, size: 0.04 }], crater: 0, scorch: 1.6, light: 12, shake: 0.35 },
+};
+
 export class Effects {
   readonly group = new THREE.Group();
   readonly fire: ParticleSystem;
@@ -214,9 +255,10 @@ export class Effects {
   private lights: { light: THREE.PointLight; life: number; max: number; power: number }[] = [];
   private beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
   private ringGeo = new THREE.RingGeometry(0.92, 1, 48).rotateX(-Math.PI / 2);
-  private discGeo = new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2);
-  private scorchTex: THREE.Texture;
-  private scorches: THREE.Mesh[] = [];
+  private sphereGeo = new THREE.SphereGeometry(1, 20, 12);
+  debris: Debris | null = null;
+  marks: GroundMarks | null = null;
+  private burns: { x: number; y: number; z: number; t: number; size: number }[] = [];
   shake = 0;
 
   constructor(
@@ -224,28 +266,18 @@ export class Effects {
     fog: FogOfWar,
     private quality: 'low' | 'medium' | 'high',
   ) {
-    const mult = quality === 'low' ? 0.5 : 1;
-    this.fire = new ParticleSystem(Math.floor(5000 * mult), true, fog);
-    this.smokeSys = new ParticleSystem(Math.floor(4000 * mult), false, fog);
+    const mult = quality === 'low' ? 0.4 : quality === 'medium' ? 0.7 : 1;
+    this.fire = new ParticleSystem(Math.floor(9000 * mult), true, fog);
+    this.smokeSys = new ParticleSystem(Math.floor(12000 * mult), false, fog);
     this.group.add(this.fire.points, this.smokeSys.points);
     scene.add(this.group);
     if (quality !== 'low') {
-      for (let i = 0; i < 4; i++) {
-        const l = new THREE.PointLight(0xffa040, 0, 6, 1.6);
+      for (let i = 0; i < 6; i++) {
+        const l = new THREE.PointLight(0xffa040, 0, 9, 1.4);
         this.group.add(l);
         this.lights.push({ light: l, life: 1, max: 1, power: 0 });
       }
     }
-    const c = document.createElement('canvas');
-    c.width = c.height = 64;
-    const ctx = c.getContext('2d')!;
-    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0, 'rgba(15,12,10,0.85)');
-    g.addColorStop(0.5, 'rgba(25,20,15,0.55)');
-    g.addColorStop(1, 'rgba(25,20,15,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 64, 64);
-    this.scorchTex = new THREE.CanvasTexture(c);
   }
 
   setPointScale(s: number) {
@@ -257,101 +289,275 @@ export class Effects {
     return a + Math.random() * (b - a);
   }
 
-  private flashLight(x: number, y: number, z: number, power: number, color: number, life: number) {
+  flashLight(x: number, y: number, z: number, power: number, color: number, life: number) {
     if (!this.lights.length) return;
     let slot = this.lights[0];
     for (const l of this.lights) if (l.life / l.max >= slot.life / slot.max) slot = l;
-    slot.light.position.set(x, y + 0.6, z);
+    slot.light.position.set(x, y + 0.5, z);
     slot.light.color.setHex(color);
+    slot.light.distance = 4 + power * 0.8;
     slot.life = 0;
     slot.max = life;
-    slot.power = power;
+    slot.power = power * 1.6;
   }
 
-  // ------------------------------------------------------------------ public
+  private q(n: number) {
+    return Math.max(1, Math.round(n * (this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.75 : 1)));
+  }
 
-  explosion(x: number, y: number, z: number, size: 'tiny' | 'small' | 'medium' | 'large' | 'huge', kind: 'fire' | 'thermo' | 'dust' | 'laser' | 'air' = 'fire') {
-    const S = { tiny: 0.25, small: 0.5, medium: 1, large: 1.7, huge: 2.6 }[size];
-    const q = this.quality === 'low' ? 0.5 : 1;
-    if (kind === 'dust') {
-      for (let i = 0; i < 6 * q; i++)
-        this.smokeSys.spawn({ x, y: y + 0.05, z, vx: this.rand(-0.6, 0.6) * S, vy: this.rand(0.3, 0.9) * S, vz: this.rand(-0.6, 0.6) * S, life: this.rand(0.4, 0.8), size: 0.25 * S, sizeEnd: 0.6 * S, color: 0x9a8a70, alpha: 0.6, drag: 3 });
-      for (let i = 0; i < 4 * q; i++) this.fire.spawn({ x, y: y + 0.1, z, vx: this.rand(-2, 2), vy: this.rand(0.5, 2), vz: this.rand(-2, 2), life: 0.15, size: 0.08, color: 0xffe0a0, gravity: 6 });
-      return;
+  // --------------------------------------------------------------- blasts
+
+  /** Full explosion from a profile. ground = terrain height under the blast. */
+  blast(p: BlastProfile, x: number, y: number, z: number, ground: number) {
+    const S = p.size;
+    const airborne = y - ground > 0.6;
+    const pal =
+      p.fireColor === 'thermo'
+        ? { hot: 0xfff1b0, mid: 0xff7a18, end: 0x5a1400 }
+        : p.fireColor === 'laser'
+          ? { hot: 0xffc0a8, mid: 0xff3a10, end: 0x400800 }
+          : p.fireColor === 'white'
+            ? { hot: 0xffffff, mid: 0xffb050, end: 0x4a1000 }
+            : { hot: 0xffd890, mid: 0xff6a12, end: 0x3c0c00 };
+    // 1. flash
+    if (p.fire > 0) {
+      this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.09 + 0.03 * S, size: 1.3 * S, sizeEnd: 2.1 * S, color: 0xffffff, colorEnd: pal.hot, alpha: 0.9 });
+      this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.35 });
     }
-    const hot = kind === 'laser' ? 0xffb090 : kind === 'thermo' ? 0xffd070 : 0xffc060;
-    const mid = kind === 'laser' ? 0xc02010 : kind === 'thermo' ? 0xe05a10 : 0xd04a08;
-    // core flash
-    this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.16, size: 1.1 * S, sizeEnd: 1.8 * S, color: 0xfff0c0, colorEnd: mid, alpha: 0.75 });
-    // fireball
-    const nFire = Math.round((kind === 'thermo' ? 22 : 12) * S * q) + 3;
+    // 2. fireball: expanding, rising, cooling puffs
+    const nFire = this.q(Math.round(16 * p.fire * Math.sqrt(S)));
     for (let i = 0; i < nFire; i++) {
       const a = Math.random() * Math.PI * 2;
-      const sp = this.rand(0.4, 1.6) * S;
+      const el = Math.random() * (airborne ? Math.PI : Math.PI / 2);
+      const sp = this.rand(0.5, 2.2) * S;
       this.fire.spawn({
-        x: x + Math.cos(a) * 0.1 * S,
-        y: y + this.rand(0.05, 0.3) * S,
-        z: z + Math.sin(a) * 0.1 * S,
-        vx: Math.cos(a) * sp,
-        vy: this.rand(0.4, 1.6) * S,
-        vz: Math.sin(a) * sp,
-        life: this.rand(0.35, 0.75) * (kind === 'thermo' ? 1.5 : 1),
+        x: x + Math.cos(a) * 0.08 * S,
+        y: y + this.rand(0.05, 0.25) * S,
+        z: z + Math.sin(a) * 0.08 * S,
+        vx: Math.cos(a) * Math.cos(el) * sp,
+        vy: Math.sin(el) * sp * (airborne ? 1 : 0.8) + 0.4 * S,
+        vz: Math.sin(a) * Math.cos(el) * sp,
+        life: this.rand(0.35, 0.8) * (p.fireColor === 'thermo' ? 1.8 : 1) * (0.8 + S * 0.2),
         size: this.rand(0.35, 0.7) * S,
-        sizeEnd: this.rand(0.7, 1.2) * S,
-        color: hot,
-        colorEnd: 0x4a0c00,
-        alpha: 0.8,
-        drag: 2.5,
-        gravity: -0.6,
+        sizeEnd: this.rand(0.8, 1.35) * S,
+        color: pal.hot,
+        colorEnd: pal.end,
+        alpha: 0.85,
+        drag: 3,
+        gravity: -0.8,
       });
     }
-    // sparks
-    for (let i = 0; i < 10 * S * q; i++) {
-      this.fire.spawn({ x, y: y + 0.15, z, vx: this.rand(-4, 4) * S, vy: this.rand(1, 5) * S, vz: this.rand(-4, 4) * S, life: this.rand(0.3, 0.7), size: 0.07, color: 0xffd080, colorEnd: 0xff4000, gravity: 9, drag: 0.5 });
+    // 3. sparks / fragments
+    const nSp = this.q(p.sparks);
+    for (let i = 0; i < nSp; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = this.rand(2, 7) * Math.sqrt(S);
+      this.fire.spawn({ x, y: y + 0.1, z, vx: Math.cos(a) * sp, vy: this.rand(1, 6) * Math.sqrt(S), vz: Math.sin(a) * sp, life: this.rand(0.3, 0.9), size: this.rand(0.04, 0.08), color: 0xffe6a0, colorEnd: 0xff4000, gravity: 9, drag: 0.6 });
     }
-    // smoke
-    if (kind !== 'air' || S > 0.6) {
-      const nSmoke = Math.round(8 * S * q) + 2;
-      for (let i = 0; i < nSmoke; i++) {
-        this.smokeSys.spawn({
-          x: x + this.rand(-0.3, 0.3) * S,
-          y: y + this.rand(0.2, 0.5) * S,
-          z: z + this.rand(-0.3, 0.3) * S,
-          vx: this.rand(-0.4, 0.4) * S,
-          vy: this.rand(0.4, 1.0) * S,
-          vz: this.rand(-0.4, 0.4) * S,
-          life: this.rand(1.4, 2.8) * Math.sqrt(S),
-          size: this.rand(0.5, 0.9) * S,
-          sizeEnd: this.rand(1.6, 2.6) * S,
-          color: 0x3a3632,
-          colorEnd: 0x6a645c,
-          alpha: 0.75,
-          drag: 1.2,
-          gravity: -0.15,
-        });
+    // 4. dirt column / spray (ground bursts only)
+    if (!airborne && p.dirt > 0) {
+      const n = this.q(Math.round(10 * p.dirt));
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = this.rand(0, 0.25) * S;
+        const up = this.rand(2.5, 6) * Math.sqrt(p.dirt);
+        this.smokeSys.spawn({ x: x + Math.cos(a) * r, y: ground + 0.05, z: z + Math.sin(a) * r, vx: Math.cos(a) * this.rand(0.3, 1.4), vy: up, vz: Math.sin(a) * this.rand(0.3, 1.4), life: this.rand(0.8, 1.6), size: this.rand(0.15, 0.3) * S, sizeEnd: this.rand(0.5, 0.9) * S, color: 0x4a3a28, colorEnd: 0x7a6a52, alpha: 0.85, gravity: 6, drag: 0.8 });
       }
     }
-    // debris
-    if (S >= 1 && kind !== 'air') {
-      for (let i = 0; i < 8 * S * q; i++)
-        this.smokeSys.spawn({ x, y: y + 0.2, z, vx: this.rand(-2.5, 2.5) * S, vy: this.rand(2, 5) * S, vz: this.rand(-2.5, 2.5) * S, life: this.rand(0.6, 1.1), size: 0.09, color: 0x1a1612, alpha: 1, gravity: 10 });
+    // 5. smoke: billowing cloud + optional column
+    const nSmoke = this.q(Math.round(9 * p.smoke));
+    for (let i = 0; i < nSmoke; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = this.rand(0, 0.35) * S;
+      this.smokeSys.spawn({
+        x: x + Math.cos(a) * r,
+        y: y + this.rand(0.15, 0.5) * S,
+        z: z + Math.sin(a) * r,
+        vx: Math.cos(a) * this.rand(0.2, 0.7) * S,
+        vy: this.rand(0.4, 1.1) * S,
+        vz: Math.sin(a) * this.rand(0.2, 0.7) * S,
+        life: this.rand(2, 4) * Math.sqrt(S),
+        size: this.rand(0.45, 0.8) * S,
+        sizeEnd: this.rand(1.6, 2.6) * S,
+        color: 0x2c2824,
+        colorEnd: 0x6e6862,
+        alpha: 0.7,
+        drag: 1.4,
+        gravity: -0.15,
+      });
     }
-    // shockwave ring
-    if (S >= 1.5) this.ring(x, y + 0.05, z, 0.3 * S, 2.2 * S, 0.4, 0xa07040, true, 0.45);
-    if (S >= 0.5 && kind !== 'air') this.scorch(x, y, z, 0.55 * S);
-    this.flashLight(x, y, z, 6 * S, kind === 'laser' ? 0xff5030 : 0xffa040, 0.35 + 0.1 * S);
-    if (S >= 1.7) this.shake = Math.max(this.shake, 0.18 * S);
+    if (p.column) {
+      const n = this.q(Math.round(6 * S));
+      for (let i = 0; i < n; i++)
+        this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15) * S, y: y + 0.3 * S + i * 0.18 * S, z: z + this.rand(-0.15, 0.15) * S, vx: 0.15, vy: this.rand(1.2, 2.2) * S * 0.6, vz: -0.1, life: this.rand(4, 7), size: 0.5 * S, sizeEnd: 2.4 * S, color: 0x221e1b, colorEnd: 0x5e5852, alpha: 0.55, drag: 0.6, gravity: -0.05 });
+    }
+    // 6. ground shockwave: fast radial dust ring + visible ring
+    if (!airborne && p.ring > 0) {
+      const n = this.q(Math.round(26 * Math.sqrt(p.ring)));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
+        const sp = p.ring * this.rand(2.2, 3.2);
+        this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.55, drag: 2.8 });
+      }
+      this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.35, 0xfff0d0, true, 0.35);
+    }
+    if (airborne && S >= 1) {
+      // spherical pressure flash in the air
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffe2b0, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const m = new THREE.Mesh(this.sphereGeo, mat);
+      m.position.set(x, y, z);
+      m.scale.setScalar(0.2 * S);
+      this.group.add(m);
+      this.timed.push({ obj: m, mat, life: 0, max: 0.25, grow: 1.4 * S, base: 0.2 * S, alpha0: 0.35 });
+    }
+    // 7. debris, crater, scorch
+    if (this.debris && p.debris) for (const d of p.debris) this.debris.burst(d.kind, x, Math.max(y, ground + 0.1), z, this.q(d.n), d.power, d.size, { smoke: d.kind === 'burnt' || d.kind === 'metal' ? 0.35 : 0 });
+    if (this.marks && !airborne) {
+      if (p.scorch) this.marks.scorchAt(x, z, p.scorch * this.rand(0.85, 1.15));
+      if (p.crater) this.marks.craterAt(x, z, p.crater * this.rand(0.85, 1.15));
+    }
+    // 8. light and camera shake
+    if (p.light) this.flashLight(x, y, z, p.light, p.fireColor === 'laser' ? 0xff5030 : 0xffa04a, 0.25 + 0.06 * S);
+    this.shake = Math.max(this.shake, p.shake);
+    if (p.afterburn) this.burns.push({ x, y: ground, z, t: p.afterburn, size: S });
   }
 
+  /** Back-compat helper used by older call sites. */
+  explosion(x: number, y: number, z: number, size: 'tiny' | 'small' | 'medium' | 'large' | 'huge', kind: 'fire' | 'thermo' | 'dust' | 'laser' | 'air' = 'fire') {
+    if (kind === 'dust') {
+      for (let i = 0; i < this.q(6); i++)
+        this.smokeSys.spawn({ x, y: y + 0.05, z, vx: this.rand(-0.5, 0.5), vy: this.rand(0.3, 0.8), vz: this.rand(-0.5, 0.5), life: this.rand(0.5, 0.9), size: 0.12, sizeEnd: 0.35, color: 0x9a8a70, alpha: 0.6, drag: 3 });
+      return;
+    }
+    const base = { tiny: BLASTS.flak, small: BLASTS.shell, medium: BLASTS.rocket, large: BLASTS.vehicle, huge: BLASTS.bigVehicle }[size];
+    const p = kind === 'thermo' ? BLASTS.thermo : kind === 'laser' ? BLASTS.laser : base;
+    this.blast(p, x, y, z, kind === 'air' ? y - 2 : y);
+  }
+
+  // ---------------------------------------------------------- launch / fire
+
   muzzle(p: THREE.Vector3, dir: THREE.Vector3, scale = 1, color = 0xffe08a) {
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.07, size: 0.45 * scale, sizeEnd: 0.2 * scale, color });
-    this.fire.spawn({ x: p.x + dir.x * 0.12 * scale, y: p.y + dir.y * 0.12, z: p.z + dir.z * 0.12 * scale, life: 0.06, size: 0.3 * scale, color: 0xffa040 });
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.06, size: 0.5 * scale, sizeEnd: 0.2 * scale, color: 0xffffff, colorEnd: color });
+    for (let i = 1; i <= 3; i++) this.fire.spawn({ x: p.x + dir.x * 0.09 * i * scale, y: p.y + dir.y * 0.09 * i, z: p.z + dir.z * 0.09 * i * scale, life: 0.05, size: (0.38 - i * 0.07) * scale, color, colorEnd: 0xff5000 });
     if (scale > 0.8) {
-      for (let i = 0; i < 3; i++)
-        this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: dir.x * 1.2 + this.rand(-0.2, 0.2), vy: this.rand(0.2, 0.6), vz: dir.z * 1.2 + this.rand(-0.2, 0.2), life: this.rand(0.5, 1), size: 0.2 * scale, sizeEnd: 0.6 * scale, color: 0x8a8580, alpha: 0.5, drag: 3 });
-      this.flashLight(p.x, p.y - 0.4, p.z, 2.5 * scale, 0xffb060, 0.08);
+      // muzzle blast: side-venting smoke from the brake, dust kicked off the ground
+      for (let i = 0; i < this.q(6); i++) {
+        const side = i % 2 ? 1 : -1;
+        this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: dir.x * 1.6 - dir.z * side * 1.4 + this.rand(-0.2, 0.2), vy: this.rand(0.1, 0.5), vz: dir.z * 1.6 + dir.x * side * 1.4 + this.rand(-0.2, 0.2), life: this.rand(0.7, 1.4), size: 0.18 * scale, sizeEnd: 0.75 * scale, color: 0x8c8780, colorEnd: 0xb8b2aa, alpha: 0.55, drag: 3 });
+      }
+      this.flashLight(p.x, p.y, p.z, 2.5 * scale, 0xffb060, 0.08);
     }
   }
+
+  /** Launch signature for a missile / rocket at position p, flying along dir. */
+  launch(kind: string, p: THREE.Vector3, dir: THREE.Vector3, ground: number) {
+    const back = dir.clone().multiplyScalar(-1);
+    switch (kind) {
+      case 'atgm':
+        // backblast cone behind the shooter
+        for (let i = 0; i < this.q(10); i++)
+          this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: back.x * this.rand(2, 4) + this.rand(-0.5, 0.5), vy: this.rand(0, 0.6), vz: back.z * this.rand(2, 4) + this.rand(-0.5, 0.5), life: this.rand(0.8, 1.5), size: 0.15, sizeEnd: 0.6, color: 0xb4ada2, colorEnd: 0xd0cbc2, alpha: 0.6, drag: 3 });
+        this.fire.spawn({ x: p.x + back.x * 0.15, y: p.y, z: p.z + back.z * 0.15, life: 0.08, size: 0.45, color: 0xfff0c0, colorEnd: 0xff6000 });
+        break;
+      case 'sam':
+      case 'interceptor':
+      case 'ballistic':
+      case 'hypersonic': {
+        const big = kind === 'ballistic' || kind === 'hypersonic' ? 2.2 : 1;
+        this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.2, size: 1.2 * big, color: 0xffffff, colorEnd: 0xffa040 });
+        // exhaust hits the ground and billows out sideways
+        const n = this.q(Math.round(22 * big));
+        for (let i = 0; i < n; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const sp = this.rand(0.8, 2.6) * big;
+          this.smokeSys.spawn({ x: p.x, y: ground + 0.1, z: p.z, vx: Math.cos(a) * sp, vy: this.rand(0.1, 0.7), vz: Math.sin(a) * sp, life: this.rand(2, 4) * big, size: 0.3 * big, sizeEnd: 1.4 * big, color: 0xe6e2dc, colorEnd: 0xf4f2ee, alpha: 0.6, drag: 1.2, gravity: -0.05 });
+        }
+        this.flashLight(p.x, p.y, p.z, 5 * big, 0xffc070, 0.5);
+        this.shake = Math.max(this.shake, 0.05 * big);
+        break;
+      }
+      case 'rocketSalvo':
+      case 'airMissile':
+      case 'topAttack':
+        this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.1, size: 0.55, color: 0xfff0c0, colorEnd: 0xff6000 });
+        for (let i = 0; i < this.q(5); i++)
+          this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: back.x * this.rand(0.5, 1.5) + this.rand(-0.3, 0.3), vy: this.rand(0, 0.5), vz: back.z * this.rand(0.5, 1.5) + this.rand(-0.3, 0.3), life: this.rand(0.8, 1.6), size: 0.18, sizeEnd: 0.7, color: 0xc8c2b8, alpha: 0.55, drag: 2 });
+        break;
+    }
+  }
+
+  /**
+   * Continuous exhaust trail between two positions of a projectile.
+   * kind: flight model; age: seconds since launch; boost: is the motor burning.
+   */
+  trail(a: THREE.Vector3, b: THREE.Vector3, kind: string, boost: boolean) {
+    const d = b.clone().sub(a);
+    const len = d.length();
+    if (len < 1e-4) return;
+    const dir = d.clone().divideScalar(len);
+    const cfg =
+      kind === 'ballistic' || kind === 'hypersonic'
+        ? { step: 0.12, life: 4.5, s0: 0.22, s1: 1.3, flame: 0.7, col: 0xe8e4de }
+        : kind === 'sam' || kind === 'interceptor'
+          ? { step: 0.07, life: 3.2, s0: 0.12, s1: 0.75, flame: 0.4, col: 0xf0eeea }
+          : kind === 'rocketSalvo'
+            ? { step: 0.1, life: 1.8, s0: 0.12, s1: 0.6, flame: 0.4, col: 0xb8b2a8 }
+            : kind === 'airMissile'
+              ? { step: 0.08, life: 1.6, s0: 0.08, s1: 0.45, flame: 0.32, col: 0xd8d4ce }
+              : { step: 0.08, life: 1.1, s0: 0.06, s1: 0.32, flame: 0.28, col: 0xcac4ba }; // atgm / topAttack
+    if (kind === 'artillery' || kind === 'mortar') {
+      // shells: faint heat shimmer streak only
+      this.fire.spawn({ x: b.x, y: b.y, z: b.z, life: 0.05, size: 0.12, color: 0xffc070 });
+      return;
+    }
+    if (kind === 'shell') return;
+    if (boost) {
+      this.fire.spawn({ x: b.x - dir.x * 0.05, y: b.y - dir.y * 0.05, z: b.z - dir.z * 0.05, life: 0.05, size: cfg.flame * 1.4, color: 0xffffff, colorEnd: 0xffb050 });
+      this.fire.spawn({ x: b.x - dir.x * 0.15, y: b.y - dir.y * 0.15, z: b.z - dir.z * 0.15, life: 0.08, size: cfg.flame, color: 0xffd080, colorEnd: 0xff4000 });
+    } else if (kind === 'hypersonic' || kind === 'ballistic') {
+      // re-entry: plasma glow around the warhead, faint trail
+      this.fire.spawn({ x: b.x, y: b.y, z: b.z, life: 0.06, size: 0.5, color: kind === 'hypersonic' ? 0xffb0ff : 0xffc080, colorEnd: 0xff5020 });
+    }
+    const n = Math.min(40, Math.ceil(len / cfg.step));
+    for (let i = 0; i < n; i++) {
+      const t = (i + Math.random()) / n;
+      const life = this.rand(0.7, 1.15) * cfg.life * (boost ? 1 : 0.35);
+      this.smokeSys.spawn({
+        x: a.x + d.x * t + this.rand(-0.02, 0.02),
+        y: a.y + d.y * t + this.rand(-0.02, 0.02),
+        z: a.z + d.z * t + this.rand(-0.02, 0.02),
+        vx: this.rand(-0.06, 0.06) + 0.05,
+        vy: this.rand(0.02, 0.12),
+        vz: this.rand(-0.06, 0.06) - 0.03,
+        life,
+        size: cfg.s0,
+        sizeEnd: cfg.s1,
+        color: cfg.col,
+        colorEnd: 0xf6f4f0,
+        alpha: boost ? 0.55 : 0.25,
+        drag: 0.5,
+      });
+    }
+  }
+
+  /** Interceptor hits (kill) or misses its target in the sky. */
+  airburst(x: number, y: number, z: number, kill: boolean, ground: number, big: boolean) {
+    if (!kill) {
+      this.fire.spawn({ x, y, z, life: 0.1, size: 0.6, color: 0xffffff, colorEnd: 0xff9040 });
+      for (let i = 0; i < this.q(6); i++) this.fire.spawn({ x, y, z, vx: this.rand(-3, 3), vy: this.rand(-1, 3), vz: this.rand(-3, 3), life: 0.5, size: 0.05, color: 0xffe0a0, gravity: 6 });
+      this.smokeSys.spawn({ x, y, z, vy: 0.1, life: 2.5, size: 0.3, sizeEnd: 1, color: 0x6a6662, alpha: 0.6, drag: 1 });
+      return;
+    }
+    const S = big ? 1.8 : 1.1;
+    this.blast({ ...BLASTS.airSmall, size: S, fire: big ? 2 : 1.2, sparks: big ? 40 : 22, smoke: 1.4, light: big ? 12 : 6, shake: big ? 0.12 : 0.03 }, x, y, z, ground);
+    // falling burning fragments with smoke trails
+    if (this.debris) this.debris.burst('burnt', x, y, z, this.q(big ? 10 : 5), big ? 4 : 2.5, 0.05, { up: 0.4, smoke: 0.8 });
+    // characteristic lingering interception cloud
+    for (let i = 0; i < this.q(8); i++)
+      this.smokeSys.spawn({ x: x + this.rand(-0.3, 0.3), y: y + this.rand(-0.2, 0.2), z: z + this.rand(-0.3, 0.3), vx: this.rand(-0.2, 0.2), vy: this.rand(0, 0.15), vz: this.rand(-0.2, 0.2), life: this.rand(5, 8), size: 0.4 * S, sizeEnd: 1.6 * S, color: 0x4a4642, colorEnd: 0x9a948c, alpha: 0.55, drag: 0.8 });
+  }
+
+  // ---------------------------------------------------------------- misc
 
   /** A short glowing line (bullet tracer, laser beam). */
   beam(a: THREE.Vector3, b: THREE.Vector3, color: number, width: number, life: number) {
@@ -367,19 +573,20 @@ export class Effects {
   }
 
   laser(a: THREE.Vector3, b: THREE.Vector3) {
-    this.beam(a, b, 0xff3a1a, 0.09, 0.22);
-    this.beam(a, b, 0xffe6d0, 0.03, 0.18);
-    for (let i = 0; i < 5; i++) this.fire.spawn({ x: b.x, y: b.y, z: b.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.25, size: 0.1, color: 0xffb090, colorEnd: 0xff2000, gravity: 5 });
-    this.fire.spawn({ x: b.x, y: b.y, z: b.z, life: 0.15, size: 0.7, color: 0xff6040 });
+    this.beam(a, b, 0xff3a1a, 0.08, 0.22);
+    this.beam(a, b, 0xffe6d0, 0.025, 0.18);
+    for (let i = 0; i < 6; i++) this.fire.spawn({ x: b.x, y: b.y, z: b.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.3, size: 0.07, color: 0xffb090, colorEnd: 0xff2000, gravity: 5 });
+    this.fire.spawn({ x: b.x, y: b.y, z: b.z, life: 0.15, size: 0.6, color: 0xff6040 });
     this.flashLight(b.x, b.y, b.z, 2, 0xff4020, 0.15);
   }
 
-  tracer(a: THREE.Vector3, b: THREE.Vector3) {
+  tracer(a: THREE.Vector3, b: THREE.Vector3, hitGround = true) {
     const len = Math.max(0.01, a.distanceTo(b));
     const seg = Math.min(1, 0.6 / len);
     const t0 = Math.random() * (1 - seg);
     this.beam(a.clone().lerp(b, t0), a.clone().lerp(b, t0 + seg), 0xffd27a, 0.018, 0.07);
-    this.fire.spawn({ x: b.x, y: b.y, z: b.z, vx: this.rand(-1, 1), vy: this.rand(0.5, 1.5), vz: this.rand(-1, 1), life: 0.12, size: 0.06, color: 0xffe0a0, gravity: 6 });
+    this.fire.spawn({ x: b.x, y: b.y, z: b.z, vx: this.rand(-1, 1), vy: this.rand(0.5, 1.5), vz: this.rand(-1, 1), life: 0.12, size: 0.05, color: 0xffe0a0, gravity: 6 });
+    if (hitGround && Math.random() < 0.5) this.smokeSys.spawn({ x: b.x, y: b.y, z: b.z, vy: 0.4, life: 0.5, size: 0.06, sizeEnd: 0.2, color: 0x8a7a60, alpha: 0.5, drag: 2 });
   }
 
   ring(x: number, y: number, z: number, r0: number, r1: number, life: number, color: number, additive: boolean, opacity = 0.9) {
@@ -397,62 +604,56 @@ export class Effects {
     this.ring(x, y + 0.04, z, 0.35, 0.05, 0.35, attack ? 0xff8080 : 0xa0ffb0, true);
   }
 
-  scorch(x: number, y: number, z: number, r: number) {
-    const mat = new THREE.MeshBasicMaterial({ map: this.scorchTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
-    const m = new THREE.Mesh(this.discGeo, mat);
-    m.position.set(x, y + 0.03, z);
-    m.scale.setScalar(r * this.rand(0.8, 1.2));
-    m.rotation.y = Math.random() * 6;
-    m.renderOrder = 1;
-    this.group.add(m);
-    this.scorches.push(m);
-    this.timed.push({ obj: m, mat, life: 0, max: 40, base: -1 });
-    if (this.scorches.length > 80) {
-      const old = this.scorches.shift()!;
-      const t = this.timed.find((tt) => tt.obj === old);
-      if (t) t.life = t.max;
-    }
+  scorch(x: number, _y: number, z: number, r: number) {
+    this.marks?.scorchAt(x, z, r);
   }
 
   smoke(x: number, y: number, z: number, size = 1, dark = true) {
-    this.smokeSys.spawn({ x: x + this.rand(-0.1, 0.1), y, z: z + this.rand(-0.1, 0.1), vx: this.rand(-0.1, 0.1) + 0.15, vy: this.rand(0.5, 0.9), vz: this.rand(-0.1, 0.1) - 0.1, life: this.rand(1.8, 3), size: 0.25 * size, sizeEnd: 1.1 * size, color: dark ? 0x2a2725 : 0xd8d8d8, colorEnd: dark ? 0x5a5550 : 0xf0f0f0, alpha: dark ? 0.55 : 0.35, drag: 0.4, gravity: -0.1 });
+    this.smokeSys.spawn({ x: x + this.rand(-0.1, 0.1), y, z: z + this.rand(-0.1, 0.1), vx: this.rand(-0.1, 0.1) + 0.15, vy: this.rand(0.5, 0.9), vz: this.rand(-0.1, 0.1) - 0.1, life: this.rand(1.8, 3.2), size: 0.25 * size, sizeEnd: 1.1 * size, color: dark ? 0x2a2725 : 0xd8d8d8, colorEnd: dark ? 0x5a5550 : 0xf0f0f0, alpha: dark ? 0.55 : 0.35, drag: 0.4, gravity: -0.1 });
+  }
+
+  exhaust(x: number, y: number, z: number) {
+    this.smokeSys.spawn({ x, y, z, vx: this.rand(-0.1, 0.1), vy: this.rand(0.2, 0.4), vz: this.rand(-0.1, 0.1), life: this.rand(0.7, 1.2), size: 0.06, sizeEnd: 0.28, color: 0x3a3836, colorEnd: 0x8a8682, alpha: 0.35, drag: 1 });
+  }
+
+  dust(x: number, y: number, z: number, size = 1) {
+    this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15), y: y + 0.03, z: z + this.rand(-0.15, 0.15), vx: this.rand(-0.2, 0.2), vy: this.rand(0.1, 0.3), vz: this.rand(-0.2, 0.2), life: this.rand(0.8, 1.4), size: 0.12 * size, sizeEnd: 0.5 * size, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.35, drag: 1.5 });
   }
 
   flame(x: number, y: number, z: number, size = 1) {
-    this.fire.spawn({ x: x + this.rand(-0.15, 0.15) * size, y, z: z + this.rand(-0.15, 0.15) * size, vy: this.rand(0.6, 1.2), life: this.rand(0.3, 0.6), size: 0.35 * size, sizeEnd: 0.1, color: 0xffc050, colorEnd: 0xb02000, gravity: -0.5 });
+    this.fire.spawn({ x: x + this.rand(-0.15, 0.15) * size, y, z: z + this.rand(-0.15, 0.15) * size, vx: this.rand(-0.1, 0.1), vy: this.rand(0.6, 1.3), vz: this.rand(-0.1, 0.1), life: this.rand(0.3, 0.7), size: 0.35 * size, sizeEnd: 0.1, color: 0xffc050, colorEnd: 0x901800, gravity: -0.5 });
+    if (Math.random() < 0.3) this.fire.spawn({ x, y: y + 0.1, z, vx: this.rand(-0.3, 0.3), vy: this.rand(1, 2), vz: this.rand(-0.3, 0.3), life: this.rand(0.8, 1.5), size: 0.03, color: 0xffb060, colorEnd: 0xff3000, drag: 0.5, gravity: -0.2 });
   }
 
   spark(x: number, y: number, z: number, color = 0x80c0ff) {
-    for (let i = 0; i < 3; i++) this.fire.spawn({ x, y, z, vx: this.rand(-1, 1), vy: this.rand(0, 1.5), vz: this.rand(-1, 1), life: 0.25, size: 0.07, color, gravity: 3 });
-    this.fire.spawn({ x, y, z, life: 0.12, size: 0.35, color });
+    for (let i = 0; i < 3; i++) this.fire.spawn({ x, y, z, vx: this.rand(-1, 1), vy: this.rand(0, 1.5), vz: this.rand(-1, 1), life: 0.25, size: 0.06, color, gravity: 3 });
+    this.fire.spawn({ x, y, z, life: 0.12, size: 0.3, color });
   }
 
   intercept(p: THREE.Vector3) {
-    for (let i = 0; i < 10; i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3, 3), vy: this.rand(0, 3), vz: this.rand(-3, 3), life: 0.3, size: 0.08, color: 0xfff0c0, colorEnd: 0xff8000, gravity: 6 });
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.15, size: 0.9, color: 0xfff0d0 });
-    this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vy: 0.4, life: 1, size: 0.3, sizeEnd: 0.8, color: 0x8a8a8a, alpha: 0.6, drag: 1 });
-    this.flashLight(p.x, p.y, p.z, 2.5, 0xfff0c0, 0.12);
+    // active protection: explosively formed charge meets the incoming round a metre out
+    for (let i = 0; i < this.q(14); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3, 3), vy: this.rand(0, 3), vz: this.rand(-3, 3), life: 0.35, size: 0.07, color: 0xfff0c0, colorEnd: 0xff8000, gravity: 6 });
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.12, size: 0.9, color: 0xffffff, colorEnd: 0xffa040 });
+    for (let i = 0; i < this.q(4); i++) this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.5, 0.5), vy: 0.4, vz: this.rand(-0.5, 0.5), life: 1.4, size: 0.2, sizeEnd: 0.7, color: 0x7a7a7a, alpha: 0.6, drag: 1.5 });
+    this.flashLight(p.x, p.y, p.z, 3, 0xfff0c0, 0.12);
   }
 
   jamPulse(x: number, y: number, z: number, r: number) {
-    this.ring(x, y + 0.1, z, 0.2, r, 1.1, 0x50a0ff, true);
-  }
-
-  /** Trail particles behind moving projectiles. */
-  trail(p: THREE.Vector3, kind: 'shell' | 'rocket' | 'missile' | 'artillery') {
-    if (kind === 'shell') {
-      this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.08, size: 0.18, color: 0xffd080 });
-      return;
-    }
-    const big = kind === 'missile' ? 1.8 : kind === 'artillery' ? 0.8 : 1;
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.1, size: 0.3 * big, color: 0xfff0b0, colorEnd: 0xff6010 });
-    this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.05, 0.05), vy: 0.15, vz: this.rand(-0.05, 0.05), life: this.rand(0.7, 1.3) * big, size: 0.12 * big, sizeEnd: 0.45 * big, color: 0xb0aca8, colorEnd: 0xd8d4d0, alpha: 0.45, drag: 1 });
+    this.ring(x, y + 0.1, z, 0.2, r, 1.1, 0x50a0ff, true, 0.5);
   }
 
   update(dt: number) {
+    for (let i = this.burns.length - 1; i >= 0; i--) {
+      const b = this.burns[i];
+      b.t -= dt;
+      if (Math.random() < dt * 30) this.flame(b.x + this.rand(-0.6, 0.6) * b.size, b.y + 0.05, b.z + this.rand(-0.6, 0.6) * b.size, 1.2);
+      if (b.t <= 0) this.burns.splice(i, 1);
+    }
     this.fire.update(dt);
     this.smokeSys.update(dt);
-    this.shake = Math.max(0, this.shake - dt * 0.8);
+    this.debris?.update(dt);
+    this.marks?.update(dt);
+    this.shake = Math.max(0, this.shake - dt * 0.9);
     for (let i = this.timed.length - 1; i >= 0; i--) {
       const t = this.timed[i];
       t.life += dt;
@@ -460,12 +661,10 @@ export class Effects {
       if (k >= 1) {
         this.group.remove(t.obj);
         t.mat.dispose();
-        if (t.base === -1) this.scorches.splice(this.scorches.indexOf(t.obj as THREE.Mesh), 1);
         this.timed.splice(i, 1);
         continue;
       }
-      if (t.base === -1) t.mat.opacity = k < 0.8 ? 1 : 1 - (k - 0.8) / 0.2;
-      else t.mat.opacity = (t.alpha0 ?? 1) * (1 - k);
+      t.mat.opacity = (t.alpha0 ?? 1) * (1 - k);
       if (t.grow !== undefined && t.base !== undefined) t.obj.scale.setScalar(t.base + (t.grow - t.base) * Math.sqrt(k));
     }
     for (const l of this.lights) {
@@ -479,4 +678,3 @@ export class Effects {
     return this.fire.active + this.smokeSys.active;
   }
 }
-

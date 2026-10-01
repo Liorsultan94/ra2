@@ -47,6 +47,7 @@ export class Terrain {
     this.buildOre();
     this.buildBridges();
     this.buildOreMines();
+    if (quality !== 'low') this.buildClutter(quality === 'high' ? 1 : 0.5);
     this.minimapImage = this.buildMinimap();
   }
 
@@ -469,6 +470,89 @@ export class Terrain {
       // deck runs across the river, along tile direction (1,-1)
       g.rotation.y = Math.PI / 4;
       this.group.add(g);
+    }
+  }
+
+  /** Grass tufts, bushes and pebbles scattered on open ground for detail. */
+  private buildClutter(density: number) {
+    const m = this.map;
+    // grass tuft texture: blades drawn on a canvas, used on crossed alpha-tested quads
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d')!;
+    for (let i = 0; i < 26; i++) {
+      const x = 8 + Math.random() * 48;
+      const h = 28 + Math.random() * 34;
+      const lean = (Math.random() - 0.5) * 18;
+      ctx.strokeStyle = `rgb(${60 + Math.random() * 40},${90 + Math.random() * 50},${30 + Math.random() * 20})`;
+      ctx.lineWidth = 1.5 + Math.random() * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 64);
+      ctx.quadraticCurveTo(x + lean * 0.3, 64 - h * 0.6, x + lean, 64 - h);
+      ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const tuftGeo = mergeGeos([
+      colored(new THREE.PlaneGeometry(0.22, 0.12).translate(0, 0.06, 0), 0xffffff),
+      colored(new THREE.PlaneGeometry(0.22, 0.12).translate(0, 0.06, 0).rotateY(Math.PI / 2), 0xffffff),
+    ]);
+    // keep UVs for the planes (mergeGeos drops them): rebuild with uv
+    const p1 = new THREE.PlaneGeometry(0.22, 0.12).translate(0, 0.06, 0);
+    const p2 = p1.clone().rotateY(Math.PI / 2);
+    const uv = new Float32Array([...(p1.toNonIndexed().attributes.uv.array as Float32Array), ...(p2.toNonIndexed().attributes.uv.array as Float32Array)]);
+    tuftGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    const tuftMat = this.fog.apply(new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.9 }));
+    const bushGeo = new THREE.IcosahedronGeometry(0.11, 1);
+    bushGeo.scale(1, 0.7, 1).translate(0, 0.05, 0);
+    const bushMat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x3e5a24, roughness: 0.95, flatShading: true }));
+    const stoneGeo = new THREE.DodecahedronGeometry(0.05, 0);
+    const stoneMat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x86807a, roughness: 0.95, flatShading: true }));
+    const tufts: THREE.Matrix4[] = [];
+    const bushes: THREE.Matrix4[] = [];
+    const stones: THREE.Matrix4[] = [];
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const nearStart = (x: number, y: number) => m.starts.some((st) => Math.hypot(x - st.x, y - st.y) < 9);
+    for (let y = 0; y < m.h; y++) {
+      for (let x = 0; x < m.w; x++) {
+        const i = y * m.w + x;
+        const t = m.tiles[i];
+        if (m.trees[i] || m.ore[i] || t === Tile.Water || t === Tile.Bridge) continue;
+        const base = nearStart(x, y) ? 0.25 : 1;
+        const n = Math.round((t === Tile.Grass ? 3 : t === Tile.Rock ? 0 : 1) * density * base + hash2(x, y, 801));
+        for (let k = 0; k < n; k++) {
+          const px = x + hash2(x, y, 810 + k);
+          const pz = y + hash2(x, y, 830 + k);
+          const s = 0.7 + hash2(x, y, 850 + k) * 0.8;
+          q.setFromAxisAngle(up, hash2(x, y, 870 + k) * 6.28);
+          const mat4 = new THREE.Matrix4().compose(new THREE.Vector3(px, groundHeight(m, px, pz), pz), q, new THREE.Vector3(s, s, s));
+          const r = hash2(x, y, 890 + k);
+          if (t === Tile.Grass && r < 0.82) tufts.push(mat4);
+          else if (t === Tile.Grass && r < 0.9) bushes.push(mat4);
+          else stones.push(mat4);
+        }
+        if (t === Tile.Rock) {
+          for (let k = 0; k < 3; k++) {
+            const px = x + hash2(x, y, 910 + k);
+            const pz = y + hash2(x, y, 930 + k);
+            q.setFromAxisAngle(up, hash2(x, y, 950 + k) * 6.28);
+            stones.push(new THREE.Matrix4().compose(new THREE.Vector3(px, groundHeight(m, px, pz), pz), q, new THREE.Vector3(1.4, 1, 1.4)));
+          }
+        }
+      }
+    }
+    for (const [geo, mat, list, shadow] of [
+      [tuftGeo, tuftMat, tufts, false],
+      [bushGeo, bushMat, bushes, true],
+      [stoneGeo, stoneMat, stones, true],
+    ] as const) {
+      if (!list.length) continue;
+      const im = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach((mm, i) => im.setMatrixAt(i, mm));
+      im.castShadow = shadow;
+      im.receiveShadow = true;
+      this.group.add(im);
     }
   }
 

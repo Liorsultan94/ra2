@@ -142,7 +142,7 @@ describe('special mechanics', () => {
       w.step();
       for (const e of w.drainEvents()) {
         if (e.t === 'fire' && e.weapon.includes('fpvLaunch')) launched++;
-        if (e.t === 'impact' && e.weapon === 'fpvWarhead' && !e.air) hits++;
+        if (e.t === 'impact' && e.weapon === 'fpvWarhead' && e.direct) hits++;
       }
     }
     expect(launched).toBeGreaterThan(0);
@@ -167,8 +167,44 @@ describe('special mechanics', () => {
     let hits2 = 0;
     for (let t = 0; t < TPS * 20; t++) {
       w2.step();
-      for (const e of w2.drainEvents()) if (e.t === 'impact' && e.weapon === 'fpvWarhead' && !e.air) hits2++;
+      for (const e of w2.drainEvents()) if (e.t === 'impact' && e.weapon === 'fpvWarhead' && e.direct) hits2++;
     }
     expect(hits2).toBeLessThan(hits);
+  });
+});
+
+describe('air defence', () => {
+  it('Iron Dome shoots down incoming ballistic missiles and rockets', () => {
+    const w = new World({
+      seed: 9,
+      players: [
+        { name: 'A', faction: 'israel', color: 0, isAI: false },
+        { name: 'B', faction: 'iran', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    const target = w.spawnBuilding('israel_conyard', 0, 30, 60, true);
+    target.hp = target.maxHp = 1e7;
+    w.spawnBuilding('israel_power', 0, 26, 60, true);
+    w.spawnBuilding('israel_power', 0, 26, 63, true);
+    w.spawnBuilding('israel_def_aa', 0, 33, 59, true);
+    w.spawnBuilding('iran_conyard', 1, 88, 4, true);
+    const launcher = w.spawnUnit('iran_fateh', 1, 44.5, 62.5);
+    launcher.hp = launcher.maxHp = 1e6;
+    w.issue(1, { type: 'attack', ids: [launcher.id], target: target.id });
+    let kills = 0;
+    let launches = 0;
+    for (let t = 0; t < TPS * 90; t++) {
+      w.step();
+      // keep the launcher's view of the target (it needs vision to aim)
+      w.players[1].visible.fill(1);
+      for (const e of w.drainEvents()) {
+        if (e.t === 'launch' && e.flight === 'ballistic') launches++;
+        if (e.t === 'airburst' && e.kind === 'kill') kills++;
+      }
+    }
+    expect(launches).toBeGreaterThan(3);
+    expect(kills).toBeGreaterThan(0);
   });
 });

@@ -293,7 +293,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}`).join(',');
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
     const own = sel.filter((e) => e.owner === this.player);
@@ -312,6 +312,7 @@ export class Hud {
         const img = e.owner === this.player ? this.cameos.get(e.def, style) : this.cameos.get(e.def, styleFor(w, e.owner));
         let extra = '';
         if (d.kind === 'unit' && d.harvester) extra = `<div class="sp-extra">Cargo: $${e.cargo}</div>`;
+        if (d.kind === 'unit' && d.transport) extra = `<div class="sp-extra">Passengers: ${e.passengers.length} / ${d.transport}</div>`;
         if (d.kind === 'building' && d.power) extra = `<div class="sp-extra">Power ${d.power > 0 ? '+' : ''}${d.power}</div>`;
         this.selPanel.innerHTML = `<img src="${img}"><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner}</div><div class="sp-hp"><i style="width:${hp * 100}%;background:${hpColor(hp)}"></i></div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${extra}</div>`;
       } else {
@@ -328,6 +329,7 @@ export class Hud {
     if (units.length) {
       cmds.push(['Stop', 'S', 'stop'], ['Attack-Move', 'A', 'attackMove']);
       if (units.some((u) => unitDef(u.def).mcv)) cmds.push(['Deploy', 'D', 'deploy']);
+      if (units.some((u) => u.passengers.length > 0)) cmds.push(['Unload', 'D', 'deploy']);
       cmds.push(['Deselect', '', 'deselect']);
     } else if (ownBuilding) {
       cmds.push(['Repair', '', 'repairSel'], ['Sell', '', 'sellSel'], ['Deselect', '', 'deselect']);

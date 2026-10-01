@@ -4,10 +4,12 @@ import {
   ORE_MAX,
   ORE_VALUE,
   createFrontlineMap,
+  standHeight,
   terrainBuildable,
   terrainPassable,
   type GameMap,
 } from './map';
+import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { PathFinder } from './path';
 import { Rng } from './rng';
 import {
@@ -153,6 +155,10 @@ export class World {
 
   // ------------------------------------------------------------------ API
 
+  allocId() {
+    return this.nextId++;
+  }
+
   issue(player: number, cmd: Command) {
     this.pending.push({ player, cmd });
   }
@@ -239,6 +245,10 @@ export class World {
       incomeTimer: 0,
       life: -1,
       jammedUntil: -1,
+      z: 0,
+      pz: 0,
+      inside: -1,
+      passengers: [],
       dockedBy: -1,
       idleTicks: 0,
       lastHurt: -9999,
@@ -356,7 +366,7 @@ export class World {
   private rebuildGrid() {
     for (const cell of this.grid) cell.length = 0;
     for (const e of this.list) {
-      if (e.dead) continue;
+      if (e.dead || e.inside >= 0) continue;
       const gx = Math.min(this.gridW - 1, Math.max(0, Math.floor(e.x / SPATIAL_CELL)));
       const gy = Math.min(this.gridH - 1, Math.max(0, Math.floor(e.y / SPATIAL_CELL)));
       this.grid[gy * this.gridW + gx].push(e);
@@ -412,7 +422,7 @@ export class World {
     const p = this.players[pid];
     if (!p || p.defeated) return;
     const own = (ids: number[]) =>
-      ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit');
+      ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0);
     switch (cmd.type) {
       case 'move': {
         const units = own(cmd.ids);
@@ -455,8 +465,17 @@ export class World {
         }
         break;
       case 'deploy':
-        for (const e of own(cmd.ids)) if (unitDef(e.def).mcv) this.tryDeploy(e);
+        for (const e of own(cmd.ids)) {
+          if (unitDef(e.def).mcv) this.tryDeploy(e);
+          else if (e.passengers.length) this.unload(e);
+        }
         break;
+      case 'enter': {
+        const t = this.get(cmd.target);
+        if (!t || t.owner !== pid || !unitDef(t.def).transport) break;
+        for (const e of own(cmd.ids)) if (unitDef(e.def).category === 'infantry') e.order = { type: 'enter', target: t.id };
+        break;
+      }
       case 'harvest':
         for (const e of own(cmd.ids)) {
           if (!unitDef(e.def).harvester) continue;
@@ -726,7 +745,7 @@ export class World {
 
   private separate() {
     for (const e of this.list) {
-      if (e.dead || e.kind !== 'unit') continue;
+      if (e.dead || e.kind !== 'unit' || e.inside >= 0) continue;
       const d = unitDef(e.def);
       this.queryRadius(e.x, e.y, 1.2, (o) => {
         if (o === e || o.kind !== 'unit' || o.id < e.id) return;
@@ -848,14 +867,16 @@ export class World {
     const wpn = WEAPONS[weaponId];
     let tx = t.x;
     let ty = t.y;
-    if ((wpn.projectile === 'artillery' || wpn.projectile === 'missile') && !wpn.precise) {
-      tx += this.rng.range(-0.7, 0.7);
-      ty += this.rng.range(-0.7, 0.7);
+    if ((wpn.flight === 'artillery' || wpn.flight === 'rocketSalvo' || wpn.flight === 'ballistic' || wpn.flight === 'mortar') && !wpn.precise) {
+      const spread = wpn.flight === 'rocketSalvo' ? 1.1 : 0.7;
+      tx += this.rng.range(-spread, spread);
+      ty += this.rng.range(-spread, spread);
     }
     e.firedAt = this.tick;
     this.events.push({ t: 'fire', id: e.id, weapon: weaponId, x: e.x, y: e.y, tx, ty, targetId: t.id, owner: e.owner });
     if (wpn.projectile === 'spawn') {
       const m = this.spawnUnit(munitionDef(DEFS[e.def].faction, wpn.spawn!), e.owner, e.x, e.y);
+      m.z = m.pz = e.kind === 'unit' && this.isAir(e) ? e.z : 0.35;
       m.facing = m.pfacing = m.turret = m.pturret = Math.atan2(t.y - e.y, t.x - e.x) + this.rng.range(-0.6, 0.6);
       m.order = { type: 'attack', target: t.id };
       m.targetId = t.id;
@@ -864,63 +885,13 @@ export class World {
     if (wpn.projectile === 'instant' || wpn.projectile === 'beam') {
       this.damage(t, wpn.damage, wpn.warhead, e);
       if (wpn.splash) this.splash(tx, ty, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id);
-      this.events.push({ t: 'impact', x: tx, y: ty, weapon: weaponId });
+      this.events.push({ t: 'impact', x: tx, y: ty, z: entityZ(this, t), weapon: weaponId, direct: true, air: this.isAir(t) });
       return;
     }
-    const dist = Math.max(0.5, Math.hypot(tx - e.x, ty - e.y));
-    this.projectiles.push({
-      id: this.nextId++,
-      owner: e.owner,
-      weapon: weaponId,
-      sourceId: e.id,
-      targetId: t.id,
-      sx: e.x,
-      sy: e.y,
-      tx,
-      ty,
-      progress: 0,
-      step: (wpn.speed ?? 0.5) / dist,
-    });
+    launch(this, e, t, wpn, tx, ty);
   }
 
-  private updateProjectiles() {
-    const keep: Projectile[] = [];
-    for (const p of this.projectiles) {
-      const wpn = WEAPONS[p.weapon];
-      // rockets home in on their target
-      if (wpn.projectile === 'rocket') {
-        const t = this.get(p.targetId);
-        if (t) {
-          p.tx = t.x;
-          p.ty = t.y;
-        }
-      }
-      p.progress += p.step;
-      if (p.progress < 1) {
-        keep.push(p);
-        continue;
-      }
-      const src = this.get(p.sourceId);
-      const t = this.get(p.targetId);
-      const owner = { id: p.sourceId, owner: p.owner } as Entity;
-      if (t && t.kind === 'unit' && (wpn.projectile === 'rocket' || wpn.projectile === 'shell' || wpn.projectile === 'missile')) {
-        const aps = unitDef(t.def).aps ?? 0;
-        const chance = wpn.projectile === 'shell' ? aps * 0.4 : aps;
-        if (chance > 0 && Math.hypot(t.x - p.tx, t.y - p.ty) < 1.5 && this.rng.next() < chance) {
-          this.events.push({ t: 'intercept', x: t.x, y: t.y, id: t.id });
-          continue;
-        }
-      }
-      if (t && (t.kind === 'building' ? this.distTo({ x: p.tx, y: p.ty } as Entity, t) < 0.6 : Math.hypot(t.x - p.tx, t.y - p.ty) < 0.7)) {
-        this.damage(t, wpn.damage, wpn.warhead, src ?? owner);
-      }
-      if (wpn.splash) this.splash(p.tx, p.ty, wpn.splash, wpn.damage * 0.7, wpn.warhead, src ?? owner, t?.id ?? -1);
-      this.events.push({ t: 'impact', x: p.tx, y: p.ty, weapon: p.weapon });
-    }
-    this.projectiles = keep;
-  }
-
-  private splash(x: number, y: number, r: number, dmg: number, warhead: keyof typeof VERSUS, src: Entity, skip: number) {
+  splash(x: number, y: number, r: number, dmg: number, warhead: keyof typeof VERSUS, src: Entity, skip: number) {
     this.queryRadius(x, y, r, (o) => {
       if (o.id === skip || !this.isEnemy(src.owner, o.owner)) return;
       const dist = this.distTo({ x, y } as Entity, o);
@@ -953,6 +924,10 @@ export class World {
   private kill(t: Entity, by: number) {
     if (t.dead) return;
     t.hp = 0;
+    for (const pid of t.passengers) {
+      const p = this.get(pid);
+      if (p) this.kill(p, by);
+    }
     this.events.push({ t: 'death', id: t.id, def: t.def, x: t.x, y: t.y, owner: t.owner, kind: t.kind });
     if (t.owner >= 0) this.players[t.owner].stats.lost++;
     if (by >= 0 && by !== t.owner) this.players[by].stats.killed++;
@@ -971,15 +946,29 @@ export class World {
 
   private updateUnit(e: Entity) {
     const d = unitDef(e.def);
+    if (e.inside >= 0) {
+      this.updatePassenger(e, d);
+      return;
+    }
     if (d.kamikaze) {
       this.updateKamikaze(e, d);
       return;
     }
-    if (e.jammedUntil > this.tick) e.cooldown = Math.max(e.cooldown, 2);
+    const jammed = e.jammedUntil > this.tick;
+    if (jammed) e.cooldown = Math.max(e.cooldown, 2);
     if (d.selfHeal && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + d.selfHeal);
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
+    if (d.air) {
+      const alt = d.cruiseAlt ?? (d.model === 'heavy_uav' ? 2.0 : 1.7);
+      e.z += Math.max(-0.05, Math.min(0.05, alt - e.z));
+    }
+    if (d.fixedWing) {
+      this.updateJet(e, d);
+      return;
+    }
     const o = e.order;
+    if (d.weapon && !jammed && o.type !== 'attack' && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
     switch (o.type) {
       case 'idle':
         this.updateIdle(e, d);
@@ -1057,40 +1046,204 @@ export class World {
       case 'deploy':
         e.order = { type: 'idle' };
         break;
+      case 'enter': {
+        const t = this.get(o.target);
+        const cap = t && t.kind === 'unit' ? (unitDef(t.def).transport ?? 0) : 0;
+        if (!t || t.owner !== e.owner || t.passengers.length >= cap) {
+          e.order = { type: 'idle' };
+          e.path = null;
+          break;
+        }
+        if (Math.hypot(t.x - e.x, t.y - e.y) < 0.8) {
+          this.board(e, t);
+          break;
+        }
+        this.chase(e, t, d);
+        break;
+      }
     }
   }
 
-  /** Loitering munitions fly into their target and detonate. */
+  /**
+   * Loitering munitions / FPV / swarm drones: cruise at their profile altitude,
+   * fan out so a swarm arrives from several directions, weave (FPV), then dive
+   * onto the target and detonate on contact.
+   */
   private updateKamikaze(e: Entity, d: UnitDef) {
     const jammed = e.jammedUntil > this.tick;
     if (--e.life <= 0 || (jammed && (e.hp -= 2) <= 0)) {
-      this.events.push({ t: 'impact', x: e.x, y: e.y, weapon: d.weapon!, air: true });
+      // out of battery or jammed: crash where it is
+      this.events.push({ t: 'impact', x: e.x, y: e.y, z: standHeight(this.map, e.x, e.y) + Math.max(0, e.z * 0.3), weapon: d.weapon!, air: e.z > 0.6 });
       this.kill(e, -1);
       return;
     }
+    const prof = d.model === 'shahed' ? { cruise: 2.3, dive: 3.2, weave: 0 } : d.model === 'fpv' ? { cruise: 0.55, dive: 1.3, weave: 0.45 } : { cruise: 1.0, dive: 2.0, weave: 0.15 };
     let t = this.get(e.targetId);
     if (!t || !this.isEnemy(e.owner, t.owner) || this.isAir(t)) {
       t = this.findTarget(e, 7) ?? undefined;
       e.targetId = t ? t.id : -1;
     }
-    if (!t) {
-      // circle where we are until something shows up
-      if (!e.path) this.pathTo(e, e.x + Math.cos(e.facing + 1.2) * 2, e.y + Math.sin(e.facing + 1.2) * 2);
-      this.fly(e, d);
-      return;
+    const age = TPS * 25 - e.life;
+    let gx: number;
+    let gy: number;
+    let tz = 0.2;
+    let dist: number;
+    if (t) {
+      [gx, gy] = t.kind === 'building' ? this.closestTileOf(e, t) : [t.x, t.y];
+      dist = this.distTo(e, t);
+      tz = entityZ(this, t) - standHeight(this.map, t.x, t.y);
+    } else {
+      // loiter in a wide circle
+      gx = e.x + Math.cos(e.facing + 0.6) * 3;
+      gy = e.y + Math.sin(e.facing + 0.6) * 3;
+      dist = 99;
     }
+    // swarm: each drone takes its own approach angle, converging at the end
+    const spread = (((e.id * 0.61803) % 1) - 0.5) * 1.6 * Math.max(0, Math.min(1, (dist - 1.2) / 5));
+    const weave = prof.weave * Math.sin(age * 0.45 + e.id) * Math.min(1, dist / 3);
+    let want = Math.atan2(gy - e.y, gx - e.x) + spread + weave;
+    // separation from nearby drones of the same wave
+    let sx = 0;
+    let sy = 0;
+    this.queryRadius(e.x, e.y, 0.6, (o) => {
+      if (o === e || o.kind !== 'unit' || o.owner !== e.owner || !unitDef(o.def).kamikaze) return;
+      const dx = e.x - o.x;
+      const dy = e.y - o.y;
+      const dd = Math.hypot(dx, dy) || 0.01;
+      if (dd < 0.45) {
+        sx += dx / dd;
+        sy += dy / dd;
+      }
+    });
+    if (sx || sy) want = Math.atan2(Math.sin(want) + sy * 0.6, Math.cos(want) + sx * 0.6);
+    e.facing = turnToward(e.facing, want, d.turnRate * 1.4);
+    e.turret = e.facing;
+    const step = (d.speed / TPS) * (jammed ? 0.35 : 1) * (dist < prof.dive ? 1.25 : 1);
+    e.x = Math.max(0.2, Math.min(this.map.w - 0.2, e.x + Math.cos(e.facing) * step));
+    e.y = Math.max(0.2, Math.min(this.map.h - 0.2, e.y + Math.sin(e.facing) * step));
+    e.moving = true;
+    // altitude: climb to cruise, then terminal dive
+    const k = Math.max(0, Math.min(1, dist / prof.dive));
+    const wantZ = tz + (prof.cruise - tz) * (dist < prof.dive ? k * k : 1);
+    e.z += Math.max(-0.12, Math.min(0.06, wantZ - e.z));
+    if (!t) return;
     const wpn = WEAPONS[d.weapon!];
-    const [gx, gy] = t.kind === 'building' ? this.closestTileOf(e, t) : [t.x, t.y];
-    e.slotX = gx;
-    e.slotY = gy;
-    e.path = [];
-    this.fly(e, d);
-    if (this.distTo(e, t) <= wpn.range) {
+    if (dist <= wpn.range && Math.abs(e.z - tz) < 0.5) {
       this.damage(t, wpn.damage, wpn.warhead, e);
       if (wpn.splash) this.splash(e.x, e.y, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id);
-      this.events.push({ t: 'impact', x: e.x, y: e.y, weapon: wpn.id });
+      this.events.push({ t: 'impact', x: e.x, y: e.y, z: standHeight(this.map, e.x, e.y) + e.z, weapon: wpn.id, direct: true });
       this.remove(e);
     }
+  }
+
+  /** Fixed-wing jets never stop: they orbit, and attack in strafing passes. */
+  private updateJet(e: Entity, d: UnitDef) {
+    const o = e.order;
+    const wpn = WEAPONS[d.weapon!];
+    let t: Entity | undefined;
+    if (o.type === 'attack') {
+      t = this.get(o.target);
+      if (!t || !this.isEnemy(e.owner, t.owner)) {
+        e.order = { type: 'idle' };
+        e.guardX = e.x;
+        e.guardY = e.y;
+        t = undefined;
+      }
+    } else if (o.type === 'idle' || o.type === 'attackMove') {
+      t = this.get(e.targetId);
+      if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > d.sight + 4)) t = undefined;
+      if (!t && this.tick >= e.scanAt) {
+        e.scanAt = this.tick + 8;
+        t = this.findTarget(e, d.sight) ?? undefined;
+      }
+    }
+    e.targetId = t ? t.id : -1;
+    let gx: number;
+    let gy: number;
+    if (t) {
+      gx = t.x;
+      gy = t.y;
+    } else if (o.type === 'move' || o.type === 'attackMove') {
+      gx = o.x;
+      gy = o.y;
+      if (Math.hypot(gx - e.x, gy - e.y) < 1.4) {
+        e.order = { type: 'idle' };
+        e.guardX = gx;
+        e.guardY = gy;
+      }
+    } else {
+      const a = Math.atan2(e.y - e.guardY, e.x - e.guardX) + 0.5;
+      gx = e.guardX + Math.cos(a) * 2.4;
+      gy = e.guardY + Math.sin(a) * 2.4;
+    }
+    const want = Math.atan2(gy - e.y, gx - e.x);
+    const dist = t ? this.distTo(e, t) : Math.hypot(gx - e.x, gy - e.y);
+    // overshoot after a pass instead of pivoting on the spot
+    if (!(t && dist < 1.5)) e.facing = turnToward(e.facing, want, d.turnRate);
+    e.turret = e.facing;
+    const jammed = e.jammedUntil > this.tick;
+    const step = (d.speed / TPS) * (jammed ? 0.5 : 1);
+    e.x = Math.max(0.5, Math.min(this.map.w - 0.5, e.x + Math.cos(e.facing) * step));
+    e.y = Math.max(0.5, Math.min(this.map.h - 0.5, e.y + Math.sin(e.facing) * step));
+    if (e.x <= 0.5 || e.y <= 0.5 || e.x >= this.map.w - 0.5 || e.y >= this.map.h - 0.5) e.facing += 0.2;
+    e.moving = true;
+    e.path = null;
+    if (t && !jammed && e.cooldown <= 0 && e.burstLeft === 0 && this.canHit(wpn, t)) {
+      const aligned = Math.abs(angleDiff(e.facing, Math.atan2(t.y - e.y, t.x - e.x))) < 0.55;
+      if (aligned && dist <= this.weaponRange(e, wpn) && dist >= 1.0) {
+        e.burstLeft = wpn.burst ?? 1;
+        e.burstTimer = 0;
+        e.cooldown = wpn.rof;
+      }
+    }
+  }
+
+  /** Infantry riding in an APC shoot out of the firing ports. */
+  private updatePassenger(e: Entity, d: UnitDef) {
+    const apc = this.get(e.inside);
+    if (!apc) {
+      e.inside = -1;
+      return;
+    }
+    e.x = e.px = apc.x;
+    e.y = e.py = apc.y;
+    if (e.cooldown > 0) e.cooldown--;
+    this.processBurst(e);
+    if (!d.weapon || d.engineer) return;
+    const wpn = WEAPONS[d.weapon];
+    let t = this.get(e.targetId);
+    if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > this.weaponRange(e, wpn))) t = undefined;
+    if (!t && this.tick >= e.scanAt) {
+      e.scanAt = this.tick + 8;
+      t = this.findTarget(e, this.weaponRange(e, wpn)) ?? undefined;
+    }
+    e.targetId = t ? t.id : -1;
+    if (t && this.engage(e, t) === 'out') e.targetId = -1;
+  }
+
+  private board(e: Entity, apc: Entity) {
+    e.inside = apc.id;
+    apc.passengers.push(e.id);
+    e.path = null;
+    e.moving = false;
+    e.order = { type: 'idle' };
+    e.targetId = -1;
+  }
+
+  private unload(apc: Entity) {
+    for (const pid of apc.passengers) {
+      const p = this.get(pid);
+      if (!p) continue;
+      p.inside = -1;
+      const spot = this.nearestPassable(apc.x - Math.cos(apc.facing) * 0.8, apc.y - Math.sin(apc.facing) * 0.8, 4);
+      const [x, y] = spot ? [spot[0] + 0.5, spot[1] + 0.5] : [apc.x, apc.y];
+      p.x = p.px = x + this.rng.range(-0.2, 0.2);
+      p.y = p.py = y + this.rng.range(-0.2, 0.2);
+      p.order = { type: 'idle' };
+      p.guardX = p.x;
+      p.guardY = p.y;
+    }
+    apc.passengers = [];
   }
 
   private updateIdle(e: Entity, d: UnitDef) {
@@ -1380,7 +1533,9 @@ export class World {
     const p = this.players[b.owner];
     if (d.weapon && b.buildAnim >= 1 && !(d.needsPower && this.isLowPower(p))) {
       this.processBurst(b);
-      const range = WEAPONS[d.weapon].range;
+      const bw = WEAPONS[d.weapon];
+      if (bw.intercept) tryIntercept(this, b, bw);
+      const range = this.weaponRange(b, bw);
       let t = this.get(b.targetId);
       if (t && (this.distTo(b, t) > range || !this.isEnemy(b.owner, t.owner))) t = undefined;
       if (!t && this.tick >= b.scanAt) {
@@ -1596,6 +1751,7 @@ export class World {
       e.py = e.y;
       e.pfacing = e.facing;
       e.pturret = e.turret;
+      e.pz = e.z;
     }
     const cmds = this.pending;
     this.pending = [];
@@ -1610,7 +1766,7 @@ export class World {
       if (e.kind === 'unit') this.updateUnit(e);
       else this.updateBuilding(e);
     }
-    this.updateProjectiles();
+    stepProjectiles(this);
     this.updateAuras();
     this.separate();
     this.growOre();
