@@ -5,7 +5,7 @@ import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent } from '../sim/types';
 import { World } from '../sim/world';
 import { CameoFactory } from '../render/cameo';
-import { GameRenderer, type Quality } from '../render/renderer';
+import { BASE_VIEW, GameRenderer, type Quality } from '../render/renderer';
 import { Hud } from '../ui/hud';
 
 export interface GameOptions {
@@ -90,12 +90,13 @@ export class Game {
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
     if (attract) {
-      this.renderer.setZoom(0.8);
       this.renderer.centerOn(this.world.map.w / 2, this.world.map.h / 2);
     } else {
-      this.renderer.setZoom(1.15);
       const mcv = this.world.list.find((e) => e.owner === 0 && e.kind === 'unit' && unitDef(e.def).mcv);
-      if (mcv) this.select([mcv.id], false);
+      if (mcv) {
+        this.select([mcv.id], false);
+        this.renderer.centerOn(mcv.x, mcv.y);
+      }
       this.hud.showHint('Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.');
       this.audio.say('Battle control online');
     }
@@ -104,6 +105,8 @@ export class Game {
     window.addEventListener('resize', onResize);
     this.disposers.push(() => window.removeEventListener('resize', onResize));
     this.resize();
+    // zoom depends on the view size (phones get a closer, RA2-like view)
+    this.renderer.setZoom(this.renderer.defaultZoom(attract));
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -447,7 +450,7 @@ export class Game {
     const r = this.renderer;
     let best: Entity | null = null;
     let bd = Infinity;
-    const scale = this.hud.viewWrap.getBoundingClientRect().height / (22 / r.zoom);
+    const scale = this.hud.viewWrap.getBoundingClientRect().height / (BASE_VIEW / r.zoom);
     for (const e of w.list) {
       if (e.dead || e.kind !== 'unit' || !r.isShown(e.id)) continue;
       const d = unitDef(e.def);

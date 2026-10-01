@@ -39,8 +39,12 @@ export function saveSettings(s: Settings) {
 export function resolveQuality(q: Settings['quality']): Quality {
   if (q !== 'auto') return q;
   const coarse = window.matchMedia?.('(pointer: coarse)').matches;
-  const small = Math.min(window.innerWidth, window.innerHeight) < 600;
-  if (coarse && small) return 'low';
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const cores = nav.hardwareConcurrency || 4;
+  const mem = nav.deviceMemory ?? 4;
+  // genuinely weak devices keep the cheap path; everything else gets shadows and post,
+  // with the renderer's dynamic quality scaling keeping the frame rate up
+  if (cores <= 2 || mem <= 2) return 'low';
   if (coarse) return 'medium';
   return 'high';
 }
@@ -211,7 +215,7 @@ function settingsHtml(st: Settings) {
       <label>Sound effects<input type="range" min="0" max="1" step="0.05" data-s="sfx" value="${st.sfx}"></label>
       <label>Music<input type="range" min="0" max="1" step="0.05" data-s="music" value="${st.music}"></label>
       <label class="chk"><input type="checkbox" data-s="voice"${st.voice ? ' checked' : ''}> Announcer voice</label>
-      <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (phones)')}${opt('medium', 'Medium')}${opt('high', 'High')}</select></label>
+      <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
     </div>`;

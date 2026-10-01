@@ -6,6 +6,7 @@ import { pbr, worldUV, type TexKind, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
 import { drawFlag } from '../flags';
+import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -657,6 +658,8 @@ interface Tpl {
   turret: boolean;
   muzzles: number;
   recoil: number;
+  /** Construction / damage visuals (scaffolding, cuts, decals, damageFx, nightLights). */
+  fx: FxTpl;
 }
 
 // ================================================================ build kit
@@ -678,6 +681,8 @@ class Kit {
   muzzles = 0;
   recoil = 0;
   rnd: () => number;
+  /** Walls, windows, lamps... recorded for the construction / damage visuals. */
+  readonly rec: FxRec = newRec();
   private bins = new Map<THREE.Object3D, Map<Mat, THREE.BufferGeometry[]>>();
   /** Project texture UVs in the primitive's local frame instead of building space. */
   luv = false;
@@ -741,6 +746,27 @@ class Kit {
     const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
     this.emitters.push({ pos: v, kind });
   }
+  /** Record a point (current frame) into one of the fx record lists. */
+  mark(list: 'elec' | 'blinks', x: number, y: number, z: number) {
+    if (this.cur !== this.root) return;
+    const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
+    this.rec[list].push(v.x, v.y, v.z);
+  }
+  /** Current frame has no tilt and a quarter-turn yaw only (AABBs stay exact). */
+  private axisAligned() {
+    const e = this.T.elements;
+    const z = (v: number) => Math.abs(v) < 1e-4;
+    const o = (v: number) => Math.abs(Math.abs(v) - 1) < 1e-4;
+    return z(e[1]) && z(e[4]) && z(e[6]) && z(e[9]) && o(e[5]) && ((o(e[0]) && z(e[2])) || (z(e[0]) && o(e[2])));
+  }
+  private recWall(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number) {
+    if (this.cur !== this.root || h < 0.1 || Math.max(w, d) < 0.15) return;
+    const real = (m.userData.real as Mat | undefined) ?? m;
+    if (real.userData.baseEI || !this.axisAligned()) return;
+    const a = new THREE.Vector3(x - w / 2, y, z - d / 2).applyMatrix4(this.T);
+    const b = new THREE.Vector3(x + w / 2, y + h, z + d / 2).applyMatrix4(this.T);
+    this.rec.walls.push(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.min(a.z, b.z), Math.max(a.x, b.x), Math.max(a.y, b.y), Math.max(a.z, b.z));
+  }
 
   // ------------------------------------------------------------ core
   add(g: THREE.BufferGeometry, mv: Mat, uv?: number) {
@@ -767,6 +793,13 @@ class Kit {
     }
     geo.clearGroups();
     geo.morphAttributes = {};
+    if (this.cur === this.root && m.userData.baseEI && !(m as SMat).map) {
+      // small lamp: remember it for the night lights
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox!;
+      const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
+      this.rec.lamps.push((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2, c.r, c.g, c.b);
+    }
     let bin = this.bins.get(this.cur);
     if (!bin) {
       bin = new Map();
@@ -808,6 +841,7 @@ class Kit {
   // ------------------------------------------------------------ primitives
   /** Box with its base at y. */
   box(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number, uv?: number) {
+    this.recWall(m, w, h, d, x, y, z);
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y + h / 2, z);
     this.add(g, m, uv);
@@ -818,6 +852,7 @@ class Kit {
   }
   /** Bevelled (rounded) box, base at y. */
   rbox(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number, r = 0.015, uv?: number) {
+    this.recWall(m, w, h, d, x, y, z);
     const g = new RoundedBoxGeometry(w, h, d, 1, Math.min(r, w / 2.01, h / 2.01, d / 2.01));
     g.translate(x, y + h / 2, z);
     this.add(g, m, uv);
@@ -942,6 +977,13 @@ class Kit {
   }
   /** Vertical quad facing +Z (centre x, base y, at z) or, with face 'x', facing +X. sign flips to -Z/-X. */
   panel(m: Mat, face: 'x' | 'z', sign: number, c: number, y: number, at: number, w: number, h: number, uv: number[] = [0, 0, 1, 1]) {
+    const real = (m.userData.real as Mat | undefined) ?? m;
+    if (this.cur === this.root && (real as SMat).emissiveMap) {
+      // lit window pane: remember it for soot streaks / broken glass
+      const p = (face === 'z' ? new THREE.Vector3(c, y, at) : new THREE.Vector3(at, y, c)).applyMatrix4(this.T);
+      const n = (face === 'z' ? new THREE.Vector3(0, 0, sign) : new THREE.Vector3(sign, 0, 0)).transformDirection(this.T);
+      if (Math.abs(n.y) < 0.1) this.rec.wins.push(p.x, p.y, p.z, n.x, n.z, w, h);
+    }
     const a = c - w / 2;
     const b = c + w / 2;
     if (face === 'z') {
@@ -976,6 +1018,7 @@ class Kit {
   blinkLight(x: number, y: number, z: number, r = 0.022, per = 1.4, p = 0) {
     const n = 'blink' + this.specs.length;
     const o = this.node(n, x, y, z);
+    this.mark('blinks', x, y, z);
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
@@ -1840,6 +1883,7 @@ function insulator(k: Kit, x: number, y: number, z: number, h = 0.08) {
 function transformer(k: Kit, x: number, y: number, z: number, ry = 0, s = 1) {
   const P = k.P;
   const body = P.mats.col(0x7f8a7c, 0.55, 0.4);
+  k.mark('elec', x, y + 0.15 * s, z);
   k.at(x, y, z, ry, () => {
     k.box(P.concrete, 0.2 * s, 0.02, 0.16 * s, 0, 0, 0);
     k.rbox(body, 0.14 * s, 0.13 * s, 0.09 * s, 0, 0.02, 0, 0.008);
@@ -1999,12 +2043,13 @@ function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d
     turret: k.turret,
     muzzles: k.muzzles,
     recoil: k.recoil,
+    fx: new FxTpl(k.root, k.rec, { key, w, d, height: k.height, region: s.region, fog, seed: strHash(key + ':' + s.faction + ':' + s.region) }),
   };
 }
 
 const _v = new THREE.Vector3();
 
-function instance(t: Tpl): Model {
+function instance(t: Tpl): FxModel {
   const root = t.root.clone(true);
   const byName = new Map<string, THREE.Object3D>();
   root.traverse((o) => {
@@ -2021,12 +2066,16 @@ function instance(t: Tpl): Model {
     const m = find('recoil' + i);
     if (m) recoil.push(m);
   }
-  const bound: { sp: AnimSpec; o: THREE.Object3D | undefined; base: number }[] = t.specs.map((sp) => {
+  const bound: { sp: AnimSpec; o: THREE.Object3D | undefined; base: number; tax: Ax; t0: number; tilt: number }[] = t.specs.map((sp, i) => {
     const o = sp.k === 'pump' ? undefined : find(sp.n);
     let base = 0;
     if (o && (sp.k === 'osc' || sp.k === 'slide')) base = sp.k === 'osc' ? o.rotation[sp.ax] : o.position[sp.ax];
-    return { sp, o, base };
+    // battle damage knocks dishes / masts askew about an axis they don't animate on
+    const tax: Ax = sp.k === 'spin' || sp.k === 'osc' ? (sp.ax === 'x' ? 'z' : 'x') : 'x';
+    const tilt = (0.16 + ((i * 0.618 + t.specs.length * 0.37) % 1) * 0.2) * (i % 2 ? 1 : -1);
+    return { sp, o, base, tax, t0: o ? o.rotation[tax] : 0, tilt };
   });
+  const bfx = new BuildFx(t.fx, root);
   const posePump = (p: { sp: Extract<AnimSpec, { k: 'pump' }>; crank?: THREE.Object3D; beam?: THREE.Object3D; rod?: THREE.Object3D; pit?: THREE.Object3D }, a: number) => {
     const sp = p.sp;
     if (p.crank) p.crank.rotation.z = -a;
@@ -2056,17 +2105,23 @@ function instance(t: Tpl): Model {
     const f = pw ? 1 : 0.22;
     for (const g of glow) g.emissiveIntensity = (g.userData.baseEI as number) * f;
     for (const fm of flags) (fm.userData.uTime as { value: number }).value = s.time;
+    bfx.update(s);
     if (s.built < 1) return;
     const t0 = s.time;
+    const dmg = s.damage;
+    // heavy damage: dishes / radars tilt and jam
+    const tiltK = dmg < 0.6 ? 0 : Math.min(1, (dmg - 0.6) / 0.25);
+    const jam = dmg >= 0.85 ? 0 : 1;
     for (const b of bound) {
       const { sp, o } = b;
       if (!o) continue;
+      if (sp.k === 'spin' || sp.k === 'osc') o.rotation[b.tax] = b.t0 + b.tilt * tiltK;
       switch (sp.k) {
         case 'spin':
-          o.rotation[sp.ax] += sp.v * s.dt * (pw ? 1 : 0.15);
+          o.rotation[sp.ax] += sp.v * s.dt * (pw ? 1 : 0.15) * jam;
           break;
         case 'osc':
-          o.rotation[sp.ax] = b.base + sp.b + sp.a * Math.sin(t0 * sp.f + sp.p);
+          o.rotation[sp.ax] = b.base + sp.b + sp.a * Math.sin((jam ? t0 : 0) * sp.f + sp.p);
           break;
         case 'slide':
           o.position[sp.ax] = b.base + sp.b + sp.a * Math.sin(t0 * sp.f + sp.p);
@@ -2092,6 +2147,8 @@ function instance(t: Tpl): Model {
     glow: [...t.glow],
     emitters: t.emitters.map((e) => ({ pos: e.pos.clone(), kind: e.kind })),
     anim,
+    damageFx: bfx.damageFx,
+    nightLights: t.fx.night,
   };
 }
 

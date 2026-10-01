@@ -2,9 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
@@ -15,13 +13,30 @@ import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
+import { Outskirts } from './outskirts';
+import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
 
 export type Quality = 'low' | 'medium' | 'high';
 
-const CAM_DIR = new THREE.Vector3(1, 1.18, 1).normalize();
+// ~35 degree elevation: a touch lower than before so units and buildings show more of their sides (RA2-like)
+const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
 const CAM_DIST = 80;
-const BASE_VIEW = 22;
+/** World units visible vertically at zoom 1 (game.ts picking relies on this). */
+export const BASE_VIEW = 22;
+export const MIN_ZOOM = 0.5;
+export const MAX_ZOOM = 3.6;
+/** Direction towards the late-afternoon sun: low, from the upper left of the screen. */
+const SUN_DIR = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
+
+/** One rung of the dynamic quality ladder (index 0 = best). */
+interface QualityStep {
+  pr: number;
+  gtao: boolean;
+  bloom: boolean;
+  shadow: number;
+  post: boolean;
+}
 
 interface Visual {
   id: number;
@@ -76,14 +91,6 @@ interface ProjVisual {
   first: boolean;
 }
 
-const VignetteShader = {
-  uniforms: { tDiffuse: { value: null }, strength: { value: 0.32 } },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;
-    void main(){ vec4 c = texture2D(tDiffuse, vUv); vec2 d = vUv - 0.5; float v = 1.0 - dot(d, d) * strength * 2.2;
-    c.rgb = mix(vec3(dot(c.rgb, vec3(0.299,0.587,0.114))), c.rgb, 1.1); gl_FragColor = vec4(c.rgb * v, c.a); }`,
-};
-
 export function styleFor(world: World, owner: number): ModelStyle {
   if (owner < 0) return { team: 0x9a9a9a, hull: 0x8a8070, accent: 0x6a6a6a, flag: [0x888888, 0xaaaaaa, 0x888888], faction: 'neutral', region: 'west' };
   const p = world.players[owner];
@@ -133,7 +140,10 @@ export class GameRenderer {
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private gtao: GTAOPass | null = null;
+  private finalPass: FinalPass | null = null;
   private sun: THREE.DirectionalLight;
+  private hemi: THREE.HemisphereLight;
+  readonly outskirts: Outskirts;
   private visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
   private projVis = new Map<number, ProjVisual>();
@@ -150,9 +160,17 @@ export class GameRenderer {
   private time = 0;
   private width = 1;
   private height = 1;
+  // dynamic quality governor
+  private ladder: QualityStep[] = [];
+  private level = 0;
+  private usePost = false;
+  private adaptive = true;
   private frameTimes: number[] = [];
-  private pixelRatio: number;
-  private maxPixelRatio: number;
+  private lastFrameAt = 0;
+  private goodWindows = 0;
+  private upNeed = 3;
+  private lastUpAt = -1e9;
+  private lastFt = 0;
   selection = new Set<number>();
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
@@ -164,40 +182,48 @@ export class GameRenderer {
     readonly quality: Quality,
   ) {
     this.viewer = viewer;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', powerPreference: 'high-performance' });
-    this.maxPixelRatio = Math.min(window.devicePixelRatio, quality === 'high' ? 2 : quality === 'medium' ? 1.5 : 1);
-    this.pixelRatio = this.maxPixelRatio;
-    this.renderer.setPixelRatio(this.pixelRatio);
+    const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+    const dpr = window.devicePixelRatio || 1;
+    // low renders straight to the (multisampled) canvas; medium/high go through the post chain
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = quality !== 'low';
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.info.autoReset = false;
 
-    this.scene.background = new THREE.Color(0x07090b);
+    this.scene.background = new THREE.Color(0x2a2824);
     this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
 
-    // image based lighting for believable metal and glass
+    // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.32;
+    this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
+    void loadSkyEnvironment(this.renderer).then((env) => {
+      if (!env || this.disposed) return;
+      this.scene.environment?.dispose();
+      this.scene.environment = env;
+      this.scene.environmentIntensity = 0.42;
+    });
 
-    const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x5a4a35, 1.0);
-    this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight(0xfff0d8, 2.8);
+    // golden hour: warm low key light, cool sky fill, warm earthy bounce
+    this.hemi = new THREE.HemisphereLight(0x9fbcea, 0x6a5232, 0.8);
+    this.scene.add(this.hemi);
+    this.sun = new THREE.DirectionalLight(0xffc68c, 3.2);
     this.sun.castShadow = quality !== 'low';
-    const sm = quality === 'high' ? 4096 : 2048;
-    this.sun.shadow.mapSize.set(sm, sm);
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.bias = -0.00025;
+    this.sun.shadow.normalBias = 0.018;
+    this.sun.shadow.radius = 2.2;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(new THREE.AmbientLight(0x404858, 0.3));
 
     const { map } = world;
     this.fog = new FogOfWar(map.w, map.h);
     this.terrain = new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
+    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.group, this.terrain.water);
+    this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     this.debris = new Debris(map, this.effects, this.fog);
     this.marks = new GroundMarks(map, this.fog);
@@ -206,24 +232,47 @@ export class GameRenderer {
     this.scene.add(this.debris.group, this.marks.group);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
-    if (quality !== 'low') {
-      this.composer = new EffectComposer(this.renderer);
+    // ---- quality ladder: drop resolution first, then the expensive effects
+    const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
+    const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
+    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
+    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0;
+    const prs: number[] = [];
+    for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
+    prs.push(minPR);
+    const post = quality !== 'low';
+    let step: QualityStep = { pr: maxPR, gtao: quality === 'high', bloom: post, shadow, post };
+    for (const pr of prs) this.ladder.push((step = { ...step, pr }));
+    if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
+    if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
+    if (step.bloom) this.ladder.push((step = { ...step, bloom: false }));
+    if (step.shadow > 1024) this.ladder.push((step = { ...step, shadow: 1024 }));
+    if (step.post) this.ladder.push((step = { ...step, post: false }));
+    this.level = Math.max(0, this.ladder.findIndex((s) => s.pr <= startPR + 0.01));
+    this.adaptive = !/[?&]adapt=0\b/.test(location.search);
+
+    if (post) {
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0 });
+      this.composer = new EffectComposer(this.renderer, target);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       if (quality === 'high') {
         try {
           this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
-          this.gtao.blendIntensity = 0.85;
+          this.gtao.blendIntensity = 0.8;
           this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1 });
           this.composer.addPass(this.gtao);
         } catch {
           this.gtao = null;
         }
       }
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.45, 0.85);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9);
       this.composer.addPass(this.bloom);
-      this.composer.addPass(new OutputPass());
-      this.composer.addPass(new ShaderPass(VignetteShader));
+      this.finalPass = new FinalPass();
+      this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
+      this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
+      this.composer.addPass(this.finalPass);
     }
+    this.applyLevel(this.level, false);
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -236,16 +285,57 @@ export class GameRenderer {
     }
   }
 
+  private disposed = false;
+
   resize(w: number, h: number) {
     this.width = w;
     this.height = h;
     this.renderer.setSize(w, h, false);
-    this.composer?.setSize(w, h);
+    if (this.composer) {
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.composer.setSize(w, h);
+    }
     this.bloom?.setSize(w / 2, h / 2);
     this.updateCamera();
   }
 
+  /** Apply one rung of the quality ladder. */
+  private applyLevel(level: number, doResize = true) {
+    const s = this.ladder[level];
+    if (!s) return;
+    this.level = level;
+    if (Math.abs(this.renderer.getPixelRatio() - s.pr) > 0.001) {
+      this.renderer.setPixelRatio(s.pr);
+      if (doResize) this.resize(this.width, this.height);
+    }
+    if (this.gtao) this.gtao.enabled = s.gtao;
+    if (this.bloom) this.bloom.enabled = s.bloom;
+    this.usePost = !!this.composer && s.post;
+    if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
+      this.sun.shadow.mapSize.set(s.shadow, s.shadow);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+  }
+
+  /** Current governor state, for debugging / screenshots. */
+  perfStats() {
+    const s = this.ladder[this.level];
+    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+  }
+
+  /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
+  defaultZoom(wide = false) {
+    const visible = Math.max(11, Math.min(15, this.height / 58)) * (wide ? 1.4 : 1);
+    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, BASE_VIEW / visible));
+  }
+
   // ------------------------------------------------------------------ camera
+
+  private sunRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
+  private sunUp = new THREE.Vector3().crossVectors(SUN_DIR, this.sunRight).normalize();
+  private corner = new THREE.Vector3();
+  private camFwd = new THREE.Vector3();
 
   private updateCamera() {
     const aspect = this.width / Math.max(1, this.height);
@@ -262,22 +352,72 @@ export class GameRenderer {
     this.camera.position.set(this.target.x + CAM_DIR.x * CAM_DIST + sx, ty + CAM_DIR.y * CAM_DIST, this.target.z + CAM_DIR.z * CAM_DIST + sz);
     this.camera.lookAt(this.target.x + sx, ty, this.target.z + sz);
     this.camera.updateMatrixWorld();
-    const r = vh * aspect * 0.75 + 4;
-    const sc = this.sun.shadow.camera;
-    sc.left = -r;
-    sc.right = r;
-    sc.top = r;
-    sc.bottom = -r;
-    sc.near = 1;
-    sc.far = 120;
-    sc.updateProjectionMatrix();
-    this.sun.position.set(this.target.x - 22, 40, this.target.z + 14);
-    this.sun.target.position.set(this.target.x, 0, this.target.z);
+    this.fitShadow(ty);
+    const u = this.fog.uniforms;
+    u.fogTarget.value.set(this.target.x, ty, this.target.z);
+    u.fogView.value.copy(CAM_DIR).negate();
+    u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
   }
 
+  /**
+   * Fit the sun's shadow frustum tightly around what the camera sees, snapped
+   * to whole shadow-map texels so the shadows stay crisp and don't shimmer
+   * while panning.
+   */
+  private fitShadow(ty: number) {
+    if (!this.sun.castShadow) return;
+    const R = this.sunRight;
+    const U = this.sunUp;
+    this.camera.getWorldDirection(this.camFwd);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const nx of [-1, 1])
+      for (const ny of [-1, 1]) {
+        this.corner.set(nx, ny, -1).unproject(this.camera);
+        for (const hy of [ty - 1.5, ty + 3.5]) {
+          const t = (hy - this.corner.y) / this.camFwd.y;
+          const px = this.corner.x + this.camFwd.x * t;
+          const py = hy;
+          const pz = this.corner.z + this.camFwd.z * t;
+          const a = px * R.x + py * R.y + pz * R.z;
+          const b = px * U.x + py * U.y + pz * U.z;
+          minX = Math.min(minX, a);
+          maxX = Math.max(maxX, a);
+          minY = Math.min(minY, b);
+          maxY = Math.max(maxY, b);
+        }
+      }
+    // quantise the extent (only changes with zoom/resize) and snap the centre to texels
+    const hx = Math.ceil(((maxX - minX) / 2 + 1.5) / 2) * 2;
+    const hy = Math.ceil(((maxY - minY) / 2 + 1.5) / 2) * 2;
+    const size = this.sun.shadow.mapSize.x;
+    const tx = (2 * hx) / size;
+    const tyx = (2 * hy) / size;
+    const cx = Math.round((minX + maxX) / 2 / tx) * tx;
+    const cy = Math.round((minY + maxY) / 2 / tyx) * tyx;
+    const sc = this.sun.shadow.camera;
+    if (sc.right !== hx || sc.top !== hy) {
+      sc.left = -hx;
+      sc.right = hx;
+      sc.top = hy;
+      sc.bottom = -hy;
+      sc.near = 1;
+      sc.far = 140;
+      sc.updateProjectionMatrix();
+    }
+    const cz = this.target.x * -SUN_DIR.x + ty * -SUN_DIR.y + this.target.z * -SUN_DIR.z;
+    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(SUN_DIR, -cz);
+    this.sun.target.position.copy(c);
+    this.sun.position.copy(c).addScaledVector(SUN_DIR, 70);
+    this.sun.target.updateMatrixWorld();
+    this.sun.updateMatrixWorld();
+  }
+
   setZoom(z: number) {
-    this.zoom = Math.max(0.45, Math.min(3.2, z));
+    this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
   }
 
   panPixels(dx: number, dy: number) {
@@ -1100,25 +1240,42 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------- frame
 
-  /** Keep the frame rate up on weak GPUs by lowering the render resolution. */
-  private adaptResolution(dt: number) {
-    if (dt <= 0) return;
-    this.frameTimes.push(dt);
-    if (this.frameTimes.length < 90) return;
-    const avg = this.frameTimes.reduce((s, x) => s + x, 0) / this.frameTimes.length;
+  /**
+   * Dynamic quality: watch real frame times and walk the quality ladder
+   * (pixel ratio first, then AO / bloom / shadow resolution / post) down when
+   * the GPU struggles and back up when there is headroom. Upgrades that get
+   * undone quickly make the next upgrade attempt wait longer.
+   */
+  private adaptQuality() {
+    const now = performance.now();
+    const gap = (now - this.lastFrameAt) / 1000;
+    this.lastFrameAt = now;
+    // very long gaps are tab switches / pauses, not slow frames; the median filters GC spikes
+    if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
+    const ft = gap;
+    this.frameTimes.push(ft);
+    if (this.frameTimes.length < 30) return;
+    const sorted = this.frameTimes.slice().sort((a, b) => a - b);
     this.frameTimes.length = 0;
-    let pr = this.pixelRatio;
-    if (avg > 1 / 28 && pr > 0.7) pr = Math.max(0.7, pr - 0.15);
-    else if (avg < 1 / 55 && pr < this.maxPixelRatio) pr = Math.min(this.maxPixelRatio, pr + 0.1);
-    if (pr !== this.pixelRatio) {
-      this.pixelRatio = pr;
-      this.renderer.setPixelRatio(pr);
-      this.resize(this.width, this.height);
-    }
+    const med = sorted[sorted.length >> 1];
+    this.lastFt = med;
+    if (med > 1 / 42 && this.level < this.ladder.length - 1) {
+      // undoing a recent upgrade: be more patient next time
+      if (now - this.lastUpAt < 4000) this.upNeed = Math.min(40, this.upNeed * 2);
+      this.goodWindows = 0;
+      this.applyLevel(Math.min(this.ladder.length - 1, this.level + (med > 1 / 24 ? 2 : 1)));
+    } else if (med < 1 / 56 && this.level > 0) {
+      if (++this.goodWindows >= this.upNeed) {
+        this.goodWindows = 0;
+        this.lastUpAt = now;
+        this.applyLevel(this.level - 1);
+      }
+    } else this.goodWindows = 0;
   }
 
   render(alpha: number, dt: number) {
     this.time += dt;
+    this.renderer.info.reset();
     for (let i = this.scheduled.length - 1; i >= 0; i--) {
       if (this.scheduled[i].t <= this.time) {
         const s = this.scheduled[i];
@@ -1137,9 +1294,9 @@ export class GameRenderer {
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.effects.update(dt);
     this.updateCamera();
-    if (this.composer) this.composer.render(dt);
+    if (this.composer && this.usePost) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
-    this.adaptResolution(dt);
+    this.adaptQuality();
   }
 
   visualHeight(id: number): number {
@@ -1151,6 +1308,7 @@ export class GameRenderer {
   }
 
   dispose() {
+    this.disposed = true;
     this.renderer.dispose();
     this.composer?.dispose();
   }

@@ -75,6 +75,15 @@ export interface Model {
   wheeled?: boolean;
   /** Infantry: the model plays its own death animation via anim(s.dead > 0); renderer removes it after ~2.5 s. */
   infantry?: boolean;
+  /**
+   * Battle-damage particle sources (vehicles / aircraft), in root-local space.
+   * Each point starts emitting once AnimState.damage >= `at` (e.g. engine deck
+   * smoke at 0.35, fire at 0.7, sparks from torn plates). Transform with
+   * root.matrixWorld like `emitters`.
+   */
+  damageFx?: { pos: THREE.Vector3; kind: 'smoke' | 'fire' | 'spark'; at: number }[];
+  /** Aircraft: empty objects at the rear (flare / chaff dispensers); use getWorldPosition() to spawn flares (they follow the bank / roll). */
+  flareDispensers?: THREE.Object3D[];
 
   // ---- legacy fields (older builders) ----
   spinners?: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; speed: number }[];
