@@ -222,7 +222,7 @@ export class GameRenderer {
     this.fog = new FogOfWar(map.w, map.h);
     this.terrain = new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
-    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.group, this.terrain.water);
+    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
     this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     this.debris = new Debris(map, this.effects, this.fog);
@@ -241,7 +241,9 @@ export class GameRenderer {
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
     const post = quality !== 'low';
-    let step: QualityStep = { pr: maxPR, gtao: quality === 'high', bloom: post, shadow, post };
+    // ambient occlusion: always on high; on medium only for desktops (phones spend the budget on resolution)
+    const ao = quality === 'high' || (quality === 'medium' && !coarse);
+    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post };
     for (const pr of prs) this.ladder.push((step = { ...step, pr }));
     if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
     if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
@@ -255,7 +257,7 @@ export class GameRenderer {
       const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0 });
       this.composer = new EffectComposer(this.renderer, target);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      if (quality === 'high') {
+      if (ao) {
         try {
           this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
           this.gtao.blendIntensity = 0.8;
@@ -326,7 +328,7 @@ export class GameRenderer {
 
   /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
   defaultZoom(wide = false) {
-    const visible = Math.max(11, Math.min(15, this.height / 58)) * (wide ? 1.4 : 1);
+    const visible = Math.max(11, Math.min(12.5, this.height / 58)) * (wide ? 1.4 : 1);
     return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, BASE_VIEW / visible));
   }
 

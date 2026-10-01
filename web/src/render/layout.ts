@@ -133,33 +133,32 @@ export function buildLayout(m: GameMap): Layout {
   const s0 = v(m.starts[0].x + 0.5, m.starts[0].y + 0.5);
   const s1 = v(m.starts[1].x + 0.5, m.starts[1].y + 0.5);
 
-  // ---- paved roads
-  const hwy0 = [v(0, 77), v(8, 79.6), s0, v(30.5, 72.5), v(41.6, 61.5), v(43.2, 55), bc.a0, bc.e0];
+  // ---- paved roads and dirt tracks: hand-placed via points, routed around
+  // rocks, trees, structures and water so nothing paved disappears under them
+  const route = makeRouter(m);
+  const hwy0 = [v(0, 71.5), v(8, 79.6), s0, v(30.5, 72.5), v(37.5, 64.5), v(41, 57.5), bc.a0, bc.e0];
   const ctryA0 = [s0, v(30.5, 84.5), v(52.5, 82.5), v(64.5, 76.5), v(70, 77.8), bs.a0, bs.e0];
   const ctryA1 = [bs.e1, bs.a1, v(80.6, 66), v(80.2, 60), v(77.5, 51.5), v(83.5, 33.5), s1];
-  const raw: { pts: V2[]; width: number; variant: 0 | 1 }[] = [
+  // (the rock ridges are not exactly point symmetric, so mirrored roads are routed on their own)
+  const roadSrc: { pts: V2[]; width: number; variant: 0 | 1 }[] = [
     { pts: hwy0, width: 1.05, variant: 0 },
-    { pts: rev(mirAll(hwy0)), width: 1.05, variant: 0 },
     { pts: ctryA0, width: 0.8, variant: 1 },
     { pts: ctryA1, width: 0.8, variant: 1 },
-    { pts: mirAll(ctryA0), width: 0.8, variant: 1 },
-    { pts: mirAll(ctryA1), width: 0.8, variant: 1 },
   ];
-  const roads: Road[] = raw.map((r) => ({ pts: smoothLine(r.pts, 4, 0.25), width: r.width, variant: r.variant }));
+  const roads: Road[] = [...roadSrc, ...roadSrc.map((r) => ({ ...r, pts: rev(mirAll(r.pts)) }))].map((r) => ({ ...r, pts: route(r.pts, r.width) }));
 
-  // ---- dirt tracks
   const tr0: V2[][] = [
     // village lane, from the western road through the village to the highway
-    [v(14.5, 52.6), v(20, 53.1), v(27, 52.7), v(33, 53.2), v(37.5, 53.4), v(40.6, 56.5), v(42.4, 58)],
+    [v(14.5, 52.6), v(20, 53.1), v(27, 52.7), v(33, 53.2), v(37.5, 53.4), v(39.8, 56.6)],
     // farm track
-    [v(55.6, 82), v(56.6, 85.8), v(60.6, 87.4), v(65.6, 87.4), v(70.5, 90.2), v(75, 91.5)],
+    [v(55.6, 82), v(56.6, 85.8), v(60.6, 87.4), v(65.6, 88.6), v(70.5, 90.2), v(75, 91.5)],
     // hamlet track
     [v(50.6, 82.8), v(51.2, 79.4), v(50.8, 75.6), v(50.2, 71.6), v(45, 67.6), v(37.8, 66.4)],
     // field access west
     [v(12.6, 45.5), v(9, 45.8), v(4, 46.6)],
     [v(31, 76), v(37, 75.6), v(43.5, 75.8)],
   ];
-  const tracks: Track[] = [...tr0, ...tr0.map(mirAll)].map((pts) => ({ pts: smoothLine(pts, 3, 0.3), width: 0.5 }));
+  const tracks: Track[] = [...tr0, ...tr0.map(mirAll)].map((pts) => ({ pts: route(pts, 0.5, 0.3), width: 0.5 }));
 
   // ---- occupancy grid
   const R = 4;
@@ -397,12 +396,228 @@ export function buildLayout(m: GameMap): Layout {
       if (nearStart(x, y, 10)) continue;
       const tx = Math.floor(x);
       const ty = Math.floor(y);
-      if (m.tiles[ty * W + tx] === Tile.Water || m.tiles[ty * W + tx] === Tile.Bridge || m.trees[ty * W + tx]) continue;
+      if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+      const wt = m.tiles[ty * W + tx];
+      if (wt === Tile.Water || wt === Tile.Bridge || wt === Tile.Rock || m.trees[ty * W + tx] || m.blocked[ty * W + tx]) continue;
       wrecks.push({ x, y, rot: ang + (hash2(wseed, 3, 62) - 0.5) * 1.2 + (hash2(wseed, 4, 62) < 0.2 ? Math.PI / 2 : 0), kind: Math.floor(hash2(wseed, 5, 62) * 3) });
     }
   }
 
   return { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R };
+}
+
+/**
+ * A* road router over the tile grid. Roads keep a margin from rocks, trees,
+ * structures and water, prefer flat ground, and the result is string-pulled
+ * (with a clearance check) and smoothed. Pure function of the map, so the
+ * scenery stays deterministic.
+ */
+function makeRouter(m: GameMap) {
+  const W = m.w;
+  const H = m.h;
+  const hard = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const t = m.tiles[i];
+    if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || m.trees[i] || m.blocked[i]) hard[i] = 1;
+  }
+  const isHard = (x: number, y: number) => x < 0 || y < 0 || x >= W || y >= H || hard[y * W + x] === 1;
+  // distance (in tiles, chamfer) to the nearest hard tile
+  const near = new Float32Array(W * H).fill(99);
+  for (let i = 0; i < W * H; i++) if (hard[i]) near[i] = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const dirs = pass === 0 ? 1 : -1;
+    for (let k = 0; k < W * H; k++) {
+      const i = dirs > 0 ? k : W * H - 1 - k;
+      const x = i % W;
+      const y = (i / W) | 0;
+      for (const [dx, dy, c] of [
+        [-1, 0, 1],
+        [0, -1, 1],
+        [-1, -1, 1.414],
+        [1, -1, 1.414],
+      ] as const) {
+        const xx = x + dx * dirs;
+        const yy = y + dy * dirs;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        near[i] = Math.min(near[i], near[yy * W + xx] + c);
+      }
+    }
+  }
+  const vh = (x: number, y: number) => m.heights[y * (W + 1) + x];
+  const cost = (i: number) => {
+    const x = i % W;
+    const y = (i / W) | 0;
+    const d = near[i];
+    const slope = Math.max(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1)) - Math.min(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1));
+    return 1 + (d < 1.5 ? 6 : d < 2.5 ? 1.5 : 0) + slope * 6 + (m.ore[i] || m.oreKind[i] ? 6 : 0) + (m.tiles[i] === Tile.Sand ? 1 : 0);
+  };
+  /** Is a disc of radius r around (x, y) clear of hard tiles? */
+  const free = (x: number, y: number, r: number) => {
+    for (let ty = Math.floor(y - r); ty <= Math.floor(y + r); ty++)
+      for (let tx = Math.floor(x - r); tx <= Math.floor(x + r); tx++) {
+        if (tx < 0 || ty < 0 || tx >= W || ty >= H || !hard[ty * W + tx]) continue;
+        const dx = Math.max(tx - x, 0, x - tx - 1);
+        const dy = Math.max(ty - y, 0, y - ty - 1);
+        if (dx * dx + dy * dy < r * r) return false;
+      }
+    return true;
+  };
+  const snap = (p: V2): number => {
+    let best = -1;
+    let bd = 1e9;
+    const cx = Math.floor(Math.max(0, Math.min(W - 1, p.x)));
+    const cy = Math.floor(Math.max(0, Math.min(H - 1, p.y)));
+    for (let y = cy - 4; y <= cy + 4; y++)
+      for (let x = cx - 4; x <= cx + 4; x++) {
+        if (isHard(x, y)) continue;
+        const d = Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) - Math.min(near[y * W + x], 3) * 0.3;
+        if (d < bd) {
+          bd = d;
+          best = y * W + x;
+        }
+      }
+    return best >= 0 ? best : cy * W + cx;
+  };
+  const astar = (a: number, b: number): number[] => {
+    const g = new Float32Array(W * H).fill(Infinity);
+    const from = new Int32Array(W * H).fill(-1);
+    const closed = new Uint8Array(W * H);
+    const bx = b % W;
+    const by = (b / W) | 0;
+    const heur = (i: number) => {
+      const dx = Math.abs((i % W) - bx);
+      const dy = Math.abs(((i / W) | 0) - by);
+      return Math.max(dx, dy) + 0.414 * Math.min(dx, dy);
+    };
+    // binary heap of [f, i]
+    const hf: number[] = [];
+    const hi: number[] = [];
+    const push = (f: number, i: number) => {
+      let k = hf.length;
+      hf.push(f);
+      hi.push(i);
+      while (k > 0) {
+        const p = (k - 1) >> 1;
+        if (hf[p] < hf[k] || (hf[p] === hf[k] && hi[p] <= hi[k])) break;
+        [hf[p], hf[k]] = [hf[k], hf[p]];
+        [hi[p], hi[k]] = [hi[k], hi[p]];
+        k = p;
+      }
+    };
+    const pop = () => {
+      const top = hi[0];
+      const lf = hf.pop()!;
+      const li = hi.pop()!;
+      if (hf.length) {
+        hf[0] = lf;
+        hi[0] = li;
+        let k = 0;
+        for (;;) {
+          const l = k * 2 + 1;
+          const r = l + 1;
+          let s = k;
+          const less = (x: number, y: number) => hf[x] < hf[y] || (hf[x] === hf[y] && hi[x] < hi[y]);
+          if (l < hf.length && less(l, s)) s = l;
+          if (r < hf.length && less(r, s)) s = r;
+          if (s === k) break;
+          [hf[s], hf[k]] = [hf[k], hf[s]];
+          [hi[s], hi[k]] = [hi[k], hi[s]];
+          k = s;
+        }
+      }
+      return top;
+    };
+    g[a] = 0;
+    push(heur(a), a);
+    while (hf.length) {
+      const i = pop();
+      if (closed[i]) continue;
+      closed[i] = 1;
+      if (i === b) break;
+      const x = i % W;
+      const y = (i / W) | 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const xx = x + dx;
+          const yy = y + dy;
+          if (isHard(xx, yy)) continue;
+          if (dx && dy && (isHard(x + dx, y) || isHard(x, y + dy))) continue;
+          const j = yy * W + xx;
+          const ng = g[i] + (dx && dy ? 1.414 : 1) * (cost(i) + cost(j)) * 0.5;
+          if (ng < g[j]) {
+            g[j] = ng;
+            from[j] = i;
+            push(ng + heur(j), j);
+          }
+        }
+    }
+    const path: number[] = [];
+    for (let i = b; i >= 0; i = from[i]) {
+      path.push(i);
+      if (i === a) break;
+    }
+    return path.reverse();
+  };
+  const clearSeg = (p: V2, q: V2, r: number) => {
+    const L = Math.hypot(q.x - p.x, q.y - p.y);
+    const n = Math.max(1, Math.ceil(L / 0.2));
+    for (let k = 0; k <= n; k++) if (!free(p.x + ((q.x - p.x) * k) / n, p.y + ((q.y - p.y) * k) / n, r)) return false;
+    return true;
+  };
+  /**
+   * Route through the via points. The first / last via may lie off the
+   * grid or on a bridge approach; they are joined straight to the route.
+   */
+  return (allVias: V2[], width: number, step = 0.25): V2[] => {
+    const r = width / 2 + 0.3;
+    // leading / trailing points on bridge decks or water join straight on
+    const vias = [...allVias];
+    const onHard = (p: V2) => {
+      const t = m.tiles[Math.floor(Math.max(0, Math.min(H - 1, p.y))) * W + Math.floor(Math.max(0, Math.min(W - 1, p.x)))];
+      return t === Tile.Water || t === Tile.Bridge;
+    };
+    const lead: V2[] = [];
+    const trail: V2[] = [];
+    while (vias.length > 2 && onHard(vias[0])) lead.push(vias.shift()!);
+    while (vias.length > 2 && onHard(vias[vias.length - 1])) trail.unshift(vias.pop()!);
+    const cells: number[] = [];
+    const ids = vias.map(snap);
+    for (let k = 0; k < ids.length - 1; k++) {
+      const seg = astar(ids[k], ids[k + 1]);
+      cells.push(...(k ? seg.slice(1) : seg));
+    }
+    const centre = (i: number) => v((i % W) + 0.5, ((i / W) | 0) + 0.5);
+    // string pulling with clearance
+    const pulled: V2[] = [centre(cells[0])];
+    let i = 0;
+    while (i < cells.length - 1) {
+      let j = Math.min(cells.length - 1, i + 1);
+      for (let k = cells.length - 1; k > i + 1; k--)
+        if (clearSeg(centre(cells[i]), centre(cells[k]), r)) {
+          j = k;
+          break;
+        }
+      pulled.push(centre(cells[j]));
+      i = j;
+    }
+    const first = vias[0];
+    const last = vias[vias.length - 1];
+    // keep the original end points when they differ from the snapped cells
+    const head = Math.hypot(first.x - pulled[0].x, first.y - pulled[0].y) > 0.05 && clearSeg(first, pulled[0], r * 0.7) ? [first] : [];
+    const tail = Math.hypot(last.x - pulled[pulled.length - 1].x, last.y - pulled[pulled.length - 1].y) > 0.05 && clearSeg(pulled[pulled.length - 1], last, r * 0.7) ? [last] : [];
+    // bridge approaches: keep the straight run onto the deck
+    const raw = [...lead, ...head, ...pulled, ...tail, ...trail];
+    // subdivide long legs so the corner cutting of the smoothing stays small
+    const dense: V2[] = [raw[0]];
+    for (let k = 1; k < raw.length; k++) {
+      const a = raw[k - 1];
+      const b = raw[k];
+      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 1.6));
+      for (let s = 1; s <= n; s++) dense.push(v(a.x + ((b.x - a.x) * s) / n, a.y + ((b.y - a.y) * s) / n));
+    }
+    return smoothLine(dense, 3, step);
+  };
 }
 
 /** Occupancy bits at a continuous position. */

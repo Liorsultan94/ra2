@@ -770,7 +770,10 @@ class Bld {
     };
     const spots: DecalSpot[] = [];
     const camoSet = new Set<THREE.Object3D>(camo);
-    const xc = (bb.min.x + bb.max.x) / 2 - (tkind === 'turret' ? (bb.max.x - bb.min.x) * 0.12 : (bb.max.x - bb.min.x) * 0.05);
+    const bl = bb.max.x - bb.min.x;
+    const xc0 = (bb.min.x + bb.max.x) / 2 - (tkind === 'turret' ? bl * 0.12 : bl * 0.05);
+    // hull / truck bodies: also try the cab doors (front) and the rear body when the middle is a low flat bed
+    const xcs = tkind === 'turret' ? [xc0] : [xc0, bb.max.x - bl * 0.16, bb.min.x + bl * 0.22, bb.max.x - bl * 0.3];
     const yf = tkind === 'turret' ? 0.5 : 0.62;
     for (const side of [1, -1]) {
       for (const k of [1, 0.75, 0.56]) {
@@ -779,10 +782,11 @@ class Bld {
         const gap = numH * 0.35;
         let em = emblemOf(numH);
         let tot = numW + (em ? gap + em.w : 0);
-        let hit = ray.flatSpot(side, bb, tot, Math.max(numH, em?.h ?? 0), xc, yf, camoSet);
+        let hit: ReturnType<Probe['flatSpot']> = null;
+        for (const xc of xcs) if (!hit) hit = ray.flatSpot(side, bb, tot, Math.max(numH, em?.h ?? 0), xc, yf, camoSet);
         if (!hit && em) {
           // not enough flat room for both: number only
-          hit = ray.flatSpot(side, bb, numW, numH, xc, yf, camoSet);
+          for (const xc of xcs) if (!hit) hit = ray.flatSpot(side, bb, numW, numH, xc, yf, camoSet);
           em = null;
           tot = numW;
         }
@@ -4114,6 +4118,132 @@ function missileTruck(style: ModelStyle, fog: FogOfWar | null): Model {
   });
 }
 
+// ------------------------------------------------------------ strike-missile TELs
+
+interface TelCfg {
+  /** Axle x positions, front first; the first `steer` axles steer. */
+  axles: number[];
+  steer: number;
+  L: number;
+  W: number;
+  r: number;
+  cab: [number, number, number]; // x0, x1, height
+  /** bare missile(s) on rails, box canisters / pod, or round canisters. */
+  load: 'bare' | 'box' | 'round';
+  cols: number;
+  rows: number;
+  len: number;
+  w: number; // box width / round & bare radius * 2
+  h: number; // box height (box) / ignored
+  mcol: number; // missile body / canister colour (CAMO = vehicle paint)
+  elev: number; // firing elevation (rad)
+  caps?: number; // box: muzzle caps per canister face (HIMARS pod: 2, Typhon cells: 1)
+  nose?: number; // bare: ogive length
+  cover?: boolean; // bare: canvas cover over the rear half (Iskander)
+}
+
+function telModel(key: string, c: TelCfg) {
+  return (style: ModelStyle, fog: FogOfWar | null): Model =>
+    build(key, style, fog, (b) => {
+      const B = b.body;
+      const axles: Axle[] = c.axles.map((x, i) => ({ x, steer: i < c.steer ? 1 - i * 0.3 : i === c.axles.length - 1 && c.axles.length > 4 ? -0.25 : 0 }));
+      const fy = truck(b, { axles, r: c.r, W: c.W, cabX0: c.cab[0], cabX1: c.cab[1], frameX0: -c.L / 2 + 0.04, cabH: c.cab[2] });
+      const bedX1 = c.cab[0] - 0.02;
+      const bedX0 = -c.L / 2 + 0.03;
+      const bedL = bedX1 - bedX0;
+      B.box(bedL, 0.028, c.W * 0.9, (bedX0 + bedX1) / 2, fy + 0.014, 0, CAMO);
+      for (const s of [-1, 1]) {
+        B.box(0.03, 0.11, 0.03, bedX0 + 0.03, fy - 0.03, s * c.W * 0.4, K.dark); // stabiliser jacks
+        B.box(0.05, 0.02, 0.05, bedX0 + 0.03, fy - 0.09, s * c.W * 0.4, K.dark);
+        bin(B, 0.1, 0.045, 0.045, bedX1 - 0.08, fy + 0.028, s * (c.W * 0.45 - 0.03), CAMO);
+        teamPanel(B, Math.min(0.3, bedL * 0.4), 0.022, 0.003, (bedX0 + bedX1) / 2, fy, s * (c.W * 0.45 + 0.002), b.team);
+      }
+      // erector: pivot at the rear of the bed, payload forward over the bed (travel), raised to fire
+      const ex = bedX0 + 0.04;
+      B.box(0.05, 0.05, c.W * 0.5, ex, fy + 0.05, 0, K.dark);
+      const E = b.part(B, ex, fy + 0.07, 0, 'erect');
+      const len = c.len;
+      const span = c.cols * c.w + (c.cols - 1) * 0.008;
+      for (const s of [-1, 1]) E.box(len * 0.9, 0.024, 0.02, len * 0.47, 0, s * (span / 2 - 0.01), K.dark);
+      for (let i = 0; i < 3; i++) E.box(0.025, 0.024, span, 0.08 + i * (len * 0.38), 0, 0, K.dark);
+      E.strut([len * 0.3, -0.015, 0], [len * 0.48, -0.05, 0], 0.014, mt(K.steel));
+      const x0 = 0.02;
+      const xm = x0 + len / 2;
+      for (let row = 0; row < c.rows; row++)
+        for (let col = 0; col < c.cols; col++) {
+          const z = (col - (c.cols - 1) / 2) * (c.w + 0.008);
+          if (c.load === 'box') {
+            const y = 0.012 + c.h / 2 + row * (c.h + 0.004);
+            E.cbox(len, c.h, c.w, 0.005, xm, y, z, c.mcol);
+            for (const k of [0.2, 0.5, 0.8]) E.box(0.008, c.h + 0.006, c.w + 0.006, x0 + len * k, y, z, K.dark); // frame ribs
+            const n = c.caps ?? 1;
+            for (let j = 0; j < n; j++) {
+              const cz = z + (n > 1 ? (j - (n - 1) / 2) * (c.w / n) : 0);
+              E.box(0.004, c.h * 0.8, (c.w / n) * 0.8, x0 + len + 0.002, y, cz, 0x2a2c28);
+              b.muzzle(E, x0 + len + 0.01, y, cz);
+            }
+          } else if (c.load === 'round') {
+            const R = c.w / 2;
+            const y = 0.012 + R + row * (c.w + 0.004);
+            E.cx(R, R, len, xm, y, z, c.mcol, 14);
+            for (const k of [0.04, 0.5, 0.96]) E.cx(R * 1.08, R * 1.08, 0.014, x0 + len * k, y, z, K.dark, 14);
+            E.cx(R * 0.9, R * 0.9, 0.004, x0 + len + 0.002, y, z, 0x2a2c28, 14);
+            b.muzzle(E, x0 + len + 0.01, y, z);
+          } else {
+            const R = c.w / 2;
+            const y = 0.014 + R + 0.01;
+            const nose = c.nose ?? R * 4;
+            const body = len - nose;
+            E.cx(R, R, body, x0 + body / 2, y, z, c.mcol, 16);
+            E.add(new THREE.LatheGeometry([new THREE.Vector2(R, 0), new THREE.Vector2(R * 0.86, nose * 0.38), new THREE.Vector2(R * 0.5, nose * 0.78), new THREE.Vector2(0.001, nose)], 14).rotateZ(-Math.PI / 2), c.mcol, TR(x0 + body, y, z));
+            for (let i = 0; i < 4; i++) {
+              const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+              E.box(len * 0.09, 0.003, R * 1.1, x0 + len * 0.06, y + Math.sin(a) * R * 1.5, z + Math.cos(a) * R * 1.5, 0x5a5e58, a, 0, 0);
+            }
+            E.cx(R * 1.03, R * 1.03, 0.012, x0 + body * 0.62, y, z, b.team, 16);
+            E.cx(R * 1.04, R * 1.04, 0.02, x0 + 0.01, y, z, 0x2a2a2a, 16);
+            if (c.cover) E.cbox(body * 0.42, R * 2.3, R * 2.3, R * 0.6, x0 + body * 0.22, y, z, 0x4e5240);
+            b.muzzle(E, x0 + len, y, z);
+          }
+        }
+      antennas(b, B, c.cab[0] + 0.03, fy + c.cab[2] + 0.004, [-c.W * 0.38, c.W * 0.38], 0.2);
+      const elev = c.elev;
+      b.custom = (q) => {
+        const e = q('erect')[0];
+        if (!e) return undefined;
+        let a = 0;
+        let still = 0;
+        return (s) => {
+          still = s.moving ? 0 : still + s.dt;
+          const target = s.fired < 3 ? elev : still > 1.5 ? elev * 0.5 : 0;
+          a += (target - a) * Math.min(1, s.dt * 1.2);
+          e.rotation.z = a;
+        };
+      };
+    });
+}
+
+const TELS: Record<string, TelCfg> = {
+  // M142 HIMARS: 6x6, one launch pod (2 PrSM cells) on a slewing platform
+  tel_himars: { axles: [0.34, -0.08, -0.26], steer: 1, L: 0.98, W: 0.48, r: 0.072, cab: [0.24, 0.47, 0.19], load: 'box', cols: 1, rows: 1, len: 0.58, w: 0.25, h: 0.15, mcol: CAMO, elev: 0.75, caps: 2 },
+  // Typhon MRC: Mk 41 cells (2 x 2) raised near-vertical
+  tel_typhon: { axles: [0.48, 0.32, -0.12, -0.28, -0.44], steer: 2, L: 1.3, W: 0.54, r: 0.072, cab: [0.36, 0.62, 0.19], load: 'box', cols: 2, rows: 2, len: 0.78, w: 0.13, h: 0.11, mcol: CAMO, elev: 1.4, caps: 1 },
+  // LORA: 8x8 with two box canisters
+  tel_lora: { axles: [0.46, 0.3, -0.16, -0.32], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'box', cols: 2, rows: 1, len: 0.8, w: 0.12, h: 0.12, mcol: CAMO, elev: 0.95 },
+  // Taurus KEPD 350 (ground-launched): one long flat canister
+  tel_taurus: { axles: [0.38, -0.1, -0.27], steer: 1, L: 1.05, W: 0.5, r: 0.07, cab: [0.28, 0.52, 0.18], load: 'box', cols: 1, rows: 1, len: 0.66, w: 0.26, h: 0.1, mcol: CAMO, elev: 0.55 },
+  // Hyunmoo-2: 8x8, two bare missiles
+  tel_hyunmoo: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'bare', cols: 2, rows: 1, len: 0.82, w: 0.07, h: 0, mcol: 0xd6d8d2, elev: 1.15, nose: 0.13 },
+  // R-360 Neptune: KrAZ 6x6 with four round canisters (2 x 2)
+  tel_neptune: { axles: [0.4, -0.12, -0.28], steer: 1, L: 1.1, W: 0.5, r: 0.072, cab: [0.3, 0.54, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
+  // Tayfun: 8x8 with two round canisters
+  tel_tayfun: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'round', cols: 2, rows: 1, len: 0.8, w: 0.1, h: 0, mcol: CAMO, elev: 1.0 },
+  // 9K720 Iskander-M: MZKT 8x8, two missiles under a rear cover
+  tel_iskander: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.54, r: 0.076, cab: [0.36, 0.6, 0.17], load: 'bare', cols: 2, rows: 1, len: 0.8, w: 0.085, h: 0, mcol: 0x6a7058, elev: 1.25, nose: 0.17, cover: true },
+  // Khorramshahr-4: heavy 10x10, one huge missile
+  tel_khorramshahr: { axles: [0.6, 0.44, 0.0, -0.16, -0.32], steer: 2, L: 1.5, W: 0.58, r: 0.08, cab: [0.48, 0.74, 0.19], load: 'bare', cols: 1, rows: 1, len: 1.12, w: 0.13, h: 0, mcol: 0xd2d0c4, elev: 1.25, nose: 0.24 },
+};
+
 /** Shahed-136 style delta-wing drone (forward = +X) in a part. */
 function shahedDrone(p: Part, x: number, y: number, z: number, s = 1) {
   const c = 0x8a8a84;
@@ -4523,6 +4653,7 @@ export const VEHICLES: Record<string, Builder> = {
   berge,
   swarm,
   missile_truck: missileTruck,
+  ...Object.fromEntries(Object.entries(TELS).map(([k, c]) => [k, telModel(k, c)])),
   container,
   harvester,
   mcv,

@@ -339,7 +339,9 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const edge = isTree(x - 1, y) || isTree(x + 1, y) || isTree(x, y - 1) || isTree(x, y + 1);
       const meadow = fbm(x * 0.12, y * 0.12, 71, 2);
       const dryness = fbm(x * 0.06, y * 0.06, 47, 3);
-      let n = (t === Tile.Grass ? 2.2 + meadow * 3 : t === Tile.Dirt ? 0.9 : 0.6) * density * baseK;
+      // tall grass grows in clumps and swathes; between them it is short turf
+      const clump = Math.max(0, Math.min(1, (meadow - 0.38) / 0.3));
+      let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK;
       if (m.ore[i]) n = 0;
       n = Math.floor(n + hash2(x, y, 304));
       for (let k = 0; k < n; k++) {
@@ -350,9 +352,9 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         if (occ & (OCC_ROAD | OCC_BUILT | OCC_FIELD)) continue;
         if (occ & OCC_TRACK && hash2(seed, 3, 305) < 0.85) continue;
         const r = hash2(seed, 4, 305);
-        const dryK = Math.max(0, Math.min(1, (dryness - 0.35) * 2 + (r - 0.5) * 0.8 + (t === Tile.Sand ? 0.6 : 0)));
-        const tuft = mk(px, pz, 0.7 + hash2(seed, 5, 305) * 0.7, 0.85, 0.12);
-        tuft.color = new THREE.Color(0.5 + dryK * 0.45, 0.68 + dryK * 0.12, 0.3 + dryK * 0.12).multiplyScalar(0.9 + hash2(seed, 6, 305) * 0.2);
+        const dryK = Math.max(0, Math.min(1, (dryness - 0.4) * 1.6 + (r - 0.5) * 0.6 + (t === Tile.Sand ? 0.5 : 0)));
+        const tuft = mk(px, pz, 0.6 + hash2(seed, 5, 305) * 0.6 + clump * 0.3, 0.85, 0.12);
+        tuft.color = new THREE.Color(0.42 + dryK * 0.4, 0.62 + dryK * 0.12, 0.26 + dryK * 0.1).multiplyScalar(0.85 + hash2(seed, 6, 305) * 0.25);
         grass.push(tuft);
       }
       // bushes at forest edges and scattered singles

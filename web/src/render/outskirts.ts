@@ -2,7 +2,14 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight, type GameMap } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
-import { FOG_GLSL, type FogOfWar } from './fog';
+import type { FogOfWar } from './fog';
+
+/** The terrain's painted control maps (see ground.ts). */
+export interface GroundMaps {
+  splat: Uint8Array;
+  tint: Uint8Array;
+  res: number;
+}
 
 /** How far the countryside continues past each map edge (world units). */
 const MARGIN = 84;
@@ -15,23 +22,63 @@ const smoothstep = (a: number, b: number, x: number) => {
 };
 
 /**
+ * Farmland patchwork drawn per pixel (crisp at any zoom): fields on a
+ * rotated grid with hedgerows and furrows, broken up by meadows. Output is
+ * sRGB 0-1. Needs `fogNoise` (declared by the fog patch).
+ */
+const OUTSKIRTS_GLSL = /* glsl */ `
+uniform sampler2D oskEdge;
+uniform sampler2D oskWoods;
+uniform vec2 oskOrigin;
+uniform float oskExt;
+float oskHash( vec2 c ) { return fract( sin( dot( c, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+vec3 oskFields( vec2 p ) {
+  const float ca = 0.94604, sa = 0.32404; // rotation by 0.33 rad
+  float u = p.x * ca - p.y * sa;
+  float v = p.x * sa + p.y * ca;
+  vec2 g = vec2( u / 11.0, v / 8.0 );
+  vec2 cell = floor( g );
+  vec2 l = g - cell;
+  float r = oskHash( cell );
+  float border = min( min( l.x, 1.0 - l.x ), min( l.y, 1.0 - l.y ) * 1.4 );
+  float meadow = texture2D( fogNoise, p * 0.011 + 0.21 ).r;
+  vec4 n = texture2D( fogNoise, p * 0.11 );
+  vec3 c;
+  if ( meadow > 0.6 || r < 0.28 ) {
+    c = vec3( 0.36, 0.46, 0.22 ) * ( 0.82 + n.g * 0.3 );
+  } else {
+    if ( r < 0.48 ) c = vec3( 0.72, 0.6, 0.32 );       // ripe wheat
+    else if ( r < 0.62 ) c = vec3( 0.5, 0.38, 0.25 );  // ploughed
+    else if ( r < 0.8 ) c = vec3( 0.42, 0.52, 0.2 );   // young crop
+    else c = vec3( 0.6, 0.55, 0.3 );                   // stubble
+    float rows = 0.9 + 0.1 * sin( ( r >= 0.48 && r < 0.62 ? v : u ) * 5.5 );
+    c *= rows * ( 0.88 + n.b * 0.24 );
+    float hedge = 1.0 - smoothstep( 0.015, 0.05, border );
+    c = mix( c, vec3( 0.16, 0.24, 0.11 ), hedge );
+  }
+  // toned down so the countryside doesn't outshine the battlefield
+  return c * 0.82;
+}
+`;
+
+/**
  * Countryside beyond the playable map: a ring of rolling ground, farm fields
  * and woods that continues the map edge and fades into haze, so the world
  * no longer ends in a black void. Purely cosmetic (no picking, no sim).
  */
 export class Outskirts {
   readonly group = new THREE.Group();
-  private edge: { data: Uint8ClampedArray; size: number } | null = null;
+  private edge: { data: Float32Array; size: number } | null = null;
 
   constructor(
     private map: GameMap,
     fog: FogOfWar,
     quality: 'low' | 'medium' | 'high',
-    terrainGroup?: THREE.Object3D,
+    terrainGround?: GroundMaps,
     terrainWater?: THREE.Mesh,
   ) {
     this.group.name = 'outskirts';
-    this.edge = this.grabTerrainTexture(terrainGroup);
+    this.edge = terrainGround ? this.sampleGround(terrainGround) : null;
     const ground = this.buildGround(fog);
     this.group.add(ground);
     this.buildTrees(fog, quality);
@@ -52,24 +99,9 @@ export class Outskirts {
     const rect = (x0: number, y0: number, x1: number, y1: number) =>
       new THREE.PlaneGeometry(x1 - x0, y1 - y0).rotateX(-Math.PI / 2).translate((x0 + x1) / 2, 0, (y0 + y1) / 2);
     const geo = mergeGeometries([rect(-M, -M, w + M, 0), rect(-M, h, w + M, h + M), rect(-M, 0, 0, h), rect(w, 0, w + M, h)])!;
-    let mat: THREE.Material = src;
-    const fsrc = src.fragmentShader;
-    const fogBlock = /float fogV = texture2D\(fogTex[^;]*;\s*float fogK[^;]*;\s*col \*= mix\(1\.0, fogK, fogEnabled\);/;
-    if (fogBlock.test(fsrc) && fsrc.includes('varying vec3 vWorld;')) {
-      const fs = fsrc
-        .replace(/uniform sampler2D fogTex;\s*/, '')
-        .replace(/uniform vec2 fogSize;\s*/, '')
-        .replace(/uniform float fogEnabled;\s*/, '')
-        .replace('varying vec3 vWorld;', `varying vec3 vWorld;\n${FOG_GLSL}`)
-        .replace(fogBlock, 'col = fogShade(col, vWorld);');
-      mat = new THREE.ShaderMaterial({
-        uniforms: { ...src.uniforms, ...fog.uniforms },
-        vertexShader: src.vertexShader,
-        fragmentShader: fs,
-        transparent: src.transparent,
-        depthWrite: src.depthWrite,
-      });
-    }
+    // share the terrain's water material (its fog block upgraded to the smoky shroud / haze)
+    fog.upgradeShader(src);
+    const mat: THREE.Material = src;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = terrainWater!.position.y;
     mesh.renderOrder = terrainWater!.renderOrder;
@@ -77,23 +109,40 @@ export class Outskirts {
     this.group.add(mesh);
   }
 
-  /** Read the terrain's painted ground texture (if any) so the seam continues its colours. */
-  private grabTerrainTexture(terrainGroup?: THREE.Object3D) {
-    try {
-      const g = terrainGroup?.getObjectByName('ground') as THREE.Mesh | undefined;
-      const mat = g?.material as THREE.MeshStandardMaterial | undefined;
-      const img = mat?.map?.image as CanvasImageSource | undefined;
-      if (!img || !(img instanceof HTMLCanvasElement || img instanceof HTMLImageElement || (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap))) return null;
-      const size = 256;
-      const c = document.createElement('canvas');
-      c.width = c.height = size;
-      const ctx = c.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return null;
-      ctx.drawImage(img, 0, 0, size, size);
-      return { data: ctx.getImageData(0, 0, size, size).data, size };
-    } catch {
-      return null;
-    }
+  /**
+   * Approximate ground colour (0-1 sRGB) from the terrain's splat / tint
+   * control maps, using the same palette as the splat shader, so the seam
+   * continues the map's colours.
+   */
+  private sampleGround(g: GroundMaps): { data: Float32Array; size: number } {
+    const { w, h } = this.map;
+    const size = 192;
+    const data = new Float32Array(size * size * 3);
+    const N = w * g.res;
+    const hex = (v: number) => [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+    const lush = hex(0x4c6a2a);
+    const dryC = hex(0x857f4c);
+    const dirt = hex(0x7a6448);
+    const rock = hex(0x77716a);
+    const sand = hex(0xa89a7a);
+    const mud = hex(0x4a3e30);
+    for (let py = 0; py < size; py++)
+      for (let px = 0; px < size; px++) {
+        const x = ((px + 0.5) / size) * w;
+        const y = ((py + 0.5) / size) * h;
+        const k = (Math.min(N - 1, Math.floor(y * g.res)) * N + Math.min(N - 1, Math.floor(x * g.res))) * 4;
+        const s0 = g.splat[k] / 255;
+        const s1 = g.splat[k + 1] / 255;
+        const s2 = g.splat[k + 2] / 255;
+        const s3 = g.splat[k + 3] / 255;
+        const wg = Math.max(0, 1 - s0 - s1 - s2 - s3);
+        const dr = g.tint[k + 3] / 255;
+        for (let j = 0; j < 3; j++) {
+          const c = (lush[j] * (1 - dr) + dryC[j] * dr) * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
+          data[(py * size + px) * 3 + j] = Math.min(1, c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
+        }
+      }
+    return { data, size };
   }
 
   /** Terrain colour (0-1 sRGB) at map position, mirrored back inside the map (or clamped to the edge). */
@@ -103,18 +152,17 @@ export class Outskirts {
     const my = clamp ? Math.max(0, Math.min(h, y)) : y < 0 ? -y : y > h ? 2 * h - y : y;
     const e = this.edge;
     if (!e) {
-      out[0] = 0.4;
-      out[1] = 0.47;
-      out[2] = 0.25;
+      out[0] = 0.3;
+      out[1] = 0.41;
+      out[2] = 0.17;
       return;
     }
-    // the ground texture has v flipped (uv.y = 1 - y / h) but canvas rows run top-down, so row = y / h
     const px = Math.max(0, Math.min(e.size - 1, Math.floor((mx / w) * e.size)));
     const py = Math.max(0, Math.min(e.size - 1, Math.floor((my / h) * e.size)));
-    const i = (py * e.size + px) * 4;
-    out[0] = e.data[i] / 255;
-    out[1] = e.data[i + 1] / 255;
-    out[2] = e.data[i + 2] / 255;
+    const i = (py * e.size + px) * 3;
+    out[0] = e.data[i];
+    out[1] = e.data[i + 1];
+    out[2] = e.data[i + 2];
   }
 
   private outside(x: number, y: number) {
@@ -158,84 +206,49 @@ export class Outskirts {
     return dry * (1 - wet) + base * wet;
   }
 
-  /** Fields, meadows and woodland floor colour (linear-ish sRGB 0-1). */
-  private fieldColor(x: number, y: number, out: number[]) {
-    // patchwork of farm fields on a rotated grid
-    const a = 0.33;
-    const u = x * Math.cos(a) - y * Math.sin(a);
-    const v = x * Math.sin(a) + y * Math.cos(a);
-    const fu = Math.floor(u / 11);
-    const fv = Math.floor(v / 8);
-    const r = hash2(fu, fv, 7);
-    const meadow = fbm(x * 0.05, y * 0.05, 404, 3);
-    const lu = u / 11 - fu;
-    const lv = v / 8 - fv;
-    const border = Math.min(lu, 1 - lu, lv * 1.4, (1 - lv) * 1.4);
-    if (meadow > 0.55 || r < 0.28) {
-      // meadow / pasture
-      const k = 0.85 + valueNoise(x * 0.4, y * 0.4, 3) * 0.25;
-      out[0] = 0.36 * k;
-      out[1] = 0.46 * k;
-      out[2] = 0.22 * k;
-      return;
-    }
-    let c: [number, number, number];
-    if (r < 0.48) c = [0.72, 0.6, 0.32]; // ripe wheat
-    else if (r < 0.62) c = [0.5, 0.38, 0.25]; // ploughed
-    else if (r < 0.8) c = [0.42, 0.52, 0.2]; // young crop
-    else c = [0.6, 0.55, 0.3]; // stubble
-    const rows = 0.92 + 0.08 * Math.sin((r < 0.62 && r >= 0.48 ? v : u) * 5.5);
-    const k = rows * (0.9 + valueNoise(x * 0.3, y * 0.3, 5) * 0.2);
-    // hedgerow edge
-    const hedge = 1 - smoothstep(0.02, 0.06, border);
-    out[0] = c[0] * k * (1 - hedge) + 0.18 * hedge;
-    out[1] = c[1] * k * (1 - hedge) + 0.26 * hedge;
-    out[2] = c[2] * k * (1 - hedge) + 0.12 * hedge;
-  }
-
   private woods(x: number, y: number) {
     return fbm(x * 0.045 + 13, y * 0.045, 515, 3);
   }
 
-  private paint(size: number, ext: number): HTMLCanvasElement {
-    const c = document.createElement('canvas');
-    c.width = c.height = size;
-    const ctx = c.getContext('2d')!;
-    const img = ctx.createImageData(size, size);
-    const d = img.data;
+  /**
+   * Low-res control map: rgb = the map's ground colour continued past the
+   * edge, a = how much the procedural farmland (drawn crisply in the shader)
+   * takes over. A second map holds the woodland floor mask.
+   */
+  private paint(size: number, ext: number) {
+    const edge = new Uint8Array(size * size * 4);
+    const woods = new Uint8Array(size * size);
     const t = [0, 0, 0];
-    const f = [0, 0, 0];
     const ppu = size / ext;
+    const { w, h } = this.map;
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
-        const x = px / ppu - MARGIN;
-        const y = py / ppu - MARGIN;
+        const x = (px + 0.5) / ppu - MARGIN;
+        const y = (py + 0.5) / ppu - MARGIN;
         const o = this.outside(x, y);
-        let r: number, g: number, b: number;
         const jitter = o <= 0 ? 0 : (valueNoise(x * 0.25, y * 0.25, 77) - 0.5) * 6;
         const near = o <= 0 ? 0 : this.wetNear(x, y);
         let blend = o <= 0 ? 0 : smoothstep(4, 18, o + jitter) * (1 - near);
-        if (o > 0 && near <= 0 && this.edgeHeight(x < 0 ? -x : x > this.map.w ? 2 * this.map.w - x : x, y < 0 ? -y : y > this.map.h ? 2 * this.map.h - y : y) < -0.05) blend = 1;
-        if (blend < 1) this.terrainColor(x, y, t, near > 0);
-        if (blend > 0) this.fieldColor(x, y, f);
-        r = t[0] * (1 - blend) + f[0] * blend;
-        g = t[1] * (1 - blend) + f[1] * blend;
-        b = t[2] * (1 - blend) + f[2] * blend;
-        // darker forest floor under woods
-        const wd = o < 5 ? 0 : smoothstep(0.55, 0.65, this.woods(x, y)) * smoothstep(5, 12, o);
-        r *= 1 - wd * 0.45;
-        g *= 1 - wd * 0.35;
-        b *= 1 - wd * 0.45;
-        const grain = 0.92 + hash2(px, py, 9) * 0.16;
+        if (o > 0 && near <= 0 && this.edgeHeight(x < 0 ? -x : x > w ? 2 * w - x : x, y < 0 ? -y : y > h ? 2 * h - y : y) < -0.05) blend = 1;
+        this.terrainColor(x, y, t, near > 0);
         const i = (py * size + px) * 4;
-        d[i] = Math.min(255, r * grain * 255);
-        d[i + 1] = Math.min(255, g * grain * 255);
-        d[i + 2] = Math.min(255, b * grain * 255);
-        d[i + 3] = 255;
+        edge[i] = Math.min(255, t[0] * 255);
+        edge[i + 1] = Math.min(255, t[1] * 255);
+        edge[i + 2] = Math.min(255, t[2] * 255);
+        edge[i + 3] = Math.round(blend * 255);
+        woods[py * size + px] = o < 5 ? 0 : Math.round(smoothstep(0.55, 0.65, this.woods(x, y)) * smoothstep(5, 12, o) * 255);
       }
     }
-    ctx.putImageData(img, 0, 0);
-    return c;
+    const tex = (data: Uint8Array, fmt: THREE.PixelFormat) => {
+      const tx = new THREE.DataTexture(data, size, size, fmt, THREE.UnsignedByteType);
+      tx.magFilter = THREE.LinearFilter;
+      tx.minFilter = THREE.LinearMipmapLinearFilter;
+      tx.generateMipmaps = true;
+      tx.wrapS = tx.wrapT = THREE.ClampToEdgeWrapping;
+      tx.needsUpdate = true;
+      return tx;
+    };
+    return { edge: tex(edge, THREE.RGBAFormat), woods: tex(woods, THREE.RedFormat) };
   }
 
   private buildGround(fog: FogOfWar): THREE.Mesh {
@@ -276,25 +289,37 @@ export class Outskirts {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    const tex = new THREE.CanvasTexture(this.paint(512, ext));
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    const mat = fog.apply(new THREE.MeshStandardMaterial({ map: tex, roughness: 0.97, metalness: 0 }));
-    // fine grain so the low-res colour texture doesn't look smeared up close
+    const maps = this.paint(384, ext);
+    const uniforms = {
+      oskEdge: { value: maps.edge },
+      oskWoods: { value: maps.woods },
+      oskOrigin: { value: new THREE.Vector2(x0, y0) },
+      oskExt: { value: ext },
+    };
+    const mat = fog.apply(new THREE.MeshStandardMaterial({ roughness: 0.97, metalness: 0 }));
     const prev = mat.onBeforeCompile;
     mat.onBeforeCompile = (shader, r) => {
       prev.call(mat, shader, r);
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
-        {
-          vec4 gn = texture2D( fogNoise, vFogP.xz * 0.37 );
-          vec4 gn2 = texture2D( fogNoise, vFogP.xz * 1.9 );
-          diffuseColor.rgb *= 0.86 + gn.r * 0.18 + gn2.g * 0.12;
-        }`,
-      );
+      Object.assign(shader.uniforms, uniforms);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>\n${OUTSKIRTS_GLSL}`)
+        .replace(
+          '#include <map_fragment>',
+          `{
+            vec2 oskUv = ( vFogP.xz - oskOrigin ) / oskExt;
+            vec4 e = texture2D( oskEdge, oskUv );
+            float wd = texture2D( oskWoods, oskUv ).r;
+            vec3 c = mix( e.rgb, oskFields( vFogP.xz ), e.a );
+            c *= mix( vec3( 1.0 ), vec3( 0.55, 0.65, 0.55 ), wd );
+            // fine grain so the countryside reads as ground up close, not a smear
+            vec4 gn = texture2D( fogNoise, vFogP.xz * 0.37 );
+            vec4 gn2 = texture2D( fogNoise, vFogP.xz * 1.9 );
+            c *= 0.86 + gn.r * 0.18 + gn2.g * 0.12;
+            diffuseColor.rgb *= pow( c, vec3( 2.2 ) );
+          }`,
+        );
     };
-    mat.customProgramCacheKey = () => 'outskirts-ground';
+    mat.customProgramCacheKey = () => 'outskirts-ground-2';
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'outskirts-ground';
@@ -347,17 +372,18 @@ export class Outskirts {
         const p = dense * 0.85 + 0.035;
         if (hash2(k, 4, 5) > p) continue;
         if (o > MARGIN - 6) continue;
-        const s = 0.85 + hash2(k, 5, 5) * 0.7 + dense * 0.3;
+        const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
         const hy = this.height(ox, oy);
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
-        const c = new THREE.Color().setHSL(0.24 + hash2(k, 8, 5) * 0.08, 0.42, 0.17 + hash2(k, 9, 5) * 0.1);
+        // dark, slightly desaturated greens to match the map's woods (haze lifts them with distance)
+        const c = new THREE.Color().setHSL(0.25 + hash2(k, 8, 5) * 0.07, 0.38, 0.09 + hash2(k, 9, 5) * 0.06);
         if (hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5)) {
           pines.push(m);
           pc.push(c);
         } else {
           leafy.push(m);
-          lc.push(c.offsetHSL(-0.02, 0.06, 0.05));
+          lc.push(c.offsetHSL(-0.02, 0.05, 0.025));
         }
         if (pines.length + leafy.length >= budget) break;
       }

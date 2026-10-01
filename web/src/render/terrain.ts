@@ -101,10 +101,11 @@ export class Terrain {
           vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
           vec3 viewDir = normalize(cameraPosition - vWorld);
           float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-          vec3 deep = vec3(0.03, 0.14, 0.2);
-          vec3 shallow = vec3(0.12, 0.38, 0.4);
-          vec3 col = mix(shallow, deep, depth);
-          col = mix(col, vec3(0.45, 0.6, 0.7), fres * 0.6);
+          // a lowland river: green-brown in the shallows, dark slate in the channel
+          vec3 deep = vec3(0.035, 0.1, 0.12);
+          vec3 shallow = vec3(0.16, 0.26, 0.2);
+          vec3 col = mix(shallow, deep, smoothstep(0.0, 0.8, depth));
+          col = mix(col, vec3(0.42, 0.52, 0.58), fres * 0.55);
           float spec = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 80.0);
           col += vec3(1.0, 0.95, 0.85) * spec * 1.6;
           float foam = smoothstep(0.22, 0.0, depth) * (0.55 + 0.45 * sin(time * 2.0 + p.x * 4.0 + p.y * 3.0));

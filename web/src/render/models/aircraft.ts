@@ -551,8 +551,7 @@ function realize(k: Kit, p: Paint, fog: FogOfWar | null, S: number): THREE.Group
     const mesh = new THREE.Mesh(geo, mat);
     mesh.userData.bk = b;
     mesh.castShadow = b === 'skin' || b === 'skin2' || b === 'vc' || b === 'glass';
-    if (b === 'decal') mesh.receiveShadow = true;
-    mesh.receiveShadow = b === 'skin' || b === 'skin2';
+    mesh.receiveShadow = b === 'skin' || b === 'skin2' || b === 'decal';
     if (b === 'disc' || b === 'plume') mesh.renderOrder = 2;
     if (b === 'blade') mesh.renderOrder = 3;
     g.add(mesh);
@@ -1148,9 +1147,12 @@ function f16(k: Kit, team: number, faction: string): Built {
     pylon(k, 8.0, 10.2, -0.04, -0.3, s * 2.2, 0.12);
     tank(k, 6.6, -0.62, s * 2.2, 4.4, 0.32);
   }
-  const ins = INSIGNIA[faction] ?? INSIGNIA.neutral;
-  roundelH(k, 10.0, 0.06, 3.0, 0.42, ins);
-  roundelH(k, 10.0, 0.06, -3.0, 0.42, ins);
+  // Iran: no fixed-wing roundel (national insignia only on its helicopters / drones)
+  if (faction !== 'iran') {
+    const ins = INSIGNIA[faction] ?? INSIGNIA.neutral;
+    roundelH(k, 10.0, 0.06, 3.0, 0.42, ins);
+    roundelH(k, 10.0, 0.06, -3.0, 0.42, ins);
+  }
   k.symc(wing([lerpSec(wr, wt, 0.8, 1.3), { ...wt, t: 0.052 }]), team);
   navLights(k, 10.6, 0.0, 4.75, 14.6, 1.05);
   k.light('strobe', 0xffffff, [-12.9, 3.75, 0], 0.009);
@@ -1621,6 +1623,7 @@ function apache(k: Kit, o: HeliO, saraf: boolean): Built {
   // markings + lights
   if (saraf) for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.26, 'israel', s);
   else if (o.faction === 'korea') for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.24, INSIGNIA.korea, s);
+  else for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.2, 'usa', s, true);
   k.symc(wing([{ d: 5.08, c: 1.0, z: 2.2, y: -0.235, t: 0.17 }, { d: 5.1, c: 0.98, z: 2.47, y: -0.24, t: 0.17 }]), o.team);
   k.light('lit', C.red, [-5.6, -0.24, -2.5]);
   k.light('lit', C.green, [-5.6, -0.24, 2.5]);
@@ -2177,6 +2180,7 @@ function reaperLike(k: Kit, o: UavO, wl2: boolean): Built {
   k.light('strobe', 0xffffff, [-5.0, 0.58, 0], 0.008);
   k.light('beacon', 0xff2a1a, [-6.0, -0.4, 0], 0.008);
   if (wl2) roundelH(k, 4.8, 0.45, 7.8, 0.35, INSIGNIA.china), roundelH(k, 4.8, 0.45, -7.8, 0.35, INSIGNIA.china);
+  else roundelH(k, 4.8, 0.45, 7.8, 0.28, 'usa', true), roundelH(k, 4.8, 0.45, -7.8, 0.28, 'usa', true);
   return { S: 0.92 / 20.3, kind: 'uav', paint: { skin: { color: wl2 ? 0xd5d8da : 0x8d9398, metal: 0.25 }, glass: 0x2a3540 } };
 }
 
@@ -2785,7 +2789,9 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   });
   const kind = t.kind;
   const phase = Math.random() * 10;
-  const wear = new WearDriver(root, airSeq++ & 3);
+  const aid = airSeq++;
+  const wear = new WearDriver(root, aid & 3);
+  const lop = (aid * 0.618034) % 1 > 0.5 ? 1 : -1;
   for (const s of spins) s.rotation.y += Math.random() * TAU;
   let roll = 0;
   let pitch = 0;
@@ -2804,6 +2810,14 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       const pitchT = kind === 'heli' ? -Math.min(1, sp / 3) * 0.13 : kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
       pitch += (pitchT - pitch) * k;
       b.rotation.set(roll, 0, pitch);
+      // badly hit airframes struggle: a shaky, lopsided attitude (helicopters most)
+      const dmg = s.dead > 0 ? 1 : s.damage || 0;
+      if (dmg > 0.5) {
+        const w = (dmg - 0.5) * 2 * (kind === 'heli' ? 1 : 0.45);
+        b.rotation.x += w * (0.06 * Math.sin(s.time * 2.3 + phase) + 0.025 * Math.sin(s.time * 7.1 + phase * 2) + 0.05 * lop);
+        b.rotation.z += w * 0.03 * Math.sin(s.time * 1.7 + phase * 3);
+        b.rotation.y = w * 0.05 * Math.sin(s.time * 1.1 + phase);
+      }
       if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012;
       else if (kind === 'quad') b.position.y = Math.sin(s.time * 3.1 + phase) * 0.006;
       else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008;

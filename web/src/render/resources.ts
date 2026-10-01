@@ -85,12 +85,13 @@ export class Resources {
     const oreNuggetMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.85, flatShading: true, emissive: 0x2a1404, emissiveIntensity: 0.6 }));
     const gemRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.05, flatShading: true }));
     const gemCrystalMat = fog.apply(
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, flatShading: true, emissive: 0x2a5a78, emissiveIntensity: 0.55 }),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, flatShading: true, emissive: 0x1e4a66, emissiveIntensity: 0.4 }),
     );
 
     // geometries: rubble piles (several chunks each) and single nuggets / crystals
     const rust = (k: number) => new THREE.Color().setRGB(0.3 + hash2(k, 1, 9) * 0.1, 0.17 + hash2(k, 2, 9) * 0.05, 0.11 + hash2(k, 3, 9) * 0.04);
-    const pale = (k: number) => new THREE.Color().setRGB(0.66 + hash2(k, 1, 8) * 0.12, 0.72 + hash2(k, 2, 8) * 0.1, 0.8 + hash2(k, 3, 8) * 0.1);
+    // lithium-bearing pegmatite: grey-blue host rock with pale spodumene chunks
+    const pale = (k: number) => (k % 2 ? new THREE.Color().setRGB(0.36 + hash2(k, 1, 8) * 0.08, 0.42 + hash2(k, 2, 8) * 0.06, 0.5 + hash2(k, 3, 8) * 0.08) : new THREE.Color().setRGB(0.62 + hash2(k, 1, 8) * 0.1, 0.7 + hash2(k, 2, 8) * 0.08, 0.78 + hash2(k, 3, 8) * 0.08));
     const orePile = pileGeo(3, 4, rust);
     const gemPile = pileGeo(17, 4, pale);
     const nugget = (() => {
@@ -116,7 +117,7 @@ export class Resources {
           new THREE.Quaternion().setFromEuler(new THREE.Euler((hash2(k, 3, 5) - 0.5) * 1.2, hash2(k, 4, 5) * 3, (hash2(k, 5, 5) - 0.5) * 1.2)),
           new THREE.Vector3(0.6 + k * 0.1, 0.6 + k * 0.12, 0.6 + k * 0.1),
         );
-        b.add(c, m4, null, new THREE.Color().setRGB(0.82, 0.93, 1.0));
+        b.add(c, m4, null, new THREE.Color().setRGB(0.66, 0.84, 0.96));
       }
       return b.build();
     })();

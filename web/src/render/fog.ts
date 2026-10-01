@@ -182,6 +182,29 @@ export class FogOfWar {
   }
 
   /** Patch a built-in material so it darkens under the shroud. */
+  /**
+   * Upgrade a custom ShaderMaterial that still uses the old flat-darkening
+   * fog block (`float fogV = ...; float fogK = ...; col *= mix(...)`) to the
+   * shared smoky shroud / haze look, in place. Returns false if the shader
+   * doesn't have the expected shape (it is then left untouched).
+   */
+  upgradeShader(mat: THREE.ShaderMaterial): boolean {
+    if (mat.userData.fogUpgraded) return true;
+    const fsrc = mat.fragmentShader;
+    const block = /float fogV = texture2D\(fogTex[^;]*;\s*float fogK[^;]*;\s*col \*= mix\(1\.0, fogK, fogEnabled\);/;
+    if (!block.test(fsrc) || !fsrc.includes('varying vec3 vWorld;')) return false;
+    mat.fragmentShader = fsrc
+      .replace(/uniform sampler2D fogTex;\s*/, '')
+      .replace(/uniform vec2 fogSize;\s*/, '')
+      .replace(/uniform float fogEnabled;\s*/, '')
+      .replace('varying vec3 vWorld;', `varying vec3 vWorld;\n${FOG_GLSL}`)
+      .replace(block, 'col = fogShade(col, vWorld);');
+    Object.assign(mat.uniforms, this.uniforms);
+    mat.userData.fogUpgraded = true;
+    mat.needsUpdate = true;
+    return true;
+  }
+
   apply<T extends THREE.Material>(mat: T): T {
     const uniforms = this.uniforms;
     const prev = mat.onBeforeCompile;

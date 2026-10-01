@@ -29,7 +29,7 @@ import type { AnimState, Model, Region } from './types';
  * instance only while needed.
  */
 
-export type DamageFx = { pos: THREE.Vector3; kind: 'smoke' | 'fire' | 'spark'; at: number };
+export type DamageFx = NonNullable<Model['damageFx']>[number];
 export type NightLight = { pos: THREE.Vector3; color: number; intensity: number };
 
 /** Model with the optional building extras (until types.ts carries them). */
@@ -648,7 +648,6 @@ function analyse(root: THREE.Group, rec: FxRec, info: FxInfo): Analysis {
   const comps = components(H, nx, nz, ox, oz, info);
   const plans: Plan[] = [];
   for (let v = 0; v < VARIANTS; v++) plans.push(plan(H, nx, nz, ox, oz, comps, rec, info, v));
-  if ((globalThis as { __bxdbg?: boolean }).__bxdbg) console.warn("bx", info.key, info.region, rec.wins.length / 7, rec.walls.length / 6, rec.lamps.length / 6, JSON.stringify(comps.map((c) => [c.x0, c.x1, c.z0, c.z1, c.h].map((v) => +v.toFixed(2)))), JSON.stringify(plans[0].holes.map((h) => h && [h.x, h.z, h.y].map((v) => +v.toFixed(2)))));
   return { maxY, lut, comps, H, nx, nz, plans };
 }
 
@@ -1398,9 +1397,15 @@ export class BuildFx {
     else if (this.scaf || this.sparks) this.endConstruction();
     if (this.custom) this.damage(s);
     else if (this.fxRoot) for (const t of this.tiers) if (t) t.visible = false;
-    if (!this.custom && !this.scaf && this.fxRoot && !this.tiers.some((t) => t?.visible)) {
-      this.root.remove(this.fxRoot);
-      this.fxRoot = null;
+    if (!this.custom && !this.scaf && this.fxRoot) {
+      let any = false;
+      for (const t of this.tiers) if (t && t.visible) any = true;
+      if (!any) {
+        // drop the overlays with their group (re-cloned from the template if damaged again)
+        this.root.remove(this.fxRoot);
+        this.fxRoot = null;
+        this.tiers.fill(null);
+      }
     }
   }
 

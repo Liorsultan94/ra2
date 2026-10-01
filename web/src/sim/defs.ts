@@ -267,8 +267,8 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-35A Lightning II', sight: 11, desc: 'Fifth-generation stealth fighter and sensor node. Hits ground and air.' },
     robot: { name: 'Vision 60 Robot Dog', model: 'robodog' },
     uav: { name: 'MQ-9 Reaper' },
-    himars: { name: 'M142 HIMARS (PrSM)', model: 'missile_truck', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
-    typhon: { name: 'Typhon MRC (Tomahawk)', model: 'missile_truck', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
+    himars: { name: 'M142 HIMARS (PrSM)', model: 'tel_himars', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
+    typhon: { name: 'Typhon MRC (Tomahawk)', model: 'tel_typhon', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
     mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 0.55, desc: 'Front-engined heavy tank with Trophy active protection.' },
@@ -280,7 +280,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'AH-64D Saraf' },
     fighter: { name: 'F-35I Adir' },
     uav: { name: 'Hermes 450' },
-    lora: { name: 'LORA Launcher', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
+    lora: { name: 'LORA Launcher', model: 'tel_lora', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   china: {
     mbt: { name: 'Type 99A' },
@@ -304,7 +304,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Su-35' },
     robot: { name: 'Uran-9 UGV', model: 'ugv', hp: 260, weapon: 'autocannon', speed: 2.3 },
     uav: { name: 'Orion' },
-    iskander: { name: '9K720 Iskander-M', model: 'missile_truck', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
+    iskander: { name: '9K720 Iskander-M', model: 'tel_iskander', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   germany: {
     mbt: { name: 'Leopard 2A8', model: 'mbt_heavy', cost: 1000, buildTime: 11, hp: 540, speed: 2.4, weapon: 'cannonHeavy', desc: 'Superior tank with modular composite armor.' },
@@ -316,7 +316,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Eurofighter Typhoon' },
     robot: { name: 'Mission Master UGV', model: 'ugv' },
     uav: { name: 'Heron TP' },
-    taurus: { name: 'Taurus KEPD 350 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'taurus', prereq: ['factory', 'tech'], desc: 'Stealthy bunker-busting cruise missile. Terrain-following; defences spot it only at a third of their range.', aiWeight: 1, aiTag: 'arty' },
+    taurus: { name: 'Taurus KEPD 350 Launcher', model: 'tel_taurus', category: 'vehicle', cost: 1900, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'taurus', prereq: ['factory', 'tech'], desc: 'Stealthy bunker-busting cruise missile. Terrain-following; defences spot it only at a third of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   korea: {
     mbt: { name: 'K2 Black Panther' },
@@ -327,7 +327,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-15K Slam Eagle' },
     robot: { name: 'Robot Dog', model: 'robodog' },
     uav: { name: 'KUS-FS' },
-    hyunmoo: { name: 'Hyunmoo-2 TEL', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'hyunmoo', prereq: ['factory', 'tech'], desc: 'Precision ballistic missile with a heavy warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
+    hyunmoo: { name: 'Hyunmoo-2 TEL', model: 'tel_hyunmoo', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'hyunmoo', prereq: ['factory', 'tech'], desc: 'Precision ballistic missile with a heavy warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   ukraine: {
     mbt: { name: 'T-84 Oplot' },
@@ -340,7 +340,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'THeMIS UGV', model: 'ugv' },
     uav: { name: 'Bayraktar TB2' },
-    neptune: { name: 'R-360 Neptune Launcher', model: 'missile_truck', category: 'vehicle', cost: 1600, buildTime: 16, hp: 200, armor: 'light', sight: 6, speed: 1.8, turnRate: 0.08, weapon: 'neptune', prereq: ['factory', 'tech'], desc: 'Sea-skimming cruise missile. Hugs the ground; defences spot it only at half range.', aiWeight: 1, aiTag: 'arty' },
+    neptune: { name: 'R-360 Neptune Launcher', model: 'tel_neptune', category: 'vehicle', cost: 1600, buildTime: 16, hp: 200, armor: 'light', sight: 6, speed: 1.8, turnRate: 0.08, weapon: 'neptune', prereq: ['factory', 'tech'], desc: 'Sea-skimming cruise missile. Hugs the ground; defences spot it only at half range.', aiWeight: 1, aiTag: 'arty' },
   },
   turkey: {
     mbt: { name: 'Altay' },
@@ -352,7 +352,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'T129 ATAK' },
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'Barkan UGV', model: 'ugv' },
-    tayfun: { name: 'Tayfun TEL', model: 'missile_truck', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
+    tayfun: { name: 'Tayfun TEL', model: 'tel_tayfun', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   iran: {
     mbt: { name: 'Karrar' },
@@ -362,7 +362,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     arty: { name: 'Raad-2' },
     shahedl: { name: 'Shahed-136 Launcher', model: 'container', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 6, speed: 1.9, turnRate: 0.1, turret: false, weapon: 'shahedLaunch', prereq: ['factory', 'airfield'], desc: 'Container launcher for long-range loitering munitions.', aiWeight: 3, aiTag: 'arty' },
     fateh: { name: 'Fateh-110 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1300, buildTime: 15, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, turret: false, weapon: 'fateh', prereq: ['factory', 'tech'], desc: 'Road-mobile ballistic missile.', aiWeight: 1, aiTag: 'arty' },
-    khorramshahr: { name: 'Khorramshahr-4 TEL', model: 'missile_truck', category: 'vehicle', cost: 2600, buildTime: 26, hp: 260, armor: 'light', sight: 6, speed: 1.4, turnRate: 0.07, turret: false, weapon: 'khorramshahr', prereq: ['factory', 'tech'], desc: 'Heavy MRBM with a huge warhead. Slow to reload; it takes 3 successful intercepts to bring one down.', aiWeight: 1, aiTag: 'arty' },
+    khorramshahr: { name: 'Khorramshahr-4 TEL', model: 'tel_khorramshahr', category: 'vehicle', cost: 2600, buildTime: 26, hp: 260, armor: 'light', sight: 6, speed: 1.4, turnRate: 0.07, turret: false, weapon: 'khorramshahr', prereq: ['factory', 'tech'], desc: 'Heavy MRBM with a huge warhead. Slow to reload; it takes 3 successful intercepts to bring one down.', aiWeight: 1, aiTag: 'arty' },
     heli: { name: 'AH-1J Cobra', hp: 360 },
     fighter: { remove: true },
     robot: { name: 'Armed UGV', model: 'ugv' },
