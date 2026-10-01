@@ -1,0 +1,4164 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import type { FogOfWar } from '../fog';
+import { factionCamo, pbrMaterial, worldUV } from '../textures';
+import type { Builder } from './registry';
+import type { AnimState, Model, ModelStyle } from './types';
+
+/*
+ * Detailed procedural ground vehicles (one design per nation for the shared
+ * roster keys). Conventions: 1 tile = 1 unit, Y up, forward = +X, origin on
+ * the ground at the footprint centre; right-hand side of the vehicle = +Z.
+ *
+ * Every vehicle is built once per (key, faction, team, fog) as a template:
+ * static geometry is merged per material inside each moving part (body,
+ * turret, gun, recoiling barrel ...). Road wheels / tyres are InstancedMeshes
+ * (one draw call for all of them) whose instance matrices are rotated by the
+ * distance travelled; track belts are swept meshes with U = distance along the
+ * belt, so scrolling the tread texture offset moves the links. Instances are
+ * deep clones of the template; animated parts are found again via userData
+ * tags, and only the track materials are per instance.
+ */
+
+type P2 = [number, number];
+type V3 = [number, number, number];
+
+// ------------------------------------------------------------------ paints
+
+/** Paint codes: a hex colour = matte vertex-coloured detail; mt(hex) = metallic detail; negatives = special materials. */
+const MT = 0x1000000;
+const mt = (c: number) => c + MT;
+const CAMO = -1;
+const GLASS = -2; // dark glossy optics (merged into the metal bucket)
+const LAMP = -3;
+const TAIL = -4;
+const AMBER = -5;
+const LENS = -6;
+const EYE = -7;
+const RED = -8; // red warning / eye glow
+
+const K = {
+  black: 0x141516,
+  rubber: 0x1c1d1e,
+  dark: 0x2a2c2e,
+  gun: 0x34373a,
+  steel: 0x676c70,
+  bright: 0x9a9fa3,
+  olive: 0x4a5032,
+  canvas: 0x6c6a4a,
+  khaki: 0x8c7f5a,
+  brown: 0x5a4632,
+  yellow: 0xd8a21c,
+  white: 0xd8d8d2,
+  red: 0x8c1c14,
+  copper: 0x8a5a32,
+  ore: 0xc7962c,
+  glassC: 0x1a2632,
+  mesh: 0x3c4044,
+};
+
+const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
+function shade(c: number, f: number): number {
+  const r = Math.min(255, Math.round(((c >> 16) & 255) * f));
+  const g = Math.min(255, Math.round(((c >> 8) & 255) * f));
+  const b = Math.min(255, Math.round((c & 255) * f));
+  return (r << 16) | (g << 8) | b;
+}
+function mixc(a: number, b: number, t: number): number {
+  const ch = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+
+// ------------------------------------------------------------- transforms
+
+const _e = new THREE.Euler();
+const _q = new THREE.Quaternion();
+const _v = new THREE.Vector3();
+const _s = new THREE.Vector3();
+function TR(x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(_v.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
+}
+
+// --------------------------------------------------------- raw geometries
+
+function shapeOf(pts: P2[]): THREE.Shape {
+  const s = new THREE.Shape();
+  s.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0], pts[i][1]);
+  s.closePath();
+  return s;
+}
+
+/** Side profile (x, y) extruded along Z, centred on z = 0, optional chamfer. */
+function gSide(pts: P2[], depth: number, bevel = 0): THREE.BufferGeometry {
+  const b = Math.min(bevel, depth * 0.45);
+  const d = Math.max(0.0005, depth - 2 * b);
+  const g = new THREE.ExtrudeGeometry(shapeOf(pts), {
+    depth: d,
+    bevelEnabled: b > 0,
+    bevelThickness: b,
+    bevelSize: b,
+    bevelOffset: -b,
+    bevelSegments: 1,
+    steps: 1,
+    curveSegments: 4,
+  });
+  g.translate(0, 0, -d / 2);
+  return g;
+}
+
+/** Plan outline (x, z) extruded upward from y = 0 to y = h. */
+function gPlan(pts: P2[], h: number, bevel = 0): THREE.BufferGeometry {
+  const b = Math.min(bevel, h * 0.45);
+  const d = Math.max(0.0005, h - 2 * b);
+  const g = new THREE.ExtrudeGeometry(shapeOf(pts.map(([x, z]) => [x, -z] as P2)), {
+    depth: d,
+    bevelEnabled: b > 0,
+    bevelThickness: b,
+    bevelSize: b,
+    bevelOffset: -b,
+    bevelSegments: 1,
+    steps: 1,
+  });
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, b, 0);
+  return g;
+}
+
+/** Chamfered box (all 12 edges cut by c). */
+function gCBox(w: number, h: number, d: number, c: number): THREE.BufferGeometry {
+  const cc = Math.min(c, w * 0.45, h * 0.45, d * 0.45);
+  const hw = w / 2;
+  const hh = h / 2;
+  return gSide(
+    [
+      [-hw + cc, -hh],
+      [hw - cc, -hh],
+      [hw, -hh + cc],
+      [hw, hh - cc],
+      [hw - cc, hh],
+      [-hw + cc, hh],
+      [-hw, hh - cc],
+      [-hw, -hh + cc],
+    ],
+    d,
+    cc,
+  );
+}
+
+const gCylY = (rt: number, rb: number, h: number, s = 12, open = false) => new THREE.CylinderGeometry(rt, rb, h, s, 1, open);
+/** Cylinder along X, radius rt at +X. */
+const gCylX = (rt: number, rb: number, h: number, s = 12, open = false) => new THREE.CylinderGeometry(rt, rb, h, s, 1, open).rotateZ(-Math.PI / 2);
+/** Cylinder along Z, radius rt at +Z. */
+const gCylZ = (rt: number, rb: number, h: number, s = 12, open = false) => new THREE.CylinderGeometry(rt, rb, h, s, 1, open).rotateX(Math.PI / 2);
+
+function polyArea(p: P2[]): number {
+  let a = 0;
+  for (let i = 0; i < p.length; i++) {
+    const q = p[(i + 1) % p.length];
+    a += p[i][0] * q[1] - q[0] * p[i][1];
+  }
+  return a / 2;
+}
+
+/** Offset a simple polygon inward by d (miter joins). */
+function inset(pts: P2[], d: number): P2[] {
+  const n = pts.length;
+  const sg = polyArea(pts) > 0 ? 1 : -1;
+  const out: P2[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[(i - 1 + n) % n];
+    const p = pts[i];
+    const c = pts[(i + 1) % n];
+    let e1x = p[0] - a[0];
+    let e1z = p[1] - a[1];
+    let l = Math.hypot(e1x, e1z) || 1;
+    e1x /= l;
+    e1z /= l;
+    let e2x = c[0] - p[0];
+    let e2z = c[1] - p[1];
+    l = Math.hypot(e2x, e2z) || 1;
+    e2x /= l;
+    e2z /= l;
+    // inward normals (left of edge for CCW)
+    const n1x = -e1z * sg;
+    const n1z = e1x * sg;
+    const n2x = -e2z * sg;
+    const n2z = e2x * sg;
+    const k = d / Math.max(0.25, 1 + n1x * n2x + n1z * n2z);
+    out.push([p[0] + (n1x + n2x) * k, p[1] + (n1z + n2z) * k]);
+  }
+  return out;
+}
+
+/** Full outline from a half outline (z >= 0) listed from the front centre line to the rear centre line. */
+function mirrorZ(half: P2[]): P2[] {
+  const out = half.slice();
+  for (let i = half.length - 1; i >= 0; i--) {
+    const [x, z] = half[i];
+    if (Math.abs(z) < 1e-6) continue;
+    out.push([x, -z]);
+  }
+  // drop duplicate centre points at the ends
+  return out;
+}
+
+
+interface Ring {
+  y: number;
+  p: P2[];
+}
+
+/** Stack of plan rings (same vertex count) joined into a closed solid. */
+function gLoft(rings: Ring[], smooth = false, capTop = true, capBot = true): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const n = rings[0].p.length;
+  const sg = polyArea(rings[0].p) > 0 ? 1 : -1;
+  const V = (r: number, j: number) => new THREE.Vector3(rings[r].p[j % n][0], rings[r].y, rings[r].p[j % n][1]);
+  const bands = rings.length - 1;
+  // face normals per band / edge, oriented outward
+  const fn: THREE.Vector3[][] = [];
+  const flip: boolean[][] = [];
+  for (let b = 0; b < bands; b++) {
+    fn.push([]);
+    flip.push([]);
+    for (let j = 0; j < n; j++) {
+      const p00 = V(b, j);
+      const p01 = V(b, j + 1);
+      const p11 = V(b + 1, j + 1);
+      const p10 = V(b + 1, j);
+      let dx = p01.x - p00.x;
+      let dz = p01.z - p00.z;
+      if (Math.hypot(dx, dz) < 1e-6) {
+        dx = p11.x - p10.x;
+        dz = p11.z - p10.z;
+      }
+      const out = new THREE.Vector3(dz * sg, 0, -dx * sg);
+      const nn = new THREE.Vector3().subVectors(p01, p00).cross(new THREE.Vector3().subVectors(p11, p00));
+      if (nn.lengthSq() < 1e-14) nn.subVectors(p11, p00).cross(new THREE.Vector3().subVectors(p10, p00));
+      const f = nn.dot(out) < 0;
+      if (f) nn.negate();
+      nn.normalize();
+      fn[b].push(nn);
+      flip[b].push(f);
+    }
+  }
+  const vn = (r: number, j: number, b: number, e: number) => {
+    if (!smooth) return fn[b][e];
+    const acc = new THREE.Vector3();
+    for (const bb of [r - 1, r]) {
+      if (bb < 0 || bb >= bands) continue;
+      acc.add(fn[bb][(j - 1 + n) % n]).add(fn[bb][j % n]);
+    }
+    return acc.normalize();
+  };
+  const push = (p: THREE.Vector3, q: THREE.Vector3) => {
+    pos.push(p.x, p.y, p.z);
+    nor.push(q.x, q.y, q.z);
+  };
+  for (let b = 0; b < bands; b++) {
+    for (let j = 0; j < n; j++) {
+      const j1 = (j + 1) % n;
+      const a = [V(b, j), V(b, j1), V(b + 1, j1), V(b + 1, j)];
+      const an = [vn(b, j, b, j), vn(b, j1, b, j), vn(b + 1, j1, b, j), vn(b + 1, j, b, j)];
+      const order = flip[b][j] ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3];
+      for (const o of order) push(a[o], an[o]);
+    }
+  }
+  const cap = (r: number, up: boolean) => {
+    const ring = rings[r];
+    const tris = THREE.ShapeUtils.triangulateShape(
+      ring.p.map(([x, z]) => new THREE.Vector2(x, z)),
+      [],
+    );
+    const nn = new THREE.Vector3(0, up ? 1 : -1, 0);
+    for (const t of tris) {
+      const a = new THREE.Vector3(ring.p[t[0]][0], ring.y, ring.p[t[0]][1]);
+      const b2 = new THREE.Vector3(ring.p[t[1]][0], ring.y, ring.p[t[1]][1]);
+      const c = new THREE.Vector3(ring.p[t[2]][0], ring.y, ring.p[t[2]][1]);
+      const cr = new THREE.Vector3().subVectors(b2, a).cross(new THREE.Vector3().subVectors(c, a));
+      if ((cr.y > 0) === up) {
+        push(a, nn);
+        push(b2, nn);
+        push(c, nn);
+      } else {
+        push(a, nn);
+        push(c, nn);
+        push(b2, nn);
+      }
+    }
+  };
+  if (capBot) cap(0, false);
+  if (capTop) cap(rings.length - 1, true);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  return g;
+}
+
+/** Ellipse-ish ring (x radius a, z radius c), n points, optional front squash. */
+function ell(n: number, a: number, c: number, dx = 0, frontK = 1, rearK = 1): P2[] {
+  const out: P2[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2;
+    const x = Math.cos(t);
+    out.push([dx + x * a * (x > 0 ? frontK : rearK), Math.sin(t) * c]);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- materials
+
+const fogIds = new WeakMap<FogOfWar, number>();
+let fogSeq = 0;
+function fogId(f: FogOfWar | null): number {
+  if (!f) return 0;
+  let id = fogIds.get(f);
+  if (id === undefined) {
+    id = ++fogSeq;
+    fogIds.set(f, id);
+  }
+  return id;
+}
+const matCache = new Map<string, THREE.Material>();
+function cmat<T extends THREE.Material>(key: string, fog: FogOfWar | null, make: () => T): T {
+  const k = fogId(fog) + '|' + key;
+  let m = matCache.get(k) as T | undefined;
+  if (!m) {
+    m = make();
+    if (fog) fog.apply(m);
+    matCache.set(k, m);
+  }
+  return m;
+}
+function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse = false) {
+  return cmat(`glow${color}|${intensity}|${pulse}`, fog, () => {
+    const m = new THREE.MeshStandardMaterial({ color: shade(color, 0.4), emissive: color, emissiveIntensity: intensity, roughness: 0.35, metalness: 0, toneMapped: false });
+    if (pulse) m.userData.pulse = true;
+    return m;
+  });
+}
+
+const TREAD_K = 4; // texture repeats per world unit along the belt (6 links per repeat)
+
+// ------------------------------------------------------------- build parts
+
+function bucketOf(paint: number): string {
+  if (paint === GLASS) return 'M';
+  if (paint < 0) return 's' + paint;
+  return paint >= MT ? 'M' : 'D';
+}
+
+const _col = new THREE.Color();
+
+/** Geometry accumulator: one list of geometries per material bucket. */
+class Acc {
+  readonly buckets = new Map<string, THREE.BufferGeometry[]>();
+  tris = 0;
+  add(geo: THREE.BufferGeometry, paint: number, m?: THREE.Matrix4): this {
+    let g = geo.index ? geo.toNonIndexed() : geo;
+    if (g === geo) g = geo.clone();
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    g.clearGroups();
+    g.morphAttributes = {};
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (m) g.applyMatrix4(m);
+    worldUV(g, paint === CAMO ? 1.1 : 2);
+    const key = bucketOf(paint);
+    if (key === 'D' || key === 'M') {
+      const c = paint === GLASS ? K.glassC : paint >= MT ? paint - MT : paint;
+      _col.setHex(c);
+      const n = g.attributes.position.count;
+      const arr = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        arr[i * 3] = _col.r;
+        arr[i * 3 + 1] = _col.g;
+        arr[i * 3 + 2] = _col.b;
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    }
+    let list = this.buckets.get(key);
+    if (!list) this.buckets.set(key, (list = []));
+    list.push(g);
+    this.tris += g.attributes.position.count / 3;
+    return this;
+  }
+  merged(key: string): THREE.BufferGeometry | null {
+    const list = this.buckets.get(key);
+    if (!list || !list.length) return null;
+    return list.length === 1 ? list[0] : mergeGeometries(list, false);
+  }
+}
+
+class Part extends Acc {
+  constructor(
+    readonly b: Bld,
+    readonly g: THREE.Object3D,
+  ) {
+    super();
+  }
+  box(w: number, h: number, d: number, x: number, y: number, z: number, paint: number, rx = 0, ry = 0, rz = 0) {
+    return this.add(new THREE.BoxGeometry(w, h, d), paint, TR(x, y, z, rx, ry, rz));
+  }
+  cbox(w: number, h: number, d: number, c: number, x: number, y: number, z: number, paint: number, rx = 0, ry = 0, rz = 0) {
+    return this.add(gCBox(w, h, d, c), paint, TR(x, y, z, rx, ry, rz));
+  }
+  /** Cylinder along X centred at x (radius r1 at +X). */
+  cx(r1: number, r2: number, len: number, x: number, y: number, z: number, paint: number, seg = 12, open = false) {
+    return this.add(gCylX(r1, r2, len, seg, open), paint, TR(x, y, z));
+  }
+  /** Vertical cylinder standing on y (radius r1 at the top). */
+  cy(r1: number, r2: number, h: number, x: number, y: number, z: number, paint: number, seg = 12) {
+    return this.add(gCylY(r1, r2, h, seg), paint, TR(x, y + h / 2, z));
+  }
+  /** Cylinder along Z centred at z (radius r1 at +Z). */
+  cz(r1: number, r2: number, len: number, x: number, y: number, z: number, paint: number, seg = 12) {
+    return this.add(gCylZ(r1, r2, len, seg), paint, TR(x, y, z));
+  }
+  side(pts: P2[], depth: number, z: number, paint: number, bevel = 0) {
+    return this.add(gSide(pts, depth, bevel), paint, TR(0, 0, z));
+  }
+  plan(pts: P2[], h: number, y: number, paint: number, bevel = 0) {
+    return this.add(gPlan(pts, h, bevel), paint, TR(0, y, 0));
+  }
+  loft(rings: Ring[], paint: number, smooth = false, m?: THREE.Matrix4) {
+    return this.add(gLoft(rings, smooth), paint, m);
+  }
+  strut(a: V3, b: V3, r: number, paint: number, seg = 6) {
+    const va = new THREE.Vector3(...a);
+    const d = new THREE.Vector3(...b).sub(va);
+    const len = d.length();
+    if (len < 1e-5) return this;
+    const g = gCylY(r, r, len, seg);
+    const m = new THREE.Matrix4().compose(
+      new THREE.Vector3(a[0] + d.x / 2, a[1] + d.y / 2, a[2] + d.z / 2),
+      new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()),
+      new THREE.Vector3(1, 1, 1),
+    );
+    return this.add(g, paint, m);
+  }
+  sph(r: number, x: number, y: number, z: number, paint: number, ws = 10, hs = 7, sy = 1, half = false) {
+    return this.add(new THREE.SphereGeometry(r, ws, hs, 0, Math.PI * 2, 0, half ? Math.PI / 2 : Math.PI), paint, TR(x, y, z, 0, 0, 0, 1, sy, 1));
+  }
+  tube(pts: V3[], r: number, paint: number, seg = 5) {
+    const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p)));
+    return this.add(new THREE.TubeGeometry(curve, Math.max(4, pts.length * 4), r, seg, false), paint);
+  }
+}
+
+interface WheelEntry {
+  x: number;
+  y: number;
+  z: number;
+  r: number; // rolling radius
+  s: number; // geometry scale
+  flip: number; // 1 = outer face toward -Z
+  steer: number; // steering factor
+}
+
+type CustomAnim = (q: (tag: string) => THREE.Object3D[], m: Model) => ((s: AnimState) => void) | undefined;
+
+interface Tpl {
+  root: THREE.Group;
+  height: number;
+  size: { x: number; y: number; z: number };
+  glow: THREE.Material[];
+  emitters: Model['emitters'];
+  gauge?: number;
+  tw?: number;
+  wheeled: boolean;
+  custom?: CustomAnim;
+  bob: number;
+  stats: { tris: number; meshes: number };
+}
+
+class Bld {
+  readonly root = new THREE.Group();
+  readonly parts: Part[] = [];
+  readonly glow: THREE.Material[] = [];
+  readonly emitters: Model['emitters'] = [];
+  readonly camoOpts: ReturnType<typeof factionCamo>;
+  readonly base: number; // main paint colour (for vertex-coloured painted parts)
+  readonly baseD: number;
+  readonly team: number;
+  readonly f: string;
+  readonly body: Part;
+  readonly chassis: Part;
+  gauge?: number;
+  tw?: number;
+  wheeled = false;
+  bob = 1;
+  custom?: CustomAnim;
+  private mi = 0;
+  extraTris = 0;
+  constructor(
+    readonly style: ModelStyle,
+    readonly fog: FogOfWar | null,
+  ) {
+    this.f = style.faction;
+    const c = factionCamo(style.faction);
+    const dk = (x: number | undefined) => (x === undefined ? undefined : shade(x, 0.8));
+    this.camoOpts = { ...c, color: dk(c.color), color2: dk(c.color2), color3: dk(c.color3), color4: dk(c.color4), seed: 5 };
+    this.base = this.camoOpts.color ?? 0x8a8070;
+    this.baseD = shade(this.base, 0.72);
+    this.team = style.team;
+    this.body = this.part(this.root, 0, 0, 0, 'body');
+    this.chassis = this.body;
+  }
+  part(parent: Part | THREE.Object3D, x = 0, y = 0, z = 0, tag?: string): Part {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    if (tag) g.userData.tag = tag;
+    (parent instanceof Part ? parent.g : parent).add(g);
+    const p = new Part(this, g);
+    this.parts.push(p);
+    return p;
+  }
+  muzzle(p: Part | THREE.Object3D, x: number, y: number, z: number) {
+    const o = new THREE.Object3D();
+    o.position.set(x, y, z);
+    o.userData.tag = 'muzzle';
+    o.userData.mi = this.mi++;
+    (p instanceof Part ? p.g : p).add(o);
+    return o;
+  }
+  emit(x: number, y: number, z: number, kind: 'smoke' | 'steam' | 'spark' | 'fire' = 'smoke') {
+    this.emitters.push({ pos: new THREE.Vector3(x, y, z), kind });
+  }
+  material(key: string): THREE.Material {
+    const fog = this.fog;
+    let m: THREE.Material;
+    switch (key) {
+      case 'D':
+        m = cmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        break;
+      case 'M':
+        m = cmat('vmetal', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.72 }));
+        break;
+      case 's' + CAMO:
+        return pbrMaterial('camo', this.camoOpts, fog);
+      case 's' + LAMP:
+        m = glowMat(0xfff0d0, 2.4, fog);
+        break;
+      case 's' + TAIL:
+        m = glowMat(0xff2a12, 1.8, fog);
+        break;
+      case 's' + AMBER:
+        m = glowMat(0xffa21a, 3.2, fog);
+        break;
+      case 's' + LENS:
+        m = glowMat(0x7fe8ff, 3.2, fog, true);
+        break;
+      case 's' + EYE:
+        m = glowMat(0x58e0ff, 2.8, fog);
+        break;
+      case 's' + RED:
+        m = glowMat(0xff3020, 2.6, fog);
+        break;
+      default:
+        m = cmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+    }
+    if (key.startsWith('s') && key !== 's' + CAMO && !this.glow.includes(m)) this.glow.push(m);
+    return m;
+  }
+  /** Wheel set as one InstancedMesh (geometry: axle along Z, outer face toward +Z, centred on the origin). */
+  wheels(parent: Part | THREE.Object3D, geo: THREE.BufferGeometry, entries: WheelEntry[], tag = 'wheels') {
+    const im = new THREE.InstancedMesh(geo, this.material('D'), entries.length);
+    im.userData.tag = tag;
+    im.userData.wheels = entries;
+    im.castShadow = true;
+    im.receiveShadow = true;
+    setWheelMatrices(im, entries, 0, 0, 0);
+    im.computeBoundingSphere();
+    im.computeBoundingBox();
+    (parent instanceof Part ? parent.g : parent).add(im);
+    this.extraTris += (geo.attributes.position.count / 3) * entries.length;
+    return im;
+  }
+  finish(): Tpl {
+    let tris = this.extraTris;
+    let meshes = 0;
+    for (const p of this.parts) {
+      for (const key of p.buckets.keys()) {
+        const g = p.merged(key);
+        if (!g) continue;
+        g.computeBoundingSphere();
+        const mesh = new THREE.Mesh(g, this.material(key));
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        p.g.add(mesh);
+        tris += g.attributes.position.count / 3;
+      }
+    }
+    this.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) meshes++;
+    });
+    this.root.updateMatrixWorld(true);
+    // footprint without barrels and antennas (they would inflate selection / health bar placement)
+    const box = new THREE.Box3();
+    const skip = (o: THREE.Object3D | null): boolean => {
+      for (let q = o; q; q = q.parent) {
+        const tg = q.userData.tag;
+        if (typeof tg === 'string' && (tg.includes('recoil') || tg.includes('whip'))) return true;
+      }
+      return false;
+    };
+    this.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && !skip(o)) box.expandByObject(o, false);
+    });
+    if (box.isEmpty()) box.setFromObject(this.root);
+    const size = { x: box.max.x - box.min.x, y: box.max.y, z: box.max.z - box.min.z };
+    return {
+      root: this.root,
+      height: box.max.y,
+      size,
+      glow: this.glow,
+      emitters: this.emitters,
+      gauge: this.gauge,
+      tw: this.tw,
+      wheeled: this.wheeled,
+      custom: this.custom,
+      bob: this.bob,
+      stats: { tris: Math.round(tris), meshes },
+    };
+  }
+}
+
+// ------------------------------------------------------------ wheel matrices
+
+const _wm = new THREE.Matrix4();
+const _wq = new THREE.Quaternion();
+const _wq2 = new THREE.Quaternion();
+const _wp = new THREE.Vector3();
+const _ws = new THREE.Vector3();
+const AX_Y = new THREE.Vector3(0, 1, 0);
+const AX_Z = new THREE.Vector3(0, 0, 1);
+const Q_FLIP = new THREE.Quaternion().setFromAxisAngle(AX_Y, Math.PI);
+
+function setWheelMatrices(im: THREE.InstancedMesh, list: WheelEntry[], dL: number, dR: number, steer: number) {
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    const d = e.z >= 0 ? dR : dL;
+    _wq.setFromAxisAngle(AX_Y, steer * e.steer);
+    _wq2.setFromAxisAngle(AX_Z, -d / e.r);
+    _wq.multiply(_wq2);
+    if (e.flip) _wq.multiply(Q_FLIP);
+    _wm.compose(_wp.set(e.x, e.y, e.z), _wq, _ws.set(e.s, e.s, e.s));
+    im.setMatrixAt(i, _wm);
+  }
+  im.instanceMatrix.needsUpdate = true;
+}
+
+// ------------------------------------------------------------ track belts
+
+interface Circ {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/** Closed belt centre line around the wheels (convex hull of circles), CCW in (x, y). */
+function beltLoop(circles: Circ[], bt: number, sag: number): { p: P2[]; n: P2[]; s: number[]; len: number } {
+  const pts: P2[] = [];
+  for (const c of circles) {
+    const r = c.r + bt / 2;
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      pts.push([c.x + Math.cos(a) * r, c.y + Math.sin(a) * r]);
+    }
+  }
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: P2, a: P2, b: P2) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: P2[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 1e-9) lower.pop();
+    lower.push(p);
+  }
+  const upper: P2[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 1e-9) upper.pop();
+    upper.push(p);
+  }
+  upper.pop();
+  lower.pop();
+  let hull = lower.concat(upper); // CCW
+  // subdivide long straight runs (for sag and smoother shading)
+  const sub: P2[] = [];
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i];
+    const b = hull[(i + 1) % hull.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const k = sag > 0 ? Math.max(1, Math.ceil(l / 0.025)) : 1;
+    for (let j = 0; j < k; j++) sub.push([a[0] + ((b[0] - a[0]) * j) / k, a[1] + ((b[1] - a[1]) * j) / k]);
+  }
+  hull = sub;
+  if (sag > 0) {
+    // supports along the top run: circles whose top lies on the hull
+    const yTop = Math.max(...circles.map((c) => c.y + c.r));
+    const sup = circles.filter((c) => c.y + c.r > yTop - 0.06).sort((a, b) => a.x - b.x);
+    hull = hull.map(([x, y]) => {
+      const cy = circles.reduce((m, c) => Math.max(m, c.y), 0);
+      if (y < cy) return [x, y] as P2;
+      for (let i = 0; i + 1 < sup.length; i++) {
+        const a = sup[i].x + sup[i].r * 0.6;
+        const b = sup[i + 1].x - sup[i + 1].r * 0.6;
+        if (x > a && x < b) {
+          const t = (x - a) / (b - a);
+          return [x, y - sag * Math.sin(Math.PI * t) * Math.min(1, (b - a) / 0.25)] as P2;
+        }
+      }
+      return [x, y] as P2;
+    });
+  }
+  const n = hull.length;
+  const nrm: P2[] = [];
+  const s: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const a = hull[(i - 1 + n) % n];
+    const b = hull[(i + 1) % n];
+    let tx = b[0] - a[0];
+    let ty = b[1] - a[1];
+    const l = Math.hypot(tx, ty) || 1;
+    tx /= l;
+    ty /= l;
+    nrm.push([ty, -tx]);
+    s.push(acc);
+    const c = hull[(i + 1) % n];
+    acc += Math.hypot(c[0] - hull[i][0], c[1] - hull[i][1]);
+  }
+  return { p: hull, n: nrm, s, len: acc };
+}
+
+/** Swept track belt: outer tread surface, inner surface and both link-end sides. U = distance along the belt * k. */
+function beltGeo(loop: ReturnType<typeof beltLoop>, z0: number, z1: number, bt: number, k: number): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  const N = loop.p.length;
+  const h = bt / 2;
+  const tri = (a: number[], b: number[], c: number[], n: V3, want: V3) => {
+    // a/b/c = [x,y,z,u,v]
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const uz = b[2] - a[2];
+    const vx = c[0] - a[0];
+    const vy = c[1] - a[1];
+    const vz = c[2] - a[2];
+    const cx = uy * vz - uz * vy;
+    const cy = uz * vx - ux * vz;
+    const cz = ux * vy - uy * vx;
+    const ord = cx * want[0] + cy * want[1] + cz * want[2] >= 0 ? [a, b, c] : [a, c, b];
+    for (const p of ord) {
+      pos.push(p[0], p[1], p[2]);
+      nor.push(n[0], n[1], n[2]);
+      uv.push(p[3], p[4]);
+    }
+  };
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    const si = loop.s[i] * k;
+    const sj = (j === 0 ? loop.len : loop.s[j]) * k;
+    const [px, py] = loop.p[i];
+    const [qx, qy] = loop.p[j];
+    const [nx, ny] = loop.n[i];
+    const [mx, my] = loop.n[j];
+    const oi = [px + nx * h, py + ny * h];
+    const oj = [qx + mx * h, qy + my * h];
+    const ii = [px - nx * h, py - ny * h];
+    const ij = [qx - mx * h, qy - my * h];
+    const fx = (nx + mx) / 2;
+    const fy = (ny + my) / 2;
+    // outer
+    const A = [oi[0], oi[1], z0, si, 0];
+    const B = [oj[0], oj[1], z0, sj, 0];
+    const C = [oj[0], oj[1], z1, sj, 1];
+    const D = [oi[0], oi[1], z1, si, 1];
+    tri(A, B, C, [fx, fy, 0], [fx, fy, 0]);
+    tri(A, C, D, [fx, fy, 0], [fx, fy, 0]);
+    // inner
+    const E = [ii[0], ii[1], z0, si, 0];
+    const F = [ij[0], ij[1], z0, sj, 0];
+    const G = [ij[0], ij[1], z1, sj, 1];
+    const H = [ii[0], ii[1], z1, si, 1];
+    tri(E, F, G, [-fx, -fy, 0], [-fx, -fy, 0]);
+    tri(E, G, H, [-fx, -fy, 0], [-fx, -fy, 0]);
+    // sides (link ends)
+    for (const [z, sz] of [
+      [z1, 1],
+      [z0, -1],
+    ] as const) {
+      const a = [oi[0], oi[1], z, si, 0.02];
+      const b = [oj[0], oj[1], z, sj, 0.02];
+      const c = [ij[0], ij[1], z, sj, 0.14];
+      const d = [ii[0], ii[1], z, si, 0.14];
+      tri(a, b, c, [0, 0, sz], [0, 0, sz]);
+      tri(a, c, d, [0, 0, sz], [0, 0, sz]);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.computeBoundingSphere();
+  return g;
+}
+
+function treadBase(fog: FogOfWar | null) {
+  return pbrMaterial('tread', { color: 0x3a3936, divisions: 6, grime: 0.55, seed: 3 }, fog);
+}
+
+function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
+  const m = new THREE.MeshStandardMaterial({
+    map: base.map ? base.map.clone() : null,
+    normalMap: base.normalMap ? base.normalMap.clone() : null,
+    roughnessMap: base.roughnessMap ? base.roughnessMap.clone() : null,
+    roughness: base.roughness,
+    metalness: base.metalness,
+    normalScale: base.normalScale.clone(),
+  });
+  if (fog) fog.apply(m);
+  return m;
+}
+
+// ------------------------------------------------------------- wheel styles
+
+type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv';
+
+const gDisc = (r: number, seg = 12) => new THREE.CircleGeometry(r, seg);
+const gRing = (r0: number, r1: number, seg = 14) => new THREE.RingGeometry(r0, r1, seg, 1);
+
+/** Road wheel: axle along Z, outer face toward +Z, centred on the origin (low poly: faces are discs). */
+function roadWheelGeo(b: Bld, r: number, w: number, style: WheelStyle): THREE.BufferGeometry {
+  const a = new Acc();
+  const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.8) : shade(b.base, 0.9);
+  const hub = 0x3e4144;
+  const zf = w / 2;
+  a.add(gCylZ(r, r, w, 14, true), K.rubber);
+  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, zf));
+  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, -zf, 0, Math.PI, 0));
+  a.add(gCylZ(r * 0.78, r * 0.8, 0.008, 14, true), disc, TR(0, 0, zf - 0.004));
+  a.add(gDisc(r * 0.78, 14), disc, TR(0, 0, zf - 0.004 + 0.004));
+  if (style === 'sov') {
+    for (let i = 0; i < 8; i++) {
+      const t = (i / 8) * Math.PI * 2;
+      a.add(new THREE.PlaneGeometry(r * 0.4, r * 0.08), shade(disc, 0.55), TR(Math.cos(t) * r * 0.55, Math.sin(t) * r * 0.55, zf + 0.002, 0, 0, t));
+    }
+  } else if (style === 't80') {
+    a.add(gRing(r * 0.5, r * 0.6, 14), shade(disc, 0.7), TR(0, 0, zf + 0.001));
+    for (let i = 0; i < 6; i++) {
+      const t = (i / 6) * Math.PI * 2;
+      a.add(gDisc(r * 0.08, 5), K.dark, TR(Math.cos(t) * r * 0.38, Math.sin(t) * r * 0.38, zf + 0.002));
+    }
+  } else {
+    const holes = style === 'merk' ? 0 : style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : 6;
+    for (let i = 0; i < holes; i++) {
+      const t = (i / holes) * Math.PI * 2;
+      a.add(gDisc(r * 0.11, 6), K.dark, TR(Math.cos(t) * r * 0.5, Math.sin(t) * r * 0.5, zf + 0.002));
+    }
+    if (style === 'merk') {
+      for (let i = 0; i < 6; i++) {
+        const t = (i / 6) * Math.PI * 2;
+        a.add(new THREE.PlaneGeometry(r * 0.46, r * 0.08), shade(disc, 0.6), TR(Math.cos(t) * r * 0.45, Math.sin(t) * r * 0.45, zf + 0.002, 0, 0, t));
+      }
+    }
+  }
+  a.add(gCylZ(r * 0.22, r * 0.3, 0.016, 8), hub, TR(0, 0, zf + 0.006));
+  a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.06), 0x8a8e90, TR(0, 0, zf + 0.0145));
+  return a.merged('D')!;
+}
+
+/** Drive sprocket: toothed rim + hub. */
+function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeometry {
+  const a = new Acc();
+  const c = 0x3a3c3c;
+  const zf = w / 2;
+  a.add(gCylZ(r * 0.84, r * 0.84, w * 0.9, teeth, true), c);
+  for (let i = 0; i < teeth; i++) {
+    const t = (i / teeth) * Math.PI * 2;
+    a.add(new THREE.BoxGeometry(r * 0.26, r * 0.2, w * 0.9), 0x47473f, TR(Math.cos(t) * r * 0.9, Math.sin(t) * r * 0.9, 0, 0, 0, t));
+  }
+  a.add(gDisc(r * 0.84, teeth), shade(b.base, 0.75), TR(0, 0, zf * 0.9));
+  a.add(gCylZ(r * 0.3, r * 0.42, 0.02, 8), 0x3e4144, TR(0, 0, zf * 0.9 + 0.008));
+  for (let i = 0; i < 6; i++) {
+    const t = (i / 6) * Math.PI * 2 + 0.5;
+    a.add(gDisc(r * 0.09, 5), K.dark, TR(Math.cos(t) * r * 0.6, Math.sin(t) * r * 0.6, zf * 0.9 + 0.001));
+  }
+  return a.merged('D')!;
+}
+
+/** Truck / wheeled AFV tyre with hub (axle along Z, outer face +Z). */
+function tyreGeo(b: Bld, r: number, w: number, military = true): THREE.BufferGeometry {
+  const a = new Acc();
+  a.add(gCylZ(r, r, w, 16, true), K.rubber);
+  a.add(gRing(r * 0.62, r, 16), 0x202122, TR(0, 0, w / 2));
+  a.add(gRing(r * 0.62, r, 16), 0x202122, TR(0, 0, -w / 2, 0, Math.PI, 0));
+  // tread lugs on the rolling surface (chevrons, alternate sides)
+  const lugs = 12;
+  for (let i = 0; i < lugs; i++) {
+    const t = (i / lugs) * Math.PI * 2;
+    const zz = (i % 2 ? 1 : -1) * w * 0.2;
+    a.add(new THREE.BoxGeometry(r * 0.16, r * 0.09, w * 0.5), 0x252627, TR(Math.cos(t) * r, Math.sin(t) * r, zz, 0, 0, t));
+  }
+  const hubC = military ? shade(b.base, 0.85) : 0x9a9a96;
+  a.add(gCylZ(r * 0.62, r * 0.62, 0.01, 14, true), hubC, TR(0, 0, w / 2 - 0.004));
+  a.add(gDisc(r * 0.62, 14), hubC, TR(0, 0, w / 2 - 0.002));
+  a.add(gCylZ(r * 0.24, r * 0.32, 0.024, 8), 0x3a3c3e, TR(0, 0, w / 2 + 0.008));
+  for (let i = 0; i < 8; i++) {
+    const t = (i / 8) * Math.PI * 2;
+    a.add(gDisc(r * 0.05, 5), 0x9a9ea0, TR(Math.cos(t) * r * 0.44, Math.sin(t) * r * 0.44, w / 2 - 0.001));
+  }
+  // CTIS valve line (makes rotation readable)
+  a.add(new THREE.BoxGeometry(r * 0.5, r * 0.07, 0.01), 0x2a2a2a, TR(r * 0.3, 0, w / 2 + 0.02));
+  return a.merged('D')!;
+}
+
+// ---------------------------------------------------------- running gear
+
+interface TrackSpec {
+  wheels: number[]; // road wheel x positions
+  rw: number; // road wheel radius
+  spr: V3; // sprocket x, y, r
+  idl: V3; // idler x, y, r
+  rollers?: V3[]; // return rollers x, y, r
+  gauge: number; // z of the belt centre line
+  tw: number; // belt width
+  bt?: number; // belt thickness
+  sag?: number;
+  style: WheelStyle;
+  teeth?: number;
+  arms?: boolean; // visible suspension arms
+}
+
+function running(b: Bld, t: TrackSpec) {
+  const bt = t.bt ?? 0.016;
+  const wy = t.rw + bt;
+  const circles: Circ[] = t.wheels.map((x) => ({ x, y: wy, r: t.rw }));
+  circles.push({ x: t.spr[0], y: t.spr[1], r: t.spr[2] });
+  circles.push({ x: t.idl[0], y: t.idl[1], r: t.idl[2] });
+  for (const r of t.rollers ?? []) circles.push({ x: r[0], y: r[1], r: r[2] });
+  const loop = beltLoop(circles, bt, t.sag ?? 0);
+  const k = Math.max(1, Math.round(loop.len * TREAD_K)) / loop.len;
+  const base = treadBase(b.fog);
+  for (const side of [-1, 1]) {
+    const zc = side * t.gauge;
+    const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
+    const mesh = new THREE.Mesh(geo, base);
+    mesh.userData.tag = 'belt';
+    mesh.userData.side = side;
+    mesh.userData.k = k;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    b.root.add(mesh);
+    b.extraTris += geo.attributes.position.count / 3;
+  }
+  // road wheels + idlers share one instanced geometry
+  const ww = t.tw * 0.86;
+  const rwGeo = roadWheelGeo(b, t.rw, ww, t.style);
+  const list: WheelEntry[] = [];
+  for (const side of [-1, 1]) {
+    const z = side * t.gauge;
+    for (const x of t.wheels) list.push({ x, y: wy, z, r: t.rw, s: 1, flip: side < 0 ? 1 : 0, steer: 0 });
+    list.push({ x: t.idl[0], y: t.idl[1], z, r: t.idl[2], s: t.idl[2] / t.rw, flip: side < 0 ? 1 : 0, steer: 0 });
+  }
+  b.wheels(b.root, rwGeo, list);
+  const spGeo = sprocketGeo(b, t.spr[2], ww, t.teeth ?? 12);
+  b.wheels(
+    b.root,
+    spGeo,
+    [-1, 1].map((side) => ({ x: t.spr[0], y: t.spr[1], z: side * t.gauge, r: t.spr[2], s: 1, flip: side < 0 ? 1 : 0, steer: 0 })),
+    'wheels',
+  );
+  // return rollers (static) and suspension arms / hubs
+  const c = b.chassis;
+  for (const side of [-1, 1]) {
+    for (const r of t.rollers ?? []) {
+      c.cz(r[2], r[2], t.tw * 0.5, r[0], r[1], side * t.gauge, K.rubber, 10);
+      c.cz(r[2] * 0.5, r[2] * 0.5, t.tw * 0.55, r[0], r[1], side * t.gauge, 0x3e4144, 8);
+    }
+    if (t.arms !== false) {
+      for (const x of t.wheels) {
+        const zi = side * (t.gauge - t.tw / 2 - 0.012);
+        c.box(t.rw * 1.3, 0.018, 0.016, x + t.rw * 0.55, wy + 0.012, zi, K.dark, 0, 0, 0.35);
+        c.box(0.02, 0.02, 0.02, x + t.rw * 1.15, wy + t.rw * 0.35, zi, K.dark);
+      }
+    }
+  }
+  b.gauge = t.gauge;
+  b.tw = t.tw;
+}
+
+/** Evenly spaced road wheel positions. */
+function evenly(n: number, x0: number, x1: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(x0 + ((x1 - x0) * i) / Math.max(1, n - 1));
+  return out;
+}
+
+interface Axle {
+  x: number;
+  steer: number;
+}
+
+/** Wheeled running gear: one InstancedMesh for all tyres; returns the axle height. */
+function wheelSet(b: Bld, axles: Axle[], r: number, w: number, zc: number, military = true) {
+  const geo = tyreGeo(b, r, w, military);
+  const list: WheelEntry[] = [];
+  for (const a of axles) for (const side of [-1, 1]) list.push({ x: a.x, y: r, z: side * zc, r, s: 1, flip: side < 0 ? 1 : 0, steer: a.steer });
+  b.wheels(b.root, geo, list);
+  // axles / differentials / suspension (static)
+  const c = b.chassis;
+  for (const a of axles) {
+    c.cz(0.014, 0.014, zc * 2 - w, a.x, r, 0, K.dark, 6);
+    c.box(0.05, 0.04, 0.06, a.x, r, 0, K.dark);
+    for (const side of [-1, 1]) c.box(0.06, 0.012, 0.03, a.x, r + 0.03, side * (zc - w / 2 - 0.02), K.dark);
+  }
+  b.gauge = zc;
+  b.tw = w;
+  b.wheeled = true;
+  return r;
+}
+
+// ------------------------------------------------------------ common details
+
+/** Headlight cluster (housing + lamp glow) facing +X at (x,y,z). */
+function headlight(p: Part, x: number, y: number, z: number, s = 1) {
+  p.box(0.022 * s, 0.026 * s, 0.04 * s, x - 0.006, y, z, K.dark);
+  p.box(0.006, 0.016 * s, 0.026 * s, x + 0.006, y, z, LAMP);
+  p.box(0.012, 0.004, 0.044 * s, x + 0.002, y + 0.015 * s, z, K.dark);
+}
+function taillight(p: Part, x: number, y: number, z: number) {
+  p.box(0.012, 0.018, 0.026, x, y, z, K.dark);
+  p.box(0.004, 0.012, 0.018, x - 0.007, y, z, 0xb02018);
+}
+
+/** Smoke grenade discharger bank: n tubes in a fan, facing roughly +X and outward. */
+function smokeBank(p: Part, x: number, y: number, z: number, side: number, n = 4, yaw = 0.5, r = 0.009) {
+  p.box(0.03, 0.012, n * r * 2.3, x - 0.01, y - r * 1.1, z, K.dark, 0, side * yaw, 0);
+  for (let i = 0; i < n; i++) {
+    const t = i / Math.max(1, n - 1) - 0.5;
+    const zz = z + t * n * r * 2.2;
+    const ry = side * (yaw + t * 0.5);
+    const m = TR(x, y + Math.abs(t) * 0.004, zz, 0, -ry, 0.45);
+    p.add(gCylX(r, r, 0.026, 6), mt(K.gun), m);
+  }
+}
+
+/** Machine gun (receiver, barrel, ammo box) pointing +X, receiver centre at (x,y,z). */
+function mgun(p: Part, x: number, y: number, z: number, len = 0.1, r = 0.0045, heavy = false) {
+  p.box(0.05, 0.016, 0.016, x, y, z, mt(K.gun));
+  p.cx(r, r, len, x + 0.025 + len / 2, y + 0.002, z, mt(K.dark), 6);
+  if (heavy) p.cx(r * 1.7, r * 1.7, len * 0.2, x + 0.03 + len * 0.15, y + 0.002, z, mt(K.dark), 6);
+  p.box(0.018, 0.02, 0.022, x - 0.004, y - 0.012, z + 0.016, K.olive);
+  p.box(0.018, 0.008, 0.006, x - 0.026, y - 0.004, z, mt(K.gun));
+}
+
+/** Remote weapon station (CROWS / Samson style): base, cradle, MG, sight. Returns barrel tip x. */
+function rws(p: Part, x: number, y: number, z: number, s = 1, heavy = true) {
+  p.cy(0.026 * s, 0.03 * s, 0.014 * s, x, y, z, K.dark, 10);
+  p.cbox(0.034 * s, 0.03 * s, 0.05 * s, 0.004, x, y + 0.03 * s, z, CAMO);
+  p.box(0.03 * s, 0.026 * s, 0.022 * s, x + 0.01 * s, y + 0.034 * s, z - 0.036 * s, mixc(0x404040, 0x000000, 0.1));
+  p.box(0.004, 0.012 * s, 0.014 * s, x + 0.026 * s, y + 0.036 * s, z - 0.036 * s, GLASS);
+  p.box(0.06 * s, 0.018 * s, 0.018 * s, x + 0.005 * s, y + 0.034 * s, z + 0.012 * s, mt(K.gun));
+  const len = (heavy ? 0.12 : 0.08) * s;
+  p.cx(0.005 * s, 0.005 * s, len, x + 0.035 * s + len / 2, y + 0.036 * s, z + 0.012 * s, mt(K.dark), 6);
+  if (heavy) p.cx(0.008 * s, 0.008 * s, 0.03 * s, x + 0.045 * s, y + 0.036 * s, z + 0.012 * s, mt(K.dark), 6);
+  p.box(0.024 * s, 0.022 * s, 0.02 * s, x - 0.006 * s, y + 0.026 * s, z + 0.036 * s, K.olive);
+  return x + 0.035 * s + len;
+}
+
+/** Hatch: low cylinder with a hinge and handle. */
+function hatch(p: Part, x: number, y: number, z: number, r = 0.03, paint = CAMO) {
+  p.cy(r, r * 1.04, 0.008, x, y, z, paint, 12);
+  p.box(0.01, 0.006, r * 1.2, x - r * 0.9, y + 0.006, z, K.dark);
+  p.box(r * 0.8, 0.004, 0.004, x + r * 0.1, y + 0.011, z, mt(K.steel));
+}
+
+/** Periscope block (vision block) facing +X with glass. */
+function periscope(p: Part, x: number, y: number, z: number, ry = 0, w = 0.022) {
+  p.box(0.014, 0.012, w, x, y + 0.006, z, K.dark, 0, ry, 0);
+  p.box(0.004, 0.007, w * 0.8, x + Math.cos(ry) * 0.007, y + 0.007, z - Math.sin(ry) * 0.007, GLASS, 0, ry, 0);
+}
+
+/** Panoramic sight head on a mast (commander's independent sight). */
+function panoSight(p: Part, x: number, y: number, z: number, h = 0.04, s = 1) {
+  p.cy(0.014 * s, 0.018 * s, h, x, y, z, K.dark, 10);
+  p.cbox(0.044 * s, 0.034 * s, 0.04 * s, 0.006 * s, x, y + h + 0.017 * s, z, CAMO);
+  p.box(0.005, 0.02 * s, 0.026 * s, x + 0.022 * s, y + h + 0.018 * s, z, GLASS);
+  p.box(0.046 * s, 0.006 * s, 0.042 * s, x, y + h + 0.036 * s, z, K.dark);
+}
+
+/** Toolbox / stowage bin. */
+function bin(p: Part, w: number, h: number, d: number, x: number, y: number, z: number, paint: number = CAMO, ry = 0) {
+  p.cbox(w, h, d, Math.min(0.004, h * 0.2), x, y + h / 2, z, paint, 0, ry, 0);
+  p.box(w * 1.01, 0.003, d * 1.01, x, y + h * 0.82, z, K.dark, 0, ry, 0);
+  p.box(0.006, 0.006, 0.006, x + w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
+  p.box(0.006, 0.006, 0.006, x - w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
+}
+
+/** Jerry can standing on y, long side along X. */
+function jerry(p: Part, x: number, y: number, z: number, c = 0x4c5434) {
+  p.cbox(0.032, 0.046, 0.016, 0.003, x, y + 0.023, z, c);
+  p.box(0.01, 0.006, 0.006, x + 0.008, y + 0.049, z, c);
+}
+
+/** Tow cable along a polyline with eye loops. */
+function cable(p: Part, pts: V3[], r = 0.0045) {
+  p.tube(pts, r, mt(0x3c3a36), 5);
+  for (const e of [pts[0], pts[pts.length - 1]]) p.add(new THREE.TorusGeometry(r * 2.4, r * 0.8, 4, 8), mt(0x3c3a36), TR(e[0], e[1], e[2], 0, 0, 0));
+}
+
+/** Engine deck grille: dark recess + slats along Z. */
+function grille(p: Part, x: number, y: number, z: number, lx: number, lz: number, n = 6, paint: number = CAMO) {
+  p.box(lx, 0.004, lz, x, y + 0.001, z, K.black);
+  for (let i = 0; i < n; i++) p.box(0.006, 0.006, lz * 0.96, x - lx / 2 + ((i + 0.5) * lx) / n, y + 0.004, z, paint);
+  p.box(lx + 0.008, 0.006, 0.006, x, y + 0.003, z - lz / 2, paint);
+  p.box(lx + 0.008, 0.006, 0.006, x, y + 0.003, z + lz / 2, paint);
+}
+
+/** Team colour identification panel (thin plate) on a surface. */
+function teamPanel(p: Part, w: number, h: number, d: number, x: number, y: number, z: number, team: number, rx = 0, ry = 0, rz = 0) {
+  p.box(w, h, d, x, y, z, team, rx, ry, rz);
+}
+
+/** Pair of whip antennas on one pivot (sways with speed). */
+function antennas(b: Bld, parent: Part, x: number, y: number, zs: number[], h: number) {
+  const ap = b.part(parent, x, y, 0, 'whip');
+  for (const z of zs) {
+    ap.cy(0.008, 0.01, 0.016, 0, 0, z, K.dark, 6);
+    ap.cy(0.0022, 0.003, h, 0, 0.016, z, K.black, 4);
+    ap.sph(0.004, 0, 0.016 + h, z, K.black, 4, 3);
+  }
+  return ap;
+}
+
+/** Bolt row (tiny cylinders) along a vector. */
+function bolts(p: Part, a: V3, d: V3, n: number, axis: 'x' | 'y' | 'z' = 'y', r = 0.0035) {
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    const g = axis === 'x' ? gCylX(r, r, 0.006, 5) : axis === 'z' ? gCylZ(r, r, 0.006, 5) : gCylY(r, r, 0.006, 5);
+    p.add(g, mt(0x5a5e60), TR(a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t));
+  }
+}
+
+/** Grid of ERA / armour bricks on a plane: m maps plane (u = X, v = Z, normal = Y). */
+function bricks(p: Part, m: THREE.Matrix4, u0: number, u1: number, v0: number, v1: number, nu: number, nv: number, th: number, gap: number, paint: number = CAMO, stagger = false) {
+  const du = (u1 - u0) / nu;
+  const dv = (v1 - v0) / nv;
+  for (let i = 0; i < nu; i++) {
+    for (let j = 0; j < nv; j++) {
+      const off = stagger && i % 2 ? dv * 0.5 : 0;
+      const v = v0 + dv * (j + 0.5) + off;
+      if (v + dv / 2 > v1 + 1e-6) continue;
+      const g = new THREE.BoxGeometry(du - gap, th, dv - gap);
+      p.add(g, paint, m.clone().multiply(TR(u0 + du * (i + 0.5), th / 2, v)));
+    }
+  }
+}
+
+/** Slat armour panel: vertical bars between y0..y1 along a line in plan (x0,z0)->(x1,z1). */
+function slats(p: Part, a: P2, c: P2, y0: number, y1: number, n: number, paint = 0x3a3d32) {
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const x = a[0] + (c[0] - a[0]) * t;
+    const z = a[1] + (c[1] - a[1]) * t;
+    p.box(0.004, y1 - y0, 0.004, x, (y0 + y1) / 2, z, paint);
+  }
+  for (const y of [y0 + 0.004, (y0 + y1) / 2, y1 - 0.003]) {
+    const l = Math.hypot(c[0] - a[0], c[1] - a[1]);
+    p.box(l, 0.004, 0.003, (a[0] + c[0]) / 2, y, (a[1] + c[1]) / 2, paint, 0, -Math.atan2(c[1] - a[1], c[0] - a[0]), 0);
+  }
+}
+
+// ----------------------------------------------------------- main guns
+
+interface GunOpt {
+  len: number; // barrel length from the trunnion
+  r: number; // barrel radius at the muzzle
+  sleeve?: number; // thermal sleeve paint (default camo) or 0 for none
+  fume?: number; // fume extractor position (0..1 along the barrel), <0 for none
+  brake?: 'none' | 'arty' | 'small';
+  mrs?: boolean; // muzzle reference sensor
+  mantlet?: [number, number, number]; // mantlet box size
+  elev?: number;
+  sleevePaint?: number;
+}
+
+/** Main gun: fixed pivot (elevation) + recoil group with barrel, muzzle at the tip. */
+function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) {
+  const piv = b.part(tur, x, y, z);
+  piv.g.rotation.z = o.elev ?? 0.02;
+  if (o.mantlet) {
+    const [mw, mh, md] = o.mantlet;
+    tur.cbox(mw, mh, md, 0.008, x - mw / 2 + 0.01, y, z, CAMO);
+  }
+  const rec = b.part(piv, 0, 0, 0, 'recoil');
+  const L = o.len;
+  const r = o.r;
+  const sp = o.sleevePaint ?? CAMO;
+  rec.cx(r * 1.35, r * 1.5, L * 0.3, L * 0.15, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
+  rec.cx(r * 1.15, r * 1.3, L * 0.35, L * 0.47, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
+  rec.cx(r, r * 1.12, L * 0.36, L * 0.81, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
+  // sleeve clamps
+  for (const t of [0.3, 0.64]) rec.cx(r * 1.4, r * 1.4, 0.008, L * t, 0, 0, mt(K.gun), 12);
+  const fume = o.fume ?? 0.45;
+  if (fume >= 0) rec.cx(r * 1.75, r * 1.75, L * 0.16, L * fume, 0, 0, sp, 14);
+  if (fume >= 0) {
+    rec.cx(r * 1.3, r * 1.75, L * 0.03, L * fume - L * 0.095, 0, 0, sp, 14);
+    rec.cx(r * 1.75, r * 1.3, L * 0.03, L * fume + L * 0.095, 0, 0, sp, 14);
+  }
+  if (o.brake === 'arty') {
+    rec.cbox(L * 0.07, r * 3.2, r * 3.6, 0.004, L + L * 0.02, 0, 0, mt(K.gun));
+    rec.box(L * 0.05, r * 2.4, r * 3.7, L + L * 0.02, 0, 0, K.black);
+  } else if (o.brake === 'small') {
+    rec.cx(r * 1.6, r * 1.6, L * 0.06, L - L * 0.02, 0, 0, mt(K.gun), 10);
+  } else {
+    rec.cx(r * 1.08, r * 1.08, 0.014, L - 0.007, 0, 0, mt(K.gun), 12);
+  }
+  rec.cx(r * 0.62, r * 0.62, 0.004, L + (o.brake === 'arty' ? L * 0.055 : 0.0015), 0, 0, mt(K.black), 10);
+  if (o.mrs) {
+    rec.box(0.022, 0.01, 0.012, L - 0.02, r * 1.2 + 0.004, 0, mt(K.gun));
+    rec.box(0.008, 0.008, 0.008, L * 0.55, r * 1.5 + 0.003, 0, mt(K.gun));
+  }
+  b.muzzle(rec, L + (o.brake === 'arty' ? L * 0.06 : 0.012), 0, 0);
+  return { piv, rec };
+}
+
+/** Autocannon / small gun barrel pointing +X in a recoil group, muzzle at the tip. */
+function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: number, r: number, opts: { brake?: boolean; shroud?: number; paint?: number } = {}) {
+  const rec = b.part(parent, x, y, z, 'recoil');
+  const paint = opts.paint ?? mt(K.gun);
+  rec.cx(r, r * 1.15, len, len / 2, 0, 0, paint, 8);
+  if (opts.shroud) rec.cx(r * 1.9, r * 1.9, len * opts.shroud, (len * opts.shroud) / 2, 0, 0, paint, 10);
+  if (opts.brake !== false) rec.cx(r * 1.7, r * 1.6, len * 0.09, len - len * 0.045, 0, 0, paint, 8);
+  rec.cx(r * 0.55, r * 0.55, 0.003, len + 0.001, 0, 0, mt(K.black), 6);
+  b.muzzle(rec, len + 0.006, 0, 0);
+  return rec;
+}
+
+// ------------------------------------------------------------- instancing
+
+const templates = new Map<string, Tpl>();
+
+function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld) => void): Model {
+  const ck = `${key}|${style.faction}|${style.team}|${fogId(fog)}`;
+  let t = templates.get(ck);
+  if (!t) {
+    const b = new Bld(style, fog);
+    fn(b);
+    t = b.finish();
+    templates.set(ck, t);
+  }
+  return instantiate(t, fog);
+}
+
+function instantiate(t: Tpl, fog: FogOfWar | null): Model {
+  const root = t.root.clone(true);
+  const tags = new Map<string, THREE.Object3D[]>();
+  root.traverse((o) => {
+    const tg = o.userData.tag;
+    if (typeof tg === 'string') {
+      for (const name of tg.split(' ')) {
+        let l = tags.get(name);
+        if (!l) tags.set(name, (l = []));
+        l.push(o);
+      }
+    }
+  });
+  const q = (tag: string) => tags.get(tag) ?? [];
+  const muzzles = q('muzzle')
+    .slice()
+    .sort((a, b) => (a.userData.mi as number) - (b.userData.mi as number));
+  const belts = q('belt') as THREE.Mesh[];
+  const beltMats: THREE.MeshStandardMaterial[] = [];
+  for (const m of belts) {
+    const mat = treadInstance(m.material as THREE.MeshStandardMaterial, fog);
+    m.material = mat;
+    beltMats.push(mat);
+  }
+  const model: Model = {
+    root,
+    turret: q('turret')[0],
+    muzzles,
+    height: t.height,
+    size: { ...t.size },
+    glow: t.glow,
+    emitters: t.emitters.map((e) => ({ pos: e.pos.clone(), kind: e.kind })),
+    recoil: q('recoil'),
+    trackGauge: t.gauge,
+    trackWidth: t.tw,
+    wheeled: t.wheeled,
+  };
+  if (!model.recoil!.length) delete model.recoil;
+  const wheelSets = q('wheels') as THREE.InstancedMesh[];
+  const body = q('body')[0];
+  const bodyY = body ? body.position.y : 0;
+  const whips = q('whip');
+  const spins = q('spin');
+  const custom = t.custom ? t.custom(q, model) : undefined;
+  const ph = Math.random() * 100;
+  let turnAcc = 0;
+  let lastSpeed = 0;
+  let acc = 0;
+  let pitch = 0;
+  let steer = 0;
+  let lastD = NaN;
+  let lastT = NaN;
+  const gauge = t.gauge ?? 0.25;
+  model.anim = (s: AnimState) => {
+    const dt = s.dt;
+    if (dt > 0) {
+      turnAcc += s.turn * dt;
+      const a = (s.speed - lastSpeed) / Math.max(dt, 1e-3);
+      lastSpeed = s.speed;
+      acc += (clamp(a, -8, 8) - acc) * Math.min(1, dt * 5);
+      steer += (clamp(s.turn * 0.9, -0.45, 0.45) - steer) * Math.min(1, dt * 6);
+    }
+    const dL = s.dist - turnAcc * gauge;
+    const dR = s.dist + turnAcc * gauge;
+    if (dL !== lastD || dR !== lastT || Math.abs(steer) > 1e-4) {
+      lastD = dL;
+      lastT = dR;
+      for (const w of wheelSets) setWheelMatrices(w, w.userData.wheels as WheelEntry[], dL, dR, steer);
+      for (let i = 0; i < belts.length; i++) {
+        const k = belts[i].userData.k as number;
+        const d = (belts[i].userData.side as number) < 0 ? dL : dR;
+        const off = (d * k) % 1;
+        const mat = beltMats[i];
+        if (mat.map) mat.map.offset.x = off;
+        if (mat.normalMap) mat.normalMap.offset.x = off;
+        if (mat.roughnessMap) mat.roughnessMap.offset.x = off;
+      }
+    }
+    if (body) {
+      const sp = Math.min(1, s.speed / 1.5);
+      const target = clamp(acc * 0.012, -0.035, 0.035) * t.bob;
+      pitch += (target - pitch) * Math.min(1, dt * 8);
+      body.rotation.z = pitch;
+      body.rotation.x = clamp(s.turn * s.speed * 0.025, -0.03, 0.03) * t.bob;
+      body.position.y = bodyY + (s.moving ? Math.sin(s.dist * 21 + ph) * 0.0022 * sp * t.bob : 0);
+    }
+    for (const w of whips) {
+      const sp = Math.min(s.speed, 3);
+      w.rotation.z = -sp * 0.07 - acc * 0.01 + Math.sin(s.time * 8 + ph) * 0.035 * Math.min(1, sp + 0.2);
+      w.rotation.x = Math.sin(s.time * 5.3 + ph * 1.7) * 0.02 * Math.min(1, sp + 0.3);
+    }
+    for (const o of spins) {
+      const rate = (o.userData.rate as number) ?? 1;
+      const ax = (o.userData.axis as 'x' | 'y' | 'z') ?? 'y';
+      o.rotation[ax] = ph + s.time * rate;
+    }
+    if (custom) custom(s);
+  };
+  return model;
+}
+
+/** Mark an object as a continuous spinner (rotation = time * rate). */
+function spinner(o: THREE.Object3D, axis: 'x' | 'y' | 'z', rate: number) {
+  o.userData.tag = ((o.userData.tag as string | undefined) ? o.userData.tag + ' ' : '') + 'spin';
+  o.userData.axis = axis;
+  o.userData.rate = rate;
+}
+
+/** Rotating amber beacon on a part. */
+function beacon(b: Bld, p: Part, x: number, y: number, z: number, paint = AMBER) {
+  p.cy(0.012, 0.014, 0.008, x, y, z, K.dark, 8);
+  const sp = b.part(p, x, y + 0.008, z);
+  spinner(sp.g, 'y', 7);
+  sp.cy(0.011, 0.011, 0.018, 0, 0, 0, paint, 8);
+  sp.box(0.004, 0.016, 0.023, 0.006, 0.009, 0, mt(K.bright));
+  return sp;
+}
+
+/** Stats for the preview harness. */
+export function vehicleStats(): Record<string, { tris: number; meshes: number }> {
+  const out: Record<string, { tris: number; meshes: number }> = {};
+  for (const [k, t] of templates) out[k] = t.stats;
+  return out;
+}
+
+
+// =============================================================== tanks
+
+/** Lower hull between the tracks (side profile, width 2*hw). */
+function lowerHull(p: Part, pts: P2[], hw: number) {
+  p.side(pts, hw * 2, 0, CAMO, 0.01);
+}
+
+/** Side skirt plate (profile in x/y) on both sides at |z| = zs, with panel seams. */
+function skirts(p: Part, pts: P2[], zs: number, th: number, seams: number[], paint: number = CAMO, seamY: [number, number] = [0.09, 0.18]) {
+  for (const s of [-1, 1]) {
+    p.side(pts, th, s * zs, paint, Math.min(0.004, th * 0.3));
+    for (const x of seams) p.box(0.004, seamY[1] - seamY[0], 0.003, x, (seamY[0] + seamY[1]) / 2, s * (zs + th / 2 + 0.001), K.dark);
+  }
+}
+
+function mbtAbrams(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(7, -0.355, 0.33),
+    rw: 0.05,
+    spr: [-0.465, 0.11, 0.05],
+    idl: [0.445, 0.098, 0.045],
+    rollers: [
+      [-0.22, 0.138, 0.016],
+      [0.12, 0.138, 0.016],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'nato',
+  });
+  const W = 0.62;
+  lowerHull(B, [[-0.5, 0.06], [0.42, 0.06], [0.53, 0.165], [-0.52, 0.165]], 0.172);
+  // upper hull with sponsons (shallow glacis, flat deck)
+  B.side(
+    [
+      [-0.525, 0.165],
+      [0.54, 0.165],
+      [0.565, 0.19],
+      [0.3, 0.255],
+      [-0.5, 0.257],
+      [-0.528, 0.235],
+    ],
+    W,
+    0,
+    CAMO,
+    0.008,
+  );
+  // skirts: heavy front panels, thinner rear
+  skirts(B, [[-0.47, 0.095], [0.18, 0.095], [0.18, 0.2], [-0.48, 0.2]], 0.317, 0.01, [-0.32, -0.16, 0.0, 0.16]);
+  skirts(B, [[0.18, 0.085], [0.45, 0.085], [0.545, 0.15], [0.55, 0.2], [0.18, 0.2]], 0.32, 0.018, [0.33]);
+  bolts(B, [-0.44, 0.19, 0.324], [0.6, 0, 0], 10, 'z');
+  // front fender lights and driver
+  for (const s of [-1, 1]) {
+    headlight(B, 0.548, 0.2, s * 0.255);
+    taillight(B, -0.53, 0.235, s * 0.27);
+    bin(B, 0.12, 0.04, 0.07, -0.43, 0.257, s * 0.255);
+  }
+  hatch(B, 0.36, 0.236, 0, 0.034);
+  for (const z of [-0.035, 0, 0.035]) periscope(B, 0.41, 0.232, z, 0, 0.02);
+  // engine deck: grilles and access panels, rear exhaust grille
+  grille(B, -0.39, 0.257, 0, 0.14, 0.3, 8);
+  for (const x of [-0.14, -0.25]) B.box(0.1, 0.004, 0.22, x, 0.258, 0, shade(b.base, 0.88));
+  B.box(0.012, 0.05, 0.36, -0.531, 0.205, 0, K.black);
+  for (let i = 0; i < 5; i++) B.box(0.006, 0.004, 0.36, -0.535, 0.188 + i * 0.009, 0, CAMO);
+  cable(B, [[-0.52, 0.245, -0.22], [-0.53, 0.22, -0.1], [-0.53, 0.22, 0.1], [-0.52, 0.245, 0.22]]);
+  for (const s of [-1, 1]) B.box(0.03, 0.026, 0.04, 0.47, 0.095, s * 0.12, K.dark);
+  teamPanel(B, 0.004, 0.035, 0.12, -0.533, 0.24, 0.0, b.team);
+  b.emit(-0.54, 0.205, 0.08);
+  b.emit(-0.54, 0.205, -0.08);
+
+  // ---- turret: flat angular with a big bustle
+  const T = b.part(B, -0.03, 0.257, 0, 'turret');
+  const plan = mirrorZ([
+    [0.28, 0],
+    [0.28, 0.065],
+    [0.17, 0.235],
+    [-0.06, 0.25],
+    [-0.17, 0.243],
+    [-0.21, 0.215],
+    [-0.36, 0.205],
+    [-0.375, 0],
+  ]);
+  T.loft(
+    [
+      { y: 0, p: plan },
+      { y: 0.085, p: inset(plan, 0.006) },
+      { y: 0.118, p: inset(plan, 0.024) },
+    ],
+    CAMO,
+  );
+  T.cy(0.21, 0.21, 0.012, -0.02, -0.01, 0, K.dark, 20);
+  // gun slot / mantlet face
+  T.box(0.02, 0.07, 0.12, 0.275, 0.058, 0, K.dark);
+  // bustle rack with stowage
+  const rk = 0x3a3d34;
+  for (const y of [0.035, 0.1]) {
+    T.box(0.006, 0.006, 0.44, -0.47, y, 0, rk);
+    for (const s of [-1, 1]) T.box(0.27, 0.006, 0.006, -0.335, y, s * 0.22, rk);
+  }
+  for (let i = 0; i < 6; i++) {
+    const z = -0.2 + i * 0.08;
+    T.box(0.006, 0.07, 0.006, -0.47, 0.068, z, rk);
+  }
+  for (const s of [-1, 1]) for (const x of [-0.24, -0.33, -0.42]) T.box(0.006, 0.07, 0.006, x, 0.068, s * 0.22, rk);
+  T.box(0.27, 0.004, 0.44, -0.335, 0.03, 0, rk);
+  T.cbox(0.09, 0.06, 0.16, 0.012, -0.415, 0.065, 0.08, K.canvas);
+  T.cbox(0.08, 0.05, 0.14, 0.012, -0.42, 0.058, -0.11, K.khaki);
+  T.cbox(0.07, 0.04, 0.08, 0.01, -0.33, 0.05, -0.14, K.olive);
+  teamPanel(T, 0.006, 0.026, 0.3, -0.474, 0.075, 0, b.team);
+  for (const s of [-1, 1]) teamPanel(T, 0.16, 0.022, 0.004, -0.01, 0.06, s * 0.247, b.team, 0, s * 0.06, 0);
+  // roof: commander CROWS (right), loader MG (left), sights
+  T.cy(0.05, 0.055, 0.016, -0.06, 0.118, 0.105, CAMO, 14);
+  rws(T, -0.05, 0.134, 0.105, 1.05, true);
+  hatch(T, -0.07, 0.118, -0.11, 0.038);
+  T.box(0.03, 0.04, 0.07, 0.0, 0.14, -0.13, CAMO);
+  mgun(T, 0.0, 0.17, -0.13, 0.1);
+  T.cbox(0.075, 0.045, 0.055, 0.008, 0.13, 0.14, 0.13, CAMO);
+  T.box(0.004, 0.026, 0.04, 0.168, 0.143, 0.13, GLASS);
+  T.cy(0.018, 0.022, 0.03, 0.09, 0.118, -0.06, K.dark, 10);
+  T.cbox(0.04, 0.03, 0.04, 0.006, 0.09, 0.163, -0.06, CAMO);
+  T.box(0.004, 0.018, 0.026, 0.111, 0.164, -0.06, GLASS);
+  for (let i = 0; i < 6; i++) periscope(T, -0.06 + Math.cos(i) * 0.05, 0.118, 0.105 + Math.sin(i) * 0.05, -i, 0.016);
+  T.cy(0.004, 0.004, 0.05, -0.3, 0.118, 0.04, K.dark, 4);
+  T.box(0.02, 0.006, 0.006, -0.3, 0.17, 0.04, K.dark);
+  for (const s of [-1, 1]) smokeBank(T, 0.13, 0.085, s * 0.228, s, 6, 0.95);
+  antennas(b, T, -0.25, 0.118, [-0.17, 0.17], 0.24);
+  mainGun(b, T, 0.27, 0.058, 0, { len: 0.66, r: 0.018, fume: 0.4, mrs: true, mantlet: [0.06, 0.07, 0.1] });
+}
+
+
+/** Matrix for a plane from a to c in the x/y side profile (u along a->c, v along Z, normal up/out). */
+function slopePlane(a: P2, c: P2, z = 0): THREE.Matrix4 {
+  return TR(a[0], a[1], z, 0, 0, Math.atan2(c[1] - a[1], c[0] - a[0]));
+}
+/** Trophy APS: radar panel + launcher on a turret side (side = +-1). */
+function trophy(T: Part, x: number, y: number, z: number, side: number, team?: number) {
+  // launcher: armoured box + dome
+  T.cbox(0.06, 0.035, 0.05, 0.006, x - 0.08, y + 0.018, z - side * 0.01, CAMO);
+  T.sph(0.022, x - 0.08, y + 0.035, z - side * 0.01, mt(K.gun), 8, 4, 0.8, true);
+  // flat radar panel
+  T.cbox(0.075, 0.055, 0.012, 0.004, x, y - 0.005, z, CAMO, 0, side * 0.35, 0);
+  T.box(0.055, 0.04, 0.002, x + 0.004, y - 0.005, z + side * 0.006, 0x3a3d40, 0, side * 0.35, 0);
+  if (team !== undefined) T.box(0.02, 0.006, 0.002, x - 0.02, y + 0.018, z + side * 0.007, team, 0, side * 0.35, 0);
+}
+
+/** Self-entrenching dozer blade folded under the nose (nose bottom at x0). */
+function dozer(B: Part, x0: number) {
+  B.side([[x0 - 0.01, 0.055], [x0 + 0.035, 0.055], [x0 + 0.075, 0.14], [x0 + 0.05, 0.145]], 0.5, 0, CAMO, 0.004);
+  for (const z of [-0.2, -0.07, 0.07, 0.2]) B.box(0.008, 0.07, 0.008, x0 + 0.058, 0.1, z, K.dark, 0, 0, 0.4);
+}
+
+/** Two external fuel drums across the hull rear (Soviet style). */
+function fuelDrums(B: Part, x: number, y: number, zs: number[]) {
+  for (const z of zs) {
+    B.cz(0.04, 0.04, 0.11, x, y, z, 0x4a5236, 12);
+    for (const dz of [-0.035, 0.035]) B.cz(0.042, 0.042, 0.006, x, y, z + dz, 0x3c4230, 12);
+    B.box(0.012, 0.09, 0.012, x + 0.03, y - 0.02, z - 0.06, K.dark);
+  }
+}
+
+/** Unditching log across the rear. */
+function unditchLog(B: Part, x: number, y: number, len: number) {
+  B.cz(0.022, 0.024, len, x, y, 0, K.brown, 8);
+  for (const z of [-len * 0.35, len * 0.35]) B.cz(0.026, 0.026, 0.008, x, y, z, K.dark, 8);
+}
+
+/** Soviet-style hull (T-72 family): low hull, fenders, flat deck. Returns deck height. */
+function sovHull(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; lowFront?: number }) {
+  const B = b.body;
+  const W = o.W ?? 0.62;
+  const L = o.L;
+  lowerHull(B, [[-L / 2 + 0.03, 0.06], [o.nose - 0.08, 0.06], [o.nose, 0.15], [-L / 2, 0.15]], 0.172);
+  B.side(
+    [
+      [-L / 2 + 0.005, 0.15],
+      [o.nose, 0.15],
+      [o.nose + 0.01, 0.17],
+      [o.glacisX, o.deck],
+      [-L / 2 + 0.03, o.deck],
+      [-L / 2, o.deck - 0.03],
+    ],
+    W - 0.02,
+    0,
+    CAMO,
+    0.008,
+  );
+  // fenders over the tracks, extending fore and aft
+  for (const s of [-1, 1]) {
+    B.box(L + 0.03, 0.006, 0.135, -0.005, 0.155, s * 0.25, CAMO);
+    B.box(0.05, 0.004, 0.13, o.nose + 0.02, 0.165, s * 0.25, CAMO, 0, 0, 0.35);
+  }
+  return o.deck;
+}
+
+/** Thin rubber side skirt with an optional row of ERA bricks on the forward part. */
+function sovSkirts(b: Bld, x0: number, x1: number, y0: number, y1: number, eraTo: number, eraRows = 1) {
+  const B = b.body;
+  for (const s of [-1, 1]) {
+    const z = s * 0.318;
+    B.box(x1 - x0, y1 - y0, 0.008, (x0 + x1) / 2, (y0 + y1) / 2, z, 0x26282a);
+    if (eraTo > x0) {
+      const n = Math.round((eraTo - x0) / 0.072);
+      bricks(B, TR(x0, y1 - 0.005, z + s * 0.004, s > 0 ? Math.PI / 2 : -Math.PI / 2, 0, 0), 0, eraTo - x0, s > 0 ? 0 : -(y1 - y0 - 0.01) * 0 - 0.0, (y1 - y0 - 0.01), n, eraRows, 0.018, 0.006);
+    }
+  }
+}
+
+function mbtMerkava(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(6, -0.37, 0.31),
+    rw: 0.056,
+    spr: [0.47, 0.115, 0.05],
+    idl: [-0.475, 0.1, 0.047],
+    rollers: [
+      [-0.2, 0.15, 0.015],
+      [0.0, 0.152, 0.015],
+      [0.2, 0.152, 0.015],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'merk',
+  });
+  const W = 0.63;
+  lowerHull(B, [[-0.52, 0.065], [0.42, 0.065], [0.55, 0.17], [-0.55, 0.17]], 0.172);
+  // front-engined hull: long sloping glacis, high rear
+  B.side(
+    [
+      [-0.555, 0.17],
+      [0.56, 0.17],
+      [0.585, 0.19],
+      [0.08, 0.275],
+      [-0.52, 0.278],
+      [-0.56, 0.24],
+    ],
+    W,
+    0,
+    CAMO,
+    0.01,
+  );
+  // big skirts with sloped front and the lower edge at hub height
+  skirts(B, [[-0.5, 0.1], [0.36, 0.1], [0.5, 0.13], [0.585, 0.2], [0.58, 0.215], [-0.52, 0.215]], 0.322, 0.016, [-0.33, -0.15, 0.03, 0.2, 0.37], CAMO, [0.1, 0.21]);
+  B.box(1.0, 0.012, 0.02, 0.03, 0.105, 0.33, K.dark);
+  B.box(1.0, 0.012, 0.02, 0.03, 0.105, -0.33, K.dark);
+  // engine deck grilles on the front right, driver on the front left
+  grille(B, 0.26, 0.232, 0.13, 0.17, 0.16, 7);
+  B.box(0.2, 0.012, 0.012, 0.25, 0.24, -0.02, K.dark, 0, 0, 0.17);
+  hatch(B, 0.18, 0.248, -0.14, 0.034);
+  for (const z of [-0.18, -0.1]) periscope(B, 0.23, 0.244, z, 0, 0.02);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.57, 0.205, s * 0.27);
+    taillight(B, -0.56, 0.255, s * 0.27);
+  }
+  // rear: troop/ammo door with team panel, stowage baskets
+  B.box(0.006, 0.075, 0.13, -0.557, 0.205, 0, K.dark);
+  B.box(0.004, 0.06, 0.11, -0.561, 0.205, 0, CAMO);
+  teamPanel(B, 0.003, 0.025, 0.1, -0.564, 0.205, 0, b.team);
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 4; i++) B.box(0.004, 0.06, 0.004, -0.56 - 0.004, 0.25, s * (0.12 + i * 0.05), 0x3a3d34);
+    B.box(0.004, 0.004, 0.16, -0.565, 0.278, s * 0.2, 0x3a3d34);
+    bin(B, 0.12, 0.035, 0.07, -0.44, 0.278, s * 0.26);
+  }
+  cable(B, [[0.5, 0.21, 0.31], [0.2, 0.25, 0.3], [-0.2, 0.28, 0.29], [-0.4, 0.28, 0.26]]);
+  b.emit(0.25, 0.25, 0.32);
+
+  // ---- turret: long, low wedge; bustle overhangs the rear with a ball-and-chain curtain
+  const T = b.part(B, -0.13, 0.278, 0, 'turret');
+  const plan = mirrorZ([
+    [0.43, 0],
+    [0.3, 0.13],
+    [0.16, 0.235],
+    [-0.16, 0.25],
+    [-0.42, 0.225],
+    [-0.47, 0.16],
+    [-0.475, 0],
+  ]);
+  const mid = mirrorZ([
+    [0.37, 0],
+    [0.27, 0.125],
+    [0.15, 0.228],
+    [-0.16, 0.243],
+    [-0.41, 0.218],
+    [-0.46, 0.155],
+    [-0.465, 0],
+  ]);
+  const top = mirrorZ([
+    [0.22, 0],
+    [0.17, 0.1],
+    [0.09, 0.19],
+    [-0.16, 0.205],
+    [-0.39, 0.19],
+    [-0.44, 0.14],
+    [-0.445, 0],
+  ]);
+  T.loft(
+    [
+      { y: -0.01, p: plan },
+      { y: 0.05, p: mid },
+      { y: 0.112, p: top },
+    ],
+    CAMO,
+  );
+  T.cy(0.22, 0.22, 0.012, 0.0, -0.016, 0, K.dark, 20);
+  // ball-and-chain curtain under the bustle
+  for (let i = 0; i < 17; i++) {
+    const z = -0.2 + i * 0.025;
+    T.box(0.003, 0.055, 0.003, -0.45, -0.035, z, 0x2e2e2c);
+    T.sph(0.0075, -0.45, -0.065, z, mt(0x3a3a38), 5, 3);
+  }
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 5; i++) {
+      const x = -0.42 + i * 0.03;
+      T.box(0.003, 0.055, 0.003, x, -0.035, s * 0.215, 0x2e2e2c);
+      T.sph(0.0075, x, -0.065, s * 0.215, mt(0x3a3a38), 5, 3);
+    }
+    T.box(0.006, 0.006, 0.44, -0.45, -0.008, 0, K.dark);
+    trophy(T, 0.12, 0.06, s * 0.235, s, b.team);
+    smokeBank(T, 0.2, 0.08, s * 0.17, s, 5, 0.65);
+    // side stowage baskets
+    for (let i = 0; i < 4; i++) T.box(0.004, 0.06, 0.004, -0.33 + i * 0.05, 0.07, s * 0.26, 0x3a3d34);
+    T.box(0.16, 0.004, 0.004, -0.255, 0.098, s * 0.26, 0x3a3d34);
+    T.cbox(0.12, 0.045, 0.03, 0.008, -0.26, 0.06, s * 0.245, K.canvas);
+    teamPanel(T, 0.14, 0.02, 0.003, -0.08, 0.03, s * 0.25, b.team, 0, -s * 0.03, 0);
+  }
+  teamPanel(T, 0.004, 0.025, 0.24, -0.467, 0.05, 0, b.team);
+  // roof: commander sight (right), loader MG + 60mm mortar (left)
+  T.cy(0.045, 0.05, 0.014, -0.08, 0.112, 0.1, CAMO, 14);
+  T.cbox(0.05, 0.06, 0.045, 0.006, -0.03, 0.142, 0.12, CAMO);
+  T.box(0.004, 0.03, 0.03, -0.004, 0.152, 0.12, GLASS);
+  rws(T, -0.1, 0.126, 0.09, 0.9, false);
+  hatch(T, -0.08, 0.112, -0.1, 0.036);
+  mgun(T, -0.02, 0.145, -0.12, 0.09);
+  T.box(0.02, 0.03, 0.02, -0.03, 0.125, -0.12, K.dark);
+  T.cx(0.011, 0.011, 0.09, 0.0, 0.135, -0.17, mt(K.gun), 8);
+  T.box(0.026, 0.02, 0.026, -0.05, 0.122, -0.17, K.dark);
+  T.cbox(0.05, 0.03, 0.04, 0.006, 0.12, 0.12, 0.08, CAMO);
+  T.box(0.004, 0.02, 0.03, 0.146, 0.123, 0.08, GLASS);
+  antennas(b, T, -0.36, 0.112, [-0.15, 0.15], 0.24);
+  mainGun(b, T, 0.3, 0.07, 0, { len: 0.62, r: 0.018, fume: 0.42, mrs: true, mantlet: [0.07, 0.06, 0.09] });
+}
+
+function mbtLeopard(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(7, -0.37, 0.33),
+    rw: 0.05,
+    spr: [-0.475, 0.112, 0.05],
+    idl: [0.452, 0.1, 0.045],
+    rollers: [
+      [-0.27, 0.138, 0.015],
+      [-0.08, 0.138, 0.015],
+      [0.11, 0.138, 0.015],
+      [0.28, 0.138, 0.015],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'nato',
+  });
+  const W = 0.62;
+  lowerHull(B, [[-0.5, 0.06], [0.44, 0.06], [0.55, 0.165], [-0.52, 0.165]], 0.172);
+  B.side(
+    [
+      [-0.535, 0.165],
+      [0.55, 0.165],
+      [0.57, 0.215],
+      [0.33, 0.255],
+      [-0.5, 0.258],
+      [-0.535, 0.245],
+    ],
+    W,
+    0,
+    CAMO,
+    0.008,
+  );
+  // heavy front skirt modules with rubber lower edge; light rear skirts
+  skirts(B, [[0.08, 0.09], [0.45, 0.09], [0.55, 0.14], [0.56, 0.205], [0.08, 0.205]], 0.322, 0.024, [0.2, 0.33]);
+  skirts(B, [[-0.48, 0.1], [0.08, 0.1], [0.08, 0.2], [-0.49, 0.2]], 0.317, 0.01, [-0.36, -0.22, -0.08]);
+  for (const s of [-1, 1]) {
+    B.box(0.46, 0.014, 0.01, 0.3, 0.085, s * 0.33, K.rubber);
+    headlight(B, 0.555, 0.215, s * 0.27);
+    taillight(B, -0.535, 0.24, s * 0.28);
+    bin(B, 0.1, 0.035, 0.06, -0.42, 0.258, s * 0.27);
+    grille(B, -0.34, 0.258, s * 0.16, 0.18, 0.12, 7);
+    b.emit(-0.54, 0.225, s * 0.2);
+  }
+  hatch(B, 0.36, 0.238, 0.13, 0.034);
+  for (const z of [0.09, 0.13, 0.17]) periscope(B, 0.41, 0.232, z, 0, 0.02);
+  B.box(0.008, 0.05, 0.3, -0.537, 0.21, 0, K.dark);
+  teamPanel(B, 0.004, 0.03, 0.14, -0.54, 0.21, 0, b.team);
+  cable(B, [[0.5, 0.23, -0.28], [0.3, 0.258, -0.26], [-0.1, 0.26, -0.27]]);
+  B.box(0.03, 0.026, 0.04, 0.47, 0.09, 0.12, K.dark);
+  B.box(0.03, 0.026, 0.04, 0.47, 0.09, -0.12, K.dark);
+
+  // ---- turret: vertical sides, arrowhead wedge armour on the front
+  const T = b.part(B, -0.06, 0.258, 0, 'turret');
+  const plan = mirrorZ([
+    [0.2, 0],
+    [0.2, 0.2],
+    [0.15, 0.24],
+    [-0.2, 0.24],
+    [-0.3, 0.215],
+    [-0.4, 0.19],
+    [-0.405, 0],
+  ]);
+  T.loft(
+    [
+      { y: 0, p: plan },
+      { y: 0.116, p: inset(plan, 0.006) },
+    ],
+    CAMO,
+  );
+  T.cy(0.21, 0.21, 0.012, 0, -0.01, 0, K.dark, 20);
+  for (const s of [-1, 1]) {
+    // wedge module: sharp front edge next to the gun, slanting back to the cheek
+    const bot: P2[] = s > 0 ? [[0.2, 0.065], [0.36, 0.07], [0.2, 0.245]] : [[0.2, -0.065], [0.2, -0.245], [0.36, -0.07]];
+    const tp: P2[] = s > 0 ? [[0.2, 0.065], [0.27, 0.068], [0.2, 0.2]] : [[0.2, -0.065], [0.2, -0.2], [0.27, -0.068]];
+    T.loft(
+      [
+        { y: 0.008, p: bot },
+        { y: 0.1, p: tp },
+      ],
+      CAMO,
+    );
+    trophy(T, 0.08, 0.06, s * 0.245, s, b.team);
+    smokeBank(T, -0.14, 0.1, s * 0.245, s, 4, 1.2);
+    // side stowage boxes
+    T.cbox(0.16, 0.06, 0.03, 0.006, -0.25, 0.055, s * 0.235, CAMO, 0, s * 0.12, 0);
+  }
+  // bustle stowage
+  T.cbox(0.06, 0.07, 0.36, 0.01, -0.43, 0.055, 0, CAMO);
+  teamPanel(T, 0.004, 0.026, 0.3, -0.462, 0.06, 0, b.team);
+  teamPanel(T, 0.16, 0.026, 0.003, -0.05, 0.08, 0.243, b.team);
+  teamPanel(T, 0.16, 0.026, 0.003, -0.05, 0.08, -0.243, b.team);
+  // roof: EMES sight (front right), PERI R17 + RWS (right rear), loader hatch + MG (left)
+  T.cbox(0.08, 0.04, 0.06, 0.006, 0.12, 0.13, 0.14, CAMO);
+  T.box(0.004, 0.022, 0.044, 0.162, 0.132, 0.14, GLASS);
+  panoSight(T, -0.06, 0.116, 0.16, 0.05, 1.05);
+  rws(T, -0.15, 0.116, 0.07, 0.9, true);
+  hatch(T, -0.08, 0.116, -0.11, 0.036);
+  mgun(T, -0.02, 0.14, -0.15, 0.09);
+  for (let i = 0; i < 5; i++) periscope(T, -0.08 + Math.cos(i * 1.2) * 0.045, 0.116, 0.07 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
+  antennas(b, T, -0.33, 0.116, [-0.15, 0.15], 0.24);
+  mainGun(b, T, 0.24, 0.058, 0, { len: 0.76, r: 0.017, fume: 0.38, mrs: true, mantlet: [0.08, 0.075, 0.12] });
+}
+
+function mbtT90(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: [-0.36, -0.245, -0.095, 0.02, 0.17, 0.285],
+    rw: 0.058,
+    spr: [-0.465, 0.105, 0.048],
+    idl: [0.425, 0.092, 0.045],
+    rollers: [
+      [-0.2, 0.146, 0.014],
+      [-0.03, 0.146, 0.014],
+      [0.13, 0.146, 0.014],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'sov',
+    sag: 0.012,
+  });
+  const deck = sovHull(b, { L: 1.0, deck: 0.235, nose: 0.48, glacisX: 0.28 });
+  sovSkirts(b, -0.47, 0.5, 0.1, 0.165, 0.5, 1);
+  // Relikt ERA on the glacis + V splash board + dozer blade
+  bricks(B, slopePlane([0.28, deck], [0.49, 0.17], 0), 0.01, 0.2, -0.27, 0.27, 3, 7, 0.022, 0.008);
+  B.box(0.012, 0.03, 0.5, 0.31, deck + 0.022, 0, CAMO, 0, 0, -0.3);
+  dozer(B, 0.4);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.5, 0.2, s * 0.21, 0.9);
+    taillight(B, -0.5, 0.215, s * 0.27);
+    // fender stowage boxes and right-side external fuel tanks
+    bin(B, 0.12, 0.04, 0.07, 0.2, 0.158, s * 0.27, CAMO);
+    bin(B, 0.1, 0.04, 0.07, -0.05, 0.158, s * 0.27, CAMO);
+  }
+  for (const x of [-0.2, -0.33]) B.cx(0.032, 0.032, 0.11, x, 0.19, 0.27, CAMO, 10);
+  B.box(0.07, 0.035, 0.02, -0.32, 0.19, -0.3, K.black);
+  b.emit(-0.32, 0.2, -0.32);
+  grille(B, -0.38, deck, 0, 0.16, 0.3, 8);
+  fuelDrums(B, -0.535, 0.25, [-0.14, 0.14]);
+  unditchLog(B, -0.52, 0.31, 0.5);
+  hatch(B, 0.33, deck, 0, 0.03);
+  periscope(B, 0.37, deck, 0, 0, 0.026);
+  cable(B, [[0.46, 0.17, -0.27], [0.2, 0.2, -0.26], [-0.1, 0.2, -0.27]]);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.135, 0.324, b.team);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.135, -0.324, b.team);
+
+  // ---- turret: low cast dome with Relikt cheeks, bustle with slat cage
+  const T = b.part(B, -0.04, deck, 0, 'turret');
+  T.loft(
+    [
+      { y: 0, p: ell(20, 0.215, 0.215, 0, 1.05, 1) },
+      { y: 0.05, p: ell(20, 0.205, 0.205, 0, 1.0, 1) },
+      { y: 0.085, p: ell(20, 0.17, 0.175, -0.01) },
+      { y: 0.1, p: ell(20, 0.11, 0.12, -0.02) },
+    ],
+    CAMO,
+    true,
+  );
+  for (const s of [-1, 1]) {
+    const bot: P2[] = s > 0 ? [[0.255, 0.055], [0.14, 0.225], [0.07, 0.205], [0.17, 0.045]] : [[0.255, -0.055], [0.17, -0.045], [0.07, -0.205], [0.14, -0.225]];
+    const tp: P2[] = s > 0 ? [[0.215, 0.055], [0.12, 0.2], [0.07, 0.185], [0.15, 0.045]] : [[0.215, -0.055], [0.15, -0.045], [0.07, -0.185], [0.12, -0.2]];
+    T.loft([{ y: 0.0, p: bot }, { y: 0.088, p: tp }], CAMO);
+    // brick seams on the cheek top
+    for (let i = 0; i < 4; i++) {
+      const t = (i + 0.5) / 4;
+      T.box(0.004, 0.004, 0.06, 0.215 - t * 0.1, 0.089, s * (0.055 + t * 0.14), K.dark, 0, s * 0.95, 0);
+    }
+    smokeBank(T, 0.1, 0.07, s * 0.21, s, 4, 1.0, 0.01);
+    // roof ERA
+    T.box(0.09, 0.016, 0.07, 0.07, 0.095, s * 0.1, CAMO, 0, 0, -0.12);
+  }
+  // bustle box + slat cage
+  T.cbox(0.12, 0.07, 0.34, 0.008, -0.255, 0.035, 0, CAMO);
+  slats(T, [-0.34, -0.2], [-0.34, 0.2], 0.0, 0.1, 10);
+  for (const s of [-1, 1]) slats(T, [-0.17, s * 0.22], [-0.34, s * 0.2], 0.0, 0.1, 4);
+  teamPanel(T, 0.004, 0.022, 0.24, -0.317, 0.04, 0, b.team);
+  // commander cupola + RWS (right), gunner sight (left), snorkel
+  T.cy(0.045, 0.05, 0.018, -0.06, 0.08, 0.09, CAMO, 14);
+  rws(T, -0.06, 0.098, 0.09, 0.9, true);
+  T.cbox(0.06, 0.04, 0.05, 0.006, 0.08, 0.105, -0.12, CAMO);
+  T.box(0.004, 0.024, 0.036, 0.112, 0.108, -0.12, GLASS);
+  hatch(T, -0.06, 0.08, -0.09, 0.034);
+  T.cx(0.014, 0.014, 0.28, -0.12, 0.09, 0.2, CAMO, 8);
+  antennas(b, T, -0.16, 0.09, [-0.14, 0.15], 0.24);
+  mainGun(b, T, 0.24, 0.05, 0, { len: 0.64, r: 0.017, fume: 0.62, mrs: false, mantlet: [0.05, 0.06, 0.09] });
+}
+
+function mbtOplot(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(6, -0.36, 0.31),
+    rw: 0.056,
+    spr: [-0.465, 0.105, 0.048],
+    idl: [0.43, 0.09, 0.045],
+    rollers: [
+      [-0.27, 0.148, 0.013],
+      [-0.12, 0.148, 0.013],
+      [0.03, 0.148, 0.013],
+      [0.18, 0.148, 0.013],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 't80',
+    sag: 0.006,
+  });
+  const deck = sovHull(b, { L: 1.02, deck: 0.24, nose: 0.49, glacisX: 0.27 });
+  sovSkirts(b, -0.48, 0.5, 0.1, 0.168, 0.5, 2);
+  // Nozh ERA: long thin chevron plates on the glacis
+  const gp = slopePlane([0.27, deck], [0.5, 0.17], 0);
+  for (let i = 0; i < 4; i++) {
+    for (const s of [-1, 1]) {
+      B.add(new THREE.BoxGeometry(0.03, 0.02, 0.26), CAMO, gp.clone().multiply(TR(0.03 + i * 0.05, 0.012, s * 0.13, 0, s * 0.35, 0)));
+    }
+  }
+  dozer(B, 0.41);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.505, 0.2, s * 0.21, 0.9);
+    taillight(B, -0.51, 0.22, s * 0.27);
+    bin(B, 0.11, 0.04, 0.07, 0.2, 0.158, s * 0.27, CAMO);
+    bin(B, 0.14, 0.04, 0.07, -0.18, 0.158, s * 0.27, CAMO);
+  }
+  grille(B, -0.37, deck, 0, 0.2, 0.34, 9);
+  B.box(0.008, 0.05, 0.34, -0.512, 0.2, 0, K.black);
+  b.emit(-0.52, 0.2, 0.1);
+  b.emit(-0.52, 0.2, -0.1);
+  hatch(B, 0.33, deck, 0, 0.03);
+  periscope(B, 0.37, deck, 0, 0, 0.026);
+  unditchLog(B, -0.5, 0.29, 0.48);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.14, 0.324, b.team);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.14, -0.324, b.team);
+
+  // ---- turret: angular welded with Duplet chevron ERA and a long bustle
+  const T = b.part(B, -0.05, deck, 0, 'turret');
+  const plan = mirrorZ([
+    [0.22, 0],
+    [0.2, 0.1],
+    [0.1, 0.215],
+    [-0.12, 0.23],
+    [-0.22, 0.2],
+    [-0.4, 0.185],
+    [-0.41, 0],
+  ]);
+  T.loft([{ y: 0, p: plan }, { y: 0.105, p: inset(plan, 0.025) }], CAMO);
+  T.cy(0.2, 0.2, 0.012, 0, -0.01, 0, K.dark, 20);
+  for (const s of [-1, 1]) {
+    const bot: P2[] = s > 0 ? [[0.33, 0.055], [0.14, 0.235], [0.09, 0.21], [0.21, 0.05]] : [[0.33, -0.055], [0.21, -0.05], [0.09, -0.21], [0.14, -0.235]];
+    const tp: P2[] = s > 0 ? [[0.25, 0.055], [0.11, 0.2], [0.08, 0.185], [0.19, 0.05]] : [[0.25, -0.055], [0.19, -0.05], [0.08, -0.185], [0.11, -0.2]];
+    T.loft([{ y: 0.004, p: bot }, { y: 0.095, p: tp }], CAMO);
+    for (let i = 0; i < 3; i++) {
+      const t = (i + 0.5) / 3;
+      T.box(0.005, 0.006, 0.07, 0.29 - t * 0.17, 0.05 + 0.0, s * (0.06 + t * 0.15), K.dark, 0, s * 0.9, 0);
+    }
+    smokeBank(T, -0.02, 0.095, s * 0.215, s, 6, 1.0, 0.008);
+    T.cbox(0.13, 0.05, 0.025, 0.006, -0.3, 0.05, s * 0.2, CAMO);
+  }
+  // bustle ammo compartment with blow-off panels and team stripe
+  for (let i = 0; i < 3; i++) T.box(0.06, 0.003, 0.26, -0.33 + i * 0.065, 0.107, 0, shade(b.base, 0.85));
+  teamPanel(T, 0.004, 0.022, 0.26, -0.412, 0.05, 0, b.team);
+  // commander PNK-6 cupola + MG (right), gunner sight (left)
+  T.cy(0.045, 0.05, 0.02, -0.05, 0.105, 0.09, CAMO, 14);
+  panoSight(T, -0.02, 0.125, 0.12, 0.02, 0.9);
+  mgun(T, -0.06, 0.15, 0.07, 0.1, 0.005, true);
+  T.box(0.03, 0.025, 0.03, -0.08, 0.135, 0.07, K.dark);
+  T.cbox(0.06, 0.04, 0.05, 0.006, 0.08, 0.12, -0.12, CAMO);
+  T.box(0.004, 0.024, 0.036, 0.112, 0.122, -0.12, GLASS);
+  hatch(T, -0.06, 0.105, -0.09, 0.034);
+  antennas(b, T, -0.3, 0.105, [-0.13, 0.13], 0.24);
+  mainGun(b, T, 0.25, 0.05, 0, { len: 0.64, r: 0.017, fume: 0.58, mrs: false, mantlet: [0.06, 0.06, 0.09] });
+}
+
+function mbtKarrar(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: [-0.36, -0.245, -0.095, 0.02, 0.17, 0.285],
+    rw: 0.058,
+    spr: [-0.465, 0.105, 0.048],
+    idl: [0.425, 0.092, 0.045],
+    rollers: [
+      [-0.2, 0.146, 0.014],
+      [-0.03, 0.146, 0.014],
+      [0.13, 0.146, 0.014],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'sov',
+    sag: 0.012,
+  });
+  const deck = sovHull(b, { L: 1.0, deck: 0.237, nose: 0.48, glacisX: 0.28 });
+  // ERA side skirts all along (box modules)
+  for (const s of [-1, 1]) {
+    B.box(0.97, 0.07, 0.01, 0.015, 0.135, s * 0.318, 0x2a2c2e);
+    for (let i = 0; i < 9; i++) B.cbox(0.1, 0.065, 0.02, 0.004, -0.44 + i * 0.11, 0.135, s * 0.33, CAMO);
+  }
+  bricks(B, slopePlane([0.28, deck], [0.49, 0.17], 0), 0.005, 0.21, -0.27, 0.27, 2, 5, 0.026, 0.01);
+  dozer(B, 0.4);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.5, 0.2, s * 0.21, 0.9);
+    taillight(B, -0.5, 0.215, s * 0.27);
+    bin(B, 0.12, 0.04, 0.07, 0.24, 0.158, s * 0.27, CAMO);
+  }
+  B.box(0.07, 0.035, 0.02, -0.32, 0.19, -0.3, K.black);
+  b.emit(-0.32, 0.2, -0.32);
+  grille(B, -0.38, deck, 0, 0.16, 0.3, 8);
+  fuelDrums(B, -0.535, 0.25, [-0.14, 0.14]);
+  hatch(B, 0.33, deck, 0, 0.03);
+  periscope(B, 0.37, deck, 0, 0, 0.026);
+  teamPanel(B, 0.004, 0.025, 0.2, -0.505, 0.21, 0, b.team);
+
+  // ---- turret: angular, big box ERA on the front faces, long bustle
+  const T = b.part(B, -0.04, deck, 0, 'turret');
+  const plan = mirrorZ([
+    [0.25, 0],
+    [0.24, 0.1],
+    [0.13, 0.225],
+    [-0.12, 0.235],
+    [-0.24, 0.205],
+    [-0.39, 0.19],
+    [-0.4, 0],
+  ]);
+  T.loft([{ y: 0, p: plan }, { y: 0.1, p: inset(plan, 0.02) }], CAMO);
+  T.cy(0.2, 0.2, 0.012, 0, -0.01, 0, K.dark, 20);
+  for (const s of [-1, 1]) {
+    // front ERA: 2x3 big blocks on each cheek
+    const nx = 0.75;
+    const nz = s * 0.66;
+    for (let i = 0; i < 3; i++) {
+      const t = (i + 0.5) / 3;
+      const x = 0.245 - 0.115 * t + nx * 0.016;
+      const z = s * (0.1 + 0.125 * t) + nz * 0.016;
+      for (let j = 0; j < 2; j++) T.cbox(0.03, 0.042, 0.052, 0.004, x, 0.028 + j * 0.046, z, CAMO, 0, -Math.atan2(nz, nx), 0);
+    }
+    // roof ERA
+    T.box(0.08, 0.016, 0.075, 0.08, 0.104, s * 0.1, CAMO, 0, 0, -0.1);
+    smokeBank(T, 0.02, 0.09, s * 0.225, s, 6, 1.1, 0.008);
+    T.cbox(0.14, 0.05, 0.025, 0.006, -0.28, 0.05, s * 0.205, CAMO);
+  }
+  T.box(0.04, 0.09, 0.08, 0.27, 0.045, 0, CAMO);
+  slats(T, [-0.42, -0.19], [-0.42, 0.19], 0.0, 0.1, 9);
+  teamPanel(T, 0.16, 0.022, 0.003, -0.08, 0.05, 0.236, b.team);
+  teamPanel(T, 0.16, 0.022, 0.003, -0.08, 0.05, -0.236, b.team);
+  T.cy(0.045, 0.05, 0.018, -0.06, 0.1, 0.09, CAMO, 14);
+  panoSight(T, -0.04, 0.118, 0.12, 0.02, 0.9);
+  mgun(T, -0.07, 0.15, 0.07, 0.1, 0.005, true);
+  T.cbox(0.07, 0.045, 0.055, 0.006, 0.08, 0.125, -0.12, CAMO);
+  T.box(0.004, 0.026, 0.04, 0.117, 0.127, -0.12, GLASS);
+  hatch(T, -0.06, 0.1, -0.09, 0.034);
+  antennas(b, T, -0.3, 0.1, [-0.13, 0.14], 0.22);
+  mainGun(b, T, 0.27, 0.05, 0, { len: 0.64, r: 0.017, fume: 0.6, mrs: true, mantlet: [0.04, 0.05, 0.08] });
+}
+
+function mbtType99(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(6, -0.37, 0.33),
+    rw: 0.062,
+    spr: [-0.478, 0.115, 0.05],
+    idl: [0.455, 0.1, 0.047],
+    rollers: [
+      [-0.18, 0.162, 0.015],
+      [0.0, 0.162, 0.015],
+      [0.18, 0.162, 0.015],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'asia',
+  });
+  const W = 0.62;
+  lowerHull(B, [[-0.5, 0.065], [0.44, 0.065], [0.55, 0.175], [-0.53, 0.175]], 0.172);
+  B.side(
+    [
+      [-0.535, 0.175],
+      [0.55, 0.175],
+      [0.57, 0.205],
+      [0.33, 0.258],
+      [-0.5, 0.262],
+      [-0.535, 0.24],
+    ],
+    W,
+    0,
+    CAMO,
+    0.008,
+  );
+  skirts(B, [[-0.48, 0.1], [0.42, 0.1], [0.55, 0.15], [0.56, 0.21], [-0.49, 0.21]], 0.318, 0.012, [-0.3, -0.12, 0.06]);
+  // ERA panels on the forward skirt and the glacis
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 4; i++) B.cbox(0.085, 0.07, 0.016, 0.004, 0.14 + i * 0.09, 0.155, s * 0.33, CAMO);
+    headlight(B, 0.555, 0.215, s * 0.27);
+    taillight(B, -0.535, 0.24, s * 0.28);
+    bin(B, 0.12, 0.035, 0.06, -0.42, 0.262, s * 0.27);
+  }
+  bricks(B, slopePlane([0.33, 0.258], [0.57, 0.205], 0), 0.02, 0.22, -0.27, 0.27, 2, 6, 0.018, 0.01);
+  grille(B, -0.37, 0.262, 0, 0.2, 0.34, 9);
+  hatch(B, 0.36, 0.245, 0, 0.032);
+  periscope(B, 0.4, 0.24, 0, 0, 0.03);
+  B.box(0.008, 0.05, 0.34, -0.537, 0.215, 0, K.black);
+  b.emit(-0.54, 0.215, 0.1);
+  b.emit(-0.54, 0.215, -0.1);
+  teamPanel(B, 0.4, 0.024, 0.003, -0.1, 0.19, 0.325, b.team);
+  teamPanel(B, 0.4, 0.024, 0.003, -0.1, 0.19, -0.325, b.team);
+
+  // ---- turret: arrowhead ERA nose, flat sides, bustle
+  const T = b.part(B, -0.06, 0.262, 0, 'turret');
+  const plan = mirrorZ([
+    [0.18, 0],
+    [0.18, 0.2],
+    [0.12, 0.235],
+    [-0.2, 0.235],
+    [-0.36, 0.2],
+    [-0.39, 0],
+  ]);
+  T.loft([{ y: 0, p: plan }, { y: 0.11, p: inset(plan, 0.012) }], CAMO);
+  T.cy(0.21, 0.21, 0.012, 0, -0.01, 0, K.dark, 20);
+  for (const s of [-1, 1]) {
+    const bot: P2[] = s > 0 ? [[0.17, 0.055], [0.42, 0.06], [0.17, 0.245]] : [[0.17, -0.055], [0.17, -0.245], [0.42, -0.06]];
+    const tp: P2[] = s > 0 ? [[0.17, 0.055], [0.3, 0.058], [0.17, 0.19]] : [[0.17, -0.055], [0.17, -0.19], [0.3, -0.058]];
+    T.loft([{ y: 0.006, p: bot }, { y: 0.1, p: tp }], CAMO);
+    // ERA tiles on the arrow faces
+    for (let i = 0; i < 4; i++) {
+      const t = (i + 0.5) / 4;
+      T.box(0.004, 0.08, 0.004, 0.42 - t * 0.25, 0.05, s * (0.06 + t * 0.185), K.dark);
+    }
+    // side ERA boxes along the turret side
+    for (let i = 0; i < 3; i++) T.cbox(0.07, 0.06, 0.016, 0.004, 0.05 - i * 0.08, 0.055, s * 0.243, CAMO);
+    smokeBank(T, -0.26, 0.11, s * 0.17, s, 5, 1.3, 0.008);
+  }
+  teamPanel(T, 0.004, 0.025, 0.3, -0.392, 0.055, 0, b.team);
+  // roof: laser dazzler (right front), commander sight + RWS, loader hatch
+  T.cbox(0.08, 0.06, 0.06, 0.006, 0.07, 0.14, 0.15, CAMO);
+  T.cx(0.02, 0.02, 0.01, 0.112, 0.145, 0.15, LENS, 10);
+  T.cbox(0.06, 0.04, 0.05, 0.006, 0.08, 0.13, -0.12, CAMO);
+  T.box(0.004, 0.024, 0.036, 0.112, 0.132, -0.12, GLASS);
+  panoSight(T, -0.08, 0.11, 0.08, 0.035, 0.95);
+  rws(T, -0.17, 0.11, 0.12, 0.9, true);
+  hatch(T, -0.08, 0.11, -0.11, 0.035);
+  antennas(b, T, -0.32, 0.11, [-0.14, 0.14], 0.24);
+  mainGun(b, T, 0.28, 0.056, 0, { len: 0.7, r: 0.017, fume: 0.45, mrs: true, mantlet: [0.08, 0.07, 0.1] });
+}
+
+/** K2 / Altay family: sleek hull, angular wedge turret with a long autoloader bustle. */
+function mbtK2(b: Bld, altay: boolean) {
+  const B = b.body;
+  running(b, {
+    wheels: altay ? evenly(7, -0.38, 0.34) : evenly(6, -0.36, 0.32),
+    rw: altay ? 0.05 : 0.055,
+    spr: [-0.475, 0.112, 0.05],
+    idl: [0.45, 0.1, 0.046],
+    rollers: [
+      [-0.2, 0.148, 0.015],
+      [0.0, 0.148, 0.015],
+      [0.2, 0.148, 0.015],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: altay ? 'nato' : 'asia',
+  });
+  const W = 0.62;
+  lowerHull(B, [[-0.5, 0.065], [0.44, 0.065], [0.55, 0.168], [-0.52, 0.168]], 0.172);
+  B.side(
+    [
+      [-0.53, 0.168],
+      [0.55, 0.168],
+      [0.575, 0.198],
+      [0.31, 0.252],
+      [-0.5, 0.255],
+      [-0.53, 0.235],
+    ],
+    W,
+    0,
+    CAMO,
+    0.008,
+  );
+  skirts(B, [[-0.47, 0.098], [0.4, 0.098], [0.53, 0.13], [0.565, 0.205], [-0.48, 0.205]], 0.32, 0.016, altay ? [-0.32, -0.16, 0.0, 0.16, 0.32] : [-0.25, 0.0, 0.25]);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.56, 0.21, s * 0.265);
+    taillight(B, -0.53, 0.235, s * 0.28);
+    bin(B, 0.1, 0.035, 0.06, -0.42, 0.255, s * 0.27);
+    grille(B, -0.33, 0.255, s * 0.15, 0.2, 0.12, 8);
+    b.emit(-0.535, 0.22, s * 0.18);
+  }
+  hatch(B, 0.36, 0.238, altay ? 0 : 0.1, 0.032);
+  for (const z of [-0.035, 0, 0.035]) periscope(B, 0.4, 0.232, (altay ? 0 : 0.1) + z, 0, 0.018);
+  B.box(0.008, 0.045, 0.3, -0.532, 0.21, 0, K.black);
+  teamPanel(B, 0.42, 0.024, 0.003, -0.08, 0.18, 0.329, b.team);
+  teamPanel(B, 0.42, 0.024, 0.003, -0.08, 0.18, -0.329, b.team);
+  cable(B, [[0.52, 0.22, -0.28], [0.3, 0.252, -0.26], [-0.1, 0.256, -0.27]]);
+
+  const T = b.part(B, -0.04, 0.255, 0, 'turret');
+  const plan = altay
+    ? mirrorZ([
+        [0.33, 0],
+        [0.32, 0.07],
+        [0.2, 0.2],
+        [0.1, 0.245],
+        [-0.15, 0.25],
+        [-0.3, 0.235],
+        [-0.46, 0.205],
+        [-0.47, 0],
+      ])
+    : mirrorZ([
+        [0.31, 0],
+        [0.3, 0.065],
+        [0.22, 0.16],
+        [0.12, 0.232],
+        [-0.12, 0.24],
+        [-0.25, 0.23],
+        [-0.43, 0.2],
+        [-0.445, 0],
+      ]);
+  const h = altay ? 0.125 : 0.112;
+  T.loft(
+    [
+      { y: 0, p: plan },
+      { y: h * 0.55, p: inset(plan, 0.004) },
+      { y: h, p: inset(plan, 0.03) },
+    ],
+    CAMO,
+  );
+  T.cy(0.21, 0.21, 0.012, 0, -0.01, 0, K.dark, 20);
+  for (const s of [-1, 1]) {
+    // MMW radar / laser warning sensors on the front corners (KAPS)
+    T.cbox(0.03, 0.03, 0.03, 0.004, altay ? 0.2 : 0.21, h + 0.012, s * (altay ? 0.18 : 0.15), 0x3a3d40);
+    T.box(0.004, 0.02, 0.022, (altay ? 0.2 : 0.21) + 0.016, h + 0.012, s * (altay ? 0.18 : 0.15), GLASS);
+    smokeBank(T, altay ? 0.0 : 0.04, h * 0.75, s * (altay ? 0.25 : 0.24), s, 4, 1.25, 0.008);
+    T.cbox(0.16, 0.045, 0.02, 0.005, -0.29, 0.05, s * (altay ? 0.215 : 0.21), CAMO);
+    teamPanel(T, 0.14, 0.022, 0.003, -0.08, h * 0.45, s * (altay ? 0.252 : 0.242), b.team);
+  }
+  // bustle panels (blow-off) and rear stowage
+  for (let i = 0; i < 3; i++) T.box(0.06, 0.003, 0.24, -0.25 - i * 0.065, h + 0.001, 0, shade(b.base, 0.85));
+  T.cbox(0.04, 0.05, 0.3, 0.008, altay ? -0.49 : -0.465, 0.05, 0, CAMO);
+  teamPanel(T, 0.004, 0.022, 0.26, altay ? -0.511 : -0.486, 0.05, 0, b.team);
+  // roof: gunner sight (left front), commander panoramic sight (right), RWS
+  T.cbox(0.07, 0.04, 0.05, 0.006, 0.1, h + 0.018, -0.13, CAMO);
+  T.box(0.004, 0.024, 0.036, 0.136, h + 0.02, -0.13, GLASS);
+  panoSight(T, altay ? -0.12 : 0.02, h, 0.14, altay ? 0.06 : 0.045, 1.0);
+  rws(T, -0.12, h, altay ? 0.05 : 0.08, 0.95, true);
+  hatch(T, -0.06, h, -0.1, 0.035);
+  antennas(b, T, altay ? -0.38 : -0.36, h, [-0.15, 0.15], 0.24);
+  mainGun(b, T, 0.3, 0.06, 0, { len: 0.76, r: 0.017, fume: 0.4, mrs: true, mantlet: [0.06, 0.065, 0.1] });
+}
+
+function mbt(style: ModelStyle, fog: FogOfWar | null): Model {
+  const f = style.faction;
+  const fn = MBT[f] ?? mbtAbrams;
+  return build('mbt', style, fog, fn);
+}
+
+const MBT: Record<string, (b: Bld) => void> = {
+  usa: mbtAbrams,
+  israel: mbtMerkava,
+  germany: mbtLeopard,
+  russia: mbtT90,
+  ukraine: mbtOplot,
+  iran: mbtKarrar,
+  china: mbtType99,
+  korea: (b) => mbtK2(b, false),
+  turkey: (b) => mbtK2(b, true),
+};
+
+
+// ================================================================ IFVs / APCs
+
+/** Standard light tracked running gear (IFV / SPAAG). */
+function lightTracks(b: Bld, o: { n: number; x0: number; x1: number; rw?: number; front?: boolean; gauge?: number; tw?: number; style?: WheelStyle; rollers?: number; sag?: number; idlUp?: number }) {
+  const rw = o.rw ?? 0.048;
+  const bt = 0.015;
+  const wy = rw + bt;
+  const sx = o.front ? o.x1 + rw + 0.045 : o.x0 - rw - 0.05;
+  const ix = o.front ? o.x0 - rw - 0.045 : o.x1 + rw + 0.04;
+  const nr = o.rollers ?? 3;
+  const rollers: V3[] = [];
+  for (let i = 0; i < nr; i++) rollers.push([o.x0 + ((o.x1 - o.x0) * (i + 0.5)) / nr, wy + rw + 0.024, 0.013]);
+  running(b, {
+    wheels: evenly(o.n, o.x0, o.x1),
+    rw,
+    spr: [sx, wy + 0.04, 0.044],
+    idl: [ix, wy + (o.idlUp ?? 0.03), 0.04],
+    rollers: nr ? rollers : undefined,
+    gauge: o.gauge ?? 0.225,
+    tw: o.tw ?? 0.12,
+    bt,
+    style: o.style ?? 'nato',
+    sag: o.sag,
+  });
+}
+
+/** Rear ramp / door outline with a team panel on the rear plate at x. */
+function rearRamp(B: Part, x: number, y0: number, y1: number, w: number, team: number, doors = 1) {
+  B.box(0.006, y1 - y0, w, x - 0.002, (y0 + y1) / 2, 0, K.dark);
+  if (doors === 1) B.box(0.006, y1 - y0 - 0.012, w - 0.014, x, (y0 + y1) / 2, 0, CAMO);
+  else for (const s of [-1, 1]) B.box(0.006, y1 - y0 - 0.012, w / 2 - 0.012, x, (y0 + y1) / 2, (s * w) / 4, CAMO);
+  B.box(0.004, 0.022, w * 0.6, x + 0.003 * Math.sign(x) * -1 + (x < 0 ? -0.004 : 0.004), y1 - 0.025, 0, team);
+  for (const s of [-1, 1]) B.box(0.008, 0.024, 0.008, x + (x < 0 ? -0.004 : 0.004), (y0 + y1) / 2, (s * w) / 2.6, mt(K.steel));
+}
+
+/** Small two-man / unmanned IFV turret base; returns the turret part. */
+function ifvTurret(b: Bld, parent: Part, x: number, y: number, z: number, half: P2[], h: number, ins = 0.02) {
+  const T = b.part(parent, x, y, z, 'turret');
+  const plan = mirrorZ(half);
+  T.loft([{ y: 0, p: plan }, { y: h, p: inset(plan, ins) }], CAMO);
+  return T;
+}
+
+/** ATGM twin launcher box (TOW / Spike / Kornet). */
+function atgmBox(T: Part, x: number, y: number, z: number, len = 0.16, tubes = 2, w = 0.05) {
+  T.cbox(len, 0.06, w, 0.006, x, y, z, CAMO);
+  for (let i = 0; i < tubes; i++) {
+    const zz = z + (tubes === 1 ? 0 : (i - (tubes - 1) / 2) * (w * 0.48));
+    T.cx(0.013, 0.013, 0.006, x + len / 2 + 0.001, y, zz, K.black, 8);
+  }
+  T.box(0.02, 0.03, 0.02, x - len * 0.2, y - 0.04, z + Math.sign(z || 1) * -0.02, K.dark);
+}
+
+function apcBradley(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.31, x1: 0.28, rw: 0.05, front: true, style: 'nato' });
+  B.side([[-0.44, 0.06], [0.33, 0.06], [0.43, 0.15], [-0.46, 0.15]], 0.33, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-0.47, 0.15],
+      [0.43, 0.15],
+      [0.475, 0.19],
+      [0.3, 0.275],
+      [-0.45, 0.28],
+      [-0.47, 0.26],
+    ],
+    0.58,
+    0,
+    CAMO,
+    0.008,
+  );
+  // BUSK / BRAT armour tiles on the skirts
+  for (const s of [-1, 1]) {
+    B.box(0.88, 0.09, 0.012, -0.01, 0.15, s * 0.296, CAMO);
+    for (let i = 0; i < 8; i++) for (let j = 0; j < 2; j++) B.cbox(0.1, 0.042, 0.018, 0.004, -0.4 + i * 0.112, 0.128 + j * 0.046, s * 0.31, CAMO);
+    headlight(B, 0.465, 0.215, s * 0.24, 0.9);
+    taillight(B, -0.47, 0.255, s * 0.25);
+  }
+  grille(B, 0.2, 0.258, 0.17, 0.12, 0.14, 6);
+  B.box(0.04, 0.02, 0.05, 0.12, 0.29, 0.24, K.black);
+  b.emit(0.12, 0.3, 0.24);
+  hatch(B, 0.25, 0.27, -0.16, 0.032);
+  for (const z of [-0.2, -0.12]) periscope(B, 0.3, 0.266, z, 0, 0.018);
+  rearRamp(B, -0.472, 0.08, 0.25, 0.32, b.team);
+  hatch(B, -0.34, 0.28, 0, 0.05);
+  for (const s of [-1, 1]) bin(B, 0.08, 0.04, 0.05, -0.4, 0.28, s * 0.24, CAMO);
+  const T = ifvTurret(b, B, -0.05, 0.28, 0.04, [[0.18, 0], [0.17, 0.11], [0.1, 0.16], [-0.17, 0.16], [-0.21, 0.12], [-0.21, 0]], 0.095);
+  T.cy(0.15, 0.15, 0.01, 0, -0.008, 0, K.dark, 16);
+  T.cbox(0.06, 0.06, 0.07, 0.008, 0.18, 0.045, 0.02, CAMO);
+  cannon(b, T, 0.2, 0.045, 0.02, 0.3, 0.008, { shroud: 0.25 });
+  T.cx(0.004, 0.004, 0.06, 0.24, 0.05, 0.06, mt(K.dark), 5);
+  atgmBox(T, -0.02, 0.06, -0.2, 0.2, 2, 0.07);
+  teamPanel(T, 0.002, 0.03, 0.06, 0.081, 0.06, -0.2, b.team);
+  // commander independent viewer + sight
+  T.cy(0.018, 0.022, 0.03, -0.08, 0.095, 0.08, K.dark, 10);
+  T.cbox(0.05, 0.035, 0.045, 0.006, -0.08, 0.14, 0.08, CAMO);
+  T.box(0.004, 0.02, 0.03, -0.054, 0.142, 0.08, GLASS);
+  T.cbox(0.05, 0.03, 0.04, 0.005, 0.1, 0.11, -0.08, CAMO);
+  T.box(0.004, 0.018, 0.03, 0.126, 0.11, -0.08, GLASS);
+  hatch(T, -0.08, 0.095, -0.05, 0.03);
+  for (const s of [-1, 1]) smokeBank(T, 0.13, 0.07, 0.02 + s * 0.15, s, 4, 0.9, 0.008);
+  teamPanel(T, 0.14, 0.022, 0.003, -0.04, 0.05, 0.161, b.team);
+  antennas(b, T, -0.18, 0.095, [-0.1, 0.12], 0.2);
+}
+
+function apcNamer(b: Bld) {
+  const B = b.body;
+  running(b, {
+    wheels: evenly(6, -0.37, 0.31),
+    rw: 0.056,
+    spr: [0.465, 0.115, 0.05],
+    idl: [-0.47, 0.1, 0.047],
+    rollers: [
+      [-0.2, 0.15, 0.015],
+      [0.0, 0.152, 0.015],
+      [0.2, 0.152, 0.015],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'merk',
+  });
+  lowerHull(B, [[-0.52, 0.065], [0.42, 0.065], [0.55, 0.17], [-0.55, 0.17]], 0.172);
+  // front engine glacis, tall troop superstructure
+  B.side(
+    [
+      [-0.55, 0.17],
+      [0.56, 0.17],
+      [0.585, 0.19],
+      [0.1, 0.285],
+      [0.0, 0.33],
+      [-0.52, 0.335],
+      [-0.55, 0.3],
+    ],
+    0.6,
+    0,
+    CAMO,
+    0.012,
+  );
+  skirts(B, [[-0.5, 0.1], [0.36, 0.1], [0.5, 0.13], [0.585, 0.2], [0.58, 0.215], [-0.52, 0.215]], 0.322, 0.016, [-0.33, -0.15, 0.03, 0.2, 0.37]);
+  // superstructure side armour modules
+  for (const s of [-1, 1]) {
+    B.cbox(0.48, 0.07, 0.02, 0.006, -0.27, 0.27, s * 0.3, CAMO);
+    for (const x of [-0.42, -0.27, -0.12]) B.box(0.004, 0.06, 0.004, x, 0.27, s * 0.311, K.dark);
+    headlight(B, 0.57, 0.205, s * 0.27);
+    taillight(B, -0.555, 0.3, s * 0.27);
+    trophy(B, 0.02, 0.31, s * 0.27, s, b.team);
+  }
+  grille(B, 0.3, 0.226, 0.13, 0.17, 0.16, 7);
+  hatch(B, 0.18, 0.25, -0.14, 0.032);
+  for (const z of [-0.18, -0.1]) periscope(B, 0.22, 0.246, z, 0, 0.018);
+  rearRamp(B, -0.552, 0.11, 0.3, 0.34, b.team);
+  for (const x of [-0.38, -0.2]) hatch(B, x, 0.335, 0.11, 0.035);
+  for (let i = 0; i < 4; i++) periscope(B, -0.4 + i * 0.1, 0.335, -0.29, -Math.PI / 2, 0.018);
+  cable(B, [[0.5, 0.21, 0.31], [0.2, 0.25, 0.3], [0.04, 0.28, 0.29]]);
+  teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, 0.322, b.team);
+  teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, -0.322, b.team);
+  b.emit(0.3, 0.24, 0.32);
+  // RWS (Samson) as the turret
+  const T = b.part(B, -0.12, 0.335, -0.06, 'turret');
+  T.cy(0.05, 0.055, 0.02, 0, 0, 0, K.dark, 12);
+  T.cbox(0.11, 0.06, 0.1, 0.01, 0.0, 0.05, 0, CAMO);
+  T.cbox(0.06, 0.04, 0.035, 0.006, 0.02, 0.06, -0.07, 0x3a3d40);
+  T.box(0.004, 0.025, 0.024, 0.052, 0.062, -0.07, GLASS);
+  T.box(0.08, 0.028, 0.028, 0.06, 0.06, 0.03, mt(K.gun));
+  cannon(b, T, 0.1, 0.06, 0.03, 0.17, 0.0065, { brake: true });
+  T.box(0.04, 0.035, 0.03, -0.02, 0.05, 0.07, K.olive);
+  smokeBank(T, 0.02, 0.09, 0.0, 1, 4, 0.0, 0.008);
+  antennas(b, B, -0.45, 0.335, [-0.2, 0.2], 0.22);
+}
+
+/** 8x8 wheeled hull: boxy body with sloped nose. Returns roof height. */
+function wheeledHull(b: Bld, o: { L: number; W: number; y0: number; roof: number; nose: number; glacisX: number; rearSlope?: number; axles: Axle[]; r: number; tyreW?: number }) {
+  const B = b.body;
+  wheelSet(b, o.axles, o.r, o.tyreW ?? 0.075, o.W / 2 - (o.tyreW ?? 0.075) / 2 - 0.004);
+  const L = o.L;
+  B.side(
+    [
+      [-L / 2 + 0.02, o.y0],
+      [o.nose - 0.06, o.y0],
+      [o.nose, o.y0 + 0.08],
+      [o.nose - 0.005, o.y0 + 0.1],
+      [o.glacisX, o.roof],
+      [-L / 2 + (o.rearSlope ?? 0.02), o.roof],
+      [-L / 2, o.roof - 0.04],
+      [-L / 2, o.y0 + 0.03],
+    ],
+    o.W - 0.16,
+    0,
+    CAMO,
+    0.01,
+  );
+  // upper hull over the wheels (sponsons) with wheel arches cut by fenders
+  B.side(
+    [
+      [-L / 2 + 0.01, o.y0 + 0.07],
+      [o.nose - 0.02, o.y0 + 0.07],
+      [o.nose - 0.005, o.y0 + 0.1],
+      [o.glacisX, o.roof],
+      [-L / 2 + (o.rearSlope ?? 0.02), o.roof],
+      [-L / 2 + 0.005, o.roof - 0.04],
+    ],
+    o.W,
+    0,
+    CAMO,
+    0.01,
+  );
+  for (const s of [-1, 1]) {
+    for (const a of o.axles) {
+      // wheel arch shadows
+      B.box(o.r * 2.3, 0.012, 0.004, a.x, o.y0 + 0.068, s * (o.W / 2 + 0.002), K.dark);
+    }
+  }
+  return o.roof;
+}
+
+function apcZBL08(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.31, steer: 1 },
+    { x: 0.16, steer: 0.6 },
+    { x: -0.1, steer: 0 },
+    { x: -0.25, steer: 0 },
+  ];
+  const roof = wheeledHull(b, { L: 0.98, W: 0.56, y0: 0.1, roof: 0.27, nose: 0.49, glacisX: 0.28, axles, r: 0.068 });
+  for (const s of [-1, 1]) {
+    headlight(B, 0.47, 0.2, s * 0.22, 0.9);
+    taillight(B, -0.49, 0.24, s * 0.24);
+    for (const x of [-0.35, -0.18, 0.0]) periscope(B, x, roof - 0.01, s * 0.27, s > 0 ? Math.PI / 2 : -Math.PI / 2, 0.02);
+    B.box(0.28, 0.006, 0.004, -0.18, 0.18, s * 0.281, K.dark);
+  }
+  // trim vane on the glacis, driver hatch, engine grille (front right)
+  B.side([[0.43, 0.2], [0.47, 0.205], [0.4, 0.25], [0.38, 0.245]], 0.44, 0, CAMO, 0.004);
+  hatch(B, 0.26, roof, -0.15, 0.03);
+  grille(B, 0.25, roof, 0.14, 0.12, 0.14, 6);
+  B.box(0.04, 0.02, 0.04, 0.18, roof + 0.012, 0.26, K.black);
+  b.emit(0.18, roof + 0.03, 0.27);
+  rearRamp(B, -0.492, 0.12, 0.25, 0.26, b.team, 2);
+  hatch(B, -0.32, roof, 0.1, 0.03);
+  hatch(B, -0.32, roof, -0.1, 0.03);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.2, 0.225, 0.281, b.team);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.2, 0.225, -0.281, b.team);
+  const T = ifvTurret(b, B, -0.02, roof, 0, [[0.15, 0], [0.14, 0.1], [0.06, 0.15], [-0.14, 0.15], [-0.17, 0.1], [-0.17, 0]], 0.085);
+  T.cbox(0.05, 0.055, 0.07, 0.008, 0.16, 0.04, 0, CAMO);
+  cannon(b, T, 0.18, 0.04, 0.0, 0.3, 0.0085, { shroud: 0.2 });
+  T.cx(0.004, 0.004, 0.05, 0.2, 0.05, 0.05, mt(K.dark), 5);
+  atgmBox(T, -0.02, 0.105, -0.12, 0.13, 1, 0.035);
+  T.cbox(0.05, 0.035, 0.04, 0.005, -0.06, 0.1, 0.08, CAMO);
+  T.box(0.004, 0.02, 0.028, -0.034, 0.102, 0.08, GLASS);
+  for (const s of [-1, 1]) smokeBank(T, 0.06, 0.07, s * 0.14, s, 4, 0.9, 0.008);
+  teamPanel(T, 0.12, 0.02, 0.003, -0.05, 0.045, 0.151, b.team);
+  antennas(b, B, -0.42, roof, [-0.2, 0.2], 0.22);
+}
+
+function apcBMP3(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.32, x1: 0.3, rw: 0.05, front: false, style: 'sov', rollers: 3, sag: 0.008 });
+  B.side([[-0.44, 0.06], [0.38, 0.06], [0.46, 0.14], [-0.46, 0.14]], 0.33, 0, CAMO, 0.008);
+  // low front, raised rear engine deck
+  B.side(
+    [
+      [-0.47, 0.14],
+      [0.45, 0.14],
+      [0.5, 0.17],
+      [0.32, 0.225],
+      [-0.1, 0.235],
+      [-0.2, 0.26],
+      [-0.45, 0.26],
+      [-0.47, 0.235],
+    ],
+    0.6,
+    0,
+    CAMO,
+    0.008,
+  );
+  // trim vane folded on the glacis, bow MGs
+  B.side([[0.44, 0.17], [0.49, 0.175], [0.42, 0.215], [0.4, 0.21]], 0.46, 0, CAMO, 0.004);
+  for (const s of [-1, 1]) {
+    B.cy(0.022, 0.026, 0.02, 0.42, 0.16, s * 0.24, CAMO, 10);
+    B.cx(0.004, 0.004, 0.06, 0.46, 0.175, s * 0.24, mt(K.dark), 5);
+    headlight(B, 0.44, 0.2, s * 0.17, 0.9);
+    taillight(B, -0.47, 0.245, s * 0.25);
+    B.box(0.86, 0.006, 0.12, 0.0, 0.142, s * 0.245, CAMO);
+    B.box(0.9, 0.05, 0.008, -0.01, 0.12, s * 0.306, 0x26282a);
+  }
+  // rear troop doors (in the engine deck) and roof hatches
+  rearRamp(B, -0.472, 0.1, 0.235, 0.3, b.team, 2);
+  for (const z of [-0.12, 0.12]) B.box(0.14, 0.006, 0.1, -0.36, 0.262, z, shade(b.base, 0.85));
+  grille(B, -0.32, 0.26, 0, 0.1, 0.07, 5);
+  B.box(0.05, 0.02, 0.03, -0.2, 0.24, -0.29, K.black);
+  b.emit(-0.2, 0.25, -0.3);
+  hatch(B, 0.3, 0.228, 0, 0.026);
+  teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, 0.301, b.team);
+  teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, -0.301, b.team);
+  // turret: low dome with 100mm launcher-gun + coaxial 30mm
+  const T = b.part(B, 0.05, 0.235, 0, 'turret');
+  T.loft(
+    [
+      { y: 0, p: ell(16, 0.16, 0.17, -0.01, 1.05, 1.1) },
+      { y: 0.05, p: ell(16, 0.15, 0.16, -0.01, 1.0, 1.05) },
+      { y: 0.08, p: ell(16, 0.1, 0.11, -0.03) },
+    ],
+    CAMO,
+    true,
+  );
+  T.cbox(0.06, 0.06, 0.1, 0.01, 0.16, 0.04, 0, CAMO);
+  const g = b.part(T, 0.18, 0.05, 0);
+  g.g.rotation.z = 0.03;
+  const r100 = b.part(g, 0, 0, 0, 'recoil');
+  r100.cx(0.018, 0.022, 0.3, 0.15, 0, 0, mt(K.gun), 12);
+  r100.cx(0.023, 0.023, 0.03, 0.29, 0, 0, mt(K.gun), 12);
+  r100.cx(0.012, 0.012, 0.004, 0.306, 0, 0, mt(K.black), 10);
+  b.muzzle(r100, 0.31, 0, 0);
+  cannon(b, T, 0.18, 0.05, 0.05, 0.27, 0.007, { brake: false });
+  T.cx(0.004, 0.004, 0.05, 0.2, 0.04, -0.05, mt(K.dark), 5);
+  T.cbox(0.05, 0.035, 0.04, 0.005, 0.04, 0.09, -0.08, CAMO);
+  T.box(0.004, 0.02, 0.028, 0.066, 0.092, -0.08, GLASS);
+  panoSight(T, -0.05, 0.08, 0.07, 0.02, 0.8);
+  for (const s of [-1, 1]) smokeBank(T, 0.06, 0.06, s * 0.15, s, 3, 1.0, 0.008);
+  teamPanel(T, 0.004, 0.02, 0.14, -0.175, 0.03, 0, b.team);
+  antennas(b, T, -0.12, 0.07, [-0.12, 0.12], 0.2);
+}
+
+function apcPuma(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.33, x1: 0.3, rw: 0.05, front: true, style: 'nato', rollers: 3 });
+  B.side([[-0.45, 0.06], [0.36, 0.06], [0.46, 0.16], [-0.47, 0.16]], 0.33, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-0.48, 0.16],
+      [0.46, 0.16],
+      [0.5, 0.2],
+      [0.3, 0.29],
+      [-0.46, 0.295],
+      [-0.48, 0.27],
+    ],
+    0.58,
+    0,
+    CAMO,
+    0.01,
+  );
+  // thick add-on side armour slabs with horizontal grooves
+  for (const s of [-1, 1]) {
+    B.side([[-0.46, 0.085], [0.38, 0.085], [0.48, 0.15], [0.49, 0.25], [-0.47, 0.25]], 0.035, s * 0.31, CAMO, 0.006);
+    B.box(0.85, 0.004, 0.004, -0.04, 0.17, s * 0.329, K.dark);
+    for (const x of [-0.25, 0.0, 0.25]) B.box(0.004, 0.16, 0.004, x, 0.165, s * 0.329, K.dark);
+    headlight(B, 0.47, 0.235, s * 0.24, 0.9);
+    taillight(B, -0.48, 0.27, s * 0.25);
+  }
+  grille(B, 0.24, 0.27, 0.15, 0.14, 0.12, 6);
+  hatch(B, 0.3, 0.282, -0.14, 0.03);
+  rearRamp(B, -0.482, 0.09, 0.27, 0.34, b.team);
+  b.emit(0.2, 0.28, 0.3);
+  teamPanel(B, 0.3, 0.025, 0.003, -0.2, 0.21, 0.329, b.team);
+  teamPanel(B, 0.3, 0.025, 0.003, -0.2, 0.21, -0.329, b.team);
+  // unmanned RCT30 turret: low angular box, 30mm with long shroud, Spike launcher left
+  const T = ifvTurret(b, B, -0.06, 0.295, 0, [[0.2, 0], [0.19, 0.08], [0.13, 0.15], [-0.18, 0.15], [-0.22, 0.11], [-0.22, 0]], 0.075, 0.015);
+  T.cbox(0.07, 0.05, 0.08, 0.008, 0.21, 0.035, 0, CAMO);
+  cannon(b, T, 0.24, 0.035, 0, 0.34, 0.0085, { shroud: 0.32 });
+  atgmBox(T, -0.04, 0.06, -0.19, 0.17, 2, 0.06);
+  // panoramic sight and gunner sight
+  panoSight(T, -0.1, 0.075, 0.08, 0.03, 0.9);
+  T.cbox(0.05, 0.03, 0.04, 0.005, 0.1, 0.09, 0.09, CAMO);
+  T.box(0.004, 0.018, 0.03, 0.126, 0.09, 0.09, GLASS);
+  T.box(0.08, 0.025, 0.03, -0.02, 0.085, 0.0, mt(K.gun));
+  for (const s of [-1, 1]) smokeBank(T, 0.14, 0.06, s * 0.13, s, 4, 0.9, 0.008);
+  teamPanel(T, 0.14, 0.02, 0.003, -0.04, 0.04, 0.151, b.team);
+  antennas(b, B, -0.4, 0.295, [-0.2, 0.2], 0.22);
+}
+
+function apcK21(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.32, x1: 0.29, rw: 0.05, front: true, style: 'asia', rollers: 3 });
+  B.side([[-0.45, 0.06], [0.36, 0.06], [0.46, 0.15], [-0.47, 0.15]], 0.33, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-0.48, 0.15],
+      [0.45, 0.15],
+      [0.5, 0.18],
+      [0.27, 0.27],
+      [-0.46, 0.272],
+      [-0.48, 0.25],
+    ],
+    0.58,
+    0,
+    CAMO,
+    0.01,
+  );
+  // flotation bladder boxes over the skirts
+  for (const s of [-1, 1]) {
+    B.cbox(0.84, 0.05, 0.03, 0.012, -0.02, 0.2, s * 0.3, CAMO);
+    B.box(0.84, 0.05, 0.006, -0.02, 0.135, s * 0.296, 0x26282a);
+    headlight(B, 0.48, 0.2, s * 0.24, 0.9);
+    taillight(B, -0.48, 0.25, s * 0.25);
+  }
+  grille(B, 0.2, 0.258, 0.15, 0.14, 0.12, 6);
+  hatch(B, 0.28, 0.262, -0.14, 0.03);
+  rearRamp(B, -0.482, 0.08, 0.25, 0.32, b.team);
+  b.emit(0.18, 0.27, 0.27);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.2, 0.2, 0.317, b.team);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.2, 0.2, -0.317, b.team);
+  // turret: 40mm gun with muzzle brake, two ATGM tubes
+  const T = ifvTurret(b, B, -0.06, 0.272, 0, [[0.18, 0], [0.17, 0.09], [0.1, 0.16], [-0.17, 0.16], [-0.21, 0.11], [-0.21, 0]], 0.09);
+  T.cbox(0.06, 0.06, 0.08, 0.008, 0.18, 0.045, 0, CAMO);
+  cannon(b, T, 0.2, 0.045, 0, 0.33, 0.0105, { shroud: 0.18 });
+  for (const s of [-1, 1]) {
+    T.cx(0.015, 0.015, 0.16, 0.0, 0.1, s * 0.12, CAMO, 8);
+    T.cx(0.011, 0.011, 0.004, 0.081, 0.1, s * 0.12, K.black, 8);
+    smokeBank(T, 0.12, 0.07, s * 0.15, s, 4, 0.9, 0.008);
+  }
+  panoSight(T, -0.08, 0.09, 0.07, 0.025, 0.85);
+  T.cbox(0.05, 0.03, 0.04, 0.005, 0.08, 0.105, -0.08, CAMO);
+  T.box(0.004, 0.018, 0.03, 0.106, 0.105, -0.08, GLASS);
+  teamPanel(T, 0.14, 0.02, 0.003, -0.05, 0.05, 0.161, b.team);
+  antennas(b, T, -0.17, 0.09, [-0.11, 0.11], 0.2);
+}
+
+function apcBTR4(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.3, steer: 1 },
+    { x: 0.14, steer: 0.6 },
+    { x: -0.07, steer: 0 },
+    { x: -0.23, steer: 0 },
+  ];
+  wheelSet(b, axles, 0.066, 0.075, 0.24);
+  // tall boxy hull, crew cab with armoured windscreen at the front
+  B.side([[-0.47, 0.1], [0.42, 0.1], [0.48, 0.17], [-0.48, 0.17]], 0.4, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-0.48, 0.15],
+      [0.46, 0.15],
+      [0.49, 0.2],
+      [0.42, 0.3],
+      [0.32, 0.32],
+      [-0.46, 0.32],
+      [-0.48, 0.3],
+    ],
+    0.57,
+    0,
+    CAMO,
+    0.01,
+  );
+  // windscreen armoured glass + shutters
+  for (const s of [-1, 1]) {
+    B.box(0.004, 0.05, 0.16, 0.452, 0.27, s * 0.12, GLASS, 0, 0, 0.6);
+    B.box(0.06, 0.04, 0.004, 0.36, 0.27, s * 0.286, GLASS);
+    B.box(0.03, 0.08, 0.004, 0.25, 0.23, s * 0.286, K.dark);
+    headlight(B, 0.48, 0.2, s * 0.22, 0.9);
+    taillight(B, -0.48, 0.29, s * 0.25);
+    for (const a of axles) B.box(0.15, 0.012, 0.004, a.x, 0.148, s * 0.287, K.dark);
+    jerry(B, -0.42, 0.32, s * 0.2);
+  }
+  B.box(0.06, 0.03, 0.03, -0.05, 0.31, -0.29, K.black);
+  b.emit(-0.05, 0.32, -0.3);
+  grille(B, 0.05, 0.32, -0.15, 0.14, 0.12, 6);
+  rearRamp(B, -0.482, 0.15, 0.3, 0.26, b.team, 2);
+  hatch(B, 0.38, 0.32, 0.12, 0.03);
+  hatch(B, 0.38, 0.32, -0.12, 0.03);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.15, 0.27, 0.287, b.team);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.15, 0.27, -0.287, b.team);
+  // Parus RWS turret: 30mm, grenade launcher, ATGM
+  const T = b.part(B, -0.1, 0.32, 0, 'turret');
+  T.cy(0.1, 0.11, 0.02, 0, 0, 0, K.dark, 14);
+  T.cbox(0.2, 0.07, 0.15, 0.012, 0.0, 0.055, 0, CAMO);
+  T.cbox(0.06, 0.05, 0.04, 0.006, 0.07, 0.11, -0.04, 0x3a3d40);
+  T.box(0.004, 0.03, 0.03, 0.102, 0.112, -0.04, GLASS);
+  cannon(b, T, 0.1, 0.055, 0.03, 0.3, 0.008, { shroud: 0.15 });
+  atgmBox(T, -0.02, 0.07, -0.1, 0.17, 2, 0.05);
+  smokeBank(T, 0.06, 0.08, 0.08, 1, 3, 0.9, 0.008);
+  teamPanel(T, 0.12, 0.02, 0.003, -0.02, 0.05, 0.076, b.team);
+  antennas(b, B, -0.4, 0.32, [-0.2, 0.2], 0.22);
+}
+
+function apcPars(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.32, steer: 1 },
+    { x: 0.15, steer: 0.6 },
+    { x: -0.1, steer: -0.2 },
+    { x: -0.27, steer: -0.4 },
+  ];
+  const roof = wheeledHull(b, { L: 1.0, W: 0.57, y0: 0.11, roof: 0.285, nose: 0.5, glacisX: 0.26, rearSlope: 0.06, axles, r: 0.07 });
+  for (const s of [-1, 1]) {
+    headlight(B, 0.48, 0.21, s * 0.22, 0.9);
+    taillight(B, -0.495, 0.25, s * 0.24);
+    B.cbox(0.3, 0.04, 0.02, 0.006, -0.18, 0.24, s * 0.29, CAMO);
+    bin(B, 0.1, 0.035, 0.04, 0.05, 0.25, s * 0.29, CAMO);
+  }
+  B.box(0.04, 0.02, 0.04, 0.1, roof + 0.01, 0.25, K.black);
+  b.emit(0.1, roof + 0.02, 0.26);
+  hatch(B, 0.25, roof, -0.13, 0.03);
+  for (const z of [-0.17, -0.09]) periscope(B, 0.28, roof - 0.006, z, 0, 0.018);
+  rearRamp(B, -0.5, 0.13, 0.25, 0.28, b.team);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.18, 0.2, 0.287, b.team);
+  teamPanel(B, 0.3, 0.024, 0.003, -0.18, 0.2, -0.287, b.team);
+  const T = ifvTurret(b, B, -0.05, roof, 0, [[0.16, 0], [0.15, 0.09], [0.08, 0.14], [-0.15, 0.14], [-0.18, 0.1], [-0.18, 0]], 0.08);
+  T.cbox(0.05, 0.05, 0.07, 0.008, 0.17, 0.04, 0, CAMO);
+  cannon(b, T, 0.19, 0.04, 0, 0.3, 0.008, { shroud: 0.22 });
+  atgmBox(T, -0.04, 0.06, 0.17, 0.15, 2, 0.05);
+  panoSight(T, -0.08, 0.08, -0.07, 0.025, 0.85);
+  T.cbox(0.05, 0.03, 0.04, 0.005, 0.08, 0.095, 0.06, CAMO);
+  T.box(0.004, 0.018, 0.03, 0.106, 0.095, 0.06, GLASS);
+  for (const s of [-1, 1]) smokeBank(T, 0.1, 0.065, s * 0.13, s, 4, 0.9, 0.008);
+  teamPanel(T, 0.12, 0.02, 0.003, -0.05, 0.04, -0.141, b.team);
+  antennas(b, B, -0.42, roof, [-0.2, 0.2], 0.22);
+}
+
+function apcBoragh(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.33, x1: 0.27, rw: 0.048, front: true, style: 'sov', rollers: 3, sag: 0.01 });
+  B.side([[-0.44, 0.06], [0.3, 0.06], [0.44, 0.13], [-0.46, 0.13]], 0.33, 0, CAMO, 0.008);
+  // BMP-1 style: long pointed ribbed nose, low hull
+  B.side(
+    [
+      [-0.47, 0.13],
+      [0.44, 0.13],
+      [0.49, 0.15],
+      [0.2, 0.235],
+      [-0.44, 0.24],
+      [-0.47, 0.22],
+    ],
+    0.56,
+    0,
+    CAMO,
+    0.008,
+  );
+  const gp = slopePlane([0.2, 0.235], [0.49, 0.15], 0);
+  for (let i = 0; i < 5; i++) B.add(new THREE.BoxGeometry(0.008, 0.01, 0.42), CAMO, gp.clone().multiply(TR(0.03 + i * 0.055, 0.004, 0)));
+  for (const s of [-1, 1]) {
+    B.box(0.88, 0.006, 0.12, -0.02, 0.132, s * 0.235, CAMO);
+    headlight(B, 0.44, 0.17, s * 0.2, 0.85);
+    taillight(B, -0.47, 0.23, s * 0.24);
+    for (let i = 0; i < 4; i++) periscope(B, -0.36 + i * 0.07, 0.236, s * 0.2, s > 0 ? Math.PI / 2 : -Math.PI / 2, 0.016);
+  }
+  // two rear doors (BMP style bulged) and roof hatches
+  for (const s of [-1, 1]) {
+    B.cbox(0.03, 0.09, 0.13, 0.01, -0.475, 0.17, s * 0.08, CAMO);
+    B.box(0.004, 0.02, 0.06, -0.493, 0.2, s * 0.08, b.team);
+    for (const x of [-0.36, -0.22]) B.box(0.12, 0.006, 0.09, x + 0.04, 0.242, s * 0.12, shade(b.base, 0.85));
+  }
+  grille(B, 0.25, 0.205, -0.1, 0.1, 0.12, 5);
+  hatch(B, 0.18, 0.236, -0.14, 0.026);
+  B.box(0.05, 0.02, 0.03, 0.22, 0.19, 0.27, K.black);
+  b.emit(0.22, 0.2, 0.28);
+  // BMP-2 style turret: frustum, long 30mm, Konkurs launcher on the roof
+  const T = b.part(B, 0.02, 0.24, 0, 'turret');
+  T.loft(
+    [
+      { y: 0, p: ell(14, 0.15, 0.15) },
+      { y: 0.075, p: ell(14, 0.1, 0.11, -0.01) },
+    ],
+    CAMO,
+  );
+  T.cbox(0.05, 0.05, 0.06, 0.008, 0.14, 0.035, 0, CAMO);
+  cannon(b, T, 0.15, 0.04, 0, 0.36, 0.0075, { brake: false });
+  T.cx(0.004, 0.004, 0.05, 0.17, 0.03, 0.04, mt(K.dark), 5);
+  T.cx(0.014, 0.014, 0.17, 0.0, 0.11, 0.0, 0x4a5032, 8);
+  T.box(0.02, 0.03, 0.02, -0.02, 0.085, 0, K.dark);
+  hatch(T, -0.04, 0.075, -0.05, 0.028);
+  hatch(T, -0.04, 0.075, 0.05, 0.028);
+  for (const s of [-1, 1]) smokeBank(T, 0.03, 0.05, s * 0.12, s, 3, 1.1, 0.008);
+  teamPanel(T, 0.004, 0.02, 0.1, -0.145, 0.03, 0, b.team);
+  antennas(b, T, -0.09, 0.075, [-0.08, 0.08], 0.2);
+}
+
+function apc(style: ModelStyle, fog: FogOfWar | null): Model {
+  const fn = APC[style.faction] ?? apcBradley;
+  return build('apc', style, fog, fn);
+}
+
+const APC: Record<string, (b: Bld) => void> = {
+  usa: apcBradley,
+  israel: apcNamer,
+  china: apcZBL08,
+  russia: apcBMP3,
+  germany: apcPuma,
+  korea: apcK21,
+  ukraine: apcBTR4,
+  turkey: apcPars,
+  iran: apcBoragh,
+};
+
+
+// ================================================================ air defence
+
+/** Spinning radar head on a part: returns the spin part (rotates about Y). */
+function spinRadar(b: Bld, p: Part, x: number, y: number, z: number, rate = 2.6) {
+  p.cy(0.012, 0.016, 0.03, x, y, z, K.dark, 8);
+  const r = b.part(p, x, y + 0.03, z);
+  spinner(r.g, 'y', rate);
+  return r;
+}
+
+/** Flat search radar antenna (planar array) on a spin part. */
+function planarRadar(r: Part, w: number, h: number, tilt = 0.35) {
+  r.box(0.02, 0.02, 0.03, 0, 0.01, 0, K.dark);
+  r.cbox(0.014, h, w, 0.003, 0.008, 0.02 + h / 2, 0, 0x4a4e48, 0, 0, tilt);
+  r.box(0.003, h * 0.84, w * 0.9, 0.016, 0.02 + h / 2, 0, 0x2a2c2a, 0, 0, tilt);
+}
+
+/** Parabolic dish facing +X (axis along X) on a part. */
+function dishX(p: Part, x: number, y: number, z: number, R: number, paint = 0x8a8e88, deep = 0.35) {
+  const pts: THREE.Vector2[] = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6;
+    pts.push(new THREE.Vector2(Math.max(0.001, R * t), R * deep * t * t));
+  }
+  const g = new THREE.LatheGeometry(pts, 16).rotateZ(Math.PI / 2);
+  p.add(g, paint, TR(x, y, z));
+  // back side (lathe is single-sided)
+  const g2 = new THREE.LatheGeometry(pts.slice().reverse(), 16).rotateZ(Math.PI / 2);
+  p.add(g2, shade(paint, 0.7), TR(x - 0.002, y, z));
+  p.cx(0.004, 0.004, R * 0.7, x + R * 0.35 - R * deep, y, z, K.dark, 4);
+  p.sph(R * 0.12, x + R * 0.7 - R * deep, y, z, K.dark, 6, 4);
+}
+
+/** Twin outboard autocannons (Gepard style) on a turret: each side a recoiling barrel. */
+function twinGuns(b: Bld, T: Part, x: number, y: number, zs: number[], len: number, r: number, housing = true) {
+  for (const z of zs) {
+    if (housing) T.cbox(0.16, 0.06, 0.05, 0.008, x - 0.06, y, z, CAMO);
+    cannon(b, T, x + 0.02, y + 0.005, z, len, r, { shroud: 0.18 });
+  }
+}
+
+function aaGepard(b: Bld, chinese = false, korean = false, turkish = false) {
+  const B = b.body;
+  if (korean || turkish) lightTracks(b, { n: 5, x0: -0.3, x1: 0.26, rw: 0.052, front: true, style: 'nato' });
+  else
+    running(b, {
+      wheels: evenly(chinese ? 6 : 7, -0.36, 0.32),
+      rw: chinese ? 0.056 : 0.05,
+      spr: [-0.465, 0.11, 0.05],
+      idl: [0.445, 0.1, 0.045],
+      rollers: [
+        [-0.2, 0.14, 0.015],
+        [0.0, 0.14, 0.015],
+        [0.2, 0.14, 0.015],
+      ],
+      gauge: 0.24,
+      tw: 0.125,
+      style: chinese ? 'asia' : 'nato',
+    });
+  const L = korean || turkish ? 0.9 : 1.0;
+  B.side([[-L / 2 + 0.03, 0.06], [L / 2 - 0.1, 0.06], [L / 2 - 0.02, 0.165], [-L / 2, 0.165]], 0.33, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-L / 2, 0.165],
+      [L / 2 - 0.02, 0.165],
+      [L / 2 + 0.01, 0.2],
+      [L / 2 - 0.18, 0.25],
+      [-L / 2 + 0.03, 0.255],
+      [-L / 2, 0.235],
+    ],
+    0.6,
+    0,
+    CAMO,
+    0.008,
+  );
+  skirts(B, [[-L / 2 + 0.03, 0.1], [L / 2 - 0.08, 0.1], [L / 2, 0.15], [L / 2, 0.2], [-L / 2 + 0.02, 0.2]], 0.31, 0.01, [-0.2, 0.0, 0.2]);
+  for (const s of [-1, 1]) {
+    headlight(B, L / 2, 0.215, s * 0.25, 0.9);
+    taillight(B, -L / 2, 0.235, s * 0.27);
+    b.emit(-L / 2 - 0.005, 0.22, s * 0.18);
+  }
+  grille(B, -L / 2 + 0.12, 0.255, 0, 0.14, 0.3, 7);
+  hatch(B, L / 2 - 0.15, 0.24, 0.12, 0.03);
+  teamPanel(B, 0.4, 0.024, 0.003, -0.05, 0.16, 0.316, b.team);
+  teamPanel(B, 0.4, 0.024, 0.003, -0.05, 0.16, -0.316, b.team);
+  // big box turret
+  const T = b.part(B, -0.06, 0.255, 0, 'turret');
+  const plan = mirrorZ([[0.22, 0], [0.22, 0.14], [0.16, 0.19], [-0.2, 0.19], [-0.26, 0.15], [-0.26, 0]]);
+  T.loft([{ y: 0, p: plan }, { y: 0.13, p: inset(plan, 0.012) }], CAMO);
+  T.cy(0.2, 0.2, 0.012, 0, -0.01, 0, K.dark, 18);
+  const gz = turkish ? 0.215 : 0.225;
+  twinGuns(b, T, 0.12, 0.08, [-gz, gz], korean ? 0.4 : 0.48, korean ? 0.008 : 0.0095);
+  for (const s of [-1, 1]) T.box(0.08, 0.04, 0.02, 0.0, 0.08, s * (gz - 0.03), K.dark);
+  // tracking radar (front) + search radar (rotating, rear)
+  if (chinese || turkish) {
+    T.cbox(0.06, 0.07, 0.12, 0.01, 0.22, 0.09, 0, 0x4a4e48);
+    T.box(0.004, 0.05, 0.09, 0.252, 0.09, 0, 0x2a2c2a);
+  } else {
+    dishX(T, 0.22, 0.14, 0, 0.06, 0x7a7e78, 0.3);
+    T.box(0.04, 0.02, 0.03, 0.2, 0.135, 0, K.dark);
+  }
+  const R = spinRadar(b, T, -0.16, 0.13, 0, 2.4);
+  if (korean) planarRadar(R, 0.18, 0.07, 0.2);
+  else {
+    R.box(0.02, 0.03, 0.03, 0, 0.015, 0, K.dark);
+    R.cbox(0.02, 0.06, 0.24, 0.004, 0.0, 0.07, 0, 0x5a5e58, 0, 0, 0.3);
+    R.box(0.004, 0.045, 0.22, 0.012, 0.07, 0, 0x2a2c2a, 0, 0, 0.3);
+  }
+  // EO sight, hatches
+  T.cbox(0.05, 0.04, 0.04, 0.005, 0.1, 0.15, 0.1, CAMO);
+  T.box(0.004, 0.024, 0.03, 0.126, 0.15, 0.1, GLASS);
+  hatch(T, -0.05, 0.13, 0.1, 0.03);
+  hatch(T, -0.05, 0.13, -0.1, 0.03);
+  for (const s of [-1, 1]) {
+    smokeBank(T, 0.17, 0.09, s * 0.17, s, 4, 0.8, 0.008);
+    teamPanel(T, 0.16, 0.022, 0.003, -0.08, 0.05, s * 0.19, b.team);
+  }
+  antennas(b, T, -0.24, 0.13, [-0.14, 0.14], 0.2);
+}
+
+/** Generic military truck chassis (cab at the front). Returns frame top height. */
+function truck(b: Bld, o: { axles: Axle[]; r: number; W: number; cabX0: number; cabX1: number; frameX0: number; cabH?: number; armoured?: boolean; tyreW?: number }) {
+  const B = b.body;
+  const tw = o.tyreW ?? 0.07;
+  wheelSet(b, o.axles, o.r, tw, o.W / 2 - tw / 2 - 0.004);
+  const fy = o.r + 0.03;
+  for (const s of [-1, 1]) B.box(o.cabX1 - o.frameX0, 0.04, 0.035, (o.cabX1 + o.frameX0) / 2, fy, s * o.W * 0.22, K.dark);
+  B.box(o.cabX1 - o.frameX0 - 0.02, 0.01, o.W * 0.5, (o.cabX1 + o.frameX0) / 2, fy + 0.02, 0, K.dark);
+  // mudguards over the wheels
+  for (const a of o.axles) for (const s of [-1, 1]) B.box(o.r * 2.3, 0.008, tw + 0.02, a.x, o.r * 2 + 0.012, s * (o.W / 2 - tw / 2 - 0.004), K.dark);
+  // cab
+  const y0 = fy + 0.02;
+  const h = o.cabH ?? 0.17;
+  const x0 = o.cabX0;
+  const x1 = o.cabX1;
+  B.side(
+    [
+      [x0, y0],
+      [x1, y0],
+      [x1 + 0.005, y0 + h * 0.45],
+      [x1 - 0.05, y0 + h],
+      [x0, y0 + h],
+    ],
+    o.W - 0.01,
+    0,
+    CAMO,
+    0.012,
+  );
+  const wl = Math.hypot(0.055, h * 0.5);
+  const wa = Math.atan2(0.055, h * 0.5);
+  for (const s of [-1, 1]) B.box(0.006, wl * 0.62, o.W / 2 - 0.07, x1 - 0.024, y0 + h * 0.74, (s * (o.W / 2 - 0.03)) / 2, GLASS, 0, 0, wa);
+  B.box(0.008, wl * 0.66, 0.016, x1 - 0.023, y0 + h * 0.74, 0, CAMO, 0, 0, wa);
+  for (const s of [-1, 1]) {
+    B.box((x1 - x0) * 0.45, h * 0.3, 0.004, x1 - 0.08, y0 + h * 0.72, s * (o.W / 2 - 0.003), GLASS);
+    headlight(B, x1 + 0.004, y0 + 0.045, s * (o.W / 2 - 0.05), 0.9);
+    B.box(0.01, 0.04, 0.03, x1 - 0.06, y0 + h * 0.75, s * (o.W / 2 + 0.02), K.dark);
+  }
+  B.box(0.03, 0.04, o.W + 0.01, x1 + 0.014, y0 + 0.01, 0, K.dark);
+  B.box(0.006, h * 0.25, o.W * 0.5, x1 + 0.004, y0 + h * 0.28, 0, K.dark);
+  B.box(0.03, 0.008, o.W - 0.02, x0 + 0.04, y0 + h + 0.004, 0, K.dark);
+  teamPanel(B, (x1 - x0) * 0.5, 0.02, o.W + 0.004, x0 + (x1 - x0) * 0.4, y0 + h * 0.4, 0, b.team);
+  B.cy(0.01, 0.012, 0.1, x0 - 0.01, y0 + h * 0.4, o.W / 2 - 0.03, K.dark, 6);
+  b.emit(x0 - 0.01, y0 + h * 0.4 + 0.1, o.W / 2 - 0.03);
+  return y0;
+}
+
+function aaPantsir(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.42, steer: 1 },
+    { x: 0.26, steer: 0.6 },
+    { x: -0.14, steer: 0 },
+    { x: -0.3, steer: 0 },
+  ];
+  const fy = truck(b, { axles, r: 0.068, W: 0.52, cabX0: 0.33, cabX1: 0.55, frameX0: -0.5, cabH: 0.18 });
+  // equipment body and turret platform
+  B.cbox(0.3, 0.14, 0.5, 0.01, 0.15, fy + 0.07, 0, CAMO);
+  B.box(0.62, 0.03, 0.5, -0.2, fy + 0.015, 0, CAMO);
+  for (const s of [-1, 1]) B.box(0.04, 0.06, 0.04, -0.46, fy - 0.02, s * 0.2, K.dark);
+  const T = b.part(B, -0.18, fy + 0.03, 0, 'turret');
+  T.cy(0.16, 0.18, 0.04, 0, 0, 0, CAMO, 16);
+  T.cbox(0.28, 0.16, 0.22, 0.014, -0.02, 0.12, 0, CAMO);
+  // tracking radar (front, round), search radar (top, rotating)
+  dishX(T, 0.12, 0.16, 0, 0.07, 0x6a6e66, 0.25);
+  T.box(0.03, 0.08, 0.03, 0.1, 0.13, 0, K.dark);
+  const R = spinRadar(b, T, -0.08, 0.18, 0, 2.0);
+  planarRadar(R, 0.2, 0.08, 0.3);
+  for (const s of [-1, 1]) {
+    // 6 missile tubes per side + twin 30mm
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.016, 0.016, 0.26, -0.04, 0.09 + i * 0.034, s * (0.13 + j * 0.034), 0x4e5634, 8);
+    T.box(0.27, 0.075, 0.11, -0.04, 0.105, s * 0.165, 0x4a5032);
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.011, 0.011, 0.004, 0.092, 0.09 + i * 0.034, s * (0.13 + j * 0.034), K.black, 6);
+    T.cbox(0.12, 0.05, 0.05, 0.006, 0.05, 0.05, s * 0.12, CAMO);
+    for (const dy of [-0.012, 0.012]) cannon(b, T, 0.1, 0.05 + dy, s * 0.12, 0.26, 0.0065, { brake: false });
+    teamPanel(T, 0.12, 0.02, 0.003, -0.04, 0.09, s * 0.101, b.team);
+  }
+  antennas(b, B, 0.36, fy + 0.18, [-0.2, 0.2], 0.2);
+}
+
+function aaShilka(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 6, x0: -0.33, x1: 0.28, rw: 0.05, front: false, style: 'sov', rollers: 0, idlUp: 0.025 });
+  B.side([[-0.44, 0.06], [0.33, 0.06], [0.44, 0.15], [-0.46, 0.15]], 0.33, 0, CAMO, 0.008);
+  B.side([[-0.47, 0.15], [0.44, 0.15], [0.48, 0.18], [0.36, 0.23], [-0.45, 0.235], [-0.47, 0.21]], 0.58, 0, CAMO, 0.008);
+  for (const s of [-1, 1]) {
+    B.box(0.9, 0.006, 0.12, -0.01, 0.152, s * 0.235, CAMO);
+    headlight(B, 0.46, 0.195, s * 0.22, 0.85);
+    taillight(B, -0.47, 0.22, s * 0.25);
+    bin(B, 0.14, 0.04, 0.06, 0.25, 0.152, s * 0.26, CAMO);
+  }
+  grille(B, -0.37, 0.235, 0, 0.12, 0.3, 6);
+  B.box(0.008, 0.04, 0.3, -0.472, 0.19, 0, K.black);
+  b.emit(-0.48, 0.19, 0.1);
+  teamPanel(B, 0.004, 0.025, 0.2, -0.474, 0.22, 0, b.team);
+  // wide flat turret, four 23mm guns, round radar dish on the rear mast
+  const T = b.part(B, -0.02, 0.235, 0, 'turret');
+  const plan = mirrorZ([[0.26, 0], [0.26, 0.17], [0.22, 0.24], [-0.24, 0.24], [-0.28, 0.2], [-0.28, 0]]);
+  T.loft([{ y: 0, p: plan }, { y: 0.11, p: inset(plan, 0.012) }], CAMO);
+  T.cbox(0.06, 0.08, 0.2, 0.01, 0.27, 0.06, 0, CAMO);
+  for (const z of [-0.055, 0.055]) for (const y of [0.04, 0.085]) cannon(b, T, 0.29, y, z, 0.24, 0.0055, { brake: true });
+  T.box(0.012, 0.06, 0.34, 0.265, 0.045, 0, K.dark);
+  T.cy(0.012, 0.014, 0.08, -0.2, 0.11, 0, K.dark, 8);
+  const R = b.part(T, -0.2, 0.19, 0);
+  spinner(R.g, 'y', 1.6);
+  dishX(R, 0.0, 0.05, 0, 0.075, 0x8a8e84, 0.35);
+  R.box(0.03, 0.05, 0.03, -0.02, 0.025, 0, K.dark);
+  for (const s of [-1, 1]) {
+    T.box(0.36, 0.006, 0.004, -0.02, 0.06, s * 0.236, K.dark);
+    teamPanel(T, 0.16, 0.022, 0.003, -0.08, 0.08, s * 0.237, b.team);
+    T.cbox(0.06, 0.04, 0.04, 0.005, 0.1, 0.13, s * 0.13, CAMO);
+  }
+  hatch(T, -0.06, 0.11, 0.12, 0.03);
+  antennas(b, T, -0.24, 0.11, [-0.18, 0.18], 0.2);
+}
+
+function m113Hull(b: Bld) {
+  const B = b.body;
+  lightTracks(b, { n: 5, x0: -0.3, x1: 0.25, rw: 0.052, front: true, style: 'light', rollers: 0, idlUp: 0.02 });
+  B.side([[-0.44, 0.06], [0.33, 0.06], [0.43, 0.15], [-0.46, 0.15]], 0.33, 0, CAMO, 0.008);
+  B.side([[-0.46, 0.13], [0.42, 0.13], [0.46, 0.17], [0.3, 0.29], [-0.44, 0.295], [-0.46, 0.28]], 0.56, 0, CAMO, 0.01);
+  for (const s of [-1, 1]) {
+    B.box(0.88, 0.04, 0.008, -0.02, 0.12, s * 0.284, 0x26282a);
+    headlight(B, 0.44, 0.2, s * 0.22, 0.85);
+    taillight(B, -0.46, 0.27, s * 0.24);
+  }
+  B.side([[0.38, 0.18], [0.44, 0.182], [0.36, 0.25], [0.33, 0.245]], 0.4, 0, CAMO, 0.004);
+  rearRamp(B, -0.462, 0.09, 0.27, 0.32, b.team);
+  B.box(0.04, 0.03, 0.03, 0.3, 0.28, 0.24, K.black);
+  b.emit(0.3, 0.3, 0.25);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.12, 0.23, 0.281, b.team);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.12, 0.23, -0.281, b.team);
+  return 0.295;
+}
+
+function aaMachbet(b: Bld) {
+  const B = b.body;
+  const top = m113Hull(b);
+  hatch(B, 0.28, top - 0.01, -0.14, 0.03);
+  const T = b.part(B, -0.08, top, 0, 'turret');
+  T.cy(0.13, 0.14, 0.03, 0, 0, 0, CAMO, 14);
+  T.cbox(0.18, 0.1, 0.16, 0.012, -0.01, 0.08, 0, CAMO);
+  // M61 Vulcan (six barrels) on the right, Stinger quad pod on the left
+  const vul = b.part(T, 0.1, 0.07, 0.11, 'recoil');
+  vul.cx(0.022, 0.024, 0.06, 0.0, 0, 0, mt(K.gun), 10);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    vul.cx(0.004, 0.004, 0.28, 0.16, Math.cos(a) * 0.012, Math.sin(a) * 0.012, mt(K.dark), 5);
+  }
+  vul.cx(0.017, 0.017, 0.01, 0.25, 0, 0, mt(K.gun), 10);
+  b.muzzle(vul, 0.31, 0, 0);
+  T.box(0.08, 0.06, 0.06, 0.02, 0.07, 0.11, CAMO);
+  const pod = b.part(T, 0.0, 0.1, -0.12);
+  pod.g.rotation.z = 0.2;
+  pod.cbox(0.2, 0.08, 0.08, 0.008, 0.02, 0.0, 0, CAMO);
+  for (const y of [-0.019, 0.019]) for (const z of [-0.019, 0.019]) pod.cx(0.014, 0.014, 0.004, 0.122, y, z, K.black, 8);
+  b.muzzle(pod, 0.13, 0, 0);
+  T.cbox(0.05, 0.04, 0.04, 0.005, 0.05, 0.15, 0.0, CAMO);
+  T.box(0.004, 0.024, 0.03, 0.076, 0.15, 0.0, GLASS);
+  const R = spinRadar(b, T, -0.08, 0.13, 0, 2.2);
+  planarRadar(R, 0.12, 0.05, 0.3);
+  teamPanel(T, 0.12, 0.022, 0.003, -0.02, 0.06, 0.081, b.team);
+  antennas(b, B, -0.4, top, [-0.2, 0.2], 0.2);
+}
+
+/** Boxer 8x8 drive module + mission module. Returns roof height. */
+function boxerHull(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.36, steer: 1 },
+    { x: 0.18, steer: 0.6 },
+    { x: -0.1, steer: 0 },
+    { x: -0.28, steer: 0 },
+  ];
+  const roof = wheeledHull(b, { L: 1.04, W: 0.58, y0: 0.11, roof: 0.3, nose: 0.52, glacisX: 0.3, rearSlope: 0.03, axles, r: 0.074, tyreW: 0.08 });
+  // mission module seam and side armour
+  for (const s of [-1, 1]) {
+    B.box(0.004, 0.15, 0.004, 0.1, 0.22, s * 0.292, K.dark);
+    B.box(0.7, 0.004, 0.004, -0.12, 0.27, s * 0.292, K.dark);
+    headlight(B, 0.5, 0.22, s * 0.23, 0.9);
+    taillight(B, -0.52, 0.27, s * 0.25);
+  }
+  grille(B, 0.3, roof, -0.1, 0.12, 0.16, 6);
+  hatch(B, 0.36, roof - 0.02, 0.14, 0.03);
+  B.box(0.05, 0.02, 0.04, 0.2, roof + 0.01, -0.25, K.black);
+  b.emit(0.2, roof + 0.02, -0.26);
+  rearRamp(B, -0.522, 0.14, 0.28, 0.3, b.team);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.15, 0.24, 0.292, b.team);
+  teamPanel(B, 0.36, 0.024, 0.003, -0.15, 0.24, -0.292, b.team);
+  return roof;
+}
+
+function aaSkyranger(b: Bld) {
+  const B = b.body;
+  const roof = boxerHull(b);
+  const T = b.part(B, -0.12, roof, 0, 'turret');
+  T.cy(0.15, 0.16, 0.02, 0, 0, 0, K.dark, 16);
+  const plan = mirrorZ([[0.2, 0], [0.19, 0.11], [0.12, 0.18], [-0.18, 0.18], [-0.23, 0.13], [-0.23, 0]]);
+  T.loft([{ y: 0.02, p: plan }, { y: 0.16, p: inset(plan, 0.026) }], CAMO);
+  // AESA radar panels on four faces
+  for (const [x, z, ry] of [
+    [0.155, 0.13, -0.78],
+    [0.155, -0.13, 0.78],
+    [-0.19, 0.14, -2.4],
+    [-0.19, -0.14, 2.4],
+  ] as const) {
+    T.box(0.008, 0.08, 0.09, x, 0.09, z, 0x3a3e40, 0, ry, 0);
+  }
+  // 30mm revolver gun in a centre cradle + missile pods on the sides
+  T.cbox(0.1, 0.07, 0.08, 0.008, 0.19, 0.09, 0, CAMO);
+  cannon(b, T, 0.23, 0.09, 0, 0.38, 0.009, { shroud: 0.25 });
+  for (const s of [-1, 1]) {
+    const pod = b.part(T, 0.02, 0.11, s * 0.215);
+    pod.cbox(0.16, 0.07, 0.06, 0.008, 0, 0, 0, CAMO);
+    for (const y of [-0.017, 0.017]) pod.cx(0.013, 0.013, 0.004, 0.081, y, 0, K.black, 8);
+    if (s > 0) b.muzzle(pod, 0.09, 0, 0);
+    teamPanel(pod, 0.1, 0.018, 0.003, -0.02, 0.0, s * 0.031, b.team);
+  }
+  T.cbox(0.05, 0.04, 0.05, 0.006, 0.0, 0.18, 0, 0x3a3e40);
+  T.box(0.004, 0.024, 0.03, 0.026, 0.18, 0, GLASS);
+  antennas(b, B, -0.44, roof, [-0.2, 0.2], 0.22);
+}
+
+function aa(style: ModelStyle, fog: FogOfWar | null): Model {
+  const fn = AA[style.faction] ?? aaSkyranger;
+  return build('aa', style, fog, fn);
+}
+
+const AA: Record<string, (b: Bld) => void> = {
+  germany: aaSkyranger,
+  ukraine: (b) => aaGepard(b),
+  russia: aaPantsir,
+  china: (b) => aaGepard(b, true),
+  korea: (b) => aaGepard(b, false, true),
+  iran: aaShilka,
+  turkey: (b) => aaGepard(b, false, false, true),
+  israel: aaMachbet,
+};
+
+// ---------------------------------------------------------------- laser
+
+/** Stryker ICV-style 8x8 hull (V-hull). Returns roof height. */
+function strykerHull(b: Bld) {
+  const B = b.body;
+  const axles: Axle[] = [
+    { x: 0.35, steer: 1 },
+    { x: 0.19, steer: 0.6 },
+    { x: -0.12, steer: 0 },
+    { x: -0.28, steer: 0 },
+  ];
+  wheelSet(b, axles, 0.066, 0.072, 0.245);
+  // double-V belly
+  B.loft(
+    [
+      { y: 0.06, p: [[-0.46, -0.06], [0.42, -0.06], [0.42, 0.06], [-0.46, 0.06]] },
+      { y: 0.16, p: [[-0.48, -0.2], [0.46, -0.2], [0.46, 0.2], [-0.48, 0.2]] },
+    ],
+    CAMO,
+  );
+  B.side(
+    [
+      [-0.49, 0.15],
+      [0.47, 0.15],
+      [0.51, 0.18],
+      [0.33, 0.28],
+      [-0.47, 0.285],
+      [-0.49, 0.26],
+    ],
+    0.56,
+    0,
+    CAMO,
+    0.01,
+  );
+  for (const s of [-1, 1]) {
+    for (const a of axles) B.box(0.15, 0.012, 0.004, a.x, 0.149, s * 0.282, K.dark);
+    // slat-like add-on armour tiles
+    for (let i = 0; i < 6; i++) B.cbox(0.13, 0.08, 0.014, 0.004, -0.38 + i * 0.14, 0.215, s * 0.287, CAMO);
+    headlight(B, 0.5, 0.2, s * 0.23, 0.9);
+    taillight(B, -0.49, 0.26, s * 0.25);
+  }
+  hatch(B, 0.36, 0.272, -0.15, 0.03);
+  grille(B, 0.27, 0.282, 0.14, 0.1, 0.14, 5);
+  B.box(0.05, 0.02, 0.04, 0.3, 0.29, 0.25, K.black);
+  b.emit(0.3, 0.3, 0.26);
+  rearRamp(B, -0.492, 0.12, 0.27, 0.32, b.team);
+  teamPanel(B, 0.004, 0.025, 0.2, -0.495, 0.25, 0, b.team);
+  return 0.285;
+}
+
+function laser(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('laser', style, fog, (b) => {
+    const B = b.body;
+    const roof = strykerHull(b);
+    // power / cooling module on the rear roof
+    B.cbox(0.3, 0.07, 0.4, 0.01, -0.28, roof + 0.035, 0, CAMO);
+    grille(B, -0.28, roof + 0.07, 0, 0.2, 0.3, 8, 0x3a3d40);
+    for (const s of [-1, 1]) B.cy(0.03, 0.03, 0.03, -0.38, roof + 0.07, s * 0.14, 0x3a3d40, 10);
+    const T = b.part(B, 0.02, roof, 0, 'turret');
+    T.cy(0.11, 0.12, 0.03, 0, 0, 0, CAMO, 16);
+    T.cbox(0.16, 0.09, 0.2, 0.012, -0.02, 0.07, 0, CAMO);
+    // beam director: armoured drum with a big glowing aperture
+    const bd = b.part(T, 0.03, 0.14, 0);
+    bd.g.rotation.z = 0.12;
+    bd.cz(0.065, 0.065, 0.14, 0, 0, 0, CAMO, 18);
+    bd.cx(0.05, 0.058, 0.04, 0.06, 0, 0, 0x2c2f32, 18);
+    bd.cx(0.045, 0.045, 0.004, 0.082, 0, 0, LENS, 18);
+    bd.add(new THREE.TorusGeometry(0.05, 0.006, 6, 18).rotateY(Math.PI / 2), mt(K.steel), TR(0.083, 0, 0));
+    for (const s of [-1, 1]) bd.cz(0.03, 0.03, 0.03, 0, 0, s * 0.08, K.dark, 10);
+    b.muzzle(bd, 0.09, 0, 0);
+    // sensor ball + 30mm for ground targets
+    T.sph(0.032, 0.08, 0.1, 0.1, 0x3a3e40, 10, 7);
+    T.cx(0.02, 0.02, 0.004, 0.112, 0.1, 0.1, GLASS, 10);
+    T.box(0.1, 0.02, 0.02, 0.0, 0.05, -0.1, mt(K.gun));
+    teamPanel(T, 0.12, 0.02, 0.003, -0.03, 0.06, 0.101, b.team);
+    teamPanel(T, 0.12, 0.02, 0.003, -0.03, 0.06, -0.101, b.team);
+    antennas(b, B, -0.44, roof, [-0.2, 0.2], 0.22);
+  });
+}
+
+// ---------------------------------------------------------------- artillery
+
+interface SphOpt {
+  wheels: number;
+  L: number;
+  turretPlan: P2[]; // half plan
+  turretH: number;
+  turretX: number;
+  barrel: number;
+  r: number;
+  front?: boolean; // front sprocket
+  style?: WheelStyle;
+  baskets?: boolean;
+  rws?: boolean;
+  cupola?: boolean;
+}
+
+function sph(b: Bld, o: SphOpt) {
+  const B = b.body;
+  const L = o.L;
+  const x0 = -L / 2 + 0.1;
+  const x1 = L / 2 - 0.13;
+  running(b, {
+    wheels: evenly(o.wheels, x0 + 0.02, x1),
+    rw: o.wheels >= 7 ? 0.048 : 0.054,
+    spr: o.front ? [L / 2 - 0.05, 0.11, 0.048] : [-L / 2 + 0.04, 0.11, 0.048],
+    idl: o.front ? [-L / 2 + 0.04, 0.1, 0.044] : [L / 2 - 0.06, 0.1, 0.044],
+    rollers: [
+      [x0 + 0.15, 0.14, 0.014],
+      [0.0, 0.14, 0.014],
+      [x1 - 0.15, 0.14, 0.014],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: o.style ?? 'nato',
+  });
+  B.side([[-L / 2 + 0.03, 0.06], [L / 2 - 0.1, 0.06], [L / 2 - 0.02, 0.165], [-L / 2, 0.165]], 0.33, 0, CAMO, 0.008);
+  B.side(
+    [
+      [-L / 2, 0.165],
+      [L / 2 - 0.02, 0.165],
+      [L / 2 + 0.01, 0.195],
+      [L / 2 - 0.2, 0.25],
+      [-L / 2 + 0.02, 0.255],
+      [-L / 2, 0.235],
+    ],
+    0.62,
+    0,
+    CAMO,
+    0.008,
+  );
+  skirts(B, [[-L / 2 + 0.04, 0.105], [L / 2 - 0.08, 0.105], [L / 2, 0.16], [L / 2, 0.2], [-L / 2 + 0.03, 0.2]], 0.318, 0.01, evenly(4, -L / 2 + 0.2, L / 2 - 0.2));
+  for (const s of [-1, 1]) {
+    headlight(B, L / 2, 0.21, s * 0.26, 0.9);
+    taillight(B, -L / 2, 0.235, s * 0.27);
+  }
+  hatch(B, L / 2 - 0.16, 0.235, -0.13, 0.03);
+  grille(B, L / 2 - 0.12, 0.215, 0.12, 0.1, 0.14, 5);
+  b.emit(L / 2 - 0.2, 0.25, 0.27);
+  // barrel travel lock (A-frame) on the glacis
+  for (const s of [-1, 1]) B.strut([L / 2 - 0.1, 0.205, s * 0.04], [L / 2 - 0.16, 0.29, 0], 0.006, K.dark);
+  B.box(0.03, 0.02, 0.05, L / 2 - 0.16, 0.29, 0, K.dark);
+  // big turret
+  const T = b.part(B, o.turretX, 0.255, 0, 'turret');
+  const plan = mirrorZ(o.turretPlan);
+  T.loft([{ y: 0, p: plan }, { y: o.turretH * 0.7, p: inset(plan, 0.004) }, { y: o.turretH, p: inset(plan, 0.02) }], CAMO);
+  const fx = o.turretPlan[0][0];
+  T.cbox(0.08, 0.1, 0.13, 0.012, fx + 0.01, 0.07, 0, CAMO);
+  mainGun(b, T, fx + 0.04, 0.07, 0, { len: o.barrel, r: o.r, fume: 0.3, brake: 'arty', elev: 0.05, sleeve: 0 });
+  const rear = o.turretPlan[o.turretPlan.length - 1][0];
+  for (const s of [-1, 1]) {
+    const zSide = Math.max(...o.turretPlan.map((p) => p[1]));
+    teamPanel(T, 0.2, 0.026, 0.003, (fx + rear) / 2, o.turretH * 0.55, s * (zSide + 0.002), b.team);
+    if (o.baskets) {
+      for (let i = 0; i < 4; i++) T.box(0.004, 0.06, 0.004, rear + 0.05 + i * 0.06, o.turretH * 0.5, s * (zSide + 0.03), 0x3a3d34);
+      T.box(0.2, 0.004, 0.004, rear + 0.14, o.turretH * 0.5 + 0.03, s * (zSide + 0.03), 0x3a3d34);
+      T.cbox(0.16, 0.04, 0.025, 0.008, rear + 0.14, o.turretH * 0.4, s * (zSide + 0.016), K.canvas);
+    }
+    smokeBank(T, fx - 0.03, o.turretH * 0.7, s * (zSide - 0.02), s, 4, 0.9, 0.008);
+  }
+  teamPanel(T, 0.004, 0.026, 0.2, rear - 0.002, o.turretH * 0.6, 0, b.team);
+  hatch(T, rear + 0.1, o.turretH, 0.1, 0.035);
+  hatch(T, rear + 0.1, o.turretH, -0.1, 0.035);
+  if (o.cupola) {
+    T.cy(0.04, 0.045, 0.03, fx - 0.12, o.turretH, 0.12, CAMO, 12);
+    mgun(T, fx - 0.1, o.turretH + 0.045, 0.12, 0.1, 0.0055, true);
+  }
+  if (o.rws) rws(T, fx - 0.12, o.turretH, 0.12, 0.9, true);
+  T.cbox(0.05, 0.035, 0.045, 0.006, fx - 0.06, o.turretH + 0.017, -0.12, CAMO);
+  T.box(0.004, 0.02, 0.03, fx - 0.034, o.turretH + 0.018, -0.12, GLASS);
+  antennas(b, T, rear + 0.05, o.turretH, [-0.17, 0.17], 0.22);
+}
+
+function arty(style: ModelStyle, fog: FogOfWar | null): Model {
+  const fn = ARTY[style.faction] ?? ARTY.usa;
+  return build('arty', style, fog, fn);
+}
+
+const PALADIN: P2[] = [[0.18, 0], [0.18, 0.2], [0.14, 0.235], [-0.42, 0.235], [-0.44, 0]];
+const ARTY: Record<string, (b: Bld) => void> = {
+  usa: (b) => sph(b, { wheels: 7, L: 1.02, turretPlan: PALADIN, turretH: 0.15, turretX: -0.04, barrel: 0.7, r: 0.019, front: true, cupola: true }),
+  israel: (b) => sph(b, { wheels: 7, L: 1.02, turretPlan: PALADIN, turretH: 0.145, turretX: -0.04, barrel: 0.62, r: 0.019, front: true, cupola: true, baskets: true }),
+  china: (b) => sph(b, { wheels: 6, L: 1.05, turretPlan: [[0.2, 0], [0.2, 0.16], [0.12, 0.24], [-0.4, 0.245], [-0.44, 0]], turretH: 0.16, turretX: -0.06, barrel: 0.82, r: 0.018, style: 'asia', rws: true }),
+  germany: (b) => sph(b, { wheels: 7, L: 1.1, turretPlan: [[0.16, 0], [0.16, 0.17], [0.1, 0.24], [-0.36, 0.25], [-0.5, 0.22], [-0.52, 0]], turretH: 0.165, turretX: -0.06, barrel: 0.86, r: 0.018, rws: true, baskets: true }),
+  ukraine: (b) => sph(b, { wheels: 7, L: 1.1, turretPlan: [[0.16, 0], [0.16, 0.17], [0.1, 0.24], [-0.36, 0.25], [-0.5, 0.22], [-0.52, 0]], turretH: 0.165, turretX: -0.06, barrel: 0.86, r: 0.018, rws: true, baskets: true }),
+  korea: (b) => sph(b, { wheels: 6, L: 1.04, turretPlan: [[0.19, 0], [0.19, 0.19], [0.14, 0.24], [-0.42, 0.24], [-0.45, 0]], turretH: 0.155, turretX: -0.05, barrel: 0.82, r: 0.018, front: true, style: 'asia', cupola: true }),
+  turkey: (b) => sph(b, { wheels: 6, L: 1.04, turretPlan: [[0.2, 0], [0.19, 0.19], [0.13, 0.245], [-0.42, 0.245], [-0.46, 0]], turretH: 0.16, turretX: -0.05, barrel: 0.82, r: 0.018, front: true, style: 'nato', rws: true, baskets: true }),
+  iran: (b) => sph(b, { wheels: 6, L: 1.0, turretPlan: [[0.18, 0], [0.18, 0.2], [0.12, 0.235], [-0.4, 0.235], [-0.42, 0]], turretH: 0.14, turretX: -0.04, barrel: 0.66, r: 0.019, front: true, style: 'sov', cupola: true }),
+};
+
+
+// ================================================================ special vehicles
+
+/** T-72 style chassis without turret (TOS-1A). Returns deck height. */
+function t72Chassis(b: Bld) {
+  running(b, {
+    wheels: [-0.36, -0.245, -0.095, 0.02, 0.17, 0.285],
+    rw: 0.058,
+    spr: [-0.465, 0.105, 0.048],
+    idl: [0.425, 0.092, 0.045],
+    rollers: [
+      [-0.2, 0.146, 0.014],
+      [-0.03, 0.146, 0.014],
+      [0.13, 0.146, 0.014],
+    ],
+    gauge: 0.243,
+    tw: 0.13,
+    style: 'sov',
+    sag: 0.012,
+  });
+  const deck = sovHull(b, { L: 1.0, deck: 0.235, nose: 0.48, glacisX: 0.28 });
+  sovSkirts(b, -0.47, 0.5, 0.1, 0.165, 0.5, 1);
+  const B = b.body;
+  bricks(B, slopePlane([0.28, deck], [0.49, 0.17], 0), 0.01, 0.2, -0.27, 0.27, 3, 7, 0.02, 0.008);
+  dozer(B, 0.4);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.5, 0.2, s * 0.21, 0.9);
+    taillight(B, -0.5, 0.215, s * 0.27);
+  }
+  B.box(0.07, 0.035, 0.02, -0.32, 0.19, -0.3, K.black);
+  b.emit(-0.32, 0.2, -0.32);
+  hatch(B, 0.33, deck, 0, 0.03);
+  periscope(B, 0.37, deck, 0, 0, 0.026);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.135, 0.324, b.team);
+  teamPanel(B, 0.4, 0.022, 0.003, 0.0, 0.135, -0.324, b.team);
+  return deck;
+}
+
+function tos(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('tos', style, fog, (b) => {
+    const deck = t72Chassis(b);
+    const B = b.body;
+    grille(B, -0.4, deck, 0, 0.12, 0.3, 6);
+    // rotating launcher base
+    const T = b.part(B, -0.12, deck, 0, 'turret');
+    T.cy(0.2, 0.21, 0.03, 0, 0, 0, CAMO, 18);
+    for (const s of [-1, 1]) T.side([[-0.2, 0.03], [0.05, 0.03], [-0.12, 0.13], [-0.2, 0.13]], 0.03, s * 0.12, CAMO, 0.004);
+    // elevating 24-tube launcher box: pivot at the rear
+    const E = b.part(T, -0.2, 0.12, 0, 'elev');
+    const len = 0.78;
+    E.cbox(len, 0.17, 0.3, 0.012, len / 2 - 0.04, 0.085, 0, CAMO);
+    for (const sd of [-1, 1]) {
+      E.box(len * 0.9, 0.006, 0.004, len / 2, 0.12, sd * 0.152, K.dark);
+      E.box(len * 0.9, 0.006, 0.004, len / 2, 0.05, sd * 0.152, K.dark);
+      teamPanel(E, 0.24, 0.026, 0.003, len * 0.45, 0.085, sd * 0.152, b.team);
+    }
+    // tube mouths (6 x 4) on the front face
+    E.box(0.004, 0.15, 0.27, len - 0.04 + 0.002, 0.085, 0, K.dark);
+    for (let i = 0; i < 6; i++) {
+      for (let j = 0; j < 4; j++) {
+        const z = -0.11 + i * 0.044;
+        const y = 0.024 + j * 0.04;
+        E.cx(0.017, 0.017, 0.012, len - 0.034, y, z, 0x3a3d32, 8);
+        E.cx(0.012, 0.012, 0.004, len - 0.027, y, z, mt(K.black), 8);
+        if ((i === 1 || i === 4) && j % 2 === 0) b.muzzle(E, len - 0.02, y, z);
+        if ((i === 2 || i === 3) && j % 2 === 1) b.muzzle(E, len - 0.02, y, z);
+      }
+    }
+    // hydraulic rams
+    for (const sd of [-1, 1]) E.strut([0.18, 0.0, sd * 0.1], [0.3, -0.05, sd * 0.1], 0.01, mt(K.steel));
+    E.box(0.07, 0.04, 0.05, -0.02, 0.18, 0.1, CAMO);
+    // laser rangefinder / sight
+    T.cbox(0.06, 0.05, 0.06, 0.006, 0.12, 0.06, 0.14, CAMO);
+    T.box(0.004, 0.03, 0.04, 0.152, 0.065, 0.14, GLASS);
+    antennas(b, B, -0.44, deck, [-0.2, 0.2], 0.22);
+    b.custom = (q) => {
+      const e = q('elev')[0];
+      if (!e) return undefined;
+      let a = 0.05;
+      let still = 0;
+      return (s) => {
+        still = s.moving ? 0 : still + s.dt;
+        const target = s.fired < 4 ? 0.55 : still > 1.2 ? 0.3 : 0.04;
+        a += (target - a) * Math.min(1, s.dt * 1.8);
+        e.rotation.z = a;
+      };
+    };
+  });
+}
+
+/** Mesh dish (circular reflector made of rings and ribs + backing). Axis along +X. */
+function meshDish(p: Part, R: number, depth: number) {
+  const pts: THREE.Vector2[] = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6;
+    pts.push(new THREE.Vector2(Math.max(0.001, R * t), depth * t * t));
+  }
+  p.add(new THREE.LatheGeometry(pts, 20).rotateZ(Math.PI / 2), 0x3a3e3c);
+  p.add(new THREE.LatheGeometry(pts.slice().reverse(), 20).rotateZ(Math.PI / 2), 0x2e3230, TR(-0.003, 0, 0));
+  for (const t of [0.35, 0.65, 1]) {
+    const r = R * t;
+    p.add(new THREE.TorusGeometry(r, 0.0035, 4, 24).rotateY(Math.PI / 2), mt(0x9a9e9a), TR(depth * t * t + 0.002, 0, 0));
+  }
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    p.strut([0.002, 0, 0], [depth + 0.002, ca * R, sa * R], 0.003, mt(0x9a9e9a), 4);
+  }
+  for (const a of [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3]) p.strut([depth, Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9], [R * 0.65, 0, 0], 0.003, K.dark, 4);
+  p.cx(0.016, 0.02, 0.04, R * 0.67, 0, 0, K.dark, 8);
+}
+
+function ew(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('ew', style, fog, (b) => {
+    const B = b.body;
+    const axles: Axle[] = [
+      { x: 0.44, steer: 1 },
+      { x: 0.28, steer: 0.6 },
+      { x: -0.18, steer: 0 },
+      { x: -0.34, steer: 0 },
+    ];
+    const fy = truck(b, { axles, r: 0.072, W: 0.54, cabX0: 0.34, cabX1: 0.58, frameX0: -0.52, cabH: 0.19 });
+    // equipment shelter with vents, ladders and outriggers
+    B.cbox(0.8, 0.2, 0.52, 0.012, -0.11, fy + 0.11, 0, CAMO);
+    for (const s of [-1, 1]) {
+      B.box(0.12, 0.08, 0.004, -0.2, fy + 0.12, s * 0.262, K.dark);
+      B.box(0.06, 0.03, 0.004, 0.15, fy + 0.15, s * 0.262, 0x3a3d40);
+      B.box(0.03, 0.14, 0.03, -0.48, fy + 0.0, s * 0.27, K.dark);
+      B.box(0.03, 0.03, 0.08, -0.48, fy - 0.06, s * 0.3, K.dark);
+      teamPanel(B, 0.4, 0.026, 0.003, -0.16, fy + 0.18, s * 0.262, b.team);
+    }
+    for (let i = 0; i < 5; i++) B.box(0.004, 0.16, 0.004, -0.515, fy + 0.1, -0.15 + i * 0.008, K.dark);
+    grille(B, 0.12, fy + 0.21, 0.12, 0.1, 0.14, 5, 0x3a3d40);
+    // turntable + big rotating mesh dish
+    B.cy(0.13, 0.14, 0.03, -0.18, fy + 0.21, 0, K.dark, 16);
+    const D = b.part(B, -0.18, fy + 0.24, 0, 'dish');
+    spinner(D.g, 'y', 0.9);
+    D.cy(0.11, 0.12, 0.04, 0, 0, 0, CAMO, 14);
+    D.box(0.08, 0.16, 0.06, -0.02, 0.1, 0, CAMO);
+    const H = b.part(D, 0.02, 0.18, 0);
+    H.g.rotation.z = 0.25;
+    meshDish(H, 0.27, 0.07);
+    b.emit(-0.18, fy + 0.45, 0, 'spark');
+    antennas(b, B, 0.3, fy + 0.19, [-0.2, 0.2], 0.24);
+  });
+}
+
+function berge(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('berge', style, fog, (b) => {
+    const B = b.body;
+    running(b, {
+      wheels: evenly(7, -0.37, 0.33),
+      rw: 0.05,
+      spr: [-0.475, 0.112, 0.05],
+      idl: [0.452, 0.1, 0.045],
+      rollers: [
+        [-0.27, 0.138, 0.015],
+        [-0.08, 0.138, 0.015],
+        [0.11, 0.138, 0.015],
+        [0.28, 0.138, 0.015],
+      ],
+      gauge: 0.243,
+      tw: 0.13,
+      style: 'nato',
+    });
+    lowerHull(B, [[-0.5, 0.06], [0.44, 0.06], [0.55, 0.165], [-0.52, 0.165]], 0.172);
+    B.side([[-0.535, 0.165], [0.55, 0.165], [0.57, 0.215], [0.45, 0.25], [-0.5, 0.255], [-0.535, 0.24]], 0.62, 0, CAMO, 0.008);
+    skirts(B, [[-0.48, 0.1], [0.45, 0.1], [0.55, 0.14], [0.56, 0.205], [-0.49, 0.205]], 0.318, 0.012, [-0.3, -0.1, 0.1, 0.3]);
+    // forward crew superstructure (left) leaving room for the crane on the right
+    B.side([[0.0, 0.25], [0.48, 0.25], [0.44, 0.33], [0.36, 0.36], [0.0, 0.36]], 0.38, -0.1, CAMO, 0.01);
+    for (const z of [-0.24, -0.16, -0.06]) periscope(B, 0.4, 0.355, z, 0, 0.02);
+    hatch(B, 0.18, 0.36, -0.12, 0.034);
+    rws(B, 0.25, 0.36, -0.2, 0.8, false);
+    // dozer / stabilising blade at the front
+    B.side([[0.56, 0.03], [0.6, 0.03], [0.62, 0.15], [0.58, 0.16]], 0.64, 0, CAMO, 0.006);
+    B.box(0.02, 0.02, 0.62, 0.6, 0.035, 0, mt(K.steel));
+    for (const s of [-1, 1]) B.strut([0.5, 0.12, s * 0.2], [0.59, 0.1, s * 0.2], 0.012, mt(K.steel));
+    // crane: slewing base at the front right, boom resting along the hull
+    B.cy(0.06, 0.07, 0.04, 0.38, 0.25, 0.19, CAMO, 14);
+    const C = b.part(B, 0.38, 0.29, 0.19, 'crane');
+    C.g.rotation.y = Math.PI - 0.06;
+    C.g.rotation.z = 0.02;
+    B.box(0.04, 0.05, 0.04, -0.42, 0.28, 0.17, K.dark);
+    C.cbox(0.82, 0.07, 0.07, 0.01, 0.38, 0.0, 0, CAMO);
+    C.cbox(0.3, 0.055, 0.055, 0.008, 0.85, -0.005, 0, CAMO);
+    C.cz(0.03, 0.03, 0.08, 0.98, 0.0, 0, K.dark, 10);
+    C.strut([0.15, -0.03, 0], [0.04, -0.08, 0], 0.016, mt(K.steel));
+    C.box(0.012, 0.06, 0.012, 1.0, -0.05, 0, K.dark);
+    C.box(0.03, 0.03, 0.02, 1.0, -0.09, 0, K.yellow);
+    teamPanel(C, 0.3, 0.02, 0.072, 0.5, 0.0, 0, b.team);
+    // winch drum on the rear deck, spare power pack cover, tow bars
+    B.cz(0.04, 0.04, 0.28, -0.38, 0.29, 0, K.dark, 12);
+    B.cz(0.042, 0.042, 0.2, -0.38, 0.29, 0, mt(0x4a4a46), 12);
+    for (const s of [-1, 1]) B.box(0.12, 0.06, 0.02, -0.38, 0.28, s * 0.16, CAMO);
+    grille(B, -0.2, 0.255, 0, 0.18, 0.34, 8);
+    B.strut([-0.52, 0.22, 0.12], [-0.3, 0.27, 0.0], 0.008, K.yellow);
+    for (const s of [-1, 1]) {
+      headlight(B, 0.55, 0.215, s * 0.27);
+      taillight(B, -0.535, 0.24, s * 0.28);
+      b.emit(-0.54, 0.225, s * 0.2);
+      teamPanel(B, 0.36, 0.026, 0.003, -0.2, 0.17, s * 0.326, b.team);
+    }
+    beacon(b, B, 0.3, 0.36, -0.05);
+    beacon(b, B, -0.5, 0.255, -0.24);
+    antennas(b, B, 0.05, 0.36, [-0.26, 0.04], 0.22);
+  });
+}
+
+function swarm(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('swarm', style, fog, (b) => {
+    const B = b.body;
+    const axles: Axle[] = [
+      { x: 0.4, steer: 1 },
+      { x: -0.12, steer: 0 },
+      { x: -0.3, steer: 0 },
+    ];
+    const fy = truck(b, { axles, r: 0.07, W: 0.52, cabX0: 0.3, cabX1: 0.52, frameX0: -0.5, cabH: 0.18 });
+    B.box(0.76, 0.03, 0.5, -0.11, fy + 0.015, 0, CAMO);
+    for (const s of [-1, 1]) {
+      B.box(0.03, 0.12, 0.03, -0.46, fy - 0.03, s * 0.22, K.dark);
+      bin(B, 0.12, 0.06, 0.06, 0.18, fy + 0.03, s * 0.21, CAMO);
+    }
+    // rack of drone canisters on an elevating cradle
+    B.box(0.1, 0.08, 0.3, -0.36, fy + 0.07, 0, K.dark);
+    const R = b.part(B, -0.36, fy + 0.11, 0);
+    R.g.rotation.z = 0.42;
+    R.cbox(0.6, 0.22, 0.46, 0.01, 0.3, 0.11, 0, CAMO);
+    R.box(0.004, 0.2, 0.43, 0.602, 0.11, 0, K.dark);
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 4; j++) {
+        const z = -0.19 + i * 0.054;
+        const y = 0.032 + j * 0.052;
+        R.box(0.012, 0.044, 0.046, 0.605, y, z, 0x4e5636);
+        R.box(0.004, 0.032, 0.034, 0.612, y, z, mt(K.black));
+        if (j === 1 && (i === 2 || i === 5)) b.muzzle(R, 0.62, y, z);
+      }
+    }
+    for (const s of [-1, 1]) teamPanel(R, 0.3, 0.03, 0.003, 0.3, 0.11, s * 0.231, b.team);
+    // control mast with datalink antennas
+    B.cy(0.01, 0.012, 0.12, 0.25, fy + 0.03, -0.18, K.dark, 6);
+    B.box(0.05, 0.03, 0.05, 0.25, fy + 0.16, -0.18, 0x3a3e40);
+    antennas(b, B, 0.32, fy + 0.18, [-0.2, 0.2], 0.24);
+  });
+}
+
+function missileTruck(style: ModelStyle, fog: FogOfWar | null): Model {
+  const china = style.faction !== 'iran';
+  return build('missile_truck', style, fog, (b) => {
+    const B = b.body;
+    const axles: Axle[] = china
+      ? [
+          { x: 0.48, steer: 1 },
+          { x: 0.33, steer: 0.7 },
+          { x: -0.05, steer: 0 },
+          { x: -0.2, steer: 0 },
+          { x: -0.35, steer: -0.3 },
+        ]
+      : [
+          { x: 0.4, steer: 1 },
+          { x: -0.12, steer: 0 },
+          { x: -0.28, steer: 0 },
+        ];
+    const L = china ? 1.3 : 1.1;
+    const fy = truck(b, { axles, r: china ? 0.075 : 0.07, W: china ? 0.56 : 0.5, cabX0: china ? 0.42 : 0.3, cabX1: china ? 0.66 : 0.52, frameX0: -L / 2 + 0.05, cabH: china ? 0.17 : 0.18 });
+    const bedL = china ? 0.98 : 0.74;
+    const bx = (china ? 0.4 : 0.28) - bedL / 2;
+    B.box(bedL, 0.03, china ? 0.52 : 0.46, bx, fy + 0.015, 0, CAMO);
+    for (const s of [-1, 1]) {
+      B.box(0.03, 0.12, 0.03, -L / 2 + 0.06, fy - 0.03, s * 0.22, K.dark);
+      B.box(0.05, 0.02, 0.05, -L / 2 + 0.06, fy - 0.09, s * 0.22, K.dark);
+      bin(B, 0.12, 0.05, 0.05, bx + bedL / 2 - 0.1, fy + 0.03, s * 0.22, CAMO);
+      teamPanel(B, 0.3, 0.024, 0.003, bx, fy + 0.0, s * ((china ? 0.26 : 0.23) + 0.002), b.team);
+    }
+    // erector arm (pivot at the rear) + missile
+    const ex = -L / 2 + 0.08;
+    B.box(0.06, 0.06, 0.2, ex, fy + 0.06, 0, K.dark);
+    const E = b.part(B, ex, fy + 0.08, 0, 'erect');
+    const ml = china ? 0.95 : 0.78;
+    const mr = china ? 0.042 : 0.034;
+    for (const s of [-1, 1]) E.box(ml * 0.85, 0.03, 0.025, ml * 0.42, 0.0, s * (mr + 0.02), K.dark);
+    for (let i = 0; i < 3; i++) E.box(0.03, 0.03, (mr + 0.03) * 2, 0.12 + i * 0.28, 0.0, 0, K.dark);
+    E.strut([0.25, -0.02, 0], [0.4, -0.06, 0], 0.016, mt(K.steel));
+    const my = mr + 0.02;
+    if (china) {
+      // DF-17: booster + hypersonic glide vehicle (flat wedge with fins)
+      E.cx(mr, mr, 0.6, 0.32, my, 0, 0xd8d8d0, 16);
+      E.cx(mr * 1.05, mr * 1.05, 0.02, 0.05, my, 0, 0x3a3a3a, 16);
+      E.cx(mr * 0.9, mr, 0.03, 0.035, my, 0, 0x2a2a2a, 12);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        E.box(0.07, 0.003, 0.04, 0.06, my + Math.sin(a) * (mr + 0.015), Math.cos(a) * (mr + 0.015), 0x9a9a96, a, 0, 0);
+      }
+      E.box(0.006, 0.01, mr * 2.2, 0.36, my, 0, b.team);
+      // glide vehicle
+      E.loft(
+        [
+          { y: -0.022, p: [[0.62, -mr], [0.62, mr], [0.9, 0.004], [0.9, -0.004]] },
+          { y: 0.022, p: [[0.62, -mr * 0.6], [0.62, mr * 0.6], [0.88, 0.002], [0.88, -0.002]] },
+        ],
+        0x2c2c2c,
+        false,
+        TR(0, my, 0),
+      );
+      for (const s of [-1, 1]) E.box(0.06, 0.004, 0.03, 0.65, my + 0.0, s * (mr + 0.012), 0x2c2c2c, 0, s * 0.3, 0);
+      E.box(0.05, 0.03, 0.003, 0.64, my + 0.03, 0, 0x2c2c2c);
+      b.muzzle(E, 0.91, my, 0);
+    } else {
+      // Fateh-110: single stage with ogive nose, canards and tail fins
+      E.cx(mr, mr, 0.56, 0.32, my, 0, 0xd0d0c8, 16);
+      E.add(new THREE.LatheGeometry([new THREE.Vector2(mr, 0), new THREE.Vector2(mr * 0.85, 0.06), new THREE.Vector2(mr * 0.5, 0.13), new THREE.Vector2(0.001, 0.17)], 14).rotateZ(-Math.PI / 2), 0xd0d0c8, TR(0.6, my, 0));
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        E.box(0.08, 0.003, 0.05, 0.08, my + Math.sin(a) * (mr + 0.02), Math.cos(a) * (mr + 0.02), 0x5a5e58, a, 0, 0);
+        E.box(0.03, 0.003, 0.024, 0.6, my + Math.sin(a) * (mr + 0.01), Math.cos(a) * (mr + 0.01), 0x5a5e58, a, 0, 0);
+      }
+      E.box(0.006, 0.01, mr * 2.2, 0.4, my, 0, b.team);
+      E.cx(mr * 1.02, mr * 1.02, 0.03, 0.47, my, 0, 0x3a3e38, 16);
+      b.muzzle(E, 0.78, my, 0);
+    }
+    antennas(b, B, china ? 0.44 : 0.33, fy + (china ? 0.17 : 0.18), [-0.2, 0.2], 0.22);
+    b.custom = (q) => {
+      const e = q('erect')[0];
+      if (!e) return undefined;
+      let a = 0;
+      let still = 0;
+      return (s) => {
+        still = s.moving ? 0 : still + s.dt;
+        const target = s.fired < 3 ? 1.1 : still > 1.5 ? 0.55 : 0;
+        a += (target - a) * Math.min(1, s.dt * 1.2);
+        e.rotation.z = a;
+      };
+    };
+  });
+}
+
+/** Shahed-136 style delta-wing drone (forward = +X) in a part. */
+function shahedDrone(p: Part, x: number, y: number, z: number, s = 1) {
+  const c = 0x8a8a84;
+  p.add(gPlan([[0.11 * s, 0], [-0.07 * s, 0.1 * s], [-0.08 * s, 0.09 * s], [-0.07 * s, 0], [-0.08 * s, -0.09 * s], [-0.07 * s, -0.1 * s]], 0.006, 0), c, TR(x, y, z));
+  p.cx(0.012 * s, 0.014 * s, 0.17 * s, x + 0.01 * s, y + 0.01 * s, z, c, 8);
+  for (const sd of [-1, 1]) p.box(0.04 * s, 0.03 * s, 0.003, x - 0.065 * s, y + 0.016 * s, z + sd * 0.095 * s, c);
+  p.cx(0.005, 0.005, 0.01, x - 0.085 * s, y + 0.01 * s, z, K.dark, 6);
+}
+
+function container(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('container', style, fog, (b) => {
+    const B = b.body;
+    const axles: Axle[] = [
+      { x: 0.42, steer: 1 },
+      { x: -0.12, steer: 0 },
+      { x: -0.3, steer: 0 },
+    ];
+    const fy = truck(b, { axles, r: 0.07, W: 0.52, cabX0: 0.32, cabX1: 0.55, frameX0: -0.52, cabH: 0.18 });
+    // 20 ft shipping container, rear end open with doors swung out
+    const cx0 = -0.54;
+    const cx1 = 0.28;
+    const ch = 0.24;
+    const cw = 0.5;
+    const cc = 0x7a4a32;
+    const C = b.part(B, 0, fy + 0.02, 0);
+    C.box(cx1 - cx0, 0.012, cw, (cx0 + cx1) / 2, 0.006, 0, cc);
+    C.box((cx1 - cx0) * 0.4, 0.012, cw, cx1 - (cx1 - cx0) * 0.2, ch - 0.006, 0, cc);
+    C.box((cx1 - cx0) * 0.4, 0.012, cw - 0.01, cx1 - (cx1 - cx0) * 0.22, ch + 0.008, 0, shade(cc, 0.92));
+    C.box((cx1 - cx0) * 0.4, 0.012, cw - 0.02, cx1 - (cx1 - cx0) * 0.24, ch + 0.022, 0, shade(cc, 0.85));
+    for (const sd of [-1, 1]) C.box(cx1 - cx0, 0.016, 0.02, (cx0 + cx1) / 2, ch - 0.008, sd * (cw / 2 - 0.01), shade(cc, 0.75));
+    C.box(0.012, ch, cw, cx1 - 0.006, ch / 2, 0, cc);
+    for (const s of [-1, 1]) {
+      C.box(cx1 - cx0, ch, 0.012, (cx0 + cx1) / 2, ch / 2, s * (cw / 2 - 0.006), cc);
+      // corrugation ribs
+      for (let i = 0; i < 14; i++) C.box(0.008, ch - 0.03, 0.006, cx0 + 0.04 + i * 0.056, ch / 2, s * (cw / 2 + 0.002), shade(cc, 0.85));
+      // open doors
+      C.box(0.012, ch - 0.01, cw / 2 - 0.01, cx0 - 0.01, ch / 2, s * (cw / 2 + 0.1), shade(cc, 0.9), 0, s * -1.35, 0);
+      teamPanel(C, 0.3, 0.03, 0.003, (cx0 + cx1) / 2, ch * 0.75, s * (cw / 2 + 0.006), b.team);
+    }
+    for (const x of [cx0, cx1]) for (const s of [-1, 1]) C.box(0.02, ch + 0.004, 0.02, x, ch / 2, s * (cw / 2 - 0.01), shade(cc, 0.7));
+    C.box(cx1 - cx0 - 0.02, 0.004, cw - 0.03, (cx0 + cx1) / 2, 0.014, 0, 0x2a2a28);
+    // inclined launch rails with three drones, fired out of the open rear
+    const R = b.part(C, cx0 + 0.62, 0.05, 0);
+    R.g.rotation.y = Math.PI;
+    R.g.rotation.z = 0.16;
+    for (const sd of [-1, 1]) R.box(0.66, 0.012, 0.012, 0.3, 0.0, sd * 0.03, mt(K.steel));
+    for (let i = 0; i < 3; i++) R.box(0.012, 0.05, 0.08, 0.08 + i * 0.22, -0.03, 0, K.dark);
+    for (let i = 0; i < 3; i++) shahedDrone(R, 0.14 + i * 0.2, 0.026, 0, 1);
+    b.muzzle(R, 0.68, 0.05, 0);
+    antennas(b, B, 0.36, fy + 0.18, [-0.2, 0.2], 0.22);
+  });
+}
+
+function harvester(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('harvester', style, fog, (b) => {
+    const B = b.body;
+    running(b, {
+      wheels: evenly(6, -0.48, 0.36),
+      rw: 0.06,
+      spr: [-0.6, 0.12, 0.055],
+      idl: [0.5, 0.11, 0.05],
+      rollers: [
+        [-0.3, 0.165, 0.016],
+        [-0.05, 0.165, 0.016],
+        [0.2, 0.165, 0.016],
+      ],
+      gauge: 0.27,
+      tw: 0.17,
+      style: 'nato',
+    });
+    lowerHull(B, [[-0.64, 0.07], [0.46, 0.07], [0.54, 0.19], [-0.66, 0.19]], 0.18);
+    B.side([[-0.68, 0.19], [0.56, 0.19], [0.58, 0.27], [-0.66, 0.28], [-0.68, 0.25]], 0.74, 0, CAMO, 0.01);
+    for (const s of [-1, 1]) {
+      B.box(1.2, 0.012, 0.18, -0.06, 0.2, s * 0.28, K.dark);
+      headlight(B, 0.585, 0.25, s * 0.3, 1.1);
+      taillight(B, -0.68, 0.25, s * 0.3);
+      teamPanel(B, 0.5, 0.03, 0.003, -0.1, 0.235, s * 0.371, b.team);
+    }
+    // front cutter drum (spins) in a housing
+    B.side([[0.5, 0.1], [0.6, 0.1], [0.7, 0.2], [0.7, 0.3], [0.56, 0.3]], 0.04, 0.33, CAMO, 0.006);
+    B.side([[0.5, 0.1], [0.6, 0.1], [0.7, 0.2], [0.7, 0.3], [0.56, 0.3]], 0.04, -0.33, CAMO, 0.006);
+    B.box(0.18, 0.02, 0.7, 0.62, 0.3, 0, CAMO, 0, 0, -0.3);
+    const D = b.part(B, 0.67, 0.12, 0, 'drum');
+    spinner(D.g, 'z', -6);
+    D.cz(0.08, 0.08, 0.6, 0, 0, 0, 0x5a5a56, 14);
+    for (let i = 0; i < 10; i++) {
+      for (let j = 0; j < 7; j++) {
+        const a = (i / 10) * Math.PI * 2 + j * 0.6;
+        const z = -0.27 + j * 0.09;
+        D.box(0.03, 0.02, 0.02, Math.cos(a) * 0.088, Math.sin(a) * 0.088, z, mt(0x8a8a86), 0, 0, a);
+      }
+    }
+    for (let i = 0; i < 2; i++) D.add(new THREE.TorusGeometry(0.08, 0.008, 4, 16), K.yellow, TR(0, 0, -0.28 + i * 0.56));
+    // conveyor from the drum to the hopper
+    B.side([[0.36, 0.28], [0.58, 0.28], [0.46, 0.45], [0.3, 0.45]], 0.16, 0, 0x3a3d40, 0.006);
+    // cab on the front left
+    B.cbox(0.24, 0.2, 0.24, 0.016, 0.35, 0.38, -0.22, CAMO);
+    B.box(0.006, 0.1, 0.2, 0.473, 0.41, -0.22, GLASS);
+    B.box(0.16, 0.08, 0.004, 0.36, 0.42, -0.341, GLASS);
+    B.box(0.16, 0.08, 0.004, 0.36, 0.42, -0.099, GLASS);
+    beacon(b, B, 0.35, 0.48, -0.22);
+    // big hopper with ore load and hazard trim
+    const hx0 = -0.62;
+    const hx1 = 0.24;
+    B.loft(
+      [
+        { y: 0.28, p: [[hx0 + 0.04, -0.3], [hx1 - 0.04, -0.3], [hx1 - 0.04, 0.3], [hx0 + 0.04, 0.3]] },
+        { y: 0.5, p: [[hx0, -0.36], [hx1, -0.36], [hx1, 0.36], [hx0, 0.36]] },
+      ],
+      CAMO,
+    );
+    B.box(hx1 - hx0 - 0.04, 0.004, 0.68, (hx0 + hx1) / 2, 0.47, 0, 0x5a4a30);
+    for (let i = 0; i < 26; i++) {
+      const x = hx0 + 0.06 + ((i * 37) % 100) / 100 * (hx1 - hx0 - 0.12);
+      const z = -0.28 + ((i * 61) % 100) / 100 * 0.56;
+      B.add(new THREE.IcosahedronGeometry(0.035 + (i % 4) * 0.008, 0), K.ore, TR(x, 0.48, z, i, i * 2, 0));
+    }
+    for (let i = 0; i < 16; i++) {
+      const x = hx0 + 0.03 + i * 0.054;
+      B.box(0.027, 0.02, 0.012, x, 0.505, 0.36, i % 2 ? K.yellow : K.black);
+      B.box(0.027, 0.02, 0.012, x, 0.505, -0.36, i % 2 ? K.yellow : K.black);
+    }
+    for (const z of [-0.33, 0.33]) beacon(b, B, hx0 + 0.04, 0.51, z);
+    teamPanel(B, 0.004, 0.06, 0.4, hx0 - 0.002, 0.4, 0, b.team);
+    // exhaust stacks
+    for (const z of [0.12, 0.2]) {
+      B.cy(0.014, 0.016, 0.2, 0.3, 0.28, z, K.dark, 8);
+      b.emit(0.3, 0.5, z);
+    }
+    b.bob = 0.6;
+  });
+}
+
+function mcv(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('mcv', style, fog, (b) => {
+    const B = b.body;
+    const axles: Axle[] = [
+      { x: 0.5, steer: 1 },
+      { x: 0.33, steer: 0.7 },
+      { x: -0.2, steer: 0 },
+      { x: -0.37, steer: -0.3 },
+    ];
+    const fy = truck(b, { axles, r: 0.085, W: 0.64, cabX0: 0.4, cabX1: 0.68, frameX0: -0.62, cabH: 0.22, tyreW: 0.085 });
+    B.box(1.02, 0.04, 0.62, -0.13, fy + 0.02, 0, CAMO);
+    // construction module: prefabricated building block
+    const mx = -0.2;
+    B.cbox(0.64, 0.24, 0.56, 0.012, mx, fy + 0.16, 0, CAMO);
+    for (const s of [-1, 1]) {
+      for (let i = 0; i < 4; i++) B.box(0.004, 0.2, 0.004, mx - 0.24 + i * 0.16, fy + 0.16, s * 0.282, K.dark);
+      B.box(0.1, 0.05, 0.004, mx + 0.1, fy + 0.2, s * 0.282, GLASS);
+      B.box(0.1, 0.05, 0.004, mx - 0.1, fy + 0.2, s * 0.282, GLASS);
+      teamPanel(B, 0.6, 0.03, 0.003, mx, fy + 0.07, s * 0.283, b.team);
+      // outriggers (folded)
+      B.box(0.06, 0.05, 0.08, -0.56, fy - 0.01, s * 0.3, K.yellow);
+      B.box(0.06, 0.03, 0.06, 0.28, fy - 0.01, s * 0.3, K.yellow);
+    }
+    grille(B, mx - 0.15, fy + 0.28, 0.12, 0.16, 0.16, 6, 0x3a3d40);
+    B.cy(0.05, 0.05, 0.04, mx + 0.15, fy + 0.28, -0.12, 0x3a3d40, 12);
+    B.box(0.1, 0.04, 0.1, mx + 0.0, fy + 0.3, -0.15, 0x3a3d40);
+    beacon(b, B, mx - 0.28, fy + 0.28, 0.24);
+    beacon(b, B, 0.6, fy + 0.24, -0.24);
+    // folded crane: base on the front of the bed, boom resting on the module
+    B.cy(0.06, 0.07, 0.05, 0.27, fy + 0.04, 0.12, K.yellow, 12);
+    const C = b.part(B, 0.27, fy + 0.11, 0.12);
+    C.g.rotation.y = Math.PI;
+    C.g.rotation.z = -0.13;
+    C.cbox(0.8, 0.06, 0.06, 0.01, 0.4, 0.04, 0, K.yellow);
+    C.cbox(0.3, 0.045, 0.045, 0.008, 0.7, 0.04, 0, K.yellow);
+    C.strut([0.05, -0.02, 0], [0.2, 0.02, 0], 0.016, mt(K.steel));
+    C.box(0.012, 0.08, 0.012, 0.84, -0.0, 0, K.dark);
+    C.box(0.03, 0.03, 0.02, 0.84, -0.05, 0, K.dark);
+    for (let i = 0; i < 6; i++) C.box(0.04, 0.004, 0.062, 0.1 + i * 0.12, 0.071, 0, K.black);
+    antennas(b, B, 0.45, fy + 0.22, [-0.25, 0.25], 0.24);
+    b.bob = 0.5;
+  });
+}
+
+// ---------------------------------------------------------------- UGVs
+
+function ugvTracks(b: Bld, L: number, gauge: number, tw: number, n = 4, rw = 0.034) {
+  running(b, {
+    wheels: evenly(n, -L / 2 + 0.08, L / 2 - 0.09),
+    rw,
+    spr: [-L / 2 + 0.035, rw + 0.04, 0.032],
+    idl: [L / 2 - 0.035, rw + 0.035, 0.03],
+    gauge,
+    tw,
+    bt: 0.012,
+    style: 'ugv',
+    teeth: 9,
+    arms: false,
+  });
+}
+
+function ugvRws(b: Bld, parent: Part, x: number, y: number, z: number, heavy = true, s = 0.85) {
+  const T = b.part(parent, x, y, z, 'turret');
+  const tip = rws(T, 0, 0, 0, s, heavy);
+  b.muzzle(T, tip + 0.005, 0.036 * s, 0.012 * s);
+  return T;
+}
+
+function ugvJaguar(b: Bld) {
+  const B = b.body;
+  wheelSet(b, [{ x: 0.17, steer: 1 }, { x: 0.0, steer: 0 }, { x: -0.17, steer: -0.6 }], 0.05, 0.05, 0.155);
+  B.side([[-0.27, 0.06], [0.24, 0.06], [0.28, 0.11], [0.22, 0.17], [-0.25, 0.175], [-0.27, 0.15]], 0.26, 0, CAMO, 0.01);
+  for (const s of [-1, 1]) {
+    B.box(0.5, 0.012, 0.06, 0.0, 0.112, s * 0.165, K.dark);
+    headlight(B, 0.27, 0.12, s * 0.09, 0.7);
+    teamPanel(B, 0.2, 0.02, 0.003, -0.05, 0.13, s * 0.131, b.team);
+  }
+  // sensor mast with cameras, bumper, comms
+  B.cy(0.008, 0.01, 0.08, 0.12, 0.175, -0.07, K.dark, 6);
+  B.cbox(0.04, 0.03, 0.05, 0.005, 0.12, 0.27, -0.07, 0x3a3e40);
+  B.box(0.004, 0.016, 0.03, 0.142, 0.27, -0.07, GLASS);
+  B.box(0.02, 0.03, 0.26, 0.28, 0.08, 0, K.dark);
+  B.box(0.08, 0.02, 0.08, -0.18, 0.18, 0.06, 0x3a3e40);
+  ugvRws(b, B, -0.02, 0.175, 0.0, true, 0.85);
+  antennas(b, B, -0.22, 0.175, [-0.09, 0.09], 0.16);
+  b.bob = 0.6;
+}
+
+function ugvUran(b: Bld) {
+  const B = b.body;
+  ugvTracks(b, 0.6, 0.17, 0.085, 5, 0.036);
+  B.side([[-0.29, 0.06], [0.24, 0.06], [0.31, 0.12], [0.25, 0.17], [-0.28, 0.175], [-0.3, 0.15]], 0.42, 0, CAMO, 0.01);
+  for (const s of [-1, 1]) {
+    B.box(0.58, 0.006, 0.09, 0.0, 0.122, s * 0.17, CAMO);
+    headlight(B, 0.29, 0.13, s * 0.12, 0.7);
+    teamPanel(B, 0.2, 0.02, 0.003, -0.08, 0.15, s * 0.211, b.team);
+  }
+  grille(B, -0.18, 0.175, 0, 0.1, 0.2, 5);
+  b.emit(-0.3, 0.15, 0.1);
+  const T = b.part(B, 0.0, 0.175, 0, 'turret');
+  T.cy(0.08, 0.09, 0.02, 0, 0, 0, K.dark, 12);
+  T.cbox(0.18, 0.07, 0.14, 0.012, 0.0, 0.055, 0, CAMO);
+  cannon(b, T, 0.09, 0.06, 0.0, 0.26, 0.0075, { brake: false });
+  for (const s of [-1, 1]) {
+    for (const y of [0.04, 0.08]) {
+      T.cx(0.015, 0.015, 0.18, 0.0, y, s * 0.1, 0x4a5032, 8);
+      T.cx(0.011, 0.011, 0.004, 0.091, y, s * 0.1, K.black, 8);
+    }
+  }
+  T.cbox(0.05, 0.035, 0.04, 0.005, 0.02, 0.105, -0.04, 0x3a3e40);
+  T.box(0.004, 0.02, 0.028, 0.046, 0.106, -0.04, GLASS);
+  antennas(b, B, -0.25, 0.175, [-0.12, 0.12], 0.16);
+  b.bob = 0.6;
+}
+
+function ugvThemis(b: Bld, barkan = false, iran = false) {
+  const B = b.body;
+  const L = barkan ? 0.56 : 0.52;
+  ugvTracks(b, L, 0.16, 0.09, 4, 0.034);
+  // two track pods (hybrid modules) with a low payload deck between
+  for (const s of [-1, 1]) {
+    B.side([[-L / 2 + 0.01, 0.07], [L / 2 - 0.01, 0.07], [L / 2 + 0.015, 0.1], [L / 2 - 0.03, 0.13], [-L / 2 + 0.03, 0.13], [-L / 2 - 0.015, 0.1]], 0.1, s * 0.16, CAMO, 0.008);
+    headlight(B, L / 2 + 0.01, 0.105, s * 0.16, 0.7);
+    teamPanel(B, 0.2, 0.02, 0.003, 0.0, 0.11, s * 0.211, b.team);
+  }
+  B.box(L - 0.08, 0.025, 0.24, 0.0, 0.1, 0, K.dark);
+  B.box(L - 0.12, 0.012, 0.22, 0.0, 0.118, 0, CAMO);
+  if (iran) B.cbox(0.24, 0.06, 0.2, 0.01, 0.0, 0.15, 0, CAMO);
+  else B.cbox(0.16, 0.04, 0.16, 0.008, -0.05, 0.14, 0, CAMO);
+  B.box(0.06, 0.03, 0.06, -0.18, 0.14, 0.0, 0x3a3e40);
+  const y = iran ? 0.18 : 0.16;
+  if (iran) {
+    const T = b.part(B, 0.0, y, 0, 'turret');
+    T.cy(0.05, 0.06, 0.02, 0, 0, 0, K.dark, 10);
+    T.cbox(0.1, 0.05, 0.09, 0.008, 0.0, 0.045, 0, CAMO);
+    mgun(T, 0.03, 0.05, 0.0, 0.1, 0.005, true);
+    b.muzzle(T, 0.17, 0.052, 0);
+    T.cbox(0.04, 0.03, 0.03, 0.004, 0.0, 0.085, -0.03, 0x3a3e40);
+  } else ugvRws(b, B, barkan ? 0.04 : 0.0, y, 0, true, barkan ? 0.9 : 0.8);
+  antennas(b, B, -L / 2 + 0.05, 0.12, [-0.08, 0.08], 0.16);
+  b.bob = 0.5;
+}
+
+function ugvMissionMaster(b: Bld) {
+  const B = b.body;
+  wheelSet(b, [{ x: 0.2, steer: 1 }, { x: 0.07, steer: 0.5 }, { x: -0.07, steer: -0.5 }, { x: -0.2, steer: -1 }], 0.045, 0.045, 0.16);
+  B.side([[-0.27, 0.05], [0.25, 0.05], [0.28, 0.09], [0.24, 0.13], [-0.26, 0.135], [-0.28, 0.11]], 0.26, 0, CAMO, 0.01);
+  for (const s of [-1, 1]) {
+    B.box(0.5, 0.012, 0.06, 0.0, 0.098, s * 0.165, K.dark);
+    headlight(B, 0.27, 0.1, s * 0.09, 0.7);
+    teamPanel(B, 0.2, 0.02, 0.003, -0.05, 0.11, s * 0.131, b.team);
+  }
+  // cargo / weapon rack and sensor head
+  for (const s of [-1, 1]) B.box(0.4, 0.04, 0.012, -0.03, 0.155, s * 0.12, K.dark);
+  B.cy(0.008, 0.01, 0.07, 0.2, 0.135, 0.0, K.dark, 6);
+  B.cbox(0.04, 0.03, 0.05, 0.005, 0.2, 0.22, 0.0, 0x3a3e40);
+  B.box(0.004, 0.016, 0.03, 0.222, 0.22, 0.0, GLASS);
+  ugvRws(b, B, -0.06, 0.135, 0.0, true, 0.8);
+  antennas(b, B, -0.23, 0.135, [-0.08, 0.08], 0.16);
+  b.bob = 0.5;
+}
+
+function ugv(style: ModelStyle, fog: FogOfWar | null): Model {
+  const fn = UGV[style.faction] ?? ((b: Bld) => ugvThemis(b));
+  return build('ugv', style, fog, fn);
+}
+
+const UGV: Record<string, (b: Bld) => void> = {
+  israel: ugvJaguar,
+  russia: ugvUran,
+  ukraine: (b) => ugvThemis(b),
+  germany: ugvMissionMaster,
+  turkey: (b) => ugvThemis(b, true),
+  iran: (b) => ugvThemis(b, false, true),
+};
+
+// ---------------------------------------------------------------- robot dog
+
+function robodog(style: ModelStyle, fog: FogOfWar | null): Model {
+  return build('robodog', style, fog, (b) => {
+    const f = b.f;
+    const shell = f === 'china' ? 0x3c4436 : f === 'korea' ? 0x5c6066 : 0x2e3134;
+    const accent = f === 'china' ? 0x252a22 : 0x1e2022;
+    const B = b.body;
+    const by = 0.2; // body centre height
+    B.cbox(0.3, 0.07, 0.13, 0.016, 0, by, 0, shell);
+    B.cbox(0.26, 0.02, 0.11, 0.008, 0, by + 0.043, 0, accent);
+    B.cbox(0.22, 0.025, 0.12, 0.008, 0, by - 0.045, 0, accent);
+    for (const s of [-1, 1]) {
+      teamPanel(B, 0.12, 0.016, 0.003, -0.02, by + 0.005, s * 0.066, b.team);
+      // hip actuator housings
+      for (const x of [-0.12, 0.12]) B.cz(0.03, 0.03, 0.03, x, by - 0.02, s * 0.075, accent, 10);
+    }
+    // sensor head with glowing eyes
+    B.cbox(0.06, 0.05, 0.09, 0.012, 0.165, by + 0.005, 0, shell);
+    B.box(0.006, 0.026, 0.07, 0.196, by + 0.006, 0, mt(K.black));
+    for (const s of [-1, 1]) B.box(0.004, 0.01, 0.014, 0.2, by + 0.008, s * 0.02, EYE);
+    for (const s of [-1, 1]) B.box(0.006, 0.012, 0.02, 0.14, by - 0.03, s * 0.068, mt(K.black));
+    B.box(0.006, 0.012, 0.03, -0.152, by, 0, mt(K.black));
+    B.cy(0.004, 0.004, 0.08, -0.12, by + 0.035, -0.04, K.black, 4);
+    // weapon pod on the back (turret)
+    const T = b.part(B, -0.01, by + 0.055, 0, 'turret');
+    T.cy(0.03, 0.035, 0.015, 0, 0, 0, accent, 10);
+    T.cbox(0.11, 0.035, 0.05, 0.008, 0.0, 0.035, 0, shell);
+    T.box(0.13, 0.016, 0.014, 0.04, 0.037, 0.0, mt(K.gun));
+    T.cx(0.004, 0.004, 0.1, 0.15, 0.04, 0.0, mt(K.dark), 6);
+    T.box(0.024, 0.028, 0.016, 0.0, 0.016, 0.03, f === 'china' ? 0x4a5032 : K.dark);
+    T.box(0.03, 0.02, 0.022, 0.06, 0.06, 0, 0x3a3e40);
+    T.box(0.004, 0.012, 0.016, 0.076, 0.06, 0, GLASS);
+    b.muzzle(T, 0.205, 0.04, 0);
+    // legs: hip (abduction + swing) -> thigh -> knee -> shin -> foot
+    const L1 = 0.1;
+    const L2 = 0.11;
+    let i = 0;
+    for (const x of [0.12, -0.12]) {
+      for (const s of [-1, 1]) {
+        const hip = b.part(B, x, by - 0.02, s * 0.092, 'hip' + i);
+        hip.cz(0.024, 0.024, 0.026, 0, 0, 0, shell, 10);
+        hip.cbox(0.03, L1, 0.026, 0.008, 0, -L1 / 2, 0, shell);
+        hip.box(0.01, L1 * 0.7, 0.028, 0.012, -L1 / 2, 0, accent);
+        const knee = b.part(hip, 0, -L1, 0, 'knee' + i);
+        knee.cz(0.016, 0.016, 0.024, 0, 0, 0, accent, 8);
+        knee.cbox(0.018, L2, 0.018, 0.005, 0, -L2 / 2, 0, accent);
+        knee.sph(0.014, 0, -L2, 0, K.rubber, 8, 6);
+        i++;
+      }
+    }
+    b.gauge = 0.09;
+    b.tw = 0.03;
+    b.bob = 0;
+    b.custom = (q) => {
+      const hips = [0, 1, 2, 3].map((k) => q('hip' + k)[0]);
+      const knees = [0, 1, 2, 3].map((k) => q('knee' + k)[0]);
+      const body = q('body')[0];
+      if (hips.some((h) => !h) || knees.some((k) => !k) || !body) return undefined;
+      // diagonal pairs (FL+RR, FR+RL) in phase for a trot
+      const phase = [0, Math.PI, Math.PI, 0];
+      let blend = 0;
+      const ph0 = Math.random() * 10;
+      return (s) => {
+        blend += ((s.moving ? 1 : 0) - blend) * Math.min(1, s.dt * 6);
+        const g = (s.dist / 0.16) * Math.PI;
+        let lift = 0;
+        for (let k = 0; k < 4; k++) {
+          const ph = g + phase[k];
+          const front = k < 2;
+          const sw = Math.sin(ph) * 0.42 * blend;
+          const up = Math.max(0, Math.cos(ph)) * 0.55 * blend;
+          const idle = Math.sin(s.time * 1.3 + ph0 + k) * 0.03 * (1 - blend);
+          // knees point backward: thigh leans forward, shin back
+          hips[k].rotation.z = (front ? -0.5 : -0.6) + sw - up * 0.35 + idle;
+          knees[k].rotation.z = (front ? 1.0 : 1.2) + up * 1.1 - idle * 0.5;
+          lift += up;
+        }
+        body.position.y = Math.sin(g * 2) * 0.004 * blend + Math.sin(s.time * 1.7 + ph0) * 0.002 * (1 - blend) - lift * 0.0;
+        body.rotation.x = Math.sin(s.time * 0.9 + ph0) * 0.015 * (1 - blend) + Math.sin(g) * 0.02 * blend;
+        body.rotation.z = Math.sin(s.time * 0.7 + ph0) * 0.01 * (1 - blend);
+      };
+    };
+  });
+}
+
+// @@MORE@@
+
+export const VEHICLES: Record<string, Builder> = {
+  mbt,
+  mbt_heavy: mbt,
+  apc,
+  aa,
+  laser,
+  arty,
+  tos,
+  ew,
+  berge,
+  swarm,
+  missile_truck: missileTruck,
+  container,
+  harvester,
+  mcv,
+  ugv,
+  robodog,
+};
