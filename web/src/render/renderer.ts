@@ -180,7 +180,7 @@ export class GameRenderer {
     // image based lighting for believable metal and glass
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.45;
+    this.scene.environmentIntensity = 0.32;
     pmrem.dispose();
 
     const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x5a4a35, 1.0);
@@ -480,7 +480,9 @@ export class GameRenderer {
           // bank into turns, pitch nose-down with speed (helicopters)
           v.bank += (Math.max(-0.6, Math.min(0.6, -v.turn * (ud.fixedWing ? 0.45 : 0.18))) - v.bank) * Math.min(1, dt * 4);
           const pitch = ud.fixedWing || ud.kamikaze ? 0 : -Math.min(0.18, v.speed * 0.05);
-          root.rotation.set(v.bank, yaw, pitch, 'YXZ');
+          // detailed models bank / pitch an inner group themselves from the anim state
+          if (v.model.anim) root.rotation.set(0, yaw, 0, 'YXZ');
+          else root.rotation.set(v.bank, yaw, pitch, 'YXZ');
           if (ud.kamikaze) {
             const climb = (e.z - e.pz) * TPS;
             root.rotation.z = Math.max(-0.9, Math.min(0.4, climb * 0.25));

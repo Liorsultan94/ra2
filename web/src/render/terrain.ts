@@ -484,7 +484,7 @@ export class Terrain {
       const x = 8 + Math.random() * 48;
       const h = 28 + Math.random() * 34;
       const lean = (Math.random() - 0.5) * 18;
-      ctx.strokeStyle = `rgb(${60 + Math.random() * 40},${90 + Math.random() * 50},${30 + Math.random() * 20})`;
+      ctx.strokeStyle = `rgb(${95 + Math.random() * 40},${125 + Math.random() * 45},${45 + Math.random() * 20})`;
       ctx.lineWidth = 1.5 + Math.random() * 1.5;
       ctx.beginPath();
       ctx.moveTo(x, 64);
@@ -505,7 +505,7 @@ export class Terrain {
     const tuftMat = this.fog.apply(new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.9 }));
     const bushGeo = new THREE.IcosahedronGeometry(0.11, 1);
     bushGeo.scale(1, 0.7, 1).translate(0, 0.05, 0);
-    const bushMat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x3e5a24, roughness: 0.95, flatShading: true }));
+    const bushMat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x4f6e2c, roughness: 0.95, flatShading: true }));
     const stoneGeo = new THREE.DodecahedronGeometry(0.05, 0);
     const stoneMat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x86807a, roughness: 0.95, flatShading: true }));
     const tufts: THREE.Matrix4[] = [];
@@ -520,7 +520,7 @@ export class Terrain {
         const t = m.tiles[i];
         if (m.trees[i] || m.ore[i] || t === Tile.Water || t === Tile.Bridge) continue;
         const base = nearStart(x, y) ? 0.25 : 1;
-        const n = Math.round((t === Tile.Grass ? 3 : t === Tile.Rock ? 0 : 1) * density * base + hash2(x, y, 801));
+        const n = Math.floor((t === Tile.Grass ? 1.6 : t === Tile.Rock ? 0 : 0.5) * density * base + hash2(x, y, 801));
         for (let k = 0; k < n; k++) {
           const px = x + hash2(x, y, 810 + k);
           const pz = y + hash2(x, y, 830 + k);

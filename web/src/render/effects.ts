@@ -4,32 +4,61 @@ import type { FogOfWar } from './fog';
 import type { GroundMarks } from './marks';
 
 function makeSpriteTexture(kind: 'glow' | 'smoke'): THREE.Texture {
-  const s = 64;
+  const s = kind === 'smoke' ? 128 : 64;
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const ctx = c.getContext('2d')!;
   if (kind === 'glow') {
-    const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.25, 'rgba(255,255,255,0.8)');
-    g.addColorStop(0.6, 'rgba(255,255,255,0.25)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, s, s);
+    // hot core with a turbulent, flame-like edge
+    const img = ctx.createImageData(s, s);
+    for (let y = 0; y < s; y++)
+      for (let x = 0; x < s; x++) {
+        const nx = x / s - 0.5;
+        const ny = y / s - 0.5;
+        const r = Math.hypot(nx, ny) * 2;
+        const a = Math.atan2(ny, nx);
+        const turb = 0.75 + 0.25 * Math.sin(a * 5 + Math.sin(a * 3) * 2) * Math.sin(r * 9);
+        const core = Math.max(0, 1 - r / turb);
+        const v = Math.pow(core, 1.8);
+        const o = (y * s + x) * 4;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = 255;
+        img.data[o + 3] = Math.min(255, v * 255);
+      }
+    ctx.putImageData(img, 0, 0);
   } else {
-    // lumpy smoke puff made of several soft blobs
-    for (let i = 0; i < 9; i++) {
-      const a = (i / 9) * Math.PI * 2;
-      const r = i === 0 ? 0 : s * 0.16;
-      const x = s / 2 + Math.cos(a) * r;
-      const y = s / 2 + Math.sin(a) * r;
-      const rad = s * (i === 0 ? 0.3 : 0.2);
-      const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
-      g.addColorStop(0, 'rgba(255,255,255,0.55)');
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, s, s);
-    }
+    // soft billowy smoke: radial falloff modulated by multi-octave noise
+    const img = ctx.createImageData(s, s);
+    const rnd = (x: number, y: number, k: number) => {
+      const h = Math.sin(x * 127.1 + y * 311.7 + k * 74.7) * 43758.5453;
+      return h - Math.floor(h);
+    };
+    const noise = (x: number, y: number, f: number, k: number) => {
+      const xi = Math.floor(x * f);
+      const yi = Math.floor(y * f);
+      const xf = x * f - xi;
+      const yf = y * f - yi;
+      const u = xf * xf * (3 - 2 * xf);
+      const v = yf * yf * (3 - 2 * yf);
+      const a = rnd(xi, yi, k);
+      const b = rnd(xi + 1, yi, k);
+      const c2 = rnd(xi, yi + 1, k);
+      const d = rnd(xi + 1, yi + 1, k);
+      return a + (b - a) * u + (c2 - a) * v + (a - b - c2 + d) * u * v;
+    };
+    for (let y = 0; y < s; y++)
+      for (let x = 0; x < s; x++) {
+        const nx = x / s;
+        const ny = y / s;
+        const r = Math.hypot(nx - 0.5, ny - 0.5) * 2;
+        const n = noise(nx, ny, 4, 1) * 0.5 + noise(nx, ny, 8, 2) * 0.3 + noise(nx, ny, 16, 3) * 0.2;
+        const fall = Math.max(0, 1 - r * (0.85 + (1 - n) * 0.5));
+        const a = Math.pow(fall, 1.6) * (0.55 + n * 0.6);
+        const shade = 0.78 + n * 0.22;
+        const o = (y * s + x) * 4;
+        img.data[o] = img.data[o + 1] = img.data[o + 2] = shade * 255;
+        img.data[o + 3] = Math.min(255, a * 255);
+      }
+    ctx.putImageData(img, 0, 0);
   }
   const t = new THREE.CanvasTexture(c);
   return t;
@@ -58,6 +87,7 @@ class ParticleSystem {
   private col: Float32Array;
   private size: Float32Array;
   private alpha: Float32Array;
+  private rot: Float32Array;
   private vel: Float32Array;
   private life: Float32Array;
   private maxLife: Float32Array;
@@ -81,6 +111,7 @@ class ParticleSystem {
     this.col = new Float32Array(max * 3);
     this.size = new Float32Array(max);
     this.alpha = new Float32Array(max);
+    this.rot = new Float32Array(max);
     this.vel = new Float32Array(max * 3);
     this.life = new Float32Array(max);
     this.maxLife = new Float32Array(max);
@@ -96,6 +127,7 @@ class ParticleSystem {
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('size', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
     this.geo.setAttribute('alpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('rot', new THREE.BufferAttribute(this.rot, 1).setUsage(THREE.DynamicDrawUsage));
     this.material = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -108,7 +140,9 @@ class ParticleSystem {
       vertexShader: /* glsl */ `
         attribute float size;
         attribute float alpha;
+        attribute float rot;
         attribute vec3 color;
+        varying float vRot;
         uniform float scale;
         uniform sampler2D fogTex;
         uniform vec2 fogSize;
@@ -117,6 +151,7 @@ class ParticleSystem {
         varying float vAlpha;
         void main() {
           vColor = color;
+          vRot = rot;
           float fogV = texture2D(fogTex, position.xz / fogSize).r;
           vAlpha = alpha * mix(1.0, smoothstep(0.55, 0.85, fogV), fogEnabled);
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -127,8 +162,13 @@ class ParticleSystem {
         uniform sampler2D tex;
         varying vec3 vColor;
         varying float vAlpha;
+        varying float vRot;
         void main() {
-          vec4 t = texture2D(tex, gl_PointCoord);
+          vec2 c = gl_PointCoord - 0.5;
+          float cs = cos(vRot);
+          float sn = sin(vRot);
+          vec2 uv = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs) + 0.5;
+          vec4 t = texture2D(tex, uv);
           gl_FragColor = vec4(vColor * t.rgb, t.a * vAlpha);
         }`,
     });
@@ -151,6 +191,7 @@ class ParticleSystem {
     this.c0.set([c.r, c.g, c.b], i * 3);
     this.c1.set([ce.r, ce.g, ce.b], i * 3);
     this.a0[i] = o.alpha ?? 1;
+    this.rot[i] = Math.random() * 6.283;
     this.drag[i] = o.drag ?? 0;
     this.grav[i] = o.gravity ?? 0;
   }
@@ -177,7 +218,7 @@ class ParticleSystem {
       i++;
     }
     this.geo.setDrawRange(0, this.count);
-    for (const a of ['position', 'color', 'size', 'alpha']) (this.geo.attributes[a] as THREE.BufferAttribute).needsUpdate = true;
+    for (const a of ['position', 'color', 'size', 'alpha', 'rot']) (this.geo.attributes[a] as THREE.BufferAttribute).needsUpdate = true;
   }
 
   private kill(i: number) {
@@ -190,7 +231,7 @@ class ParticleSystem {
     copy3(this.col);
     copy3(this.c0);
     copy3(this.c1);
-    for (const a of [this.size, this.alpha, this.life, this.maxLife, this.s0, this.s1, this.a0, this.drag, this.grav]) copy1(a);
+    for (const a of [this.size, this.alpha, this.rot, this.life, this.maxLife, this.s0, this.s1, this.a0, this.drag, this.grav]) copy1(a);
   }
 
   get active() {
@@ -313,19 +354,19 @@ export class Effects {
     const airborne = y - ground > 0.6;
     const pal =
       p.fireColor === 'thermo'
-        ? { hot: 0xfff1b0, mid: 0xff7a18, end: 0x5a1400 }
+        ? { hot: 0xffb860, mid: 0xff5a10, end: 0x4a1000 }
         : p.fireColor === 'laser'
           ? { hot: 0xffc0a8, mid: 0xff3a10, end: 0x400800 }
           : p.fireColor === 'white'
             ? { hot: 0xffffff, mid: 0xffb050, end: 0x4a1000 }
-            : { hot: 0xffd890, mid: 0xff6a12, end: 0x3c0c00 };
+            : { hot: 0xffc070, mid: 0xff5a10, end: 0x3c0c00 };
     // 1. flash
     if (p.fire > 0) {
-      this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.09 + 0.03 * S, size: 1.3 * S, sizeEnd: 2.1 * S, color: 0xffffff, colorEnd: pal.hot, alpha: 0.9 });
-      this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.35 });
+      this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.08 + 0.03 * S, size: 1.0 * S, sizeEnd: 1.6 * S, color: 0xfff2d8, colorEnd: pal.hot, alpha: 0.55 });
+      this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.2 });
     }
     // 2. fireball: expanding, rising, cooling puffs
-    const nFire = this.q(Math.round(16 * p.fire * Math.sqrt(S)));
+    const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S)));
     for (let i = 0; i < nFire; i++) {
       const a = Math.random() * Math.PI * 2;
       const el = Math.random() * (airborne ? Math.PI : Math.PI / 2);
@@ -342,7 +383,7 @@ export class Effects {
         sizeEnd: this.rand(0.8, 1.35) * S,
         color: pal.hot,
         colorEnd: pal.end,
-        alpha: 0.85,
+        alpha: 0.42,
         drag: 3,
         gravity: -0.8,
       });
@@ -399,7 +440,7 @@ export class Effects {
         const sp = p.ring * this.rand(2.2, 3.2);
         this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.55, drag: 2.8 });
       }
-      this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.35, 0xfff0d0, true, 0.35);
+      this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.3, 0xffd8a0, true, 0.14);
     }
     if (airborne && S >= 1) {
       // spherical pressure flash in the air
