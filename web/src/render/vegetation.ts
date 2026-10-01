@@ -160,7 +160,7 @@ function coniferGeo(kind: 'spruce' | 'pine', lite = false): THREE.BufferGeometry
     // dark inner cone to make the crown read as dense from above
     const core = new THREE.ConeGeometry(0.2, 0.78, lite ? 5 : 6, 1, true).translate(0, 0.5, 0);
     b.add(core, new THREE.Matrix4(), leafCell(Leaf.Solid), 0.55, { normalFn: (p) => p.clone().sub(centre).normalize().addScaledVector(UP, 0.5).normalize() });
-    const tiers = lite ? 4 : 7;
+    const tiers = lite ? 5 : 7;
     for (let i = 0; i < tiers; i++) {
       const t = i / (tiers - 1);
       const y = 0.14 + t * 0.74;
@@ -228,10 +228,10 @@ function canopy(b: GeoBuilder, centre: THREE.Vector3, rad: THREE.Vector3, cluste
 function broadleafGeo(kind: 'oak' | 'birch' | 'young', lite = false): THREE.BufferGeometry {
   const b = new GeoBuilder();
   // the lite version keeps the silhouette: fewer, bigger leaf clusters of two cards
-  const cl = (n: number) => (lite ? Math.ceil(n * 0.5) : n);
+  const cl = (n: number) => (lite ? Math.ceil(n * 0.55) : n);
   const sz = (x: number) => (lite ? x * 1.3 : x);
   const core = lite ? 0 : 1;
-  const cards = lite ? 2 : 3;
+  const cards = 3;
   if (kind === 'oak') {
     trunk(b, 0.55, 0.05, 0.03, 0.85, lite ? 4 : 5);
     if (!lite)
@@ -253,7 +253,7 @@ function broadleafGeo(kind: 'oak' | 'birch' | 'young', lite = false): THREE.Buff
 
 function bushGeo(lite = false): THREE.BufferGeometry {
   const b = new GeoBuilder();
-  canopy(b, V(0, 0.13, 0), V(0.22, 0.15, 0.22), lite ? 3 : 6, lite ? 0.15 : 0.12, Leaf.Bush, 4, 0.05, lite ? -1 : 0, lite ? 2 : 3);
+  canopy(b, V(0, 0.13, 0), V(0.22, 0.15, 0.22), lite ? 4 : 6, lite ? 0.15 : 0.12, Leaf.Bush, 4, 0.05, lite ? -1 : 0, 3);
   return b.build(true);
 }
 

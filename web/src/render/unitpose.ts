@@ -21,8 +21,6 @@ import type { AnimState, Model } from './models';
 interface GroundPose {
   pitch: number;
   roll: number;
-  tp: number; // last target pitch / roll (roughness from their change)
-  tr: number;
   rough: number;
   init: boolean;
 }
@@ -64,7 +62,7 @@ export function poseGroundVehicle(model: Model, a: AnimState, map: GameMap, p: T
   const root = model.root;
   let s = poses.get(model);
   if (!s) {
-    s = { pitch: 0, roll: 0, tp: 0, tr: 0, rough: 0, init: false };
+    s = { pitch: 0, roll: 0, rough: 0, init: false };
     poses.set(model, s);
   }
   // hidden units keep their last attitude (no sampling)
@@ -90,23 +88,17 @@ export function poseGroundVehicle(model: Model, a: AnimState, map: GameMap, p: T
   if (!s.init) {
     s.pitch = tp;
     s.roll = tr;
-    s.tp = tp;
-    s.tr = tr;
     s.init = true;
   } else if (dt > 0) {
     // heavier hulls settle a little slower than light trucks
     const k = Math.min(1, dt * (model.wheeled ? 11 : 8));
     s.pitch += (tp - s.pitch) * k;
     s.roll += (tr - s.roll) * k;
-    // roughness: how fast the ground attitude changes under the moving hull, plus the surface itself
-    const bump = Math.abs(tp - s.tp) + Math.abs(tr - s.tr);
-    const moved = a.speed * dt;
-    const curv = moved > 1e-4 ? clamp((bump / moved) * 0.35, 0, 1) : 0;
-    const tgt = clamp(tileRough(map, p.x, p.z) + curv, 0, 1);
+    // roughness: the surface itself plus the terrain's curvature under the footprint (crests, ditches)
+    const curv = Math.abs(hF + hB - 2 * p.y) + Math.abs(hL + hR - 2 * p.y);
+    const tgt = clamp(tileRough(map, p.x, p.z) + Math.min(0.6, curv * 4), 0, 1);
     s.rough += (tgt - s.rough) * Math.min(1, dt * 3);
   }
-  s.tp = tp;
-  s.tr = tr;
   a.rough = s.rough;
   // in a dip the hull rides on its ends; on a crest it rests on its middle
   root.position.y = Math.max(p.y, (hF + hB) * 0.5, (hL + hR) * 0.5);

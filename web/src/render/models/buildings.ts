@@ -647,7 +647,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall2: () => T.sandstone(tur ? 0xf0e4cc : 0xffffff),
         base: () => T.sandstone(0x9a8460),
         trim: () => T.sandstone(0xf4e8d0),
-        roof: () => T.plaster(0xd6c6a6),
+        roof: () => T.plaster(0xc4b08c),
         pitch: () => T.plaster(0xd0bc96),
         slab: () => T.concrete(0xe0cfa8, 1.2),
         asphalt: () => T.asphalt(0xd8ccb0),
@@ -733,6 +733,8 @@ class Kit {
   turret = false;
   muzzles = 0;
   recoil = 0;
+  /** Roof roundels placed so far (one per building). */
+  emb = 0;
   rnd: () => number;
   /** Walls, windows, lamps... recorded for the construction / damage visuals. */
   readonly rec: FxRec = newRec();
@@ -1369,7 +1371,8 @@ function roofEmblem(k: Kit, x0: number, x1: number, z0: number, z1: number, y: n
   const W = x1 - x0;
   const D = z1 - z0;
   const sz = Math.min(W * 0.46, D * 0.42, 0.46);
-  if (f === 'neutral' || sz < 0.2) return false;
+  if (f === 'neutral' || sz < 0.2 || k.emb > 0) return false;
+  k.emb++;
   const cell = roundelCell(f);
   const ew = cell.aspect > 1.4 ? Math.min(W - 0.12, sz * 1.7) : sz;
   const cx = x0 + W * 0.5;
@@ -1442,6 +1445,16 @@ function dress(k: Kit, x0: number, x1: number, z0: number, z1: number, y0: numbe
     const vy = y0 + h - 0.11;
     faceBox(k, P.pier, 'z', 1, vx, vy, z1, 0.1, 0.07, 0.014);
     for (let i = 0; i < 4; i++) faceBox(k, P.galv, 'z', 1, vx, vy + 0.008 + i * 0.015, z1 + 0.006, 0.084, 0.006, 0.014);
+  }
+  if (o.beacons !== false && D > 0.45) {
+    // roof access ladder with safety cage + a pair of service pipes on the +X face
+    ladder(k, 'x', 1, z1 - 0.2, y0, y0 + h, x1);
+    for (let yy = y0 + 0.2; yy < y0 + h; yy += 0.07) k.ring(P.galv, 0.026, 0.002, x1 + 0.035, yy, z1 - 0.2, 8);
+    for (const [py, r] of [
+      [y0 + 0.045, 0.008],
+      [y0 + 0.065, 0.006],
+    ])
+      k.tube(P.pipe, [x1 + 0.012, py, z0 + 0.13], [x1 + 0.012, py, z1 - 0.26], r, 6);
   }
   if (o.beacons !== false && h >= 0.32) {
     k.sph(P.red_l, 0.011, x1 - 0.012, y0 + h + 0.055, z1 - 0.012, 6, 4);
@@ -1635,7 +1648,7 @@ function block(k: Kit, o: BlockOpt): number {
   if (roof === 'flat') {
     const ph = o.parapet ?? 0.035;
     flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? (P.R === 'west' ? P.wall2 : wall));
-    const emb = o.emblem !== false && D >= 0.55 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
+    const emb = o.emblem !== false && D >= 0.55 && W * D >= 0.45 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
     if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, emb ? z0 + D * 0.42 : z1, top + 0.01, o.equip ?? 2);
     return top + ph + 0.01;
   }
@@ -1662,6 +1675,8 @@ function ridgeMat(k: Kit) {
   return k.P.mats.col(k.P.s.faction === 'korea' ? 0x39465a : 0x2f4a42, 0.6, 0.15);
 }
 
+const yc0 = (rise: number, a: number, run: number) => rise - (run / 2) * Math.tan(a);
+
 /** Pitched (gable) roof: attic prism + two overhanging roof slabs + ridge cap. */
 function gable(k: Kit, roofM: Mat, endM: Mat, cx: number, y: number, cz: number, W: number, D: number, rise: number, over = 0.03, alongX = true) {
   const L = alongX ? W : D;
@@ -1687,9 +1702,12 @@ function gable(k: Kit, roofM: Mat, endM: Mat, cx: number, y: number, cz: number,
       const yc = rise - (run / 2) * Math.tan(a);
       k.at(0, yc, zc, 0, () => k.local(() => k.box(roofM, L + 2 * over, t, sl, 0, -0.002, 0)), sg * a);
     }
-    k.box(k.P.dark, L + 2 * over + 0.01, 0.016, 0.03, 0, rise - 0.004, 0);
-    // fascia boards
-    for (const sg of [-1, 1]) k.box(k.P.trim, L + 2 * over, 0.016, 0.008, 0, -over * Math.tan(a) - 0.014, sg * run);
+    k.box(k.P.team, L + 2 * over + 0.01, 0.022, 0.042, 0, rise - 0.006, 0);
+    // fascia boards (team coloured: pitched roofs outline in the owner's colour like flat roof copings)
+    for (const sg of [-1, 1]) k.box(k.P.team, L + 2 * over, 0.022, 0.01, 0, -over * Math.tan(a) - 0.018, sg * run);
+    // verge boards along the sloped gable edges
+    for (const sx of [-1, 1])
+      for (const sg of [-1, 1]) k.at(sx * (L / 2 + over), yc0(rise, a, run), (sg * run) / 2, 0, () => k.box(k.P.pier, 0.012, 0.02, sl + 0.01, 0, 0, 0), sg * a);
   });
 }
 
@@ -2401,6 +2419,13 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
     // UVs: u around the arch, v along the axis -> ribs run along the slope
     scaleUV(g, (Math.PI * r + rise) * uvs, len * uvs);
     k.add(g, m, 0);
+    // team coloured arch rims at both ends
+    for (const s of [-1, 1]) {
+      const t = new THREE.TorusGeometry(r + 0.004, 0.016, 4, 22, Math.PI);
+      t.scale(1, (rise + 0.004) / (r + 0.004), 1.4);
+      t.translate(0, 0, s * (len / 2 - 0.012));
+      k.add(t, k.P.team, 0);
+    }
     if (endM) {
       const pts: P2[] = [];
       for (let i = 0; i <= 16; i++) {
@@ -2599,6 +2624,7 @@ function conyard(k: Kit) {
   if (R === 'east') {
     k.box(P.brick, FW, 0.12, FD, fcx, Y0, fcz);
     k.box(P.corrRust, FW, 0.32, FD, fcx, Y0 + 0.12, fcz);
+    dress(k, fx0, fx1, fz0, fz1, Y0, 0.44, { beacons: false });
     gable(k, P.pitch, P.corrRust, fcx, Y0 + 0.44, fcz, FW, FD, 0.2, 0.03, false);
     // painted double gate with a star
     const gw = 0.42;
@@ -2616,6 +2642,7 @@ function conyard(k: Kit) {
     const wallM = R === 'west' ? P.wall2 : R === 'asia' ? P.wall2 : P.wall;
     k.box(P.base, FW + 0.012, 0.03, FD + 0.012, fcx, Y0, fcz);
     k.box(wallM, FW, 0.42, FD, fcx, Y0, fcz);
+    dress(k, fx0, fx1, fz0, fz1, Y0, 0.42, { beacons: false });
     const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
     vault(k, roofM, wallM, fcx, Y0 + 0.42, fcz, FW + 0.03, FD + 0.04, 0.22, false);
     k.box(P.team, FW + 0.01, 0.024, FD + 0.01, fcx, Y0 + 0.38, fcz);
@@ -2880,6 +2907,7 @@ function power(k: Kit) {
     const z1 = 0.62;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
     k.box(P.wall2, x1 - x0, 0.42, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.42, { beacons: false, vent: false });
     punched(k, 'x', 1, z0 + 0.05, z1 - 0.05, 5, Y0 + 0.1, x1, 0.1, 0.24, 'round');
     punched(k, 'z', 1, x0 + 0.05, x1 - 0.05, 3, Y0 + 0.1, z1, 0.1, 0.24, 'round', [-0.6, -0.4]);
     door(k, 'z', 1, -0.52, Y0, z1, 0.14, 0.2, true);
@@ -2916,6 +2944,7 @@ function power(k: Kit) {
     const tz1 = -0.08;
     k.box(P.base, tx1 - tx0 + 0.014, 0.03, tz1 - tz0 + 0.014, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
     k.box(P.wall, tx1 - tx0, 0.4, tz1 - tz0, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
+    dress(k, tx0, tx1, tz0, tz1, Y0, 0.4, { beacons: false });
     ribbon(k, 'z', 1, tx0 + 0.05, tx1 - 0.05, Y0 + 0.24, tz1, 0.1, true);
     ribbon(k, 'x', 1, tz0 + 0.05, tz1 - 0.05, Y0 + 0.24, tx1, 0.1, true);
     rollDoor(k, 'z', 1, 0.3, Y0, tz1, 0.22, 0.18, 0);
@@ -3053,6 +3082,7 @@ function refinery(k: Kit) {
   if (R === 'east') {
     k.box(P.base, px1 - px0 + 0.014, 0.03, pz1 - pz0 + 0.014, 0, Y0, (pz0 + pz1) / 2);
     k.box(P.wall2, px1 - px0, 0.6, pz1 - pz0, 0, Y0, (pz0 + pz1) / 2);
+    dress(k, px0, px1, pz0, pz1, Y0, 0.6, { beacons: false });
     punched(k, 'z', 1, px0, px1, 6, Y0 + 0.12, pz1, 0.09, 0.3, 'round', [-0.1, 0.1]);
     punched(k, 'x', 1, pz0, pz1, 5, Y0 + 0.12, px1, 0.09, 0.3, 'round');
     k.box(P.team, px1 - px0 + 0.008, 0.03, pz1 - pz0 + 0.008, 0, Y0 + 0.55, (pz0 + pz1) / 2);
@@ -3256,6 +3286,7 @@ function barracks(k: Kit) {
     const zc = (z0 + z1) / 2;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, 0, Y0, zc);
     k.box(P.wall2, x1 - x0, 0.44, z1 - z0, 0, Y0, zc);
+    dress(k, x0, x1, z0, z1, Y0, 0.44, { beacons: false });
     facade(k, 'z', 1, x0, x1, z1, Y0, 0.44, 2, 'punched');
     facade(k, 'x', 1, z0, z1, x1, Y0, 0.44, 2, 'punched');
     k.box(P.concrete, x1 - x0 + 0.012, 0.02, z1 - z0 + 0.012, 0, Y0 + 0.21, zc);
@@ -3319,6 +3350,7 @@ function factory(k: Kit) {
     const hx = sx * (0.55 + hallW / 2);
     k.box(P.base, hallW + 0.012, 0.03, L + 0.012, hx, Y0, zc);
     k.box(hallM, hallW, H, L, hx, Y0, zc);
+    dress(k, hx - hallW / 2, hx + hallW / 2, z0, z1, Y0, H, { beacons: false, cab: sx > 0 });
     k.box(P.team, hallW + 0.008, 0.026, L + 0.008, hx, Y0 + H - 0.06, zc);
   }
   // bay interior: back wall + inner lighting
@@ -3332,6 +3364,7 @@ function factory(k: Kit) {
   facade(k, 'x', 1, z0, z1, 1.42, Y0, H, 1, style);
   for (const sx of [-1, 1]) facade(k, 'z', 1, sx * 0.55 + (sx > 0 ? 0.08 : -hallW), sx * 0.55 + (sx > 0 ? hallW : -0.08), z1, Y0, H, 1, style);
   door(k, 'z', 1, 1.25, Y0, z1, 0.1, 0.18, true);
+  wallEmblem(k, 'z', 1, 0.86, Y0 + H - 0.22, z1, 0.15);
   // door portal
   const doorFrame = () => {
     for (const sx of [-1, 1]) {
@@ -3352,6 +3385,7 @@ function factory(k: Kit) {
     k.box(P.trim, 0.12, 0.04, L * 0.8, 0, Y0 + H + 0.41, zc);
     k.box(P.dark, 0.13, 0.012, L * 0.8, 0, Y0 + H + 0.45, zc);
     k.box(P.team, 0.6, 0.12, 0.012, 0, Y0 + H + 0.1, z1 + 0.025);
+    k.panel(P.emb, 'z', 1, 0, Y0 + H + 0.11, z1 + 0.032, 0.15, 0.1, flagPatchCell(P.s.faction).r);
     k.box(hallM, 1.1, H - DH, 0.04, 0, DH, z1 - 0.02);
     k.box(P.team, 1.12, 0.05, 0.05, 0, DH + 0.01, z1 + 0.02);
     doorFrame();
@@ -3482,6 +3516,7 @@ function radar(k: Kit) {
     const z1 = 0.95;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
     k.box(P.wall2, x1 - x0, 0.32, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.32, { beacons: false });
     facade(k, 'z', 1, x0, x1, z1, Y0, 0.32, 1, 'punched', [-0.6, -0.3]);
     facade(k, 'x', 1, z0, z1, x1, Y0, 0.32, 1, 'punched');
     door(k, 'z', 1, -0.45, Y0, z1, 0.12, 0.19);
@@ -3694,6 +3729,7 @@ function airfield(k: Kit) {
     k.box(wallM, span, wh, 0.04, hcx, Y0, hz0 + 0.02);
     const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
     vault(k, roofM, null, hcx, Y0 + wh, hcz, span + 0.03, hl + 0.03, rise, false);
+    dress(k, hx0, hx1, hz0, hz1, Y0, wh, { beacons: false, vent: false });
     // front wall with the door opening
     const outer: P2[] = [[hx0, Y0], [hx1, Y0]];
     for (let i = 0; i <= 18; i++) {
@@ -3720,6 +3756,7 @@ function airfield(k: Kit) {
       const dw = span * 0.78;
       for (const sx of [-1, 1]) k.box(P.rollup, 0.03, wh + rise * 0.55, dw * 0.25, hcx + sx * (dw / 2 + 0.02), Y0, hz1 + 0.01);
       k.box(P.team, dw + 0.04, 0.04, 0.03, hcx, Y0 + wh + rise * 0.55, hz1 + 0.0);
+      wallEmblem(k, 'z', 1, hcx, Y0 + wh + rise * 0.55 + 0.07, hz1 - 0.005, 0.16);
       for (const sx of [-1, 1]) k.box(P.hazard, 0.03, wh + rise * 0.55, 0.03, hcx + sx * (dw / 2 + 0.015), Y0, hz1 + 0.015, 9);
     }
   }
@@ -3729,7 +3766,7 @@ function airfield(k: Kit) {
   // ------------------------------------------------ control tower (back right)
   const tx = 1.0;
   const tz = -1.0;
-  block(k, { x0: 0.62, x1: 1.42, z0: -1.42, z1: -0.62, h: 0.24, floors: 1, door: 0.8, equip: 1, roof: R === 'asia' ? 'flat' : 'flat' });
+  block(k, { x0: 0.62, x1: 1.42, z0: -1.42, z1: -0.62, h: 0.24, floors: 1, door: 0.8, equip: 1, roof: 'flat', emblem: false });
   const shaftTop = Y0 + 1.0;
   if (R === 'asia') {
     k.cyl(P.wall, 0.11, 1.0, tx, Y0, tz, 18, 0.09);
@@ -3863,8 +3900,10 @@ function tech(k: Kit) {
     curtain(k, 'x', 1, z0 + 0.04, z1 - 0.04, Y0 + 0.04, Y0 + 0.74, x1, 0.09, 0.117);
     k.box(cyan, x1 - x0 + 0.01, 0.012, z1 - z0 + 0.01, (x0 + x1) / 2, Y0 + 0.755, (z0 + z1) / 2);
     k.box(P.team, x1 - x0 + 0.012, 0.03, z1 - z0 + 0.012, (x0 + x1) / 2, Y0 + 0.77, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.8, { cab: false });
     flatRoof(k, x0, x1, z0, z1, Y0 + 0.8, 0.03, P.wall2);
-    roofKit(k, x0, x1 - 0.6, z0, z1, Y0 + 0.81, 2);
+    roofEmblem(k, x0, x1 - 0.6, z0, z1, Y0 + 0.811);
+    roofKit(k, x0, x1 - 0.6, z0, z0 + 0.45, Y0 + 0.81, 2);
     satcom(k, 'dish', -0.15, Y0 + 0.81, -0.9, 0.16);
     for (let i = 0; i < 3; i++) antenna(k, -1.3 + i * 0.12, Y0 + 0.81, -1.3, 0.35 + i * 0.08);
     // glass entrance atrium
@@ -3890,7 +3929,7 @@ function tech(k: Kit) {
     k.height = 1.5;
   } else if (R === 'east') {
     // brutalist institute: stepped concrete blocks with vertical fins
-    block(k, { x0: -1.42, x1: 0.3, z0: -1.42, z1: -0.35, h: 0.42, floors: 2, equip: 0 });
+    block(k, { x0: -1.42, x1: 0.3, z0: -1.42, z1: -0.35, h: 0.42, floors: 2, equip: 0, emblem: false });
     const ux0 = -1.3;
     const ux1 = -0.2;
     const uz0 = -1.3;
@@ -3907,7 +3946,8 @@ function tech(k: Kit) {
     }
     k.box(P.team, ux1 - ux0 + 0.01, 0.03, uz1 - uz0 + 0.01, (ux0 + ux1) / 2, Y0 + 0.92, (uz0 + uz1) / 2);
     flatRoof(k, ux0, ux1, uz0, uz1, Y0 + 0.98, 0.03);
-    roofKit(k, ux0, ux1, uz0, uz1, Y0 + 0.99, 2);
+    roofEmblem(k, ux0, ux1, uz0, uz1, Y0 + 0.991);
+    roofKit(k, ux0, ux1, uz0, uz0 + 0.3, Y0 + 0.99, 2);
     stencil(k, 'НИИ-9', 'x', 1, -0.95, Y0 + 0.75, ux1 + 0.05, 0.36, '#e6e2d6');
     dome(k, 0.88, Y0, -0.9, 0.38, 'observatory');
     // tall lattice TV / comms mast with aviation bands
@@ -3928,7 +3968,7 @@ function tech(k: Kit) {
     k.height = 1.6;
   } else if (R === 'asia') {
     // podium + glass tower with tiled crown + glass dome
-    block(k, { x0: -1.42, x1: 0.35, z0: -1.42, z1: -0.25, h: 0.3, floors: 1, equip: 0, door: -0.3 });
+    block(k, { x0: -1.42, x1: 0.35, z0: -1.42, z1: -0.25, h: 0.3, floors: 1, equip: 0, door: -0.3, emblem: false });
     const tx0 = -1.15;
     const tx1 = -0.45;
     const tz0 = -1.2;
@@ -3940,6 +3980,7 @@ function tech(k: Kit) {
     asianRoof(k, P.pitch, ridgeMat(k), (tx0 + tx1) / 2, Y0 + 1.35, (tz0 + tz1) / 2, tx1 - tx0 + 0.16, tz1 - tz0 + 0.16, 0.22, 0.05, P.accent);
     k.blinkLight((tx0 + tx1) / 2, Y0 + 1.62, (tz0 + tz1) / 2, 0.014, 1.4, 0);
     flatRoof(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.3, 0.03);
+    roofEmblem(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.311);
     // glass dome lab
     const dx = 0.88;
     const dz = -0.8;
@@ -3995,11 +4036,13 @@ function tech(k: Kit) {
     const wz1 = -0.4;
     k.box(P.base, wx1 - wx0 + 0.014, 0.03, wz1 - wz0 + 0.014, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
     k.box(P.wall2, wx1 - wx0, 0.52, wz1 - wz0, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
+    dress(k, wx0, wx1, wz0, wz1, Y0, 0.52, { vent: false, cab: false });
     curtain(k, 'z', 1, wx0 + 0.06, wx1 - 0.06, Y0 + 0.06, Y0 + 0.46, wz1, 0.09, 0.1);
     curtain(k, 'x', 1, wz0 + 0.06, wz1 - 0.06, Y0 + 0.06, Y0 + 0.46, wx1, 0.09, 0.1);
     for (let i = 0; i < 9; i++) faceBox(k, P.mash, 'z', 1, wx0 + 0.1 + i * 0.11, Y0 + 0.06, wz1, 0.05, 0.4, 0.03);
     k.box(P.team, wx1 - wx0 + 0.01, 0.025, wz1 - wz0 + 0.01, (wx0 + wx1) / 2, Y0 + 0.49, (wz0 + wz1) / 2);
     flatRoof(k, wx0, wx1, wz0, wz1, Y0 + 0.52, 0.035);
+    roofEmblem(k, wx0, wx1, wz0, wz1, Y0 + 0.531);
     satcom(k, 'dish', 0.95, Y0 + 0.53, -0.95, 0.15);
     antenna(k, 1.3, Y0 + 0.53, -1.3, 0.5);
     // reflecting pool with arcade

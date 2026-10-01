@@ -25,7 +25,7 @@ uniform float time;
 uniform float mode;   // 0 unit ring, 1 building brackets, 2 move, 3 attack-move, 4 attack, 5 rally, 6 hover ring, 7 hover box
 uniform float age;    // 0..1 life of a marker / selection pop-in
 uniform float opacity;
-uniform vec2 half;    // footprint half extents in world units (buildings)
+uniform vec2 halfExt; // footprint half extents in world units (buildings)
 varying vec2 vUv;
 
 #define PI 3.14159265
@@ -57,10 +57,10 @@ void main() {
     alpha *= mix( 0.4, 1.0, age );
   } else if ( mode < 1.5 || ( mode > 6.5 ) ) {
     // ---- building: corner brackets on the footprint + scan line
-    vec2 q = abs( p ) * half;           // world units from the centre
-    vec2 e = half - q;                  // distance to the edges
+    vec2 q = abs( p ) * halfExt;           // world units from the centre
+    vec2 e = halfExt - q;                  // distance to the edges
     float lw = 0.07;
-    float L = min( 0.55, min( half.x, half.y ) * 0.45 );
+    float L = min( 0.55, min( halfExt.x, halfExt.y ) * 0.45 );
     float edge = step( min( e.x, e.y ), lw ) * step( 0.0, min( e.x, e.y ) );
     float corner = step( e.x, L ) * step( e.y, L );
     float brackets = edge * corner;
@@ -176,7 +176,7 @@ export class CombatOverlay {
         mode: { value: mode },
         age: { value: 0 },
         opacity: { value: 1 },
-        half: { value: new THREE.Vector2(1, 1) },
+        halfExt: { value: new THREE.Vector2(1, 1) },
       },
       vertexShader: VERT,
       fragmentShader: FRAG,
@@ -233,7 +233,7 @@ export class CombatOverlay {
     if (building) {
       const pad = 0.12;
       r.mesh.scale.set(building.w / 2 + pad, 1, building.h / 2 + pad);
-      r.mat.uniforms.half.value.set(building.w / 2 + pad, building.h / 2 + pad);
+      r.mat.uniforms.halfExt.value.set(building.w / 2 + pad, building.h / 2 + pad);
       r.mesh.position.set(x, groundY + 0.06, y);
       r.mesh.quaternion.identity();
     } else {

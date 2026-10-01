@@ -148,6 +148,7 @@ class ParticleSystem {
       uniforms: {
         tex: { value: makeSpriteTexture(additive ? 'glow' : 'smoke') },
         scale: { value: 30 },
+        refDist: { value: 0 },
         ...fog.uniforms,
       },
       vertexShader: /* glsl */ `
@@ -157,6 +158,7 @@ class ParticleSystem {
         attribute vec3 color;
         varying float vRot;
         uniform float scale;
+        uniform float refDist; // perspective camera: distance at which scale applies (0 = orthographic)
         uniform sampler2D fogTex;
         uniform vec2 fogSize;
         uniform float fogEnabled;
@@ -168,7 +170,7 @@ class ParticleSystem {
           float fogV = texture2D(fogTex, position.xz / fogSize).r;
           vAlpha = alpha * mix(1.0, smoothstep(0.55, 0.85, fogV), fogEnabled);
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = size * scale;
+          gl_PointSize = size * scale * ( refDist > 0.0 ? refDist / max( 0.1, -mv.z ) : 1.0 );
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */ `
@@ -381,9 +383,21 @@ export class Effects {
   }
 
   /** Point the dynamic lights and the camera shake at the view centre (the camera target; kept by reference). */
-  setView(v: THREE.Vector3) {
+  setView(v: THREE.Vector3, camera?: THREE.Camera) {
     this.lights.view = v;
     this.shaker.view = v;
+    this.camera = camera ?? null;
+  }
+  private camera: THREE.Camera | null = null;
+
+  /** Perspective cameras: point sprites are sized for the view-centre distance and scaled by depth. */
+  private updatePerspective() {
+    const c = this.camera as THREE.PerspectiveCamera | null;
+    const v = this.lights.view;
+    const ref = c && c.isPerspectiveCamera && v ? c.position.distanceTo(v) : 0;
+    this.fire.material.uniforms.refDist.value = ref;
+    this.smokeSys.material.uniforms.refDist.value = ref;
+    this.haze?.setPerspective(ref, this.camera);
   }
 
   /** Add camera shake (0.03 small .. 0.45 huge), attenuated by distance to the view centre when a position is given. */
@@ -614,13 +628,13 @@ export class Effects {
     const R = 2.4 * S;
     if (!airborne) {
       // pressure dome
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffe6c0, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffd8a8, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
       const m = new THREE.Mesh(this.domeGeo, mat);
       m.position.set(x, ground, z);
       m.scale.setScalar(0.3);
       m.renderOrder = 3;
       this.group.add(m);
-      this.timed.push({ obj: m, mat, life: 0, max: 0.45, grow: R, base: 0.3, alpha0: 0.22 });
+      this.timed.push({ obj: m, mat, life: 0, max: 0.4, grow: R, base: 0.3, alpha0: 0.09 });
       // dust wall pushed out by the wave
       const n = this.q(36);
       for (let i = 0; i < n; i++) {
@@ -1108,6 +1122,7 @@ export class Effects {
     this.marks?.update(dt);
     this.shaker.update(dt);
     this.lights.update(dt);
+    this.updatePerspective();
     for (let i = this.timed.length - 1; i >= 0; i--) {
       const t = this.timed[i];
       t.life += dt;

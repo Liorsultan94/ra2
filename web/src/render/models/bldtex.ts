@@ -135,10 +135,10 @@ const GEN: Record<BldTexKind, { N: number; strength: number; gen: Gen }> = {
     gen(u, v, o) {
       const mott = fbm(u, v, 4, 41, 4);
       const peel = fbm(u, v, 64, 43, 2);
-      const chip = clamp01((fbm(u, v, 12, 47, 4) - 0.66) * 6);
+      const chip = clamp01((fbm(u, v, 12, 47, 4) - 0.7) * 5);
       const drip = clamp01((fbm(u * 1.0, v * 0.1, 32, 49, 3) - 0.55) * 2.5) * 0.5;
-      o.c = clamp01(0.95 - (mott - 0.5) * 0.12 - chip * 0.25 - drip * 0.1);
-      o.h = 0.5 + (peel - 0.5) * 0.12 - chip * 0.25;
+      o.c = clamp01(0.96 - (mott - 0.5) * 0.07 - chip * 0.08 - drip * 0.06);
+      o.h = 0.5 + (peel - 0.5) * 0.12 - chip * 0.12;
       o.r = clamp01(0.55 + (mott - 0.5) * 0.3 + chip * 0.3 + drip * 0.15);
     },
   },

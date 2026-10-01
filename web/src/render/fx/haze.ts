@@ -73,7 +73,7 @@ export class HazeField {
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,
       blendDst: THREE.OneFactor,
-      uniforms: { scale: { value: 10 }, time: { value: 0 } },
+      uniforms: { scale: { value: 10 }, time: { value: 0 }, refDist: { value: 0 }, squash: { value: GROUND_SQUASH } },
       vertexShader: /* glsl */ `
         attribute float size;
         attribute float strength;
@@ -81,6 +81,7 @@ export class HazeField {
         attribute float prog;
         attribute float seed;
         uniform float scale;
+        uniform float refDist;
         varying float vS;
         varying float vK;
         varying float vSeed;
@@ -88,11 +89,13 @@ export class HazeField {
           vS = strength;
           vK = kind;
           vSeed = seed;
-          gl_PointSize = size * scale;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+          vec4 mv = modelViewMatrix * vec4( position, 1.0 );
+          gl_PointSize = size * scale * ( refDist > 0.0 ? refDist / max( 0.1, -mv.z ) : 1.0 );
+          gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */ `
         uniform float time;
+        uniform float squash;
         varying float vS;
         varying float vK;
         varying float vSeed;
@@ -109,12 +112,12 @@ export class HazeField {
             off = vec2( n1, n2 ) * fall * vS;
           } else {
             vec2 q = c;
-            if ( vK > 1.5 ) q.y /= ${GROUND_SQUASH.toFixed(2)};
+            if ( vK > 1.5 ) q.y /= squash;
             float r = length( q ) * 2.0;
             float d = ( r - 0.8 ) / 0.13;
             float prof = exp( -d * d ) * step( r, 1.0 );
             off = q / max( length( q ), 1e-3 ) * prof * vS;
-            if ( vK > 1.5 ) off.y *= ${GROUND_SQUASH.toFixed(2)};
+            if ( vK > 1.5 ) off.y *= squash;
           }
           gl_FragColor = vec4( off, 0.0, 1.0 );
         }`,
@@ -132,6 +135,13 @@ export class HazeField {
   /** Pixels per world unit at full resolution (same as the particle point scale). */
   setScale(s: number) {
     this.mat.uniforms.scale.value = s * RES;
+  }
+
+  private dir = new THREE.Vector3();
+  /** Perspective cameras: reference distance for sprite sizes; ground rings squash by the view elevation. */
+  setPerspective(refDist: number, camera: THREE.Camera | null) {
+    this.mat.uniforms.refDist.value = refDist;
+    if (camera) this.mat.uniforms.squash.value = Math.max(0.2, Math.abs(camera.getWorldDirection(this.dir).y));
   }
 
   setSize(w: number, h: number) {

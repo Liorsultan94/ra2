@@ -1566,6 +1566,10 @@ export class BuildFx {
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
       g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4);
       this.sparks = new THREE.Points(g, sparkMat());
+      // point size is in pixels for an orthographic camera but scaled by 1/depth for a perspective one
+      this.sparks.onBeforeRender = (_r, _s, cam) => {
+        sparkMat().size = (cam as THREE.PerspectiveCamera).isPerspectiveCamera ? 0.16 : 5;
+      };
       this.sparks.frustumCulled = false;
       this.sparks.renderOrder = 3;
       this.fx().add(this.sparks);

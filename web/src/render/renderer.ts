@@ -18,6 +18,7 @@ import { CombatOverlay } from './overlay';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
+import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
 export type Quality = 'low' | 'medium' | 'high';
@@ -27,8 +28,8 @@ const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
 const CAM_DIST = 80;
 /** Perspective camera (C&C3-like): vertical field of view and pitch range (far zoom .. close zoom), degrees. */
 const PERSP_FOV = 38;
-const PITCH_FAR = 56;
-const PITCH_NEAR = 47;
+const PITCH_FAR = 55;
+const PITCH_NEAR = 43;
 /** World units visible vertically at zoom 1 (game.ts picking relies on this). */
 export const BASE_VIEW = 22;
 export const MIN_ZOOM = 0.5;
@@ -153,6 +154,7 @@ export class GameRenderer {
   private bloom: UnrealBloomPass | null = null;
   private gtao: GTAOPass | null = null;
   private finalPass: FinalPass | null = null;
+  private tilt: TiltShiftPass | null = null;
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
   readonly outskirts: Outskirts;
@@ -241,7 +243,7 @@ export class GameRenderer {
     this.marks = new GroundMarks(map, this.fog);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
-    this.effects.setView(this.target);
+    this.effects.setView(this.target, this.camera);
     this.scene.add(this.debris.group, this.marks.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
@@ -288,6 +290,8 @@ export class GameRenderer {
       this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
       this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
       this.composer.addPass(this.finalPass);
+      // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
+      if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
       this.finalPass.haze = this.effects.enableHaze(this.camera);
     }
     this.applyLevel(this.level, false);
@@ -314,6 +318,7 @@ export class GameRenderer {
       this.composer.setSize(w, h);
     }
     this.bloom?.setSize(w / 2, h / 2);
+    this.tilt?.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
     this.updateCamera();
   }
 
@@ -350,7 +355,8 @@ export class GameRenderer {
 
   /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
   defaultZoom(wide = false) {
-    const visible = Math.max(11, Math.min(12.5, this.height / 58)) * (wide ? 1.4 : 1);
+    // the perspective camera frames a little closer: units read big, the far side recedes
+    const visible = (this.perspective ? Math.max(10, Math.min(11.5, this.height / 62)) : Math.max(11, Math.min(12.5, this.height / 58))) * (wide ? 1.4 : 1);
     return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, BASE_VIEW / visible));
   }
 
@@ -433,6 +439,7 @@ export class GameRenderer {
     u.fogView.value.copy(D).negate();
     u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
+    this.tilt?.setZoom(this.zoom, this.defaultZoom(), this.renderer.getPixelRatio());
   }
 
   /**

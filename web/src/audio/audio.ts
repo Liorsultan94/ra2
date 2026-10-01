@@ -6,9 +6,15 @@
  * Graph:
  *   voice -> [panner] -> sfxBus -> sfxGain ----------------\
  *                     \-> wetSend -> sfxWetBus -> sfxWetGain -> reverb -\
- *   music notes -> modeBus(battle|menu) -> musicPlay -> musicGain ------+-> compressor -> master -> destination
- *                                                      \-> musicWet -> reverb
+ *   music (music.ts) -> musicPlay -> musicDuck -> musicGain -------------+-> compressor -> master -> destination
+ *                                                          \-> musicWet -> reverb
+ *
+ * The battle score adapts to a combat intensity inferred from the effects and
+ * announcer lines that pass through here (see intensity.ts).
  */
+import { Bank, Patch, clamp, env, glide, makeImpulse, spikes } from './core';
+import { CombatHeat } from './intensity';
+import { MUSIC_LEVEL, MusicEngine, type MusicMode, type StingerKind } from './music';
 
 export type Sfx =
   | 'rifle' | 'mg' | 'cannon' | 'cannonHeavy' | 'rocket' | 'missileLaunch' | 'flak' | 'laser'
@@ -16,387 +22,13 @@ export type Sfx =
   | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'click' | 'tab' | 'build' | 'place' | 'sell' | 'error'
   | 'select' | 'ack' | 'alarm' | 'money' | 'deploy' | 'repair' | 'jam';
 
-type MusicMode = 'menu' | 'battle';
-type NoiseKind = 'white' | 'pink' | 'brown';
-
 const MAX_VOICES = 24;
-const LOOKAHEAD = 0.12;
-/** internal music mix level (before the user music volume) */
-const MUSIC_LEVEL = 0.45;
-const TICK_MS = 25;
 
 /** Maps a screen x coordinate to a stereo pan in -0.8..0.8. */
 export function panFor(screenX: number, screenWidth: number): number {
   if (!(screenWidth > 0) || !Number.isFinite(screenX)) return 0;
   const x = clamp(screenX / screenWidth, 0, 1);
   return (x * 2 - 1) * 0.8;
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-
-function midiHz(m: number): number {
-  return 440 * Math.pow(2, (m - 69) / 12);
-}
-
-function rng32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Shared buffers (generated once per context)
-// ---------------------------------------------------------------------------
-
-function makeCurve(drive: number) {
-  const n = 1024;
-  const c = new Float32Array(n);
-  const norm = Math.tanh(drive);
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 2 - 1;
-    c[i] = Math.tanh(drive * x) / norm;
-  }
-  return c;
-}
-
-function makeCrushCurve(levels: number) {
-  const n = 1024;
-  const c = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 2 - 1;
-    c[i] = Math.round(x * levels) / levels;
-  }
-  return c;
-}
-
-type Curve = ReturnType<typeof makeCurve>;
-
-class Bank {
-  readonly white: AudioBuffer;
-  readonly pink: AudioBuffer;
-  readonly brown: AudioBuffer;
-  readonly crush: Curve;
-  private curves = new Map<number, Curve>();
-
-  constructor(ctx: BaseAudioContext) {
-    const len = Math.floor(ctx.sampleRate * 2);
-    this.white = ctx.createBuffer(1, len, ctx.sampleRate);
-    this.pink = ctx.createBuffer(1, len, ctx.sampleRate);
-    this.brown = ctx.createBuffer(1, len, ctx.sampleRate);
-    const w = this.white.getChannelData(0);
-    const p = this.pink.getChannelData(0);
-    const b = this.brown.getChannelData(0);
-    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, last = 0;
-    for (let i = 0; i < len; i++) {
-      const x = Math.random() * 2 - 1;
-      w[i] = x;
-      b0 = 0.99886 * b0 + x * 0.0555179;
-      b1 = 0.99332 * b1 + x * 0.0750759;
-      b2 = 0.969 * b2 + x * 0.153852;
-      b3 = 0.8665 * b3 + x * 0.3104856;
-      b4 = 0.55 * b4 + x * 0.5329522;
-      b5 = -0.7616 * b5 - x * 0.016898;
-      p[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + x * 0.5362;
-      b6 = x * 0.115926;
-      last = (last + 0.02 * x) / 1.02;
-      b[i] = last;
-    }
-    // Make the coloured noises loop without a step at the wrap point, then level-match.
-    for (const d of [p, b]) {
-      const drift = d[len - 1] - d[0];
-      for (let i = 0; i < len; i++) d[i] -= (drift * i) / (len - 1);
-    }
-    for (const d of [w, p, b]) normalizeRms(d, 0.33);
-    this.crush = makeCrushCurve(5);
-  }
-
-  buffer(kind: NoiseKind): AudioBuffer {
-    return kind === 'white' ? this.white : kind === 'pink' ? this.pink : this.brown;
-  }
-
-  curve(drive: number): Curve {
-    const key = Math.round(drive * 10) / 10;
-    let c = this.curves.get(key);
-    if (!c) {
-      c = makeCurve(Math.max(0.1, key));
-      this.curves.set(key, c);
-    }
-    return c;
-  }
-}
-
-function normalizeRms(d: Float32Array, target: number): void {
-  let mean = 0;
-  for (let i = 0; i < d.length; i++) mean += d[i];
-  mean /= d.length;
-  let sq = 0;
-  for (let i = 0; i < d.length; i++) {
-    d[i] -= mean;
-    sq += d[i] * d[i];
-  }
-  const rms = Math.sqrt(sq / d.length) || 1;
-  const k = target / rms;
-  for (let i = 0; i < d.length; i++) d[i] = clamp(d[i] * k, -1, 1);
-}
-
-function makeImpulse(ctx: BaseAudioContext, seconds: number): AudioBuffer {
-  const sr = ctx.sampleRate;
-  const len = Math.floor(sr * seconds);
-  const pre = Math.floor(sr * 0.012);
-  const buf = ctx.createBuffer(2, len, sr);
-  for (let ch = 0; ch < 2; ch++) {
-    const d = buf.getChannelData(ch);
-    let y = 0;
-    for (let i = 0; i < len; i++) {
-      if (i < pre) {
-        d[i] = 0;
-        continue;
-      }
-      const k = (i - pre) / (len - pre);
-      const x = (Math.random() * 2 - 1) * Math.pow(1 - k, 2.6);
-      // progressively darker tail
-      y += (0.55 - 0.45 * k) * (x - y);
-      d[i] = y;
-    }
-  }
-  return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Envelope helpers
-// ---------------------------------------------------------------------------
-
-function env(p: AudioParam, t: number, peak: number, a: number, hold: number, d: number): void {
-  p.setValueAtTime(0, t);
-  p.linearRampToValueAtTime(peak, t + a);
-  if (hold > 0) p.setValueAtTime(peak, t + a + hold);
-  p.exponentialRampToValueAtTime(0.0001, t + a + hold + d);
-}
-
-function glide(p: AudioParam, t: number, from: number, to: number, dur: number): void {
-  p.setValueAtTime(Math.max(from, 0.01), t);
-  p.exponentialRampToValueAtTime(Math.max(to, 0.01), t + Math.max(dur, 0.002));
-}
-
-/** Short spikes on a gain param (crackles, ratchets, claps). Times must be ascending. */
-function spikes(p: AudioParam, times: number[], peaks: number[], tau: number): void {
-  for (let i = 0; i < times.length; i++) {
-    p.setValueAtTime(peaks[i], times[i]);
-    p.setTargetAtTime(0, times[i] + 0.001, tau);
-  }
-}
-
-interface NoiseOpts {
-  kind?: NoiseKind;
-  type?: BiquadFilterType;
-  f: number;
-  f2?: number;
-  sweep?: number;
-  q?: number;
-  a?: number;
-  hold?: number;
-  d: number;
-  peak: number;
-  rate?: number;
-  drive?: number;
-}
-
-interface ToneOpts {
-  type?: OscillatorType;
-  f: number;
-  f2?: number;
-  glide?: number;
-  a?: number;
-  hold?: number;
-  d: number;
-  peak: number;
-  detune?: number;
-  lp?: number;
-  drive?: number;
-}
-
-/**
- * A set of nodes making up one sound. Tracks every node so it can all be
- * disconnected once the longest-running source has ended.
- */
-class Patch {
-  private nodes: AudioNode[] = [];
-  private srcs: AudioScheduledSourceNode[] = [];
-  private lastSrc: AudioScheduledSourceNode | null = null;
-  private disposed = false;
-  end = 0;
-  onDone: (() => void) | null = null;
-
-  constructor(readonly ctx: AudioContext, readonly bank: Bank) {}
-
-  add<T extends AudioNode>(n: T): T {
-    this.nodes.push(n);
-    return n;
-  }
-
-  gain(v = 0): GainNode {
-    const g = this.add(this.ctx.createGain());
-    g.gain.value = v;
-    return g;
-  }
-
-  filter(type: BiquadFilterType, f: number, q = 0.707): BiquadFilterNode {
-    const n = this.add(this.ctx.createBiquadFilter());
-    n.type = type;
-    n.frequency.value = f;
-    n.Q.value = q;
-    return n;
-  }
-
-  shaper(drive: number): WaveShaperNode {
-    const s = this.add(this.ctx.createWaveShaper());
-    s.curve = this.bank.curve(drive);
-    return s;
-  }
-
-  crusher(): WaveShaperNode {
-    const s = this.add(this.ctx.createWaveShaper());
-    s.curve = this.bank.crush;
-    return s;
-  }
-
-  osc(type: OscillatorType, f: number, t0: number, t1: number): OscillatorNode {
-    const o = this.add(this.ctx.createOscillator());
-    o.type = type;
-    o.frequency.value = f;
-    this.sched(o, t0, t1, 0);
-    return o;
-  }
-
-  noise(kind: NoiseKind, t0: number, t1: number, rate = 1): AudioBufferSourceNode {
-    const s = this.add(this.ctx.createBufferSource());
-    const buf = this.bank.buffer(kind);
-    s.buffer = buf;
-    s.loop = true;
-    s.playbackRate.value = rate;
-    this.sched(s, t0, t1, Math.random() * (buf.duration - 0.05));
-    return s;
-  }
-
-  private sched(s: AudioScheduledSourceNode, t0: number, t1: number, offset: number): void {
-    if (s instanceof AudioBufferSourceNode) s.start(t0, offset);
-    else s.start(t0);
-    s.stop(t1);
-    this.srcs.push(s);
-    if (t1 >= this.end) {
-      this.end = t1;
-      this.lastSrc = s;
-    }
-  }
-
-  /** Filtered noise burst with an envelope. */
-  nh(dest: AudioNode, t: number, o: NoiseOpts): GainNode {
-    const a = Math.max(0.001, o.a ?? 0.001);
-    const hold = o.hold ?? 0;
-    const end = t + a + hold + o.d;
-    const src = this.noise(o.kind ?? 'white', t, end + 0.03, o.rate ?? 1);
-    const f = this.filter(o.type ?? 'bandpass', o.f, o.q ?? 0.8);
-    if (o.f2 !== undefined) glide(f.frequency, t, o.f, o.f2, o.sweep ?? a + hold + o.d);
-    const g = this.gain(0);
-    env(g.gain, t, o.peak, a, hold, o.d);
-    src.connect(f);
-    if (o.drive) {
-      const s = this.shaper(o.drive);
-      f.connect(s);
-      s.connect(g);
-    } else {
-      f.connect(g);
-    }
-    g.connect(dest);
-    return g;
-  }
-
-  /** Oscillator tone with optional pitch glide, drive and lowpass. */
-  th(dest: AudioNode, t: number, o: ToneOpts): OscillatorNode {
-    const a = Math.max(0.001, o.a ?? 0.002);
-    const hold = o.hold ?? 0;
-    const end = t + a + hold + o.d;
-    const osc = this.osc(o.type ?? 'sine', o.f, t, end + 0.03);
-    if (o.detune) osc.detune.value = o.detune;
-    if (o.f2 !== undefined) glide(osc.frequency, t, o.f, o.f2, o.glide ?? a + hold + o.d);
-    let n: AudioNode = osc;
-    if (o.drive) {
-      const s = this.shaper(o.drive);
-      n.connect(s);
-      n = s;
-    }
-    if (o.lp) {
-      const f = this.filter('lowpass', o.lp, 0.7);
-      n.connect(f);
-      n = f;
-    }
-    const g = this.gain(0);
-    env(g.gain, t, o.peak, a, hold, o.d);
-    n.connect(g);
-    g.connect(dest);
-    return osc;
-  }
-
-  /** Random crackles: one noise source gated by short spikes. */
-  crackle(dest: AudioNode, t: number, dur: number, count: number, f: number, peak: number): void {
-    const src = this.noise('white', t, t + dur + 0.1);
-    const bp = this.filter('bandpass', f, 1.4);
-    const g = this.gain(0);
-    const times: number[] = [];
-    for (let i = 0; i < count; i++) times.push(t + Math.random() * dur);
-    times.sort((x, y) => x - y);
-    const peaks = times.map(() => peak * (0.35 + 0.65 * Math.random()));
-    spikes(g.gain, times, peaks, 0.006 + Math.random() * 0.01);
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(dest);
-  }
-
-  /** Arm cleanup once all sources are scheduled. */
-  finish(): void {
-    if (!this.lastSrc) {
-      this.dispose();
-      return;
-    }
-    this.lastSrc.onended = () => this.dispose();
-  }
-
-  /** Stop all sources early (voice stealing). */
-  kill(at: number): void {
-    for (const s of this.srcs) {
-      try {
-        s.stop(at);
-      } catch {
-        /* already stopped */
-      }
-    }
-  }
-
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
-    for (const n of this.nodes) {
-      try {
-        n.disconnect();
-      } catch {
-        /* ignore */
-      }
-    }
-    for (const s of this.srcs) s.onended = null;
-    this.nodes.length = 0;
-    this.srcs.length = 0;
-    this.lastSrc = null;
-    const cb = this.onDone;
-    this.onDone = null;
-    if (cb) cb();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,492 +461,6 @@ const radioBlip: Build = (p, o, t) => {
 };
 
 // ---------------------------------------------------------------------------
-// Music
-// ---------------------------------------------------------------------------
-
-type Riff = (number | null)[];
-const R1: Riff = [0, null, 0, 0, 12, null, 0, 0, 0, null, 0, 0, 10, null, 7, null];
-const R2: Riff = [0, 0, null, 0, 0, 12, null, 0, 3, null, 0, 0, 7, null, 5, 3];
-const R3: Riff = [0, null, null, null, 0, null, null, 0, null, null, 0, null, 12, null, 10, null];
-const BASS_FILL = [0, 3, 5, 7];
-
-/** chord roots (semitones from E) per bar, 4-bar cycle, one per section */
-const BATTLE_PROG = [
-  [0, 0, -4, -2],
-  [0, 3, -4, -2],
-  [0, 0, -4, -2],
-  [0, -4, -7, -2],
-];
-
-/** 2-bar lead phrases: [step 0..31, semitone from E4, length in steps] */
-type Phrase = [number, number, number][];
-const M1: Phrase = [
-  [0, 7, 3], [3, 7, 1], [4, 10, 2], [6, 12, 4], [10, 10, 2], [12, 7, 4],
-  [16, 8, 3], [19, 7, 3], [22, 5, 2], [24, 3, 4], [28, 2, 2], [30, 3, 2],
-];
-const M2: Phrase = [
-  [0, 12, 2], [2, 15, 2], [4, 14, 4], [8, 12, 2], [10, 10, 2], [12, 12, 4],
-  [16, 7, 6], [22, 8, 2], [24, 7, 4], [28, 3, 4],
-];
-
-function phraseMap(ph: Phrase): Map<number, [number, number]> {
-  const m = new Map<number, [number, number]>();
-  for (const [s, n, l] of ph) m.set(s, [n, l]);
-  return m;
-}
-const M1_MAP = phraseMap(M1);
-const M2_MAP = phraseMap(M2);
-
-const MENU_PROG: { root: number; tones: number[] }[] = [
-  { root: 0, tones: [0, 3, 7, 12, 14] }, // Em(add9)
-  { root: -4, tones: [0, 4, 7, 11] }, // Cmaj7
-  { root: 3, tones: [0, 4, 7, 12] }, // G
-  { root: -2, tones: [0, 4, 7, 9] }, // D6
-];
-
-const TEMPO: Record<MusicMode, number> = { battle: 140, menu: 78 };
-
-class MusicEngine {
-  private timer: number | null = null;
-  private mode: MusicMode = 'battle';
-  private pending: MusicMode = 'battle';
-  private step = 0;
-  private bar = 0;
-  private next = 0;
-  private rnd = rng32(0x5eed1);
-
-  constructor(
-    private readonly ctx: AudioContext,
-    private readonly bank: Bank,
-    private readonly buses: Record<MusicMode, GainNode>,
-    private readonly play: GainNode,
-  ) {}
-
-  get running(): boolean {
-    return this.timer !== null;
-  }
-
-  setMode(m: MusicMode): void {
-    this.pending = m;
-    if (this.timer === null) this.mode = m;
-  }
-
-  start(): void {
-    if (this.timer !== null) return;
-    const now = this.ctx.currentTime;
-    this.mode = this.pending;
-    this.step = 0;
-    this.bar = 0;
-    this.next = now + 0.08;
-    for (const m of ['battle', 'menu'] as const) {
-      const g = this.buses[m].gain;
-      g.cancelScheduledValues(now);
-      g.setValueAtTime(m === this.mode ? 1 : 0, now);
-    }
-    const pg = this.play.gain;
-    pg.cancelScheduledValues(now);
-    pg.setValueAtTime(pg.value, now);
-    pg.linearRampToValueAtTime(MUSIC_LEVEL, now + 0.05);
-    this.timer = window.setInterval(() => this.tick(), TICK_MS);
-    this.tick();
-  }
-
-  stop(): void {
-    if (this.timer !== null) {
-      window.clearInterval(this.timer);
-      this.timer = null;
-    }
-    const now = this.ctx.currentTime;
-    const pg = this.play.gain;
-    pg.cancelScheduledValues(now);
-    pg.setTargetAtTime(0, now, 0.12);
-  }
-
-  private tick(): void {
-    const ctx = this.ctx;
-    if (ctx.state !== 'running') return;
-    const now = ctx.currentTime;
-    // Background tabs throttle timers: resync instead of bursting stale notes.
-    if (this.next < now - 0.05) {
-      this.next = now + 0.05;
-      this.step = 0;
-      this.bar++;
-    }
-    while (this.next < now + LOOKAHEAD) {
-      if (this.step === 0 && this.pending !== this.mode) this.switchMode(this.next);
-      const sd = 60 / TEMPO[this.mode] / 4;
-      if (this.step === 12 && this.pending !== this.mode) this.riser(this.next, sd * 4, this.play, 0.18);
-      if (this.mode === 'battle') this.battleStep(this.step, this.next, sd);
-      else this.menuStep(this.step, this.next, sd);
-      this.next += sd;
-      this.step++;
-      if (this.step >= 16) {
-        this.step = 0;
-        this.bar++;
-      }
-    }
-  }
-
-  private switchMode(t: number): void {
-    const from = this.mode;
-    const to = this.pending;
-    this.mode = to;
-    this.bar = 0;
-    const gNew = this.buses[to].gain;
-    const gOld = this.buses[from].gain;
-    gNew.cancelScheduledValues(t);
-    gNew.setTargetAtTime(1, t, 0.12);
-    gOld.cancelScheduledValues(t);
-    gOld.setTargetAtTime(0, t, 0.35);
-    // transition hit, straight into the post-fade bus
-    this.boom(t, this.play, to === 'battle' ? 0.9 : 0.6);
-    this.crash(t, this.play, to === 'battle' ? 1 : 0.5);
-  }
-
-  private patch(): Patch {
-    return new Patch(this.ctx, this.bank);
-  }
-
-  // --- battle -------------------------------------------------------------
-
-  private battleStep(s: number, t: number, sd: number): void {
-    const bus = this.buses.battle;
-    const rnd = this.rnd;
-    const sec = Math.floor(this.bar / 8) % 4;
-    const bi = this.bar % 8;
-    const off = BATTLE_PROG[sec][bi % 4];
-    const half = sec === 2 && bi < 4;
-    const buildUp = sec === 2 && bi >= 6;
-
-    if (s === 0 && bi === 0) this.crash(t, bus, sec === 3 ? 1 : 0.7);
-    if (sec === 2 && bi === 6 && s === 0) this.riser(t, sd * 32, bus, 0.22);
-
-    // kick
-    let kick = s % 4 === 0;
-    if (half) kick = s === 0 || s === 8 || (s === 10 && bi % 2 === 1);
-    if (sec === 3 && s === 14 && bi % 2 === 1) kick = true;
-    if (kick) this.kick(t, bus, s === 0 ? 1 : 0.9);
-    else if (!half && !buildUp && s === 7 && rnd() < 0.12) this.kick(t, bus, 0.5);
-
-    // snare / clap
-    if (buildUp) {
-      if (bi === 7 || s % 2 === 0) this.snare(t, bus, bi === 6 ? 0.35 + (s / 16) * 0.3 : 0.45 + (s / 16) * 0.55);
-    } else if (half) {
-      if (s === 8) this.snare(t, bus, 1);
-    } else if (s === 4 || s === 12) {
-      this.snare(t, bus, 1);
-    } else if (bi === 7 && s >= 13) {
-      this.snare(t, bus, 0.45 + (s - 13) * 0.2);
-    } else if ((s === 15 || s === 10) && rnd() < 0.12) {
-      this.snare(t, bus, 0.22);
-    }
-
-    // hats
-    if (sec === 0 || half) {
-      if (s % 2 === 0) this.hat(t, bus, s % 4 === 2 ? 0.9 : 0.45, false);
-    } else if (!buildUp || bi === 6) {
-      const v = s % 4 === 2 ? 0.85 : s % 2 === 0 ? 0.45 : 0.25;
-      this.hat(t, bus, v * (0.85 + rnd() * 0.3), s === 14 && bi % 2 === 1);
-    }
-
-    // bass
-    const riff = sec === 1 ? R2 : half ? R3 : sec === 3 && bi % 2 === 1 ? R2 : R1;
-    let n = riff[s];
-    if (bi === 7 && s >= 12 && !buildUp) n = BASS_FILL[s - 12];
-    if (n !== null) this.bass(t, bus, 40 + off + n, sd * (riff === R3 ? 2.6 : 0.85), s % 4 === 0);
-
-    // stabs, pads, lead
-    if (sec === 0 && bi % 4 === 3 && (s === 0 || s === 3 || s === 6)) this.stab(t, bus, 52 + off, sd * 1.6, 1);
-    if (sec === 1) {
-      const ph = bi < 6 ? M1_MAP : M2_MAP;
-      const note = ph.get((bi % 2) * 16 + s);
-      if (note) this.lead(t, bus, 64 + note[0], sd * note[1]);
-      if (bi === 7 && s === 0) this.stab(t, bus, 52 + off, sd * 2, 1);
-    }
-    if (half && s === 0) this.powerPad(t, bus, 52 + off, sd * 16);
-    if (sec === 3) {
-      if (bi % 2 === 0 && (s === 0 || s === 3 || s === 6 || s === 10)) this.stab(t, bus, 52 + off, sd * 1.5, 0.9);
-      if (bi % 2 === 1) {
-        const note = M2_MAP.get(16 + s);
-        if (note) this.lead(t, bus, 64 + note[0], sd * note[1]);
-      }
-    }
-  }
-
-  private kick(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: 155, f2: 42, glide: 0.11, a: 0.002, d: 0.34, peak: 0.95 * v, drive: 1.6 });
-    p.nh(dest, t, { type: 'highpass', f: 2500, a: 0.001, d: 0.012, peak: 0.16 * v });
-    p.finish();
-  }
-
-  private snare(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    const src = p.noise('white', t, t + 0.3);
-    const bp = p.filter('bandpass', 1700, 0.9);
-    const hp = p.filter('highpass', 5000, 0.7);
-    const g1 = p.gain(0);
-    const g2 = p.gain(0);
-    const pk = 0.55 * v;
-    spikes(g1.gain, [t, t + 0.011], [pk * 0.8, pk * 0.8], 0.006);
-    g1.gain.setValueAtTime(pk, t + 0.022);
-    g1.gain.setTargetAtTime(0, t + 0.023, 0.05);
-    env(g2.gain, t + 0.02, 0.22 * v, 0.002, 0, 0.1);
-    src.connect(bp);
-    src.connect(hp);
-    bp.connect(g1);
-    hp.connect(g2);
-    g1.connect(dest);
-    g2.connect(dest);
-    p.th(dest, t + 0.02, { type: 'triangle', f: 220, f2: 170, glide: 0.06, d: 0.08, peak: 0.35 * v });
-    p.finish();
-  }
-
-  private hat(t: number, dest: AudioNode, v: number, open: boolean): void {
-    const p = this.patch();
-    p.nh(dest, t, { type: 'highpass', f: 7500, q: 0.8, a: 0.001, d: open ? 0.16 : 0.035, peak: 0.2 * v });
-    p.finish();
-  }
-
-  private crash(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.nh(dest, t, { type: 'highpass', f: 4500, a: 0.002, d: 1.4, peak: 0.16 * v });
-    p.nh(dest, t, { type: 'bandpass', f: 8000, q: 1, a: 0.002, d: 0.6, peak: 0.1 * v });
-    p.finish();
-  }
-
-  private riser(t: number, dur: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    const src = p.noise('white', t, t + dur + 0.05);
-    const bp = p.filter('bandpass', 400, 3);
-    glide(bp.frequency, t, 400, 5000, dur);
-    const g = p.gain(0);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v, t + dur * 0.95);
-    g.gain.linearRampToValueAtTime(0, t + dur);
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  private boom(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: 70, f2: 30, glide: 0.8, d: 1.2, peak: 0.7 * v, drive: 1.5 });
-    p.nh(dest, t, { kind: 'brown', type: 'lowpass', f: 300, d: 1.0, peak: 0.5 * v });
-    p.finish();
-  }
-
-  private bass(t: number, dest: AudioNode, midi: number, dur: number, accent: boolean): void {
-    const p = this.patch();
-    const f = midiHz(midi);
-    const end = t + dur + 0.05;
-    const sh = p.shaper(2.5);
-    p.osc('sawtooth', f, t, end).connect(sh);
-    const sq = p.osc('square', f, t, end);
-    sq.detune.value = -6;
-    const sqg = p.gain(0.6);
-    sq.connect(sqg);
-    sqg.connect(sh);
-    const lp = p.filter('lowpass', 300, 6);
-    glide(lp.frequency, t, 300 + (accent ? 1500 : 800), 220, dur);
-    const g = p.gain(0);
-    env(g.gain, t, 0.28, 0.003, dur * 0.4, dur * 0.55);
-    sh.connect(lp);
-    lp.connect(g);
-    g.connect(dest);
-    if (f / 2 > 35) {
-      const sub = p.osc('sine', f / 2, t, end);
-      const sg = p.gain(0);
-      env(sg.gain, t, 0.3, 0.003, dur * 0.4, dur * 0.55);
-      sub.connect(sg);
-      sg.connect(dest);
-    }
-    p.finish();
-  }
-
-  private chordOscs(p: Patch, dest: AudioNode, root: number, t: number, end: number): void {
-    for (const iv of [0, 7, 12]) {
-      const f = midiHz(root + iv);
-      for (const det of [-10, 10]) {
-        const o = p.osc('sawtooth', f, t, end);
-        o.detune.value = det;
-        o.connect(dest);
-      }
-    }
-  }
-
-  private stab(t: number, dest: AudioNode, root: number, dur: number, v: number): void {
-    const p = this.patch();
-    const end = t + dur + 0.1;
-    const lp = p.filter('lowpass', 2400, 2);
-    glide(lp.frequency, t, 2600, 600, dur);
-    const sh = p.shaper(1.5);
-    const g = p.gain(0);
-    env(g.gain, t, 0.07 * v, 0.004, dur * 0.3, dur * 0.7);
-    this.chordOscs(p, lp, root, t, end);
-    lp.connect(sh);
-    sh.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  private powerPad(t: number, dest: AudioNode, root: number, dur: number): void {
-    const p = this.patch();
-    const end = t + dur + 0.6;
-    const lp = p.filter('lowpass', 600, 1);
-    glide(lp.frequency, t, 500, 1400, dur);
-    const g = p.gain(0);
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.05, t + 0.25);
-    g.gain.setValueAtTime(0.05, t + dur - 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.5);
-    this.chordOscs(p, lp, root, t, end);
-    lp.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  private lead(t: number, dest: AudioNode, midi: number, dur: number): void {
-    const p = this.patch();
-    const f = midiHz(midi);
-    const end = t + dur + 0.15;
-    const lp = p.filter('lowpass', 2600, 1);
-    const lfo = p.osc('sine', 5.5, t, end);
-    const vib = p.gain(0);
-    vib.gain.setValueAtTime(0, t);
-    vib.gain.linearRampToValueAtTime(14, t + Math.min(0.25, dur));
-    lfo.connect(vib);
-    const a = p.osc('square', f, t, end);
-    const b = p.osc('sawtooth', f, t, end);
-    b.detune.value = 7;
-    vib.connect(a.detune);
-    vib.connect(b.detune);
-    const ga = p.gain(0.5);
-    a.connect(ga);
-    ga.connect(lp);
-    b.connect(lp);
-    const g = p.gain(0);
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.11, t + 0.01);
-    g.gain.linearRampToValueAtTime(0.08, t + 0.08);
-    g.gain.setValueAtTime(0.08, t + dur);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
-    lp.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  // --- menu ---------------------------------------------------------------
-
-  private menuStep(s: number, t: number, sd: number): void {
-    const bus = this.buses.menu;
-    const rnd = this.rnd;
-    const bi = this.bar % 8;
-    const sec = Math.floor(this.bar / 8) % 2;
-    const chord = MENU_PROG[this.bar % 4];
-
-    if (s === 0) {
-      const base = 52 + chord.root;
-      const notes = chord.tones.map((x) => base + x);
-      this.pad(t, bus, notes, sd * 16);
-      this.drone(t, bus, 40 + chord.root, sd * 16);
-    }
-
-    // sparse percussion
-    if (s === 0) this.kick(t, bus, 0.5);
-    if (s === 10 && this.bar % 2 === 1) this.kick(t, bus, 0.3);
-    if (s === 8 && this.bar % 2 === 0) this.tom(t, bus, 65, 0.45);
-    if (s === 12 && rnd() < 0.6) this.rim(t, bus, 0.5);
-    if (this.bar % 4 === 3 && s >= 12) this.tom(t, bus, 70 + (s - 12) * 12, 0.25 + (s - 12) * 0.08);
-    if (s % 4 === 2 && rnd() < 0.45) this.hat(t, bus, 0.25, false);
-    if (bi === 4 && s === 0 && rnd() < 0.7) this.boom(t + sd * 6, bus, 0.35);
-
-    // slow pulse in the second half of the cycle
-    if (sec === 1 && s % 4 === 0) this.pulse(t, bus, 40 + chord.root + (s === 8 ? 12 : 0), sd * 3);
-
-    // sparse bells
-    if (s % 2 === 0 && rnd() < 0.22) {
-      const tone = chord.tones[Math.floor(rnd() * chord.tones.length)];
-      this.bell(t, bus, 76 + chord.root + tone - (chord.root > 0 ? 12 : 0), 0.6 + rnd() * 0.4);
-    }
-  }
-
-  private pad(t: number, dest: AudioNode, notes: number[], dur: number): void {
-    const p = this.patch();
-    const end = t + dur + 2.2;
-    const lp = p.filter('lowpass', 600, 0.8);
-    lp.frequency.setValueAtTime(500, t);
-    lp.frequency.linearRampToValueAtTime(1100, t + dur * 0.5);
-    lp.frequency.linearRampToValueAtTime(650, t + dur + 1);
-    const g = p.gain(0);
-    const peak = 0.16 / notes.length;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(peak, t + 0.9);
-    g.gain.setValueAtTime(peak, t + dur);
-    g.gain.setTargetAtTime(0, t + dur, 0.5);
-    for (const m of notes) {
-      const f = midiHz(m);
-      for (const det of [-7, 7]) {
-        const o = p.osc('sawtooth', f, t, end);
-        o.detune.value = det;
-        o.connect(lp);
-      }
-    }
-    lp.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  private drone(t: number, dest: AudioNode, midi: number, dur: number): void {
-    const p = this.patch();
-    const end = t + dur + 1.8;
-    const o = p.osc('sine', midiHz(midi), t, end);
-    const tri = p.osc('triangle', midiHz(midi + 12), t, end);
-    const tg = p.gain(0.25);
-    const g = p.gain(0);
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.16, t + 0.8);
-    g.gain.setValueAtTime(0.16, t + dur);
-    g.gain.setTargetAtTime(0, t + dur, 0.4);
-    o.connect(g);
-    tri.connect(tg);
-    tg.connect(g);
-    g.connect(dest);
-    p.finish();
-  }
-
-  private pulse(t: number, dest: AudioNode, midi: number, dur: number): void {
-    const p = this.patch();
-    p.th(dest, t, { type: 'triangle', f: midiHz(midi), lp: 500, a: 0.01, hold: dur * 0.3, d: dur * 0.6, peak: 0.14 });
-    p.finish();
-  }
-
-  private tom(t: number, dest: AudioNode, f: number, v: number): void {
-    const p = this.patch();
-    p.th(dest, t, { f: f * 1.5, f2: f, glide: 0.15, d: 0.3, peak: 0.6 * v });
-    p.nh(dest, t, { kind: 'pink', type: 'lowpass', f: 1200, d: 0.05, peak: 0.2 * v });
-    p.finish();
-  }
-
-  private rim(t: number, dest: AudioNode, v: number): void {
-    const p = this.patch();
-    p.nh(dest, t, { type: 'bandpass', f: 2200, q: 4, d: 0.03, peak: 0.25 * v });
-    p.th(dest, t, { type: 'triangle', f: 800, d: 0.02, peak: 0.12 * v });
-    p.finish();
-  }
-
-  private bell(t: number, dest: AudioNode, midi: number, v: number): void {
-    const p = this.patch();
-    const f = midiHz(midi);
-    p.th(dest, t, { f, a: 0.003, d: 1.2, peak: 0.07 * v });
-    p.th(dest, t, { type: 'triangle', f, a: 0.003, d: 0.6, peak: 0.04 * v });
-    p.th(dest, t, { f: f * 2.76, a: 0.002, d: 0.35, peak: 0.02 * v });
-    p.finish();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // AudioSystem
 // ---------------------------------------------------------------------------
 
@@ -1326,17 +472,85 @@ interface VoiceRec {
   end: number;
 }
 
-interface Graph {
-  ctx: AudioContext;
+/** The mixing graph, independent of the context type so it can be rendered offline. */
+export interface MixGraph {
   bank: Bank;
   sfxBus: GainNode;
   sfxGain: GainNode;
   sfxWetBus: GainNode;
   sfxWetGain: GainNode;
+  /** start/stop fades of the music (0 or MUSIC_LEVEL) */
+  musicPlay: GainNode;
+  /** dips the music under announcer lines */
+  musicDuck: GainNode;
+  /** user music volume */
   musicGain: GainNode;
   master: GainNode;
   music: MusicEngine;
 }
+
+interface Graph extends MixGraph {
+  ctx: AudioContext;
+}
+
+/** Builds buses, reverb, compressor and the music engine on any (also offline) context. */
+export function buildAudioGraph(ctx: BaseAudioContext, sfxVol: number, musicVol: number): MixGraph {
+  const bank = new Bank(ctx);
+
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14;
+  comp.knee.value = 12;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.004;
+  comp.release.value = 0.2;
+  const master = ctx.createGain();
+  master.gain.value = 0.9;
+  comp.connect(master);
+  master.connect(ctx.destination);
+
+  const reverb = ctx.createConvolver();
+  reverb.buffer = makeImpulse(ctx, 1.4);
+  const revOut = ctx.createGain();
+  revOut.gain.value = 0.55;
+  reverb.connect(revOut);
+  revOut.connect(comp);
+
+  const sfxBus = ctx.createGain();
+  const sfxGain = ctx.createGain();
+  sfxGain.gain.value = sfxVol;
+  sfxBus.connect(sfxGain);
+  sfxGain.connect(comp);
+  const sfxWetBus = ctx.createGain();
+  const sfxWetGain = ctx.createGain();
+  sfxWetGain.gain.value = sfxVol;
+  sfxWetBus.connect(sfxWetGain);
+  sfxWetGain.connect(reverb);
+
+  const musicGain = ctx.createGain();
+  musicGain.gain.value = musicVol;
+  musicGain.connect(comp);
+  const musicWet = ctx.createGain();
+  musicWet.gain.value = 0.26;
+  musicGain.connect(musicWet);
+  musicWet.connect(reverb);
+  const musicDuck = ctx.createGain();
+  musicDuck.connect(musicGain);
+  const musicPlay = ctx.createGain();
+  musicPlay.gain.value = 0;
+  musicPlay.connect(musicDuck);
+
+  const music = new MusicEngine(ctx, bank, musicPlay);
+  return { bank, sfxBus, sfxGain, sfxWetBus, sfxWetGain, musicPlay, musicDuck, musicGain, master, music };
+}
+
+/** announcer lines that tell the score something about the battle */
+const SAY_CUES: Record<string, { floor: number; hold: number; sting?: StingerKind }> = {
+  'Our base is under attack': { floor: 0.55, hold: 12, sting: 'dread' },
+  'Unit under attack': { floor: 0.35, hold: 8 },
+  'Structure lost': { floor: 0.6, hold: 12, sting: 'dread' },
+  'Ore harvester lost': { floor: 0.4, hold: 8 },
+  'Mission failed': { floor: 0, hold: 0, sting: 'dread' },
+};
 
 export class AudioSystem {
   private g: Graph | null = null;
@@ -1349,6 +563,8 @@ export class AudioSystem {
   private voiceOn = true;
   private musicWanted = false;
   private musicMode: MusicMode = 'battle';
+  private heat = new CombatHeat();
+  private intensityOverride: number | null = null;
 
   // speech
   private speechQueue: string[] = [];
@@ -1363,6 +579,13 @@ export class AudioSystem {
 
   get unlocked(): boolean {
     return this.g !== null && this.g.ctx.state === 'running';
+  }
+
+  /** Smoothed combat intensity 0..1 currently driving the battle music. */
+  get musicIntensity(): number {
+    if (this.intensityOverride !== null) return this.intensityOverride;
+    const g = this.g;
+    return g ? this.heat.update(g.ctx.currentTime) : this.heat.value;
   }
 
   unlock(): void {
@@ -1396,7 +619,7 @@ export class AudioSystem {
   private afterResume(): void {
     const g = this.g;
     if (!g || g.ctx.state !== 'running') return;
-    if (this.musicWanted && !g.music.running) g.music.start();
+    if (this.musicWanted && !g.music.running) this.musicOn(g);
   }
 
   private createGraph(): Graph | null {
@@ -1407,70 +630,7 @@ export class AudioSystem {
     const AC = w.AudioContext ?? w.webkitAudioContext;
     if (!AC) return null;
     const ctx = new AC({ latencyHint: 'interactive' });
-    const bank = new Bank(ctx);
-
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14;
-    comp.knee.value = 12;
-    comp.ratio.value = 4;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.2;
-    const master = ctx.createGain();
-    master.gain.value = 0.9;
-    comp.connect(master);
-    master.connect(ctx.destination);
-
-    const reverb = ctx.createConvolver();
-    reverb.buffer = makeImpulse(ctx, 1.4);
-    const revOut = ctx.createGain();
-    revOut.gain.value = 0.55;
-    reverb.connect(revOut);
-    revOut.connect(comp);
-
-    const sfxBus = ctx.createGain();
-    const sfxGain = ctx.createGain();
-    sfxGain.gain.value = this.sfxVol;
-    sfxBus.connect(sfxGain);
-    sfxGain.connect(comp);
-    const sfxWetBus = ctx.createGain();
-    const sfxWetGain = ctx.createGain();
-    sfxWetGain.gain.value = this.sfxVol;
-    sfxWetBus.connect(sfxWetGain);
-    sfxWetGain.connect(reverb);
-
-    const musicGain = ctx.createGain();
-    musicGain.gain.value = this.musicVol;
-    musicGain.connect(comp);
-    const musicWet = ctx.createGain();
-    musicWet.gain.value = 0.2;
-    musicGain.connect(musicWet);
-    musicWet.connect(reverb);
-    const play = ctx.createGain();
-    play.gain.value = 0;
-    play.connect(musicGain);
-
-    const battle = ctx.createGain();
-    battle.gain.value = 0;
-    battle.connect(play);
-    const menu = ctx.createGain();
-    menu.gain.value = 0;
-    menu.connect(play);
-    // dotted-eighth echo for the atmospheric menu theme
-    const dly = ctx.createDelay(1);
-    dly.delayTime.value = (60 / TEMPO.menu) * 0.75;
-    const fb = ctx.createGain();
-    fb.gain.value = 0.32;
-    const dlp = ctx.createBiquadFilter();
-    dlp.type = 'lowpass';
-    dlp.frequency.value = 2200;
-    const dOut = ctx.createGain();
-    dOut.gain.value = 0.35;
-    menu.connect(dly);
-    dly.connect(dlp);
-    dlp.connect(fb);
-    fb.connect(dly);
-    dlp.connect(dOut);
-    dOut.connect(menu);
+    const mix = buildAudioGraph(ctx, this.sfxVol, this.musicVol);
 
     // iOS: play a silent buffer inside the gesture
     try {
@@ -1483,10 +643,10 @@ export class AudioSystem {
       /* ignore */
     }
 
-    const music = new MusicEngine(ctx, bank, { battle, menu }, play);
-    music.setMode(this.musicMode);
+    mix.music.setMode(this.musicMode);
+    mix.music.setIntensitySource(() => this.musicIntensity);
     ctx.onstatechange = () => this.afterResume();
-    return { ctx, bank, sfxBus, sfxGain, sfxWetBus, sfxWetGain, musicGain, master, music };
+    return { ...mix, ctx };
   }
 
   setSfxVolume(v: number): void {
@@ -1526,9 +686,12 @@ export class AudioSystem {
     if (!g || g.ctx.state !== 'running') return;
     const def = SFX[name];
     if (!def) return;
-    const level = clamp(Number.isFinite(volume) ? volume : 0, 0, 1) * def.lvl;
-    if (level < 0.005 || this.sfxVol <= 0) return;
+    const vol = clamp(Number.isFinite(volume) ? volume : 0, 0, 1);
     const now = g.ctx.currentTime;
+    // the score listens to the battle even when effects are muted
+    this.feedMusic(g, name, vol, now);
+    const level = vol * def.lvl;
+    if (level < 0.005 || this.sfxVol <= 0) return;
     const last = this.lastPlay.get(name);
     if (last !== undefined && now - last < def.gap && now >= last) return;
 
@@ -1609,6 +772,42 @@ export class AudioSystem {
     v.patch.kill(now + 0.04);
   }
 
+  /** Combat intensity + stingers from the effects that are being played. */
+  private feedMusic(g: Graph, name: Sfx, vol: number, now: number): void {
+    if (this.musicMode !== 'battle') return;
+    this.heat.hit(name, vol, now);
+    if (name === 'alarm') this.heat.raiseFloor(0.45, 10, now);
+    if (!g.music.running) return;
+    // a ballistic / hypersonic launch on screen reaches volume 1, SAMs stay at 0.75
+    if ((name === 'missileLaunch' && vol >= 0.85) || (name === 'explosionLarge' && vol >= 0.92)) g.music.stinger('heavy');
+    else if (name === 'buildingCollapse' && vol >= 0.3) g.music.stinger('dread');
+  }
+
+  private cueMusic(text: string): void {
+    const g = this.g;
+    if (!g || this.musicMode !== 'battle') return;
+    const now = g.ctx.currentTime;
+    if (text === 'Mission accomplished') {
+      this.heat.reset(now);
+      return;
+    }
+    const cue = SAY_CUES[text];
+    if (!cue) return;
+    if (cue.floor > 0) this.heat.raiseFloor(cue.floor, cue.hold, now);
+    if (cue.sting && g.music.running && g.ctx.state === 'running') g.music.stinger(cue.sting);
+    if (text === 'Mission failed') this.heat.reset(now);
+  }
+
+  private duck(on: boolean): void {
+    const g = this.g;
+    if (!g) return;
+    try {
+      g.musicDuck.gain.setTargetAtTime(on ? 0.6 : 1, g.ctx.currentTime, on ? 0.08 : 0.5);
+    } catch {
+      /* ignore */
+    }
+  }
+
   // --- announcer ------------------------------------------------------------
 
   private synth(): SpeechSynthesis | null {
@@ -1664,6 +863,7 @@ export class AudioSystem {
   }
 
   say(text: string): void {
+    if (typeof text === 'string') this.cueMusic(text);
     if (!this.voiceOn || !this.gestured || typeof text !== 'string' || !text.trim()) return;
     const now = Date.now();
     const last = this.lastSaid.get(text);
@@ -1693,9 +893,11 @@ export class AudioSystem {
     const text = this.speechQueue.shift();
     if (!synth || text === undefined || !this.voiceOn) {
       this.speaking = false;
+      this.duck(false);
       return;
     }
     this.speaking = true;
+    this.duck(true);
     this.blip();
     let done = false;
     let watchdog = 0;
@@ -1713,6 +915,7 @@ export class AudioSystem {
       this.speaking = false;
       window.setTimeout(() => {
         if (!this.speaking) this.speakNext();
+        if (!this.speaking) this.duck(false);
       }, 60);
     };
     try {
@@ -1741,12 +944,22 @@ export class AudioSystem {
 
   // --- music ----------------------------------------------------------------
 
+  private musicOn(g: Graph): void {
+    const now = g.ctx.currentTime;
+    g.music.setMode(this.musicMode);
+    g.music.start();
+    const pg = g.musicPlay.gain;
+    pg.cancelScheduledValues(now);
+    pg.setValueAtTime(pg.value, now);
+    pg.linearRampToValueAtTime(MUSIC_LEVEL, now + 0.05);
+  }
+
   startMusic(): void {
     this.musicWanted = true;
     const g = this.g;
+    if (this.musicMode === 'battle') this.heat.reset(g ? g.ctx.currentTime : undefined);
     if (!g || g.ctx.state !== 'running') return;
-    g.music.setMode(this.musicMode);
-    g.music.start();
+    this.musicOn(g);
   }
 
   stopMusic(): void {
@@ -1754,11 +967,26 @@ export class AudioSystem {
     const g = this.g;
     if (!g) return;
     g.music.stop();
+    const now = g.ctx.currentTime;
+    const pg = g.musicPlay.gain;
+    pg.cancelScheduledValues(now);
+    pg.setValueAtTime(pg.value, now);
+    pg.setTargetAtTime(0, now, 0.12);
   }
 
   setMusicMode(mode: 'menu' | 'battle'): void {
     if (mode !== 'menu' && mode !== 'battle') return;
+    // every battle starts from calm
+    if (mode === 'battle' && this.musicMode !== 'battle') this.heat.reset(this.g ? this.g.ctx.currentTime : undefined);
     this.musicMode = mode;
     if (this.g) this.g.music.setMode(mode);
+  }
+
+  /**
+   * Optional: drive the battle music's combat intensity (0..1) directly.
+   * Pass null to return to the automatic estimate derived from the effects.
+   */
+  setMusicIntensity(x: number | null): void {
+    this.intensityOverride = x === null || !Number.isFinite(x) ? null : clamp(x, 0, 1);
   }
 }
