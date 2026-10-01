@@ -203,6 +203,7 @@ interface Timed {
   max: number;
   grow?: number;
   base?: number;
+  alpha0?: number;
 }
 
 export class Effects {
@@ -212,7 +213,7 @@ export class Effects {
   private timed: Timed[] = [];
   private lights: { light: THREE.PointLight; life: number; max: number; power: number }[] = [];
   private beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
-  private ringGeo = new THREE.RingGeometry(0.85, 1, 40).rotateX(-Math.PI / 2);
+  private ringGeo = new THREE.RingGeometry(0.92, 1, 48).rotateX(-Math.PI / 2);
   private discGeo = new THREE.CircleGeometry(1, 24).rotateX(-Math.PI / 2);
   private scorchTex: THREE.Texture;
   private scorches: THREE.Mesh[] = [];
@@ -278,10 +279,10 @@ export class Effects {
       for (let i = 0; i < 4 * q; i++) this.fire.spawn({ x, y: y + 0.1, z, vx: this.rand(-2, 2), vy: this.rand(0.5, 2), vz: this.rand(-2, 2), life: 0.15, size: 0.08, color: 0xffe0a0, gravity: 6 });
       return;
     }
-    const hot = kind === 'laser' ? 0xffd0c0 : kind === 'thermo' ? 0xfff4c0 : 0xfff0b0;
-    const mid = kind === 'laser' ? 0xff4020 : kind === 'thermo' ? 0xff8a20 : 0xff7a1a;
+    const hot = kind === 'laser' ? 0xffb090 : kind === 'thermo' ? 0xffd070 : 0xffc060;
+    const mid = kind === 'laser' ? 0xc02010 : kind === 'thermo' ? 0xe05a10 : 0xd04a08;
     // core flash
-    this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18, size: 1.4 * S, sizeEnd: 2.2 * S, color: hot, colorEnd: mid, alpha: 1 });
+    this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.16, size: 1.1 * S, sizeEnd: 1.8 * S, color: 0xfff0c0, colorEnd: mid, alpha: 0.75 });
     // fireball
     const nFire = Math.round((kind === 'thermo' ? 22 : 12) * S * q) + 3;
     for (let i = 0; i < nFire; i++) {
@@ -298,7 +299,8 @@ export class Effects {
         size: this.rand(0.35, 0.7) * S,
         sizeEnd: this.rand(0.7, 1.2) * S,
         color: hot,
-        colorEnd: 0x601000,
+        colorEnd: 0x4a0c00,
+        alpha: 0.8,
         drag: 2.5,
         gravity: -0.6,
       });
@@ -335,7 +337,7 @@ export class Effects {
         this.smokeSys.spawn({ x, y: y + 0.2, z, vx: this.rand(-2.5, 2.5) * S, vy: this.rand(2, 5) * S, vz: this.rand(-2.5, 2.5) * S, life: this.rand(0.6, 1.1), size: 0.09, color: 0x1a1612, alpha: 1, gravity: 10 });
     }
     // shockwave ring
-    if (S >= 0.9) this.ring(x, y + 0.05, z, 0.3 * S, 2.6 * S, 0.45, 0xffc070, true);
+    if (S >= 1.5) this.ring(x, y + 0.05, z, 0.3 * S, 2.2 * S, 0.4, 0xa07040, true, 0.45);
     if (S >= 0.5 && kind !== 'air') this.scorch(x, y, z, 0.55 * S);
     this.flashLight(x, y, z, 6 * S, kind === 'laser' ? 0xff5030 : 0xffa040, 0.35 + 0.1 * S);
     if (S >= 1.7) this.shake = Math.max(this.shake, 0.18 * S);
@@ -380,14 +382,14 @@ export class Effects {
     this.fire.spawn({ x: b.x, y: b.y, z: b.z, vx: this.rand(-1, 1), vy: this.rand(0.5, 1.5), vz: this.rand(-1, 1), life: 0.12, size: 0.06, color: 0xffe0a0, gravity: 6 });
   }
 
-  ring(x: number, y: number, z: number, r0: number, r1: number, life: number, color: number, additive: boolean) {
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+  ring(x: number, y: number, z: number, r0: number, r1: number, life: number, color: number, additive: boolean, opacity = 0.9) {
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
     const m = new THREE.Mesh(this.ringGeo, mat);
     m.position.set(x, y, z);
     m.scale.setScalar(r0);
     m.renderOrder = 3;
     this.group.add(m);
-    this.timed.push({ obj: m, mat, life: 0, max: life, grow: r1, base: r0 });
+    this.timed.push({ obj: m, mat, life: 0, max: life, grow: r1, base: r0, alpha0: opacity });
   }
 
   marker(x: number, y: number, z: number, attack: boolean) {
@@ -463,7 +465,7 @@ export class Effects {
         continue;
       }
       if (t.base === -1) t.mat.opacity = k < 0.8 ? 1 : 1 - (k - 0.8) / 0.2;
-      else t.mat.opacity = 1 - k;
+      else t.mat.opacity = (t.alpha0 ?? 1) * (1 - k);
       if (t.grow !== undefined && t.base !== undefined) t.obj.scale.setScalar(t.base + (t.grow - t.base) * Math.sqrt(k));
     }
     for (const l of this.lights) {

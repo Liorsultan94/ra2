@@ -811,7 +811,7 @@ export class Game {
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
-    if (this.local < 0) return;
+    if (this.local < 0 || (this.paused && down)) return;
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
     if (down) this.keys.add(k);
@@ -891,6 +891,15 @@ export class Game {
         this.hud.setTab(order[(order.indexOf(this.hud.tab) + 1) % order.length]);
         break;
       }
+    }
+  }
+
+  /** Debug: advance the simulation instantly (events are dropped). */
+  fastForward(seconds: number) {
+    const n = Math.round((seconds * 1000) / TICK_MS);
+    for (let i = 0; i < n && !this.world.over; i++) {
+      this.world.step();
+      this.world.drainEvents();
     }
   }
 

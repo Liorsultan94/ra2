@@ -474,7 +474,7 @@ export class Terrain {
 
   private buildOreMines() {
     const mat = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x6f6658, roughness: 0.9, flatShading: true }));
-    const glow = new THREE.MeshBasicMaterial({ color: 0xffd25a, toneMapped: false });
+    const glow = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0xffd25a, emissive: 0xffc030, emissiveIntensity: 2.5, toneMapped: false }));
     for (const mm of this.map.oreMines) {
       const g = new THREE.Group();
       const mound = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.35, 7), mat);

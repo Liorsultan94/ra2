@@ -105,11 +105,26 @@ function startBattle(opts: GameOptions) {
 // Debug/test hook: ?play=usa,russia,normal jumps straight into a battle.
 const params = new URLSearchParams(location.search);
 const play = params.get('play');
-if (play) {
+const demo = params.get('demo');
+if (demo) {
+  // ?demo=usa,russia&ff=240 : watch an AI battle, optionally fast-forwarded
+  const [a, b] = demo.split(',') as Faction[];
+  game = new Game(app, { faction: a || 'usa', enemy: b || 'russia', difficulty: 'hard', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), attract: true, seed: 42 }, audio, { onMenu: () => {}, onEnd: () => {} });
+  const g = game as Game;
+  g.fastForward(Number(params.get('ff') ?? 0));
+  const cx = Number(params.get('cx'));
+  const cy = Number(params.get('cy'));
+  if (cx && cy) {
+    (g as unknown as { updateCamera: () => void }).updateCamera = () => {};
+    g.renderer.centerOn(cx, cy);
+  }
+  if (params.get('z')) g.renderer.setZoom(Number(params.get('z')));
+} else if (play) {
   const [f, e, d] = play.split(',');
   startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality) });
   const speed = Number(params.get('speed'));
-  if (speed && game) game.speed = speed;
+  const g = game as Game | null;
+  if (speed && g) g.speed = speed;
 } else {
   showMainMenu();
 }

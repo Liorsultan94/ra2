@@ -246,7 +246,7 @@ const FACTION_UNITS: Record<Faction, Record<string, Partial<UnitTpl> & { replace
     uav: { name: 'Orion UAV' },
   },
   germany: {
-    mbt: { name: 'Leo 2A8 MBT', model: 'mbt_heavy', cost: 1100, buildTime: 11, hp: 540, speed: 2.4, weapon: 'cannonHeavy', desc: 'Superior tank with modular composite armor.' },
+    mbt: { name: 'Leo 2A8 MBT', model: 'mbt_heavy', cost: 1000, buildTime: 11, hp: 540, speed: 2.4, weapon: 'cannonHeavy', desc: 'Superior tank with modular composite armor.' },
     berge: { name: 'Berge Recovery Vehicle', model: 'berge', category: 'vehicle', cost: 800, buildTime: 9, hp: 450, armor: 'heavy', sight: 6, speed: 2.1, turnRate: 0.1, turret: false, repairAura: 3, prereq: ['factory'], desc: 'Repairs nearby vehicles.', aiWeight: 1, aiTag: 'support' },
     aa: { name: 'Cheetah AA' },
     uav: { name: 'Heron UAV' },
@@ -258,7 +258,7 @@ const FACTION_UNITS: Record<Faction, Record<string, Partial<UnitTpl> & { replace
   },
   ukraine: {
     mbt: { name: 'Oplot MBT' },
-    fpvteam: { name: 'FPV Drone Team', model: 'fpvteam', category: 'infantry', cost: 400, buildTime: 5, hp: 90, armor: 'infantry', sight: 7, speed: 1.25, weapon: 'fpvLaunch', prereq: ['barracks'], desc: 'Launches FPV kamikaze drones that hunt armor.', aiWeight: 4, aiTag: 'main' },
+    fpvteam: { name: 'FPV Drone Team', model: 'fpvteam', category: 'infantry', cost: 450, buildTime: 5, hp: 90, armor: 'infantry', sight: 7, speed: 1.25, weapon: 'fpvLaunch', prereq: ['barracks'], desc: 'Launches FPV kamikaze drones that hunt armor.', aiWeight: 4, aiTag: 'main' },
     ewinf: { name: 'EW Trooper', model: 'ewinf', category: 'infantry', cost: 350, buildTime: 5, hp: 110, armor: 'infantry', sight: 6, speed: 1.3, weapon: 'rifle', ewRadius: 4.5, prereq: ['barracks'], desc: 'Backpack jammer protects nearby troops from drones.', aiWeight: 1, aiTag: 'support' },
     uav: { name: 'Recon Strike UAV' },
   },

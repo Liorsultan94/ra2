@@ -99,3 +99,76 @@ describe('factions', () => {
     console.log(JSON.stringify(wins));
   }, 300000);
 });
+
+describe('special mechanics', () => {
+  function duel() {
+    const w = new World({
+      seed: 5,
+      players: [
+        { name: 'A', faction: 'israel', color: 0, isAI: false },
+        { name: 'B', faction: 'ukraine', color: 0, isAI: false },
+      ],
+    });
+    // clear starting forces
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    // keep both players alive (no buildings = defeat)
+    w.spawnBuilding('israel_conyard', 0, 4, 88, true);
+    w.spawnBuilding('ukraine_conyard', 1, 88, 4, true);
+    return w;
+  }
+
+  it('active protection intercepts rockets', () => {
+    const w = duel();
+    const tank = w.spawnUnit('israel_mbt', 0, 40.5, 60.5);
+    tank.hp = tank.maxHp = 1e6;
+    for (let i = 0; i < 4; i++) w.spawnUnit('ukraine_at', 1, 44.5, 58.5 + i * 0.4);
+    let intercepts = 0;
+    for (let t = 0; t < TPS * 40; t++) {
+      w.step();
+      for (const e of w.drainEvents()) if (e.t === 'intercept') intercepts++;
+    }
+    expect(intercepts).toBeGreaterThan(5);
+  });
+
+  it('FPV teams launch kamikaze drones and EW jams them', () => {
+    const w = duel();
+    const target = w.spawnUnit('israel_mbt', 0, 40.5, 60.5);
+    target.hp = target.maxHp = 1e6;
+    w.spawnUnit('ukraine_fpvteam', 1, 46.5, 60.5);
+    let launched = 0;
+    let hits = 0;
+    for (let t = 0; t < TPS * 20; t++) {
+      w.step();
+      for (const e of w.drainEvents()) {
+        if (e.t === 'fire' && e.weapon.includes('fpvLaunch')) launched++;
+        if (e.t === 'impact' && e.weapon === 'fpvWarhead' && !e.air) hits++;
+      }
+    }
+    expect(launched).toBeGreaterThan(0);
+    expect(hits).toBeGreaterThan(0);
+
+    // with a jammer next to the target the drones should mostly fail
+    const w2 = new World({
+      seed: 5,
+      players: [
+        { name: 'A', faction: 'russia', color: 0, isAI: false },
+        { name: 'B', faction: 'ukraine', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w2.list) if (e.owner >= 0) e.dead = true;
+    w2.list = w2.list.filter((e) => !e.dead);
+    w2.spawnBuilding('russia_conyard', 0, 4, 88, true);
+    w2.spawnBuilding('ukraine_conyard', 1, 88, 4, true);
+    const t2 = w2.spawnUnit('russia_mbt', 0, 40.5, 60.5);
+    t2.hp = t2.maxHp = 1e6;
+    w2.spawnUnit('russia_ew', 0, 39.5, 60.5);
+    w2.spawnUnit('ukraine_fpvteam', 1, 46.5, 60.5);
+    let hits2 = 0;
+    for (let t = 0; t < TPS * 20; t++) {
+      w2.step();
+      for (const e of w2.drainEvents()) if (e.t === 'impact' && e.weapon === 'fpvWarhead' && !e.air) hits2++;
+    }
+    expect(hits2).toBeLessThan(hits);
+  });
+});

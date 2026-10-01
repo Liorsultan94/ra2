@@ -245,6 +245,7 @@ export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume():
       </div>`;
     const close = (fn: () => void) => () => {
       layer.remove();
+      window.removeEventListener('keydown', onKey, true);
       fn();
     };
     layer.querySelector('[data-a=resume]')!.addEventListener('click', close(h2.resume));
@@ -259,16 +260,16 @@ export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume():
       layer.querySelector('[data-a=back]')!.addEventListener('click', main);
     });
   };
-  main();
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && document.body.contains(layer)) {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       layer.remove();
       window.removeEventListener('keydown', onKey, true);
       h2.resume();
     }
   };
   window.addEventListener('keydown', onKey, true);
+  main();
 }
 
 export function showEndScreen(parent: HTMLElement, win: boolean, you: Player, enemy: Player, seconds: number, h2: { again(): void; menu(): void }) {
