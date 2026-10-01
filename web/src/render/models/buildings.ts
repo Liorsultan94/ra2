@@ -3663,6 +3663,25 @@ function satcom(k: Kit, name: string, x: number, y: number, z: number, r: number
   k.osc(name, 'y', 1.2, 0.12, x * 3, 0);
 }
 
+/** Directed-energy prototype on a test pad (battle lab yard prop). */
+function prototypeLaser(k: Kit, x: number, z: number) {
+  const P = k.P;
+  k.plan(P.T.concrete(0x8a8c8e, 2), regular(6, 0.26, Math.PI / 6), 0.02, x, Y0, z, 0.006);
+  k.ring(P.yellow, 0.24, 0.006, x, Y0 + 0.022, z, 6);
+  k.cyl(P.dark, 0.09, 0.06, x, Y0 + 0.02, z, 12);
+  k.rbox(P.white, 0.14, 0.1, 0.12, x, Y0 + 0.08, z, 0.015);
+  k.box(P.team, 0.142, 0.02, 0.122, x, Y0 + 0.14, z);
+  k.at(x, Y0 + 0.2, z, 0.6, () => {
+    k.tube(P.galv, [-0.05, 0, 0], [0.16, 0.06, 0], 0.035, 12);
+    k.tube(P.cyan_l, [0.16, 0.06, 0], [0.17, 0.063, 0], 0.028, 12);
+    k.box(P.dark, 0.06, 0.05, 0.1, -0.06, -0.03, 0);
+    for (const sz of [-1, 1]) k.box(P.galv, 0.012, 0.06, 0.012, 0.0, -0.06, sz * 0.05);
+  });
+  k.box(P.mats.col(0x3a3d40, 0.8, 0.2), 0.16, 0.12, 0.04, x - 0.3, Y0, z + 0.25);
+  k.box(P.cyan_l, 0.004, 0.02, 0.025, x - 0.219, Y0 + 0.08, z + 0.25);
+  k.tube(P.black, [x - 0.22, Y0 + 0.01, z + 0.25], [x - 0.05, Y0 + 0.02, z + 0.05], 0.006, 4);
+}
+
 function tech(k: Kit) {
   const P = k.P;
   const R = P.R;
@@ -3775,6 +3794,7 @@ function tech(k: Kit) {
       k.pipe(P.white, pts, 0.007, 4);
     }
     satcom(k, 'dish', 0.9, Y0, 0.3, 0.16);
+    prototypeLaser(k, 0.25, 0.85);
     planter(k, -1.2, 0.3, 0.12, 0.8, 'tree', Y0);
     planter(k, -0.6, 1.3, 0.9, 0.1, 'shrub', Y0);
     planter(k, 0.4, 1.3, 0.6, 0.1, 'shrub', Y0);
