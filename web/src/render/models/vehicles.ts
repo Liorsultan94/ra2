@@ -666,74 +666,127 @@ class Bld {
     this.extraTris += (geo.attributes.position.count / 3) * entries.length;
     return im;
   }
-  /** Ray-cast probe over the unmerged parts (template build time only). */
+  /**
+   * Top-down height buffer over the unmerged parts (template build time only):
+   * every upward-facing triangle is rasterised into a grid (cell = 4 mm of
+   * tile) keeping the highest surface, its part and whether it is plain camo
+   * paint. Much cheaper than ray casting each probe point.
+   */
   private probe() {
     this.root.updateMatrixWorld(true);
     const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
-    const meshes: THREE.Mesh[] = [];
-    const own = new Map<Part, THREE.Mesh[]>();
-    const tmpMat = new THREE.MeshBasicMaterial();
-    for (const p of this.parts) {
+    const C = 0.005;
+    const bb = new THREE.Box3();
+    const v = new THREE.Vector3();
+    const parts = this.parts;
+    for (const p of parts)
+      for (const geos of p.buckets.values())
+        for (const g of geos) {
+          const pos = g.attributes.position;
+          for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(p.g.matrixWorld));
+        }
+    const x0 = bb.min.x - C;
+    const z0 = bb.min.z - C;
+    const nx = Math.max(1, Math.ceil((bb.max.x - x0) / C) + 2);
+    const nz = Math.max(1, Math.ceil((bb.max.z - z0) / C) + 2);
+    const H = new Float32Array(nx * nz).fill(-1e9);
+    const O = new Int16Array(nx * nz).fill(-1); // part index; -2 - index for non-camo / skipped parts
+    const NY = new Float32Array(nx * nz);
+    const camoBox = parts.map(() => new THREE.Box3());
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    parts.forEach((p, pi) => {
       let skipIt = false;
       for (let q: THREE.Object3D | null = p.g; q; q = q.parent) if (tagged(q, 'recoil') || tagged(q, 'whip') || tagged(q, 'spin')) skipIt = true;
-      const list: THREE.Mesh[] = [];
+      const m = p.g.matrixWorld;
       for (const [key, geos] of p.buckets) {
+        const camo = !skipIt && key === 's' + CAMO;
         for (const g of geos) {
-          if (!g.boundingSphere) g.computeBoundingSphere();
-          const m = new THREE.Mesh(g, tmpMat);
-          m.matrixAutoUpdate = false;
-          m.matrixWorld.copy(p.g.matrixWorld);
-          meshes.push(m);
-          if (!skipIt && key === 's' + CAMO) list.push(m);
+          const pos = g.attributes.position;
+          for (let t = 0; t + 2 < pos.count; t += 3) {
+            a.fromBufferAttribute(pos, t).applyMatrix4(m);
+            b.fromBufferAttribute(pos, t + 1).applyMatrix4(m);
+            c.fromBufferAttribute(pos, t + 2).applyMatrix4(m);
+            n.subVectors(b, a).cross(v.subVectors(c, a));
+            const len = n.length();
+            if (len < 1e-12) continue;
+            n.divideScalar(len);
+            if (n.y < 0) n.negate(); // winding is not reliable on all primitives: take the upward side
+            if (n.y < 0.05) continue;
+            if (camo) {
+              camoBox[pi].expandByPoint(a).expandByPoint(b).expandByPoint(c);
+            }
+            const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x, c.x) - x0) / C));
+            const i1 = Math.min(nx - 1, Math.ceil((Math.max(a.x, b.x, c.x) - x0) / C));
+            const j0 = Math.max(0, Math.floor((Math.min(a.z, b.z, c.z) - z0) / C));
+            const j1 = Math.min(nz - 1, Math.ceil((Math.max(a.z, b.z, c.z) - z0) / C));
+            const d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+            if (Math.abs(d) < 1e-12) continue;
+            for (let j = j0; j <= j1; j++) {
+              const pz = z0 + (j + 0.5) * C;
+              for (let i = i0; i <= i1; i++) {
+                const px = x0 + (i + 0.5) * C;
+                const w1 = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / d;
+                const w2 = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / d;
+                const w3 = 1 - w1 - w2;
+                if (w1 < -1e-4 || w2 < -1e-4 || w3 < -1e-4) continue;
+                const y = w1 * a.y + w2 * b.y + w3 * c.y;
+                const k = j * nx + i;
+                if (y > H[k] + 1e-5) {
+                  H[k] = y;
+                  O[k] = camo ? pi : -2 - pi;
+                  NY[k] = n.y;
+                }
+              }
+            }
+          }
         }
       }
-      own.set(p, list);
-    }
-    const rc = new THREE.Raycaster();
-    const o = new THREE.Vector3();
-    const down = new THREE.Vector3(0, -1, 0);
-    const hitAt = (x: number, z: number) => {
-      rc.set(o.set(x, 5, z), down);
-      const h = rc.intersectObjects(meshes, false);
-      return h.length ? h[0] : null;
+    });
+    const tur = parts.find((p) => tagged(p.g, 'turret') && !camoBox[parts.indexOf(p)].isEmpty());
+    const boxOf = (p: Part) => camoBox[parts.indexOf(p)];
+    const cell = (x: number, z: number) => {
+      const i = Math.floor((x - x0) / C);
+      const j = Math.floor((z - z0) / C);
+      return i < 0 || j < 0 || i >= nx || j >= nz ? -1 : j * nx + i;
     };
-    const tur = this.parts.find((p) => tagged(p.g, 'turret') && (own.get(p)?.length ?? 0) > 0);
-    const boxOf = (p: Part) => {
-      const bb = new THREE.Box3();
-      for (const m of own.get(p) ?? []) {
-        m.geometry.computeBoundingBox();
-        bb.union(m.geometry.boundingBox!.clone().applyMatrix4(m.matrixWorld));
-      }
-      return bb;
-    };
-    /** Flat spot of camo paint of part p at (x, z) with footprint (l along x, w along z); returns the root-space hit. */
+    /** Flat spot of camo paint of part p at (x, z) with footprint (l along x, w along z); returns the root-space point. */
     const flat = (p: Part, x: number, z: number, l: number, w: number, tol = 0.0025) => {
-      const set = own.get(p);
-      if (!set || !set.length) return null;
-      const c = hitAt(x, z);
-      if (!c || !c.face || !set.includes(c.object as THREE.Mesh)) return null;
-      const n = c.face.normal.clone().transformDirection(c.object.matrixWorld);
-      if (n.y < 0.96) return null;
-      for (const [gx, gz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0], [-0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [0.5, -0.5]]) {
-        const hc = hitAt(x + (gx * l) / 2, z + (gz * w) / 2);
-        if (!hc || !set.includes(hc.object as THREE.Mesh) || Math.abs(hc.point.y - c.point.y) > tol) return null;
+      const pi = parts.indexOf(p);
+      const k0 = cell(x, z);
+      if (k0 < 0 || O[k0] !== pi || NY[k0] < 0.96) return null;
+      const y0 = H[k0];
+      for (let zz = z - w / 2; zz <= z + w / 2 + 1e-6; zz += C) {
+        for (let xx = x - l / 2; xx <= x + l / 2 + 1e-6; xx += C) {
+          const k = cell(xx, zz);
+          if (k < 0 || O[k] !== pi || NY[k] < 0.9 || Math.abs(H[k] - y0) > tol) return null;
+        }
       }
-      return c.point.clone();
+      return new THREE.Vector3(x, y0, z);
     };
-    return { tur, boxOf, flat, dispose: () => tmpMat.dispose() };
+    /** Mark a footprint as taken (nothing else may be placed on it). */
+    const block = (x: number, z: number, l: number, w: number) => {
+      for (let zz = z - w / 2; zz <= z + w / 2 + 1e-6; zz += C)
+        for (let xx = x - l / 2; xx <= x + l / 2 + 1e-6; xx += C) {
+          const k = cell(xx, zz);
+          if (k >= 0) O[k] = -1;
+        }
+    };
+    return { tur, boxOf, flat, block };
   }
   /**
    * Air-recognition panel (VS-17 style) in the team colour on the turret roof
    * (or the rear deck): a flat, unobstructed spot is found by ray casting the
    * unmerged parts, so it reads from above at RTS zoom whatever the design.
    */
-  private idPanel() {
+  private idPanel(pr: ReturnType<Bld['probe']>) {
     if (this.noIdPanel) return;
-    const pr = this.probe();
     const targets: { p: Part; rear: boolean }[] = [];
     if (pr.tur) targets.push({ p: pr.tur, rear: false });
     targets.push({ p: this.body, rear: true });
-    try {
+    {
       for (const { p, rear } of targets) {
         const bb = pr.boxOf(p);
         if (bb.isEmpty()) continue;
@@ -753,13 +806,12 @@ class Bld {
               const lp = p.g.worldToLocal(hit);
               p.box(pl + 0.008, 0.002, pw + 0.008, lp.x, lp.y + 0.001, lp.z, K.black);
               p.box(pl, 0.0025, pw, lp.x, lp.y + 0.002, lp.z, this.team);
+              pr.block(x, zc + dz, pl + 0.02, pw + 0.02);
               return;
             }
           }
         }
       }
-    } finally {
-      pr.dispose();
     }
   }
   /** Skip the air-recognition panel (set by builders with no suitable roof). */
@@ -772,10 +824,9 @@ class Bld {
    * the turret's sweep) and the turret roof. Every item is a loose piece (blown
    * off by battle damage).
    */
-  private clutter() {
+  private clutter(pr: ReturnType<Bld['probe']>) {
     if (this.clutterN <= 0) return;
-    const pr = this.probe();
-    try {
+    {
       const reg = this.style.region;
       const bagC = reg === 'west' ? [0x7c6a4a, 0x5a5c3c, 0x8a7a58] : reg === 'east' ? [0x4e5434, 0x5c5a3c, 0x3e4430] : reg === 'asia' ? [0x4c5636, 0x5e5e40, 0x424a32] : [0x8c7a56, 0x6c6444, 0x9a8a64];
       const netC = reg === 'mideast' ? 0x8a7c5a : reg === 'west' && this.f !== 'germany' ? 0x76683e : 0x4a5232;
@@ -845,13 +896,14 @@ class Bld {
         const W = tb.max.z - tb.min.z;
         place(pr.tur, Math.ceil(this.clutterN / 2), tb.min.x + 0.03, tb.min.x + (tb.max.x - tb.min.x) * 0.5, [tb.min.z + W * 0.22, tb.max.z - W * 0.22], false);
       }
-    } finally {
-      pr.dispose();
     }
   }
   finish(): Tpl {
-    this.idPanel();
-    this.clutter();
+    if (!this.noIdPanel || this.clutterN > 0) {
+      const pr = this.probe();
+      this.idPanel(pr);
+      this.clutter(pr);
+    }
     let tris = this.extraTris;
     let meshes = 0;
     for (const p of this.parts) {

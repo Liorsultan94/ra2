@@ -36,18 +36,38 @@ function hash(x: number, y: number, s: number) {
   h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
+/** Lattice tables per (period, seed): hashing once per lattice point keeps generation fast. */
+const lattices = new Map<number, Float32Array>();
+function lattice(p: number, s: number): Float32Array {
+  const key = p * 1048576 + (s & 1048575);
+  let t = lattices.get(key);
+  if (!t) {
+    t = new Float32Array(p * p);
+    for (let y = 0; y < p; y++) for (let x = 0; x < p; x++) t[y * p + x] = hash(x, y, s);
+    lattices.set(key, t);
+  }
+  return t;
+}
+/** Periodic value noise with period p cells. */
 function vnoise(x: number, y: number, p: number, s: number) {
+  const T = lattice(p, s);
   const xi = Math.floor(x);
   const yi = Math.floor(y);
   const xf = x - xi;
   const yf = y - yi;
   const u = xf * xf * (3 - 2 * xf);
   const v = yf * yf * (3 - 2 * yf);
-  const m = (a: number) => ((a % p) + p) % p;
-  const a = hash(m(xi), m(yi), s);
-  const b = hash(m(xi + 1), m(yi), s);
-  const c = hash(m(xi), m(yi + 1), s);
-  const d = hash(m(xi + 1), m(yi + 1), s);
+  let x0 = xi % p;
+  if (x0 < 0) x0 += p;
+  let y0 = yi % p;
+  if (y0 < 0) y0 += p;
+  const x1 = x0 + 1 === p ? 0 : x0 + 1;
+  const y1 = (y0 + 1 === p ? 0 : y0 + 1) * p;
+  y0 *= p;
+  const a = T[y0 + x0];
+  const b = T[y0 + x1];
+  const c = T[y1 + x0];
+  const d = T[y1 + x1];
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 /** Periodic fBm over the unit square, base frequency f (integer). */
@@ -63,6 +83,10 @@ function fbm(u: number, v: number, f: number, s: number, oct = 4) {
     fq *= 2;
   }
   return sum / norm;
+}
+/** Drop the noise lattice tables (call after a batch of generation). */
+function freeLattices() {
+  lattices.clear();
 }
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const sstep = (a: number, b: number, x: number) => {
@@ -135,8 +159,17 @@ interface Plate {
   r: number; // roughness
 }
 
-const AN = 512;
-let plateCache: Plate[] | null = null;
+const AN = 256;
+/** Plate fields as typed arrays (h, ao, chip, edge, grime, r per texel). */
+interface Plates {
+  h: Float32Array;
+  ao: Float32Array;
+  chip: Float32Array;
+  edge: Float32Array;
+  grime: Float32Array;
+  r: Float32Array;
+}
+let plateCache: Plates | null = null;
 
 function plateAt(u: number, v: number, o: Plate) {
   // 4 x 3 plates per repeat, every other row offset (welded hull / turret plates)
@@ -151,45 +184,53 @@ function plateAt(u: number, v: number, o: Plate) {
   const sv = hOn ? lineDist(v, 3) : 1;
   const seam = Math.min(su, sv);
   // bevelled plate edge -> groove
-  const groove = 1 - sstep(0.0015, 0.0045, seam);
-  const bevel = sstep(0.0, 0.01, seam);
+  const groove = 1 - sstep(0.002, 0.0062, seam);
+  const bevel = sstep(0.0, 0.014, seam);
   // bolt rows just inside the horizontal seams, every 1/28
-  const bu = frac(uu * 28);
-  const bd = Math.hypot((Math.min(bu, 1 - bu) / 28) * 1.0, sv - 0.011);
-  const bolt = 1 - sstep(0.0028, 0.0052, bd);
-  const boltRing = (1 - sstep(0.0048, 0.0065, bd)) * (1 - bolt);
+  const bu = frac(uu * 20);
+  const bd = Math.hypot(Math.min(bu, 1 - bu) / 20, sv - 0.014);
+  const bolt = 1 - sstep(0.0038, 0.0068, bd);
+  const boltRing = (1 - sstep(0.0066, 0.009, bd)) * (1 - bolt);
   // a weld bead on some vertical seams (cast + welded look)
   const pid = hash(Math.floor(uu * 4) & 3, row % 3, 7);
-  const weld = pid > 0.55 ? (1 - sstep(0.002, 0.005, su)) * (0.6 + 0.4 * vnoise(v * 400, 0, 400, 3)) : 0;
+  const weld = pid > 0.55 ? (1 - sstep(0.003, 0.007, su)) * (0.6 + 0.4 * vnoise(v * 200, 0, 200, 3)) : 0;
   // plate surface: cast grain + slight per-plate tilt / dents
   const grain = fbm(u, v, 48, 11, 2) - 0.5;
-  const dent = fbm(u, v, 8, 13, 3) - 0.5;
+  const dent = fbm(u, v, 8, 13, 2) - 0.5;
   // chipping: noisy, concentrated along seams and bolt heads
-  const nearEdge = 1 - sstep(0.004, 0.022, seam);
-  const chipN = fbm(u, v, 32, 17, 3);
+  const nearEdge = 1 - sstep(0.006, 0.026, seam);
+  const chipN = fbm(u, v, 24, 17, 2);
   const chip = clamp01((chipN - 0.7 + nearEdge * 0.2 + bolt * 0.3) * 6) * (0.45 + 0.55 * nearEdge);
-  const speck = hash(Math.floor(u * 512), Math.floor(v * 512), 19) > 0.996 ? 1 : 0;
+  const speck = hash(Math.floor(u * 256), Math.floor(v * 256), 19) > 0.994 ? 1 : 0;
   // grime streaks running down from the horizontal seams (v grows downward on side faces)
   const below = frac(v * 3);
-  const streak = clamp01((fbm(u * 1.0, v * 0.08, 40, 23, 3) - 0.5) * 3.2) * (1 - sstep(0.0, 0.7, below));
+  const streak = clamp01((fbm(u * 1.0, v * 0.08, 40, 23, 2) - 0.5) * 3.2) * (1 - sstep(0.0, 0.7, below));
   const blot = clamp01((fbm(u, v, 3, 29, 4) - 0.5) * 2.4);
   o.h = 0.5 + bevel * 0.18 - groove * 0.32 + bolt * 0.32 + boltRing * 0.05 + weld * 0.12 + grain * 0.035 + dent * 0.06 - Math.max(chip, speck) * 0.05;
   o.ao = Math.max(groove * 0.6, boltRing * 0.25);
   o.chip = Math.max(chip, speck * 0.8);
-  o.edge = (1 - sstep(0.0045, 0.009, seam)) * (1 - groove) * 0.8 + bolt * 0.5;
+  o.edge = (1 - sstep(0.0062, 0.012, seam)) * (1 - groove) * 0.8 + bolt * 0.5;
   o.grime = clamp01(streak * 0.7 + blot * 0.35);
   o.r = clamp01(0.74 + blot * 0.1 + streak * 0.12 - chip * 0.3 - bolt * 0.2 - o.edge * 0.15 + grain * 0.1);
 }
 
-function plates(): Plate[] {
+function plates(): Plates {
   if (plateCache) return plateCache;
-  const out: Plate[] = new Array(AN * AN);
+  const n = AN * AN;
+  const out: Plates = { h: new Float32Array(n), ao: new Float32Array(n), chip: new Float32Array(n), edge: new Float32Array(n), grime: new Float32Array(n), r: new Float32Array(n) };
+  const o: Plate = { h: 0, ao: 0, chip: 0, edge: 0, grime: 0, r: 0 };
   for (let y = 0; y < AN; y++)
     for (let x = 0; x < AN; x++) {
-      const o: Plate = { h: 0, ao: 0, chip: 0, edge: 0, grime: 0, r: 0 };
       plateAt((x + 0.5) / AN, (y + 0.5) / AN, o);
-      out[y * AN + x] = o;
+      const i = y * AN + x;
+      out.h[i] = o.h;
+      out.ao[i] = o.ao;
+      out.chip[i] = o.chip;
+      out.edge[i] = o.edge;
+      out.grime[i] = o.grime;
+      out.r[i] = o.r;
     }
+  freeLattices();
   plateCache = out;
   return out;
 }
@@ -198,13 +239,7 @@ let armourNR: { normalMap: THREE.Texture; roughnessMap: THREE.Texture } | null =
 function armourMaps() {
   if (armourNR) return armourNR;
   const P = plates();
-  const h = new Float32Array(AN * AN);
-  const r = new Float32Array(AN * AN);
-  for (let i = 0; i < AN * AN; i++) {
-    h[i] = P[i].h;
-    r[i] = P[i].r;
-  }
-  armourNR = { normalMap: toTex(AN, normalFrom(AN, h, 4.2), 3, false), roughnessMap: roughTex(AN, r) };
+  armourNR = { normalMap: toTex(AN, normalFrom(AN, P.h, 4.2), 3, false), roughnessMap: roughTex(AN, P.r) };
   return armourNR;
 }
 
@@ -217,10 +252,9 @@ export function armourMod(): UnitTexSet {
   const P = plates();
   const c = new Float32Array(AN * AN * 3);
   for (let i = 0; i < AN * AN; i++) {
-    const p = P[i];
-    let k = 1 - p.ao * 0.45 - p.grime * 0.12 + p.edge * 0.08;
-    k = Math.max(0.3, k);
-    for (let j = 0; j < 3; j++) c[i * 3 + j] = k * (1 - p.chip * 0.55) + PRIMER[j] * p.chip * 0.55 * 1.6;
+    const k = Math.max(0.3, 1 - P.ao[i] * 0.45 - P.grime[i] * 0.12 + P.edge[i] * 0.08);
+    const ch = P.chip[i];
+    for (let j = 0; j < 3; j++) c[i * 3 + j] = k * (1 - ch * 0.55) + PRIMER[j] * ch * 0.55 * 1.6;
   }
   const m = armourMaps();
   modSet = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
@@ -330,12 +364,13 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
   const P = plates();
   const c = new Float32Array(AN * AN * 3);
   const plain = spec.scheme === 'carc' || spec.scheme === 'sinai';
+  const idx = new Uint8Array(AN * AN);
+  if (!plain) for (let y = 0; y < AN; y++) for (let x = 0; x < AN; x++) idx[y * AN + x] = schemeAt(spec.scheme, (x + 0.5) / AN, (y + 0.5) / AN);
   for (let y = 0; y < AN; y++)
     for (let x = 0; x < AN; x++) {
       const u = (x + 0.5) / AN;
       const v = (y + 0.5) / AN;
       const i = y * AN + x;
-      const p = P[i];
       let col: [number, number, number];
       if (plain) {
         // single colour, sun-faded mottling and slightly different repaint patches per plate
@@ -346,32 +381,32 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         const k = Math.abs(t - 0.5) * 0.3;
         col = [base[0] + (alt[0] - base[0]) * k, base[1] + (alt[1] - base[1]) * k, base[2] + (alt[2] - base[2]) * k];
       } else {
-        // 2x2 supersample the hard pattern edges
-        const acc: [number, number, number] = [0, 0, 0];
-        for (const [ox, oy] of [
-          [-0.25, -0.25],
-          [0.25, -0.25],
-          [-0.25, 0.25],
-          [0.25, 0.25],
-        ]) {
-          const cc = cols[schemeAt(spec.scheme, (x + 0.5 + ox) / AN, (y + 0.5 + oy) / AN)];
-          acc[0] += cc[0] / 4;
-          acc[1] += cc[1] / 4;
-          acc[2] += cc[2] / 4;
+        // hard pattern edges, anti-aliased by the small blur pass below
+        col = cols[idx[i]];
+        const n4 = [idx[y * AN + ((x + 1) % AN)], idx[y * AN + ((x + AN - 1) % AN)], idx[((y + 1) % AN) * AN + x], idx[((y + AN - 1) % AN) * AN + x]];
+        let r0 = col[0] * 4;
+        let g0 = col[1] * 4;
+        let b0 = col[2] * 4;
+        for (const k of n4) {
+          r0 += cols[k][0];
+          g0 += cols[k][1];
+          b0 += cols[k][2];
         }
-        col = acc;
+        col = [r0 / 8, g0 / 8, b0 / 8];
         const m = (fbm(u, v, 8, 811, 3) - 0.5) * 0.08;
         col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
       }
       // plate detail: seams, edge wear, chipping to primer, grime streaks
-      const k = Math.max(0.3, 1 - p.ao * 0.45 - p.grime * 0.12) + p.edge * 0.07;
+      const k = Math.max(0.3, 1 - P.ao[i] * 0.45 - P.grime[i] * 0.12) + P.edge[i] * 0.07;
+      const chip = P.chip[i];
       for (let j = 0; j < 3; j++) {
         let ch = col[j] * k;
-        ch = ch * (1 - p.chip * 0.6) + PRIMER[j] * p.chip * 0.6;
+        ch = ch * (1 - chip * 0.6) + PRIMER[j] * chip * 0.6;
         c[i * 3 + j] = ch;
       }
     }
   const m = armourMaps();
+  freeLattices();
   s = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
   camoCache.set(key, s);
   return s;
@@ -383,7 +418,7 @@ let airSet: UnitTexSet | null = null;
 /** Aircraft skin detail: flush panels with fine lines, rivet rows, hatches (near-white albedo modulation). */
 export function airPanels(): UnitTexSet {
   if (airSet) return airSet;
-  const N = 512;
+  const N = 256;
   const c = new Float32Array(N * N * 3);
   const h = new Float32Array(N * N);
   const r = new Float32Array(N * N);
@@ -398,13 +433,13 @@ export function airPanels(): UnitTexSet {
       const su = lineDist(u, 3);
       const sv = lineDist(vv, rows);
       const seam = Math.min(su, sv);
-      const line = 1 - sstep(0.0008, 0.0026, seam);
+      const line = 1 - sstep(0.0016, 0.005, seam);
       // rivet lines parallel to the panel lines
-      const ru = frac(vv * 64);
-      const rv = frac(u * 64);
-      const rivA = Math.hypot(Math.min(ru, 1 - ru) / 64, Math.abs(su - 0.008));
-      const rivB = Math.hypot(Math.min(rv, 1 - rv) / 64, Math.abs(sv - 0.008));
-      const rivet = 1 - sstep(0.0012, 0.0024, Math.min(rivA, rivB));
+      const ru = frac(vv * 40);
+      const rv = frac(u * 40);
+      const rivA = Math.hypot(Math.min(ru, 1 - ru) / 40, Math.abs(su - 0.012));
+      const rivB = Math.hypot(Math.min(rv, 1 - rv) / 40, Math.abs(sv - 0.012));
+      const rivet = 1 - sstep(0.0022, 0.0042, Math.min(rivA, rivB));
       // a small access hatch in some panels (rounded rectangle outline + fasteners)
       const pr = Math.floor(vv * rows);
       const hh = hash(col, pr, 9);
@@ -415,7 +450,7 @@ export function airPanels(): UnitTexSet {
         const du = Math.abs(u - cu) - 0.035;
         const dv = Math.abs(frac(vv) - frac(cv)) - 0.022;
         const d = Math.hypot(Math.max(du, 0), Math.max(dv, 0)) + Math.min(Math.max(du, dv), 0) - 0.006;
-        hatch = 1 - sstep(0.0006, 0.0022, Math.abs(d));
+        hatch = 1 - sstep(0.0014, 0.0044, Math.abs(d));
       }
       const tone = (hash(col, pr, 17) - 0.5) * 0.06 + (fbm(u, v, 6, 19, 3) - 0.5) * 0.06;
       const streak = clamp01((fbm(u * 0.6, v * 0.08, 24, 23, 3) - 0.55) * 2) * 0.5;
@@ -425,6 +460,7 @@ export function airPanels(): UnitTexSet {
       h[i] = 0.5 - line * 0.35 - hatch * 0.25 + rivet * 0.18 + (fbm(u, v, 32, 29, 2) - 0.5) * 0.02;
       r[i] = clamp01(0.62 + tone * 2 + streak * 0.2 + line * 0.15 - rivet * 0.2);
     }
+  freeLattices();
   airSet = { map: toTex(N, c, 3, true), normalMap: toTex(N, normalFrom(N, h, 3.0), 3, false), roughnessMap: roughTex(N, r) };
   return airSet;
 }
@@ -511,7 +547,7 @@ export function uniformCamo(faction: string): UnitTexSet {
   if (s) return s;
   const spec = UNIFORM[faction] ?? UNIFORM.usa;
   const cols = spec.cols.map(rgb);
-  const N = 256;
+  const N = 192;
   const c = new Float32Array(N * N * 3);
   const h = new Float32Array(N * N);
   const r = new Float32Array(N * N);
@@ -522,7 +558,7 @@ export function uniformCamo(faction: string): UnitTexSet {
       const col = cols[Math.min(cols.length - 1, uniformIdx(spec.p, u, v))];
       // diagonal twill + rip-stop grid
       const tw = Math.sin((x + y) * Math.PI * 0.5) * 0.5 + 0.5;
-      const rip = lineDist(u, 16) < 0.0018 || lineDist(v, 16) < 0.0018 ? 1 : 0;
+      const rip = lineDist(u, 12) < 0.0028 || lineDist(v, 12) < 0.0028 ? 1 : 0;
       const fold = fbm(u, v, 4, 991, 3) - 0.5;
       const k = 0.94 + tw * 0.06 - rip * 0.05 + fold * 0.12;
       const i = y * N + x;
@@ -530,6 +566,7 @@ export function uniformCamo(faction: string): UnitTexSet {
       h[i] = 0.5 + tw * 0.08 + rip * 0.06 + fold * 0.25;
       r[i] = 0.88 + tw * 0.06;
     }
+  freeLattices();
   s = { map: toTex(N, c, 3, true), normalMap: toTex(N, normalFrom(N, h, 2.2), 3, false), roughnessMap: roughTex(N, r) };
   uniCache.set(faction, s);
   return s;

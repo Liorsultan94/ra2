@@ -30,9 +30,9 @@ export const enum Surf {
 
 /** Dust colours (start, end) per dry surface. */
 const DUST: Record<number, [number, number]> = {
-  [Surf.Dirt]: [0x8e7656, 0xb4a07e],
-  [Surf.Sand]: [0xc0a170, 0xd8c49a],
-  [Surf.Ore]: [0x8a6448, 0xae8c6a],
+  [Surf.Dirt]: [0xa48c6a, 0xcbbb9c],
+  [Surf.Sand]: [0xd0b484, 0xe4d4b0],
+  [Surf.Ore]: [0xa07a5a, 0xc4a486],
   [Surf.Grass]: [0x8a8060, 0xa8a084],
   [Surf.Paved]: [0x8c8880, 0xaaa69e],
   [Surf.Rock]: [0x8c8880, 0xaaa69e],
@@ -147,8 +147,8 @@ export class GroundFx {
           const side = i % 2 ? 1 : -1;
           const ox = rx + px * gauge * side + (rnd() - 0.5) * 0.1;
           const oz = rz + pz * gauge * side + (rnd() - 0.5) * 0.1;
-          const big = (0.55 + 0.45 * sp) * weight * k;
-          this.emit(ox, g + 0.06, oz, -fx * sp * 0.5 + px * side * 0.25 + (rnd() - 0.5) * 0.3, 0.2 + rnd() * 0.45 * (0.5 + sp), -fz * sp * 0.5 + pz * side * 0.25 + (rnd() - 0.5) * 0.3, 2.2 + rnd() * 1.8 * big, 0.14 * big, (0.75 + rnd() * 0.5) * big, c0, c1, 0.3 + 0.1 * Math.min(1, sp), 1.1, -0.04, 0.75);
+          const big = (0.6 + 0.5 * sp) * weight * k;
+          this.emit(ox, g + 0.1, oz, -fx * sp * 0.5 + px * side * 0.3 + (rnd() - 0.5) * 0.35, 0.35 + rnd() * 0.5 * (0.5 + sp), -fz * sp * 0.5 + pz * side * 0.3 + (rnd() - 0.5) * 0.35, 2.4 + rnd() * 2 * big, 0.2 * big, (0.95 + rnd() * 0.6) * big, c0, c1, 0.5 + 0.12 * Math.min(1, sp), 1.1, -0.05, 0.75);
         }
         break;
       }
@@ -160,13 +160,13 @@ export class GroundFx {
           const n = this.take(Math.floor(0.5 * sp * weight * rate + rnd()));
           for (let i = 0; i < n; i++) {
             const side = i % 2 ? 1 : -1;
-            this.emit(rx + px * gauge * side, g + 0.05, rz + pz * gauge * side, -fx * 0.4 + px * side * 0.35, 0.3 + rnd() * 0.3, -fz * 0.4 + pz * side * 0.35, 0.5 + rnd() * 0.4, 0.06, 0.35 * weight, 0x8c949c, 0xb4bcc4, 0.28, 2, 0.3, 0.3);
+            this.emit(rx + px * gauge * side, g + 0.12, rz + pz * gauge * side, -fx * 0.4 + px * side * 0.35, 0.3 + rnd() * 0.3, -fz * 0.4 + pz * side * 0.35, 0.5 + rnd() * 0.4, 0.06, 0.35 * weight, 0x8c949c, 0xb4bcc4, 0.28, 2, 0.3, 0.3);
           }
           break;
         }
         // a light haze only at speed
         if (sp < 0.6 || rnd() > 0.35 * rate) break;
-        if (this.take(1)) this.emit(rx + (rnd() - 0.5) * gauge, g + 0.05, rz + (rnd() - 0.5) * gauge, (rnd() - 0.5) * 0.2, 0.15, (rnd() - 0.5) * 0.2, 1.4, 0.12 * weight, 0.55 * weight, DUST[s][0], DUST[s][1], 0.1 * dusty, 1.4, -0.02, 0.6);
+        if (this.take(1)) this.emit(rx + (rnd() - 0.5) * gauge, g + 0.14, rz + (rnd() - 0.5) * gauge, (rnd() - 0.5) * 0.2, 0.15, (rnd() - 0.5) * 0.2, 1.4, 0.12 * weight, 0.55 * weight, DUST[s][0], DUST[s][1], 0.1 * dusty, 1.4, -0.02, 0.6);
         break;
       }
       case Surf.Grass: {
@@ -177,7 +177,7 @@ export class GroundFx {
           const up = 1.2 + rnd() * 1.4 * (0.5 + sp);
           this.emit(rx + px * gauge * side, g + 0.06, rz + pz * gauge * side, -fx * (0.4 + rnd() * 0.6) + (rnd() - 0.5) * 0.6, up, -fz * (0.4 + rnd() * 0.6) + (rnd() - 0.5) * 0.6, 0.45 + rnd() * 0.35, 0.035 + rnd() * 0.025, 0.03, rnd() < 0.6 ? 0x4c5a26 : 0x5a4a30, 0x46502a, 0.95, 0.5, 7, 0);
         }
-        if (sp > 0.35 && rnd() < 0.5 * rate && this.take(1)) this.emit(rx, g + 0.05, rz, (rnd() - 0.5) * 0.3, 0.2, (rnd() - 0.5) * 0.3, 1.6, 0.14 * weight, 0.6 * weight, DUST[Surf.Grass][0], DUST[Surf.Grass][1], 0.12 * dusty, 1.3, -0.02, 0.6);
+        if (sp > 0.35 && rnd() < 0.5 * rate && this.take(1)) this.emit(rx, g + 0.14, rz, (rnd() - 0.5) * 0.3, 0.2, (rnd() - 0.5) * 0.3, 1.6, 0.14 * weight, 0.6 * weight, DUST[Surf.Grass][0], DUST[Surf.Grass][1], 0.12 * dusty, 1.3, -0.02, 0.6);
         break;
       }
       case Surf.Mud: {
@@ -190,7 +190,7 @@ export class GroundFx {
         }
         if (sp > 0.3 && rnd() < 0.6 * rate && this.take(1)) {
           const side = rnd() < 0.5 ? 1 : -1;
-          this.emit(rx + px * gauge * side, g + 0.06, rz + pz * gauge * side, -fx * 0.3, 0.35, -fz * 0.3, 0.7, 0.08 * weight, 0.4 * weight, 0x4a4036, 0x6a6258, 0.3, 2, 0.4, 0.2);
+          this.emit(rx + px * gauge * side, g + 0.12, rz + pz * gauge * side, -fx * 0.3, 0.35, -fz * 0.3, 0.7, 0.08 * weight, 0.4 * weight, 0x4a4036, 0x6a6258, 0.3, 2, 0.4, 0.2);
         }
         break;
       }
@@ -201,7 +201,7 @@ export class GroundFx {
         for (let i = 0; i < n; i++) {
           const side = i % 2 ? 1 : -1;
           const big = (0.5 + 0.5 * sp) * weight;
-          this.emit(rx + px * gauge * side, g + 0.06, rz + pz * gauge * side, -fx * (0.3 + sp * 0.6) + (rnd() - 0.5) * 0.4, 0.4 + rnd() * 0.7 * (0.5 + sp), -fz * (0.3 + sp * 0.6) + (rnd() - 0.5) * 0.4, 1.3 + rnd() * 1.1, 0.12 * big, (0.6 + rnd() * 0.4) * big, 0xe6ecf4, 0xf4f7fb, 0.42, 1.6, 0.12, 0.8);
+          this.emit(rx + px * gauge * side, g + 0.1, rz + pz * gauge * side, -fx * (0.3 + sp * 0.6) + (rnd() - 0.5) * 0.4, 0.4 + rnd() * 0.7 * (0.5 + sp), -fz * (0.3 + sp * 0.6) + (rnd() - 0.5) * 0.4, 1.4 + rnd() * 1.2, 0.16 * big, (0.75 + rnd() * 0.45) * big, 0xe6ecf4, 0xf4f7fb, 0.55, 1.6, 0.1, 0.8);
         }
         // a few heavier clumps
         if (sp > 0.4 && rnd() < 0.5 * rate && this.take(1)) this.emit(rx, g + 0.12, rz, -fx * 1.2 + (rnd() - 0.5) * 0.6, 1.4 + rnd(), -fz * 1.2 + (rnd() - 0.5) * 0.6, 0.6, 0.05, 0.04, 0xf4f8fc, 0xe8eef6, 0.95, 0.3, 7, 0);
@@ -229,7 +229,7 @@ export class GroundFx {
     this.tokens -= n * 0.5;
     let c0: number;
     let c1: number;
-    let alpha = 0.5;
+    let alpha = 0.7;
     if (s === Surf.Water) {
       c0 = 0xdfe8ee;
       c1 = 0xf0f4f6;
@@ -250,14 +250,18 @@ export class GroundFx {
       const ca = Math.cos(a);
       const sa = Math.sin(a);
       const fwd = Math.max(0, ca * dx + sa * dz);
-      const sp = c * (1.6 + rnd() * 1.4) * (1 + fwd * 0.9);
-      this.emit(cx + ca * 0.1 * c, g + 0.06, cz + sa * 0.1 * c, ca * sp, 0.12 + rnd() * 0.25, sa * sp, (0.9 + rnd() * 0.9) * (0.7 + 0.3 * c), 0.14 * c, (0.55 + rnd() * 0.35) * c, c0, c1, alpha, 2.6, -0.03, 0.55);
+      const sp = c * (1 + rnd() * 1.1) * (1 + fwd * 1.3);
+      // spawned a little above the ground: the soft-particle fade would swallow a sprite centred on it
+      this.emit(cx + ca * 0.1 * c, g + 0.1 + 0.16 * c, cz + sa * 0.1 * c, ca * sp, 0.15 + rnd() * 0.3, sa * sp, (1 + rnd() * 1.1) * (0.7 + 0.3 * c), 0.2 * c, (0.9 + rnd() * 0.5) * c, c0, c1, alpha, 3, -0.03, 0.55);
     }
+    // the dense core of the cloud right under the muzzle
+    const nc = Math.max(1, Math.round(4 * c * rate));
+    for (let i = 0; i < nc; i++) this.emit(cx + (rnd() - 0.5) * 0.3 * c, g + 0.15 + 0.2 * c, cz + (rnd() - 0.5) * 0.3 * c, dx * c * 0.8 + (rnd() - 0.5) * 0.4, 0.2 + rnd() * 0.4, dz * c * 0.8 + (rnd() - 0.5) * 0.4, 1.6 + rnd() * 1.2, 0.3 * c, (1.1 + rnd() * 0.5) * c, c0, c1, alpha * 0.85, 1.8, -0.04, 0.6);
     // a forward plume of ground debris blown along the shot
     const nf = Math.max(1, Math.round(3 * c * rate));
     for (let i = 0; i < nf; i++) {
       const sp = c * (2 + rnd() * 2);
-      this.emit(cx, g + 0.08, cz, dx * sp + (rnd() - 0.5) * 0.6, 0.3 + rnd() * 0.5, dz * sp + (rnd() - 0.5) * 0.6, 1.2 + rnd() * 0.8, 0.18 * c, 0.85 * c, c0, c1, alpha * 0.85, 2.2, -0.04, 0.6);
+      this.emit(cx, g + 0.12 + 0.2 * c, cz, dx * sp + (rnd() - 0.5) * 0.6, 0.3 + rnd() * 0.5, dz * sp + (rnd() - 0.5) * 0.6, 1.3 + rnd() * 0.9, 0.22 * c, 1.05 * c, c0, c1, alpha * 0.9, 2.2, -0.04, 0.6);
     }
     if (s === Surf.Snow) {
       // snow burst: powder thrown up plus heavier clumps falling back
@@ -267,7 +271,7 @@ export class GroundFx {
         const sp = c * (0.8 + rnd() * 1.6);
         this.emit(cx, g + 0.08, cz, Math.cos(a) * sp + dx * c, 1.2 + rnd() * 1.6 * c, Math.sin(a) * sp + dz * c, 0.6 + rnd() * 0.4, 0.05 + rnd() * 0.03, 0.05, 0xf6f9fc, 0xe4eaf2, 0.95, 0.4, 6, 0);
       }
-      for (let i = 0; i < Math.max(1, Math.round(3 * c * rate)); i++) this.emit(cx + (rnd() - 0.5) * 0.4 * c, g + 0.1, cz + (rnd() - 0.5) * 0.4 * c, (rnd() - 0.5) * 0.6, 0.8 + rnd() * 0.8, (rnd() - 0.5) * 0.6, 1.6 + rnd(), 0.2 * c, 1.1 * c, 0xf0f4fa, 0xfafcfe, 0.5, 1.4, 0.05, 0.7);
+      for (let i = 0; i < Math.max(1, Math.round(3 * c * rate)); i++) this.emit(cx + (rnd() - 0.5) * 0.4 * c, g + 0.15 + 0.2 * c, cz + (rnd() - 0.5) * 0.4 * c, (rnd() - 0.5) * 0.6, 0.8 + rnd() * 0.8, (rnd() - 0.5) * 0.6, 1.6 + rnd(), 0.2 * c, 1.1 * c, 0xf0f4fa, 0xfafcfe, 0.5, 1.4, 0.05, 0.7);
     } else if (s === Surf.Grass || (s === Surf.Mud && c > 1)) {
       // shredded grass / mud flicked out of the blast zone
       const nb = Math.max(1, Math.round(5 * c * rate));
@@ -326,7 +330,7 @@ export class GroundFx {
     for (let i = 0; i < n; i++) {
       const a = rnd() * Math.PI * 2;
       const sp = (1.4 + rnd()) * (0.5 + strength * 0.5);
-      this.emit(x + Math.cos(a) * 0.3, g + 0.04, z + Math.sin(a) * 0.3, Math.cos(a) * sp, 0.05 + rnd() * 0.25 * size, Math.sin(a) * sp, (0.6 + rnd() * 0.5) * size, 0.12 * size, 0.55 * size, c0, c1, alpha * strength, 2.2, -0.02, 0.4);
+      this.emit(x + Math.cos(a) * 0.3, g + 0.12, z + Math.sin(a) * 0.3, Math.cos(a) * sp, 0.05 + rnd() * 0.25 * size, Math.sin(a) * sp, (0.6 + rnd() * 0.5) * size, 0.12 * size, 0.55 * size, c0, c1, alpha * strength, 2.2, -0.02, 0.4);
     }
     // grass bits / water droplets / snow clumps whipped up
     if (rnd() < 0.5 * strength * rate && (s === Surf.Grass || s === Surf.Water || s === Surf.Snow) && this.take(1)) {

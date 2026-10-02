@@ -223,10 +223,16 @@ export class NightLights {
       for (const [g, base] of this.boosted) g.userData.baseEI = base * (1 + 1.6 * dk);
     }
     if (dk <= 0.01) {
-      // broad daylight: no lamps (pools stay allocated, the point lights keep their slots at zero)
-      commit(this.flares, 0);
-      commit(this.pools, 0);
-      commit(this.cones, 0);
+      // broad daylight: no lamps (pools stay allocated, the point lights keep their slots at zero). One
+      // degenerate black instance per pool keeps the materials drawn, so their shaders are compiled
+      // up front (warm-up) instead of hitching when the lights come on at dusk.
+      _m.makeScale(0, 0, 0);
+      _c.setRGB(0, 0, 0);
+      for (const im of [this.flares, this.pools, this.cones]) {
+        im.setMatrixAt(0, _m);
+        im.setColorAt(0, _c);
+        commit(im, 1);
+      }
       for (const l of this.lights) l.intensity = 0;
       return;
     }
