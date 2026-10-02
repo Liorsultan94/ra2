@@ -60,13 +60,13 @@ export class PerfHud {
     }
     const now = performance.now();
     if (this.last) this.times.push(now - this.last);
+    else this.refresh = now;
     this.last = now;
     const info = src.gl.info.render;
     this.calls += info.calls;
     this.tris += info.triangles;
     this.n++;
     if (now - this.refresh < 500) return;
-    this.refresh = now;
     if (!this.el) {
       const el = document.createElement('div');
       el.className = 'perf-hud';
@@ -78,9 +78,11 @@ export class PerfHud {
     }
     this.el.style.display = '';
     const t = this.times;
-    const avg = t.length ? t.reduce((a, b) => a + b, 0) / t.length : 0;
-    const worst = t.length ? Math.max(...t) : 0;
+    const span = now - this.refresh;
+    const avg = t.length ? t.reduce((a, b) => a + b, 0) / t.length : span;
+    const worst = t.length ? Math.max(...t) : span;
     const fps = avg > 0 ? 1000 / avg : 0;
+    this.refresh = now;
     const k = Math.max(1, this.n);
     const progs = src.gl.info.programs?.length ?? 0;
     const tri = this.tris / k;

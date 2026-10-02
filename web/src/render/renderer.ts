@@ -552,6 +552,7 @@ export class GameRenderer {
       'superfx': sys(this.superFx, 'update'),
       'fog': sys(this.fog, 'update'),
       ...(this.ambient ? { ambient: sys(this.ambient, 'update') } : {}),
+      'instancer': sys(this.instancer, 'update'),
       'frame total': sys(this, 'render'),
     });
   }
@@ -1090,7 +1091,8 @@ export class GameRenderer {
           v.near = fr.intersectsSphere(sph);
           if (shadowsOn) setCasting(v.lod, v.near);
         }
-        v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
+        // (staggered: each unit re-tests every 4th frame)
+        if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
       }
     }
     this.airShadows.end();
@@ -1893,7 +1895,7 @@ export class GameRenderer {
     this.adaptQuality();
     this.perf.frame();
     const st = this.ladder[this.level];
-    this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1 });
+    this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
   }
 
   private shadowKey = new Float64Array(9);
