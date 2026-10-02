@@ -8,6 +8,8 @@ export class CameoFactory {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(26, 4 / 3, 0.1, 100);
   private cache = new Map<string, string>();
+  private w = 192;
+  private h = 144;
 
   constructor() {
     try {
@@ -42,6 +44,7 @@ export class CameoFactory {
       const root = model.root;
       // units face the viewer three-quarter, like classic cameos
       if (d.kind === 'unit') root.rotation.y = Math.PI * 0.18;
+      this.resize(192, 144);
       this.scene.add(root);
       const box = new THREE.Box3().setFromObject(root);
       const size = box.getSize(new THREE.Vector3());
@@ -58,6 +61,34 @@ export class CameoFactory {
     }
     this.cache.set(key, url);
     return url;
+  }
+
+  /** True while the offscreen GL context is alive (the live portrait falls back to the static cameo otherwise). */
+  get available(): boolean {
+    return !!this.renderer;
+  }
+
+  private resize(w: number, h: number) {
+    if (!this.renderer || (w === this.w && h === this.h)) return;
+    this.w = w;
+    this.h = h;
+    this.renderer.setSize(w, h, false);
+  }
+
+  /**
+   * Live 3D portrait (ui/portrait3d.ts): render a scene into this factory's
+   * offscreen canvas and return it for the caller to blit. Sharing the cameo
+   * GL context means the model shader programs already compiled for the
+   * sidebar cameos are reused (the portrait scene keeps the same light rig
+   * layout: one hemisphere + two directional lights) and no extra context is
+   * opened on phones.
+   */
+  renderLive(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): HTMLCanvasElement | null {
+    if (!this.renderer) return null;
+    this.resize(w, h);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.render(scene, camera);
+    return this.renderer.domElement;
   }
 
   dispose() {

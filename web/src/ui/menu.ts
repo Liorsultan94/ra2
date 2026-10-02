@@ -2,6 +2,7 @@ import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
 import type { Faction, Player } from '../sim/types';
 import type { Quality } from '../render/renderer';
+import { setReadabilityPrefs } from '../render/readability';
 import { flagHtml } from './hud';
 import emblemSvg from './emblem.svg?raw';
 
@@ -23,6 +24,10 @@ export interface Settings {
   droneCam: 'auto' | 'off';
   /** Team-coloured silhouettes of units hidden behind buildings and trees. */
   xray: boolean;
+  /** Team-coloured strategic unit icons when zoomed out (src/render/readability.ts). */
+  icons?: boolean;
+  /** Thin team-coloured outline around every unit. */
+  outlines?: boolean;
   /**
    * Control scheme: 'simple' (phones: tap = select / move, big ARMY button, decluttered HUD)
    * or 'advanced' (the full RTS command set; mouse and keyboard always work the same).
@@ -41,7 +46,11 @@ export function loadSettings(): Settings {
   const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true, controls: defaultControls() };
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...def, ...JSON.parse(raw) };
+    if (raw) {
+      const s: Settings = { ...def, ...JSON.parse(raw) };
+      setReadabilityPrefs(s);
+      return s;
+    }
   } catch {
     /* storage unavailable */
   }
@@ -49,6 +58,7 @@ export function loadSettings(): Settings {
 }
 
 export function saveSettings(s: Settings) {
+  setReadabilityPrefs(s);
   try {
     localStorage.setItem(KEY, JSON.stringify(s));
   } catch {
@@ -254,6 +264,8 @@ function settingsHtml(st: Settings) {
       <label class="chk"><input type="checkbox" data-s="cinematic"${st.cinematic ? ' checked' : ''}> Cinematic moments (slow-motion on big missile strikes)</label>
       <label>Drone camera<select data-s="droneCam"><option value="auto"${st.droneCam !== 'off' ? ' selected' : ''}>Auto (live feed when a drone attacks)</option><option value="off"${st.droneCam === 'off' ? ' selected' : ''}>Off</option></select></label>
       <label class="chk"><input type="checkbox" data-s="xray"${st.xray !== false ? ' checked' : ''}> X-ray silhouettes (units hidden behind buildings / trees)</label>
+      <label class="chk"><input type="checkbox" data-s="icons"${st.icons !== false ? ' checked' : ''}> Unit icons when zoomed out</label>
+      <label class="chk"><input type="checkbox" data-s="outlines"${st.outlines !== false ? ' checked' : ''}> Unit outlines (team-coloured edge)</label>
       <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}${opt('ultra', 'Ultra (strong PCs)')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
@@ -268,6 +280,8 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       else if (k === 'cinematic') st.cinematic = (inp as HTMLInputElement).checked;
       else if (k === 'droneCam') st.droneCam = inp.value === 'off' ? 'off' : 'auto';
       else if (k === 'xray') st.xray = (inp as HTMLInputElement).checked;
+      else if (k === 'icons') st.icons = (inp as HTMLInputElement).checked;
+      else if (k === 'outlines') st.outlines = (inp as HTMLInputElement).checked;
       else if (k === 'controls') st.controls = inp.value === 'simple' ? 'simple' : 'advanced';
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
       else if (k === 'sfx') st.sfx = Number(inp.value);
@@ -278,7 +292,7 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
 }
 
 /** In-game pause menu. */
-export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume(): void; restart(): void; quit(): void; settings(s: Settings): void }) {
+export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume(): void; restart(): void; quit(): void; settings(s: Settings): void; photo?(): void }) {
   const layer = h(`<div class="menu-layer dim"></div>`);
   parent.appendChild(layer);
   const main = () => {
@@ -287,6 +301,7 @@ export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume():
         <h2>Paused</h2>
         <button class="mbtn primary" data-a="resume">Resume</button>
         <button class="mbtn" data-a="settings">Settings</button>
+        ${h2.photo ? '<button class="mbtn" data-a="photo">Photo mode</button>' : ''}
         <button class="mbtn" data-a="restart">Restart battle</button>
         <button class="mbtn" data-a="quit">Quit to main menu</button>
       </div>`;
@@ -297,6 +312,7 @@ export function showPauseMenu(parent: HTMLElement, st: Settings, h2: { resume():
     };
     layer.querySelector('[data-a=resume]')!.addEventListener('click', close(h2.resume));
     layer.querySelector('[data-a=restart]')!.addEventListener('click', close(h2.restart));
+    if (h2.photo) layer.querySelector('[data-a=photo]')!.addEventListener('click', close(h2.photo));
     layer.querySelector('[data-a=quit]')!.addEventListener('click', close(h2.quit));
     layer.querySelector('[data-a=settings]')!.addEventListener('click', () => {
       layer.innerHTML = settingsHtml(st);

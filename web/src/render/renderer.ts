@@ -11,6 +11,8 @@ import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
 import { SuperFx } from './fx/superfx';
 import { Debris } from './debris';
+import { Fracture, type FracWreck } from './fracture';
+import { Secondaries } from './fx/secondary';
 import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
@@ -18,10 +20,12 @@ import { FACTION_REGION, createModel, createMunition, type AnimState, type Model
 import { Outskirts } from './outskirts';
 import { Paradrop } from './paradrop';
 import { CombatOverlay } from './overlay';
+import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
+import { AmbientLife, ambientEnabled } from './ambient';
 import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
@@ -121,6 +125,8 @@ interface Wreck {
   turret?: { obj: THREE.Object3D; vx: number; vy: number; vz: number; wx: number; wz: number; landed: boolean };
   landed: boolean;
   anim?: AnimState;
+  /** Buildings on medium / high: the model broken into rigid chunks (fracture.ts). */
+  frac?: FracWreck;
 }
 
 interface ProjVisual {
@@ -191,12 +197,20 @@ export class GameRenderer {
   readonly terrain: Terrain;
   readonly effects: Effects;
   readonly debris: Debris;
+  /** Building collapse into rigid rubble chunks (medium / high; src/render/fracture.ts). */
+  readonly fracture: Fracture;
+  /** Ammo / fuel / missile cook-offs after deaths (visual only; fx/secondary.ts). */
+  readonly secondaries: Secondaries;
   readonly marks: GroundMarks;
   readonly bridgeFx: BridgeFx;
   /** Garrison window fire, house damage sync, superweapon blasts / Iron Beam dome (fx/superfx.ts). */
   readonly superFx: SuperFx;
+  /** Civilian traffic, livestock and birds (src/render/ambient, visual only). */
+  readonly ambient: AmbientLife | null = null;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
+  /** Phone readability: strategic icons, unit outlines, move-route arrows (src/render/readability.ts). */
+  readonly readability: Readability;
   readonly target = new THREE.Vector3();
   zoom = 1;
   private composer: EffectComposer | null = null;
@@ -324,6 +338,8 @@ export class GameRenderer {
         }
     }
     this.debris = new Debris(map, this.effects, this.fog);
+    this.fracture = new Fracture(quality);
+    this.secondaries = new Secondaries(this.effects);
     this.marks = new GroundMarks(map, this.fog);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
@@ -335,6 +351,7 @@ export class GameRenderer {
     this.scene.add(this.bridgeFx.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
+    this.readability = new Readability(quality);
     if (quality !== 'low') {
       this.contact = new ContactShadows();
       this.scene.add(this.contact.mesh);
@@ -402,6 +419,10 @@ export class GameRenderer {
     this.applyLevel(this.level, false);
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
+    if (ambientEnabled()) {
+      this.ambient = new AmbientLife(this);
+      this.scene.add(this.ambient.group);
+    }
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -566,6 +587,18 @@ export class GameRenderer {
     const sz = so ? so.z : 0;
     cam.position.set(this.target.x + D.x * dist + sx, ty + D.y * dist, this.target.z + D.z * dist + sz);
     cam.lookAt(this.target.x + sx, ty, this.target.z + sz);
+    // photo mode (src/game/photomode.ts): free orbit camera
+    const pc = this.photoCam;
+    if (pc) {
+      if (cam instanceof THREE.PerspectiveCamera) {
+        cam.position.copy(pc.pos);
+        cam.near = 0.1;
+        cam.far = 700;
+        cam.updateProjectionMatrix();
+      } else cam.position.copy(pc.pos).sub(pc.look).setLength(CAM_DIST).add(pc.look);
+      cam.lookAt(pc.look);
+      D.copy(cam.position).sub(pc.look).normalize();
+    }
     this.camera.updateMatrixWorld();
     this.fitShadow(ty);
     const u = this.fog.uniforms;
@@ -574,7 +607,10 @@ export class GameRenderer {
     u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
     this.tilt?.setZoom(this.zoom, this.defaultZoom(), this.renderer.getPixelRatio());
+    if (pc && this.tilt) this.tilt.enabled = false;
   }
+  /** Photo mode free camera (position + look-at point); null = the normal RTS camera. */
+  photoCam: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
 
   /**
    * Fit the sun's shadow frustum tightly around what the camera sees, snapped
@@ -889,6 +925,8 @@ export class GameRenderer {
         if (k < 1 && vis && Math.random() < dt * 20) this.effects.dust(root.position.x + (Math.random() - 0.5) * bd.w, h + 0.05, root.position.z + (Math.random() - 0.5) * bd.h, 1.5);
         if (v.model.turret) v.model.turret.rotation.y = -lerpAngle(e.pturret, e.turret, alpha);
         if (vis) this.buildingFx(e, v, dt);
+        // badly damaged: cut its rubble chunks ahead of time in idle callbacks (fracture.ts)
+        if (a.damage > 0.45 && k >= 1) this.fracture.prewarm(root, bd.w, bd.h);
       } else {
         const ud = unitDef(e.def);
         const p = this.entityPos(e, alpha);
@@ -1074,7 +1112,10 @@ export class GameRenderer {
     const base: Wreck = { kind: 'vehicle', root, model: v.model, t: 0, max: 26, x: pos.x, y: pos.y, z: pos.z, vx: 0, vy: 0, vz: 0, spin: 0, size: 1, h: v.model.height ?? 0.5, w: 1, d: 1, landed: true };
     if (d.kind === 'building') {
       const bd = buildingDef(e.def);
-      this.wrecks.push({ ...base, kind: 'building', max: 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h) });
+      // medium / high: break the model into rigid chunks (falls back to the sink collapse when the chunk pool is full)
+      const frac = this.fracture.shatter(root, bd.w, bd.h, this.scene) ?? undefined;
+      if (frac) this.scene.remove(root);
+      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac });
       return;
     }
     const ud = unitDef(e.def);
@@ -1105,8 +1146,54 @@ export class GameRenderer {
     this.wrecks.push(wr);
   }
 
+  /** Type-specific secondary explosions of a destroyed ground vehicle (visual only). */
+  private vehicleCookOff(ud: ReturnType<typeof unitDef>, model: Model | undefined, x: number, gy: number, z: number) {
+    const sec = this.secondaries;
+    const wpn = ud.weapon ? WEAPONS[ud.weapon] : undefined;
+    const wheeled = !!model?.wheeled;
+    const h = model?.height ?? 0.5;
+    if (wpn && (wpn.projectile === 'missile' || wpn.projectile === 'spawn' || (wpn.projectile === 'rocket' && !ud.turret) || wpn.warhead === 'missile')) {
+      // launcher / TEL: rockets and missiles skitter away, the truck's fuel goes up
+      sec.cookOff({ ammo: 2, fuel: wheeled ? 1 : 0, missiles: 2 + Math.floor(Math.random() * 3), size: 0.7, span: 2.6 }, x, gy, z, 0.6, 0.6, h * 0.8);
+    } else if (wpn && wpn.projectile === 'artillery') {
+      // propellant charges and shells in the rack
+      sec.cookOff({ ammo: 4 + Math.floor(Math.random() * 3), fuel: wheeled ? 1 : 0, missiles: 0, size: 0.7, span: 2.8 }, x, gy, z, 0.6, 0.6, h * 0.8);
+    } else if (ud.harvester || ud.mcv) {
+      sec.truckFuel(x, gy, z, 1.05);
+      sec.cookOff({ ammo: 2, fuel: 0, missiles: 0, size: 1, span: 2.5 }, x, gy, z, 0.8, 0.8, h * 0.7);
+    } else if (wheeled) {
+      if (Math.random() < 0.85) sec.truckFuel(x, gy, z, 0.7);
+    } else if (ud.turret && ud.armor === 'heavy') {
+      // tank ready rack: sometimes a roaring flame fountain out of the turret ring
+      if (Math.random() < 0.4) {
+        const dur = 1.6 + Math.random() * 1.4;
+        this.schedule(0.55 + Math.random() * 0.5, () => sec.fountain(x, gy + h * 0.75, z, dur));
+      } else sec.cookOff({ ammo: 3, fuel: 0, missiles: 0, size: 0.6, span: 2 }, x, gy, z, 0.4, 0.4, h * 0.8);
+    } else if (Math.random() < 0.6) sec.cookOff({ ammo: 2 + Math.floor(Math.random() * 2), fuel: 0, missiles: 0, size: 0.6, span: 2 }, x, gy, z, 0.4, 0.4, h * 0.8);
+  }
+
+  /** A big cook-off sets off nearby wrecks too (visual only). */
+  private chainWrecks(x: number, z: number, r: number) {
+    const sec = this.secondaries;
+    for (const w of this.wrecks) {
+      if (w.kind !== 'vehicle' && w.kind !== 'building') continue;
+      if (Math.hypot(w.x - x, w.z - z) > r + w.size || w.t > 25 || Math.random() < 0.4) continue;
+      const fw = w.frac;
+      const px = w.x,
+        py = w.y,
+        pz = w.z;
+      this.schedule(0.8 + Math.random() * 3, () => {
+        if (fw) {
+          const p = fw.randomPiece(new THREE.Vector3());
+          sec.pop(p.x, p.y + 0.1, p.z, py, 1.3);
+        } else sec.pop(px, py + 0.35, pz, py, 1.2);
+      });
+    }
+  }
+
   private updateWrecks(dt: number) {
     const map = this.world.map;
+    this.secondaries.update(dt);
     for (let i = this.wrecks.length - 1; i >= 0; i--) {
       const w = this.wrecks[i];
       w.t += dt;
@@ -1140,6 +1227,10 @@ export class GameRenderer {
           this.effects.blast(BLASTS.aircraft, w.x, g + 0.2, w.z, g);
           this.marks.craterAt(w.x, w.z, 0.5);
         }
+      } else if (w.kind === 'building' && w.frac) {
+        // chunks topple, bounce and pile up (fracture.ts); the rubble then sinks away slowly
+        w.frac.update(dt, map, this.effects, this.visibleAt(w.x, w.z));
+        if (w.t > w.max - 5) w.frac.group.position.y -= dt * 0.12;
       } else if (w.kind === 'building') {
         // collapse: sink and crumble, then smoulder as a rubble pile
         const k = Math.min(1, w.t / 2.4);
@@ -1185,6 +1276,7 @@ export class GameRenderer {
       if (tt && w.t > w.max - 2.5) tt.obj.position.y -= dt * 0.25;
       if (w.t >= w.max) {
         this.scene.remove(r);
+        if (w.frac) this.fracture.release(w.frac);
         if (tt) this.scene.remove(tt.obj);
         this.wrecks.splice(i, 1);
       }
@@ -1343,6 +1435,7 @@ export class GameRenderer {
   }
 
   handleEvent(ev: SimEvent) {
+    this.ambient?.onEvent(ev);
     if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
@@ -1458,6 +1551,12 @@ export class GameRenderer {
               this.schedule(i * 0.16, () => fx.blast(i === 0 ? BLASTS.vehicle : BLASTS.rocket, ex, gy + 0.4, ez, gy));
             }
             this.schedule(0.45, () => fx.blast({ ...BLASTS.building, size: bd.w >= 3 ? 2.4 : 1.7 }, ev.x, gy + 0.3, ev.y, gy));
+            // stored ammunition / fuel / missiles cook off for a few seconds (visual only)
+            const co = Secondaries.forBuilding(bd.superweapon ? 'superweapon' : bd.role);
+            if (co) {
+              this.secondaries.cookOff(co, ev.x, gy, ev.y, bd.w, bd.h, Math.min(1.2, (v?.model.height ?? 1) * 0.6));
+              this.chainWrecks(ev.x, ev.y, 1.2 + Math.max(bd.w, bd.h));
+            }
           }
           if (v) {
             if (shown) this.toWreck(v, ev);
@@ -1483,6 +1582,7 @@ export class GameRenderer {
             fx.blast(ud.harvester || ud.mcv ? BLASTS.bigVehicle : BLASTS.vehicle, ev.x, gy + 0.25, ev.y, gy);
             // secondary ammunition cook-off
             this.schedule(0.5 + Math.random() * 0.4, () => fx.blast(BLASTS.heat, ev.x + (Math.random() - 0.5) * 0.3, gy + 0.4, ev.y + (Math.random() - 0.5) * 0.3, gy));
+            this.vehicleCookOff(ud, v?.model, ev.x, gy, ev.y);
           }
         }
         if (v) {
@@ -1632,6 +1732,7 @@ export class GameRenderer {
     this.overlay.endFrame();
     this.updateWrecks(dt);
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
+    this.ambient?.update(dt);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
@@ -1639,14 +1740,25 @@ export class GameRenderer {
     this.superFx.update(dt, this.time);
     this.effects.update(dt);
     this.updateCamera();
+    this.updateReadability(dt);
     const vh = this.viewHook;
     vh?.before(dt);
     if (vh?.renderMain()) {
       // the view mode drew the frame itself
     } else if (this.composer && this.usePost) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+    this.readability.renderOverlays(this.renderer, this.scene, this.camera);
     vh?.after(dt);
     this.adaptQuality();
+  }
+
+  /** Icons / outlines / route arrows (after the camera so icon fades use this frame's view). */
+  private updateReadability(dt: number) {
+    const ppu = this.pixelsPerUnit();
+    this.overlay.pxWorld = 1 / Math.max(1e-3, ppu);
+    const thermal = !!(this.viewHook as { thermal?: boolean } | null)?.thermal;
+    this.readability.update({ world: this.world, visuals: this.visuals, selection: this.selection, viewer: this.viewer, camera: this.camera, viewHeight: this.height, gl: this.renderer, time: this.time, thermal }, dt);
+    this.overlay.routes(this.readability.routes, performance.now() / 1000);
   }
 
   visualHeight(id: number): number {
@@ -1660,6 +1772,7 @@ export class GameRenderer {
   dispose() {
     this.disposed = true;
     this.atmos.dispose();
+    this.readability.dispose();
     this.temporal?.dispose();
     this.contact?.dispose();
     this.csm?.dispose();
