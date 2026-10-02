@@ -475,6 +475,8 @@ uniform vec2 terrMapSize;
 uniform vec3 cLush, cDry, cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
+float wxPud;
+vec2 wxHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
 `;
 
 const TERRAIN_MAP = /* glsl */ `
@@ -561,6 +563,17 @@ const TERRAIN_MAP = /* glsl */ `
   }
   col *= tnt.rgb * 2.0;
   diffuseColor.rgb = col;
+  // rain: puddles collect in low, muddy spots (flat, dark, mirror-like)
+  wxPud = 0.0;
+  if (wxWet > 0.001) {
+    float n1 = texture2D(fogNoise, tw * 0.085 + 0.13).g;
+    float n2 = texture2D(fogNoise, tw * 0.33 + 0.57).r;
+    float lowSpot = n1 * 0.78 + n2 * 0.22 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05;
+    wxPud = smoothstep(0.6, 0.64, lowSpot) * wxWet;
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.3 + vec3(0.008, 0.01, 0.013), wxPud);
+    terrRough = mix(terrRough, 0.03, wxPud);
+    terrH = mix(terrH, 0.0, wxPud);
+  }
 }
 `;
 
@@ -574,5 +587,21 @@ const TERRAIN_NORMAL = /* glsl */ `
   float fDet = dot(vSigmaX, R1) * faceDirection;
   vec3 vGrad = sign(fDet) * (dHdxy.x * R1 + dHdxy.y * R2);
   normal = normalize(abs(fDet) * normal - vGrad);
+  if (wxPud > 0.01) {
+    // rain drop ripples: one expanding ring per 0.45-tile cell, random phase
+    vec2 rp = vTerrW.xz / 0.45;
+    vec2 ci = floor(rp);
+    vec2 g = vec2(0.0);
+    for (int j = 0; j < 4; j++) {
+      vec2 c = ci + vec2(float(j - (j / 2) * 2), float(j / 2));
+      vec2 h = wxHash2(c);
+      vec2 o = rp - (c + 0.2 + h * 0.6);
+      float ph = fract(wxTime * 0.9 + h.x * 7.3);
+      float d = length(o) - ph * 0.55;
+      float wv = sin(d * 38.0) * exp(-abs(d) * 14.0) * (1.0 - ph);
+      g += normalize(o + 1e-4) * wv;
+    }
+    normal = normalize(normal + (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz * 0.35 * wxPud);
+  }
 }
 `;

@@ -6,8 +6,9 @@ import { Ground } from './ground';
 import { buildLayout, type Layout } from './layout';
 import { Resources } from './resources';
 import { buildRocks } from './rocks';
-import { buildScenery } from './scenery';
-import { buildVegetation, canopyRadius, treeSpots, windTime } from './vegetation';
+import { buildScenery, type SceneryHandles } from './scenery';
+import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
+import { WX, WX_PARS } from './wxuniforms';
 
 /*
  * The battlefield landscape: splat-shaded ground, river, vegetation, rocks,
@@ -23,9 +24,13 @@ export class Terrain {
   /** Zoom-driven level of detail for vegetation and rocks. */
   readonly lod: SceneryLod;
   private camera: THREE.Camera | null = null;
-  private waterMat!: THREE.ShaderMaterial;
+  /** River shader (weather / time of day tint its light via wxLight / wxSpec). */
+  waterMat!: THREE.ShaderMaterial;
   private resources: Resources;
   readonly minimapImage: HTMLCanvasElement;
+  /** Instanced plants, fences and village houses, for render-side environment damage. */
+  readonly veg: VegetationHandles = { trees: [], bushes: [] };
+  readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
 
   constructor(
     private map: GameMap,
@@ -55,9 +60,9 @@ export class Terrain {
     skirt.name = 'skirt';
     this.group.add(skirt);
     this.buildWater();
-    for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod)) this.group.add(o);
+    for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(o);
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(o);
-    for (const o of buildScenery(map, this.layout, fog, quality)) this.group.add(o);
+    for (const o of buildScenery(map, this.layout, fog, quality, this.scenery)) this.group.add(o);
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
     this.minimapImage = this.buildMinimap();
@@ -83,7 +88,10 @@ export class Terrain {
         mapSize: { value: new THREE.Vector2(m.w, m.h) },
         sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
         waterLevel: { value: WATER_LEVEL },
+        wxLight: { value: new THREE.Vector3(1, 1, 1) },
+        wxSpec: { value: 1 },
         ...this.fog.uniforms,
+        ...WX,
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
@@ -98,6 +106,9 @@ export class Terrain {
         uniform vec2 mapSize;
         uniform vec3 sunDir;
         uniform float waterLevel;
+        uniform vec3 wxLight;
+        uniform float wxSpec;
+        ${WX_PARS}
         uniform sampler2D fogTex;
         uniform vec2 fogSize;
         uniform float fogEnabled;
@@ -113,6 +124,16 @@ export class Terrain {
           g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 3.1 + time * 1.4) * 0.05;
           g += vec2(-0.4, 0.9) * cos(dot(p, vec2(-0.4, 0.9)) * 5.3 + time * 1.9) * 0.03;
           g += vec2(0.95, -0.3) * cos(dot(p, vec2(0.95, -0.3)) * 8.7 + time * 2.6) * 0.02;
+          if (wxWet > 0.001) {
+            // rain: rings from drops on the surface
+            vec2 rp = p / 0.5;
+            vec2 ci = floor(rp);
+            vec2 h = fract(sin(vec2(dot(ci, vec2(127.1, 311.7)), dot(ci, vec2(269.5, 183.3)))) * 43758.5453);
+            vec2 o = rp - (ci + 0.2 + h * 0.6);
+            float ph = fract(wxTime * 0.9 + h.x * 7.3);
+            float d = length(o) - ph * 0.5;
+            g += normalize(o + 1e-4) * sin(d * 40.0) * exp(-abs(d) * 14.0) * (1.0 - ph) * 0.12 * wxWet;
+          }
           vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
           vec3 viewDir = normalize(cameraPosition - vWorld);
           float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
@@ -122,10 +143,11 @@ export class Terrain {
           vec3 shallow = vec3(0.07, 0.1, 0.075);
           vec3 col = mix(shallow, deep, smoothstep(0.0, 0.8, depth));
           col = mix(col, vec3(0.22, 0.28, 0.33), fres * 0.6);
+          col *= wxLight;
           float spec = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 80.0);
-          col += vec3(1.0, 0.95, 0.85) * spec * 1.6;
+          col += vec3(1.0, 0.95, 0.85) * spec * 1.6 * wxSpec;
           float foam = smoothstep(0.22, 0.0, depth) * (0.55 + 0.45 * sin(time * 2.0 + p.x * 4.0 + p.y * 3.0));
-          col = mix(col, vec3(0.85, 0.9, 0.9), foam * 0.7);
+          col = mix(col, vec3(0.85, 0.9, 0.9) * wxLight, foam * 0.7);
           float fogV = texture2D(fogTex, p / fogSize).r;
           float fogK = fogV < 0.5 ? fogV * 0.9 : 0.45 + (fogV - 0.5) * 1.1;
           col *= mix(1.0, fogK, fogEnabled);

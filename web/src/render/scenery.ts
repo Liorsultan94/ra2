@@ -48,7 +48,25 @@ function beam(b: GeoBuilder, a: THREE.Vector3, c: THREE.Vector3, t: number, col:
   b.add(g, new THREE.Matrix4().compose(mid, q, V(1, 1, 1)), null, col);
 }
 
-export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.Object3D[] {
+/** One civilian structure's slice of the merged scenery meshes (vertex ranges per mesh). */
+export interface HouseHandle {
+  st: Structure;
+  cx: number;
+  cz: number;
+  /** Ground height under the footprint (the structure's base). */
+  gy: number;
+  ranges: { mesh: THREE.Mesh; start: number; end: number }[];
+}
+
+/** Handles for render-side environment damage (src/render/envdamage.ts). */
+export interface SceneryHandles {
+  houses: HouseHandle[];
+  /** Fence posts / rails (origin of a post at its foot, of a rail at its centre). */
+  posts: THREE.InstancedMesh[];
+  rails: THREE.InstancedMesh[];
+}
+
+export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: SceneryHandles): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
   const shadows = quality !== 'low';
   const tex = buildingTextures(quality === 'low' ? 128 : 256);
@@ -155,7 +173,13 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const metal = new GeoBuilder();
   const wallColors = [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
   const roofColors = [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
-  for (const st of m.structures) buildStructure(st);
+  const builders = [walls, roofs, trim, wood, metal];
+  const spans: { st: Structure; from: number[]; to: number[] }[] = [];
+  for (const st of m.structures) {
+    const from = builders.map((b) => b.count);
+    buildStructure(st);
+    spans.push({ st, from, to: builders.map((b) => b.count) });
+  }
 
   function buildStructure(st: Structure) {
     const cx = st.x + st.w / 2;
@@ -319,6 +343,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       }
     }
   }
+  const built = new Map<GeoBuilder, THREE.Mesh>();
   const mkStatic = (b: GeoBuilder, mat: THREE.Material, cast: boolean) => {
     if (!b.count) return;
     const g = b.build();
@@ -326,12 +351,27 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     mesh.castShadow = cast;
     mesh.receiveShadow = true;
     out.push(mesh);
+    built.set(b, mesh);
   };
   mkStatic(walls, fog.apply(new THREE.MeshStandardMaterial({ map: tex.plaster, vertexColors: true, roughness: 0.92 })), shadows);
   mkStatic(roofs, fog.apply(new THREE.MeshStandardMaterial({ map: tex.roof, vertexColors: true, roughness: 0.8, side: THREE.DoubleSide })), shadows);
   mkStatic(trim, fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.2 })), false);
   mkStatic(wood, fog.apply(new THREE.MeshStandardMaterial({ map: tex.planks, vertexColors: true, roughness: 0.9 })), shadows);
   mkStatic(metal, fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.6 })), shadows);
+  if (sink)
+    for (const sp of spans) {
+      const st = sp.st;
+      const cx = st.x + st.w / 2;
+      const cz = st.y + st.h / 2;
+      let gy = 99;
+      for (const [x, z] of [[st.x, st.y], [st.x + st.w, st.y], [st.x, st.y + st.h], [st.x + st.w, st.y + st.h], [cx, cz]]) gy = Math.min(gy, surfaceHeight(m, x, z));
+      const ranges: HouseHandle['ranges'] = [];
+      builders.forEach((b, k) => {
+        const mesh = built.get(b);
+        if (mesh && sp.to[k] > sp.from[k]) ranges.push({ mesh, start: sp.from[k], end: sp.to[k] });
+      });
+      sink.houses.push({ st, cx, cz, gy, ranges });
+    }
 
   // ------------------------------------------------------------- fences
   const posts: Inst[] = [];
@@ -371,9 +411,13 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const fenceMat = fog.apply(new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 0.95, map: tex.planks }));
   if (posts.length) {
     const postGeo = new THREE.BoxGeometry(0.03, 0.16, 0.03).translate(0, 0.07, 0);
-    out.push(...chunkedInstances(postGeo, fenceMat, posts, 96, { castShadow: false }));
+    const pm = chunkedInstances(postGeo, fenceMat, posts, 96, { castShadow: false });
+    out.push(...pm);
     const railGeo = new THREE.BoxGeometry(1, 0.014, 0.012);
-    out.push(...chunkedInstances(railGeo, fenceMat, rails, 96, { castShadow: false }));
+    const rm = chunkedInstances(railGeo, fenceMat, rails, 96, { castShadow: false });
+    out.push(...rm);
+    sink?.posts.push(...pm);
+    sink?.rails.push(...rm);
   }
 
   // ------------------------------------------------------- power lines

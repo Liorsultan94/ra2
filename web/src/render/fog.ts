@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { hash2 } from '../sim/rng';
+import { WX, WX_PARS, WX_SURFACE } from './wxuniforms';
 
 /** Tileable 4-channel value-noise fbm texture (each channel an independent field). */
 function makeNoiseTexture(size = 128): THREE.DataTexture {
@@ -210,7 +211,7 @@ export class FogOfWar {
     const prev = mat.onBeforeCompile;
     mat.onBeforeCompile = (shader, renderer) => {
       prev.call(mat, shader, renderer);
-      Object.assign(shader.uniforms, uniforms);
+      Object.assign(shader.uniforms, uniforms, WX);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vFogP;')
         .replace(
@@ -224,7 +225,9 @@ export class FogOfWar {
           vFogP = fogWp.xyz;`,
         );
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\nvarying vec3 vFogP;\n${FOG_GLSL}`)
+        .replace('#include <common>', `#include <common>\nvarying vec3 vFogP;\n${FOG_GLSL}\n${WX_PARS}`)
+        // weather: snow cover / wet / dust on upward-facing surfaces (all zero = untouched)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${WX_SURFACE}`)
         .replace(
           '#include <lights_fragment_end>',
           `#include <lights_fragment_end>

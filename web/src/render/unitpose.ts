@@ -170,9 +170,9 @@ function shadowTexture(): THREE.Texture {
   };
   ctx.globalCompositeOperation = 'lighter';
   // rotorcraft: faint rotor disc + fuselage + tail boom
-  blob(64, 64, 58, 58, 0.22);
-  blob(74, 64, 34, 13, 0.6);
-  blob(30, 64, 30, 5, 0.45);
+  blob(64, 64, 58, 58, 0.3);
+  blob(74, 64, 36, 15, 0.85);
+  blob(30, 64, 30, 6, 0.6);
   // fixed wing (nose at the right): softened polygon via shadowBlur (works on iOS Safari, unlike ctx.filter)
   ctx.globalCompositeOperation = 'source-over';
   ctx.save();
@@ -254,8 +254,8 @@ export class AirShadows {
         transparent: true,
         depthWrite: false,
         polygonOffset: true,
-        polygonOffsetFactor: -2,
-        polygonOffsetUnits: -2,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
       });
       this.mesh = new THREE.InstancedMesh(geo, mat, SHADOW_MAX);
       this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -283,13 +283,13 @@ export class AirShadows {
     this.q2.setFromAxisAngle(AirShadows.UP, yaw);
     this.q.multiply(this.q2);
     // higher = larger, softer, fainter (fades in as it lifts off so it doesn't double the shadow map at rest)
-    const spread = 1 + Math.min(alt, 6) * 0.07;
+    const spread = 1.15 + Math.min(alt, 6) * 0.08;
     this.s.set(len * 1.1 * spread, 1, (rotor ? len : wid) * 1.1 * spread);
-    this.v.set(x, h0 + 0.05, z);
+    this.v.set(x, h0 + 0.1, z);
     this.m4.compose(this.v, this.q, this.s);
     this.mesh.setMatrixAt(i, this.m4);
     const lift = clamp((alt - 0.15) / 0.5, 0, 1);
-    this.alpha!.setX(i, 0.55 * lift * clamp(1.15 - alt / 7, 0.3, 1));
+    this.alpha!.setX(i, 0.8 * lift * clamp(1.15 - alt / 7, 0.35, 1));
     this.cell!.setX(i, rotor ? 0 : 1);
   }
 

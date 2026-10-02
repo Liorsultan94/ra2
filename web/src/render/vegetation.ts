@@ -273,7 +273,13 @@ function tuftGeo(cell: Leaf, h: number, w: number): THREE.BufferGeometry {
 
 // ------------------------------------------------------------- builder
 
-export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod): THREE.Object3D[] {
+/** Handles to the instanced plants, for render-side environment damage (src/render/envdamage.ts). */
+export interface VegetationHandles {
+  trees: CulledInstances[];
+  bushes: CulledInstances[];
+}
+
+export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod, sink?: VegetationHandles): THREE.Object3D[] {
   const atlas = foliageAtlas(quality === 'low' ? 128 : 256);
   const { mat, depth } = foliageMaterial(atlas, fog, quality);
   const out: THREE.Object3D[] = [];
@@ -325,6 +331,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     ci.mesh.customDepthMaterial = depth;
     out.push(ci.mesh);
     lod.addCulled(ci, lo, treeLo);
+    sink?.trees.push(ci);
   });
 
   // ---- ground cover
@@ -437,6 +444,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     ci.mesh.customDepthMaterial = depth;
     out.push(ci.mesh);
     lod.addCulled(ci, lo, loSpan, hideSpan);
+    if (list === bushes) sink?.bushes.push(ci);
   }
   return out;
 }

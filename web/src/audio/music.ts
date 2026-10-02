@@ -32,7 +32,7 @@ export type StingerKind = 'heavy' | 'dread';
 const LOOKAHEAD = 0.12;
 const TICK_MS = 25;
 /** internal music mix level (before the user music volume) */
-export const MUSIC_LEVEL = 0.5;
+export const MUSIC_LEVEL = 0.62;
 
 const BATTLE_BPM = 112;
 /** menu tempo per 4-bar phrase: the heartbeat slowly speeds up, then resets */
@@ -442,6 +442,7 @@ export class MusicEngine {
   // ------------------------------------------------------------------ battle
 
   private battleBar(t: number): void {
+    this.sd = 60 / BATTLE_BPM / 4;
     const sd = this.sd;
     const barLen = sd * 16;
     if (this.planned !== this.level) this.setLevel(t, this.planned);
@@ -879,7 +880,7 @@ export class MusicEngine {
     const end = t + dur + 0.25;
     const lp = p.filter('lowpass', 200, 1.4);
     lp.frequency.setValueAtTime(200, t);
-    lp.frequency.exponentialRampToValueAtTime(1500, t + dur * 0.9);
+    lp.frequency.exponentialRampToValueAtTime(1200, t + dur * 0.9);
     lp.frequency.exponentialRampToValueAtTime(300, t + dur + 0.2);
     const sh = p.shaper(1.8);
     const g = p.gain(0);

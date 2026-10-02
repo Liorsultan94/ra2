@@ -587,12 +587,12 @@ export class Effects {
     }
     if (airborne && S >= 1) {
       // spherical pressure flash in the air
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffe2b0, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffe2b0, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
       const m = new THREE.Mesh(this.sphereGeo, mat);
       m.position.set(x, y, z);
       m.scale.setScalar(0.2 * S);
       this.group.add(m);
-      this.timed.push({ obj: m, mat, life: 0, max: 0.25, grow: 1.4 * S, base: 0.2 * S, alpha0: 0.35 });
+      this.timed.push({ obj: m, mat, life: 0, max: 0.2, grow: 1.2 * S, base: 0.2 * S, alpha0: 0.16 });
       if (this.haze) this.haze.ring(x, y, z, 1.6 * S, 0.3, 0.01, false);
     }
     // heat shimmer over the fireball
@@ -1049,11 +1049,11 @@ export class Effects {
       vy: this.rand(1.3, 1.9) * Math.sqrt(size),
       vz: this.rand(-0.06, 0.06),
       life: this.rand(4.5, 6.5) * (0.8 + 0.2 * size),
-      size: 0.28 * size,
-      sizeEnd: 1.9 * size,
-      color: dark ? 0x1c1a18 : 0x8a8682,
-      colorEnd: dark ? 0x67615b : 0xcfcbc6,
-      alpha: dark ? 0.62 : 0.4,
+      size: 0.36 * size,
+      sizeEnd: 2.3 * size,
+      color: dark ? 0x161412 : 0x8a8682,
+      colorEnd: dark ? 0x5a554f : 0xcfcbc6,
+      alpha: dark ? 0.85 : 0.5,
       drag: 0.35,
       gravity: -0.02,
       wind: 1,

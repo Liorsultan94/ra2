@@ -172,6 +172,8 @@ export class CulledInstances {
   private start: Int32Array;
   private gw: number;
   private gh: number;
+  /** Bumped whenever an instance is edited (render-side damage); SceneryLod re-culls then. */
+  version = 0;
 
   constructor(
     geo: THREE.BufferGeometry,
@@ -217,6 +219,38 @@ export class CulledInstances {
     im.receiveShadow = opts.receiveShadow ?? true;
     if (opts.name) im.name = opts.name;
     this.mesh = im;
+  }
+
+  /** Number of instances (in the internal, cell-sorted order used by the accessors below). */
+  get size() {
+    return this.mats.length / 16;
+  }
+
+  /** World x / z of instance j (its translation). */
+  posX(j: number) {
+    return this.mats[j * 16 + 12];
+  }
+  posZ(j: number) {
+    return this.mats[j * 16 + 14];
+  }
+
+  getMatrix(j: number, out: THREE.Matrix4) {
+    return out.fromArray(this.mats, j * 16);
+  }
+
+  /** Replace an instance's transform (e.g. a tree knocked over); takes effect on the next cull. */
+  setMatrix(j: number, m: THREE.Matrix4) {
+    m.toArray(this.mats, j * 16);
+    this.version++;
+  }
+
+  /** Multiply an instance's colour (e.g. charred by fire). */
+  tint(j: number, r: number, g: number, b: number) {
+    if (!this.cols) return;
+    this.cols[j * 3] *= r;
+    this.cols[j * 3 + 1] *= g;
+    this.cols[j * 3 + 2] *= b;
+    this.version++;
   }
 
   /** Keep the instances whose cell lies within `margin` of the convex ground polygon `poly` (x/z pairs). */
@@ -307,6 +341,7 @@ export class CulledInstances {
 export class SceneryLod {
   private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number }[] = [];
   private culled: CulledInstances[] = [];
+  private versions = 0;
   private state = -1;
   private last = -1;
   private camKey = '';
@@ -371,8 +406,11 @@ export class SceneryLod {
       poly.push(this.v0.x, this.v0.z);
     }
     const key = poly.map((v) => Math.round(v / 1.5)).join(',');
-    if (key === this.camKey) return;
+    let ver = 0;
+    for (const ci of this.culled) ver += ci.version;
+    if (key === this.camKey && ver === this.versions) return;
     this.camKey = key;
+    this.versions = ver;
     for (const ci of this.culled) ci.cull(poly, 4);
   }
 }
