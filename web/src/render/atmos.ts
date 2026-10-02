@@ -144,9 +144,9 @@ function buildPreset(cfg: AtmosConfig): Preset {
     p.water.set(0.72, 0.6, 0.62);
     light = 0.6;
   } else if (cfg.tod === 'night') {
-    Object.assign(p, { sunI: 0.62, hemiI: 0.36, env: 0.06, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 });
+    Object.assign(p, { sunI: 0.8, hemiI: 0.48, env: 0.07, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 });
     p.sunC.set(0x8ea8ff);
-    p.sky.set(0x2e4072);
+    p.sky.set(0x3a5296);
     p.gnd.set(0x0e1118);
     p.haze.setRGB(0.022, 0.03, 0.055);
     p.shadowTint.set(-0.008, 0.0, 0.03);
