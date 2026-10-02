@@ -8,6 +8,12 @@
 export const WX = {
   /** Snow cover on upward-facing surfaces, 0..1. */
   wxSnow: { value: 0 },
+  /**
+   * How far a snowfall still is from full cover, 0..1 (0 = full, the default).
+   * A snow battle starts patchy (~60% of the ground white) and the effects
+   * ease it to 0 over a few minutes (fx/groundfx.ts).
+   */
+  wxSnowThin: { value: 0 },
   /** Rain wetness: darker albedo, glossier surfaces, puddles on the ground, 0..1. */
   wxWet: { value: 0 },
   /** Sandstorm dust settling on upward-facing surfaces, 0..1. */
@@ -19,6 +25,7 @@ export const WX = {
 /** GLSL declarations for the uniforms above. */
 export const WX_PARS = /* glsl */ `
 uniform float wxSnow;
+uniform float wxSnowThin;
 uniform float wxWet;
 uniform float wxDust;
 uniform float wxTime;
@@ -37,6 +44,12 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
   if ( wxSnow > 0.001 ) {
     float cover = smoothstep( 0.42, 0.78, wxUp + ( wxNz.r - 0.5 ) * 0.5 ) * wxSnow;
     cover = max( cover, smoothstep( 0.1, 0.5, wxUp ) * wxSnow * 0.22 );
+    if ( wxSnowThin > 0.001 ) {
+      // early in the snowfall it lies in drifts with thinly dusted ground between; the gaps fill in over the battle
+      float wxPatch = wxNz.r * 0.6 + texture2D( fogNoise, vFogP.xz * 0.93 ).g * 0.4;
+      float wxThr = mix( 1.3, 0.53, wxSnowThin );
+      cover *= mix( 0.28, 1.0, 1.0 - smoothstep( wxThr - 0.07, wxThr + 0.07, wxPatch ) );
+    }
     #if defined( STANDARD )
       // painted metal (vehicles, plant) sheds most of it: keeps units readable
       cover *= 1.0 - 0.7 * smoothstep( 0.2, 0.5, metalnessFactor );

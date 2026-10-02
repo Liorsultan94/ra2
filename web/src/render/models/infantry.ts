@@ -5,6 +5,7 @@ import type { FogOfWar } from '../fog';
 import { pbrMaterial, worldUV, type CamoPattern, type MatOpts } from '../textures';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle } from './types';
+import { uniformCamo, unitLook } from './unittex';
 
 /*
  * Procedural, animated infantry.
@@ -204,7 +205,7 @@ const KITS: Record<string, Kit> = {
     gear: canvas(0x595b3d),
     bootsGear: false,
     skin: 0xc6a085,
-    helmet: '6b47',
+    helmet: 'fast',
     vest: 'bulky',
     rifle: 'ak74',
     at: 'rpg7',
@@ -234,7 +235,7 @@ const KITS: Record<string, Kit> = {
     gear: cam('digital', 0x64685a, 0x454b3d, 0x2a2c27, 0x837e66, 21),
     bootsGear: false,
     skin: 0xc29a77,
-    helmet: 'qgf',
+    helmet: 'fast',
     vest: 'pc',
     rifle: 'k2c',
     at: 'pzf3',
@@ -302,10 +303,25 @@ function stdMat(key: string, fog: FogOfWar | null, p: THREE.MeshStandardMaterial
   return m;
 }
 
+/** Uniform fabric: the army's real camouflage pattern on a twill weave (unittex.ts), with the unit rim light. */
+function uniformMat(faction: string, tint: number, fog: FogOfWar | null) {
+  const k = `${fogId(fog)}:uni:${faction}:${tint}`;
+  let m = stdCache.get(k);
+  if (!m) {
+    const t = uniformCamo(faction);
+    m = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, color: tint, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.6, 0.6) });
+    if (fog) fog.apply(m);
+    unitLook(m, { rim: 0.7 });
+    stdCache.set(k, m);
+  }
+  return m;
+}
+
 function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: number): Record<MK, THREE.Material> {
+  const fac = KITS[style.faction] ? style.faction : (REGION_FALLBACK[style.region] ?? 'usa');
   return {
-    camo: pbrMaterial('camo', { ...kit.camo, roughness: 1, normalScale: 0.6 }, fog),
-    gear: pbrMaterial(kit.gearTex, { ...kit.gear, normalScale: 0.6 }, fog),
+    camo: uniformMat(fac, 0xffffff, fog),
+    gear: kit.gearTex === 'camo' ? uniformMat(fac, 0xe4e4e4, fog) : pbrMaterial(kit.gearTex, { ...kit.gear, normalScale: 0.6 }, fog),
     dark: pbrMaterial('rubber', { color: 0x2a2a27, size: 128, roughness: 0.9 }, fog),
     gun: pbrMaterial('metalPanel', { color: kit.gun, size: 128, divisions: 1, grime: 0.15, metalness: 0.45, roughness: 0.85 }, fog),
     tube: pbrMaterial('metalPanel', { color: kit.tube, size: 128, divisions: 1, grime: 0.35, metalness: 0.25, roughness: 1 }, fog),

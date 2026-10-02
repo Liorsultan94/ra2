@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b0f13" />
+    <meta name="theme-color" content="#050607" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="description" content="Iron Front - a modern-warfare real-time strategy game in the style of classic RTS, playable in your browser." />
@@ -11,9 +11,134 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161c22'/%3E%3Cpath d='M16 4l10 6v12l-10 6-10-6V10z' fill='%23d8402c'/%3E%3Cpath d='M16 10l5 3v6l-5 3-5-3v-6z' fill='%23f2d9a0'/%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+    <!-- fonts load without blocking the first paint (the splash waits briefly for the wordmark font) -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet';window.__ifFont&&window.__ifFont()" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" /></noscript>
+    <style>
+      /* ---- splash: painted before any JS downloads (logic in src/ui/splash.ts) ---- */
+      html,body{margin:0;height:100%;overflow:hidden;background:#050607}
+      #splash{--E:min(52vh,34vw,340px);position:fixed;inset:0;z-index:1000;overflow:hidden;color:#e8e3d4;font:600 13px Rajdhani,'Segoe UI',system-ui,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:default}
+      @media (orientation:portrait){#splash{--E:min(64vw,36vh,340px)}}
+      .bs-bg{position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 50% 42%,#21140f 0%,#0c0d0f 52%,#030405 100%);transition:opacity .8s ease}
+      .bs-bg::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px),radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.75) 100%)}
+      .bs-bg::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,rgba(216,64,44,.07) 1px,transparent 1px) 0 0/48px 48px,linear-gradient(0deg,rgba(216,64,44,.07) 1px,transparent 1px) 0 0/48px 48px;-webkit-mask:radial-gradient(ellipse at 50% 45%,#000 0,transparent 70%);mask:radial-gradient(ellipse at 50% 45%,#000 0,transparent 70%)}
+      .bs-embers{position:absolute;inset:0;pointer-events:none;transition:opacity .4s}
+      .bs-embers i{position:absolute;bottom:-12px;width:var(--sz);height:var(--sz);border-radius:50%;background:#ffc58a;box-shadow:0 0 5px 1px rgba(255,90,40,.75);opacity:0;animation:spEmber linear infinite;will-change:transform,opacity}
+      .bs-main{position:absolute;inset:0 0 92px;display:flex;align-items:center;justify-content:center;gap:calc(var(--E)*.11)}
+      @media (orientation:portrait){.bs-main{flex-direction:column;inset:0 0 120px}}
+      .bs-em{position:relative;flex:none;width:var(--E);height:var(--E);animation:spPop .5s cubic-bezier(.2,.8,.3,1) both}
+      .bs-em svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+      .bs-glow{position:absolute;inset:-28%;border-radius:50%;background:radial-gradient(circle,rgba(216,64,44,.34) 0,rgba(216,64,44,.1) 38%,rgba(216,64,44,0) 62%);animation:spGlow 2.8s ease-in-out infinite}
+      .bs-radar{position:absolute;inset:6%;border-radius:50%;background:conic-gradient(from 0deg,rgba(255,96,60,0) 0 250deg,rgba(255,96,60,.08) 300deg,rgba(255,120,80,.55) 359deg,rgba(255,96,60,0) 360deg);-webkit-mask:radial-gradient(circle,transparent 0 63%,#000 64% 97%,transparent 98%);mask:radial-gradient(circle,transparent 0 63%,#000 64% 97%,transparent 98%);animation:spSpin 2.6s linear infinite,spFade .8s .35s both}
+      .bs-shock{position:absolute;inset:8%;border-radius:50%;border:2px solid rgba(255,170,120,.9);opacity:0;pointer-events:none}
+      #splash .em-ring,#splash .em-ring2,#splash .em-shield-line{stroke-dasharray:1 1;stroke-dashoffset:1;animation:spDraw .9s cubic-bezier(.5,0,.3,1) .1s forwards}
+      #splash .em-ring2{animation-delay:.35s;animation-duration:.8s}
+      #splash .em-shield-line{animation-delay:.55s;animation-duration:.75s}
+      #splash .em-disc{animation:spFade .6s both}
+      #splash .em-ticks{transform-box:view-box;transform-origin:50% 50%;animation:spTicks 1s cubic-bezier(.2,.7,.3,1) .15s both}
+      #splash .em-ret{transform-box:view-box;transform-origin:50% 50%;animation:spRet .45s cubic-bezier(.3,1.4,.5,1) .5s both}
+      #splash .em-miss use{animation:spMissile .55s cubic-bezier(.2,.8,.3,1) .65s both}
+      #splash .em-miss g+g use{animation-delay:.75s}
+      #splash .em-shield{animation:spFade .45s .95s both}
+      #splash .em-pip,#splash .em-c1,#splash .em-c2{transform-box:fill-box;transform-origin:50% 50%;animation:spStamp .3s cubic-bezier(.3,1.5,.5,1) 1.05s both}
+      #splash .em-c1{animation-delay:1.15s}
+      #splash .em-c2{animation-delay:1.25s}
+      #splash .em-sheen{animation:spSheen 4.2s ease-in-out 1.5s infinite}
+      .bs-word{flex:none;position:relative;text-align:center;font-family:'Black Ops One',Impact,'Arial Black',sans-serif;font-size:calc(var(--E)*.3);line-height:.85;filter:drop-shadow(0 6px 16px rgba(0,0,0,.85))}
+      .bs-word b{display:block;font-weight:400;letter-spacing:.06em;opacity:0;-webkit-background-clip:text;background-clip:text;color:transparent}
+      .bs-top{background:linear-gradient(180deg,#fbf3dc 0%,#c9c1a9 45%,#7d7564 52%,#d7cfb5 100%)}
+      .bs-bot{background:linear-gradient(180deg,#ff9a78 0%,#e0452c 45%,#8e1e10 55%,#e85a3a 100%)}
+      .bs-tag{position:absolute;left:50%;top:100%;margin-top:.55em;white-space:nowrap;font:600 calc(var(--E)*.045)/1 Rajdhani,'Segoe UI',system-ui,sans-serif;letter-spacing:.42em;color:#d9d0b8;opacity:0;transform:translateX(-50%)}
+      #splash.word .bs-top{animation:spSlam .42s cubic-bezier(.2,.75,.25,1) both}
+      #splash.word .bs-bot{animation:spSlam .42s cubic-bezier(.2,.75,.25,1) .12s both}
+      #splash.word .bs-tag{animation:spFade .6s .55s both}
+      #splash.word .bs-shock{animation:spShock .7s cubic-bezier(.1,.6,.3,1) .26s}
+      #splash.word .bs-main{animation:spShake .32s linear .27s}
+      .bs-load{position:absolute;left:50%;bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px),4.5vh);width:min(440px,80vw);transform:translateX(-50%);text-transform:uppercase;letter-spacing:.16em;transition:opacity .35s}
+      .bs-lines{height:48px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;font-size:11px;line-height:16px;color:#7f8a90}
+      .bs-lines div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .bs-lines div::before{content:'\2713  ';color:#6fae58}
+      .bs-lines div.now{color:#efe6cc}
+      .bs-lines div.now::before{content:'\25B8  ';color:#d8402c}
+      .bs-lines div.now::after{content:'_';animation:spBlink 1s steps(1) infinite}
+      .bs-lines div.tap{color:#f2c14e;font-size:14px;animation:spBlink 1.2s ease-in-out infinite}
+      .bs-lines div.tap::before{content:''}
+      .bs-lines div.tap::after{content:''}
+      .bs-bar{position:relative;height:4px;margin-top:7px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+      .bs-bar i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(.02);background:linear-gradient(90deg,#7e1d10,#d8402c 70%,#ffb27a);box-shadow:0 0 10px rgba(255,90,50,.6);transition:transform .35s ease-out}
+      .bs-meta{display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#5f696f;letter-spacing:.2em}
+      #splash.out .bs-bg{opacity:0}
+      #splash.out .bs-load,#splash.out .bs-embers,#splash.out .bs-tag{opacity:0!important;transition:opacity .25s}
+      #splash.out .bs-glow,#splash.out .bs-radar{opacity:0;transition:opacity .4s}
+      #splash.out{pointer-events:none}
+      @keyframes spDraw{to{stroke-dashoffset:0}}
+      @keyframes spFade{from{opacity:0}}
+      @keyframes spPop{from{opacity:0;transform:scale(.9)}}
+      @keyframes spGlow{0%,100%{opacity:.55;transform:scale(.94)}50%{opacity:1;transform:scale(1.04)}}
+      @keyframes spSpin{to{transform:rotate(360deg)}}
+      @keyframes spTicks{from{opacity:0;transform:rotate(-40deg) scale(.9)}}
+      @keyframes spRet{from{opacity:0;transform:scale(1.35)}}
+      @keyframes spMissile{from{opacity:0;transform:translateY(46px)}}
+      @keyframes spStamp{from{opacity:0;transform:scale(1.9)}}
+      @keyframes spSheen{0%{transform:translateX(0)}28%,100%{transform:translateX(200px)}}
+      @keyframes spSlam{0%{opacity:0;transform:scale(2.6)}62%{opacity:1;transform:scale(.95)}100%{opacity:1;transform:none}}
+      @keyframes spShock{0%{opacity:.9;transform:scale(.7)}100%{opacity:0;transform:scale(2.4)}}
+      @keyframes spShake{0%,100%{transform:none}20%{transform:translate(-5px,3px)}40%{transform:translate(4px,-3px)}60%{transform:translate(-3px,-2px)}80%{transform:translate(2px,2px)}}
+      @keyframes spEmber{0%{opacity:0;transform:translate(0,0)}12%{opacity:.9}80%{opacity:.6}100%{opacity:0;transform:translate(var(--dx),-105vh)}}
+      @keyframes spBlink{50%{opacity:.25}}
+      @media (prefers-reduced-motion:reduce){
+        #splash *,#splash *::before,#splash *::after{animation:none!important}
+        #splash .em-ring,#splash .em-ring2,#splash .em-shield-line{stroke-dashoffset:0}
+        .bs-embers,.bs-radar{display:none}
+        #splash .bs-main{animation:spFade .6s both!important}
+        .bs-word b,.bs-tag{opacity:1}
+      }
+    </style>
   </head>
   <body>
+    <div id="splash" role="progressbar" aria-label="Loading Iron Front" aria-valuemin="0" aria-valuemax="100" aria-valuenow="2">
+      <div class="bs-bg"></div>
+      <div class="bs-embers"></div>
+      <div class="bs-main">
+        <div class="bs-em"><div class="bs-glow"></div><div class="bs-radar"></div><div class="bs-shock"></div><!--emblem--></div>
+        <div class="bs-word"><b class="bs-top">IRON</b><b class="bs-bot">FRONT</b><div class="bs-tag">MODERN WARFARE</div></div>
+      </div>
+      <div class="bs-load">
+        <div class="bs-lines"><div class="now" data-t="Loading engine">Loading engine…</div></div>
+        <div class="bs-bar"><i></i></div>
+        <div class="bs-meta"><span class="bs-detail">Establishing uplink</span><span class="bs-pct">2%</span></div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var s = document.getElementById('splash');
+        window.__ifT0 = performance.now();
+        // drifting embers
+        var h = '';
+        for (var i = 0; i < 18; i++) {
+          var r = Math.random;
+          h += '<i style="left:' + (3 + r() * 94).toFixed(1) + '%;animation-duration:' + (4.5 + r() * 4).toFixed(2) + 's;animation-delay:' + (-r() * 8).toFixed(2) + 's;--dx:' + ((r() - 0.5) * 120).toFixed(0) + 'px;--sz:' + (1.2 + r() * 2.4).toFixed(1) + 'px"></i>';
+        }
+        s.querySelector('.bs-embers').innerHTML = h;
+        // the wordmark slams in once the emblem has drawn and its font is ready (never later than 1.9 s)
+        var slam = function () {
+          if (s.className.indexOf('word') < 0) {
+            s.className += ' word';
+            window.__ifWordT = performance.now();
+          }
+        };
+        var font = new Promise(function (res) {
+          window.__ifFont = function () {
+            document.fonts && document.fonts.load ? document.fonts.load('1em "Black Ops One"', 'IRONFT').then(res, res) : res();
+          };
+        });
+        if (document.querySelector('link[rel=stylesheet][href*="fonts.googleapis"]')) window.__ifFont();
+        setTimeout(function () {
+          font.then(slam);
+          setTimeout(slam, 750);
+        }, 1150);
+      })();
+    </script>
     <div id="app"></div>
     <noscript>Iron Front needs JavaScript and WebGL.</noscript>
     <script type="module" src="/src/main.ts"></script>

@@ -13,6 +13,8 @@ const FinalShader = {
     resolution: { value: new THREE.Vector2(1, 1) },
     exposure: { value: 1.0 },
     fxaa: { value: 1 },
+    /** Ultra (TAA): light unsharp mask instead of FXAA, 0 = off. */
+    sharpen: { value: 0 },
     contrast: { value: 1.08 },
     saturation: { value: 1.06 },
     shadowTint: { value: new THREE.Vector3(-0.012, 0.0, 0.022) },
@@ -31,6 +33,7 @@ const FinalShader = {
     uniform vec2 resolution;
     uniform float exposure;
     uniform float fxaa;
+    uniform float sharpen;
     uniform float contrast;
     uniform float saturation;
     uniform vec3 shadowTint;
@@ -48,6 +51,16 @@ const FinalShader = {
     vec3 sampleAA( vec2 uv ) {
       vec2 px = 1.0 / resolution;
       vec3 rgbM = texture2D( tDiffuse, uv ).rgb;
+      if ( sharpen > 0.0 ) {
+        // after TAA: 5-tap unsharp mask, clamped to the neighbourhood (no halos)
+        vec3 n = texture2D( tDiffuse, uv + vec2( 0.0, px.y ) ).rgb;
+        vec3 s = texture2D( tDiffuse, uv - vec2( 0.0, px.y ) ).rgb;
+        vec3 e = texture2D( tDiffuse, uv + vec2( px.x, 0.0 ) ).rgb;
+        vec3 w = texture2D( tDiffuse, uv - vec2( px.x, 0.0 ) ).rgb;
+        vec3 mn = min( rgbM, min( min( n, s ), min( e, w ) ) );
+        vec3 mx = max( rgbM, max( max( n, s ), max( e, w ) ) );
+        return clamp( rgbM + ( 4.0 * rgbM - n - s - e - w ) * sharpen, mn, mx );
+      }
       if ( fxaa < 0.5 ) return rgbM;
       vec3 rgbNW = texture2D( tDiffuse, uv + vec2( -1.0, -1.0 ) * px ).rgb;
       vec3 rgbNE = texture2D( tDiffuse, uv + vec2( 1.0, -1.0 ) * px ).rgb;

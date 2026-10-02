@@ -5,6 +5,7 @@ import { factionCamo, pbrMaterial, worldUV } from '../textures';
 import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
+import { armourMod, unitLook, vehCamo } from './unittex';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -343,8 +344,16 @@ const DECAL_WEAR: WearCfg = { dirt: false, loose: false, scale: 9 };
 /** Cached material with the dust / damage / loose-part patch (shared by every vehicle). */
 function wmat(key: string, fog: FogOfWar | null, make: () => THREE.Material, cfg: WearCfg = VEH_WEAR): THREE.Material {
   const m = cmat('w|' + key, fog, make);
-  if (!isWearMaterial(m)) wearPatch(m, cfg);
+  if (!isWearMaterial(m)) {
+    wearPatch(m, cfg);
+    if (cfg.dirt) unitLook(m, { rim: 0.9, team: true });
+  }
   return m;
+}
+/** Painted armour detail (vertex-coloured parts): plate seams, bolts, chipping (shared maps). */
+function dullMat(): THREE.MeshStandardMaterial {
+  const t = armourMod();
+  return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1.02, metalness: 0.12, normalScale: new THREE.Vector2(0.7, 0.7) });
 }
 const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial, DECAL_WEAR);
 
@@ -372,6 +381,8 @@ const _col = new THREE.Color();
 class Acc {
   readonly buckets = new Map<string, THREE.BufferGeometry[]>();
   tris = 0;
+  /** Team colour hex: matte detail painted exactly this colour is flagged (stays clean of dust, glows slightly). */
+  teamHex = -1;
   /** Current loose-piece tag (see wear.ts): id + 256 * mode, hinge y / z. */
   private lc = 0;
   private lpy = 0;
@@ -417,6 +428,7 @@ class Acc {
       // aWear: x = dust / mud (filled in by Bld.finish), y = loose piece code, zw = hinge
       const n = g.attributes.position.count;
       const w = new Float32Array(n * 4);
+      if (key === 'D' && paint === this.teamHex) for (let i = 0; i < n; i++) w[i * 4] = -1;
       if (this.lc)
         for (let i = 0; i < n; i++) {
           w[i * 4 + 1] = this.lc;
@@ -444,6 +456,7 @@ class Part extends Acc {
     readonly g: THREE.Object3D,
   ) {
     super();
+    this.teamHex = b.team;
   }
   box(w: number, h: number, d: number, x: number, y: number, z: number, paint: number, rx = 0, ry = 0, rz = 0) {
     return this.add(new THREE.BoxGeometry(w, h, d), paint, TR(x, y, z, rx, ry, rz));
@@ -599,11 +612,14 @@ class Bld {
     let m: THREE.Material;
     switch (key) {
       case 'D':
-        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        return wmat('vdull2', fog, dullMat);
       case 'M':
         return wmat('vmetal', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.72 }));
       case 's' + CAMO:
-        return wmat('camo' + JSON.stringify(this.camoOpts), fog, () => pbrMaterial('camo', this.camoOpts, null).clone());
+        return wmat('camo2|' + this.f, fog, () => {
+          const t = vehCamo(this.f);
+          return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, metalness: 0.15, normalScale: new THREE.Vector2(0.85, 0.85) });
+        });
       case 's' + LAMP:
         m = glowMat(0xfff0d0, 2.4, fog);
         break;
@@ -623,7 +639,7 @@ class Bld {
         m = glowMat(0xff3020, 2.6, fog);
         break;
       default:
-        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        return wmat('vdull2', fog, dullMat);
     }
     if (key.startsWith('s') && key !== 's' + CAMO && !this.glow.includes(m)) this.glow.push(m);
     return m;
@@ -650,7 +666,244 @@ class Bld {
     this.extraTris += (geo.attributes.position.count / 3) * entries.length;
     return im;
   }
+  /**
+   * Top-down height buffer over the unmerged parts (template build time only):
+   * every upward-facing triangle is rasterised into a grid (cell = 4 mm of
+   * tile) keeping the highest surface, its part and whether it is plain camo
+   * paint. Much cheaper than ray casting each probe point.
+   */
+  private probe() {
+    this.root.updateMatrixWorld(true);
+    const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
+    const C = 0.005;
+    const bb = new THREE.Box3();
+    const v = new THREE.Vector3();
+    const parts = this.parts;
+    for (const p of parts)
+      for (const geos of p.buckets.values())
+        for (const g of geos) {
+          const pos = g.attributes.position;
+          for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(p.g.matrixWorld));
+        }
+    const x0 = bb.min.x - C;
+    const z0 = bb.min.z - C;
+    const nx = Math.max(1, Math.ceil((bb.max.x - x0) / C) + 2);
+    const nz = Math.max(1, Math.ceil((bb.max.z - z0) / C) + 2);
+    const H = new Float32Array(nx * nz).fill(-1e9);
+    const O = new Int16Array(nx * nz).fill(-1); // part index; -2 - index for non-camo / skipped parts
+    const NY = new Float32Array(nx * nz);
+    const camoBox = parts.map(() => new THREE.Box3());
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    parts.forEach((p, pi) => {
+      let skipIt = false;
+      for (let q: THREE.Object3D | null = p.g; q; q = q.parent) if (tagged(q, 'recoil') || tagged(q, 'whip') || tagged(q, 'spin')) skipIt = true;
+      const m = p.g.matrixWorld;
+      for (const [key, geos] of p.buckets) {
+        const camo = !skipIt && key === 's' + CAMO;
+        for (const g of geos) {
+          const pos = g.attributes.position;
+          for (let t = 0; t + 2 < pos.count; t += 3) {
+            a.fromBufferAttribute(pos, t).applyMatrix4(m);
+            b.fromBufferAttribute(pos, t + 1).applyMatrix4(m);
+            c.fromBufferAttribute(pos, t + 2).applyMatrix4(m);
+            n.subVectors(b, a).cross(v.subVectors(c, a));
+            const len = n.length();
+            if (len < 1e-12) continue;
+            n.divideScalar(len);
+            if (n.y < 0) n.negate(); // winding is not reliable on all primitives: take the upward side
+            if (n.y < 0.05) continue;
+            if (camo) {
+              camoBox[pi].expandByPoint(a).expandByPoint(b).expandByPoint(c);
+            }
+            const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x, c.x) - x0) / C));
+            const i1 = Math.min(nx - 1, Math.ceil((Math.max(a.x, b.x, c.x) - x0) / C));
+            const j0 = Math.max(0, Math.floor((Math.min(a.z, b.z, c.z) - z0) / C));
+            const j1 = Math.min(nz - 1, Math.ceil((Math.max(a.z, b.z, c.z) - z0) / C));
+            const d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+            if (Math.abs(d) < 1e-12) continue;
+            for (let j = j0; j <= j1; j++) {
+              const pz = z0 + (j + 0.5) * C;
+              for (let i = i0; i <= i1; i++) {
+                const px = x0 + (i + 0.5) * C;
+                const w1 = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / d;
+                const w2 = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / d;
+                const w3 = 1 - w1 - w2;
+                if (w1 < -1e-4 || w2 < -1e-4 || w3 < -1e-4) continue;
+                const y = w1 * a.y + w2 * b.y + w3 * c.y;
+                const k = j * nx + i;
+                if (y > H[k] + 1e-5) {
+                  H[k] = y;
+                  O[k] = camo ? pi : -2 - pi;
+                  NY[k] = n.y;
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+    const tur = parts.find((p) => tagged(p.g, 'turret') && !camoBox[parts.indexOf(p)].isEmpty());
+    const boxOf = (p: Part) => camoBox[parts.indexOf(p)];
+    const cell = (x: number, z: number) => {
+      const i = Math.floor((x - x0) / C);
+      const j = Math.floor((z - z0) / C);
+      return i < 0 || j < 0 || i >= nx || j >= nz ? -1 : j * nx + i;
+    };
+    /** Flat spot of camo paint of part p at (x, z) with footprint (l along x, w along z); returns the root-space point. */
+    const flat = (p: Part, x: number, z: number, l: number, w: number, tol = 0.0025) => {
+      const pi = parts.indexOf(p);
+      const k0 = cell(x, z);
+      if (k0 < 0 || O[k0] !== pi || NY[k0] < 0.96) return null;
+      const y0 = H[k0];
+      for (let zz = z - w / 2; zz <= z + w / 2 + 1e-6; zz += C) {
+        for (let xx = x - l / 2; xx <= x + l / 2 + 1e-6; xx += C) {
+          const k = cell(xx, zz);
+          if (k < 0 || O[k] !== pi || NY[k] < 0.9 || Math.abs(H[k] - y0) > tol) return null;
+        }
+      }
+      return new THREE.Vector3(x, y0, z);
+    };
+    /** Mark a footprint as taken (nothing else may be placed on it). */
+    const block = (x: number, z: number, l: number, w: number) => {
+      for (let zz = z - w / 2; zz <= z + w / 2 + 1e-6; zz += C)
+        for (let xx = x - l / 2; xx <= x + l / 2 + 1e-6; xx += C) {
+          const k = cell(xx, zz);
+          if (k >= 0) O[k] = -1;
+        }
+    };
+    return { tur, boxOf, flat, block };
+  }
+  /**
+   * Air-recognition panel (VS-17 style) in the team colour on the turret roof
+   * (or the rear deck): a flat, unobstructed spot is found by ray casting the
+   * unmerged parts, so it reads from above at RTS zoom whatever the design.
+   */
+  private idPanel(pr: ReturnType<Bld['probe']>) {
+    if (this.noIdPanel) return;
+    const targets: { p: Part; rear: boolean }[] = [];
+    if (pr.tur) targets.push({ p: pr.tur, rear: false });
+    targets.push({ p: this.body, rear: true });
+    {
+      for (const { p, rear } of targets) {
+        const bb = pr.boxOf(p);
+        if (bb.isEmpty()) continue;
+        const L = bb.max.x - bb.min.x;
+        const W = bb.max.z - bb.min.z;
+        if (L < 0.12 || W < 0.1) continue;
+        for (const k of [1, 0.75, 0.55]) {
+          const pl = Math.min(0.075, L * 0.28) * k;
+          const pw = Math.min(0.17, W * 0.6) * k;
+          const x0 = bb.min.x + pl / 2 + L * 0.06;
+          const x1 = rear ? bb.min.x + L * 0.45 : bb.max.x - pl / 2 - L * 0.2;
+          const zc = (bb.min.z + bb.max.z) / 2;
+          for (let x = x0; x <= x1; x += 0.012) {
+            for (const dz of [0, 0.02, -0.02, 0.04, -0.04]) {
+              const hit = pr.flat(p, x, zc + dz, pl, pw);
+              if (!hit) continue;
+              const lp = p.g.worldToLocal(hit);
+              p.box(pl + 0.008, 0.002, pw + 0.008, lp.x, lp.y + 0.001, lp.z, K.black);
+              p.box(pl, 0.0025, pw, lp.x, lp.y + 0.002, lp.z, this.team);
+              pr.block(x, zc + dz, pl + 0.02, pw + 0.02);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+  /** Skip the air-recognition panel (set by builders with no suitable roof). */
+  noIdPanel = false;
+  /** Number of stowage items scattered on free flat deck / roof areas (0 = none). */
+  clutterN = 0;
+  /**
+   * Field stowage: kit bags, rolled camouflage nets / tarps, ammo boxes, jerry
+   * cans and spare track links on free, flat spots of the hull deck (outside
+   * the turret's sweep) and the turret roof. Every item is a loose piece (blown
+   * off by battle damage).
+   */
+  private clutter(pr: ReturnType<Bld['probe']>) {
+    if (this.clutterN <= 0) return;
+    {
+      const reg = this.style.region;
+      const bagC = reg === 'west' ? [0x7c6a4a, 0x5a5c3c, 0x8a7a58] : reg === 'east' ? [0x4e5434, 0x5c5a3c, 0x3e4430] : reg === 'asia' ? [0x4c5636, 0x5e5e40, 0x424a32] : [0x8c7a56, 0x6c6444, 0x9a8a64];
+      const netC = reg === 'mideast' ? 0x8a7c5a : reg === 'west' && this.f !== 'germany' ? 0x76683e : 0x4a5232;
+      let seed = 0;
+      for (const ch of this.f + this.parts.length) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+      let ri = 0;
+      const rnd = () => hash01(seed + ri++ * 7919);
+      const used: THREE.Box3[] = [];
+      const free = (bx: THREE.Box3) => !used.some((u) => u.intersectsBox(bx));
+      // turret sweep radius (hull clutter must stay clear of the bustle / gun)
+      let tc: THREE.Vector3 | null = null;
+      let tr = 0;
+      if (pr.tur) {
+        tc = new THREE.Vector3().setFromMatrixPosition(pr.tur.g.matrixWorld);
+        const tb = pr.boxOf(pr.tur);
+        for (const x of [tb.min.x, tb.max.x]) for (const z of [tb.min.z, tb.max.z]) tr = Math.max(tr, Math.hypot(x - tc.x, z - tc.z));
+        tr += 0.025;
+      }
+      type Item = { l: number; w: number; put: (p: Part, x: number, y: number, z: number) => void };
+      const S = 1.3; // chunky, readable stowage (C&C3-like exaggeration)
+      const items: Item[] = [
+        // kit bag / rucksack
+        { l: 0.05 * S, w: 0.032 * S, put: (p, x, y, z) => { const c = bagC[Math.floor(rnd() * 3)]; p.cbox(0.048 * S, 0.024 * S, 0.03 * S, 0.006, x, y + 0.012 * S, z, c); p.box(0.05 * S, 0.004, 0.006, x, y + 0.02 * S, z, shade(c, 0.7)); } },
+        // rolled net / tarp across the deck (along z) with straps
+        { l: 0.036 * S, w: 0.1 * S, put: (p, x, y, z) => { p.cz(0.016 * S, 0.016 * S, 0.1 * S, x, y + 0.016 * S, z, netC, 7); for (const dz of [-0.03, 0.03]) p.cz(0.0175 * S, 0.0175 * S, 0.005, x, y + 0.016 * S, z + dz * S, K.dark, 7); } },
+        // ammo boxes, two stacked
+        { l: 0.04 * S, w: 0.026 * S, put: (p, x, y, z) => { p.box(0.038 * S, 0.02 * S, 0.024 * S, x, y + 0.01 * S, z, K.olive); p.box(0.034 * S, 0.016 * S, 0.022 * S, x + 0.002, y + 0.028 * S, z, shade(K.olive, 0.85)); p.box(0.04 * S, 0.003, 0.025 * S, x, y + 0.017 * S, z, K.dark); } },
+        // jerry cans side by side
+        { l: 0.036, w: 0.04, put: (p, x, y, z) => { jerry(p, x, y, z - 0.01, reg === 'mideast' ? 0x6a6244 : 0x4c5434); jerry(p, x, y, z + 0.01, 0x4c5434); } },
+        // spare track links
+        { l: 0.034 * S, w: 0.07 * S, put: (p, x, y, z) => { for (let i = 0; i < 2; i++) p.box(0.032 * S, 0.006 * S, 0.066 * S, x, y + 0.003 * S + i * 0.0065 * S, z + i * 0.004, K.dark); p.box(0.034 * S, 0.003, 0.004, x, y + 0.014 * S, z, mt(K.steel)); } },
+        // folded tarp
+        { l: 0.06 * S, w: 0.05 * S, put: (p, x, y, z) => { p.cbox(0.058 * S, 0.012 * S, 0.048 * S, 0.004, x, y + 0.006 * S, z, netC); p.cbox(0.044 * S, 0.008 * S, 0.036 * S, 0.003, x - 0.004, y + 0.016 * S, z + 0.002, shade(netC, 1.1)); } },
+      ];
+      const place = (p: Part, maxN: number, xmin: number, xmax: number, zs: number[], avoidTurret: boolean) => {
+        let n = 0;
+        for (let tries = 0; tries < maxN * 6 && n < maxN; tries++) {
+          const it = items[Math.floor(rnd() * items.length)];
+          const z0 = zs[Math.floor(rnd() * zs.length)];
+          // scan along x from a random start for a free flat spot
+          const span = xmax - xmin;
+          if (span <= 0) return;
+          const start = rnd();
+          for (let k = 0; k < 14; k++) {
+            const x = xmin + ((start + k / 14) % 1) * span;
+            const z = z0;
+            const bx = new THREE.Box3(new THREE.Vector3(x - it.l / 2 - 0.006, -1, z - it.w / 2 - 0.006), new THREE.Vector3(x + it.l / 2 + 0.006, 5, z + it.w / 2 + 0.006));
+            if (!free(bx)) continue;
+            if (avoidTurret && tc && Math.hypot(Math.max(Math.abs(x - tc.x) - it.l / 2, 0), Math.max(Math.abs(z - tc.z) - it.w / 2, 0)) < tr) continue;
+            const hit = pr.flat(p, x, z, it.l + 0.008, it.w + 0.008, 0.004);
+            if (!hit) continue;
+            const lp = p.g.worldToLocal(hit);
+            p.piece(1, () => it.put(p, lp.x, lp.y, lp.z));
+            used.push(bx);
+            n++;
+            break;
+          }
+        }
+      };
+      const hb = pr.boxOf(this.body);
+      if (!hb.isEmpty()) {
+        const W = hb.max.z - hb.min.z;
+        place(this.body, this.clutterN, hb.min.x + 0.04, hb.max.x - 0.04, [hb.min.z + W * 0.2, hb.max.z - W * 0.2, (hb.min.z + hb.max.z) / 2, hb.min.z + W * 0.3, hb.max.z - W * 0.3], true);
+      }
+      if (pr.tur) {
+        const tb = pr.boxOf(pr.tur);
+        const W = tb.max.z - tb.min.z;
+        place(pr.tur, Math.ceil(this.clutterN / 2), tb.min.x + 0.03, tb.min.x + (tb.max.x - tb.min.x) * 0.5, [tb.min.z + W * 0.22, tb.max.z - W * 0.22], false);
+      }
+    }
+  }
   finish(): Tpl {
+    if (!this.noIdPanel || this.clutterN > 0) {
+      const pr = this.probe();
+      this.idPanel(pr);
+      this.clutter(pr);
+    }
     let tris = this.extraTris;
     let meshes = 0;
     for (const p of this.parts) {
@@ -715,6 +968,7 @@ class Bld {
       const nor = mesh.geometry.attributes.normal;
       const mw = mesh.matrixWorld;
       for (let i = 0; i < pos.count; i++) {
+        if (aw.getX(i) < -0.5) continue; // team colour: kept clean
         _dv.fromBufferAttribute(pos, i).applyMatrix4(mw);
         const low = clamp((0.2 - _dv.y) / 0.15, 0, 1);
         const ny = nor.getY(i);
@@ -1556,12 +1810,15 @@ function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: numb
 // ------------------------------------------------------------- instancing
 
 const templates = new Map<string, Tpl>();
+/** Field stowage items per template key (see Bld.clutter). */
+const CLUTTER: Record<string, number> = { mbt: 7, apc: 4, arty: 4, aa: 3, laser: 3, tos: 3, ew: 2, berge: 4, missile_truck: 2 };
 
 function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld) => void): Model {
   const ck = `${key}|${style.faction}|${style.team}|${fogId(fog)}`;
   let t = templates.get(ck);
   if (!t) {
     const b = new Bld(style, fog);
+    b.clutterN = CLUTTER[key] ?? 0;
     fn(b);
     t = b.finish();
     t.key = ck;

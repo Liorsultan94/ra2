@@ -122,8 +122,9 @@ export class NightLights {
   /** Candidate lamps for the real point lights this frame: x, y, z, r, g, b, distance. */
   private cand = new Float32Array(64 * 7);
   private nCand = 0;
-  private boosted = new Set<THREE.Material>();
-  private boostBase: number[] = [];
+  /** Window-glow materials and their daylight emissive intensity (the boost follows `dark`). */
+  private boosted = new Map<THREE.Material, number>();
+  private boostedAt = -1;
   private nf = 0;
   private np = 0;
   private nc = 0;
@@ -157,11 +158,14 @@ export class NightLights {
 
   /** Undo the window-glow boost on the shared building materials (they outlive this battle). */
   dispose() {
-    let i = 0;
-    for (const g of this.boosted) g.userData.baseEI = this.boostBase[i++];
+    for (const [g, base] of this.boosted) g.userData.baseEI = base;
     this.boosted.clear();
-    this.boostBase.length = 0;
     this.group.removeFromParent();
+  }
+
+  /** Dynamic day / night cycle: 0 = daylight (everything off) .. 1 = full night. */
+  setDark(dark: number) {
+    this.dark = Math.max(0, Math.min(1, dark));
   }
 
   private flare(x: number, y: number, z: number, size: number, r: number, g: number, b: number) {
@@ -213,6 +217,25 @@ export class NightLights {
     this.nf = this.np = this.nc = this.nCand = 0;
     const map = world.map;
     const dk = this.dark;
+    // the cycle changes `dark`: re-apply the window boost when it has moved noticeably
+    if (Math.abs(dk - this.boostedAt) > 0.004) {
+      this.boostedAt = dk;
+      for (const [g, base] of this.boosted) g.userData.baseEI = base * (1 + 1.6 * dk);
+    }
+    if (dk <= 0.01) {
+      // broad daylight: no lamps (pools stay allocated, the point lights keep their slots at zero). One
+      // degenerate black instance per pool keeps the materials drawn, so their shaders are compiled
+      // up front (warm-up) instead of hitching when the lights come on at dusk.
+      _m.makeScale(0, 0, 0);
+      _c.setRGB(0, 0, 0);
+      for (const im of [this.flares, this.pools, this.cones]) {
+        im.setMatrixAt(0, _m);
+        im.setColorAt(0, _c);
+        commit(im, 1);
+      }
+      for (const l of this.lights) l.intensity = 0;
+      return;
+    }
     const tx = target.x;
     const tz = target.z;
     for (const v of visuals) {
@@ -228,8 +251,7 @@ export class NightLights {
         // windows glow harder after dark (template materials: boost their base once)
         for (const g of m.glow) {
           if (this.boosted.has(g) || typeof g.userData.baseEI !== 'number') continue;
-          this.boosted.add(g);
-          this.boostBase.push(g.userData.baseEI);
+          this.boosted.set(g, g.userData.baseEI);
           g.userData.baseEI *= 1 + 1.6 * dk;
         }
         const lamps = m.nightLights;
