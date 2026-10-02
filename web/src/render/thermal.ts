@@ -60,6 +60,7 @@ export function heatMaterial(): THREE.MeshMatcapMaterial {
  * Render the heat mask (hot meshes only) into `target` from `camera`.
  * Shadows are not re-rendered and the background is cleared to black.
  */
+const savedClear = new THREE.Color();
 export function renderHeatMask(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, target: THREE.WebGLRenderTarget) {
   const mask = camera.layers.mask;
   const bg = scene.background;
@@ -67,7 +68,7 @@ export function renderHeatMask(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   const ov = scene.overrideMaterial;
   const sh = renderer.shadowMap.autoUpdate;
   const prevRT = renderer.getRenderTarget();
-  const clear = renderer.getClearColor(new THREE.Color());
+  const clear = renderer.getClearColor(savedClear);
   const clearA = renderer.getClearAlpha();
   camera.layers.set(HEAT_LAYER);
   scene.background = null;

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { HEAT_LAYER } from './thermal';
 
+/** Camera layer of the silhouette proxies: only the main view camera enables it (not the drone feed / heat mask). */
+export const XRAY_LAYER = 21;
+
 /*
  * X-ray silhouettes and heat tagging for unit models.
  *
@@ -159,6 +162,7 @@ export class UnitTagger {
       const p = new THREE.Mesh(m.geometry, mat);
       (p as unknown as { isXray: boolean }).isXray = true;
       p.renderOrder = 30;
+      p.layers.set(XRAY_LAYER);
       p.castShadow = false;
       p.receiveShadow = false;
       p.frustumCulled = m.frustumCulled;

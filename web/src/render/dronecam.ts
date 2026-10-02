@@ -67,6 +67,8 @@ export class DroneCam {
   private camPos = new THREE.Vector3();
   private tgt = new THREE.Vector3();
   private lastPos = new THREE.Vector3();
+  private proj = new THREE.Vector3();
+  private size2 = new THREE.Vector2();
   private rect = { x: 0, y: 0, w: 0, h: 0 };
   private rectAt = -1;
   private textAt = 0;
@@ -391,7 +393,7 @@ export class DroneCam {
     }
     // target box: project the target into the feed
     if (ok && !lost) {
-      const v = this.tgt.clone().project(this.cam);
+      const v = this.proj.copy(this.tgt).project(this.cam);
       const inView = v.z < 1 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1;
       this.box.style.display = inView ? '' : 'none';
       if (inView) this.box.style.transform = `translate(${((v.x + 1) / 2) * this.rect.w}px, ${((1 - v.y) / 2) * this.rect.h}px) translate(-50%, -50%)`;
@@ -408,7 +410,7 @@ export class DroneCam {
     gl.setViewport(this.rect.x, this.rect.y, this.rect.w, this.rect.h);
     this.quad.render(gl);
     gl.setScissorTest(false);
-    const size = gl.getSize(new THREE.Vector2());
+    const size = gl.getSize(this.size2);
     gl.setViewport(0, 0, size.x, size.y);
     gl.autoClear = auto;
   }

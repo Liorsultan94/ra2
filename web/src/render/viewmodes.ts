@@ -4,7 +4,7 @@ import type { SimEvent } from '../sim/types';
 import { DroneCam } from './dronecam';
 import type { GameRenderer, ViewHook } from './renderer';
 import { ThermalPass, renderHeatMask, type Polarity } from './thermal';
-import { UnitTagger } from './xray';
+import { UnitTagger, XRAY_LAYER } from './xray';
 
 /*
  * Whole-view modes hooked into the renderer's frame (GameRenderer.viewHook):
@@ -35,6 +35,7 @@ export class ViewModes implements ViewHook {
   ) {
     const color = r.viewer >= 0 ? r.world.players[r.viewer].color : 0x2f8fff;
     this.tagger = new UnitTagger(color);
+    r.camera.layers.enable(XRAY_LAYER);
     this.drone = container && r.viewer >= 0 ? new DroneCam(r, container, onJump) : null;
   }
 
@@ -116,6 +117,7 @@ export class ViewModes implements ViewHook {
   dispose() {
     this.tagger.dispose();
     this.drone?.dispose();
+    this.r.camera.layers.disable(XRAY_LAYER);
     this.pass?.dispose();
     this.heatRT?.dispose();
     this.directRT?.dispose();
