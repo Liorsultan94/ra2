@@ -288,11 +288,11 @@ function bedTexture(): THREE.DataTexture {
       const w = Math.max(0, Math.min(1, (weedN[k] - 0.6) * 6));
       if (w <= 0) continue;
       const streak = 0.5 + 0.5 * Math.sin(((x * 0.8 + y * 0.6) / N) * Math.PI * 2 * 40 + weedF[k] * 9);
-      const a = w * (0.55 + 0.45 * streak);
+      const a = w * (0.3 + 0.3 * streak);
       const g = 0.75 + weedF[k] * 0.5;
-      col[k * 3] = col[k * 3] * (1 - a) + 0.12 * g * a;
-      col[k * 3 + 1] = col[k * 3 + 1] * (1 - a) + 0.2 * g * a;
-      col[k * 3 + 2] = col[k * 3 + 2] * (1 - a) + 0.07 * g * a;
+      col[k * 3] = col[k * 3] * (1 - a) + 0.2 * g * a;
+      col[k * 3 + 1] = col[k * 3 + 1] * (1 - a) + 0.27 * g * a;
+      col[k * 3 + 2] = col[k * 3 + 2] * (1 - a) + 0.1 * g * a;
     }
   const data = new Uint8Array(N * N * 4);
   for (let k = 0; k < N * N; k++) {
@@ -735,7 +735,7 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
   for (const p of piers) addPair(p.x, p.y, main.x, main.y, p.hl + 0.55, p.hw + 0.28, 0.5, 0.42);
   for (const r of f.rocks) {
     const c = info.sample(info.sAt(r.x, r.y))!;
-    addPair(r.x, r.y, c.tx, c.ty, r.r + 0.35, r.r + 0.12, 0.45, 0.3);
+    addPair(r.x, r.y, c.tx, c.ty, r.r + 0.35, r.r + 0.12, 0.22, 0.3);
   }
   const data = new Uint8Array(N * NH * 4);
   const data2 = new Uint8Array(N * NH * 4);
@@ -1160,7 +1160,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float w1 = 1.0 - w0;
         vec2 q0 = p - vel * (ph0 * 3.0);
         vec2 q1 = p - vel * (ph1 * 3.0) + 0.37;
-        float amp = 0.07 * (1.0 - 0.78 * calm) * (1.0 + 1.5 * chop) * (1.0 + rapids * 1.6) * (1.0 - 0.65 * oil);
+        float amp = 0.07 * (1.0 - 0.78 * calm) * (1.0 + 1.5 * chop) * (1.0 + rapids * 0.7) * (1.0 - 0.65 * oil);
         vec2 g = (waveN(q0 * 0.42) * w0 + waveN(q1 * 0.42) * w1) * amp;
         #if WATER_Q > 0
           g += (waveN(q0 * 1.13 + 0.21) * w0 + waveN(q1 * 1.13 + 0.53) * w1) * amp * 0.5;
@@ -1211,9 +1211,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float cosT = max(dot(n, viewDir), 0.0);
         float fres = 0.1 + 0.9 * pow(1.0 - cosT, 4.0);
         // ---- the water body: bed through the water, absorbed with depth
-        vec3 deepC = mix(vec3(0.008, 0.042, 0.05), vec3(0.06, 0.05, 0.026), mud);
-        vec3 turq = mix(vec3(0.03, 0.105, 0.085), vec3(0.11, 0.09, 0.045), mud);
-        vec3 absorb = mix(vec3(3.4, 2.0, 2.2), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
+        vec3 deepC = mix(vec3(0.007, 0.03, 0.032), vec3(0.06, 0.05, 0.026), mud);
+        vec3 turq = mix(vec3(0.03, 0.085, 0.06), vec3(0.11, 0.09, 0.045), mud);
+        vec3 absorb = mix(vec3(4.2, 2.7, 3.1), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
         vec3 trans = exp(-absorb * depthW);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
         #if WATER_Q > 0
@@ -1227,7 +1227,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             float c2 = texture2D(causTex, cq * 1.19 + vec2(-time * 0.037, time * 0.041) + 0.5).r;
             bed *= 1.0 + min(c1, c2) * 2.6 * ck;
           }
-          bed *= 0.78;
+          bed *= 0.62;
         #else
           vec3 bed = vec3(0.24, 0.2, 0.13);
         #endif
@@ -1270,7 +1270,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             refl = mix(refl, rs, sc.a);
           }
         #endif
-        float fr = fres * (0.85 + 0.15 * calm);
+        float fr = fres * (0.85 + 0.15 * calm) * (1.0 - 0.5 * rapids);
         vec3 col = mix(under, refl, fr);
         col *= wxLight * (1.0 - 0.22 * chop);
         // ---- light on the surface: sun / moon highlight and its glitter path, nearby lamps and fires
@@ -1302,7 +1302,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float band = 1.0 - smoothstep(0.0, (0.22 + fA * 0.28) * lapK, shore);
         float lap = 0.5 + 0.5 * sin(shore * 18.0 - time * 1.7 + fA * 5.0);
         float foam = band * smoothstep(0.5, 0.85, fB * 0.6 + lap * 0.4 + band * 0.2) * 0.85 * (1.0 - 0.4 * calm);
-        foam = max(foam, (1.0 - smoothstep(0.0, 0.05 + fB * 0.05, shore)) * (0.35 + 0.45 * fB));
+        foam = max(foam, (1.0 - smoothstep(0.0, 0.05 + fB * 0.05, shore)) * smoothstep(0.35, 0.75, fB) * 0.6);
         // streaks dragged along the flow: pier wakes, whitewater on the rapids
         float wk = max(dat.a, rapids);
         if (wk > 0.003) {
@@ -1312,7 +1312,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float st2 = texture2D(waveTex, vec2(ax.x * 0.9 - time * 0.9 * sp2, ax.y * 4.1) + 0.5).a;
           float streak = smoothstep(0.5, 0.78, st * 0.65 + st2 * 0.35 + dat.a * 0.12);
           foam = max(foam, dat.a * dat.a * mix(streak, 1.0, smoothstep(0.85, 1.0, dat.a)) * 0.8);
-          float ww = smoothstep(0.38, 0.68, st * 0.55 + st2 * 0.45 + 0.12 * sin(alongR * 8.0 + 1.2));
+          float ww = smoothstep(0.3, 0.6, st * 0.55 + st2 * 0.45 + 0.12 * sin(alongR * 8.0 + 1.2));
           foam = max(foam, rapids * mix(ww, 1.0, rapids * rapids * 0.35) * 0.95);
         }
         // eddies swirl foam; rocks and the weir churn it white

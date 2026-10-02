@@ -372,7 +372,7 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
     ctx.globalAlpha = 1;
   };
   bark(TCell.Bark, [28, 22, 34], 'rgba(30,22,16,1)', [30, 20, 40]);
-  bark(TCell.PineBark, [26, 14, 32], 'rgba(40,26,18,1)', [22, 34, 44]);
+  bark(TCell.PineBark, [26, 12, 30], 'rgba(40,26,18,1)', [22, 26, 40]);
   {
     clip(TCell.BirchBark);
     ctx.fillStyle = '#e6e2d6';

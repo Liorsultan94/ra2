@@ -118,7 +118,7 @@ void RE_Direct_Foliage( const in IncidentLight directLight, const in vec3 geomet
   float tback = pow( clamp( dot( -geometryViewDir, directLight.direction ), 0.0, 1.0 ), 3.0 );
   float tthru = clamp( -tnl, 0.0, 1.0 );
   vec3 tglow = directLight.color * BRDF_Lambert( material.diffuseColor ) * vec3( 1.05, 1.1, 0.75 );
-  reflectedLight.directDiffuse += tglow * ( twrap * 0.55 * fLeafAmt + fTransl * ( tback * 1.6 + tthru * 0.45 ) );
+  reflectedLight.directDiffuse += tglow * ( twrap * 0.55 * fLeafAmt + fTransl * ( tback * 1.15 + tthru * 0.4 ) );
 }
 #define RE_Direct RE_Direct_Foliage
 `;
@@ -142,7 +142,7 @@ export function treeMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high')
     alphaTest: 0.42,
     side: THREE.DoubleSide,
     vertexColors: true,
-    roughness: 0.66,
+    roughness: 0.74,
     metalness: 0,
     alphaToCoverage: quality !== 'low',
   });
@@ -553,7 +553,7 @@ function pine(lite: boolean): THREE.BufferGeometry {
   const top = V(0.05, 0.86, 0.02);
   b.tube(lite ? [V(0, 0, 0), top] : [V(0, 0, 0), V(0.035, 0.45, 0.01), top], lite ? [0.036, 0.016] : [0.036, 0.027, 0.014], lite ? 3 : 5, TCell.PineBark, (p) => 0.6 + 0.4 * (p.y / H));
   const lumps: THREE.Vector3[] = [];
-  const nL = lite ? 4 : 6;
+  const nL = lite ? 4 : 7;
   for (let i = 0; i < nL; i++) {
     const a = (i / nL) * Math.PI * 2 + rnd() * 0.6;
     const r = i === 0 ? 0.04 : 0.18 + rnd() * 0.08;
@@ -577,7 +577,7 @@ function pine(lite: boolean): THREE.BufferGeometry {
       const off = V(Math.cos(a) * 0.08, (rnd() - 0.3) * 0.05, Math.sin(a) * 0.08);
       const p = L.clone().add(off);
       const f = off.clone().normalize().multiplyScalar(0.55).addScaledVector(UP, 1.2).normalize();
-      const sz = (lite ? 0.3 : 0.2) * (0.85 + rnd() * 0.3);
+      const sz = (lite ? 0.34 : 0.25) * (0.85 + rnd() * 0.3);
       b.card(p, f, V(rnd() - 0.5, 0, rnd() - 0.5), sz, sz, lite ? TCell.MassConifer : TCell.Pine, light(L));
       if (!lite && i % 2 === 0) b.card(p, V(Math.cos(a + 1.3), 0.2, Math.sin(a + 1.3)), UP, sz * 0.9, sz * 0.7, TCell.Pine, light(L));
     }
@@ -628,7 +628,7 @@ export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE
       c.setHSL(0.36 + r1 * 0.04, 0.26 + r2 * 0.1, 0.4 + r2 * 0.08);
       break;
     case Species.Pine:
-      c.setHSL(0.29 + r1 * 0.05, 0.26 + r2 * 0.08, 0.45 + r2 * 0.08);
+      c.setHSL(0.31 + r1 * 0.05, 0.24 + r2 * 0.08, 0.42 + r2 * 0.08);
       break;
     case Species.Birch:
       if (r3 < 0.07) c.setHSL(0.13 + r1 * 0.03, 0.58, 0.52);

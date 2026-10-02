@@ -491,7 +491,7 @@ export class Waterside implements WatersideHandles {
       const gh = groundHeight(m, rk.x, rk.y);
       const top = WATER_LEVEL + 0.04 + rk.r * 0.35;
       const h = (top - gh) / 0.62 / 2 + 0.02;
-      add(rk.x, (top + gh) / 2, rk.y, rk.r, Math.max(h, rk.r * 0.6), 5000 + k, 0.4 + hash2(k, 7, 903) * 0.12);
+      add(rk.x, (top + gh) / 2, rk.y, rk.r * 1.15, Math.max(h, rk.r * 0.6), 5000 + k, 0.27 + hash2(k, 7, 903) * 0.1);
       // smaller stones scattered round it
       for (let j = 0; j < 3; j++) {
         const a = hash2(k, j, 907) * 6.28;
