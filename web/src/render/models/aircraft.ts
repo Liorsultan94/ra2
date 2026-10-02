@@ -5,6 +5,7 @@ import { factionCamo, pbr, worldUV, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import { decalQuad, makeDecalMaterial, roundelCell } from './insignia';
 import type { AnimState, Model, ModelStyle, MunitionKind, MunitionModel } from './types';
+import { airPanels, unitLook } from './unittex';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -404,26 +405,28 @@ function worn<T extends THREE.Material>(m: T): T {
 const decalMat = (fog: FogOfWar | null) => worn(cmat('decal', fog, makeDecalMaterial));
 
 function skinMat(s: SkinSpec, fog: FogOfWar | null) {
-  return worn(skinMatRaw(s, fog));
+  return unitLook(worn(skinMatRaw(s, fog)), { rim: 0.8 });
 }
 function skinMatRaw(s: SkinSpec, fog: FogOfWar | null) {
   return cmat('skin' + JSON.stringify(s), fog, () => {
-    const set = s.camo ? pbr('camo', s.camo) : pbr('metalPanel', { color: 0xe4e4e4, grime: 0.15, seed: 23, divisions: 3 });
+    // flush skin panels: panel lines, rivet rows and access hatches (shared maps) under the paint
+    const pan = airPanels();
+    const set = s.camo ? pbr('camo', s.camo) : pan;
     return new THREE.MeshStandardMaterial({
       map: set.map,
-      normalMap: set.normalMap,
-      roughnessMap: set.roughnessMap,
+      normalMap: pan.normalMap,
+      roughnessMap: pan.roughnessMap,
       color: s.camo ? 0xffffff : s.color,
       metalness: s.metal ?? (s.camo ? 0.2 : 0.35),
-      roughness: s.rough ?? 0.85,
-      normalScale: new THREE.Vector2(0.6, 0.6),
+      roughness: (s.rough ?? 0.85) * 1.1,
+      normalScale: new THREE.Vector2(0.75, 0.75),
     });
   });
 }
 
 const glassMat = (hex: number, fog: FogOfWar | null) =>
   cmat('glass' + hex, fog, () => new THREE.MeshStandardMaterial({ color: hex, metalness: 0.85, roughness: 0.12, envMapIntensity: 1.6 }));
-const vcMat = (fog: FogOfWar | null) => worn(cmat('vc', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.55 })));
+const vcMat = (fog: FogOfWar | null) => unitLook(worn(cmat('vc', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.55 }))), { rim: 0.8 });
 const bladeMat = (fog: FogOfWar | null) => cmat('blade', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.6, transparent: true, opacity: 0.72 }));
 const litMat = (fog: FogOfWar | null) => cmat('lit', fog, () => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
 const strobeMat = (fog: FogOfWar | null) => cmat('strobe', fog, () => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));

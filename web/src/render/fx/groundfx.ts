@@ -54,7 +54,7 @@ export class GroundFx {
   private tokens = 0;
   private perSec: number;
   /** Reused spawn record: GpuParticles.spawn copies it into its buffer. */
-  private o: ParticleOpts = { x: 0, y: 0, z: 0, life: 1, size: 0.1 };
+  private o: ParticleOpts = { x: 0, y: 0, z: 0, life: 1, size: 0.1, color: 0 };
   /** Particles spawned by this module since the last stats() read (perf checks). */
   spawned = 0;
 

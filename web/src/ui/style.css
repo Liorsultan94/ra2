@@ -822,6 +822,40 @@ kbd {
 .title-screen.intro .menu-buttons {
   transform: translateY(18px);
 }
+/* phones in landscape: title left, buttons right, so the whole title screen fits the height */
+@media (max-height: 560px) and (orientation: landscape) {
+  .title-screen {
+    --lf: clamp(40px, 16vh, 84px);
+    flex-flow: row wrap;
+    justify-content: center;
+    gap: 10px 6vw;
+  }
+  .title-screen .logo-top,
+  .title-screen .logo-bottom {
+    font-size: var(--lf);
+  }
+  .title-screen .logo-emblem {
+    top: calc(var(--lf) * 0.85);
+    width: calc(var(--lf) * 2.05);
+  }
+  .title-screen .logo-sub {
+    font-size: 11px;
+    letter-spacing: 0.32em;
+  }
+  .title-screen .menu-buttons {
+    width: min(320px, 42vw);
+    gap: 8px;
+  }
+  .title-screen .mbtn {
+    padding: 8px 18px;
+    font-size: 17px;
+  }
+  .title-screen .menu-foot {
+    flex-basis: 100%;
+    max-width: none;
+    font-size: 11px;
+  }
+}
 .logo-top,
 .logo-bottom {
   font-size: clamp(56px, 13vw, 132px);

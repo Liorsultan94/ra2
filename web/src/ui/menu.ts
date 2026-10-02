@@ -137,7 +137,7 @@ export class MainMenu {
           <label>Difficulty<select data-o="difficulty">${opt('easy', st.difficulty, 'Easy')}${opt('normal', st.difficulty, 'Normal')}${opt('hard', st.difficulty, 'Hard')}</select></label>
           <label>Credits<select data-o="credits">${[5000, 10000, 20000].map((c) => opt(String(c), String(st.credits), '$' + c.toLocaleString('en-US'))).join('')}</select></label>
           <label>Map<select disabled><option>Frontline Crossing (2 players)</option></select></label>
-          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}</select></label>
+          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}${opt('cycle', st.tod ?? 'day', 'Dynamic cycle')}</select></label>
           <label>Weather<select data-o="weather">${opt('clear', st.weather ?? 'clear', 'Clear')}${opt('rain', st.weather ?? 'clear', 'Rain')}${opt('snow', st.weather ?? 'clear', 'Snow')}${opt('sandstorm', st.weather ?? 'clear', 'Sandstorm')}</select></label>
         </div>
         <div class="row">
@@ -236,7 +236,7 @@ function settingsHtml(st: Settings) {
       <label class="chk"><input type="checkbox" data-s="cinematic"${st.cinematic ? ' checked' : ''}> Cinematic moments (slow-motion on big missile strikes)</label>
       <label>Drone camera<select data-s="droneCam"><option value="auto"${st.droneCam !== 'off' ? ' selected' : ''}>Auto (live feed when a drone attacks)</option><option value="off"${st.droneCam === 'off' ? ' selected' : ''}>Off</option></select></label>
       <label class="chk"><input type="checkbox" data-s="xray"${st.xray !== false ? ' checked' : ''}> X-ray silhouettes (units hidden behind buildings / trees)</label>
-      <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}</select></label>
+      <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}${opt('ultra', 'Ultra (strong PCs)')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
     </div>`;

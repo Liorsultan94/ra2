@@ -18,7 +18,7 @@
       /* ---- splash: painted before any JS downloads (logic in src/ui/splash.ts) ---- */
       html,body{margin:0;height:100%;overflow:hidden;background:#050607}
       #splash{--E:min(52vh,34vw,340px);position:fixed;inset:0;z-index:1000;overflow:hidden;color:#e8e3d4;font:600 13px Rajdhani,'Segoe UI',system-ui,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:default}
-      @media (orientation:portrait){#splash{--E:min(58vw,34vh,340px)}}
+      @media (orientation:portrait){#splash{--E:min(64vw,36vh,340px)}}
       .bs-bg{position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 50% 42%,#21140f 0%,#0c0d0f 52%,#030405 100%);transition:opacity .8s ease}
       .bs-bg::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px),radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.75) 100%)}
       .bs-bg::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,rgba(216,64,44,.07) 1px,transparent 1px) 0 0/48px 48px,linear-gradient(0deg,rgba(216,64,44,.07) 1px,transparent 1px) 0 0/48px 48px;-webkit-mask:radial-gradient(ellipse at 50% 45%,#000 0,transparent 70%);mask:radial-gradient(ellipse at 50% 45%,#000 0,transparent 70%)}
@@ -54,7 +54,7 @@
       #splash.word .bs-tag{animation:spFade .6s .55s both}
       #splash.word .bs-shock{animation:spShock .7s cubic-bezier(.1,.6,.3,1) .26s}
       #splash.word .bs-main{animation:spShake .32s linear .27s}
-      .bs-load{position:absolute;left:50%;bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px),4.5vh);width:min(440px,80vw);transform:translateX(-50%);text-transform:uppercase;letter-spacing:.16em;animation:spFade .5s .25s both;transition:opacity .35s}
+      .bs-load{position:absolute;left:50%;bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px),4.5vh);width:min(440px,80vw);transform:translateX(-50%);text-transform:uppercase;letter-spacing:.16em;transition:opacity .35s}
       .bs-lines{height:48px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;font-size:11px;line-height:16px;color:#7f8a90}
       .bs-lines div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .bs-lines div::before{content:'\2713  ';color:#6fae58}

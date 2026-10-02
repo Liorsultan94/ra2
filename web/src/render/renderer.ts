@@ -22,8 +22,25 @@ import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
 import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
+import { CONTACT_LAYER, ContactShadows } from './contactshadow';
+import { CascadeSun } from './ultra/cascades';
+import { JitterRenderPass, TemporalPass } from './ultra/temporal';
 
-export type Quality = 'low' | 'medium' | 'high';
+/** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
+export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+/** The tier the scene subsystems (terrain, effects, weather, ...) are built for. */
+type BaseQuality = 'low' | 'medium' | 'high';
+
+/** Can this device run the ultra extras (float render targets for TAA history, big shadow atlas)? */
+function ultraCapable(r: THREE.WebGLRenderer): boolean {
+  try {
+    const ext = r.extensions;
+    const float = ext.has('EXT_color_buffer_half_float') || ext.has('EXT_color_buffer_float');
+    return float && r.capabilities.maxTextureSize >= 4096;
+  } catch {
+    return false;
+  }
+}
 
 /** Per-frame hook for whole-view modes (src/render/viewmodes.ts). */
 export interface ViewHook {
@@ -54,6 +71,8 @@ interface QualityStep {
   bloom: boolean;
   shadow: number;
   post: boolean;
+  /** Ultra extras (TAA + sharpen, SSR, screen-space contact shadows) on this rung. */
+  ultra: boolean;
 }
 
 export interface Visual {
@@ -165,6 +184,16 @@ export class GameRenderer {
   private gtao: GTAOPass | null = null;
   private finalPass: FinalPass | null = null;
   private tilt: TiltShiftPass | null = null;
+  // ultra quality (src/render/ultra/*): jittered scene pass, temporal resolve, cascaded sun
+  private jitterPass: JitterRenderPass | null = null;
+  private temporal: TemporalPass | null = null;
+  private csm: CascadeSun | null = null;
+  /** Soft footprint darkening under ground units and buildings (all but low quality). */
+  private contact: ContactShadows | null = null;
+  /** Base quality tier the subsystems run at ('ultra' runs as 'high' plus the extras). */
+  readonly quality: BaseQuality;
+  /** Ultra extras available (requested and supported by the device). */
+  readonly ultra: boolean;
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
   readonly outskirts: Outskirts;
@@ -207,9 +236,11 @@ export class GameRenderer {
     readonly canvas: HTMLCanvasElement,
     readonly world: World,
     viewer: number,
-    readonly quality: Quality,
+    requested: Quality,
   ) {
     this.viewer = viewer;
+    const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
+    this.quality = quality;
     const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
@@ -220,6 +251,8 @@ export class GameRenderer {
     this.renderer.shadowMap.enabled = quality !== 'low';
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
+    this.ultra = requested === 'ultra' && ultraCapable(this.renderer);
+    if (requested === 'ultra' && !this.ultra) console.warn('Ultra quality unsupported on this device (no float render targets): running High');
 
     this.scene.background = new THREE.Color(0x2a2824);
     this.perspective = !/[?&]cam=ortho\b/.test(location.search);
@@ -246,6 +279,12 @@ export class GameRenderer {
     this.sun.shadow.normalBias = 0.018;
     this.sun.shadow.radius = 2.2;
     this.scene.add(this.sun, this.sun.target);
+    if (this.ultra) {
+      // cascaded sun shadows: the directional light stays the controller (atmos / effects read it) but is hidden
+      this.csm = new CascadeSun(this.scene, this.camera, 4096);
+      this.sun.castShadow = false;
+      this.sun.visible = false;
+    }
 
     const { map } = world;
     this.fog = new FogOfWar(map.w, map.h);
@@ -254,6 +293,16 @@ export class GameRenderer {
     this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
     this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
+    if (this.ultra) {
+      // ultra: a few more dynamic fire / explosion lights than high (fx/lights.ts pool)
+      const fl = this.effects.lights as unknown as { lights?: THREE.PointLight[]; group?: THREE.Group };
+      if (Array.isArray(fl.lights) && fl.group)
+        for (let i = 0; i < 4; i++) {
+          const l = new THREE.PointLight(0xffa040, 0, 9, 1.4);
+          fl.lights.push(l);
+          fl.group.add(l);
+        }
+    }
     this.debris = new Debris(map, this.effects, this.fog);
     this.marks = new GroundMarks(map, this.fog);
     this.effects.debris = this.debris;
@@ -263,6 +312,11 @@ export class GameRenderer {
     this.scene.add(this.debris.group, this.marks.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
+    if (quality !== 'low') {
+      this.contact = new ContactShadows();
+      this.scene.add(this.contact.mesh);
+      this.camera.layers.enable(CONTACT_LAYER);
+    }
     this.chutes = new Paradrop(this.scene);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
@@ -270,14 +324,19 @@ export class GameRenderer {
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0;
+    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0; // ultra: per cascade
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
     const post = quality !== 'low';
     // ambient occlusion: always on high; on medium only for desktops (phones spend the budget on resolution)
     const ao = quality === 'high' || (quality === 'medium' && !coarse);
-    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post };
+    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post, ultra: this.ultra };
+    // ultra sheds its extras first (sharper shadows, then TAA / SSR), then walks the normal high ladder
+    if (this.ultra) {
+      this.ladder.push(step, (step = { ...step, shadow: 2048 }));
+      step = { ...step, shadow, ultra: false };
+    }
     for (const pr of prs) this.ladder.push((step = { ...step, pr }));
     if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
     if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
@@ -288,19 +347,24 @@ export class GameRenderer {
     this.adaptive = !/[?&]adapt=0\b/.test(location.search);
 
     if (post) {
-      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0 });
+      // ultra: the scene buffer keeps its depth (TAA reprojection, SSR, contact shadows, GTAO without a normal pass)
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0, depthTexture: this.ultra ? new THREE.DepthTexture(1, 1) : null });
       this.composer = new EffectComposer(this.renderer, target);
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      if (this.ultra) this.composer.addPass((this.jitterPass = new JitterRenderPass(this.scene, this.camera)));
+      else this.composer.addPass(new RenderPass(this.scene, this.camera));
       if (ao) {
         try {
           this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
           this.gtao.blendIntensity = 0.8;
-          this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1 });
+          this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1, ...(this.ultra ? { samples: 24 } : {}) });
           this.composer.addPass(this.gtao);
+          const g = this.gtao;
+          if (this.jitterPass) this.jitterPass.onDepth = (d) => g.setGBuffer(d);
         } catch {
           this.gtao = null;
         }
       }
+      if (this.jitterPass) this.composer.addPass((this.temporal = new TemporalPass(this.jitterPass, this.camera, this.fog.uniforms.fogNoise.value)));
       this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9);
       this.composer.addPass(this.bloom);
       this.finalPass = new FinalPass();
@@ -364,8 +428,17 @@ export class GameRenderer {
     if (this.gtao) this.gtao.enabled = s.gtao;
     if (this.bloom) this.bloom.enabled = s.bloom;
     this.usePost = !!this.composer && s.post;
-    this.effects.budget = 1 - 0.45 * (level / Math.max(1, this.ladder.length - 1));
-    if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
+    // ultra rungs hint a bigger particle budget
+    this.effects.budget = (s.ultra ? 1.3 : 1) - 0.45 * (level / Math.max(1, this.ladder.length - 1));
+    if (this.jitterPass) this.jitterPass.jitter = s.ultra;
+    if (this.temporal) {
+      if (this.temporal.enabled !== s.ultra) this.temporal.reset();
+      this.temporal.enabled = s.ultra;
+    }
+    if (this.finalPass) this.finalPass.uniforms.sharpen.value = s.ultra ? 0.22 : 0;
+    if (this.csm) {
+      if (s.shadow) this.csm.setMapSize(s.shadow);
+    } else if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
       this.sun.shadow.mapSize.set(s.shadow, s.shadow);
       this.sun.shadow.map?.dispose();
       this.sun.shadow.map = null;
@@ -441,7 +514,8 @@ export class GameRenderer {
     const ca = Math.PI / 4 + this.yaw;
     this.camDir.set(Math.cos(ca) * Math.cos(elev), Math.sin(elev), Math.sin(ca) * Math.cos(elev));
     // the sun turns with the view so the scene is always lit from the upper left of the screen
-    this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    // (the dynamic day / night cycle moves the sun and moon across the sky: atmos.sunBase)
+    this.sunDir.copy(this.atmos?.sunBase ?? SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
     this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
     this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
     const D = this.camDir;
@@ -484,6 +558,12 @@ export class GameRenderer {
    * while panning.
    */
   private fitShadow(ty: number) {
+    if (this.csm) {
+      this.csm.sync(this.sun);
+      this.csm.fit(this.camera, this.target, ty, this.sunDir, this.sunRight, this.sunUp, 18 + BASE_VIEW / this.zoom);
+      if (this.temporal) this.temporal.sunDir.copy(this.sunDir);
+      return;
+    }
     if (!this.sun.castShadow) return;
     const R = this.sunRight;
     const U = this.sunUp;
@@ -710,6 +790,29 @@ export class GameRenderer {
   }
 
   private airShadows = new AirShadows();
+
+  /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
+  private addContact(e: Entity, v: Visual) {
+    const c = this.contact!;
+    const m = v.model;
+    const root = m.root;
+    const map = this.world.map;
+    const sz = m.size;
+    if (e.kind === 'building') {
+      const bd = buildingDef(e.def);
+      const hl = Math.min(bd.w * 0.5, sz ? sz.x * 0.5 : bd.w * 0.45) * 0.96;
+      const hw = Math.min(bd.h * 0.5, sz ? sz.z * 0.5 : bd.h * 0.45) * 0.96;
+      c.add(map, root.position.x, root.position.z, root.rotation.y, hl, hw, 0.3, 0.5 * Math.min(1, v.anim.built * 2));
+      return;
+    }
+    if (unitDef(e.def).air) return;
+    const p = root.position;
+    const above = p.y - standHeight(map, p.x, p.z);
+    if (above > 0.6) return;
+    const fade = Math.min(1, 1 - above / 0.6);
+    if (m.infantry) c.add(map, p.x, p.z, root.rotation.y, 0.08, 0.08, 0.15, 0.45 * fade);
+    else c.add(map, p.x, p.z, 0, (sz ? sz.x * 0.5 : 0.4) * 0.84, (sz ? sz.z * 0.5 : 0.25) * 0.9, 0.24, 0.55 * fade, root.quaternion);
+  }
   private yAxis = new THREE.Vector3(0, 1, 0);
 
   private legacyAnim(m: Model, s: AnimState) {
@@ -726,6 +829,7 @@ export class GameRenderer {
     const w = this.world;
     const seen = new Set<number>();
     this.airShadows.begin(this.scene);
+    this.contact?.begin();
     this.chutes.begin();
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
@@ -813,8 +917,10 @@ export class GameRenderer {
         for (const r of v.model.recoil) r.position.x = (r.userData.baseX ??= r.position.x) - v.recoil * 0.12;
       }
       this.updateRing(e, v, d);
+      if (vis && this.contact) this.addContact(e, v);
     }
     this.airShadows.end();
+    this.contact?.end();
     this.chutes.end(dt, this.time);
     for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
   }
@@ -836,7 +942,14 @@ export class GameRenderer {
         const g = m.trackGauge;
         this.marks.print(p.x + px * g, p.z + pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled);
         this.marks.print(p.x - px * g, p.z - pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled);
-        if (Math.random() < 0.35) this.effects.dust(p.x - fx * 0.4, p.y, p.z - fz * 0.4, 0.8);
+        this.effects.trackDust(p.x, p.z, fx, fz, v.speed, g, !!m.wheeled, m.size?.x, m.size?.z);
+      }
+    } else if (m.infantry && !e.para && moved > 0) {
+      // boot prints (snow / mud / sand), alternating feet
+      v.trackAcc += moved;
+      if (v.trackAcc >= 0.15) {
+        v.trackAcc %= 0.15;
+        this.marks.footstep(p.x, p.z, -yaw, Math.floor(v.dist / 0.15) & 1 ? 1 : -1);
       }
     }
     // exhaust while driving
@@ -1519,6 +1632,9 @@ export class GameRenderer {
   dispose() {
     this.disposed = true;
     this.atmos.dispose();
+    this.temporal?.dispose();
+    this.contact?.dispose();
+    this.csm?.dispose();
     this.renderer.dispose();
     this.composer?.dispose();
   }

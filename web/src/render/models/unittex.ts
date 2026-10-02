@@ -142,8 +142,13 @@ function plateAt(u: number, v: number, o: Plate) {
   // 4 x 3 plates per repeat, every other row offset (welded hull / turret plates)
   const row = Math.floor(v * 3);
   const uu = u + (row % 2) * 0.125;
-  const su = lineDist(uu, 4);
-  const sv = lineDist(v, 3);
+  // irregular plates: drop some seam segments so it never reads as a regular grid
+  const ci = Math.floor(uu * 4 + 0.5);
+  const ri = Math.floor(v * 3 + 0.5);
+  const vOn = hash(ci & 3, row % 3, 41) > 0.3 ? 1 : 0;
+  const hOn = hash(Math.floor(uu * 4) & 3, ri % 3, 43) > 0.35 ? 1 : 0;
+  const su = vOn ? lineDist(uu, 4) : 1;
+  const sv = hOn ? lineDist(v, 3) : 1;
   const seam = Math.min(su, sv);
   // bevelled plate edge -> groove
   const groove = 1 - sstep(0.0015, 0.0045, seam);
@@ -162,14 +167,14 @@ function plateAt(u: number, v: number, o: Plate) {
   // chipping: noisy, concentrated along seams and bolt heads
   const nearEdge = 1 - sstep(0.004, 0.022, seam);
   const chipN = fbm(u, v, 32, 17, 3);
-  const chip = clamp01((chipN - 0.62 + nearEdge * 0.22 + bolt * 0.3) * 6) * (0.55 + 0.45 * nearEdge);
-  const speck = hash(Math.floor(u * 512), Math.floor(v * 512), 19) > 0.992 ? 1 : 0;
+  const chip = clamp01((chipN - 0.7 + nearEdge * 0.2 + bolt * 0.3) * 6) * (0.45 + 0.55 * nearEdge);
+  const speck = hash(Math.floor(u * 512), Math.floor(v * 512), 19) > 0.996 ? 1 : 0;
   // grime streaks running down from the horizontal seams (v grows downward on side faces)
   const below = frac(v * 3);
   const streak = clamp01((fbm(u * 1.0, v * 0.08, 40, 23, 3) - 0.5) * 3.2) * (1 - sstep(0.0, 0.7, below));
   const blot = clamp01((fbm(u, v, 3, 29, 4) - 0.5) * 2.4);
   o.h = 0.5 + bevel * 0.18 - groove * 0.32 + bolt * 0.32 + boltRing * 0.05 + weld * 0.12 + grain * 0.035 + dent * 0.06 - Math.max(chip, speck) * 0.05;
-  o.ao = Math.max(groove * 0.85, boltRing * 0.4);
+  o.ao = Math.max(groove * 0.6, boltRing * 0.25);
   o.chip = Math.max(chip, speck * 0.8);
   o.edge = (1 - sstep(0.0045, 0.009, seam)) * (1 - groove) * 0.8 + bolt * 0.5;
   o.grime = clamp01(streak * 0.7 + blot * 0.35);
@@ -338,7 +343,7 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         const t = clamp01((m - 0.35) * 1.6);
         const base = cols[0];
         const alt = t < 0.5 ? cols[1] : cols[3];
-        const k = Math.abs(t - 0.5) * 0.5;
+        const k = Math.abs(t - 0.5) * 0.3;
         col = [base[0] + (alt[0] - base[0]) * k, base[1] + (alt[1] - base[1]) * k, base[2] + (alt[2] - base[2]) * k];
       } else {
         // 2x2 supersample the hard pattern edges
@@ -359,10 +364,10 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
       }
       // plate detail: seams, edge wear, chipping to primer, grime streaks
-      const k = Math.max(0.3, 1 - p.ao * 0.5 - p.grime * 0.14) + p.edge * 0.1;
+      const k = Math.max(0.3, 1 - p.ao * 0.45 - p.grime * 0.12) + p.edge * 0.07;
       for (let j = 0; j < 3; j++) {
         let ch = col[j] * k;
-        ch = ch * (1 - p.chip * 0.7) + PRIMER[j] * p.chip * 0.7;
+        ch = ch * (1 - p.chip * 0.6) + PRIMER[j] * p.chip * 0.6;
         c[i * 3 + j] = ch;
       }
     }
@@ -567,7 +572,7 @@ export function unitLook<T extends THREE.Material>(m: T, cfg: LookCfg): T {
       fs = fs.replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        if (vWDirt < -0.5) totalEmissiveRadiance += diffuseColor.rgb * 0.55;`,
+        if (vWDirt < -0.5) totalEmissiveRadiance += diffuseColor.rgb * 0.3;`,
       );
     }
     shader.fragmentShader = fs;

@@ -12,6 +12,8 @@ import { Fireballs } from './fx/fireball';
 import { GodRays } from './fx/godrays';
 import { GpuParticles, particleUniforms, type ParticleOpts } from './fx/gpuparticles';
 import type { GroundMarks } from './marks';
+import { GroundFx } from './fx/groundfx';
+import { WX } from './wxuniforms';
 
 export type { ParticleOpts } from './fx/gpuparticles';
 
@@ -146,6 +148,8 @@ export class Effects {
   readonly shaker = new CameraShake();
   readonly tracers: Tracers;
   readonly flyers: Flyers;
+  /** Surface-aware dust / mud / snow from vehicles, muzzle blasts and rotor wash (fx/groundfx.ts). */
+  readonly ground: GroundFx;
   /** Screen-space heat haze / shockwaves (medium / high only, created by enableHaze). */
   haze: HazeField | null = null;
   private grass: GrassFires | null = null;
@@ -192,6 +196,16 @@ export class Effects {
       groundAt: (x: number, z: number) => this.groundAt(x, z),
     };
     this.flyers = new Flyers(sink, quality === 'low' ? 40 : quality === 'medium' ? 80 : 140);
+    this.ground = new GroundFx(
+      {
+        smoke: (o) => this.smokeSys.spawn(o),
+        map: () => this.map,
+        paved: (x, z) => this.marks?.isPaved(x, z) ?? false,
+        groundAt: (x, z) => this.groundAt(x, z),
+        rate: () => this.rate,
+      },
+      quality,
+    );
     this.group.add(this.fire.points, this.smokeSys.points, this.lights.group, this.tracers.mesh);
     scene.add(this.group);
   }
@@ -418,14 +432,16 @@ export class Effects {
       const sp = this.rand(2, 7) * Math.sqrt(S);
       this.fire.spawn({ x, y: y + 0.1, z, vx: Math.cos(a) * sp, vy: this.rand(1, 6) * Math.sqrt(S), vz: Math.sin(a) * sp, life: this.rand(0.3, 0.9), size: this.rand(0.04, 0.08), color: 0xffe6a0, colorEnd: 0xff4000, gravity: 9, drag: 0.6 });
     }
-    // 4. dirt column / spray (ground bursts only)
+    // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white)
+    const snow = WX.wxSnow.value > 0.3;
     if (!airborne && p.dirt > 0) {
       const n = this.q(Math.round(10 * p.dirt));
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const r = this.rand(0, 0.25) * S;
         const up = this.rand(2.5, 6) * Math.sqrt(p.dirt);
-        this.smokeSys.spawn({ x: x + Math.cos(a) * r, y: ground + 0.05, z: z + Math.sin(a) * r, vx: Math.cos(a) * this.rand(0.3, 1.4), vy: up, vz: Math.sin(a) * this.rand(0.3, 1.4), life: this.rand(0.8, 1.6), size: this.rand(0.15, 0.3) * S, sizeEnd: this.rand(0.5, 0.9) * S, color: 0x4a3a28, colorEnd: 0x7a6a52, alpha: 0.85, gravity: 6, drag: 0.8 });
+        const sn = snow && i % 2 === 0;
+        this.smokeSys.spawn({ x: x + Math.cos(a) * r, y: ground + 0.05, z: z + Math.sin(a) * r, vx: Math.cos(a) * this.rand(0.3, 1.4), vy: up, vz: Math.sin(a) * this.rand(0.3, 1.4), life: this.rand(0.8, 1.6), size: this.rand(0.15, 0.3) * S, sizeEnd: this.rand(0.5, 0.9) * S, color: sn ? 0xe6ecf4 : 0x4a3a28, colorEnd: sn ? 0xf4f7fa : 0x7a6a52, alpha: 0.85, gravity: 6, drag: 0.8 });
       }
     }
     // 5. smoke: billowing cloud + optional column (drifts with the wind)
@@ -463,7 +479,7 @@ export class Effects {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
         const sp = p.ring * this.rand(2.2, 3.2);
-        this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.55, drag: 2.8 });
+        this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: snow ? 0xe8eef4 : 0x9a8a6c, colorEnd: snow ? 0xf6f8fa : 0xb4a688, alpha: 0.55, drag: 2.8 });
       }
       this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.3, 0xffd8a0, true, 0.14);
       // refraction shockwave racing over the ground
@@ -599,6 +615,25 @@ export class Effects {
       this.flashLight(p.x, p.y, p.z, 2.5 * scale, 0xffb060, 0.08);
       if (this.haze && scale > 1.2) this.haze.heat(p.x + dir.x * 0.3, p.y, p.z + dir.z * 0.3, 0.6 * scale, 0.35, 0.004, 0.3);
     } else this.flashLight(p.x, p.y, p.z, 1.6 * scale, 0xffc070, 0.05);
+    // the blast hits the ground under / ahead of the muzzle (guns from autocannon up; not from the air)
+    if (scale >= 0.5 && this.map) {
+      const g = this.groundAt(p.x, p.z);
+      if (p.y - g < 1.1) {
+        this.ground.muzzleBlast(p.x, p.z, dir.x, dir.z, scale, this.blastMark);
+        if (this.haze && scale >= 1.2) this.haze.ring(p.x + dir.x * 0.4 * scale, g + 0.08, p.z + dir.z * 0.4 * scale, 1.1 * scale, 0.3, 0.006, true);
+      }
+    }
+  }
+
+  private blastMark = (x: number, z: number, r: number) => this.marks?.blastAt(x, z, r);
+
+  /**
+   * Dust / mud / snow thrown up behind a moving ground vehicle (one call per
+   * print segment): (fx, fz) forward, speed tiles/s, gauge half track spacing,
+   * len / wid hull size.
+   */
+  trackDust(x: number, z: number, fx: number, fz: number, speed: number, gauge: number, wheeled: boolean, len = 0.8, wid = 0.5) {
+    this.ground.vehicle(x, z, fx, fz, speed, gauge, wheeled, len, wid);
   }
 
   /** Launch signature for a missile / rocket at position p, flying along dir. */
@@ -846,13 +881,7 @@ export class Effects {
 
   /** Rotor downwash: a ring of dust blown outwards on the ground. strength 0..1 (lower = stronger). */
   rotorWash(x: number, g: number, z: number, strength: number) {
-    const water = this.isWater(x, z);
-    const n = Math.max(1, Math.round(3 * strength * this.budget));
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = this.rand(1.4, 2.4) * (0.5 + strength * 0.5);
-      this.smokeSys.spawn({ x: x + Math.cos(a) * 0.3, y: g + 0.04, z: z + Math.sin(a) * 0.3, vx: Math.cos(a) * sp, vy: this.rand(0.05, 0.25), vz: Math.sin(a) * sp, life: this.rand(0.6, 1.1), size: 0.12, sizeEnd: 0.55, color: water ? 0xe4ecf0 : 0xa08e70, colorEnd: water ? 0xf2f6f8 : 0xbcae90, alpha: 0.4 * strength, drag: 2.2 });
-    }
+    this.ground.rotorWash(x, g, z, strength);
   }
 
   /** Ejected shell casing (brass) from (x,y,z), thrown towards (sx, sz). */
@@ -1005,6 +1034,7 @@ export class Effects {
       if (b.t <= 0) this.burns.splice(i, 1);
     }
     this.flyers.update(dt);
+    this.ground.update(dt);
     this.grass?.update(dt);
     this.fireballs?.update(dt);
     this.tracers.update(dt);
@@ -1049,6 +1079,7 @@ export class Effects {
       grassFires: this.grass?.active ?? 0,
       fireballs: this.fireballs?.active ?? 0,
       trauma: Math.round(this.shaker.trauma * 100) / 100,
+      groundFx: this.ground.spawned,
     };
   }
 }

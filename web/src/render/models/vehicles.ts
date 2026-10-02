@@ -666,13 +666,8 @@ class Bld {
     this.extraTris += (geo.attributes.position.count / 3) * entries.length;
     return im;
   }
-  /**
-   * Air-recognition panel (VS-17 style) in the team colour on the turret roof
-   * (or the rear deck): a flat, unobstructed spot is found by ray casting the
-   * unmerged parts, so it reads from above at RTS zoom whatever the design.
-   */
-  private idPanel() {
-    if (this.noIdPanel) return;
+  /** Ray-cast probe over the unmerged parts (template build time only). */
+  private probe() {
     this.root.updateMatrixWorld(true);
     const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
     const meshes: THREE.Mesh[] = [];
@@ -688,7 +683,6 @@ class Bld {
           const m = new THREE.Mesh(g, tmpMat);
           m.matrixAutoUpdate = false;
           m.matrixWorld.copy(p.g.matrixWorld);
-          m.userData.bk = key;
           meshes.push(m);
           if (!skipIt && key === 's' + CAMO) list.push(m);
         }
@@ -704,60 +698,160 @@ class Bld {
       return h.length ? h[0] : null;
     };
     const tur = this.parts.find((p) => tagged(p.g, 'turret') && (own.get(p)?.length ?? 0) > 0);
-    const targets: { p: Part; rear: boolean }[] = [];
-    if (tur) targets.push({ p: tur, rear: false });
-    targets.push({ p: this.body, rear: true });
-    for (const { p, rear } of targets) {
-      const camo = own.get(p) ?? [];
-      if (!camo.length) continue;
-      const set = new Set<THREE.Object3D>(camo);
+    const boxOf = (p: Part) => {
       const bb = new THREE.Box3();
-      for (const m of camo) {
+      for (const m of own.get(p) ?? []) {
         m.geometry.computeBoundingBox();
         bb.union(m.geometry.boundingBox!.clone().applyMatrix4(m.matrixWorld));
       }
-      const L = bb.max.x - bb.min.x;
-      const W = bb.max.z - bb.min.z;
-      if (L < 0.12 || W < 0.1) continue;
-      for (const k of [1, 0.75, 0.55]) {
-        const pl = Math.min(0.075, L * 0.28) * k;
-        const pw = Math.min(0.17, W * 0.6) * k;
-        const xs: number[] = [];
-        const x0 = bb.min.x + pl / 2 + L * 0.06;
-        const x1 = rear ? bb.min.x + L * 0.45 : bb.max.x - pl / 2 - L * 0.2;
-        for (let x = x0; x <= x1; x += 0.012) xs.push(x);
-        const zc = (bb.min.z + bb.max.z) / 2;
-        for (const x of xs) {
-          for (const dz of [0, 0.02, -0.02, 0.04, -0.04]) {
-            const z = zc + dz;
-            const c = hitAt(x, z);
-            if (!c || !set.has(c.object) || !c.face) continue;
-            const n = c.face.normal.clone().transformDirection(c.object.matrixWorld);
-            if (n.y < 0.96) continue;
-            let ok = true;
-            for (const [gx, gz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0], [-0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [0.5, -0.5]]) {
-              const hc = hitAt(x + (gx * pl) / 2, z + (gz * pw) / 2);
-              if (!hc || !set.has(hc.object) || Math.abs(hc.point.y - c.point.y) > 0.0025) {
-                ok = false;
-                break;
-              }
+      return bb;
+    };
+    /** Flat spot of camo paint of part p at (x, z) with footprint (l along x, w along z); returns the root-space hit. */
+    const flat = (p: Part, x: number, z: number, l: number, w: number, tol = 0.0025) => {
+      const set = own.get(p);
+      if (!set || !set.length) return null;
+      const c = hitAt(x, z);
+      if (!c || !c.face || !set.includes(c.object as THREE.Mesh)) return null;
+      const n = c.face.normal.clone().transformDirection(c.object.matrixWorld);
+      if (n.y < 0.96) return null;
+      for (const [gx, gz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0], [-0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [0.5, -0.5]]) {
+        const hc = hitAt(x + (gx * l) / 2, z + (gz * w) / 2);
+        if (!hc || !set.includes(hc.object as THREE.Mesh) || Math.abs(hc.point.y - c.point.y) > tol) return null;
+      }
+      return c.point.clone();
+    };
+    return { tur, boxOf, flat, dispose: () => tmpMat.dispose() };
+  }
+  /**
+   * Air-recognition panel (VS-17 style) in the team colour on the turret roof
+   * (or the rear deck): a flat, unobstructed spot is found by ray casting the
+   * unmerged parts, so it reads from above at RTS zoom whatever the design.
+   */
+  private idPanel() {
+    if (this.noIdPanel) return;
+    const pr = this.probe();
+    const targets: { p: Part; rear: boolean }[] = [];
+    if (pr.tur) targets.push({ p: pr.tur, rear: false });
+    targets.push({ p: this.body, rear: true });
+    try {
+      for (const { p, rear } of targets) {
+        const bb = pr.boxOf(p);
+        if (bb.isEmpty()) continue;
+        const L = bb.max.x - bb.min.x;
+        const W = bb.max.z - bb.min.z;
+        if (L < 0.12 || W < 0.1) continue;
+        for (const k of [1, 0.75, 0.55]) {
+          const pl = Math.min(0.075, L * 0.28) * k;
+          const pw = Math.min(0.17, W * 0.6) * k;
+          const x0 = bb.min.x + pl / 2 + L * 0.06;
+          const x1 = rear ? bb.min.x + L * 0.45 : bb.max.x - pl / 2 - L * 0.2;
+          const zc = (bb.min.z + bb.max.z) / 2;
+          for (let x = x0; x <= x1; x += 0.012) {
+            for (const dz of [0, 0.02, -0.02, 0.04, -0.04]) {
+              const hit = pr.flat(p, x, zc + dz, pl, pw);
+              if (!hit) continue;
+              const lp = p.g.worldToLocal(hit);
+              p.box(pl + 0.008, 0.002, pw + 0.008, lp.x, lp.y + 0.001, lp.z, K.black);
+              p.box(pl, 0.0025, pw, lp.x, lp.y + 0.002, lp.z, this.team);
+              return;
             }
-            if (!ok) continue;
-            const lp = p.g.worldToLocal(c.point.clone());
-            p.box(pl + 0.008, 0.002, pw + 0.008, lp.x, lp.y + 0.001, lp.z, K.black);
-            p.box(pl, 0.0025, pw, lp.x, lp.y + 0.002, lp.z, this.team);
-            tmpMat.dispose();
-            return;
           }
         }
       }
+    } finally {
+      pr.dispose();
     }
-    tmpMat.dispose();
   }
   /** Skip the air-recognition panel (set by builders with no suitable roof). */
   noIdPanel = false;
+  /** Number of stowage items scattered on free flat deck / roof areas (0 = none). */
+  clutterN = 0;
+  /**
+   * Field stowage: kit bags, rolled camouflage nets / tarps, ammo boxes, jerry
+   * cans and spare track links on free, flat spots of the hull deck (outside
+   * the turret's sweep) and the turret roof. Every item is a loose piece (blown
+   * off by battle damage).
+   */
+  private clutter() {
+    if (this.clutterN <= 0) return;
+    const pr = this.probe();
+    try {
+      const reg = this.style.region;
+      const bagC = reg === 'west' ? [0x7c6a4a, 0x5a5c3c, 0x8a7a58] : reg === 'east' ? [0x4e5434, 0x5c5a3c, 0x3e4430] : reg === 'asia' ? [0x4c5636, 0x5e5e40, 0x424a32] : [0x8c7a56, 0x6c6444, 0x9a8a64];
+      const netC = reg === 'mideast' ? 0x8a7c5a : reg === 'west' && this.f !== 'germany' ? 0x76683e : 0x4a5232;
+      let seed = 0;
+      for (const ch of this.f + this.parts.length) seed = (seed * 31 + ch.charCodeAt(0)) | 0;
+      let ri = 0;
+      const rnd = () => hash01(seed + ri++ * 7919);
+      const used: THREE.Box3[] = [];
+      const free = (bx: THREE.Box3) => !used.some((u) => u.intersectsBox(bx));
+      // turret sweep radius (hull clutter must stay clear of the bustle / gun)
+      let tc: THREE.Vector3 | null = null;
+      let tr = 0;
+      if (pr.tur) {
+        tc = new THREE.Vector3().setFromMatrixPosition(pr.tur.g.matrixWorld);
+        const tb = pr.boxOf(pr.tur);
+        for (const x of [tb.min.x, tb.max.x]) for (const z of [tb.min.z, tb.max.z]) tr = Math.max(tr, Math.hypot(x - tc.x, z - tc.z));
+        tr += 0.025;
+      }
+      type Item = { l: number; w: number; put: (p: Part, x: number, y: number, z: number) => void };
+      const S = 1.3; // chunky, readable stowage (C&C3-like exaggeration)
+      const items: Item[] = [
+        // kit bag / rucksack
+        { l: 0.05 * S, w: 0.032 * S, put: (p, x, y, z) => { const c = bagC[Math.floor(rnd() * 3)]; p.cbox(0.048 * S, 0.024 * S, 0.03 * S, 0.006, x, y + 0.012 * S, z, c); p.box(0.05 * S, 0.004, 0.006, x, y + 0.02 * S, z, shade(c, 0.7)); } },
+        // rolled net / tarp across the deck (along z) with straps
+        { l: 0.036 * S, w: 0.1 * S, put: (p, x, y, z) => { p.cz(0.016 * S, 0.016 * S, 0.1 * S, x, y + 0.016 * S, z, netC, 7); for (const dz of [-0.03, 0.03]) p.cz(0.0175 * S, 0.0175 * S, 0.005, x, y + 0.016 * S, z + dz * S, K.dark, 7); } },
+        // ammo boxes, two stacked
+        { l: 0.04 * S, w: 0.026 * S, put: (p, x, y, z) => { p.box(0.038 * S, 0.02 * S, 0.024 * S, x, y + 0.01 * S, z, K.olive); p.box(0.034 * S, 0.016 * S, 0.022 * S, x + 0.002, y + 0.028 * S, z, shade(K.olive, 0.85)); p.box(0.04 * S, 0.003, 0.025 * S, x, y + 0.017 * S, z, K.dark); } },
+        // jerry cans side by side
+        { l: 0.036, w: 0.04, put: (p, x, y, z) => { jerry(p, x, y, z - 0.01, reg === 'mideast' ? 0x6a6244 : 0x4c5434); jerry(p, x, y, z + 0.01, 0x4c5434); } },
+        // spare track links
+        { l: 0.034 * S, w: 0.07 * S, put: (p, x, y, z) => { for (let i = 0; i < 2; i++) p.box(0.032 * S, 0.006 * S, 0.066 * S, x, y + 0.003 * S + i * 0.0065 * S, z + i * 0.004, K.dark); p.box(0.034 * S, 0.003, 0.004, x, y + 0.014 * S, z, mt(K.steel)); } },
+        // folded tarp
+        { l: 0.06 * S, w: 0.05 * S, put: (p, x, y, z) => { p.cbox(0.058 * S, 0.012 * S, 0.048 * S, 0.004, x, y + 0.006 * S, z, netC); p.cbox(0.044 * S, 0.008 * S, 0.036 * S, 0.003, x - 0.004, y + 0.016 * S, z + 0.002, shade(netC, 1.1)); } },
+      ];
+      const place = (p: Part, maxN: number, xmin: number, xmax: number, zs: number[], avoidTurret: boolean) => {
+        let n = 0;
+        for (let tries = 0; tries < maxN * 6 && n < maxN; tries++) {
+          const it = items[Math.floor(rnd() * items.length)];
+          const z0 = zs[Math.floor(rnd() * zs.length)];
+          // scan along x from a random start for a free flat spot
+          const span = xmax - xmin;
+          if (span <= 0) return;
+          const start = rnd();
+          for (let k = 0; k < 14; k++) {
+            const x = xmin + ((start + k / 14) % 1) * span;
+            const z = z0;
+            const bx = new THREE.Box3(new THREE.Vector3(x - it.l / 2 - 0.006, -1, z - it.w / 2 - 0.006), new THREE.Vector3(x + it.l / 2 + 0.006, 5, z + it.w / 2 + 0.006));
+            if (!free(bx)) continue;
+            if (avoidTurret && tc && Math.hypot(Math.max(Math.abs(x - tc.x) - it.l / 2, 0), Math.max(Math.abs(z - tc.z) - it.w / 2, 0)) < tr) continue;
+            const hit = pr.flat(p, x, z, it.l + 0.008, it.w + 0.008, 0.004);
+            if (!hit) continue;
+            const lp = p.g.worldToLocal(hit);
+            p.piece(1, () => it.put(p, lp.x, lp.y, lp.z));
+            used.push(bx);
+            n++;
+            break;
+          }
+        }
+      };
+      const hb = pr.boxOf(this.body);
+      if (!hb.isEmpty()) {
+        const W = hb.max.z - hb.min.z;
+        place(this.body, this.clutterN, hb.min.x + 0.04, hb.max.x - 0.04, [hb.min.z + W * 0.2, hb.max.z - W * 0.2, (hb.min.z + hb.max.z) / 2, hb.min.z + W * 0.3, hb.max.z - W * 0.3], true);
+      }
+      if (pr.tur) {
+        const tb = pr.boxOf(pr.tur);
+        const W = tb.max.z - tb.min.z;
+        place(pr.tur, Math.ceil(this.clutterN / 2), tb.min.x + 0.03, tb.min.x + (tb.max.x - tb.min.x) * 0.5, [tb.min.z + W * 0.22, tb.max.z - W * 0.22], false);
+      }
+    } finally {
+      pr.dispose();
+    }
+  }
   finish(): Tpl {
     this.idPanel();
+    this.clutter();
     let tris = this.extraTris;
     let meshes = 0;
     for (const p of this.parts) {
@@ -1664,12 +1758,15 @@ function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: numb
 // ------------------------------------------------------------- instancing
 
 const templates = new Map<string, Tpl>();
+/** Field stowage items per template key (see Bld.clutter). */
+const CLUTTER: Record<string, number> = { mbt: 7, apc: 4, arty: 4, aa: 3, laser: 3, tos: 3, ew: 2, berge: 4, missile_truck: 2 };
 
 function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld) => void): Model {
   const ck = `${key}|${style.faction}|${style.team}|${fogId(fog)}`;
   let t = templates.get(ck);
   if (!t) {
     const b = new Bld(style, fog);
+    b.clutterN = CLUTTER[key] ?? 0;
     fn(b);
     t = b.finish();
     t.key = ck;

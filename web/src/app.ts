@@ -162,7 +162,7 @@ export async function boot(splash: Splash) {
   } else {
     const g = startAttract();
     splash.stage('Compiling shaders', 0.7, 0.95);
-    await g.prewarm((k) => splash.sub(k));
+    if (!/[?&]warm=0\b/.test(location.search)) await g.prewarm((k) => splash.sub(k));
     splash.stage('Deploying forces', 0.95, 1);
     await frames(2); // first frames of the demo battle rendered
     const m = showMainMenu(false);

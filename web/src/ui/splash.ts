@@ -245,7 +245,7 @@ export class Splash {
           [em, unionRect([...title.querySelectorAll('.logo-emblem')]), 'w'],
         ]
       : [];
-    if (reduce || !title) {
+    if (reduce || !title || typeof el.animate !== 'function') {
       el.style.transition = 'opacity .5s ease';
       el.style.opacity = '0';
       title?.classList.remove('intro');
@@ -253,27 +253,28 @@ export class Splash {
       el.remove();
       return;
     }
+    // Web Animations (not timers) so the whole hand-over follows the document timeline
+    const ease = 'cubic-bezier(.65,0,.25,1)';
+    const anims: Animation[] = [el.querySelector('.bs-bg')!.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 800, easing: 'ease-in', fill: 'forwards' })];
     for (const [src, to, fit] of pairs) {
       if (!src) continue;
       const from = src.getBoundingClientRect();
       src.style.animation = 'none';
       if (!to || !from.width) {
-        src.style.transition = 'opacity .4s ease';
-        src.style.opacity = '0';
+        anims.push(src.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 400, fill: 'forwards' }));
         continue;
       }
-      const s = fit === 'h' ? to.height / from.height : to.width / from.width;
+      const k = fit === 'h' ? to.height / from.height : to.width / from.width;
       const dx = to.left + to.width / 2 - (from.left + from.width / 2);
       const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-      void src.offsetWidth;
-      src.style.transition = 'transform .8s cubic-bezier(.65,0,.25,1), opacity .38s ease .44s';
-      src.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${s.toFixed(4)})`;
-      src.style.opacity = '0';
+      const end = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${k.toFixed(4)})`;
+      anims.push(src.animate([{ transform: 'none' }, { transform: end }], { duration: 800, easing: ease, fill: 'forwards' }));
+      anims.push(src.animate([{ opacity: 1 }, { opacity: 1, offset: 0.55 }, { opacity: 0 }], { duration: 800, fill: 'forwards' }));
     }
     // the menu title fades in under the arriving lockup (crossfade)
-    await sleep(430);
+    await el.animate([{ visibility: 'visible' }, { visibility: 'visible' }], { duration: 430 }).finished.catch(() => {});
     title.classList.remove('intro');
-    await sleep(420);
+    await Promise.all(anims.map((a) => a.finished.catch(() => {})));
     el.remove();
   }
 
