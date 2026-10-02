@@ -52,10 +52,10 @@ type Shape = 'oak' | 'oval' | 'tri' | 'round' | 'lance';
 
 const hsl = (h: number, s: number, l: number, a = 1) => `hsla(${h.toFixed(1)},${s.toFixed(1)}%,${l.toFixed(1)}%,${a})`;
 
-const cache = new Map<number, THREE.CanvasTexture>();
+const cache = new Map<number, THREE.DataTexture>();
 
 /** The tree atlas, `cellPx` pixels per cell (cached per size). */
-export function treeAtlas(cellPx: number): THREE.CanvasTexture {
+export function treeAtlas(cellPx: number): THREE.DataTexture {
   const hit = cache.get(cellPx);
   if (hit) return hit;
   const S = cellPx;
@@ -395,7 +395,41 @@ export function treeAtlas(cellPx: number): THREE.CanvasTexture {
   }
   ctx.restore();
 
-  const tex = new THREE.CanvasTexture(c);
+  // Bleed each cell's average leaf colour into its transparent texels (the canvas
+  // stores them black), so mipmaps don't grow dark fringes around every leaf; rows
+  // are flipped so the canvas top is v = 1, like a CanvasTexture.
+  const W = S * GRID;
+  const src = ctx.getImageData(0, 0, W, W).data;
+  const data = new Uint8Array(W * W * 4);
+  for (let cy = 0; cy < GRID; cy++)
+    for (let cx = 0; cx < GRID; cx++) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let n = 0;
+      for (let y = cy * S; y < (cy + 1) * S; y += 2)
+        for (let x = cx * S; x < (cx + 1) * S; x += 2) {
+          const k = (y * W + x) * 4;
+          if (src[k + 3] > 200) {
+            r += src[k];
+            g += src[k + 1];
+            b += src[k + 2];
+            n++;
+          }
+        }
+      n = Math.max(1, n);
+      const avg = [r / n, g / n, b / n];
+      for (let y = cy * S; y < (cy + 1) * S; y++)
+        for (let x = cx * S; x < (cx + 1) * S; x++) {
+          const k = (y * W + x) * 4;
+          const o = ((W - 1 - y) * W + x) * 4;
+          const a = src[k + 3] / 255;
+          for (let j = 0; j < 3; j++) data[o + j] = Math.round(avg[j] * (1 - a) + src[k + j] * a);
+          data[o + 3] = src[k + 3];
+        }
+    }
+  const tex = new THREE.DataTexture(data, W, W, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.needsUpdate = true;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   tex.generateMipmaps = true;
