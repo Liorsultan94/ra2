@@ -426,15 +426,17 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   },
   {
     tile: Tile.Soil,
-    strength: 2.2,
+    strength: 1.4,
     gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
-      const pebble = clamp01((at(hi, x, y, 2, 2, 31, 7) - 0.62) * 4);
+      // compacted gravel hardstand: fine aggregate, a few larger stones, tyre-darkened patches
+      const pebble = clamp01((at(hi, x, y, 2, 2, 31, 7) - 0.6) * 4);
+      const grit = at(hi, x, y, 4, 4, 5, 9);
       const m = at(mid, x, y, 1, 1, 5, 5);
       const l = at(lo, x, y, 1, 1, 99, 9);
-      grey(o, clamp01(0.7 + (m - 0.5) * 0.25 + (l - 0.5) * 0.15 + pebble * 0.12));
-      stain(o, clamp01((l - 0.5) * 2) * 0.2, 0.5, 0.4, 0.28);
-      o.h = 0.4 + m * 0.3 + pebble * 0.3;
+      grey(o, clamp01(0.72 + (grit - 0.5) * 0.14 + (m - 0.5) * 0.1 + (l - 0.5) * 0.12 + pebble * 0.1));
+      stain(o, clamp01((l - 0.55) * 2) * 0.18, 0.5, 0.4, 0.28);
+      o.h = 0.5 + (grit - 0.5) * 0.25 + pebble * 0.25 + (m - 0.5) * 0.05;
       o.ro = 0.95;
       o.me = 0;
     },
