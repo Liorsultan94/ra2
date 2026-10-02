@@ -9,6 +9,7 @@
 
 import { DEFS, WEAPONS, buildingDef, munitionDef, unitDef } from './defs';
 import { launch } from './ballistics';
+import { canGarrisonUnit, garrisonRoom } from './garrison';
 import { standHeight } from './map';
 import { IRON_BEAM_AIR_DPT, IRON_BEAM_RADIUS, IRON_BEAM_SHOTS, IRON_BEAM_TICKS, SW_BY_FACTION, SW_INFO, type SwInfo, type SwKind } from './specialdefs';
 import { TPS, type Entity, type Player, type SuperweaponState } from './types';
@@ -314,8 +315,8 @@ function updateBeam(w: World, p: Player) {
  * Superweapon AI (a separate controller next to the main AIController): builds
  * the structure once a Battle Lab stands and the economy allows, fires offensive
  * powers at the most valuable enemy cluster, and raises the Iron Beam when a
- * strike or a swarm is inbound. Also tucks idle infantry into empty houses near
- * its own forces. Deterministic (decisions only from world state).
+ * strike or a swarm is inbound. Also tucks idle infantry into an empty house
+ * next to them. Deterministic (decisions only from world state).
  */
 export class SuperweaponAI implements Controller {
   constructor(
@@ -328,6 +329,7 @@ export class SuperweaponAI implements Controller {
     const p = w.players[this.pid];
     if (!p || p.defeated || w.over || (w.tick + this.pid * 7) % 20 !== 0) return;
     this.build(p);
+    if ((w.tick + this.pid * 7) % 200 === 0) this.garrison();
     const st = superweaponStatus(w, this.pid);
     if (st.ready) {
       const t = st.info.defensive ? this.defensiveSpot() : this.offensiveSpot();
@@ -342,6 +344,27 @@ export class SuperweaponAI implements Controller {
     for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === id) return;
     if (p.powerOut - p.powerUse < 150) return; // let the main AI add power first
     w.issue(this.pid, { type: 'produce', def: id });
+  }
+
+  /** Idle riflemen near an empty house move in (one held house at a time, so the waves keep their infantry). */
+  private garrison() {
+    const w = this.w;
+    let held = 0;
+    for (const e of w.list) if (!e.dead && e.owner === this.pid && e.kind === 'building' && buildingDef(e.def).garrison) held++;
+    if (held >= 1) return;
+    for (const h of w.list) {
+      if (h.dead || h.kind !== 'building' || h.owner >= 0 || !buildingDef(h.def).garrison) continue;
+      const room = garrisonRoom(w, h, this.pid);
+      const ids: number[] = [];
+      w.queryRadius(h.x, h.y, 7, (o) => {
+        if (ids.length >= Math.min(room, 4) || o.owner !== this.pid || o.kind !== 'unit' || o.order.type !== 'idle' || o.path) return;
+        if (canGarrisonUnit(o.def) && w.distTo(o, h) < 7) ids.push(o.id);
+      });
+      if (ids.length >= 2) {
+        w.issue(this.pid, { type: 'enter', ids, target: h.id });
+        return;
+      }
+    }
   }
 
   /** Centre of the richest enemy cluster (structures weigh most). */

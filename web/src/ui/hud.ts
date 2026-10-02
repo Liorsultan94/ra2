@@ -6,6 +6,7 @@ import type { CameoFactory } from '../render/cameo';
 import { styleFor, type GameRenderer } from '../render/renderer';
 import { flagDataUrl } from '../render/flags';
 import { SupportPower } from './support';
+import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
 
@@ -13,7 +14,7 @@ export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
   onCancel(defId: string): void;
   onTool(tool: 'repair' | 'sell' | 'menu' | 'boxselect'): void;
-  onCommand(cmd: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel'): void;
+  onCommand(cmd: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate'): void;
   onMinimap(x: number, y: number, drag: boolean): void;
   onSelectType(defId: string): void;
   onRotate(steps: number): void;
@@ -81,6 +82,8 @@ export class Hud {
   private hint!: HTMLElement;
   private toolBtns = new Map<string, HTMLElement>();
   private support!: SupportPower;
+  /** Superweapon button, countdown list and target markers (superweapons.ts). */
+  superweapons!: SuperweaponPower;
   tab: Category = 'building';
   private shownCredits = 0;
   private fogCanvas: HTMLCanvasElement;
@@ -226,6 +229,7 @@ export class Hud {
     mk('sell', 'Sell mode (X)', '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>');
     mk('boxselect', 'Box select (touch)', '<path d="M3 3h4v2H5v2H3zm14 0h4v4h-2V5h-2zM3 17h2v2h2v2H3zm16 2v-2h2v4h-4v-2zM9 3h6v2H9zm0 16h6v2H9zM3 9h2v6H3zm16 0h2v6h-2z"/>', 'touch-only');
     this.support = new SupportPower(this, tools); // airborne-drop support power
+    this.superweapons = new SuperweaponPower(this, tools); // superweapon (superweapons.ts)
 
     const tabs = el('div', 'sb-tabs', sb);
     for (const t of TABS) {
@@ -369,6 +373,7 @@ export class Hud {
     }
     this.updateSelection();
     this.support.update();
+    this.superweapons.update();
   }
 
   /** Selection details (portrait panel) + context command buttons. */
@@ -395,6 +400,7 @@ export class Hud {
         const stats: string[] = [];
         if (d.kind === 'unit' && d.harvester) stats.push(`Cargo $${e.cargo}`);
         if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
+        if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
         if (d.weapon && WEAPONS[d.weapon]) {
           const wp = WEAPONS[d.weapon];
@@ -424,7 +430,11 @@ export class Hud {
       if (units.some((u) => u.passengers.length > 0)) cmds.push(['Unload', 'D', 'deploy', ICONS.unload]);
       cmds.push(['Deselect', '', 'deselect', ICONS.deselect]);
     } else if (ownBuilding) {
-      cmds.push(['Repair', '', 'repairSel', ICONS.repair], ['Sell', '', 'sellSel', ICONS.sell], ['Deselect', '', 'deselect', ICONS.deselect]);
+      if (DEFS[ownBuilding.def].faction === 'neutral') {
+        // captured tech structure / garrisoned house: no selling
+        if (ownBuilding.passengers.length) cmds.push(['Evacuate', 'D', 'evacuate', ICONS.unload]);
+        cmds.push(['Repair', '', 'repairSel', ICONS.repair], ['Deselect', '', 'deselect', ICONS.deselect]);
+      } else cmds.push(['Repair', '', 'repairSel', ICONS.repair], ['Sell', '', 'sellSel', ICONS.sell], ['Deselect', '', 'deselect', ICONS.deselect]);
     } else {
       cmds.push(['Select Army', 'W', 'selectArmy', ICONS.army]);
     }
@@ -832,6 +842,7 @@ export class Hud {
 
   destroy() {
     this.support.destroy();
+    this.superweapons.destroy();
     this.root.remove();
     this.tooltip.remove();
   }

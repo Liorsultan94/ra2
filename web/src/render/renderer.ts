@@ -9,6 +9,7 @@ import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
+import { SuperFx } from './fx/superfx';
 import { Debris } from './debris';
 import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
@@ -177,6 +178,8 @@ export class GameRenderer {
   readonly debris: Debris;
   readonly marks: GroundMarks;
   readonly bridgeFx: BridgeFx;
+  /** Garrison window fire, house damage sync, superweapon blasts / Iron Beam dome (fx/superfx.ts). */
+  readonly superFx: SuperFx;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
   readonly target = new THREE.Vector3();
@@ -383,6 +386,7 @@ export class GameRenderer {
     }
     this.applyLevel(this.level, false);
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
+    this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -1323,6 +1327,7 @@ export class GameRenderer {
   }
 
   handleEvent(ev: SimEvent) {
+    if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
       case 'fire': {
@@ -1615,6 +1620,7 @@ export class GameRenderer {
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
+    this.superFx.update(dt, this.time);
     this.effects.update(dt);
     this.updateCamera();
     const vh = this.viewHook;
