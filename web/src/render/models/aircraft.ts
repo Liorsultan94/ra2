@@ -2825,10 +2825,10 @@ class Vapor {
     this.mesh = mesh;
     root.add(mesh);
     const span = Math.abs(tips[0].position.z - tips[1].position.z);
-    this.hw = Math.max(0.006, span * 0.022);
+    this.hw = Math.max(0.01, span * 0.035);
   }
 
-  update(dt: number, target: number, bank: THREE.Object3D) {
+  update(dt: number, target: number) {
     this.level += (target - this.level) * Math.min(1, dt * 6);
     if (this.level < 0.01 && !this.live) return;
     if (dt <= 0) return;
@@ -2842,8 +2842,10 @@ class Vapor {
       this.str.copyWithin(1, 0, VN - 1);
       this.n = Math.min(VN, this.n + 1);
     }
-    // head sample = current tips, ribbon width across the (banked) span
-    _vl.setFromMatrixColumn(bank.matrixWorld, 2).normalize().multiplyScalar(this.hw);
+    // head sample = current tips; ribbon width kept horizontal (across the heading) so the top-down camera sees it flat
+    _vl.setFromMatrixColumn(this.root.matrixWorld, 2);
+    _vl.y = 0;
+    _vl.normalize().multiplyScalar(this.hw);
     for (let t = 0; t < 2; t++) {
       _vw.setFromMatrixPosition(this.tips[t].matrixWorld);
       const o = t * VN * 6;
@@ -3036,7 +3038,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       // wingtip vortices in hard turns (and hard pull-ups) at speed
       const turn = Number.isFinite(s.turn) ? Math.abs(s.turn) : 0;
       const g = clamp((turn - 0.4) / 0.45, 0, 1) + clamp((Math.abs(climb) - 1.2) / 1.5, 0, 0.6);
-      vapor.update(dt, s.dead > 0 ? 0 : clamp(g, 0, 1) * clamp(sp / 3, 0, 1), b);
+      vapor.update(dt, s.dead > 0 ? 0 : clamp(g, 0, 1) * clamp(sp / 3, 0, 1));
     }
   };
   // initial state
