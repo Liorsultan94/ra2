@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash2 } from '../sim/rng';
-import { WX, WX_PARS, WX_SURFACE } from './wxuniforms';
+import { MIST_GLSL, WX, WX_PARS, WX_SURFACE, WXM } from './wxuniforms';
 
 /** Tileable 4-channel value-noise fbm texture (each channel an independent field). */
 function makeNoiseTexture(size = 128): THREE.DataTexture {
@@ -65,6 +65,7 @@ uniform vec3 fogView;
 uniform vec3 hazeColor;
 uniform vec4 hazeParams;
 uniform float cloudAmount;
+${MIST_GLSL}
 
 // 0 = unexplored, 0.5 = explored, 1 = visible; edges are wobbled by noise
 float fogSample( vec3 p ) {
@@ -89,6 +90,8 @@ vec3 fogShade( vec3 col, vec3 p ) {
   float haze = clamp( ( depth - hazeParams.x ) / ( hazeParams.y - hazeParams.x ), 0.0, 1.0 ) * hazeParams.z;
   haze = max( haze, smoothstep( 6.0, hazeParams.w, outside ) * 0.7 );
   col = mix( col, hazeColor, haze );
+  // low ground fog / valley mist (wxuniforms.ts; zero = skipped)
+  col = mistShade( col, p );
   col *= 1.0 - smoothstep( hazeParams.w * 0.6, hazeParams.w * 1.6, outside ) * 0.55;
   if ( fogEnabled > 0.5 ) {
     float v = fogSample( p );
@@ -134,7 +137,7 @@ export class FogOfWar {
     hazeColor: { value: THREE.Color };
     hazeParams: { value: THREE.Vector4 };
     cloudAmount: { value: number };
-  };
+  } & typeof WXM;
   private data: Uint8Array;
   private cur: Float32Array;
 
@@ -161,6 +164,8 @@ export class FogOfWar {
       // depth haze start/end (world units past the view centre), max amount, outskirts fade distance
       hazeParams: { value: new THREE.Vector4(4, 80, 0.38, 52) },
       cloudAmount: { value: 0.32 },
+      // ground fog / mist (shared objects: the atmosphere drives them)
+      ...WXM,
     };
   }
 

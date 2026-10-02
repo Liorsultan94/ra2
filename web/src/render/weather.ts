@@ -7,9 +7,23 @@ import { groundHeight, type GameMap } from '../sim/map';
  * seed; its position is seed * box + velocity * time, wrapped into the box
  * around the view centre in world space, so panning never pops. One
  * instanced draw call; the count scales with quality.
+ *
+ * Dynamic weather (weathercycle.ts) keeps one instance of this alive for the
+ * whole battle: setKind / setIntensity / setWind only change uniforms and the
+ * drawn instance count, so nothing recompiles while the weather turns. The
+ * travelled distance is integrated on the CPU (uOff) so wind shifts don't
+ * make the particles jump.
  */
 
 const KIND = { rain: 0, snow: 1, sandstorm: 2 } as const;
+export type FallKind = keyof typeof KIND;
+
+/** Per-kind look: fall velocity (calm air), particle size, sway, colour, opacity, count at high quality. */
+const LOOK: Record<FallKind, { vel: [number, number, number]; size: [number, number]; sway: number; color: [number, number, number]; alpha: number; n: number }> = {
+  rain: { vel: [1.4, -15, 0.7], size: [0.022, 0.5], sway: 0.6, color: [0.55, 0.6, 0.68], alpha: 0.2, n: 6500 },
+  snow: { vel: [0.35, -1.0, 0.18], size: [0.075, 0], sway: 0.45, color: [0.95, 0.97, 1], alpha: 0.85, n: 4500 },
+  sandstorm: { vel: [9, -0.35, 3.2], size: [0.03, 0.9], sway: 0.6, color: [0.78, 0.56, 0.32], alpha: 0.15, n: 4200 },
+};
 
 const VERT = /* glsl */ `
 attribute vec4 aSeed;
@@ -17,6 +31,7 @@ uniform float uTime;
 uniform vec3 uCenter;
 uniform vec3 uBox;
 uniform vec3 uVel;
+uniform vec3 uOff;
 uniform vec2 uSize;
 uniform float uKind;
 uniform float uSway;
@@ -24,7 +39,7 @@ varying vec2 vUv;
 varying float vA;
 void main() {
   float spd = 0.75 + 0.5 * aSeed.w;
-  vec3 p = aSeed.xyz * uBox + uVel * spd * uTime;
+  vec3 p = aSeed.xyz * uBox + uOff * spd;
   if (uKind > 0.5) {
     float ph = uTime * (0.5 + aSeed.w) + aSeed.x * 40.0;
     p.x += sin(ph) * uSway;

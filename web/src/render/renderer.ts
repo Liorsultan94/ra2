@@ -31,6 +31,8 @@ import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import { JitterRenderPass, TemporalPass } from './ultra/temporal';
+import { PerfHud } from './perf/hud';
+import { PerfProbe } from './perf/probe';
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
@@ -260,6 +262,9 @@ export class GameRenderer {
   private upNeed = 3;
   private lastUpAt = -1e9;
   private lastFt = 0;
+  /** Draw call / triangle / CPU breakdown per pass and category (debug + benchmark; inactive until enablePerf()). */
+  readonly perf: PerfProbe;
+  private perfHud = new PerfHud();
   selection = new Set<number>();
   /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
   hover = -1;
@@ -291,6 +296,7 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x2a2824);
     this.perspective = !/[?&]cam=ortho\b/.test(location.search);
     this.camera = this.perspective ? new THREE.PerspectiveCamera(PERSP_FOV, 1, 0.5, 400) : new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
+    this.perf = new PerfProbe(this.renderer, this.scene, this.camera);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -417,12 +423,19 @@ export class GameRenderer {
       this.finalPass.rays = this.effects.enableGodRays(this.camera);
     }
     this.applyLevel(this.level, false);
+    this.effects.group.name = 'effects';
+    this.debris.group.name = 'debris';
+    this.marks.group.name = 'marks';
+    this.bridgeFx.group.name = 'bridges';
+    this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
     if (ambientEnabled()) {
       this.ambient = new AmbientLife(this);
       this.scene.add(this.ambient.group);
+      this.ambient.group.name = 'ambient';
     }
+    if (/[?&]perf=1\b/.test(location.search)) this.enablePerf();
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -499,6 +512,27 @@ export class GameRenderer {
   perfStats() {
     const s = this.ladder[this.level];
     return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+  }
+
+  /** Start the per-pass / per-category / per-system cost probe (src/render/perf/probe.ts). */
+  enablePerf() {
+    const sys = (obj: object, fn: string) => ({ obj, fn });
+    this.perf.enable({
+      'sync entities': sys(this, 'syncEntities'),
+      'wrecks': sys(this, 'updateWrecks'),
+      'projectiles': sys(this, 'syncProjectiles'),
+      'readability': sys(this, 'updateReadability'),
+      'outline+icons draw': sys(this.readability, 'renderOverlays'),
+      'camera+shadow fit': sys(this, 'updateCamera'),
+      'atmos': sys(this.atmos, 'update'),
+      'effects': sys(this.effects, 'update'),
+      'terrain': sys(this.terrain, 'update'),
+      'bridges': sys(this.bridgeFx, 'update'),
+      'superfx': sys(this.superFx, 'update'),
+      'fog': sys(this.fog, 'update'),
+      ...(this.ambient ? { ambient: sys(this.ambient, 'update') } : {}),
+      'frame total': sys(this, 'render'),
+    });
   }
 
   /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
@@ -817,6 +851,7 @@ export class GameRenderer {
   private makeVisual(e: Entity): Visual {
     const d = DEFS[e.def];
     const model = createModel(d.model, styleFor(this.world, e.owner), this.fog);
+    model.root.userData.perfCat = e.kind === 'building' ? 'building' : d.category === 'infantry' ? 'infantry' : d.category === 'air' ? 'aircraft' : 'vehicle';
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
     this.scene.add(model.root);
     return {
@@ -1750,6 +1785,9 @@ export class GameRenderer {
     this.readability.renderOverlays(this.renderer, this.scene, this.camera);
     vh?.after(dt);
     this.adaptQuality();
+    this.perf.frame();
+    const st = this.ladder[this.level];
+    this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1 });
   }
 
   /** Icons / outlines / route arrows (after the camera so icon fades use this frame's view). */
@@ -1771,6 +1809,7 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    this.perfHud.dispose();
     this.atmos.dispose();
     this.readability.dispose();
     this.temporal?.dispose();
