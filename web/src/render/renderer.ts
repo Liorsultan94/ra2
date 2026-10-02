@@ -27,7 +27,9 @@ import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
+import { Sky } from './sky';
 import { AmbientLife, ambientEnabled } from './ambient';
+import { WaterFx } from './fx/waterfx';
 import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
@@ -221,6 +223,8 @@ export class GameRenderer {
   readonly superFx: SuperFx;
   /** Civilian traffic, livestock and birds (src/render/ambient, visual only). */
   readonly ambient: AmbientLife | null = null;
+  /** River weather, ring waves, fuel slicks, floating debris (fx/waterfx.ts, visual only). */
+  readonly river: WaterFx;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
   /** Phone readability: strategic icons, unit outlines, move-route arrows (src/render/readability.ts). */
@@ -247,6 +251,8 @@ export class GameRenderer {
   readonly outskirts: Outskirts;
   /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
   readonly atmos: Atmosphere;
+  /** Physical sky (src/render/sky.ts; medium / high). */
+  sky: Sky | null = null;
   /** Live unit / building visuals by entity id (read by the view modes in viewmodes.ts). */
   readonly visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
@@ -325,7 +331,8 @@ export class GameRenderer {
     this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
     void loadSkyEnvironment(this.renderer).then((env) => {
-      if (!env || this.disposed) return;
+      // (high quality captures its environment from the physical sky instead: sky.ts)
+      if (!env || this.disposed || this.sky?.envCapture) return;
       this.scene.environment?.dispose();
       this.scene.environment = env;
       this.scene.environmentIntensity = 0.42;
@@ -456,7 +463,13 @@ export class GameRenderer {
     this.bridgeFx.group.name = 'bridges';
     this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
+    // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
+    if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
+      this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
+      this.scene.add(this.sky.mesh);
+    }
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
+    this.river = new WaterFx({ world, terrain: this.terrain, effects: this.effects, atmos: this.atmos, fog: this.fog, scene: this.scene, quality, target: this.target, visibleAt: (x, y) => this.visibleAt(x, y) });
     this.life = new UnitLife(this.scene, this.effects, world, (x, z) => standHeight(world.map, x, z), (id) => this.visuals.get(id)?.model);
     this.deployFx = new DeployFx(this.scene, this.effects, (id) => !!world.get(id));
     if (ambientEnabled()) {
@@ -555,6 +568,7 @@ export class GameRenderer {
       'camera+shadow fit': sys(this, 'updateCamera'),
       'atmos': sys(this.atmos, 'update'),
       'effects': sys(this.effects, 'update'),
+      'water': sys(this.river, 'update'),
       'terrain': sys(this.terrain, 'update'),
       'bridges': sys(this.bridgeFx, 'update'),
       'superfx': sys(this.superFx, 'update'),
@@ -1587,6 +1601,7 @@ export class GameRenderer {
 
   handleEvent(ev: SimEvent) {
     this.ambient?.onEvent(ev);
+    this.river.onEvent(ev);
     if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
@@ -1917,12 +1932,14 @@ export class GameRenderer {
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
-    this.terrain.update(this.time);
+    this.terrain.update(this.time, this.world.list);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
     this.superFx.update(dt, this.time);
     this.effects.update(dt);
+    this.river.update(dt);
     this.updateCamera();
+    if (this.sky) this.atmos.driveSky(this.sky, dt, this.sunDir, !!this.photoCam);
     this.scheduleShadow(dt);
     this.updateReadability(dt);
     const vh = this.viewHook;
@@ -2015,6 +2032,7 @@ export class GameRenderer {
     this.life.dispose();
     this.deployFx.dispose();
     this.atmos.dispose();
+    this.sky?.dispose();
     this.readability.dispose();
     this.temporal?.dispose();
     this.contact?.dispose();

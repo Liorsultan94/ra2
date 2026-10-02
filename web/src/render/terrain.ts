@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 import { Tile, groundHeight, type GameMap } from '../sim/map';
+import type { Entity } from '../sim/types';
 import type { FogOfWar } from './fog';
 import { SceneryLod } from './geo';
+import { grassRGB } from './grasstex';
+import { GrassBlades } from './grass';
 import { Ground } from './ground';
 import { buildLayout, type Layout } from './layout';
 import { Resources } from './resources';
 import { buildRocks } from './rocks';
 import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
-import { buildWater, type WaterReflection } from './water';
+import { RIVER, buildWater, type RiverInfo, type WaterReflection } from './water';
+import { Waterside } from './waterside';
 
 /*
  * The battlefield landscape: splat-shaded ground, river, vegetation, rocks,
@@ -28,6 +32,9 @@ export class Terrain {
   waterMat!: THREE.ShaderMaterial;
   /** Planar water reflection (high quality only). */
   reflection: WaterReflection | null = null;
+  /** The river analysis (centreline, flow, feature spots) and its banks, reeds, jetty and weir. */
+  river!: RiverInfo;
+  waterside: Waterside | null = null;
   private resources: Resources;
   readonly minimapImage: HTMLCanvasElement;
   /** Instanced plants, fences and village houses, for render-side environment damage. */
@@ -44,6 +51,11 @@ export class Terrain {
     const trees = treeSpots(map, quality);
     this.ground = new Ground(map, this.layout, trees.map((t) => ({ x: t.x, y: t.y, r: canopyRadius(t) })), fog, quality);
     this.group.add(this.ground.mesh);
+    // 3D grass blades near the camera (medium / high)
+    if (quality !== 'low') {
+      this.grass = new GrassBlades(map, this.ground, fog, quality);
+      this.group.add(this.grass.mesh);
+    }
     // Zoom-based LOD: the ground chunks report the view span (orthographic
     // camera) every frame; the vegetation and rocks switch models from it.
     const lod = new SceneryLod();
@@ -82,7 +94,10 @@ export class Terrain {
     this.water = w.mesh;
     this.waterMat = w.material;
     this.reflection = w.reflection;
+    this.river = w.river;
     this.group.add(w.mesh);
+    this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
+    this.group.add(this.waterside.group);
   }
 
   /**
@@ -103,8 +118,7 @@ export class Terrain {
     const img = ctx.createImageData(c.width, c.height);
     const g = this.ground;
     const N = m.w * g.res;
-    const lush = [86, 102, 47];
-    const dryC = [143, 132, 82];
+    const gcol = [0, 0, 0];
     const dirtC = [122, 100, 72];
     const rockC = [138, 132, 122];
     const sandC = [168, 154, 122];
@@ -120,7 +134,8 @@ export class Terrain {
         const sp = [g.splat[k] / 255, g.splat[k + 1] / 255, g.splat[k + 2] / 255, g.splat[k + 3] / 255];
         const wg = Math.max(0, 1 - sp[0] - sp[1] - sp[2] - sp[3]);
         const dr = g.tint[k + 3] / 255;
-        let col = [0, 1, 2].map((j) => (lush[j] * (1 - dr) + dryC[j] * dr) * wg + dirtC[j] * sp[0] + rockC[j] * sp[1] + sandC[j] * sp[2] + mudC[j] * sp[3]);
+        grassRGB(g.ctl[k] / 255, dr, gcol);
+        let col = [0, 1, 2].map((j) => gcol[j] * 255 * 1.08 * wg + dirtC[j] * sp[0] + rockC[j] * sp[1] + sandC[j] * sp[2] + mudC[j] * sp[3]);
         col = col.map((v, j) => v * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
         const t = m.tiles[i];
         if (t === Tile.Water) col = [38, 74, 88];
@@ -145,11 +160,17 @@ export class Terrain {
     return c;
   }
 
-  update(time: number) {
+  /** Instanced grass blades (null on low quality). */
+  readonly grass: GrassBlades | null = null;
+
+  /** Per frame. `units` (the world's entity list) lets vehicles flatten the grass blades. */
+  update(time: number, units?: readonly Entity[]) {
+    this.grass?.update(time, this.camera, units ?? null);
     // cull the scatter to last frame's view (the margin covers the lag)
     if (this.camera) this.lod.cull(this.camera);
-    this.waterMat.uniforms.time.value = time;
+    RIVER.time.value = time;
     this.reflection?.tick();
+    this.waterside?.update(time);
     windTime.value = time;
     this.resources.animate(time);
   }

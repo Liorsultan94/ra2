@@ -3,11 +3,16 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundHeight, type GameMap } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
+import { treeGeometry, treeMaterials, treeTint } from './trees';
+import { Species } from './vegetation';
+import { grassRGB } from './grasstex';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
   splat: Uint8Array;
   tint: Uint8Array;
+  /** Grass control map (r = lush), see ground.ts. */
+  ctl?: Uint8Array;
   res: number;
 }
 
@@ -126,8 +131,7 @@ export class Outskirts {
     const data = new Float32Array(size * size * 3);
     const N = w * g.res;
     const hex = (v: number) => [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
-    const lush = hex(0x4c6a2a);
-    const dryC = hex(0x857f4c);
+    const gcol = [0, 0, 0];
     const dirt = hex(0x7a6448);
     const rock = hex(0x77716a);
     const sand = hex(0xa89a7a);
@@ -143,8 +147,9 @@ export class Outskirts {
         const s3 = g.splat[k + 3] / 255;
         const wg = Math.max(0, 1 - s0 - s1 - s2 - s3);
         const dr = g.tint[k + 3] / 255;
+        grassRGB(g.ctl ? g.ctl[k] / 255 : 0, dr, gcol);
         for (let j = 0; j < 3; j++) {
-          const c = (lush[j] * (1 - dr) + dryC[j] * dr) * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
+          const c = gcol[j] * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
           // a touch darker: the splat shader's detail maps darken the flat palette colours
           data[(py * size + px) * 3 + j] = Math.min(1, 0.88 * c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
         }
@@ -334,28 +339,11 @@ export class Outskirts {
     return mesh;
   }
 
-  private buildTrees(fog: FogOfWar, quality: string) {
+  private buildTrees(fog: FogOfWar, quality: 'low' | 'medium' | 'high') {
     const { w, h } = this.map;
-    const colored = (g: THREE.BufferGeometry, hex: number) => {
-      const g2 = g.index ? g.toNonIndexed() : g;
-      const col = new THREE.Color(hex);
-      const n = g2.attributes.position.count;
-      const arr = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) col.toArray(arr, i * 3);
-      g2.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-      g2.deleteAttribute('uv');
-      return g2;
-    };
-    const pineGeo = mergeGeometries([
-      colored(new THREE.CylinderGeometry(0.035, 0.05, 0.3, 4).translate(0, 0.15, 0), 0x4a3424),
-      colored(new THREE.ConeGeometry(0.34, 0.6, 6).translate(0, 0.5, 0), 0xffffff),
-      colored(new THREE.ConeGeometry(0.24, 0.5, 6).translate(0, 0.85, 0), 0xffffff),
-    ])!;
-    const leafyGeo = mergeGeometries([
-      colored(new THREE.CylinderGeometry(0.04, 0.06, 0.35, 4).translate(0, 0.17, 0), 0x4a3424),
-      colored(new THREE.IcosahedronGeometry(0.36, 0).translate(0, 0.58, 0), 0xffffff),
-      colored(new THREE.IcosahedronGeometry(0.26, 0).translate(0.17, 0.46, 0.1), 0xffffff),
-    ])!;
+    // the battlefield's own tree models (light LOD) and material: same leaves, wind and lighting
+    const pineGeo = treeGeometry(Species.Spruce, true);
+    const leafyGeo = treeGeometry(Species.Oak, true);
     const pines: THREE.Matrix4[] = [];
     const leafy: THREE.Matrix4[] = [];
     const pc: THREE.Color[] = [];
@@ -384,19 +372,20 @@ export class Outskirts {
         const hy = this.height(ox, oy);
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
-        // dark, slightly desaturated greens to match the map's woods (haze lifts them with distance)
-        const c = new THREE.Color().setHSL(0.25 + hash2(k, 8, 5) * 0.07, 0.38, 0.09 + hash2(k, 9, 5) * 0.06);
-        if (hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5)) {
+        // the map's leaf tints, a little deeper (haze lifts them with distance)
+        const pine = hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5);
+        const c = treeTint(pine ? Species.Spruce : Species.Oak, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
+        if (pine) {
           pines.push(m);
           pc.push(c);
         } else {
           leafy.push(m);
-          lc.push(c.offsetHSL(-0.02, 0.05, 0.025));
+          lc.push(c);
         }
         if (pines.length + leafy.length >= budget) break;
       }
     }
-    const mat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true }));
+    const { mat, depth } = treeMaterials(fog, quality);
     // one instanced mesh per type and sector so off-screen sectors are frustum culled
     const G = 5;
     const cell = (Math.max(w, h) + MARGIN * 2) / G;
@@ -419,6 +408,7 @@ export class Outskirts {
           im.setColorAt(i, cols[src]);
         });
         im.castShadow = quality === 'high';
+        im.customDepthMaterial = depth;
         im.receiveShadow = false;
         im.computeBoundingSphere();
         this.group.add(im);

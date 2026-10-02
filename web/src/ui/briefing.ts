@@ -280,7 +280,7 @@ export function drawTacticalMap(cv: HTMLCanvasElement, world: World, local: numb
     ctx.stroke();
   }
   const fs = Math.round(S / 40);
-  ctx.font = `700 ${fs}px Rajdhani, system-ui, sans-serif`;
+  ctx.font = `600 ${fs}px 'Barlow Condensed', Inter, system-ui, sans-serif`;
   ctx.fillStyle = 'rgba(190, 220, 210, 0.55)';
   ctx.textBaseline = 'top';
   for (let i = 0; i < GRID; i++) {
@@ -301,7 +301,7 @@ export function drawTacticalMap(cv: HTMLCanvasElement, world: World, local: numb
   ctx.stroke();
 
   const label = (text: string, x: number, y: number, color: string, size = fs, align: CanvasTextAlign = 'center') => {
-    ctx.font = `700 ${size}px Rajdhani, system-ui, sans-serif`;
+    ctx.font = `600 ${size}px 'Barlow Condensed', Inter, system-ui, sans-serif`;
     ctx.textAlign = align;
     ctx.textBaseline = 'middle';
     ctx.lineWidth = Math.max(2, size / 4);

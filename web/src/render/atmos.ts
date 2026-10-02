@@ -10,6 +10,7 @@ import type { AnimState, Model } from './models';
 import { GroundFog } from './groundfog';
 import { NightLights, NightVisionPass } from './night';
 import type { FinalPass } from './post';
+import type { Sky, SkyState } from './sky';
 import type { Terrain } from './terrain';
 import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
@@ -865,6 +866,47 @@ export class Atmosphere {
     h.hemi.intensity = p.hemiI + flash * 2.6;
     h.sun.intensity = p.sunI + flash * 1.5;
     this.night?.update(dt, time, visuals.values(), target, h.world);
+  }
+
+  private skySt: SkyState = { sun: new THREE.Vector3(0, 1, 0), moon: null, night: 0, cover: 0.3, storm: 0, dust: 0 };
+  private skyMoon = new THREE.Vector3();
+
+  /**
+   * Drive the physical sky (sky.ts) from the time of day and the weather. keyDir = the renderer's
+   * key light direction this frame (sun by day, moon by night; it turns with the view).
+   */
+  driveSky(sky: Sky, dt: number, keyDir: THREE.Vector3, freeView: boolean) {
+    const st = this.skySt;
+    const p = this.active ? this.preset : null;
+    const light = this.keys ? this.light : p ? this.baseLight : 1;
+    const moonUp = this.keys ? this.phase > MOON_RISE && this.phase < MOON_SET : this.cfg.tod === 'night' && !!p;
+    st.night = 1 - sstep(0.15, 0.62, light);
+    st.sun.copy(keyDir);
+    st.moon = null;
+    if (moonUp) {
+      st.moon = this.skyMoon.copy(keyDir);
+      // the sun is well below the horizon on the far side
+      st.sun.set(-keyDir.x, 0, -keyDir.z).normalize().multiplyScalar(Math.cos(0.3));
+      st.sun.y = -Math.sin(0.3);
+    } else if (!this.keys && this.cfg.tod === 'dusk' && p) {
+      // fixed dusk: the key light keeps its usual direction, the sky shows a low evening sun in that azimuth
+      const h = Math.hypot(keyDir.x, keyDir.z) || 1;
+      st.sun.set((keyDir.x / h) * Math.cos(0.09), Math.sin(0.09), (keyDir.z / h) * Math.cos(0.09));
+    }
+    const wx = this.wx;
+    if (wx) {
+      st.cover = Math.max(0.2, wx.cover, wx.precip);
+      st.storm = wx.storm;
+      st.dust = wx.dust;
+    } else {
+      const w = this.cfg.weather;
+      st.cover = w === 'rain' ? 0.95 : w === 'snow' ? 0.85 : w === 'sandstorm' ? 0.55 : 0.18 + (p ? p.cloud : 0.32) * 0.5;
+      st.storm = w === 'rain' ? 0.35 : 0;
+      st.dust = w === 'sandstorm' ? 1 : 0;
+    }
+    sky.setFreeView(freeView, dt);
+    sky.update(dt, st, this.host.sun.color, this.host.hemi.groundColor);
+    if (sky.env && this.host.scene.environment !== sky.env) this.host.scene.environment = sky.env;
   }
 
   /** Dynamic weather: a short, subtle HUD line when a front arrives, a storm breaks or the sky clears. */

@@ -428,7 +428,7 @@ function broadleaf(sp: BroadSpec, lite: boolean): THREE.BufferGeometry {
     const f2 = new THREE.Vector3().crossVectors(f1, sp.upright ? UP : roll).normalize();
     b.card(centre.clone().addScaledVector(f1, -sz * 0.12), f2, sp.upright ? UP : f1, sz * 0.92, sz * 0.92, cell, L, 1, 1, rnd() < 0.5);
   };
-  const leafCell = lite ? (sp.curtains ? TCell.Mass : TCell.Mass) : sp.cell;
+  const leafCell = lite ? TCell.Mass : sp.cell;
   const szK = lite ? 1.75 : 1;
   for (const Lc of lumps) {
     const n = lite ? Math.max(2, Math.round(sp.perLump * 0.4)) : sp.perLump;
@@ -576,14 +576,18 @@ function pine(lite: boolean): THREE.BufferGeometry {
 
 // ------------------------------------------------------------ species
 
-const BROAD: Partial<Record<Species, BroadSpec>> = {
+/** Broadleaf species parameters (a function: Species lives in vegetation.ts, which imports this module). */
+function broadSpec(sp: Species): BroadSpec {
+  const BROAD: Partial<Record<number, BroadSpec>> = {
   [Species.Oak]: { seed: 3, trunkH: 0.42, r0: 0.05, lean: 0.03, crownC: V(0, 0.7, 0), crownR: V(0.46, 0.31, 0.46), lumps: 6, lumpR: 0.48, perLump: 5, shell: 9, inner: 3, size: 0.22, cell: TCell.Oak, bark: TCell.Bark, flexK: 0.045 },
   [Species.Birch]: { seed: 5, trunkH: 0.5, r0: 0.03, lean: 0.05, stems: 2, crownC: V(0, 0.76, 0), crownR: V(0.26, 0.34, 0.26), lumps: 4, lumpR: 0.5, perLump: 4, shell: 8, inner: 1, size: 0.17, cell: TCell.Birch, bark: TCell.BirchBark, flexK: 0.06, ao: 0.75 },
   [Species.Young]: { seed: 7, trunkH: 0.28, r0: 0.026, lean: 0.04, crownC: V(0, 0.5, 0), crownR: V(0.27, 0.23, 0.27), lumps: 3, lumpR: 0.5, perLump: 4, shell: 6, inner: 1, size: 0.17, cell: TCell.Broad, bark: TCell.Bark, flexK: 0.05 },
   [Species.Poplar]: { seed: 9, trunkH: 0.2, r0: 0.035, lean: 0.01, crownC: V(0, 0.74, 0), crownR: V(0.17, 0.52, 0.17), lumps: 3, lumpR: 0.75, perLump: 5, shell: 12, inner: 2, size: 0.17, cell: TCell.Poplar, bark: TCell.Bark, flexK: 0.07, upright: true },
   [Species.Willow]: { seed: 13, trunkH: 0.36, r0: 0.055, lean: 0.07, crownC: V(0, 0.62, 0), crownR: V(0.46, 0.25, 0.46), lumps: 5, lumpR: 0.45, perLump: 4, shell: 8, inner: 2, size: 0.2, cell: TCell.Broad, bark: TCell.Bark, flexK: 0.05, curtains: 16 },
   [Species.Fruit]: { seed: 17, trunkH: 0.24, r0: 0.032, lean: 0.04, crownC: V(0, 0.47, 0), crownR: V(0.36, 0.22, 0.36), lumps: 5, lumpR: 0.45, perLump: 4, shell: 7, inner: 1, size: 0.17, cell: TCell.Fruit, bark: TCell.Bark, flexK: 0.04 },
-};
+  };
+  return BROAD[sp] ?? BROAD[Species.Oak]!;
+}
 
 const geoCache = new Map<string, THREE.BufferGeometry>();
 
@@ -594,7 +598,7 @@ export function treeGeometry(sp: Species, lite: boolean): THREE.BufferGeometry {
   if (g) return g;
   if (sp === Species.Spruce) g = spruce(lite);
   else if (sp === Species.Pine) g = pine(lite);
-  else g = broadleaf(BROAD[sp]!, lite);
+  else g = broadleaf(broadSpec(sp), lite);
   geoCache.set(key, g);
   return g;
 }
@@ -668,7 +672,12 @@ export function buildTrees(m: GameMap, trees: TreeSpot[], fog: FogOfWar, quality
     const hi = quality === 'low' ? lo : treeGeometry(sp as Species, false);
     const ci = new CulledInstances(hi, mat, list, m.w, m.h, CELL, { castShadow: shadows, receiveShadow: true, name: 'trees' });
     ci.mesh.customDepthMaterial = depth;
-    ci.mesh.onBeforeRender = tick;
+    // medium: dappled shadows only while zoomed in (the far LOD casts none; takes effect next frame)
+    const mesh = ci.mesh;
+    mesh.onBeforeRender = () => {
+      tick();
+      mesh.castShadow = shadows && !(quality === 'medium' && mesh.geometry === lo);
+    };
     out.push(ci.mesh);
     lod.addCulled(ci, lo, treeLo);
     sink?.push(ci);

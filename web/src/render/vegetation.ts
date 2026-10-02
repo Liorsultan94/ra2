@@ -314,7 +314,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     }
   }
   // reeds along the waterline
-  const reedN = quality === 'low' ? 1 : quality === 'medium' ? 2 : 3;
+  const reedN = 0; // waterline reeds now come from waterside.ts (swaying reed / cattail clusters)
   for (let y = 0; y < m.h; y++)
     for (let x = 0; x < m.w; x++) {
       const t = m.tiles[y * m.w + x];

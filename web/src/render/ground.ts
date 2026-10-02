@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import { fbm, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { segDist, type Layout } from './layout';
+import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
+import { segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
 
 /*
@@ -14,7 +15,7 @@ import { groundDetailTexture } from './terraintex';
  * same shader from a field map (rows, furrows, crops), so they cost nothing.
  */
 
-const SUB = 2; // mesh vertices per tile
+export const SUB = 2; // mesh vertices per tile
 
 /** Height of the rendered ground surface (sim height + visual micro relief). */
 export function surfaceHeight(m: GameMap, x: number, y: number) {
@@ -53,6 +54,72 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+/**
+ * Trodden footpaths (render only): each village house to the nearest road
+ * when it is a short walk away, and to its nearest neighbour. Gently
+ * wandering, smoothed polylines.
+ */
+function footpaths(m: GameMap, L: Layout): { x: number; y: number }[][] {
+  const out: { x: number; y: number }[][] = [];
+  const roadPts: { x: number; y: number }[] = [];
+  for (const r of L.roads) for (let i = 0; i < r.pts.length; i += 2) roadPts.push(r.pts[i]);
+  const centres = m.structures.map((s) => ({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: Math.max(s.w, s.h) / 2 }));
+  const nearest = centres.map((c, i) => {
+    let nb = -1;
+    let nd = 1e9;
+    centres.forEach((o, j) => {
+      const d = Math.hypot(o.x - c.x, o.y - c.y);
+      if (j !== i && d < nd) {
+        nd = d;
+        nb = j;
+      }
+    });
+    return nb;
+  });
+  const wander = (a: { x: number; y: number }, b: { x: number; y: number }, seed: number) => {
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const nx = -(b.y - a.y) / len;
+    const ny = (b.x - a.x) / len;
+    const n = Math.max(3, Math.ceil(len / 1.5));
+    const amp = (valueNoise(seed * 3.1, 0.5, 91) - 0.5) * 0.5 * Math.min(4, len);
+    const pts: { x: number; y: number }[] = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const off = Math.sin(t * Math.PI) * amp + (i > 0 && i < n ? (valueNoise(seed + i * 0.7, 3.3, 93) - 0.5) * 0.5 : 0);
+      pts.push({ x: a.x + (b.x - a.x) * t + nx * off, y: a.y + (b.y - a.y) * t + ny * off });
+    }
+    return smoothLine(pts, 2, 0.3);
+  };
+  centres.forEach((c, i) => {
+    let best: { x: number; y: number } | null = null;
+    let bd = 1e9;
+    for (const p of roadPts) {
+      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (best && bd > c.r + 1.2 && bd < 11) {
+      const dx = (best.x - c.x) / bd;
+      const dy = (best.y - c.y) / bd;
+      out.push(wander({ x: c.x + dx * (c.r + 0.3), y: c.y + dy * (c.r + 0.3) }, best, i * 7 + 1));
+    }
+    const nb = nearest[i];
+    const nd = nb >= 0 ? Math.hypot(centres[nb].x - c.x, centres[nb].y - c.y) : 1e9;
+    // each pair once
+    if (nb >= 0 && (nb > i || nearest[nb] !== i)) {
+      const o = centres[nb];
+      if (nd > c.r + o.r + 1 && nd < 9) {
+        const dx = (o.x - c.x) / nd;
+        const dy = (o.y - c.y) / nd;
+        out.push(wander({ x: c.x + dx * (c.r + 0.3), y: c.y + dy * (c.r + 0.3) }, { x: o.x - dx * (o.r + 0.3), y: o.y - dy * (o.r + 0.3) }, i * 13 + 5));
+      }
+    }
+  });
+  return out;
+}
+
 export class Ground {
   /** The ground, split into square chunks so off-screen parts are culled. */
   readonly mesh = new THREE.Group();
@@ -61,7 +128,17 @@ export class Ground {
   /** Painted control maps, also reused for the minimap. */
   readonly splat: Uint8Array;
   readonly tint: Uint8Array;
+  /** Grass control map: r lush, g clover, b wildflowers, a worn (paths, trampled yards). */
+  readonly ctl: Uint8Array;
+  /** 3D grass blade map: r density, g height (src/render/grass.ts). */
+  readonly blades: Uint8Array;
   readonly res: number;
+  /** Rendered surface heights on the mesh grid (hx * hy vertices, SUB per tile). */
+  readonly heights: Float32Array;
+  readonly hx: number;
+  readonly hy: number;
+  /** Textures and palette uniforms shared with the grass blades. */
+  readonly shared: Record<string, { value: unknown }>;
 
   constructor(
     private map: GameMap,
@@ -75,6 +152,8 @@ export class Ground {
     const N = m.w * this.res;
     this.splat = new Uint8Array(N * N * 4);
     this.tint = new Uint8Array(N * N * 4);
+    this.ctl = new Uint8Array(N * N * 4);
+    this.blades = new Uint8Array(N * N * 4);
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);
     const tex = (data: Uint8Array) => {
@@ -92,6 +171,7 @@ export class Ground {
     fieldTex.minFilter = THREE.LinearFilter;
     fieldTex.generateMipmaps = false;
     const detail = groundDetailTexture(quality === 'low' ? 256 : 512);
+    const grassTex = grassTexture(quality === 'low' ? 256 : 512);
 
     const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
     const col = (hex: number) => new THREE.Color(hex);
@@ -100,9 +180,10 @@ export class Ground {
       tintTex: { value: tex(this.tint) },
       fieldTex: { value: fieldTex },
       detailTex: { value: detail },
+      grassTex: { value: grassTex },
+      ctlTex: { value: tex(this.ctl) },
       terrMapSize: { value: new THREE.Vector2(m.w, m.h) },
-      cLush: { value: col(0x4c6a2a) },
-      cDry: { value: col(0x857f4c) },
+      ...grassUniforms(),
       cDirt: { value: col(0x7a6448) },
       cRock: { value: col(0x77716a) },
       cSand: { value: col(0xa89a7a) },
@@ -112,13 +193,14 @@ export class Ground {
       cWheat: { value: col(0xb59a52) },
       cHay: { value: col(0x8e8a4a) },
     };
+    this.shared = { ...uniforms, bladeTex: { value: tex(this.blades) } };
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vTerrW;')
         .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTerrW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${TERRAIN_PARS}`)
+        .replace('#include <common>', `#include <common>\n${GRASS_GLSL}\n${TERRAIN_PARS}`)
         .replace('#include <map_fragment>', TERRAIN_MAP)
         .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = terrRough;')
         .replace('#include <normal_fragment_maps>', TERRAIN_NORMAL);
@@ -128,7 +210,8 @@ export class Ground {
     const pomOff = typeof location !== 'undefined' && /[?&]pom=0\b/.test(location.search);
     const pom = pomOff ? 0 : quality === 'high' ? 12 : quality === 'medium' ? 5 : 0;
     mat.defines = { ...(mat.defines ?? {}), TERR_POM: pom };
-    mat.customProgramCacheKey = () => 'terrain-splat-2-' + pom;
+    mat.defines.GRASS_TILES = GRASS_TEX_TILES.toFixed(3);
+    mat.customProgramCacheKey = () => 'terrain-splat-3-' + pom;
     this.material = mat;
 
     // mesh: one height field (so normals are continuous), cut into chunks
@@ -142,6 +225,10 @@ export class Ground {
         pos[k + 1] = surfaceHeight(m, i / SUB, j / SUB);
         pos[k + 2] = j / SUB;
       }
+    this.hx = nx;
+    this.hy = ny;
+    this.heights = new Float32Array(nx * ny);
+    for (let k = 0; k < nx * ny; k++) this.heights[k] = pos[k * 3 + 1];
     const nor = new Float32Array(nx * ny * 3);
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
@@ -263,6 +350,34 @@ export class Ground {
     const dryN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.06, y * 0.06, 47, 3));
     const patchN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.7, y * 0.7, 51, 3));
     const hueN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.13 + 7, y * 0.13, 61, 2));
+    const lushN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.08 + 3, y * 0.08, 67, 3));
+    const cloverN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.3 + 11, y * 0.3, 71, 3));
+    const flowerN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.22, y * 0.22 + 5, 73, 3));
+    const tallN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.16, y * 0.16, 79, 3));
+
+    // distance (tiles) to the nearest water tile: lush banks, no blades on the shore
+    const wd = new Float32Array(W * m.h).fill(1e3);
+    for (let i = 0; i < W * m.h; i++) if (m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Bridge) wd[i] = 0;
+    const relax = (i: number, j: number, c: number) => {
+      if (wd[j] + c < wd[i]) wd[i] = wd[j] + c;
+    };
+    for (let y = 0; y < m.h; y++)
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (x > 0) relax(i, i - 1, 1);
+        if (y > 0) relax(i, i - W, 1);
+        if (x > 0 && y > 0) relax(i, i - W - 1, 1.414);
+        if (x < W - 1 && y > 0) relax(i, i - W + 1, 1.414);
+      }
+    for (let y = m.h - 1; y >= 0; y--)
+      for (let x = W - 1; x >= 0; x--) {
+        const i = y * W + x;
+        if (x < W - 1) relax(i, i + 1, 1);
+        if (y < m.h - 1) relax(i, i + W, 1);
+        if (x < W - 1 && y < m.h - 1) relax(i, i + W + 1, 1.414);
+        if (x > 0 && y < m.h - 1) relax(i, i + W - 1, 1.414);
+      }
+    const waterD = coarseField(W, m.h, 1, (x, y) => wd[Math.max(0, Math.min(m.h - 1, Math.floor(y))) * W + Math.max(0, Math.min(W - 1, Math.floor(x)))]);
 
     // distance fields to roads and tracks (stamped per segment)
     const roadD = new Float32Array(N * N).fill(99);
@@ -289,6 +404,9 @@ export class Ground {
     };
     for (const r of L.roads) stamp(r.pts, r.width / 2 + 1, roadD, r.width, roadW);
     for (const t of L.tracks) stamp(t.pts, 1, trackD, t.width, null);
+    // trodden footpaths: village houses to the nearest road, and between neighbouring houses
+    const pathD = new Float32Array(N * N).fill(99);
+    for (const p of footpaths(m, L)) stamp(p, 0.7, pathD, 0, null);
 
     // fields: coverage + type + row direction (dilated so filtering stays stable)
     const fieldMask = new Float32Array(N * N);
@@ -353,6 +471,8 @@ export class Ground {
     };
 
     const w = [0, 0, 0, 0, 0, 0, 0];
+    const ctl = this.ctl;
+    const bladeMap = this.blades;
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
         const x = (px + 0.5) / P;
@@ -461,7 +581,36 @@ export class Ground {
         let dry = smooth(0.45, 0.8, dryN(x, y)) * 0.6 + Math.max(0, h0 - 0.8) * 0.2 + (bl - 0.5) * 0.25;
         dry += (1 - smooth(0, 1.2, rd)) * 0.2 + base * 0.2;
         dry -= (1 - smooth(0.1, 0.7, wl)) * 0.4 + forest * 0.2;
+        // lushness: river banks, low ground and damp hollows; hills and slopes are drier
+        const dW = waterD(x, y);
+        let lush = (1 - smooth(0.6, 6, dW)) * 0.8 + smooth(0.5, -0.4, h0) * 0.35 + (lushN(x, y) - 0.45) * 0.9 + forest * 0.25;
+        lush -= slope * 1.6 + base * 0.3;
+        lush = Math.max(0, Math.min(1, lush));
+        dry = dry * 0.85 - lush * 0.45 + slope * 1.2;
         tint[o + 3] = Math.max(0, Math.min(1, dry)) * 255;
+        const dryC = Math.max(0, Math.min(1, dry));
+        // footpaths, trampled base and yard ground
+        const pd = pathD[k];
+        const path = (1 - smooth(0.06, 0.24, pd + (pn - 0.5) * 0.08)) * (1 - fm) * smooth(0.2, 0.4, wl);
+        let worn = Math.max(path, base * 0.55 * smooth(0.3, 0.6, pn), yd < 1.5 ? (1 - smooth(0.3, 1.5, yd)) * 0.45 : 0, shoulder * 0.35);
+        worn = Math.min(1, worn);
+        ctl[o] = lush * 255;
+        ctl[o + 1] = smooth(0.58, 0.72, cloverN(x, y)) * (1 - dryC * 0.8) * (1 - worn) * 255;
+        ctl[o + 2] = smooth(0.6, 0.76, flowerN(x, y)) * (1 - dryC * 0.6) * (1 - worn) * (1 - base) * (1 - forest * 0.7) * 255;
+        ctl[o + 3] = worn * 255;
+        // 3D grass blades: grass layer only, off paths, roads, tracks, fields, yards and the shore
+        const grassW = 1 - tot;
+        let dens = smooth(0.5, 0.85, grassW);
+        dens *= 1 - smooth(0.02, 0.25, fm);
+        dens *= smooth(0.15, 0.5, rd) * smooth(0.25, 0.5, td);
+        dens *= smooth(0.3, 0.6, wl) * smooth(0.9, 1.6, dW);
+        dens *= 1 - Math.max(path * 1.3, worn * 0.7);
+        dens *= smooth(0.45, 0.9, yd);
+        dens *= 1 - forest * 0.45;
+        if (w[4] > 0.05 || w[5] > 0.05) dens *= 0.2;
+        bladeMap[o] = Math.max(0, Math.min(1, dens)) * 255;
+        const tall = 0.35 + smooth(0.42, 0.75, tallN(x, y)) * 0.5 + lush * 0.25 - dryC * 0.2 - base * 0.3 - worn * 0.3;
+        bladeMap[o + 1] = Math.max(0, Math.min(1, tall)) * 255;
       }
     }
   }
@@ -475,8 +624,10 @@ uniform sampler2D splatTex;
 uniform sampler2D tintTex;
 uniform sampler2D fieldTex;
 uniform sampler2D detailTex;
+uniform sampler2D grassTex;
+uniform sampler2D ctlTex;
 uniform vec2 terrMapSize;
-uniform vec3 cLush, cDry, cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
+uniform vec3 cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
 float wxPud;
@@ -501,6 +652,7 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 spl = texture2D(splatTex, mUV);
   vec4 tnt = texture2D(tintTex, mUV);
   vec4 fld = texture2D(fieldTex, mUV);
+  vec4 ctl = texture2D(ctlTex, mUV);
 #if TERR_POM > 0
   // relief mapping on soil / rock: march the view ray down into the detail
   // height field (world xz = tangent plane; the ground is mostly flat) and
@@ -545,6 +697,22 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
   vec4 det = clamp((dA * 0.6 + dB * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
 
+  // ---- grass micro texture: two decorrelated (rotated, rescaled) samples,
+  // chosen region by region by low-frequency noise, blended so the contrast
+  // survives - no visible repeat at any zoom
+  vec2 gq = tw * (1.0 / GRASS_TILES);
+  vec2 gq2 = vec2(gq.x * 0.799 - gq.y * 0.602, gq.x * 0.602 + gq.y * 0.799) * 0.83 + vec2(0.37, 0.11);
+  vec4 gA = texture2D(grassTex, gq);
+  vec4 gB = texture2D(grassTex, gq2);
+  vec4 gnz = texture2D(fogNoise, tw * 0.043);
+  float gsel = smoothstep(0.36, 0.64, gnz.r);
+  float gH = clamp(((gA.r - 0.5) * (1.0 - gsel) + (gB.r - 0.5) * gsel) * inversesqrt(gsel * gsel + (1.0 - gsel) * (1.0 - gsel)) + 0.5, 0.0, 1.0);
+  vec4 gT = mix(gA, gB, gsel);
+  // fine detail fades to its mean where it would only shimmer
+  float gFine = 1.0 - smoothstep(0.5, 1.5, fwidth(gq.x) * 40.0);
+  gH = mix(0.5, gH, 0.35 + 0.65 * gFine);
+  float gDrift = (gnz.b - 0.5) + (texture2D(fogNoise, tw * 0.0117 + 0.5).g - 0.5);
+
   // height-blended layer weights
   float wG = clamp(1.0 - spl.r - spl.g - spl.b - spl.a, 0.0, 1.0);
   vec4 present = smoothstep(0.0, 0.06, spl);
@@ -557,14 +725,32 @@ const TERRAIN_MAP = /* glsl */ `
   bg /= tot;
   bw /= tot;
 
-  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.5 + (det.g - 0.5) * 0.2, 0.0, 1.0);
-  vec3 grass = mix(cLush, cDry, dry) * (0.5 + det.r * 1.0);
+  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.3 + (det.g - 0.5) * 0.15, 0.0, 1.0);
+  vec3 gc = grassBase(ctl.r, dry, gDrift * 0.8);
+  // single blades: some fresh and bright, a few dead straw ones (more where it is dry)
+  gc = mix(gc, gcFresh, smoothstep(0.66, 0.97, gT.g) * (0.5 - dry * 0.3) * gFine);
+  gc = mix(gc, gcDry * vec3(1.2, 1.08, 0.78), smoothstep(0.14, 0.0, gT.g) * (0.3 + dry * 0.5) * gFine);
+  // dark gaps between the blades, lit tips; clump scale from the detail map
+  vec3 grass = gc * (0.5 + gH * 0.82) * (0.8 + det.r * 0.4);
+  // clover patches: rounder, darker, bluer leaves
+  float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
+  grass = mix(grass, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);
+  // worn ground (paths, trampled yards): soil shows through the gaps first
+  float gSoil = smoothstep(0.0, 0.3, ctl.a * 1.15 - gH * 0.5 + (det.g - 0.5) * 0.35 * ctl.a);
+  grass = mix(grass, cDirt * (0.62 + det.g * 0.55), gSoil);
+  // wildflowers: crisp heads up close, a faint wash of colour further out
+  if (ctl.b > 0.01) {
+    float sp = texture2D(fogNoise, tw * 0.09 + 0.7).a;
+    vec3 fcol = sp < 0.42 ? vec3(0.82, 0.82, 0.72) : sp < 0.68 ? vec3(0.86, 0.6, 0.06) : vec3(0.42, 0.22, 0.66);
+    float fl = ctl.b * smoothstep(0.3, 0.6, gT.a) * (1.0 - gSoil);
+    grass = mix(grass, fcol, fl * gFine + ctl.b * 0.1 * (1.0 - gFine));
+  }
   vec3 dirt = cDirt * (0.55 + det.g * 0.9);
   vec3 rock = cRock * (0.45 + det.b * 1.1);
   vec3 sand = cSand * (0.72 + det.a * 0.56);
   vec3 mud = cMud * (0.7 + det.g * 0.5);
   vec3 col = grass * bg + dirt * bw.x + rock * bw.y + sand * bw.z + mud * bw.w;
-  terrH = det.r * bg * 0.7 + det.g * bw.x * 1.0 + det.b * bw.y * 2.2 + det.a * bw.z * 0.5 + det.g * bw.w * 0.3;
+  terrH = (gH * 0.8 + det.r * 0.35 + clov * gT.b * 0.4) * bg + det.g * bw.x * 1.0 + det.b * bw.y * 2.2 + det.a * bw.z * 0.5 + det.g * bw.w * 0.3;
   terrRough = 0.96 - bw.w * 0.4 - bw.y * 0.12;
 
   // farm fields
@@ -604,10 +790,13 @@ const TERRAIN_MAP = /* glsl */ `
       fc = mix(fc, cSoil * 0.9, tram * 0.7);
       fh = mix(0.5, s, k) * 0.5 + det.r * 0.5 - tram * 0.6;
     } else {
-      // mown meadow: broad mowing stripes
-      float st = step(0.5, fract(across / 0.9));
-      fc = cHay * (0.82 + st * 0.18 + (det.r - 0.5) * 0.45);
-      fh = det.r * 0.6;
+      // mown meadow: lawn-like mowing stripes, short fresh grass
+      float sw = fract(across / 1.1);
+      float st = smoothstep(0.47, 0.53, sw) * (1.0 - smoothstep(0.97, 1.0, sw));
+      st = mix(0.5, st, clamp(1.0 - aa * 2.0, 0.0, 1.0));
+      vec3 lawn = grassBase(0.3 + ctl.r * 0.4, 0.12, gDrift * 0.5);
+      fc = lawn * (0.58 + gH * 0.5) * (0.84 + st * 0.26) * (0.92 + det.r * 0.16);
+      fh = gH * 0.45;
     }
     // darker rim along the field edge
     fc *= 0.82 + 0.18 * smoothstep(0.5, 0.95, fld.r);
