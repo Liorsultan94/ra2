@@ -73,7 +73,7 @@ export const waterRings = {
   /** A ring wave at (x, z) (tiles); amp ~0.15 (a fish) .. 1.5 (a heavy shell). */
   add(x: number, z: number, amp: number) {
     const arr = RIVER.wRings.value;
-    // reuse the oldest slot unless a weak young ring sits there and this one is weak too
+    // round robin: the oldest ring makes way
     const v = arr[this.next];
     this.next = (this.next + 1) % MAX_RINGS;
     v.set(x, z, RIVER.time.value, amp);
@@ -660,7 +660,7 @@ export class RiverInfo {
   }
 }
 
-function bridgePiers(m: GameMap, fl: { x: number; y: number }): Pier[] {
+function bridgePiers(m: GameMap): Pier[] {
   const D = Math.SQRT1_2;
   const out: Pier[] = [];
   // same layout as scenery.ts: three piers along the deck, which runs along (1, -1)
@@ -668,7 +668,6 @@ function bridgePiers(m: GameMap, fl: { x: number; y: number }): Pier[] {
     const L = br.length;
     for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) out.push({ x: br.x + k * D, y: br.y - k * D, hw: 0.2, hl: 2.1 * 0.35 });
   }
-  void fl;
   return out;
 }
 
@@ -689,7 +688,7 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
   const N = info.N;
   const NH = info.NH;
   const main = { x: info.ax, y: info.ay };
-  const piers = bridgePiers(m, main);
+  const piers = bridgePiers(m);
   const inPier = (x: number, y: number) => {
     for (const p of piers) {
       const dx = x - p.x;

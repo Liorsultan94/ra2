@@ -195,7 +195,7 @@ export class WaterFx {
 
   private addSlick(x: number, y: number, k: number) {
     if (this.slicks.length >= MAX_SLICKS) this.slicks.shift();
-    this.slicks.push({ x, y, r: 0.15, rMax: 0.75 + 0.45 * k + Math.random() * 0.25, age: 0, life: 70 + Math.random() * 30, burn: 1, burnFor: 22 + Math.random() * 14 * k, emit: 0 });
+    this.slicks.push({ x, y, r: 0.35, rMax: 1.0 + 0.6 * k + Math.random() * 0.3, age: 0, life: 70 + Math.random() * 30, burn: 1, burnFor: 22 + Math.random() * 14 * k, emit: 0 });
     waterRings.add(x, y, 0.7);
   }
 
@@ -283,38 +283,41 @@ export class WaterFx {
     RIVER.wState2.value.set(dark, wind.x / wl, wind.z / wl, caus);
   }
 
+  /** A light candidate for the water reflections (kept: the strongest near the view). */
+  private consider = (x: number, y: number, z: number, r: number, g: number, b: number, i: number) => {
+    const m = this.host.world.map;
+    const tgt = this.host.target;
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h || !this.nearWater[tz * m.w + tx]) return;
+    const dx = x - tgt.x;
+    const dz = z - tgt.z;
+    const s = i / (1 + (dx * dx + dz * dz) / 60);
+    if (s < 0.02) return;
+    let k = this.nCand;
+    if (k >= this.cand.length) {
+      // replace the weakest
+      k = 0;
+      for (let j = 1; j < this.cand.length; j++) if (this.cand[j].s < this.cand[k].s) k = j;
+      if (this.cand[k].s >= s) return;
+    } else this.nCand++;
+    const c = this.cand[k];
+    c.x = x;
+    c.y = y;
+    c.z = z;
+    c.r = r;
+    c.g = g;
+    c.b = b;
+    c.i = i;
+    c.s = s;
+  };
+
   /** The lamps / fires nearest the view that stand close to the water: reflected by the shader. */
   private gatherLights() {
     const out = RIVER.wLightP.value;
     const outC = RIVER.wLightC.value;
-    const m = this.host.world.map;
-    const tgt = this.host.target;
     this.nCand = 0;
-    const consider = (x: number, y: number, z: number, r: number, g: number, b: number, i: number) => {
-      const tx = Math.floor(x);
-      const tz = Math.floor(z);
-      if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h || !this.nearWater[tz * m.w + tx]) return;
-      const dx = x - tgt.x;
-      const dz = z - tgt.z;
-      const s = i / (1 + (dx * dx + dz * dz) / 60);
-      if (s < 0.02) return;
-      let k = this.nCand;
-      if (k >= this.cand.length) {
-        // replace the weakest
-        k = 0;
-        for (let j = 1; j < this.cand.length; j++) if (this.cand[j].s < this.cand[k].s) k = j;
-        if (this.cand[k].s >= s) return;
-      } else this.nCand++;
-      const c = this.cand[k];
-      c.x = x;
-      c.y = y;
-      c.z = z;
-      c.r = r;
-      c.g = g;
-      c.b = b;
-      c.i = i;
-      c.s = s;
-    };
+    const consider = this.consider;
     const night = this.host.atmos.night;
     const dark = RIVER.wState2.value.x;
     if (night && dark > 0.15) {
@@ -366,7 +369,7 @@ export class WaterFx {
         continue;
       }
       // spread, then thin out; drift downstream (a little slower than the surface)
-      s.r += (s.rMax - s.r) * Math.min(1, dt * 0.12);
+      s.r += (s.rMax - s.r) * Math.min(1, dt * 0.22);
       r.velAt(s.x, s.y, this.v2);
       const nx = s.x + this.v2.x * dt * 0.75;
       const ny = s.y + this.v2.y * dt * 0.75;

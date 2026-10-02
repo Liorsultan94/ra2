@@ -1240,6 +1240,8 @@ interface Sol {
   // idle life
   lookY: number;
   lookP: number;
+  /** Bones blended by the death snapshot (built on first use). */
+  bl: THREE.Object3D[] | null;
 }
 
 const tmpA = new THREE.Vector3();
@@ -1542,14 +1544,13 @@ function solBones(sol: Sol): THREE.Object3D[] {
  * blended in from the pose the soldier was in when hit.
  */
 function deathPose(sol: Sol, d: number) {
+  const bones = (sol.bl ??= solBones(sol));
   if (!sol.snap) {
-    const bones = solBones(sol);
     sol.snap = { q: bones.map((o) => o.quaternion.clone()), hp: sol.hips.position.clone(), wp: sol.wpn ? sol.wpn.position.clone() : null };
   }
   ragdoll(sol, d);
   const b = sstep(0, 0.18, d);
   if (b < 1) {
-    const bones = solBones(sol);
     const sn = sol.snap;
     for (let i = 0; i < bones.length && i < sn.q.length; i++) bones[i].quaternion.slerpQuaternions(sn.q[i], tmpQ2.copy(bones[i].quaternion), b);
     sol.hips.position.lerpVectors(sn.hp, tmpE.copy(sol.hips.position), b);
@@ -1775,6 +1776,7 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): S
     crouch: false,
     lookY: 0,
     lookP: 0,
+    bl: null,
   };
   reseed(sol, 100000 + solSeq++);
   return sol;
@@ -1977,7 +1979,7 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const mw = sol.moveW;
   const aw = sol.aimW;
   const kw = sol.kneelW;
-  const rw = w && (w.kind === 'rifle' || w.kind === 'launcher') ? sol.reloadW : 0;
+  const rw = w && w.kind === 'rifle' ? sol.reloadW : 0;
   // recoil: sharp kick on the shot, exponential recovery
   const f0 = s.fired;
   const kick = f0 >= 0 && f0 < 0.3 ? Math.exp(-f0 * (role === 'at' ? 11 : 24)) * Math.min(1, (f0 + 0.008) / 0.012) : 0;
@@ -2009,7 +2011,8 @@ function animSoldierBase(sol: Sol, s: AnimState) {
 
   // ---- spine / chest: lean (speed, aim, kneel, acceleration), counter-twist, breathing, flinch
   const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * kw + 0.12 * fl - clamp(sol.accL * 0.012, -0.08, 0.1) * mw;
-  const twistUp = -L.tw * (1.25 - 0.6 * aw) * (w ? 0.85 : 1) + 0.2 * fl * sol.flinchDir + 0.3 * gBack * backSide;
+  // shoulders counter-rotate against the pelvis (less with a rifle in both hands, square to the target when aiming)
+  const twistUp = -L.tw * mix(w ? 1.35 : 1.8, 1, aw) + 0.2 * fl * sol.flinchDir + 0.3 * gBack * backSide;
   sol.spine.rotation.set(-L.roll * 0.55 + 0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw) + 0.06 * fl * sol.flinchDir, twistUp * 0.4, lean * 0.45);
   const chestP = lean * 0.55 + 0.012 * br * (1 - mw) + kick * 0.05 * (role === 'at' ? 2 : 1);
   sol.chest.rotation.set(-L.roll * 0.3 + 0.04 * fl * sol.flinchDir + 0.04 * gRoll, twistUp * 0.6, chestP);

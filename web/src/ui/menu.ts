@@ -2,6 +2,7 @@ import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
 import type { Faction, Player } from '../sim/types';
 import type { Quality } from '../render/renderer';
+import { autoQuality } from '../render/autoquality';
 import { setReadabilityPrefs } from '../render/readability';
 import { flagHtml } from './hud';
 import emblemSvg from './emblem.svg?raw';
@@ -71,16 +72,8 @@ export function saveSettings(s: Settings) {
 }
 
 export function resolveQuality(q: Settings['quality']): Quality {
-  if (q !== 'auto') return q;
-  const coarse = window.matchMedia?.('(pointer: coarse)').matches;
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const cores = nav.hardwareConcurrency || 4;
-  const mem = nav.deviceMemory ?? 4;
-  // genuinely weak devices keep the cheap path; everything else gets shadows and post,
-  // with the renderer's dynamic quality scaling keeping the frame rate up
-  if (cores <= 2 || mem <= 2) return 'low';
-  if (coarse) return 'medium';
-  return 'high';
+  // auto: device probe (GPU, memory, float targets, micro-benchmark), cached, corrected by the frame-time governor (src/render/autoquality.ts)
+  return q === 'auto' ? autoQuality() : q;
 }
 
 const h = (html: string) => {

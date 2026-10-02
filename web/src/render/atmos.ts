@@ -900,7 +900,7 @@ export class Atmosphere {
       st.dust = wx.dust;
     } else {
       const w = this.cfg.weather;
-      st.cover = w === 'rain' ? 0.95 : w === 'snow' ? 0.85 : w === 'sandstorm' ? 0.55 : 0.18 + (p ? p.cloud : 0.32) * 0.5;
+      st.cover = w === 'rain' ? 0.95 : w === 'snow' ? 0.85 : w === 'sandstorm' ? 0.55 : 0.28 + (p ? p.cloud : 0.32) * 0.6;
       st.storm = w === 'rain' ? 0.35 : 0;
       st.dust = w === 'sandstorm' ? 1 : 0;
     }

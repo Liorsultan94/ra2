@@ -707,8 +707,11 @@ export class RiverLife {
 
   // --------------------------------------------------------------- draw
 
+  private inView(f: AmbientFrame, x: number, y: number) {
+    return x > f.vx0 && x < f.vx1 && y > f.vy0 && y < f.vy1 && this.probe.visible(x, y);
+  }
+
   draw(f: AmbientFrame) {
-    const inView = (x: number, y: number) => x > f.vx0 && x < f.vx1 && y > f.vy0 && y < f.vy1 && this.probe.visible(x, y);
     const t = this.time;
     // ducks
     const di = this.duckI;
@@ -716,7 +719,7 @@ export class RiverLife {
     for (const fl of this.flocks) {
       const flying = fl.s === D.Fly;
       for (const d of fl.ducks) {
-        if (!inView(d.x, d.y)) continue;
+        if (!this.inView(f, d.x, d.y)) continue;
         const pitch = flying ? -0.15 : Math.sin(t * 1.3 + d.phase) * 0.04;
         _e.set(Math.sin(t * 1.7 + d.phase) * 0.05, d.yaw, pitch, 'YXZ');
         _q.setFromEuler(_e);
@@ -729,7 +732,7 @@ export class RiverLife {
     const fi = this.fishI;
     fi.n = 0;
     for (const fish of this.fish) {
-      if (!fish.on || !inView(fish.x, fish.y)) continue;
+      if (!fish.on || !this.inView(f, fish.x, fish.y)) continue;
       const u = fish.t;
       const x = fish.x + fish.dx * 0.32 * u;
       const y = fish.y + fish.dy * 0.32 * u;
@@ -745,7 +748,7 @@ export class RiverLife {
     ri.n = 0;
     if (f.dark < 0.35 && !f.foul)
       for (const d of this.flies) {
-        if (!inView(d.x, d.y)) continue;
+        if (!this.inView(f, d.x, d.y)) continue;
         _e.set(0, d.yaw, 0, 'YXZ');
         _q.setFromEuler(_e);
         _m.compose(_p.set(d.x, d.z + Math.sin(t * 9 + d.ax) * 0.01, d.y), _q, _s.set(1.4, 1.4, 1.4));
@@ -756,7 +759,7 @@ export class RiverLife {
     const bi = this.boatI;
     bi.n = 0;
     for (const b of this.boats) {
-      if (!inView(b.x, b.y)) continue;
+      if (!this.inView(f, b.x, b.y)) continue;
       const fast = b.st === B.Flee;
       _e.set(Math.sin(t * 1.2 + b.lo) * 0.04, b.yaw, (fast ? 0.06 : 0.015) + Math.sin(t * 0.9 + b.hi) * 0.02, 'YXZ');
       _q.setFromEuler(_e);

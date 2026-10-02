@@ -32,6 +32,7 @@ import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
 import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
+import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import { JitterRenderPass, TemporalPass } from './ultra/temporal';
@@ -316,6 +317,7 @@ export class GameRenderer {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
     this.ultra = requested === 'ultra' && ultraCapable(this.renderer);
+    this.autoMon = new AutoQualityMonitor(requested);
     if (requested === 'ultra' && !this.ultra) console.warn('Ultra quality unsupported on this device (no float render targets): running High');
 
     this.scene.background = new THREE.Color(0x2a2824);
@@ -1895,6 +1897,8 @@ export class GameRenderer {
     if (this.fastFrames > 0) this.fastFrames = Math.max(0, this.fastFrames - win);
     // battery saver caps at 30 fps (perf/hud.ts): judge frames against that budget instead
     const capped = perfPrefs.battery;
+    // Auto quality: long stretches at the bottom (or comfortably at the top) adjust the next session's pick
+    this.autoMon.sample(this.level, this.ladder.length, med, win, capped);
     const slow = capped ? 1 / 26 : 1 / 42;
     const fast = capped ? 1 / 29 : 1 / 56;
     if (med > slow && this.level < this.ladder.length - 1) {
@@ -1915,6 +1919,7 @@ export class GameRenderer {
   }
   private govFrames = 0;
   private fastFrames = 0;
+  private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
     this.time += dt;
