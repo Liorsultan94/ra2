@@ -626,7 +626,10 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
   }
   // layered defence: a heavier interceptor (own weapon def / pk / munition) for some threat kinds
   const layer = ic.layer && ic.layer.kinds.includes(best.flight) ? WEAPONS[ic.layer.weapon] : undefined;
-  launchInterceptor(w, e, best, layer ?? wpn);
+  const iw = layer ?? wpn;
+  launchInterceptor(w, e, best, iw);
+  // shoot-shoot doctrine: ballistic, hypersonic and multi-hit threats get a pair, within the engagement cap
+  if ((best.flight === 'ballistic' || best.flight === 'hypersonic' || best.hp >= 2) && best.engaged < maxEngage(best)) launchInterceptor(w, e, best, iw);
   w.events.push({ t: 'fire', id: e.id, weapon: wpn.id, x: e.x, y: e.y, tx: best.x, ty: best.y, targetId: -1, owner: e.owner });
   return true;
 }

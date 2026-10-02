@@ -372,11 +372,15 @@ export class GameRenderer {
   /** Camera yaw in radians (0 = classic view from +X/+Z); animates towards yawGoal. */
   yaw = 0;
   private yawGoal = 0;
+  private yawFrom = 0;
+  private yawT = 1;
   private yawClock = 0;
 
   /** Rotate the view by 90 degree steps (animated). */
   rotateView(steps: number) {
     this.yawGoal += steps * (Math.PI / 2);
+    this.yawFrom = this.yaw;
+    this.yawT = 0;
   }
   /** Settled 90 degree view step 0..3 (where the rotation is heading). */
   get viewStep(): number {
@@ -398,8 +402,10 @@ export class GameRenderer {
     const rdt = this.yawClock ? Math.min(0.1, (now - this.yawClock) / 1000) : 0;
     this.yawClock = now;
     if (this.yaw !== this.yawGoal) {
-      const d = this.yawGoal - this.yaw;
-      this.yaw = Math.abs(d) < 0.002 ? this.yawGoal : this.yaw + d * Math.min(1, rdt * 9);
+      this.yawT = Math.min(1, this.yawT + rdt / 0.5);
+      const k = this.yawT;
+      const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      this.yaw = k >= 1 ? this.yawGoal : this.yawFrom + (this.yawGoal - this.yawFrom) * e;
     }
     const elev = this.elevation();
     const ca = Math.PI / 4 + this.yaw;
