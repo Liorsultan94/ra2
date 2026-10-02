@@ -1894,7 +1894,7 @@ export class BuildFx {
     const out: THREE.Vector3[] = [];
     for (const p of pts) if (Number.isFinite(p.x + p.y + p.z) && !out.some((q) => q.distanceToSquared(p) < 0.04)) out.push(p);
     out.sort((a, b) => a.distanceToSquared(from) - b.distanceToSquared(from));
-    return out.slice(0, 14).map((p) => {
+    return out.slice(0, 11).map((p) => {
       const fire: DamageFx = { pos: p, kind: 'fire', at: 9 };
       const smoke: DamageFx = { pos: p.clone().setY(p.y + 0.25), kind: 'smoke', at: 9 };
       this.damageFx.push(fire, smoke);
@@ -1916,14 +1916,15 @@ export class BuildFx {
     else this.burnT = Math.max(0, this.burnT - dt * 4);
     // exposure from burning neighbours decays unless they keep it up
     this.exposure = Math.max(0, this.exposure - dt * 0.5);
-    if (!this.fires) {
-      const from = this.fireSrc ?? this.damageFx[2]?.pos ?? new THREE.Vector3();
-      this.fires = this.firePoints(from);
-    }
-    const n = this.fires.length;
+    const n = this.fires ? this.fires.length : 11;
     const own = d >= 0.5 ? Math.min(1 + Math.floor(this.burnT / 2.2), Math.round(n * smooth(0.42, 0.95, d))) : 0;
     const ext = this.exposure > 6 ? Math.min(1 + Math.floor((this.exposure - 6) / 3), Math.ceil(n * 0.45)) : 0;
     const want = Math.max(own, ext);
+    if (!this.fires) {
+      if (want === 0) return; // only warming up (exposure below the ignition point)
+      const from = this.fireSrc ?? this.damageFx[2]?.pos ?? new THREE.Vector3();
+      this.fires = this.firePoints(from);
+    }
     // one point at a time: spreads every ~0.9 s, goes out every ~0.6 s
     if (want !== this.lit) {
       this.litT += dt;
@@ -1935,18 +1936,19 @@ export class BuildFx {
         this.litT = 0;
       }
     } else this.litT = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < this.fires.length; i++) {
       const on = i < this.lit;
       this.fires[i].fire.at = on ? 0 : 9;
-      // smoke thickens as more of the structure burns
-      this.fires[i].smoke.at = on && (i % 2 === 1 || this.lit > 4) ? 0 : 9;
+      // smoke thickens as more of the structure burns (one extra plume at 2, 5 and 9 points)
+      this.fires[i].smoke.at = on && (i === 1 || i === 4 || i === 8) ? 0 : 9;
     }
     if (this.lit === 0 && want === 0 && this.burnT === 0) {
       // all out: next fire starts from wherever it is lit next
       this.fires = null;
       this.fireSrc = null;
       this.damageFx.length = FX_SLOTS.length;
-      this.exposure = 0;
+      INFERNO.delete(this);
+      return;
     }
     // inferno: long burn at very low HP sets close neighbours alight
     if (d >= 0.8 && this.burnT > 20) {
