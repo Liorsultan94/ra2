@@ -2,9 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
@@ -15,13 +13,39 @@ import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
+import { Outskirts } from './outskirts';
+import { CombatOverlay } from './overlay';
+import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
+import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
+import { Atmosphere } from './atmos';
+import { TiltShiftPass } from './tiltshift';
+import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
 export type Quality = 'low' | 'medium' | 'high';
 
-const CAM_DIR = new THREE.Vector3(1, 1.18, 1).normalize();
+// ~35 degree elevation: a touch lower than before so units and buildings show more of their sides (RA2-like)
+const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
 const CAM_DIST = 80;
-const BASE_VIEW = 22;
+/** Perspective camera (C&C3-like): vertical field of view and pitch range (far zoom .. close zoom), degrees. */
+const PERSP_FOV = 38;
+const PITCH_FAR = 55;
+const PITCH_NEAR = 43;
+/** World units visible vertically at zoom 1 (game.ts picking relies on this). */
+export const BASE_VIEW = 22;
+export const MIN_ZOOM = 0.5;
+export const MAX_ZOOM = 3.6;
+/** Direction towards the late-afternoon sun: low, from the upper left of the screen. */
+const SUN_DIR = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
+
+/** One rung of the dynamic quality ladder (index 0 = best). */
+interface QualityStep {
+  pr: number;
+  gtao: boolean;
+  bloom: boolean;
+  shadow: number;
+  post: boolean;
+}
 
 interface Visual {
   id: number;
@@ -76,14 +100,6 @@ interface ProjVisual {
   first: boolean;
 }
 
-const VignetteShader = {
-  uniforms: { tDiffuse: { value: null }, strength: { value: 0.32 } },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;
-    void main(){ vec4 c = texture2D(tDiffuse, vUv); vec2 d = vUv - 0.5; float v = 1.0 - dot(d, d) * strength * 2.2;
-    c.rgb = mix(vec3(dot(c.rgb, vec3(0.299,0.587,0.114))), c.rgb, 1.1); gl_FragColor = vec4(c.rgb * v, c.a); }`,
-};
-
 export function styleFor(world: World, owner: number): ModelStyle {
   if (owner < 0) return { team: 0x9a9a9a, hull: 0x8a8070, accent: 0x6a6a6a, flag: [0x888888, 0xaaaaaa, 0x888888], faction: 'neutral', region: 'west' };
   const p = world.players[owner];
@@ -117,32 +133,40 @@ const MUNITION_FALLBACK: Record<string, MunitionKind> = {
   airMissile: 'airMissile',
   ballistic: 'ballistic',
   hypersonic: 'hypersonic',
+  cruise: 'airMissile',
 };
 
 export class GameRenderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera: THREE.OrthographicCamera;
+  readonly camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  /** ?cam=ortho keeps the classic orthographic view. */
+  readonly perspective: boolean;
   readonly fog: FogOfWar;
   readonly terrain: Terrain;
   readonly effects: Effects;
   readonly debris: Debris;
   readonly marks: GroundMarks;
+  /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
+  readonly overlay: CombatOverlay;
   readonly target = new THREE.Vector3();
   zoom = 1;
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private gtao: GTAOPass | null = null;
+  private finalPass: FinalPass | null = null;
+  private tilt: TiltShiftPass | null = null;
   private sun: THREE.DirectionalLight;
+  private hemi: THREE.HemisphereLight;
+  readonly outskirts: Outskirts;
+  /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
+  readonly atmos: Atmosphere;
   private visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
   private projVis = new Map<number, ProjVisual>();
   private ghost: THREE.Group | null = null;
   private ghostKey = '';
   private ghostTiles: THREE.Mesh[] = [];
-  private ringGeo = new THREE.RingGeometry(0.92, 1.05, 32).rotateX(-Math.PI / 2);
-  private boxRingGeo = new THREE.RingGeometry(0.95, 1.05, 4, 1, Math.PI / 4).rotateX(-Math.PI / 2);
-  private ringMats = new Map<string, THREE.MeshBasicMaterial>();
   private burnt: THREE.MeshStandardMaterial;
   private streakGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
   private streakMat = new THREE.MeshBasicMaterial({ color: 0xffd28a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
@@ -150,10 +174,20 @@ export class GameRenderer {
   private time = 0;
   private width = 1;
   private height = 1;
+  // dynamic quality governor
+  private ladder: QualityStep[] = [];
+  private level = 0;
+  private usePost = false;
+  private adaptive = true;
   private frameTimes: number[] = [];
-  private pixelRatio: number;
-  private maxPixelRatio: number;
+  private lastFrameAt = 0;
+  private goodWindows = 0;
+  private upNeed = 3;
+  private lastUpAt = -1e9;
+  private lastFt = 0;
   selection = new Set<number>();
+  /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
+  hover = -1;
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
 
@@ -164,66 +198,107 @@ export class GameRenderer {
     readonly quality: Quality,
   ) {
     this.viewer = viewer;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality !== 'low', powerPreference: 'high-performance' });
-    this.maxPixelRatio = Math.min(window.devicePixelRatio, quality === 'high' ? 2 : quality === 'medium' ? 1.5 : 1);
-    this.pixelRatio = this.maxPixelRatio;
-    this.renderer.setPixelRatio(this.pixelRatio);
+    const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+    const dpr = window.devicePixelRatio || 1;
+    // low renders straight to the (multisampled) canvas; medium/high go through the post chain
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = quality !== 'low';
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.info.autoReset = false;
 
-    this.scene.background = new THREE.Color(0x07090b);
-    this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
+    this.scene.background = new THREE.Color(0x2a2824);
+    this.perspective = !/[?&]cam=ortho\b/.test(location.search);
+    this.camera = this.perspective ? new THREE.PerspectiveCamera(PERSP_FOV, 1, 0.5, 400) : new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
 
-    // image based lighting for believable metal and glass
+    // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.32;
+    this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
+    void loadSkyEnvironment(this.renderer).then((env) => {
+      if (!env || this.disposed) return;
+      this.scene.environment?.dispose();
+      this.scene.environment = env;
+      this.scene.environmentIntensity = 0.42;
+    });
 
-    const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x5a4a35, 1.0);
-    this.scene.add(hemi);
-    this.sun = new THREE.DirectionalLight(0xfff0d8, 2.8);
+    // golden hour: warm low key light, cool sky fill, warm earthy bounce
+    this.hemi = new THREE.HemisphereLight(0x9fbcea, 0x6a5232, 0.8);
+    this.scene.add(this.hemi);
+    this.sun = new THREE.DirectionalLight(0xffc68c, 3.2);
     this.sun.castShadow = quality !== 'low';
-    const sm = quality === 'high' ? 4096 : 2048;
-    this.sun.shadow.mapSize.set(sm, sm);
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.bias = -0.00025;
+    this.sun.shadow.normalBias = 0.018;
+    this.sun.shadow.radius = 2.2;
     this.scene.add(this.sun, this.sun.target);
-    this.scene.add(new THREE.AmbientLight(0x404858, 0.3));
 
     const { map } = world;
     this.fog = new FogOfWar(map.w, map.h);
     this.terrain = new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
+    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
+    this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     this.debris = new Debris(map, this.effects, this.fog);
     this.marks = new GroundMarks(map, this.fog);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
+    this.effects.setView(this.target, this.camera);
     this.scene.add(this.debris.group, this.marks.group);
+    this.overlay = new CombatOverlay(map);
+    this.scene.add(this.overlay.group);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
-    if (quality !== 'low') {
-      this.composer = new EffectComposer(this.renderer);
+    // ---- quality ladder: drop resolution first, then the expensive effects
+    const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
+    const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
+    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
+    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0;
+    const prs: number[] = [];
+    for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
+    prs.push(minPR);
+    const post = quality !== 'low';
+    // ambient occlusion: always on high; on medium only for desktops (phones spend the budget on resolution)
+    const ao = quality === 'high' || (quality === 'medium' && !coarse);
+    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post };
+    for (const pr of prs) this.ladder.push((step = { ...step, pr }));
+    if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
+    if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
+    if (step.bloom) this.ladder.push((step = { ...step, bloom: false }));
+    if (step.shadow > 1024) this.ladder.push((step = { ...step, shadow: 1024 }));
+    if (step.post) this.ladder.push((step = { ...step, post: false }));
+    this.level = Math.max(0, this.ladder.findIndex((s) => s.pr <= startPR + 0.01));
+    this.adaptive = !/[?&]adapt=0\b/.test(location.search);
+
+    if (post) {
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0 });
+      this.composer = new EffectComposer(this.renderer, target);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
-      if (quality === 'high') {
+      if (ao) {
         try {
           this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
-          this.gtao.blendIntensity = 0.85;
+          this.gtao.blendIntensity = 0.8;
           this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1 });
           this.composer.addPass(this.gtao);
         } catch {
           this.gtao = null;
         }
       }
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.5, 0.45, 0.85);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9);
       this.composer.addPass(this.bloom);
-      this.composer.addPass(new OutputPass());
-      this.composer.addPass(new ShaderPass(VignetteShader));
+      this.finalPass = new FinalPass();
+      this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
+      this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
+      this.composer.addPass(this.finalPass);
+      // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
+      if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
+      this.finalPass.haze = this.effects.enableHaze(this.camera);
     }
+    this.applyLevel(this.level, false);
+    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -236,56 +311,225 @@ export class GameRenderer {
     }
   }
 
+  private disposed = false;
+
   resize(w: number, h: number) {
     this.width = w;
     this.height = h;
     this.renderer.setSize(w, h, false);
-    this.composer?.setSize(w, h);
+    if (this.composer) {
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.composer.setSize(w, h);
+    }
     this.bloom?.setSize(w / 2, h / 2);
+    this.tilt?.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
     this.updateCamera();
+  }
+
+  /** Apply one rung of the quality ladder. */
+  private applyLevel(level: number, doResize = true) {
+    const s = this.ladder[level];
+    if (!s) return;
+    this.level = level;
+    if (Math.abs(this.renderer.getPixelRatio() - s.pr) > 0.001) {
+      this.renderer.setPixelRatio(s.pr);
+      if (doResize) this.resize(this.width, this.height);
+    }
+    if (this.gtao) this.gtao.enabled = s.gtao;
+    if (this.bloom) this.bloom.enabled = s.bloom;
+    this.usePost = !!this.composer && s.post;
+    this.effects.budget = 1 - 0.45 * (level / Math.max(1, this.ladder.length - 1));
+    if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
+      this.sun.shadow.mapSize.set(s.shadow, s.shadow);
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+    }
+  }
+
+  /** Camera shake (0.03 small .. 0.45 huge); with a position (tile x, y) it fades with distance from the view centre. */
+  shake(amount: number, x?: number, y?: number) {
+    this.effects.addShake(amount, x, y);
+  }
+
+  /** Current governor state, for debugging / screenshots. */
+  perfStats() {
+    const s = this.ladder[this.level];
+    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+  }
+
+  /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
+  defaultZoom(wide = false) {
+    // the perspective camera frames a little closer: units read big, the far side recedes
+    const visible = (this.perspective ? Math.max(10, Math.min(11.5, this.height / 62)) : Math.max(11, Math.min(12.5, this.height / 58))) * (wide ? 1.4 : 1);
+    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, BASE_VIEW / visible));
   }
 
   // ------------------------------------------------------------------ camera
 
+  private sunDir = SUN_DIR.clone();
+  private sunRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
+  private sunUp = new THREE.Vector3().crossVectors(SUN_DIR, this.sunRight).normalize();
+  private corner = new THREE.Vector3();
+  private camFwd = new THREE.Vector3();
+  /** Unit vector from the view target towards the camera (rotates with the 90 degree view steps). */
+  readonly camDir = CAM_DIR.clone();
+  /** Camera yaw in radians (0 = classic view from +X/+Z); animates towards yawGoal. */
+  yaw = 0;
+  private yawGoal = 0;
+  private yawFrom = 0;
+  private yawT = 1;
+  private yawClock = 0;
+
+  /** Rotate the view by 90 degree steps (animated). */
+  rotateView(steps: number) {
+    this.yawGoal += steps * (Math.PI / 2);
+    this.yawFrom = this.yaw;
+    this.yawT = 0;
+  }
+  /** Settled 90 degree view step 0..3 (where the rotation is heading). */
+  get viewStep(): number {
+    return ((Math.round(this.yawGoal / (Math.PI / 2)) % 4) + 4) % 4;
+  }
+  get rotating(): boolean {
+    return Math.abs(this.yawGoal - this.yaw) > 1e-3;
+  }
+  /** Camera elevation above the horizon (radians); the perspective camera tilts lower when zoomed in. */
+  elevation(): number {
+    if (!this.perspective) return Math.asin(CAM_DIR.y);
+    const k = Math.max(0, Math.min(1, (this.zoom - 0.8) / (MAX_ZOOM - 0.8)));
+    return THREE.MathUtils.degToRad(PITCH_FAR + (PITCH_NEAR - PITCH_FAR) * k);
+  }
+
   private updateCamera() {
+    // animate the view rotation on real time (render dt may be slowed by cinematics)
+    const now = performance.now();
+    const rdt = this.yawClock ? Math.min(0.1, (now - this.yawClock) / 1000) : 0;
+    this.yawClock = now;
+    if (this.yaw !== this.yawGoal) {
+      this.yawT = Math.min(1, this.yawT + rdt / 0.5);
+      const k = this.yawT;
+      const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      this.yaw = k >= 1 ? this.yawGoal : this.yawFrom + (this.yawGoal - this.yawFrom) * e;
+    }
+    const elev = this.elevation();
+    const ca = Math.PI / 4 + this.yaw;
+    this.camDir.set(Math.cos(ca) * Math.cos(elev), Math.sin(elev), Math.sin(ca) * Math.cos(elev));
+    // the sun turns with the view so the scene is always lit from the upper left of the screen
+    this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
+    this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
+    const D = this.camDir;
     const aspect = this.width / Math.max(1, this.height);
     const vh = BASE_VIEW / this.zoom;
-    this.camera.left = (-vh * aspect) / 2;
-    this.camera.right = (vh * aspect) / 2;
-    this.camera.top = vh / 2;
-    this.camera.bottom = -vh / 2;
-    this.camera.updateProjectionMatrix();
+    let dist = CAM_DIST;
+    const cam = this.camera;
+    if (cam instanceof THREE.PerspectiveCamera) {
+      // dolly zoom: the view height at the target matches the orthographic BASE_VIEW / zoom
+      dist = vh / (2 * Math.tan(THREE.MathUtils.degToRad(PERSP_FOV / 2)));
+      cam.aspect = aspect;
+      cam.near = Math.max(0.3, dist * 0.2);
+      cam.far = dist + 260;
+    } else {
+      cam.left = (-vh * aspect) / 2;
+      cam.right = (vh * aspect) / 2;
+      cam.top = vh / 2;
+      cam.bottom = -vh / 2;
+    }
+    cam.updateProjectionMatrix();
     const ty = groundHeight(this.world.map, this.target.x, this.target.z);
-    const shake = this.effects?.shake ?? 0;
-    const sx = shake ? (Math.random() - 0.5) * shake : 0;
-    const sz = shake ? (Math.random() - 0.5) * shake : 0;
-    this.camera.position.set(this.target.x + CAM_DIR.x * CAM_DIST + sx, ty + CAM_DIR.y * CAM_DIST, this.target.z + CAM_DIR.z * CAM_DIST + sz);
-    this.camera.lookAt(this.target.x + sx, ty, this.target.z + sz);
+    const so = this.effects?.shakeOffset();
+    const sx = so ? so.x : 0;
+    const sz = so ? so.z : 0;
+    cam.position.set(this.target.x + D.x * dist + sx, ty + D.y * dist, this.target.z + D.z * dist + sz);
+    cam.lookAt(this.target.x + sx, ty, this.target.z + sz);
     this.camera.updateMatrixWorld();
-    const r = vh * aspect * 0.75 + 4;
-    const sc = this.sun.shadow.camera;
-    sc.left = -r;
-    sc.right = r;
-    sc.top = r;
-    sc.bottom = -r;
-    sc.near = 1;
-    sc.far = 120;
-    sc.updateProjectionMatrix();
-    this.sun.position.set(this.target.x - 22, 40, this.target.z + 14);
-    this.sun.target.position.set(this.target.x, 0, this.target.z);
+    this.fitShadow(ty);
+    const u = this.fog.uniforms;
+    u.fogTarget.value.set(this.target.x, ty, this.target.z);
+    u.fogView.value.copy(D).negate();
+    u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
+    this.tilt?.setZoom(this.zoom, this.defaultZoom(), this.renderer.getPixelRatio());
+  }
+
+  /**
+   * Fit the sun's shadow frustum tightly around what the camera sees, snapped
+   * to whole shadow-map texels so the shadows stay crisp and don't shimmer
+   * while panning.
+   */
+  private fitShadow(ty: number) {
+    if (!this.sun.castShadow) return;
+    const R = this.sunRight;
+    const U = this.sunUp;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    // footprint of the view frustum on two height slabs; rays diverge with the perspective camera,
+    // so far corners are pulled in to keep the shadow map resolution on what matters
+    const reach = 18 + BASE_VIEW / this.zoom;
+    const tx0 = this.target.x;
+    const tz0 = this.target.z;
+    for (const nx of [-1, 1])
+      for (const ny of [-1, 1]) {
+        this.corner.set(nx, ny, -1).unproject(this.camera);
+        this.camFwd.set(nx, ny, 1).unproject(this.camera).sub(this.corner).normalize();
+        for (const hy of [ty - 1.5, ty + 3.5]) {
+          const t = this.camFwd.y < -1e-4 ? (hy - this.corner.y) / this.camFwd.y : 1e4;
+          let px = this.corner.x + this.camFwd.x * t;
+          const py = hy;
+          let pz = this.corner.z + this.camFwd.z * t;
+          const dd = Math.hypot(px - tx0, pz - tz0);
+          if (dd > reach) {
+            px = tx0 + ((px - tx0) * reach) / dd;
+            pz = tz0 + ((pz - tz0) * reach) / dd;
+          }
+          const a = px * R.x + py * R.y + pz * R.z;
+          const b = px * U.x + py * U.y + pz * U.z;
+          minX = Math.min(minX, a);
+          maxX = Math.max(maxX, a);
+          minY = Math.min(minY, b);
+          maxY = Math.max(maxY, b);
+        }
+      }
+    // quantise the extent (only changes with zoom/resize) and snap the centre to texels
+    const hx = Math.ceil(((maxX - minX) / 2 + 1.5) / 2) * 2;
+    const hy = Math.ceil(((maxY - minY) / 2 + 1.5) / 2) * 2;
+    const size = this.sun.shadow.mapSize.x;
+    const tx = (2 * hx) / size;
+    const tyx = (2 * hy) / size;
+    const cx = Math.round((minX + maxX) / 2 / tx) * tx;
+    const cy = Math.round((minY + maxY) / 2 / tyx) * tyx;
+    const sc = this.sun.shadow.camera;
+    if (sc.right !== hx || sc.top !== hy) {
+      sc.left = -hx;
+      sc.right = hx;
+      sc.top = hy;
+      sc.bottom = -hy;
+      sc.near = 1;
+      sc.far = 140;
+      sc.updateProjectionMatrix();
+    }
+    const cz = this.target.x * -this.sunDir.x + ty * -this.sunDir.y + this.target.z * -this.sunDir.z;
+    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(this.sunDir, -cz);
+    this.sun.target.position.copy(c);
+    this.sun.position.copy(c).addScaledVector(this.sunDir, 70);
+    this.sun.target.updateMatrixWorld();
+    this.sun.updateMatrixWorld();
   }
 
   setZoom(z: number) {
-    this.zoom = Math.max(0.45, Math.min(3.2, z));
+    this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
   }
 
   panPixels(dx: number, dy: number) {
     const vh = BASE_VIEW / this.zoom;
     const wpp = vh / this.height;
-    const right = new THREE.Vector3(1, 0, -1).normalize();
-    const up = new THREE.Vector3(-1, 0, -1).normalize();
-    const elev = Math.asin(CAM_DIR.y);
+    // screen right / screen up on the ground plane for the current view rotation
+    const ca = Math.PI / 4 + this.yaw;
+    const right = new THREE.Vector3(Math.sin(ca), 0, -Math.cos(ca));
+    const up = new THREE.Vector3(-Math.cos(ca), 0, -Math.sin(ca));
+    const elev = this.elevation();
     this.target.addScaledVector(right, dx * wpp);
     this.target.addScaledVector(up, (-dy * wpp) / Math.sin(elev));
     this.clampTarget();
@@ -293,6 +537,46 @@ export class GameRenderer {
 
   centerOn(x: number, y: number) {
     this.target.set(x, 0, y);
+    this.clampTarget();
+  }
+
+  /** Ground point the camera must look at so the 3D point (x, height h, y) lands in the screen centre. */
+  focusPoint(x: number, h: number, y: number): { x: number; y: number } {
+    const D = this.camDir;
+    const g = standHeight(this.world.map, Math.max(0, Math.min(this.world.map.w - 0.01, x)), Math.max(0, Math.min(this.world.map.h - 0.01, y)));
+    const s = (g - h) / D.y;
+    return { x: x + D.x * s, y: y + D.z * s };
+  }
+
+  /** Screen pixels per world unit at the view target, or at world point p (perspective shrinks with depth). */
+  pixelsPerUnit(p?: { x: number; y: number; z: number }): number {
+    const base = this.height / (BASE_VIEW / this.zoom);
+    const cam = this.camera;
+    if (!p || !(cam instanceof THREE.PerspectiveCamera)) return base;
+    cam.getWorldDirection(this.camFwd);
+    const depth = (p.x - cam.position.x) * this.camFwd.x + (p.y - cam.position.y) * this.camFwd.y + (p.z - cam.position.z) * this.camFwd.z;
+    const ty = groundHeight(this.world.map, this.target.x, this.target.z);
+    const ref = (this.target.x - cam.position.x) * this.camFwd.x + (ty - cam.position.y) * this.camFwd.y + (this.target.z - cam.position.z) * this.camFwd.z;
+    return (base * ref) / Math.max(0.5, depth);
+  }
+
+  /** Intersection of the view ray through a screen point with the horizontal plane at height h. */
+  screenToPlane(sx: number, sy: number, h: number): { x: number; y: number } {
+    this.ndc.set((sx / this.width) * 2 - 1, -(sy / this.height) * 2 + 1);
+    this.ray.setFromCamera(this.ndc, this.camera);
+    const o = this.ray.ray.origin;
+    const d = this.ray.ray.direction;
+    const t = (o.y - h) / Math.max(1e-4, -d.y);
+    return { x: o.x + d.x * t, y: o.z + d.z * t };
+  }
+
+  /** Drag-scroll: move the view so the ground under (x0, y0) ends up under (x1, y1). */
+  panDrag(x0: number, y0: number, x1: number, y1: number) {
+    const h = groundHeight(this.world.map, this.target.x, this.target.z);
+    const a = this.screenToPlane(x0, y0, h);
+    const b = this.screenToPlane(x1, y1, h);
+    this.target.x += a.x - b.x;
+    this.target.z += a.y - b.y;
     this.clampTarget();
   }
 
@@ -396,19 +680,7 @@ export class GameRenderer {
     this.visuals.delete(v.id);
   }
 
-  private ringMat(color: number) {
-    const key = color.toString(16);
-    let m = this.ringMats.get(key);
-    if (!m) {
-      m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false });
-      this.ringMats.set(key, m);
-    }
-    return m;
-  }
-
-  private tmpQ = new THREE.Quaternion();
-  private tmpQ2 = new THREE.Quaternion();
-  private tmpN = new THREE.Vector3();
+  private airShadows = new AirShadows();
   private yAxis = new THREE.Vector3(0, 1, 0);
 
   private legacyAnim(m: Model, s: AnimState) {
@@ -424,6 +696,7 @@ export class GameRenderer {
   private syncEntities(alpha: number, dt: number) {
     const w = this.world;
     const seen = new Set<number>();
+    this.airShadows.begin(this.scene);
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -451,8 +724,6 @@ export class GameRenderer {
         const h = groundHeight(w.map, e.x, e.y);
         root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
         const k = e.buildAnim;
-        const ease = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3);
-        root.scale.set(1, Math.max(0.02, ease), 1);
         a.built = k;
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
         a.moving = false;
@@ -487,14 +758,14 @@ export class GameRenderer {
             const climb = (e.z - e.pz) * TPS;
             root.rotation.z = Math.max(-0.9, Math.min(0.4, climb * 0.25));
           }
+          if (vis) {
+            const sz = v.model.size;
+            this.airShadows.add(w.map, p.x, p.z, yaw, p.y - standHeight(w.map, p.x, p.z), sz ? sz.x : 0.6, sz ? sz.z : 0.5, !ud.fixedWing && d.model !== 'uav' && d.model !== 'heavy_uav' && d.model !== 'shahed');
+          }
         } else if (ud.category === 'vehicle') {
-          const m = w.map;
-          const hx = standHeight(m, p.x + 0.35, p.z) - standHeight(m, p.x - 0.35, p.z);
-          const hz = standHeight(m, p.x, p.z + 0.35) - standHeight(m, p.x, p.z - 0.35);
-          this.tmpN.set(-hx / 0.7, 1, -hz / 0.7).normalize();
-          this.tmpQ.setFromUnitVectors(this.yAxis, this.tmpN);
-          this.tmpQ2.setFromAxisAngle(this.yAxis, yaw);
-          root.quaternion.copy(this.tmpQ).multiply(this.tmpQ2);
+          poseGroundVehicle(v.model, a, w.map, p, yaw, dt, vis);
+        } else if (v.model.infantry) {
+          poseInfantry(v.model, a, w.map, p, yaw, dt);
         } else {
           root.rotation.set(0, yaw, 0);
         }
@@ -509,6 +780,7 @@ export class GameRenderer {
       }
       this.updateRing(e, v, d);
     }
+    this.airShadows.end();
     for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
   }
 
@@ -551,7 +823,9 @@ export class GameRenderer {
       }
     }
     // battle damage
-    if (ud.category !== 'infantry' && e.hp < e.maxHp * 0.4) {
+    if (ud.category !== 'infantry' && emitDamageFx(this.effects, m, v.anim.damage, dt, ud.harvester || ud.mcv ? 1.3 : 1)) {
+      // model-specific damage points (smoke columns, fires, sparks)
+    } else if (ud.category !== 'infantry' && e.hp < e.maxHp * 0.4) {
       v.fxTimer -= dt;
       if (v.fxTimer <= 0) {
         v.fxTimer = 0.14;
@@ -568,7 +842,9 @@ export class GameRenderer {
     }
     if (e.jammedUntil > this.world.tick && Math.random() < dt * 8) this.effects.spark(p.x, p.y, p.z, 0x70b0ff);
     // rotor downwash kicks up dust under low-flying helicopters
-    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.4 && Math.random() < dt * 6) this.effects.dust(p.x, standHeight(this.world.map, p.x, p.z), p.z, 1.5);
+    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2));
+    // decoy flares when a missile is homing in
+    if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
   }
 
   private buildingFx(e: Entity, v: Visual, dt: number) {
@@ -586,7 +862,9 @@ export class GameRenderer {
         else this.effects.smoke(wp.x, wp.y, wp.z, em.kind === 'steam' ? 0.9 : 0.6, em.kind === 'smoke');
       }
     }
-    if (e.hp < e.maxHp * 0.55) {
+    if (e.buildAnim >= 1 && emitDamageFx(this.effects, v.model, v.anim.damage, dt, Math.max(1, Math.sqrt(bd.w * bd.h) * 0.8))) {
+      // model-specific damage points
+    } else if (e.hp < e.maxHp * 0.55) {
       v.fxTimer -= dt;
       if (v.fxTimer <= 0) {
         v.fxTimer = 0.12;
@@ -600,30 +878,16 @@ export class GameRenderer {
     if (e.repairing && Math.random() < dt * 3) this.effects.spark(root.position.x + (Math.random() - 0.5) * bd.w, root.position.y + (v.model.height ?? 0.6) * Math.random(), root.position.z + (Math.random() - 0.5) * bd.h, 0x80ff80);
   }
 
+  /** Selection / hover rings live in the combat overlay (src/render/overlay.ts). */
   private updateRing(e: Entity, v: Visual, d: (typeof DEFS)[string]) {
-    const sel = this.selection.has(e.id) && v.visible;
-    if (sel && !v.ring) {
-      const own = e.owner === this.viewer;
-      const mat = this.ringMat(own ? 0x5dff7a : e.owner < 0 ? 0xffe060 : 0xff4040);
-      if (e.kind === 'building') {
-        const bd = buildingDef(e.def);
-        v.ring = new THREE.Mesh(this.boxRingGeo, mat);
-        v.ring.scale.set((bd.w / 2) * 1.414 * 0.98, 1, (bd.h / 2) * 1.414 * 0.98);
-      } else {
-        v.ring = new THREE.Mesh(this.ringGeo, mat);
-        v.ring.scale.setScalar(Math.max(0.28, (d as { radius?: number }).radius! * 1.25));
-      }
-      v.ring.renderOrder = 2;
-      this.scene.add(v.ring);
-    } else if (!sel && v.ring) {
-      this.scene.remove(v.ring);
-      v.ring = null;
-    }
-    if (v.ring) {
-      const rp = v.model.root.position;
-      const gy = e.kind === 'unit' && unitDef(e.def).air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
-      v.ring.position.set(rp.x, gy + 0.04, rp.z);
-    }
+    const sel = this.selection.has(e.id);
+    if (!v.visible || (!sel && this.hover !== e.id)) return;
+    const rp = v.model.root.position;
+    const air = e.kind === 'unit' && unitDef(e.def).air;
+    const gy = air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
+    const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
+    const bd = e.kind === 'building' ? buildingDef(e.def) : null;
+    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4);
   }
 
   // ------------------------------------------------------------------ wrecks
@@ -711,7 +975,7 @@ export class GameRenderer {
           if (Math.random() < dt * 30) this.effects.dust(w.x + (Math.random() - 0.5) * w.w, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d, 3);
           if (Math.random() < dt * 8) this.debris.burst('concrete', w.x + (Math.random() - 0.5) * w.w, w.y + w.h * (1 - k), w.z + (Math.random() - 0.5) * w.d, 2, 2, 0.08);
         } else if (w.t < 25 && Math.random() < dt * 10) {
-          this.effects.smoke(w.x + (Math.random() - 0.5) * w.w * 0.8, w.y + 0.2, w.z + (Math.random() - 0.5) * w.d * 0.8, 1.4);
+          this.effects.column(w.x + (Math.random() - 0.5) * w.w * 0.8, w.y + 0.2, w.z + (Math.random() - 0.5) * w.d * 0.8, 1.4);
           if (w.t < 14 && Math.random() < 0.6) this.effects.flame(w.x + (Math.random() - 0.5) * w.w * 0.7, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d * 0.7, 1.3);
         }
         if (w.t > w.max - 3) r.position.y -= dt * 0.15;
@@ -722,7 +986,8 @@ export class GameRenderer {
       } else {
         // burning vehicle wreck
         if (w.t < 9 && Math.random() < dt * 14) this.effects.flame(w.x + (Math.random() - 0.5) * 0.4 * w.size, w.y + 0.3, w.z + (Math.random() - 0.5) * 0.4 * w.size, 0.9 * w.size);
-        if (w.t < 20 && Math.random() < dt * 8) this.effects.smoke(w.x, w.y + 0.4, w.z, 1.0 * w.size);
+        if (w.t < 22 && Math.random() < dt * 7) this.effects.column(w.x, w.y + 0.4, w.z, (w.t < 9 ? 1.1 : 0.8) * w.size);
+        if (w.t < 9) this.effects.burnGlow(w.x, w.y + 0.3, w.z, 2.6 * w.size * Math.min(1, (9 - w.t) / 3));
         if (w.t > w.max - 2.5) r.position.y = w.y - (w.t - (w.max - 2.5)) * 0.25;
       }
       const tt = w.turret;
@@ -791,7 +1056,14 @@ export class GameRenderer {
       if (vel.lengthSq() > 1e-6) {
         v.obj.lookAt(pos.clone().add(vel));
         v.obj.rotateY(-Math.PI / 2);
+        if (p.hits > 0) {
+          // damaged rounds wobble as they fly on
+          const wk = Math.min(1, p.hits / Math.max(1, p.maxHp)) * 0.45;
+          v.obj.rotateZ(Math.sin(this.time * 17 + p.id) * wk);
+          v.obj.rotateY(Math.cos(this.time * 13 + p.id * 2) * wk);
+        }
       }
+      if ((p.flight === 'sam' || p.flight === 'airMissile') && p.targetId >= 0) this.effects.threaten(p.targetId);
       if (v.streak) {
         v.streak.visible = visible;
         const from = v.first ? pos.clone().addScaledVector(vel, -0.03) : v.last;
@@ -805,7 +1077,8 @@ export class GameRenderer {
         const k = p.T > 0 ? p.age / p.T : 0;
         const boost =
           p.flight === 'ballistic' ? k < 0.4 : p.flight === 'hypersonic' ? k < 0.3 : p.flight === 'rocketSalvo' ? k < 0.6 : p.flight === 'artillery' || p.flight === 'mortar' || p.flight === 'shell' ? false : true;
-        this.effects.trail(v.last, pos, p.flight, boost);
+        this.effects.trail(v.last, pos, p.flight, boost, p.age / TPS + p.id * 0.37);
+        if (p.hits > 0) this.effects.damagedTrail(v.last, pos, p.hits / Math.max(1, p.maxHp));
       }
       v.last.copy(pos);
       v.first = false;
@@ -881,6 +1154,9 @@ export class GameRenderer {
       case 'hypersonic':
         p = BLASTS.ballistic;
         break;
+      case 'cruise':
+        p = w.damage >= 300 ? BLASTS.ballistic : BLASTS.missile;
+        break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
         break;
@@ -909,15 +1185,21 @@ export class GameRenderer {
           case 'instant': {
             const t = this.world.get(ev.targetId);
             fx.muzzle(pos, dir, wpn.warhead === 'flak' ? 0.55 : 0.35);
-            fx.tracer(pos, tp, !(t && t.kind === 'unit' && unitDef(t.def).air));
+            const inf = src.kind === 'unit' && unitDef(src.def).category === 'infantry';
+            fx.tracer(pos, tp, !(t && t.kind === 'unit' && unitDef(t.def).air), inf ? 1 : 2, wpn.warhead === 'flak');
+            const sv = inf ? undefined : this.visuals.get(src.id);
+            if (sv && sv.visible) ejectCasing(fx, sv.model, dir.x, dir.z, wpn.warhead === 'flak');
             break;
           }
           case 'beam':
             fx.laser(pos, tp);
             break;
-          case 'shell':
+          case 'shell': {
             fx.muzzle(pos, dir, 1.3);
+            const sv = this.visuals.get(src.id);
+            if (sv && sv.visible) ejectCasing(fx, sv.model, dir.x, dir.z, true);
             break;
+          }
           case 'artillery':
             fx.muzzle(pos, dir, wpn.flight === 'mortar' ? 0.7 : 1.7);
             break;
@@ -941,11 +1223,16 @@ export class GameRenderer {
       }
       case 'airburst': {
         if (!this.visibleAt(ev.x, ev.y)) break;
-        const big = ev.victim === 'ballistic' || ev.victim === 'hypersonic';
+        if (ev.kind === 'hit') {
+          fx.airHit(ev.x, ev.z, ev.y, ev.maxHp ? 1 - (ev.hpLeft ?? 0) / ev.maxHp : 0.5);
+          break;
+        }
+        const big = ev.victim === 'ballistic' || ev.victim === 'hypersonic' || (ev.kind === 'kill' && (ev.maxHp ?? 1) >= 3);
         fx.airburst(ev.x, ev.z, ev.y, ev.kind === 'kill', standHeight(this.world.map, ev.x, ev.y), big);
         break;
       }
       case 'impact': {
+        if (!ev.air) this.atmos.impact(ev.x, ev.y, this.blastFor(ev.weapon, false)?.size ?? 0);
         if (!this.visibleAt(ev.x, ev.y)) break;
         const prof = this.blastFor(ev.weapon, !!ev.air);
         if (!prof) break;
@@ -968,6 +1255,7 @@ export class GameRenderer {
         const shown = this.visibleAt(ev.x, ev.y);
         const d = DEFS[ev.def];
         const gy = standHeight(this.world.map, ev.x, ev.y);
+        if (d.kind === 'building' || (unitDef(ev.def).category === 'vehicle' && !unitDef(ev.def).air)) this.atmos.impact(ev.x, ev.y, d.kind === 'building' ? 2 : 1.1);
         if (d.kind === 'building') {
           const bd = buildingDef(ev.def);
           if (shown) {
@@ -1100,25 +1388,42 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------- frame
 
-  /** Keep the frame rate up on weak GPUs by lowering the render resolution. */
-  private adaptResolution(dt: number) {
-    if (dt <= 0) return;
-    this.frameTimes.push(dt);
-    if (this.frameTimes.length < 90) return;
-    const avg = this.frameTimes.reduce((s, x) => s + x, 0) / this.frameTimes.length;
+  /**
+   * Dynamic quality: watch real frame times and walk the quality ladder
+   * (pixel ratio first, then AO / bloom / shadow resolution / post) down when
+   * the GPU struggles and back up when there is headroom. Upgrades that get
+   * undone quickly make the next upgrade attempt wait longer.
+   */
+  private adaptQuality() {
+    const now = performance.now();
+    const gap = (now - this.lastFrameAt) / 1000;
+    this.lastFrameAt = now;
+    // very long gaps are tab switches / pauses, not slow frames; the median filters GC spikes
+    if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
+    const ft = gap;
+    this.frameTimes.push(ft);
+    if (this.frameTimes.length < 30) return;
+    const sorted = this.frameTimes.slice().sort((a, b) => a - b);
     this.frameTimes.length = 0;
-    let pr = this.pixelRatio;
-    if (avg > 1 / 28 && pr > 0.7) pr = Math.max(0.7, pr - 0.15);
-    else if (avg < 1 / 55 && pr < this.maxPixelRatio) pr = Math.min(this.maxPixelRatio, pr + 0.1);
-    if (pr !== this.pixelRatio) {
-      this.pixelRatio = pr;
-      this.renderer.setPixelRatio(pr);
-      this.resize(this.width, this.height);
-    }
+    const med = sorted[sorted.length >> 1];
+    this.lastFt = med;
+    if (med > 1 / 42 && this.level < this.ladder.length - 1) {
+      // undoing a recent upgrade: be more patient next time
+      if (now - this.lastUpAt < 4000) this.upNeed = Math.min(40, this.upNeed * 2);
+      this.goodWindows = 0;
+      this.applyLevel(Math.min(this.ladder.length - 1, this.level + (med > 1 / 24 ? 2 : 1)));
+    } else if (med < 1 / 56 && this.level > 0) {
+      if (++this.goodWindows >= this.upNeed) {
+        this.goodWindows = 0;
+        this.lastUpAt = now;
+        this.applyLevel(this.level - 1);
+      }
+    } else this.goodWindows = 0;
   }
 
   render(alpha: number, dt: number) {
     this.time += dt;
+    this.renderer.info.reset();
     for (let i = this.scheduled.length - 1; i >= 0; i--) {
       if (this.scheduled[i].t <= this.time) {
         const s = this.scheduled[i];
@@ -1131,15 +1436,17 @@ export class GameRenderer {
       this.fog.update(p.explored, p.visible, dt);
     }
     this.syncEntities(alpha, dt);
+    this.overlay.endFrame();
     this.updateWrecks(dt);
+    this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.effects.update(dt);
     this.updateCamera();
-    if (this.composer) this.composer.render(dt);
+    if (this.composer && this.usePost) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
-    this.adaptResolution(dt);
+    this.adaptQuality();
   }
 
   visualHeight(id: number): number {
@@ -1151,6 +1458,8 @@ export class GameRenderer {
   }
 
   dispose() {
+    this.disposed = true;
+    this.atmos.dispose();
     this.renderer.dispose();
     this.composer?.dispose();
   }

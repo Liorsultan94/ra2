@@ -49,6 +49,8 @@ export interface AnimState {
   damage: number; // 0 = pristine .. 1 = destroyed
   built: number; // building construction progress 0..1 (1 = done)
   powered: boolean; // buildings: false when the owner is low on power
+  /** Ground vehicles: terrain roughness under the hull, 0 (bridge / smooth) .. 1 (ore field, broken ground); set by the renderer's unit pose (render/unitpose.ts). */
+  rough?: number;
 }
 
 export interface Model {
@@ -75,6 +77,17 @@ export interface Model {
   wheeled?: boolean;
   /** Infantry: the model plays its own death animation via anim(s.dead > 0); renderer removes it after ~2.5 s. */
   infantry?: boolean;
+  /**
+   * Battle-damage particle sources (vehicles / aircraft), in root-local space.
+   * Each point starts emitting once AnimState.damage >= `at` (e.g. engine deck
+   * smoke at 0.35, fire at 0.7, sparks from torn plates). Transform with
+   * root.matrixWorld like `emitters`.
+   */
+  damageFx?: { pos: THREE.Vector3; kind: 'smoke' | 'fire' | 'spark'; at: number }[];
+  /** Aircraft: empty objects at the rear (flare / chaff dispensers); use getWorldPosition() to spawn flares (they follow the bank / roll). */
+  flareDispensers?: THREE.Object3D[];
+  /** Buildings: local-space lamp/floodlight points for night mode (shared per template, read-only). */
+  nightLights?: { pos: THREE.Vector3; color: number; intensity: number }[];
 
   // ---- legacy fields (older builders) ----
   spinners?: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; speed: number }[];

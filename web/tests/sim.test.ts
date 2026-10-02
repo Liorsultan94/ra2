@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
-import { buildingDef } from '../src/sim/defs';
+import { detectionRange, hitThreat, launch } from '../src/sim/ballistics';
+import { WEAPONS, buildingDef } from '../src/sim/defs';
 import { terrainPassable } from '../src/sim/map';
 import { PathFinder } from '../src/sim/path';
-import { TPS } from '../src/sim/types';
+import { TPS, type Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
 function aiWorld(seed = 1) {
@@ -206,5 +207,159 @@ describe('air defence', () => {
     }
     expect(launches).toBeGreaterThan(3);
     expect(kills).toBeGreaterThan(0);
+  });
+});
+
+describe('missile toughness and variety', () => {
+  /** Defender (player 0) base at (30, 60) with `batteries` air-defence sites; attacker (player 1) launchers 17 tiles east. */
+  function range(def: 'israel' | 'usa' | 'germany', att: 'iran' | 'usa' | 'russia' | 'germany' | 'china', launchers: string[], batteries: number, seed = 9) {
+    const w = new World({
+      seed,
+      players: [
+        { name: 'D', faction: def, color: 0, isAI: false },
+        { name: 'A', faction: att, color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    const target = w.spawnBuilding(`${def}_conyard`, 0, 30, 60, true);
+    target.hp = target.maxHp = 1e7;
+    for (let i = 0; i < 3; i++) w.spawnBuilding(`${def}_power`, 0, 22, 56 + i * 3, true);
+    const sites: Entity[] = [];
+    for (let i = 0; i < batteries; i++) sites.push(w.spawnBuilding(`${def}_def_aa`, 0, 33 + i, 58 - i * 2, true));
+    w.spawnBuilding(`${att}_conyard`, 1, 88, 4, true);
+    const units = launchers.map((d, i) => {
+      const l = w.spawnUnit(d, 1, 47.5, 60.5 + i * 1.5);
+      l.hp = l.maxHp = 1e6;
+      w.issue(1, { type: 'attack', ids: [l.id], target: target.id });
+      return l;
+    });
+    return { w, target, sites, units };
+  }
+
+  it('a 3-hp Khorramshahr survives intercepts until the third hit, flying on damaged and off course', () => {
+    const { w, target } = range('israel', 'iran', [], 0);
+    const launcher = w.spawnUnit('iran_khorramshahr', 1, 47.5, 60.5);
+    const m = launch(w, launcher, target, WEAPONS.khorramshahr, target.x, target.y);
+    expect(m.hp).toBe(3);
+    expect(m.maxHp).toBe(3);
+    for (let i = 0; i < 30; i++) w.step();
+    w.drainEvents();
+
+    // first hit: damaged, not destroyed
+    expect(hitThreat(w, m, 'patriot', m.x, m.y, m.z)).toBe(false);
+    expect(m.dead).toBe(false);
+    expect(m.hp).toBe(2);
+    expect(m.hits).toBe(1);
+    const ev1 = w.drainEvents().find((e) => e.t === 'airburst');
+    expect(ev1).toMatchObject({ t: 'airburst', kind: 'hit', victimId: m.id, hpLeft: 2, maxHp: 3, victim: 'ballistic', victimWeapon: 'khorramshahr' });
+    for (let i = 0; i < 10; i++) w.step();
+    expect(w.projectiles).toContain(m);
+
+    // second hit: still flying
+    expect(hitThreat(w, m, 'patriot', m.x, m.y, m.z)).toBe(false);
+    expect(m.hp).toBe(1);
+    expect(m.hits).toBe(2);
+    for (let i = 0; i < 5; i++) w.step();
+    expect(w.projectiles).toContain(m);
+
+    // third hit: destroyed
+    w.drainEvents();
+    expect(hitThreat(w, m, 'patriot', m.x, m.y, m.z)).toBe(true);
+    expect(m.dead).toBe(true);
+    expect(w.drainEvents().find((e) => e.t === 'airburst')).toMatchObject({ kind: 'kill', victimId: m.id, hpLeft: 0 });
+    w.step();
+    expect(w.projectiles).not.toContain(m);
+
+    // a damaged missile that is not finished off still arrives, but off its aim point
+    const m2 = launch(w, launcher, target, WEAPONS.khorramshahr, target.x, target.y);
+    for (let i = 0; i < 40; i++) w.step();
+    hitThreat(w, m2, 'patriot', m2.x, m2.y, m2.z);
+    let impact: { x: number; y: number } | null = null;
+    for (let i = 0; i < TPS * 15 && !impact; i++) {
+      w.step();
+      for (const e of w.drainEvents()) if (e.t === 'impact' && e.weapon === 'khorramshahr') impact = e;
+    }
+    expect(impact).not.toBeNull();
+    const miss = Math.hypot(impact!.x - target.x, impact!.y - target.y);
+    expect(miss).toBeGreaterThan(0.3);
+    expect(miss).toBeLessThan(1.5);
+  });
+
+  it('batteries keep engaging a damaged heavy missile and need three hits to kill it', () => {
+    const { w } = range('israel', 'iran', ['iran_khorramshahr'], 2);
+    const hits = new Map<number, number>();
+    let kills = 0;
+    let launches = 0;
+    for (let t = 0; t < TPS * 90; t++) {
+      w.step();
+      for (const e of w.drainEvents()) {
+        if (e.t === 'launch' && e.weapon === 'khorramshahr') launches++;
+        if (e.t !== 'airburst' || e.victimWeapon !== 'khorramshahr') continue;
+        if (e.kind === 'hit') hits.set(e.victimId!, (hits.get(e.victimId!) ?? 0) + 1);
+        if (e.kind === 'kill') {
+          kills++;
+          // every kill took exactly two earlier hits that the missile survived
+          expect(hits.get(e.victimId!)).toBe(2);
+        }
+      }
+      // never more interceptors in the air against one missile than hits still needed (+1 spare)
+      for (const p of w.projectiles) if (p.weapon === 'khorramshahr') expect(p.engaged).toBeLessThanOrEqual(p.hp + 1);
+    }
+    expect(launches).toBeGreaterThan(1);
+    expect(kills).toBeGreaterThan(0);
+  });
+
+  it('cruise missiles are only detected at a fraction of a battery range', () => {
+    // distances (battery -> threat) at which the Patriot site launched its interceptors
+    const engageDist = () => {
+      const { w, sites } = range('usa', 'usa', ['usa_typhon'], 1);
+      const site = sites[0];
+      const out: number[] = [];
+      for (let t = 0; t < TPS * 60; t++) {
+        w.step();
+        for (const e of w.drainEvents()) {
+          if (e.t !== 'launch' || e.sourceId !== site.id) continue;
+          const ic = w.projectiles.find((p) => p.id === e.id);
+          const threat = ic && w.projectiles.find((p) => p.id === ic.targetProj);
+          if (threat) out.push(Math.hypot(threat.x - site.x, threat.y - site.y));
+        }
+      }
+      const wpn = WEAPONS[buildingDef(site.def).weapon!];
+      return { out, range: w.weaponRange(site, wpn) };
+    };
+    const stealthy = engageDist();
+    expect(stealthy.out.length).toBeGreaterThan(0);
+    const limit = detectionRange(stealthy.range, WEAPONS.tomahawk, false);
+    expect(limit).toBeLessThan(stealthy.range * 0.5);
+    // measured one tick after the detection check: allow one tick of cruise-missile travel
+    for (const d of stealthy.out) expect(d).toBeLessThanOrEqual(limit + 0.3);
+    // the same Tomahawk without its low-observable signature is engaged much further out
+    const lo = WEAPONS.tomahawk.lowObservable;
+    try {
+      WEAPONS.tomahawk.lowObservable = undefined;
+      const visible = engageDist();
+      expect(Math.max(...visible.out)).toBeGreaterThan(limit + 2);
+    } finally {
+      WEAPONS.tomahawk.lowObservable = lo;
+    }
+  });
+
+  it('is deterministic with the new missiles in flight', () => {
+    const run = () => {
+      const { w } = range('israel', 'russia', ['iran_khorramshahr', 'russia_iskander', 'germany_taurus', 'usa_typhon', 'china_df', 'israel_lora'], 2, 13);
+      let events = 0;
+      for (let t = 0; t < TPS * 75; t++) {
+        w.step();
+        events += w.drainEvents().length;
+      }
+      const ents = w.list.filter((e) => !e.dead).map((e) => `${e.id}:${e.x.toFixed(4)}:${e.y.toFixed(4)}:${e.hp.toFixed(2)}`).join('|');
+      const projs = w.projectiles.map((p) => `${p.id}:${p.weapon}:${p.x.toFixed(4)}:${p.y.toFixed(4)}:${p.z.toFixed(4)}:${p.hp}:${p.hits}`).join('|');
+      return { ents, projs, events, rng: w.rng.next() };
+    };
+    const a = run();
+    const b = run();
+    expect(a.events).toBeGreaterThan(50);
+    expect(a).toEqual(b);
   });
 });

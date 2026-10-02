@@ -32,7 +32,7 @@ function startAttract() {
   const a = randomFaction();
   game = new Game(
     app,
-    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: resolveQuality(settings.quality) === 'high' ? 'medium' : resolveQuality(settings.quality), attract: true },
+    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: resolveQuality(settings.quality) === 'high' ? 'medium' : resolveQuality(settings.quality), attract: true, cinematic: settings.cinematic },
     audio,
     {
       onMenu: () => {
@@ -52,7 +52,7 @@ function showMainMenu() {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality) });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic });
     },
     onSettings: (s) => {
       settings = s;
@@ -88,6 +88,7 @@ function startBattle(opts: GameOptions) {
         settings: (s) => {
           settings = s;
           applyAudio(s);
+          game?.setCinematic(s.cinematic);
         },
       });
     },
@@ -111,7 +112,7 @@ const demo = params.get('demo');
 if (demo) {
   // ?demo=usa,russia&ff=240 : watch an AI battle, optionally fast-forwarded
   const [a, b] = demo.split(',') as Faction[];
-  game = new Game(app, { faction: a || 'usa', enemy: b || 'russia', difficulty: 'hard', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), attract: true, seed: 42 }, audio, { onMenu: () => {}, onEnd: () => {} });
+  game = new Game(app, { faction: a || 'usa', enemy: b || 'russia', difficulty: 'hard', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), attract: true, seed: 42, cinematic: params.get('cine') !== '0' }, audio, { onMenu: () => {}, onEnd: () => {} });
   const g = game as Game;
   g.fastForward(Number(params.get('ff') ?? 0));
   const cx = Number(params.get('cx'));
@@ -123,7 +124,7 @@ if (demo) {
   if (params.get('z')) g.renderer.setZoom(Number(params.get('z')));
 } else if (play) {
   const [f, e, d] = play.split(',');
-  startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality) });
+  startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic });
   const speed = Number(params.get('speed'));
   const g = game as Game | null;
   if (speed && g) g.speed = speed;

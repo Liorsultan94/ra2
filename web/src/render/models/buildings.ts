@@ -6,6 +6,9 @@ import { pbr, worldUV, type TexKind, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
 import { drawFlag } from '../flags';
+import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
+import { bldTex, type BldTexKind } from './bldtex';
+import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -277,7 +280,7 @@ class Mats {
     return m;
   }
   /** Textured PBR material (procedural texture from textures.ts), tinted per vertex. */
-  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1): SMat {
+  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1.6): SMat {
     const real = this.cached(`tex:${kind}:${JSON.stringify(opts)}:${rough}:${metal}:${nScale}`, false, () => {
       const set = pbr(kind, opts);
       return new THREE.MeshStandardMaterial({
@@ -292,6 +295,31 @@ class Mats {
     });
     return this.virt(real, new THREE.Color(tint), uv);
   }
+  /** Building surface texture from bldtex.ts (cladding / plates), tinted per vertex. */
+  btex(kind: BldTexKind, tint = 0xffffff, uv = 2.5, rough = 1, metal = 0.25, nScale = 1.4): SMat {
+    const real = this.cached(`btex:${kind}:${rough}:${metal}:${nScale}`, false, () => {
+      const set = bldTex(kind);
+      return new THREE.MeshStandardMaterial({
+        map: set.map,
+        normalMap: set.normalMap,
+        roughnessMap: set.roughnessMap,
+        roughness: rough,
+        metalness: metal,
+        vertexColors: true,
+        normalScale: new THREE.Vector2(nScale, nScale),
+      });
+    });
+    return this.virt(real, new THREE.Color(tint), uv);
+  }
+  /** National insignia / flag decals (shared atlas, alpha tested). */
+  decal(): SMat {
+    const m = this.cached('decal', false, () => {
+      const mm = makeDecalMaterial();
+      mm.userData.uv = 0;
+      return mm;
+    });
+    return m;
+  }
   /** Plain colour: bucketed by roughness / metalness into a few shared vertex coloured materials. */
   col(color: number, rough = 0.7, metal = 0.1, double = false): SMat {
     let b: string;
@@ -299,9 +327,27 @@ class Mats {
     let mt: number;
     if (double) [b, r, mt] = ['dbl', 0.8, 0.05];
     else if (rough < 0.2 && metal > 0.5) [b, r, mt] = ['gloss', 0.08, 0.85];
-    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.42, 0.65];
-    else [b, r, mt] = ['paint', 0.7, 0.12];
-    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide }));
+    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.32, 0.8];
+    else [b, r, mt] = ['paint', 0.66, 0.14];
+    if (b === 'metal' || b === 'paint') {
+      // weathered steel plates / worn paint: normal + roughness detail at no extra draw call
+      const kind: BldTexKind = b === 'metal' ? 'plate' : 'paint';
+      const real = this.cached(`vc:${b}`, false, () => {
+        const set = bldTex(kind);
+        // roughness maps average ~0.45 (plate) / ~0.62 (paint): scale them to the bucket value
+        return new THREE.MeshStandardMaterial({
+          map: set.map,
+          normalMap: set.normalMap,
+          roughnessMap: set.roughnessMap,
+          roughness: b === 'metal' ? r / 0.45 : r / 0.62,
+          metalness: mt,
+          vertexColors: true,
+          normalScale: new THREE.Vector2(b === 'metal' ? 1.1 : 0.6, b === 'metal' ? 1.1 : 0.6),
+        });
+      });
+      return this.virt(real, new THREE.Color(color), b === 'metal' ? 4 : 3);
+    }
+    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide, envMapIntensity: b === 'gloss' ? 1.6 : 1 }));
     return this.virt(real, new THREE.Color(color), 0);
   }
   /** Emissive lamp (one shared per-owner material; colour/intensity via vertex colours). */
@@ -331,11 +377,11 @@ class Mats {
         map: set.map,
         normalMap: set.normalMap,
         roughnessMap: set.roughnessMap,
-        roughness: 1,
-        metalness: 0.35,
+        roughness: 0.75,
+        metalness: 0.45,
         emissiveMap: set.emissiveMap ?? null,
         emissive: 0xffffff,
-        emissiveIntensity: curtain ? 0.7 : 0.9,
+        emissiveIntensity: curtain ? 1.15 : 1.45,
       });
       mm.userData.uv = 0;
       mm.userData.baseEI = mm.emissiveIntensity;
@@ -443,6 +489,10 @@ interface Pal {
   mash: SMat;
   tile: SMat; // decorative tile band (mideast) / dancheong band (asia)
   dome: SMat; // dome cladding
+  nation: SMat; // national accent colour (bold secondary band)
+  clad: SMat; // composite / steel wall cladding (ribbed panels, bolt rows)
+  pier: SMat; // dark structural trim: corner pilasters, plinths
+  emb: SMat; // insignia decal atlas
   mats: Mats;
   s: ModelStyle;
   T: TexSet;
@@ -529,6 +579,10 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     corr: () => T.corr(0xffffff),
     corrRust: () => T.corrRust(0xffffff),
     brick: () => T.brick(0xffffff),
+    nation: () => M.col(s.accent, 0.55, 0.2),
+    clad: () => M.btex('clad', R === 'east' ? 0xb8bcb0 : R === 'mideast' ? 0xe0d4bc : R === 'asia' ? 0xe4e8ea : 0xc4ccd2),
+    pier: () => M.col(R === 'mideast' ? 0x8a7656 : R === 'east' ? 0x5e5c56 : R === 'asia' ? 0x4c5458 : 0x3e4448, 0.6, 0.2),
+    emb: () => M.decal(),
     mats: () => M,
     s: () => s,
     T: () => T,
@@ -542,7 +596,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.concreteDark(0xffffff),
         wallB: () => T.concreteDark(0xe8e2d4),
         wall2: () => ukr ? T.plaster(0xe2cf92) : T.brick(0xffffff),
-        base: () => T.concreteDark(0x9a968e),
+        base: () => T.concreteDark(0x7e7a72),
         trim: () => T.concrete(0xb8b4aa),
         roof: () => T.asphalt(0xb0aaa0),
         pitch: () => T.corr(0xa8a8a0, 1.6),
@@ -567,7 +621,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.plaster(0xf2f2ee),
         wallB: () => T.plaster(0xe6e8e6),
         wall2: () => T.concrete(0xd8dcdc),
-        base: () => T.concrete(0x8e9294),
+        base: () => T.concrete(0x6e7274),
         trim: () => M.col(trimC, 0.55, 0.1),
         roof: () => T.concrete(0xa2a8aa),
         pitch: () => T.tiles(kor ? 0x6d7f9e : 0x5fae96),
@@ -591,9 +645,9 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         wall: () => T.plaster(tur ? 0xeee2c8 : 0xe6cfa2),
         wallB: () => T.plaster(tur ? 0xe2d4b4 : 0xdcc396),
         wall2: () => T.sandstone(tur ? 0xf0e4cc : 0xffffff),
-        base: () => T.sandstone(0xb8a27a),
+        base: () => T.sandstone(0x9a8460),
         trim: () => T.sandstone(0xf4e8d0),
-        roof: () => T.plaster(0xd6c6a6),
+        roof: () => T.plaster(0xc4b08c),
         pitch: () => T.plaster(0xd0bc96),
         slab: () => T.concrete(0xe0cfa8, 1.2),
         asphalt: () => T.asphalt(0xd8ccb0),
@@ -617,9 +671,9 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
         R: () => 'west',
         wall: () => isr ? T.sandstone(0xfaf2e0, 2.2) : T.concrete(wallT),
         wallB: () => T.concrete(shade(wallT, 0.93)),
-        wall2: () => T.panel(ger ? 0x9ea694 : isr ? 0xc8ccd0 : 0xa9b4bc),
-        base: () => T.concrete(0x8e8c88),
-        trim: () => M.col(0x8a9096, 0.4, 0.6),
+        wall2: () => M.btex('clad', ger ? 0x9ea694 : isr ? 0xd2d6d8 : 0xa9b4bc),
+        base: () => T.concrete(0x6e6c68),
+        trim: () => M.col(0x5a6066, 0.4, 0.6),
         roof: () => T.concrete(0x8e9092, 1.6),
         pitch: () => T.corr(ger ? 0x6c7466 : 0x8a9298),
         slab: () => T.concrete(0xd8d6d0, 1.2),
@@ -657,6 +711,8 @@ interface Tpl {
   turret: boolean;
   muzzles: number;
   recoil: number;
+  /** Construction / damage visuals (scaffolding, cuts, decals, damageFx, nightLights). */
+  fx: FxTpl;
 }
 
 // ================================================================ build kit
@@ -677,10 +733,36 @@ class Kit {
   turret = false;
   muzzles = 0;
   recoil = 0;
+  /** Roof roundels placed so far (one per building). */
+  emb = 0;
   rnd: () => number;
+  /** Walls, windows, lamps... recorded for the construction / damage visuals. */
+  readonly rec: FxRec = newRec();
   private bins = new Map<THREE.Object3D, Map<Mat, THREE.BufferGeometry[]>>();
   /** Project texture UVs in the primitive's local frame instead of building space. */
   luv = false;
+  /**
+   * Vertical stretch of everything above the ground slab (root level only:
+   * animated / turret parts keep their proportions, their pivots move up).
+   * Makes the structures taller and chunkier relative to the units.
+   */
+  sy = 1;
+  wy(y: number) {
+    return y <= Y0 ? y : Y0 + (y - Y0) * this.sy;
+  }
+  private warp(geo: THREE.BufferGeometry) {
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, this.wy(p.getY(i)));
+    const n = geo.attributes.normal;
+    if (n)
+      for (let i = 0; i < n.count; i++) {
+        const x = n.getX(i);
+        const y = n.getY(i) / this.sy;
+        const z = n.getZ(i);
+        const l = Math.hypot(x, y, z) || 1;
+        n.setXYZ(i, x / l, y / l, z / l);
+      }
+  }
   local(fn: () => void) {
     const prev = this.luv;
     this.luv = true;
@@ -731,6 +813,7 @@ class Kit {
     o.name = name;
     const m = this.T.clone().multiply(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, 'YXZ')), new THREE.Vector3(1, 1, 1)));
     m.decompose(o.position, o.quaternion, o.scale);
+    if (this.cur === this.root) o.position.y = this.wy(o.position.y);
     this.cur.add(o);
     return o;
   }
@@ -739,7 +822,29 @@ class Kit {
   }
   emit(x: number, y: number, z: number, kind: 'smoke' | 'steam' | 'spark' | 'fire') {
     const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
+    if (this.cur === this.root) v.y = this.wy(v.y);
     this.emitters.push({ pos: v, kind });
+  }
+  /** Record a point (current frame) into one of the fx record lists. */
+  mark(list: 'elec' | 'blinks', x: number, y: number, z: number) {
+    if (this.cur !== this.root) return;
+    const v = new THREE.Vector3(x, y, z).applyMatrix4(this.T);
+    this.rec[list].push(v.x, this.wy(v.y), v.z);
+  }
+  /** Current frame has no tilt and a quarter-turn yaw only (AABBs stay exact). */
+  private axisAligned() {
+    const e = this.T.elements;
+    const z = (v: number) => Math.abs(v) < 1e-4;
+    const o = (v: number) => Math.abs(Math.abs(v) - 1) < 1e-4;
+    return z(e[1]) && z(e[4]) && z(e[6]) && z(e[9]) && o(e[5]) && ((o(e[0]) && z(e[2])) || (z(e[0]) && o(e[2])));
+  }
+  private recWall(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number) {
+    if (this.cur !== this.root || h < 0.1 || Math.max(w, d) < 0.15) return;
+    const real = (m.userData.real as Mat | undefined) ?? m;
+    if (real.userData.baseEI || !this.axisAligned()) return;
+    const a = new THREE.Vector3(x - w / 2, y, z - d / 2).applyMatrix4(this.T);
+    const b = new THREE.Vector3(x + w / 2, y + h, z + d / 2).applyMatrix4(this.T);
+    this.rec.walls.push(Math.min(a.x, b.x), this.wy(Math.min(a.y, b.y)), Math.min(a.z, b.z), Math.max(a.x, b.x), this.wy(Math.max(a.y, b.y)), Math.max(a.z, b.z));
   }
 
   // ------------------------------------------------------------ core
@@ -751,6 +856,7 @@ class Kit {
     const scale = uv ?? (mv.userData.uv as number | undefined) ?? 3;
     if (scale > 0 && this.luv) worldUV(geo, scale);
     geo.applyMatrix4(this.T);
+    if (this.sy !== 1 && this.cur === this.root) this.warp(geo);
     if (scale > 0 && !this.luv) worldUV(geo, scale);
     else if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     for (const name of Object.keys(geo.attributes)) if (!KEEP.has(name)) geo.deleteAttribute(name);
@@ -767,6 +873,13 @@ class Kit {
     }
     geo.clearGroups();
     geo.morphAttributes = {};
+    if (this.cur === this.root && m.userData.baseEI && !(m as SMat).map) {
+      // small lamp: remember it for the night lights
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox!;
+      const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
+      this.rec.lamps.push((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2, c.r, c.g, c.b);
+    }
     let bin = this.bins.get(this.cur);
     if (!bin) {
       bin = new Map();
@@ -808,6 +921,7 @@ class Kit {
   // ------------------------------------------------------------ primitives
   /** Box with its base at y. */
   box(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number, uv?: number) {
+    this.recWall(m, w, h, d, x, y, z);
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y + h / 2, z);
     this.add(g, m, uv);
@@ -818,6 +932,7 @@ class Kit {
   }
   /** Bevelled (rounded) box, base at y. */
   rbox(m: Mat, w: number, h: number, d: number, x: number, y: number, z: number, r = 0.015, uv?: number) {
+    this.recWall(m, w, h, d, x, y, z);
     const g = new RoundedBoxGeometry(w, h, d, 1, Math.min(r, w / 2.01, h / 2.01, d / 2.01));
     g.translate(x, y + h / 2, z);
     this.add(g, m, uv);
@@ -942,6 +1057,13 @@ class Kit {
   }
   /** Vertical quad facing +Z (centre x, base y, at z) or, with face 'x', facing +X. sign flips to -Z/-X. */
   panel(m: Mat, face: 'x' | 'z', sign: number, c: number, y: number, at: number, w: number, h: number, uv: number[] = [0, 0, 1, 1]) {
+    const real = (m.userData.real as Mat | undefined) ?? m;
+    if (this.cur === this.root && (real as SMat).emissiveMap) {
+      // lit window pane: remember it for soot streaks / broken glass
+      const p = (face === 'z' ? new THREE.Vector3(c, y, at) : new THREE.Vector3(at, y, c)).applyMatrix4(this.T);
+      const n = (face === 'z' ? new THREE.Vector3(0, 0, sign) : new THREE.Vector3(sign, 0, 0)).transformDirection(this.T);
+      if (Math.abs(n.y) < 0.1) this.rec.wins.push(p.x, this.wy(p.y), p.z, n.x, n.z, w, h * this.sy);
+    }
     const a = c - w / 2;
     const b = c + w / 2;
     if (face === 'z') {
@@ -976,6 +1098,7 @@ class Kit {
   blinkLight(x: number, y: number, z: number, r = 0.022, per = 1.4, p = 0) {
     const n = 'blink' + this.specs.length;
     const o = this.node(n, x, y, z);
+    this.mark('blinks', x, y, z);
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
@@ -1203,12 +1326,139 @@ function flatRoof(k: Kit, x0: number, x1: number, z0: number, z1: number, y: num
     mer(z0 + t, z1 - t, x0 + t / 2, false);
     k.box(P.trim, W + 0.01, 0.01, 0.01, cx, y + ph - 0.012, z1 + 0.003);
     k.box(P.trim, 0.01, 0.01, D + 0.01, x1 + 0.003, y + ph - 0.012, cz);
+    // team coloured band under the merlons: reads from the high camera
+    k.box(P.team, W + 0.012, 0.014, 0.008, cx, y + ph - 0.03, z1 + 0.004);
+    k.box(P.team, 0.008, 0.014, D + 0.012, x1 + 0.004, y + ph - 0.03, cz);
   } else {
-    const ct = P.R === 'east' ? P.concrete : P.trim;
-    k.box(ct, W + 0.008, 0.008, t + 0.01, cx, y + ph, z1 - t / 2);
-    k.box(ct, W + 0.008, 0.008, t + 0.01, cx, y + ph, z0 + t / 2);
-    k.box(ct, t + 0.01, 0.008, D - 2 * t, x1 - t / 2, y + ph, cz);
-    k.box(ct, t + 0.01, 0.008, D - 2 * t, x0 + t / 2, y + ph, cz);
+    // team coloured coping: outlines every roof in the owner's colour from above
+    const ct = P.team;
+    const ch = 0.014;
+    k.box(ct, W + 0.016, ch, t + 0.016, cx, y + ph, z1 - t / 2);
+    k.box(ct, W + 0.016, ch, t + 0.016, cx, y + ph, z0 + t / 2);
+    k.box(ct, t + 0.016, ch, D - 2 * t, x1 - t / 2, y + ph, cz);
+    k.box(ct, t + 0.016, ch, D - 2 * t, x0 + t / 2, y + ph, cz);
+    k.box(P.pier, W + 0.018, 0.006, t + 0.018, cx, y + ph - 0.006, z1 - t / 2);
+    k.box(P.pier, t + 0.018, 0.006, D + 0.018, x1 - t / 2, y + ph - 0.006, cz);
+    if (W * D > 0.3) {
+      // safety rail along the back and left edges (roof access side)
+      const yr = y + ph + ch;
+      const pts: P2[] = [
+        [x0 + 0.012, z1 - 0.06],
+        [x0 + 0.012, z0 + 0.012],
+        [x1 - 0.06, z0 + 0.012],
+      ];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [ax, az] = pts[i];
+        const [bx, bz] = pts[i + 1];
+        const n = Math.max(1, Math.round(Math.hypot(bx - ax, bz - az) / 0.16));
+        for (let j = 0; j <= n; j++) {
+          if (j === 0 && i > 0) continue;
+          k.box(P.yellow, 0.005, 0.045, 0.005, ax + ((bx - ax) * j) / n, yr, az + ((bz - az) * j) / n);
+        }
+        k.bar(P.yellow, [ax, yr + 0.045, az], [bx, yr + 0.045, bz], 0.006);
+      }
+    }
+  }
+}
+
+/**
+ * National roundel painted on a flat roof (dark field with a team coloured
+ * frame), in the front part of the roof. Returns false when the roof is too small.
+ */
+function roofEmblem(k: Kit, x0: number, x1: number, z0: number, z1: number, y: number): boolean {
+  const P = k.P;
+  const f = P.s.faction;
+  const W = x1 - x0;
+  const D = z1 - z0;
+  const sz = Math.min(W * 0.46, D * 0.42, 0.46);
+  if (f === 'neutral' || sz < 0.2 || k.emb > 0) return false;
+  k.emb++;
+  const cell = roundelCell(f);
+  const ew = cell.aspect > 1.4 ? Math.min(W - 0.12, sz * 1.7) : sz;
+  const cx = x0 + W * 0.5;
+  const cz = z1 - D * 0.08 - sz / 2 - 0.04;
+  k.box(P.dark, ew + 0.03, 0.004, sz + 0.03, cx, y, cz);
+  const fr = 0.016;
+  k.box(P.team, ew + 0.05, 0.006, fr, cx, y, cz + sz / 2 + 0.018);
+  k.box(P.team, ew + 0.05, 0.006, fr, cx, y, cz - sz / 2 - 0.018);
+  k.box(P.team, fr, 0.006, sz + 0.02, cx + ew / 2 + 0.018, y, cz);
+  k.box(P.team, fr, 0.006, sz + 0.02, cx - ew / 2 - 0.018, y, cz);
+  const dh = cell.aspect > 1.4 ? Math.min(sz * 0.9, (ew * 0.92) / cell.aspect) : sz * 0.86;
+  k.decal(P.emb, cx, y + 0.0055, cz, dh * cell.aspect, dh, cell.r);
+  return true;
+}
+
+/** Flag sign board on a wall: team frame, dark backing, national flag. */
+function wallEmblem(k: Kit, face: Face, sign: number, c: number, y: number, at: number, w: number, cell?: Cell) {
+  const P = k.P;
+  if (P.s.faction === 'neutral') return;
+  const cl = cell ?? flagPatchCell(P.s.faction);
+  const h = w / cl.aspect;
+  faceBox(k, P.team, face, sign, c, y - 0.016, at, w + 0.04, h + 0.032, 0.012);
+  faceBox(k, P.dark, face, sign, c, y - 0.008, at, w + 0.016, h + 0.016, 0.016);
+  k.panel(P.emb, face, sign, c, y, at + sign * 0.0175, w, h, cl.r);
+}
+
+/**
+ * Exterior dressing of a rectangular structure on its visible faces (+Z, +X):
+ * dark corner pilasters with hazard striped bases, wall-pack lamps, a utility
+ * cabinet with its conduit, a louvred vent and roof-corner warning lights.
+ */
+function dress(k: Kit, x0: number, x1: number, z0: number, z1: number, y0: number, h: number, o: { cab?: boolean; vent?: boolean; beacons?: boolean } = {}) {
+  const P = k.P;
+  const W = x1 - x0;
+  const D = z1 - z0;
+  if (W < 0.25 || D < 0.25 || h < 0.12) return;
+  const pw = 0.034;
+  // corner pilasters (the three corners the camera sees)
+  for (const [px, pz] of [
+    [x1, z1],
+    [x0, z1],
+    [x1, z0],
+  ] as P2[]) {
+    k.box(P.pier, pw, h + 0.004, pw, px - Math.sign(px - (x0 + x1) / 2) * (pw / 2 - 0.008), y0, pz - Math.sign(pz - (z0 + z1) / 2) * (pw / 2 - 0.008));
+  }
+  // impact-protection stripes at the exposed corner
+  k.box(P.hazard, pw + 0.006, 0.07, pw + 0.006, x1 - pw / 2 + 0.008, y0, z1 - pw / 2 + 0.008, 9);
+  // wall-pack lamps under the first floor line
+  const ly = y0 + Math.min(h * 0.86, 0.21);
+  for (const a of W > 0.6 ? [x0 + 0.1, x1 - 0.1] : [(x0 + x1) / 2]) {
+    faceBox(k, P.dark, 'z', 1, a, ly, z1, 0.034, 0.022, 0.02);
+    faceBox(k, P.lamp, 'z', 1, a, ly - 0.004, z1 + 0.004, 0.026, 0.005, 0.016);
+  }
+  for (const a of D > 0.6 ? [z0 + 0.1, z1 - 0.1] : [(z0 + z1) / 2]) {
+    faceBox(k, P.dark, 'x', 1, a, ly, x1, 0.034, 0.022, 0.02);
+    faceBox(k, P.lamp, 'x', 1, a, ly - 0.004, x1 + 0.004, 0.026, 0.005, 0.016);
+  }
+  if (o.cab !== false && D > 0.35) {
+    // electrical cabinet + conduit up to the roof on the +X face
+    const cz = z0 + 0.08;
+    faceBox(k, P.galv, 'x', 1, cz, y0, x1, 0.07, 0.1, 0.03);
+    faceBox(k, P.team, 'x', 1, cz, y0 + 0.08, x1 + 0.0005, 0.072, 0.012, 0.031);
+    faceBox(k, P.green_l, 'x', 1, cz + 0.022, y0 + 0.064, x1 + 0.03, 0.008, 0.008, 0.004);
+    k.box(P.steel, 0.012, h - 0.1, 0.012, x1 + 0.009, y0 + 0.1, cz - 0.022);
+    for (let yy = y0 + 0.16; yy < y0 + h - 0.04; yy += 0.12) k.box(P.dark, 0.016, 0.006, 0.02, x1 + 0.009, yy, cz - 0.022);
+  }
+  if (o.vent !== false && W > 0.45) {
+    // louvred intake on the +Z face, high up
+    const vx = x0 + 0.13;
+    const vy = y0 + h - 0.11;
+    faceBox(k, P.pier, 'z', 1, vx, vy, z1, 0.1, 0.07, 0.014);
+    for (let i = 0; i < 4; i++) faceBox(k, P.galv, 'z', 1, vx, vy + 0.008 + i * 0.015, z1 + 0.006, 0.084, 0.006, 0.014);
+  }
+  if (o.beacons !== false && D > 0.45) {
+    // roof access ladder with safety cage + a pair of service pipes on the +X face
+    ladder(k, 'x', 1, z1 - 0.2, y0, y0 + h, x1);
+    for (let yy = y0 + 0.2; yy < y0 + h; yy += 0.07) k.ring(P.galv, 0.026, 0.002, x1 + 0.035, yy, z1 - 0.2, 8);
+    for (const [py, r] of [
+      [y0 + 0.045, 0.008],
+      [y0 + 0.065, 0.006],
+    ])
+      k.tube(P.pipe, [x1 + 0.012, py, z0 + 0.13], [x1 + 0.012, py, z1 - 0.26], r, 6);
+  }
+  if (o.beacons !== false && h >= 0.32) {
+    k.sph(P.red_l, 0.011, x1 - 0.012, y0 + h + 0.055, z1 - 0.012, 6, 4);
+    k.sph(P.red_l, 0.011, x0 + 0.012, y0 + h + 0.055, z0 + 0.012, 6, 4);
   }
 }
 
@@ -1345,6 +1595,8 @@ interface BlockOpt {
   rise?: number;
   parapet?: number;
   pm?: Mat;
+  emblem?: boolean; // roundel on the flat roof (default on when it fits)
+  sign?: boolean; // flag board on the +Z facade
 }
 
 /** Regional building block: walls, windows on the visible faces, team band, roof. Returns the roof top height. */
@@ -1381,17 +1633,23 @@ function block(k: Kit, o: BlockOpt): number {
     k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
     if (W > 0.8) k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
   }
-  // team band
+  // bold team band with dark keylines and a national accent stripe below
   if (o.band !== false) {
-    const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.035 : 0.03);
-    k.box(P.team, W + 0.008, 0.022, D + 0.008, cx, by, cz);
+    const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.05 : 0.044);
+    k.box(P.dark, W + 0.01, 0.006, D + 0.01, cx, by + 0.044, cz);
+    k.box(P.team, W + 0.012, 0.044, D + 0.012, cx, by, cz);
+    k.box(P.dark, W + 0.01, 0.006, D + 0.01, cx, by - 0.006, cz);
+    if (h > 0.3) k.box(P.nation, W + 0.009, 0.014, D + 0.009, cx, by - 0.02, cz);
   }
+  dress(k, x0, x1, z0, z1, y0, h, { beacons: (o.roof ?? 'flat') === 'flat' });
+  if (o.sign !== false && W >= 0.6 && h >= 0.24) wallEmblem(k, 'z', 1, x1 - 0.16, y0 + h - 0.15, z1, 0.13);
   const top = y0 + h;
   const roof = o.roof ?? 'flat';
   if (roof === 'flat') {
     const ph = o.parapet ?? 0.035;
     flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? (P.R === 'west' ? P.wall2 : wall));
-    if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, z1, top + 0.01, o.equip ?? 2);
+    const emb = o.emblem !== false && D >= 0.55 && W * D >= 0.45 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
+    if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, emb ? z0 + D * 0.42 : z1, top + 0.01, o.equip ?? 2);
     return top + ph + 0.01;
   }
   if (roof === 'gable') {
@@ -1416,6 +1674,8 @@ function block(k: Kit, o: BlockOpt): number {
 function ridgeMat(k: Kit) {
   return k.P.mats.col(k.P.s.faction === 'korea' ? 0x39465a : 0x2f4a42, 0.6, 0.15);
 }
+
+const yc0 = (rise: number, a: number, run: number) => rise - (run / 2) * Math.tan(a);
 
 /** Pitched (gable) roof: attic prism + two overhanging roof slabs + ridge cap. */
 function gable(k: Kit, roofM: Mat, endM: Mat, cx: number, y: number, cz: number, W: number, D: number, rise: number, over = 0.03, alongX = true) {
@@ -1442,9 +1702,12 @@ function gable(k: Kit, roofM: Mat, endM: Mat, cx: number, y: number, cz: number,
       const yc = rise - (run / 2) * Math.tan(a);
       k.at(0, yc, zc, 0, () => k.local(() => k.box(roofM, L + 2 * over, t, sl, 0, -0.002, 0)), sg * a);
     }
-    k.box(k.P.dark, L + 2 * over + 0.01, 0.016, 0.03, 0, rise - 0.004, 0);
-    // fascia boards
-    for (const sg of [-1, 1]) k.box(k.P.trim, L + 2 * over, 0.016, 0.008, 0, -over * Math.tan(a) - 0.014, sg * run);
+    k.box(k.P.team, L + 2 * over + 0.01, 0.022, 0.042, 0, rise - 0.006, 0);
+    // fascia boards (team coloured: pitched roofs outline in the owner's colour like flat roof copings)
+    for (const sg of [-1, 1]) k.box(k.P.team, L + 2 * over, 0.022, 0.01, 0, -over * Math.tan(a) - 0.018, sg * run);
+    // verge boards along the sloped gable edges
+    for (const sx of [-1, 1])
+      for (const sg of [-1, 1]) k.at(sx * (L / 2 + over), yc0(rise, a, run), (sg * run) / 2, 0, () => k.box(k.P.pier, 0.012, 0.02, sl + 0.01, 0, 0, 0), sg * a);
   });
 }
 
@@ -1840,6 +2103,7 @@ function insulator(k: Kit, x: number, y: number, z: number, h = 0.08) {
 function transformer(k: Kit, x: number, y: number, z: number, ry = 0, s = 1) {
   const P = k.P;
   const body = P.mats.col(0x7f8a7c, 0.55, 0.4);
+  k.mark('elec', x, y + 0.15 * s, z);
   k.at(x, y, z, ry, () => {
     k.box(P.concrete, 0.2 * s, 0.02, 0.16 * s, 0, 0, 0);
     k.rbox(body, 0.14 * s, 0.13 * s, 0.09 * s, 0, 0.02, 0, 0.008);
@@ -1982,10 +2246,15 @@ function dashes(k: Kit, m: Mat, x0: number, z0: number, x1: number, z1: number, 
 
 const tplCache = new Map<string, Tpl>();
 
+/** Vertical stretch per building (the pump jack keeps its exact linkage geometry). */
+const STRETCH: Record<string, number> = { conyard: 1.2, power: 1.2, refinery: 1.2, barracks: 1.22, factory: 1.18, radar: 1.18, airfield: 1.18, tech: 1.2, bunker: 1.12, sentry: 1.1, sam: 1.08, atgm: 1.15, oil: 1 };
+
 function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d: number, fn: (k: Kit) => void): Tpl {
   const P = makePal(s, fog);
   const k = new Kit(P, strHash(key + ':' + s.faction));
+  k.sy = STRETCH[key] ?? 1;
   fn(k);
+  k.height = k.wy(k.height);
   k.finish();
   k.root.name = 'building:' + key;
   return {
@@ -1999,12 +2268,13 @@ function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d
     turret: k.turret,
     muzzles: k.muzzles,
     recoil: k.recoil,
+    fx: new FxTpl(k.root, k.rec, { key, w, d, height: k.height, region: s.region, fog, seed: strHash(key + ':' + s.faction + ':' + s.region) }),
   };
 }
 
 const _v = new THREE.Vector3();
 
-function instance(t: Tpl): Model {
+function instance(t: Tpl): FxModel {
   const root = t.root.clone(true);
   const byName = new Map<string, THREE.Object3D>();
   root.traverse((o) => {
@@ -2021,12 +2291,16 @@ function instance(t: Tpl): Model {
     const m = find('recoil' + i);
     if (m) recoil.push(m);
   }
-  const bound: { sp: AnimSpec; o: THREE.Object3D | undefined; base: number }[] = t.specs.map((sp) => {
+  const bound: { sp: AnimSpec; o: THREE.Object3D | undefined; base: number; tax: Ax; t0: number; tilt: number }[] = t.specs.map((sp, i) => {
     const o = sp.k === 'pump' ? undefined : find(sp.n);
     let base = 0;
     if (o && (sp.k === 'osc' || sp.k === 'slide')) base = sp.k === 'osc' ? o.rotation[sp.ax] : o.position[sp.ax];
-    return { sp, o, base };
+    // battle damage knocks dishes / masts askew about an axis they don't animate on
+    const tax: Ax = sp.k === 'spin' || sp.k === 'osc' ? (sp.ax === 'x' ? 'z' : 'x') : 'x';
+    const tilt = (0.16 + ((i * 0.618 + t.specs.length * 0.37) % 1) * 0.2) * (i % 2 ? 1 : -1);
+    return { sp, o, base, tax, t0: o ? o.rotation[tax] : 0, tilt };
   });
+  const bfx = new BuildFx(t.fx, root);
   const posePump = (p: { sp: Extract<AnimSpec, { k: 'pump' }>; crank?: THREE.Object3D; beam?: THREE.Object3D; rod?: THREE.Object3D; pit?: THREE.Object3D }, a: number) => {
     const sp = p.sp;
     if (p.crank) p.crank.rotation.z = -a;
@@ -2056,17 +2330,23 @@ function instance(t: Tpl): Model {
     const f = pw ? 1 : 0.22;
     for (const g of glow) g.emissiveIntensity = (g.userData.baseEI as number) * f;
     for (const fm of flags) (fm.userData.uTime as { value: number }).value = s.time;
+    bfx.update(s);
     if (s.built < 1) return;
     const t0 = s.time;
+    const dmg = s.damage;
+    // heavy damage: dishes / radars tilt and jam
+    const tiltK = dmg < 0.6 ? 0 : Math.min(1, (dmg - 0.6) / 0.25);
+    const jam = dmg >= 0.85 ? 0 : 1;
     for (const b of bound) {
       const { sp, o } = b;
       if (!o) continue;
+      if (sp.k === 'spin' || sp.k === 'osc') o.rotation[b.tax] = b.t0 + b.tilt * tiltK;
       switch (sp.k) {
         case 'spin':
-          o.rotation[sp.ax] += sp.v * s.dt * (pw ? 1 : 0.15);
+          o.rotation[sp.ax] += sp.v * s.dt * (pw ? 1 : 0.15) * jam;
           break;
         case 'osc':
-          o.rotation[sp.ax] = b.base + sp.b + sp.a * Math.sin(t0 * sp.f + sp.p);
+          o.rotation[sp.ax] = b.base + sp.b + sp.a * Math.sin((jam ? t0 : 0) * sp.f + sp.p);
           break;
         case 'slide':
           o.position[sp.ax] = b.base + sp.b + sp.a * Math.sin(t0 * sp.f + sp.p);
@@ -2092,6 +2372,8 @@ function instance(t: Tpl): Model {
     glow: [...t.glow],
     emitters: t.emitters.map((e) => ({ pos: e.pos.clone(), kind: e.kind })),
     anim,
+    damageFx: bfx.damageFx,
+    nightLights: t.fx.night,
   };
 }
 
@@ -2137,6 +2419,13 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
     // UVs: u around the arch, v along the axis -> ribs run along the slope
     scaleUV(g, (Math.PI * r + rise) * uvs, len * uvs);
     k.add(g, m, 0);
+    // team coloured arch rims at both ends
+    for (const s of [-1, 1]) {
+      const t = new THREE.TorusGeometry(r + 0.004, 0.016, 4, 22, Math.PI);
+      t.scale(1, (rise + 0.004) / (r + 0.004), 1.4);
+      t.translate(0, 0, s * (len / 2 - 0.012));
+      k.add(t, k.P.team, 0);
+    }
     if (endM) {
       const pts: P2[] = [];
       for (let i = 0; i <= 16; i++) {
@@ -2335,6 +2624,7 @@ function conyard(k: Kit) {
   if (R === 'east') {
     k.box(P.brick, FW, 0.12, FD, fcx, Y0, fcz);
     k.box(P.corrRust, FW, 0.32, FD, fcx, Y0 + 0.12, fcz);
+    dress(k, fx0, fx1, fz0, fz1, Y0, 0.44, { beacons: false });
     gable(k, P.pitch, P.corrRust, fcx, Y0 + 0.44, fcz, FW, FD, 0.2, 0.03, false);
     // painted double gate with a star
     const gw = 0.42;
@@ -2352,6 +2642,7 @@ function conyard(k: Kit) {
     const wallM = R === 'west' ? P.wall2 : R === 'asia' ? P.wall2 : P.wall;
     k.box(P.base, FW + 0.012, 0.03, FD + 0.012, fcx, Y0, fcz);
     k.box(wallM, FW, 0.42, FD, fcx, Y0, fcz);
+    dress(k, fx0, fx1, fz0, fz1, Y0, 0.42, { beacons: false });
     const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
     vault(k, roofM, wallM, fcx, Y0 + 0.42, fcz, FW + 0.03, FD + 0.04, 0.22, false);
     k.box(P.team, FW + 0.01, 0.024, FD + 0.01, fcx, Y0 + 0.38, fcz);
@@ -2616,6 +2907,7 @@ function power(k: Kit) {
     const z1 = 0.62;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
     k.box(P.wall2, x1 - x0, 0.42, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.42, { beacons: false, vent: false });
     punched(k, 'x', 1, z0 + 0.05, z1 - 0.05, 5, Y0 + 0.1, x1, 0.1, 0.24, 'round');
     punched(k, 'z', 1, x0 + 0.05, x1 - 0.05, 3, Y0 + 0.1, z1, 0.1, 0.24, 'round', [-0.6, -0.4]);
     door(k, 'z', 1, -0.52, Y0, z1, 0.14, 0.2, true);
@@ -2652,6 +2944,7 @@ function power(k: Kit) {
     const tz1 = -0.08;
     k.box(P.base, tx1 - tx0 + 0.014, 0.03, tz1 - tz0 + 0.014, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
     k.box(P.wall, tx1 - tx0, 0.4, tz1 - tz0, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
+    dress(k, tx0, tx1, tz0, tz1, Y0, 0.4, { beacons: false });
     ribbon(k, 'z', 1, tx0 + 0.05, tx1 - 0.05, Y0 + 0.24, tz1, 0.1, true);
     ribbon(k, 'x', 1, tz0 + 0.05, tz1 - 0.05, Y0 + 0.24, tx1, 0.1, true);
     rollDoor(k, 'z', 1, 0.3, Y0, tz1, 0.22, 0.18, 0);
@@ -2789,6 +3082,7 @@ function refinery(k: Kit) {
   if (R === 'east') {
     k.box(P.base, px1 - px0 + 0.014, 0.03, pz1 - pz0 + 0.014, 0, Y0, (pz0 + pz1) / 2);
     k.box(P.wall2, px1 - px0, 0.6, pz1 - pz0, 0, Y0, (pz0 + pz1) / 2);
+    dress(k, px0, px1, pz0, pz1, Y0, 0.6, { beacons: false });
     punched(k, 'z', 1, px0, px1, 6, Y0 + 0.12, pz1, 0.09, 0.3, 'round', [-0.1, 0.1]);
     punched(k, 'x', 1, pz0, pz1, 5, Y0 + 0.12, px1, 0.09, 0.3, 'round');
     k.box(P.team, px1 - px0 + 0.008, 0.03, pz1 - pz0 + 0.008, 0, Y0 + 0.55, (pz0 + pz1) / 2);
@@ -2992,6 +3286,7 @@ function barracks(k: Kit) {
     const zc = (z0 + z1) / 2;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, 0, Y0, zc);
     k.box(P.wall2, x1 - x0, 0.44, z1 - z0, 0, Y0, zc);
+    dress(k, x0, x1, z0, z1, Y0, 0.44, { beacons: false });
     facade(k, 'z', 1, x0, x1, z1, Y0, 0.44, 2, 'punched');
     facade(k, 'x', 1, z0, z1, x1, Y0, 0.44, 2, 'punched');
     k.box(P.concrete, x1 - x0 + 0.012, 0.02, z1 - z0 + 0.012, 0, Y0 + 0.21, zc);
@@ -3055,6 +3350,7 @@ function factory(k: Kit) {
     const hx = sx * (0.55 + hallW / 2);
     k.box(P.base, hallW + 0.012, 0.03, L + 0.012, hx, Y0, zc);
     k.box(hallM, hallW, H, L, hx, Y0, zc);
+    dress(k, hx - hallW / 2, hx + hallW / 2, z0, z1, Y0, H, { beacons: false, cab: sx > 0 });
     k.box(P.team, hallW + 0.008, 0.026, L + 0.008, hx, Y0 + H - 0.06, zc);
   }
   // bay interior: back wall + inner lighting
@@ -3068,6 +3364,7 @@ function factory(k: Kit) {
   facade(k, 'x', 1, z0, z1, 1.42, Y0, H, 1, style);
   for (const sx of [-1, 1]) facade(k, 'z', 1, sx * 0.55 + (sx > 0 ? 0.08 : -hallW), sx * 0.55 + (sx > 0 ? hallW : -0.08), z1, Y0, H, 1, style);
   door(k, 'z', 1, 1.25, Y0, z1, 0.1, 0.18, true);
+  wallEmblem(k, 'z', 1, 0.86, Y0 + H - 0.22, z1, 0.15);
   // door portal
   const doorFrame = () => {
     for (const sx of [-1, 1]) {
@@ -3088,6 +3385,7 @@ function factory(k: Kit) {
     k.box(P.trim, 0.12, 0.04, L * 0.8, 0, Y0 + H + 0.41, zc);
     k.box(P.dark, 0.13, 0.012, L * 0.8, 0, Y0 + H + 0.45, zc);
     k.box(P.team, 0.6, 0.12, 0.012, 0, Y0 + H + 0.1, z1 + 0.025);
+    k.panel(P.emb, 'z', 1, 0, Y0 + H + 0.11, z1 + 0.032, 0.15, 0.1, flagPatchCell(P.s.faction).r);
     k.box(hallM, 1.1, H - DH, 0.04, 0, DH, z1 - 0.02);
     k.box(P.team, 1.12, 0.05, 0.05, 0, DH + 0.01, z1 + 0.02);
     doorFrame();
@@ -3218,6 +3516,7 @@ function radar(k: Kit) {
     const z1 = 0.95;
     k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
     k.box(P.wall2, x1 - x0, 0.32, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.32, { beacons: false });
     facade(k, 'z', 1, x0, x1, z1, Y0, 0.32, 1, 'punched', [-0.6, -0.3]);
     facade(k, 'x', 1, z0, z1, x1, Y0, 0.32, 1, 'punched');
     door(k, 'z', 1, -0.45, Y0, z1, 0.12, 0.19);
@@ -3430,6 +3729,7 @@ function airfield(k: Kit) {
     k.box(wallM, span, wh, 0.04, hcx, Y0, hz0 + 0.02);
     const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
     vault(k, roofM, null, hcx, Y0 + wh, hcz, span + 0.03, hl + 0.03, rise, false);
+    dress(k, hx0, hx1, hz0, hz1, Y0, wh, { beacons: false, vent: false });
     // front wall with the door opening
     const outer: P2[] = [[hx0, Y0], [hx1, Y0]];
     for (let i = 0; i <= 18; i++) {
@@ -3456,6 +3756,7 @@ function airfield(k: Kit) {
       const dw = span * 0.78;
       for (const sx of [-1, 1]) k.box(P.rollup, 0.03, wh + rise * 0.55, dw * 0.25, hcx + sx * (dw / 2 + 0.02), Y0, hz1 + 0.01);
       k.box(P.team, dw + 0.04, 0.04, 0.03, hcx, Y0 + wh + rise * 0.55, hz1 + 0.0);
+      wallEmblem(k, 'z', 1, hcx, Y0 + wh + rise * 0.55 + 0.07, hz1 - 0.005, 0.16);
       for (const sx of [-1, 1]) k.box(P.hazard, 0.03, wh + rise * 0.55, 0.03, hcx + sx * (dw / 2 + 0.015), Y0, hz1 + 0.015, 9);
     }
   }
@@ -3465,7 +3766,7 @@ function airfield(k: Kit) {
   // ------------------------------------------------ control tower (back right)
   const tx = 1.0;
   const tz = -1.0;
-  block(k, { x0: 0.62, x1: 1.42, z0: -1.42, z1: -0.62, h: 0.24, floors: 1, door: 0.8, equip: 1, roof: R === 'asia' ? 'flat' : 'flat' });
+  block(k, { x0: 0.62, x1: 1.42, z0: -1.42, z1: -0.62, h: 0.24, floors: 1, door: 0.8, equip: 1, roof: 'flat', emblem: false });
   const shaftTop = Y0 + 1.0;
   if (R === 'asia') {
     k.cyl(P.wall, 0.11, 1.0, tx, Y0, tz, 18, 0.09);
@@ -3599,8 +3900,10 @@ function tech(k: Kit) {
     curtain(k, 'x', 1, z0 + 0.04, z1 - 0.04, Y0 + 0.04, Y0 + 0.74, x1, 0.09, 0.117);
     k.box(cyan, x1 - x0 + 0.01, 0.012, z1 - z0 + 0.01, (x0 + x1) / 2, Y0 + 0.755, (z0 + z1) / 2);
     k.box(P.team, x1 - x0 + 0.012, 0.03, z1 - z0 + 0.012, (x0 + x1) / 2, Y0 + 0.77, (z0 + z1) / 2);
+    dress(k, x0, x1, z0, z1, Y0, 0.8, { cab: false });
     flatRoof(k, x0, x1, z0, z1, Y0 + 0.8, 0.03, P.wall2);
-    roofKit(k, x0, x1 - 0.6, z0, z1, Y0 + 0.81, 2);
+    roofEmblem(k, x0, x1 - 0.6, z0, z1, Y0 + 0.811);
+    roofKit(k, x0, x1 - 0.6, z0, z0 + 0.45, Y0 + 0.81, 2);
     satcom(k, 'dish', -0.15, Y0 + 0.81, -0.9, 0.16);
     for (let i = 0; i < 3; i++) antenna(k, -1.3 + i * 0.12, Y0 + 0.81, -1.3, 0.35 + i * 0.08);
     // glass entrance atrium
@@ -3626,7 +3929,7 @@ function tech(k: Kit) {
     k.height = 1.5;
   } else if (R === 'east') {
     // brutalist institute: stepped concrete blocks with vertical fins
-    block(k, { x0: -1.42, x1: 0.3, z0: -1.42, z1: -0.35, h: 0.42, floors: 2, equip: 0 });
+    block(k, { x0: -1.42, x1: 0.3, z0: -1.42, z1: -0.35, h: 0.42, floors: 2, equip: 0, emblem: false });
     const ux0 = -1.3;
     const ux1 = -0.2;
     const uz0 = -1.3;
@@ -3643,7 +3946,8 @@ function tech(k: Kit) {
     }
     k.box(P.team, ux1 - ux0 + 0.01, 0.03, uz1 - uz0 + 0.01, (ux0 + ux1) / 2, Y0 + 0.92, (uz0 + uz1) / 2);
     flatRoof(k, ux0, ux1, uz0, uz1, Y0 + 0.98, 0.03);
-    roofKit(k, ux0, ux1, uz0, uz1, Y0 + 0.99, 2);
+    roofEmblem(k, ux0, ux1, uz0, uz1, Y0 + 0.991);
+    roofKit(k, ux0, ux1, uz0, uz0 + 0.3, Y0 + 0.99, 2);
     stencil(k, 'НИИ-9', 'x', 1, -0.95, Y0 + 0.75, ux1 + 0.05, 0.36, '#e6e2d6');
     dome(k, 0.88, Y0, -0.9, 0.38, 'observatory');
     // tall lattice TV / comms mast with aviation bands
@@ -3664,7 +3968,7 @@ function tech(k: Kit) {
     k.height = 1.6;
   } else if (R === 'asia') {
     // podium + glass tower with tiled crown + glass dome
-    block(k, { x0: -1.42, x1: 0.35, z0: -1.42, z1: -0.25, h: 0.3, floors: 1, equip: 0, door: -0.3 });
+    block(k, { x0: -1.42, x1: 0.35, z0: -1.42, z1: -0.25, h: 0.3, floors: 1, equip: 0, door: -0.3, emblem: false });
     const tx0 = -1.15;
     const tx1 = -0.45;
     const tz0 = -1.2;
@@ -3676,6 +3980,7 @@ function tech(k: Kit) {
     asianRoof(k, P.pitch, ridgeMat(k), (tx0 + tx1) / 2, Y0 + 1.35, (tz0 + tz1) / 2, tx1 - tx0 + 0.16, tz1 - tz0 + 0.16, 0.22, 0.05, P.accent);
     k.blinkLight((tx0 + tx1) / 2, Y0 + 1.62, (tz0 + tz1) / 2, 0.014, 1.4, 0);
     flatRoof(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.3, 0.03);
+    roofEmblem(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.311);
     // glass dome lab
     const dx = 0.88;
     const dz = -0.8;
@@ -3731,11 +4036,13 @@ function tech(k: Kit) {
     const wz1 = -0.4;
     k.box(P.base, wx1 - wx0 + 0.014, 0.03, wz1 - wz0 + 0.014, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
     k.box(P.wall2, wx1 - wx0, 0.52, wz1 - wz0, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
+    dress(k, wx0, wx1, wz0, wz1, Y0, 0.52, { vent: false, cab: false });
     curtain(k, 'z', 1, wx0 + 0.06, wx1 - 0.06, Y0 + 0.06, Y0 + 0.46, wz1, 0.09, 0.1);
     curtain(k, 'x', 1, wz0 + 0.06, wz1 - 0.06, Y0 + 0.06, Y0 + 0.46, wx1, 0.09, 0.1);
     for (let i = 0; i < 9; i++) faceBox(k, P.mash, 'z', 1, wx0 + 0.1 + i * 0.11, Y0 + 0.06, wz1, 0.05, 0.4, 0.03);
     k.box(P.team, wx1 - wx0 + 0.01, 0.025, wz1 - wz0 + 0.01, (wx0 + wx1) / 2, Y0 + 0.49, (wz0 + wz1) / 2);
     flatRoof(k, wx0, wx1, wz0, wz1, Y0 + 0.52, 0.035);
+    roofEmblem(k, wx0, wx1, wz0, wz1, Y0 + 0.531);
     satcom(k, 'dish', 0.95, Y0 + 0.53, -0.95, 0.15);
     antenna(k, 1.3, Y0 + 0.53, -1.3, 0.5);
     // reflecting pool with arcade

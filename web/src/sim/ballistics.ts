@@ -9,13 +9,27 @@ import type { World } from './world';
  * Unguided flights (shell, artillery, mortar, rocket salvos, ballistic and
  * hypersonic missiles) follow analytic trajectories from launch to the aim
  * point, so they always land where they were aimed and every client computes
- * the same positions. Guided flights (ATGM, top-attack, SAM, interceptor,
- * air-launched missiles) are integrated each tick with a turn-rate-limited
- * pursuit / proportional navigation law. All projectiles have real 3D
- * positions, which is what lets air defences intercept them mid-flight.
+ * the same positions. Cruise missiles fly a curved dog-leg ground track at a
+ * fixed pace and follow the terrain below them, then pop up and dive.
+ * Guided flights (ATGM, top-attack, SAM, interceptor, air-launched missiles)
+ * are integrated each tick with a turn-rate-limited pursuit / proportional
+ * navigation law. All projectiles have real 3D positions, which is what lets
+ * air defences intercept them mid-flight.
+ *
+ * Missile toughness: every interceptable round has `hp` (the weapon's
+ * interceptHp, default 1). A successful intercept removes one point; at 0 the
+ * round is destroyed, otherwise it flies on damaged (`hits`), knocked off its
+ * aim point by a seeded random drift and with a weaker warhead.
  */
 
 const DT = 1 / TPS;
+const TAU = Math.PI * 2;
+
+// cruise missile profile (heights above the terrain, distances in tiles)
+const CRUISE_ALT = 0.45;
+const CRUISE_BOOST_TICKS = 14;
+const CRUISE_POPUP = 2.8; // remaining track length where the pop-up starts
+const CRUISE_DIVE = 1.2; // ... and where the terminal dive starts
 
 /** Height of an entity's centre (absolute world height). */
 export function entityZ(w: World, e: Entity): number {
@@ -50,6 +64,8 @@ const SPEC: Record<Flight, FlightSpec> = {
   rocketSalvo: { time: (d) => 0.9 + d * 0.11, arc: (d) => 0.6 + d * 0.22 },
   ballistic: { time: (d) => 3.2 + d * 0.14, arc: (d) => 6 + d * 0.55 },
   hypersonic: { time: (d) => 2.4 + d * 0.07, arc: (d) => 4.5 + d * 0.3 },
+  // subsonic: ~2.9 tiles/s along a track ~10% longer than the chord (stepped by stepCruise, not analyticPos)
+  cruise: { time: (d) => 0.8 + (d * 1.1) / 2.9, arc: () => 0 },
   atgm: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 9, accel: 30, turn: 4.5, hit: 0.35, life: 6 },
   topAttack: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 8, accel: 22, turn: 5, hit: 0.35, life: 8 },
   airMissile: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 12, accel: 35, turn: 5, hit: 0.4, life: 6 },
@@ -90,6 +106,16 @@ function blank(w: World, src: Entity, weapon: WeaponDef, flight: Flight): Projec
     turn: 0,
     phase: 0,
     engaged: 0,
+    hp: 1,
+    maxHp: 1,
+    hits: 0,
+    dox: 0,
+    doy: 0,
+    dbx: 0,
+    dby: 0,
+    dk: 0,
+    wx: 0,
+    wy: 0,
     dead: false,
   };
 }
@@ -112,9 +138,17 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
     p.x = p.sx = p.px = src.x + (dx / dist) * Math.min(off, dist * 0.5);
     p.y = p.sy = p.py = src.y + (dy / dist) * Math.min(off, dist * 0.5);
   }
+  p.hp = p.maxHp = Math.max(1, weapon.interceptHp ?? 1);
   if (!spec.guided) {
-    p.T = Math.max(2, Math.round(spec.time(dist) * TPS));
-    p.arc = spec.arc(dist);
+    p.T = Math.max(2, Math.round(spec.time(dist) * (weapon.flightTime ?? 1) * TPS));
+    p.arc = spec.arc(dist) * (weapon.apogee ?? 1);
+    if (flight === 'cruise') {
+      // dog-leg route: the ground track bows out to one side (alternating per round) around a waypoint
+      const h = Math.min(5, dist * 0.3) * (p.id % 2 ? 1 : -1);
+      const l = Math.max(0.01, dist);
+      p.wx = (p.sx + ax) / 2 + (-dy / l) * h;
+      p.wy = (p.sy + ay) / 2 + (dx / l) * h;
+    }
   } else {
     p.maxSpeed = spec.maxSpeed!;
     p.turn = spec.turn! * DT;
@@ -159,11 +193,16 @@ export function launchInterceptor(w: World, src: Entity, threat: Projectile, wea
   const dx = threat.x - p.x;
   const dy = threat.y - p.y;
   const h = Math.max(0.01, Math.hypot(dx, dy));
-  const n = Math.hypot(0.3, 1);
+  // low, close threats (cruise missiles): a shallow launch with a short boost (phase 1) instead of a vertical one
+  const low = threat.z - groundZ(w, threat.x, threat.y) < 2.2;
+  if (low) p.phase = 1;
+  const lat = low ? 1 : 0.3;
+  const up = low ? 0.6 : 1;
+  const n = Math.hypot(lat, up);
   p.speed = p.maxSpeed * 0.3;
-  p.vx = ((dx / h) * 0.3 * p.speed) / n;
-  p.vy = ((dy / h) * 0.3 * p.speed) / n;
-  p.vz = p.speed / n;
+  p.vx = ((dx / h) * lat * p.speed) / n;
+  p.vy = ((dy / h) * lat * p.speed) / n;
+  p.vz = (up * p.speed) / n;
   threat.engaged++;
   w.projectiles.push(p);
   w.events.push({ t: 'launch', id: p.id, flight, weapon: weapon.id, x: p.x, y: p.y, z: p.z, owner: p.owner, sourceId: src.id });
@@ -171,7 +210,20 @@ export function launchInterceptor(w: World, src: Entity, threat: Projectile, wea
 
 // ------------------------------------------------------------------ update
 
-function analyticPos(p: Projectile, k: number, out: { x: number; y: number; z: number }) {
+/** Flight progress 0..1 of an analytic / cruise round. */
+export function threatProgress(p: Projectile) {
+  return Math.min(1, p.age / Math.max(1, p.T));
+}
+
+/** Current aim error of a damaged round at progress k (eases from the last hit to the impact). */
+function driftAt(p: Projectile, k: number, out: { x: number; y: number }) {
+  const f = p.dk >= 1 ? 1 : Math.max(0, Math.min(1, (k - p.dk) / (1 - p.dk)));
+  out.x = p.dbx + (p.dox - p.dbx) * f;
+  out.y = p.dby + (p.doy - p.dby) * f;
+}
+const dtmp = { x: 0, y: 0 };
+
+function analyticPos(p: Projectile, k: number, man: number, out: { x: number; y: number; z: number }) {
   let e = k;
   let lift = 4 * k * (1 - k);
   let side = 0;
@@ -179,6 +231,11 @@ function analyticPos(p: Projectile, k: number, out: { x: number; y: number; z: n
     // slow vertical boost, then fast descent: skew the parabola
     e = k * k * (3 - 2 * k) * 0.35 + k * 0.65;
     lift = Math.sin(Math.PI * Math.pow(k, 0.8));
+    if (man > 0 && k > 0.6) {
+      // manoeuvring re-entry vehicle (Iskander style): weaving pull-ups in the terminal phase
+      const u = (k - 0.6) / 0.4;
+      side = man * Math.sin(u * TAU * 1.5) * (1 - u);
+    }
   } else if (p.flight === 'hypersonic') {
     // boost to apex, then a long flat glide with S-turns and a final plunge
     lift = k < 0.3 ? Math.sin((k / 0.3) * (Math.PI / 2)) : 1 - Math.pow((k - 0.3) / 0.7, 2.6);
@@ -190,6 +247,58 @@ function analyticPos(p: Projectile, k: number, out: { x: number; y: number; z: n
   out.x = p.sx + dx * e + (-dy / len) * side;
   out.y = p.sy + dy * e + (dx / len) * side;
   out.z = p.sz + (p.tz - p.sz) * k + p.arc * lift;
+  if (p.hits) {
+    driftAt(p, k, dtmp);
+    out.x += dtmp.x;
+    out.y += dtmp.y;
+  }
+}
+
+/** Cruise missile: curved ground track at constant pace, terrain following, pop-up and terminal dive. */
+function stepCruise(w: World, p: Projectile) {
+  const k = threatProgress(p);
+  const u = 1 - k;
+  let x = u * u * p.sx + 2 * k * u * p.wx + k * k * p.tx;
+  let y = u * u * p.sy + 2 * k * u * p.wy + k * k * p.ty;
+  if (p.hits) {
+    driftAt(p, k, dtmp);
+    x += dtmp.x;
+    y += dtmp.y;
+  }
+  // heading along the track, for the terrain look-ahead
+  let hx = 2 * u * (p.wx - p.sx) + 2 * k * (p.tx - p.wx);
+  let hy = 2 * u * (p.wy - p.sy) + 2 * k * (p.ty - p.wy);
+  const hl = Math.hypot(hx, hy) || 1;
+  hx /= hl;
+  hy /= hl;
+  const g = Math.max(groundZ(w, x, y), groundZ(w, x + hx * 0.5, y + hy * 0.5), groundZ(w, x + hx * 1.0, y + hy * 1.0));
+  const cruiseZ = g + CRUISE_ALT;
+  const rem = u * Math.hypot(p.tx - p.sx, p.ty - p.sy) * 1.1;
+  let z: number;
+  if (p.age <= CRUISE_BOOST_TICKS) {
+    // booster: up out of the canister, then the turbofan takes over
+    z = p.sz + (cruiseZ + 0.8 - p.sz) * Math.sin(((p.age / CRUISE_BOOST_TICKS) * Math.PI) / 2);
+  } else if (rem > CRUISE_POPUP) {
+    // hug the ground: climb at once over rising terrain, sink back gently
+    z = Math.max(cruiseZ, p.pz - 0.05);
+  } else if (rem > CRUISE_DIVE) {
+    // pop-up to acquire the target
+    const want = cruiseZ + 1.1 * Math.sin((((CRUISE_POPUP - rem) / (CRUISE_POPUP - CRUISE_DIVE)) * Math.PI) / 2);
+    z = Math.max(want, p.pz - 0.05);
+  } else {
+    if (p.phase < 2) {
+      p.phase = 2;
+      p.arc = p.pz; // dive entry height
+    }
+    z = p.tz + (p.arc - p.tz) * Math.sin(((rem / CRUISE_DIVE) * Math.PI) / 2);
+  }
+  p.x = x;
+  p.y = y;
+  p.z = k >= 1 ? p.tz : z;
+  p.vx = (p.x - p.px) * TPS;
+  p.vy = (p.y - p.py) * TPS;
+  p.vz = (p.z - p.pz) * TPS;
+  if (k >= 1) detonate(w, p, true);
 }
 
 const tmp = { x: 0, y: 0, z: 0 };
@@ -204,9 +313,13 @@ export function stepProjectiles(w: World) {
     p.pz = p.z;
     p.age++;
     const spec = SPEC[p.flight];
+    if (p.flight === 'cruise') {
+      stepCruise(w, p);
+      continue;
+    }
     if (!spec.guided) {
       const k = Math.min(1, p.age / p.T);
-      analyticPos(p, k, tmp);
+      analyticPos(p, k, p.flight === 'ballistic' ? (WEAPONS[p.weapon]?.maneuver ?? 0) : 0, tmp);
       p.x = tmp.x;
       p.y = tmp.y;
       p.z = tmp.z;
@@ -219,6 +332,35 @@ export function stepProjectiles(w: World) {
     stepGuided(w, p, spec, byId);
   }
   w.projectiles = w.projectiles.filter((p) => !p.dead);
+  // recount interceptors in flight per threat, so a lost or expired interceptor never blocks re-engagement
+  for (const p of w.projectiles) p.engaged = 0;
+  for (const p of w.projectiles) {
+    if (p.targetProj < 0) continue;
+    const t = byId.get(p.targetProj);
+    if (t && !t.dead) t.engaged++;
+  }
+}
+
+/** How many interceptors may be in the air against one threat at once: one per hit still needed (+1 spare vs missiles). */
+export function maxEngage(p: Projectile) {
+  return p.hp + (p.flight === 'ballistic' || p.flight === 'hypersonic' ? 1 : 0);
+}
+
+/** An interceptor whose target is gone looks for another threat close by instead of wasting itself. */
+function retarget(w: World, p: Projectile): Projectile | null {
+  const kinds = WEAPONS[p.weapon]?.intercept?.kinds;
+  if (!kinds) return null;
+  let best: Projectile | null = null;
+  let bd = 4;
+  for (const q of w.projectiles) {
+    if (q.dead || q === p || !w.isEnemy(p.owner, q.owner) || !kinds.includes(q.flight) || q.engaged >= maxEngage(q)) continue;
+    const d = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
+    if (d < bd) {
+      bd = d;
+      best = q;
+    }
+  }
+  return best;
 }
 
 function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number, Projectile>) {
@@ -230,10 +372,17 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   let tvy = 0;
   let tvz = 0;
   if (p.targetProj >= 0) {
-    const t = byId.get(p.targetProj);
+    let t = byId.get(p.targetProj);
     if (!t || t.dead) {
-      airburst(w, p, 'expire');
-      return;
+      const nt = retarget(w, p);
+      if (!nt) {
+        airburst(w, p, 'expire');
+        return;
+      }
+      t = nt;
+      p.targetProj = nt.id;
+      nt.engaged++;
+      byId.set(nt.id, nt);
     }
     ax = t.x;
     ay = t.y;
@@ -277,7 +426,7 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
     gz = az + Math.min(2.2, 0.6 + hd * 0.45);
     if (hd < 1.6) p.phase = 1;
   }
-  if ((p.flight === 'sam' || p.flight === 'interceptor') && p.age < 6) {
+  if ((p.flight === 'sam' || p.flight === 'interceptor') && p.age < (p.phase === 1 ? 2 : 6)) {
     // vertical boost off the rail before guidance kicks in
     gx = p.x + p.vx;
     gy = p.y + p.vy;
@@ -340,7 +489,7 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   }
   // guided missiles fly nap-of-the-earth: never dip below the terrain while still away from the target
   const gnd = groundZ(w, p.x, p.y);
-  if (p.targetProj < 0 && Math.hypot(ax - p.x, ay - p.y) > 0.7 && p.z < gnd + 0.25) {
+  if (Math.hypot(ax - p.x, ay - p.y) > 0.7 && p.z < gnd + 0.25 && (p.targetProj < 0 || p.age > 3)) {
     p.z = gnd + 0.25;
     if (p.vz < 0) p.vz = 0;
   }
@@ -357,13 +506,48 @@ function airburst(w: World, p: Projectile, kind: 'kill' | 'miss' | 'expire', vic
   w.events.push({ t: 'airburst', x: p.x, y: p.y, z: p.z, kind, weapon: p.weapon, victim: victim?.flight });
 }
 
-function interceptResolve(w: World, p: Projectile, threat: Projectile) {
-  const wpn = WEAPONS[p.weapon];
-  const pk = threat.flight === 'hypersonic' ? (wpn.intercept?.pkHypersonic ?? 0.3) : (wpn.intercept?.pk ?? 0.7);
-  threat.engaged = Math.max(0, threat.engaged - 1);
-  if (w.rng.next() < pk) {
+/** Probability that one engagement by an air-defence weapon hits this threat. */
+export function interceptPk(wpn: WeaponDef, threat: Projectile): number {
+  const ic = wpn.intercept;
+  if (!ic) return 0.7;
+  let pk = ic.pkBy?.[threat.flight] ?? (threat.flight === 'hypersonic' ? (ic.pkHypersonic ?? 0.3) : ic.pk);
+  // manoeuvring re-entry vehicles are harder to hit once they are past apogee
+  if (threat.flight === 'ballistic' && (WEAPONS[threat.weapon]?.maneuver ?? 0) > 0 && threatProgress(threat) > 0.4) pk *= 0.75;
+  return pk;
+}
+
+/**
+ * One successful intercept on a threat at (x, y, z). Removes one point of its interceptHp; at zero the
+ * round is destroyed ('kill'), otherwise it flies on damaged with a seeded aim error ('hit').
+ * Emits the airburst event; returns true when the threat was destroyed.
+ */
+export function hitThreat(w: World, threat: Projectile, weaponId: string, x: number, y: number, z: number): boolean {
+  threat.hp = Math.max(0, threat.hp - 1);
+  const info = { victim: threat.flight, victimId: threat.id, victimWeapon: threat.weapon, hpLeft: threat.hp, maxHp: threat.maxHp };
+  if (threat.hp <= 0) {
     threat.dead = true;
-    airburst(w, p, 'kill', threat);
+    w.events.push({ t: 'airburst', x, y, z, kind: 'kill', weapon: weaponId, ...info });
+    return true;
+  }
+  threat.hits++;
+  // knocked off course: the impact point drifts by up to ~1.1 tiles, easing in from now to impact
+  const k = threatProgress(threat);
+  driftAt(threat, k, dtmp);
+  threat.dbx = dtmp.x;
+  threat.dby = dtmp.y;
+  threat.dk = k;
+  const a = w.rng.next() * TAU;
+  const r = 0.45 + w.rng.next() * 0.65;
+  threat.dox += Math.cos(a) * r;
+  threat.doy += Math.sin(a) * r;
+  w.events.push({ t: 'airburst', x, y, z, kind: 'hit', weapon: weaponId, ...info });
+  return false;
+}
+
+function interceptResolve(w: World, p: Projectile, threat: Projectile) {
+  if (w.rng.next() < interceptPk(WEAPONS[p.weapon], threat)) {
+    p.dead = true;
+    hitThreat(w, threat, p.weapon, p.x, p.y, p.z);
   } else airburst(w, p, 'miss');
 }
 
@@ -373,6 +557,8 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
   const wpn = WEAPONS[p.weapon];
   const src = w.get(p.sourceId) ?? ({ id: p.sourceId, owner: p.owner } as Entity);
   const t = w.get(p.targetId);
+  // an intercepted-but-surviving missile arrives with a damaged warhead
+  const dmgMul = p.hits ? Math.max(0.5, 1 - 0.15 * p.hits) : 1;
   let direct = false;
   if (t && onTarget) {
     // active protection systems defeat rockets and missiles before they hit
@@ -386,11 +572,11 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
     }
     const near = t.kind === 'building' ? w.distTo({ x: p.x, y: p.y } as Entity, t) < 0.6 : Math.hypot(t.x - p.x, t.y - p.y) < 0.75;
     if (near && (!unitDef(t.def)?.air || t.kind === 'building' || wpn.air !== 'no')) {
-      w.damage(t, wpn.damage, wpn.warhead, src);
+      w.damage(t, wpn.damage * dmgMul, wpn.warhead, src);
       direct = true;
     }
   }
-  if (wpn.splash) w.splash(p.x, p.y, wpn.splash, wpn.damage * 0.7, wpn.warhead, src, direct ? (t?.id ?? -1) : -1);
+  if (wpn.splash) w.splash(p.x, p.y, wpn.splash, wpn.damage * 0.7 * dmgMul, wpn.warhead, src, direct ? (t?.id ?? -1) : -1);
   const air = p.z - groundZ(w, p.x, p.y) > 0.6;
   w.events.push({ t: 'impact', x: p.x, y: p.y, z: p.z, weapon: p.weapon, air, direct });
 }
@@ -406,13 +592,19 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
   const ic = wpn.intercept;
   if (!ic || e.cooldown > 0) return false;
   const range = w.weaponRange(e, wpn);
+  const radar = e.owner >= 0 && w.players[e.owner].radarOnline;
+  const ez = entityZ(w, e);
   let best: Projectile | null = null;
   let bestScore = Infinity;
   for (const p of w.projectiles) {
     if (p.dead || !w.isEnemy(e.owner, p.owner) || !ic.kinds.includes(p.flight)) continue;
-    if (p.engaged >= (p.flight === 'ballistic' || p.flight === 'hypersonic' ? 2 : 1)) continue;
+    // keep engaging a damaged threat, but never put more interceptors in the air than hits still needed (+1 spare)
+    if (p.engaged >= maxEngage(p)) continue;
     const d = Math.hypot(p.x - e.x, p.y - e.y);
-    if (d > range) continue;
+    if (d > detectionRange(range, WEAPONS[p.weapon], radar)) continue;
+    // above the engagement ceiling (the layered interceptor's, if it would fire one): wait for the terminal dive
+    const lw = ic.layer && ic.layer.kinds.includes(p.flight) ? WEAPONS[ic.layer.weapon] : wpn;
+    if (p.z - ez > (lw.intercept?.ceiling ?? ic.ceiling ?? 9)) continue;
     // only engage threats that will land near us (impact point within defended radius)
     if (Math.hypot(p.tx - e.x, p.ty - e.y) > range + 4) continue;
     const remaining = p.T - p.age;
@@ -429,18 +621,30 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
   if (wpn.projectile === 'beam') {
     // directed energy: hit instantly, chance to burn it down
     w.events.push({ t: 'fire', id: e.id, weapon: wpn.id, x: e.x, y: e.y, tx: best.x, ty: best.y, targetId: -1, owner: e.owner });
-    if (w.rng.next() < ic.pk) {
-      best.dead = true;
-      w.events.push({ t: 'airburst', x: best.x, y: best.y, z: best.z, kind: 'kill', weapon: wpn.id, victim: best.flight });
-    }
+    if (w.rng.next() < interceptPk(wpn, best)) hitThreat(w, best, wpn.id, best.x, best.y, best.z);
     return true;
   }
-  launchInterceptor(w, e, best, wpn);
+  // layered defence: a heavier interceptor (own weapon def / pk / munition) for some threat kinds
+  const layer = ic.layer && ic.layer.kinds.includes(best.flight) ? WEAPONS[ic.layer.weapon] : undefined;
+  const iw = layer ?? wpn;
+  launchInterceptor(w, e, best, iw);
+  // shoot-shoot doctrine: ballistic, hypersonic and multi-hit threats get a pair, within the engagement cap
+  if ((best.flight === 'ballistic' || best.flight === 'hypersonic' || best.hp >= 2) && best.engaged < maxEngage(best)) launchInterceptor(w, e, best, iw);
   w.events.push({ t: 'fire', id: e.id, weapon: wpn.id, x: e.x, y: e.y, tx: best.x, ty: best.y, targetId: -1, owner: e.owner });
   return true;
 }
 
 export function isInterceptable(f: Flight) {
   return INTERCEPTABLE.includes(f);
+}
+
+/**
+ * Range at which a defence with weapon range `range` detects a threat fired by `threatWpn`: low-observable
+ * cruise missiles are only seen at a fraction of it (+15% of the range while a Radar Center is online).
+ */
+export function detectionRange(range: number, threatWpn: WeaponDef | undefined, radar: boolean) {
+  const lo = threatWpn?.lowObservable ?? 1;
+  if (lo >= 1) return range;
+  return range * Math.min(1, lo + (radar ? 0.15 : 0));
 }
 

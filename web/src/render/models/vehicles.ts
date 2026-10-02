@@ -3,7 +3,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
 import { factionCamo, pbrMaterial, worldUV } from '../textures';
 import type { Builder } from './registry';
+import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
+import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
  * Detailed procedural ground vehicles (one design per nation for the shared
@@ -58,6 +60,10 @@ const K = {
 };
 
 const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
+const sstep = (a: number, b: number, x: number) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
 function shade(c: number, f: number): number {
   const r = Math.min(255, Math.round(((c >> 16) & 255) * f));
   const g = Math.min(255, Math.round(((c >> 8) & 255) * f));
@@ -332,6 +338,16 @@ function cmat<T extends THREE.Material>(key: string, fog: FogOfWar | null, make:
   }
   return m;
 }
+const VEH_WEAR: WearCfg = { dirt: true, loose: true, scale: 9 };
+const DECAL_WEAR: WearCfg = { dirt: false, loose: false, scale: 9 };
+/** Cached material with the dust / damage / loose-part patch (shared by every vehicle). */
+function wmat(key: string, fog: FogOfWar | null, make: () => THREE.Material, cfg: WearCfg = VEH_WEAR): THREE.Material {
+  const m = cmat('w|' + key, fog, make);
+  if (!isWearMaterial(m)) wearPatch(m, cfg);
+  return m;
+}
+const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial, DECAL_WEAR);
+
 function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse = false) {
   return cmat(`glow${color}|${intensity}|${pulse}`, fog, () => {
     const m = new THREE.MeshStandardMaterial({ color: shade(color, 0.4), emissive: color, emissiveIntensity: intensity, roughness: 0.35, metalness: 0, toneMapped: false });
@@ -356,6 +372,25 @@ const _col = new THREE.Color();
 class Acc {
   readonly buckets = new Map<string, THREE.BufferGeometry[]>();
   tris = 0;
+  /** Current loose-piece tag (see wear.ts): id + 256 * mode, hinge y / z. */
+  private lc = 0;
+  private lpy = 0;
+  private lpz = 0;
+  private static pid = 0;
+  /** Everything fn() adds is one piece that is blown off (mode 1) or hangs from a corner (x, y) when damaged (mode 2: hinge at the front end, 3: at the rear end). */
+  piece(mode: 1 | 2 | 3, fn: () => void, py = 0, pz = 0): this {
+    const save = [this.lc, this.lpy, this.lpz];
+    Acc.pid = (Acc.pid % 254) + 1;
+    this.lc = Acc.pid + mode * 256;
+    this.lpy = py;
+    this.lpz = pz;
+    try {
+      fn();
+    } finally {
+      [this.lc, this.lpy, this.lpz] = save;
+    }
+    return this;
+  }
   add(geo: THREE.BufferGeometry, paint: number, m?: THREE.Matrix4): this {
     let g = geo.index ? geo.toNonIndexed() : geo;
     if (g === geo) g = geo.clone();
@@ -377,6 +412,18 @@ class Acc {
         arr[i * 3 + 2] = _col.b;
       }
       g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    }
+    if (key === 'D' || key === 'M' || key === 's' + CAMO) {
+      // aWear: x = dust / mud (filled in by Bld.finish), y = loose piece code, zw = hinge
+      const n = g.attributes.position.count;
+      const w = new Float32Array(n * 4);
+      if (this.lc)
+        for (let i = 0; i < n; i++) {
+          w[i * 4 + 1] = this.lc;
+          w[i * 4 + 2] = this.lpy;
+          w[i * 4 + 3] = this.lpz;
+        }
+      g.setAttribute('aWear', new THREE.BufferAttribute(w, 4));
     }
     let list = this.buckets.get(key);
     if (!list) this.buckets.set(key, (list = []));
@@ -470,7 +517,27 @@ interface Tpl {
   wheeled: boolean;
   custom?: CustomAnim;
   bob: number;
+  /** Hull rock per main-gun shot (0 = none, 1 = 120 mm MBT, ~1.4 = SPH, ~0.25 = autocannon). */
+  kick: number;
   stats: { tris: number; meshes: number };
+  key: string;
+  decals: DecalSpec | null;
+  fx: NonNullable<Model['damageFx']>;
+}
+
+/** Marking layout found on the template (target-local coordinates). */
+interface DecalSpot {
+  p: THREE.Vector3;
+  u: THREE.Vector3;
+  v: THREE.Vector3;
+  numH: number;
+  numOff: number; // number centre offset along u
+  emblem: { cell: Cell; w: number; h: number; off: number; color: number } | null;
+}
+interface DecalSpec {
+  spots: DecalSpot[];
+  digits: number;
+  color: number;
 }
 
 class Bld {
@@ -489,6 +556,7 @@ class Bld {
   tw?: number;
   wheeled = false;
   bob = 1;
+  kick = 0;
   custom?: CustomAnim;
   private mi = 0;
   extraTris = 0;
@@ -531,13 +599,11 @@ class Bld {
     let m: THREE.Material;
     switch (key) {
       case 'D':
-        m = cmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
-        break;
+        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
       case 'M':
-        m = cmat('vmetal', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.72 }));
-        break;
+        return wmat('vmetal', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.72 }));
       case 's' + CAMO:
-        return pbrMaterial('camo', this.camoOpts, fog);
+        return wmat('camo' + JSON.stringify(this.camoOpts), fog, () => pbrMaterial('camo', this.camoOpts, null).clone());
       case 's' + LAMP:
         m = glowMat(0xfff0d0, 2.4, fog);
         break;
@@ -557,13 +623,21 @@ class Bld {
         m = glowMat(0xff3020, 2.6, fog);
         break;
       default:
-        m = cmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
     }
     if (key.startsWith('s') && key !== 's' + CAMO && !this.glow.includes(m)) this.glow.push(m);
     return m;
   }
   /** Wheel set as one InstancedMesh (geometry: axle along Z, outer face toward +Z, centred on the origin). */
   wheels(parent: Part | THREE.Object3D, geo: THREE.BufferGeometry, entries: WheelEntry[], tag = 'wheels') {
+    // running gear: mud caked on the rims and tyres, more toward the outside
+    const aw = geo.getAttribute('aWear') as THREE.BufferAttribute | undefined;
+    if (aw) {
+      const pos = geo.attributes.position;
+      let R = 1e-6;
+      for (let i = 0; i < pos.count; i++) R = Math.max(R, Math.hypot(pos.getX(i), pos.getY(i)));
+      for (let i = 0; i < pos.count; i++) aw.setX(i, 0.55 + 0.45 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R));
+    }
     const im = new THREE.InstancedMesh(geo, this.material('D'), entries.length);
     im.userData.tag = tag;
     im.userData.wheels = entries;
@@ -585,6 +659,7 @@ class Bld {
         if (!g) continue;
         g.computeBoundingSphere();
         const mesh = new THREE.Mesh(g, this.material(key));
+        mesh.userData.bk = key;
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         p.g.add(mesh);
@@ -609,6 +684,8 @@ class Bld {
     });
     if (box.isEmpty()) box.setFromObject(this.root);
     const size = { x: box.max.x - box.min.x, y: box.max.y, z: box.max.z - box.min.z };
+    this.bakeDirt();
+    const ray = new Probe(this.root, skip);
     return {
       root: this.root,
       height: box.max.y,
@@ -620,8 +697,236 @@ class Bld {
       wheeled: this.wheeled,
       custom: this.custom,
       bob: this.bob,
+      kick: this.kick || (this.mi > 0 ? 0.18 : 0),
       stats: { tris: Math.round(tris), meshes },
+      key: '',
+      decals: this.layoutDecals(ray),
+      fx: this.damagePoints(ray, box),
     };
+  }
+  /** Dust & mud amount per vertex from its height above the ground (root space) and facing. */
+  private bakeDirt() {
+    this.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh || (mesh as THREE.InstancedMesh).isInstancedMesh || o.userData.tag === 'belt') return;
+      const aw = mesh.geometry.getAttribute('aWear') as THREE.BufferAttribute | undefined;
+      if (!aw) return;
+      const pos = mesh.geometry.attributes.position;
+      const nor = mesh.geometry.attributes.normal;
+      const mw = mesh.matrixWorld;
+      for (let i = 0; i < pos.count; i++) {
+        _dv.fromBufferAttribute(pos, i).applyMatrix4(mw);
+        const low = clamp((0.2 - _dv.y) / 0.15, 0, 1);
+        const ny = nor.getY(i);
+        // caked on the lower hull / fenders, a light film of dust on decks and the glacis
+        const d = low * low * (3 - 2 * low) + Math.max(0, ny) * 0.16 + (ny < -0.5 ? 0.25 : 0);
+        aw.setX(i, clamp(d, 0, 1));
+      }
+      aw.needsUpdate = true;
+    });
+  }
+  /** Hull numbers + national marking spots on the turret (or hull) sides, found by ray casting the finished template. */
+  private layoutDecals(ray: Probe): DecalSpec | null {
+    const own = (t: THREE.Object3D) => t.children.filter((c) => (c as THREE.Mesh).isMesh && (c.userData.bk === 's' + CAMO || c.userData.bk === 'D')) as THREE.Mesh[];
+    const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
+    // candidate parts: the turret first, then the part with the largest painted side (hull, launcher box, cargo body...)
+    const cands: { g: THREE.Object3D; area: number; turret: boolean }[] = [];
+    for (const p of this.parts) {
+      let skipIt = false;
+      for (let q: THREE.Object3D | null = p.g; q; q = q.parent) if (tagged(q, 'recoil') || tagged(q, 'whip') || tagged(q, 'spin')) skipIt = true;
+      if (skipIt) continue;
+      const bb = new THREE.Box3();
+      for (const m of own(p.g)) if (m.userData.bk === 's' + CAMO) bb.expandByObject(m, false);
+      if (bb.isEmpty()) continue;
+      const area = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y);
+      const turret = tagged(p.g, 'turret') && bb.max.y - bb.min.y > 0.05 && bb.max.x - bb.min.x > 0.2;
+      cands.push({ g: p.g, area: area * (turret ? 100 : 1), turret });
+    }
+    cands.sort((a, b) => b.area - a.area);
+    for (const c of cands.slice(0, 4)) {
+      const r = this.layoutOn(ray, c.g, c.turret ? 'turret' : 'body', own);
+      if (r) {
+        c.g.userData.tag = ((c.g.userData.tag as string | undefined) ? c.g.userData.tag + ' ' : '') + 'decalT';
+        return r;
+      }
+    }
+    return null;
+  }
+  private layoutOn(ray: Probe, tg: THREE.Object3D, tkind: 'turret' | 'body', own: (t: THREE.Object3D) => THREE.Mesh[]): DecalSpec | null {
+    const meshes = own(tg);
+    const camo = meshes.filter((m) => m.userData.bk === 's' + CAMO);
+    if (!camo.length) return null;
+    const bb = new THREE.Box3();
+    for (const m of camo) bb.expandByObject(m, false);
+    const H = bb.max.y - bb.min.y;
+    const numH0 = clamp(H * (tkind === 'turret' ? 0.4 : 0.22), 0.024, tkind === 'turret' ? 0.048 : 0.04);
+    const f = this.f;
+    const lum = ((this.base >> 16) & 255) * 0.3 + ((this.base >> 8) & 255) * 0.59 + (this.base & 255) * 0.11;
+    const color = lum > 140 ? 0x1c1c1a : 0xe6e6de;
+    const digits = f === 'israel' ? 2 : 3;
+    // national marking: flag patch, the Bundeswehr cross, the PLA star, the IDF chevron
+    const emblemOf = (numH: number): DecalSpot['emblem'] => {
+      if (f === 'germany') return { cell: roundelCell('germany'), w: numH * 1.05, h: numH * 1.05, off: 0, color: 0xffffff };
+      if (f === 'china') return { cell: roundelCell('china'), w: numH * 1.1, h: numH * 1.1, off: 0, color: 0xffffff };
+      if (f === 'israel') return { cell: chevronCell(), w: numH * 0.95, h: numH * 0.95, off: 0, color };
+      if (f !== 'neutral') return { cell: flagPatchCell(f), w: numH * 1.05, h: numH * 0.7, off: 0, color: 0xffffff };
+      return null;
+    };
+    const spots: DecalSpot[] = [];
+    const camoSet = new Set<THREE.Object3D>(camo);
+    const bl = bb.max.x - bb.min.x;
+    const xc0 = (bb.min.x + bb.max.x) / 2 - (tkind === 'turret' ? bl * 0.12 : bl * 0.05);
+    // hull / truck bodies: also try the cab doors (front) and the rear body when the middle is a low flat bed
+    const xcs = tkind === 'turret' ? [xc0] : [xc0, bb.max.x - bl * 0.16, bb.min.x + bl * 0.22, bb.max.x - bl * 0.3];
+    const yf = tkind === 'turret' ? 0.5 : 0.62;
+    for (const side of [1, -1]) {
+      for (const k of [1, 0.75, 0.56]) {
+        const numH = numH0 * k;
+        const numW = digits * numH * 0.47 + (digits - 1) * numH * 0.08;
+        const gap = numH * 0.35;
+        let em = emblemOf(numH);
+        let tot = numW + (em ? gap + em.w : 0);
+        let hit: ReturnType<Probe['flatSpot']> = null;
+        for (const xc of xcs) if (!hit) hit = ray.flatSpot(side, bb, tot, Math.max(numH, em?.h ?? 0), xc, yf, camoSet);
+        if (!hit && em) {
+          // not enough flat room for both: number only
+          for (const xc of xcs) if (!hit) hit = ray.flatSpot(side, bb, numW, numH, xc, yf, camoSet);
+          em = null;
+          tot = numW;
+        }
+        if (!hit) continue;
+        const n = hit.n;
+        const u = new THREE.Vector3(side, 0, 0).addScaledVector(n, -n.x * side).normalize();
+        const v = new THREE.Vector3().crossVectors(n, u).normalize();
+        // to target-local space
+        const inv = new THREE.Matrix4().copy(tg.matrixWorld).invert();
+        const p = hit.p.clone().addScaledVector(n, 0.0015).applyMatrix4(inv);
+        const nm = new THREE.Matrix3().setFromMatrix4(inv);
+        u.applyMatrix3(nm).normalize();
+        v.applyMatrix3(nm).normalize();
+        const start = -tot / 2;
+        spots.push({ p, u, v, numH, numOff: em ? start + em.w + gap + numW / 2 : 0, emblem: em ? { ...em, off: start + em.w / 2 } : null });
+        break;
+      }
+    }
+    if (!spots.length) return null;
+    return { spots, digits, color };
+  }
+  /** Battle-damage particle points: engine deck smoke / fire, torn-plate sparks, turret ring fire. */
+  private damagePoints(ray: Probe, box: THREE.Box3): NonNullable<Model['damageFx']> {
+    const x0 = box.min.x;
+    const x1 = box.max.x;
+    const L = x1 - x0;
+    const W = box.max.z - box.min.z;
+    // engine near the exhaust (rear for most tanks, front for Merkava / Namer / trucks)
+    const ex = this.emitters.find((e) => e.kind === 'smoke');
+    let ex0 = x0 + L * 0.16;
+    if (ex) ex0 = ex.pos.x > (x0 + x1) / 2 ? ex.pos.x - L * 0.14 : ex.pos.x + L * 0.14;
+    ex0 = clamp(ex0, x0 + L * 0.1, x1 - L * 0.1);
+    const top = (x: number, z: number) => new THREE.Vector3(x, ray.topY(x, z, true) + 0.012, z);
+    let turretTop: THREE.Vector3 | null = null;
+    this.root.traverse((o) => {
+      if (!turretTop && typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes('turret')) {
+        const p = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld);
+        turretTop = new THREE.Vector3(p.x, ray.topY(p.x, p.z, false) + 0.01, p.z);
+      }
+    });
+    const mid = (x0 + x1) / 2;
+    const fx: NonNullable<Model['damageFx']> = [
+      { pos: top(ex0, W * 0.08), kind: 'smoke', at: 0.35 },
+      { pos: new THREE.Vector3(mid + L * 0.1, box.max.y * 0.45, box.max.z * 0.92), kind: 'spark', at: 0.45 },
+      { pos: turretTop ?? top(mid, 0), kind: 'smoke', at: 0.55 },
+      { pos: new THREE.Vector3(mid - L * 0.15, box.max.y * 0.4, box.min.z * 0.92), kind: 'spark', at: 0.6 },
+      { pos: top(ex0, -W * 0.1), kind: 'fire', at: 0.7 },
+      { pos: top(mid + (ex0 < mid ? L * 0.22 : -L * 0.22), W * 0.12), kind: 'smoke', at: 0.8 },
+      { pos: turretTop ? (turretTop as THREE.Vector3).clone().setY((turretTop as THREE.Vector3).y - 0.005) : top(mid, -W * 0.1), kind: 'fire', at: 0.88 },
+    ];
+    return fx;
+  }
+}
+
+// ------------------------------------------------------------ template probing
+
+const _dv = new THREE.Vector3();
+const DOWN = new THREE.Vector3(0, -1, 0);
+
+const GRID: [number, number][] = [];
+for (const gy of [-1, -0.5, 0, 0.5, 1]) for (const gx of [-1, -0.5, 0, 0.5, 1]) if (gx || gy) GRID.push([gx * 0.98, gy * 0.96]);
+
+/** Hit on a loose piece (skirt, ERA brick, bin)? Markings must not sit on parts that fall off. */
+function loose(h: THREE.Intersection): boolean {
+  const aw = (h.object as THREE.Mesh).geometry?.getAttribute('aWear');
+  return !!(aw && h.face && aw.getY(h.face.a) > 0.5);
+}
+
+/** Ray casts against a finished template (marking placement, damage points). */
+class Probe {
+  private readonly rc = new THREE.Raycaster();
+  private readonly all: THREE.Object3D[] = [];
+  private readonly hull: THREE.Object3D[] = [];
+  private readonly o = new THREE.Vector3();
+  private readonly d = new THREE.Vector3();
+  constructor(root: THREE.Object3D, skip: (o: THREE.Object3D | null) => boolean) {
+    const inTurret = (o: THREE.Object3D | null): boolean => {
+      for (let q = o; q; q = q.parent) if (typeof q.userData.tag === 'string' && (q.userData.tag as string).split(' ').includes('turret')) return true;
+      return false;
+    };
+    root.traverse((o) => {
+      if (!(o as THREE.Mesh).isMesh || skip(o)) return;
+      this.all.push(o);
+      if (!inTurret(o)) this.hull.push(o);
+    });
+    this.rc.far = 20;
+  }
+  private first(list: THREE.Object3D[]) {
+    this.rc.set(this.o, this.d);
+    const h = this.rc.intersectObjects(list, false);
+    return h.length ? h[0] : null;
+  }
+  /** Height of the first surface straight below (x, z). */
+  topY(x: number, z: number, hullOnly: boolean): number {
+    this.o.set(x, 6, z);
+    this.d.copy(DOWN);
+    const h = this.first(hullOnly ? this.hull : this.all);
+    return h ? h.point.y : 0.15;
+  }
+  private side(x: number, y: number, side: number) {
+    this.o.set(x, y, side * 6);
+    this.d.set(0, 0, -side);
+    return this.first(this.all);
+  }
+  /** A flat, unobstructed w x h patch of `paint` meshes on the +Z (side = 1) or -Z face of bb, near (xc, yFrac). */
+  flatSpot(side: number, bb: THREE.Box3, w: number, h: number, xc: number, yFrac: number, paint: Set<THREE.Object3D>): { p: THREE.Vector3; n: THREE.Vector3 } | null {
+    const y0 = bb.min.y + (bb.max.y - bb.min.y) * yFrac;
+    const ys: number[] = [];
+    for (let y = bb.min.y + h / 2 + 0.004; y <= bb.max.y - h / 2 - 0.004; y += 0.01) ys.push(y);
+    ys.sort((a, b) => Math.abs(a - y0) - Math.abs(b - y0));
+    const own = [...paint];
+    for (const y of ys.slice(0, 10)) {
+      for (let k = 0; k < 14; k++) {
+        const x = xc + Math.ceil(k / 2) * 0.02 * (k % 2 ? 1 : -1);
+        if (x - w / 2 < bb.min.x + 0.004 || x + w / 2 > bb.max.x - 0.004) continue;
+        // cheap test against the target's own paint first, occlusion by the whole model after
+        this.o.set(x, y, side * 6);
+        this.d.set(0, 0, -side);
+        const h0 = this.first(own);
+        if (!h0 || !h0.face || loose(h0)) continue;
+        const n = h0.face.normal.clone().transformDirection(h0.object.matrixWorld);
+        if (n.z * side < 0.6 || Math.abs(n.y) > 0.55) continue;
+        const occ = this.side(x, y, side);
+        if (!occ || occ.object !== h0.object || occ.distance < h0.distance - 1e-4) continue;
+        let ok = true;
+        for (const [cx, cy] of GRID) {
+          const hc = this.side(x + (cx * w) / 2, y + (cy * h) / 2, side);
+          if (!hc || !paint.has(hc.object) || loose(hc) || Math.abs(_dv.subVectors(hc.point, h0.point).dot(n)) > 0.004) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) return { p: h0.point.clone(), n };
+      }
+    }
+    return null;
   }
 }
 
@@ -810,6 +1115,7 @@ function treadBase(fog: FogOfWar | null) {
   return pbrMaterial('tread', { color: 0x3a3936, divisions: 6, grime: 0.55, seed: 3 }, fog);
 }
 
+const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9 };
 function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
   const m = new THREE.MeshStandardMaterial({
     map: base.map ? base.map.clone() : null,
@@ -820,7 +1126,7 @@ function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
     normalScale: base.normalScale.clone(),
   });
   if (fog) fog.apply(m);
-  return m;
+  return wearPatch(m, BELT_WEAR);
 }
 
 // ------------------------------------------------------------- wheel styles
@@ -945,6 +1251,9 @@ function running(b: Bld, t: TrackSpec) {
   for (const side of [-1, 1]) {
     const zc = side * t.gauge;
     const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
+    const wa = new Float32Array(geo.attributes.position.count * 4);
+    for (let i = 0; i < wa.length; i += 4) wa[i] = 0.8;
+    geo.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
     const mesh = new THREE.Mesh(geo, base);
     mesh.userData.tag = 'belt';
     mesh.userData.side = side;
@@ -1092,16 +1401,20 @@ function panoSight(p: Part, x: number, y: number, z: number, h = 0.04, s = 1) {
 
 /** Toolbox / stowage bin. */
 function bin(p: Part, w: number, h: number, d: number, x: number, y: number, z: number, paint: number = CAMO, ry = 0) {
-  p.cbox(w, h, d, Math.min(0.004, h * 0.2), x, y + h / 2, z, paint, 0, ry, 0);
-  p.box(w * 1.01, 0.003, d * 1.01, x, y + h * 0.82, z, K.dark, 0, ry, 0);
-  p.box(0.006, 0.006, 0.006, x + w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
-  p.box(0.006, 0.006, 0.006, x - w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
+  p.piece(1, () => {
+    p.cbox(w, h, d, Math.min(0.004, h * 0.2), x, y + h / 2, z, paint, 0, ry, 0);
+    p.box(w * 1.01, 0.003, d * 1.01, x, y + h * 0.82, z, K.dark, 0, ry, 0);
+    p.box(0.006, 0.006, 0.006, x + w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
+    p.box(0.006, 0.006, 0.006, x - w * 0.3, y + h * 0.6, z + (d / 2) * Math.sign(z || 1), mt(K.steel));
+  });
 }
 
 /** Jerry can standing on y, long side along X. */
 function jerry(p: Part, x: number, y: number, z: number, c = 0x4c5434) {
-  p.cbox(0.032, 0.046, 0.016, 0.003, x, y + 0.023, z, c);
-  p.box(0.01, 0.006, 0.006, x + 0.008, y + 0.049, z, c);
+  p.piece(1, () => {
+    p.cbox(0.032, 0.046, 0.016, 0.003, x, y + 0.023, z, c);
+    p.box(0.01, 0.006, 0.006, x + 0.008, y + 0.049, z, c);
+  });
 }
 
 /** Tow cable along a polyline with eye loops. */
@@ -1153,7 +1466,7 @@ function bricks(p: Part, m: THREE.Matrix4, u0: number, u1: number, v0: number, v
       const v = v0 + dv * (j + 0.5) + off;
       if (v + dv / 2 > v1 + 1e-6) continue;
       const g = new THREE.BoxGeometry(du - gap, th, dv - gap);
-      p.add(g, paint, m.clone().multiply(TR(u0 + du * (i + 0.5), th / 2, v)));
+      p.piece(1, () => p.add(g, paint, m.clone().multiply(TR(u0 + du * (i + 0.5), th / 2, v))));
     }
   }
 }
@@ -1188,8 +1501,9 @@ interface GunOpt {
 
 /** Main gun: fixed pivot (elevation) + recoil group with barrel, muzzle at the tip. */
 function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) {
-  const piv = b.part(tur, x, y, z);
+  const piv = b.part(tur, x, y, z, 'gunpiv');
   piv.g.rotation.z = o.elev ?? 0.02;
+  b.kick = Math.max(b.kick, o.brake === 'arty' ? 1.4 : clamp(o.r / 0.018, 0.6, 1.2));
   if (o.mantlet) {
     const [mw, mh, md] = o.mantlet;
     tur.cbox(mw, mh, md, 0.008, x - mw / 2 + 0.01, y, z, CAMO);
@@ -1228,6 +1542,7 @@ function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) 
 
 /** Autocannon / small gun barrel pointing +X in a recoil group, muzzle at the tip. */
 function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: number, r: number, opts: { brake?: boolean; shroud?: number; paint?: number } = {}) {
+  b.kick = Math.max(b.kick, clamp(r / 0.04, 0.15, 0.3));
   const rec = b.part(parent, x, y, z, 'recoil');
   const paint = opts.paint ?? mt(K.gun);
   rec.cx(r, r * 1.15, len, len / 2, 0, 0, paint, 8);
@@ -1249,13 +1564,39 @@ function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld
     const b = new Bld(style, fog);
     fn(b);
     t = b.finish();
+    t.key = ck;
     templates.set(ck, t);
   }
   return instantiate(t, fog);
 }
 
+let instSeq = 0;
+const decalGeos = new Map<string, THREE.BufferGeometry>();
+
+/** Markings mesh (national emblem + per-instance tactical number), one draw call. */
+function decalGeo(t: Tpl, num: string): THREE.BufferGeometry | null {
+  const d = t.decals;
+  if (!d) return null;
+  const key = t.key + '|' + num;
+  let g = decalGeos.get(key);
+  if (g) return g;
+  const parts: THREE.BufferGeometry[] = [];
+  const c = new THREE.Vector3();
+  for (const sp of d.spots) {
+    if (sp.emblem) parts.push(decalQuad(c.copy(sp.p).addScaledVector(sp.u, sp.emblem.off), sp.u, sp.v, sp.emblem.w, sp.emblem.h, sp.emblem.cell, sp.emblem.color));
+    parts.push(...numberQuads(c.copy(sp.p).addScaledVector(sp.u, sp.numOff), sp.u, sp.v, sp.numH, num, d.color));
+  }
+  if (!parts.length) return null;
+  g = mergeGeometries(parts, false);
+  g.computeBoundingSphere();
+  decalGeos.set(key, g);
+  return g;
+}
+
 function instantiate(t: Tpl, fog: FogOfWar | null): Model {
   const root = t.root.clone(true);
+  const id = instSeq++;
+  const seed = id & 3;
   const tags = new Map<string, THREE.Object3D[]>();
   root.traverse((o) => {
     const tg = o.userData.tag;
@@ -1292,9 +1633,26 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
     wheeled: t.wheeled,
   };
   if (!model.recoil!.length) delete model.recoil;
+  // markings: national emblem + tactical number on the turret / hull sides
+  const num = String((t.decals?.digits ?? 3) === 2 ? 10 + Math.floor(hash01(id * 7 + 3) * 90) : 100 + Math.floor(hash01(id * 7 + 3) * 900));
+  const dg = decalGeo(t, num);
+  const dTarget = q('decalT')[0];
+  if (dg && dTarget) {
+    const dm = new THREE.Mesh(dg, decalMat(fog));
+    dm.receiveShadow = true;
+    dm.userData.tag = 'decal';
+    dTarget.add(dm);
+  }
+  model.damageFx = t.fx.map((f) => ({ pos: f.pos.clone(), kind: f.kind, at: f.at }));
+  // battle damage: shared damaged material variants + per-instance belts
+  const wear = new WearDriver(root, seed, beltMats);
+  const gunPivs = q('gunpiv').map((o) => ({ o, z: o.rotation.z, k: 0.03 + 0.07 * hash01(id * 13 + o.id) }));
+  const tur = model.turret;
+  const turTilt = (hash01(id * 5 + 1) - 0.5) * 0.05;
   const wheelSets = q('wheels') as THREE.InstancedMesh[];
   const body = q('body')[0];
   const bodyY = body ? body.position.y : 0;
+  const bodyX = body ? body.position.x : 0;
   const whips = q('whip');
   const spins = q('spin');
   const custom = t.custom ? t.custom(q, model) : undefined;
@@ -1302,7 +1660,18 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
   let turnAcc = 0;
   let lastSpeed = 0;
   let acc = 0;
+  // sprung hull state: pitch / roll / fore-aft shove and their velocities
   let pitch = 0;
+  let roll = 0;
+  let shove = 0;
+  let pv = 0;
+  let rv = 0;
+  let xv = 0;
+  let lastFired = Infinity;
+  const wheeled = t.wheeled;
+  // wheeled hulls ride softer and bouncier than tracked ones
+  const SK = wheeled ? 62 : 115;
+  const SC = 2 * (wheeled ? 0.26 : 0.42) * Math.sqrt(SK);
   let steer = 0;
   let lastD = NaN;
   let lastT = NaN;
@@ -1333,18 +1702,71 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
       }
     }
     if (body) {
+      const bob = t.bob;
       const sp = Math.min(1, s.speed / 1.5);
-      const target = clamp(acc * 0.012, -0.035, 0.035) * t.bob;
-      pitch += (target - pitch) * Math.min(1, dt * 8);
-      body.rotation.z = pitch;
-      body.rotation.x = clamp(s.turn * s.speed * 0.025, -0.03, 0.03) * t.bob;
-      body.position.y = bodyY + (s.moving ? Math.sin(s.dist * 21 + ph) * 0.0022 * sp * t.bob : 0);
+      // main gun shot: the hull rocks away from the gun (nose up for a shot over the front,
+      // rolls away from a side shot) and is shoved back a touch, then settles on its springs
+      if (s.fired < lastFired && s.fired < 0.25 && t.kick > 0 && bob > 0 && s.dead <= 0) {
+        const ta = tur ? tur.rotation.y : 0;
+        const imp = t.kick * 0.85 * (wheeled ? 1.25 : 1);
+        pv += imp * Math.cos(ta);
+        rv += imp * Math.sin(ta);
+        xv -= t.kick * 0.25 * Math.cos(ta);
+      }
+      lastFired = s.fired;
+      // load transfer: squat under acceleration, dive under braking, lean out of turns
+      const pT = clamp(acc * 0.014, -0.045, 0.045) * bob;
+      const rT = clamp(s.turn * s.speed * 0.03, -0.04, 0.04) * bob;
+      let h = Math.min(dt, 0.1);
+      while (h > 1e-5) {
+        const st = Math.min(h, 1 / 60);
+        h -= st;
+        pv += (SK * (pT - pitch) - SC * pv) * st;
+        pitch += pv * st;
+        rv += (SK * (rT - roll) - SC * rv) * st;
+        roll += rv * st;
+        xv += (SK * 1.5 * -shove - SC * 1.2 * xv) * st;
+        shove += xv * st;
+      }
+      // ground bounce: proportional to speed and the roughness under the hull (AnimState.rough)
+      let by = 0;
+      let bp = 0;
+      let br = 0;
+      if (s.moving && bob > 0) {
+        const rough = s.rough ?? 0.35;
+        const d = s.dist;
+        if (wheeled) {
+          const a = (0.25 + rough) * sp * bob;
+          by = (Math.sin(d * 7.3 + ph) * 0.6 + Math.sin(d * 15.1 + ph * 2) * 0.4) * 0.0055 * a;
+          bp = (Math.sin(d * 5.2 + ph * 3) * 0.7 + Math.sin(d * 11.7 + ph) * 0.3) * 0.016 * a;
+          br = Math.sin(d * 6.1 + ph * 5) * 0.012 * a;
+        } else {
+          const a = (0.2 + rough) * sp * bob;
+          by = Math.sin(d * 21 + ph) * 0.0022 * sp * bob + (Math.sin(d * 33 + ph * 2) * 0.6 + Math.sin(d * 12.7 + ph) * 0.4) * 0.0028 * a;
+          bp = (Math.sin(d * 8.3 + ph * 3) * 0.6 + Math.sin(d * 19.7 + ph) * 0.4) * 0.009 * a;
+          br = Math.sin(d * 10.9 + ph * 5) * 0.005 * a;
+        }
+      }
+      body.rotation.z = pitch + bp;
+      body.rotation.x = roll + br;
+      body.position.y = bodyY + by;
+      body.position.x = bodyX + shove;
     }
-    for (const w of whips) {
+    const dmg = s.dead > 0 ? 1 : s.damage;
+    if (s.dead <= 0) wear.update(dmg);
+    for (let i = 0; i < whips.length; i++) {
+      const w = whips[i];
       const sp = Math.min(s.speed, 3);
-      w.rotation.z = -sp * 0.07 - acc * 0.01 + Math.sin(s.time * 8 + ph) * 0.035 * Math.min(1, sp + 0.2);
+      // antennas snapped off by fragments
+      const broken = dmg > 0.45 + 0.4 * hash01(id * 11 + i);
+      w.scale.y = broken ? 0.3 : 1;
+      w.rotation.z = -sp * 0.07 - acc * 0.01 + Math.sin(s.time * 8 + ph) * 0.035 * Math.min(1, sp + 0.2) - (broken ? 0.5 : 0);
       w.rotation.x = Math.sin(s.time * 5.3 + ph * 1.7) * 0.02 * Math.min(1, sp + 0.3);
     }
+    // battered gun (drooping barrel) and a turret knocked askew on its ring
+    const bat = dmg > 0.6 ? sstep(0.6, 0.92, dmg) : 0;
+    for (const g of gunPivs) g.o.rotation.z = g.z - g.k * bat;
+    if (tur) tur.rotation.x = turTilt * sstep(0.72, 0.95, dmg);
     for (const o of spins) {
       const rate = (o.userData.rate as number) ?? 1;
       const ax = (o.userData.axis as 'x' | 'y' | 'z') ?? 'y';
@@ -1389,9 +1811,19 @@ function lowerHull(p: Part, pts: P2[], hw: number) {
 
 /** Side skirt plate (profile in x/y) on both sides at |z| = zs, with panel seams. */
 function skirts(p: Part, pts: P2[], zs: number, th: number, seams: number[], paint: number = CAMO, seamY: [number, number] = [0.09, 0.18]) {
+  const top = Math.max(...pts.map((q) => q[1]));
+  const xa = Math.min(...pts.map((q) => q[0]));
+  const xb = Math.max(...pts.map((q) => q[0]));
   for (const s of [-1, 1]) {
-    p.side(pts, th, s * zs, paint, Math.min(0.004, th * 0.3));
-    for (const x of seams) p.box(0.004, seamY[1] - seamY[0], 0.003, x, (seamY[0] + seamY[1]) / 2, s * (zs + th / 2 + 0.001), K.dark);
+    p.piece(
+      s > 0 ? 2 : 3,
+      () => {
+        p.side(pts, th, s * zs, paint, Math.min(0.004, th * 0.3));
+        for (const x of seams) p.box(0.004, seamY[1] - seamY[0], 0.003, x, (seamY[0] + seamY[1]) / 2, s * (zs + th / 2 + 0.001), K.dark);
+      },
+      s > 0 ? xb : xa,
+      top,
+    );
   }
 }
 
@@ -1579,7 +2011,7 @@ function sovSkirts(b: Bld, x0: number, x1: number, y0: number, y1: number, eraTo
   const B = b.body;
   for (const s of [-1, 1]) {
     const z = s * 0.318;
-    B.box(x1 - x0, y1 - y0, 0.008, (x0 + x1) / 2, (y0 + y1) / 2, z, 0x26282a);
+    B.piece(s > 0 ? 3 : 2, () => B.box(x1 - x0, y1 - y0, 0.008, (x0 + x1) / 2, (y0 + y1) / 2, z, 0x26282a), s > 0 ? x0 : x1, y1);
     if (eraTo > x0) {
       const n = Math.round((eraTo - x0) / 0.072);
       bricks(B, TR(x0, y1 - 0.005, z + s * 0.004, s > 0 ? Math.PI / 2 : -Math.PI / 2, 0, 0), 0, eraTo - x0, s > 0 ? 0 : -(y1 - y0 - 0.01) * 0 - 0.0, (y1 - y0 - 0.01), n, eraRows, 0.018, 0.006);
@@ -3747,6 +4179,132 @@ function missileTruck(style: ModelStyle, fog: FogOfWar | null): Model {
   });
 }
 
+// ------------------------------------------------------------ strike-missile TELs
+
+interface TelCfg {
+  /** Axle x positions, front first; the first `steer` axles steer. */
+  axles: number[];
+  steer: number;
+  L: number;
+  W: number;
+  r: number;
+  cab: [number, number, number]; // x0, x1, height
+  /** bare missile(s) on rails, box canisters / pod, or round canisters. */
+  load: 'bare' | 'box' | 'round';
+  cols: number;
+  rows: number;
+  len: number;
+  w: number; // box width / round & bare radius * 2
+  h: number; // box height (box) / ignored
+  mcol: number; // missile body / canister colour (CAMO = vehicle paint)
+  elev: number; // firing elevation (rad)
+  caps?: number; // box: muzzle caps per canister face (HIMARS pod: 2, Typhon cells: 1)
+  nose?: number; // bare: ogive length
+  cover?: boolean; // bare: canvas cover over the rear half (Iskander)
+}
+
+function telModel(key: string, c: TelCfg) {
+  return (style: ModelStyle, fog: FogOfWar | null): Model =>
+    build(key, style, fog, (b) => {
+      const B = b.body;
+      const axles: Axle[] = c.axles.map((x, i) => ({ x, steer: i < c.steer ? 1 - i * 0.3 : i === c.axles.length - 1 && c.axles.length > 4 ? -0.25 : 0 }));
+      const fy = truck(b, { axles, r: c.r, W: c.W, cabX0: c.cab[0], cabX1: c.cab[1], frameX0: -c.L / 2 + 0.04, cabH: c.cab[2] });
+      const bedX1 = c.cab[0] - 0.02;
+      const bedX0 = -c.L / 2 + 0.03;
+      const bedL = bedX1 - bedX0;
+      B.box(bedL, 0.028, c.W * 0.9, (bedX0 + bedX1) / 2, fy + 0.014, 0, CAMO);
+      for (const s of [-1, 1]) {
+        B.box(0.03, 0.11, 0.03, bedX0 + 0.03, fy - 0.03, s * c.W * 0.4, K.dark); // stabiliser jacks
+        B.box(0.05, 0.02, 0.05, bedX0 + 0.03, fy - 0.09, s * c.W * 0.4, K.dark);
+        bin(B, 0.1, 0.045, 0.045, bedX1 - 0.08, fy + 0.028, s * (c.W * 0.45 - 0.03), CAMO);
+        teamPanel(B, Math.min(0.3, bedL * 0.4), 0.022, 0.003, (bedX0 + bedX1) / 2, fy, s * (c.W * 0.45 + 0.002), b.team);
+      }
+      // erector: pivot at the rear of the bed, payload forward over the bed (travel), raised to fire
+      const ex = bedX0 + 0.04;
+      B.box(0.05, 0.05, c.W * 0.5, ex, fy + 0.05, 0, K.dark);
+      const E = b.part(B, ex, fy + 0.07, 0, 'erect');
+      const len = c.len;
+      const span = c.cols * c.w + (c.cols - 1) * 0.008;
+      for (const s of [-1, 1]) E.box(len * 0.9, 0.024, 0.02, len * 0.47, 0, s * (span / 2 - 0.01), K.dark);
+      for (let i = 0; i < 3; i++) E.box(0.025, 0.024, span, 0.08 + i * (len * 0.38), 0, 0, K.dark);
+      E.strut([len * 0.3, -0.015, 0], [len * 0.48, -0.05, 0], 0.014, mt(K.steel));
+      const x0 = 0.02;
+      const xm = x0 + len / 2;
+      for (let row = 0; row < c.rows; row++)
+        for (let col = 0; col < c.cols; col++) {
+          const z = (col - (c.cols - 1) / 2) * (c.w + 0.008);
+          if (c.load === 'box') {
+            const y = 0.012 + c.h / 2 + row * (c.h + 0.004);
+            E.cbox(len, c.h, c.w, 0.005, xm, y, z, c.mcol);
+            for (const k of [0.2, 0.5, 0.8]) E.box(0.008, c.h + 0.006, c.w + 0.006, x0 + len * k, y, z, K.dark); // frame ribs
+            const n = c.caps ?? 1;
+            for (let j = 0; j < n; j++) {
+              const cz = z + (n > 1 ? (j - (n - 1) / 2) * (c.w / n) : 0);
+              E.box(0.004, c.h * 0.8, (c.w / n) * 0.8, x0 + len + 0.002, y, cz, 0x2a2c28);
+              b.muzzle(E, x0 + len + 0.01, y, cz);
+            }
+          } else if (c.load === 'round') {
+            const R = c.w / 2;
+            const y = 0.012 + R + row * (c.w + 0.004);
+            E.cx(R, R, len, xm, y, z, c.mcol, 14);
+            for (const k of [0.04, 0.5, 0.96]) E.cx(R * 1.08, R * 1.08, 0.014, x0 + len * k, y, z, K.dark, 14);
+            E.cx(R * 0.9, R * 0.9, 0.004, x0 + len + 0.002, y, z, 0x2a2c28, 14);
+            b.muzzle(E, x0 + len + 0.01, y, z);
+          } else {
+            const R = c.w / 2;
+            const y = 0.014 + R + 0.01;
+            const nose = c.nose ?? R * 4;
+            const body = len - nose;
+            E.cx(R, R, body, x0 + body / 2, y, z, c.mcol, 16);
+            E.add(new THREE.LatheGeometry([new THREE.Vector2(R, 0), new THREE.Vector2(R * 0.86, nose * 0.38), new THREE.Vector2(R * 0.5, nose * 0.78), new THREE.Vector2(0.001, nose)], 14).rotateZ(-Math.PI / 2), c.mcol, TR(x0 + body, y, z));
+            for (let i = 0; i < 4; i++) {
+              const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+              E.box(len * 0.09, 0.003, R * 1.1, x0 + len * 0.06, y + Math.sin(a) * R * 1.5, z + Math.cos(a) * R * 1.5, 0x5a5e58, a, 0, 0);
+            }
+            E.cx(R * 1.03, R * 1.03, 0.012, x0 + body * 0.62, y, z, b.team, 16);
+            E.cx(R * 1.04, R * 1.04, 0.02, x0 + 0.01, y, z, 0x2a2a2a, 16);
+            if (c.cover) E.cbox(body * 0.42, R * 2.3, R * 2.3, R * 0.6, x0 + body * 0.22, y, z, 0x4e5240);
+            b.muzzle(E, x0 + len, y, z);
+          }
+        }
+      antennas(b, B, c.cab[0] + 0.03, fy + c.cab[2] + 0.004, [-c.W * 0.38, c.W * 0.38], 0.2);
+      const elev = c.elev;
+      b.custom = (q) => {
+        const e = q('erect')[0];
+        if (!e) return undefined;
+        let a = 0;
+        let still = 0;
+        return (s) => {
+          still = s.moving ? 0 : still + s.dt;
+          const target = s.fired < 3 ? elev : still > 1.5 ? elev * 0.5 : 0;
+          a += (target - a) * Math.min(1, s.dt * 1.2);
+          e.rotation.z = a;
+        };
+      };
+    });
+}
+
+const TELS: Record<string, TelCfg> = {
+  // M142 HIMARS: 6x6, one launch pod (2 PrSM cells) on a slewing platform
+  tel_himars: { axles: [0.34, -0.08, -0.26], steer: 1, L: 0.98, W: 0.48, r: 0.072, cab: [0.24, 0.47, 0.19], load: 'box', cols: 1, rows: 1, len: 0.58, w: 0.25, h: 0.15, mcol: CAMO, elev: 0.75, caps: 2 },
+  // Typhon MRC: Mk 41 cells (2 x 2) raised near-vertical
+  tel_typhon: { axles: [0.48, 0.32, -0.12, -0.28, -0.44], steer: 2, L: 1.3, W: 0.54, r: 0.072, cab: [0.36, 0.62, 0.19], load: 'box', cols: 2, rows: 2, len: 0.78, w: 0.13, h: 0.11, mcol: CAMO, elev: 1.4, caps: 1 },
+  // LORA: 8x8 with two box canisters
+  tel_lora: { axles: [0.46, 0.3, -0.16, -0.32], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'box', cols: 2, rows: 1, len: 0.8, w: 0.12, h: 0.12, mcol: CAMO, elev: 0.95 },
+  // Taurus KEPD 350 (ground-launched): one long flat canister
+  tel_taurus: { axles: [0.38, -0.1, -0.27], steer: 1, L: 1.05, W: 0.5, r: 0.07, cab: [0.28, 0.52, 0.18], load: 'box', cols: 1, rows: 1, len: 0.66, w: 0.26, h: 0.1, mcol: CAMO, elev: 0.55 },
+  // Hyunmoo-2: 8x8, two bare missiles
+  tel_hyunmoo: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'bare', cols: 2, rows: 1, len: 0.82, w: 0.07, h: 0, mcol: 0xd6d8d2, elev: 1.15, nose: 0.13 },
+  // R-360 Neptune: KrAZ 6x6 with four round canisters (2 x 2)
+  tel_neptune: { axles: [0.4, -0.12, -0.28], steer: 1, L: 1.1, W: 0.5, r: 0.072, cab: [0.3, 0.54, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
+  // Tayfun: 8x8 with two round canisters
+  tel_tayfun: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'round', cols: 2, rows: 1, len: 0.8, w: 0.1, h: 0, mcol: CAMO, elev: 1.0 },
+  // 9K720 Iskander-M: MZKT 8x8, two missiles under a rear cover
+  tel_iskander: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.54, r: 0.076, cab: [0.36, 0.6, 0.17], load: 'bare', cols: 2, rows: 1, len: 0.8, w: 0.085, h: 0, mcol: 0x6a7058, elev: 1.25, nose: 0.17, cover: true },
+  // Khorramshahr-4: heavy 10x10, one huge missile
+  tel_khorramshahr: { axles: [0.6, 0.44, 0.0, -0.16, -0.32], steer: 2, L: 1.5, W: 0.58, r: 0.08, cab: [0.48, 0.74, 0.19], load: 'bare', cols: 1, rows: 1, len: 1.12, w: 0.13, h: 0, mcol: 0xd2d0c4, elev: 1.25, nose: 0.24 },
+};
+
 /** Shahed-136 style delta-wing drone (forward = +X) in a part. */
 function shahedDrone(p: Part, x: number, y: number, z: number, s = 1) {
   const c = 0x8a8a84;
@@ -4156,6 +4714,7 @@ export const VEHICLES: Record<string, Builder> = {
   berge,
   swarm,
   missile_truck: missileTruck,
+  ...Object.fromEntries(Object.entries(TELS).map(([k, c]) => [k, telModel(k, c)])),
   container,
   harvester,
   mcv,

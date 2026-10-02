@@ -31,6 +31,32 @@ export interface GameMap {
   starts: Point[];
   oils: Point[];
   bridges: { x: number; y: number; angle: number; length: number }[];
+  /** Road centerlines (the sim only marks them as dirt tiles; the renderer paves them). */
+  roads: Point[][];
+  /** Civilian scenery buildings. Their footprints are impassable (see `blocked`). */
+  structures: Structure[];
+  /** 1 where a civilian structure stands. */
+  blocked: Uint8Array;
+}
+
+export const enum StructureKind {
+  House = 0,
+  Cottage = 1,
+  Barn = 2,
+  Tower = 3,
+  WaterTower = 4,
+  Silo = 5,
+}
+
+export interface Structure {
+  kind: StructureKind;
+  /** Footprint in tiles (top-left corner + size). */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Facing (0..3, quarter turns): which side the front door / gable faces. */
+  rot: number;
 }
 
 export const ORE_MAX = 10;
@@ -46,7 +72,7 @@ export function terrainPassable(m: GameMap, x: number, y: number): boolean {
   if (!inBounds(m, x, y)) return false;
   const i = y * m.w + x;
   const t = m.tiles[i];
-  return t !== Tile.Water && t !== Tile.Rock && m.trees[i] === 0;
+  return t !== Tile.Water && t !== Tile.Rock && m.trees[i] === 0 && m.blocked[i] === 0;
 }
 
 export function terrainBuildable(m: GameMap, x: number, y: number): boolean {
@@ -273,6 +299,8 @@ export function createFrontlineMap(): GameMap {
     }
   }
 
+  const { structures, blocked } = placeStructures(W, H, tiles, trees, ore, heights, starts, oils, oreFields, allRoads, mirror);
+
   const bridges = bridgeS.map((s) => {
     // bridge center lies on the river centerline at diagonal coordinate s
     const d = riverOffset(s);
@@ -294,5 +322,119 @@ export function createFrontlineMap(): GameMap {
     starts,
     oils,
     bridges,
+    roads: allRoads,
+    structures,
+    blocked,
   };
+}
+
+/**
+ * Villages and farmsteads: a fixed layout for player 0's half, mirrored for
+ * player 1. Every footprint is validated (open, flat ground away from bases,
+ * ore, oil, roads and bridges) and a flood fill makes sure no structure cuts
+ * off any part of the walkable map; anything that fails is simply skipped.
+ */
+function placeStructures(
+  W: number,
+  H: number,
+  tiles: Uint8Array,
+  trees: Uint8Array,
+  ore: Uint8Array,
+  heights: Float32Array,
+  starts: Point[],
+  oils: Point[],
+  oreFields: (Point & { r: number })[],
+  roads: Point[][],
+  mirror: (p: Point) => Point,
+) {
+  const layout: Structure[] = [
+    // village west of the centre bridge, around an east-west lane at y ~ 52.5
+    { kind: StructureKind.House, x: 25, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.Cottage, x: 28, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.House, x: 32, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.House, x: 24, y: 55, w: 2, h: 2, rot: 0 },
+    { kind: StructureKind.Cottage, x: 29, y: 55, w: 2, h: 2, rot: 0 },
+    { kind: StructureKind.Tower, x: 35, y: 54, w: 1, h: 1, rot: 0 },
+    { kind: StructureKind.WaterTower, x: 36, y: 50, w: 1, h: 1, rot: 0 },
+    // farmstead in the southern fields
+    { kind: StructureKind.House, x: 58, y: 88, w: 2, h: 2, rot: 3 },
+    { kind: StructureKind.Barn, x: 62, y: 88, w: 3, h: 2, rot: 0 },
+    { kind: StructureKind.Silo, x: 62, y: 86, w: 1, h: 1, rot: 0 },
+    // roadside hamlet on the highway to the centre bridge
+    { kind: StructureKind.Cottage, x: 48, y: 73, w: 2, h: 2, rot: 1 },
+    { kind: StructureKind.House, x: 52, y: 73, w: 2, h: 2, rot: 1 },
+    { kind: StructureKind.Cottage, x: 49, y: 77, w: 2, h: 2, rot: 1 },
+  ];
+  const all = [
+    ...layout,
+    ...layout.map((st) => {
+      const p = mirror({ x: st.x + st.w - 1, y: st.y + st.h - 1 });
+      return { ...st, x: p.x, y: p.y, rot: (st.rot + 2) % 4 };
+    }),
+  ];
+  const blocked = new Uint8Array(W * H);
+  const structures: Structure[] = [];
+  const vh = (vx: number, vy: number) => heights[vy * (W + 1) + vx];
+  const roadDist = (x: number, y: number) => {
+    let best = 1e9;
+    for (const r of roads)
+      for (let k = 0; k < r.length - 1; k++) best = Math.min(best, distToSegment(x, y, r[k].x + 0.5, r[k].y + 0.5, r[k + 1].x + 0.5, r[k + 1].y + 0.5));
+    return best;
+  };
+  const okTile = (x: number, y: number) => {
+    if (x < 2 || y < 2 || x >= W - 2 || y >= H - 2) return false;
+    const i = y * W + x;
+    if ((tiles[i] !== Tile.Grass && tiles[i] !== Tile.Dirt) || trees[i] || ore[i] || blocked[i]) return false;
+    const cx = x + 0.5;
+    const cy = y + 0.5;
+    if (starts.some((s) => Math.hypot(cx - s.x, cy - s.y) < 16)) return false;
+    if (oils.some((o) => Math.hypot(cx - o.x - 1, cy - o.y - 1) < 4.5)) return false;
+    if (oreFields.some((f) => Math.hypot(cx - f.x, cy - f.y) < f.r + 2.2)) return false;
+    if (roadDist(cx, cy) < 1.6) return false;
+    const hs = [vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1)];
+    if (Math.max(...hs) - Math.min(...hs) > 0.35) return false;
+    return true;
+  };
+  // flood fill over walkable tiles, returns the reachable count from a start
+  const reach = () => {
+    const seen = new Uint8Array(W * H);
+    const s0 = starts[0].y * W + starts[0].x;
+    const q = [s0];
+    seen[s0] = 1;
+    let n = 0;
+    while (q.length) {
+      const t = q.pop()!;
+      n++;
+      const x = t % W;
+      const y = (t / W) | 0;
+      const nb = [x > 0 ? t - 1 : -1, x < W - 1 ? t + 1 : -1, y > 0 ? t - W : -1, y < H - 1 ? t + W : -1];
+      for (const u of nb) {
+        if (u < 0 || seen[u]) continue;
+        if (tiles[u] === Tile.Water || tiles[u] === Tile.Rock || trees[u] || blocked[u]) continue;
+        seen[u] = 1;
+        q.push(u);
+      }
+    }
+    return n;
+  };
+  let reachable = reach();
+  for (const st of all) {
+    let ok = true;
+    // footprint plus a one tile walkable margin
+    for (let y = st.y - 1; y <= st.y + st.h && ok; y++)
+      for (let x = st.x - 1; x <= st.x + st.w && ok; x++) {
+        const inside = x >= st.x && y >= st.y && x < st.x + st.w && y < st.y + st.h;
+        if (inside ? !okTile(x, y) : x < 0 || y < 0 || x >= W || y >= H || blocked[y * W + x]) ok = false;
+      }
+    if (!ok) continue;
+    for (let y = st.y; y < st.y + st.h; y++) for (let x = st.x; x < st.x + st.w; x++) blocked[y * W + x] = 1;
+    const now = reach();
+    if (now !== reachable - st.w * st.h) {
+      for (let y = st.y; y < st.y + st.h; y++) for (let x = st.x; x < st.x + st.w; x++) blocked[y * W + x] = 0;
+      continue;
+    }
+    reachable = now;
+    structures.push(st);
+  }
+  return { structures, blocked };
 }

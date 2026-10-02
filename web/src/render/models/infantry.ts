@@ -1092,6 +1092,15 @@ interface Sol {
   aimW: number;
   moveW: number;
   kneelW: number;
+  /** Smoothed walk (0) -> run (1) blend. */
+  runW: number;
+  /** Smoothed firing recoil impulse (0..1) and hit flinch timer / side. */
+  kickW: number;
+  flinch: number;
+  flinchDir: number;
+  lastDmg: number;
+  /** Pose at the moment of death (blended out over the first ~0.2 s of the fall). */
+  snap: { q: THREE.Quaternion[]; hp: THREE.Vector3; wp: THREE.Vector3 | null } | null;
   hx: number; // current home (team-local) position / yaw
   hz: number;
   hyaw: number;
@@ -1177,7 +1186,10 @@ interface LegOut {
 function legs(sol: Sol, s: AnimState, t: number): LegOut {
   const mw = sol.moveW;
   const kw = sol.kneelW;
-  const runK = clamp((s.speed - 0.55) / 0.55, 0, 1);
+  // walk <-> run blend follows the ground speed smoothly (no pops on speed changes)
+  const runT = s.moving ? clamp((s.speed - 0.55) / 0.55, 0, 1) : 0;
+  sol.runW = s.dt === 0 && s.time === 0 ? runT : approach(sol.runW, runT, clamp(s.dt, 0, 0.1), 5);
+  const runK = sol.runW;
   const ph = (s.dist / 0.17) * PI;
   const A = mix(0.42, 0.62, runK) * mw;
   const kb = mix(0.06, 0.16, runK);
@@ -1230,8 +1242,68 @@ function legs(sol: Sol, s: AnimState, t: number): LegOut {
   return { hp, phase: ph, runK };
 }
 
+function solBones(sol: Sol): THREE.Object3D[] {
+  const b: THREE.Object3D[] = [sol.hips, sol.spine, sol.head, sol.uaR, sol.uaL, sol.faR, sol.faL, sol.thR, sol.thL, sol.shR, sol.shL, sol.ftR, sol.ftL];
+  if (sol.wpn) b.push(sol.wpn);
+  return b;
+}
+
+/**
+ * Death animation: three deterministic variations per soldier (thrown back,
+ * pitched forward, knees buckle and topple sideways), blended in from the
+ * pose the soldier was in when hit.
+ */
 function deathPose(sol: Sol, d: number) {
-  const back = sol.seed < 0.55;
+  if (!sol.snap) {
+    const bones = solBones(sol);
+    sol.snap = { q: bones.map((o) => o.quaternion.clone()), hp: sol.hips.position.clone(), wp: sol.wpn ? sol.wpn.position.clone() : null };
+  }
+  if (sol.seed >= 0.7) crumplePose(sol, d);
+  else fallPose(sol, d);
+  const b = sstep(0, 0.22, d);
+  if (b < 1) {
+    const bones = solBones(sol);
+    const sn = sol.snap;
+    for (let i = 0; i < bones.length && i < sn.q.length; i++) bones[i].quaternion.slerpQuaternions(sn.q[i], tmpQ2.copy(bones[i].quaternion), b);
+    sol.hips.position.lerpVectors(sn.hp, tmpE.copy(sol.hips.position), b);
+    if (sol.wpn && sn.wp) sol.wpn.position.lerpVectors(sn.wp, tmpE.copy(sol.wpn.position), b);
+  }
+}
+
+/** Knees buckle, the soldier slumps onto them, then topples onto his side. */
+function crumplePose(sol: Sol, d: number) {
+  const side = sol.seed > 0.85 ? 1 : -1;
+  const k1 = sstep(0, 0.42, d); // buckle to the knees
+  const k2 = sstep(0.38, 0.95, d); // topple
+  const settle = d > 0.95 ? Math.sin(clamp((d - 0.95) / 0.22, 0, 1) * PI) * 0.05 : 0;
+  // legs: kneel, then curl up on the ground
+  const th = mix(1.45 * k1, 1.05, k2);
+  const kn = mix(-2.1 * k1, -1.5, k2);
+  sol.thL.rotation.set(0.06, 0, th * 0.92);
+  sol.thR.rotation.set(-0.06, 0, th);
+  sol.shL.rotation.set(0, 0, kn);
+  sol.shR.rotation.set(0, 0, kn * 1.03);
+  sol.ftL.rotation.set(0, 0, mix(0.3 * k1, 0.45, k2));
+  sol.ftR.rotation.set(0, 0, mix(0.3 * k1, 0.5, k2));
+  const hy = mix(mix(0.95, 0.5, k1), 0.2, k2) + settle * 0.2;
+  const off = 0.24 * k2 * side;
+  const back = -0.12 * k1;
+  const c = Math.cos(sol.hyaw);
+  const sn = Math.sin(sol.hyaw);
+  sol.hips.position.set(sol.hx + sn * off + c * back, hy, sol.hz + c * off - sn * back);
+  // body slumps forward over the knees, then rolls onto its side
+  sol.hips.rotation.set(side * (PI / 2) * 0.92 * k2 + settle * side, sol.hyaw + 0.15 * k2 * side, -0.35 * k1 * (1 - k2) - 0.2 * k2);
+  sol.spine.rotation.set(0.08 * k2 * side, 0.1 * k2, -0.45 * k1 + 0.15 * k2);
+  sol.spine.scale.set(1, 1, 1);
+  sol.head.rotation.set(0.35 * k2 * side, 0.2 * k2, -0.5 * k1 + 0.25 * k2);
+  // arms hang limp, then sprawl
+  freeArm(sol.uaR, sol.faR, 1, mix(0.25 * k1, 0.9, k2), mix(0.12, 0.3, k2), mix(0.2 + 0.3 * k1, 0.9, k2));
+  freeArm(sol.uaL, sol.faL, -1, mix(0.3 * k1, 0.6, k2), mix(0.12, 0.45 + 0.4 * k2, k2), mix(0.2 + 0.2 * k1, 0.5, k2));
+  dropWeapon(sol, d, side > 0);
+}
+
+function fallPose(sol: Sol, d: number) {
+  const back = sol.seed < 0.36;
   const dir = back ? 1 : -1;
   const k1 = sstep(0, 0.28, d);
   const kf = clamp((d - 0.12) / 0.55, 0, 1);
@@ -1259,7 +1331,11 @@ function deathPose(sol: Sol, d: number) {
   const flail = Math.sin(d * 9) * (1 - k2) * k1 * 0.3;
   freeArm(sol.uaR, sol.faR, 1, mix(0.45 * k1 + flail, back ? 0.15 : -0.1, k2), mix(0.15 + 0.4 * k1, back ? 1.25 : 0.9, k2), mix(0.3 + 0.6 * k1, back ? 0.5 : 0.25, k2));
   freeArm(sol.uaL, sol.faL, -1, mix(0.6 * k1 - flail, back ? 0.3 : 0.05, k2), mix(0.15 + 0.3 * k1, back ? 0.55 : 0.35, k2), mix(0.3 + 0.7 * k1, back ? 0.9 : 0.2, k2));
-  // weapon leaves the hands and lies beside the body
+  dropWeapon(sol, d, back);
+}
+
+/** The weapon leaves the hands and lies beside the body. */
+function dropWeapon(sol: Sol, d: number, back: boolean) {
   if (sol.wpn && sol.def.w && sol.def.w.kind !== 'bomb') {
     const w = sol.def.w;
     const kw = sstep(0.05, 0.6, d);
@@ -1296,8 +1372,20 @@ function bindInstance(t: Tpl): { top: THREE.Group; map: Map<string, THREE.Object
   return { top, map, skel };
 }
 
+let solSeq = 0;
+/** Deterministic per-instance seed in [0, 1) (death variation, idle phase). */
+function hashSeed(n: number): number {
+  let x = (n * 0x9e3779b1 + 0x7f4a7c15) | 0;
+  x = Math.imul(x ^ (x >>> 16), 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35);
+  x ^= x >>> 16;
+  return (x >>> 0) / 4294967296;
+}
+
 function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
   const g = (n: string) => map.get(def.p + n) as THREE.Bone;
+  // hips: yaw outermost, so rotation.x is a body-local sideways roll (crumple death)
+  g('hips').rotation.order = 'YXZ';
   return {
     def,
     hips: g('hips'),
@@ -1316,10 +1404,16 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
     wpn: (map.get(def.p + 'wpn') as THREE.Bone) ?? (map.get(def.p + 'bomb') as THREE.Bone) ?? null,
     round: (map.get(def.p + 'round') as THREE.Bone) ?? null,
     extra: (map.get(def.p + 'ant') as THREE.Bone) ?? (map.get(def.p + 'drone') as THREE.Bone) ?? null,
-    seed: Math.random(),
+    seed: hashSeed(solSeq++),
     aimW: 0,
     moveW: 0,
     kneelW: 0,
+    runW: 0,
+    kickW: 0,
+    flinch: 0,
+    flinchDir: 1,
+    lastDmg: 0,
+    snap: null,
     hx: def.x,
     hz: def.z,
     hyaw: def.yaw,
@@ -1340,8 +1434,18 @@ function animSoldier(sol: Sol, s: AnimState) {
     if (sol.extra && role === 'fpv') sol.extra.scale.setScalar(1);
     return;
   }
+  sol.snap = null;
   const moving = s.moving && s.speed > 0.05;
   sol.moveW = approach(sol.moveW, moving ? 1 : 0, dt, 7);
+  // hit flinch when the squad takes damage
+  const dmg = s.damage || 0;
+  if (dmg > sol.lastDmg + 0.005) {
+    sol.flinch = 0.32;
+    sol.flinchDir = Math.sin(s.time * 13.7 + sol.seed * 50) > 0 ? 1 : -1;
+  }
+  sol.lastDmg = dmg;
+  sol.flinch = Math.max(0, sol.flinch - dt);
+  const fl = sol.flinch > 0 ? Math.sin((1 - sol.flinch / 0.32) * PI) : 0;
   const holdAim = role === 'at' ? 3 : role === 'fpv' ? 5 : 1.4;
   const aimT = s.fired < holdAim ? 1 : 0;
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
@@ -1353,12 +1457,15 @@ function animSoldier(sol: Sol, s: AnimState) {
   const L = legs(sol, s, t);
   const mw = sol.moveW;
   const aw = sol.aimW;
-  const kick = s.fired < 0.09 ? 1 - s.fired / 0.09 : 0;
+  // recoil: sharp kick on the shot, exponential recovery
+  const f0 = s.fired;
+  const kick = f0 >= 0 && f0 < 0.3 ? Math.exp(-f0 * (role === 'at' ? 11 : 24)) * Math.min(1, (f0 + 0.008) / 0.012) : 0;
+  sol.kickW = kick;
   // spine: lean, twist, breathing
-  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * sol.kneelW;
-  const twist = -0.09 * Math.sin(L.phase) * mw * (w ? 1 : 0.6);
+  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * sol.kneelW + 0.12 * fl;
+  const twist = -0.09 * Math.sin(L.phase) * mw * (w ? 1 : 0.6) + 0.2 * fl * sol.flinchDir;
   const br = Math.sin(t * 1.7);
-  sol.spine.rotation.set(0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw), twist, lean + kick * 0.05 * (role === 'at' ? 2 : 1));
+  sol.spine.rotation.set(0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw) + 0.1 * fl * sol.flinchDir, twist, lean + kick * 0.05 * (role === 'at' ? 2 : 1));
   sol.spine.scale.set(1 + 0.014 * br * (1 - mw), 1, 1 + 0.007 * br * (1 - mw));
   const tot = L.hp + lean;
   // head: keep the eyes level, idle glances
@@ -1377,13 +1484,18 @@ function animSoldier(sol: Sol, s: AnimState) {
     return;
   }
   const bob = Math.sin(L.phase * 2) * mw;
+  // weapon sway: slow idle drift + breathing (much smaller while aiming), carried at port arms when running
+  const still = 1 - mw;
+  const swayP = (0.035 * Math.sin(t * 0.83 + sol.seed * 7) + 0.012 * br) * still * (1 - 0.8 * aw) + 0.006 * Math.sin(t * 2.3) * aw;
+  const swayY = 0.04 * Math.sin(t * 0.57 + sol.seed * 3) * still * (1 - 0.85 * aw);
+  const port = L.runK * mw * (1 - aw);
   if (w.kind === 'rifle') {
     // low ready <-> shouldered aim
-    const px = mix(0.1, 0.12, aw);
-    const py = mix(0.29, 0.47, aw) + 0.012 * bob;
-    const pz = mix(0.17, 0.12, aw);
-    const pitch = mix(-0.55 + 0.1 * mw, -tot - 0.01, aw) + kick * 0.12;
-    const yaw = mix(0.5, 0.06 - twist, aw);
+    const px = mix(0.1, 0.12, aw) + 0.04 * port;
+    const py = mix(0.29, 0.47, aw) + 0.012 * bob + 0.07 * port;
+    const pz = mix(0.17, 0.12, aw) - 0.05 * port;
+    const pitch = mix(-0.55 + 0.1 * mw, -tot - 0.01, aw) + kick * 0.14 + swayP + 0.8 * port;
+    const yaw = mix(0.5, 0.06 - twist, aw) + swayY + 0.2 * port;
     const roll = mix(0.3, 0, aw);
     placeWeapon(sol, w, px, py, pz, pitch, yaw, roll, kick);
     handTargets(sol, w, RT, LT);
@@ -1393,8 +1505,8 @@ function animSoldier(sol: Sol, s: AnimState) {
     const px = mix(0.02, 0.0, aw);
     const py = mix(0.43, 0.445, aw) + 0.01 * bob;
     const pz = mix(0.17, 0.155, aw);
-    const pitch = mix(0.5 - 0.1 * mw, -tot + 0.04, aw) + kick * 0.18;
-    const yaw = mix(0.06, 0.03 - twist, aw);
+    const pitch = mix(0.5 - 0.1 * mw, -tot + 0.04, aw) + kick * 0.18 + swayP * 0.6;
+    const yaw = mix(0.06, 0.03 - twist, aw) + swayY * 0.5;
     placeWeapon(sol, w, px, py, pz, pitch, yaw, 0, kick * 1.5);
     handTargets(sol, w, RT, LT);
     // reload: warhead gone after the shot, left hand fetches a new one
@@ -1511,6 +1623,7 @@ function animMortar(m: MortarState, s: AnimState) {
   if (!packed) m.tube.position.set(M_TUBE0[0] - TUBE_DIR.x * tubeKick, M_TUBE0[1] - TUBE_DIR.y * tubeKick, 0);
 
   // ---- gunner
+  if (!(s.dead > 0)) g.snap = l.snap = null;
   if (s.dead > 0) deathPose(g, s.dead + 0.05);
   else {
     const t = s.time + g.seed * 40;

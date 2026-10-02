@@ -1,4 +1,5 @@
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, defsForFaction, unitDef } from '../sim/defs';
+import { standHeight } from '../sim/map';
 import { TPS, type Category, type Def, type Entity } from '../sim/types';
 import type { World } from '../sim/world';
 import type { CameoFactory } from '../render/cameo';
@@ -12,6 +13,8 @@ export interface HudActions {
   onCommand(cmd: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel'): void;
   onMinimap(x: number, y: number, drag: boolean): void;
   onSelectType(defId: string): void;
+  onRotate(steps: number): void;
+  onLayout(): void;
 }
 
 const TABS: { cat: Category; label: string; icon: string }[] = [
@@ -23,6 +26,35 @@ const TABS: { cat: Category; label: string; icon: string }[] = [
 ];
 
 const svg = (inner: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${inner}</svg>`;
+
+const ICONS = {
+  stop: '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
+  attackMove: '<path d="M4 20l5-5m0 0l-2-2 7-7h5v5l-7 7-2-2m-1-1l3 3" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="17" cy="17" r="2.6"/>',
+  deploy: '<path d="M12 2l4 4h-3v5h5V8l4 4-4 4v-3h-5v5h3l-4 4-4-4h3v-5H6v3l-4-4 4-4v3h5V6H8z"/>',
+  unload: '<path d="M3 8h13v9H3zM16 11h3l2 3v3h-5zM12 2v5m-3-3l3 3 3-3" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  deselect: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.6"/>',
+  repair: '<path d="M22 19l-9-9c1-2.6.4-5.6-1.7-7.7A6.9 6.9 0 0 0 4.4 1L9 5.6 5.6 9 1 4.4a6.9 6.9 0 0 0 1.3 6.9c2.1 2.1 5.1 2.7 7.7 1.7l9 9z"/>',
+  sell: '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>',
+  army: '<circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="13" r="2.5"/><path d="M3 21v-3c0-2 2-3 4-3s4 1 4 3M13 21v-3c0-2 2-3 4-3s4 1 4 3"/>',
+};
+
+/** Short rallying line under the nation name in the sidebar header. */
+const FACTION_MOTTO: Record<string, string> = {
+  usa: 'Joint Force Command',
+  israel: 'Northern Command',
+  china: 'Eastern Theater',
+  russia: 'Western Military District',
+  germany: 'Heer · Panzerdivision',
+  korea: 'ROK Army Command',
+  ukraine: 'Joint Forces Operation',
+  turkey: 'Land Forces Command',
+  iran: 'IRGC Aerospace Force',
+};
+
+function roleLabel(d: Def): string {
+  if (d.kind === 'building') return d.category === 'defense' ? 'Defense' : 'Structure';
+  return d.category === 'infantry' ? 'Infantry' : d.category === 'air' ? 'Aircraft' : 'Vehicle';
+}
 
 export class Hud {
   readonly root: HTMLElement;
@@ -52,6 +84,15 @@ export class Hud {
   private lastSelKey = '';
   private hoverCameo: string | null = null;
   private octx: CanvasRenderingContext2D;
+  private mmStatic: HTMLCanvasElement;
+  private mmM = new DOMMatrix();
+  private mmInv = new DOMMatrix();
+  private mmYaw = NaN;
+  private mmDirty = true;
+  private cineEl!: HTMLElement;
+  private hpState = new Map<number, { hp: number; ghost: number; flash: number }>();
+  private orderLines: { ids: number[]; x: number; y: number; target: number; color: string; t0: number }[] = [];
+  private lastOverlayT = 0;
   world!: World;
   renderer!: GameRenderer;
   player = 0;
@@ -70,6 +111,20 @@ export class Hud {
     this.selBox = el('div', 'selbox', this.viewWrap);
     this.messages = el('div', 'messages', this.viewWrap);
     this.hint = el('div', 'hint hidden', this.viewWrap);
+    // cinematic letterbox
+    this.cineEl = el('div', 'cine', this.viewWrap);
+    this.cineEl.innerHTML = '<i class="cine-bar top"></i><i class="cine-bar bottom"></i><span class="cine-skip">TAP TO SKIP</span>';
+    // view rotation (Q / E)
+    const vc = el('div', 'view-ctrl', this.viewWrap);
+    const rot = (steps: number, title: string, icon: string) => {
+      const b = el('button', 'vc-btn', vc);
+      b.innerHTML = svg(icon);
+      b.title = title;
+      b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      b.onclick = () => this.actions.onRotate(steps);
+    };
+    rot(-1, 'Rotate view left (Q)', '<path d="M7.1 8.5H11V6.5H3.5V14h2v-4.1A8 8 0 1 1 4 15.9l-1.9.6A10 10 0 1 0 7.1 8.5z"/>');
+    rot(1, 'Rotate view right (E)', '<path d="M16.9 8.5H13V6.5h7.5V14h-2v-4.1A8 8 0 1 0 20 15.9l1.9.6A10 10 0 1 1 16.9 8.5z"/>');
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -77,6 +132,12 @@ export class Hud {
     this.buildSidebar();
     this.fogCanvas = document.createElement('canvas');
     this.fogImg = new ImageData(1, 1);
+    this.mmStatic = document.createElement('canvas');
+  }
+
+  /** Letterbox bars while a cinematic moment plays. */
+  setCinematic(on: boolean) {
+    this.viewWrap.classList.toggle('cine-on', on);
   }
 
   attach(world: World, renderer: GameRenderer, player: number) {
@@ -89,7 +150,10 @@ export class Hud {
     this.shownCredits = world.players[player].credits;
     const f = FACTION_INFO[world.players[player].faction];
     this.root.style.setProperty('--faction', '#' + f.accent.toString(16).padStart(6, '0'));
-    (this.sidebar.querySelector('.sb-faction') as HTMLElement).innerHTML = `${flagHtml(f.id)}<span>${f.name}</span>`;
+    this.root.dataset.faction = f.id;
+    (this.sidebar.querySelector('.sb-faction') as HTMLElement).innerHTML = `${flagHtml(f.id)}<span><small>${FACTION_MOTTO[f.id] ?? 'Command'}</small>${f.name}</span>`;
+    this.mmStatic.width = this.minimap.width;
+    this.mmStatic.height = this.minimap.height;
     this.buildCameos();
     this.setTab('building');
   }
@@ -98,6 +162,15 @@ export class Hud {
 
   private buildSidebar() {
     const sb = (this.sidebar = el('aside', 'sidebar', this.root));
+    const toggle = el('button', 'sb-toggle', this.root);
+    toggle.title = 'Hide / show the command sidebar';
+    toggle.innerHTML = svg('<path d="M9 5l7 7-7 7z"/>');
+    toggle.onclick = () => {
+      this.root.classList.toggle('sb-collapsed');
+      this.actions.onLayout();
+    };
+    el('i', 'sb-rivet tl', sb);
+    el('i', 'sb-rivet tr', sb);
     const head = el('div', 'sb-head', sb);
     el('div', 'sb-faction', head);
     const menuBtn = el('button', 'icon-btn', head);
@@ -105,7 +178,8 @@ export class Hud {
     menuBtn.title = 'Menu (Esc)';
     menuBtn.onclick = () => this.actions.onTool('menu');
 
-    const radar = el('div', 'radar', sb);
+    const radarFrame = el('div', 'radar-frame', sb);
+    const radar = el('div', 'radar', radarFrame);
     this.minimap = el('canvas', 'minimap', radar) as HTMLCanvasElement;
     this.minimap.width = 400;
     this.minimap.height = 300;
@@ -290,11 +364,11 @@ export class Hud {
     this.updateSelection();
   }
 
-  /** Selection details + context command buttons. */
+  /** Selection details (portrait panel) + context command buttons. */
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}`).join(',');
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
     const own = sel.filter((e) => e.owner === this.player);
@@ -311,11 +385,20 @@ export class Hud {
         const owner = e.owner < 0 ? 'Neutral' : w.players[e.owner].name;
         const hp = e.hp / e.maxHp;
         const img = e.owner === this.player ? this.cameos.get(e.def, style) : this.cameos.get(e.def, styleFor(w, e.owner));
-        let extra = '';
-        if (d.kind === 'unit' && d.harvester) extra = `<div class="sp-extra">Cargo: $${e.cargo}</div>`;
-        if (d.kind === 'unit' && d.transport) extra = `<div class="sp-extra">Passengers: ${e.passengers.length} / ${d.transport}</div>`;
-        if (d.kind === 'building' && d.power) extra = `<div class="sp-extra">Power ${d.power > 0 ? '+' : ''}${d.power}</div>`;
-        this.selPanel.innerHTML = `<img src="${img}"><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner}</div><div class="sp-hp"><i style="width:${hp * 100}%;background:${hpColor(hp)}"></i></div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${extra}</div>`;
+        const stats: string[] = [];
+        if (d.kind === 'unit' && d.harvester) stats.push(`Cargo $${e.cargo}`);
+        if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
+        if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
+        if (d.weapon && WEAPONS[d.weapon]) {
+          const wp = WEAPONS[d.weapon];
+          stats.push(`Range ${wp.range}`, wp.air === 'only' ? 'Anti-air' : wp.air === 'yes' ? 'Ground + air' : 'Ground');
+        }
+        if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
+        const segs = 12;
+        const on = Math.ceil(hp * segs);
+        const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
+        const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
+        this.selPanel.innerHTML = `<div class="portrait ${rel}"><img src="${img}" alt=""><span class="pt-scan"></span></div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`;
       } else {
         const counts = new Map<string, number>();
         for (const e of sel) counts.set(e.def, (counts.get(e.def) ?? 0) + 1);
@@ -326,21 +409,22 @@ export class Hud {
       }
     }
     // command buttons
-    const cmds: [string, string, Parameters<HudActions['onCommand']>[0]][] = [];
+    const cmds: [string, string, Parameters<HudActions['onCommand']>[0], string][] = [];
     if (units.length) {
-      cmds.push(['Stop', 'S', 'stop'], ['Attack-Move', 'A', 'attackMove']);
-      if (units.some((u) => unitDef(u.def).mcv)) cmds.push(['Deploy', 'D', 'deploy']);
-      if (units.some((u) => u.passengers.length > 0)) cmds.push(['Unload', 'D', 'deploy']);
-      cmds.push(['Deselect', '', 'deselect']);
+      cmds.push(['Stop', 'S', 'stop', ICONS.stop], ['Attack-Move', 'A', 'attackMove', ICONS.attackMove]);
+      if (units.some((u) => unitDef(u.def).mcv)) cmds.push(['Deploy', 'D', 'deploy', ICONS.deploy]);
+      if (units.some((u) => u.passengers.length > 0)) cmds.push(['Unload', 'D', 'deploy', ICONS.unload]);
+      cmds.push(['Deselect', '', 'deselect', ICONS.deselect]);
     } else if (ownBuilding) {
-      cmds.push(['Repair', '', 'repairSel'], ['Sell', '', 'sellSel'], ['Deselect', '', 'deselect']);
+      cmds.push(['Repair', '', 'repairSel', ICONS.repair], ['Sell', '', 'sellSel', ICONS.sell], ['Deselect', '', 'deselect', ICONS.deselect]);
     } else {
-      cmds.push(['Select Army', 'Q', 'selectArmy']);
+      cmds.push(['Select Army', 'W', 'selectArmy', ICONS.army]);
     }
     this.cmdBar.innerHTML = '';
-    for (const [label, key2, id] of cmds) {
+    for (const [label, key2, id, icon] of cmds) {
       const b = el('button', 'cmd-btn', this.cmdBar);
-      b.innerHTML = `${label}${key2 ? `<kbd>${key2}</kbd>` : ''}`;
+      b.title = label + (key2 ? ` (${key2})` : '');
+      b.innerHTML = `${svg(icon)}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
       b.onclick = () => this.actions.onCommand(id);
     }
   }
@@ -351,70 +435,153 @@ export class Hud {
 
   // --------------------------------------------------------------- minimap
 
-  private mmK() {
+  /**
+   * World (tile) -> minimap pixel transform: an isometric diamond turned with
+   * the camera so "up" on the minimap is always "up" on screen.
+   */
+  private mmTransform() {
     const { w, h } = this.world.map;
-    return { kx: this.minimap.width / (w + h), ky: this.minimap.height / (w + h), H: h };
+    const yaw = this.renderer.yaw;
+    if (yaw === this.mmYaw) return;
+    this.mmYaw = yaw;
+    this.mmDirty = true;
+    const kx = this.minimap.width / (w + h);
+    const ky = this.minimap.height / (w + h);
+    const odd = Math.abs(Math.round(yaw / (Math.PI / 2))) % 2 === 1;
+    const W2 = odd ? h : w;
+    const H2 = odd ? w : h;
+    const a = -yaw;
+    const A00 = Math.cos(a);
+    const A01 = -Math.sin(a);
+    const A10 = Math.sin(a);
+    const A11 = Math.cos(a);
+    const b0 = W2 / 2 - (A00 * w) / 2 - (A01 * h) / 2;
+    const b1 = H2 / 2 - (A10 * w) / 2 - (A11 * h) / 2;
+    this.mmM = new DOMMatrix([kx * (A00 - A10), ky * (A00 + A10), kx * (A01 - A11), ky * (A01 + A11), kx * (b0 - b1 + H2), ky * (b0 + b1)]);
+    this.mmInv = this.mmM.inverse();
   }
 
   private fromMinimap(px: number, py: number) {
-    const { kx, ky, H } = this.mmK();
-    const a = px / kx - H;
-    const b = py / ky;
-    return { x: (a + b) / 2, y: (b - a) / 2 };
+    this.mmTransform();
+    const p = this.mmInv.transformPoint(new DOMPoint(px, py));
+    return { x: p.x, y: p.y };
   }
 
+  /** Static radar layer: terrain, ore, units and fog (redrawn a few times per second). */
   drawMinimap() {
     const w = this.world;
     const { map } = w;
-    const ctx = this.minimap.getContext('2d')!;
-    const { kx, ky, H } = this.mmK();
+    this.mmTransform();
+    this.mmDirty = false;
+    const ctx = this.mmStatic.getContext('2d')!;
     const p = w.players[this.player];
     const radar = p.radarOnline;
     this.radarOff.classList.toggle('hidden', radar);
+    this.minimap.parentElement!.classList.toggle('online', radar);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05080a';
-    ctx.fillRect(0, 0, this.minimap.width, this.minimap.height);
-    ctx.setTransform(kx, ky, -kx, ky, kx * H, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.renderer.terrain.minimapImage, 0, 0);
+    ctx.fillRect(0, 0, this.mmStatic.width, this.mmStatic.height);
+    const M = this.mmM;
+    ctx.setTransform(M.a, M.b, M.c, M.d, M.e, M.f);
+    ctx.imageSmoothingEnabled = true;
+    // real terrain colours (grass, fields, roads, water, rock) baked by the terrain
+    ctx.drawImage(this.renderer.terrain.minimapImage, 0, 0, map.w, map.h);
     // ore
-    ctx.fillStyle = '#d8b040';
     for (let i = 0; i < map.ore.length; i++) {
       if (map.ore[i] && p.explored[i]) {
-        ctx.fillStyle = map.oreKind[i] === 2 ? '#c060ff' : '#d8b040';
+        ctx.fillStyle = map.oreKind[i] === 2 ? '#c060ff' : '#e0b840';
         ctx.fillRect(i % map.w, Math.floor(i / map.w), 1, 1);
       }
-    }
-    // entities
-    for (const e of w.list) {
-      if (e.dead) continue;
-      const own = e.owner === this.player;
-      if (!own && !this.renderer.isShown(e.id)) continue;
-      if (!radar && !(own && e.kind === 'building')) continue;
-      const col = e.owner < 0 ? '#c8c8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
-      ctx.fillStyle = col;
-      if (e.kind === 'building') {
-        const d = buildingDef(e.def);
-        ctx.fillRect(e.tx, e.ty, d.w, d.h);
-      } else if (!unitDef(e.def).temp) ctx.fillRect(e.x - 0.9, e.y - 0.9, 1.8, 1.8);
     }
     // fog
     const data = this.fogImg.data;
     for (let i = 0; i < map.w * map.h; i++) {
-      data[i * 4 + 3] = p.visible[i] ? 0 : p.explored[i] ? 110 : 255;
+      data[i * 4 + 3] = p.visible[i] ? 0 : p.explored[i] ? 120 : 255;
     }
-    const fctx = this.fogCanvas.getContext('2d')!;
-    fctx.putImageData(this.fogImg, 0, 0);
-    ctx.imageSmoothingEnabled = true;
+    this.fogCanvas.getContext('2d')!.putImageData(this.fogImg, 0, 0);
     ctx.drawImage(this.fogCanvas, 0, 0);
-    // camera view
-    const c = this.renderer.viewCorners();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 1.2 / kx;
+    // entities (only what the player can see; enemies need the radar)
+    for (const e of w.list) {
+      if (e.dead || e.inside >= 0) continue;
+      const own = e.owner === this.player;
+      if (!own && !this.renderer.isShown(e.id)) continue;
+      if (!radar && !(own && e.kind === 'building')) continue;
+      const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
+      if (e.kind === 'building') {
+        const d = buildingDef(e.def);
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(e.tx - 0.3, e.ty - 0.3, d.w + 0.6, d.h + 0.6);
+        ctx.fillStyle = col;
+        ctx.fillRect(e.tx, e.ty, d.w, d.h);
+      } else if (!unitDef(e.def).temp) {
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(e.x - 1.2, e.y - 1.2, 2.4, 2.4);
+        ctx.fillStyle = col;
+        ctx.fillRect(e.x - 0.85, e.y - 0.85, 1.7, 1.7);
+      }
+    }
+  }
+
+  /** Per-frame radar: composite the static layer, the sweep and the camera frustum footprint. */
+  tickMinimap(now: number) {
+    if (!this.world) return;
+    this.mmTransform();
+    if (this.mmDirty) this.drawMinimap();
+    const ctx = this.minimap.getContext('2d')!;
+    const { map } = this.world;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.mmStatic, 0, 0);
+    const M = this.mmM;
+    const radar = this.world.players[this.player].radarOnline;
+    if (radar) {
+      // rotating sweep, clipped to the map diamond
+      const c = M.transformPoint(new DOMPoint(map.w / 2, map.h / 2));
+      const R = Math.hypot(this.minimap.width, this.minimap.height) * 0.6;
+      const ang = (now * 1.3) % (Math.PI * 2);
+      ctx.save();
+      ctx.beginPath();
+      for (const [x, y] of [[0, 0], [map.w, 0], [map.w, map.h], [0, map.h]]) {
+        const q = M.transformPoint(new DOMPoint(x, y));
+        ctx.lineTo(q.x, q.y);
+      }
+      ctx.closePath();
+      ctx.clip();
+      const g = (ctx as CanvasRenderingContext2D & { createConicGradient?: (a: number, x: number, y: number) => CanvasGradient }).createConicGradient?.(ang - 1.1, c.x, c.y);
+      if (g) {
+        g.addColorStop(0, 'rgba(90,255,160,0)');
+        g.addColorStop(0.175, 'rgba(90,255,160,0.26)');
+        g.addColorStop(0.176, 'rgba(90,255,160,0)');
+        g.addColorStop(1, 'rgba(90,255,160,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.arc(c.x, c.y, R, ang - 1.1, ang);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(150,255,190,0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(c.x, c.y);
+      ctx.lineTo(c.x + Math.cos(ang) * R, c.y + Math.sin(ang) * R);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // camera view: the frustum footprint (a trapezoid with the perspective camera)
+    const corners = this.renderer.viewCorners();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 1.6;
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 3;
     ctx.beginPath();
-    c.forEach((pt, i) => (i ? ctx.lineTo(pt.x, pt.y) : ctx.moveTo(pt.x, pt.y)));
+    corners.forEach((pt, i) => {
+      const q = M.transformPoint(new DOMPoint(pt.x, pt.y));
+      if (i) ctx.lineTo(q.x, q.y);
+      else ctx.moveTo(q.x, q.y);
+    });
     ctx.closePath();
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // --------------------------------------------------------------- overlay
@@ -425,48 +592,147 @@ export class Hud {
     this.octx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  /** Health bars, harvester cargo pips, group numbers, rally lines. */
+  /** Show a fading waypoint line from each ordered unit to its destination / target. */
+  orderLine(ids: number[], x: number, y: number, target: number, kind: 'move' | 'attackMove' | 'attack' | 'other') {
+    const color = kind === 'attack' ? '255,70,60' : kind === 'attackMove' ? '255,150,70' : '110,255,170';
+    this.orderLines.push({ ids, x, y, target, color, t0: performance.now() / 1000 });
+    if (this.orderLines.length > 4) this.orderLines.shift();
+  }
+
+  /** Can the local player currently see this entity (fog of war)? Own entities always. */
+  private seen(e: Entity) {
+    if (e.owner === this.player) return true;
+    if (!this.renderer.isShown(e.id)) return false;
+    if (e.kind === 'building') {
+      const d = buildingDef(e.def);
+      return this.world.visibleTo(this.player, e.tx + d.w / 2, e.ty + d.h / 2) || this.world.visibleTo(this.player, e.tx + 0.5, e.ty + 0.5);
+    }
+    return true;
+  }
+
+  /** Health bars, harvester cargo pips, group numbers, rally and waypoint lines. */
   drawOverlay(alpha: number, hover: number, groups: Map<number, number>, now: number) {
     const ctx = this.octx;
     const w = this.world;
+    const r = this.renderer;
+    const dt = Math.min(0.1, Math.max(0, now - this.lastOverlayT));
+    this.lastOverlayT = now;
     ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
-    const sel = this.renderer.selection;
+    const sel = r.selection;
+    const attract = this.root.classList.contains('attract');
+    // waypoint lines (fade out after the order)
+    for (let i = this.orderLines.length - 1; i >= 0; i--) {
+      const L = this.orderLines[i];
+      const k = (now - L.t0) / 1.5;
+      if (k >= 1) {
+        this.orderLines.splice(i, 1);
+        continue;
+      }
+      let dest = { x: L.x, y: L.y, h: standHeight(w.map, L.x, L.y) };
+      if (L.target >= 0) {
+        const t = w.get(L.target);
+        if (!t || !this.seen(t)) continue;
+        const tp = r.entityPos(t, alpha);
+        dest = { x: tp.x, y: tp.z, h: tp.y };
+      }
+      const b = r.project(dest.x, dest.h + 0.05, dest.y);
+      const a0 = (1 - k) * (1 - k);
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 5]);
+      ctx.lineDashOffset = -now * 26;
+      for (const id of L.ids) {
+        const u = w.get(id);
+        if (!u || u.dead || !r.isShown(id)) continue;
+        const up = r.entityPos(u, alpha);
+        const a = r.project(up.x, up.y + 0.05, up.z);
+        const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+        grad.addColorStop(0, `rgba(${L.color},${0.15 * a0})`);
+        grad.addColorStop(1, `rgba(${L.color},${0.85 * a0})`);
+        ctx.strokeStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
     for (const e of w.list) {
       if (e.dead) continue;
       const selected = sel.has(e.id);
-      const recent = w.tick - e.lastHurt < TPS * 2;
-      if (!selected && e.id !== hover && !recent) continue;
-      if (!this.renderer.isShown(e.id)) continue;
-      const pos = this.renderer.entityPos(e, alpha);
-      const top = this.renderer.project(pos.x, pos.y + this.renderer.visualHeight(e.id) + 0.12, pos.z);
+      const recent = w.tick - e.lastHurt < TPS * 2.5;
+      let st = this.hpState.get(e.id);
       const hp = e.hp / e.maxHp;
+      if (st) {
+        if (hp < st.hp - 1e-4) {
+          st.flash = 1;
+          st.ghost = Math.max(st.ghost, st.hp);
+        }
+        st.hp = hp;
+        st.flash = Math.max(0, st.flash - dt * 3.5);
+        st.ghost = st.ghost > hp ? Math.max(hp, st.ghost - dt * 0.45) : hp;
+      }
+      if (!selected && e.id !== hover && !recent) continue;
+      if (e.kind === 'unit' && unitDef(e.def).temp) continue;
+      if (attract && !selected) continue;
+      if (!this.seen(e)) continue;
+      if (!st) {
+        st = { hp, ghost: hp, flash: 0 };
+        this.hpState.set(e.id, st);
+      }
+      const pos = r.entityPos(e, alpha);
+      const top = r.project(pos.x, pos.y + r.visualHeight(e.id) + 0.14, pos.z);
       const isB = e.kind === 'building';
-      const width = isB ? buildingDef(e.def).w * 18 : unitDef(e.def).category === 'infantry' ? 16 : 26;
-      const pips = isB ? buildingDef(e.def).w * 6 : unitDef(e.def).category === 'infantry' ? 4 : 8;
+      const inf = !isB && unitDef(e.def).category === 'infantry';
+      const width = isB ? Math.min(90, buildingDef(e.def).w * 20) : inf ? 20 : 32;
+      const pips = isB ? buildingDef(e.def).w * 5 : inf ? 4 : 8;
       const x0 = Math.round(top.x - width / 2);
-      const y0 = Math.round(top.y - 6);
-      ctx.fillStyle = 'rgba(0,0,0,0.75)';
-      ctx.fillRect(x0 - 1, y0 - 1, width + 2, 6);
-      const filled = Math.ceil(hp * pips);
+      const y0 = Math.round(top.y - 7);
+      const team = e.owner < 0 ? '#d8d0a0' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
+      // frame + team accent cap
+      ctx.fillStyle = 'rgba(4,8,10,0.78)';
+      ctx.fillRect(x0 - 4, y0 - 2, width + 6, 8);
+      ctx.fillStyle = team;
+      ctx.fillRect(x0 - 4, y0 - 2, 3, 8);
+      // lagging damage ghost
       const pw = width / pips;
-      ctx.fillStyle = hpColor(hp);
-      for (let i = 0; i < filled; i++) ctx.fillRect(x0 + i * pw + 0.5, y0, pw - 1, 4);
-      if (e.kind === 'unit' && unitDef(e.def).harvester && selected) {
+      if (st.ghost > hp + 0.002) {
+        ctx.fillStyle = 'rgba(255,220,180,0.55)';
+        ctx.fillRect(x0, y0, width * st.ghost, 4);
+      }
+      const filled = Math.ceil(hp * pips);
+      const col = hpColor(hp);
+      for (let i = 0; i < filled; i++) {
+        const sx = x0 + i * pw;
+        const last = i === filled - 1;
+        const fw = last ? Math.max(1, Math.min(pw - 1, width * hp - i * pw)) : pw - 1;
+        ctx.fillStyle = col;
+        ctx.fillRect(sx, y0, fw, 4);
+        ctx.fillStyle = 'rgba(255,255,255,0.28)';
+        ctx.fillRect(sx, y0, fw, 1);
+      }
+      if (st.flash > 0) {
+        ctx.strokeStyle = `rgba(255,255,255,${st.flash})`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0 - 3.5, y0 - 1.5, width + 5, 7);
+      }
+      if (e.kind === 'unit' && unitDef(e.def).harvester && selected && e.owner === this.player) {
         const k = e.cargo / 900;
         ctx.fillStyle = '#e8c040';
-        for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + 6, 4, 3);
+        for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + 7, 4, 3);
       }
       const g = groups.get(e.id);
       if (g !== undefined && selected) {
         ctx.font = 'bold 11px system-ui, sans-serif';
         ctx.fillStyle = '#fff';
-        ctx.fillText(String(g), x0 + width + 3, y0 + 5);
+        ctx.fillText(String(g), x0 + width + 4, y0 + 5);
       }
-      // rally point of selected factory
+      // rally point of the selected factory
       if (selected && isB && e.owner === this.player && e.rallyX >= 0) {
-        const a = this.renderer.project(pos.x, pos.y + 0.2, pos.z);
-        const b = this.renderer.project(e.rallyX, pos.y, e.rallyY);
-        ctx.strokeStyle = 'rgba(120,255,140,0.7)';
+        const a = r.project(pos.x, pos.y + 0.2, pos.z);
+        const rh = standHeight(w.map, e.rallyX, e.rallyY);
+        const b = r.project(e.rallyX, rh, e.rallyY);
+        ctx.strokeStyle = 'rgba(230,255,120,0.75)';
+        ctx.lineWidth = 1.5;
         ctx.setLineDash([5, 4]);
         ctx.lineDashOffset = -now * 20;
         ctx.beginPath();
@@ -474,8 +740,19 @@ export class Hud {
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
         ctx.setLineDash([]);
+        // beacon
+        const pulse = 0.5 + 0.5 * Math.sin(now * 5);
+        ctx.fillStyle = `rgba(230,255,120,${0.6 + 0.4 * pulse})`;
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y - 18);
+        ctx.lineTo(b.x + 9, b.y - 14);
+        ctx.lineTo(b.x, b.y - 10);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillRect(b.x - 1, b.y - 18, 2, 18);
       }
     }
+    if (this.hpState.size > 600) for (const id of this.hpState.keys()) if (!w.get(id)) this.hpState.delete(id);
   }
 
   // --------------------------------------------------------------- messages

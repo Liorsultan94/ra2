@@ -3,7 +3,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
 import { factionCamo, pbr, worldUV, type TexOpts } from '../textures';
 import type { Builder } from './registry';
+import { decalQuad, makeDecalMaterial, roundelCell } from './insignia';
 import type { AnimState, Model, ModelStyle, MunitionKind, MunitionModel } from './types';
+import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
  * Procedural aircraft, drones and munitions.
@@ -296,7 +298,7 @@ const discX = (rz: number, ry: number, p: V3, back = false, seg = 14) => tf(prep
 
 // =================================================================== kit
 
-type Bk = 'skin' | 'skin2' | 'glass' | 'vc' | 'blade' | 'glow' | 'lit' | 'strobe' | 'disc' | 'plume';
+type Bk = 'skin' | 'skin2' | 'glass' | 'vc' | 'blade' | 'glow' | 'lit' | 'strobe' | 'disc' | 'plume' | 'decal';
 const _c = new THREE.Color();
 
 function colorize(g: THREE.BufferGeometry, hex: number): THREE.BufferGeometry {
@@ -325,12 +327,13 @@ class Kit {
   muz: V3[] = [];
   lights: { kind: 'lit' | 'strobe' | 'beacon'; hex: number; p: V3; r: number }[] = [];
   disc: string | null = null;
+  decals: { v: boolean; d: number; y: number; z: number; r: number; nation: string; side: number; lowVis: boolean }[] = [];
 
   add(b: Bk, g: THREE.BufferGeometry | THREE.BufferGeometry[]) {
     const list = this.parts.get(b) ?? [];
     for (const x of Array.isArray(g) ? g : [g]) {
-      const p = prep(x, b === 'disc');
-      if (b !== 'vc' && b !== 'blade' && b !== 'lit' && b !== 'strobe' && b !== 'plume' && p.attributes.color) p.deleteAttribute('color');
+      const p = prep(x, b === 'disc' || b === 'decal');
+      if (b !== 'vc' && b !== 'blade' && b !== 'lit' && b !== 'strobe' && b !== 'plume' && b !== 'decal' && p.attributes.color) p.deleteAttribute('color');
       list.push(p);
     }
     this.parts.set(b, list);
@@ -392,7 +395,18 @@ interface SkinSpec {
   rough?: number;
 }
 
+const AIR_WEAR: WearCfg = { dirt: false, loose: false, scale: 0.62 };
+/** Battle-damage patch (soot, scorch, darkened panels) on a cached material. */
+function worn<T extends THREE.Material>(m: T): T {
+  if (!isWearMaterial(m)) wearPatch(m, AIR_WEAR);
+  return m;
+}
+const decalMat = (fog: FogOfWar | null) => worn(cmat('decal', fog, makeDecalMaterial));
+
 function skinMat(s: SkinSpec, fog: FogOfWar | null) {
+  return worn(skinMatRaw(s, fog));
+}
+function skinMatRaw(s: SkinSpec, fog: FogOfWar | null) {
   return cmat('skin' + JSON.stringify(s), fog, () => {
     const set = s.camo ? pbr('camo', s.camo) : pbr('metalPanel', { color: 0xe4e4e4, grime: 0.15, seed: 23, divisions: 3 });
     return new THREE.MeshStandardMaterial({
@@ -409,7 +423,7 @@ function skinMat(s: SkinSpec, fog: FogOfWar | null) {
 
 const glassMat = (hex: number, fog: FogOfWar | null) =>
   cmat('glass' + hex, fog, () => new THREE.MeshStandardMaterial({ color: hex, metalness: 0.85, roughness: 0.12, envMapIntensity: 1.6 }));
-const vcMat = (fog: FogOfWar | null) => cmat('vc', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.55 }));
+const vcMat = (fog: FogOfWar | null) => worn(cmat('vc', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.55 })));
 const bladeMat = (fog: FogOfWar | null) => cmat('blade', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.6, transparent: true, opacity: 0.72 }));
 const litMat = (fog: FogOfWar | null) => cmat('lit', fog, () => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
 const strobeMat = (fog: FogOfWar | null) => cmat('strobe', fog, () => new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
@@ -530,11 +544,14 @@ function realize(k: Kit, p: Paint, fog: FogOfWar | null, S: number): THREE.Group
       case 'disc':
         mat = discMat(k.disc ?? '4|1', fog);
         break;
+      case 'decal':
+        mat = decalMat(fog);
+        break;
     }
     const mesh = new THREE.Mesh(geo, mat);
     mesh.userData.bk = b;
     mesh.castShadow = b === 'skin' || b === 'skin2' || b === 'vc' || b === 'glass';
-    mesh.receiveShadow = b === 'skin' || b === 'skin2';
+    mesh.receiveShadow = b === 'skin' || b === 'skin2' || b === 'decal';
     if (b === 'disc' || b === 'plume') mesh.renderOrder = 2;
     if (b === 'blade') mesh.renderOrder = 3;
     g.add(mesh);
@@ -849,34 +866,80 @@ function colorizeGrad(g: THREE.BufferGeometry, a: V3, b: V3): THREE.BufferGeomet
   return g;
 }
 
-/** Concentric roundel on a horizontal surface (outer -> inner colours). */
-function roundelH(k: Kit, d: number, y: number, z: number, r: number, cols: number[]) {
-  cols.forEach((c, i) => k.col(cylY(r * (1 - i / cols.length), r * (1 - i / cols.length), 0.02, 16, [-d, y + i * 0.006, z]), c));
+const _dc = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
+const FWD = new THREE.Vector3(1, 0, 0);
+const AFT = new THREE.Vector3(-1, 0, 0);
+const STBD = new THREE.Vector3(0, 0, 1);
+
+/** National insignia decal on a horizontal (wing / fuselage top) surface; r = radius in metres. Star points forward. */
+function roundelH(k: Kit, d: number, y: number, z: number, r: number, nation: string, lowVis = false) {
+  k.decals.push({ v: false, d, y, z, r, nation, side: 1, lowVis });
 }
-/** Roundel on a vertical side surface facing +Z (side=1) or -Z. */
-function roundelV(k: Kit, d: number, y: number, z: number, r: number, cols: number[], side: number) {
-  cols.forEach((c, i) => k.col(cylZ(r * (1 - i / cols.length), 0.02, 16, [-d, y, z + side * i * 0.006]), c));
-}
-/** Star of David (two overlapping triangles) on a horizontal surface. */
-function magenDavid(k: Kit, d: number, y: number, z: number, r: number) {
-  k.col(cylY(r, r, 0.02, 20, [-d, y, z]), 0xf2f2f0);
-  for (const rot of [0, PI]) {
-    const pts: P2[] = [0, 1, 2].map((i) => [d + Math.cos(rot + (i * TAU) / 3 + PI / 2) * r * 0.82, z + Math.sin(rot + (i * TAU) / 3 + PI / 2) * r * 0.82] as P2);
-    k.col(slab(pts, 0.012, y + 0.008, 0), 0x1f4fbf);
-  }
+/** Insignia on a vertical side surface facing +Z (side = 1) or -Z. */
+function roundelV(k: Kit, d: number, y: number, z: number, r: number, nation: string, side: number, lowVis = false) {
+  k.decals.push({ v: true, d, y, z, r, nation, side, lowVis });
 }
 
-// national insignia per faction (outer -> inner)
-const INSIGNIA: Record<string, number[]> = {
-  usa: [0x2d3036, 0x6a6e72, 0x2d3036], // low-vis grey star roundel
-  russia: [0xf2f2f0, 0xc8201e], // white-edged red star (as roundel)
-  china: [0xd4b030, 0xc8201e], // yellow-edged red star
-  germany: [0xf2f2f0, 0x111111], // Balkenkreuz (approximated)
-  korea: [0xf2f2f0, 0xc8201e, 0x1f3f9f], // taegeuk
-  ukraine: [0xf2f2f0, 0x1f57c8, 0xf5cf2a], // blue/yellow roundel
-  turkey: [0xf2f2f0, 0xc8201e, 0xf2f2f0, 0xc8201e],
-  iran: [0x239f40, 0xf2f2f0, 0xda0000],
-  neutral: [0x777777, 0xaaaaaa],
+/** Snap the pending insignia onto the finished skin (ray cast) and add them as decal quads. */
+function placeDecals(k: Kit) {
+  if (!k.decals.length) return;
+  const skin = [...(k.parts.get('skin') ?? []), ...(k.parts.get('skin2') ?? [])].map((g) => {
+    const c = new THREE.BufferGeometry();
+    c.setAttribute('position', g.attributes.position);
+    if (g.index) c.setIndex(g.index);
+    return c;
+  });
+  const geo = skin.length ? mergeGeometries(skin, false) : null;
+  const mesh = geo ? new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })) : null;
+  mesh?.updateMatrixWorld(true);
+  const rc = new THREE.Raycaster();
+  const n = new THREE.Vector3();
+  const u = new THREE.Vector3();
+  const v = new THREE.Vector3();
+  for (const p0 of k.decals) {
+    // a little larger than the old ring stacks so they read at RTS zoom
+    const p = { ...p0, r: p0.r * (p0.v ? 1.35 : 1.15) };
+    const cell = roundelCell(p.nation, p.lowVis);
+    let hit: THREE.Intersection | undefined;
+    if (mesh) {
+      if (p.v) rc.set(_dc.set(-p.d, p.y, p.side * 30), n.set(0, 0, -p.side));
+      else rc.set(_dc.set(-p.d, 30, p.z), n.set(0, -1, 0));
+      hit = rc.intersectObject(mesh, false)[0];
+    }
+    if (hit && hit.face && (p.v ? Math.abs(hit.point.z - p.z) < 0.6 : Math.abs(hit.point.y - p.y) < 0.6)) {
+      n.copy(hit.face.normal);
+      if (p.v ? n.z * p.side < 0 : n.y < 0) n.negate();
+      if (p.v) {
+        v.copy(UP).addScaledVector(n, -n.y).normalize();
+      } else {
+        v.copy(FWD).addScaledVector(n, -n.x).normalize();
+      }
+      u.crossVectors(v, n).normalize();
+      _dc.copy(hit.point).addScaledVector(n, 0.01);
+      k.add('decal', decalQuad(_dc, u, v, 2 * p.r * cell.aspect, 2 * p.r, cell));
+    } else if (p.v) {
+      k.add('decal', decalQuad(_dc.set(-p.d, p.y, p.z + p.side * 0.012), p.side > 0 ? FWD : AFT, UP, 2 * p.r * cell.aspect, 2 * p.r, cell));
+    } else {
+      k.add('decal', decalQuad(_dc.set(-p.d, p.y + 0.012, p.z), STBD, FWD, 2 * p.r * cell.aspect, 2 * p.r, cell));
+    }
+  }
+  k.decals = [];
+  geo?.dispose();
+}
+
+// national insignia per faction
+const INSIGNIA: Record<string, string> = {
+  usa: 'usa',
+  israel: 'israel',
+  russia: 'russia',
+  china: 'china',
+  germany: 'germany',
+  korea: 'korea',
+  ukraine: 'ukraine',
+  turkey: 'turkey',
+  iran: 'iran',
+  neutral: 'usa',
 };
 
 // =================================================================== fighters
@@ -991,13 +1054,13 @@ function f35(k: Kit, team: number, israel: boolean): Built {
   }
   // markings
   if (israel) {
-    magenDavid(k, 8.6, 0.12, 3.2, 0.55);
-    magenDavid(k, 8.6, 0.12, -3.2, 0.55);
+    roundelH(k, 8.6, 0.12, 3.2, 0.55, 'israel');
+    roundelH(k, 8.6, 0.12, -3.2, 0.55, 'israel');
     // Adir: dorsal EW/comm hump
     k.add('skin', sph(0.35, [-8.6, 0.78, 0], [2.4, 0.6, 0.9], 10, 6));
   } else {
-    roundelH(k, 8.8, 0.13, 3.3, 0.5, INSIGNIA.usa);
-    roundelH(k, 8.8, 0.13, -3.3, 0.5, INSIGNIA.usa);
+    roundelH(k, 8.8, 0.13, 3.3, 0.36, 'usa', true);
+    roundelH(k, 8.8, 0.13, -3.3, 0.36, 'usa', true);
   }
   // team: wingtip bands
   k.symc(wing([lerpSec(wr, wt, 0.86, 1.3), { ...wt, t: 0.052, c: wt.c * 1.01 }]), team);
@@ -1084,9 +1147,12 @@ function f16(k: Kit, team: number, faction: string): Built {
     pylon(k, 8.0, 10.2, -0.04, -0.3, s * 2.2, 0.12);
     tank(k, 6.6, -0.62, s * 2.2, 4.4, 0.32);
   }
-  const ins = INSIGNIA[faction] ?? INSIGNIA.neutral;
-  roundelH(k, 10.0, 0.06, 3.0, 0.42, ins);
-  roundelH(k, 10.0, 0.06, -3.0, 0.42, ins);
+  // Iran: no fixed-wing roundel (national insignia only on its helicopters / drones)
+  if (faction !== 'iran') {
+    const ins = INSIGNIA[faction] ?? INSIGNIA.neutral;
+    roundelH(k, 10.0, 0.06, 3.0, 0.42, ins);
+    roundelH(k, 10.0, 0.06, -3.0, 0.42, ins);
+  }
   k.symc(wing([lerpSec(wr, wt, 0.8, 1.3), { ...wt, t: 0.052 }]), team);
   navLights(k, 10.6, 0.0, 4.75, 14.6, 1.05);
   k.light('strobe', 0xffffff, [-12.9, 3.75, 0], 0.009);
@@ -1359,6 +1425,8 @@ function typhoon(k: Kit, team: number): Built {
   }
   k.symc(wing([lerpSec(wr, wt, 0.86, 1.3), { ...wt, t: 0.047 }]), team);
   navLights(k, 13.0, -0.25, 5.5, 14.2, 4.0);
+  roundelH(k, 11.0, -0.12, 3.5, 0.48, 'germany');
+  roundelH(k, 11.0, -0.12, -3.5, 0.48, 'germany');
   k.light('strobe', 0xffffff, [-8.0, 0.92, 0], 0.009);
   return { S: 1.08 / 16.0, kind: 'jet', paint: { skin: { color: 0x8f969d }, skin2: { color: 0x6a7076 }, glass: 0x6a6048 } };
 }
@@ -1553,8 +1621,9 @@ function apache(k: Kit, o: HeliO, saraf: boolean): Built {
   k.col(box(0.08, 0.5, 0.08, [-13.4, -0.05, 0]), 0x3a3d38);
   wheel(k, 13.4, -0.3, 0, 0.16, 0.1);
   // markings + lights
-  if (saraf) for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.26, [0xf2f2f0, 0x1f4fbf], s);
+  if (saraf) for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.26, 'israel', s);
   else if (o.faction === 'korea') for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.24, INSIGNIA.korea, s);
+  else for (const s of [-1, 1]) roundelV(k, 10.8, 0.3, s * 0.3, 0.2, 'usa', s, true);
   k.symc(wing([{ d: 5.08, c: 1.0, z: 2.2, y: -0.235, t: 0.17 }, { d: 5.1, c: 0.98, z: 2.47, y: -0.24, t: 0.17 }]), o.team);
   k.light('lit', C.red, [-5.6, -0.24, -2.5]);
   k.light('lit', C.green, [-5.6, -0.24, 2.5]);
@@ -1815,6 +1884,7 @@ function tiger(k: Kit, o: HeliO): Built {
   k.light('beacon', 0xff2a1a, [-13.6, 2.0, 0], 0.01);
   k.light('strobe', 0xffffff, [-7.0, -0.7, 0], 0.008);
   rotor(k, [-5.8, 1.95, 0], 6.5, 4, 0.5, 26);
+  for (const s of [-1, 1]) roundelV(k, 9.4, 0.22, s * 0.3, 0.22, 'germany', s);
   return { S: 1.0 / 14.5, kind: 'heli', paint: { skin: { color: 0x515b47, metal: 0.15, rough: 0.95 }, skin2: { color: 0x353c30 }, glass: 0x34505a } };
 }
 
@@ -2110,6 +2180,7 @@ function reaperLike(k: Kit, o: UavO, wl2: boolean): Built {
   k.light('strobe', 0xffffff, [-5.0, 0.58, 0], 0.008);
   k.light('beacon', 0xff2a1a, [-6.0, -0.4, 0], 0.008);
   if (wl2) roundelH(k, 4.8, 0.45, 7.8, 0.35, INSIGNIA.china), roundelH(k, 4.8, 0.45, -7.8, 0.35, INSIGNIA.china);
+  else roundelH(k, 4.8, 0.45, 7.8, 0.28, 'usa', true), roundelH(k, 4.8, 0.45, -7.8, 0.28, 'usa', true);
   return { S: 0.92 / 20.3, kind: 'uav', paint: { skin: { color: wl2 ? 0xd5d8da : 0x8d9398, metal: 0.25 }, glass: 0x2a3540 } };
 }
 
@@ -2141,8 +2212,8 @@ function hermes(k: Kit, o: UavO): Built {
   prop(k, [-6.05, 0.04, 0], [0, 0, PI / 2], 0.85, 2, 0.14, 70, { spinner: 0.08 });
   for (const s of [-1, 1]) uavMissile(k, 1.9, 0.2, s * 1.5, 1.2, 0.07);
   k.symc(wing([lerpSec(wr, wt, 0.88, 1.25), { ...wt, t: 0.15 }]), o.team);
-  magenDavid(k, 2.4, 0.4, 3.4, 0.22);
-  magenDavid(k, 2.4, 0.4, -3.4, 0.22);
+  roundelH(k, 2.4, 0.4, 3.4, 0.22, 'israel');
+  roundelH(k, 2.4, 0.4, -3.4, 0.22, 'israel');
   k.light('lit', C.red, [-2.5, 0.42, -5.3]);
   k.light('lit', C.green, [-2.5, 0.42, 5.3]);
   k.light('strobe', 0xffffff, [-3.0, 0.32, 0], 0.008);
@@ -2230,6 +2301,8 @@ function heronTP(k: Kit, o: UavO): Built {
   k.light('lit', C.red, [-5.5, 0.9, -13.05]);
   k.light('lit', C.green, [-5.5, 0.9, 13.05]);
   k.light('strobe', 0xffffff, [-5.0, 0.98, 0], 0.008);
+  roundelH(k, 5.6, 0.8, 8.0, 0.42, 'germany');
+  roundelH(k, 5.6, 0.8, -8.0, 0.42, 'germany');
   return { S: 1.0 / 26.0, kind: 'uav', paint: { skin: { color: 0xb9bec2, metal: 0.25 }, glass: 0x2a3540 } };
 }
 
@@ -2620,6 +2693,7 @@ interface Template {
   height: number;
   size: { x: number; y: number; z: number };
   kind: Built['kind'];
+  fx: NonNullable<Model['damageFx']>;
 }
 const templates = new Map<string, Template>();
 
@@ -2628,6 +2702,7 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
   // pre-scan S: designs declare S in their return value, so build into a kit first
   const k = new Kit();
   const built = designFor(key, faction)(k, style.team, faction);
+  placeDecals(k);
   const body = realize(k, built.paint, fog, built.S);
   body.scale.setScalar(built.S);
   const bank = new THREE.Group();
@@ -2642,7 +2717,177 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
   root.updateMatrixWorld(true);
   bb.setFromObject(root);
   const sz = bb.getSize(new THREE.Vector3());
-  return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind };
+  // airframe box (skin only: no rotor discs / plumes) for damage points and flare dispensers
+  const ab = new THREE.Box3();
+  root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && (o.userData.bk === 'skin' || o.userData.bk === 'skin2')) ab.expandByObject(o, false);
+  });
+  if (ab.isEmpty()) ab.copy(bb);
+  const L = ab.max.x - ab.min.x;
+  const Hh = ab.max.y - ab.min.y;
+  const Wd = ab.max.z - ab.min.z;
+  const cy = (ab.min.y + ab.max.y) / 2;
+  const kind = built.kind;
+  const fx: NonNullable<Model['damageFx']> = [];
+  const P = (fx_: number, fy: number, fz: number) => new THREE.Vector3(ab.min.x + L * fx_, ab.min.y + Hh * fy, ab.min.z + Wd * fz);
+  if (kind === 'jet') {
+    fx.push({ pos: P(0.04, 0.45, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.5, 0.5, 0.36), kind: 'spark', at: 0.45 }, { pos: P(0.42, 0.5, 0.7), kind: 'smoke', at: 0.55 }, { pos: P(0.06, 0.45, 0.5), kind: 'fire', at: 0.7 }, { pos: P(0.45, 0.5, 0.3), kind: 'fire', at: 0.88 });
+  } else if (kind === 'heli') {
+    fx.push({ pos: P(0.42, 0.62, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.6, 0.45, 0.62), kind: 'spark', at: 0.45 }, { pos: P(0.22, 0.55, 0.5), kind: 'smoke', at: 0.6 }, { pos: P(0.45, 0.6, 0.45), kind: 'fire', at: 0.7 }, { pos: P(0.62, 0.4, 0.4), kind: 'spark', at: 0.8 });
+  } else if (kind === 'uav') {
+    fx.push({ pos: P(0.12, 0.5, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.55, 0.5, 0.35), kind: 'spark', at: 0.5 }, { pos: P(0.14, 0.5, 0.5), kind: 'fire', at: 0.7 });
+  } else {
+    fx.push({ pos: P(0.3, 0.5, 0.5), kind: 'smoke', at: 0.4 }, { pos: P(0.5, 0.5, 0.5), kind: 'spark', at: 0.6 });
+  }
+  // flare / chaff dispensers under the rear fuselage (jets) or on the cabin / boom sides (helicopters)
+  if (kind === 'jet' || kind === 'heli') {
+    for (const s of [-1, 1]) {
+      const o = new THREE.Object3D();
+      o.userData.flare = true;
+      const zc = (ab.min.z + ab.max.z) / 2;
+      if (kind === 'jet') o.position.set(ab.min.x + L * 0.16, ab.min.y + Hh * 0.25, zc + s * Wd * 0.07);
+      else o.position.set(ab.min.x + L * 0.42, cy - Hh * 0.05, zc + s * Wd * 0.14);
+      bank.add(o);
+    }
+  }
+  // wingtip vortex / vapour trail anchors (jets): the outermost skin points of the wing, ~30 % of the length from the tail
+  if (kind === 'jet') {
+    for (const s of [-1, 1]) {
+      const o = new THREE.Object3D();
+      o.userData.vapor = s;
+      o.position.set(ab.min.x + L * 0.3, cy + Hh * 0.05, s < 0 ? ab.min.z + Wd * 0.02 : ab.max.z - Wd * 0.02);
+      bank.add(o);
+    }
+  }
+  return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind, fx };
+}
+
+/** Per-instance copy of a shared (possibly fog-patched) material. */
+function ownMat(m: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const c = m.clone();
+  c.onBeforeCompile = m.onBeforeCompile;
+  c.customProgramCacheKey = m.customProgramCacheKey;
+  return c;
+}
+
+// ------------------------------------------------------------ wingtip vapour
+
+const VN = 14; // samples per trail
+const VSTEP = 0.028; // seconds between samples
+let vaporMat: THREE.MeshBasicMaterial | null = null;
+const _vw = new THREE.Vector3();
+const _vl = new THREE.Vector3();
+const _vinv = new THREE.Matrix4();
+
+/**
+ * Two short white ribbons trailing from the wingtips. History is kept in world
+ * space and rebuilt in root-local space each frame (the mesh rides on the
+ * root), so no scene bookkeeping is needed; idle trails cost nothing.
+ */
+class Vapor {
+  private mesh: THREE.Mesh;
+  private pos: Float32Array;
+  private col: Float32Array;
+  private hist = new Float32Array(2 * VN * 6); // [tip][sample] -> two world points (left / right edge)
+  private str = new Float32Array(VN);
+  private n = 0;
+  private acc = 0;
+  private level = 0;
+  private live = false;
+  private hw: number;
+  constructor(
+    private root: THREE.Object3D,
+    private tips: THREE.Object3D[],
+  ) {
+    vaporMat ??= new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    const verts = 2 * VN * 2;
+    this.pos = new Float32Array(verts * 3);
+    this.col = new Float32Array(verts * 4);
+    const idx: number[] = [];
+    for (let t = 0; t < 2; t++) {
+      for (let i = 0; i < VN - 1; i++) {
+        const a = (t * VN + i) * 2;
+        idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(idx);
+    const mesh = new THREE.Mesh(geo, vaporMat);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    mesh.renderOrder = 4;
+    mesh.userData.bk = 'vapor';
+    const own = vaporMat;
+    // the wreck code repaints every mesh charred: never draw the trail with anything but its own material
+    mesh.onBeforeRender = () => geo.setDrawRange(0, mesh.material === own ? Infinity : 0);
+    this.mesh = mesh;
+    root.add(mesh);
+    const span = Math.abs(tips[0].position.z - tips[1].position.z);
+    this.hw = Math.max(0.01, span * 0.035);
+  }
+
+  update(dt: number, target: number) {
+    this.level += (target - this.level) * Math.min(1, dt * 6);
+    if (this.level < 0.01 && !this.live) return;
+    if (dt <= 0) return;
+    this.root.updateMatrixWorld(true);
+    // advance the history
+    this.acc += dt;
+    if (this.acc >= VSTEP || this.n === 0) {
+      this.acc = 0;
+      this.hist.copyWithin(6, 0, VN * 6 - 6);
+      this.hist.copyWithin(VN * 6 + 6, VN * 6, 2 * VN * 6 - 6);
+      this.str.copyWithin(1, 0, VN - 1);
+      this.n = Math.min(VN, this.n + 1);
+    }
+    // head sample = current tips; ribbon width kept horizontal (across the heading) so the top-down camera sees it flat
+    _vl.setFromMatrixColumn(this.root.matrixWorld, 2);
+    _vl.y = 0;
+    _vl.normalize().multiplyScalar(this.hw);
+    for (let t = 0; t < 2; t++) {
+      _vw.setFromMatrixPosition(this.tips[t].matrixWorld);
+      const o = t * VN * 6;
+      this.hist[o] = _vw.x - _vl.x;
+      this.hist[o + 1] = _vw.y - _vl.y;
+      this.hist[o + 2] = _vw.z - _vl.z;
+      this.hist[o + 3] = _vw.x + _vl.x;
+      this.hist[o + 4] = _vw.y + _vl.y;
+      this.hist[o + 5] = _vw.z + _vl.z;
+    }
+    this.str[0] = this.level;
+    // rebuild in root-local space; fade with age
+    _vinv.copy(this.root.matrixWorld).invert();
+    let any = false;
+    for (let t = 0; t < 2; t++) {
+      for (let i = 0; i < VN; i++) {
+        const j = Math.min(i, this.n - 1);
+        const age = i / (VN - 1);
+        const a = i < this.n ? this.str[j] * (1 - age) * (1 - age * 0.3) * 0.6 : 0;
+        if (a > 0.01) any = true;
+        for (let e = 0; e < 2; e++) {
+          const h = t * VN * 6 + j * 6 + e * 3;
+          _vw.set(this.hist[h], this.hist[h + 1], this.hist[h + 2]).applyMatrix4(_vinv);
+          const v = (t * VN + i) * 2 + e;
+          this.pos[v * 3] = _vw.x;
+          this.pos[v * 3 + 1] = _vw.y;
+          this.pos[v * 3 + 2] = _vw.z;
+          this.col[v * 4] = 1;
+          this.col[v * 4 + 1] = 1;
+          this.col[v * 4 + 2] = 1;
+          // the head end tapers in so the trail grows out of the tip
+          this.col[v * 4 + 3] = i === 0 ? 0 : a;
+        }
+      }
+    }
+    this.live = any || this.level >= 0.01;
+    this.mesh.visible = this.live;
+    if (!this.live) this.n = 0;
+    const g = this.mesh.geometry;
+    g.attributes.position.needsUpdate = true;
+    g.attributes.color.needsUpdate = true;
+  }
 }
 
 function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
@@ -2657,7 +2902,12 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   const muzzles: THREE.Object3D[] = [];
   const strobes: THREE.Object3D[] = [];
   const plumes: THREE.Object3D[] = [];
+  const flares: THREE.Object3D[] = [];
+  const tips: THREE.Object3D[] = [];
   const glow: THREE.Material[] = [];
+  // per-instance rotor materials (blades fade into the blur disc as the rotor spools up)
+  let bladeM: THREE.MeshStandardMaterial | null = null;
+  const discMs = new Map<THREE.Material, THREE.MeshStandardMaterial>();
   let bank: THREE.Object3D | null = null;
   let abMat: THREE.MeshStandardMaterial | null = null;
   root.traverse((o) => {
@@ -2666,7 +2916,16 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     if (u.muzzle) muzzles.push(o);
     if (u.bank) bank = o;
     if (u.plume) plumes.push(o);
+    if (u.flare) flares.push(o);
+    if (u.vapor) tips.push(o);
     if (o instanceof THREE.Mesh) {
+      if (u.bk === 'blade') o.material = bladeM ??= ownMat(o.material as THREE.MeshStandardMaterial);
+      else if (u.bk === 'disc') {
+        const src = o.material as THREE.MeshStandardMaterial;
+        let m = discMs.get(src);
+        if (!m) discMs.set(src, (m = ownMat(src)));
+        o.material = m;
+      }
       if (u.bk === 'strobe') strobes.push(o);
       else if (u.bk === 'glow') {
         abMat ??= nozzleGlow(fog);
@@ -2679,24 +2938,82 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   });
   const kind = t.kind;
   const phase = Math.random() * 10;
+  const aid = airSeq++;
+  const wear = new WearDriver(root, aid & 3);
+  const lop = (aid * 0.618034) % 1 > 0.5 ? 1 : -1;
   for (const s of spins) s.rotation.y += Math.random() * TAU;
   let roll = 0;
   let pitch = 0;
+  let pv = 0;
   let ab = 0.3;
+  let lastSp = 0;
+  let accS = 0;
+  let lastY = NaN;
+  let climb = 0;
+  let rpm = 0.8;
+  const discList = [...discMs.values()];
+  const vapor = kind === 'jet' && tips.length === 2 ? new Vapor(root, tips) : null;
   const anim = (s: AnimState) => {
     const dt = s.dt;
-    for (const sp of spins) sp.rotation.y += (sp.userData.spin as number) * dt;
+    if (!(s.dead > 0)) wear.update(s.damage);
+    const sp = Math.max(0, s.speed || 0);
+    if (dt > 0) {
+      // smoothed acceleration and climb rate (the renderer has already placed the root this frame)
+      accS += (clamp((sp - lastSp) / Math.max(dt, 1e-3), -6, 6) - accS) * Math.min(1, dt * 4);
+      const y = root.position.y;
+      if (lastY === lastY) climb += (clamp((y - lastY) / Math.max(dt, 1e-3), -4, 4) - climb) * Math.min(1, dt * 4);
+      lastY = y;
+    }
+    lastSp = sp;
+    // rotor RPM: hover ~0.8, rising with forward speed and climb (collective); spin follows it
+    if (discList.length || bladeM) {
+      const tr = clamp(0.78 + sp * 0.12 + Math.max(0, climb) * 0.2, 0.7, 1.05);
+      rpm += (tr - rpm) * Math.min(1, dt * 1.5);
+    }
+    for (const sp_ of spins) sp_.rotation.y += (sp_.userData.spin as number) * dt * (0.6 + rpm * 0.45);
+    if (bladeM || discList.length) {
+      // past ~90 % RPM the eye only sees the blurred disc: fade the blades, strengthen the disc
+      const f = clamp((rpm - 0.86) / 0.14, 0, 1);
+      const bl = f * f * (3 - 2 * f);
+      if (bladeM) bladeM.opacity = 0.72 * (1 - 0.82 * bl);
+      for (const m of discList) m.opacity = 0.75 + 0.85 * bl;
+    }
     const b = bank as THREE.Object3D | null;
     const k = Math.min(1, dt * 4);
     if (b) {
       const turn = Number.isFinite(s.turn) ? s.turn : 0;
       const maxRoll = kind === 'jet' ? 0.75 : kind === 'heli' ? 0.3 : kind === 'quad' ? 0.45 : 0.4;
       roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) - roll) * k;
-      const sp = Math.max(0, s.speed || 0);
-      const pitchT = kind === 'heli' ? -Math.min(1, sp / 3) * 0.13 : kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
-      pitch += (pitchT - pitch) * k;
+      if (kind === 'heli') {
+        // nose down to fly forward (more while accelerating), nose-up flare while slowing; a damped spring so it settles
+        const pitchT = -Math.min(1, sp / 3) * 0.13 - clamp(accS * 0.08, -0.17, 0.12);
+        let h = Math.min(dt, 0.1);
+        while (h > 1e-5) {
+          const st = Math.min(h, 1 / 60);
+          h -= st;
+          pv += (34 * (pitchT - pitch) - 6.4 * pv) * st;
+          pitch += pv * st;
+        }
+      } else {
+        const pitchT = kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
+        pitch += (pitchT - pitch) * k;
+      }
       b.rotation.set(roll, 0, pitch);
-      if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012;
+      if (kind === 'heli') {
+        // gentle hover sway, fading out in forward flight
+        const hov = 1 - Math.min(1, sp / 1.5);
+        b.rotation.x += hov * 0.02 * Math.sin(s.time * 0.73 + phase);
+        b.rotation.z += hov * 0.012 * Math.sin(s.time * 0.51 + phase * 2);
+      }
+      // badly hit airframes struggle: a shaky, lopsided attitude (helicopters most)
+      const dmg = s.dead > 0 ? 1 : s.damage || 0;
+      if (dmg > 0.5) {
+        const w = (dmg - 0.5) * 2 * (kind === 'heli' ? 1 : 0.45);
+        b.rotation.x += w * (0.06 * Math.sin(s.time * 2.3 + phase) + 0.025 * Math.sin(s.time * 7.1 + phase * 2) + 0.05 * lop);
+        b.rotation.z += w * 0.03 * Math.sin(s.time * 1.7 + phase * 3);
+        b.rotation.y = w * 0.05 * Math.sin(s.time * 1.1 + phase);
+      }
+      if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012 + Math.sin(s.time * 0.37 + phase * 3) * 0.008;
       else if (kind === 'quad') b.position.y = Math.sin(s.time * 3.1 + phase) * 0.006;
       else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008;
     }
@@ -2705,22 +3022,33 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     const on = ts < 0.06 || (ts > 0.16 && ts < 0.22);
     for (const o of strobes) o.visible = on;
     if (abMat || plumes.length) {
-      const sp = Math.max(0, s.speed || 0);
-      const target = clamp(sp / 5, 0, 1);
+      // throttle: cruise ~0.75, afterburner pushes past 1 while accelerating or climbing
+      const target = kind === 'jet' ? clamp(0.75 * Math.min(1, sp / 4.5) + Math.max(0, accS) * 0.22 + Math.max(0, climb) * 0.35, 0, 1.35) : clamp(sp / 5, 0, 1);
       ab += (target - ab) * Math.min(1, dt * 2.5);
-      if (abMat) (abMat as THREE.MeshStandardMaterial).emissiveIntensity = 1.4 + ab * 3.6 + Math.sin(s.time * 37 + phase) * 0.25 * ab;
+      // flame flicker: two incommensurate fast sines + a slow breath
+      const fl = Math.sin(s.time * 37 + phase) * 0.6 + Math.sin(s.time * 61.7 + phase * 3) * 0.4;
+      if (abMat) (abMat as THREE.MeshStandardMaterial).emissiveIntensity = 1.4 + ab * 3.6 + fl * 0.35 * ab;
       for (const p of plumes) {
         const f = ab > 0.15 ? (ab - 0.15) / 0.85 : 0;
         p.visible = f > 0.02;
-        p.scale.set(0.35 + f * (0.85 + Math.sin(s.time * 29 + phase) * 0.08), 0.7 + f * 0.3, 0.7 + f * 0.3);
+        p.scale.set(0.35 + f * (0.85 + fl * 0.09), 0.7 + f * 0.3 + fl * 0.03 * f, 0.7 + f * 0.3 + fl * 0.03 * f);
       }
+    }
+    if (vapor && b) {
+      // wingtip vortices in hard turns (and hard pull-ups) at speed
+      const turn = Number.isFinite(s.turn) ? Math.abs(s.turn) : 0;
+      const g = clamp((turn - 0.4) / 0.45, 0, 1) + clamp((Math.abs(climb) - 1.2) / 1.5, 0, 0.6);
+      vapor.update(dt, s.dead > 0 ? 0 : clamp(g, 0, 1) * clamp(sp / 3, 0, 1));
     }
   };
   // initial state
   for (const p of plumes) p.visible = false;
   for (const o of strobes) o.visible = false;
-  return { root, muzzles, height: t.height, size: t.size, glow, emitters: [], anim };
+  const model: Model = { root, muzzles, height: t.height, size: t.size, glow, emitters: [], anim, damageFx: t.fx.map((f) => ({ pos: f.pos.clone(), kind: f.kind, at: f.at })) };
+  if (flares.length) model.flareDispensers = flares;
+  return model;
 }
+let airSeq = 0;
 
 function builder(key: string): Builder {
   return (style, fog) => {
