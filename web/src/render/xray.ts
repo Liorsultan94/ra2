@@ -44,7 +44,7 @@ uniform float time;
 varying float vRim;
 void main() {
   float r = pow(clamp(vRim, 0.0, 1.0), 1.6);
-  float a = (0.16 + 0.84 * r) * opacity * (0.88 + 0.12 * sin(time * 4.0));
+  float a = (0.38 + 0.62 * r) * opacity * (0.88 + 0.12 * sin(time * 4.0));
   gl_FragColor = vec4(color * (0.75 + 0.6 * r), a);
 }`;
 
@@ -113,7 +113,7 @@ export class UnitTagger {
     const key = `${own ? 'o' : 'e'}${step}`;
     let m = this.mats.get(key);
     if (!m) {
-      m = own ? xrayMaterial(this.ownColor, 0.85, step / 10, this.time) : xrayMaterial(this.enemyColor, 0.55, step / 10, this.time);
+      m = own ? xrayMaterial(this.ownColor, 0.95, step / 10, this.time) : xrayMaterial(this.enemyColor, 0.7, step / 10, this.time);
       this.mats.set(key, m);
     }
     return m;
