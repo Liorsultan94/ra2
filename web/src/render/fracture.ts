@@ -564,7 +564,7 @@ export class FracWreck {
       dz = Math.sin(a);
     const top = Math.max(0.2, tpl.top);
     const reach = Math.abs(dx) * w * 0.5 + Math.abs(dz) * d * 0.5;
-    this.lean = { ax: dz, az: -dx, px: dx * reach * 0.8, py: top * 0.38, pz: dz * reach * 0.8, alpha: 2.2 + Math.random() * 1.6 };
+    this.lean = { ax: dz, az: -dx, px: dx * reach * 0.8, py: top * 0.38, pz: dz * reach * 0.8, alpha: 1.8 + Math.random() * 1.2 };
     this.makeBodies(nBodies);
   }
 
@@ -771,7 +771,8 @@ export class FracWreck {
       if (b.state === 0 || b.state === 1) {
         if (b.state === 1) {
           // rigid lean about the pivot line (axis (ax,0,az) through P)
-          const th = 0.5 * L.alpha * this.t * this.t;
+          const tl = this.t;
+          const th = tl < 1.7 / L.alpha ? 0.5 * L.alpha * tl * tl : 0.5 * 1.7 * (1.7 / L.alpha) + 1.7 * (tl - 1.7 / L.alpha);
           const s = Math.sin(th / 2);
           b.qx = L.ax * s;
           b.qy = 0;
@@ -786,7 +787,8 @@ export class FracWreck {
         if (this.t >= b.delay) {
           if (b.state === 1) {
             // inherit the toppling motion: v = w x r
-            const om = L.alpha * this.t;
+            // (a toppling storey does not spin up for ever: cap the inherited rate so pieces land near the footprint)
+            const om = Math.min(1.7, L.alpha * this.t);
             const rx = b.x - L.px,
               ry = b.y - L.py,
               rz = b.z - L.pz;
