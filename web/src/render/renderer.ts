@@ -921,7 +921,7 @@ export class GameRenderer {
       lastFire: -1e9,
       trackAcc: 0,
       bank: 0,
-      anim: newAnim(),
+      anim: { ...newAnim(), seed: e.id },
       lod,
       occl: true,
       near: true,
@@ -1101,6 +1101,7 @@ export class GameRenderer {
         if (v.model.turret) v.model.turret.rotation.y = -angleDiff(lerpAngle(e.pfacing, e.facing, alpha), lerpAngle(e.pturret, e.turret, alpha));
         if (vis) this.unitFx(e, v, p, yaw, moved, dt);
       }
+      if (v.model.infantry) a.lod = !vis ? 2 : a.lod === 2 && v.near ? 0 : a.lod;
       if (v.model.anim) v.model.anim(a);
       this.legacyAnim(v.model, a);
       if (v.model.recoil && v.recoil > 0) {
@@ -1123,6 +1124,11 @@ export class GameRenderer {
           sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
           v.near = fr.intersectsSphere(sph);
           if (shadowsOn) setCasting(v.lod, v.near);
+          // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
+          if (v.model.infantry) {
+            const hpx = this.photoCam ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
+            a.lod = !v.near ? 2 : hpx < (this.quality === 'low' ? 40 : 16) ? 1 : 0;
+          }
         }
         // (staggered: each unit re-tests every 4th frame)
         if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);

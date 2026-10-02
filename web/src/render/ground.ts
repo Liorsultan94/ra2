@@ -13,6 +13,11 @@ import { groundDetailTexture } from './terraintex';
  * detail map sampled at two rotated scales supplies crisp per-material
  * detail, height-based transitions and bump. Farm fields are drawn by the
  * same shader from a field map (rows, furrows, crops), so they cost nothing.
+ *
+ * Grass has its own micro texture (grasstex.ts: blades, clover, flower heads)
+ * sampled twice with noise-driven selection against tiling, and a grass
+ * control map: lush banks and hollows, clover and wildflower patches, worn
+ * footpaths and yards. The blade map drives the 3D grass (grass.ts).
  */
 
 export const SUB = 2; // mesh vertices per tile
@@ -726,12 +731,12 @@ const TERRAIN_MAP = /* glsl */ `
   bw /= tot;
 
   float dry = clamp(tnt.a + (dB.r - 0.5) * 0.3 + (det.g - 0.5) * 0.15, 0.0, 1.0);
-  vec3 gc = grassBase(ctl.r, dry, gDrift * 0.8);
+  vec3 gc = grassBase(ctl.r, dry, gDrift);
   // single blades: some fresh and bright, a few dead straw ones (more where it is dry)
   gc = mix(gc, gcFresh, smoothstep(0.66, 0.97, gT.g) * (0.5 - dry * 0.3) * gFine);
   gc = mix(gc, gcDry * vec3(1.2, 1.08, 0.78), smoothstep(0.14, 0.0, gT.g) * (0.3 + dry * 0.5) * gFine);
   // dark gaps between the blades, lit tips; clump scale from the detail map
-  vec3 grass = gc * (0.5 + gH * 0.82) * (0.8 + det.r * 0.4);
+  vec3 grass = gc * (0.5 + gH * 0.82) * (0.74 + det.r * 0.52);
   // clover patches: rounder, darker, bluer leaves
   float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
   grass = mix(grass, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);

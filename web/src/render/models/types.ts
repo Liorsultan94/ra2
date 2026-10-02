@@ -65,6 +65,10 @@ export interface AnimState {
   deploy?: number;
   /** Infantry: seconds since the soldier started digging in (undefined / 0 = not digging); the dig motion plays for the first ~2.4 s, then he kneels in the foxhole. */
   dig?: number;
+  /** Stable per-unit seed (the entity id): de-synchronises idle motion, gestures and death variants. Render only. */
+  seed?: number;
+  /** Infantry animation detail: 0 / undefined = full (leg IK, gestures), 1 = cheap cycle (far zoom / low quality), 2 = off screen (clocks only). */
+  lod?: number;
 }
 
 export interface Model {

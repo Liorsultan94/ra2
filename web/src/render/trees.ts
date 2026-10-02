@@ -504,7 +504,7 @@ function spruce(lite: boolean): THREE.BufferGeometry {
     const r = Math.hypot(p.x, p.z);
     const t = clamp01((p.y - 0.1) / (H - 0.1));
     const rel = clamp01(r / radAt(t));
-    const n = V(p.x, 0, p.z).normalize().multiplyScalar(0.8).addScaledVector(UP, 0.75).normalize();
+    const n = V(p.x, 0, p.z).normalize().multiplyScalar(0.85).addScaledVector(UP, 0.5).normalize();
     let ao = (0.48 + 0.52 * sstep(0.15, 0.95, rel)) * (0.72 + 0.28 * t);
     ao = Math.min(1, ao * 1.05);
     return { n, c: [ao * 0.96, ao, ao * 0.97] as [number, number, number] };
@@ -640,7 +640,7 @@ export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE
       c.setHSL(0.24 + r1 * 0.04, 0.4 + r2 * 0.1, 0.46 + r2 * 0.06);
       break;
     case Species.Willow:
-      c.setHSL(0.22 + r1 * 0.03, 0.34 + r2 * 0.08, 0.47 + r2 * 0.05);
+      c.setHSL(0.235 + r1 * 0.03, 0.32 + r2 * 0.08, 0.41 + r2 * 0.05);
       break;
     case Species.Fruit:
       c.setHSL(0.22 + r1 * 0.04, 0.44 + r2 * 0.1, 0.5 + r2 * 0.05);

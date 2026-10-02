@@ -1346,7 +1346,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float rimW = ice * (0.25 + 0.6 * rn);
           float im = 1.0 - smoothstep(rimW * 0.75, rimW, shore);
           #if WATER_Q > 0
-            im = max(im, smoothstep(0.32, 0.4, fl.b) * smoothstep(0.35, 0.9, shore) * smoothstep(0.2, 0.8, ice) * (0.7 + 0.3 * rn));
+            im = max(im, smoothstep(0.42, 0.5, fl.b) * smoothstep(0.5, 0.62, fA) * smoothstep(0.35, 0.9, shore) * smoothstep(0.2, 0.8, ice) * (0.7 + 0.3 * rn));
           #endif
           vec3 iceC = mix(vec3(0.42, 0.5, 0.56), vec3(0.8, 0.84, 0.88), clamp(wxSnow * 0.8 + rn * 0.3, 0.0, 1.0));
           vec3 iceL = iceC * wxLight + sunCol * pow(sd, 40.0) * 0.4 * wxSpec;
@@ -1362,6 +1362,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #else
           float alpha = (max(mix(0.55, 0.92, depth), fres * 0.85) + foam * 0.25 + oil * 0.3) * smoothstep(0.0, 0.06, depthW);
         #endif
+        // never hand NaN / Inf to the HDR chain (bloom would smear it over the frame)
+        col = (col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0) ? min(col, vec3(32.0)) : vec3(0.0);
         gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
         #include <tonemapping_fragment>
         #include <colorspace_fragment>

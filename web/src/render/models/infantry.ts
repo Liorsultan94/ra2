@@ -338,6 +338,10 @@ class Rig {
   readonly top = new THREE.Group();
   readonly bones: THREE.Bone[] = [];
   private parts = new Map<MK, G[]>();
+  /** Geometry added to the key bone is modelled in the value's rest frame (the joint sits higher up the same chain). */
+  readonly frames = new Map<THREE.Bone, THREE.Object3D>();
+  /** Soft skinning: vertices of the key bone blend into `lo` below frame-local height y1 (fully `lo` under y0). */
+  readonly soft = new Map<THREE.Bone, { lo: THREE.Bone; y0: number; y1: number }>();
 
   bone(name: string, parent: THREE.Object3D | null, x: number, y: number, z: number): THREE.Bone {
     const b = new THREE.Bone();
@@ -357,8 +361,11 @@ class Rig {
   }
   /** Add parts (modelled in the bone's local frame at its rest pose). */
   add(b: THREE.Bone, mk: MK, ...geos: G[]) {
-    b.updateWorldMatrix(true, false);
+    const fr = this.frames.get(b) ?? b;
+    fr.updateWorldMatrix(true, false);
     const idx = this.bones.indexOf(b);
+    const sf = this.soft.get(b);
+    const lo = sf ? this.bones.indexOf(sf.lo) : -1;
     let list = this.parts.get(mk);
     if (!list) this.parts.set(mk, (list = []));
     for (const g of geos) {
@@ -368,14 +375,20 @@ class Rig {
         for (let i = 0; i < n; i++) ix.push(i);
         g.setIndex(ix);
       }
-      g.applyMatrix4(b.matrixWorld);
       const n = g.attributes.position.count;
       const si = new Uint16Array(n * 4);
       const sw = new Float32Array(n * 4);
+      const pos = g.attributes.position;
       for (let i = 0; i < n; i++) {
+        const k = sf ? sstep(sf.y0, sf.y1, pos.getY(i)) : 1;
         si[i * 4] = idx;
-        sw[i * 4] = 1;
+        sw[i * 4] = k;
+        if (k < 1) {
+          si[i * 4 + 1] = lo;
+          sw[i * 4 + 1] = 1 - k;
+        }
       }
+      g.applyMatrix4(fr.matrixWorld);
       g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
       g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
       list.push(g);
@@ -654,6 +667,8 @@ interface SolDef {
 interface Body {
   hips: THREE.Bone;
   spine: THREE.Bone;
+  chest: THREE.Bone;
+  neck: THREE.Bone;
   head: THREE.Bone;
   uaR: THREE.Bone;
   uaL: THREE.Bone;
@@ -661,21 +676,49 @@ interface Body {
   faL: THREE.Bone;
 }
 
+/*
+ * Skeleton (metres, rest pose, forward +X, right +Z):
+ *   hips (pelvis) -> spine (lumbar) -> chest -> neck -> head
+ *                                       chest -> clavicle -> upper arm -> forearm -> hand   (x2)
+ *   hips -> thigh -> shin -> foot                                                          (x2)
+ *   chest -> weapon (both hands IK'd onto its grips)
+ * Torso / vest / pack vertices blend between spine and chest (soft skin), so the
+ * body bends smoothly at the waist. Parts are modelled in the old single-spine
+ * frame (`Rig.frames`), the joints themselves sit where a real one is.
+ */
 const TH = 0.44; // thigh
 const SH = 0.43; // shin (knee -> ankle)
 const UA = 0.29; // upper arm
 const FA = 0.295; // elbow -> hand centre
-const SHOULDER: V3 = [0, 0.385, 0.19];
+const SHOULDER: V3 = [0, 0.385, 0.19]; // shoulder joint at rest (spine frame)
+/** spine -> chest joint (spine frame height); weapon / hand targets are written in spine-frame numbers minus this. */
+const CH = 0.22;
+const NECK_Y = 0.28; // chest -> neck base
+const HEAD_Y = 0.09; // neck base -> skull pivot
+const CLAV: V3 = [0, 0.36 - CH, 0.035]; // clavicle root (chest frame, right side)
+const CLAV_UA: V3 = [0, SHOULDER[1] - 0.36, SHOULDER[2] - 0.035]; // clavicle -> shoulder joint
+const WRIST = 0.255; // elbow -> wrist
 
 function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, helmet: HelmetKind, pack: PackKind): Body {
   const hips = r.bone(p + 'hips', null, x, 0.98, z);
   hips.rotation.y = yaw;
   const spine = r.bone(p + 'spine', hips, 0, 0.06, 0);
-  const head = r.bone(p + 'head', spine, 0, 0.5, 0);
-  const uaR = r.bone(p + 'uaR', spine, SHOULDER[0], SHOULDER[1], SHOULDER[2]);
+  const chest = r.bone(p + 'chest', spine, 0, CH, 0);
+  r.frames.set(chest, spine);
+  r.soft.set(chest, { lo: spine, y0: 0.06, y1: 0.3 });
+  const neck = r.bone(p + 'neck', chest, 0, NECK_Y, 0);
+  const head = r.bone(p + 'head', neck, 0, HEAD_Y, 0);
+  r.frames.set(head, neck);
+  const clR = r.bone(p + 'clR', chest, CLAV[0], CLAV[1], CLAV[2]);
+  const clL = r.bone(p + 'clL', chest, CLAV[0], CLAV[1], -CLAV[2]);
+  const uaR = r.bone(p + 'uaR', clR, CLAV_UA[0], CLAV_UA[1], CLAV_UA[2]);
   const faR = r.bone(p + 'faR', uaR, 0, -UA, 0);
-  const uaL = r.bone(p + 'uaL', spine, SHOULDER[0], SHOULDER[1], -SHOULDER[2]);
+  const uaL = r.bone(p + 'uaL', clL, CLAV_UA[0], CLAV_UA[1], -CLAV_UA[2]);
   const faL = r.bone(p + 'faL', uaL, 0, -UA, 0);
+  const hdR = r.bone(p + 'hdR', faR, 0, -WRIST, 0);
+  const hdL = r.bone(p + 'hdL', faL, 0, -WRIST, 0);
+  r.frames.set(hdR, faR);
+  r.frames.set(hdL, faL);
   const glove: MK = kit.gloves === 'skin' ? 'skin' : kit.gloves;
   const bootM: MK = kit.bootsGear ? 'gear' : 'dark';
   const kneeM: MK = kit.gearTex === 'canvas' ? 'gear' : 'dark';
@@ -714,9 +757,9 @@ function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, he
     ],
     10,
   );
-  r.add(spine, 'camo', xf(torso, [0, 0, 0], [0, 0, 0], [0.72, 1, 1]));
-  vest(r, spine, kit);
-  backpack(r, spine, kit, pack, p);
+  r.add(chest, 'camo', xf(torso, [0, 0, 0], [0, 0, 0], [0.72, 1, 1]));
+  vest(r, chest, kit);
+  backpack(r, chest, kit, pack, p);
 
   // ---- arms
   for (const sd of [1, -1]) {
@@ -726,11 +769,11 @@ function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, he
     if (kit.vest === 'bulky') r.add(ua, 'gear', xf(sph(0.082, 0.06, 0.08, 8, 5), [0, -0.01, sd * 0.004]));
     r.add(ua, 'team', xf(cylY(0.067, 0.062, 0.1, 10, true), [0, -0.13, 0]), xf(box(0.075, 0.08, 0.02), [0.0, -0.05, sd * 0.07]));
     r.add(fa, 'camo', limb(0.052, 0.04, 0.235, 6));
-    r.add(fa, glove, xf(sph(0.04, 0.056, 0.036, 6, 4), [0, -0.292, 0]), xf(box(0.022, 0.05, 0.02), [0.03, -0.272, -sd * 0.015]));
+    r.add(sd > 0 ? hdR : hdL, glove, xf(sph(0.04, 0.056, 0.036, 6, 4), [0, -0.292, 0]), xf(box(0.022, 0.05, 0.02), [0.03, -0.272, -sd * 0.015]));
   }
 
-  // ---- neck & head
-  r.add(head, 'skin', xf(limb(0.052, 0.056, 0.11, 6), [0, 0.075, 0]));
+  // ---- neck & head (head parts are modelled in the neck-base frame)
+  r.add(neck, 'skin', xf(limb(0.052, 0.056, 0.11, 6), [0, 0.075, 0]));
   r.add(
     head,
     'skin',
@@ -742,7 +785,7 @@ function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, he
   );
   r.add(head, 'dark', xf(sph(0.011, 0.008, 0.013, 6, 4), [0.088, 0.137, 0.031]), xf(sph(0.011, 0.008, 0.013, 6, 4), [0.088, 0.137, -0.031]), xf(box(0.008, 0.006, 0.03), [0.092, 0.152, 0.031]), xf(box(0.008, 0.006, 0.03), [0.092, 0.152, -0.031]));
   hat(r, head, kit, helmet);
-  return { hips, spine, head, uaR, uaL, faR, faL };
+  return { hips, spine, chest, neck, head, uaR, uaL, faR, faL };
 }
 
 function hat(r: Rig, head: THREE.Bone, kit: Kit, kind: HelmetKind) {
@@ -802,14 +845,14 @@ function hat(r: Rig, head: THREE.Bone, kit: Kit, kind: HelmetKind) {
   }
 }
 
-function vest(r: Rig, spine: THREE.Bone, kit: Kit) {
-  const g = (...gs: G[]) => r.add(spine, 'gear', ...gs);
+function vest(r: Rig, chest: THREE.Bone, kit: Kit) {
+  const g = (...gs: G[]) => r.add(chest, 'gear', ...gs);
   if (kit.vest === 'rig') {
     // chest rig: harness + row of mag pouches over the belly
     g(xf(cylY(1, 1, 0.12, 14, true), [0, 0.17, 0], [0, 0, 0], [0.128, 1, 0.172]));
     for (const z of [-0.09, -0.03, 0.03, 0.09]) g(xf(rbox(0.05, 0.11, 0.055, 0.01), [0.135, 0.17, z]));
     for (const sd of [1, -1]) g(xf(box(0.2, 0.02, 0.04), [0, 0.43, sd * 0.1]), xf(box(0.025, 0.24, 0.04), [-0.12, 0.31, sd * 0.07], [sd * 0.35, 0, 0]));
-    r.add(spine, 'team', xf(box(0.014, 0.09, 0.18), [0.13, 0.33, 0], [0, 0, -0.15]));
+    r.add(chest, 'team', xf(box(0.014, 0.09, 0.18), [0.13, 0.33, 0], [0, 0, -0.15]));
     return;
   }
   const big = kit.vest === 'bulky';
@@ -827,14 +870,14 @@ function vest(r: Rig, spine: THREE.Bone, kit: Kit) {
     g(xf(rbox(0.04, 0.13, 0.17, 0.02), [0.13, -0.06, 0], [0, 0, 0.1]));
   }
   // radio + antenna (left side)
-  r.add(spine, 'dark', xf(rbox(0.06, 0.12, 0.045, 0.01), [-0.04, 0.27, -0.2]), xf(cylY(0.0035, 0.006, 0.42, 4), [-0.06, 0.53, -0.2], [0.1, 0, 0.05]));
+  r.add(chest, 'dark', xf(rbox(0.06, 0.12, 0.045, 0.01), [-0.04, 0.27, -0.2]), xf(cylY(0.0035, 0.006, 0.42, 4), [-0.06, 0.53, -0.2], [0.1, 0, 0.05]));
   // team ID patch on the chest
-  r.add(spine, 'team', xf(box(0.014, 0.115, 0.23), [0.15, 0.33, 0], [0, 0, -0.06]));
+  r.add(chest, 'team', xf(box(0.014, 0.115, 0.23), [0.15, 0.33, 0], [0, 0, -0.06]));
 }
 
-function backpack(r: Rig, spine: THREE.Bone, kit: Kit, pack: PackKind, p: string) {
-  const g = (...gs: G[]) => r.add(spine, 'gear', ...gs);
-  const teamBack = (x: number, y: number) => r.add(spine, 'team', xf(box(0.014, 0.12, 0.23), [x, y, 0]), xf(box(0.08, 0.014, 0.2), [x + 0.04, y + 0.115, 0]));
+function backpack(r: Rig, chest: THREE.Bone, kit: Kit, pack: PackKind, p: string) {
+  const g = (...gs: G[]) => r.add(chest, 'gear', ...gs);
+  const teamBack = (x: number, y: number) => r.add(chest, 'team', xf(box(0.014, 0.12, 0.23), [x, y, 0]), xf(box(0.08, 0.014, 0.2), [x + 0.04, y + 0.115, 0]));
   switch (pack) {
     case 'assault':
     case 'rpg': {
@@ -842,7 +885,7 @@ function backpack(r: Rig, spine: THREE.Bone, kit: Kit, pack: PackKind, p: string
       teamBack(-0.296, 0.355);
       if (pack === 'rpg') {
         for (const z of [-0.065, 0.065]) {
-          r.add(spine, 'tube', xf(cylY(0.042, 0.042, 0.13, 8), [-0.2, 0.47, z]), xf(cylY(0.006, 0.042, 0.13, 8), [-0.2, 0.6, z]));
+          r.add(chest, 'tube', xf(cylY(0.042, 0.042, 0.13, 8), [-0.2, 0.47, z]), xf(cylY(0.006, 0.042, 0.13, 8), [-0.2, 0.6, z]));
         }
       }
       break;
@@ -852,30 +895,30 @@ function backpack(r: Rig, spine: THREE.Bone, kit: Kit, pack: PackKind, p: string
       teamBack(-0.28, 0.33);
       // slung carbine across the back
       const { parts } = rifleGeo(kit.rifle, true);
-      for (const [mk, geo] of parts) r.add(spine, mk, xf(geo, [-0.3, 0.25, 0], [PI / 2, 0, 0.75]));
+      for (const [mk, geo] of parts) r.add(chest, mk, xf(geo, [-0.3, 0.25, 0], [PI / 2, 0, 0.75]));
       break;
     }
     case 'radio': {
       g(xf(rbox(0.13, 0.28, 0.25, 0.04, 2), [-0.21, 0.26, 0]));
-      r.add(spine, 'dark', xf(rbox(0.06, 0.16, 0.12, 0.01), [-0.29, 0.3, -0.04]), xf(cylY(0.004, 0.007, 0.6, 4), [-0.28, 0.66, -0.08], [0.12, 0, 0.1]));
+      r.add(chest, 'dark', xf(rbox(0.06, 0.16, 0.12, 0.01), [-0.29, 0.3, -0.04]), xf(cylY(0.004, 0.007, 0.6, 4), [-0.28, 0.66, -0.08], [0.12, 0, 0.1]));
       teamBack(-0.275, 0.24);
       break;
     }
     case 'bombbag': {
       g(xf(rbox(0.16, 0.3, 0.28, 0.04, 2), [-0.22, 0.24, 0]));
-      for (const z of [-0.08, 0, 0.08]) r.add(spine, 'tube', xf(cylY(0.03, 0.03, 0.12, 6), [-0.22, 0.43, z]), xf(cylY(0.012, 0.03, 0.04, 6), [-0.22, 0.51, z]));
+      for (const z of [-0.08, 0, 0.08]) r.add(chest, 'tube', xf(cylY(0.03, 0.03, 0.12, 6), [-0.22, 0.43, z]), xf(cylY(0.012, 0.03, 0.04, 6), [-0.22, 0.51, z]));
       teamBack(-0.303, 0.3);
       break;
     }
     case 'jammer': {
       // big backpack jammer: frame + RF box with fins
       g(xf(rbox(0.07, 0.42, 0.28, 0.02), [-0.17, 0.27, 0]));
-      r.add(spine, 'dark', xf(rbox(0.17, 0.4, 0.3, 0.025, 2), [-0.29, 0.27, 0]));
-      for (const y of [0.13, 0.19, 0.25, 0.31, 0.37]) r.add(spine, 'gun', xf(box(0.02, 0.012, 0.26), [-0.385, y, 0]));
-      r.add(spine, 'gun', xf(rbox(0.13, 0.06, 0.26, 0.012), [-0.29, 0.5, 0]));
+      r.add(chest, 'dark', xf(rbox(0.17, 0.4, 0.3, 0.025, 2), [-0.29, 0.27, 0]));
+      for (const y of [0.13, 0.19, 0.25, 0.31, 0.37]) r.add(chest, 'gun', xf(box(0.02, 0.012, 0.26), [-0.385, y, 0]));
+      r.add(chest, 'gun', xf(rbox(0.13, 0.06, 0.26, 0.012), [-0.29, 0.5, 0]));
       teamBack(-0.385, 0.44);
       // antenna cluster on its own bone so it can sway
-      const ant = r.bone(p + 'ant', spine, -0.29, 0.53, 0);
+      const ant = r.bone(p + 'ant', chest, -0.29, 0.53 - CH, 0);
       const tips: V3[] = [
         [0.03, 0.62, 0.11],
         [-0.04, 0.68, 0.04],
@@ -894,7 +937,7 @@ function backpack(r: Rig, spine: THREE.Bone, kit: Kit, pack: PackKind, p: string
       g(xf(rbox(0.13, 0.3, 0.26, 0.04, 2), [-0.21, 0.25, 0]));
       teamBack(-0.28, 0.4);
       // quadcopter strapped flat against the pack (own bone: hidden after launch)
-      const dr = r.bone(p + 'drone', spine, -0.32, 0.27, 0);
+      const dr = r.bone(p + 'drone', chest, -0.32, 0.27 - CH, 0);
       r.add(dr, 'dark', xf(rbox(0.05, 0.1, 0.09, 0.015), [0, 0, 0]));
       for (const a of [PI / 4, -PI / 4]) r.add(dr, 'dark', xf(box(0.018, 0.32, 0.025), [-0.005, 0, 0], [a, 0, 0]));
       for (const [y, z] of [
@@ -932,7 +975,7 @@ interface Tpl {
 
 /** Adds the weapon bone + geometry for a soldier; returns weapon info and muzzle name. */
 function arm(r: Rig, b: Body, p: string, kind: 'rifle' | 'carbine' | AtKind | 'controller', kit: Kit, muzzles: string[]): WInfo {
-  const wpn = r.bone(p + 'wpn', b.spine, 0.3, 0.2, 0.12);
+  const wpn = r.bone(p + 'wpn', b.chest, 0.3, 0.2 - CH, 0.12);
   if (kind === 'rifle' || kind === 'carbine') {
     const g = rifleGeo(kit.rifle, kind === 'carbine');
     for (const [mk, geo] of g.parts) r.add(wpn, mk, geo);
@@ -997,7 +1040,7 @@ function buildSoldierTpl(r: Rig, kit: Kit, key: string, t: Tpl) {
       r.add(b.faL, 'team', xf(box(0.08, 0.04, 0.124), [0.0, -0.42, 0]));
       r.add(b.faL, 'dark', xf(box(0.03, 0.04, 0.02), [0.03, -0.35, 0.05]));
       // hi-vis/ID band on the vest back
-      r.add(b.spine, 'hat', xf(cylY(1, 1, 0.035, 14, true), [0, 0.33, 0], [0, 0, 0], [0.165, 1, 0.2]));
+      r.add(b.chest, 'hat', xf(cylY(1, 1, 0.035, 14, true), [0, 0.33, 0], [0, 0, 0], [0.165, 1, 0.2]));
       break;
     }
   }
@@ -1036,7 +1079,7 @@ function buildMortarTpl(r: Rig, kit: Kit, t: Tpl) {
   r.point('muzzle0', tube, [M_LEN + 0.02, 0, 0]);
   t.muzzles.push('muzzle0');
   // loader's bomb (held in the hands)
-  const bomb = r.bone('lbomb', l.spine, 0.3, 0.2, 0);
+  const bomb = r.bone('lbomb', l.chest, 0.3, 0.2 - CH, 0);
   r.add(bomb, 'tube', xf(cylX(0.04, 0.04, 0.16, 10), [0.02, 0, 0]), xf(cylX(0.012, 0.04, 0.09, 10), [0.145, 0, 0]), xf(cylX(0.04, 0.02, 0.07, 8), [-0.095, 0, 0]));
   r.add(bomb, 'dark', xf(cylX(0.012, 0.012, 0.1, 5), [-0.17, 0, 0]), xf(box(0.06, 0.07, 0.006), [-0.19, 0, 0]), xf(box(0.06, 0.006, 0.07), [-0.19, 0, 0]));
   const w: WInfo = { kind: 'bomb', grip: new THREE.Vector3(0.0, -0.01, 0.055), fore: new THREE.Vector3(0.0, -0.01, -0.055), pivot: new THREE.Vector3(0, 0, 0), round: false };
@@ -1086,15 +1129,65 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
 
 // -------------------------------------------------------------- runtime
 
+/*
+ * Procedural animation runtime (no clips, no allocations per frame).
+ *
+ *  Locomotion: a stride phase integrated from the distance actually covered
+ *  (AnimState.dist, converted to model metres), so the planted foot moves
+ *  backwards exactly at ground speed and never slides. Each foot follows a
+ *  stance / swing curve (heel strike, roll over the ball, toe-off, lift);
+ *  thigh / knee / ankle come from an analytic two-bone IK in the pelvis frame
+ *  and the pelvis drops whenever a planted foot couldn't reach. Pelvis bob,
+ *  lateral sway, hip drop and yaw twist; the chest counter-twists and the
+ *  free arms counter-swing. Walk <-> run blend by speed (stride length,
+ *  stance fraction, lift, lean, bob), shuffle steps when turning on the spot.
+ *  Weapon: low ready / port arms on the run / shouldered aim (clavicle up,
+ *  cheek on the stock); a shot kicks shoulder, chest and head; after a few
+ *  bursts a quick magazine swap. Idle: weight shifts, breathing, head
+ *  look-around and small gestures (helmet, radio, look back, shoulder roll),
+ *  all de-synchronised by a per-unit seed (AnimState.seed = entity id).
+ *  Riflemen with the habit (and most AT gunners) take a knee to fire.
+ *  Death: knees buckle under the body's weight (legs IK'd to the planted
+ *  feet), then a gravity-accelerated topple, impact bounce and limbs that lag
+ *  and flop before lying still (forward / backward / sideways variants).
+ *  All state weights are smoothed, so no transition snaps.
+ *  AnimState.lod: 1 = cheap cycle (sine legs, no gestures / reload hand path),
+ *  2 = off screen (only clocks advance).
+ */
+
+/** Ankle height above the sole (foot bone origin). */
+const ANK = 0.074;
+const HIPJ_Y = -0.04; // hip joint below the pelvis bone
+const HIPJ_Z = 0.095;
+const LEG = TH + SH;
+/** Stride (two steps) length in metres and stance fraction, walking / running. */
+const WALK_C = 1.45;
+const RUN_C = 2.15;
+const WALK_B = 0.6;
+const RUN_B = 0.36;
+/** Ground speed (m/s, model scale) where the walk starts turning into a run, and the width of the blend. */
+const RUN_V0 = 2.6;
+const RUN_DV = 1.6;
+/** Pelvis bone height in the kneel pose. */
+const KNEEL_Y = 0.556;
+const RELOAD_T = 0.72;
+const GEST_T = 2.1;
+
 interface Sol {
   def: SolDef;
   hips: THREE.Bone;
   spine: THREE.Bone;
+  chest: THREE.Bone;
+  neck: THREE.Bone;
   head: THREE.Bone;
+  clR: THREE.Bone;
+  clL: THREE.Bone;
   uaR: THREE.Bone;
   uaL: THREE.Bone;
   faR: THREE.Bone;
   faL: THREE.Bone;
+  hdR: THREE.Bone;
+  hdL: THREE.Bone;
   thR: THREE.Bone;
   thL: THREE.Bone;
   shR: THREE.Bone;
@@ -1104,13 +1197,18 @@ interface Sol {
   wpn: THREE.Bone | null;
   round: THREE.Bone | null;
   extra: THREE.Bone | null; // antenna / drone
+  /** Per-unit random in [0, 1) and its integer source (hashing). */
   seed: number;
+  sid: number;
+  /** AnimState.seed the seed was derived from (NaN = template counter). */
+  seedSrc: number;
+  salt: number;
   aimW: number;
   moveW: number;
   kneelW: number;
   /** Smoothed walk (0) -> run (1) blend. */
   runW: number;
-  /** Smoothed firing recoil impulse (0..1) and hit flinch timer / side. */
+  /** Firing recoil impulse (0..1) and hit flinch timer / side. */
   kickW: number;
   flinch: number;
   flinchDir: number;
@@ -1122,6 +1220,26 @@ interface Sol {
   hyaw: number;
   /** Parachute pose weight (1 = hanging under the canopy). */
   paraW: number;
+  /** Stride phase in cycles (left heel strike at integers). */
+  phase: number;
+  lastDist: number;
+  /** Shuffle-step weight while turning on the spot. */
+  turnW: number;
+  /** Smoothed acceleration lean. */
+  accL: number;
+  lastV: number;
+  /** Model metres per map tile (1 / (S * root scale)). */
+  mpt: number;
+  // weapon handling
+  prevFired: number;
+  shots: number;
+  mag: number;
+  reload: number; // seconds into the magazine swap (-1 = none)
+  reloadW: number;
+  crouch: boolean;
+  // idle life
+  lookY: number;
+  lookP: number;
 }
 
 const tmpA = new THREE.Vector3();
@@ -1129,19 +1247,28 @@ const tmpB = new THREE.Vector3();
 const tmpC = new THREE.Vector3();
 const tmpD = new THREE.Vector3();
 const tmpE = new THREE.Vector3();
+const tmpF = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
 const tmpQ2 = new THREE.Quaternion();
 const tmpM = new THREE.Matrix4();
 const tmpM2 = new THREE.Matrix4();
-const shR = new THREE.Vector3(SHOULDER[0], SHOULDER[1], SHOULDER[2]);
-const shL = new THREE.Vector3(SHOULDER[0], SHOULDER[1], -SHOULDER[2]);
+const CLAV_OFF_R = new THREE.Vector3(CLAV_UA[0], CLAV_UA[1], CLAV_UA[2]);
+const CLAV_OFF_L = new THREE.Vector3(CLAV_UA[0], CLAV_UA[1], -CLAV_UA[2]);
 const POLE_R = new THREE.Vector3(-0.35, -0.6, 1).normalize();
 const POLE_L = new THREE.Vector3(-0.1, -1, -0.55).normalize();
 const POLE_RC = new THREE.Vector3(-0.3, -1, 0.6).normalize();
 const POLE_LC = new THREE.Vector3(-0.3, -1, -0.6).normalize();
 
-/** Two-bone IK in the spine frame; hinge at the elbow (forearm rotation.z). */
-function ik(ua: THREE.Bone, fa: THREE.Bone, S0: THREE.Vector3, T: THREE.Vector3, pole: THREE.Vector3) {
+/**
+ * Two-bone arm IK in the chest frame: hand centre to T, elbow towards `pole`.
+ * The shoulder joint follows the clavicle; the upper arm's rotation is
+ * expressed relative to it (hinge at the elbow: forearm rotation.z).
+ */
+function ik(sol: Sol, sd: number, T: THREE.Vector3, pole: THREE.Vector3) {
+  const cl = sd > 0 ? sol.clR : sol.clL;
+  const ua = sd > 0 ? sol.uaR : sol.uaL;
+  const fa = sd > 0 ? sol.faR : sol.faL;
+  const S0 = tmpF.copy(sd > 0 ? CLAV_OFF_R : CLAV_OFF_L).applyQuaternion(cl.quaternion).add(cl.position);
   const a = UA;
   const b = FA;
   const d = tmpA.subVectors(T, S0);
@@ -1167,22 +1294,23 @@ function ik(ua: THREE.Bone, fa: THREE.Bone, S0: THREE.Vector3, T: THREE.Vector3,
   z.normalize();
   const x = tmpB.crossVectors(y, z).normalize();
   tmpM.makeBasis(x, y, z);
-  ua.quaternion.setFromRotationMatrix(tmpM);
+  ua.quaternion.setFromRotationMatrix(tmpM).premultiply(tmpQ2.copy(cl.quaternion).invert());
   fa.rotation.set(0, 0, Math.acos(clamp(u.dot(v), -1, 1)));
 }
 
+/** Arm hanging from its clavicle: swing (+ forward), abduction (+ out), elbow flex. */
 function freeArm(ua: THREE.Bone, fa: THREE.Bone, sd: number, swing: number, abduct: number, flex: number) {
   ua.rotation.set(-sd * abduct, 0, swing);
   fa.rotation.set(0, 0, flex);
 }
 
-/** Pose the weapon bone so its pivot sits at P (spine space) with the given yaw/pitch/roll. */
+/** Pose the weapon bone so its pivot sits at P (spine-frame numbers, chest space) with the given yaw/pitch/roll. */
 function placeWeapon(sol: Sol, w: WInfo, px: number, py: number, pz: number, pitch: number, yaw: number, roll: number, kick: number) {
   const wpn = sol.wpn!;
   _e.set(roll, yaw, pitch, 'YZX');
   wpn.quaternion.setFromEuler(_e);
   tmpA.copy(w.pivot).applyQuaternion(wpn.quaternion);
-  wpn.position.set(px, py, pz).sub(tmpA);
+  wpn.position.set(px, py - CH, pz).sub(tmpA);
   if (kick > 0) {
     tmpA.set(-0.04 * kick, 0, 0).applyQuaternion(wpn.quaternion);
     wpn.position.add(tmpA);
@@ -1193,92 +1321,233 @@ function handTargets(sol: Sol, w: WInfo, R: THREE.Vector3, L: THREE.Vector3) {
   R.copy(w.grip).applyQuaternion(wpn.quaternion).add(wpn.position);
   L.copy(w.fore).applyQuaternion(wpn.quaternion).add(wpn.position);
 }
-
-interface LegOut {
-  hp: number;
-  phase: number;
-  runK: number;
+/** Weapon-local point -> chest space. */
+function onWeapon(sol: Sol, x: number, y: number, z: number, out: THREE.Vector3) {
+  const wpn = sol.wpn!;
+  return out.set(x, y, z).applyQuaternion(wpn.quaternion).add(wpn.position);
 }
 
-/** Legs + hips: gait from s.dist, idle weight shift, kneel blend. Sets hips height so the lowest contact touches the ground. */
-function legs(sol: Sol, s: AnimState, t: number): LegOut {
+interface LegOut {
+  /** Pelvis pitch (rotation.z, + = back). */
+  hp: number;
+  /** Pelvis yaw twist and roll (soldier frame). */
+  tw: number;
+  roll: number;
+  /** Stride angle (radians): sin(phase) = +1 when the left foot is forward. */
+  phase: number;
+  runK: number;
+  /** Gait weight (moving or shuffling). */
+  gw: number;
+}
+const LO: LegOut = { hp: 0, tw: 0, roll: 0, phase: 0, runK: 0, gw: 0 };
+
+/** Per leg (L, R): thigh flex, knee, ankle, abduction. */
+const _ang = new Float32Array(8);
+/** Per leg (L, R): foot target x, y, z, ground pitch, planted. */
+const _ft = new Float32Array(10);
+const _hj = new THREE.Vector3();
+const _pq3 = new THREE.Quaternion();
+const _pe3 = new THREE.Euler(0, 0, 0, 'YXZ');
+
+/**
+ * Analytic two-bone leg IK, pelvis frame: ankle to (x, y, z), sole pitched by
+ * `fp` relative to the ground. Writes thigh / knee / ankle / abduction for leg i.
+ */
+function legIK(i: number, sd: number, x: number, y: number, z: number, fp: number, hp: number) {
+  const dy = y - HIPJ_Y;
+  const dz = z - sd * HIPJ_Z;
+  const abd = Math.atan2(-dz, -dy);
+  const dv = Math.sqrt(dy * dy + dz * dz);
+  const d = clamp(Math.sqrt(x * x + dv * dv), 0.3, LEG * 0.999);
+  const a = Math.atan2(x, dv);
+  const th = a + Math.acos(clamp((TH * TH + d * d - SH * SH) / (2 * TH * d), -1, 1));
+  const kn = Math.acos(clamp((TH * TH + SH * SH - d * d) / (2 * TH * SH), -1, 1)) - PI;
+  _ang[i * 4] = th;
+  _ang[i * 4 + 1] = kn;
+  _ang[i * 4 + 2] = fp - hp - th - kn;
+  _ang[i * 4 + 3] = abd;
+}
+
+/**
+ * Legs + pelvis. Full LOD: foot targets (stance / swing curves, idle stance,
+ * weight shift) solved with IK; cheap LOD: sine leg angles. Then the kneel
+ * blend. Sets the pelvis bone and the leg bones, returns pelvis attitude.
+ */
+function legs(sol: Sol, s: AnimState, t: number, dt: number, lod: number): LegOut {
   const mw = sol.moveW;
   const kw = sol.kneelW;
-  // walk <-> run blend follows the ground speed smoothly (no pops on speed changes)
-  const runT = s.moving ? clamp((s.speed - 0.55) / 0.55, 0, 1) : 0;
-  sol.runW = s.dt === 0 && s.time === 0 ? runT : approach(sol.runW, runT, clamp(s.dt, 0, 0.1), 5);
-  const runK = sol.runW;
-  const ph = (s.dist / 0.17) * PI;
-  const A = mix(0.42, 0.62, runK) * mw;
-  const kb = mix(0.06, 0.16, runK);
-  const kf = mix(0.8, 1.45, runK);
-  const shift = Math.sin(t * 0.45 + sol.seed * 6);
-  const ang = [0, 0, 0, 0, 0, 0]; // thL shL ftL thR shR ftR (world-ish angles)
-  for (let i = 0; i < 2; i++) {
-    const p = ph + i * PI;
-    const sw = Math.max(0, Math.cos(p));
-    const thG = A * Math.sin(p) + 0.12 * runK * mw;
-    const knG = -(kb + kf * Math.pow(sw, 1.3) + 0.35 * runK * Math.max(0, -Math.sin(p))) * mw;
-    // idle: one relaxed knee
-    const relax = (i === 0 ? Math.max(0, shift) : Math.max(0, -shift)) * (1 - mw);
-    let th = thG + (i === 0 ? 0.04 : -0.02) * (1 - mw) + relax * 0.1;
-    let kn = knG - relax * 0.18 - 0.03 * (1 - mw);
-    let ft = -(th + kn) - 0.35 * sw * mw;
-    if (kw > 0) {
-      // kneeling on the right knee, left foot forward
-      const kth = i === 0 ? 1.57 : 0.06;
-      const kkn = i === 0 ? -1.62 : -1.62;
-      const kft = i === 0 ? 0.05 : 0.0;
-      th = mix(th, kth, kw);
-      kn = mix(kn, kkn, kw);
-      ft = mix(ft, kft, kw);
+  const init = dt === 0 && s.time === 0;
+  // stride phase from the distance really covered (model metres)
+  let dd = s.dist - sol.lastDist;
+  sol.lastDist = s.dist;
+  if (!(dd >= 0 && dd < 1)) dd = 0;
+  const vm = s.speed * sol.mpt;
+  const runT = s.moving ? clamp((vm - RUN_V0) / RUN_DV, 0, 1) : 0;
+  sol.runW = init ? runT : approach(sol.runW, runT, dt, 4);
+  const rk = sol.runW;
+  const C = mix(WALK_C, RUN_C, rk);
+  const B = mix(WALK_B, RUN_B, rk);
+  // turning on the spot: little steps in place
+  const tw0 = (1 - mw) * (1 - kw) * clamp((Math.abs(s.turn) - 0.7) / 1.5, 0, 1);
+  sol.turnW = init ? 0 : approach(sol.turnW, tw0, dt, 6);
+  sol.phase += (dd * sol.mpt) / C + dt * 1.8 * sol.turnW;
+  if (sol.phase > 4096) sol.phase -= 4096;
+  const gw = Math.max(mw, sol.turnW * 0.75);
+  // acceleration lean (speed up: forward, brake: back)
+  if (dt > 0) {
+    const acc = clamp((vm - sol.lastV) / dt, -12, 12);
+    sol.accL = approach(sol.accL, acc, dt, 5);
+  }
+  sol.lastV = vm;
+
+  const ph = sol.phase;
+  const cyc = 2 * PI * ph;
+  const ms = cyc - PI * B; // 0 at left mid-stance
+  const cms = Math.cos(ms);
+  // idle weight shift (slow, per-unit period): + = weight on the right leg, left knee relaxed
+  const shift = Math.sin(t * (0.32 + 0.22 * sol.seed) + sol.seed * 6) * (1 - mw) * (1 - kw);
+  const relaxL = Math.max(0, shift);
+  const relaxR = Math.max(0, -shift);
+  // pelvis attitude
+  const hp = -mix(0.04, 0.2, rk) * mw * (1 - kw);
+  const tw = -Math.cos(cyc) * mix(0.11, 0.16, rk) * mw;
+  const roll = cms * mix(0.05, 0.028, rk) * gw - 0.045 * shift;
+  const sway = -cms * mix(0.026, 0.01, rk) * gw + 0.02 * shift;
+  let py = mix(0.972, mix(0.95, 0.905, rk) + Math.cos(2 * ms) * mix(0.02, -0.03, rk) * gw, gw);
+  let px = 0.012 * gw;
+
+  if (lod === 0) {
+    // ---- foot targets (soldier frame)
+    const h = 0.5 * C * B * mw;
+    const lift = mix(0.1, 0.25, rk) * gw;
+    const off = mix(0.5, 0.38, rk);
+    for (let i = 0; i < 2; i++) {
+      const sd = i === 0 ? -1 : 1;
+      let u = ph + i * 0.5;
+      u -= Math.floor(u);
+      let fx: number;
+      let fy: number;
+      let fp: number;
+      let planted: number;
+      if (u < B) {
+        const k = u / B;
+        fx = h * (1 - 2 * k);
+        const heel = (1 - sstep(0, 0.22, k)) * 0.2 * (1 - rk);
+        const roll2 = sstep(0.6, 1, k) * off;
+        fp = heel - roll2;
+        fy = ANK + 0.13 * Math.sin(roll2);
+        planted = 1;
+      } else {
+        const k = (u - B) / (1 - B);
+        const e = k * k * (3 - 2 * k);
+        fx = h * (2 * e - 1);
+        const kl = rk > 0.01 ? Math.pow(k, 1 - 0.38 * rk) : k;
+        fy = ANK + lift * Math.sin(PI * kl) + 0.13 * Math.sin(off) * (1 - sstep(0, 0.3, k));
+        fp = mix(-off, 0.2 * (1 - rk), sstep(0, 0.8, k));
+        planted = 0;
+      }
+      const relax = i === 0 ? relaxL : relaxR;
+      const ix = (i === 0 ? 0.035 : -0.025) + 0.05 * relax;
+      const iz = sd * (0.112 + 0.025 * relax);
+      _ft[i * 5] = mix(ix, fx, gw);
+      _ft[i * 5 + 1] = mix(ANK, fy, gw);
+      _ft[i * 5 + 2] = mix(iz, sd * 0.1, gw);
+      _ft[i * 5 + 3] = fp * gw + 0.06 * relax;
+      _ft[i * 5 + 4] = mix(1, planted, gw);
     }
-    ang[i * 3] = th;
-    ang[i * 3 + 1] = kn;
-    ang[i * 3 + 2] = ft;
+    // pelvis rotation (no home yaw): hip joints in the soldier frame
+    _pq3.setFromEuler(_pe3.set(roll, tw, hp, 'YXZ'));
+    // a planted foot must reach: drop the pelvis if needed
+    for (let i = 0; i < 2; i++) {
+      if (_ft[i * 5 + 4] < 0.5) continue;
+      const sd = i === 0 ? -1 : 1;
+      _hj.set(0, HIPJ_Y, sd * HIPJ_Z).applyQuaternion(_pq3);
+      const dx = _ft[i * 5] - (px + _hj.x);
+      const dz = _ft[i * 5 + 2] - (sway + _hj.z);
+      const r2 = LEG * LEG * 0.97 - dx * dx - dz * dz;
+      const ymax = _ft[i * 5 + 1] + Math.sqrt(Math.max(0.04, r2)) - _hj.y;
+      if (py > ymax) py = ymax;
+    }
+    // IK in the pelvis frame
+    _pq3.invert();
+    for (let i = 0; i < 2; i++) {
+      tmpA.set(_ft[i * 5] - px, _ft[i * 5 + 1] - py, _ft[i * 5 + 2] - sway).applyQuaternion(_pq3);
+      legIK(i, i === 0 ? -1 : 1, tmpA.x, tmpA.y, tmpA.z, _ft[i * 5 + 3], hp);
+    }
+  } else {
+    // ---- cheap cycle: sine angles, pelvis height from the lowest contact
+    const A = mix(0.42, 0.62, rk) * mw;
+    const kb = mix(0.06, 0.16, rk);
+    const kf = mix(0.8, 1.45, rk);
+    let hy = 0;
+    for (let i = 0; i < 2; i++) {
+      const p = cyc + PI / 2 + i * PI;
+      const sw = Math.max(0, Math.cos(p));
+      const relax = i === 0 ? relaxL : relaxR;
+      const th = A * Math.sin(p) + 0.12 * rk * mw + (i === 0 ? 0.04 : -0.02) * (1 - mw) + relax * 0.1;
+      const kn = -(kb + kf * Math.pow(sw, 1.3) + 0.35 * rk * Math.max(0, -Math.sin(p))) * gw - relax * 0.18 - 0.03 * (1 - mw);
+      _ang[i * 4] = th - hp;
+      _ang[i * 4 + 1] = kn;
+      _ang[i * 4 + 2] = -(th + kn) - 0.35 * sw * mw;
+      _ang[i * 4 + 3] = (i === 0 ? 0.05 : -0.05) * (1 - mw);
+      const knee = 0.04 + TH * Math.cos(th);
+      hy = Math.max(hy, knee + SH * Math.cos(th + kn) + 0.072, knee + 0.05);
+    }
+    py = hy + 0.01 * rk * mw * Math.abs(Math.sin(cyc));
+    px = 0;
   }
-  const hp = -0.2 * runK * mw;
-  let hy = 0;
-  for (let i = 0; i < 2; i++) {
-    const a1 = ang[i * 3];
-    const a2 = a1 + ang[i * 3 + 1];
-    const knee = 0.04 + TH * Math.cos(a1);
-    hy = Math.max(hy, knee + SH * Math.cos(a2) + 0.072, knee + 0.05);
+
+  if (kw > 0.001) {
+    // kneeling on the right knee, left foot forward
+    for (let i = 0; i < 2; i++) {
+      _ang[i * 4] = mix(_ang[i * 4], i === 0 ? 1.57 : 0.06, kw);
+      _ang[i * 4 + 1] = mix(_ang[i * 4 + 1], -1.62, kw);
+      _ang[i * 4 + 2] = mix(_ang[i * 4 + 2], i === 0 ? 0.05 : 0, kw);
+      _ang[i * 4 + 3] = mix(_ang[i * 4 + 3], i === 0 ? 0.05 : -0.05, kw);
+    }
+    py = mix(py, KNEEL_Y, kw);
+    px *= 1 - kw;
   }
-  sol.thL.rotation.set(0.05 * (1 - kw), 0, ang[0] - hp);
-  sol.shL.rotation.set(0, 0, ang[1]);
-  sol.ftL.rotation.set(0, 0, ang[2]);
-  sol.thR.rotation.set(-0.05 * (1 - kw), 0, ang[3] - hp);
-  sol.shR.rotation.set(0, 0, ang[4]);
-  sol.ftR.rotation.set(0, 0, ang[5]);
-  const sway = 0.018 * shift * (1 - mw) * (1 - kw);
+  sol.thL.rotation.set(_ang[3], 0, _ang[0]);
+  sol.shL.rotation.set(0, 0, _ang[1]);
+  sol.ftL.rotation.set(-_ang[3] * 0.8, 0, _ang[2]);
+  sol.thR.rotation.set(_ang[7], 0, _ang[4]);
+  sol.shR.rotation.set(0, 0, _ang[5]);
+  sol.ftR.rotation.set(-_ang[7] * 0.8, 0, _ang[6]);
+
   const c = Math.cos(sol.hyaw);
   const sn = Math.sin(sol.hyaw);
-  // weight shift is lateral (soldier's +Z)
-  sol.hips.position.set(sol.hx + sn * sway, hy + 0.01 * runK * mw * Math.abs(Math.sin(ph)), sol.hz + c * sway);
-  sol.hips.rotation.set(-0.03 * shift * (1 - mw) * (1 - kw), sol.hyaw + 0.09 * Math.sin(ph) * mw, hp);
-  return { hp, phase: ph, runK };
+  const sw2 = sway * (1 - kw);
+  sol.hips.position.set(sol.hx + c * px + sn * sw2, py, sol.hz - sn * px + c * sw2);
+  sol.hips.rotation.set(roll * (1 - kw), sol.hyaw + tw * (1 - kw), hp);
+  LO.hp = hp;
+  LO.tw = tw * (1 - kw);
+  LO.roll = roll * (1 - kw);
+  LO.phase = cyc + PI / 2;
+  LO.runK = rk;
+  LO.gw = gw;
+  return LO;
 }
 
 function solBones(sol: Sol): THREE.Object3D[] {
-  const b: THREE.Object3D[] = [sol.hips, sol.spine, sol.head, sol.uaR, sol.uaL, sol.faR, sol.faL, sol.thR, sol.thL, sol.shR, sol.shL, sol.ftR, sol.ftL];
+  const b: THREE.Object3D[] = [sol.hips, sol.spine, sol.chest, sol.neck, sol.head, sol.clR, sol.clL, sol.uaR, sol.uaL, sol.faR, sol.faL, sol.hdR, sol.hdL, sol.thR, sol.thL, sol.shR, sol.shL, sol.ftR, sol.ftL];
   if (sol.wpn) b.push(sol.wpn);
   return b;
 }
 
 /**
- * Death animation: three deterministic variations per soldier (thrown back,
- * pitched forward, knees buckle and topple sideways), blended in from the
- * pose the soldier was in when hit.
+ * Death: knees buckle under the body's weight, then a gravity-accelerated
+ * topple, impact bounce and lagging limbs that flop and settle; three
+ * deterministic variations per soldier (face down, on the back, on the side),
+ * blended in from the pose the soldier was in when hit.
  */
 function deathPose(sol: Sol, d: number) {
   if (!sol.snap) {
     const bones = solBones(sol);
     sol.snap = { q: bones.map((o) => o.quaternion.clone()), hp: sol.hips.position.clone(), wp: sol.wpn ? sol.wpn.position.clone() : null };
   }
-  if (sol.seed >= 0.7) crumplePose(sol, d);
-  else fallPose(sol, d);
-  const b = sstep(0, 0.22, d);
+  ragdoll(sol, d);
+  const b = sstep(0, 0.18, d);
   if (b < 1) {
     const bones = solBones(sol);
     const sn = sol.snap;
@@ -1288,68 +1557,106 @@ function deathPose(sol: Sol, d: number) {
   }
 }
 
-/** Knees buckle, the soldier slumps onto them, then topples onto his side. */
-function crumplePose(sol: Sol, d: number) {
-  const side = sol.seed > 0.85 ? 1 : -1;
-  const k1 = sstep(0, 0.42, d); // buckle to the knees
-  const k2 = sstep(0.38, 0.95, d); // topple
-  const settle = d > 0.95 ? Math.sin(clamp((d - 0.95) / 0.22, 0, 1) * PI) * 0.05 : 0;
-  // legs: kneel, then curl up on the ground
-  const th = mix(1.45 * k1, 1.05, k2);
-  const kn = mix(-2.1 * k1, -1.5, k2);
-  sol.thL.rotation.set(0.06, 0, th * 0.92);
-  sol.thR.rotation.set(-0.06, 0, th);
-  sol.shL.rotation.set(0, 0, kn);
-  sol.shR.rotation.set(0, 0, kn * 1.03);
-  sol.ftL.rotation.set(0, 0, mix(0.3 * k1, 0.45, k2));
-  sol.ftR.rotation.set(0, 0, mix(0.3 * k1, 0.5, k2));
-  const hy = mix(mix(0.95, 0.5, k1), 0.2, k2) + settle * 0.2;
-  const off = 0.24 * k2 * side;
-  const back = -0.12 * k1;
-  const c = Math.cos(sol.hyaw);
-  const sn = Math.sin(sol.hyaw);
-  sol.hips.position.set(sol.hx + sn * off + c * back, hy, sol.hz + c * off - sn * back);
-  // body slumps forward over the knees, then rolls onto its side
-  sol.hips.rotation.set(side * (PI / 2) * 0.92 * k2 + settle * side, sol.hyaw + 0.15 * k2 * side, -0.35 * k1 * (1 - k2) - 0.2 * k2);
-  sol.spine.rotation.set(0.08 * k2 * side, 0.1 * k2, -0.45 * k1 + 0.15 * k2);
-  sol.spine.scale.set(1, 1, 1);
-  sol.head.rotation.set(0.35 * k2 * side, 0.2 * k2, -0.5 * k1 + 0.25 * k2);
-  // arms hang limp, then sprawl
-  freeArm(sol.uaR, sol.faR, 1, mix(0.25 * k1, 0.9, k2), mix(0.12, 0.3, k2), mix(0.2 + 0.3 * k1, 0.9, k2));
-  freeArm(sol.uaL, sol.faL, -1, mix(0.3 * k1, 0.6, k2), mix(0.12, 0.45 + 0.4 * k2, k2), mix(0.2 + 0.2 * k1, 0.5, k2));
-  dropWeapon(sol, d, side > 0);
-}
+/** Final lying leg pose per variant: L thigh, knee, ankle, abduction, then R. */
+const LIE_LEGS = [
+  [0.05, -0.35, -0.9, 0.06, 0.12, -0.7, -0.8, -0.3], // face down, right leg drawn out
+  [0.3, -0.55, 0.25, 0.1, 0.06, -0.18, 0.15, -0.16], // on the back, left knee up a little
+  [0.95, -1.25, 0.3, 0.05, 0.6, -0.9, 0.25, -0.05], // on the side, curled
+];
+/** Final arm pose per variant: R swing, abduction, flex, then L. */
+const LIE_ARMS = [
+  [2.5, 0.45, 0.35, -0.15, 0.3, 0.25],
+  [0.25, 1.3, 0.5, 0.45, 0.9, 0.9],
+  [0.95, 0.3, 1.05, 0.6, 0.2, 1.25],
+];
 
-function fallPose(sol: Sol, d: number) {
-  const back = sol.seed < 0.36;
-  const dir = back ? 1 : -1;
-  const k1 = sstep(0, 0.28, d);
-  const kf = clamp((d - 0.12) / 0.55, 0, 1);
-  const k2 = kf * kf * (3 - 2 * kf) * 0.35 + kf * kf * 0.65;
-  const settle = d > 0.67 ? Math.sin(clamp((d - 0.67) / 0.25, 0, 1) * PI) * 0.06 : 0;
-  // legs: buckle, then relax on the ground
-  const thA = mix(0.95 * k1, back ? 0.15 : -0.1, k2);
-  const knA = mix(-1.6 * k1, back ? -0.35 : -0.25, k2);
-  sol.thL.rotation.set(0.08, 0, thA);
-  sol.thR.rotation.set(-0.12, 0, thA * (back ? 0.6 : 1.2));
-  sol.shL.rotation.set(0, 0, knA);
-  sol.shR.rotation.set(0, 0, knA * 0.5);
-  sol.ftL.rotation.set(0, 0, 0.5 * k2);
-  sol.ftR.rotation.set(0, 0, 0.6 * k2);
-  const hy = mix(mix(0.95, 0.6, k1), back ? 0.15 : 0.17, k2) + settle * 0.3;
-  const off = mix(0, back ? -0.3 : 0.28, k2);
+function ragdoll(sol: Sol, d: number) {
+  const v = sol.seed < 0.4 ? 0 : sol.seed < 0.72 ? 1 : 2;
+  const side = hashSeed(sol.sid * 13 + 5) > 0.5 ? 1 : -1;
+  const j = hashSeed(sol.sid * 17 + 3);
+  // phase 1: the knees give (free fall of the pelvis, eased in), phase 2: topple (accelerating), then impact
+  const tb = 0.24 + 0.1 * j;
+  const kb = clamp(d / tb, 0, 1);
+  const kb2 = kb * kb;
+  const t0 = tb * 0.55;
+  const tt = 0.4 + 0.08 * j;
+  const kt = clamp((d - t0) / tt, 0, 1);
+  const kt2 = kt * kt;
+  const imp = t0 + tt;
+  const af = d - imp;
+  const bounce = af > 0 ? Math.exp(-af * 8) * Math.sin(af * 19) : 0;
+  const ktl = clamp((d - t0 - 0.08) / tt, 0, 1);
+  const kl = ktl * ktl;
+  const al = af - 0.08;
+  const flop = al > 0 ? Math.exp(-al * 6.5) * Math.sin(al * 16) : 0;
   const c = Math.cos(sol.hyaw);
   const sn = Math.sin(sol.hyaw);
-  sol.hips.position.set(sol.hx + c * off, hy, sol.hz - sn * off);
-  sol.hips.rotation.set(0.15 * k2 * (sol.seed - 0.5), sol.hyaw + 0.3 * k2 * (sol.seed - 0.5), (-0.25 * k1 * (1 - k2) + dir * (PI / 2) * k2) * 1 + settle * dir);
-  sol.spine.rotation.set(0.1 * k2, 0.2 * (sol.seed - 0.5) * k2, -0.2 * k1 * (1 - k2) + (back ? 0.12 : -0.05) * k2);
-  sol.spine.scale.set(1, 1, 1);
-  sol.head.rotation.set(0, (sol.seed - 0.5) * 1.4 * k2, (back ? 0.3 : 0.1) * k2 - 0.3 * k1 * (1 - k2));
-  // arms flail
-  const flail = Math.sin(d * 9) * (1 - k2) * k1 * 0.3;
-  freeArm(sol.uaR, sol.faR, 1, mix(0.45 * k1 + flail, back ? 0.15 : -0.1, k2), mix(0.15 + 0.4 * k1, back ? 1.25 : 0.9, k2), mix(0.3 + 0.6 * k1, back ? 0.5 : 0.25, k2));
-  freeArm(sol.uaL, sol.faL, -1, mix(0.6 * k1 - flail, back ? 0.3 : 0.05, k2), mix(0.15 + 0.3 * k1, back ? 0.55 : 0.35, k2), mix(0.3 + 0.7 * k1, back ? 0.9 : 0.2, k2));
-  dropWeapon(sol, d, back);
+
+  // ---- pelvis (soldier frame)
+  let hx = 0;
+  let hy: number;
+  let hz = 0;
+  let rx = 0;
+  let ry = 0;
+  let rz: number;
+  if (v === 0) {
+    // face down: slump forward over the buckling knees, pitch onto the chest
+    hy = mix(mix(0.97, 0.55, kb2), 0.15, kt2) + 0.03 * Math.max(0, bounce);
+    hx = mix(0.05 * kb, 0.36, sstep(0, 1, kt));
+    rz = mix(-0.4 * kb, -PI / 2 + 0.07, kt2) + 0.05 * bounce;
+    rx = side * 0.12 * kt;
+    ry = side * 0.22 * kt;
+  } else if (v === 1) {
+    // thrown back: sit down hard, then onto the back
+    hy = mix(mix(0.97, 0.5, kb2), 0.14, kt2) + 0.03 * Math.max(0, bounce);
+    hx = mix(-0.08 * kb, -0.32, sstep(0, 1, kt));
+    rz = mix(0.12 * kb, PI / 2 - 0.08, kt2) - 0.05 * bounce;
+    ry = side * 0.25 * kt;
+  } else {
+    // crumple: knees fold, twist and roll onto the side
+    hy = mix(mix(0.97, 0.52, kb2), 0.17, kt2) + 0.025 * Math.max(0, bounce);
+    hz = side * 0.24 * sstep(0, 1, kt);
+    hx = -0.08 * kt;
+    rx = side * mix(0.12 * kb, PI / 2 - 0.12, kt2) + side * 0.05 * bounce;
+    rz = mix(-0.35 * kb, -0.3, kt);
+    ry = side * 0.3 * kt;
+  }
+  sol.hips.position.set(sol.hx + c * hx + sn * hz, hy, sol.hz - sn * hx + c * hz);
+  sol.hips.rotation.set(rx, sol.hyaw + ry, rz);
+
+  // ---- legs: IK to the planted feet while the knees give, then the lying pose
+  _pq3.setFromEuler(_pe3.set(rx, ry, rz, 'YXZ')).invert();
+  for (let i = 0; i < 2; i++) {
+    const sd = i === 0 ? -1 : 1;
+    tmpA.set((i === 0 ? 0.04 : -0.03) - hx, ANK - hy, sd * 0.12 - hz).applyQuaternion(_pq3);
+    legIK(i, sd, tmpA.x, tmpA.y, tmpA.z, 0, rz);
+  }
+  const lie = LIE_LEGS[v];
+  const kL = sstep(0, 1, kt) * (1 - 0.15 * flop);
+  for (let k = 0; k < 8; k++) _ang[k] = mix(_ang[k], lie[k], kL);
+  sol.thL.rotation.set(_ang[3], 0, _ang[0]);
+  sol.shL.rotation.set(0, 0, _ang[1] - 0.12 * flop);
+  sol.ftL.rotation.set(0, 0, _ang[2]);
+  sol.thR.rotation.set(_ang[7], 0, _ang[4]);
+  sol.shR.rotation.set(0, 0, _ang[5] - 0.1 * flop);
+  sol.ftR.rotation.set(0, 0, _ang[6]);
+
+  // ---- torso and head (head lags, whips on impact, ends turned to the side)
+  const slump = v === 0 ? -0.3 : v === 1 ? 0.15 : -0.35;
+  sol.spine.rotation.set(0.06 * side * kt, 0.08 * side * kt, mix(slump * kb, v === 2 ? -0.25 : 0.04, kt));
+  sol.chest.rotation.set(0.05 * side * kt, 0.1 * side * kt, mix(slump * 0.8 * kb, v === 2 ? -0.2 : 0.02, kt) - 0.12 * flop);
+  sol.clR.rotation.set(0, 0, 0);
+  sol.clL.rotation.set(0, 0, 0);
+  sol.neck.rotation.set(0, side * 0.4 * kl, -0.25 * kb * (1 - kl));
+  sol.head.rotation.set(side * 0.25 * kl, side * (v === 1 ? 0.5 : 0.75) * kl, (v === 0 ? 0.35 : v === 1 ? 0.15 : 0.1) * kl - 0.35 * kb * (1 - kl) + 0.45 * flop);
+  // ---- arms: thrown up as the knees give, trail the body down, flop on impact
+  const la = LIE_ARMS[v];
+  const reach = kb * (1 - kl);
+  freeArm(sol.uaR, sol.faR, 1, mix(0.15 + 0.7 * reach * (v === 1 ? 0.6 : 1), la[0], kl) + 0.4 * flop, mix(0.15 + 0.3 * reach, la[1], kl), mix(0.25 + 0.6 * reach, la[2], kl) + 0.3 * flop);
+  freeArm(sol.uaL, sol.faL, -1, mix(0.1 + 0.5 * reach, la[3], kl) - 0.3 * flop, mix(0.15 + 0.4 * reach, la[4], kl), mix(0.3 + 0.5 * reach, la[5], kl) + 0.25 * flop);
+  sol.hdR.rotation.set(0, 0, 0.35 * kl);
+  sol.hdL.rotation.set(0, 0, 0.25 * kl);
+  dropWeapon(sol, d, v === 1 || (v === 2 && side > 0));
 }
 
 /** The weapon leaves the hands and lies beside the body. */
@@ -1364,7 +1671,7 @@ function dropWeapon(sol: Sol, d: number, back: boolean) {
     else tmpM.makeBasis(tmpA.set(0, 1, 0), tmpB.set(0, 0, -1), tmpC.set(-1, 0, 0));
     tmpQ.setFromRotationMatrix(tmpM);
     sol.wpn.quaternion.slerp(tmpQ, kw);
-    tmpD.set(back ? -0.11 : 0.12, 0.15, 0.46).sub(tmpA.copy(w.grip).applyQuaternion(tmpQ));
+    tmpD.set(back ? -0.11 : 0.12, 0.15 - CH, 0.46).sub(tmpA.copy(w.grip).applyQuaternion(tmpQ));
     sol.wpn.position.lerp(tmpD, kw);
   }
   if (sol.round) sol.round.scale.setScalar(1);
@@ -1391,7 +1698,7 @@ function bindInstance(t: Tpl): { top: THREE.Group; map: Map<string, THREE.Object
 }
 
 let solSeq = 0;
-/** Deterministic per-instance seed in [0, 1) (death variation, idle phase). */
+/** Deterministic hash of an integer to [0, 1) (death variation, idle phase, gestures). */
 function hashSeed(n: number): number {
   let x = (n * 0x9e3779b1 + 0x7f4a7c15) | 0;
   x = Math.imul(x ^ (x >>> 16), 0x85ebca6b);
@@ -1400,19 +1707,34 @@ function hashSeed(n: number): number {
   return (x >>> 0) / 4294967296;
 }
 
-function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
+/** (Re)derive every per-unit random from an integer source. */
+function reseed(sol: Sol, n: number) {
+  sol.sid = (n * 2 + sol.salt) | 0;
+  sol.seed = hashSeed(sol.sid);
+  sol.mag = 4 + Math.floor(hashSeed(sol.sid * 3 + 1) * 4);
+  const role = sol.def.role;
+  sol.crouch = hashSeed(sol.sid * 5 + 2) < (role === 'at' ? 0.75 : role === 'rifle' ? 0.4 : role === 'ew' ? 0.3 : 0);
+}
+
+function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): Sol {
   const g = (n: string) => map.get(def.p + n) as THREE.Bone;
   // hips: yaw outermost, so rotation.x is a body-local sideways roll (crumple death)
   g('hips').rotation.order = 'YXZ';
-  return {
+  const sol: Sol = {
     def,
     hips: g('hips'),
     spine: g('spine'),
+    chest: g('chest'),
+    neck: g('neck'),
     head: g('head'),
+    clR: g('clR'),
+    clL: g('clL'),
     uaR: g('uaR'),
     uaL: g('uaL'),
     faR: g('faR'),
     faL: g('faL'),
+    hdR: g('hdR'),
+    hdL: g('hdL'),
     thR: g('thR'),
     thL: g('thL'),
     shR: g('shR'),
@@ -1422,7 +1744,10 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
     wpn: (map.get(def.p + 'wpn') as THREE.Bone) ?? (map.get(def.p + 'bomb') as THREE.Bone) ?? null,
     round: (map.get(def.p + 'round') as THREE.Bone) ?? null,
     extra: (map.get(def.p + 'ant') as THREE.Bone) ?? (map.get(def.p + 'drone') as THREE.Bone) ?? null,
-    seed: hashSeed(solSeq++),
+    seed: 0,
+    sid: 0,
+    seedSrc: NaN,
+    salt,
     aimW: 0,
     moveW: 0,
     kneelW: 0,
@@ -1436,14 +1761,42 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
     hz: def.z,
     hyaw: def.yaw,
     paraW: 0,
+    phase: 0,
+    lastDist: 0,
+    turnW: 0,
+    accL: 0,
+    lastV: 0,
+    mpt: 1 / (S * 1.4),
+    prevFired: Infinity,
+    shots: 0,
+    mag: 5,
+    reload: -1,
+    reloadW: 0,
+    crouch: false,
+    lookY: 0,
+    lookP: 0,
   };
+  reseed(sol, 100000 + solSeq++);
+  return sol;
+}
+
+/** Pick up the renderer's per-unit seed (entity id) once it is known. */
+function seedFrom(sol: Sol, s: AnimState) {
+  const n = s.seed;
+  if (n !== undefined && n !== sol.seedSrc) {
+    sol.seedSrc = n;
+    reseed(sol, n);
+    sol.phase = sol.seed;
+  }
 }
 
 const RT = new THREE.Vector3();
 const LT = new THREE.Vector3();
+const GT = new THREE.Vector3();
 
 /** One soldier (rifle / at / engineer / fpv / ew), blended into the parachute pose while under a canopy. */
 function animSoldier(sol: Sol, s: AnimState) {
+  seedFrom(sol, s);
   animSoldierBase(sol, s);
   const dig = s.dead > 0 ? 0 : (s.dig ?? 0);
   if (dig > 0 && dig < DIG_T) digPose(sol, dig);
@@ -1471,7 +1824,8 @@ function digPose(sol: Sol, dig: number) {
   // stroke: quick chop down, slower lift (about 1.7 strokes per second)
   const ph = (dig * 1.7) % 1;
   const c = ph < 0.35 ? sstep(0, 0.35, ph) : 1 - sstep(0.35, 1, ph);
-  sol.spine.rotation.z += (-0.32 - 0.22 * c) * k;
+  sol.spine.rotation.z += (-0.18 - 0.1 * c) * k;
+  sol.chest.rotation.z += (-0.14 - 0.12 * c) * k;
   sol.head.rotation.z += 0.12 * k;
   _dq[0].copy(sol.uaR.quaternion);
   _dq[1].copy(sol.faR.quaternion);
@@ -1485,11 +1839,11 @@ function digPose(sol: Sol, dig: number) {
     sol.wpn.position.lerp(_dwp, 1 - k);
     sol.wpn.quaternion.slerp(_dwq, 1 - k);
   }
-  // hands (spine space): raised by the chest -> down at the ground in front
-  RT.set(mix(0.3, 0.52, c), mix(0.12, -0.3, c), 0.07);
-  LT.set(mix(0.22, 0.42, c), mix(0.26, -0.1, c), -0.03);
-  ik(sol.uaR, sol.faR, shR, RT, POLE_DIG);
-  ik(sol.uaL, sol.faL, shL, LT, POLE_LC);
+  // hands (spine-frame numbers): raised by the chest -> down at the ground in front
+  RT.set(mix(0.3, 0.52, c), mix(0.12, -0.3, c) - CH, 0.07);
+  LT.set(mix(0.22, 0.42, c), mix(0.26, -0.1, c) - CH, -0.03);
+  ik(sol, 1, RT, POLE_DIG);
+  ik(sol, -1, LT, POLE_LC);
   blendFrom(sol.uaR, _dq[0], k);
   blendFrom(sol.faR, _dq[1], k);
   blendFrom(sol.uaL, _dq[2], k);
@@ -1524,12 +1878,16 @@ function paraPose(sol: Sol, k: number, t: number) {
   blendBone(sol.shR, 0, 0, -0.46, k);
   blendBone(sol.ftL, 0, 0, -0.3, k);
   blendBone(sol.ftR, 0, 0, -0.24, k);
+  blendBone(sol.clR, -0.18, 0, 0, k);
+  blendBone(sol.clL, 0.18, 0, 0, k);
   blendBone(sol.uaR, -0.32, 0, 2.7, k);
   blendBone(sol.faR, 0, 0, 0.4, k);
   blendBone(sol.uaL, 0.32, 0, 2.7, k);
   blendBone(sol.faL, 0, 0, 0.4, k);
-  blendBone(sol.spine, 0, 0, 0.08, k);
-  blendBone(sol.head, 0, 0, -0.3, k);
+  blendBone(sol.spine, 0, 0, 0.05, k);
+  blendBone(sol.chest, 0, 0, 0.03, k);
+  blendBone(sol.neck, 0, 0, -0.12, k);
+  blendBone(sol.head, 0, 0, -0.18, k);
   const w = sol.def.w;
   if (w && sol.wpn) {
     _wp.copy(sol.wpn.position);
@@ -1540,17 +1898,51 @@ function paraPose(sol: Sol, k: number, t: number) {
   }
 }
 
+/** Shot counting and the magazine-swap timer (purely visual). */
+function trackShots(sol: Sol, s: AnimState, dt: number) {
+  const f = s.fired;
+  if (f < sol.prevFired - 1e-3 && f < 0.25) {
+    // a new shot: abandon a reload in progress
+    sol.reload = -1;
+    sol.shots++;
+  }
+  sol.prevFired = f;
+  if (sol.reload < 0 && sol.shots >= sol.mag && f > 0.1 && f < 0.25) {
+    sol.reload = 0;
+    sol.shots = 0;
+  }
+  if (sol.reload >= 0) {
+    sol.reload += dt;
+    if (sol.reload > RELOAD_T) sol.reload = -1;
+  }
+  const on = sol.reload >= 0 && sol.reload < RELOAD_T - 0.12;
+  sol.reloadW = dt === 0 && s.time === 0 ? 0 : approach(sol.reloadW, on ? 1 : 0, dt, on ? 16 : 12);
+}
+
+/** Left hand path of the magazine swap (chest space): magwell -> pouch -> magwell -> charging handle -> handguard. */
+function reloadHand(sol: Sol, r: number, out: THREE.Vector3) {
+  const t = clamp(sol.reload < 0 ? RELOAD_T : sol.reload, 0, RELOAD_T) / RELOAD_T;
+  const well = onWeapon(sol, 0.07, -0.07, -0.02, tmpC);
+  if (t < 0.2) out.lerp(well, sstep(0, 0.2, t) * r);
+  else if (t < 0.42) out.lerp(tmpD.copy(well).lerp(tmpE.set(0.2, 0.16 - CH, -0.05), sstep(0.2, 0.42, t)), r);
+  else if (t < 0.62) out.lerp(tmpD.set(0.2, 0.16 - CH, -0.05).lerp(well, sstep(0.42, 0.62, t)), r);
+  else if (t < 0.8) out.lerp(tmpD.copy(well).lerp(onWeapon(sol, 0.02, 0.08, -0.05, tmpE), sstep(0.62, 0.8, t)), r);
+  else out.lerp(onWeapon(sol, 0.02, 0.08, -0.05, tmpE), (1 - sstep(0.8, 1, t)) * r);
+}
+
 function animSoldierBase(sol: Sol, s: AnimState) {
   const role = sol.def.role;
   const w = sol.def.w;
   const t = s.time + sol.seed * 40;
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
+  const init = dt === 0 && s.time === 0;
   if (s.dead > 0) {
     deathPose(sol, s.dead);
     if (sol.extra && role === 'fpv') sol.extra.scale.setScalar(1);
     return;
   }
   sol.snap = null;
+  const lod = init ? 0 : (s.lod ?? 0);
   const moving = s.moving && s.speed > 0.05;
   sol.moveW = approach(sol.moveW, moving ? 1 : 0, dt, 7);
   // hit flinch when the squad takes damage
@@ -1565,64 +1957,131 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const holdAim = role === 'at' ? 3 : role === 'fpv' ? 5 : 1.4;
   const aimT = s.fired < holdAim ? 1 : 0;
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
-  sol.kneelW = approach(sol.kneelW, (role === 'fpv' && aimT && !moving) || ((s.dig ?? 0) > 0 && !moving) ? 1 : 0, dt, 5);
-  if (dt === 0 && s.time === 0) {
+  trackShots(sol, s, dt);
+  const dig = (s.dig ?? 0) > 0;
+  const kneelT = !moving && ((role === 'fpv' && aimT > 0) || dig || (sol.crouch && aimT > 0)) ? 1 : 0;
+  sol.kneelW = approach(sol.kneelW, kneelT, dt, kneelT ? 6 : 4);
+  if (init) {
     sol.moveW = moving ? 1 : 0;
     sol.aimW = aimT;
+    sol.lastDist = s.dist;
   }
-  const L = legs(sol, s, t);
+  if (lod >= 2) {
+    // off screen / under fog: keep the clocks running, skip the posing
+    const dd = s.dist - sol.lastDist;
+    sol.lastDist = s.dist;
+    if (dd > 0 && dd < 1) sol.phase += (dd * sol.mpt) / mix(WALK_C, RUN_C, sol.runW);
+    return;
+  }
+  const L = legs(sol, s, t, dt, lod);
   const mw = sol.moveW;
   const aw = sol.aimW;
+  const kw = sol.kneelW;
+  const rw = w && (w.kind === 'rifle' || w.kind === 'launcher') ? sol.reloadW : 0;
   // recoil: sharp kick on the shot, exponential recovery
   const f0 = s.fired;
   const kick = f0 >= 0 && f0 < 0.3 ? Math.exp(-f0 * (role === 'at' ? 11 : 24)) * Math.min(1, (f0 + 0.008) / 0.012) : 0;
   sol.kickW = kick;
-  // spine: lean, twist, breathing
-  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * sol.kneelW + 0.12 * fl;
-  const twist = -0.09 * Math.sin(L.phase) * mw * (w ? 1 : 0.6) + 0.2 * fl * sol.flinchDir;
-  const br = Math.sin(t * 1.7);
-  sol.spine.rotation.set(0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw) + 0.1 * fl * sol.flinchDir, twist, lean + kick * 0.05 * (role === 'at' ? 2 : 1));
-  sol.spine.scale.set(1 + 0.014 * br * (1 - mw), 1, 1 + 0.007 * br * (1 - mw));
-  const tot = L.hp + lean;
-  // head: keep the eyes level, idle glances
-  const glance = Math.sin(t * 0.31) * Math.max(0, Math.sin(t * 0.13 + sol.seed * 9)) * 0.9;
-  const rifleAim = aw * (w && w.kind === 'rifle' ? 1 : 0);
-  sol.head.rotation.set(0.16 * rifleAim, glance * (1 - aw) * (1 - mw * 0.6) - twist, -tot * 0.85 - 0.12 * aw - 0.22 * rifleAim + 0.03 * Math.sin(t * 0.7) * (1 - mw));
+  const br = Math.sin(t * (1.5 + 0.4 * sol.seed)); // breathing
+  const still = (1 - mw) * (1 - aw);
 
-  // arms
+  // ---- idle gestures (de-synchronised per unit)
+  let gk = 0;
+  let ge = 0;
+  let gs = 0;
+  if (lod === 0 && still > 0.02 && kw < 0.5) {
+    const per = 6.5 + 5 * sol.seed;
+    const tt = s.time + sol.seed * per * 3.1;
+    const slot = Math.floor(tt / per);
+    const tau = tt - slot * per;
+    if (tau < GEST_T) {
+      const hv = hashSeed(sol.sid * 31 + slot);
+      gk = hv < 0.3 ? 0 : 1 + Math.floor(((hv - 0.3) / 0.7) * 4); // 1 helmet, 2 look back, 3 shoulder roll, 4 radio
+      if ((gk === 1 || gk === 4) && !(w && (w.kind === 'rifle' || w.kind === 'launcher'))) gk = 3;
+      ge = sstep(0, 0.35, tau) * (1 - sstep(GEST_T - 0.5, GEST_T, tau)) * still * (1 - kw) * (1 - rw);
+      gs = tau / GEST_T;
+      if (ge < 0.002) gk = 0;
+    }
+  }
+  const backSide = hashSeed(sol.sid * 7 + 3) > 0.5 ? 1 : -1;
+  const gBack = gk === 2 ? ge : 0;
+  const gRoll = gk === 3 ? ge * Math.sin(gs * 2 * PI) : 0;
+
+  // ---- spine / chest: lean (speed, aim, kneel, acceleration), counter-twist, breathing, flinch
+  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * kw + 0.12 * fl - clamp(sol.accL * 0.012, -0.08, 0.1) * mw;
+  const twistUp = -L.tw * (1.25 - 0.6 * aw) * (w ? 0.85 : 1) + 0.2 * fl * sol.flinchDir + 0.3 * gBack * backSide;
+  sol.spine.rotation.set(-L.roll * 0.55 + 0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw) + 0.06 * fl * sol.flinchDir, twistUp * 0.4, lean * 0.45);
+  const chestP = lean * 0.55 + 0.012 * br * (1 - mw) + kick * 0.05 * (role === 'at' ? 2 : 1);
+  sol.chest.rotation.set(-L.roll * 0.3 + 0.04 * fl * sol.flinchDir + 0.04 * gRoll, twistUp * 0.6, chestP);
+  // world pitch of the chest (soldier frame) and its yaw away from the soldier's heading
+  const tot = L.hp + lean * 0.45 + chestP;
+  const twistAll = L.tw + twistUp;
+
+  // ---- clavicles: breathing, shouldering the weapon, recoil, shoulder roll
+  const rifleAim = aw * (w && w.kind === 'rifle' ? 1 : 0);
+  const shrug = 0.015 * br * (1 - mw) + 0.12 * gRoll;
+  sol.clR.rotation.set(-shrug - 0.07 * rifleAim, 0.08 * rifleAim - 0.2 * kick * (w && w.kind !== 'controller' ? 1 : 0), 0);
+  sol.clL.rotation.set(shrug + 0.03 * rifleAim, -0.06 * rifleAim, 0);
+
+  // ---- head: eyes level, look-around when idle, into turns when moving, cheek on the stock when aiming
+  let lookT = 0;
+  let lookP = 0;
+  if (lod === 0) {
+    const lp = 2.1 + 1.9 * sol.seed;
+    const ls = Math.floor((s.time + sol.seed * 17) / lp);
+    const hv = hashSeed(sol.sid * 7 + ls * 3 + 1);
+    lookT = (hv < 0.32 ? 0 : ((hv - 0.32) / 0.68) * 1.7 - 0.85) * (1 - mw);
+    lookP = (hashSeed(sol.sid * 11 + ls * 5 + 2) - 0.55) * 0.3 * (1 - mw);
+  } else lookT = Math.sin(t * 0.31) * Math.max(0, Math.sin(t * 0.13 + sol.seed * 9)) * 0.8 * (1 - mw);
+  lookT = lookT * (1 - aw) + clamp(s.turn * 0.22, -0.5, 0.5) * mw + gBack * backSide * 1.1;
+  sol.lookY = init ? lookT : approach(sol.lookY, lookT, dt, 4.5);
+  sol.lookP = init ? lookP : approach(sol.lookP, lookP * (1 - aw), dt, 3);
+  const headP = -tot * 0.85 - 0.12 * aw - 0.22 * rifleAim + sol.lookP + 0.025 * Math.sin(t * 0.7) * still + 0.1 * kick + (gk === 1 ? -0.18 * ge : 0) - 0.3 * rw;
+  const headY = sol.lookY - twistAll + 0.2 * rw;
+  const tilt = 0.16 * rifleAim + (gk === 4 ? -0.28 * ge : 0) + 0.12 * gRoll * backSide;
+  sol.neck.rotation.set(tilt * 0.3, headY * 0.4, headP * 0.35);
+  sol.head.rotation.set(tilt * 0.7, headY * 0.6, headP * 0.65);
+  sol.hdR.rotation.set(0, 0, -0.2);
+  sol.hdL.rotation.set(0.25, 0, -0.15);
+
+  // ---- arms
   if (!w || !sol.wpn) {
-    // engineer: tools in both hands, natural swing
+    // engineer: tools in both hands, arms counter-swing to the legs
     const sw = Math.sin(L.phase) * mw;
     const amp = mix(0.35, 0.7, L.runK);
-    freeArm(sol.uaR, sol.faR, 1, -amp * sw * 0.8 + 0.08, 0.12, mix(0.35, 1.2, L.runK * mw));
-    freeArm(sol.uaL, sol.faL, -1, amp * sw * 0.6, 0.16, mix(0.15, 0.6, L.runK * mw));
+    freeArm(sol.uaR, sol.faR, 1, amp * sw * 0.8 + 0.08, 0.12, mix(0.35, 1.2, L.runK * mw));
+    freeArm(sol.uaL, sol.faL, -1, -amp * sw * 0.6, 0.16, mix(0.15, 0.6, L.runK * mw));
     if (sol.extra) sol.extra.rotation.set(0, 0, 0);
     return;
   }
   const bob = Math.sin(L.phase * 2) * mw;
   // weapon sway: slow idle drift + breathing (much smaller while aiming), carried at port arms when running
-  const still = 1 - mw;
-  const swayP = (0.035 * Math.sin(t * 0.83 + sol.seed * 7) + 0.012 * br) * still * (1 - 0.8 * aw) + 0.006 * Math.sin(t * 2.3) * aw;
-  const swayY = 0.04 * Math.sin(t * 0.57 + sol.seed * 3) * still * (1 - 0.85 * aw);
+  const swayP = (0.035 * Math.sin(t * 0.83 + sol.seed * 7) + 0.012 * br) * (1 - mw) * (1 - 0.8 * aw) + 0.006 * Math.sin(t * 2.3) * aw;
+  const swayY = 0.04 * Math.sin(t * 0.57 + sol.seed * 3) * (1 - mw) * (1 - 0.85 * aw);
   const port = L.runK * mw * (1 - aw);
+  // gestures with the rifle hand: the weapon dips onto its sling, the left hand goes up
+  const lift = gk === 1 || gk === 4 ? ge : 0;
+  const regrip = gRoll * 0.04;
   if (w.kind === 'rifle') {
     // low ready <-> shouldered aim
-    const px = mix(0.1, 0.12, aw) + 0.04 * port;
-    const py = mix(0.29, 0.47, aw) + 0.012 * bob + 0.07 * port;
-    const pz = mix(0.17, 0.12, aw) - 0.05 * port;
-    const pitch = mix(-0.55 + 0.1 * mw, -tot - 0.01, aw) + kick * 0.14 + swayP + 0.8 * port;
-    const yaw = mix(0.5, 0.06 - twist, aw) + swayY + 0.2 * port;
-    const roll = mix(0.3, 0, aw);
+    const px = mix(0.1, 0.12, aw) + 0.04 * port - 0.03 * rw;
+    const py = mix(0.29, 0.47, aw) + 0.012 * bob + 0.07 * port - 0.04 * lift + regrip + 0.04 * rw;
+    const pz = mix(0.17, 0.12, aw) - 0.05 * port - 0.02 * rw;
+    const pitch = mix(-0.55 + 0.1 * mw, -tot - 0.01, aw) + kick * 0.14 + swayP + 0.8 * port - 0.2 * lift + 0.35 * rw;
+    const yaw = mix(0.5, 0.06 - twistAll, aw) + swayY + 0.2 * port + 0.15 * rw;
+    const roll = mix(0.3, 0, aw) + 0.5 * rw;
     placeWeapon(sol, w, px, py, pz, pitch, yaw, roll, kick);
     handTargets(sol, w, RT, LT);
-    ik(sol.uaR, sol.faR, shR, RT, POLE_R);
-    ik(sol.uaL, sol.faL, shL, LT, POLE_L);
+    if (rw > 0.002 && lod === 0) reloadHand(sol, rw, LT);
+    ik(sol, 1, RT, POLE_R);
+    if (lift > 0.002) gestureHand(gk, ge, gs, LT);
+    ik(sol, -1, LT, POLE_L);
   } else if (w.kind === 'launcher') {
     const px = mix(0.02, 0.0, aw);
     const py = mix(0.43, 0.445, aw) + 0.01 * bob;
     const pz = mix(0.17, 0.155, aw);
     const pitch = mix(0.5 - 0.1 * mw, -tot + 0.04, aw) + kick * 0.18 + swayP * 0.6;
-    const yaw = mix(0.06, 0.03 - twist, aw) + swayY * 0.5;
+    const yaw = mix(0.06, 0.03 - twistAll, aw) + swayY * 0.5;
     placeWeapon(sol, w, px, py, pz, pitch, yaw, 0, kick * 1.5);
     handTargets(sol, w, RT, LT);
     // reload: warhead gone after the shot, left hand fetches a new one
@@ -1633,23 +2092,33 @@ function animSoldierBase(sol: Sol, s: AnimState) {
       if (f > 0.25 && f < 1.75) {
         const k = sstep(0.25, 0.7, f) * (1 - sstep(1.3, 1.75, f));
         const toMuzzle = sstep(0.85, 1.25, f);
-        tmpA.set(-0.15, 0.35, -0.22); // reach behind to the pack
+        tmpA.set(-0.15, 0.35 - CH, -0.22); // reach behind to the pack
         tmpB.set(0.72, 0.08, 0).applyQuaternion(sol.wpn.quaternion).add(sol.wpn.position); // in front of the tube
         tmpA.lerp(tmpB, toMuzzle);
         LT.lerp(tmpA, k);
       }
     }
-    ik(sol.uaR, sol.faR, shR, RT, POLE_R);
-    ik(sol.uaL, sol.faL, shL, LT, POLE_L);
+    ik(sol, 1, RT, POLE_R);
+    if (lift > 0.002) gestureHand(gk, ge, gs, LT);
+    ik(sol, -1, LT, POLE_L);
+    // on the move the tube rides on the shoulder, the free left arm swings
+    const free = mw * (1 - aw) * (s.fired > 1.8 ? 1 : 0);
+    if (free > 0.002) {
+      _dq[2].copy(sol.uaL.quaternion);
+      _dq[3].copy(sol.faL.quaternion);
+      freeArm(sol.uaL, sol.faL, -1, -mix(0.35, 0.6, L.runK) * Math.sin(L.phase), 0.14, mix(0.3, 1.1, L.runK));
+      blendFrom(sol.uaL, _dq[2], free);
+      blendFrom(sol.faL, _dq[3], free);
+    }
   } else {
     // FPV controller: chest height, raised when flying a drone
     const px = mix(0.3, 0.33, aw);
     const py = mix(0.15, 0.27, aw) + 0.01 * bob;
     const pitch = mix(-0.55, -0.25, aw) - tot * aw;
-    placeWeapon(sol, w, px, py, 0, pitch, -twist * 0.5, 0, 0);
+    placeWeapon(sol, w, px, py, 0, pitch, -twistAll * 0.5, 0, 0);
     handTargets(sol, w, RT, LT);
-    ik(sol.uaR, sol.faR, shR, RT, POLE_RC);
-    ik(sol.uaL, sol.faL, shL, LT, POLE_LC);
+    ik(sol, 1, RT, POLE_RC);
+    ik(sol, -1, LT, POLE_LC);
     sol.head.rotation.z -= 0.12 * aw;
   }
   // extras
@@ -1665,6 +2134,19 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   }
 }
 
+/** Idle gesture targets for the left hand (chest space): 1 = straighten the helmet, 4 = key the radio. */
+function gestureHand(gk: number, ge: number, gs: number, out: THREE.Vector3) {
+  if (gk === 1) {
+    // up to the helmet brim, a little tug side to side
+    const wig = Math.sin(gs * PI * 5) * 0.02 * sstep(0.25, 0.4, gs);
+    GT.set(0.13, NECK_Y + HEAD_Y + 0.12, -0.07 + wig);
+  } else {
+    // radio / shoulder mic on the left strap
+    GT.set(0.13, 0.17, -0.12);
+  }
+  out.lerp(GT, ge);
+}
+
 // ---------------------------------------------------------- mortar team
 
 interface MortarState {
@@ -1678,17 +2160,25 @@ interface MortarState {
   packed: boolean;
 }
 
-/** Body-space point -> soldier spine space (uses local matrices; no world update needed). */
+/** Body-space point -> soldier chest space (uses local matrices; no world update needed). */
 function bodyToSpine(sol: Sol, p: THREE.Vector3, out: THREE.Vector3) {
   sol.hips.updateMatrix();
   sol.spine.updateMatrix();
-  tmpM2.multiplyMatrices(sol.hips.matrix, sol.spine.matrix).invert();
+  sol.chest.updateMatrix();
+  tmpM2.multiplyMatrices(sol.hips.matrix, sol.spine.matrix).multiply(sol.chest.matrix).invert();
   return out.copy(p).applyMatrix4(tmpM2);
 }
 function bodyQuatToSpine(sol: Sol, q: THREE.Quaternion, out: THREE.Quaternion) {
-  tmpQ2.copy(sol.hips.quaternion).multiply(sol.spine.quaternion).invert();
+  tmpQ2.copy(sol.hips.quaternion).multiply(sol.spine.quaternion).multiply(sol.chest.quaternion).invert();
   return out.copy(tmpQ2).multiply(q);
 }
+const M_CHEST = new THREE.Vector3(0.3, 0.2 - CH, 0);
+const M_BAG = new THREE.Vector3(-0.12, 0.12 - CH, -0.3);
+const _mPos = new THREE.Vector3();
+const _mRot = new THREE.Quaternion();
+const _mReady = new THREE.Vector3();
+const _mMouth = new THREE.Vector3();
+const _mTubeQ = new THREE.Quaternion();
 
 const MOUTH = new THREE.Vector3(M_BASE[0] + M_TUBE0[0] + Math.cos(M_ELEV) * M_LEN, M_TUBE0[1] + Math.sin(M_ELEV) * M_LEN, 0);
 const TUBE_DIR = new THREE.Vector3(Math.cos(M_ELEV), Math.sin(M_ELEV), 0);
@@ -1702,7 +2192,8 @@ function animMortar(m: MortarState, s: AnimState) {
   const { g, l } = m;
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   const moving = s.moving && s.speed > 0.05;
-  for (const sol of [g, l]) sol.moveW = approach(sol.moveW, moving ? 1 : 0, dt, 6);
+  g.moveW = approach(g.moveW, moving ? 1 : 0, dt, 6);
+  l.moveW = approach(l.moveW, moving ? 1 : 0, dt, 6);
   if (dt === 0 && s.time === 0) g.moveW = l.moveW = moving ? 1 : 0;
   const mw = g.moveW;
   const packed = mw > 0.5;
@@ -1733,7 +2224,9 @@ function animMortar(m: MortarState, s: AnimState) {
   l.hx = mix(L_HOME[0], PACK_L[0], mw);
   l.hz = mix(L_HOME[1], PACK_L[1], mw);
   l.hyaw = mix(L_HOME[2], PACK_L[2], mw);
-  for (const sol of [g, l]) sol.kneelW = 1 - mw;
+  g.kneelW = l.kneelW = 1 - mw;
+  seedFrom(g, s);
+  seedFrom(l, s);
   const f = s.fired;
   const tubeKick = f < 0.12 ? (1 - f / 0.12) * 0.05 : 0;
   if (!packed) m.tube.position.set(M_TUBE0[0] - TUBE_DIR.x * tubeKick, M_TUBE0[1] - TUBE_DIR.y * tubeKick, 0);
@@ -1743,16 +2236,20 @@ function animMortar(m: MortarState, s: AnimState) {
   if (s.dead > 0) deathPose(g, s.dead + 0.05);
   else {
     const t = s.time + g.seed * 40;
-    const L = legs(g, s, t);
+    const L = legs(g, s, t, dt, 0);
     const flinch = f < 0.6 ? Math.sin((f / 0.6) * PI) : 0;
     const lean = mix(-0.32, -0.12 * (0.4 + 0.6 * L.runK), mw);
-    g.spine.rotation.set(0.12 * flinch * (1 - mw), 0.25 * (1 - mw), lean + 0.12 * flinch * (1 - mw));
-    g.spine.scale.set(1 + 0.012 * Math.sin(t * 1.7), 1, 1);
+    g.spine.rotation.set(0.12 * flinch * (1 - mw), 0.25 * (1 - mw) - L.tw * 0.5, lean + 0.12 * flinch * (1 - mw));
+    g.chest.rotation.set(0, -L.tw * 0.7, 0.012 * Math.sin(t * 1.7));
+    g.clR.rotation.set(0, 0, 0);
+    g.clL.rotation.set(0, 0, 0);
+    g.neck.rotation.set(0, 0, 0);
     g.head.rotation.set(0, mix(-0.3 + 0.5 * flinch, 0, mw), -(L.hp + lean) * 0.7 - 0.15 * (1 - mw));
     if (packed) {
+      // arms counter-swing to the legs
       const sw = Math.sin(L.phase);
-      freeArm(g.uaR, g.faR, 1, -0.5 * sw, 0.15, mix(0.3, 1.1, L.runK));
-      freeArm(g.uaL, g.faL, -1, 0.5 * sw, 0.15, mix(0.3, 1.1, L.runK));
+      freeArm(g.uaR, g.faR, 1, 0.5 * sw, 0.15, mix(0.3, 1.1, L.runK));
+      freeArm(g.uaL, g.faL, -1, -0.5 * sw, 0.15, mix(0.3, 1.1, L.runK));
     } else {
       // hands on the tube and the elevation crank (crank turns while idle)
       const crank = Math.sin(t * 0.6) > 0.6 ? t * 5 : 0;
@@ -1760,8 +2257,8 @@ function animMortar(m: MortarState, s: AnimState) {
       tmpB.copy(G_HOLD_R).add(_v.set(0, Math.sin(crank) * 0.03, Math.cos(crank) * 0.03));
       bodyToSpine(g, tmpA, LT);
       bodyToSpine(g, tmpB, RT);
-      ik(g.uaR, g.faR, shR, RT, POLE_R);
-      ik(g.uaL, g.faL, shL, LT, POLE_L);
+      ik(g, 1, RT, POLE_R);
+      ik(g, -1, LT, POLE_L);
     }
   }
 
@@ -1772,15 +2269,19 @@ function animMortar(m: MortarState, s: AnimState) {
     return;
   }
   const t = s.time + l.seed * 40;
-  const L = legs(l, s, t);
+  const L = legs(l, s, t, dt, 0);
+  l.chest.rotation.set(0, -L.tw * 0.7, 0.012 * Math.sin(t * 1.7));
+  l.clR.rotation.set(0, 0, 0);
+  l.clL.rotation.set(0, 0, 0);
+  l.neck.rotation.set(0, 0, 0);
   let lean = mix(-0.25, -0.12 * (0.4 + 0.6 * L.runK), mw);
   let twist = 0;
   // bomb pose (spine space) keyframes
-  const chestP = tmpC.set(0.3, 0.2, 0);
-  const chestQ = tmpQ.copy(UP_Q);
+  const chestP = M_CHEST;
+  const chestQ = UP_Q;
   let bombVisible = true;
-  let pos = chestP.clone();
-  let rot = chestQ.clone();
+  const pos = _mPos.copy(chestP);
+  const rot = _mRot.copy(chestQ);
   let duck = 0;
   if (!packed) {
     // in action: hold ready over the muzzle, drop on fire, fetch the next round
@@ -1796,31 +2297,30 @@ function animMortar(m: MortarState, s: AnimState) {
       twist = 0.7 * Math.sin(((f - 0.6) / 0.6) * PI);
     } else if (ready) lean = mix(-0.2, readyLean, sstep(1.2, 1.7, f));
     l.spine.rotation.set(-0.15 * duck, twist, lean);
-    l.spine.scale.set(1 + 0.012 * Math.sin(t * 1.7), 1, 1);
-    // ready / drop poses from the tube (body space -> spine)
-    const readyP = bodyToSpine(l, tmpA.copy(MOUTH).addScaledVector(TUBE_DIR, 0.2), new THREE.Vector3());
-    const tubeQ = bodyQuatToSpine(l, TUBE_Q, new THREE.Quaternion());
-    const bagP = new THREE.Vector3(-0.12, 0.12, -0.3);
+    // ready / drop poses from the tube (body space -> chest)
+    const readyP = bodyToSpine(l, tmpA.copy(MOUTH).addScaledVector(TUBE_DIR, 0.2), _mReady);
+    const tubeQ = bodyQuatToSpine(l, TUBE_Q, _mTubeQ);
+    const bagP = M_BAG;
     if (!ready) {
       // idle: cradle the round at the chest
     } else if (f < 0.15) {
       const k = f / 0.15;
-      pos = readyP.clone().addScaledVector(bodyToSpine(l, tmpB.copy(MOUTH), new THREE.Vector3()).sub(readyP), 1 + k * 1.2);
-      rot = tubeQ.clone();
+      pos.copy(readyP).addScaledVector(bodyToSpine(l, tmpB.copy(MOUTH), _mMouth).sub(readyP), 1 + k * 1.2);
+      rot.copy(tubeQ);
       bombVisible = k < 0.6;
     } else if (f < 0.6) {
       bombVisible = false;
-      pos = readyP.clone().lerp(chestP, sstep(0.15, 0.6, f));
-      rot = tubeQ.clone();
+      pos.copy(readyP).lerp(chestP, sstep(0.15, 0.6, f));
+      rot.copy(tubeQ);
     } else if (f < 1.2) {
       const k = sstep(0.6, 0.9, f);
-      pos = chestP.clone().lerp(bagP, k * (1 - sstep(0.95, 1.2, f)));
+      pos.copy(chestP).lerp(bagP, k * (1 - sstep(0.95, 1.2, f)));
       bombVisible = f > 0.85;
-      rot = chestQ.clone();
+      rot.copy(chestQ);
     } else {
       const k = sstep(1.2, 1.7, f);
-      pos = chestP.clone().lerp(readyP, k);
-      rot = chestQ.clone().slerp(tubeQ, k);
+      pos.copy(chestP).lerp(readyP, k);
+      rot.copy(chestQ).slerp(tubeQ, k);
     }
   } else {
     l.spine.rotation.set(0, 0, lean);
@@ -1834,8 +2334,8 @@ function animMortar(m: MortarState, s: AnimState) {
   // hands on the bomb
   RT.set(pos.x - 0.02, pos.y - 0.02, pos.z + 0.07);
   LT.set(pos.x - 0.02, pos.y - 0.02, pos.z - 0.07);
-  ik(l.uaR, l.faR, shR, RT, POLE_RC);
-  ik(l.uaL, l.faL, shL, LT, POLE_LC);
+  ik(l, 1, RT, POLE_RC);
+  ik(l, -1, LT, POLE_LC);
 }
 
 // --------------------------------------------------------------- builder
@@ -1859,7 +2359,7 @@ function build(key: string): Builder {
       root.add(inst.top);
       root.addEventListener('removed', () => inst.skel.dispose());
       const muzzles = t.muzzles.map((n) => inst.map.get(n)).filter((o): o is THREE.Object3D => !!o);
-      const sols = t.sols.map((d) => makeSol(d, inst.map));
+      const sols = t.sols.map((d, i) => makeSol(d, inst.map, i));
       let anim: (s: AnimState) => void;
       if (key === 'mortar') {
         const ms: MortarState = {
@@ -1888,6 +2388,9 @@ function build(key: string): Builder {
         infantry: true,
         anim: (s) => {
           try {
+            // stride length is matched in model metres: follow the renderer's unit scale
+            const mpt = 1 / (S * (root.scale.x || 1));
+            for (const sol of sols) sol.mpt = mpt;
             anim(s);
           } catch {
             /* never throw from animation */

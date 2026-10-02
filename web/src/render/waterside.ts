@@ -360,7 +360,7 @@ export class Waterside implements WatersideHandles {
           // the thin sheet of water and its foam line
           float sheet = (1.0 - smoothstep(edge - 0.03, edge + 0.005, d)) * smoothstep(-0.3, -0.02, d);
           float fq = (d - edge) / (0.022 + 0.02 * chop);
-          float foamL = exp(-fq * fq) * (0.45 + 0.55 * n2) * (1.0 - ice) * step(-0.06, d);
+          float foamL = exp(-fq * fq) * smoothstep(0.35, 0.8, n2) * (0.5 + 0.5 * chop) * (1.0 - ice) * step(-0.06, d);
           col = mix(col, vec3(0.05, 0.075, 0.065), sheet * 0.7);
           a = max(a, sheet * 0.55);
           col *= wxLight;
@@ -368,10 +368,12 @@ export class Waterside implements WatersideHandles {
           float sp = pow(max(dot(reflect(-V, vec3(0.0, 1.0, 0.0)), sunDir), 0.0), 40.0);
           col += sunCol * sp * (sheet * 0.6 + fresh * 0.35) * (1.0 - wxSnow);
           col = mix(col, vec3(0.8, 0.84, 0.83) * wxLight, foamL * 0.8);
-          a = max(a, foamL * 0.75);
+          a = max(a, foamL * 0.6);
           float fogV = texture2D(fogTex, p / fogSize).r;
           float fogK = fogV < 0.5 ? fogV * 0.9 : 0.45 + (fogV - 0.5) * 1.1;
           col *= mix(1.0, fogK, fogEnabled);
+          // never hand NaN / Inf to the HDR chain (bloom would smear it over the frame)
+          col = (col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0) ? min(col, vec3(32.0)) : vec3(0.0);
           gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -700,6 +702,8 @@ export class Waterside implements WatersideHandles {
           float fogV = texture2D(fogTex, vWorld.xz / fogSize).r;
           float fogK = fogV < 0.5 ? fogV * 0.9 : 0.45 + (fogV - 0.5) * 1.1;
           col *= mix(1.0, fogK, fogEnabled);
+          // never hand NaN / Inf to the HDR chain (bloom would smear it over the frame)
+          col = (col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0) ? min(col, vec3(32.0)) : vec3(0.0);
           gl_FragColor = vec4(col, a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>

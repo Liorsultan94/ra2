@@ -36,8 +36,9 @@ interface GrassCfg {
 }
 
 const CFG: Record<'medium' | 'high', GrassCfg> = {
-  medium: { cell: 0.3, grid: 60, blades: 5, segs: 1, fadeFrom: 12.5, fadeTo: 16 },
-  high: { cell: 0.21, grid: 88, blades: 6, segs: 2, fadeFrom: 15, fadeTo: 19.5 },
+  // medium: 64^2 tufts x 4 one-triangle blades = 49k vertices; high: 104^2 x 4 x 5 = 216k
+  medium: { cell: 0.26, grid: 64, blades: 4, segs: 1, fadeFrom: 12.5, fadeTo: 16 },
+  high: { cell: 0.17, grid: 104, blades: 4, segs: 2, fadeFrom: 15, fadeTo: 19.5 },
 };
 
 /** Trample map resolution (pixels per tile). */
@@ -80,7 +81,7 @@ void grassBlade() {
   float side = position.z;
   vec2 bh = gHash2( wc * 1.37 + vec2( bi * 7.13, bi * 3.71 ) );
   float ang = bh.y * 6.2832 + bi * 2.39996;
-  float spread = ( 0.2 + 0.8 * fract( bh.x * 13.7 ) ) * gCell * 0.3;
+  float spread = ( 0.15 + 0.85 * fract( bh.x * 13.7 ) ) * gCell * 0.38;
   vec2 off = vec2( cos( ang ), sin( ang ) ) * spread;
   vec2 base = root + off;
   vec2 uv = base / terrMapSize;
@@ -89,7 +90,9 @@ void grassBlade() {
   float keep = step( bh.x, bm.r * inside );
   float d = length( root - gCenter );
   float fade = ( 1.0 - smoothstep( gFade.x, gFade.y, d ) ) * gFade.z;
-  float H = ( 0.045 + 0.085 * bm.g ) * ( 0.55 + 0.75 * fract( bh.y * 5.31 ) ) * fade * keep * ( 1.0 - 0.75 * wxSnow );
+  // the odd taller bunch where the meadow grows long
+  float tallT = step( 0.86, hh.y ) * smoothstep( 0.3, 0.7, bm.g );
+  float H = ( 0.06 + 0.1 * bm.g ) * ( 0.6 + 0.7 * fract( bh.y * 5.31 ) ) * ( 1.0 + 0.9 * tallT ) * fade * keep * ( 1.0 - 0.75 * wxSnow );
   // lean: blades splay out of the tuft, combed by the wind
   vec2 outD = off / max( spread, 1e-4 );
   vec2 bend = outD * ( 0.22 + 0.4 * fract( bh.y * 7.3 ) );
@@ -99,10 +102,12 @@ void grassBlade() {
   bend += wdir * ( ( gust - 0.35 ) * 0.9 + sin( ph ) * 0.12 + sin( ph * 2.3 + bi ) * 0.05 );
   // trample: r/g stamp time (1/8 s, 16 bit), b direction, a strength (1 = building: no grass)
   vec4 tr = texelFetch( trampleTex, ivec2( clamp( base * ${TRES.toFixed(1)}, vec2( 0.0 ), terrMapSize * ${TRES.toFixed(1)} - 1.0 ) ), 0 );
+  float trF = 0.0;
   if ( tr.a > 0.0 ) {
     float age = mod( gNow8 - ( tr.r * 65280.0 + tr.g * 255.0 ), 65536.0 ) / 8.0;
     float flat_ = tr.a > 0.7 ? 1.0 - smoothstep( 2.0, 24.0, age ) * 0.92 : 1.0 - smoothstep( 0.25, 1.6, age );
     float f = clamp( tr.a * 1.18, 0.0, 1.0 ) * flat_;
+    trF = f;
     float ta = tr.b * 6.2832;
     bend = mix( bend, vec2( cos( ta ), sin( ta ) ) * 1.5, f );
     H *= 1.0 - 0.45 * f;
@@ -112,7 +117,7 @@ void grassBlade() {
   if ( bl > 1.5 ) bend *= 1.5 / bl;
   float b2 = min( 1.0, dot( bend, bend ) * 0.45 );
   vec2 wv = normalize( vec2( -bend.y, bend.x ) + vec2( cos( ang * 3.1 ), sin( ang * 3.1 ) ) * 0.6 );
-  float W = ( 0.009 + 0.006 * bh.x ) * gWidth * ( 1.0 - t ) * step( 0.0001, H );
+  float W = ( 0.011 + 0.008 * bh.x ) * gWidth * ( 1.0 - t ) * step( 0.0001, H );
   vec3 hp = vec3( base, 0.0 );
   float gy = texture2D( gHeightTex, ( base * ${2.0.toFixed(1)} + 0.5 ) / ( terrMapSize * 2.0 + 1.0 ) ).r;
   gP = vec3( base.x + bend.x * H * t * t + wv.x * side * W, gy - 0.01 + H * t * sqrt( 1.0 - b2 * t ), base.y + bend.y * H * t * t + wv.y * side * W );
@@ -128,15 +133,17 @@ void grassBlade() {
   c = mix( c, gcFresh, step( 0.72, v ) * ( 0.5 - tn.a * 0.3 ) );
   c = mix( c, gcDry * vec3( 1.2, 1.08, 0.78 ), step( v, 0.1 ) * ( 0.35 + tn.a * 0.5 ) );
   c = mix( c, gcClover, ct.g * 0.4 );
-  c *= tn.rgb * 2.0;
-  vec3 tipC = c * vec3( 1.12, 1.1, 0.86 );
+  c *= tn.rgb * 2.0 * ( 0.86 + 0.28 * hh.x );
+  // pressed-down blades show their lighter, sheeny backs
+  c *= 1.0 + 0.3 * trF;
+  vec3 tipC = c * vec3( 1.22, 1.17, 0.88 );
   // wildflower patches: some blades carry a flower head
   if ( ct.b > 0.25 && v > 0.55 && v < 0.55 + ct.b * 0.25 ) {
     float sp = texture2D( gNoise, base * 0.09 + 0.7 ).a;
     tipC = sp < 0.42 ? vec3( 0.82, 0.82, 0.72 ) : sp < 0.68 ? vec3( 0.86, 0.6, 0.06 ) : vec3( 0.42, 0.22, 0.66 );
     tipC *= tn.rgb * 2.0;
   }
-  vGrassC = mix( c * 0.5, c * 1.05, smoothstep( 0.0, 0.7, t ) );
+  vGrassC = mix( c * 0.42, c * 1.0, smoothstep( 0.0, 0.65, t ) );
   vGrassC = mix( vGrassC, tipC, smoothstep( 0.6, 1.0, t ) );
 }
 `;
@@ -231,7 +238,7 @@ export class GrassBlades {
       ...this.u,
       gCell: { value: cfg.cell },
       gGrid: { value: cfg.grid },
-      gWidth: { value: quality === 'high' ? 1 : 1.3 },
+      gWidth: { value: quality === 'high' ? 1 : 1.25 },
       gHeightTex: { value: htex },
       trampleTex: { value: tt },
       gNoise: fog.uniforms.fogNoise,
