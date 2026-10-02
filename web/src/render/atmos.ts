@@ -176,15 +176,15 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.65;
       break;
     case 'twilight':
-      set({ sunI: 0.45, hemiI: 0.62, env: 0.13, cloud: 0.14, sat: 0.9, vignette: 0.46, bloom: 0.72, exposure: 1.23, spec: 0.55, dark: 0.88 }, 0xa080b0, 0x4c5894, 0x1c1820, [0.1, 0.08, 0.12], [-0.01, 0.0, 0.036], [0.02, 0.004, 0.0], 0x0e0c14, [0.4, 0.38, 0.5]);
+      set({ sunI: 0.62, hemiI: 0.68, env: 0.14, cloud: 0.14, sat: 0.9, vignette: 0.46, bloom: 0.72, exposure: 1.25, spec: 0.55, dark: 0.88 }, 0xa080b0, 0x5462a0, 0x1c1820, [0.1, 0.08, 0.12], [-0.01, 0.0, 0.036], [0.02, 0.004, 0.0], 0x0e0c14, [0.4, 0.38, 0.5]);
       light = 0.28;
       break;
     case 'predawn':
-      set({ sunI: 0.5, hemiI: 0.62, env: 0.12, cloud: 0.12, sat: 0.88, vignette: 0.46, bloom: 0.72, exposure: 1.23, spec: 0.5, dark: 0.88 }, 0x9aa0d8, 0x48589a, 0x161a24, [0.07, 0.08, 0.12], [-0.01, 0.0, 0.034], [0.006, 0.006, 0.01], 0x0a0c14, [0.34, 0.36, 0.5]);
+      set({ sunI: 0.65, hemiI: 0.68, env: 0.13, cloud: 0.12, sat: 0.88, vignette: 0.46, bloom: 0.72, exposure: 1.25, spec: 0.5, dark: 0.88 }, 0x9aa0d8, 0x4e5ea2, 0x161a24, [0.07, 0.08, 0.12], [-0.01, 0.0, 0.034], [0.006, 0.006, 0.01], 0x0a0c14, [0.34, 0.36, 0.5]);
       light = 0.28;
       break;
     case 'dawn':
-      set({ sunI: 2.4, hemiI: 0.6, env: 0.26, cloud: 0.2, sat: 1.08, vignette: 0.38, bloom: 0.55, exposure: 1.17, spec: 0.9, dark: 0.42 }, 0xff9a70, 0x8a94c8, 0x4a3a34, [0.3, 0.24, 0.26], [-0.012, 0.0, 0.045], [0.05, 0.012, -0.03], 0x1c1820, [0.8, 0.68, 0.72]);
+      set({ sunI: 2.5, hemiI: 0.6, env: 0.26, cloud: 0.2, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.17, spec: 0.9, dark: 0.42 }, 0xff9468, 0x8a90c4, 0x4a3a34, [0.34, 0.24, 0.26], [-0.012, 0.0, 0.045], [0.07, 0.02, -0.03], 0x1c1820, [0.8, 0.68, 0.72]);
       p.hazeP.set(3, 70, 0.45, 50); // morning mist
       light = 0.6;
       break;
