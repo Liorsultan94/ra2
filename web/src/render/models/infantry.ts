@@ -1445,10 +1445,60 @@ const LT = new THREE.Vector3();
 /** One soldier (rifle / at / engineer / fpv / ew), blended into the parachute pose while under a canopy. */
 function animSoldier(sol: Sol, s: AnimState) {
   animSoldierBase(sol, s);
+  const dig = s.dead > 0 ? 0 : (s.dig ?? 0);
+  if (dig > 0 && dig < DIG_T) digPose(sol, dig);
   const tgt = s.dead > 0 ? 0 : clamp(s.para ?? 0, 0, 1);
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   sol.paraW = dt === 0 && s.time === 0 ? tgt : approach(sol.paraW, tgt, dt, tgt > sol.paraW ? 20 : 5);
   if (sol.paraW > 0.002) paraPose(sol, sol.paraW, s.time + sol.seed * 40);
+}
+
+/** Length of the digging-in motion (AnimState.dig seconds); afterwards the soldier kneels in his foxhole. */
+const DIG_T = 2.6;
+const _dq = [new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternion()];
+const _dwp = new THREE.Vector3();
+const _dwq = new THREE.Quaternion();
+const POLE_DIG = new THREE.Vector3(-0.2, -1, 0).normalize();
+
+/**
+ * Digging in (kneeling, from the normal kneel pose): rifle slung across the back,
+ * both hands on an entrenching tool chopping at the ground in front of the knees,
+ * leaning into each stroke. Blended in and out over the first / last ~0.4 s.
+ */
+function digPose(sol: Sol, dig: number) {
+  const k = sstep(0, 0.4, dig) * (1 - sstep(DIG_T - 0.45, DIG_T, dig));
+  if (k <= 0.001) return;
+  // stroke: quick chop down, slower lift (about 1.7 strokes per second)
+  const ph = (dig * 1.7) % 1;
+  const c = ph < 0.35 ? sstep(0, 0.35, ph) : 1 - sstep(0.35, 1, ph);
+  sol.spine.rotation.z += (-0.32 - 0.22 * c) * k;
+  sol.head.rotation.z += 0.12 * k;
+  _dq[0].copy(sol.uaR.quaternion);
+  _dq[1].copy(sol.faR.quaternion);
+  _dq[2].copy(sol.uaL.quaternion);
+  _dq[3].copy(sol.faL.quaternion);
+  const w = sol.def.w;
+  if (w && sol.wpn) {
+    _dwp.copy(sol.wpn.position);
+    _dwq.copy(sol.wpn.quaternion);
+    placeWeapon(sol, w, -0.17, 0.2, 0.0, 0.75, PI / 2, 0.15, 0);
+    sol.wpn.position.lerp(_dwp, 1 - k);
+    sol.wpn.quaternion.slerp(_dwq, 1 - k);
+  }
+  // hands (spine space): raised by the chest -> down at the ground in front
+  RT.set(mix(0.3, 0.52, c), mix(0.12, -0.3, c), 0.07);
+  LT.set(mix(0.22, 0.42, c), mix(0.26, -0.1, c), -0.03);
+  ik(sol.uaR, sol.faR, shR, RT, POLE_DIG);
+  ik(sol.uaL, sol.faL, shL, LT, POLE_LC);
+  blendFrom(sol.uaR, _dq[0], k);
+  blendFrom(sol.faR, _dq[1], k);
+  blendFrom(sol.uaL, _dq[2], k);
+  blendFrom(sol.faL, _dq[3], k);
+}
+/** bone = slerp(from, bone's current pose, k). */
+function blendFrom(b: THREE.Object3D, from: THREE.Quaternion, k: number) {
+  _pq.copy(b.quaternion);
+  b.quaternion.copy(from).slerp(_pq, k);
 }
 
 const _pq = new THREE.Quaternion();
@@ -1515,7 +1565,7 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const holdAim = role === 'at' ? 3 : role === 'fpv' ? 5 : 1.4;
   const aimT = s.fired < holdAim ? 1 : 0;
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
-  sol.kneelW = approach(sol.kneelW, role === 'fpv' && aimT && !moving ? 1 : 0, dt, 5);
+  sol.kneelW = approach(sol.kneelW, (role === 'fpv' && aimT && !moving) || ((s.dig ?? 0) > 0 && !moving) ? 1 : 0, dt, 5);
   if (dt === 0 && s.time === 0) {
     sol.moveW = moving ? 1 : 0;
     sol.aimW = aimT;

@@ -19,6 +19,8 @@ import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
 import { Paradrop } from './paradrop';
+import { UnitLife } from './unitlife';
+import { DeployFx } from './deployfx';
 import { CombatOverlay } from './overlay';
 import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
@@ -250,6 +252,10 @@ export class GameRenderer {
   private wrecks: Wreck[] = [];
   /** Parachute canopies (airborne-drop support power). */
   private chutes: Paradrop;
+  /** Crew hatches, transport ramps / walk-in-out, infantry digging in (unitlife.ts). */
+  private life: UnitLife;
+  /** MCV unfolding into a construction yard (deployfx.ts). */
+  private deployFx: DeployFx;
   private projVis = new Map<number, ProjVisual>();
   private ghost: THREE.Group | null = null;
   private ghostKey = '';
@@ -451,6 +457,8 @@ export class GameRenderer {
     this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
+    this.life = new UnitLife(this.scene, this.effects, world, (x, z) => standHeight(world.map, x, z), (id) => this.visuals.get(id)?.model);
+    this.deployFx = new DeployFx(this.scene, this.effects, (id) => !!world.get(id));
     if (ambientEnabled()) {
       this.ambient = new AmbientLife(this);
       this.scene.add(this.ambient.group);
@@ -1016,6 +1024,14 @@ export class GameRenderer {
         root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
         const k = e.buildAnim;
         a.built = k;
+        if (this.deployFx.active) {
+          // MCV still unfolding over its new yard: the yard appears / rises on the overlay's clock
+          const dk = this.deployFx.built(e.id);
+          if (dk >= 0) {
+            a.built = Math.max(1e-3, dk);
+            if (dk <= 0) root.visible = false;
+          }
+        }
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
         a.moving = false;
         if (k < 1 && vis && Math.random() < dt * 20) this.effects.dust(root.position.x + (Math.random() - 0.5) * bd.w, h + 0.05, root.position.z + (Math.random() - 0.5) * bd.h, 1.5);
@@ -1057,8 +1073,10 @@ export class GameRenderer {
           }
         } else if (ud.category === 'vehicle') {
           poseGroundVehicle(v.model, a, w.map, p, yaw, dt, vis);
+          this.life.vehicle(e, a, !!ud.transport);
         } else if (v.model.infantry) {
           poseInfantry(v.model, a, w.map, p, yaw, dt);
+          this.life.infantry(e, v.model, a, vis, dt);
         } else {
           root.rotation.set(0, yaw, 0);
         }
@@ -1099,7 +1117,16 @@ export class GameRenderer {
     this.airShadows.end();
     this.contact?.end();
     this.chutes.end(dt, this.time);
-    for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
+    for (const v of [...this.visuals.values()]) {
+      if (seen.has(v.id)) continue;
+      // boarding a transport: the soldier first walks up the ramp (unitlife.ts)
+      if (v.model.infantry && this.life.adopt(v.id, v.model)) {
+        this.visuals.delete(v.id);
+        if (v.ring) this.scene.remove(v.ring);
+        continue;
+      }
+      this.removeVisual(v);
+    }
   }
 
   private unitFx(e: Entity, v: Visual, p: THREE.Vector3, yaw: number, moved: number, dt: number) {
@@ -1252,6 +1279,8 @@ export class GameRenderer {
       this.wrecks.push({ ...base, kind: 'air', max: 30, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
       return;
     }
+    // crew ducks inside / hatch slammed shut on the burning hull
+    v.model.anim?.({ ...v.anim, dt: 0, dead: 1 });
     const wr: Wreck = { ...base, kind: 'vehicle', size: ud.harvester || ud.mcv ? 1.4 : 1 };
     if (v.model.turret && Math.random() < 0.6) {
       // turret tossed off by the ammunition cook-off
@@ -1717,6 +1746,7 @@ export class GameRenderer {
       case 'deployed': {
         const b = this.world.get(ev.id);
         if (!b || !this.visibleAt(b.x, b.y)) break;
+        if (ev.t === 'deployed' && this.startDeploy(b)) break;
         const bd = buildingDef(b.def);
         const gy = groundHeight(this.world.map, b.x, b.y);
         fx.ring(b.x, gy + 0.05, b.y, 0.5, Math.max(bd.w, bd.h) * 1.1, 0.7, 0xd8c8a0, false, 0.5);
@@ -1744,6 +1774,21 @@ export class GameRenderer {
         break;
       }
     }
+  }
+
+  /** The MCV that just became yard `b` unfolds as an overlay instead of vanishing (deployfx.ts). */
+  private startDeploy(b: Entity): boolean {
+    for (const v of this.visuals.values()) {
+      if (!v.visible || this.world.get(v.id) || DEFS[v.def]?.kind !== 'unit' || !unitDef(v.def).mcv) continue;
+      const r = v.model.root;
+      if (Math.hypot(r.position.x - b.x, r.position.z - b.y) > 2) continue;
+      this.visuals.delete(v.id);
+      if (v.ring) this.scene.remove(v.ring);
+      restoreMain(r);
+      this.deployFx.start(b.id, v.model, v.anim, b.x, groundHeight(this.world.map, b.x, b.y), b.y);
+      return true;
+    }
+    return false;
   }
 
   private schedule(delay: number, fn: () => void) {
@@ -1865,6 +1910,8 @@ export class GameRenderer {
       this.fog.update(p.explored, p.visible, dt);
     }
     this.syncEntities(alpha, dt);
+    this.life.update(dt, this.time);
+    this.deployFx.update(dt, this.time);
     this.overlay.endFrame();
     this.updateWrecks(dt);
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
@@ -1965,6 +2012,8 @@ export class GameRenderer {
     this.disposed = true;
     this.perfHud.dispose();
     this.instancer.dispose();
+    this.life.dispose();
+    this.deployFx.dispose();
     this.atmos.dispose();
     this.readability.dispose();
     this.temporal?.dispose();

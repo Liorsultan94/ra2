@@ -440,8 +440,23 @@ class Acc {
     let list = this.buckets.get(key);
     if (!list) this.buckets.set(key, (list = []));
     list.push(g);
+    this.last = g;
     this.tris += g.attributes.position.count / 3;
     return this;
+  }
+  /** Geometry pushed by the latest add() (build time bookkeeping, e.g. hatch lids moved to their own part). */
+  last: THREE.BufferGeometry | null = null;
+  /** Take a geometry added earlier back out of its bucket. */
+  drop(g: THREE.BufferGeometry | null) {
+    if (!g) return;
+    for (const list of this.buckets.values()) {
+      const i = list.indexOf(g);
+      if (i >= 0) {
+        list.splice(i, 1);
+        this.tris -= g.attributes.position.count / 3;
+        return;
+      }
+    }
   }
   merged(key: string): THREE.BufferGeometry | null {
     const list = this.buckets.get(key);
@@ -829,6 +844,80 @@ class Bld {
   }
   /** Skip the air-recognition panel (set by builders with no suitable roof). */
   noIdPanel = false;
+  /** Template key (mbt, apc, ...). */
+  key = '';
+  /** Hatches built with hatch() (z already narrowed); geos = the lid disc + handle in p's buckets. */
+  readonly hatches: { p: Part; x: number; y: number; z: number; r: number; paint: number; geos: (THREE.BufferGeometry | null)[] }[] = [];
+  /** Put a commander in a hatch (tanks, IFVs). */
+  crewOn = false;
+  /**
+   * Vehicle commander riding out of a hatch: the hatch lid becomes its own part
+   * hinged at its rear edge ('hlid', opens to ~110 deg), with a dark opening
+   * under it, and a head-and-shoulders figure ('crew' pivot; 'crewA' hands on
+   * the rim, 'crewB' glassing with binoculars - one shown at a time) that ducks
+   * inside when the vehicle buttons up. Each is a single vertex-coloured mesh
+   * (lid: camo + handle), so a crewed vehicle adds 3 drawn meshes.
+   * Turret hatches first (the commander's / loader's), else the largest hull hatch.
+   */
+  private crew() {
+    const inTurret = (p: Part) => {
+      for (let q: THREE.Object3D | null = p.g; q; q = q.parent) if (typeof q.userData.tag === 'string' && (q.userData.tag as string).split(' ').includes('turret')) return true;
+      return false;
+    };
+    let list = this.hatches.filter((h) => inTurret(h.p));
+    if (!list.length) list = this.hatches.slice();
+    if (!list.length) return;
+    list.sort((a, b) => b.r - a.r || a.x - b.x);
+    const h = list[0];
+    const P = h.p;
+    for (const g of h.geos) P.drop(g);
+    const r = h.r;
+    // the open hatch: dark ring well + coaming lip
+    P.cy(r * 0.9, r * 0.9, 0.002, h.x, h.y + 0.0004, h.z, K.black, 12);
+    P.add(new THREE.TorusGeometry(r * 0.95, 0.0035, 4, 14).rotateX(Math.PI / 2), shade(this.base, 0.75), TR(h.x, h.y + 0.003, h.z));
+    // lid, hinged at its rear edge (rotation.z opens it up and back)
+    const L = this.part(P, h.x - r, h.y, h.z, 'hlid');
+    L.cy(r, r * 1.04, 0.008, r, 0, 0, h.paint, 12);
+    L.box(r * 0.8, 0.004, 0.004, r * 1.1, 0.011, 0, K.steel);
+    L.box(r * 1.2, 0.0035, r * 1.1, r, -0.002, 0, 0x2c2e2a); // underside padding (seen when open)
+    // the commander
+    const reg = this.style.region;
+    const uni = reg === 'west' ? 0x7c7052 : reg === 'east' ? 0x4c5232 : reg === 'asia' ? 0x4a5434 : 0x857558;
+    const helm = reg === 'west' ? 0x5c5a44 : reg === 'east' ? 0x202020 : reg === 'asia' ? 0x34382c : 0x4a4636;
+    const skin = reg === 'mideast' ? 0xa8805e : reg === 'asia' ? 0xc8a07c : 0xc49478;
+    const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');
+    const figure = (Q: Part, glass: boolean) => {
+      // torso in the hatch well, shoulders, collar of the vest
+      Q.add(gCylY(0.021, 0.019, 0.07, 9), uni, TR(0, -0.022, 0));
+      Q.cbox(0.032, 0.02, 0.056, 0.007, 0, 0.018, 0, uni);
+      Q.cbox(0.036, 0.012, 0.05, 0.004, 0.002, 0.008, 0, shade(uni, 0.72));
+      Q.cy(0.007, 0.008, 0.012, 0.001, 0.026, 0, skin, 7);
+      // head + tanker helmet with ear cups, boom mic
+      Q.sph(0.0125, 0.002, 0.048, 0, skin, 9, 7);
+      Q.sph(0.0142, 0.0, 0.052, 0, helm, 10, 6, 0.9, true);
+      Q.add(gCylY(0.0142, 0.0142, 0.006, 10, true), helm, TR(0, 0.05, 0));
+      for (const s of [-1, 1]) Q.add(gCylZ(0.006, 0.006, 0.005, 8), helm, TR(0.0, 0.046, s * 0.0135));
+      Q.box(0.012, 0.0018, 0.0018, 0.012, 0.04, 0.012, K.dark, 0, 0.5, 0.2);
+      if (!glass) {
+        // forearms resting on the hatch rim
+        for (const s of [-1, 1]) {
+          Q.strut([0, 0.022, s * 0.026], [0.012, 0.004, s * 0.03], 0.0055, uni, 6);
+          Q.strut([0.012, 0.004, s * 0.03], [0.034, 0.004, s * 0.014], 0.005, uni, 6);
+          Q.sph(0.005, 0.036, 0.004, s * 0.012, K.olive, 6, 4);
+        }
+      } else {
+        // binoculars up at the eyes, elbows out
+        for (const s of [-1, 1]) {
+          Q.strut([0, 0.022, s * 0.026], [0.016, 0.028, s * 0.03], 0.0055, uni, 6);
+          Q.strut([0.016, 0.028, s * 0.03], [0.022, 0.046, s * 0.008], 0.005, uni, 6);
+          Q.add(gCylX(0.0045, 0.0045, 0.014, 7), K.black, TR(0.022, 0.049, s * 0.0055));
+        }
+        Q.box(0.006, 0.006, 0.006, 0.019, 0.049, 0, K.dark);
+      }
+    };
+    figure(this.part(F, 0, 0, 0, 'crewA'), false);
+    figure(this.part(F, 0, 0, 0, 'crewB'), true);
+  }
   /** Number of stowage items scattered on free flat deck / roof areas (0 = none). */
   clutterN = 0;
   /**
@@ -913,6 +1002,7 @@ class Bld {
   }
   finish(): Tpl {
     this.zk = 1;
+    if (this.crewOn) this.crew();
     if (!this.noIdPanel || this.clutterN > 0) {
       const pr = this.probe();
       this.idPanel(pr);
@@ -942,7 +1032,7 @@ class Bld {
     const skip = (o: THREE.Object3D | null): boolean => {
       for (let q = o; q; q = q.parent) {
         const tg = q.userData.tag;
-        if (typeof tg === 'string' && (tg.includes('recoil') || tg.includes('whip'))) return true;
+        if (typeof tg === 'string' && (tg.includes('recoil') || tg.includes('whip') || tg.includes('crew') || tg.includes('ramp'))) return true;
       }
       return false;
     };
@@ -1646,11 +1736,13 @@ function rws(p: Part, x: number, y: number, z: number, s = 1, heavy = true) {
   return x + 0.035 * s + len;
 }
 
-/** Hatch: low cylinder with a hinge and handle. */
+/** Hatch: low cylinder with a hinge and handle (recorded: the crew hatch is later rebuilt as an opening lid, see Bld.crew). */
 function hatch(p: Part, x: number, y: number, z: number, r = 0.03, paint = CAMO) {
   p.cy(r, r * 1.04, 0.008, x, y, z, paint, 12);
+  const disc = p.last;
   p.box(0.01, 0.006, r * 1.2, x - r * 0.9, y + 0.006, z, K.dark);
   p.box(r * 0.8, 0.004, 0.004, x + r * 0.1, y + 0.011, z, mt(K.steel));
+  p.b.hatches.push({ p, x, y, z: z * p.b.zk, r, paint, geos: [disc, p.last] });
 }
 
 /** Periscope block (vision block) facing +X with glass. */
@@ -1849,6 +1941,8 @@ function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld
     const b = new Bld(style, fog);
     b.clutterN = CLUTTER[key] ?? 0;
     b.zk = WIDTH_K[key + '|' + style.faction] ?? WIDTH_K[key] ?? 1;
+    b.key = key;
+    b.crewOn = key === 'mbt' || key === 'apc';
     fn(b);
     t = b.finish();
     t.key = ck;
@@ -1943,6 +2037,9 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
   const whips = q('whip');
   const spins = q('spin');
   const custom = t.custom ? t.custom(q, model) : undefined;
+  const crew = crewAnim(q, id);
+  const ramps = q('ramp');
+  let rampT = 0;
   const ph = Math.random() * 100;
   let turnAcc = 0;
   let lastSpeed = 0;
@@ -2059,9 +2156,80 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
       const ax = (o.userData.axis as 'x' | 'y' | 'z') ?? 'y';
       o.rotation[ax] = ph + s.time * rate;
     }
+    if (crew) crew(s);
+    if (ramps.length) {
+      // troop door: eases to AnimState.ramp (opening slower than the slam shut)
+      const tgt = s.dead > 0 ? 0 : clamp(s.ramp ?? 0, 0, 1);
+      const was = rampT;
+      rampT = dt === 0 && s.time === 0 ? tgt : tgt > rampT ? Math.min(tgt, rampT + dt * 1.6) : Math.max(tgt, rampT - dt * 2.2);
+      if (rampT !== was || s.time === 0) {
+        const k = sstep(0, 1, rampT);
+        for (const r of ramps) r.rotation[r.userData.axis as 'y' | 'z'] = (r.userData.open as number) * k;
+      }
+    }
     if (custom) custom(s);
   };
   return model;
+}
+
+/**
+ * Commander in the hatch (see Bld.crew): rides out while calm, ducks inside and
+ * pulls the lid shut within ~0.4 s when the vehicle fires, takes damage or the
+ * renderer reports enemies near (AnimState.hatch = 0); pops back up after a few
+ * quiet seconds. Idle: looks around, now and then glasses the horizon with
+ * binoculars. Dead / wreck: inside, lid shut.
+ */
+function crewAnim(q: (tag: string) => THREE.Object3D[], id: number): ((s: AnimState) => void) | undefined {
+  const F = q('crew')[0];
+  const A = q('crewA')[0];
+  const Bn = q('crewB')[0];
+  const lid = q('hlid')[0];
+  if (!F || !A || !Bn || !lid) return undefined;
+  const y0 = F.position.y;
+  const seed = hash01(id * 17 + 5) * 100;
+  let expo = 1;
+  let calm = 10;
+  let lastDmg = 0;
+  let look = 0;
+  let glass = false;
+  let shown = -1;
+  const OPEN = 1.95;
+  Bn.visible = false;
+  return (s: AnimState) => {
+    const dt = Math.min(Math.max(s.dt, 0), 0.1);
+    const dead = s.dead > 0;
+    const hurt = s.damage > lastDmg + 0.001;
+    lastDmg = s.damage;
+    if (dead || (s.hatch ?? 1) < 0.5 || s.fired < 2.5 || hurt) calm = 0;
+    else calm += dt;
+    const tgt = calm > 3 ? 1 : 0;
+    if (dead) expo = 0;
+    else if (dt === 0 && s.time === 0) expo = tgt;
+    else expo = tgt > expo ? Math.min(1, expo + dt / 1.6) : Math.max(0, expo - dt / 0.45);
+    // 0 .. 0.3: lid swings open (closes last when ducking), 0.25 .. 1: the commander climbs up
+    lid.rotation.z = OPEN * sstep(0, 0.3, expo);
+    const up = sstep(0.25, 1, expo);
+    F.position.y = y0 - 0.075 * (1 - up);
+    const vis = up > 0.02 ? 1 : 0;
+    if (vis !== shown) {
+      F.visible = vis === 1;
+      shown = vis;
+    }
+    if (!vis) return;
+    // idle: scan the surroundings, binoculars for a few seconds every ~15 s (forward arc)
+    const t = s.time + seed;
+    const cyc = (t % 15) / 15;
+    const g = up > 0.9 && cyc > 0.72 && cyc < 0.93;
+    if (g !== glass) {
+      glass = g;
+      A.visible = !g;
+      Bn.visible = g;
+    }
+    const want = g ? Math.sin(seed) * 0.5 : Math.sin(t * 0.37) * 1.1 + Math.sin(t * 0.91 + seed) * 0.45;
+    look += (want - look) * Math.min(1, dt * 2.2);
+    F.rotation.y = look;
+    F.rotation.z = (g ? 0.06 : 0) + 0.04 * Math.sin(t * 0.6);
+  };
 }
 
 /** Mark an object as a continuous spinner (rotation = time * rate). */
@@ -3029,11 +3197,52 @@ function lightTracks(b: Bld, o: { n: number; x0: number; x1: number; rw?: number
 
 /** Rear ramp / door outline with a team panel on the rear plate at x. */
 function rearRamp(B: Part, x: number, y0: number, y1: number, w: number, team: number, doors = 1) {
+  if (B.b.key === 'apc') return troopRamp(B, x, y0, y1, w, team, doors);
   B.box(0.006, y1 - y0, w, x - 0.002, (y0 + y1) / 2, 0, K.dark);
   if (doors === 1) B.box(0.006, y1 - y0 - 0.012, w - 0.014, x, (y0 + y1) / 2, 0, CAMO);
   else for (const s of [-1, 1]) B.box(0.006, y1 - y0 - 0.012, w / 2 - 0.012, x, (y0 + y1) / 2, (s * w) / 4, CAMO);
   B.box(0.004, 0.022, w * 0.6, x + 0.003 * Math.sign(x) * -1 + (x < 0 ? -0.004 : 0.004), y1 - 0.025, 0, team);
   for (const s of [-1, 1]) B.box(0.008, 0.024, 0.008, x + (x < 0 ? -0.004 : 0.004), (y0 + y1) / 2, (s * w) / 2.6, mt(K.steel));
+}
+
+/**
+ * Troop transport's working rear door(s), tagged 'ramp' (userData.axis / open = the hinge axis and open angle;
+ * the instance animation eases them with AnimState.ramp). One door = a ramp hinged at its bottom edge that
+ * drops to the ground; two doors = leaves hinged at the outer edges that swing out to the sides.
+ * Behind them: a dark troop compartment with benches and a lit interior.
+ */
+function troopRamp(B: Part, x: number, y0: number, y1: number, w: number, team: number, doors: number) {
+  const b = B.b;
+  const h = y1 - y0;
+  // compartment opening: dark recess, side benches, red interior lamp
+  B.box(0.006, h, w, x + 0.006, (y0 + y1) / 2, 0, K.black);
+  B.box(0.004, 0.006, w + 0.006, x - 0.001, y1 + 0.002, 0, K.dark);
+  B.box(0.004, 0.006, w + 0.006, x - 0.001, y0 - 0.002, 0, K.dark);
+  for (const s of [-1, 1]) {
+    B.box(0.004, h + 0.008, 0.006, x - 0.001, (y0 + y1) / 2, (s * (w + 0.006)) / 2, K.dark);
+    B.box(0.01, 0.018, 0.004, x + 0.005, y0 + h * 0.35, s * w * 0.38, K.olive);
+  }
+  B.box(0.003, 0.008, 0.02, x + 0.004, y1 - 0.012, 0, 0x8a2c1e);
+  if (doors === 1) {
+    const R = b.part(B, x - 0.004, y0, 0, 'ramp');
+    R.g.userData.axis = 'z';
+    // drop to the ground (hinge height y0, ramp length h): rotate past horizontal until the lip touches
+    R.g.userData.open = Math.min(2.25, Math.acos(Math.max(-1, Math.min(1, -y0 / h))));
+    R.box(0.008, h - 0.004, w - 0.01, 0, h / 2, 0, CAMO);
+    R.box(0.003, 0.022, w * 0.6, -0.005, h - 0.025, 0, team);
+    for (let i = 0; i < 4; i++) R.box(0.003, 0.004, w - 0.04, 0.0055, 0.03 + i * (h - 0.05) / 3, 0, 0x34362e); // inside treads (seen when down)
+    for (const s of [-1, 1]) R.box(0.008, 0.024, 0.008, -0.005, h / 2, (s * w) / 2.6, K.steel);
+  } else {
+    for (const s of [-1, 1]) {
+      const D = b.part(B, x - 0.004, (y0 + y1) / 2, (s * w) / 2, 'ramp');
+      D.g.userData.axis = 'y';
+      D.g.userData.open = s * 1.85;
+      const lw = w / 2 - 0.004;
+      D.box(0.008, h - 0.006, lw, 0, 0, (-s * lw) / 2, CAMO);
+      D.box(0.003, 0.022, lw * 0.7, -0.005, h / 2 - 0.025, (-s * lw) / 2, team);
+      D.box(0.008, 0.024, 0.008, -0.005, 0, -s * lw * 0.8, K.steel);
+    }
+  }
 }
 
 /** Small two-man / unmanned IFV turret base; returns the turret part. */
@@ -4727,6 +4936,12 @@ function harvester(style: ModelStyle, fog: FogOfWar | null): Model {
   });
 }
 
+/**
+ * MCV: truck with a folded construction module. Deploying (AnimState.deploy 0..1, ~4 s, driven by the
+ * renderer's deploy overlay) unfolds it: outrigger beams slide out and their jacks press down, lifting
+ * the truck level; the module's side walls fold down into floor wings, wall panels hinged on the wings
+ * swing up, roof panels flip over onto them and the crane boom rises and slews.
+ */
 function mcv(style: ModelStyle, fog: FogOfWar | null): Model {
   return build('mcv', style, fog, (b) => {
     const B = b.body;
@@ -4738,26 +4953,65 @@ function mcv(style: ModelStyle, fog: FogOfWar | null): Model {
     ];
     const fy = truck(b, { axles, r: 0.085, W: 0.64, cabX0: 0.4, cabX1: 0.68, frameX0: -0.62, cabH: 0.22, tyreW: 0.085 });
     B.box(1.02, 0.04, 0.62, -0.13, fy + 0.02, 0, CAMO);
-    // construction module: prefabricated building block
+    // construction module: core (floor, end walls, roof, machinery) + folding side walls
     const mx = -0.2;
-    B.cbox(0.64, 0.24, 0.56, 0.012, mx, fy + 0.16, 0, CAMO);
-    for (const s of [-1, 1]) {
-      for (let i = 0; i < 4; i++) B.box(0.004, 0.2, 0.004, mx - 0.24 + i * 0.16, fy + 0.16, s * 0.282, K.dark);
-      B.box(0.1, 0.05, 0.004, mx + 0.1, fy + 0.2, s * 0.282, GLASS);
-      B.box(0.1, 0.05, 0.004, mx - 0.1, fy + 0.2, s * 0.282, GLASS);
-      teamPanel(B, 0.6, 0.03, 0.003, mx, fy + 0.07, s * 0.283, b.team);
-      // outriggers (folded)
-      B.box(0.06, 0.05, 0.08, -0.56, fy - 0.01, s * 0.3, K.yellow);
-      B.box(0.06, 0.03, 0.06, 0.28, fy - 0.01, s * 0.3, K.yellow);
+    const LX = 0.64;
+    const H = 0.24;
+    const HZ = 0.28;
+    const y0 = fy + 0.04;
+    B.box(LX, 0.012, HZ * 2, mx, y0 + 0.006, 0, 0x3a3c38);
+    for (const e of [-1, 1]) B.box(0.014, H, HZ * 2, mx + (e * (LX - 0.014)) / 2, y0 + H / 2, 0, CAMO);
+    B.cbox(LX, 0.014, HZ * 2, 0.004, mx, y0 + H, 0, CAMO);
+    // machinery inside (seen once the walls are down): 3D-printer gantry, power packs, consoles
+    B.box(LX - 0.06, 0.16, 0.2, mx, y0 + 0.09, 0, 0x5a5e60);
+    B.box(LX - 0.1, 0.02, 0.22, mx, y0 + 0.18, 0, K.yellow);
+    for (const x of [-0.2, 0, 0.2]) B.box(0.03, 0.05, 0.03, mx + x, y0 + 0.215, 0, K.dark);
+    for (const z of [-1, 1]) {
+      for (let i = 0; i < 3; i++) B.box(0.1, 0.07, 0.02, mx - 0.18 + i * 0.18, y0 + 0.05, z * 0.115, i === 1 ? 0x2c4a5c : 0x4a4c48);
+      B.box(LX - 0.04, 0.008, 0.008, mx, y0 + 0.235, z * 0.2, K.yellow);
     }
-    grille(B, mx - 0.15, fy + 0.28, 0.12, 0.16, 0.16, 6, 0x3a3d40);
-    B.cy(0.05, 0.05, 0.04, mx + 0.15, fy + 0.28, -0.12, 0x3a3d40, 12);
-    B.box(0.1, 0.04, 0.1, mx + 0.0, fy + 0.3, -0.15, 0x3a3d40);
-    beacon(b, B, mx - 0.28, fy + 0.28, 0.24);
+    grille(B, mx - 0.15, y0 + H, 0.12, 0.16, 0.16, 6, 0x3a3d40);
+    B.cy(0.05, 0.05, 0.04, mx + 0.15, y0 + H, -0.12, 0x3a3d40, 12);
+    beacon(b, B, mx - 0.28, y0 + H, 0.24);
     beacon(b, B, 0.6, fy + 0.24, -0.24);
-    // folded crane: base on the front of the bed, boom resting on the module
+    for (const s of [-1, 1]) {
+      // side wall: hinged at its bottom edge, folds out into a floor wing (inner face = deck plate)
+      const W = b.part(B, mx, y0, s * HZ, 'mcvwall');
+      W.g.userData.side = s;
+      W.box(LX - 0.03, H, 0.012, 0, H / 2, s * 0.006, CAMO);
+      for (let i = 0; i < 4; i++) W.box(0.004, H - 0.04, 0.004, -0.24 + i * 0.16, H / 2, s * 0.013, K.dark);
+      for (const x of [-0.1, 0.1]) W.box(0.1, 0.05, 0.004, x, 0.16, s * 0.013, 0x1e2a34);
+      W.box(0.6, 0.03, 0.003, 0, 0.03, s * 0.0135, b.team);
+      W.box(LX - 0.05, H - 0.02, 0.003, 0, H / 2, -s * 0.0015, 0x55585a); // anti-slip deck plate
+      for (let i = 0; i < 3; i++) W.box(LX - 0.06, 0.004, 0.003, 0, 0.05 + i * 0.07, -s * 0.0035, K.yellow);
+      // wall panel stowed against the inside of the side wall; swings up from the wing's outer edge
+      const O = b.part(W, 0, H, -s * 0.004, 'mcvpanel');
+      O.g.userData.side = s;
+      O.box(LX - 0.06, 0.2, 0.01, 0, -0.1, -s * 0.005, CAMO);
+      for (const x of [-0.18, 0.02, 0.2]) O.box(0.08, 0.05, 0.003, x, -0.12, -s * 0.0105, 0x1e2a34);
+      O.box(LX - 0.06, 0.012, 0.012, 0, -0.006, -s * 0.005, b.team);
+      // roof panel folded on the roof; flips over onto the raised wall panel
+      const R = b.part(B, mx, y0 + H + 0.007 + (s > 0 ? 0.007 : 0), s * (HZ - 0.01), 'mcvroof');
+      R.g.userData.side = s;
+      R.box(LX - 0.03, 0.006, 0.25, 0, 0.003, -s * 0.125, CAMO);
+      for (let i = 0; i < 3; i++) R.box(LX - 0.05, 0.004, 0.006, 0, 0.007, -s * (0.04 + i * 0.08), K.dark);
+    }
+    // outriggers: beams slide out sideways, jack legs press down (leg = unit height, scaled to reach the ground)
+    for (const x of [-0.56, 0.28])
+      for (const s of [-1, 1]) {
+        const J = b.part(B, x, fy - 0.01, s * 0.26, 'mcvjack');
+        J.g.userData.side = s;
+        J.box(0.06, 0.05, 0.1, 0, 0, s * 0.04, K.yellow);
+        J.box(0.062, 0.012, 0.03, 0, 0.0, s * 0.085, K.black);
+        const Lg = b.part(J, 0, 0, s * 0.07, 'mcvleg');
+        Lg.box(0.03, 0.12, 0.03, 0, -0.06, 0, K.yellow);
+        J.box(0.036, 0.05, 0.036, 0, -0.03, s * 0.07, K.dark);
+        const Pd = b.part(J, 0, 0, s * 0.07, 'mcvpad');
+        Pd.box(0.07, 0.012, 0.07, 0, -0.006, 0, K.dark);
+      }
+    // crane: base on the front of the bed, boom resting on the module
     B.cy(0.06, 0.07, 0.05, 0.27, fy + 0.04, 0.12, K.yellow, 12);
-    const C = b.part(B, 0.27, fy + 0.11, 0.12);
+    const C = b.part(B, 0.27, fy + 0.11, 0.12, 'mcvcrane');
     C.g.rotation.y = Math.PI;
     C.g.rotation.z = -0.13;
     C.cbox(0.8, 0.06, 0.06, 0.01, 0.4, 0.04, 0, K.yellow);
@@ -4768,6 +5022,50 @@ function mcv(style: ModelStyle, fog: FogOfWar | null): Model {
     for (let i = 0; i < 6; i++) C.box(0.04, 0.004, 0.062, 0.1 + i * 0.12, 0.071, 0, K.black);
     antennas(b, B, 0.45, fy + 0.22, [-0.25, 0.25], 0.24);
     b.bob = 0.5;
+    const legTop = fy - 0.01;
+    b.custom = (q) => {
+      const body = q('body')[0];
+      const walls = q('mcvwall');
+      const panels = q('mcvpanel');
+      const roofs = q('mcvroof');
+      const jacks = q('mcvjack');
+      const legs = q('mcvleg');
+      const pads = q('mcvpad');
+      const crane = q('mcvcrane')[0];
+      const jz = jacks.map((j) => j.position.z);
+      const R0 = 0.035;
+      for (const l of legs) l.scale.y = R0 / 0.12;
+      for (const p of pads) p.position.y = -R0 + 0.012;
+      let last = 0;
+      return (s: AnimState) => {
+        const d = s.deploy ?? 0;
+        const T = d * 4;
+        const lift = 0.028 * sstep(0.85, 1.25, T);
+        if (body && d > 0) body.position.y += lift;
+        if (d === last) return;
+        last = d;
+        const out = sstep(0.3, 0.75, T);
+        const press = sstep(0.6, 1.15, T);
+        for (let i = 0; i < jacks.length; i++) {
+          const sd = jacks[i].userData.side as number;
+          jacks[i].position.z = jz[i] + sd * 0.11 * out;
+          // leg reaches from the beam to the ground (body origin = ground; the hull rises by lift)
+          const len = R0 + (legTop + lift - R0) * press;
+          legs[i].scale.y = len / 0.12;
+          pads[i].position.y = -len + 0.012;
+        }
+        const fold = sstep(1.0, 1.75, T);
+        for (const w of walls) w.rotation.x = (w.userData.side as number) * (Math.PI / 2) * fold;
+        const up = sstep(1.6, 2.25, T);
+        for (const p of panels) p.rotation.x = (p.userData.side as number) * (Math.PI / 2) * up;
+        const flip = sstep(2.0, 2.75, T);
+        for (const r of roofs) r.rotation.x = (r.userData.side as number) * (Math.PI + 0.13) * flip;
+        if (crane) {
+          crane.rotation.z = -0.13 + 1.0 * sstep(1.1, 2.0, T);
+          crane.rotation.y = Math.PI - 0.9 * sstep(2.0, 3.0, T) + 0.5 * sstep(3.0, 3.8, T);
+        }
+      };
+    };
   });
 }
 

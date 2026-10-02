@@ -55,6 +55,16 @@ export interface AnimState {
   ramp?: number;
   /** Infantry: 1 while hanging under a parachute canopy, 0 on the ground (the model blends its pose). */
   para?: number;
+  /**
+   * Tanks / IFVs with a crew hatch: 1 = the commander may ride head-and-shoulders out of the open hatch
+   * (default when undefined), 0 = button up (combat nearby). The model adds its own calm-down delay and
+   * also closes up on its own when it fires or takes damage.
+   */
+  hatch?: number;
+  /** MCV: deploy (unfold into a construction yard) progress 0..1, driven by the renderer's deploy overlay. */
+  deploy?: number;
+  /** Infantry: seconds since the soldier started digging in (undefined / 0 = not digging); the dig motion plays for the first ~2.4 s, then he kneels in the foxhole. */
+  dig?: number;
 }
 
 export interface Model {
