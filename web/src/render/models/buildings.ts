@@ -191,6 +191,7 @@ const TILE_UV: Record<Tile, number> = {
   [Tile.RoofTile]: 2.2,
   [Tile.Hazard]: 4.5,
   [Tile.Stone]: 1.3,
+  [Tile.Glass]: 1,
 };
 
 /** Old procedural texture kinds (textures.ts names) mapped onto atlas tiles. */
@@ -275,8 +276,6 @@ class Mats {
       const mm = new THREE.MeshStandardMaterial({
         map: A.map,
         normalMap: A.normalMap,
-        roughnessMap: A.rmMap,
-        metalnessMap: A.rmMap,
         roughness: 1,
         metalness: 1,
         vertexColors: true,
@@ -317,10 +316,7 @@ class Mats {
   /** Plain colour: painted (atlas paint tile), bare metal (atlas plate tile), glossy (plain) or double sided. */
   col(color: number, rough = 0.7, metal = 0.1, double = false): SMat {
     if (double) return this.at(Tile.Paint, color, 3, true);
-    if (rough < 0.2 && metal > 0.5) {
-      const real = this.cached('vc:gloss', false, () => new THREE.MeshStandardMaterial({ roughness: 0.08, metalness: 0.85, vertexColors: true, envMapIntensity: 1.6 }));
-      return this.virt(real, new THREE.Color(color), 0);
-    }
+    if (rough < 0.2 && metal > 0.5) return this.at(Tile.Glass, mulHex(color, 0xffffff, 1.15), 1);
     if (metal >= 0.45) return this.at(Tile.Plate, color, 3.2);
     return this.at(Tile.Paint, color, 3);
   }
@@ -341,6 +337,19 @@ class Mats {
     const c = new THREE.Color(color).multiplyScalar(ei / base);
     return this.virt(real, c, 0);
   }
+  /** Synchronised red obstruction lights (per owner; flashed by the instances, not a night lamp). */
+  blink(): SMat {
+    const base = 3.2;
+    const real = this.cached('blinkl', true, () => {
+      const mm = new THREE.MeshStandardMaterial({ color: 0x050505, emissive: 0xff2a1a, emissiveIntensity: base, roughness: 0.4, metalness: 0, toneMapped: false });
+      mm.userData.blinkEI = base;
+      mm.userData.uv = 0;
+      return mm;
+    });
+    this.blinks.add(real);
+    return real;
+  }
+  readonly blinks = new Set<SMat>();
   /** Window panes with random lit cells (per owner, dimmable). */
   win(curtain = false): SMat {
     const m = this.cached(`win:${curtain}`, true, () => {
@@ -646,6 +655,11 @@ const NATIONS: Record<string, Nation> = {
   },
 };
 
+for (const n of Object.values(NATIONS)) {
+  n.conc = shade(n.conc, 0.86);
+  n.ground = shade(n.ground, 0.84);
+}
+
 function nationOf(s: ModelStyle): Nation {
   return NATIONS[s.faction] ?? NATIONS.neutral;
 }
@@ -859,6 +873,7 @@ interface Tpl {
   specs: AnimSpec[];
   glow: Mat[];
   flags: SMat[];
+  blinks: SMat[];
   emitters: Model['emitters'];
   height: number;
   size: { x: number; y: number; z: number };
@@ -1092,7 +1107,7 @@ class Kit {
         geo.computeBoundingSphere();
         const mesh = new THREE.Mesh(geo, m);
         const sm = m as SMat;
-        const isGlow = !!sm.userData.baseEI && !sm.map;
+        const isGlow = (!!sm.userData.baseEI || !!sm.userData.blinkEI) && !sm.map;
         mesh.castShadow = !isGlow && !sm.alphaTest;
         mesh.receiveShadow = true;
         if (obj === this.detail) mesh.userData.lodDetail = true;
@@ -1279,10 +1294,19 @@ class Kit {
   osc(n: string, ax: Ax, a: number, f: number, p = 0, b = 0) {
     this.specs.push({ k: 'osc', n, ax, a, f, p, b });
   }
+  /**
+   * Aviation obstruction light. All of an owner's obstruction lights share one emissive material that the
+   * instances flash in sync (like a real synchronised obstruction lighting system), so they merge into the
+   * static geometry instead of costing a draw call each. Animated parts keep a per-node blinker.
+   */
   blinkLight(x: number, y: number, z: number, r = 0.022, per = 1.4, p = 0) {
+    if (this.cur === this.root) {
+      this.mark('blinks', x, y, z);
+      this.sph(this.P.mats.blink(), r, x, y, z, 8, 6);
+      return;
+    }
     const n = 'blink' + this.specs.length;
     const o = this.node(n, x, y, z);
-    this.mark('blinks', x, y, z);
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
@@ -2265,6 +2289,7 @@ function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d
     specs: k.specs,
     glow: [...P.mats.glow],
     flags: P.mats.flags,
+    blinks: [...P.mats.blinks],
     emitters: k.emitters,
     height: k.height,
     size: { x: w, y: k.height, z: d },
@@ -2339,6 +2364,8 @@ function instance(t: Tpl): FxModel {
     const f = pw ? 1 : 0.22;
     for (const g of glow) g.emissiveIntensity = (g.userData.baseEI as number) * f;
     for (const fm of flags) (fm.userData.uTime as { value: number }).value = s.time;
+    const blinkOn = pw && s.built >= 1 && s.time % 1.5 < 0.55;
+    for (const bm of t.blinks) bm.emissiveIntensity = blinkOn ? (bm.userData.blinkEI as number) : 0;
     bfx.update(s);
     if (s.built < 1) return;
     const t0 = s.time;
@@ -3005,8 +3032,7 @@ function gantryCrane(k: Kit, cx: number, z: number, span: number, H: number, zAm
     k.box(cm, 0.12, 0.09, 0.11, span / 2 - 0.16, H - 0.1, -0.11);
     k.box(P.glass, 0.004, 0.05, 0.09, span / 2 - 0.22, H - 0.08, -0.11);
     k.box(P.glass, 0.1, 0.05, 0.004, span / 2 - 0.16, H - 0.08, -0.165);
-    // warning lights at the girder ends
-    for (const sx of [-1, 1]) k.sph(P.amber_l, 0.012, (sx * (span / 2 + 0.03)), H + 0.09, -0.07, 6, 4);
+    for (const sx of [-1, 1]) k.box(P.yellow, 0.02, 0.025, 0.02, sx * (span / 2 + 0.03), H + 0.075, -0.07);
     // trolley + hoist + load
     const tr = k.node('trolley', 0, H + 0.075, 0);
     k.on(tr, () => {
@@ -3023,8 +3049,7 @@ function gantryCrane(k: Kit, cx: number, z: number, span: number, H: number, zAm
       k.at(0, -drop - 0.12 - 0.15, 0, 0, () => {
         k.box(P.wall, 0.4, 0.15, 0.17, 0, 0, 0);
         k.box(P.team, 0.402, 0.015, 0.172, 0, 0.13, 0);
-        k.panel(P.win, 'z', 1, -0.08, 0.05, 0.086, 0.07, 0.05, cell(k));
-        k.panel(P.win, 'z', 1, 0.08, 0.05, 0.086, 0.07, 0.05, cell(k));
+        for (const wx of [-0.08, 0.08]) k.box(P.glass, 0.07, 0.05, 0.004, wx, 0.05, 0.086);
       });
     });
   });
@@ -3518,8 +3543,8 @@ function oreHeap(k: Kit, x: number, z: number, r: number, h: number) {
 /** Round thickener / settling tank with a slowly rotating rake bridge. */
 function thickener(k: Kit, name: string, x: number, z: number, r: number) {
   const P = k.P;
-  k.cyl(P.concrete, r, 0.12, x, Y0, z, 24);
-  k.cyl(P.mats.col(0x5a5a3e, 0.15, 0.6), r - 0.02, 0.005, x, Y0 + 0.105, z, 24);
+  k.lathe(P.concrete, [[r - 0.03, 0.1], [r - 0.03, 0.12], [r, 0.12], [r, 0]], x, Y0, z, 28);
+  k.cyl(P.mats.col(0x4e5236, 0.15, 0.6), r - 0.03, 0.1, x, Y0, z, 24);
   k.ring(P.team, r + 0.002, 0.008, x, Y0 + 0.11, z, 28);
   k.cyl(P.steel, 0.03, 0.16, x, Y0, z, 10);
   const b = k.node(name, x, Y0 + 0.16, z);
@@ -3950,21 +3975,19 @@ function prototypeLaser(k: Kit, x: number, z: number) {
   k.cyl(P.dark, 0.09, 0.06, x, Y0 + 0.02, z, 12);
   k.rbox(P.white, 0.14, 0.1, 0.12, x, Y0 + 0.08, z, 0.015);
   k.box(P.team, 0.142, 0.02, 0.122, x, Y0 + 0.14, z);
-  const t = k.node('proto', x, Y0 + 0.2, z, 0.6);
-  k.on(t, () => {
+  k.at(x, Y0 + 0.2, z, 0.6, () => {
     k.tube(P.galv, [-0.05, 0, 0], [0.16, 0.06, 0], 0.035, 12);
     k.tube(P.cyan_l, [0.16, 0.06, 0], [0.17, 0.063, 0], 0.028, 12);
     k.box(P.dark, 0.06, 0.05, 0.1, -0.06, -0.03, 0);
     for (const sz of [-1, 1]) k.box(P.galv, 0.012, 0.06, 0.012, 0.0, -0.06, sz * 0.05);
   });
-  k.osc('proto', 'y', 0.9, 0.2, 0.3, 0);
   k.box(P.mats.col(0x3a3d40, 0.8, 0.2), 0.16, 0.12, 0.04, x - 0.3, Y0, z + 0.25);
   k.box(P.cyan_l, 0.004, 0.02, 0.025, x - 0.219, Y0 + 0.08, z + 0.25);
   k.tube(P.black, [x - 0.22, Y0 + 0.01, z + 0.25], [x - 0.05, Y0 + 0.02, z + 0.05], 0.006, 4);
 }
 
 /** Bank of server / chiller units with spinning fans on top. */
-function chillers(k: Kit, x0: number, x1: number, z: number, n: number, tag: string) {
+function chillers(k: Kit, x0: number, x1: number, z: number, n: number, tag: string, spin = true) {
   const P = k.P;
   const w = (x1 - x0) / n;
   for (let i = 0; i < n; i++) {
@@ -3973,11 +3996,13 @@ function chillers(k: Kit, x0: number, x1: number, z: number, n: number, tag: str
     for (let j = 0; j < 5; j++) k.box(P.dark, w - 0.04, 0.008, 0.004, cx, Y0 + 0.03 + j * 0.02, z + 0.111);
     k.cyl(P.black, 0.07, 0.005, cx, Y0 + 0.14, z, 14);
     k.ring(P.dark, 0.07, 0.006, cx, Y0 + 0.147, z, 14);
-    const fn = k.node(tag + i, cx, Y0 + 0.146, z);
-    k.on(fn, () => {
+    const blades = () => {
       for (let b = 0; b < 5; b++) k.boxR(P.steel, 0.06, 0.003, 0.018, Math.cos((b / 5) * TAU) * 0.03, 0, -Math.sin((b / 5) * TAU) * 0.03, (b / 5) * TAU, 0.3);
-    });
-    k.spin(tag + i, 'y', 6 + i);
+    };
+    if (spin) {
+      k.on(k.node(tag + i, cx, Y0 + 0.146, z), blades);
+      k.spin(tag + i, 'y', 6 + i);
+    } else k.at(cx, Y0 + 0.146, z, i * 0.7, blades);
     k.box(P.team, w - 0.018, 0.012, 0.222, cx, Y0 + 0.12, z);
   }
 }
@@ -4024,12 +4049,12 @@ function tech(k: Kit) {
   }
   k.blinkLight(0.9, Y0 + 0.96, -0.9, 0.016, 1.5, 0);
   // ------------------------------------------------ server chillers + cryo tanks + test pad
-  chillers(k, 0.38, 1.38, -0.2, 3, 'fan');
+  chillers(k, 0.38, 1.38, -0.2, 3, 'fan', false);
   for (let i = 0; i < 3; i++) silo(k, -1.2 + i * 0.24, -0.1, 0.085, 0.42, P.white, 'dome');
   k.pipe(P.galv, [[-1.2, Y0 + 0.3, -0.19], [-1.2, Y0 + 0.3, -0.38]], 0.014, 6);
   k.pipe(P.rust, [[-0.7, Y0 + 0.2, -0.1], [-0.5, Y0 + 0.2, -0.1], [-0.5, Y0 + 0.2, -0.38]], 0.016, 6);
   prototypeLaser(k, 0.55, 0.65);
-  satcom(k, 'dish2', -0.25, Y0, 0.35, 0.18);
+  satDish(k, -0.25, Y0, 0.35, 0.16, 0.85, 0.7);
   // antenna farm: lattice mast
   lattice(k, P.galv, -1.05, 0.75, Y0, 1.45, 0.16, 0.05, 8, 0.007);
   k.blinkLight(-1.05, Y0 + 1.48, 0.75, 0.016, 1.5, 0);
@@ -4299,6 +4324,160 @@ function swCruise(k: Kit) {
   k.spin('crad', 'y', 1.4);
   truck(k, -0.6, 1.25, 0, 'cargo', 1.0);
   k.height = 1.0;
+}
+
+// ================================================================ CAPTURABLE TECH STRUCTURES (neutral until captured)
+
+/** Red cross marking: flat on a roof, or upright on a +Z facing wall. */
+function redCross(k: Kit, x: number, y: number, z: number, s: number, wall = false) {
+  const P = k.P;
+  if (!wall) {
+    k.box(P.white, s * 1.15, 0.004, s * 1.15, x, y, z);
+    k.box(P.red, s, 0.006, s * 0.3, x, y + 0.002, z);
+    k.box(P.red, s * 0.3, 0.006, s, x, y + 0.002, z);
+    return;
+  }
+  k.box(P.white, s * 1.15, s * 1.15, 0.006, x, y - s * 0.575, z + 0.003);
+  k.box(P.red, s, s * 0.3, 0.008, x, y - s * 0.15, z + 0.004);
+  k.box(P.red, s * 0.3, s, 0.008, x, y - s * 0.5, z + 0.004);
+}
+
+function techHospital(k: Kit) {
+  const P = k.P;
+  slab(k, 2, 2);
+  // prefab ward block (two modules) with a covered entrance
+  const x0 = -0.95;
+  const x1 = 0.35;
+  const z0 = -0.95;
+  const z1 = -0.35;
+  block(k, { x0, x1, z0, z1, h: 0.36, floors: 2, wall: P.mats.at(Tile.Clad, 0xe8e8e2), door: -0.3, equip: 2, sign: false, roof: 'flat' });
+  redCross(k, -0.62, Y0 + 0.385, -0.65, 0.26);
+  redCross(k, 0.1, Y0 + 0.3, z1, 0.1, true);
+  k.box(P.white, 0.34, 0.012, 0.16, -0.3, Y0 + 0.2, z1 + 0.08);
+  for (const sx of [-1, 1]) k.cyl(P.galv, 0.006, 0.2, -0.3 + sx * 0.15, Y0, z1 + 0.15, 6);
+  // field tents (canvas, gable) on the right
+  for (let i = 0; i < 2; i++) {
+    const tz = -0.75 + i * 0.42;
+    k.box(P.mats.at(Tile.Canvas, 0xa8a488), 0.5, 0.14, 0.34, 0.68, Y0, tz);
+    gable(k, P.mats.at(Tile.Canvas, 0x9a9878), P.mats.at(Tile.Canvas, 0xa8a488), 0.68, Y0 + 0.14, tz, 0.5, 0.34, 0.12, 0.02, true);
+    redCross(k, 0.68, Y0 + 0.24, tz + 0.085, 0.07);
+  }
+  // helipad (front left) + ambulances
+  k.cyl(P.concrete, 0.4, 0.008, -0.45, Y0, 0.5, 28);
+  k.decal(P.mats.canvas('helipad-h', texHelipad('#f2f2ea'), { alphaTest: 0.5 }), -0.45, Y0 + 0.009, 0.5, 0.7, 0.7);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU;
+    k.box(P.green_l, 0.016, 0.01, 0.016, -0.45 + Math.cos(a) * 0.41, Y0, 0.5 + Math.sin(a) * 0.41);
+  }
+  for (const [ax, az] of [
+    [0.55, 0.2],
+    [0.55, 0.52],
+  ] as P2[]) {
+    k.at(ax, Y0, az, 0, () => {
+      for (const wx of [0.1, -0.1]) for (const sz of [-1, 1]) k.tube(P.rubber, [wx, 0.03, sz * 0.06], [wx, 0.03, sz * 0.08], 0.03, 10);
+      k.rbox(P.white, 0.34, 0.16, 0.15, 0, 0.03, 0, 0.015);
+      k.box(P.red, 0.345, 0.025, 0.152, 0, 0.09, 0);
+      k.box(P.glass, 0.004, 0.05, 0.12, 0.171, 0.12, 0);
+      k.box(P.mats.light(0x3a7aff, 3), 0.03, 0.015, 0.1, 0.12, 0.19, 0);
+    });
+  }
+  genset(k, 0.0, 0.0, 0, 0.8);
+  flagPole(k, 0.9, 0.9, 0.7, Y0);
+  floodMast(k, -0.95, 0.0, 0.5, 0);
+  k.height = 0.85;
+}
+
+function techAirport(k: Kit) {
+  const P = k.P;
+  slab(k, 3, 3);
+  // runway strip with edge lights
+  const rz = 0.95;
+  k.box(P.asphalt, 2.96, 0.004, 0.7, 0, Y0, rz);
+  for (const sz of [-1, 1]) k.box(P.white, 2.9, 0.002, 0.014, 0, Y0 + 0.004, rz + sz * 0.31);
+  dashes(k, P.white, -1.2, rz, 1.2, rz, 0.16, 0.1, 0.02, Y0 + 0.004);
+  for (let i = 0; i <= 7; i++) for (const sz of [-1, 1]) k.box(i === 0 || i === 7 ? P.green_l : P.lamp, 0.016, 0.012, 0.016, -1.4 + i * 0.4, Y0 + 0.004, rz + sz * 0.34);
+  // terminal: glass front, flat roof
+  const tx0 = -1.42;
+  const tx1 = 0.05;
+  const tz0 = -1.42;
+  const tz1 = -0.6;
+  block(k, { x0: tx0, x1: tx1, z0: tz0, z1: tz1, h: 0.4, floors: 2, wall: P.mats.at(Tile.Clad, 0xd8dade), win: 'ribbon', door: -0.7, equip: 3, sign: false, roof: 'flat' });
+  k.panel(P.winC, 'z', 1, -0.7, Y0 + 0.03, tz1 + 0.006, 1.2, 0.18, cell(k, 8, 1));
+  k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 1.3, 0.05, 0.02, -0.68, Y0 + 0.33, tz1 + 0.01);
+  // control tower
+  const cx = 0.45;
+  const cz = -1.05;
+  k.cyl(P.mats.at(Tile.Panel, 0xd8d6d0), 0.1, 0.95, cx, Y0, cz, 12, 0.08);
+  k.cyl(P.mats.col(0x2a4258, 0.15, 0.8), 0.17, 0.12, cx, Y0 + 0.95, cz, 8, 0.2);
+  k.cyl(P.lamp, 0.165, 0.004, cx, Y0 + 1.01, cz, 8);
+  k.cyl(P.dark, 0.22, 0.035, cx, Y0 + 1.07, cz, 8);
+  antenna(k, cx - 0.05, Y0 + 1.1, cz, 0.22);
+  k.blinkLight(cx, Y0 + 1.34, cz, 0.016, 1.3, 0);
+  const rd = k.node('trad', cx + 0.08, Y0 + 1.11, cz + 0.02);
+  k.on(rd, () => {
+    k.box(P.dark, 0.02, 0.03, 0.02, 0, 0, 0);
+    k.box(P.white, 0.02, 0.04, 0.16, 0.01, 0.03, 0);
+  });
+  k.spin('trad', 'y', 2);
+  // hangar (back right, vault)
+  vault(k, P.mats.at(Tile.Corr, 0xb8bcc0, 1.6), P.mats.at(Tile.Clad, 0xd0d2d4), 1.05, Y0, -0.95, 0.75, 0.9, 0.42, false, 2);
+  k.box(P.dark, 0.5, 0.3, 0.01, 1.05, Y0, -0.49);
+  // parked airliner on the apron
+  const ax = -0.45;
+  const az = 0.1;
+  const body = P.mats.col(0xeef0f2, 0.45, 0.2);
+  k.at(ax, Y0, az, 0, () => {
+    k.tube(body, [-0.5, 0.14, 0], [0.42, 0.14, 0], 0.07, 14);
+    k.sph(body, 0.07, 0.42, 0.14, 0, 12, 8);
+    k.tube(body, [-0.5, 0.14, 0], [-0.62, 0.17, 0], 0.07, 12, 0.035);
+    k.box(body, 0.22, 0.012, 1.0, -0.05, 0.11, 0);
+    for (const sz of [-1, 1]) k.tube(P.mats.col(0xc8ccd0, 0.4, 0.5), [0.0, 0.08, sz * 0.24], [0.12, 0.08, sz * 0.24], 0.035, 10);
+    k.box(body, 0.12, 0.012, 0.34, -0.55, 0.17, 0);
+    k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 0.14, 0.17, 0.012, -0.56, 0.18, 0);
+    k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 0.9, 0.018, 0.142, -0.05, 0.14, 0);
+    for (let i = 0; i < 8; i++) k.box(P.dark, 0.016, 0.012, 0.142, -0.35 + i * 0.09, 0.17, 0);
+    for (const gx of [0.3, -0.05]) k.box(P.dark, 0.012, 0.07, 0.012, gx, 0, 0);
+  });
+  truck(k, 0.35, 0.35, Math.PI / 2, 'fuel', 0.9);
+  jeep(k, 0.7, -0.25, 0.4, 0.9);
+  flagPole(k, -1.3, -0.4, 0.8, Y0);
+  floodMast(k, 1.35, 0.45, 0.55, Math.PI);
+  k.height = 1.35;
+}
+
+function techComms(k: Kit) {
+  const P = k.P;
+  slab(k, 2, 2);
+  // tall lattice telecom mast with aviation bands, dishes and panel antennas
+  const H = 2.2;
+  const cx = 0.2;
+  const cz = -0.2;
+  k.box(P.concrete, 0.66, 0.05, 0.66, cx, Y0, cz);
+  const red = P.mats.col(0xc03020, 0.6, 0.3);
+  for (let i = 0; i < 6; i++) lattice(k, i % 2 ? red : P.white, cx, cz, Y0 + 0.05 + (i * H) / 6, H / 6, 0.6 - i * 0.09, 0.6 - (i + 1) * 0.09, 2, 0.012);
+  for (const [y, a] of [
+    [1.4, 0.6],
+    [1.7, 2.4],
+    [1.15, 4.1],
+  ] as P2[])
+    k.at(cx + Math.cos(a) * 0.12, Y0 + y, cz + Math.sin(a) * 0.12, -a, () => {
+      const pts: P2[] = [];
+      for (let i = 0; i <= 5; i++) pts.push([0.13 * (i / 5) + 0.001, 0.05 * (i / 5) ** 2]);
+      k.at(0, 0, 0, 0, () => k.lathe(P.mats.col(0xdcdcd4, 0.5, 0.1, true), pts, 0, 0, 0, 16, 0), 0, Math.PI / 2);
+      k.box(P.dark, 0.04, 0.03, 0.03, -0.02, -0.015, 0);
+    });
+  for (let i = 0; i < 3; i++) k.at(cx, Y0 + H - 0.05, cz, i * 2.1, () => k.box(P.white, 0.03, 0.24, 0.07, 0.07, 0, 0));
+  k.blinkLight(cx, Y0 + H + 0.25, cz, 0.02, 1.5, 0);
+  k.blinkLight(cx + 0.15, Y0 + H * 0.5, cz + 0.15, 0.016, 1.5, 0.7);
+  k.cyl(P.dark, 0.006, 0.22, cx, Y0 + H, cz, 4);
+  // equipment shelter + generator + cable bridge
+  block(k, { x0: -0.95, x1: -0.3, z0: 0.25, z1: 0.75, h: 0.24, floors: 1, wall: P.mats.at(Tile.Panel, 0xd0cec6), doorX: 0.5, equip: 1, sign: false, roof: 'flat' });
+  genset(k, 0.55, 0.62, 0, 0.85);
+  cableRun(k, [[-0.3, 0.35], [cx - 0.2, 0.35], [cx - 0.2, cz + 0.2]], 0.12);
+  fence(k, [[-0.95, -0.95], [0.95, -0.95], [0.95, 0.95], [-0.2, 0.95]], 0.16, Y0);
+  razor(k, [0.95, -0.95], [0.95, 0.95], Y0 + 0.16);
+  flagPole(k, -0.85, -0.85, 0.7, Y0);
+  k.height = H;
 }
 
 // ================================================================ DEFENCES (1x1)
@@ -4790,4 +4969,8 @@ export const BUILDINGS: Record<string, Builder> = {
   sw_drone: building('sw_drone', 3, 3, swDrone),
   sw_rocket: building('sw_rocket', 3, 3, swRocket),
   sw_cruise: building('sw_cruise', 3, 3, swCruise),
+  // capturable neutral tech structures (sim/specialdefs.ts)
+  tech_hospital: building('tech_hospital', 2, 2, techHospital),
+  tech_airport: building('tech_airport', 3, 3, techAirport),
+  tech_comms: building('tech_comms', 2, 2, techComms),
 };

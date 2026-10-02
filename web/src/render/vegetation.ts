@@ -8,6 +8,7 @@ import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from '.
 import { grassRGB } from './grasstex';
 import { Leaf, foliageAtlas, leafCell } from './terraintex';
 import { buildTrees } from './trees';
+import { Species, windTime, type TreeSpot } from './treekinds';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -15,26 +16,8 @@ import { buildTrees } from './trees';
  * geometry, instanced per map chunk.
  */
 
-export const windTime = { value: 0 };
-
-export const enum Species {
-  Spruce = 0,
-  Pine = 1,
-  Oak = 2,
-  Birch = 3,
-  Young = 4,
-  Poplar = 5,
-  Willow = 6,
-  Fruit = 7,
-}
-
-export interface TreeSpot {
-  x: number;
-  y: number;
-  s: number;
-  species: Species;
-  rot: number;
-}
+// shared with trees.ts (re-exported for the existing importers)
+export { Species, windTime, type TreeSpot } from './treekinds';
 
 /** Culling cell size (tiles). */
 const CELL = 4;

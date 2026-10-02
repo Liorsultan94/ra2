@@ -43,6 +43,8 @@ export class AudioScene {
   private riverPan = 0;
   private cands: Cand[] = [];
   private slotId: number[] = new Array(ENGINE_SLOTS).fill(-1);
+  private taken: boolean[] = new Array(ENGINE_SLOTS).fill(false);
+  private placed: boolean[] = new Array(ENGINE_SLOTS).fill(false);
   private flybyAt = new Map<number, number>();
   private time = 0;
   private halfW = 9;
@@ -138,8 +140,8 @@ export class AudioScene {
     }
     const m = n;
     // keep aircraft in the slot they already have (no loop restarts), then fill free slots
-    const taken = [false, false, false, false];
-    const placed = [false, false, false, false];
+    const taken = this.taken.fill(false);
+    const placed = this.placed.fill(false);
     for (let i = 0; i < m; i++) {
       const s = this.slotId.indexOf(this.cands[i].id);
       if (s >= 0 && !taken[s]) {

@@ -6,15 +6,14 @@ import * as THREE from 'three';
  * textured surfaces with a single material (a handful of draw calls per
  * building, bounded memory).
  *
- * The atlas holds ATLAS_COLS x ATLAS_ROWS seamless tiles of TILE px, three
- * maps of the same layout:
- *  - albedo (sRGB): near neutral so the per-vertex tint (team colour, nation
- *    paint) carries the hue; stains / rust / runoff keep a little colour.
- *    Camouflage tiles store a palette index in R (0, 1/3, 2/3, 1) and a grime
- *    factor in G: the building shader maps them onto the nation's 4 colours.
- *  - normal (tangent space, from a height field)
- *  - rough/metal: roughness in G, metalness in B (three's channel layout, so
- *    one texture serves both maps).
+ * The atlas holds ATLAS_COLS x ATLAS_ROWS seamless tiles of TILE px in two
+ * RGBA data textures of the same layout:
+ *  - albedo (sRGB) + metalness in alpha: near neutral so the per-vertex tint
+ *    (team colour, nation paint) carries the hue; stains / rust / runoff keep a
+ *    little colour. Camouflage tiles store a palette index in R (0, 1/3, 2/3,
+ *    1) and a grime factor in G: the building shader maps them onto the
+ *    nation's 4 colours.
+ *  - tangent space normal (from a height field) + roughness in alpha.
  * Buildings carry the tile index per vertex (uv1.x); the shader wraps the
  * tile UV with fract() and samples with textureGrad on the unwrapped UV, so
  * mip selection stays seamless (see `atlasPatch`).
@@ -50,10 +49,11 @@ export enum Tile {
   RoofTile = 17, // East Asian curved roof tiles
   Hazard = 18, // yellow / black stripes (coloured)
   Stone = 19, // coursed sandstone blocks
+  Glass = 20, // glazing: dark, smooth, reflective
 }
 
 export const ATLAS_COLS = 4;
-export const ATLAS_ROWS = 5;
+export const ATLAS_ROWS = 6;
 const T = 256;
 const AW = ATLAS_COLS * T;
 const AH = ATLAS_ROWS * T;
@@ -219,7 +219,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
       const streakN = at(mid, x, y, 8, 1, 21, 9);
       // rust streaks running down from the screw row under each lap
       const rustRun = clamp01((streakN - 0.55) * 4) * clamp01(1 - (1 - frac(v * 2)) * 1.8) * 0.9;
-      const patch = clamp01((at(lo, x, y, 1, 1, 70, 40) - 0.62) * 4);
+      const patch = clamp01((at(lo, x, y, 1, 1, 70, 40) - 0.7) * 3) * 0.7;
       const grain = at(hi, x, y, 1, 4, 0, 0);
       let c = 0.82 + prof * 0.06 - lap * 0.25 + (grain - 0.5) * 0.06;
       grey(o, clamp01(c));
@@ -571,29 +571,38 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
       o.me = 0;
     },
   },
+  {
+    tile: Tile.Glass,
+    strength: 0.6,
+    gen(x, y, _u, v, o) {
+      const { mid, hi } = fields();
+      const streak = clamp01((at(mid, x, y, 8, 1, 61, 7) - 0.55) * 2) * clamp01(1 - frac(v) * 1.4);
+      const dust = at(hi, x, y, 1, 1, 17, 5);
+      grey(o, clamp01(0.86 - streak * 0.1 + (dust - 0.5) * 0.04));
+      o.h = 0.5;
+      o.ro = clamp01(0.07 + streak * 0.25 + (dust - 0.5) * 0.05);
+      o.me = 0.85;
+    },
+  },
 ];
 
 export interface AtlasSet {
+  /** Albedo (sRGB) in RGB, metalness in A. */
   map: THREE.Texture;
+  /** Tangent space normal in RGB, roughness in A. */
   normalMap: THREE.Texture;
-  rmMap: THREE.Texture;
 }
 
-function makeTex(data: Uint8ClampedArray, srgb: boolean): THREE.Texture {
-  const cv = document.createElement('canvas');
-  cv.width = AW;
-  cv.height = AH;
-  const ctx = cv.getContext('2d')!;
-  const img = ctx.createImageData(AW, AH);
-  img.data.set(data);
-  ctx.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(cv);
+function makeTex(data: Uint8Array, srgb: boolean): THREE.Texture {
+  // a DataTexture (not a canvas): the alpha channels carry data and must not be premultiplied
+  const t = new THREE.DataTexture(data, AW, AH, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   t.anisotropy = 4;
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.magFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
   return t;
 }
 
@@ -602,28 +611,33 @@ let atlas: AtlasSet | null = null;
 /** The shared building texture atlas (generated once, lazily). */
 export function bldAtlas(): AtlasSet {
   if (atlas) return atlas;
-  const alb = new Uint8ClampedArray(AW * AH * 4);
-  const nrm = new Uint8ClampedArray(AW * AH * 4);
-  const rm = new Uint8ClampedArray(AW * AH * 4);
+  const alb = new Uint8Array(AW * AH * 4);
+  const nrm = new Uint8Array(AW * AH * 4);
+  // unused cells: flat normal, matte
+  for (let i = 0; i < AW * AH; i++) {
+    alb[i * 4] = alb[i * 4 + 1] = alb[i * 4 + 2] = 128;
+    nrm[i * 4] = nrm[i * 4 + 1] = 128;
+    nrm[i * 4 + 2] = 255;
+    nrm[i * 4 + 3] = 230;
+  }
   const h = new Float32Array(T * T);
   const o: Px = { r: 0, g: 0, b: 0, h: 0, ro: 0, me: 0 };
+  const q = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
   for (const { tile, strength, gen } of GENS) {
     const ox = (tile % ATLAS_COLS) * T;
     const oy = Math.floor(tile / ATLAS_COLS) * T;
+    // data row 0 is v = 0: generator row y lands on tile row T - 1 - y, so the generators' v runs
+    // "up the wall" (worldUV maps wall height to -v) exactly like the old flipped canvas textures
+    const row = (y: number) => oy + T - 1 - y;
     for (let y = 0; y < T; y++)
       for (let x = 0; x < T; x++) {
         gen(x, y, (x + 0.5) / T, (y + 0.5) / T, o);
-        // canvas row 0 is the top of the image; three flips Y on upload so tile row y maps to v = 1 - y / T.
-        // Generators treat v as "up the wall" (worldUV maps wall height to -v), so write rows as generated.
-        const i = ((oy + y) * AW + ox + x) * 4;
-        alb[i] = o.r * 255;
-        alb[i + 1] = o.g * 255;
-        alb[i + 2] = o.b * 255;
-        alb[i + 3] = 255;
-        rm[i] = 255;
-        rm[i + 1] = o.ro * 255;
-        rm[i + 2] = o.me * 255;
-        rm[i + 3] = 255;
+        const i = (row(y) * AW + ox + x) * 4;
+        alb[i] = q(o.r);
+        alb[i + 1] = q(o.g);
+        alb[i + 2] = q(o.b);
+        alb[i + 3] = q(o.me);
+        nrm[i + 3] = q(o.ro);
         h[y * T + x] = o.h;
       }
     const H = (xx: number, yy: number) => h[((yy + T) % T) * T + ((xx + T) % T)];
@@ -632,20 +646,19 @@ export function bldAtlas(): AtlasSet {
         const dx = (H(x + 1, y - 1) + 2 * H(x + 1, y) + H(x + 1, y + 1) - H(x - 1, y - 1) - 2 * H(x - 1, y) - H(x - 1, y + 1)) * strength;
         const dy = (H(x - 1, y + 1) + 2 * H(x, y + 1) + H(x + 1, y + 1) - H(x - 1, y - 1) - 2 * H(x, y - 1) - H(x + 1, y - 1)) * strength;
         const len = Math.hypot(dx, dy, 1);
-        const i = ((oy + y) * AW + ox + x) * 4;
-        nrm[i] = ((-dx / len) * 0.5 + 0.5) * 255;
-        nrm[i + 1] = ((dy / len) * 0.5 + 0.5) * 255;
-        nrm[i + 2] = ((1 / len) * 0.5 + 0.5) * 255;
-        nrm[i + 3] = 255;
+        const i = (row(y) * AW + ox + x) * 4;
+        nrm[i] = q((-dx / len) * 0.5 + 0.5);
+        nrm[i + 1] = q((dy / len) * 0.5 + 0.5);
+        nrm[i + 2] = q((1 / len) * 0.5 + 0.5);
       }
   }
-  atlas = { map: makeTex(alb, true), normalMap: makeTex(nrm, false), rmMap: makeTex(rm, false) };
+  atlas = { map: makeTex(alb, true), normalMap: makeTex(nrm, false) };
   return atlas;
 }
 
 /**
- * Shader patch for a MeshStandardMaterial using the atlas (map, normalMap,
- * roughnessMap = metalnessMap = rmMap). `pal` holds the 4 camo colours
+ * Shader patch for a MeshStandardMaterial using the atlas (map + normalMap;
+ * roughness / metalness come from their alpha channels). `pal` holds the 4 camo colours
  * (linear) used by the camo tiles. Chain it into onBeforeCompile.
  */
 export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { value: THREE.Color[] }) {
@@ -669,7 +682,7 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
       uniform vec3 bPal[4];
       vec4 bAtlas( sampler2D t, vec2 uv ) {
         float ti = floor( vBTile + 0.5 );
-        vec2 cell = vec2( mod( ti, ${ATLAS_COLS}.0 ), ${ATLAS_ROWS - 1}.0 - floor( ti / ${ATLAS_COLS}.0 ) );
+        vec2 cell = vec2( mod( ti, ${ATLAS_COLS}.0 ), floor( ti / ${ATLAS_COLS}.0 ) );
         const vec2 GRID = vec2( ${ATLAS_COLS}.0, ${ATLAS_ROWS}.0 );
         const float IN = 1.5 / ${T}.0;
         vec2 f = fract( uv );
@@ -693,12 +706,13 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
           vec3 pc = lv < 0.5 ? bPal[0] : lv < 1.5 ? bPal[1] : lv < 2.5 ? bPal[2] : bPal[3];
           sampledDiffuseColor.rgb = pc * pow( sampledDiffuseColor.g, 1.0 / 2.2 );
         }
-        diffuseColor *= sampledDiffuseColor;
+        diffuseColor.rgb *= sampledDiffuseColor.rgb;
       #endif`,
     )
-    .replace('#include <roughnessmap_fragment>', C.roughnessmap_fragment.replace('texture2D( roughnessMap, vRoughnessMapUv )', 'bAtlas( roughnessMap, vRoughnessMapUv )'))
-    .replace('#include <metalnessmap_fragment>', C.metalnessmap_fragment.replace('texture2D( metalnessMap, vMetalnessMapUv )', 'bAtlas( metalnessMap, vMetalnessMapUv )'))
-    .replace('#include <normal_fragment_maps>', C.normal_fragment_maps.replace('texture2D( normalMap, vNormalMapUv )', 'bAtlas( normalMap, vNormalMapUv )'));
+    // roughness lives in the normal map's alpha, metalness in the albedo's alpha
+    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * bAtlas( normalMap, vNormalMapUv ).a;')
+    .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = metalness * bAtlas( map, vMapUv ).a;')
+    .replace('#include <normal_fragment_maps>', C.normal_fragment_maps.split('texture2D( normalMap, vNormalMapUv )').join('bAtlas( normalMap, vNormalMapUv )'));
 }
 
 // ================================================================ signs

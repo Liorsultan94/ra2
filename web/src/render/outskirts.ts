@@ -4,7 +4,7 @@ import { groundHeight, type GameMap } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
-import { Species } from './vegetation';
+import { Species } from './treekinds';
 import { grassRGB } from './grasstex';
 
 /** The terrain's painted control maps (see ground.ts). */

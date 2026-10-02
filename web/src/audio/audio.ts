@@ -513,7 +513,8 @@ export class AudioSystem {
    * (world units) and the renderer zoom.
    */
   setListener(cx: number, cy: number, rx: number, ry: number, halfW: number, halfD: number, zoom: number): void {
-    if (![cx, cy, rx, ry, halfW, halfD, zoom].every(Number.isFinite)) return;
+    const f = Number.isFinite;
+    if (!(f(cx) && f(cy) && f(rx) && f(ry) && f(halfW) && f(halfD) && f(zoom))) return;
     const l = this.listener;
     l.cx = cx;
     l.cy = cy;

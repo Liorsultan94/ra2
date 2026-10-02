@@ -5,7 +5,7 @@ import type { FogOfWar } from './fog';
 import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { TCell, tcell, treeAtlas } from './treeatlas';
-import { Species, windTime, type TreeSpot } from './vegetation';
+import { Species, windTime, type TreeSpot } from './treekinds';
 
 /*
  * Trees: eight species for a temperate river valley (oak, birch, Lombardy
