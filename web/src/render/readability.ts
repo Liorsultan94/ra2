@@ -577,7 +577,8 @@ class UnitOutlines {
         t = undefined;
       }
       if (!t && v.visible) {
-        t = this.tag(v.model.root, color(v.owner));
+        // infantry: body, kit and weapon carry the silhouette (each soldier is ~6 skinned meshes)
+        t = this.tag(v.model.root, color(v.owner), v.model.infantry ? Math.min(3, this.perUnit) : this.perUnit);
         this.tagged.set(v.id, t);
       }
     }
@@ -589,9 +590,9 @@ class UnitOutlines {
     }
   }
 
-  private tag(root: THREE.Object3D, teamColor: number): Tagged {
+  private tag(root: THREE.Object3D, teamColor: number, max: number): Tagged {
     const col = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.32);
-    const meshes = outlineMeshes(root, this.perUnit);
+    const meshes = outlineMeshes(root, max);
     for (const m of meshes) {
       m.layers.enable(OUTLINE_LAYER);
       m.userData.outlineColor = col;
@@ -730,7 +731,7 @@ export class Readability {
   hidden = false;
 
   constructor(quality: 'low' | 'medium' | 'high') {
-    this.outlines = new UnitOutlines(quality === 'low' ? 3 : quality === 'medium' ? 6 : 12, quality === 'low' ? 0.5 : 0);
+    this.outlines = new UnitOutlines(quality === 'low' ? 3 : quality === 'medium' ? 5 : 12, quality === 'low' ? 0.5 : 0);
   }
 
   private isUnit = (def: string) => DEFS[def]?.kind === 'unit';

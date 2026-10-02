@@ -33,7 +33,8 @@ import { CascadeSun } from './ultra/cascades';
 import { JitterRenderPass, TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { PerfProbe } from './perf/probe';
-import { applyLod, prepareLod, type LodInfo } from './perf/lod';
+import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
+import { AutoInstancer } from './perf/instancer';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
 
@@ -112,6 +113,8 @@ export interface Visual {
   lod: LodInfo;
   /** Something (tree, building, ridge) may hide this unit from the camera: x-ray proxies needed (perf/occlusion.ts). */
   occl: boolean;
+  /** The model or its shadow may be on screen (last sync). */
+  near: boolean;
 }
 
 interface Wreck {
@@ -271,6 +274,9 @@ export class GameRenderer {
   private lastFt = 0;
   /** Draw call / triangle / CPU breakdown per pass and category (debug + benchmark; inactive until enablePerf()). */
   readonly perf: PerfProbe;
+  /** Per-frame automatic instancing of identical unit parts (src/render/perf/instancer.ts). */
+  readonly instancer: AutoInstancer;
+  private instRoots: THREE.Object3D[] = [];
   private perfHud = new PerfHud();
   selection = new Set<number>();
   /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
@@ -304,6 +310,8 @@ export class GameRenderer {
     this.perspective = !/[?&]cam=ortho\b/.test(location.search);
     this.camera = this.perspective ? new THREE.PerspectiveCamera(PERSP_FOV, 1, 0.5, 400) : new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
     this.perf = new PerfProbe(this.renderer, this.scene, this.camera);
+    this.instancer = new AutoInstancer(this.renderer, this.scene, this.camera, (m) => m.userData.outlineColor !== undefined);
+    this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -893,6 +901,7 @@ export class GameRenderer {
       anim: newAnim(),
       lod,
       occl: true,
+      near: true,
     };
   }
 
@@ -904,6 +913,9 @@ export class GameRenderer {
 
   private airShadows = new AirShadows();
   private occluders: OccluderGrid;
+  private viewFrustum = new THREE.Frustum();
+  private projView = new THREE.Matrix4();
+  private castSphere = new THREE.Sphere();
   private occlFrame = 0;
 
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
@@ -966,6 +978,14 @@ export class GameRenderer {
       this.occluders.setBuildings(bl);
     }
     const cd = this.camDir;
+    // shadow casters: only models whose shadow can reach the view (the sun shadow box spans a much
+    // wider rectangle than the perspective view, so off-screen units would otherwise all cast)
+    const fr = this.viewFrustum.setFromProjectionMatrix(this.projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const sd = this.sunDir;
+    const sy = Math.max(0.15, sd.y);
+    const throwX = -sd.x / sy;
+    const throwZ = -sd.z / sy;
+    const shadowsOn = this.sun.castShadow || !!this.csm;
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -1059,6 +1079,17 @@ export class GameRenderer {
         const rp = root.position;
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
         applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
+        {
+          // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
+          const h = v.model.height ?? 1;
+          const tx = shadowsOn ? throwX * h : 0;
+          const tz = shadowsOn ? throwZ * h : 0;
+          const sph = this.castSphere;
+          sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
+          sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
+          v.near = fr.intersectsSphere(sph);
+          if (shadowsOn) setCasting(v.lod, v.near);
+        }
         v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
       }
     }
@@ -1185,6 +1216,8 @@ export class GameRenderer {
 
   private toWreck(v: Visual, e: { def: string; x: number; y: number }) {
     this.visuals.delete(v.id);
+    // back on layer 0: wrecks and fracture rubble copy / reuse the meshes
+    restoreMain(v.model.root);
     if (v.ring) this.scene.remove(v.ring);
     const d = DEFS[e.def];
     const root = v.model.root;
@@ -1688,6 +1721,7 @@ export class GameRenderer {
           const bd = buildingDef(b.def);
           this.visuals.delete(v.id);
           if (v.ring) this.scene.remove(v.ring);
+          restoreMain(v.model.root);
           const p = v.model.root.position;
           this.wrecks.push({ kind: 'sold', root: v.model.root, model: v.model, t: 0, max: 1.2, x: p.x, y: p.y, z: p.z, vx: 0, vy: 0, vz: 0, spin: 0, size: 1, h: 1, w: bd.w, d: bd.h, landed: true });
         }
@@ -1841,6 +1875,11 @@ export class GameRenderer {
     const scene = this.scene;
     scene.updateMatrixWorld();
     scene.matrixWorldAutoUpdate = false;
+    // identical unit parts drawn as instanced batches (models on or casting into the view only)
+    const roots = this.instRoots;
+    roots.length = 0;
+    if (this.instancer.enabled) for (const v of this.visuals.values()) if (v.visible && v.near && v.lod.kind !== 'infantry') roots.push(v.model.root);
+    this.instancer.update(roots);
     try {
       if (vh?.renderMain()) {
         // the view mode drew the frame itself
@@ -1916,6 +1955,7 @@ export class GameRenderer {
   dispose() {
     this.disposed = true;
     this.perfHud.dispose();
+    this.instancer.dispose();
     this.atmos.dispose();
     this.readability.dispose();
     this.temporal?.dispose();

@@ -314,7 +314,7 @@ export class WeatherCycle {
     out.dust = dust;
     out.snow = snow;
     // mist rises off the wet ground once the rain has stopped (calm air keeps it)
-    out.mist = sstep(0.25, 0.9, wet) * (1 - sstep(0.05, 0.3, out.precip)) * (1 - 0.6 * out.wind) * 0.55;
+    out.mist = sstep(0.25, 0.9, wet) * (1 - sstep(0.05, 0.3, out.precip)) * (1 - 0.6 * out.wind) * 0.4;
     return out;
   }
 

@@ -380,7 +380,7 @@ function dawnMist(u: number) {
 
 /** 'Misty morning': thick for the first minutes of the battle, then the sun thins it to a light valley mist. */
 function morningMist(t: number) {
-  return 1 - 0.55 * sstep(200, 620, t);
+  return 0.9 - 0.5 * sstep(200, 620, t);
 }
 
 /** Calm-weather breeze (world x / z direction, matches the effects' default drift). */
@@ -637,14 +637,14 @@ export class Atmosphere {
   private applyMist(p: Preset, mist: number, light: number, cover: number) {
     const mc = WXM.mistColor.value;
     const lk = 0.16 + 0.84 * light;
-    mc.setRGB(0.5, 0.52, 0.56).multiplyScalar(lk * (1 - 0.3 * cover));
+    mc.setRGB(0.4, 0.42, 0.46).multiplyScalar(lk * (1 - 0.3 * cover));
     mc.lerp(this.mistC.copy(p.sunC).multiplyScalar(0.62 * lk), 0.2 * (1 - cover));
     WXM.mistAmount.value = mist;
     if (mist <= 0.001) return;
-    p.haze.lerp(mc, 0.45 * mist);
+    p.haze.lerp(mc, 0.3 * mist);
     p.hazeP.x += (1 - p.hazeP.x) * mist * 0.5;
     p.hazeP.y += (58 - p.hazeP.y) * mist * 0.5;
-    p.hazeP.z += (0.56 - p.hazeP.z) * mist * 0.6;
+    p.hazeP.z += (0.5 - p.hazeP.z) * mist * 0.5;
     p.cloud *= 1 - 0.5 * mist;
     p.sat *= 1 - 0.06 * mist;
     p.bloom += 0.08 * mist;
@@ -816,19 +816,20 @@ export class Atmosphere {
       if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
       if (this.mistOverride !== null) mist = this.mistOverride;
       this.mist = mist;
-      this.applyMist(p, mist, this.keys ? this.light : this.baseLight, st?.cover ?? 0);
+      // zoomed in close (phones) the layer thins: the player is looking at their units, not the landscape
+      this.applyMist(p, mist * (1 - 0.4 * sstep(1, 1.8, zoom)), this.keys ? this.light : this.baseLight, st?.cover ?? 0);
       this.applyPreset(p);
       this.night?.setDark(p.dark);
       if (this.keys) this.weather?.setLight(0.25 + 0.75 * this.light);
     }
-    // keep the busy middle of the view clear of mist (readability): radius ~ a third of the visible height
-    const focus = (22 / Math.max(0.3, zoom)) * 0.34;
+    // keep the busy middle of the view clear of mist (readability): radius ~ half the visible height
+    const focus = (22 / Math.max(0.3, zoom)) * 0.45;
     WXM.mistParams.value.z = focus;
     const drift = WXM.mistDrift.value;
     const wv = 0.25 + 0.75 * this.windK;
     drift.x = (drift.x - this.windX * wv * dt * 0.4) % 9600;
     drift.y = (drift.y - this.windZ * wv * dt * 0.4) % 9600;
-    this.groundFog?.update(dt, time, this.mist, this.windX * wv * 1.4, this.windZ * wv * 1.4, focus);
+    this.groundFog?.update(dt, time, WXM.mistAmount.value, this.windX * wv * 1.4, this.windZ * wv * 1.4, focus);
     if (st && this.weather) {
       const wf = this.weather;
       if (wf.kind !== st.fall && st.precip < 0.03) wf.setKind(st.fall);

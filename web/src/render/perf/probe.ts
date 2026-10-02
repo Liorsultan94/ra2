@@ -22,7 +22,10 @@ function catOf(o: THREE.Object3D, scene: THREE.Object3D): string {
     if (c) return c;
     if (p.parent === scene || !p.parent) {
       const top = p.name || p.type;
-      return prev && prev.name ? `${top}/${prev.name}` : top;
+      if (!prev) return top;
+      if (prev.name) return `${top}/${prev.name}`;
+      const g = (prev as THREE.Mesh).geometry;
+      return `${top}/${prev.type}${g ? '(' + g.type.replace('Geometry', '') + ')' : ''}`;
     }
   }
   return '?';

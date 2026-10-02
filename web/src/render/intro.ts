@@ -55,6 +55,7 @@ function rtsPose(r: GameRenderer, x: number, y: number, zoom: number): Pose {
 
 export class BattleIntro {
   private t = 0;
+  private wall = performance.now();
   done = false;
   private from: Pose;
   private via: Pose;
@@ -89,10 +90,16 @@ export class BattleIntro {
     (r.fog as unknown as { update: () => void }).update = () => {};
   }
 
+  /** Seconds into the flyover. */
+  get time() {
+    return this.t;
+  }
+
   /** Real seconds; returns true when the flyover has ended and the camera is handed back. */
   update(dt: number): boolean {
     if (this.done) return true;
-    this.t += Math.min(dt, 0.1);
+    // real time (slow devices drop frames rather than stretching the shot)
+    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
     const k = Math.min(1, this.t / this.duration);
     if (k >= 1) {
       this.finish();
@@ -126,6 +133,7 @@ export class BattleIntro {
 
 export class BattleOutro {
   private t = 0;
+  private wall = performance.now();
   done = false;
   private from: Pose;
   private to: Pose;
@@ -153,7 +161,8 @@ export class BattleOutro {
 
   update(dt: number): boolean {
     if (this.done) return true;
-    this.t += Math.min(dt, 0.1);
+    // real time (slow devices drop frames rather than stretching the shot)
+    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
     const k = easeOut(Math.min(1, this.t / 2.6));
     // after the push-in keep a slow orbit going
     const drift = Math.max(0, this.t - 2.6) * 0.07;

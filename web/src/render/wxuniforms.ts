@@ -51,7 +51,7 @@ export const WXM = {
   /** Lit colour of the mist (follows the sky / sun). */
   mistColor: { value: new THREE.Color(0.75, 0.77, 0.8) },
   /** x: height of full density, y: top of the layer (world y), z: clear radius around the view centre, w: max opacity. */
-  mistParams: { value: new THREE.Vector4(-0.1, 1.15, 8, 0.72) },
+  mistParams: { value: new THREE.Vector4(-0.1, 0.95, 8, 0.6) },
   /** Accumulated wind drift of the mist noise (world units). */
   mistDrift: { value: new THREE.Vector2() },
 };

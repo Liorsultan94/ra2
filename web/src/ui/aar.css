@@ -279,10 +279,13 @@
     gap: 12px;
   }
   .aar-table {
-    font-size: 13px;
+    font-size: 12.5px;
   }
   .aar-table td {
-    padding: 2px 5px;
+    padding: 1px 5px;
+  }
+  .aar-mvp {
+    padding: 5px 10px;
   }
   .aar-graph canvas {
     height: 96px;

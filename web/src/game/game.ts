@@ -264,7 +264,7 @@ export class Game {
     const info = buildBriefing(this.world, this.local, { seed: this.seed, difficulty: this.opts.difficulty, tod: atm.tod, weather: atm.weather, credits: this.opts.credits });
     (this as { brief: BriefingInfo | null }).brief = info;
     this.briefing = new Briefing(container, info, this.world, this.local, this.renderer.terrain.minimapImage, {
-      autoDeploy: this.opts.briefing === 'quick' ? 1.2 : 14,
+      autoDeploy: this.opts.briefing === 'quick' ? 1.2 : 12,
       say: (t) => this.audio.unlocked && this.audio.say(t),
     });
   }
@@ -291,7 +291,7 @@ export class Game {
     const you = this.brief.you;
     this.introCardAt = [0.5, 4.9];
     this.introCardShown = 0;
-    this.cardText = { kicker: `${you.name} armed forces · Operation`, flag: flagDataUrl(you.faction), title: this.brief.codename, sub: `${this.world.map.name} · ${this.brief.time.split(' · ')[0]}`, tone: 'intro' };
+    this.cardText = { kicker: `${you.name} · Operation`, flag: flagDataUrl(you.faction), title: this.brief.codename, sub: `${this.world.map.name} · ${this.brief.time.split(' · ')[0]}`, tone: 'intro' };
     this.audio.sting('heavy');
   }
   private introCardAt: [number, number] = [0, 0];
@@ -429,7 +429,7 @@ export class Game {
     if (this.warming || this.briefing) return;
     if (this.intro) {
       // intro flyover: the simulation has not started; only the camera moves
-      this.introT += dt;
+      this.introT = this.intro.time;
       if (this.cardText && this.introCardShown === 0 && this.introT >= this.introCardAt[0]) {
         this.introCardShown = 1;
         this.card?.show(this.cardText);

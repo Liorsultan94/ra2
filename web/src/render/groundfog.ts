@@ -117,7 +117,7 @@ export class GroundFog {
     const a2 = new Float32Array(n * 4);
     picked.forEach(([x, z, h], i) => {
       a1.set([x, z, 8 + rnd() * 7, Math.max(h, WATER_LEVEL) + 0.35 + rnd() * 0.4], i * 4);
-      a2.set([rnd(), rnd(), rnd() * Math.PI * 2, 0.32 + rnd() * 0.22], i * 4);
+      a2.set([rnd(), rnd(), rnd() * Math.PI * 2, 0.4 + rnd() * 0.25], i * 4);
     });
     const base = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();

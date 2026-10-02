@@ -20,6 +20,11 @@ export interface LodInfo {
   /** Model bounding radius (world units, scale applied). */
   radius: number;
   hidden: boolean;
+  /** Meshes that cast into the sun shadow map (after the medium trimming). */
+  casters: THREE.Mesh[];
+  /** Casters currently switched on (off while the model and its shadow are off screen). */
+  castOn: boolean;
+  kind: 'infantry' | 'vehicle' | 'aircraft' | 'building';
 }
 
 const _s = new THREE.Vector3();
@@ -53,7 +58,8 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
     if (mat.emissive && mat.emissiveIntensity > 0 && mat.emissive.r + mat.emissive.g + mat.emissive.b > 0.05) continue;
     detail.push(m);
   }
-  return { detail, radius: big, hidden: false };
+  const casters = meshes.filter((x) => x.m.castShadow).map((x) => x.m);
+  return { detail, radius: big, hidden: false, casters, castOn: true, kind };
 }
 
 /**
@@ -65,8 +71,36 @@ export function applyLod(info: LodInfo, pxPerUnit: number) {
   const hide = info.hidden ? px < 30 : px < 24;
   if (hide === info.hidden || !info.detail.length) return;
   info.hidden = hide;
-  for (const m of info.detail) {
-    if (hide) m.layers.disable(0);
-    else m.layers.enable(0);
-  }
+  for (const m of info.detail) setHidden(m, HIDE_LOD, hide);
+}
+
+/** Reasons a mesh is kept off layer 0 (main view + shadow pass); it is drawn again once none is left. */
+export const HIDE_LOD = 1;
+export const HIDE_INSTANCED = 2;
+
+/** Hide / show a mesh from the main view and the shadow pass for one reason (outline / heat / x-ray layers untouched). */
+export function setHidden(m: THREE.Object3D, reason: number, on: boolean) {
+  const prev = (m.userData.hide as number | undefined) ?? 0;
+  const next = on ? prev | reason : prev & ~reason;
+  if (next === prev) return;
+  m.userData.hide = next;
+  if (next) m.layers.disable(0);
+  else m.layers.enable(0);
+}
+
+/** Put every mesh of a model back on layer 0 (before it becomes a wreck / rubble that copies its layers). */
+export function restoreMain(root: THREE.Object3D) {
+  root.traverse((o) => {
+    if (o.userData.hide) {
+      o.userData.hide = 0;
+      o.layers.enable(0);
+    }
+  });
+}
+
+/** Switch the model's shadow casters on / off (no-op when unchanged). */
+export function setCasting(info: LodInfo, on: boolean) {
+  if (on === info.castOn) return;
+  info.castOn = on;
+  for (const m of info.casters) m.castShadow = on;
 }

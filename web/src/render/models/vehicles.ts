@@ -458,6 +458,12 @@ class Part extends Acc {
     super();
     this.teamHex = b.team;
   }
+  /** Geometry is narrowed by the builder's width factor (Bld.zk) while the template is being built. */
+  override add(geo: THREE.BufferGeometry, paint: number, m?: THREE.Matrix4): this {
+    const k = this.b?.zk ?? 1;
+    if (k !== 1) m = new THREE.Matrix4().makeScale(1, 1, k).multiply(m ?? new THREE.Matrix4());
+    return super.add(geo, paint, m);
+  }
   box(w: number, h: number, d: number, x: number, y: number, z: number, paint: number, rx = 0, ry = 0, rz = 0) {
     return this.add(new THREE.BoxGeometry(w, h, d), paint, TR(x, y, z, rx, ry, rz));
   }
@@ -571,6 +577,12 @@ class Bld {
   bob = 1;
   kick = 0;
   custom?: CustomAnim;
+  /**
+   * Width factor applied to everything built (geometry, part offsets, wheels, belts, muzzles, emitters):
+   * lets a design be authored at the old exaggerated width and brought to the real length : width ratio.
+   * Reset to 1 by finish() (stowage / markings are placed on the finished, already narrowed geometry).
+   */
+  zk = 1;
   private mi = 0;
   extraTris = 0;
   constructor(
@@ -589,7 +601,7 @@ class Bld {
   }
   part(parent: Part | THREE.Object3D, x = 0, y = 0, z = 0, tag?: string): Part {
     const g = new THREE.Group();
-    g.position.set(x, y, z);
+    g.position.set(x, y, z * this.zk);
     if (tag) g.userData.tag = tag;
     (parent instanceof Part ? parent.g : parent).add(g);
     const p = new Part(this, g);
@@ -598,14 +610,14 @@ class Bld {
   }
   muzzle(p: Part | THREE.Object3D, x: number, y: number, z: number) {
     const o = new THREE.Object3D();
-    o.position.set(x, y, z);
+    o.position.set(x, y, z * this.zk);
     o.userData.tag = 'muzzle';
     o.userData.mi = this.mi++;
     (p instanceof Part ? p.g : p).add(o);
     return o;
   }
   emit(x: number, y: number, z: number, kind: 'smoke' | 'steam' | 'spark' | 'fire' = 'smoke') {
-    this.emitters.push({ pos: new THREE.Vector3(x, y, z), kind });
+    this.emitters.push({ pos: new THREE.Vector3(x, y, z * this.zk), kind });
   }
   material(key: string): THREE.Material {
     const fog = this.fog;
@@ -646,6 +658,7 @@ class Bld {
   }
   /** Wheel set as one InstancedMesh (geometry: axle along Z, outer face toward +Z, centred on the origin). */
   wheels(parent: Part | THREE.Object3D, geo: THREE.BufferGeometry, entries: WheelEntry[], tag = 'wheels') {
+    if (this.zk !== 1) entries = entries.map((e) => ({ ...e, z: e.z * this.zk }));
     // running gear: mud caked on the rims and tyres, more toward the outside
     const aw = geo.getAttribute('aWear') as THREE.BufferAttribute | undefined;
     if (aw) {
@@ -899,6 +912,7 @@ class Bld {
     }
   }
   finish(): Tpl {
+    this.zk = 1;
     if (!this.noIdPanel || this.clutterN > 0) {
       const pr = this.probe();
       this.idPanel(pr);
@@ -1503,7 +1517,7 @@ function running(b: Bld, t: TrackSpec) {
   const k = Math.max(1, Math.round(loop.len * TREAD_K)) / loop.len;
   const base = treadBase(b.fog);
   for (const side of [-1, 1]) {
-    const zc = side * t.gauge;
+    const zc = side * t.gauge * b.zk;
     const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
     const wa = new Float32Array(geo.attributes.position.count * 4);
     for (let i = 0; i < wa.length; i += 4) wa[i] = 0.8;
@@ -1549,7 +1563,7 @@ function running(b: Bld, t: TrackSpec) {
       }
     }
   }
-  b.gauge = t.gauge;
+  b.gauge = t.gauge * b.zk;
   b.tw = t.tw;
 }
 
@@ -1578,7 +1592,7 @@ function wheelSet(b: Bld, axles: Axle[], r: number, w: number, zc: number, milit
     c.box(0.05, 0.04, 0.06, a.x, r, 0, K.dark);
     for (const side of [-1, 1]) c.box(0.06, 0.012, 0.03, a.x, r + 0.03, side * (zc - w / 2 - 0.02), K.dark);
   }
-  b.gauge = zc;
+  b.gauge = zc * b.zk;
   b.tw = w;
   b.wheeled = true;
   return r;
@@ -1811,6 +1825,21 @@ function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: numb
 
 const templates = new Map<string, Tpl>();
 /** Field stowage items per template key (see Bld.clutter). */
+/**
+ * Width factors (Bld.zk) per template key or key|faction: older designs were authored ~20-30 % wider than
+ * the real vehicles (real length : width ratios, e.g. Bradley 6.55 x 3.6 m, BTR-4 7.76 x 2.9 m, Boxer 7.93 x 2.99 m).
+ */
+const WIDTH_K: Record<string, number> = {
+  apc: 0.85,
+  'apc|china': 0.8,
+  'apc|ukraine': 0.78,
+  'apc|turkey': 0.8,
+  aa: 0.84,
+  arty: 0.82,
+  laser: 0.82,
+  tos: 0.86,
+  berge: 0.86,
+};
 const CLUTTER: Record<string, number> = { mbt: 7, apc: 4, arty: 4, aa: 3, laser: 3, tos: 3, ew: 2, berge: 4, missile_truck: 2 };
 
 function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld) => void): Model {
@@ -1819,6 +1848,7 @@ function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld
   if (!t) {
     const b = new Bld(style, fog);
     b.clutterN = CLUTTER[key] ?? 0;
+    b.zk = WIDTH_K[key + '|' + style.faction] ?? WIDTH_K[key] ?? 1;
     fn(b);
     t = b.finish();
     t.key = ck;
