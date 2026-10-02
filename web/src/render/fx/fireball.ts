@@ -156,7 +156,7 @@ export class Fireballs {
         });
         const mesh = new THREE.Mesh(this.geo, mat);
         mesh.frustumCulled = false;
-        mesh.renderOrder = 2;
+        mesh.renderOrder = 3.5;
         b = { mesh, mat, age: 0, life: 1, r: 1, x: 0, y: 0, z: 0, rise: 0 };
       }
     }

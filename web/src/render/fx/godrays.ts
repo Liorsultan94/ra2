@@ -33,10 +33,10 @@ const RAYS_FRAG = /* glsl */ `
       vec2 inb = step( vec2( 0.0 ), p ) * step( p, vec2( 1.0 ) );
       occ += texture2D( tDens, p ).r * w * inb.x * inb.y;
     }
-    float T = exp( -occ * 0.55 );
+    float T = exp( -occ * 0.35 );
     // in-scatter: thin / mid smoke that the sun reaches lights up; haze behind dense smoke is shadowed
     float scatter = smoothstep( 0.02, 0.5, d0 ) * ( 1.0 - smoothstep( 0.9, 2.5, d0 ) );
-    float shaft = scatter * T * 0.55 - ( 1.0 - T ) * ( 0.1 + 0.25 * min( d0, 1.0 ) );
+    float shaft = scatter * T * 0.35 - ( 1.0 - T ) * 0.06 * ( 1.0 - 0.5 * min( d0, 1.0 ) );
     gl_FragColor = vec4( uCol * shaft * uOn, 1.0 );
   }
 `;

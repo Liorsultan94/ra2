@@ -1326,22 +1326,22 @@ if ( abs( hfn.y ) < 0.5 ) {
   float fid = ( hX ? 3.0 : 7.0 ) + sign( hX ? hfn.x : hfn.z ) + bxSeed;
   // bursts: holes cluster where a burst hit
   float clus = bxV( vec3( wp * 3.2, fid * 1.7 ) );
-  vec2 cg = wp * 15.0;
+  vec2 cg = wp * 12.0;
   vec2 ci = floor( cg );
   vec3 hk = vec3( ci, fid );
   float hr = bxH( hk );
   if ( hr < bxHit * smoothstep( 0.62 - bxHit * 0.3, 0.9 - bxHit * 0.2, clus ) * 0.75 ) {
     vec2 dv = cg - ci - ( vec2( bxH( hk + 3.1 ), bxH( hk + 7.7 ) ) * 0.5 + 0.25 );
     float d = length( dv );
-    float rr = 0.09 + 0.07 * bxH( hk + 1.3 );
+    float rr = 0.1 + 0.07 * bxH( hk + 1.3 );
     float jag = 1.0 + 0.3 * sin( atan( dv.y, dv.x ) * 5.0 + hr * 40.0 );
     float chip = 1.0 - smoothstep( rr * 2.0 * jag, rr * 2.7 * jag, d );
     float hole = 1.0 - smoothstep( rr * 0.7, rr, d );
-    outgoingLight = mix( outgoingLight, vec3( bxL2 * 1.3 + 0.008 ) * vec3( 1.0, 0.96, 0.9 ), chip * 0.5 );
+    outgoingLight = mix( outgoingLight, max( bxRaw, vec3( bxL2 * 1.2 ) ), chip * 0.55 );
     outgoingLight *= 1.0 - hole * 0.88;
   }
   // larger spalled chips
-  vec2 cg2 = wp * 5.0;
+  vec2 cg2 = wp * 4.0;
   vec2 ci2 = floor( cg2 );
   vec3 hk2 = vec3( ci2, fid + 11.0 );
   if ( bxH( hk2 ) < bxHit * 0.32 ) {
@@ -1352,7 +1352,7 @@ if ( abs( hfn.y ) < 0.5 ) {
     float spall = 1.0 - smoothstep( r2 * 0.85, r2, d2 );
     float rim = smoothstep( r2 * 0.7, r2 * 0.95, d2 ) * spall;
     float pit = 1.0 - smoothstep( r2 * 0.2, r2 * 0.45, d2 );
-    vec3 raw = vec3( bxL2 * 1.15 + 0.01 ) * vec3( 0.98, 0.95, 0.9 ) * ( 0.8 + n2 * 0.4 );
+    vec3 raw = max( bxRaw, vec3( bxL2 * 1.1 ) ) * ( 0.75 + n2 * 0.45 );
     outgoingLight = mix( outgoingLight, raw, spall * 0.75 );
     outgoingLight *= ( 1.0 - rim * 0.45 ) * ( 1.0 - pit * 0.6 );
   }
@@ -1429,6 +1429,13 @@ const FRAG_LIGHT = `
   outgoingLight *= ( 1.0 - 0.62 * bxS ) * ( 1.0 - 0.8 * bxK );
   if ( bxHit > 0.0 && vBxP.y > 0.05 ) {
     float bxL2 = dot( outgoingLight, vec3( 0.3, 0.59, 0.11 ) );
+    // light reaching the surface, so exposed raw material can be lit like the wall
+    #if defined( STANDARD )
+    float bxIrr = dot( totalDiffuse, vec3( 0.3, 0.59, 0.11 ) ) / max( dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) ), 0.03 );
+    #else
+    float bxIrr = bxL2 * 2.0;
+    #endif
+    vec3 bxRaw = vec3( 0.46, 0.44, 0.41 ) * bxIrr;
     #ifdef BX_GLASS
     ${GLASS_GLSL}
     #else

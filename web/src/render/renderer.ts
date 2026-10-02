@@ -24,6 +24,14 @@ import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
 export type Quality = 'low' | 'medium' | 'high';
 
+/** Per-frame hook for whole-view modes (src/render/viewmodes.ts). */
+export interface ViewHook {
+  before(dt: number): void;
+  /** Return true when the hook rendered the main view itself. */
+  renderMain(): boolean;
+  after(dt: number): void;
+}
+
 // ~35 degree elevation: a touch lower than before so units and buildings show more of their sides (RA2-like)
 const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
 const CAM_DIST = 80;
@@ -47,7 +55,7 @@ interface QualityStep {
   post: boolean;
 }
 
-interface Visual {
+export interface Visual {
   id: number;
   model: Model;
   owner: number;
@@ -161,7 +169,8 @@ export class GameRenderer {
   readonly outskirts: Outskirts;
   /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
   readonly atmos: Atmosphere;
-  private visuals = new Map<number, Visual>();
+  /** Live unit / building visuals by entity id (read by the view modes in viewmodes.ts). */
+  readonly visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
   private projVis = new Map<number, ProjVisual>();
   private ghost: THREE.Group | null = null;
@@ -314,6 +323,16 @@ export class GameRenderer {
   }
 
   private disposed = false;
+  /** Optional view-mode hook (thermal / x-ray / drone camera, src/render/viewmodes.ts). */
+  viewHook: ViewHook | null = null;
+  /** The post-processing chain, when this quality level has one. */
+  get postComposer(): EffectComposer | null {
+    return this.composer;
+  }
+  /** True while frames go through the post chain (the quality governor can switch it off). */
+  get postActive(): boolean {
+    return !!this.composer && this.usePost;
+  }
 
   resize(w: number, h: number) {
     this.width = w;
@@ -1447,8 +1466,13 @@ export class GameRenderer {
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.effects.update(dt);
     this.updateCamera();
-    if (this.composer && this.usePost) this.composer.render(dt);
+    const vh = this.viewHook;
+    vh?.before(dt);
+    if (vh?.renderMain()) {
+      // the view mode drew the frame itself
+    } else if (this.composer && this.usePost) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+    vh?.after(dt);
     this.adaptQuality();
   }
 

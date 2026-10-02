@@ -268,7 +268,7 @@ export class Effects {
       u.uCamBack.value.set(e[8], e[9], e[10]).normalize();
     }
     this.lights.strongest(u.uFireP.value, u.uFireC.value);
-    this.marks?.setSun(u.uSunDir.value);
+    this.marks?.setSun(u.uSunDir.value, Math.min(1, u.uSunCol.value.x * 0.3 + u.uSunCol.value.y * 0.59 + u.uSunCol.value.z * 0.11) * day);
     this.godRays?.setSun(u.uSunDir.value, u.uSunCol.value, day);
   }
 

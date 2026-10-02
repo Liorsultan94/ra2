@@ -165,6 +165,8 @@ const TEX = {
 
 /** Sun direction (towards the sun, world space), shared by every relief decal. */
 const SUN = { value: new THREE.Vector3(-0.7, 0.6, 0.15).normalize() };
+/** Sun strength relative to daylight (0 at night .. 1): scales the relief highlights. */
+const SUN_K = { value: 1 };
 
 class DecalLayer {
   readonly mesh: THREE.InstancedMesh;
@@ -207,7 +209,7 @@ class DecalLayer {
       polygonOffsetFactor: -2 - order,
       polygonOffsetUnits: -2,
       defines,
-      uniforms: { map: { value: tex }, relief: { value: relief }, uSun: SUN, wxSnow: WX.wxSnow, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
+      uniforms: { map: { value: tex }, relief: { value: relief }, uSun: SUN, uSunK: SUN_K, wxSnow: WX.wxSnow, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
       vertexShader: /* glsl */ `
         attribute float aBirth;
         varying vec2 vUv;
@@ -232,6 +234,7 @@ class DecalLayer {
         uniform sampler2D map;
         uniform sampler2D relief;
         uniform vec3 uSun;
+        uniform float uSunK;
         uniform float wxSnow;
         uniform float life;
         uniform float opacity;
@@ -261,7 +264,7 @@ class DecalLayer {
           vec3 nm = texture2D( relief, vUv ).xyz * 2.0 - 1.0;
           vec3 n = normalize( vT * nm.x + vB * nm.y + vN * nm.z );
           float e = ( dot( n, uSun ) - dot( vN, uSun ) ) * 1.6;
-          float w = clamp( abs( e ), 0.0, 0.5 );
+          float w = clamp( abs( e ), 0.0, 0.5 ) * ( e > 0.0 ? uSunK : 0.4 + 0.6 * uSunK );
           vec3 target = e > 0.0 ? mix( vec3( 0.2, 0.16, 0.11 ), vec3( 0.6, 0.64, 0.7 ), wxSnow ) : vec3( 0.004, 0.003, 0.002 );
           float ao = 1.0 - ( 1.0 - w ) * ( 1.0 - ta );
           rgb = ( target * w + ( 1.0 - w ) * ta * t.rgb ) / max( ao, 1e-3 );
@@ -311,6 +314,8 @@ export class GroundMarks {
   private rut: DecalLayer;
   private crater: DecalLayer;
   private scorch: DecalLayer;
+  /** Tiles under paved roads (the sim marks roads as dirt): no ruts there. */
+  private paved: Uint8Array;
   time = 0;
 
   constructor(
@@ -325,6 +330,22 @@ export class GroundMarks {
     this.scorch = new DecalLayer(TEX.scorch(), 600, 240, 0.9, fog, 1);
     this.crater = new DecalLayer(TEX.crater(), 600, 270, 1, fog, 2, RELIEF.crater());
     for (const l of [this.tread, this.tire, this.rut, this.scorch, this.crater]) this.group.add(l.mesh);
+    this.paved = new Uint8Array(map.w * map.h);
+    for (const r of map.roads ?? [])
+      for (let k = 0; k < r.length - 1; k++) {
+        const ax = r[k].x + 0.5;
+        const az = r[k].y + 0.5;
+        const bx = r[k + 1].x + 0.5;
+        const bz = r[k + 1].y + 0.5;
+        const dx = bx - ax;
+        const dz = bz - az;
+        const L2 = Math.max(1e-6, dx * dx + dz * dz);
+        for (let y = Math.max(0, Math.floor(Math.min(az, bz) - 2)); y <= Math.min(map.h - 1, Math.ceil(Math.max(az, bz) + 2)); y++)
+          for (let x = Math.max(0, Math.floor(Math.min(ax, bx) - 2)); x <= Math.min(map.w - 1, Math.ceil(Math.max(ax, bx) + 2)); x++) {
+            const t = Math.max(0, Math.min(1, ((x + 0.5 - ax) * dx + (y + 0.5 - az) * dz) / L2));
+            if (Math.hypot(x + 0.5 - ax - dx * t, y + 0.5 - az - dz * t) < 1.2) this.paved[y * map.w + x] = 1;
+          }
+      }
   }
 
   /** Soft ground that takes deep ruts: dirt and sand always, grass when wet, anything but rock in snow. */
@@ -333,6 +354,7 @@ export class GroundMarks {
     const tx = Math.floor(x);
     const tz = Math.floor(z);
     if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h) return false;
+    if (this.paved[tz * m.w + tx]) return false;
     const t = m.tiles[tz * m.w + tx];
     if (t === Tile.Dirt || t === Tile.Sand) return true;
     if (t === Tile.Grass) return WX.wxWet.value > 0 || WX.wxSnow.value > 0;
@@ -354,8 +376,9 @@ export class GroundMarks {
   }
 
   /** Sun direction (towards the sun) for the relief decals. */
-  setSun(dir: THREE.Vector3) {
+  setSun(dir: THREE.Vector3, strength = 1) {
     SUN.value.copy(dir);
+    SUN_K.value = Math.max(0, Math.min(1, strength));
   }
 
   update(dt: number) {

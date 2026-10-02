@@ -10,6 +10,7 @@ import {
   type GameMap,
 } from './map';
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
+import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
 import { Rng } from './rng';
 import {
@@ -140,6 +141,8 @@ export class World {
         attackWarnAt: -9999,
         lowPowerWarned: false,
         radarOnline: false,
+        airdropAt: -1,
+        airdropFrom: 0,
       });
       const f = ps.faction;
       this.spawnUnit(factionUnit(f, (d) => !!d.mcv).id, i, s.x + 0.5, s.y + 0.5);
@@ -253,6 +256,8 @@ export class World {
       idleTicks: 0,
       lastHurt: -9999,
       firedAt: -9999,
+      drop: null,
+      para: null,
     };
   }
 
@@ -422,7 +427,7 @@ export class World {
     const p = this.players[pid];
     if (!p || p.defeated) return;
     const own = (ids: number[]) =>
-      ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0);
+      ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
     switch (cmd.type) {
       case 'move': {
         const units = own(cmd.ids);
@@ -558,7 +563,179 @@ export class World {
         b.rallyY = cmd.y;
         break;
       }
+      case 'airdrop': {
+        // support power: needs a completed airfield (airdropAt >= 0) and a full charge
+        if (p.airdropAt < 0 || this.tick < p.airdropAt || !Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) break;
+        p.airdropFrom = this.tick;
+        p.airdropAt = this.tick + AIRDROP_COOLDOWN;
+        this.launchAirdrop(p, cmd.x, cmd.y);
+        break;
+      }
     }
+  }
+
+  // ------------------------------------------------------------ airborne drop
+
+  /** Distance from (x, y) along (dx, dy) to the map edge (inset). */
+  private rayToEdge(x: number, y: number, dx: number, dy: number, inset: number) {
+    const { w, h } = this.map;
+    let t = 1e9;
+    if (dx > 1e-6) t = Math.min(t, (w - inset - x) / dx);
+    else if (dx < -1e-6) t = Math.min(t, (inset - x) / dx);
+    if (dy > 1e-6) t = Math.min(t, (h - inset - y) / dy);
+    else if (dy < -1e-6) t = Math.min(t, (inset - y) / dy);
+    return Math.max(0, t);
+  }
+
+  /** A transport enters from the owner's side of the map and flies a straight run over the drop zone. */
+  launchAirdrop(p: Player, x: number, y: number): Entity {
+    const { w, h } = this.map;
+    x = Math.max(1, Math.min(w - 1, x));
+    y = Math.max(1, Math.min(h - 1, y));
+    let dx = x - (p.startX + 0.5);
+    let dy = y - (p.startY + 0.5);
+    let len = Math.hypot(dx, dy);
+    if (len < 4) {
+      dx = w / 2 - (p.startX + 0.5);
+      dy = h / 2 - (p.startY + 0.5);
+      len = Math.hypot(dx, dy);
+    }
+    if (len < 1e-3) {
+      dx = 1;
+      dy = 0;
+      len = 1;
+    }
+    dx /= len;
+    dy /= len;
+    const back = this.rayToEdge(x, y, -dx, -dy, 0.6);
+    const e = this.spawnUnit(`${p.faction}_transport`, p.id, x - dx * back, y - dy * back);
+    e.life = -1;
+    e.facing = e.pfacing = e.turret = e.pturret = Math.atan2(dy, dx);
+    e.z = e.pz = unitDef(e.def).cruiseAlt ?? 3;
+    e.moving = true;
+    e.drop = { x, y, dx, dy, jumpers: AIRDROP_STICK.map((k) => `${p.faction}_${k}`), crate: true, phase: 'inbound', next: 0, ramp: 0, closeAt: 0 };
+    this.events.push({ t: 'airdrop', owner: p.id, id: e.id, x, y });
+    return e;
+  }
+
+  /** Transport on its drop run: inbound straight and level, the stick jumps over the zone, then it turns for home and leaves the map. */
+  private updateAirlift(e: Entity, d: UnitDef) {
+    const r = e.drop;
+    if (!r) {
+      this.remove(e);
+      return;
+    }
+    const step = (d.speed / TPS) * (e.jammedUntil > this.tick ? 0.7 : 1);
+    if (r.phase === 'outbound') e.facing = turnToward(e.facing, Math.atan2(-r.dy, -r.dx), 0.035);
+    e.turret = e.facing;
+    e.x += Math.cos(e.facing) * step;
+    e.y += Math.sin(e.facing) * step;
+    e.moving = true;
+    e.path = null;
+    const along = (r.x - e.x) * r.dx + (r.y - e.y) * r.dy;
+    if (r.phase === 'inbound') {
+      // the ramp opens on the run-in
+      if (along < d.speed * 2.4) r.ramp = 1;
+      const n = r.jumpers.length + (r.crate ? 1 : 0);
+      if (along <= ((n - 1) * AIRDROP_GAP * step) / 2) {
+        // a damaged aircraft gets fewer of its stick out (wounded jumpers, a fire in the hold)
+        const frac = Math.max(0, e.hp / e.maxHp);
+        const keep = Math.max(1, Math.ceil(r.jumpers.length * frac - 1e-6));
+        if (keep < r.jumpers.length) {
+          const at = r.jumpers.findIndex((j) => j.endsWith('_at'));
+          const kept = r.jumpers.filter((_, i) => i !== at).slice(0, at >= 0 && keep >= 3 ? keep - 1 : keep);
+          if (at >= 0 && keep >= 3) kept.splice(Math.min(2, kept.length), 0, r.jumpers[at]);
+          r.jumpers = kept;
+        }
+        if (frac < 0.5) r.crate = false;
+        r.phase = 'dropping';
+        r.next = this.tick;
+        r.ramp = 1;
+        this.events.push({ t: 'paradrop', owner: e.owner, id: e.id, x: e.x, y: e.y, z: e.z });
+      }
+    }
+    if (r.phase === 'dropping' && this.tick >= r.next) {
+      const j = r.jumpers.shift();
+      if (j) this.paraExit(e, j, CHUTE_TICKS);
+      else if (r.crate) {
+        r.crate = false;
+        this.paraExit(e, 'supply_crate', CRATE_CHUTE_TICKS);
+      }
+      r.next = this.tick + AIRDROP_GAP;
+      if (!r.jumpers.length && !r.crate) {
+        r.phase = 'outbound';
+        r.closeAt = this.tick + TPS * 2;
+      }
+    }
+    if (r.phase === 'outbound' && this.tick >= r.closeAt) r.ramp = 0;
+    const { w, h } = this.map;
+    const out = e.x < 0.3 || e.y < 0.3 || e.x > w - 0.3 || e.y > h - 0.3;
+    if (out) {
+      if (r.phase === 'outbound') this.remove(e);
+      else {
+        e.x = Math.max(0.3, Math.min(w - 0.3, e.x));
+        e.y = Math.max(0.3, Math.min(h - 0.3, e.y));
+      }
+    }
+  }
+
+  /** One jumper (or the supply pallet) leaves the ramp: it drifts on with the aircraft's momentum and lands with a little scatter. */
+  private paraExit(plane: Entity, defId: string, T: number) {
+    const r = plane.drop!;
+    const u = this.spawnUnit(defId, plane.owner, plane.x, plane.y);
+    u.facing = u.pfacing = u.turret = u.pturret = plane.facing;
+    u.z = u.pz = Math.max(0.6, plane.z - 0.25);
+    let lx = plane.x + r.dx * 0.8 + this.rng.range(-0.5, 0.5);
+    let ly = plane.y + r.dy * 0.8 + this.rng.range(-0.5, 0.5);
+    const { w, h } = this.map;
+    lx = Math.max(0.6, Math.min(w - 0.6, lx));
+    ly = Math.max(0.6, Math.min(h - 0.6, ly));
+    if (!this.pf.passable(Math.floor(lx), Math.floor(ly))) {
+      const spot = this.nearestPassable(lx, ly, 10);
+      if (spot) {
+        lx = spot[0] + 0.5 + this.rng.range(-0.25, 0.25);
+        ly = spot[1] + 0.5 + this.rng.range(-0.25, 0.25);
+      }
+    }
+    u.guardX = lx;
+    u.guardY = ly;
+    u.para = { t: T, T, z0: u.z, x0: plane.x, y0: plane.y };
+    u.order = { type: 'idle' };
+    u.moving = false;
+  }
+
+  /** Under canopy: drift to the landing point while descending; helpless (no orders, no fire) until touchdown. */
+  private updatePara(e: Entity, d: UnitDef) {
+    const pa = e.para!;
+    pa.t--;
+    const u = 1 - pa.t / pa.T;
+    const k = 1 - (1 - u) * (1 - u);
+    e.x = pa.x0 + (e.guardX - pa.x0) * k;
+    e.y = pa.y0 + (e.guardY - pa.y0) * k;
+    e.z = pa.z0 * descentHeight(u);
+    e.moving = false;
+    if (pa.t > 0) return;
+    e.para = null;
+    e.z = 0;
+    e.x = e.guardX;
+    e.y = e.guardY;
+    e.scanAt = this.tick + 2;
+    if (d.supply) e.life = CRATE_LIFE;
+    this.events.push({ t: 'landed', owner: e.owner, id: e.id, x: e.x, y: e.y });
+  }
+
+  /** Supply pallet on the ground: field medical kits and ammunition patch up friendly units around it, then it is used up. */
+  private updateSupply(e: Entity) {
+    if (--e.life <= 0) {
+      this.remove(e);
+      return;
+    }
+    if ((this.tick + e.id) % TPS !== 0) return;
+    this.queryRadius(e.x, e.y, CRATE_RADIUS, (o) => {
+      if (o === e || o.owner !== e.owner || o.kind !== 'unit' || o.para || o.hp >= o.maxHp || this.isAir(o)) return;
+      if (Math.hypot(o.x - e.x, o.y - e.y) > CRATE_RADIUS) return;
+      o.hp = Math.min(o.maxHp, o.hp + o.maxHp * CRATE_HEAL);
+    });
   }
 
   formationMove(units: Entity[], x: number, y: number, attackMove: boolean) {
@@ -745,12 +922,13 @@ export class World {
 
   private separate() {
     for (const e of this.list) {
-      if (e.dead || e.kind !== 'unit' || e.inside >= 0) continue;
+      if (e.dead || e.kind !== 'unit' || e.inside >= 0 || e.para) continue;
       const d = unitDef(e.def);
+      if (d.supply || d.airlift) continue;
       this.queryRadius(e.x, e.y, 1.2, (o) => {
-        if (o === e || o.kind !== 'unit' || o.id < e.id) return;
+        if (o === e || o.kind !== 'unit' || o.id < e.id || o.para) return;
         const od = unitDef(o.def);
-        if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze) return;
+        if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
         const min = d.radius + od.radius;
         const dx = o.x - e.x;
         const dy = o.y - e.y;
@@ -805,6 +983,7 @@ export class World {
         score += bd.weapon ? 3 : 8;
       } else {
         const td = unitDef(t.def);
+        if (td.supply) return;
         if (td.weapon) score -= 1;
         if (td.temp) score -= wpn?.air === 'no' ? 0 : 3; // shoot down incoming drones first
       }
@@ -950,6 +1129,14 @@ export class World {
       this.updatePassenger(e, d);
       return;
     }
+    if (e.para) {
+      this.updatePara(e, d);
+      return;
+    }
+    if (d.supply) {
+      this.updateSupply(e);
+      return;
+    }
     if (d.kamikaze) {
       this.updateKamikaze(e, d);
       return;
@@ -962,6 +1149,10 @@ export class World {
     if (d.air) {
       const alt = d.cruiseAlt ?? (d.model === 'heavy_uav' ? 2.0 : 1.7);
       e.z += Math.max(-0.05, Math.min(0.05, alt - e.z));
+    }
+    if (d.airlift) {
+      this.updateAirlift(e, d);
+      return;
     }
     if (d.fixedWing) {
       this.updateJet(e, d);
@@ -1566,6 +1757,7 @@ export class World {
   // ------------------------------------------------------------ production
 
   private updateEconomy() {
+    const airfield = new Uint8Array(this.players.length);
     for (const p of this.players) {
       p.powerOut = 0;
       p.powerUse = 0;
@@ -1578,8 +1770,20 @@ export class World {
       if (d.power > 0) p.powerOut += Math.round(d.power * (0.5 + 0.5 * (e.hp / e.maxHp)));
       else p.powerUse -= d.power;
       if (d.role === 'radar') p.radarOnline = true;
+      if (d.role === 'airfield' && e.buildAnim >= 1) airfield[e.owner] = 1;
     }
     for (const p of this.players) if (this.isLowPower(p)) p.radarOnline = false;
+    // airborne-drop support power: charges while an airfield stands (paused on low power), locked without one
+    for (const p of this.players) {
+      if (!airfield[p.id]) p.airdropAt = -1;
+      else if (p.airdropAt < 0) {
+        p.airdropFrom = this.tick;
+        p.airdropAt = this.tick + AIRDROP_FIRST;
+      } else if (this.tick < p.airdropAt && this.isLowPower(p)) {
+        p.airdropAt++;
+        p.airdropFrom++;
+      }
+    }
     for (const p of this.players) {
       if (p.defeated) continue;
       const low = this.isLowPower(p);
