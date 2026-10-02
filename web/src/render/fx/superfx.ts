@@ -236,8 +236,8 @@ export class SuperFx {
         void main() {
           float rim = pow(1.0 - abs(dot(vN, vV)), 2.5);
           float bands = 0.5 + 0.5 * sin(vH * 9.0 - uTime * 3.0);
-          float a = (0.04 + rim * 0.55 + bands * 0.05 + uPulse * 0.15) * uAlpha;
-          gl_FragColor = vec4(vec3(0.35, 0.9, 1.0) * (1.0 + uPulse), a);
+          float a = (0.025 + rim * (0.5 + uPulse * 0.25) + bands * 0.035 + uPulse * 0.03) * uAlpha;
+          gl_FragColor = vec4(vec3(0.35, 0.9, 1.0) * (1.0 + uPulse * 0.4), a);
         }`,
     });
     const shell = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 14, 0, Math.PI * 2, 0, Math.PI / 2), shellMat);

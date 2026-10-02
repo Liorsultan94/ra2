@@ -696,7 +696,7 @@ export class BridgeFx {
       const p = this.toWorld(v, x, BRIDGE_HEIGHT, (Math.random() - 0.5) * 0.6);
       this.fx.after(Math.abs(i - 2) * 0.12 + Math.random() * 0.08, () => {
         this.fx.blast(i === 2 ? BLASTS.bigVehicle : BLASTS.vehicle, p.x, p.y, p.z, WATER_LEVEL);
-        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 14, 3.2, 0.12, { up: 2.2, smoke: 0.8, spread: 0.8 });
+        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 8, 2.6, 0.09, { up: 2, smoke: 0.6, spread: 0.5 });
       });
     });
     const c = this.toWorld(v, 0, BRIDGE_HEIGHT, 0);
@@ -779,13 +779,13 @@ export class BridgeFx {
             s.vel.multiplyScalar(0.25);
             if (Math.sign(s.rz) && Math.sign(s.rest.rz) !== Math.sign(s.rz)) s.rest.rz = -s.rest.rz;
             // the big splash along the span, spray, debris
-            for (let k = 0; k < 4; k++) {
-              const lx = s.pos.x + (k / 3 - 0.5) * s.len * 0.9;
-              const p = this.toWorld(v, lx, WATER_LEVEL, (Math.random() - 0.5) * 1.2);
-              this.fx.after(k * 0.05, () => this.fx.splash(p.x, WATER_LEVEL, p.z, 1.6 + Math.random() * 0.6));
+            for (let k = 0; k < 2; k++) {
+              const lx = s.pos.x + (k - 0.5) * s.len * 0.6;
+              const p = this.toWorld(v, lx, WATER_LEVEL, (Math.random() - 0.5) * 0.8);
+              this.fx.after(k * 0.07, () => this.fx.splash(p.x, WATER_LEVEL, p.z, 1.5 + Math.random() * 0.4));
             }
             const p = this.toWorld(v, lp.x, WATER_LEVEL, 0);
-            this.fx.debris?.burst('concrete', p.x, WATER_LEVEL + 0.1, p.z, 10, 2.4, 0.107, { up: 1.6, spread: 1 });
+            this.fx.debris?.burst('concrete', p.x, WATER_LEVEL + 0.1, p.z, 6, 2, 0.08, { up: 1.4, spread: 0.6 });
             this.fx.addShake(0.25, p.x, p.z);
           }
           break;
@@ -798,9 +798,10 @@ export class BridgeFx {
           s.pos.y += (s.rest.y - s.pos.y) * k;
           s.rz += (s.rest.rz - s.rz) * k;
           s.rx += (s.rest.rx - s.rx) * k;
-          if (Math.random() < dt * 4 && s.t < 3) {
+          if (Math.random() < dt * 1.2 && s.t < 2.5) {
+            // churned water / foam around the sinking slab
             const p = this.toWorld(v, s.pos.x + (Math.random() - 0.5) * s.len, WATER_LEVEL, (Math.random() - 0.5) * W);
-            this.fx.splash(p.x, WATER_LEVEL, p.z, 0.4 + Math.random() * 0.3);
+            this.fx.smoke(p.x, WATER_LEVEL + 0.05, p.z, 0.7, false);
           }
           if (s.t > 4) s.phase = 'rest';
           break;

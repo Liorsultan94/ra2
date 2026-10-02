@@ -37,6 +37,7 @@ describe.skipIf(!ON)('balance', () => {
     const ids = FACTIONS.map((f) => f.id);
     const minutes = Number(env.BALANCE_MIN ?? 20);
     const limit = Number(env.BALANCE_GAMES ?? 999);
+    const only = (env.BALANCE_ONLY ?? '').split(',').filter(Boolean);
     const wins: Record<string, number> = {};
     const games: Record<string, number> = {};
     let n = 0;
@@ -44,6 +45,7 @@ describe.skipIf(!ON)('balance', () => {
     for (let i = 0; i < ids.length; i++)
       for (let j = i + 1; j < ids.length; j++) {
         if (n >= limit) continue;
+        if (only.length && !only.includes(ids[i]) && !only.includes(ids[j])) continue;
         for (const [a, b] of [[ids[i], ids[j]], [ids[j], ids[i]]] as [Faction, Faction][]) {
           const r = playAI(a, b, 100 + n, minutes);
           n++;

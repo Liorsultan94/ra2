@@ -1,4 +1,5 @@
 import { airdropStatus } from './airdrop';
+import { bridgeTactics } from './bridges';
 import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { Rng } from './rng';
@@ -109,6 +110,7 @@ export class AIController implements Controller {
   private scoutsSent = 0;
   private thinks = 0;
   private lastLane = -1;
+  private chokeAt = 0;
 
   constructor(
     private world: World,
@@ -161,6 +163,7 @@ export class AIController implements Controller {
     this.manageArmy(buildings, units);
     this.manageRepairs(buildings);
     this.manageSupport();
+    bridgeTactics(w, this.pid, units); // rebuild fallen bridges, drop one under a big assault (bridges.ts)
   }
 
   // ------------------------------------------------------------------ intel
@@ -375,12 +378,19 @@ export class AIController implements Controller {
     }
     let best: [number, number] | null = null;
     let bestScore = Infinity;
+    // scan in a canonical frame (the north-east base mirrored onto the south-west one) so rounding and
+    // tie-breaks favour neither start position on the point-symmetric map
+    const flip = conyard.x > map.w / 2;
+    const cbx = flip ? map.w - bx : bx;
+    const cby = flip ? map.h - by : by;
     for (let r = 0; r <= 14; r++) {
       for (let oy = -r; oy <= r; oy++) {
         for (let ox = -r; ox <= r; ox++) {
           if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue;
-          const tx = Math.round(bx + ox - d.w / 2);
-          const ty = Math.round(by + oy - d.h / 2);
+          const ctx = Math.round(cbx + ox - d.w / 2);
+          const cty = Math.round(cby + oy - d.h / 2);
+          const tx = flip ? map.w - ctx - d.w : ctx;
+          const ty = flip ? map.h - cty - d.h : cty;
           if (!w.canPlace(this.pid, defId, tx, ty)) continue;
           if (d.category !== 'defense' && !this.hasClearance(tx, ty, d.w, d.h)) continue;
           let score = Math.hypot(tx + d.w / 2 - bx, ty + d.h / 2 - by);
@@ -411,7 +421,7 @@ export class AIController implements Controller {
   }
 
   private enemyBase(): [number, number] | null {
-    for (const p of this.world.players) if (p.id !== this.pid && !p.defeated) return [p.startX, p.startY];
+    for (const p of this.world.players) if (p.id !== this.pid && !p.defeated) return [p.startX + 0.5, p.startY + 0.5];
     return null;
   }
 
@@ -482,8 +492,8 @@ export class AIController implements Controller {
   private nearestOil(from: Entity | null): Entity | null {
     let best: Entity | null = null;
     let bd = Infinity;
-    const ox = from ? from.x : this.p.startX;
-    const oy = from ? from.y : this.p.startY;
+    const ox = from ? from.x : this.p.startX + 0.5;
+    const oy = from ? from.y : this.p.startY + 0.5;
     for (const e of this.world.list) {
       if (e.dead || e.def !== 'oil' || e.owner === this.pid) continue;
       if (e.owner >= 0) continue;
@@ -532,10 +542,11 @@ export class AIController implements Controller {
 
   private rally(): [number, number] {
     const enemy = this.enemyBase() ?? [this.world.map.w / 2, this.world.map.h / 2];
-    const dx = enemy[0] - this.p.startX;
-    const dy = enemy[1] - this.p.startY;
+    const [hx, hy] = this.home();
+    const dx = enemy[0] - hx;
+    const dy = enemy[1] - hy;
     const len = Math.hypot(dx, dy) || 1;
-    return [this.p.startX + (dx / len) * 10, this.p.startY + (dy / len) * 10];
+    return [hx + (dx / len) * 10, hy + (dy / len) * 10];
   }
 
   private manageArmy(buildings: Entity[], units: Entity[]) {
@@ -737,8 +748,20 @@ export class AIController implements Controller {
     const bridge = lanes.reduce((b, l) => (Math.hypot(l.x - hx, l.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? l : b), lanes[0]);
     const [px, py] = this.bank(bridge, 4);
     const picket = force.filter((u) => this.roleOf(u) === 'choke');
-    const want = this.doctrine.choke + (this.cfg.micro >= 2 ? 1 : 0);
-    if (picket.length < want) {
+    // an outpost, not a last stand: spot the enemy wave, then fall back to the main body
+    let near = 0;
+    for (const [, it] of this.known((it) => !it.building, TPS * 3)) if (Math.hypot(it.x - px, it.y - py) < 10) near++;
+    if (near >= 4 && picket.length) {
+      const ids = picket.map((u) => u.id);
+      const [rx, ry] = this.rally();
+      this.setRole(ids, 'army');
+      this.cmd({ type: 'move', ids, x: rx, y: ry });
+      this.chokeAt = this.world.tick + TPS * 90;
+      return;
+    }
+    const want = this.doctrine.choke;
+    if (picket.length < want && this.world.tick >= this.chokeAt) {
+      this.chokeAt = this.world.tick + TPS * 120;
       const [rx, ry] = this.rally();
       const cands = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 8 && klass(u.def) !== 'support');
       // anti-tank infantry and defensive guns first
@@ -1057,8 +1080,8 @@ export class AIController implements Controller {
 
   /** Wave objective: a known enemy structure (doctrine's preferred roles weigh in), else the enemy base. */
   private pickTarget(from?: Entity): [number, number] | null {
-    const ox = from ? from.x : this.p.startX;
-    const oy = from ? from.y : this.p.startY;
+    const ox = from ? from.x : this.p.startX + 0.5;
+    const oy = from ? from.y : this.p.startY + 0.5;
     const deep = this.doctrine.deep;
     let best: [number, number] | null = null;
     let bd = Infinity;
@@ -1075,7 +1098,7 @@ export class AIController implements Controller {
     }
     if (!best) {
       const enemy = this.enemyBase();
-      if (enemy) best = [enemy[0] + 0.5, enemy[1] + 0.5];
+      if (enemy) best = [enemy[0], enemy[1]];
     }
     return best;
   }

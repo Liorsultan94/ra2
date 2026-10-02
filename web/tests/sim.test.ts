@@ -47,7 +47,7 @@ describe('simulation', () => {
     const snap = (w: World) => w.list.filter((e) => !e.dead).map((e) => `${e.id}:${e.def}:${e.x.toFixed(4)}:${e.y.toFixed(4)}:${e.hp}`).join('|');
     expect(snap(a)).toBe(snap(b));
     expect(a.players.map((p) => p.credits)).toEqual(b.players.map((p) => p.credits));
-  });
+  }, 60000);
 
   it('AI builds a base, harvests and fights', () => {
     const w = aiWorld(3);

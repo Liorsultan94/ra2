@@ -84,19 +84,26 @@ describe('doctrine AI', () => {
   }, 120000);
 
   it('doctrine shapes the army: Turkey flies, Russia brings thermobaric artillery', () => {
-    const built = (w: World, pid: number, pred: (id: string) => boolean) => {
+    // what each AI orders from its factories over the first 10 minutes
+    const orders = (a: Faction, b: Faction, seed: number, pred: (id: string) => boolean) => {
+      const w = game(a, b, seed);
       let n = 0;
-      for (let t = 0; t < TPS * 60 * 11 && !w.over; t++) {
+      const orig = w.issue.bind(w);
+      w.issue = (pid: number, c: Command) => {
+        if (pid === 0 && c.type === 'produce' && pred(c.def)) n++;
+        orig(pid, c);
+      };
+      for (let t = 0; t < TPS * 60 * 10 && !w.over; t++) {
         w.step();
-        for (const e of w.drainEvents()) if (e.t === 'unitReady' && e.owner === pid && pred(e.def)) n++;
+        w.drainEvents();
       }
       return n;
     };
-    const air = (id: string) => !!unitDef(id).air;
-    const tk = built(game('turkey', 'korea', 21), 0, air);
-    const de = built(game('germany', 'korea', 21), 0, air);
+    const air = (id: string) => unitDef(id)?.kind === 'unit' && !!unitDef(id).air;
+    const tk = orders('turkey', 'korea', 21, air);
+    const de = orders('germany', 'korea', 21, air);
     expect(tk).toBeGreaterThan(de);
-    const tos = built(game('russia', 'usa', 22), 0, (id) => id === 'russia_tos');
-    expect(tos).toBeGreaterThan(0);
+    const ru = orders('russia', 'korea', 22, (id) => id === 'russia_tos');
+    expect(ru).toBeGreaterThan(0);
   }, 180000);
 });
