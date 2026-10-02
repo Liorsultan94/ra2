@@ -464,7 +464,8 @@ export class AIController implements Controller {
     ];
     const prefix = f.length + 1;
     for (const [q, cat, min] of queues) {
-      if (q.length >= this.cfg.queueDepth || p.credits < min) continue;
+      const prio = doc.spend[cat];
+      if (q.length >= this.cfg.queueDepth + (prio >= 1.5 ? 1 : 0) || p.credits < min / prio) continue;
       const opts: [string, number][] = [];
       for (const d of defsForFaction(f)) {
         if (d.kind !== 'unit' || d.category !== cat || !d.aiWeight) continue;
@@ -619,7 +620,10 @@ export class AIController implements Controller {
     const [hx, hy] = this.home();
     const home = force.filter((u) => {
       const r = this.roleOf(u);
-      return (r === 'army' || r === 'wing' || r === 'retreat') && Math.hypot(u.x - hx, u.y - hy) < 28 && u.order.type !== 'attack';
+      if (u.order.type === 'attack') return false;
+      // already on its way there: don't re-plan every think
+      if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
+      return (r === 'army' || r === 'wing' || r === 'retreat') && Math.hypot(u.x - hx, u.y - hy) < 28;
     });
     if (home.length) this.cmd({ type: 'move', ids: home.map((u) => u.id), x: t.x, y: t.y, attackMove: true });
     return home.length > 0;
@@ -777,10 +781,18 @@ export class AIController implements Controller {
       return this.roleOf(u) === 'army' && u.order.type === 'idle' && Math.hypot(u.x - rx, u.y - ry) < 10 && (d.speed >= 2.3 || drones || (d.air && !d.fixedWing)) && klass(u.def) === 'main';
     });
     if (fast.length < 2) return;
-    const prey = this.nearestKnown(fast[0], (it) => !!unitDef(it.def)?.harvester && !it.building, TPS * 240, 200);
+    // the least defended harvester we know of (they keep to their ore fields, so old sightings are good leads)
+    let prey = -1;
+    let ps = Infinity;
+    for (const [id, it] of this.known((it) => !it.building && !!unitDef(it.def)?.harvester, TPS * 240)) {
+      const threat = this.threatAt(it.x, it.y, 7);
+      const sc = threat + Math.hypot(it.x - rx, it.y - ry) * 0.05;
+      if (threat <= 10 && sc < ps) {
+        ps = sc;
+        prey = id;
+      }
+    }
     if (prey < 0) return;
-    const it = this.intel.get(prey)!;
-    if (this.threatAt(it.x, it.y, 7) > 8) return;
     fast.sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
     const ids = fast.slice(0, 2 + this.rng.int(3)).map((u) => u.id);
     this.setRole(ids, 'raid');
@@ -937,6 +949,8 @@ export class AIController implements Controller {
     const w = this.world;
     const arty = force.filter((u) => klass(u.def) === 'arty' && this.roleOf(u) === 'army');
     if (!arty.length) return;
+    // guns don't charge the enemy on their own: hold position, fire missions come from here
+    if (this.cfg.micro > 0 && this.thinks % 5 === 0) this.stance(arty.map((u) => u.id), 'hold');
     const wave = this.waves.length ? this.waves[this.waves.length - 1] : null;
     let cx = 0;
     let cy = 0;

@@ -658,7 +658,7 @@ export class BridgeFx {
           s.hits.add(m);
         }
         const p = this.toWorld(v, lx, BRIDGE_HEIGHT + 0.05, Math.max(-W / 2, Math.min(W / 2, lz)));
-        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 6, 1.6, 0.6, { up: 1.2, smoke: 0.4 });
+        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 6, 1.6, 0.08, { up: 1.2, smoke: 0.4 });
         this.fx.dust(p.x, p.y, p.z, 1.1);
         // chunks dropping into the river below
         if (f < 0.6) this.fx.splash(p.x + (Math.random() - 0.5) * 0.4, WATER_LEVEL, p.z + (Math.random() - 0.5) * 0.4, 0.45);
@@ -696,7 +696,7 @@ export class BridgeFx {
       const p = this.toWorld(v, x, BRIDGE_HEIGHT, (Math.random() - 0.5) * 0.6);
       this.fx.after(Math.abs(i - 2) * 0.12 + Math.random() * 0.08, () => {
         this.fx.blast(i === 2 ? BLASTS.bigVehicle : BLASTS.vehicle, p.x, p.y, p.z, WATER_LEVEL);
-        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 14, 3.2, 0.9, { up: 2.2, smoke: 0.8, spread: 0.8 });
+        this.fx.debris?.burst('concrete', p.x, p.y, p.z, 14, 3.2, 0.12, { up: 2.2, smoke: 0.8, spread: 0.8 });
       });
     });
     const c = this.toWorld(v, 0, BRIDGE_HEIGHT, 0);
@@ -744,7 +744,7 @@ export class BridgeFx {
             s.wz = s.hinge === 0 ? (Math.random() - 0.5) * 0.5 : 0;
             const ex = s.cx + (s.hinge === 0 ? 0 : -s.hinge * s.len * 0.5);
             const p = this.toWorld(v, ex, DECK_Y, 0);
-            this.fx.debris?.burst('concrete', p.x, p.y, p.z, 10, 1.8, 0.7, { up: 0.6, smoke: 0.6, spread: 1 });
+            this.fx.debris?.burst('concrete', p.x, p.y, p.z, 10, 1.8, 0.093, { up: 0.6, smoke: 0.6, spread: 1 });
             this.fx.dust(p.x, p.y, p.z, 1.6);
           }
           break;
@@ -762,7 +762,7 @@ export class BridgeFx {
             s.vel.subVectors(s.pos, s.prev).divideScalar(dt);
             s.wz = s.hinge * s.w * 0.8;
             const p = this.toWorld(v, px, DECK_Y, 0);
-            this.fx.debris?.burst('concrete', p.x, p.y, p.z, 8, 1.4, 0.6, { up: 0.4, smoke: 0.5 });
+            this.fx.debris?.burst('concrete', p.x, p.y, p.z, 8, 1.4, 0.08, { up: 0.4, smoke: 0.5 });
             for (let k = 0; k < 3; k++) this.fx.spark(p.x + (Math.random() - 0.5) * 0.6, p.y, p.z + (Math.random() - 0.5) * 0.6, 0xffc070);
           }
           break;
@@ -785,7 +785,7 @@ export class BridgeFx {
               this.fx.after(k * 0.05, () => this.fx.splash(p.x, WATER_LEVEL, p.z, 1.6 + Math.random() * 0.6));
             }
             const p = this.toWorld(v, lp.x, WATER_LEVEL, 0);
-            this.fx.debris?.burst('concrete', p.x, WATER_LEVEL + 0.1, p.z, 10, 2.4, 0.8, { up: 1.6, spread: 1 });
+            this.fx.debris?.burst('concrete', p.x, WATER_LEVEL + 0.1, p.z, 10, 2.4, 0.107, { up: 1.6, spread: 1 });
             this.fx.addShake(0.25, p.x, p.z);
           }
           break;

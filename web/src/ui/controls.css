@@ -3,8 +3,7 @@
 .ctl-groups {
   position: absolute;
   left: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 150px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -125,11 +124,12 @@
 @media (max-height: 560px) and (orientation: landscape) {
   .ctl-groups {
     left: 4px;
+    top: 54px;
     gap: 3px;
   }
   .ctl-slot {
-    width: 46px;
-    height: 36px;
+    width: 44px;
+    height: 32px;
   }
   .ctl-orders .ctl-btn {
     min-width: 40px;

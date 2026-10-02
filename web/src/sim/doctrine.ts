@@ -32,6 +32,8 @@ export interface Doctrine {
   airWing: number;
   /** Preferred targets for waves and strikes (building roles), deepest first. */
   deep: string[];
+  /** Spending priority per production line (> 1 = buys from it with less money in the bank). */
+  spend: { infantry: number; vehicle: number; air: number };
 }
 
 const BASE_DEF = ['def_gun', 'def_aa', 'def_at', 'def_gun', 'def_at', 'def_aa'];
@@ -52,22 +54,24 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 3,
     deep: ['radar', 'airfield', 'factory', 'tech'],
+    spend: { infantry: 1, vehicle: 1, air: 1.3 },
   },
   israel: {
     summary: 'Precision strikes and a layered air-defence umbrella; Merkava/Trophy armour is preserved and pulled back to repair.',
     bias: { mbt: 1.5, apc: 1.2, mortar: 1.5, lora: 1.8, aa: 1.3, ugv: 1.2, uav: 1.2 },
-    defense: 1.2,
-    samFloor: 3,
-    defenseOrder: ['def_aa', 'def_gun', 'def_at', 'def_aa', 'def_at', 'def_aa'],
-    wave: 0.9,
+    defense: 1,
+    samFloor: 2,
+    defenseOrder: ['def_gun', 'def_aa', 'def_at', 'def_aa', 'def_gun', 'def_aa'],
+    wave: 1,
     flank: 0.35,
     harass: 0.6,
-    retreat: 0.45,
+    retreat: 0.4,
     salvo: 1,
     counterBattery: true,
     choke: 2,
     airWing: 0,
     deep: ['tech', 'factory', 'radar'],
+    spend: { infantry: 1, vehicle: 1.1, air: 1 },
   },
   china: {
     summary: 'A2/AD and drone swarms: swarm carriers lead, DF-17 hypersonic salvos strike the rear, cheap massed aircraft.',
@@ -84,6 +88,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 0,
     deep: ['factory', 'tech', 'conyard'],
+    spend: { infantry: 1, vehicle: 1, air: 1.3 },
   },
   russia: {
     summary: 'Mass artillery attrition: TOS/howitzer fire behind big armour waves, Krasukha EW escorting against drones.',
@@ -100,6 +105,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 0,
     deep: ['conyard', 'factory', 'refinery'],
+    spend: { infantry: 0.9, vehicle: 1.3, air: 0.8 },
   },
   germany: {
     summary: 'Heavy mechanised manoeuvre: early, fast Leopard/Puma thrusts through the flanks with Bergepanzer recovery.',
@@ -116,22 +122,24 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 0,
     deep: ['factory', 'refinery', 'conyard'],
+    spend: { infantry: 0.8, vehicle: 1.4, air: 0.8 },
   },
   korea: {
     summary: 'Fortified defence with K9 counter-battery fire: holds the bridges, out-guns enemy artillery, then counter-attacks in strength.',
     bias: { arty: 1.8, mbt: 1.2, at: 1.2, hyunmoo: 1.3, aa: 1.1 },
-    defense: 2,
-    samFloor: 2,
+    defense: 1.4,
+    samFloor: 1,
     defenseOrder: ['def_gun', 'def_at', 'def_aa', 'def_gun', 'def_at', 'def_at', 'def_aa'],
-    wave: 1.25,
+    wave: 1.1,
     flank: 0.2,
     harass: 0.4,
     retreat: 0.35,
     salvo: 1,
     counterBattery: true,
-    choke: 3,
+    choke: 2,
     airWing: 0,
     deep: ['factory', 'conyard'],
+    spend: { infantry: 1.1, vehicle: 1.1, air: 0.9 },
   },
   ukraine: {
     summary: 'Asymmetric drone war: FPV teams and EW troopers in small mobile groups that raid harvesters and strike the flanks.',
@@ -139,7 +147,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     defense: 0.9,
     samFloor: 1,
     defenseOrder: BASE_DEF,
-    wave: 0.75,
+    wave: 0.9,
     flank: 0.5,
     harass: 2,
     retreat: 0.35,
@@ -148,6 +156,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 0,
     deep: ['refinery', 'factory', 'radar'],
+    spend: { infantry: 1.5, vehicle: 1, air: 1.1 },
   },
   turkey: {
     summary: 'Persistent UAV dominance: TB2 / Akinci wings hunt harvesters, artillery and launchers far ahead of the ground forces.',
@@ -164,6 +173,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     choke: 0,
     airWing: 3,
     deep: ['refinery', 'radar', 'factory'],
+    spend: { infantry: 1, vehicle: 0.8, air: 2.2 },
   },
   iran: {
     summary: 'Missile saturation: Fateh / Khorramshahr launchers fire in coordinated volleys while Shahed loitering munitions swarm the defences.',
@@ -175,10 +185,11 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     flank: 0.25,
     harass: 0.6,
     retreat: 0.25,
-    salvo: 3,
+    salvo: 2,
     counterBattery: false,
     choke: 1,
     airWing: 0,
     deep: ['def_aa', 'factory', 'refinery'],
+    spend: { infantry: 1.1, vehicle: 1.2, air: 0.8 },
   },
 };

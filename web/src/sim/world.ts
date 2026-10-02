@@ -977,7 +977,11 @@ export class World {
         const nx = dist2 > 0 ? dx / dist : 1;
         const ny = dist2 > 0 ? dy / dist : 0;
         // moving units barge through; idle ones yield
-        const we = e.moving && !o.moving ? 0.25 : !e.moving && o.moving ? 0.75 : 0.5;
+        let we = e.moving && !o.moving ? 0.25 : !e.moving && o.moving ? 0.75 : 0.5;
+        // hold-position units stand firm; others step round them
+        const eh = !e.moving && e.stance === 'hold';
+        const oh = !o.moving && o.stance === 'hold';
+        if (eh !== oh) we = eh ? 0 : 1;
         const wo = 1 - we;
         this.nudge(e, -nx * push * we * 2, -ny * push * we * 2);
         this.nudge(o, nx * push * wo * 2, ny * push * wo * 2);
@@ -2011,7 +2015,21 @@ export class World {
       if (!ok) {
         p.defeated = true;
         this.events.push({ t: 'defeated', owner: p.id });
-        for (const e of this.list) if (!e.dead && e.owner === p.id) this.kill(e, -1);
+        for (const e of this.list) {
+          if (e.dead || e.owner !== p.id) continue;
+          // captured tech structures / garrisoned houses go back to neutral (their garrison dies with the player)
+          if (e.kind === 'building' && DEFS[e.def].faction === 'neutral') {
+            for (const id of e.passengers) {
+              const u = this.get(id);
+              if (u) this.kill(u, -1);
+            }
+            e.passengers = [];
+            e.owner = -1;
+            e.targetId = -1;
+            continue;
+          }
+          this.kill(e, -1);
+        }
       } else {
         alive++;
         last = p.id;

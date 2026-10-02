@@ -106,7 +106,7 @@ export function bankOf(b: BridgeState, x: number, y: number): 0 | 1 {
   return (x - b.x) * D - (y - b.y) * D < 0 ? 0 : 1;
 }
 
-/** Flood-fill count of walkable tiles reachable from player 0's start (terrain only). */
+/** Flood-fill count of walkable tiles reachable from player 0's start (terrain and structures, World.pass). */
 function reachCount(w: World): number {
   const m = w.map;
   const W = m.w;
@@ -122,7 +122,7 @@ function reachCount(w: World): number {
     const y = (t / W) | 0;
     const nb = [x > 0 ? t - 1 : -1, x < W - 1 ? t + 1 : -1, y > 0 ? t - W : -1, y < m.h - 1 ? t + W : -1];
     for (const u of nb) {
-      if (u < 0 || seen[u] || !terrainPassable(m, u % W, (u / W) | 0)) continue;
+      if (u < 0 || seen[u] || !w.pass[u]) continue;
       seen[u] = 1;
       q.push(u);
     }
@@ -160,9 +160,9 @@ function hutTile(w: World, ex: number, ey: number, out: number, reach: number): 
         if (score >= bestScore) continue;
         // must not cut off any walkable tile
         const i = ty * m.w + tx;
-        m.blocked[i] = 1;
+        w.pass[i] = 0;
         const ok = reachCount(w) === reach - 1;
-        m.blocked[i] = 0;
+        w.pass[i] = 1;
         if (!ok) continue;
         best = i;
         bestScore = score;
