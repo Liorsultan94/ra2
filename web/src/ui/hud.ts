@@ -9,6 +9,7 @@ import { SupportPower } from './support';
 import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
+import { LivePortrait } from './portrait3d';
 import './simple.css';
 
 export interface HudActions {
@@ -133,6 +134,8 @@ export class Hud {
   world!: World;
   renderer!: GameRenderer;
   player = 0;
+  /** Live 3D portrait of the selection (portrait3d.ts); static cameos on 'low' quality. */
+  private live: LivePortrait | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -285,6 +288,8 @@ export class Hud {
     this.mmStatic.height = this.minimap.height;
     this.buildCameos();
     this.setTab('building');
+    this.live?.dispose();
+    this.live = new LivePortrait(this.cameos, renderer.quality !== 'low' && player >= 0);
   }
 
   // --------------------------------------------------------------- sidebar
@@ -515,6 +520,7 @@ export class Hud {
     const style = styleFor(w, this.player);
     if (sel.length === 0) {
       this.selPanel.classList.add('hidden');
+      this.live?.detach();
     } else {
       this.selPanel.classList.remove('hidden');
       if (sel.length === 1) {
@@ -539,6 +545,8 @@ export class Hud {
         const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
         const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
         this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        const id = e.id;
+        this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
       } else {
         const counts = new Map<string, number>();
         for (const e of sel) counts.set(e.def, (counts.get(e.def) ?? 0) + 1);
@@ -547,6 +555,12 @@ export class Hud {
           .join('')}</div>`;
         // only rebuild when it changed (a rebuild under the finger would eat the tap)
         if (this.setSelHtml(html)) this.selPanel.querySelectorAll<HTMLElement>('.sp-type').forEach((b) => (b.onclick = () => this.actions.onSelectType(b.dataset.def!)));
+        // the primary (most numerous) type turns live in its button
+        let prim = '';
+        for (const [id, n] of counts) if (!prim || n > counts.get(prim)!) prim = id;
+        const lead = sel.find((x) => x.def === prim)!;
+        const leadId = lead.id;
+        this.live?.attach(this.selPanel.querySelector<HTMLElement>(`.sp-type[data-def="${prim}"]`), () => w.get(leadId), styleFor(w, lead.owner));
       }
     }
     if (this.simple) {
@@ -803,6 +817,8 @@ export class Hud {
     return true;
   }
 
+  private coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+
   /** Health bars, harvester cargo pips, group numbers, rally and waypoint lines. */
   drawOverlay(alpha: number, hover: number, groups: Map<number, number>, now: number) {
     const ctx = this.octx;
@@ -813,6 +829,9 @@ export class Hud {
     ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
     const sel = r.selection;
     const attract = this.root.classList.contains('attract');
+    // health bars: a touch larger on phones and when zoomed out (src/render/readability.ts)
+    const bk = (this.coarse ? 1.15 : 1) * (1 + 0.3 * Math.max(0, Math.min(1, (1.6 - r.zoom) / 1.1)));
+    const bh = Math.round(4 * bk);
     // waypoint lines (fade out after the order)
     for (let i = this.orderLines.length - 1; i >= 0; i--) {
       const L = this.orderLines[i];
@@ -919,21 +938,25 @@ export class Hud {
       const top = r.project(pos.x, pos.y + r.visualHeight(e.id) + 0.14, pos.z);
       const isB = e.kind === 'building';
       const inf = !isB && unitDef(e.def).category === 'infantry';
-      const width = isB ? Math.min(90, buildingDef(e.def).w * 20) : inf ? 20 : 32;
+      const width = Math.round((isB ? Math.min(90, buildingDef(e.def).w * 20) : inf ? 20 : 32) * bk);
       const pips = isB ? buildingDef(e.def).w * 5 : inf ? 4 : 8;
       const x0 = Math.round(top.x - width / 2);
-      const y0 = Math.round(top.y - 7);
+      // strategic icons sit above zoomed-out units: lift the bar over them
+      const lift = isB ? 0 : r.readability.fadeAtPoint(pos.x, pos.y + r.visualHeight(e.id), pos.z) * 25;
+      // zoomed out: the highlighted icon already marks selected units, keep only bars that say something
+      if (lift > 15 && hp > 0.999 && !recent && e.id !== hover) continue;
+      const y0 = Math.round(top.y - 3 - bh - lift);
       const team = e.owner < 0 ? '#d8d0a0' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
       // frame + team accent cap
       ctx.fillStyle = 'rgba(4,8,10,0.78)';
-      ctx.fillRect(x0 - 4, y0 - 2, width + 6, 8);
+      ctx.fillRect(x0 - 4, y0 - 2, width + 6, bh + 4);
       ctx.fillStyle = team;
-      ctx.fillRect(x0 - 4, y0 - 2, 3, 8);
+      ctx.fillRect(x0 - 4, y0 - 2, 3, bh + 4);
       // lagging damage ghost
       const pw = width / pips;
       if (st.ghost > hp + 0.002) {
         ctx.fillStyle = 'rgba(255,220,180,0.55)';
-        ctx.fillRect(x0, y0, width * st.ghost, 4);
+        ctx.fillRect(x0, y0, width * st.ghost, bh);
       }
       const filled = Math.ceil(hp * pips);
       const col = hpColor(hp);
@@ -942,20 +965,20 @@ export class Hud {
         const last = i === filled - 1;
         const fw = last ? Math.max(1, Math.min(pw - 1, width * hp - i * pw)) : pw - 1;
         ctx.fillStyle = col;
-        ctx.fillRect(sx, y0, fw, 4);
+        ctx.fillRect(sx, y0, fw, bh);
         ctx.fillStyle = 'rgba(255,255,255,0.28)';
         ctx.fillRect(sx, y0, fw, 1);
       }
       if (st.flash > 0) {
         ctx.strokeStyle = `rgba(255,255,255,${st.flash})`;
         ctx.lineWidth = 1;
-        ctx.strokeRect(x0 - 3.5, y0 - 1.5, width + 5, 7);
+        ctx.strokeRect(x0 - 3.5, y0 - 1.5, width + 5, bh + 3);
       }
       if (e.rank) drawRankInsignia(ctx, x0 - 11, y0 + 1, e.rank, pop, now);
       if (e.kind === 'unit' && unitDef(e.def).harvester && selected && e.owner === this.player) {
         const k = e.cargo / 900;
         ctx.fillStyle = '#e8c040';
-        for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + 7, 4, 3);
+        for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + bh + 3, 4, 3);
       }
       const g = groups.get(e.id);
       if (g !== undefined && selected) {
@@ -1050,6 +1073,8 @@ export class Hud {
   }
 
   destroy() {
+    this.live?.dispose();
+    this.live = null;
     this.support.destroy();
     this.superweapons.destroy();
     this.root.remove();

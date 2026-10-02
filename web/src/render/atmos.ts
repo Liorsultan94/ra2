@@ -333,8 +333,8 @@ function pathAt(path: [number, number, number][], u: number, out: THREE.Vector3)
 
 export class Atmosphere {
   readonly cfg: AtmosConfig;
-  /** Day + clear + no night vision: nothing to do. */
-  readonly active: boolean;
+  /** Day + clear + no night vision: nothing to do (photo mode may switch it on for a time-of-day preview). */
+  active: boolean;
   /** Thunder hook (delay already elapsed), volume 0..1. Defaults to the game's large-explosion sound. */
   onThunder: ((volume: number) => void) | null = null;
   readonly weather: WeatherFx | null = null;
@@ -351,7 +351,7 @@ export class Atmosphere {
   private keys: { u: number; p: Preset; light: number }[] | null = null;
   private light = 1;
   /** Direction towards the key light (sun or moon) in the classic view frame; null = the renderer's fixed sun. */
-  readonly sunBase: THREE.Vector3 | null = null;
+  sunBase: THREE.Vector3 | null = null;
   /** Debug / screenshots: force the cycle to this phase (0 = midday, 0.5 = night). */
   phaseOverride: number | null = null;
   /** Current phase of the cycle (0..1, 0 = midday), -1 when the time of day is fixed. */
@@ -425,6 +425,89 @@ export class Atmosphere {
     // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
     const comp = Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y)));
     this.preset!.sunI *= Math.max(1, moon ? Math.min(comp, 1.3) : comp);
+  }
+
+  /** Photo mode time-of-day preview: the state to put back (fixed time of day only). */
+  private photoSaved: { active: boolean; preset: Preset | null; base: Preset; bg: THREE.Color | THREE.Texture | null; exposure: number; envI: number } | null = null;
+  private photoPrevPhase: number | null = null;
+  private photoCycle = false;
+
+  /**
+   * Photo mode: show the day / night cycle at phase u (0 = midday, 0.5 = night)
+   * even when the battle runs a fixed time of day; null puts everything back.
+   */
+  previewPhase(u: number | null) {
+    const h = this.host;
+    if (this.cfg.tod === 'cycle') {
+      if (u === null) {
+        if (this.photoCycle) this.phaseOverride = this.photoPrevPhase;
+        this.photoCycle = false;
+        return;
+      }
+      if (!this.photoCycle) {
+        this.photoPrevPhase = this.phaseOverride;
+        this.photoCycle = true;
+      }
+      this.phaseOverride = u;
+      return;
+    }
+    if (u === null) {
+      const sv = this.photoSaved;
+      if (!sv) return;
+      this.photoSaved = null;
+      this.keys = null;
+      this.sunBase = null;
+      this.phaseOverride = null;
+      this.phase = -1;
+      this.active = sv.active;
+      this.preset = sv.preset;
+      this.applyPreset(sv.preset ?? sv.base);
+      h.scene.background = sv.bg;
+      h.renderer.toneMappingExposure = sv.exposure;
+      if (h.finalPass) h.finalPass.uniforms.exposure.value = sv.base.exposure;
+      h.scene.environmentIntensity = sv.envI;
+      this.night?.setDark(sv.preset?.dark ?? 0);
+      return;
+    }
+    if (!this.photoSaved) {
+      // snapshot what the fixed time of day put on the renderer
+      const f = h.finalPass?.uniforms;
+      const wu = h.terrain.waterMat.uniforms;
+      const base: Preset = {
+        ...todPreset('day').p,
+        sunC: h.sun.color.clone(),
+        sunI: h.sun.intensity,
+        sky: h.hemi.color.clone(),
+        gnd: h.hemi.groundColor.clone(),
+        hemiI: h.hemi.intensity,
+        env: h.scene.environmentIntensity,
+        haze: (h.fog.uniforms.hazeColor.value as THREE.Color).clone(),
+        hazeP: (h.fog.uniforms.hazeParams.value as THREE.Vector4).clone(),
+        cloud: h.fog.uniforms.cloudAmount.value as number,
+        exposure: f ? (f.exposure.value as number) : h.renderer.toneMappingExposure,
+        bg: h.scene.background instanceof THREE.Color ? h.scene.background.clone() : new THREE.Color(0x2a2824),
+        water: (wu.wxLight.value as THREE.Vector3).clone(),
+        spec: wu.wxSpec.value as number,
+        dark: this.preset?.dark ?? 0,
+      };
+      if (f) {
+        base.sat = f.saturation.value as number;
+        base.shadowTint = (f.shadowTint.value as THREE.Vector3).clone();
+        base.highTint = (f.highTint.value as THREE.Vector3).clone();
+        base.vignette = f.vignette.value as number;
+      }
+      if (h.bloom) base.bloom = h.bloom.strength;
+      this.photoSaved = { active: this.active, preset: this.preset, base, bg: h.scene.background as THREE.Color | THREE.Texture | null, exposure: h.renderer.toneMappingExposure, envI: h.scene.environmentIntensity };
+      this.keys = CYCLE_KEYS.map(({ u: ku, key }) => {
+        const t = todPreset(key);
+        applyWeather(t.p, this.cfg.weather, t.light);
+        return { u: ku, p: t.p, light: t.light };
+      });
+      this.preset = buildPreset({ ...this.cfg, tod: 'day' });
+      this.sunBase = new THREE.Vector3();
+      this.active = true;
+    }
+    this.phaseOverride = u;
   }
 
   get nightVision() {

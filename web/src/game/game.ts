@@ -16,6 +16,7 @@ import { warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
 import { ControlsUI, type OrderMode } from '../ui/controls';
 import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
+import { PhotoMode } from './photomode';
 
 export interface GameOptions {
   faction: Faction;
@@ -84,6 +85,8 @@ export class Game {
   /** While a simple-scheme tap is resolved: own units are only picked on a direct hit when units are selected. */
   private touchPick: 'tight' | 'loose' | null = null;
   private lastNudge = 0;
+  /** Photo mode: frozen battle, free camera, filters and a PNG shutter (photomode.ts). */
+  readonly photo: PhotoMode;
 
   constructor(
     container: HTMLElement,
@@ -134,6 +137,23 @@ export class Game {
       this.renderer.centerOn(x, y);
     });
     this.renderer.viewHook = this.modes;
+    const game = this;
+    this.photo = new PhotoMode({
+      renderer: this.renderer,
+      modes: this.modes,
+      root: this.hud.root,
+      layer: this.hud.viewWrap,
+      get paused() {
+        return game.paused;
+      },
+      set paused(v: boolean) {
+        game.paused = v;
+      },
+      onToggle: () => {
+        this.keys.clear();
+        this.hud.forceSelectionRefresh();
+      },
+    });
     this.modes.xray = opts.xray ?? true;
     this.modes.drone?.setMode(opts.droneCam ?? 'auto');
     this.hud.keepClear = () => this.modes.drone?.overlayRect() ?? null;
@@ -148,6 +168,8 @@ export class Game {
         this.thermalBtn?.classList.toggle('on', this.modes.thermal);
         this.thermalBtn?.classList.toggle('black', this.modes.thermal && this.modes.polarity === 'black');
       };
+      // photo mode (photomode.ts): view button on desktop, More panel entry in the simple scheme
+      this.hud.addViewButton('Photo mode (Y)', '<path d="M9 4l-1.6 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.4L15 4zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>', () => this.enterPhotoMode()).classList.add('vc-photo');
     }
     if (attract) {
       this.renderer.centerOn(this.world.map.w / 2, this.world.map.h / 2);
@@ -290,6 +312,15 @@ export class Game {
     void dpr;
   }
 
+  /** Open photo mode; from the pause menu (`resume`) the battle runs again on the way out. */
+  enterPhotoMode(resume = false) {
+    if (this.local < 0 || this.ended || this.photo.active) return;
+    if (this.cine.active) this.cine.skip();
+    this.audio.unlock();
+    this.sfx('click');
+    this.photo.enter(resume);
+  }
+
   // ------------------------------------------------------------------- loop
 
   private frame = (now: number) => {
@@ -313,8 +344,8 @@ export class Game {
       if (steps >= 6) this.acc = 0;
     }
     const alpha = this.paused ? 1 : Math.min(1, this.acc / TICK_MS);
-    if (!this.cine.active) this.updateCamera(dt);
-    if (this.local >= 0) this.updateHover();
+    if (!this.cine.active && !this.photo.active) this.updateCamera(dt);
+    if (this.local >= 0 && !this.photo.active) this.updateHover();
     this.renderer.render(alpha, this.paused ? 0 : dt * ts);
     this.hud.drawOverlay(alpha, this.hover, this.ctl.groupOf, now / 1000);
     this.ctlUI?.drawWaypoints(this.selectedOwnUnits(), alpha, now / 1000);
@@ -1367,6 +1398,10 @@ export class Game {
       this.cine.skip();
       return;
     }
+    if (down && !e.repeat && (e.key === 'y' || e.key === 'Y') && !e.ctrlKey && !e.metaKey && !e.altKey && this.local >= 0 && !this.paused && !this.photo.active) {
+      if ((e.target as HTMLElement)?.tagName !== 'INPUT') this.enterPhotoMode();
+      return;
+    }
     if (this.local < 0 || (this.paused && down)) return;
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
@@ -1475,6 +1510,7 @@ export class Game {
     cancelAnimationFrame(this.raf);
     for (const d of this.disposers) d();
     this.renderer.viewHook = null;
+    this.photo.dispose();
     this.modes.dispose();
     this.renderer.dispose();
     this.ctlUI?.destroy();

@@ -1,0 +1,33 @@
+/* Live 3D portrait (portrait3d.ts): a canvas over the static cameo, which stays as the fallback until the first frame. */
+.pt-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.portrait.live img,
+.sp-type.live img {
+  visibility: hidden;
+}
+/* dark studio backdrop with a faint faction glow behind the model */
+.portrait.live {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 62%, color-mix(in srgb, var(--faction, #4aa0ff) 22%, transparent), transparent 70%),
+    radial-gradient(circle at 50% 40%, #222c35, #07090c 78%);
+}
+.portrait.live.enemy {
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 62%, rgba(232, 53, 43, 0.2), transparent 70%),
+    radial-gradient(circle at 50% 40%, #2e2224, #0a0607 78%);
+}
+.sp-type.live {
+  background: radial-gradient(circle at 50% 40%, #222c35, #07090c 80%);
+}
+.sp-type.live span {
+  z-index: 1;
+}
+.portrait .vet-badge {
+  z-index: 1;
+}

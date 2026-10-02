@@ -91,6 +91,7 @@ function startBattle(opts: GameOptions) {
       game.paused = true;
       showPauseMenu(app, settings, {
         resume: () => game && (game.paused = false),
+        photo: () => game?.enterPhotoMode(true),
         restart: () => lastOptions && startBattle(lastOptions),
         quit: () => {
           audio.setMusicMode('menu');
