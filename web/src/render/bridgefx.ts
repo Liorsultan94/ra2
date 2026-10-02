@@ -503,10 +503,6 @@ export class BridgeFx {
   private toWorld(v: View, x: number, y: number, z: number) {
     return V(x, y, z).applyMatrix4(v.root.matrixWorld);
   }
-  private local2tile(v: View, lx: number, lz: number): [number, number] {
-    // root rotation +pi/4 about Y: local x -> (D, -D), local z -> (D, D)
-    return [v.root.position.x + lx * D + lz * D, v.root.position.z - lx * D + lz * D];
-  }
 
   /** Occluder map: drop / restore the deck height over this bridge's tiles. */
   private patchWater(v: View, down: boolean) {

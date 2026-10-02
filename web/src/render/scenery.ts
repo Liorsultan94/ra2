@@ -120,50 +120,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   roads.name = 'roads';
   out.push(roads);
 
-  // ------------------------------------------------------------- bridges
-  const concrete = new GeoBuilder();
-  const deckTop = new GeoBuilder();
-  for (const br of m.bridges) {
-    const L = br.length;
-    const W = 2.1;
-    const rot = new THREE.Matrix4().makeRotationY(Math.PI / 4);
-    const at = (lx: number, ly: number, lz: number) => new THREE.Matrix4().makeTranslation(br.x, 0, br.y).multiply(rot).multiply(new THREE.Matrix4().makeTranslation(lx, ly, lz));
-    const base = concrete.count;
-    boxAt(concrete, L, 0.2, W, at(0, BRIDGE_HEIGHT - 0.1, 0), 0.78);
-    for (const side of [-1, 1]) {
-      boxAt(concrete, L, 0.04, 0.3, at(0, BRIDGE_HEIGHT + 0.02, side * (W / 2 - 0.15)), 0.85); // sidewalk
-      boxAt(concrete, L, 0.12, 0.06, at(0, BRIDGE_HEIGHT + 0.1, side * (W / 2 - 0.03)), 0.9); // parapet
-      for (let k = -L / 2 + 0.4; k < L / 2; k += 0.8) boxAt(concrete, 0.05, 0.04, 0.08, at(k, BRIDGE_HEIGHT + 0.18, side * (W / 2 - 0.03)), 0.6);
-    }
-    for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) {
-      boxAt(concrete, 0.4, 1.5, W * 0.7, at(k, BRIDGE_HEIGHT - 0.95, 0), 0.62);
-      boxAt(concrete, 0.6, 0.12, W * 0.85, at(k, BRIDGE_HEIGHT - 0.24, 0), 0.7);
-    }
-    // abutments where the deck meets the bank
-    for (const k of [-L / 2, L / 2]) boxAt(concrete, 0.5, 1.0, W, at(k + Math.sign(k) * 0.05, BRIDGE_HEIGHT - 0.6, 0), 0.65);
-    boxUV(concrete, base, 2);
-    // asphalt with markings on the deck (road texture, highway variant)
-    const w = W - 0.6;
-    const corners = [at(-L / 2, BRIDGE_HEIGHT + 0.004, -w / 2), at(L / 2, BRIDGE_HEIGHT + 0.004, -w / 2), at(-L / 2, BRIDGE_HEIGHT + 0.004, w / 2), at(L / 2, BRIDGE_HEIGHT + 0.004, w / 2)].map((mm) => V(0, 0, 0).applyMatrix4(mm));
-    const ids = corners.map((p, k) => deckTop.vert(p, V(0, 1, 0), k % 2 ? 0.02 : 0.02, 0, 1));
-    // u across the road (z), v along (x)
-    deckTop.uv[ids[0] * 2] = 0.06;
-    deckTop.uv[ids[1] * 2] = 0.06;
-    deckTop.uv[ids[2] * 2] = 0.44;
-    deckTop.uv[ids[3] * 2] = 0.44;
-    deckTop.uv[ids[1] * 2 + 1] = L / 6;
-    deckTop.uv[ids[3] * 2 + 1] = L / 6;
-    deckTop.quad(ids[0], ids[1], ids[2], ids[3]);
-  }
-  const concTex = tex.plaster;
-  const concMat = fog.apply(new THREE.MeshStandardMaterial({ map: concTex, vertexColors: true, roughness: 0.9 }));
-  const bridgeMesh = new THREE.Mesh(concrete.build(), concMat);
-  bridgeMesh.castShadow = shadows;
-  bridgeMesh.receiveShadow = true;
-  out.push(bridgeMesh);
-  const deck = new THREE.Mesh(deckTop.build(), roadMat);
-  deck.receiveShadow = true;
-  out.push(deck);
+  // bridges: built and animated per span by render/bridgefx.ts (collapse / rebuild)
 
   // ------------------------------------------------------------ buildings
   const walls = new GeoBuilder();
