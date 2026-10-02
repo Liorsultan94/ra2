@@ -4009,7 +4009,6 @@ function chillers(k: Kit, x0: number, x1: number, z: number, n: number, tag: str
 
 function tech(k: Kit) {
   const P = k.P;
-  const N = P.N;
   slab(k, 3, 3);
   // ------------------------------------------------ hardened lab block (back left): windowless, blast door
   const x0 = -1.42;
@@ -4042,11 +4041,8 @@ function tech(k: Kit) {
   k.cyl(P.panel, 0.4, 0.22, 0.9, Y0, -0.9, 24);
   k.cyl(P.team, 0.405, 0.03, 0.9, Y0 + 0.16, -0.9, 24);
   k.sph(P.dome, 0.44, 0.9, Y0 + 0.5, -0.9, 28, 18);
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * TAU;
-    k.ring(P.mats.col(0xd8d8d2, 0.6, 0.05), 0.44 * Math.cos(0.3 + i * 0.2), 0.003, 0.9, Y0 + 0.5 + 0.44 * Math.sin(0.3 + i * 0.2), -0.9, 28);
-    void a;
-  }
+  // radome panel seams
+  for (let i = 0; i < 6; i++) k.ring(P.mats.col(0xd8d8d2, 0.6, 0.05), 0.44 * Math.cos(0.3 + i * 0.2), 0.003, 0.9, Y0 + 0.5 + 0.44 * Math.sin(0.3 + i * 0.2), -0.9, 28);
   k.blinkLight(0.9, Y0 + 0.96, -0.9, 0.016, 1.5, 0);
   // ------------------------------------------------ server chillers + cryo tanks + test pad
   chillers(k, 0.38, 1.38, -0.2, 3, 'fan', false);
@@ -4068,7 +4064,6 @@ function tech(k: Kit) {
   floodMast(k, 1.35, -0.45, 0.6, Math.PI);
   floodMast(k, -1.38, 0.2, 0.55, 0.2);
   jeep(k, 0.0, 1.15, Math.PI, 1);
-  void N;
   k.height = 1.5;
 }
 

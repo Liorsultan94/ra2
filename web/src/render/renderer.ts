@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
@@ -24,18 +22,20 @@ import { DeployFx } from './deployfx';
 import { CombatOverlay } from './overlay';
 import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
-import { FinalPass, loadSkyEnvironment } from './post';
+import { loadSkyEnvironment, type FinalPass } from './post';
+import { PostChain } from './post/chain';
+import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
 import { Sky } from './sky';
 import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
-import { TiltShiftPass } from './tiltshift';
+import type { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
-import { JitterRenderPass, TemporalPass } from './ultra/temporal';
+import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
@@ -84,8 +84,12 @@ const SUN_DIR = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
 /** One rung of the dynamic quality ladder (index 0 = best). */
 interface QualityStep {
   pr: number;
-  gtao: boolean;
-  bloom: boolean;
+  /** Ambient occlusion (post/ao.ts). */
+  ao: boolean;
+  /** Bloom: 0 off, 1 cheap, 2 full (post/bloom.ts). */
+  bloomQ: 0 | 1 | 2;
+  /** Lens extras: edge chromatic aberration, lens dirt, flare streak (post/chain.ts). */
+  lens: boolean;
   shadow: number;
   post: boolean;
   /** Ultra extras (TAA + sharpen, SSR, screen-space contact shadows) on this rung. */
@@ -234,13 +238,13 @@ export class GameRenderer {
   readonly readability: Readability;
   readonly target = new THREE.Vector3();
   zoom = 1;
+  /** Cinematic post chain (src/render/post/chain.ts): AO, bloom, DOF, AgX + LUT grade, lens, AA. */
+  private post: PostChain | null = null;
   private composer: EffectComposer | null = null;
-  private bloom: UnrealBloomPass | null = null;
-  private gtao: GTAOPass | null = null;
+  private bloom: BloomPass | null = null;
   private finalPass: FinalPass | null = null;
   private tilt: TiltShiftPass | null = null;
-  // ultra quality (src/render/ultra/*): jittered scene pass, temporal resolve, cascaded sun
-  private jitterPass: JitterRenderPass | null = null;
+  // ultra quality (src/render/ultra/*): temporal resolve (in the post chain), cascaded sun
   private temporal: TemporalPass | null = null;
   private csm: CascadeSun | null = null;
   /** Soft footprint darkening under ground units and buildings (all but low quality). */
@@ -312,7 +316,8 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // (the post chain tone maps itself, AgX + grade LUT; this only covers direct-to-screen frames)
+    this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = quality !== 'low';
