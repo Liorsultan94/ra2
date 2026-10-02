@@ -10,8 +10,8 @@ import type { AnimState, Model, ModelStyle } from './types';
  *    is scenery: render/scenery.ts + envdamage.ts);
  *  - tech_hospital / tech_airport / tech_comms: neutral civilian tech structures
  *    (owner flag once captured);
- *  - sw_silo / sw_laser / sw_drone / sw_rocket / sw_cruise: the nations'
- *    superweapon structures (3x3).
+ *  (the nations' superweapon complexes sw_* live in buildings.ts with the
+ *    other base structures).
  * Geometry is merged per building into one vertex-coloured mesh plus an
  * emissive mesh for lamps / lenses, so each costs a couple of draw calls.
  */
@@ -281,142 +281,9 @@ const techComms: Builder = (style, fog) => {
   });
 };
 
-// -------------------------------------------------------------- superweapons
-
-/** Shared 3x3 superweapon compound: blast-walled pad, command bunker with team stripe, fence lights. */
-function swBase(k: Kit) {
-  pad(k, 3, 3, 0x7e7c76);
-  const s = k.style;
-  // blast walls on three sides
-  for (const [x, z, w, d] of [
-    [0, -1.42, 2.9, 0.1],
-    [-1.42, 0, 0.1, 2.9],
-    [1.42, 0, 0.1, 2.9],
-  ] as [number, number, number, number][])
-    k.box(w, 0.2, d, x, 0.04, z, 0x8a887e);
-  // command bunker
-  k.box(0.8, 0.34, 0.5, -0.95, 0.04, -1.0, 0x6e705e);
-  k.box(0.82, 0.05, 0.08, -0.95, 0.32, -0.74, s.team);
-  k.box(0.2, 0.06, 0.012, -0.95, 0.2, -0.744, 0x9ad0ff, 0, true);
-  k.cyl(0.012, 0.012, 0.3, -1.25, 0.38, -1.1, 0x9a9a9a, 4);
-  // hazard stripes at the launch area
-  for (let i = 0; i < 6; i++) k.box(0.14, 0.012, 0.05, -0.6 + i * 0.24, 0.045, 1.25, i % 2 ? 0x202020 : 0xe0b020);
-  for (const [x, z] of [
-    [-1.38, 1.38],
-    [1.38, 1.38],
-    [1.38, -1.38],
-  ])
-    k.sph(0.035, x, 0.28, z, 0xffa020, true);
-}
-
-const swSilo: Builder = (style, fog) => {
-  const k = new Kit(style, fog);
-  swBase(k);
-  // twin silo doors (open) + erected missile
-  for (const x of [-0.1, 0.75]) {
-    k.cyl(0.36, 0.36, 0.06, x, 0.04, 0.25, 0x5a5a56, 16);
-    k.cyl(0.29, 0.29, 0.065, x, 0.04, 0.25, 0x141414, 16);
-    k.tbox(0.3, 0.04, 0.6, x - 0.42, 0.3, 0.25, 0xb0aa40, 0, 0, 1.2);
-  }
-  const mx = 0.75;
-  k.cyl(0.11, 0.11, 1.3, mx, 0.06, 0.25, 0xe8e8e0, 14);
-  k.cyl(0.11, 0.0, 0.42, mx, 1.36, 0.25, 0x404850, 14);
-  k.cyl(0.115, 0.115, 0.06, mx, 0.6, 0.25, style.team, 14);
-  for (let i = 0; i < 4; i++) k.tbox(0.012, 0.18, 0.12, mx + Math.cos(i * 1.57) * 0.12, 0.2, 0.25 + Math.sin(i * 1.57) * 0.12, 0x303030, -i * 1.57, 0);
-  // gantry
-  k.bar(V(mx + 0.25, 0.04, 0.0), V(mx + 0.25, 1.5, 0.0), 0.04, 0xc0b020);
-  k.bar(V(mx + 0.25, 0.04, 0.5), V(mx + 0.25, 1.5, 0.5), 0.04, 0xc0b020);
-  for (let y = 0.3; y < 1.5; y += 0.3) k.bar(V(mx + 0.25, y, 0.0), V(mx + 0.25, y, 0.5), 0.02, 0xc0b020);
-  return k.finish(1.8, { x: 3, y: 1.8, z: 3 });
-};
-
-const swLaser: Builder = (style, fog) => {
-  const k = new Kit(style, fog);
-  swBase(k);
-  // radar + power banks
-  for (let i = 0; i < 3; i++) k.box(0.3, 0.3, 0.36, 0.95, 0.04, -0.95 + i * 0.42, 0x5a6050);
-  k.sph(0.32, -0.95, 0.38, 0.65, 0xe8e8e2, false, true);
-  k.box(0.5, 0.34, 0.5, -0.95, 0.04, 0.65, 0xd0d0c8);
-  // laser turret (animated yaw)
-  k.cyl(0.42, 0.36, 0.3, 0.15, 0.04, 0.25, 0x707468, 16);
-  const tur = new Kit(style, fog);
-  tur.box(0.5, 0.3, 0.46, 0, 0, 0, 0xd8d8cc);
-  tur.box(0.52, 0.04, 0.48, 0, 0.3, 0, style.team);
-  tur.tube(0.14, 0.5, 0.42, 0.2, 0, 0x404448, 0, Math.PI / 2, 14);
-  tur.tube(0.17, 0.08, 0.2, 0.2, 0, 0x2a2c2e, 0, Math.PI / 2, 14);
-  tur.cyl(0.1, 0.1, 0.02, 0.68, 0.2, 0, 0x60f0ff, 14, true);
-  const pivot = tur.finish(0.6, { x: 1, y: 0.6, z: 1 }).root;
-  pivot.position.set(0.15, 0.34, 0.25);
-  k.root.add(pivot);
-  return k.finish(1.2, { x: 3, y: 1.2, z: 3 }, (s) => {
-    pivot.rotation.y = s.time * 0.35;
-  });
-};
-
-const swDrone: Builder = (style, fog) => {
-  const k = new Kit(style, fog);
-  swBase(k);
-  // hangar
-  const hg = new THREE.CylinderGeometry(0.55, 0.55, 1.3, 16, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2);
-  k.b.add(hg, new THREE.Matrix4().makeTranslation(0.65, 0.04, -0.5), null, C(0x7c8278));
-  k.box(1.0, 0.05, 0.02, 0.65, 0.5, 0.16, style.team);
-  // launch rails with drones
-  for (let i = 0; i < 4; i++) {
-    const x = -0.5 + i * 0.38;
-    k.tbox(0.06, 0.04, 0.8, x, 0.25, 0.75, 0x55585a, 0, -0.35);
-    k.tbox(0.24, 0.02, 0.06, x, 0.42, 0.95, 0x8a9088, 0, -0.35);
-    k.tbox(0.05, 0.05, 0.3, x, 0.43, 0.95, 0xa8aca0, 0, -0.35);
-  }
-  // container racks
-  for (let i = 0; i < 3; i++) k.box(0.36, 0.22, 0.24, -1.05, 0.04 + (i % 2) * 0.22, 0.2 + Math.floor(i / 2) * 0.3, i % 2 ? 0x6a7050 : 0x5a6448);
-  return k.finish(1.0, { x: 3, y: 1.0, z: 3 });
-};
-
-const swRocket: Builder = (style, fog) => {
-  const k = new Kit(style, fog);
-  swBase(k);
-  // two TOS-style launcher boxes on turntables, raised
-  for (const z of [-0.15, 0.7]) {
-    k.box(1.3, 0.22, 0.42, 0.25, 0.04, z, 0x4c5838);
-    k.box(0.32, 0.2, 0.42, -0.5, 0.26, z, 0x4c5838);
-    const tilt = 0.55;
-    k.tbox(0.9, 0.36, 0.4, 0.45, 0.62, z, 0x56623e, 0, 0, tilt);
-    for (let r = 0; r < 3; r++)
-      for (let c = 0; c < 4; c++) {
-        const ox = 0.45 + Math.cos(tilt) * 0.46;
-        const oy = 0.62 + Math.sin(tilt) * 0.46;
-        k.tbox(0.012, 0.08, 0.08, ox - 0.02 + (r - 1) * 0.12 * Math.sin(tilt), oy + (r - 1) * -0.12 * Math.cos(tilt) + 0.02, z - 0.15 + c * 0.1, 0x181818, 0, 0, tilt);
-      }
-    k.box(0.06, 0.04, 0.42, 0.25, 0.26, z, style.team);
-  }
-  return k.finish(1.1, { x: 3, y: 1.1, z: 3 });
-};
-
-const swCruise: Builder = (style, fog) => {
-  const k = new Kit(style, fog);
-  swBase(k);
-  // four angled canister launchers
-  for (let i = 0; i < 4; i++) {
-    const z = -0.4 + i * 0.42;
-    k.box(0.5, 0.14, 0.3, 0.35, 0.04, z, 0x5a6048);
-    k.tbox(1.0, 0.22, 0.24, 0.45, 0.42, z, 0x6a7058, 0, 0, 0.45);
-    k.tbox(0.02, 0.2, 0.22, 0.9, 0.62, z, 0x202020, 0, 0, 0.45);
-    k.box(0.04, 0.04, 0.26, 0.1, 0.18, z, style.team);
-  }
-  // fire-control radar
-  k.box(0.4, 0.3, 0.4, -0.9, 0.04, 0.7, 0xc8c8be);
-  k.tbox(0.36, 0.3, 0.03, -0.9, 0.55, 0.7, 0x707070, 0.6, 0.35);
-  return k.finish(1.0, { x: 3, y: 1.0, z: 3 });
-};
-
 export const TECH_MODELS: Record<string, Builder> = {
   civ_garrison: civGarrison,
   tech_hospital: techHospital,
   tech_airport: techAirport,
   tech_comms: techComms,
-  sw_silo: swSilo,
-  sw_laser: swLaser,
-  sw_drone: swDrone,
-  sw_rocket: swRocket,
-  sw_cruise: swCruise,
 };

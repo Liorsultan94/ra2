@@ -259,7 +259,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Paint,
     strength: 1.4,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       const mott = at(lo, x, y, 1, 1, 90, 30);
       const peel = at(hi, x, y, 1, 1, 13, 61);
@@ -300,7 +300,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.CamoA,
     strength: 1.2,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       const a = at(lo, x, y, 2, 2, 0, 0) * 0.75 + at(mid, x, y, 1, 1, 0, 0) * 0.25;
       const b = at(lo, x, y, 2, 2, 128, 64) * 0.75 + at(mid, x, y, 1, 1, 64, 128) * 0.25;
@@ -319,7 +319,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.CamoB,
     strength: 1.0,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       // pixel camo: quantise the blob fields to 8 px squares
       const qx = Math.floor(x / 8) * 8 + 4;
@@ -341,7 +341,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.CamoC,
     strength: 1.0,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       // flecktarn: overlapping small dots of three colours on the base
       let idx = 0;
@@ -374,8 +374,6 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
       o.h = 0.5 + (at(mid, x, y, 1, 1, 30, 30) - 0.5) * 0.1;
       o.ro = 0.8;
       o.me = 0.05;
-      void u;
-      void v;
     },
   },
   {
@@ -400,7 +398,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Canvas,
     strength: 1.8,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       const weave = (Math.sin(x * Math.PI) * Math.sin(y * Math.PI)) * 0.5 + 0.5;
       const fold = at(mid, x, y, 4, 1, 40, 0);
@@ -414,7 +412,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Asphalt,
     strength: 1.6,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       const agg = at(hi, x, y, 2, 2, 11, 3);
       const patch = clamp01((at(lo, x, y, 1, 1, 200, 10) - 0.6) * 5);
@@ -429,7 +427,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Soil,
     strength: 2.2,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, _v, o) {
       const { lo, mid, hi } = fields();
       const pebble = clamp01((at(hi, x, y, 2, 2, 31, 7) - 0.62) * 4);
       const m = at(mid, x, y, 1, 1, 5, 5);
@@ -469,7 +467,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Plaster,
     strength: 1.4,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, v, o) {
       const { lo, mid, hi } = fields();
       const trowel = at(mid, x, y, 1, 1, 50, 50);
       const dirt = clamp01((at(lo, x, y, 1, 1, 7, 7) - 0.5) * 2) * 0.5 + clamp01((at(mid, x, y, 8, 1, 3, 3) - 0.6) * 3) * clamp01(1 - frac(v) * 1.5) * 0.5;
@@ -501,7 +499,7 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
   {
     tile: Tile.Wood,
     strength: 2.0,
-    gen(x, y, u, v, o) {
+    gen(x, y, _u, v, o) {
       const { mid, hi } = fields();
       const plank = lineD(v, 8);
       const gap = 1 - sstep(0.002, 0.005, plank);
@@ -768,6 +766,35 @@ function drawMark(c: CanvasRenderingContext2D, kind: string, x: number, y: numbe
     c.fillStyle = col;
     c.fillRect(x - r * 0.86, y - t * 0.7, r * 1.72, t * 1.4);
     c.fillRect(x - t * 0.7, y - r * 0.86, t * 1.4, r * 1.72);
+  } else if (kind === 'magen') {
+    // Star of David outline
+    c.lineWidth = r * 0.2;
+    for (const rot of [-Math.PI / 2, Math.PI / 2]) {
+      c.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = rot + (i * Math.PI * 2) / 3;
+        if (i) c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+        else c.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      }
+      c.closePath();
+      c.stroke();
+    }
+  } else if (kind === 'taeguk') {
+    c.fillStyle = '#c8102e';
+    c.arc(x, y, r, Math.PI, 0);
+    c.fill();
+    c.beginPath();
+    c.fillStyle = '#003478';
+    c.arc(x, y, r, 0, Math.PI);
+    c.fill();
+    c.beginPath();
+    c.fillStyle = '#c8102e';
+    c.arc(x - r / 2, y, r / 2, 0, Math.PI);
+    c.fill();
+    c.beginPath();
+    c.fillStyle = '#003478';
+    c.arc(x + r / 2, y, r / 2, Math.PI, 0);
+    c.fill();
   } else if (kind === 'trident') {
     c.lineWidth = r * 0.22;
     c.moveTo(x, y - r);
