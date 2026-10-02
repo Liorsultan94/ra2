@@ -255,8 +255,8 @@ export class Paradrop {
 
   private make(id: number, cargo: boolean, region: Region): Chute {
     const color = cargo ? CARGO_CANOPY : CANOPY[region];
-    const R = cargo ? 0.4 : 0.25;
-    const drop = cargo ? 0.42 : 0.34;
+    const R = cargo ? 0.4 : 0.24;
+    const drop = cargo ? 0.42 : 0.42;
     const geo = canopyGeo(color, drop / R, cargo);
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
     const lineMat = new THREE.LineBasicMaterial({ color: 0x2b2b26, transparent: true, opacity: 0.75 });
