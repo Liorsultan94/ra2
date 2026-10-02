@@ -886,6 +886,7 @@ class Bld {
     const helm = reg === 'west' ? 0x5c5a44 : reg === 'east' ? 0x202020 : reg === 'asia' ? 0x34382c : 0x4a4636;
     const skin = reg === 'mideast' ? 0xa8805e : reg === 'asia' ? 0xc8a07c : 0xc49478;
     const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');
+    F.g.scale.setScalar(CREW_K); // RTS exaggeration: readable at play zoom
     const figure = (Q: Part, glass: boolean) => {
       // torso in the hatch well, shoulders, collar of the vest
       Q.add(gCylY(0.021, 0.019, 0.07, 9), uni, TR(0, -0.022, 0));
@@ -2179,6 +2180,7 @@ function instantiate(t: Tpl, fog: FogOfWar | null): Model {
  * quiet seconds. Idle: looks around, now and then glasses the horizon with
  * binoculars. Dead / wreck: inside, lid shut.
  */
+const CREW_K = 1.35;
 function crewAnim(q: (tag: string) => THREE.Object3D[], id: number): ((s: AnimState) => void) | undefined {
   const F = q('crew')[0];
   const A = q('crewA')[0];
@@ -2209,7 +2211,7 @@ function crewAnim(q: (tag: string) => THREE.Object3D[], id: number): ((s: AnimSt
     // 0 .. 0.3: lid swings open (closes last when ducking), 0.25 .. 1: the commander climbs up
     lid.rotation.z = OPEN * sstep(0, 0.3, expo);
     const up = sstep(0.25, 1, expo);
-    F.position.y = y0 - 0.075 * (1 - up);
+    F.position.y = y0 - 0.075 * CREW_K * (1 - up);
     const vis = up > 0.02 ? 1 : 0;
     if (vis !== shown) {
       F.visible = vis === 1;
