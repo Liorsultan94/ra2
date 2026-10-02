@@ -229,6 +229,11 @@ export interface Entity {
   firedAt: number;
   drop: DropRun | null; // airlift transports only
   para: ParaState | null; // under canopy
+
+  // veterancy (see veterancy.ts)
+  xp: number; // value of everything this unit has destroyed
+  rank: number; // 0 rookie, 1 veteran, 2 elite
+  spawner: number; // spawned munitions (drones): the launcher credited with their kills, else -1
 }
 
 export interface QueueItem {
@@ -355,4 +360,6 @@ export type SimEvent =
   | { t: 'airdrop'; owner: number; id: number; x: number; y: number }
   | { t: 'paradrop'; owner: number; id: number; x: number; y: number; z: number }
   | { t: 'landed'; owner: number; id: number; x: number; y: number }
+  /** Veterancy: a unit reached a new rank (1 veteran, 2 elite). */
+  | { t: 'promoted'; id: number; owner: number; rank: number; x: number; y: number }
   | { t: 'gameOver'; winner: number };

@@ -12,6 +12,7 @@ import {
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
+import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
 import {
   CATEGORIES,
@@ -258,6 +259,9 @@ export class World {
       firedAt: -9999,
       drop: null,
       para: null,
+      xp: 0,
+      rank: 0,
+      spawner: -1,
     };
   }
 
@@ -1019,7 +1023,7 @@ export class World {
     if (aligned && e.cooldown <= 0 && e.burstLeft === 0) {
       e.burstLeft = wpn.burst ?? 1;
       e.burstTimer = 0;
-      e.cooldown = wpn.rof;
+      e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
     }
     return 'aiming';
   }
@@ -1059,6 +1063,9 @@ export class World {
       m.facing = m.pfacing = m.turret = m.pturret = Math.atan2(t.y - e.y, t.x - e.x) + this.rng.range(-0.6, 0.6);
       m.order = { type: 'attack', target: t.id };
       m.targetId = t.id;
+      // the launcher is credited with the drone's kill; a veteran crew flies its drones better
+      m.spawner = e.id;
+      m.rank = e.rank;
       return;
     }
     if (wpn.projectile === 'instant' || wpn.projectile === 'beam') {
@@ -1082,6 +1089,8 @@ export class World {
   damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity) {
     if (t.dead) return;
     const d = DEFS[t.def];
+    // veterancy: the shooter's firepower and the target's armour
+    amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
     t.hp -= amount * VERSUS[warhead][d.armor];
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
@@ -1097,20 +1106,36 @@ export class World {
         t.autoTarget = true;
       }
     }
-    if (t.hp <= 0) this.kill(t, src.owner);
+    if (t.hp <= 0) this.kill(t, src.owner, src);
   }
 
-  private kill(t: Entity, by: number) {
+  private kill(t: Entity, by: number, killer?: Entity) {
     if (t.dead) return;
     t.hp = 0;
     for (const pid of t.passengers) {
       const p = this.get(pid);
-      if (p) this.kill(p, by);
+      if (p) this.kill(p, by, killer);
     }
     this.events.push({ t: 'death', id: t.id, def: t.def, x: t.x, y: t.y, owner: t.owner, kind: t.kind });
     if (t.owner >= 0) this.players[t.owner].stats.lost++;
-    if (by >= 0 && by !== t.owner) this.players[by].stats.killed++;
+    if (by >= 0 && by !== t.owner) {
+      this.players[by].stats.killed++;
+      if (killer) this.creditKill(killer, t);
+    }
     this.remove(t);
+  }
+
+  /** Veterancy: the unit that destroyed `victim` (or the launcher of the drone that did) gains its value as experience. */
+  private creditKill(killer: Entity, victim: Entity) {
+    let k = this.get(killer.id);
+    if (k && k.spawner >= 0) k = this.get(k.spawner);
+    if (!k || k.kind !== 'unit' || !this.isEnemy(k.owner, victim.owner) || !canRank(DEFS[k.def])) return;
+    k.xp += xpValue(victim.def);
+    const rank = rankFor(k.def, k.xp);
+    if (rank > k.rank) {
+      k.rank = rank;
+      this.events.push({ t: 'promoted', id: k.id, owner: k.owner, rank, x: k.x, y: k.y });
+    }
   }
 
   private remove(t: Entity) {
@@ -1144,6 +1169,7 @@ export class World {
     const jammed = e.jammedUntil > this.tick;
     if (jammed) e.cooldown = Math.max(e.cooldown, 2);
     if (d.selfHeal && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + d.selfHeal);
+    if (e.rank >= ELITE && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * ELITE_HEAL);
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
     if (d.air) {
@@ -1384,7 +1410,7 @@ export class World {
       if (aligned && dist <= this.weaponRange(e, wpn) && dist >= 1.0) {
         e.burstLeft = wpn.burst ?? 1;
         e.burstTimer = 0;
-        e.cooldown = wpn.rof;
+        e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
       }
     }
   }

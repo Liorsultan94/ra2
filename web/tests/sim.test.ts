@@ -7,6 +7,7 @@ import { terrainPassable } from '../src/sim/map';
 import { PathFinder } from '../src/sim/path';
 import { TPS, type Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
+import { ELITE, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, VETERAN, canRank, rankFor, rankThreshold } from '../src/sim/veterancy';
 
 function aiWorld(seed = 1) {
   const w = new World({
@@ -534,4 +535,171 @@ describe('airborne drop support power', () => {
     }
     expect(drops).toBeGreaterThan(0);
   });
+});
+
+describe('veterancy', () => {
+  function vetWorld() {
+    const w = new World({
+      seed: 21,
+      players: [
+        { name: 'A', faction: 'usa', color: 0, isAI: false },
+        { name: 'B', faction: 'russia', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    w.spawnBuilding('usa_conyard', 0, 4, 88, true);
+    w.spawnBuilding('russia_conyard', 1, 88, 4, true);
+    return w;
+  }
+
+  it('ranks up by the value destroyed: veteran at its own cost, elite at three times', () => {
+    expect(rankThreshold('usa_mbt', VETERAN)).toBe(800);
+    expect(rankThreshold('usa_mbt', ELITE)).toBe(2400);
+    expect(rankThreshold('usa_rifle', VETERAN)).toBe(150);
+    expect(rankFor('usa_mbt', 799)).toBe(0);
+    expect(rankFor('usa_mbt', 800)).toBe(VETERAN);
+    expect(rankFor('usa_mbt', 2400)).toBe(ELITE);
+    expect(canRank(unitDef('ukraine_fpv'))).toBe(false);
+    expect(canRank(unitDef('usa_mbt'))).toBe(true);
+
+    const w = vetWorld();
+    const tank = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+    const promos: { id: number; rank: number }[] = [];
+    const kill = () => {
+      const v = w.spawnUnit('russia_mbt', 1, 44.5, 60.5);
+      w.damage(v, 1e6, 'cannon', tank);
+      for (const e of w.drainEvents()) if (e.t === 'promoted') promos.push({ id: e.id, rank: e.rank });
+    };
+    // a cheap kill is not enough
+    w.damage(w.spawnUnit('russia_rifle', 1, 44.5, 61.5), 1e6, 'mg', tank);
+    expect(tank.xp).toBe(150);
+    expect(tank.rank).toBe(0);
+    kill();
+    expect(tank.rank).toBe(VETERAN);
+    expect(promos).toEqual([{ id: tank.id, rank: VETERAN }]);
+    kill();
+    expect(tank.rank).toBe(VETERAN);
+    kill();
+    expect(tank.xp).toBe(150 + 3 * 800);
+    expect(tank.rank).toBe(ELITE);
+    expect(promos).toEqual([
+      { id: tank.id, rank: VETERAN },
+      { id: tank.id, rank: ELITE },
+    ]);
+  });
+
+  it('veterans hit harder, take less damage and reload faster; elites self-heal', () => {
+    const w = vetWorld();
+    const a = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+    const b = w.spawnUnit('russia_mbt', 1, 50.5, 60.5);
+    b.hp = b.maxHp = 1e5;
+    a.rank = VETERAN;
+    w.damage(b, 100, 'cannon', a);
+    expect(1e5 - b.hp).toBeCloseTo(100 * RANK_FIREPOWER[VETERAN], 6);
+    const hp0 = b.hp;
+    b.rank = ELITE;
+    a.rank = 0;
+    w.damage(b, 100, 'cannon', a);
+    expect(hp0 - b.hp).toBeCloseTo(100 * RANK_ARMOR[ELITE], 6);
+
+    // reload: time between shots of an elite tank vs a rookie
+    const gap = (rank: number) => {
+      const v = vetWorld();
+      const s = v.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+      s.rank = rank;
+      const t = v.spawnUnit('russia_mbt', 1, 44.5, 60.5);
+      t.hp = t.maxHp = 1e7;
+      v.issue(0, { type: 'attack', ids: [s.id], target: t.id });
+      const shots: number[] = [];
+      for (let i = 0; i < TPS * 15; i++) {
+        v.step();
+        for (const e of v.drainEvents()) if (e.t === 'fire' && e.id === s.id) shots.push(v.tick);
+      }
+      return shots[shots.length - 1] - shots[shots.length - 2];
+    };
+    const rof = WEAPONS[unitDef('usa_mbt').weapon!].rof;
+    expect(gap(0)).toBe(rof);
+    expect(gap(ELITE)).toBe(Math.round(rof * RANK_ROF[ELITE]));
+
+    // elite self-repair
+    const e = w.spawnUnit('usa_mbt', 0, 30.5, 60.5);
+    e.rank = ELITE;
+    e.hp = e.maxHp / 2;
+    for (let i = 0; i < TPS * 5; i++) w.step();
+    expect(e.hp).toBeGreaterThan(e.maxHp / 2 + e.maxHp * 0.04);
+    const r = w.spawnUnit('usa_mbt', 0, 30.5, 64.5);
+    r.hp = r.maxHp / 2;
+    for (let i = 0; i < TPS * 5; i++) w.step();
+    expect(r.hp).toBe(r.maxHp / 2);
+  });
+
+  it('drone launchers are credited with their drones’ kills; live fire earns experience', () => {
+    const w = new World({
+      seed: 5,
+      players: [
+        { name: 'A', faction: 'israel', color: 0, isAI: false },
+        { name: 'B', faction: 'ukraine', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    w.spawnBuilding('israel_conyard', 0, 4, 88, true);
+    w.spawnBuilding('ukraine_conyard', 1, 88, 4, true);
+    const target = w.spawnUnit('israel_mbt', 0, 40.5, 60.5);
+    target.hp = 20;
+    const team = w.spawnUnit('ukraine_fpvteam', 1, 46.5, 60.5);
+    let promoted = false;
+    for (let t = 0; t < TPS * 20 && !target.dead; t++) {
+      w.step();
+      for (const e of w.drainEvents()) if (e.t === 'promoted' && e.id === team.id) promoted = true;
+    }
+    expect(target.dead).toBe(true);
+    expect(team.xp).toBe(unitDef('israel_mbt').cost);
+    expect(team.rank).toBe(VETERAN);
+    expect(promoted).toBe(true);
+
+    // a tank shooting infantry ranks up from real combat
+    const v = vetWorld();
+    const tank = v.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+    tank.hp = tank.maxHp = 1e6;
+    for (let i = 0; i < 6; i++) v.spawnUnit('russia_rifle', 1, 44.5, 59.5 + i * 0.4);
+    for (let t = 0; t < TPS * 60; t++) v.step();
+    const killed = 6 - v.list.filter((e) => !e.dead && e.owner === 1 && e.kind === 'unit').length;
+    expect(killed).toBeGreaterThan(2);
+    expect(tank.xp).toBe(killed * 150);
+    expect(tank.rank).toBe(rankFor('usa_mbt', tank.xp));
+  });
+
+  it('rank survives boarding and unloading a transport', () => {
+    const w = vetWorld();
+    const apc = w.spawnUnit('usa_apc', 0, 40.5, 60.5);
+    const inf = w.spawnUnit('usa_rifle', 0, 41.5, 60.5);
+    inf.rank = ELITE;
+    inf.xp = 500;
+    w.issue(0, { type: 'enter', ids: [inf.id], target: apc.id });
+    for (let i = 0; i < TPS * 4; i++) w.step();
+    expect(inf.inside).toBe(apc.id);
+    w.issue(0, { type: 'deploy', ids: [apc.id] });
+    w.step();
+    expect(inf.inside).toBe(-1);
+    expect(inf.rank).toBe(ELITE);
+    expect(inf.xp).toBe(500);
+  });
+
+  it('AI games promote units and stay deterministic with veterancy', () => {
+    const a = aiWorld(13);
+    const b = aiWorld(13);
+    let promos = 0;
+    for (let i = 0; i < TPS * 60 * 9; i++) {
+      a.step();
+      b.step();
+      for (const e of a.drainEvents()) if (e.t === 'promoted') promos++;
+      b.drainEvents();
+    }
+    const snap = (w: World) => w.list.filter((e) => !e.dead).map((e) => `${e.id}:${e.x.toFixed(4)}:${e.y.toFixed(4)}:${e.hp}:${e.xp}:${e.rank}`).join('|');
+    expect(snap(a)).toBe(snap(b));
+    console.log('veterancy promotions in 9 min AI game:', promos);
+    expect(promos).toBeGreaterThan(0);
+  }, 120000);
 });
