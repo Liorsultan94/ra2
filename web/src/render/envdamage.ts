@@ -522,7 +522,7 @@ export class EnvDamage {
     for (let lost = was - H.hp; lost >= 0.15 || (H.stage === 0 && frac < 0.85); lost -= 0.15) {
       const a = Math.random() * Math.PI * 2;
       const st = H.h.st;
-      this.damageHouse(H, H.h.cx + Math.cos(a) * st.w * 0.45, H.h.cz + Math.sin(a) * st.h * 0.45, 0.7, 0.4);
+      this.damageHouse(H, H.h.cx + Math.cos(a) * st.w * 0.45, H.h.cz + Math.sin(a) * st.h * 0.45, 1.0, 0.2);
       if (lost < 0.15) break;
     }
   }
