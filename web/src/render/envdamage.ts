@@ -50,6 +50,8 @@ interface HouseState {
   collapseT: number;
   burnT: number;
   lean: number;
+  /** Backed by a sim entity (garrisonable house): damage stages follow its hp, blasts only scorch. */
+  sim: boolean;
 }
 
 const _m = new THREE.Matrix4();
@@ -143,7 +145,7 @@ export class EnvDamage {
     this.cellItems = new Int32Array(this.n);
     for (let i = 0; i < this.n; i++) this.cellItems[fill[cell(i)]++] = i;
 
-    this.houses = sc.houses.map((h) => ({ h, hp: 1, stage: 0, pos: null, col: null, top: 1, collapseT: -1, burnT: -1, lean: 0 }));
+    this.houses = sc.houses.map((h) => ({ h, hp: 1, stage: 0, pos: null, col: null, top: 1, collapseT: -1, burnT: -1, lean: 0, sim: false }));
 
     // burnt ground patches: dark, ragged-edged blotches
     const sTex = scorchTexture();
@@ -379,7 +381,7 @@ export class EnvDamage {
       const d = Math.hypot(ddx, ddz);
       if (d > R) continue;
       const dmg = size * (1 - d / R) * 0.42;
-      H.hp -= dmg;
+      if (!H.sim) H.hp -= dmg;
       this.damageHouse(H, x, y, size, d / R);
     }
   }
@@ -441,7 +443,7 @@ export class EnvDamage {
       H.stage = 1;
       this.burning.push({ x: cx + (bx - cx) * 0.3, y: H.top - 0.15, z: cz + (bz - cz) * 0.3, t: 5 + size * 3, size: 0.7 });
     }
-    if (H.hp <= 0 || size >= 2.2) {
+    if (H.hp <= 0 || (size >= 2.2 && !H.sim)) {
       H.stage = 2;
       H.collapseT = 0;
       H.lean = (Math.random() - 0.5) * 0.25;
@@ -499,6 +501,35 @@ export class EnvDamage {
   }
 
   // ---------------------------------------------------------------- decals
+
+  /**
+   * Sim-backed village house at footprint (tx, ty) (garrison.ts): mark it, and bring its damage stages in line
+   * with the entity's hp fraction (0 = destroyed: it collapses).
+   */
+  syncSimHouse(tx: number, ty: number, frac: number) {
+    const H = this.houses.find((o) => Math.abs(o.h.st.x - tx) < 0.01 && Math.abs(o.h.st.y - ty) < 0.01);
+    if (!H) return;
+    H.sim = true;
+    if (H.stage === 2) return;
+    const was = H.hp;
+    H.hp = Math.min(H.hp, frac);
+    if (frac <= 0) {
+      H.hp = 0;
+      this.damageHouse(H, H.h.cx, H.h.cz, 1.2, 0);
+      return;
+    }
+    // a fresh scar for every ~15% of hp lost, on a random side
+    for (let lost = was - H.hp; lost >= 0.15 || (H.stage === 0 && frac < 0.85); lost -= 0.15) {
+      const a = Math.random() * Math.PI * 2;
+      const st = H.h.st;
+      this.damageHouse(H, H.h.cx + Math.cos(a) * st.w * 0.45, H.h.cz + Math.sin(a) * st.h * 0.45, 1.0, 0.2);
+      if (lost < 0.15) break;
+    }
+  }
+
+  scorchAt(x: number, z: number, r: number) {
+    this.addScorch(x, z, r);
+  }
 
   private addScorch(x: number, z: number, r: number) {
     const im = this.scorch;

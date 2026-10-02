@@ -12,7 +12,10 @@ there are no copyrighted game assets.
 - Classic base building: power, ore refineries & harvesters, barracks, war factory, radar, drone hub, battle lab,
   defenses (MG bunker, SAM site, ATGM tower), repair / sell, capturable oil derricks.
 - Ground, artillery and **air units** (strike UAVs, jets, kamikaze drones) with anti-air counters.
-- Skirmish vs. AI (easy / normal / hard), fog of war, minimap, control groups, attack-move.
+- Skirmish vs. a doctrine AI — every nation fights its own way (scouting, flanks, harvester raids, focus fire,
+  retreat-to-repair, artillery standoff, missile salvos) on easy / normal / hard; fog of war, minimap.
+- RTS controls: control groups (Ctrl/Shift + 1-9, phone group strip), stances (Alt+A/S/D/F: aggressive, guard,
+  hold position, hold fire), patrol (P), escort (G), Shift-queued waypoints, attack-move, repeat build.
 - Isometric 3D graphics with shadows, bloom, animated water, particles and dynamic explosion lights.
 - Desktop (mouse + keyboard) and touch (phones / tablets) controls.
 - Deterministic, command-driven simulation, ready for lockstep online multiplayer (next step).

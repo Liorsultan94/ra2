@@ -502,7 +502,8 @@ export class Effects {
     }
     // 7. debris, crater, scorch
     if (this.debris && p.debris) for (const d of p.debris) this.debris.burst(d.kind, x, Math.max(y, ground + 0.1), z, this.q(d.n), d.power, d.size, { smoke: d.kind === 'burnt' || d.kind === 'metal' ? 0.35 : 0 });
-    if (this.marks && !airborne) {
+    // (bridge decks carry their own scorch decals that fall with the spans: render/bridgefx.ts)
+    if (this.marks && !airborne && !(this.map && this.map.tiles[Math.floor(z) * this.map.w + Math.floor(x)] === Tile.Bridge)) {
       if (p.scorch) this.marks.scorchAt(x, z, p.scorch * this.rand(0.85, 1.15));
       if (p.crater) this.marks.craterAt(x, z, p.crater * this.rand(0.85, 1.15));
     }

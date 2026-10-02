@@ -1,8 +1,12 @@
 import { AudioSystem, panFor, type Sfx } from '../audio/audio';
 import { AIController, type Difficulty } from '../sim/ai';
+import { canGarrisonUnit, garrisonRoom } from '../sim/garrison';
+import { SW_INFO, type SwKind } from '../sim/specialdefs';
+import { SuperweaponAI } from '../sim/superweapons';
+import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent } from '../sim/types';
+import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { CameoFactory } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
@@ -10,6 +14,8 @@ import { GameRenderer, type Quality } from '../render/renderer';
 import { ViewModes } from '../render/viewmodes';
 import { warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
+import { ControlsUI, type OrderMode } from '../ui/controls';
+import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
 
 export interface GameOptions {
   faction: Faction;
@@ -31,7 +37,7 @@ export interface GameCallbacks {
   onEnd(win: boolean, stats: { you: World['players'][0]; enemy: World['players'][0]; time: number }): void;
 }
 
-type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove';
+type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove' | 'patrol' | 'guard';
 
 const PLAYER_COLOR = 0x2f8fff;
 const ENEMY_COLOR = 0xe8352b;
@@ -51,8 +57,9 @@ export class Game {
   speed = 1;
   private mode: Mode = 'normal';
   private placing: string | null = null;
-  private groups = new Map<number, number[]>();
-  private groupOf = new Map<number, number>();
+  /** Control groups, stance / patrol / guard order modes (src/game/controls.ts) and their widgets. */
+  readonly ctl: ControlGroups;
+  private ctlUI: ControlsUI | null = null;
   private hover = -1;
   private mouse = { x: 0, y: 0, inside: false, type: 'mouse' };
   private keys = new Set<string>();
@@ -60,7 +67,6 @@ export class Game {
   private ended = false;
   private startTime = performance.now();
   private hintShown = true;
-  private lastGroupTap = { g: -1, t: 0 };
   private destroyed = false;
   private disposers: (() => void)[] = [];
   readonly cine = new CinematicDirector();
@@ -88,8 +94,11 @@ export class Game {
       ],
     });
     this.local = attract ? -1 : 0;
+    this.ctl = new ControlGroups(this.controlsHost());
     if (attract) this.world.controllers.push(new AIController(this.world, 0, 'hard'));
     this.world.controllers.push(new AIController(this.world, 1, attract ? 'hard' : opts.difficulty));
+    // superweapon builder / user (superweapons.ts)
+    for (const p of this.world.players) if (p.isAI) this.world.controllers.push(new SuperweaponAI(this.world, p.id));
 
     this.hud = new Hud(container, this.cameos, {
       onCameo: (id, cat, shift) => this.onCameo(id, cat, shift),
@@ -139,6 +148,25 @@ export class Game {
       }
       this.hud.showHint('Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.');
       this.audio.say('Battle control online');
+    }
+    if (!attract) {
+      this.ctlUI = new ControlsUI(this.hud, this.renderer, this.cameos, this.ctl, this.local, {
+        onStance: (st) => this.setStance(st),
+        onMode: (m) => this.toggleOrderMode(m),
+        onQueueToggle: () => {
+          this.ctl.queueMode = !this.ctl.queueMode;
+          this.sfx('click');
+        },
+        onRepeat: (cat, on) => {
+          this.issue({ type: 'repeat', cat, on });
+          this.sfx('click');
+        },
+        onGroupTap: (g) => {
+          this.audio.unlock();
+          if (!this.ctl.recall(g, performance.now())) this.sfx('error');
+        },
+        onGroupAssign: (g) => this.ctl.assign(g),
+      });
     }
     this.bindInput();
     const onResize = () => this.resize();
@@ -239,11 +267,13 @@ export class Game {
     if (!this.cine.active) this.updateCamera(dt);
     if (this.local >= 0) this.updateHover();
     this.renderer.render(alpha, this.paused ? 0 : dt * ts);
-    this.hud.drawOverlay(alpha, this.hover, this.groupOf, now / 1000);
+    this.hud.drawOverlay(alpha, this.hover, this.ctl.groupOf, now / 1000);
+    this.ctlUI?.drawWaypoints(this.selectedOwnUnits(), alpha, now / 1000);
     this.hudTimer -= dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
       if (this.local >= 0) this.hud.update(0.1);
+      this.ctlUI?.update(this.selectedOwnUnits());
       this.pruneSelection();
     }
     this.mmTimer -= dt;
@@ -470,6 +500,22 @@ export class Game {
       case 'captured':
         if (mine) this.say('Building captured', 'good');
         break;
+      case 'superweapon': {
+        // warnings for everybody (superweapons.ts); the HUD shows the countdowns and impact markers
+        this.hud.superweapons.onEvent(ev);
+        const info = SW_INFO[ev.sw as SwKind];
+        const own = ev.owner === this.local;
+        if (ev.phase === 'detected') this.say(own ? `${info.building} online - charging` : `Warning: enemy superweapon detected - ${info.name}`, own ? 'good' : 'warn');
+        else if (ev.phase === 'ready') this.say(own ? `${info.name} ready` : `Warning: enemy ${info.name} ready`, own ? 'good' : 'warn');
+        else if (ev.phase === 'launch') {
+          this.say(own ? `${info.name} launched` : `Enemy ${info.name} launched!`, own ? 'good' : 'warn');
+          if (!own) this.sfx('alarm', undefined, undefined, 0.8);
+        } else if (ev.phase === 'lost' && own) this.say('Superweapon lost', 'warn');
+        break;
+      }
+      case 'garrison':
+        if (mine && ev.enter) this.say('Building garrisoned', 'good');
+        break;
       case 'promoted':
         if (mine) this.say(ev.rank >= 2 ? 'Unit promoted to elite' : 'Unit promoted', 'good');
         break;
@@ -541,6 +587,48 @@ export class Game {
       this.renderer.setGhost(null, 0, 0, false, 0);
     }
     this.hud.setToolActive(m === 'sell' ? 'sell' : m === 'repair' ? 'repair' : this.boxSelectMode ? 'boxselect' : null);
+    if (this.ctlUI) this.ctlUI.mode = m === 'patrol' || m === 'guard' ? m : null;
+  }
+
+  // ------------------------------------------------------------ RTS controls (src/game/controls.ts)
+
+  private controlsHost(): ControlsHost {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const g = this;
+    return {
+      get world() {
+        return g.world;
+      },
+      get local() {
+        return g.local;
+      },
+      selection: () => g.renderer.selection,
+      select: (ids, add) => g.select(ids, add),
+      issue: (c) => g.issue(c),
+      centerOn: (x, y) => g.renderer.centerOn(x, y),
+      ack: (k) => g.sfx(k),
+      message: (t) => g.hud.message(t, 'info'),
+    };
+  }
+
+  /** Shift held (desktop) or the queue toggle (phone): orders go into the waypoint queue. */
+  private queueing() {
+    return this.keys.has('Shift') || this.ctl.queueMode;
+  }
+
+  private setStance(st: Stance) {
+    const ids = orderable(this.selectedOwnUnits()).map((u) => u.id);
+    if (!ids.length) return;
+    this.issue({ type: 'stance', ids, stance: st });
+    this.sfx('ack');
+    this.hud.message(`Stance: ${STANCE_LABEL[st]}`, 'info');
+  }
+
+  private toggleOrderMode(m: OrderMode) {
+    if (!orderable(this.selectedOwnUnits()).length) return;
+    this.setMode(this.mode === m ? 'normal' : m);
+    this.sfx('click');
+    if (this.mode === m && this.mouse.type === 'touch') this.hud.message(m === 'patrol' ? 'Tap the far end of the patrol route' : 'Tap a friendly unit or building to escort', 'info');
   }
 
   private onCameo(id: string, cat: Category, shift: boolean) {
@@ -584,7 +672,7 @@ export class Game {
     this.setMode(this.mode === t ? 'normal' : t);
   }
 
-  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel') {
+  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate') {
     this.audio.unlock();
     const units = this.selectedOwnUnits();
     switch (c) {
@@ -597,8 +685,17 @@ export class Game {
         this.sfx('click');
         break;
       case 'deploy':
-        this.issue({ type: 'deploy', ids: units.map((u) => u.id) });
+      case 'evacuate': {
+        // a selected garrisoned house of ours: send the garrison out (garrison.ts)
+        const house = [...this.renderer.selection].map((id) => this.world.get(id)).find((e) => e && e.kind === 'building' && e.owner === this.local && e.passengers.length);
+        if (house && (c === 'evacuate' || !units.length)) {
+          this.issue({ type: 'evacuate', id: house.id });
+          this.sfx('ack');
+          break;
+        }
+        if (c === 'deploy') this.issue({ type: 'deploy', ids: units.map((u) => u.id) });
         break;
+      }
       case 'selectArmy':
         this.select(this.world.list.filter((e) => !e.dead && e.owner === this.local && e.kind === 'unit' && !!unitDef(e.def).weapon && !unitDef(e.def).temp && !unitDef(e.def).harvester).map((e) => e.id));
         break;
@@ -700,6 +797,27 @@ export class Game {
       };
     }
     const ownSel = units.length > 0;
+    if ((this.mode === 'patrol' || this.mode === 'guard') && ownSel) {
+      const ids = orderable(units).map((u) => u.id);
+      if (this.mode === 'guard') {
+        const ok = !!target && target.owner === this.local && !ids.includes(target.id) && !(target.kind === 'unit' && unitDef(target.def).temp);
+        return {
+          cursor: ok ? 'enter' : 'nope',
+          run: () => {
+            if (!ok) return this.sfx('error');
+            this.order({ type: 'guard', ids, target: target!.id, queue: this.queueing() }, target, false);
+            this.setMode('normal');
+          },
+        };
+      }
+      return {
+        cursor: 'attack',
+        run: () => {
+          this.order({ type: 'patrol', ids, x: g.x, y: g.y, queue: this.queueing() }, null, true, g);
+          this.setMode('normal');
+        },
+      };
+    }
     if (target && target.owner === this.local && !(ctrl && ownSel)) {
       // own unit/building: select, deploy MCV, or engineer repair
       const eng = units.filter((u) => unitDef(u.def).engineer);
@@ -714,26 +832,39 @@ export class Game {
       if (cap && riders.length && target.passengers.length < cap) {
         return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: riders.map((u) => u.id), target: target.id }, target, false) };
       }
+      const garrison = units.filter((u) => canGarrisonUnit(u.def));
+      if (target.kind === 'building' && garrison.length && garrisonRoom(w, target, this.local) > 0) {
+        return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: garrison.map((u) => u.id), target: target.id }, target, false) };
+      }
       return { cursor: 'select', run: () => this.select([target.id], this.keys.has('Shift')) };
     }
     if (ownSel) {
       if (target && target.owner !== this.local) {
         const eng = units.filter((u) => unitDef(u.def).engineer);
-        if (target.kind === 'building' && eng.length && (target.owner >= 0 || buildingDef(target.def).capturable)) {
+        if (target.kind === 'building' && eng.length && !buildingDef(target.def).garrison && (target.owner >= 0 || buildingDef(target.def).capturable)) {
           return { cursor: 'enter', run: () => this.order({ type: 'capture', ids: eng.map((u) => u.id), target: target.id }, target, false) };
+        }
+        // garrison an empty civilian building (garrison.ts)
+        const garrison = units.filter((u) => canGarrisonUnit(u.def));
+        if (target.kind === 'building' && target.owner < 0 && garrison.length && garrisonRoom(w, target, this.local) > 0 && !ctrl) {
+          return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: garrison.map((u) => u.id), target: target.id }, target, false) };
         }
         const attackers = units.filter((u) => {
           const d = unitDef(u.def);
           return d.weapon && !d.temp && WEAPONS[d.weapon] && w.canHit(WEAPONS[d.weapon], target);
         });
         if (target.owner >= 0 && attackers.length) {
-          return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id }, target, true) };
+          return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id, queue: this.queueing() }, target, true) };
         }
-        if (target.owner < 0) return { cursor: 'select', run: () => this.select([target.id]) };
+        if (isBridge(target)) {
+          // bridges: Ctrl force-fires heavy ordnance at the deck; otherwise the deck is just ground to move onto
+          const heavy = attackers.filter((u) => canHurtBridge(unitDef(u.def).weapon));
+          if (ctrl && heavy.length) return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: heavy.map((u) => u.id), target: target.id }, target, true) };
+        } else if (target.owner < 0) return { cursor: 'select', run: () => this.select([target.id]) };
       }
       if (ctrl && target && target.owner === this.local) {
         const attackers = units.filter((u) => unitDef(u.def).weapon);
-        return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id }, target, true) };
+        return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id, queue: this.queueing() }, target, true) };
       }
       const tile = Math.floor(g.y) * w.map.w + Math.floor(g.x);
       const harvesters = units.filter((u) => unitDef(u.def).harvester);
@@ -747,7 +878,7 @@ export class Game {
       return {
         cursor: attackMove ? 'attack' : 'move',
         run: () => {
-          this.order({ type: 'move', ids: units.map((u) => u.id), x: g.x, y: g.y, attackMove }, null, attackMove, g);
+          this.order({ type: 'move', ids: units.map((u) => u.id), x: g.x, y: g.y, attackMove, queue: this.queueing() }, null, attackMove, g);
           if (this.mode === 'attackMove') this.setMode('normal');
         },
       };
@@ -1045,27 +1176,12 @@ export class Game {
       return;
     }
     const units = this.selectedOwnUnits();
-    const digit = /^[0-9]$/.test(k) ? Number(k) : -1;
-    if (digit >= 0 && !e.altKey) {
+    // control groups (Ctrl+N assign, Shift+N add, N select, NN centre) and Alt+A/S/D/F stances
+    if (this.ctl.onKey(e)) return;
+    const st = stanceForKey(e);
+    if (st) {
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        const ids = units.map((u) => u.id);
-        for (const id of this.groups.get(digit) ?? []) this.groupOf.delete(id);
-        this.groups.set(digit, ids);
-        for (const id of ids) this.groupOf.set(id, digit);
-        this.sfx('ack');
-      } else {
-        const ids = (this.groups.get(digit) ?? []).filter((id) => this.world.get(id));
-        if (ids.length) {
-          this.select(ids, e.shiftKey);
-          const now = performance.now();
-          if (this.lastGroupTap.g === digit && now - this.lastGroupTap.t < 400) {
-            const u = this.world.get(ids[0])!;
-            this.renderer.centerOn(u.x, u.y);
-          }
-          this.lastGroupTap = { g: digit, t: now };
-        }
-      }
+      this.setStance(st);
       return;
     }
     switch (k.toLowerCase()) {
@@ -1073,6 +1189,17 @@ export class Game {
         if (this.mode !== 'normal') this.setMode('normal');
         else this.cb.onMenu();
         break;
+      case 'p':
+        this.toggleOrderMode('patrol');
+        break;
+      case 'g':
+        this.toggleOrderMode('guard');
+        break;
+      case 'v': {
+        const ou = orderable(units);
+        if (ou.length) this.setStance(nextStance(ou));
+        break;
+      }
       case 's':
         if (units.length) {
           this.issue({ type: 'stop', ids: units.map((u) => u.id) });
@@ -1146,6 +1273,7 @@ export class Game {
     this.renderer.viewHook = null;
     this.modes.dispose();
     this.renderer.dispose();
+    this.ctlUI?.destroy();
     this.cameos.dispose();
     this.hud.destroy();
   }

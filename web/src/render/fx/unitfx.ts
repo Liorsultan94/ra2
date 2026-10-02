@@ -22,6 +22,10 @@ export function emitDamageFx(fx: Effects, m: Model, damage: number, dt: number, 
   if (!pts || !pts.length) return false;
   const mw = m.root.matrixWorld;
   dt *= fx.rate;
+  // many burning points (building fire spread): share one smoke budget instead of a column each
+  let lit = 0;
+  for (const p of pts) if (p.kind === 'fire' && damage >= p.at) lit++;
+  const colK = 1 / Math.max(1, lit * 0.45);
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
     if (damage < p.at) continue;
@@ -31,7 +35,7 @@ export function emitDamageFx(fx: Effects, m: Model, damage: number, dt: number, 
       if (Math.random() < dt * (3 + 6 * sev)) fx.column(WP.x, WP.y, WP.z, (0.45 + 0.45 * sev) * scale, true);
     } else if (p.kind === 'fire') {
       if (Math.random() < dt * (10 + 10 * sev)) fx.flame(WP.x, WP.y, WP.z, (0.45 + 0.35 * sev) * Math.sqrt(scale));
-      if (Math.random() < dt * 3) fx.column(WP.x, WP.y + 0.2, WP.z, 0.55 * scale, true);
+      if (Math.random() < dt * 3 * colK) fx.column(WP.x, WP.y + 0.2, WP.z, 0.55 * scale, true);
       fx.burnGlow(WP.x, WP.y, WP.z, (1 + sev) * Math.sqrt(scale));
     } else if (Math.random() < dt * (1 + 2 * sev)) fx.spark(WP.x, WP.y, WP.z, 0xffd080);
   }

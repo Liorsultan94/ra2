@@ -81,7 +81,7 @@ void main() {
   float n1 = texture2D( fogNoise, W.xz * 0.085 + 0.13 ).g;
   float n2 = texture2D( fogNoise, W.xz * 0.33 + 0.57 ).r;
   float pud = smoothstep( 0.6, 0.67, n1 * 0.78 + n2 * 0.22 );
-  float mask = flatK * wet * ( 0.3 + 0.7 * pud );
+  float mask = flatK * wet * ( 0.45 + 0.55 * pud );
   if ( mask < 0.01 ) return;
   vec3 V = normalize( P );
   vec3 R = normalize( reflect( V, N ) );
@@ -114,7 +114,7 @@ void main() {
   if ( hitUv.x < 0.0 ) return;
   vec2 e = smoothstep( vec2( 0.0 ), vec2( 0.08 ), hitUv ) * smoothstep( vec2( 0.0 ), vec2( 0.08 ), 1.0 - hitUv );
   float fres = 0.04 + 0.96 * pow( 1.0 - clamp( dot( -V, N ), 0.0, 1.0 ), 5.0 );
-  float k = mask * e.x * e.y * mix( 0.35, 1.0, pud ) * ( 0.55 + 0.45 * fres ) * smoothstep( 14.0, 6.0, t );
+  float k = mask * e.x * e.y * mix( 0.5, 1.0, pud ) * ( 0.55 + 0.45 * fres ) * smoothstep( 14.0, 6.0, t );
   gl_FragColor = vec4( texture2D( tColor, hitUv ).rgb, k );
 }`;
 

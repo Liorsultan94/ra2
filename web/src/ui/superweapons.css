@@ -1,0 +1,144 @@
+/* Superweapon HUD: tool-row button (shares .support-btn), countdown list, reticle, impact markers. */
+
+.sw-btn .sp-icon {
+  width: 21px;
+  height: 21px;
+}
+.sw-btn.ready {
+  color: #ff6a4a;
+}
+.sw-btn.ready .sp-fill {
+  stroke: #ff6a4a;
+}
+
+.sw-timers {
+  position: absolute;
+  top: 58px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  pointer-events: none;
+  z-index: 3;
+}
+.sw-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px 3px 7px;
+  background: rgba(5, 8, 10, 0.72);
+  border: 1px solid color-mix(in srgb, var(--swc) 55%, transparent);
+  border-left: 3px solid var(--swc);
+  border-radius: 2px;
+  font: 600 13px/1.1 system-ui, sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #f2ead0;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+}
+.sw-row svg {
+  width: 16px;
+  height: 16px;
+  color: var(--swc);
+  flex: none;
+}
+.sw-row span {
+  min-width: 46px;
+  text-align: right;
+  font: 700 17px/1 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color: var(--swc);
+}
+.sw-row.hot span {
+  animation: sw-blink 0.9s steps(2, start) infinite;
+}
+.sw-row.enemy.ready {
+  background: rgba(60, 6, 4, 0.8);
+}
+@keyframes sw-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.sw-reticle,
+.sw-marker {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+.sw-reticle {
+  border: 2px dashed #ff5a3a;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 70, 40, 0.18), rgba(255, 70, 40, 0.04) 70%);
+  box-shadow: 0 0 14px rgba(255, 60, 30, 0.5);
+}
+.sw-reticle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: #ff5a3a;
+}
+.sw-reticle.defensive {
+  border-color: #5ae8ff;
+  background: radial-gradient(circle, rgba(90, 232, 255, 0.16), rgba(90, 232, 255, 0.03) 70%);
+  box-shadow: 0 0 14px rgba(90, 232, 255, 0.5);
+}
+.sw-reticle.defensive::after {
+  background: #5ae8ff;
+}
+.sw-reticle.hidden {
+  display: none;
+}
+.sw-marker i {
+  display: block;
+  width: 64px;
+  height: 64px;
+  border: 3px solid #ff3a20;
+  border-radius: 50%;
+  animation: dz-pulse 0.9s ease-out infinite;
+}
+.sw-marker span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font: 800 11px/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  color: #ff5a3a;
+  text-shadow: 0 1px 2px #000;
+}
+.sw-marker.defensive i {
+  border-color: #5ae8ff;
+}
+.sw-marker.defensive span {
+  color: #5ae8ff;
+}
+
+@media (max-width: 900px), (max-height: 500px) {
+  .sw-timers {
+    top: 46px;
+    right: 6px;
+  }
+  .sw-row {
+    font-size: 10px;
+    padding: 2px 7px 2px 5px;
+    gap: 5px;
+  }
+  .sw-row svg {
+    width: 13px;
+    height: 13px;
+  }
+  .sw-row span {
+    font-size: 13px;
+    min-width: 36px;
+  }
+}

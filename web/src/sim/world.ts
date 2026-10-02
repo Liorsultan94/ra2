@@ -12,6 +12,11 @@ import {
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
+import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
+import { spawnTechSites, updateTechs } from './capture';
+import { fireSuperweapon, newSuperweaponState, updateSuperweapons } from './superweapons';
+import { bridgeHutEnter, bridgeProof, canHurtBridge, initBridges, isBridge, updateBridges, type BridgeState } from './bridges';
+import { DEFAULT_STANCE, applyOrderCommand, autoFire, idleReturn, leashRange, ordersIdle, queueCap, scanRange } from './orders';
 import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
 import {
@@ -101,6 +106,8 @@ export class World {
   controllers: Controller[] = [];
   winner = -1;
   over = false;
+  /** Collapsible river bridges (bridges.ts). */
+  bridges: BridgeState[] = [];
   private nextId = 1;
   private pending: { player: number; cmd: Command }[] = [];
   private grid: Entity[][];
@@ -144,6 +151,7 @@ export class World {
         radarOnline: false,
         airdropAt: -1,
         airdropFrom: 0,
+        sw: newSuperweaponState(),
       });
       const f = ps.faction;
       this.spawnUnit(factionUnit(f, (d) => !!d.mcv).id, i, s.x + 0.5, s.y + 0.5);
@@ -154,6 +162,9 @@ export class World {
       for (let k = 0; k < 4; k++) this.spawnUnit(inf, i, s.x + 0.5 + (2 + (k % 2)) * toCenter, s.y + 0.5 + (1 + (k >> 1)) * -toCenter * -1);
     });
     for (const o of this.map.oils) this.spawnBuilding('oil', -1, Math.min(o.x, w - 2), Math.min(o.y, h - 2), true);
+    spawnGarrisons(this); // garrisonable village houses (garrison.ts)
+    spawnTechSites(this); // capturable tech structures (capture.ts)
+    this.bridges = initBridges(this);
     this.updateVisibility();
   }
 
@@ -262,6 +273,10 @@ export class World {
       xp: 0,
       rank: 0,
       spawner: -1,
+      stance: DEFAULT_STANCE,
+      queue: [],
+      patrol: null,
+      guardId: -1,
     };
   }
 
@@ -335,6 +350,10 @@ export class World {
 
   weaponRange(e: Entity, wpn: WeaponDef) {
     let r = wpn.range;
+    if (e.inside >= 0) {
+      const h = garrisonOf(this, e);
+      if (h) r += garrisonRangeBonus(h); // firing from a civilian building (garrison.ts)
+    }
     if (e.owner >= 0) {
       const p = this.players[e.owner];
       if (p.radarOnline) r += FACTION_INFO[p.faction].mods.radarRange ?? 0;
@@ -432,6 +451,7 @@ export class World {
     if (!p || p.defeated) return;
     const own = (ids: number[]) =>
       ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+    if (applyOrderCommand(this, pid, cmd, own)) return; // stances, patrol, guard, queued waypoints (orders.ts)
     switch (cmd.type) {
       case 'move': {
         const units = own(cmd.ids);
@@ -451,6 +471,7 @@ export class World {
             continue;
           }
           if (!d.weapon || t.owner === pid || d.temp || !this.canHit(WEAPONS[d.weapon], t)) continue;
+          if (isBridge(t) && !canHurtBridge(d.weapon)) continue; // only heavy ordnance can drop a bridge
           e.order = { type: 'attack', target: t.id, forced: true };
           e.targetId = t.id;
           e.autoTarget = false;
@@ -481,6 +502,11 @@ export class World {
         break;
       case 'enter': {
         const t = this.get(cmd.target);
+        if (t && t.kind === 'building') {
+          // garrison a civilian building (garrison.ts)
+          if (garrisonRoom(this, t, pid) > 0) for (const e of own(cmd.ids)) if (canGarrisonUnit(e.def)) e.order = { type: 'enter', target: t.id };
+          break;
+        }
         if (!t || t.owner !== pid || !unitDef(t.def).transport) break;
         for (const e of own(cmd.ids)) if (unitDef(e.def).category === 'infantry') e.order = { type: 'enter', target: t.id };
         break;
@@ -506,7 +532,7 @@ export class World {
           if (q.length > 0 || p.ready[d.category]) break;
           q.push({ def: d.id, progress: 0, paid: 0 });
         } else {
-          for (let k = 0; k < n && q.length < 15; k++) q.push({ def: d.id, progress: 0, paid: 0 });
+          for (let k = 0, cap = queueCap(this.producerCount(p, d.category)); k < n && q.length < cap; k++) q.push({ def: d.id, progress: 0, paid: 0 });
         }
         break;
       }
@@ -547,7 +573,7 @@ export class World {
       }
       case 'sell': {
         const b = this.get(cmd.id);
-        if (!b || b.owner !== pid || b.kind !== 'building') break;
+        if (!b || b.owner !== pid || b.kind !== 'building' || DEFS[b.def].faction === 'neutral') break; // captured / garrisoned civilian buildings can't be sold
         const d = buildingDef(b.def);
         p.credits += Math.floor((d.cost * 0.5 * b.hp) / b.maxHp);
         this.events.push({ t: 'sold', id: b.id, owner: pid });
@@ -565,6 +591,14 @@ export class World {
         if (!b || b.owner !== pid || b.kind !== 'building') break;
         b.rallyX = cmd.x;
         b.rallyY = cmd.y;
+        break;
+      }
+      case 'superweapon':
+        fireSuperweapon(this, pid, cmd.x, cmd.y); // validated there (superweapons.ts)
+        break;
+      case 'evacuate': {
+        const b = this.get(cmd.id);
+        if (b && b.owner === pid && isGarrison(b)) ejectAll(this, b, false); // garrison.ts
         break;
       }
       case 'airdrop': {
@@ -943,7 +977,11 @@ export class World {
         const nx = dist2 > 0 ? dx / dist : 1;
         const ny = dist2 > 0 ? dy / dist : 0;
         // moving units barge through; idle ones yield
-        const we = e.moving && !o.moving ? 0.25 : !e.moving && o.moving ? 0.75 : 0.5;
+        let we = e.moving && !o.moving ? 0.25 : !e.moving && o.moving ? 0.75 : 0.5;
+        // hold-position units stand firm; others step round them
+        const eh = !e.moving && e.stance === 'hold';
+        const oh = !o.moving && o.stance === 'hold';
+        if (eh !== oh) we = eh ? 0 : 1;
         const wo = 1 - we;
         this.nudge(e, -nx * push * we * 2, -ny * push * we * 2);
         this.nudge(o, nx * push * wo * 2, ny * push * wo * 2);
@@ -1086,11 +1124,14 @@ export class World {
     });
   }
 
-  damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity) {
-    if (t.dead) return;
+  damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity, raw = false) {
+    if (!raw && t.inside >= 0) t = garrisonOf(this, t) ?? t; // garrisoned infantry: the house takes the hit (garrison.ts)
+    if (t.dead || bridgeProof(t)) return; // bridges take damage from impacts (bridges.ts)
     const d = DEFS[t.def];
     // veterancy: the shooter's firepower and the target's armour
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
+    if (src.inside >= 0 && garrisonOf(this, src)) amount *= GARRISON_FIREPOWER;
+    if (!raw && t.passengers.length && isGarrison(t)) amount = garrisonHit(this, t, amount, warhead, src);
     t.hp -= amount * VERSUS[warhead][d.armor];
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
@@ -1100,18 +1141,19 @@ export class World {
         this.events.push({ t: 'underAttack', owner: t.owner, x: t.x, y: t.y });
       }
       // retaliate
-      const att = this.get(src.id);
-      if (t.kind === 'unit' && d.weapon && (t.order.type === 'idle' || t.order.type === 'attackMove') && t.targetId < 0 && att && this.canHit(WEAPONS[d.weapon], att)) {
-        t.targetId = src.id;
+      const att = this.get(src.inside >= 0 ? src.inside : src.id); // shots from a garrison / APC: answer the container
+      if (t.kind === 'unit' && d.weapon && autoFire(t) && (t.order.type === 'idle' || t.order.type === 'attackMove') && t.targetId < 0 && att && this.canHit(WEAPONS[d.weapon], att)) {
+        t.targetId = att.id;
         t.autoTarget = true;
       }
     }
     if (t.hp <= 0) this.kill(t, src.owner, src);
   }
 
-  private kill(t: Entity, by: number, killer?: Entity) {
+  kill(t: Entity, by: number, killer?: Entity) {
     if (t.dead) return;
     t.hp = 0;
+    if (t.passengers.length && isGarrison(t)) for (const p of ejectAll(this, t, true)) this.kill(p, by, killer); // garrison.ts
     for (const pid of t.passengers) {
       const p = this.get(pid);
       if (p) this.kill(p, by, killer);
@@ -1138,7 +1180,7 @@ export class World {
     }
   }
 
-  private remove(t: Entity) {
+  remove(t: Entity) {
     t.dead = true;
     if (t.kind === 'building') this.occupy(t, false);
     if (t.kind === 'unit') {
@@ -1180,12 +1222,13 @@ export class World {
       this.updateAirlift(e, d);
       return;
     }
+    if (e.order.type === 'idle' && (e.queue.length || e.patrol || e.guardId >= 0)) ordersIdle(this, e); // orders.ts
     if (d.fixedWing) {
       this.updateJet(e, d);
       return;
     }
     const o = e.order;
-    if (d.weapon && !jammed && o.type !== 'attack' && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
+    if (d.weapon && !jammed && o.type !== 'attack' && autoFire(e) && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
     switch (o.type) {
       case 'idle':
         this.updateIdle(e, d);
@@ -1200,7 +1243,7 @@ export class World {
       case 'attackMove': {
         if (d.weapon) {
           let t = this.get(e.targetId);
-          if (!t && this.tick >= e.scanAt) {
+          if (!t && this.tick >= e.scanAt && autoFire(e)) {
             e.scanAt = this.tick + 8;
             t = this.findTarget(e, d.sight) ?? undefined;
             if (t) e.targetId = t.id;
@@ -1227,7 +1270,7 @@ export class World {
       }
       case 'attack': {
         const t = this.get(o.target);
-        if (!t || !this.isEnemy(e.owner, t.owner) || !d.weapon) {
+        if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t)) || !d.weapon) {
           e.order = { type: 'idle' };
           e.targetId = -1;
           e.path = null;
@@ -1266,13 +1309,16 @@ export class World {
       case 'enter': {
         const t = this.get(o.target);
         const cap = t && t.kind === 'unit' ? (unitDef(t.def).transport ?? 0) : 0;
-        if (!t || t.owner !== e.owner || t.passengers.length >= cap) {
+        const house = !!t && t.kind === 'building'; // garrisoning a civilian building (garrison.ts)
+        if (!t || (house ? garrisonRoom(this, t, e.owner) <= 0 : t.owner !== e.owner || t.passengers.length >= cap)) {
           e.order = { type: 'idle' };
           e.path = null;
           break;
         }
-        if (Math.hypot(t.x - e.x, t.y - e.y) < 0.8) {
-          this.board(e, t);
+        if (house ? this.distTo(e, t) < 0.75 : Math.hypot(t.x - e.x, t.y - e.y) < 0.8) {
+          if (house) {
+            if (!enterGarrison(this, e, t)) e.order = { type: 'idle' };
+          } else this.board(e, t);
           break;
         }
         this.chase(e, t, d);
@@ -1368,8 +1414,8 @@ export class World {
       }
     } else if (o.type === 'idle' || o.type === 'attackMove') {
       t = this.get(e.targetId);
-      if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > d.sight + 4)) t = undefined;
-      if (!t && this.tick >= e.scanAt) {
+      if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > d.sight + 4 || !autoFire(e))) t = undefined;
+      if (!t && this.tick >= e.scanAt && autoFire(e)) {
         e.scanAt = this.tick + 8;
         t = this.findTarget(e, d.sight) ?? undefined;
       }
@@ -1438,7 +1484,7 @@ export class World {
     if (t && this.engage(e, t) === 'out') e.targetId = -1;
   }
 
-  private board(e: Entity, apc: Entity) {
+  board(e: Entity, apc: Entity) {
     e.inside = apc.id;
     apc.passengers.push(e.id);
     e.path = null;
@@ -1476,21 +1522,21 @@ export class World {
     }
     if (!d.weapon) return;
     let t = this.get(e.targetId);
-    if (t && !this.isEnemy(e.owner, t.owner)) t = undefined;
-    if (!t && this.tick >= e.scanAt) {
+    if (t && (!this.isEnemy(e.owner, t.owner) || !autoFire(e))) t = undefined;
+    if (!t && this.tick >= e.scanAt && autoFire(e)) {
       e.scanAt = this.tick + 10;
-      t = this.findTarget(e, d.sight) ?? undefined;
+      t = this.findTarget(e, scanRange(this, e, d)) ?? undefined;
     }
     if (!t) {
       e.targetId = -1;
-      // drift back to guard position after a chase
-      if (!e.path && Math.hypot(e.x - e.guardX, e.y - e.guardY) > 1.5) this.pathTo(e, e.guardX, e.guardY);
+      // drift back to guard position after a chase (stance: hold stays, aggressive makes this its post)
+      if (!e.path && Math.hypot(e.x - e.guardX, e.y - e.guardY) > 1.5 && idleReturn(e) === 'return') this.pathTo(e, e.guardX, e.guardY);
       return;
     }
     e.targetId = t.id;
     if (this.engage(e, t) === 'out') {
       // leash: don't chase far from where we were told to stand
-      if (Math.hypot(t.x - e.guardX, t.y - e.guardY) > d.sight + 3 || (WEAPONS[d.weapon].minRange ?? 0) > this.distTo(e, t)) {
+      if (Math.hypot(t.x - e.guardX, t.y - e.guardY) > leashRange(e, d) || e.stance === 'hold' || (WEAPONS[d.weapon].minRange ?? 0) > this.distTo(e, t)) {
         e.targetId = -1;
         return;
       }
@@ -1519,7 +1565,16 @@ export class World {
   }
 
   private engineerEnter(e: Entity, t: Entity) {
+    if (t.def === 'bridgehut') {
+      if (bridgeHutEnter(this, t, e)) this.remove(e);
+      else e.order = { type: 'idle' };
+      return;
+    }
     const td = buildingDef(t.def);
+    if (td.garrison && t.owner !== e.owner) {
+      e.order = { type: 'idle' }; // engineers can't clear or capture civilian buildings (garrison.ts)
+      return;
+    }
     if (t.owner === e.owner) {
       t.hp = t.maxHp;
     } else if (t.owner === -1 ? td.capturable : true) {
@@ -1864,6 +1919,7 @@ export class World {
         this.events.push({ t: 'buildingReady', owner: p.id, def: d.id });
       } else {
         this.deliverUnit(p, d as UnitDef);
+        if (p.repeat?.[cat]) q.push({ def: d.id, progress: 0, paid: 0 }); // repeat-build
       }
     }
   }
@@ -1951,7 +2007,7 @@ export class World {
       let ok = false;
       for (const e of this.list) {
         if (e.dead || e.owner !== p.id) continue;
-        if (e.kind === 'building' || unitDef(e.def).mcv) {
+        if ((e.kind === 'building' && DEFS[e.def].faction !== 'neutral') || (e.kind === 'unit' && unitDef(e.def).mcv)) {
           ok = true;
           break;
         }
@@ -1959,7 +2015,21 @@ export class World {
       if (!ok) {
         p.defeated = true;
         this.events.push({ t: 'defeated', owner: p.id });
-        for (const e of this.list) if (!e.dead && e.owner === p.id) this.kill(e, -1);
+        for (const e of this.list) {
+          if (e.dead || e.owner !== p.id) continue;
+          // captured tech structures / garrisoned houses go back to neutral (their garrison dies with the player)
+          if (e.kind === 'building' && DEFS[e.def].faction === 'neutral') {
+            for (const id of e.passengers) {
+              const u = this.get(id);
+              if (u) this.kill(u, -1);
+            }
+            e.passengers = [];
+            e.owner = -1;
+            e.targetId = -1;
+            continue;
+          }
+          this.kill(e, -1);
+        }
       } else {
         alive++;
         last = p.id;
@@ -1976,6 +2046,7 @@ export class World {
 
   step() {
     this.tick++;
+    const ev0 = this.events.length;
     for (const e of this.list) {
       e.px = e.x;
       e.py = e.y;
@@ -1989,6 +2060,8 @@ export class World {
 
     this.rebuildGrid();
     this.updateEconomy();
+    updateTechs(this); // captured tech structures (capture.ts)
+    updateSuperweapons(this); // superweapon timers, salvos, Iron Beam (superweapons.ts)
     const n = this.list.length;
     for (let i = 0; i < n; i++) {
       const e = this.list[i];
@@ -1997,6 +2070,8 @@ export class World {
       else this.updateBuilding(e);
     }
     stepProjectiles(this);
+    updateGarrisons(this); // garrison.ts
+    updateBridges(this, ev0);
     this.updateAuras();
     this.separate();
     this.growOre();

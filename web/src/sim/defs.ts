@@ -1,4 +1,5 @@
 import type { ArmorClass, BuildingDef, Def, Faction, UnitDef, Warhead, WeaponDef } from './types';
+import { CIVILIAN_BUILDINGS, SW_WEAPONS, TECH_BUILDINGS, superweaponBuilding } from './specialdefs';
 
 // ----------------------------------------------------------------- warheads
 
@@ -77,6 +78,7 @@ const BASE_WEAPONS: WeaponDef[] = [
 
 export const WEAPONS: Record<string, WeaponDef> = {};
 for (const w of BASE_WEAPONS) WEAPONS[w.id] = w;
+for (const w of SW_WEAPONS) WEAPONS[w.id] = w; // superweapon munitions (specialdefs.ts)
 
 // ----------------------------------------------------------------- factions
 
@@ -467,6 +469,12 @@ for (const f of FACTIONS) {
     if (b.weapon) b.weapon = factionWeapon(f, b.weapon, 'building', b.category);
     list.push(b);
   }
+  {
+    // the nation's superweapon structure (specialdefs.ts)
+    const b = superweaponBuilding(f.id);
+    if (m.buildingHp) b.hp = Math.round(b.hp * m.buildingHp);
+    list.push(b);
+  }
 }
 
 list.push({
@@ -492,6 +500,12 @@ list.push({
   desc: 'Capture with an Engineer for steady income.',
 });
 
+// collapsible river bridges (sim/bridges.ts): the targetable deck and the engineer repair huts
+list.push(
+  { kind: 'building', id: 'bridge', name: 'Bridge', faction: 'neutral', category: 'building', role: 'bridge', model: 'bridge', cost: 0, buildTime: 1, hp: 2400, armor: 'building', sight: 0, w: 1, h: 1, power: 0, passable: [[0, 0]], prereq: [], buildable: false, desc: 'Only heavy ordnance (artillery, missiles) can bring it down. Engineers rebuild it from a repair hut.' },
+  { kind: 'building', id: 'bridgehut', name: 'Bridge Repair Hut', faction: 'neutral', category: 'building', role: 'bridgehut', model: 'bridgehut', cost: 0, buildTime: 1, hp: 1000, armor: 'building', sight: 0, w: 1, h: 1, power: 0, capturable: true, prereq: [], buildable: false, desc: 'Send an Engineer in to rebuild a destroyed bridge or restore a damaged one.' },
+);
+
 list.push({
   kind: 'unit',
   id: 'supply_crate',
@@ -514,6 +528,9 @@ list.push({
   buildable: false,
   desc: 'Air-dropped ammunition and medical supplies: heals friendly units nearby.',
 });
+
+// garrisonable civilian houses and capturable tech structures (specialdefs.ts)
+list.push(...CIVILIAN_BUILDINGS, ...TECH_BUILDINGS);
 
 export const DEFS: Record<string, Def> = Object.fromEntries(list.map((d) => [d.id, d]));
 export const DEF_LIST = list;
