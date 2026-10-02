@@ -96,6 +96,7 @@ export class Game {
     if (attract) this.hud.root.classList.add('attract');
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
+    this.renderer.atmos.onThunder = (v) => this.audio.play('explosionLarge', v * 0.55);
     if (attract) {
       this.renderer.centerOn(this.world.map.w / 2, this.world.map.h / 2);
     } else {
@@ -741,6 +742,8 @@ export class Game {
     on(view, 'pointerdown', (e) => {
       this.audio.unlock();
       if (this.cine.active) return;
+      // HUD widgets inside the view (command bar, portrait, rotate buttons) are not map clicks
+      if ((e.target as HTMLElement).closest?.('button, .selpanel, .cmdbar, .view-ctrl, .hint')) return;
       if (this.local < 0) return;
       const p = local(e);
       this.mouse = { x: p.x, y: p.y, inside: true, type: e.pointerType };

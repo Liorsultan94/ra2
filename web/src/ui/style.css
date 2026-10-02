@@ -1583,3 +1583,13 @@ input[type='range'] {
     font-size: 12px;
   }
 }
+@media (max-height: 560px) and (orientation: landscape) {
+  .sb-faction .flag {
+    width: 24px;
+    height: 16px;
+  }
+  .sb-faction span {
+    font-size: 11px;
+    letter-spacing: 0;
+  }
+}
