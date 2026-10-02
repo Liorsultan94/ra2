@@ -1570,3 +1570,16 @@ input[type='range'] {
   font-size: 8.5px;
   letter-spacing: 0.08em;
 }
+@media (max-height: 560px) and (orientation: landscape) {
+  .radar-off {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    bottom: 3px;
+  }
+  .sb-faction small {
+    display: none;
+  }
+  .sb-faction span {
+    font-size: 12px;
+  }
+}

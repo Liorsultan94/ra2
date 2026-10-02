@@ -65,6 +65,11 @@ export interface VisualLike {
   anim: AnimState;
 }
 
+/** Anything with a re-iterable `values()` (the renderer's visual map). */
+export interface VisualSource {
+  values(): Iterable<VisualLike>;
+}
+
 export interface AtmosHost {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -144,7 +149,7 @@ function buildPreset(cfg: AtmosConfig): Preset {
     p.water.set(0.72, 0.6, 0.62);
     light = 0.6;
   } else if (cfg.tod === 'night') {
-    Object.assign(p, { sunI: 0.8, hemiI: 0.48, env: 0.07, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 });
+    Object.assign(p, { sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 });
     p.sunC.set(0x8ea8ff);
     p.sky.set(0x3a5296);
     p.gnd.set(0x0e1118);
@@ -291,9 +296,9 @@ export class Atmosphere {
   }
 
   /** Per-frame update (after the entities are synced, before the effects / camera). */
-  update(dt: number, time: number, visuals: Iterable<VisualLike>, target: THREE.Vector3, zoom: number, camera: THREE.Camera) {
+  update(dt: number, time: number, visuals: VisualSource, target: THREE.Vector3, zoom: number, camera: THREE.Camera) {
     this.time = time;
-    this.env.update(dt, visuals);
+    this.env.update(dt, visuals.values());
     if (this.nvPass && this.nv) this.nvPass.uniforms.time.value = time;
     if (!this.active || !this.preset) return;
     const h = this.host;
@@ -319,7 +324,7 @@ export class Atmosphere {
     }
     h.hemi.intensity = p.hemiI + flash * 2.6;
     h.sun.intensity = p.sunI + flash * 1.5;
-    this.night?.update(dt, time, visuals, target, h.world);
+    this.night?.update(dt, time, visuals.values(), target, h.world);
   }
 
   private thunder(vol: number) {
@@ -339,6 +344,7 @@ export class Atmosphere {
 
   dispose() {
     if (this.keyHandler) window.removeEventListener('keydown', this.keyHandler);
+    this.night?.dispose();
     this.host.canvas.style.filter = '';
     WX.wxWet.value = 0;
     WX.wxSnow.value = 0;

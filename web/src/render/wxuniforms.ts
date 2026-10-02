@@ -37,6 +37,10 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
   if ( wxSnow > 0.001 ) {
     float cover = smoothstep( 0.42, 0.78, wxUp + ( wxNz.r - 0.5 ) * 0.5 ) * wxSnow;
     cover = max( cover, smoothstep( 0.1, 0.5, wxUp ) * wxSnow * 0.22 );
+    #if defined( STANDARD )
+      // painted metal (vehicles, plant) sheds most of it: keeps units readable
+      cover *= 1.0 - 0.7 * smoothstep( 0.2, 0.5, metalnessFactor );
+    #endif
     vec3 snowC = vec3( 0.82, 0.86, 0.92 ) * ( 0.92 + wxNz.g * 0.16 );
     diffuseColor.rgb = mix( diffuseColor.rgb, snowC, cover );
     #if defined( STANDARD )

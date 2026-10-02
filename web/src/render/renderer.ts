@@ -1438,7 +1438,7 @@ export class GameRenderer {
     this.syncEntities(alpha, dt);
     this.overlay.endFrame();
     this.updateWrecks(dt);
-    this.atmos.update(dt, this.time, this.visuals.values(), this.target, this.zoom, this.camera);
+    this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();

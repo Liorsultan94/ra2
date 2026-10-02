@@ -102,11 +102,11 @@ export class WeatherFx {
       uCenter: { value: new THREE.Vector3() },
       uBox: { value: new THREE.Vector3(30, 15, 30) },
       uVel: { value: kind === 'rain' ? new THREE.Vector3(1.4, -15, 0.7) : kind === 'snow' ? new THREE.Vector3(0.35, -1.0, 0.18) : new THREE.Vector3(9, -0.35, 3.2) },
-      uSize: { value: kind === 'rain' ? new THREE.Vector2(0.022, 0.5) : kind === 'snow' ? new THREE.Vector2(0.075, 0) : new THREE.Vector2(0.035, 1.3) },
+      uSize: { value: kind === 'rain' ? new THREE.Vector2(0.022, 0.5) : kind === 'snow' ? new THREE.Vector2(0.075, 0) : new THREE.Vector2(0.03, 0.9) },
       uKind: { value: KIND[kind] },
       uSway: { value: kind === 'snow' ? 0.45 : 0.6 },
       uColor: { value: color },
-      uAlpha: { value: kind === 'rain' ? 0.2 : kind === 'snow' ? 0.85 : 0.3 },
+      uAlpha: { value: kind === 'rain' ? 0.2 : kind === 'snow' ? 0.85 : 0.15 },
       uFlash: { value: 0 },
     };
     this.mat = new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, toneMapped: false });

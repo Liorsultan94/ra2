@@ -75,7 +75,7 @@ varying float vFace;
 varying vec3 vCol;
 void main() {
   float a = pow(1.0 - clamp(vT, 0.0, 1.0), 1.6) * pow(vFace, 1.5) * smoothstep(0.0, 0.06, vT);
-  gl_FragColor = vec4(vCol * a * 0.32, 1.0);
+  gl_FragColor = vec4(vCol * a * 0.22, 1.0);
 }`;
 
 function additive(vert: string, frag: string, double = false) {
@@ -122,7 +122,8 @@ export class NightLights {
   /** Candidate lamps for the real point lights this frame: x, y, z, r, g, b, distance. */
   private cand = new Float32Array(64 * 7);
   private nCand = 0;
-  private boosted = new WeakSet<THREE.Material>();
+  private boosted = new Set<THREE.Material>();
+  private boostBase: number[] = [];
   private nf = 0;
   private np = 0;
   private nc = 0;
@@ -152,6 +153,15 @@ export class NightLights {
       this.group.add(l);
     }
     scene.add(this.group);
+  }
+
+  /** Undo the window-glow boost on the shared building materials (they outlive this battle). */
+  dispose() {
+    let i = 0;
+    for (const g of this.boosted) g.userData.baseEI = this.boostBase[i++];
+    this.boosted.clear();
+    this.boostBase.length = 0;
+    this.group.removeFromParent();
   }
 
   private flare(x: number, y: number, z: number, size: number, r: number, g: number, b: number) {
@@ -217,22 +227,26 @@ export class NightLights {
         const pw = v.anim.powered ? 1 : 0.25;
         // windows glow harder after dark (template materials: boost their base once)
         for (const g of m.glow) {
-          if (this.boosted.has(g)) continue;
+          if (this.boosted.has(g) || typeof g.userData.baseEI !== 'number') continue;
           this.boosted.add(g);
-          if (typeof g.userData.baseEI === 'number') g.userData.baseEI *= 1 + 1.6 * dk;
+          this.boostBase.push(g.userData.baseEI);
+          g.userData.baseEI *= 1 + 1.6 * dk;
         }
         const lamps = m.nightLights;
         if (lamps) {
+          let pools = 0;
           for (const L of lamps) {
             _p.copy(L.pos).applyMatrix4(root.matrix);
             _c.setHex(L.color);
             const k = L.intensity * pw * dk;
             const blink = L.color === 0xff3020 ? (Math.sin(time * 3 + v.id) > 0.3 ? 1 : 0.1) : 1;
-            this.flare(_p.x, _p.y, _p.z, 0.22 + L.intensity * 0.32, _c.r * k * 2.4 * blink, _c.g * k * 2.4 * blink, _c.b * k * 2.4 * blink);
-            if (L.intensity >= 0.5) {
+            const fk = 1.3 * blink;
+            this.flare(_p.x, _p.y, _p.z, 0.1 + L.intensity * 0.18, _c.r * k * fk, _c.g * k * fk, _c.b * k * fk);
+            if (L.intensity >= 0.8 && pools < 3) {
+              pools++;
               const gy = groundHeight(map, Math.max(0, Math.min(map.w - 0.01, _p.x)), Math.max(0, Math.min(map.h - 0.01, _p.z)));
-              const rr = 0.9 + L.intensity * 1.3;
-              const pk = k * 0.42;
+              const rr = 0.7 + L.intensity * 0.8;
+              const pk = k * 0.13;
               this.pool(_p.x, Math.max(gy, root.position.y), _p.z, 0, rr * 2, rr * 2, _c.r * pk, _c.g * pk, _c.b * pk);
               if (L.intensity >= 0.8) this.candidate(_p.x, _p.y + 0.15, _p.z, _c, k, tx, tz);
             }
@@ -280,7 +294,7 @@ export class NightLights {
       const px = root.position.x + _f.x * (sx * 0.5 + 1.3);
       const pz = root.position.z + _f.z * (sx * 0.5 + 1.3);
       const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, px)), Math.max(0, Math.min(map.h - 0.01, pz)));
-      this.pool(px, gy, pz, yaw, 2.8, 1.6, 0.5 * k, 0.45 * k, 0.34 * k);
+      this.pool(px, gy, pz, yaw, 2.8, 1.6, 0.32 * k, 0.29 * k, 0.22 * k);
     }
     commit(this.flares, this.nf);
     commit(this.pools, this.np);

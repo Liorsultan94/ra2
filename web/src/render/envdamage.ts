@@ -147,13 +147,14 @@ export class EnvDamage {
 
     // burnt ground patches: dark, ragged-edged blotches
     const sTex = scorchTexture();
-    const sMat = fog.apply(new THREE.MeshBasicMaterial({ color: 0x0b0907, alphaMap: sTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }));
+    const sMat = fog.apply(new THREE.MeshBasicMaterial({ color: 0x0b0907, alphaMap: sTex, transparent: true, opacity: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }));
     const nS = quality === 'low' ? 60 : 140;
     this.scorch = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), sMat, nS);
     this.scorch.count = 0;
     this.scorch.frustumCulled = false;
     this.scorch.renderOrder = 1;
     this.scorch.name = 'env-scorch';
+    this.scorch.visible = false;
     // collapsed house rubble
     const rMat = fog.apply(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.95, flatShading: true }));
     const nR = quality === 'low' ? 160 : 420;
@@ -164,6 +165,7 @@ export class EnvDamage {
     this.rubble.receiveShadow = true;
     this.rubble.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(nR * 3), 3);
     this.rubble.name = 'env-rubble';
+    this.rubble.visible = false;
     this.group.add(this.scorch, this.rubble);
   }
 
@@ -236,7 +238,7 @@ export class EnvDamage {
         const i = this.qi[q];
         const dist = this.qd[q];
         const k = this.kind[i];
-        if (k === Kind.Tree && (!heavy || dist > r * 0.85)) continue;
+        if (k === Kind.Tree && (!heavy || dist > r)) continue;
         // fall ahead of the vehicle, a little to the side it was struck on
         const sx = this.ix[i] - root.position.x;
         const sz2 = this.iz[i] - root.position.z;
@@ -445,7 +447,7 @@ export class EnvDamage {
       H.lean = (Math.random() - 0.5) * 0.25;
       const st = H.h.st;
       this.burning.push({ x: cx, y: gy + 0.2, z: cz, t: 14 + Math.random() * 8, size: 1.1 });
-      this.addScorch(cx, cz, Math.max(st.w, st.h) * 1.15);
+      this.addScorch(cx, cz, Math.max(st.w, st.h) * 0.8);
       // a heap of rubble over the footprint
       const n = Math.min(26, 8 + st.w * st.h * 4);
       for (let i = 0; i < n; i++) {
@@ -507,6 +509,7 @@ export class EnvDamage {
     _m.compose(_p.set(x, gy + 0.03, z), _q, _s.set(r * 2, 1, r * 2));
     im.setMatrixAt(i, _m);
     im.count = Math.min(max, this.scorchN);
+    im.visible = true;
     im.instanceMatrix.needsUpdate = true;
   }
 
@@ -519,6 +522,7 @@ export class EnvDamage {
     im.setMatrixAt(i, _m);
     im.setColorAt(i, _c.setHex(col));
     im.count = Math.min(max, this.rubbleN);
+    im.visible = true;
     im.instanceMatrix.needsUpdate = true;
     im.instanceColor!.needsUpdate = true;
   }

@@ -569,8 +569,8 @@ const TERRAIN_MAP = /* glsl */ `
     float n1 = texture2D(fogNoise, tw * 0.085 + 0.13).g;
     float n2 = texture2D(fogNoise, tw * 0.33 + 0.57).r;
     float lowSpot = n1 * 0.78 + n2 * 0.22 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05;
-    wxPud = smoothstep(0.62, 0.66, lowSpot) * wxWet;
-    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.5 + vec3(0.012, 0.014, 0.018), wxPud);
+    wxPud = smoothstep(0.65, 0.68, lowSpot) * wxWet;
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.62 + vec3(0.03, 0.035, 0.042), wxPud);
     terrRough = mix(terrRough, 0.03, wxPud);
     terrH = mix(terrH, 0.0, wxPud);
   }
