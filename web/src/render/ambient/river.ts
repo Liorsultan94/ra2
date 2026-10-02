@@ -297,14 +297,17 @@ export class RiverLife {
       }
       return false;
     };
-    for (let k = 0; k < 600 && (this.spots.length < 40 || this.reedSpots.length < 40); k++) {
-      const x = 1 + Math.random() * (map.w - 2);
-      const y = 1 + Math.random() * (map.h - 2);
+    for (let k = 0; k < 2000 && inside.length && (this.spots.length < 40 || this.reedSpots.length < 40); k++) {
+      // a random point across the river at a random spot along it
+      const c = inside[Math.floor(Math.random() * inside.length)];
+      const p = r.at(c.s, (Math.random() - 0.5) * (c.width + 1.2));
+      const x = p.x;
+      const y = p.y;
+      if (x < 1 || y < 1 || x > map.w - 1 || y > map.h - 1 || busy(x, y)) continue;
       const sh = r.shoreAt(x, y);
-      if (sh <= 0 || busy(x, y)) continue;
       if (sh > 0.35 && sh < 1.1 && this.spots.length < 40) this.spots.push({ x, y });
       const d = r.depthAt(x, y);
-      if (d > -0.05 && d < 0.08 && this.reedSpots.length < 40) this.reedSpots.push({ x, y });
+      if (d > -0.06 && d < 0.06 && this.reedSpots.length < 40) this.reedSpots.push({ x, y });
     }
     const nFlocks = this.spots.length ? (quality === 'low' ? 2 : phone ? 3 : 4) : 0;
     let nd = 0;

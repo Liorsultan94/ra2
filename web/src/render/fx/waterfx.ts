@@ -126,6 +126,9 @@ export class WaterFx {
         this.nearWater[y * m.w + x] = near;
       }
     host.effects.onSplash = (x, z, size) => this.splash(x, z, size);
+    // a fixed snow / rain battle starts with the river already iced / muddy
+    this.ice = smooth(0.25, 0.9, WX.wxSnow.value);
+    if (host.atmos.cfg.weather === 'rain') this.mud = 0.45;
     this.bridgeDown = host.world.bridges.map(() => false);
     this.bridgeOrig = host.world.bridges.map(() => null);
   }

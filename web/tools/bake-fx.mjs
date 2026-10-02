@@ -4,7 +4,7 @@
  *
  *   node tools/bake-fx.mjs            (needs ImageMagick `convert` with WebP support)
  *
- * Every effect is a short volumetric simulation evaluated on a 128 x 128 x 96
+ * Every effect is a short volumetric simulation evaluated on a 128 x 128 x 72
  * density grid per frame (pyroclastic noise-displaced puffs, jets, rings and
  * flame columns, all driven by 3D value-noise fbm and advected over time),
  * plus a temperature field. Each frame is then "photographed" orthographically:
@@ -28,13 +28,13 @@
  */
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import os from 'node:os';
 
 const FRAME = 128;
-const NZ = 96;
+const NZ = 72;
 const GRID = 8; // 8 x 8 frames per effect
 const NF = GRID * GRID;
 const BLOCKS_X = 4;
@@ -548,6 +548,24 @@ if (!isMainThread) {
   for (let e = 0; e < EFFECTS.length; e++) {
     const fx = EFFECTS[e];
     if (only.length && !only.includes(fx.name)) continue;
+    // finished effects are cached (an interrupted bake resumes; --force re-bakes)
+    const cache = join(tmpDir, `cache-${fx.name}-${FRAME}-${NZ}.bin`);
+    const bx = (e % BLOCKS_X) * FRAME * GRID;
+    const by = Math.floor(e / BLOCKS_X) * FRAME * GRID;
+    const BW = FRAME * GRID;
+    if (!pick && !args.includes('--force') && existsSync(cache)) {
+      const buf = readFileSync(cache);
+      const emax = buf.readFloatLE(0);
+      for (let y = 0; y < BW; y++) {
+        const s0 = 4 + y * BW * 4;
+        const d = ((by + y) * AW + bx) * 4;
+        atlasA.set(buf.subarray(s0, s0 + BW * 4), d);
+        atlasB.set(buf.subarray(4 + BW * BW * 4 + y * BW * 4, 4 + BW * BW * 4 + (y + 1) * BW * 4), d);
+      }
+      manifest.effects[fx.name] = { block: e, life: fx.life, loop: fx.loop, emission: +emax.toFixed(4) };
+      console.log(`${fx.name}: cached`);
+      continue;
+    }
     const frames = new Array(NF);
     await Promise.all(
       [...Array(threads).keys()].map(
@@ -570,8 +588,6 @@ if (!isMainThread) {
     let emax = 0;
     for (const fr of frames) if (fr) for (let p = 3; p < fr.outB.length; p += 4) emax = Math.max(emax, fr.outB[p]);
     emax = emax || 1;
-    const bx = (e % BLOCKS_X) * FRAME * GRID;
-    const by = Math.floor(e / BLOCKS_X) * FRAME * GRID;
     const enc = (v) => Math.round(Math.sqrt(clamp01(v)) * 255);
     for (let f = 0; f < NF; f++) {
       if (!frames[f]) continue;
@@ -593,6 +609,16 @@ if (!isMainThread) {
         }
     }
     manifest.effects[fx.name] = { block: e, life: fx.life, loop: fx.loop, emission: +emax.toFixed(4) };
+    if (!pick) {
+      const buf = Buffer.alloc(4 + BW * BW * 8);
+      buf.writeFloatLE(emax, 0);
+      for (let y = 0; y < BW; y++) {
+        const d = ((by + y) * AW + bx) * 4;
+        buf.set(atlasA.subarray(d, d + BW * 4), 4 + y * BW * 4);
+        buf.set(atlasB.subarray(d, d + BW * 4), 4 + BW * BW * 4 + y * BW * 4);
+      }
+      writeFileSync(cache, buf);
+    }
     console.log(`${fx.name}: ${((Date.now() - t0) / 1000).toFixed(1)}s emax ${emax.toFixed(3)}`);
   }
   const write = (buf, name) => {

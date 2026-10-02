@@ -150,14 +150,14 @@ export function treeMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high')
       .replace('#include <common>', '#include <common>\nuniform float windTime;\nuniform vec3 treeWind;\nattribute float flex;\nattribute float leaf;\nvarying float vLeaf;')
       .replace(
         '#include <color_vertex>',
-        `vColor = vec3( 1.0 );
+        `vColor = vec4( 1.0 );
         #ifdef USE_COLOR
-          vColor *= color;
+          vColor.rgb *= color.rgb;
         #endif
         #ifdef USE_INSTANCING_COLOR
           // the instance colour is the leaf tint (stored at half strength); bark only takes its brightness (charring)
           float tlum = dot( instanceColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-          vColor *= mix( vec3( clamp( tlum * 6.5, 0.0, 1.0 ) ), instanceColor.rgb * 2.0, clamp( leaf, 0.0, 1.0 ) );
+          vColor.rgb *= mix( vec3( clamp( tlum * 6.5, 0.0, 1.0 ) ), instanceColor.rgb * 2.0, clamp( leaf, 0.0, 1.0 ) );
         #endif
         vLeaf = leaf;`,
       )

@@ -27,10 +27,6 @@
 .qb-powers:empty {
   display: none;
 }
-.qb-powers:not(:empty) {
-  padding-left: 4px;
-  border-left: 1px solid var(--line);
-}
 .qb-btn {
   position: relative;
   flex: none;

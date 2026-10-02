@@ -882,7 +882,7 @@ class Bld {
     L.box(r * 1.2, 0.0035, r * 1.1, r, -0.002, 0, 0x2c2e2a); // underside padding (seen when open)
     // the commander
     const reg = this.style.region;
-    const uni = reg === 'west' ? 0x7c7052 : reg === 'east' ? 0x4c5232 : reg === 'asia' ? 0x4a5434 : 0x857558;
+    const uni = reg === 'west' ? 0x6c6446 : reg === 'east' ? 0x4c5232 : reg === 'asia' ? 0x4a5434 : 0x857558;
     const helm = reg === 'west' ? 0x5c5a44 : reg === 'east' ? 0x202020 : reg === 'asia' ? 0x34382c : 0x4a4636;
     const skin = reg === 'mideast' ? 0xa8805e : reg === 'asia' ? 0xc8a07c : 0xc49478;
     const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');

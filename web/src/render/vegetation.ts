@@ -5,6 +5,7 @@ import type { FogOfWar } from './fog';
 import { CulledInstances, GeoBuilder, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
+import { grassRGB } from './grasstex';
 import { Leaf, foliageAtlas, leafCell } from './terraintex';
 import { buildTrees } from './trees';
 
@@ -204,14 +205,14 @@ function bushGeo(lite = false): THREE.BufferGeometry {
   return b.build(true);
 }
 
-function tuftGeo(cell: Leaf, h: number, w: number): THREE.BufferGeometry {
+function tuftGeo(cell: Leaf, h: number, w: number, rootShade = 0.55): THREE.BufferGeometry {
   const b = new GeoBuilder();
   const [u0, v0, u1, v1] = leafCell(cell);
   for (let k = 0; k < 3; k++) {
     const a = (k * Math.PI) / 3;
     const e = V(Math.cos(a) * w * 0.5, 0, Math.sin(a) * w * 0.5);
     const ids = [V(0, h, 0).sub(e), V(0, h, 0).add(e), V(0, 0, 0).sub(e), V(0, 0, 0).add(e)].map((q, j) =>
-      b.vert(q, UP, j % 2 ? u1 : u0, j < 2 ? v1 : v0, j < 2 ? 1 : 0.55, j < 2 ? 0.08 : 0),
+      b.vert(q, UP, j % 2 ? u1 : u0, j < 2 ? v1 : v0, j < 2 ? 1 : rootShade, j < 2 ? 0.08 : 0),
     );
     b.quad(ids[0], ids[1], ids[2], ids[3]);
   }
@@ -247,6 +248,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   const nearStart = (x: number, y: number) => Math.min(...m.starts.map((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5)));
   const isTree = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.trees[y * m.w + x] > 0;
   let seed = 0;
+  const tuftRGB = [0, 0, 0];
   for (let y = 0; y < m.h; y++) {
     for (let x = 0; x < m.w; x++) {
       const i = y * m.w + x;
@@ -268,7 +270,8 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const dryness = fbm(x * 0.06, y * 0.06, 47, 3);
       // tall grass grows in clumps and swathes; between them it is short turf
       const clump = Math.max(0, Math.min(1, (meadow - 0.38) / 0.3));
-      let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK;
+      // medium / high grow 3D grass blades (grass.ts): only the odd taller clump is left as a card
+      let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK * (quality === 'low' ? 1 : 0.4);
       if (m.ore[i]) n = 0;
       n = Math.floor(n + hash2(x, y, 304));
       for (let k = 0; k < n; k++) {
@@ -280,8 +283,10 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         if (occ & OCC_TRACK && hash2(seed, 3, 305) < 0.85) continue;
         const r = hash2(seed, 4, 305);
         const dryK = Math.max(0, Math.min(1, (dryness - 0.4) * 1.6 + (r - 0.5) * 0.6 + (t === Tile.Sand ? 0.5 : 0)));
-        const tuft = mk(px, pz, 0.6 + hash2(seed, 5, 305) * 0.6 + clump * 0.3, 0.85, 0.12);
-        tuft.color = new THREE.Color(0.42 + dryK * 0.4, 0.62 + dryK * 0.12, 0.26 + dryK * 0.1).multiplyScalar(0.85 + hash2(seed, 6, 305) * 0.25);
+        const tuft = mk(px, pz, 0.75 + hash2(seed, 5, 305) * 0.6 + clump * 0.35, 0.85, 0.12);
+        // the meadow's own palette (grasstex.ts), lifted to cancel the card texture's darkness
+        grassRGB(0.2 + clump * 0.3, dryK * 0.75, tuftRGB);
+        tuft.color = new THREE.Color().setRGB(tuftRGB[0], tuftRGB[1], tuftRGB[2], THREE.SRGBColorSpace).multiplyScalar(2.0 * (0.88 + hash2(seed, 6, 305) * 0.25));
         grass.push(tuft);
       }
       // bushes at forest edges and scattered singles
@@ -339,7 +344,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
 
   const bushLo = bushGeo(true);
   const groups: [THREE.BufferGeometry, THREE.BufferGeometry | null, Inst[], boolean, number, number][] = [
-    [tuftGeo(Leaf.Grass, 0.2, 0.3), null, grass, false, Infinity, grassHide],
+    [tuftGeo(Leaf.Grass, 0.22, 0.32, 0.72), null, grass, false, Infinity, grassHide],
     [low ? bushLo : bushGeo(), bushLo, bushes, shadows && quality === 'high', treeLo - 2, Infinity],
     [tuftGeo(Leaf.Reeds, 0.36, 0.26), null, reeds, false, Infinity, grassHide + 4],
   ];
