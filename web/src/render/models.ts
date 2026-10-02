@@ -7,6 +7,7 @@ import { overrideModel } from './models/gltf';
 import { INFANTRY } from './models/infantry';
 import { EXTRA_MUNITIONS, createExtraMunition, type ExtraMunitionKind } from './models/munitions';
 import { createModel as legacyModel } from './models/legacy';
+import { BRIDGE_MODELS } from './models/bridgehut';
 import type { Builder } from './models/registry';
 import type { Model, ModelStyle, MunitionKind, MunitionModel } from './models/types';
 import { VEHICLES } from './models/vehicles';
@@ -24,7 +25,7 @@ function footprintOf(key: string) {
   return footprints.get(key);
 }
 
-const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY, CARGO];
+const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY, CARGO, BRIDGE_MODELS];
 
 /** Build the model for a model key: glTF override > detailed builder > legacy builder. */
 export function createModel(key: string, style: ModelStyle, fog: FogOfWar | null): Model {

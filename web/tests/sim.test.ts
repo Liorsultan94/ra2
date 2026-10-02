@@ -3,7 +3,8 @@ import { AIController } from '../src/sim/ai';
 import { detectionRange, hitThreat, launch } from '../src/sim/ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, airdropStatus } from '../src/sim/airdrop';
 import { WEAPONS, buildingDef, unitDef } from '../src/sim/defs';
-import { terrainPassable } from '../src/sim/map';
+import { Tile, terrainPassable } from '../src/sim/map';
+import { BRIDGE_DEF, BRIDGE_HP, BRIDGE_HUT_DEF, BRIDGE_REPAIR_TICKS, bankOf, bridgeImpact, hurtBridge, pathCrosses } from '../src/sim/bridges';
 import { PathFinder } from '../src/sim/path';
 import { TPS, type Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
@@ -702,4 +703,149 @@ describe('veterancy', () => {
     console.log('veterancy promotions in 9 min AI game:', promos);
     expect(promos).toBeGreaterThan(0);
   }, 120000);
+});
+
+describe('collapsible bridges', () => {
+  const oneSide = () => new World({ seed: 5, players: [{ name: 'A', faction: 'usa', color: 0, isAI: false }, { name: 'B', faction: 'russia', color: 1, isAI: false }] });
+  const reach = (w: World, from: { x: number; y: number }, to: { x: number; y: number }) => {
+    const path = w.pf.find(Math.floor(from.x), Math.floor(from.y), Math.floor(to.x), Math.floor(to.y), 100000);
+    return path.length > 0 && path[path.length - 1] === Math.floor(to.y) * w.map.w + Math.floor(to.x);
+  };
+
+  it('every bridge is a neutral structure with a repair hut on each bank, and the map stays connected', () => {
+    const w = oneSide();
+    expect(w.bridges.length).toBe(3);
+    for (const b of w.bridges) {
+      expect(b.tiles.length).toBeGreaterThan(5);
+      expect(b.status).toBe('intact');
+      const e = w.get(b.entity)!;
+      expect(e.def).toBe(BRIDGE_DEF);
+      expect(e.owner).toBe(-1);
+      expect(e.hp).toBe(BRIDGE_HP);
+      expect(b.huts.length).toBe(2);
+      b.huts.forEach((id, k) => {
+        const hut = w.get(id)!;
+        expect(hut.def).toBe(BRIDGE_HUT_DEF);
+        expect(bankOf(b, hut.x, hut.y)).toBe(k);
+      });
+    }
+    expect(reach(w, w.map.starts[0], w.map.starts[1])).toBe(true);
+  });
+
+  it('only heavy weapons hurt a bridge', () => {
+    const w = oneSide();
+    const b = w.bridges[0];
+    const e = w.get(b.entity)!;
+    const src = w.spawnUnit('usa_rifle', 0, 20.5, 80.5);
+    w.damage(e, 1e6, 'mg', src);
+    w.damage(e, 1e6, 'artillery', src); // direct damage() is ignored: bridges are hurt by impacts
+    bridgeImpact(w, b.x, b.y, 'rifle');
+    bridgeImpact(w, b.x, b.y, 'flak');
+    expect(b.hp).toBe(BRIDGE_HP);
+    bridgeImpact(w, b.x, b.y, 'howitzer');
+    expect(b.hp).toBeCloseTo(BRIDGE_HP - WEAPONS.howitzer.damage, 5);
+    const before = b.hp;
+    bridgeImpact(w, b.x, b.y, 'cannon');
+    expect(before - b.hp).toBeLessThan(WEAPONS.cannon.damage * 0.2);
+    // a shell landing well away from the deck does nothing
+    const hp = b.hp;
+    bridgeImpact(w, b.x + 6, b.y + 6, 'howitzer');
+    expect(b.hp).toBe(hp);
+    // riflemen refuse a force-attack order on the bridge; artillery accepts it
+    const art = w.spawnUnit('usa_arty', 0, b.ends[0].x - 5, b.ends[0].y + 5);
+    w.issue(0, { type: 'attack', ids: [src.id, art.id], target: b.entity });
+    w.step();
+    expect(src.order.type).toBe('idle');
+    expect(art.order.type).toBe('attack');
+  });
+
+  it('artillery fire brings a bridge down: the deck turns to water, units on it fall, paths re-plan', () => {
+    const w = oneSide();
+    const b = w.bridges[0];
+    const deckTile = b.tiles[Math.floor(b.tiles.length / 2)];
+    const onDeck = w.spawnUnit('russia_rifle', 1, (deckTile % w.map.w) + 0.5, Math.floor(deckTile / w.map.w) + 0.5);
+    // a far-away walker routed over this bridge
+    const walker = w.spawnUnit('usa_mbt', 0, b.ends[0].x - 6, b.ends[0].y + 6);
+    w.issue(0, { type: 'move', ids: [walker.id], x: b.ends[1].x + 6, y: b.ends[1].y - 6 });
+    w.step();
+    expect(pathCrosses(w, walker, new Set(b.tiles))).toBe(true);
+    const art = ['usa_arty', 'usa_arty', 'usa_arty'].map((d, i) => w.spawnUnit(d, 0, b.ends[0].x - 6 + i, b.ends[0].y + 6 + i * 0.5));
+    w.issue(0, { type: 'attack', ids: art.map((a) => a.id), target: b.entity });
+    let ticks = 0;
+    while (b.status === 'intact' && ticks < TPS * 400) {
+      w.step();
+      ticks++;
+    }
+    expect(b.status).toBe('down');
+    for (const t of b.tiles) {
+      expect(w.map.tiles[t]).toBe(Tile.Water);
+      expect(w.pass[t]).toBe(0);
+    }
+    expect(onDeck.dead).toBe(true);
+    expect(w.get(b.entity)).toBeUndefined();
+    // the gunners stand down, the walker's path no longer uses the fallen deck
+    w.step();
+    for (const a of art) expect(a.order.type === 'attack').toBe(false);
+    expect(walker.dead).toBe(false);
+    expect(pathCrosses(w, walker, new Set(b.tiles))).toBe(false);
+  });
+
+  it('with every bridge down the banks are cut off; engineers rebuild from either bank', () => {
+    const w = oneSide();
+    for (const b of w.bridges) hurtBridge(w, b, 1e9);
+    expect(w.bridges.every((b) => b.status === 'down')).toBe(true);
+    expect(reach(w, w.map.starts[0], w.map.starts[1])).toBe(false);
+    // every hut is reachable from its own bank's base
+    for (const b of w.bridges)
+      b.huts.forEach((id, k) => {
+        const hut = w.get(id)!;
+        const s = w.map.starts[k];
+        const path = w.pf.find(s.x, s.y, hut.tx, hut.ty, 100000);
+        const last = path[path.length - 1];
+        expect(Math.hypot((last % w.map.w) - hut.tx, Math.floor(last / w.map.w) - hut.ty)).toBeLessThan(1.5);
+      });
+    // player 0 rebuilds the centre bridge from its bank, player 1 the west one from the other bank
+    const [b0, b1] = w.bridges;
+    const h0 = w.get(b0.huts[0])!;
+    const h1 = w.get(b1.huts[1])!;
+    const e0 = w.spawnUnit('usa_engineer', 0, h0.x + 1.5, h0.y + 1.5);
+    const e1 = w.spawnUnit('russia_engineer', 1, h1.x - 1.5, h1.y - 1.5);
+    w.issue(0, { type: 'attack', ids: [e0.id], target: h0.id });
+    w.issue(1, { type: 'capture', ids: [e1.id], target: h1.id });
+    for (let i = 0; i < TPS * 15 && (b0.status === 'down' || b1.status === 'down'); i++) w.step();
+    expect(b0.status).toBe('repairing');
+    expect(b1.status).toBe('repairing');
+    expect(e0.dead && e1.dead).toBe(true);
+    for (const t of b0.tiles) expect(w.pass[t]).toBe(0); // still closed while rebuilding
+    for (let i = 0; i < BRIDGE_REPAIR_TICKS + 2; i++) w.step();
+    for (const b of [b0, b1]) {
+      expect(b.status).toBe('intact');
+      expect(b.hp).toBe(BRIDGE_HP);
+      expect(w.get(b.entity)?.hp).toBe(BRIDGE_HP);
+      for (const t of b.tiles) expect(w.map.tiles[t]).toBe(Tile.Bridge);
+    }
+    expect(reach(w, w.map.starts[0], w.map.starts[1])).toBe(true);
+    // an engineer at the hut of an intact, undamaged bridge is not used up
+    const e2 = w.spawnUnit('usa_engineer', 0, h0.x + 1.5, h0.y + 1.5);
+    w.issue(0, { type: 'capture', ids: [e2.id], target: h0.id });
+    for (let i = 0; i < TPS * 8; i++) w.step();
+    expect(e2.dead).toBe(false);
+  });
+
+  it('is deterministic under bridge shelling, collapse and AI play', () => {
+    const run = () => {
+      const w = aiWorld(11);
+      const b = w.bridges[1];
+      const art = [0, 1].map((i) => w.spawnUnit('usa_arty', 0, b.ends[0].x - 6 + i, b.ends[0].y + 6));
+      for (let i = 0; i < TPS * 200; i++) {
+        if (i === 5) w.issue(0, { type: 'attack', ids: art.map((a) => a.id), target: b.entity });
+        w.step();
+      }
+      return { w, snap: w.list.filter((e) => !e.dead).map((e) => `${e.id}:${e.def}:${e.x.toFixed(4)}:${e.y.toFixed(4)}:${e.hp}`).join('|') + w.bridges.map((x) => `${x.status}:${x.hp}`).join(',') };
+    };
+    const a = run();
+    const b = run();
+    expect(a.snap).toBe(b.snap);
+    expect(a.w.bridges[1].hp).toBeLessThan(BRIDGE_HP);
+  });
 });

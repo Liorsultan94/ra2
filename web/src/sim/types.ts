@@ -124,6 +124,23 @@ export interface BuildingDef extends BaseDef {
   produces?: 'infantry' | 'vehicle' | 'air';
   income?: number; // credits per income interval (oil derricks)
   capturable?: boolean;
+  /** Civilian house: infantry capacity (garrison.ts). */
+  garrison?: number;
+  /** Capturable tech structure effect (capture.ts). */
+  techKind?: 'hospital' | 'airport' | 'comms';
+  /** Superweapon structure (superweapons.ts). */
+  superweapon?: string;
+}
+
+/** Superweapon state of a player (superweapons.ts). at: tick it is ready (-1 = no superweapon structure). */
+export interface SuperweaponState {
+  at: number;
+  from: number;
+  readyTold: boolean;
+  /** Iron Beam dome while active. */
+  beam: { x: number; y: number; until: number } | null;
+  /** Staggered launches still to fire (salvos, drone waves). */
+  queue: { at: number; what: string; x: number; y: number; target: number }[];
 }
 
 export type Def = UnitDef | BuildingDef;
@@ -137,6 +154,14 @@ export type Order =
   | { type: 'capture'; target: number }
   | { type: 'enter'; target: number }
   | { type: 'deploy' };
+
+/** Unit stance (see orders.ts): how far a unit goes on its own to fight. */
+export type Stance = 'aggressive' | 'guard' | 'hold' | 'holdFire';
+
+/** An order waiting in a unit's waypoint queue (Shift-queued / phone queue mode). */
+export type QueuedOrder =
+  | { type: 'move' | 'attackMove' | 'patrol'; x: number; y: number }
+  | { type: 'attack' | 'guard'; target: number };
 
 /** Support-power transport on its drop run (sim state, read by the renderer for the ramp door). */
 export interface DropRun {
@@ -234,6 +259,12 @@ export interface Entity {
   xp: number; // value of everything this unit has destroyed
   rank: number; // 0 rookie, 1 veteran, 2 elite
   spawner: number; // spawned munitions (drones): the launcher credited with their kills, else -1
+
+  // orders (see orders.ts)
+  stance: Stance;
+  queue: QueuedOrder[]; // waypoints / orders to run after the current one
+  patrol: { ax: number; ay: number; bx: number; by: number } | null; // patrolling between a and b
+  guardId: number; // friendly unit / building this unit escorts, else -1
 }
 
 export interface QueueItem {
@@ -266,6 +297,10 @@ export interface Player {
   /** Airborne-drop support power: tick it is ready at (-1 = locked: no completed airfield), and when it started charging. */
   airdropAt: number;
   airdropFrom: number;
+  /** Superweapon timer / Iron Beam / pending salvos (superweapons.ts). */
+  sw: SuperweaponState;
+  /** Repeat-build per production category: finished units are queued again. */
+  repeat?: Partial<Record<Category, boolean>>;
 }
 
 export interface Projectile {
@@ -319,8 +354,8 @@ export interface Projectile {
 }
 
 export type Command =
-  | { type: 'move'; ids: number[]; x: number; y: number; attackMove?: boolean }
-  | { type: 'attack'; ids: number[]; target: number }
+  | { type: 'move'; ids: number[]; x: number; y: number; attackMove?: boolean; queue?: boolean }
+  | { type: 'attack'; ids: number[]; target: number; queue?: boolean }
   | { type: 'capture'; ids: number[]; target: number }
   | { type: 'stop'; ids: number[] }
   | { type: 'deploy'; ids: number[] }
@@ -332,7 +367,15 @@ export type Command =
   | { type: 'repair'; id: number }
   | { type: 'rally'; id: number; x: number; y: number }
   | { type: 'enter'; ids: number[]; target: number }
-  | { type: 'airdrop'; x: number; y: number };
+  | { type: 'airdrop'; x: number; y: number }
+  | { type: 'stance'; ids: number[]; stance: Stance }
+  | { type: 'patrol'; ids: number[]; x: number; y: number; queue?: boolean }
+  | { type: 'guard'; ids: number[]; target: number; queue?: boolean }
+  | { type: 'repeat'; cat: Category; on: boolean }
+  /** Fire the player's superweapon at (x, y) (superweapons.ts). */
+  | { type: 'superweapon'; x: number; y: number }
+  /** Send the garrison out of an occupied civilian building (garrison.ts). */
+  | { type: 'evacuate'; id: number };
 
 export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
@@ -362,4 +405,8 @@ export type SimEvent =
   | { t: 'landed'; owner: number; id: number; x: number; y: number }
   /** Veterancy: a unit reached a new rank (1 veteran, 2 elite). */
   | { t: 'promoted'; id: number; owner: number; rank: number; x: number; y: number }
+  /** Superweapon status (superweapons.ts): structure detected, charged, launched (target x, y), lost; Iron Beam engagements ('beam': from x, y, z to tx, ty, tz) and dome end. */
+  | { t: 'superweapon'; owner: number; sw: string; phase: 'detected' | 'ready' | 'launch' | 'lost' | 'beam' | 'end'; x: number; y: number; z?: number; tx?: number; ty?: number; tz?: number }
+  /** Infantry entered (enter) or left a civilian building (garrison.ts). */
+  | { t: 'garrison'; id: number; owner: number; enter: boolean }
   | { t: 'gameOver'; winner: number };
