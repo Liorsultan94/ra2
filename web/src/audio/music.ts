@@ -174,7 +174,7 @@ export class MusicEngine {
     this.combatR = this.pan(this.layer[L.Combat], 0.5);
     // Shared tone shaping for the drones and the ostinato: one filter per bus
     // instead of one per note.
-    this.droneLp = { battle: this.lp(this.layer[L.Bed], 400, 1.1), menu: this.lp(this.bus.menu, 300, 1.2) };
+    this.droneLp = { battle: this.lp(this.layer[L.Bed], 400, 1.7), menu: this.lp(this.bus.menu, 300, 1.8) };
     const ostDrive = ctx.createWaveShaper();
     ostDrive.curve = bank.curve(1.6);
     ostDrive.connect(this.layer[L.Alert]);
@@ -664,15 +664,21 @@ export class MusicEngine {
     g.gain.setValueAtTime(v, t + dur);
     g.gain.linearRampToValueAtTime(0, t + dur + fade);
     const sub = p.osc('sine', midiHz(midi), t, end);
-    const sg = p.gain(0.06);
+    const sg = p.gain(0.05);
     sub.connect(sg);
     sg.connect(g);
-    const sawG = p.gain(0.075);
+    const sawG = p.gain(0.055);
     for (const det of [-9, 8]) {
       const o = p.osc('sawtooth', midiHz(midi + 12), t, end);
       o.detune.value = det;
       o.connect(sawG);
     }
+    // octave above for small speakers
+    const oct = p.osc('sawtooth', midiHz(midi + 24), t, end);
+    oct.detune.value = 3;
+    const og = p.gain(1.25);
+    oct.connect(og);
+    og.connect(sawG);
     sawG.connect(g);
     // dissonant upper voice one octave higher, outside the shared filter so it stays audible
     const um = midi + 24;
@@ -710,7 +716,7 @@ export class MusicEngine {
     lp.frequency.linearRampToValueAtTime(1100, t + dur * 0.7);
     lp.frequency.linearRampToValueAtTime(600, t + dur + rel);
     const g = p.gain(0);
-    const pk = 0.04 * v;
+    const pk = 0.06 * v;
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(pk, t + 0.7);
     g.gain.setValueAtTime(pk, t + dur);
@@ -748,7 +754,7 @@ export class MusicEngine {
 
   /** Muffled low thump (heartbeat). */
   private thump(t: number, dest: AudioNode, v: number): void {
-    this.hit(this.kit.thump, t, dest, 0.42 * v);
+    this.hit(this.kit.thump, t, dest, 0.36 * v);
   }
 
   /** Dissonant stab: low pizzicato minor 2nd, or a high tritone piano dyad. */
@@ -962,8 +968,8 @@ export class MusicEngine {
     const send = p.gain(0.6);
     out.connect(send);
     send.connect(this.mode === 'menu' ? this.echo.menu : this.echo.battle);
-    p.th(out, t, { type: 'triangle', f, a: 0.002, d: 2.4, peak: 0.075 * v, detune: det });
-    p.th(out, t, { f: f * 2.006, a: 0.002, d: 1.1, peak: 0.03 * v, detune: det });
+    p.th(out, t, { type: 'triangle', f, a: 0.002, d: 2.4, peak: 0.11 * v, detune: det });
+    p.th(out, t, { f: f * 2.006, a: 0.002, d: 1.1, peak: 0.045 * v, detune: det });
     p.th(out, t, { f: f * 3.013, a: 0.002, d: 0.45, peak: 0.016 * v });
     p.nh(out, t, { type: 'bandpass', f: Math.min(6000, f * 5), q: 2, a: 0.001, d: 0.02, peak: 0.05 * v });
     p.finish();
@@ -1075,9 +1081,9 @@ export class MusicEngine {
     f.linearRampToValueAtTime(520, t + dur + fade);
     const g = p.gain(0);
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.05, t + fade);
-    g.gain.linearRampToValueAtTime(0.11, t + dur * 0.4);
-    g.gain.linearRampToValueAtTime(0.05, t + dur * 0.75);
+    g.gain.linearRampToValueAtTime(0.12, t + fade);
+    g.gain.linearRampToValueAtTime(0.28, t + dur * 0.4);
+    g.gain.linearRampToValueAtTime(0.12, t + dur * 0.75);
     g.gain.linearRampToValueAtTime(0, t + dur + fade);
     n.connect(bp);
     bp.connect(g);
