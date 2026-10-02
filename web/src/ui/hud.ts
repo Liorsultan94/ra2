@@ -5,6 +5,7 @@ import type { World } from '../sim/world';
 import type { CameoFactory } from '../render/cameo';
 import { styleFor, type GameRenderer } from '../render/renderer';
 import { flagDataUrl } from '../render/flags';
+import { SupportPower } from './support';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -77,6 +78,7 @@ export class Hud {
   private tooltip!: HTMLElement;
   private hint!: HTMLElement;
   private toolBtns = new Map<string, HTMLElement>();
+  private support!: SupportPower;
   tab: Category = 'building';
   private shownCredits = 0;
   private fogCanvas: HTMLCanvasElement;
@@ -220,6 +222,7 @@ export class Hud {
     mk('repair', 'Repair mode (R)', '<path d="M22 19l-9-9c1-2.6.4-5.6-1.7-7.7A6.9 6.9 0 0 0 4.4 1L9 5.6 5.6 9 1 4.4a6.9 6.9 0 0 0 1.3 6.9c2.1 2.1 5.1 2.7 7.7 1.7l9 9z"/>');
     mk('sell', 'Sell mode (X)', '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>');
     mk('boxselect', 'Box select (touch)', '<path d="M3 3h4v2H5v2H3zm14 0h4v4h-2V5h-2zM3 17h2v2h2v2H3zm16 2v-2h2v4h-4v-2zM9 3h6v2H9zm0 16h6v2H9zM3 9h2v6H3zm16 0h2v6h-2z"/>', 'touch-only');
+    this.support = new SupportPower(this, tools); // airborne-drop support power
 
     const tabs = el('div', 'sb-tabs', sb);
     for (const t of TABS) {
@@ -362,6 +365,7 @@ export class Hud {
       b.classList.toggle('t-empty', !st?.avail);
     }
     this.updateSelection();
+    this.support.update();
   }
 
   /** Selection details (portrait panel) + context command buttons. */
@@ -753,6 +757,39 @@ export class Hud {
       }
     }
     if (this.hpState.size > 600) for (const id of this.hpState.keys()) if (!w.get(id)) this.hpState.delete(id);
+    // keep the drone camera feed clear of bars and markers
+    const keep = this.keepClear?.();
+    if (keep) ctx.clearRect(keep.x, keep.y, keep.w, keep.h);
+  }
+
+  /** Screen rectangle the 2D overlay must leave clear (the drone camera picture-in-picture). */
+  keepClear: (() => { x: number; y: number; w: number; h: number } | null) | null = null;
+
+  /** Extra round button in the top-right view controls (thermal view...). */
+  addViewButton(title: string, icon: string, onClick: () => void): HTMLButtonElement {
+    const vc = this.viewWrap.querySelector('.view-ctrl') as HTMLElement;
+    const b = el('button', 'vc-btn', vc);
+    b.innerHTML = svg(icon);
+    b.title = title;
+    b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    b.onclick = onClick;
+    return b;
+  }
+
+  /** Loading overlay while shaders warm up (k = 0..1, null removes it). */
+  setLoading(k: number | null, text = 'Preparing battlefield') {
+    let L = this.viewWrap.querySelector('.warmup') as HTMLElement | null;
+    if (k === null) {
+      L?.classList.add('done');
+      setTimeout(() => L?.remove(), 350);
+      return;
+    }
+    if (!L) {
+      L = el('div', 'warmup', this.viewWrap);
+      L.innerHTML = `<div class="wu-box"><div class="wu-title"></div><div class="wu-bar"><i></i></div><div class="wu-sub">Compiling shaders and materials</div></div>`;
+    }
+    (L.querySelector('.wu-title') as HTMLElement).textContent = `${text}… ${Math.round(k * 100)}%`;
+    (L.querySelector('.wu-bar i') as HTMLElement).style.width = `${Math.round(k * 100)}%`;
   }
 
   // --------------------------------------------------------------- messages
@@ -779,6 +816,7 @@ export class Hud {
   }
 
   destroy() {
+    this.support.destroy();
     this.root.remove();
     this.tooltip.remove();
   }

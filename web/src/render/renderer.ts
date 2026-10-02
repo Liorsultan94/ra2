@@ -14,6 +14,7 @@ import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
+import { Paradrop } from './paradrop';
 import { CombatOverlay } from './overlay';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
@@ -23,6 +24,14 @@ import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
 export type Quality = 'low' | 'medium' | 'high';
+
+/** Per-frame hook for whole-view modes (src/render/viewmodes.ts). */
+export interface ViewHook {
+  before(dt: number): void;
+  /** Return true when the hook rendered the main view itself. */
+  renderMain(): boolean;
+  after(dt: number): void;
+}
 
 // ~35 degree elevation: a touch lower than before so units and buildings show more of their sides (RA2-like)
 const CAM_DIR = new THREE.Vector3(1, 1.0, 1).normalize();
@@ -47,7 +56,7 @@ interface QualityStep {
   post: boolean;
 }
 
-interface Visual {
+export interface Visual {
   id: number;
   model: Model;
   owner: number;
@@ -161,8 +170,11 @@ export class GameRenderer {
   readonly outskirts: Outskirts;
   /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
   readonly atmos: Atmosphere;
-  private visuals = new Map<number, Visual>();
+  /** Live unit / building visuals by entity id (read by the view modes in viewmodes.ts). */
+  readonly visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
+  /** Parachute canopies (airborne-drop support power). */
+  private chutes: Paradrop;
   private projVis = new Map<number, ProjVisual>();
   private ghost: THREE.Group | null = null;
   private ghostKey = '';
@@ -247,9 +259,11 @@ export class GameRenderer {
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
     this.effects.setView(this.target, this.camera);
+    this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
+    this.chutes = new Paradrop(this.scene);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
     // ---- quality ladder: drop resolution first, then the expensive effects
@@ -296,6 +310,7 @@ export class GameRenderer {
       // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
       if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
       this.finalPass.haze = this.effects.enableHaze(this.camera);
+      this.finalPass.rays = this.effects.enableGodRays(this.camera);
     }
     this.applyLevel(this.level, false);
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
@@ -312,6 +327,16 @@ export class GameRenderer {
   }
 
   private disposed = false;
+  /** Optional view-mode hook (thermal / x-ray / drone camera, src/render/viewmodes.ts). */
+  viewHook: ViewHook | null = null;
+  /** The post-processing chain, when this quality level has one. */
+  get postComposer(): EffectComposer | null {
+    return this.composer;
+  }
+  /** True while frames go through the post chain (the quality governor can switch it off). */
+  get postActive(): boolean {
+    return !!this.composer && this.usePost;
+  }
 
   resize(w: number, h: number) {
     this.width = w;
@@ -331,6 +356,7 @@ export class GameRenderer {
     const s = this.ladder[level];
     if (!s) return;
     this.level = level;
+    this.terrain.setLadder(level / Math.max(1, this.ladder.length - 1));
     if (Math.abs(this.renderer.getPixelRatio() - s.pr) > 0.001) {
       this.renderer.setPixelRatio(s.pr);
       if (doResize) this.resize(this.width, this.height);
@@ -628,6 +654,9 @@ export class GameRenderer {
       const d = unitDef(e.def);
       const z = e.pz + (e.z - e.pz) * alpha;
       h = Math.max(h, 0) + z + (d.kamikaze || d.fixedWing ? 0 : Math.sin(this.time * 1.7 + e.id) * 0.04);
+    } else if (e.para || e.pz > 0) {
+      // under a parachute canopy
+      h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;
     }
     return new THREE.Vector3(x, h, y);
   }
@@ -697,6 +726,7 @@ export class GameRenderer {
     const w = this.world;
     const seen = new Set<number>();
     this.airShadows.begin(this.scene);
+    this.chutes.begin();
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -769,6 +799,10 @@ export class GameRenderer {
         } else {
           root.rotation.set(0, yaw, 0);
         }
+        // airborne drop: transport ramp door, jumpers / supply pallet under canopy
+        if (ud.airlift) a.ramp = e.drop?.ramp ?? 0;
+        if (v.model.infantry) a.para = e.para ? 1 : 0;
+        if (e.para) this.chutes.track(e, v.model, p, yaw, styleFor(w, e.owner).region, !!ud.supply, alpha, vis, this.time, dt, w.map);
         if (v.model.turret) v.model.turret.rotation.y = -angleDiff(lerpAngle(e.pfacing, e.facing, alpha), lerpAngle(e.pturret, e.turret, alpha));
         if (vis) this.unitFx(e, v, p, yaw, moved, dt);
       }
@@ -781,6 +815,7 @@ export class GameRenderer {
       this.updateRing(e, v, d);
     }
     this.airShadows.end();
+    this.chutes.end(dt, this.time);
     for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
   }
 
@@ -905,6 +940,8 @@ export class GameRenderer {
       return;
     }
     const ud = unitDef(e.def);
+    // killed under the canopy: the parachute carries the body down
+    if (ud.category === 'infantry' && this.chutes.takeBody(v.id, v.model, v.anim)) return;
     if (ud.category === 'infantry') {
       if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false } });
       else this.wrecks.push({ ...base, kind: 'infantry', max: 2.2 });
@@ -1444,8 +1481,13 @@ export class GameRenderer {
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.effects.update(dt);
     this.updateCamera();
-    if (this.composer && this.usePost) this.composer.render(dt);
+    const vh = this.viewHook;
+    vh?.before(dt);
+    if (vh?.renderMain()) {
+      // the view mode drew the frame itself
+    } else if (this.composer && this.usePost) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+    vh?.after(dt);
     this.adaptQuality();
   }
 

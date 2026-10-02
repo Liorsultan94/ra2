@@ -106,6 +106,8 @@ export interface UnitDef extends BaseDef {
   transport?: number; // infantry capacity
   fixedWing?: boolean; // jets: always moving, attack in passes
   cruiseAlt?: number; // flight altitude above ground
+  airlift?: boolean; // support-power transport plane: flies a straight drop run, then leaves the map
+  supply?: boolean; // air-dropped supply pallet: heals friendly units nearby, then expires
 }
 
 export interface BuildingDef extends BaseDef {
@@ -135,6 +137,29 @@ export type Order =
   | { type: 'capture'; target: number }
   | { type: 'enter'; target: number }
   | { type: 'deploy' };
+
+/** Support-power transport on its drop run (sim state, read by the renderer for the ramp door). */
+export interface DropRun {
+  x: number; // drop zone centre
+  y: number;
+  dx: number; // unit flight direction
+  dy: number;
+  jumpers: string[]; // defs still aboard, in exit order
+  crate: boolean; // supply pallet aboard
+  phase: 'inbound' | 'dropping' | 'outbound';
+  next: number; // tick of the next exit
+  ramp: number; // 1 while the ramp door is open
+  closeAt: number; // tick the ramp closes after the stick has gone
+}
+
+/** Parachute descent (jumpers and supply pallets); the landing point is guardX / guardY. */
+export interface ParaState {
+  t: number; // ticks of descent left
+  T: number; // total descent ticks
+  z0: number; // exit altitude
+  x0: number; // exit point
+  y0: number;
+}
 
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
 
@@ -202,6 +227,8 @@ export interface Entity {
 
   lastHurt: number;
   firedAt: number;
+  drop: DropRun | null; // airlift transports only
+  para: ParaState | null; // under canopy
 }
 
 export interface QueueItem {
@@ -231,6 +258,9 @@ export interface Player {
   attackWarnAt: number;
   lowPowerWarned: boolean;
   radarOnline: boolean;
+  /** Airborne-drop support power: tick it is ready at (-1 = locked: no completed airfield), and when it started charging. */
+  airdropAt: number;
+  airdropFrom: number;
 }
 
 export interface Projectile {
@@ -296,7 +326,8 @@ export type Command =
   | { type: 'sell'; id: number }
   | { type: 'repair'; id: number }
   | { type: 'rally'; id: number; x: number; y: number }
-  | { type: 'enter'; ids: number[]; target: number };
+  | { type: 'enter'; ids: number[]; target: number }
+  | { type: 'airdrop'; x: number; y: number };
 
 export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
@@ -320,4 +351,8 @@ export type SimEvent =
   | { t: 'sold'; id: number; owner: number }
   | { t: 'deployed'; id: number; owner: number }
   | { t: 'defeated'; owner: number }
+  /** Support power: a transport is inbound (id) to the drop zone; 'paradrop' when the stick jumps; 'landed' per jumper / pallet. */
+  | { t: 'airdrop'; owner: number; id: number; x: number; y: number }
+  | { t: 'paradrop'; owner: number; id: number; x: number; y: number; z: number }
+  | { t: 'landed'; owner: number; id: number; x: number; y: number }
   | { t: 'gameOver'; winner: number };

@@ -1,4 +1,5 @@
-import { WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
+import { airdropStatus } from './airdrop';
+import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { Rng } from './rng';
 import { TPS, type Entity, type Player } from './types';
 import type { Controller, World } from './world';
@@ -98,6 +99,76 @@ export class AIController implements Controller {
     this.manageProduction(buildings, units);
     this.manageArmy(buildings, units);
     this.manageRepairs(buildings);
+    this.manageSupport();
+  }
+
+  /** Airborne drop: as soon as it is charged, drop behind the lines onto a weakly defended high-value target, else contest ore. */
+  private manageSupport() {
+    const w = this.world;
+    if (!airdropStatus(w, this.pid).ready) return;
+    const z = this.pickDropZone();
+    if (z) w.issue(this.pid, { type: 'airdrop', x: z[0], y: z[1] });
+  }
+
+  /** Enemy firepower around a point (defences count most; SAMs threaten the transport on its run-in). */
+  private threatAt(x: number, y: number, r: number) {
+    const w = this.world;
+    let threat = 0;
+    w.queryRadius(x, y, r, (o) => {
+      if (!w.isEnemy(this.pid, o.owner)) return;
+      const od = DEFS[o.def];
+      if (!od.weapon || Math.hypot(o.x - x, o.y - y) > r) return;
+      const air = WEAPONS[od.weapon].air;
+      if (o.kind === 'building') threat += air === 'only' ? 3 : 4;
+      else if (od.category === 'air') threat += 1;
+      else threat += air === 'only' ? 1 : od.category === 'infantry' ? 1 : 2;
+    });
+    return threat;
+  }
+
+  private pickDropZone(): [number, number] | null {
+    const w = this.world;
+    const VALUE: Record<string, number> = { refinery: 9, factory: 8, tech: 8, conyard: 7, power: 7, radar: 6, airfield: 6, barracks: 5, oil: 5 };
+    let best: Entity | null = null;
+    let bestScore = 0;
+    for (const e of w.list) {
+      if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
+      let value: number;
+      if (e.kind === 'building') {
+        const bd = buildingDef(e.def);
+        if (bd.category === 'defense') continue;
+        value = VALUE[bd.role] ?? 4;
+      } else if (unitDef(e.def).harvester) value = 7;
+      else continue;
+      const score = value - this.threatAt(e.x, e.y, 8);
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    const base = [this.p.startX + 0.5, this.p.startY + 0.5];
+    if (best) {
+      // land just short of the target, on our side of it
+      const dx = base[0] - best.x;
+      const dy = base[1] - best.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return [best.x + (dx / len) * 2.5, best.y + (dy / len) * 2.5];
+    }
+    // nothing soft enough: seize the contested ore field nearest the middle, if it is not a killing ground
+    const enemy = this.enemyBase();
+    if (!enemy) return null;
+    let mine: [number, number] | null = null;
+    let md = Infinity;
+    for (const m of w.map.oreMines) {
+      const da = Math.hypot(m.x - base[0], m.y - base[1]);
+      const db = Math.hypot(m.x - enemy[0], m.y - enemy[1]);
+      const d = Math.abs(da - db) + this.threatAt(m.x, m.y, 7) * 4;
+      if (d < md && this.threatAt(m.x, m.y, 7) < 6) {
+        md = d;
+        mine = [m.x + 0.5, m.y + 0.5];
+      }
+    }
+    return mine;
   }
 
   private count(buildings: Entity[], role: string) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { POINT_SIZE_GLSL, bindViewHeight } from './gpuparticles';
 
 /*
  * Screen-space heat haze and shockwave distortion.
@@ -73,15 +74,14 @@ export class HazeField {
       blendEquation: THREE.AddEquation,
       blendSrc: THREE.OneFactor,
       blendDst: THREE.OneFactor,
-      uniforms: { scale: { value: 10 }, time: { value: 0 }, refDist: { value: 0 }, squash: { value: GROUND_SQUASH } },
+      uniforms: { time: { value: 0 }, squash: { value: GROUND_SQUASH } },
       vertexShader: /* glsl */ `
         attribute float size;
         attribute float strength;
         attribute float kind;
         attribute float prog;
         attribute float seed;
-        uniform float scale;
-        uniform float refDist;
+        ${POINT_SIZE_GLSL}
         varying float vS;
         varying float vK;
         varying float vSeed;
@@ -90,7 +90,7 @@ export class HazeField {
           vK = kind;
           vSeed = seed;
           vec4 mv = modelViewMatrix * vec4( position, 1.0 );
-          gl_PointSize = size * scale * ( refDist > 0.0 ? refDist / max( 0.1, -mv.z ) : 1.0 );
+          gl_PointSize = pointPx( size, mv );
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: /* glsl */ `
@@ -124,6 +124,7 @@ export class HazeField {
     });
     const pts = new THREE.Points(this.geo, this.mat);
     pts.frustumCulled = false;
+    bindViewHeight(pts, this.mat);
     this.scene.add(pts);
     this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: false });
   }
@@ -132,15 +133,12 @@ export class HazeField {
     return this.count;
   }
 
-  /** Pixels per world unit at full resolution (same as the particle point scale). */
-  setScale(s: number) {
-    this.mat.uniforms.scale.value = s * RES;
-  }
+  /** Back-compat no-op: point sizes come from the projection matrix (see POINT_SIZE_GLSL). */
+  setScale(_s: number) {}
 
   private dir = new THREE.Vector3();
   /** Perspective cameras: reference distance for sprite sizes; ground rings squash by the view elevation. */
-  setPerspective(refDist: number, camera: THREE.Camera | null) {
-    this.mat.uniforms.refDist.value = refDist;
+  setPerspective(_refDist: number, camera: THREE.Camera | null) {
     if (camera) this.mat.uniforms.squash.value = Math.max(0.2, Math.abs(camera.getWorldDirection(this.dir).y));
   }
 

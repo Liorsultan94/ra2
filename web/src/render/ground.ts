@@ -124,7 +124,11 @@ export class Ground {
         .replace('#include <normal_fragment_maps>', TERRAIN_NORMAL);
     };
     fog.apply(mat);
-    mat.customProgramCacheKey = () => 'terrain-splat-1';
+    // relief mapping steps: high 12, medium 5, low off (?pom=0 forces it off for comparisons)
+    const pomOff = typeof location !== 'undefined' && /[?&]pom=0\b/.test(location.search);
+    const pom = pomOff ? 0 : quality === 'high' ? 12 : quality === 'medium' ? 5 : 0;
+    mat.defines = { ...(mat.defines ?? {}), TERR_POM: pom };
+    mat.customProgramCacheKey = () => 'terrain-splat-2-' + pom;
     this.material = mat;
 
     // mesh: one height field (so normals are continuous), cut into chunks
@@ -476,7 +480,18 @@ uniform vec3 cLush, cDry, cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
 float wxPud;
+float terrPomAO = 0.0;
 vec2 wxHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
+#if TERR_POM > 0
+// depth (0 = top) of the soil / rock detail relief at tw, same blend as TERRAIN_MAP
+float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy) {
+  vec2 rw = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8);
+  vec2 a = textureGrad(detailTex, tw * 0.29, gAx, gAy).gb;
+  vec2 b = textureGrad(detailTex, rw * 0.113 + 0.31, gBx, gBy).gb;
+  vec2 d = clamp((a * 0.6 + b * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
+  return 1.0 - mix(d.x, d.y, rockW);
+}
+#endif
 `;
 
 const TERRAIN_MAP = /* glsl */ `
@@ -486,6 +501,45 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 spl = texture2D(splatTex, mUV);
   vec4 tnt = texture2D(tintTex, mUV);
   vec4 fld = texture2D(fieldTex, mUV);
+#if TERR_POM > 0
+  // relief mapping on soil / rock: march the view ray down into the detail
+  // height field (world xz = tangent plane; the ground is mostly flat) and
+  // shade the detail where it hits. Control maps stay at the true position.
+  {
+    float relief = (spl.r * 0.1 + spl.g * 0.26) * (1.0 - smoothstep(0.3, 0.7, fld.r));
+    if (relief > 0.004) {
+      vec3 V = normalize(cameraPosition - vTerrW);
+      vec2 dir = -V.xz / max(V.y, 0.3) * relief;
+      float rockW = spl.g / max(spl.r + spl.g, 1e-3);
+      vec2 gAx = dFdx(tw * 0.29);
+      vec2 gAy = dFdy(tw * 0.29);
+      vec2 rw0 = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8) * 0.113;
+      vec2 gBx = dFdx(rw0);
+      vec2 gBy = dFdy(rw0);
+      float stepD = 1.0 / float(TERR_POM);
+      float layer = 0.0;
+      float dPrev = 0.0;
+      float lPrev = 0.0;
+      float dCur = terrPomDepth(tw, rockW, gAx, gAy, gBx, gBy);
+      for (int i = 0; i < TERR_POM; i++) {
+        if (layer < dCur) {
+          lPrev = layer;
+          dPrev = dCur;
+          layer += stepD;
+          dCur = terrPomDepth(tw + dir * layer, rockW, gAx, gAy, gBx, gBy);
+        }
+      }
+      // linear refinement between the last two layers
+      float a = dCur - layer;
+      float b = dPrev - lPrev;
+      float t = clamp(a / min(a - b, -1e-4), 0.0, 1.0);
+      float hitD = mix(layer, lPrev, t);
+      tw += dir * hitD;
+      // cavities sit in their own shade
+      terrPomAO = hitD * 0.4 * clamp(relief * 9.0, 0.0, 1.0);
+    }
+  }
+#endif
   vec2 rw = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8);
   vec4 dA = texture2D(detailTex, tw * 0.29);
   vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
@@ -562,6 +616,9 @@ const TERRAIN_MAP = /* glsl */ `
     terrRough = mix(terrRough, 0.95, fMask);
   }
   col *= tnt.rgb * 2.0;
+#if TERR_POM > 0
+  col *= 1.0 - terrPomAO;
+#endif
   diffuseColor.rgb = col;
   // rain: puddles collect in low, muddy spots (flat, dark, mirror-like)
   wxPud = 0.0;

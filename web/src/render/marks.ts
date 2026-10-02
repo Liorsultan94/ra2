@@ -1,12 +1,57 @@
 import * as THREE from 'three';
-import { standHeight, type GameMap } from '../sim/map';
+import { Tile, standHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
+import { WX } from './wxuniforms';
 
 /*
  * Ground decals drawn as instanced quads that fade with age: tank tread
- * prints and tyre marks (~10 s), blast craters and scorch marks. Each decal is
- * tilted to the terrain normal so it hugs slopes.
+ * prints and tyre marks (~10 s), deep ruts on soft ground (mud, sand, dirt,
+ * snow; ~45 s), blast craters (~4.5 min) and burnt patches (~4 min). Each decal
+ * is tilted to the terrain normal so it hugs slopes. Ruts and craters carry a
+ * relief (normal) map lit by the sun, so berms and crater rims read embossed.
  */
+
+/** Tangent-space normal map from a height field (u along x, v along rows). */
+function reliefTex(n: number, height: (u: number, v: number) => number, strength: number): THREE.DataTexture {
+  const h = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) h[y * n + x] = height((x + 0.5) / n, (y + 0.5) / n);
+  const d = new Uint8Array(n * n * 4);
+  const at = (x: number, y: number) => h[Math.min(n - 1, Math.max(0, y)) * n + Math.min(n - 1, Math.max(0, x))];
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
+      const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
+      const l = Math.hypot(dx, dy, 1);
+      const o = (y * n + x) * 4;
+      d[o] = ((-dx / l) * 0.5 + 0.5) * 255;
+      d[o + 1] = ((-dy / l) * 0.5 + 0.5) * 255;
+      d[o + 2] = ((1 / l) * 0.5 + 0.5) * 255;
+      d[o + 3] = 255;
+    }
+  const t = new THREE.DataTexture(d, n, n);
+  t.magFilter = t.minFilter = THREE.LinearFilter;
+  t.wrapS = THREE.RepeatWrapping;
+  t.needsUpdate = true;
+  return t;
+}
+
+const gauss = (x: number, w: number) => Math.exp(-(x * x) / (w * w));
+const RELIEF = {
+  // a pressed groove with pushed-up berms either side and track-cleat bars along it
+  rut: () =>
+    reliefTex(64, (u, v) => {
+      const a = Math.abs(v - 0.5);
+      const cleat = (u * 4) % 1 < 0.45 ? -0.18 : 0;
+      return -gauss(a, 0.22) * (1 + cleat * gauss(a, 0.18)) + 0.55 * gauss(a - 0.41, 0.07);
+    }, 6),
+  // bowl with a raised rim
+  crater: () =>
+    reliefTex(128, (u, v) => {
+      const r = Math.hypot(u - 0.5, v - 0.5);
+      const bowl = r < 0.4 ? -(1 - (r / 0.4) * (r / 0.4)) : 0;
+      return bowl + 0.45 * gauss(r - 0.42, 0.07);
+    }, 14),
+};
 
 function canvasTex(size: number, draw: (ctx: CanvasRenderingContext2D, s: number) => void) {
   const c = document.createElement('canvas');
@@ -42,6 +87,23 @@ const TEX = {
       ctx.fillRect(0, 0, s, s);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
       for (let i = 0; i < 8; i++) ctx.fillRect(i * 8, 18, 3, s - 36);
+    }),
+  rut: () =>
+    canvasTex(64, (ctx, s) => {
+      ctx.clearRect(0, 0, s, s);
+      // dark wet groove, lighter churned berms
+      const g = ctx.createLinearGradient(0, 0, 0, s);
+      g.addColorStop(0, 'rgba(70,58,42,0)');
+      g.addColorStop(0.1, 'rgba(78,64,46,0.45)');
+      g.addColorStop(0.25, 'rgba(34,26,18,0.75)');
+      g.addColorStop(0.5, 'rgba(22,17,12,0.9)');
+      g.addColorStop(0.75, 'rgba(34,26,18,0.75)');
+      g.addColorStop(0.9, 'rgba(78,64,46,0.45)');
+      g.addColorStop(1, 'rgba(70,58,42,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      ctx.fillStyle = 'rgba(10,8,5,0.35)';
+      for (let i = 0; i < 4; i++) ctx.fillRect(i * 16 + 2, 18, 7, s - 36);
     }),
   crater: () =>
     canvasTex(128, (ctx, s) => {
@@ -101,6 +163,11 @@ const TEX = {
     }),
 };
 
+/** Sun direction (towards the sun, world space), shared by every relief decal. */
+const SUN = { value: new THREE.Vector3(-0.7, 0.6, 0.15).normalize() };
+/** Sun strength relative to daylight (0 at night .. 1): scales the relief highlights. */
+const SUN_K = { value: 1 };
+
 class DecalLayer {
   readonly mesh: THREE.InstancedMesh;
   private birth: Float32Array;
@@ -112,6 +179,8 @@ class DecalLayer {
   private q2 = new THREE.Quaternion();
   private up = new THREE.Vector3(0, 1, 0);
   private n = new THREE.Vector3();
+  private p = new THREE.Vector3();
+  private sc = new THREE.Vector3();
   readonly uniforms: { time: { value: number } };
 
   constructor(
@@ -121,6 +190,8 @@ class DecalLayer {
     opacity: number,
     fog: FogOfWar,
     order: number,
+    relief: THREE.Texture | null = null,
+    snowTint = false,
   ) {
     const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     this.birth = new Float32Array(max).fill(-1e6);
@@ -128,28 +199,43 @@ class DecalLayer {
     this.attr.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('aBirth', this.attr);
     this.uniforms = { time: { value: 0 } };
+    const defines: Record<string, number> = {};
+    if (relief) defines.RELIEF = 1;
+    if (snowTint) defines.SNOW_TINT = 1;
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -2 - order,
       polygonOffsetUnits: -2,
-      uniforms: { map: { value: tex }, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
+      defines,
+      uniforms: { map: { value: tex }, relief: { value: relief }, uSun: SUN, uSunK: SUN_K, wxSnow: WX.wxSnow, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
       vertexShader: /* glsl */ `
         attribute float aBirth;
         varying vec2 vUv;
         varying float vAge;
         varying vec2 vW;
+        varying vec3 vT;
+        varying vec3 vB;
+        varying vec3 vN;
         uniform float time;
         void main() {
           vUv = uv;
           vAge = time - aBirth;
+          mat3 m = mat3( modelMatrix * instanceMatrix );
+          vT = normalize( m * vec3( 1.0, 0.0, 0.0 ) );
+          vB = normalize( m * vec3( 0.0, 0.0, -1.0 ) );
+          vN = normalize( m * vec3( 0.0, 1.0, 0.0 ) );
           vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
           vW = wp.xz;
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: /* glsl */ `
         uniform sampler2D map;
+        uniform sampler2D relief;
+        uniform vec3 uSun;
+        uniform float uSunK;
+        uniform float wxSnow;
         uniform float life;
         uniform float opacity;
         uniform sampler2D fogTex;
@@ -158,13 +244,33 @@ class DecalLayer {
         varying vec2 vUv;
         varying float vAge;
         varying vec2 vW;
+        varying vec3 vT;
+        varying vec3 vB;
+        varying vec3 vN;
         void main() {
           float k = clamp(vAge / life, 0.0, 1.0);
           float fade = 1.0 - smoothstep(0.6, 1.0, k);
           vec4 t = texture2D(map, vUv);
+          #ifdef SNOW_TINT
+          // ruts in snow: blue-grey shadowed troughs instead of brown mud
+          t.rgb = mix( t.rgb, vec3( 0.32, 0.36, 0.44 ) * ( 0.6 + t.rgb * 2.0 ), wxSnow );
+          #endif
           float fogV = texture2D(fogTex, vW / fogSize).r;
           float f = mix(1.0, smoothstep(0.2, 0.6, fogV), fogEnabled);
-          gl_FragColor = vec4(t.rgb, t.a * opacity * fade * f);
+          float ta = t.a * opacity;
+          vec3 rgb = t.rgb;
+          #ifdef RELIEF
+          // embossed relief: light / shade relative to the flat ground, composited over the albedo
+          vec3 nm = texture2D( relief, vUv ).xyz * 2.0 - 1.0;
+          vec3 n = normalize( vT * nm.x + vB * nm.y + vN * nm.z );
+          float e = ( dot( n, uSun ) - dot( vN, uSun ) ) * 1.6;
+          float w = clamp( abs( e ), 0.0, 0.5 ) * ( e > 0.0 ? uSunK : 0.4 + 0.6 * uSunK );
+          vec3 target = e > 0.0 ? mix( vec3( 0.2, 0.16, 0.11 ), vec3( 0.6, 0.64, 0.7 ), wxSnow ) : vec3( 0.004, 0.003, 0.002 );
+          float ao = 1.0 - ( 1.0 - w ) * ( 1.0 - ta );
+          rgb = ( target * w + ( 1.0 - w ) * ta * t.rgb ) / max( ao, 1e-3 );
+          ta = ao * smoothstep( 0.0, 0.08, t.a + w * 0.2 );
+          #endif
+          gl_FragColor = vec4(rgb, ta * fade * f);
           if (gl_FragColor.a < 0.004) discard;
           #include <colorspace_fragment>
         }`,
@@ -189,11 +295,14 @@ class DecalLayer {
     this.q.setFromUnitVectors(this.up, this.n);
     this.q2.setFromAxisAngle(this.up, -angle);
     this.q.multiply(this.q2);
-    this.m4.compose(new THREE.Vector3(x, standHeight(map, cx, cz) + lift, z), this.q, new THREE.Vector3(length, 1, width));
+    this.m4.compose(this.p.set(x, standHeight(map, cx, cz) + lift, z), this.q, this.sc.set(length, 1, width));
     this.mesh.setMatrixAt(i, this.m4);
     this.birth[i] = time;
     this.mesh.count = this.used;
+    // upload only the touched instance
+    this.mesh.instanceMatrix.addUpdateRange(i * 16, 16);
     this.mesh.instanceMatrix.needsUpdate = true;
+    this.attr.addUpdateRange(i, 1);
     this.attr.needsUpdate = true;
   }
 }
@@ -202,8 +311,11 @@ export class GroundMarks {
   readonly group = new THREE.Group();
   private tread: DecalLayer;
   private tire: DecalLayer;
+  private rut: DecalLayer;
   private crater: DecalLayer;
   private scorch: DecalLayer;
+  /** Tiles under paved roads (the sim marks roads as dirt): no ruts there. */
+  private paved: Uint8Array;
   time = 0;
 
   constructor(
@@ -212,14 +324,47 @@ export class GroundMarks {
   ) {
     this.tread = new DecalLayer(TEX.tread(), 5000, 10, 0.55, fog, 0);
     this.tire = new DecalLayer(TEX.tire(), 3000, 10, 0.45, fog, 0);
-    this.scorch = new DecalLayer(TEX.scorch(), 200, 45, 0.9, fog, 1);
-    this.crater = new DecalLayer(TEX.crater(), 200, 60, 1, fog, 2);
-    for (const l of [this.tread, this.tire, this.scorch, this.crater]) this.group.add(l.mesh);
+    // soft ground keeps deep ruts much longer
+    this.rut = new DecalLayer(TEX.rut(), 9000, 45, 0.8, fog, 0, RELIEF.rut(), true);
+    // battle damage persists: burnt patches ~4 min, craters ~4.5 min
+    this.scorch = new DecalLayer(TEX.scorch(), 600, 240, 0.9, fog, 1);
+    this.crater = new DecalLayer(TEX.crater(), 600, 270, 1, fog, 2, RELIEF.crater());
+    for (const l of [this.tread, this.tire, this.rut, this.scorch, this.crater]) this.group.add(l.mesh);
+    this.paved = new Uint8Array(map.w * map.h);
+    for (const r of map.roads ?? [])
+      for (let k = 0; k < r.length - 1; k++) {
+        const ax = r[k].x + 0.5;
+        const az = r[k].y + 0.5;
+        const bx = r[k + 1].x + 0.5;
+        const bz = r[k + 1].y + 0.5;
+        const dx = bx - ax;
+        const dz = bz - az;
+        const L2 = Math.max(1e-6, dx * dx + dz * dz);
+        for (let y = Math.max(0, Math.floor(Math.min(az, bz) - 2)); y <= Math.min(map.h - 1, Math.ceil(Math.max(az, bz) + 2)); y++)
+          for (let x = Math.max(0, Math.floor(Math.min(ax, bx) - 2)); x <= Math.min(map.w - 1, Math.ceil(Math.max(ax, bx) + 2)); x++) {
+            const t = Math.max(0, Math.min(1, ((x + 0.5 - ax) * dx + (y + 0.5 - az) * dz) / L2));
+            if (Math.hypot(x + 0.5 - ax - dx * t, y + 0.5 - az - dz * t) < 1.2) this.paved[y * map.w + x] = 1;
+          }
+      }
   }
 
-  /** Track or tyre print segment under one track. */
+  /** Soft ground that takes deep ruts: dirt and sand always, grass when wet, anything but rock in snow. */
+  private soft(x: number, z: number) {
+    const m = this.map;
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h) return false;
+    if (this.paved[tz * m.w + tx]) return false;
+    const t = m.tiles[tz * m.w + tx];
+    if (t === Tile.Dirt || t === Tile.Sand) return true;
+    if (t === Tile.Grass) return WX.wxWet.value > 0 || WX.wxSnow.value > 0;
+    return false;
+  }
+
+  /** Track or tyre print segment under one track (a deep rut on soft ground). */
   print(x: number, z: number, angle: number, len: number, width: number, wheeled: boolean) {
-    (wheeled ? this.tire : this.tread).add(this.map, x, z, angle, len, width, this.time);
+    if (this.soft(x, z)) this.rut.add(this.map, x, z, angle, len, width * (wheeled ? 1.5 : 1.8), this.time, 0.014);
+    else (wheeled ? this.tire : this.tread).add(this.map, x, z, angle, len, width, this.time);
   }
 
   craterAt(x: number, z: number, r: number) {
@@ -230,8 +375,14 @@ export class GroundMarks {
     this.scorch.add(this.map, x, z, Math.random() * 6.28, r * 2, r * 2, this.time, 0.016);
   }
 
+  /** Sun direction (towards the sun) for the relief decals. */
+  setSun(dir: THREE.Vector3, strength = 1) {
+    SUN.value.copy(dir);
+    SUN_K.value = Math.max(0, Math.min(1, strength));
+  }
+
   update(dt: number) {
     this.time += dt;
-    for (const l of [this.tread, this.tire, this.crater, this.scorch]) l.uniforms.time.value = this.time;
+    for (const l of [this.tread, this.tire, this.rut, this.crater, this.scorch]) l.uniforms.time.value = this.time;
   }
 }

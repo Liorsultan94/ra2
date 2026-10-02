@@ -8,9 +8,12 @@ import { HazeField } from './fx/haze';
 import { FxLights } from './fx/lights';
 import { CameraShake } from './fx/shake';
 import { Tracers } from './fx/tracers';
+import { Fireballs } from './fx/fireball';
+import { GodRays } from './fx/godrays';
+import { GpuParticles, particleUniforms, type ParticleOpts } from './fx/gpuparticles';
 import type { GroundMarks } from './marks';
 
-const TMP_C = new THREE.Color();
+export type { ParticleOpts } from './fx/gpuparticles';
 
 function makeSpriteTexture(kind: 'glow' | 'smoke'): THREE.Texture {
   const s = kind === 'smoke' ? 128 : 64;
@@ -73,204 +76,6 @@ function makeSpriteTexture(kind: 'glow' | 'smoke'): THREE.Texture {
   return t;
 }
 
-export interface ParticleOpts {
-  x: number;
-  y: number;
-  z: number;
-  vx?: number;
-  vy?: number;
-  vz?: number;
-  life: number;
-  size: number;
-  sizeEnd?: number;
-  color: number;
-  colorEnd?: number;
-  alpha?: number;
-  drag?: number;
-  gravity?: number;
-  /** How strongly the global wind pushes the particle (acceleration factor, 0 = none). */
-  wind?: number;
-}
-
-class ParticleSystem {
-  readonly points: THREE.Points;
-  private pos: Float32Array;
-  private col: Float32Array;
-  private size: Float32Array;
-  private alpha: Float32Array;
-  private rot: Float32Array;
-  private vel: Float32Array;
-  private life: Float32Array;
-  private maxLife: Float32Array;
-  private s0: Float32Array;
-  private s1: Float32Array;
-  private c0: Float32Array;
-  private c1: Float32Array;
-  private a0: Float32Array;
-  private drag: Float32Array;
-  private grav: Float32Array;
-  private wind: Float32Array;
-  private count = 0;
-  private geo: THREE.BufferGeometry;
-  readonly material: THREE.ShaderMaterial;
-
-  constructor(
-    private max: number,
-    additive: boolean,
-    fog: FogOfWar,
-  ) {
-    this.pos = new Float32Array(max * 3);
-    this.col = new Float32Array(max * 3);
-    this.size = new Float32Array(max);
-    this.alpha = new Float32Array(max);
-    this.rot = new Float32Array(max);
-    this.vel = new Float32Array(max * 3);
-    this.life = new Float32Array(max);
-    this.maxLife = new Float32Array(max);
-    this.s0 = new Float32Array(max);
-    this.s1 = new Float32Array(max);
-    this.c0 = new Float32Array(max * 3);
-    this.c1 = new Float32Array(max * 3);
-    this.a0 = new Float32Array(max);
-    this.drag = new Float32Array(max);
-    this.grav = new Float32Array(max);
-    this.wind = new Float32Array(max);
-    this.geo = new THREE.BufferGeometry();
-    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('size', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('alpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
-    this.geo.setAttribute('rot', new THREE.BufferAttribute(this.rot, 1).setUsage(THREE.DynamicDrawUsage));
-    this.material = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-      uniforms: {
-        tex: { value: makeSpriteTexture(additive ? 'glow' : 'smoke') },
-        scale: { value: 30 },
-        refDist: { value: 0 },
-        ...fog.uniforms,
-      },
-      vertexShader: /* glsl */ `
-        attribute float size;
-        attribute float alpha;
-        attribute float rot;
-        attribute vec3 color;
-        varying float vRot;
-        uniform float scale;
-        uniform float refDist; // perspective camera: distance at which scale applies (0 = orthographic)
-        uniform sampler2D fogTex;
-        uniform vec2 fogSize;
-        uniform float fogEnabled;
-        varying vec3 vColor;
-        varying float vAlpha;
-        void main() {
-          vColor = color;
-          vRot = rot;
-          float fogV = texture2D(fogTex, position.xz / fogSize).r;
-          vAlpha = alpha * mix(1.0, smoothstep(0.55, 0.85, fogV), fogEnabled);
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = size * scale * ( refDist > 0.0 ? refDist / max( 0.1, -mv.z ) : 1.0 );
-          gl_Position = projectionMatrix * mv;
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform sampler2D tex;
-        varying vec3 vColor;
-        varying float vAlpha;
-        varying float vRot;
-        void main() {
-          vec2 c = gl_PointCoord - 0.5;
-          float cs = cos(vRot);
-          float sn = sin(vRot);
-          vec2 uv = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs) + 0.5;
-          vec4 t = texture2D(tex, uv);
-          gl_FragColor = vec4(vColor * t.rgb, t.a * vAlpha);
-        }`,
-    });
-    this.points = new THREE.Points(this.geo, this.material);
-    this.points.frustumCulled = false;
-    this.points.renderOrder = additive ? 3 : 2;
-  }
-
-  spawn(o: ParticleOpts) {
-    if (this.count >= this.max) return;
-    const i = this.count++;
-    const i3 = i * 3;
-    this.pos[i3] = o.x;
-    this.pos[i3 + 1] = o.y;
-    this.pos[i3 + 2] = o.z;
-    this.vel[i3] = o.vx ?? 0;
-    this.vel[i3 + 1] = o.vy ?? 0;
-    this.vel[i3 + 2] = o.vz ?? 0;
-    this.life[i] = 0;
-    this.maxLife[i] = o.life;
-    this.s0[i] = o.size;
-    this.s1[i] = o.sizeEnd ?? o.size;
-    this.size[i] = 0;
-    this.alpha[i] = 0;
-    TMP_C.setHex(o.color);
-    this.c0[i3] = TMP_C.r;
-    this.c0[i3 + 1] = TMP_C.g;
-    this.c0[i3 + 2] = TMP_C.b;
-    if (o.colorEnd !== undefined) TMP_C.setHex(o.colorEnd);
-    this.c1[i3] = TMP_C.r;
-    this.c1[i3 + 1] = TMP_C.g;
-    this.c1[i3 + 2] = TMP_C.b;
-    this.a0[i] = o.alpha ?? 1;
-    this.rot[i] = Math.random() * 6.283;
-    this.drag[i] = o.drag ?? 0;
-    this.grav[i] = o.gravity ?? 0;
-    this.wind[i] = o.wind ?? 0;
-  }
-
-  update(dt: number, wx = 0, wz = 0) {
-    let i = 0;
-    while (i < this.count) {
-      this.life[i] += dt;
-      if (this.life[i] >= this.maxLife[i]) {
-        this.kill(i);
-        continue;
-      }
-      const t = this.life[i] / this.maxLife[i];
-      const k = Math.max(0, 1 - this.drag[i] * dt);
-      const wk = this.wind[i] * dt;
-      this.vel[i * 3] = this.vel[i * 3] * k + wx * wk;
-      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * k - this.grav[i] * dt;
-      this.vel[i * 3 + 2] = this.vel[i * 3 + 2] * k + wz * wk;
-      this.pos[i * 3] += this.vel[i * 3] * dt;
-      this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
-      this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      this.size[i] = this.s0[i] + (this.s1[i] - this.s0[i]) * t;
-      for (let c = 0; c < 3; c++) this.col[i * 3 + c] = this.c0[i * 3 + c] + (this.c1[i * 3 + c] - this.c0[i * 3 + c]) * t;
-      this.alpha[i] = this.a0[i] * (t < 0.1 ? t * 10 : 1 - (t - 0.1) / 0.9);
-      i++;
-    }
-    this.geo.setDrawRange(0, this.count);
-    for (const a of ATTRS) (this.geo.attributes[a] as THREE.BufferAttribute).needsUpdate = true;
-  }
-
-  private ones: Float32Array[] | null = null;
-  private threes: Float32Array[] | null = null;
-  private kill(i: number) {
-    const j = --this.count;
-    if (i === j) return;
-    const threes = (this.threes ??= [this.pos, this.vel, this.col, this.c0, this.c1]);
-    const ones = (this.ones ??= [this.size, this.alpha, this.rot, this.life, this.maxLife, this.s0, this.s1, this.a0, this.drag, this.grav, this.wind]);
-    for (const a of threes) a.copyWithin(i * 3, j * 3, j * 3 + 3);
-    for (const a of ones) a[i] = a[j];
-  }
-
-  get capacity() {
-    return this.max;
-  }
-
-  get active() {
-    return this.count;
-  }
-}
-
-const ATTRS = ['position', 'color', 'size', 'alpha', 'rot'];
-
 interface Timed {
   obj: THREE.Object3D;
   mat: THREE.Material & { opacity: number };
@@ -322,8 +127,19 @@ export const BLASTS: Record<string, BlastProfile> = {
 
 export class Effects {
   readonly group = new THREE.Group();
-  readonly fire: ParticleSystem;
-  readonly smokeSys: ParticleSystem;
+  readonly fire: GpuParticles;
+  readonly smokeSys: GpuParticles;
+  /** Uniforms shared by the particle shaders (clock, wind, sun, camera, fire lights). */
+  readonly pu = particleUniforms();
+  /** Volumetric-looking 3D fireballs (high quality only). */
+  readonly fireballs: Fireballs | null = null;
+  /** Crepuscular light shafts through smoke (high quality, post chain only; see enableGodRays). */
+  godRays: GodRays | null = null;
+  private sun: THREE.DirectionalLight | null = null;
+  private hemi: THREE.HemisphereLight | null = null;
+  private heightTex: THREE.DataTexture | null = null;
+  private fog: FogOfWar;
+  private smokeTex: THREE.Texture;
   /** Dynamic light pool + ground light pools (see fx/lights.ts). */
   readonly lights: FxLights;
   /** Camera shake; the camera reads `shakeOffset()` every frame. */
@@ -355,9 +171,14 @@ export class Effects {
     fog: FogOfWar,
     private quality: 'low' | 'medium' | 'high',
   ) {
-    const mult = quality === 'low' ? 0.4 : quality === 'medium' ? 0.7 : 1;
-    this.fire = new ParticleSystem(Math.floor(9000 * mult), true, fog);
-    this.smokeSys = new ParticleSystem(Math.floor(12000 * mult), false, fog);
+    // GPU particles cost the CPU nothing per live particle: caps are generous (fill rate is the real limit)
+    this.fog = fog;
+    this.smokeTex = makeSpriteTexture('smoke');
+    const fireCap = quality === 'low' ? 5000 : quality === 'medium' ? 12000 : 18000;
+    const smokeCap = quality === 'low' ? 7000 : quality === 'medium' ? 18000 : 28000;
+    this.fire = new GpuParticles(fireCap, true, fog, makeSpriteTexture('glow'), this.pu);
+    this.smokeSys = new GpuParticles(smokeCap, false, fog, this.smokeTex, this.pu);
+    if (quality === 'high') this.fireballs = new Fireballs(this.group, fog, 12);
     this.lights = new FxLights(quality, fog);
     this.lights.heightAt = (x, z) => this.groundAt(x, z);
     this.tracers = new Tracers(quality === 'low' ? 64 : 160);
@@ -382,6 +203,75 @@ export class Effects {
     return this.haze;
   }
 
+  /** Turn on crepuscular light shafts (high quality only); hand the result to the final post pass. */
+  enableGodRays(camera: THREE.Camera): GodRays | null {
+    if (this.quality !== 'high') return null;
+    this.godRays ??= new GodRays(camera, this.smokeSys.densityPoints(this.smokeTex, this.pu, this.fog));
+    return this.godRays;
+  }
+
+  /** The scene's sun and sky light: smoke shading and god rays follow them (time of day, weather). */
+  setLights(sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight) {
+    this.sun = sun;
+    this.hemi = hemi;
+  }
+
+  /** Terrain height texture for soft particles (built once the map is known). */
+  private buildHeightTex() {
+    const m = this.map;
+    if (!m || this.heightTex) return;
+    const W = m.w + 1;
+    const H = m.h + 1;
+    const data = new Uint16Array(W * H);
+    for (let z = 0; z < H; z++)
+      for (let x = 0; x < W; x++) {
+        data[z * W + x] = THREE.DataUtils.toHalfFloat(Math.max(-0.25, m.heights[z * W + x] ?? 0));
+      }
+    const t = new THREE.DataTexture(data, W, H, THREE.RedFormat, THREE.HalfFloatType);
+    t.magFilter = t.minFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    this.heightTex = t;
+    this.pu.heightTex.value = t;
+    this.pu.heightSize.value.set(W, H);
+    this.pu.heightOn.value = 1;
+  }
+
+  private sunV = new THREE.Vector3();
+  private col = new THREE.Color();
+  /** Per frame: sun / sky colour, camera axes, fire lights and wind for the particle shaders. */
+  private updateShading() {
+    const u = this.pu;
+    u.uTime.value = this.time;
+    u.uWind.value.set(this.wind.x, this.wind.z);
+    const sun = this.sun;
+    let day = 1;
+    if (sun) {
+      const d = this.sunV.copy(sun.position).sub(sun.target.position);
+      if (d.lengthSq() > 1e-6) u.uSunDir.value.copy(d.normalize());
+      // normalised to the daytime key light; desaturated a little so smoke is not orange at noon
+      const c = this.col.copy(sun.color);
+      const l = c.r * 0.3 + c.g * 0.59 + c.b * 0.11;
+      const k = sun.intensity / 3.2;
+      u.uSunCol.value.set((l + (c.r - l) * 0.6) * k, (l + (c.g - l) * 0.6) * k, (l + (c.b - l) * 0.6) * k);
+      day = THREE.MathUtils.smoothstep(sun.intensity * l, 0.7, 1.6);
+    }
+    if (this.hemi) {
+      const c = this.hemi.color;
+      const k = (this.hemi.intensity / 0.8) * 0.42;
+      u.uAmbCol.value.set(c.r * k, c.g * k, c.b * k);
+    }
+    const cam = this.camera;
+    if (cam) {
+      const e = cam.matrixWorld.elements;
+      u.uCamRight.value.set(e[0], e[1], e[2]).normalize();
+      u.uCamUp.value.set(e[4], e[5], e[6]).normalize();
+      u.uCamBack.value.set(e[8], e[9], e[10]).normalize();
+    }
+    this.lights.strongest(u.uFireP.value, u.uFireC.value);
+    this.marks?.setSun(u.uSunDir.value, Math.min(1, u.uSunCol.value.x * 0.3 + u.uSunCol.value.y * 0.59 + u.uSunCol.value.z * 0.11) * day);
+    this.godRays?.setSun(u.uSunDir.value, u.uSunCol.value, day);
+  }
+
   /** Point the dynamic lights and the camera shake at the view centre (the camera target; kept by reference). */
   setView(v: THREE.Vector3, camera?: THREE.Camera) {
     this.lights.view = v;
@@ -390,14 +280,9 @@ export class Effects {
   }
   private camera: THREE.Camera | null = null;
 
-  /** Perspective cameras: point sprites are sized for the view-centre distance and scaled by depth. */
+  /** Point sprites size themselves from the projection matrix per particle; haze rings still squash by the view elevation. */
   private updatePerspective() {
-    const c = this.camera as THREE.PerspectiveCamera | null;
-    const v = this.lights.view;
-    const ref = c && c.isPerspectiveCamera && v ? c.position.distanceTo(v) : 0;
-    this.fire.material.uniforms.refDist.value = ref;
-    this.smokeSys.material.uniforms.refDist.value = ref;
-    this.haze?.setPerspective(ref, this.camera);
+    this.haze?.setPerspective(0, this.camera);
   }
 
   /** Add camera shake (0.03 small .. 0.45 huge), attenuated by distance to the view centre when a position is given. */
@@ -415,11 +300,8 @@ export class Effects {
     return this.shaker.trauma;
   }
 
-  setPointScale(s: number) {
-    this.fire.material.uniforms.scale.value = s;
-    this.smokeSys.material.uniforms.scale.value = s;
-    this.haze?.setScale(s);
-  }
+  /** Back-compat no-op: point sprites take their pixel size from the projection matrix and the target height. */
+  setPointScale(_s: number) {}
 
   private rand(a: number, b: number) {
     return a + Math.random() * (b - a);
@@ -472,11 +354,11 @@ export class Effects {
 
   /** Emission rate multiplier for continuous emitters (quality x adaptive budget). */
   get rate() {
-    return (this.quality === 'low' ? 0.5 : this.quality === 'medium' ? 0.75 : 1) * this.budget;
+    return (this.quality === 'low' ? 0.5 : this.quality === 'medium' ? 0.9 : 1) * this.budget;
   }
 
   private q(n: number) {
-    return Math.max(1, Math.round(n * (this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.75 : 1) * this.budget));
+    return Math.max(1, Math.round(n * (this.quality === 'low' ? 0.45 : this.quality === 'medium' ? 0.9 : 1) * this.budget));
   }
 
   // --------------------------------------------------------------- blasts
@@ -505,7 +387,8 @@ export class Effects {
       this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.08 + 0.03 * S, size: 1.0 * S, sizeEnd: 1.6 * S, color: 0xfff2d8, colorEnd: pal.hot, alpha: 0.55 });
       this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.2 });
     }
-    // 2. fireball: expanding, rising, cooling puffs
+    // 2. fireball: expanding, rising, cooling puffs (+ a volumetric 3D fireball on high quality)
+    if (this.fireballs && S >= 0.9 && p.fire >= 0.8 && p.fireColor !== 'laser') this.fireballs.spawn(x, airborne ? y : Math.max(y, ground), z, S * Math.min(1.1, Math.sqrt(p.fire)), thermo ? 'thermo' : p.fireColor === 'white' ? 'white' : 'normal', airborne);
     const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S)));
     for (let i = 0; i < nFire; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -566,12 +449,13 @@ export class Effects {
         drag: 1.4,
         gravity: -0.15,
         wind: 0.5,
+        glow: p.fire > 0 ? Math.min(0.8, 0.35 + 0.2 * p.fire) : 0,
       });
     }
     if (p.column) {
       const n = this.q(Math.round(6 * S));
       for (let i = 0; i < n; i++)
-        this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15) * S, y: y + 0.3 * S + i * 0.18 * S, z: z + this.rand(-0.15, 0.15) * S, vx: 0.05, vy: this.rand(1.2, 2.2) * S * 0.6, vz: -0.03, life: this.rand(4, 7), size: 0.5 * S, sizeEnd: 2.4 * S, color: 0x221e1b, colorEnd: 0x5e5852, alpha: 0.55, drag: 0.6, gravity: -0.05, wind: 0.9 });
+        this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15) * S, y: y + 0.3 * S + i * 0.18 * S, z: z + this.rand(-0.15, 0.15) * S, vx: 0.05, vy: this.rand(1.2, 2.2) * S * 0.6, vz: -0.03, life: this.rand(4, 7), size: 0.5 * S, sizeEnd: 2.4 * S, color: 0x221e1b, colorEnd: 0x5e5852, alpha: 0.55, drag: 0.6, gravity: -0.05, wind: 0.9, glow: i < 2 ? 0.5 : 0.2 });
     }
     // 6. ground shockwave: fast radial dust ring + visible ring
     if (!airborne && p.ring > 0) {
@@ -1098,6 +982,9 @@ export class Effects {
 
   update(dt: number) {
     this.time += dt;
+    this.fire.clock(this.time);
+    this.smokeSys.clock(this.time);
+    if (!this.heightTex) this.buildHeightTex();
     // slowly veering wind
     const wa = -0.55 + Math.sin(this.time * 0.031) * 0.5 + Math.sin(this.time * 0.013 + 1) * 0.3;
     const ws = 0.32 + 0.08 * Math.sin(this.time * 0.07);
@@ -1119,8 +1006,7 @@ export class Effects {
     }
     this.flyers.update(dt);
     this.grass?.update(dt);
-    this.fire.update(dt, this.wind.x, this.wind.z);
-    this.smokeSys.update(dt, this.wind.x, this.wind.z);
+    this.fireballs?.update(dt);
     this.tracers.update(dt);
     this.haze?.update(dt);
     this.debris?.update(dt);
@@ -1128,6 +1014,9 @@ export class Effects {
     this.shaker.update(dt);
     this.lights.update(dt);
     this.updatePerspective();
+    this.updateShading();
+    this.fire.flush();
+    this.smokeSys.flush();
     for (let i = this.timed.length - 1; i >= 0; i--) {
       const t = this.timed[i];
       t.life += dt;
@@ -1158,6 +1047,7 @@ export class Effects {
       tracers: this.tracers.active,
       flyers: this.flyers.active,
       grassFires: this.grass?.active ?? 0,
+      fireballs: this.fireballs?.active ?? 0,
       trauma: Math.round(this.shaker.trauma * 100) / 100,
     };
   }

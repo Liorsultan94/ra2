@@ -37,6 +37,8 @@ export function entityZ(w: World, e: Entity): number {
   if (e.kind === 'building') return g + 0.45;
   const d = unitDef(e.def);
   if (d.air) return Math.max(g, 0) + e.z;
+  // under canopy (airborne drop)
+  if (e.para) return Math.max(g, 0) + e.z + 0.15;
   return g + (d.category === 'infantry' ? 0.15 : 0.3);
 }
 

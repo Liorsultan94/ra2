@@ -7,6 +7,8 @@ import { World } from '../sim/world';
 import { CameoFactory } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality } from '../render/renderer';
+import { ViewModes } from '../render/viewmodes';
+import { warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
 
 export interface GameOptions {
@@ -18,6 +20,10 @@ export interface GameOptions {
   attract?: boolean; // AI vs AI demo behind the main menu
   cinematic?: boolean; // slow-motion camera moments on big events (default on)
   seed?: number;
+  /** Drone camera picture-in-picture (default auto). */
+  droneCam?: 'auto' | 'off';
+  /** X-ray silhouettes of hidden units (default on). */
+  xray?: boolean;
 }
 
 export interface GameCallbacks {
@@ -59,6 +65,12 @@ export class Game {
   private disposers: (() => void)[] = [];
   readonly cine = new CinematicDirector();
   private mmFrame = 0;
+  /** Thermal view, x-ray silhouettes and the drone camera (src/render/viewmodes.ts). */
+  readonly modes: ViewModes;
+  private warming = false;
+  /** Shader warm-up stats (null until it has run, or when skipped). */
+  warmup: WarmupResult | null = null;
+  private thermalBtn: HTMLButtonElement | null = null;
 
   constructor(
     container: HTMLElement,
@@ -97,6 +109,26 @@ export class Game {
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
     this.renderer.atmos.onThunder = (v) => this.audio.play('explosionLarge', v * 0.55);
+    this.modes = new ViewModes(this.renderer, attract ? null : this.hud.viewWrap, (x, y) => {
+      if (this.cine.active) this.cine.skip();
+      this.renderer.centerOn(x, y);
+    });
+    this.renderer.viewHook = this.modes;
+    this.modes.xray = opts.xray ?? true;
+    this.modes.drone?.setMode(opts.droneCam ?? 'auto');
+    this.hud.keepClear = () => this.modes.drone?.overlayRect() ?? null;
+    if (!attract) {
+      this.thermalBtn = this.hud.addViewButton(
+        'Thermal view (T)',
+        '<path d="M12 2a3 3 0 0 0-3 3v8.1a5 5 0 1 0 6 0V5a3 3 0 0 0-3-3zm0 2a1 1 0 0 1 1 1v9.1l.4.3a3 3 0 1 1-2.8 0l.4-.3V5a1 1 0 0 1 1-1zm-1 6v5.3a2 2 0 1 0 2 0V10z"/>',
+        () => this.modes.cycleThermal(),
+      );
+      this.thermalBtn.classList.add('vc-thermal');
+      this.modes.onChange = () => {
+        this.thermalBtn?.classList.toggle('on', this.modes.thermal);
+        this.thermalBtn?.classList.toggle('black', this.modes.thermal && this.modes.polarity === 'black');
+      };
+    }
     if (attract) {
       this.renderer.centerOn(this.world.map.w / 2, this.world.map.h / 2);
     } else {
@@ -123,6 +155,32 @@ export class Game {
     this.renderer.setZoom(this.renderer.defaultZoom(attract));
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+    if (!attract && !/[?&]warm=0\b/.test(location.search)) this.startWarmup();
+  }
+
+  /** Compile every shader / material of this match under a loading overlay before the first battle frame. */
+  private startWarmup() {
+    this.warming = true;
+    this.hud.setLoading(0);
+    const factions = [...new Set(this.world.players.map((p) => p.faction))];
+    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && this.hud.setLoading(k))
+      .then((res) => {
+        this.warmup = res;
+        console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms`);
+      })
+      .catch((e) => console.warn('[warmup] failed', e))
+      .finally(() => {
+        if (this.destroyed) return;
+        this.warming = false;
+        this.hud.setLoading(null);
+        this.last = performance.now();
+      });
+  }
+
+  /** Settings that can change mid-battle (pause menu). */
+  setViewSettings(s: { droneCam?: 'auto' | 'off'; xray?: boolean }) {
+    if (s.droneCam) this.modes.drone?.setMode(s.droneCam);
+    if (s.xray !== undefined) this.modes.xray = s.xray;
   }
 
   private resize() {
@@ -140,6 +198,7 @@ export class Game {
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
+    if (this.warming) return;
     if (this.cine.active) this.cine.update(dt, this.renderer);
     this.hud.setCinematic(this.cine.active);
     const ts = this.cine.timeScale;
@@ -293,6 +352,7 @@ export class Game {
 
   private onEvent(ev: SimEvent) {
     this.renderer.handleEvent(ev);
+    this.modes.onEvent(ev);
     if (ev.t === 'launch' || ev.t === 'airburst' || ev.t === 'impact') this.considerCinematic(ev);
     const mine = 'owner' in ev && ev.owner === this.local;
     switch (ev.t) {
@@ -1006,6 +1066,13 @@ export class Game {
       case 'q':
         this.rotateView(-1);
         break;
+      case 't':
+        this.modes.cycleThermal();
+        break;
+      case 'n':
+        // atmos toggles night vision on N; thermal and night vision are exclusive
+        this.modes.syncNightVision();
+        break;
       case 'e':
         this.rotateView(1);
         break;
@@ -1051,6 +1118,8 @@ export class Game {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     for (const d of this.disposers) d();
+    this.renderer.viewHook = null;
+    this.modes.dispose();
     this.renderer.dispose();
     this.cameos.dispose();
     this.hud.destroy();

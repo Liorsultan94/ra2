@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
+import { Tile, groundHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { SceneryLod } from './geo';
 import { Ground } from './ground';
@@ -8,7 +8,7 @@ import { Resources } from './resources';
 import { buildRocks } from './rocks';
 import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
-import { WX, WX_PARS } from './wxuniforms';
+import { buildWater, type WaterReflection } from './water';
 
 /*
  * The battlefield landscape: splat-shaded ground, river, vegetation, rocks,
@@ -26,6 +26,8 @@ export class Terrain {
   private camera: THREE.Camera | null = null;
   /** River shader (weather / time of day tint its light via wxLight / wxSpec). */
   waterMat!: THREE.ShaderMaterial;
+  /** Planar water reflection (high quality only). */
+  reflection: WaterReflection | null = null;
   private resources: Resources;
   readonly minimapImage: HTMLCanvasElement;
   /** Instanced plants, fences and village houses, for render-side environment damage. */
@@ -47,6 +49,8 @@ export class Terrain {
     const lod = new SceneryLod();
     this.lod = lod;
     const onBefore = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+      // the mirrored water reflection camera must not drive LOD / culling
+      if (cam.userData.waterReflection) return;
       this.camera = cam;
       const oc = cam as THREE.OrthographicCamera;
       if (oc.isOrthographicCamera) lod.update((oc.top - oc.bottom) / oc.zoom);
@@ -59,7 +63,7 @@ export class Terrain {
     skirt.position.set(map.w / 2, -2, map.h / 2);
     skirt.name = 'skirt';
     this.group.add(skirt);
-    this.buildWater();
+    this.buildWater(quality);
     for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(o);
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(o);
     for (const o of buildScenery(map, this.layout, fog, quality, this.scenery)) this.group.add(o);
@@ -69,101 +73,20 @@ export class Terrain {
     console.info(`terrain built in ${Math.round(performance.now() - t0)} ms`);
   }
 
-  private buildWater() {
-    const m = this.map;
-    // height texture so the shader knows the depth
-    const hw = m.w + 1;
-    const hh = m.h + 1;
-    const data = new Uint8Array(hw * hh);
-    for (let i = 0; i < hw * hh; i++) data[i] = Math.max(0, Math.min(255, ((m.heights[i] + 1.5) / 4.5) * 255));
-    const htex = new THREE.DataTexture(data, hw, hh, THREE.RedFormat, THREE.UnsignedByteType);
-    htex.magFilter = htex.minFilter = THREE.LinearFilter;
-    htex.needsUpdate = true;
-    this.waterMat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      uniforms: {
-        time: { value: 0 },
-        heightTex: { value: htex },
-        mapSize: { value: new THREE.Vector2(m.w, m.h) },
-        sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
-        waterLevel: { value: WATER_LEVEL },
-        wxLight: { value: new THREE.Vector3(1, 1, 1) },
-        wxSpec: { value: 1 },
-        ...this.fog.uniforms,
-        ...WX,
-      },
-      vertexShader: /* glsl */ `
-        varying vec3 vWorld;
-        void main() {
-          vec4 wp = modelMatrix * vec4(position, 1.0);
-          vWorld = wp.xyz;
-          gl_Position = projectionMatrix * viewMatrix * wp;
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform float time;
-        uniform sampler2D heightTex;
-        uniform vec2 mapSize;
-        uniform vec3 sunDir;
-        uniform float waterLevel;
-        uniform vec3 wxLight;
-        uniform float wxSpec;
-        ${WX_PARS}
-        uniform sampler2D fogTex;
-        uniform vec2 fogSize;
-        uniform float fogEnabled;
-        varying vec3 vWorld;
-        float wave(vec2 p, vec2 d, float f, float s) { return sin(dot(p, d) * f + time * s); }
-        void main() {
-          vec2 p = vWorld.xz;
-          float ground = texture2D(heightTex, (p + 0.5) / (mapSize + 1.0)).r * 4.5 - 1.5;
-          float depth = clamp((waterLevel - ground) / 0.7, 0.0, 1.0);
-          if (depth <= 0.0) discard;
-          // analytic wave normal from a few directional sines
-          vec2 g = vec2(0.0);
-          g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 3.1 + time * 1.4) * 0.05;
-          g += vec2(-0.4, 0.9) * cos(dot(p, vec2(-0.4, 0.9)) * 5.3 + time * 1.9) * 0.03;
-          g += vec2(0.95, -0.3) * cos(dot(p, vec2(0.95, -0.3)) * 8.7 + time * 2.6) * 0.02;
-          if (wxWet > 0.001) {
-            // rain: rings from drops on the surface
-            vec2 rp = p / 0.5;
-            vec2 ci = floor(rp);
-            vec2 h = fract(sin(vec2(dot(ci, vec2(127.1, 311.7)), dot(ci, vec2(269.5, 183.3)))) * 43758.5453);
-            vec2 o = rp - (ci + 0.2 + h * 0.6);
-            float ph = fract(wxTime * 0.9 + h.x * 7.3);
-            float d = length(o) - ph * 0.5;
-            g += normalize(o + 1e-4) * sin(d * 40.0) * exp(-abs(d) * 14.0) * (1.0 - ph) * 0.12 * wxWet;
-          }
-          vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
-          vec3 viewDir = normalize(cameraPosition - vWorld);
-          float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-          // a lowland river: green-brown in the shallows, dark slate in the channel
-          // (linear colours: these come out roughly as sRGB #2a3e3c .. #1a2c30)
-          vec3 deep = vec3(0.018, 0.045, 0.052);
-          vec3 shallow = vec3(0.07, 0.1, 0.075);
-          vec3 col = mix(shallow, deep, smoothstep(0.0, 0.8, depth));
-          col = mix(col, vec3(0.22, 0.28, 0.33), fres * 0.6);
-          col *= wxLight;
-          float spec = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 80.0);
-          col += vec3(1.0, 0.95, 0.85) * spec * 1.6 * wxSpec;
-          float foam = smoothstep(0.22, 0.0, depth) * (0.55 + 0.45 * sin(time * 2.0 + p.x * 4.0 + p.y * 3.0));
-          col = mix(col, vec3(0.85, 0.9, 0.9) * wxLight, foam * 0.7);
-          float fogV = texture2D(fogTex, p / fogSize).r;
-          float fogK = fogV < 0.5 ? fogV * 0.9 : 0.45 + (fogV - 0.5) * 1.1;
-          col *= mix(1.0, fogK, fogEnabled);
-          gl_FragColor = vec4(col, mix(0.55, 0.9, depth) + foam * 0.2);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
-        }`,
-    });
-    const geo = new THREE.PlaneGeometry(m.w, m.h, 1, 1);
-    geo.rotateX(-Math.PI / 2);
-    // shared smoky shroud / haze instead of the plain darkening above
-    this.fog.upgradeShader(this.waterMat);
-    this.water = new THREE.Mesh(geo, this.waterMat);
-    this.water.position.set(m.w / 2, WATER_LEVEL, m.h / 2);
-    this.water.renderOrder = 1;
-    this.group.add(this.water);
+  private buildWater(quality: 'low' | 'medium' | 'high') {
+    const w = buildWater(this.map, this.fog, quality);
+    this.water = w.mesh;
+    this.waterMat = w.material;
+    this.reflection = w.reflection;
+    this.group.add(w.mesh);
+  }
+
+  /**
+   * Quality ladder hook (0 = best rung .. 1 = worst): the planar water
+   * reflection (high only) switches off once the governor is half way down.
+   */
+  setLadder(f: number) {
+    if (this.reflection) this.reflection.enabled = f < 0.5;
   }
 
   private buildMinimap(): HTMLCanvasElement {
@@ -222,6 +145,7 @@ export class Terrain {
     // cull the scatter to last frame's view (the margin covers the lag)
     if (this.camera) this.lod.cull(this.camera);
     this.waterMat.uniforms.time.value = time;
+    this.reflection?.tick();
     windTime.value = time;
     this.resources.animate(time);
   }

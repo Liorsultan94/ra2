@@ -255,6 +255,24 @@ const MUNITIONS: Record<string, UnitTpl> = {
   shahed: { name: 'Loitering Munition', category: 'air', model: 'shahed', cost: 0, buildTime: 1, hp: 70, armor: 'aircraft', sight: 4, speed: 2.6, turnRate: 0.2, turret: false, radius: 0.25, air: true, kamikaze: true, temp: true, weapon: 'shahedWarhead', prereq: [], buildable: false, desc: '' },
 };
 
+/**
+ * Airborne-drop support power: the transport each nation flies the stick in with (real types in service).
+ * Model keys map to the procedural airframes in render/models/aircraft.ts.
+ */
+export const TRANSPORTS: Record<Faction, { name: string; model: string }> = {
+  usa: { name: 'C-17A Globemaster III', model: 'tr_c17' },
+  israel: { name: 'C-130J Shimshon', model: 'tr_c130j' },
+  china: { name: 'Y-20 Kunpeng', model: 'tr_y20' },
+  russia: { name: 'Il-76MD', model: 'tr_il76' },
+  germany: { name: 'A400M Atlas', model: 'tr_a400m' },
+  korea: { name: 'C-130J-30 Super Hercules', model: 'tr_c130j' },
+  ukraine: { name: 'An-26', model: 'tr_an26' },
+  turkey: { name: 'A400M Atlas', model: 'tr_a400m' },
+  iran: { name: 'C-130H Hercules', model: 'tr_c130h' },
+};
+
+const TRANSPORT_TPL: UnitTpl = { name: 'Transport', category: 'air', model: 'tr_c130j', cost: 0, buildTime: 1, hp: 900, armor: 'aircraft', sight: 6, speed: 3.6, turnRate: 0.05, turret: false, radius: 0.9, air: true, fixedWing: true, airlift: true, cruiseAlt: 3.2, prereq: [], buildable: false, desc: 'Airborne-drop transport.' };
+
 /** Per-faction overrides of the shared roster and signature additions. Real-world equipment names. */
 type UnitOverride = Partial<UnitTpl> & { replaces?: string; remove?: boolean };
 const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
@@ -436,6 +454,12 @@ for (const f of FACTIONS) {
   for (const [k, t] of Object.entries(MUNITIONS)) {
     list.push({ kind: 'unit', buildable: false, faction: f.id, id: `${f.id}_${k}`, ...t });
   }
+  {
+    const tr = TRANSPORTS[f.id];
+    const u: UnitDef = { kind: 'unit', faction: f.id, id: `${f.id}_transport`, ...TRANSPORT_TPL, buildable: false, name: tr.name, model: tr.model, desc: `${tr.name}: airborne-drop transport.` };
+    if (m.airHp) u.hp = Math.round(u.hp * m.airHp);
+    list.push(u);
+  }
   for (const [k, t] of Object.entries(BUILDINGS)) {
     const o = FACTION_BUILDINGS[f.id]?.[k] ?? {};
     const b: BuildingDef = { kind: 'building', buildable: true, armor: 'building', faction: f.id, id: `${f.id}_${k}`, ...t, ...o };
@@ -466,6 +490,29 @@ list.push({
   prereq: [],
   buildable: false,
   desc: 'Capture with an Engineer for steady income.',
+});
+
+list.push({
+  kind: 'unit',
+  id: 'supply_crate',
+  name: 'Supply Pallet',
+  faction: 'neutral',
+  category: 'vehicle',
+  model: 'supplycrate',
+  cost: 0,
+  buildTime: 1,
+  hp: 160,
+  armor: 'light',
+  sight: 2,
+  speed: 0,
+  turnRate: 0,
+  turret: false,
+  radius: 0.25,
+  temp: true,
+  supply: true,
+  prereq: [],
+  buildable: false,
+  desc: 'Air-dropped ammunition and medical supplies: heals friendly units nearby.',
 });
 
 export const DEFS: Record<string, Def> = Object.fromEntries(list.map((d) => [d.id, d]));

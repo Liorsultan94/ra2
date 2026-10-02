@@ -92,6 +92,23 @@ export class FxLights {
     this.group.add(this.glow);
   }
 
+  /**
+   * The strongest current sources (after update(): last frame's ranking) as
+   * position + intensity and colour, for shaders that want a cheap fire glow
+   * (smoke lit from below). Unused entries get intensity 0.
+   */
+  strongest(pos: THREE.Vector4[], col: THREE.Vector3[]) {
+    for (let i = 0; i < pos.length; i++) {
+      const s = this.top[i];
+      if (s && i < this.nTop) {
+        pos[i].set(s.x, s.y, s.z, s.i);
+        col[i].set(s.r, s.g, s.b);
+      } else pos[i].w = 0;
+    }
+  }
+  private top: Src[] = [];
+  private nTop = 0;
+
   get lightCount() {
     return this.lights.length;
   }
@@ -177,6 +194,19 @@ export class FxLights {
     }
     this.nSus = 0;
     order.sort(byScore);
+    // keep copies of the best few (the Src objects are recycled next frame)
+    this.nTop = Math.min(4, order.length);
+    for (let i = 0; i < this.nTop; i++) {
+      const s = (this.top[i] ??= makeSrc());
+      const o = order[i];
+      s.x = o.x;
+      s.y = o.y;
+      s.z = o.z;
+      s.i = o.i;
+      s.r = o.r;
+      s.g = o.g;
+      s.b = o.b;
+    }
     // real lights for the strongest sources
     for (let i = 0; i < this.lights.length; i++) {
       const l = this.lights[i];

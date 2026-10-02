@@ -947,7 +947,7 @@ const INSIGNIA: Record<string, string> = {
 interface Built {
   S: number;
   paint: Paint;
-  kind: 'jet' | 'heli' | 'uav' | 'quad' | 'loiter';
+  kind: 'jet' | 'heli' | 'uav' | 'quad' | 'loiter' | 'cargo';
 }
 
 /** Pair of AIM-120-style missiles on underwing pylons (z = |span station|). Returns muzzles. */
@@ -2602,6 +2602,184 @@ function shahed(k: Kit, o: UavO): Built {
   return { S: 0.62 / 3.5, kind: 'loiter', paint: { skin: { color: 0xa69f8e, metal: 0.15, rough: 0.95 }, skin2: { color: 0x8a8576, metal: 0.15 }, glass: 0x222222 } };
 }
 
+// =================================================================== airlift transports
+
+/**
+ * High-wing military transports for the airborne-drop support power, modelled
+ * from the real types' dimensions (metres). One parametric airframe covers the
+ * turboprops (C-130H/J, A400M, An-26) and the T-tail jets (C-17, Il-76, Y-20).
+ * The rear loading ramp is a hinged sub-group (userData.ramp) that the anim
+ * lowers to level for the drop, uncovering the dark hold behind it.
+ */
+interface LifterSpec {
+  L: number; // fuselage length
+  R: number; // half width
+  H: number; // half height
+  nose: number; // nose length
+  tail: number; // upsweep starts
+  tailB: number; // underside height at the tail cone
+  tailT: number; // top height at the tail cone
+  wingD: number; // root leading edge
+  rootC: number;
+  tipC: number;
+  span: number; // half span
+  sweep: number; // leading-edge setback at the tip
+  dihedral: number; // tip height change (- = anhedral)
+  kink?: number; // An-26: outer panels droop from this span station
+  engines: number[]; // engine span stations (one side)
+  fan?: { len: number; r: number }; // turbofans (else turboprops)
+  prop?: { r: number; n: number; chord: number };
+  ttail: boolean;
+  fin: { d: number; c: number; tc: number; h: number; sweep: number };
+  stab: { c: number; tc: number; span: number; sweep: number };
+  winglets?: boolean;
+  glazedNose?: boolean;
+  game: number; // game length (tiles)
+  paint: Paint;
+}
+
+const LIFTERS: Record<string, LifterSpec> = {
+  tr_c130j: { L: 29.8, R: 2.15, H: 2.2, nose: 5.4, tail: 19.0, tailB: 0.9, tailT: 1.95, wingD: 10.4, rootC: 4.9, tipC: 2.7, span: 20.2, sweep: 1.1, dihedral: 0.45, engines: [5.2, 10.0], prop: { r: 2.05, n: 6, chord: 0.36 }, ttail: false, fin: { d: 22.6, c: 6.2, tc: 3.0, h: 6.6, sweep: 3.1 }, stab: { c: 3.8, tc: 1.9, span: 8.1, sweep: 1.0 }, game: 1.75, paint: { skin: { color: 0x8e959b, metal: 0.25 }, skin2: { color: 0x6c7379 }, glass: 0x2a3540 } },
+  tr_c130h: { L: 29.8, R: 2.15, H: 2.2, nose: 5.4, tail: 19.0, tailB: 0.9, tailT: 1.95, wingD: 10.4, rootC: 4.9, tipC: 2.7, span: 20.2, sweep: 1.1, dihedral: 0.45, engines: [5.2, 10.0], prop: { r: 2.05, n: 4, chord: 0.42 }, ttail: false, fin: { d: 22.6, c: 6.2, tc: 3.0, h: 6.6, sweep: 3.1 }, stab: { c: 3.8, tc: 1.9, span: 8.1, sweep: 1.0 }, game: 1.75, paint: { skin: { color: 0xffffff, uv: 0.12, camo: factionCamo('iran') }, skin2: { color: 0x8a7a5c }, glass: 0x2a3540 } },
+  tr_a400m: { L: 45.1, R: 2.85, H: 2.95, nose: 7.2, tail: 28.5, tailB: 1.5, tailT: 2.7, wingD: 16.2, rootC: 6.6, tipC: 2.8, span: 21.2, sweep: 3.3, dihedral: -0.3, engines: [6.7, 12.6], prop: { r: 2.65, n: 8, chord: 0.36 }, ttail: true, fin: { d: 33.8, c: 8.6, tc: 4.2, h: 8.4, sweep: 5.6 }, stab: { c: 4.8, tc: 2.3, span: 9.8, sweep: 2.2 }, game: 2.15, paint: { skin: { color: 0x7f878d, metal: 0.25 }, skin2: { color: 0x60676d }, glass: 0x2a3540 } },
+  tr_an26: { L: 23.8, R: 1.45, H: 1.5, nose: 4.2, tail: 14.6, tailB: 0.75, tailT: 1.35, wingD: 8.3, rootC: 3.5, tipC: 1.5, span: 14.6, sweep: 0.6, dihedral: -0.75, kink: 5.4, engines: [3.9], prop: { r: 1.95, n: 4, chord: 0.34 }, ttail: false, fin: { d: 17.2, c: 4.6, tc: 2.0, h: 4.6, sweep: 3.0 }, stab: { c: 2.6, tc: 1.4, span: 5.0, sweep: 0.7 }, game: 1.45, paint: { skin: { color: 0xffffff, uv: 0.16, camo: factionCamo('ukraine') }, skin2: { color: 0x5d6656 }, glass: 0x2a3540 } },
+  tr_c17: { L: 53.0, R: 3.4, H: 3.45, nose: 8.4, tail: 33.5, tailB: 1.9, tailT: 3.4, wingD: 20.5, rootC: 9.8, tipC: 3.0, span: 25.9, sweep: 9.5, dihedral: -0.5, engines: [7.4, 12.6], fan: { len: 6.2, r: 1.4 }, ttail: true, fin: { d: 41.2, c: 9.2, tc: 5.0, h: 9.6, sweep: 6.6 }, stab: { c: 5.6, tc: 2.6, span: 10.0, sweep: 3.2 }, winglets: true, game: 2.35, paint: { skin: { color: 0x6c7379, metal: 0.25 }, skin2: { color: 0x575d63 }, glass: 0x2a3540 } },
+  tr_il76: { L: 46.6, R: 2.45, H: 2.55, nose: 7.0, tail: 30.0, tailB: 1.6, tailT: 2.5, wingD: 17.4, rootC: 8.0, tipC: 2.7, span: 25.2, sweep: 7.6, dihedral: -1.0, engines: [6.6, 11.3], fan: { len: 5.4, r: 1.05 }, ttail: true, fin: { d: 37.4, c: 8.0, tc: 4.4, h: 8.4, sweep: 6.0 }, stab: { c: 5.0, tc: 2.3, span: 8.8, sweep: 3.0 }, glazedNose: true, game: 2.15, paint: { skin: { color: 0xa9aeb2, metal: 0.25 }, skin2: { color: 0x7e8489 }, glass: 0x2a3540 } },
+  tr_y20: { L: 47.0, R: 3.0, H: 3.05, nose: 7.6, tail: 30.5, tailB: 1.8, tailT: 3.0, wingD: 18.4, rootC: 8.8, tipC: 2.8, span: 22.5, sweep: 8.0, dihedral: -0.6, engines: [6.8, 11.6], fan: { len: 5.8, r: 1.25 }, ttail: true, fin: { d: 38.4, c: 8.6, tc: 4.6, h: 8.8, sweep: 6.4 }, stab: { c: 5.0, tc: 2.4, span: 9.0, sweep: 3.0 }, game: 2.2, paint: { skin: { color: 0x9aa1a7, metal: 0.25 }, skin2: { color: 0x737a80 }, glass: 0x2a3540 } },
+};
+
+function lifter(k: Kit, sp: LifterSpec, team: number, faction: string): Built {
+  const { L, R, H, nose, tail } = sp;
+  const nation = INSIGNIA[faction] ?? 'usa';
+  // ---- fuselage: rounded nose, constant barrel, upswept tail with the ramp underneath
+  const sts: St[] = [
+    { d: 0, w: R * 0.1, t: H * 0.1, y: -H * 0.22 },
+    { d: nose * 0.22, w: R * 0.55, t: H * 0.5, b: H * 0.52, y: -H * 0.2, a: 0.95 },
+    { d: nose * 0.55, w: R * 0.86, t: H * 0.8, b: H * 0.84, y: -H * 0.1, a: 0.9 },
+    { d: nose, w: R, t: H, y: 0, a: 0.85, e: 0.95 },
+    { d: tail, w: R, t: H, y: 0, a: 0.85, e: 0.95 },
+  ];
+  const yb = (f: number) => -H + (sp.tailB + H) * f;
+  const yt = (f: number) => H - (H - sp.tailT) * f * f;
+  for (const f of [0.3, 0.6, 0.85, 1]) {
+    const lo = yb(f);
+    const hi = yt(f);
+    sts.push({ d: tail + (L - tail) * f, w: R * (1 - 0.82 * f ** 1.4), t: (hi - lo) / 2, y: (hi + lo) / 2, a: 0.85 + 0.15 * f });
+  }
+  k.add('skin', loft(sts, 22, 3));
+  // team-colour band round the barrel and a dark anti-glare panel on the nose
+  const bd = tail - (tail - nose) * 0.22;
+  k.col(loft([{ d: bd, w: R * 1.012, t: H * 1.012, a: 0.85, e: 0.95 }, { d: bd + 0.9, w: R * 1.012, t: H * 1.012, a: 0.85, e: 0.95 }], 22, 1, false, false), team);
+  // wing-root fairing and main-gear sponsons
+  k.add('skin', loft([{ d: sp.wingD - 2.2, w: R * 0.2, t: 0.2, y: H * 0.86 }, { d: sp.wingD - 0.6, w: R * 0.5, t: 0.42, y: H * 0.9 }, { d: sp.wingD + sp.rootC + 0.4, w: R * 0.52, t: 0.44, y: H * 0.9 }, { d: sp.wingD + sp.rootC + 2.4, w: R * 0.18, t: 0.15, y: H * 0.86 }], 12, 2));
+  const sg = loft([{ d: sp.wingD - 1.4, w: 0.1, t: 0.1, y: -H * 0.62, z: R * 0.72 }, { d: sp.wingD, w: R * 0.3, t: H * 0.32, y: -H * 0.6, z: R * 0.8 }, { d: sp.wingD + sp.rootC + 1.2, w: R * 0.3, t: H * 0.32, y: -H * 0.6, z: R * 0.8 }, { d: sp.wingD + sp.rootC + 3.0, w: 0.1, t: 0.1, y: -H * 0.6, z: R * 0.72 }], 12, 2);
+  k.sym('skin2', sg);
+  // cockpit: windscreen panes, side windows; Il-76 glazed navigator's nose
+  const wy = H * 0.42;
+  for (const s of [-1, 1]) {
+    k.add('glass', box(0.9, 0.5, R * 0.5, [-nose * 0.42, wy, s * R * 0.3], [0, 0, 0.7]));
+    k.add('glass', box(1.2, 0.42, 0.08, [-nose * 0.62, wy - 0.02, s * R * 0.86]));
+    // paratroop doors at the rear of the hold
+    k.col(box(0.95, 1.9, 0.06, [-(tail - 1.2), -H * 0.15, s * R * 0.995]), 0x2a2d30);
+  }
+  if (sp.glazedNose) k.add('glass', sph(R * 0.42, [-nose * 0.16, -H * 0.38, 0], [1.6, 0.9, 1.25], 12, 8));
+  else k.col(sph(R * 0.36, [-nose * 0.07, -H * 0.18, 0], [1.2, 1, 1], 10, 7), 0x3a3e42); // radome
+  // ---- rear ramp: hinged at the start of the upsweep, lies along the belly
+  const d0 = tail + 0.4;
+  const d1 = tail + (L - tail) * 0.66;
+  const y0 = yb((d0 - tail) / (L - tail));
+  const y1 = yb((d1 - tail) / (L - tail));
+  const run = d1 - d0;
+  const rise = y1 - y0;
+  const alpha = Math.atan2(rise, run);
+  const len = Math.hypot(run, rise);
+  // the dark hold, revealed when the ramp swings down
+  k.col(box(len * 0.98, 0.06, R * 1.25, [-(d0 + run / 2), (y0 + y1) / 2 - 0.05, 0], [0, 0, -alpha]), 0x101214);
+  const ramp = k.sub([-d0, y0 - 0.1, 0], [0, 0, 0], { ramp: alpha + 0.12 });
+  ramp.add('skin2', box(len, 0.14, R * 1.35, [-run / 2, rise / 2, 0], [0, 0, -alpha]));
+  ramp.col(box(len * 0.92, 0.03, R * 1.1, [-run / 2, rise / 2 + 0.08, 0], [0, 0, -alpha]), 0x3b3f42);
+  // ---- wing (high, on top of the fuselage)
+  const wy0 = H * 0.92;
+  const root: Sec = { d: sp.wingD, c: sp.rootC, z: R * 0.4, y: wy0, t: 0.15 };
+  const tip: Sec = { d: sp.wingD + sp.sweep, c: sp.tipC, z: sp.span, y: wy0 + sp.dihedral, t: 0.11 };
+  const at = (z: number) => lerpSec(root, tip, (z - root.z) / (tip.z - root.z));
+  if (sp.kink) {
+    const mid: Sec = { ...at(sp.kink), y: wy0 + 0.1 };
+    k.sym('skin', wing([root, mid]));
+    k.sym('skin', wing([mid, tip]));
+  } else k.sym('skin', wing([root, tip]));
+  k.symc(wing([{ ...at(sp.span * 0.93), t: 0.14 }, { ...tip, t: 0.14 }]), team);
+  const wingY = (z: number) => (sp.kink && z > sp.kink ? wy0 + 0.1 + ((sp.dihedral - 0.1) * (z - sp.kink)) / (sp.span - sp.kink) : at(z).y ?? wy0);
+  if (sp.winglets) {
+    const wt = { d: tip.d + 0.2, c: tip.c * 0.9, z: 0, t: 0.1 };
+    const wtt = { d: tip.d + 1.9, c: tip.c * 0.45, z: 2.9, t: 0.09 };
+    k.sym('skin', fin([wt, wtt], [0, tip.y ?? wy0, sp.span - 0.05], 0.25));
+  }
+  // ---- engines
+  for (const z of sp.engines) {
+    const s0 = at(z);
+    const yW = wingY(z);
+    if (sp.fan) {
+      const { len: fl, r } = sp.fan;
+      const dF = s0.d - fl * 0.42;
+      const yN = yW - r - 0.75;
+      const prof: P2[] = [
+        [dF, r * 0.86],
+        [dF + 0.15, r],
+        [dF + fl * 0.35, r * 1.02],
+        [dF + fl * 0.78, r * 0.86],
+        [dF + fl * 0.94, r * 0.55],
+        [dF + fl, r * 0.4],
+      ];
+      k.sym('skin', lathe(prof, 16, [0, yN, z]));
+      k.symc(discX(r * 0.84, r * 0.84, [-(dF + 0.25), yN, z]), C.intake);
+      k.symc(lathe([[dF + 0.2, 0], [dF + 0.75, r * 0.3], [dF + 0.9, r * 0.34]], 10, [0, yN, z]), 0x55585b);
+      k.symc(discX(r * 0.38, r * 0.38, [-(dF + fl + 0.02), yN, z], true), 0x141414);
+      k.symc(lathe([[dF + fl - 0.2, r * 0.34], [dF + fl + 0.7, r * 0.1]], 10, [0, yN, z]), C.burnt);
+      for (const s of [-1, 1]) pylon(k, s0.d - 0.6, s0.d + s0.c * 0.75, yW - 0.05, yN + r * 0.6, s * z, 0.34);
+    } else {
+      const pr = sp.prop!;
+      const dF = s0.d - pr.r * 1.5;
+      const yN = yW - 0.35;
+      const n = loft([{ d: dF, w: 0.32, t: 0.36, y: yN, z }, { d: dF + 0.7, w: 0.62, t: 0.72, y: yN - 0.05, z }, { d: s0.d + 0.5, w: 0.66, t: 0.8, y: yN - 0.1, z }, { d: s0.d + s0.c * 0.95, w: 0.3, t: 0.3, y: yN, z }], 12, 2);
+      k.sym('skin', n);
+      k.symc(box(0.7, 0.2, 0.34, [-(dF + 0.9), yN - 0.72, z]), 0x1c1d1f); // oil-cooler intake
+      for (const s of [-1, 1]) prop(k, [-(dF - 0.15), yN, s * z], [0, 0, -PI / 2], pr.r, pr.n, pr.chord, s * 48, { spinner: 0.36 });
+    }
+  }
+  // ---- empennage
+  const finBase = yt(Math.min(1, Math.max(0, (sp.fin.d - tail) / (L - tail)))) - 0.25;
+  const fr: Sec = { d: sp.fin.d, c: sp.fin.c, z: 0, t: 0.11 };
+  const ft: Sec = { d: sp.fin.d + sp.fin.sweep, c: sp.fin.tc, z: sp.fin.h, t: 0.1 };
+  k.add('skin', fin([fr, ft], [0, finBase, 0]));
+  // dorsal fillet
+  k.add('skin', loft([{ d: sp.fin.d - 4, w: 0.05, t: 0.05, y: finBase + 0.1 }, { d: sp.fin.d + 0.5, w: 0.22, t: 0.55, y: finBase + 0.45 }, { d: sp.fin.d + sp.fin.c * 0.5, w: 0.2, t: 0.6, y: finBase + 0.5 }], 8, 2));
+  k.col(fin([lerpSec(fr, ft, 0.7, 1.3), { ...ft, t: 0.13, c: ft.c * 1.02 }], [0, finBase, 0]), team);
+  const stY = sp.ttail ? finBase + sp.fin.h : yt(0.8) - 0.3;
+  const stD = sp.ttail ? ft.d - 0.3 : L - sp.stab.c - 0.6;
+  k.sym('skin', wing([{ d: stD, c: sp.stab.c, z: 0.1, y: stY, t: 0.1 }, { d: stD + sp.stab.sweep, c: sp.stab.tc, z: sp.stab.span, y: stY + (sp.ttail ? -0.3 : 0.35), t: 0.09 }]));
+  // ---- national insignia: fuselage sides aft of the wing, upper wing
+  for (const s of [-1, 1]) {
+    roundelV(k, tail - 3.2, H * 0.05, s * R, H * 0.38, nation, s);
+    const zr = s * sp.span * 0.7;
+    const sec = at(Math.abs(zr));
+    roundelH(k, sec.d + sec.c * 0.45, wingY(Math.abs(zr)) + 0.1, zr, sec.c * 0.3, nation);
+  }
+  // ---- lights
+  k.light('lit', C.red, [-(tip.d + tip.c * 0.3), (tip.y ?? wy0) - 0.05, -sp.span - 0.05]);
+  k.light('lit', C.green, [-(tip.d + tip.c * 0.3), (tip.y ?? wy0) - 0.05, sp.span + 0.05]);
+  k.light('strobe', 0xffffff, [-(ft.d + ft.c * 0.6), finBase + sp.fin.h + 0.1, 0], 0.012);
+  k.light('beacon', 0xff2a1a, [-(sp.wingD + sp.rootC + 1.0), H + 0.45, 0], 0.012);
+  k.light('beacon', 0xff2a1a, [-(sp.wingD + 1), -H - 0.05, 0], 0.012);
+  return { S: sp.game / L, kind: 'cargo', paint: sp.paint };
+}
+
+/** Each nation's drop transport (see sim/defs.ts TRANSPORTS). */
+function transportDesign(key: string): DesignFn {
+  const sp = LIFTERS[key] ?? LIFTERS.tr_c130j;
+  return (k, team, faction) => lifter(k, sp, team, faction);
+}
+
 // =================================================================== registry & templates
 
 type DesignFn = (k: Kit, team: number, faction: string) => Built;
@@ -2683,6 +2861,14 @@ function designFor(key: string, faction: string): DesignFn {
       return (k, team, f) => fpv(k, { team, faction: f });
     case 'micro':
       return (k, team, f) => micro(k, { team, faction: f });
+    case 'tr_c130j':
+    case 'tr_c130h':
+    case 'tr_a400m':
+    case 'tr_an26':
+    case 'tr_c17':
+    case 'tr_il76':
+    case 'tr_y20':
+      return transportDesign(key);
     default:
       return (k, team, f) => shahed(k, { team, faction: f });
   }
@@ -2734,18 +2920,21 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
     fx.push({ pos: P(0.04, 0.45, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.5, 0.5, 0.36), kind: 'spark', at: 0.45 }, { pos: P(0.42, 0.5, 0.7), kind: 'smoke', at: 0.55 }, { pos: P(0.06, 0.45, 0.5), kind: 'fire', at: 0.7 }, { pos: P(0.45, 0.5, 0.3), kind: 'fire', at: 0.88 });
   } else if (kind === 'heli') {
     fx.push({ pos: P(0.42, 0.62, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.6, 0.45, 0.62), kind: 'spark', at: 0.45 }, { pos: P(0.22, 0.55, 0.5), kind: 'smoke', at: 0.6 }, { pos: P(0.45, 0.6, 0.45), kind: 'fire', at: 0.7 }, { pos: P(0.62, 0.4, 0.4), kind: 'spark', at: 0.8 });
+  } else if (kind === 'cargo') {
+    fx.push({ pos: P(0.62, 0.72, 0.3), kind: 'smoke', at: 0.3 }, { pos: P(0.6, 0.72, 0.72), kind: 'smoke', at: 0.5 }, { pos: P(0.5, 0.5, 0.5), kind: 'spark', at: 0.55 }, { pos: P(0.62, 0.72, 0.3), kind: 'fire', at: 0.7 }, { pos: P(0.6, 0.72, 0.72), kind: 'fire', at: 0.85 });
   } else if (kind === 'uav') {
     fx.push({ pos: P(0.12, 0.5, 0.5), kind: 'smoke', at: 0.35 }, { pos: P(0.55, 0.5, 0.35), kind: 'spark', at: 0.5 }, { pos: P(0.14, 0.5, 0.5), kind: 'fire', at: 0.7 });
   } else {
     fx.push({ pos: P(0.3, 0.5, 0.5), kind: 'smoke', at: 0.4 }, { pos: P(0.5, 0.5, 0.5), kind: 'spark', at: 0.6 });
   }
   // flare / chaff dispensers under the rear fuselage (jets) or on the cabin / boom sides (helicopters)
-  if (kind === 'jet' || kind === 'heli') {
+  if (kind === 'jet' || kind === 'heli' || kind === 'cargo') {
     for (const s of [-1, 1]) {
       const o = new THREE.Object3D();
       o.userData.flare = true;
       const zc = (ab.min.z + ab.max.z) / 2;
-      if (kind === 'jet') o.position.set(ab.min.x + L * 0.16, ab.min.y + Hh * 0.25, zc + s * Wd * 0.07);
+      if (kind === 'cargo') o.position.set(ab.min.x + L * 0.3, ab.min.y + Hh * 0.3, zc + s * Wd * 0.06);
+      else if (kind === 'jet') o.position.set(ab.min.x + L * 0.16, ab.min.y + Hh * 0.25, zc + s * Wd * 0.07);
       else o.position.set(ab.min.x + L * 0.42, cy - Hh * 0.05, zc + s * Wd * 0.14);
       bank.add(o);
     }
@@ -2904,6 +3093,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   const plumes: THREE.Object3D[] = [];
   const flares: THREE.Object3D[] = [];
   const tips: THREE.Object3D[] = [];
+  const ramps: THREE.Object3D[] = [];
   const glow: THREE.Material[] = [];
   // per-instance rotor materials (blades fade into the blur disc as the rotor spools up)
   let bladeM: THREE.MeshStandardMaterial | null = null;
@@ -2918,6 +3108,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     if (u.plume) plumes.push(o);
     if (u.flare) flares.push(o);
     if (u.vapor) tips.push(o);
+    if (u.ramp) ramps.push(o);
     if (o instanceof THREE.Mesh) {
       if (u.bk === 'blade') o.material = bladeM ??= ownMat(o.material as THREE.MeshStandardMaterial);
       else if (u.bk === 'disc') {
@@ -2951,6 +3142,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   let lastY = NaN;
   let climb = 0;
   let rpm = 0.8;
+  let rampV = 0;
   const discList = [...discMs.values()];
   const vapor = kind === 'jet' && tips.length === 2 ? new Vapor(root, tips) : null;
   const anim = (s: AnimState) => {
@@ -2971,6 +3163,13 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       rpm += (tr - rpm) * Math.min(1, dt * 1.5);
     }
     for (const sp_ of spins) sp_.rotation.y += (sp_.userData.spin as number) * dt * (0.6 + rpm * 0.45);
+    if (ramps.length) {
+      // loading ramp: hydraulics lower it to level for the drop (~2.5 s), and close it again
+      const tgt = s.dead > 0 ? rampV : clamp(s.ramp ?? 0, 0, 1);
+      rampV += clamp(tgt - rampV, -dt * 0.45, dt * 0.45);
+      const e = rampV * rampV * (3 - 2 * rampV);
+      for (const r of ramps) r.rotation.z = e * (r.userData.ramp as number);
+    }
     if (bladeM || discList.length) {
       // past ~90 % RPM the eye only sees the blurred disc: fade the blades, strengthen the disc
       const f = clamp((rpm - 0.86) / 0.14, 0, 1);
@@ -2982,7 +3181,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     const k = Math.min(1, dt * 4);
     if (b) {
       const turn = Number.isFinite(s.turn) ? s.turn : 0;
-      const maxRoll = kind === 'jet' ? 0.75 : kind === 'heli' ? 0.3 : kind === 'quad' ? 0.45 : 0.4;
+      const maxRoll = kind === 'jet' ? 0.75 : kind === 'heli' ? 0.3 : kind === 'quad' ? 0.45 : kind === 'cargo' ? 0.32 : 0.4;
       roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) - roll) * k;
       if (kind === 'heli') {
         // nose down to fly forward (more while accelerating), nose-up flare while slowing; a damped spring so it settles
@@ -3070,6 +3269,13 @@ export const AIRCRAFT: Record<string, Builder> = {
   heli: builder('heli'),
   uav: builder('uav'),
   heavy_uav: builder('heavy_uav'),
+  tr_c130j: builder('tr_c130j'),
+  tr_c130h: builder('tr_c130h'),
+  tr_a400m: builder('tr_a400m'),
+  tr_an26: builder('tr_an26'),
+  tr_c17: builder('tr_c17'),
+  tr_il76: builder('tr_il76'),
+  tr_y20: builder('tr_y20'),
   fpv: builder('fpv'),
   micro: builder('micro'),
   shahed: builder('shahed'),

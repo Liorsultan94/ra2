@@ -20,6 +20,8 @@ const FinalShader = {
     vignette: { value: 0.3 },
     tDistort: { value: null as THREE.Texture | null },
     distortOn: { value: 0 },
+    tRays: { value: null as THREE.Texture | null },
+    raysOn: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -36,6 +38,8 @@ const FinalShader = {
     uniform float vignette;
     uniform sampler2D tDistort;
     uniform float distortOn;
+    uniform sampler2D tRays;
+    uniform float raysOn;
     varying vec2 vUv;
 
     float lumaOf( vec3 c ) { c = c / ( 1.0 + c ); return dot( c, vec3( 0.299, 0.587, 0.114 ) ); }
@@ -87,6 +91,8 @@ const FinalShader = {
       vec2 uv = vUv;
       if ( distortOn > 0.5 ) uv = clamp( uv + texture2D( tDistort, vUv ).rg, vec2( 0.001 ), vec2( 0.999 ) );
       vec3 c = sampleAA( uv );
+      // crepuscular light / shadow shafts through smoke (signed, linear HDR; see fx/godrays.ts)
+      if ( raysOn > 0.5 ) c = max( c + texture2D( tRays, uv ).rgb * ( 0.35 + 0.65 * min( vec3( 1.0 ), c * 4.0 ) ), vec3( 0.0 ) );
       c = toSRGB( aces( c ) );
       float l = dot( c, vec3( 0.2126, 0.7152, 0.0722 ) );
       // split toning: cool shadows, warm highlights
@@ -113,6 +119,8 @@ export class FinalPass extends Pass {
   readonly uniforms: typeof FinalShader.uniforms;
   /** Optional heat haze / shockwave distortion, rendered right before the final quad. */
   haze: DistortionSource | null = null;
+  /** Optional god-ray buffer (fx/godrays.ts), rendered right before the final quad. */
+  rays: DistortionSource | null = null;
   private material: THREE.ShaderMaterial;
   private quad: FullScreenQuad;
 
@@ -133,6 +141,7 @@ export class FinalPass extends Pass {
   setSize(width: number, height: number) {
     this.uniforms.resolution.value.set(width, height);
     this.haze?.setSize(width, height);
+    this.rays?.setSize(width, height);
   }
 
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
@@ -140,6 +149,9 @@ export class FinalPass extends Pass {
     const d = this.haze ? this.haze.render(renderer) : null;
     this.uniforms.tDistort.value = d;
     this.uniforms.distortOn.value = d ? 1 : 0;
+    const r = this.rays ? this.rays.render(renderer) : null;
+    this.uniforms.tRays.value = r;
+    this.uniforms.raysOn.value = r ? 1 : 0;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }
