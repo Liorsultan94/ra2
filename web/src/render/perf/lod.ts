@@ -48,6 +48,12 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
   });
   const detail: THREE.Mesh[] = [];
   for (const { m, r } of meshes) {
+    // buildings: the builder already split its small parts into dedicated detail meshes (models/buildings.ts)
+    if (m.userData.lodDetail) {
+      if (medium) m.castShadow = false;
+      detail.push(m);
+      continue;
+    }
     if (medium && m.castShadow && (kind === 'infantry' || r < (kind === 'building' ? 0.07 : 0.045))) m.castShadow = false;
     // infantry are a handful of merged skinned meshes: nothing to drop
     if (kind === 'infantry' || (m as THREE.InstancedMesh).isInstancedMesh || r >= Math.max(kind === 'building' ? 0.09 : 0.05, big * 0.14)) continue;
@@ -68,7 +74,8 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
  */
 export function applyLod(info: LodInfo, pxPerUnit: number) {
   const px = pxPerUnit * info.radius * 2;
-  const hide = info.hidden ? px < 30 : px < 24;
+  // buildings: drop the detail meshes once a tile is only ~20 px across (strategic zoom)
+  const hide = info.kind === 'building' ? (info.hidden ? pxPerUnit < 26 : pxPerUnit < 21) : info.hidden ? px < 30 : px < 24;
   if (hide === info.hidden || !info.detail.length) return;
   info.hidden = hide;
   for (const m of info.detail) setHidden(m, HIDE_LOD, hide);

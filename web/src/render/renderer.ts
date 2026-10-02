@@ -97,6 +97,8 @@ export interface Visual {
   model: Model;
   owner: number;
   def: string;
+  /** Production buildings: renderer time of the last unit rolled out (factory doors / lifts). */
+  prodAt?: number;
   ring: THREE.Mesh | null;
   muzzleIdx: number;
   fxTimer: number;
@@ -1049,6 +1051,7 @@ export class GameRenderer {
           }
         }
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
+        a.produced = v.prodAt !== undefined ? this.time - v.prodAt : Infinity;
         a.moving = false;
         if (k < 1 && vis && Math.random() < dt * 20) this.effects.dust(root.position.x + (Math.random() - 0.5) * bd.w, h + 0.05, root.position.z + (Math.random() - 0.5) * bd.h, 1.5);
         if (v.model.turret) v.model.turret.rotation.y = -lerpAngle(e.pturret, e.turret, alpha);
@@ -1763,6 +1766,19 @@ export class GameRenderer {
           if (shown) this.toWreck(v, ev);
           else this.removeVisual(v);
         }
+        break;
+      }
+      case 'unitReady': {
+        // the producing building (same pick as World.deliverUnit): opens its doors / runs its lift
+        const cat = unitDef(ev.def).category;
+        let fac: Entity | null = null;
+        for (const e of this.world.list) {
+          if (e.dead || e.owner !== ev.owner || e.kind !== 'building' || buildingDef(e.def).produces !== cat) continue;
+          fac = e;
+          if (e.rallyX >= 0) break;
+        }
+        const fv = fac ? this.visuals.get(fac.id) : undefined;
+        if (fv) fv.prodAt = this.time;
         break;
       }
       case 'placed':

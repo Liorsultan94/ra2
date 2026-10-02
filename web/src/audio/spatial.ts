@@ -53,7 +53,7 @@ const DELAY_PER_UNIT = 0.016;
 /** Camera height above the view centre relative to the visible view height. */
 const CAM_HEIGHT = 0.62;
 /** Reference distance: full level within this many world units of the camera. */
-const REF_DIST = 9.5;
+const REF_DIST = 11;
 /** Distance law exponent (1 = physical inverse distance; softer keeps a battle readable). */
 const ROLLOFF = 0.62;
 /** Air absorption: cut-off = AIR_F * exp(-r / AIR_R). */
@@ -76,8 +76,8 @@ export function defaultListener(): Listener {
  * Writes into `out` (no allocation) and returns it.
  */
 export function spatialize(l: Listener, x: number, y: number, z: number, out: Spatial): Spatial {
-  const dx = x - l.cx;
-  const dy = y - l.cy;
+  const dx = Number.isFinite(x) ? x - l.cx : 0;
+  const dy = Number.isFinite(y) ? y - l.cy : 0;
   // screen axes on the ground: right and "up the screen" (away from the camera)
   const sx = dx * l.rx + dy * l.ry;
   const sy = dx * l.ry - dy * l.rx;

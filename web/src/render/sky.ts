@@ -105,7 +105,8 @@ const ATMO_GLSL = /* glsl */ `
 /** Equirect LUT addressing: more rows near the horizon. */
 const LUT_GLSL = /* glsl */ `
   vec2 skyUv( vec3 d ) {
-    float az = atan( d.z, d.x );
+    // (atan(0, 0) is undefined: at the zenith / nadir it returns NaN on some GPUs, which the water and bloom then smear)
+    float az = atan( d.z, abs( d.x ) < 1e-5 ? 1e-5 : d.x );
     float el = asin( clamp( d.y, -1.0, 1.0 ) );
     float v = 0.5 + 0.5 * sign( el ) * sqrt( abs( el ) / 1.5707963 );
     return vec2( az / 6.2831853 + 0.5, v );
@@ -131,6 +132,7 @@ const LUT_FRAG = /* glsl */ `
     vec3 c = atmosphere( normalize( d ), uLight ) * uScale;
     // soft knee: the bright band around a low sun stays under the bloom threshold (the sun disc blooms)
     c /= 1.0 + max( c.r, max( c.g, c.b ) ) * 0.45;
+    if ( any( isnan( c ) ) || any( isinf( c ) ) ) c = vec3( 0.0 );
     gl_FragColor = vec4( c, 1.0 );
   }
 `;
@@ -200,7 +202,7 @@ const DOME_FRAG = /* glsl */ `
         vec3 c = cell + vec3( h13( cell + 7.1 ), h13( cell + 3.3 ), h13( cell + 1.7 ) );
         float r = length( sp - c );
         float tw = 0.65 + 0.35 * sin( uTime * ( 1.5 + h * 7.0 ) + h * 40.0 );
-        float b = smoothstep( 0.42, 0.0, r ) * ( h - 0.985 ) * 66.0 * tw;
+        float b = ( 1.0 - smoothstep( 0.0, 0.42, r ) ) * ( h - 0.985 ) * 66.0 * tw;
         col += vec3( 0.85, 0.9, 1.0 ) * b * 0.5 * uNight * ( 1.0 - over ) * smoothstep( 0.0, 0.25, up );
       }
     }
@@ -245,7 +247,8 @@ const DOME_FRAG = /* glsl */ `
     vec2 vd = normalize( d.xz + 1e-5 );
     vec3 hz = mix( uHorB, uHorA, dot( vd, uSunXZ ) * 0.5 + 0.5 );
     col = mix( col, hz, 1.0 - smoothstep( -0.02, 0.09, up ) );
-    if ( uEnv > 0.5 && up < 0.0 ) col = mix( hz, vec3( uGray ), smoothstep( 0.0, -0.4, up ) );
+    if ( uEnv > 0.5 && up < 0.0 ) col = mix( hz, vec3( uGray ), ( 1.0 - smoothstep( -0.4, 0.0, up ) ) );
+    if ( any( isnan( col ) ) ) col = vec3( 0.0 );
     gl_FragColor = vec4( col, 1.0 );
   }
 `;
@@ -333,6 +336,7 @@ export class Sky {
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
   private sunXZ = new THREE.Vector2(1, 0);
+  private lightN = new THREE.Vector3();
   /** The environment map captured from the sky (high quality); null until the first capture. */
   env: THREE.Texture | null = null;
 
@@ -414,9 +418,12 @@ export class Sky {
     this.time += dt;
     const night = st.night;
     // by night the moon lights the (much fainter) sky: same scattering model, different source
-    const light = st.moon && night > 0.5 ? st.moon : st.sun;
+    const src = st.moon && night > 0.5 ? st.moon : st.sun;
+    // never feed a degenerate direction to the scattering integral (it would fill the LUT with NaN for good)
+    if (!(src.lengthSq() > 0.25)) return;
+    const light = this.lightN.copy(src).normalize();
     const scale = 0.62 * (st.moon && night > 0.5 ? 0.012 + 0.03 * (1 - night) : 1);
-    if (light.dot(this.lastLight) < 0.99998 || Math.abs(scale - this.lastScale) > this.lastScale * 0.02) {
+    if (!(light.dot(this.lastLight) >= 0.99998) || Math.abs(scale - this.lastScale) > this.lastScale * 0.02) {
       this.lastLight.copy(light);
       this.lastScale = scale;
       this.lutMat.uniforms.uLight.value.copy(light);

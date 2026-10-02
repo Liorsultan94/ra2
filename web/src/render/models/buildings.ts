@@ -7,7 +7,7 @@ import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
 import { drawFlag } from '../flags';
 import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
-import { bldTex, type BldTexKind } from './bldtex';
+import { atlasPatch, bldAtlas, netTexture, signCell, signTexture, Tile, type SignSpec } from './bldtex';
 import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
 
 /*
@@ -90,22 +90,6 @@ function canvasTex(key: string, w: number, h: number, draw: (c: CanvasRenderingC
 const css = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
 // --- canvas texture painters
-function texHazard() {
-  return canvasTex('hazard', 64, 64, (c, w, h) => {
-    c.fillStyle = '#e2b021';
-    c.fillRect(0, 0, w, h);
-    c.fillStyle = '#1c1c1c';
-    for (let i = -2; i < 4; i++) {
-      c.beginPath();
-      c.moveTo(i * 32, 0);
-      c.lineTo(i * 32 + 16, 0);
-      c.lineTo(i * 32 + 16 + 64, h);
-      c.lineTo(i * 32 + 64, h);
-      c.closePath();
-      c.fill();
-    }
-  });
-}
 function texChain() {
   return canvasTex('chain', 64, 64, (c, w, h) => {
     c.clearRect(0, 0, w, h);
@@ -127,71 +111,15 @@ function texHelipad(color: string) {
   return canvasTex('helipad' + color, 256, 256, (c, w) => {
     c.clearRect(0, 0, w, w);
     c.strokeStyle = color;
-    c.lineWidth = 14;
+    c.lineWidth = 10;
     c.beginPath();
     c.arc(w / 2, w / 2, w / 2 - 14, 0, TAU);
     c.stroke();
     c.fillStyle = color;
     const s = w / 256;
-    c.fillRect(78 * s, 64 * s, 26 * s, 128 * s);
-    c.fillRect(152 * s, 64 * s, 26 * s, 128 * s);
-    c.fillRect(100 * s, 116 * s, 56 * s, 24 * s);
-  });
-}
-function texMashrabiya() {
-  return canvasTex('mashrabiya', 128, 128, (c, w, h) => {
-    c.fillStyle = '#20150c';
-    c.fillRect(0, 0, w, h);
-    c.strokeStyle = '#8a6440';
-    c.lineWidth = 5;
-    const n = 4;
-    const s = w / n;
-    for (let i = 0; i < n; i++)
-      for (let j = 0; j < n; j++) {
-        const x = i * s + s / 2;
-        const y = j * s + s / 2;
-        c.beginPath();
-        c.arc(x, y, s * 0.3, 0, TAU);
-        c.stroke();
-        c.strokeRect(i * s, j * s, s, s);
-        c.beginPath();
-        c.moveTo(x - s / 2, y);
-        c.lineTo(x + s / 2, y);
-        c.moveTo(x, y - s / 2);
-        c.lineTo(x, y + s / 2);
-        c.stroke();
-      }
-  });
-}
-function texTileBand(main: number, alt: number) {
-  return canvasTex('tileband' + main + alt, 128, 64, (c, w, h) => {
-    c.fillStyle = css(main);
-    c.fillRect(0, 0, w, h);
-    c.fillStyle = '#f0ead8';
-    c.fillRect(0, 0, w, 6);
-    c.fillRect(0, h - 6, w, 6);
-    for (let i = 0; i < 4; i++) {
-      const x = i * 32 + 16;
-      const y = h / 2;
-      c.fillStyle = '#f2ecd6';
-      c.beginPath();
-      for (let k = 0; k < 16; k++) {
-        const r = k % 2 ? 9 : 17;
-        const a = (k / 16) * TAU;
-        if (k) c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
-        else c.moveTo(x + r, y);
-      }
-      c.closePath();
-      c.fill();
-      c.fillStyle = css(alt);
-      c.beginPath();
-      c.arc(x, y, 7, 0, TAU);
-      c.fill();
-      c.fillStyle = '#d8b04a';
-      c.beginPath();
-      c.arc(x + 16, y, 3, 0, TAU);
-      c.fill();
-    }
+    c.fillRect(82 * s, 70 * s, 22 * s, 116 * s);
+    c.fillRect(152 * s, 70 * s, 22 * s, 116 * s);
+    c.fillRect(100 * s, 117 * s, 56 * s, 22 * s);
   });
 }
 function texSolar() {
@@ -216,14 +144,19 @@ function texSolar() {
     c.fillRect(0, 0, w, h / 3);
   });
 }
-function texStencil(text: string, color: string) {
-  return canvasTex('sten' + text + color, 128, 64, (c, w, h) => {
-    c.clearRect(0, 0, w, h);
-    c.fillStyle = color;
-    c.font = 'bold 50px Arial, sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(text, w / 2, h / 2 + 2);
+/** AESA radar face: grid of transmit / receive modules. */
+function texAesa() {
+  return canvasTex('aesa', 64, 64, (c, w, h) => {
+    c.fillStyle = '#5c625e';
+    c.fillRect(0, 0, w, h);
+    for (let i = 0; i < 8; i++)
+      for (let j = 0; j < 8; j++) {
+        c.fillStyle = (i + j) % 2 ? '#6e7470' : '#646a66';
+        c.fillRect(i * 8 + 1, j * 8 + 1, 6, 6);
+      }
+    c.strokeStyle = '#3e4442';
+    c.lineWidth = 2;
+    c.strokeRect(1, 1, w - 2, h - 2);
   });
 }
 function texFlag(cols: number[], faction: string) {
@@ -236,26 +169,80 @@ function texFlag(cols: number[], faction: string) {
   });
 }
 
+/** Default texture repeats per world unit for each atlas tile. */
+const TILE_UV: Record<Tile, number> = {
+  [Tile.Panel]: 1.25,
+  [Tile.Cast]: 1.4,
+  [Tile.Corr]: 1.6,
+  [Tile.Plate]: 2.2,
+  [Tile.Paint]: 2.5,
+  [Tile.Clad]: 1.6,
+  [Tile.CamoA]: 1.6,
+  [Tile.CamoB]: 1.6,
+  [Tile.CamoC]: 1.8,
+  [Tile.Bag]: 3,
+  [Tile.Canvas]: 2,
+  [Tile.Asphalt]: 1.2,
+  [Tile.Soil]: 1.1,
+  [Tile.Brick]: 1.4,
+  [Tile.Plaster]: 1.3,
+  [Tile.Grate]: 4,
+  [Tile.Wood]: 4,
+  [Tile.RoofTile]: 2.2,
+  [Tile.Hazard]: 4.5,
+  [Tile.Stone]: 1.3,
+};
+
+/** Old procedural texture kinds (textures.ts names) mapped onto atlas tiles. */
+const KIND_TILE: Record<string, Tile> = {
+  concrete: Tile.Panel,
+  concreteDark: Tile.Panel,
+  plaster: Tile.Plaster,
+  sandstone: Tile.Stone,
+  brick: Tile.Brick,
+  corrugated: Tile.Corr,
+  metalPanel: Tile.Plate,
+  roofTiles: Tile.RoofTile,
+  asphalt: Tile.Asphalt,
+  sandbag: Tile.Bag,
+  wood: Tile.Wood,
+  canvas: Tile.Canvas,
+  grating: Tile.Grate,
+  rust: Tile.Corr,
+  soil: Tile.Soil,
+};
+
+/** Multiply two colours (hex), with a brightness gain (atlas tiles average ~0.82 albedo). */
+function mulHex(a: number, b: number, gain = 1) {
+  const ca = new THREE.Color(a);
+  const cb = new THREE.Color(b);
+  return new THREE.Color(Math.min(1, ca.r * cb.r * gain), Math.min(1, ca.g * cb.g * gain), Math.min(1, ca.b * cb.b * gain)).getHex();
+}
+
 /**
  * Per-template material factory bound to an owner (style) and a fog instance.
  *
  * To keep draw calls low most materials handed out are *virtual*: lightweight
- * descriptors pointing at a shared real material plus a tint which the kit
- * bakes into a vertex colour attribute. Plain colours collapse into a handful
- * of roughness/metalness buckets, tinted textures share one material per
- * texture, and all small lamps share one emissive material.
+ * descriptors pointing at a shared real material plus a tint (baked into a
+ * vertex colour attribute) and, for the building atlas, a tile index (baked
+ * into uv1.x). Every textured surface of a building (concrete, steel, paint,
+ * camo, sandbags, soil...) shares ONE atlas material; plain glass and lamps
+ * have their own, so a building draws in a handful of calls.
  */
 class Mats {
   readonly glow = new Set<Mat>();
   readonly flags: SMat[] = [];
   private readonly fid: number;
   private readonly own: string;
+  private readonly pal: { value: THREE.Color[] };
   constructor(
     readonly s: ModelStyle,
     readonly fog: FogOfWar | null,
+    readonly N: Nation,
   ) {
     this.fid = fogId(fog);
     this.own = `${s.faction}:${s.team}`;
+    this.pal = { value: N.camo.map((c) => new THREE.Color(c)) };
   }
   private cached<T extends Mat>(key: string, perOwner: boolean, make: () => T): T {
     const k = `${this.fid}|${perOwner ? this.own : '*'}|${key}`;
@@ -267,49 +254,56 @@ class Mats {
     }
     return m;
   }
-  private virt(real: Mat, color: THREE.Color, uv: number): SMat {
-    const k = `v|${real.uuid}|${color.getHexString()}|${color.r.toFixed(4)}|${uv}`;
+  private virt(real: Mat, color: THREE.Color, uv: number, tile = -1): SMat {
+    const k = `v|${real.uuid}|${color.getHexString()}|${color.r.toFixed(4)}|${uv}|${tile}`;
     let m = matCache.get(k) as SMat | undefined;
     if (!m) {
       m = new THREE.MeshStandardMaterial();
       m.userData.real = real;
       m.userData.vc = color;
       m.userData.uv = uv;
+      m.userData.tile = tile;
       matCache.set(k, m);
     }
     return m;
   }
-  /** Textured PBR material (procedural texture from textures.ts), tinted per vertex. */
-  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1.6): SMat {
-    const real = this.cached(`tex:${kind}:${JSON.stringify(opts)}:${rough}:${metal}:${nScale}`, false, () => {
-      const set = pbr(kind, opts);
-      return new THREE.MeshStandardMaterial({
-        map: set.map,
-        normalMap: set.normalMap,
-        roughnessMap: set.roughnessMap,
-        roughness: rough,
-        metalness: metal,
+  /** The shared atlas material (per owner: the camo palette is a uniform). */
+  private atlasReal(double: boolean): SMat {
+    const pal = this.pal;
+    const m = this.cached(`atlas:${double}:${this.N.camo.join(',')}`, true, () => {
+      const A = bldAtlas();
+      const mm = new THREE.MeshStandardMaterial({
+        map: A.map,
+        normalMap: A.normalMap,
+        roughnessMap: A.rmMap,
+        metalnessMap: A.rmMap,
+        roughness: 1,
+        metalness: 1,
         vertexColors: true,
-        normalScale: new THREE.Vector2(nScale, nScale),
+        side: double ? THREE.DoubleSide : THREE.FrontSide,
+        normalScale: new THREE.Vector2(1.25, 1.25),
       });
+      mm.userData.atlas = true;
+      mm.onBeforeCompile = (sh) => atlasPatch(sh, pal);
+      return mm;
     });
-    return this.virt(real, new THREE.Color(tint), uv);
+    m.customProgramCacheKey = () => (this.fog ? 'fog-' : '') + 'batlas';
+    return m;
   }
-  /** Building surface texture from bldtex.ts (cladding / plates), tinted per vertex. */
-  btex(kind: BldTexKind, tint = 0xffffff, uv = 2.5, rough = 1, metal = 0.25, nScale = 1.4): SMat {
-    const real = this.cached(`btex:${kind}:${rough}:${metal}:${nScale}`, false, () => {
-      const set = bldTex(kind);
-      return new THREE.MeshStandardMaterial({
-        map: set.map,
-        normalMap: set.normalMap,
-        roughnessMap: set.roughnessMap,
-        roughness: rough,
-        metalness: metal,
-        vertexColors: true,
-        normalScale: new THREE.Vector2(nScale, nScale),
-      });
-    });
-    return this.virt(real, new THREE.Color(tint), uv);
+  /** Atlas surface: tile + tint (per vertex) + texture repeats per world unit. */
+  at(tile: Tile, tint = 0xffffff, uv?: number, double = false): SMat {
+    return this.virt(this.atlasReal(double), new THREE.Color(tint), uv ?? TILE_UV[tile], tile);
+  }
+  /** Old procedural texture kinds (textures.ts names), served from the atlas. */
+  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, _rough = 1, _metal = 0.03, _nScale = 1.6): SMat {
+    if (kind === 'camo') return this.at(this.N.camoTile, 0xffffff, uv * 0.5);
+    const tile = KIND_TILE[kind] ?? Tile.Paint;
+    const base = opts.color ?? 0xd8d8d4;
+    return this.at(tile, mulHex(tint, base, kind === 'concreteDark' ? 1.05 : 1.15), uv * 0.55);
+  }
+  /** Building surface texture (cladding / plates). */
+  btex(kind: 'clad' | 'plate' | 'paint', tint = 0xffffff, uv = 2.5): SMat {
+    return this.at(kind === 'clad' ? Tile.Clad : kind === 'plate' ? Tile.Plate : Tile.Paint, tint, uv * 0.6);
   }
   /** National insignia / flag decals (shared atlas, alpha tested). */
   decal(): SMat {
@@ -320,35 +314,15 @@ class Mats {
     });
     return m;
   }
-  /** Plain colour: bucketed by roughness / metalness into a few shared vertex coloured materials. */
+  /** Plain colour: painted (atlas paint tile), bare metal (atlas plate tile), glossy (plain) or double sided. */
   col(color: number, rough = 0.7, metal = 0.1, double = false): SMat {
-    let b: string;
-    let r: number;
-    let mt: number;
-    if (double) [b, r, mt] = ['dbl', 0.8, 0.05];
-    else if (rough < 0.2 && metal > 0.5) [b, r, mt] = ['gloss', 0.08, 0.85];
-    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.32, 0.8];
-    else [b, r, mt] = ['paint', 0.66, 0.14];
-    if (b === 'metal' || b === 'paint') {
-      // weathered steel plates / worn paint: normal + roughness detail at no extra draw call
-      const kind: BldTexKind = b === 'metal' ? 'plate' : 'paint';
-      const real = this.cached(`vc:${b}`, false, () => {
-        const set = bldTex(kind);
-        // roughness maps average ~0.45 (plate) / ~0.62 (paint): scale them to the bucket value
-        return new THREE.MeshStandardMaterial({
-          map: set.map,
-          normalMap: set.normalMap,
-          roughnessMap: set.roughnessMap,
-          roughness: b === 'metal' ? r / 0.45 : r / 0.62,
-          metalness: mt,
-          vertexColors: true,
-          normalScale: new THREE.Vector2(b === 'metal' ? 1.1 : 0.6, b === 'metal' ? 1.1 : 0.6),
-        });
-      });
-      return this.virt(real, new THREE.Color(color), b === 'metal' ? 4 : 3);
+    if (double) return this.at(Tile.Paint, color, 3, true);
+    if (rough < 0.2 && metal > 0.5) {
+      const real = this.cached('vc:gloss', false, () => new THREE.MeshStandardMaterial({ roughness: 0.08, metalness: 0.85, vertexColors: true, envMapIntensity: 1.6 }));
+      return this.virt(real, new THREE.Color(color), 0);
     }
-    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide, envMapIntensity: b === 'gloss' ? 1.6 : 1 }));
-    return this.virt(real, new THREE.Color(color), 0);
+    if (metal >= 0.45) return this.at(Tile.Plate, color, 3.2);
+    return this.at(Tile.Paint, color, 3);
   }
   /** Emissive lamp (one shared per-owner material; colour/intensity via vertex colours). */
   light(color: number, ei = 2.6): SMat {
@@ -405,6 +379,22 @@ class Mats {
       return m;
     });
   }
+  /** Shared sign / stencil atlas (boards opaque, stencils alpha tested). */
+  signs(): SMat {
+    return this.cached('signs', false, () => {
+      const m = new THREE.MeshStandardMaterial({ map: signTexture(), roughness: 0.75, metalness: 0.05, alphaTest: 0.45 });
+      m.userData.uv = 0;
+      return m;
+    });
+  }
+  /** Camouflage net in the nation's colours (alpha cut, double sided). */
+  net(): SMat {
+    return this.cached(`net:${this.N.camo.join(',')}`, false, () => {
+      const m = new THREE.MeshStandardMaterial({ map: netTexture(this.N.camo), roughness: 0.95, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
+      m.userData.uv = 2.2;
+      return m;
+    });
+  }
   /** Waving flag (vertex shader wave driven by a per-owner time uniform). */
   flag(): SMat {
     const s = this.s;
@@ -434,24 +424,253 @@ class Mats {
   }
 }
 
+// ================================================================ nations
+
+type RoofStyle = 'flat' | 'gable' | 'hip';
+
+/**
+ * Architectural flavour per nation: paint, wall finish, roof style, camo,
+ * signage (script, colours, emblem). Team colour accents are added on top by
+ * the builders (roof copings, bands, door frames) for readability.
+ */
+interface Nation {
+  /** Main wall tint and atlas finish. */
+  wall: number;
+  wallTile: Tile;
+  /** Secondary wall (annexes, cladding). */
+  wall2: number;
+  wall2Tile: Tile;
+  /** Flat roof membrane tint. */
+  roof: number;
+  /** Pitched roof tint (corrugated or tiles). */
+  pitch: number;
+  roofStyle: RoofStyle;
+  /** Nation drab paint for steel doors, sheds, vehicles. */
+  drab: number;
+  /** Dark structural trim. */
+  trim: number;
+  /** 4 camo colours (base, 2, 3, highlight) + pattern tile. */
+  camo: number[];
+  camoTile: Tile;
+  /** Sandbag / hesco fabric. */
+  bag: number;
+  /** Ground hardstand (gravel) tint. */
+  ground: number;
+  /** Concrete tint (barriers, footings). */
+  conc: number;
+  /** ISO container tints. */
+  boxes: number[];
+  sign: { base: string; sub: string; fg: string; bg: string; border: string; font?: string; rtl?: boolean; mark?: string; markColor?: string; num: string };
+}
+
+const NATIONS: Record<string, Nation> = {
+  usa: {
+    wall: 0xcdbd98,
+    wallTile: Tile.Panel,
+    wall2: 0xb4aa90,
+    wall2Tile: Tile.Clad,
+    roof: 0xa8a294,
+    pitch: 0x9a9480,
+    roofStyle: 'flat',
+    drab: 0x857a5a,
+    trim: 0x4c4a42,
+    camo: [0xb8a57c, 0xa08c62, 0x7c6c4c, 0xcab890],
+    camoTile: Tile.CamoA,
+    bag: 0xc2ad84,
+    ground: 0xb0a690,
+    conc: 0xccc6b6,
+    boxes: [0xb49a6a, 0x7a7e5c, 0x9a5a3a],
+    sign: { base: 'US ARMY', sub: 'FORWARD OPERATING BASE', fg: '#f4f0e0', bg: '#3b4a2f', border: '#d8c89a', mark: 'star', markColor: '#f4f0e0', num: 'BLDG' },
+  },
+  israel: {
+    wall: 0xe2d4b0,
+    wallTile: Tile.Stone,
+    wall2: 0xd0c4a4,
+    wall2Tile: Tile.Panel,
+    roof: 0xc2baa4,
+    pitch: 0xb0a888,
+    roofStyle: 'flat',
+    drab: 0x8e8a6c,
+    trim: 0x5a5648,
+    camo: [0x9e9a7e, 0x8a8668, 0x6e6a54, 0xb2ae92],
+    camoTile: Tile.CamoA,
+    bag: 0xcdb98e,
+    ground: 0xc8b896,
+    conc: 0xd8d0bc,
+    boxes: [0xc8b48a, 0x8e8a6c, 0x5a6a7a],
+    sign: { base: 'צה״ל', sub: 'בסיס צבאי', fg: '#1d3f8f', bg: '#f2efe4', border: '#1d3f8f', rtl: true, font: '"Noto Sans Hebrew", Arial, "DejaVu Sans", sans-serif', mark: 'magen', markColor: '#1d3f8f', num: 'מבנה' },
+  },
+  china: {
+    wall: 0xdcdcd4,
+    wallTile: Tile.Panel,
+    wall2: 0x5e6c4a,
+    wall2Tile: Tile.Paint,
+    roof: 0x8e968a,
+    pitch: 0x4e7a84,
+    roofStyle: 'gable',
+    drab: 0x56643e,
+    trim: 0x3e4438,
+    camo: [0x5d6b47, 0x3d4a2e, 0x26281e, 0x8a8462],
+    camoTile: Tile.CamoB,
+    bag: 0x9a9268,
+    ground: 0x9a9888,
+    conc: 0xc8c8c0,
+    boxes: [0x5e6c4a, 0x8a3a2a, 0x3a5a7a],
+    sign: { base: '中国人民解放军', sub: '八一', fg: '#f8d84a', bg: '#a8201a', border: '#f8d84a', font: '"Noto Sans CJK SC", "WenQuanYi Zen Hei", "Microsoft YaHei", sans-serif', mark: 'star', markColor: '#f8d84a', num: '营' },
+  },
+  russia: {
+    wall: 0xaeb0a2,
+    wallTile: Tile.Panel,
+    wall2: 0x5a6a40,
+    wall2Tile: Tile.Paint,
+    roof: 0x7e8072,
+    pitch: 0x6c7660,
+    roofStyle: 'gable',
+    drab: 0x4e5c38,
+    trim: 0x3a3c34,
+    camo: [0x56663e, 0x3e4a2c, 0x26261c, 0x8a8060],
+    camoTile: Tile.CamoA,
+    bag: 0x8a8462,
+    ground: 0x8a887a,
+    conc: 0xb4b2a8,
+    boxes: [0x5a6a40, 0x7a3a2a, 0x40566e],
+    sign: { base: 'ВОЙСКОВАЯ ЧАСТЬ', sub: '№ 45321', fg: '#f0e8d0', bg: '#2e4a2e', border: '#c8b060', mark: 'star', markColor: '#d02818', num: 'КОРП' },
+  },
+  germany: {
+    wall: 0xa4a8a0,
+    wallTile: Tile.Panel,
+    wall2: 0x4e5c40,
+    wall2Tile: Tile.Clad,
+    roof: 0x70746c,
+    pitch: 0x5e665a,
+    roofStyle: 'flat',
+    drab: 0x4b5640,
+    trim: 0x34382f,
+    camo: [0x7a7c5a, 0x4b5a38, 0x5e4a36, 0x1f2018],
+    camoTile: Tile.CamoC,
+    bag: 0x8e8866,
+    ground: 0x96968a,
+    conc: 0xbcbcb4,
+    boxes: [0x4e5c40, 0x8a8a7c, 0x6a4e36],
+    sign: { base: 'BUNDESWEHR', sub: 'KASERNE', fg: '#141414', bg: '#f2f2ec', border: '#141414', mark: 'cross', markColor: '#141414', num: 'GEB' },
+  },
+  korea: {
+    wall: 0xd0d0c6,
+    wallTile: Tile.Panel,
+    wall2: 0x56643e,
+    wall2Tile: Tile.Paint,
+    roof: 0x8e9488,
+    pitch: 0x3e6a8a,
+    roofStyle: 'hip',
+    drab: 0x505c3a,
+    trim: 0x34382e,
+    camo: [0x6a7050, 0x4a5236, 0x2c2e24, 0x8c8466],
+    camoTile: Tile.CamoB,
+    bag: 0x928c66,
+    ground: 0x9a988a,
+    conc: 0xc6c6be,
+    boxes: [0x56643e, 0x3a6a9a, 0xa83a2a],
+    sign: { base: '대한민국 육군', sub: 'ROK ARMY', fg: '#ffffff', bg: '#1f3f2a', border: '#e0c050', font: '"Noto Sans CJK KR", "WenQuanYi Zen Hei", "Malgun Gothic", sans-serif', mark: 'taeguk', num: '동' },
+  },
+  ukraine: {
+    wall: 0xb8b6a8,
+    wallTile: Tile.Panel,
+    wall2: 0x5f6a3e,
+    wall2Tile: Tile.Paint,
+    roof: 0x727866,
+    pitch: 0x606a54,
+    roofStyle: 'gable',
+    drab: 0x56603a,
+    trim: 0x34362c,
+    camo: [0x5f6a3e, 0x464f2e, 0x2c2e22, 0x857a58],
+    camoTile: Tile.CamoB,
+    bag: 0x8a8462,
+    ground: 0x8e8c7c,
+    conc: 0xb8b6ac,
+    boxes: [0x5f6a3e, 0x2a5aa0, 0x8a6a3a],
+    sign: { base: 'ЗСУ', sub: 'ЗБРОЙНІ СИЛИ УКРАЇНИ', fg: '#f6d43a', bg: '#1f4fa0', border: '#f6d43a', mark: 'trident', markColor: '#f6d43a', num: 'БУД' },
+  },
+  turkey: {
+    wall: 0xd8ccb2,
+    wallTile: Tile.Plaster,
+    wall2: 0x6b7356,
+    wall2Tile: Tile.Paint,
+    roof: 0xa49a82,
+    pitch: 0x8a5a3a,
+    roofStyle: 'flat',
+    drab: 0x5e6448,
+    trim: 0x3e3e34,
+    camo: [0x6b7356, 0x4a5040, 0x2a2c24, 0x8c8a70],
+    camoTile: Tile.CamoA,
+    bag: 0xa89a74,
+    ground: 0xaaa090,
+    conc: 0xccc4b0,
+    boxes: [0x6b7356, 0xb8202e, 0xc8b48a],
+    sign: { base: 'TSK', sub: 'TÜRK SİLAHLI KUVVETLERİ', fg: '#ffffff', bg: '#c8102e', border: '#ffffff', mark: 'crescent', markColor: '#ffffff', num: 'BİNA' },
+  },
+  iran: {
+    wall: 0xcbb68c,
+    wallTile: Tile.Plaster,
+    wall2: 0xb09870,
+    wall2Tile: Tile.Stone,
+    roof: 0xb0a07e,
+    pitch: 0x9a8a6a,
+    roofStyle: 'flat',
+    drab: 0x8a7552,
+    trim: 0x4e4234,
+    camo: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a],
+    camoTile: Tile.CamoA,
+    bag: 0xc4ad80,
+    ground: 0xc0aa84,
+    conc: 0xd4c6a8,
+    boxes: [0xb19a6c, 0x5a6a48, 0x2f6a5a],
+    sign: { base: 'ارتش', sub: 'جمهوری اسلامی ایران', fg: '#ffffff', bg: '#2a5a32', border: '#e8e0c8', rtl: true, font: '"Noto Naskh Arabic", "Noto Sans Arabic", Tahoma, "DejaVu Sans", sans-serif', mark: 'disc', markColor: '#d8202a', num: 'ساختمان' },
+  },
+  neutral: {
+    wall: 0xd6d2c6,
+    wallTile: Tile.Panel,
+    wall2: 0xb8bcc0,
+    wall2Tile: Tile.Clad,
+    roof: 0x9a9890,
+    pitch: 0x8a8e90,
+    roofStyle: 'flat',
+    drab: 0x7a7a70,
+    trim: 0x4a4c4e,
+    camo: [0x8a8070, 0x6e6658, 0x4a463c, 0xa49a88],
+    camoTile: Tile.CamoA,
+    bag: 0xb0a07c,
+    ground: 0xa8a49a,
+    conc: 0xc8c6be,
+    boxes: [0x3a6a9a, 0xb8a27a, 0x8a3a2a],
+    sign: { base: 'CIVIL', sub: '', fg: '#ffffff', bg: '#3a4a5a', border: '#ffffff', num: 'NO' },
+  },
+};
+
+function nationOf(s: ModelStyle): Nation {
+  return NATIONS[s.faction] ?? NATIONS.neutral;
+}
+
 // ================================================================ palette
 
-/** Regional material palette. */
+/** Material palette of one owner (nation paint + team colour). */
 interface Pal {
   R: Region;
+  N: Nation;
   wall: SMat; // main facade
-  wall2: SMat; // secondary facade (cladding / brick / stone)
+  wall2: SMat; // secondary facade (cladding / paint)
   wallB: SMat; // slight colour variation of the main wall
   base: SMat; // plinth / dark concrete
   trim: SMat; // coping, cornices, frames
   roof: SMat; // flat roof surface
   pitch: SMat; // pitched roof cladding
-  slab: SMat; // ground apron
+  slab: SMat; // ground hardstand
   asphalt: SMat;
   concrete: SMat; // neutral cast concrete (barriers, pads, foundations)
+  panel: SMat; // precast concrete panels (T-walls, bunkers)
   team: SMat;
   teamD: SMat;
-  accent: SMat; // faction/regional trim colour
+  accent: SMat; // nation drab paint (doors, gates, sheds)
+  drab: SMat; // nation drab, steel
   steel: SMat;
   galv: SMat; // galvanised steel (light)
   dark: SMat;
@@ -467,6 +686,7 @@ interface Pal {
   red: SMat;
   hazard: SMat;
   sandbag: SMat;
+  hesco: SMat;
   wood: SMat;
   canvas: SMat;
   grating: SMat;
@@ -479,20 +699,24 @@ interface Pal {
   crane: SMat; // crane / machinery paint
   green: SMat; // vegetation
   soil: SMat;
+  camo: SMat; // nation camo paint
+  net: SMat; // camo net (alpha)
   lamp: SMat; // warm lamp glow
+  flood: SMat; // cold white floodlight
   red_l: SMat; // red aviation light
   green_l: SMat;
   cyan_l: SMat;
   amber_l: SMat;
   chain: SMat;
   solar: SMat;
-  mash: SMat;
-  tile: SMat; // decorative tile band (mideast) / dancheong band (asia)
-  dome: SMat; // dome cladding
+  aesa: SMat;
+  tile: SMat; // decorative band (national accent)
+  dome: SMat; // radome
   nation: SMat; // national accent colour (bold secondary band)
   clad: SMat; // composite / steel wall cladding (ribbed panels, bolt rows)
   pier: SMat; // dark structural trim: corner pilasters, plinths
   emb: SMat; // insignia decal atlas
+  signs: SMat; // sign atlas
   mats: Mats;
   s: ModelStyle;
   T: TexSet;
@@ -500,16 +724,16 @@ interface Pal {
 type TexSet = ReturnType<typeof texSet>;
 function texSet(M: Mats) {
   return {
-    concrete: (tint: number, uv = 2.2) => M.tex('concrete', { color: 0xe4e2dc, divisions: 2, grime: 0.35, seed: 11 }, tint, uv),
-    concreteDark: (tint: number, uv = 2) => M.tex('concreteDark', { color: 0xc4c0b6, divisions: 3, grime: 0.6, seed: 12 }, tint, uv),
-    plaster: (tint: number, uv = 2) => M.tex('plaster', { color: 0xf4f1ea, grime: 0.3, seed: 13 }, tint, uv),
-    sandstone: (tint: number, uv = 2.5) => M.tex('sandstone', { color: 0xe8d6b0, grime: 0.3, divisions: 8, seed: 14 }, tint, uv),
-    brick: (tint: number, uv = 3) => M.tex('brick', { color: 0x9a4a32, grime: 0.45, seed: 15 }, tint, uv),
-    corr: (tint: number, uv = 3) => M.tex('corrugated', { color: 0xd0d4d6, grime: 0.15, divisions: 24, seed: 16 }, tint, uv, 1, 0.45),
-    corrRust: (tint: number, uv = 4) => M.tex('corrugated', { color: 0xa8a49a, grime: 0.85, divisions: 24, seed: 17 }, tint, uv, 1, 0.35),
-    panel: (tint: number, uv = 2.5) => M.tex('metalPanel', { color: 0xdadde0, divisions: 3, grime: 0.2, seed: 18 }, tint, uv, 1, 0.35),
-    tiles: (tint: number, uv = 4) => M.tex('roofTiles', { color: 0xe6e8e6, divisions: 10, grime: 0.25, seed: 19 }, tint, uv, 0.9, 0.1),
-    asphalt: (tint: number, uv = 1.5) => M.tex('asphalt', { color: 0x46474a, seed: 20 }, tint, uv),
+    concrete: (tint: number, uv = 2.2) => M.at(Tile.Cast, mulHex(tint, 0xdedcd6, 1.1), uv * 0.6),
+    concreteDark: (tint: number, uv = 2) => M.at(Tile.Panel, mulHex(tint, 0xc4c0b6, 1.1), uv * 0.6),
+    plaster: (tint: number, uv = 2) => M.at(Tile.Plaster, tint, uv * 0.6),
+    sandstone: (tint: number, uv = 2.5) => M.at(Tile.Stone, tint, uv * 0.55),
+    brick: (tint: number, uv = 3) => M.at(Tile.Brick, tint, uv * 0.45),
+    corr: (tint: number, uv = 3) => M.at(Tile.Corr, tint, uv * 0.5),
+    corrRust: (tint: number, uv = 4) => M.at(Tile.Corr, mulHex(tint, 0xb0a490), uv * 0.45),
+    panel: (tint: number, uv = 2.5) => M.at(Tile.Plate, tint, uv * 0.8),
+    tiles: (tint: number, uv = 4) => M.at(Tile.RoofTile, tint, uv * 0.55),
+    asphalt: (tint: number, uv = 1.5) => M.at(Tile.Asphalt, tint, uv * 0.8),
   };
 }
 
@@ -540,14 +764,33 @@ function lazyObj<T extends object>(spec: Thunks<T>): T {
 }
 
 function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
-  const M = new Mats(s, fog);
-  const R = s.region;
-  const f = s.faction;
+  const N = nationOf(s);
+  const M = new Mats(s, fog, N);
   const T = texSet(M);
   const team = M.col(s.team, 0.55, 0.2);
-  const common = {
+  team.userData.team = true;
+  return {
+    R: () => s.region,
+    N: () => N,
+    wall: () => M.at(N.wallTile, N.wall),
+    wallB: () => M.at(N.wallTile, shade(N.wall, 0.92)),
+    wall2: () => M.at(N.wall2Tile, N.wall2),
+    base: () => M.at(Tile.Cast, shade(N.conc, 0.62)),
+    trim: () => M.col(N.trim, 0.5, 0.4),
+    roof: () => M.at(Tile.Asphalt, mulHex(N.roof, 0xffffff, 1.35), 1.4),
+    pitch: () => (N.roofStyle === 'hip' ? M.at(Tile.RoofTile, N.pitch) : M.at(Tile.Corr, N.pitch)),
+    slab: () => M.at(Tile.Soil, N.ground),
+    asphalt: () => M.at(Tile.Asphalt, 0xe8e6e0),
+    concrete: () => M.at(Tile.Cast, N.conc),
+    panel: () => M.at(Tile.Panel, N.conc),
     team: () => team,
-    teamD: () => M.col(shade(s.team, 0.6), 0.6, 0.2),
+    teamD: () => {
+      const m = M.col(shade(s.team, 0.6), 0.6, 0.2);
+      m.userData.team = true;
+      return m;
+    },
+    accent: () => M.col(N.drab, 0.7, 0.2),
+    drab: () => M.col(N.drab, 0.6, 0.5),
     steel: () => M.col(0x6f757b, 0.45, 0.65),
     galv: () => M.col(0xa8adb0, 0.4, 0.75),
     dark: () => M.col(0x2c2f33, 0.75, 0.3),
@@ -557,138 +800,47 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     white: () => M.col(0xe8e8e2, 0.75, 0.02),
     yellow: () => M.col(0xe0ae22, 0.7, 0.05),
     red: () => M.col(0xb3261e, 0.6, 0.1),
-    hazard: () => M.canvas('hazard', texHazard(), { uv: 8, rough: 0.7 }),
-    sandbag: () => M.tex('sandbag', { color: 0xb09c72, seed: 21, size: 256 }, 0xffffff, 7),
-    wood: () => M.tex('wood', { color: 0x8a6a46, seed: 22, size: 256 }, 0xffffff, 5),
-    canvas: () => M.tex('canvas', { color: 0x6b6a4a, seed: 23, grime: 0.4, size: 256 }, 0xffffff, 3),
-    grating: () => M.tex('grating', { color: 0x6a6c6e, seed: 24, size: 256 }, 0xffffff, 8, 1, 0.6),
-    rust: () => M.tex('rust', { seed: 25, size: 256 }, 0xffffff, 3),
-    soil: () => M.tex('soil', { color: 0x6a5a40, seed: 26, size: 256 }, 0xffffff, 2),
-    green: () => M.col(0x3f6a2c, 0.9, 0),
+    hazard: () => M.at(Tile.Hazard, 0xffffff),
+    sandbag: () => M.at(Tile.Bag, N.bag),
+    hesco: () => M.at(Tile.Bag, mulHex(N.bag, 0xe8e0c8), 2.2),
+    wood: () => M.at(Tile.Wood, 0xe8dcc8),
+    canvas: () => M.at(Tile.Canvas, mulHex(N.drab, 0xffffff, 1.2)),
+    grating: () => M.at(Tile.Grate, 0xc8ccd0),
+    rust: () => M.at(Tile.Corr, 0xa06a48),
+    soil: () => M.at(Tile.Soil, mulHex(N.ground, 0xb0a080)),
+    corr: () => T.corr(0xd0d4d6),
+    corrRust: () => T.corrRust(0xffffff),
+    brick: () => T.brick(0xffffff),
+    tank: () => M.col(mix(N.wall, 0xe8e8e0, 0.4), 0.5, 0.3),
     pipe: () => M.col(0x8c9196, 0.45, 0.6),
+    crane: () => M.col(0xd8a422, 0.6, 0.3),
+    green: () => M.col(0x3f6a2c, 0.9, 0),
+    camo: () => M.at(N.camoTile, 0xffffff),
+    net: () => M.net(),
     lamp: () => M.light(0xfff0c8, 2.8),
+    flood: () => M.light(0xe8f0ff, 3.4),
     red_l: () => M.light(0xff2a1a, 3.2),
     green_l: () => M.light(0x30ff6a, 2.6),
     cyan_l: () => M.light(0x5fe0ff, 2.6),
     amber_l: () => M.light(0xffa21a, 3),
     chain: () => M.canvas('chain', texChain(), { alphaTest: 0.4, double: true, uv: 9, metal: 0.6, rough: 0.5 }),
     solar: () => M.canvas('solar', texSolar(), { uv: 6, rough: 0.45, metal: 0.15 }),
-    mash: () => M.canvas('mash', texMashrabiya(), { uv: 9, rough: 0.8 }),
+    aesa: () => M.canvas('aesa', texAesa(), { uv: 6, rough: 0.5, metal: 0.4 }),
     win: () => M.win(false),
     winC: () => M.win(true),
-    corr: () => T.corr(0xffffff),
-    corrRust: () => T.corrRust(0xffffff),
-    brick: () => T.brick(0xffffff),
+    door: () => M.col(shade(N.drab, 0.85), 0.6, 0.45),
+    rollup: () => M.at(Tile.Corr, mulHex(N.drab, 0xffffff, 1.5), 2.6),
+    tile: () => M.col(s.accent, 0.6, 0.2),
+    dome: () => M.col(0xeeeee8, 0.6, 0.05),
     nation: () => M.col(s.accent, 0.55, 0.2),
-    clad: () => M.btex('clad', R === 'east' ? 0xb8bcb0 : R === 'mideast' ? 0xe0d4bc : R === 'asia' ? 0xe4e8ea : 0xc4ccd2),
-    pier: () => M.col(R === 'mideast' ? 0x8a7656 : R === 'east' ? 0x5e5c56 : R === 'asia' ? 0x4c5458 : 0x3e4448, 0.6, 0.2),
+    clad: () => M.at(Tile.Clad, N.wall2),
+    pier: () => M.col(N.trim, 0.6, 0.2),
     emb: () => M.decal(),
+    signs: () => M.signs(),
     mats: () => M,
     s: () => s,
     T: () => T,
   };
-  switch (R) {
-    case 'east': {
-      const ukr = f === 'ukraine';
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.concreteDark(0xffffff),
-        wallB: () => T.concreteDark(0xe8e2d4),
-        wall2: () => ukr ? T.plaster(0xe2cf92) : T.brick(0xffffff),
-        base: () => T.concreteDark(0x7e7a72),
-        trim: () => T.concrete(0xb8b4aa),
-        roof: () => T.asphalt(0xb0aaa0),
-        pitch: () => T.corr(0xa8a8a0, 1.6),
-        slab: () => T.concreteDark(0xd8d4cc, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xc0bcb2),
-        accent: () => M.col(ukr ? 0x3a5a8a : 0x3f5e3a, 0.7, 0.2), // painted gates (Soviet green / Ukrainian blue)
-        door: () => M.col(0x4a5a3c, 0.75, 0.3),
-        rollup: () => T.corrRust(0x9aa08a),
-        tank: () => M.col(0x9ea08e, 0.6, 0.35),
-        crane: () => M.col(0xd09a2a, 0.65, 0.3),
-        tile: () => M.col(0xa83228, 0.7, 0.1),
-        dome: () => T.panel(0xb4b8ba),
-      };
-    }
-    case 'asia': {
-      const kor = f === 'korea';
-      const trimC = kor ? 0x2f7a5a : 0xa8261e;
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.plaster(0xf2f2ee),
-        wallB: () => T.plaster(0xe6e8e6),
-        wall2: () => T.concrete(0xd8dcdc),
-        base: () => T.concrete(0x6e7274),
-        trim: () => M.col(trimC, 0.55, 0.1),
-        roof: () => T.concrete(0xa2a8aa),
-        pitch: () => T.tiles(kor ? 0x6d7f9e : 0x5fae96),
-        slab: () => T.concrete(0xd4d6d4, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xd0d0cc),
-        accent: () => M.col(trimC, 0.55, 0.1),
-        door: () => M.col(kor ? 0x2a4f6e : 0x7a1e1a, 0.6, 0.2),
-        rollup: () => T.corr(kor ? 0x7a96b8 : 0x8ab0a4),
-        tank: () => M.col(0xe8ecec, 0.45, 0.3),
-        crane: () => M.col(0xe0b020, 0.6, 0.3),
-        tile: () => M.col(kor ? 0x2a6a8e : 0x2f8a6e, 0.6, 0.1),
-        dome: () => T.panel(0xeef2f2),
-      };
-    }
-    case 'mideast': {
-      const tur = f === 'turkey';
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.plaster(tur ? 0xeee2c8 : 0xe6cfa2),
-        wallB: () => T.plaster(tur ? 0xe2d4b4 : 0xdcc396),
-        wall2: () => T.sandstone(tur ? 0xf0e4cc : 0xffffff),
-        base: () => T.sandstone(0x9a8460),
-        trim: () => T.sandstone(0xf4e8d0),
-        roof: () => T.plaster(0xc4b08c),
-        pitch: () => T.plaster(0xd0bc96),
-        slab: () => T.concrete(0xe0cfa8, 1.2),
-        asphalt: () => T.asphalt(0xd8ccb0),
-        concrete: () => T.concrete(0xe0d4b8),
-        accent: () => M.col(tur ? 0xb8202e : 0x1f9a8e, 0.5, 0.1),
-        door: () => M.col(0x6a4a2a, 0.8, 0.05),
-        rollup: () => T.corr(0xd8c8a4),
-        tank: () => M.col(0xe8e2d4, 0.5, 0.3),
-        crane: () => M.col(0xe8c040, 0.6, 0.3),
-        tile: () => M.canvas('tb' + f, texTileBand(tur ? 0x1f5fa8 : 0x1f9aa0, tur ? 0xb8202e : 0x1a3f8a), { uv: 0, rough: 0.35, metal: 0.1 }),
-        dome: () => tur ? T.panel(0x9aa2a8) : T.tiles(0x49c0b8),
-      };
-    }
-    default: {
-      // west
-      const isr = f === 'israel';
-      const ger = f === 'germany';
-      const wallT = isr ? 0xf2ead8 : ger ? 0xd2d2ce : 0xe0d6c0;
-      return {
-        ...common,
-        R: () => 'west',
-        wall: () => isr ? T.sandstone(0xfaf2e0, 2.2) : T.concrete(wallT),
-        wallB: () => T.concrete(shade(wallT, 0.93)),
-        wall2: () => M.btex('clad', ger ? 0x9ea694 : isr ? 0xd2d6d8 : 0xa9b4bc),
-        base: () => T.concrete(0x6e6c68),
-        trim: () => M.col(0x5a6066, 0.4, 0.6),
-        roof: () => T.concrete(0x8e9092, 1.6),
-        pitch: () => T.corr(ger ? 0x6c7466 : 0x8a9298),
-        slab: () => T.concrete(0xd8d6d0, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xd2d0ca),
-        accent: () => M.col(s.accent, 0.6, 0.2),
-        door: () => M.col(0x5a6066, 0.5, 0.5),
-        rollup: () => T.corr(0xc8ccce),
-        tank: () => M.col(0xdadcda, 0.45, 0.4),
-        crane: () => M.col(0xf0c020, 0.55, 0.3),
-        tile: () => M.col(s.accent, 0.6, 0.2),
-        dome: () => T.panel(0xf2f2f0),
-      };
-    }
-  }
 }
 
 // ================================================================ animation specs
@@ -698,6 +850,8 @@ type AnimSpec =
   | { k: 'osc'; n: string; ax: Ax; a: number; f: number; p: number; b: number }
   | { k: 'slide'; n: string; ax: Ax; a: number; f: number; p: number; b: number }
   | { k: 'blink'; n: string; per: number; on: number; p: number }
+  /** Driven by unit production (AnimState.produced): pos / rot ease by `a` while a unit rolls out; vis shows (and spins about ax at v) only then. */
+  | { k: 'prod'; n: string; ax: Ax; a: number; mode: 'pos' | 'rot' | 'vis'; v?: number }
   | { k: 'pump'; crank: string; beam: string; rod: string; pit: string; G: P2; P: P2; r: number; R: number; Rf: number; amp: number; rodY: number };
 
 interface Tpl {
@@ -860,6 +1014,14 @@ class Kit {
     if (scale > 0 && !this.luv) worldUV(geo, scale);
     else if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     for (const name of Object.keys(geo.attributes)) if (!KEEP.has(name)) geo.deleteAttribute(name);
+    if (m.userData.atlas) {
+      // atlas tile index per vertex (uv1.x; uv1 survives the fracture / wreck geometry rebuild)
+      const tile = (mv.userData.tile as number | undefined) ?? 0;
+      const n = geo.attributes.position.count;
+      const arr = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) arr[i * 2] = tile;
+      geo.setAttribute('uv1', new THREE.BufferAttribute(arr, 2));
+    }
     if ((m as SMat).vertexColors) {
       const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
       const n = geo.attributes.position.count;
@@ -880,10 +1042,16 @@ class Kit {
       const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
       this.rec.lamps.push((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2, c.r, c.g, c.b);
     }
-    let bin = this.bins.get(this.cur);
+    // small root-level parts (rails, bolts, props) go to a separate detail mesh the far-zoom LOD hides
+    let target = this.cur;
+    if (target === this.root && this.detailOk(m, mv)) {
+      geo.computeBoundingSphere();
+      if (geo.boundingSphere!.radius < 0.045) target = this.detailObj();
+    }
+    let bin = this.bins.get(target);
     if (!bin) {
       bin = new Map();
-      this.bins.set(this.cur, bin);
+      this.bins.set(target, bin);
     }
     let list = bin.get(m);
     if (!list) {
@@ -892,6 +1060,21 @@ class Kit {
     }
     list.push(geo);
     geo = null as unknown as THREE.BufferGeometry;
+  }
+
+  private detail: THREE.Group | null = null;
+  private detailObj() {
+    if (!this.detail) {
+      this.detail = new THREE.Group();
+      this.detail.name = 'lod-detail';
+      this.root.add(this.detail);
+    }
+    return this.detail;
+  }
+  /** Parts that may go to the far-zoom detail mesh: plain surfaces (no lamps, glass panes, team colour, decals). */
+  private detailOk(m: Mat, mv: Mat) {
+    if (mv.userData.team || m.userData.baseEI) return false;
+    return !!m.userData.atlas;
   }
 
   /** Merge everything into meshes. */
@@ -912,6 +1095,7 @@ class Kit {
         const isGlow = !!sm.userData.baseEI && !sm.map;
         mesh.castShadow = !isGlow && !sm.alphaTest;
         mesh.receiveShadow = true;
+        if (obj === this.detail) mesh.userData.lodDetail = true;
         obj.add(mesh);
       }
     }
@@ -1210,9 +1394,9 @@ function punched(k: Kit, face: Face, sign: number, a0: number, a1: number, n: nu
     if (skip && c + ww / 2 > skip[0] && c - ww / 2 < skip[1]) continue;
     if (style === 'mash') {
       // projecting wooden mashrabiya bay
-      faceBox(k, P.wood, face, sign, c, y - 0.015, at, ww + 0.03, 0.012, 0.035);
-      faceBox(k, P.mash, face, sign, c, y - 0.003, at, ww + 0.016, wh + 0.01, 0.03);
-      faceBox(k, P.wood, face, sign, c, y + wh + 0.007, at, ww + 0.03, 0.012, 0.038);
+      faceBox(k, P.trim, face, sign, c, y - 0.015, at, ww + 0.03, 0.012, 0.035);
+      faceBox(k, P.accent, face, sign, c, y - 0.003, at, ww + 0.016, wh + 0.01, 0.02);
+      for (let j = 0; j < 4; j++) faceBox(k, P.dark, face, sign, c, y + 0.006 + (j * wh) / 4, at, ww + 0.01, 0.006, 0.026);
       continue;
     }
     const off = sign * 0.003;
@@ -1305,31 +1489,7 @@ function flatRoof(k: Kit, x0: number, x1: number, z0: number, z1: number, y: num
   k.box(m, W, ph, t, cx, y, z0 + t / 2);
   k.box(m, t, ph, D - 2 * t, x1 - t / 2, y, cz);
   k.box(m, t, ph, D - 2 * t, x0 + t / 2, y, cz);
-  if (P.R === 'mideast') {
-    // crenellated parapet (stepped merlons)
-    const mer = (a0: number, a1: number, fixed: number, alongX: boolean) => {
-      const n = Math.max(2, Math.round((a1 - a0) / 0.07));
-      for (let i = 0; i < n; i++) {
-        const a = a0 + ((a1 - a0) * (i + 0.5)) / n;
-        if (alongX) {
-          k.box(P.trim, 0.034, 0.022, t + 0.006, a, y + ph, fixed);
-          k.box(P.trim, 0.018, 0.014, t + 0.006, a, y + ph + 0.022, fixed);
-        } else {
-          k.box(P.trim, t + 0.006, 0.022, 0.034, fixed, y + ph, a);
-          k.box(P.trim, t + 0.006, 0.014, 0.018, fixed, y + ph + 0.022, a);
-        }
-      }
-    };
-    mer(x0, x1, z1 - t / 2, true);
-    mer(x0, x1, z0 + t / 2, true);
-    mer(z0 + t, z1 - t, x1 - t / 2, false);
-    mer(z0 + t, z1 - t, x0 + t / 2, false);
-    k.box(P.trim, W + 0.01, 0.01, 0.01, cx, y + ph - 0.012, z1 + 0.003);
-    k.box(P.trim, 0.01, 0.01, D + 0.01, x1 + 0.003, y + ph - 0.012, cz);
-    // team coloured band under the merlons: reads from the high camera
-    k.box(P.team, W + 0.012, 0.014, 0.008, cx, y + ph - 0.03, z1 + 0.004);
-    k.box(P.team, 0.008, 0.014, D + 0.012, x1 + 0.004, y + ph - 0.03, cz);
-  } else {
+  {
     // team coloured coping: outlines every roof in the owner's colour from above
     const ct = P.team;
     const ch = 0.014;
@@ -1370,7 +1530,7 @@ function roofEmblem(k: Kit, x0: number, x1: number, z0: number, z1: number, y: n
   const f = P.s.faction;
   const W = x1 - x0;
   const D = z1 - z0;
-  const sz = Math.min(W * 0.46, D * 0.42, 0.46);
+  const sz = Math.min(W * 0.4, D * 0.38, 0.32);
   if (f === 'neutral' || sz < 0.2 || k.emb > 0) return false;
   k.emb++;
   const cell = roundelCell(f);
@@ -1487,7 +1647,7 @@ function vent(k: Kit, x: number, y: number, z: number, r = 0.022) {
   k.cyl(P.galv, r * 1.6, 0.014, x, y + 0.05, z, 8, r * 0.8);
 }
 
-/** Regional rooftop clutter on a flat roof. */
+/** Nation flavoured rooftop clutter on a flat roof. */
 function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: number, n = 2) {
   const P = k.P;
   const r = k.rnd;
@@ -1495,14 +1655,23 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
   const D = z1 - z0;
   const px = (f: number) => x0 + 0.1 + (W - 0.2) * f;
   const pz = (f: number) => z0 + 0.1 + (D - 0.2) * f;
-  switch (P.R) {
-    case 'west':
-      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
-      vent(k, px(r()), y, pz(0.8));
-      vent(k, px(r()), y, pz(0.7));
-      if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
+  switch (P.s.faction) {
+    case 'israel':
+      // solar water heaters (dud shemesh) + water tanks: the Israeli roofline
+      for (let i = 0; i < n + 1; i++) {
+        const xx = px((i + 0.5) / (n + 1));
+        const zz = pz(0.3 + (i % 2) * 0.3);
+        k.at(xx, y, zz, 0.2, () => {
+          k.boxR(P.solar, 0.12, 0.008, 0.09, 0, 0.05, 0.03, 0, -0.7, 0, 6);
+          k.box(P.galv, 0.006, 0.07, 0.006, -0.05, 0, -0.01);
+          k.box(P.galv, 0.006, 0.07, 0.006, 0.05, 0, -0.01);
+          k.at(0, 0.09, -0.035, 0, () => k.tube(P.white, [-0.06, 0, 0], [0.06, 0, 0], 0.022, 10));
+        });
+      }
+      vent(k, px(0.9), y, pz(0.85));
       break;
-    case 'east':
+    case 'russia':
+    case 'ukraine':
       for (let i = 0; i < n; i++) {
         const xx = px((i + 0.5) / n);
         const zz = pz(0.3 + r() * 0.3);
@@ -1510,31 +1679,35 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
         k.box(P.concrete, 0.075, 0.012, 0.075, xx, y + 0.12, zz);
       }
       k.pipe(P.rust, [[px(0.1), y + 0.03, pz(0.9)], [px(0.6), y + 0.03, pz(0.9)], [px(0.6), y + 0.03, pz(0.5)]], 0.01, 6);
-      k.cyl(P.dark, 0.004, 0.25, px(0.85), y, pz(0.2), 4);
-      k.box(P.wall, 0.16, 0.08, 0.12, px(0.2), y, pz(0.75));
+      antenna(k, px(0.85), y, pz(0.2), 0.25);
+      k.box(P.wall2, 0.16, 0.08, 0.12, px(0.2), y, pz(0.75));
       break;
-    case 'asia':
+    case 'china':
+    case 'korea':
       for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.3), 0.14, 0.1);
-      // solar water heater
-      k.at(px(0.75), y, pz(0.75), 0, () => {
-        k.cyl(P.galv, 0.025, 0.2, -0.1, 0.1, 0, 10);
-        k.tube(P.galv, [-0.1, 0.1, 0], [0.1, 0.1, 0], 0.022, 10);
-        k.boxR(P.solar, 0.2, 0.008, 0.12, 0, 0.05, 0.05, 0, -0.6, 0, 6);
+      // stainless water tank on a stand
+      k.at(px(0.78), y, pz(0.78), 0, () => {
+        for (const sx of [-1, 1]) k.box(P.steel, 0.012, 0.05, 0.08, sx * 0.05, 0, 0);
+        k.tube(P.galv, [-0.08, 0.085, 0], [0.08, 0.085, 0], 0.04, 12);
       });
       break;
-    case 'mideast':
+    case 'turkey':
+    case 'iran':
       for (let i = 0; i < n + 1; i++) {
         const xx = px((i + 0.5) / (n + 1));
         const zz = pz(0.2 + r() * 0.4);
-        // water tank on a stand
         const c = i % 2 ? P.black : P.white;
         k.box(P.steel, 0.07, 0.03, 0.07, xx, y, zz);
         k.cyl(c, 0.035, 0.07, xx, y + 0.03, zz, 12);
       }
-      k.rbox(P.white, 0.1, 0.06, 0.07, px(0.8), y, pz(0.8), 0.006);
-      k.cyl(P.black, 0.02, 0.003, px(0.8), y + 0.06, pz(0.8), 10);
+      hvac(k, px(0.8), y, pz(0.8), 0.12, 0.09);
       satDish(k, px(0.15), y, pz(0.85), 0.05, 0.6);
       break;
+    default:
+      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
+      vent(k, px(r()), y, pz(0.8));
+      vent(k, px(r()), y, pz(0.7));
+      if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
   }
 }
 
@@ -1612,7 +1785,8 @@ function block(k: Kit, o: BlockOpt): number {
   const floors = o.floors ?? Math.max(1, Math.round(h / 0.24));
   k.box(P.base, W + 0.014, 0.03, D + 0.014, cx, y0, cz);
   k.rbox(wall, W, h, D, cx, y0, cz, 0.008);
-  const style = o.win ?? { west: 'ribbon', east: 'punched', asia: 'ribbonC', mideast: 'arched' }[P.R];
+  const f = P.s.faction;
+  const style = o.win ?? (f === 'usa' || f === 'germany' || f === 'neutral' ? 'ribbon' : 'punched');
   const skipZ: [number, number] | undefined = o.door !== undefined ? [o.door - 0.09, o.door + 0.09] : undefined;
   const skipX: [number, number] | undefined = o.doorX !== undefined ? [o.doorX - 0.09, o.doorX + 0.09] : undefined;
   if (style !== 'none') {
@@ -1622,17 +1796,13 @@ function block(k: Kit, o: BlockOpt): number {
   if (o.door !== undefined) door(k, 'z', 1, o.door, y0, z1, 0.12, Math.min(0.2, h * 0.8));
   if (o.doorX !== undefined) door(k, 'x', 1, o.doorX, y0, x1, 0.12, Math.min(0.2, h * 0.8));
   // floor lines
-  if (P.R === 'west' || P.R === 'asia') {
-    for (let f = 1; f < floors; f++) {
-      const yy = y0 + (h * f) / floors - 0.006;
-      k.box(P.R === 'asia' ? P.white : P.wall2, W + 0.012, 0.014, D + 0.012, cx, yy, cz);
-    }
+  for (let fl = 1; fl < floors; fl++) {
+    const yy = y0 + (h * fl) / floors - 0.006;
+    k.box(P.base, W + 0.012, 0.012, D + 0.012, cx, yy, cz);
   }
   // downpipes at the visible corners
-  if (P.R !== 'mideast') {
-    k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
-    if (W > 0.8) k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
-  }
+  k.cyl(P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
+  if (W > 0.8) k.cyl(P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
   // bold team band with dark keylines and a national accent stripe below
   if (o.band !== false) {
     const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.05 : 0.044);
@@ -1647,8 +1817,8 @@ function block(k: Kit, o: BlockOpt): number {
   const roof = o.roof ?? 'flat';
   if (roof === 'flat') {
     const ph = o.parapet ?? 0.035;
-    flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? (P.R === 'west' ? P.wall2 : wall));
-    const emb = o.emblem !== false && D >= 0.55 && W * D >= 0.45 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
+    flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? wall);
+    const emb = o.emblem === true && D >= 0.5 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
     if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, emb ? z0 + D * 0.42 : z1, top + 0.01, o.equip ?? 2);
     return top + ph + 0.01;
   }
@@ -1975,19 +2145,23 @@ function sandbags(k: Kit, a: P2, b: P2, rows = 2, y = 0) {
   });
 }
 
-/** HESCO style barrier (wire mesh baskets filled with soil). */
-function hesco(k: Kit, a: P2, b: P2, h = 0.12) {
+/** HESCO bastion line (geotextile lined wire baskets filled with soil). */
+function hesco(k: Kit, a: P2, b: P2, h = 0.12, y = 0, dd = 0.1) {
   const P = k.P;
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
   const ry = -Math.atan2(b[1] - a[1], b[0] - a[0]);
-  k.at((a[0] + b[0]) / 2, 0, (a[1] + b[1]) / 2, ry, () => {
-    const n = Math.max(1, Math.round(len / 0.1));
-    for (let i = 0; i < n; i++) {
-      const xx = -len / 2 + (len * (i + 0.5)) / n;
-      k.box(P.mats.tex('canvas', { color: 0x6b6a4a, seed: 23, grime: 0.4, size: 256 }, 0xd8c8a0, 6), len / n - 0.004, h, 0.1, xx, 0, 0);
-      k.box(P.soil, len / n - 0.012, 0.004, 0.09, xx, h, 0);
-      for (const sz of [-1, 1]) k.box(P.galv, len / n - 0.002, 0.004, 0.003, xx, h - 0.004, sz * 0.05);
+  k.at((a[0] + b[0]) / 2, y, (a[1] + b[1]) / 2, ry, () => {
+    const n = Math.max(1, Math.round(len / dd));
+    const cw = len / n;
+    k.box(P.hesco, len, h, dd, 0, 0, 0);
+    k.box(P.soil, len - 0.01, 0.006, dd - 0.012, 0, h - 0.003, 0);
+    // wire mesh frame: vertical posts at the cell joints + top rails
+    for (let i = 0; i <= n; i++) {
+      const xx = -len / 2 + i * cw;
+      for (const sz of [-1, 1]) k.box(P.galv, 0.004, h + 0.004, 0.004, xx, 0, sz * (dd / 2 + 0.001));
     }
+    for (const sz of [-1, 1]) k.box(P.galv, len, 0.004, 0.004, 0, h - 0.002, sz * (dd / 2 + 0.001));
+    for (const sz of [-1, 1]) k.box(P.galv, len, 0.003, 0.003, 0, h * 0.5, sz * (dd / 2 + 0.001));
   });
 }
 
@@ -2226,10 +2400,10 @@ function stairs(k: Kit, x: number, z: number, y0: number, y1: number, alongX: bo
   }
 }
 
-/** Stencilled number / text decal on a wall (alpha tested). */
+/** Stencilled number / text decal on a wall (alpha tested, shared sign atlas). */
 function stencil(k: Kit, text: string, face: Face, sign: number, c: number, y: number, at: number, w: number, color = '#f0eee6') {
-  const m = k.P.mats.canvas('st' + text + color, texStencil(text, color), { alphaTest: 0.5, rough: 0.8 });
-  k.panel(m, face, sign, c, y, at + sign * 0.005, w, w / 2);
+  const uv = signCell('st|' + text + color, { text, fg: color });
+  k.panel(k.P.signs, face, sign, c, y, at + sign * 0.005, w, w / 4, uv);
 }
 
 /** Painted road markings: dashed line along x or z. */
@@ -2295,6 +2469,10 @@ function instance(t: Tpl): FxModel {
     const o = sp.k === 'pump' ? undefined : find(sp.n);
     let base = 0;
     if (o && (sp.k === 'osc' || sp.k === 'slide')) base = sp.k === 'osc' ? o.rotation[sp.ax] : o.position[sp.ax];
+    if (o && sp.k === 'prod') {
+      base = sp.mode === 'pos' ? o.position[sp.ax] : sp.mode === 'rot' ? o.rotation[sp.ax] : 0;
+      if (sp.mode === 'vis') o.visible = false;
+    }
     // battle damage knocks dishes / masts askew about an axis they don't animate on
     const tax: Ax = sp.k === 'spin' || sp.k === 'osc' ? (sp.ax === 'x' ? 'z' : 'x') : 'x';
     const tilt = (0.16 + ((i * 0.618 + t.specs.length * 0.37) % 1) * 0.2) * (i % 2 ? 1 : -1);
@@ -2325,6 +2503,8 @@ function instance(t: Tpl): FxModel {
     .map((sp) => ({ sp, crank: find(sp.crank), beam: find(sp.beam), rod: find(sp.rod), pit: find(sp.pit), phase: 0 }));
   const glow = t.glow as SMat[];
   const flags = t.flags;
+  /** Production door / lift / beacon easing (0 closed .. 1 open). */
+  let prodK = 0;
   const anim = (s: AnimState) => {
     const pw = s.powered;
     const f = pw ? 1 : 0.22;
@@ -2334,6 +2514,8 @@ function instance(t: Tpl): FxModel {
     if (s.built < 1) return;
     const t0 = s.time;
     const dmg = s.damage;
+    const pAge = s.produced ?? Infinity;
+    prodK += ((pAge < 3.2 ? 1 : 0) - prodK) * Math.min(1, s.dt * (pAge < 3.2 ? 2.6 : 1.4));
     // heavy damage: dishes / radars tilt and jam
     const tiltK = dmg < 0.6 ? 0 : Math.min(1, (dmg - 0.6) / 0.25);
     const jam = dmg >= 0.85 ? 0 : 1;
@@ -2353,6 +2535,14 @@ function instance(t: Tpl): FxModel {
           break;
         case 'blink':
           o.visible = pw && ((t0 + sp.p) % sp.per) / sp.per < sp.on;
+          break;
+        case 'prod':
+          if (sp.mode === 'pos') o.position[sp.ax] = b.base + sp.a * prodK;
+          else if (sp.mode === 'rot') o.rotation[sp.ax] = b.base + sp.a * prodK;
+          else {
+            o.visible = prodK > 0.08;
+            if (o.visible) o.rotation[sp.ax] += (sp.v ?? 6) * s.dt;
+          }
           break;
       }
     }
