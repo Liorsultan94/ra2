@@ -1056,8 +1056,8 @@ export class Fracture {
     const src = collect(root);
     let tris = 0;
     for (const s of src) tris += (s.mesh.geometry.index?.count ?? s.mesh.geometry.attributes.position.count) / 3;
-    // medium (phones): only cut small models synchronously; big ones were normally prewarmed while burning
-    const tpl = this.template(root, this.targetFor(w, d), src, this.quality === 'high' || tris < 6000);
+    // medium (phones): only cut small models synchronously; big ones are normally prewarmed while burning
+    const tpl = this.template(root, this.targetFor(w, d), src, this.quality === 'high' || tris < 3000);
     if (!tpl || tpl.n < 3) return null;
     // mass destruction (superweapons): later buildings get fewer, clustered bodies so more of them can break
     const fw = new FracWreck(tpl, src, root, Math.min(tpl.n - 1, room, Math.max(6, Math.floor(room / 2))), this, w, d);
