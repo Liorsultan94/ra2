@@ -974,6 +974,13 @@ export class AudioSystem {
     pg.setTargetAtTime(0, now, 0.12);
   }
 
+  /** One battle-music stinger (cinematic intro / outro); rate-limited by the music engine. */
+  sting(kind: StingerKind = 'heavy'): void {
+    const g = this.g;
+    if (!g || this.musicMode !== 'battle' || !g.music.running || g.ctx.state !== 'running') return;
+    g.music.stinger(kind);
+  }
+
   setMusicMode(mode: 'menu' | 'battle'): void {
     if (mode !== 'menu' && mode !== 'battle') return;
     // every battle starts from calm

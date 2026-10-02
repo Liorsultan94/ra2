@@ -8,6 +8,7 @@ import type { FogOfWar } from '../fog';
 import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
+import { WX } from '../wxuniforms';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
 
@@ -61,6 +62,7 @@ export class AmbientLife {
   private busy: Uint8Array;
   private busyT = 0;
 
+  private readonly dynamicWx: boolean;
   constructor(private host: AmbientHost) {
     const { world, fog, terrain, effects, quality } = host;
     const map = world.map;
@@ -69,7 +71,9 @@ export class AmbientLife {
     setBusy(this.busy);
     const phone = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const probe = new FogProbe(fog, map.w, map.h);
-    const foul = host.atmos.cfg.weather !== 'clear';
+    // dynamic weather starts clear; foulness is then followed per frame from the live rain/dust level
+    this.dynamicWx = host.atmos.cfg.weather === 'dynamic';
+    const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
     this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
@@ -160,6 +164,7 @@ export class AmbientLife {
   update(dt: number) {
     this.time += dt;
     const f = this.frame;
+    if (this.dynamicWx) f.foul = WX.wxRain.value > 0.3 || WX.wxDust.value > 0.3;
     this.scanT -= dt;
     if (this.scanT <= 0) {
       this.scanT = 0.25;

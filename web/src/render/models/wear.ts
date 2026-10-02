@@ -146,8 +146,9 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       ${
         cfg.dirt
           ? `if (vWDirt > 0.01) {
-        float dn = wNoise(wP * 2.7 + 11.0) * 0.65 + wNoise(wP * 7.9) * 0.35;
-        float dk = clamp(vWDirt * (0.55 + 1.2 * (dn - 0.35)), 0.0, 1.0);
+        // broad patches with vertical run-off streaks (no fine speckle: reads as stucco on flat armour)
+        float dn = wNoise(wP * vec3(1.1, 0.35, 1.1) + 11.0) * 0.55 + wNoise(wP * vec3(3.6, 0.9, 3.6) + 5.0) * 0.3 + wNoise(wP * vec3(9.0, 1.6, 9.0)) * 0.15;
+        float dk = clamp(vWDirt * (0.5 + 1.1 * (dn - 0.35)), 0.0, 1.0);
         vec3 dc = mix(uDust, uMud, smoothstep(0.5, 0.95, vWDirt * (0.65 + 0.7 * dn)));
         diffuseColor.rgb = mix(diffuseColor.rgb, dc, dk * 0.9);
       }`

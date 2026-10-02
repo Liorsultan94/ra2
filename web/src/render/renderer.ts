@@ -31,6 +31,12 @@ import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import { JitterRenderPass, TemporalPass } from './ultra/temporal';
+import { PerfHud, perfPrefs } from './perf/hud';
+import { PerfProbe } from './perf/probe';
+import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
+import { AutoInstancer } from './perf/instancer';
+import { OccluderGrid } from './perf/occlusion';
+import { treeSpots } from './vegetation';
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
@@ -103,6 +109,12 @@ export interface Visual {
   trackAcc: number;
   bank: number;
   anim: AnimState;
+  /** Far-zoom detail LOD (src/render/perf/lod.ts). */
+  lod: LodInfo;
+  /** Something (tree, building, ridge) may hide this unit from the camera: x-ray proxies needed (perf/occlusion.ts). */
+  occl: boolean;
+  /** The model or its shadow may be on screen (last sync). */
+  near: boolean;
 }
 
 interface Wreck {
@@ -260,6 +272,12 @@ export class GameRenderer {
   private upNeed = 3;
   private lastUpAt = -1e9;
   private lastFt = 0;
+  /** Draw call / triangle / CPU breakdown per pass and category (debug + benchmark; inactive until enablePerf()). */
+  readonly perf: PerfProbe;
+  /** Per-frame automatic instancing of identical unit parts (src/render/perf/instancer.ts). */
+  readonly instancer: AutoInstancer;
+  private instRoots: THREE.Object3D[] = [];
+  private perfHud = new PerfHud();
   selection = new Set<number>();
   /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
   hover = -1;
@@ -291,6 +309,9 @@ export class GameRenderer {
     this.scene.background = new THREE.Color(0x2a2824);
     this.perspective = !/[?&]cam=ortho\b/.test(location.search);
     this.camera = this.perspective ? new THREE.PerspectiveCamera(PERSP_FOV, 1, 0.5, 400) : new THREE.OrthographicCamera(-10, 10, 10, -10, 1, 400);
+    this.perf = new PerfProbe(this.renderer, this.scene, this.camera);
+    this.instancer = new AutoInstancer(this.renderer, this.scene, this.camera, (m) => m.userData.outlineColor !== undefined);
+    this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -322,6 +343,7 @@ export class GameRenderer {
 
     const { map } = world;
     this.fog = new FogOfWar(map.w, map.h);
+    this.occluders = new OccluderGrid(map, treeSpots(map, quality));
     this.terrain = new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
     this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
@@ -336,6 +358,11 @@ export class GameRenderer {
           fl.lights.push(l);
           fl.group.add(l);
         }
+    }
+    if (quality === 'medium' && coarse) {
+      // phones: two dynamic fire / explosion lights instead of three (every lit pixel loops over them; the ground glow decals stay)
+      const fl = this.effects.lights as unknown as { lights?: THREE.PointLight[]; group?: THREE.Group };
+      if (Array.isArray(fl.lights) && fl.group && fl.lights.length > 2) fl.group.remove(fl.lights.pop()!);
     }
     this.debris = new Debris(map, this.effects, this.fog);
     this.fracture = new Fracture(quality);
@@ -417,12 +444,19 @@ export class GameRenderer {
       this.finalPass.rays = this.effects.enableGodRays(this.camera);
     }
     this.applyLevel(this.level, false);
+    this.effects.group.name = 'effects';
+    this.debris.group.name = 'debris';
+    this.marks.group.name = 'marks';
+    this.bridgeFx.group.name = 'bridges';
+    this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
     if (ambientEnabled()) {
       this.ambient = new AmbientLife(this);
       this.scene.add(this.ambient.group);
+      this.ambient.group.name = 'ambient';
     }
+    if (/[?&]perf=1\b/.test(location.search)) this.enablePerf();
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -499,6 +533,28 @@ export class GameRenderer {
   perfStats() {
     const s = this.ladder[this.level];
     return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+  }
+
+  /** Start the per-pass / per-category / per-system cost probe (src/render/perf/probe.ts). */
+  enablePerf() {
+    const sys = (obj: object, fn: string) => ({ obj, fn });
+    this.perf.enable({
+      'sync entities': sys(this, 'syncEntities'),
+      'wrecks': sys(this, 'updateWrecks'),
+      'projectiles': sys(this, 'syncProjectiles'),
+      'readability': sys(this, 'updateReadability'),
+      'outline+icons draw': sys(this.readability, 'renderOverlays'),
+      'camera+shadow fit': sys(this, 'updateCamera'),
+      'atmos': sys(this.atmos, 'update'),
+      'effects': sys(this.effects, 'update'),
+      'terrain': sys(this.terrain, 'update'),
+      'bridges': sys(this.bridgeFx, 'update'),
+      'superfx': sys(this.superFx, 'update'),
+      'fog': sys(this.fog, 'update'),
+      ...(this.ambient ? { ambient: sys(this.ambient, 'update') } : {}),
+      'instancer': sys(this.instancer, 'update'),
+      'frame total': sys(this, 'render'),
+    });
   }
 
   /** Zoom that shows units at a comfortable, RA2-like size for this viewport. */
@@ -817,7 +873,10 @@ export class GameRenderer {
   private makeVisual(e: Entity): Visual {
     const d = DEFS[e.def];
     const model = createModel(d.model, styleFor(this.world, e.owner), this.fog);
+    const cat = e.kind === 'building' ? 'building' : d.category === 'infantry' ? 'infantry' : d.category === 'air' ? 'aircraft' : 'vehicle';
+    model.root.userData.perfCat = cat;
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
+    const lod = prepareLod(model.root, cat, this.quality === 'medium', e.owner >= 0 ? this.world.players[e.owner].color : 0x9a9a9a);
     this.scene.add(model.root);
     return {
       id: e.id,
@@ -841,6 +900,9 @@ export class GameRenderer {
       trackAcc: 0,
       bank: 0,
       anim: newAnim(),
+      lod,
+      occl: true,
+      near: true,
     };
   }
 
@@ -851,6 +913,11 @@ export class GameRenderer {
   }
 
   private airShadows = new AirShadows();
+  private occluders: OccluderGrid;
+  private viewFrustum = new THREE.Frustum();
+  private projView = new THREE.Matrix4();
+  private castSphere = new THREE.Sphere();
+  private occlFrame = 0;
 
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   private addContact(e: Entity, v: Visual) {
@@ -888,10 +955,39 @@ export class GameRenderer {
 
   private syncEntities(alpha: number, dt: number) {
     const w = this.world;
-    const seen = new Set<number>();
+    const seen = this.seenIds;
+    seen.clear();
     this.airShadows.begin(this.scene);
     this.contact?.begin();
     this.chutes.begin();
+    // screen size for the detail LOD: px per world unit = lodK / view depth
+    const cam = this.camera;
+    cam.getWorldDirection(this.camFwd);
+    const cf = this.camFwd;
+    const cp = cam.position;
+    const ty0 = groundHeight(w.map, this.target.x, this.target.z);
+    const persp = cam instanceof THREE.PerspectiveCamera && !this.photoCam;
+    const refDepth = persp ? (this.target.x - cp.x) * cf.x + (ty0 - cp.y) * cf.y + (this.target.z - cp.z) * cf.z : 1;
+    const lodK = (this.height / (BASE_VIEW / this.zoom)) * refDepth;
+    if (this.occlFrame++ % 15 === 0) {
+      const bl: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
+      for (const v of this.visuals.values()) {
+        const be = v.visible ? w.get(v.id) : undefined;
+        if (!be || be.kind !== 'building') continue;
+        const bd = buildingDef(be.def);
+        bl.push({ id: be.id, tx: be.tx, ty: be.ty, w: bd.w, h: bd.h, height: v.model.height ?? 1 });
+      }
+      this.occluders.setBuildings(bl);
+    }
+    const cd = this.camDir;
+    // shadow casters: only models whose shadow can reach the view (the sun shadow box spans a much
+    // wider rectangle than the perspective view, so off-screen units would otherwise all cast)
+    const fr = this.viewFrustum.setFromProjectionMatrix(this.projView.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const sd = this.sunDir;
+    const sy = Math.max(0.15, sd.y);
+    const throwX = -sd.x / sy;
+    const throwZ = -sd.z / sy;
+    const shadowsOn = this.sun.castShadow || !!this.csm;
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -981,6 +1077,24 @@ export class GameRenderer {
       }
       this.updateRing(e, v, d);
       if (vis && this.contact) this.addContact(e, v);
+      if (vis) {
+        const rp = root.position;
+        const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
+        applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
+        {
+          // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
+          const h = v.model.height ?? 1;
+          const tx = shadowsOn ? throwX * h : 0;
+          const tz = shadowsOn ? throwZ * h : 0;
+          const sph = this.castSphere;
+          sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
+          sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
+          v.near = fr.intersectsSphere(sph);
+          if (shadowsOn) setCasting(v.lod, v.near);
+        }
+        // (staggered: each unit re-tests every 4th frame)
+        if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
+      }
     }
     this.airShadows.end();
     this.contact?.end();
@@ -1105,6 +1219,8 @@ export class GameRenderer {
 
   private toWreck(v: Visual, e: { def: string; x: number; y: number }) {
     this.visuals.delete(v.id);
+    // back on layer 0: wrecks and fracture rubble copy / reuse the meshes
+    restoreMain(v.model.root);
     if (v.ring) this.scene.remove(v.ring);
     const d = DEFS[e.def];
     const root = v.model.root;
@@ -1297,10 +1413,16 @@ export class GameRenderer {
     return g;
   }
 
+  private seenIds = new Set<number>();
+  private seenProj = new Set<number>();
+  private projPos = new THREE.Vector3();
+  private projVel = new THREE.Vector3();
+  private projLook = new THREE.Vector3();
   private syncProjectiles(alpha: number) {
-    const seen = new Set<number>();
-    const pos = new THREE.Vector3();
-    const vel = new THREE.Vector3();
+    const seen = this.seenProj;
+    seen.clear();
+    const pos = this.projPos;
+    const vel = this.projVel;
     for (const p of this.world.projectiles) {
       seen.add(p.id);
       let v = this.projVis.get(p.id);
@@ -1321,7 +1443,7 @@ export class GameRenderer {
       v.obj.position.copy(pos);
       vel.set(p.vx, p.vz, p.vy);
       if (vel.lengthSq() > 1e-6) {
-        v.obj.lookAt(pos.clone().add(vel));
+        v.obj.lookAt(this.projLook.copy(pos).add(vel));
         v.obj.rotateY(-Math.PI / 2);
         if (p.hits > 0) {
           // damaged rounds wobble as they fly on
@@ -1608,6 +1730,7 @@ export class GameRenderer {
           const bd = buildingDef(b.def);
           this.visuals.delete(v.id);
           if (v.ring) this.scene.remove(v.ring);
+          restoreMain(v.model.root);
           const p = v.model.root.position;
           this.wrecks.push({ kind: 'sold', root: v.model.root, model: v.model, t: 0, max: 1.2, x: p.x, y: p.y, z: p.z, vx: 0, vy: 0, vz: 0, spin: 0, size: 1, h: 1, w: bd.w, d: bd.h, landed: true });
         }
@@ -1695,17 +1818,28 @@ export class GameRenderer {
     if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
     const ft = gap;
     this.frameTimes.push(ft);
-    if (this.frameTimes.length < 30) return;
+    // short windows while the governor is still finding its level (first seconds, right after a step down)
+    if (++this.govFrames < 400) this.fastFrames = Math.max(this.fastFrames, 1);
+    const win = this.fastFrames > 0 ? 12 : 30;
+    if (this.frameTimes.length < win) return;
     const sorted = this.frameTimes.slice().sort((a, b) => a - b);
     this.frameTimes.length = 0;
     const med = sorted[sorted.length >> 1];
     this.lastFt = med;
-    if (med > 1 / 42 && this.level < this.ladder.length - 1) {
+    if (this.fastFrames > 0) this.fastFrames = Math.max(0, this.fastFrames - win);
+    // battery saver caps at 30 fps (perf/hud.ts): judge frames against that budget instead
+    const capped = perfPrefs.battery;
+    const slow = capped ? 1 / 26 : 1 / 42;
+    const fast = capped ? 1 / 29 : 1 / 56;
+    if (med > slow && this.level < this.ladder.length - 1) {
       // undoing a recent upgrade: be more patient next time
       if (now - this.lastUpAt < 4000) this.upNeed = Math.min(40, this.upNeed * 2);
       this.goodWindows = 0;
-      this.applyLevel(Math.min(this.ladder.length - 1, this.level + (med > 1 / 24 ? 2 : 1)));
-    } else if (med < 1 / 56 && this.level > 0) {
+      // far off the target (under ~22 fps): skip rungs
+      const steps = med > 1 / 16 ? 3 : med > 1 / 24 ? 2 : 1;
+      this.applyLevel(Math.min(this.ladder.length - 1, this.level + steps));
+      this.fastFrames = 60;
+    } else if (med < fast && this.level > 0) {
       if (++this.goodWindows >= this.upNeed) {
         this.goodWindows = 0;
         this.lastUpAt = now;
@@ -1713,6 +1847,8 @@ export class GameRenderer {
       }
     } else this.goodWindows = 0;
   }
+  private govFrames = 0;
+  private fastFrames = 0;
 
   render(alpha: number, dt: number) {
     this.time += dt;
@@ -1740,16 +1876,72 @@ export class GameRenderer {
     this.superFx.update(dt, this.time);
     this.effects.update(dt);
     this.updateCamera();
+    this.scheduleShadow(dt);
     this.updateReadability(dt);
     const vh = this.viewHook;
     vh?.before(dt);
-    if (vh?.renderMain()) {
-      // the view mode drew the frame itself
-    } else if (this.composer && this.usePost) this.composer.render(dt);
-    else this.renderer.render(this.scene, this.camera);
-    this.readability.renderOverlays(this.renderer, this.scene, this.camera);
-    vh?.after(dt);
+    // world matrices once per frame: the main view, AO, outline mask, drone feed and heat mask all reuse them
+    const scene = this.scene;
+    scene.updateMatrixWorld();
+    scene.matrixWorldAutoUpdate = false;
+    // identical unit parts drawn as instanced batches (models on or casting into the view only)
+    const roots = this.instRoots;
+    roots.length = 0;
+    if (this.instancer.enabled) for (const v of this.visuals.values()) if (v.visible && v.near && v.lod.kind !== 'infantry') roots.push(v.model.root);
+    this.instancer.update(roots);
+    try {
+      if (vh?.renderMain()) {
+        // the view mode drew the frame itself
+      } else if (this.composer && this.usePost) this.composer.render(dt);
+      else this.renderer.render(scene, this.camera);
+      this.readability.renderOverlays(this.renderer, scene, this.camera);
+      vh?.after(dt);
+    } finally {
+      scene.matrixWorldAutoUpdate = true;
+    }
     this.adaptQuality();
+    this.perf.frame();
+    const st = this.ladder[this.level];
+    this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
+  }
+
+  private shadowKey = new Float64Array(9);
+  private shadowAge = 0;
+  /**
+   * Sun shadow map refresh throttle (not ultra's cascades): re-render it whenever the
+   * shadow frustum or the sun moves (panning, zoom, day cycle), otherwise every frame on
+   * high and every second frame on medium (moving units' shadows trail by one frame,
+   * imperceptible), and not at all while the game is paused and the view is still.
+   */
+  private scheduleShadow(dt: number) {
+    const sh = this.sun.shadow;
+    if (!this.sun.castShadow || this.csm) {
+      sh.autoUpdate = true;
+      return;
+    }
+    sh.autoUpdate = false;
+    const k = this.shadowKey;
+    const p = this.sun.position;
+    const t = this.sun.target.position;
+    const c = sh.camera;
+    const moved = k[0] !== p.x || k[1] !== p.y || k[2] !== p.z || k[3] !== t.x || k[4] !== t.y || k[5] !== t.z || k[6] !== c.right || k[7] !== c.top || k[8] !== sh.mapSize.x;
+    if (moved) {
+      k[0] = p.x;
+      k[1] = p.y;
+      k[2] = p.z;
+      k[3] = t.x;
+      k[4] = t.y;
+      k[5] = t.z;
+      k[6] = c.right;
+      k[7] = c.top;
+      k[8] = sh.mapSize.x;
+    }
+    const every = this.quality === 'high' ? 1 : 2;
+    this.shadowAge++;
+    if (moved || !sh.map || (dt > 0 && this.shadowAge >= every) || this.shadowAge > 30) {
+      sh.needsUpdate = true;
+      this.shadowAge = 0;
+    }
   }
 
   /** Icons / outlines / route arrows (after the camera so icon fades use this frame's view). */
@@ -1771,6 +1963,8 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    this.perfHud.dispose();
+    this.instancer.dispose();
     this.atmos.dispose();
     this.readability.dispose();
     this.temporal?.dispose();

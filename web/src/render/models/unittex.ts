@@ -178,8 +178,8 @@ function plateAt(u: number, v: number, o: Plate) {
   // irregular plates: drop some seam segments so it never reads as a regular grid
   const ci = Math.floor(uu * 4 + 0.5);
   const ri = Math.floor(v * 3 + 0.5);
-  const vOn = hash(ci & 3, row % 3, 41) > 0.3 ? 1 : 0;
-  const hOn = hash(Math.floor(uu * 4) & 3, ri % 3, 43) > 0.35 ? 1 : 0;
+  const vOn = hash(ci & 3, row % 3, 41) > 0.45 ? 1 : 0;
+  const hOn = hash(Math.floor(uu * 4) & 3, ri % 3, 43) > 0.4 ? 1 : 0;
   const su = vOn ? lineDist(uu, 4) : 1;
   const sv = hOn ? lineDist(v, 3) : 1;
   const seam = Math.min(su, sv);
@@ -187,10 +187,12 @@ function plateAt(u: number, v: number, o: Plate) {
   const groove = 1 - sstep(0.002, 0.0062, seam);
   const bevel = sstep(0.0, 0.014, seam);
   // bolt rows just inside the horizontal seams, every 1/28
-  const bu = frac(uu * 20);
-  const bd = Math.hypot(Math.min(bu, 1 - bu) / 20, sv - 0.014);
-  const bolt = 1 - sstep(0.0038, 0.0068, bd);
-  const boltRing = (1 - sstep(0.0066, 0.009, bd)) * (1 - bolt);
+  // modern armour: only some plates are bolted (access panels), sparse bolt rows
+  const bu = frac(uu * 14);
+  const bd = Math.hypot(Math.min(bu, 1 - bu) / 14, sv - 0.014);
+  const bolted = hash(Math.floor(uu * 4) & 3, ri % 3, 47) > 0.62 ? 1 : 0;
+  const bolt = (1 - sstep(0.0034, 0.0062, bd)) * bolted;
+  const boltRing = (1 - sstep(0.0062, 0.0085, bd)) * (1 - bolt) * bolted;
   // a weld bead on some vertical seams (cast + welded look)
   const pid = hash(Math.floor(uu * 4) & 3, row % 3, 7);
   const weld = pid > 0.55 ? (1 - sstep(0.003, 0.007, su)) * (0.6 + 0.4 * vnoise(v * 200, 0, 200, 3)) : 0;
@@ -200,13 +202,14 @@ function plateAt(u: number, v: number, o: Plate) {
   // chipping: noisy, concentrated along seams and bolt heads
   const nearEdge = 1 - sstep(0.006, 0.026, seam);
   const chipN = fbm(u, v, 24, 17, 2);
-  const chip = clamp01((chipN - 0.7 + nearEdge * 0.2 + bolt * 0.3) * 6) * (0.45 + 0.55 * nearEdge);
-  const speck = hash(Math.floor(u * 256), Math.floor(v * 256), 19) > 0.994 ? 1 : 0;
+  const chip = clamp01((chipN - 0.76 + nearEdge * 0.16 + bolt * 0.2) * 6) * (0.35 + 0.65 * nearEdge);
+  const speck = hash(Math.floor(u * 256), Math.floor(v * 256), 19) > 0.997 ? 1 : 0;
   // grime streaks running down from the horizontal seams (v grows downward on side faces)
   const below = frac(v * 3);
   const streak = clamp01((fbm(u * 1.0, v * 0.08, 40, 23, 2) - 0.5) * 3.2) * (1 - sstep(0.0, 0.7, below));
   const blot = clamp01((fbm(u, v, 3, 29, 4) - 0.5) * 2.4);
-  o.h = 0.5 + bevel * 0.18 - groove * 0.32 + bolt * 0.32 + boltRing * 0.05 + weld * 0.12 + grain * 0.035 + dent * 0.06 - Math.max(chip, speck) * 0.05;
+  // smooth rolled / cast plate: the surface itself is nearly flat (no hammered dents), detail lives in seams, welds and bolts
+  o.h = 0.5 + bevel * 0.14 - groove * 0.3 + bolt * 0.3 + boltRing * 0.04 + weld * 0.1 + grain * 0.008 + dent * 0.01 - Math.max(chip, speck) * 0.02;
   o.ao = Math.max(groove * 0.6, boltRing * 0.25);
   o.chip = Math.max(chip, speck * 0.8);
   o.edge = (1 - sstep(0.0062, 0.012, seam)) * (1 - groove) * 0.8 + bolt * 0.5;
@@ -239,7 +242,7 @@ let armourNR: { normalMap: THREE.Texture; roughnessMap: THREE.Texture } | null =
 function armourMaps() {
   if (armourNR) return armourNR;
   const P = plates();
-  armourNR = { normalMap: toTex(AN, normalFrom(AN, P.h, 4.2), 3, false), roughnessMap: roughTex(AN, P.r) };
+  armourNR = { normalMap: toTex(AN, normalFrom(AN, P.h, 3.4), 3, false), roughnessMap: roughTex(AN, P.r) };
   return armourNR;
 }
 

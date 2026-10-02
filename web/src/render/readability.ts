@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { setPerfPrefs } from './perf/hud';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { DEFS, WEAPONS, unitDef } from '../sim/defs';
 import type { Entity, UnitDef } from '../sim/types';
@@ -28,9 +29,11 @@ export const OUTLINE_LAYER = 25; // 20 heat, 21 x-ray, 22 contact shadows
 
 /** User preferences (menu.ts keeps them in sync with the saved settings). */
 export const readabilityPrefs = { icons: true, outlines: true };
-export function setReadabilityPrefs(p: { icons?: boolean; outlines?: boolean }) {
+export function setReadabilityPrefs(p: { icons?: boolean; outlines?: boolean; showFps?: boolean; battery?: boolean }) {
   readabilityPrefs.icons = p.icons !== false;
   readabilityPrefs.outlines = p.outlines !== false;
+  // the performance settings ride along (src/render/perf/hud.ts)
+  setPerfPrefs(p);
 }
 
 /** Icon fade range in CSS pixels per world unit at the unit (start showing .. fully shown). */
@@ -574,7 +577,8 @@ class UnitOutlines {
         t = undefined;
       }
       if (!t && v.visible) {
-        t = this.tag(v.model.root, color(v.owner));
+        // infantry: body, kit and weapon carry the silhouette (each soldier is ~6 skinned meshes)
+        t = this.tag(v.model.root, color(v.owner), v.model.infantry ? Math.min(3, this.perUnit) : this.perUnit);
         this.tagged.set(v.id, t);
       }
     }
@@ -586,9 +590,9 @@ class UnitOutlines {
     }
   }
 
-  private tag(root: THREE.Object3D, teamColor: number): Tagged {
+  private tag(root: THREE.Object3D, teamColor: number, max: number): Tagged {
     const col = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.32);
-    const meshes = outlineMeshes(root, this.perUnit);
+    const meshes = outlineMeshes(root, max);
     for (const m of meshes) {
       m.layers.enable(OUTLINE_LAYER);
       m.userData.outlineColor = col;
@@ -625,6 +629,8 @@ class UnitOutlines {
     const env = scene.environment;
     const ov = scene.overrideMaterial;
     const sh = gl.shadowMap.autoUpdate;
+    // the main view already updated every world matrix this frame
+    const mwu = scene.matrixWorldAutoUpdate;
     const clear = gl.getClearColor(this.clear);
     const clearA = gl.getClearAlpha();
     const auto = gl.autoClear;
@@ -633,6 +639,7 @@ class UnitOutlines {
     scene.environment = null;
     scene.overrideMaterial = this.maskMat;
     gl.shadowMap.autoUpdate = false;
+    scene.matrixWorldAutoUpdate = false;
     gl.setClearColor(0x000000, 0);
     gl.setRenderTarget(this.rt);
     gl.autoClear = true;
@@ -642,6 +649,7 @@ class UnitOutlines {
     gl.setRenderTarget(null);
     gl.setClearColor(clear, clearA);
     gl.shadowMap.autoUpdate = sh;
+    scene.matrixWorldAutoUpdate = mwu;
     scene.overrideMaterial = ov;
     scene.environment = env;
     scene.background = bg;
@@ -723,7 +731,7 @@ export class Readability {
   hidden = false;
 
   constructor(quality: 'low' | 'medium' | 'high') {
-    this.outlines = new UnitOutlines(quality === 'low' ? 3 : quality === 'medium' ? 6 : 12, quality === 'low' ? 0.5 : 0);
+    this.outlines = new UnitOutlines(quality === 'low' ? 3 : quality === 'medium' ? 5 : 12, quality === 'low' ? 0.5 : 0);
   }
 
   private isUnit = (def: string) => DEFS[def]?.kind === 'unit';

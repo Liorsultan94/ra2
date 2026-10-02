@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Tile, standHeight } from '../sim/map';
+import { RingPool } from './perf/ringpool';
 import type { Debris, DebrisKind } from './debris';
 import type { FogOfWar } from './fog';
 import { GrassFires } from './fx/fires';
@@ -155,7 +156,7 @@ export class Effects {
   private grass: GrassFires | null = null;
   private timed: Timed[] = [];
   private beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2);
-  private ringGeo = new THREE.RingGeometry(0.92, 1, 48).rotateX(-Math.PI / 2);
+  private rings = new RingPool(new THREE.RingGeometry(0.92, 1, 48).rotateX(-Math.PI / 2));
   private sphereGeo = new THREE.SphereGeometry(1, 20, 12);
   private domeGeo = new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2);
   debris: Debris | null = null;
@@ -206,7 +207,7 @@ export class Effects {
       },
       quality,
     );
-    this.group.add(this.fire.points, this.smokeSys.points, this.lights.group, this.tracers.mesh);
+    this.group.add(this.fire.points, this.smokeSys.points, this.lights.group, this.tracers.mesh, this.rings.group);
     scene.add(this.group);
   }
 
@@ -928,14 +929,10 @@ export class Effects {
   }
 
   ring(x: number, y: number, z: number, r0: number, r1: number, life: number, color: number, additive: boolean, opacity = 0.9) {
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
-    const m = new THREE.Mesh(this.ringGeo, mat);
-    m.position.set(x, y, z);
-    m.scale.setScalar(r0);
-    m.renderOrder = 3;
-    this.group.add(m);
-    this.timed.push({ obj: m, mat, life: 0, max: life, grow: r1, base: r0, alpha0: opacity });
+    // instanced: two draw calls for every ring alive (perf/ringpool.ts)
+    this.rings.ring(x, y, z, r0, r1, life, color, additive, opacity);
   }
+
 
   marker(x: number, y: number, z: number, attack: boolean) {
     this.ring(x, y + 0.04, z, 0.6, 0.1, 0.45, attack ? 0xff3030 : 0x40ff70, true);
@@ -1048,6 +1045,7 @@ export class Effects {
     this.updateShading();
     this.fire.flush();
     this.smokeSys.flush();
+    this.rings.update(dt);
     for (let i = this.timed.length - 1; i >= 0; i--) {
       const t = this.timed[i];
       t.life += dt;

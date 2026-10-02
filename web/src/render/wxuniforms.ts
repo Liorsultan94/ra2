@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /*
  * Global weather / time-of-day shader uniforms. They are shared by every
  * fog-patched material (see FogOfWar.apply) and by the ground and water
@@ -20,6 +22,11 @@ export const WX = {
   wxDust: { value: 0 },
   /** Clock for rain ripples (seconds). */
   wxTime: { value: 0 },
+  /**
+   * Rain falling right now, 0..1 (ripple rings on puddles and the river). Separate from
+   * wxWet so puddles can stay (and shrink) while the ground dries after the rain.
+   */
+  wxRain: { value: 0 },
 };
 
 /** GLSL declarations for the uniforms above. */
@@ -29,6 +36,49 @@ uniform float wxSnowThin;
 uniform float wxWet;
 uniform float wxDust;
 uniform float wxTime;
+uniform float wxRain;
+`;
+
+/**
+ * Low ground fog / valley mist (dawn, the 'mist' time of day, after rain). These live in
+ * the fog-of-war uniform set (FogOfWar.uniforms spreads them) and MIST_GLSL is part of
+ * FOG_GLSL, so every fog-shaded material gets the height fog for free. mistAmount 0 =
+ * the branch is skipped; the shader never changes, only these values.
+ */
+export const WXM = {
+  /** Overall mist density 0..1. */
+  mistAmount: { value: 0 },
+  /** Lit colour of the mist (follows the sky / sun). */
+  mistColor: { value: new THREE.Color(0.75, 0.77, 0.8) },
+  /** x: height of full density, y: top of the layer (world y), z: clear radius around the view centre, w: max opacity. */
+  mistParams: { value: new THREE.Vector4(-0.1, 0.95, 8, 0.6) },
+  /** Accumulated wind drift of the mist noise (world units). */
+  mistDrift: { value: new THREE.Vector2() },
+};
+
+/**
+ * Height fog, inserted into FOG_GLSL (needs fogNoise and fogTarget declared before it).
+ * Dense in the river valley and hollows, thin on the plateaus, gone on the ridges; it
+ * thins out around the view centre (where the player is looking / their units are)
+ * so the battle stays readable, and drifts with the wind.
+ */
+export const MIST_GLSL = /* glsl */ `
+uniform float mistAmount;
+uniform vec3 mistColor;
+uniform vec4 mistParams;
+uniform vec2 mistDrift;
+vec3 mistShade( vec3 col, vec3 p ) {
+  if ( mistAmount < 0.002 ) return col;
+  float mh = 1.0 - smoothstep( mistParams.x, mistParams.y, p.y );
+  if ( mh <= 0.0 ) return col;
+  vec2 mq = p.xz + mistDrift;
+  float mn = texture2D( fogNoise, mq * 0.031 ).g * 0.62 + texture2D( fogNoise, mq * 0.083 + vec2( 0.31, 0.57 ) - mistDrift * 0.004 ).a * 0.38;
+  // patchy banks: the noise eats the thin upper part of the layer first
+  float md = mh * smoothstep( 0.18, 0.72, mn + mh * 0.32 + mistAmount * 0.18 - 0.2 );
+  float mr = length( p.xz - fogTarget.xz );
+  md *= mix( 0.3, 1.0, smoothstep( mistParams.z * 0.45, mistParams.z * 1.5, mr ) );
+  return mix( col, mistColor, clamp( md * mistAmount, 0.0, 1.0 ) * mistParams.w );
+}
 `;
 
 /**

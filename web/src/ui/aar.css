@@ -1,0 +1,327 @@
+/* After-action report (src/ui/aar.ts). */
+
+.aar {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  background: radial-gradient(ellipse at 50% 30%, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.82));
+  animation: aar-in 0.5s ease-out both;
+}
+@keyframes aar-in {
+  from {
+    opacity: 0;
+  }
+}
+.aar-panel {
+  width: min(1060px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(20, 26, 30, 0.97), rgba(8, 11, 13, 0.97));
+  border: 1px solid #3a4652;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+  animation: aar-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes aar-rise {
+  from {
+    transform: translateY(18px);
+    opacity: 0;
+  }
+}
+.aar-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #2a333b;
+  flex: none;
+}
+.aar.win .aar-head {
+  background: linear-gradient(90deg, rgba(242, 193, 78, 0.16), transparent 60%);
+}
+.aar.lose .aar-head {
+  background: linear-gradient(90deg, rgba(226, 72, 58, 0.18), transparent 60%);
+}
+.aar-result {
+  font-family: 'Black Ops One', var(--font);
+  font-size: clamp(34px, 6vw, 60px);
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+.aar.win .aar-result {
+  color: #f2c14e;
+  text-shadow: 0 0 24px rgba(242, 193, 78, 0.45);
+}
+.aar.lose .aar-result {
+  color: #e2483a;
+  text-shadow: 0 0 24px rgba(226, 72, 58, 0.45);
+}
+.aar-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.25;
+}
+.aar-meta small {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  color: #c9cdc4;
+}
+.aar-meta b {
+  color: var(--text);
+}
+.aar-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 10px 18px;
+}
+.aar-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.aar-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+.aar-table th {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: right;
+  padding: 2px 6px 5px;
+  white-space: nowrap;
+}
+.aar-table th img {
+  width: 20px;
+  height: 13px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.aar-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid #222a31;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.aar-table td:first-child {
+  text-align: left;
+  color: var(--muted);
+}
+.aar-table td.lead {
+  color: #f2e2b0;
+}
+.aar-mvp {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(242, 193, 78, 0.35);
+  background: linear-gradient(90deg, rgba(242, 193, 78, 0.12), transparent);
+}
+.mvp-badge {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Black Ops One', var(--font);
+  font-size: 17px;
+  color: #1a1206;
+  background: linear-gradient(180deg, #ffd56a, #c8902a);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+.mvp-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.mvp-info b {
+  font-size: 17px;
+}
+.mvp-info small {
+  color: var(--muted);
+  font-size: 13px;
+}
+.mvp-rank {
+  font-size: 13px;
+  color: #c9cdc4;
+}
+.mvp-rank.r1 {
+  color: #9fd0ff;
+}
+.mvp-rank.r2 {
+  color: #f2c14e;
+}
+.aar-graph {
+  border: 1px solid #2a333b;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 8px 4px;
+}
+.ag-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ag-tabs button {
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #2f3a44;
+  padding: 5px 10px;
+  min-height: 32px;
+  cursor: pointer;
+}
+.ag-tabs button.on {
+  color: var(--text);
+  border-color: #6b7c8a;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ag-key {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ag-key i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  margin: 0 4px 0 8px;
+  vertical-align: 3px;
+}
+.aar-graph canvas {
+  display: block;
+  width: 100%;
+  height: 130px;
+  margin-top: 4px;
+}
+.aar-hl h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.aar-hl ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+.aar-hl li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0 3px 8px;
+  border-left: 2px solid #4a5560;
+  margin-bottom: 2px;
+}
+.aar-hl li.good {
+  border-left-color: #4fe36a;
+}
+.aar-hl li.bad {
+  border-left-color: #e2483a;
+}
+.aar-hl time {
+  flex: none;
+  width: 38px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.aar-foot {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 18px 10px;
+  border-top: 1px solid #2a333b;
+}
+.aar-foot .mbtn {
+  min-width: 180px;
+  min-height: 46px;
+}
+
+/* phones */
+@media (max-height: 520px) and (orientation: landscape) {
+  .aar-head {
+    padding: 5px 12px;
+  }
+  .aar-result {
+    font-size: 32px;
+  }
+  .aar-meta {
+    font-size: 12.5px;
+  }
+  .aar-body {
+    padding: 6px 12px;
+    gap: 12px;
+  }
+  .aar-table {
+    font-size: 12.5px;
+  }
+  .aar-table td {
+    padding: 1px 5px;
+  }
+  .aar-mvp {
+    padding: 5px 10px;
+  }
+  .aar-graph canvas {
+    height: 96px;
+  }
+  .mvp-badge {
+    width: 42px;
+    height: 42px;
+    font-size: 14px;
+  }
+  .aar-foot {
+    padding: 5px 12px 6px;
+  }
+  .aar-foot .mbtn {
+    padding: 6px 18px;
+    font-size: 17px;
+    min-height: 42px;
+  }
+}
+@media (orientation: portrait) {
+  .aar-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .aar-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .aar-foot .mbtn {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    font-size: 17px;
+    white-space: nowrap;
+  }
+  .ag-tabs button {
+    white-space: nowrap;
+    padding: 5px 7px;
+  }
+}

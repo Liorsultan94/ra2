@@ -488,15 +488,15 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #endif
         // a slow cross swell so still water isn't dead
         g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 2.3 + time * 1.1) * 0.012;
-        if (wxWet > 0.001) {
-          // rain: rings from drops on the surface
+        if (wxRain > 0.001) {
+          // rain: rings from drops on the surface (wxRain: while it rains)
           vec2 rp = p / 0.5;
           vec2 ci = floor(rp);
           vec2 h = fract(sin(vec2(dot(ci, vec2(127.1, 311.7)), dot(ci, vec2(269.5, 183.3)))) * 43758.5453);
           vec2 o = rp - (ci + 0.2 + h * 0.6);
           float ph = fract(wxTime * 0.9 + h.x * 7.3);
           float d = length(o) - ph * 0.5;
-          g += normalize(o + 1e-4) * sin(d * 40.0) * exp(-abs(d) * 14.0) * (1.0 - ph) * 0.12 * wxWet;
+          g += normalize(o + 1e-4) * sin(d * 40.0) * exp(-abs(d) * 14.0) * (1.0 - ph) * 0.12 * wxRain;
         }
         vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
         vec3 viewDir = normalize(cameraPosition - vWorld);

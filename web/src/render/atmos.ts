@@ -7,24 +7,38 @@ import { EnvDamage } from './envdamage';
 import type { FogOfWar } from './fog';
 import type { GroundMarks } from './marks';
 import type { AnimState, Model } from './models';
+import { GroundFog } from './groundfog';
 import { NightLights, NightVisionPass } from './night';
 import type { FinalPass } from './post';
 import type { Terrain } from './terrain';
+import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
-import { WX } from './wxuniforms';
+import { WeatherCycle, type WxKind, type WxState } from './weathercycle';
+import { WX, WXM } from './wxuniforms';
 import { TPS } from '../sim/types';
 
 /*
  * Time of day, weather and night vision (all purely visual).
  *
- * Settings come from the URL (?tod=day|dusk|night|cycle, ?weather=clear|rain|snow|sandstorm,
- * ?nv=1) or, for a skirmish, from the saved menu settings (`tod`, `weather`).
- * Day + clear leaves the renderer exactly as it is: no presets are applied and
- * no extra objects are created.
+ * Settings come from the URL (?tod=day|dusk|night|cycle|mist,
+ * ?weather=clear|rain|snow|sandstorm|dynamic, ?nv=1) or, for a skirmish, from
+ * the saved menu settings (`tod`, `weather`). Day + clear leaves the renderer
+ * exactly as it is: no presets are applied and no extra objects are created.
+ *
+ * 'dynamic' weather follows a deterministic timeline (weathercycle.ts, seeded
+ * from the world, driven by the sim tick): clouds gather, the wind picks up,
+ * rain starts lightly, builds (sometimes to a thunderstorm), eases and stops,
+ * the ground dries. Everything is faded by uniforms (no shader recompiles).
+ * Ground fog (groundfog.ts + the height fog in the shared fog shader) rises at
+ * dawn in the cycle, on the 'mist' time of day and after rain.
+ *
+ * Debug / screenshots: ?wxt=<game seconds> pins the weather timeline,
+ * ?wxseed=<n> picks the timeline, ?mist=<0..1> forces the ground fog
+ * (also `wxTimeOverride`, `wxForce`, `mistOverride` on the instance).
  */
 
-export type TimeOfDay = 'day' | 'dusk' | 'night' | 'cycle';
-export type Weather = 'clear' | 'rain' | 'snow' | 'sandstorm';
+export type TimeOfDay = 'day' | 'dusk' | 'night' | 'cycle' | 'mist';
+export type Weather = 'clear' | 'rain' | 'snow' | 'sandstorm' | 'dynamic';
 type Q = 'low' | 'medium' | 'high';
 
 export interface AtmosConfig {
@@ -33,8 +47,8 @@ export interface AtmosConfig {
   nv: boolean;
 }
 
-const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle'];
-const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm'];
+const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle', 'mist'];
+const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm', 'dynamic'];
 
 /** Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings. */
 export function atmosConfig(viewer: number): AtmosConfig {
@@ -193,6 +207,12 @@ function todPreset(key: Key): { p: Preset; light: number } {
       p.hazeP.set(4, 80, 0.4, 52);
       light = 0.95;
       break;
+    case 'mist':
+      // misty morning: a low, soft, warm sun through damp air (the ground fog itself is separate)
+      set({ sunI: 2.7, hemiI: 0.8, env: 0.34, cloud: 0.14, sat: 0.97, vignette: 0.34, bloom: 0.56, exposure: 1.2, spec: 0.9, dark: 0.1 }, 0xffc8a0, 0x9eaacc, 0x5a4c40, [0.4, 0.4, 0.43], [-0.012, 0.0, 0.034], [0.05, 0.02, -0.02], 0x26262a, [0.85, 0.84, 0.9]);
+      p.hazeP.set(2, 62, 0.5, 50);
+      light = 0.8;
+      break;
   }
   return { p, light };
 }
@@ -331,6 +351,41 @@ function pathAt(path: [number, number, number][], u: number, out: THREE.Vector3)
   return out.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az));
 }
 
+function clonePreset(p: Preset): Preset {
+  return { ...p, sunC: p.sunC.clone(), sky: p.sky.clone(), gnd: p.gnd.clone(), haze: p.haze.clone(), hazeP: p.hazeP.clone(), shadowTint: p.shadowTint.clone(), highTint: p.highTint.clone(), bg: p.bg.clone(), water: p.water.clone() };
+}
+
+const FALLS: WxKind[] = ['rain', 'snow', 'sandstorm'];
+
+/** The time-of-day key under each kind of weather (dynamic weather blends towards these by cloud cover). */
+function altPresets(key: Key): Record<WxKind, Preset> {
+  const o = {} as Record<WxKind, Preset>;
+  for (const k of FALLS) {
+    const t = todPreset(key);
+    applyWeather(t.p, k, t.light);
+    o[k] = t.p;
+  }
+  return o;
+}
+
+const sstep = (e0: number, e1: number, x: number) => {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+/** Ground fog over the cycle phase (0 = midday): a little in the small hours, thick at dawn, burnt off by mid-morning. */
+function dawnMist(u: number) {
+  return Math.min(1, 0.22 * sstep(0.55, 0.7, u) * (1 - sstep(0.8, 0.84, u)) + sstep(0.72, 0.8, u) * (1 - sstep(0.85, 0.93, u)));
+}
+
+/** 'Misty morning': thick for the first minutes of the battle, then the sun thins it to a light valley mist. */
+function morningMist(t: number) {
+  return 0.9 - 0.5 * sstep(200, 620, t);
+}
+
+/** Calm-weather breeze (world x / z direction, matches the effects' default drift). */
+const BREEZE_DIR = -0.55;
+
 export class Atmosphere {
   readonly cfg: AtmosConfig;
   /** Day + clear + no night vision: nothing to do (photo mode may switch it on for a time-of-day preview). */
@@ -340,6 +395,20 @@ export class Atmosphere {
   readonly weather: WeatherFx | null = null;
   readonly night: NightLights | null = null;
   readonly env: EnvDamage;
+  /** Drifting fog banks over the low ground (mist time of day, dawn in the cycle, dynamic weather). */
+  readonly groundFog: GroundFog | null = null;
+  /** Dynamic weather timeline (weather = 'dynamic'). */
+  readonly wxCycle: WeatherCycle | null = null;
+  /** Dynamic weather state of this frame. */
+  wx: WxState | null = null;
+  /** Debug / screenshots: evaluate the weather timeline at this game time (seconds) instead of the sim tick. */
+  wxTimeOverride: number | null = null;
+  /** Debug / screenshots: force parts of the dynamic weather state (e.g. { precip: 1, storm: 1 }). */
+  wxForce: Partial<WxState> | null = null;
+  /** Debug / screenshots: force the ground fog amount 0..1. */
+  mistOverride: number | null = null;
+  /** Ground fog amount of this frame, 0..1. */
+  mist = 0;
   private preset: Preset | null = null;
   private nvPass: NightVisionPass | null = null;
   private nv = false;
@@ -348,8 +417,24 @@ export class Atmosphere {
   private thunderVol: number[] = [];
   private time = 0;
   /** Dynamic cycle: lighting stops (weather applied) and the blended preset of this frame. */
-  private keys: { u: number; p: Preset; light: number }[] | null = null;
+  private keys: { u: number; p: Preset; light: number; alt?: Record<WxKind, Preset> }[] | null = null;
   private light = 1;
+  /** Fixed time of day: its daylight level and clear preset (dynamic weather starts from it every frame). */
+  private baseLight = 1;
+  private base: Preset | null = null;
+  /** Dynamic weather: the fixed time of day under each weather, and this frame's blend target. */
+  private alt: Record<WxKind, Preset> | null = null;
+  private altP: Preset | null = null;
+  /** Presets are re-applied every frame (cycle, dynamic weather, ground fog). */
+  private perFrame = false;
+  private lastSec = -1;
+  private said = '';
+  private unhookWind: (() => void) | null = null;
+  /** Wind of this frame (0..1 strength, world x / z unit direction) for particles, smoke, foliage and mist. */
+  private windK = 0.2;
+  private windX = Math.cos(BREEZE_DIR);
+  private windZ = Math.sin(BREEZE_DIR);
+  private swayExtra = 0;
   /** Direction towards the key light (sun or moon) in the classic view frame; null = the renderer's fixed sun. */
   sunBase: THREE.Vector3 | null = null;
   /** Debug / screenshots: force the cycle to this phase (0 = midday, 0.5 = night). */
@@ -358,12 +443,18 @@ export class Atmosphere {
   phase = -1;
   private keyI = 1;
 
-  constructor(private host: AtmosHost, viewer: number) {
+  constructor(
+    private host: AtmosHost,
+    private viewer: number,
+  ) {
     const cfg = (this.cfg = atmosConfig(viewer));
+    const dynamic = cfg.weather === 'dynamic';
     this.active = cfg.tod !== 'day' || cfg.weather !== 'clear' || cfg.nv;
     WX.wxWet.value = cfg.weather === 'rain' ? 1 : 0;
+    WX.wxRain.value = cfg.weather === 'rain' ? 1 : 0;
     WX.wxSnow.value = cfg.weather === 'snow' ? 1 : 0;
     WX.wxDust.value = cfg.weather === 'sandstorm' ? 1 : 0;
+    WXM.mistAmount.value = 0;
     // environment destruction is always on (it only reacts to events)
     this.env = new EnvDamage(host.terrain, host.world.map, host.fog, host.effects, host.quality);
     host.scene.add(this.env.group);
@@ -377,27 +468,117 @@ export class Atmosphere {
     window.addEventListener('keydown', this.keyHandler);
     if (cfg.nv) this.setNightVision(true);
     if (!this.active) return;
-    const p = (this.preset = buildPreset(cfg));
+    const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+    const num = (k: string) => {
+      const v = params.get(k);
+      return v !== null && v !== '' && Number.isFinite(+v) ? +v : null;
+    };
+    if (dynamic) {
+      // the same timeline for every player: seeded from the match (the sim's PRNG state at the start)
+      const rs = (host.world as unknown as { rng?: { s?: number } }).rng?.s ?? 0;
+      let seed = (rs ^ 0x9e3779b9) >>> 0;
+      for (const ch of host.world.map.name) seed = (Math.imul(seed, 31) + ch.charCodeAt(0)) >>> 0;
+      seed = num('wxseed') ?? seed;
+      this.wxCycle = new WeatherCycle(seed, { dust: true, cold: cfg.tod === 'night' });
+      this.wxTimeOverride = num('wxt');
+      this.wx = this.wxCycle.at(this.wxTimeOverride ?? host.world.tick / TPS);
+    }
+    this.mistOverride = num('mist');
+    const fixedKey: Key = cfg.tod === 'cycle' ? 'day' : cfg.tod;
+    const p = (this.preset = buildPreset(dynamic ? { ...cfg, weather: 'clear' } : cfg));
+    this.baseLight = todPreset(fixedKey).light;
+    if (dynamic) {
+      this.base = clonePreset(p);
+      this.alt = altPresets(fixedKey);
+      this.altP = clonePreset(this.alt.rain);
+    }
     if (cfg.tod === 'cycle') {
-      this.keys = CYCLE_KEYS.map(({ u, key }) => {
-        const t = todPreset(key);
-        applyWeather(t.p, cfg.weather, t.light);
-        return { u, p: t.p, light: t.light };
-      });
+      this.keys = this.buildKeys();
       this.sunBase = new THREE.Vector3();
-      const q = new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('todphase');
+      const q = params.get('todphase');
       if (q !== null && Number.isFinite(+q)) this.phaseOverride = +q;
       this.blendCycle(host.world.tick);
-    }
+    } else if (cfg.tod === 'mist') this.mistSun();
     this.applyPreset(p);
-    if (cfg.weather !== 'clear') {
-      this.weather = new WeatherFx(cfg.weather, host.quality, cfg.tod === 'cycle' ? 'day' : cfg.tod);
+    const fxTod = cfg.tod === 'cycle' || cfg.tod === 'mist' ? 'day' : cfg.tod;
+    if (dynamic) {
+      this.weather = new WeatherFx('rain', host.quality, fxTod, true);
+      host.scene.add(this.weather.mesh);
+    } else if (cfg.weather !== 'clear' && cfg.weather !== 'dynamic') {
+      this.weather = new WeatherFx(cfg.weather, host.quality, fxTod);
       host.scene.add(this.weather.mesh);
     }
-    // the cycle keeps its night-light pools for the whole battle (fixed light count: no shader recompiles)
-    if (p.dark > 0.3 || this.keys) {
+    if (dynamic || cfg.tod === 'mist' || cfg.tod === 'cycle') {
+      this.groundFog = new GroundFog(host.world.map, host.fog, host.quality, this.wxCycle ? this.wxCycle.events.length + host.world.map.w * 131 : 7);
+      host.scene.add(this.groundFog.mesh);
+    }
+    this.perFrame = !!this.keys || dynamic || !!this.groundFog;
+    if (dynamic) this.hookWind();
+    // the cycle keeps its night-light pools for the whole battle (fixed light count: no shader recompiles);
+    // dynamic weather creates them when a storm could make the scene dark enough
+    const darkest = dynamic && this.alt ? Math.max(p.dark, this.alt.rain.dark + 0.15) : p.dark;
+    if (darkest > 0.3 || this.keys) {
       this.night = new NightLights(host.scene, host.quality, p.dark);
     }
+  }
+
+  /** Lighting stops of the cycle (with their weather variants under dynamic weather). */
+  private buildKeys() {
+    const dynamic = !!this.wxCycle;
+    return CYCLE_KEYS.map(({ u, key }) => {
+      const t = todPreset(key);
+      applyWeather(t.p, dynamic ? 'clear' : this.cfg.weather, t.light);
+      return { u, p: t.p, light: t.light, alt: dynamic ? altPresets(key) : undefined };
+    });
+  }
+
+  /** 'Misty morning': a fixed low morning sun. */
+  private mistSun() {
+    const dir = (this.sunBase = pathAt(SUN_PATH, 0.855 - 1, new THREE.Vector3()));
+    const comp = Math.min(1.5, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y)));
+    if (this.preset) this.preset.sunI *= comp;
+    if (this.base) this.base.sunI *= comp;
+    if (this.alt) for (const k of FALLS) this.alt[k].sunI *= comp;
+  }
+
+  /**
+   * Smoke drift and foliage sway follow the weather's wind. Both are owned elsewhere and
+   * rewritten every frame (Effects.update sets `effects.wind`, Terrain.update sets the
+   * foliage clock), so their values are wrapped in accessors that add the weather on read.
+   */
+  private hookWind() {
+    const w = this.host.effects.wind as { x: number; z: number };
+    const raw = { x: w.x, z: w.z };
+    const self = this;
+    const mixed = (axis: 'x' | 'z') => {
+      // calm: the effects' own slowly veering breeze; a front takes over with its own, stronger wind
+      const m = sstep(0.25, 0.6, self.windK);
+      const dir = axis === 'x' ? self.windX : self.windZ;
+      return raw[axis] * (1 - m) + dir * (0.25 + 0.75 * self.windK) * m;
+    };
+    for (const axis of ['x', 'z'] as const) {
+      Object.defineProperty(w, axis, {
+        configurable: true,
+        enumerable: true,
+        get: () => mixed(axis),
+        set: (v: number) => {
+          raw[axis] = v;
+        },
+      });
+    }
+    let clock = windTime.value;
+    Object.defineProperty(windTime, 'value', {
+      configurable: true,
+      enumerable: true,
+      get: () => clock + self.swayExtra,
+      set: (v: number) => {
+        clock = v;
+      },
+    });
+    this.unhookWind = () => {
+      for (const axis of ['x', 'z'] as const) Object.defineProperty(w, axis, { value: raw[axis], writable: true, configurable: true, enumerable: true });
+      Object.defineProperty(windTime, 'value', { value: clock, writable: true, configurable: true, enumerable: true });
+    };
   }
 
   /** Dynamic cycle: blend the lighting stops and move the sun / moon for this sim tick. */
@@ -416,6 +597,8 @@ export class Atmosphere {
     const k = Math.max(0, Math.min(1, (u - a.u) / Math.max(1e-6, b.u - a.u)));
     const ks = k * k * (3 - 2 * k);
     lerpPreset(this.preset!, a.p, b.p, ks);
+    const fall = this.wx?.fall ?? 'rain';
+    if (this.altP && a.alt && b.alt) lerpPreset(this.altP, a.alt[fall], b.alt[fall], ks);
     this.light = a.light + (b.light - a.light) * ks;
     // key light: the sun by day, the moon by night; they hand over while the light is dim
     const dir = this.sunBase!;
@@ -423,8 +606,48 @@ export class Atmosphere {
     if (moon) pathAt(MOON_PATH, u, dir);
     else pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, dir);
     // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
-    const comp = Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y)));
-    this.preset!.sunI *= Math.max(1, moon ? Math.min(comp, 1.3) : comp);
+    const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
+    this.preset!.sunI *= comp;
+    if (this.altP && a.alt) this.altP.sunI *= comp;
+  }
+
+  /** Dynamic weather on top of this frame's clear preset: cloud cover, storm darkness. */
+  private applyDynamic(p: Preset, st: WxState) {
+    const a = this.altP!;
+    const c = st.cover;
+    const k = Math.max(c, st.precip);
+    const cloud0 = p.cloud;
+    lerpPreset(p, p, a, k);
+    // broken cloud while it clouds over / clears: more drifting cloud shadows, then flat overcast light
+    p.cloud = cloud0 * (1 - k) + a.cloud * k + 1.3 * c * (1 - c);
+    const s = st.storm;
+    if (s > 0) {
+      p.sunI *= 1 - 0.45 * s;
+      p.hemiI *= 1 - 0.2 * s;
+      p.env *= 1 - 0.3 * s;
+      p.dark = Math.min(1, p.dark + 0.15 * s);
+      p.bg.multiplyScalar(1 - 0.35 * s);
+      p.haze.multiplyScalar(1 - 0.3 * s);
+      p.vignette += 0.06 * s;
+    }
+  }
+
+  private mistC = new THREE.Color();
+  /** Ground fog: the shared height fog, a damper haze and the lit colour of the mist. */
+  private applyMist(p: Preset, mist: number, light: number, cover: number) {
+    const mc = WXM.mistColor.value;
+    const lk = 0.16 + 0.84 * light;
+    mc.setRGB(0.4, 0.42, 0.46).multiplyScalar(lk * (1 - 0.3 * cover));
+    mc.lerp(this.mistC.copy(p.sunC).multiplyScalar(0.62 * lk), 0.2 * (1 - cover));
+    WXM.mistAmount.value = mist;
+    if (mist <= 0.001) return;
+    p.haze.lerp(mc, 0.3 * mist);
+    p.hazeP.x += (1 - p.hazeP.x) * mist * 0.5;
+    p.hazeP.y += (58 - p.hazeP.y) * mist * 0.5;
+    p.hazeP.z += (0.5 - p.hazeP.z) * mist * 0.5;
+    p.cloud *= 1 - 0.5 * mist;
+    p.sat *= 1 - 0.06 * mist;
+    p.bloom += 0.08 * mist;
   }
 
   /** Photo mode time-of-day preview: the state to put back (fixed time of day only). */
@@ -457,6 +680,7 @@ export class Atmosphere {
       this.photoSaved = null;
       this.keys = null;
       this.sunBase = null;
+      if (this.cfg.tod === 'mist') this.sunBase = pathAt(SUN_PATH, 0.855 - 1, new THREE.Vector3());
       this.phaseOverride = null;
       this.phase = -1;
       this.active = sv.active;
@@ -498,12 +722,9 @@ export class Atmosphere {
       }
       if (h.bloom) base.bloom = h.bloom.strength;
       this.photoSaved = { active: this.active, preset: this.preset, base, bg: h.scene.background as THREE.Color | THREE.Texture | null, exposure: h.renderer.toneMappingExposure, envI: h.scene.environmentIntensity };
-      this.keys = CYCLE_KEYS.map(({ u: ku, key }) => {
-        const t = todPreset(key);
-        applyWeather(t.p, this.cfg.weather, t.light);
-        return { u: ku, p: t.p, light: t.light };
-      });
+      this.keys = this.buildKeys();
       this.preset = buildPreset({ ...this.cfg, tod: 'day' });
+      if (this.wxCycle && !this.altP) this.altP = clonePreset(this.preset);
       this.sunBase = new THREE.Vector3();
       this.active = true;
     }
@@ -565,11 +786,62 @@ export class Atmosphere {
     if (!this.active || !this.preset) return;
     const h = this.host;
     const p = this.preset;
-    if (this.keys) {
-      this.blendCycle(h.world.tick);
+    const gt = h.world.tick / TPS;
+    // dynamic weather: where the timeline is at this sim tick
+    let st: WxState | null = null;
+    if (this.wxCycle) {
+      st = this.wx = this.wxCycle.at(this.wxTimeOverride ?? gt, this.wx ?? undefined);
+      if (this.wxForce) Object.assign(st, this.wxForce);
+      this.windK = st.wind;
+      this.windX = Math.cos(st.windDir);
+      this.windZ = Math.sin(st.windDir);
+      WX.wxWet.value = st.wet;
+      WX.wxRain.value = st.fall === 'rain' ? st.precip : 0;
+      WX.wxDust.value = st.dust;
+      WX.wxSnow.value = st.snow;
+      // foliage sways faster in the wind (extra clock on top of the terrain's)
+      this.swayExtra += dt * 1.8 * Math.max(0, st.wind - 0.2);
+    }
+    if (this.perFrame) {
+      if (this.keys) this.blendCycle(h.world.tick);
+      else if (this.base) {
+        lerpPreset(p, this.base, this.base, 0);
+        if (this.alt && this.altP) lerpPreset(this.altP, this.alt[st?.fall ?? 'rain'], this.alt[st?.fall ?? 'rain'], 0);
+      }
+      if (st && this.altP) this.applyDynamic(p, st);
+      // ground fog: dawn in the cycle, the misty morning, after rain; strong wind tears it up
+      let mist = 0;
+      if (this.cfg.tod === 'mist') mist = morningMist(gt);
+      if (this.keys) mist = Math.max(mist, dawnMist(this.phase));
+      if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
+      if (this.mistOverride !== null) mist = this.mistOverride;
+      this.mist = mist;
+      // zoomed in close (phones) the layer thins: the player is looking at their units, not the landscape
+      this.applyMist(p, mist * (1 - 0.4 * sstep(1, 1.8, zoom)), this.keys ? this.light : this.baseLight, st?.cover ?? 0);
       this.applyPreset(p);
       this.night?.setDark(p.dark);
-      this.weather?.setLight(0.25 + 0.75 * this.light);
+      if (this.keys) this.weather?.setLight(0.25 + 0.75 * this.light);
+    }
+    // keep the busy middle of the view clear of mist (readability): radius ~ half the visible height
+    const focus = (22 / Math.max(0.3, zoom)) * 0.45;
+    WXM.mistParams.value.z = focus;
+    const drift = WXM.mistDrift.value;
+    const wv = 0.25 + 0.75 * this.windK;
+    drift.x = (drift.x - this.windX * wv * dt * 0.4) % 9600;
+    drift.y = (drift.y - this.windZ * wv * dt * 0.4) % 9600;
+    this.groundFog?.update(dt, time, WXM.mistAmount.value, this.windX * wv * 1.4, this.windZ * wv * 1.4, focus);
+    if (st && this.weather) {
+      const wf = this.weather;
+      if (wf.kind !== st.fall && st.precip < 0.03) wf.setKind(st.fall);
+      wf.setIntensity(wf.kind === st.fall ? st.precip : 0);
+      wf.setWind(this.windX * st.wind * 6, this.windZ * st.wind * 6);
+      // lightning on whole game seconds picked by the seeded timeline (the same for every player)
+      const sec = Math.floor(this.wxTimeOverride ?? gt);
+      if (sec !== this.lastSec) {
+        if (this.lastSec >= 0 && sec > this.lastSec && sec - this.lastSec < 3 && this.wxCycle!.strikes(sec, st.storm)) wf.strike(time);
+        this.lastSec = sec;
+      }
+      if (this.wxTimeOverride === null && !this.wxForce) this.announce(st);
     }
     WX.wxTime.value = time;
     // the HDRI streams in late and resets the intensity: keep ours
@@ -581,7 +853,7 @@ export class Atmosphere {
         this.weather.struck = false;
         // thunder rolls in a moment later (distance), louder for close strikes
         this.thunderAt.push(time + 0.5 + Math.random() * 2.2);
-        this.thunderVol.push(0.35 + Math.random() * 0.4);
+        this.thunderVol.push((0.35 + Math.random() * 0.4) * (st ? 0.6 + 0.4 * st.storm : 1));
       }
     }
     for (let i = this.thunderAt.length - 1; i >= 0; i--) {
@@ -593,6 +865,31 @@ export class Atmosphere {
     h.hemi.intensity = p.hemiI + flash * 2.6;
     h.sun.intensity = p.sunI + flash * 1.5;
     this.night?.update(dt, time, visuals.values(), target, h.world);
+  }
+
+  /** Dynamic weather: a short, subtle HUD line when a front arrives, a storm breaks or the sky clears. */
+  private announce(st: WxState) {
+    const e = st.event;
+    const key = e ? `${e.start}:${st.stage}:${st.storm > 0.5 ? 1 : 0}` : 'clear';
+    if (key === this.said) return;
+    const first = this.said === '';
+    this.said = key;
+    if (first || !e || this.viewer < 0) return;
+    let text = '';
+    if (st.stage === 'build') {
+      if (e.kind === 'dust') text = 'Dust front approaching';
+      else if (e.kind === 'flurries') text = 'Snow flurries moving in';
+      else if (e.kind === 'storm') text = 'Storm front moving in';
+      else if (e.kind !== 'overcast') text = 'Clouds gathering: rain expected';
+    } else if (st.stage === 'hold' && st.storm > 0.5) text = 'Thunderstorm overhead';
+    else if (st.stage === 'clearing' && e.precip > 0) text = e.kind === 'dust' ? 'Dust settling' : 'Skies clearing';
+    if (!text) return;
+    try {
+      const g = (window as unknown as { ironfront?: { game?: { hud?: { message(t: string, k?: 'info' | 'warn' | 'good'): void } } } }).ironfront?.game;
+      g?.hud?.message(text, 'info');
+    } catch {
+      /* no hud */
+    }
   }
 
   private thunder(vol: number) {
@@ -613,9 +910,13 @@ export class Atmosphere {
   dispose() {
     if (this.keyHandler) window.removeEventListener('keydown', this.keyHandler);
     this.night?.dispose();
+    this.unhookWind?.();
+    this.unhookWind = null;
     this.host.canvas.style.filter = '';
     WX.wxWet.value = 0;
+    WX.wxRain.value = 0;
     WX.wxSnow.value = 0;
     WX.wxDust.value = 0;
+    WXM.mistAmount.value = 0;
   }
 }

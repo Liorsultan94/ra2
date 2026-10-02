@@ -7,6 +7,7 @@ import { Game, type GameOptions } from './game/game';
 import { loadModelOverrides } from './render/models';
 import { MainMenu, loadSettings, resolveQuality, showEndScreen, showPauseMenu, type Settings } from './ui/menu';
 import type { Splash } from './ui/splash';
+import { showAfterAction } from './ui/aar';
 
 /*
  * The game proper, loaded by the small entry (src/main.ts) behind the boot
@@ -107,13 +108,16 @@ function startBattle(opts: GameOptions) {
       });
     },
     onEnd: (win, stats) => {
-      showEndScreen(app, win, stats.you, stats.enemy, stats.time, {
+      const h = {
         again: () => lastOptions && startBattle(lastOptions),
         menu: () => {
           audio.setMusicMode('menu');
           showMainMenu();
         },
-      });
+      };
+      // after-action report (src/ui/aar.ts); the plain end screen when there are no match stats
+      if (stats.report) showAfterAction(app, { report: stats.report, you: stats.you, enemy: stats.enemy, codename: stats.codename }, h);
+      else showEndScreen(app, win, stats.you, stats.enemy, stats.time, h);
     },
   });
 }
@@ -155,7 +159,9 @@ export async function boot(splash: Splash) {
     splash.dismiss();
   } else if (play) {
     const [f, e, d] = play.split(',');
-    startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls });
+    // ?brief=0: no briefing / intro / outro; ?brief=1: the full sequence; default: quick briefing, no intro
+    const brief = params.get('brief');
+    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls });
     const speed = Number(params.get('speed'));
     const g = game as Game | null;
     if (speed && g) g.speed = speed;

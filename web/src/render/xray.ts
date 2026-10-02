@@ -120,7 +120,7 @@ export class UnitTagger {
   }
 
   /** Called once per frame with the renderer's live visuals. */
-  update(visuals: Iterable<{ id: number; owner: number; def: string; model: { root: THREE.Object3D }; visible: boolean }>, viewer: number, isUnit: (def: string) => boolean, time: number) {
+  update(visuals: Iterable<{ id: number; owner: number; def: string; model: { root: THREE.Object3D }; visible: boolean; occl?: boolean }>, viewer: number, isUnit: (def: string) => boolean, time: number) {
     this.time.value = time;
     const seen = this.seen;
     seen.clear();
@@ -136,7 +136,9 @@ export class UnitTagger {
         t = this.tag(v.model.root, viewer >= 0 && v.owner >= 0 ? v.owner === viewer : null);
         this.tagged.set(v.id, t);
       }
-      for (const p of t.proxies) p.visible = this.xray;
+      // occl: the renderer's coarse "could anything hide it" test (perf/occlusion.ts); units in the open skip their proxies' draw calls
+      const on = this.xray && v.occl !== false;
+      for (const p of t.proxies) p.visible = on;
     }
     for (const [id, t] of this.tagged) {
       if (seen.has(id)) continue;
