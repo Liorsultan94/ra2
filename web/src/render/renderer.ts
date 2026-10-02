@@ -24,6 +24,7 @@ import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { loadSkyEnvironment, type FinalPass } from './post';
 import { PostChain } from './post/chain';
+import type { GradeInput } from './post/grade';
 import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
@@ -409,7 +410,8 @@ export class GameRenderer {
     this.chutes = new Paradrop(this.scene);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
-    // ---- quality ladder: drop resolution first, then the expensive effects
+    // ---- quality ladder (index 0 = best). The governor sheds, in order: lens extras -> AO -> bloom quality
+    // -> (ultra extras) -> resolution -> shadow detail / bloom. Every post pass is a rung of its own.
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
@@ -417,53 +419,47 @@ export class GameRenderer {
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
-    const post = quality !== 'low';
-    // ambient occlusion: always on high; on medium only for desktops (phones spend the budget on resolution)
-    const ao = quality === 'high' || (quality === 'medium' && !coarse);
-    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post, ultra: this.ultra };
-    // ultra sheds its extras first (sharper shadows, then TAA / SSR), then walks the normal high ladder
+    // the post chain needs half-float targets; without them every tier renders straight to the canvas
+    const post = PostChain.supported(this.renderer);
+    const fx = post && quality !== 'low';
+    // AO: high and medium (medium only climbs to it with headroom: it starts below that rung)
+    let step: QualityStep = { pr: maxPR, ao: fx, bloomQ: fx ? 2 : 0, lens: fx, shadow, post, ultra: this.ultra };
+    const push = (s: QualityStep) => {
+      const l = this.ladder[this.ladder.length - 1];
+      if (!l || l.pr !== s.pr || l.ao !== s.ao || l.bloomQ !== s.bloomQ || l.lens !== s.lens || l.shadow !== s.shadow || l.post !== s.post || l.ultra !== s.ultra) this.ladder.push(s);
+      step = s;
+    };
+    push(step);
+    if (step.lens) push({ ...step, lens: false });
+    if (step.ao) push({ ...step, ao: false });
+    if (step.bloomQ === 2) push({ ...step, bloomQ: 1 });
+    // ultra sheds its extras next (sharper shadows, then TAA / SSR), then walks the normal high ladder
     if (this.ultra) {
-      this.ladder.push(step, (step = { ...step, shadow: 2048 }));
+      push({ ...step, shadow: 2048 });
       step = { ...step, ultra: false };
     }
-    for (const pr of prs) this.ladder.push((step = { ...step, pr }));
-    if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
-    if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
-    if (step.bloom) this.ladder.push((step = { ...step, bloom: false }));
-    if (step.shadow > 1024) this.ladder.push((step = { ...step, shadow: 1024 }));
-    if (step.post) this.ladder.push((step = { ...step, post: false }));
-    this.level = Math.max(0, this.ladder.findIndex((s) => s.pr <= startPR + 0.01));
+    for (const pr of prs) push({ ...step, pr });
+    if (step.shadow > 2048) push({ ...step, shadow: 2048 });
+    if (step.bloomQ) push({ ...step, bloomQ: 0 });
+    if (step.shadow > 1024) push({ ...step, shadow: 1024 });
+    // low's last resort: straight to the (multisampled) canvas; medium / high keep tone map + grade + FXAA
+    if (step.post && quality === 'low') push({ ...step, post: false });
+    const startAt = (s: QualityStep) => s.pr <= startPR + 0.01 && (quality !== 'medium' || !s.ao);
+    this.level = Math.max(0, this.ladder.findIndex(startAt));
     this.adaptive = !/[?&]adapt=0\b/.test(location.search);
 
     if (post) {
-      // ultra: the scene buffer keeps its depth (TAA reprojection, SSR, contact shadows, GTAO without a normal pass)
-      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0, depthTexture: this.ultra ? new THREE.DepthTexture(1, 1) : null });
-      this.composer = new EffectComposer(this.renderer, target);
-      if (this.ultra) this.composer.addPass((this.jitterPass = new JitterRenderPass(this.scene, this.camera)));
-      else this.composer.addPass(new RenderPass(this.scene, this.camera));
-      if (ao) {
-        try {
-          this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
-          this.gtao.blendIntensity = 0.8;
-          this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1, ...(this.ultra ? { samples: 24 } : {}) });
-          this.composer.addPass(this.gtao);
-          const g = this.gtao;
-          if (this.jitterPass) this.jitterPass.onDepth = (d) => g.setGBuffer(d);
-        } catch {
-          this.gtao = null;
-        }
-      }
-      if (this.jitterPass) this.composer.addPass((this.temporal = new TemporalPass(this.jitterPass, this.camera, this.fog.uniforms.fogNoise.value)));
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9);
-      this.composer.addPass(this.bloom);
-      this.finalPass = new FinalPass();
-      this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
+      const pc = (this.post = new PostChain(this.renderer, this.scene, this.camera, quality, this.ultra, this.fog.uniforms.fogNoise.value));
+      this.composer = pc.composer;
+      this.bloom = pc.bloom;
+      this.finalPass = pc.final;
+      this.tilt = pc.tilt;
+      this.temporal = pc.temporal;
       this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
-      this.composer.addPass(this.finalPass);
-      // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
-      if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
-      this.finalPass.haze = this.effects.enableHaze(this.camera);
-      this.finalPass.rays = this.effects.enableGodRays(this.camera);
+      if (quality !== 'low') {
+        this.finalPass.haze = this.effects.enableHaze(this.camera);
+        this.finalPass.rays = this.effects.enableGodRays(this.camera);
+      }
     }
     this.applyLevel(this.level, false);
     this.effects.group.name = 'effects';
@@ -471,7 +467,7 @@ export class GameRenderer {
     this.marks.group.name = 'marks';
     this.bridgeFx.group.name = 'bridges';
     this.overlay.group.name = 'overlay';
-    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
+    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom as unknown as UnrealBloomPass | null, canvas }, viewer);
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
@@ -515,12 +511,7 @@ export class GameRenderer {
     this.width = w;
     this.height = h;
     this.renderer.setSize(w, h, false);
-    if (this.composer) {
-      this.composer.setPixelRatio(this.renderer.getPixelRatio());
-      this.composer.setSize(w, h);
-    }
-    this.bloom?.setSize(w / 2, h / 2);
-    this.tilt?.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
+    this.post?.setSize(w, h, this.renderer.getPixelRatio());
     this.updateCamera();
   }
 
@@ -534,17 +525,12 @@ export class GameRenderer {
       this.renderer.setPixelRatio(s.pr);
       if (doResize) this.resize(this.width, this.height);
     }
-    if (this.gtao) this.gtao.enabled = s.gtao;
-    if (this.bloom) this.bloom.enabled = s.bloom;
+    this.post?.applyStep(s);
     this.usePost = !!this.composer && s.post;
+    // AO already darkens the ground contact: the footprint shadows back off so the two don't double up
+    if (this.contact) this.contact.strength = s.ao && this.usePost ? 0.55 : 1;
     // ultra rungs hint a bigger particle budget
     this.effects.budget = (s.ultra ? 1.3 : 1) - 0.45 * (level / Math.max(1, this.ladder.length - 1));
-    if (this.jitterPass) this.jitterPass.jitter = s.ultra;
-    if (this.temporal) {
-      if (this.temporal.enabled !== s.ultra) this.temporal.reset();
-      this.temporal.enabled = s.ultra;
-    }
-    if (this.finalPass) this.finalPass.uniforms.sharpen.value = s.ultra ? 0.3 : 0;
     if (this.csm) {
       if (s.shadow) this.csm.setMapSize(s.shadow);
     } else if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
@@ -563,6 +549,65 @@ export class GameRenderer {
   perfStats() {
     const s = this.ladder[this.level];
     return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+  }
+
+  /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
+  postStats() {
+    const st = this.post?.stats();
+    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive } : null;
+  }
+
+  /**
+   * Photo mode depth of field: focus 0..1 (near .. far around the orbit point) and amount 0..1;
+   * null hands the free camera back to the intro / outro look. Returns true when the post chain
+   * renders it (a real depth-based bokeh); false = the caller has to fake it.
+   */
+  setPhotoDof(focus: number | null, amount = 0): boolean {
+    if (focus === null) this.photoDof = null;
+    else {
+      const d = (this.photoDof ??= { focus: 0.5, amount: 0 });
+      d.focus = focus;
+      d.amount = amount;
+    }
+    return !!this.post?.dof && this.usePost;
+  }
+  private photoDof: { focus: number; amount: number } | null = null;
+  /** Bokeh amount of the intro / outro flyovers (free camera without photo mode): a gentle miniature look. */
+  cinematicDof = 0.32;
+  private gradeIn: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
+
+  /** Per-frame post inputs: grade look from the atmosphere, depth of field from the free camera. */
+  private updatePost(dt: number) {
+    const pc = this.post!;
+    const g = this.gradeIn;
+    const a = this.atmos;
+    g.daylight = a.daylight;
+    g.sunY = this.sunDir.y;
+    const c = this.sun.color;
+    g.warmth = (c.r - c.b) / Math.max(1e-3, c.r);
+    const wx = a.wx;
+    if (wx) {
+      // dynamic weather: overcast already greys the look a little, precipitation takes it the rest of the way
+      const k = Math.max(wx.precip, wx.cover * 0.55);
+      g.rain = wx.fall === 'rain' ? k : 0;
+      g.snow = wx.fall === 'snow' ? k * 0.85 : 0;
+      g.sand = wx.fall === 'sandstorm' ? Math.max(wx.precip, wx.cover * 0.5) : 0;
+      g.storm = wx.storm;
+    } else {
+      const w = a.cfg.weather;
+      g.rain = w === 'rain' ? 1 : 0;
+      g.storm = w === 'rain' ? 0.35 : 0;
+      g.sand = w === 'sandstorm' ? 1 : 0;
+      g.snow = w === 'snow' ? 1 : 0;
+    }
+    const free = this.photoCam;
+    if (free && pc.dof) {
+      const dist = this.camera.position.distanceTo(free.look);
+      const pd = this.photoDof;
+      if (pd) pc.setDof(dist * Math.pow(2, (pd.focus - 0.5) * 3.2), pd.amount);
+      else pc.setDof(dist, this.cinematicDof);
+    } else pc.setDof(20, 0);
+    pc.update(dt, g);
   }
 
   /** Start the per-pass / per-category / per-system cost probe (src/render/perf/probe.ts). */
@@ -1988,7 +2033,10 @@ export class GameRenderer {
     try {
       if (vh?.renderMain()) {
         // the view mode drew the frame itself
-      } else if (this.composer && this.usePost) this.composer.render(dt);
+      } else if (this.post && this.usePost) {
+        this.updatePost(dt);
+        this.post.render(dt);
+      }
       else this.renderer.render(scene, this.camera);
       this.readability.renderOverlays(this.renderer, scene, this.camera);
       vh?.after(dt);
@@ -2066,10 +2114,9 @@ export class GameRenderer {
     this.atmos.dispose();
     this.sky?.dispose();
     this.readability.dispose();
-    this.temporal?.dispose();
     this.contact?.dispose();
     this.csm?.dispose();
     this.renderer.dispose();
-    this.composer?.dispose();
+    this.post?.dispose();
   }
 }

@@ -23,6 +23,7 @@ import { MatchTracker, type MatchReport } from './matchstats';
 import { Briefing, buildBriefing, type BriefingInfo } from '../ui/briefing';
 import { CineCard } from '../ui/cinecard';
 import { BattleIntro, BattleOutro } from '../render/intro';
+import type { MapId } from '../sim/map';
 import { flagDataUrl } from '../render/flags';
 
 export interface GameOptions {
@@ -34,6 +35,8 @@ export interface GameOptions {
   attract?: boolean; // AI vs AI demo behind the main menu
   cinematic?: boolean; // slow-motion camera moments on big events (default on)
   seed?: number;
+  /** Map (default Frontline Crossing; sim/maps.ts). */
+  map?: MapId;
   /** Drone camera picture-in-picture (default auto). */
   droneCam?: 'auto' | 'off';
   /** X-ray silhouettes of hidden units (default on). */
@@ -127,6 +130,7 @@ export class Game {
     this.seed = opts.seed ?? Math.floor(Math.random() * 1e9);
     this.world = new World({
       seed: this.seed,
+      map: opts.map,
       credits: opts.credits,
       players: [
         { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract },

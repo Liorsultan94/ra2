@@ -73,7 +73,7 @@ export class PostChain {
   constructor(
     private renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
-    private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
     readonly quality: BaseQuality,
     readonly ultra: boolean,
     fogNoise: THREE.Texture | null,

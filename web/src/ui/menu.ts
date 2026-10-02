@@ -1,6 +1,7 @@
 import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
 import type { Faction, Player } from '../sim/types';
+import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
 import { autoQuality } from '../render/autoquality';
 import { setReadabilityPrefs } from '../render/readability';
@@ -18,9 +19,11 @@ export interface Settings {
   voice: boolean;
   /** Slow-motion camera moments on big events (missile launches, interceptions, huge blasts). */
   cinematic: boolean;
-  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). */
+  /** Skirmish map (sim/maps.ts; ?map= overrides it). */
+  map?: MapId;
+  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). 'map' / unset = the map's own weather. */
   tod?: 'day' | 'dusk' | 'night';
-  weather?: 'clear' | 'rain' | 'snow' | 'sandstorm';
+  weather?: 'map' | 'clear' | 'rain' | 'snow' | 'sandstorm';
   /** Drone camera picture-in-picture: 'auto' shows the feed of a selected / attacking drone. */
   droneCam: 'auto' | 'off';
   /** Team-coloured silhouettes of units hidden behind buildings and trees. */

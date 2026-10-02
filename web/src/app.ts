@@ -8,6 +8,14 @@ import { loadModelOverrides } from './render/models';
 import { MainMenu, loadSettings, resolveQuality, showEndScreen, showPauseMenu, type Settings } from './ui/menu';
 import type { Splash } from './ui/splash';
 import { showAfterAction } from './ui/aar';
+import { isMapId } from './sim/maps';
+import type { MapId } from './sim/map';
+
+/** ?map=frontline|desert|winter|urban picks the map (overrides the menu choice). */
+function urlMap(): MapId | undefined {
+  const v = new URLSearchParams(location.search).get('map');
+  return isMapId(v) ? v : undefined;
+}
 
 /*
  * The game proper, loaded by the small entry (src/main.ts) behind the boot
@@ -40,7 +48,7 @@ function startAttract() {
   const a = randomFaction();
   game = new Game(
     app,
-    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: resolveQuality(settings.quality) === 'high' ? 'medium' : resolveQuality(settings.quality), attract: true, cinematic: settings.cinematic },
+    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: resolveQuality(settings.quality) === 'high' ? 'medium' : resolveQuality(settings.quality), attract: true, cinematic: settings.cinematic, map: urlMap() },
     audio,
     {
       onMenu: () => {
@@ -67,7 +75,7 @@ function showMainMenu(newDemo = true) {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map });
     },
     onSettings: (s) => {
       settings = s;
@@ -146,7 +154,7 @@ export async function boot(splash: Splash) {
   if (demo) {
     // ?demo=usa,russia&ff=240 : watch an AI battle, optionally fast-forwarded
     const [a, b] = demo.split(',') as Faction[];
-    game = new Game(app, { faction: a || 'usa', enemy: b || 'russia', difficulty: 'hard', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), attract: true, seed: 42, cinematic: params.get('cine') !== '0' }, audio, { onMenu: () => {}, onEnd: () => {} });
+    game = new Game(app, { faction: a || 'usa', enemy: b || 'russia', difficulty: 'hard', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), attract: true, seed: 42, cinematic: params.get('cine') !== '0', map: urlMap() }, audio, { onMenu: () => {}, onEnd: () => {} });
     const g = game as Game;
     g.fastForward(Number(params.get('ff') ?? 0));
     const cx = Number(params.get('cx'));
@@ -161,7 +169,7 @@ export async function boot(splash: Splash) {
     const [f, e, d] = play.split(',');
     // ?brief=0: no briefing / intro / outro; ?brief=1: the full sequence; default: quick briefing, no intro
     const brief = params.get('brief');
-    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls });
+    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls, map: urlMap() ?? settings.map });
     const speed = Number(params.get('speed'));
     const g = game as Game | null;
     if (speed && g) g.speed = speed;

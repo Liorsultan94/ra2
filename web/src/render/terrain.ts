@@ -79,7 +79,7 @@ export class Terrain {
     // names double as draw call breakdown categories (src/render/perf/probe.ts)
     for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(Object.assign(o, { name: o.name || 'vegetation' }));
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(Object.assign(o, { name: o.name || 'rocks' }));
-    for (const o of buildScenery(map, this.layout, fog, quality, this.scenery)) this.group.add(Object.assign(o, { name: o.name || 'scenery' }));
+    for (const o of buildScenery(map, this.layout, fog, quality, this.scenery, lod)) this.group.add(Object.assign(o, { name: o.name || 'scenery' }));
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
     this.ground.mesh.userData.perfCat = 'ground';

@@ -1,5 +1,6 @@
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
+import { buildBiomeLayout } from './biomelayout';
 
 /*
  * Scenery layout derived deterministically from the map: paved roads, dirt
@@ -19,6 +20,8 @@ export interface Road {
   pts: V2[]; // dense, smoothed centreline
   width: number;
   variant: 0 | 1; // 0 highway with markings, 1 country road
+  /** Drawn by the ground shader (city streets as Avenue / Street / Crossing fields), no ribbon mesh. */
+  painted?: boolean;
 }
 
 export interface Track {
@@ -31,6 +34,12 @@ export const enum FieldType {
   Green = 1,
   Wheat = 2,
   Fallow = 3,
+  /** City squares: stone flags (urban maps only). */
+  Plaza = 4,
+  /** City streets painted by the ground shader (urban maps only): avenue, street, crossing. */
+  Avenue = 5,
+  Street = 6,
+  Crossing = 7,
 }
 
 export interface Field {
@@ -111,6 +120,8 @@ export function segDist(px: number, py: number, a: V2, b: V2) {
 }
 
 export function buildLayout(m: GameMap): Layout {
+  // the other maps hand their layout to the renderer as deco hints (sim/maps.ts)
+  if (m.id !== 'frontline') return buildBiomeLayout(m);
   const W = m.w;
   const H = m.h;
   const mir = (p: V2) => v(W - p.x, H - p.y);
@@ -427,7 +438,7 @@ export function buildLayout(m: GameMap): Layout {
  * (with a clearance check) and smoothed. Pure function of the map, so the
  * scenery stays deterministic.
  */
-function makeRouter(m: GameMap) {
+export function makeRouter(m: GameMap) {
   const W = m.w;
   const H = m.h;
   const hard = new Uint8Array(W * H);

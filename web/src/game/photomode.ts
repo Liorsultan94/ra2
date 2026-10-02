@@ -258,6 +258,7 @@ export class PhotoMode {
     if (this.tod !== null) r.atmos.previewPhase(null);
     this.tod = null;
     r.photoCam = null;
+    r.setPhotoDof(null);
     r.target.copy(s.target);
     r.zoom = s.zoom;
     r.viewHook = s.hook;
@@ -371,7 +372,9 @@ export class PhotoMode {
   post() {
     const code = FILTER_CODE[this.filter] === 2 && this.host.renderer.postActive ? 0 : FILTER_CODE[this.filter];
     const ev = Math.pow(2, this.exposure);
-    if (code === 0 && Math.abs(ev - 1) < 1e-3 && this.blur < 0.01) return;
+    // depth of field: the post chain's depth-based bokeh when it runs, else the screen-space band below
+    const blur = this.host.renderer.setPhotoDof(this.focus, this.blur) ? 0 : this.blur;
+    if (code === 0 && Math.abs(ev - 1) < 1e-3 && blur < 0.01) return;
     const gl = this.host.renderer.renderer;
     gl.getDrawingBufferSize(this.size);
     const w = this.size.x;
@@ -392,7 +395,7 @@ export class PhotoMode {
     u.resolution.value.set(w, h);
     u.exposure.value = ev;
     u.focus.value = this.focus;
-    u.blur.value = this.blur;
+    u.blur.value = blur;
     u.mode.value = code;
     u.time.value = this.time % 100;
     this.quad!.render(gl);

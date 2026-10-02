@@ -60,7 +60,7 @@ function siteOk(w: World, defId: string, tx: number, ty: number): boolean {
 export function spawnTechSites(w: World) {
   const { w: W, h: H } = w.map;
   let reach = reachable(w);
-  for (const site of SITES) {
+  for (const site of w.map.techSites ?? SITES) {
     const d = buildingDef(site.def);
     for (const [x, y] of site.at) {
       // mirror the footprint through the centre

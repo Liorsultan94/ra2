@@ -50,6 +50,9 @@ export enum Tile {
   Hazard = 18, // yellow / black stripes (coloured)
   Stone = 19, // coursed sandstone blocks
   Glass = 20, // glazing: dark, smooth, reflective
+  Aesa = 21, // radar array face: grid of transmit / receive modules
+  Solar = 22, // photovoltaic panel cells (coloured)
+  Roof = 23, // rolled roofing membrane: lapped strips, wrinkles, ponding stains
 }
 
 export const ATLAS_COLS = 4;
@@ -586,6 +589,61 @@ const GENS: { tile: Tile; strength: number; gen: Gen }[] = [
       o.me = 0.85;
     },
   },
+  {
+    tile: Tile.Aesa,
+    strength: 2.0,
+    gen(x, y, u, v, o) {
+      const { lo, hi } = fields();
+      const mu = lineD(u, 8);
+      const mv = lineD(v, 8);
+      const gap = 1 - sstep(0.004, 0.009, Math.min(mu, mv));
+      const id = hash(Math.floor(u * 8), Math.floor(v * 8), 31);
+      const dirt = clamp01((at(lo, x, y, 1, 1, 3, 3) - 0.55) * 2);
+      grey(o, clamp01(0.5 + (id - 0.5) * 0.06 - gap * 0.3 - dirt * 0.08 + (at(hi, x, y, 1, 1, 0, 0) - 0.5) * 0.03));
+      o.g += 0.02;
+      o.h = 0.55 - gap * 0.4;
+      o.ro = 0.55 + dirt * 0.2;
+      o.me = 0.35;
+    },
+  },
+  {
+    tile: Tile.Solar,
+    strength: 1.4,
+    gen(x, y, u, v, o) {
+      const { lo } = fields();
+      const cu = lineD(u, 6);
+      const cv = lineD(v, 10);
+      const frame = 1 - sstep(0.003, 0.007, Math.min(cu, cv));
+      const bus = 1 - sstep(0.001, 0.003, lineD(u * 3 + 0.5, 6) / 3);
+      const sheen = (at(lo, x, y, 1, 1, 7, 7) - 0.5) * 0.06;
+      o.r = clamp01(0.1 + frame * 0.6 + bus * 0.3 + sheen);
+      o.g = clamp01(0.16 + frame * 0.6 + bus * 0.3 + sheen);
+      o.b = clamp01(0.34 + frame * 0.5 + bus * 0.25 + sheen);
+      o.h = 0.5 + frame * 0.2;
+      o.ro = 0.22 + frame * 0.3;
+      o.me = 0.3 + frame * 0.4;
+    },
+  },
+  {
+    tile: Tile.Roof,
+    strength: 2.0,
+    gen(x, y, _u, v, o) {
+      const { lo, mid, hi } = fields();
+      // 4 membrane strips per tile with raised lap seams, fine granules, ponding stains
+      const lap = lineD(v, 4);
+      const seam = 1 - sstep(0.002, 0.006, lap);
+      const ridge = 1 - sstep(0.006, 0.014, Math.abs(frac(v * 4) - 0.03));
+      const wrinkle = at(mid, x, y, 4, 1, 3, 70);
+      const pond = clamp01((at(lo, x, y, 1, 1, 50, 50) - 0.58) * 3);
+      const gran = at(hi, x, y, 2, 2, 9, 1);
+      const sid = hash(Math.floor(v * 4), 3, 77);
+      grey(o, clamp01(0.78 + (sid - 0.5) * 0.06 + (gran - 0.5) * 0.1 - pond * 0.16 - seam * 0.12 + ridge * 0.05));
+      stain(o, pond * 0.3, 0.42, 0.4, 0.36);
+      o.h = 0.5 + ridge * 0.3 - seam * 0.2 + (wrinkle - 0.5) * 0.12 + (gran - 0.5) * 0.06;
+      o.ro = clamp01(0.82 - pond * 0.35);
+      o.me = 0;
+    },
+  },
 ];
 
 export interface AtlasSet {
@@ -706,9 +764,11 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
           // camo tile: palette index in R (stored sRGB: undo the decode), grime in G
           float lv = pow( sampledDiffuseColor.r, 1.0 / 2.2 ) * 3.0;
           vec3 pc = lv < 0.5 ? bPal[0] : lv < 1.5 ? bPal[1] : lv < 2.5 ? bPal[2] : bPal[3];
-          sampledDiffuseColor.rgb = pc * pow( sampledDiffuseColor.g, 1.0 / 2.2 );
+          diffuseColor.rgb *= pc * pow( sampledDiffuseColor.g, 1.0 / 2.2 );
+        } else {
+          // tiles are authored around ~0.8 grey so stains / joints can darken them: lift back to full albedo
+          diffuseColor.rgb = min( diffuseColor.rgb * sampledDiffuseColor.rgb * 1.45, vec3( 1.0 ) );
         }
-        diffuseColor.rgb *= sampledDiffuseColor.rgb;
       #endif`,
     )
     // roughness lives in the normal map's alpha, metalness in the albedo's alpha
@@ -721,13 +781,15 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
 
 const SW = 1024;
 const SH = 1024;
-const CW = 256;
-const CH = 64;
+const CW = 200;
+const CH = 50;
+const COLS = Math.floor(SW / CW);
+const ROWS = Math.floor(SH / CH);
 const signCells = new Map<string, number>();
 let signCanvas: HTMLCanvasElement | null = null;
 let signTex: THREE.CanvasTexture | null = null;
 
-/** Shared sign atlas texture (cells of 256 x 64 px). */
+/** Shared sign atlas texture (cells of 200 x 50 px, 100 signs). */
 export function signTexture(): THREE.CanvasTexture {
   if (!signTex) {
     signCanvas = document.createElement('canvas');
@@ -839,11 +901,11 @@ export function signCell(key: string, s: SignSpec): [number, number, number, num
   let i = signCells.get(key);
   if (i === undefined) {
     i = signCells.size;
-    const n = (SW / CW) * (SH / CH);
+    const n = COLS * ROWS;
     if (i >= n) i = n - 1;
     else signCells.set(key, i);
-    const cx = (i % (SW / CW)) * CW;
-    const cy = Math.floor(i / (SW / CW)) * CH;
+    const cx = (i % COLS) * CW;
+    const cy = Math.floor(i / COLS) * CH;
     const c = signCanvas!.getContext('2d')!;
     c.save();
     c.beginPath();
@@ -854,12 +916,12 @@ export function signCell(key: string, s: SignSpec): [number, number, number, num
       c.fillStyle = s.border ?? s.bg;
       c.fillRect(cx, cy, CW, CH);
       c.fillStyle = s.bg;
-      c.fillRect(cx + 4, cy + 4, CW - 8, CH - 8);
+      c.fillRect(cx + 3, cy + 3, CW - 6, CH - 6);
     }
     let x0 = cx + 8;
     if (s.mark) {
-      drawMark(c, s.mark, cx + 34, cy + CH / 2, 22, s.markColor ?? s.fg);
-      x0 = cx + 62;
+      drawMark(c, s.mark, cx + 26, cy + CH / 2, 17, s.markColor ?? s.fg);
+      x0 = cx + 48;
     }
     const font = s.font ?? 'Arial, "DejaVu Sans", sans-serif';
     c.fillStyle = s.fg;
@@ -871,25 +933,25 @@ export function signCell(key: string, s: SignSpec): [number, number, number, num
     const fit = (txt: string, px: number) => {
       let sz = px;
       c.font = `bold ${sz}px ${font}`;
-      while (sz > 10 && c.measureText(txt).width > maxW) {
+      while (sz > 9 && c.measureText(txt).width > maxW) {
         sz -= 2;
         c.font = `bold ${sz}px ${font}`;
       }
     };
     if (s.sub) {
-      fit(s.text, 30);
-      c.fillText(s.text, mid, cy + 23, maxW);
-      fit(s.sub, 16);
-      c.fillText(s.sub, mid, cy + 50, maxW);
+      fit(s.text, 24);
+      c.fillText(s.text, mid, cy + 18, maxW);
+      fit(s.sub, 13);
+      c.fillText(s.sub, mid, cy + 39, maxW);
     } else {
-      fit(s.text, 40);
+      fit(s.text, 32);
       c.fillText(s.text, mid, cy + CH / 2 + 2, maxW);
     }
     c.restore();
     signTex!.needsUpdate = true;
   }
-  const cx = (i % (SW / CW)) * CW;
-  const cy = Math.floor(i / (SW / CW)) * CH;
+  const cx = (i % COLS) * CW;
+  const cy = Math.floor(i / COLS) * CH;
   // canvas y down, uv v up (flipY)
   return [cx / SW, 1 - (cy + CH) / SH, (cx + CW) / SW, 1 - cy / SH];
 }

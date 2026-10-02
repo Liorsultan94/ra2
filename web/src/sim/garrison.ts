@@ -30,6 +30,13 @@ const DEF_BY_KIND: Partial<Record<StructureKind, string>> = {
   [StructureKind.House]: 'civ_house',
   [StructureKind.Cottage]: 'civ_cottage',
   [StructureKind.Barn]: 'civ_barn',
+  [StructureKind.MudHouse]: 'civ_mudhouse',
+  [StructureKind.Courtyard]: 'civ_courtyard',
+  [StructureKind.Apartment]: 'civ_apartment',
+  [StructureKind.Block]: 'civ_block',
+  [StructureKind.Office]: 'civ_office',
+  [StructureKind.Shop]: 'civ_shop',
+  [StructureKind.Townhouse]: 'civ_townhouse',
 };
 
 /** Turn the map's village houses into neutral garrisonable building entities. */

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
+import { biomeLook } from './biome';
 
 /*
  * The river: a flat, alpha-blended sheet at WATER_LEVEL covering only the
@@ -1043,6 +1044,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   const maps = buildWaterData(m, river);
   const reflection = quality === 'high' ? new WaterReflection(WATER_LEVEL) : null;
   const Q = quality === 'high' ? 2 : quality === 'medium' ? 1 : 0;
+  // biome water: clear turquoise oasis, icy river, murky canal (temperate = the original river)
+  const bw = biomeLook(m).water;
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -1062,6 +1065,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       waterLevel: { value: WATER_LEVEL },
       wxLight: { value: new THREE.Vector3(1, 1, 1) },
       wxSpec: { value: 1 },
+      wTurq: { value: new THREE.Vector3(...bw.turq) },
+      wDeep: { value: new THREE.Vector3(...bw.deep) },
+      wBed: { value: new THREE.Vector3(...bw.bed) },
+      wIceK: { value: biomeLook(m).iceK },
       skyTop: { value: new THREE.Color(0x4a6488) },
       skyHorizon: { value: new THREE.Color(0x8a8678) },
       reflTex: { value: reflection ? reflection.target.texture : null },
@@ -1102,6 +1109,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform float wxSpec;
       uniform vec3 skyTop;
       uniform vec3 skyHorizon;
+      uniform vec3 wTurq;
+      uniform vec3 wDeep;
+      uniform vec3 wBed;
+      uniform float wIceK;
       uniform sampler2D reflTex;
       uniform mat4 reflMatrix;
       uniform float reflOn;
@@ -1210,8 +1221,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float cosT = max(dot(n, viewDir), 0.0);
         float fres = 0.1 + 0.9 * pow(1.0 - cosT, 4.0);
         // ---- the water body: bed through the water, absorbed with depth
-        vec3 deepC = mix(vec3(0.007, 0.03, 0.032), vec3(0.06, 0.05, 0.026), mud);
-        vec3 turq = mix(vec3(0.03, 0.085, 0.06), vec3(0.11, 0.09, 0.045), mud);
+        vec3 deepC = mix(wDeep, vec3(0.06, 0.05, 0.026), mud);
+        vec3 turq = mix(wTurq, vec3(0.11, 0.09, 0.045), mud);
         vec3 absorb = mix(vec3(4.2, 2.7, 3.1), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
         vec3 trans = exp(-absorb * depthW);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
@@ -1226,9 +1237,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             float c2 = texture2D(causTex, cq * 1.19 + vec2(-time * 0.037, time * 0.041) + 0.5).r;
             bed *= 1.0 + min(c1, c2) * 2.6 * ck;
           }
-          bed *= 0.62;
+          bed *= 0.62 * wBed / vec3(0.24, 0.2, 0.13);
         #else
-          vec3 bed = vec3(0.24, 0.2, 0.13);
+          vec3 bed = wBed;
         #endif
         vec3 under = bed * trans + scatter * (1.0 - trans);
         // ---- reflection: sky gradient, then banks / bridges / everything on high
@@ -1342,7 +1353,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // ---- ice: rims along the banks, floes drifting with the current
         if (ice > 0.01) {
           float rn = texture2D(waveTex, p * 0.35).b;
-          float rimW = ice * (0.25 + 0.6 * rn);
+          float rimW = ice * (0.25 + 0.6 * rn) * wIceK;
           float im = 1.0 - smoothstep(rimW * 0.75, rimW, shore);
           #if WATER_Q > 0
             im = max(im, smoothstep(0.42, 0.5, fl.b) * smoothstep(0.5, 0.62, fA) * smoothstep(0.35, 0.9, shore) * smoothstep(0.2, 0.8, ice) * (0.7 + 0.3 * rn));

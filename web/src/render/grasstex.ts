@@ -19,31 +19,40 @@ export const GRASS = {
   clover: 0x28542d,
 };
 
+/** A grass palette (the biome's, render/biome.ts); GRASS is the temperate one. */
+export type GrassPalette = typeof GRASS;
+
 const srgb = (v: number) => [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
-const PAL = { lush: srgb(GRASS.lush), mid: srgb(GRASS.mid), dry: srgb(GRASS.dry) };
+const palCache = new Map<GrassPalette, { lush: number[]; mid: number[]; dry: number[] }>();
+const palOf = (g: GrassPalette) => {
+  let p = palCache.get(g);
+  if (!p) palCache.set(g, (p = { lush: srgb(g.lush), mid: srgb(g.mid), dry: srgb(g.dry) }));
+  return p;
+};
 
 /**
  * Approximate flat grass colour (0-1 sRGB) for the control map values at a
  * point - the CPU twin of grassBase() in GRASS_GLSL (without the micro detail,
  * which darkens the result by ~10%).
  */
-export function grassRGB(lush: number, dry: number, out: number[]) {
+export function grassRGB(lush: number, dry: number, out: number[], pal: GrassPalette = GRASS) {
+  const P = palOf(pal);
   for (let j = 0; j < 3; j++) {
-    const c = PAL.mid[j] + (PAL.lush[j] - PAL.mid[j]) * lush;
-    out[j] = c + (PAL.dry[j] - c) * dry;
+    const c = P.mid[j] + (P.lush[j] - P.mid[j]) * lush;
+    out[j] = c + (P.dry[j] - c) * dry;
   }
   return out;
 }
 
 /** Uniform objects for the palette (shared by every material that includes GRASS_GLSL). */
-export function grassUniforms() {
+export function grassUniforms(pal: GrassPalette = GRASS) {
   const col = (hex: number) => ({ value: new THREE.Color(hex) });
   return {
-    gcLush: col(GRASS.lush),
-    gcMid: col(GRASS.mid),
-    gcDry: col(GRASS.dry),
-    gcFresh: col(GRASS.fresh),
-    gcClover: col(GRASS.clover),
+    gcLush: col(pal.lush),
+    gcMid: col(pal.mid),
+    gcDry: col(pal.dry),
+    gcFresh: col(pal.fresh),
+    gcClover: col(pal.clover),
   };
 }
 

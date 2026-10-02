@@ -104,6 +104,10 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
       // painted metal (vehicles, plant) sheds most of it: keeps units readable
       cover *= 1.0 - 0.7 * smoothstep( 0.2, 0.5, metalnessFactor );
     #endif
+    #ifdef WX_SNOW_K
+      // materials that paint their own snow (winter ground) or shed it (ploughed roads)
+      cover *= WX_SNOW_K;
+    #endif
     vec3 snowC = vec3( 0.82, 0.86, 0.92 ) * ( 0.92 + wxNz.g * 0.16 );
     diffuseColor.rgb = mix( diffuseColor.rgb, snowC, cover );
     #if defined( STANDARD )

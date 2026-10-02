@@ -724,6 +724,8 @@ export class AIController implements Controller {
     for (const b of w.map.bridges) {
       if (w.pf.passable(Math.floor(b.x), Math.floor(b.y))) out.push({ x: b.x, y: b.y });
     }
+    // fords, passes and avenues of maps with few or no bridges (sim/maps.ts)
+    for (const l of w.map.lanes ?? []) if (w.pf.passable(Math.floor(l.x), Math.floor(l.y))) out.push({ x: l.x, y: l.y });
     return out;
   }
 

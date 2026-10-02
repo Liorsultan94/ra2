@@ -122,43 +122,7 @@ function texHelipad(color: string) {
     c.fillRect(100 * s, 117 * s, 56 * s, 22 * s);
   });
 }
-function texSolar() {
-  return canvasTex('solar', 64, 64, (c, w, h) => {
-    c.fillStyle = '#1b2a4a';
-    c.fillRect(0, 0, w, h);
-    c.strokeStyle = '#8c9aac';
-    c.lineWidth = 1;
-    for (let i = 0; i <= 8; i++) {
-      c.beginPath();
-      c.moveTo(i * 8, 0);
-      c.lineTo(i * 8, h);
-      c.stroke();
-    }
-    for (let j = 0; j <= 4; j++) {
-      c.beginPath();
-      c.moveTo(0, j * 16);
-      c.lineTo(w, j * 16);
-      c.stroke();
-    }
-    c.fillStyle = 'rgba(120,160,220,0.15)';
-    c.fillRect(0, 0, w, h / 3);
-  });
-}
 /** AESA radar face: grid of transmit / receive modules. */
-function texAesa() {
-  return canvasTex('aesa', 64, 64, (c, w, h) => {
-    c.fillStyle = '#5c625e';
-    c.fillRect(0, 0, w, h);
-    for (let i = 0; i < 8; i++)
-      for (let j = 0; j < 8; j++) {
-        c.fillStyle = (i + j) % 2 ? '#6e7470' : '#646a66';
-        c.fillRect(i * 8 + 1, j * 8 + 1, 6, 6);
-      }
-    c.strokeStyle = '#3e4442';
-    c.lineWidth = 2;
-    c.strokeRect(1, 1, w - 2, h - 2);
-  });
-}
 function texFlag(cols: number[], faction: string) {
   return canvasTex('flag' + cols.join(',') + faction, 96, 64, (c, w, h) => {
     if (drawFlag(c, faction, w, h)) return;
@@ -192,6 +156,9 @@ const TILE_UV: Record<Tile, number> = {
   [Tile.Hazard]: 4.5,
   [Tile.Stone]: 1.3,
   [Tile.Glass]: 1,
+  [Tile.Aesa]: 3,
+  [Tile.Solar]: 2.5,
+  [Tile.Roof]: 1.6,
 };
 
 /** Old procedural texture kinds (textures.ts names) mapped onto atlas tiles. */
@@ -299,10 +266,6 @@ class Mats {
     const tile = KIND_TILE[kind] ?? Tile.Paint;
     const base = opts.color ?? 0xd8d8d4;
     return this.at(tile, mulHex(tint, base, kind === 'concreteDark' ? 1.05 : 1.15), uv * 0.55);
-  }
-  /** Building surface texture (cladding / plates). */
-  btex(kind: 'clad' | 'plate' | 'paint', tint = 0xffffff, uv = 2.5): SMat {
-    return this.at(kind === 'clad' ? Tile.Clad : kind === 'plate' ? Tile.Plate : Tile.Paint, tint, uv * 0.6);
   }
   /** National insignia / flag decals (shared atlas, alpha tested). */
   decal(): SMat {
@@ -469,6 +432,8 @@ interface Nation {
   conc: number;
   /** ISO container tints. */
   boxes: number[];
+  /** Big industrial halls (factory hangar, turbine hall, workshop) are camo painted. */
+  camoHalls?: boolean;
   sign: { base: string; sub: string; fg: string; bg: string; border: string; font?: string; rtl?: boolean; mark?: string; markColor?: string; num: string };
 }
 
@@ -543,6 +508,7 @@ const NATIONS: Record<string, Nation> = {
     ground: 0x8a887a,
     conc: 0xb4b2a8,
     boxes: [0x5a6a40, 0x7a3a2a, 0x40566e],
+    camoHalls: true,
     sign: { base: 'ВОЙСКОВАЯ ЧАСТЬ', sub: '№ 45321', fg: '#f0e8d0', bg: '#2e4a2e', border: '#c8b060', mark: 'star', markColor: '#d02818', num: 'КОРП' },
   },
   germany: {
@@ -561,6 +527,7 @@ const NATIONS: Record<string, Nation> = {
     ground: 0x96968a,
     conc: 0xbcbcb4,
     boxes: [0x4e5c40, 0x8a8a7c, 0x6a4e36],
+    camoHalls: true,
     sign: { base: 'BUNDESWEHR', sub: 'KASERNE', fg: '#141414', bg: '#f2f2ec', border: '#141414', mark: 'cross', markColor: '#141414', num: 'GEB' },
   },
   korea: {
@@ -597,6 +564,7 @@ const NATIONS: Record<string, Nation> = {
     ground: 0x8e8c7c,
     conc: 0xb8b6ac,
     boxes: [0x5f6a3e, 0x2a5aa0, 0x8a6a3a],
+    camoHalls: true,
     sign: { base: 'ЗСУ', sub: 'ЗБРОЙНІ СИЛИ УКРАЇНИ', fg: '#f6d43a', bg: '#1f4fa0', border: '#f6d43a', mark: 'trident', markColor: '#f6d43a', num: 'БУД' },
   },
   turkey: {
@@ -656,8 +624,8 @@ const NATIONS: Record<string, Nation> = {
 };
 
 for (const n of Object.values(NATIONS)) {
-  n.conc = shade(n.conc, 0.86);
-  n.ground = shade(n.ground, 0.84);
+  // hardstand gravel a touch lighter than the concrete so structures stand out from their apron
+  n.ground = shade(n.ground, 1.08);
 }
 
 function nationOf(s: ModelStyle): Nation {
@@ -791,7 +759,7 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     wall2: () => M.at(N.wall2Tile, N.wall2),
     base: () => M.at(Tile.Cast, shade(N.conc, 0.62)),
     trim: () => M.col(N.trim, 0.5, 0.4),
-    roof: () => M.at(Tile.Asphalt, mulHex(N.roof, 0xffffff, 1.35), 1.4),
+    roof: () => M.at(Tile.Roof, N.roof),
     pitch: () => (N.roofStyle === 'hip' ? M.at(Tile.RoofTile, N.pitch) : M.at(Tile.Corr, N.pitch)),
     slab: () => M.at(Tile.Soil, N.ground),
     asphalt: () => M.at(Tile.Asphalt, 0xe8e6e0),
@@ -838,8 +806,8 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     cyan_l: () => M.light(0x5fe0ff, 2.6),
     amber_l: () => M.light(0xffa21a, 3),
     chain: () => M.canvas('chain', texChain(), { alphaTest: 0.4, double: true, uv: 9, metal: 0.6, rough: 0.5 }),
-    solar: () => M.canvas('solar', texSolar(), { uv: 6, rough: 0.45, metal: 0.15 }),
-    aesa: () => M.canvas('aesa', texAesa(), { uv: 6, rough: 0.5, metal: 0.4 }),
+    solar: () => M.at(Tile.Solar, 0xffffff, 5),
+    aesa: () => M.at(Tile.Aesa, 0xd0d6d0, 5),
     win: () => M.win(false),
     winC: () => M.win(true),
     door: () => M.col(shade(N.drab, 0.85), 0.6, 0.45),
@@ -2713,7 +2681,7 @@ function floodMast(k: Kit, x: number, z: number, h = 0.62, ry = 0, y = Y0) {
 }
 
 /** Trailer mounted diesel generator set (exhaust smoke), facing +X rotated by ry. */
-function genset(k: Kit, x: number, z: number, ry = 0, s = 1, y = Y0) {
+function genset(k: Kit, x: number, z: number, ry = 0, s = 1, y = Y0, smoke = false) {
   const P = k.P;
   k.at(x, y, z, ry, () => {
     k.box(P.dark, 0.26 * s, 0.02 * s, 0.11 * s, 0, 0.03 * s, 0);
@@ -2726,7 +2694,7 @@ function genset(k: Kit, x: number, z: number, ry = 0, s = 1, y = Y0) {
     k.box(P.green_l, 0.008, 0.006, 0.002, -0.06 * s, 0.1 * s, 0.063 * s);
     k.cyl(P.dark, 0.008 * s, 0.05 * s, -0.07 * s, 0.16 * s, -0.03 * s, 6);
     k.box(P.team, 0.222 * s, 0.012 * s, 0.122 * s, 0, 0.15 * s, 0);
-    k.emit(-0.07 * s, 0.24 * s, -0.03 * s, 'smoke');
+    if (smoke) k.emit(-0.07 * s, 0.24 * s, -0.03 * s, 'smoke');
   });
 }
 
@@ -2830,7 +2798,6 @@ function dozer(k: Kit, x: number, z: number, ry: number, s = 1, y = Y0) {
     });
     for (const sz of [-1, 1]) k.bar(P.dark, [0.1 * s, 0.04 * s, sz * 0.09 * s], [0.19 * s, 0.05 * s, sz * 0.09 * s], 0.014 * s);
     k.box(P.team, 0.1 * s, 0.012 * s, 0.102 * s, -0.06 * s, 0.23 * s, 0);
-    k.emit(0.07 * s, 0.23 * s, 0.03 * s, 'smoke');
   });
 }
 
@@ -3116,7 +3083,7 @@ function conyard(k: Kit) {
   const wz1 = -0.62;
   const wcx = (wx0 + wx1) / 2;
   const wcz = (wz0 + wz1) / 2;
-  const shed = P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d4c8, 0.35), 1.8);
+  const shed = N.camoHalls ? P.camo : P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d4c8, 0.35), 1.8);
   k.box(P.base, wx1 - wx0 + 0.014, 0.03, wz1 - wz0 + 0.014, wcx, Y0, wcz);
   k.box(shed, wx1 - wx0, 0.4, wz1 - wz0, wcx, Y0, wcz);
   dress(k, wx0, wx1, wz0, wz1, Y0, 0.4, { beacons: false, vent: false });
@@ -3134,6 +3101,7 @@ function conyard(k: Kit) {
   gantryCrane(k, 0.0, 0.48, 2.62, 1.02, 0.36);
   // prefab sections under the crane path (kept low so the hook load clears them)
   prefabFrame(k, -0.42, 0.62, 0);
+  k.emit(-0.62, Y0 + 0.2, 0.62, 'spark');
   cabin(k, 0.62, Y0, 0.08, 0, N.wall, 0.42);
   cabin(k, 0.62, Y0, 0.34, 0, N.wall, 0.42);
   panelRack(k, -0.88, 1.0, 0.0);
@@ -3207,7 +3175,7 @@ function power(k: Kit) {
   const H = 0.4;
   const cx = (x0 + x1) / 2;
   const cz = (z0 + z1) / 2;
-  const hall = P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
+  const hall = N.camoHalls ? P.camo : P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
   k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, cx, Y0, cz);
   k.box(hall, x1 - x0, H, z1 - z0, cx, Y0, cz);
   dress(k, x0, x1, z0, z1, Y0, H, { beacons: false, vent: false });
@@ -3421,7 +3389,7 @@ function factory(k: Kit) {
   const L = z1 - z0;
   const H = 0.64;
   const DH = 0.5; // door height
-  const hall = P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
+  const hall = N.camoHalls ? P.camo : P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
   k.box(P.base, 2.86, 0.03, L + 0.014, 0, Y0, zc);
   for (const sx of [-1, 1]) {
     // hall walls either side of the bay
@@ -3585,11 +3553,9 @@ function refinery(k: Kit) {
   slab(k, 3, 3, Y0, [-0.52, 0.52, 0.52]);
   // ------------------------------------------------ harvester dock (front centre tile, ground level, bare concrete)
   k.box(P.concrete, 1.02, 0.008, 1.0, 0, 0, 1.0);
-  for (const sx of [-1, 1]) {
-    k.box(P.steel, 0.025, 0.03, 0.9, sx * 0.44, 0.008, 1.0);
-    k.box(P.hazard, 0.025, 0.012, 0.9, sx * 0.44, 0.038, 1.0);
-  }
-  k.box(P.hazard, 0.9, 0.035, 0.035, 0, 0.008, 0.53);
+  // flush steel kerb plates (the harvester drives over them)
+  for (const sx of [-1, 1]) k.box(P.hazard, 0.03, 0.006, 0.9, sx * 0.46, 0.008, 1.0);
+  k.box(P.mats.at(Tile.Plate, 0x9a9e9c, 2.4), 0.8, 0.006, 0.5, 0, 0.008, 0.85);
   // ------------------------------------------------ ore intake hopper behind the dock
   const hz = 0.3;
   k.box(P.concrete, 0.94, 0.08, 0.04, 0, Y0, hz - 0.2);
@@ -3936,6 +3902,7 @@ function airfield(k: Kit) {
   k.osc('sock', 'y', 0.35, 0.9, 0, 0);
   k.blinkLight(1.3, Y0 + 0.39, 0.42, 0.01, 1.0, 0.2);
   truck(k, 0.95, -0.3, 2.6, 'fuel', 1.0);
+  fuelBladder(k, 1.02, 0.12, 0.42, 0.22, 0);
   genset(k, 0.5, -0.42, 0, 0.8);
   floodMast(k, -1.38, 0.5, 0.5, 0);
   floodMast(k, 0.55, -0.62, 0.5, Math.PI);
@@ -4120,7 +4087,7 @@ function swCompound(k: Kit) {
   razor(k, [1.46, 1.46], [-0.4, 1.46], Y0 + 0.16);
   floodMast(k, 1.36, -1.32, 0.66, Math.PI * 0.75);
   floodMast(k, -1.34, 1.36, 0.6, -Math.PI * 0.25);
-  genset(k, -1.12, -0.42, Math.PI / 2, 0.9);
+  genset(k, -1.12, -0.42, Math.PI / 2, 0.9, Y0, true);
   cableRun(k, [[-1.12, -0.25], [-1.12, 0.1], [-0.6, 0.1]], 0.05);
   postSign(k, 0.9, 1.38, 0, 0.3, 'num', 'SW');
   // warning lights on the wall corners
@@ -4702,13 +4669,12 @@ function sam(k: Kit) {
     k.box(P.dark, 0.6, 0.05, 0.24, 0, g + 0.02, 0);
     k.box(hull, 0.62, 0.04, 0.3, 0, g + 0.07, 0);
     ty = g + 0.11;
-    // EL/M-2084 radar on its own mast (static)
+    // EL/M-2084 multi-mission radar on its own mast (rotating)
     k.box(hull, 0.16, 0.1, 0.16, -0.32, g, -0.3);
     k.cyl(P.dark, 0.012, 0.18, -0.32, g + 0.1, -0.3, 6);
-    k.at(-0.32, g + 0.3, -0.3, Math.PI / 4, () => {
-      k.box(hull, 0.03, 0.2, 0.28, 0, -0.1, 0);
-      k.box(P.mats.canvas('aesa2', texSolar(), { uv: 0, rough: 0.5, metal: 0.2, color: 0x9aa48a }), 0.006, 0.18, 0.26, 0.018, -0.09, 0, 12);
-    }, 0, -0.3);
+    const mmr = k.node('srad', -0.32, g + 0.28, -0.3, Math.PI / 4);
+    k.on(mmr, () => k.at(0, 0, 0, 0, () => aesaFace(k, 0.28, 0.2, 0.02, -0.1, 0), 0, -0.3));
+    k.spin('srad', 'y', 1.4);
   }
   const t = k.node('turret', 0.06, ty, 0);
   k.turret = true;
