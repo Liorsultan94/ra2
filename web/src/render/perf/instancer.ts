@@ -29,6 +29,22 @@ interface Pool {
 }
 
 const noopBR = THREE.Object3D.prototype.onBeforeRender;
+
+/** Per-mesh cache (stored on the mesh as `__pfi`): the pool for its current signature and its hidden state. */
+interface MeshState {
+  g: THREE.BufferGeometry;
+  mat: THREE.Material;
+  cs: boolean;
+  rs: boolean;
+  ro: number;
+  /** Eligible for instancing (static checks for this geometry / material). */
+  ok: boolean;
+  pool: Pool | null;
+  /** Frame it was last drawn through a pool. */
+  f: number;
+  hid: boolean;
+}
+type Tracked = THREE.Mesh & { __pfi?: MeshState };
 const ids = new WeakMap<object, number>();
 let nextId = 1;
 /** Stable small id per material object (three's runtime ids aren't typed for materials). */
@@ -43,7 +59,9 @@ export class AutoInstancer {
   enabled = true;
   private pools = new Map<string, Pool>();
   private used: Pool[] = [];
-  private hidden: THREE.Mesh[] = [];
+  private hidden: Tracked[] = [];
+  private nextHidden: Tracked[] = [];
+  private frame = 0;
   /** Draw calls saved last frame (meshes merged into instanced draws minus the draws). */
   saved = 0;
 
@@ -60,9 +78,13 @@ export class AutoInstancer {
     scene.add(this.group);
   }
 
-  /** Put every mesh hidden last frame back (call before anything clones / inspects the models). */
+  /** Put every mesh hidden by the instancer back on layer 0. */
   restore() {
-    for (const m of this.hidden) setHidden(m, HIDE_INSTANCED, false);
+    for (const m of this.hidden) {
+      const st = m.__pfi;
+      if (st) st.hid = false;
+      setHidden(m, HIDE_INSTANCED, false);
+    }
     this.hidden.length = 0;
   }
 
@@ -71,16 +93,17 @@ export class AutoInstancer {
    * Roots should be visible and on (or casting into) the view.
    */
   update(roots: Iterable<THREE.Object3D>) {
-    this.restore();
-    for (const p of this.used) {
-      p.members.length = 0;
-    }
+    for (const p of this.used) p.members.length = 0;
     this.used.length = 0;
     if (!this.enabled) {
+      this.restore();
       for (const p of this.pools.values()) p.mesh.visible = false;
       return;
     }
+    const f = ++this.frame;
     for (const root of roots) this.collect(root, root);
+    const next = this.nextHidden;
+    next.length = 0;
     let saved = 0;
     for (const p of this.pools.values()) {
       const n = p.members.length;
@@ -93,10 +116,15 @@ export class AutoInstancer {
       if (n > p.cap) this.grow(p, n);
       const arr = p.mesh.instanceMatrix.array as Float32Array;
       for (let i = 0; i < n; i++) {
-        const m = p.members[i];
+        const m = p.members[i] as Tracked;
         arr.set(m.matrixWorld.elements, i * 16);
-        setHidden(m, HIDE_INSTANCED, true);
-        this.hidden.push(m);
+        const st = m.__pfi!;
+        st.f = f;
+        if (!st.hid) {
+          st.hid = true;
+          setHidden(m, HIDE_INSTANCED, true);
+        }
+        next.push(m);
       }
       p.mesh.count = n;
       p.mesh.visible = true;
@@ -107,39 +135,56 @@ export class AutoInstancer {
       this.used.push(p);
       saved += n - 1;
     }
+    // meshes drawn through a pool last frame but not this one go back on layer 0
+    for (const m of this.hidden) {
+      const st = m.__pfi;
+      if (st && st.hid && st.f !== f) {
+        st.hid = false;
+        setHidden(m, HIDE_INSTANCED, false);
+      }
+    }
+    this.nextHidden = this.hidden;
+    this.hidden = next;
     this.saved = saved;
   }
 
   private collect(o: THREE.Object3D, root: THREE.Object3D) {
     if (!o.visible) return;
-    const m = o as THREE.Mesh;
-    if (m.isMesh && o !== root) this.consider(m);
+    if ((o as THREE.Mesh).isMesh && o !== root) this.consider(o as Tracked);
     const ch = o.children;
     for (let i = 0; i < ch.length; i++) this.collect(ch[i], root);
   }
 
-  private consider(m: THREE.Mesh) {
-    if (!m.layers.isEnabled(0) || (m as THREE.SkinnedMesh).isSkinnedMesh || (m as THREE.InstancedMesh).isInstancedMesh || (m as unknown as { isXray?: boolean }).isXray) return;
+  private consider(m: Tracked) {
+    // hidden for another reason (far-zoom LOD)
+    const hide = m.userData.hide as number | undefined;
+    if (hide && hide & ~HIDE_INSTANCED) return;
     const mat = m.material as THREE.Material;
-    if (!mat || Array.isArray(m.material) || mat.transparent || !mat.visible) return;
     const g = m.geometry;
-    if (!g || g.morphAttributes.position || g.drawRange.count !== Infinity || g.drawRange.start !== 0) return;
-    if (m.onBeforeRender !== noopBR && !this.allowHook(m)) return;
-    if (m.customDepthMaterial || m.customDistanceMaterial) return;
-    let key = m.userData.instKey as string | undefined;
-    const mid = uid(mat);
-    const sig = g.id * 1e6 + mid;
-    if (!key || m.userData.instSig !== sig || m.userData.instCs !== m.castShadow || m.userData.instRs !== m.receiveShadow || m.userData.instRo !== m.renderOrder) {
-      key = `${g.id}|${mid}|${m.castShadow ? 1 : 0}${m.receiveShadow ? 1 : 0}|${m.renderOrder}`;
-      m.userData.instKey = key;
-      m.userData.instSig = sig;
-      m.userData.instCs = m.castShadow;
-      m.userData.instRs = m.receiveShadow;
-      m.userData.instRo = m.renderOrder;
+    let st = m.__pfi;
+    if (!st || st.g !== g || st.mat !== mat || st.cs !== m.castShadow || st.rs !== m.receiveShadow || st.ro !== m.renderOrder) {
+      const ok =
+        !(m as THREE.SkinnedMesh).isSkinnedMesh &&
+        !(m as THREE.InstancedMesh).isInstancedMesh &&
+        !(m as unknown as { isXray?: boolean }).isXray &&
+        !!mat &&
+        !Array.isArray(m.material) &&
+        !mat.transparent &&
+        !!g &&
+        !g.morphAttributes.position &&
+        !m.customDepthMaterial &&
+        !m.customDistanceMaterial;
+      const prev = st;
+      st = { g, mat, cs: m.castShadow, rs: m.receiveShadow, ro: m.renderOrder, ok, pool: null, f: prev ? prev.f : 0, hid: prev ? prev.hid : false };
+      if (ok) {
+        const key = `${g.id}|${uid(mat)}|${m.castShadow ? 1 : 0}${m.receiveShadow ? 1 : 0}|${m.renderOrder}`;
+        st.pool = this.pools.get(key) ?? this.create(key, m);
+      }
+      m.__pfi = st;
     }
-    let p = this.pools.get(key);
-    if (!p) p = this.create(key, m);
-    p.members.push(m);
+    if (!st.ok || !mat.visible || g.drawRange.count !== Infinity || g.drawRange.start !== 0) return;
+    if (m.onBeforeRender !== noopBR && !this.allowHook(m)) return;
+    st.pool!.members.push(m);
   }
 
   private create(key: string, m: THREE.Mesh): Pool {

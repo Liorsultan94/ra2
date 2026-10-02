@@ -955,7 +955,8 @@ export class GameRenderer {
 
   private syncEntities(alpha: number, dt: number) {
     const w = this.world;
-    const seen = new Set<number>();
+    const seen = this.seenIds;
+    seen.clear();
     this.airShadows.begin(this.scene);
     this.contact?.begin();
     this.chutes.begin();
@@ -1412,10 +1413,16 @@ export class GameRenderer {
     return g;
   }
 
+  private seenIds = new Set<number>();
+  private seenProj = new Set<number>();
+  private projPos = new THREE.Vector3();
+  private projVel = new THREE.Vector3();
+  private projLook = new THREE.Vector3();
   private syncProjectiles(alpha: number) {
-    const seen = new Set<number>();
-    const pos = new THREE.Vector3();
-    const vel = new THREE.Vector3();
+    const seen = this.seenProj;
+    seen.clear();
+    const pos = this.projPos;
+    const vel = this.projVel;
     for (const p of this.world.projectiles) {
       seen.add(p.id);
       let v = this.projVis.get(p.id);
@@ -1436,7 +1443,7 @@ export class GameRenderer {
       v.obj.position.copy(pos);
       vel.set(p.vx, p.vz, p.vy);
       if (vel.lengthSq() > 1e-6) {
-        v.obj.lookAt(pos.clone().add(vel));
+        v.obj.lookAt(this.projLook.copy(pos).add(vel));
         v.obj.rotateY(-Math.PI / 2);
         if (p.hits > 0) {
           // damaged rounds wobble as they fly on

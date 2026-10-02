@@ -83,7 +83,8 @@ export class BattleIntro {
     while (az0 - this.to.az > Math.PI) az0 -= Math.PI * 2;
     while (az0 - this.to.az < -Math.PI) az0 += Math.PI * 2;
     this.from = { x: enemy.x, y: enemy.y, az: az0, el: THREE.MathUtils.degToRad(24), zoom: 0.85 };
-    this.via = { x: via.x, y: via.y, az: (az0 + this.to.az) / 2, el: THREE.MathUtils.degToRad(50), zoom: 0.3 };
+    // via.zoom: how far the mid-flight pull-back goes (fraction of the straight zoom path)
+    this.via = { x: via.x, y: via.y, az: (az0 + this.to.az) / 2, el: THREE.MathUtils.degToRad(56), zoom: 0.35 };
     applyPose(r, map, this.from);
     // the briefing already showed the whole map: no shroud during the flyover (the fog eases back afterwards)
     r.fog.revealAll();
@@ -114,8 +115,9 @@ export class BattleIntro {
       x: bez(a.x, b.x, c.x, u),
       y: bez(a.y, b.y, c.y, u),
       az: lerp(a.az, c.az, turn),
-      el: bez(a.el, b.el, c.el, u),
-      zoom: bez(a.zoom, b.zoom, c.zoom, u),
+      // rise high over the river mid-flight, settle into the RTS view at the end
+      el: lerp(a.el, c.el, u) + (b.el - (a.el + c.el) / 2) * Math.sin(Math.PI * u),
+      zoom: Math.exp(lerp(Math.log(a.zoom), Math.log(c.zoom), u)) * (1 - (1 - b.zoom) * Math.sin(Math.PI * u)),
     });
     return false;
   }
@@ -149,8 +151,9 @@ export class BattleOutro {
       x: focus.x,
       y: focus.y,
       az: this.from.az + 0.55,
-      el: Math.max(THREE.MathUtils.degToRad(30), this.from.el - 0.14),
-      zoom: Math.min(2.6, Math.max(1.35, this.from.zoom * 1.45)),
+      // a slow pull-back over the aftermath (a push-in ends up inside the smoke of the collapse)
+      el: Math.max(THREE.MathUtils.degToRad(32), this.from.el - 0.08),
+      zoom: Math.max(0.7, this.from.zoom * 0.72),
     };
   }
 

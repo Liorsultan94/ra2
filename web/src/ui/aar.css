@@ -316,5 +316,12 @@
   .aar-foot .mbtn {
     flex: 1;
     min-width: 0;
+    padding: 8px 10px;
+    font-size: 17px;
+    white-space: nowrap;
+  }
+  .ag-tabs button {
+    white-space: nowrap;
+    padding: 5px 7px;
   }
 }

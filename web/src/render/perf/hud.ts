@@ -87,7 +87,7 @@ export class PerfHud {
     const progs = src.gl.info.programs?.length ?? 0;
     const tri = this.tris / k;
     this.el.textContent =
-      `${fps.toFixed(0)} fps  ${avg.toFixed(1)} ms (max ${worst.toFixed(0)})${perfPrefs.battery ? '  30cap' : ''}\n` +
+      `${fps.toFixed(fps < 10 ? 1 : 0)} fps  ${avg.toFixed(1)} ms (max ${worst.toFixed(0)})${perfPrefs.battery ? '  30cap' : ''}\n` +
       `${Math.round(this.calls / k)} calls  ${tri >= 1e6 ? (tri / 1e6).toFixed(2) + 'M' : Math.round(tri / 1000) + 'k'} tris  ${progs} prg  Q${src.level}/${src.levels - 1} pr${src.pr}${src.extra ? '  ' + src.extra : ''}`;
     t.length = 0;
     this.calls = this.tris = this.n = 0;

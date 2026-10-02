@@ -140,7 +140,6 @@
 .game-root.intro-on .view-wrap > :not(canvas.view):not(.cinecard) {
   opacity: 0 !important;
   pointer-events: none !important;
-  transition: opacity 0.4s;
 }
 .game-root.intro-on > :not(.view-wrap) {
   opacity: 0.18;
