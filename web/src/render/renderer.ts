@@ -8,6 +8,7 @@ import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import type { World } from '../sim/world';
+import { BridgeFx } from './bridgefx';
 import { Debris } from './debris';
 import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
@@ -175,6 +176,7 @@ export class GameRenderer {
   readonly effects: Effects;
   readonly debris: Debris;
   readonly marks: GroundMarks;
+  readonly bridgeFx: BridgeFx;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
   readonly target = new THREE.Vector3();
@@ -310,6 +312,9 @@ export class GameRenderer {
     this.effects.setView(this.target, this.camera);
     this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
+    // collapsible bridges: per-span meshes, damage, collapse and rebuild (bridgefx.ts)
+    this.bridgeFx = new BridgeFx(world, this.effects, this.fog, quality, this.terrain.waterMat);
+    this.scene.add(this.bridgeFx.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
     if (quality !== 'low') {
@@ -1609,6 +1614,7 @@ export class GameRenderer {
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
+    this.bridgeFx.update(dt);
     this.effects.update(dt);
     this.updateCamera();
     const vh = this.viewHook;
