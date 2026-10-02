@@ -1488,6 +1488,10 @@ const noopBR = THREE.Object3D.prototype.onBeforeRender;
 
 const _v4 = new THREE.Vector4();
 
+/** Every live BuildFx (fire spread between neighbours) and the ones currently burning hard enough to spread. */
+const ALL_FX = new Set<BuildFx>();
+const INFERNO = new Set<BuildFx>();
+
 /** Per-instance construction / damage driver, called from the model's anim. */
 export class BuildFx {
   readonly damageFx: DamageFx[];
@@ -1524,6 +1528,7 @@ export class BuildFx {
     readonly root: THREE.Group,
   ) {
     this.damageFx = FX_SLOTS.map((s) => ({ pos: new THREE.Vector3(0, tpl.info.height * 0.6, 0), kind: s.kind, at: s.at }));
+    ALL_FX.add(this);
     const root2 = root;
     this.obr = () => {
       const U = this.U;
@@ -1535,6 +1540,7 @@ export class BuildFx {
   update(s: AnimState) {
     const b = s.built;
     const d = s.damage;
+    this.burn(s);
     if (b >= 1 && d < D_ON && !this.custom && !this.scaf && this.fxRoot === null) return;
     if (this.variant < 0) this.pickVariant();
     const want = b < 1 || d >= D_ON || (this.custom && d >= D_OFF);
@@ -1566,7 +1572,7 @@ export class BuildFx {
     this.seed = Math.floor(h01(x * 1.37 + 0.11, z * 2.71 + 0.17) * 1e6);
     this.variant = this.seed % VARIANTS;
     const fx = an.plans[this.variant].fx;
-    for (let i = 0; i < this.damageFx.length; i++) this.damageFx[i].pos.set(fx[i * 3], fx[i * 3 + 1], fx[i * 3 + 2]);
+    for (let i = 0; i < FX_SLOTS.length; i++) this.damageFx[i].pos.set(fx[i * 3], fx[i * 3 + 1], fx[i * 3 + 2]);
   }
 
   private fx(): THREE.Group {
@@ -1846,6 +1852,128 @@ export class BuildFx {
     }
     P.needsUpdate = true;
     C.needsUpdate = true;
+  }
+
+  // ------------------------------------------------------------ spreading fire
+  // Visual only. While a building stays badly damaged, its fire spreads over
+  // the structure: more points ignite one after another (windows, roof holes,
+  // roof tops), outward from where it started, and the smoke thickens. A
+  // building that burns long at very low HP exposes close neighbours, which
+  // catch fire on the side facing it. Repair (damage falling) puts the fires
+  // out one by one.
+  private burnT = 0;
+  private exposure = 0;
+  private exposeAcc = 0;
+  private lit = 0;
+  private litT = 0;
+  private lastT = -1;
+  private fires: { fire: DamageFx; smoke: DamageFx }[] | null = null;
+  private fireSrc: THREE.Vector3 | null = null;
+
+  /** Candidate fire points (root-local): windows (flames licking out), roof holes, roof tops; ordered from `from` outwards. */
+  private firePoints(from: THREE.Vector3) {
+    if (this.variant < 0) this.pickVariant();
+    const an = this.tpl.analysis;
+    const rec = this.tpl.rec;
+    const pts: THREE.Vector3[] = [];
+    const wins = rec.wins;
+    const nW = Math.floor(wins.length / 7);
+    const stride = Math.max(1, Math.floor(nW / 9));
+    for (let i = 0; i < nW; i += stride) {
+      const o = i * 7;
+      pts.push(new THREE.Vector3(wins[o] + wins[o + 3] * 0.06, wins[o + 1] + wins[o + 6] * 0.5, wins[o + 2] + wins[o + 4] * 0.06));
+    }
+    for (const h of an.plans[this.variant].holes) if (h) pts.push(new THREE.Vector3(h.x, h.y, h.z));
+    for (const c of an.comps) {
+      const cx = (c.x0 + c.x1) / 2;
+      const cz = (c.z0 + c.z1) / 2;
+      pts.push(new THREE.Vector3(cx, c.h, cz));
+      if (c.x1 - c.x0 > 0.9) for (const k of [-0.3, 0.3]) pts.push(new THREE.Vector3(cx + (c.x1 - c.x0) * k, c.h, cz));
+      if (c.z1 - c.z0 > 0.9) for (const k of [-0.3, 0.3]) pts.push(new THREE.Vector3(cx, c.h, cz + (c.z1 - c.z0) * k));
+    }
+    const out: THREE.Vector3[] = [];
+    for (const p of pts) if (Number.isFinite(p.x + p.y + p.z) && !out.some((q) => q.distanceToSquared(p) < 0.04)) out.push(p);
+    out.sort((a, b) => a.distanceToSquared(from) - b.distanceToSquared(from));
+    return out.slice(0, 14).map((p) => {
+      const fire: DamageFx = { pos: p, kind: 'fire', at: 9 };
+      const smoke: DamageFx = { pos: p.clone().setY(p.y + 0.25), kind: 'smoke', at: 9 };
+      this.damageFx.push(fire, smoke);
+      return { fire, smoke };
+    });
+  }
+
+  private burn(s: AnimState) {
+    const dt = s.dt;
+    const d = s.built >= 1 ? s.damage : 0;
+    this.lastT = s.time;
+    if (d < 0.5 && this.burnT === 0 && this.exposure === 0 && this.lit === 0) {
+      INFERNO.delete(this);
+      return;
+    }
+    if (dt <= 0) return;
+    // own heat: grows while the damage stays high, cools quickly once repaired
+    if (d >= 0.5) this.burnT = Math.min(120, this.burnT + dt * (0.6 + d));
+    else this.burnT = Math.max(0, this.burnT - dt * 4);
+    // exposure from burning neighbours decays unless they keep it up
+    this.exposure = Math.max(0, this.exposure - dt * 0.5);
+    if (!this.fires) {
+      const from = this.fireSrc ?? this.damageFx[2]?.pos ?? new THREE.Vector3();
+      this.fires = this.firePoints(from);
+    }
+    const n = this.fires.length;
+    const own = d >= 0.5 ? Math.min(1 + Math.floor(this.burnT / 2.2), Math.round(n * smooth(0.42, 0.95, d))) : 0;
+    const ext = this.exposure > 6 ? Math.min(1 + Math.floor((this.exposure - 6) / 3), Math.ceil(n * 0.45)) : 0;
+    const want = Math.max(own, ext);
+    // one point at a time: spreads every ~0.9 s, goes out every ~0.6 s
+    if (want !== this.lit) {
+      this.litT += dt;
+      if (want > this.lit && this.litT >= 0.9) {
+        this.lit++;
+        this.litT = 0;
+      } else if (want < this.lit && this.litT >= 0.6) {
+        this.lit--;
+        this.litT = 0;
+      }
+    } else this.litT = 0;
+    for (let i = 0; i < n; i++) {
+      const on = i < this.lit;
+      this.fires[i].fire.at = on ? 0 : 9;
+      // smoke thickens as more of the structure burns
+      this.fires[i].smoke.at = on && (i % 2 === 1 || this.lit > 4) ? 0 : 9;
+    }
+    if (this.lit === 0 && want === 0 && this.burnT === 0) {
+      // all out: next fire starts from wherever it is lit next
+      this.fires = null;
+      this.fireSrc = null;
+      this.damageFx.length = FX_SLOTS.length;
+      this.exposure = 0;
+    }
+    // inferno: long burn at very low HP sets close neighbours alight
+    if (d >= 0.8 && this.burnT > 20) {
+      INFERNO.add(this);
+      this.exposeAcc += dt;
+      if (this.exposeAcc >= 0.5) {
+        const step = this.exposeAcc;
+        this.exposeAcc = 0;
+        const me = this.root.position;
+        for (const o of ALL_FX) {
+          if (o === this) continue;
+          if (!o.root.parent || s.time - o.lastT > 1) {
+            if (!o.root.parent) ALL_FX.delete(o);
+            continue;
+          }
+          const op = o.root.position;
+          const gx = Math.abs(op.x - me.x) - (o.tpl.info.w + this.tpl.info.w) / 2;
+          const gz = Math.abs(op.z - me.z) - (o.tpl.info.d + this.tpl.info.d) / 2;
+          if (Math.max(gx, gz) > 1.3) continue;
+          o.exposure = Math.min(40, o.exposure + step * 1.6);
+          if (!o.fires && !o.fireSrc) {
+            // the neighbour's fire starts on the side facing us
+            o.fireSrc = o.root.worldToLocal(me.clone()).multiplyScalar(0.5);
+          }
+        }
+      }
+    } else INFERNO.delete(this);
   }
 
   // ------------------------------------------------------------ damage

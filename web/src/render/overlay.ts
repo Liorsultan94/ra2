@@ -292,6 +292,33 @@ export class CombatOverlay {
     this.markers.push({ mesh, mat, t0: this.now(), life: 1.7, follow });
   }
 
+  private pinPool: THREE.Mesh[] = [];
+  private pinWhite = new THREE.Color(0xffffff);
+
+  /** Waypoint pins of the selection's queued orders / patrol routes (src/ui/controls.ts); the full list every frame. */
+  pins(list: { x: number; y: number; color: number }[]) {
+    const t = this.now();
+    for (let i = 0; i < list.length; i++) {
+      let m = this.pinPool[i];
+      if (!m) {
+        m = new THREE.Mesh(this.geo, this.material(0xffffff, MODE.rally));
+        m.renderOrder = 3;
+        m.frustumCulled = false;
+        this.group.add(m);
+        this.pinPool.push(m);
+      }
+      const u = (m.material as THREE.ShaderMaterial).uniforms;
+      u.color.value.setHex(list[i].color).lerp(this.pinWhite, 0.22);
+      u.time.value = t + i * 0.37;
+      u.age.value = 0.3;
+      u.opacity.value = 0.8;
+      m.scale.set(0.45, 1, 0.45);
+      this.hug(m, list[i].x, list[i].y);
+      m.visible = true;
+    }
+    for (let i = list.length; i < this.pinPool.length; i++) this.pinPool[i].visible = false;
+  }
+
   /** Remove rings that were not refreshed this frame and animate everything. */
   endFrame() {
     const t = this.now();
@@ -330,6 +357,7 @@ export class CombatOverlay {
   dispose() {
     for (const r of this.rings.values()) r.mat.dispose();
     for (const m of this.markers) m.mat.dispose();
+    for (const m of this.pinPool) (m.material as THREE.ShaderMaterial).dispose();
     this.geo.dispose();
   }
 }

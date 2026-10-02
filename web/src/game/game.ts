@@ -1,5 +1,6 @@
 import { AudioSystem, panFor, type Sfx } from '../audio/audio';
 import { AIController, type Difficulty } from '../sim/ai';
+import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent } from '../sim/types';
@@ -729,7 +730,11 @@ export class Game {
         if (target.owner >= 0 && attackers.length) {
           return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id }, target, true) };
         }
-        if (target.owner < 0) return { cursor: 'select', run: () => this.select([target.id]) };
+        if (isBridge(target)) {
+          // bridges: Ctrl force-fires heavy ordnance at the deck; otherwise the deck is just ground to move onto
+          const heavy = attackers.filter((u) => canHurtBridge(unitDef(u.def).weapon));
+          if (ctrl && heavy.length) return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: heavy.map((u) => u.id), target: target.id }, target, true) };
+        } else if (target.owner < 0) return { cursor: 'select', run: () => this.select([target.id]) };
       }
       if (ctrl && target && target.owner === this.local) {
         const attackers = units.filter((u) => unitDef(u.def).weapon);
