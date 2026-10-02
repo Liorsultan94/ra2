@@ -598,7 +598,9 @@ export class Traffic {
         cy = c.ty;
         const d = Math.hypot(cx - c.x, cy - c.y);
         stopAt = d;
-        if (d < 0.12 || (c.v < 0.05 && d < 0.4)) {
+        // arrived (or the spot ended up inside the turning circle / it's taking too long): stop here
+        const behind = Math.abs(wrapAngle(Math.atan2(cy - c.y, cx - c.x) - c.yaw)) > 1.3;
+        if (d < 0.12 || (c.v < 0.05 && d < 0.4) || (behind && d < 0.9) || c.calm > 6) {
           c.s = S.Abandoned;
           c.calm = 0;
           c.v = 0;
@@ -767,7 +769,7 @@ export class Traffic {
       if (dk > 0.08 && c.s !== S.Abandoned) {
         const k = dk;
         for (const sd of [-1, 1]) {
-          Lt.flare(c.x + hx * fl + rx * sd * sw, ly, c.y + hy * fl + ry * sd * sw, 0.11, 2.0 * k, 1.85 * k, 1.5 * k);
+          Lt.flare(c.x + hx * fl + rx * sd * sw, ly, c.y + hy * fl + ry * sd * sw, 0.14, 2.0 * k, 1.85 * k, 1.5 * k);
           const b = c.brake ? 2.2 : 1;
           Lt.flare(c.x - hx * fl + rx * sd * sw, ly, c.y - hy * fl + ry * sd * sw, 0.06 * (c.brake ? 1.4 : 1), 1.3 * k * b, 0.06 * k * b, 0.03 * k * b);
         }

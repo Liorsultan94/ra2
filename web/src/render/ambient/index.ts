@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { WEAPONS, unitDef } from '../../sim/defs';
+import { WEAPONS, buildingDef, unitDef } from '../../sim/defs';
 import type { SimEvent } from '../../sim/types';
 import type { World } from '../../sim/world';
 import type { Atmosphere } from '../atmos';
@@ -8,7 +8,7 @@ import type { FogOfWar } from '../fog';
 import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
-import { FogProbe, LightSprites, type AmbientFrame, type Danger, type Quality } from './shared';
+import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
 
 /*
@@ -58,10 +58,15 @@ export class AmbientLife {
   private scanT = 0;
   private time = 0;
   private frame: AmbientFrame;
+  private busy: Uint8Array;
+  private busyT = 0;
 
   constructor(private host: AmbientHost) {
     const { world, fog, terrain, effects, quality } = host;
     const map = world.map;
+    this.busy = new Uint8Array(map.w * map.h);
+    this.scanBuildings();
+    setBusy(this.busy);
     const phone = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const probe = new FogProbe(fog, map.w, map.h);
     const foul = host.atmos.cfg.weather !== 'clear';
@@ -117,6 +122,19 @@ export class AmbientLife {
     }
   }
 
+  /** Building footprints (+1 tile apron): livestock, birds and swerving cars keep off them. */
+  private scanBuildings() {
+    const m = this.host.world.map;
+    const b = this.busy;
+    b.fill(0);
+    for (const e of this.host.world.entities.values()) {
+      if (e.kind !== 'building' || e.dead) continue;
+      const d = buildingDef(e.def);
+      if (!d) continue;
+      for (let y = Math.max(0, e.ty - 1); y < Math.min(m.h, e.ty + d.h + 1); y++) for (let x = Math.max(0, e.tx - 1); x < Math.min(m.w, e.tx + d.w + 1); x++) b[y * m.w + x] = 1;
+    }
+  }
+
   private scanUnits() {
     let n = 0;
     let na = 0;
@@ -146,6 +164,12 @@ export class AmbientLife {
     if (this.scanT <= 0) {
       this.scanT = 0.25;
       this.scanUnits();
+    }
+    this.busyT -= dt;
+    if (this.busyT <= 0) {
+      this.busyT = 2;
+      this.scanBuildings();
+      setBusy(this.busy);
     }
     f.dt = dt;
     f.time = this.time;

@@ -112,7 +112,7 @@ export class Birds {
         const gy = (Math.random() - 0.5) * 1.0;
         const x = sp.x + gx;
         const y = sp.y + gy;
-        fl.birds.push({ x, y, z: groundAt(m, x, y), vx: 0, vy: 0, vz: 0, phase: Math.random() * 6.28, amp: 0, fold: 1, a: Math.random() * 6.28, r: 1.2 + Math.random() * 1.6, alt: 2.2 + Math.random() * 1.4, gx, gy, hop: Math.random() * 3, yaw: Math.random() * 6.28, bank: 0, size: 1.25 + Math.random() * 0.3 });
+        fl.birds.push({ x, y, z: groundAt(m, x, y), vx: 0, vy: 0, vz: 0, phase: Math.random() * 6.28, amp: 0, fold: 1, a: Math.random() * 6.28, r: 1.2 + Math.random() * 1.6, alt: 2.2 + Math.random() * 1.4, gx, gy, hop: Math.random() * 3, yaw: Math.random() * 6.28, bank: 0, size: 1.05 + Math.random() * 0.25 });
       }
       // half of them start in the air
       if (!foul && Math.random() < 0.5) this.takeOff(fl);

@@ -85,12 +85,18 @@ export function groundAt(m: GameMap, x: number, y: number): number {
   return surfaceHeight(m, cx, cy);
 }
 
+/** Tiles covered by sim buildings (bases, tech structures, with a 1-tile apron); refreshed by AmbientLife. */
+let busy: Uint8Array | null = null;
+export function setBusy(mask: Uint8Array | null) {
+  busy = mask;
+}
+
 /** Can a cow / an off-road car stand here (no water, no buildings, not off the map)? */
 export function walkable(m: GameMap, x: number, y: number): boolean {
   if (x < 0.3 || y < 0.3 || x > m.w - 0.3 || y > m.h - 0.3) return false;
   const i = (y | 0) * m.w + (x | 0);
   const t = m.tiles[i];
-  return t !== Tile.Water && t !== Tile.Bridge && t !== Tile.Rock && !m.blocked[i];
+  return t !== Tile.Water && t !== Tile.Bridge && t !== Tile.Rock && !m.blocked[i] && !(busy && busy[i]);
 }
 
 export function wrapAngle(a: number) {

@@ -24,7 +24,7 @@ import type { Model } from './models';
  */
 
 /** Camera layer of the outline hulls: only the main view camera enables it. */
-export const OUTLINE_LAYER = 22;
+export const OUTLINE_LAYER = 25; // 20 heat, 21 x-ray, 22 contact shadows
 
 /** User preferences (menu.ts keeps them in sync with the saved settings). */
 export const readabilityPrefs = { icons: true, outlines: true };
@@ -587,7 +587,7 @@ class UnitOutlines {
   }
 
   private tag(root: THREE.Object3D, teamColor: number): Tagged {
-    const col = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.2);
+    const col = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.32);
     const meshes = outlineMeshes(root, this.perUnit);
     for (const m of meshes) {
       m.layers.enable(OUTLINE_LAYER);
@@ -713,8 +713,6 @@ export interface ReadabilityInput {
 export class Readability {
   readonly icons = new UnitIcons();
   readonly outlines: UnitOutlines;
-  /** Unit icon size in CSS px (HUD bar placement). */
-  readonly iconSize = 20;
   private master = 1;
   private outlineOn = true;
   private groups: RouteGroup[] = [];
@@ -741,8 +739,9 @@ export class Readability {
     this.outlines.update(inp.visuals.values(), this.isUnit, colorOf, this.outlineOn);
     // ---- icons
     const want = readabilityPrefs.icons && !this.hidden ? 1 : 0;
-    this.master += (want - this.master) * Math.min(1, dt * 6 + (dt === 0 ? 1 : 0));
-    if (this.master < 0.01) this.master = want;
+    // eased on/off (the settings toggle); jumps while the game is paused (dt 0)
+    this.master = dt > 0 ? this.master + (want - this.master) * Math.min(1, dt * 6) : want;
+    if (Math.abs(this.master - want) < 0.01) this.master = want;
     const icons = this.icons;
     icons.begin();
     // CSS px per world unit at view depth w: P11 * h / 2 / w

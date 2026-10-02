@@ -943,6 +943,8 @@ export class Hud {
       const x0 = Math.round(top.x - width / 2);
       // strategic icons sit above zoomed-out units: lift the bar over them
       const lift = isB ? 0 : r.readability.fadeAtPoint(pos.x, pos.y + r.visualHeight(e.id), pos.z) * 25;
+      // zoomed out: the highlighted icon already marks selected units, keep only bars that say something
+      if (lift > 15 && hp > 0.999 && !recent && e.id !== hover) continue;
       const y0 = Math.round(top.y - 3 - bh - lift);
       const team = e.owner < 0 ? '#d8d0a0' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
       // frame + team accent cap

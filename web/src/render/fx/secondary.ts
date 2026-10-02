@@ -211,10 +211,10 @@ export class Secondaries {
       }
       // strongest at the start, then sputtering
       const pw = (1 - k) * (0.6 + 0.4 * Math.sin(f.t * 23) * Math.sin(f.t * 7.3));
-      f.acc += dt * 70 * fx.rate;
+      f.acc += dt * 90 * fx.rate;
       while (f.acc >= 1) {
         f.acc -= 1;
-        fx.fire.spawn({ x: f.x + this.r(-0.05, 0.05), y: f.y, z: f.z + this.r(-0.05, 0.05), vx: this.r(-0.4, 0.4), vy: this.r(4, 7) * (0.4 + pw), vz: this.r(-0.4, 0.4), life: this.r(0.25, 0.45), size: this.r(0.14, 0.24), sizeEnd: 0.5, color: 0xffe0a0, colorEnd: 0xb02000, alpha: 0.6, drag: 1.2, gravity: -1 });
+        fx.fire.spawn({ x: f.x + this.r(-0.06, 0.06), y: f.y, z: f.z + this.r(-0.06, 0.06), vx: this.r(-0.35, 0.35), vy: this.r(5, 9) * (0.4 + pw), vz: this.r(-0.35, 0.35), life: this.r(0.3, 0.55), size: this.r(0.2, 0.32), sizeEnd: this.r(0.5, 0.75), color: 0xfff2c8, colorEnd: 0xd03008, alpha: 0.7, drag: 1.1, gravity: -1 });
         if (Math.random() < 0.35) fx.fire.spawn({ x: f.x, y: f.y + 0.1, z: f.z, vx: this.r(-2, 2), vy: this.r(4, 8), vz: this.r(-2, 2), life: this.r(0.5, 1), size: 0.04, color: 0xfff0c0, colorEnd: 0xff4000, gravity: 8, drag: 0.3 });
       }
       if (Math.random() < dt * 8) fx.smoke(f.x, f.y + 1.2 * pw + 0.3, f.z, 0.9, true);

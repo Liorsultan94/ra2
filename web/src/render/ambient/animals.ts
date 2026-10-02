@@ -82,7 +82,7 @@ export class Animals {
     const nHerds = Math.round((quality === 'high' ? 7 : quality === 'medium' ? 5 : 3) * (phone ? 0.75 : 1));
     const pastures = layout.fields
       .filter((f) => (f.type === FieldType.Fallow || f.type === FieldType.Green) && f.hl > 1 && f.hw > 0.8)
-      .filter((f) => m.starts.every((s) => Math.hypot(s.x - f.cx, s.y - f.cy) > 11) && walkable(m, f.cx, f.cy));
+      .filter((f) => m.starts.every((s) => Math.hypot(s.x - f.cx, s.y - f.cy) > 11) && this.clear(f));
     // spread over the map: shuffle, then take every other where possible
     for (let i = pastures.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -116,6 +116,20 @@ export class Animals {
       this.inst.push(inst);
       this.group.add(inst.mesh);
     }
+  }
+
+  /** Most of the field is open ground (no tech building / base sprawl on it). */
+  private clear(f: Field) {
+    const ca = Math.cos(f.angle);
+    const sa = Math.sin(f.angle);
+    let ok = 0;
+    for (let i = -2; i <= 2; i++)
+      for (let j = -1; j <= 1; j++) {
+        const a = (i / 2) * (f.hl - 0.3);
+        const b = j * (f.hw - 0.3);
+        if (walkable(this.map, f.cx + ca * a - sa * b, f.cy + sa * a + ca * b)) ok++;
+      }
+    return ok >= 14;
   }
 
   private fieldPoint(f: Field, spread: number) {

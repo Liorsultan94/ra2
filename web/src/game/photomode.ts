@@ -3,6 +3,7 @@ import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { groundHeight } from '../sim/map';
 import { BASE_VIEW, type GameRenderer, type ViewHook } from '../render/renderer';
 import type { ViewModes } from '../render/viewmodes';
+import { readabilityPrefs } from '../render/readability';
 import '../ui/photomode.css';
 
 /*
@@ -123,6 +124,10 @@ class PhotoHook implements ViewHook {
     readonly inner: ViewHook | null,
     private pm: PhotoMode,
   ) {}
+  /** The renderer asks the hook whether the thermal view is on (readability outlines). */
+  get thermal(): boolean {
+    return !!(this.inner as { thermal?: boolean } | null)?.thermal;
+  }
   before(dt: number) {
     this.inner?.before(dt);
   }
@@ -145,6 +150,9 @@ interface Saved {
   nv: boolean;
   xray: boolean;
   hook: ViewHook | null;
+  icons: boolean;
+  outlines: boolean;
+  overlay: boolean;
 }
 
 export class PhotoMode {
@@ -201,12 +209,19 @@ export class PhotoMode {
       nv: r.atmos.nightVision,
       xray: h.modes.xray,
       hook: r.viewHook,
+      icons: readabilityPrefs.icons,
+      outlines: readabilityPrefs.outlines,
+      overlay: r.overlay.group.visible,
     };
     h.paused = true;
     // a clean frame: no selection rings, hover ring or x-ray silhouettes
     r.selection.clear();
     r.hover = -1;
     h.modes.xray = false;
+    // ... nor strategic icons, unit outlines, order markers
+    readabilityPrefs.icons = false;
+    readabilityPrefs.outlines = false;
+    r.overlay.group.visible = false;
     r.viewHook = new PhotoHook(this.saved.hook, this);
     // start the orbit from the current RTS camera
     const c = r.camera;
@@ -249,6 +264,9 @@ export class PhotoMode {
     for (const id of s.selection) if (r.world.get(id)) r.selection.add(id);
     r.hover = s.hover;
     h.modes.xray = s.xray;
+    readabilityPrefs.icons = s.icons;
+    readabilityPrefs.outlines = s.outlines;
+    r.overlay.group.visible = s.overlay;
     if (s.thermal) h.modes.setThermal(true, s.polarity);
     if (s.nv) r.atmos.setNightVision(true);
     h.paused = s.paused;
@@ -408,7 +426,10 @@ export class PhotoMode {
     const cssH = canvas.clientHeight || canvas.height;
     const pr = gl.getPixelRatio();
     gl.getDrawingBufferSize(this.size);
-    const scale = Math.max(1, Math.min(2, 4096 / Math.max(this.size.x, this.size.y)));
+    // up to 2x; phones keep the post chain's render targets within a sane memory budget
+    const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
+    const maxSide = Math.min(gl.capabilities.maxTextureSize, coarse ? 3200 : 4096);
+    const scale = Math.max(1, Math.min(2, maxSide / Math.max(this.size.x, this.size.y)));
     const out = document.createElement('canvas');
     this.ui?.classList.add('flash');
     try {

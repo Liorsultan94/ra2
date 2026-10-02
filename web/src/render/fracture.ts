@@ -1059,7 +1059,8 @@ export class Fracture {
     // medium (phones): only cut small models synchronously; big ones were normally prewarmed while burning
     const tpl = this.template(root, this.targetFor(w, d), src, this.quality === 'high' || tris < 6000);
     if (!tpl || tpl.n < 3) return null;
-    const fw = new FracWreck(tpl, src, root, Math.min(tpl.n - 1, room), this, w, d);
+    // mass destruction (superweapons): later buildings get fewer, clustered bodies so more of them can break
+    const fw = new FracWreck(tpl, src, root, Math.min(tpl.n - 1, room, Math.max(6, Math.floor(room / 2))), this, w, d);
     scene.add(fw.group);
     this.wrecks.add(fw);
     return fw;

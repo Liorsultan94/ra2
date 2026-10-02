@@ -156,6 +156,12 @@ export class LivePortrait {
     const box = new THREE.Box3().setFromObject(model.root);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
+    // skinned meshes (infantry) report their bind-space box: trust the model's own height then
+    if (!air && model.height > size.y * 1.4) {
+      size.set(Math.max(size.x, model.height * 0.55), model.height, Math.max(size.z, model.height * 0.4));
+      center.set(0, model.height / 2, 0);
+      box.min.y = 0;
+    }
     const e: Entry = { key, model, center, rh: 0.5 * Math.hypot(size.x, size.z), hy: size.y * 0.5, floorY: air ? box.min.y - size.y * 0.35 : box.min.y + 0.005, air };
     this.cache.set(key, e);
     while (this.cache.size > CACHE) {
