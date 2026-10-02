@@ -7,7 +7,8 @@ import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { grassRGB } from './grasstex';
 import { Leaf, foliageAtlas, leafCell } from './terraintex';
-import { buildTrees } from './trees';
+import { Shrub, buildTrees, shrubGeometry, shrubTint, treeMaterials } from './trees';
+import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
 
 /*
@@ -50,12 +51,18 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
       }
     }
   }
+  // render-only trees of the hand-designed maps: street trees, roadside palms (sim/maps.ts deco)
+  (m.deco?.trees ?? []).forEach((t, k) => {
+    const r = hash2(k, 7, 43);
+    const species = m.biome === 'desert' ? (t.kind === 2 ? Species.Palm : Species.Acacia) : m.biome === 'winter' ? Species.Birch : r < 0.7 ? Species.Young : Species.Fruit;
+    out.push({ x: t.x, y: t.y, s: (m.biome === 'urban' ? 0.85 : 0.95) + hash2(k, 8, 43) * 0.3, species, rot: hash2(k, 9, 43) * Math.PI * 2 });
+  });
   return out;
 }
 
 /** Approximate canopy radius of a tree spot (for ground shading). */
 export function canopyRadius(t: TreeSpot) {
-  const base = [0.36, 0.32, 0.44, 0.3, 0.28, 0.2, 0.44, 0.36][t.species] ?? 0.3;
+  const base = [0.36, 0.32, 0.44, 0.3, 0.28, 0.2, 0.44, 0.36, 0.42, 0.48][t.species] ?? 0.3;
   return base * t.s;
 }
 
@@ -65,6 +72,15 @@ export function canopyRadius(t: TreeSpot) {
  * rows along the roads, Scots pine on the higher ground, oak-birch woods elsewhere.
  */
 function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r: number, ctx: { roads: GameMap['roads']; structures: GameMap['structures'] }): Species {
+  // the other climates: date palms by the water and umbrella acacias (desert); spruce / pine forest and
+  // birch groves (winter); park and street trees (city)
+  if (m.biome === 'desert') return t === 2 ? Species.Palm : r < 0.85 ? Species.Acacia : Species.Young;
+  if (m.biome === 'winter') {
+    if (t === 2) return r < 0.85 ? Species.Birch : Species.Spruce;
+    const h = m.heights[y * (m.w + 1) + x] ?? 0;
+    return r < 0.66 - Math.max(0, Math.min(0.3, h * 0.12)) ? Species.Spruce : Species.Pine;
+  }
+  if (m.biome === 'urban') return t === 1 ? (r < 0.7 ? Species.Young : Species.Fruit) : r < 0.45 ? Species.Oak : r < 0.7 ? Species.Birch : r < 0.85 ? Species.Young : Species.Willow;
   if (t === 1) {
     const h = m.heights[y * (m.w + 1) + x] ?? 0;
     return r < 0.66 - Math.max(0, Math.min(0.3, h * 0.12)) ? Species.Spruce : Species.Pine;
@@ -148,46 +164,6 @@ function foliageMaterial(atlas: THREE.Texture, fog: FogOfWar, quality: string) {
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 const UP = V(0, 1, 0);
 
-/** Leaf-card clusters on an ellipsoid around a dark solid core. */
-function canopy(b: GeoBuilder, centre: THREE.Vector3, rad: THREE.Vector3, clusters: number, size: number, cell: Leaf, seed: number, flexK: number, coreDetail = 1, cards = 3) {
-  const core = coreDetail < 0 ? new THREE.OctahedronGeometry(1, 0) : new THREE.IcosahedronGeometry(1, coreDetail);
-  const cm = new THREE.Matrix4().compose(centre, new THREE.Quaternion(), rad.clone().multiplyScalar(0.78));
-  b.add(core, cm, leafCell(Leaf.Solid), (p) => 0.5 + Math.max(0, (p.y - centre.y) / rad.y) * 0.25, {
-    normalFn: (p) => p.clone().sub(centre).divide(rad).normalize(),
-    flexFn: (p) => Math.max(0, p.y) * flexK * 0.5,
-  });
-  const [u0, v0, u1, v1] = leafCell(cell);
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < clusters; i++) {
-    // fibonacci points, skipping the very bottom
-    const yy = 1 - (i / (clusters - 1)) * 1.7;
-    const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
-    const th = i * golden + seed;
-    const jit = 0.85 + hash2(i, seed * 13, 7) * 0.25;
-    const c = V(Math.cos(th) * rr * rad.x * jit, yy * rad.y * jit, Math.sin(th) * rr * rad.z * jit).add(centre);
-    const sz = size * (0.8 + hash2(i, seed * 17, 8) * 0.4);
-    // crossed cards per cluster
-    for (let k = 0; k < cards; k++) {
-      const a = th + (k * Math.PI) / cards;
-      const e1 = V(Math.cos(a), 0, Math.sin(a)).multiplyScalar(sz);
-      const e2 = k === cards - 1 && cards > 2 ? V(-Math.sin(a), 0, Math.cos(a)).multiplyScalar(sz) : V(0, sz * 0.85, 0).addScaledVector(V(-Math.sin(a), 0, Math.cos(a)), sz * 0.35);
-      const corners = [c.clone().sub(e1).add(e2), c.clone().add(e1).add(e2), c.clone().sub(e1).sub(e2), c.clone().add(e1).sub(e2)];
-      const ids = corners.map((q, j) => {
-        const n = q.clone().sub(centre).divide(rad).normalize();
-        const lightK = 0.62 + Math.max(-0.3, (q.y - centre.y) / rad.y) * 0.32 + 0.1;
-        return b.vert(q, n, j % 2 ? u1 : u0, j < 2 ? v1 : v0, lightK, Math.max(0, q.y) * flexK);
-      });
-      b.quad(ids[0], ids[1], ids[2], ids[3]);
-    }
-  }
-}
-
-function bushGeo(lite = false): THREE.BufferGeometry {
-  const b = new GeoBuilder();
-  canopy(b, V(0, 0.13, 0), V(0.22, 0.15, 0.22), lite ? 4 : 6, lite ? 0.15 : 0.12, Leaf.Bush, 4, 0.05, lite ? -1 : 0, 3);
-  return b.build(true);
-}
-
 function tuftGeo(cell: Leaf, h: number, w: number, rootShade = 0.55): THREE.BufferGeometry {
   const b = new GeoBuilder();
   const [u0, v0, u1, v1] = leafCell(cell);
@@ -226,7 +202,10 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   // ---- ground cover
   const grass: Inst[] = [];
   const bushes: Inst[] = [];
+  const hedges: Inst[] = [];
   const reeds: Inst[] = [];
+  const look = biomeLook(m);
+  const biome = m.biome;
   const density = quality === 'high' ? 1 : quality === 'medium' ? 0.55 : 0.35;
   const nearStart = (x: number, y: number) => Math.min(...m.starts.map((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5)));
   const isTree = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.trees[y * m.w + x] > 0;
@@ -255,6 +234,9 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const clump = Math.max(0, Math.min(1, (meadow - 0.38) / 0.3));
       let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK;
       if (m.ore[i]) n = 0;
+      // tufts: scrub patches only in the desert, none in the snow, park lawns only in the city
+      if (biome === 'winter' || ((biome === 'desert' || biome === 'urban') && t !== Tile.Grass)) n = 0;
+      if (biome === 'desert') n *= 0.35;
       n = Math.floor(n + hash2(x, y, 304));
       // medium / high grow 3D grass blades instead (grass.ts): the card tufts are the low-quality
       // stand-in (the seed still advances so the reeds and hedges keep their places)
@@ -273,12 +255,14 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         const dryK = Math.max(0, Math.min(1, (dryness - 0.4) * 1.6 + (r - 0.5) * 0.6 + (t === Tile.Sand ? 0.5 : 0)));
         const tuft = mk(px, pz, 0.75 + hash2(seed, 5, 305) * 0.6 + clump * 0.35, 0.85, 0.12);
         // the meadow's own palette (grasstex.ts), lifted to cancel the card texture's darkness
-        grassRGB(0.2 + clump * 0.3, dryK * 0.75, tuftRGB);
+        grassRGB(0.2 + clump * 0.3, dryK * 0.75, tuftRGB, look.grass);
         tuft.color = new THREE.Color().setRGB(tuftRGB[0], tuftRGB[1], tuftRGB[2], THREE.SRGBColorSpace).multiplyScalar(1.8 * (0.88 + hash2(seed, 6, 305) * 0.25));
         grass.push(tuft);
       }
-      // bushes at forest edges and scattered singles
-      const nb = edge ? 1 + (hash2(x, y, 306) < 0.5 ? 1 : 0) : hash2(x, y, 307) < 0.06 * baseK ? 1 : 0;
+      // bushes at forest edges and scattered singles (desert: sparse scrub; city: parks only)
+      let nb = edge ? 1 + (hash2(x, y, 306) < 0.5 ? 1 : 0) : hash2(x, y, 307) < 0.06 * baseK ? 1 : 0;
+      if (biome === 'urban' && t !== Tile.Grass) nb = 0;
+      if (biome === 'desert' && t === Tile.Sand && hash2(x, y, 308) < 0.7) nb = 0;
       for (let k = 0; k < nb; k++) {
         const px = x + hash2(x, y, 310 + k);
         const pz = y + hash2(x, y, 320 + k);
@@ -303,7 +287,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const tx = Math.floor(px);
       const ty = Math.floor(pz);
       if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] === Tile.Water) continue;
-      bushes.push(mk(px, pz, (1.05 + hash2(seed, 3, 340) * 0.5) * Math.sqrt(hs), 0.25, 0.28));
+      hedges.push(mk(px, pz, (1.05 + hash2(seed, 3, 340) * 0.5) * Math.sqrt(hs), 0.25, 0.28));
     }
   }
   // reeds along the waterline
@@ -330,10 +314,8 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     return { x: px, y: surfaceHeight(m, px, pz) - 0.01, z: pz, rotY: r * Math.PI * 2, sx: s, sy: s * (0.85 + r * 0.3), sz: s, color: c };
   }
 
-  const bushLo = bushGeo(true);
   const groups: [THREE.BufferGeometry, THREE.BufferGeometry | null, Inst[], boolean, number, number][] = [
     [tuftGeo(Leaf.Grass, 0.22, 0.32, 0.72), null, grass, false, Infinity, grassHide],
-    [low ? bushLo : bushGeo(), bushLo, bushes, shadows && quality === 'high', treeLo - 2, Infinity],
     [tuftGeo(Leaf.Reeds, 0.36, 0.26), null, reeds, false, Infinity, grassHide + 4],
   ];
   for (const [g, lo, list, cast, loSpan, hideSpan] of groups) {
@@ -342,7 +324,27 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     ci.mesh.customDepthMaterial = depth;
     out.push(ci.mesh);
     lod.addCulled(ci, lo, loSpan, hideSpan);
-    if (list === bushes) sink?.bushes.push(ci);
+  }
+  // shrubs and hedgerows: built like the trees (leaf-card crowns, wrap lighting, translucency, wind)
+  const tm = treeMaterials(fog, quality);
+  const shrubSets: [Shrub, Inst[]][] = [
+    [biome === 'desert' ? Shrub.Scrub : Shrub.Bush, bushes],
+    [Shrub.Hedge, hedges],
+  ];
+  for (const [kind, list] of shrubSets) {
+    if (!list.length) continue;
+    for (const it of list) {
+      const kx = Math.floor(it.x * 13);
+      const kz = Math.floor(it.z * 13);
+      it.color = shrubTint(biome, kind, hash2(kx, kz, 3), hash2(kx, kz, 4), hash2(kx, kz, 5));
+      it.tiltX = (hash2(kx, kz, 6) - 0.5) * 0.12;
+    }
+    const lo = shrubGeometry(kind, true);
+    const ci = new CulledInstances(low ? lo : shrubGeometry(kind, false), tm.mat, list, m.w, m.h, CELL, { castShadow: shadows && quality === 'high', receiveShadow: true, name: 'plants' });
+    ci.mesh.customDepthMaterial = tm.depth;
+    out.push(ci.mesh);
+    lod.addCulled(ci, low ? null : lo, treeLo - 2, Infinity);
+    sink?.bushes.push(ci);
   }
   return out;
 }

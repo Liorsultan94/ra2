@@ -44,9 +44,9 @@ const FinalShader = {
     /** 1 = AgX (default), 0 = ACES fit. */
     tonemap: { value: 1 },
     /** Exposure trim of the AgX curve (matches the ACES fit's brightness). */
-    agxExposure: { value: 1.18 },
+    agxExposure: { value: 1.25 },
     /** AgX look: power (contrast) and saturation in the encoded domain. */
-    agxLook: { value: new THREE.Vector2(1.12, 1.12) },
+    agxLook: { value: new THREE.Vector2(1.35, 1.4) },
     tLut: { value: null as THREE.Texture | null },
     lutOn: { value: 0 },
     tBloom: { value: null as THREE.Texture | null },
@@ -68,6 +68,8 @@ const FinalShader = {
     caAmt: { value: 0 },
     grain: { value: 0 },
     frame: { value: 0 },
+    /** Debug view: 0 = off, 1 = ambient occlusion only, 2 = bloom only. */
+    debugView: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -101,6 +103,7 @@ const FinalShader = {
     uniform float caAmt;
     uniform float grain;
     uniform float frame;
+    uniform float debugView;
     varying vec2 vUv;
     ${VIEWPOS_GLSL}
     ${PACK_GLSL}
@@ -209,13 +212,16 @@ const FinalShader = {
       if ( aoOn > 0.5 ) {
         float k = aoStrength * ( 1.0 - smoothstep( 1.2, 4.0, max( c.r, max( c.g, c.b ) ) * exposure ) );
         if ( dofOn > 0.5 ) k *= 1.0 - texture2D( tDiffuse, uv ).a;
-        c *= mix( 1.0, aoAt( gl_FragCoord.xy, vUv ), k );
+        float ao = aoAt( gl_FragCoord.xy, vUv );
+        if ( debugView == 1.0 ) { gl_FragColor = vec4( vec3( ao ), 1.0 ); return; }
+        c *= mix( 1.0, ao, k );
       }
       // crepuscular light / shadow shafts through smoke (signed, linear HDR; see fx/godrays.ts)
       if ( raysOn > 0.5 ) c = max( c + texture2D( tRays, uv ).rgb * ( 0.35 + 0.65 * min( vec3( 1.0 ), c * 4.0 ) ), vec3( 0.0 ) );
       // bloom (normalised mip chain, post/bloom.ts) + lens extras
       if ( bloomOn > 0.5 ) {
         c += texture2D( tBloom, uv ).rgb * bloomStrength;
+        if ( debugView == 2.0 ) c = texture2D( tBloom, uv ).rgb * bloomStrength;
         if ( dirtAmt > 0.0 ) c += texture2D( tBloomWide, uv ).rgb * texture2D( tDirt, vUv ).rgb * dirtAmt;
         if ( streakAmt > 0.0 ) c += texture2D( tStreak, uv ).rgb * ( streakAmt * vec3( 0.8, 0.92, 1.15 ) );
       }

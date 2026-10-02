@@ -587,6 +587,47 @@ function pine(lite: boolean): THREE.BufferGeometry {
   return b.build();
 }
 
+/** Date palm: a gently curved, scarred trunk under a crown of long arching fronds. */
+function palm(lite: boolean): THREE.BufferGeometry {
+  const H = 1.3;
+  const b = new TreeBuilder(0.05, H);
+  const rnd = rngOf(29);
+  const seg = lite ? 3 : 6;
+  const pts: THREE.Vector3[] = [];
+  const radii: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    pts.push(V(0.13 * t * t, H * 0.86 * t, 0.02 * t));
+    radii.push(0.05 * (1 - t * 0.38) + (i === 0 ? 0.015 : 0));
+  }
+  b.tube(pts, radii, lite ? 4 : 7, TCell.PalmBark, (p) => 0.7 + 0.3 * (p.y / H));
+  const top = pts[seg].clone().add(V(0, 0.02, 0));
+  const nF = lite ? 9 : 16;
+  for (let f = 0; f < nF; f++) {
+    const a = (f / nF) * Math.PI * 2 + rnd() * 0.35;
+    const upper = f % 3 === 0;
+    const e0 = upper ? 0.9 + rnd() * 0.3 : 0.15 + rnd() * 0.35;
+    const L = (upper ? 0.48 : 0.62) * (0.88 + rnd() * 0.24);
+    const droop = upper ? 0.25 : 0.55 + rnd() * 0.2;
+    const dir = V(Math.cos(a), 0, Math.sin(a));
+    const side = V(-Math.sin(a), 0.25 * (f % 2 ? 1 : -1), Math.cos(a)).normalize();
+    const at = (t: number) => top.clone().addScaledVector(dir, Math.cos(e0) * t * L).add(V(0, Math.sin(e0) * t * L - droop * t * t * L, 0));
+    const light = (p: THREE.Vector3) => {
+      const n = p.clone().sub(top).normalize().multiplyScalar(0.5).add(UP).normalize();
+      const k = 0.7 + 0.3 * clamp01((p.y - top.y + 0.2) / 0.4);
+      return { n, c: [k, k, k * 0.95] as [number, number, number] };
+    };
+    const steps = lite ? 2 : 3;
+    for (let k = 0; k < steps; k++) {
+      const t0 = k / steps;
+      const t1 = (k + 1) / steps;
+      const w = (t: number) => 0.26 * Math.sin(Math.PI * Math.min(1, 0.18 + t * 0.85)) + 0.02;
+      b.strip(at(t0), at(t1), side, w(t0), w(t1), TCell.Palm, light, t0, t1);
+    }
+  }
+  return b.build();
+}
+
 // ------------------------------------------------------------ species
 
 /** Broadleaf species parameters (a function: Species lives in vegetation.ts, which imports this module). */
@@ -597,6 +638,7 @@ function broadSpec(sp: Species): BroadSpec {
   [Species.Young]: { seed: 7, trunkH: 0.28, r0: 0.026, lean: 0.04, crownC: V(0, 0.5, 0), crownR: V(0.27, 0.23, 0.27), lumps: 3, lumpR: 0.5, perLump: 4, shell: 6, inner: 1, size: 0.17, cell: TCell.Broad, bark: TCell.Bark, flexK: 0.05 },
   [Species.Poplar]: { seed: 9, trunkH: 0.2, r0: 0.035, lean: 0.01, crownC: V(0, 0.74, 0), crownR: V(0.17, 0.52, 0.17), lumps: 3, lumpR: 0.75, perLump: 5, shell: 12, inner: 2, size: 0.17, cell: TCell.Poplar, bark: TCell.Bark, flexK: 0.07, upright: true },
   [Species.Willow]: { seed: 13, trunkH: 0.36, r0: 0.055, lean: 0.07, crownC: V(0, 0.62, 0), crownR: V(0.46, 0.25, 0.46), lumps: 5, lumpR: 0.45, perLump: 4, shell: 8, inner: 2, size: 0.2, cell: TCell.Broad, bark: TCell.Bark, flexK: 0.05, curtains: 16 },
+  [Species.Acacia]: { seed: 19, trunkH: 0.55, r0: 0.032, lean: 0.09, stems: 2, crownC: V(0, 0.82, 0), crownR: V(0.5, 0.11, 0.48), lumps: 5, lumpR: 0.42, perLump: 4, shell: 8, inner: 1, size: 0.15, cell: TCell.Birch, bark: TCell.Bark, flexK: 0.035, ao: 0.8 },
   [Species.Fruit]: { seed: 17, trunkH: 0.24, r0: 0.032, lean: 0.04, crownC: V(0, 0.47, 0), crownR: V(0.36, 0.22, 0.36), lumps: 5, lumpR: 0.45, perLump: 4, shell: 7, inner: 1, size: 0.17, cell: TCell.Fruit, bark: TCell.Bark, flexK: 0.04 },
   };
   return BROAD[sp] ?? BROAD[Species.Oak]!;
@@ -611,12 +653,13 @@ export function treeGeometry(sp: Species, lite: boolean): THREE.BufferGeometry {
   if (g) return g;
   if (sp === Species.Spruce) g = spruce(lite);
   else if (sp === Species.Pine) g = pine(lite);
+  else if (sp === Species.Palm) g = palm(lite);
   else g = broadleaf(broadSpec(sp), lite);
   geoCache.set(key, g);
   return g;
 }
 
-export const SPECIES_COUNT = 8;
+export const SPECIES_COUNT = 10;
 
 /**
  * Leaf tint of one tree (linear colour, stored at half strength in the
@@ -645,12 +688,55 @@ export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE
     case Species.Fruit:
       c.setHSL(0.22 + r1 * 0.04, 0.44 + r2 * 0.1, 0.5 + r2 * 0.05);
       break;
+    case Species.Palm:
+      // some fronds sun-bleached towards olive-yellow
+      c.setHSL(0.19 + r1 * 0.05, 0.36 + r2 * 0.12, 0.42 + r2 * 0.07);
+      break;
+    case Species.Acacia:
+      c.setHSL(0.18 + r1 * 0.04, 0.3 + r2 * 0.08, 0.4 + r2 * 0.06);
+      break;
     default:
       // oaks / saplings: fresh to deep greens, now and then an olive, a yellowing or a rusty one
       if (autumn) c.setHSL(r1 < 0.5 ? 0.07 + r2 * 0.03 : 0.12 + r2 * 0.03, 0.6, 0.5);
       else if (r3 < 0.1) c.setHSL(0.18 + r1 * 0.03, 0.4, 0.45);
       else c.setHSL(0.24 + r1 * 0.06, 0.4 + r2 * 0.14, 0.4 + r2 * 0.1);
   }
+  return c.multiplyScalar(0.5);
+}
+
+// --------------------------------------------------------------- shrubs
+
+/** Ground-cover shrubs built like the trees (same leaf atlas, lighting and wind): bush, clipped hedge, desert scrub. */
+export const enum Shrub {
+  Bush = 0,
+  Hedge = 1,
+  Scrub = 2,
+}
+
+const SHRUBS: BroadSpec[] = [
+  { seed: 31, trunkH: 0.05, r0: 0.012, lean: 0.03, stems: 3, crownC: V(0, 0.17, 0), crownR: V(0.25, 0.16, 0.25), lumps: 4, lumpR: 0.5, perLump: 4, shell: 7, inner: 2, size: 0.13, cell: TCell.Broad, bark: TCell.Bark, flexK: 0.02, ao: 0.9 },
+  { seed: 37, trunkH: 0.04, r0: 0.01, lean: 0.01, stems: 2, crownC: V(0, 0.17, 0), crownR: V(0.21, 0.17, 0.21), lumps: 3, lumpR: 0.55, perLump: 4, shell: 8, inner: 2, size: 0.12, cell: TCell.Poplar, bark: TCell.Bark, flexK: 0.015, ao: 0.85 },
+  { seed: 41, trunkH: 0.03, r0: 0.008, lean: 0.06, stems: 3, crownC: V(0, 0.1, 0), crownR: V(0.2, 0.09, 0.2), lumps: 3, lumpR: 0.5, perLump: 3, shell: 5, inner: 0, size: 0.11, cell: TCell.Birch, bark: TCell.Bark, flexK: 0.02, ao: 0.8 },
+];
+
+/** Hi / lo model of a shrub (cached). */
+export function shrubGeometry(k: Shrub, lite: boolean): THREE.BufferGeometry {
+  const key = `shrub${k}:${lite}`;
+  let g = geoCache.get(key);
+  if (!g) geoCache.set(key, (g = broadleaf(SHRUBS[k], lite)));
+  return g;
+}
+
+/** Leaf tint of a shrub (half strength like treeTint) for the map's climate. */
+export function shrubTint(biome: string, k: Shrub, r1: number, r2: number, r3: number): THREE.Color {
+  const c = new THREE.Color();
+  if (biome === 'desert') c.setHSL(0.13 + r1 * 0.07, 0.22 + r2 * 0.1, 0.4 + r2 * 0.08);
+  else if (biome === 'winter') {
+    if (r3 < 0.4) c.setHSL(0.07 + r1 * 0.03, 0.2, 0.32 + r2 * 0.06); // bare twigs
+    else c.setHSL(0.32 + r1 * 0.04, 0.2 + r2 * 0.08, 0.3 + r2 * 0.06);
+  } else if (k === Shrub.Hedge) c.setHSL(0.26 + r1 * 0.04, (biome === 'urban' ? 0.46 : 0.4) + r2 * 0.1, 0.32 + r2 * 0.06);
+  else if (r3 < 0.06) c.setHSL(0.1 + r1 * 0.04, 0.5, 0.45); // a turning one
+  else c.setHSL(0.24 + r1 * 0.07, 0.36 + r2 * 0.14, 0.34 + r2 * 0.09);
   return c.multiplyScalar(0.5);
 }
 

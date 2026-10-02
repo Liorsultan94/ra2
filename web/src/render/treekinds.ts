@@ -15,6 +15,9 @@ export const enum Species {
   Poplar = 5,
   Willow = 6,
   Fruit = 7,
+  /** Desert: date palm and umbrella acacia. */
+  Palm = 8,
+  Acacia = 9,
 }
 
 export interface TreeSpot {

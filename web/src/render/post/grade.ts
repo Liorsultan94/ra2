@@ -51,13 +51,13 @@ const LOOKS = {
   /** Golden hour / sunset: warm highlights, slightly teal shadows, rich colour. */
   golden: L({ temp: 0.09, tint: 0.012, sat: 1.1, contrast: 1.07, gain: [1.02, 1.0, 0.96], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.035, 0.012, -0.03] }),
   /** Night: blue-teal, lifted toe so units stay readable, lights left warm so they pop. */
-  night: L({ temp: -0.13, tint: -0.01, sat: 0.9, protect: 0.85, contrast: 1.02, lift: [0.004, 0.012, 0.022], gamma: [0.98, 1.02, 1.06], shadowTint: [-0.01, 0.01, 0.028], highTint: [0.02, 0.008, -0.006] }),
+  night: L({ temp: -0.19, tint: 0.012, sat: 0.88, protect: 0.85, contrast: 1.02, lift: [0.002, 0.012, 0.026], gamma: [0.97, 1.02, 1.08], shadowTint: [-0.012, 0.008, 0.034], highTint: [0.022, 0.008, -0.008] }),
   /** Rain: desaturated grey-green, soft contrast, a little haze in the blacks. */
-  rain: L({ temp: -0.045, tint: -0.03, sat: 0.76, protect: 0.75, contrast: 1.0, lift: [0.012, 0.016, 0.016], gain: [0.98, 1.0, 0.99], shadowTint: [-0.006, 0.006, 0.006], highTint: [-0.004, 0.006, 0.0] }),
+  rain: L({ temp: -0.05, tint: -0.045, sat: 0.7, protect: 0.75, contrast: 1.0, lift: [0.014, 0.019, 0.017], gain: [0.97, 1.0, 0.98], shadowTint: [-0.008, 0.008, 0.006], highTint: [-0.008, 0.008, 0.0] }),
   /** Thunderstorm (on top of rain): darker, flatter, greener. */
   storm: L({ temp: -0.06, tint: -0.04, sat: 0.68, protect: 0.8, contrast: 1.05, lift: [0.008, 0.013, 0.014], gain: [0.93, 0.95, 0.95], shadowTint: [-0.008, 0.008, 0.01], highTint: [-0.006, 0.006, 0.004] }),
   /** Sandstorm: ochre haze, compressed contrast. */
-  sand: L({ temp: 0.13, tint: 0.008, sat: 0.9, protect: 0.75, contrast: 0.97, lift: [0.022, 0.014, 0.0], gain: [1.03, 0.99, 0.88], shadowTint: [0.012, 0.004, -0.014], highTint: [0.04, 0.02, -0.04] }),
+  sand: L({ temp: 0.16, tint: 0.01, sat: 0.88, protect: 0.75, contrast: 0.96, lift: [0.026, 0.016, 0.0], gain: [1.03, 0.98, 0.84], shadowTint: [0.014, 0.005, -0.016], highTint: [0.045, 0.022, -0.045] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };

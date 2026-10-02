@@ -107,8 +107,12 @@ void main() {
       vec3 d1 = viewPos( uv - off ) - P;
       float l0 = length( d0 );
       float l1 = length( d1 );
-      float c0 = mix( low0, dot( d0, V ) / max( l0, 1e-4 ), clamp( l0 * falloffMul + falloffAdd, 0.0, 1.0 ) );
-      float c1 = mix( low1, dot( d1, V ) / max( l1, 1e-4 ), clamp( l1 * falloffMul + falloffAdd, 0.0, 1.0 ) );
+      // thin-occluder compensation (XeGTAO): what sticks out towards the camera (grass blades seen from
+      // above) counts as further away, so it fades out instead of speckling the ground
+      float f0 = length( vec3( d0.xy, d0.z * ( 1.0 + THIN ) ) );
+      float f1 = length( vec3( d1.xy, d1.z * ( 1.0 + THIN ) ) );
+      float c0 = mix( low0, dot( d0, V ) / max( l0, 1e-4 ), clamp( f0 * falloffMul + falloffAdd, 0.0, 1.0 ) );
+      float c1 = mix( low1, dot( d1, V ) / max( l1, 1e-4 ), clamp( f1 * falloffMul + falloffAdd, 0.0, 1.0 ) );
       h0c = max( h0c, c0 );
       h1c = max( h1c, c1 );
     }
@@ -137,7 +141,7 @@ void main() {
   ivec2 p = ivec2( gl_FragCoord.xy );
   vec4 c = texelFetch( tAO, p, 0 );
   float z = unpackDepth16( c.gb );
-  float tol = z * 0.035 + 2e-4;
+  float tol = z * 0.05 + 2e-4;
   float sum = 0.0;
   float ws = 0.0;
   for ( int y = -2; y <= 1; y++ )
@@ -175,10 +179,10 @@ float aoAt( vec2 fc, vec2 uv ) {
 
 export class AOPass extends Pass {
   /** World-space radius (map tiles). */
-  radius = 0.85;
+  radius = 1.0;
   /** Output strength 0..1 (applied by the final pass). */
-  intensity = 0.85;
-  power = 1.35;
+  intensity = 0.9;
+  power = 1.6;
   private raw: THREE.WebGLRenderTarget;
   private clean: THREE.WebGLRenderTarget;
   private aoMat: THREE.ShaderMaterial;
@@ -214,7 +218,7 @@ export class AOPass extends Pass {
         power: { value: 1.35 },
         maxPx: { value: 64 },
       },
-      { DIRS: dirs, STEPS: 4 },
+      { DIRS: dirs, STEPS: 4, THIN: '0.7' },
     );
     this.denoiseMat = fsMaterial(DENOISE_FRAG, { tAO: { value: null }, size: { value: new THREE.Vector2() } });
   }

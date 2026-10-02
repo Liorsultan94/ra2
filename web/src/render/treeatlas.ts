@@ -25,6 +25,10 @@ export const enum TCell {
   BirchBark = 11,
   PineBark = 12,
   MassWillow = 13,
+  /** Date palm frond (root at the left edge, tip at the right), desert maps. */
+  Palm = 14,
+  /** Palm trunk: stacked leaf-base scars. */
+  PalmBark = 15,
 }
 
 const GRID = 4;
@@ -322,6 +326,59 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   };
   fishbone(TCell.Spruce, { width: 0.3, dense: 1, light: 62 });
   fishbone(TCell.MassConifer, { width: 0.44, dense: 1.35, light: 60 });
+
+  // date palm frond: a curved rachis with long, stiff, narrow leaflets in a V
+  {
+    clip(TCell.Palm);
+    const y0 = S * 0.5;
+    ctx.strokeStyle = hsl(48, 30, 46);
+    ctx.lineWidth = Math.max(1.2, S * 0.022);
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.lineTo(S * 0.98, y0);
+    ctx.stroke();
+    for (let layer = 0; layer < 2; layer++) {
+      const n = 34;
+      for (let i = 0; i < n; i++) {
+        const t = (i + rnd() * 0.6) / n;
+        const x = S * (0.06 + t * 0.9);
+        const len = S * (0.42 * Math.sin(Math.PI * Math.min(1, 0.2 + t * 0.85)) + 0.04) * R(0.85, 1.05);
+        for (const side of [-1, 1]) {
+          const a = side * R(0.55, 0.85);
+          const lit = 70 * (layer === 0 ? 0.62 : 1) * R(0.88, 1.1) * (0.92 + 0.15 * t);
+          ctx.save();
+          ctx.translate(x, y0);
+          ctx.rotate(a);
+          leafPath('lance', len, S * 0.022);
+          ctx.fillStyle = hsl(78 + R(-8, 6), 26, lit);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  }
+  {
+    clip(TCell.PalmBark);
+    ctx.fillStyle = hsl(32, 22, 38);
+    ctx.fillRect(0, 0, S, S);
+    // diamond pattern of old leaf bases
+    const rows = 12;
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < 6; c++) {
+        const x = ((c + (r % 2) * 0.5) / 6) * S;
+        const y = (r / rows) * S;
+        ctx.fillStyle = hsl(30 + R(-4, 4), 20, R(26, 40));
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + S / 12, y + S / rows / 2);
+        ctx.lineTo(x, y + S / rows);
+        ctx.lineTo(x - S / 12, y + S / rows / 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(30,22,14,0.6)';
+        ctx.lineWidth = Math.max(0.6, S * 0.006);
+        ctx.stroke();
+      }
+  }
 
   // pine: needle tufts at the ends of twigs
   {

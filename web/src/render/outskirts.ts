@@ -6,6 +6,8 @@ import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
 import { Species } from './treekinds';
 import { grassRGB } from './grasstex';
+import { biomeLook, hexRGB, type BiomeLook } from './biome';
+import { CITY_NIGHT } from './models/citybldgs';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
@@ -38,6 +40,48 @@ uniform vec2 oskOrigin;
 uniform float oskExt;
 float oskHash( vec2 c ) { return fract( sin( dot( c, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
 vec3 oskFields( vec2 p ) {
+#if OSK_BIOME == 1
+  // desert: long dunes, gravel flats, a sandstone outcrop now and then
+  {
+    vec4 n = texture2D( fogNoise, p * 0.11 );
+    float big = texture2D( fogNoise, p * 0.013 + 0.4 ).r;
+    float u = dot( p, vec2( 0.29, 0.13 ) ) + big * 9.0;
+    float dune = pow( 0.5 + 0.5 * cos( u * 2.1 ), 1.6 );
+    vec3 c = mix( vec3( 0.7, 0.55, 0.36 ), vec3( 0.86, 0.7, 0.48 ), dune );
+    c = mix( c, vec3( 0.58, 0.5, 0.4 ), smoothstep( 0.62, 0.7, big ) * 0.8 );
+    c = mix( c, vec3( 0.62, 0.38, 0.25 ), smoothstep( 0.74, 0.78, texture2D( fogNoise, p * 0.021 + 0.7 ).g ) );
+    return c * ( 0.9 + n.g * 0.16 ) * 0.86;
+  }
+#elif OSK_BIOME == 2
+  // winter: snowfields, fence lines and dark copses
+  {
+    vec4 n = texture2D( fogNoise, p * 0.11 );
+    float drift = texture2D( fogNoise, p * 0.031 + 0.2 ).r;
+    vec3 c = vec3( 0.8, 0.84, 0.9 ) * ( 0.9 + drift * 0.12 + n.b * 0.05 );
+    const float ca = 0.94604, sa = 0.32404;
+    vec2 g = vec2( ( p.x * ca - p.y * sa ) / 13.0, ( p.x * sa + p.y * ca ) / 9.0 );
+    vec2 l = fract( g );
+    float border = min( min( l.x, 1.0 - l.x ), min( l.y, 1.0 - l.y ) * 1.4 );
+    c = mix( c, vec3( 0.4, 0.38, 0.36 ), ( 1.0 - smoothstep( 0.008, 0.02, border ) ) * 0.6 );
+    c = mix( c, vec3( 0.42, 0.4, 0.36 ), smoothstep( 0.7, 0.76, drift ) * 0.5 );
+    return c * 0.86;
+  }
+#elif OSK_BIOME == 3
+  // city: streets on the same grid, roofs, the odd park
+  {
+    vec2 g = p / 12.0;
+    vec2 l = fract( g );
+    vec2 ci = floor( g );
+    float st = 1.0 - smoothstep( 0.1, 0.13, min( min( l.x, 1.0 - l.x ), min( l.y, 1.0 - l.y ) ) );
+    float r = oskHash( ci );
+    vec2 lot = floor( l * vec2( 3.0, 2.0 ) );
+    float rl = oskHash( ci * 7.1 + lot );
+    vec3 roof = mix( vec3( 0.36, 0.35, 0.34 ), vec3( 0.55, 0.42, 0.36 ), step( 0.6, rl ) ) * ( 0.75 + rl * 0.4 );
+    vec3 c = r < 0.15 ? vec3( 0.3, 0.42, 0.22 ) : roof;
+    c = mix( c, vec3( 0.2, 0.2, 0.21 ), st );
+    return c * ( 0.9 + texture2D( fogNoise, p * 0.11 ).g * 0.15 ) * 0.86;
+  }
+#endif
   const float ca = 0.94604, sa = 0.32404; // rotation by 0.33 rad
   float u = p.x * ca - p.y * sa;
   float v = p.x * sa + p.y * ca;
@@ -74,6 +118,7 @@ vec3 oskFields( vec2 p ) {
 export class Outskirts {
   readonly group = new THREE.Group();
   private edge: { data: Float32Array; size: number } | null = null;
+  private look: BiomeLook;
 
   constructor(
     private map: GameMap,
@@ -83,10 +128,12 @@ export class Outskirts {
     terrainWater?: THREE.Mesh,
   ) {
     this.group.name = 'outskirts';
+    this.look = biomeLook(map);
     this.edge = terrainGround ? this.sampleGround(terrainGround) : null;
     const ground = this.buildGround(fog);
     this.group.add(ground);
     this.buildTrees(fog, quality);
+    if (this.look.code === 3) this.buildCityRing(fog, quality);
     this.buildWater(fog, terrainWater);
   }
 
@@ -130,12 +177,12 @@ export class Outskirts {
     const size = 192;
     const data = new Float32Array(size * size * 3);
     const N = w * g.res;
-    const hex = (v: number) => [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
     const gcol = [0, 0, 0];
-    const dirt = hex(0x7a6448);
-    const rock = hex(0x77716a);
-    const sand = hex(0xa89a7a);
-    const mud = hex(0x4a3e30);
+    const L = this.look;
+    const dirt = hexRGB(L.ground.dirt);
+    const rock = hexRGB(L.ground.rock);
+    const sand = hexRGB(L.ground.sand);
+    const mud = hexRGB(L.ground.mud);
     for (let py = 0; py < size; py++)
       for (let px = 0; px < size; px++) {
         const x = ((px + 0.5) / size) * w;
@@ -147,9 +194,12 @@ export class Outskirts {
         const s3 = g.splat[k + 3] / 255;
         const wg = Math.max(0, 1 - s0 - s1 - s2 - s3);
         const dr = g.tint[k + 3] / 255;
-        grassRGB(g.ctl ? g.ctl[k] / 255 : 0, dr, gcol);
+        grassRGB(g.ctl ? g.ctl[k] / 255 : 0, dr, gcol, L.grass);
+        // winter: the painted snow cover (ground.ts keeps its depth in the grass control map's blue)
+        const sn = L.code === 2 && g.ctl ? Math.max(0, Math.min(1, (g.ctl[k + 2] / 255 - 0.25) / 0.4)) : 0;
         for (let j = 0; j < 3; j++) {
-          const c = gcol[j] * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
+          let c = gcol[j] * wg + dirt[j] * s0 + rock[j] * s1 + sand[j] * s2 + mud[j] * s3;
+          c += ([0.84, 0.88, 0.95][j] - c) * sn;
           // a touch darker: the splat shader's detail maps darken the flat palette colours
           data[(py * size + px) * 3 + j] = Math.min(1, 0.88 * c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
         }
@@ -332,18 +382,92 @@ export class Outskirts {
           }`,
         );
     };
-    mat.customProgramCacheKey = () => 'outskirts-ground-2';
+    mat.defines = { ...(mat.defines ?? {}), OSK_BIOME: this.look.code };
+    // woods darken the countryside (not the desert / city)
+    if (this.look.code === 1 || this.look.code === 3) {
+      maps.woods.image.data?.fill(0);
+      maps.woods.needsUpdate = true;
+    }
+    const bk = this.look.code;
+    mat.customProgramCacheKey = () => 'outskirts-ground-2-b' + bk;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'outskirts-ground';
     return mesh;
   }
 
+  /** City map: the town goes on past the edge (instanced blocks on the street grid, lit windows at night). */
+  private buildCityRing(fog: FogOfWar, quality: 'low' | 'medium' | 'high') {
+    const { w, h } = this.map;
+    const N = 64;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = N;
+    const g = cv.getContext('2d')!;
+    g.fillStyle = '#b8b2a8';
+    g.fillRect(0, 0, N, N);
+    const ce = document.createElement('canvas');
+    ce.width = ce.height = N;
+    const ge = ce.getContext('2d')!;
+    ge.fillStyle = '#000';
+    ge.fillRect(0, 0, N, N);
+    for (let y = 0; y < 8; y++)
+      for (let x = 0; x < 8; x++) {
+        g.fillStyle = '#3a4048';
+        g.fillRect(x * 8 + 2, y * 8 + 2, 4, 4);
+        if (hash2(x, y, 77) < 0.4) {
+          ge.fillStyle = hash2(x, y, 78) < 0.8 ? '#ffc880' : '#b8d0ff';
+          ge.fillRect(x * 8 + 2, y * 8 + 2, 4, 4);
+        }
+      }
+    const map = new THREE.CanvasTexture(cv);
+    map.colorSpace = THREE.SRGBColorSpace;
+    const em = new THREE.CanvasTexture(ce);
+    const mat = new THREE.MeshStandardMaterial({ map, emissiveMap: em, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.85, vertexColors: false });
+    fog.apply(mat);
+    const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    // drop the bottom face's UV stretch: the roofs read as flat concrete through the texture's border colour
+    const list: { m: THREE.Matrix4; c: THREE.Color }[] = [];
+    const budget = quality === 'low' ? 260 : quality === 'medium' ? 460 : 700;
+    for (let by = -MARGIN + 4; by < h + MARGIN - 4 && list.length < budget; by += 12)
+      for (let bx = -MARGIN + 4; bx < w + MARGIN - 4 && list.length < budget; bx += 12)
+        for (let k = 0; k < 4; k++) {
+          const x = bx + 2.5 + (k % 2) * 5 + (hash2(bx, by, 60 + k) - 0.5);
+          const y = by + 2.5 + (k >> 1) * 5 + (hash2(bx, by, 70 + k) - 0.5);
+          const o = this.outside(x, y);
+          if (o < 4 || o > MARGIN - 8) continue;
+          if ((x > w || y > h) && o < 10) continue;
+          if (hash2(bx, by, 50) < 0.12) continue; // a park
+          const hh = 0.7 + hash2(bx, by, 80 + k) * (o > 20 ? 2.4 : 1.6);
+          const sx = 2.6 + hash2(bx, by, 90 + k) * 1.4;
+          const sz = 2.6 + hash2(bx, by, 95 + k) * 1.4;
+          const m = new THREE.Matrix4().compose(new THREE.Vector3(x, this.height(x, y) - 0.1, y), new THREE.Quaternion(), new THREE.Vector3(sx, hh, sz));
+          const t = 0.75 + hash2(bx, by, 99 + k) * 0.35;
+          list.push({ m, c: new THREE.Color(t, t * (0.95 + hash2(k, by, 3) * 0.08), t * 0.92) });
+        }
+    if (!list.length) return;
+    const im = new THREE.InstancedMesh(box, mat, list.length);
+    list.forEach((e, i) => {
+      im.setMatrixAt(i, e.m);
+      im.setColorAt(i, e.c);
+    });
+    im.computeBoundingSphere();
+    im.castShadow = quality === 'high';
+    im.receiveShadow = true;
+    im.name = 'outskirts-city';
+    im.onBeforeRender = () => {
+      mat.emissiveIntensity = CITY_NIGHT.value * 1.4;
+    };
+    this.group.add(im);
+  }
+
   private buildTrees(fog: FogOfWar, quality: 'low' | 'medium' | 'high') {
     const { w, h } = this.map;
     // the battlefield's own tree models (light LOD) and material: same leaves, wind and lighting
-    const pineGeo = treeGeometry(Species.Spruce, true);
-    const leafyGeo = treeGeometry(Species.Oak, true);
+    const bk = this.look.code;
+    const spA = bk === 1 ? Species.Acacia : bk === 3 ? Species.Young : Species.Spruce;
+    const spB = bk === 1 ? Species.Palm : bk === 2 ? Species.Birch : Species.Oak;
+    const pineGeo = treeGeometry(spA, true);
+    const leafyGeo = treeGeometry(spB, true);
     const pines: THREE.Matrix4[] = [];
     const leafy: THREE.Matrix4[] = [];
     const pc: THREE.Color[] = [];
@@ -365,7 +489,7 @@ export class Outskirts {
         const wd = this.woods(ox, oy);
         const dense = smoothstep(0.56, 0.66, wd);
         // scattered trees along hedgerows / in meadows
-        const p = dense * 0.85 + 0.035;
+        const p = bk === 1 ? 0.012 : bk === 3 ? dense * 0.25 + 0.01 : dense * 0.85 + 0.035;
         if (hash2(k, 4, 5) > p) continue;
         if (o > MARGIN - 6) continue;
         const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
@@ -374,7 +498,7 @@ export class Outskirts {
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
         // the map's leaf tints, a little deeper (haze lifts them with distance)
         const pine = hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5);
-        const c = treeTint(pine ? Species.Spruce : Species.Oak, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
+        const c = treeTint(pine ? spA : spB, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
         if (pine) {
           pines.push(m);
           pc.push(c);

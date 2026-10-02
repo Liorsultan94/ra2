@@ -134,8 +134,8 @@ export class BloomPass extends Pass {
   /** 2 = full (13-tap down, tent up, 6 levels), 1 = cheap (4-tap, 4 levels). */
   quality: 1 | 2 = 2;
   /** Soft threshold (exposed linear units) and knee. */
-  threshold = 1.0;
-  knee = 0.55;
+  threshold = 0.85;
+  knee = 0.6;
   /** Upsample mix towards the wider level (0..1). */
   scatter = 0.7;
   /** Exposure the final pass applies (the threshold is in exposed units). */

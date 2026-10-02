@@ -106,7 +106,11 @@ export class PostChain {
     this.lens = LENS[quality];
     if (this.lens.dirt > 0) f.uniforms.tDirt.value = this.dirtTex = makeLensDirt();
     f.grainAmt = this.lens.grain;
-    if (/[?&]tm=aces\b/.test(typeof location !== 'undefined' ? location.search : '')) f.uniforms.tonemap.value = 0;
+    const qs = typeof location !== 'undefined' ? location.search : '';
+    // debug: ?tm=aces compares the old curve, ?ppdebug=ao|bloom shows one buffer
+    if (/[?&]tm=aces\b/.test(qs)) f.uniforms.tonemap.value = 0;
+    const dbg = /[?&]ppdebug=(ao|bloom)\b/.exec(qs);
+    if (dbg) f.uniforms.debugView.value = dbg[1] === 'ao' ? 1 : 2;
   }
 
   /** Apply the post part of a quality rung. */

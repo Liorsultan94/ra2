@@ -119,10 +119,14 @@ export class Terrain {
     const g = this.ground;
     const N = m.w * g.res;
     const gcol = [0, 0, 0];
-    const dirtC = [122, 100, 72];
-    const rockC = [138, 132, 122];
-    const sandC = [168, 154, 122];
-    const mudC = [74, 62, 48];
+    const look = g.look;
+    const rgb = (v: number) => [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+    // temperate keeps its original minimap tones
+    const temperate = look.code === 0;
+    const dirtC = temperate ? [122, 100, 72] : rgb(look.ground.dirt);
+    const rockC = temperate ? [138, 132, 122] : rgb(look.ground.rock);
+    const sandC = temperate ? [168, 154, 122] : rgb(look.ground.sand);
+    const mudC = temperate ? [74, 62, 48] : rgb(look.ground.mud);
     for (let py = 0; py < c.height; py++) {
       for (let px = 0; px < c.width; px++) {
         const x = (px + 0.5) / S;
@@ -134,13 +138,18 @@ export class Terrain {
         const sp = [g.splat[k] / 255, g.splat[k + 1] / 255, g.splat[k + 2] / 255, g.splat[k + 3] / 255];
         const wg = Math.max(0, 1 - sp[0] - sp[1] - sp[2] - sp[3]);
         const dr = g.tint[k + 3] / 255;
-        grassRGB(g.ctl[k] / 255, dr, gcol);
+        grassRGB(g.ctl[k] / 255, dr, gcol, look.grass);
         let col = [0, 1, 2].map((j) => gcol[j] * 255 * 1.08 * wg + dirtC[j] * sp[0] + rockC[j] * sp[1] + sandC[j] * sp[2] + mudC[j] * sp[3]);
         col = col.map((v, j) => v * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
+        // winter: the painted snow cover
+        if (look.code === 2) {
+          const sn = Math.max(0, Math.min(1, (g.ctl[k + 2] / 255 - 0.25) / 0.4));
+          col = col.map((v, j) => v + ([214, 222, 236][j] - v) * sn);
+        }
         const t = m.tiles[i];
-        if (t === Tile.Water) col = [38, 74, 88];
+        if (t === Tile.Water) col = [...look.mini.water];
         else if (t === Tile.Bridge) col = [120, 116, 108];
-        else if (m.trees[i]) col = [34, 54, 26];
+        else if (m.trees[i]) col = [...look.mini.tree];
         if (m.blocked[i]) col = [150, 80, 60];
         const hgt = groundHeight(m, x, y);
         const sh = 0.9 + Math.max(-0.2, Math.min(0.3, hgt * 0.12));

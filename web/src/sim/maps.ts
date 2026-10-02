@@ -429,7 +429,8 @@ export function createDesertMap(seed: number): GameMap {
       for (const m of mesas) {
         const d = distToSegment(vx, vy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
         const top = 2.25 + ((hash2(vx, vy, NS + 9) + hash2(W - vx, H - vy, NS + 9)) / 2 - 0.5) * 0.12;
-        h += (top - Math.max(0, h - 0.4)) * (1 - smoothstep(m.r - 0.5, m.r + 0.8, d));
+        // a flat-topped plateau with steep sandstone cliffs
+        h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
       }
       g.heights[vy * (W + 1) + vx] = h;
     }
