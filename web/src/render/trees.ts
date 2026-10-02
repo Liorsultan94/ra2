@@ -173,7 +173,9 @@ export function treeMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high')
       .replace(
         '#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>
-        normal = normalize( vNormal );
+        #ifndef FLAT_SHADED
+          normal = normalize( vNormal );
+        #endif
         fLeafAmt = clamp( vLeaf, 0.0, 1.0 );
         // thin outer leaves pass more light than the dark inside of the crown
         fTransl = fLeafAmt * smoothstep( 0.25, 0.9, dot( vColor.rgb, vec3( 0.33 ) ) );`,
