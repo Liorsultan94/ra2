@@ -4044,7 +4044,7 @@ function samRadar(k: Kit, x: number, z: number, y: number) {
   if (f === 'israel') return; // EL/M-2084 is part of the launcher layout
   if (f === 'usa') {
     // AN/MPQ-65 style: shelter with a fixed, tilted phased array facing the threat axis
-    k.at(x, y, z, Math.PI / 4, () => {
+    k.at(x, y, z, -Math.PI / 4, () => {
       k.box(P.dark, 0.2, 0.03, 0.14, 0, 0, 0);
       k.rbox(hull, 0.18, 0.1, 0.13, 0, 0.03, 0, 0.01);
       k.at(0.1, 0.07, 0, 0, () => aesaFace(k, 0.15, 0.16, 0, -0.04, 0), 0, -0.35);
@@ -4059,7 +4059,7 @@ function samRadar(k: Kit, x: number, z: number, y: number) {
   k.box(hull, 0.12, 0.06, 0.12, x, y, z);
   lattice(k, P.drab, x, z, y + 0.06, h, 0.08, 0.05, 3, 0.006);
   const n = 'srad';
-  const o = k.node(n, x, y + 0.06 + h, z, Math.PI / 4);
+  const o = k.node(n, x, y + 0.06 + h, z, -Math.PI / 4);
   k.on(o, () => {
     k.cyl(P.dark, 0.03, 0.025, 0, 0, 0, 10);
     k.at(0.0, 0.025, 0, 0, () => {
@@ -4561,6 +4561,9 @@ function bunker(k: Kit) {
     top = g + 0.2;
     mgTurret(k, top + 0.01);
   }
+  // camo net over the ammunition corner behind the nest
+  camoNet(k, -0.47, -0.12, -0.47, -0.12, 0.2, 0.03, g);
+  ammoBoxes(k, -0.3, -0.3, 3, 0.4, g);
   k.height = 0.55;
 }
 
@@ -4743,10 +4746,11 @@ function sam(k: Kit) {
       if (f !== 'israel') k.box(P.team, 0.03, H + 0.026, W + 0.026, lay.len * 0.45, -H / 2 - 0.013, 0);
     });
   });
-  samRadar(k, -0.3, -0.33, g);
+  // radar on the front left corner (the raised launcher would hide it at the back)
+  samRadar(k, -0.33, 0.33, g);
   sandbags(k, [0.44, -0.36], [0.44, 0.36], 2, g);
-  if (R === 'west' && f !== 'israel') jersey(k, -0.25, 0.42, 0.4, 0);
-  else sandbags(k, [-0.36, 0.44], [0.3, 0.44], 2, g);
+  sandbags(k, [-0.12, 0.44], [0.36, 0.44], 2, g);
+  if (R === 'west' && f !== 'israel') jersey(k, -0.15, -0.42, 0.5, 0);
   k.height = 0.75;
 }
 

@@ -205,6 +205,17 @@ export class GradeLut {
 
   /** Blend the looks for this frame; re-bake the LUT when the result moved. */
   update(r: THREE.WebGLRenderer, blit: Blitter, g: GradeInput) {
+    const v = this.blend(g);
+    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4;
+    for (let i = 0; i < P_LEN && !moved; i++) if (Math.abs(v[i] - this.baked[i]) > 4e-4) moved = true;
+    if (!moved) return;
+    this.baked.set(v);
+    this.bakedAmount = this.amount;
+    this.bake(r, blit, v);
+  }
+
+  /** The look weights (see weights()) and blended parameter vector for an input (CPU only, no allocation). */
+  blend(g: GradeInput): Float32Array {
     const w = this.w;
     for (const k of KEYS) w[k] = 0;
     if (this.force) w[this.force] = 1;
@@ -234,12 +245,17 @@ export class GradeLut {
       this.toward('sand', Math.min(1, g.sand) * (1 - 0.5 * night));
       this.toward('snow', Math.min(1, g.snow) * (1 - 0.5 * night));
     }
-    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4;
-    for (let i = 0; i < P_LEN && !moved; i++) if (Math.abs(v[i] - this.baked[i]) > 4e-4) moved = true;
-    if (!moved) return;
-    this.baked.set(v);
-    this.bakedAmount = this.amount;
-    this.bake(r, blit, v);
+    return v;
+  }
+
+  /** Blended saturation of the last blend (tests / debug). */
+  get saturation(): number {
+    return this.cur[P_SAT];
+  }
+
+  /** Blended white-balance temperature of the last blend (tests / debug). */
+  get temperature(): number {
+    return this.cur[P_TEMP];
   }
 
   private toward(k: LookKey, t: number) {
