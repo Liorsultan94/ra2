@@ -2,6 +2,7 @@ import { DEFS } from '../sim/defs';
 import type { FogOfWar } from './fog';
 import { AIRCRAFT, createMunition as createBaseMunition } from './models/aircraft';
 import { BUILDINGS } from './models/buildings';
+import { CARGO } from './models/cargo';
 import { overrideModel } from './models/gltf';
 import { INFANTRY } from './models/infantry';
 import { EXTRA_MUNITIONS, createExtraMunition, type ExtraMunitionKind } from './models/munitions';
@@ -23,7 +24,7 @@ function footprintOf(key: string) {
   return footprints.get(key);
 }
 
-const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY];
+const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY, CARGO];
 
 /** Build the model for a model key: glTF override > detailed builder > legacy builder. */
 export function createModel(key: string, style: ModelStyle, fog: FogOfWar | null): Model {

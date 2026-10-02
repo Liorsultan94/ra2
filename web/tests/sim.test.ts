@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
 import { detectionRange, hitThreat, launch } from '../src/sim/ballistics';
-import { WEAPONS, buildingDef } from '../src/sim/defs';
+import { AIRDROP_COOLDOWN, AIRDROP_FIRST, airdropStatus } from '../src/sim/airdrop';
+import { WEAPONS, buildingDef, unitDef } from '../src/sim/defs';
 import { terrainPassable } from '../src/sim/map';
 import { PathFinder } from '../src/sim/path';
 import { TPS, type Entity } from '../src/sim/types';
@@ -361,5 +362,176 @@ describe('missile toughness and variety', () => {
     const b = run();
     expect(a.events).toBeGreaterThan(50);
     expect(a).toEqual(b);
+  });
+});
+
+describe('airborne drop support power', () => {
+  /** USA (player 0) vs Russia, starting forces cleared; an airfield for player 0 unless told otherwise. */
+  function dropWorld(seed = 11, airfield = true) {
+    const w = new World({
+      seed,
+      players: [
+        { name: 'A', faction: 'usa', color: 0, isAI: false },
+        { name: 'B', faction: 'russia', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    w.spawnBuilding('usa_conyard', 0, 4, 88, true);
+    w.spawnBuilding('russia_conyard', 1, 88, 4, true);
+    w.spawnBuilding('usa_power', 0, 8, 88, true);
+    if (airfield) w.spawnBuilding('usa_airfield', 0, 4, 83, true);
+    return w;
+  }
+  const charge = (w: World) => {
+    w.step();
+    w.players[0].airdropAt = w.tick; // skip the recharge wait
+  };
+  const transports = (w: World) => w.list.filter((e) => !e.dead && e.def.endsWith('_transport'));
+  const troops = (w: World, owner = 0) => w.list.filter((e) => !e.dead && e.owner === owner && unitDef(e.def).category === 'infantry');
+
+  it('needs an airfield and a full charge, then goes on cooldown', () => {
+    const none = dropWorld(11, false);
+    for (let i = 0; i < 5; i++) none.step();
+    expect(none.players[0].airdropAt).toBe(-1);
+    none.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    none.step();
+    expect(transports(none).length).toBe(0);
+
+    const w = dropWorld();
+    w.step();
+    // first charge takes 90 s after the airfield is up
+    expect(airdropStatus(w, 0).unlocked).toBe(true);
+    expect(airdropStatus(w, 0).ready).toBe(false);
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(0);
+    for (let i = 0; i < AIRDROP_FIRST; i++) w.step();
+    expect(airdropStatus(w, 0).ready).toBe(true);
+    // the enemy has no airfield: its command is rejected
+    w.issue(1, { type: 'airdrop', x: 48, y: 48 });
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(1);
+    expect(transports(w)[0].owner).toBe(0);
+    // recharging: a second call is refused
+    w.issue(0, { type: 'airdrop', x: 30, y: 60 });
+    w.step();
+    expect(transports(w).length).toBe(1);
+    expect(airdropStatus(w, 0).ready).toBe(false);
+    expect(w.players[0].airdropAt - w.tick).toBeGreaterThan(AIRDROP_COOLDOWN - TPS * 2);
+  });
+
+  it('jumpers descend under canopy, land and become normal infantry; the pallet heals', () => {
+    const w = dropWorld();
+    charge(w);
+    w.issue(0, { type: 'airdrop', x: 40, y: 56 });
+    let landed = 0;
+    let paradrop = 0;
+    let sawAirborne = false;
+    let hurt: Entity | null = null;
+    for (let i = 0; i < TPS * 60; i++) {
+      if (i === TPS * 32) {
+        // supply pallet on the ground: it patches up wounded units nearby
+        const crate = w.list.find((e) => !e.dead && e.def === 'supply_crate' && !e.para);
+        expect(crate).toBeTruthy();
+        hurt = w.spawnUnit('usa_engineer', 0, crate!.x + 1, crate!.y);
+        hurt.hp = 20;
+      }
+      w.step();
+      for (const ev of w.drainEvents()) {
+        if (ev.t === 'landed') landed++;
+        if (ev.t === 'paradrop') paradrop++;
+      }
+      for (const e of troops(w)) if (e.para && e.z > 1) sawAirborne = true;
+    }
+    expect(paradrop).toBe(1);
+    expect(sawAirborne).toBe(true);
+    const inf = troops(w).filter((e) => e !== hurt);
+    expect(inf.length).toBe(6);
+    expect(inf.filter((e) => e.def === 'usa_at').length).toBe(1);
+    expect(landed).toBe(7); // six jumpers + the supply pallet
+    expect(hurt!.hp).toBeGreaterThan(60);
+    for (const e of inf) {
+      expect(e.para).toBeNull();
+      expect(e.z).toBe(0);
+      expect(Math.hypot(e.x - 40, e.y - 56)).toBeLessThan(4);
+      expect(w.pf.passable(Math.floor(e.x), Math.floor(e.y))).toBe(true);
+    }
+    // the transport has left the map
+    expect(transports(w).length).toBe(0);
+    // they take orders like any squad
+    const ids = inf.map((e) => e.id);
+    w.issue(0, { type: 'move', ids, x: 34, y: 60 });
+    for (let i = 0; i < TPS * 20; i++) w.step();
+    for (const id of ids) expect(Math.hypot(w.get(id)!.x - 34, w.get(id)!.y - 60)).toBeLessThan(2.5);
+  });
+
+  it('shooting the transport down before the drop loses the stick; damage costs jumpers', () => {
+    const w = dropWorld();
+    charge(w);
+    w.issue(0, { type: 'airdrop', x: 40, y: 56 });
+    w.step();
+    const plane = transports(w)[0];
+    const shooter = w.spawnUnit('russia_rifle', 1, 2, 2);
+    for (let i = 0; i < TPS * 2; i++) w.step();
+    expect(plane.drop!.phase).toBe('inbound');
+    w.damage(plane, 1e6, 'missile', shooter);
+    expect(plane.dead).toBe(true);
+    for (let i = 0; i < TPS * 40; i++) w.step();
+    expect(troops(w).length).toBe(0);
+    expect(w.list.some((e) => !e.dead && e.def === 'supply_crate')).toBe(false);
+
+    const w2 = dropWorld();
+    charge(w2);
+    w2.issue(0, { type: 'airdrop', x: 40, y: 56 });
+    w2.step();
+    const p2 = transports(w2)[0];
+    p2.hp = p2.maxHp * 0.4;
+    for (let i = 0; i < TPS * 40; i++) w2.step();
+    expect(troops(w2).length).toBe(3);
+    expect(troops(w2).filter((e) => e.def === 'usa_at').length).toBe(1);
+    expect(w2.list.some((e) => !e.dead && e.def === 'supply_crate')).toBe(false);
+  });
+
+  it('jumpers can be shot while descending', () => {
+    const w = dropWorld();
+    charge(w);
+    w.issue(0, { type: 'airdrop', x: 40, y: 56 });
+    for (let i = 0; i < 4; i++) w.spawnUnit('russia_rifle', 1, 41.5 + (i % 2) * 0.4, 57.5 + i * 0.3);
+    let hitInAir = 0;
+    for (let i = 0; i < TPS * 40; i++) {
+      w.step();
+      for (const e of troops(w)) if (e.para && e.hp < e.maxHp) hitInAir++;
+    }
+    expect(hitInAir).toBeGreaterThan(0);
+  });
+
+  it('is deterministic', () => {
+    const run = () => {
+      const w = dropWorld(21);
+      charge(w);
+      w.issue(0, { type: 'airdrop', x: 52, y: 44 });
+      w.spawnBuilding('russia_def_aa', 1, 60, 36, true);
+      w.spawnBuilding('russia_power', 1, 62, 36, true);
+      for (let i = 0; i < TPS * 50; i++) w.step();
+      return w.list
+        .filter((e) => !e.dead)
+        .map((e) => `${e.id}:${e.def}:${e.x.toFixed(5)}:${e.y.toFixed(5)}:${e.z.toFixed(4)}:${e.hp.toFixed(3)}`)
+        .join('|');
+    };
+    const a = run();
+    expect(a).toBe(run());
+    expect(a).toContain('usa_rifle');
+  });
+
+  it('the AI calls in paratroopers once it has an airfield', () => {
+    const w = aiWorld(5);
+    let drops = 0;
+    for (let i = 0; i < TPS * 60 * 11 && !w.over && drops === 0; i++) {
+      w.step();
+      for (const ev of w.drainEvents()) if (ev.t === 'airdrop') drops++;
+    }
+    expect(drops).toBeGreaterThan(0);
   });
 });

@@ -18,12 +18,16 @@ export interface Settings {
   /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). */
   tod?: 'day' | 'dusk' | 'night';
   weather?: 'clear' | 'rain' | 'snow' | 'sandstorm';
+  /** Drone camera picture-in-picture: 'auto' shows the feed of a selected / attacking drone. */
+  droneCam: 'auto' | 'off';
+  /** Team-coloured silhouettes of units hidden behind buildings and trees. */
+  xray: boolean;
 }
 
 const KEY = 'ironfront.settings.v1';
 
 export function loadSettings(): Settings {
-  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true };
+  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...def, ...JSON.parse(raw) };
@@ -186,6 +190,7 @@ export class MainMenu {
               <li><kbd>Ctrl+1-9</kbd> make group · <kbd>1-9</kbd> select group</li>
               <li><kbd>W</kbd> select army · <kbd>H</kbd> home · <kbd>R</kbd> repair · <kbd>X</kbd> sell</li>
               <li><kbd>Q</kbd> / <kbd>E</kbd> rotate the view 90°</li>
+              <li><kbd>T</kbd> thermal view (twice: black-hot) · <kbd>N</kbd> night vision</li>
               <li><kbd>Arrows</kbd> / screen edge scroll · <kbd>Wheel</kbd> zoom</li>
               <li>Shift+click a build icon to queue 5 · right-click to cancel</li>
             </ul>
@@ -227,6 +232,8 @@ function settingsHtml(st: Settings) {
       <label>Music<input type="range" min="0" max="1" step="0.05" data-s="music" value="${st.music}"></label>
       <label class="chk"><input type="checkbox" data-s="voice"${st.voice ? ' checked' : ''}> Announcer voice</label>
       <label class="chk"><input type="checkbox" data-s="cinematic"${st.cinematic ? ' checked' : ''}> Cinematic moments (slow-motion on big missile strikes)</label>
+      <label>Drone camera<select data-s="droneCam"><option value="auto"${st.droneCam !== 'off' ? ' selected' : ''}>Auto (live feed when a drone attacks)</option><option value="off"${st.droneCam === 'off' ? ' selected' : ''}>Off</option></select></label>
+      <label class="chk"><input type="checkbox" data-s="xray"${st.xray !== false ? ' checked' : ''}> X-ray silhouettes (units hidden behind buildings / trees)</label>
       <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
@@ -239,6 +246,8 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       const k = inp.dataset.s!;
       if (k === 'voice') st.voice = (inp as HTMLInputElement).checked;
       else if (k === 'cinematic') st.cinematic = (inp as HTMLInputElement).checked;
+      else if (k === 'droneCam') st.droneCam = inp.value === 'off' ? 'off' : 'auto';
+      else if (k === 'xray') st.xray = (inp as HTMLInputElement).checked;
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
       else if (k === 'sfx') st.sfx = Number(inp.value);
       else if (k === 'music') st.music = Number(inp.value);

@@ -1104,6 +1104,8 @@ interface Sol {
   hx: number; // current home (team-local) position / yaw
   hz: number;
   hyaw: number;
+  /** Parachute pose weight (1 = hanging under the canopy). */
+  paraW: number;
 }
 
 const tmpA = new THREE.Vector3();
@@ -1417,14 +1419,62 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>): Sol {
     hx: def.x,
     hz: def.z,
     hyaw: def.yaw,
+    paraW: 0,
   };
 }
 
 const RT = new THREE.Vector3();
 const LT = new THREE.Vector3();
 
-/** One soldier (rifle / at / engineer / fpv / ew). */
+/** One soldier (rifle / at / engineer / fpv / ew), blended into the parachute pose while under a canopy. */
 function animSoldier(sol: Sol, s: AnimState) {
+  animSoldierBase(sol, s);
+  const tgt = s.dead > 0 ? 0 : clamp(s.para ?? 0, 0, 1);
+  const dt = Math.min(Math.max(s.dt, 0), 0.1);
+  sol.paraW = dt === 0 && s.time === 0 ? tgt : approach(sol.paraW, tgt, dt, tgt > sol.paraW ? 20 : 5);
+  if (sol.paraW > 0.002) paraPose(sol, sol.paraW, s.time + sol.seed * 40);
+}
+
+const _pq = new THREE.Quaternion();
+const _pe = new THREE.Euler();
+function blendBone(b: THREE.Object3D, x: number, y: number, z: number, k: number) {
+  _pq.setFromEuler(_pe.set(x, y, z, b.rotation.order));
+  b.quaternion.slerp(_pq, k);
+}
+const _wp = new THREE.Vector3();
+const _wq = new THREE.Quaternion();
+
+/**
+ * Under canopy: both hands up on the risers, legs together and dangling (a slow
+ * kick as the jumper sways), weapon strapped muzzle-down across the chest,
+ * head down watching the drop zone. Weighted so landing blends back to the
+ * ground pose (knees soak up the touchdown).
+ */
+function paraPose(sol: Sol, k: number, t: number) {
+  const kick = Math.sin(t * 2.1) * 0.1;
+  blendBone(sol.thL, 0.02, 0, 0.2 + kick, k);
+  blendBone(sol.thR, -0.02, 0, 0.1 - kick, k);
+  blendBone(sol.shL, 0, 0, -0.34, k);
+  blendBone(sol.shR, 0, 0, -0.46, k);
+  blendBone(sol.ftL, 0, 0, -0.3, k);
+  blendBone(sol.ftR, 0, 0, -0.24, k);
+  blendBone(sol.uaR, -0.32, 0, 2.7, k);
+  blendBone(sol.faR, 0, 0, 0.4, k);
+  blendBone(sol.uaL, 0.32, 0, 2.7, k);
+  blendBone(sol.faL, 0, 0, 0.4, k);
+  blendBone(sol.spine, 0, 0, 0.08, k);
+  blendBone(sol.head, 0, 0, -0.3, k);
+  const w = sol.def.w;
+  if (w && sol.wpn) {
+    _wp.copy(sol.wpn.position);
+    _wq.copy(sol.wpn.quaternion);
+    placeWeapon(sol, w, 0.15, 0.22, 0.04, -1.3, 0.2, 0.25, 0);
+    sol.wpn.position.lerp(_wp, 1 - k);
+    sol.wpn.quaternion.slerp(_wq, 1 - k);
+  }
+}
+
+function animSoldierBase(sol: Sol, s: AnimState) {
   const role = sol.def.role;
   const w = sol.def.w;
   const t = s.time + sol.seed * 40;

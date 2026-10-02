@@ -51,6 +51,10 @@ export interface AnimState {
   powered: boolean; // buildings: false when the owner is low on power
   /** Ground vehicles: terrain roughness under the hull, 0 (bridge / smooth) .. 1 (ore field, broken ground); set by the renderer's unit pose (render/unitpose.ts). */
   rough?: number;
+  /** Airlift transports: ramp door target, 0 closed .. 1 open (the model eases towards it). */
+  ramp?: number;
+  /** Infantry: 1 while hanging under a parachute canopy, 0 on the ground (the model blends its pose). */
+  para?: number;
 }
 
 export interface Model {

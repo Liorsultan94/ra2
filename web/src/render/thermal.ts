@@ -42,7 +42,17 @@ function heatMatcap(): THREE.DataTexture {
 let sharedHeatMat: THREE.MeshMatcapMaterial | null = null;
 /** Override material for the heat mask pass. */
 export function heatMaterial(): THREE.MeshMatcapMaterial {
-  if (!sharedHeatMat) sharedHeatMat = new THREE.MeshMatcapMaterial({ matcap: heatMatcap(), color: 0xffffff, fog: false });
+  if (!sharedHeatMat) {
+    const m = new THREE.MeshMatcapMaterial({ matcap: heatMatcap(), color: 0xffffff, fog: false });
+    // models face +X: the engine deck / exhausts at the rear and the running gear low down run hottest
+    m.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vHeatPos;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvHeatPos = position;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vHeatPos;')
+        .replace('#include <opaque_fragment>', 'outgoingLight *= 0.62 + 0.42 * smoothstep(0.1, -0.45, vHeatPos.x) + 0.16 * smoothstep(0.1, 0.0, vHeatPos.y);\n#include <opaque_fragment>');
+    };
+    sharedHeatMat = m;
+  }
   return sharedHeatMat;
 }
 
@@ -99,17 +109,19 @@ float heatAt(vec2 uv) {
   vec3 c = srcColor(uv);
   float l = dot(c, vec3(0.3, 0.59, 0.11));
   // cool world: compressed grey range keeps the terrain readable
-  float cold = 0.07 + 0.36 * l;
+  float cold = 0.05 + 0.5 * pow(l, 1.15);
   // fire, explosions, tracers, muzzle flashes, lit windows: hot orange-yellow-white
   float warm = smoothstep(0.22, 0.6, c.r - c.b) * smoothstep(0.5, 0.95, c.r);
   float white = smoothstep(0.86, 1.0, min(c.r, min(c.g, c.b))) * 0.75;
   float v = max(cold, max(warm, white));
-  // hot bodies: blurred mask so engines bloom a little
+  // hot bodies: blurred mask so engines bloom a little; the visible image adds surface detail
   vec2 px = 1.0 / res;
-  float h = texture2D(tHeat, uv).r * 0.6
+  float h0 = texture2D(tHeat, uv).r;
+  float h = h0 * 0.6
     + (texture2D(tHeat, uv + vec2(px.x * 2.0, 0.0)).r + texture2D(tHeat, uv - vec2(px.x * 2.0, 0.0)).r
      + texture2D(tHeat, uv + vec2(0.0, px.y * 2.0)).r + texture2D(tHeat, uv - vec2(0.0, px.y * 2.0)).r) * 0.1;
-  v = max(v, 0.25 + h * 0.78);
+  float body = 0.3 + h * 0.5 + (l - 0.35) * 0.45 * step(0.02, h0);
+  v = max(v, body);
   return v;
 }
 float thermal(vec2 uv) {

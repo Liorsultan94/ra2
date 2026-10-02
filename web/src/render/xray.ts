@@ -45,9 +45,9 @@ void main() {
   gl_FragColor = vec4(color * (0.75 + 0.6 * r), a);
 }`;
 
-function xrayMaterial(color: number, opacity: number): THREE.ShaderMaterial {
+function xrayMaterial(color: THREE.Color, opacity: number, bias: number, time: { value: number }): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { color: { value: new THREE.Color(color) }, opacity: { value: opacity }, bias: { value: 0.32 }, time: { value: 0 } },
+    uniforms: { color: { value: color }, opacity: { value: opacity }, bias: { value: bias }, time },
     vertexShader: XRAY_VERT,
     fragmentShader: XRAY_FRAG,
     transparent: true,
@@ -66,8 +66,8 @@ interface Tagged {
   hot: THREE.Mesh[];
 }
 
-/** Largest few meshes of a model (by bounding radius), skipping transparent / effect parts. */
-function mainMeshes(root: THREE.Object3D, max: number): THREE.Mesh[] {
+/** Solid meshes of a model, largest first (by bounding radius), skipping transparent / effect parts. */
+function solidMeshes(root: THREE.Object3D): { m: THREE.Mesh; r: number }[] {
   const list: { m: THREE.Mesh; r: number }[] = [];
   root.traverse((o) => {
     const m = o as THREE.Mesh;
@@ -80,28 +80,45 @@ function mainMeshes(root: THREE.Object3D, max: number): THREE.Mesh[] {
     list.push({ m, r: (m.geometry.boundingSphere?.radius ?? 0) * Math.max(s.x, s.y, s.z) });
   });
   list.sort((a, b) => b.r - a.r);
-  return list.slice(0, max).map((x) => x.m);
+  return list;
 }
+const box = new THREE.Box3();
+const boxSize = new THREE.Vector3();
 
 export class UnitTagger {
   /** X-ray silhouettes on / off (heat tagging always runs). */
   xray = true;
-  private own: THREE.ShaderMaterial;
-  private enemy: THREE.ShaderMaterial;
+  private ownColor: THREE.Color;
+  private enemyColor = new THREE.Color(0xff3a2a);
+  private time = { value: 0 };
+  /** Materials by side and depth bias step. */
+  private mats = new Map<string, THREE.ShaderMaterial>();
   private tagged = new Map<number, Tagged>();
   private seen = new Set<number>();
 
   constructor(teamColor: number) {
     // brighten the team colour a little so it reads over dark roofs and canopies
-    const c = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.25);
-    this.own = xrayMaterial(c.getHex(), 0.85);
-    this.enemy = xrayMaterial(0xff3a2a, 0.55);
+    this.ownColor = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.25);
+  }
+
+  /**
+   * The silhouette is pulled towards the camera by about the model's own size, so the model's
+   * parts never x-ray through each other (a container on a truck bed, a turret over the hull).
+   */
+  private material(own: boolean, radius: number): THREE.ShaderMaterial {
+    const step = Math.round(Math.max(0.3, Math.min(1.6, radius)) * 10);
+    const key = `${own ? 'o' : 'e'}${step}`;
+    let m = this.mats.get(key);
+    if (!m) {
+      m = own ? xrayMaterial(this.ownColor, 0.85, step / 10, this.time) : xrayMaterial(this.enemyColor, 0.55, step / 10, this.time);
+      this.mats.set(key, m);
+    }
+    return m;
   }
 
   /** Called once per frame with the renderer's live visuals. */
   update(visuals: Iterable<{ id: number; owner: number; def: string; model: { root: THREE.Object3D }; visible: boolean }>, viewer: number, isUnit: (def: string) => boolean, time: number) {
-    this.own.uniforms.time.value = time;
-    this.enemy.uniforms.time.value = time;
+    this.time.value = time;
     const seen = this.seen;
     seen.clear();
     for (const v of visuals) {
@@ -113,7 +130,7 @@ export class UnitTagger {
         t = undefined;
       }
       if (!t) {
-        t = this.tag(v.model.root, viewer >= 0 && v.owner >= 0 ? (v.owner === viewer ? this.own : this.enemy) : null);
+        t = this.tag(v.model.root, viewer >= 0 && v.owner >= 0 ? v.owner === viewer : null);
         this.tagged.set(v.id, t);
       }
       for (const p of t.proxies) p.visible = this.xray;
@@ -126,12 +143,19 @@ export class UnitTagger {
     }
   }
 
-  private tag(root: THREE.Object3D, mat: THREE.ShaderMaterial | null): Tagged {
-    const hot = mainMeshes(root, 4);
+  private tag(root: THREE.Object3D, own: boolean | null): Tagged {
+    const solid = solidMeshes(root);
+    const hot = solid.map((x) => x.m);
+    for (const m of hot) m.layers.enable(HEAT_LAYER);
     const proxies: THREE.Mesh[] = [];
-    for (const m of hot) {
-      m.layers.enable(HEAT_LAYER);
-      if (!mat) continue;
+    if (own === null) return { root, proxies, hot };
+    box.setFromObject(root);
+    const radius = box.isEmpty() ? 0.4 : box.getSize(boxSize).length() * 0.5;
+    const mat = this.material(own, radius * 0.95);
+    let n = 0;
+    for (const { m } of solid) {
+      if ((m as THREE.InstancedMesh).isInstancedMesh || (m as THREE.SkinnedMesh).isSkinnedMesh) continue;
+      if (++n > 4) break;
       const p = new THREE.Mesh(m.geometry, mat);
       (p as unknown as { isXray: boolean }).isXray = true;
       p.renderOrder = 30;
@@ -153,7 +177,7 @@ export class UnitTagger {
   dispose() {
     for (const t of this.tagged.values()) this.untag(t, true);
     this.tagged.clear();
-    this.own.dispose();
-    this.enemy.dispose();
+    for (const m of this.mats.values()) m.dispose();
+    this.mats.clear();
   }
 }
