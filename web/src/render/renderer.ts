@@ -247,6 +247,7 @@ export class GameRenderer {
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
     this.effects.setView(this.target, this.camera);
+    this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
     this.overlay = new CombatOverlay(map);
     this.scene.add(this.overlay.group);
@@ -296,6 +297,7 @@ export class GameRenderer {
       // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
       if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
       this.finalPass.haze = this.effects.enableHaze(this.camera);
+      this.finalPass.rays = this.effects.enableGodRays(this.camera);
     }
     this.applyLevel(this.level, false);
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
@@ -331,6 +333,7 @@ export class GameRenderer {
     const s = this.ladder[level];
     if (!s) return;
     this.level = level;
+    this.terrain.setLadder(level / Math.max(1, this.ladder.length - 1));
     if (Math.abs(this.renderer.getPixelRatio() - s.pr) > 0.001) {
       this.renderer.setPixelRatio(s.pr);
       if (doResize) this.resize(this.width, this.height);

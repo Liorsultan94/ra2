@@ -106,6 +106,12 @@ export class Outskirts {
     mesh.position.y = terrainWater!.position.y;
     mesh.renderOrder = terrainWater!.renderOrder;
     mesh.name = 'outskirts-water';
+    // planar reflection (high): hidden while the mirrored view renders; either water mesh can trigger it
+    const refl = terrainWater!.userData.waterReflection as { meshes: THREE.Mesh[]; hook: THREE.Object3D['onBeforeRender'] } | null | undefined;
+    if (refl) {
+      refl.meshes.push(mesh);
+      mesh.onBeforeRender = refl.hook;
+    }
     this.group.add(mesh);
   }
 

@@ -134,6 +134,30 @@ function sparkMat() {
   return sparkMatC;
 }
 
+let glassMatC: THREE.PointsMaterial | null = null;
+/** Additive glints for falling glass shards. */
+function glassMat() {
+  if (!glassMatC) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 32;
+    const c = cv.getContext('2d')!;
+    // a small four point star: reads as a glint, not a spark
+    const g = c.createRadialGradient(16, 16, 0, 16, 16, 16);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.25, 'rgba(210,235,255,0.6)');
+    g.addColorStop(1, 'rgba(160,200,255,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 32, 32);
+    c.fillStyle = 'rgba(255,255,255,0.8)';
+    c.fillRect(15, 2, 2, 28);
+    c.fillRect(2, 15, 28, 2);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    glassMatC = new THREE.PointsMaterial({ size: 4, map: t, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, sizeAttenuation: true });
+  }
+  return glassMatC;
+}
+
 let netTexC: THREE.Texture | null = null;
 function netTex() {
   if (netTexC) return netTexC;
@@ -1084,13 +1108,6 @@ function buildOverlay(an: Analysis, rec: FxRec, info: FxInfo, v: number, tier: n
     const yt = Math.min(y0 + wh + 0.08 + r() * 0.12, Math.max(y0 + wh + 0.03, roofH - 0.004));
     B.vdecal(dm, nx, nz, x + nx * 0.006, yb, z + nz * 0.006, sw, yt - yb, 0, r() > 0.5);
   };
-  const broken = (g: number) => {
-    const o = segs[g * 4] * 7;
-    const [cx, y0, cz, nx, nz, , wh] = [W[o], W[o + 1], W[o + 2], W[o + 3], W[o + 4], W[o + 5], W[o + 6]];
-    const bw = segs[g * 4 + 2] * 1.05;
-    const off = segs[g * 4 + 1];
-    B.vdecal(dm, nx, nz, cx + nz * off + nx * 0.005, y0 - wh * 0.05, cz - nx * off + nz * 0.005, bw, wh * 1.1, 2, r() > 0.5);
-  };
   const nSeg = segs.length / 4;
   // crack on an exposed wall face
   const walls = rec.walls;
@@ -1176,7 +1193,7 @@ function buildOverlay(an: Analysis, rec: FxRec, info: FxInfo, v: number, tier: n
       for (let i = 0; i < nSeg; i++) {
         const sv = segs[i * 4 + 3];
         if (sv >= 0.35 && sv < 0.75) soot(i);
-        if (h01(i + 7.3, p.seed) < 0.4) broken(i);
+
       }
       const h = p.holes[0];
       if (h) {
@@ -1257,6 +1274,8 @@ function buildOverlay(an: Analysis, rec: FxRec, info: FxInfo, v: number, tier: n
 const VERT_HEAD = 'uniform mat4 bxInv;\nvarying vec3 vBxP;';
 const FRAG_HEAD = `uniform float bxClip;
 uniform float bxSoot;
+uniform float bxHit;
+uniform float bxSeed;
 uniform vec4 bxR[4];
 uniform vec4 bxP[4];
 varying vec3 vBxP;
@@ -1293,6 +1312,108 @@ float bxK = 0.0;
     }
   }
 }`;
+/*
+ * Small arms damage on walls (vertical faces only, building space, so it is
+ * deterministic per instance via bxSeed): clustered bullet holes with a
+ * chipped light rim, and fewer larger spalled patches (shrapnel / cannon).
+ * Density follows bxHit (0 at D_ON .. 1 near destruction).
+ */
+const HOLES_GLSL = /* glsl */ `
+vec3 hfn = normalize( cross( dFdx( vBxP ), dFdy( vBxP ) ) );
+if ( abs( hfn.y ) < 0.5 ) {
+  bool hX = abs( hfn.x ) > abs( hfn.z );
+  vec2 wp = vec2( hX ? vBxP.z : vBxP.x, vBxP.y );
+  float fid = ( hX ? 3.0 : 7.0 ) + sign( hX ? hfn.x : hfn.z ) + bxSeed;
+  // bursts: holes cluster where a burst hit
+  float clus = bxV( vec3( wp * 3.2, fid * 1.7 ) );
+  vec2 cg = wp * 15.0;
+  vec2 ci = floor( cg );
+  vec3 hk = vec3( ci, fid );
+  float hr = bxH( hk );
+  if ( hr < bxHit * smoothstep( 0.62 - bxHit * 0.3, 0.9 - bxHit * 0.2, clus ) * 0.75 ) {
+    vec2 dv = cg - ci - ( vec2( bxH( hk + 3.1 ), bxH( hk + 7.7 ) ) * 0.5 + 0.25 );
+    float d = length( dv );
+    float rr = 0.09 + 0.07 * bxH( hk + 1.3 );
+    float jag = 1.0 + 0.3 * sin( atan( dv.y, dv.x ) * 5.0 + hr * 40.0 );
+    float chip = 1.0 - smoothstep( rr * 2.0 * jag, rr * 2.7 * jag, d );
+    float hole = 1.0 - smoothstep( rr * 0.7, rr, d );
+    outgoingLight = mix( outgoingLight, vec3( bxL2 * 1.3 + 0.008 ) * vec3( 1.0, 0.96, 0.9 ), chip * 0.5 );
+    outgoingLight *= 1.0 - hole * 0.88;
+  }
+  // larger spalled chips
+  vec2 cg2 = wp * 5.0;
+  vec2 ci2 = floor( cg2 );
+  vec3 hk2 = vec3( ci2, fid + 11.0 );
+  if ( bxH( hk2 ) < bxHit * 0.32 ) {
+    vec2 dv2 = cg2 - ci2 - ( vec2( bxH( hk2 + 2.3 ), bxH( hk2 + 5.9 ) ) * 0.4 + 0.3 );
+    float n2 = bxV( vec3( wp * 40.0, fid ) );
+    float d2 = length( dv2 ) + ( n2 - 0.5 ) * 0.14;
+    float r2 = 0.12 + 0.12 * bxH( hk2 + 9.1 );
+    float spall = 1.0 - smoothstep( r2 * 0.85, r2, d2 );
+    float rim = smoothstep( r2 * 0.7, r2 * 0.95, d2 ) * spall;
+    float pit = 1.0 - smoothstep( r2 * 0.2, r2 * 0.45, d2 );
+    vec3 raw = vec3( bxL2 * 1.15 + 0.01 ) * vec3( 0.98, 0.95, 0.9 ) * ( 0.8 + n2 * 0.4 );
+    outgoingLight = mix( outgoingLight, raw, spall * 0.75 );
+    outgoingLight *= ( 1.0 - rim * 0.45 ) * ( 1.0 - pit * 0.6 );
+  }
+}
+`;
+
+/*
+ * Window panes (the lit window materials; their uv grid is 8 x 4 cells with
+ * two half panes per cell): with damage, half panes crack into a spider web
+ * around a bullet hole, then shatter out leaving jagged shards at the frame.
+ * The pane centre is rebuilt from screen derivatives so every half pane
+ * gets its own stable state.
+ */
+const GLASS_GLSL = /* glsl */ `
+#ifdef USE_MAP
+vec2 wg = vMapUv * vec2( 8.0, 4.0 );
+vec2 wf = fract( wg );
+vec2 gx = dFdx( wg );
+vec2 gy = dFdy( wg );
+float gdet = gx.x * gy.y - gx.y * gy.x;
+float side = step( 0.5, wf.x );
+vec2 lq = vec2( ( wf.x - mix( 0.12, 0.525, side ) ) / 0.355, ( wf.y - 0.18 ) / 0.68 );
+if ( abs( gdet ) > 1e-14 && lq.x > 0.0 && lq.x < 1.0 && lq.y > 0.0 && lq.y < 1.0 ) {
+  vec3 px = dFdx( vBxP );
+  vec3 py = dFdy( vBxP );
+  vec3 dPdu = ( gy.y * px - gx.y * py ) / gdet;
+  vec3 dPdv = ( gx.x * py - gy.x * px ) / gdet;
+  vec3 pc = vBxP - dPdu * ( wf.x - mix( 0.2975, 0.7025, side ) ) - dPdv * ( wf.y - 0.52 );
+  vec3 pk = floor( pc * 50.0 + 0.5 ) + bxSeed;
+  float r = bxH( pk );
+  vec3 voidC = vec3( 0.006, 0.006, 0.007 );
+  if ( r < bxHit * 0.42 ) {
+    // pane gone: dark interior, jagged teeth of glass left in the frame
+    float e = min( min( lq.x, 1.0 - lq.x ), min( lq.y, 1.0 - lq.y ) );
+    float per = ( min( lq.x, 1.0 - lq.x ) < min( lq.y, 1.0 - lq.y ) ) ? lq.y * 1.9 : lq.x;
+    float tk = per * 4.0 + r * 13.0;
+    float tooth = ( 1.0 - abs( fract( tk ) * 2.0 - 1.0 ) ) * ( 0.05 + 0.3 * bxH( vec3( floor( tk ), r, 3.0 ) ) );
+    float glassK = step( e, tooth );
+    outgoingLight = mix( voidC, outgoingLight * 0.8 + vec3( 0.05, 0.06, 0.065 ) * bxL2, glassK );
+  } else if ( r < bxHit * 0.95 ) {
+    // bullet hole with radial and ring cracks
+    vec2 ip = vec2( bxH( pk + 1.7 ), bxH( pk + 4.3 ) ) * 0.6 + 0.2;
+    vec2 dv = ( lq - ip ) * vec2( 1.0, 1.9 );
+    float d = length( dv );
+    float a = atan( dv.y, dv.x ) / 6.2832 + 0.5;
+    float h3 = bxH( pk + 8.9 );
+    float rh = ( 0.05 + 0.07 * h3 ) * ( 0.75 + 0.5 * bxH( vec3( floor( a * 9.0 ), r, 5.0 ) ) );
+    float spokes = 6.0 + floor( h3 * 4.0 );
+    float sd = abs( fract( a * spokes + h3 * 3.0 ) - 0.5 ) / spokes * 6.2832 * d;
+    float ringI = floor( d * 7.0 );
+    float rd = abs( fract( d * 7.0 ) - 0.5 ) / 7.0;
+    float ringOn = step( 0.45, bxH( vec3( floor( a * spokes + h3 * 3.0 ), ringI, 7.0 ) ) ) * step( d, 0.5 );
+    float lw = 0.012 + fwidth( d ) * 0.6;
+    float crack = max( 1.0 - smoothstep( lw * 0.5, lw, sd ), ( 1.0 - smoothstep( lw * 0.5, lw, rd ) ) * ringOn ) * ( 1.0 - smoothstep( 0.35, 1.1, d ) );
+    outgoingLight = mix( outgoingLight, vec3( 0.32, 0.36, 0.38 ) * ( 0.4 + bxL2 * 2.0 ), crack * 0.75 );
+    outgoingLight = mix( outgoingLight, voidC, 1.0 - smoothstep( rh * 0.85, rh, d ) );
+  }
+}
+#endif
+`;
+
 const FRAG_LIGHT = `
 {
   float bxB = 1.0 - smoothstep( 0.0, 0.035, bxClip - vBxP.y );
@@ -1306,6 +1427,14 @@ const FRAG_LIGHT = `
     bxS = bxSoot * smoothstep( 0.7 - 0.28 * bxSoot, 0.95 - 0.2 * bxSoot, n ) * smoothstep( 0.045, 0.1, vBxP.y );
   }
   outgoingLight *= ( 1.0 - 0.62 * bxS ) * ( 1.0 - 0.8 * bxK );
+  if ( bxHit > 0.0 && vBxP.y > 0.05 ) {
+    float bxL2 = dot( outgoingLight, vec3( 0.3, 0.59, 0.11 ) );
+    #ifdef BX_GLASS
+    ${GLASS_GLSL}
+    #else
+    ${HOLES_GLSL}
+    #endif
+  }
   #ifdef BX_FRONT
   // inside faces seen through a cut / the open top: the interior is in shade
   if ( ! gl_FrontFacing ) outgoingLight *= 0.38;
@@ -1316,6 +1445,8 @@ interface BxUniforms {
   bxInv: { value: THREE.Matrix4 };
   bxClip: { value: number };
   bxSoot: { value: number };
+  bxHit: { value: number };
+  bxSeed: { value: number };
   bxR: { value: THREE.Vector4[] };
   bxP: { value: THREE.Vector4[] };
   [k: string]: THREE.IUniform;
@@ -1332,6 +1463,8 @@ function cloneFor(real: Mat, U: BxUniforms): Mat {
   const c = real.clone();
   c.side = THREE.DoubleSide;
   if (real.side === THREE.FrontSide) c.defines = { ...(c.defines ?? {}), BX_FRONT: '' };
+  // lit window panes shatter instead of collecting bullet holes
+  if ((real as THREE.MeshStandardMaterial).emissiveMap && real.userData.baseEI) c.defines = { ...(c.defines ?? {}), BX_GLASS: '' };
   c.shadowSide = real.shadowSide ?? (real.side === THREE.FrontSide ? THREE.BackSide : real.side);
   const prevKey = real.customProgramCacheKey();
   c.onBeforeCompile = (sh, r) => {
@@ -1370,6 +1503,13 @@ export class BuildFx {
   private sparkPos: Float32Array | null = null;
   private tiers: (THREE.Object3D | null)[] = [null, null, null, null];
   private seed = 0;
+  /** Falling glass shards when windows break (lazily created, shared material). */
+  private shards: THREE.Points | null = null;
+  private shardT0 = -1;
+  private shardAt = new THREE.Vector3();
+  private shardN = new THREE.Vector2();
+  private shardD = -1;
+  private shardK = 0;
   private obr: (r: THREE.WebGLRenderer, s: THREE.Scene, c: THREE.Camera, g: THREE.BufferGeometry, m: Mat) => void;
 
   constructor(
@@ -1405,6 +1545,9 @@ export class BuildFx {
         this.root.remove(this.fxRoot);
         this.fxRoot = null;
         this.tiers.fill(null);
+        this.shards?.geometry.dispose();
+        this.shards = null;
+        this.shardT0 = -1;
       }
     }
   }
@@ -1445,6 +1588,8 @@ export class BuildFx {
         bxInv: { value: new THREE.Matrix4() },
         bxClip: { value: 99 },
         bxSoot: { value: 0 },
+        bxHit: { value: 0 },
+        bxSeed: { value: (this.seed % 997) * 0.731 },
         bxR: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(1, 1, 0, 0)) },
         bxP: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(99, 0, 0, 0)) },
       };
@@ -1633,6 +1778,69 @@ export class BuildFx {
     if (this.U) this.U.bxClip.value = 99;
   }
 
+  // ------------------------------------------------------------ glass
+  /**
+   * A brief burst of glinting shards from a window whenever the damage has
+   * grown enough for more panes to break (the shader breaks them by bxHit).
+   */
+  private glassFx(s: AnimState) {
+    const W = this.tpl.rec.wins;
+    const d = s.damage;
+    if (!W.length || s.built < 1) return;
+    if (this.shardD < 0 || d < this.shardD - 0.1) this.shardD = d;
+    const t = s.time;
+    if (d >= this.shardD + 0.07) {
+      this.shardD = d;
+      const n = W.length / 7;
+      const i = Math.floor(h01(this.shardK++ * 3.7 + 0.3, this.seed % 1000) * n) * 7;
+      const off = (h01(this.shardK, 7.1) - 0.5) * W[i + 5] * 0.8;
+      this.shardAt.set(W[i] + W[i + 4] * off + W[i + 3] * 0.01, W[i + 1] + W[i + 6] * 0.6, W[i + 2] - W[i + 3] * off + W[i + 4] * 0.01);
+      this.shardN.set(W[i + 3], W[i + 4]);
+      this.shardT0 = t;
+    }
+    const age = this.shardT0 < 0 ? 99 : t - this.shardT0;
+    const LIFE = 0.9;
+    if (age > LIFE) {
+      if (this.shards) this.shards.visible = false;
+      return;
+    }
+    const N = 18;
+    if (!this.shards) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3).setUsage(THREE.DynamicDrawUsage));
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * 3), 3).setUsage(THREE.DynamicDrawUsage));
+      g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 4);
+      this.shards = new THREE.Points(g, glassMat());
+      this.shards.onBeforeRender = (_r, _s, cam) => {
+        glassMat().size = (cam as THREE.PerspectiveCamera).isPerspectiveCamera ? 0.09 : 3.5;
+      };
+      this.shards.frustumCulled = false;
+      this.shards.renderOrder = 3;
+      this.fx().add(this.shards);
+    }
+    this.shards.visible = true;
+    const P = this.shards.geometry.attributes.position as THREE.BufferAttribute;
+    const C = this.shards.geometry.attributes.color as THREE.BufferAttribute;
+    const { x: nx, y: nz } = this.shardN;
+    const k = this.shardK;
+    const fade = 1 - age / LIFE;
+    for (let i = 0; i < N; i++) {
+      const out = 0.12 + h01(i, k) * 0.35;
+      const side = (h01(i + 0.5, k) - 0.5) * 0.5;
+      const up = h01(i + 0.25, k + 3) * 0.35;
+      const x = this.shardAt.x + (nx * out + nz * side) * age;
+      const z = this.shardAt.z + (nz * out - nx * side) * age;
+      const y = Math.max(Y0, this.shardAt.y + up * age - 2.6 * age * age);
+      P.setXYZ(i, x, y, z);
+      // tumbling shards catch the light now and then
+      const glint = Math.max(0, Math.sin(t * (18 + h01(i, 9) * 20) + i * 1.7)) ** 3;
+      const b = fade * (0.25 + 1.6 * glint);
+      C.setXYZ(i, b * 0.85, b * 0.95, b);
+    }
+    P.needsUpdate = true;
+    C.needsUpdate = true;
+  }
+
   // ------------------------------------------------------------ damage
   private damage(s: AnimState) {
     const d = s.damage;
@@ -1650,6 +1858,8 @@ export class BuildFx {
       }
     }
     U.bxSoot.value = 0.85 * smooth(0.2, 0.95, d);
+    U.bxHit.value = s.built >= 1 ? 0.15 + 0.85 * smooth(D_ON, 0.9, d) : 0;
+    this.glassFx(s);
     // overlays (lazily built per template variant and tier)
     for (let k = 0; k < 4; k++) {
       const on = d >= TIER[k] && s.built >= 1;
