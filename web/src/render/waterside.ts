@@ -76,7 +76,7 @@ export function boatGeometry(kind: 'row' | 'fish'): THREE.BufferGeometry {
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const y = pos.getY(i);
-    const t = (x / L + 0.5) ** 2.2;
+    const t = Math.max(0, Math.min(1, x / L + 0.5)) ** 2.2;
     let z = pos.getZ(i) * (1 - t * 0.92);
     if (y < 0) z *= 0.55;
     pos.setZ(i, z);

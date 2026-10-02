@@ -176,6 +176,7 @@ const DOME_FRAG = /* glsl */ `
     #else
     n += 0.07;
     #endif
+    n = ( n - 0.5 ) * 2.2 + 0.5; // the summed octaves are low-contrast: stretch them
     float c = 1.0 - uCover;
     return smoothstep( c * 0.6 + 0.15, c * 0.6 + 0.45, n );
   }

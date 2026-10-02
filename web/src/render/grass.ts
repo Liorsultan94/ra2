@@ -253,7 +253,7 @@ export class GrassBlades {
       gcFresh: sh.gcFresh,
       gcClover: sh.gcClover,
     };
-    const mat = (this.mat = new THREE.MeshStandardMaterial({ roughness: 0.82, metalness: 0, side: THREE.DoubleSide }));
+    const mat = (this.mat = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: THREE.DoubleSide }));
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
