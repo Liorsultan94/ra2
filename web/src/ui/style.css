@@ -2070,3 +2070,91 @@ input[type='range'] {
 .drop-marker.hidden {
   display: none;
 }
+
+/* main menu: Quick Battle shows the nation it starts with */
+.mbtn small.qb-nation {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  letter-spacing: 0.04em;
+}
+.mbtn small.qb-nation .flag {
+  width: 18px;
+  height: 12px;
+}
+
+/* skirmish setup on phones (landscape): every nation visible at once, the options in one row,
+   Deploy always on screen */
+@media (max-height: 560px) {
+  .skirmish h2 {
+    margin-bottom: 6px;
+    font-size: 17px;
+  }
+  .skirmish .fgrid {
+    grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
+    gap: 6px;
+  }
+  .skirmish .fcard {
+    justify-content: center;
+    min-height: 46px;
+    padding: 6px 10px;
+  }
+  .skirmish .fc-head {
+    font-size: 16px;
+  }
+  .skirmish .fc-doc,
+  .skirmish .fc-sig {
+    display: none;
+  }
+  .skirmish .fcard.sel .fc-doc {
+    display: block;
+    margin: 2px 0 0;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  .skirmish .opts {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 6px;
+  }
+  /* the only map: no need to show the (disabled) picker on a small screen */
+  .skirmish .opts label:has(select:disabled) {
+    display: none;
+  }
+  .skirmish .opts label {
+    font-size: 11px;
+  }
+  .skirmish .opts select {
+    min-height: 40px;
+  }
+  .skirmish .row .mbtn {
+    min-height: 48px;
+  }
+}
+
+/* settings on phones (landscape): two columns so everything fits without scrolling far */
+@media (max-height: 560px) and (orientation: landscape) {
+  .settings {
+    width: min(820px, 96vw);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 18px;
+    align-items: start;
+  }
+  .settings h2,
+  .settings .note,
+  .settings .row {
+    grid-column: 1 / -1;
+  }
+  .settings h2 {
+    margin-bottom: 0;
+  }
+  .settings label {
+    font-size: 12px;
+  }
+  .settings select {
+    min-height: 40px;
+  }
+}

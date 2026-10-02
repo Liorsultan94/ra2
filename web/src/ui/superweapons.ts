@@ -105,7 +105,8 @@ export class SuperweaponPower {
       const pr = this.press;
       if (!pr || pr.id !== e.pointerId) return;
       e.stopPropagation();
-      if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) > 9) pr.moved = true;
+      // fingers jitter: a touch has to travel further before it counts as a drag (pan)
+      if (!pr.moved && Math.hypot(p.x - pr.x, p.y - pr.y) > (e.pointerType === 'touch' ? 18 : 9)) pr.moved = true;
       if (pr.moved) this.host.renderer.panDrag(pr.lx, pr.ly, p.x, p.y);
       pr.lx = p.x;
       pr.ly = p.y;

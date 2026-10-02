@@ -23,12 +23,22 @@ export interface Settings {
   droneCam: 'auto' | 'off';
   /** Team-coloured silhouettes of units hidden behind buildings and trees. */
   xray: boolean;
+  /**
+   * Control scheme: 'simple' (phones: tap = select / move, big ARMY button, decluttered HUD)
+   * or 'advanced' (the full RTS command set; mouse and keyboard always work the same).
+   */
+  controls: 'simple' | 'advanced';
+}
+
+/** Default control scheme: simple on touch screens, advanced with a mouse. */
+export function defaultControls(): Settings['controls'] {
+  return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced';
 }
 
 const KEY = 'ironfront.settings.v1';
 
 export function loadSettings(): Settings {
-  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true };
+  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true, controls: defaultControls() };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...def, ...JSON.parse(raw) };
@@ -104,13 +114,16 @@ export class MainMenu {
           <div class="logo-sub">MODERN WARFARE · REAL-TIME STRATEGY</div>
         </div>
         <div class="menu-buttons">
-          <button class="mbtn primary" data-a="skirmish">Skirmish vs AI</button>
+          <button class="mbtn primary" data-a="quick">Quick Battle <small class="qb-nation">${flagHtml(this.settings.faction)}${FACTIONS.find((f) => f.id === this.settings.faction)?.name ?? ''}</small></button>
+          <button class="mbtn" data-a="skirmish">Skirmish Setup</button>
           <button class="mbtn" disabled title="Coming in the next update">Online Multiplayer <small>soon</small></button>
           <button class="mbtn" data-a="howto">How to Play</button>
           <button class="mbtn" data-a="settings">Settings</button>
         </div>
         <div class="menu-foot">Original fan project inspired by classic RTS games. All art and sound are procedurally generated.</div>
       </div>`);
+    // one tap into a battle with the last skirmish settings
+    s.querySelector('[data-a=quick]')!.addEventListener('click', () => this.handlers.onStart(this.settings));
     s.querySelector('[data-a=skirmish]')!.addEventListener('click', () => this.showSkirmish());
     s.querySelector('[data-a=howto]')!.addEventListener('click', () => this.showHowTo(() => this.showTitle()));
     s.querySelector('[data-a=settings]')!.addEventListener('click', () => this.showSettings(() => this.showTitle()));
@@ -196,13 +209,17 @@ export class MainMenu {
               <li><kbd>Arrows</kbd> / screen edge scroll · <kbd>Wheel</kbd> zoom</li>
               <li>Shift+click a build icon to queue 5 · right-click to cancel</li>
             </ul>
-            <h3>Touch</h3>
+            <h3>Touch (Simple controls)</h3>
             <ul class="keys">
-              <li><kbd>Tap</kbd> select / command · <kbd>Drag</kbd> scroll</li>
-              <li><kbd>Long-press + drag</kbd> box select (or the box tool)</li>
-              <li><kbd>Pinch</kbd> zoom · long-press a build icon to cancel</li>
-              <li>Rotate buttons (top right) turn the view · tap to skip a cinematic</li>
+              <li><kbd>Tap a unit</kbd> select it · <kbd>Double-tap</kbd> all of its type on screen</li>
+              <li><kbd>Tap the map</kbd> move there · tap an enemy to attack</li>
+              <li><kbd>ARMY</kbd> select every combat unit · <kbd>ON SCREEN</kbd> the ones you see</li>
+              <li><kbd>BOX</kbd> then drag to box-select · <kbd>CLEAR</kbd> deselect</li>
+              <li><kbd>Drag</kbd> scroll · <kbd>Pinch</kbd> zoom · long-press a build icon to cancel</li>
+              <li><kbd>MORE</kbd> stances, patrol, escort, groups, rotate / thermal view</li>
+              <li>Build: tap an icon, when it is READY tap it, tap the map, tap the building again</li>
             </ul>
+            <p class="note">Settings → Controls: Advanced brings back long-press box select and the full command bar.</p>
           </div>
         </div>
         <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
@@ -230,6 +247,7 @@ function settingsHtml(st: Settings) {
   return `
     <div class="panel settings">
       <h2>Settings</h2>
+      <label>Controls<select data-s="controls"><option value="simple"${st.controls === 'simple' ? ' selected' : ''}>Simple (tap to select, tap to move)</option><option value="advanced"${st.controls !== 'simple' ? ' selected' : ''}>Advanced (all RTS orders)</option></select></label>
       <label>Sound effects<input type="range" min="0" max="1" step="0.05" data-s="sfx" value="${st.sfx}"></label>
       <label>Music<input type="range" min="0" max="1" step="0.05" data-s="music" value="${st.music}"></label>
       <label class="chk"><input type="checkbox" data-s="voice"${st.voice ? ' checked' : ''}> Announcer voice</label>
@@ -250,6 +268,7 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       else if (k === 'cinematic') st.cinematic = (inp as HTMLInputElement).checked;
       else if (k === 'droneCam') st.droneCam = inp.value === 'off' ? 'off' : 'auto';
       else if (k === 'xray') st.xray = (inp as HTMLInputElement).checked;
+      else if (k === 'controls') st.controls = inp.value === 'simple' ? 'simple' : 'advanced';
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
       else if (k === 'sfx') st.sfx = Number(inp.value);
       else if (k === 'music') st.music = Number(inp.value);

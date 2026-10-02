@@ -153,6 +153,25 @@ export class ControlsUI {
     this.strip.classList.toggle('touch', this.touch);
   }
 
+  /**
+   * Simple control scheme: move the group strip and the order bar into the HUD's
+   * collapsible "More" panel (null puts them back on the battlefield).
+   */
+  dock(slots: { groups: HTMLElement; orders: HTMLElement } | null) {
+    const bl = this.hud.viewWrap.querySelector('.bottom-left') as HTMLElement;
+    if (slots) {
+      slots.groups.appendChild(this.strip);
+      slots.orders.appendChild(this.bar);
+    } else {
+      this.hud.viewWrap.appendChild(this.strip);
+      bl.appendChild(this.bar);
+    }
+    this.docked = !!slots;
+    this.strip.classList.toggle('docked', this.docked);
+    this.bar.classList.toggle('docked', this.docked);
+  }
+  private docked = false;
+
   /** Refresh widgets (called ~10x per second). */
   update(selected: Entity[]) {
     const w = this.hud.world;
@@ -164,7 +183,7 @@ export class ControlsUI {
       const sel = info.count > 0 && this.groups.members(g).every((id) => this.renderer.selection.has(id));
       const key = `${info.count}:${info.def}:${sel}`;
       // phones show a fixed strip of 5 slots; desktops show assigned groups only
-      const show = info.count > 0 || (this.touch && g <= 5);
+      const show = info.count > 0 || ((this.touch || this.docked) && g <= 5);
       s.b.style.display = show ? '' : 'none';
       if (key === s.key) continue;
       s.key = key;

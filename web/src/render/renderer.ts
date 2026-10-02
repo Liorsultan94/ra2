@@ -166,6 +166,21 @@ const MUNITION_FALLBACK: Record<string, MunitionKind> = {
   cruise: 'airMissile',
 };
 
+/*
+ * Units are drawn larger than their 1-tile sim footprint so they read clearly
+ * on small screens (visual only; the simulation is unchanged).
+ */
+const VEHICLE_SCALE = 1.25;
+const INFANTRY_SCALE = 1.4;
+const AIR_SCALE = 1.15;
+function enlargeUnit(m: Model, k: number) {
+  m.root.scale.setScalar(k);
+  m.height *= k;
+  if (m.size) m.size = { x: m.size.x * k, y: m.size.y * k, z: m.size.z * k };
+  if (m.trackGauge) m.trackGauge *= k;
+  if (m.trackWidth) m.trackWidth *= k;
+}
+
 export class GameRenderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -766,6 +781,7 @@ export class GameRenderer {
   private makeVisual(e: Entity): Visual {
     const d = DEFS[e.def];
     const model = createModel(d.model, styleFor(this.world, e.owner), this.fog);
+    if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
     this.scene.add(model.root);
     return {
       id: e.id,

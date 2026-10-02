@@ -30,6 +30,8 @@ export interface GameOptions {
   droneCam?: 'auto' | 'off';
   /** X-ray silhouettes of hidden units (default on). */
   xray?: boolean;
+  /** Control scheme: 'simple' touch controls + decluttered HUD, or 'advanced' (default: simple on touch screens). */
+  controls?: 'simple' | 'advanced';
 }
 
 export interface GameCallbacks {
@@ -77,6 +79,11 @@ export class Game {
   /** Shader warm-up stats (null until it has run, or when skipped). */
   warmup: WarmupResult | null = null;
   private thermalBtn: HTMLButtonElement | null = null;
+  /** Simple control scheme (phones): tap = select / move, no long-press box, decluttered HUD. */
+  private simple = false;
+  /** While a simple-scheme tap is resolved: own units are only picked on a direct hit when units are selected. */
+  private touchPick: 'tight' | 'loose' | null = null;
+  private lastNudge = 0;
 
   constructor(
     container: HTMLElement,
@@ -112,6 +119,10 @@ export class Game {
       onSelectType: (id) => this.select([...this.renderer.selection].filter((s) => this.world.get(s)?.def === id)),
       onRotate: (steps) => this.rotateView(steps),
       onLayout: () => this.resize(),
+      onMore: () => {
+        this.audio.unlock();
+        this.sfx('click', undefined, undefined, 0.6);
+      },
     });
     this.cine.enabled = opts.cinematic ?? true;
     if (attract) this.hud.root.classList.add('attract');
@@ -146,7 +157,12 @@ export class Game {
         this.select([mcv.id], false);
         this.renderer.centerOn(mcv.x, mcv.y);
       }
-      this.hud.showHint('Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.');
+      const simple = (opts.controls ?? (window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced')) === 'simple';
+      this.hud.showHint(
+        simple
+          ? 'Your MCV is selected. Tap <b>Deploy</b> (or tap the MCV again) to build your Construction Yard.'
+          : 'Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.',
+      );
       this.audio.say('Battle control online');
     }
     if (!attract) {
@@ -167,6 +183,8 @@ export class Game {
         },
         onGroupAssign: (g) => this.ctl.assign(g),
       });
+      this.setControls(opts.controls ?? (window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced'));
+      if (this.simple && this.smallScreen() && window.innerHeight > window.innerWidth) this.hud.message('Tip: turn your phone sideways for a bigger battlefield', 'info');
     }
     this.bindInput();
     const onResize = () => this.resize();
@@ -225,6 +243,37 @@ export class Game {
         this.last = performance.now();
       }
     }
+  }
+
+  /** Switch the control scheme (Settings → Controls; can change mid-battle). */
+  setControls(c: 'simple' | 'advanced') {
+    if (this.local < 0) return;
+    this.simple = c === 'simple';
+    this.hud.setSimple(this.simple);
+    this.ctlUI?.dock(this.simple ? this.hud.moreSlots : null);
+    if (!this.simple && this.boxSelectMode) {
+      this.boxSelectMode = false;
+      this.setMode(this.mode);
+    }
+  }
+
+  /** Is this a small (phone-sized) screen? */
+  private smallScreen() {
+    return Math.min(window.innerWidth, window.innerHeight) < 560;
+  }
+
+  /** Finger movement (CSS px) that still counts as a tap in the simple scheme; larger drags pan. */
+  private tapSlop() {
+    const m = Math.min(window.innerWidth, window.innerHeight);
+    return Math.round(Math.max(16, Math.min(26, 18 * Math.sqrt(Math.max(1, m / 420)))));
+  }
+
+  /** Short, rate-limited help line when a tap could not do anything. */
+  private nudge(text: string) {
+    const now = performance.now();
+    if (now - this.lastNudge < 9000) return;
+    this.lastNudge = now;
+    this.hud.message(text, 'info');
   }
 
   /** Settings that can change mid-battle (pause menu). */
@@ -587,8 +636,23 @@ export class Game {
       this.renderer.setGhost(null, 0, 0, false, 0);
     }
     this.hud.setToolActive(m === 'sell' ? 'sell' : m === 'repair' ? 'repair' : this.boxSelectMode ? 'boxselect' : null);
+    this.hud.setOrderMode(m === 'normal' ? null : m);
     if (this.ctlUI) this.ctlUI.mode = m === 'patrol' || m === 'guard' ? m : null;
+    if (this.simple) {
+      // say what the next tap does
+      const hint =
+        m === 'place' ? 'Tap the map to preview the building, then tap it <b>again</b> to build it.'
+        : m === 'attackMove' ? 'Tap the map: units move there and fight everything on the way.'
+        : m === 'sell' ? 'Tap one of your buildings to sell it.'
+        : m === 'repair' ? 'Tap a damaged building to repair it.'
+        : this.boxSelectMode ? '<b>Drag</b> on the map to select units.'
+        : null;
+      if (hint) this.hud.showHint(hint);
+      else if (this.modeHint) this.hud.showHint(null);
+      this.modeHint = !!hint;
+    }
   }
+  private modeHint = false;
 
   // ------------------------------------------------------------ RTS controls (src/game/controls.ts)
 
@@ -638,6 +702,9 @@ export class Game {
       this.setMode('place');
       this.placing = id;
       this.sfx('click');
+      // small screens: fold the build menu away so the whole battlefield is free for placing
+      // (landscape only: in portrait the sidebar is docked under the battlefield)
+      if (this.simple && this.smallScreen() && window.innerWidth > window.innerHeight) this.hud.setCollapsed(true);
       return;
     }
     if (!this.world.canBuild(this.local, id)) {
@@ -667,12 +734,13 @@ export class Game {
     if (t === 'boxselect') {
       this.boxSelectMode = !this.boxSelectMode;
       this.setMode(this.mode === 'place' ? 'place' : 'normal');
+      if (!this.boxSelectMode && this.simple) this.hud.showHint(null);
       return;
     }
     this.setMode(this.mode === t ? 'normal' : t);
   }
 
-  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate') {
+  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode') {
     this.audio.unlock();
     const units = this.selectedOwnUnits();
     switch (c) {
@@ -697,10 +765,41 @@ export class Game {
         break;
       }
       case 'selectArmy':
-        this.select(this.world.list.filter((e) => !e.dead && e.owner === this.local && e.kind === 'unit' && !!unitDef(e.def).weapon && !unitDef(e.def).temp && !unitDef(e.def).harvester).map((e) => e.id));
+      case 'selectScreen': {
+        const army = this.world.list.filter((e) => !e.dead && e.owner === this.local && e.kind === 'unit' && e.inside < 0 && !!unitDef(e.def).weapon && !unitDef(e.def).temp && !unitDef(e.def).harvester);
+        const ids = (c === 'selectScreen' ? army.filter((e) => this.onScreen(e)) : army).map((e) => e.id);
+        this.select(ids);
+        if (ids.length) {
+          navigator.vibrate?.(8);
+          this.hud.flashUnits(ids, 'select');
+          if (this.simple) this.hud.message(`${ids.length} unit${ids.length > 1 ? 's' : ''} selected · tap the map to move`, 'info');
+        } else if (this.simple) {
+          this.sfx('error');
+          this.hud.message(c === 'selectScreen' ? 'No combat units on screen' : 'No combat units yet', 'warn');
+        }
+        if (this.simple && (this.mode === 'attackMove' || this.mode === 'patrol' || this.mode === 'guard')) this.setMode('normal');
         break;
+      }
       case 'deselect':
         this.select([]);
+        if (this.simple) {
+          this.sfx('click', undefined, undefined, 0.5);
+          if (this.mode !== 'normal' && this.mode !== 'place') this.setMode('normal');
+        }
+        break;
+      case 'cancel':
+        if (this.boxSelectMode) this.boxSelectMode = false;
+        this.setMode('normal');
+        this.hud.showHint(null);
+        this.sfx('click');
+        break;
+      case 'repairMode':
+        this.setMode(this.mode === 'repair' ? 'normal' : 'repair');
+        this.sfx('click');
+        break;
+      case 'sellMode':
+        this.setMode(this.mode === 'sell' ? 'normal' : 'sell');
+        this.sfx('click');
         break;
       case 'sellSel':
       case 'repairSel': {
@@ -712,17 +811,62 @@ export class Game {
     }
   }
 
+  /** Is the entity inside the battlefield view? */
+  private onScreen(e: Entity) {
+    const rect = this.hud.viewWrap.getBoundingClientRect();
+    const p = this.renderer.entityPos(e, 1);
+    const s = this.renderer.project(p.x, p.y, p.z);
+    return s.x >= 0 && s.y >= 0 && s.x <= rect.width && s.y <= rect.height;
+  }
+
   // ------------------------------------------------------------------ picking
+
+  /**
+   * Simple-scheme unit hit test against the visible model: the distance from the tap to the
+   * unit's upright body (a segment from its feet to its top, as wide as the drawn model).
+   * Returns the distance, or Infinity on a miss. `tight`: only a direct hit on the body counts.
+   */
+  private touchHit(e: Entity, sx: number, sy: number, tight: boolean): number {
+    const r = this.renderer;
+    const d = unitDef(e.def);
+    const p = r.entityPos(e, 1);
+    const scale = r.pixelsPerUnit(p);
+    const m = r.visuals.get(e.id)?.model;
+    const half = m?.size ? Math.max(m.size.x, m.size.z) / 2 : d.radius * 1.3;
+    const h = r.visualHeight(e.id);
+    const a = r.project(p.x, p.y, p.z);
+    const b = r.project(p.x, p.y + h, p.z);
+    const vx = b.x - a.x;
+    const vy = b.y - a.y;
+    const L = vx * vx + vy * vy;
+    const t = L > 0 ? Math.max(0, Math.min(1, ((sx - a.x) * vx + (sy - a.y) * vy) / L)) : 0;
+    const dist = Math.hypot(sx - (a.x + vx * t), sy - (a.y + vy * t));
+    // the body: the model's half width on screen (at least a fingertip); loose: a generous halo
+    const body = Math.max(7, half * scale * 0.85);
+    const rad = tight ? body : Math.max(24, half * scale * 1.5);
+    return dist < rad ? dist : Infinity;
+  }
 
   private pick(sx: number, sy: number): Entity | null {
     const w = this.world;
     const r = this.renderer;
     let best: Entity | null = null;
     let bd = Infinity;
+    const tp = this.touchPick;
     for (const e of w.list) {
       if (e.dead || e.kind !== 'unit' || !r.isShown(e.id)) continue;
       const d = unitDef(e.def);
       if (d.temp) continue;
+      if (tp) {
+        // simple scheme: own units need a direct hit while units are selected (so a tap next to
+        // them moves the selection there); enemies and an empty selection get a generous halo
+        const dist = this.touchHit(e, sx, sy, tp === 'tight' && e.owner === this.local) - (d.air ? 6 : 0);
+        if (dist < bd) {
+          bd = dist;
+          best = e;
+        }
+        continue;
+      }
       const p = r.entityPos(e, 1);
       const scale = r.pixelsPerUnit(p);
       const s = r.project(p.x, p.y + r.visualHeight(e.id) * 0.45, p.z);
@@ -745,6 +889,8 @@ export class Game {
     // tall buildings: test their projected box too
     for (const e of w.list) {
       if (e.dead || e.kind !== 'building' || !r.isShown(e.id)) continue;
+      // simple scheme with units selected: own buildings only by their footprint (the ground behind them moves)
+      if (tp === 'tight' && e.owner === this.local) continue;
       const d = buildingDef(e.def);
       const p = r.entityPos(e, 1);
       const scale = r.pixelsPerUnit(p);
@@ -904,6 +1050,9 @@ export class Game {
     this.sfx('ack');
     const r = this.renderer;
     const ids = 'ids' in cmd ? cmd.ids : [];
+    if (this.mouse.type === 'touch') navigator.vibrate?.(10);
+    // the units that took the order flash briefly
+    this.hud.flashUnits(ids, attack ? 'attack' : 'move');
     if (target) {
       const tid = target.id;
       const big = target.kind === 'building' ? Math.max(buildingDef(target.def).w, buildingDef(target.def).h) * 0.75 : Math.max(1, unitDef(target.def).radius * 2.2);
@@ -959,7 +1108,7 @@ export class Game {
       this.audio.unlock();
       if (this.cine.active) return;
       // HUD widgets inside the view (command bar, portrait, rotate buttons) are not map clicks
-      if ((e.target as HTMLElement).closest?.('button, .selpanel, .cmdbar, .view-ctrl, .hint')) return;
+      if ((e.target as HTMLElement).closest?.('button, .selpanel, .cmdbar, .view-ctrl, .hint, .quickbar, .more-panel, .ctl-groups, .ctl-orders')) return;
       if (this.local < 0) return;
       const p = local(e);
       this.mouse = { x: p.x, y: p.y, inside: true, type: e.pointerType };
@@ -978,7 +1127,8 @@ export class Game {
       const d = { id: e.pointerId, sx: p.x, sy: p.y, button: e.button, box: false, panning: false, moved: false, longTimer: 0, time: performance.now() };
       if (e.pointerType === 'touch') {
         if (this.boxSelectMode) d.box = true;
-        else
+        // simple scheme: no long-press box select (a slow tap must stay a tap)
+        else if (!this.simple)
           d.longTimer = window.setTimeout(() => {
             if (this.drag === d && !d.moved) {
               d.box = true;
@@ -1009,9 +1159,10 @@ export class Game {
       const d = this.drag;
       if (!d || d.id !== e.pointerId) return;
       const dist = Math.hypot(p.x - d.sx, p.y - d.sy);
-      if (dist > 7) d.moved = true;
-      if (!d.moved) return;
       const touch = e.pointerType === 'touch';
+      // simple scheme: finger jitter up to ~18 px is still a tap; only a real drag pans
+      if (dist > (touch && this.simple ? this.tapSlop() : 7)) d.moved = true;
+      if (!d.moved) return;
       if ((touch && !d.box) || d.button === 2 || d.button === 1) {
         if (!d.panning) {
           d.panning = true;
@@ -1046,9 +1197,16 @@ export class Game {
       if (d.panning) return;
       if (d.box && d.moved) {
         this.boxSelect(d.sx, d.sy, p.x, p.y, e.shiftKey);
+        if (this.simple && this.boxSelectMode && e.pointerType === 'touch') {
+          // one box per press of the BOX button: the next tap moves the new selection
+          this.boxSelectMode = false;
+          this.setMode(this.mode);
+          this.hud.showHint(null);
+        }
         return;
       }
-      if (d.box && !d.moved && e.pointerType === 'touch') return;
+      // simple scheme: a tap in box mode is still a tap (never swallowed)
+      if (d.box && !d.moved && e.pointerType === 'touch' && !this.simple) return;
       if (d.button === 2) {
         // right click: cancel mode, else deselect
         if (this.mode !== 'normal') this.setMode('normal');
@@ -1056,7 +1214,9 @@ export class Game {
         return;
       }
       if (d.button !== 0) return;
-      this.click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
+      // simple scheme: resolve the tap where the finger went down (jitter while lifting is noise)
+      if (e.pointerType === 'touch' && this.simple) this.tapSimple(d.sx, d.sy);
+      else this.click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     };
     on(view, 'pointerup', end);
     on(view, 'pointercancel', (e) => {
@@ -1156,6 +1316,50 @@ export class Game {
       return;
     }
     this.contextAction(x, y, ctrl).run();
+  }
+
+  /**
+   * Simple touch scheme: tap an own unit = select it; with units selected, a tap anywhere else
+   * (ground, enemy, a building to enter / repair / garrison) is an order. Own units only take
+   * the tap on a direct hit while something is selected, so tapping next to a unit in a crowd
+   * moves the selection instead of re-selecting. Double-tap a unit = all of its type on screen.
+   */
+  private tapSimple(x: number, y: number) {
+    const units = this.selectedOwnUnits();
+    const hadSel = this.renderer.selection.size > 0;
+    // (escort mode wants a friendly unit under the finger: generous there)
+    this.touchPick = units.length && this.mode !== 'guard' ? 'tight' : 'loose';
+    try {
+      if (this.mode === 'place' && this.placing) {
+        this.click(x, y, false, false);
+        return;
+      }
+      const target = this.pick(x, y);
+      const now = performance.now();
+      if (target && target.owner === this.local && target.kind === 'unit' && this.mode === 'normal' && now - this.lastClick.t < 450 && this.lastClick.id === target.id) {
+        // double tap: every unit of that type on screen
+        const ids = this.world.list.filter((e) => !e.dead && e.owner === this.local && e.def === target.def && e.inside < 0 && this.onScreen(e)).map((e) => e.id);
+        this.select(ids);
+        this.hud.flashUnits(ids, 'select');
+        navigator.vibrate?.(8);
+        this.lastClick = { t: 0, id: -1 };
+        return;
+      }
+      this.lastClick = { t: now, id: target?.id ?? -1 };
+      const a = this.contextAction(x, y, false);
+      a.run();
+      if (a.cursor === 'select' && target) {
+        navigator.vibrate?.(6);
+        if (target.owner === this.local && target.kind === 'unit') this.hud.flashUnits([target.id], 'select');
+      } else if (a.cursor === 'nomove') this.nudge("Can't move there");
+      else if (a.cursor === 'default' && !target && !hadSel) {
+        // nothing selected and nothing under the finger: explain once in a while
+        this.hud.tapRipple(x, y);
+        this.nudge('Tap one of your units first, or press ARMY');
+      }
+    } finally {
+      this.touchPick = null;
+    }
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
