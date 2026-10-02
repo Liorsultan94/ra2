@@ -1,0 +1,436 @@
+/*
+ * Simple control scheme (phones by default, Settings → Controls): one compact quick bar
+ * at the bottom left, everything else in a collapsible "More" panel, a compact selection
+ * panel and a build sidebar with bigger, clearly labelled icons that folds to a slim strip.
+ * Every touch target is at least 44 px.
+ */
+
+/* ------------------------------------------------------------------ quick bar */
+
+.quickbar {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(8, 11, 14, 0.8);
+  border: 1px solid color-mix(in srgb, var(--tm, #59636d) 70%, #000);
+  border-top: 2px solid var(--t2, #c9d3dc);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+  align-self: flex-start;
+  max-width: 100%;
+}
+.qb-main,
+.qb-powers {
+  display: flex;
+  gap: 4px;
+}
+.qb-powers:empty {
+  display: none;
+}
+.qb-btn {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 56px;
+  min-height: 50px;
+  padding: 4px 6px 3px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--tm, #59636d) 55%, #2c363f), #12171b);
+  border: 1px solid color-mix(in srgb, var(--tm, #59636d) 60%, #000);
+  border-radius: 5px;
+  color: #e9eef2;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -2px 0 rgba(0, 0, 0, 0.4);
+}
+.qb-btn svg {
+  width: 22px;
+  height: 22px;
+  color: var(--t2, #c9d3dc);
+  filter: drop-shadow(0 0 3px var(--tglow, rgba(120, 180, 255, 0.45)));
+  pointer-events: none;
+}
+.qb-btn span {
+  pointer-events: none;
+}
+.qb-btn:active {
+  transform: scale(0.95);
+}
+.qb-btn:disabled {
+  opacity: 0.4;
+}
+.qb-btn.army {
+  min-width: 70px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--t1, #2c4a78) 85%, #fff 10%), color-mix(in srgb, var(--t1, #2c4a78) 55%, #000));
+  border-color: color-mix(in srgb, var(--t2, #c9d3dc) 70%, #000);
+}
+.qb-btn.army svg {
+  color: #fff;
+}
+.qb-btn.on,
+.mp-btn.on {
+  border-color: var(--hi, #f2c14e);
+  color: var(--hi, #f2c14e);
+  background: linear-gradient(180deg, #6a5216, #2e2306);
+  box-shadow: 0 0 12px rgba(242, 193, 78, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.qb-btn.on svg,
+.mp-btn.on svg {
+  color: var(--hi, #f2c14e);
+}
+.qb-btn.box.on {
+  animation: qb-glow 1.2s ease-in-out infinite;
+}
+@keyframes qb-glow {
+  50% {
+    box-shadow: 0 0 20px rgba(242, 193, 78, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+}
+.qb-btn.ctx {
+  border-color: color-mix(in srgb, var(--hi, #f2c14e) 70%, #000);
+}
+.qb-btn.deploy {
+  background: linear-gradient(180deg, #3d6b2c, #1a3010);
+  border-color: #8fe06a;
+  animation: qb-glow 1.4s ease-in-out infinite;
+}
+.qb-btn.deploy svg {
+  color: #c9ffb0;
+}
+.qb-btn.cancel svg {
+  color: #ffb4a0;
+}
+.qb-powers .support-btn {
+  flex: none;
+  width: 50px;
+  height: auto;
+  min-height: 50px;
+  border-radius: 5px;
+}
+.qb-powers .support-btn .sp-icon {
+  width: 24px;
+  height: 24px;
+}
+/* support powers only show up when they can be used */
+.qb-powers .support-btn:not(.ready):not(.active) {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ "More" panel */
+
+.more-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 6px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  background: rgba(8, 11, 14, 0.92);
+  border: 1px solid color-mix(in srgb, var(--tm, #59636d) 70%, #000);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+  align-self: flex-start;
+  max-width: 100%;
+  scrollbar-width: thin;
+}
+.mp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.mp-label {
+  display: flex;
+  flex-direction: column;
+  width: 58px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #9aa4ab);
+}
+.mp-label small {
+  font-size: 8.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.mp-slot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mp-orders:empty,
+.mp-orders:has(> .ctl-orders.hidden) {
+  display: none;
+}
+.more-panel .ctl-groups.docked {
+  position: static;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.more-panel .ctl-slot {
+  width: 52px;
+  height: 46px;
+}
+.more-panel .ctl-orders.docked {
+  padding: 0;
+  gap: 4px;
+  background: none;
+  border: 0;
+  clip-path: none;
+}
+.more-panel .ctl-orders .ctl-btn {
+  min-width: 54px;
+  min-height: 48px;
+  margin: 0;
+  border-radius: 5px;
+  font-size: 10px;
+}
+.more-panel .ctl-orders .ctl-btn kbd,
+.more-panel .ctl-sep {
+  display: none;
+}
+.more-panel .view-ctrl {
+  position: static;
+}
+.more-panel .vc-btn {
+  width: 48px;
+  height: 48px;
+}
+.game-root.more-open .selpanel {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------------ compact selection panel */
+
+.simple-ui .bottom-left {
+  max-width: calc(100% - 20px);
+}
+.simple-ui .selpanel {
+  align-self: flex-start;
+  max-width: min(380px, 100%);
+  padding: 3px 10px 3px 3px;
+  gap: 7px;
+}
+.simple-ui .portrait {
+  width: 56px;
+  height: 42px;
+}
+.simple-ui .sp-info b {
+  font-size: 13px;
+}
+.simple-ui .sp-owner,
+.simple-ui .sp-extra,
+.simple-ui .sp-info .vet-line {
+  display: none;
+}
+.simple-ui .sp-hp {
+  width: 104px;
+  height: 7px;
+  margin: 2px 0 1px;
+}
+.simple-ui .sp-hpt {
+  font-size: 10.5px;
+}
+.simple-ui .sp-multi {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: min(420px, 58vw);
+  scrollbar-width: none;
+}
+.simple-ui .sp-type {
+  flex: none;
+  width: 48px;
+  height: 44px;
+}
+
+/* ------------------------------------------------------------------ build sidebar */
+
+/* repair / sell / box live in the quick bar and the More panel */
+.simple-ui .sb-tools .tool-btn:not(.support-btn):not(.ctl-repeat) {
+  display: none;
+}
+.simple-ui .tab {
+  min-height: 46px;
+  justify-content: center;
+}
+.simple-ui .tab svg {
+  width: 22px;
+  height: 22px;
+}
+.simple-ui .tab.t-ready .tab-badge,
+.simple-ui .tab.t-busy .tab-badge {
+  width: 11px;
+  height: 11px;
+  top: 2px;
+  right: 2px;
+}
+.simple-ui .sb-grid {
+  gap: 6px;
+}
+.simple-ui .cameo {
+  padding-bottom: 80%;
+  border-radius: 4px;
+}
+.simple-ui .c-name {
+  padding: 2px 4px;
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.simple-ui .c-cost {
+  top: 2px;
+  right: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.simple-ui .cameo.ready {
+  border-color: var(--hi, #f2c14e);
+  animation: cameo-ready 1s ease-in-out infinite;
+}
+@keyframes cameo-ready {
+  50% {
+    box-shadow: 0 0 16px rgba(242, 193, 78, 0.9), inset 0 0 0 1px #000;
+  }
+}
+.simple-ui .cameo.ready .c-status {
+  top: auto;
+  bottom: 22px;
+  left: 8%;
+  right: 8%;
+  padding: 2px 0;
+  border-radius: 3px;
+  background: var(--hi, #f2c14e);
+  color: #1d1604;
+  font-size: 12px;
+  font-weight: 800;
+  text-shadow: none;
+  animation: none;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+}
+.simple-ui .cameo.building .c-status:not(:empty) {
+  top: auto;
+  bottom: 22px;
+  font-size: 10px;
+  background: rgba(160, 30, 20, 0.85);
+}
+
+/* folded sidebar: a slim strip of tabs (with their ready / busy badges), credits and the menu */
+.game-root.simple-ui.sb-collapsed {
+  --sbs: 60px;
+}
+.game-root.simple-ui.sb-collapsed .sidebar {
+  display: flex;
+  width: var(--sbs);
+  padding: 5px 4px;
+  gap: 5px;
+}
+.game-root.simple-ui.sb-collapsed .sidebar > .radar-frame,
+.game-root.simple-ui.sb-collapsed .sidebar > .sb-tools,
+.game-root.simple-ui.sb-collapsed .sidebar > .sb-grid,
+.game-root.simple-ui.sb-collapsed .sidebar > .sb-rivet,
+.game-root.simple-ui.sb-collapsed .sb-faction,
+.game-root.simple-ui.sb-collapsed .power {
+  display: none;
+}
+.game-root.simple-ui.sb-collapsed .sb-head {
+  justify-content: center;
+  min-height: 0;
+  padding: 2px;
+  clip-path: none;
+}
+.game-root.simple-ui.sb-collapsed .sb-head .icon-btn {
+  min-width: 44px;
+  min-height: 40px;
+}
+.game-root.simple-ui.sb-collapsed .credits {
+  padding: 2px 1px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-align: center;
+}
+.game-root.simple-ui.sb-collapsed .sb-tabs {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.game-root.simple-ui.sb-collapsed .tab {
+  min-height: 44px;
+  border-radius: 3px;
+}
+.game-root.simple-ui.sb-collapsed .tab span {
+  display: none;
+}
+.game-root.simple-ui.sb-collapsed .sb-toggle {
+  right: var(--sbs);
+}
+
+/* phones in landscape */
+@media (max-height: 560px) and (orientation: landscape) {
+  .game-root.simple-ui:not(.sb-collapsed) {
+    --sb: 206px;
+  }
+  .simple-ui .radar-frame {
+    width: 60%;
+  }
+  .simple-ui .sb-stats .credits {
+    font-size: 16px;
+  }
+  .simple-ui .qb-btn {
+    min-width: 54px;
+    min-height: 48px;
+    font-size: 9.5px;
+  }
+  .simple-ui .qb-btn.army {
+    min-width: 64px;
+  }
+  .simple-ui .messages {
+    max-width: 52%;
+  }
+  .simple-ui .hint {
+    max-width: 66%;
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+  .simple-ui .sb-toggle {
+    width: 26px;
+    height: 72px;
+    margin-top: -36px;
+  }
+}
+
+/* portrait phones: the sidebar docks at the bottom (style.css); keep the bars small */
+@media (orientation: portrait) and (max-width: 900px) {
+  .simple-ui .qb-btn {
+    min-width: 48px;
+    padding: 4px 3px 3px;
+    font-size: 9px;
+  }
+  .simple-ui .qb-btn.screen span {
+    font-size: 8px;
+  }
+}
+
+.game-root.attract .quickbar,
+.game-root.attract .more-panel,
+.view-wrap.cine-on .more-panel {
+  display: none !important;
+}

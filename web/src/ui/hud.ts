@@ -9,17 +9,22 @@ import { SupportPower } from './support';
 import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
+import './simple.css';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
   onCancel(defId: string): void;
   onTool(tool: 'repair' | 'sell' | 'menu' | 'boxselect'): void;
-  onCommand(cmd: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate'): void;
+  onCommand(cmd: HudCommand): void;
   onMinimap(x: number, y: number, drag: boolean): void;
   onSelectType(defId: string): void;
   onRotate(steps: number): void;
   onLayout(): void;
+  /** The simple scheme's "More" panel was opened / closed. */
+  onMore(): void;
 }
+
+export type HudCommand = 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode';
 
 const TABS: { cat: Category; label: string; icon: string }[] = [
   { cat: 'building', label: 'Base', icon: '<path d="M3 21V10l9-6 9 6v11h-6v-6H9v6z"/>' },
@@ -40,6 +45,10 @@ const ICONS = {
   repair: '<path d="M22 19l-9-9c1-2.6.4-5.6-1.7-7.7A6.9 6.9 0 0 0 4.4 1L9 5.6 5.6 9 1 4.4a6.9 6.9 0 0 0 1.3 6.9c2.1 2.1 5.1 2.7 7.7 1.7l9 9z"/>',
   sell: '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>',
   army: '<circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="13" r="2.5"/><path d="M3 21v-3c0-2 2-3 4-3s4 1 4 3M13 21v-3c0-2 2-3 4-3s4 1 4 3"/>',
+  screen: '<path d="M2 4h20v14H2z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="10" r="2"/><circle cx="15" cy="9" r="2"/><circle cx="12" cy="14" r="2"/><path d="M8 21h8" stroke="currentColor" stroke-width="2"/>',
+  box: '<path d="M3 3h4v2H5v2H3zm14 0h4v4h-2V5h-2zM3 17h2v2h2v2H3zm16 2v-2h2v4h-4v-2zM9 3h6v2H9zm0 16h6v2H9zM3 9h2v6H3zm16 0h2v6h-2z"/>',
+  cancel: '<path d="M9 4L3 10l6 6v-4h5a4 4 0 0 1 0 8h-3v3h3a7 7 0 0 0 0-14H9z"/>',
+  more: '<circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/>',
 };
 
 /** Short rallying line under the nation name in the sidebar header. */
@@ -100,6 +109,26 @@ export class Hud {
   private hpState = new Map<number, { hp: number; ghost: number; flash: number }>();
   private rankPops = new RankPops();
   private orderLines: { ids: number[]; x: number; y: number; target: number; color: string; t0: number }[] = [];
+  /** Simple control scheme: compact quick bar + collapsible "More" panel instead of the full command bar. */
+  simple = false;
+  private quickBar!: HTMLElement;
+  private qbMain!: HTMLElement;
+  private qbPowers!: HTMLElement;
+  private moreBtn!: HTMLButtonElement;
+  private morePanel!: HTMLElement;
+  private moreView!: HTMLElement;
+  private moreTools = new Map<string, HTMLButtonElement>();
+  private moreUnitBtns: HTMLButtonElement[] = [];
+  /** Where the control-group strip and the order bar dock in the simple scheme. */
+  moreSlots!: { groups: HTMLElement; orders: HTMLElement };
+  private viewCtrl!: HTMLElement;
+  private toolsRow!: HTMLElement;
+  private cmdKey = '';
+  private selHtml = '';
+  private activeTool: string | null = null;
+  private orderMode: string | null = null;
+  private flashes: { ids: number[]; color: string; t0: number }[] = [];
+  private ripples: { x: number; y: number; t0: number }[] = [];
   private lastOverlayT = 0;
   world!: World;
   renderer!: GameRenderer;
@@ -123,7 +152,7 @@ export class Hud {
     this.cineEl = el('div', 'cine', this.viewWrap);
     this.cineEl.innerHTML = '<i class="cine-bar top"></i><i class="cine-bar bottom"></i><span class="cine-skip">TAP TO SKIP</span>';
     // view rotation (Q / E)
-    const vc = el('div', 'view-ctrl', this.viewWrap);
+    const vc = (this.viewCtrl = el('div', 'view-ctrl', this.viewWrap));
     const rot = (steps: number, title: string, icon: string) => {
       const b = el('button', 'vc-btn', vc);
       b.innerHTML = svg(icon);
@@ -136,11 +165,103 @@ export class Hud {
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
+    this.buildSimpleBars(bottomLeft);
     this.tooltip = el('div', 'tooltip hidden', this.root);
     this.buildSidebar();
     this.fogCanvas = document.createElement('canvas');
     this.fogImg = new ImageData(1, 1);
     this.mmStatic = document.createElement('canvas');
+  }
+
+  /** Simple scheme widgets: the quick bar (ARMY / ON SCREEN / BOX / ✕ + context) and the "More" panel. */
+  private buildSimpleBars(bottomLeft: HTMLElement) {
+    const btn = (parent: HTMLElement, cls: string, label: string, icon: string, title: string, fn: () => void) => {
+      const b = el('button', `qb-btn ${cls}`, parent);
+      b.innerHTML = `${svg(icon)}<span>${label}</span>`;
+      b.title = title;
+      b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      b.onclick = fn;
+      return b;
+    };
+    // "More" panel (opens upwards, above the quick bar; closed by default)
+    const mp = (this.morePanel = el('div', 'more-panel hidden', bottomLeft));
+    const head = el('div', 'mp-row mp-tools', mp);
+    const unitBtn = (label: string, icon: string, title: string, cmd: HudCommand) => {
+      const b = btn(head, 'mp-btn', label, icon, title, () => this.actions.onCommand(cmd));
+      this.moreUnitBtns.push(b);
+    };
+    unitBtn('Stop', ICONS.stop, 'Stop the selected units', 'stop');
+    unitBtn('Attack-Move', ICONS.attackMove, 'Attack-move: tap the map, units fight everything on the way', 'attackMove');
+    this.moreTools.set('repair', btn(head, 'mp-btn', 'Repair', ICONS.repair, 'Repair mode: tap your damaged buildings', () => this.actions.onCommand('repairMode')));
+    this.moreTools.set('sell', btn(head, 'mp-btn', 'Sell', ICONS.sell, 'Sell mode: tap one of your buildings', () => this.actions.onCommand('sellMode')));
+    const orders = el('div', 'mp-row mp-orders', mp);
+    const groups = el('div', 'mp-row mp-groups', mp);
+    el('span', 'mp-label', groups).innerHTML = 'Groups<small>tap: select · hold: save</small>';
+    const groupSlot = el('div', 'mp-slot', groups);
+    const view = el('div', 'mp-row mp-view', mp);
+    el('span', 'mp-label', view).innerHTML = 'View';
+    this.moreView = el('div', 'mp-slot', view);
+    this.moreSlots = { groups: groupSlot, orders };
+    // quick bar
+    const qb = (this.quickBar = el('div', 'quickbar hidden', bottomLeft));
+    this.qbMain = el('div', 'qb-main', qb);
+    this.qbPowers = el('div', 'qb-powers', qb);
+    this.moreBtn = btn(qb, 'qb-more', 'More', ICONS.more, 'More orders: stances, patrol, groups, view', () => this.setMore(this.morePanel.classList.contains('hidden')));
+  }
+
+  /** Open / close the simple scheme's "More" panel. */
+  setMore(open: boolean) {
+    if (open === !this.morePanel.classList.contains('hidden')) return;
+    this.morePanel.classList.toggle('hidden', !open);
+    this.root.classList.toggle('more-open', open);
+    this.moreBtn.classList.toggle('on', open);
+    this.actions.onMore();
+  }
+
+  /** Switch between the simple (phone) and the advanced HUD. */
+  setSimple(on: boolean) {
+    this.simple = on;
+    this.root.classList.toggle('simple-ui', on);
+    this.quickBar.classList.toggle('hidden', !on);
+    this.cmdBar.classList.toggle('hidden', on);
+    if (!on) this.setMore(false);
+    // rotate / thermal buttons live in the More panel; support powers ride in the quick bar
+    if (on) this.moreView.appendChild(this.viewCtrl);
+    else this.viewWrap.appendChild(this.viewCtrl);
+    for (const b of [...this.toolsRow.querySelectorAll<HTMLElement>('.support-btn'), ...this.qbPowers.querySelectorAll<HTMLElement>('.support-btn')]) {
+      (on ? this.qbPowers : this.toolsRow).appendChild(b);
+    }
+    this.cmdKey = '';
+    this.forceSelectionRefresh();
+    this.actions.onLayout();
+  }
+
+  /** Fold the build sidebar (simple scheme: down to a slim strip of tabs). */
+  setCollapsed(on: boolean) {
+    if (this.root.classList.contains('sb-collapsed') === on) return;
+    this.root.classList.toggle('sb-collapsed', on);
+    this.actions.onLayout();
+  }
+
+  /** Current order mode (place / sell / repair / attack-move / patrol / escort), for the quick bar's Cancel. */
+  setOrderMode(m: string | null) {
+    if (m === this.orderMode) return;
+    this.orderMode = m;
+    this.forceSelectionRefresh();
+  }
+
+  /** Brief ring on units that just took an order / got selected. */
+  flashUnits(ids: number[], kind: 'move' | 'attack' | 'select') {
+    if (!ids.length) return;
+    const color = kind === 'attack' ? '255,90,70' : kind === 'select' ? '255,240,170' : '120,255,170';
+    this.flashes.push({ ids: ids.slice(0, 80), color, t0: performance.now() / 1000 });
+    if (this.flashes.length > 4) this.flashes.shift();
+  }
+
+  /** Small ripple where a tap landed (feedback for taps that had nothing to do). */
+  tapRipple(x: number, y: number) {
+    this.ripples.push({ x, y, t0: performance.now() / 1000 });
+    if (this.ripples.length > 4) this.ripples.shift();
   }
 
   /** Letterbox bars while a cinematic moment plays. */
@@ -173,10 +294,8 @@ export class Hud {
     const toggle = el('button', 'sb-toggle', this.root);
     toggle.title = 'Hide / show the command sidebar';
     toggle.innerHTML = svg('<path d="M9 5l7 7-7 7z"/>');
-    toggle.onclick = () => {
-      this.root.classList.toggle('sb-collapsed');
-      this.actions.onLayout();
-    };
+    toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    toggle.onclick = () => this.setCollapsed(!this.root.classList.contains('sb-collapsed'));
     el('i', 'sb-rivet tl', sb);
     el('i', 'sb-rivet tr', sb);
     const head = el('div', 'sb-head', sb);
@@ -217,7 +336,7 @@ export class Hud {
     this.powerFill = el('div', 'power-fill', bar);
     this.powerText = el('div', 'power-text', power);
 
-    const tools = el('div', 'sb-tools', sb);
+    const tools = (this.toolsRow = el('div', 'sb-tools', sb));
     const mk = (id: 'repair' | 'sell' | 'boxselect', title: string, icon: string, cls = '') => {
       const b = el('button', 'tool-btn ' + cls, tools);
       b.innerHTML = svg(icon);
@@ -238,6 +357,8 @@ export class Hud {
       b.title = t.label;
       b.onclick = () => {
         this.setTab(t.cat);
+        // simple scheme: a tab in the folded strip opens the build menu on that tab
+        if (this.simple) this.setCollapsed(false);
       };
       this.tabEls.set(t.cat, b);
     }
@@ -323,6 +444,11 @@ export class Hud {
 
   setToolActive(tool: string | null) {
     for (const [id, b] of this.toolBtns) b.classList.toggle('active', id === tool);
+    for (const [id, b] of this.moreTools) b.classList.toggle('on', id === tool);
+    if (tool !== this.activeTool) {
+      this.activeTool = tool;
+      this.forceSelectionRefresh();
+    }
   }
 
   // --------------------------------------------------------------- updates
@@ -412,15 +538,20 @@ export class Hud {
         const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
         const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
         const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
-        this.selPanel.innerHTML = `<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`;
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
       } else {
         const counts = new Map<string, number>();
         for (const e of sel) counts.set(e.def, (counts.get(e.def) ?? 0) + 1);
-        this.selPanel.innerHTML = `<div class="sp-multi">${[...counts]
+        const html = `<div class="sp-multi">${[...counts]
           .map(([id, n]) => `<button class="sp-type" data-def="${id}" title="${DEFS[id].name}"><img src="${this.cameos.get(id, style)}"><span>${n}</span></button>`)
           .join('')}</div>`;
-        this.selPanel.querySelectorAll<HTMLElement>('.sp-type').forEach((b) => (b.onclick = () => this.actions.onSelectType(b.dataset.def!)));
+        // only rebuild when it changed (a rebuild under the finger would eat the tap)
+        if (this.setSelHtml(html)) this.selPanel.querySelectorAll<HTMLElement>('.sp-type').forEach((b) => (b.onclick = () => this.actions.onSelectType(b.dataset.def!)));
       }
+    }
+    if (this.simple) {
+      this.updateQuickBar(sel, units, ownBuilding);
+      return;
     }
     // command buttons
     const cmds: [string, string, Parameters<HudActions['onCommand']>[0], string][] = [];
@@ -438,12 +569,56 @@ export class Hud {
     } else {
       cmds.push(['Select Army', 'W', 'selectArmy', ICONS.army]);
     }
+    // rebuild only when the set of buttons changes (a rebuild between press and release loses the click)
+    const ck = cmds.map((c) => c[2] + c[0]).join(',');
+    if (ck === this.cmdKey) return;
+    this.cmdKey = ck;
     this.cmdBar.innerHTML = '';
     for (const [label, key2, id, icon] of cmds) {
       const b = el('button', 'cmd-btn', this.cmdBar);
       b.title = label + (key2 ? ` (${key2})` : '');
       b.innerHTML = `${svg(icon)}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
       b.onclick = () => this.actions.onCommand(id);
+    }
+  }
+
+  private setSelHtml(html: string): boolean {
+    if (html === this.selHtml) return false;
+    this.selHtml = html;
+    this.selPanel.innerHTML = html;
+    return true;
+  }
+
+  /** Simple scheme: [ARMY] [ON SCREEN] [BOX] [✕] + context buttons only when they apply. */
+  private updateQuickBar(sel: Entity[], units: Entity[], ownBuilding: Entity | null) {
+    const b: [string, string, string, () => void, string][] = [];
+    const cmd = (c: HudCommand) => () => this.actions.onCommand(c);
+    const mode = this.orderMode;
+    const boxOn = this.activeTool === 'boxselect';
+    b.push(['army', 'Army', ICONS.army, cmd('selectArmy'), 'Select your whole army']);
+    b.push(['screen', 'On screen', ICONS.screen, cmd('selectScreen'), 'Select all combat units on screen']);
+    b.push([`box${boxOn ? ' on' : ''}`, 'Box', ICONS.box, () => this.actions.onTool('boxselect'), 'Box select: drag a box on the map']);
+    if (sel.length) b.push(['deselect', 'Clear', ICONS.deselect, cmd('deselect'), 'Deselect']);
+    if (units.some((u) => unitDef(u.def).mcv)) b.push(['ctx deploy', 'Deploy', ICONS.deploy, cmd('deploy'), 'Deploy the MCV into a Construction Yard']);
+    if (units.some((u) => u.passengers.length > 0)) b.push(['ctx', 'Unload', ICONS.unload, cmd('deploy'), 'Unload the passengers']);
+    if (ownBuilding) {
+      if (ownBuilding.passengers.length) b.push(['ctx', 'Evacuate', ICONS.unload, cmd('evacuate'), 'Send the garrison out']);
+      if (ownBuilding.hp < ownBuilding.maxHp) b.push(['ctx', 'Repair', ICONS.repair, cmd('repairSel'), 'Repair this building']);
+      if (DEFS[ownBuilding.def].faction !== 'neutral') b.push(['ctx', 'Sell', ICONS.sell, cmd('sellSel'), 'Sell this building']);
+    }
+    if (mode || boxOn) b.push(['ctx cancel', 'Cancel', ICONS.cancel, cmd('cancel'), 'Cancel']);
+    // More panel: unit orders only with units selected
+    for (const x of this.moreUnitBtns) x.disabled = !units.length;
+    const key = b.map((x) => x[0] + x[1]).join(',');
+    if (key === this.cmdKey) return;
+    this.cmdKey = key;
+    this.qbMain.innerHTML = '';
+    for (const [cls, label, icon, fn, title] of b) {
+      const x = el('button', `qb-btn ${cls}`, this.qbMain);
+      x.innerHTML = `${svg(icon)}<span>${label}</span>`;
+      x.title = title;
+      x.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      x.onclick = fn;
     }
   }
 
@@ -673,6 +848,40 @@ export class Hud {
         ctx.stroke();
       }
       ctx.setLineDash([]);
+    }
+    // order / selection flashes: a ring that opens around each unit, and tap ripples
+    for (let i = this.flashes.length - 1; i >= 0; i--) {
+      const F = this.flashes[i];
+      const k = (now - F.t0) / 0.55;
+      if (k >= 1 || k < 0) {
+        if (k >= 1) this.flashes.splice(i, 1);
+        continue;
+      }
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(${F.color},${(1 - k) * 0.95})`;
+      for (const id of F.ids) {
+        const u = w.get(id);
+        if (!u || u.dead || !r.isShown(id)) continue;
+        const up = r.entityPos(u, alpha);
+        const c = r.project(up.x, up.y + 0.05, up.z);
+        const rad = 8 + 16 * k;
+        ctx.beginPath();
+        ctx.ellipse(c.x, c.y, rad, rad * 0.55, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    for (let i = this.ripples.length - 1; i >= 0; i--) {
+      const R = this.ripples[i];
+      const k = (now - R.t0) / 0.45;
+      if (k >= 1 || k < 0) {
+        if (k >= 1) this.ripples.splice(i, 1);
+        continue;
+      }
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(255,255,255,${(1 - k) * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(R.x, R.y, 6 + 18 * k, 0, Math.PI * 2);
+      ctx.stroke();
     }
     for (const e of w.list) {
       if (e.dead) continue;

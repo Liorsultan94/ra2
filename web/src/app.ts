@@ -66,7 +66,7 @@ function showMainMenu(newDemo = true) {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls });
     },
     onSettings: (s) => {
       settings = s;
@@ -101,6 +101,7 @@ function startBattle(opts: GameOptions) {
           applyAudio(s);
           game?.setCinematic(s.cinematic);
           game?.setViewSettings({ droneCam: s.droneCam, xray: s.xray });
+          game?.setControls(s.controls);
         },
       });
     },
@@ -153,7 +154,7 @@ export async function boot(splash: Splash) {
     splash.dismiss();
   } else if (play) {
     const [f, e, d] = play.split(',');
-    startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray });
+    startBattle({ faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls });
     const speed = Number(params.get('speed'));
     const g = game as Game | null;
     if (speed && g) g.speed = speed;
