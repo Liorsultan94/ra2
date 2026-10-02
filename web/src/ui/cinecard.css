@@ -1,0 +1,147 @@
+/* Battle intro / outro letterbox + title cards (src/ui/cinecard.ts). */
+
+.cinecard {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: auto;
+  overflow: hidden;
+  touch-action: none;
+}
+.cinecard.closing {
+  pointer-events: none;
+}
+.cc-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 12%;
+  background: #000;
+  transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.cc-bar.top {
+  top: 0;
+  transform: translateY(-101%);
+}
+.cc-bar.bottom {
+  bottom: 0;
+  transform: translateY(101%);
+}
+.cinecard.on .cc-bar {
+  transform: none;
+}
+.cc-skip {
+  position: absolute;
+  right: 16px;
+  bottom: 3.5%;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  color: rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  transition: opacity 0.4s 0.4s;
+}
+.cinecard.on .cc-skip {
+  opacity: 1;
+}
+.cinecard.closing .cc-skip {
+  opacity: 0;
+  transition-delay: 0s;
+}
+.cc-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  padding: 0 16px;
+}
+.cc-card.in {
+  animation: cc-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.cc-card.out {
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+@keyframes cc-in {
+  from {
+    opacity: 0;
+    letter-spacing: 0.6em;
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+  }
+}
+.cc-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: clamp(12px, 1.8vw, 16px);
+  letter-spacing: 0.32em;
+  color: rgba(235, 235, 225, 0.85);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+  text-transform: uppercase;
+}
+.cc-kicker img {
+  width: 34px;
+  height: 22px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+.cc-title {
+  font-family: 'Black Ops One', var(--font);
+  font-size: clamp(26px, 5.4vw, 72px);
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  color: #f4ecd6;
+  text-shadow: 0 0 30px rgba(0, 0, 0, 0.9), 0 3px 0 rgba(0, 0, 0, 0.6);
+  margin: 4px 0;
+}
+.cc-card.intro .cc-title {
+  color: #f2c14e;
+  text-shadow: 0 0 26px rgba(242, 193, 78, 0.35), 0 3px 0 rgba(0, 0, 0, 0.7);
+}
+.cc-card.win .cc-title {
+  color: #f2c14e;
+  font-size: clamp(44px, 11vw, 120px);
+  text-shadow: 0 0 40px rgba(242, 193, 78, 0.55), 0 4px 0 rgba(0, 0, 0, 0.7);
+}
+.cc-card.lose .cc-title {
+  color: #e2483a;
+  font-size: clamp(44px, 11vw, 120px);
+  text-shadow: 0 0 40px rgba(226, 72, 58, 0.5), 0 4px 0 rgba(0, 0, 0, 0.7);
+}
+.cc-sub {
+  font-size: clamp(12px, 1.9vw, 17px);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(225, 228, 220, 0.8);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95);
+}
+.cc-card.win::before,
+.cc-card.lose::before,
+.cc-card.intro::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(900px, 110%);
+  height: 160%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), transparent 65%);
+  z-index: -1;
+}
+
+/* while the intro / outro plays: battlefield HUD out of the way */
+.game-root.intro-on .view-wrap > :not(canvas.view):not(.cinecard) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.4s;
+}
+.game-root.intro-on > :not(.view-wrap) {
+  opacity: 0.18;
+  pointer-events: none !important;
+  transition: opacity 0.5s;
+}

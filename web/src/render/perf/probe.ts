@@ -15,6 +15,7 @@ type Tally = { calls: number; tris: number };
 
 /** Category of a drawn object: the nearest userData.perfCat up the parent chain, else "<scene child>/<its child>" names. */
 function catOf(o: THREE.Object3D, scene: THREE.Object3D): string {
+  if ((o as THREE.Object3D & { isXray?: boolean }).isXray) return 'xray-proxy';
   let prev: THREE.Object3D | null = null;
   for (let p: THREE.Object3D | null = o; p; prev = p, p = p.parent) {
     const c = p.userData.perfCat as string | undefined;

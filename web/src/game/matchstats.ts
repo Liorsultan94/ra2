@@ -1,5 +1,5 @@
-import { DEFS } from '../sim/defs';
-import { SW_INFO, SW_WEAPONS, type SwKind } from '../sim/specialdefs';
+import { DEFS, WEAPONS } from '../sim/defs';
+import { SW_INFO, type SwKind } from '../sim/specialdefs';
 import { RANK_NAMES, xpValue } from '../sim/veterancy';
 import { TPS, type SimEvent, type UnitDef } from '../sim/types';
 import type { World } from '../sim/world';
@@ -88,7 +88,7 @@ function weaponLabel(id: string): string {
 }
 
 export class MatchTracker {
-  readonly side: [SidePerf, SidePerf] = [newSide(), newSide()];
+  readonly side: SidePerf[] = [newSide(), newSide()];
   readonly samples: StatSample[] = [];
   private highlights: Highlight[] = [];
   private nextSample = 0;
@@ -233,8 +233,7 @@ export class MatchTracker {
         }
         break;
       case 'impact': {
-        const sw = SW_WEAPONS.find((x) => x.id === ev.weapon);
-        const wd = sw ?? null;
+        const wd = WEAPONS[ev.weapon];
         const dmg = wd ? wd.damage * (1 + (wd.splash ?? 0)) : 0;
         if (dmg > 0 && (!this.bigBlast || dmg > this.bigBlast.score)) this.bigBlast = { score: dmg, t: this.t, weapon: ev.weapon };
         break;

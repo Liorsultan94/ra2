@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { setPerfPrefs } from './perf/hud';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { DEFS, WEAPONS, unitDef } from '../sim/defs';
 import type { Entity, UnitDef } from '../sim/types';
@@ -28,9 +29,11 @@ export const OUTLINE_LAYER = 25; // 20 heat, 21 x-ray, 22 contact shadows
 
 /** User preferences (menu.ts keeps them in sync with the saved settings). */
 export const readabilityPrefs = { icons: true, outlines: true };
-export function setReadabilityPrefs(p: { icons?: boolean; outlines?: boolean }) {
+export function setReadabilityPrefs(p: { icons?: boolean; outlines?: boolean; showFps?: boolean; battery?: boolean }) {
   readabilityPrefs.icons = p.icons !== false;
   readabilityPrefs.outlines = p.outlines !== false;
+  // the performance settings ride along (src/render/perf/hud.ts)
+  setPerfPrefs(p);
 }
 
 /** Icon fade range in CSS pixels per world unit at the unit (start showing .. fully shown). */
@@ -625,6 +628,8 @@ class UnitOutlines {
     const env = scene.environment;
     const ov = scene.overrideMaterial;
     const sh = gl.shadowMap.autoUpdate;
+    // the main view already updated every world matrix this frame
+    const mwu = scene.matrixWorldAutoUpdate;
     const clear = gl.getClearColor(this.clear);
     const clearA = gl.getClearAlpha();
     const auto = gl.autoClear;
@@ -633,6 +638,7 @@ class UnitOutlines {
     scene.environment = null;
     scene.overrideMaterial = this.maskMat;
     gl.shadowMap.autoUpdate = false;
+    scene.matrixWorldAutoUpdate = false;
     gl.setClearColor(0x000000, 0);
     gl.setRenderTarget(this.rt);
     gl.autoClear = true;
@@ -642,6 +648,7 @@ class UnitOutlines {
     gl.setRenderTarget(null);
     gl.setClearColor(clear, clearA);
     gl.shadowMap.autoUpdate = sh;
+    scene.matrixWorldAutoUpdate = mwu;
     scene.overrideMaterial = ov;
     scene.environment = env;
     scene.background = bg;

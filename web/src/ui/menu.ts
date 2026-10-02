@@ -28,6 +28,10 @@ export interface Settings {
   icons?: boolean;
   /** Thin team-coloured outline around every unit. */
   outlines?: boolean;
+  /** Performance readout (fps, frame ms, draw calls; src/render/perf/hud.ts). */
+  showFps?: boolean;
+  /** Battery saver: cap the frame rate at 30 fps. */
+  battery?: boolean;
   /**
    * Control scheme: 'simple' (phones: tap = select / move, big ARMY button, decluttered HUD)
    * or 'advanced' (the full RTS command set; mouse and keyboard always work the same).
@@ -160,8 +164,8 @@ export class MainMenu {
           <label>Difficulty<select data-o="difficulty">${opt('easy', st.difficulty, 'Easy')}${opt('normal', st.difficulty, 'Normal')}${opt('hard', st.difficulty, 'Hard')}</select></label>
           <label>Credits<select data-o="credits">${[5000, 10000, 20000].map((c) => opt(String(c), String(st.credits), '$' + c.toLocaleString('en-US'))).join('')}</select></label>
           <label>Map<select disabled><option>Frontline Crossing (2 players)</option></select></label>
-          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}${opt('cycle', st.tod ?? 'day', 'Dynamic cycle')}</select></label>
-          <label>Weather<select data-o="weather">${opt('clear', st.weather ?? 'clear', 'Clear')}${opt('rain', st.weather ?? 'clear', 'Rain')}${opt('snow', st.weather ?? 'clear', 'Snow')}${opt('sandstorm', st.weather ?? 'clear', 'Sandstorm')}</select></label>
+          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}${opt('cycle', st.tod ?? 'day', 'Dynamic cycle')}${opt('mist', st.tod ?? 'day', 'Misty morning')}</select></label>
+          <label>Weather<select data-o="weather">${opt('clear', st.weather ?? 'clear', 'Clear')}${opt('rain', st.weather ?? 'clear', 'Rain')}${opt('snow', st.weather ?? 'clear', 'Snow')}${opt('sandstorm', st.weather ?? 'clear', 'Sandstorm')}${opt('dynamic', st.weather ?? 'clear', 'Dynamic')}</select></label>
         </div>
         <div class="row">
           <button class="mbtn" data-a="back">Back</button>
@@ -266,6 +270,8 @@ function settingsHtml(st: Settings) {
       <label class="chk"><input type="checkbox" data-s="xray"${st.xray !== false ? ' checked' : ''}> X-ray silhouettes (units hidden behind buildings / trees)</label>
       <label class="chk"><input type="checkbox" data-s="icons"${st.icons !== false ? ' checked' : ''}> Unit icons when zoomed out</label>
       <label class="chk"><input type="checkbox" data-s="outlines"${st.outlines !== false ? ' checked' : ''}> Unit outlines (team-coloured edge)</label>
+      <label class="chk"><input type="checkbox" data-s="battery"${st.battery ? ' checked' : ''}> Battery saver (30 fps cap)</label>
+      <label class="chk"><input type="checkbox" data-s="showFps"${st.showFps ? ' checked' : ''}> Show FPS</label>
       <label>Graphics<select data-s="quality">${opt('auto', 'Auto')}${opt('low', 'Low (weak devices)')}${opt('medium', 'Medium')}${opt('high', 'High')}${opt('ultra', 'Ultra (strong PCs)')}</select></label>
       <p class="note">Graphics changes apply to the next battle.</p>
       <div class="row"><button class="mbtn primary" data-a="back">Back</button></div>
@@ -282,6 +288,8 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       else if (k === 'xray') st.xray = (inp as HTMLInputElement).checked;
       else if (k === 'icons') st.icons = (inp as HTMLInputElement).checked;
       else if (k === 'outlines') st.outlines = (inp as HTMLInputElement).checked;
+      else if (k === 'battery') st.battery = (inp as HTMLInputElement).checked;
+      else if (k === 'showFps') st.showFps = (inp as HTMLInputElement).checked;
       else if (k === 'controls') st.controls = inp.value === 'simple' ? 'simple' : 'advanced';
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
       else if (k === 'sfx') st.sfx = Number(inp.value);

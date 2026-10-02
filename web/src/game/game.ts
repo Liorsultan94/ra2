@@ -8,6 +8,7 @@ import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
+import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality } from '../render/renderer';
@@ -17,6 +18,11 @@ import { Hud } from '../ui/hud';
 import { ControlsUI, type OrderMode } from '../ui/controls';
 import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
 import { PhotoMode } from './photomode';
+import { MatchTracker, type MatchReport } from './matchstats';
+import { Briefing, buildBriefing, type BriefingInfo } from '../ui/briefing';
+import { CineCard } from '../ui/cinecard';
+import { BattleIntro, BattleOutro } from '../render/intro';
+import { flagDataUrl } from '../render/flags';
 
 export interface GameOptions {
   faction: Faction;
@@ -33,11 +39,17 @@ export interface GameOptions {
   xray?: boolean;
   /** Control scheme: 'simple' touch controls + decluttered HUD, or 'advanced' (default: simple on touch screens). */
   controls?: 'simple' | 'advanced';
+  /**
+   * Mission briefing while loading + intro flyover + victory / defeat outro (default 'full').
+   * 'quick': the briefing deploys itself as soon as loading ends and there is no intro flyover (test URLs);
+   * 'off': the plain loading overlay and the classic end sequence.
+   */
+  briefing?: 'full' | 'quick' | 'off';
 }
 
 export interface GameCallbacks {
   onMenu(): void;
-  onEnd(win: boolean, stats: { you: World['players'][0]; enemy: World['players'][0]; time: number }): void;
+  onEnd(win: boolean, stats: { you: World['players'][0]; enemy: World['players'][0]; time: number; report?: MatchReport; codename?: string }): void;
 }
 
 type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove' | 'patrol' | 'guard';
@@ -87,6 +99,20 @@ export class Game {
   private lastNudge = 0;
   /** Photo mode: frozen battle, free camera, filters and a PNG shutter (photomode.ts). */
   readonly photo: PhotoMode;
+  /** Match seed (operation codename, briefing). */
+  readonly seed: number;
+  /** After-action report statistics (observes events only). */
+  readonly tracker: MatchTracker | null = null;
+  /** Mission briefing data (null in attract mode / with briefing 'off'). */
+  readonly brief: BriefingInfo | null = null;
+  /** Briefing overlay while loading / waiting for "Deploy" (the battle holds still). */
+  private briefing: Briefing | null = null;
+  /** Intro flyover / victory-defeat outro and their letterbox card. */
+  private intro: BattleIntro | null = null;
+  private outro: BattleOutro | null = null;
+  private card: CineCard | null = null;
+  /** Where the last structure fell (outro camera target). */
+  private lastFall: { x: number; y: number; owner: number } | null = null;
 
   constructor(
     container: HTMLElement,
@@ -95,8 +121,9 @@ export class Game {
     private cb: GameCallbacks,
   ) {
     const attract = !!opts.attract;
+    this.seed = opts.seed ?? Math.floor(Math.random() * 1e9);
     this.world = new World({
-      seed: opts.seed ?? Math.floor(Math.random() * 1e9),
+      seed: this.seed,
       credits: opts.credits,
       players: [
         { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract },
@@ -185,7 +212,7 @@ export class Game {
           ? 'Your MCV is selected. Tap <b>Deploy</b> (or tap the MCV again) to build your Construction Yard.'
           : 'Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.',
       );
-      this.audio.say('Battle control online');
+      if ((opts.briefing ?? 'full') === 'off') this.audio.say('Battle control online');
     }
     if (!attract) {
       this.ctlUI = new ControlsUI(this.hud, this.renderer, this.cameos, this.ctl, this.local, {
@@ -223,15 +250,84 @@ export class Game {
     this.renderer.setZoom(this.renderer.defaultZoom(attract));
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+    if (!attract) {
+      this.tracker = new MatchTracker(this.world, this.local);
+      if ((opts.briefing ?? 'full') !== 'off') this.openBriefing(container);
+    }
     if (!attract && !/[?&]warm=0\b/.test(location.search)) this.startWarmup();
+    else if (this.briefing) this.briefing.setReady(() => this.deploy());
+  }
+
+  /** Mission briefing over the whole screen while the battle loads (src/ui/briefing.ts). */
+  private openBriefing(container: HTMLElement) {
+    const atm = (this.renderer.atmos as unknown as { cfg?: { tod?: string; weather?: string } }).cfg ?? {};
+    const info = buildBriefing(this.world, this.local, { seed: this.seed, difficulty: this.opts.difficulty, tod: atm.tod, weather: atm.weather, credits: this.opts.credits });
+    (this as { brief: BriefingInfo | null }).brief = info;
+    this.briefing = new Briefing(container, info, this.world, this.local, this.renderer.terrain.minimapImage, {
+      autoDeploy: this.opts.briefing === 'quick' ? 1.2 : 14,
+      say: (t) => this.audio.unlocked && this.audio.say(t),
+    });
+  }
+
+  /** "Deploy" on the briefing: fly the intro (or hand over control straight away). */
+  private deploy() {
+    this.briefing = null; // it fades out by itself
+    this.audio.unlock();
+    this.last = performance.now();
+    const mcv = this.world.list.find((e) => e.owner === this.local && e.kind === 'unit' && unitDef(e.def).mcv);
+    const me = this.world.players[this.local];
+    const hx = mcv ? mcv.x : me.startX + 0.5;
+    const hy = mcv ? mcv.y : me.startY + 0.5;
+    if (this.opts.briefing === 'quick' || !this.brief) {
+      this.startBattleClock();
+      return;
+    }
+    const m = this.world.map;
+    const foe = m.starts[1 - this.local] ?? { x: m.w / 2, y: m.h / 2 };
+    const via = m.bridges[0] ?? { x: m.w / 2, y: m.h / 2 };
+    this.intro = new BattleIntro(this.renderer, m, { x: foe.x + 0.5, y: foe.y + 0.5 }, via, { x: hx, y: hy }, this.renderer.zoom, 6.5);
+    this.card = new CineCard(this.hud.viewWrap, () => this.skipIntro());
+    this.hud.root.classList.add('intro-on');
+    const you = this.brief.you;
+    this.introCardAt = [0.5, 4.9];
+    this.introCardShown = 0;
+    this.cardText = { kicker: `${you.name} armed forces · Operation`, flag: flagDataUrl(you.faction), title: this.brief.codename, sub: `${this.world.map.name} · ${this.brief.time.split(' · ')[0]}`, tone: 'intro' };
+    this.audio.sting('heavy');
+  }
+  private introCardAt: [number, number] = [0, 0];
+  private introCardShown = 0;
+  private introT = 0;
+  private cardText: { kicker?: string; flag?: string; title: string; sub?: string; tone?: 'intro' | 'win' | 'lose' } | null = null;
+
+  private skipIntro() {
+    if (!this.intro) return;
+    this.intro.finish();
+    this.endIntro();
+  }
+
+  private endIntro() {
+    this.intro = null;
+    this.card?.close();
+    this.card = null;
+    this.hud.root.classList.remove('intro-on');
+    this.startBattleClock();
+  }
+
+  /** Control to the player: the simulation starts now. */
+  private startBattleClock() {
+    this.last = performance.now();
+    this.acc = 0;
+    this.startTime = performance.now();
+    this.audio.say('Battle control online');
   }
 
   /** Compile every shader / material of this match under a loading overlay before the first battle frame. */
   private startWarmup() {
     this.warming = true;
-    this.hud.setLoading(0);
+    const progress = (k: number) => (this.briefing ? this.briefing.setProgress(k) : this.hud.setLoading(k));
+    progress(0);
     const factions = [...new Set(this.world.players.map((p) => p.faction))];
-    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && this.hud.setLoading(k))
+    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k))
       .then((res) => {
         this.warmup = res;
         console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms`);
@@ -240,7 +336,8 @@ export class Game {
       .finally(() => {
         if (this.destroyed) return;
         this.warming = false;
-        this.hud.setLoading(null);
+        if (this.briefing) this.briefing.setReady(() => this.deploy());
+        else this.hud.setLoading(null);
         this.last = performance.now();
       });
   }
@@ -326,12 +423,28 @@ export class Game {
   private frame = (now: number) => {
     if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.frame);
+    if (skipFrame(now)) return; // battery saver: 30 fps cap (render/perf/hud.ts)
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
-    if (this.warming) return;
+    if (this.warming || this.briefing) return;
+    if (this.intro) {
+      // intro flyover: the simulation has not started; only the camera moves
+      this.introT += dt;
+      if (this.cardText && this.introCardShown === 0 && this.introT >= this.introCardAt[0]) {
+        this.introCardShown = 1;
+        this.card?.show(this.cardText);
+      } else if (this.introCardShown === 1 && this.introT >= this.introCardAt[1]) {
+        this.introCardShown = 2;
+        this.card?.hideCard();
+      }
+      if (this.intro.update(dt)) this.endIntro();
+      this.renderer.render(1, dt);
+      return;
+    }
+    if (this.outro && this.outro.update(dt)) this.endOutro();
     if (this.cine.active) this.cine.update(dt, this.renderer);
     this.hud.setCinematic(this.cine.active);
-    const ts = this.cine.timeScale;
+    const ts = this.cine.timeScale * (this.outro ? this.outro.timeScale : 1);
     if (!this.paused) {
       this.acc += dt * 1000 * this.speed * ts;
       let steps = 0;
@@ -344,7 +457,8 @@ export class Game {
       if (steps >= 6) this.acc = 0;
     }
     const alpha = this.paused ? 1 : Math.min(1, this.acc / TICK_MS);
-    if (!this.cine.active && !this.photo.active) this.updateCamera(dt);
+    this.tracker?.update();
+    if (!this.cine.active && !this.photo.active && !this.outro) this.updateCamera(dt);
     if (this.local >= 0 && !this.photo.active) this.updateHover();
     this.renderer.render(alpha, this.paused ? 0 : dt * ts);
     this.hud.drawOverlay(alpha, this.hover, this.ctl.groupOf, now / 1000);
@@ -483,6 +597,8 @@ export class Game {
   }
 
   private onEvent(ev: SimEvent) {
+    this.tracker?.onEvent(ev);
+    if (ev.t === 'death' && ev.kind === 'building' && ev.owner >= 0) this.lastFall = { x: ev.x, y: ev.y, owner: ev.owner };
     this.renderer.handleEvent(ev);
     this.modes.onEvent(ev);
     if (ev.t === 'launch' || ev.t === 'airburst' || ev.t === 'impact') this.considerCinematic(ev);
@@ -628,10 +744,34 @@ export class Game {
       return;
     }
     this.audio.say(win ? 'Mission accomplished' : 'Mission failed');
-    setTimeout(() => {
-      this.paused = true;
-      this.cb.onEnd(win, { you: this.world.players[0], enemy: this.world.players[1], time: (performance.now() - this.startTime) / 1000 });
-    }, 2500);
+    this.endWin = win;
+    if ((this.opts.briefing ?? 'full') === 'off') {
+      setTimeout(() => this.endOutro(), 2500);
+      return;
+    }
+    // outro: slow motion, the camera drifts to where the last structure fell, VICTORY / DEFEAT card
+    if (this.photo.active) this.photo.exit();
+    const fall = this.lastFall ?? { x: this.renderer.target.x, y: this.renderer.target.z, owner: -1 };
+    this.outro = new BattleOutro(this.renderer, this.world.map, fall, 4.8);
+    this.card = new CineCard(this.hud.viewWrap, () => this.outro?.skip(), 'TAP TO CONTINUE');
+    this.card.show({ kicker: this.brief ? `Operation ${this.brief.codename}` : undefined, title: win ? 'VICTORY' : 'DEFEAT', sub: win ? 'Mission accomplished' : 'Mission failed', tone: win ? 'win' : 'lose' });
+    this.hud.root.classList.add('intro-on');
+    this.renderer.selection.clear();
+    if (win) this.audio.sting('heavy');
+  }
+  private endWin = false;
+  private reported = false;
+
+  /** Outro over (or skipped): freeze the battle and hand over to the after-action report. */
+  private endOutro() {
+    if (this.destroyed || this.reported) return;
+    this.reported = true;
+    this.outro = null;
+    this.paused = true;
+    this.card?.destroy();
+    this.card = null;
+    const report = this.tracker?.report(this.endWin);
+    this.cb.onEnd(this.endWin, { you: this.world.players[0], enemy: this.world.players[1], time: report?.time ?? (performance.now() - this.startTime) / 1000, report, codename: this.brief?.codename });
   }
 
   // --------------------------------------------------------------- commands
@@ -1394,6 +1534,12 @@ export class Game {
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
+    if (this.briefing || this.intro || this.outro) {
+      // briefing / intro / outro: any key skips the cinematic (the briefing handles its own keys)
+      if (down && !e.repeat && this.intro) this.skipIntro();
+      else if (down && !e.repeat && this.outro && e.key !== 'Escape') this.outro.skip();
+      return;
+    }
     if (down && this.cine.active) {
       this.cine.skip();
       return;
@@ -1508,6 +1654,10 @@ export class Game {
   destroy() {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
+    this.briefing?.destroy();
+    this.briefing = null;
+    this.card?.destroy();
+    this.renderer.photoCam = null;
     for (const d of this.disposers) d();
     this.renderer.viewHook = null;
     this.photo.dispose();

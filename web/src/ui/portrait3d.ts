@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { DEFS, FACTION_INFO, unitDef } from '../sim/defs';
 import type { Entity } from '../sim/types';
-import type { CameoFactory } from '../render/cameo';
+import { frameBox, studioRig, type CameoFactory, type StudioRig } from '../render/cameo';
 import { createModel, type AnimState, type Model, type ModelStyle } from '../render/models';
 import './portrait3d.css';
 
@@ -14,16 +14,21 @@ import './portrait3d.css';
  * animation runs with the entity's damage (wear.ts soot / battered plates),
  * turrets sweep gently and rotors spin.
  *
- * Cost: the frame is rendered at ~15 fps into the CameoFactory's small
- * offscreen canvas (same GL context as the sidebar cameos, so no extra
- * context and the shader programs are already compiled) and blitted into a
- * 2D canvas inside the portrait. Nothing runs while nothing is selected, the
+ * Cost: the frame is rendered at ~15 fps into the CameoFactory's offscreen
+ * canvas (same GL context as the sidebar cameos, so no extra context and the
+ * shader programs are already compiled) at up to 2x the portrait's device
+ * pixels (MSAA + supersampling, capped at MAX_PX; 1.5x on touch devices) and
+ * filtered down into a 2D canvas inside the portrait. The studio rig (warm
+ * key, cool fill, faction rim, hemisphere) and the room environment for the
+ * metal / glass are shared with the cameos (render/cameo.ts studioRig()). Nothing runs while nothing is selected, the
  * portrait is hidden (More panel, photo mode, background tab) or on 'low'
  * quality, where the static cameo stays.
  */
 
 const FPS = 15;
-const MAX_PX = 256;
+/** Largest rendered side (px) of the supersampled frame, and of the displayed canvas. */
+const MAX_PX = 512;
+const MAX_OUT = 384;
 const CACHE = 4;
 
 interface Entry {
@@ -43,9 +48,8 @@ export class LivePortrait {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(26, 4 / 3, 0.05, 200);
   private readonly pivot = new THREE.Group();
-  private readonly hemi = new THREE.HemisphereLight(0xa4b6d0, 0x202830, 1.25);
-  private readonly key = new THREE.DirectionalLight(0xfff0dc, 3.0);
-  private readonly rim = new THREE.DirectionalLight(0x4aa0ff, 3.2);
+  private readonly rig: StudioRig;
+  private readonly ss: number;
   private readonly floor: THREE.Mesh;
   private readonly cache = new Map<string, Entry>();
   private cur: Entry | null = null;
@@ -66,10 +70,15 @@ export class LivePortrait {
   ) {
     this.canvas.className = 'pt-live';
     this.ctx = this.canvas.getContext('2d');
-    // same light rig layout as the cameo scene (1 hemisphere + 2 directional): the programs are shared
-    this.key.position.set(-3, 5, 4.5);
-    this.rim.position.set(3.5, 2.2, -5);
-    this.scene.add(this.hemi, this.key, this.rim, this.pivot);
+    // same light rig + environment as the cameo scene: the programs are shared
+    this.rig = studioRig(this.scene);
+    this.rig.hemi.intensity = 1.0;
+    this.rig.rim.intensity = 2.6;
+    this.scene.environment = cameos.environment();
+    this.scene.environmentIntensity = 0.5;
+    this.scene.add(this.pivot);
+    const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+    this.ss = coarse ? 1.5 : 2;
     // soft studio floor spot under the model
     const c = document.createElement('canvas');
     c.width = c.height = 64;
@@ -136,8 +145,8 @@ export class LivePortrait {
     // keep the rim saturated but bright enough to read on any accent colour
     const hsl = { h: 0, s: 0, l: 0 };
     accent.getHSL(hsl);
-    this.rim.color.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.max(0.55, hsl.l));
-    this.hemi.groundColor.copy(accent).multiplyScalar(0.28);
+    this.rig.rim.color.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.max(0.55, hsl.l));
+    this.rig.hemi.groundColor.copy(accent).multiplyScalar(0.28);
     (this.floor.material as THREE.MeshBasicMaterial).color.copy(accent).lerp(new THREE.Color(0x8aa0b4), 0.6);
   }
 
@@ -153,7 +162,9 @@ export class LivePortrait {
     const model = createModel(modelKey, style, null);
     // settle the pose once before measuring (buildings fully built, gear down)
     model.anim?.({ ...this.anim, dt: 0 });
-    const box = new THREE.Box3().setFromObject(model.root);
+    model.root.updateMatrixWorld(true);
+    // whip antennas would shrink the vehicle in the frame
+    const box = frameBox(model.root, true);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     // skinned meshes (infantry) report their bind-space box: trust the model's own height then
@@ -195,12 +206,16 @@ export class LivePortrait {
     const cw = host.clientWidth;
     const ch = host.clientHeight;
     if (!cw || !ch) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    // displayed canvas at device pixels, the GL frame supersampled on top of MSAA
     let w = Math.round(cw * dpr);
     let h = Math.round(ch * dpr);
-    const k = Math.min(1, MAX_PX / Math.max(w, h));
+    const k = Math.min(1, MAX_OUT / Math.max(w, h));
     w = Math.max(16, Math.round(w * k));
     h = Math.max(16, Math.round(h * k));
+    const ks = Math.min(this.ss, MAX_PX / Math.max(w, h));
+    const rw = Math.max(16, Math.round(w * ks));
+    const rh = Math.max(16, Math.round(h * ks));
     this.time += dt;
     this.angle += dt * 0.42;
     this.pivot.rotation.y = this.angle;
@@ -224,7 +239,7 @@ export class LivePortrait {
     // framing: the whole turntable sweep fits the view
     const cam = this.camera;
     cam.aspect = w / h;
-    const elev = THREE.MathUtils.degToRad(cur.air ? 16 : 22);
+    const elev = THREE.MathUtils.degToRad(cur.air ? 16 : 24);
     // horizontal: the sweep radius; vertical: the sweep ellipse seen from above plus the height
     const vHalf = Math.max(cur.rh / cam.aspect, cur.rh * Math.sin(elev) + cur.hy * Math.cos(elev)) * 1.06;
     const dist = vHalf / Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
@@ -235,14 +250,16 @@ export class LivePortrait {
     cam.far = this.dist * 4 + 10;
     cam.lookAt(0, cy, 0);
     cam.updateProjectionMatrix();
-    const src = this.cameos.renderLive(this.scene, cam, w, h);
+    const src = this.cameos.renderLive(this.scene, cam, rw, rh);
     if (!src) return this.detach();
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
     this.ctx.clearRect(0, 0, w, h);
-    this.ctx.drawImage(src, 0, 0, w, h, 0, 0, w, h);
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = 'high';
+    this.ctx.drawImage(src, 0, 0, rw, rh, 0, 0, w, h);
     if (!this.drawn) {
       this.drawn = true;
       host.classList.add('live');

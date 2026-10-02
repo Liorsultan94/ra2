@@ -31,8 +31,11 @@ import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import { JitterRenderPass, TemporalPass } from './ultra/temporal';
-import { PerfHud } from './perf/hud';
+import { PerfHud, perfPrefs } from './perf/hud';
 import { PerfProbe } from './perf/probe';
+import { applyLod, prepareLod, type LodInfo } from './perf/lod';
+import { OccluderGrid } from './perf/occlusion';
+import { treeSpots } from './vegetation';
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
@@ -105,6 +108,10 @@ export interface Visual {
   trackAcc: number;
   bank: number;
   anim: AnimState;
+  /** Far-zoom detail LOD (src/render/perf/lod.ts). */
+  lod: LodInfo;
+  /** Something (tree, building, ridge) may hide this unit from the camera: x-ray proxies needed (perf/occlusion.ts). */
+  occl: boolean;
 }
 
 interface Wreck {
@@ -328,6 +335,7 @@ export class GameRenderer {
 
     const { map } = world;
     this.fog = new FogOfWar(map.w, map.h);
+    this.occluders = new OccluderGrid(map, treeSpots(map, quality));
     this.terrain = new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
     this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
@@ -342,6 +350,11 @@ export class GameRenderer {
           fl.lights.push(l);
           fl.group.add(l);
         }
+    }
+    if (quality === 'medium' && coarse) {
+      // phones: two dynamic fire / explosion lights instead of three (every lit pixel loops over them; the ground glow decals stay)
+      const fl = this.effects.lights as unknown as { lights?: THREE.PointLight[]; group?: THREE.Group };
+      if (Array.isArray(fl.lights) && fl.group && fl.lights.length > 2) fl.group.remove(fl.lights.pop()!);
     }
     this.debris = new Debris(map, this.effects, this.fog);
     this.fracture = new Fracture(quality);
@@ -851,8 +864,10 @@ export class GameRenderer {
   private makeVisual(e: Entity): Visual {
     const d = DEFS[e.def];
     const model = createModel(d.model, styleFor(this.world, e.owner), this.fog);
-    model.root.userData.perfCat = e.kind === 'building' ? 'building' : d.category === 'infantry' ? 'infantry' : d.category === 'air' ? 'aircraft' : 'vehicle';
+    const cat = e.kind === 'building' ? 'building' : d.category === 'infantry' ? 'infantry' : d.category === 'air' ? 'aircraft' : 'vehicle';
+    model.root.userData.perfCat = cat;
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
+    const lod = prepareLod(model.root, cat, this.quality === 'medium', e.owner >= 0 ? this.world.players[e.owner].color : 0x9a9a9a);
     this.scene.add(model.root);
     return {
       id: e.id,
@@ -876,6 +891,8 @@ export class GameRenderer {
       trackAcc: 0,
       bank: 0,
       anim: newAnim(),
+      lod,
+      occl: true,
     };
   }
 
@@ -886,6 +903,8 @@ export class GameRenderer {
   }
 
   private airShadows = new AirShadows();
+  private occluders: OccluderGrid;
+  private occlFrame = 0;
 
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   private addContact(e: Entity, v: Visual) {
@@ -927,6 +946,26 @@ export class GameRenderer {
     this.airShadows.begin(this.scene);
     this.contact?.begin();
     this.chutes.begin();
+    // screen size for the detail LOD: px per world unit = lodK / view depth
+    const cam = this.camera;
+    cam.getWorldDirection(this.camFwd);
+    const cf = this.camFwd;
+    const cp = cam.position;
+    const ty0 = groundHeight(w.map, this.target.x, this.target.z);
+    const persp = cam instanceof THREE.PerspectiveCamera && !this.photoCam;
+    const refDepth = persp ? (this.target.x - cp.x) * cf.x + (ty0 - cp.y) * cf.y + (this.target.z - cp.z) * cf.z : 1;
+    const lodK = (this.height / (BASE_VIEW / this.zoom)) * refDepth;
+    if (this.occlFrame++ % 15 === 0) {
+      const bl: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
+      for (const v of this.visuals.values()) {
+        const be = v.visible ? w.get(v.id) : undefined;
+        if (!be || be.kind !== 'building') continue;
+        const bd = buildingDef(be.def);
+        bl.push({ id: be.id, tx: be.tx, ty: be.ty, w: bd.w, h: bd.h, height: v.model.height ?? 1 });
+      }
+      this.occluders.setBuildings(bl);
+    }
+    const cd = this.camDir;
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       seen.add(e.id);
@@ -1016,6 +1055,12 @@ export class GameRenderer {
       }
       this.updateRing(e, v, d);
       if (vis && this.contact) this.addContact(e, v);
+      if (vis) {
+        const rp = root.position;
+        const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
+        applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
+        v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
+      }
     }
     this.airShadows.end();
     this.contact?.end();
@@ -1730,17 +1775,28 @@ export class GameRenderer {
     if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
     const ft = gap;
     this.frameTimes.push(ft);
-    if (this.frameTimes.length < 30) return;
+    // short windows while the governor is still finding its level (first seconds, right after a step down)
+    if (++this.govFrames < 400) this.fastFrames = Math.max(this.fastFrames, 1);
+    const win = this.fastFrames > 0 ? 12 : 30;
+    if (this.frameTimes.length < win) return;
     const sorted = this.frameTimes.slice().sort((a, b) => a - b);
     this.frameTimes.length = 0;
     const med = sorted[sorted.length >> 1];
     this.lastFt = med;
-    if (med > 1 / 42 && this.level < this.ladder.length - 1) {
+    if (this.fastFrames > 0) this.fastFrames = Math.max(0, this.fastFrames - win);
+    // battery saver caps at 30 fps (perf/hud.ts): judge frames against that budget instead
+    const capped = perfPrefs.battery;
+    const slow = capped ? 1 / 26 : 1 / 42;
+    const fast = capped ? 1 / 29 : 1 / 56;
+    if (med > slow && this.level < this.ladder.length - 1) {
       // undoing a recent upgrade: be more patient next time
       if (now - this.lastUpAt < 4000) this.upNeed = Math.min(40, this.upNeed * 2);
       this.goodWindows = 0;
-      this.applyLevel(Math.min(this.ladder.length - 1, this.level + (med > 1 / 24 ? 2 : 1)));
-    } else if (med < 1 / 56 && this.level > 0) {
+      // far off the target (under ~22 fps): skip rungs
+      const steps = med > 1 / 16 ? 3 : med > 1 / 24 ? 2 : 1;
+      this.applyLevel(Math.min(this.ladder.length - 1, this.level + steps));
+      this.fastFrames = 60;
+    } else if (med < fast && this.level > 0) {
       if (++this.goodWindows >= this.upNeed) {
         this.goodWindows = 0;
         this.lastUpAt = now;
@@ -1748,6 +1804,8 @@ export class GameRenderer {
       }
     } else this.goodWindows = 0;
   }
+  private govFrames = 0;
+  private fastFrames = 0;
 
   render(alpha: number, dt: number) {
     this.time += dt;
@@ -1775,19 +1833,67 @@ export class GameRenderer {
     this.superFx.update(dt, this.time);
     this.effects.update(dt);
     this.updateCamera();
+    this.scheduleShadow(dt);
     this.updateReadability(dt);
     const vh = this.viewHook;
     vh?.before(dt);
-    if (vh?.renderMain()) {
-      // the view mode drew the frame itself
-    } else if (this.composer && this.usePost) this.composer.render(dt);
-    else this.renderer.render(this.scene, this.camera);
-    this.readability.renderOverlays(this.renderer, this.scene, this.camera);
-    vh?.after(dt);
+    // world matrices once per frame: the main view, AO, outline mask, drone feed and heat mask all reuse them
+    const scene = this.scene;
+    scene.updateMatrixWorld();
+    scene.matrixWorldAutoUpdate = false;
+    try {
+      if (vh?.renderMain()) {
+        // the view mode drew the frame itself
+      } else if (this.composer && this.usePost) this.composer.render(dt);
+      else this.renderer.render(scene, this.camera);
+      this.readability.renderOverlays(this.renderer, scene, this.camera);
+      vh?.after(dt);
+    } finally {
+      scene.matrixWorldAutoUpdate = true;
+    }
     this.adaptQuality();
     this.perf.frame();
     const st = this.ladder[this.level];
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1 });
+  }
+
+  private shadowKey = new Float64Array(9);
+  private shadowAge = 0;
+  /**
+   * Sun shadow map refresh throttle (not ultra's cascades): re-render it whenever the
+   * shadow frustum or the sun moves (panning, zoom, day cycle), otherwise every frame on
+   * high and every second frame on medium (moving units' shadows trail by one frame,
+   * imperceptible), and not at all while the game is paused and the view is still.
+   */
+  private scheduleShadow(dt: number) {
+    const sh = this.sun.shadow;
+    if (!this.sun.castShadow || this.csm) {
+      sh.autoUpdate = true;
+      return;
+    }
+    sh.autoUpdate = false;
+    const k = this.shadowKey;
+    const p = this.sun.position;
+    const t = this.sun.target.position;
+    const c = sh.camera;
+    const moved = k[0] !== p.x || k[1] !== p.y || k[2] !== p.z || k[3] !== t.x || k[4] !== t.y || k[5] !== t.z || k[6] !== c.right || k[7] !== c.top || k[8] !== sh.mapSize.x;
+    if (moved) {
+      k[0] = p.x;
+      k[1] = p.y;
+      k[2] = p.z;
+      k[3] = t.x;
+      k[4] = t.y;
+      k[5] = t.z;
+      k[6] = c.right;
+      k[7] = c.top;
+      k[8] = sh.mapSize.x;
+    }
+    const every = this.quality === 'high' ? 1 : 2;
+    this.shadowAge++;
+    if (moved || !sh.map || (dt > 0 && this.shadowAge >= every) || this.shadowAge > 30) {
+      sh.needsUpdate = true;
+      this.shadowAge = 0;
+    }
   }
 
   /** Icons / outlines / route arrows (after the camera so icon fades use this frame's view). */
