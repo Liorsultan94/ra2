@@ -922,7 +922,7 @@ export class GameRenderer {
     const gy = air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
     const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
     const bd = e.kind === 'building' ? buildingDef(e.def) : null;
-    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4);
+    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4, e.rank >= 2);
   }
 
   // ------------------------------------------------------------------ wrecks
@@ -1275,6 +1275,23 @@ export class GameRenderer {
         if (!prof) break;
         const g = standHeight(this.world.map, ev.x, ev.y);
         fx.blast(prof, ev.x, Math.max(ev.z, g + 0.05), ev.y, g);
+        break;
+      }
+      case 'promoted': {
+        // veterancy: golden burst under the unit (only if the local player can see it)
+        const t = this.world.get(ev.id);
+        if (!t || t.inside >= 0 || !this.isShown(t.id) || !this.visibleAt(t.x, t.y)) break;
+        const inf = unitDef(t.def).category === 'infantry';
+        const ground = () => {
+          const u = this.world.get(ev.id);
+          if (!u) return null;
+          const p = this.entityPos(u, 1);
+          p.y = standHeight(this.world.map, p.x, p.z);
+          return p;
+        };
+        this.overlay.promote(t.x, t.y, ground, inf ? 0.75 : 1.15);
+        const p = this.entityPos(t, 1);
+        for (let i = 0; i < 10; i++) fx.spark(p.x + (Math.random() - 0.5) * 0.5, p.y + 0.2 + Math.random() * 0.5, p.z + (Math.random() - 0.5) * 0.5, i % 3 ? 0xffd060 : 0xfff4c0);
         break;
       }
       case 'intercept': {

@@ -177,6 +177,28 @@ export class Game {
       });
   }
 
+  /**
+   * Attract mode: compile the scene's shaders while the boot splash covers it
+   * (the demo battle holds still meanwhile). `full` also builds every unit /
+   * building model of both sides (slower, smoother demo).
+   */
+  async prewarm(onProgress: (k: number) => void, full = false): Promise<void> {
+    if (this.warming || this.destroyed) return;
+    this.warming = true;
+    try {
+      const factions = full ? [...new Set(this.world.players.map((p) => p.faction))] : [];
+      this.warmup = await warmUp(this.renderer, factions, null, (k) => !this.destroyed && onProgress(k));
+      console.info(`[warmup] attract: ${this.warmup.models} models, ${this.warmup.programs} programs in ${this.warmup.ms} ms`);
+    } catch (e) {
+      console.warn('[warmup] failed', e);
+    } finally {
+      if (!this.destroyed) {
+        this.warming = false;
+        this.last = performance.now();
+      }
+    }
+  }
+
   /** Settings that can change mid-battle (pause menu). */
   setViewSettings(s: { droneCam?: 'auto' | 'off'; xray?: boolean }) {
     if (s.droneCam) this.modes.drone?.setMode(s.droneCam);
@@ -447,6 +469,9 @@ export class Game {
         break;
       case 'captured':
         if (mine) this.say('Building captured', 'good');
+        break;
+      case 'promoted':
+        if (mine) this.say(ev.rank >= 2 ? 'Unit promoted to elite' : 'Unit promoted', 'good');
         break;
       case 'sold':
         if (mine) this.sfx('sell');

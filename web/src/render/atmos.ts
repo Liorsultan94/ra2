@@ -12,17 +12,18 @@ import type { FinalPass } from './post';
 import type { Terrain } from './terrain';
 import { WeatherFx } from './weather';
 import { WX } from './wxuniforms';
+import { TPS } from '../sim/types';
 
 /*
  * Time of day, weather and night vision (all purely visual).
  *
- * Settings come from the URL (?tod=day|dusk|night, ?weather=clear|rain|snow|sandstorm,
+ * Settings come from the URL (?tod=day|dusk|night|cycle, ?weather=clear|rain|snow|sandstorm,
  * ?nv=1) or, for a skirmish, from the saved menu settings (`tod`, `weather`).
  * Day + clear leaves the renderer exactly as it is: no presets are applied and
  * no extra objects are created.
  */
 
-export type TimeOfDay = 'day' | 'dusk' | 'night';
+export type TimeOfDay = 'day' | 'dusk' | 'night' | 'cycle';
 export type Weather = 'clear' | 'rain' | 'snow' | 'sandstorm';
 type Q = 'low' | 'medium' | 'high';
 
@@ -32,7 +33,7 @@ export interface AtmosConfig {
   nv: boolean;
 }
 
-const TODS: TimeOfDay[] = ['day', 'dusk', 'night'];
+const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle'];
 const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm'];
 
 /** Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings. */
@@ -113,8 +114,11 @@ interface Preset {
 
 const C = (h: number) => new THREE.Color(h);
 
-function buildPreset(cfg: AtmosConfig): Preset {
-  // --- time of day
+/** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
+type Key = TimeOfDay | 'noon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
+
+/** Base (clear weather) preset of a time-of-day key; `light` = overall daylight 0..1 (weather haze scaling). */
+function todPreset(key: Key): { p: Preset; light: number } {
   const p: Preset = {
     sunC: C(0xffc68c),
     sunI: 3.2,
@@ -137,32 +141,66 @@ function buildPreset(cfg: AtmosConfig): Preset {
     dark: 0,
   };
   let light = 1;
-  if (cfg.tod === 'dusk') {
-    Object.assign(p, { sunI: 2.3, hemiI: 0.55, env: 0.24, cloud: 0.22, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.15, spec: 0.9, dark: 0.55 });
-    p.sunC.set(0xff8a4c);
-    p.sky.set(0x7a84b8);
-    p.gnd.set(0x4a3424);
-    p.haze.setRGB(0.3, 0.19, 0.16);
-    p.shadowTint.set(-0.012, 0.0, 0.04);
-    p.highTint.set(0.06, 0.015, -0.05);
-    p.bg.set(0x1c1418);
-    p.water.set(0.72, 0.6, 0.62);
-    light = 0.6;
-  } else if (cfg.tod === 'night') {
-    Object.assign(p, { sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 });
-    p.sunC.set(0x8ea8ff);
-    p.sky.set(0x3a5296);
-    p.gnd.set(0x0e1118);
-    p.haze.setRGB(0.022, 0.03, 0.055);
-    p.shadowTint.set(-0.008, 0.0, 0.03);
-    p.highTint.set(0.0, 0.004, 0.012);
-    p.bg.set(0x04060a);
-    p.water.set(0.2, 0.25, 0.38);
-    light = 0.12;
+  const set = (o: Partial<Record<'sunI' | 'hemiI' | 'env' | 'cloud' | 'sat' | 'vignette' | 'bloom' | 'exposure' | 'spec' | 'dark', number>>, sunC: number, sky: number, gnd: number, haze: [number, number, number], shadow: [number, number, number], high: [number, number, number], bg: number, water: [number, number, number]) => {
+    Object.assign(p, o);
+    p.sunC.set(sunC);
+    p.sky.set(sky);
+    p.gnd.set(gnd);
+    p.haze.setRGB(...haze);
+    p.shadowTint.set(...shadow);
+    p.highTint.set(...high);
+    p.bg.set(bg);
+    p.water.set(...water);
+  };
+  switch (key) {
+    case 'day':
+      break;
+    case 'dusk':
+      set({ sunI: 2.3, hemiI: 0.55, env: 0.24, cloud: 0.22, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.15, spec: 0.9, dark: 0.55 }, 0xff8a4c, 0x7a84b8, 0x4a3424, [0.3, 0.19, 0.16], [-0.012, 0.0, 0.04], [0.06, 0.015, -0.05], 0x1c1418, [0.72, 0.6, 0.62]);
+      light = 0.6;
+      break;
+    case 'night':
+      set({ sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 }, 0x8ea8ff, 0x3a5296, 0x0e1118, [0.022, 0.03, 0.055], [-0.008, 0.0, 0.03], [0.0, 0.004, 0.012], 0x04060a, [0.2, 0.25, 0.38]);
+      light = 0.12;
+      break;
+    // ---- extra stops of the dynamic cycle
+    case 'noon':
+      set({ sunI: 3.3, hemiI: 0.85, env: 0.45, cloud: 0.34, sat: 1.04, vignette: 0.28, bloom: 0.38, exposure: 1.13, spec: 1, dark: 0 }, 0xfff0dc, 0xa6c4f0, 0x6a5434, [0.3, 0.31, 0.32], [-0.012, 0.0, 0.024], [0.015, 0.008, -0.015], 0x2a2824, [1, 1, 1]);
+      break;
+    case 'golden':
+      set({ sunI: 3.0, hemiI: 0.68, env: 0.34, cloud: 0.28, sat: 1.14, vignette: 0.33, bloom: 0.5, exposure: 1.2, spec: 1, dark: 0.1 }, 0xffa458, 0x8c9cd0, 0x5a4028, [0.34, 0.25, 0.19], [-0.014, 0.0, 0.032], [0.06, 0.02, -0.05], 0x241a16, [0.9, 0.78, 0.7]);
+      light = 0.85;
+      break;
+    case 'sunset':
+      set({ sunI: 2.5, hemiI: 0.58, env: 0.26, cloud: 0.22, sat: 1.14, vignette: 0.38, bloom: 0.58, exposure: 1.17, spec: 0.95, dark: 0.38 }, 0xff7a3c, 0x7a80b4, 0x4a3424, [0.33, 0.2, 0.16], [-0.012, 0.0, 0.045], [0.07, 0.015, -0.055], 0x1e1418, [0.78, 0.6, 0.6]);
+      light = 0.65;
+      break;
+    case 'twilight':
+      set({ sunI: 0.45, hemiI: 0.62, env: 0.13, cloud: 0.14, sat: 0.9, vignette: 0.46, bloom: 0.72, exposure: 1.23, spec: 0.55, dark: 0.88 }, 0xa080b0, 0x4c5894, 0x1c1820, [0.1, 0.08, 0.12], [-0.01, 0.0, 0.036], [0.02, 0.004, 0.0], 0x0e0c14, [0.4, 0.38, 0.5]);
+      light = 0.28;
+      break;
+    case 'predawn':
+      set({ sunI: 0.5, hemiI: 0.62, env: 0.12, cloud: 0.12, sat: 0.88, vignette: 0.46, bloom: 0.72, exposure: 1.23, spec: 0.5, dark: 0.88 }, 0x9aa0d8, 0x48589a, 0x161a24, [0.07, 0.08, 0.12], [-0.01, 0.0, 0.034], [0.006, 0.006, 0.01], 0x0a0c14, [0.34, 0.36, 0.5]);
+      light = 0.28;
+      break;
+    case 'dawn':
+      set({ sunI: 2.4, hemiI: 0.6, env: 0.26, cloud: 0.2, sat: 1.08, vignette: 0.38, bloom: 0.55, exposure: 1.17, spec: 0.9, dark: 0.42 }, 0xff9a70, 0x8a94c8, 0x4a3a34, [0.3, 0.24, 0.26], [-0.012, 0.0, 0.045], [0.05, 0.012, -0.03], 0x1c1820, [0.8, 0.68, 0.72]);
+      p.hazeP.set(3, 70, 0.45, 50); // morning mist
+      light = 0.6;
+      break;
+    case 'morning':
+      set({ sunI: 3.0, hemiI: 0.78, env: 0.4, cloud: 0.3, sat: 1.04, vignette: 0.3, bloom: 0.42, exposure: 1.18, spec: 1, dark: 0.04 }, 0xffdcb0, 0x9ab8e6, 0x64503a, [0.3, 0.3, 0.31], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2826, [0.95, 0.95, 1]);
+      p.hazeP.set(4, 80, 0.4, 52);
+      light = 0.95;
+      break;
   }
-  // --- weather on top
+  return { p, light };
+}
+
+/** Weather on top of a time-of-day preset (in place). */
+function applyWeather(p: Preset, weather: Weather, light: number) {
   const mixC = (c: THREE.Color, h: number, k: number) => c.lerp(C(h), k);
-  if (cfg.weather === 'rain') {
+  if (weather === 'rain') {
     p.sunI *= 0.32;
     mixC(p.sunC, 0xc4ccd8, 0.6);
     mixC(p.sky, 0x8592a6, 0.6);
@@ -173,10 +211,10 @@ function buildPreset(cfg: AtmosConfig): Preset {
     p.sat *= 0.82;
     p.water.multiplyScalar(0.8);
     p.dark = Math.min(1, p.dark + 0.3);
-  } else if (cfg.weather === 'snow') {
+  } else if (weather === 'snow') {
     p.sunI *= 0.55;
     mixC(p.sunC, 0xe2eaff, 0.6);
-    mixC(p.gnd, 0xb0b8c8, cfg.tod === 'night' ? 0.25 : 0.7);
+    mixC(p.gnd, 0xb0b8c8, light < 0.3 ? 0.25 : 0.7);
     p.hemiI *= 1.05;
     p.haze.setRGB(0.6, 0.64, 0.7).multiplyScalar(Math.max(0.12, light));
     p.hazeP.set(2, 55, 0.5, 48);
@@ -186,7 +224,7 @@ function buildPreset(cfg: AtmosConfig): Preset {
     p.highTint.set(-0.012, 0.0, 0.02);
     p.water.multiplyScalar(0.9);
     p.dark = Math.min(1, p.dark + 0.15);
-  } else if (cfg.weather === 'sandstorm') {
+  } else if (weather === 'sandstorm') {
     p.sunI *= 0.42;
     mixC(p.sunC, 0xffa860, 0.6);
     mixC(p.sky, 0xc49a64, 0.7);
@@ -199,7 +237,98 @@ function buildPreset(cfg: AtmosConfig): Preset {
     p.water.multiplyScalar(0.85);
     p.dark = Math.min(1, p.dark + 0.3);
   }
+}
+
+function buildPreset(cfg: AtmosConfig): Preset {
+  const { p, light } = todPreset(cfg.tod === 'cycle' ? 'day' : cfg.tod);
+  applyWeather(p, cfg.weather, light);
   return p;
+}
+
+function lerpPreset(out: Preset, a: Preset, b: Preset, k: number) {
+  out.sunC.copy(a.sunC).lerp(b.sunC, k);
+  out.sky.copy(a.sky).lerp(b.sky, k);
+  out.gnd.copy(a.gnd).lerp(b.gnd, k);
+  out.haze.copy(a.haze).lerp(b.haze, k);
+  out.bg.copy(a.bg).lerp(b.bg, k);
+  out.hazeP.copy(a.hazeP).lerp(b.hazeP, k);
+  out.shadowTint.copy(a.shadowTint).lerp(b.shadowTint, k);
+  out.highTint.copy(a.highTint).lerp(b.highTint, k);
+  out.water.copy(a.water).lerp(b.water, k);
+  const n = (x: number, y: number) => x + (y - x) * k;
+  out.sunI = n(a.sunI, b.sunI);
+  out.hemiI = n(a.hemiI, b.hemiI);
+  out.env = n(a.env, b.env);
+  out.cloud = n(a.cloud, b.cloud);
+  out.sat = n(a.sat, b.sat);
+  out.vignette = n(a.vignette, b.vignette);
+  out.bloom = n(a.bloom, b.bloom);
+  out.exposure = n(a.exposure, b.exposure);
+  out.spec = n(a.spec, b.spec);
+  out.dark = n(a.dark, b.dark);
+}
+
+// ------------------------------------------------------------ dynamic day / night cycle
+
+/** One full day at 1x game speed: 22 real minutes (driven by the sim tick, so it follows the game speed). */
+export const CYCLE_TICKS = TPS * 60 * 22;
+
+/**
+ * Lighting stops of the cycle. u = fraction of the day starting at midday. Sun / moon paths are in degrees:
+ * elevation and azimuth (0 = +x, 90 = +z) in the classic view frame; the late-afternoon 'day' stop sits
+ * exactly on the static day sun so the cycle passes through the familiar look.
+ */
+const CYCLE_KEYS: { u: number; key: Key }[] = [
+  { u: 0.0, key: 'noon' },
+  { u: 0.2, key: 'day' },
+  { u: 0.31, key: 'golden' },
+  { u: 0.375, key: 'sunset' },
+  { u: 0.425, key: 'dusk' },
+  { u: 0.46, key: 'twilight' },
+  { u: 0.51, key: 'night' },
+  { u: 0.72, key: 'night' },
+  { u: 0.77, key: 'predawn' },
+  { u: 0.81, key: 'dawn' },
+  { u: 0.88, key: 'morning' },
+  { u: 1.0, key: 'noon' },
+];
+/** The key light hands over from the sun to the moon (and back) at these points, while it is dim. */
+const MOON_RISE = 0.46;
+const MOON_SET = 0.77;
+const SUN_DIR_DAY = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
+const DAY_ELEV = THREE.MathUtils.radToDeg(Math.asin(SUN_DIR_DAY.y));
+const DAY_AZ = THREE.MathUtils.radToDeg(Math.atan2(SUN_DIR_DAY.z, SUN_DIR_DAY.x));
+/** Sun path stops [u, elevation, azimuth]: rises far right, passes behind the battlefield, sets far left. */
+const SUN_PATH: [number, number, number][] = [
+  [MOON_SET - 1, 7, 292],
+  [0.81 - 1, 12, 284],
+  [0.88 - 1, 30, 262],
+  [0.0, 58, 222],
+  [0.2, DAY_ELEV, DAY_AZ],
+  [0.31, 22, 158],
+  [0.375, 13, 150],
+  [0.425, 9, 146],
+  [MOON_RISE, 7, 143],
+];
+/** Moon path over the night. */
+const MOON_PATH: [number, number, number][] = [
+  [MOON_RISE, 18, 268],
+  [0.52, 32, 248],
+  [0.62, 46, 214],
+  [0.72, 34, 186],
+  [MOON_SET, 20, 172],
+];
+
+function pathAt(path: [number, number, number][], u: number, out: THREE.Vector3) {
+  let i = 0;
+  while (i < path.length - 2 && u > path[i + 1][0]) i++;
+  const [u0, e0, a0] = path[i];
+  const [u1, e1, a1] = path[i + 1];
+  const k = Math.max(0, Math.min(1, (u - u0) / Math.max(1e-6, u1 - u0)));
+  const s = k * k * (3 - 2 * k);
+  const el = THREE.MathUtils.degToRad(e0 + (e1 - e0) * s);
+  const az = THREE.MathUtils.degToRad(a0 + (a1 - a0) * s);
+  return out.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az));
 }
 
 export class Atmosphere {
@@ -218,6 +347,16 @@ export class Atmosphere {
   private thunderAt: number[] = [];
   private thunderVol: number[] = [];
   private time = 0;
+  /** Dynamic cycle: lighting stops (weather applied) and the blended preset of this frame. */
+  private keys: { u: number; p: Preset; light: number }[] | null = null;
+  private light = 1;
+  /** Direction towards the key light (sun or moon) in the classic view frame; null = the renderer's fixed sun. */
+  readonly sunBase: THREE.Vector3 | null = null;
+  /** Debug / screenshots: force the cycle to this phase (0 = midday, 0.5 = night). */
+  phaseOverride: number | null = null;
+  /** Current phase of the cycle (0..1, 0 = midday), -1 when the time of day is fixed. */
+  phase = -1;
+  private keyI = 1;
 
   constructor(private host: AtmosHost, viewer: number) {
     const cfg = (this.cfg = atmosConfig(viewer));
@@ -239,14 +378,53 @@ export class Atmosphere {
     if (cfg.nv) this.setNightVision(true);
     if (!this.active) return;
     const p = (this.preset = buildPreset(cfg));
+    if (cfg.tod === 'cycle') {
+      this.keys = CYCLE_KEYS.map(({ u, key }) => {
+        const t = todPreset(key);
+        applyWeather(t.p, cfg.weather, t.light);
+        return { u, p: t.p, light: t.light };
+      });
+      this.sunBase = new THREE.Vector3();
+      const q = new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('todphase');
+      if (q !== null && Number.isFinite(+q)) this.phaseOverride = +q;
+      this.blendCycle(host.world.tick);
+    }
     this.applyPreset(p);
     if (cfg.weather !== 'clear') {
-      this.weather = new WeatherFx(cfg.weather, host.quality, cfg.tod);
+      this.weather = new WeatherFx(cfg.weather, host.quality, cfg.tod === 'cycle' ? 'day' : cfg.tod);
       host.scene.add(this.weather.mesh);
     }
-    if (p.dark > 0.3) {
+    // the cycle keeps its night-light pools for the whole battle (fixed light count: no shader recompiles)
+    if (p.dark > 0.3 || this.keys) {
       this.night = new NightLights(host.scene, host.quality, p.dark);
     }
+  }
+
+  /** Dynamic cycle: blend the lighting stops and move the sun / moon for this sim tick. */
+  private blendCycle(tick: number) {
+    const keys = this.keys!;
+    const u = (((this.phaseOverride ?? tick / CYCLE_TICKS) % 1) + 1) % 1;
+    this.phase = u;
+    let i = Math.min(Math.max(1, this.keyI), keys.length - 1);
+    if (u < keys[i - 1].u || u > keys[i].u) {
+      i = 1;
+      while (i < keys.length - 1 && u > keys[i].u) i++;
+    }
+    this.keyI = i;
+    const a = keys[i - 1];
+    const b = keys[i];
+    const k = Math.max(0, Math.min(1, (u - a.u) / Math.max(1e-6, b.u - a.u)));
+    const ks = k * k * (3 - 2 * k);
+    lerpPreset(this.preset!, a.p, b.p, ks);
+    this.light = a.light + (b.light - a.light) * ks;
+    // key light: the sun by day, the moon by night; they hand over while the light is dim
+    const dir = this.sunBase!;
+    const moon = u > MOON_RISE && u < MOON_SET;
+    if (moon) pathAt(MOON_PATH, u, dir);
+    else pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, dir);
+    // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
+    const comp = Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y)));
+    this.preset!.sunI *= Math.max(1, moon ? Math.min(comp, 1.3) : comp);
   }
 
   get nightVision() {
@@ -275,7 +453,8 @@ export class Atmosphere {
     h.hemi.color.copy(p.sky);
     h.hemi.groundColor.copy(p.gnd);
     h.hemi.intensity = p.hemiI;
-    h.scene.background = p.bg.clone();
+    if (h.scene.background instanceof THREE.Color) h.scene.background.copy(p.bg);
+    else h.scene.background = p.bg.clone();
     const u = h.fog.uniforms;
     u.hazeColor.value.copy(p.haze);
     u.hazeParams.value.copy(p.hazeP);
@@ -303,6 +482,12 @@ export class Atmosphere {
     if (!this.active || !this.preset) return;
     const h = this.host;
     const p = this.preset;
+    if (this.keys) {
+      this.blendCycle(h.world.tick);
+      this.applyPreset(p);
+      this.night?.setDark(p.dark);
+      this.weather?.setLight(0.25 + 0.75 * this.light);
+    }
     WX.wxTime.value = time;
     // the HDRI streams in late and resets the intensity: keep ours
     h.scene.environmentIntensity = p.env;

@@ -96,6 +96,7 @@ export class WeatherFx {
     geo.instanceCount = n;
     const lightK = tod === 'night' ? 0.32 : tod === 'dusk' ? 0.7 : 1;
     const color = kind === 'rain' ? new THREE.Color(0.55, 0.6, 0.68) : kind === 'snow' ? new THREE.Color(0.95, 0.97, 1) : new THREE.Color(0.78, 0.56, 0.32);
+    this.baseColor.copy(color);
     color.multiplyScalar(lightK);
     this.u = {
       uTime: { value: 0 },
@@ -115,6 +116,13 @@ export class WeatherFx {
     this.mesh.renderOrder = 6;
     this.mesh.name = 'weather';
     this.nextBolt = kind === 'rain' ? 4 + Math.random() * 6 : Infinity;
+  }
+
+  private baseColor = new THREE.Color();
+
+  /** Dynamic day / night cycle: scale the particle colour by the daylight (1 = day, ~0.32 = night). */
+  setLight(k: number) {
+    (this.u.uColor.value as THREE.Color).copy(this.baseColor).multiplyScalar(k);
   }
 
   /** Move the particle box with the view; returns the lightning flash level 0..1. */

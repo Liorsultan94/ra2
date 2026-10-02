@@ -777,9 +777,50 @@ kbd {
   text-align: center;
 }
 .logo {
+  position: relative;
   font-family: 'Black Ops One', var(--font);
   line-height: 0.85;
   filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.8));
+}
+/* the boot-splash emblem settles here, behind the wordmark (src/ui/splash.ts) */
+.logo-emblem {
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: calc(clamp(56px, 13vw, 132px) * 0.85);
+  width: calc(clamp(56px, 13vw, 132px) * 2.05);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  opacity: 0.3;
+  pointer-events: none;
+}
+.logo-emblem svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* title intro: hidden while the splash lockup flies in, then a short crossfade */
+.title-screen .logo > *,
+.title-screen .menu-buttons,
+.title-screen .menu-foot {
+  transition:
+    opacity 0.45s ease,
+    transform 0.55s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.title-screen .menu-buttons {
+  transition-delay: 0.1s;
+}
+.title-screen .menu-foot {
+  transition-delay: 0.2s;
+}
+.title-screen.intro .logo > *,
+.title-screen.intro .menu-buttons,
+.title-screen.intro .menu-foot {
+  opacity: 0;
+  transition: none;
+}
+.title-screen.intro .menu-buttons {
+  transform: translateY(18px);
 }
 .logo-top,
 .logo-bottom {
@@ -1812,6 +1853,69 @@ input[type='range'] {
   opacity: 0.6;
   text-transform: none;
   letter-spacing: 0.02em;
+}
+/* the boot emblem (src/ui/emblem.svg) over the battle loading bar, with a radar sweep */
+.wu-box {
+  position: relative;
+  padding-top: 132px;
+}
+.wu-box::before,
+.wu-box::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 108px;
+  height: 108px;
+  margin-left: -54px;
+  border-radius: 50%;
+}
+.wu-box::before {
+  background: url('./emblem.svg') center / contain no-repeat;
+  filter: drop-shadow(0 0 12px rgba(216, 64, 44, 0.45));
+  animation: wuPulse 2.4s ease-in-out infinite;
+}
+.wu-box::after {
+  background: conic-gradient(from 0deg, rgba(255, 96, 60, 0) 0 250deg, rgba(255, 96, 60, 0.08) 300deg, rgba(255, 120, 80, 0.6) 359deg, rgba(255, 96, 60, 0) 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 63%, #000 64% 97%, transparent 98%);
+  mask: radial-gradient(circle, transparent 0 63%, #000 64% 97%, transparent 98%);
+  animation: wuSpin 2.4s linear infinite;
+}
+@keyframes wuPulse {
+  0%,
+  100% {
+    transform: scale(0.96);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 1;
+  }
+}
+@keyframes wuSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-height: 560px) {
+  .wu-box {
+    padding-top: 96px;
+  }
+  .wu-box::before,
+  .wu-box::after {
+    width: 80px;
+    height: 80px;
+    margin-left: -40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wu-box::before,
+  .wu-box::after {
+    animation: none;
+  }
+  .wu-box::after {
+    display: none;
+  }
 }
 
 /* ------------------------------------------------- airborne-drop support power */

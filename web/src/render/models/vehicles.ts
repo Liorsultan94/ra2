@@ -5,6 +5,7 @@ import { factionCamo, pbrMaterial, worldUV } from '../textures';
 import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
+import { armourMod, unitLook, vehCamo } from './unittex';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -343,8 +344,16 @@ const DECAL_WEAR: WearCfg = { dirt: false, loose: false, scale: 9 };
 /** Cached material with the dust / damage / loose-part patch (shared by every vehicle). */
 function wmat(key: string, fog: FogOfWar | null, make: () => THREE.Material, cfg: WearCfg = VEH_WEAR): THREE.Material {
   const m = cmat('w|' + key, fog, make);
-  if (!isWearMaterial(m)) wearPatch(m, cfg);
+  if (!isWearMaterial(m)) {
+    wearPatch(m, cfg);
+    if (cfg.dirt) unitLook(m, { rim: 0.9, team: true });
+  }
   return m;
+}
+/** Painted armour detail (vertex-coloured parts): plate seams, bolts, chipping (shared maps). */
+function dullMat(): THREE.MeshStandardMaterial {
+  const t = armourMod();
+  return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1.02, metalness: 0.12, normalScale: new THREE.Vector2(0.7, 0.7) });
 }
 const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial, DECAL_WEAR);
 
@@ -372,6 +381,8 @@ const _col = new THREE.Color();
 class Acc {
   readonly buckets = new Map<string, THREE.BufferGeometry[]>();
   tris = 0;
+  /** Team colour hex: matte detail painted exactly this colour is flagged (stays clean of dust, glows slightly). */
+  teamHex = -1;
   /** Current loose-piece tag (see wear.ts): id + 256 * mode, hinge y / z. */
   private lc = 0;
   private lpy = 0;
@@ -417,6 +428,7 @@ class Acc {
       // aWear: x = dust / mud (filled in by Bld.finish), y = loose piece code, zw = hinge
       const n = g.attributes.position.count;
       const w = new Float32Array(n * 4);
+      if (key === 'D' && paint === this.teamHex) for (let i = 0; i < n; i++) w[i * 4] = -1;
       if (this.lc)
         for (let i = 0; i < n; i++) {
           w[i * 4 + 1] = this.lc;
@@ -444,6 +456,7 @@ class Part extends Acc {
     readonly g: THREE.Object3D,
   ) {
     super();
+    this.teamHex = b.team;
   }
   box(w: number, h: number, d: number, x: number, y: number, z: number, paint: number, rx = 0, ry = 0, rz = 0) {
     return this.add(new THREE.BoxGeometry(w, h, d), paint, TR(x, y, z, rx, ry, rz));
@@ -599,11 +612,14 @@ class Bld {
     let m: THREE.Material;
     switch (key) {
       case 'D':
-        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        return wmat('vdull2', fog, dullMat);
       case 'M':
         return wmat('vmetal', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.38, metalness: 0.72 }));
       case 's' + CAMO:
-        return wmat('camo' + JSON.stringify(this.camoOpts), fog, () => pbrMaterial('camo', this.camoOpts, null).clone());
+        return wmat('camo2|' + this.f, fog, () => {
+          const t = vehCamo(this.f);
+          return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, metalness: 0.15, normalScale: new THREE.Vector2(0.85, 0.85) });
+        });
       case 's' + LAMP:
         m = glowMat(0xfff0d0, 2.4, fog);
         break;
@@ -623,7 +639,7 @@ class Bld {
         m = glowMat(0xff3020, 2.6, fog);
         break;
       default:
-        return wmat('vdull', fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.12 }));
+        return wmat('vdull2', fog, dullMat);
     }
     if (key.startsWith('s') && key !== 's' + CAMO && !this.glow.includes(m)) this.glow.push(m);
     return m;
@@ -650,7 +666,98 @@ class Bld {
     this.extraTris += (geo.attributes.position.count / 3) * entries.length;
     return im;
   }
+  /**
+   * Air-recognition panel (VS-17 style) in the team colour on the turret roof
+   * (or the rear deck): a flat, unobstructed spot is found by ray casting the
+   * unmerged parts, so it reads from above at RTS zoom whatever the design.
+   */
+  private idPanel() {
+    if (this.noIdPanel) return;
+    this.root.updateMatrixWorld(true);
+    const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
+    const meshes: THREE.Mesh[] = [];
+    const own = new Map<Part, THREE.Mesh[]>();
+    const tmpMat = new THREE.MeshBasicMaterial();
+    for (const p of this.parts) {
+      let skipIt = false;
+      for (let q: THREE.Object3D | null = p.g; q; q = q.parent) if (tagged(q, 'recoil') || tagged(q, 'whip') || tagged(q, 'spin')) skipIt = true;
+      const list: THREE.Mesh[] = [];
+      for (const [key, geos] of p.buckets) {
+        for (const g of geos) {
+          if (!g.boundingSphere) g.computeBoundingSphere();
+          const m = new THREE.Mesh(g, tmpMat);
+          m.matrixAutoUpdate = false;
+          m.matrixWorld.copy(p.g.matrixWorld);
+          m.userData.bk = key;
+          meshes.push(m);
+          if (!skipIt && key === 's' + CAMO) list.push(m);
+        }
+      }
+      own.set(p, list);
+    }
+    const rc = new THREE.Raycaster();
+    const o = new THREE.Vector3();
+    const down = new THREE.Vector3(0, -1, 0);
+    const hitAt = (x: number, z: number) => {
+      rc.set(o.set(x, 5, z), down);
+      const h = rc.intersectObjects(meshes, false);
+      return h.length ? h[0] : null;
+    };
+    const tur = this.parts.find((p) => tagged(p.g, 'turret') && (own.get(p)?.length ?? 0) > 0);
+    const targets: { p: Part; rear: boolean }[] = [];
+    if (tur) targets.push({ p: tur, rear: false });
+    targets.push({ p: this.body, rear: true });
+    for (const { p, rear } of targets) {
+      const camo = own.get(p) ?? [];
+      if (!camo.length) continue;
+      const set = new Set<THREE.Object3D>(camo);
+      const bb = new THREE.Box3();
+      for (const m of camo) {
+        m.geometry.computeBoundingBox();
+        bb.union(m.geometry.boundingBox!.clone().applyMatrix4(m.matrixWorld));
+      }
+      const L = bb.max.x - bb.min.x;
+      const W = bb.max.z - bb.min.z;
+      if (L < 0.12 || W < 0.1) continue;
+      for (const k of [1, 0.75, 0.55]) {
+        const pl = Math.min(0.075, L * 0.28) * k;
+        const pw = Math.min(0.17, W * 0.6) * k;
+        const xs: number[] = [];
+        const x0 = bb.min.x + pl / 2 + L * 0.06;
+        const x1 = rear ? bb.min.x + L * 0.45 : bb.max.x - pl / 2 - L * 0.2;
+        for (let x = x0; x <= x1; x += 0.012) xs.push(x);
+        const zc = (bb.min.z + bb.max.z) / 2;
+        for (const x of xs) {
+          for (const dz of [0, 0.02, -0.02, 0.04, -0.04]) {
+            const z = zc + dz;
+            const c = hitAt(x, z);
+            if (!c || !set.has(c.object) || !c.face) continue;
+            const n = c.face.normal.clone().transformDirection(c.object.matrixWorld);
+            if (n.y < 0.96) continue;
+            let ok = true;
+            for (const [gx, gz] of [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0], [-0.5, -0.5], [0.5, 0.5], [-0.5, 0.5], [0.5, -0.5]]) {
+              const hc = hitAt(x + (gx * pl) / 2, z + (gz * pw) / 2);
+              if (!hc || !set.has(hc.object) || Math.abs(hc.point.y - c.point.y) > 0.0025) {
+                ok = false;
+                break;
+              }
+            }
+            if (!ok) continue;
+            const lp = p.g.worldToLocal(c.point.clone());
+            p.box(pl + 0.008, 0.002, pw + 0.008, lp.x, lp.y + 0.001, lp.z, K.black);
+            p.box(pl, 0.0025, pw, lp.x, lp.y + 0.002, lp.z, this.team);
+            tmpMat.dispose();
+            return;
+          }
+        }
+      }
+    }
+    tmpMat.dispose();
+  }
+  /** Skip the air-recognition panel (set by builders with no suitable roof). */
+  noIdPanel = false;
   finish(): Tpl {
+    this.idPanel();
     let tris = this.extraTris;
     let meshes = 0;
     for (const p of this.parts) {
@@ -715,6 +822,7 @@ class Bld {
       const nor = mesh.geometry.attributes.normal;
       const mw = mesh.matrixWorld;
       for (let i = 0; i < pos.count; i++) {
+        if (aw.getX(i) < -0.5) continue; // team colour: kept clean
         _dv.fromBufferAttribute(pos, i).applyMatrix4(mw);
         const low = clamp((0.2 - _dv.y) / 0.15, 0, 1);
         const ny = nor.getY(i);

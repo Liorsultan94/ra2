@@ -6,6 +6,8 @@ import type { CameoFactory } from '../render/cameo';
 import { styleFor, type GameRenderer } from '../render/renderer';
 import { flagDataUrl } from '../render/flags';
 import { SupportPower } from './support';
+import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
+import { canRank } from '../sim/veterancy';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -93,6 +95,7 @@ export class Hud {
   private mmDirty = true;
   private cineEl!: HTMLElement;
   private hpState = new Map<number, { hp: number; ghost: number; flash: number }>();
+  private rankPops = new RankPops();
   private orderLines: { ids: number[]; x: number; y: number; target: number; color: string; t0: number }[] = [];
   private lastOverlayT = 0;
   world!: World;
@@ -372,7 +375,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}`).join(',');
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
     const own = sel.filter((e) => e.owner === this.player);
@@ -402,7 +405,8 @@ export class Hud {
         const on = Math.ceil(hp * segs);
         const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
         const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
-        this.selPanel.innerHTML = `<div class="portrait ${rel}"><img src="${img}" alt=""><span class="pt-scan"></span></div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`;
+        const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
+        this.selPanel.innerHTML = `<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`;
       } else {
         const counts = new Map<string, number>();
         for (const e of sel) counts.set(e.def, (counts.get(e.def) ?? 0) + 1);
@@ -675,10 +679,19 @@ export class Hud {
         st.flash = Math.max(0, st.flash - dt * 3.5);
         st.ghost = st.ghost > hp ? Math.max(hp, st.ghost - dt * 0.45) : hp;
       }
-      if (!selected && e.id !== hover && !recent) continue;
+      const bar = selected || e.id === hover || recent;
+      const pop = e.kind === 'unit' ? this.rankPops.pop(e, now) : 0;
+      if (!bar && !e.rank) continue;
       if (e.kind === 'unit' && unitDef(e.def).temp) continue;
       if (attract && !selected) continue;
       if (!this.seen(e)) continue;
+      if (!bar) {
+        // ranked units always wear their chevrons (RA2 style), even without a health bar
+        const p = r.entityPos(e, alpha);
+        const tp = r.project(p.x, p.y + r.visualHeight(e.id) + 0.14, p.z);
+        drawRankInsignia(ctx, Math.round(tp.x), Math.round(tp.y - 3), e.rank, pop, now);
+        continue;
+      }
       if (!st) {
         st = { hp, ghost: hp, flash: 0 };
         this.hpState.set(e.id, st);
@@ -719,6 +732,7 @@ export class Hud {
         ctx.lineWidth = 1;
         ctx.strokeRect(x0 - 3.5, y0 - 1.5, width + 5, 7);
       }
+      if (e.rank) drawRankInsignia(ctx, x0 - 11, y0 + 1, e.rank, pop, now);
       if (e.kind === 'unit' && unitDef(e.def).harvester && selected && e.owner === this.player) {
         const k = e.cargo / 900;
         ctx.fillStyle = '#e8c040';
@@ -757,6 +771,7 @@ export class Hud {
       }
     }
     if (this.hpState.size > 600) for (const id of this.hpState.keys()) if (!w.get(id)) this.hpState.delete(id);
+    this.rankPops.prune((id) => !!w.get(id));
     // keep the drone camera feed clear of bars and markers
     const keep = this.keepClear?.();
     if (keep) ctx.clearRect(keep.x, keep.y, keep.w, keep.h);

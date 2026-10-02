@@ -3,6 +3,7 @@ import type { Difficulty } from '../sim/ai';
 import type { Faction, Player } from '../sim/types';
 import type { Quality } from '../render/renderer';
 import { flagHtml } from './hud';
+import emblemSvg from './emblem.svg?raw';
 
 export interface Settings {
   faction: Faction;
@@ -97,6 +98,7 @@ export class MainMenu {
     const s = this.screen(`
       <div class="title-screen">
         <div class="logo">
+          <div class="logo-emblem">${emblemSvg}</div>
           <div class="logo-top">IRON</div>
           <div class="logo-bottom">FRONT</div>
           <div class="logo-sub">MODERN WARFARE · REAL-TIME STRATEGY</div>

@@ -44,6 +44,20 @@ const RELIEF = {
       const cleat = (u * 4) % 1 < 0.45 ? -0.18 : 0;
       return -gauss(a, 0.22) * (1 + cleat * gauss(a, 0.18)) + 0.55 * gauss(a - 0.41, 0.07);
     }, 6),
+  // compressed snow trench: a deep flat-bottomed groove, high crumbly berms, sharp cleat ridges
+  snowRut: () =>
+    reliefTex(64, (u, v) => {
+      const a = Math.abs(v - 0.5);
+      const cleat = (u * 4) % 1 < 0.4 ? -0.25 : 0;
+      return -Math.min(1, gauss(a, 0.3) * 1.4) * (1 + cleat * gauss(a, 0.24)) + 0.8 * gauss(a - 0.43, 0.06);
+    }, 9),
+  // a boot print pressed into the ground: sole and heel
+  boot: () =>
+    reliefTex(32, (u, v) => {
+      const sole = Math.max(0, 1 - Math.hypot((u - 0.36) / 0.27, (v - 0.5) / 0.36));
+      const heel = Math.max(0, 1 - Math.hypot((u - 0.8) / 0.13, (v - 0.5) / 0.3));
+      return -Math.min(1, (sole + heel) * 2.5);
+    }, 5),
   // bowl with a raised rim
   crater: () =>
     reliefTex(128, (u, v) => {
@@ -104,6 +118,56 @@ const TEX = {
       ctx.fillRect(0, 0, s, s);
       ctx.fillStyle = 'rgba(10,8,5,0.35)';
       for (let i = 0; i < 4; i++) ctx.fillRect(i * 16 + 2, 18, 7, s - 36);
+    }),
+  snowRut: () =>
+    canvasTex(64, (ctx, s) => {
+      ctx.clearRect(0, 0, s, s);
+      // packed blue-grey trench, bright churned berms, darker cleat imprints
+      const g = ctx.createLinearGradient(0, 0, 0, s);
+      g.addColorStop(0, 'rgba(236,242,250,0)');
+      g.addColorStop(0.08, 'rgba(240,245,252,0.6)');
+      g.addColorStop(0.2, 'rgba(150,164,186,0.75)');
+      g.addColorStop(0.5, 'rgba(112,126,150,0.9)');
+      g.addColorStop(0.8, 'rgba(150,164,186,0.75)');
+      g.addColorStop(0.92, 'rgba(240,245,252,0.6)');
+      g.addColorStop(1, 'rgba(236,242,250,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      ctx.fillStyle = 'rgba(70,82,104,0.4)';
+      for (let i = 0; i < 4; i++) ctx.fillRect(i * 16 + 2, 16, 6, s - 32);
+    }),
+  boot: (r: number, g: number, b: number, a: number) =>
+    canvasTex(32, (ctx, s) => {
+      ctx.clearRect(0, 0, s, s);
+      ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+      ctx.beginPath();
+      ctx.ellipse(s * 0.36, s * 0.5, s * 0.25, s * 0.33, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(s * 0.8, s * 0.5, s * 0.11, s * 0.27, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }),
+  // muzzle blast: grass blown flat in radial streaks (pale undersides), or snow blown off the ground
+  blastFan: (light: boolean) =>
+    canvasTex(128, (ctx, s) => {
+      ctx.clearRect(0, 0, s, s);
+      const c = s / 2;
+      for (let i = 0; i < 90; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r0 = c * (0.08 + Math.random() * 0.15);
+        const r1 = c * (0.55 + Math.random() * 0.42);
+        ctx.strokeStyle = light ? `rgba(${170 + Math.random() * 40},${170 + Math.random() * 30},${100 + Math.random() * 30},${0.12 + Math.random() * 0.2})` : `rgba(${70 + Math.random() * 20},${64 + Math.random() * 16},${56},${0.15 + Math.random() * 0.25})`;
+        ctx.lineWidth = 1 + Math.random() * 2.5;
+        ctx.beginPath();
+        ctx.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0);
+        ctx.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1);
+        ctx.stroke();
+      }
+      const g = ctx.createRadialGradient(c, c, 0, c, c, c * 0.5);
+      g.addColorStop(0, light ? 'rgba(150,150,90,0.3)' : 'rgba(60,56,50,0.55)');
+      g.addColorStop(1, 'rgba(60,56,50,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
     }),
   crater: () =>
     canvasTex(128, (ctx, s) => {
@@ -279,6 +343,7 @@ class DecalLayer {
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 1 + order;
     this.mesh.count = 0;
+    this.mesh.visible = false; // no draw call until the first decal
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   }
 
@@ -299,6 +364,7 @@ class DecalLayer {
     this.mesh.setMatrixAt(i, this.m4);
     this.birth[i] = time;
     this.mesh.count = this.used;
+    this.mesh.visible = true;
     // upload only the touched instance
     this.mesh.instanceMatrix.addUpdateRange(i * 16, 16);
     this.mesh.instanceMatrix.needsUpdate = true;
@@ -314,8 +380,16 @@ export class GroundMarks {
   private rut: DecalLayer;
   private crater: DecalLayer;
   private scorch: DecalLayer;
+  /** Snow: deep packed trenches under tracks / tyres, boot prints; mud / sand: faint prints. */
+  private snowRut: DecalLayer;
+  private footSnow: DecalLayer;
+  private footSoft: DecalLayer;
+  /** Muzzle blast: grass blown flat (springs back in seconds) / snow blown off the ground. */
+  private flat: DecalLayer;
+  private blown: DecalLayer;
   /** Tiles under paved roads (the sim marks roads as dirt): no ruts there. */
   private paved: Uint8Array;
+  private layers: DecalLayer[];
   time = 0;
 
   constructor(
@@ -329,7 +403,15 @@ export class GroundMarks {
     // battle damage persists: burnt patches ~4 min, craters ~4.5 min
     this.scorch = new DecalLayer(TEX.scorch(), 600, 240, 0.9, fog, 1);
     this.crater = new DecalLayer(TEX.crater(), 600, 270, 1, fog, 2, RELIEF.crater());
-    for (const l of [this.tread, this.tire, this.rut, this.scorch, this.crater]) this.group.add(l.mesh);
+    // snow keeps every print for minutes
+    this.snowRut = new DecalLayer(TEX.snowRut(), 7000, 150, 0.9, fog, 0, RELIEF.snowRut());
+    const boot = RELIEF.boot();
+    this.footSnow = new DecalLayer(TEX.boot(96, 112, 140, 0.8), 4000, 120, 0.85, fog, 0, boot);
+    this.footSoft = new DecalLayer(TEX.boot(42, 32, 22, 0.7), 2500, 30, 0.4, fog, 0, boot);
+    this.flat = new DecalLayer(TEX.blastFan(true), 120, 9, 0.8, fog, 0);
+    this.blown = new DecalLayer(TEX.blastFan(false), 160, 100, 0.75, fog, 0);
+    this.layers = [this.tread, this.tire, this.rut, this.snowRut, this.footSnow, this.footSoft, this.flat, this.blown, this.scorch, this.crater];
+    for (const l of this.layers) this.group.add(l.mesh);
     this.paved = new Uint8Array(map.w * map.h);
     for (const r of map.roads ?? [])
       for (let k = 0; k < r.length - 1; k++) {
@@ -361,10 +443,59 @@ export class GroundMarks {
     return false;
   }
 
-  /** Track or tyre print segment under one track (a deep rut on soft ground). */
+  /** Paved road under (x, z) (the sim marks roads as dirt). */
+  isPaved(x: number, z: number) {
+    const m = this.map;
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    return tx >= 0 && tz >= 0 && tx < m.w && tz < m.h && this.paved[tz * m.w + tx] === 1;
+  }
+
+  private tileAt(x: number, z: number) {
+    const m = this.map;
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h) return Tile.Rock;
+    return m.tiles[tz * m.w + tx];
+  }
+
+  /** Track or tyre print segment under one track (a deep rut on soft ground, a packed trench in snow). */
   print(x: number, z: number, angle: number, len: number, width: number, wheeled: boolean) {
+    if (WX.wxSnow.value > 0.3) {
+      const t = this.tileAt(x, z);
+      if (t !== Tile.Water && t !== Tile.Bridge) {
+        this.snowRut.add(this.map, x, z, angle, len, width * (wheeled ? 1.6 : 1.9), this.time, 0.015);
+        return;
+      }
+    }
     if (this.soft(x, z)) this.rut.add(this.map, x, z, angle, len, width * (wheeled ? 1.5 : 1.8), this.time, 0.014);
     else (wheeled ? this.tire : this.tread).add(this.map, x, z, angle, len, width, this.time);
+  }
+
+  /**
+   * One boot print of a walking soldier (side = -1 left / +1 right foot):
+   * deep in snow, faint in mud (rain) and dry sand / dirt, none on grass, rock or roads.
+   */
+  footstep(x: number, z: number, angle: number, side: number) {
+    const t = this.tileAt(x, z);
+    if (t === Tile.Water || t === Tile.Bridge) return;
+    const ox = -Math.sin(angle) * 0.022 * side;
+    const oz = Math.cos(angle) * 0.022 * side;
+    if (WX.wxSnow.value > 0.3) {
+      this.footSnow.add(this.map, x + ox, z + oz, angle, 0.075, 0.04, this.time, 0.016);
+      return;
+    }
+    if (t === Tile.Rock || this.isPaved(x, z)) return;
+    if (t === Tile.Grass && !(WX.wxWet.value > 0.3)) return;
+    this.footSoft.add(this.map, x + ox, z + oz, angle, 0.07, 0.036, this.time, 0.015);
+  }
+
+  /** Muzzle blast pressure on the ground: grass blown flat in radial streaks, or snow blown off. */
+  blastAt(x: number, z: number, r: number) {
+    const t = this.tileAt(x, z);
+    if (t === Tile.Water || t === Tile.Bridge) return;
+    if (WX.wxSnow.value > 0.3) this.blown.add(this.map, x, z, Math.random() * 6.28, r * 2, r * 2, this.time, 0.013);
+    else if (t === Tile.Grass) this.flat.add(this.map, x, z, Math.random() * 6.28, r * 2, r * 2, this.time, 0.013);
   }
 
   craterAt(x: number, z: number, r: number) {
@@ -383,6 +514,6 @@ export class GroundMarks {
 
   update(dt: number) {
     this.time += dt;
-    for (const l of [this.tread, this.tire, this.rut, this.crater, this.scorch]) l.uniforms.time.value = this.time;
+    for (const l of this.layers) l.uniforms.time.value = this.time;
   }
 }
