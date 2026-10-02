@@ -295,6 +295,8 @@ export class Waterside implements WatersideHandles {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setIndex(idx);
+    // real normals: the AO pass draws every mesh's normals (none would read as a black crease)
+    g.computeVertexNormals();
     g.computeBoundingSphere();
     const mat = new THREE.ShaderMaterial({
       transparent: true,
@@ -352,12 +354,13 @@ export class Waterside implements WatersideHandles {
           // wet sand / mud: darker toward the water, the band left by the last wave glistens
           float wet = 1.0 - smoothstep(0.0, wetW, d);
           float fresh = (1.0 - smoothstep(edge, edge + reach * 0.9 + 0.04, d)) * step(-0.02, d);
-          vec3 mudC = mix(vec3(0.16, 0.13, 0.09), vec3(0.08, 0.065, 0.045), wet);
-          float a = wet * 0.62 * (1.0 - 0.75 * wxSnow) * (1.0 - smoothstep(0.0, 0.3, -d));
+          vec3 mudC = mix(vec3(0.2, 0.165, 0.115), vec3(0.11, 0.09, 0.062), wet * wet);
+          float a = wet * 0.5 * (1.0 - 0.75 * wxSnow) * (1.0 - smoothstep(0.0, 0.3, -d));
           vec3 col = mudC;
           // the thin sheet of water and its foam line
           float sheet = (1.0 - smoothstep(edge - 0.03, edge + 0.005, d)) * smoothstep(-0.3, -0.02, d);
-          float foamL = exp(-pow((d - edge) / (0.022 + 0.02 * chop), 2.0)) * (0.45 + 0.55 * n2) * (1.0 - ice) * step(-0.06, d);
+          float fq = (d - edge) / (0.022 + 0.02 * chop);
+          float foamL = exp(-fq * fq) * (0.45 + 0.55 * n2) * (1.0 - ice) * step(-0.06, d);
           col = mix(col, vec3(0.05, 0.075, 0.065), sheet * 0.7);
           a = max(a, sheet * 0.55);
           col *= wxLight;
@@ -617,7 +620,7 @@ export class Waterside implements WatersideHandles {
     const g = mergeGeometries(local)!;
     // local z must point downstream: rotate so +x = across (ax, ay), +z = (tx, ty)
     const flip = w.ax * w.ty - w.ay * w.tx < 0 ? -1 : 1;
-    if (flip < 0) g.scale(1, 1, -1);
+    if (flip < 0) g.rotateY(Math.PI);
     g.rotateY(yaw);
     g.translate(cx, 0, cy);
     const mat = this.fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
@@ -651,6 +654,7 @@ export class Waterside implements WatersideHandles {
     sg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     sg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     sg.setIndex(idx);
+    sg.computeVertexNormals();
     sg.rotateY(yaw);
     sg.translate(cx, 0, cy);
     sg.computeBoundingSphere();

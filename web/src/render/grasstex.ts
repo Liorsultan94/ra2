@@ -12,11 +12,11 @@ import * as THREE from 'three';
 
 /** Grass colours (sRGB hex). Lush = wet low ground, Mid = ordinary meadow, Dry = hills / verges. */
 export const GRASS = {
-  lush: 0x2f5d22,
-  mid: 0x4b7a2c,
-  dry: 0x87894a,
-  fresh: 0x6f9b37,
-  clover: 0x2c5a2f,
+  lush: 0x2a5523,
+  mid: 0x426f2b,
+  dry: 0x7e8047,
+  fresh: 0x5f8e35,
+  clover: 0x28542d,
 };
 
 const srgb = (v: number) => [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
@@ -57,7 +57,7 @@ vec3 grassBase( float lush, float dry, float drift ) {
   vec3 c = mix( gcMid, gcLush, lush );
   c = mix( c, gcDry, dry );
   // drift: some swathes a touch yellower / bluer, never far from the palette
-  return c * vec3( 1.0 + drift * 0.22, 1.0 + drift * 0.07, 1.0 - drift * 0.28 );
+  return c * vec3( 1.0 + drift * 0.16, 1.0 + drift * 0.04, 1.0 - drift * 0.2 );
 }
 `;
 

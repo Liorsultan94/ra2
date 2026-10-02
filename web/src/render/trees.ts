@@ -71,7 +71,10 @@ const WIND_VERT = /* glsl */ `
     vec3 wo = instanceMatrix[3].xyz;
     vec3 tax = instanceMatrix[0].xyz;
     vec3 taz = instanceMatrix[2].xyz;
+    // toppled trees (envdamage.ts) lie still
+    float tup = clamp( instanceMatrix[1].y / max( 1e-4, length( instanceMatrix[1].xyz ) ), 0.0, 1.0 );
   #else
+    float tup = 1.0;
     vec3 wo = vec3( 0.0 );
     vec3 tax = vec3( 1.0, 0.0, 0.0 );
     vec3 taz = vec3( 0.0, 0.0, 1.0 );
@@ -79,7 +82,7 @@ const WIND_VERT = /* glsl */ `
   vec3 twd = vec3( treeWind.x, 0.0, treeWind.y );
   // the world wind direction in the tree's own (rotated, scaled) frame
   vec2 tld = vec2( dot( tax, twd ) / dot( tax, tax ), dot( taz, twd ) / dot( taz, taz ) );
-  float tst = treeWind.z;
+  float tst = treeWind.z * tup * tup;
   float tph = windTime * 0.8 + wo.x * 0.21 + wo.z * 0.17;
   float gust = 0.5 + 0.5 * sin( tph ) * sin( tph * 0.37 + 1.7 );
   float osc = sin( windTime * ( 1.6 + tst * 0.8 ) + wo.x * 1.3 + wo.z * 0.9 ) * ( 0.2 + 0.25 * gust );
@@ -415,7 +418,15 @@ function broadleaf(sp: BroadSpec, lite: boolean): THREE.BufferGeometry {
 
   // ---- leaf clusters
   const cluster = (centre: THREE.Vector3, out: THREE.Vector3, sz: number, lump: THREE.Vector3 | null, cell: TCell) => {
-    const L = light(lump);
+    // per-cluster brightness / hue jitter breaks up the crown surface
+    const jb = 0.84 + rnd() * 0.3;
+    const jy = (rnd() - 0.5) * 0.08;
+    const L0 = light(lump);
+    const L = (p: THREE.Vector3) => {
+      const r = L0(p);
+      r.c = [r.c[0] * jb * (1 + jy), r.c[1] * jb, r.c[2] * jb * (1 - jy)];
+      return r;
+    };
     const jitter = V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.7);
     const f1 = out.clone().add(jitter).normalize();
     const roll = V(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
@@ -505,12 +516,12 @@ function spruce(lite: boolean): THREE.BufferGeometry {
     b.strip(V(0, 0.1, 0), V(0, H, 0), side, R0 * 2.1, 0.04, TCell.MassConifer, light, 0.02, 1);
   }
   // drooping branch tiers
-  const tiers = lite ? 4 : 9;
+  const tiers = lite ? 5 : 9;
   for (let i = 0; i < tiers; i++) {
     const t = (i + 0.3) / tiers;
     const y = 0.12 + t * 0.8;
     const R = radAt(t) * (1.02 + (rnd() - 0.5) * 0.12);
-    const n = lite ? 4 : Math.max(4, Math.round(7 - t * 3));
+    const n = lite ? 5 : Math.max(4, Math.round(7 - t * 3));
     const rot = i * 0.9 + rnd();
     for (let j = 0; j < n; j++) {
       const a = rot + (j / n) * Math.PI * 2 + (rnd() - 0.5) * 0.3;
@@ -522,7 +533,7 @@ function spruce(lite: boolean): THREE.BufferGeometry {
       const w = R * (lite ? 1.15 : 0.95);
       // tilt across the branch so it reads from above and from the side
       const side = tan.clone().addScaledVector(UP, (j % 2 ? 0.3 : -0.3)).normalize();
-      if (lite) b.strip(root, tip, side, w * 0.4, w * 0.75, TCell.MassConifer, light, 0.05, 1);
+      if (lite) b.strip(root, tip, side, w * 0.55, w * 0.9, TCell.MassConifer, light, 0.05, 1);
       else {
         const mid = root.clone().lerp(tip, 0.5).add(V(0, R * 0.08, 0));
         b.strip(root, mid, side, w * 0.38, w * 0.82, TCell.Spruce, light, 0.0, 0.5);
@@ -611,7 +622,7 @@ export const SPECIES_COUNT = 8;
  */
 export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE.Color {
   const c = new THREE.Color();
-  const autumn = r3 < 0.06;
+  const autumn = r3 < 0.045;
   switch (sp) {
     case Species.Spruce:
       c.setHSL(0.36 + r1 * 0.04, 0.26 + r2 * 0.1, 0.4 + r2 * 0.08);
@@ -620,14 +631,14 @@ export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE
       c.setHSL(0.29 + r1 * 0.05, 0.26 + r2 * 0.08, 0.45 + r2 * 0.08);
       break;
     case Species.Birch:
-      if (r3 < 0.14) c.setHSL(0.13 + r1 * 0.03, 0.62, 0.55);
+      if (r3 < 0.07) c.setHSL(0.13 + r1 * 0.03, 0.58, 0.52);
       else c.setHSL(0.21 + r1 * 0.04, 0.46 + r2 * 0.1, 0.55 + r2 * 0.06);
       break;
     case Species.Poplar:
       c.setHSL(0.24 + r1 * 0.04, 0.4 + r2 * 0.1, 0.46 + r2 * 0.06);
       break;
     case Species.Willow:
-      c.setHSL(0.2 + r1 * 0.03, 0.34 + r2 * 0.08, 0.58 + r2 * 0.05);
+      c.setHSL(0.22 + r1 * 0.03, 0.34 + r2 * 0.08, 0.47 + r2 * 0.05);
       break;
     case Species.Fruit:
       c.setHSL(0.22 + r1 * 0.04, 0.44 + r2 * 0.1, 0.5 + r2 * 0.05);
@@ -635,8 +646,8 @@ export function treeTint(sp: Species, r1: number, r2: number, r3: number): THREE
     default:
       // oaks / saplings: fresh to deep greens, now and then an olive, a yellowing or a rusty one
       if (autumn) c.setHSL(r1 < 0.5 ? 0.07 + r2 * 0.03 : 0.12 + r2 * 0.03, 0.6, 0.5);
-      else if (r3 < 0.12) c.setHSL(0.17 + r1 * 0.03, 0.42, 0.48);
-      else c.setHSL(0.23 + r1 * 0.06, 0.4 + r2 * 0.14, 0.44 + r2 * 0.1);
+      else if (r3 < 0.1) c.setHSL(0.18 + r1 * 0.03, 0.4, 0.45);
+      else c.setHSL(0.24 + r1 * 0.06, 0.4 + r2 * 0.14, 0.4 + r2 * 0.1);
   }
   return c.multiplyScalar(0.5);
 }
@@ -672,11 +683,11 @@ export function buildTrees(m: GameMap, trees: TreeSpot[], fog: FogOfWar, quality
     const hi = quality === 'low' ? lo : treeGeometry(sp as Species, false);
     const ci = new CulledInstances(hi, mat, list, m.w, m.h, CELL, { castShadow: shadows, receiveShadow: true, name: 'trees' });
     ci.mesh.customDepthMaterial = depth;
-    // medium: dappled shadows only while zoomed in (the far LOD casts none; takes effect next frame)
+    // medium: no tree shadows from the far zoom-out (takes effect next frame; the view's span as in Terrain)
     const mesh = ci.mesh;
-    mesh.onBeforeRender = () => {
+    mesh.onBeforeRender = (_r, _s, cam) => {
       tick();
-      mesh.castShadow = shadows && !(quality === 'medium' && mesh.geometry === lo);
+      if (!cam.userData.waterReflection) mesh.castShadow = shadows && !(quality === 'medium' && cam.position.y * 0.9 > 30);
     };
     out.push(ci.mesh);
     lod.addCulled(ci, lo, treeLo);

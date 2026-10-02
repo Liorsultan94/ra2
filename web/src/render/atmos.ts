@@ -906,7 +906,11 @@ export class Atmosphere {
     }
     sky.setFreeView(freeView, dt);
     sky.update(dt, st, this.host.sun.color, this.host.hemi.groundColor);
-    if (sky.env && this.host.scene.environment !== sky.env) this.host.scene.environment = sky.env;
+    if (sky.env && this.host.scene.environment !== sky.env) {
+      this.host.scene.environment = sky.env;
+      // (the fixed day look normally gets this from the HDRI loader, which the sky capture replaces)
+      if (!this.active) this.host.scene.environmentIntensity = 0.42;
+    }
   }
 
   /** Dynamic weather: a short, subtle HUD line when a front arrives, a storm breaks or the sky clears. */

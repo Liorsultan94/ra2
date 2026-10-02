@@ -649,12 +649,12 @@ export class RiverInfo {
       const c = this.sample(sm)!;
       this.features.rapids = { s0: sm - 3.2, s1: sm + 3.2, x: c.x, y: c.y };
       const r = rng(31337);
-      for (let i = 0; i < 9; i++) {
-        const s = sm - 2.6 + (i / 8) * 5.2 + (r() - 0.5) * 0.6;
+      for (let i = 0; i < 8; i++) {
+        const s = sm - 2.8 + (i / 7) * 5.6 + (r() - 0.5) * 0.5;
         const cc = this.sample(s)!;
-        const off = (r() - 0.5) * cc.width * 0.62;
+        const off = (i % 2 ? 1 : -1) * (0.15 + r() * 0.3) * cc.width * 0.5;
         const p = this.at(s, off);
-        this.features.rocks.push({ x: p.x, y: p.y, r: 0.13 + r() * 0.16 });
+        this.features.rocks.push({ x: p.x, y: p.y, r: 0.2 + r() * 0.17 });
       }
     }
   }
@@ -1178,7 +1178,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float alongR = dot(p, fd);
         if (rapids > 0.01) {
           float sw = sin(alongR * 8.0 + texture2D(waveTex, p * 0.23).b * 7.0);
-          g += fd * sw * rapids * 0.17;
+          g += fd * sw * rapids * 0.09;
         }
         if (wxRain > 0.001) {
           // rain: rings from drops on the surface (wxRain: while it rains)
@@ -1209,11 +1209,11 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
         vec3 viewDir = normalize(cameraPosition - vWorld);
         float cosT = max(dot(n, viewDir), 0.0);
-        float fres = 0.22 + 0.78 * pow(1.0 - cosT, 4.0);
+        float fres = 0.1 + 0.9 * pow(1.0 - cosT, 4.0);
         // ---- the water body: bed through the water, absorbed with depth
         vec3 deepC = mix(vec3(0.008, 0.042, 0.05), vec3(0.06, 0.05, 0.026), mud);
         vec3 turq = mix(vec3(0.03, 0.105, 0.085), vec3(0.11, 0.09, 0.045), mud);
-        vec3 absorb = mix(vec3(5.2, 3.3, 3.5), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
+        vec3 absorb = mix(vec3(3.4, 2.0, 2.2), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
         vec3 trans = exp(-absorb * depthW);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
         #if WATER_Q > 0
@@ -1265,7 +1265,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             vec4 rc = reflMatrix * vec4(vWorld, 1.0);
             vec2 ruv = rc.xy / rc.w + n.xz * 0.05 * (1.0 - 0.6 * calm);
             vec4 sc = texture2D(reflTex, ruv);
-            refl = mix(refl, sc.rgb, sc.a);
+            // the mirrored sky is HDR: compress it so it never washes the river out
+            vec3 rs = sc.rgb / (1.0 + dot(sc.rgb, vec3(0.3, 0.59, 0.11)) * 0.6);
+            refl = mix(refl, rs, sc.a);
           }
         #endif
         float fr = fres * (0.85 + 0.15 * calm);
@@ -1276,7 +1278,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float spec = pow(sd, mix(90.0, 420.0, calm)) * mix(1.6, 2.6, calm);
         #if WATER_Q > 0
           float spark = smoothstep(0.66, 0.93, texture2D(waveTex, q0 * 1.9).b * w0 + texture2D(waveTex, q1 * 1.9).b * w1);
-          spec += pow(sd, 10.0) * spark * (0.35 + 2.6 * dark) * (1.0 - 0.6 * calm);
+          spec += pow(sd, 12.0) * spark * (0.06 + 2.4 * dark) * (1.0 - 0.6 * calm);
         #endif
         col += sunCol * spec * wxSpec * (1.0 - 0.7 * ice);
         #if WATER_Q > 0
@@ -1319,7 +1321,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #if WATER_Q > 0
           // drifting foam flecks and leaves
           vec4 fl = texture2D(fleckTex, q0 * 0.31) * w0 + texture2D(fleckTex, q1 * 0.31 + 0.5) * w1;
-          foam = max(foam, smoothstep(0.25, 0.7, fl.r) * (0.3 + 0.7 * max(max(rapids, dat2.b), dat2.a * 0.8)) * 0.8 * (1.0 - calm * 0.4));
+          foam = max(foam, smoothstep(0.35, 0.8, fl.r) * (0.15 + 0.85 * max(max(rapids, dat2.b), dat2.a * 0.8)) * 0.7 * (1.0 - calm * 0.4));
         #endif
         // storm whitecaps
         if (chop > 0.3) foam = max(foam, (chop - 0.3) * 1.4 * smoothstep(0.74, 0.92, texture2D(waveTex, p * 0.7 - wind * time * 0.7).b * 0.8 + fB * 0.3));

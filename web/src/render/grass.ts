@@ -195,6 +195,8 @@ export class GrassBlades {
     }
     const geo = (this.geo = new THREE.InstancedBufferGeometry());
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    // (computed in the shader; present so the material is not built flat shaded)
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
     geo.setIndex(idx);
     geo.instanceCount = this.count;
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(map.w / 2, 0, map.h / 2), Math.hypot(map.w, map.h));

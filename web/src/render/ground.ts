@@ -592,7 +592,7 @@ export class Ground {
         // footpaths, trampled base and yard ground
         const pd = pathD[k];
         const path = (1 - smooth(0.06, 0.24, pd + (pn - 0.5) * 0.08)) * (1 - fm) * smooth(0.2, 0.4, wl);
-        let worn = Math.max(path, base * 0.55 * smooth(0.3, 0.6, pn), yd < 1.5 ? (1 - smooth(0.3, 1.5, yd)) * 0.45 : 0, shoulder * 0.35);
+        let worn = Math.max(path, base * 0.3 * smooth(0.3, 0.6, pn), yd < 1.5 ? (1 - smooth(0.3, 1.5, yd)) * 0.4 : 0, shoulder * 0.3);
         worn = Math.min(1, worn);
         ctl[o] = lush * 255;
         ctl[o + 1] = smooth(0.58, 0.72, cloverN(x, y)) * (1 - dryC * 0.8) * (1 - worn) * 255;
@@ -736,7 +736,7 @@ const TERRAIN_MAP = /* glsl */ `
   float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
   grass = mix(grass, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);
   // worn ground (paths, trampled yards): soil shows through the gaps first
-  float gSoil = smoothstep(0.0, 0.3, ctl.a * 1.15 - gH * 0.5 + (det.g - 0.5) * 0.35 * ctl.a);
+  float gSoil = smoothstep(0.45, 0.85, ctl.a * 0.95 + (0.5 - gH) * 0.5 + (det.g - 0.5) * 0.4);
   grass = mix(grass, cDirt * (0.62 + det.g * 0.55), gSoil);
   // wildflowers: crisp heads up close, a faint wash of colour further out
   if (ctl.b > 0.01) {

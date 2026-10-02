@@ -31,6 +31,7 @@ const WALK = 0.95; // tiles / s
 const DIG_START = 8; // s standing still
 const DIG_T = 2.6; // dig motion length (models/infantry.ts)
 const HOLES = 40; // foxhole cap
+const DOOR = 0.72; // walk-in / walk-out point: just inside the rear door (fraction of the half length)
 
 type Getter = (id: number) => Model | undefined;
 
@@ -419,7 +420,7 @@ export class UnitLife {
     const ax = tr.position.x - fx * (half + 0.22);
     const az = tr.position.z - fz * (half + 0.22);
     push(ax, az, this.ground(ax, az));
-    push(tr.position.x - fx * half * 0.35, tr.position.z - fz * half * 0.35, tr.position.y + 0.12);
+    push(tr.position.x - fx * half * DOOR, tr.position.z - fz * half * DOOR, tr.position.y + 0.1);
     w.n = n;
     let len = 0;
     for (let i = 1; i < n; i++) len += Math.hypot(P[i * 3] - P[i * 3 - 3], P[i * 3 + 2] - P[i * 3 - 1]);
@@ -448,9 +449,9 @@ export class UnitLife {
     const fz = -Math.sin(tr.rotation.y);
     const half = (tm.size?.x ?? 1) * 0.5;
     // inside the hull -> ramp foot -> the real (sim) position
-    const x0 = tr.position.x - fx * half * 0.35;
-    const z0 = tr.position.z - fz * half * 0.35;
-    const y0 = tr.position.y + 0.12;
+    const x0 = tr.position.x - fx * half * DOOR;
+    const z0 = tr.position.z - fz * half * DOOR;
+    const y0 = tr.position.y + 0.1;
     const x1 = tr.position.x - fx * (half + 0.22);
     const z1 = tr.position.z - fz * (half + 0.22);
     const x2 = root.position.x;

@@ -81,19 +81,17 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   const leafPath = (shape: Shape, len: number, wid: number) => {
     ctx.beginPath();
     if (shape === 'oak') {
-      // lobed: a wavy outline with three lobes per side
-      ctx.moveTo(0, 0);
-      const n = 3;
-      for (const side of [1, -1]) {
-        for (let i = 0; i <= n; i++) {
-          const t = (i + 0.5) / (n + 1);
-          const w = wid * Math.sin(Math.PI * Math.min(1, t * 1.15)) * (i % 2 ? 0.7 : 1);
-          if (side > 0) ctx.quadraticCurveTo(len * (t - 0.12), side * w * 1.1, len * t, side * w * 0.55);
-          else ctx.quadraticCurveTo(len * (1 - t + 0.12), side * w * 1.1, len * (1 - t), side * w * 0.55);
+      // rounded lobes: overlapping discs along the midrib, widest in the outer half
+      for (let i = 0; i < 4; i++) {
+        const t = 0.2 + i * 0.2;
+        const w = wid * (0.45 + 0.4 * Math.sin(Math.PI * Math.min(1, t * 1.1)));
+        for (const side of [-1, 1]) {
+          ctx.moveTo(len * t + w * 0.5, side * w * 0.45);
+          ctx.arc(len * t, side * w * 0.45, w * 0.5, 0, Math.PI * 2);
         }
-        if (side > 0) ctx.quadraticCurveTo(len * 0.97, wid * 0.25, len, 0);
       }
-      ctx.closePath();
+      ctx.moveTo(len, 0);
+      ctx.ellipse(len * 0.5, 0, len * 0.5, wid * 0.35, 0, 0, Math.PI * 2);
       return;
     }
     const wmax = shape === 'round' ? wid * 1.15 : shape === 'lance' ? wid * 0.5 : wid;
@@ -116,7 +114,7 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
     ctx.translate(0, -wid * 0.32);
     ctx.scale(1, 0.75);
     leafPath(shape, len, wid);
-    ctx.fillStyle = hsl(hue - 4, sat * 0.9, Math.min(96, lit * 1.08));
+    ctx.fillStyle = hsl(hue - 4, sat * 0.9, Math.min(90, lit * 1.06));
     ctx.fill();
     ctx.restore();
     if (len > S * 0.05) {
@@ -207,11 +205,11 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   };
 
   // ---------------------------------------------------------- leaf clusters
-  spray(TCell.Oak, { shape: 'oak', n: 120, len: 0.13, wid: 0.05, hue: 80, sat: 26, light: 74, twigs: 6 });
-  spray(TCell.Broad, { shape: 'oval', n: 150, len: 0.115, wid: 0.045, hue: 78, sat: 24, light: 76, twigs: 7 });
-  spray(TCell.Birch, { shape: 'tri', n: 120, len: 0.075, wid: 0.04, hue: 72, sat: 26, light: 80, twigs: 7, rad: 0.42 });
-  spray(TCell.Poplar, { shape: 'round', n: 170, len: 0.07, wid: 0.038, hue: 80, sat: 24, light: 76, twigs: 5, upright: true, rad: 0.36 });
-  spray(TCell.Fruit, { shape: 'oval', n: 140, len: 0.1, wid: 0.045, hue: 82, sat: 24, light: 74, twigs: 6, fruit: true });
+  spray(TCell.Oak, { shape: 'oak', n: 190, len: 0.12, wid: 0.06, hue: 80, sat: 26, light: 74, twigs: 6 });
+  spray(TCell.Broad, { shape: 'oval', n: 220, len: 0.115, wid: 0.045, hue: 78, sat: 24, light: 76, twigs: 7 });
+  spray(TCell.Birch, { shape: 'tri', n: 170, len: 0.075, wid: 0.04, hue: 72, sat: 26, light: 80, twigs: 7, rad: 0.42 });
+  spray(TCell.Poplar, { shape: 'round', n: 240, len: 0.07, wid: 0.038, hue: 80, sat: 24, light: 76, twigs: 5, upright: true, rad: 0.36 });
+  spray(TCell.Fruit, { shape: 'oval', n: 200, len: 0.1, wid: 0.045, hue: 82, sat: 24, light: 74, twigs: 6, fruit: true });
   // far LOD mass: many small leaves in a lumpy, dense blob
   {
     clip(TCell.Mass);
@@ -229,7 +227,7 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
           const x = lx + Math.cos(a) * r;
           const y = ly + Math.sin(a) * r;
           const top = (S / 2 - y) / (S * 0.5);
-          const lit = 76 * (layer === 0 ? 0.55 : layer === 1 ? 0.78 : 1) * (0.92 + 0.18 * top) * R(0.9, 1.08);
+          const lit = 70 * (layer === 0 ? 0.5 : layer === 1 ? 0.74 : 0.96) * (0.9 + 0.16 * top) * R(0.86, 1.08);
           leaf('oval', x, y, rnd() * Math.PI * 2, S * 0.06, S * 0.026, 80 + R(-8, 8), 24, lit);
         }
   }
@@ -374,7 +372,7 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
     ctx.globalAlpha = 1;
   };
   bark(TCell.Bark, [28, 22, 34], 'rgba(30,22,16,1)', [30, 20, 40]);
-  bark(TCell.PineBark, [25, 14, 34], 'rgba(40,26,18,1)', [20, 46, 50]);
+  bark(TCell.PineBark, [26, 14, 32], 'rgba(40,26,18,1)', [22, 34, 44]);
   {
     clip(TCell.BirchBark);
     ctx.fillStyle = '#e6e2d6';

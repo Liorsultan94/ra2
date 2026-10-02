@@ -219,6 +219,7 @@
 .more-panel .ctl-orders .ctl-btn {
   min-width: 54px;
   min-height: 48px;
+  padding: 4px 6px;
   margin: 0;
   background: var(--fill);
   border-radius: 12px;

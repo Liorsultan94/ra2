@@ -271,7 +271,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       // tall grass grows in clumps and swathes; between them it is short turf
       const clump = Math.max(0, Math.min(1, (meadow - 0.38) / 0.3));
       // medium / high grow 3D grass blades (grass.ts): only the odd taller clump is left as a card
-      let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK * (quality === 'low' ? 1 : 0.4);
+      let n = (t === Tile.Grass ? 0.35 + clump * clump * 4.2 : t === Tile.Dirt ? 0.6 : 0.5) * density * baseK * (quality === 'low' ? 1 : 0.25);
       if (m.ore[i]) n = 0;
       n = Math.floor(n + hash2(x, y, 304));
       for (let k = 0; k < n; k++) {
@@ -286,7 +286,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         const tuft = mk(px, pz, 0.75 + hash2(seed, 5, 305) * 0.6 + clump * 0.35, 0.85, 0.12);
         // the meadow's own palette (grasstex.ts), lifted to cancel the card texture's darkness
         grassRGB(0.2 + clump * 0.3, dryK * 0.75, tuftRGB);
-        tuft.color = new THREE.Color().setRGB(tuftRGB[0], tuftRGB[1], tuftRGB[2], THREE.SRGBColorSpace).multiplyScalar(2.0 * (0.88 + hash2(seed, 6, 305) * 0.25));
+        tuft.color = new THREE.Color().setRGB(tuftRGB[0], tuftRGB[1], tuftRGB[2], THREE.SRGBColorSpace).multiplyScalar(1.45 * (0.88 + hash2(seed, 6, 305) * 0.25));
         grass.push(tuft);
       }
       // bushes at forest edges and scattered singles

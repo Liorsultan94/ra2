@@ -325,11 +325,16 @@ function effectFrame(name, t, N) {
           const n0 = fbm(x * 3.5, y * 2.6 - t * S, z * 3.5, 4);
           const n1 = fbm(x * 3.5, y * 2.6 - (t - 1) * S, z * 3.5, 4);
           const n = n0 * (1 - t) + n1 * t;
-          const sway = (n - 0.5) * 0.35 * h;
+          // finer licking tongues (also loop-blended)
+          const m0 = turb(x * 7, y * 4.5 - t * S * 1.6, z * 7, 3);
+          const m1 = turb(x * 7, y * 4.5 - (t - 1) * S * 1.6, z * 7, 3);
+          const m = m0 * (1 - t) + m1 * t;
+          const sway = (n - 0.5) * 0.7 * h;
           const rr = Math.hypot(x - sway, z - sway * 0.5);
-          const w = 0.38 * (1 - h) * (1 - h * 0.35) + 0.04;
-          let dens = clamp01((w * (0.5 + 1.1 * n) - rr) / (w * 0.6));
-          dens *= smooth(0, 0.08, h) * (1 - smooth(0.55, 1, h + (n - 0.5) * 0.6));
+          const w = 0.4 * (1 - h) * (1 - h * 0.3) + 0.05;
+          let dens = clamp01((w * (0.25 + 1.5 * n + 0.6 * (m - 0.4)) - rr) / (w * 0.45));
+          // the top breaks up into separate tongues
+          dens *= smooth(0, 0.08, h) * (1 - smooth(0.35, 0.85, h + (n - 0.5) * 0.9 + (m - 0.45) * 0.6));
           const temp = clamp01((1 - h * 0.9) * (0.6 + 0.8 * n) * (1 - rr / (w + 0.05) * 0.5));
           out[0] = dens * 0.55;
           out[1] = dens * Math.pow(temp, 1.6) * 1.6;
@@ -507,7 +512,7 @@ function renderSparks(t, outA, outB) {
         const v = Math.exp(-d2 / (rad * rad)) * br * (0.35 + 0.65 * u);
         if (v < 0.002) continue;
         const p = (y * W + x) * 4;
-        outB[p + 3] += v;
+        outB[p + 3] = Math.min(1, outB[p + 3] + v);
         outA[p + 3] = Math.min(1, outA[p + 3] + v * 0.35);
       }
   }

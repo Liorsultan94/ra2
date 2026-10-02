@@ -571,7 +571,7 @@ export class Effects {
         }
       }
     }
-    if (S >= 0.6 && p.sparks >= 8) fb.spawn('sparks', { x, y: y + 0.1 * S, z, size: 2.2 * Math.sqrt(S) * (airborne ? 1.3 : 1), sizeEnd: 2.6 * Math.sqrt(S), rot: airborne ? Math.PI : 0.3, emissive: 1.2, heat: 0.3 });
+    if (S >= 0.6 && p.sparks >= 8) fb.spawn('sparks', { x, y: y + 0.1 * S, z, size: 2.2 * Math.sqrt(S) * (airborne ? 1.3 : 1), sizeEnd: 2.6 * Math.sqrt(S), rot: airborne ? Math.PI : 0.3, emissive: 1.2, heat: 0.3, tint: 0x201810 });
     if (!airborne && p.dirt >= 0.8) {
       const d = Math.sqrt(p.dirt);
       fb.spawn('dust', { x, y: ground, z, size: 1.5 * S * d, sizeEnd: 2.1 * S * d, tint: snow ? 0xdde4ec : 0x7a6a54, ground: true, rot: 0.2, alpha: 0.95, emissive: 0, wind: 0.3 });

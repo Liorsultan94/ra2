@@ -128,7 +128,10 @@ const LUT_FRAG = /* glsl */ `
     vec3 d = skyDir( vUv );
     // under the horizon: keep the horizon colour (the dome blends to the far haze there anyway)
     d.y = max( d.y, 0.002 );
-    gl_FragColor = vec4( atmosphere( normalize( d ), uLight ) * uScale, 1.0 );
+    vec3 c = atmosphere( normalize( d ), uLight ) * uScale;
+    // soft knee: the bright band around a low sun stays under the bloom threshold (the sun disc blooms)
+    c /= 1.0 + max( c.r, max( c.g, c.b ) ) * 0.45;
+    gl_FragColor = vec4( c, 1.0 );
   }
 `;
 
@@ -174,7 +177,7 @@ const DOME_FRAG = /* glsl */ `
     n += 0.07;
     #endif
     float c = 1.0 - uCover;
-    return smoothstep( c * 0.72 + 0.12, c * 0.72 + 0.42, n );
+    return smoothstep( c * 0.6 + 0.15, c * 0.6 + 0.45, n );
   }
   void main() {
     vec3 d = normalize( vDir );
@@ -411,7 +414,7 @@ export class Sky {
     const night = st.night;
     // by night the moon lights the (much fainter) sky: same scattering model, different source
     const light = st.moon && night > 0.5 ? st.moon : st.sun;
-    const scale = 1.7 * (st.moon && night > 0.5 ? 0.012 + 0.03 * (1 - night) : 1);
+    const scale = 0.62 * (st.moon && night > 0.5 ? 0.012 + 0.03 * (1 - night) : 1);
     if (light.dot(this.lastLight) < 0.99998 || Math.abs(scale - this.lastScale) > this.lastScale * 0.02) {
       this.lastLight.copy(light);
       this.lastScale = scale;
@@ -425,8 +428,10 @@ export class Sky {
       this.sunXZ.set(light.x, light.z);
       if (this.sunXZ.lengthSq() < 1e-6) this.sunXZ.set(1, 0);
       this.sunXZ.normalize();
-      atmosphereJS(this.tmp.set(this.sunXZ.x, 0.02, this.sunXZ.y).normalize(), light, this.horA).multiplyScalar(scale);
-      atmosphereJS(this.tmp.set(-this.sunXZ.x, 0.02, -this.sunXZ.y).normalize(), light, this.horB).multiplyScalar(scale);
+      for (const [v, k] of [[this.horA, 1], [this.horB, -1]] as const) {
+        atmosphereJS(this.tmp.set(this.sunXZ.x * k, 0.02, this.sunXZ.y * k).normalize(), light, v).multiplyScalar(scale);
+        v.divideScalar(1 + Math.max(v.x, v.y, v.z) * 0.45);
+      }
     }
     // weather on the horizon colours (same as the dome shader)
     const over = smooth(0.45, 1, st.cover);

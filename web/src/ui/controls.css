@@ -91,8 +91,9 @@
   pointer-events: auto;
 }
 .ctl-orders .ctl-btn {
-  min-width: 54px;
+  min-width: 58px;
   min-height: 46px;
+  padding-top: 9px;
   font-size: 11px;
 }
 .ctl-orders .ctl-btn svg {
