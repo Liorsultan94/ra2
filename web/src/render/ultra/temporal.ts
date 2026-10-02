@@ -150,7 +150,7 @@ void main() {
           vec2 uv = toUv( Q );
           if ( uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ) break;
           float dz = viewAt( uv ).z - Q.z;
-          if ( dz > 0.012 && dz < 0.3 ) { occ = 1.0 - float( i ) / 12.0; break; }
+          if ( dz > 0.012 && dz < 0.22 ) { occ = 1.0 - float( i ) / 12.0; break; }
         }
         c *= 1.0 - contact * occ * facing;
       }
@@ -311,7 +311,7 @@ export class TemporalPass extends Pass {
   /** Temporal resolve on/off (off = pass-through of the composite). */
   taa = true;
   /** Screen-space contact shadow strength (0 = off). */
-  contact = 0.32;
+  contact = 0.25;
   /** Screen-space reflections on wet ground (only runs while it rains). */
   ssr = true;
   /** Direction towards the sun (world space). */

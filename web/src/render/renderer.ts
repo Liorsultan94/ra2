@@ -335,7 +335,7 @@ export class GameRenderer {
     // ultra sheds its extras first (sharper shadows, then TAA / SSR), then walks the normal high ladder
     if (this.ultra) {
       this.ladder.push(step, (step = { ...step, shadow: 2048 }));
-      step = { ...step, shadow, ultra: false };
+      step = { ...step, ultra: false };
     }
     for (const pr of prs) this.ladder.push((step = { ...step, pr }));
     if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));

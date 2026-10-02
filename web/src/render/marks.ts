@@ -152,12 +152,12 @@ const TEX = {
     canvasTex(128, (ctx, s) => {
       ctx.clearRect(0, 0, s, s);
       const c = s / 2;
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 160; i++) {
         const a = Math.random() * Math.PI * 2;
-        const r0 = c * (0.08 + Math.random() * 0.15);
-        const r1 = c * (0.55 + Math.random() * 0.42);
-        ctx.strokeStyle = light ? `rgba(${170 + Math.random() * 40},${170 + Math.random() * 30},${100 + Math.random() * 30},${0.12 + Math.random() * 0.2})` : `rgba(${70 + Math.random() * 20},${64 + Math.random() * 16},${56},${0.15 + Math.random() * 0.25})`;
-        ctx.lineWidth = 1 + Math.random() * 2.5;
+        const r0 = c * (0.05 + Math.random() * 0.2);
+        const r1 = c * (0.35 + Math.random() * 0.6);
+        ctx.strokeStyle = light ? `rgba(${170 + Math.random() * 40},${170 + Math.random() * 30},${100 + Math.random() * 30},${0.08 + Math.random() * 0.14})` : `rgba(${70 + Math.random() * 20},${64 + Math.random() * 16},${56},${0.08 + Math.random() * 0.16})`;
+        ctx.lineWidth = 0.8 + Math.random() * 2;
         ctx.beginPath();
         ctx.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0);
         ctx.lineTo(c + Math.cos(a) * r1, c + Math.sin(a) * r1);
