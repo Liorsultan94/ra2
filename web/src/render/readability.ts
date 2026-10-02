@@ -723,7 +723,7 @@ export class Readability {
   hidden = false;
 
   constructor(quality: 'low' | 'medium' | 'high') {
-    this.outlines = new UnitOutlines(quality === 'low' ? 4 : quality === 'medium' ? 8 : 12, quality === 'low' ? 0.5 : 0);
+    this.outlines = new UnitOutlines(quality === 'low' ? 3 : quality === 'medium' ? 6 : 12, quality === 'low' ? 0.5 : 0);
   }
 
   private isUnit = (def: string) => DEFS[def]?.kind === 'unit';

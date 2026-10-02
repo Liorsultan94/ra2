@@ -49,6 +49,11 @@ export class CameoFactory {
       const box = new THREE.Box3().setFromObject(root);
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
+      // skinned meshes (infantry) measure in bind space before their first render: use the model's height
+      if (d.kind === 'unit' && model.height > size.y * 1.4) {
+        size.set(Math.max(size.x, model.height * 0.55), model.height, Math.max(size.z, model.height * 0.4));
+        center.set(0, model.height / 2, 0);
+      }
       const radius = Math.max(size.x, size.y * 1.2, size.z) * 0.62 + 0.05;
       const dist = radius / Math.tan((this.camera.fov * Math.PI) / 360);
       const dir = new THREE.Vector3(1, 0.85, 1.25).normalize();

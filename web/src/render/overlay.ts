@@ -412,6 +412,7 @@ export class CombatOverlay {
         vertexShader: ROUTE_VERT,
         fragmentShader: ROUTE_FRAG,
         transparent: true,
+        side: THREE.DoubleSide,
         depthWrite: false,
         polygonOffset: true,
         polygonOffsetFactor: -3,
