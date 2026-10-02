@@ -53,7 +53,7 @@ const DELAY_PER_UNIT = 0.016;
 /** Camera height above the view centre relative to the visible view height. */
 const CAM_HEIGHT = 0.62;
 /** Reference distance: full level within this many world units of the camera. */
-const REF_DIST = 7.2;
+const REF_DIST = 9.5;
 /** Distance law exponent (1 = physical inverse distance; softer keeps a battle readable). */
 const ROLLOFF = 0.62;
 /** Air absorption: cut-off = AIR_F * exp(-r / AIR_R). */
@@ -97,8 +97,7 @@ export function spatialize(l: Listener, x: number, y: number, z: number, out: Sp
   out.pan = Number.isFinite(px) ? px : 0;
 
   // distance from the camera (which hovers above the view centre)
-  const viewH = halfD * 2;
-  const h = Math.max(1, CAM_HEIGHT * Math.min(viewH, halfW * 2));
+  const h = Math.max(1, CAM_HEIGHT * 2 * Math.min(halfD, halfW));
   const zz = Number.isFinite(z) ? Math.max(0, z) : 0;
   const ground = Math.hypot(dx, dy);
   const r = Math.hypot(ground, h - Math.min(zz, h * 0.8));
