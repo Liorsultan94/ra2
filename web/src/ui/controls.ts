@@ -23,7 +23,7 @@ export interface ControlsActions {
   onGroupAssign(g: number): void;
 }
 
-const svg = (inner: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const svg = (inner: string) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 
 const ICON: Record<string, string> = {
   aggressive: '<path d="M14.5 4.5L20 4l-.5 5.5L9 20l-5-5z"/><path d="M4 20l3-3M12 8l4 4"/>',

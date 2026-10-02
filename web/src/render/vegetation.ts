@@ -6,6 +6,7 @@ import { CulledInstances, GeoBuilder, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { Leaf, foliageAtlas, leafCell } from './terraintex';
+import { buildTrees } from './trees';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -21,6 +22,9 @@ export const enum Species {
   Oak = 2,
   Birch = 3,
   Young = 4,
+  Poplar = 5,
+  Willow = 6,
+  Fruit = 7,
 }
 
 export interface TreeSpot {
@@ -39,6 +43,7 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
   const out: TreeSpot[] = [];
   const isTree = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.trees[y * m.w + x] > 0;
   const maxPer = quality === 'low' ? 2 : 3;
+  const ctx = { roads: m.roads, structures: m.structures };
   for (let y = 0; y < m.h; y++) {
     for (let x = 0; x < m.w; x++) {
       const t = m.trees[y * m.w + x];
@@ -54,10 +59,8 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
         const ox = x + (flip ? 1 - sx : sx) + (hash2(x, y, 50 + k) - 0.5) * 0.28;
         const oy = y + sy + (hash2(x, y, 60 + k) - 0.5) * 0.28;
         const r = hash2(x, y, 80 + k);
-        let species: Species;
-        if (t === 1) species = r < 0.68 ? Species.Spruce : Species.Pine;
-        else species = r < 0.55 ? Species.Oak : r < 0.8 ? Species.Birch : Species.Young;
         const forest = n4 >= 2;
+        const species = treeSpecies(m, x, y, t, n4, r, ctx);
         const s = (forest ? 0.95 : 0.82) + hash2(x, y, 70 + k) * 0.45;
         out.push({ x: ox, y: oy, s, species, rot: hash2(x, y, 90 + k) * Math.PI * 2 });
       }
@@ -68,8 +71,51 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
 
 /** Approximate canopy radius of a tree spot (for ground shading). */
 export function canopyRadius(t: TreeSpot) {
-  const base = t.species === Species.Spruce ? 0.34 : t.species === Species.Pine ? 0.36 : t.species === Species.Oak ? 0.42 : t.species === Species.Birch ? 0.3 : 0.28;
+  const base = [0.36, 0.32, 0.44, 0.3, 0.28, 0.2, 0.44, 0.36][t.species] ?? 0.3;
   return base * t.s;
+}
+
+/**
+ * Species of a tree on tile (x, y) (`t`: 1 conifer tile, 2 broadleaf tile):
+ * willows and birches along the water, fruit trees by the farmsteads, poplar
+ * rows along the roads, Scots pine on the higher ground, oak-birch woods elsewhere.
+ */
+function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r: number, ctx: { roads: GameMap['roads']; structures: GameMap['structures'] }): Species {
+  if (t === 1) {
+    const h = m.heights[y * (m.w + 1) + x] ?? 0;
+    return r < 0.66 - Math.max(0, Math.min(0.3, h * 0.12)) ? Species.Spruce : Species.Pine;
+  }
+  let water = false;
+  for (let dy = -2; dy <= 2 && !water; dy++)
+    for (let dx = -2; dx <= 2; dx++) {
+      const xx = x + dx;
+      const yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < m.w && yy < m.h && m.tiles[yy * m.w + xx] === Tile.Water) {
+        water = true;
+        break;
+      }
+    }
+  if (water) return r < 0.42 ? Species.Willow : r < 0.76 ? Species.Birch : r < 0.9 ? Species.Oak : Species.Young;
+  const cx = x + 0.5;
+  const cy = y + 0.5;
+  if (n4 <= 2) {
+    let house = Infinity;
+    for (const st of ctx.structures) house = Math.min(house, Math.hypot(Math.max(st.x - cx, 0, cx - (st.x + st.w)), Math.max(st.y - cy, 0, cy - (st.y + st.h))));
+    if (house < 4.5) return r < 0.62 ? Species.Fruit : r < 0.85 ? Species.Oak : Species.Young;
+    let road = Infinity;
+    for (const pts of ctx.roads)
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const ex = b.x - a.x;
+        const ey = b.y - a.y;
+        const l2 = ex * ex + ey * ey || 1;
+        const k = Math.max(0, Math.min(1, ((cx - a.x) * ex + (cy - a.y) * ey) / l2));
+        road = Math.min(road, Math.hypot(a.x + ex * k - cx, a.y + ey * k - cy));
+      }
+    if (road < 2.6) return r < 0.62 ? Species.Poplar : r < 0.85 ? Species.Oak : Species.Birch;
+  }
+  return r < 0.52 ? Species.Oak : r < 0.74 ? Species.Birch : Species.Young;
 }
 
 // ------------------------------------------------------------- material
@@ -118,79 +164,6 @@ function foliageMaterial(atlas: THREE.Texture, fog: FogOfWar, quality: string) {
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 const UP = V(0, 1, 0);
 
-function trunk(b: GeoBuilder, h: number, r0: number, r1: number, shade: THREE.Color | number, sides = 5) {
-  const cyl = new THREE.CylinderGeometry(r1, r0, h, sides, 1, true).translate(0, h / 2, 0);
-  b.add(cyl, new THREE.Matrix4(), leafCell(Leaf.Bark), shade, { uvScale: [1, 1] });
-}
-
-/** Ring of drooping branch cards around the trunk. */
-function branchTier(b: GeoBuilder, y: number, radius: number, droop: number, cards: number, rot: number, centre: THREE.Vector3, light: number, flexK: number) {
-  const [u0, v0, u1, v1] = leafCell(Leaf.Conifer);
-  for (let j = 0; j < cards; j++) {
-    const a = rot + (j / cards) * Math.PI * 2;
-    const dir = V(Math.cos(a), 0, Math.sin(a));
-    const tan = V(-Math.sin(a), 0, Math.cos(a));
-    const w = radius * 0.9;
-    const root = V(0, y + droop * 0.25, 0).addScaledVector(dir, 0.02);
-    const tip = V(dir.x * radius, y - droop, dir.z * radius);
-    // the card is tilted so its face looks up/outwards
-    const lift = V(0, 0.18 * w, 0);
-    const p = [
-      root.clone().addScaledVector(tan, -w * 0.22),
-      root.clone().addScaledVector(tan, w * 0.22),
-      tip.clone().addScaledVector(tan, -w * 0.5).add(lift),
-      tip.clone().addScaledVector(tan, w * 0.5).sub(lift),
-    ];
-    const ids = p.map((q, k) => {
-      const n = q.clone().sub(centre).normalize().addScaledVector(UP, 0.7).normalize();
-      const tipSide = k >= 2;
-      const c = light * (tipSide ? 1 : 0.6);
-      const f = Math.max(0, q.y) * flexK * (tipSide ? 1 : 0.5);
-      return b.vert(q, n, tipSide ? u1 : u0, k % 2 === 0 ? v0 : v1, c, f);
-    });
-    b.quad(ids[0], ids[1], ids[2], ids[3]);
-  }
-}
-
-function coniferGeo(kind: 'spruce' | 'pine', lite = false): THREE.BufferGeometry {
-  const b = new GeoBuilder();
-  const centre = V(0, 0.45, 0);
-  if (kind === 'spruce') {
-    trunk(b, 0.95, 0.035, 0.01, 0.8, lite ? 3 : 5);
-    // dark inner cone to make the crown read as dense from above
-    const core = new THREE.ConeGeometry(0.2, 0.78, lite ? 5 : 6, 1, true).translate(0, 0.5, 0);
-    b.add(core, new THREE.Matrix4(), leafCell(Leaf.Solid), 0.55, { normalFn: (p) => p.clone().sub(centre).normalize().addScaledVector(UP, 0.5).normalize() });
-    const tiers = lite ? 5 : 7;
-    for (let i = 0; i < tiers; i++) {
-      const t = i / (tiers - 1);
-      const y = 0.14 + t * 0.74;
-      const r = 0.38 * (1 - t * 0.82) + 0.04;
-      branchTier(b, y, r, r * 0.42, lite ? (i > 2 ? 4 : 5) : i > 4 ? 5 : 7, i * 0.53, centre, 0.62 + t * 0.45, 0.022);
-    }
-    // leader at the top
-    const [u0, v0, u1, v1] = leafCell(Leaf.Conifer);
-    for (const a of lite ? [] : [0, Math.PI / 2]) {
-      const t = V(Math.cos(a) * 0.05, 0, Math.sin(a) * 0.05);
-      const ids = [V(0, 0.84, 0).sub(t), V(0, 0.84, 0).add(t), V(0, 1.0, 0).sub(t.clone().multiplyScalar(0.3)), V(0, 1.0, 0).add(t.clone().multiplyScalar(0.3))].map((q, k) =>
-        b.vert(q, V(0, 1, 0), k >= 2 ? u1 : u0, k % 2 ? v1 : v0, 1.0, 0.02),
-      );
-      b.quad(ids[0], ids[1], ids[2], ids[3]);
-    }
-  } else {
-    trunk(b, 0.9, 0.04, 0.015, 0.95, lite ? 3 : 5);
-    const core = (lite ? new THREE.OctahedronGeometry(0.2, 0) : new THREE.IcosahedronGeometry(0.2, 0)).scale(1, 0.55, 1).translate(0, 0.74, 0);
-    b.add(core, new THREE.Matrix4(), leafCell(Leaf.Solid), 0.6, { normalFn: (p) => p.clone().sub(V(0, 0.7, 0)).normalize() });
-    const tiers = lite ? 2 : 4;
-    for (let i = 0; i < tiers; i++) {
-      const t = i / (tiers - 1);
-      const y = 0.52 + t * 0.36;
-      const r = 0.34 * (1 - t * 0.6) + 0.05;
-      branchTier(b, y, r, r * 0.18, lite ? 5 : 6, i * 1.1, V(0, 0.7, 0), 0.7 + t * 0.4, 0.02);
-    }
-  }
-  return b.build(true);
-}
-
 /** Leaf-card clusters on an ellipsoid around a dark solid core. */
 function canopy(b: GeoBuilder, centre: THREE.Vector3, rad: THREE.Vector3, clusters: number, size: number, cell: Leaf, seed: number, flexK: number, coreDetail = 1, cards = 3) {
   const core = coreDetail < 0 ? new THREE.OctahedronGeometry(1, 0) : new THREE.IcosahedronGeometry(1, coreDetail);
@@ -223,32 +196,6 @@ function canopy(b: GeoBuilder, centre: THREE.Vector3, rad: THREE.Vector3, cluste
       b.quad(ids[0], ids[1], ids[2], ids[3]);
     }
   }
-}
-
-function broadleafGeo(kind: 'oak' | 'birch' | 'young', lite = false): THREE.BufferGeometry {
-  const b = new GeoBuilder();
-  // the lite version keeps the silhouette: fewer, bigger leaf clusters of two cards
-  const cl = (n: number) => (lite ? Math.ceil(n * 0.55) : n);
-  const sz = (x: number) => (lite ? x * 1.3 : x);
-  const core = lite ? 0 : 1;
-  const cards = 3;
-  if (kind === 'oak') {
-    trunk(b, 0.55, 0.05, 0.03, 0.85, lite ? 4 : 5);
-    if (!lite)
-      for (const a of [0.4, 2.5, 4.4]) {
-        const br = new THREE.CylinderGeometry(0.012, 0.025, 0.32, 4, 1, true).translate(0, 0.16, 0);
-        const m = new THREE.Matrix4().makeRotationAxis(V(Math.cos(a), 0, Math.sin(a)).cross(UP).normalize(), -0.75).premultiply(new THREE.Matrix4().makeTranslation(0, 0.42, 0));
-        b.add(br, m, leafCell(Leaf.Bark), 0.8);
-      }
-    canopy(b, V(0, 0.72, 0), V(0.42, 0.3, 0.42), cl(13), sz(0.17), Leaf.Broadleaf, 1, 0.025, core, cards);
-  } else if (kind === 'birch') {
-    trunk(b, 0.85, 0.03, 0.012, 2.2, lite ? 3 : 5);
-    canopy(b, V(0, 0.78, 0), V(0.26, 0.38, 0.26), cl(11), sz(0.14), Leaf.Broadleaf, 2, 0.03, core, cards);
-  } else {
-    trunk(b, 0.3, 0.025, 0.018, 0.85, lite ? 3 : 5);
-    canopy(b, V(0, 0.48, 0), V(0.3, 0.24, 0.3), cl(9), sz(0.15), Leaf.Bush, 3, 0.03, core, cards);
-  }
-  return b.build(true);
 }
 
 function bushGeo(lite = false): THREE.BufferGeometry {
@@ -286,53 +233,11 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   const shadows = quality !== 'low';
 
   const low = quality === 'low';
-  const geoPair = (fn: (lite: boolean) => THREE.BufferGeometry): [THREE.BufferGeometry, THREE.BufferGeometry] => {
-    const lo = fn(true);
-    return [low ? lo : fn(false), lo];
-  };
-  const geos: Record<Species, [THREE.BufferGeometry, THREE.BufferGeometry]> = {
-    [Species.Spruce]: geoPair((l) => coniferGeo('spruce', l)),
-    [Species.Pine]: geoPair((l) => coniferGeo('pine', l)),
-    [Species.Oak]: geoPair((l) => broadleafGeo('oak', l)),
-    [Species.Birch]: geoPair((l) => broadleafGeo('birch', l)),
-    [Species.Young]: geoPair((l) => broadleafGeo('young', l)),
-  };
   // view span (world units) beyond which the lighter models / no clutter are used
   const treeLo = quality === 'high' ? 19 : 14.5;
   const grassHide = quality === 'high' ? 24 : quality === 'medium' ? 17 : 13.5;
-  const lists: Inst[][] = [[], [], [], [], []];
-  const col = (h: number, s: number, l: number) => new THREE.Color().setHSL(h, s, l);
-  for (const t of trees) {
-    const r1 = hash2(Math.floor(t.x * 7), Math.floor(t.y * 7), 3);
-    const r2 = hash2(Math.floor(t.x * 7), Math.floor(t.y * 7), 4);
-    let c: THREE.Color;
-    switch (t.species) {
-      case Species.Spruce:
-        c = col(0.3 + r1 * 0.05, 0.22 + r2 * 0.15, 0.62 + r2 * 0.2);
-        break;
-      case Species.Pine:
-        c = col(0.2 + r1 * 0.06, 0.3, 0.68 + r2 * 0.18);
-        break;
-      case Species.Birch:
-        c = col(0.17 + r1 * 0.05, 0.45, 0.78 + r2 * 0.15);
-        break;
-      default:
-        // oaks/young trees: green with an occasional olive or autumn-ish tone
-        c = r1 < 0.08 ? col(0.1, 0.45, 0.72) : col(0.2 + r1 * 0.07, 0.3 + r2 * 0.2, 0.66 + r2 * 0.2);
-    }
-    const h = surfaceHeight(m, t.x, t.y);
-    const sy = t.s * (0.9 + r2 * 0.25);
-    lists[t.species].push({ x: t.x, y: h - 0.02, z: t.y, rotY: t.rot, sx: t.s, sy, sz: t.s, color: c, tiltX: (r1 - 0.5) * 0.08, tiltZ: (r2 - 0.5) * 0.08 });
-  }
-  lists.forEach((list, sp) => {
-    if (!list.length) return;
-    const [hi, lo] = geos[sp as Species];
-    const ci = new CulledInstances(hi, mat, list, m.w, m.h, CELL, { castShadow: shadows, receiveShadow: true, name: 'trees' });
-    ci.mesh.customDepthMaterial = depth;
-    out.push(ci.mesh);
-    lod.addCulled(ci, lo, treeLo);
-    sink?.trees.push(ci);
-  });
+  // trees: species models, materials and instancing live in trees.ts
+  out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees));
 
   // ---- ground cover
   const grass: Inst[] = [];
