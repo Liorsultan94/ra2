@@ -77,11 +77,11 @@ void main() {
   vec3 Nw = ( camWorld * vec4( N, 0.0 ) ).xyz;
   vec3 W = ( camWorld * vec4( P, 1.0 ) ).xyz;
   // wet film on flat ground, mirror-like in the puddle spots (same noise the ground shader pools water with)
-  float flat = smoothstep( 0.86, 0.97, Nw.y );
+  float flatK = smoothstep( 0.86, 0.97, Nw.y );
   float n1 = texture2D( fogNoise, W.xz * 0.085 + 0.13 ).g;
   float n2 = texture2D( fogNoise, W.xz * 0.33 + 0.57 ).r;
   float pud = smoothstep( 0.6, 0.67, n1 * 0.78 + n2 * 0.22 );
-  float mask = flat * wet * ( 0.3 + 0.7 * pud );
+  float mask = flatK * wet * ( 0.3 + 0.7 * pud );
   if ( mask < 0.01 ) return;
   vec3 V = normalize( P );
   vec3 R = normalize( reflect( V, N ) );
@@ -216,8 +216,8 @@ void main() {
     }
   m1 /= 9.0;
   vec3 sig = sqrt( max( m2 / 9.0 - m1 * m1, vec3( 0.0 ) ) );
-  vec3 bmin = max( mn, m1 - sig * 1.25 );
-  vec3 bmax = min( mx, m1 + sig * 1.25 );
+  vec3 bmin = max( mn, m1 - sig * 1.0 );
+  vec3 bmax = min( mx, m1 + sig * 1.0 );
   // reproject the nearest surface of the neighbourhood (edges of moving silhouettes follow the front object)
   vec4 vp = projInv * vec4( duv * 2.0 - 1.0, dmin * 2.0 - 1.0, 1.0 );
   vec4 wp = camWorld * vec4( vp.xyz / vp.w, 1.0 );
@@ -237,7 +237,7 @@ void main() {
     vec3 a = abs( v / e );
     float ma = max( a.x, max( a.y, a.z ) );
     if ( ma > 1.0 ) h = c + v / ma;
-    float alpha = mix( 0.08, 0.22, clamp( vel / 6.0, 0.0, 1.0 ) );
+    float alpha = mix( 0.08, 0.3, clamp( vel / 4.0, 0.0, 1.0 ) );
     // luminance weighting against flicker of small bright details
     float wc = alpha / ( 1.0 + cur.x );
     float wh = ( 1.0 - alpha ) / ( 1.0 + h.x );

@@ -435,7 +435,7 @@ export class GameRenderer {
       if (this.temporal.enabled !== s.ultra) this.temporal.reset();
       this.temporal.enabled = s.ultra;
     }
-    if (this.finalPass) this.finalPass.uniforms.sharpen.value = s.ultra ? 0.22 : 0;
+    if (this.finalPass) this.finalPass.uniforms.sharpen.value = s.ultra ? 0.3 : 0;
     if (this.csm) {
       if (s.shadow) this.csm.setMapSize(s.shadow);
     } else if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {

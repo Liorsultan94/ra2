@@ -60,7 +60,7 @@ function star(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) 
  */
 export function drawRankInsignia(ctx: CanvasRenderingContext2D, cx: number, cy: number, rank: number, pop = 0, now = 0) {
   if (rank < VETERAN) return;
-  const s = 1 + pop * 0.9;
+  const s = 1.15 + pop * 0.9;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.scale(s, s);
