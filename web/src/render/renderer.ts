@@ -18,6 +18,7 @@ import { CombatOverlay } from './overlay';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { FinalPass, loadSkyEnvironment } from './post';
 import { Terrain } from './terrain';
+import { Atmosphere } from './atmos';
 import { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
 
@@ -158,6 +159,8 @@ export class GameRenderer {
   private sun: THREE.DirectionalLight;
   private hemi: THREE.HemisphereLight;
   readonly outskirts: Outskirts;
+  /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
+  readonly atmos: Atmosphere;
   private visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
   private projVis = new Map<number, ProjVisual>();
@@ -295,6 +298,7 @@ export class GameRenderer {
       this.finalPass.haze = this.effects.enableHaze(this.camera);
     }
     this.applyLevel(this.level, false);
+    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
 
     if (viewer >= 0) {
       const p = world.players[viewer];
@@ -1228,6 +1232,7 @@ export class GameRenderer {
         break;
       }
       case 'impact': {
+        if (!ev.air) this.atmos.impact(ev.x, ev.y, this.blastFor(ev.weapon, false)?.size ?? 0);
         if (!this.visibleAt(ev.x, ev.y)) break;
         const prof = this.blastFor(ev.weapon, !!ev.air);
         if (!prof) break;
@@ -1250,6 +1255,7 @@ export class GameRenderer {
         const shown = this.visibleAt(ev.x, ev.y);
         const d = DEFS[ev.def];
         const gy = standHeight(this.world.map, ev.x, ev.y);
+        if (d.kind === 'building' || (unitDef(ev.def).category === 'vehicle' && !unitDef(ev.def).air)) this.atmos.impact(ev.x, ev.y, d.kind === 'building' ? 2 : 1.1);
         if (d.kind === 'building') {
           const bd = buildingDef(ev.def);
           if (shown) {
@@ -1432,6 +1438,7 @@ export class GameRenderer {
     this.syncEntities(alpha, dt);
     this.overlay.endFrame();
     this.updateWrecks(dt);
+    this.atmos.update(dt, this.time, this.visuals.values(), this.target, this.zoom, this.camera);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
@@ -1452,6 +1459,7 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    this.atmos.dispose();
     this.renderer.dispose();
     this.composer?.dispose();
   }

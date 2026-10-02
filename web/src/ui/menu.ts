@@ -15,6 +15,9 @@ export interface Settings {
   voice: boolean;
   /** Slow-motion camera moments on big events (missile launches, interceptions, huge blasts). */
   cinematic: boolean;
+  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). */
+  tod?: 'day' | 'dusk' | 'night';
+  weather?: 'clear' | 'rain' | 'snow' | 'sandstorm';
 }
 
 const KEY = 'ironfront.settings.v1';
@@ -128,6 +131,8 @@ export class MainMenu {
           <label>Difficulty<select data-o="difficulty">${opt('easy', st.difficulty, 'Easy')}${opt('normal', st.difficulty, 'Normal')}${opt('hard', st.difficulty, 'Hard')}</select></label>
           <label>Credits<select data-o="credits">${[5000, 10000, 20000].map((c) => opt(String(c), String(st.credits), '$' + c.toLocaleString('en-US'))).join('')}</select></label>
           <label>Map<select disabled><option>Frontline Crossing (2 players)</option></select></label>
+          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}</select></label>
+          <label>Weather<select data-o="weather">${opt('clear', st.weather ?? 'clear', 'Clear')}${opt('rain', st.weather ?? 'clear', 'Rain')}${opt('snow', st.weather ?? 'clear', 'Snow')}${opt('sandstorm', st.weather ?? 'clear', 'Sandstorm')}</select></label>
         </div>
         <div class="row">
           <button class="mbtn" data-a="back">Back</button>
@@ -146,6 +151,8 @@ export class MainMenu {
         if (k === 'credits') st.credits = Number(sel.value);
         else if (k === 'enemy') st.enemy = sel.value as Settings['enemy'];
         else if (k === 'difficulty') st.difficulty = sel.value as Difficulty;
+        else if (k === 'tod') st.tod = sel.value as Settings['tod'];
+        else if (k === 'weather') st.weather = sel.value as Settings['weather'];
       }),
     );
     s.querySelector('[data-a=back]')!.addEventListener('click', () => this.showTitle());
