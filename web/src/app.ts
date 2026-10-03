@@ -80,7 +80,7 @@ function showMainMenu(newDemo = true) {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map, liveSky: true });
     },
     onSettings: (s) => {
       settings = s;
