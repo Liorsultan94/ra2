@@ -1,0 +1,60 @@
+{
+ "version": 1,
+ "frame": 128,
+ "grid": 8,
+ "blocks": [
+  4,
+  2
+ ],
+ "encoding": "sqrt",
+ "effects": {
+  "fireball": {
+   "block": 0,
+   "life": 3.2,
+   "loop": false,
+   "emission": 0.6349
+  },
+  "burst": {
+   "block": 1,
+   "life": 0.9,
+   "loop": false,
+   "emission": 0.9797
+  },
+  "fuel": {
+   "block": 2,
+   "life": 3.8,
+   "loop": false,
+   "emission": 0.9951
+  },
+  "dust": {
+   "block": 3,
+   "life": 2.6,
+   "loop": false,
+   "emission": 1
+  },
+  "smoke": {
+   "block": 4,
+   "life": 6,
+   "loop": false,
+   "emission": 1
+  },
+  "flame": {
+   "block": 5,
+   "life": 2.4,
+   "loop": true,
+   "emission": 0.8613
+  },
+  "sparks": {
+   "block": 6,
+   "life": 1,
+   "loop": false,
+   "emission": 1
+  },
+  "airburst": {
+   "block": 7,
+   "life": 3,
+   "loop": false,
+   "emission": 0.6779
+  }
+ }
+}

@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
@@ -19,18 +17,26 @@ import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
 import { Paradrop } from './paradrop';
+import { UnitLife } from './unitlife';
+import { DeployFx } from './deployfx';
 import { CombatOverlay } from './overlay';
 import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
-import { FinalPass, loadSkyEnvironment } from './post';
+import { loadSkyEnvironment, type FinalPass } from './post';
+import { PostChain } from './post/chain';
+import type { GradeInput } from './post/grade';
+import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
+import { Sky } from './sky';
 import { AmbientLife, ambientEnabled } from './ambient';
-import { TiltShiftPass } from './tiltshift';
+import { WaterFx } from './fx/waterfx';
+import type { TiltShiftPass } from './tiltshift';
 import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
+import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
-import { JitterRenderPass, TemporalPass } from './ultra/temporal';
+import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
@@ -79,8 +85,12 @@ const SUN_DIR = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
 /** One rung of the dynamic quality ladder (index 0 = best). */
 interface QualityStep {
   pr: number;
-  gtao: boolean;
-  bloom: boolean;
+  /** Ambient occlusion (post/ao.ts). */
+  ao: boolean;
+  /** Bloom: 0 off, 1 cheap, 2 full (post/bloom.ts). */
+  bloomQ: 0 | 1 | 2;
+  /** Lens extras: edge chromatic aberration, lens dirt, flare streak (post/chain.ts). */
+  lens: boolean;
   shadow: number;
   post: boolean;
   /** Ultra extras (TAA + sharpen, SSR, screen-space contact shadows) on this rung. */
@@ -92,6 +102,8 @@ export interface Visual {
   model: Model;
   owner: number;
   def: string;
+  /** Production buildings: renderer time of the last unit rolled out (factory doors / lifts). */
+  prodAt?: number;
   ring: THREE.Mesh | null;
   muzzleIdx: number;
   fxTimer: number;
@@ -219,19 +231,21 @@ export class GameRenderer {
   readonly superFx: SuperFx;
   /** Civilian traffic, livestock and birds (src/render/ambient, visual only). */
   readonly ambient: AmbientLife | null = null;
+  /** River weather, ring waves, fuel slicks, floating debris (fx/waterfx.ts, visual only). */
+  readonly river: WaterFx;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
   /** Phone readability: strategic icons, unit outlines, move-route arrows (src/render/readability.ts). */
   readonly readability: Readability;
   readonly target = new THREE.Vector3();
   zoom = 1;
+  /** Cinematic post chain (src/render/post/chain.ts): AO, bloom, DOF, AgX + LUT grade, lens, AA. */
+  private post: PostChain | null = null;
   private composer: EffectComposer | null = null;
-  private bloom: UnrealBloomPass | null = null;
-  private gtao: GTAOPass | null = null;
+  private bloom: BloomPass | null = null;
   private finalPass: FinalPass | null = null;
   private tilt: TiltShiftPass | null = null;
-  // ultra quality (src/render/ultra/*): jittered scene pass, temporal resolve, cascaded sun
-  private jitterPass: JitterRenderPass | null = null;
+  // ultra quality (src/render/ultra/*): temporal resolve (in the post chain), cascaded sun
   private temporal: TemporalPass | null = null;
   private csm: CascadeSun | null = null;
   /** Soft footprint darkening under ground units and buildings (all but low quality). */
@@ -245,11 +259,17 @@ export class GameRenderer {
   readonly outskirts: Outskirts;
   /** Time of day, weather, night vision and environment destruction (src/render/atmos.ts). */
   readonly atmos: Atmosphere;
+  /** Physical sky (src/render/sky.ts; medium / high). */
+  sky: Sky | null = null;
   /** Live unit / building visuals by entity id (read by the view modes in viewmodes.ts). */
   readonly visuals = new Map<number, Visual>();
   private wrecks: Wreck[] = [];
   /** Parachute canopies (airborne-drop support power). */
   private chutes: Paradrop;
+  /** Crew hatches, transport ramps / walk-in-out, infantry digging in (unitlife.ts). */
+  private life: UnitLife;
+  /** MCV unfolding into a construction yard (deployfx.ts). */
+  private deployFx: DeployFx;
   private projVis = new Map<number, ProjVisual>();
   private ghost: THREE.Group | null = null;
   private ghostKey = '';
@@ -297,13 +317,15 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // (the post chain tone maps itself, AgX + grade LUT; this only covers direct-to-screen frames)
+    this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = quality !== 'low';
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.info.autoReset = false;
     this.ultra = requested === 'ultra' && ultraCapable(this.renderer);
+    this.autoMon = new AutoQualityMonitor(requested);
     if (requested === 'ultra' && !this.ultra) console.warn('Ultra quality unsupported on this device (no float render targets): running High');
 
     this.scene.background = new THREE.Color(0x2a2824);
@@ -319,7 +341,8 @@ export class GameRenderer {
     this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
     void loadSkyEnvironment(this.renderer).then((env) => {
-      if (!env || this.disposed) return;
+      // (high quality captures its environment from the physical sky instead: sky.ts)
+      if (!env || this.disposed || this.sky?.envCapture) return;
       this.scene.environment?.dispose();
       this.scene.environment = env;
       this.scene.environmentIntensity = 0.42;
@@ -387,7 +410,8 @@ export class GameRenderer {
     this.chutes = new Paradrop(this.scene);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
 
-    // ---- quality ladder: drop resolution first, then the expensive effects
+    // ---- quality ladder (index 0 = best). The governor sheds, in order: lens extras -> AO -> bloom quality
+    // -> (ultra extras) -> resolution -> shadow detail / bloom. Every post pass is a rung of its own.
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
@@ -395,53 +419,47 @@ export class GameRenderer {
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
-    const post = quality !== 'low';
-    // ambient occlusion: always on high; on medium only for desktops (phones spend the budget on resolution)
-    const ao = quality === 'high' || (quality === 'medium' && !coarse);
-    let step: QualityStep = { pr: maxPR, gtao: ao, bloom: post, shadow, post, ultra: this.ultra };
-    // ultra sheds its extras first (sharper shadows, then TAA / SSR), then walks the normal high ladder
+    // the post chain needs half-float targets; without them every tier renders straight to the canvas
+    const post = PostChain.supported(this.renderer);
+    const fx = post && quality !== 'low';
+    // AO: high and medium (medium only climbs to it with headroom: it starts below that rung)
+    let step: QualityStep = { pr: maxPR, ao: fx, bloomQ: fx ? 2 : 0, lens: fx, shadow, post, ultra: this.ultra };
+    const push = (s: QualityStep) => {
+      const l = this.ladder[this.ladder.length - 1];
+      if (!l || l.pr !== s.pr || l.ao !== s.ao || l.bloomQ !== s.bloomQ || l.lens !== s.lens || l.shadow !== s.shadow || l.post !== s.post || l.ultra !== s.ultra) this.ladder.push(s);
+      step = s;
+    };
+    push(step);
+    if (step.lens) push({ ...step, lens: false });
+    if (step.ao) push({ ...step, ao: false });
+    if (step.bloomQ === 2) push({ ...step, bloomQ: 1 });
+    // ultra sheds its extras next (sharper shadows, then TAA / SSR), then walks the normal high ladder
     if (this.ultra) {
-      this.ladder.push(step, (step = { ...step, shadow: 2048 }));
+      push({ ...step, shadow: 2048 });
       step = { ...step, ultra: false };
     }
-    for (const pr of prs) this.ladder.push((step = { ...step, pr }));
-    if (step.gtao) this.ladder.push((step = { ...step, gtao: false }));
-    if (step.shadow > 2048) this.ladder.push((step = { ...step, shadow: 2048 }));
-    if (step.bloom) this.ladder.push((step = { ...step, bloom: false }));
-    if (step.shadow > 1024) this.ladder.push((step = { ...step, shadow: 1024 }));
-    if (step.post) this.ladder.push((step = { ...step, post: false }));
-    this.level = Math.max(0, this.ladder.findIndex((s) => s.pr <= startPR + 0.01));
+    for (const pr of prs) push({ ...step, pr });
+    if (step.shadow > 2048) push({ ...step, shadow: 2048 });
+    if (step.bloomQ) push({ ...step, bloomQ: 0 });
+    if (step.shadow > 1024) push({ ...step, shadow: 1024 });
+    // low's last resort: straight to the (multisampled) canvas; medium / high keep tone map + grade + FXAA
+    if (step.post && quality === 'low') push({ ...step, post: false });
+    const startAt = (s: QualityStep) => s.pr <= startPR + 0.01 && (quality !== 'medium' || !s.ao);
+    this.level = Math.max(0, this.ladder.findIndex(startAt));
     this.adaptive = !/[?&]adapt=0\b/.test(location.search);
 
     if (post) {
-      // ultra: the scene buffer keeps its depth (TAA reprojection, SSR, contact shadows, GTAO without a normal pass)
-      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0, depthTexture: this.ultra ? new THREE.DepthTexture(1, 1) : null });
-      this.composer = new EffectComposer(this.renderer, target);
-      if (this.ultra) this.composer.addPass((this.jitterPass = new JitterRenderPass(this.scene, this.camera)));
-      else this.composer.addPass(new RenderPass(this.scene, this.camera));
-      if (ao) {
-        try {
-          this.gtao = new GTAOPass(this.scene, this.camera, 256, 256);
-          this.gtao.blendIntensity = 0.8;
-          this.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.5, thickness: 1, scale: 1, ...(this.ultra ? { samples: 24 } : {}) });
-          this.composer.addPass(this.gtao);
-          const g = this.gtao;
-          if (this.jitterPass) this.jitterPass.onDepth = (d) => g.setGBuffer(d);
-        } catch {
-          this.gtao = null;
-        }
-      }
-      if (this.jitterPass) this.composer.addPass((this.temporal = new TemporalPass(this.jitterPass, this.camera, this.fog.uniforms.fogNoise.value)));
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.42, 0.5, 0.9);
-      this.composer.addPass(this.bloom);
-      this.finalPass = new FinalPass();
-      this.finalPass.uniforms.fxaa.value = quality === 'high' ? 0 : 1;
+      const pc = (this.post = new PostChain(this.renderer, this.scene, this.camera, quality, this.ultra, this.fog.uniforms.fogNoise.value));
+      this.composer = pc.composer;
+      this.bloom = pc.bloom;
+      this.finalPass = pc.final;
+      this.tilt = pc.tilt;
+      this.temporal = pc.temporal;
       this.finalPass.uniforms.exposure.value = this.renderer.toneMappingExposure;
-      this.composer.addPass(this.finalPass);
-      // miniature-style tilt-shift at close zoom (high quality only, src/render/tiltshift.ts)
-      if (quality === 'high') this.composer.addPass((this.tilt = new TiltShiftPass()));
-      this.finalPass.haze = this.effects.enableHaze(this.camera);
-      this.finalPass.rays = this.effects.enableGodRays(this.camera);
+      if (quality !== 'low') {
+        this.finalPass.haze = this.effects.enableHaze(this.camera);
+        this.finalPass.rays = this.effects.enableGodRays(this.camera);
+      }
     }
     this.applyLevel(this.level, false);
     this.effects.group.name = 'effects';
@@ -449,8 +467,16 @@ export class GameRenderer {
     this.marks.group.name = 'marks';
     this.bridgeFx.group.name = 'bridges';
     this.overlay.group.name = 'overlay';
-    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom, canvas }, viewer);
+    this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom as unknown as UnrealBloomPass | null, canvas }, viewer);
+    // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
+    if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
+      this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
+      this.scene.add(this.sky.mesh);
+    }
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
+    this.river = new WaterFx({ world, terrain: this.terrain, effects: this.effects, atmos: this.atmos, fog: this.fog, scene: this.scene, quality, target: this.target, visibleAt: (x, y) => this.visibleAt(x, y) });
+    this.life = new UnitLife(this.scene, this.effects, world, (x, z) => standHeight(world.map, x, z), (id) => this.visuals.get(id)?.model);
+    this.deployFx = new DeployFx(this.scene, this.effects, (id) => !!world.get(id));
     if (ambientEnabled()) {
       this.ambient = new AmbientLife(this);
       this.scene.add(this.ambient.group);
@@ -485,12 +511,7 @@ export class GameRenderer {
     this.width = w;
     this.height = h;
     this.renderer.setSize(w, h, false);
-    if (this.composer) {
-      this.composer.setPixelRatio(this.renderer.getPixelRatio());
-      this.composer.setSize(w, h);
-    }
-    this.bloom?.setSize(w / 2, h / 2);
-    this.tilt?.setSize(w * this.renderer.getPixelRatio(), h * this.renderer.getPixelRatio());
+    this.post?.setSize(w, h, this.renderer.getPixelRatio());
     this.updateCamera();
   }
 
@@ -504,17 +525,12 @@ export class GameRenderer {
       this.renderer.setPixelRatio(s.pr);
       if (doResize) this.resize(this.width, this.height);
     }
-    if (this.gtao) this.gtao.enabled = s.gtao;
-    if (this.bloom) this.bloom.enabled = s.bloom;
+    this.post?.applyStep(s);
     this.usePost = !!this.composer && s.post;
+    // AO already darkens the ground contact: the footprint shadows back off so the two don't double up
+    if (this.contact) this.contact.strength = s.ao && this.usePost ? 0.55 : 1;
     // ultra rungs hint a bigger particle budget
     this.effects.budget = (s.ultra ? 1.3 : 1) - 0.45 * (level / Math.max(1, this.ladder.length - 1));
-    if (this.jitterPass) this.jitterPass.jitter = s.ultra;
-    if (this.temporal) {
-      if (this.temporal.enabled !== s.ultra) this.temporal.reset();
-      this.temporal.enabled = s.ultra;
-    }
-    if (this.finalPass) this.finalPass.uniforms.sharpen.value = s.ultra ? 0.3 : 0;
     if (this.csm) {
       if (s.shadow) this.csm.setMapSize(s.shadow);
     } else if (s.shadow && this.sun.shadow.mapSize.x !== s.shadow) {
@@ -535,6 +551,65 @@ export class GameRenderer {
     return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
   }
 
+  /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
+  postStats() {
+    const st = this.post?.stats();
+    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive } : null;
+  }
+
+  /**
+   * Photo mode depth of field: focus 0..1 (near .. far around the orbit point) and amount 0..1;
+   * null hands the free camera back to the intro / outro look. Returns true when the post chain
+   * renders it (a real depth-based bokeh); false = the caller has to fake it.
+   */
+  setPhotoDof(focus: number | null, amount = 0): boolean {
+    if (focus === null) this.photoDof = null;
+    else {
+      const d = (this.photoDof ??= { focus: 0.5, amount: 0 });
+      d.focus = focus;
+      d.amount = amount;
+    }
+    return !!this.post?.dof && this.usePost;
+  }
+  private photoDof: { focus: number; amount: number } | null = null;
+  /** Bokeh amount of the intro / outro flyovers (free camera without photo mode): a gentle miniature look. */
+  cinematicDof = 0.32;
+  private gradeIn: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
+
+  /** Per-frame post inputs: grade look from the atmosphere, depth of field from the free camera. */
+  private updatePost(dt: number) {
+    const pc = this.post!;
+    const g = this.gradeIn;
+    const a = this.atmos;
+    g.daylight = a.daylight;
+    g.sunY = this.sunDir.y;
+    const c = this.sun.color;
+    g.warmth = (c.r - c.b) / Math.max(1e-3, c.r);
+    const wx = a.wx;
+    if (wx) {
+      // dynamic weather: overcast already greys the look a little, precipitation takes it the rest of the way
+      const k = Math.max(wx.precip, wx.cover * 0.55);
+      g.rain = wx.fall === 'rain' ? k : 0;
+      g.snow = wx.fall === 'snow' ? k * 0.85 : 0;
+      g.sand = wx.fall === 'sandstorm' ? Math.max(wx.precip, wx.cover * 0.5) : 0;
+      g.storm = wx.storm;
+    } else {
+      const w = a.cfg.weather;
+      g.rain = w === 'rain' ? 1 : 0;
+      g.storm = w === 'rain' ? 0.35 : 0;
+      g.sand = w === 'sandstorm' ? 1 : 0;
+      g.snow = w === 'snow' ? 1 : 0;
+    }
+    const free = this.photoCam;
+    if (free && pc.dof) {
+      const dist = this.camera.position.distanceTo(free.look);
+      const pd = this.photoDof;
+      if (pd) pc.setDof(dist * Math.pow(2, (pd.focus - 0.5) * 3.2), pd.amount);
+      else pc.setDof(dist, this.cinematicDof);
+    } else pc.setDof(20, 0);
+    pc.update(dt, g);
+  }
+
   /** Start the per-pass / per-category / per-system cost probe (src/render/perf/probe.ts). */
   enablePerf() {
     const sys = (obj: object, fn: string) => ({ obj, fn });
@@ -547,6 +622,7 @@ export class GameRenderer {
       'camera+shadow fit': sys(this, 'updateCamera'),
       'atmos': sys(this.atmos, 'update'),
       'effects': sys(this.effects, 'update'),
+      'water': sys(this.river, 'update'),
       'terrain': sys(this.terrain, 'update'),
       'bridges': sys(this.bridgeFx, 'update'),
       'superfx': sys(this.superFx, 'update'),
@@ -899,7 +975,7 @@ export class GameRenderer {
       lastFire: -1e9,
       trackAcc: 0,
       bank: 0,
-      anim: newAnim(),
+      anim: { ...newAnim(), seed: e.id },
       lod,
       occl: true,
       near: true,
@@ -1016,7 +1092,16 @@ export class GameRenderer {
         root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
         const k = e.buildAnim;
         a.built = k;
+        if (this.deployFx.active) {
+          // MCV still unfolding over its new yard: the yard appears / rises on the overlay's clock
+          const dk = this.deployFx.built(e.id);
+          if (dk >= 0) {
+            a.built = Math.max(1e-3, dk);
+            if (dk <= 0) root.visible = false;
+          }
+        }
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
+        a.produced = v.prodAt !== undefined ? this.time - v.prodAt : Infinity;
         a.moving = false;
         if (k < 1 && vis && Math.random() < dt * 20) this.effects.dust(root.position.x + (Math.random() - 0.5) * bd.w, h + 0.05, root.position.z + (Math.random() - 0.5) * bd.h, 1.5);
         if (v.model.turret) v.model.turret.rotation.y = -lerpAngle(e.pturret, e.turret, alpha);
@@ -1057,8 +1142,10 @@ export class GameRenderer {
           }
         } else if (ud.category === 'vehicle') {
           poseGroundVehicle(v.model, a, w.map, p, yaw, dt, vis);
+          this.life.vehicle(e, a, !!ud.transport);
         } else if (v.model.infantry) {
           poseInfantry(v.model, a, w.map, p, yaw, dt);
+          this.life.infantry(e, v.model, a, vis, dt);
         } else {
           root.rotation.set(0, yaw, 0);
         }
@@ -1069,6 +1156,7 @@ export class GameRenderer {
         if (v.model.turret) v.model.turret.rotation.y = -angleDiff(lerpAngle(e.pfacing, e.facing, alpha), lerpAngle(e.pturret, e.turret, alpha));
         if (vis) this.unitFx(e, v, p, yaw, moved, dt);
       }
+      if (v.model.infantry) a.lod = !vis ? 2 : a.lod === 2 && v.near ? 0 : a.lod;
       if (v.model.anim) v.model.anim(a);
       this.legacyAnim(v.model, a);
       if (v.model.recoil && v.recoil > 0) {
@@ -1091,6 +1179,11 @@ export class GameRenderer {
           sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
           v.near = fr.intersectsSphere(sph);
           if (shadowsOn) setCasting(v.lod, v.near);
+          // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
+          if (v.model.infantry) {
+            const hpx = this.photoCam ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
+            a.lod = !v.near ? 2 : hpx < (this.quality === 'low' ? 40 : 16) ? 1 : 0;
+          }
         }
         // (staggered: each unit re-tests every 4th frame)
         if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
@@ -1099,7 +1192,16 @@ export class GameRenderer {
     this.airShadows.end();
     this.contact?.end();
     this.chutes.end(dt, this.time);
-    for (const v of [...this.visuals.values()]) if (!seen.has(v.id)) this.removeVisual(v);
+    for (const v of [...this.visuals.values()]) {
+      if (seen.has(v.id)) continue;
+      // boarding a transport: the soldier first walks up the ramp (unitlife.ts)
+      if (v.model.infantry && this.life.adopt(v.id, v.model)) {
+        this.visuals.delete(v.id);
+        if (v.ring) this.scene.remove(v.ring);
+        continue;
+      }
+      this.removeVisual(v);
+    }
   }
 
   private unitFx(e: Entity, v: Visual, p: THREE.Vector3, yaw: number, moved: number, dt: number) {
@@ -1252,6 +1354,8 @@ export class GameRenderer {
       this.wrecks.push({ ...base, kind: 'air', max: 30, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
       return;
     }
+    // crew ducks inside / hatch slammed shut on the burning hull
+    v.model.anim?.({ ...v.anim, dt: 0, dead: 1 });
     const wr: Wreck = { ...base, kind: 'vehicle', size: ud.harvester || ud.mcv ? 1.4 : 1 };
     if (v.model.turret && Math.random() < 0.6) {
       // turret tossed off by the ammunition cook-off
@@ -1558,6 +1662,7 @@ export class GameRenderer {
 
   handleEvent(ev: SimEvent) {
     this.ambient?.onEvent(ev);
+    this.river.onEvent(ev);
     if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
@@ -1713,10 +1818,24 @@ export class GameRenderer {
         }
         break;
       }
+      case 'unitReady': {
+        // the producing building (same pick as World.deliverUnit): opens its doors / runs its lift
+        const cat = unitDef(ev.def).category;
+        let fac: Entity | null = null;
+        for (const e of this.world.list) {
+          if (e.dead || e.owner !== ev.owner || e.kind !== 'building' || buildingDef(e.def).produces !== cat) continue;
+          fac = e;
+          if (e.rallyX >= 0) break;
+        }
+        const fv = fac ? this.visuals.get(fac.id) : undefined;
+        if (fv) fv.prodAt = this.time;
+        break;
+      }
       case 'placed':
       case 'deployed': {
         const b = this.world.get(ev.id);
         if (!b || !this.visibleAt(b.x, b.y)) break;
+        if (ev.t === 'deployed' && this.startDeploy(b)) break;
         const bd = buildingDef(b.def);
         const gy = groundHeight(this.world.map, b.x, b.y);
         fx.ring(b.x, gy + 0.05, b.y, 0.5, Math.max(bd.w, bd.h) * 1.1, 0.7, 0xd8c8a0, false, 0.5);
@@ -1744,6 +1863,21 @@ export class GameRenderer {
         break;
       }
     }
+  }
+
+  /** The MCV that just became yard `b` unfolds as an overlay instead of vanishing (deployfx.ts). */
+  private startDeploy(b: Entity): boolean {
+    for (const v of this.visuals.values()) {
+      if (!v.visible || this.world.get(v.id) || DEFS[v.def]?.kind !== 'unit' || !unitDef(v.def).mcv) continue;
+      const r = v.model.root;
+      if (Math.hypot(r.position.x - b.x, r.position.z - b.y) > 2) continue;
+      this.visuals.delete(v.id);
+      if (v.ring) this.scene.remove(v.ring);
+      restoreMain(r);
+      this.deployFx.start(b.id, v.model, v.anim, b.x, groundHeight(this.world.map, b.x, b.y), b.y);
+      return true;
+    }
+    return false;
   }
 
   private schedule(delay: number, fn: () => void) {
@@ -1829,6 +1963,8 @@ export class GameRenderer {
     if (this.fastFrames > 0) this.fastFrames = Math.max(0, this.fastFrames - win);
     // battery saver caps at 30 fps (perf/hud.ts): judge frames against that budget instead
     const capped = perfPrefs.battery;
+    // Auto quality: long stretches at the bottom (or comfortably at the top) adjust the next session's pick
+    this.autoMon.sample(this.level, this.ladder.length, med, win, capped);
     const slow = capped ? 1 / 26 : 1 / 42;
     const fast = capped ? 1 / 29 : 1 / 56;
     if (med > slow && this.level < this.ladder.length - 1) {
@@ -1849,6 +1985,7 @@ export class GameRenderer {
   }
   private govFrames = 0;
   private fastFrames = 0;
+  private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
     this.time += dt;
@@ -1865,17 +2002,21 @@ export class GameRenderer {
       this.fog.update(p.explored, p.visible, dt);
     }
     this.syncEntities(alpha, dt);
+    this.life.update(dt, this.time);
+    this.deployFx.update(dt, this.time);
     this.overlay.endFrame();
     this.updateWrecks(dt);
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
-    this.terrain.update(this.time);
+    this.terrain.update(this.time, this.world.list);
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
     this.superFx.update(dt, this.time);
     this.effects.update(dt);
+    this.river.update(dt);
     this.updateCamera();
+    if (this.sky) this.atmos.driveSky(this.sky, dt, this.sunDir, !!this.photoCam);
     this.scheduleShadow(dt);
     this.updateReadability(dt);
     const vh = this.viewHook;
@@ -1892,7 +2033,10 @@ export class GameRenderer {
     try {
       if (vh?.renderMain()) {
         // the view mode drew the frame itself
-      } else if (this.composer && this.usePost) this.composer.render(dt);
+      } else if (this.post && this.usePost) {
+        this.updatePost(dt);
+        this.post.render(dt);
+      }
       else this.renderer.render(scene, this.camera);
       this.readability.renderOverlays(this.renderer, scene, this.camera);
       vh?.after(dt);
@@ -1965,12 +2109,14 @@ export class GameRenderer {
     this.disposed = true;
     this.perfHud.dispose();
     this.instancer.dispose();
+    this.life.dispose();
+    this.deployFx.dispose();
     this.atmos.dispose();
+    this.sky?.dispose();
     this.readability.dispose();
-    this.temporal?.dispose();
     this.contact?.dispose();
     this.csm?.dispose();
     this.renderer.dispose();
-    this.composer?.dispose();
+    this.post?.dispose();
   }
 }

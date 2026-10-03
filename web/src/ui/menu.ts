@@ -1,10 +1,14 @@
 import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
 import type { Faction, Player } from '../sim/types';
+import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
+import { autoQuality } from '../render/autoquality';
 import { setReadabilityPrefs } from '../render/readability';
 import { flagHtml } from './hud';
 import emblemSvg from './emblem.svg?raw';
+import { MAPS } from '../sim/maps';
+import './maps.css';
 
 export interface Settings {
   faction: Faction;
@@ -17,9 +21,11 @@ export interface Settings {
   voice: boolean;
   /** Slow-motion camera moments on big events (missile launches, interceptions, huge blasts). */
   cinematic: boolean;
-  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). */
+  /** Skirmish map (sim/maps.ts; ?map= overrides it). */
+  map?: MapId;
+  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). 'map' / unset = the map's own weather. */
   tod?: 'day' | 'dusk' | 'night';
-  weather?: 'clear' | 'rain' | 'snow' | 'sandstorm';
+  weather?: 'map' | 'clear' | 'rain' | 'snow' | 'sandstorm';
   /** Drone camera picture-in-picture: 'auto' shows the feed of a selected / attacking drone. */
   droneCam: 'auto' | 'off';
   /** Team-coloured silhouettes of units hidden behind buildings and trees. */
@@ -71,16 +77,8 @@ export function saveSettings(s: Settings) {
 }
 
 export function resolveQuality(q: Settings['quality']): Quality {
-  if (q !== 'auto') return q;
-  const coarse = window.matchMedia?.('(pointer: coarse)').matches;
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const cores = nav.hardwareConcurrency || 4;
-  const mem = nav.deviceMemory ?? 4;
-  // genuinely weak devices keep the cheap path; everything else gets shadows and post,
-  // with the renderer's dynamic quality scaling keeping the frame rate up
-  if (cores <= 2 || mem <= 2) return 'low';
-  if (coarse) return 'medium';
-  return 'high';
+  // auto: device probe (GPU, memory, float targets, micro-benchmark), cached, corrected by the frame-time governor (src/render/autoquality.ts)
+  return q === 'auto' ? autoQuality() : q;
 }
 
 const h = (html: string) => {
@@ -160,12 +158,16 @@ export class MainMenu {
         <h2>Choose your nation</h2>
         <div class="fgrid">${cards}</div>
         <div class="opts">
+          <div class="mpick" role="radiogroup" aria-label="Map">
+            <div class="mpick-title">Battlefield</div>
+            ${MAPS.map((m) => `<button class="mtile${m.id === (st.map ?? 'frontline') ? ' sel' : ''}" data-map="${m.id}" role="radio" aria-checked="${m.id === (st.map ?? 'frontline')}"><b>${m.name}</b><small>${m.blurb}</small></button>`).join('')}
+          </div>
           <label>Opponent<select data-o="enemy">${opt('random', st.enemy, 'Random nation')}${FACTIONS.map((f) => opt(f.id, st.enemy, f.name)).join('')}</select></label>
           <label>Difficulty<select data-o="difficulty">${opt('easy', st.difficulty, 'Easy')}${opt('normal', st.difficulty, 'Normal')}${opt('hard', st.difficulty, 'Hard')}</select></label>
           <label>Credits<select data-o="credits">${[5000, 10000, 20000].map((c) => opt(String(c), String(st.credits), '$' + c.toLocaleString('en-US'))).join('')}</select></label>
-          <label>Map<select disabled><option>Frontline Crossing (2 players)</option></select></label>
+
           <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}${opt('cycle', st.tod ?? 'day', 'Dynamic cycle')}${opt('mist', st.tod ?? 'day', 'Misty morning')}</select></label>
-          <label>Weather<select data-o="weather">${opt('clear', st.weather ?? 'clear', 'Clear')}${opt('rain', st.weather ?? 'clear', 'Rain')}${opt('snow', st.weather ?? 'clear', 'Snow')}${opt('sandstorm', st.weather ?? 'clear', 'Sandstorm')}${opt('dynamic', st.weather ?? 'clear', 'Dynamic')}</select></label>
+          <label>Weather<select data-o="weather">${opt('map', st.weather ?? 'map', 'Map default')}${opt('clear', st.weather ?? 'map', 'Clear')}${opt('rain', st.weather ?? 'map', 'Rain')}${opt('snow', st.weather ?? 'map', 'Snow')}${opt('sandstorm', st.weather ?? 'map', 'Sandstorm')}${opt('dynamic', st.weather ?? 'map', 'Dynamic')}</select></label>
         </div>
         <div class="row">
           <button class="mbtn" data-a="back">Back</button>
@@ -176,6 +178,15 @@ export class MainMenu {
       c.addEventListener('click', () => {
         st.faction = c.dataset.f as Faction;
         s.querySelectorAll('.fcard').forEach((x) => x.classList.toggle('sel', x === c));
+      }),
+    );
+    s.querySelectorAll<HTMLElement>('.mtile').forEach((t) =>
+      t.addEventListener('click', () => {
+        st.map = t.dataset.map as MapId;
+        s.querySelectorAll<HTMLElement>('.mtile').forEach((x) => {
+          x.classList.toggle('sel', x === t);
+          x.setAttribute('aria-checked', String(x === t));
+        });
       }),
     );
     s.querySelectorAll<HTMLSelectElement>('select[data-o]').forEach((sel) =>

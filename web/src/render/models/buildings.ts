@@ -7,7 +7,7 @@ import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
 import { drawFlag } from '../flags';
 import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
-import { bldTex, type BldTexKind } from './bldtex';
+import { atlasPatch, bldAtlas, netTexture, signCell, signTexture, Tile, type SignSpec } from './bldtex';
 import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
 
 /*
@@ -90,22 +90,6 @@ function canvasTex(key: string, w: number, h: number, draw: (c: CanvasRenderingC
 const css = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
 // --- canvas texture painters
-function texHazard() {
-  return canvasTex('hazard', 64, 64, (c, w, h) => {
-    c.fillStyle = '#e2b021';
-    c.fillRect(0, 0, w, h);
-    c.fillStyle = '#1c1c1c';
-    for (let i = -2; i < 4; i++) {
-      c.beginPath();
-      c.moveTo(i * 32, 0);
-      c.lineTo(i * 32 + 16, 0);
-      c.lineTo(i * 32 + 16 + 64, h);
-      c.lineTo(i * 32 + 64, h);
-      c.closePath();
-      c.fill();
-    }
-  });
-}
 function texChain() {
   return canvasTex('chain', 64, 64, (c, w, h) => {
     c.clearRect(0, 0, w, h);
@@ -127,105 +111,18 @@ function texHelipad(color: string) {
   return canvasTex('helipad' + color, 256, 256, (c, w) => {
     c.clearRect(0, 0, w, w);
     c.strokeStyle = color;
-    c.lineWidth = 14;
+    c.lineWidth = 10;
     c.beginPath();
     c.arc(w / 2, w / 2, w / 2 - 14, 0, TAU);
     c.stroke();
     c.fillStyle = color;
     const s = w / 256;
-    c.fillRect(78 * s, 64 * s, 26 * s, 128 * s);
-    c.fillRect(152 * s, 64 * s, 26 * s, 128 * s);
-    c.fillRect(100 * s, 116 * s, 56 * s, 24 * s);
+    c.fillRect(82 * s, 70 * s, 22 * s, 116 * s);
+    c.fillRect(152 * s, 70 * s, 22 * s, 116 * s);
+    c.fillRect(100 * s, 117 * s, 56 * s, 22 * s);
   });
 }
-function texMashrabiya() {
-  return canvasTex('mashrabiya', 128, 128, (c, w, h) => {
-    c.fillStyle = '#20150c';
-    c.fillRect(0, 0, w, h);
-    c.strokeStyle = '#8a6440';
-    c.lineWidth = 5;
-    const n = 4;
-    const s = w / n;
-    for (let i = 0; i < n; i++)
-      for (let j = 0; j < n; j++) {
-        const x = i * s + s / 2;
-        const y = j * s + s / 2;
-        c.beginPath();
-        c.arc(x, y, s * 0.3, 0, TAU);
-        c.stroke();
-        c.strokeRect(i * s, j * s, s, s);
-        c.beginPath();
-        c.moveTo(x - s / 2, y);
-        c.lineTo(x + s / 2, y);
-        c.moveTo(x, y - s / 2);
-        c.lineTo(x, y + s / 2);
-        c.stroke();
-      }
-  });
-}
-function texTileBand(main: number, alt: number) {
-  return canvasTex('tileband' + main + alt, 128, 64, (c, w, h) => {
-    c.fillStyle = css(main);
-    c.fillRect(0, 0, w, h);
-    c.fillStyle = '#f0ead8';
-    c.fillRect(0, 0, w, 6);
-    c.fillRect(0, h - 6, w, 6);
-    for (let i = 0; i < 4; i++) {
-      const x = i * 32 + 16;
-      const y = h / 2;
-      c.fillStyle = '#f2ecd6';
-      c.beginPath();
-      for (let k = 0; k < 16; k++) {
-        const r = k % 2 ? 9 : 17;
-        const a = (k / 16) * TAU;
-        if (k) c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
-        else c.moveTo(x + r, y);
-      }
-      c.closePath();
-      c.fill();
-      c.fillStyle = css(alt);
-      c.beginPath();
-      c.arc(x, y, 7, 0, TAU);
-      c.fill();
-      c.fillStyle = '#d8b04a';
-      c.beginPath();
-      c.arc(x + 16, y, 3, 0, TAU);
-      c.fill();
-    }
-  });
-}
-function texSolar() {
-  return canvasTex('solar', 64, 64, (c, w, h) => {
-    c.fillStyle = '#1b2a4a';
-    c.fillRect(0, 0, w, h);
-    c.strokeStyle = '#8c9aac';
-    c.lineWidth = 1;
-    for (let i = 0; i <= 8; i++) {
-      c.beginPath();
-      c.moveTo(i * 8, 0);
-      c.lineTo(i * 8, h);
-      c.stroke();
-    }
-    for (let j = 0; j <= 4; j++) {
-      c.beginPath();
-      c.moveTo(0, j * 16);
-      c.lineTo(w, j * 16);
-      c.stroke();
-    }
-    c.fillStyle = 'rgba(120,160,220,0.15)';
-    c.fillRect(0, 0, w, h / 3);
-  });
-}
-function texStencil(text: string, color: string) {
-  return canvasTex('sten' + text + color, 128, 64, (c, w, h) => {
-    c.clearRect(0, 0, w, h);
-    c.fillStyle = color;
-    c.font = 'bold 50px Arial, sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(text, w / 2, h / 2 + 2);
-  });
-}
+/** AESA radar face: grid of transmit / receive modules. */
 function texFlag(cols: number[], faction: string) {
   return canvasTex('flag' + cols.join(',') + faction, 96, 64, (c, w, h) => {
     if (drawFlag(c, faction, w, h)) return;
@@ -236,26 +133,84 @@ function texFlag(cols: number[], faction: string) {
   });
 }
 
+/** Default texture repeats per world unit for each atlas tile. */
+const TILE_UV: Record<Tile, number> = {
+  [Tile.Panel]: 1.25,
+  [Tile.Cast]: 1.4,
+  [Tile.Corr]: 1.6,
+  [Tile.Plate]: 2.2,
+  [Tile.Paint]: 2.5,
+  [Tile.Clad]: 1.6,
+  [Tile.CamoA]: 1.6,
+  [Tile.CamoB]: 1.6,
+  [Tile.CamoC]: 1.8,
+  [Tile.Bag]: 3,
+  [Tile.Canvas]: 2,
+  [Tile.Asphalt]: 1.2,
+  [Tile.Soil]: 1.1,
+  [Tile.Brick]: 1.4,
+  [Tile.Plaster]: 1.3,
+  [Tile.Grate]: 4,
+  [Tile.Wood]: 4,
+  [Tile.RoofTile]: 2.2,
+  [Tile.Hazard]: 4.5,
+  [Tile.Stone]: 1.3,
+  [Tile.Glass]: 1,
+  [Tile.Aesa]: 3,
+  [Tile.Solar]: 2.5,
+  [Tile.Roof]: 1.6,
+};
+
+/** Old procedural texture kinds (textures.ts names) mapped onto atlas tiles. */
+const KIND_TILE: Record<string, Tile> = {
+  concrete: Tile.Panel,
+  concreteDark: Tile.Panel,
+  plaster: Tile.Plaster,
+  sandstone: Tile.Stone,
+  brick: Tile.Brick,
+  corrugated: Tile.Corr,
+  metalPanel: Tile.Plate,
+  roofTiles: Tile.RoofTile,
+  asphalt: Tile.Asphalt,
+  sandbag: Tile.Bag,
+  wood: Tile.Wood,
+  canvas: Tile.Canvas,
+  grating: Tile.Grate,
+  rust: Tile.Corr,
+  soil: Tile.Soil,
+};
+
+/** Multiply two colours (hex), with a brightness gain (atlas tiles average ~0.82 albedo). */
+function mulHex(a: number, b: number, gain = 1) {
+  const ca = new THREE.Color(a);
+  const cb = new THREE.Color(b);
+  return new THREE.Color(Math.min(1, ca.r * cb.r * gain), Math.min(1, ca.g * cb.g * gain), Math.min(1, ca.b * cb.b * gain)).getHex();
+}
+
 /**
  * Per-template material factory bound to an owner (style) and a fog instance.
  *
  * To keep draw calls low most materials handed out are *virtual*: lightweight
- * descriptors pointing at a shared real material plus a tint which the kit
- * bakes into a vertex colour attribute. Plain colours collapse into a handful
- * of roughness/metalness buckets, tinted textures share one material per
- * texture, and all small lamps share one emissive material.
+ * descriptors pointing at a shared real material plus a tint (baked into a
+ * vertex colour attribute) and, for the building atlas, a tile index (baked
+ * into uv1.x). Every textured surface of a building (concrete, steel, paint,
+ * camo, sandbags, soil...) shares ONE atlas material; plain glass and lamps
+ * have their own, so a building draws in a handful of calls.
  */
 class Mats {
   readonly glow = new Set<Mat>();
   readonly flags: SMat[] = [];
   private readonly fid: number;
   private readonly own: string;
+  private readonly pal: { value: THREE.Color[] };
   constructor(
     readonly s: ModelStyle,
     readonly fog: FogOfWar | null,
+    readonly N: Nation,
   ) {
     this.fid = fogId(fog);
     this.own = `${s.faction}:${s.team}`;
+    this.pal = { value: N.camo.map((c) => new THREE.Color(c)) };
   }
   private cached<T extends Mat>(key: string, perOwner: boolean, make: () => T): T {
     const k = `${this.fid}|${perOwner ? this.own : '*'}|${key}`;
@@ -267,49 +222,50 @@ class Mats {
     }
     return m;
   }
-  private virt(real: Mat, color: THREE.Color, uv: number): SMat {
-    const k = `v|${real.uuid}|${color.getHexString()}|${color.r.toFixed(4)}|${uv}`;
+  private virt(real: Mat, color: THREE.Color, uv: number, tile = -1): SMat {
+    const k = `v|${real.uuid}|${color.getHexString()}|${color.r.toFixed(4)}|${uv}|${tile}`;
     let m = matCache.get(k) as SMat | undefined;
     if (!m) {
       m = new THREE.MeshStandardMaterial();
       m.userData.real = real;
       m.userData.vc = color;
       m.userData.uv = uv;
+      m.userData.tile = tile;
       matCache.set(k, m);
     }
     return m;
   }
-  /** Textured PBR material (procedural texture from textures.ts), tinted per vertex. */
-  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, rough = 1, metal = 0.03, nScale = 1.6): SMat {
-    const real = this.cached(`tex:${kind}:${JSON.stringify(opts)}:${rough}:${metal}:${nScale}`, false, () => {
-      const set = pbr(kind, opts);
-      return new THREE.MeshStandardMaterial({
-        map: set.map,
-        normalMap: set.normalMap,
-        roughnessMap: set.roughnessMap,
-        roughness: rough,
-        metalness: metal,
+  /** The shared atlas material (per owner: the camo palette is a uniform). */
+  private atlasReal(double: boolean): SMat {
+    const pal = this.pal;
+    const m = this.cached(`atlas:${double}:${this.N.camo.join(',')}`, true, () => {
+      const A = bldAtlas();
+      const mm = new THREE.MeshStandardMaterial({
+        map: A.map,
+        normalMap: A.normalMap,
+        roughness: 1,
+        metalness: 1,
         vertexColors: true,
-        normalScale: new THREE.Vector2(nScale, nScale),
+        side: double ? THREE.DoubleSide : THREE.FrontSide,
+        normalScale: new THREE.Vector2(1.25, 1.25),
       });
+      mm.userData.atlas = true;
+      mm.onBeforeCompile = (sh) => atlasPatch(sh, pal);
+      return mm;
     });
-    return this.virt(real, new THREE.Color(tint), uv);
+    m.customProgramCacheKey = () => (this.fog ? 'fog-' : '') + 'batlas';
+    return m;
   }
-  /** Building surface texture from bldtex.ts (cladding / plates), tinted per vertex. */
-  btex(kind: BldTexKind, tint = 0xffffff, uv = 2.5, rough = 1, metal = 0.25, nScale = 1.4): SMat {
-    const real = this.cached(`btex:${kind}:${rough}:${metal}:${nScale}`, false, () => {
-      const set = bldTex(kind);
-      return new THREE.MeshStandardMaterial({
-        map: set.map,
-        normalMap: set.normalMap,
-        roughnessMap: set.roughnessMap,
-        roughness: rough,
-        metalness: metal,
-        vertexColors: true,
-        normalScale: new THREE.Vector2(nScale, nScale),
-      });
-    });
-    return this.virt(real, new THREE.Color(tint), uv);
+  /** Atlas surface: tile + tint (per vertex) + texture repeats per world unit. */
+  at(tile: Tile, tint = 0xffffff, uv?: number, double = false): SMat {
+    return this.virt(this.atlasReal(double), new THREE.Color(tint), uv ?? TILE_UV[tile], tile);
+  }
+  /** Old procedural texture kinds (textures.ts names), served from the atlas. */
+  tex(kind: TexKind, opts: TexOpts, tint = 0xffffff, uv = 3, _rough = 1, _metal = 0.03, _nScale = 1.6): SMat {
+    if (kind === 'camo') return this.at(this.N.camoTile, 0xffffff, uv * 0.5);
+    const tile = KIND_TILE[kind] ?? Tile.Paint;
+    const base = opts.color ?? 0xd8d8d4;
+    return this.at(tile, mulHex(tint, base, kind === 'concreteDark' ? 1.05 : 1.15), uv * 0.55);
   }
   /** National insignia / flag decals (shared atlas, alpha tested). */
   decal(): SMat {
@@ -320,35 +276,12 @@ class Mats {
     });
     return m;
   }
-  /** Plain colour: bucketed by roughness / metalness into a few shared vertex coloured materials. */
+  /** Plain colour: painted (atlas paint tile), bare metal (atlas plate tile), glossy (plain) or double sided. */
   col(color: number, rough = 0.7, metal = 0.1, double = false): SMat {
-    let b: string;
-    let r: number;
-    let mt: number;
-    if (double) [b, r, mt] = ['dbl', 0.8, 0.05];
-    else if (rough < 0.2 && metal > 0.5) [b, r, mt] = ['gloss', 0.08, 0.85];
-    else if (metal >= 0.45) [b, r, mt] = ['metal', 0.32, 0.8];
-    else [b, r, mt] = ['paint', 0.66, 0.14];
-    if (b === 'metal' || b === 'paint') {
-      // weathered steel plates / worn paint: normal + roughness detail at no extra draw call
-      const kind: BldTexKind = b === 'metal' ? 'plate' : 'paint';
-      const real = this.cached(`vc:${b}`, false, () => {
-        const set = bldTex(kind);
-        // roughness maps average ~0.45 (plate) / ~0.62 (paint): scale them to the bucket value
-        return new THREE.MeshStandardMaterial({
-          map: set.map,
-          normalMap: set.normalMap,
-          roughnessMap: set.roughnessMap,
-          roughness: b === 'metal' ? r / 0.45 : r / 0.62,
-          metalness: mt,
-          vertexColors: true,
-          normalScale: new THREE.Vector2(b === 'metal' ? 1.1 : 0.6, b === 'metal' ? 1.1 : 0.6),
-        });
-      });
-      return this.virt(real, new THREE.Color(color), b === 'metal' ? 4 : 3);
-    }
-    const real = this.cached(`vc:${b}`, false, () => new THREE.MeshStandardMaterial({ roughness: r, metalness: mt, vertexColors: true, side: double ? THREE.DoubleSide : THREE.FrontSide, envMapIntensity: b === 'gloss' ? 1.6 : 1 }));
-    return this.virt(real, new THREE.Color(color), 0);
+    if (double) return this.at(Tile.Paint, color, 3, true);
+    if (rough < 0.2 && metal > 0.5) return this.at(Tile.Glass, mulHex(color, 0xffffff, 1.15), 1);
+    if (metal >= 0.45) return this.at(Tile.Plate, color, 3.2);
+    return this.at(Tile.Paint, color, 3);
   }
   /** Emissive lamp (one shared per-owner material; colour/intensity via vertex colours). */
   light(color: number, ei = 2.6): SMat {
@@ -367,6 +300,19 @@ class Mats {
     const c = new THREE.Color(color).multiplyScalar(ei / base);
     return this.virt(real, c, 0);
   }
+  /** Synchronised red obstruction lights (per owner; flashed by the instances, not a night lamp). */
+  blink(): SMat {
+    const base = 3.2;
+    const real = this.cached('blinkl', true, () => {
+      const mm = new THREE.MeshStandardMaterial({ color: 0x050505, emissive: 0xff2a1a, emissiveIntensity: base, roughness: 0.4, metalness: 0, toneMapped: false });
+      mm.userData.blinkEI = base;
+      mm.userData.uv = 0;
+      return mm;
+    });
+    this.blinks.add(real);
+    return real;
+  }
+  readonly blinks = new Set<SMat>();
   /** Window panes with random lit cells (per owner, dimmable). */
   win(curtain = false): SMat {
     const m = this.cached(`win:${curtain}`, true, () => {
@@ -405,6 +351,22 @@ class Mats {
       return m;
     });
   }
+  /** Shared sign / stencil atlas (boards opaque, stencils alpha tested). */
+  signs(): SMat {
+    return this.cached('signs', false, () => {
+      const m = new THREE.MeshStandardMaterial({ map: signTexture(), roughness: 0.75, metalness: 0.05, alphaTest: 0.45 });
+      m.userData.uv = 0;
+      return m;
+    });
+  }
+  /** Camouflage net in the nation's colours (alpha cut, double sided). */
+  net(): SMat {
+    return this.cached(`net:${this.N.camo.join(',')}`, false, () => {
+      const m = new THREE.MeshStandardMaterial({ map: netTexture(this.N.camo), roughness: 0.95, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
+      m.userData.uv = 2.2;
+      return m;
+    });
+  }
   /** Waving flag (vertex shader wave driven by a per-owner time uniform). */
   flag(): SMat {
     const s = this.s;
@@ -434,24 +396,263 @@ class Mats {
   }
 }
 
+// ================================================================ nations
+
+type RoofStyle = 'flat' | 'gable' | 'hip';
+
+/**
+ * Architectural flavour per nation: paint, wall finish, roof style, camo,
+ * signage (script, colours, emblem). Team colour accents are added on top by
+ * the builders (roof copings, bands, door frames) for readability.
+ */
+interface Nation {
+  /** Main wall tint and atlas finish. */
+  wall: number;
+  wallTile: Tile;
+  /** Secondary wall (annexes, cladding). */
+  wall2: number;
+  wall2Tile: Tile;
+  /** Flat roof membrane tint. */
+  roof: number;
+  /** Pitched roof tint (corrugated or tiles). */
+  pitch: number;
+  roofStyle: RoofStyle;
+  /** Nation drab paint for steel doors, sheds, vehicles. */
+  drab: number;
+  /** Dark structural trim. */
+  trim: number;
+  /** 4 camo colours (base, 2, 3, highlight) + pattern tile. */
+  camo: number[];
+  camoTile: Tile;
+  /** Sandbag / hesco fabric. */
+  bag: number;
+  /** Ground hardstand (gravel) tint. */
+  ground: number;
+  /** Concrete tint (barriers, footings). */
+  conc: number;
+  /** ISO container tints. */
+  boxes: number[];
+  /** Big industrial halls (factory hangar, turbine hall, workshop) are camo painted. */
+  camoHalls?: boolean;
+  sign: { base: string; sub: string; fg: string; bg: string; border: string; font?: string; rtl?: boolean; mark?: string; markColor?: string; num: string };
+}
+
+const NATIONS: Record<string, Nation> = {
+  usa: {
+    wall: 0xcdbd98,
+    wallTile: Tile.Panel,
+    wall2: 0xb4aa90,
+    wall2Tile: Tile.Clad,
+    roof: 0xa8a294,
+    pitch: 0x9a9480,
+    roofStyle: 'flat',
+    drab: 0x857a5a,
+    trim: 0x4c4a42,
+    camo: [0xb8a57c, 0xa08c62, 0x7c6c4c, 0xcab890],
+    camoTile: Tile.CamoA,
+    bag: 0xc2ad84,
+    ground: 0xb0a690,
+    conc: 0xccc6b6,
+    boxes: [0xb49a6a, 0x7a7e5c, 0x9a5a3a],
+    sign: { base: 'US ARMY', sub: 'FORWARD OPERATING BASE', fg: '#f4f0e0', bg: '#3b4a2f', border: '#d8c89a', mark: 'star', markColor: '#f4f0e0', num: 'BLDG' },
+  },
+  israel: {
+    wall: 0xe2d4b0,
+    wallTile: Tile.Stone,
+    wall2: 0xd0c4a4,
+    wall2Tile: Tile.Panel,
+    roof: 0xc2baa4,
+    pitch: 0xb0a888,
+    roofStyle: 'flat',
+    drab: 0x8e8a6c,
+    trim: 0x5a5648,
+    camo: [0x9e9a7e, 0x8a8668, 0x6e6a54, 0xb2ae92],
+    camoTile: Tile.CamoA,
+    bag: 0xcdb98e,
+    ground: 0xc8b896,
+    conc: 0xd8d0bc,
+    boxes: [0xc8b48a, 0x8e8a6c, 0x5a6a7a],
+    sign: { base: 'צה״ל', sub: 'בסיס צבאי', fg: '#1d3f8f', bg: '#f2efe4', border: '#1d3f8f', rtl: true, font: '"Noto Sans Hebrew", Arial, "DejaVu Sans", sans-serif', mark: 'magen', markColor: '#1d3f8f', num: 'מבנה' },
+  },
+  china: {
+    wall: 0xdcdcd4,
+    wallTile: Tile.Panel,
+    wall2: 0x5e6c4a,
+    wall2Tile: Tile.Paint,
+    roof: 0x8e968a,
+    pitch: 0x4e7a84,
+    roofStyle: 'gable',
+    drab: 0x56643e,
+    trim: 0x3e4438,
+    camo: [0x5d6b47, 0x3d4a2e, 0x26281e, 0x8a8462],
+    camoTile: Tile.CamoB,
+    bag: 0x9a9268,
+    ground: 0x9a9888,
+    conc: 0xc8c8c0,
+    boxes: [0x5e6c4a, 0x8a3a2a, 0x3a5a7a],
+    sign: { base: '中国人民解放军', sub: '八一', fg: '#f8d84a', bg: '#a8201a', border: '#f8d84a', font: '"Noto Sans CJK SC", "WenQuanYi Zen Hei", "Microsoft YaHei", sans-serif', mark: 'star', markColor: '#f8d84a', num: '营' },
+  },
+  russia: {
+    wall: 0xaeb0a2,
+    wallTile: Tile.Panel,
+    wall2: 0x5a6a40,
+    wall2Tile: Tile.Paint,
+    roof: 0x7e8072,
+    pitch: 0x6c7660,
+    roofStyle: 'gable',
+    drab: 0x4e5c38,
+    trim: 0x3a3c34,
+    camo: [0x56663e, 0x3e4a2c, 0x26261c, 0x8a8060],
+    camoTile: Tile.CamoA,
+    bag: 0x8a8462,
+    ground: 0x8a887a,
+    conc: 0xb4b2a8,
+    boxes: [0x5a6a40, 0x7a3a2a, 0x40566e],
+    camoHalls: true,
+    sign: { base: 'ВОЙСКОВАЯ ЧАСТЬ', sub: '№ 45321', fg: '#f0e8d0', bg: '#2e4a2e', border: '#c8b060', mark: 'star', markColor: '#d02818', num: 'КОРП' },
+  },
+  germany: {
+    wall: 0xa4a8a0,
+    wallTile: Tile.Panel,
+    wall2: 0x4e5c40,
+    wall2Tile: Tile.Clad,
+    roof: 0x70746c,
+    pitch: 0x5e665a,
+    roofStyle: 'flat',
+    drab: 0x4b5640,
+    trim: 0x34382f,
+    camo: [0x7a7c5a, 0x4b5a38, 0x5e4a36, 0x1f2018],
+    camoTile: Tile.CamoC,
+    bag: 0x8e8866,
+    ground: 0x96968a,
+    conc: 0xbcbcb4,
+    boxes: [0x4e5c40, 0x8a8a7c, 0x6a4e36],
+    camoHalls: true,
+    sign: { base: 'BUNDESWEHR', sub: 'KASERNE', fg: '#141414', bg: '#f2f2ec', border: '#141414', mark: 'cross', markColor: '#141414', num: 'GEB' },
+  },
+  korea: {
+    wall: 0xd0d0c6,
+    wallTile: Tile.Panel,
+    wall2: 0x56643e,
+    wall2Tile: Tile.Paint,
+    roof: 0x8e9488,
+    pitch: 0x3e6a8a,
+    roofStyle: 'hip',
+    drab: 0x505c3a,
+    trim: 0x34382e,
+    camo: [0x6a7050, 0x4a5236, 0x2c2e24, 0x8c8466],
+    camoTile: Tile.CamoB,
+    bag: 0x928c66,
+    ground: 0x9a988a,
+    conc: 0xc6c6be,
+    boxes: [0x56643e, 0x3a6a9a, 0xa83a2a],
+    sign: { base: '대한민국 육군', sub: 'ROK ARMY', fg: '#ffffff', bg: '#1f3f2a', border: '#e0c050', font: '"Noto Sans CJK KR", "WenQuanYi Zen Hei", "Malgun Gothic", sans-serif', mark: 'taeguk', num: '동' },
+  },
+  ukraine: {
+    wall: 0xb8b6a8,
+    wallTile: Tile.Panel,
+    wall2: 0x5f6a3e,
+    wall2Tile: Tile.Paint,
+    roof: 0x727866,
+    pitch: 0x606a54,
+    roofStyle: 'gable',
+    drab: 0x56603a,
+    trim: 0x34362c,
+    camo: [0x5f6a3e, 0x464f2e, 0x2c2e22, 0x857a58],
+    camoTile: Tile.CamoB,
+    bag: 0x8a8462,
+    ground: 0x8e8c7c,
+    conc: 0xb8b6ac,
+    boxes: [0x5f6a3e, 0x2a5aa0, 0x8a6a3a],
+    camoHalls: true,
+    sign: { base: 'ЗСУ', sub: 'ЗБРОЙНІ СИЛИ УКРАЇНИ', fg: '#f6d43a', bg: '#1f4fa0', border: '#f6d43a', mark: 'trident', markColor: '#f6d43a', num: 'БУД' },
+  },
+  turkey: {
+    wall: 0xd8ccb2,
+    wallTile: Tile.Plaster,
+    wall2: 0x6b7356,
+    wall2Tile: Tile.Paint,
+    roof: 0xa49a82,
+    pitch: 0x8a5a3a,
+    roofStyle: 'flat',
+    drab: 0x5e6448,
+    trim: 0x3e3e34,
+    camo: [0x6b7356, 0x4a5040, 0x2a2c24, 0x8c8a70],
+    camoTile: Tile.CamoA,
+    bag: 0xa89a74,
+    ground: 0xaaa090,
+    conc: 0xccc4b0,
+    boxes: [0x6b7356, 0xb8202e, 0xc8b48a],
+    sign: { base: 'TSK', sub: 'TÜRK SİLAHLI KUVVETLERİ', fg: '#ffffff', bg: '#c8102e', border: '#ffffff', mark: 'crescent', markColor: '#ffffff', num: 'BİNA' },
+  },
+  iran: {
+    wall: 0xcbb68c,
+    wallTile: Tile.Plaster,
+    wall2: 0xb09870,
+    wall2Tile: Tile.Stone,
+    roof: 0xb0a07e,
+    pitch: 0x9a8a6a,
+    roofStyle: 'flat',
+    drab: 0x8a7552,
+    trim: 0x4e4234,
+    camo: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a],
+    camoTile: Tile.CamoA,
+    bag: 0xc4ad80,
+    ground: 0xc0aa84,
+    conc: 0xd4c6a8,
+    boxes: [0xb19a6c, 0x5a6a48, 0x2f6a5a],
+    sign: { base: 'ارتش', sub: 'جمهوری اسلامی ایران', fg: '#ffffff', bg: '#2a5a32', border: '#e8e0c8', rtl: true, font: '"Noto Naskh Arabic", "Noto Sans Arabic", Tahoma, "DejaVu Sans", sans-serif', mark: 'disc', markColor: '#d8202a', num: 'ساختمان' },
+  },
+  neutral: {
+    wall: 0xd6d2c6,
+    wallTile: Tile.Panel,
+    wall2: 0xb8bcc0,
+    wall2Tile: Tile.Clad,
+    roof: 0x9a9890,
+    pitch: 0x8a8e90,
+    roofStyle: 'flat',
+    drab: 0x7a7a70,
+    trim: 0x4a4c4e,
+    camo: [0x8a8070, 0x6e6658, 0x4a463c, 0xa49a88],
+    camoTile: Tile.CamoA,
+    bag: 0xb0a07c,
+    ground: 0xa8a49a,
+    conc: 0xc8c6be,
+    boxes: [0x3a6a9a, 0xb8a27a, 0x8a3a2a],
+    sign: { base: 'CIVIL', sub: '', fg: '#ffffff', bg: '#3a4a5a', border: '#ffffff', num: 'NO' },
+  },
+};
+
+for (const n of Object.values(NATIONS)) {
+  // hardstand gravel a touch lighter than the concrete so structures stand out from their apron
+  n.ground = shade(n.ground, 1.08);
+}
+
+function nationOf(s: ModelStyle): Nation {
+  return NATIONS[s.faction] ?? NATIONS.neutral;
+}
+
 // ================================================================ palette
 
-/** Regional material palette. */
+/** Material palette of one owner (nation paint + team colour). */
 interface Pal {
   R: Region;
+  N: Nation;
   wall: SMat; // main facade
-  wall2: SMat; // secondary facade (cladding / brick / stone)
+  wall2: SMat; // secondary facade (cladding / paint)
   wallB: SMat; // slight colour variation of the main wall
   base: SMat; // plinth / dark concrete
   trim: SMat; // coping, cornices, frames
   roof: SMat; // flat roof surface
   pitch: SMat; // pitched roof cladding
-  slab: SMat; // ground apron
+  slab: SMat; // ground hardstand
   asphalt: SMat;
   concrete: SMat; // neutral cast concrete (barriers, pads, foundations)
+  panel: SMat; // precast concrete panels (T-walls, bunkers)
   team: SMat;
   teamD: SMat;
-  accent: SMat; // faction/regional trim colour
+  accent: SMat; // nation drab paint (doors, gates, sheds)
+  drab: SMat; // nation drab, steel
   steel: SMat;
   galv: SMat; // galvanised steel (light)
   dark: SMat;
@@ -467,6 +668,7 @@ interface Pal {
   red: SMat;
   hazard: SMat;
   sandbag: SMat;
+  hesco: SMat;
   wood: SMat;
   canvas: SMat;
   grating: SMat;
@@ -479,20 +681,24 @@ interface Pal {
   crane: SMat; // crane / machinery paint
   green: SMat; // vegetation
   soil: SMat;
+  camo: SMat; // nation camo paint
+  net: SMat; // camo net (alpha)
   lamp: SMat; // warm lamp glow
+  flood: SMat; // cold white floodlight
   red_l: SMat; // red aviation light
   green_l: SMat;
   cyan_l: SMat;
   amber_l: SMat;
   chain: SMat;
   solar: SMat;
-  mash: SMat;
-  tile: SMat; // decorative tile band (mideast) / dancheong band (asia)
-  dome: SMat; // dome cladding
+  aesa: SMat;
+  tile: SMat; // decorative band (national accent)
+  dome: SMat; // radome
   nation: SMat; // national accent colour (bold secondary band)
   clad: SMat; // composite / steel wall cladding (ribbed panels, bolt rows)
   pier: SMat; // dark structural trim: corner pilasters, plinths
   emb: SMat; // insignia decal atlas
+  signs: SMat; // sign atlas
   mats: Mats;
   s: ModelStyle;
   T: TexSet;
@@ -500,16 +706,16 @@ interface Pal {
 type TexSet = ReturnType<typeof texSet>;
 function texSet(M: Mats) {
   return {
-    concrete: (tint: number, uv = 2.2) => M.tex('concrete', { color: 0xe4e2dc, divisions: 2, grime: 0.35, seed: 11 }, tint, uv),
-    concreteDark: (tint: number, uv = 2) => M.tex('concreteDark', { color: 0xc4c0b6, divisions: 3, grime: 0.6, seed: 12 }, tint, uv),
-    plaster: (tint: number, uv = 2) => M.tex('plaster', { color: 0xf4f1ea, grime: 0.3, seed: 13 }, tint, uv),
-    sandstone: (tint: number, uv = 2.5) => M.tex('sandstone', { color: 0xe8d6b0, grime: 0.3, divisions: 8, seed: 14 }, tint, uv),
-    brick: (tint: number, uv = 3) => M.tex('brick', { color: 0x9a4a32, grime: 0.45, seed: 15 }, tint, uv),
-    corr: (tint: number, uv = 3) => M.tex('corrugated', { color: 0xd0d4d6, grime: 0.15, divisions: 24, seed: 16 }, tint, uv, 1, 0.45),
-    corrRust: (tint: number, uv = 4) => M.tex('corrugated', { color: 0xa8a49a, grime: 0.85, divisions: 24, seed: 17 }, tint, uv, 1, 0.35),
-    panel: (tint: number, uv = 2.5) => M.tex('metalPanel', { color: 0xdadde0, divisions: 3, grime: 0.2, seed: 18 }, tint, uv, 1, 0.35),
-    tiles: (tint: number, uv = 4) => M.tex('roofTiles', { color: 0xe6e8e6, divisions: 10, grime: 0.25, seed: 19 }, tint, uv, 0.9, 0.1),
-    asphalt: (tint: number, uv = 1.5) => M.tex('asphalt', { color: 0x46474a, seed: 20 }, tint, uv),
+    concrete: (tint: number, uv = 2.2) => M.at(Tile.Cast, mulHex(tint, 0xdedcd6, 1.1), uv * 0.6),
+    concreteDark: (tint: number, uv = 2) => M.at(Tile.Panel, mulHex(tint, 0xc4c0b6, 1.1), uv * 0.6),
+    plaster: (tint: number, uv = 2) => M.at(Tile.Plaster, tint, uv * 0.6),
+    sandstone: (tint: number, uv = 2.5) => M.at(Tile.Stone, tint, uv * 0.55),
+    brick: (tint: number, uv = 3) => M.at(Tile.Brick, tint, uv * 0.45),
+    corr: (tint: number, uv = 3) => M.at(Tile.Corr, tint, uv * 0.5),
+    corrRust: (tint: number, uv = 4) => M.at(Tile.Corr, mulHex(tint, 0xb0a490), uv * 0.45),
+    panel: (tint: number, uv = 2.5) => M.at(Tile.Plate, tint, uv * 0.8),
+    tiles: (tint: number, uv = 4) => M.at(Tile.RoofTile, tint, uv * 0.55),
+    asphalt: (tint: number, uv = 1.5) => M.at(Tile.Asphalt, tint, uv * 0.8),
   };
 }
 
@@ -540,14 +746,33 @@ function lazyObj<T extends object>(spec: Thunks<T>): T {
 }
 
 function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
-  const M = new Mats(s, fog);
-  const R = s.region;
-  const f = s.faction;
+  const N = nationOf(s);
+  const M = new Mats(s, fog, N);
   const T = texSet(M);
   const team = M.col(s.team, 0.55, 0.2);
-  const common = {
+  team.userData.team = true;
+  return {
+    R: () => s.region,
+    N: () => N,
+    wall: () => M.at(N.wallTile, N.wall),
+    wallB: () => M.at(N.wallTile, shade(N.wall, 0.92)),
+    wall2: () => M.at(N.wall2Tile, N.wall2),
+    base: () => M.at(Tile.Cast, shade(N.conc, 0.62)),
+    trim: () => M.col(N.trim, 0.5, 0.4),
+    roof: () => M.at(Tile.Roof, N.roof),
+    pitch: () => (N.roofStyle === 'hip' ? M.at(Tile.RoofTile, N.pitch) : M.at(Tile.Corr, N.pitch)),
+    slab: () => M.at(Tile.Soil, N.ground),
+    asphalt: () => M.at(Tile.Asphalt, 0xe8e6e0),
+    concrete: () => M.at(Tile.Cast, N.conc),
+    panel: () => M.at(Tile.Panel, N.conc),
     team: () => team,
-    teamD: () => M.col(shade(s.team, 0.6), 0.6, 0.2),
+    teamD: () => {
+      const m = M.col(shade(s.team, 0.6), 0.6, 0.2);
+      m.userData.team = true;
+      return m;
+    },
+    accent: () => M.col(N.drab, 0.7, 0.2),
+    drab: () => M.col(N.drab, 0.6, 0.5),
     steel: () => M.col(0x6f757b, 0.45, 0.65),
     galv: () => M.col(0xa8adb0, 0.4, 0.75),
     dark: () => M.col(0x2c2f33, 0.75, 0.3),
@@ -557,138 +782,47 @@ function palSpec(s: ModelStyle, fog: FogOfWar | null): Thunks<Pal> {
     white: () => M.col(0xe8e8e2, 0.75, 0.02),
     yellow: () => M.col(0xe0ae22, 0.7, 0.05),
     red: () => M.col(0xb3261e, 0.6, 0.1),
-    hazard: () => M.canvas('hazard', texHazard(), { uv: 8, rough: 0.7 }),
-    sandbag: () => M.tex('sandbag', { color: 0xb09c72, seed: 21, size: 256 }, 0xffffff, 7),
-    wood: () => M.tex('wood', { color: 0x8a6a46, seed: 22, size: 256 }, 0xffffff, 5),
-    canvas: () => M.tex('canvas', { color: 0x6b6a4a, seed: 23, grime: 0.4, size: 256 }, 0xffffff, 3),
-    grating: () => M.tex('grating', { color: 0x6a6c6e, seed: 24, size: 256 }, 0xffffff, 8, 1, 0.6),
-    rust: () => M.tex('rust', { seed: 25, size: 256 }, 0xffffff, 3),
-    soil: () => M.tex('soil', { color: 0x6a5a40, seed: 26, size: 256 }, 0xffffff, 2),
-    green: () => M.col(0x3f6a2c, 0.9, 0),
+    hazard: () => M.at(Tile.Hazard, 0xffffff),
+    sandbag: () => M.at(Tile.Bag, N.bag),
+    hesco: () => M.at(Tile.Bag, mulHex(N.bag, 0xe8e0c8), 2.2),
+    wood: () => M.at(Tile.Wood, 0xe8dcc8),
+    canvas: () => M.at(Tile.Canvas, mulHex(N.drab, 0xffffff, 1.2)),
+    grating: () => M.at(Tile.Grate, 0xc8ccd0),
+    rust: () => M.at(Tile.Corr, 0xa06a48),
+    soil: () => M.at(Tile.Soil, mulHex(N.ground, 0xb0a080)),
+    corr: () => T.corr(0xd0d4d6),
+    corrRust: () => T.corrRust(0xffffff),
+    brick: () => T.brick(0xffffff),
+    tank: () => M.col(mix(N.wall, 0xe8e8e0, 0.4), 0.5, 0.3),
     pipe: () => M.col(0x8c9196, 0.45, 0.6),
+    crane: () => M.col(0xd8a422, 0.6, 0.3),
+    green: () => M.col(0x3f6a2c, 0.9, 0),
+    camo: () => M.at(N.camoTile, 0xffffff),
+    net: () => M.net(),
     lamp: () => M.light(0xfff0c8, 2.8),
+    flood: () => M.light(0xe8f0ff, 3.4),
     red_l: () => M.light(0xff2a1a, 3.2),
     green_l: () => M.light(0x30ff6a, 2.6),
     cyan_l: () => M.light(0x5fe0ff, 2.6),
     amber_l: () => M.light(0xffa21a, 3),
     chain: () => M.canvas('chain', texChain(), { alphaTest: 0.4, double: true, uv: 9, metal: 0.6, rough: 0.5 }),
-    solar: () => M.canvas('solar', texSolar(), { uv: 6, rough: 0.45, metal: 0.15 }),
-    mash: () => M.canvas('mash', texMashrabiya(), { uv: 9, rough: 0.8 }),
+    solar: () => M.at(Tile.Solar, 0xffffff, 5),
+    aesa: () => M.at(Tile.Aesa, 0xd0d6d0, 5),
     win: () => M.win(false),
     winC: () => M.win(true),
-    corr: () => T.corr(0xffffff),
-    corrRust: () => T.corrRust(0xffffff),
-    brick: () => T.brick(0xffffff),
+    door: () => M.col(shade(N.drab, 0.85), 0.6, 0.45),
+    rollup: () => M.at(Tile.Corr, mulHex(N.drab, 0xffffff, 1.5), 2.6),
+    tile: () => M.col(s.accent, 0.6, 0.2),
+    dome: () => M.col(0xeeeee8, 0.6, 0.05),
     nation: () => M.col(s.accent, 0.55, 0.2),
-    clad: () => M.btex('clad', R === 'east' ? 0xb8bcb0 : R === 'mideast' ? 0xe0d4bc : R === 'asia' ? 0xe4e8ea : 0xc4ccd2),
-    pier: () => M.col(R === 'mideast' ? 0x8a7656 : R === 'east' ? 0x5e5c56 : R === 'asia' ? 0x4c5458 : 0x3e4448, 0.6, 0.2),
+    clad: () => M.at(Tile.Clad, N.wall2),
+    pier: () => M.col(N.trim, 0.6, 0.2),
     emb: () => M.decal(),
+    signs: () => M.signs(),
     mats: () => M,
     s: () => s,
     T: () => T,
   };
-  switch (R) {
-    case 'east': {
-      const ukr = f === 'ukraine';
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.concreteDark(0xffffff),
-        wallB: () => T.concreteDark(0xe8e2d4),
-        wall2: () => ukr ? T.plaster(0xe2cf92) : T.brick(0xffffff),
-        base: () => T.concreteDark(0x7e7a72),
-        trim: () => T.concrete(0xb8b4aa),
-        roof: () => T.asphalt(0xb0aaa0),
-        pitch: () => T.corr(0xa8a8a0, 1.6),
-        slab: () => T.concreteDark(0xd8d4cc, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xc0bcb2),
-        accent: () => M.col(ukr ? 0x3a5a8a : 0x3f5e3a, 0.7, 0.2), // painted gates (Soviet green / Ukrainian blue)
-        door: () => M.col(0x4a5a3c, 0.75, 0.3),
-        rollup: () => T.corrRust(0x9aa08a),
-        tank: () => M.col(0x9ea08e, 0.6, 0.35),
-        crane: () => M.col(0xd09a2a, 0.65, 0.3),
-        tile: () => M.col(0xa83228, 0.7, 0.1),
-        dome: () => T.panel(0xb4b8ba),
-      };
-    }
-    case 'asia': {
-      const kor = f === 'korea';
-      const trimC = kor ? 0x2f7a5a : 0xa8261e;
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.plaster(0xf2f2ee),
-        wallB: () => T.plaster(0xe6e8e6),
-        wall2: () => T.concrete(0xd8dcdc),
-        base: () => T.concrete(0x6e7274),
-        trim: () => M.col(trimC, 0.55, 0.1),
-        roof: () => T.concrete(0xa2a8aa),
-        pitch: () => T.tiles(kor ? 0x6d7f9e : 0x5fae96),
-        slab: () => T.concrete(0xd4d6d4, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xd0d0cc),
-        accent: () => M.col(trimC, 0.55, 0.1),
-        door: () => M.col(kor ? 0x2a4f6e : 0x7a1e1a, 0.6, 0.2),
-        rollup: () => T.corr(kor ? 0x7a96b8 : 0x8ab0a4),
-        tank: () => M.col(0xe8ecec, 0.45, 0.3),
-        crane: () => M.col(0xe0b020, 0.6, 0.3),
-        tile: () => M.col(kor ? 0x2a6a8e : 0x2f8a6e, 0.6, 0.1),
-        dome: () => T.panel(0xeef2f2),
-      };
-    }
-    case 'mideast': {
-      const tur = f === 'turkey';
-      return {
-        ...common,
-        R: () => R,
-        wall: () => T.plaster(tur ? 0xeee2c8 : 0xe6cfa2),
-        wallB: () => T.plaster(tur ? 0xe2d4b4 : 0xdcc396),
-        wall2: () => T.sandstone(tur ? 0xf0e4cc : 0xffffff),
-        base: () => T.sandstone(0x9a8460),
-        trim: () => T.sandstone(0xf4e8d0),
-        roof: () => T.plaster(0xc4b08c),
-        pitch: () => T.plaster(0xd0bc96),
-        slab: () => T.concrete(0xe0cfa8, 1.2),
-        asphalt: () => T.asphalt(0xd8ccb0),
-        concrete: () => T.concrete(0xe0d4b8),
-        accent: () => M.col(tur ? 0xb8202e : 0x1f9a8e, 0.5, 0.1),
-        door: () => M.col(0x6a4a2a, 0.8, 0.05),
-        rollup: () => T.corr(0xd8c8a4),
-        tank: () => M.col(0xe8e2d4, 0.5, 0.3),
-        crane: () => M.col(0xe8c040, 0.6, 0.3),
-        tile: () => M.canvas('tb' + f, texTileBand(tur ? 0x1f5fa8 : 0x1f9aa0, tur ? 0xb8202e : 0x1a3f8a), { uv: 0, rough: 0.35, metal: 0.1 }),
-        dome: () => tur ? T.panel(0x9aa2a8) : T.tiles(0x49c0b8),
-      };
-    }
-    default: {
-      // west
-      const isr = f === 'israel';
-      const ger = f === 'germany';
-      const wallT = isr ? 0xf2ead8 : ger ? 0xd2d2ce : 0xe0d6c0;
-      return {
-        ...common,
-        R: () => 'west',
-        wall: () => isr ? T.sandstone(0xfaf2e0, 2.2) : T.concrete(wallT),
-        wallB: () => T.concrete(shade(wallT, 0.93)),
-        wall2: () => M.btex('clad', ger ? 0x9ea694 : isr ? 0xd2d6d8 : 0xa9b4bc),
-        base: () => T.concrete(0x6e6c68),
-        trim: () => M.col(0x5a6066, 0.4, 0.6),
-        roof: () => T.concrete(0x8e9092, 1.6),
-        pitch: () => T.corr(ger ? 0x6c7466 : 0x8a9298),
-        slab: () => T.concrete(0xd8d6d0, 1.2),
-        asphalt: () => T.asphalt(0xffffff),
-        concrete: () => T.concrete(0xd2d0ca),
-        accent: () => M.col(s.accent, 0.6, 0.2),
-        door: () => M.col(0x5a6066, 0.5, 0.5),
-        rollup: () => T.corr(0xc8ccce),
-        tank: () => M.col(0xdadcda, 0.45, 0.4),
-        crane: () => M.col(0xf0c020, 0.55, 0.3),
-        tile: () => M.col(s.accent, 0.6, 0.2),
-        dome: () => T.panel(0xf2f2f0),
-      };
-    }
-  }
 }
 
 // ================================================================ animation specs
@@ -698,6 +832,8 @@ type AnimSpec =
   | { k: 'osc'; n: string; ax: Ax; a: number; f: number; p: number; b: number }
   | { k: 'slide'; n: string; ax: Ax; a: number; f: number; p: number; b: number }
   | { k: 'blink'; n: string; per: number; on: number; p: number }
+  /** Driven by unit production (AnimState.produced): pos / rot ease by `a` while a unit rolls out; vis shows (and spins about ax at v) only then. */
+  | { k: 'prod'; n: string; ax: Ax; a: number; mode: 'pos' | 'rot' | 'scl' | 'vis'; v?: number }
   | { k: 'pump'; crank: string; beam: string; rod: string; pit: string; G: P2; P: P2; r: number; R: number; Rf: number; amp: number; rodY: number };
 
 interface Tpl {
@@ -705,6 +841,7 @@ interface Tpl {
   specs: AnimSpec[];
   glow: Mat[];
   flags: SMat[];
+  blinks: SMat[];
   emitters: Model['emitters'];
   height: number;
   size: { x: number; y: number; z: number };
@@ -860,6 +997,14 @@ class Kit {
     if (scale > 0 && !this.luv) worldUV(geo, scale);
     else if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     for (const name of Object.keys(geo.attributes)) if (!KEEP.has(name)) geo.deleteAttribute(name);
+    if (m.userData.atlas) {
+      // atlas tile index per vertex (uv1.x; uv1 survives the fracture / wreck geometry rebuild)
+      const tile = (mv.userData.tile as number | undefined) ?? 0;
+      const n = geo.attributes.position.count;
+      const arr = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) arr[i * 2] = tile;
+      geo.setAttribute('uv1', new THREE.BufferAttribute(arr, 2));
+    }
     if ((m as SMat).vertexColors) {
       const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
       const n = geo.attributes.position.count;
@@ -880,10 +1025,16 @@ class Kit {
       const c = (mv.userData.vc as THREE.Color | undefined) ?? WHITE;
       this.rec.lamps.push((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2, c.r, c.g, c.b);
     }
-    let bin = this.bins.get(this.cur);
+    // small root-level parts (rails, bolts, props) go to a separate detail mesh the far-zoom LOD hides
+    let target = this.cur;
+    if (target === this.root && this.detailOk(m, mv)) {
+      geo.computeBoundingSphere();
+      if (geo.boundingSphere!.radius < 0.045) target = this.detailObj();
+    }
+    let bin = this.bins.get(target);
     if (!bin) {
       bin = new Map();
-      this.bins.set(this.cur, bin);
+      this.bins.set(target, bin);
     }
     let list = bin.get(m);
     if (!list) {
@@ -892,6 +1043,21 @@ class Kit {
     }
     list.push(geo);
     geo = null as unknown as THREE.BufferGeometry;
+  }
+
+  private detail: THREE.Group | null = null;
+  private detailObj() {
+    if (!this.detail) {
+      this.detail = new THREE.Group();
+      this.detail.name = 'lod-detail';
+      this.root.add(this.detail);
+    }
+    return this.detail;
+  }
+  /** Parts that may go to the far-zoom detail mesh: plain surfaces (no lamps, glass panes, team colour, decals). */
+  private detailOk(m: Mat, mv: Mat) {
+    if (mv.userData.team || m.userData.baseEI) return false;
+    return !!m.userData.atlas;
   }
 
   /** Merge everything into meshes. */
@@ -909,9 +1075,10 @@ class Kit {
         geo.computeBoundingSphere();
         const mesh = new THREE.Mesh(geo, m);
         const sm = m as SMat;
-        const isGlow = !!sm.userData.baseEI && !sm.map;
+        const isGlow = (!!sm.userData.baseEI || !!sm.userData.blinkEI) && !sm.map;
         mesh.castShadow = !isGlow && !sm.alphaTest;
         mesh.receiveShadow = true;
+        if (obj === this.detail) mesh.userData.lodDetail = true;
         obj.add(mesh);
       }
     }
@@ -1095,10 +1262,19 @@ class Kit {
   osc(n: string, ax: Ax, a: number, f: number, p = 0, b = 0) {
     this.specs.push({ k: 'osc', n, ax, a, f, p, b });
   }
+  /**
+   * Aviation obstruction light. All of an owner's obstruction lights share one emissive material that the
+   * instances flash in sync (like a real synchronised obstruction lighting system), so they merge into the
+   * static geometry instead of costing a draw call each. Animated parts keep a per-node blinker.
+   */
   blinkLight(x: number, y: number, z: number, r = 0.022, per = 1.4, p = 0) {
+    if (this.cur === this.root) {
+      this.mark('blinks', x, y, z);
+      this.sph(this.P.mats.blink(), r, x, y, z, 8, 6);
+      return;
+    }
     const n = 'blink' + this.specs.length;
     const o = this.node(n, x, y, z);
-    this.mark('blinks', x, y, z);
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
@@ -1210,9 +1386,9 @@ function punched(k: Kit, face: Face, sign: number, a0: number, a1: number, n: nu
     if (skip && c + ww / 2 > skip[0] && c - ww / 2 < skip[1]) continue;
     if (style === 'mash') {
       // projecting wooden mashrabiya bay
-      faceBox(k, P.wood, face, sign, c, y - 0.015, at, ww + 0.03, 0.012, 0.035);
-      faceBox(k, P.mash, face, sign, c, y - 0.003, at, ww + 0.016, wh + 0.01, 0.03);
-      faceBox(k, P.wood, face, sign, c, y + wh + 0.007, at, ww + 0.03, 0.012, 0.038);
+      faceBox(k, P.trim, face, sign, c, y - 0.015, at, ww + 0.03, 0.012, 0.035);
+      faceBox(k, P.accent, face, sign, c, y - 0.003, at, ww + 0.016, wh + 0.01, 0.02);
+      for (let j = 0; j < 4; j++) faceBox(k, P.dark, face, sign, c, y + 0.006 + (j * wh) / 4, at, ww + 0.01, 0.006, 0.026);
       continue;
     }
     const off = sign * 0.003;
@@ -1249,16 +1425,6 @@ function ribbon(k: Kit, face: Face, sign: number, a0: number, a1: number, y: num
     seg(a0, Math.min(a1, skip[0] - 0.02));
     seg(Math.max(a0, skip[1] + 0.02), a1);
   } else seg(a0, a1);
-}
-
-/** Glass curtain wall section with frame. */
-function curtain(k: Kit, face: Face, sign: number, a0: number, a1: number, y0: number, y1: number, at: number, cw = 0.1, ch = 0.12) {
-  const P = k.P;
-  const n = Math.max(1, Math.round((a1 - a0) / cw));
-  const m = Math.max(1, Math.round((y1 - y0) / ch));
-  k.panel(P.winC, face, sign, (a0 + a1) / 2, y0, at + sign * 0.004, a1 - a0, y1 - y0, cell(k, n, m));
-  for (const a of [a0, a1]) faceBox(k, P.trim, face, sign, a, y0, at, 0.012, y1 - y0, 0.012);
-  for (let i = 0; i <= m; i++) faceBox(k, P.trim, face, sign, (a0 + a1) / 2, y0 + ((y1 - y0) * i) / m - 0.004, at, a1 - a0, 0.008, 0.01);
 }
 
 /** Personnel door with team coloured frame, canopy and lamp. */
@@ -1305,31 +1471,7 @@ function flatRoof(k: Kit, x0: number, x1: number, z0: number, z1: number, y: num
   k.box(m, W, ph, t, cx, y, z0 + t / 2);
   k.box(m, t, ph, D - 2 * t, x1 - t / 2, y, cz);
   k.box(m, t, ph, D - 2 * t, x0 + t / 2, y, cz);
-  if (P.R === 'mideast') {
-    // crenellated parapet (stepped merlons)
-    const mer = (a0: number, a1: number, fixed: number, alongX: boolean) => {
-      const n = Math.max(2, Math.round((a1 - a0) / 0.07));
-      for (let i = 0; i < n; i++) {
-        const a = a0 + ((a1 - a0) * (i + 0.5)) / n;
-        if (alongX) {
-          k.box(P.trim, 0.034, 0.022, t + 0.006, a, y + ph, fixed);
-          k.box(P.trim, 0.018, 0.014, t + 0.006, a, y + ph + 0.022, fixed);
-        } else {
-          k.box(P.trim, t + 0.006, 0.022, 0.034, fixed, y + ph, a);
-          k.box(P.trim, t + 0.006, 0.014, 0.018, fixed, y + ph + 0.022, a);
-        }
-      }
-    };
-    mer(x0, x1, z1 - t / 2, true);
-    mer(x0, x1, z0 + t / 2, true);
-    mer(z0 + t, z1 - t, x1 - t / 2, false);
-    mer(z0 + t, z1 - t, x0 + t / 2, false);
-    k.box(P.trim, W + 0.01, 0.01, 0.01, cx, y + ph - 0.012, z1 + 0.003);
-    k.box(P.trim, 0.01, 0.01, D + 0.01, x1 + 0.003, y + ph - 0.012, cz);
-    // team coloured band under the merlons: reads from the high camera
-    k.box(P.team, W + 0.012, 0.014, 0.008, cx, y + ph - 0.03, z1 + 0.004);
-    k.box(P.team, 0.008, 0.014, D + 0.012, x1 + 0.004, y + ph - 0.03, cz);
-  } else {
+  {
     // team coloured coping: outlines every roof in the owner's colour from above
     const ct = P.team;
     const ch = 0.014;
@@ -1370,7 +1512,7 @@ function roofEmblem(k: Kit, x0: number, x1: number, z0: number, z1: number, y: n
   const f = P.s.faction;
   const W = x1 - x0;
   const D = z1 - z0;
-  const sz = Math.min(W * 0.46, D * 0.42, 0.46);
+  const sz = Math.min(W * 0.4, D * 0.38, 0.32);
   if (f === 'neutral' || sz < 0.2 || k.emb > 0) return false;
   k.emb++;
   const cell = roundelCell(f);
@@ -1487,7 +1629,7 @@ function vent(k: Kit, x: number, y: number, z: number, r = 0.022) {
   k.cyl(P.galv, r * 1.6, 0.014, x, y + 0.05, z, 8, r * 0.8);
 }
 
-/** Regional rooftop clutter on a flat roof. */
+/** Nation flavoured rooftop clutter on a flat roof. */
 function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: number, n = 2) {
   const P = k.P;
   const r = k.rnd;
@@ -1495,14 +1637,23 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
   const D = z1 - z0;
   const px = (f: number) => x0 + 0.1 + (W - 0.2) * f;
   const pz = (f: number) => z0 + 0.1 + (D - 0.2) * f;
-  switch (P.R) {
-    case 'west':
-      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
-      vent(k, px(r()), y, pz(0.8));
-      vent(k, px(r()), y, pz(0.7));
-      if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
+  switch (P.s.faction) {
+    case 'israel':
+      // solar water heaters (dud shemesh) + water tanks: the Israeli roofline
+      for (let i = 0; i < n + 1; i++) {
+        const xx = px((i + 0.5) / (n + 1));
+        const zz = pz(0.3 + (i % 2) * 0.3);
+        k.at(xx, y, zz, 0.2, () => {
+          k.boxR(P.solar, 0.12, 0.008, 0.09, 0, 0.05, 0.03, 0, -0.7, 0, 6);
+          k.box(P.galv, 0.006, 0.07, 0.006, -0.05, 0, -0.01);
+          k.box(P.galv, 0.006, 0.07, 0.006, 0.05, 0, -0.01);
+          k.at(0, 0.09, -0.035, 0, () => k.tube(P.white, [-0.06, 0, 0], [0.06, 0, 0], 0.022, 10));
+        });
+      }
+      vent(k, px(0.9), y, pz(0.85));
       break;
-    case 'east':
+    case 'russia':
+    case 'ukraine':
       for (let i = 0; i < n; i++) {
         const xx = px((i + 0.5) / n);
         const zz = pz(0.3 + r() * 0.3);
@@ -1510,31 +1661,35 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
         k.box(P.concrete, 0.075, 0.012, 0.075, xx, y + 0.12, zz);
       }
       k.pipe(P.rust, [[px(0.1), y + 0.03, pz(0.9)], [px(0.6), y + 0.03, pz(0.9)], [px(0.6), y + 0.03, pz(0.5)]], 0.01, 6);
-      k.cyl(P.dark, 0.004, 0.25, px(0.85), y, pz(0.2), 4);
-      k.box(P.wall, 0.16, 0.08, 0.12, px(0.2), y, pz(0.75));
+      antenna(k, px(0.85), y, pz(0.2), 0.25);
+      k.box(P.wall2, 0.16, 0.08, 0.12, px(0.2), y, pz(0.75));
       break;
-    case 'asia':
+    case 'china':
+    case 'korea':
       for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.3), 0.14, 0.1);
-      // solar water heater
-      k.at(px(0.75), y, pz(0.75), 0, () => {
-        k.cyl(P.galv, 0.025, 0.2, -0.1, 0.1, 0, 10);
-        k.tube(P.galv, [-0.1, 0.1, 0], [0.1, 0.1, 0], 0.022, 10);
-        k.boxR(P.solar, 0.2, 0.008, 0.12, 0, 0.05, 0.05, 0, -0.6, 0, 6);
+      // stainless water tank on a stand
+      k.at(px(0.78), y, pz(0.78), 0, () => {
+        for (const sx of [-1, 1]) k.box(P.steel, 0.012, 0.05, 0.08, sx * 0.05, 0, 0);
+        k.tube(P.galv, [-0.08, 0.085, 0], [0.08, 0.085, 0], 0.04, 12);
       });
       break;
-    case 'mideast':
+    case 'turkey':
+    case 'iran':
       for (let i = 0; i < n + 1; i++) {
         const xx = px((i + 0.5) / (n + 1));
         const zz = pz(0.2 + r() * 0.4);
-        // water tank on a stand
         const c = i % 2 ? P.black : P.white;
         k.box(P.steel, 0.07, 0.03, 0.07, xx, y, zz);
         k.cyl(c, 0.035, 0.07, xx, y + 0.03, zz, 12);
       }
-      k.rbox(P.white, 0.1, 0.06, 0.07, px(0.8), y, pz(0.8), 0.006);
-      k.cyl(P.black, 0.02, 0.003, px(0.8), y + 0.06, pz(0.8), 10);
+      hvac(k, px(0.8), y, pz(0.8), 0.12, 0.09);
       satDish(k, px(0.15), y, pz(0.85), 0.05, 0.6);
       break;
+    default:
+      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
+      vent(k, px(r()), y, pz(0.8));
+      vent(k, px(r()), y, pz(0.7));
+      if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
   }
 }
 
@@ -1612,7 +1767,8 @@ function block(k: Kit, o: BlockOpt): number {
   const floors = o.floors ?? Math.max(1, Math.round(h / 0.24));
   k.box(P.base, W + 0.014, 0.03, D + 0.014, cx, y0, cz);
   k.rbox(wall, W, h, D, cx, y0, cz, 0.008);
-  const style = o.win ?? { west: 'ribbon', east: 'punched', asia: 'ribbonC', mideast: 'arched' }[P.R];
+  const f = P.s.faction;
+  const style = o.win ?? (f === 'usa' || f === 'germany' || f === 'neutral' ? 'ribbon' : 'punched');
   const skipZ: [number, number] | undefined = o.door !== undefined ? [o.door - 0.09, o.door + 0.09] : undefined;
   const skipX: [number, number] | undefined = o.doorX !== undefined ? [o.doorX - 0.09, o.doorX + 0.09] : undefined;
   if (style !== 'none') {
@@ -1622,17 +1778,13 @@ function block(k: Kit, o: BlockOpt): number {
   if (o.door !== undefined) door(k, 'z', 1, o.door, y0, z1, 0.12, Math.min(0.2, h * 0.8));
   if (o.doorX !== undefined) door(k, 'x', 1, o.doorX, y0, x1, 0.12, Math.min(0.2, h * 0.8));
   // floor lines
-  if (P.R === 'west' || P.R === 'asia') {
-    for (let f = 1; f < floors; f++) {
-      const yy = y0 + (h * f) / floors - 0.006;
-      k.box(P.R === 'asia' ? P.white : P.wall2, W + 0.012, 0.014, D + 0.012, cx, yy, cz);
-    }
+  for (let fl = 1; fl < floors; fl++) {
+    const yy = y0 + (h * fl) / floors - 0.006;
+    k.box(P.base, W + 0.012, 0.012, D + 0.012, cx, yy, cz);
   }
   // downpipes at the visible corners
-  if (P.R !== 'mideast') {
-    k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
-    if (W > 0.8) k.cyl(P.R === 'asia' ? P.white : P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
-  }
+  k.cyl(P.galv, 0.007, h, x1 + 0.01, y0, z1 - 0.03, 6);
+  if (W > 0.8) k.cyl(P.galv, 0.007, h, x0 + 0.03, y0, z1 + 0.01, 6);
   // bold team band with dark keylines and a national accent stripe below
   if (o.band !== false) {
     const by = y0 + h - (o.roof === 'flat' || !o.roof ? 0.05 : 0.044);
@@ -1647,8 +1799,8 @@ function block(k: Kit, o: BlockOpt): number {
   const roof = o.roof ?? 'flat';
   if (roof === 'flat') {
     const ph = o.parapet ?? 0.035;
-    flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? (P.R === 'west' ? P.wall2 : wall));
-    const emb = o.emblem !== false && D >= 0.55 && W * D >= 0.45 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
+    flatRoof(k, x0, x1, z0, z1, top, ph, o.pm ?? wall);
+    const emb = o.emblem === true && D >= 0.5 && roofEmblem(k, x0, x1, z0, z1, top + 0.011);
     if ((o.equip ?? 2) > 0) roofKit(k, x0, x1, z0, emb ? z0 + D * 0.42 : z1, top + 0.01, o.equip ?? 2);
     return top + ph + 0.01;
   }
@@ -1800,78 +1952,6 @@ function asianRoof(k: Kit, roofM: Mat, ridgeM: Mat, cx: number, y: number, cz: n
   }
 }
 
-/** Wall with pointed (or round) arch openings, lying in the XY plane, centred on z. */
-function arcade(k: Kit, m: Mat, x0: number, x1: number, y: number, h: number, z: number, t: number, n: number, aw: number, spring: number, round = false) {
-  const outer: P2[] = [
-    [x0, y],
-    [x1, y],
-    [x1, y + h],
-    [x0, y + h],
-  ];
-  const holes: P2[][] = [];
-  for (let i = 0; i < n; i++) {
-    const xc = x0 + ((x1 - x0) * (i + 0.5)) / n;
-    holes.push(round ? roundArchPts(xc, y - 0.0001, aw, spring) : archPts(xc, y - 0.0001, aw, spring, 0.4, 5));
-  }
-  // holes touching the base edge are not allowed in a shape: lift a hair
-  for (const hl of holes) {
-    hl[0][1] = y + 0.002;
-    hl[1][1] = y + 0.002;
-  }
-  k.prism(m, outer, t, 0, 0, z, undefined, holes);
-}
-
-/** Persian pointed-bulb dome on a drum, or a low Ottoman dome. */
-function dome(k: Kit, x: number, y: number, z: number, r: number, kind: 'persian' | 'ottoman' | 'hemi' | 'observatory') {
-  const P = k.P;
-  if (kind === 'persian') {
-    const dh = r * 0.5;
-    k.cyl(P.wall, r * 1.02, dh, x, y, z, 24);
-    const band = new THREE.CylinderGeometry(r * 1.035, r * 1.035, dh * 0.4, 24, 1, true);
-    scaleUV(band, 8, 1);
-    band.translate(x, y + dh * 0.55, z);
-    k.add(band, P.tile, 0);
-    k.cyl(P.trim, r * 1.06, 0.015, x, y + dh, z, 24);
-    const pts: P2[] = [
-      [r * 1.0, 0],
-      [r * 1.07, r * 0.22],
-      [r * 1.05, r * 0.46],
-      [r * 0.92, r * 0.76],
-      [r * 0.66, r * 1.05],
-      [r * 0.34, r * 1.3],
-      [r * 0.08, r * 1.48],
-      [0.001, r * 1.56],
-    ];
-    const g = new THREE.LatheGeometry(
-      pts.map(([a, b]) => new THREE.Vector2(a, b)),
-      28,
-    );
-    scaleUV(g, 10, 4);
-    g.translate(x, y + dh + 0.015, z);
-    k.add(g, P.dome, 0);
-    k.cyl(P.mats.col(0xd8b04a, 0.3, 0.8), 0.006, r * 0.35, x, y + dh + r * 1.5, z, 6);
-    k.sph(P.mats.col(0xd8b04a, 0.3, 0.8), 0.014, x, y + dh + r * 1.62, z, 8, 6);
-  } else if (kind === 'ottoman') {
-    const dh = r * 0.35;
-    k.cyl(P.wall2, r * 1.02, dh, x, y, z, 24);
-    k.cyl(P.trim, r * 1.06, 0.012, x, y + dh, z, 24);
-    const g = new THREE.SphereGeometry(r, 28, 8, 0, TAU, 0, Math.PI / 2);
-    g.scale(1, 0.8, 1);
-    scaleUV(g, 12, 3);
-    g.translate(x, y + dh + 0.012, z);
-    k.add(g, P.dome, 0);
-    k.cyl(P.mats.col(0xd8b04a, 0.3, 0.8), 0.005, r * 0.4, x, y + dh + r * 0.78, z, 6);
-    k.sph(P.mats.col(0xd8b04a, 0.3, 0.8), 0.012, x, y + dh + r * 1.0, z, 8, 6);
-  } else if (kind === 'observatory') {
-    k.cyl(P.wall, r, r * 0.3, x, y, z, 24);
-    k.dome(P.dome, r * 0.98, x, y + r * 0.3, z, 28, 10);
-    k.box(P.team, r * 0.36, r * 1.1, r * 0.06, x, y + r * 0.3, z + r * 0.3);
-    k.box(P.dark, r * 0.3, r * 0.95, 0.01, x, y + r * 0.32, z + r * 0.85);
-  } else {
-    k.dome(P.dome, r, x, y, z, 28, 10);
-  }
-}
-
 // ---------------------------------------------------------------- props
 
 function lightPole(k: Kit, x: number, z: number, h = 0.42, ry = 0, y = 0) {
@@ -1918,25 +1998,6 @@ function fence(k: Kit, pts: P2[], h = 0.17, y = 0) {
   }
 }
 
-function container(k: Kit, x: number, y: number, z: number, ry: number, tint: number, L = 0.4) {
-  const P = k.P;
-  const m = P.T.corr(tint, 6);
-  const H = 0.16;
-  const Wd = 0.155;
-  k.at(x, y, z, ry, () => {
-    k.box(m, L, H, Wd, 0, 0, 0);
-    // door end + frame rails + corner castings
-    k.box(P.mats.col(shade(tint, 0.75), 0.6, 0.3), 0.006, H - 0.01, Wd - 0.01, L / 2 + 0.003, 0.005, 0);
-    for (const zz of [-0.025, 0.025]) k.box(P.steel, 0.008, H - 0.02, 0.004, L / 2 + 0.007, 0.01, zz);
-    for (const sx of [-1, 1])
-      for (const sz of [-1, 1]) {
-        k.box(P.dark, 0.014, H, 0.014, sx * (L / 2 - 0.007), 0, sz * (Wd / 2 - 0.007));
-      }
-    k.box(P.dark, L, 0.01, 0.008, 0, H - 0.01, Wd / 2 - 0.002);
-    k.box(P.dark, L, 0.01, 0.008, 0, 0, Wd / 2 - 0.002);
-  });
-}
-
 function crate(k: Kit, x: number, y: number, z: number, s = 0.08, ry = 0) {
   const P = k.P;
   k.at(x, y, z, ry, () => {
@@ -1975,80 +2036,24 @@ function sandbags(k: Kit, a: P2, b: P2, rows = 2, y = 0) {
   });
 }
 
-/** HESCO style barrier (wire mesh baskets filled with soil). */
-function hesco(k: Kit, a: P2, b: P2, h = 0.12) {
+/** HESCO bastion line (geotextile lined wire baskets filled with soil). */
+function hesco(k: Kit, a: P2, b: P2, h = 0.12, y = 0, dd = 0.1) {
   const P = k.P;
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
   const ry = -Math.atan2(b[1] - a[1], b[0] - a[0]);
-  k.at((a[0] + b[0]) / 2, 0, (a[1] + b[1]) / 2, ry, () => {
-    const n = Math.max(1, Math.round(len / 0.1));
-    for (let i = 0; i < n; i++) {
-      const xx = -len / 2 + (len * (i + 0.5)) / n;
-      k.box(P.mats.tex('canvas', { color: 0x6b6a4a, seed: 23, grime: 0.4, size: 256 }, 0xd8c8a0, 6), len / n - 0.004, h, 0.1, xx, 0, 0);
-      k.box(P.soil, len / n - 0.012, 0.004, 0.09, xx, h, 0);
-      for (const sz of [-1, 1]) k.box(P.galv, len / n - 0.002, 0.004, 0.003, xx, h - 0.004, sz * 0.05);
+  k.at((a[0] + b[0]) / 2, y, (a[1] + b[1]) / 2, ry, () => {
+    const n = Math.max(1, Math.round(len / dd));
+    const cw = len / n;
+    k.box(P.hesco, len, h, dd, 0, 0, 0);
+    k.box(P.soil, len - 0.01, 0.006, dd - 0.012, 0, h - 0.003, 0);
+    // wire mesh frame: vertical posts at the cell joints + top rails
+    for (let i = 0; i <= n; i++) {
+      const xx = -len / 2 + i * cw;
+      for (const sz of [-1, 1]) k.box(P.galv, 0.004, h + 0.004, 0.004, xx, 0, sz * (dd / 2 + 0.001));
     }
+    for (const sz of [-1, 1]) k.box(P.galv, len, 0.004, 0.004, 0, h - 0.002, sz * (dd / 2 + 0.001));
+    for (const sz of [-1, 1]) k.box(P.galv, len, 0.003, 0.003, 0, h * 0.5, sz * (dd / 2 + 0.001));
   });
-}
-
-function shrub(k: Kit, x: number, y: number, z: number, r = 0.04) {
-  const g = new THREE.IcosahedronGeometry(r, 1);
-  g.scale(1, 0.8, 1);
-  g.translate(x, y + r * 0.7, z);
-  k.add(g, k.P.green, 0);
-}
-
-function tree(k: Kit, x: number, z: number, h = 0.3, y = 0) {
-  const P = k.P;
-  k.cyl(P.mats.col(0x5a4632, 0.9, 0), 0.008, h * 0.5, x, y, z, 6, 0.006);
-  shrub(k, x, y + h * 0.4, z, h * 0.28);
-  shrub(k, x + 0.03, y + h * 0.55, z - 0.02, h * 0.2);
-}
-
-function palm(k: Kit, x: number, z: number, h = 0.4, y = 0) {
-  const P = k.P;
-  const trunk = P.mats.col(0x7a6448, 0.95, 0);
-  const lean = 0.04;
-  k.tube(trunk, [x, y, z], [x + lean * 0.5, y + h * 0.5, z], 0.012, 6, 0.016);
-  k.tube(trunk, [x + lean * 0.5, y + h * 0.5, z], [x + lean, y + h, z], 0.01, 6, 0.012);
-  const leaf = P.mats.col(0x4c7a2e, 0.85, 0, true);
-  const n = 8;
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * TAU + 0.3;
-    const L = h * 0.42;
-    const cx = Math.cos(a);
-    const cz = Math.sin(a);
-    const pts: V3[] = [
-      [0, 0, 0],
-      [cx * L * 0.5, L * 0.18, cz * L * 0.5],
-      [cx * L, -L * 0.15, cz * L],
-    ];
-    const px = -cz * 0.03;
-    const pz = cx * 0.03;
-    k.at(x + lean, y + h, z, 0, () => {
-      for (let j = 0; j < 2; j++) {
-        const [a0, a1] = [pts[j], pts[j + 1]];
-        const w0 = j === 0 ? 0.6 : 1;
-        const w1 = j === 0 ? 1 : 0.1;
-        k.quad(leaf, [a0[0] - px * w0, a0[1], a0[2] - pz * w0], [a0[0] + px * w0, a0[1], a0[2] + pz * w0], [a1[0] + px * w1, a1[1], a1[2] + pz * w1], [a1[0] - px * w1, a1[1], a1[2] - pz * w1]);
-      }
-    });
-  }
-}
-
-function planter(k: Kit, x: number, z: number, w: number, d: number, kind: 'shrub' | 'palm' | 'tree' = 'shrub', y = 0) {
-  const P = k.P;
-  k.box(P.R === 'mideast' ? P.wall2 : P.concrete, w, 0.05, d, x, y, z);
-  k.box(P.soil, w - 0.02, 0.004, d - 0.02, x, y + 0.05, z);
-  if (kind === 'palm') palm(k, x, z, 0.42, y + 0.05);
-  else if (kind === 'tree') tree(k, x, z, 0.32, y + 0.05);
-  else {
-    const n = Math.max(1, Math.round(Math.max(w, d) / 0.07));
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n;
-      shrub(k, w > d ? x - w / 2 + w * t : x, y + 0.05, w > d ? z : z - d / 2 + d * t, 0.03 + k.rnd() * 0.012);
-    }
-  }
 }
 
 /** Satellite dish (fixed). */
@@ -2198,16 +2203,6 @@ function guardBooth(k: Kit, x: number, z: number, ry = 0) {
   });
 }
 
-/** Barrier boom gate. */
-function boomGate(k: Kit, x: number, z: number, len: number, ry = 0) {
-  const P = k.P;
-  k.at(x, 0, z, ry, () => {
-    k.box(P.dark, 0.04, 0.08, 0.04, 0, 0, 0);
-    k.box(P.red, len, 0.012, 0.012, len / 2, 0.07, 0);
-    for (let i = 0; i < 4; i++) k.box(P.white, len / 9, 0.013, 0.013, len * (0.2 + i * 0.22), 0.07, 0);
-  });
-}
-
 /** Steel stair flight from (x,z,y0) rising along +dir to y1. */
 function stairs(k: Kit, x: number, z: number, y0: number, y1: number, alongX: boolean, sgn = 1, w = 0.08) {
   const P = k.P;
@@ -2226,10 +2221,10 @@ function stairs(k: Kit, x: number, z: number, y0: number, y1: number, alongX: bo
   }
 }
 
-/** Stencilled number / text decal on a wall (alpha tested). */
+/** Stencilled number / text decal on a wall (alpha tested, shared sign atlas). */
 function stencil(k: Kit, text: string, face: Face, sign: number, c: number, y: number, at: number, w: number, color = '#f0eee6') {
-  const m = k.P.mats.canvas('st' + text + color, texStencil(text, color), { alphaTest: 0.5, rough: 0.8 });
-  k.panel(m, face, sign, c, y, at + sign * 0.005, w, w / 2);
+  const uv = signCell('st|' + text + color, { text, fg: color });
+  k.panel(k.P.signs, face, sign, c, y, at + sign * 0.005, w, w / 4, uv);
 }
 
 /** Painted road markings: dashed line along x or z. */
@@ -2262,6 +2257,7 @@ function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d
     specs: k.specs,
     glow: [...P.mats.glow],
     flags: P.mats.flags,
+    blinks: [...P.mats.blinks],
     emitters: k.emitters,
     height: k.height,
     size: { x: w, y: k.height, z: d },
@@ -2295,6 +2291,10 @@ function instance(t: Tpl): FxModel {
     const o = sp.k === 'pump' ? undefined : find(sp.n);
     let base = 0;
     if (o && (sp.k === 'osc' || sp.k === 'slide')) base = sp.k === 'osc' ? o.rotation[sp.ax] : o.position[sp.ax];
+    if (o && sp.k === 'prod') {
+      base = sp.mode === 'pos' ? o.position[sp.ax] : sp.mode === 'rot' ? o.rotation[sp.ax] : sp.mode === 'scl' ? o.scale[sp.ax] : 0;
+      if (sp.mode === 'vis') o.visible = false;
+    }
     // battle damage knocks dishes / masts askew about an axis they don't animate on
     const tax: Ax = sp.k === 'spin' || sp.k === 'osc' ? (sp.ax === 'x' ? 'z' : 'x') : 'x';
     const tilt = (0.16 + ((i * 0.618 + t.specs.length * 0.37) % 1) * 0.2) * (i % 2 ? 1 : -1);
@@ -2325,15 +2325,21 @@ function instance(t: Tpl): FxModel {
     .map((sp) => ({ sp, crank: find(sp.crank), beam: find(sp.beam), rod: find(sp.rod), pit: find(sp.pit), phase: 0 }));
   const glow = t.glow as SMat[];
   const flags = t.flags;
+  /** Production door / lift / beacon easing (0 closed .. 1 open). */
+  let prodK = 0;
   const anim = (s: AnimState) => {
     const pw = s.powered;
     const f = pw ? 1 : 0.22;
     for (const g of glow) g.emissiveIntensity = (g.userData.baseEI as number) * f;
     for (const fm of flags) (fm.userData.uTime as { value: number }).value = s.time;
+    const blinkOn = pw && s.built >= 1 && s.time % 1.5 < 0.55;
+    for (const bm of t.blinks) bm.emissiveIntensity = blinkOn ? (bm.userData.blinkEI as number) : 0;
     bfx.update(s);
     if (s.built < 1) return;
     const t0 = s.time;
     const dmg = s.damage;
+    const pAge = s.produced ?? Infinity;
+    prodK += ((pAge < 3.2 ? 1 : 0) - prodK) * Math.min(1, s.dt * (pAge < 3.2 ? 2.6 : 1.4));
     // heavy damage: dishes / radars tilt and jam
     const tiltK = dmg < 0.6 ? 0 : Math.min(1, (dmg - 0.6) / 0.25);
     const jam = dmg >= 0.85 ? 0 : 1;
@@ -2353,6 +2359,15 @@ function instance(t: Tpl): FxModel {
           break;
         case 'blink':
           o.visible = pw && ((t0 + sp.p) % sp.per) / sp.per < sp.on;
+          break;
+        case 'prod':
+          if (sp.mode === 'pos') o.position[sp.ax] = b.base + sp.a * prodK;
+          else if (sp.mode === 'rot') o.rotation[sp.ax] = b.base + sp.a * prodK;
+          else if (sp.mode === 'scl') o.scale[sp.ax] = b.base + sp.a * prodK;
+          else {
+            o.visible = prodK > 0.08;
+            if (o.visible) o.rotation[sp.ax] += (sp.v ?? 6) * s.dt;
+          }
           break;
       }
     }
@@ -2436,299 +2451,6 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
     }
   });
 }
-
-/** Steel frame of a building under construction. */
-function steelFrame(k: Kit, x0: number, x1: number, z0: number, z1: number, levels: number, lh: number) {
-  const P = k.P;
-  const m = P.mats.col(0x8a3b26, 0.6, 0.4); // red oxide primer
-  const nx = 3;
-  const nz = 2;
-  for (let i = 0; i <= nx; i++)
-    for (let j = 0; j <= nz; j++) {
-      const x = x0 + ((x1 - x0) * i) / nx;
-      const z = z0 + ((z1 - z0) * j) / nz;
-      const top = i === nx && j === 0 ? levels - 1 : levels;
-      k.box(m, 0.022, lh * top, 0.022, x, Y0, z);
-      k.box(P.concrete, 0.05, 0.015, 0.05, x, Y0, z);
-    }
-  for (let l = 1; l <= levels; l++) {
-    const y = Y0 + l * lh - 0.02;
-    for (let j = 0; j <= nz; j++) {
-      const z = z0 + ((z1 - z0) * j) / nz;
-      k.box(m, x1 - x0, 0.02, 0.016, (x0 + x1) / 2, y, z);
-    }
-    for (let i = 0; i <= nx; i++) {
-      const x = x0 + ((x1 - x0) * i) / nx;
-      if (l === levels && i === nx) continue;
-      k.box(m, 0.016, 0.02, z1 - z0, x, y, (z0 + z1) / 2);
-    }
-  }
-  // first floor deck (partly poured) + bracing + scaffold
-  k.box(P.concrete, (x1 - x0) * 0.67, 0.018, z1 - z0, x0 + (x1 - x0) * 0.335, Y0 + lh, (z0 + z1) / 2);
-  k.bar(m, [x1, Y0, z1], [x1, Y0 + lh, (z0 + z1) / 2], 0.01);
-  k.bar(m, [x0, Y0, z1], [x0 + (x1 - x0) / 3, Y0 + lh, z1], 0.01);
-  for (let l = 0; l < levels; l++)
-    for (let i = 0; i < 4; i++) {
-      const x = x0 + ((x1 - x0) * (i + 0.5)) / 4;
-      k.box(P.wood, 0.1, 0.006, 0.05, x, Y0 + l * lh + lh * 0.55, z1 + 0.04, 12);
-    }
-  for (let i = 0; i <= 4; i++) k.box(P.galv, 0.006, lh * levels, 0.006, x0 + ((x1 - x0) * i) / 4, Y0, z1 + 0.065);
-}
-
-/** Tower crane with slewing jib, trolley and hanging load (animated). */
-function towerCrane(k: Kit, x: number, z: number, H: number, jib: number, cj: number, ang: number) {
-  const P = k.P;
-  const cm = P.crane;
-  k.box(P.concrete, 0.3, 0.05, 0.3, x, Y0, z);
-  k.box(P.dark, 0.16, 0.03, 0.16, x, Y0 + 0.05, z);
-  lattice(k, cm, x, z, Y0 + 0.08, H - Y0 - 0.08, 0.13, 0.13, Math.round(H / 0.13), 0.008);
-  ladder(k, 'z', 1, x - 0.03, Y0 + 0.08, H - 0.05, z + 0.065);
-  const sl = k.node('slew', x, H, z, ang);
-  k.on(sl, () => {
-    k.cyl(P.dark, 0.085, 0.035, 0, 0, 0, 14);
-    k.box(cm, 0.16, 0.05, 0.16, 0, 0.035, 0);
-    // operator cab
-    k.rbox(P.white, 0.085, 0.085, 0.075, 0.07, 0.0, 0.12, 0.01);
-    k.panel(P.glass, 'x', 1, 0.12, 0.03, 0.1135, 0.06, 0.045);
-    k.panel(P.glass, 'z', 1, 0.07, 0.03, 0.1585, 0.07, 0.045);
-    k.box(P.team, 0.087, 0.016, 0.077, 0.07, 0.07, 0.12);
-    // tower head
-    const ap: V3 = [0, 0.5, 0];
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.bar(cm, [sx * 0.06, 0.085, sz * 0.06], ap, 0.012);
-    k.bar(cm, [-0.06, 0.25, 0], [0.06, 0.25, 0], 0.008);
-    k.sph(P.red_l, 0.012, 0, 0.51, 0, 6, 4);
-    // jib (triangular lattice)
-    const seg = 0.1;
-    const n = Math.round(jib / seg);
-    const yb = 0.09;
-    const ht = 0.085;
-    const zz = 0.045;
-    for (let i = 0; i < n; i++) {
-      const xa = 0.08 + i * seg;
-      const xb = xa + seg;
-      const xm = xa + seg / 2;
-      const taper = 1 - (i / n) * 0.35;
-      const tb = 1 - ((i + 1) / n) * 0.35;
-      for (const s of [-1, 1]) {
-        k.bar(cm, [xa, yb, s * zz * taper], [xb, yb, s * zz * tb], 0.008);
-        k.bar(cm, [xa, yb, s * zz * taper], [xm, yb + ht * taper, 0], 0.005);
-        k.bar(cm, [xm, yb + ht * taper, 0], [xb, yb, s * zz * tb], 0.005);
-      }
-      k.bar(cm, [xa, yb + ht * taper, 0], [xb, yb + ht * tb, 0], 0.008);
-      k.bar(cm, [xa, yb, -zz * taper], [xa, yb, zz * taper], 0.004);
-    }
-    // counter jib with walkway, winch and counterweights
-    k.box(cm, cj, 0.02, 0.012, -cj / 2 - 0.06, yb, 0.05);
-    k.box(cm, cj, 0.02, 0.012, -cj / 2 - 0.06, yb, -0.05);
-    k.box(P.grating, cj, 0.006, 0.09, -cj / 2 - 0.06, yb + 0.02, 0);
-    railing(k, [[-0.08, 0.055], [-cj - 0.04, 0.055]], yb + 0.026, 0.05, P.galv);
-    k.box(P.dark, 0.1, 0.06, 0.07, -cj * 0.45, yb + 0.026, 0);
-    k.box(P.team, 0.101, 0.015, 0.071, -cj * 0.45, yb + 0.06, 0);
-    for (let i = 0; i < 3; i++) k.box(P.concrete, 0.04, 0.11, 0.12, -cj + 0.015 - i * 0.043, yb - 0.07, 0, 6);
-    // pendant ties
-    k.tube(P.dark, ap, [jib * 0.55, yb + ht * 0.8, 0], 0.003, 4);
-    k.tube(P.dark, ap, [-cj + 0.02, yb + 0.03, 0], 0.003, 4);
-    // trolley + hook + load
-    const tr = k.node('trolley', jib * 0.62, yb, 0);
-    k.on(tr, () => {
-      k.box(P.dark, 0.06, 0.02, 0.08, 0, -0.02, 0);
-      const drop = H - 0.55;
-      k.tube(P.dark, [0, -0.02, -0.01], [0, -drop, -0.01], 0.0025, 3);
-      k.tube(P.dark, [0, -0.02, 0.01], [0, -drop, 0.01], 0.0025, 3);
-      k.box(P.yellow, 0.03, 0.04, 0.03, 0, -drop - 0.04, 0);
-      k.tube(P.dark, [0, -drop - 0.04, 0], [-0.09, -drop - 0.12, 0], 0.002, 3);
-      k.tube(P.dark, [0, -drop - 0.04, 0], [0.09, -drop - 0.12, 0], 0.002, 3);
-      // steel beam bundle
-      k.box(P.mats.col(0x8a3b26, 0.6, 0.4), 0.26, 0.025, 0.05, 0, -drop - 0.15, 0);
-    });
-  });
-  k.osc('slew', 'y', 0.55, 0.11, 0, 0);
-  k.specs.push({ k: 'slide', n: 'trolley', ax: 'x', a: jib * 0.22, f: 0.19, p: 1.2, b: 0 });
-}
-
-// ================================================================ CONSTRUCTION YARD (3x3)
-
-function conyard(k: Kit) {
-  const P = k.P;
-  const R = P.R;
-  slab(k, 3, 3);
-  // yard surface + markings
-  k.box(P.asphalt, 1.9, 0.004, 1.5, 0.45, Y0, 0.7);
-  dashes(k, P.yellow, -0.45, -0.02, 1.38, -0.02, 0.1, 0.05, 0.014, Y0 + 0.004);
-  dashes(k, P.yellow, -0.45, 1.42, 1.38, 1.42, 0.1, 0.05, 0.014, Y0 + 0.004);
-  for (let i = 0; i < 4; i++) k.box(P.white, 0.012, 0.002, 0.3, 0.75 + i * 0.16, Y0 + 0.004, 1.2);
-
-  // ---------------------------------------------------------- HQ (back left)
-  const hx0 = -1.42;
-  const hx1 = -0.12;
-  const hz0 = -1.42;
-  const hz1 = -0.52;
-  if (R === 'west') {
-    const top = block(k, { x0: hx0, x1: hx1 - 0.36, z0: hz0, z1: hz1, h: 0.5, door: -0.95, equip: 2 });
-    // glass curtain corner tower
-    k.box(P.base, 0.37, 0.03, 0.62, hx1 - 0.18, Y0, hz1 - 0.3);
-    k.box(P.wall2, 0.36, 0.66, 0.6, hx1 - 0.18, Y0, hz1 - 0.3);
-    curtain(k, 'z', 1, hx1 - 0.34, hx1 - 0.02, Y0 + 0.03, Y0 + 0.62, hz1, 0.08, 0.11);
-    curtain(k, 'x', 1, hz1 - 0.58, hz1 - 0.02, Y0 + 0.03, Y0 + 0.62, hx1, 0.08, 0.11);
-    k.box(P.team, 0.37, 0.025, 0.61, hx1 - 0.18, Y0 + 0.62, hz1 - 0.3);
-    flatRoof(k, hx1 - 0.36, hx1, hz1 - 0.6, hz1, Y0 + 0.66, 0.03, P.wall2);
-    satDish(k, hx1 - 0.18, Y0 + 0.67, hz1 - 0.3, 0.08, 0.8, 0.7);
-    antenna(k, hx0 + 0.12, top - 0.04, hz0 + 0.15, 0.4);
-    // entrance canopy
-    k.box(P.trim, 0.32, 0.015, 0.14, -0.95, Y0 + 0.23, hz1 + 0.07);
-    k.box(P.team, 0.32, 0.03, 0.01, -0.95, Y0 + 0.215, hz1 + 0.14);
-    for (const sx of [-1, 1]) k.cyl(P.galv, 0.006, 0.23, -0.95 + sx * 0.14, Y0, hz1 + 0.13, 6);
-  } else if (R === 'east') {
-    block(k, { x0: hx0, x1: hx1 - 0.3, z0: hz0, z1: hz1, h: 0.5, door: -1.0, equip: 3 });
-    // stair tower with vertical glazing and painted number
-    k.box(P.base, 0.31, 0.03, 0.4, hx1 - 0.15, Y0, hz1 - 0.2);
-    k.box(P.wallB, 0.3, 0.74, 0.38, hx1 - 0.15, Y0, hz1 - 0.2);
-    k.panel(P.win, 'z', 1, hx1 - 0.15, Y0 + 0.08, hz1 + 0.003, 0.08, 0.6, [0.125, 0, 0.25, 1.5]);
-    stencil(k, '07', 'x', 1, hz1 - 0.2, Y0 + 0.45, hx1, 0.3);
-    k.box(P.team, 0.31, 0.04, 0.39, hx1 - 0.15, Y0 + 0.66, hz1 - 0.2);
-    k.box(P.concrete, 0.32, 0.015, 0.4, hx1 - 0.15, Y0 + 0.74, hz1 - 0.2);
-    lattice(k, P.dark, hx1 - 0.15, hz1 - 0.25, Y0 + 0.75, 0.55, 0.08, 0.03, 4, 0.005);
-    k.sph(P.red_l, 0.012, hx1 - 0.15, Y0 + 1.31, hz1 - 0.25, 6, 4);
-    // exposed heating pipe along the front
-    k.pipe(P.rust, [[hx0 + 0.05, Y0 + 0.07, hz1 + 0.03], [hx1 - 0.35, Y0 + 0.07, hz1 + 0.03], [hx1 - 0.35, Y0 + 0.07, hz1 + 0.25], [hx1 - 0.35, Y0 + 0.2, hz1 + 0.25]], 0.014, 8);
-    k.pipe(P.galv, [[hx0 + 0.05, Y0 + 0.11, hz1 + 0.03], [hx1 - 0.36, Y0 + 0.11, hz1 + 0.03]], 0.008, 6);
-  } else if (R === 'asia') {
-    block(k, { x0: hx0, x1: hx1, z0: hz0, z1: hz1, h: 0.48, door: -0.75, roof: 'asian', rise: 0.3 });
-    // red/green columned portico with its own small roof
-    for (let i = 0; i < 4; i++) k.cyl(P.accent, 0.018, 0.24, -0.95 + i * 0.13, Y0, hz1 + 0.14, 10);
-    k.box(P.white, 0.48, 0.02, 0.17, -0.755, Y0, hz1 + 0.085);
-    k.box(P.accent, 0.46, 0.03, 0.03, -0.755, Y0 + 0.24, hz1 + 0.14);
-    asianRoof(k, P.pitch, ridgeMat(k), -0.755, Y0 + 0.27, hz1 + 0.09, 0.6, 0.24, 0.1, 0.03, P.accent);
-    // sign board with team colour
-    k.box(P.team, 0.24, 0.06, 0.012, -0.755, Y0 + 0.4, hz1 + 0.007);
-  } else {
-    const top = block(k, { x0: hx0, x1: hx1, z0: hz0, z1: hz1, h: 0.46, equip: 1 });
-    dome(k, -0.78, top - 0.04, -0.98, 0.24, P.s.faction === 'turkey' ? 'ottoman' : 'persian');
-    // arcade porch along the front
-    arcade(k, P.wall2, hx0 + 0.02, hx1 - 0.02, Y0, 0.25, hz1 + 0.12, 0.03, 6, 0.12, 0.1);
-    k.box(P.wall2, hx1 - hx0, 0.025, 0.15, (hx0 + hx1) / 2, Y0 + 0.25, hz1 + 0.06);
-    k.box(P.tile, hx1 - hx0 - 0.04, 0.03, 0.004, (hx0 + hx1) / 2, Y0 + 0.2, hz1 + 0.137, 0);
-    k.box(P.team, hx1 - hx0, 0.008, 0.01, (hx0 + hx1) / 2, Y0 + 0.262, hz1 + 0.137);
-    door(k, 'z', 1, -0.78, Y0, hz1, 0.12, 0.19, false);
-  }
-
-  // ---------------------------------------------------------- fabrication hall (back right)
-  const fx0 = 0.02;
-  const fx1 = 0.92;
-  const fz0 = -1.42;
-  const fz1 = -0.4;
-  const fcx = (fx0 + fx1) / 2;
-  const fcz = (fz0 + fz1) / 2;
-  const FW = fx1 - fx0;
-  const FD = fz1 - fz0;
-  if (R === 'east') {
-    k.box(P.brick, FW, 0.12, FD, fcx, Y0, fcz);
-    k.box(P.corrRust, FW, 0.32, FD, fcx, Y0 + 0.12, fcz);
-    dress(k, fx0, fx1, fz0, fz1, Y0, 0.44, { beacons: false });
-    gable(k, P.pitch, P.corrRust, fcx, Y0 + 0.44, fcz, FW, FD, 0.2, 0.03, false);
-    // painted double gate with a star
-    const gw = 0.42;
-    for (const s of [-1, 1]) {
-      k.box(P.accent, gw / 2 - 0.006, 0.34, 0.012, fcx + (s * gw) / 4, Y0, fz1 + 0.006);
-      k.box(P.dark, 0.008, 0.34, 0.016, fcx + (s * gw) / 2, Y0, fz1 + 0.008);
-    }
-    const star = regular(10, 0.06, Math.PI / 2).map(([a, b], i) => [a * (i % 2 ? 0.42 : 1), b * (i % 2 ? 0.42 : 1)] as P2);
-    k.prism(P.red, star, 0.006, fcx, Y0 + 0.2, fz1 + 0.014);
-    k.box(P.team, gw + 0.04, 0.03, 0.02, fcx, Y0 + 0.34, fz1 + 0.01);
-    punched(k, 'x', 1, fz0 + 0.1, fz1 - 0.1, 5, Y0 + 0.24, fx1, 0.08, 0.1);
-    k.box(P.brick, 0.08, 0.95, 0.08, fx0 + 0.15, Y0, fz0 + 0.15);
-    k.emit(fx0 + 0.15, Y0 + 1.0, fz0 + 0.15, 'smoke');
-  } else {
-    const wallM = R === 'west' ? P.wall2 : R === 'asia' ? P.wall2 : P.wall;
-    k.box(P.base, FW + 0.012, 0.03, FD + 0.012, fcx, Y0, fcz);
-    k.box(wallM, FW, 0.42, FD, fcx, Y0, fcz);
-    dress(k, fx0, fx1, fz0, fz1, Y0, 0.42, { beacons: false });
-    const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
-    vault(k, roofM, wallM, fcx, Y0 + 0.42, fcz, FW + 0.03, FD + 0.04, 0.22, false);
-    k.box(P.team, FW + 0.01, 0.024, FD + 0.01, fcx, Y0 + 0.38, fcz);
-    if (R === 'mideast') {
-      // pointed arch gateway
-      const op = archPts(fcx, Y0 + 0.001, 0.36, 0.2, 0.4, 6);
-      k.prism(P.wall2, [[fx0, Y0], [fx1, Y0], [fx1, Y0 + 0.42], [fx0, Y0 + 0.42]], 0.04, 0, 0, fz1 + 0.02, undefined, [op]);
-      k.prism(P.door, op.map(([a, b]) => [a, b] as P2), 0.01, 0, 0, fz1 - 0.01);
-      k.box(P.tile, 0.5, 0.04, 0.004, fcx, Y0 + 0.36, fz1 + 0.042, 0);
-      k.box(P.team, 0.06, 0.06, 0.006, fcx, Y0 + 0.3, fz1 + 0.042);
-    } else {
-      rollDoor(k, 'z', 1, fcx - 0.08, Y0, fz1, 0.44, 0.3, 0.3);
-      ribbon(k, 'x', 1, fz0 + 0.06, fz1 - 0.06, Y0 + 0.27, fx1, 0.08, R === 'asia');
-      door(k, 'z', 1, fx1 - 0.12, Y0, fz1, 0.09, 0.17, false);
-    }
-  }
-
-  // ---------------------------------------------------------- tower crane (behind the hall, slewing over the yard)
-  const cH = R === 'east' ? 1.95 : 1.85;
-  towerCrane(k, 1.2, -1.2, cH, 1.55, 0.5, -2.2);
-
-  // ---------------------------------------------------------- containers + prefab modules (front left)
-  const tints: Record<Region, number[]> = {
-    west: [0xb8a27a, 0x8a949a, 0x5f6b4a],
-    east: [0x8a3a2a, 0x3f5a7a, 0x5f6b4a],
-    asia: [0x3a6aa8, 0xd8dcdc, 0xa83a2a],
-    mideast: [0xc8b088, 0x8a3a2a, 0xe0dcd0],
-  };
-  const tc = tints[R];
-  container(k, -1.12, Y0, 0.35, 0, tc[0]);
-  container(k, -1.12, Y0, 0.52, 0, tc[1]);
-  container(k, -1.12, Y0 + 0.16, 0.44, 0, P.s.team);
-  container(k, -1.18, Y0, 1.2, Math.PI / 2, tc[2]);
-  // prefab office modules
-  for (let i = 0; i < 2; i++) {
-    const zx = -0.62;
-    const zz = 0.9 + i * 0.2;
-    k.rbox(P.white, 0.36, 0.15, 0.17, zx, Y0 + 0.02, zz, 0.008);
-    k.box(P.dark, 0.36, 0.02, 0.17, zx, Y0, zz);
-    punched(k, 'x', 1, zz - 0.06, zz + 0.06, 2, Y0 + 0.08, zx + 0.18, 0.04, 0.05);
-    k.box(P.team, 0.362, 0.014, 0.172, zx, Y0 + 0.15, zz);
-  }
-  door(k, 'z', 1, -0.62, Y0 + 0.02, 1.185, 0.06, 0.12, false);
-  hvac(k, -0.62, Y0 + 0.17, 0.9, 0.12, 0.08);
-  crate(k, -0.82, Y0, -0.1, 0.09);
-  crate(k, -0.72, Y0, -0.12, 0.08, 0.4);
-  crate(k, -0.77, Y0 + 0.072, -0.11, 0.07, 0.2);
-  barrels(k, -0.9, 0.05, 3, R === 'east' ? 0x4a5a3a : 0x2f5f8a, Y0);
-
-  // ---------------------------------------------------------- steel frame under construction (front right)
-  steelFrame(k, 0.35, 1.25, 0.25, 0.75, 2, 0.26);
-  // girders on dunnage
-  for (let i = 0; i < 3; i++) k.box(P.mats.col(0x8a3b26, 0.6, 0.4), 0.5, 0.02, 0.025, 0.75, Y0 + 0.012 + i * 0.02, 1.05 + i * 0.006);
-  k.box(P.wood, 0.03, 0.012, 0.12, 0.55, Y0, 1.06, 12);
-  k.box(P.wood, 0.03, 0.012, 0.12, 0.95, Y0, 1.06, 12);
-
-  // ---------------------------------------------------------- perimeter / entrance
-  if (R === 'west') {
-    jersey(k, 1.2, 1.42, 0.35, 0);
-    jersey(k, -0.1, 1.42, 0.35, 0);
-    boomGate(k, 0.2, 1.38, 0.5);
-    fence(k, [[-1.46, -0.25], [-1.46, 1.46], [-0.4, 1.46]], 0.16, Y0);
-  } else if (R === 'east') {
-    for (let i = 0; i < 4; i++) {
-      const x = -1.35 + i * 0.25;
-      k.box(P.concrete, 0.24, 0.16, 0.02, x, Y0, 1.46, 6);
-      k.box(P.concrete, 0.03, 0.18, 0.03, x + 0.125, Y0, 1.46);
-    }
-    guardBooth(k, 0.15, 1.3);
-    boomGate(k, 0.25, 1.42, 0.45);
-  } else if (R === 'asia') {
-    planter(k, -0.2, 1.38, 0.4, 0.1, 'shrub', Y0);
-    planter(k, 1.2, 1.38, 0.4, 0.1, 'shrub', Y0);
-    planter(k, -1.35, -0.3, 0.1, 0.35, 'tree', Y0);
-    boomGate(k, 0.25, 1.38, 0.45);
-  } else {
-    planter(k, -0.25, 1.36, 0.14, 0.14, 'palm', Y0);
-    planter(k, 1.32, 1.36, 0.14, 0.14, 'palm', Y0);
-    sandbags(k, [-1.45, 1.44], [-0.45, 1.44], 2, Y0);
-  }
-  flagPole(k, -1.3, -0.25, 0.75, Y0);
-  lightPole(k, 1.38, 0.1, 0.42, Math.PI, Y0);
-  lightPole(k, -0.35, 1.3, 0.42, 0, Y0);
-  k.height = 1.4;
-}
-
 
 // ================================================================ POWER PLANT (2x2)
 
@@ -2871,135 +2593,894 @@ function switchyard(k: Kit, x0: number, x1: number, z0: number, z1: number, nT =
   fence(k, [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0 + 0.15]], 0.14, Y0);
 }
 
+// ================================================================ military props (shared)
+
+/** Nation sign board on two posts (entrance sign) or flat on a wall; text from the nation's sign spec. */
+function signSpec(k: Kit, which: 'main' | 'unit' | 'num', num = ''): { key: string; spec: SignSpec } {
+  const S = k.P.N.sign;
+  const f = k.P.s.faction;
+  if (which === 'main') return { key: `main|${f}`, spec: { text: S.base, sub: S.sub || undefined, fg: S.fg, bg: S.bg, border: S.border, font: S.font, rtl: S.rtl, mark: S.mark, markColor: S.markColor } };
+  if (which === 'unit') return { key: `unit|${f}|${num}`, spec: { text: num, fg: S.fg, bg: S.bg, border: S.border, font: S.font, rtl: S.rtl } };
+  return { key: `num|${f}|${num}`, spec: { text: `${S.num} ${num}`, fg: '#f2f0e8', bg: '#2a2c2a', border: '#f2f0e8', font: S.font, rtl: S.rtl } };
+}
+
+/** Wall mounted sign board (face / sign / c / y / at as panel()). */
+function wallSign(k: Kit, face: Face, sign: number, c: number, y: number, at: number, w: number, which: 'main' | 'unit' | 'num' = 'main', num = '') {
+  const P = k.P;
+  const { key, spec } = signSpec(k, which, num);
+  const uv = signCell(key, spec);
+  faceBox(k, P.dark, face, sign, c, y - 0.006, at, w + 0.012, w / 4 + 0.012, 0.008);
+  k.panel(P.signs, face, sign, c, y, at + sign * 0.0085, w, w / 4, uv);
+}
+
+/** Free standing sign on two posts, facing +Z rotated by ry. */
+function postSign(k: Kit, x: number, z: number, ry: number, w = 0.34, which: 'main' | 'unit' | 'num' = 'main', num = '', y = 0) {
+  const P = k.P;
+  const { key, spec } = signSpec(k, which, num);
+  const uv = signCell(key, spec);
+  k.at(x, y, z, ry, () => {
+    for (const sx of [-1, 1]) k.box(P.dark, 0.012, 0.12 + w / 4, 0.012, sx * (w / 2 - 0.03), 0, -0.012);
+    k.box(P.dark, w + 0.012, w / 4 + 0.012, 0.012, 0, 0.11, -0.004);
+    k.panel(P.signs, 'z', 1, 0, 0.116, 0.0025, w, w / 4, uv);
+    k.box(P.concrete, w * 0.9, 0.03, 0.06, 0, 0, -0.01);
+  });
+}
+
+/** Precast concrete T-wall line (blast barrier) from a to b. */
+function tWall(k: Kit, a: P2, b: P2, h = 0.24, y = 0) {
+  const P = k.P;
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const ry = -Math.atan2(b[1] - a[1], b[0] - a[0]);
+  const n = Math.max(1, Math.round(len / 0.12));
+  const sw = len / n;
+  k.at((a[0] + b[0]) / 2, y, (a[1] + b[1]) / 2, ry, () => {
+    for (let i = 0; i < n; i++) {
+      const xx = -len / 2 + sw * (i + 0.5);
+      k.box(P.panel, sw - 0.006, 0.026, 0.09, xx, 0, 0, 1.3);
+      k.box(P.panel, sw - 0.006, h, 0.032, xx, 0.026, 0, 1.3);
+      // lifting eyes
+      k.box(P.dark, 0.008, 0.008, 0.034, xx, h + 0.024, 0);
+    }
+    // team painted band along the top (readable from the RTS camera)
+    k.box(P.team, len - 0.004, 0.022, 0.034, 0, h - 0.03, 0);
+  });
+}
+
+/** Concertina razor wire coil along a to b at height y. */
+function razor(k: Kit, a: P2, b: P2, y: number, r = 0.022) {
+  const P = k.P;
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const ry = -Math.atan2(b[1] - a[1], b[0] - a[0]);
+  const n = Math.max(2, Math.round(len / 0.035));
+  k.at((a[0] + b[0]) / 2, y + r, (a[1] + b[1]) / 2, ry, () => {
+    for (let i = 0; i < n; i++) {
+      const xx = -len / 2 + (len * (i + 0.5)) / n;
+      k.at(xx, 0, 0, 0, () => {
+        const g = new THREE.TorusGeometry(r, 0.0018, 3, 9);
+        g.rotateY(Math.PI / 2 + (i % 2 ? 0.35 : -0.35));
+        k.add(g, P.galv, 0);
+      });
+    }
+  });
+}
+
+/** Light mast with a cluster of floodlights aimed along ry (+X when ry = 0). */
+function floodMast(k: Kit, x: number, z: number, h = 0.62, ry = 0, y = Y0) {
+  const P = k.P;
+  k.box(P.concrete, 0.07, 0.03, 0.07, x, y, z);
+  k.cyl(P.galv, 0.009, h, x, y + 0.03, z, 6, 0.006);
+  k.at(x, y + h + 0.03, z, ry, () => {
+    k.box(P.galv, 0.012, 0.012, 0.12, 0.0, 0, 0);
+    for (const sz of [-0.04, 0.04]) {
+      k.at(0.015, 0.008, sz, 0, () => {
+        k.box(P.dark, 0.03, 0.036, 0.04, 0, -0.018, 0);
+        k.box(P.flood, 0.004, 0.028, 0.032, 0.016, -0.014, 0);
+      }, 0, -0.35);
+    }
+  });
+}
+
+/** Trailer mounted diesel generator set (exhaust smoke), facing +X rotated by ry. */
+function genset(k: Kit, x: number, z: number, ry = 0, s = 1, y = Y0, smoke = false) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    k.box(P.dark, 0.26 * s, 0.02 * s, 0.11 * s, 0, 0.03 * s, 0);
+    for (const sz of [-1, 1]) k.tube(P.rubber, [-0.03 * s, 0.03 * s, sz * 0.06 * s], [-0.03 * s, 0.03 * s, sz * 0.075 * s], 0.03 * s, 10);
+    k.bar(P.dark, [0.13 * s, 0.035 * s, 0], [0.22 * s, 0.01 * s, 0], 0.008 * s);
+    k.rbox(P.accent, 0.22 * s, 0.11 * s, 0.12 * s, 0, 0.05 * s, 0, 0.008);
+    // louvres + control panel + exhaust
+    for (let i = 0; i < 4; i++) k.box(P.dark, 0.004, 0.006, 0.08 * s, 0.111 * s, 0.07 * s + i * 0.018 * s, 0);
+    k.box(P.dark, 0.05 * s, 0.04 * s, 0.003, -0.05 * s, 0.09 * s, 0.061 * s);
+    k.box(P.green_l, 0.008, 0.006, 0.002, -0.06 * s, 0.1 * s, 0.063 * s);
+    k.cyl(P.dark, 0.008 * s, 0.05 * s, -0.07 * s, 0.16 * s, -0.03 * s, 6);
+    k.box(P.team, 0.222 * s, 0.012 * s, 0.122 * s, 0, 0.15 * s, 0);
+    if (smoke) k.emit(-0.07 * s, 0.24 * s, -0.03 * s, 'smoke');
+  });
+}
+
+/** Collapsible fuel bladder (pillow tank) inside a low earth berm. */
+function fuelBladder(k: Kit, x: number, z: number, L = 0.5, W = 0.3, ry = 0, y = Y0) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    const berm: P2[] = [
+      [-0.04, 0],
+      [0.04, 0],
+      [0.015, 0.04],
+      [-0.015, 0.04],
+    ];
+    for (const sz of [-1, 1]) k.at(0, 0, (sz * (W + 0.08)) / 2, 0, () => k.at(0, 0, 0, Math.PI / 2, () => k.prism(P.soil, berm, L + 0.12)));
+    for (const sx of [-1, 1]) k.at((sx * (L + 0.08)) / 2, 0, 0, 0, () => k.prism(P.soil, berm, W + 0.04));
+    const g = new THREE.CapsuleGeometry(W / 2, L - W, 4, 14);
+    g.rotateZ(Math.PI / 2);
+    g.scale(1, 0.16, 1);
+    g.translate(0, W * 0.08, 0);
+    k.add(g, P.mats.col(0x2a2e26, 0.7, 0.1), 0);
+    k.tube(P.dark, [L / 2 - 0.02, 0.02, 0], [L / 2 + 0.06, 0.02, 0.0], 0.008, 6);
+  });
+}
+
+/** Military truck (cab at +X), kind: cargo (tarp), fuel (tank), crane. */
+function truck(k: Kit, x: number, z: number, ry: number, kind: 'cargo' | 'fuel' | 'crane' = 'cargo', s = 1, y = Y0) {
+  const P = k.P;
+  const body = P.accent;
+  k.at(x, y, z, ry, () => {
+    k.box(P.dark, 0.5 * s, 0.03 * s, 0.1 * s, 0, 0.035 * s, 0);
+    for (const wx of [0.17, -0.07, -0.17])
+      for (const sz of [-1, 1]) k.tube(P.rubber, [wx * s, 0.035 * s, sz * 0.055 * s], [wx * s, 0.035 * s, sz * 0.085 * s], 0.035 * s, 10);
+    // cab
+    k.rbox(body, 0.12 * s, 0.12 * s, 0.16 * s, 0.18 * s, 0.05 * s, 0, 0.012);
+    k.box(P.glass, 0.004, 0.045 * s, 0.13 * s, 0.241 * s, 0.11 * s, 0);
+    for (const sz of [-1, 1]) k.box(P.glass, 0.05 * s, 0.035 * s, 0.003, 0.19 * s, 0.11 * s, sz * 0.081 * s);
+    k.box(P.dark, 0.012, 0.03 * s, 0.17 * s, 0.245 * s, 0.05 * s, 0);
+    for (const sz of [-1, 1]) k.sph(P.lamp, 0.008 * s, 0.248 * s, 0.07 * s, sz * 0.06 * s, 6, 4);
+    if (kind === 'fuel') {
+      k.tube(P.mats.col(mix(P.N.drab, 0xd8d8d0, 0.2), 0.5, 0.35), [-0.25 * s, 0.13 * s, 0], [0.1 * s, 0.13 * s, 0], 0.06 * s, 12);
+      k.sph(P.mats.col(mix(P.N.drab, 0xd8d8d0, 0.2), 0.5, 0.35), 0.06 * s, -0.25 * s, 0.13 * s, 0, 12, 6);
+      k.box(P.red, 0.03 * s, 0.03 * s, 0.003, -0.08 * s, 0.13 * s, 0.061 * s);
+      k.box(P.dark, 0.3 * s, 0.006, 0.02 * s, -0.08 * s, 0.19 * s, 0);
+    } else if (kind === 'crane') {
+      k.box(body, 0.34 * s, 0.04 * s, 0.15 * s, -0.08 * s, 0.05 * s, 0);
+      k.cyl(P.crane, 0.035 * s, 0.04 * s, -0.12 * s, 0.09 * s, 0, 10);
+      k.at(-0.12 * s, 0.13 * s, 0, 0.4, () => {
+        k.box(P.crane, 0.05 * s, 0.05 * s, 0.05 * s, 0, 0, 0);
+        k.boxR(P.crane, 0.38 * s, 0.03 * s, 0.035 * s, 0.17 * s, 0.07 * s, 0, 0, 0, 0.35);
+        k.tube(P.dark, [0.34 * s, 0.13 * s, 0], [0.34 * s, -0.05 * s, 0], 0.002, 3);
+        k.box(P.yellow, 0.02 * s, 0.025 * s, 0.02 * s, 0.34 * s, -0.08 * s, 0);
+      });
+      for (const sz of [-1, 1]) k.box(P.dark, 0.02 * s, 0.05 * s, 0.03 * s, -0.2 * s, 0, sz * 0.1 * s);
+    } else {
+      k.box(body, 0.33 * s, 0.04 * s, 0.16 * s, -0.08 * s, 0.05 * s, 0);
+      // tarp over hoops
+      const tarp = P.canvas;
+      k.box(tarp, 0.32 * s, 0.1 * s, 0.155 * s, -0.08 * s, 0.09 * s, 0);
+      k.at(-0.08 * s, 0.19 * s, 0, Math.PI / 2, () => {
+        const g = new THREE.CylinderGeometry(0.0775 * s, 0.0775 * s, 0.32 * s, 10, 1, false, -Math.PI / 2, Math.PI);
+        g.rotateX(-Math.PI / 2);
+        g.scale(1, 0.4, 1);
+        k.add(g, tarp, 3);
+      });
+    }
+    k.box(P.team, 0.122 * s, 0.014 * s, 0.162 * s, 0.18 * s, 0.17 * s, 0);
+  });
+}
+
+/** Light utility vehicle (Humvee / Tigr / Wolf style), facing +X rotated by ry. */
+function jeep(k: Kit, x: number, z: number, ry: number, s = 1, y = Y0) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    for (const wx of [0.09, -0.09]) for (const sz of [-1, 1]) k.tube(P.rubber, [wx * s, 0.03 * s, sz * 0.055 * s], [wx * s, 0.03 * s, sz * 0.078 * s], 0.03 * s, 10);
+    k.rbox(P.accent, 0.3 * s, 0.06 * s, 0.15 * s, 0, 0.03 * s, 0, 0.012);
+    k.rbox(P.accent, 0.16 * s, 0.05 * s, 0.14 * s, -0.03 * s, 0.09 * s, 0, 0.01);
+    k.box(P.glass, 0.004, 0.035 * s, 0.12 * s, 0.051 * s, 0.095 * s, 0);
+    for (const sz of [-1, 1]) k.box(P.glass, 0.07 * s, 0.03 * s, 0.003, -0.03 * s, 0.1 * s, sz * 0.071 * s);
+    k.box(P.dark, 0.01, 0.03 * s, 0.13 * s, 0.152 * s, 0.035 * s, 0);
+    k.box(P.team, 0.12 * s, 0.006, 0.08 * s, -0.03 * s, 0.141 * s, 0);
+    k.cyl(P.dark, 0.003, 0.14 * s, -0.12 * s, 0.09 * s, -0.05 * s, 4);
+  });
+}
+
+/** Tracked engineering dozer with blade (facing +X). */
+function dozer(k: Kit, x: number, z: number, ry: number, s = 1, y = Y0) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    for (const sz of [-1, 1]) {
+      k.rbox(P.rubber, 0.3 * s, 0.07 * s, 0.05 * s, 0, 0, sz * 0.075 * s, 0.025 * s);
+      k.box(P.dark, 0.22 * s, 0.05 * s, 0.052 * s, 0, 0.01 * s, sz * 0.075 * s);
+    }
+    k.rbox(P.accent, 0.26 * s, 0.08 * s, 0.12 * s, -0.01 * s, 0.06 * s, 0, 0.01);
+    k.rbox(P.accent, 0.1 * s, 0.09 * s, 0.1 * s, -0.06 * s, 0.14 * s, 0, 0.01);
+    k.box(P.glass, 0.004, 0.05 * s, 0.08 * s, -0.009 * s, 0.155 * s, 0);
+    k.cyl(P.dark, 0.008 * s, 0.07 * s, 0.07 * s, 0.14 * s, 0.03 * s, 6);
+    // blade + push arms
+    k.at(0.2 * s, 0, 0, 0, () => {
+      k.boxR(P.drab, 0.025 * s, 0.09 * s, 0.24 * s, 0, 0.0, 0, 0, 0, 0.15);
+      k.box(P.dark, 0.012 * s, 0.012 * s, 0.24 * s, 0.012 * s, 0.0, 0);
+    });
+    for (const sz of [-1, 1]) k.bar(P.dark, [0.1 * s, 0.04 * s, sz * 0.09 * s], [0.19 * s, 0.05 * s, sz * 0.09 * s], 0.014 * s);
+    k.box(P.team, 0.1 * s, 0.012 * s, 0.102 * s, -0.06 * s, 0.23 * s, 0);
+  });
+}
+
+/** Wooden pallet with strapped crates under a tarp. */
+function pallet(k: Kit, x: number, z: number, ry = 0, y = Y0) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    k.box(P.wood, 0.14, 0.018, 0.12, 0, 0, 0, 8);
+    k.box(P.canvas, 0.13, 0.07, 0.11, 0, 0.018, 0);
+    k.box(P.dark, 0.132, 0.004, 0.012, 0, 0.088, 0.02);
+    k.box(P.dark, 0.132, 0.004, 0.012, 0, 0.088, -0.02);
+  });
+}
+
+/** Ammunition / equipment boxes in olive drab. */
+function ammoBoxes(k: Kit, x: number, z: number, n = 4, ry = 0, y = Y0) {
+  const P = k.P;
+  k.at(x, y, z, ry, () => {
+    for (let i = 0; i < n; i++) {
+      const row = i % 3;
+      const lvl = Math.floor(i / 3);
+      k.rbox(P.drab, 0.07, 0.035, 0.04, -0.075 + row * 0.075, lvl * 0.036, 0, 0.004);
+      k.box(P.yellow, 0.02, 0.008, 0.002, -0.075 + row * 0.075, lvl * 0.036 + 0.015, 0.021);
+    }
+  });
+}
+
+/** Camouflage net on poles over a rectangle (sagging between the poles, peak at the centre). */
+function camoNet(k: Kit, x0: number, x1: number, z0: number, z1: number, h: number, peak = 0.05, y = Y0) {
+  const P = k.P;
+  const nx = 6;
+  const nz = 6;
+  const pos: number[] = [];
+  const uvs: number[] = [];
+  const idx: number[] = [];
+  const W = x1 - x0;
+  const D = z1 - z0;
+  for (let j = 0; j <= nz; j++)
+    for (let i = 0; i <= nx; i++) {
+      const u = i / nx;
+      const v = j / nz;
+      const xx = x0 + W * u;
+      const zz = z0 + D * v;
+      // sag between edge poles, lifted to a peak in the middle, hanging lower at the very edges
+      const eu = Math.sin(u * Math.PI);
+      const ev = Math.sin(v * Math.PI);
+      const yy = y + h - 0.04 * (1 - eu * ev) + peak * eu * ev + 0.008 * Math.sin(u * 17 + v * 11);
+      pos.push(xx, yy, zz);
+      uvs.push(xx * 2.2, zz * 2.2);
+    }
+  for (let j = 0; j < nz; j++)
+    for (let i = 0; i < nx; i++) {
+      const a = j * (nx + 1) + i;
+      const b = a + 1;
+      const c = a + nx + 1;
+      const d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  k.mesh(P.net, pos, idx, uvs);
+  // poles at the corners and the centre
+  for (const [px, pz] of [
+    [x0 + 0.02, z0 + 0.02],
+    [x1 - 0.02, z0 + 0.02],
+    [x0 + 0.02, z1 - 0.02],
+    [x1 - 0.02, z1 - 0.02],
+  ] as P2[])
+    k.cyl(P.dark, 0.005, h - 0.04, px, y, pz, 4);
+  k.cyl(P.dark, 0.005, h + peak, (x0 + x1) / 2, y, (z0 + z1) / 2, 4);
+}
+
+/** Wall mounted split air conditioner. */
+function aircon(k: Kit, face: Face, sign: number, a: number, y: number, at: number) {
+  const P = k.P;
+  faceBox(k, P.galv, face, sign, a, y, at, 0.07, 0.05, 0.03);
+  if (face === 'z') k.at(a, y + 0.025, at + sign * 0.031, sign > 0 ? 0 : Math.PI, () => k.cyl(P.dark, 0.016, 0.002, 0, 0, 0, 10), Math.PI / 2);
+  else k.at(at + sign * 0.031, y + 0.025, a, sign > 0 ? Math.PI / 2 : -Math.PI / 2, () => k.cyl(P.dark, 0.016, 0.002, 0, 0, 0, 10), Math.PI / 2);
+}
+
+/** Cable tray on short posts along a polyline at height h (power cable runs). */
+function cableRun(k: Kit, pts: P2[], h = 0.08, y = Y0) {
+  const P = k.P;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, az] = pts[i];
+    const [bx, bz] = pts[i + 1];
+    const len = Math.hypot(bx - ax, bz - az);
+    const ry = -Math.atan2(bz - az, bx - ax);
+    k.at((ax + bx) / 2, y, (az + bz) / 2, ry, () => {
+      k.box(P.galv, len + 0.03, 0.012, 0.04, 0, h, 0);
+      k.box(P.black, len + 0.02, 0.008, 0.03, 0, h + 0.008, 0);
+      const n = Math.max(1, Math.round(len / 0.18));
+      for (let j = 0; j <= n; j++) k.box(P.galv, 0.008, h, 0.008, -len / 2 + (len * j) / n, 0, 0);
+    });
+  }
+}
+
+/** Fixed AESA radar face (team framed), facing +X in the current frame. */
+function aesaFace(k: Kit, w: number, h: number, x = 0, y = 0, z = 0) {
+  const P = k.P;
+  k.box(P.drab, 0.03, h, w, x - 0.015, y, z);
+  k.box(P.aesa, 0.004, h - 0.02, w - 0.02, x + 0.002, y + 0.01, z, 10);
+  k.box(P.team, 0.034, 0.014, w + 0.004, x - 0.015, y + h - 0.014, z);
+}
+
+/** Simple rotating beacon (production / warning), shown only while a unit rolls out. */
+function prodBeacon(k: Kit, name: string, x: number, y: number, z: number) {
+  const P = k.P;
+  k.cyl(P.dark, 0.014, 0.012, x, y, z, 8);
+  k.cyl(P.mats.col(0x6a4a10, 0.3, 0.1), 0.012, 0.02, x, y + 0.012, z, 8);
+  const o = k.node(name, x, y + 0.012, z);
+  k.on(o, () => {
+    k.box(P.amber_l, 0.03, 0.016, 0.008, 0, 0.002, 0);
+  });
+  k.specs.push({ k: 'prod', n: name, ax: 'y', a: 0, mode: 'vis', v: 9 });
+}
+
+/** Earth-covered bunker mound (ammo / command) with a concrete portal facing +Z. */
+function bermBunker(k: Kit, x: number, z: number, w: number, d: number, h: number, ry = 0) {
+  const P = k.P;
+  k.at(x, Y0, z, ry, () => {
+    const prof: P2[] = [
+      [-w / 2 - h * 0.6, 0],
+      [w / 2 + h * 0.6, 0],
+      [w / 2, h],
+      [-w / 2, h],
+    ];
+    k.at(0, 0, 0, 0, () => k.prism(P.soil, prof, d));
+    k.box(P.soil, w - 0.02, 0.012, d - 0.04, 0, h, 0);
+    // portal
+    k.box(P.panel, w * 0.62, h * 0.95, 0.05, 0, 0, d / 2 + 0.02);
+    k.box(P.door, w * 0.4, h * 0.62, 0.01, 0, 0, d / 2 + 0.046);
+    k.box(P.team, w * 0.62, 0.02, 0.052, 0, h * 0.95 - 0.03, d / 2 + 0.021);
+    k.box(P.lamp, 0.03, 0.01, 0.012, 0, h * 0.72, d / 2 + 0.05);
+    for (const sx of [-1, 1]) k.box(P.panel, 0.03, h * 0.8, 0.1, sx * (w * 0.31 + 0.015), 0, d / 2 + 0.05);
+    vent(k, w * 0.25, h, -d * 0.2, 0.018);
+  });
+}
+
+/** Container stack / prefab module (ISO 20ft) with optional windows + door (prefab cabin). */
+function cabin(k: Kit, x: number, y: number, z: number, ry: number, tint: number, L = 0.42, win = true) {
+  const P = k.P;
+  const H = 0.17;
+  const Wd = 0.17;
+  const m = P.mats.at(Tile.Corr, tint, 2.4);
+  k.at(x, y, z, ry, () => {
+    k.box(m, L, H, Wd, 0, 0, 0);
+    k.box(P.mats.col(shade(tint, 0.7), 0.6, 0.4), L + 0.006, 0.012, Wd + 0.006, 0, H - 0.006, 0);
+    k.box(P.mats.col(shade(tint, 0.7), 0.6, 0.4), L + 0.006, 0.012, Wd + 0.006, 0, 0, 0);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.dark, 0.012, H, 0.012, sx * (L / 2 - 0.004), 0, sz * (Wd / 2 - 0.004));
+    if (win) {
+      for (let i = 0; i < 2; i++) {
+        const c = -L / 2 + L * (0.3 + i * 0.4);
+        k.panel(P.win, 'z', 1, c, 0.07, Wd / 2 + 0.003, 0.06, 0.05, cell(k));
+        faceBox(k, P.dark, 'z', 1, c, 0.065, Wd / 2, 0.07, 0.006, 0.012);
+        for (let j = 0; j < 3; j++) faceBox(k, P.dark, 'z', 1, c - 0.02 + j * 0.02, 0.07, Wd / 2 + 0.002, 0.003, 0.05, 0.004);
+      }
+      k.panel(P.door, 'x', 1, 0, 0.0, L / 2 + 0.003, 0.07, 0.13);
+      k.box(P.lamp, 0.006, 0.006, 0.02, L / 2 + 0.006, 0.14, 0);
+    }
+  });
+}
+
+// ================================================================ CONSTRUCTION YARD (3x3)
+
+/** Rail-mounted gantry crane spanning the yard: travels along z, trolley along x, with a prefab module on the hook. */
+function gantryCrane(k: Kit, cx: number, z: number, span: number, H: number, zAmp: number) {
+  const P = k.P;
+  const cm = P.crane;
+  // rails on concrete sleepers (static, root)
+  for (const sx of [-1, 1]) {
+    const rx = cx + (sx * span) / 2;
+    k.box(P.concrete, 0.08, 0.018, 1.9, rx, Y0, 0.47);
+    k.box(P.steel, 0.018, 0.016, 1.9, rx, Y0 + 0.018, 0.47);
+    for (const zz of [-0.47, 1.41]) k.box(P.hazard, 0.06, 0.04, 0.03, rx, Y0, zz);
+  }
+  const g = k.node('gantry', cx, Y0 + 0.034, z);
+  k.on(g, () => {
+    for (const sx of [-1, 1]) {
+      const lx = (sx * span) / 2;
+      // end bogie with wheels
+      k.box(cm, 0.07, 0.045, 0.42, lx, 0, 0);
+      for (const sz of [-0.15, 0.15]) k.at(lx, 0.022, sz, 0, () => k.tube(P.dark, [-0.04, 0, 0], [0.04, 0, 0], 0.022, 10));
+      k.box(P.hazard, 0.072, 0.02, 0.43, lx, 0.044, 0);
+      // A-frame legs
+      for (const sz of [-1, 1]) k.bar(cm, [lx, 0.06, sz * 0.17], [lx, H, sz * 0.07], 0.034);
+      k.bar(cm, [lx, 0.3, -0.13], [lx, 0.3, 0.13], 0.02);
+      k.bar(cm, [lx, 0.3, -0.13], [lx, 0.62, 0.1], 0.014);
+      // ladder up one leg
+      if (sx > 0) for (let yy = 0.12; yy < H - 0.05; yy += 0.05) k.box(P.galv, 0.004, 0.004, 0.04, lx + 0.02, yy, 0.19 - (yy / H) * 0.1);
+    }
+    // twin box girders + end ties + walkway
+    for (const sz of [-1, 1]) {
+      k.box(cm, span + 0.08, 0.075, 0.04, 0, H, sz * 0.07);
+      k.box(P.team, span - 0.1, 0.02, 0.042, 0, H + 0.04, sz * 0.07);
+    }
+    for (const sx of [-1, 1]) k.box(cm, 0.07, 0.09, 0.2, (sx * span) / 2, H - 0.005, 0);
+    k.box(P.grating, span - 0.06, 0.006, 0.06, 0, H + 0.075, 0.13);
+    railing(k, [[-span / 2 + 0.05, 0.16], [span / 2 - 0.05, 0.16]], H + 0.081, 0.045, P.yellow);
+    // operator cab under the girder
+    k.box(cm, 0.12, 0.09, 0.11, span / 2 - 0.16, H - 0.1, -0.11);
+    k.box(P.glass, 0.004, 0.05, 0.09, span / 2 - 0.22, H - 0.08, -0.11);
+    k.box(P.glass, 0.1, 0.05, 0.004, span / 2 - 0.16, H - 0.08, -0.165);
+    for (const sx of [-1, 1]) k.box(P.yellow, 0.02, 0.025, 0.02, sx * (span / 2 + 0.03), H + 0.075, -0.07);
+    // trolley + hoist + load
+    const tr = k.node('trolley', 0, H + 0.075, 0);
+    k.on(tr, () => {
+      k.box(cm, 0.18, 0.05, 0.22, 0, 0, 0);
+      k.box(P.dark, 0.12, 0.05, 0.08, 0, 0.05, -0.03);
+      k.tube(P.galv, [-0.06, 0.06, 0.06], [0.06, 0.06, 0.06], 0.025, 10);
+      const drop = 0.48;
+      for (const sx of [-0.03, 0.03]) k.tube(P.dark, [sx, 0, 0], [sx, -drop, 0], 0.0025, 3);
+      k.box(P.yellow, 0.05, 0.04, 0.035, 0, -drop - 0.035, 0);
+      // spreader + slings
+      k.box(P.dark, 0.36, 0.012, 0.02, 0, -drop - 0.06, 0);
+      for (const sx of [-1, 1]) k.tube(P.dark, [sx * 0.17, -drop - 0.06, 0], [sx * 0.17, -drop - 0.12, 0], 0.002, 3);
+      // prefab module on the hook
+      k.at(0, -drop - 0.12 - 0.15, 0, 0, () => {
+        k.box(P.wall, 0.4, 0.15, 0.17, 0, 0, 0);
+        k.box(P.team, 0.402, 0.015, 0.172, 0, 0.13, 0);
+        for (const wx of [-0.08, 0.08]) k.box(P.glass, 0.07, 0.05, 0.004, wx, 0.05, 0.086);
+      });
+    });
+  });
+  k.specs.push({ k: 'slide', n: 'gantry', ax: 'z', a: zAmp, f: 0.1, p: 0.6, b: 0 });
+  k.specs.push({ k: 'slide', n: 'trolley', ax: 'x', a: span * 0.3, f: 0.17, p: 2.1, b: 0 });
+}
+
+/** A-frame rack of precast wall panels. */
+function panelRack(k: Kit, x: number, z: number, ry: number) {
+  const P = k.P;
+  k.at(x, Y0, z, ry, () => {
+    k.box(P.dark, 0.36, 0.02, 0.14, 0, 0, 0);
+    for (const sx of [-0.16, 0, 0.16]) {
+      k.bar(P.drab, [sx, 0.02, -0.06], [sx, 0.24, 0], 0.012);
+      k.bar(P.drab, [sx, 0.02, 0.06], [sx, 0.24, 0], 0.012);
+    }
+    for (const sz of [-1, 1])
+      for (let i = 0; i < 2; i++) k.boxR(P.panel, 0.34, 0.22, 0.016, 0, 0.13, sz * (0.025 + i * 0.022), 0, sz * -0.22, 0, 1.6);
+  });
+}
+
+/** Half assembled prefab module: floor frame, two walls, corner posts. */
+function prefabFrame(k: Kit, x: number, z: number, ry: number) {
+  const P = k.P;
+  k.at(x, Y0, z, ry, () => {
+    k.box(P.dark, 0.42, 0.025, 0.18, 0, 0, 0);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.steel, 0.014, 0.17, 0.014, sx * 0.2, 0.025, sz * 0.083);
+    k.box(P.wall, 0.42, 0.17, 0.012, 0, 0.025, -0.084);
+    k.box(P.wall, 0.012, 0.17, 0.17, -0.205, 0.025, 0);
+    k.box(P.steel, 0.42, 0.014, 0.014, 0, 0.19, 0.083);
+    k.box(P.grating, 0.38, 0.006, 0.15, 0, 0.025, 0.0);
+  });
+}
+
+function conyard(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  slab(k, 3, 3);
+  // cast concrete work pad under the gantry (bare concrete, no markings)
+  k.box(P.concrete, 2.66, 0.006, 1.88, 0.0, Y0, 0.48);
+  const roof = N.roofStyle === 'hip' ? 'hip' : N.roofStyle === 'gable' ? 'gable' : 'flat';
+
+  // ---------------------------------------------------------- command block (back left)
+  const top = block(k, { x0: -1.42, x1: -0.34, z0: -1.42, z1: -0.68, h: 0.5, floors: 2, door: -0.62, equip: 2, roof, sign: false, emblem: true });
+  wallSign(k, 'z', 1, -1.08, Y0 + 0.31, -0.68, 0.36, 'main');
+  aircon(k, 'x', 1, -1.0, Y0 + 0.08, -0.34);
+  aircon(k, 'x', 1, -1.2, Y0 + 0.32, -0.34);
+  sandbags(k, [-0.78, -0.56], [-0.46, -0.56], 2, Y0);
+  if (roof === 'flat') satDish(k, -1.25, top - 0.05, -1.25, 0.09, 0.8, 0.7);
+  // comms mast in the gap behind the yard
+  lattice(k, P.galv, -0.17, -1.3, Y0, 1.25, 0.14, 0.05, 8, 0.007);
+  for (const [y, a] of [
+    [0.9, 0.5],
+    [1.05, 2.2],
+  ] as P2[])
+    k.at(-0.17, Y0 + y, -1.3, a, () => k.box(P.white, 0.03, 0.12, 0.05, 0.05, 0, 0));
+  k.blinkLight(-0.17, Y0 + 1.3, -1.3, 0.016, 1.5, 0);
+  satDish(k, -0.17, Y0, -0.88, 0.08, 0.85, 0.9);
+
+  // ---------------------------------------------------------- engineering workshop (back right)
+  const wx0 = 0.04;
+  const wx1 = 1.42;
+  const wz0 = -1.42;
+  const wz1 = -0.62;
+  const wcx = (wx0 + wx1) / 2;
+  const wcz = (wz0 + wz1) / 2;
+  const shed = N.camoHalls ? P.camo : P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d4c8, 0.35), 1.8);
+  k.box(P.base, wx1 - wx0 + 0.014, 0.03, wz1 - wz0 + 0.014, wcx, Y0, wcz);
+  k.box(shed, wx1 - wx0, 0.4, wz1 - wz0, wcx, Y0, wcz);
+  dress(k, wx0, wx1, wz0, wz1, Y0, 0.4, { beacons: false, vent: false });
+  k.box(P.team, wx1 - wx0 + 0.008, 0.026, wz1 - wz0 + 0.008, wcx, Y0 + 0.36, wcz);
+  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true);
+  else gable(k, P.pitch, shed, wcx, Y0 + 0.4, wcz, wx1 - wx0, wz1 - wz0, 0.2, 0.03, true);
+  rollDoor(k, 'z', 1, 0.42, Y0, wz1, 0.36, 0.3, 0.65);
+  k.box(P.lamp, 0.24, 0.012, 0.01, 0.42, Y0 + 0.27, wz1 - 0.12);
+  rollDoor(k, 'z', 1, 1.0, Y0, wz1, 0.36, 0.3, 0);
+  stencil(k, '01', 'z', 1, 0.42, Y0 + 0.36, wz1, 0.2);
+  stencil(k, '02', 'z', 1, 1.0, Y0 + 0.36, wz1, 0.2);
+  for (let i = 0; i < 3; i++) vent(k, 0.3 + i * 0.4, Y0 + 0.62, -1.02, 0.026);
+
+  // ---------------------------------------------------------- gantry crane over the prefab yard
+  gantryCrane(k, 0.0, 0.48, 2.62, 1.02, 0.36);
+  // prefab sections under the crane path (kept low so the hook load clears them)
+  prefabFrame(k, -0.42, 0.62, 0);
+  k.emit(-0.62, Y0 + 0.2, 0.62, 'spark');
+  cabin(k, 0.62, Y0, 0.08, 0, N.wall, 0.42);
+  cabin(k, 0.62, Y0, 0.34, 0, N.wall, 0.42);
+  panelRack(k, -0.88, 1.0, 0.0);
+  // steel beams + rebar on dunnage
+  for (let i = 0; i < 3; i++) k.box(P.mats.col(0x8a3b26, 0.6, 0.45), 0.5, 0.02, 0.025, 0.55, Y0 + 0.012 + i * 0.02, 0.98 + i * 0.006);
+  k.box(P.wood, 0.03, 0.012, 0.12, 0.35, Y0, 0.99);
+  k.box(P.wood, 0.03, 0.012, 0.12, 0.75, Y0, 0.99);
+  for (let i = 0; i < 6; i++) k.tube(P.rust, [0.3, Y0 + 0.012, 1.2 + i * 0.012], [0.82, Y0 + 0.012, 1.2 + i * 0.012], 0.005, 4);
+  pallet(k, -0.15, 1.05, 0.2);
+  pallet(k, 0.02, 1.12, -0.1);
+  ammoBoxes(k, -0.4, 0.15, 5, 0.3);
+
+  // ---------------------------------------------------------- vehicles, power, perimeter
+  dozer(k, -1.0, 0.3, 0.5, 1.15);
+  truck(k, 1.0, 1.25, Math.PI, 'crane', 1.05);
+  genset(k, 0.36, -0.44, 0, 0.9);
+  cableRun(k, [[0.48, -0.44], [0.62, -0.44], [0.62, -0.6]], 0.05);
+  postSign(k, -0.62, 1.38, 0, 0.34, 'main');
+  flagPole(k, -0.12, -0.44, 0.8, Y0);
+  hesco(k, [-1.46, -0.6], [-1.46, 1.44], 0.12, Y0);
+  razor(k, [-1.46, -0.6], [-1.46, 1.44], Y0 + 0.12);
+  floodMast(k, -1.34, -0.5, 0.62, 0.6);
+  floodMast(k, 1.4, -0.5, 0.62, Math.PI - 0.6);
+  k.height = 1.45;
+}
+
+// ================================================================ POWER PLANT (2x2)
+
+/** Small wind turbine with a spinning three-blade rotor (German energy flavour). */
+function windTurbine(k: Kit, x: number, z: number, H: number, ry: number) {
+  const P = k.P;
+  k.box(P.concrete, 0.12, 0.03, 0.12, x, Y0, z);
+  k.cyl(P.white, 0.025, H, x, Y0 + 0.03, z, 10, 0.014);
+  const head = k.node('nacelle', x, Y0 + 0.03 + H, z, ry);
+  k.on(head, () => {
+    k.rbox(P.white, 0.12, 0.05, 0.05, -0.02, -0.02, 0, 0.015);
+    k.box(P.team, 0.122, 0.012, 0.052, -0.02, 0.012, 0);
+    const rot = k.node('rotor', 0.05, 0.005, 0);
+    k.on(rot, () => {
+      k.sph(P.white, 0.025, 0.01, 0, 0, 8, 6);
+      for (let i = 0; i < 3; i++) k.at(0.015, 0, 0, 0, () => k.boxR(P.white, 0.006, 0.36, 0.03, 0, 0.19, 0, 0, 0.08), (i / 3) * TAU);
+    });
+  });
+  k.spin('rotor', 'x', 2.2);
+  k.osc('nacelle', 'y', 0.25, 0.07, 0.4, 0);
+  k.blinkLight(x, Y0 + 0.07 + H, z, 0.012, 1.6, 0.4);
+}
+
+/** Gas flare stack with a burning tip (Iranian gas-fired plant flavour). */
+function flareStack(k: Kit, x: number, z: number, H: number) {
+  const P = k.P;
+  k.box(P.concrete, 0.12, 0.03, 0.12, x, Y0, z);
+  lattice(k, P.mats.col(0xb8402a, 0.6, 0.4), x, z, Y0 + 0.03, H, 0.1, 0.05, 6, 0.006);
+  k.cyl(P.dark, 0.016, H + 0.05, x, Y0 + 0.03, z, 8);
+  k.cyl(P.dark, 0.026, 0.04, x, Y0 + 0.06 + H, z, 8);
+  k.emit(x, Y0 + 0.14 + H, z, 'fire');
+  k.emit(x, Y0 + 0.24 + H, z, 'smoke');
+  k.blinkLight(x + 0.05, Y0 + H * 0.7, z, 0.01, 1.5, 0.3);
+}
+
 function power(k: Kit) {
   const P = k.P;
-  const R = P.R;
+  const N = P.N;
+  const f = P.s.faction;
   slab(k, 2, 2);
-  if (R === 'west') {
-    // turbine hall with stacks
-    block(k, { x0: -0.95, x1: 0.18, z0: -0.95, z1: -0.12, h: 0.42, wall: P.wall2, win: 'ribbon', equip: 0, floors: 1 });
-    rollDoor(k, 'z', 1, -0.55, Y0, -0.12, 0.26, 0.24, 0);
-    door(k, 'z', 1, -0.1, Y0, -0.12, 0.1, 0.18);
-    stencil(k, 'G1', 'x', 1, -0.55, Y0 + 0.3, 0.18, 0.12, '#1d2a38');
-    for (const sx of [-0.78, -0.48]) {
-      k.box(P.wall2, 0.22, 0.32, 0.26, sx, Y0 + 0.42, -0.72);
-      k.box(P.team, 0.222, 0.025, 0.262, sx, Y0 + 0.66, -0.72);
-      k.cyl(P.galv, 0.055, 0.85, sx, Y0 + 0.74, -0.72, 14, 0.05);
-      k.cyl(P.dark, 0.056, 0.03, sx, Y0 + 1.56, -0.72, 14);
-      k.ring(P.grating, 0.08, 0.012, sx, Y0 + 1.25, -0.72, 14);
-      k.emit(sx, Y0 + 1.65, -0.72, 'steam');
-    }
-    k.blinkLight(-0.78, Y0 + 1.62, -0.72, 0.016, 1.5, 0);
-    k.blinkLight(-0.48, Y0 + 1.62, -0.72, 0.016, 1.5, 0.7);
-    coolingCells(k, 0.32, 0.95, -0.95, 0.05, 0.3, 2);
-    switchyard(k, -0.95, 0.4, 0.2, 0.95, 2);
-    pylon(k, 0.72, 0.6, 0.72, 0, 0.3);
-    lightPole(k, 0.55, 0.92, 0.38, Math.PI);
-    k.height = 1.3;
-  } else if (R === 'east') {
-    coolingTower(k, 0.43, -0.43, 0.52, 1.18);
-    chimney(k, -0.76, -0.76, 1.95, 0.085, 0.06, true);
-    k.emit(-0.76, Y0 + 2.05, -0.76, 'smoke');
-    // brick turbine hall with pitched roof and tall windows
-    const x0 = -0.95;
-    const x1 = -0.1;
-    const z0 = -0.5;
-    const z1 = 0.62;
-    k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    k.box(P.wall2, x1 - x0, 0.42, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    dress(k, x0, x1, z0, z1, Y0, 0.42, { beacons: false, vent: false });
-    punched(k, 'x', 1, z0 + 0.05, z1 - 0.05, 5, Y0 + 0.1, x1, 0.1, 0.24, 'round');
-    punched(k, 'z', 1, x0 + 0.05, x1 - 0.05, 3, Y0 + 0.1, z1, 0.1, 0.24, 'round', [-0.6, -0.4]);
-    door(k, 'z', 1, -0.52, Y0, z1, 0.14, 0.2, true);
-    k.box(P.team, x1 - x0 + 0.008, 0.03, z1 - z0 + 0.008, (x0 + x1) / 2, Y0 + 0.39, (z0 + z1) / 2);
-    gable(k, P.pitch, P.wall2, (x0 + x1) / 2, Y0 + 0.42, (z0 + z1) / 2, x1 - x0, z1 - z0, 0.22, 0.03, false);
-    k.box(P.concrete, 0.3, 0.06, 0.14, (x0 + x1) / 2, Y0 + 0.6, (z0 + z1) / 2 - 0.1);
-    // hot water pipes to the tower
-    k.pipe(P.rust, [[x1, Y0 + 0.2, -0.3], [0.05, Y0 + 0.2, -0.3], [0.05, Y0 + 0.2, -0.15]], 0.025, 10);
-    k.pipe(P.galv, [[x1, Y0 + 0.12, -0.38], [0.0, Y0 + 0.12, -0.38]], 0.018, 8);
-    for (const px of [-0.05, 0.02]) k.box(P.concrete, 0.03, 0.12, 0.12, px, Y0, -0.34);
-    switchyard(k, 0.05, 0.95, 0.25, 0.95, 1);
-    pylon(k, 0.78, 0.45, 0.7, 0, 0.25);
-    k.height = 1.4;
-  } else if (R === 'asia') {
-    // reactor containment building
-    const cx = -0.48;
-    const cz = -0.46;
-    k.cyl(P.base, 0.4, 0.04, cx, Y0, cz, 28);
-    k.cyl(P.wall2, 0.37, 0.48, cx, Y0 + 0.04, cz, 28);
-    k.dome(P.wall2, 0.37, cx, Y0 + 0.52, cz, 28, 9, 0.7);
-    k.cyl(P.team, 0.375, 0.03, cx, Y0 + 0.44, cz, 28);
-    k.cyl(P.accent, 0.38, 0.02, cx, Y0 + 0.08, cz, 28);
-    for (let i = 0; i < 4; i++) k.box(P.base, 0.02, 0.44, 0.02, cx + Math.cos(i * 0.5 + 0.2) * 0.37, Y0 + 0.04, cz + Math.sin(i * 0.5 + 0.2) * 0.37);
-    // vent stack with lattice support
-    k.cyl(P.wall, 0.035, 1.55, -0.86, Y0, -0.9, 10);
-    lattice(k, P.galv, -0.86, -0.9, Y0, 1.35, 0.2, 0.08, 7, 0.006);
-    k.cyl(P.red, 0.037, 0.1, -0.86, Y0 + 1.35, -0.9, 10);
-    k.cyl(P.white, 0.037, 0.1, -0.86, Y0 + 1.45, -0.9, 10);
-    k.blinkLight(-0.86, Y0 + 1.58, -0.9, 0.016, 1.5, 0);
-    // turbine hall with curved roof
-    const tx0 = 0.02;
-    const tx1 = 0.95;
-    const tz0 = -0.95;
-    const tz1 = -0.08;
-    k.box(P.base, tx1 - tx0 + 0.014, 0.03, tz1 - tz0 + 0.014, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
-    k.box(P.wall, tx1 - tx0, 0.4, tz1 - tz0, (tx0 + tx1) / 2, Y0, (tz0 + tz1) / 2);
-    dress(k, tx0, tx1, tz0, tz1, Y0, 0.4, { beacons: false });
-    ribbon(k, 'z', 1, tx0 + 0.05, tx1 - 0.05, Y0 + 0.24, tz1, 0.1, true);
-    ribbon(k, 'x', 1, tz0 + 0.05, tz1 - 0.05, Y0 + 0.24, tx1, 0.1, true);
-    rollDoor(k, 'z', 1, 0.3, Y0, tz1, 0.22, 0.18, 0);
-    k.box(P.team, tx1 - tx0 + 0.008, 0.024, tz1 - tz0 + 0.008, (tx0 + tx1) / 2, Y0 + 0.37, (tz0 + tz1) / 2);
-    vault(k, P.T.corr(0x5f86b8), P.wall, (tx0 + tx1) / 2, Y0 + 0.4, (tz0 + tz1) / 2, tz1 - tz0 + 0.03, tx1 - tx0 + 0.03, 0.14, true);
-    switchyard(k, -0.95, 0.35, 0.22, 0.95, 2);
-    pylon(k, 0.72, 0.55, 0.7, 0, 0.25);
-    planter(k, 0.7, 0.05, 0.4, 0.09, 'shrub', Y0);
-    k.height = 1.3;
-  } else {
-    // solar power tower with heliostat field
-    const tx = -0.62;
-    const tz = -0.62;
-    k.box(P.base, 0.34, 0.05, 0.34, tx, Y0, tz);
-    k.at(tx, Y0 + 0.05, tz, Math.PI / 4, () => k.cyl(P.concrete, 0.15, 1.3, 0, 0, 0, 4, 0.09, false, 2.5));
-    // square solar receiver (white hot) with a steel crown
-    k.box(P.steel, 0.2, 0.03, 0.2, tx, Y0 + 1.27, tz);
-    k.box(P.mats.light(0xfff2c8, 4.2), 0.17, 0.24, 0.17, tx, Y0 + 1.3, tz);
-    for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) k.box(P.steel, 0.02, 0.26, 0.02, tx + sx * 0.088, Y0 + 1.29, tz + sz * 0.088);
-    k.box(P.steel, 0.2, 0.04, 0.2, tx, Y0 + 1.55, tz);
-    lattice(k, P.galv, tx, tz, Y0 + 1.59, 0.14, 0.12, 0.04, 2, 0.006);
-    k.cyl(P.team, 0.13, 0.05, tx, Y0 + 1.0, tz, 4, 0.125);
-    ladder(k, 'x', 1, tz, Y0 + 0.05, Y0 + 1.25, tx + 0.09);
-    k.blinkLight(tx, Y0 + 1.75, tz, 0.016, 1.5, 0);
-    const mirror = P.mats.col(0xbcd6ee, 0.3, 0.3);
-    for (let i = 0; i < 5; i++)
-      for (let j = 0; j < 4; j++) {
-        const hx = -0.82 + i * 0.4 + (j % 2) * 0.08;
-        const hz = 0.1 + j * 0.25;
-        if (hx > 0.9) continue;
-        const ry = Math.atan2(tx - hx, tz - hz);
-        k.cyl(P.galv, 0.008, 0.09, hx, Y0, hz, 6);
-        k.at(hx, Y0 + 0.1, hz, ry, () => {
-          k.box(P.dark, 0.2, 0.01, 0.14, 0, -0.008, 0);
-          k.box(mirror, 0.195, 0.004, 0.135, 0, 0.002, 0);
-        }, 0.55);
-      }
-    for (let i = 0; i < 2; i++) {
-        const hx = 0.2 + i * 0.25;
-        const hz = -0.25;
-        const ry = Math.atan2(tx - hx, tz - hz);
-        k.cyl(P.galv, 0.008, 0.09, hx, Y0, hz, 6);
-        k.at(hx, Y0 + 0.1, hz, ry, () => {
-          k.box(P.dark, 0.16, 0.01, 0.11, 0, -0.008, 0);
-          k.box(mirror, 0.155, 0.004, 0.105, 0, 0.002, 0);
-        }, 0.55);
-      }
-    // power block
-    const top = block(k, { x0: 0.1, x1: 0.95, z0: -0.95, z1: -0.45, h: 0.34, floors: 1, equip: 1 });
-    k.cyl(P.wall2, 0.04, 0.45, 0.82, top - 0.03, -0.82, 10);
-    k.emit(0.82, top + 0.47, -0.82, 'steam');
-    transformer(k, -0.15, Y0, -0.62, Math.PI / 2, 1.1);
-    planter(k, -0.85, -0.1, 0.12, 0.12, 'palm', Y0);
-    k.height = 1.4;
+  // ------------------------------------------------ gas turbine generator hall (back)
+  const x0 = -0.95;
+  const x1 = 0.32;
+  const z0 = -0.95;
+  const z1 = -0.3;
+  const H = 0.4;
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  const hall = N.camoHalls ? P.camo : P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
+  k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, cx, Y0, cz);
+  k.box(hall, x1 - x0, H, z1 - z0, cx, Y0, cz);
+  dress(k, x0, x1, z0, z1, Y0, H, { beacons: false, vent: false });
+  k.box(P.team, x1 - x0 + 0.01, 0.03, z1 - z0 + 0.01, cx, Y0 + H - 0.05, cz);
+  flatRoof(k, x0, x1, z0, z1, Y0 + H, 0.03, hall);
+  rollDoor(k, 'z', 1, -0.55, Y0, z1, 0.28, 0.26, 0);
+  door(k, 'z', 1, -0.12, Y0, z1, 0.09, 0.18);
+  wallSign(k, 'z', 1, 0.12, Y0 + 0.24, z1, 0.26, 'num', 'G1');
+  // louvred ventilation band on the +X face
+  for (let i = 0; i < 4; i++) faceBox(k, P.dark, 'x', 1, cz, Y0 + 0.2 + i * 0.03, x1, z1 - z0 - 0.16, 0.012, 0.012);
+  // combustion air intake filter house (roof, -X end) + exhaust stacks (+X end)
+  const ry = Y0 + H + 0.01;
+  k.box(P.drab, 0.34, 0.16, 0.3, -0.7, ry, -0.62);
+  for (let i = 0; i < 5; i++) k.box(P.dark, 0.012, 0.12, 0.31, -0.86 + i * 0.075, ry + 0.02, -0.62);
+  k.box(P.team, 0.342, 0.014, 0.302, -0.7, ry + 0.16, -0.62);
+  k.box(P.steel, 0.2, 0.08, 0.14, -0.42, ry, -0.62);
+  for (const sx of [-0.12, 0.12]) {
+    k.box(P.drab, 0.13, 0.12, 0.13, sx, ry, -0.62);
+    k.cyl(P.galv, 0.05, 0.62, sx, ry + 0.12, -0.62, 14, 0.046);
+    k.cyl(P.dark, 0.052, 0.03, sx, ry + 0.72, -0.62, 14);
+    k.ring(P.grating, 0.075, 0.012, sx, ry + 0.48, -0.62, 14);
+    k.emit(sx, ry + 0.82, -0.62, 'steam');
   }
+  k.blinkLight(-0.12, ry + 0.76, -0.62, 0.014, 1.5, 0);
+  k.blinkLight(0.12, ry + 0.76, -0.62, 0.014, 1.5, 0.75);
+  // ------------------------------------------------ radiator cooling bank (back right)
+  coolingCells(k, 0.42, 0.95, -0.95, -0.12, 0.26, 2);
+  // ------------------------------------------------ switchyard + cable runs (front left)
+  switchyard(k, -0.95, 0.22, 0.2, 0.95, 2);
+  cableRun(k, [[-0.62, -0.28], [-0.62, 0.18]], 0.07);
+  cableRun(k, [[-0.25, -0.28], [-0.25, 0.18]], 0.07);
+  // ------------------------------------------------ front right: nation flavour + fuel / gensets
+  if (f === 'germany') {
+    windTurbine(k, 0.72, 0.62, 1.15, -0.6);
+    genset(k, 0.62, 0.15, Math.PI / 2, 0.85);
+  } else if (f === 'israel') {
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) solarPanel(k, 0.48 + j * 0.3, Y0, 0.25 + i * 0.32, 0.26, 0.18, 0.55);
+    genset(k, 0.72, 0.88, 0, 0.8);
+  } else if (f === 'iran') {
+    flareStack(k, 0.78, 0.78, 0.95);
+    fuelBladder(k, 0.62, 0.3, 0.46, 0.26, Math.PI / 2);
+  } else if (f === 'russia') {
+    coolingTower(k, 0.66, 0.6, 0.32, 0.78);
+  } else if (f === 'ukraine') {
+    chimney(k, 0.75, 0.72, 1.55, 0.075, 0.055, true);
+    k.emit(0.75, Y0 + 1.62, 0.72, 'smoke');
+    genset(k, 0.55, 0.2, Math.PI / 2, 0.85);
+  } else {
+    // bunded diesel day tank + gensets
+    k.box(P.concrete, 0.5, 0.05, 0.3, 0.68, Y0, 0.35);
+    k.box(P.concrete, 0.46, 0.04, 0.26, 0.68, Y0 + 0.01, 0.35);
+    k.at(0.68, Y0 + 0.12, 0.35, 0, () => {
+      k.tube(P.tank, [-0.18, 0, 0], [0.18, 0, 0], 0.08, 14);
+      k.sph(P.tank, 0.08, -0.18, 0, 0, 12, 6);
+      k.sph(P.tank, 0.08, 0.18, 0, 0, 12, 6);
+      k.tube(P.team, [-0.02, 0, 0], [0.02, 0, 0], 0.082, 14);
+    });
+    genset(k, 0.6, 0.78, 0, 0.85);
+  }
+  pylon(k, 0.86, -0.02, 0.62, 0, 0.18);
+  floodMast(k, 0.32, 0.92, 0.5, -2.2);
+  k.height = 1.3;
+}
+
+// ================================================================ BARRACKS (2x2)
+
+/** Guard tower (steel legs, sandbagged platform under a camo roof). */
+function watchtower(k: Kit, x: number, z: number) {
+  const P = k.P;
+  const h = 0.5;
+  const s = 0.07;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.bar(P.drab, [x + sx * s * 1.3, Y0, z + sz * s * 1.3], [x + sx * s, Y0 + h, z + sz * s], 0.018);
+  for (const yy of [0.15, 0.32]) {
+    k.bar(P.drab, [x - s * 1.2, Y0 + yy, z + s * 1.2], [x + s * 1.2, Y0 + yy + 0.1, z + s * 1.2], 0.008);
+    k.bar(P.drab, [x + s * 1.2, Y0 + yy, z - s * 1.2], [x + s * 1.2, Y0 + yy + 0.1, z + s * 1.2], 0.008);
+  }
+  k.box(P.grating, 0.2, 0.015, 0.2, x, Y0 + h, z);
+  sandbags(k, [x - 0.09, z + 0.09], [x + 0.09, z + 0.09], 1, Y0 + h + 0.015);
+  sandbags(k, [x + 0.09, z - 0.09], [x + 0.09, z + 0.09], 1, Y0 + h + 0.015);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.galv, 0.01, 0.14, 0.01, x + sx * 0.09, Y0 + h, z + sz * 0.09);
+  k.box(P.camo, 0.25, 0.015, 0.25, x, Y0 + h + 0.14, z);
+  k.box(P.team, 0.252, 0.012, 0.252, x, Y0 + h + 0.13, z);
+  k.box(P.dark, 0.03, 0.02, 0.04, x + 0.06, Y0 + h + 0.1, z + 0.06);
+  k.box(P.flood, 0.004, 0.014, 0.03, x + 0.077, Y0 + h + 0.1, z + 0.06);
+  ladder(k, 'x', 1, z, Y0, Y0 + h, x + 0.07);
+}
+
+/** Two storey stack of accommodation modules with an access gallery and a roof canopy (nation style). */
+function chuStack(k: Kit, x0: number, x1: number, z0: number, z1: number) {
+  const P = k.P;
+  const N = P.N;
+  const L = x1 - x0;
+  const D = z1 - z0;
+  const cz = (z0 + z1) / 2;
+  const H = 0.19;
+  const n = 2;
+  const ml = (L - 0.02) / n;
+  for (let lvl = 0; lvl < 2; lvl++)
+    for (let i = 0; i < n; i++) {
+      const mx = x0 + 0.01 + ml * (i + 0.5);
+      const y = Y0 + lvl * H;
+      k.box(P.wall, ml - 0.012, H - 0.006, D, mx, y, cz);
+      k.box(P.base, ml - 0.008, 0.014, D + 0.004, mx, y, cz);
+      // windows + door per module on the +Z face
+      for (let w = 0; w < 2; w++) {
+        const c = mx - ml * 0.3 + w * ml * 0.32;
+        k.panel(P.win, 'z', 1, c, y + 0.07, z1 + 0.003, 0.07, 0.06, cell(k));
+        faceBox(k, P.trim, 'z', 1, c, y + 0.065, z1, 0.08, 0.006, 0.012);
+        faceBox(k, P.accent, 'z', 1, c - 0.055, y + 0.06, z1, 0.022, 0.075, 0.006);
+      }
+      k.panel(P.door, 'z', 1, mx + ml * 0.33, y + 0.015, z1 + 0.003, 0.06, 0.14);
+      faceBox(k, P.lamp, 'z', 1, mx + ml * 0.33, y + 0.16, z1, 0.02, 0.006, 0.012);
+      aircon(k, 'z', 1, mx + ml * 0.12, y + 0.1, z1);
+    }
+  // team band between the levels + on top
+  k.box(P.team, L + 0.006, 0.02, D + 0.006, (x0 + x1) / 2, Y0 + H - 0.012, cz);
+  k.box(P.team, L + 0.006, 0.02, D + 0.006, (x0 + x1) / 2, Y0 + 2 * H - 0.016, cz);
+  // access gallery (upper level) + stair at the +X end
+  const gz = z1 + 0.06;
+  k.box(P.grating, L, 0.008, 0.11, (x0 + x1) / 2, Y0 + H, gz);
+  for (let i = 0; i <= 4; i++) k.box(P.steel, 0.012, H, 0.012, x0 + (L * i) / 4, Y0, gz + 0.05);
+  railing(k, [[x0, gz + 0.055], [x1 - 0.12, gz + 0.055]], Y0 + H + 0.008, 0.06, P.galv);
+  stairs(k, x1 - 0.06, gz + 0.02, Y0, Y0 + H, false, 1, 0.07);
+  // canopy roof
+  const ry = Y0 + 2 * H;
+  if (N.roofStyle === 'flat') {
+    for (const sx of [x0 + 0.03, x1 - 0.03]) for (const sz of [z0 + 0.03, gz + 0.04]) k.box(P.steel, 0.012, 0.07, 0.012, sx, ry, sz);
+    k.box(P.mats.at(Tile.Corr, N.roof, 2), L + 0.06, 0.012, D + 0.17, (x0 + x1) / 2, ry + 0.07, (z0 + gz + 0.06) / 2);
+    k.box(P.team, L + 0.065, 0.016, 0.014, (x0 + x1) / 2, ry + 0.068, gz + 0.1);
+    hvac(k, x0 + 0.3, ry + 0.082, cz - 0.02, 0.14, 0.1);
+  } else if (N.roofStyle === 'hip') {
+    asianRoof(k, P.pitch, P.dark, (x0 + x1) / 2, ry, (z0 + gz + 0.05) / 2, L + 0.08, D + 0.18, 0.16, 0.01, P.dark);
+  } else {
+    gable(k, P.pitch, P.wall, (x0 + x1) / 2, ry, (z0 + gz + 0.05) / 2, L, D + 0.12, 0.14, 0.04, true);
+  }
+}
+
+function barracks(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  slab(k, 2, 2);
+  // accommodation stack (back)
+  chuStack(k, -0.95, 0.95, -0.95, -0.6);
+  // HQ / armoury hut (front left)
+  const hx0 = -0.95;
+  const hx1 = -0.3;
+  const hz0 = -0.3;
+  const hz1 = 0.18;
+  block(k, { x0: hx0, x1: hx1, z0: hz0, z1: hz1, h: 0.26, floors: 1, doorX: -0.06, equip: 1, roof: N.roofStyle === 'hip' ? 'hip' : N.roofStyle === 'gable' ? 'gable' : 'flat', sign: false, rise: 0.12 });
+  wallSign(k, 'z', 1, (hx0 + hx1) / 2, Y0 + 0.13, hz1, 0.3, 'main');
+  sandbags(k, [hx1 + 0.06, -0.2], [hx1 + 0.06, 0.08], 2, Y0);
+  // camo net over the ammunition / kit area (centre)
+  camoNet(k, -0.2, 0.42, -0.4, 0.12, 0.26, 0.05);
+  ammoBoxes(k, -0.05, -0.2, 6, 0.1);
+  pallet(k, 0.24, -0.25, 0.4);
+  ammoBoxes(k, 0.2, -0.0, 4, -0.3);
+  // perimeter: hesco along the left and back of the front, guard tower at the front left
+  hesco(k, [-0.98, 0.25], [-0.98, 0.98], 0.13, Y0);
+  hesco(k, [-0.95, 0.98], [-0.3, 0.98], 0.13, Y0);
+  razor(k, [-0.98, 0.25], [-0.98, 0.98], Y0 + 0.13);
+  watchtower(k, -0.78, 0.78);
+  flagPole(k, -0.12, 0.5, 0.72, Y0);
+  // training bars + water tank + generator (right side, leaving the exit at the front right clear)
+  for (let i = 0; i < 3; i++) k.box(P.galv, 0.008, 0.18, 0.008, 0.62 + i * 0.12, Y0, -0.3);
+  k.bar(P.galv, [0.62, Y0 + 0.17, -0.3], [0.86, Y0 + 0.17, -0.3], 0.006);
+  k.at(0.86, Y0, 0.0, 0, () => {
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.steel, 0.01, 0.12, 0.01, sx * 0.05, 0, sz * 0.05);
+    k.cyl(P.black, 0.065, 0.12, 0, 0.12, 0, 14);
+    k.cyl(P.dark, 0.05, 0.012, 0, 0.24, 0, 14);
+  });
+  genset(k, 0.55, 0.05, Math.PI / 2, 0.8);
+  sandbags(k, [0.3, 0.98], [0.95, 0.98], 2, Y0);
+  floodMast(k, 0.95, 0.4, 0.5, Math.PI);
+  postSign(k, -0.05, 0.92, 0, 0.26, 'unit', P.s.faction === 'neutral' ? '' : N.sign.num + ' 3');
+  k.height = 0.95;
+}
+
+// ================================================================ WAR FACTORY (3x3)
+
+/** Roof turbine ventilator (spinning). */
+function turbineVent(k: Kit, name: string, x: number, y: number, z: number) {
+  const P = k.P;
+  k.cyl(P.galv, 0.03, 0.04, x, y, z, 10);
+  const o = k.node(name, x, y + 0.04, z);
+  k.on(o, () => {
+    k.sph(P.galv, 0.04, 0, 0.025, 0, 10, 6);
+    for (let i = 0; i < 8; i++) k.boxR(P.steel, 0.004, 0.04, 0.02, Math.cos((i / 8) * TAU) * 0.038, 0.02, Math.sin((i / 8) * TAU) * 0.038, -(i / 8) * TAU, 0, 0.3);
+  });
+  k.spin(name, 'y', 3 + (x * 7) % 2);
+}
+
+function factory(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  slab(k, 3, 3, Y0, [-0.53, 0.53, -0.5]);
+  // vehicle lane through the middle at ground level (cast concrete, no paint)
+  k.box(P.concrete, 1.04, 0.002, 2.0, 0, 0, 0.5);
+  // vehicle lift deck on the exit tile (steel plate flush with the apron, hazard edged, corner lamps)
+  k.box(P.mats.at(Tile.Plate, 0x8a8e90, 2.6), 0.82, 0.012, 0.82, 0, 0.002, 0.0);
+  k.box(P.hazard, 0.84, 0.014, 0.03, 0, 0.002, 0.415);
+  k.box(P.hazard, 0.84, 0.014, 0.03, 0, 0.002, -0.415);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    k.box(P.yellow, 0.025, 0.05, 0.025, sx * 0.45, 0, sz * 0.45);
+    k.box(P.amber_l, 0.02, 0.008, 0.02, sx * 0.45, 0.05, sz * 0.45);
+  }
+
+  // ------------------------------------------------ main assembly hangar (back, full width)
+  const z0 = -1.42;
+  const z1 = -0.5;
+  const zc = (z0 + z1) / 2;
+  const L = z1 - z0;
+  const H = 0.64;
+  const DH = 0.5; // door height
+  const hall = N.camoHalls ? P.camo : P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2);
+  k.box(P.base, 2.86, 0.03, L + 0.014, 0, Y0, zc);
+  for (const sx of [-1, 1]) {
+    // hall walls either side of the bay
+    const wx = sx * (0.55 + 0.44);
+    k.box(hall, 0.88, H, L, wx, Y0, zc);
+    dress(k, wx - 0.44, wx + 0.44, z0, z1, Y0, H, { beacons: false, cab: sx > 0, vent: sx < 0 });
+  }
+  k.box(hall, 1.1, H, 0.3, 0, Y0, z0 + 0.15); // back of the bay
+  k.box(hall, 1.1, H - DH, 0.06, 0, Y0 + DH, z1 - 0.03); // lintel over the door
+  k.box(P.team, 2.87, 0.04, L + 0.01, 0, Y0 + H - 0.07, zc);
+  // bay interior (dark, lit) behind the big roller door
+  k.box(P.dark, 1.1, 0.01, L - 0.3, 0, Y0, zc + 0.15);
+  k.box(P.mats.col(0x3a3d40, 0.8, 0.2), 0.012, DH, L - 0.3, -0.545, Y0, zc + 0.15);
+  k.box(P.mats.col(0x3a3d40, 0.8, 0.2), 0.012, DH, L - 0.3, 0.545, Y0, zc + 0.15);
+  k.box(P.lamp, 0.8, 0.012, 0.012, 0, Y0 + DH - 0.04, zc);
+  k.box(P.lamp, 0.8, 0.012, 0.012, 0, Y0 + DH - 0.04, zc + 0.3);
+  // big roller door (animated: rolls up while a vehicle rolls out)
+  const dh = DH * k.sy;
+  const bdoor = k.node('bigdoor', 0, Y0 + DH, z1 + 0.004);
+  k.on(bdoor, () => {
+    k.panel(P.rollup, 'z', 1, 0, -dh, 0, 1.06, dh, [0, 0, 0, 1.06 * 9, dh * 9, 1.06 * 9, dh * 9, 0]);
+    k.box(P.dark, 1.06, 0.02, 0.012, 0, -dh, 0);
+  });
+  k.specs.push({ k: 'prod', n: 'bigdoor', ax: 'y', a: -0.92, mode: 'scl' });
+  // door portal: hazard jambs, team header, beacons
+  for (const sx of [-1, 1]) {
+    k.box(P.hazard, 0.05, DH, 0.05, sx * 0.555, Y0, z1 + 0.02);
+    prodBeacon(k, 'beacon' + (sx > 0 ? 'R' : 'L'), sx * 0.6, Y0 + DH + 0.02, z1 + 0.05);
+  }
+  k.box(P.team, 1.16, 0.05, 0.05, 0, Y0 + DH + 0.005, z1 + 0.02);
+  k.box(P.dark, 1.08, 0.04, 0.05, 0, Y0 + DH + 0.055, z1 + 0.02);
+  wallSign(k, 'z', 1, 0, Y0 + DH + 0.14, z1, 0.5, 'main');
+  // hall facades: high window bands + small doors
+  for (const sx of [-1, 1]) {
+    const a0 = sx > 0 ? 0.6 : -1.38;
+    const a1 = sx > 0 ? 1.38 : -0.6;
+    ribbon(k, 'z', 1, a0, a1, Y0 + 0.4, z1, 0.08, false);
+    door(k, 'z', 1, sx * 1.15, Y0, z1, 0.1, 0.18, true);
+  }
+  ribbon(k, 'x', 1, z0 + 0.08, z1 - 0.08, Y0 + 0.4, 1.42, 0.08, false);
+  // roof: nation style over the full hangar + ventilators + skylights
+  const rTop = Y0 + H;
+  if (N.roofStyle === 'gable' || N.roofStyle === 'hip') {
+    gable(k, P.pitch, hall, 0, rTop, zc, 2.86, L, 0.3, 0.04, true);
+    for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.3, zc);
+    for (let i = 0; i < 3; i++) k.at(-0.9 + i * 0.9, rTop + 0.15, zc + L * 0.24, 0, () => k.box(P.glass, 0.3, 0.012, 0.16, 0, 0, 0), Math.atan2(0.3, L / 2));
+  } else {
+    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true);
+    for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.28, zc);
+    k.box(P.glass, 2.2, 0.014, 0.12, 0, rTop + 0.29, zc + 0.12);
+  }
+  // exhaust stacks (paint shop / engine test cell)
+  for (const sx of [-1.25, -1.05]) {
+    k.cyl(P.galv, 0.035, 0.55, sx, Y0, z0 + 0.08, 10);
+    k.cyl(P.dark, 0.037, 0.03, sx, Y0 + 0.55, z0 + 0.08, 10);
+  }
+  k.emit(-1.25, Y0 + 0.64, z0 + 0.08, 'smoke');
+
+  // ------------------------------------------------ front left: maintenance bays opening onto the lane
+  const ax0 = -1.42;
+  const ax1 = -0.6;
+  const az0 = -0.42;
+  const az1 = 0.62;
+  k.box(P.base, ax1 - ax0 + 0.014, 0.03, az1 - az0 + 0.014, (ax0 + ax1) / 2, Y0, (az0 + az1) / 2);
+  k.box(P.wall, ax1 - ax0, 0.36, az1 - az0, (ax0 + ax1) / 2, Y0, (az0 + az1) / 2);
+  rollDoor(k, 'x', 1, -0.15, Y0, ax1, 0.32, 0.26, 0.7);
+  rollDoor(k, 'x', 1, 0.33, Y0, ax1, 0.32, 0.26, 0);
+  k.box(P.lamp, 0.01, 0.012, 0.22, ax1 - 0.1, Y0 + 0.24, -0.15);
+  dress(k, ax0, ax1, az0, az1, Y0, 0.36, { beacons: false, cab: false });
+  k.box(P.team, ax1 - ax0 + 0.008, 0.026, az1 - az0 + 0.008, (ax0 + ax1) / 2, Y0 + 0.32, (az0 + az1) / 2);
+  flatRoof(k, ax0, ax1, az0, az1, Y0 + 0.36, 0.03);
+  roofKit(k, ax0, ax1, az0, az1, Y0 + 0.37, 2);
+  // ------------------------------------------------ front right: stores / office block + parts yard
+  block(k, { x0: 0.6, x1: 1.42, z0: -0.42, z1: 0.36, h: 0.42, floors: 2, door: 1.0, equip: 2, sign: false, roof: 'flat' });
+  wallSign(k, 'x', 1, -0.05, Y0 + 0.28, 1.42, 0.3, 'num', '7');
+  // engine on a stand + spare track + crates (front right corner)
+  k.at(1.0, Y0, 0.82, 0.2, () => {
+    k.box(P.steel, 0.2, 0.06, 0.14, 0, 0, 0);
+    k.rbox(P.dark, 0.18, 0.1, 0.12, 0, 0.06, 0, 0.01);
+    k.cyl(P.drab, 0.03, 0.06, 0.05, 0.16, 0, 8);
+  });
+  for (let i = 0; i < 2; i++) k.box(P.rubber, 0.5, 0.02, 0.07, 1.05, Y0 + i * 0.02, 1.18 + i * 0.01);
+  crate(k, 0.72, Y0, 1.22, 0.09);
+  crate(k, 0.74, Y0 + 0.072, 1.2, 0.07, 0.4);
+  ammoBoxes(k, 1.3, 0.62, 5, Math.PI / 2);
+  // front left corner: fuel bowser + jeep
+  truck(k, -1.0, 1.0, 0, 'fuel', 1.05);
+  jeep(k, -1.05, 1.32, 0.1, 1.0);
+  floodMast(k, -0.58, 1.38, 0.55, -Math.PI / 2 - 0.5);
+  floodMast(k, 0.58, 1.38, 0.55, -Math.PI / 2 + 0.5);
+  k.height = 1.15;
 }
 
 // ================================================================ REFINERY (3x3)
@@ -3023,49 +3504,79 @@ function silo(k: Kit, x: number, z: number, r: number, h: number, m: Mat, top: '
 }
 
 function oreHeap(k: Kit, x: number, z: number, r: number, h: number) {
-  const m = k.P.mats.tex('soil', { color: 0xc89a3a, seed: 28, size: 256 }, 0xffffff, 6);
+  const m = k.P.mats.at(Tile.Soil, 0xd8a848, 1.6);
   k.lathe(m, [[r, 0], [r * 0.75, h * 0.45], [r * 0.4, h * 0.85], [0.001, h]], x, Y0, z, 12);
+}
+
+/** Round thickener / settling tank with a slowly rotating rake bridge. */
+function thickener(k: Kit, name: string, x: number, z: number, r: number) {
+  const P = k.P;
+  k.lathe(P.concrete, [[r - 0.03, 0.1], [r - 0.03, 0.12], [r, 0.12], [r, 0]], x, Y0, z, 28);
+  k.cyl(P.mats.col(0x4e5236, 0.15, 0.6), r - 0.03, 0.1, x, Y0, z, 24);
+  k.ring(P.team, r + 0.002, 0.008, x, Y0 + 0.11, z, 28);
+  k.cyl(P.steel, 0.03, 0.16, x, Y0, z, 10);
+  const b = k.node(name, x, Y0 + 0.16, z);
+  k.on(b, () => {
+    k.box(P.grating, r * 2 - 0.04, 0.008, 0.05, 0, 0, 0);
+    railing(k, [[-r + 0.03, 0.025], [r - 0.03, 0.025]], 0.008, 0.035, P.yellow);
+    k.box(P.drab, 0.06, 0.04, 0.06, 0, 0.008, 0);
+    k.box(P.steel, 0.015, 0.06, 0.015, r - 0.04, -0.06, 0);
+  });
+  k.spin(name, 'y', 0.25);
+}
+
+/** Rotary dryer drum on roller stations (spins slowly), axis along z. */
+function rotaryDrum(k: Kit, x: number, z0: number, z1: number, r: number) {
+  const P = k.P;
+  const y = Y0 + r + 0.06;
+  for (const zz of [z0 + 0.12, z1 - 0.12]) {
+    k.box(P.concrete, r * 2 + 0.08, 0.05, 0.08, x, Y0, zz);
+    for (const sx of [-1, 1]) k.at(x + sx * r * 0.7, Y0 + 0.07, zz, 0, () => k.tube(P.dark, [0, 0, -0.03], [0, 0, 0.03], 0.025, 8));
+  }
+  const d = k.node('drum', x, y, (z0 + z1) / 2);
+  k.on(d, () => {
+    k.tube(P.mats.col(0x6a5040, 0.6, 0.5), [0, 0, -(z1 - z0) / 2], [0, 0, (z1 - z0) / 2], r, 16);
+    for (const f of [-0.3, 0.3]) k.tube(P.steel, [0, 0, f * (z1 - z0) - 0.015], [0, 0, f * (z1 - z0) + 0.015], r + 0.012, 16);
+    k.tube(P.team, [0, 0, -0.02], [0, 0, 0.02], r + 0.008, 16);
+    k.box(P.dark, 0.02, r * 0.6, 0.06, r, -r * 0.3, 0);
+  });
+  k.spin('drum', 'z', 0.6);
+  // firing hood + stack at the far end
+  k.box(P.drab, r * 2 + 0.06, r * 2 + 0.06, 0.1, x, Y0 + 0.04, z0 - 0.03);
+  k.cyl(P.galv, 0.04, 0.55, x, Y0 + r * 2 + 0.1, z0 - 0.03, 10);
+  k.emit(x, Y0 + r * 2 + 0.7, z0 - 0.03, 'steam');
 }
 
 function refinery(k: Kit) {
   const P = k.P;
-  const R = P.R;
+  const N = P.N;
   slab(k, 3, 3, Y0, [-0.52, 0.52, 0.52]);
-  // ------------------------------------------------ harvester dock pad (front centre tile, flat)
-  k.box(P.T.concrete(0x9a9890, 2), 1.02, 0.008, 1.0, 0, 0, 1.0);
-  k.box(P.hazard, 0.05, 0.004, 0.96, -0.47, 0.008, 1.0, 9);
-  k.box(P.hazard, 0.05, 0.004, 0.96, 0.47, 0.008, 1.0, 9);
-  k.box(P.hazard, 0.9, 0.004, 0.05, 0, 0.008, 0.545, 9);
-  k.box(P.yellow, 0.022, 0.003, 0.7, -0.18, 0.008, 1.05);
-  k.box(P.yellow, 0.022, 0.003, 0.7, 0.18, 0.008, 1.05);
-  for (let i = 0; i < 3; i++) {
-    const zz = 1.2 - i * 0.16;
-    k.at(-0.05, 0.008, zz, -0.6, () => k.box(P.white, 0.12, 0.003, 0.02, 0, 0, 0));
-    k.at(0.05, 0.008, zz, 0.6, () => k.box(P.white, 0.12, 0.003, 0.02, 0, 0, 0));
-  }
-  k.box(P.team, 0.5, 0.003, 0.03, 0, 0.008, 0.62);
-  // ------------------------------------------------ ore intake hopper behind the pad
+  // ------------------------------------------------ harvester dock (front centre tile, ground level, bare concrete)
+  k.box(P.concrete, 1.02, 0.008, 1.0, 0, 0, 1.0);
+  // flush steel kerb plates (the harvester drives over them)
+  for (const sx of [-1, 1]) k.box(P.hazard, 0.03, 0.006, 0.9, sx * 0.46, 0.008, 1.0);
+  k.box(P.mats.at(Tile.Plate, 0x9a9e9c, 2.4), 0.8, 0.006, 0.5, 0, 0.008, 0.85);
+  // ------------------------------------------------ ore intake hopper behind the dock
   const hz = 0.3;
   k.box(P.concrete, 0.94, 0.08, 0.04, 0, Y0, hz - 0.2);
   k.box(P.concrete, 0.04, 0.08, 0.38, -0.45, Y0, hz);
   k.box(P.concrete, 0.04, 0.08, 0.38, 0.45, Y0, hz);
   k.box(P.black, 0.86, 0.01, 0.36, 0, Y0 + 0.02, hz);
   k.box(P.grating, 0.86, 0.006, 0.36, 0, Y0 + 0.05, hz, 8);
-  // steel hopper funnel with team stripe
-  k.at(0, Y0 + 0.08, hz - 0.1, Math.PI / 2, () =>
-    k.prism(P.steel, [[-0.1, 0], [0.12, 0], [0.18, 0.2], [-0.18, 0.2]], 0.7),
-  );
+  k.at(0, Y0 + 0.08, hz - 0.1, Math.PI / 2, () => k.prism(P.steel, [[-0.1, 0], [0.12, 0], [0.18, 0.2], [-0.18, 0.2]], 0.7));
   k.box(P.team, 0.72, 0.03, 0.01, 0, Y0 + 0.22, hz + 0.08);
   k.box(P.hazard, 0.72, 0.02, 0.012, 0, Y0 + 0.26, hz + 0.075);
+  oreHeap(k, -0.32, hz + 0.02, 0.12, 0.08);
   // inclined conveyor gallery up into the plant
   const c0: V3 = [0, Y0 + 0.24, hz - 0.12];
-  const c1: V3 = [0, Y0 + 0.7, -0.5];
+  const c1: V3 = [0, Y0 + 0.72, -0.5];
   const len = Math.hypot(c1[1] - c0[1], c1[2] - c0[2]);
   const ang = Math.atan2(c1[1] - c0[1], -(c1[2] - c0[2]));
   k.at(0, (c0[1] + c1[1]) / 2, (c0[2] + c1[2]) / 2, 0, () => {
-    k.local(() => k.box(R === 'east' ? P.corrRust : P.corr, 0.16, 0.1, len, 0, -0.05, 0));
+    k.local(() => k.box(P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d8d0, 0.4), 2), 0.16, 0.1, len, 0, -0.05, 0));
     k.box(P.team, 0.165, 0.016, len, 0, 0.03, 0);
     k.box(P.steel, 0.18, 0.012, len, 0, -0.06, 0);
+    for (let i = 0; i < 5; i++) k.box(P.lamp, 0.004, 0.012, 0.03, 0.082, -0.03, -len / 2 + 0.08 + i * (len - 0.16) / 4);
   }, ang);
   for (const t of [0.35, 0.7]) {
     const y = c0[1] + (c1[1] - c0[1]) * t - 0.06;
@@ -3079,387 +3590,48 @@ function refinery(k: Kit) {
   const px1 = 0.62;
   const pz0 = -1.42;
   const pz1 = -0.5;
-  if (R === 'east') {
-    k.box(P.base, px1 - px0 + 0.014, 0.03, pz1 - pz0 + 0.014, 0, Y0, (pz0 + pz1) / 2);
-    k.box(P.wall2, px1 - px0, 0.6, pz1 - pz0, 0, Y0, (pz0 + pz1) / 2);
-    dress(k, px0, px1, pz0, pz1, Y0, 0.6, { beacons: false });
-    punched(k, 'z', 1, px0, px1, 6, Y0 + 0.12, pz1, 0.09, 0.3, 'round', [-0.1, 0.1]);
-    punched(k, 'x', 1, pz0, pz1, 5, Y0 + 0.12, px1, 0.09, 0.3, 'round');
-    k.box(P.team, px1 - px0 + 0.008, 0.03, pz1 - pz0 + 0.008, 0, Y0 + 0.55, (pz0 + pz1) / 2);
-    gable(k, P.pitch, P.wall2, 0, Y0 + 0.6, (pz0 + pz1) / 2, px1 - px0, pz1 - pz0, 0.26, 0.03, true);
-    k.box(P.corrRust, 0.3, 0.14, 0.2, 0.0, Y0 + 0.78, (pz0 + pz1) / 2, 4);
-    chimney(k, -0.45, -1.25, 1.6, 0.07, 0.05, false, Y0);
-    k.emit(-0.45, Y0 + 1.7, -1.25, 'smoke');
-    stencil(k, '3', 'x', 1, -0.75, Y0 + 0.75, px1, 0.18);
-  } else {
-    const top = block(k, { x0: px0, x1: px1, z0: pz0, z1: pz1, h: 0.66, floors: 3, wall: R === 'west' ? P.wall2 : P.wall, equip: 2 });
-    // smelter / kiln tower on top
-    const sm = R === 'mideast' ? P.wall2 : R === 'asia' ? P.wall : P.wallB;
-    k.box(sm, 0.4, 0.3, 0.36, -0.3, top - 0.03, -1.15);
-    k.box(P.team, 0.402, 0.03, 0.362, -0.3, top + 0.22, -1.15);
-    k.cyl(R === 'asia' ? P.white : P.concrete, 0.06, 0.6, -0.36, top + 0.27, -1.2, 12, 0.05);
-    if (R === 'asia') k.cyl(P.red, 0.052, 0.1, -0.36, top + 0.77, -1.2, 12);
-    k.emit(-0.36, top + 0.95, -1.2, 'smoke');
-    k.blinkLight(-0.36, top + 0.9, -1.2, 0.014, 1.4, 0.3);
+  const top = block(k, { x0: px0, x1: px1, z0: pz0, z1: pz1, h: 0.66, floors: 3, wall: P.mats.at(N.wall2Tile === Tile.Paint ? Tile.Clad : N.wall2Tile, N.wall2), equip: 2, sign: false, roof: 'flat' });
+  wallSign(k, 'z', 1, -0.3, Y0 + 0.5, pz1, 0.36, 'main');
+  // crusher / kiln tower on top + stack
+  k.box(P.wallB, 0.4, 0.3, 0.36, -0.3, top - 0.03, -1.15);
+  k.box(P.team, 0.402, 0.03, 0.362, -0.3, top + 0.22, -1.15);
+  k.cyl(P.concrete, 0.06, 0.6, -0.36, top + 0.27, -1.2, 12, 0.05);
+  k.cyl(P.red, 0.052, 0.06, -0.36, top + 0.8, -1.2, 12);
+  k.emit(-0.36, top + 0.95, -1.2, 'smoke');
+  k.blinkLight(-0.36, top + 0.9, -1.2, 0.014, 1.4, 0.3);
+  // ------------------------------------------------ left: storage silos on legs with a conveyor gallery on top
+  for (let i = 0; i < 3; i++) silo(k, -1.12, -1.2 + i * 0.34, 0.15, 0.62, P.tank, 'cone', Y0, 0.2);
+  k.box(P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d8d0, 0.4), 2), 0.08, 0.06, 0.75, -1.12, Y0 + 0.94, -0.86);
+  k.box(P.grating, 0.1, 0.008, 0.75, -1.12, Y0 + 1.0, -0.86);
+  railing(k, [[-1.17, -1.23], [-1.17, -0.5]], Y0 + 1.0, 0.05);
+  k.at(-0.84, Y0 + 0.97, -0.9, 0, () => k.box(P.mats.at(Tile.Corr, mix(N.wall2, 0xd8d8d0, 0.4), 2), 0.48, 0.06, 0.08, 0, 0, 0), 0, -0.12);
+  ladder(k, 'x', 1, -0.75, Y0, Y0 + 0.98, -0.97);
+  oreHeap(k, -1.12, -0.2, 0.26, 0.2);
+  // ------------------------------------------------ right: rotary dryer + thickener + pipe rack
+  rotaryDrum(k, 0.98, -1.35, -0.55, 0.09);
+  thickener(k, 'rake', 1.05, 0.05, 0.34);
+  const rx = 0.72;
+  for (let i = 0; i < 3; i++) {
+    const z = -0.4 + i * 0.28;
+    k.box(P.steel, 0.02, 0.32, 0.02, rx - 0.06, Y0, z);
+    k.box(P.steel, 0.02, 0.32, 0.02, rx + 0.06, Y0, z);
+    k.box(P.steel, 0.16, 0.02, 0.025, rx, Y0 + 0.3, z);
   }
-  // ------------------------------------------------ left: silos / storage
-  if (R === 'west') {
-    for (let i = 0; i < 3; i++) silo(k, -1.12, -1.2 + i * 0.34, 0.15, 0.78, P.tank, 'cone');
-    k.box(P.grating, 0.06, 0.012, 0.75, -1.12, Y0 + 0.92, -0.86);
-    railing(k, [[-1.15, -1.23], [-1.15, -0.5]], Y0 + 0.93, 0.05);
-    ladder(k, 'x', 1, -0.86, Y0, Y0 + 0.8, -0.97);
-  } else if (R === 'east') {
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) silo(k, -1.25 + i * 0.3, -1.25 + j * 0.3, 0.145, 1.05, P.wall, 'flat');
-    k.box(P.wallB, 0.5, 0.18, 0.5, -1.1, Y0 + 1.07, -1.1);
-    punched(k, 'z', 1, -1.3, -0.9, 3, Y0 + 1.13, -0.85, 0.06, 0.06);
-    k.box(P.concrete, 0.52, 0.015, 0.52, -1.1, Y0 + 1.25, -1.1);
-    // conveyor bridge to the plant roof
-    k.at(-0.75, Y0 + 1.0, -1.0, 0, () => k.box(P.corrRust, 0.36, 0.08, 0.1, 0, 0, 0), 0, -0.25);
-    oreHeap(k, -1.1, -0.35, 0.28, 0.22);
-  } else if (R === 'asia') {
-    for (let i = 0; i < 2; i++) {
-      const x = -1.08;
-      const z = -1.12 + i * 0.52;
-      for (let a = 0; a < 6; a++) k.box(P.steel, 0.018, 0.22, 0.018, x + Math.cos((a / 6) * TAU) * 0.17, Y0, z + Math.sin((a / 6) * TAU) * 0.17);
-      k.sph(P.tank, 0.23, x, Y0 + 0.4, z, 20, 14);
-      k.ring(P.team, 0.232, 0.012, x, Y0 + 0.4, z, 24);
-      stairs(k, x + 0.28, z, Y0, Y0 + 0.5, false, -1, 0.05);
-    }
-  } else {
-    for (let i = 0; i < 3; i++) silo(k, -1.12, -1.22 + i * 0.32, 0.14, 0.62, P.wallB, 'dome');
-    oreHeap(k, -1.15, -0.25, 0.22, 0.16);
-  }
-  // ------------------------------------------------ right: tanks, pipes
-  if (R === 'west' || R === 'asia') {
-    // pipe rack along z
-    const rx = 0.8;
-    for (let i = 0; i < 5; i++) {
-      const z = -1.3 + i * 0.32;
-      k.box(P.steel, 0.02, 0.36, 0.02, rx - 0.08, Y0, z);
-      k.box(P.steel, 0.02, 0.36, 0.02, rx + 0.08, Y0, z);
-      k.box(P.steel, 0.2, 0.02, 0.025, rx, Y0 + 0.34, z);
-      k.box(P.steel, 0.2, 0.02, 0.025, rx, Y0 + 0.22, z);
-    }
-    const pc = [P.yellow, P.galv, P.mats.col(0x3f6a9a, 0.5, 0.4), P.galv];
-    for (let i = 0; i < 4; i++) k.tube(pc[i], [rx - 0.06 + i * 0.04, Y0 + 0.385, -1.36], [rx - 0.06 + i * 0.04, Y0 + 0.385, 0.0], 0.014, 8);
-    k.pipe(P.galv, [[px1, Y0 + 0.385, -0.9], [rx - 0.02, Y0 + 0.385, -0.9]], 0.014, 8);
-    // horizontal bullet tanks
-    for (let i = 0; i < 2; i++) {
-      const z = -1.1 + i * 0.5;
-      const x = 1.22;
-      k.box(P.concrete, 0.05, 0.06, 0.18, x, Y0, z - 0.1);
-      k.box(P.concrete, 0.05, 0.06, 0.18, x, Y0, z + 0.1);
-      k.at(x, Y0 + 0.14, z, 0, () => {
-        k.tube(P.tank, [0, 0, -0.18], [0, 0, 0.18], 0.1, 16);
-        k.sph(P.tank, 0.1, 0, 0, -0.18, 16, 8);
-        k.sph(P.tank, 0.1, 0, 0, 0.18, 16, 8);
-        k.tube(P.team, [0, 0, -0.03], [0, 0, 0.03], 0.102, 16);
-      });
-    }
-  } else if (R === 'east') {
-    for (let i = 0; i < 2; i++) {
-      const z = -1.05 + i * 0.6;
-      silo(k, 1.1, z, 0.24, 0.42, P.T.corrRust(0xb8b0a0, 5), 'flat');
-      stencil(k, String(i + 1), 'x', 1, z, Y0 + 0.2, 1.1 + 0.245, 0.14, '#e8e4d8');
-    }
-    k.pipe(P.rust, [[px1, Y0 + 0.3, -1.05], [0.86, Y0 + 0.3, -1.05]], 0.025, 8);
-    k.pipe(P.rust, [[px1, Y0 + 0.2, -0.6], [0.75, Y0 + 0.2, -0.6], [0.75, Y0 + 0.2, -0.45], [0.86, Y0 + 0.2, -0.45]], 0.022, 8);
-  } else {
-    for (let i = 0; i < 2; i++) silo(k, 1.08, -1.05 + i * 0.6, 0.22, 0.38, P.tank, 'dome');
-    k.pipe(P.galv, [[px1, Y0 + 0.25, -1.05], [0.86, Y0 + 0.25, -1.05]], 0.02, 8);
-  }
-  // ------------------------------------------------ front left: control office
-  const ox0 = -1.42;
-  const ox1 = -0.72;
-  const oz0 = 0.35;
-  const oz1 = 1.2;
-  if (R === 'asia') block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1, h: 0.36, floors: 2, roof: 'asian', rise: 0.18, door: -1.07 });
-  else if (R === 'mideast') {
-    block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1 - 0.1, h: 0.34, floors: 2, equip: 1 });
-    arcade(k, P.wall2, ox0, ox1, Y0, 0.2, oz1 - 0.02, 0.03, 4, 0.11, 0.08);
-    k.box(P.wall2, ox1 - ox0, 0.02, 0.12, (ox0 + ox1) / 2, Y0 + 0.2, oz1 - 0.06);
-    k.box(P.tile, ox1 - ox0 - 0.02, 0.025, 0.004, (ox0 + ox1) / 2, Y0 + 0.16, oz1 - 0.003);
-  } else block(k, { x0: ox0, x1: ox1, z0: oz0, z1: oz1, h: 0.34, floors: 2, door: -1.07, equip: 1 });
-  // ------------------------------------------------ front right
-  if (R === 'east' || R === 'mideast') {
-    oreHeap(k, 1.02, 0.95, 0.32, 0.24);
-    oreHeap(k, 1.2, 0.45, 0.2, 0.14);
-    if (R === 'mideast') planter(k, 0.7, 1.35, 0.12, 0.12, 'palm', Y0);
-    else guardBooth(k, 0.75, 1.32, 0);
-  } else {
-    k.box(P.concrete, 0.66, 0.05, 0.02, 1.05, Y0, 0.55);
-    k.box(P.concrete, 0.66, 0.05, 0.02, 1.05, Y0, 1.38);
-    k.box(P.concrete, 0.02, 0.05, 0.83, 0.73, Y0, 0.965);
-    k.box(P.concrete, 0.02, 0.05, 0.83, 1.37, Y0, 0.965);
-    silo(k, 0.9, 0.78, 0.15, 0.4, P.tank, 'cone');
-    silo(k, 1.18, 1.12, 0.15, 0.4, P.tank, 'cone');
-    if (R === 'asia') planter(k, 0.95, 1.43, 0.6, 0.06, 'shrub', Y0);
-  }
-  lightPole(k, 0.62, 1.38, 0.42, Math.PI);
-  lightPole(k, -0.62, 1.38, 0.42, 0);
+  const pc = [P.yellow, P.galv, P.mats.col(0x3f6a9a, 0.5, 0.4)];
+  for (let i = 0; i < 3; i++) k.tube(pc[i], [rx - 0.045 + i * 0.045, Y0 + 0.34, -0.5], [rx - 0.045 + i * 0.045, Y0 + 0.34, 0.2], 0.014, 8);
+  k.pipe(P.galv, [[px1, Y0 + 0.34, -0.55], [rx, Y0 + 0.34, -0.55], [rx, Y0 + 0.34, -0.5]], 0.014, 8);
+  k.pipe(P.mats.col(0x3f6a9a, 0.5, 0.4), [[rx + 0.045, Y0 + 0.34, 0.2], [rx + 0.045, Y0 + 0.14, 0.2], [0.85, Y0 + 0.14, 0.2]], 0.014, 8);
+  // ------------------------------------------------ front left: weighbridge / control cabin + loader
+  cabin(k, -1.0, Y0, 0.62, 0, N.wall, 0.5);
+  k.box(N.roofStyle === 'flat' ? P.roof : P.pitch, 0.56, 0.012, 0.24, -1.0, Y0 + 0.18, 0.62);
+  wallSign(k, 'z', 1, -1.0, Y0 + 0.11, 0.705, 0.22, 'num', 'R1');
+  dozer(k, -0.95, 1.12, -0.4, 1.05);
+  floodMast(k, -0.62, 1.4, 0.5, -1.2);
+  floodMast(k, 0.62, 1.4, 0.5, -1.9);
+  // front right: ore stockpile
+  oreHeap(k, 1.08, 0.95, 0.32, 0.22);
+  oreHeap(k, 0.78, 1.25, 0.18, 0.12);
   k.height = 1.25;
-}
-
-// ================================================================ BARRACKS (2x2)
-
-/** Regional guard / watch tower. */
-function watchtower(k: Kit, x: number, z: number) {
-  const P = k.P;
-  const R = P.R;
-  const h = 0.5;
-  if (R === 'mideast') {
-    k.box(P.wall2, 0.18, h, 0.18, x, Y0, z);
-    punched(k, 'z', 1, x - 0.05, x + 0.05, 1, Y0 + h - 0.15, z + 0.09, 0.04, 0.08, 'arch');
-    flatRoof(k, x - 0.09, x + 0.09, z - 0.09, z + 0.09, Y0 + h, 0.03, P.wall2);
-    k.box(P.team, 0.182, 0.02, 0.182, x, Y0 + h - 0.05, z);
-    return;
-  }
-  if (R === 'asia') {
-    k.box(P.wall, 0.16, h - 0.1, 0.16, x, Y0, z);
-    k.box(P.accent, 0.164, 0.02, 0.164, x, Y0 + h - 0.12, z);
-    k.box(P.mats.col(0x2a3a48, 0.15, 0.8), 0.2, 0.08, 0.2, x, Y0 + h - 0.1, z);
-    asianRoof(k, P.pitch, ridgeMat(k), x, Y0 + h - 0.02, z, 0.3, 0.3, 0.09, 0.03, P.accent);
-    k.box(P.team, 0.205, 0.015, 0.205, x, Y0 + h - 0.035, z);
-    return;
-  }
-  const leg = R === 'east' ? P.wood : P.galv;
-  const s = 0.07;
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.bar(leg, [x + sx * s * 1.3, Y0, z + sz * s * 1.3], [x + sx * s, Y0 + h, z + sz * s], 0.018);
-  for (const yy of [0.15, 0.32]) {
-    k.bar(leg, [x - s * 1.2, Y0 + yy, z + s * 1.2], [x + s * 1.2, Y0 + yy + 0.1, z + s * 1.2], 0.008);
-    k.bar(leg, [x + s * 1.2, Y0 + yy, z - s * 1.2], [x + s * 1.2, Y0 + yy + 0.1, z + s * 1.2], 0.008);
-  }
-  k.box(R === 'east' ? P.wood : P.grating, 0.2, 0.015, 0.2, x, Y0 + h, z);
-  if (R === 'east') {
-    for (const sx of [-1, 1]) k.box(P.wood, 0.2, 0.06, 0.01, x, Y0 + h + 0.015, z + sx * 0.095);
-    for (const sx of [-1, 1]) k.box(P.wood, 0.01, 0.06, 0.2, x + sx * 0.095, Y0 + h + 0.015, z);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.wood, 0.012, 0.13, 0.012, x + sx * 0.09, Y0 + h, z + sz * 0.09);
-    gable(k, P.corrRust, P.wood, x, Y0 + h + 0.13, z, 0.22, 0.22, 0.07, 0.02, true);
-    k.box(P.team, 0.2, 0.02, 0.005, x, Y0 + h + 0.05, z + 0.102);
-  } else {
-    sandbags(k, [x - 0.09, z + 0.09], [x + 0.09, z + 0.09], 1, Y0 + h + 0.015);
-    sandbags(k, [x + 0.09, z - 0.09], [x + 0.09, z + 0.09], 1, Y0 + h + 0.015);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.galv, 0.01, 0.14, 0.01, x + sx * 0.09, Y0 + h, z + sz * 0.09);
-    k.box(P.mats.col(P.s.hull, 0.7, 0.2), 0.24, 0.015, 0.24, x, Y0 + h + 0.14, z);
-    k.box(P.team, 0.242, 0.012, 0.242, x, Y0 + h + 0.13, z);
-  }
-  k.box(P.dark, 0.03, 0.02, 0.04, x + 0.06, Y0 + h + 0.1, z + 0.06);
-  k.box(P.lamp, 0.004, 0.014, 0.03, x + 0.077, Y0 + h + 0.1, z + 0.06);
-}
-
-function barracks(k: Kit) {
-  const P = k.P;
-  const R = P.R;
-  slab(k, 2, 2);
-  // parade ground (front left)
-  const pg = R === 'east' ? P.asphalt : P.T.asphalt(R === 'mideast' ? 0xd8ccb0 : 0xc8c8c8);
-  k.box(pg, 0.95, 0.004, 0.8, -0.45, Y0, 0.52);
-  for (let i = 0; i < 4; i++) k.box(P.white, 0.012, 0.002, 0.6, -0.8 + i * 0.22, Y0 + 0.004, 0.55);
-  k.box(P.white, 0.8, 0.002, 0.012, -0.47, Y0 + 0.004, 0.22);
-  k.box(R === 'east' ? P.red : P.team, 0.12, 0.002, 0.12, -0.47, Y0 + 0.004, 0.75);
-  flagPole(k, -0.85, 0.2, 0.72, Y0);
-  watchtower(k, -0.8, 0.8);
-  // main dormitory (back) + wing with entrance (front right)
-  const x0 = -0.95;
-  const x1 = 0.95;
-  const z0 = -0.95;
-  const z1 = -0.2;
-  const wx0 = 0.2;
-  const wx1 = 0.95;
-  const wz1 = 0.48;
-  if (R === 'west') {
-    block(k, { x0, x1, z0, z1, h: 0.46, floors: 2, equip: 3 });
-    block(k, { x0: wx0, x1: wx1, z0: z1 - 0.02, z1: wz1, h: 0.26, floors: 1, door: 0.5, equip: 1, wall: P.wallB });
-    // entrance canopy
-    k.box(P.trim, 0.3, 0.012, 0.12, 0.5, Y0 + 0.22, wz1 + 0.06);
-    k.box(P.team, 0.3, 0.025, 0.008, 0.5, Y0 + 0.205, wz1 + 0.12);
-    // pull-up / training bars
-    for (let i = 0; i < 3; i++) {
-      const bx = -0.85 + i * 0.12;
-      k.box(P.galv, 0.008, 0.18, 0.008, bx, Y0, 0.0);
-    }
-    k.bar(P.galv, [-0.85, Y0 + 0.17, 0.0], [-0.61, Y0 + 0.17, 0.0], 0.006);
-    jersey(k, 0.15, 0.95, 0.25, Math.PI / 2);
-    jersey(k, -0.2, 0.95, 0.25, Math.PI / 2);
-    lightPole(k, 0.12, 0.6, 0.38, 0);
-  } else if (R === 'east') {
-    const zc = (z0 + z1) / 2;
-    k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, 0, Y0, zc);
-    k.box(P.wall2, x1 - x0, 0.44, z1 - z0, 0, Y0, zc);
-    dress(k, x0, x1, z0, z1, Y0, 0.44, { beacons: false });
-    facade(k, 'z', 1, x0, x1, z1, Y0, 0.44, 2, 'punched');
-    facade(k, 'x', 1, z0, z1, x1, Y0, 0.44, 2, 'punched');
-    k.box(P.concrete, x1 - x0 + 0.012, 0.02, z1 - z0 + 0.012, 0, Y0 + 0.21, zc);
-    k.box(P.team, x1 - x0 + 0.01, 0.025, z1 - z0 + 0.01, 0, Y0 + 0.41, zc);
-    gable(k, P.pitch, P.wall2, 0, Y0 + 0.44, zc, x1 - x0, z1 - z0, 0.22, 0.035, true);
-    k.box(P.brick, 0.06, 0.16, 0.06, -0.5, Y0 + 0.5, zc - 0.12);
-    k.box(P.brick, 0.06, 0.16, 0.06, 0.5, Y0 + 0.5, zc - 0.12);
-    // entrance wing (single storey, flat)
-    block(k, { x0: wx0, x1: wx1, z0: z1, z1: wz1, h: 0.25, floors: 1, door: 0.5, equip: 1, wall: P.wall });
-    stencil(k, '12', 'x', 1, 0.15, Y0 + 0.1, wx1, 0.14);
-    // painted kerbs + watch post
-    for (let i = 0; i < 6; i++) k.box(i % 2 ? P.white : P.black, 0.12, 0.02, 0.025, -0.88 + i * 0.12, Y0, 0.95);
-    guardBooth(k, -0.1, 0.85);
-  } else if (R === 'asia') {
-    block(k, { x0, x1, z0, z1, h: 0.44, floors: 2, roof: 'asian', rise: 0.28 });
-    block(k, { x0: wx0, x1: wx1, z0: z1 - 0.02, z1: wz1 - 0.08, h: 0.24, floors: 1, door: 0.5, equip: 0, roof: 'asian', rise: 0.14 });
-    for (let i = 0; i < 2; i++) k.cyl(P.accent, 0.016, 0.22, 0.38 + i * 0.24, Y0, wz1 - 0.02, 10);
-    k.box(P.white, 0.4, 0.02, 0.12, 0.5, Y0, wz1 - 0.04);
-    planter(k, -0.9, 0.2, 0.08, 0.5, 'shrub', Y0);
-    planter(k, 0.05, 0.9, 0.2, 0.12, 'tree', Y0);
-    lightPole(k, 0.12, 0.55, 0.38, 0);
-  } else {
-    block(k, { x0, x1, z0, z1, h: 0.46, floors: 2, equip: 2 });
-    block(k, { x0: wx0, x1: wx1, z0: z1 - 0.02, z1: wz1 - 0.12, h: 0.24, floors: 1, door: 0.5, equip: 1, win: 'arched' });
-    arcade(k, P.wall2, wx0, wx1, Y0, 0.22, wz1 - 0.01, 0.03, 4, 0.11, 0.07);
-    k.box(P.wall2, wx1 - wx0, 0.02, 0.15, (wx0 + wx1) / 2, Y0 + 0.22, wz1 - 0.08);
-    k.box(P.tile, wx1 - wx0 - 0.02, 0.025, 0.004, (wx0 + wx1) / 2, Y0 + 0.18, wz1 + 0.006);
-    planter(k, 0.1, 0.9, 0.12, 0.12, 'palm', Y0);
-    sandbags(k, [-0.95, 0.96], [-0.25, 0.96], 2, Y0);
-  }
-  crate(k, 0.85, Y0, 0.85, 0.08);
-  crate(k, 0.76, Y0, 0.88, 0.07, 0.3);
-  k.height = 0.95;
-}
-
-// ================================================================ WAR FACTORY (3x3)
-
-function factory(k: Kit) {
-  const P = k.P;
-  const R = P.R;
-  slab(k, 3, 3, Y0, [-0.53, 0.53, -0.6]);
-  // vehicle bay floor + apron (ground level, open to +Z)
-  k.box(P.T.concrete(0x8e8c86, 2), 1.06, 0.01, 2.12, 0, 0, 0.44);
-  for (const sx of [-1, 1]) k.box(P.yellow, 0.022, 0.003, 1.95, sx * 0.4, 0.01, 0.5);
-  for (let i = 0; i < 4; i++) {
-    const zz = 1.25 - i * 0.22;
-    k.at(-0.06, 0.01, zz, -0.6, () => k.box(P.white, 0.13, 0.003, 0.022, 0, 0, 0));
-    k.at(0.06, 0.01, zz, 0.6, () => k.box(P.white, 0.13, 0.003, 0.022, 0, 0, 0));
-  }
-  k.box(P.hazard, 0.9, 0.003, 0.05, 0, 0.01, 0.92, 9);
-  const z0 = -1.42;
-  const z1 = 0.95;
-  const zc = (z0 + z1) / 2;
-  const L = z1 - z0;
-  const H = R === 'east' ? 0.5 : 0.6;
-  const DH = 0.56; // door height
-  const hallW = 1.42 - 0.55;
-  const hallM = R === 'west' ? P.wall2 : R === 'east' ? P.wall2 : R === 'asia' ? P.wall : P.wall;
-  // side halls
-  for (const sx of [-1, 1]) {
-    const hx = sx * (0.55 + hallW / 2);
-    k.box(P.base, hallW + 0.012, 0.03, L + 0.012, hx, Y0, zc);
-    k.box(hallM, hallW, H, L, hx, Y0, zc);
-    dress(k, hx - hallW / 2, hx + hallW / 2, z0, z1, Y0, H, { beacons: false, cab: sx > 0 });
-    k.box(P.team, hallW + 0.008, 0.026, L + 0.008, hx, Y0 + H - 0.06, zc);
-  }
-  // bay interior: back wall + inner lighting
-  k.box(P.dark, 1.1, H, 0.04, 0, 0, -0.6);
-  k.box(P.lamp, 0.7, 0.03, 0.01, 0, 0.42, -0.575);
-  k.box(P.mats.col(0x3a3d40, 0.8, 0.2), 1.1, 0.02, 1.55, 0, H - 0.01, 0.17);
-  // back block behind the bay
-  k.box(hallM, 1.1, H, 0.82, 0, Y0, -1.01);
-  // facade windows (+X side and fronts of the halls)
-  const style = { west: 'ribbon', east: 'round', asia: 'ribbonC', mideast: 'arched' }[R];
-  facade(k, 'x', 1, z0, z1, 1.42, Y0, H, 1, style);
-  for (const sx of [-1, 1]) facade(k, 'z', 1, sx * 0.55 + (sx > 0 ? 0.08 : -hallW), sx * 0.55 + (sx > 0 ? hallW : -0.08), z1, Y0, H, 1, style);
-  door(k, 'z', 1, 1.25, Y0, z1, 0.1, 0.18, true);
-  wallEmblem(k, 'z', 1, 0.86, Y0 + H - 0.22, z1, 0.15);
-  // door portal
-  const doorFrame = () => {
-    for (const sx of [-1, 1]) {
-      k.box(P.hazard, 0.04, DH, 0.05, sx * 0.53, 0, z1 + 0.025, 9);
-      k.sph(P.amber_l, 0.018, sx * 0.53, DH + 0.03, z1 + 0.06, 8, 6);
-    }
-    k.tube(P.steel, [-0.52, DH + 0.05, z1 - 0.03], [0.52, DH + 0.05, z1 - 0.03], 0.04, 12);
-  };
-  if (R === 'west') {
-    vault(k, P.T.corr(0xa8b0b6, 3), hallM, 0, Y0 + H, zc, 2.86, L + 0.04, 0.42, false);
-    // structural ribs + ridge ventilator
-    for (let i = 0; i < 6; i++) {
-      const g = new THREE.TorusGeometry(1.435, 0.012, 4, 22, Math.PI);
-      g.scale(1, 0.42 / 1.435, 1);
-      g.translate(0, Y0 + H, z0 + 0.05 + (i * (L - 0.1)) / 5);
-      k.add(g, P.trim, 0);
-    }
-    k.box(P.trim, 0.12, 0.04, L * 0.8, 0, Y0 + H + 0.41, zc);
-    k.box(P.dark, 0.13, 0.012, L * 0.8, 0, Y0 + H + 0.45, zc);
-    k.box(P.team, 0.6, 0.12, 0.012, 0, Y0 + H + 0.1, z1 + 0.025);
-    k.panel(P.emb, 'z', 1, 0, Y0 + H + 0.11, z1 + 0.032, 0.15, 0.1, flagPatchCell(P.s.faction).r);
-    k.box(hallM, 1.1, H - DH, 0.04, 0, DH, z1 - 0.02);
-    k.box(P.team, 1.12, 0.05, 0.05, 0, DH + 0.01, z1 + 0.02);
-    doorFrame();
-    // skylights + roof vents along the vault crown
-    for (let i = 0; i < 3; i++) k.box(P.glass, 0.18, 0.012, L * 0.26, -0.5 + i * 0.5, Y0 + H + 0.405 - Math.abs(-0.5 + i * 0.5) * 0.12, zc);
-    for (let i = 0; i < 4; i++) vent(k, 0.9, Y0 + H + 0.28, -1.1 + i * 0.5, 0.03);
-    // front office annex + parking
-    block(k, { x0: 0.62, x1: 1.42, z0: 1.0, z1: 1.42, h: 0.24, floors: 1, door: 0.9, equip: 1 });
-    jersey(k, -1.0, 1.35, 0.6, 0);
-    lightPole(k, -0.62, 1.38, 0.42, 0);
-  } else if (R === 'east') {
-    // sawtooth roof with north lights (glazing faces +Z)
-    const n = 5;
-    const tz = L / n;
-    const th = 0.2;
-    for (let i = 0; i < n; i++) {
-      const za = z0 + i * tz;
-      const zb = za + tz;
-      k.at(0, Y0 + H, 0, -Math.PI / 2, () => k.prism(P.pitch, [[za, 0], [zb, 0], [zb - 0.02, th]], 2.86, 0, 0, 0));
-      k.panel(P.win, 'z', 1, 0, Y0 + H + 0.03, zb - 0.02, 2.8, th - 0.05, [0, 0, 28 / 8, 0.25]);
-      k.box(P.dark, 2.86, 0.012, 0.03, 0, Y0 + H + th - 0.004, zb - 0.02);
-    }
-    k.box(P.wall2, 1.1, H - DH, 0.05, 0, DH, z1 - 0.025);
-    k.box(P.team, 1.12, 0.04, 0.05, 0, DH + 0.02, z1 + 0.01);
-    doorFrame();
-    // swung-open painted gate leaves with stars
-    for (const sx of [-1, 1]) {
-      k.box(P.accent, 0.012, DH - 0.02, 0.5, sx * 0.57, 0.01, z1 + 0.25);
-      const star = regular(10, 0.07, Math.PI / 2).map(([a, b], i) => [a * (i % 2 ? 0.42 : 1), b * (i % 2 ? 0.42 : 1)] as P2);
-      k.at(sx * 0.565 - sx * 0.01, 0.3, z1 + 0.25, Math.PI / 2, () => k.prism(P.red, star, 0.006, 0, 0, sx * 0.003));
-    }
-    chimney(k, -1.15, -1.15, 1.7, 0.08, 0.055, false, Y0);
-    k.emit(-1.15, Y0 + 1.8, -1.15, 'smoke');
-    stencil(k, '1', 'x', 1, 0.6, Y0 + 0.3, 1.42, 0.22);
-    k.pipe(P.rust, [[1.44, Y0 + 0.4, -1.3], [1.44, Y0 + 0.4, 0.8]], 0.016, 8);
-    guardBooth(k, 1.2, 1.25);
-    boomGate(k, 0.6, 1.3, 0.4, 0);
-  } else if (R === 'asia') {
-    k.box(P.T.corr(0x5f86b8, 3), 2.86, 0.12, L, 0, Y0 + H - 0.12, zc);
-    k.box(hallM, 1.1, H - DH, 0.04, 0, DH, z1 - 0.02);
-    k.box(P.T.corr(0x5f86b8, 3), 1.1, 0.12, 0.045, 0, Y0 + H - 0.12, z1 - 0.02);
-    gable(k, P.T.corr(0x5f86b8, 3), P.T.corr(0x5f86b8, 3), 0, Y0 + H, zc, 2.86, L, 0.2, 0.04, false);
-    for (const sx of [-1, 1]) k.box(P.glass, 0.12, 0.01, L * 0.8, sx * 0.7, Y0 + H + 0.1, zc);
-    k.box(P.team, 1.12, 0.05, 0.05, 0, DH + 0.01, z1 + 0.02);
-    doorFrame();
-    planter(k, -1.0, 1.35, 0.7, 0.1, 'shrub', Y0);
-    planter(k, 1.0, 1.35, 0.7, 0.1, 'shrub', Y0);
-    lightPole(k, 0.62, 1.2, 0.42, Math.PI);
-  } else {
-    // flat crenellated roofs over the halls with small vaults, and a tall iwan portal
-    for (const sx of [-1, 1]) {
-      const hx = sx * (0.55 + hallW / 2);
-      flatRoof(k, hx - hallW / 2, hx + hallW / 2, z0, z1, Y0 + H, 0.04);
-      for (let i = 0; i < 3; i++) vault(k, P.T.sandstone(0xe8dcc0, 5), null, hx, Y0 + H, z0 + 0.4 + i * 0.78, hallW - 0.12, 0.6, 0.14, true);
-    }
-    k.box(P.roof, 1.1, 0.02, 2.4, 0, Y0 + H, zc);
-    for (let i = 0; i < 3; i++) dome(k, 0, Y0 + H, -1.0 + i * 0.6, 0.18, 'hemi');
-    const op = archPts(0, 0.0, 1.0, 0.42, 0.25, 7);
-    op[0][1] = 0.003;
-    op[1][1] = 0.003;
-    k.prism(P.wall2, [[-0.66, 0], [0.66, 0], [0.66, 1.18], [-0.66, 1.18]], 0.12, 0, 0, z1 - 0.01, undefined, [op]);
-    const band = archPts(0, 0.0, 1.08, 0.42, 0.25, 7).slice(1);
-    k.prism(P.tile, ([...band, [-0.62, 0.0], [-0.62, 1.12], [0.62, 1.12], [0.62, 0.0]] as P2[]).reverse(), 0.01, 0, 0.0, z1 + 0.055, 0, [op.map(([a, b]) => [a * 0.999, b] as P2)]);
-    k.box(P.trim, 1.36, 0.04, 0.14, 0, 1.18, z1 - 0.01);
-    for (let i = 0; i < 7; i++) k.box(P.trim, 0.06, 0.05, 0.13, -0.6 + i * 0.2, 1.22, z1 - 0.01);
-    k.box(P.team, 0.5, 0.06, 0.006, 0, 1.06, z1 + 0.062);
-    for (const sx of [-1, 1]) k.box(P.hazard, 0.03, 0.4, 0.02, sx * 0.53, 0, z1 + 0.06, 9);
-    planter(k, -1.2, 1.3, 0.14, 0.14, 'palm', Y0);
-    planter(k, 1.2, 1.3, 0.14, 0.14, 'palm', Y0);
-    sandbags(k, [-1.0, 1.0], [-0.6, 1.0], 2, Y0);
-  }
-  // back block roof equipment
-  roofKit(k, -0.55, 0.55, -1.42, -0.6, Y0 + H + (R === 'west' ? 0.38 : R === 'east' ? 0.2 : 0.2), 0);
-  k.height = R === 'mideast' ? 1.25 : 1.1;
 }
 
 // ================================================================ RADAR (2x2)
@@ -3467,87 +3639,47 @@ function factory(k: Kit) {
 /** Curved reflector strip (part of a vertical cylinder), facing +X, double sided. */
 function reflector(k: Kit, m: Mat, R: number, arc: number, h: number, x: number, y: number, z: number) {
   const g = new THREE.CylinderGeometry(R, R, h, 14, 1, true, Math.PI / 2 - arc / 2, arc);
-  // the arc is centred on +X after rotating: cylinder theta 0 = +Z, so shift by -PI/2
   g.translate(x - R, y + h / 2, z);
   k.add(g, m, 0);
 }
 
 function radar(k: Kit) {
   const P = k.P;
+  const N = P.N;
   const R = P.R;
   slab(k, 2, 2);
   const white = P.mats.col(0xeceee8, 0.55, 0.05, true);
-  if (R === 'west') {
-    const top = block(k, { x0: -0.95, x1: 0.1, z0: 0.0, z1: 0.95, h: 0.34, floors: 1, door: -0.4, equip: 1 });
-    k.cyl(P.wall2, 0.14, 0.06, -0.62, top - 0.04, 0.3, 16);
-    k.sph(P.mats.col(0xf2f2ee, 0.6, 0.05), 0.15, -0.62, top + 0.14, 0.3, 20, 14);
-    satDish(k, -0.2, top - 0.04, 0.7, 0.08, 0.7, 0.8);
-    // lattice tower with rotating ASR antenna
-    const tx = 0.45;
-    const tz = -0.45;
-    k.box(P.concrete, 0.42, 0.04, 0.42, tx, Y0, tz);
-    lattice(k, P.galv, tx, tz, Y0 + 0.04, 1.15, 0.38, 0.18, 7, 0.011);
-    const ty = Y0 + 1.19;
-    k.box(P.grating, 0.3, 0.012, 0.3, tx, ty, tz);
-    railing(k, [[tx - 0.15, tz - 0.15], [tx + 0.15, tz - 0.15], [tx + 0.15, tz + 0.15], [tx - 0.15, tz + 0.15], [tx - 0.15, tz - 0.15]], ty + 0.012, 0.05);
-    k.box(P.wall2, 0.24, 0.16, 0.18, tx - 0.1, Y0, tz + 0.32);
-    const d = k.node('dish', tx, ty + 0.012, tz);
-    k.on(d, () => {
-      k.cyl(P.dark, 0.05, 0.08, 0, 0, 0, 12);
-      k.box(P.galv, 0.05, 0.03, 0.08, 0, 0.08, 0);
-      reflector(k, white, 0.6, 1.15, 0.22, 0.04, 0.07, 0);
-      for (let i = -2; i <= 2; i++) k.bar(P.galv, [-0.02, 0.1, 0], [0.04 - 0.6 * (1 - Math.cos(i * 0.25)), 0.18, Math.sin(i * 0.25) * 0.6], 0.008);
-      k.bar(P.galv, [0.0, 0.1, 0], [-0.3, 0.12, 0], 0.012);
-      k.box(P.dark, 0.05, 0.045, 0.045, -0.32, 0.1, 0);
-      k.box(P.galv, 0.016, 0.035, 0.6, 0.02, 0.3, 0);
-      k.box(P.team, 0.018, 0.014, 0.6, 0.02, 0.335, 0);
-    });
-    k.spin('dish', 'y', 1.4);
-    k.blinkLight(tx + 0.15, ty + 0.07, tz + 0.15, 0.014, 1.4, 0);
-    k.blinkLight(tx - 0.15, ty + 0.07, tz - 0.15, 0.014, 1.4, 0.7);
-    fence(k, [[0.15, 0.1], [0.95, 0.1], [0.95, 0.95], [0.25, 0.95]], 0.14, Y0);
-    k.box(P.wall2, 0.3, 0.14, 0.2, 0.55, Y0, 0.5);
-    hvac(k, 0.55, Y0 + 0.14, 0.5, 0.14, 0.1);
-    k.height = 1.6;
-  } else if (R === 'east') {
-    const x0 = -0.95;
-    const x1 = -0.05;
-    const z0 = 0.05;
-    const z1 = 0.95;
-    k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    k.box(P.wall2, x1 - x0, 0.32, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    dress(k, x0, x1, z0, z1, Y0, 0.32, { beacons: false });
-    facade(k, 'z', 1, x0, x1, z1, Y0, 0.32, 1, 'punched', [-0.6, -0.3]);
-    facade(k, 'x', 1, z0, z1, x1, Y0, 0.32, 1, 'punched');
-    door(k, 'z', 1, -0.45, Y0, z1, 0.12, 0.19);
-    k.box(P.team, x1 - x0 + 0.008, 0.024, z1 - z0 + 0.008, (x0 + x1) / 2, Y0 + 0.29, (z0 + z1) / 2);
-    gable(k, P.pitch, P.wall2, (x0 + x1) / 2, Y0 + 0.32, (z0 + z1) / 2, x1 - x0, z1 - z0, 0.18, 0.03, true);
-    // P-18 style yagi mast (static)
-    const yx = -0.6;
-    const yz = -0.55;
-    k.box(P.concrete, 0.2, 0.04, 0.2, yx, Y0, yz);
-    k.cyl(P.dark, 0.016, 1.1, yx, Y0, yz, 8, 0.012);
-    for (let r = 0; r < 2; r++)
-      for (let i = 0; i < 6; i++) {
-        const y = Y0 + 0.86 + r * 0.14;
-        const xx = yx - 0.25 + i * 0.1;
-        k.bar(P.galv, [xx, y, yz - 0.18], [xx, y, yz + 0.18], 0.006);
-      }
-    k.bar(P.galv, [yx - 0.27, Y0 + 0.86, yz], [yx + 0.27, Y0 + 0.86, yz], 0.012);
-    k.bar(P.galv, [yx - 0.27, Y0 + 1.0, yz], [yx + 0.27, Y0 + 1.0, yz], 0.012);
-    // concrete tower with rotating mesh reflector (P-37 style)
-    const tx = 0.45;
-    const tz = -0.42;
-    k.cyl(P.wall, 0.22, 0.6, tx, Y0, tz, 16, 0.18);
+  // ------------------------------------------------ operations shelters under a camo net (front left)
+  cabin(k, -0.55, Y0, 0.3, 0, N.wall, 0.62);
+  cabin(k, -0.55, Y0, 0.68, 0, N.boxes[0], 0.62);
+  camoNet(k, -0.95, -0.12, 0.08, 0.92, 0.3, 0.05);
+  genset(k, -0.1, 0.55, Math.PI / 2, 0.8);
+  cableRun(k, [[-0.2, 0.15], [0.3, 0.15], [0.3, -0.2]], 0.05);
+  satcom(k, 'sat', -0.6, Y0, -0.45, 0.13);
+  for (let i = 0; i < 3; i++) antenna(k, -0.92 + i * 0.12, Y0, -0.9, 0.42 + i * 0.1);
+  postSign(k, 0.2, 0.9, 0, 0.28, 'main');
+  // ------------------------------------------------ radar head (back right)
+  const tx = 0.45;
+  const tz = -0.45;
+  if (R === 'east') {
+    // P-18 style yagi mast (static) + concrete pedestal with a rotating mesh reflector
+    const yx = -0.1;
+    const yz = -0.75;
+    k.box(P.concrete, 0.16, 0.04, 0.16, yx, Y0, yz);
+    k.cyl(P.dark, 0.016, 1.0, yx, Y0, yz, 8, 0.012);
+    for (let r = 0; r < 2; r++) for (let i = 0; i < 5; i++) k.bar(P.galv, [yx - 0.2 + i * 0.1, Y0 + 0.8 + r * 0.14, yz - 0.16], [yx - 0.2 + i * 0.1, Y0 + 0.8 + r * 0.14, yz + 0.16], 0.006);
+    k.bar(P.galv, [yx - 0.24, Y0 + 0.8, yz], [yx + 0.24, Y0 + 0.8, yz], 0.012);
+    k.bar(P.galv, [yx - 0.24, Y0 + 0.94, yz], [yx + 0.24, Y0 + 0.94, yz], 0.012);
+    k.blinkLight(yx, Y0 + 1.02, yz, 0.014, 1.5, 0);
+    k.cyl(P.panel, 0.22, 0.6, tx, Y0, tz, 16, 0.18);
     k.cyl(P.team, 0.182, 0.03, tx, Y0 + 0.54, tz, 16);
-    stencil(k, '5', 'x', 1, tz, Y0 + 0.25, tx + 0.2, 0.12);
+    stencil(k, '5', 'x', 1, tz, Y0 + 0.25, tx + 0.2, 0.2);
     const d = k.node('dish', tx, Y0 + 0.6, tz);
     const mesh = P.mats.col(0x9aa0a4, 0.5, 0.5, true);
     k.on(d, () => {
       k.cyl(P.dark, 0.13, 0.04, 0, 0, 0, 16);
       k.box(P.accent, 0.22, 0.13, 0.18, -0.02, 0.04, 0);
       k.box(P.glass, 0.005, 0.05, 0.14, -0.132, 0.1, 0);
-      // big mesh reflector (concave side toward the feed at -X) + truss
       k.at(0, 0, 0, Math.PI, () => {
         reflector(k, mesh, 0.75, 1.05, 0.46, -0.2, 0.17, 0);
         reflector(k, P.chain, 0.752, 1.05, 0.46, -0.198, 0.17, 0);
@@ -3563,74 +3695,62 @@ function radar(k: Kit) {
       });
     });
     k.spin('dish', 'y', 1.0);
-    k.blinkLight(-0.6, Y0 + 1.12, -0.55, 0.014, 1.5, 0);
-    k.box(P.mats.col(0x55603f, 0.85, 0.1), 0.3, 0.14, 0.16, 0.55, Y0, 0.45);
-    k.box(P.canvas, 0.32, 0.03, 0.18, 0.55, Y0 + 0.14, 0.45);
-    for (let i = 0; i < 4; i++) k.box(P.concrete, 0.2, 0.14, 0.02, 0.1 + i * 0.22, Y0, 0.95, 6);
     k.height = 1.15;
-  } else if (R === 'asia') {
-    block(k, { x0: -0.95, x1: 0.1, z0: 0.0, z1: 0.95, h: 0.36, floors: 1, door: -0.4, equip: 1 });
-    // square white tower with rotating AESA panel
-    const tx = 0.45;
-    const tz = -0.45;
-    k.box(P.base, 0.34, 0.04, 0.34, tx, Y0, tz);
-    k.box(P.wall, 0.3, 1.0, 0.3, tx, Y0 + 0.04, tz);
-    for (const yy of [0.5, 0.8]) {
-      ribbon(k, 'z', 1, tx - 0.13, tx + 0.13, Y0 + yy, tz + 0.15, 0.08, true);
-      ribbon(k, 'x', 1, tz - 0.13, tz + 0.13, Y0 + yy, tx + 0.15, 0.08, true);
-    }
-    k.box(P.accent, 0.33, 0.03, 0.33, tx, Y0 + 1.04, tz);
-    k.box(P.team, 0.305, 0.025, 0.305, tx, Y0 + 0.4, tz);
-    const d = k.node('dish', tx, Y0 + 1.07, tz);
-    k.on(d, () => {
-      k.cyl(P.dark, 0.07, 0.06, 0, 0, 0, 14);
-      for (const sx of [-1, 1]) {
-        k.at(sx * 0.05, 0.2, 0, sx > 0 ? 0 : Math.PI, () => {
-          k.box(P.white, 0.05, 0.36, 0.54, 0, -0.18, 0);
-          k.box(P.mats.canvas('aesa', texSolar(), { uv: 0, rough: 0.4, metal: 0.3, color: 0x8899aa }), 0.006, 0.33, 0.51, 0.026, -0.165, 0, 10);
-          k.box(P.team, 0.052, 0.024, 0.542, 0, 0.16, 0);
-        }, 0, sx * 0.3);
-      }
-    });
-    k.spin('dish', 'y', 0.9);
-    k.blinkLight(tx - 0.15, Y0 + 1.08, tz + 0.15, 0.014, 1.4, 0);
-    planter(k, 0.6, 0.2, 0.5, 0.1, 'shrub', Y0);
-    planter(k, 0.85, 0.6, 0.1, 0.6, 'tree', Y0);
-    k.height = 1.25;
-  } else {
-    const top = block(k, { x0: -0.95, x1: 0.1, z0: 0.0, z1: 0.95, h: 0.34, floors: 1, door: -0.4, equip: 0 });
-    // rotating dish on the ops roof
-    const d = k.node('dish', -0.45, top - 0.03, 0.45);
+  } else if (R === 'mideast') {
+    // stone tower with a large radome + rotating dish beside it
+    k.box(P.base, 0.42, 0.04, 0.42, tx, Y0, tz);
+    k.box(P.wall2, 0.36, 0.6, 0.36, tx, Y0 + 0.04, tz);
+    punched(k, 'z', 1, tx - 0.12, tx + 0.12, 2, Y0 + 0.3, tz + 0.18, 0.05, 0.12, 'plain');
+    punched(k, 'x', 1, tz - 0.12, tz + 0.12, 2, Y0 + 0.3, tx + 0.18, 0.05, 0.12, 'plain');
+    flatRoof(k, tx - 0.18, tx + 0.18, tz - 0.18, tz + 0.18, Y0 + 0.64, 0.03, P.wall2);
+    k.cyl(P.concrete, 0.16, 0.05, tx, Y0 + 0.65, tz, 16);
+    k.sph(P.dome, 0.27, tx, Y0 + 0.92, tz, 24, 16);
+    k.ring(P.team, 0.2, 0.012, tx, Y0 + 0.74, tz, 24);
+    k.blinkLight(tx, Y0 + 1.2, tz, 0.014, 1.5, 0);
+    const d = k.node('dish', -0.1, Y0, -0.6);
     k.on(d, () => {
       k.cyl(P.dark, 0.06, 0.08, 0, 0, 0, 12);
-      k.at(0, 0.2, 0, 0, () => {
+      k.box(P.galv, 0.03, 0.22, 0.03, -0.02, 0.06, 0);
+      k.at(0, 0.32, 0, 0, () => {
         const pts: P2[] = [];
         for (let i = 0; i <= 6; i++) pts.push([0.2 * (i / 6) + 0.001, 0.07 * (i / 6) ** 2]);
         k.lathe(white, pts, 0, 0, 0, 20, 0);
         k.tube(P.dark, [0, 0, 0], [0, 0.17, 0], 0.005, 4);
-        k.box(P.dark, 0.03, 0.03, 0.03, 0, 0.17, 0);
         k.ring(P.team, 0.2, 0.008, 0, 0.07, 0, 20);
       }, 0, Math.PI / 2 - 0.35);
-      k.box(P.galv, 0.03, 0.14, 0.03, -0.02, 0.06, 0);
     });
     k.spin('dish', 'y', 1.1);
-    // stone tower with a large radome
-    const tx = 0.45;
-    const tz = -0.45;
-    k.box(P.base, 0.42, 0.04, 0.42, tx, Y0, tz);
-    k.box(P.wall2, 0.36, 0.6, 0.36, tx, Y0 + 0.04, tz);
-    punched(k, 'z', 1, tx - 0.12, tx + 0.12, 2, Y0 + 0.3, tz + 0.18, 0.05, 0.12, 'arch');
-    punched(k, 'x', 1, tz - 0.12, tz + 0.12, 2, Y0 + 0.3, tx + 0.18, 0.05, 0.12, 'arch');
-    flatRoof(k, tx - 0.18, tx + 0.18, tz - 0.18, tz + 0.18, Y0 + 0.64, 0.03, P.wall2);
-    k.box(P.tile, 0.362, 0.04, 0.362, tx, Y0 + 0.52, tz, 0);
-    k.cyl(P.concrete, 0.16, 0.05, tx, Y0 + 0.65, tz, 16);
-    k.sph(P.mats.col(0xf0f0ea, 0.6, 0.05), 0.27, tx, Y0 + 0.92, tz, 24, 16);
-    k.ring(P.team, 0.2, 0.012, tx, Y0 + 0.74, tz, 24);
-    k.blinkLight(tx, Y0 + 1.2, tz, 0.014, 1.5, 0);
-    planter(k, 0.75, 0.75, 0.14, 0.14, 'palm', Y0);
-    sandbags(k, [0.2, 0.25], [0.2, 0.95], 2, Y0);
     k.height = 1.25;
+  } else {
+    // lattice mast with four fixed AESA faces and a rotating surveillance array on top
+    k.box(P.concrete, 0.42, 0.04, 0.42, tx, Y0, tz);
+    lattice(k, P.galv, tx, tz, Y0 + 0.04, 0.95, 0.36, 0.2, 6, 0.011);
+    const ty = Y0 + 0.99;
+    k.box(P.grating, 0.34, 0.012, 0.34, tx, ty, tz);
+    railing(k, [[tx - 0.17, tz - 0.17], [tx + 0.17, tz - 0.17], [tx + 0.17, tz + 0.17], [tx - 0.17, tz + 0.17], [tx - 0.17, tz - 0.17]], ty + 0.012, 0.045);
+    k.box(P.drab, 0.22, 0.22, 0.22, tx, ty + 0.012, tz);
+    for (let i = 0; i < 4; i++) k.at(tx, ty + 0.012, tz, (i / 4) * TAU + Math.PI / 4, () => aesaFace(k, 0.2, 0.2, 0.125, 0.01, 0));
+    k.box(P.team, 0.24, 0.02, 0.24, tx, ty + 0.234, tz);
+    const d = k.node('dish', tx, ty + 0.254, tz);
+    k.on(d, () => {
+      k.cyl(P.dark, 0.05, 0.06, 0, 0, 0, 12);
+      k.at(0.0, 0.08, 0, 0, () => {
+        k.boxR(P.drab, 0.04, 0.16, 0.5, 0.02, 0.0, 0, 0, 0, -0.25);
+        k.boxR(P.aesa, 0.004, 0.14, 0.48, 0.042, 0.01, 0, 0, 0, -0.25);
+        k.box(P.team, 0.042, 0.014, 0.5, 0.0, 0.15, 0);
+      });
+    });
+    k.spin('dish', 'y', 1.3);
+    k.blinkLight(tx + 0.17, ty + 0.06, tz + 0.17, 0.014, 1.4, 0);
+    k.blinkLight(tx - 0.17, ty + 0.06, tz - 0.17, 0.014, 1.4, 0.7);
+    k.box(P.wall2, 0.24, 0.16, 0.18, tx - 0.05, Y0, tz + 0.36);
+    hvac(k, tx - 0.05, Y0 + 0.16, tz + 0.36, 0.14, 0.1);
+    k.height = 1.45;
   }
+  // perimeter fence with razor wire (right + front)
+  fence(k, [[0.12, 0.98], [0.98, 0.98], [0.98, -0.98]], 0.14, Y0);
+  razor(k, [0.98, 0.98], [0.98, -0.98], Y0 + 0.14);
+  floodMast(k, 0.92, 0.3, 0.5, Math.PI - 0.4);
 }
 
 // ================================================================ DRONE HUB / AIRFIELD (3x3)
@@ -3660,44 +3780,37 @@ function parkedDrone(k: Kit, x: number, y: number, z: number, ry: number, s = 1)
 
 function airfield(k: Kit) {
   const P = k.P;
+  const N = P.N;
   const R = P.R;
   slab(k, 3, 3);
-  // runway strip along the front
+  // runway strip along the front with edge lights
   const rz = 1.0;
   k.box(P.asphalt, 2.96, 0.004, 0.78, 0, Y0, rz);
   for (const sz of [-1, 1]) k.box(P.white, 2.9, 0.002, 0.014, 0, Y0 + 0.004, rz + sz * 0.35);
   dashes(k, P.white, -1.0, rz, 1.0, rz, 0.12, 0.08, 0.016, Y0 + 0.004);
-  for (const sx of [-1, 1]) {
-    for (let i = 0; i < 6; i++) k.box(P.white, 0.16, 0.002, 0.03, sx * 1.32, Y0 + 0.004, rz - 0.27 + i * 0.108);
-    const m = P.mats.canvas('rw' + (sx > 0 ? '27' : '09'), texStencil(sx > 0 ? '27' : '09', '#f0f0f0'), { alphaTest: 0.5 });
-    k.decal(m, sx * 1.1, Y0 + 0.005, rz, 0.28, 0.14, [0, 0, 1, 1], sx > 0 ? -Math.PI / 2 : Math.PI / 2);
-  }
   for (let i = 0; i <= 7; i++) {
     const x = -1.4 + i * 0.4;
     for (const sz of [-1, 1]) k.box(i === 0 || i === 7 ? P.green_l : P.lamp, 0.016, 0.012, 0.016, x, Y0 + 0.004, rz + sz * 0.375);
   }
-  // central launch pad (aircraft spawn at the centre)
-  k.cyl(P.T.concrete(0x9a9a96, 2), 0.47, 0.006, 0, Y0, 0, 32);
-  k.decal(P.mats.canvas('helipad', texHelipad('#f2c230'), { alphaTest: 0.5 }), 0, Y0 + 0.007, 0, 0.82, 0.82);
+  // launch / recovery pad (aircraft spawn at the centre)
+  k.cyl(P.concrete, 0.47, 0.006, 0, Y0, 0, 32);
+  k.decal(P.mats.canvas('helipad', texHelipad('#e8d070'), { alphaTest: 0.5 }), 0, Y0 + 0.007, 0, 0.8, 0.8);
   k.ring(P.team, 0.46, 0.012, 0, Y0 + 0.006, 0, 40);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * TAU;
     k.box(P.amber_l, 0.02, 0.012, 0.02, Math.cos(a) * 0.48, Y0, Math.sin(a) * 0.48);
   }
-  // taxiway
   k.box(P.asphalt, 0.26, 0.004, 0.2, 0, Y0, 0.52);
-  k.box(P.yellow, 0.014, 0.002, 0.22, 0, Y0 + 0.004, 0.52);
 
   // ------------------------------------------------ hangar (back left)
   const hx0 = -1.42;
-  const hx1 = -0.08;
+  const hx1 = -0.1;
   const hz0 = -1.42;
   const hz1 = -0.55;
   const hcx = (hx0 + hx1) / 2;
   const hcz = (hz0 + hz1) / 2;
   const span = hx1 - hx0;
   const hl = hz1 - hz0;
-  const opening = (w: number, h: number): P2[] => rect(w, h, hcx, h / 2 + 0.002);
   if (R === 'east') {
     // hardened aircraft shelter: concrete arch half buried under earth
     const rise = 0.5;
@@ -3705,112 +3818,75 @@ function airfield(k: Kit) {
       const g = new THREE.CylinderGeometry(span / 2 + 0.06, span / 2 + 0.06, hl + 0.02, 22, 1, true, -Math.PI / 2, Math.PI);
       g.rotateX(-Math.PI / 2);
       g.scale(1, (rise + 0.06) / (span / 2 + 0.06), 1);
-      k.add(g, P.mats.tex('soil', { color: 0x5f6a3a, seed: 29, size: 256 }, 0xffffff, 3));
+      k.add(g, P.soil);
     });
-    vault(k, P.wall, null, hcx, Y0, hcz + 0.02, span - 0.02, hl + 0.02, rise, false, 3);
+    vault(k, P.panel, null, hcx, Y0, hcz + 0.02, span - 0.02, hl + 0.02, rise, false, 3);
     const outer: P2[] = [];
     for (let i = 0; i <= 18; i++) {
       const a = (i / 18) * Math.PI;
       outer.push([hcx + (Math.cos(a) * span) / 2, Y0 + Math.sin(a) * rise]);
     }
-    k.prism(P.concrete, outer, 0.06, 0, 0, hz1 + 0.03, undefined, [opening(span * 0.7, rise * 0.62).map(([a, b]) => [a, b + Y0] as P2)]);
+    const op = rect(span * 0.7, rise * 0.62, hcx, (rise * 0.62) / 2 + 0.002).map(([a, b]) => [a, b + Y0] as P2);
+    k.prism(P.panel, outer, 0.06, 0, 0, hz1 + 0.03, undefined, [op]);
     k.box(P.black, span * 0.7, rise * 0.62, 0.01, hcx, Y0, hz1 - 0.2);
-    // blast door leaves pushed aside
     for (const sx of [-1, 1]) k.box(P.wallB, span * 0.2, rise * 0.62, 0.06, hcx + sx * span * 0.42, Y0, hz1 + 0.09);
     k.box(P.team, span * 0.7, 0.03, 0.012, hcx, Y0 + rise * 0.62 + 0.01, hz1 + 0.066);
-    stencil(k, '04', 'z', 1, hcx, Y0 + rise * 0.7, hz1 + 0.06, 0.16);
+    stencil(k, '04', 'z', 1, hcx, Y0 + rise * 0.7, hz1 + 0.06, 0.3);
   } else {
-    const wallM = R === 'west' ? P.wall2 : R === 'mideast' ? P.wall2 : P.wall;
-    const wh = R === 'mideast' ? 0.36 : 0.22;
-    const rise = R === 'mideast' ? 0.16 : R === 'asia' ? 0.22 : 0.34;
-    k.box(P.base, span + 0.012, 0.03, hl + 0.012, hcx, Y0, hcz);
-    k.box(wallM, 0.04, wh, hl, hx0 + 0.02, Y0, hcz);
-    k.box(wallM, 0.04, wh, hl, hx1 - 0.02, Y0, hcz);
-    k.box(wallM, span, wh, 0.04, hcx, Y0, hz0 + 0.02);
-    const roofM = R === 'west' ? P.T.corr(0x9aa3a8) : R === 'asia' ? P.T.corr(0x5f86b8) : P.T.sandstone(0xe8dcc0, 5);
-    vault(k, roofM, null, hcx, Y0 + wh, hcz, span + 0.03, hl + 0.03, rise, false);
-    dress(k, hx0, hx1, hz0, hz1, Y0, wh, { beacons: false, vent: false });
-    // front wall with the door opening
-    const outer: P2[] = [[hx0, Y0], [hx1, Y0]];
-    for (let i = 0; i <= 18; i++) {
-      const a = (i / 18) * Math.PI;
-      outer.push([hcx + (Math.cos(a) * (span + 0.03)) / 2, Y0 + wh + Math.sin(a) * rise]);
+    // fabric arch shelter (Rubb style) in camo with an open front
+    const rise = 0.42;
+    const wh = 0.12;
+    const fab = P.camo;
+    k.box(P.base, span + 0.012, 0.02, hl + 0.012, hcx, Y0, hcz);
+    for (const sx of [-1, 1]) k.box(fab, 0.03, wh, hl, hcx + sx * (span / 2 - 0.015), Y0, hcz);
+    vault(k, fab, null, hcx, Y0 + wh, hcz, span + 0.02, hl + 0.02, rise, false, 2);
+    // steel arch ribs
+    for (let i = 0; i < 5; i++) {
+      const g = new THREE.TorusGeometry(span / 2 + 0.012, 0.008, 4, 18, Math.PI);
+      g.scale(1, (rise + 0.012) / (span / 2 + 0.012), 1);
+      g.translate(hcx, Y0 + wh, hz0 + 0.04 + (i * (hl - 0.08)) / 4);
+      k.add(g, P.drab, 0);
     }
-    outer.splice(2, 0, [hx1, Y0 + wh]);
-    outer.push([hx0, Y0 + wh]);
-    const hole = R === 'mideast' ? archPts(hcx, Y0 + 0.002, span * 0.7, 0.16, 0.3, 6) : opening(span * 0.78, wh + rise * 0.55).map(([a, b]) => [a, b + Y0] as P2);
-    k.prism(wallM, outer, 0.04, 0, 0, hz1 - 0.02, undefined, [hole]);
-    const back: P2[] = [[hx0 + 0.05, Y0], [hx1 - 0.05, Y0]];
+    // back end wall + interior
+    const back: P2[] = [[hx0 + 0.02, Y0], [hx1 - 0.02, Y0]];
     for (let i = 0; i <= 12; i++) {
       const a = (i / 12) * Math.PI;
-      back.push([hcx + (Math.cos(a) * (span - 0.1)) / 2, Y0 + wh + Math.sin(a) * (rise - 0.03)]);
+      back.push([hcx + (Math.cos(a) * (span - 0.04)) / 2, Y0 + wh + Math.sin(a) * (rise - 0.02)]);
     }
-    back.splice(2, 0, [hx1 - 0.05, Y0 + wh]);
-    back.push([hx0 + 0.05, Y0 + wh]);
-    k.prism(P.black, back, 0.01, 0, 0, hz0 + 0.05);
-    k.box(P.lamp, span * 0.5, 0.02, 0.01, hcx, Y0 + wh + 0.05, hz0 + 0.06);
-    if (R === 'mideast') {
-      k.box(P.tile, span * 0.85, 0.035, 0.004, hcx, Y0 + 0.47, hz1 + 0.001);
-      k.box(P.team, 0.2, 0.06, 0.006, hcx, Y0 + 0.4, hz1 + 0.002);
-    } else {
-      const dw = span * 0.78;
-      for (const sx of [-1, 1]) k.box(P.rollup, 0.03, wh + rise * 0.55, dw * 0.25, hcx + sx * (dw / 2 + 0.02), Y0, hz1 + 0.01);
-      k.box(P.team, dw + 0.04, 0.04, 0.03, hcx, Y0 + wh + rise * 0.55, hz1 + 0.0);
-      wallEmblem(k, 'z', 1, hcx, Y0 + wh + rise * 0.55 + 0.07, hz1 - 0.005, 0.16);
-      for (const sx of [-1, 1]) k.box(P.hazard, 0.03, wh + rise * 0.55, 0.03, hcx + sx * (dw / 2 + 0.015), Y0, hz1 + 0.015, 9);
-    }
+    back.splice(2, 0, [hx1 - 0.02, Y0 + wh]);
+    back.push([hx0 + 0.02, Y0 + wh]);
+    k.prism(P.dark, back, 0.01, 0, 0, hz0 + 0.03);
+    k.box(P.lamp, span * 0.5, 0.012, 0.01, hcx, Y0 + wh + 0.2, hz0 + 0.05);
+    // front: canvas door curtains rolled to the sides + team header
+    for (const sx of [-1, 1]) k.box(fab, 0.12, wh + rise * 0.6, 0.03, hcx + sx * (span / 2 - 0.08), Y0, hz1 + 0.01);
+    k.box(P.team, span * 0.6, 0.03, 0.02, hcx, Y0 + wh + rise * 0.82, hz1 + 0.012);
   }
   parkedDrone(k, hcx, Y0, hz1 - 0.28, Math.PI / 2, 1.1);
-  parkedDrone(k, -1.05, Y0, -0.15, 0.3, 1.0);
+  // drone parking under a camo net (front left of the pad)
+  camoNet(k, -1.42, -0.62, -0.42, 0.42, 0.28, 0.04);
+  parkedDrone(k, -1.02, Y0, -0.0, 0.3, 1.0);
+  ammoBoxes(k, -0.75, 0.3, 4, 0.5);
 
-  // ------------------------------------------------ control tower (back right)
+  // ------------------------------------------------ control tower (back right): stacked containers + glass cab
   const tx = 1.0;
   const tz = -1.0;
-  block(k, { x0: 0.62, x1: 1.42, z0: -1.42, z1: -0.62, h: 0.24, floors: 1, door: 0.8, equip: 1, roof: 'flat', emblem: false });
-  const shaftTop = Y0 + 1.0;
-  if (R === 'asia') {
-    k.cyl(P.wall, 0.11, 1.0, tx, Y0, tz, 18, 0.09);
-    k.lathe(P.wall, [[0.09, 0], [0.2, 0.06], [0.2, 0.08]], tx, shaftTop - 0.08, tz, 18);
-  } else if (R === 'east') {
-    k.box(P.wall2, 0.2, 1.0, 0.2, tx, Y0, tz);
-    k.panel(P.win, 'z', 1, tx, Y0 + 0.3, tz + 0.1, 0.06, 0.6, [0, 0, 0.125, 1.5]);
-    stencil(k, 'КДП', 'x', 1, tz, Y0 + 0.75, tx + 0.1, 0.18);
-    k.box(P.concrete, 0.38, 0.03, 0.38, tx, shaftTop - 0.03, tz);
-  } else if (R === 'mideast') {
-    k.box(P.wall, 0.22, 1.0, 0.22, tx, Y0, tz);
-    punched(k, 'z', 1, tx - 0.06, tx + 0.06, 1, Y0 + 0.55, tz + 0.11, 0.05, 0.12, 'arch');
-    punched(k, 'x', 1, tz - 0.06, tz + 0.06, 1, Y0 + 0.55, tx + 0.11, 0.05, 0.12, 'arch');
-    k.box(P.tile, 0.224, 0.04, 0.224, tx, Y0 + 0.85, tz, 0);
-    k.box(P.trim, 0.36, 0.03, 0.36, tx, shaftTop - 0.03, tz);
-  } else {
-    k.box(P.wall, 0.2, 1.0, 0.2, tx, Y0, tz);
-    k.box(P.wall2, 0.06, 0.9, 0.06, tx + 0.1, Y0, tz + 0.1);
-    k.box(P.trim, 0.36, 0.03, 0.36, tx, shaftTop - 0.03, tz);
-  }
-  // glazed cab (outward-leaning octagon)
-  k.cyl(P.mats.col(0x2a4258, 0.15, 0.8), 0.17, 0.13, tx, shaftTop, tz, 8, 0.2);
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * TAU + TAU / 16;
-    k.bar(P.dark, [tx + Math.cos(a) * 0.172, shaftTop, tz + Math.sin(a) * 0.172], [tx + Math.cos(a) * 0.202, shaftTop + 0.13, tz + Math.sin(a) * 0.202], 0.008);
-  }
-  k.cyl(P.lamp, 0.165, 0.004, tx, shaftTop + 0.06, tz, 8);
-  if (R === 'asia') asianRoof(k, P.pitch, ridgeMat(k), tx, shaftTop + 0.13, tz, 0.5, 0.5, 0.12, 0.04, P.accent);
-  else if (R === 'mideast') {
-    k.cyl(P.trim, 0.22, 0.03, tx, shaftTop + 0.13, tz, 8);
-    dome(k, tx, shaftTop + 0.13, tz, 0.13, P.s.faction === 'turkey' ? 'ottoman' : 'persian');
-  } else {
-    k.cyl(P.dark, 0.22, 0.035, tx, shaftTop + 0.13, tz, 8);
-    k.cyl(P.team, 0.222, 0.015, tx, shaftTop + 0.14, tz, 8);
-    antenna(k, tx - 0.06, shaftTop + 0.165, tz, 0.25);
-    satDish(k, tx + 0.08, shaftTop + 0.165, tz - 0.04, 0.05, 0.6);
-    if (R === 'east') {
-      for (let i = 0; i < 4; i++) k.cyl(i % 2 ? P.white : P.red, 0.012, 0.06, tx + 0.05, shaftTop + 0.165 + i * 0.06, tz + 0.06, 6);
-    }
-  }
-  k.blinkLight(tx, shaftTop + 0.45, tz, 0.016, 1.3, 0);
-  k.cyl(P.dark, 0.004, 0.3, tx, shaftTop + 0.15, tz, 4);
+  cabin(k, tx, Y0, tz + 0.18, 0, N.wall, 0.6);
+  cabin(k, tx, Y0, tz - 0.2, 0, N.boxes[0], 0.6);
+  cabin(k, tx, Y0 + 0.17, tz - 0.01, 0, N.wall, 0.6, false);
+  k.box(P.steel, 0.28, 0.02, 0.28, tx, Y0 + 0.34, tz);
+  k.box(P.mats.col(0x2a4258, 0.15, 0.8), 0.24, 0.12, 0.24, tx, Y0 + 0.36, tz);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.dark, 0.012, 0.12, 0.012, tx + sx * 0.12, Y0 + 0.36, tz + sz * 0.12);
+  k.box(P.lamp, 0.22, 0.004, 0.22, tx, Y0 + 0.42, tz);
+  k.box(P.dark, 0.3, 0.03, 0.3, tx, Y0 + 0.48, tz);
+  k.box(P.team, 0.302, 0.014, 0.302, tx, Y0 + 0.5, tz);
+  stairs(k, tx - 0.36, tz + 0.12, Y0, Y0 + 0.34, true, 1, 0.07);
+  antenna(k, tx - 0.08, Y0 + 0.51, tz, 0.35);
+  satDish(k, tx + 0.08, Y0 + 0.51, tz - 0.05, 0.05, 0.6);
+  k.blinkLight(tx, Y0 + 0.9, tz, 0.016, 1.3, 0);
+  k.cyl(P.dark, 0.004, 0.38, tx, Y0 + 0.51, tz, 4);
+  wallSign(k, 'z', 1, tx, Y0 + 0.08, tz + 0.27, 0.3, 'main');
 
-  // ------------------------------------------------ windsock + fuel bowser + lights
+  // ------------------------------------------------ windsock + fuel bowser + ground power + lights
   k.cyl(P.concrete, 0.025, 0.02, 1.3, Y0, 0.42, 8);
   k.cyl(P.galv, 0.007, 0.36, 1.3, Y0, 0.42, 6);
   const sock = k.node('sock', 1.3, Y0 + 0.35, 0.42, -0.6);
@@ -3825,18 +3901,12 @@ function airfield(k: Kit) {
   });
   k.osc('sock', 'y', 0.35, 0.9, 0, 0);
   k.blinkLight(1.3, Y0 + 0.39, 0.42, 0.01, 1.0, 0.2);
-  const tank = P.mats.col(R === 'west' ? 0xb8a27a : 0xd8d8d0, 0.5, 0.3);
-  k.at(1.05, Y0, -0.3, 0.3, () => {
-    k.box(P.dark, 0.32, 0.03, 0.11, 0, 0.02, 0);
-    k.tube(tank, [-0.12, 0.09, 0], [0.12, 0.09, 0], 0.05, 12);
-    k.rbox(P.mats.col(P.s.hull, 0.6, 0.2), 0.08, 0.08, 0.11, 0.15, 0.04, 0, 0.01);
-    for (const wx of [-0.1, 0.06, 0.15]) for (const sz of [-1, 1]) k.tube(P.rubber, [wx, 0.025, sz * 0.05], [wx, 0.025, sz * 0.06], 0.025, 10);
-  });
-  lightPole(k, -1.38, 0.5, 0.42, 0);
-  lightPole(k, 0.55, -0.5, 0.42, Math.PI);
-  if (R === 'mideast') planter(k, -0.6, -0.42, 0.12, 0.12, 'palm', Y0);
-  if (R === 'asia') planter(k, 0.62, -0.45, 0.4, 0.08, 'shrub', Y0);
-  k.height = 1.45;
+  truck(k, 0.95, -0.3, 2.6, 'fuel', 1.0);
+  fuelBladder(k, 1.02, 0.12, 0.42, 0.22, 0);
+  genset(k, 0.5, -0.42, 0, 0.8);
+  floodMast(k, -1.38, 0.5, 0.5, 0);
+  floodMast(k, 0.55, -0.62, 0.5, Math.PI);
+  k.height = 1.4;
 }
 
 // ================================================================ BATTLE LAB / RESEARCH CENTRE (3x3)
@@ -3868,8 +3938,7 @@ function satcom(k: Kit, name: string, x: number, y: number, z: number, r: number
 /** Directed-energy prototype on a test pad (battle lab yard prop). */
 function prototypeLaser(k: Kit, x: number, z: number) {
   const P = k.P;
-  k.plan(P.T.concrete(0x8a8c8e, 2), regular(6, 0.26, Math.PI / 6), 0.02, x, Y0, z, 0.006);
-  k.ring(P.yellow, 0.24, 0.006, x, Y0 + 0.022, z, 6);
+  k.plan(P.concrete, regular(6, 0.26, Math.PI / 6), 0.02, x, Y0, z, 0.006);
   k.cyl(P.dark, 0.09, 0.06, x, Y0 + 0.02, z, 12);
   k.rbox(P.white, 0.14, 0.1, 0.12, x, Y0 + 0.08, z, 0.015);
   k.box(P.team, 0.142, 0.02, 0.122, x, Y0 + 0.14, z);
@@ -3884,187 +3953,493 @@ function prototypeLaser(k: Kit, x: number, z: number) {
   k.tube(P.black, [x - 0.22, Y0 + 0.01, z + 0.25], [x - 0.05, Y0 + 0.02, z + 0.05], 0.006, 4);
 }
 
+/** Bank of server / chiller units with spinning fans on top. */
+function chillers(k: Kit, x0: number, x1: number, z: number, n: number, tag: string, spin = true) {
+  const P = k.P;
+  const w = (x1 - x0) / n;
+  for (let i = 0; i < n; i++) {
+    const cx = x0 + w * (i + 0.5);
+    k.box(P.galv, w - 0.02, 0.14, 0.22, cx, Y0, z);
+    for (let j = 0; j < 5; j++) k.box(P.dark, w - 0.04, 0.008, 0.004, cx, Y0 + 0.03 + j * 0.02, z + 0.111);
+    k.cyl(P.black, 0.07, 0.005, cx, Y0 + 0.14, z, 14);
+    k.ring(P.dark, 0.07, 0.006, cx, Y0 + 0.147, z, 14);
+    const blades = () => {
+      for (let b = 0; b < 5; b++) k.boxR(P.steel, 0.06, 0.003, 0.018, Math.cos((b / 5) * TAU) * 0.03, 0, -Math.sin((b / 5) * TAU) * 0.03, (b / 5) * TAU, 0.3);
+    };
+    if (spin) {
+      k.on(k.node(tag + i, cx, Y0 + 0.146, z), blades);
+      k.spin(tag + i, 'y', 6 + i);
+    } else k.at(cx, Y0 + 0.146, z, i * 0.7, blades);
+    k.box(P.team, w - 0.018, 0.012, 0.222, cx, Y0 + 0.12, z);
+  }
+}
+
 function tech(k: Kit) {
   const P = k.P;
-  const R = P.R;
   slab(k, 3, 3);
-  const cyan = P.cyan_l;
-  if (R === 'west') {
-    const x0 = -1.42;
-    const x1 = 0.25;
-    const z0 = -1.42;
-    const z1 = -0.35;
-    k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    k.box(P.wall2, x1 - x0, 0.8, z1 - z0, (x0 + x1) / 2, Y0, (z0 + z1) / 2);
-    curtain(k, 'z', 1, x0 + 0.04, x1 - 0.04, Y0 + 0.04, Y0 + 0.74, z1, 0.09, 0.117);
-    curtain(k, 'x', 1, z0 + 0.04, z1 - 0.04, Y0 + 0.04, Y0 + 0.74, x1, 0.09, 0.117);
-    k.box(cyan, x1 - x0 + 0.01, 0.012, z1 - z0 + 0.01, (x0 + x1) / 2, Y0 + 0.755, (z0 + z1) / 2);
-    k.box(P.team, x1 - x0 + 0.012, 0.03, z1 - z0 + 0.012, (x0 + x1) / 2, Y0 + 0.77, (z0 + z1) / 2);
-    dress(k, x0, x1, z0, z1, Y0, 0.8, { cab: false });
-    flatRoof(k, x0, x1, z0, z1, Y0 + 0.8, 0.03, P.wall2);
-    roofEmblem(k, x0, x1 - 0.6, z0, z1, Y0 + 0.811);
-    roofKit(k, x0, x1 - 0.6, z0, z0 + 0.45, Y0 + 0.81, 2);
-    satcom(k, 'dish', -0.15, Y0 + 0.81, -0.9, 0.16);
-    for (let i = 0; i < 3; i++) antenna(k, -1.3 + i * 0.12, Y0 + 0.81, -1.3, 0.35 + i * 0.08);
-    // glass entrance atrium
-    k.box(P.base, 0.56, 0.02, 0.32, -0.7, Y0, -0.19);
-    curtain(k, 'z', 1, -0.97, -0.43, Y0 + 0.02, Y0 + 0.3, -0.03, 0.09, 0.093);
-    curtain(k, 'x', 1, -0.34, -0.04, Y0 + 0.02, Y0 + 0.3, -0.43, 0.1, 0.093);
-    k.box(P.mats.col(0x2a3a48, 0.15, 0.8), 0.54, 0.28, 0.3, -0.7, Y0 + 0.02, -0.19);
-    k.box(P.trim, 0.6, 0.025, 0.36, -0.7, Y0 + 0.3, -0.19);
-    k.box(cyan, 0.6, 0.008, 0.36, -0.7, Y0 + 0.296, -0.19);
-    // big radome
-    k.cyl(P.wall, 0.4, 0.22, 0.9, Y0, -0.9, 24);
-    k.cyl(P.team, 0.405, 0.03, 0.9, Y0 + 0.16, -0.9, 24);
-    k.sph(P.mats.col(0xf4f4f0, 0.6, 0.05), 0.44, 0.9, Y0 + 0.5, -0.9, 28, 18);
-    door(k, 'x', 1, -0.9, Y0, 1.3, 0.1, 0.18, false);
-    // solar field + antenna farm
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) solarPanel(k, -1.15 + j * 0.42, Y0, 0.35 + i * 0.32, 0.38, 0.2, 0.5);
-    for (let i = 0; i < 3; i++) satDish(k, 1.25, Y0, 0.15 + i * 0.35, 0.09, 0.9, 0.9);
-    lattice(k, P.galv, 0.55, 0.55, Y0, 1.55, 0.14, 0.05, 8, 0.007);
-    k.blinkLight(0.55, Y0 + 1.58, 0.55, 0.016, 1.5, 0);
-    k.box(cyan, 0.04, 0.04, 0.04, 0.55, Y0 + 1.0, 0.55);
-    fence(k, [[0.25, 1.45], [1.45, 1.45], [1.45, -0.2]], 0.15, Y0);
-    lightPole(k, -0.2, 1.3, 0.42, 0);
-    k.height = 1.5;
-  } else if (R === 'east') {
-    // brutalist institute: stepped concrete blocks with vertical fins
-    block(k, { x0: -1.42, x1: 0.3, z0: -1.42, z1: -0.35, h: 0.42, floors: 2, equip: 0, emblem: false });
-    const ux0 = -1.3;
-    const ux1 = -0.2;
-    const uz0 = -1.3;
-    const uz1 = -0.6;
-    k.box(P.wallB, ux1 - ux0, 0.56, uz1 - uz0, (ux0 + ux1) / 2, Y0 + 0.42, (uz0 + uz1) / 2);
-    for (let i = 0; i <= 13; i++) {
-      const x = ux0 + ((ux1 - ux0) * i) / 13;
-      k.box(P.concrete, 0.025, 0.56, 0.05, x, Y0 + 0.42, uz1 + 0.025);
-      if (i < 13) k.panel(P.win, 'z', 1, x + (ux1 - ux0) / 26, Y0 + 0.46, uz1 + 0.003, 0.055, 0.46, [(i % 8) / 8, 0, (i % 8) / 8 + 0.125, 0.75]);
-    }
-    for (let i = 0; i <= 8; i++) {
-      const z = uz0 + ((uz1 - uz0) * i) / 8;
-      k.box(P.concrete, 0.05, 0.56, 0.025, ux1 + 0.025, Y0 + 0.42, z);
-    }
-    k.box(P.team, ux1 - ux0 + 0.01, 0.03, uz1 - uz0 + 0.01, (ux0 + ux1) / 2, Y0 + 0.92, (uz0 + uz1) / 2);
-    flatRoof(k, ux0, ux1, uz0, uz1, Y0 + 0.98, 0.03);
-    roofEmblem(k, ux0, ux1, uz0, uz1, Y0 + 0.991);
-    roofKit(k, ux0, ux1, uz0, uz0 + 0.3, Y0 + 0.99, 2);
-    stencil(k, 'НИИ-9', 'x', 1, -0.95, Y0 + 0.75, ux1 + 0.05, 0.36, '#e6e2d6');
-    dome(k, 0.88, Y0, -0.9, 0.38, 'observatory');
-    // tall lattice TV / comms mast with aviation bands
-    const mx = 1.05;
-    const mz = 0.55;
-    k.box(P.concrete, 0.3, 0.04, 0.3, mx, Y0, mz);
-    lattice(k, P.galv, mx, mz, Y0 + 0.04, 2.0, 0.26, 0.05, 10, 0.008);
-    for (let i = 0; i < 3; i++) k.box(i % 2 ? P.white : P.red, 0.09 - i * 0.012, 0.1, 0.09 - i * 0.012, mx, Y0 + 1.5 + i * 0.16, mz);
-    k.blinkLight(mx, Y0 + 2.08, mz, 0.018, 1.5, 0);
-    k.blinkLight(mx, Y0 + 1.2, mz, 0.014, 1.5, 0.75);
-    satcom(k, 'dish', 0.35, Y0, 0.2, 0.16);
-    // cryo tanks + pipes
-    for (let i = 0; i < 3; i++) silo(k, -1.15 + i * 0.25, 0.75, 0.09, 0.5, P.white, 'dome');
-    k.pipe(P.galv, [[-1.15, Y0 + 0.3, 0.66], [-1.15, Y0 + 0.3, -0.33]], 0.014, 6);
-    k.pipe(P.rust, [[-0.6, Y0 + 0.2, 0.75], [-0.3, Y0 + 0.2, 0.75], [-0.3, Y0 + 0.2, -0.33]], 0.018, 6);
-    for (let i = 0; i < 5; i++) k.box(P.concrete, 0.24, 0.16, 0.02, -1.3 + i * 0.25, Y0, 1.45, 6);
-    guardBooth(k, 0.25, 1.25);
-    k.height = 1.6;
-  } else if (R === 'asia') {
-    // podium + glass tower with tiled crown + glass dome
-    block(k, { x0: -1.42, x1: 0.35, z0: -1.42, z1: -0.25, h: 0.3, floors: 1, equip: 0, door: -0.3, emblem: false });
-    const tx0 = -1.15;
-    const tx1 = -0.45;
-    const tz0 = -1.2;
-    const tz1 = -0.55;
-    k.box(P.wall, tx1 - tx0, 1.05, tz1 - tz0, (tx0 + tx1) / 2, Y0 + 0.3, (tz0 + tz1) / 2);
-    curtain(k, 'z', 1, tx0 + 0.04, tx1 - 0.04, Y0 + 0.34, Y0 + 1.31, tz1, 0.09, 0.108);
-    curtain(k, 'x', 1, tz0 + 0.04, tz1 - 0.04, Y0 + 0.34, Y0 + 1.31, tx1, 0.09, 0.108);
-    k.box(P.team, tx1 - tx0 + 0.01, 0.03, tz1 - tz0 + 0.01, (tx0 + tx1) / 2, Y0 + 1.32, (tz0 + tz1) / 2);
-    asianRoof(k, P.pitch, ridgeMat(k), (tx0 + tx1) / 2, Y0 + 1.35, (tz0 + tz1) / 2, tx1 - tx0 + 0.16, tz1 - tz0 + 0.16, 0.22, 0.05, P.accent);
-    k.blinkLight((tx0 + tx1) / 2, Y0 + 1.62, (tz0 + tz1) / 2, 0.014, 1.4, 0);
-    flatRoof(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.3, 0.03);
-    roofEmblem(k, -0.4, 0.35, -1.42, -0.25, Y0 + 0.311);
-    // glass dome lab
-    const dx = 0.88;
-    const dz = -0.8;
-    k.cyl(P.wall, 0.44, 0.12, dx, Y0, dz, 28);
-    k.cyl(P.accent, 0.445, 0.02, dx, Y0 + 0.1, dz, 28);
-    k.sph(cyan, 0.12, dx, Y0 + 0.32, dz, 14, 10);
-    k.cyl(P.galv, 0.03, 0.2, dx, Y0 + 0.12, dz, 8);
-    const gl = P.mats.col(0x6aa8c8, 0.15, 0.85);
-    k.dome(gl, 0.42, dx, Y0 + 0.12, dz, 28, 10);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * TAU;
-      const pts: V3[] = [];
-      for (let j = 0; j <= 5; j++) {
-        const t = (j / 5) * (Math.PI / 2);
-        pts.push([dx + Math.cos(a) * Math.cos(t) * 0.425, Y0 + 0.12 + Math.sin(t) * 0.425, dz + Math.sin(a) * Math.cos(t) * 0.425]);
-      }
-      k.pipe(P.white, pts, 0.007, 4);
-    }
-    satcom(k, 'dish', 0.9, Y0, 0.3, 0.16);
-    prototypeLaser(k, 0.25, 0.85);
-    planter(k, -1.2, 0.3, 0.12, 0.8, 'tree', Y0);
-    planter(k, -0.6, 1.3, 0.9, 0.1, 'shrub', Y0);
-    planter(k, 0.4, 1.3, 0.6, 0.1, 'shrub', Y0);
-    for (let i = 0; i < 2; i++) tree(k, -0.7 + i * 0.4, 0.4, 0.32, Y0);
-    lightPole(k, 1.3, 1.3, 0.42, Math.PI);
-    k.height = 1.65;
-  } else {
-    // octagonal domed hall, modern glass wing, reflecting pool
-    const cx = -0.6;
-    const cz = -0.62;
-    k.cyl(P.base, 0.66, 0.04, cx, Y0, cz, 8);
-    k.cyl(P.wall, 0.62, 0.48, cx, Y0 + 0.04, cz, 8);
-    const band = new THREE.CylinderGeometry(0.625, 0.625, 0.06, 8, 1, true);
-    scaleUV(band, 10, 1);
-    band.translate(cx, Y0 + 0.43, cz);
-    k.add(band, P.tile, 0);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * TAU + TAU / 16;
-      if (Math.cos(a) + Math.sin(a) < -0.3) continue;
-      const r = 0.62 * Math.cos(TAU / 16);
-      k.at(cx + Math.cos(a) * r, Y0 + 0.12, cz + Math.sin(a) * r, Math.PI / 2 - a, () => {
-        k.prism(P.glass, archPts(0, 0, 0.12, 0.14, 0.4, 5), 0.01, 0, 0, 0.004);
-        k.prism(P.trim, archPts(0, -0.01, 0.16, 0.15, 0.4, 5).slice(1), 0.012, 0, 0, 0.008, undefined, [archPts(0, 0.0, 0.125, 0.14, 0.4, 5).slice(1)]);
-      });
-    }
-    k.cyl(P.trim, 0.64, 0.03, cx, Y0 + 0.52, cz, 8);
-    dome(k, cx, Y0 + 0.55, cz, 0.46, P.s.faction === 'turkey' ? 'ottoman' : 'persian');
-    k.cyl(P.team, 0.635, 0.025, cx, Y0 + 0.36, cz, 8);
-    // modern research wing
-    const wx0 = 0.35;
-    const wx1 = 1.42;
-    const wz0 = -1.42;
-    const wz1 = -0.4;
-    k.box(P.base, wx1 - wx0 + 0.014, 0.03, wz1 - wz0 + 0.014, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
-    k.box(P.wall2, wx1 - wx0, 0.52, wz1 - wz0, (wx0 + wx1) / 2, Y0, (wz0 + wz1) / 2);
-    dress(k, wx0, wx1, wz0, wz1, Y0, 0.52, { vent: false, cab: false });
-    curtain(k, 'z', 1, wx0 + 0.06, wx1 - 0.06, Y0 + 0.06, Y0 + 0.46, wz1, 0.09, 0.1);
-    curtain(k, 'x', 1, wz0 + 0.06, wz1 - 0.06, Y0 + 0.06, Y0 + 0.46, wx1, 0.09, 0.1);
-    for (let i = 0; i < 9; i++) faceBox(k, P.mash, 'z', 1, wx0 + 0.1 + i * 0.11, Y0 + 0.06, wz1, 0.05, 0.4, 0.03);
-    k.box(P.team, wx1 - wx0 + 0.01, 0.025, wz1 - wz0 + 0.01, (wx0 + wx1) / 2, Y0 + 0.49, (wz0 + wz1) / 2);
-    flatRoof(k, wx0, wx1, wz0, wz1, Y0 + 0.52, 0.035);
-    roofEmblem(k, wx0, wx1, wz0, wz1, Y0 + 0.531);
-    satcom(k, 'dish', 0.95, Y0 + 0.53, -0.95, 0.15);
-    antenna(k, 1.3, Y0 + 0.53, -1.3, 0.5);
-    // reflecting pool with arcade
-    const water = P.mats.col(0x2f8aa6, 0.1, 0.9);
-    k.box(P.wall2, 1.3, 0.04, 0.62, -0.55, Y0, 0.75);
-    k.box(water, 1.2, 0.005, 0.52, -0.55, Y0 + 0.036, 0.75);
-    k.cyl(P.wall2, 0.05, 0.08, -0.55, Y0 + 0.04, 0.75, 10);
-    k.cyl(cyan, 0.02, 0.06, -0.55, Y0 + 0.11, 0.75, 8);
-    arcade(k, P.wall2, -1.3, 0.1, Y0, 0.24, 0.0, 0.03, 6, 0.13, 0.08);
-    k.box(P.wall2, 1.4, 0.025, 0.08, -0.6, Y0 + 0.24, 0.0);
-    k.box(P.tile, 1.36, 0.03, 0.004, -0.6, Y0 + 0.19, 0.017);
-    for (const [px, pz] of [
-      [-1.3, 0.45],
-      [0.2, 0.45],
-      [-1.3, 1.2],
-      [0.2, 1.2],
-    ])
-      planter(k, px, pz, 0.12, 0.12, 'palm', Y0);
-    k.box(cyan, 0.4, 0.01, 0.01, (wx0 + wx1) / 2, Y0 + 0.03, wz1 + 0.012);
-    lightPole(k, 1.3, 1.3, 0.42, Math.PI);
-    k.height = 1.5;
+  // ------------------------------------------------ hardened lab block (back left): windowless, blast door
+  const x0 = -1.42;
+  const x1 = 0.25;
+  const z0 = -1.42;
+  const z1 = -0.4;
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  k.box(P.base, x1 - x0 + 0.014, 0.03, z1 - z0 + 0.014, cx, Y0, cz);
+  k.box(P.panel, x1 - x0, 0.62, z1 - z0, cx, Y0, cz, 1.1);
+  // vertical precast ribs + slit windows
+  for (let i = 0; i <= 10; i++) faceBox(k, P.concrete, 'z', 1, x0 + 0.04 + i * ((x1 - x0 - 0.08) / 10), Y0, z1, 0.03, 0.6, 0.03);
+  for (let i = 0; i < 10; i++) k.panel(P.win, 'z', 1, x0 + 0.04 + (i + 0.5) * ((x1 - x0 - 0.08) / 10), Y0 + 0.44, z1 + 0.003, 0.08, 0.06, cell(k));
+  for (let i = 0; i < 6; i++) k.panel(P.win, 'x', 1, z0 + 0.1 + (i + 0.5) * ((z1 - z0 - 0.2) / 6), Y0 + 0.44, x1 + 0.003, 0.08, 0.06, cell(k));
+  dress(k, x0, x1, z0, z1, Y0, 0.62, { vent: false });
+  k.box(P.team, x1 - x0 + 0.01, 0.034, z1 - z0 + 0.01, cx, Y0 + 0.36, cz);
+  k.box(P.cyan_l, x1 - x0 + 0.012, 0.008, z1 - z0 + 0.012, cx, Y0 + 0.34, cz);
+  flatRoof(k, x0, x1, z0, z1, Y0 + 0.62, 0.035, P.panel);
+  roofEmblem(k, x0 + 0.5, x1, z0, z1, Y0 + 0.631);
+  satcom(k, 'dish', -1.1, Y0 + 0.63, -1.05, 0.15);
+  for (let i = 0; i < 3; i++) antenna(k, -0.78 + i * 0.12, Y0 + 0.63, -1.3, 0.32 + i * 0.08);
+  // blast door portal
+  k.box(P.panel, 0.42, 0.34, 0.08, -0.55, Y0, z1 + 0.04);
+  k.box(P.mats.at(Tile.Plate, 0x7a8078, 2.4), 0.3, 0.26, 0.012, -0.55, Y0, z1 + 0.086);
+  k.box(P.hazard, 0.42, 0.03, 0.082, -0.55, Y0 + 0.31, z1 + 0.04);
+  k.box(P.amber_l, 0.03, 0.012, 0.012, -0.55, Y0 + 0.29, z1 + 0.095);
+  wallSign(k, 'z', 1, -1.08, Y0 + 0.2, z1, 0.34, 'main');
+  wallSign(k, 'z', 1, -0.05, Y0 + 0.2, z1, 0.22, 'num', 'R&D');
+  // ------------------------------------------------ radome on a drum (back right)
+  k.cyl(P.panel, 0.4, 0.22, 0.9, Y0, -0.9, 24);
+  k.cyl(P.team, 0.405, 0.03, 0.9, Y0 + 0.16, -0.9, 24);
+  k.sph(P.dome, 0.44, 0.9, Y0 + 0.5, -0.9, 28, 18);
+  // radome panel seams
+  for (let i = 0; i < 6; i++) k.ring(P.mats.col(0xd8d8d2, 0.6, 0.05), 0.44 * Math.cos(0.3 + i * 0.2), 0.003, 0.9, Y0 + 0.5 + 0.44 * Math.sin(0.3 + i * 0.2), -0.9, 28);
+  k.blinkLight(0.9, Y0 + 0.96, -0.9, 0.016, 1.5, 0);
+  // ------------------------------------------------ server chillers + cryo tanks + test pad
+  chillers(k, 0.38, 1.38, -0.2, 3, 'fan', false);
+  for (let i = 0; i < 3; i++) silo(k, -1.2 + i * 0.24, -0.1, 0.085, 0.42, P.white, 'dome');
+  k.pipe(P.galv, [[-1.2, Y0 + 0.3, -0.19], [-1.2, Y0 + 0.3, -0.38]], 0.014, 6);
+  k.pipe(P.rust, [[-0.7, Y0 + 0.2, -0.1], [-0.5, Y0 + 0.2, -0.1], [-0.5, Y0 + 0.2, -0.38]], 0.016, 6);
+  prototypeLaser(k, 0.55, 0.65);
+  satDish(k, -0.25, Y0, 0.35, 0.16, 0.85, 0.7);
+  // antenna farm: lattice mast
+  lattice(k, P.galv, -1.05, 0.75, Y0, 1.45, 0.16, 0.05, 8, 0.007);
+  k.blinkLight(-1.05, Y0 + 1.48, 0.75, 0.016, 1.5, 0);
+  k.box(P.cyan_l, 0.04, 0.04, 0.04, -1.05, Y0 + 0.95, 0.75);
+  for (let i = 0; i < 2; i++) satDish(k, -0.55 + i * 0.3, Y0, 1.1, 0.09, 0.9, 0.9);
+  // security: fence with razor wire, guard booth, floodlights
+  fence(k, [[-1.45, 1.45], [1.45, 1.45], [1.45, 0.1]], 0.16, Y0);
+  razor(k, [-1.45, 1.45], [1.45, 1.45], Y0 + 0.16);
+  razor(k, [1.45, 1.45], [1.45, 0.1], Y0 + 0.16);
+  guardBooth(k, 1.2, 1.2, 0);
+  floodMast(k, 1.35, -0.45, 0.6, Math.PI);
+  floodMast(k, -1.38, 0.2, 0.55, 0.2);
+  jeep(k, 0.0, 1.15, Math.PI, 1);
+  k.height = 1.5;
+}
+
+// ================================================================ air defence radars (1x1 site corner)
+
+/** Fire-control / surveillance radar for the SAM sites: a panel on a short mast, rotating or slewing per system. */
+function samRadar(k: Kit, x: number, z: number, y: number) {
+  const P = k.P;
+  const f = P.s.faction;
+  const hull = P.mats.col(P.s.hull, 0.68, 0.2);
+  if (f === 'israel') return; // EL/M-2084 is part of the launcher layout
+  if (f === 'usa') {
+    // AN/MPQ-65 style: shelter with a fixed, tilted phased array facing the threat axis
+    k.at(x, y, z, -Math.PI / 4, () => {
+      k.box(P.dark, 0.2, 0.03, 0.14, 0, 0, 0);
+      k.rbox(hull, 0.18, 0.1, 0.13, 0, 0.03, 0, 0.01);
+      k.at(0.1, 0.07, 0, 0, () => aesaFace(k, 0.15, 0.16, 0, -0.04, 0), 0, -0.35);
+      k.box(P.team, 0.182, 0.014, 0.132, 0, 0.12, 0);
+    });
+    return;
   }
+  // mast mounted panel: S-400 / HQ-9 / Bavar slew, TRML-4D / KM-SAM / Hisar rotate
+  const spin = f === 'germany' || f === 'ukraine' || f === 'korea' || f === 'turkey';
+  const tall = f === 'russia' || f === 'china' || f === 'iran';
+  const h = tall ? 0.36 : 0.22;
+  k.box(hull, 0.12, 0.06, 0.12, x, y, z);
+  lattice(k, P.drab, x, z, y + 0.06, h, 0.08, 0.05, 3, 0.006);
+  const n = 'srad';
+  const o = k.node(n, x, y + 0.06 + h, z, -Math.PI / 4);
+  k.on(o, () => {
+    k.cyl(P.dark, 0.03, 0.025, 0, 0, 0, 10);
+    k.at(0.0, 0.025, 0, 0, () => {
+      if (tall) aesaFace(k, 0.22, 0.2, 0.03, 0, 0);
+      else aesaFace(k, 0.18, 0.1, 0.03, 0, 0);
+    }, 0, tall ? -0.25 : -0.15);
+  });
+  if (spin) k.spin(n, 'y', 1.6);
+  else k.osc(n, 'y', 0.6, 0.25, x * 5, 0);
+  k.blinkLight(x, y + 0.08 + h + (tall ? 0.25 : 0.14), z, 0.01, 1.4, 0.2);
+}
+
+// ================================================================ SUPERWEAPON COMPLEXES (3x3)
+
+/** Shared walled compound: hardstand, T-wall blast walls, berm command bunker, floodlights, razor wire, power. */
+function swCompound(k: Kit) {
+  slab(k, 3, 3);
+  tWall(k, [-1.44, -1.44], [1.44, -1.44], 0.26, Y0);
+  tWall(k, [-1.44, -1.32], [-1.44, 0.9], 0.26, Y0);
+  bermBunker(k, -0.95, -0.98, 0.5, 0.5, 0.2, 0);
+  wallSign(k, 'z', 1, -0.95, Y0 + 0.24, -0.66, 0.34, 'main');
+  for (let i = 0; i < 3; i++) antenna(k, -1.2 + i * 0.1, Y0 + 0.2, -1.15, 0.3 + i * 0.07);
+  fence(k, [[1.46, -1.3], [1.46, 1.46], [-0.4, 1.46]], 0.16, Y0);
+  razor(k, [1.46, -1.3], [1.46, 1.46], Y0 + 0.16);
+  razor(k, [1.46, 1.46], [-0.4, 1.46], Y0 + 0.16);
+  floodMast(k, 1.36, -1.32, 0.66, Math.PI * 0.75);
+  floodMast(k, -1.34, 1.36, 0.6, -Math.PI * 0.25);
+  genset(k, -1.12, -0.42, Math.PI / 2, 0.9, Y0, true);
+  cableRun(k, [[-1.12, -0.25], [-1.12, 0.1], [-0.6, 0.1]], 0.05);
+  postSign(k, 0.9, 1.38, 0, 0.3, 'num', 'SW');
+  // warning lights on the wall corners
+  k.blinkLight(-1.44, Y0 + 0.31, -1.44, 0.016, 1.2, 0);
+  k.blinkLight(1.4, Y0 + 0.31, -1.44, 0.016, 1.2, 0.6);
+}
+
+function swSilo(k: Kit) {
+  const P = k.P;
+  swCompound(k);
+  // twin launch silos: concrete collars, sliding hatch (one open), missile standing in the open silo
+  for (const [x, z, open] of [
+    [0.05, 0.15, true],
+    [0.05, 0.95, false],
+  ] as [number, number, boolean][]) {
+    k.cyl(P.panel, 0.34, 0.06, x, Y0, z, 24);
+    k.cyl(P.team, 0.345, 0.012, x, Y0 + 0.045, z, 24);
+    k.cyl(P.black, 0.25, 0.004, x, Y0 + 0.06, z, 20);
+    // hatch rails + hatch
+    for (const sz of [-1, 1]) k.box(P.steel, 0.9, 0.02, 0.03, x + 0.3, Y0 + 0.06, z + sz * 0.22);
+    const hx = open ? x + 0.6 : x;
+    k.box(P.mats.at(Tile.Plate, 0x8a8e86, 2.2), 0.5, 0.05, 0.5, hx, Y0 + 0.07, z);
+    k.box(P.hazard, 0.5, 0.012, 0.04, hx, Y0 + 0.12, z - 0.23);
+    k.box(P.team, 0.12, 0.012, 0.5, hx, Y0 + 0.12, z);
+    if (open) {
+      // missile (raised) + umbilical arm
+      const my = Y0 + 0.06;
+      k.cyl(P.white, 0.09, 0.95, x, my, z, 16);
+      k.cyl(P.team, 0.092, 0.05, x, my + 0.55, z, 16);
+      k.cyl(P.dark, 0.092, 0.02, x, my + 0.3, z, 16);
+      k.lathe(P.white, [[0.09, 0], [0.085, 0.12], [0.06, 0.26], [0.025, 0.36], [0.001, 0.4]], x, my + 0.95, z, 16);
+      for (let i = 0; i < 4; i++) k.at(x, my + 0.05, z, (i / 4) * TAU + Math.PI / 4, () => k.box(P.dark, 0.1, 0.12, 0.008, 0.11, 0, 0));
+      k.blinkLight(x, my + 1.38, z, 0.012, 0.9, 0);
+    }
+  }
+  // service tower beside the open silo
+  const gx = -0.42;
+  const gz = 0.15;
+  k.box(P.concrete, 0.24, 0.04, 0.24, gx, Y0, gz);
+  lattice(k, P.crane, gx, gz, Y0 + 0.04, 1.2, 0.2, 0.16, 8, 0.01);
+  for (const y of [0.45, 0.85, 1.2]) {
+    k.box(P.grating, 0.3, 0.01, 0.24, gx + 0.06, Y0 + y, gz);
+    k.bar(P.steel, [gx + 0.1, Y0 + y - 0.02, gz], [0.05 - 0.09, Y0 + y - 0.02, gz], 0.02);
+  }
+  k.blinkLight(gx, Y0 + 1.28, gz, 0.016, 1.5, 0.3);
+  // propellant / service trucks
+  truck(k, 0.95, -0.55, Math.PI, 'fuel', 1.1);
+  truck(k, -0.55, 1.1, 0, 'cargo', 1.05);
+  ammoBoxes(k, 0.95, 0.5, 5, Math.PI / 2);
+  k.height = 1.55;
+}
+
+function swLaser(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  swCompound(k);
+  // power + thermal management containers with spinning fans
+  for (let i = 0; i < 3; i++) cabin(k, 1.05, Y0, -1.0 + i * 0.26, Math.PI / 2, i === 1 ? N.boxes[1] : N.wall, 0.42, false);
+  chillers(k, 0.6, 1.36, -0.3, 2, 'lfan');
+  // laser weapon: armoured base + slewing beam director (yaw + slow nod)
+  const lx = 0.0;
+  const lz = 0.35;
+  k.cyl(P.panel, 0.42, 0.08, lx, Y0, lz, 24);
+  k.cyl(P.team, 0.425, 0.014, lx, Y0 + 0.07, lz, 24);
+  k.cyl(P.drab, 0.3, 0.2, lx, Y0 + 0.08, lz, 18, 0.26);
+  const tur = k.node('lturret', lx, Y0 + 0.28, lz);
+  k.on(tur, () => {
+    k.cyl(P.dark, 0.24, 0.03, 0, 0, 0, 18);
+    for (const sz of [-1, 1]) k.rbox(P.white, 0.26, 0.26, 0.06, 0, 0.03, sz * 0.18, 0.02);
+    const el = k.node('lelev', 0, 0.2, 0);
+    k.on(el, () => {
+      k.rbox(P.white, 0.34, 0.2, 0.26, 0.02, -0.1, 0, 0.03);
+      k.box(P.team, 0.342, 0.03, 0.262, 0.02, 0.06, 0);
+      k.tube(P.dark, [0.19, 0, 0], [0.24, 0, 0], 0.1, 20);
+      k.tube(P.cyan_l, [0.238, 0, 0], [0.246, 0, 0], 0.075, 20);
+      k.tube(P.dark, [-0.1, 0.12, 0.08], [0.12, 0.12, 0.08], 0.025, 10);
+      k.box(P.glass, 0.004, 0.03, 0.03, 0.12, 0.12, 0.08);
+    });
+  });
+  k.osc('lturret', 'y', 1.4, 0.18, 0, 0);
+  k.osc('lelev', 'z', 0.18, 0.31, 1.0, 0.25);
+  // EL/M-2084 style radar on its trailer + mast (slewing)
+  k.box(P.dark, 0.36, 0.04, 0.2, -0.6, Y0 + 0.02, 0.85);
+  for (const sx of [-1, 1]) k.tube(P.rubber, [-0.6 + sx * 0.1, Y0 + 0.04, 0.95], [-0.6 + sx * 0.1, Y0 + 0.04, 0.98], 0.04, 10);
+  k.rbox(P.drab, 0.3, 0.1, 0.18, -0.6, Y0 + 0.05, 0.85, 0.01);
+  const rd = k.node('lradar', -0.6, Y0 + 0.17, 0.85, 0.6);
+  k.on(rd, () => {
+    k.cyl(P.dark, 0.04, 0.05, 0, 0, 0, 10);
+    k.at(0, 0.05, 0, 0, () => aesaFace(k, 0.34, 0.26, 0.04, 0, 0), 0, -0.3);
+  });
+  k.spin('lradar', 'y', 1.2);
+  k.height = 1.0;
+}
+
+function swDrone(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  swCompound(k);
+  // fabric hangar (back right)
+  const hx = 0.62;
+  const hz = -0.9;
+  vault(k, P.camo, null, hx, Y0, hz, 1.2, 0.95, 0.46, false, 2);
+  k.box(P.dark, 0.9, 0.02, 0.85, hx, Y0, hz);
+  parkedDrone(k, hx, Y0, hz + 0.2, Math.PI / 2, 1.1);
+  k.box(P.team, 0.9, 0.03, 0.02, hx, Y0 + 0.38, hz + 0.47);
+  // launch rails (angled) with loitering munitions ready
+  for (let i = 0; i < 4; i++) {
+    const x = -0.75 + i * 0.4;
+    const z = 0.55;
+    k.at(x, Y0, z, -Math.PI / 2, () => {
+      k.box(P.dark, 0.14, 0.04, 0.12, 0.0, 0, 0);
+      k.boxR(P.drab, 0.62, 0.03, 0.06, 0.25, 0.14, 0, 0, 0, 0.32);
+      for (const t of [0.1, 0.4]) k.box(P.steel, 0.02, 0.07 + t * 0.4, 0.02, t, 0.0, 0);
+      k.at(0.3, 0.183, 0, 0, () => {
+        k.tube(P.mats.col(0xa8aca4, 0.5, 0.3), [-0.1, 0, 0], [0.1, 0, 0], 0.018, 8);
+        k.box(P.mats.col(0xa8aca4, 0.5, 0.3), 0.07, 0.005, 0.24, -0.04, 0.0, 0);
+        k.box(P.team, 0.02, 0.006, 0.24, -0.04, 0.003, 0);
+      }, 0, 0.32);
+    });
+  }
+  // ground control containers + satcom under a camo net
+  cabin(k, 0.95, Y0, 0.2, Math.PI / 2, N.wall, 0.5);
+  cabin(k, 1.2, Y0, 0.2, Math.PI / 2, N.boxes[0], 0.5);
+  camoNet(k, 0.78, 1.4, -0.12, 0.55, 0.28, 0.04);
+  satcom(k, 'gcs', 0.4, Y0, 0.05, 0.14);
+  ammoBoxes(k, -0.4, 1.15, 6, 0);
+  truck(k, -0.25, -0.3, 0, 'cargo', 1.05);
+  k.height = 1.0;
+}
+
+function swRocket(k: Kit) {
+  const P = k.P;
+  swCompound(k);
+  const hull = P.mats.col(P.s.hull, 0.68, 0.2);
+  // two heavy launchers (TOS style) on hardstands with raised launch boxes
+  for (const z of [-0.25, 0.65]) {
+    k.box(P.concrete, 1.5, 0.012, 0.56, 0.2, Y0, z);
+    k.at(0.2, Y0, z, 0, () => {
+      for (const sz of [-1, 1]) {
+        k.rbox(P.rubber, 1.2, 0.09, 0.09, -0.05, 0.0, sz * 0.17, 0.04);
+        k.box(P.dark, 1.0, 0.07, 0.092, -0.05, 0.01, sz * 0.17);
+      }
+      k.rbox(hull, 1.25, 0.12, 0.42, -0.05, 0.07, 0, 0.02);
+      k.rbox(hull, 0.34, 0.12, 0.4, 0.42, 0.19, 0, 0.02);
+      k.box(P.glass, 0.004, 0.04, 0.3, 0.592, 0.24, 0);
+      k.box(P.team, 0.342, 0.016, 0.402, 0.42, 0.31, 0);
+      const tilt = 0.55;
+      k.at(-0.1, 0.22, 0, 0, () => {
+        k.box(P.dark, 0.2, 0.06, 0.3, 0, 0, 0);
+        k.at(0.0, 0.06, 0, 0, () => {
+          k.box(hull, 0.85, 0.34, 0.38, 0.3, 0, 0);
+          for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) k.box(P.black, 0.006, 0.06, 0.07, 0.726, 0.025 + r * 0.08, -0.12 + c * 0.08);
+          k.box(P.team, 0.04, 0.344, 0.384, 0.12, 0, 0);
+        }, 0, tilt);
+      });
+    });
+  }
+  truck(k, -0.65, 1.15, 0, 'crane', 1.05);
+  ammoBoxes(k, -0.95, 0.75, 6, Math.PI / 2);
+  ammoBoxes(k, -0.95, 0.2, 6, Math.PI / 2);
+  k.height = 1.05;
+}
+
+function swCruise(k: Kit) {
+  const P = k.P;
+  const N = P.N;
+  swCompound(k);
+  const hull = P.mats.col(P.s.hull, 0.68, 0.2);
+  const can = P.mats.col(mix(P.s.hull, 0xd8d8cc, 0.25), 0.6, 0.2);
+  // four canister launchers on trailer chassis, raised
+  for (let i = 0; i < 4; i++) {
+    const z = -0.45 + i * 0.42;
+    k.at(0.2, Y0, z, 0, () => {
+      k.box(P.dark, 0.9, 0.05, 0.16, 0, 0.06, 0);
+      for (const x of [-0.3, -0.18]) for (const sz of [-1, 1]) k.tube(P.rubber, [x, 0.045, sz * 0.1], [x, 0.045, sz * 0.13], 0.045, 10);
+      k.box(hull, 0.86, 0.03, 0.26, 0, 0.1, 0);
+      for (const sx of [-1, 1]) k.box(P.steel, 0.012, 0.08, 0.012, 0.36, 0.0, sx * 0.14);
+      k.at(-0.25, 0.14, 0, 0, () => {
+        for (let c = 0; c < 2; c++) {
+          k.box(can, 0.95, 0.1, 0.1, 0.47, 0.0, -0.055 + c * 0.11);
+          k.box(P.black, 0.006, 0.08, 0.08, 0.948, 0.01, -0.055 + c * 0.11);
+        }
+        k.box(P.team, 0.03, 0.105, 0.225, 0.3, 0.0, 0);
+        for (let c = 0; c < 2; c++) k.muzzle(0.96, 0.05, -0.055 + c * 0.11);
+      }, 0, 0.62);
+    });
+  }
+  // fire control: container with a rotating panel radar
+  cabin(k, -0.75, Y0, 0.95, 0, N.wall, 0.5);
+  k.box(P.steel, 0.12, 0.08, 0.12, -0.6, Y0 + 0.17, 0.95);
+  const rd = k.node('crad', -0.6, Y0 + 0.25, 0.95);
+  k.on(rd, () => {
+    k.cyl(P.dark, 0.03, 0.03, 0, 0, 0, 10);
+    k.at(0, 0.03, 0, 0, () => aesaFace(k, 0.3, 0.14, 0.03, 0, 0), 0, -0.2);
+  });
+  k.spin('crad', 'y', 1.4);
+  truck(k, -0.6, 1.25, 0, 'cargo', 1.0);
+  k.height = 1.0;
+}
+
+// ================================================================ CAPTURABLE TECH STRUCTURES (neutral until captured)
+
+/** Red cross marking: flat on a roof, or upright on a +Z facing wall. */
+function redCross(k: Kit, x: number, y: number, z: number, s: number, wall = false) {
+  const P = k.P;
+  if (!wall) {
+    k.box(P.white, s * 1.15, 0.004, s * 1.15, x, y, z);
+    k.box(P.red, s, 0.006, s * 0.3, x, y + 0.002, z);
+    k.box(P.red, s * 0.3, 0.006, s, x, y + 0.002, z);
+    return;
+  }
+  k.box(P.white, s * 1.15, s * 1.15, 0.006, x, y - s * 0.575, z + 0.003);
+  k.box(P.red, s, s * 0.3, 0.008, x, y - s * 0.15, z + 0.004);
+  k.box(P.red, s * 0.3, s, 0.008, x, y - s * 0.5, z + 0.004);
+}
+
+function techHospital(k: Kit) {
+  const P = k.P;
+  slab(k, 2, 2);
+  // prefab ward block (two modules) with a covered entrance
+  const x0 = -0.95;
+  const x1 = 0.35;
+  const z0 = -0.95;
+  const z1 = -0.35;
+  block(k, { x0, x1, z0, z1, h: 0.36, floors: 2, wall: P.mats.at(Tile.Clad, 0xe8e8e2), door: -0.3, equip: 2, sign: false, roof: 'flat' });
+  redCross(k, -0.62, Y0 + 0.385, -0.65, 0.26);
+  redCross(k, 0.1, Y0 + 0.3, z1, 0.1, true);
+  k.box(P.white, 0.34, 0.012, 0.16, -0.3, Y0 + 0.2, z1 + 0.08);
+  for (const sx of [-1, 1]) k.cyl(P.galv, 0.006, 0.2, -0.3 + sx * 0.15, Y0, z1 + 0.15, 6);
+  // field tents (canvas, gable) on the right
+  for (let i = 0; i < 2; i++) {
+    const tz = -0.75 + i * 0.42;
+    k.box(P.mats.at(Tile.Canvas, 0xa8a488), 0.5, 0.14, 0.34, 0.68, Y0, tz);
+    gable(k, P.mats.at(Tile.Canvas, 0x9a9878), P.mats.at(Tile.Canvas, 0xa8a488), 0.68, Y0 + 0.14, tz, 0.5, 0.34, 0.12, 0.02, true);
+    redCross(k, 0.68, Y0 + 0.24, tz + 0.085, 0.07);
+  }
+  // helipad (front left) + ambulances
+  k.cyl(P.concrete, 0.4, 0.008, -0.45, Y0, 0.5, 28);
+  k.decal(P.mats.canvas('helipad-h', texHelipad('#f2f2ea'), { alphaTest: 0.5 }), -0.45, Y0 + 0.009, 0.5, 0.7, 0.7);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU;
+    k.box(P.green_l, 0.016, 0.01, 0.016, -0.45 + Math.cos(a) * 0.41, Y0, 0.5 + Math.sin(a) * 0.41);
+  }
+  for (const [ax, az] of [
+    [0.55, 0.2],
+    [0.55, 0.52],
+  ] as P2[]) {
+    k.at(ax, Y0, az, 0, () => {
+      for (const wx of [0.1, -0.1]) for (const sz of [-1, 1]) k.tube(P.rubber, [wx, 0.03, sz * 0.06], [wx, 0.03, sz * 0.08], 0.03, 10);
+      k.rbox(P.white, 0.34, 0.16, 0.15, 0, 0.03, 0, 0.015);
+      k.box(P.red, 0.345, 0.025, 0.152, 0, 0.09, 0);
+      k.box(P.glass, 0.004, 0.05, 0.12, 0.171, 0.12, 0);
+      k.box(P.mats.light(0x3a7aff, 3), 0.03, 0.015, 0.1, 0.12, 0.19, 0);
+    });
+  }
+  genset(k, 0.0, 0.0, 0, 0.8);
+  flagPole(k, 0.9, 0.9, 0.7, Y0);
+  floodMast(k, -0.95, 0.0, 0.5, 0);
+  k.height = 0.85;
+}
+
+function techAirport(k: Kit) {
+  const P = k.P;
+  slab(k, 3, 3);
+  // runway strip with edge lights
+  const rz = 0.95;
+  k.box(P.asphalt, 2.96, 0.004, 0.7, 0, Y0, rz);
+  for (const sz of [-1, 1]) k.box(P.white, 2.9, 0.002, 0.014, 0, Y0 + 0.004, rz + sz * 0.31);
+  dashes(k, P.white, -1.2, rz, 1.2, rz, 0.16, 0.1, 0.02, Y0 + 0.004);
+  for (let i = 0; i <= 7; i++) for (const sz of [-1, 1]) k.box(i === 0 || i === 7 ? P.green_l : P.lamp, 0.016, 0.012, 0.016, -1.4 + i * 0.4, Y0 + 0.004, rz + sz * 0.34);
+  // terminal: glass front, flat roof
+  const tx0 = -1.42;
+  const tx1 = 0.05;
+  const tz0 = -1.42;
+  const tz1 = -0.6;
+  block(k, { x0: tx0, x1: tx1, z0: tz0, z1: tz1, h: 0.4, floors: 2, wall: P.mats.at(Tile.Clad, 0xd8dade), win: 'ribbon', door: -0.7, equip: 3, sign: false, roof: 'flat' });
+  k.panel(P.winC, 'z', 1, -0.7, Y0 + 0.03, tz1 + 0.006, 1.2, 0.18, cell(k, 8, 1));
+  k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 1.3, 0.05, 0.02, -0.68, Y0 + 0.33, tz1 + 0.01);
+  // control tower
+  const cx = 0.45;
+  const cz = -1.05;
+  k.cyl(P.mats.at(Tile.Panel, 0xd8d6d0), 0.1, 0.95, cx, Y0, cz, 12, 0.08);
+  k.cyl(P.mats.col(0x2a4258, 0.15, 0.8), 0.17, 0.12, cx, Y0 + 0.95, cz, 8, 0.2);
+  k.cyl(P.lamp, 0.165, 0.004, cx, Y0 + 1.01, cz, 8);
+  k.cyl(P.dark, 0.22, 0.035, cx, Y0 + 1.07, cz, 8);
+  antenna(k, cx - 0.05, Y0 + 1.1, cz, 0.22);
+  k.blinkLight(cx, Y0 + 1.34, cz, 0.016, 1.3, 0);
+  const rd = k.node('trad', cx + 0.08, Y0 + 1.11, cz + 0.02);
+  k.on(rd, () => {
+    k.box(P.dark, 0.02, 0.03, 0.02, 0, 0, 0);
+    k.box(P.white, 0.02, 0.04, 0.16, 0.01, 0.03, 0);
+  });
+  k.spin('trad', 'y', 2);
+  // hangar (back right, vault)
+  vault(k, P.mats.at(Tile.Corr, 0xb8bcc0, 1.6), P.mats.at(Tile.Clad, 0xd0d2d4), 1.05, Y0, -0.95, 0.75, 0.9, 0.42, false, 2);
+  k.box(P.dark, 0.5, 0.3, 0.01, 1.05, Y0, -0.49);
+  // parked airliner on the apron
+  const ax = -0.45;
+  const az = 0.1;
+  const body = P.mats.col(0xeef0f2, 0.45, 0.2);
+  k.at(ax, Y0, az, 0, () => {
+    k.tube(body, [-0.5, 0.14, 0], [0.42, 0.14, 0], 0.07, 14);
+    k.sph(body, 0.07, 0.42, 0.14, 0, 12, 8);
+    k.tube(body, [-0.5, 0.14, 0], [-0.62, 0.17, 0], 0.07, 12, 0.035);
+    k.box(body, 0.22, 0.012, 1.0, -0.05, 0.11, 0);
+    for (const sz of [-1, 1]) k.tube(P.mats.col(0xc8ccd0, 0.4, 0.5), [0.0, 0.08, sz * 0.24], [0.12, 0.08, sz * 0.24], 0.035, 10);
+    k.box(body, 0.12, 0.012, 0.34, -0.55, 0.17, 0);
+    k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 0.14, 0.17, 0.012, -0.56, 0.18, 0);
+    k.box(P.mats.col(0x2a6ac0, 0.5, 0.2), 0.9, 0.018, 0.142, -0.05, 0.14, 0);
+    for (let i = 0; i < 8; i++) k.box(P.dark, 0.016, 0.012, 0.142, -0.35 + i * 0.09, 0.17, 0);
+    for (const gx of [0.3, -0.05]) k.box(P.dark, 0.012, 0.07, 0.012, gx, 0, 0);
+  });
+  truck(k, 0.35, 0.35, Math.PI / 2, 'fuel', 0.9);
+  jeep(k, 0.7, -0.25, 0.4, 0.9);
+  flagPole(k, -1.3, -0.4, 0.8, Y0);
+  floodMast(k, 1.35, 0.45, 0.55, Math.PI);
+  k.height = 1.35;
+}
+
+function techComms(k: Kit) {
+  const P = k.P;
+  slab(k, 2, 2);
+  // tall lattice telecom mast with aviation bands, dishes and panel antennas
+  const H = 2.2;
+  const cx = 0.2;
+  const cz = -0.2;
+  k.box(P.concrete, 0.66, 0.05, 0.66, cx, Y0, cz);
+  const red = P.mats.col(0xc03020, 0.6, 0.3);
+  for (let i = 0; i < 6; i++) lattice(k, i % 2 ? red : P.white, cx, cz, Y0 + 0.05 + (i * H) / 6, H / 6, 0.6 - i * 0.09, 0.6 - (i + 1) * 0.09, 2, 0.012);
+  for (const [y, a] of [
+    [1.4, 0.6],
+    [1.7, 2.4],
+    [1.15, 4.1],
+  ] as P2[])
+    k.at(cx + Math.cos(a) * 0.12, Y0 + y, cz + Math.sin(a) * 0.12, -a, () => {
+      const pts: P2[] = [];
+      for (let i = 0; i <= 5; i++) pts.push([0.13 * (i / 5) + 0.001, 0.05 * (i / 5) ** 2]);
+      k.at(0, 0, 0, 0, () => k.lathe(P.mats.col(0xdcdcd4, 0.5, 0.1, true), pts, 0, 0, 0, 16, 0), 0, Math.PI / 2);
+      k.box(P.dark, 0.04, 0.03, 0.03, -0.02, -0.015, 0);
+    });
+  for (let i = 0; i < 3; i++) k.at(cx, Y0 + H - 0.05, cz, i * 2.1, () => k.box(P.white, 0.03, 0.24, 0.07, 0.07, 0, 0));
+  k.blinkLight(cx, Y0 + H + 0.25, cz, 0.02, 1.5, 0);
+  k.blinkLight(cx + 0.15, Y0 + H * 0.5, cz + 0.15, 0.016, 1.5, 0.7);
+  k.cyl(P.dark, 0.006, 0.22, cx, Y0 + H, cz, 4);
+  // equipment shelter + generator + cable bridge
+  block(k, { x0: -0.95, x1: -0.3, z0: 0.25, z1: 0.75, h: 0.24, floors: 1, wall: P.mats.at(Tile.Panel, 0xd0cec6), doorX: 0.5, equip: 1, sign: false, roof: 'flat' });
+  genset(k, 0.55, 0.62, 0, 0.85);
+  cableRun(k, [[-0.3, 0.35], [cx - 0.2, 0.35], [cx - 0.2, cz + 0.2]], 0.12);
+  fence(k, [[-0.95, -0.95], [0.95, -0.95], [0.95, 0.95], [-0.2, 0.95]], 0.16, Y0);
+  razor(k, [0.95, -0.95], [0.95, 0.95], Y0 + 0.16);
+  flagPole(k, -0.85, -0.85, 0.7, Y0);
+  k.height = H;
 }
 
 // ================================================================ DEFENCES (1x1)
@@ -4186,6 +4561,9 @@ function bunker(k: Kit) {
     top = g + 0.2;
     mgTurret(k, top + 0.01);
   }
+  // camo net over the ammunition corner behind the nest
+  camoNet(k, -0.47, -0.12, -0.47, -0.12, 0.2, 0.03, g);
+  ammoBoxes(k, -0.3, -0.3, 3, 0.4, g);
   k.height = 0.55;
 }
 
@@ -4294,13 +4672,12 @@ function sam(k: Kit) {
     k.box(P.dark, 0.6, 0.05, 0.24, 0, g + 0.02, 0);
     k.box(hull, 0.62, 0.04, 0.3, 0, g + 0.07, 0);
     ty = g + 0.11;
-    // EL/M-2084 radar on its own mast (static)
+    // EL/M-2084 multi-mission radar on its own mast (rotating)
     k.box(hull, 0.16, 0.1, 0.16, -0.32, g, -0.3);
     k.cyl(P.dark, 0.012, 0.18, -0.32, g + 0.1, -0.3, 6);
-    k.at(-0.32, g + 0.3, -0.3, Math.PI / 4, () => {
-      k.box(hull, 0.03, 0.2, 0.28, 0, -0.1, 0);
-      k.box(P.mats.canvas('aesa2', texSolar(), { uv: 0, rough: 0.5, metal: 0.2, color: 0x9aa48a }), 0.006, 0.18, 0.26, 0.018, -0.09, 0, 12);
-    }, 0, -0.3);
+    const mmr = k.node('srad', -0.32, g + 0.28, -0.3, Math.PI / 4);
+    k.on(mmr, () => k.at(0, 0, 0, 0, () => aesaFace(k, 0.28, 0.2, 0.02, -0.1, 0), 0, -0.3));
+    k.spin('srad', 'y', 1.4);
   }
   const t = k.node('turret', 0.06, ty, 0);
   k.turret = true;
@@ -4369,9 +4746,11 @@ function sam(k: Kit) {
       if (f !== 'israel') k.box(P.team, 0.03, H + 0.026, W + 0.026, lay.len * 0.45, -H / 2 - 0.013, 0);
     });
   });
-  if (R === 'west' && f !== 'israel') jersey(k, -0.25, 0.42, 0.4, 0);
-  if (R === 'mideast') sandbags(k, [0.42, -0.3], [0.42, 0.3], 2, g);
-  if (R === 'asia') fence(k, [[-0.45, 0.45], [0.45, 0.45]], 0.12, g);
+  // radar on the front left corner (the raised launcher would hide it at the back)
+  samRadar(k, -0.33, 0.33, g);
+  sandbags(k, [0.44, -0.36], [0.44, 0.36], 2, g);
+  sandbags(k, [-0.12, 0.44], [0.36, 0.44], 2, g);
+  if (R === 'west' && f !== 'israel') jersey(k, -0.15, -0.42, 0.5, 0);
   k.height = 0.75;
 }
 
@@ -4549,4 +4928,14 @@ export const BUILDINGS: Record<string, Builder> = {
   sam: building('sam', 1, 1, sam),
   atgm: building('atgm', 1, 1, atgm),
   oil: building('oil', 2, 2, oil),
+  // the nations' superweapon complexes (sim/specialdefs.ts superweaponBuilding)
+  sw_silo: building('sw_silo', 3, 3, swSilo),
+  sw_laser: building('sw_laser', 3, 3, swLaser),
+  sw_drone: building('sw_drone', 3, 3, swDrone),
+  sw_rocket: building('sw_rocket', 3, 3, swRocket),
+  sw_cruise: building('sw_cruise', 3, 3, swCruise),
+  // capturable neutral tech structures (sim/specialdefs.ts)
+  tech_hospital: building('tech_hospital', 2, 2, techHospital),
+  tech_airport: building('tech_airport', 3, 3, techAirport),
+  tech_comms: building('tech_comms', 2, 2, techComms),
 };

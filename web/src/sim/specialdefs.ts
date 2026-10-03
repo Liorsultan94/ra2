@@ -11,9 +11,18 @@ export const CIVILIAN_BUILDINGS: BuildingDef[] = [
   civ('civ_house', 'Village House', 2, 2, 900, 6),
   civ('civ_cottage', 'Cottage', 2, 2, 700, 5),
   civ('civ_barn', 'Farm Barn', 3, 2, 1100, 6),
+  // desert villages
+  civ('civ_mudhouse', 'Mudbrick House', 2, 2, 800, 5),
+  civ('civ_courtyard', 'Courtyard House', 3, 2, 1100, 6),
+  // city blocks (render/models/citybldgs.ts draws them; the model is the garrison flag + night lamps)
+  civ('civ_apartment', 'Apartment Block', 3, 3, 1600, 10, 'civ_city_apartment'),
+  civ('civ_block', 'Tenement', 3, 2, 1300, 8, 'civ_city_block'),
+  civ('civ_office', 'Office Tower', 3, 3, 1800, 10, 'civ_city_office'),
+  civ('civ_shop', 'Corner Shop', 2, 2, 800, 5, 'civ_city_shop'),
+  civ('civ_townhouse', 'Townhouse', 2, 2, 1000, 6, 'civ_city_townhouse'),
 ];
 
-function civ(id: string, name: string, w: number, h: number, hp: number, garrison: number): BuildingDef {
+function civ(id: string, name: string, w: number, h: number, hp: number, garrison: number, model = 'civ_garrison'): BuildingDef {
   return {
     kind: 'building',
     id,
@@ -21,7 +30,7 @@ function civ(id: string, name: string, w: number, h: number, hp: number, garriso
     faction: 'neutral',
     category: 'building',
     role: 'civilian',
-    model: 'civ_garrison',
+    model,
     cost: 0,
     buildTime: 1,
     hp,

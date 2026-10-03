@@ -10,11 +10,14 @@ import type { AnimState, Model } from './models';
 import { GroundFog } from './groundfog';
 import { NightLights, NightVisionPass } from './night';
 import type { FinalPass } from './post';
+import type { Sky, SkyState } from './sky';
 import type { Terrain } from './terrain';
 import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
 import { WeatherCycle, type WxKind, type WxState } from './weathercycle';
 import { WX, WXM } from './wxuniforms';
+import { biomeLook, type BiomeLook } from './biome';
+import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
 
 /*
@@ -50,9 +53,12 @@ export interface AtmosConfig {
 const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle', 'mist'];
 const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm', 'dynamic'];
 
-/** Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings. */
-export function atmosConfig(viewer: number): AtmosConfig {
-  const cfg: AtmosConfig = { tod: 'day', weather: 'clear', nv: false };
+/**
+ * Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings,
+ * then to the map's own weather (`mapWeather`: snow on the winter map, ...).
+ */
+export function atmosConfig(viewer: number, mapWeather: Weather = 'clear'): AtmosConfig {
+  const cfg: AtmosConfig = { tod: 'day', weather: mapWeather, nv: false };
   let saved: { tod?: string; weather?: string } = {};
   if (viewer >= 0) {
     try {
@@ -127,6 +133,29 @@ interface Preset {
 }
 
 const C = (h: number) => new THREE.Color(h);
+
+/** The battle's biome look (set by the Atmosphere; every preset passes through its grade). */
+let BIOME: BiomeLook | null = null;
+
+/** Climate grade of a time-of-day preset (in place): haze, sky / ground light, sun tint, saturation. */
+function applyBiome(p: Preset, light: number) {
+  const a = BIOME?.atmos;
+  if (!a) return;
+  if (a.haze) {
+    p.haze.lerp(new THREE.Color(a.haze[0], a.haze[1], a.haze[2]).multiplyScalar(Math.max(0.1, light)), 0.7);
+    p.bg.lerp(new THREE.Color(a.haze[0], a.haze[1], a.haze[2]).multiplyScalar(0.35 * Math.max(0.1, light)), 0.5);
+  }
+  p.hazeP.y *= a.hazeK;
+  p.hazeP.z = Math.min(0.62, p.hazeP.z / a.hazeK);
+  if (a.sky !== null) p.sky.lerp(C(a.sky), 0.5 * light);
+  if (a.gnd !== null) p.gnd.lerp(C(a.gnd), 0.6 * Math.max(0.3, light));
+  if (a.sun !== null) p.sunC.lerp(C(a.sun), 0.45 * light);
+  p.sunI *= 1 + (a.sunK - 1) * light;
+  p.sat *= a.sat;
+  if (a.highTint) p.highTint.lerp(new THREE.Vector3(...a.highTint), 0.6 * light);
+  // snow fields bounce a lot of light back up
+  if (BIOME?.biome === 'winter') p.hemiI *= 1 + 0.15 * light;
+}
 
 /** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
 type Key = TimeOfDay | 'noon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
@@ -214,6 +243,7 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.8;
       break;
   }
+  applyBiome(p, light);
   return { p, light };
 }
 
@@ -388,6 +418,8 @@ const BREEZE_DIR = -0.55;
 
 export class Atmosphere {
   readonly cfg: AtmosConfig;
+  /** The map's climate look (render/biome.ts). */
+  readonly look: BiomeLook;
   /** Day + clear + no night vision: nothing to do (photo mode may switch it on for a time-of-day preview). */
   active: boolean;
   /** Thunder hook (delay already elapsed), volume 0..1. Defaults to the game's large-explosion sound. */
@@ -447,13 +479,19 @@ export class Atmosphere {
     private host: AtmosHost,
     private viewer: number,
   ) {
-    const cfg = (this.cfg = atmosConfig(viewer));
+    const look = (this.look = biomeLook(host.world.map));
+    BIOME = look.biome === 'temperate' ? null : look;
+    const cfg = (this.cfg = atmosConfig(viewer, look.weather));
     const dynamic = cfg.weather === 'dynamic';
-    this.active = cfg.tod !== 'day' || cfg.weather !== 'clear' || cfg.nv;
+    // the other climates always grade the light (Frontline Crossing on a clear day stays untouched)
+    this.active = cfg.tod !== 'day' || cfg.weather !== 'clear' || cfg.nv || look.biome !== 'temperate';
     WX.wxWet.value = cfg.weather === 'rain' ? 1 : 0;
     WX.wxRain.value = cfg.weather === 'rain' ? 1 : 0;
-    WX.wxSnow.value = cfg.weather === 'snow' ? 1 : 0;
+    WX.wxSnow.value = Math.max(look.snowFloor, cfg.weather === 'snow' ? 1 : 0);
     WX.wxDust.value = cfg.weather === 'sandstorm' ? 1 : 0;
+    // the winter map's snow has lain for weeks: no patchy first minutes
+    if (look.snowFloor > 0) WX.wxSnowThin.value = 0;
+    CITY_NIGHT.value = 0;
     WXM.mistAmount.value = 0;
     // environment destruction is always on (it only reacts to events)
     this.env = new EnvDamage(host.terrain, host.world.map, host.fog, host.effects, host.quality);
@@ -725,10 +763,16 @@ export class Atmosphere {
       this.keys = this.buildKeys();
       this.preset = buildPreset({ ...this.cfg, tod: 'day' });
       if (this.wxCycle && !this.altP) this.altP = clonePreset(this.preset);
-      this.sunBase = new THREE.Vector3();
+      // a real direction right away: the cycle blend only rewrites it on the next frame, and a zero sun breaks shadows
+      this.sunBase = pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, new THREE.Vector3());
       this.active = true;
     }
     this.phaseOverride = u;
+  }
+
+  /** Overall daylight of this frame, 0 (night) .. 1 (full day): drives the post-processing grade (post/grade.ts). */
+  get daylight(): number {
+    return this.active && this.preset ? (this.keys ? this.light : this.baseLight) : 1;
   }
 
   get nightVision() {
@@ -762,6 +806,8 @@ export class Atmosphere {
     const u = h.fog.uniforms;
     u.hazeColor.value.copy(p.haze);
     u.hazeParams.value.copy(p.hazeP);
+    // city windows and street lamps come on at dusk
+    CITY_NIGHT.value = Math.max(0, Math.min(1, (p.dark - 0.25) / 0.5));
     u.cloudAmount.value = p.cloud;
     h.renderer.toneMappingExposure = p.exposure;
     if (h.finalPass) {
@@ -798,7 +844,7 @@ export class Atmosphere {
       WX.wxWet.value = st.wet;
       WX.wxRain.value = st.fall === 'rain' ? st.precip : 0;
       WX.wxDust.value = st.dust;
-      WX.wxSnow.value = st.snow;
+      WX.wxSnow.value = Math.max(this.look.snowFloor, st.snow);
       // foliage sways faster in the wind (extra clock on top of the terrain's)
       this.swayExtra += dt * 1.8 * Math.max(0, st.wind - 0.2);
     }
@@ -867,6 +913,51 @@ export class Atmosphere {
     this.night?.update(dt, time, visuals.values(), target, h.world);
   }
 
+  private skySt: SkyState = { sun: new THREE.Vector3(0, 1, 0), moon: null, night: 0, cover: 0.3, storm: 0, dust: 0 };
+  private skyMoon = new THREE.Vector3();
+
+  /**
+   * Drive the physical sky (sky.ts) from the time of day and the weather. keyDir = the renderer's
+   * key light direction this frame (sun by day, moon by night; it turns with the view).
+   */
+  driveSky(sky: Sky, dt: number, keyDir: THREE.Vector3, freeView: boolean) {
+    const st = this.skySt;
+    const p = this.active ? this.preset : null;
+    const light = this.keys ? this.light : p ? this.baseLight : 1;
+    const moonUp = this.keys ? this.phase > MOON_RISE && this.phase < MOON_SET : this.cfg.tod === 'night' && !!p;
+    st.night = 1 - sstep(0.15, 0.62, light);
+    st.sun.copy(keyDir);
+    st.moon = null;
+    if (moonUp) {
+      st.moon = this.skyMoon.copy(keyDir);
+      // the sun is well below the horizon on the far side
+      st.sun.set(-keyDir.x, 0, -keyDir.z).normalize().multiplyScalar(Math.cos(0.3));
+      st.sun.y = -Math.sin(0.3);
+    } else if (!this.keys && this.cfg.tod === 'dusk' && p) {
+      // fixed dusk: the key light keeps its usual direction, the sky shows a low evening sun in that azimuth
+      const h = Math.hypot(keyDir.x, keyDir.z) || 1;
+      st.sun.set((keyDir.x / h) * Math.cos(0.09), Math.sin(0.09), (keyDir.z / h) * Math.cos(0.09));
+    }
+    const wx = this.wx;
+    if (wx) {
+      st.cover = Math.max(0.2, wx.cover, wx.precip);
+      st.storm = wx.storm;
+      st.dust = wx.dust;
+    } else {
+      const w = this.cfg.weather;
+      st.cover = w === 'rain' ? 0.95 : w === 'snow' ? 0.85 : w === 'sandstorm' ? 0.55 : 0.28 + (p ? p.cloud : 0.32) * 0.6;
+      st.storm = w === 'rain' ? 0.35 : 0;
+      st.dust = w === 'sandstorm' ? 1 : 0;
+    }
+    sky.setFreeView(freeView, dt);
+    sky.update(dt, st, this.host.sun.color, this.host.hemi.groundColor);
+    if (sky.env && this.host.scene.environment !== sky.env) {
+      this.host.scene.environment = sky.env;
+      // (the fixed day look normally gets this from the HDRI loader, which the sky capture replaces)
+      if (!this.active) this.host.scene.environmentIntensity = 0.42;
+    }
+  }
+
   /** Dynamic weather: a short, subtle HUD line when a front arrives, a storm breaks or the sky clears. */
   private announce(st: WxState) {
     const e = st.event;
@@ -918,5 +1009,7 @@ export class Atmosphere {
     WX.wxSnow.value = 0;
     WX.wxDust.value = 0;
     WXM.mistAmount.value = 0;
+    CITY_NIGHT.value = 0;
+    BIOME = null;
   }
 }

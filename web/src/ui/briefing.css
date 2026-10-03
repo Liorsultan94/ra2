@@ -1,12 +1,12 @@
-/* Mission briefing (src/ui/briefing.ts): classified dossier shown while the battle loads. */
+/* Mission briefing (src/ui/briefing.ts): mission dossier shown while the battle loads. */
 
 .brief {
-  --b-ink: #d9dccf;
-  --b-dim: #8d978f;
-  --b-line: rgba(160, 190, 175, 0.18);
-  --b-hi: #f2c14e;
-  --b-red: #e2483a;
-  --b-blue: #4aa8ff;
+  --b-ink: #e8ecf0;
+  --b-dim: #8e99a4;
+  --b-line: rgba(255, 255, 255, 0.09);
+  --b-hi: #f5b941;
+  --b-red: #ff5a42;
+  --b-blue: #4db2ff;
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -14,9 +14,9 @@
   flex-direction: column;
   color: var(--b-ink);
   background:
-    radial-gradient(ellipse at 30% 20%, rgba(70, 90, 80, 0.22), transparent 60%),
-    radial-gradient(ellipse at 80% 90%, rgba(120, 40, 30, 0.18), transparent 55%),
-    linear-gradient(180deg, #0b0f0f, #050707);
+    radial-gradient(ellipse 60% 50% at 25% 15%, rgba(77, 178, 255, 0.07), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 85% 95%, rgba(255, 90, 66, 0.07), transparent 70%),
+    linear-gradient(180deg, #0b0f14, #06080b);
   font-family: var(--font);
   overflow: hidden;
   animation: brief-in 0.45s ease-out both;
@@ -39,12 +39,7 @@
   }
 }
 .brief-scan {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 3px);
-  mix-blend-mode: overlay;
-  z-index: 3;
+  display: none;
 }
 
 /* header */
@@ -52,9 +47,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 16px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--b-line);
-  background: linear-gradient(90deg, rgba(216, 64, 44, 0.16), transparent 55%);
+  background: rgba(255, 255, 255, 0.02);
   flex: none;
 }
 .bh-emblem {
@@ -73,15 +68,17 @@
 }
 .bh-title small {
   display: block;
-  font-size: 11px;
+  font-family: var(--font-d);
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.22em;
   color: var(--b-red);
 }
 .bh-title h1 {
   margin: 0;
-  font-family: 'Black Ops One', var(--font);
-  font-weight: 400;
-  font-size: clamp(18px, 3.4vw, 32px);
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: clamp(20px, 3.6vw, 34px);
   letter-spacing: 0.08em;
   line-height: 1.1;
   white-space: nowrap;
@@ -90,15 +87,16 @@
 }
 .bh-code {
   color: var(--b-hi);
-  font-weight: 400;
-  text-shadow: 0 0 18px rgba(242, 193, 78, 0.35);
+  font-weight: 700;
 }
 .bh-meta {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 1px;
-  font-size: 11px;
+  font-family: var(--font-d);
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.14em;
   color: var(--b-dim);
   text-align: right;
@@ -124,8 +122,8 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
-  gap: 14px;
-  padding: 10px 16px 6px;
+  gap: 16px;
+  padding: 12px 18px 8px;
 }
 .brief-map {
   min-height: 0;
@@ -140,9 +138,11 @@
   min-height: 0;
   aspect-ratio: 1;
   max-width: 100%;
-  border: 1px solid rgba(180, 210, 195, 0.28);
-  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.6);
-  background: #06090b;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  background: #05080b;
 }
 .bm-frame canvas {
   width: 100%;
@@ -153,14 +153,15 @@
   position: absolute;
   right: 3%;
   bottom: 3%;
-  padding: 1px 8px;
-  border: 3px solid rgba(226, 72, 58, 0.75);
-  color: rgba(226, 72, 58, 0.8);
-  font-family: 'Black Ops One', var(--font);
-  font-size: clamp(10px, 1.7vw, 16px);
-  letter-spacing: 0.12em;
-  transform: rotate(-12deg);
-  mix-blend-mode: screen;
+  padding: 2px 9px;
+  border: 1.5px solid rgba(255, 90, 66, 0.7);
+  border-radius: 5px;
+  color: rgba(255, 110, 90, 0.9);
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: clamp(10px, 1.6vw, 15px);
+  letter-spacing: 0.2em;
+  transform: rotate(-8deg);
   pointer-events: none;
 }
 .bm-cap {
@@ -172,7 +173,9 @@
   flex: none;
 }
 .bm-cap b {
-  font-size: 14px;
+  font-family: var(--font-d);
+  font-size: 15px;
+  font-weight: 600;
   letter-spacing: 0.16em;
   color: var(--b-hi);
 }
@@ -234,23 +237,24 @@
 }
 .bd-block {
   position: relative;
-  padding: 8px 12px 10px;
+  padding: 10px 14px 12px;
   border: 1px solid var(--b-line);
-  border-left: 3px solid rgba(160, 190, 175, 0.4);
-  background: rgba(14, 20, 20, 0.72);
-  animation: brief-block 0.5s ease-out both;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  --bk: rgba(255, 255, 255, 0.4);
+  animation: brief-block 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 .bd-block:nth-child(2) {
   animation-delay: 0.12s;
-  border-left-color: var(--b-red);
+  --bk: var(--b-red);
 }
 .bd-block:nth-child(3) {
   animation-delay: 0.24s;
-  border-left-color: var(--b-blue);
+  --bk: var(--b-blue);
 }
 .bd-block:nth-child(4) {
   animation-delay: 0.36s;
-  border-left-color: var(--b-hi);
+  --bk: var(--b-hi);
 }
 @keyframes brief-block {
   from {
@@ -259,28 +263,41 @@
   }
 }
 .bd-block h3 {
-  margin: 0 0 4px;
-  font-size: 12px;
-  letter-spacing: 0.24em;
+  margin: 0 0 6px;
+  font-family: var(--font-d);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--b-dim);
   display: flex;
   align-items: center;
   gap: 8px;
 }
+.bd-block h3::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bk);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bk) 22%, transparent);
+}
 .bd-block p {
   margin: 0;
-  font-size: 14.5px;
-  line-height: 1.35;
-  min-height: 2.7em;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  min-height: 3em;
 }
 .threat {
   font-style: normal;
   font-size: 10.5px;
-  letter-spacing: 0.14em;
-  padding: 1px 6px;
+  letter-spacing: 0.12em;
+  padding: 2px 8px;
+  border-radius: 999px;
   color: #fff;
-  background: rgba(226, 72, 58, 0.8);
+  background: rgba(255, 90, 66, 0.85);
 }
 .bd-nation {
   display: flex;
@@ -289,16 +306,20 @@
   margin: 2px 0 4px;
 }
 .bd-nation .flag {
-  width: 42px;
-  height: 28px;
+  width: 40px;
+  height: 27px;
   flex: none;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 .bd-nation b {
   display: block;
-  font-size: 18px;
+  font-family: var(--font-d);
+  font-size: 19px;
+  font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 1.05;
+  text-transform: uppercase;
 }
 .bd-nation small {
   display: block;
@@ -307,9 +328,11 @@
   line-height: 1.15;
 }
 .bd-sub {
-  margin-top: 6px;
-  font-size: 10.5px;
-  letter-spacing: 0.2em;
+  margin-top: 8px;
+  font-family: var(--font-d);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--b-dim);
 }
@@ -319,8 +342,9 @@
 .bd-block ul {
   margin: 2px 0 0;
   padding-left: 18px;
-  font-size: 13.5px;
-  line-height: 1.3;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
 }
 .bd-block li {
   margin: 2px 0;
@@ -345,22 +369,25 @@
   margin-top: 6px;
 }
 .bd-chips span {
-  font-size: 12px;
-  padding: 1px 7px;
-  border: 1px solid rgba(226, 72, 58, 0.45);
-  background: rgba(226, 72, 58, 0.1);
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 90, 66, 0.4);
+  background: rgba(255, 90, 66, 0.1);
 }
 .bd-chips.own span {
-  border-color: rgba(74, 168, 255, 0.45);
-  background: rgba(74, 168, 255, 0.1);
+  border-color: rgba(77, 178, 255, 0.4);
+  background: rgba(77, 178, 255, 0.1);
 }
 .bd-sw {
   margin-top: 6px;
   font-size: 13.5px;
 }
 .bd-sw b {
-  font-size: 10.5px;
-  letter-spacing: 0.18em;
+  font-family: var(--font-d);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--b-hi);
   margin-right: 4px;
@@ -375,18 +402,20 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px 10px;
+  gap: 18px;
+  padding: 10px 18px 12px;
   border-top: 1px solid var(--b-line);
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.02);
 }
 .bf-prog {
   flex: 1;
   min-width: 0;
 }
 .bf-label {
-  font-size: 12px;
-  letter-spacing: 0.16em;
+  font-family: var(--font-d);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--b-dim);
   margin-bottom: 4px;
@@ -395,36 +424,42 @@
   text-overflow: ellipsis;
 }
 .bf-bar {
-  height: 6px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
   overflow: hidden;
 }
 .bf-bar i {
   display: block;
   height: 100%;
   width: 0;
-  background: linear-gradient(90deg, #8a2a1e, var(--b-red), var(--b-hi));
-  box-shadow: 0 0 10px rgba(242, 120, 60, 0.6);
+  border-radius: 2px;
+  background: linear-gradient(90deg, #a3281a, var(--b-red));
   transition: width 0.25s ease;
 }
 .brief.ready .bf-label {
-  color: #9fe6a8;
+  color: #7fe8b0;
+}
+.brief.ready .bf-bar i {
+  background: #3dd68c;
 }
 .bf-go {
   flex: none;
-  min-width: 190px;
-  min-height: 48px;
-  padding: 8px 22px;
-  font-family: 'Black Ops One', var(--font);
-  font-size: 18px;
-  letter-spacing: 0.12em;
+  min-width: 200px;
+  min-height: 50px;
+  padding: 8px 24px;
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #1a1206;
-  background: linear-gradient(180deg, #ffd56a, #e0a52c);
-  border: none;
-  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  color: #fff;
+  background: linear-gradient(180deg, #f0533e, #d83c2c);
+  border: 1px solid rgba(255, 160, 140, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
   cursor: pointer;
+  transition: transform 120ms, box-shadow 0.2s;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -433,14 +468,17 @@
 }
 .bf-go small {
   font-family: var(--font);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  margin-top: 2px;
-  opacity: 0.75;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  margin-top: 3px;
+  opacity: 0.8;
 }
 .bf-go:disabled {
   color: var(--b-dim);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
   cursor: default;
 }
 .brief.ready .bf-go {
@@ -451,7 +489,7 @@
 }
 @keyframes brief-pulse {
   50% {
-    filter: brightness(1.18) drop-shadow(0 0 10px rgba(242, 193, 78, 0.7));
+    box-shadow: 0 0 0 5px rgba(255, 90, 66, 0.25);
   }
 }
 

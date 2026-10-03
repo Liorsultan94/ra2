@@ -17,8 +17,17 @@ export interface Point {
   y: number;
 }
 
+/** Climate / look of a map (render palette, plants, water, weather default). */
+export type Biome = 'temperate' | 'desert' | 'winter' | 'urban';
+/** Selectable skirmish maps (src/sim/maps.ts). */
+export type MapId = 'frontline' | 'desert' | 'winter' | 'urban';
+
 export interface GameMap {
   name: string;
+  /** Which map generator built it. */
+  id: MapId;
+  /** Climate / look (the renderer picks palettes, plants and water from it). */
+  biome: Biome;
   w: number;
   h: number;
   tiles: Uint8Array;
@@ -37,6 +46,35 @@ export interface GameMap {
   structures: Structure[];
   /** 1 where a civilian structure stands. */
   blocked: Uint8Array;
+  /**
+   * Capturable tech sites: candidate top-left corners for player 0's half (mirrored for player 1),
+   * the first valid one is used (capture.ts). Absent: the Frontline Crossing defaults.
+   */
+  techSites?: { def: string; at: [number, number][] }[];
+  /** Extra AI attack lanes (fords, passes, avenues) besides the bridges (ai.ts). */
+  lanes?: Point[];
+  /** Render-only hints of the hand-designed maps (road widths, tracks, plazas, parks, rubble lots). */
+  deco?: MapDeco;
+}
+
+/** Visual-only layout data a map generator hands to the renderer (render/biomelayout.ts). */
+export interface MapDeco {
+  /** Per entry of `GameMap.roads`: width (tiles), 0 = highway / avenue, 1 = country road / street, routed around obstacles or straight. */
+  roadStyles: { width: number; variant: 0 | 1; straight?: boolean }[];
+  /** Dirt tracks (via points; routed). */
+  tracks: Point[][];
+  /** Paved plazas / squares (axis-aligned rectangles, tile space). */
+  plazas: { x0: number; y0: number; x1: number; y1: number }[];
+  /** Park lawns (rectangles) with hedges and paths. */
+  parks: { x0: number; y0: number; x1: number; y1: number }[];
+  /** Ruined / rubble lots (rectangles, passable). */
+  lots: { x0: number; y0: number; x1: number; y1: number }[];
+  /** Irrigated plots / snowy fields (rectangles, row direction 0 = along x, 1 = along y). */
+  fields: { x0: number; y0: number; x1: number; y1: number; rows: 0 | 1 }[];
+  /** Power line runs (via points). */
+  power: Point[][];
+  /** Render-only trees (street trees, roadside palms): kind 1 / 2 as `GameMap.trees`. Vehicles knock them over. */
+  trees: { x: number; y: number; kind: number }[];
 }
 
 export const enum StructureKind {
@@ -46,6 +84,15 @@ export const enum StructureKind {
   Tower = 3,
   WaterTower = 4,
   Silo = 5,
+  // desert villages
+  MudHouse = 6,
+  Courtyard = 7,
+  // city (render/models/citybldgs.ts)
+  Apartment = 8,
+  Block = 9,
+  Office = 10,
+  Shop = 11,
+  Townhouse = 12,
 }
 
 export interface Structure {
@@ -57,6 +104,8 @@ export interface Structure {
   h: number;
   /** Facing (0..3, quarter turns): which side the front door / gable faces. */
   rot: number;
+  /** Look variant 0..1 (render only: floors, facade, colours); seeded by the map generator. */
+  variant?: number;
 }
 
 export const ORE_MAX = 10;
@@ -108,12 +157,12 @@ export function standHeight(m: GameMap, x: number, y: number): number {
   return Math.max(groundHeight(m, x, y), WATER_LEVEL);
 }
 
-function smoothstep(e0: number, e1: number, x: number) {
+export function smoothstep(e0: number, e1: number, x: number) {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
 }
 
-function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+export function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
   const dx = bx - ax;
   const dy = by - ay;
   const len2 = dx * dx + dy * dy;
@@ -311,6 +360,8 @@ export function createFrontlineMap(): GameMap {
 
   return {
     name: 'Frontline Crossing',
+    id: 'frontline',
+    biome: 'temperate',
     w: W,
     h: H,
     tiles,

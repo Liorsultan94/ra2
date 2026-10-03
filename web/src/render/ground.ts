@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import { fbm, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { segDist, type Layout } from './layout';
+import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
+import { biomeLook, type BiomeLook } from './biome';
+import { FieldType, segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
 
 /*
@@ -12,9 +14,14 @@ import { groundDetailTexture } from './terraintex';
  * detail map sampled at two rotated scales supplies crisp per-material
  * detail, height-based transitions and bump. Farm fields are drawn by the
  * same shader from a field map (rows, furrows, crops), so they cost nothing.
+ *
+ * Grass has its own micro texture (grasstex.ts: blades, clover, flower heads)
+ * sampled twice with noise-driven selection against tiling, and a grass
+ * control map: lush banks and hollows, clover and wildflower patches, worn
+ * footpaths and yards. The blade map drives the 3D grass (grass.ts).
  */
 
-const SUB = 2; // mesh vertices per tile
+export const SUB = 2; // mesh vertices per tile
 
 /** Height of the rendered ground surface (sim height + visual micro relief). */
 export function surfaceHeight(m: GameMap, x: number, y: number) {
@@ -53,6 +60,72 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+/**
+ * Trodden footpaths (render only): each village house to the nearest road
+ * when it is a short walk away, and to its nearest neighbour. Gently
+ * wandering, smoothed polylines.
+ */
+function footpaths(m: GameMap, L: Layout): { x: number; y: number }[][] {
+  const out: { x: number; y: number }[][] = [];
+  const roadPts: { x: number; y: number }[] = [];
+  for (const r of L.roads) for (let i = 0; i < r.pts.length; i += 2) roadPts.push(r.pts[i]);
+  const centres = m.structures.map((s) => ({ x: s.x + s.w / 2, y: s.y + s.h / 2, r: Math.max(s.w, s.h) / 2 }));
+  const nearest = centres.map((c, i) => {
+    let nb = -1;
+    let nd = 1e9;
+    centres.forEach((o, j) => {
+      const d = Math.hypot(o.x - c.x, o.y - c.y);
+      if (j !== i && d < nd) {
+        nd = d;
+        nb = j;
+      }
+    });
+    return nb;
+  });
+  const wander = (a: { x: number; y: number }, b: { x: number; y: number }, seed: number) => {
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const nx = -(b.y - a.y) / len;
+    const ny = (b.x - a.x) / len;
+    const n = Math.max(3, Math.ceil(len / 1.5));
+    const amp = (valueNoise(seed * 3.1, 0.5, 91) - 0.5) * 0.5 * Math.min(4, len);
+    const pts: { x: number; y: number }[] = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const off = Math.sin(t * Math.PI) * amp + (i > 0 && i < n ? (valueNoise(seed + i * 0.7, 3.3, 93) - 0.5) * 0.5 : 0);
+      pts.push({ x: a.x + (b.x - a.x) * t + nx * off, y: a.y + (b.y - a.y) * t + ny * off });
+    }
+    return smoothLine(pts, 2, 0.3);
+  };
+  centres.forEach((c, i) => {
+    let best: { x: number; y: number } | null = null;
+    let bd = 1e9;
+    for (const p of roadPts) {
+      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (best && bd > c.r + 1.2 && bd < 11) {
+      const dx = (best.x - c.x) / bd;
+      const dy = (best.y - c.y) / bd;
+      out.push(wander({ x: c.x + dx * (c.r + 0.3), y: c.y + dy * (c.r + 0.3) }, best, i * 7 + 1));
+    }
+    const nb = nearest[i];
+    const nd = nb >= 0 ? Math.hypot(centres[nb].x - c.x, centres[nb].y - c.y) : 1e9;
+    // each pair once
+    if (nb >= 0 && (nb > i || nearest[nb] !== i)) {
+      const o = centres[nb];
+      if (nd > c.r + o.r + 1 && nd < 9) {
+        const dx = (o.x - c.x) / nd;
+        const dy = (o.y - c.y) / nd;
+        out.push(wander({ x: c.x + dx * (c.r + 0.3), y: c.y + dy * (c.r + 0.3) }, { x: o.x - dx * (o.r + 0.3), y: o.y - dy * (o.r + 0.3) }, i * 13 + 5));
+      }
+    }
+  });
+  return out;
+}
+
 export class Ground {
   /** The ground, split into square chunks so off-screen parts are culled. */
   readonly mesh = new THREE.Group();
@@ -61,7 +134,19 @@ export class Ground {
   /** Painted control maps, also reused for the minimap. */
   readonly splat: Uint8Array;
   readonly tint: Uint8Array;
+  /** Grass control map: r lush, g clover, b wildflowers, a worn (paths, trampled yards). */
+  readonly ctl: Uint8Array;
+  /** 3D grass blade map: r density, g height (src/render/grass.ts). */
+  readonly blades: Uint8Array;
   readonly res: number;
+  /** Rendered surface heights on the mesh grid (hx * hy vertices, SUB per tile). */
+  readonly heights: Float32Array;
+  readonly hx: number;
+  readonly hy: number;
+  /** Textures and palette uniforms shared with the grass blades. */
+  readonly shared: Record<string, { value: unknown }>;
+  /** The map's biome look (palette, blades, snow; render/biome.ts). */
+  readonly look: BiomeLook;
 
   constructor(
     private map: GameMap,
@@ -71,10 +156,13 @@ export class Ground {
     quality: 'low' | 'medium' | 'high',
   ) {
     const m = map;
+    this.look = biomeLook(m);
     this.res = quality === 'low' ? 6 : quality === 'medium' ? 8 : 10;
     const N = m.w * this.res;
     this.splat = new Uint8Array(N * N * 4);
     this.tint = new Uint8Array(N * N * 4);
+    this.ctl = new Uint8Array(N * N * 4);
+    this.blades = new Uint8Array(N * N * 4);
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);
     const tex = (data: Uint8Array) => {
@@ -92,6 +180,7 @@ export class Ground {
     fieldTex.minFilter = THREE.LinearFilter;
     fieldTex.generateMipmaps = false;
     const detail = groundDetailTexture(quality === 'low' ? 256 : 512);
+    const grassTex = grassTexture(quality === 'low' ? 256 : 512);
 
     const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
     const col = (hex: number) => new THREE.Color(hex);
@@ -100,25 +189,27 @@ export class Ground {
       tintTex: { value: tex(this.tint) },
       fieldTex: { value: fieldTex },
       detailTex: { value: detail },
+      grassTex: { value: grassTex },
+      ctlTex: { value: tex(this.ctl) },
       terrMapSize: { value: new THREE.Vector2(m.w, m.h) },
-      cLush: { value: col(0x4c6a2a) },
-      cDry: { value: col(0x857f4c) },
-      cDirt: { value: col(0x7a6448) },
-      cRock: { value: col(0x77716a) },
-      cSand: { value: col(0xa89a7a) },
-      cMud: { value: col(0x4a3e30) },
-      cSoil: { value: col(0x5e4632) },
-      cCrop: { value: col(0x4f6a22) },
-      cWheat: { value: col(0xb59a52) },
-      cHay: { value: col(0x8e8a4a) },
+      ...grassUniforms(this.look.grass),
+      cDirt: { value: col(this.look.ground.dirt) },
+      cRock: { value: col(this.look.ground.rock) },
+      cSand: { value: col(this.look.ground.sand) },
+      cMud: { value: col(this.look.ground.mud) },
+      cSoil: { value: col(this.look.ground.soil) },
+      cCrop: { value: col(this.look.ground.crop) },
+      cWheat: { value: col(this.look.ground.wheat) },
+      cHay: { value: col(this.look.ground.hay) },
     };
+    this.shared = { ...uniforms, bladeTex: { value: tex(this.blades) } };
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vTerrW;')
         .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTerrW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${TERRAIN_PARS}`)
+        .replace('#include <common>', `#include <common>\n${GRASS_GLSL}\n${TERRAIN_PARS}`)
         .replace('#include <map_fragment>', TERRAIN_MAP)
         .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = terrRough;')
         .replace('#include <normal_fragment_maps>', TERRAIN_NORMAL);
@@ -128,7 +219,15 @@ export class Ground {
     const pomOff = typeof location !== 'undefined' && /[?&]pom=0\b/.test(location.search);
     const pom = pomOff ? 0 : quality === 'high' ? 12 : quality === 'medium' ? 5 : 0;
     mat.defines = { ...(mat.defines ?? {}), TERR_POM: pom };
-    mat.customProgramCacheKey = () => 'terrain-splat-2-' + pom;
+    mat.defines.GRASS_TILES = GRASS_TEX_TILES.toFixed(3);
+    // biome branches of the splat shader (0 = the original temperate look, untouched)
+    const bc = this.look.code;
+    mat.defines.BIOME = bc;
+    mat.defines.FIELD_STEP = bc === 3 ? '30.0' : '60.0';
+    mat.defines.TERR_DIRT_RELIEF = bc === 3 ? '0.0' : bc === 1 ? '0.06' : '0.1';
+    // the winter ground paints its own snow (deeper, drifted, kept off roads and ruts)
+    if (bc === 2) mat.defines.WX_SNOW_K = '0.0';
+    mat.customProgramCacheKey = () => 'terrain-splat-3-' + pom + '-b' + bc;
     this.material = mat;
 
     // mesh: one height field (so normals are continuous), cut into chunks
@@ -142,6 +241,10 @@ export class Ground {
         pos[k + 1] = surfaceHeight(m, i / SUB, j / SUB);
         pos[k + 2] = j / SUB;
       }
+    this.hx = nx;
+    this.hy = ny;
+    this.heights = new Float32Array(nx * ny);
+    for (let k = 0; k < nx * ny; k++) this.heights[k] = pos[k * 3 + 1];
     const nor = new Float32Array(nx * ny * 3);
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
@@ -223,12 +326,14 @@ export class Ground {
         }
       return n / 9;
     };
+    const bc = this.look.code;
     for (let i = 0; i < W * m.h; i++) {
       const t = m.tiles[i];
       const o = i * TW;
-      if (t === Tile.Dirt && !simRoad[i]) tileW[o] = 0.62;
+      if (t === Tile.Dirt && !simRoad[i]) tileW[o] = bc === 3 ? 1 : 0.62;
+      if (t === Tile.Dirt && bc === 3) tileW[o] = 1; // city: paved everywhere but the parks
       if (t === Tile.Rock) tileW[o + 1] = 1;
-      if (t === Tile.Sand) tileW[o + 2] = 0.85;
+      if (t === Tile.Sand) tileW[o + 2] = bc === 1 ? 1 : 0.85;
       if (t === Tile.Water || t === Tile.Bridge) {
         tileW[o + 3] = 0.55;
         tileW[o + 2] = 0.2;
@@ -263,6 +368,34 @@ export class Ground {
     const dryN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.06, y * 0.06, 47, 3));
     const patchN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.7, y * 0.7, 51, 3));
     const hueN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.13 + 7, y * 0.13, 61, 2));
+    const lushN = coarseField(W, m.h, 2, (x, y) => fbm(x * 0.08 + 3, y * 0.08, 67, 3));
+    const cloverN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.3 + 11, y * 0.3, 71, 3));
+    const flowerN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.22, y * 0.22 + 5, 73, 3));
+    const tallN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.16, y * 0.16, 79, 3));
+
+    // distance (tiles) to the nearest water tile: lush banks, no blades on the shore
+    const wd = new Float32Array(W * m.h).fill(1e3);
+    for (let i = 0; i < W * m.h; i++) if (m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Bridge) wd[i] = 0;
+    const relax = (i: number, j: number, c: number) => {
+      if (wd[j] + c < wd[i]) wd[i] = wd[j] + c;
+    };
+    for (let y = 0; y < m.h; y++)
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (x > 0) relax(i, i - 1, 1);
+        if (y > 0) relax(i, i - W, 1);
+        if (x > 0 && y > 0) relax(i, i - W - 1, 1.414);
+        if (x < W - 1 && y > 0) relax(i, i - W + 1, 1.414);
+      }
+    for (let y = m.h - 1; y >= 0; y--)
+      for (let x = W - 1; x >= 0; x--) {
+        const i = y * W + x;
+        if (x < W - 1) relax(i, i + 1, 1);
+        if (y < m.h - 1) relax(i, i + W, 1);
+        if (x < W - 1 && y < m.h - 1) relax(i, i + W + 1, 1.414);
+        if (x > 0 && y < m.h - 1) relax(i, i + W - 1, 1.414);
+      }
+    const waterD = coarseField(W, m.h, 1, (x, y) => wd[Math.max(0, Math.min(m.h - 1, Math.floor(y))) * W + Math.max(0, Math.min(W - 1, Math.floor(x)))]);
 
     // distance fields to roads and tracks (stamped per segment)
     const roadD = new Float32Array(N * N).fill(99);
@@ -289,10 +422,17 @@ export class Ground {
     };
     for (const r of L.roads) stamp(r.pts, r.width / 2 + 1, roadD, r.width, roadW);
     for (const t of L.tracks) stamp(t.pts, 1, trackD, t.width, null);
+    // trodden footpaths: village houses to the nearest road, and between neighbouring houses
+    const pathD = new Float32Array(N * N).fill(99);
+    for (const p of footpaths(m, L)) stamp(p, 0.7, pathD, 0, null);
 
     // fields: coverage + type + row direction (dilated so filtering stays stable)
     const fieldMask = new Float32Array(N * N);
+    // type step in the green channel (the city needs 8 types: streets / crossings, see FIELD_STEP in the shader)
+    const fstep = this.look.code === 3 ? 30 : 60;
     for (const f of L.fields) {
+      // streets / crossings store their local coordinates in b / a (linear, so filtering keeps them exact)
+      const local = f.type >= FieldType.Avenue;
       const ca = Math.cos(f.angle);
       const sa = Math.sin(f.angle);
       const R = Math.hypot(f.hl, f.hw) + 1;
@@ -313,9 +453,15 @@ export class Ground {
           const k = y * N + x;
           const cov = Math.max(0, Math.min(1, 0.5 - sd * P));
           if (cov >= fieldMask[k] || field[k * 4 + 1] === 0) {
-            field[k * 4 + 1] = 1 + f.type * 60;
-            field[k * 4 + 2] = (ca * 0.5 + 0.5) * 255;
-            field[k * 4 + 3] = (sa * 0.5 + 0.5) * 255;
+            field[k * 4 + 1] = 1 + f.type * fstep;
+            if (local) {
+              // across (b) / along (a) the street, +-2.3 tiles -> 0..1; crossings: x / y offsets
+              field[k * 4 + 2] = Math.max(0, Math.min(255, ((f.type === FieldType.Crossing ? a : b) / 4.6 + 0.5) * 255));
+              field[k * 4 + 3] = f.type === FieldType.Crossing ? Math.max(0, Math.min(255, (b / 4.6 + 0.5) * 255)) : Math.abs(sa) > 0.5 ? 255 : 0;
+            } else {
+              field[k * 4 + 2] = (ca * 0.5 + 0.5) * 255;
+              field[k * 4 + 3] = (sa * 0.5 + 0.5) * 255;
+            }
           }
           if (cov > fieldMask[k]) fieldMask[k] = cov;
         }
@@ -352,7 +498,20 @@ export class Ground {
       return best;
     };
 
+    // city rubble lots (sim/maps.ts deco): broken gravel and brick dust
+    const lots = m.deco?.lots ?? [];
+    const inLot = (x: number, y: number) => {
+      let k = 0;
+      for (const r of lots) {
+        const d = Math.max(r.x0 - x, x - r.x1, r.y0 - y, y - r.y1);
+        if (d < 0.4) k = Math.max(k, 1 - smooth(-0.6, 0.4, d));
+      }
+      return k;
+    };
+    const look = this.look;
     const w = [0, 0, 0, 0, 0, 0, 0];
+    const ctl = this.ctl;
+    const bladeMap = this.blades;
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
         const x = (px + 0.5) / P;
@@ -374,18 +533,31 @@ export class Ground {
         let sand = w[2];
         let mud = w[3];
         const pn = patchN(x, y);
-        // sim dirt patches: broken, patchy bare ground rather than a solid blob
-        dirt *= smooth(0.25, 0.6, pn + dirt * 0.45);
+        // sim dirt patches: broken, patchy bare ground rather than a solid blob (city pavements stay whole)
+        if (bc !== 3) dirt *= smooth(0.25, 0.6, pn + dirt * 0.45);
         // slopes turn rocky
         const h0 = groundHeight(m, x, y);
         const slope = Math.abs(groundHeight(m, x + 0.3, y) - h0) + Math.abs(groundHeight(m, x, y + 0.3) - h0);
         rock = Math.max(rock, smooth(0.16, 0.34, slope + (pn - 0.5) * 0.12));
         // riverbank: wet sand -> mud at the waterline
         const wl = h0 - WATER_LEVEL;
-        if (wl < 0.45) {
+        if (bc === 3) {
+          // the canal's stone quay walls and the wet stone at their foot
+          if (wl < 0.5) rock = Math.max(rock, 1 - smooth(0.25, 0.5, wl));
+        } else if (wl < 0.45) {
           const wet = 1 - smooth(-0.05, 0.45, wl);
           sand = Math.max(sand, wet * 0.7 * smooth(0.2, 0.55, pn + 0.2));
           mud = Math.max(mud, (1 - smooth(-0.25, 0.12, wl)) * 0.6);
+        }
+        // desert: the wadi floor and the oasis margins dry into cracked mud
+        if (bc === 1) mud = Math.max(mud, w[0] * (1 - smooth(-0.02, 0.3, h0)) * 0.95 * smooth(0.25, 0.55, pn + 0.15));
+        // city: rubble lots
+        if (bc === 3) {
+          const lk = inLot(x, y);
+          if (lk > 0) {
+            sand = Math.max(sand, lk * smooth(0.25, 0.55, pn + 0.1));
+            dirt *= 1 - lk * 0.6;
+          }
         }
         // forest floor
         const forest = w[6];
@@ -461,7 +633,55 @@ export class Ground {
         let dry = smooth(0.45, 0.8, dryN(x, y)) * 0.6 + Math.max(0, h0 - 0.8) * 0.2 + (bl - 0.5) * 0.25;
         dry += (1 - smooth(0, 1.2, rd)) * 0.2 + base * 0.2;
         dry -= (1 - smooth(0.1, 0.7, wl)) * 0.4 + forest * 0.2;
+        // lushness: river banks, low ground and damp hollows; hills and slopes are drier
+        const dW = waterD(x, y);
+        let lush = (1 - smooth(0.6, 6, dW)) * 0.8 + smooth(0.5, -0.4, h0) * 0.35 + (lushN(x, y) - 0.45) * 0.9 + forest * 0.25;
+        lush -= slope * 1.6 + base * 0.3;
+        lush = Math.max(0, Math.min(1, lush));
+        dry = dry * 0.85 - lush * 0.45 + slope * 1.2;
         tint[o + 3] = Math.max(0, Math.min(1, dry)) * 255;
+        const dryC = Math.max(0, Math.min(1, dry));
+        // footpaths, trampled base and yard ground
+        const pd = pathD[k];
+        const path = (1 - smooth(0.06, 0.24, pd + (pn - 0.5) * 0.08)) * (1 - fm) * smooth(0.2, 0.4, wl);
+        let worn = Math.max(path, base * 0.3 * smooth(0.3, 0.6, pn), yd < 1.5 ? (1 - smooth(0.3, 1.5, yd)) * 0.4 : 0, shoulder * 0.3);
+        worn = Math.min(1, worn);
+        ctl[o] = lush * 255;
+        ctl[o + 1] = smooth(0.58, 0.72, cloverN(x, y)) * (1 - dryC * 0.8) * (1 - worn) * look.clover * 255;
+        ctl[o + 2] = smooth(0.6, 0.76, flowerN(x, y)) * (1 - dryC * 0.6) * (1 - worn) * (1 - base) * (1 - forest * 0.7) * look.flowers * 255;
+        ctl[o + 3] = worn * 255;
+        if (bc === 2) {
+          // winter: the blue channel is the snow depth (ploughed off the shoulders, rutted on tracks,
+          // trampled in the bases, thin under the trees and on steep or wet ground)
+          let snow = 1;
+          snow *= 0.35 + 0.65 * smooth(0.05, 0.75, rd);
+          snow *= 1 - trk * 0.5 - rut * 0.45;
+          snow *= 1 - base * 0.5 * smooth(0.3, 0.7, pn);
+          snow *= 1 - smooth(0.22, 0.5, slope + (pn - 0.5) * 0.1);
+          snow *= 1 - Math.min(0.45, shade[k] * 0.7);
+          snow *= 0.25 + 0.75 * smooth(0.0, 0.35, wl);
+          snow *= 1 - Math.min(0.7, (w[4] + w[5]) * 0.75);
+          snow *= 1 - path * 0.5 - (yd < 1.5 ? (1 - smooth(0.3, 1.5, yd)) * 0.35 : 0);
+          ctl[o + 2] = Math.max(0, Math.min(1, snow)) * 255;
+        }
+        // 3D grass blades: grass layer only, off paths, roads, tracks, fields, yards and the shore
+        const grassW = 1 - tot;
+        let dens = smooth(0.5, 0.85, grassW);
+        dens *= 1 - smooth(0.02, 0.25, fm);
+        dens *= smooth(0.15, 0.5, rd) * smooth(0.25, 0.5, td);
+        dens *= smooth(0.3, 0.6, wl) * smooth(0.9, 1.6, dW);
+        dens *= 1 - Math.max(path * 1.3, worn * 0.7);
+        dens *= smooth(0.45, 0.9, yd);
+        dens *= 1 - forest * 0.45;
+        if (w[4] > 0.05 || w[5] > 0.05) dens *= 0.2;
+        // biome: sparse short scrub in the desert, none in the snow, park lawns only in the city
+        dens *= look.blades;
+        if (bc === 1) dens *= smooth(0.35, 0.65, patchN(x * 1.7, y * 1.7));
+        bladeMap[o] = Math.max(0, Math.min(1, dens)) * 255;
+        let tall = 0.35 + smooth(0.42, 0.75, tallN(x, y)) * 0.5 + lush * 0.25 - dryC * 0.2 - base * 0.3 - worn * 0.3;
+        if (bc === 1) tall *= 0.55;
+        if (bc === 3) tall *= 0.45; // mown
+        bladeMap[o + 1] = Math.max(0, Math.min(1, tall)) * 255;
       }
     }
   }
@@ -475,8 +695,10 @@ uniform sampler2D splatTex;
 uniform sampler2D tintTex;
 uniform sampler2D fieldTex;
 uniform sampler2D detailTex;
+uniform sampler2D grassTex;
+uniform sampler2D ctlTex;
 uniform vec2 terrMapSize;
-uniform vec3 cLush, cDry, cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
+uniform vec3 cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
 float wxPud;
@@ -501,12 +723,13 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 spl = texture2D(splatTex, mUV);
   vec4 tnt = texture2D(tintTex, mUV);
   vec4 fld = texture2D(fieldTex, mUV);
+  vec4 ctl = texture2D(ctlTex, mUV);
 #if TERR_POM > 0
   // relief mapping on soil / rock: march the view ray down into the detail
   // height field (world xz = tangent plane; the ground is mostly flat) and
   // shade the detail where it hits. Control maps stay at the true position.
   {
-    float relief = (spl.r * 0.1 + spl.g * 0.26) * (1.0 - smoothstep(0.3, 0.7, fld.r));
+    float relief = (spl.r * TERR_DIRT_RELIEF + spl.g * 0.26) * (1.0 - smoothstep(0.3, 0.7, fld.r));
     if (relief > 0.004) {
       vec3 V = normalize(cameraPosition - vTerrW);
       vec2 dir = -V.xz / max(V.y, 0.3) * relief;
@@ -545,6 +768,22 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
   vec4 det = clamp((dA * 0.6 + dB * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
 
+  // ---- grass micro texture: two decorrelated (rotated, rescaled) samples,
+  // chosen region by region by low-frequency noise, blended so the contrast
+  // survives - no visible repeat at any zoom
+  vec2 gq = tw * (1.0 / GRASS_TILES);
+  vec2 gq2 = vec2(gq.x * 0.799 - gq.y * 0.602, gq.x * 0.602 + gq.y * 0.799) * 0.83 + vec2(0.37, 0.11);
+  vec4 gA = texture2D(grassTex, gq);
+  vec4 gB = texture2D(grassTex, gq2);
+  vec4 gnz = texture2D(fogNoise, tw * 0.043);
+  float gsel = smoothstep(0.36, 0.64, gnz.r);
+  float gH = clamp(((gA.r - 0.5) * (1.0 - gsel) + (gB.r - 0.5) * gsel) * inversesqrt(gsel * gsel + (1.0 - gsel) * (1.0 - gsel)) + 0.5, 0.0, 1.0);
+  vec4 gT = mix(gA, gB, gsel);
+  // fine detail fades to its mean where it would only shimmer
+  float gFine = 1.0 - smoothstep(0.5, 1.5, fwidth(gq.x) * 40.0);
+  gH = mix(0.5, gH, 0.35 + 0.65 * gFine);
+  float gDrift = (gnz.b - 0.5) + (texture2D(fogNoise, tw * 0.0117 + 0.5).g - 0.5);
+
   // height-blended layer weights
   float wG = clamp(1.0 - spl.r - spl.g - spl.b - spl.a, 0.0, 1.0);
   vec4 present = smoothstep(0.0, 0.06, spl);
@@ -557,15 +796,97 @@ const TERRAIN_MAP = /* glsl */ `
   bg /= tot;
   bw /= tot;
 
-  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.5 + (det.g - 0.5) * 0.2, 0.0, 1.0);
-  vec3 grass = mix(cLush, cDry, dry) * (0.5 + det.r * 1.0);
+  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.3 + (det.g - 0.5) * 0.15, 0.0, 1.0);
+  vec3 gc = grassBase(ctl.r, dry, gDrift);
+  // single blades: some fresh and bright, a few dead straw ones (more where it is dry)
+  gc = mix(gc, gcFresh, smoothstep(0.66, 0.97, gT.g) * (0.5 - dry * 0.3) * gFine);
+  gc = mix(gc, gcDry * vec3(1.2, 1.08, 0.78), smoothstep(0.14, 0.0, gT.g) * (0.3 + dry * 0.5) * gFine);
+  // dark gaps between the blades, lit tips; clump scale from the detail map
+  vec3 grass = gc * (0.5 + gH * 0.82) * (0.74 + det.r * 0.52);
+  // clover patches: rounder, darker, bluer leaves
+  float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
+  grass = mix(grass, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);
+  // worn ground (paths, trampled yards): soil shows through the gaps first
+  float gSoil = smoothstep(0.45, 0.85, ctl.a * 0.95 + (0.5 - gH) * 0.5 + (det.g - 0.5) * 0.4);
+  grass = mix(grass, cDirt * (0.62 + det.g * 0.55), gSoil);
+  // wildflowers: crisp heads up close, a faint wash of colour further out
+#if BIOME == 2
+  if (false) {
+#else
+  if (ctl.b > 0.01) {
+#endif
+    float sp = texture2D(fogNoise, tw * 0.09 + 0.7).a;
+    vec3 fcol = sp < 0.42 ? vec3(0.82, 0.82, 0.72) : sp < 0.68 ? vec3(0.86, 0.6, 0.06) : vec3(0.42, 0.22, 0.66);
+    float fl = ctl.b * smoothstep(0.3, 0.6, gT.a) * (1.0 - gSoil);
+    grass = mix(grass, fcol, fl * gFine + ctl.b * 0.1 * (1.0 - gFine));
+  }
   vec3 dirt = cDirt * (0.55 + det.g * 0.9);
   vec3 rock = cRock * (0.45 + det.b * 1.1);
   vec3 sand = cSand * (0.72 + det.a * 0.56);
   vec3 mud = cMud * (0.7 + det.g * 0.5);
+  float bioH = 0.0;
+#if BIOME == 1
+  {
+    // dune sand: wind ripples across the prevailing wind (faded where they would alias)
+    float rq = dot(tw, vec2(0.83, 0.56)) * 8.5 + (gnz.g - 0.5) * 6.0 + (dA.a - 0.5) * 1.6;
+    float ripK = clamp(1.6 - fwidth(rq) * 0.9, 0.0, 1.0);
+    float rip = sin(rq) * 0.5 + 0.5;
+    rip = rip * rip;
+    sand *= 1.0 + (rip - 0.45) * 0.2 * ripK;
+    bioH += (rip - 0.5) * 0.9 * ripK * bw.z;
+    // cracked mud: polygonal plates (cell edges of a jittered grid)
+    if (bw.w > 0.01) {
+      vec2 vp = tw * 2.3 + (dB.rg - 0.5) * 0.3;
+      vec2 ip = floor(vp);
+      vec2 fp = fract(vp);
+      float f1 = 8.0;
+      float f2 = 8.0;
+      vec2 cell = ip;
+      for (int j = -1; j <= 1; j++)
+        for (int i = -1; i <= 1; i++) {
+          vec2 o = vec2(float(i), float(j));
+          vec2 r = o + wxHash2(ip + o) - fp;
+          float d = dot(r, r);
+          if (d < f1) { f2 = f1; f1 = d; cell = ip + o; } else if (d < f2) f2 = d;
+        }
+      float edge = sqrt(f2) - sqrt(f1);
+      float aaK = clamp(1.4 - fwidth(vp.x) * 2.5, 0.0, 1.0);
+      float crack = (1.0 - smoothstep(0.02, 0.07, edge)) * aaK;
+      float plate = wxHash2(cell).x;
+      mud = cMud * (0.95 + plate * 0.22 + (det.g - 0.5) * 0.3);
+      mud = mix(mud, cMud * 0.38, crack);
+      bioH += (0.35 - crack * 0.9 + plate * 0.15) * bw.w;
+    }
+  }
+#elif BIOME == 2
+  // ice on the ford / frozen banks: smooth and glossy
+  sand = cSand * (0.86 + det.a * 0.16 + (dB.b - 0.5) * 0.12);
+#elif BIOME == 3
+  {
+    // pavements: half-tile concrete slabs with dark joints, per-slab tone and grime
+    vec2 sq = tw * 2.0;
+    vec2 sf = fract(sq);
+    vec2 si = floor(sq);
+    float jw = fwidth(sq.x) * 1.1 + 0.03;
+    float joint = 1.0 - smoothstep(jw * 0.5, jw, min(min(sf.x, 1.0 - sf.x), min(sf.y, 1.0 - sf.y)));
+    vec2 sh = wxHash2(si);
+    float grime = smoothstep(0.35, 0.75, texture2D(fogNoise, tw * 0.05 + 0.2).g);
+    dirt = cDirt * (0.84 + sh.x * 0.14 + (det.g - 0.5) * 0.22) * (1.0 - joint * 0.38) * (1.0 - grime * 0.18);
+    bioH -= joint * 0.6 * bw.x;
+    // rubble / gravel lots: broken brick and concrete
+    sand = cSand * (0.62 + det.a * 0.55) * mix(vec3(1.0), vec3(1.06, 0.96, 0.9), step(0.75, sh.y));
+  }
+#endif
   vec3 col = grass * bg + dirt * bw.x + rock * bw.y + sand * bw.z + mud * bw.w;
-  terrH = det.r * bg * 0.7 + det.g * bw.x * 1.0 + det.b * bw.y * 2.2 + det.a * bw.z * 0.5 + det.g * bw.w * 0.3;
+#if BIOME == 3
+  terrH = (gH * 0.8 + det.r * 0.35 + clov * gT.b * 0.4) * bg + 0.3 * bw.x + det.b * bw.y * 1.4 + det.a * bw.z * 1.2 + det.g * bw.w * 0.3 + bioH;
+#else
+  terrH = (gH * 0.8 + det.r * 0.35 + clov * gT.b * 0.4) * bg + det.g * bw.x * 1.0 + det.b * bw.y * 2.2 + det.a * bw.z * 0.5 + det.g * bw.w * 0.3 + bioH;
+#endif
   terrRough = 0.96 - bw.w * 0.4 - bw.y * 0.12;
+#if BIOME == 2
+  terrRough -= bw.z * 0.6;
+#endif
 
   // farm fields
   float fMask = smoothstep(0.3, 0.7, fld.r);
@@ -573,7 +894,7 @@ const TERRAIN_MAP = /* glsl */ `
   float across = dot(tw, vec2(-fdir.y, fdir.x));
   float aa = fwidth(across);
   if (fMask > 0.001) {
-    float ftype = floor((fld.g * 255.0 - 1.0) / 60.0 + 0.5);
+    float ftype = floor((fld.g * 255.0 - 1.0) / FIELD_STEP + 0.5);
     vec3 fc;
     float fh;
     if (ftype < 0.5) {
@@ -603,11 +924,72 @@ const TERRAIN_MAP = /* glsl */ `
       fc = cWheat * (0.8 + mix(0.5, s, k) * 0.25 + (det.r - 0.5) * 0.35 + (dB.g - 0.5) * 0.25);
       fc = mix(fc, cSoil * 0.9, tram * 0.7);
       fh = mix(0.5, s, k) * 0.5 + det.r * 0.5 - tram * 0.6;
-    } else {
-      // mown meadow: broad mowing stripes
-      float st = step(0.5, fract(across / 0.9));
-      fc = cHay * (0.82 + st * 0.18 + (det.r - 0.5) * 0.45);
-      fh = det.r * 0.6;
+    }
+#if BIOME == 3
+    else if (ftype > 4.5) {
+      // city streets: asphalt, worn and patched, with markings; crossings with zebras
+      vec2 lq = (fld.ba * 2.0 - 1.0) * 2.3;
+      float n1 = texture2D(fogNoise, tw * 0.37 + 0.11).r;
+      float n2 = texture2D(fogNoise, tw * 1.7).g;
+      vec3 asph = vec3(0.15, 0.152, 0.158) * (0.82 + n1 * 0.3 + (det.g - 0.5) * 0.3 + (n2 - 0.5) * 0.12);
+      // patches and tar seams
+      float patchK = smoothstep(0.62, 0.66, texture2D(fogNoise, tw * 0.11 + 0.7).b);
+      asph = mix(asph, asph * 0.78, patchK);
+      float mark = 0.0;
+      vec3 markC = vec3(0.86, 0.85, 0.8);
+      if (ftype < 6.5) {
+        float acr = lq.x;
+        float alongW = fld.a > 0.5 ? tw.y : tw.x;
+        float aw = fwidth(acr) + 0.004;
+        // curb / gutter at the edge
+        float curb = smoothstep(1.24, 1.3, abs(acr));
+        asph = mix(asph, vec3(0.42, 0.41, 0.39) * (0.85 + det.g * 0.3), curb);
+        float gut = smoothstep(1.05, 1.15, abs(acr)) * (1.0 - curb);
+        asph *= 1.0 - gut * 0.25;
+        if (ftype < 5.5) {
+          // avenue: double yellow centre line, dashed lanes
+          float yl = 1.0 - smoothstep(0.022, 0.022 + aw, abs(abs(acr) - 0.055));
+          mark = max(mark, yl);
+          markC = mix(markC, vec3(0.86, 0.66, 0.16), yl);
+          float dash = step(0.45, fract(alongW * 0.55)) * (1.0 - smoothstep(0.025, 0.025 + aw, abs(abs(acr) - 0.62)));
+          mark = max(mark, dash);
+        } else {
+          // street: dashed white centre line
+          mark = max(mark, step(0.5, fract(alongW * 0.7)) * (1.0 - smoothstep(0.025, 0.025 + aw, abs(acr))));
+        }
+      } else {
+        // crossing: zebra bands along the four edges, a stop line
+        float ex = abs(lq.x);
+        float ey = abs(lq.y);
+        float zx = step(0.95, ex) * step(ex, 1.42) * step(ey, 1.1) * step(0.5, fract(lq.y * 2.4));
+        float zy = step(0.95, ey) * step(ey, 1.42) * step(ex, 1.1) * step(0.5, fract(lq.x * 2.4));
+        mark = max(zx, zy) * clamp(1.0 - fwidth(lq.x) * 3.0, 0.0, 1.0);
+      }
+      // markings wear off in the tyre tracks
+      mark *= 0.6 + 0.4 * smoothstep(0.3, 0.7, n2);
+      fc = mix(asph, markC * (0.85 + det.r * 0.15), mark * 0.9);
+      fh = 0.15 + mark * 0.25 + (det.g - 0.5) * 0.15;
+    }
+    else if (ftype > 3.5) {
+      // city squares: stone flags in a running bond
+      vec2 pq = tw * 1.6;
+      pq.x += mod(floor(pq.y), 2.0) * 0.5;
+      vec2 pf = fract(pq);
+      float jw = fwidth(pq.x) * 1.1 + 0.025;
+      float joint = 1.0 - smoothstep(jw * 0.5, jw, min(min(pf.x, 1.0 - pf.x), min(pf.y, 1.0 - pf.y)));
+      vec2 ph = wxHash2(floor(pq) + 17.0);
+      fc = vec3(0.6, 0.57, 0.52) * (0.8 + ph.x * 0.24 + (det.g - 0.5) * 0.18) * (1.0 - joint * 0.42);
+      fh = (1.0 - joint) * 0.4 + det.g * 0.1;
+    }
+#endif
+    else {
+      // mown meadow: lawn-like mowing stripes, short fresh grass
+      float sw = fract(across / 1.1);
+      float st = smoothstep(0.47, 0.53, sw) * (1.0 - smoothstep(0.97, 1.0, sw));
+      st = mix(0.5, st, clamp(1.0 - aa * 2.0, 0.0, 1.0));
+      vec3 lawn = grassBase(0.3 + ctl.r * 0.4, 0.12, gDrift * 0.5);
+      fc = lawn * (0.58 + gH * 0.5) * (0.84 + st * 0.26) * (0.92 + det.r * 0.16);
+      fh = gH * 0.45;
     }
     // darker rim along the field edge
     fc *= 0.82 + 0.18 * smoothstep(0.5, 0.95, fld.r);
@@ -615,6 +997,20 @@ const TERRAIN_MAP = /* glsl */ `
     terrH = mix(terrH, fh, fMask);
     terrRough = mix(terrRough, 0.95, fMask);
   }
+#if BIOME == 2
+  {
+    // winter: painted snow depth (ctl.b), wind drifts eat the thin cover first; sparkle up close
+    float dn = texture2D(fogNoise, tw * 0.071 + 0.3).r * 0.6 + texture2D(fogNoise, tw * 0.23 + 0.1).g * 0.4;
+    float cover = smoothstep(0.22, 0.62, ctl.b + (dn - 0.5) * 0.6);
+    cover *= 1.0 - fMask * 0.2;
+    vec3 snowC = vec3(0.84, 0.88, 0.95) * (0.9 + (dn - 0.5) * 0.14 + gH * 0.05);
+    float spark = step(0.985, texture2D(fogNoise, tw * 2.7).a) * gFine;
+    snowC += spark * 0.25;
+    col = mix(col, snowC, cover);
+    terrH = mix(terrH, 0.25 + dn * 0.7, cover);
+    terrRough = mix(terrRough, 0.6, cover);
+  }
+#endif
   col *= tnt.rgb * 2.0;
 #if TERR_POM > 0
   col *= 1.0 - terrPomAO;

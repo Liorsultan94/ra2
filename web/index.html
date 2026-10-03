@@ -9,15 +9,17 @@
     <meta name="description" content="Iron Front - a modern-warfare real-time strategy game in the style of classic RTS, playable in your browser." />
     <title>Iron Front</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161c22'/%3E%3Cpath d='M16 4l10 6v12l-10 6-10-6V10z' fill='%23d8402c'/%3E%3Cpath d='M16 10l5 3v6l-5 3-5-3v-6z' fill='%23f2d9a0'/%3E%3C/svg%3E" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- fonts load without blocking the first paint (the splash waits briefly for the wordmark font) -->
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet';window.__ifFont&&window.__ifFont()" />
-    <noscript><link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" /></noscript>
+    <!-- self-hosted UI fonts (SIL OFL, public/fonts): Inter for text and numbers, Barlow Condensed for labels and the wordmark -->
+    <link rel="preload" href="./fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="./fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
     <style>
+      @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(./fonts/inter-latin.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;src:url(./fonts/barlow-condensed-500.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:600;font-display:swap;src:url(./fonts/barlow-condensed-600.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;src:url(./fonts/barlow-condensed-700.woff2) format('woff2')}
       /* ---- splash: painted before any JS downloads (logic in src/ui/splash.ts) ---- */
       html,body{margin:0;height:100%;overflow:hidden;background:#050607}
-      #splash{--E:min(52vh,34vw,340px);position:fixed;inset:0;z-index:1000;overflow:hidden;color:#e8e3d4;font:600 13px Rajdhani,'Segoe UI',system-ui,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:default}
+      #splash{--E:min(52vh,34vw,340px);position:fixed;inset:0;z-index:1000;overflow:hidden;color:#e8ecf0;font:500 13px Inter,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:default}
       @media (orientation:portrait){#splash{--E:min(64vw,36vh,340px)}}
       .bs-bg{position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 50% 42%,#21140f 0%,#0c0d0f 52%,#030405 100%);transition:opacity .8s ease}
       .bs-bg::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px),radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.75) 100%)}
@@ -44,29 +46,29 @@
       #splash .em-c1{animation-delay:1.15s}
       #splash .em-c2{animation-delay:1.25s}
       #splash .em-sheen{animation:spSheen 4.2s ease-in-out 1.5s infinite}
-      .bs-word{flex:none;position:relative;text-align:center;font-family:'Black Ops One',Impact,'Arial Black',sans-serif;font-size:calc(var(--E)*.3);line-height:.85;filter:drop-shadow(0 6px 16px rgba(0,0,0,.85))}
-      .bs-word b{display:block;font-weight:400;letter-spacing:.06em;opacity:0;-webkit-background-clip:text;background-clip:text;color:transparent}
-      .bs-top{background:linear-gradient(180deg,#fbf3dc 0%,#c9c1a9 45%,#7d7564 52%,#d7cfb5 100%)}
-      .bs-bot{background:linear-gradient(180deg,#ff9a78 0%,#e0452c 45%,#8e1e10 55%,#e85a3a 100%)}
-      .bs-tag{position:absolute;left:50%;top:100%;margin-top:.55em;white-space:nowrap;font:600 calc(var(--E)*.045)/1 Rajdhani,'Segoe UI',system-ui,sans-serif;letter-spacing:.42em;color:#d9d0b8;opacity:0;transform:translateX(-50%)}
+      .bs-word{flex:none;position:relative;text-align:center;font-family:'Barlow Condensed','Roboto Condensed','Arial Narrow',sans-serif;font-weight:700;font-size:calc(var(--E)*.36);line-height:.86;text-transform:uppercase;filter:drop-shadow(0 6px 22px rgba(0,0,0,.6))}
+      .bs-word b{display:block;font-weight:700;letter-spacing:.08em;margin-right:-.08em;opacity:0}
+      .bs-top{color:#f3f5f7}
+      .bs-bot{color:#ff5a42}
+      .bs-tag{position:absolute;left:50%;top:100%;margin-top:.7em;white-space:nowrap;font:600 calc(var(--E)*.04)/1 Inter,system-ui,sans-serif;letter-spacing:.38em;color:rgba(232,236,240,.75);opacity:0;transform:translateX(-50%)}
       #splash.word .bs-top{animation:spSlam .42s cubic-bezier(.2,.75,.25,1) both}
       #splash.word .bs-bot{animation:spSlam .42s cubic-bezier(.2,.75,.25,1) .12s both}
       #splash.word .bs-tag{animation:spFade .6s .55s both}
       #splash.word .bs-shock{animation:spShock .7s cubic-bezier(.1,.6,.3,1) .26s}
       #splash.word .bs-main{animation:spShake .32s linear .27s}
-      .bs-load{position:absolute;left:50%;bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px),4.5vh);width:min(440px,80vw);transform:translateX(-50%);text-transform:uppercase;letter-spacing:.16em;transition:opacity .35s}
-      .bs-lines{height:48px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;font-size:11px;line-height:16px;color:#7f8a90}
+      .bs-load{position:absolute;left:50%;bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px),4.5vh);width:min(420px,80vw);transform:translateX(-50%);font-family:'Barlow Condensed','Arial Narrow',sans-serif;font-weight:600;text-transform:uppercase;letter-spacing:.14em;transition:opacity .35s}
+      .bs-lines{height:48px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;font-size:12px;line-height:16px;color:#6c7782}
       .bs-lines div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .bs-lines div::before{content:'\2713  ';color:#6fae58}
-      .bs-lines div.now{color:#efe6cc}
-      .bs-lines div.now::before{content:'\25B8  ';color:#d8402c}
+      .bs-lines div::before{content:'\2713  ';color:#3dd68c}
+      .bs-lines div.now{color:#e8ecf0}
+      .bs-lines div.now::before{content:'\25B8  ';color:#ff5a42}
       .bs-lines div.now::after{content:'_';animation:spBlink 1s steps(1) infinite}
-      .bs-lines div.tap{color:#f2c14e;font-size:14px;animation:spBlink 1.2s ease-in-out infinite}
+      .bs-lines div.tap{color:#f5b941;font-size:15px;animation:spBlink 1.2s ease-in-out infinite}
       .bs-lines div.tap::before{content:''}
       .bs-lines div.tap::after{content:''}
-      .bs-bar{position:relative;height:4px;margin-top:7px;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
-      .bs-bar i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(.02);background:linear-gradient(90deg,#7e1d10,#d8402c 70%,#ffb27a);box-shadow:0 0 10px rgba(255,90,50,.6);transition:transform .35s ease-out}
-      .bs-meta{display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#5f696f;letter-spacing:.2em}
+      .bs-bar{position:relative;height:3px;margin-top:8px;overflow:hidden;border-radius:2px;background:rgba(255,255,255,.1)}
+      .bs-bar i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(.02);background:linear-gradient(90deg,#a3281a,#ff5a42 75%,#ffa588);transition:transform .35s ease-out}
+      .bs-meta{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:#6c7782;letter-spacing:.16em;font-variant-numeric:tabular-nums}
       #splash.out .bs-bg{opacity:0}
       #splash.out .bs-load,#splash.out .bs-embers,#splash.out .bs-tag{opacity:0!important;transition:opacity .25s}
       #splash.out .bs-glow,#splash.out .bs-radar{opacity:0;transition:opacity .4s}
@@ -127,12 +129,7 @@
             window.__ifWordT = performance.now();
           }
         };
-        var font = new Promise(function (res) {
-          window.__ifFont = function () {
-            document.fonts && document.fonts.load ? document.fonts.load('1em "Black Ops One"', 'IRONFT').then(res, res) : res();
-          };
-        });
-        if (document.querySelector('link[rel=stylesheet][href*="fonts.googleapis"]')) window.__ifFont();
+        var font = document.fonts && document.fonts.load ? document.fonts.load('700 1em "Barlow Condensed"', 'IRONFT').catch(function () {}) : Promise.resolve();
         setTimeout(function () {
           font.then(slam);
           setTimeout(slam, 750);

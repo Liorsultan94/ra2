@@ -85,9 +85,11 @@ export class Resources {
     const shadows = quality === 'high';
 
     // materials
+    // the winter map's lasting snow must not bury the ore (it stays readable); other maps unchanged
     const oreRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.15, flatShading: true }));
     const oreNuggetMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.85, flatShading: true, emissive: 0x2a1404, emissiveIntensity: 0.6 }));
     const gemRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.05, flatShading: true }));
+    if (m.biome === 'winter') for (const mt of [oreRubbleMat, oreNuggetMat, gemRubbleMat]) mt.defines = { ...mt.defines, WX_SNOW_K: '0.25' };
     const gemCrystalMat = fog.apply(
       new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, flatShading: true, emissive: 0x1e4a66, emissiveIntensity: 0.4 }),
     );

@@ -8,6 +8,7 @@ import type { FogOfWar } from '../fog';
 import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
+import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
@@ -50,6 +51,8 @@ export class AmbientLife {
   readonly traffic: Traffic;
   readonly animals: Animals;
   readonly birds: Birds;
+  /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
+  readonly river: RiverLife;
   private lights = new LightSprites();
   private dangers: Danger[] = [];
   private units = new Float32Array(512);
@@ -78,7 +81,8 @@ export class AmbientLife {
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
-    this.group.add(this.traffic.group, this.animals.group, this.birds.group, this.lights.group);
+    this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
+    this.group.add(this.traffic.group, this.animals.group, this.birds.group, this.river.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -205,16 +209,18 @@ export class AmbientLife {
     this.traffic.update(f);
     this.animals.update(f);
     this.birds.update(f);
+    this.river.update(f);
     this.dangers.length = 0;
     this.lights.begin();
     this.traffic.draw(f, this.time);
     this.animals.draw();
     this.birds.draw();
+    this.river.draw(f);
     this.lights.commit();
   }
 
   /** Debug / tests: counts and car states. */
   stats() {
-    return { cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, traffic: this.traffic.debug() };
+    return { cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
   }
 }

@@ -1,28 +1,54 @@
 /**
- * Procedural sound system: every effect, the announcer radio chatter and the
- * background music are synthesized at runtime with the Web Audio API.
+ * Procedural sound system: every effect, the radio chatter, the ambience and
+ * the background music are synthesized at runtime with the Web Audio API.
  * There are no audio asset files.
  *
+ * Combat sounds are baked once at load into AudioBuffer variants (weapons.ts,
+ * rendered by bake.ts in OfflineAudioContexts) and played through a pool of
+ * 24 positional voices; until a sound is baked its live node-graph version
+ * (live.ts) plays through the same voice.
+ *
  * Graph:
- *   voice -> [panner] -> sfxBus -> sfxGain ----------------\
- *                     \-> wetSend -> sfxWetBus -> sfxWetGain -> reverb -\
- *   music (music.ts) -> musicPlay -> musicDuck -> musicGain -------------+-> compressor -> master -> destination
- *                                                          \-> musicWet -> reverb
+ *   source -> voice gain -> low-pass -> stereo pan -> sfxBus -> sfxGain -----------------------\
+ *                                                 \-> wet -> sfxWetBus -> sfxWetGain -> outdoor IR -+
+ *   ambience beds / aircraft engines -> sfxBus                                                    |
+ *   UI sounds (live patches) -> [pan] -> sfxBus                                                   |
+ *   music (music.ts) -> musicPlay -> musicDuck -> musicGain ---------------------------------------+-> compressor -> master
+ *                                                          \-> musicWet -> hall reverb ------------/
+ *
+ * Positional audio: the camera reports itself every frame (setListener); a
+ * sound played with a world position gets pan, distance gain, air-absorption
+ * low-pass, off-screen muffling and a (capped) speed-of-sound delay
+ * (spatial.ts). Voice priority keeps a big battle readable and cheap.
  *
  * The battle score adapts to a combat intensity inferred from the effects and
  * announcer lines that pass through here (see intensity.ts).
  */
-import { Bank, Patch, clamp, env, glide, makeImpulse, spikes } from './core';
+import { Bank, Patch, clamp, makeImpulse } from './core';
 import { CombatHeat } from './intensity';
 import { MUSIC_LEVEL, MusicEngine, type MusicMode, type StingerKind } from './music';
+import { LIVE, type Build, type LiveName } from './live';
+import { bakeAll, type BakeStats, type BakedSound } from './bake';
+import { type BakedName } from './weapons';
+import { makeOutdoorImpulse } from './reverb';
+import { type Listener, type Spatial, type VoiceInfo, chooseSlot, defaultListener, makeSpatial, spatialize } from './spatial';
+import { Ambience, type AmbienceState, type BedName, type EngineKind, EngineVoices, ENGINE_SLOTS, defaultAmbience } from './ambience';
+import { type RadioProfile, radioAck, radioClose, radioFor, radioOpen, radioStatic } from './radio';
 
 export type Sfx =
-  | 'rifle' | 'mg' | 'cannon' | 'cannonHeavy' | 'rocket' | 'missileLaunch' | 'flak' | 'laser'
-  | 'artillery' | 'thermo' | 'explosionSmall' | 'explosionMedium' | 'explosionLarge' | 'buildingCollapse'
-  | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'click' | 'tab' | 'build' | 'place' | 'sell' | 'error'
-  | 'select' | 'ack' | 'alarm' | 'money' | 'deploy' | 'repair' | 'jam';
+  | LiveName
+  | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder';
 
-const MAX_VOICES = 24;
+/** A world position (sim x / y on the ground, z = height above it). */
+export interface SoundPos {
+  x: number;
+  y: number;
+  z?: number;
+}
+
+/** Combat voices playing at once (UI sounds have their own small budget). */
+export const MAX_VOICES = 24;
+const MAX_UI = 8;
 
 /** Maps a screen x coordinate to a stereo pan in -0.8..0.8. */
 export function panFor(screenX: number, screenWidth: number): number {
@@ -32,439 +58,97 @@ export function panFor(screenX: number, screenWidth: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Sound effects
+// Sound table
 // ---------------------------------------------------------------------------
 
-type Build = (p: Patch, o: AudioNode, t: number, r: number) => void;
-
-interface SfxDef {
+interface Meta {
   /** base level */
   lvl: number;
   /** reverb send */
   wet: number;
   /** minimum interval between identical sounds, seconds */
   gap: number;
-  build: Build;
+  /** combat sound: baked, pooled, positional */
+  combat: boolean;
+  /** priority class weight */
+  weight: number;
+  /** max simultaneous voices of this sound */
+  cap: number;
+  /** random pitch spread per play */
+  jitter: number;
+  /** live fallback while not baked */
+  live: LiveName;
 }
 
-function bigBoom(p: Patch, o: AudioNode, t: number, r: number): void {
-  p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 2100 * r, f2: 120, sweep: 1.2, q: 0.9, d: 1.35, peak: 1, drive: 2.5 });
-  p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 450, f2: 150, sweep: 1.3, a: 0.02, d: 1.4, peak: 0.9 });
-  p.th(o, t, { f: 70 * r, f2: 25, glide: 0.9, d: 1.1, peak: 1, drive: 2 });
-  p.nh(o, t, { type: 'bandpass', f: 1600, q: 1, d: 0.05, peak: 0.5 });
-  p.crackle(o, t + 0.08, 0.9, 7, 2500, 0.25);
+const C = (lvl: number, wet: number, gap: number, weight: number, cap: number, live: LiveName, jitter = 0.06): Meta => ({ lvl, wet, gap, combat: true, weight, cap, jitter, live });
+
+// levels balanced by measured loudness: sustained roars (rocket / missile / thermobaric / jet) carry
+// 8-12 dB more RMS than the impulsive cannon and blast buffers, so they sit lower here
+const META: Record<Sfx, Meta> = {
+  rifle: C(0.42, 0.12, 0.04, 0.8, 6, 'rifle'),
+  mg: C(0.45, 0.1, 0.05, 0.8, 5, 'mg'),
+  autocannon: C(0.55, 0.14, 0.06, 1.1, 4, 'flak'),
+  flak: C(0.5, 0.14, 0.05, 1, 4, 'flak'),
+  cannon: C(0.72, 0.2, 0.05, 1.5, 5, 'cannon'),
+  cannonHeavy: C(0.82, 0.22, 0.06, 1.6, 4, 'cannonHeavy'),
+  rocket: C(0.36, 0.16, 0.05, 1.3, 5, 'rocket'),
+  missileLaunch: C(0.38, 0.22, 0.08, 2, 3, 'missileLaunch'),
+  interceptorLaunch: C(0.66, 0.2, 0.06, 1.8, 4, 'missileLaunch'),
+  laser: C(0.45, 0.22, 0.05, 1.1, 3, 'laser'),
+  artillery: C(0.85, 0.3, 0.06, 1.8, 4, 'artillery'),
+  mortar: C(0.6, 0.22, 0.06, 1.2, 3, 'artillery', 0.08),
+  thermo: C(0.44, 0.2, 0.08, 1.8, 2, 'thermo'),
+  explosionSmall: C(0.6, 0.2, 0.045, 1.2, 6, 'explosionSmall', 0.1),
+  explosionMedium: C(0.78, 0.24, 0.05, 1.8, 5, 'explosionMedium', 0.08),
+  explosionLarge: C(0.95, 0.28, 0.06, 2.6, 4, 'explosionLarge', 0.07),
+  buildingCollapse: C(0.95, 0.3, 0.2, 3.2, 2, 'buildingCollapse', 0.05),
+  bridgeCollapse: C(1, 0.32, 0.3, 3.5, 1, 'buildingCollapse', 0.04),
+  intercept: C(0.55, 0.16, 0.05, 1.3, 3, 'intercept'),
+  droneLaunch: C(0.5, 0.15, 0.1, 1, 3, 'droneLaunch'),
+  droneBuzz: C(0.35, 0.08, 0.08, 0.6, 2, 'droneBuzz'),
+  jetFlyby: C(0.5, 0.2, 0.8, 2, 2, 'droneBuzz', 0.05),
+  thunder: C(0.9, 0.25, 0.5, 2.2, 2, 'explosionLarge', 0.12),
+  jam: { lvl: 0.4, wet: 0.08, gap: 0.08, combat: false, weight: 1, cap: 2, jitter: 0, live: 'jam' },
+  click: ui('click'),
+  tab: ui('tab'),
+  build: ui('build'),
+  place: ui('place'),
+  sell: ui('sell'),
+  error: ui('error'),
+  select: ui('select'),
+  ack: ui('ack'),
+  alarm: ui('alarm'),
+  money: ui('money'),
+  deploy: ui('deploy'),
+  repair: ui('repair'),
+};
+
+function ui(name: LiveName): Meta {
+  const d = LIVE[name];
+  return { lvl: d.lvl, wet: d.wet, gap: d.gap, combat: false, weight: 5, cap: 4, jitter: 0.08, live: name };
 }
 
-const SFX: Record<Sfx, SfxDef> = {
-  rifle: {
-    lvl: 0.55, wet: 0.1, gap: 0.045,
-    build(p, o, t, r) {
-      p.nh(o, t, { type: 'bandpass', f: 2600 * r, q: 0.9, d: 0.055, peak: 0.9 });
-      p.nh(o, t, { type: 'highpass', f: 5000, d: 0.018, peak: 0.22 });
-      p.th(o, t, { f: 170 * r, f2: 60, glide: 0.05, d: 0.06, peak: 0.55 });
-    },
-  },
-  mg: {
-    lvl: 0.47, wet: 0.08, gap: 0.04,
-    build(p, o, t, r) {
-      p.nh(o, t, { type: 'bandpass', f: 1800 * r, q: 1, d: 0.04, peak: 0.85 });
-      p.nh(o, t, { type: 'highpass', f: 4000, d: 0.012, peak: 0.18 });
-      p.th(o, t, { f: 140 * r, f2: 55, glide: 0.04, d: 0.045, peak: 0.5 });
-    },
-  },
-  flak: {
-    lvl: 0.5, wet: 0.12, gap: 0.045,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 240 * r, f2: 75, glide: 0.08, d: 0.13, peak: 0.9, drive: 2 });
-      p.nh(o, t, { type: 'bandpass', f: 1300 * r, q: 1.2, d: 0.06, peak: 0.6 });
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 700, d: 0.16, peak: 0.45 });
-    },
-  },
-  cannon: {
-    lvl: 0.7, wet: 0.18, gap: 0.05,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 120 * r, f2: 40, glide: 0.25, d: 0.5, peak: 1, drive: 1.5 });
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 1200 * r, f2: 180, sweep: 0.4, d: 0.55, peak: 0.9 });
-      p.nh(o, t, { type: 'bandpass', f: 1600, q: 1, d: 0.03, peak: 0.5 });
-    },
-  },
-  cannonHeavy: {
-    lvl: 0.8, wet: 0.2, gap: 0.06,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 100 * r, f2: 30, glide: 0.45, d: 0.9, peak: 1, drive: 2.5 });
-      p.th(o, t, { type: 'triangle', f: 55, f2: 28, glide: 0.6, d: 0.9, peak: 0.5 });
-      p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 900 * r, f2: 120, sweep: 0.8, d: 1.0, peak: 1, drive: 1.5 });
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 2500, f2: 400, sweep: 0.25, d: 0.25, peak: 0.6 });
-      p.nh(o, t, { type: 'bandpass', f: 1400, q: 1, d: 0.04, peak: 0.55 });
-    },
-  },
-  rocket: {
-    lvl: 0.65, wet: 0.15, gap: 0.05,
-    build(p, o, t, r) {
-      p.nh(o, t, { type: 'bandpass', f: 1100, q: 1, d: 0.04, peak: 0.6 });
-      p.th(o, t, { f: 220 * r, f2: 80, glide: 0.06, d: 0.07, peak: 0.5 });
-      p.nh(o, t, { type: 'bandpass', f: 600 * r, f2: 2600 * r, sweep: 0.45, q: 2.2, a: 0.04, d: 0.5, peak: 0.55 });
-    },
-  },
-  missileLaunch: {
-    lvl: 0.65, wet: 0.2, gap: 0.08,
-    build(p, o, t, r) {
-      p.nh(o, t, { type: 'bandpass', f: 1000, q: 1, d: 0.05, peak: 0.7 });
-      p.th(o, t, { f: 200 * r, f2: 70, glide: 0.08, d: 0.1, peak: 0.6 });
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 350, f2: 1800 * r, sweep: 1.0, q: 1.5, a: 0.1, d: 1.1, peak: 0.9, drive: 2 });
-      p.nh(o, t, { type: 'bandpass', f: 500, f2: 3200 * r, sweep: 1.1, q: 2.5, a: 0.15, d: 1.0, peak: 0.4 });
-      p.th(o, t, { type: 'triangle', f: 55, f2: 85, glide: 1.0, a: 0.1, d: 1.0, peak: 0.3 });
-    },
-  },
-  laser: {
-    lvl: 0.45, wet: 0.22, gap: 0.05,
-    build(p, o, t, r) {
-      const lp = p.filter('lowpass', 3200, 1.2);
-      lp.connect(o);
-      p.th(lp, t, { type: 'sawtooth', f: 2500 * r, f2: 280, glide: 0.2, a: 0.003, d: 0.28, peak: 0.2 });
-      p.th(lp, t, { type: 'sine', f: 2500 * r, f2: 280, glide: 0.2, a: 0.003, d: 0.3, peak: 0.32, detune: 14 });
-      p.th(lp, t, { type: 'sine', f: 1250 * r, f2: 140, glide: 0.22, a: 0.003, d: 0.25, peak: 0.18, detune: -9 });
-    },
-  },
-  artillery: {
-    lvl: 0.75, wet: 0.3, gap: 0.06,
-    build(p, o, t, r) {
-      const lp = p.filter('lowpass', 420 * r, 0.7);
-      lp.connect(o);
-      p.th(lp, t, { f: 75 * r, f2: 30, glide: 0.6, d: 1.0, peak: 1, drive: 1.5 });
-      p.nh(lp, t, { kind: 'brown', type: 'lowpass', f: 600, f2: 120, sweep: 0.9, a: 0.01, d: 1.1, peak: 1 });
-      p.nh(lp, t, { kind: 'pink', type: 'lowpass', f: 1500, f2: 300, sweep: 0.3, d: 0.3, peak: 0.45 });
-    },
-  },
-  thermo: {
-    lvl: 0.6, wet: 0.2, gap: 0.08,
-    build(p, o, t, r) {
-      for (let i = 0; i < 4; i++) {
-        const ti = t + i * 0.075 + Math.random() * 0.015;
-        p.th(o, ti, { f: 160 * r, f2: 50, glide: 0.09, d: 0.12, peak: 0.8 });
-        p.nh(o, ti, { type: 'bandpass', f: 900 + i * 60, q: 1, d: 0.05, peak: 0.5 });
-      }
-      p.nh(o, t, { type: 'bandpass', f: 700, f2: 2400, sweep: 0.5, q: 1.8, a: 0.05, d: 0.55, peak: 0.35 });
-    },
-  },
-  explosionSmall: {
-    lvl: 0.6, wet: 0.18, gap: 0.045,
-    build(p, o, t, r) {
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 2600 * r, f2: 280, sweep: 0.35, d: 0.4, peak: 0.9 });
-      p.th(o, t, { f: 95 * r, f2: 35, glide: 0.25, d: 0.3, peak: 0.7 });
-      p.nh(o, t, { type: 'bandpass', f: 1900, q: 1, d: 0.035, peak: 0.4 });
-    },
-  },
-  explosionMedium: {
-    lvl: 0.75, wet: 0.22, gap: 0.05,
-    build(p, o, t, r) {
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 2300 * r, f2: 190, sweep: 0.7, d: 0.8, peak: 1, drive: 1.5 });
-      p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 500, a: 0.01, d: 1.0, peak: 0.7 });
-      p.th(o, t, { f: 80 * r, f2: 30, glide: 0.5, d: 0.65, peak: 0.9, drive: 1.5 });
-      p.nh(o, t, { type: 'bandpass', f: 1700, q: 1, d: 0.04, peak: 0.45 });
-    },
-  },
-  explosionLarge: {
-    lvl: 0.9, wet: 0.28, gap: 0.06,
-    build: bigBoom,
-  },
-  buildingCollapse: {
-    lvl: 0.95, wet: 0.3, gap: 0.2,
-    build(p, o, t, r) {
-      bigBoom(p, o, t, r);
-      // rumbling debris
-      const src = p.noise('brown', t, t + 2.6);
-      const lp = p.filter('lowpass', 260, 1);
-      glide(lp.frequency, t, 300, 140, 2.4);
-      const g = p.gain(0);
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.85, t + 0.35);
-      g.gain.setValueAtTime(0.85, t + 1.3);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 2.5);
-      src.connect(lp);
-      lp.connect(g);
-      g.connect(o);
-      p.crackle(o, t + 0.3, 2.0, 14, 3000, 0.2);
-      for (let i = 0; i < 4; i++) {
-        const ti = t + 0.4 + Math.random() * 1.6;
-        p.th(o, ti, { f: 75 + Math.random() * 20, f2: 35, glide: 0.12, d: 0.15, peak: 0.4 + Math.random() * 0.2 });
-      }
-    },
-  },
-  intercept: {
-    lvl: 0.6, wet: 0.15, gap: 0.05,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 3150 * r, a: 0.001, d: 0.11, peak: 0.2 });
-      p.th(o, t, { f: 4630 * r, a: 0.001, d: 0.08, peak: 0.1 });
-      p.th(o, t, { type: 'triangle', f: 2120 * r, a: 0.001, d: 0.14, peak: 0.15 });
-      p.nh(o, t + 0.015, { type: 'bandpass', f: 1400, q: 1, d: 0.05, peak: 0.5 });
-      p.th(o, t + 0.015, { f: 300, f2: 110, glide: 0.05, d: 0.07, peak: 0.45 });
-    },
-  },
-  droneLaunch: {
-    lvl: 0.5, wet: 0.15, gap: 0.1,
-    build(p, o, t, r) {
-      const end = t + 1.05;
-      const bp = p.filter('bandpass', 700, 1.4);
-      glide(bp.frequency, t, 700, 1500, 0.8);
-      const trem = p.gain(0.65);
-      const lfo = p.osc('sine', 26, t, end);
-      const depth = p.gain(0.3);
-      lfo.connect(depth);
-      depth.connect(trem.gain);
-      const e = p.gain(0);
-      e.gain.setValueAtTime(0, t);
-      e.gain.linearRampToValueAtTime(0.5, t + 0.12);
-      e.gain.linearRampToValueAtTime(0.45, t + 0.75);
-      e.gain.exponentialRampToValueAtTime(0.0001, t + 1.0);
-      for (const det of [0, 12]) {
-        const s = p.osc('sawtooth', 180 * r, t, end);
-        s.detune.value = det;
-        glide(s.frequency, t, 180 * r, 420 * r, 0.8);
-        s.connect(bp);
-      }
-      bp.connect(trem);
-      trem.connect(e);
-      e.connect(o);
-      p.nh(o, t, { type: 'bandpass', f: 1500, f2: 3000, q: 1.5, a: 0.1, d: 0.6, peak: 0.12 });
-    },
-  },
-  droneBuzz: {
-    lvl: 0.35, wet: 0.08, gap: 0.08,
-    build(p, o, t, r) {
-      const end = t + 0.3;
-      const bp = p.filter('bandpass', 1100, 1.2);
-      const trem = p.gain(0.65);
-      const lfo = p.osc('sine', 32, t, end);
-      const depth = p.gain(0.35);
-      lfo.connect(depth);
-      depth.connect(trem.gain);
-      const e = p.gain(0);
-      env(e.gain, t, 0.45, 0.03, 0.05, 0.17);
-      p.osc('sawtooth', 250 * r, t, end).connect(bp);
-      p.osc('sawtooth', 253 * r, t, end).connect(bp);
-      bp.connect(trem);
-      trem.connect(e);
-      e.connect(o);
-    },
-  },
-  jam: {
-    lvl: 0.4, wet: 0.08, gap: 0.08,
-    build(p, o, t) {
-      const dur = 0.4;
-      const end = t + dur + 0.05;
-      const sq = p.osc('square', 600, t, end);
-      const sg = p.gain(0);
-      const noise = p.noise('white', t, end);
-      const nbp = p.filter('bandpass', 2800, 0.6);
-      const ng = p.gain(0);
-      const steps = 18;
-      for (let i = 0; i < steps; i++) {
-        const ti = t + i * (dur / steps);
-        sq.frequency.setValueAtTime(200 + Math.random() * 1800, ti);
-        sg.gain.setValueAtTime(Math.random() < 0.7 ? 0.25 + Math.random() * 0.25 : 0, ti);
-        ng.gain.setValueAtTime(Math.random() < 0.6 ? 0.4 + Math.random() * 0.6 : 0.05, ti);
-      }
-      sg.gain.setValueAtTime(0, t + dur);
-      ng.gain.setValueAtTime(0, t + dur);
-      sq.connect(sg);
-      noise.connect(nbp);
-      nbp.connect(ng);
-      const crush = p.crusher();
-      const hp = p.filter('highpass', 350, 0.7);
-      const lp = p.filter('lowpass', 4500, 0.7);
-      const e = p.gain(0);
-      env(e.gain, t, 0.45, 0.005, dur - 0.06, 0.05);
-      sg.connect(crush);
-      ng.connect(crush);
-      crush.connect(hp);
-      hp.connect(lp);
-      lp.connect(e);
-      e.connect(o);
-    },
-  },
-  click: {
-    lvl: 0.55, wet: 0, gap: 0.03,
-    build(p, o, t, r) {
-      p.th(o, t, { type: 'triangle', f: 1500 * r, f2: 1100, glide: 0.012, a: 0.001, d: 0.025, peak: 0.35 });
-      p.nh(o, t, { type: 'highpass', f: 4000, d: 0.008, peak: 0.12 });
-    },
-  },
-  tab: {
-    lvl: 0.55, wet: 0, gap: 0.03,
-    build(p, o, t, r) {
-      p.th(o, t, { type: 'triangle', f: 950 * r, f2: 750, glide: 0.02, a: 0.001, d: 0.04, peak: 0.35 });
-      p.nh(o, t, { type: 'bandpass', f: 2400, q: 2, d: 0.01, peak: 0.15 });
-    },
-  },
-  build: {
-    lvl: 0.6, wet: 0.05, gap: 0.05,
-    build(p, o, t) {
-      [660, 990].forEach((f, i) => {
-        const ti = t + i * 0.085;
-        p.th(o, ti, { type: 'square', f, lp: 2400, a: 0.004, hold: 0.03, d: 0.1, peak: 0.13 });
-        p.th(o, ti, { type: 'triangle', f, a: 0.004, hold: 0.03, d: 0.12, peak: 0.22 });
-      });
-    },
-  },
-  place: {
-    lvl: 0.6, wet: 0.08, gap: 0.06,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 120 * r, f2: 45, glide: 0.12, d: 0.18, peak: 0.9 });
-      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 500, d: 0.1, peak: 0.5 });
-      const tc = t + 0.055;
-      p.nh(o, tc, { type: 'bandpass', f: 2300 * r, q: 7, d: 0.07, peak: 0.6 });
-      p.th(o, tc, { type: 'square', f: 330 * r, lp: 1500, d: 0.06, peak: 0.12 });
-      p.th(o, tc, { type: 'square', f: 517 * r, lp: 1800, d: 0.05, peak: 0.09 });
-    },
-  },
-  sell: {
-    lvl: 0.6, wet: 0.05, gap: 0.08,
-    build(p, o, t) {
-      [1318, 1046, 880, 659].forEach((f, i) => {
-        const ti = t + i * 0.06;
-        p.th(o, ti, { type: 'square', f, lp: 3000, a: 0.002, hold: 0.015, d: 0.04, peak: 0.12 });
-        p.th(o, ti, { type: 'triangle', f, a: 0.002, hold: 0.015, d: 0.06, peak: 0.18 });
-      });
-      p.nh(o, t + 0.25, { type: 'bandpass', f: 5000, q: 3, d: 0.08, peak: 0.15 });
-      p.th(o, t + 0.25, { f: 2637, d: 0.25, peak: 0.07 });
-    },
-  },
-  error: {
-    lvl: 0.5, wet: 0, gap: 0.12,
-    build(p, o, t) {
-      for (let i = 0; i < 2; i++) {
-        const ti = t + i * 0.15;
-        p.th(o, ti, { type: 'square', f: 170, lp: 1100, a: 0.005, hold: 0.09, d: 0.025, peak: 0.25 });
-        p.th(o, ti, { type: 'sawtooth', f: 171.5, lp: 900, a: 0.005, hold: 0.09, d: 0.025, peak: 0.12 });
-      }
-    },
-  },
-  select: {
-    lvl: 0.6, wet: 0, gap: 0.04,
-    build(p, o, t, r) {
-      p.th(o, t, { f: 950 * r, f2: 1500 * r, glide: 0.045, a: 0.004, d: 0.06, peak: 0.3 });
-      p.th(o, t, { type: 'triangle', f: 475 * r, f2: 750 * r, glide: 0.045, a: 0.004, d: 0.05, peak: 0.1 });
-    },
-  },
-  ack: {
-    lvl: 0.6, wet: 0.03, gap: 0.06,
-    build(p, o, t, r) {
-      const hp = p.filter('highpass', 450, 0.7);
-      const sh = p.shaper(3);
-      const lp = p.filter('lowpass', 3200, 0.7);
-      const pre = p.gain(0.6);
-      pre.connect(hp);
-      hp.connect(sh);
-      sh.connect(lp);
-      lp.connect(o);
-      p.nh(pre, t, { type: 'bandpass', f: 2200, q: 0.7, d: 0.05, peak: 0.35 });
-      p.th(pre, t, { type: 'square', f: 1250 * r, f2: 1700 * r, glide: 0.04, a: 0.003, hold: 0.03, d: 0.02, peak: 0.12 });
-      p.th(pre, t + 0.075, { type: 'square', f: 1550 * r, f2: 2050 * r, glide: 0.04, a: 0.003, hold: 0.03, d: 0.02, peak: 0.12 });
-      p.nh(pre, t + 0.13, { type: 'bandpass', f: 2000, q: 0.7, d: 0.06, peak: 0.25 });
-    },
-  },
-  alarm: {
-    lvl: 0.5, wet: 0.08, gap: 0.9,
-    build(p, o, t) {
-      const end = t + 1.1;
-      const lp = p.filter('lowpass', 2000, 1);
-      const sh = p.shaper(1.5);
-      const e = p.gain(0);
-      e.gain.setValueAtTime(0, t);
-      e.gain.linearRampToValueAtTime(0.3, t + 0.02);
-      e.gain.setValueAtTime(0.3, t + 0.95);
-      e.gain.exponentialRampToValueAtTime(0.0001, t + 1.05);
-      const lfo = p.osc('sine', 7, t, end);
-      const vib = p.gain(15);
-      lfo.connect(vib);
-      const freqs = [620, 465, 620, 465];
-      for (const [type, mul, lvl] of [['sawtooth', 1, 1], ['square', 0.5, 0.5]] as const) {
-        const s = p.osc(type, freqs[0] * mul, t, end);
-        freqs.forEach((f, i) => {
-          const ti = t + i * 0.25;
-          s.frequency.setValueAtTime((i === 0 ? f : freqs[i - 1]) * mul, ti);
-          s.frequency.linearRampToValueAtTime(f * mul, ti + 0.02);
-        });
-        vib.connect(s.detune);
-        const g = p.gain(lvl);
-        s.connect(g);
-        g.connect(sh);
-      }
-      sh.connect(lp);
-      lp.connect(e);
-      e.connect(o);
-    },
-  },
-  money: {
-    lvl: 0.6, wet: 0.04, gap: 0.05,
-    build(p, o, t) {
-      p.th(o, t, { type: 'square', f: 988, lp: 4000, a: 0.002, hold: 0.05, d: 0.02, peak: 0.13 });
-      p.th(o, t, { type: 'triangle', f: 988, a: 0.002, hold: 0.05, d: 0.02, peak: 0.15 });
-      p.th(o, t + 0.06, { type: 'square', f: 1319, lp: 4000, a: 0.002, d: 0.2, peak: 0.13 });
-      p.th(o, t + 0.06, { type: 'triangle', f: 1319, a: 0.002, d: 0.22, peak: 0.15 });
-    },
-  },
-  deploy: {
-    lvl: 0.5, wet: 0.1, gap: 0.1,
-    build(p, o, t, r) {
-      p.nh(o, t, { type: 'bandpass', f: 3500 * r, f2: 2000, sweep: 0.45, q: 0.8, a: 0.04, hold: 0.25, d: 0.2, peak: 0.3 });
-      p.th(o, t, { type: 'sawtooth', f: 90, f2: 70, glide: 0.4, lp: 400, a: 0.05, hold: 0.3, d: 0.1, peak: 0.15 });
-      const tc = t + 0.5;
-      p.th(o, tc, { f: 150 * r, f2: 55, glide: 0.1, d: 0.14, peak: 0.9 });
-      p.nh(o, tc, { type: 'bandpass', f: 1000, q: 3, d: 0.06, peak: 0.45 });
-      p.th(o, tc, { type: 'square', f: 280 * r, lp: 1400, d: 0.05, peak: 0.1 });
-    },
-  },
-  repair: {
-    lvl: 0.65, wet: 0.05, gap: 0.1,
-    build(p, o, t, r) {
-      const n = 7;
-      const times: number[] = [];
-      const pk: number[] = [];
-      const pk2: number[] = [];
-      for (let i = 0; i < n; i++) {
-        times.push(t + i * 0.045);
-        pk.push(i % 2 ? 0.5 : 0.8);
-        pk2.push(i % 2 ? 0.06 : 0.12);
-      }
-      const end = t + n * 0.045 + 0.1;
-      const src = p.noise('white', t, end);
-      const bp = p.filter('bandpass', 3600 * r, 4);
-      const g = p.gain(0);
-      spikes(g.gain, times, pk, 0.006);
-      src.connect(bp);
-      bp.connect(g);
-      g.connect(o);
-      const tri = p.osc('triangle', 2700 * r, t, end);
-      const g2 = p.gain(0);
-      spikes(g2.gain, times, pk2, 0.01);
-      tri.connect(g2);
-      g2.connect(o);
-      const tc = t + 0.34;
-      p.th(o, tc, { type: 'square', f: 600 * r, lp: 2000, d: 0.06, peak: 0.08 });
-      p.nh(o, tc, { type: 'bandpass', f: 2000, q: 5, d: 0.05, peak: 0.4 });
-    },
-  },
-};
-
-/** Radio blip + squelch played before announcer lines. */
-const radioBlip: Build = (p, o, t) => {
-  const hp = p.filter('highpass', 500, 0.7);
-  const lp = p.filter('lowpass', 3000, 0.7);
-  const sh = p.shaper(2.5);
-  hp.connect(sh);
-  sh.connect(lp);
-  lp.connect(o);
-  p.th(hp, t, { f: 1350, a: 0.002, hold: 0.035, d: 0.02, peak: 0.25 });
-  p.nh(hp, t + 0.06, { type: 'bandpass', f: 1800, q: 0.6, a: 0.005, d: 0.11, peak: 0.12 });
-};
+/** Which baked sound a combat Sfx plays. */
+function bakedFor(name: Sfx): BakedName | null {
+  return META[name].combat ? (name as BakedName) : null;
+}
 
 // ---------------------------------------------------------------------------
-// AudioSystem
+// Voices
 // ---------------------------------------------------------------------------
 
-interface VoiceRec {
+/** A pooled voice: persistent gain -> low-pass -> panner (+ reverb send) chain. */
+interface Voice extends VoiceInfo {
+  input: GainNode;
+  lp: BiquadFilterNode;
+  pan: StereoPannerNode | null;
+  wet: GainNode;
+  src: AudioBufferSourceNode | null;
+  patch: Patch | null;
+  busy: boolean;
+}
+
+interface UiVoice {
   patch: Patch;
   out: GainNode;
   level: number;
@@ -491,9 +175,12 @@ export interface MixGraph {
 
 interface Graph extends MixGraph {
   ctx: AudioContext;
+  voices: Voice[];
+  ambience: Ambience;
+  engines: EngineVoices;
 }
 
-/** Builds buses, reverb, compressor and the music engine on any (also offline) context. */
+/** Builds buses, reverbs, compressor and the music engine on any (also offline) context. */
 export function buildAudioGraph(ctx: BaseAudioContext, sfxVol: number, musicVol: number): MixGraph {
   const bank = new Bank(ctx);
 
@@ -508,12 +195,21 @@ export function buildAudioGraph(ctx: BaseAudioContext, sfxVol: number, musicVol:
   comp.connect(master);
   master.connect(ctx.destination);
 
+  // the music's hall
   const reverb = ctx.createConvolver();
   reverb.buffer = makeImpulse(ctx, 1.4);
   const revOut = ctx.createGain();
   revOut.gain.value = 0.55;
   reverb.connect(revOut);
   revOut.connect(comp);
+
+  // the battlefield: outdoor slap-back echoes and a terrain tail
+  const outdoor = ctx.createConvolver();
+  outdoor.buffer = makeOutdoorImpulse(ctx);
+  const outOut = ctx.createGain();
+  outOut.gain.value = 0.7;
+  outdoor.connect(outOut);
+  outOut.connect(comp);
 
   const sfxBus = ctx.createGain();
   const sfxGain = ctx.createGain();
@@ -524,7 +220,7 @@ export function buildAudioGraph(ctx: BaseAudioContext, sfxVol: number, musicVol:
   const sfxWetGain = ctx.createGain();
   sfxWetGain.gain.value = sfxVol;
   sfxWetBus.connect(sfxWetGain);
-  sfxWetGain.connect(reverb);
+  sfxWetGain.connect(outdoor);
 
   const musicGain = ctx.createGain();
   musicGain.gain.value = musicVol;
@@ -543,6 +239,29 @@ export function buildAudioGraph(ctx: BaseAudioContext, sfxVol: number, musicVol:
   return { bank, sfxBus, sfxGain, sfxWetBus, sfxWetGain, musicPlay, musicDuck, musicGain, master, music };
 }
 
+function makeVoice(ctx: BaseAudioContext, bus: AudioNode, wetBus: AudioNode): Voice {
+  const input = ctx.createGain();
+  input.gain.value = 0;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 20000;
+  lp.Q.value = 0.5;
+  input.connect(lp);
+  let tail: AudioNode = lp;
+  let pan: StereoPannerNode | null = null;
+  if (typeof ctx.createStereoPanner === 'function') {
+    pan = ctx.createStereoPanner();
+    lp.connect(pan);
+    tail = pan;
+  }
+  tail.connect(bus);
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+  tail.connect(wet);
+  wet.connect(wetBus);
+  return { input, lp, pan, wet, src: null, patch: null, busy: false, name: '', level: 0, weight: 1, start: 0, end: 0 };
+}
+
 /** announcer lines that tell the score something about the battle */
 const SAY_CUES: Record<string, { floor: number; hold: number; sting?: StingerKind }> = {
   'Our base is under attack': { floor: 0.55, hold: 12, sting: 'dread' },
@@ -556,8 +275,11 @@ export class AudioSystem {
   private g: Graph | null = null;
   private failed = false;
   private gestured = false;
-  private voices: VoiceRec[] = [];
+  private uiVoices: UiVoice[] = [];
+  private active: Voice[] = [];
   private lastPlay = new Map<Sfx, number>();
+  private lastVariant = new Map<string, number>();
+  private baked = new Map<BakedName, BakedSound>();
   private sfxVol = 0.8;
   private musicVol = 0.35;
   private voiceOn = true;
@@ -565,6 +287,18 @@ export class AudioSystem {
   private musicMode: MusicMode = 'battle';
   private heat = new CombatHeat();
   private intensityOverride: number | null = null;
+  private listener: Listener = defaultListener();
+  private hasListener = false;
+  private sp: Spatial = makeSpatial();
+  private spFlat: Spatial = makeSpatial();
+  private amb: AmbienceState = defaultAmbience();
+  private nation: RadioProfile = radioFor(null);
+  private ackSeed = 1;
+  private lastAck = -1;
+  private hiddenSuspend = false;
+  private lifecycleHooked = false;
+  /** Bake statistics (null while still baking). */
+  bakeStats: BakeStats | null = null;
 
   // speech
   private speechQueue: string[] = [];
@@ -572,6 +306,7 @@ export class AudioSystem {
   private lastSaid = new Map<string, number>();
   private voice: SpeechSynthesisVoice | null = null;
   private voicesHooked = false;
+  private radioBed: { patch: Patch; gain: GainNode } | null = null;
 
   constructor() {
     // Intentionally does nothing that touches browser globals.
@@ -588,13 +323,32 @@ export class AudioSystem {
     return g ? this.heat.update(g.ctx.currentTime) : this.heat.value;
   }
 
+  /** Number of combat voices playing now (debug / tests). */
+  get voiceCount(): number {
+    return this.active.length;
+  }
+
+  /** Snapshot for debugging / smoke tests (no effect on playback). */
+  debugState(): { state: string; voices: string[]; ui: number; baked: number; listener: Listener; ambience: AmbienceState; nation: RadioProfile } | null {
+    const g = this.g;
+    if (!g) return null;
+    return { state: g.ctx.state, voices: this.active.map((v) => v.name), ui: this.uiVoices.length, baked: this.baked.size, listener: { ...this.listener }, ambience: { ...this.amb }, nation: this.nation };
+  }
+
+  /** How many sounds are baked so far. */
+  get bakedCount(): number {
+    return this.baked.size;
+  }
+
   unlock(): void {
     if (typeof window === 'undefined') return;
     this.gestured = true;
     this.hookVoices();
+    this.hookLifecycle();
     if (!this.g && !this.failed) {
       try {
         this.g = this.createGraph();
+        if (this.g) this.startBake(this.g);
       } catch {
         this.failed = true;
         this.g = null;
@@ -602,7 +356,7 @@ export class AudioSystem {
     }
     const g = this.g;
     if (!g) return;
-    if (g.ctx.state !== 'running') {
+    if (g.ctx.state !== 'running' && !(this.hiddenSuspend && document.hidden)) {
       try {
         g.ctx
           .resume()
@@ -620,6 +374,51 @@ export class AudioSystem {
     const g = this.g;
     if (!g || g.ctx.state !== 'running') return;
     if (this.musicWanted && !g.music.running) this.musicOn(g);
+  }
+
+  /**
+   * Phones: suspend the context while the page is hidden (saves battery, and
+   * the music scheduler stops piling up), resume when it comes back; iOS can
+   * leave the context 'interrupted' after a call, so any later touch resumes it.
+   */
+  private hookLifecycle(): void {
+    if (this.lifecycleHooked || typeof document === 'undefined') return;
+    this.lifecycleHooked = true;
+    const resume = () => {
+      const g = this.g;
+      if (!g || document.hidden) return;
+      this.hiddenSuspend = false;
+      if (g.ctx.state !== 'running') {
+        try {
+          g.ctx
+            .resume()
+            .then(() => this.afterResume())
+            .catch(() => undefined);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', () => {
+      const g = this.g;
+      if (!g) return;
+      if (document.hidden) {
+        if (g.ctx.state === 'running') {
+          this.hiddenSuspend = true;
+          g.ctx.suspend().catch(() => undefined);
+        }
+      } else {
+        resume();
+      }
+    });
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', resume);
+    const onGesture = () => {
+      if (this.g && this.g.ctx.state !== 'running') resume();
+    };
+    window.addEventListener('pointerdown', onGesture, { capture: true, passive: true });
+    window.addEventListener('touchend', onGesture, { capture: true, passive: true });
+    window.addEventListener('keydown', onGesture, { capture: true, passive: true });
   }
 
   private createGraph(): Graph | null {
@@ -646,7 +445,28 @@ export class AudioSystem {
     mix.music.setMode(this.musicMode);
     mix.music.setIntensitySource(() => this.musicIntensity);
     ctx.onstatechange = () => this.afterResume();
-    return { ...mix, ctx };
+    const voices: Voice[] = [];
+    for (let i = 0; i < MAX_VOICES; i++) voices.push(makeVoice(ctx, mix.sfxBus, mix.sfxWetBus));
+    const ambience = new Ambience(ctx, mix.sfxBus);
+    const engines = new EngineVoices(ctx, mix.sfxBus, (n) => this.baked.get(n as BakedName)?.buffers[0] ?? null);
+    return { ...mix, ctx, voices, ambience, engines };
+  }
+
+  private startBake(g: Graph): void {
+    const beds: Partial<Record<BakedName, BedName>> = { windBed: 'wind', rainBed: 'rain', riverBed: 'river', cricketBed: 'crickets' };
+    void bakeAll(
+      g.ctx,
+      g.bank,
+      (name, s) => {
+        this.baked.set(name, s);
+        const bed = beds[name];
+        if (bed) g.ambience.setBuffer(bed, s.buffers[0]);
+        if (name === 'rainBed') g.ambience.setBuffer('grit', s.buffers[0]);
+      },
+      () => this.g === g && g.ctx.state !== 'closed',
+    ).then((st) => {
+      this.bakeStats = st;
+    });
   }
 
   setSfxVolume(v: number): void {
@@ -678,48 +498,284 @@ export class AudioSystem {
         }
       }
       this.speaking = false;
+      this.endRadioBed(false);
     }
   }
 
-  play(name: Sfx, volume = 1, pan = 0): void {
+  /** The local player's nation: picks the radio character of acknowledgements and announcer lines. */
+  setNation(nation: string | null): void {
+    this.nation = radioFor(nation);
+  }
+
+  // --- listener ---------------------------------------------------------------
+
+  /**
+   * The camera, once per frame: view centre on the ground (sim x / y), the
+   * screen-right unit vector on the ground, half the visible width / depth
+   * (world units) and the renderer zoom.
+   */
+  setListener(cx: number, cy: number, rx: number, ry: number, halfW: number, halfD: number, zoom: number): void {
+    const f = Number.isFinite;
+    if (!(f(cx) && f(cy) && f(rx) && f(ry) && f(halfW) && f(halfD) && f(zoom))) return;
+    const l = this.listener;
+    l.cx = cx;
+    l.cy = cy;
+    const n = Math.hypot(rx, ry) || 1;
+    l.rx = rx / n;
+    l.ry = ry / n;
+    l.halfW = Math.max(0.5, halfW);
+    l.halfD = Math.max(0.5, halfD);
+    l.zoom = zoom;
+    this.hasListener = true;
+    this.amb.zoom = zoom;
+  }
+
+  /** Spatial parameters a sound at (x, y, z) would get now (also for the scene's own use). */
+  spatial(x: number, y: number, z = 0): Spatial {
+    return spatialize(this.listener, x, y, z, this.sp);
+  }
+
+  // --- effects ------------------------------------------------------------------
+
+  /**
+   * Play an effect. `where` is either a world position (positional: pan,
+   * distance, muffling, delay) or, as before, a plain stereo pan -1..1.
+   * `panTo` sweeps the pan over the sound (flybys).
+   */
+  play(name: Sfx, volume = 1, where?: number | SoundPos, panTo?: number): void {
     const g = this.g;
     if (!g || g.ctx.state !== 'running') return;
-    const def = SFX[name];
-    if (!def) return;
+    const meta = META[name];
+    if (!meta) return;
     const vol = clamp(Number.isFinite(volume) ? volume : 0, 0, 1);
     const now = g.ctx.currentTime;
-    // the score listens to the battle even when effects are muted
-    this.feedMusic(g, name, vol, now);
-    const level = vol * def.lvl;
-    if (level < 0.005 || this.sfxVol <= 0) return;
-    const last = this.lastPlay.get(name);
-    if (last !== undefined && now - last < def.gap && now >= last) return;
-
-    this.reap(now);
-    if (this.voices.length >= MAX_VOICES) {
-      let victim = -1;
-      let best = Infinity;
-      for (let i = 0; i < this.voices.length; i++) {
-        const v = this.voices[i];
-        const life = Math.max(0.001, v.end - v.start);
-        const remaining = clamp((v.end - now) / life, 0, 1);
-        const score = v.level * (0.25 + remaining);
-        if (score < best) {
-          best = score;
-          victim = i;
-        }
-      }
-      // A newcomer quieter than everything already playing is dropped instead.
-      if (victim < 0 || level * 1.25 < best) return;
-      this.steal(victim, now);
+    let sp: Spatial;
+    if (where !== undefined && typeof where === 'object' && this.hasListener && Number.isFinite(where.x) && Number.isFinite(where.y)) {
+      sp = spatialize(this.listener, where.x, where.y, where.z ?? 0, this.sp);
+    } else {
+      sp = this.spFlat;
+      sp.gain = 1;
+      sp.pan = typeof where === 'number' && Number.isFinite(where) ? clamp(where, -1, 1) : 0;
+      sp.lp = 20000;
+      sp.delay = 0;
+      sp.wet = 0;
+      sp.off = 0;
+      sp.heat = 1;
     }
-    this.lastPlay.set(name, now);
-    this.spawn(g, def.build, level, Number.isFinite(pan) ? pan : 0, def.wet);
+    // the score listens to the battle even when effects are muted
+    if (name !== 'thunder') this.feedMusic(g, name, vol * sp.heat, now);
+    if (this.sfxVol <= 0) return;
+    if (!meta.combat) {
+      this.playUi(g, name, vol, sp.pan);
+      return;
+    }
+    const level = vol * meta.lvl * sp.gain;
+    if (level < 0.004) return;
+    const last = this.lastPlay.get(name);
+    if (last !== undefined && now - last < meta.gap && now >= last) return;
+    if (this.startVoice(g, name, meta, level, sp, panTo)) this.lastPlay.set(name, now);
   }
 
-  private spawn(g: Graph, build: Build, level: number, pan: number, wet: number): void {
+  /** Thunder (atmos.onThunder): non-positional, distant ones darker and quieter. */
+  thunder(v: number): void {
+    const g = this.g;
+    if (!g || g.ctx.state !== 'running' || this.sfxVol <= 0) return;
+    const vol = clamp(Number.isFinite(v) ? v : 0, 0, 1);
+    const sp = this.spFlat;
+    sp.gain = 1;
+    sp.pan = (Math.random() - 0.5) * 1.1;
+    sp.lp = 260 + 6000 * vol * vol;
+    sp.delay = 0;
+    sp.wet = 0.3 * (1 - vol);
+    sp.off = 0;
+    sp.heat = 0;
+    this.startVoice(g, 'thunder', META.thunder, vol * META.thunder.lvl, sp);
+  }
+
+  private startVoice(g: Graph, name: Sfx, meta: Meta, level: number, sp: Spatial, panTo?: number): boolean {
     const ctx = g.ctx;
-    const t = ctx.currentTime + 0.005;
+    const now = ctx.currentTime;
+    this.reap(now);
+    const bn = bakedFor(name);
+    const baked = bn ? this.baked.get(bn) : undefined;
+    const rate = 1 + (Math.random() - 0.5) * meta.jitter;
+    const t0 = now + 0.005 + sp.delay;
+    const estDur = baked ? baked.dur / rate : 1.5;
+    const info: VoiceInfo = { name, level, weight: meta.weight, start: t0, end: t0 + estDur };
+    const slot = chooseSlot(this.active, MAX_VOICES, info, meta.cap, now);
+    if (slot === -2) return false;
+    let t = t0;
+    if (slot >= 0) {
+      this.steal(this.active[slot], now);
+      t = Math.max(t, now + 0.03);
+    }
+    const v = g.voices.find((x) => !x.busy);
+    if (!v) return false;
+    v.busy = true;
+    v.name = name;
+    v.level = level;
+    v.weight = meta.weight;
+    v.start = t;
+    // parameters for this sound from its start time (a stolen voice finishes its fade-out first)
+    const ig = v.input.gain;
+    ig.cancelScheduledValues(t);
+    ig.setValueAtTime(level * (0.9 + 0.2 * Math.random()), t);
+    v.lp.frequency.cancelScheduledValues(t);
+    v.lp.frequency.setValueAtTime(sp.lp, t);
+    if (v.pan) {
+      v.pan.pan.cancelScheduledValues(t);
+      v.pan.pan.setValueAtTime(clamp(sp.pan, -1, 1), t);
+    }
+    v.wet.gain.cancelScheduledValues(t);
+    v.wet.gain.setValueAtTime(clamp(meta.wet + sp.wet * 0.5, 0, 1), t);
+    if (baked) {
+      const buffers = baked.buffers;
+      let k = Math.floor(Math.random() * buffers.length);
+      if (buffers.length > 1 && k === this.lastVariant.get(name)) k = (k + 1) % buffers.length;
+      this.lastVariant.set(name, k);
+      const buf = buffers[k];
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      src.connect(v.input);
+      src.start(t);
+      v.src = src;
+      v.end = t + buf.duration / rate;
+      src.onended = () => this.release(v, src);
+    } else {
+      const p = new Patch(ctx, g.bank);
+      const out = p.gain(1);
+      out.connect(v.input);
+      LIVE[meta.live].build(p, out, t, rate);
+      v.patch = p;
+      v.end = p.end;
+      p.onDone = () => this.release(v, null, p);
+      p.finish();
+    }
+    if (panTo !== undefined && v.pan && Number.isFinite(panTo)) v.pan.pan.linearRampToValueAtTime(clamp(panTo, -1, 1), v.end);
+    this.active.push(v);
+    return true;
+  }
+
+  private release(v: Voice, src: AudioBufferSourceNode | null, patch?: Patch): void {
+    if (src) {
+      try {
+        src.disconnect();
+      } catch {
+        /* ignore */
+      }
+      if (v.src !== src) return;
+      v.src = null;
+    } else if (patch) {
+      if (v.patch !== patch) return;
+      v.patch = null;
+    }
+    v.busy = false;
+    const i = this.active.indexOf(v);
+    if (i >= 0) this.active.splice(i, 1);
+  }
+
+  /** Fade a voice out quickly and free it for the newcomer. */
+  private steal(v: Voice, now: number): void {
+    const gp = v.input.gain;
+    try {
+      gp.cancelScheduledValues(now);
+      gp.setValueAtTime(gp.value, now);
+      gp.linearRampToValueAtTime(0, now + 0.02);
+    } catch {
+      /* ignore */
+    }
+    if (v.src) {
+      const src = v.src;
+      src.onended = () => {
+        try {
+          src.disconnect();
+        } catch {
+          /* ignore */
+        }
+      };
+      try {
+        src.stop(now + 0.025);
+      } catch {
+        /* ignore */
+      }
+      v.src = null;
+    }
+    if (v.patch) {
+      const p = v.patch;
+      p.onDone = null;
+      p.kill(now + 0.025);
+      setTimeout(() => p.dispose(), 200);
+      v.patch = null;
+    }
+    v.busy = false;
+    const i = this.active.indexOf(v);
+    if (i >= 0) this.active.splice(i, 1);
+  }
+
+  /** Drop bookkeeping for voices whose onended never fired (context suspended, etc.). */
+  private reap(now: number): void {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      const v = this.active[i];
+      if (v.end < now - 0.5) this.steal(v, now);
+    }
+    for (let i = this.uiVoices.length - 1; i >= 0; i--) {
+      const v = this.uiVoices[i];
+      if (v.end < now - 0.5) {
+        this.uiVoices.splice(i, 1);
+        v.patch.onDone = null;
+        v.patch.dispose();
+      }
+    }
+  }
+
+  // --- UI / radio (live patches) ---------------------------------------------------
+
+  private playUi(g: Graph, name: Sfx, vol: number, pan: number): void {
+    const now = g.ctx.currentTime;
+    const meta = META[name];
+    if (name === 'ack' && this.voiceOn && this.gestured) {
+      // unit acknowledgement over the nation's radio; rapid orders get just the squelch
+      const rp = this.nation;
+      const seed = this.ackSeed++ * 2654435761;
+      if (now - this.lastAck > 0.9) {
+        this.lastAck = now;
+        this.spawnUi(g, (p, o, t) => void radioAck(p, o, t, rp, seed), 0.75 * vol, 0, 0.04);
+      } else {
+        this.spawnUi(g, (p, o, t) => radioOpen(p, o, t, rp), 0.5 * vol, 0, 0.02);
+      }
+      return;
+    }
+    const level = vol * meta.lvl;
+    if (level < 0.005) return;
+    const last = this.lastPlay.get(name);
+    if (last !== undefined && now - last < meta.gap && now >= last) return;
+    this.lastPlay.set(name, now);
+    this.spawnUi(g, LIVE[meta.live].build, level, pan, meta.wet);
+  }
+
+  private spawnUi(g: Graph, build: Build, level: number, pan: number, wet: number): void {
+    const ctx = g.ctx;
+    const now = ctx.currentTime;
+    this.reap(now);
+    if (this.uiVoices.length >= MAX_UI) {
+      // the oldest UI sound gives way
+      const v = this.uiVoices.shift();
+      if (v) {
+        v.patch.onDone = null;
+        try {
+          v.out.gain.cancelScheduledValues(now);
+          v.out.gain.setValueAtTime(v.out.gain.value, now);
+          v.out.gain.linearRampToValueAtTime(0, now + 0.03);
+        } catch {
+          /* ignore */
+        }
+        v.patch.kill(now + 0.04);
+        const p = v.patch;
+        setTimeout(() => p.dispose(), 200);
+      }
+    }
+    const t = now + 0.005;
     const p = new Patch(ctx, g.bank);
     const out = p.gain(level);
     let tail: AudioNode = out;
@@ -736,41 +792,52 @@ export class AudioSystem {
       w.connect(g.sfxWetBus);
     }
     build(p, out, t, 1 + (Math.random() - 0.5) * 0.08);
-    const rec: VoiceRec = { patch: p, out, level, start: t, end: p.end };
+    const rec: UiVoice = { patch: p, out, level, start: t, end: p.end };
     p.onDone = () => {
-      const i = this.voices.indexOf(rec);
-      if (i >= 0) this.voices.splice(i, 1);
+      const i = this.uiVoices.indexOf(rec);
+      if (i >= 0) this.uiVoices.splice(i, 1);
     };
-    this.voices.push(rec);
+    this.uiVoices.push(rec);
     p.finish();
   }
 
-  /** Drop bookkeeping for voices whose onended never fired. */
-  private reap(now: number): void {
-    for (let i = this.voices.length - 1; i >= 0; i--) {
-      const v = this.voices[i];
-      if (v.end < now - 0.5) {
-        this.voices.splice(i, 1);
-        v.patch.onDone = null;
-        v.patch.dispose();
-      }
+  // --- aircraft engines and ambience ------------------------------------------------
+
+  /**
+   * Continuous engine of an aircraft in engine slot `slot` (0..3): `kind` null
+   * (or vol 0) silences the slot. `rate` is the doppler factor.
+   */
+  setEngine(slot: number, id: number, kind: EngineKind | null, x: number, y: number, z: number, vol: number, rate: number): void {
+    const g = this.g;
+    if (!g || g.ctx.state !== 'running' || slot < 0 || slot >= ENGINE_SLOTS) return;
+    const now = g.ctx.currentTime;
+    if (!kind || !(vol > 0)) {
+      g.engines.set(slot, -1, null, 0, 0, 0, 1, now);
+      return;
     }
+    const sp = spatialize(this.listener, x, y, z, this.sp);
+    g.engines.set(slot, id, kind, vol * sp.gain, sp.pan, sp.lp, rate, now);
   }
 
-  private steal(i: number, now: number): void {
-    const v = this.voices[i];
-    this.voices.splice(i, 1);
-    v.patch.onDone = null;
-    const gp = v.out.gain;
-    try {
-      gp.cancelScheduledValues(now);
-      gp.setValueAtTime(gp.value, now);
-      gp.linearRampToValueAtTime(0, now + 0.03);
-    } catch {
-      /* ignore */
-    }
-    v.patch.kill(now + 0.04);
+  /** Ambience state from the battle (weather, night, river), a few times per second. */
+  setAmbience(s: Partial<AmbienceState>): void {
+    Object.assign(this.amb, s);
+    const g = this.g;
+    if (!g || g.ctx.state !== 'running') return;
+    g.ambience.update(this.amb, g.ctx.currentTime);
   }
+
+  /** Battle over / back to the menu: ambience and engines fade out. */
+  quietScene(): void {
+    this.amb.on = false;
+    const g = this.g;
+    if (!g) return;
+    const now = g.ctx.currentTime;
+    g.ambience.silence(now);
+    g.engines.silence(now);
+  }
+
+  // --- music heat -------------------------------------------------------------------
 
   /** Combat intensity + stingers from the effects that are being played. */
   private feedMusic(g: Graph, name: Sfx, vol: number, now: number): void {
@@ -780,7 +847,7 @@ export class AudioSystem {
     if (!g.music.running) return;
     // a ballistic / hypersonic launch on screen reaches volume 1, SAMs stay at 0.75
     if ((name === 'missileLaunch' && vol >= 0.85) || (name === 'explosionLarge' && vol >= 0.92)) g.music.stinger('heavy');
-    else if (name === 'buildingCollapse' && vol >= 0.3) g.music.stinger('dread');
+    else if ((name === 'buildingCollapse' || name === 'bridgeCollapse') && vol >= 0.3) g.music.stinger('dread');
   }
 
   private cueMusic(text: string): void {
@@ -873,7 +940,13 @@ export class AudioSystem {
       for (const [k, v] of this.lastSaid) if (now - v > 4000) this.lastSaid.delete(k);
     }
     if (!this.synth()) {
-      this.blip();
+      // no speech engine: a non-verbal radio transmission instead
+      const g = this.g;
+      if (g && g.ctx.state === 'running' && this.sfxVol > 0) {
+        const rp = this.nation;
+        const seed = this.ackSeed++ * 2246822519;
+        this.spawnUi(g, (p, o, t) => void radioAck(p, o, t, rp, seed), 0.6, 0, 0.04);
+      }
       return;
     }
     if (this.speechQueue.includes(text)) return;
@@ -882,10 +955,44 @@ export class AudioSystem {
     if (!this.speaking) this.speakNext();
   }
 
-  private blip(): void {
+  /**
+   * Speech can't be routed through Web Audio, so the radio "wraps" it: the
+   * squelch opens with the nation's click, static and hum sit under the line,
+   * and a roger beep + squelch tail close it.
+   */
+  private startRadioBed(maxDur: number): void {
     const g = this.g;
     if (!g || g.ctx.state !== 'running' || this.sfxVol <= 0) return;
-    this.spawn(g, radioBlip, 0.55, 0, 0.05);
+    this.endRadioBed(false);
+    const rp = this.nation;
+    const t = g.ctx.currentTime + 0.005;
+    const p = new Patch(g.ctx, g.bank);
+    const out = p.gain(0.55);
+    out.connect(g.sfxBus);
+    radioOpen(p, out, t, rp);
+    const gain = radioStatic(p, out, t + 0.04, maxDur, rp);
+    p.finish();
+    this.radioBed = { patch: p, gain };
+  }
+
+  private endRadioBed(beep: boolean): void {
+    const bed = this.radioBed;
+    this.radioBed = null;
+    const g = this.g;
+    if (!bed || !g) return;
+    const now = g.ctx.currentTime;
+    try {
+      bed.gain.gain.cancelScheduledValues(now);
+      bed.gain.gain.setValueAtTime(bed.gain.gain.value, now);
+      bed.gain.gain.linearRampToValueAtTime(0, now + 0.06);
+    } catch {
+      /* ignore */
+    }
+    bed.patch.kill(now + 0.08);
+    if (beep && g.ctx.state === 'running' && this.sfxVol > 0) {
+      const rp = this.nation;
+      this.spawnUi(g, (p, o, t) => radioClose(p, o, t, rp), 0.55, 0, 0.03);
+    }
   }
 
   private speakNext(): void {
@@ -898,7 +1005,8 @@ export class AudioSystem {
     }
     this.speaking = true;
     this.duck(true);
-    this.blip();
+    const maxMs = 2500 + text.length * 110;
+    this.startRadioBed(maxMs / 1000 + 0.5);
     let done = false;
     let watchdog = 0;
     const finish = (stuck: boolean) => {
@@ -912,11 +1020,12 @@ export class AudioSystem {
           /* ignore */
         }
       }
+      this.endRadioBed(true);
       this.speaking = false;
       window.setTimeout(() => {
         if (!this.speaking) this.speakNext();
         if (!this.speaking) this.duck(false);
-      }, 60);
+      }, 260);
     };
     try {
       const u = new SpeechSynthesisUtterance(text);
@@ -928,7 +1037,7 @@ export class AudioSystem {
       u.volume = clamp(this.sfxVol * 1.25, 0, 1);
       u.onend = () => finish(false);
       u.onerror = () => finish(false);
-      watchdog = window.setTimeout(() => finish(true), 2500 + text.length * 110);
+      watchdog = window.setTimeout(() => finish(true), maxMs);
       window.setTimeout(() => {
         if (done) return;
         try {
@@ -987,6 +1096,7 @@ export class AudioSystem {
     if (mode === 'battle' && this.musicMode !== 'battle') this.heat.reset(this.g ? this.g.ctx.currentTime : undefined);
     this.musicMode = mode;
     if (this.g) this.g.music.setMode(mode);
+    if (mode === 'menu') this.quietScene();
   }
 
   /**

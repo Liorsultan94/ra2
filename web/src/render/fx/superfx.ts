@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+
+/** Extra muzzle height range for garrisons in tall city buildings. */
+const CITY_TALL: Record<string, number> = { civ_apartment: 1.4, civ_office: 1.9, civ_block: 1.1, civ_townhouse: 0.55, civ_shop: 0.3 };
 import { DEFS, buildingDef } from '../../sim/defs';
 import { standHeight } from '../../sim/map';
 import { IRON_BEAM_RADIUS, SW_INFO, type SwKind } from '../../sim/specialdefs';
@@ -135,7 +138,9 @@ export class SuperFx {
     const px = house.x + nx * k - ny * side;
     const pz = house.y + ny * k + nx * side;
     const g = standHeight(w.map, house.x, house.y);
-    const pos = new THREE.Vector3(px, g + 0.32 + (Math.random() < 0.3 ? 0.25 : 0), pz);
+    // city blocks: any floor of the building (models/citybldgs.ts heights)
+    const tall = CITY_TALL[house.def] ?? 0;
+    const pos = new THREE.Vector3(px, g + 0.32 + (tall ? Math.random() * tall : Math.random() < 0.3 ? 0.25 : 0), pz);
     const dir = new THREE.Vector3(nx, 0, ny);
     fx.muzzle(pos, dir, 0.45);
     const t = w.get(targetId);

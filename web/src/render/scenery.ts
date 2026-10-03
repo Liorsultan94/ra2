@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { BRIDGE_HEIGHT, StructureKind, Tile, type GameMap, type Structure } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
-import { GeoBuilder, chunkedInstances, type Inst } from './geo';
+import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { FieldType, type Layout } from './layout';
 import { buildingTextures, roadTexture } from './terraintex';
+import { biomeLook } from './biome';
+import { buildCity, isCityKind } from './models/citybldgs';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -66,22 +68,51 @@ export interface SceneryHandles {
   rails: THREE.InstancedMesh[];
 }
 
-export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: SceneryHandles): THREE.Object3D[] {
+export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: SceneryHandles, lod?: SceneryLod): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
   const shadows = quality !== 'low';
   const tex = buildingTextures(quality === 'low' ? 128 : 256);
 
   // ------------------------------------------------------------- roads
   const roadTex = roadTexture(quality === 'high' ? 256 : 128);
-  const roadMat = fog.apply(
-    new THREE.MeshStandardMaterial({ map: roadTex, alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
-  );
+  const look = biomeLook(m);
+  const bc = look.code;
+  const roadBase = new THREE.MeshStandardMaterial({ map: roadTex, alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  if (bc === 1 || bc === 2) {
+    // desert: drifting sand over sun-bleached asphalt; winter: compacted snow with dark tyre ruts
+    roadBase.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        {
+          float uL = fract( vMapUv.x * 2.0 );
+          vec3 rwp = vFogP;
+          float rn = texture2D( fogNoise, rwp.xz * 0.21 ).r * 0.6 + texture2D( fogNoise, rwp.xz * 0.9 ).g * 0.4;
+          float edgeK = 1.0 - smoothstep( 0.08, 0.3, min( uL, 1.0 - uL ) );
+          #if ROAD_BIOME == 1
+            diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 1.25, 1.12, 0.95 ), 0.6 );
+            float sandK = smoothstep( 0.5, 0.75, rn + edgeK * 0.45 );
+            diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.66, 0.53, 0.36 ) * ( 0.88 + rn * 0.2 ), sandK * 0.9 );
+          #else
+            float rut = exp( -pow( ( abs( uL - 0.5 ) - 0.26 ) / 0.07, 2.0 ) );
+            float snowK = clamp( 0.38 + edgeK * 0.8 - rut * ( 0.6 + rn * 0.3 ) + ( rn - 0.5 ) * 0.45, 0.0, 1.0 );
+            vec3 slush = diffuseColor.rgb * vec3( 0.62, 0.65, 0.7 );
+            diffuseColor.rgb = mix( slush, vec3( 0.78, 0.82, 0.88 ) * ( 0.92 + rn * 0.12 ), snowK );
+          #endif
+        }`,
+      );
+    };
+    roadBase.defines = { ...roadBase.defines, ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
+  }
+  const roadMat = fog.apply(roadBase);
+  if (bc === 1 || bc === 2) roadMat.customProgramCacheKey = () => 'fog2-road-b' + bc;
   const rb = new GeoBuilder();
   const bridgeEnds = m.bridges.flatMap((br) => {
     const h = br.length / 2;
     return [V(br.x - h * Math.SQRT1_2, 0, br.y + h * Math.SQRT1_2), V(br.x + h * Math.SQRT1_2, 0, br.y - h * Math.SQRT1_2)];
   });
   for (const r of layout.roads) {
+    if (r.painted) continue; // city streets: drawn by the ground shader
     const n = r.pts.length;
     const across = [-1, -0.5, 0, 0.5, 1];
     const u0 = r.variant === 0 ? 0.005 : 0.505;
@@ -128,11 +159,13 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const trim = new GeoBuilder();
   const wood = new GeoBuilder();
   const metal = new GeoBuilder();
-  const wallColors = [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
-  const roofColors = [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
+  // desert: sun-baked plaster and mudbrick; winter: painted log houses (falu red, ochre, tar brown) with dark roofs
+  const wallColors = bc === 1 ? [0xd8b98c, 0xe2c9a0, 0xc9a378, 0xe8d6b4, 0xcfae84, 0xbf9a70] : bc === 2 ? [0x8a2e22, 0x9a3a28, 0xb08840, 0x5a3e2a, 0x6a7a84, 0x7a2a22] : [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
+  const roofColors = bc === 2 ? [0x3a3a3c, 0x2e3a30, 0x4a3a30, 0x34383e] : [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
   const builders = [walls, roofs, trim, wood, metal];
   const spans: { st: Structure; from: number[]; to: number[] }[] = [];
   for (const st of m.structures) {
+    if (isCityKind(st.kind)) continue; // city blocks: models/citybldgs.ts
     const from = builders.map((b) => b.count);
     buildStructure(st);
     spans.push({ st, from, to: builders.map((b) => b.count) });
@@ -211,9 +244,83 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       }
     };
 
+    /** Desert flat-roofed house: plaster box, parapet, deep small windows, roof clutter. */
+    const flatHouse = (lx: number, dz: number, hw: number, ox: number, oz: number, door: boolean) => {
+      const w0 = walls.count;
+      boxAt(walls, lx, hw, dz, L(trs(ox, hw / 2, oz)), wallC);
+      const pt = 0.05;
+      const ph = 0.08;
+      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz + dz / 2 - pt / 2)), wallC);
+      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz - dz / 2 + pt / 2)), wallC);
+      boxAt(walls, pt, ph, dz, L(trs(ox + lx / 2 - pt / 2, hw + ph / 2, oz)), wallC);
+      boxAt(walls, pt, ph, dz, L(trs(ox - lx / 2 + pt / 2, hw + ph / 2, oz)), wallC);
+      boxUV(walls, w0, 1.1);
+      boxAt(trim, lx - 0.1, 0.012, dz - 0.1, L(trs(ox, hw + 0.006, oz)), wallC.clone().multiplyScalar(0.72));
+      const nx = Math.max(1, Math.floor(lx / 0.38));
+      const floors = hw > 0.55 ? 2 : 1;
+      for (let f = 0; f < floors; f++) {
+        const wy = floors === 1 ? hw * 0.6 : hw * (0.3 + f * 0.42);
+        for (let i = 0; i < nx; i++) {
+          const x = ox - lx / 2 + (lx / nx) * (i + 0.5);
+          for (const sz of [-1, 1]) {
+            if (door && sz > 0 && f === 0 && i === Math.floor(nx / 2)) continue;
+            const z = oz + sz * (dz / 2 + 0.004);
+            boxAt(trim, 0.1, 0.13, 0.02, L(trs(x, wy, z)), new THREE.Color(0.08, 0.07, 0.06));
+            if (h(20 + i + f) < 0.45) boxAt(wood, 0.12, 0.03, 0.03, L(trs(x, wy + 0.08, z + sz * 0.01)), new THREE.Color(0.36, 0.26, 0.17));
+          }
+        }
+      }
+      if (door) {
+        boxAt(wood, 0.13, 0.25, 0.03, L(trs(ox, 0.125, oz + dz / 2 + 0.01)), [new THREE.Color(0.24, 0.36, 0.5), new THREE.Color(0.42, 0.28, 0.16), new THREE.Color(0.2, 0.42, 0.36)][Math.floor(h(7) * 3)]);
+        // striped cloth awning over the door
+        const aw = [new THREE.Color(0.7, 0.22, 0.16), new THREE.Color(0.2, 0.36, 0.58), new THREE.Color(0.75, 0.62, 0.3)][Math.floor(h(8) * 3)];
+        if (h(9) < 0.6) boxAt(wood, 0.34, 0.015, 0.14, L(trs(ox, 0.31, oz + dz / 2 + 0.07).multiply(new THREE.Matrix4().makeRotationX(0.25))), aw);
+      }
+      // roof clutter: water tank, satellite dish, a stair head
+      if (h(10) < 0.75) {
+        metal.add(new THREE.CylinderGeometry(0.07, 0.07, 0.14, 10).toNonIndexed(), L(trs(ox + lx * 0.25, hw + 0.09, oz - dz * 0.2)), null, h(11) < 0.5 ? new THREE.Color(0.85, 0.85, 0.82) : new THREE.Color(0.12, 0.12, 0.13));
+      }
+      if (h(12) < 0.5) metal.add(new THREE.CylinderGeometry(0.06, 0.02, 0.025, 10).toNonIndexed(), L(trs(ox - lx * 0.3, hw + 0.08, oz + dz * 0.25, 0, 0.6)), null, new THREE.Color(0.86, 0.86, 0.84));
+      if (h(13) < 0.4) boxAt(walls, 0.2, 0.16, 0.2, L(trs(ox - lx * 0.28, hw + 0.08, oz - dz * 0.22)), wallC.clone().multiplyScalar(0.95));
+    };
+
+    if (bc === 1 && (st.kind === StructureKind.House || st.kind === StructureKind.Cottage || st.kind === StructureKind.MudHouse)) {
+      // desert village house: two storeys or one, flat roof
+      const tall = st.kind !== StructureKind.Cottage && h(14) < 0.6;
+      flatHouse(1.35, 1.1, tall ? 0.66 : 0.42, 0, 0, true);
+      if (h(15) < 0.5) flatHouse(0.55, 0.62, 0.28, -0.42, -0.1, false);
+      return;
+    }
+    if (st.kind === StructureKind.Courtyard) {
+      // courtyard house: rooms along the back and one side, a walled yard with a gate in front
+      flatHouse(2.4, 0.62, 0.5, 0, -0.42, false);
+      flatHouse(0.62, 0.75, 0.4, 0.88, 0.3, true);
+      const w0 = walls.count;
+      boxAt(walls, 1.75, 0.22, 0.06, L(trs(-0.32, 0.11, 0.72)), wallC.clone().multiplyScalar(0.94));
+      boxAt(walls, 0.06, 0.22, 0.8, L(trs(-1.17, 0.11, 0.33)), wallC.clone().multiplyScalar(0.94));
+      boxUV(walls, w0, 1.1);
+      boxAt(wood, 0.24, 0.2, 0.03, L(trs(-0.2, 0.1, 0.75)), new THREE.Color(0.3, 0.22, 0.14));
+      boxAt(trim, 1.7, 0.01, 0.75, L(trs(-0.28, 0.005, 0.32)), new THREE.Color(0.62, 0.52, 0.4));
+      return;
+    }
+
     switch (st.kind) {
       case StructureKind.House:
       case StructureKind.Cottage: {
+        if (bc === 2) {
+          // winter: painted log house, steep dark roof (the snow lies on it), white window frames
+          const big = st.kind === StructureKind.House;
+          const lx = big ? 1.45 : 1.2;
+          const dz = big ? 1.05 : 0.9;
+          const hw = big ? 0.6 : 0.42;
+          const rise = house(lx, dz, hw, (big ? 0.68 : 0.8) + 0.12, wood, wallC, roofC, 1.6);
+          windows(lx, dz, hw, big ? 2 : 1, true);
+          boxAt(walls, 0.13, 0.32, 0.13, L(trs((h(4) - 0.5) * lx * 0.6, hw + rise * 0.75, -dz * 0.18)), new THREE.Color(0.55, 0.53, 0.5));
+          // corner posts
+          for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) boxAt(wood, 0.05, hw, 0.05, L(trs((sx * lx) / 2, hw / 2, (sz * dz) / 2)), wallC.clone().multiplyScalar(0.7));
+          if (h(5) < 0.6) house(0.5, 0.62, 0.3, 0.55, wood, new THREE.Color(0.38, 0.3, 0.24), roofC.clone().multiplyScalar(0.85), 1.5);
+          break;
+        }
         const big = st.kind === StructureKind.House;
         const lx = big ? 1.45 : 1.2;
         const dz = big ? 1.05 : 0.9;
@@ -329,6 +436,9 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       });
       sink.houses.push({ st, cx, cz, gy, ranges });
     }
+
+  // city blocks, street lamps, fountains and ruins (urban maps)
+  out.push(...buildCity(m, fog, quality, sink, lod));
 
   // ------------------------------------------------------------- fences
   const posts: Inst[] = [];

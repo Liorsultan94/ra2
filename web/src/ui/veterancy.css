@@ -9,7 +9,8 @@
   pointer-events: none;
 }
 .portrait.vet-elite {
-  box-shadow: inset 0 0 0 1px rgba(255, 210, 90, 0.55), inset 0 0 18px rgba(255, 190, 60, 0.28);
+  border-color: rgba(255, 210, 90, 0.6);
+  box-shadow: inset 0 0 16px rgba(255, 190, 60, 0.2);
 }
 .vet-badge svg {
   width: 100%;
@@ -24,11 +25,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 2px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  margin-top: 3px;
+  font-family: var(--font-d, sans-serif);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #8fa3b0;
+  color: var(--muted, #a3adb7);
 }
 .vet-line .vet-badge {
   width: 11px;
@@ -37,7 +40,6 @@
 .vet-line.vet-r1 .vet-name,
 .vet-line.vet-r2 .vet-name {
   color: #ffd45a;
-  text-shadow: 0 0 6px rgba(255, 190, 60, 0.45);
 }
 .vet-line.vet-r2 .vet-name {
   animation: vet-glint 2.4s ease-in-out infinite;
@@ -45,16 +47,18 @@
 .vet-xp {
   position: relative;
   width: 64px;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 212, 90, 0.25);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
 }
 .vet-xp i {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  background: linear-gradient(90deg, #a8761c, #ffd45a);
+  border-radius: 2px;
+  background: #ffd45a;
 }
 @keyframes vet-glint {
   0%,

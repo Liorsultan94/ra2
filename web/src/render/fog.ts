@@ -65,6 +65,11 @@ uniform vec3 fogView;
 uniform vec3 hazeColor;
 uniform vec4 hazeParams;
 uniform float cloudAmount;
+// physical sky horizon (sky.ts): rgb towards / away from the sun, skyHorA.a = how much the far
+// outskirts melt into it (free cameras that see the horizon; 0 = the classic dark surround)
+uniform vec4 skyHorA;
+uniform vec4 skyHorB;
+uniform vec2 skySunXZ;
 ${MIST_GLSL}
 
 // 0 = unexplored, 0.5 = explored, 1 = visible; edges are wobbled by noise
@@ -92,7 +97,12 @@ vec3 fogShade( vec3 col, vec3 p ) {
   col = mix( col, hazeColor, haze );
   // low ground fog / valley mist (wxuniforms.ts; zero = skipped)
   col = mistShade( col, p );
-  col *= 1.0 - smoothstep( hazeParams.w * 0.6, hazeParams.w * 1.6, outside ) * 0.55;
+  col *= 1.0 - smoothstep( hazeParams.w * 0.6, hazeParams.w * 1.6, outside ) * 0.55 * ( 1.0 - skyHorA.a );
+  if ( skyHorA.a > 0.0 ) {
+    vec2 vd = normalize( p.xz - cameraPosition.xz + 1e-4 );
+    vec3 hz = mix( skyHorB.rgb, skyHorA.rgb, dot( vd, skySunXZ ) * 0.5 + 0.5 );
+    col = mix( col, hz, skyHorA.a * smoothstep( 4.0, hazeParams.w * 1.5, outside ) * 0.92 );
+  }
   if ( fogEnabled > 0.5 ) {
     float v = fogSample( p );
     float vis = smoothstep( 0.56, 0.92, v );
@@ -137,6 +147,9 @@ export class FogOfWar {
     hazeColor: { value: THREE.Color };
     hazeParams: { value: THREE.Vector4 };
     cloudAmount: { value: number };
+    skyHorA: { value: THREE.Vector4 };
+    skyHorB: { value: THREE.Vector4 };
+    skySunXZ: { value: THREE.Vector2 };
   } & typeof WXM;
   private data: Uint8Array;
   private cur: Float32Array;
@@ -164,6 +177,9 @@ export class FogOfWar {
       // depth haze start/end (world units past the view centre), max amount, outskirts fade distance
       hazeParams: { value: new THREE.Vector4(4, 80, 0.38, 52) },
       cloudAmount: { value: 0.32 },
+      skyHorA: { value: new THREE.Vector4(0, 0, 0, 0) },
+      skyHorB: { value: new THREE.Vector4(0, 0, 0, 0) },
+      skySunXZ: { value: new THREE.Vector2(1, 0) },
       // ground fog / mist (shared objects: the atmosphere drives them)
       ...WXM,
     };

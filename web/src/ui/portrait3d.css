@@ -11,11 +11,11 @@
 .sp-type.live img {
   visibility: hidden;
 }
-/* dark studio backdrop with a faint faction glow behind the model */
+/* dark studio backdrop with a faint nation-accent glow behind the model */
 .portrait.live {
   background:
-    radial-gradient(ellipse 70% 55% at 50% 62%, color-mix(in srgb, var(--faction, #4aa0ff) 22%, transparent), transparent 70%),
-    radial-gradient(circle at 50% 40%, #222c35, #07090c 78%);
+    radial-gradient(ellipse 70% 55% at 50% 64%, color-mix(in srgb, var(--acc, #4aa0ff) 20%, transparent), transparent 70%),
+    linear-gradient(180deg, #1a222b, #07090c);
 }
 .portrait.live.enemy {
   background:
@@ -23,7 +23,7 @@
     radial-gradient(circle at 50% 40%, #2e2224, #0a0607 78%);
 }
 .sp-type.live {
-  background: radial-gradient(circle at 50% 40%, #222c35, #07090c 80%);
+  background: linear-gradient(180deg, #1a222b, #07090c);
 }
 .sp-type.live span {
   z-index: 1;

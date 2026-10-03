@@ -58,7 +58,7 @@ function drawGraph(cv: HTMLCanvasElement, samples: StatSample[], pick: (s: StatS
     ctx.lineTo(W - padR, y);
     ctx.stroke();
   }
-  ctx.font = '600 10px Rajdhani, system-ui, sans-serif';
+  ctx.font = '500 10px Inter, system-ui, sans-serif';
   ctx.fillStyle = 'rgba(200,210,205,0.6)';
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';

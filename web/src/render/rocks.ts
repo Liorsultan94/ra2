@@ -101,9 +101,13 @@ function finishRock(g: THREE.BufferGeometry, disp: Float32Array, seed: number): 
 
 export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod): THREE.Object3D[] {
   const tex = rockTexture(quality === 'low' ? 128 : 256);
+  const biome = m.biome;
   const mat = fog.apply(
     new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.92, metalness: 0, flatShading: true }),
   );
+  // desert sandstone / winter granite (temperate keeps the white base colour)
+  if (biome === 'desert') mat.color.setHex(0xd6aa86);
+  else if (biome === 'winter') mat.color.setHex(0xc4c8d0);
   const shadows = quality !== 'low';
   // [full, lite] pairs: the lite model is the same rock at a lower subdivision
   const low = quality === 'low';
@@ -120,6 +124,8 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       const i = y * m.w + x;
       const t = m.tiles[i];
       if (t === Tile.Rock) {
+        // desert mesas: boulders only along the cliff rim, the flat top stays bare
+        if (biome === 'desert' && isRock(x - 1, y) && isRock(x + 1, y) && isRock(x, y - 1) && isRock(x, y + 1) && hash2(x, y, 9) < 0.85) continue;
         // principal direction of the ridge around this tile
         let sxx = 0;
         let sxy = 0;
@@ -164,7 +170,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       let n = 0;
       if (near) n = 3 + Math.floor(hash2(x, y, 20) * 4);
       else if (slope > 0.45) n = 1 + Math.floor(hash2(x, y, 21) * 2);
-      else if (t === Tile.Sand) n = hash2(x, y, 22) < 0.5 ? 1 + Math.floor(hash2(x, y, 23) * 3) : 0;
+      else if (t === Tile.Sand) n = hash2(x, y, 22) < (biome === 'desert' ? 0.05 : 0.5) ? 1 + Math.floor(hash2(x, y, 23) * 3) : 0;
       else if (hash2(x, y, 24) < 0.03) n = 1;
       if (quality === 'low') n = Math.ceil(n / 2);
       for (let k = 0; k < n; k++) {

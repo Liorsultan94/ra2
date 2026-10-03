@@ -3,12 +3,13 @@ import {
   GEM_VALUE,
   ORE_MAX,
   ORE_VALUE,
-  createFrontlineMap,
   standHeight,
   terrainBuildable,
   terrainPassable,
   type GameMap,
+  type MapId,
 } from './map';
+import { createMap } from './maps';
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
@@ -46,6 +47,8 @@ export interface WorldOptions {
   players: PlayerSetup[];
   seed?: number;
   credits?: number;
+  /** Which map (default Frontline Crossing); the seed varies its details (sim/maps.ts). */
+  map?: MapId;
 }
 
 export interface Controller {
@@ -116,7 +119,7 @@ export class World {
 
   constructor(opts: WorldOptions) {
     this.rng = new Rng(opts.seed ?? 12345);
-    this.map = createFrontlineMap();
+    this.map = createMap(opts.map ?? 'frontline', opts.seed ?? 12345);
     const { w, h } = this.map;
     this.pass = new Uint8Array(w * h);
     this.occ = new Int32Array(w * h);

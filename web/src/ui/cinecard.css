@@ -34,6 +34,8 @@
   position: absolute;
   right: 16px;
   bottom: 3.5%;
+  font-family: var(--font-d);
+  font-weight: 600;
   font-size: 12px;
   letter-spacing: 0.3em;
   color: rgba(255, 255, 255, 0.55);
@@ -79,8 +81,10 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-size: clamp(12px, 1.8vw, 16px);
-  letter-spacing: 0.32em;
+  font-family: var(--font-d);
+  font-weight: 600;
+  font-size: clamp(13px, 1.9vw, 17px);
+  letter-spacing: 0.3em;
   color: rgba(235, 235, 225, 0.85);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
   text-transform: uppercase;
@@ -88,36 +92,37 @@
   max-width: 100%;
 }
 .cc-kicker img {
-  width: 34px;
-  height: 22px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.6);
+  width: 32px;
+  height: 21px;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2), 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 .cc-title {
-  font-family: 'Black Ops One', var(--font);
-  font-size: clamp(26px, 5.4vw, 72px);
-  letter-spacing: 0.08em;
+  font-family: var(--font-d);
+  font-weight: 700;
+  font-size: clamp(30px, 6vw, 80px);
+  letter-spacing: 0.12em;
   line-height: 1.05;
-  color: #f4ecd6;
-  text-shadow: 0 0 30px rgba(0, 0, 0, 0.9), 0 3px 0 rgba(0, 0, 0, 0.6);
+  color: #f3f5f7;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.7);
   margin: 4px 0;
 }
 .cc-card.intro .cc-title {
-  color: #f2c14e;
-  text-shadow: 0 0 26px rgba(242, 193, 78, 0.35), 0 3px 0 rgba(0, 0, 0, 0.7);
+  color: #f5b941;
 }
 .cc-card.win .cc-title {
-  color: #f2c14e;
-  font-size: clamp(44px, 11vw, 120px);
-  text-shadow: 0 0 40px rgba(242, 193, 78, 0.55), 0 4px 0 rgba(0, 0, 0, 0.7);
+  color: #f5b941;
+  font-size: clamp(48px, 12vw, 132px);
 }
 .cc-card.lose .cc-title {
-  color: #e2483a;
-  font-size: clamp(44px, 11vw, 120px);
-  text-shadow: 0 0 40px rgba(226, 72, 58, 0.5), 0 4px 0 rgba(0, 0, 0, 0.7);
+  color: #ff5a4f;
+  font-size: clamp(48px, 12vw, 132px);
 }
 .cc-sub {
-  font-size: clamp(12px, 1.9vw, 17px);
-  letter-spacing: 0.22em;
+  font-family: var(--font-d);
+  font-weight: 600;
+  font-size: clamp(13px, 2vw, 18px);
+  letter-spacing: 0.24em;
   text-transform: uppercase;
   color: rgba(225, 228, 220, 0.8);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95);

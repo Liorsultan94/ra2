@@ -32,6 +32,11 @@ export const HEAT_WEIGHT: Partial<Record<Sfx, number>> = {
   intercept: 0.5,
   droneLaunch: 0.4,
   droneBuzz: 0.1,
+  autocannon: 0.35,
+  interceptorLaunch: 0.6,
+  mortar: 0.6,
+  bridgeCollapse: 3,
+  jetFlyby: 0.3,
   jam: 0.3,
   alarm: 2.5,
 };

@@ -10,6 +10,7 @@ import { FxLights } from './fx/lights';
 import { CameraShake } from './fx/shake';
 import { Tracers } from './fx/tracers';
 import { Fireballs } from './fx/fireball';
+import { Flipbooks } from './fx/flipbook';
 import { GodRays } from './fx/godrays';
 import { GpuParticles, particleUniforms, type ParticleOpts } from './fx/gpuparticles';
 import type { GroundMarks } from './marks';
@@ -136,6 +137,11 @@ export class Effects {
   readonly pu = particleUniforms();
   /** Volumetric-looking 3D fireballs (high quality only). */
   readonly fireballs: Fireballs | null = null;
+  /**
+   * Pre-rendered volumetric flipbooks (fx/flipbook.ts; medium: half-res atlases, low: none).
+   * Loaded lazily: blasts use the procedural sprites until `flip.ready`.
+   */
+  readonly flip: Flipbooks | null = null;
   /** Crepuscular light shafts through smoke (high quality, post chain only; see enableGodRays). */
   godRays: GodRays | null = null;
   private sun: THREE.DirectionalLight | null = null;
@@ -161,6 +167,8 @@ export class Effects {
   private domeGeo = new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2);
   debris: Debris | null = null;
   marks: GroundMarks | null = null;
+  /** Water hook (fx/waterfx.ts): ring waves and floating bits where something hits the river. */
+  onSplash: ((x: number, z: number, size: number) => void) | null = null;
   private burns: { x: number; y: number; z: number; t: number; size: number }[] = [];
   private later: { t: number; fn: () => void }[] = [];
   private threats = new Map<number, { seen: number; popped: number }>();
@@ -184,6 +192,13 @@ export class Effects {
     this.fire = new GpuParticles(fireCap, true, fog, makeSpriteTexture('glow'), this.pu);
     this.smokeSys = new GpuParticles(smokeCap, false, fog, this.smokeTex, this.pu);
     if (quality === 'high') this.fireballs = new Fireballs(this.group, fog, 12);
+    if (quality !== 'low' && !/[?&]flip=0\b/.test(typeof location !== 'undefined' ? location.search : '')) {
+      this.flip = new Flipbooks(quality === 'high' ? 320 : 160, quality === 'medium', fog, this.pu);
+      this.flip.wind = this.wind;
+      this.group.add(this.flip.mesh);
+      // fetched in the background while the briefing / loading screen is up; never blocks the first frame
+      void this.flip.load();
+    }
     this.lights = new FxLights(quality, fog);
     this.lights.heightAt = (x, z) => this.groundAt(x, z);
     this.tracers = new Tracers(quality === 'low' ? 64 : 160);
@@ -402,9 +417,12 @@ export class Effects {
       this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.08 + 0.03 * S, size: 1.0 * S, sizeEnd: 1.6 * S, color: 0xfff2d8, colorEnd: pal.hot, alpha: 0.55 });
       this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.2 });
     }
-    // 2. fireball: expanding, rising, cooling puffs (+ a volumetric 3D fireball on high quality)
-    if (this.fireballs && S >= 0.9 && p.fire >= 0.8 && p.fireColor !== 'laser') this.fireballs.spawn(x, airborne ? y : Math.max(y, ground), z, S * Math.min(1.1, Math.sqrt(p.fire)), thermo ? 'thermo' : p.fireColor === 'white' ? 'white' : 'normal', airborne);
-    const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S)));
+    // 2. fireball: pre-rendered volumetric flipbooks when loaded, plus expanding, rising, cooling puffs
+    // (and the 3D fireball mesh on high quality while the flipbooks are not available)
+    const fb = this.flip?.ready ? this.flip : null;
+    if (fb && p.fire > 0 && p.fireColor !== 'laser') this.flipBlast(fb, p, x, y, z, ground, airborne);
+    if (!fb && this.fireballs && S >= 0.9 && p.fire >= 0.8 && p.fireColor !== 'laser') this.fireballs.spawn(x, airborne ? y : Math.max(y, ground), z, S * Math.min(1.1, Math.sqrt(p.fire)), thermo ? 'thermo' : p.fireColor === 'white' ? 'white' : 'normal', airborne);
+    const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S) * (fb && p.fireColor !== 'laser' ? 0.35 : 1)));
     for (let i = 0; i < nFire; i++) {
       const a = Math.random() * Math.PI * 2;
       const el = Math.random() * (airborne ? Math.PI : Math.PI / 2);
@@ -427,7 +445,7 @@ export class Effects {
       });
     }
     // 3. sparks / fragments
-    const nSp = this.q(p.sparks);
+    const nSp = this.q(fb && S >= 0.6 ? p.sparks * 0.55 : p.sparks);
     for (let i = 0; i < nSp; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = this.rand(2, 7) * Math.sqrt(S);
@@ -436,7 +454,7 @@ export class Effects {
     // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white)
     const snow = WX.wxSnow.value > 0.3;
     if (!airborne && p.dirt > 0) {
-      const n = this.q(Math.round(10 * p.dirt));
+      const n = this.q(Math.round(10 * p.dirt * (fb ? 0.5 : 1)));
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const r = this.rand(0, 0.25) * S;
@@ -446,7 +464,7 @@ export class Effects {
       }
     }
     // 5. smoke: billowing cloud + optional column (drifts with the wind)
-    const nSmoke = this.q(Math.round(9 * p.smoke));
+    const nSmoke = this.q(Math.round(9 * p.smoke * (fb ? 0.55 : 1)));
     for (let i = 0; i < nSmoke; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = this.rand(0, 0.35) * S;
@@ -527,6 +545,67 @@ export class Effects {
   }
 
   /**
+   * The flipbook layer of a blast: a pre-rendered volumetric fireball (burst / fireball /
+   * fuel-air / mid-air variants), its sparks, the dirt plume of a ground burst and the
+   * lingering lit smoke it leaves. The procedural particles keep the small stuff.
+   */
+  private flipBlast(fb: Flipbooks, p: BlastProfile, x: number, y: number, z: number, ground: number, airborne: boolean) {
+    const S = p.size;
+    const thermo = p.fireColor === 'thermo';
+    const heat = p.fireColor === 'white' ? 0.45 : thermo ? 0.12 : 0;
+    const snow = WX.wxSnow.value > 0.3;
+    const gy = airborne ? y : ground;
+    if (airborne) {
+      fb.spawn('airburst', { x, y, z, size: 2.3 * S, sizeEnd: 3.2 * S, tint: 0x45413d, heat, emissive: 1.1, wind: 0.3, rise: -0.05 });
+    } else if (S < 0.9) {
+      fb.spawn('burst', { x, y: gy + 0.05 * S, z, size: 1.9 * S, sizeEnd: 2.5 * S, tint: 0x5a5550, heat, ground: true, rot: 0.35 });
+    } else {
+      const fuel = thermo || p.fire >= 1.5;
+      const kind = fuel ? 'fuel' : 'fireball';
+      fb.spawn(kind, { x, y: gy, z, size: 2.5 * S, sizeEnd: 3.3 * S, tint: fuel ? 0x2c2926 : 0x55504a, heat, emissive: thermo ? 1.3 : 1, ground: true, rot: 0.3, rise: 0.05, wind: 0.25 });
+      if (S >= 1.3) {
+        // a couple of offset secondary billows break up the silhouette
+        for (let i = 0; i < 2; i++) {
+          const a = Math.random() * Math.PI * 2;
+          fb.spawn(i === 0 ? 'burst' : kind, { x: x + Math.cos(a) * 0.45 * S, y: gy, z: z + Math.sin(a) * 0.45 * S, size: 1.6 * S, sizeEnd: 2.2 * S, tint: 0x4a4540, heat, ground: true, rot: 0.4, delay: 0.04 + i * 0.07, emissive: 0.9, wind: 0.25 });
+        }
+      }
+    }
+    if (S >= 0.6 && p.sparks >= 8) fb.spawn('sparks', { x, y: y + 0.1 * S, z, size: 2.2 * Math.sqrt(S) * (airborne ? 1.3 : 1), sizeEnd: 2.6 * Math.sqrt(S), rot: airborne ? Math.PI : 0.3, emissive: 1.2, heat: 0.3, tint: 0x201810 });
+    if (!airborne && p.dirt >= 0.8) {
+      const d = Math.sqrt(p.dirt);
+      fb.spawn('dust', { x, y: ground, z, size: 1.5 * S * d, sizeEnd: 2.1 * S * d, tint: snow ? 0xdde4ec : 0x7a6a54, ground: true, rot: 0.2, alpha: 0.95, emissive: 0, wind: 0.3 });
+    }
+    // lingering, lit smoke where the fireball was (the GPU smoke column keeps rising out of it)
+    if (p.smoke >= 0.6) {
+      const n = Math.min(3, Math.round(1 + p.smoke * 0.8));
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = this.rand(0.1, 0.4) * S;
+        fb.spawn('smoke', {
+          x: x + Math.cos(a) * r,
+          y: (airborne ? y : ground + 0.7 * S) + this.rand(0, 0.5) * S,
+          z: z + Math.sin(a) * r,
+          vx: Math.cos(a) * 0.15,
+          vy: 0.25 * S,
+          vz: Math.sin(a) * 0.15,
+          size: 1.6 * S,
+          sizeEnd: 3.4 * S,
+          life: this.rand(5, 7.5) * Math.sqrt(S),
+          delay: this.rand(0.35, 0.9),
+          tint: airborne ? 0x4a4642 : thermo || p.fire >= 1.5 ? 0x2a2725 : 0x4e4944,
+          alpha: 0.8,
+          emissive: 0,
+          drag: 0.6,
+          rise: 0.05,
+          wind: 0.8,
+          spin: this.rand(-0.08, 0.08),
+        });
+      }
+    }
+  }
+
+  /**
    * Thermobaric extras: the fuel-air cloud's visible pressure wave (a fast
    * expanding translucent dome plus a ground dust wall), and a delayed
    * secondary fireball when the dispersed cloud ignites.
@@ -554,7 +633,15 @@ export class Effects {
     }
     // the cloud ignites a beat later: a second, wider and longer fireball
     this.after(0.16, () => {
-      const n = this.q(16);
+      const fb = this.flip?.ready ? this.flip : null;
+      if (fb) {
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2 + Math.random();
+          const r = R * this.rand(0.25, 0.5);
+          fb.spawn('fuel', { x: x + Math.cos(a) * r, y: airborne ? y : ground, z: z + Math.sin(a) * r, size: 1.8 * S, sizeEnd: 2.8 * S, ground: !airborne, emissive: 1.2, heat: 0.1, tint: 0x2e2a27, delay: i * 0.05, rot: 0.25, rise: 0.15, wind: 0.3 });
+        }
+      }
+      const n = this.q(fb ? 6 : 16);
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const r = this.rand(0.3, 1) * R * 0.6;
@@ -569,6 +656,7 @@ export class Effects {
   /** Shell / missile / debris hitting water: tall white column, spray and a ring. */
   splash(x: number, y: number, z: number, size = 1) {
     const S = Math.max(0.3, size);
+    this.onSplash?.(x, z, size);
     const wy = y + 0.02;
     const n = this.q(Math.round(14 * Math.sqrt(S)));
     for (let i = 0; i < n; i++) {
@@ -986,6 +1074,8 @@ export class Effects {
   }
 
   flame(x: number, y: number, z: number, size = 1) {
+    // sustained fires call this many times a second: now and then lay a looping flame flipbook under the particles
+    if (this.flip?.ready && Math.random() < 0.07 * this.budget) this.flip.spawn('flame', { x, y: y - 0.05 * size, z, size: this.rand(0.75, 1.0) * size, ground: true, rot: 0.15, life: this.rand(1.4, 2.2), emissive: 0.9, alpha: 0.85, tint: 0x302c28, wind: 0.2 });
     this.fire.spawn({ x: x + this.rand(-0.15, 0.15) * size, y, z: z + this.rand(-0.15, 0.15) * size, vx: this.rand(-0.1, 0.1), vy: this.rand(0.6, 1.3), vz: this.rand(-0.1, 0.1), life: this.rand(0.3, 0.7), size: 0.35 * size, sizeEnd: 0.1, color: 0xffc050, colorEnd: 0x901800, gravity: -0.5, wind: 0.4 });
     if (Math.random() < 0.3) this.fire.spawn({ x, y: y + 0.1, z, vx: this.rand(-0.3, 0.3), vy: this.rand(1, 2), vz: this.rand(-0.3, 0.3), life: this.rand(0.8, 1.5), size: 0.03, color: 0xffb060, colorEnd: 0xff3000, drag: 0.5, gravity: -0.2, wind: 0.6 });
   }
@@ -1028,6 +1118,7 @@ export class Effects {
       const b = this.burns[i];
       b.t -= dt;
       if (Math.random() < dt * 30) this.flame(b.x + this.rand(-0.6, 0.6) * b.size, b.y + 0.05, b.z + this.rand(-0.6, 0.6) * b.size, 1.2);
+      if (this.flip?.ready && Math.random() < dt * 3) this.flip.spawn('flame', { x: b.x + this.rand(-0.5, 0.5) * b.size, y: b.y, z: b.z + this.rand(-0.5, 0.5) * b.size, size: this.rand(0.9, 1.3) * b.size, ground: true, rot: 0.15, life: Math.min(1.6, b.t + 0.4), emissive: 1.1, alpha: 0.9, tint: 0x302c28 });
       this.lights.sustain(b.x, b.y + 0.3, b.z, 3 * b.size * Math.min(1, b.t), 0xff8a30, 0.5);
       if (b.t <= 0) this.burns.splice(i, 1);
     }
@@ -1035,6 +1126,7 @@ export class Effects {
     this.ground.update(dt);
     this.grass?.update(dt);
     this.fireballs?.update(dt);
+    this.flip?.update(dt, this.camera);
     this.tracers.update(dt);
     this.haze?.update(dt);
     this.debris?.update(dt);

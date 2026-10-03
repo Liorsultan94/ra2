@@ -1627,7 +1627,7 @@ export class BuildFx {
         c = cloneFor(real, U);
         map.set(real, c);
         this.clones.push(c);
-        if (c.userData.baseEI) this.glowClones.push(c as THREE.MeshStandardMaterial);
+        if (c.userData.baseEI || c.userData.blinkEI) this.glowClones.push(c as THREE.MeshStandardMaterial);
       }
       m.material = c;
       // alpha tested materials keep the default (cut-less) shadow so their cut-outs stay right
@@ -2017,6 +2017,8 @@ export class BuildFx {
       const q = Math.sin(t * 23.1 + this.seed) * Math.sin(t * 7.7 + this.seed * 0.37);
       fl = q > (pw ? 0.55 : 0.2) ? 0.12 : 1;
     }
-    for (const g of this.glowClones) g.emissiveIntensity = (g.userData.baseEI as number) * dim * fl;
+    // synchronised obstruction lights (models/buildings.ts blink material): keep flashing while lit
+    const blinkOn = s.time % 1.5 < 0.55 ? 1 : 0;
+    for (const g of this.glowClones) g.emissiveIntensity = g.userData.blinkEI ? (g.userData.blinkEI as number) * (dim > 0 ? fl * blinkOn : 0) : (g.userData.baseEI as number) * dim * fl;
   }
 }

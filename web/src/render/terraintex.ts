@@ -328,7 +328,8 @@ export function foliageAtlas(cellPx: number): THREE.CanvasTexture {
     }
     ctx.restore();
   };
-  blades(Leaf.Grass, 75, 18, 62, 150, 0.95);
+  // neutral, bright blades: the instance colour (vegetation.ts) supplies the meadow's green
+  blades(Leaf.Grass, 80, 22, 70, 230, 0.95);
   blades(Leaf.DryGrass, 52, 38, 52, 140, 0.95, 'hsl(40,40%,58%)');
   blades(Leaf.Reeds, 75, 32, 34, 70, 1.0, 'hsl(25,45%,26%)');
 

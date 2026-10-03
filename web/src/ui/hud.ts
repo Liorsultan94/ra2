@@ -10,6 +10,7 @@ import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
 import { LivePortrait } from './portrait3d';
+import { hasIcon, icon } from './icons';
 import './simple.css';
 
 export interface HudActions {
@@ -28,29 +29,36 @@ export interface HudActions {
 export type HudCommand = 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode';
 
 const TABS: { cat: Category; label: string; icon: string }[] = [
-  { cat: 'building', label: 'Base', icon: '<path d="M3 21V10l9-6 9 6v11h-6v-6H9v6z"/>' },
-  { cat: 'defense', label: 'Defense', icon: '<path d="M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"/>' },
-  { cat: 'infantry', label: 'Infantry', icon: '<circle cx="12" cy="5" r="3"/><path d="M8 22l1-8-2-1 1-5h8l1 5-2 1 1 8h-3l-1-6-1 6z"/>' },
-  { cat: 'vehicle', label: 'Vehicles', icon: '<path d="M2 16h20v3H2zM5 12h11l3 4H4zM9 9h6v3H9zM15 10h7v1h-7z"/>' },
-  { cat: 'air', label: 'Air', icon: '<path d="M12 2l2 7 8 4v2l-8-2-1 6 3 2v1l-4-1-4 1v-1l3-2-1-6-8 2v-2l8-4z"/>' },
+  { cat: 'building', label: 'Base', icon: 'base' },
+  { cat: 'defense', label: 'Defense', icon: 'defense' },
+  { cat: 'infantry', label: 'Infantry', icon: 'infantry' },
+  { cat: 'vehicle', label: 'Vehicles', icon: 'vehicle' },
+  { cat: 'air', label: 'Air', icon: 'air' },
 ];
 
 const svg = (inner: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${inner}</svg>`;
 
+/** Line icons (src/ui/icons.ts), full <svg> markup. */
 const ICONS = {
-  stop: '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
-  attackMove: '<path d="M4 20l5-5m0 0l-2-2 7-7h5v5l-7 7-2-2m-1-1l3 3" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="17" cy="17" r="2.6"/>',
-  deploy: '<path d="M12 2l4 4h-3v5h5V8l4 4-4 4v-3h-5v5h3l-4 4-4-4h3v-5H6v3l-4-4 4-4v3h5V6H8z"/>',
-  unload: '<path d="M3 8h13v9H3zM16 11h3l2 3v3h-5zM12 2v5m-3-3l3 3 3-3" stroke="currentColor" stroke-width="1.6" fill="none"/>',
-  deselect: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.6"/>',
-  repair: '<path d="M22 19l-9-9c1-2.6.4-5.6-1.7-7.7A6.9 6.9 0 0 0 4.4 1L9 5.6 5.6 9 1 4.4a6.9 6.9 0 0 0 1.3 6.9c2.1 2.1 5.1 2.7 7.7 1.7l9 9z"/>',
-  sell: '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>',
-  army: '<circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="13" r="2.5"/><path d="M3 21v-3c0-2 2-3 4-3s4 1 4 3M13 21v-3c0-2 2-3 4-3s4 1 4 3"/>',
-  screen: '<path d="M2 4h20v14H2z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="10" r="2"/><circle cx="15" cy="9" r="2"/><circle cx="12" cy="14" r="2"/><path d="M8 21h8" stroke="currentColor" stroke-width="2"/>',
-  box: '<path d="M3 3h4v2H5v2H3zm14 0h4v4h-2V5h-2zM3 17h2v2h2v2H3zm16 2v-2h2v4h-4v-2zM9 3h6v2H9zm0 16h6v2H9zM3 9h2v6H3zm16 0h2v6h-2z"/>',
-  cancel: '<path d="M9 4L3 10l6 6v-4h5a4 4 0 0 1 0 8h-3v3h3a7 7 0 0 0 0-14H9z"/>',
-  more: '<circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/>',
+  stop: icon('stop'),
+  attackMove: icon('attackMove'),
+  deploy: icon('deploy'),
+  unload: icon('unload'),
+  deselect: icon('deselect'),
+  repair: icon('repair'),
+  sell: icon('sell'),
+  army: icon('army'),
+  screen: icon('screen'),
+  box: icon('box'),
+  cancel: icon('cancel'),
+  more: icon('more'),
 };
+
+/** Line icons for the view buttons other modules add by title (thermal, photo mode); filled glyph otherwise. */
+const VIEW_ICONS: [RegExp, string][] = [
+  [/^Thermal/i, 'thermal'],
+  [/^Photo/i, 'photo'],
+];
 
 /** Short rallying line under the nation name in the sidebar header. */
 const FACTION_MOTTO: Record<string, string> = {
@@ -156,15 +164,15 @@ export class Hud {
     this.cineEl.innerHTML = '<i class="cine-bar top"></i><i class="cine-bar bottom"></i><span class="cine-skip">TAP TO SKIP</span>';
     // view rotation (Q / E)
     const vc = (this.viewCtrl = el('div', 'view-ctrl', this.viewWrap));
-    const rot = (steps: number, title: string, icon: string) => {
+    const rot = (steps: number, title: string, ico: string) => {
       const b = el('button', 'vc-btn', vc);
-      b.innerHTML = svg(icon);
+      b.innerHTML = icon(ico);
       b.title = title;
       b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       b.onclick = () => this.actions.onRotate(steps);
     };
-    rot(-1, 'Rotate view left (Q)', '<path d="M7.1 8.5H11V6.5H3.5V14h2v-4.1A8 8 0 1 1 4 15.9l-1.9.6A10 10 0 1 0 7.1 8.5z"/>');
-    rot(1, 'Rotate view right (E)', '<path d="M16.9 8.5H13V6.5h7.5V14h-2v-4.1A8 8 0 1 0 20 15.9l1.9.6A10 10 0 1 1 16.9 8.5z"/>');
+    rot(-1, 'Rotate view left (Q)', 'rotL');
+    rot(1, 'Rotate view right (E)', 'rotR');
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -178,9 +186,9 @@ export class Hud {
 
   /** Simple scheme widgets: the quick bar (ARMY / ON SCREEN / BOX / ✕ + context) and the "More" panel. */
   private buildSimpleBars(bottomLeft: HTMLElement) {
-    const btn = (parent: HTMLElement, cls: string, label: string, icon: string, title: string, fn: () => void) => {
+    const btn = (parent: HTMLElement, cls: string, label: string, ico: string, title: string, fn: () => void) => {
       const b = el('button', `qb-btn ${cls}`, parent);
-      b.innerHTML = `${svg(icon)}<span>${label}</span>`;
+      b.innerHTML = `${ico}<span>${label}</span>`;
       b.title = title;
       b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       b.onclick = fn;
@@ -189,8 +197,8 @@ export class Hud {
     // "More" panel (opens upwards, above the quick bar; closed by default)
     const mp = (this.morePanel = el('div', 'more-panel hidden', bottomLeft));
     const head = el('div', 'mp-row mp-tools', mp);
-    const unitBtn = (label: string, icon: string, title: string, cmd: HudCommand) => {
-      const b = btn(head, 'mp-btn', label, icon, title, () => this.actions.onCommand(cmd));
+    const unitBtn = (label: string, ico: string, title: string, cmd: HudCommand) => {
+      const b = btn(head, 'mp-btn', label, ico, title, () => this.actions.onCommand(cmd));
       this.moreUnitBtns.push(b);
     };
     unitBtn('Stop', ICONS.stop, 'Stop the selected units', 'stop');
@@ -298,15 +306,13 @@ export class Hud {
     const sb = (this.sidebar = el('aside', 'sidebar', this.root));
     const toggle = el('button', 'sb-toggle', this.root);
     toggle.title = 'Hide / show the command sidebar';
-    toggle.innerHTML = svg('<path d="M9 5l7 7-7 7z"/>');
+    toggle.innerHTML = icon('chevron');
     toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation());
     toggle.onclick = () => this.setCollapsed(!this.root.classList.contains('sb-collapsed'));
-    el('i', 'sb-rivet tl', sb);
-    el('i', 'sb-rivet tr', sb);
     const head = el('div', 'sb-head', sb);
     el('div', 'sb-faction', head);
     const menuBtn = el('button', 'icon-btn', head);
-    menuBtn.innerHTML = svg('<path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/>');
+    menuBtn.innerHTML = icon('menu');
     menuBtn.title = 'Menu (Esc)';
     menuBtn.onclick = () => this.actions.onTool('menu');
 
@@ -337,28 +343,29 @@ export class Hud {
     const stats = el('div', 'sb-stats', sb);
     this.creditsEl = el('div', 'credits', stats);
     const power = el('div', 'power', stats);
+    power.innerHTML = icon('bolt', 'power-ico');
     const bar = el('div', 'power-bar', power);
     this.powerFill = el('div', 'power-fill', bar);
     this.powerText = el('div', 'power-text', power);
 
     const tools = (this.toolsRow = el('div', 'sb-tools', sb));
-    const mk = (id: 'repair' | 'sell' | 'boxselect', title: string, icon: string, cls = '') => {
+    const mk = (id: 'repair' | 'sell' | 'boxselect', title: string, ico: string, cls = '') => {
       const b = el('button', 'tool-btn ' + cls, tools);
-      b.innerHTML = svg(icon);
+      b.innerHTML = ico;
       b.title = title;
       b.onclick = () => this.actions.onTool(id);
       this.toolBtns.set(id, b);
     };
-    mk('repair', 'Repair mode (R)', '<path d="M22 19l-9-9c1-2.6.4-5.6-1.7-7.7A6.9 6.9 0 0 0 4.4 1L9 5.6 5.6 9 1 4.4a6.9 6.9 0 0 0 1.3 6.9c2.1 2.1 5.1 2.7 7.7 1.7l9 9z"/>');
-    mk('sell', 'Sell mode (X)', '<path d="M12 1v3m0 16v3M17 6.5c-.8-1.6-2.6-2.5-5-2.5-3 0-5 1.5-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1-5.3-2.8" stroke="currentColor" stroke-width="2.2" fill="none"/>');
-    mk('boxselect', 'Box select (touch)', '<path d="M3 3h4v2H5v2H3zm14 0h4v4h-2V5h-2zM3 17h2v2h2v2H3zm16 2v-2h2v4h-4v-2zM9 3h6v2H9zm0 16h6v2H9zM3 9h2v6H3zm16 0h2v6h-2z"/>', 'touch-only');
+    mk('repair', 'Repair mode (R)', ICONS.repair);
+    mk('sell', 'Sell mode (X)', ICONS.sell);
+    mk('boxselect', 'Box select (touch)', ICONS.box, 'touch-only');
     this.support = new SupportPower(this, tools); // airborne-drop support power
     this.superweapons = new SuperweaponPower(this, tools); // superweapon (superweapons.ts)
 
     const tabs = el('div', 'sb-tabs', sb);
     for (const t of TABS) {
       const b = el('button', 'tab', tabs);
-      b.innerHTML = svg(t.icon) + `<span>${t.label}</span><i class="tab-badge"></i>`;
+      b.innerHTML = icon(t.icon) + `<span>${t.label}</span><i class="tab-badge"></i>`;
       b.title = t.label;
       b.onclick = () => {
         this.setTab(t.cat);
@@ -471,7 +478,7 @@ export class Hud {
     const k = out > 0 ? Math.min(1, use / out) : use > 0 ? 1 : 0;
     this.powerFill.style.width = `${Math.round(k * 100)}%`;
     this.powerFill.className = 'power-fill ' + (use > out ? 'low' : k > 0.85 ? 'warn' : 'ok');
-    this.powerText.textContent = `⚡ ${use}/${out}`;
+    this.powerText.textContent = `${use}/${out}`;
     // cameos
     const tabState = new Map<Category, { ready: boolean; busy: boolean; avail: boolean }>();
     for (const [id, b] of this.cameoEls) {
@@ -588,10 +595,10 @@ export class Hud {
     if (ck === this.cmdKey) return;
     this.cmdKey = ck;
     this.cmdBar.innerHTML = '';
-    for (const [label, key2, id, icon] of cmds) {
+    for (const [label, key2, id, ico] of cmds) {
       const b = el('button', 'cmd-btn', this.cmdBar);
       b.title = label + (key2 ? ` (${key2})` : '');
-      b.innerHTML = `${svg(icon)}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
+      b.innerHTML = `${ico}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
       b.onclick = () => this.actions.onCommand(id);
     }
   }
@@ -627,9 +634,9 @@ export class Hud {
     if (key === this.cmdKey) return;
     this.cmdKey = key;
     this.qbMain.innerHTML = '';
-    for (const [cls, label, icon, fn, title] of b) {
+    for (const [cls, label, ico, fn, title] of b) {
       const x = el('button', `qb-btn ${cls}`, this.qbMain);
-      x.innerHTML = `${svg(icon)}<span>${label}</span>`;
+      x.innerHTML = `${ico}<span>${label}</span>`;
       x.title = title;
       x.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       x.onclick = fn;
@@ -1023,10 +1030,11 @@ export class Hud {
   keepClear: (() => { x: number; y: number; w: number; h: number } | null) | null = null;
 
   /** Extra round button in the top-right view controls (thermal view...). */
-  addViewButton(title: string, icon: string, onClick: () => void): HTMLButtonElement {
+  addViewButton(title: string, glyph: string, onClick: () => void): HTMLButtonElement {
     const vc = this.viewWrap.querySelector('.view-ctrl') as HTMLElement;
     const b = el('button', 'vc-btn', vc);
-    b.innerHTML = svg(icon);
+    const line = VIEW_ICONS.find(([re]) => re.test(title))?.[1];
+    b.innerHTML = line && hasIcon(line) ? icon(line) : svg(glyph);
     b.title = title;
     b.addEventListener('pointerdown', (ev) => ev.stopPropagation());
     b.onclick = onClick;

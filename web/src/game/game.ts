@@ -1,4 +1,5 @@
-import { AudioSystem, panFor, type Sfx } from '../audio/audio';
+import { AudioSystem, type Sfx } from '../audio/audio';
+import { AudioScene } from '../audio/scene';
 import { AIController, type Difficulty } from '../sim/ai';
 import { canGarrisonUnit, garrisonRoom } from '../sim/garrison';
 import { SW_INFO, type SwKind } from '../sim/specialdefs';
@@ -22,6 +23,7 @@ import { MatchTracker, type MatchReport } from './matchstats';
 import { Briefing, buildBriefing, type BriefingInfo } from '../ui/briefing';
 import { CineCard } from '../ui/cinecard';
 import { BattleIntro, BattleOutro } from '../render/intro';
+import type { MapId } from '../sim/map';
 import { flagDataUrl } from '../render/flags';
 
 export interface GameOptions {
@@ -33,6 +35,8 @@ export interface GameOptions {
   attract?: boolean; // AI vs AI demo behind the main menu
   cinematic?: boolean; // slow-motion camera moments on big events (default on)
   seed?: number;
+  /** Map (default Frontline Crossing; sim/maps.ts). */
+  map?: MapId;
   /** Drone camera picture-in-picture (default auto). */
   droneCam?: 'auto' | 'off';
   /** X-ray silhouettes of hidden units (default on). */
@@ -113,6 +117,8 @@ export class Game {
   private card: CineCard | null = null;
   /** Where the last structure fell (outro camera target). */
   private lastFall: { x: number; y: number; owner: number } | null = null;
+  /** Listener / ambience / aircraft engines (reads the world, never writes it). */
+  private audioScene: AudioScene;
 
   constructor(
     container: HTMLElement,
@@ -124,6 +130,7 @@ export class Game {
     this.seed = opts.seed ?? Math.floor(Math.random() * 1e9);
     this.world = new World({
       seed: this.seed,
+      map: opts.map,
       credits: opts.credits,
       players: [
         { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract },
@@ -158,7 +165,10 @@ export class Game {
     if (attract) this.hud.root.classList.add('attract');
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
-    this.renderer.atmos.onThunder = (v) => this.audio.play('explosionLarge', v * 0.55);
+    this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
+    // positional audio: the camera is the listener (src/audio/scene.ts)
+    this.audio.setNation(attract ? null : opts.faction);
+    this.audioScene = new AudioScene(this.audio, this.world, this.renderer, (x, y) => this.visibleToLocal(x, y), !attract);
     this.modes = new ViewModes(this.renderer, attract ? null : this.hud.viewWrap, (x, y) => {
       if (this.cine.active) this.cine.skip();
       this.renderer.centerOn(x, y);
@@ -405,6 +415,7 @@ export class Game {
     const r = this.hud.viewWrap.getBoundingClientRect();
     const dpr = this.renderer.renderer.getPixelRatio();
     this.renderer.resize(Math.max(1, r.width), Math.max(1, r.height));
+    this.audioScene?.resize(r.width, r.height);
     this.hud.resizeOverlay(r.width, r.height, Math.min(2, window.devicePixelRatio));
     void dpr;
   }
@@ -427,6 +438,7 @@ export class Game {
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
     if (this.warming || this.briefing) return;
+    this.audioScene.update(dt);
     if (this.intro) {
       // intro flyover: the simulation has not started; only the camera moves
       this.introT = this.intro.time;
@@ -579,17 +591,13 @@ export class Game {
 
   // ----------------------------------------------------------------- events
 
-  private sfx(name: Sfx, x?: number, y?: number, vol = 1) {
+  /** Play an effect; with a world position it is positional (pan, distance, off-screen muffling, delay). */
+  private sfx(name: Sfx, x?: number, y?: number, vol = 1, z = 0) {
     if (x === undefined || y === undefined) {
       this.audio.play(name, vol);
       return;
     }
-    const s = this.renderer.project(x, 0, y);
-    const r = this.hud.viewWrap.getBoundingClientRect();
-    const out = Math.max(0, -s.x, s.x - r.width, -s.y, s.y - r.height);
-    const fall = Math.max(0, 1 - out / (r.width * 0.6));
-    if (fall <= 0.02) return;
-    this.audio.play(name, vol * fall * (0.5 + 0.5 * Math.min(1, this.renderer.zoom)), panFor(s.x, r.width));
+    this.audio.play(name, vol, { x, y, z });
   }
 
   private visibleToLocal(x: number, y: number) {
@@ -607,12 +615,12 @@ export class Game {
       case 'launch': {
         if (!this.visibleToLocal(ev.x, ev.y)) break;
         const f = ev.flight;
-        const snd: Sfx = f === 'sam' || f === 'interceptor' || f === 'ballistic' || f === 'hypersonic' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
+        const snd: Sfx = f === 'interceptor' ? 'interceptorLaunch' : f === 'sam' || f === 'ballistic' || f === 'hypersonic' || f === 'cruise' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
         this.sfx(snd, ev.x, ev.y, f === 'ballistic' || f === 'hypersonic' ? 1 : 0.75);
         break;
       }
       case 'airburst':
-        if (this.visibleToLocal(ev.x, ev.y)) this.sfx(ev.kind === 'kill' ? (ev.victim === 'ballistic' || ev.victim === 'hypersonic' ? 'explosionLarge' : 'explosionMedium') : 'explosionSmall', ev.x, ev.y, 0.8);
+        if (this.visibleToLocal(ev.x, ev.y)) this.sfx(ev.kind === 'kill' ? (ev.victim === 'ballistic' || ev.victim === 'hypersonic' ? 'explosionLarge' : 'explosionMedium') : 'explosionSmall', ev.x, ev.y, 0.8, ev.z);
         break;
       case 'fire': {
         if (!this.visibleToLocal(ev.x, ev.y) && !this.visibleToLocal(ev.tx, ev.ty)) break;
@@ -622,11 +630,12 @@ export class Game {
         const snd: Sfx =
           w.projectile === 'beam' ? 'laser'
           : w.projectile === 'spawn' ? 'droneLaunch'
+          : ev.weapon === 'autocannon' ? 'autocannon'
           : w.warhead === 'flak' ? 'flak'
           : w.warhead === 'thermo' ? 'thermo'
           : w.projectile === 'missile' ? 'missileLaunch'
           : w.projectile === 'rocket' ? 'rocket'
-          : w.projectile === 'artillery' ? 'artillery'
+          : w.projectile === 'artillery' ? (w.flight === 'mortar' ? 'mortar' : 'artillery')
           : w.projectile === 'shell' ? (w.damage > 70 ? 'cannonHeavy' : 'cannon')
           : w.rof < 10 ? 'mg' : 'rifle';
         this.sfx(snd, ev.x, ev.y, snd === 'mg' || snd === 'rifle' ? 0.5 : 0.8);
@@ -638,7 +647,7 @@ export class Game {
         if (w.projectile === 'instant' && w.damage < 30) break;
         if (w.projectile === 'beam') break;
         const big = w.damage >= 200 || w.warhead === 'thermo';
-        this.sfx(big ? 'explosionLarge' : w.damage >= 70 || w.splash ? 'explosionMedium' : 'explosionSmall', ev.x, ev.y, big ? 1 : 0.8);
+        this.sfx(big ? 'explosionLarge' : w.damage >= 70 || w.splash ? 'explosionMedium' : 'explosionSmall', ev.x, ev.y, big ? 1 : 0.8, ev.air ? ev.z : 0);
         break;
       }
       case 'intercept':
@@ -647,7 +656,7 @@ export class Game {
       case 'death': {
         if (!this.visibleToLocal(ev.x, ev.y)) break;
         const d = DEFS[ev.def];
-        if (d.kind === 'building') this.sfx('buildingCollapse', ev.x, ev.y);
+        if (d.kind === 'building') this.sfx(ev.def === 'bridge' ? 'bridgeCollapse' : 'buildingCollapse', ev.x, ev.y);
         else if (d.category === 'vehicle') this.sfx('explosionLarge', ev.x, ev.y);
         else if (d.category === 'air' && !unitDef(d.id).temp) this.sfx('explosionMedium', ev.x, ev.y);
         if (ev.owner === this.local && d.kind === 'unit' && !unitDef(d.id).temp) {
@@ -1663,6 +1672,7 @@ export class Game {
     this.photo.dispose();
     this.modes.dispose();
     this.renderer.dispose();
+    this.audioScene.dispose();
     this.ctlUI?.destroy();
     this.cameos.dispose();
     this.hud.destroy();

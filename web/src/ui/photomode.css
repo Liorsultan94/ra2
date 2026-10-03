@@ -44,7 +44,9 @@
   letter-spacing: 0.04em;
 }
 .ph-top b {
-  font-size: 12.5px;
+  font-family: var(--font-d, inherit);
+  font-weight: 600;
+  font-size: 13.5px;
   letter-spacing: 0.18em;
   color: #fff;
 }
@@ -73,8 +75,10 @@
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 12px;
   font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-family: var(--font-d, inherit);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
   backdrop-filter: blur(6px);
