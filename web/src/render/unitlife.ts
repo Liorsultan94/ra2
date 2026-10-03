@@ -22,6 +22,9 @@ import type { AnimState, Model } from './models';
  *    idle, no orders) dig a foxhole: a short dig motion (AnimState.dig), a growing
  *    horseshoe of sandbags and a ring of dug earth (two InstancedMeshes, capped),
  *    then they kneel in it. Leaving the spot leaves the empty hole, which fades.
+ *  - Dodging a vehicle (sim/crush.ts, Entity.dodge): once the soldier reacts his head
+ *    turns towards the vehicle (AnimState.look) while he sprints aside, and a close
+ *    call plays the dive and roll (AnimState.dive clock).
  *
  * Per-frame work is a map lookup per infantry / transport and a few dozen
  * instance matrices; no allocation in steady state.
@@ -67,6 +70,9 @@ interface Dig {
   slot: number;
   frame: number;
   chop: number;
+  /** Dive and roll clock (s), -1 = not diving; the dodge it was played for (once per dodge). */
+  dive: number;
+  diveOf: object | null;
 }
 
 const _a = new THREE.Vector3();
@@ -325,9 +331,27 @@ export class UnitLife {
     if (!st) {
       // first seen: just out of a transport whose passenger diff hasn't run yet this frame?
       for (const [cid, c] of this.carriers) if (c.ids.includes(e.id)) this.unloaded(e.id, cid, c);
-      this.digs.set(e.id, (st = { x: root.position.x, z: root.position.z, still: 0, t: 0, slot: -1, frame: 0, chop: 0 }));
+      this.digs.set(e.id, (st = { x: root.position.x, z: root.position.z, still: 0, t: 0, slot: -1, frame: 0, chop: 0, dive: -1, diveOf: null }));
     }
     st.frame = this.frame;
+    // jumping out of a vehicle's way: look at it, dive and roll on a close call (sim/crush.ts)
+    const dg = e.dodge;
+    const threat = dg && dg.phase !== 'wait' ? this.world.get(dg.by) : undefined;
+    if (threat) {
+      let l = e.facing - Math.atan2(threat.y - e.y, threat.x - e.x);
+      while (l > Math.PI) l -= Math.PI * 2;
+      while (l < -Math.PI) l += Math.PI * 2;
+      a.look = l;
+    } else a.look = undefined;
+    if (dg && dg.dive && dg.phase !== 'wait' && st.diveOf !== dg) {
+      st.diveOf = dg;
+      st.dive = 0;
+    }
+    if (st.dive >= 0) {
+      st.dive += dt;
+      if (st.dive > 1.25) st.dive = -1;
+    }
+    a.dive = Math.max(0, st.dive);
     const ex = this.exits.size ? this.exits.get(e.id) : undefined;
     if (ex) this.walkOut(e.id, ex, model, a, vis, dt);
     a.dig = 0;

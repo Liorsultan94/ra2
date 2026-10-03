@@ -665,6 +665,12 @@ export class Game {
         if (ev.owner === this.local && d.kind === 'building') this.say('Structure lost', 'warn');
         break;
       }
+      case 'crushed':
+        if (this.visibleToLocal(ev.x, ev.y)) this.sfx('crush', ev.x, ev.y, 0.9);
+        break;
+      case 'dodge':
+        if (mine && !ev.yield) this.sfx('squelch', ev.x, ev.y, 0.6); // one of ours yelling a warning
+        break;
       case 'placed':
         if (mine) this.sfx('place');
         break;

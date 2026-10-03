@@ -11,6 +11,8 @@ import type { AnimState, Model } from './models';
  *    suspension (pitch under acceleration / braking, roll in turns, rough
  *    ground bounce, firing rock) is driven by the vehicle model's anim()
  *    from AnimState, using `AnimState.rough` computed here.
+ *    Running a soldier over (bumpVehicle) adds a short pitch jolt: the nose
+ *    lifts as the front of the tracks climbs over the body, then drops.
  *  - Infantry: a slight lean into turns and up slopes.
  *  - Aircraft: a soft ground-hugging shadow decal (AirShadows), one instanced
  *    draw call for every aircraft on screen.
@@ -23,6 +25,9 @@ interface GroundPose {
   roll: number;
   rough: number;
   init: boolean;
+  /** Seconds since the hull last rode over a body (bumpVehicle), -1 = none; and the jolt's size. */
+  bump: number;
+  bumpK: number;
 }
 const poses = new WeakMap<Model, GroundPose>();
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -62,13 +67,23 @@ export function poseGroundVehicle(model: Model, a: AnimState, map: GameMap, p: T
   const root = model.root;
   let s = poses.get(model);
   if (!s) {
-    s = { pitch: 0, roll: 0, rough: 0, init: false };
+    s = { pitch: 0, roll: 0, rough: 0, init: false, bump: -1, bumpK: 1 };
     poses.set(model, s);
+  }
+  // riding over a body: nose up as the front climbs over it, a smaller dip as it drops off
+  let jolt = 0;
+  if (s.bump >= 0) {
+    s.bump += dt;
+    const t = s.bump;
+    if (t < BUMP_UP) jolt = Math.sin((Math.PI * t) / BUMP_UP);
+    else if (t < BUMP_T) jolt = -0.45 * Math.sin((Math.PI * (t - BUMP_UP)) / (BUMP_T - BUMP_UP));
+    else s.bump = -1;
+    jolt *= BUMP_PITCH * s.bumpK;
   }
   // hidden units keep their last attitude (no sampling)
   if (!visible && s.init) {
     root.position.y = p.y;
-    _e.set(s.roll, yaw, s.pitch);
+    _e.set(s.roll, yaw, s.pitch + jolt);
     root.quaternion.setFromEuler(_e);
     return;
   }
@@ -101,9 +116,25 @@ export function poseGroundVehicle(model: Model, a: AnimState, map: GameMap, p: T
   }
   a.rough = s.rough;
   // in a dip the hull rides on its ends; on a crest it rests on its middle
-  root.position.y = Math.max(p.y, (hF + hB) * 0.5, (hL + hR) * 0.5);
-  _e.set(s.roll, yaw, s.pitch);
+  root.position.y = Math.max(p.y, (hF + hB) * 0.5, (hL + hR) * 0.5) + Math.max(0, jolt) * hl * 0.25;
+  _e.set(s.roll, yaw, s.pitch + jolt);
   root.quaternion.setFromEuler(_e);
+}
+
+/** Pitch jolt (radians) of a hull riding over a body, and its timing (s): nose up, then the drop. */
+const BUMP_PITCH = 0.075;
+const BUMP_UP = 0.2;
+const BUMP_T = 0.5;
+
+/** A ground vehicle just ran a soldier over: play the jolt (light vehicles jolt a little more). */
+export function bumpVehicle(model: Model) {
+  let s = poses.get(model);
+  if (!s) {
+    s = { pitch: 0, roll: 0, rough: 0, init: false, bump: -1, bumpK: 1 };
+    poses.set(model, s);
+  }
+  s.bump = 0;
+  s.bumpK = model.wheeled ? 1.3 : 1;
 }
 
 interface FootPose {

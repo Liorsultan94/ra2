@@ -61,21 +61,22 @@ const CHECK_ONLY = process.argv.includes('--check');
  * that keeps the detail readable from the camera). regular = man-made
  * patterns (slabs, flags): sampled without the random rotation of the
  * anti-tiling. flatten = how much of the photo's low-frequency brightness is
- * divided out. nk = normal strength.
+ * divided out. nk = normal strength. rough = roughness override (some scans'
+ * roughness maps are implausibly glossy for dry ground).
  */
 const MATS = [
-  { key: 'meadow', src: 'acg:Grass004', tiles: 2.4, flatten: 0.8, nk: 1.0, note: 'lush meadow grass' },
+  { key: 'meadow', src: 'acg:Grass004', tiles: 2.4, flatten: 0.8, nk: 1.0, rough: 0.86, note: 'lush meadow grass' },
   { key: 'withered', src: 'ph:withered_grass', tiles: 2.4, flatten: 0.8, nk: 1.0, note: 'dry / frozen grass, desert scrub' },
   { key: 'litter', src: 'ph:forest_leaves_02', tiles: 2.6, flatten: 0.7, nk: 1.0, note: 'forest floor: moss and leaf litter' },
   { key: 'dirt', src: 'ph:dirt', tiles: 2.6, flatten: 0.8, nk: 1.2, note: 'bare soil, tracks' },
   { key: 'drysoil', src: 'ph:dry_ground_rocks', tiles: 2.8, flatten: 0.8, nk: 1.0, note: 'dry stony soil (desert)' },
-  { key: 'gravel', src: 'ph:rocky_trail', tiles: 2.2, flatten: 0.7, nk: 1.0, note: 'gravel shoulders, stony tracks' },
+  { key: 'gravel', src: 'ph:rocky_trail', tiles: 2.2, flatten: 0.7, nk: 1.0, rough: 0.82, note: 'gravel shoulders, stony tracks' },
   { key: 'mossrock', src: 'ph:aerial_rocks_02', tiles: 5, flatten: 0.55, nk: 1.0, note: 'mossy cliff rock (aerial scan)' },
   { key: 'sandstone', src: 'ph:sandstone_cracks', tiles: 3.4, flatten: 0.6, nk: 1.2, note: 'desert mesa sandstone' },
   { key: 'snowrock', src: 'ph:rocks_ground_05', tiles: 3.2, flatten: 0.6, nk: 1.0, note: 'rocks with snow between' },
-  { key: 'greyrock', src: 'ph:rock_boulder_dry', tiles: 3.2, flatten: 0.6, nk: 1.0, note: 'pale grey rock (quays)' },
+  { key: 'greyrock', src: 'ph:rock_boulder_dry', tiles: 3.2, flatten: 0.6, nk: 1.0, rough: 0.78, note: 'pale grey rock (quays)' },
   { key: 'beach', src: 'ph:coast_sand_01', tiles: 4.5, flatten: 0.7, nk: 1.0, note: 'river beach sand' },
-  { key: 'dunes', src: 'ph:aerial_beach_01', tiles: 6, flatten: 0.7, nk: 1.3, note: 'wind-rippled sand (aerial scan)' },
+  { key: 'dunes', src: 'ph:aerial_beach_01', tiles: 6, flatten: 0.7, nk: 1.3, rough: 0.9, note: 'wind-rippled sand (aerial scan)' },
   { key: 'mud', src: 'ph:brown_mud_02', tiles: 2.2, flatten: 0.7, nk: 1.0, note: 'wet mud' },
   { key: 'cracked', src: 'ph:mud_cracked_dry_03', tiles: 2.4, flatten: 0.7, nk: 1.0, note: 'cracked dry mud' },
   { key: 'farmsoil', src: 'ph:farm_soil', tiles: 2.2, flatten: 0.8, nk: 1.0, note: 'ploughed field soil' },
@@ -315,6 +316,23 @@ function writeWebp(file, S, rgb, opts) {
 
 const b8 = (v) => Math.round(clamp01(v) * 255);
 
+/** PSNR target (dB) for packed 8-bit RGB: error ~ 0.2 x the mean channel standard deviation, never below `floor`. */
+function psnrFor(rgb, floor) {
+  let sd = 0;
+  for (let c = 0; c < 3; c++) {
+    let m = 0;
+    let m2 = 0;
+    const n = rgb.length / 3;
+    for (let k = c; k < rgb.length; k += 3) {
+      m += rgb[k];
+      m2 += rgb[k] * rgb[k];
+    }
+    m /= n;
+    sd += Math.sqrt(Math.max(0, m2 / n - m * m)) / 3;
+  }
+  return Math.round(Math.min(48, Math.max(floor, 20 * Math.log10(255 / (0.2 * Math.max(1, sd))))));
+}
+
 // ------------------------------------------------------------------ materials
 
 function bakeMaterial(mat) {
@@ -402,14 +420,16 @@ function bakeMaterial(mat) {
     }
     const dir = join(OUT, String(S));
     mkdirSync(dir, { recursive: true });
-    const ba = writeWebp(join(dir, `${mat.key}_a.webp`), S, pa, { psnr: S >= 1024 ? 36 : 37 });
-    const bn = writeWebp(join(dir, `${mat.key}_n.webp`), S, pn, { psnr: S >= 1024 ? 34 : 36 });
+    // encoder target: an error of ~1/5 of the texture's own contrast (a fixed PSNR would wipe
+    // out the detail of low-contrast scans - snow, smooth dirt - and waste bytes on busy ones)
+    const ba = writeWebp(join(dir, `${mat.key}_a.webp`), S, pa, { psnr: psnrFor(pa, S >= 1024 ? 35 : 36) });
+    const bn = writeWebp(join(dir, `${mat.key}_n.webp`), S, pn, { psnr: psnrFor(pn, S >= 1024 ? 33 : 34) });
     const meanLin = sum.map((v) => v / (S * S));
     out.sizes[S] = { bytes: ba + bn, seam: +sr.toFixed(2), healed };
     if (S === SIZES[0]) {
       out.mean = meanLin.map((v) => +v.toFixed(4));
       out.meanHex = '#' + meanLin.map((v) => b8(l2s(v)).toString(16).padStart(2, '0')).join('');
-      out.rough = +(rs / (S * S)).toFixed(3);
+      out.rough = mat.rough ?? +(rs / (S * S)).toFixed(3);
     }
     console.log(`  ${S}: ${(ba / 1024).toFixed(0)} + ${(bn / 1024).toFixed(0)} KB, seam ${sr.toFixed(2)}${healed ? ' healed' : ''}`);
   }
@@ -439,7 +459,7 @@ function bakeBark(b) {
   }
   const dir = join(ROOT, 'public/tex/bark');
   mkdirSync(dir, { recursive: true });
-  const bytes = writeWebp(join(dir, `${b.key}.webp`), S, rgb, { psnr: 37 });
+  const bytes = writeWebp(join(dir, `${b.key}.webp`), S, rgb, { psnr: psnrFor(rgb, 36) });
   const m = sum.map((v) => v / (S * S));
   console.log(`  ${(bytes / 1024).toFixed(0)} KB`);
   return { bytes, page: src.page, mean: m.map((v) => +v.toFixed(4)) };

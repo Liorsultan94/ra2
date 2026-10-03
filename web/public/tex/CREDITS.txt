@@ -1,0 +1,42 @@
+Iron Front - third-party assets
+
+All assets listed here are CC0 1.0 Universal (public domain dedication):
+https://creativecommons.org/publicdomain/zero/1.0/
+No attribution is required; it is given here as a courtesy.
+
+# ---- terrain, barks, sky HDRIs, rocks (tools/bake-terrain.mjs, tools/bake-rocks.mjs) ----
+Ground materials (public/tex/terrain/):
+  meadow     acg:Grass004               https://ambientcg.com/view?id=Grass004  (CC0)
+  withered   ph:withered_grass          https://polyhaven.com/a/withered_grass  (CC0)
+  litter     ph:forest_leaves_02        https://polyhaven.com/a/forest_leaves_02  (CC0)
+  dirt       ph:dirt                    https://polyhaven.com/a/dirt  (CC0)
+  drysoil    ph:dry_ground_rocks        https://polyhaven.com/a/dry_ground_rocks  (CC0)
+  gravel     ph:rocky_trail             https://polyhaven.com/a/rocky_trail  (CC0)
+  mossrock   ph:aerial_rocks_02         https://polyhaven.com/a/aerial_rocks_02  (CC0)
+  sandstone  ph:sandstone_cracks        https://polyhaven.com/a/sandstone_cracks  (CC0)
+  snowrock   ph:rocks_ground_05         https://polyhaven.com/a/rocks_ground_05  (CC0)
+  greyrock   ph:rock_boulder_dry        https://polyhaven.com/a/rock_boulder_dry  (CC0)
+  beach      ph:coast_sand_01           https://polyhaven.com/a/coast_sand_01  (CC0)
+  dunes      ph:aerial_beach_01         https://polyhaven.com/a/aerial_beach_01  (CC0)
+  mud        ph:brown_mud_02            https://polyhaven.com/a/brown_mud_02  (CC0)
+  cracked    ph:mud_cracked_dry_03      https://polyhaven.com/a/mud_cracked_dry_03  (CC0)
+  farmsoil   ph:farm_soil               https://polyhaven.com/a/farm_soil  (CC0)
+  snow       ph:snow_02                 https://polyhaven.com/a/snow_02  (CC0)
+  asphalt    ph:asphalt_02              https://polyhaven.com/a/asphalt_02  (CC0)
+  pavement   ph:concrete_pavement       https://polyhaven.com/a/concrete_pavement  (CC0)
+  rubble     ph:rubble                  https://polyhaven.com/a/rubble  (CC0)
+  flags      ph:precast_stone_paving    https://polyhaven.com/a/precast_stone_paving  (CC0)
+Tree barks (public/tex/bark/):
+  oak        ph:bark_brown_02           https://polyhaven.com/a/bark_brown_02  (CC0)
+  pine       ph:pine_bark               https://polyhaven.com/a/pine_bark  (CC0)
+  palm       ph:palm_bark               https://polyhaven.com/a/palm_bark  (CC0)
+Sky HDRIs (public/tex/hdri/):
+  clear      ph:noon_grass              https://polyhaven.com/a/noon_grass  (CC0)
+  overcast   ph:overcast_soil           https://polyhaven.com/a/overcast_soil  (CC0)
+  sunset     ph:grasslands_sunset       https://polyhaven.com/a/grasslands_sunset  (CC0)
+Rock models (public/tex/rocks/):
+  outcrop    ph:namaqualand_boulder_03  https://polyhaven.com/a/namaqualand_boulder_03  (CC0)
+  crag       ph:namaqualand_boulder_04  https://polyhaven.com/a/namaqualand_boulder_04  (CC0)
+  boulder    ph:namaqualand_boulder_06  https://polyhaven.com/a/namaqualand_boulder_06  (CC0)
+  stone      ph:namaqualand_boulder_05  https://polyhaven.com/a/namaqualand_boulder_05  (CC0)
+# ---- end terrain ----

@@ -1242,6 +1242,9 @@ interface Sol {
   lookP: number;
   /** Bones blended by the death snapshot (built on first use). */
   bl: THREE.Object3D[] | null;
+  /** Head turned towards a threat (AnimState.look): weight and smoothed yaw. */
+  thrW: number;
+  thrY: number;
 }
 
 const tmpA = new THREE.Vector3();
@@ -1543,12 +1546,14 @@ function solBones(sol: Sol): THREE.Object3D[] {
  * deterministic variations per soldier (face down, on the back, on the side),
  * blended in from the pose the soldier was in when hit.
  */
-function deathPose(sol: Sol, d: number) {
+function deathPose(sol: Sol, d: number, crushed = false) {
   const bones = (sol.bl ??= solBones(sol));
   if (!sol.snap) {
     sol.snap = { q: bones.map((o) => o.quaternion.clone()), hp: sol.hips.position.clone(), wp: sol.wpn ? sol.wpn.position.clone() : null };
   }
-  ragdoll(sol, d);
+  // run over: knocked flat at once, face down or on the back (the model squashes the body; see build())
+  if (crushed) d *= 3.2;
+  ragdoll(sol, d, crushed ? (sol.seed < 0.5 ? 0 : 1) : -1);
   const b = sstep(0, 0.18, d);
   if (b < 1) {
     const sn = sol.snap;
@@ -1571,8 +1576,8 @@ const LIE_ARMS = [
   [0.95, 0.3, 1.05, 0.6, 0.2, 1.25],
 ];
 
-function ragdoll(sol: Sol, d: number) {
-  const v = sol.seed < 0.4 ? 0 : sol.seed < 0.72 ? 1 : 2;
+function ragdoll(sol: Sol, d: number, force = -1) {
+  const v = force >= 0 ? force : sol.seed < 0.4 ? 0 : sol.seed < 0.72 ? 1 : 2;
   const side = hashSeed(sol.sid * 13 + 5) > 0.5 ? 1 : -1;
   const j = hashSeed(sol.sid * 17 + 3);
   // phase 1: the knees give (free fall of the pelvis, eased in), phase 2: topple (accelerating), then impact
@@ -1777,6 +1782,8 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): S
     lookY: 0,
     lookP: 0,
     bl: null,
+    thrW: 0,
+    thrY: 0,
   };
   reseed(sol, 100000 + solSeq++);
   return sol;
@@ -1802,10 +1809,63 @@ function animSoldier(sol: Sol, s: AnimState) {
   animSoldierBase(sol, s);
   const dig = s.dead > 0 ? 0 : (s.dig ?? 0);
   if (dig > 0 && dig < DIG_T) digPose(sol, dig);
+  if (!(s.dead > 0) && (s.lod ?? 0) < 2) {
+    // (additive on this frame's pose: skipped off screen, where the base pose isn't rebuilt)
+    threatPose(sol, s);
+    const dv = s.dive ?? 0;
+    if (dv > 0) divePose(sol, dv);
+  }
   const tgt = s.dead > 0 ? 0 : clamp(s.para ?? 0, 0, 1);
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   sol.paraW = dt === 0 && s.time === 0 ? tgt : approach(sol.paraW, tgt, dt, tgt > sol.paraW ? 20 : 5);
   if (sol.paraW > 0.002) paraPose(sol, sol.paraW, s.time + sol.seed * 40);
+}
+
+/** Head (and a little of the neck) turned towards a threat: a vehicle about to run him over (AnimState.look). */
+function threatPose(sol: Sol, s: AnimState) {
+  const dt = Math.min(Math.max(s.dt, 0), 0.1);
+  const on = s.look !== undefined && Number.isFinite(s.look);
+  sol.thrW = approach(sol.thrW, on ? 1 : 0, dt, on ? 14 : 5);
+  if (on) sol.thrY = sol.thrW < 0.02 ? s.look! : approach(sol.thrY, s.look!, dt, 12);
+  const k = sol.thrW;
+  if (k < 0.002) return;
+  const y = clamp(sol.thrY, -1.5, 1.5) * k;
+  sol.neck.rotation.y += y * 0.4;
+  sol.head.rotation.y += y * 0.6;
+  sol.chest.rotation.y += y * 0.15;
+}
+
+/** Dive and roll timing (AnimState.dive seconds): launch, a log roll on the ground, back up. */
+const DIVE_T = 1.2;
+
+/**
+ * Close call: the soldier throws himself flat out of a vehicle's path (his legs trail the pelvis),
+ * rolls once over his shoulder on the ground with the weapon held to his chest, and pushes back up.
+ * Applied on top of the run pose; blended in / out at both ends.
+ */
+function divePose(sol: Sol, t: number) {
+  const k = sstep(0, 0.1, t) * (1 - sstep(DIVE_T - 0.4, DIVE_T, t));
+  if (k <= 0.001) return;
+  const fly = sstep(0, 0.28, t);
+  const arc = Math.sin(PI * clamp(t / 0.3, 0, 1));
+  const side = sol.seed < 0.5 ? 1 : -1;
+  // one full roll about the body's long axis; a whole turn is the identity, so it ends seamlessly
+  const roll = t < 0.74 ? 2 * PI * side * sstep(0.32, 0.74, t) : 0;
+  const h = sol.hips;
+  h.position.y = mix(h.position.y, mix(0.8, 0.17, fly) + 0.16 * arc, k);
+  h.rotation.z = mix(h.rotation.z, -(PI / 2 - 0.15) * fly, k);
+  h.rotation.x = mix(h.rotation.x, 0, k) + roll * k;
+  // legs stretched out behind, a little apart; chest and head up to look where he lands
+  const legs = k * fly;
+  sol.thL.rotation.z = mix(sol.thL.rotation.z, 0.1, legs);
+  sol.thR.rotation.z = mix(sol.thR.rotation.z, -0.05, legs);
+  sol.thL.rotation.x = mix(sol.thL.rotation.x, 0.12, legs);
+  sol.thR.rotation.x = mix(sol.thR.rotation.x, -0.12, legs);
+  sol.shL.rotation.z = mix(sol.shL.rotation.z, -0.35, legs);
+  sol.shR.rotation.z = mix(sol.shR.rotation.z, -0.2, legs);
+  sol.spine.rotation.z += 0.25 * legs;
+  sol.neck.rotation.z += 0.35 * legs;
+  sol.head.rotation.z += 0.3 * legs;
 }
 
 /** Length of the digging-in motion (AnimState.dig seconds); afterwards the soldier kneels in his foxhole. */
@@ -1939,7 +1999,7 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   const init = dt === 0 && s.time === 0;
   if (s.dead > 0) {
-    deathPose(sol, s.dead);
+    deathPose(sol, s.dead, !!s.crushed);
     if (sol.extra && role === 'fpv') sol.extra.scale.setScalar(1);
     return;
   }
@@ -2236,7 +2296,7 @@ function animMortar(m: MortarState, s: AnimState) {
 
   // ---- gunner
   if (!(s.dead > 0)) g.snap = l.snap = null;
-  if (s.dead > 0) deathPose(g, s.dead + 0.05);
+  if (s.dead > 0) deathPose(g, s.dead + 0.05, !!s.crushed);
   else {
     const t = s.time + g.seed * 40;
     const L = legs(g, s, t, dt, 0);
@@ -2267,7 +2327,7 @@ function animMortar(m: MortarState, s: AnimState) {
 
   // ---- loader
   if (s.dead > 0) {
-    deathPose(l, s.dead);
+    deathPose(l, s.dead, !!s.crushed);
     m.bomb.scale.setScalar(1e-3);
     return;
   }
@@ -2395,6 +2455,9 @@ function build(key: string): Builder {
             const mpt = 1 / (S * (root.scale.x || 1));
             for (const sol of sols) sol.mpt = mpt;
             anim(s);
+            // run over: the body is pressed flat into the ground (and the template scale restored otherwise)
+            const sq = s.dead > 0 && s.crushed ? sstep(0.06, 0.24, s.dead) : 0;
+            if (sq > 0 || inst.top.scale.y !== S) inst.top.scale.set(S * (1 + 0.2 * sq), S * (1 - 0.75 * sq), S * (1 + 0.2 * sq));
           } catch {
             /* never throw from animation */
           }

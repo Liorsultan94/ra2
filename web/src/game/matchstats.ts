@@ -105,6 +105,7 @@ export class MatchTracker {
   private firstElite = false;
   private firstIntercept = false;
   private firstDrop = [false, false];
+  private firstCrush = false;
   private bigBlast: { score: number; t: number; weapon: string } | null = null;
 
   constructor(
@@ -224,6 +225,14 @@ export class MatchTracker {
         const e = w.get(ev.id);
         if (!e || ev.owner !== this.local) break;
         this.note(`Captured the ${this.nameOf(e.def)}`, 'good');
+        break;
+      }
+      case 'crushed': {
+        // the kill itself is counted by the 'death' event that follows
+        if (this.firstCrush || ev.owner < 0 || ev.owner > 1 || this.local < 0) break;
+        this.firstCrush = true;
+        const mineV = ev.byOwner === this.local;
+        this.note(mineV ? `Your ${this.nameOf(ev.byDef)} ran over an enemy ${this.nameOf(ev.def)}` : `Your ${this.nameOf(ev.def)} was run over by an enemy ${this.nameOf(ev.byDef)}`, mineV ? 'good' : 'bad');
         break;
       }
       case 'paradrop':

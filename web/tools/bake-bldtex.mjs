@@ -63,15 +63,16 @@ const T = { Panel: 0, Cast: 1, Corr: 2, Plate: 3, Paint: 4, Clad: 5, Bag: 9, Can
  *  scale: uv multiplier vs the procedural tile (< 1 = the photo covers more surface)
  *  metal: constant metalness, or 'map' (x metalK)
  *  rough: [scale, offset] applied to the roughness map
+ *  ao: how much of the scan's ambient occlusion is multiplied into the albedo (default 0.7)
  *  nrm: normal strength multiplier
  */
 const SOURCES = [
   { tile: T.Panel, name: 'precast concrete', id: 'concrete_wall_008', mean: 0.8, chroma: 0.25, stain: 0.5, contrast: 1.15, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.2 },
   { tile: T.Cast, name: 'board-formed concrete', id: 'concrete_layers_02', mean: 0.78, chroma: 0.25, stain: 0.5, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.1 },
-  { tile: T.Corr, name: 'corrugated steel', id: 'corrugated_iron_02', mean: 0.8, chroma: 0.2, stain: 0.7, contrast: 1.0, scale: 0.42, metal: 'map', metalK: 0.75, rough: [1, 0], nrm: 1.4 },
+  { tile: T.Corr, name: 'corrugated steel', id: 'corrugated_iron_02', mean: 0.8, chroma: 0.2, stain: 0.7, contrast: 1.1, scale: 0.32, metal: 'map', metalK: 0.75, rough: [1, 0], nrm: 1.7, ao: 1 },
   { tile: T.Plate, name: 'steel plate', id: 'blue_metal_plate', mean: 0.78, chroma: 0.0, stain: 0.35, contrast: 1.15, scale: 1, metal: 0.62, rough: [0.9, 0.02], nrm: 1.3 },
   { tile: T.Paint, name: 'painted metal', id: 'green_metal_rust', mean: 0.92, chroma: 0.0, stain: 0.45, contrast: 1.2, scale: 0.55, metal: 0.12, rough: [0.9, 0.06], nrm: 1 },
-  { tile: T.Clad, name: 'box profile cladding', id: 'box_profile_metal_sheet', mean: 0.84, chroma: 0.0, stain: 0.3, contrast: 1.1, scale: 0.5, metal: 'map', metalK: 0.4, rough: [1, 0.12], nrm: 1.3 },
+  { tile: T.Clad, name: 'box profile cladding', id: 'box_profile_metal_sheet', mean: 0.84, chroma: 0.0, stain: 0.3, contrast: 1.1, scale: 0.45, metal: 'map', metalK: 0.4, rough: [1, 0.12], nrm: 1.5, ao: 1 },
   { tile: T.Bag, name: 'sandbag hessian', id: 'hessian_230', mean: 0.78, chroma: 0.3, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0.06], nrm: 0.8, bulge: true },
   { tile: T.Canvas, name: 'canvas', id: 'hessian_380', mean: 0.84, chroma: 0.15, stain: 0.3, contrast: 1.2, scale: 1, metal: 0, rough: [1, 0.05], nrm: 0.9 },
   { tile: T.Asphalt, name: 'asphalt', id: 'asphalt_04', mean: 0.52, chroma: 0.1, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
@@ -105,6 +106,7 @@ function phMaps(id) {
     ['nor_gl', 'nor'],
     ['Rough', 'rough'],
     ['Metal', 'metal'],
+    ['AO', 'ao'],
   ]) {
     const e = f[key]?.['1k']?.jpg ?? f[key]?.['1k']?.png;
     if (!e) continue;
@@ -184,6 +186,7 @@ function bakeTile(src, S) {
   let nor = load(maps.nor.path, S);
   let rough = maps.rough ? load(maps.rough.path, S) : null;
   let metal = src.metal === 'map' && maps.metal ? load(maps.metal.path, S) : null;
+  let ao = maps.ao ? load(maps.ao.path, S) : null;
   const sr = seamRatio(diff, S);
   if (sr > 2.2) {
     console.log(`  ${src.id}: seam ratio ${sr.toFixed(2)} -> cross blend`);
@@ -191,6 +194,7 @@ function bakeTile(src, S) {
     nor = makeSeamless(nor, S);
     if (rough) rough = makeSeamless(rough, S);
     if (metal) metal = makeSeamless(metal, S);
+    if (ao) ao = makeSeamless(ao, S);
   }
   const N = S * S;
   // ---- albedo: work in linear light
@@ -200,10 +204,13 @@ function bakeTile(src, S) {
   let mg = 0;
   let mb = 0;
   let ml = 0;
+  // ambient occlusion baked into the albedo: joints, ribs and mortar lines stay legible at RTS distance
+  const aoK = src.ao ?? 0.7;
   for (let i = 0; i < N; i++) {
-    const r = lin(diff[i * 3]);
-    const g = lin(diff[i * 3 + 1]);
-    const b = lin(diff[i * 3 + 2]);
+    const o = ao ? 1 - (1 - ao[i * 3]) * aoK : 1;
+    const r = lin(diff[i * 3]) * o;
+    const g = lin(diff[i * 3 + 1]) * o;
+    const b = lin(diff[i * 3 + 2]) * o;
     rgb[i * 3] = r;
     rgb[i * 3 + 1] = g;
     rgb[i * 3 + 2] = b;

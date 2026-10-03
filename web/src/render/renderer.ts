@@ -32,7 +32,7 @@ import { Sky } from './sky';
 import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
 import type { TiltShiftPass } from './tiltshift';
-import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
+import { AirShadows, bumpVehicle, poseGroundVehicle, poseInfantry } from './unitpose';
 import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
@@ -1322,7 +1322,7 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ wrecks
 
-  private toWreck(v: Visual, e: { def: string; x: number; y: number }) {
+  private toWreck(v: Visual, e: { def: string; x: number; y: number; cause?: 'crushed' }) {
     this.visuals.delete(v.id);
     // back on layer 0: wrecks and fracture rubble copy / reuse the meshes
     restoreMain(v.model.root);
@@ -1343,7 +1343,7 @@ export class GameRenderer {
     // killed under the canopy: the parachute carries the body down
     if (ud.category === 'infantry' && this.chutes.takeBody(v.id, v.model, v.anim)) return;
     if (ud.category === 'infantry') {
-      if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false } });
+      if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false, crushed: e.cause === 'crushed' ? 1 : 0, look: undefined, dive: 0 } });
       else this.wrecks.push({ ...base, kind: 'infantry', max: 2.2 });
       return;
     }
@@ -1807,7 +1807,7 @@ export class GameRenderer {
             const pos = v?.model.root.position ?? new THREE.Vector3(ev.x, gy + 1.5, ev.y);
             fx.blast(BLASTS.airSmall, pos.x, pos.y, pos.z, gy);
           } else if (ud.category === 'infantry') {
-            fx.explosion(ev.x, gy, ev.y, 'small', 'dust');
+            if (ev.cause !== 'crushed') fx.explosion(ev.x, gy, ev.y, 'small', 'dust'); // run over: the 'crushed' event's puff
           } else {
             fx.blast(ud.harvester || ud.mcv ? BLASTS.bigVehicle : BLASTS.vehicle, ev.x, gy + 0.25, ev.y, gy);
             // secondary ammunition cook-off
@@ -1819,6 +1819,16 @@ export class GameRenderer {
           if (shown) this.toWreck(v, ev);
           else this.removeVisual(v);
         }
+        break;
+      }
+      case 'crushed': {
+        // run over: the hull jolts over the body, a small puff of dust and grit under the tracks
+        const vv = this.visuals.get(ev.by);
+        if (vv) bumpVehicle(vv.model);
+        if (!this.visibleAt(ev.x, ev.y)) break;
+        const gy = standHeight(this.world.map, ev.x, ev.y);
+        for (let i = 0; i < 6; i++) fx.dust(ev.x, gy, ev.y, 0.9 + i * 0.12);
+        this.debris.burst('dirt', ev.x, gy + 0.03, ev.y, 5, 0.9, 0.035, { up: 0.6, spread: 0.12 });
         break;
       }
       case 'unitReady': {

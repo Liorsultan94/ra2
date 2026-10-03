@@ -1,0 +1,704 @@
+{
+ "version": 1,
+ "cols": 5,
+ "rows": 4,
+ "model": "props.glb",
+ "atlas": {
+  "256": {
+   "albedo": "props-albedo-256.webp",
+   "normal": "props-normal-256.webp",
+   "orm": "props-orm-256.webp",
+   "bytes": 395774
+  },
+  "512": {
+   "albedo": "props-albedo-512.webp",
+   "normal": "props-normal-512.webp",
+   "orm": "props-orm-512.webp",
+   "bytes": 1302298
+  }
+ },
+ "props": {
+  "drum_red": {
+   "src": "Barrel_01",
+   "size": [
+    0.122,
+    0.193,
+    0.123
+   ],
+   "footprint": [
+    0.122,
+    0.123
+   ],
+   "height": 0.193,
+   "biomes": [
+    "temperate",
+    "desert"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    488,
+    287
+   ]
+  },
+  "drum_blue": {
+   "src": "barrel_03",
+   "size": [
+    0.133,
+    0.195,
+    0.131
+   ],
+   "footprint": [
+    0.133,
+    0.131
+   ],
+   "height": 0.195,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    407,
+    274
+   ]
+  },
+  "drum_rust": {
+   "src": "barrel_stove",
+   "size": [
+    0.127,
+    0.185,
+    0.128
+   ],
+   "footprint": [
+    0.127,
+    0.128
+   ],
+   "height": 0.185,
+   "biomes": [
+    "desert",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    774,
+    209
+   ]
+  },
+  "drum_plastic": {
+   "src": "Barrel_02",
+   "size": [
+    0.103,
+    0.185,
+    0.102
+   ],
+   "footprint": [
+    0.103,
+    0.102
+   ],
+   "height": 0.185,
+   "biomes": [
+    "urban",
+    "temperate"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    688,
+    262
+   ]
+  },
+  "jerrycan": {
+   "src": "metal_jerrycan_green",
+   "size": [
+    0.086,
+    0.116,
+    0.041
+   ],
+   "footprint": [
+    0.086,
+    0.041
+   ],
+   "height": 0.116,
+   "biomes": [
+    "desert",
+    "temperate",
+    "winter"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": false,
+   "tris": [
+    362,
+    282
+   ]
+  },
+  "propane": {
+   "src": "propane_tank",
+   "size": [
+    0.074,
+    0.127,
+    0.075
+   ],
+   "footprint": [
+    0.074,
+    0.075
+   ],
+   "height": 0.127,
+   "biomes": [
+    "desert"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": false,
+   "tris": [
+    590,
+    272
+   ]
+  },
+  "crate_long": {
+   "src": "wooden_crate_02",
+   "size": [
+    0.247,
+    0.102,
+    0.116
+   ],
+   "footprint": [
+    0.247,
+    0.116
+   ],
+   "height": 0.102,
+   "biomes": [
+    "temperate",
+    "winter"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    405,
+    284
+   ]
+  },
+  "crate_ammo": {
+   "src": "old_military_crate",
+   "size": [
+    0.176,
+    0.06,
+    0.103
+   ],
+   "footprint": [
+    0.176,
+    0.103
+   ],
+   "height": 0.063,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    749,
+    278
+   ]
+  },
+  "barrel_wood": {
+   "src": "wine_barrel_01",
+   "size": [
+    0.163,
+    0.191,
+    0.163
+   ],
+   "footprint": [
+    0.163,
+    0.163
+   ],
+   "height": 0.191,
+   "biomes": [
+    "temperate",
+    "winter"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    790,
+    280
+   ]
+  },
+  "tyre": {
+   "src": "old_tyre",
+   "size": [
+    0.124,
+    0.125,
+    0.033
+   ],
+   "footprint": [
+    0.124,
+    0.033
+   ],
+   "height": 0.131,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": false,
+   "tris": [
+    228,
+    228
+   ]
+  },
+  "tyre_stack": {
+   "src": "composed:tyreStack",
+   "size": [
+    0.2,
+    0.188,
+    0.18
+   ],
+   "footprint": [
+    0.2,
+    0.18
+   ],
+   "height": 0.188,
+   "biomes": [
+    "winter",
+    "desert"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    936,
+    290
+   ]
+  },
+  "woodpile": {
+   "src": "composed:woodpile",
+   "size": [
+    0.428,
+    0.121,
+    0.159
+   ],
+   "footprint": [
+    0.428,
+    0.159
+   ],
+   "height": 0.121,
+   "biomes": [
+    "winter",
+    "temperate"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    700,
+    292
+   ]
+  },
+  "stump": {
+   "src": "tree_stump_01",
+   "size": [
+    0.242,
+    0.097,
+    0.27
+   ],
+   "footprint": [
+    0.242,
+    0.27
+   ],
+   "height": 0.097,
+   "biomes": [
+    "winter",
+    "temperate"
+   ],
+   "destructible": false,
+   "kind": "fixed",
+   "shadow": false,
+   "tris": [
+    526,
+    173
+   ]
+  },
+  "car_covered": {
+   "src": "covered_car",
+   "size": [
+    0.664,
+    0.205,
+    0.261
+   ],
+   "footprint": [
+    0.664,
+    0.261
+   ],
+   "height": 0.21,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    1422,
+    272
+   ]
+  },
+  "barrier": {
+   "src": "concrete_road_barrier",
+   "size": [
+    0.339,
+    0.182,
+    0.139
+   ],
+   "footprint": [
+    0.339,
+    0.139
+   ],
+   "height": 0.182,
+   "biomes": [
+    "temperate",
+    "desert",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    446,
+    270
+   ]
+  },
+  "block": {
+   "src": "concrete_road_barrier_02",
+   "size": [
+    0.312,
+    0.222,
+    0.088
+   ],
+   "footprint": [
+    0.312,
+    0.088
+   ],
+   "height": 0.222,
+   "biomes": [
+    "desert",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    698,
+    168
+   ]
+  },
+  "generator": {
+   "src": "portable_generator",
+   "size": [
+    0.175,
+    0.126,
+    0.118
+   ],
+   "footprint": [
+    0.175,
+    0.118
+   ],
+   "height": 0.127,
+   "biomes": [
+    "temperate",
+    "desert"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    1133,
+    256
+   ]
+  },
+  "lamp": {
+   "src": "street_lamp_01",
+   "size": [
+    0.132,
+    0.732,
+    0.073
+   ],
+   "footprint": [
+    0.132,
+    0.073
+   ],
+   "height": 0.732,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "tall",
+   "shadow": true,
+   "tris": [
+    442,
+    198
+   ]
+  },
+  "bench": {
+   "src": "modular_street_seating",
+   "size": [
+    0.49,
+    0.173,
+    0.132
+   ],
+   "footprint": [
+    0.49,
+    0.132
+   ],
+   "height": 0.173,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": false,
+   "tris": [
+    999,
+    95
+   ]
+  },
+  "bin": {
+   "src": "metal_trash_can",
+   "size": [
+    0.134,
+    0.199,
+    0.12
+   ],
+   "footprint": [
+    0.134,
+    0.12
+   ],
+   "height": 0.199,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    484,
+    286
+   ]
+  },
+  "trashbag": {
+   "src": "trashbag",
+   "size": [
+    0.115,
+    0.126,
+    0.1
+   ],
+   "footprint": [
+    0.115,
+    0.1
+   ],
+   "height": 0.126,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": false,
+   "tris": [
+    164,
+    164
+   ]
+  },
+  "utility_box": {
+   "src": "utility_box_02",
+   "size": [
+    0.192,
+    0.235,
+    0.09
+   ],
+   "footprint": [
+    0.192,
+    0.09
+   ],
+   "height": 0.235,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    565,
+    297
+   ]
+  },
+  "hydrant": {
+   "src": "fire_hydrant",
+   "size": [
+    0.06,
+    0.176,
+    0.07
+   ],
+   "footprint": [
+    0.06,
+    0.07
+   ],
+   "height": 0.176,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": false,
+   "tris": [
+    494,
+    294
+   ]
+  },
+  "sandbags": {
+   "src": "procedural:sandbags",
+   "size": [
+    0.497,
+    0.155,
+    0.104
+   ],
+   "footprint": [
+    0.497,
+    0.104
+   ],
+   "height": 0.155,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    960,
+    288
+   ]
+  },
+  "hedgehog": {
+   "src": "procedural:hedgehog",
+   "size": [
+    0.325,
+    0.251,
+    0.325
+   ],
+   "footprint": [
+    0.325,
+    0.325
+   ],
+   "height": 0.251,
+   "biomes": [
+    "temperate",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    72,
+    72
+   ]
+  },
+  "dumpster": {
+   "src": "procedural:dumpster",
+   "size": [
+    0.368,
+    0.257,
+    0.265
+   ],
+   "footprint": [
+    0.368,
+    0.265
+   ],
+   "height": 0.257,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "big",
+   "shadow": true,
+   "tris": [
+    96,
+    96
+   ]
+  },
+  "bollard": {
+   "src": "procedural:bollard",
+   "size": [
+    0.075,
+    0.176,
+    0.071
+   ],
+   "footprint": [
+    0.075,
+    0.071
+   ],
+   "height": 0.176,
+   "biomes": [
+    "urban"
+   ],
+   "destructible": false,
+   "kind": "fixed",
+   "shadow": false,
+   "tris": [
+    50,
+    50
+   ]
+  },
+  "pallets": {
+   "src": "procedural:pallets",
+   "size": [
+    0.28,
+    0.129,
+    0.199
+   ],
+   "footprint": [
+    0.28,
+    0.199
+   ],
+   "height": 0.129,
+   "biomes": [
+    "temperate",
+    "desert",
+    "winter",
+    "urban"
+   ],
+   "destructible": true,
+   "kind": "small",
+   "shadow": true,
+   "tris": [
+    528,
+    48
+   ]
+  }
+ },
+ "tiers": {
+  "medium": 811946,
+  "high": 1718470
+ },
+ "modelBytes": 416172
+}

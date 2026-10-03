@@ -266,90 +266,128 @@ export function armourMod(): UnitTexSet {
 
 // ------------------------------------------------------- nation camo
 
-type Scheme = 'carc' | 'sinai' | 'nato3' | 'ru3' | 'ua3' | 'pla' | 'kor3' | 'tr4' | 'ir';
+type Scheme = 'carc' | 'sinai' | 'nato3' | 'ru3' | 'uapix' | 'pla' | 'kor4' | 'tr3' | 'ir';
 
 interface CamoSpec {
   scheme: Scheme;
   cols: number[]; // base, 2, 3, 4
 }
 
-/** Real-world paint schemes (colours close to the factionCamo() base so vertex-coloured parts match). */
+/*
+ * Real-world vehicle paint schemes, re-derived from reference photos (Wikimedia
+ * Commons, see tools/vehicle-refs.md; only used as reference, nothing shipped):
+ *  - US: CARC tan 686A (FS 33446), single colour, sun-faded.
+ *  - Israel: "Sinai grey" (khaki grey-olive), single colour.
+ *  - Germany: NATO three-tone (RAL 6031 bronze green / 8027 leather brown /
+ *    9021 tar black): big amorphous patches, black bordering the brown.
+ *  - Russia: T-90M factory 3-tone: green base, broad sand-khaki patches with
+ *    black edges, hand-painted wavy shapes.
+ *  - Ukraine: pixelated 4-colour (MM-14 derived): khaki / olive / brown /
+ *    dark olive in blocky clusters.
+ *  - China: PLA woodland digital (Type 99A): large pixel blotches of dark
+ *    green, khaki and black on green with a dithered pixel fringe.
+ *  - Korea: ROK 4-colour woodland (K1 / K2): green, brown, black and a sand
+ *    khaki in long wavy bands.
+ *  - Turkey: TSK 3-tone (Altay, Leopard 2A4TR): green, brown, black blotches.
+ *  - Iran: desert sand with soft brown / dark tan blotches (Karrar).
+ * Colours stay close to the factionCamo() base so the vertex-coloured parts match.
+ */
 const CAMO: Record<string, CamoSpec> = {
-  usa: { scheme: 'carc', cols: [0xb8a57c, 0xa8946a, 0x8c7a56, 0xc4b48c] }, // CARC tan 686A
-  israel: { scheme: 'sinai', cols: [0x9e9a7e, 0x8f8a6e, 0x7a7660, 0xaaa68a] }, // Sinai grey
-  germany: { scheme: 'nato3', cols: [0x4b5a38, 0x5e4a36, 0x1f2018, 0x4b5a38] }, // NATO 3-tone: green / brown / black
-  russia: { scheme: 'ru3', cols: [0x56663e, 0x8a8060, 0x26261c, 0x3e4a2c] }, // green / sand / black
-  ukraine: { scheme: 'ua3', cols: [0x5f6a3e, 0x6a5538, 0x2c2e22, 0x857a58] }, // green with brown + black bands
-  china: { scheme: 'pla', cols: [0x5d6b47, 0x3d4a2e, 0x26281e, 0x8a8462] }, // PLA digital
-  korea: { scheme: 'kor3', cols: [0x56623f, 0x5c4a34, 0x22241c, 0x7a6a4a] }, // ROK 3-tone
-  turkey: { scheme: 'tr4', cols: [0x6b7356, 0x4a5040, 0x2a2c24, 0x8c8a70] }, // TSK 4-tone
-  iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] }, // desert tan, brown blotches
+  usa: { scheme: 'carc', cols: [0xb8a57c, 0xa8946a, 0x8c7a56, 0xc4b48c] },
+  israel: { scheme: 'sinai', cols: [0x9a967a, 0x8b866a, 0x7a7660, 0xa8a488] },
+  germany: { scheme: 'nato3', cols: [0x4a5838, 0x5a4634, 0x22231d, 0x4a5838] },
+  russia: { scheme: 'ru3', cols: [0x55643c, 0x958a62, 0x24241c, 0x44502e] },
+  ukraine: { scheme: 'uapix', cols: [0x5f6a3e, 0x6a5a3c, 0x2c2e22, 0x8a8260] },
+  china: { scheme: 'pla', cols: [0x5d6b47, 0x3a4630, 0x24261d, 0x8e8562] },
+  korea: { scheme: 'kor4', cols: [0x56623f, 0x5e4c36, 0x22241c, 0x8c8262] },
+  turkey: { scheme: 'tr3', cols: [0x667050, 0x58483a, 0x26271f, 0x667050] },
+  iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] },
 };
 
-/** Index 0..3 of the camo colour at (u, v). `w` = soft weight for anti-aliasing (unused by hard schemes). */
+/** Domain-warped fBm: amorphous, hand-painted looking patch shapes (tileable). */
+function wfbm(u: number, v: number, f: number, s: number, warp = 0.18) {
+  const wu = fbm(u, v, 2, s + 5, 3) - 0.5;
+  const wv = fbm(u, v, 2, s + 9, 3) - 0.5;
+  return fbm(frac(u + wu * warp * 2), frac(v + wv * warp * 2), f, s, 4);
+}
+
+/** Index 0..3 of the camo colour at (u, v). */
 function schemeAt(s: Scheme, u: number, v: number): number {
   switch (s) {
     case 'carc':
     case 'sinai':
       return 0;
     case 'nato3': {
-      // large hard-edged blotches: brown and black over green
-      const a = fbm(u, v, 3, 101, 4);
-      const b = fbm(u + 0.37, v + 0.21, 3, 131, 4);
-      if (b > 0.6) return 2;
-      if (a > 0.54) return 1;
+      // ~45 % green, ~35 % brown, ~20 % black; the black patches hug the brown ones
+      const a = wfbm(u, v, 3, 101, 0.22);
+      const b = wfbm(u, v, 3, 131, 0.22);
+      if (b > 0.63 || (a > 0.47 && a < 0.5 && b > 0.5)) return 2;
+      if (a > 0.47) return 1;
       return 0;
     }
     case 'ru3': {
-      // wavy diagonal bands: sand + black on green (T-90M style)
-      const w = fbm(u, v, 2, 211, 3);
-      const t = frac((u * 2 + v * 1 + w * 0.9) * 1.0);
-      const n = fbm(u, v, 6, 223, 3);
-      if (t < 0.18 + n * 0.08) return 2;
-      if (t > 0.48 && t < 0.72 + n * 0.08) return 1;
+      // broad sand patches with black edging on green, plus a few lone black streaks
+      const a = wfbm(u, v, 3, 211, 0.25);
+      const n = fbm(u, v, 9, 223, 2) * 0.04;
+      if (a > 0.5 + n) return 1;
+      if (a > 0.47 + n) return 2;
+      if (wfbm(u, v, 4, 241, 0.3) > 0.67) return 2;
       return 0;
     }
-    case 'ua3': {
-      const a = fbm(u, v, 4, 311, 4);
-      const b = fbm(u + 0.5, v, 4, 331, 4);
-      if (b > 0.62) return 2;
-      if (a > 0.57) return 1;
-      if (a < 0.33) return 3;
+    case 'uapix': {
+      // pixel clusters (~1 / 40 of the tile): olive ground, brown + khaki clusters, dark accents
+      const P = 40;
+      const iu = Math.floor(u * P);
+      const iv = Math.floor(v * P);
+      const cu = (iu + 0.5) / P;
+      const cv = (iv + 0.5) / P;
+      const j = (hash(iu, iv, 313) - 0.5) * 0.09;
+      const a = wfbm(cu, cv, 4, 311, 0.2) + j;
+      const b = wfbm(cu + 0.5, cv, 4, 331, 0.2) + j;
+      if (b > 0.63) return 2;
+      if (a > 0.58) return 1;
+      if (a < 0.38) return 3;
       return 0;
     }
     case 'pla': {
-      // digital: 2-level pixel blocks
-      const P = 48;
-      const cu = (Math.floor(u * P) + 0.5) / P;
-      const cv = (Math.floor(v * P) + 0.5) / P;
-      const a = fbm(cu, cv, 4, 411, 3) + (hash(Math.floor(u * P), Math.floor(v * P), 413) - 0.5) * 0.08;
-      const b = fbm(cu + 0.3, cv, 5, 431, 3) + (hash(Math.floor(u * P), Math.floor(v * P), 433) - 0.5) * 0.08;
-      if (b > 0.6) return 2;
-      if (a > 0.56) return 1;
-      if (a < 0.36) return 3;
+      // woodland digital: blotches built from big pixels with a finer dithered fringe
+      const P = 32;
+      const iu = Math.floor(u * P);
+      const iv = Math.floor(v * P);
+      const fu = Math.floor(u * P * 2);
+      const fv = Math.floor(v * P * 2);
+      const cu = (iu + 0.5) / P;
+      const cv = (iv + 0.5) / P;
+      const d = (hash(fu, fv, 413) - 0.5) * 0.07;
+      const a = wfbm(cu, cv, 4, 411, 0.2) + d;
+      const b = wfbm(cu + 0.3, cv, 4, 431, 0.2) + d;
+      if (b > 0.62) return 2;
+      if (a > 0.57) return 1;
+      if (a < 0.4) return 3;
       return 0;
     }
-    case 'kor3': {
-      // smaller, elongated brown + black patches on green
-      const a = fbm(u * 1.0, v * 1.0, 5, 511, 4);
-      const b = fbm(u + 0.2, v + 0.6, 5, 531, 4);
-      if (b > 0.61) return 2;
-      if (a > 0.58) return 1;
+    case 'kor4': {
+      // long wavy bands (MERDC-style woodland): green ground, brown + sand bands, black slashes
+      const w = fbm(u, v, 2, 511, 3);
+      const t = frac(u * 2 + v * 0.6 + w * 1.2);
+      const n = wfbm(u, v, 5, 521, 0.2);
+      if (n > 0.64) return 2;
+      if (t < 0.28) return 1;
+      if (t > 0.55 && t < 0.72) return 3;
       return 0;
     }
-    case 'tr4': {
-      const a = fbm(u, v, 4, 611, 4);
-      const b = fbm(u + 0.1, v + 0.4, 4, 631, 4);
-      if (b > 0.64) return 2;
-      if (a > 0.6) return 1;
-      if (a < 0.34) return 3;
+    case 'tr3': {
+      const a = wfbm(u, v, 3, 611, 0.22);
+      const b = wfbm(u + 0.1, v + 0.4, 4, 631, 0.22);
+      if (b > 0.66) return 2;
+      if (a > 0.5) return 1;
       return 0;
     }
     case 'ir': {
-      const a = fbm(u, v, 3, 711, 4);
-      const b = fbm(u, v, 6, 731, 3);
-      if (a > 0.61) return 1;
-      if (b > 0.68) return 2;
+      const a = wfbm(u, v, 3, 711, 0.25);
+      const b = wfbm(u, v, 5, 731, 0.2);
+      if (a > 0.6) return 1;
+      if (b > 0.67) return 2;
       return 0;
     }
   }

@@ -8,6 +8,7 @@ import { FieldType, type Layout } from './layout';
 import { buildingTextures, roadTexture } from './terraintex';
 import { biomeLook } from './biome';
 import { buildCity, isCityKind } from './models/citybldgs';
+import { snowLine } from './props';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -478,7 +479,9 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const fenceMat = fog.apply(new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 0.95, map: tex.planks }));
   if (posts.length) {
     const postGeo = new THREE.BoxGeometry(0.03, 0.16, 0.03).translate(0, 0.07, 0);
-    const pm = chunkedInstances(postGeo, fenceMat, posts, 96, { castShadow: false });
+    // winter: the posts stand half buried in the snow (props.ts snow line)
+    const postMat = bc === 2 ? snowLine(fog, new THREE.MeshStandardMaterial({ color: 0x8a7a64, roughness: 0.95, map: tex.planks }), 0.06) : fenceMat;
+    const pm = chunkedInstances(postGeo, postMat, posts, 96, { castShadow: false });
     out.push(...pm);
     const railGeo = new THREE.BoxGeometry(1, 0.014, 0.012);
     const rm = chunkedInstances(railGeo, fenceMat, rails, 96, { castShadow: false });

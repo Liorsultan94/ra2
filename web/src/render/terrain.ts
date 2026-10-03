@@ -9,6 +9,7 @@ import { Ground } from './ground';
 import { buildLayout, type Layout } from './layout';
 import { Resources } from './resources';
 import { buildRocks } from './rocks';
+import { Props } from './props';
 import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
 import { RIVER, buildWater, type RiverInfo, type WaterReflection } from './water';
@@ -40,6 +41,8 @@ export class Terrain {
   /** Instanced plants, fences and village houses, for render-side environment damage. */
   readonly veg: VegetationHandles = { trees: [], bushes: [] };
   readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
+  /** Photoscanned props (barrels, crates, cars, barriers...); they stream in after the terrain is built. */
+  readonly props: Props;
 
   constructor(
     private map: GameMap,
@@ -60,7 +63,9 @@ export class Terrain {
     // camera) every frame; the vegetation and rocks switch models from it.
     const lod = new SceneryLod();
     this.lod = lod;
-    const onBefore = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+    const onBefore = (r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+      // stream the photoscanned ground layers into their texture arrays (a few per frame)
+      this.ground.prepare(r);
       // the mirrored water reflection camera must not drive LOD / culling
       if (cam.userData.waterReflection) return;
       this.camera = cam;
@@ -80,6 +85,9 @@ export class Terrain {
     for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(Object.assign(o, { name: o.name || 'vegetation' }));
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(Object.assign(o, { name: o.name || 'rocks' }));
     for (const o of buildScenery(map, this.layout, fog, quality, this.scenery, lod)) this.group.add(Object.assign(o, { name: o.name || 'scenery' }));
+    this.props = new Props(map, this.layout, fog, quality);
+    this.group.add(this.props.group);
+    void this.props.load();
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
     this.ground.mesh.userData.perfCat = 'ground';
@@ -177,6 +185,7 @@ export class Terrain {
     this.grass?.update(time, this.camera, units ?? null);
     // cull the scatter to last frame's view (the margin covers the lag)
     if (this.camera) this.lod.cull(this.camera);
+    this.props.frame(this.camera, time, units);
     RIVER.time.value = time;
     this.reflection?.tick();
     this.waterside?.update(time);

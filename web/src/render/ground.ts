@@ -6,6 +6,7 @@ import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './gras
 import { biomeLook, type BiomeLook } from './biome';
 import { FieldType, segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
+import { PhotoGround, photoTier } from './photoground';
 
 /*
  * Ground: a height-blended splat material. Low resolution control maps
@@ -19,6 +20,19 @@ import { groundDetailTexture } from './terraintex';
  * sampled twice with noise-driven selection against tiling, and a grass
  * control map: lush banks and hollows, clover and wildflower patches, worn
  * footpaths and yards. The blade map drives the 3D grass (grass.ts).
+ *
+ * Medium / high quality layer CC0 photoscans on top (photoground.ts,
+ * PHOTO = 1): every layer samples its scan from two texture arrays (albedo;
+ * normal + height) with anti-tiling - hex tiling with random rotations on
+ * high, two decorrelated copies on medium - and the layers are height
+ * blended, so grass fills the gaps between gravel, soil shows in the dips
+ * of worn turf, and so on. The dirt layer splits into bare soil, forest floor
+ * and gravel by a second control map (ctl2). The scans' normal maps feed the
+ * standard lighting; the procedural relief (furrows, joints, markings) stays
+ * as a bump on top. Everything painted (tint, dryness, lushness, fields,
+ * snow, puddles, fog of war) still drives the result. Low quality keeps the
+ * fully procedural shader (PHOTO = 0), which is also the fallback when the
+ * scans cannot be loaded.
  */
 
 export const SUB = 2; // mesh vertices per tile
@@ -138,6 +152,10 @@ export class Ground {
   readonly ctl: Uint8Array;
   /** 3D grass blade map: r density, g height (src/render/grass.ts). */
   readonly blades: Uint8Array;
+  /** Second ground control map (photo layers): r forest floor, g gravel, b / a unused. */
+  readonly ctl2: Uint8Array;
+  /** Photoscanned layers (null on low quality). */
+  readonly photo: PhotoGround | null;
   readonly res: number;
   /** Rendered surface heights on the mesh grid (hx * hy vertices, SUB per tile). */
   readonly heights: Float32Array;
@@ -163,6 +181,14 @@ export class Ground {
     this.tint = new Uint8Array(N * N * 4);
     this.ctl = new Uint8Array(N * N * 4);
     this.blades = new Uint8Array(N * N * 4);
+    this.ctl2 = new Uint8Array(N * N * 4);
+    const tier = photoTier(quality);
+    const g = this.look.ground;
+    this.photo =
+      tier > 0
+        ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
+          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 4)
+        : null;
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);
     const tex = (data: Uint8Array) => {
@@ -191,6 +217,7 @@ export class Ground {
       detailTex: { value: detail },
       grassTex: { value: grassTex },
       ctlTex: { value: tex(this.ctl) },
+      ctl2Tex: { value: tex(this.ctl2) },
       terrMapSize: { value: new THREE.Vector2(m.w, m.h) },
       ...grassUniforms(this.look.grass),
       cDirt: { value: col(this.look.ground.dirt) },
@@ -201,8 +228,11 @@ export class Ground {
       cCrop: { value: col(this.look.ground.crop) },
       cWheat: { value: col(this.look.ground.wheat) },
       cHay: { value: col(this.look.ground.hay) },
+      ...(this.photo ? { phA: this.photo.albedo, phN: this.photo.normal, phP: this.photo.params, phM: this.photo.means, phT: this.photo.tints } : {}),
     };
     this.shared = { ...uniforms, bladeTex: { value: tex(this.blades) } };
+    const ph = this.photo;
+    ph?.whenReady(() => console.info(`[photo] ground layers on the GPU: ${(ph.gpuBytes() / 1048576).toFixed(1)} MB`));
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
@@ -212,13 +242,17 @@ export class Ground {
         .replace('#include <common>', `#include <common>\n${GRASS_GLSL}\n${TERRAIN_PARS}`)
         .replace('#include <map_fragment>', TERRAIN_MAP)
         .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = terrRough;')
-        .replace('#include <normal_fragment_maps>', TERRAIN_NORMAL);
+        .replace('#include <normal_fragment_maps>', TERRAIN_NORMAL)
+        .replace('#include <aomap_fragment>', TERRAIN_AO);
     };
     fog.apply(mat);
-    // relief mapping steps: high 12, medium 5, low off (?pom=0 forces it off for comparisons)
+    // relief mapping steps: high 12, medium 5, low off (?pom=0 forces it off for comparisons);
+    // the photoscan layers bring their own normal maps instead
     const pomOff = typeof location !== 'undefined' && /[?&]pom=0\b/.test(location.search);
     const pom = pomOff ? 0 : quality === 'high' ? 12 : quality === 'medium' ? 5 : 0;
-    mat.defines = { ...(mat.defines ?? {}), TERR_POM: pom };
+    const photo = this.photo;
+    mat.defines = { ...(mat.defines ?? {}), TERR_POM: photo ? 0 : pom, PHOTO: photo ? 1 : 0, PH_Q: quality === 'high' ? 2 : 1, ...(photo ? photo.defines() : {}) };
+    this.pomSteps = pom;
     mat.defines.GRASS_TILES = GRASS_TEX_TILES.toFixed(3);
     // biome branches of the splat shader (0 = the original temperate look, untouched)
     const bc = this.look.code;
@@ -227,7 +261,7 @@ export class Ground {
     mat.defines.TERR_DIRT_RELIEF = bc === 3 ? '0.0' : bc === 1 ? '0.06' : '0.1';
     // the winter ground paints its own snow (deeper, drifted, kept off roads and ruts)
     if (bc === 2) mat.defines.WX_SNOW_K = '0.0';
-    mat.customProgramCacheKey = () => 'terrain-splat-3-' + pom + '-b' + bc;
+    mat.customProgramCacheKey = () => 'terrain-splat-4-' + mat.defines!.TERR_POM + '-b' + bc + '-p' + mat.defines!.PHOTO + mat.defines!.PH_Q;
     this.material = mat;
 
     // mesh: one height field (so normals are continuous), cut into chunks
@@ -292,6 +326,28 @@ export class Ground {
         this.mesh.add(mesh);
       }
     this.mesh.name = 'ground';
+  }
+
+  private pomSteps = 0;
+
+  /**
+   * Render hook (the terrain calls it before drawing the ground): streams the
+   * decoded photoscans into their texture arrays; if they could not be loaded,
+   * falls back to the procedural shader once.
+   */
+  prepare(renderer: THREE.WebGLRenderer) {
+    const p = this.photo;
+    if (!p || p.ready) return;
+    if (p.failed) {
+      const d = this.material.defines!;
+      if (d.PHOTO) {
+        d.PHOTO = 0;
+        d.TERR_POM = this.pomSteps;
+        this.material.needsUpdate = true;
+      }
+      return;
+    }
+    p.upload(renderer);
   }
 
   // ------------------------------------------------------------ painting
@@ -511,6 +567,11 @@ export class Ground {
     const look = this.look;
     const w = [0, 0, 0, 0, 0, 0, 0];
     const ctl = this.ctl;
+    const ctl2 = this.ctl2;
+    // photo layers the biome really has (a fallback slot samples the dirt layer: nothing to split off)
+    const st = this.photo?.stack;
+    const hasForest = !!st && st.slot.forest !== st.slot.dirt;
+    const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
     for (let py = 0; py < N; py++) {
       for (let px = 0; px < N; px++) {
@@ -650,6 +711,14 @@ export class Ground {
         ctl[o + 1] = smooth(0.58, 0.72, cloverN(x, y)) * (1 - dryC * 0.8) * (1 - worn) * look.clover * 255;
         ctl[o + 2] = smooth(0.6, 0.76, flowerN(x, y)) * (1 - dryC * 0.6) * (1 - worn) * (1 - base) * (1 - forest * 0.7) * look.flowers * 255;
         ctl[o + 3] = worn * 255;
+        // photo layers: forest floor under the woods, gravel on the road shoulders, stony tracks,
+        // the trampled bases and village yards (split off the dirt layer in the shader)
+        if (hasForest) ctl2[o] = smooth(0.12, 0.6, forest + (pn - 0.5) * 0.3) * 255;
+        if (hasGravel) {
+          let gv = Math.max(shoulder * 0.9, trk * 0.35 * smooth(0.4, 0.7, pn), base * 0.6 * smooth(0.45, 0.7, blotch(x * 1.3, y * 1.3)), yd < 1.2 ? (1 - smooth(0.2, 1.2, yd)) * 0.45 : 0);
+          if (bc === 3) gv *= 0.4;
+          ctl2[o + 1] = Math.min(1, gv) * 255;
+        }
         if (bc === 2) {
           // winter: the blue channel is the snow depth (ploughed off the shoulders, rutted on tracks,
           // trampled in the bases, thin under the trees and on steep or wet ground)
@@ -703,7 +772,108 @@ float terrH;
 float terrRough;
 float wxPud;
 float terrPomAO = 0.0;
+// procedural relief bumped on top of the normals (furrows, joints, markings; = terrH without photo layers)
+float terrB;
+// cavity occlusion of the indirect light (photo layers)
+float terrAO = 1.0;
 vec2 wxHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
+#if PHOTO
+uniform highp sampler2DArray phA;
+uniform highp sampler2DArray phN;
+// per array layer: x = 1 / repeat (tiles), y = regular pattern, z = roughness, w = normal strength
+uniform vec4 phP[PH_N];
+// per array layer: scan mean albedo / colour factor (linear)
+uniform vec3 phM[PH_N];
+uniform vec3 phT[PH_N];
+uniform sampler2D ctl2Tex;
+vec2 phDx;
+vec2 phDy;
+vec2 phNxy = vec2(0.0);
+float phSel = 0.5;
+mat2 phRot(float t) {
+  float an = t * 6.2831853;
+  float c = cos(an);
+  float s = sin(an);
+  return mat2(c, s, -s, c);
+}
+/*
+ * One anti-tiled sample of array layer L at world xz p: a = albedo (linear) + height,
+ * n.xy = normal XY in world-aligned texture space (x = +x, y = image up = -z), n.z = height.
+ * High: hex tiling (Mikkelsen 2022, "Practical Real-Time Hex-Tiling") - three randomly
+ * rotated and shifted copies on a triangle grid, blended by barycentric weight sharpened by
+ * height, so the higher detail wins instead of a blurry cross-fade. Medium: two decorrelated
+ * copies (rotated + rescaled) chosen by low-frequency noise, also height blended; a copy is
+ * only fetched where it contributes. Gradients are explicit (rotated with each copy), so
+ * mipmapping stays exact and branching is safe.
+ */
+void phSample(float L, vec2 p, out vec4 a, out vec3 n) {
+  vec4 P = phP[int(L)];
+  vec2 uv = p * P.x;
+  vec2 gx = phDx * P.x;
+  vec2 gy = phDy * P.x;
+  if (P.y > 0.5) {
+    // man-made patterns (slabs, flags): a plain repeat keeps the grid straight
+    a.rgb = textureGrad(phA, vec3(uv, L), gx, gy).rgb;
+    n = textureGrad(phN, vec3(uv, L), gx, gy).rgb;
+    a.a = n.z;
+    n.xy = n.xy * 2.0 - 1.0;
+    return;
+  }
+#if PH_Q >= 2
+  vec2 q = uv * 1.7320508;
+  vec2 sk = vec2(q.x - 0.57735027 * q.y, 1.15470054 * q.y);
+  vec2 bi = floor(sk);
+  vec2 f = fract(sk);
+  float tz = 1.0 - f.x - f.y;
+  float s = step(0.0, -tz);
+  float s2 = 2.0 * s - 1.0;
+  vec3 w = vec3(-tz * s2, s - f.y * s2, s - f.x * s2);
+  vec2 h1 = wxHash2(bi + vec2(s, s));
+  vec2 h2 = wxHash2(bi + vec2(s, 1.0 - s));
+  vec2 h3 = wxHash2(bi + vec2(1.0 - s, s));
+  mat2 r1 = phRot(h1.x);
+  mat2 r2 = phRot(h2.x);
+  mat2 r3 = phRot(h3.x);
+  vec2 u1 = r1 * uv + h1.yx * 5.3;
+  vec2 u2 = r2 * uv + h2.yx * 5.3;
+  vec2 u3 = r3 * uv + h3.yx * 5.3;
+  vec3 a1 = textureGrad(phA, vec3(u1, L), r1 * gx, r1 * gy).rgb;
+  vec3 a2 = textureGrad(phA, vec3(u2, L), r2 * gx, r2 * gy).rgb;
+  vec3 a3 = textureGrad(phA, vec3(u3, L), r3 * gx, r3 * gy).rgb;
+  vec3 n1 = textureGrad(phN, vec3(u1, L), r1 * gx, r1 * gy).rgb;
+  vec3 n2 = textureGrad(phN, vec3(u2, L), r2 * gx, r2 * gy).rgb;
+  vec3 n3 = textureGrad(phN, vec3(u3, L), r3 * gx, r3 * gy).rgb;
+  vec3 hw = w * w * w * w * exp2(vec3(n1.z, n2.z, n3.z) * 6.0) + 1e-6;
+  hw /= hw.x + hw.y + hw.z;
+  a = vec4(a1, n1.z) * hw.x + vec4(a2, n2.z) * hw.y + vec4(a3, n3.z) * hw.z;
+  n.xy = (transpose(r1) * (n1.xy * 2.0 - 1.0)) * hw.x + (transpose(r2) * (n2.xy * 2.0 - 1.0)) * hw.y + (transpose(r3) * (n3.xy * 2.0 - 1.0)) * hw.z;
+  n.z = a.a;
+#else
+  const mat2 rB = mat2(0.4161468, 0.9092974, -0.9092974, 0.4161468);
+  vec4 aA = vec4(0.0);
+  vec4 aB = vec4(0.0);
+  vec2 nA = vec2(0.0);
+  vec2 nB = vec2(0.0);
+  if (phSel < 0.995) {
+    vec3 m = textureGrad(phN, vec3(uv, L), gx, gy).rgb;
+    aA = vec4(textureGrad(phA, vec3(uv, L), gx, gy).rgb, m.z);
+    nA = m.xy * 2.0 - 1.0;
+  }
+  if (phSel > 0.005) {
+    vec2 uB = rB * uv * 0.87 + vec2(0.37, 0.11);
+    vec2 bx = rB * gx * 0.87;
+    vec2 by = rB * gy * 0.87;
+    vec3 m = textureGrad(phN, vec3(uB, L), bx, by).rgb;
+    aB = vec4(textureGrad(phA, vec3(uB, L), bx, by).rgb, m.z);
+    nB = transpose(rB) * (m.xy * 2.0 - 1.0);
+  }
+  vec2 wv = vec2(1.0 - phSel, phSel) * exp2(vec2(aA.a, aB.a) * 5.0);
+  wv /= wv.x + wv.y + 1e-6;
+  a = aA * wv.x + aB * wv.y;
+  n = vec3(nA * wv.x + nB * wv.y, a.a);
+#endif
+}
+#endif
 #if TERR_POM > 0
 // depth (0 = top) of the soil / rock detail relief at tw, same blend as TERRAIN_MAP
 float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy) {
@@ -716,6 +886,253 @@ float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy)
 #endif
 `;
 
+/*
+ * Photo layer branch of TERRAIN_MAP (PHOTO = 1): same inputs, same outputs
+ * (col, terrH, terrRough, bw / bg, fMask) plus the blended normal (phNxy),
+ * the procedural bump (terrB) and the cavity occlusion (terrAO).
+ */
+const PHOTO_MAP = /* glsl */ `
+  phDx = dFdx(tw);
+  phDy = dFdy(tw);
+  vec2 rw = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8);
+  vec4 dA = texture2D(detailTex, tw * 0.29);
+  vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
+  vec4 det = clamp((dA * 0.6 + dB * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
+  vec4 gnz = texture2D(fogNoise, tw * 0.043);
+  float gDrift = (gnz.b - 0.5) + (texture2D(fogNoise, tw * 0.0117 + 0.5).g - 0.5);
+  float gFine = 1.0 - smoothstep(0.5, 1.5, fwidth(tw.x * (1.0 / GRASS_TILES)) * 40.0);
+#if PH_Q < 2
+  phSel = smoothstep(0.32, 0.68, texture2D(fogNoise, tw * 0.093 + 0.21).g);
+#endif
+  vec4 c2 = texture2D(ctl2Tex, mUV);
+  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.3 + (det.g - 0.5) * 0.15, 0.0, 1.0);
+  // layer weights: grass takes what the splat leaves, worn turf gives way to soil, and the
+  // soil splits into bare dirt / forest floor / gravel (ctl2)
+  float wG = clamp(1.0 - spl.r - spl.g - spl.b - spl.a, 0.0, 1.0);
+  float worn = smoothstep(0.2, 0.9, ctl.a) * wG * 0.9;
+  wG -= worn;
+  // under the woods the turf thins out into leaf litter
+  float wFloor = wG * c2.r * 0.55;
+  wG -= wFloor;
+  float wS = spl.r + worn;
+  float wF = wS * c2.r;
+  float wV = (wS - wF) * c2.g;
+  float lw[7] = float[7](wG, wS - wF - wV, wF + wFloor, wV, spl.g, spl.b, spl.a);
+  float ll[7] = float[7](PH_GRASS, PH_DIRT, PH_FOREST, PH_GRAVEL, PH_ROCK, PH_SAND, PH_MUD);
+  // grass: the scan's detail on the painted palette (lush / dry / drift), as the 3D blades
+  vec3 gTint = grassBase(ctl.r, dry, gDrift) / max(phM[int(PH_GRASS)], vec3(1e-3));
+  vec4 la[7];
+  vec3 ln[7];
+  float ls[7];
+  float smax = -9.0;
+  for (int i = 0; i < 7; i++) {
+    la[i] = vec4(0.0);
+    ln[i] = vec3(0.0);
+    ls[i] = -9.0;
+    if (lw[i] > 0.004) {
+      phSample(ll[i], tw, la[i], ln[i]);
+      // height blend: a layer's share plus its own relief, so high points poke through
+      ls[i] = lw[i] + la[i].a * 0.5;
+      smax = max(smax, ls[i]);
+    }
+  }
+  float lb[7];
+  float lt = 1e-4;
+  for (int i = 0; i < 7; i++) {
+    lb[i] = max(ls[i] - smax + 0.2, 0.0);
+    lt += lb[i];
+  }
+  vec3 col = vec3(0.0);
+  vec2 nxy = vec2(0.0);
+  terrH = 0.0;
+  terrRough = 0.0;
+  for (int i = 0; i < 7; i++) {
+    float k = lb[i] / lt;
+    if (k > 0.0) {
+      int L = int(ll[i]);
+      vec3 c = la[i].rgb * (i == 0 ? gTint : phT[L]);
+      vec2 n = ln[i].xy * phP[L].w;
+      float r = phP[L].z;
+#if BIOME == 2
+      // ice on the ford / frozen banks: smooth and glossy
+      if (i == 5) {
+        c = cSand * la[i].rgb / max(phM[L], vec3(1e-3));
+        n *= 0.2;
+        r = 0.22;
+      }
+#endif
+      col += c * k;
+      nxy += n * k;
+      terrH += la[i].a * k;
+      terrRough += r * k;
+    }
+  }
+  float bg = lb[0] / lt;
+  vec4 bw = vec4(lb[1] + lb[2] + lb[3], lb[4], lb[5], lb[6]) / lt;
+  float gH = la[0].a;
+  // clover patches and wildflowers on the turf (the procedural micro texture's leaf / flower masks)
+  if (bg > 0.0 && ctl.g + ctl.b > 0.01) {
+    vec4 gT = texture2D(grassTex, tw * (1.0 / GRASS_TILES));
+    vec3 g0 = la[0].rgb * gTint;
+    float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
+    vec3 g1 = mix(g0, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);
+#if BIOME != 2
+    float sp = texture2D(fogNoise, tw * 0.09 + 0.7).a;
+    vec3 fcol = sp < 0.42 ? vec3(0.82, 0.82, 0.72) : sp < 0.68 ? vec3(0.86, 0.6, 0.06) : vec3(0.42, 0.22, 0.66);
+    float fl = ctl.b * smoothstep(0.3, 0.6, gT.a);
+    g1 = mix(g1, fcol, fl * gFine + ctl.b * 0.1 * (1.0 - gFine));
+#endif
+    col += (g1 - g0) * bg;
+  }
+  terrAO = 1.0 - (1.0 - smoothstep(0.0, 0.5, terrH)) * 0.35;
+  terrRough += (0.5 - terrH) * 0.08;
+  terrB = 0.0;
+
+  // farm fields (photo soil / turf under the procedural rows), city streets and squares
+  float fMask = smoothstep(0.3, 0.7, fld.r);
+  vec2 fdir = normalize(fld.ba * 2.0 - 1.0 + vec2(1e-4, 0.0));
+  float across = dot(tw, vec2(-fdir.y, fdir.x));
+  float aa = fwidth(across);
+  if (fMask > 0.001) {
+    float ftype = floor((fld.g * 255.0 - 1.0) / FIELD_STEP + 0.5);
+    vec3 fc = vec3(0.5);
+    float fh = 0.0;
+    float fr = 0.95;
+    vec4 fa = vec4(0.5);
+    vec3 fn = vec3(0.0);
+    if (ftype < 2.5) {
+      phSample(PH_SOIL, tw, fa, fn);
+      vec3 soil = fa.rgb * phT[int(PH_SOIL)];
+      if (ftype < 0.5) {
+        // ploughed: furrows across the rows
+        float per = 0.17;
+        float sv = 0.5 + 0.5 * sin(across / per * 6.2832 + det.g * 1.2);
+        float k = clamp(1.0 - aa / per * 1.4, 0.0, 1.0);
+        sv = mix(0.5, sv, k);
+        fc = soil * (0.72 + sv * 0.5);
+        fh = sv * 1.2;
+      } else if (ftype < 1.5) {
+        // green crop rows on the soil
+        float per = 0.2;
+        float sv = 0.5 + 0.5 * sin(across / per * 6.2832);
+        float k = clamp(1.0 - aa / per * 1.4, 0.0, 1.0);
+        float plant = smoothstep(0.35, 0.75, sv + (det.r - 0.5) * 0.6 + (fa.a - 0.5) * 0.3);
+        plant = mix(0.62, plant, k);
+        fc = mix(soil, cCrop * (0.7 + det.r * 0.6), plant);
+        fh = plant;
+        fn.xy *= 1.0 - plant * 0.6;
+      } else {
+        // ripe wheat: fine rows and tramlines down to the soil
+        float per = 0.12;
+        float sv = 0.5 + 0.5 * sin(across / per * 6.2832);
+        float k = clamp(1.0 - aa / per * 1.4, 0.0, 1.0);
+        float tram = smoothstep(0.06, 0.02, abs(fract(across / 2.2) - 0.5) - 0.03) * clamp(1.0 - aa * 6.0, 0.0, 1.0);
+        fc = cWheat * (0.8 + mix(0.5, sv, k) * 0.25 + (det.r - 0.5) * 0.35 + (dB.g - 0.5) * 0.25);
+        fc = mix(fc, soil * 0.9, tram * 0.7);
+        fh = mix(0.5, sv, k) * 0.5 + det.r * 0.5 - tram * 0.6;
+        fn.xy *= 0.3 + tram * 0.7;
+      }
+    }
+#if BIOME == 3
+    else if (ftype > 4.5) {
+      // city streets: photo asphalt, patched, with markings; crossings with zebras
+      phSample(PH_ASPHALT, tw, fa, fn);
+      vec2 lq = (fld.ba * 2.0 - 1.0) * 2.3;
+      float n2 = texture2D(fogNoise, tw * 1.7).g;
+      vec3 asph = fa.rgb * phT[int(PH_ASPHALT)];
+      float patchK = smoothstep(0.62, 0.66, texture2D(fogNoise, tw * 0.11 + 0.7).b);
+      asph = mix(asph, asph * 0.78, patchK);
+      float mark = 0.0;
+      vec3 markC = vec3(0.86, 0.85, 0.8);
+      if (ftype < 6.5) {
+        float acr = lq.x;
+        float alongW = fld.a > 0.5 ? tw.y : tw.x;
+        float aw = fwidth(acr) + 0.004;
+        // curb / gutter at the edge
+        float curb = smoothstep(1.24, 1.3, abs(acr));
+        asph = mix(asph, vec3(0.42, 0.41, 0.39) * (0.85 + det.g * 0.3), curb);
+        float gut = smoothstep(1.05, 1.15, abs(acr)) * (1.0 - curb);
+        asph *= 1.0 - gut * 0.25;
+        fh = curb * 0.6;
+        if (ftype < 5.5) {
+          // avenue: double yellow centre line, dashed lanes
+          float yl = 1.0 - smoothstep(0.022, 0.022 + aw, abs(abs(acr) - 0.055));
+          mark = max(mark, yl);
+          markC = mix(markC, vec3(0.86, 0.66, 0.16), yl);
+          float dash = step(0.45, fract(alongW * 0.55)) * (1.0 - smoothstep(0.025, 0.025 + aw, abs(abs(acr) - 0.62)));
+          mark = max(mark, dash);
+        } else {
+          // street: dashed white centre line
+          mark = max(mark, step(0.5, fract(alongW * 0.7)) * (1.0 - smoothstep(0.025, 0.025 + aw, abs(acr))));
+        }
+      } else {
+        // crossing: zebra bands along the four edges
+        float ex = abs(lq.x);
+        float ey = abs(lq.y);
+        float zx = step(0.95, ex) * step(ex, 1.42) * step(ey, 1.1) * step(0.5, fract(lq.y * 2.4));
+        float zy = step(0.95, ey) * step(ey, 1.42) * step(ex, 1.1) * step(0.5, fract(lq.x * 2.4));
+        mark = max(zx, zy) * clamp(1.0 - fwidth(lq.x) * 3.0, 0.0, 1.0);
+      }
+      // markings wear off in the tyre tracks
+      mark *= 0.6 + 0.4 * smoothstep(0.3, 0.7, n2);
+      fc = mix(asph, markC * (0.85 + det.r * 0.15), mark * 0.9);
+      fh += mark * 0.25;
+      fn.xy *= 1.0 - mark * 0.7;
+      fr = mix(phP[int(PH_ASPHALT)].z, 0.6, mark);
+    }
+    else if (ftype > 3.5) {
+      // city squares: photo stone flags
+      phSample(PH_PAVING, tw, fa, fn);
+      fc = fa.rgb * phT[int(PH_PAVING)];
+      fr = phP[int(PH_PAVING)].z;
+    }
+#endif
+    else {
+      // mown meadow: lawn-like mowing stripes
+      phSample(PH_GRASS, tw, fa, fn);
+      float sw = fract(across / 1.1);
+      float st = smoothstep(0.47, 0.53, sw) * (1.0 - smoothstep(0.97, 1.0, sw));
+      st = mix(0.5, st, clamp(1.0 - aa * 2.0, 0.0, 1.0));
+      vec3 lawn = grassBase(0.3 + ctl.r * 0.4, 0.12, gDrift * 0.5);
+      fc = fa.rgb * lawn / max(phM[int(PH_GRASS)], vec3(1e-3)) * (0.86 + st * 0.24);
+      fn.xy *= 0.7;
+    }
+    // darker rim along the field edge
+    fc *= 0.82 + 0.18 * smoothstep(0.5, 0.95, fld.r);
+    col = mix(col, fc, fMask);
+    nxy = mix(nxy, fn.xy, fMask);
+    terrH = mix(terrH, fa.a, fMask);
+    terrB = mix(terrB, fh, fMask);
+    terrRough = mix(terrRough, fr, fMask);
+    terrAO = mix(terrAO, 1.0 - (1.0 - smoothstep(0.0, 0.5, fa.a)) * 0.25, fMask);
+  }
+#if BIOME == 2
+  {
+    // winter: painted snow depth (ctl.b), wind drifts eat the thin cover first, the scan's
+    // snow settles into the hollows of what it covers before the high points; sparkle up close
+    float dn = texture2D(fogNoise, tw * 0.071 + 0.3).r * 0.6 + texture2D(fogNoise, tw * 0.23 + 0.1).g * 0.4;
+    float cover = smoothstep(0.22, 0.62, ctl.b + (dn - 0.5) * 0.6);
+    cover *= 1.0 - fMask * 0.2;
+    if (cover > 0.002) {
+      cover = clamp(cover + cover * (1.0 - cover) * (0.5 - terrH) * 2.0, 0.0, 1.0);
+      vec4 sa;
+      vec3 sn;
+      phSample(PH_SNOW, tw, sa, sn);
+      vec3 snowC = sa.rgb * phT[int(PH_SNOW)] * (0.94 + (dn - 0.5) * 0.12);
+      float spark = step(0.985, texture2D(fogNoise, tw * 2.7).a) * gFine;
+      snowC += spark * 0.25;
+      col = mix(col, snowC, cover);
+      nxy = mix(nxy, sn.xy * phP[int(PH_SNOW)].w, cover);
+      terrH = mix(terrH, 0.25 + sa.a * 0.5, cover);
+      terrB = mix(terrB, dn * 0.7, cover);
+      terrRough = mix(terrRough, 0.6, cover);
+      terrAO = mix(terrAO, 1.0, cover * 0.7);
+    }
+  }
+#endif
+  phNxy = nxy;
+`;
+
 const TERRAIN_MAP = /* glsl */ `
 {
   vec2 tw = vTerrW.xz;
@@ -724,6 +1141,9 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 tnt = texture2D(tintTex, mUV);
   vec4 fld = texture2D(fieldTex, mUV);
   vec4 ctl = texture2D(ctlTex, mUV);
+#if PHOTO
+${PHOTO_MAP}
+#else
 #if TERR_POM > 0
   // relief mapping on soil / rock: march the view ray down into the detail
   // height field (world xz = tangent plane; the ground is mostly flat) and
@@ -1011,6 +1431,8 @@ const TERRAIN_MAP = /* glsl */ `
     terrRough = mix(terrRough, 0.6, cover);
   }
 #endif
+  terrB = terrH;
+#endif
   col *= tnt.rgb * 2.0;
 #if TERR_POM > 0
   col *= 1.0 - terrPomAO;
@@ -1028,13 +1450,35 @@ const TERRAIN_MAP = /* glsl */ `
     diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.62 + vec3(0.03, 0.035, 0.042), wxPud);
     terrRough = mix(terrRough, 0.03, wxPud);
     terrH = mix(terrH, 0.0, wxPud);
+    terrB = mix(terrB, 0.0, wxPud);
   }
 }
 `;
 
+/** Cavity occlusion of the photo layers on the indirect (sky / environment) light. */
+const TERRAIN_AO = /* glsl */ `
+#if PHOTO
+  reflectedLight.indirectDiffuse *= terrAO;
+  reflectedLight.indirectSpecular *= terrAO;
+#endif
+#include <aomap_fragment>
+`;
+
 const TERRAIN_NORMAL = /* glsl */ `
 {
-  vec2 dHdxy = vec2(dFdx(terrH), dFdy(terrH)) * 0.022;
+#if PHOTO
+  {
+    // the scans' normal maps: world-aligned texture space (u = +x, image up = -z) around the
+    // interpolated surface normal; puddles lie flat
+    vec3 nW = inverseTransformDirection(normal, viewMatrix);
+    vec3 T = normalize(vec3(1.0, 0.0, 0.0) - nW * nW.x);
+    vec3 B = cross(nW, T);
+    vec2 pxy = phNxy * (1.0 - wxPud);
+    vec3 pn = T * pxy.x + B * pxy.y + nW * sqrt(max(0.04, 1.0 - dot(pxy, pxy)));
+    normal = normalize((viewMatrix * vec4(pn, 0.0)).xyz);
+  }
+#endif
+  vec2 dHdxy = vec2(dFdx(terrB), dFdy(terrB)) * 0.022;
   vec3 vSigmaX = dFdx(-vViewPosition);
   vec3 vSigmaY = dFdy(-vViewPosition);
   vec3 R1 = cross(vSigmaY, normal);

@@ -460,6 +460,24 @@ function interceptPop(b: BakeCtx): void {
   tail(p, o, t + 0.02, 700, 0.04, 0.5, 0.15, 0.4);
 }
 
+/**
+ * A vehicle running a soldier over: a dull body thud under the tracks layered with a short crunch of
+ * kit, gravel and gear giving way, and a track-link clank. No voice.
+ */
+function crushFx(b: BakeCtx): void {
+  const { p, o, t, r, R } = b;
+  p.th(o, t, { f: 82 * r, f2: 40, glide: 0.12, a: 0.003, d: 0.24, peak: 0.85, drive: 1.4 });
+  p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 420 * r, a: 0.004, d: 0.22, peak: 0.6 });
+  const n = 4 + Math.floor(R() * 3);
+  for (let k = 0; k < n; k++) {
+    const ti = t + 0.008 + k * (0.018 + R() * 0.03);
+    p.nh(o, ti, { type: 'bandpass', f: (800 + R() * 1600) * r, q: 1.5, a: 0.0008, d: 0.025 + R() * 0.035, peak: 0.35 + R() * 0.3, drive: 2.5 });
+  }
+  rattle(p, o, t + 0.015, 0.3, 16, 2400 * r, 2, 0.22, 0.004, R);
+  ping(p, o, t + 0.04 + R() * 0.03, 1700 * r, 0.07, 0.07);
+  tail(p, o, t + 0.02, 300, 0.03, 0.35, 0.12, 0.3);
+}
+
 function mortarShot(b: BakeCtx): void {
   const { p, o, t, r, R } = b;
   // the tube "thoonk": a pipe resonance plus the bomb's charge
@@ -805,7 +823,7 @@ function cricketBed(b: BakeCtx): void {
 export type BakedName =
   | 'rifle' | 'mg' | 'autocannon' | 'flak' | 'cannon' | 'cannonHeavy' | 'rocket' | 'missileLaunch' | 'interceptorLaunch'
   | 'laser' | 'artillery' | 'mortar' | 'thermo' | 'explosionSmall' | 'explosionMedium' | 'explosionLarge'
-  | 'buildingCollapse' | 'bridgeCollapse' | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'jetFlyby' | 'thunder'
+  | 'buildingCollapse' | 'bridgeCollapse' | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'jetFlyby' | 'thunder' | 'crush'
   | 'jetLoop' | 'rotorLoop' | 'propLoop' | 'fpvLoop' | 'windBed' | 'rainBed' | 'riverBed' | 'cricketBed';
 
 const SR_HI = 32000;
@@ -832,6 +850,7 @@ export const BAKED: Record<BakedName, BakeDef> = {
   buildingCollapse: { dur: 5.0, variants: 2, sr: 22050, build: collapse },
   bridgeCollapse: { dur: 6.0, variants: 2, sr: 22050, build: bridgeFall },
   intercept: { dur: 0.9, variants: 3, sr: SR_HI, build: interceptPop },
+  crush: { dur: 0.8, variants: 3, sr: SR_MID, spread: 0.14, build: crushFx },
   droneLaunch: { dur: 1.3, variants: 2, sr: SR_MID, build: droneLaunchFx },
   droneBuzz: { dur: 0.4, variants: 2, sr: SR_MID, build: droneBuzzFx },
   jetFlyby: { dur: 3.7, variants: 2, sr: SR_MID, spread: 0.08, build: jetFlyby },
@@ -850,7 +869,7 @@ export const BAKED: Record<BakedName, BakeDef> = {
 export const BAKE_ORDER: BakedName[] = [
   'rifle', 'mg', 'cannon', 'explosionSmall', 'explosionMedium', 'explosionLarge', 'rocket', 'missileLaunch',
   'autocannon', 'cannonHeavy', 'artillery', 'interceptorLaunch', 'intercept', 'flak', 'buildingCollapse', 'mortar',
-  'thermo', 'droneLaunch', 'laser', 'droneBuzz', 'bridgeCollapse', 'jetFlyby', 'thunder',
+  'thermo', 'droneLaunch', 'laser', 'droneBuzz', 'crush', 'bridgeCollapse', 'jetFlyby', 'thunder',
   'jetLoop', 'rotorLoop', 'propLoop', 'fpvLoop', 'windBed', 'rainBed', 'riverBed', 'cricketBed',
 ];
 

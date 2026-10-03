@@ -8,13 +8,13 @@
    "albedo": "bld-albedo-256.webp",
    "normal": "bld-normal-256.webp",
    "rm": "bld-rm-256.webp",
-   "bytes": 243326
+   "bytes": 252198
   },
   "512": {
    "albedo": "bld-albedo-512.webp",
    "normal": "bld-normal-512.webp",
    "rm": "bld-rm-512.webp",
-   "bytes": 1170844
+   "bytes": 1210942
   }
  },
  "tiles": [
@@ -34,7 +34,7 @@
    "tile": 2,
    "name": "corrugated steel",
    "id": "corrugated_iron_02",
-   "scale": 0.42
+   "scale": 0.32
   },
   {
    "tile": 3,
@@ -52,7 +52,7 @@
    "tile": 5,
    "name": "box profile cladding",
    "id": "box_profile_metal_sheet",
-   "scale": 0.5
+   "scale": 0.45
   },
   {
    "tile": 9,

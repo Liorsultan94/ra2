@@ -37,7 +37,9 @@ import { type RadioProfile, radioAck, radioClose, radioFor, radioOpen, radioStat
 
 export type Sfx =
   | LiveName
-  | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder';
+  | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder'
+  /** A vehicle ran a soldier over (crunch + thud); a short alarmed radio squelch (soldiers dodging a vehicle). */
+  | 'crush' | 'squelch';
 
 /** A world position (sim x / y on the ground, z = height above it). */
 export interface SoundPos {
@@ -108,6 +110,7 @@ const META: Record<Sfx, Meta> = {
   droneBuzz: C(0.35, 0.08, 0.08, 0.6, 2, 'droneBuzz'),
   jetFlyby: C(0.5, 0.2, 0.8, 2, 2, 'droneBuzz', 0.05),
   thunder: C(0.9, 0.25, 0.5, 2.2, 2, 'explosionLarge', 0.12),
+  crush: C(0.6, 0.1, 0.06, 1, 3, 'explosionSmall', 0.1),
   jam: { lvl: 0.4, wet: 0.08, gap: 0.08, combat: false, weight: 1, cap: 2, jitter: 0, live: 'jam' },
   click: ui('click'),
   tab: ui('tab'),
@@ -121,6 +124,7 @@ const META: Record<Sfx, Meta> = {
   money: ui('money'),
   deploy: ui('deploy'),
   repair: ui('repair'),
+  squelch: { ...ui('ack'), gap: 3 },
 };
 
 function ui(name: LiveName): Meta {
@@ -751,6 +755,12 @@ export class AudioSystem {
     const last = this.lastPlay.get(name);
     if (last !== undefined && now - last < meta.gap && now >= last) return;
     this.lastPlay.set(name, now);
+    if (name === 'squelch') {
+      // just the nation's radio squelch: a soldier calling out a vehicle bearing down on him
+      const rp = this.nation;
+      this.spawnUi(g, (p, o, t) => radioOpen(p, o, t, rp), 0.45 * vol, pan, 0.02);
+      return;
+    }
     this.spawnUi(g, LIVE[meta.live].build, level, pan, meta.wet);
   }
 

@@ -20,6 +20,7 @@ import { bridgeHutEnter, bridgeProof, canHurtBridge, initBridges, isBridge, upda
 import { DEFAULT_STANCE, applyOrderCommand, autoFire, idleReturn, leashRange, ordersIdle, queueCap, scanRange } from './orders';
 import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
+import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import {
   CATEGORIES,
   TPS,
@@ -280,6 +281,9 @@ export class World {
       queue: [],
       patrol: null,
       guardId: -1,
+      dodge: null,
+      dodgeAt: 0,
+      stillAt: 0,
     };
   }
 
@@ -970,6 +974,10 @@ export class World {
         if (o === e || o.kind !== 'unit' || o.id < e.id || o.para) return;
         const od = unitDef(o.def);
         if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
+        // heavy vehicles and infantry: enemies go under the tracks, the rest are shoved aside (crush.ts)
+        if ((d.crusher && od.crushable) || (od.crusher && d.crushable)) {
+          if (crushContact(this, e, d, o, od)) return;
+        }
         const min = d.radius + od.radius;
         const dx = o.x - e.x;
         const dy = o.y - e.y;
@@ -988,6 +996,11 @@ export class World {
         const wo = 1 - we;
         this.nudge(e, -nx * push * we * 2, -ny * push * we * 2);
         this.nudge(o, nx * push * wo * 2, ny * push * wo * 2);
+        // two vehicles meeting head-on both keep right, so they slide past instead of deadlocking in a lane
+        if (e.moving && o.moving && !d.air && d.category === 'vehicle' && od.category === 'vehicle' && Math.abs(angleDiff(e.facing, o.facing)) > 2.3) {
+          this.nudge(e, -Math.sin(e.facing) * 0.05, Math.cos(e.facing) * 0.05);
+          this.nudge(o, -Math.sin(o.facing) * 0.05, Math.cos(o.facing) * 0.05);
+        }
       });
     }
   }
@@ -1153,7 +1166,7 @@ export class World {
     if (t.hp <= 0) this.kill(t, src.owner, src);
   }
 
-  kill(t: Entity, by: number, killer?: Entity) {
+  kill(t: Entity, by: number, killer?: Entity, cause?: 'crushed') {
     if (t.dead) return;
     t.hp = 0;
     if (t.passengers.length && isGarrison(t)) for (const p of ejectAll(this, t, true)) this.kill(p, by, killer); // garrison.ts
@@ -1161,7 +1174,7 @@ export class World {
       const p = this.get(pid);
       if (p) this.kill(p, by, killer);
     }
-    this.events.push({ t: 'death', id: t.id, def: t.def, x: t.x, y: t.y, owner: t.owner, kind: t.kind });
+    this.events.push(cause ? { t: 'death', id: t.id, def: t.def, x: t.x, y: t.y, owner: t.owner, kind: t.kind, cause } : { t: 'death', id: t.id, def: t.def, x: t.x, y: t.y, owner: t.owner, kind: t.kind });
     if (t.owner >= 0) this.players[t.owner].stats.lost++;
     if (by >= 0 && by !== t.owner) {
       this.players[by].stats.killed++;
@@ -1217,6 +1230,7 @@ export class World {
     if (e.rank >= ELITE && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * ELITE_HEAL);
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
+    if (e.dodge && stepDodge(this, e, d)) return; // jumping out of a vehicle's way (crush.ts)
     if (d.air) {
       const alt = d.cruiseAlt ?? (d.model === 'heavy_uav' ? 2.0 : 1.7);
       e.z += Math.max(-0.05, Math.min(0.05, alt - e.z));
@@ -1283,7 +1297,9 @@ export class World {
           break;
         }
         e.targetId = t.id;
-        if (this.engage(e, t) === 'out') this.chase(e, t, d);
+        const aim = this.engage(e, t);
+        // infantry in contact: a heavy vehicle runs them over instead of standing off (crush.ts)
+        if (aim === 'out' || wantsCrush(this, e, d, t)) this.chase(e, t, d);
         else {
           e.path = null;
           e.moving = false;
@@ -1489,6 +1505,7 @@ export class World {
 
   board(e: Entity, apc: Entity) {
     e.inside = apc.id;
+    e.dodge = null;
     apc.passengers.push(e.id);
     e.path = null;
     e.moving = false;
@@ -2077,6 +2094,7 @@ export class World {
     updateBridges(this, ev0);
     this.updateAuras();
     this.separate();
+    updateCrush(this); // vehicles run over enemy infantry, infantry jump out of the way (crush.ts)
     this.growOre();
     if (this.tick % 4 === 0) this.updateVisibility();
     if (this.tick % TPS === 0) this.checkVictory();

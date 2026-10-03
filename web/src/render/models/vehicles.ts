@@ -2531,7 +2531,8 @@ function mbtAbrams(b: Bld) {
   T.cy(0.003, 0.003, 0.05, -0.32, 0.106, 0.03, K.dark, 4);
   T.box(0.02, 0.005, 0.005, -0.32, 0.158, 0.03, K.dark);
   antennas(b, T, -0.27, 0.106, [-0.165, 0.165], 0.24);
-  mainGun(b, T, 0.28, 0.052, 0, { len: 0.66, r: 0.0145, fume: 0.42, mrs: true, mantlet: [0.05, 0.066, 0.104] });
+  // M256 L/44: 9.77 m gun forward vs 7.93 m hull = 1.84 m overhang
+  mainGun(b, T, 0.28, 0.052, 0, { len: 0.585, r: 0.0145, fume: 0.47, mrs: true, mantlet: [0.05, 0.066, 0.104] });
 }
 
 function mbtMerkava(b: Bld) {
@@ -2586,9 +2587,10 @@ function mbtMerkava(b: Bld) {
   b.emit(0.28, 0.205, 0.28);
 
   // ---- turret: very long, low arrowhead wedge with steeply leaning sides; gun at the tip
-  const T = b.part(B, -0.14, 0.276, 0, 'turret');
-  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.228], [-0.4, 0.21], [-0.46, 0.17], [-0.47, 0]];
-  const PT: P2[] = [[0.3, 0], [0.3, 0.025], [0.21, 0.09], [0.08, 0.17], [-0.15, 0.18], [-0.39, 0.168], [-0.44, 0.13], [-0.45, 0]];
+  // (reference photos: the wedge tip sits ~0.28 hull lengths behind the nose, the bustle ends over the hull rear)
+  const T = b.part(B, -0.19, 0.276, 0, 'turret');
+  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.228], [-0.33, 0.21], [-0.39, 0.17], [-0.4, 0]];
+  const PT: P2[] = [[0.3, 0], [0.3, 0.025], [0.21, 0.09], [0.08, 0.17], [-0.15, 0.18], [-0.32, 0.168], [-0.37, 0.13], [-0.38, 0]];
   hloft(T, [
     { y: -0.008, h: sz(P0, 0.9) },
     { y: 0.018, h: P0 },
@@ -2599,25 +2601,25 @@ function mbtMerkava(b: Bld) {
   // ball-and-chain curtain under the bustle
   for (let i = 0; i < 15; i++) {
     const z = -0.17 + i * 0.0243;
-    T.box(0.003, 0.05, 0.003, -0.455, -0.033, z, 0x2e2e2c);
-    T.sph(0.007, -0.455, -0.06, z, mt(0x3a3a38), 5, 3);
+    T.box(0.003, 0.05, 0.003, -0.385, -0.033, z, 0x2e2e2c);
+    T.sph(0.007, -0.385, -0.06, z, mt(0x3a3a38), 5, 3);
   }
   for (const s of [-1, 1]) {
     for (let i = 0; i < 4; i++) {
-      const x = -0.42 + i * 0.03;
+      const x = -0.35 + i * 0.03;
       T.box(0.003, 0.05, 0.003, x, -0.033, s * 0.2, 0x2e2e2c);
       T.sph(0.007, x, -0.06, s * 0.2, mt(0x3a3a38), 5, 3);
     }
-    T.box(0.13, 0.005, 0.005, -0.395, -0.006, s * 0.2, K.dark);
+    T.box(0.13, 0.005, 0.005, -0.325, -0.006, s * 0.2, K.dark);
     trophy(T, 0.06, 0.055, s * 0.222, s, b.team);
     smokeBank(T, 0.18, 0.07, s * 0.15, s, 5, 0.6, 0.008);
     // side stowage baskets on the rear half
-    rack(T, -0.33, -0.18, s * 0.228, s * 0.255, 0.03, 0.055, 3);
-    T.cbox(0.13, 0.045, 0.024, 0.008, -0.255, 0.058, s * 0.243, K.canvas);
+    rack(T, -0.3, -0.16, s * 0.228, s * 0.255, 0.03, 0.055, 3);
+    T.cbox(0.12, 0.045, 0.024, 0.008, -0.23, 0.058, s * 0.243, K.canvas);
     teamPanel(T, 0.13, 0.02, 0.003, -0.07, 0.03, s * 0.229, b.team, 0, -s * 0.03, 0);
   }
-  T.box(0.004, 0.006, 0.4, -0.455, -0.006, 0, K.dark);
-  teamPanel(T, 0.004, 0.022, 0.2, -0.468, 0.05, 0, b.team);
+  T.box(0.004, 0.006, 0.4, -0.385, -0.006, 0, K.dark);
+  teamPanel(T, 0.004, 0.022, 0.2, -0.396, 0.05, 0, b.team);
   // mantlet: small armoured box at the wedge tip
   T.cbox(0.06, 0.05, 0.075, 0.008, 0.45, 0.05, 0, CAMO);
   coax(T, 0.47, 0.035, 0.035);
@@ -2635,8 +2637,9 @@ function mbtMerkava(b: Bld) {
   T.cbox(0.06, 0.03, 0.045, 0.006, 0.12, 0.112, 0.07, CAMO);
   T.box(0.004, 0.02, 0.032, 0.151, 0.114, 0.07, GLASS);
   for (const s of [-1, 1]) lid(T, 0.1, 0.06, 0.15, 0.106, s * 0.06, 0);
-  antennas(b, T, -0.38, 0.106, [-0.13, 0.13], 0.24);
-  mainGun(b, T, 0.48, 0.05, 0, { len: 0.6, r: 0.0145, fume: 0.38, mrs: true });
+  antennas(b, T, -0.32, 0.106, [-0.13, 0.13], 0.24);
+  // MG253 L/44: 9.04 m gun forward vs 7.60 m hull = 1.44 m overhang
+  mainGun(b, T, 0.48, 0.05, 0, { len: 0.5, r: 0.0145, fume: 0.42, mrs: true });
 }
 /** Slim Soviet-lineage hull (T-72 / T-80 / T-90 family): low hull, fenders over the tracks, flat deck. */
 function sovHull2(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; fw?: number }) {
@@ -2835,7 +2838,8 @@ function mbtT90(b: Bld) {
   T.box(0.004, 0.026, 0.036, 0.102, 0.124, -0.11, GLASS);
   hatch(T, -0.07, 0.1, -0.09, 0.034);
   antennas(b, T, -0.2, 0.1, [-0.14, 0.15], 0.24);
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.6, mrs: false, mantlet: [0.04, 0.055, 0.08] });
+  // 2A46M-5: 9.63 m gun forward vs 6.86 m hull = 2.77 m overhang
+  mainGun(b, T, 0.27, 0.05, 0, { len: 0.665, r: 0.014, fume: 0.6, mrs: false, mantlet: [0.04, 0.055, 0.08] });
 }
 
 function mbtOplot(b: Bld) {
@@ -2916,7 +2920,8 @@ function mbtOplot(b: Bld) {
   T.box(0.004, 0.024, 0.036, 0.112, 0.126, -0.11, GLASS);
   hatch(T, -0.06, 0.105, -0.09, 0.034);
   antennas(b, T, -0.3, 0.105, [-0.13, 0.13], 0.24);
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.58, mrs: false, mantlet: [0.05, 0.055, 0.08] });
+  // KBA-3: 9.72 m gun forward vs 7.08 m hull = 2.64 m overhang
+  mainGun(b, T, 0.27, 0.05, 0, { len: 0.67, r: 0.014, fume: 0.58, mrs: false, mantlet: [0.05, 0.055, 0.08] });
 }
 
 function mbtKarrar(b: Bld) {
@@ -3066,7 +3071,8 @@ function mbtType99(b: Bld) {
   rws(T, -0.16, 0.112, 0.11, 0.85, true);
   hatch(T, -0.08, 0.112, -0.1, 0.035);
   antennas(b, T, -0.3, 0.112, [-0.14, 0.14], 0.24);
-  mainGun(b, T, 0.28, 0.056, 0, { len: 0.7, r: 0.0145, fume: 0.45, mrs: true, mantlet: [0.07, 0.07, 0.1] });
+  // ZPT-98A 125 mm L/50: 11.0 m gun forward vs 7.6 m hull = 3.4 m overhang
+  mainGun(b, T, 0.28, 0.056, 0, { len: 0.8, r: 0.0145, fume: 0.5, mrs: true, mantlet: [0.07, 0.07, 0.1] });
 }
 
 /** K2 / Altay family: sleek hull, angular wedge turret with a long autoloader / ammunition bustle. */
@@ -3149,7 +3155,8 @@ function mbtK2(b: Bld, altay: boolean) {
   rws(T, -0.12, h, altay ? 0.05 : 0.08, 0.9, true);
   hatch(T, -0.06, h, -0.1, 0.035);
   antennas(b, T, altay ? -0.38 : -0.36, h, [-0.15, 0.15], 0.24);
-  mainGun(b, T, 0.31, 0.058, 0, { len: 0.78, r: 0.0145, fume: 0.4, mrs: true, mantlet: [0.06, 0.062, 0.1] });
+  // L/55 120 mm: K2 10.8 m gun forward vs 7.5 m hull (3.3 m overhang), Altay 10.3 m vs 7.3 m (3.0 m)
+  mainGun(b, T, 0.31, 0.058, 0, { len: altay ? 0.71 : 0.77, r: 0.0145, fume: 0.4, mrs: true, mantlet: [0.06, 0.062, 0.1] });
 }
 
 function mbt(style: ModelStyle, fog: FogOfWar | null): Model {
