@@ -89,7 +89,7 @@ export function rampHeight(m: GameMap, x: number, y: number, g: number, base: nu
     const side = Math.max(0, Math.abs(lz) - DECK_W / 2 + 0.15);
     const dist = Math.hypot(out, side);
     if (dist >= RAMP_RUN) continue;
-    const top = BRIDGE_HEIGHT + 0.01 + deckLift(d, Math.sign(lx) * d.L / 2);
+    const top = BRIDGE_HEIGHT + 0.014 + deckLift(d, Math.sign(lx) * d.L / 2);
     const k = Math.min(1, (1 - dist / RAMP_RUN) * 1.15);
     h = Math.max(h, g + (top - g) * k);
   }

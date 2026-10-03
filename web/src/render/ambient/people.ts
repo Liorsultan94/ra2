@@ -550,11 +550,11 @@ export class People {
       }
       cl.sort((a, b) => b.n - a.n);
       for (const c of cl.slice(0, 2)) {
-        if (c.n < 3) continue;
+        if (c.n < 2) continue;
         const cx = c.x / c.n;
         const cy = c.y / c.n;
         let done = false;
-        for (let r = 0; r < 5 && !done; r += 0.5)
+        for (let r = 0; r < 7 && !done; r += 0.5)
           for (let a = 0; a < 16 && !done; a++) {
             const x = cx + Math.cos((a / 16) * Math.PI * 2) * r;
             const y = cy + Math.sin((a / 16) * Math.PI * 2) * r;
@@ -927,6 +927,17 @@ export class People {
     if (p.kind === K.Kid && p.parent) return;
     const night = this.dark > 0.6;
     const r = Math.random();
+    // an unstaffed stall (the vendor ran off): someone takes it over in daylight
+    if (!night && p.kind !== K.Kid && !p.child)
+      for (let i = 0; i < this.stalls.length; i++) {
+        const st = this.stalls[i];
+        if ((st.vendor && st.vendor.vendor) || Math.hypot(st.x - p.x, st.y - p.y) > 9) continue;
+        if (st.vendor && st.vendor.s !== S.Inside && st.vendor.s !== S.Gone && st.vendor !== p) continue;
+        if (this.walkTo(p, st.x - Math.cos(st.yaw) * 0.25, st.y - Math.sin(st.yaw) * 0.25, Goal.Stall, i)) {
+          st.vendor = p;
+          return;
+        }
+      }
     if (r < (night ? 0.5 : 0.16) && this.goDoor(p)) return;
     if (r < 0.3 && p.kind !== K.Kid && this.goBench(p, 14)) return;
     if (r < 0.46 && this.goStall(p)) return;
@@ -1066,6 +1077,13 @@ export class People {
       }
       case Goal.Stall: {
         const st = this.stalls[p.gi];
+        if (st && st.vendor === p) {
+          // back behind the counter
+          p.s = S.Vendor;
+          p.vendor = true;
+          p.yaw = st.yaw;
+          return;
+        }
         if (st) {
           p.s = S.Shop;
           p.t = 6 + Math.random() * 14;
@@ -1146,6 +1164,7 @@ export class People {
     if (p.s === S.Inside || p.s === S.Gone || p.s === S.Vendor && power < 0.3) return;
     if (p.parent && p.s === S.Follow) return;
     this.leaveGroups(p);
+    p.vendor = false;
     let dx = p.x - sx;
     let dy = p.y - sy;
     const L = Math.hypot(dx, dy) || 1;
@@ -1165,7 +1184,6 @@ export class People {
       p.s = S.Alarm;
       p.t = 0.35 + Math.random() * 0.5;
       p.np = 0;
-      if (p.vendor) p.vendor = false;
       return;
     }
     // a parent first fetches a child that wandered off (play groups)

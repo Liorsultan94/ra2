@@ -6,6 +6,7 @@ import type { World } from '../sim/world';
 import { BLASTS, type Effects } from './effects';
 import type { FogOfWar } from './fog';
 import { GeoBuilder } from './geo';
+import { roadNetFor } from './ambient/clearance';
 import { deckLift, deckRamps, rampHeight } from './deckramp';
 import { surfaceHeight } from './ground';
 import { buildLayout } from './layout';
@@ -117,6 +118,8 @@ function asphalt(top: GeoBuilder, x0: number, x1: number, z0: number, z1: number
 const SEG = 0.25;
 /** Asphalt overlaps the next deck piece a touch (no hairline cracks where separate meshes meet). */
 const LAP = 0.012;
+/** Asphalt height above the slab's top centre plane (clear of the slab pieces' end faces: no z-fighting). */
+const ASPH = 0.115;
 type Lift = (x: number) => number;
 const FLAT: Lift = () => 0;
 
@@ -208,11 +211,11 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
     const hx1 = hole.x + hole.hx;
     const hz0 = Math.max(-aw, hole.z - hole.hz);
     const hz1 = Math.min(aw, hole.z + hole.hz);
-    asphalt(top, x0 - LAP, hx0, -aw, aw, 0.104, xBase, m);
-    asphalt(top, hx1, x1 + LAP, -aw, aw, 0.104, xBase, m);
-    if (hz0 > -aw) asphalt(top, hx0, hx1, -aw, hz0, 0.104, xBase, m);
-    if (hz1 < aw) asphalt(top, hx0, hx1, hz1, aw, 0.104, xBase, m);
-  } else asphalt(top, x0 - LAP, x1 + LAP, -aw, aw, 0.104, xBase, m);
+    asphalt(top, x0 - LAP, hx0, -aw, aw, ASPH, xBase, m);
+    asphalt(top, hx1, x1 + LAP, -aw, aw, ASPH, xBase, m);
+    if (hz0 > -aw) asphalt(top, hx0, hx1, -aw, hz0, ASPH, xBase, m);
+    if (hz1 < aw) asphalt(top, hx0, hx1, hz1, aw, ASPH, xBase, m);
+  } else asphalt(top, x0 - LAP, x1 + LAP, -aw, aw, ASPH, xBase, m);
   warp(conc, base, lift, xBase);
   warp(top, tbase, lift, xBase);
 }
@@ -507,7 +510,7 @@ export class BridgeFx {
           const n = 1 + Math.round(len * (0.6 + k * 0.4));
           for (let j = 0; j < n; j++) {
             const q = s * 13 + k * 101 + j;
-            decal(db, (hash2(q, 1, 40) - 0.5) * (len - 0.2), (hash2(q, 2, 41) - 0.5) * (W - 0.7), 0.106 + k * 0.0015 + j * 0.0002, 0.35 + hash2(q, 3, 42) * (0.35 + k * 0.2), hash2(q, 4, 43) * 6.28, hash2(q, 5, 44) < 0.45 ? 1 : 0);
+            decal(db, (hash2(q, 1, 40) - 0.5) * (len - 0.2), (hash2(q, 2, 41) - 0.5) * (W - 0.7), ASPH + 0.002 + k * 0.0015 + j * 0.0002, 0.35 + hash2(q, 3, 42) * (0.35 + k * 0.2), hash2(q, 4, 43) * 6.28, hash2(q, 5, 44) < 0.45 ? 1 : 0);
           }
           warp(db, 0, lift, cx);
           const m = new THREE.Mesh(db.build(), this.decalMat);
@@ -621,10 +624,36 @@ export class BridgeFx {
       return surfaceHeight(m, w.x, w.z);
     };
     const xe = end * (L / 2);
+    // another road's surface (a junction or roundabout right at the bridge): no kerb or rail across it
+    // (every lane but the deck's and the approach road's own)
+    const e0 = toW(xe, 0);
+    const net = roadNetFor(m, buildLayout(m));
+    const rings = net.loops.filter((lp) => Math.hypot(lp.x - e0.x, lp.y - e0.z) < lp.R + 4);
+    const others = net.lines.filter((ln) => {
+      if (ln.bridge >= 0) return false;
+      const a = ln.pts[0];
+      const b = ln.pts[ln.pts.length - 1];
+      if (Math.hypot(a.x - e0.x, a.y - e0.z) < 0.6 || Math.hypot(b.x - e0.x, b.y - e0.z) < 0.6) return false;
+      return ln.pts.some((p) => Math.hypot(p.x - e0.x, p.y - e0.z) < 4 + ln.half);
+    });
+    const busy = (x: number, z: number) => {
+      const w = toW(x, z);
+      for (const lp of rings) if (Math.hypot(w.x - lp.x, w.z - lp.y) < lp.R + 0.05) return true;
+      for (const ln of others)
+        for (let i = 0; i < ln.pts.length - 1; i++) {
+          const a = ln.pts[i];
+          const b = ln.pts[i + 1];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.z - a.y) * dy) / (dx * dx + dy * dy || 1e-9)));
+          if (Math.hypot(w.x - a.x - dx * t, w.z - a.y - dy * t) < ln.half + 0.05) return true;
+        }
+      return false;
+    };
     const deckTop = DECK_Y + 0.1 + lift(xe);
     // expansion joint: a steel strip with teeth across the whole deck at the end
-    box(conc, 0.07, 0.012, W - 0.02, trs(xe - end * 0.03, deckTop + 0.012, 0), 0.24);
-    for (let k = 0; k < 12; k++) box(conc, 0.02, 0.013, 0.07, trs(xe - end * 0.03, deckTop + 0.013, -W / 2 + 0.12 + (k / 11) * (W - 0.24)), 0.5);
+    box(conc, 0.07, 0.012, W - 0.02, trs(xe - end * 0.03, deckTop + 0.024, 0), 0.24);
+    for (let k = 0; k < 12; k++) box(conc, 0.02, 0.013, 0.07, trs(xe - end * 0.03, deckTop + 0.025, -W / 2 + 0.12 + (k / 11) * (W - 0.24)), 0.5);
     // kerbs + wing walls along both sides of the ramp
     const run = 1.2;
     const N = 6;
@@ -634,6 +663,7 @@ export class BridgeFx {
         const t1 = (i + 1) / N;
         const xa = xe + end * run * t0;
         const xb = xe + end * run * t1;
+        if (busy(xb, side * (W / 2 + 0.1))) break;
         // the kerb eases from the sidewalk's edge in to the road's shoulder
         const za = side * (W / 2 - 0.12 - 0.08 * t0);
         const zb = side * (W / 2 - 0.12 - 0.08 * t1);
@@ -665,7 +695,13 @@ export class BridgeFx {
         const x = xe + end * 1.3 * t;
         const z = side * (W / 2 - 0.03 + 0.32 * t * t);
         const top = i === 0 ? deckTop + 0.2 : Math.max(groundH(x, z), roadH(x, z) - 0.02) + 0.16 * (1 - t * t * 0.85);
+        if (i > 0 && busy(x, z + side * 0.12)) break;
         pts.push(V(x, top, z));
+      }
+      if (pts.length > 1) {
+        // the rail's end: bent down into the ground (a short stub when another road is right there)
+        const q = pts[pts.length - 1];
+        if (pts.length < 7) pts.push(V(q.x + end * 0.08, Math.max(groundH(q.x, q.z), roadH(q.x, q.z) - 0.04), q.z));
       }
       for (let i = 0; i < pts.length - 1; i++) {
         beam(rails, pts[i], pts[i + 1], 0.035, 0.75);
@@ -832,7 +868,7 @@ export class BridgeFx {
         if (s && Math.abs(lz) < W / 2 - 0.1) {
           if (s.hits.children.length >= 6) s.hits.remove(s.hits.children[0]);
           const m = new THREE.Mesh(this.hitGeo, this.decalMat);
-          m.position.set(lx - s.cx, 0.108 + v.lift(lx) + (v.nHits++ % 8) * 0.0004, lz);
+          m.position.set(lx - s.cx, ASPH + 0.004 + v.lift(lx) + (v.nHits++ % 8) * 0.0004, lz);
           // lying on the deck, also where it bends up onto a bank
           m.rotation.set(0, Math.random() * 6.28, Math.atan((v.lift(lx + 0.1) - v.lift(lx - 0.1)) / 0.2), 'ZYX');
           m.scale.setScalar(0.5 + Math.random() * 0.35);

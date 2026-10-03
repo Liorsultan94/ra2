@@ -126,32 +126,32 @@ export function civilianGeometry(): THREE.BufferGeometry {
   put(cyl(0.2, 0.165, 0.46, 7), trs(0, 1.2, 0, 0, 0, 0, 0.62, 1, 1), Part.Torso, Slot.Top);
   put(sph(0.12, 7, 4), trs(0, 1.4, 0, 0, 0, 0, 0.9, 0.55, 1.75), Part.Torso, Slot.Top);
   put(cyl(0.045, 0.05, 0.1, 5), trs(0, 1.49, 0), Part.Head, Slot.Skin);
-  put(sph(0.105, 8, 6), trs(0.005, 1.63, 0, 0, 0, 0, 1, 1.12, 0.95), Part.Head, Slot.Skin);
-  put(sph(0.112, 8, 4), trs(-0.012, 1.665, 0, 0, 0, 0, 1, 0.9, 0.98), Part.Head, Slot.Hat);
+  put(sph(0.105, 7, 5), trs(0.005, 1.63, 0, 0, 0, 0, 1, 1.12, 0.95), Part.Head, Slot.Skin);
+  put(sph(0.112, 7, 3), trs(-0.012, 1.665, 0, 0, 0, 0, 1, 0.9, 0.98), Part.Head, Slot.Hat);
   // a nose so the heading reads at a glance
   put(box(0.03, 0.04, 0.03), trs(0.105, 1.615, 0), Part.Head, Slot.Skin);
   // ---- optional parts
   put(box(0.08, 0.3, 0.2), trs(-0.075, 1.5, 0), Part.Head, Slot.Hat, Opt.LongHair);
-  put(cyl(0.2, 0.3, 0.46, 8), trs(0, 0.77, 0, 0, 0, 0, 0.8, 1, 1), Part.Skirt, Slot.Bottom, Opt.Skirt);
-  put(cyl(0.21, 0.31, 1.28, 8), trs(0, 0.74, 0, 0, 0, 0, 0.82, 1, 1), Part.Skirt, Slot.Top, Opt.Robe);
-  put(cyl(0.21, 0.27, 0.5, 8), trs(0, 0.74, 0, 0, 0, 0, 0.82, 1, 1), Part.Skirt, Slot.Top, Opt.Coat);
-  put(sph(0.122, 8, 4, ), trs(-0.005, 1.68, 0, 0, 0, 0, 1, 0.85, 1), Part.Head, Slot.Hat, Opt.Beanie);
+  put(cyl(0.2, 0.3, 0.46, 7), trs(0, 0.77, 0, 0, 0, 0, 0.8, 1, 1), Part.Skirt, Slot.Bottom, Opt.Skirt);
+  put(cyl(0.21, 0.31, 1.28, 7), trs(0, 0.74, 0, 0, 0, 0, 0.82, 1, 1), Part.Skirt, Slot.Top, Opt.Robe);
+  put(cyl(0.21, 0.27, 0.5, 7), trs(0, 0.74, 0, 0, 0, 0, 0.82, 1, 1), Part.Skirt, Slot.Top, Opt.Coat);
+  put(sph(0.122, 6, 3), trs(-0.005, 1.68, 0, 0, 0, 0, 1, 0.85, 1), Part.Head, Slot.Hat, Opt.Beanie);
   put(box(0.04, 0.05, 0.04), trs(-0.005, 1.785, 0), Part.Head, Slot.Hat, Opt.Beanie);
   // keffiyeh: cloth over the head, falling to the shoulders; a dark agal ring
-  put(sph(0.125, 8, 5), trs(-0.01, 1.655, 0, 0, 0, 0, 1, 1.05, 1.02), Part.Head, Slot.Hat, Opt.Keffiyeh);
+  put(sph(0.125, 6, 4), trs(-0.01, 1.655, 0, 0, 0, 0, 1, 1.05, 1.02), Part.Head, Slot.Hat, Opt.Keffiyeh);
   put(box(0.16, 0.26, 0.27), trs(-0.06, 1.5, 0), Part.Head, Slot.Hat, Opt.Keffiyeh);
-  put(cyl(0.118, 0.118, 0.03, 8), trs(-0.005, 1.73, 0), Part.Head, Slot.Shoe, Opt.Keffiyeh);
+  put(cyl(0.118, 0.118, 0.03, 6), trs(-0.005, 1.73, 0), Part.Head, Slot.Shoe, Opt.Keffiyeh);
   // headscarf (wrapped round the face, falling behind)
-  put(sph(0.122, 8, 5), trs(-0.015, 1.65, 0, 0, 0, 0, 1, 1.08, 1.02), Part.Head, Slot.Hat, Opt.Headscarf);
+  put(sph(0.122, 6, 4), trs(-0.015, 1.65, 0, 0, 0, 0, 1, 1.08, 1.02), Part.Head, Slot.Hat, Opt.Headscarf);
   put(box(0.1, 0.2, 0.22), trs(-0.07, 1.48, 0), Part.Head, Slot.Hat, Opt.Headscarf);
   // cap / flat cap with a brim
-  put(cyl(0.112, 0.115, 0.06, 8), trs(-0.005, 1.71, 0), Part.Head, Slot.Hat, Opt.Cap);
+  put(cyl(0.112, 0.115, 0.06, 6), trs(-0.005, 1.71, 0), Part.Head, Slot.Hat, Opt.Cap);
   put(box(0.1, 0.015, 0.16), trs(0.12, 1.69, 0), Part.Head, Slot.Hat, Opt.Cap);
   // wide brim hat (shepherds, farmers)
-  put(cyl(0.2, 0.2, 0.02, 10), trs(0, 1.7, 0), Part.Head, Slot.Hat, Opt.BrimHat);
-  put(cyl(0.09, 0.11, 0.1, 8), trs(0, 1.75, 0), Part.Head, Slot.Hat, Opt.BrimHat);
+  put(cyl(0.2, 0.2, 0.02, 8), trs(0, 1.7, 0), Part.Head, Slot.Hat, Opt.BrimHat);
+  put(cyl(0.09, 0.11, 0.1, 6), trs(0, 1.75, 0), Part.Head, Slot.Hat, Opt.BrimHat);
   // peaked uniform cap
-  put(cyl(0.125, 0.105, 0.07, 8), trs(0, 1.73, 0), Part.Head, Slot.Hat, Opt.Peaked);
+  put(cyl(0.125, 0.105, 0.07, 6), trs(0, 1.73, 0), Part.Head, Slot.Hat, Opt.Peaked);
   put(box(0.09, 0.012, 0.17), trs(0.115, 1.7, 0), Part.Head, Slot.Shoe, Opt.Peaked);
   put(box(0.24, 0.05, 0.36), trs(0, 1.08, 0), Part.Torso, Slot.HiVis, Opt.HiVis);
   put(box(0.14, 0.3, 0.26), trs(-0.17, 1.2, 0), Part.Torso, Slot.Accent, Opt.Backpack);

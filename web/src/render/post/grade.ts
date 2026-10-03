@@ -47,9 +47,9 @@ const LOOKS = {
   /** The classic late-afternoon battlefield (fixed 'day'): warm light already comes from the sun. */
   // (the tone mapper's punchy AgX look already adds saturation: the daylight looks take some of it back so the
   // grass reads as a natural mid-green, like a good photo, not a neon yellow-green)
-  day: L({ temp: 0.01, tint: -0.03, sat: 0.9, contrast: 1.06, shadowTint: [-0.008, 0.0, 0.016], highTint: [0.012, 0.005, -0.01] }),
+  day: L({ temp: 0.01, tint: -0.05, sat: 0.88, contrast: 1.06, shadowTint: [-0.008, 0.0, 0.016], highTint: [0.012, 0.005, -0.01] }),
   /** Midday: neutral, a touch cool and crisp. */
-  noon: L({ temp: -0.035, tint: -0.03, sat: 0.87, contrast: 1.05, shadowTint: [-0.008, 0.002, 0.018], highTint: [0.0, 0.002, 0.006] }),
+  noon: L({ temp: -0.035, tint: -0.05, sat: 0.85, contrast: 1.05, shadowTint: [-0.008, 0.002, 0.018], highTint: [0.0, 0.002, 0.006] }),
   /**
    * Golden hour / sunrise / sunset: the warmth lives in the key light (atmos.ts), so the look only warms the
    * highlights a little and cools the shadows; no global orange white balance.

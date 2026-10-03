@@ -242,7 +242,7 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.85;
       break;
     case 'sunset':
-      set({ sunI: 1.4, hemiI: 1.1, env: 0.55, cloud: 0.22, sat: 1.0, vignette: 0.38, bloom: 0.56, exposure: 1.12, spec: 0.95, dark: 0.38 }, 0xffc496, 0x7894d4, 0x343238, [0.26, 0.21, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x1c1820, [0.78, 0.66, 0.7]);
+      set({ sunI: 1.25, hemiI: 1.15, env: 0.6, cloud: 0.22, sat: 1.0, vignette: 0.38, bloom: 0.56, exposure: 1.12, spec: 0.95, dark: 0.38 }, 0xffc496, 0x7894d4, 0x343238, [0.26, 0.21, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x1c1820, [0.78, 0.66, 0.7]);
       light = 0.65;
       break;
     case 'twilight':
