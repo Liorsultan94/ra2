@@ -182,6 +182,8 @@ export class Driver {
         if (a.line === inA.line && a.dir === inA.dir) continue;
         const L = this.net.lines[a.line];
         let wgt = c.kind === 3 ? (L.paved ? 0.5 : 1.4) : L.paved ? 1 : 0.25;
+        // a parking lot by the road: often worth a stop (not for tractors)
+        if (L.lot >= 0) wgt = c.kind === 3 ? 0 : 1.6;
         const turn = Math.abs(wrapPi(a.ang - inHead));
         if (turn < 0.5) wgt *= 1.6; // straight on is the usual way
         // a hairpin turn off a junction isn't drivable (roundabouts are fine)

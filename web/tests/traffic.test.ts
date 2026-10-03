@@ -274,10 +274,14 @@ describe('driving by the rules (headless)', () => {
       let samples = 0;
       const still = new Map<number, number>();
       const parked = new Set<number>();
+      const onLot = new Set<number>();
+      const atLotJn = new Set<string>();
       let longest = 0;
       const list = simulate(n, 24, 200, 33 + id.length, (c, t) => {
         samples++;
         if (c.pk >= 2) parked.add(c.id);
+        if (n.lines[c.line].lot >= 0) onLot.add(c.id);
+        if (c.planNode >= 0 && n.nodes[c.planNode].arms.some((a) => n.lines[a.line].lot >= 0)) atLotJn.add(`${c.id}:${c.planNode}:${c.plan}`);
         const s = c.v < 0.02 && c.pk !== 3 ? (still.get(c.id) ?? 0) + 0.05 : 0;
         still.set(c.id, s);
         longest = Math.max(longest, s);
@@ -294,8 +298,8 @@ describe('driving by the rules (headless)', () => {
       expect(list.reduce((s, c) => s + c.loops, 0)).toBeGreaterThan(0);
       // no gridlock: nobody stands still for half a minute (parked cars aside)
       expect(longest).toBeLessThan(30);
-      // some cars turn into the parking lots and park
-      if (n.lots.length) expect(parked.size).toBeGreaterThan(0);
+      // cars that pass by turn into the parking lots now and then, and park
+      if (n.lots.length && atLotJn.size >= 8) expect(parked.size, `on lot lanes: ${onLot.size}, plans ${[...atLotJn].join(' ')}, lots ${JSON.stringify(n.lots.map((l) => [l.x, l.y, l.line, n.lines[l.line]?.stops]))}`).toBeGreaterThan(0);
     });
   }
 

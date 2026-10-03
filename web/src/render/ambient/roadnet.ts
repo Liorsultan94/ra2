@@ -593,9 +593,15 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       const P = e ? A.pts[A.pts.length - 1] : A.pts[0];
       const endArc = e ? A.len : 0;
       let linked = false;
+      // a parking lot's aisle ends in the lot (nothing joins it there)
+      if (A.lot >= 0 && e === 1) {
+        cands.push({ x: P.x, y: P.y, prio: 0, ep: ai * 2 + e, cs: [{ line: ai, arc: endArc }] });
+        continue;
+      }
       for (let bi = 0; bi < nL; bi++) {
         if (bi === ai) continue;
         const B = lines[bi];
+        if (B.lot >= 0 && A.lot < 0) continue; // (other ends don't join an access lane)
         const thr = A.bridge >= 0 || B.bridge >= 0 ? 2.4 : 1.3;
         if (P.x < B.bx0 - thr || P.x > B.bx1 + thr || P.y < B.by0 - thr || P.y > B.by1 + thr) continue;
         const { arc, d } = nearestArc(B, P.x, P.y);
@@ -633,7 +639,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
         for (let q = p + 2; q < arr.length; q += 2) {
           const la = arr[p];
           const lb = arr[q];
-          if (la === lb) continue;
+          if (la === lb || lines[la].lot >= 0 || lines[lb].lot >= 0) continue;
           const A = lines[la];
           const B = lines[lb];
           const i = arr[p + 1];
