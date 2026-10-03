@@ -490,6 +490,9 @@ export class Driver {
     let holdD = -1;
     let hz = -1;
     let pulled = false;
+    // the car's offset to the right of its lane line, and how far left it may swing out
+    let offR = 0;
+    let maxDodge = 0;
     let slowTo = 1e9;
     for (let pass = 0; pass < 2; pass++) {
       if (c.loop >= 0) {
@@ -564,8 +567,8 @@ export class Driver {
         for (const h of this.holds[c.line] ?? []) {
           const d = (h.arc - c.arc) * c.dir - h.gap - c.len / 2;
           if (d < -0.05 || d > 4.5) continue;
-          // (a level crossing closing as the car is right on it: clear it)
-          if (h.kind === 1 && d < 0.15 && c.v > 0.1) continue;
+          // (a level crossing closing just as the car gets there, too late to stop: clear it)
+          if (h.kind === 1 && d < 0.6 && c.v * c.v > 2.4 * Math.max(0, d) + 0.12) continue;
           if (!this.closed(h)) continue;
           hz = hz < 0 ? Math.max(0, d) : Math.min(hz, Math.max(0, d));
         }
@@ -582,7 +585,9 @@ export class Driver {
       const roomR = Math.max(0, L2.half - (L2.paved ? 0.12 : 0.08) - L2.lane);
       const pullR = c.yieldT > 0 ? Math.max(roomR, L2.half - c.wid / 2 - 0.05 >= L2.lane + 0.2 ? L2.half - c.wid / 2 - 0.05 - L2.lane : L2.half + 0.05 - L2.lane) : 0;
       const lane = L2.lane + Math.max(c.aside * roomR, pullR) - c.dodge;
-      if (c.yieldT > 0) pulled = (c.x - p0.x) * -p0.ty * c.dir + (c.y - p0.y) * p0.tx * c.dir > L2.lane + pullR - 0.07;
+      offR = (c.x - p0.x) * -p0.ty * c.dir + (c.y - p0.y) * p0.tx * c.dir - L2.lane;
+      maxDodge = L2.lane + L2.half - c.wid / 2;
+      if (c.yieldT > 0) pulled = offR > pullR - 0.07;
       cx = pa.x - pa.ty * c.dir * lane;
       cy = pa.y + pa.tx * c.dir * lane;
       const pb = pointAt(L2, c.arc + c.dir * 1.3);
@@ -634,15 +639,29 @@ export class Driver {
         const latS = Math.abs(dx * -hy + dy * hx);
         if (latS < 1.6 && ((along < 0 && same > 0.3) || (along > 0 && same < -0.3))) siren = Math.min(siren, Math.abs(along));
       }
-      if (along <= 0 || along > 3.5) continue;
       const latR = dx * -hy + dy * hx;
       const lat = Math.abs(latR);
-      // a vehicle stopped at the kerb on our side: ease out round it (slowly), don't queue behind it
-      if (o.kerb && along < 2.8 && latR > -0.1 && lat < side + 0.06) {
-        dodgeTo = Math.max(dodgeTo, side + 0.08 - latR - c.dodge);
-        vt = Math.min(vt, 0.3);
-        if (lat + c.dodge >= side) continue;
+      // a vehicle stopped at the kerb on our side: ease out round it (slowly, till past it), don't queue behind it
+      if (o.kerb && c.loop < 0 && along < 3.6 && along > -(c.len + ol) / 2 - 0.15) {
+        // its offset from our lane line (from the road geometry, not from where the car is pointing)
+        const Lk = net.lines[c.line];
+        const pk = pointAt(Lk, c.arc + c.dir * Math.max(0, along));
+        const oL = (o.x - pk.x) * -pk.ty * c.dir + (o.y - pk.y) * pk.tx * c.dir - Lk.lane;
+        const need = side + 0.08 - oL;
+        if (need > 0 && oL > -0.15) {
+          dodgeTo = Math.max(dodgeTo, Math.min(maxDodge, need));
+          vt = Math.min(vt, 0.35 + Math.max(0, along - 1) * 0.4);
+          // (clear of it across its own axis: go by; not yet: wait behind it while swinging out)
+          const latO = Math.abs(dx * -Math.sin(o.yaw) + dy * Math.cos(o.yaw));
+          if (along <= 0) continue;
+          if (latO < side - 0.01) {
+            vt = Math.min(vt, Math.max(0, (along - (c.len + ol) / 2 - 0.03) * 1.8));
+            continue;
+          }
+          continue;
+        }
       }
+      if (along <= 0 || along > 3.5) continue;
       const oncoming = o.driving && Math.cos(o.yaw - c.yaw) < -0.3;
       if (oncoming && lat < side - 0.04) {
         // head-on in one lane (narrow track, roads sharing a corridor): both pull over to the right and pass slowly
@@ -666,8 +685,7 @@ export class Driver {
     }
     c.aside = meet ? Math.min(1, c.aside + dt * 2.5) : Math.max(0, c.aside - dt * 0.8);
     // round a parked emergency vehicle: shift left (and back once past)
-    const dg = dodgeTo > 0 ? c.dodge + dodgeTo : 0;
-    c.dodge += Math.max(-dt * 0.35, Math.min(dt * 0.5, dg - c.dodge));
+    c.dodge += Math.max(-dt * 0.35, Math.min(dt * 0.8, dodgeTo - c.dodge));
     if (siren < 1e9 && !fleeing) c.yieldT = 1.2;
     if (c.yieldT > 0) {
       c.yieldT -= dt;

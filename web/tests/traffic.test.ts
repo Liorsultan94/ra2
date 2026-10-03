@@ -673,16 +673,16 @@ describe('crossings, emergency vehicles and the car scale', () => {
   function stretch(n: RoadNet) {
     for (let li = 0; li < n.lines.length; li++) {
       const L = n.lines[li];
-      if (!L.paved || L.bridge >= 0 || L.lot >= 0 || L.len < 12) continue;
+      if (!L.paved || L.bridge >= 0 || L.lot >= 0 || L.len < 11) continue;
       for (let a = 2; a + 8 < L.len - 2; a += 1) {
-        if (L.stops.some((s) => s.arc > a - 2 && s.arc < a + 10)) continue;
-        const p = pointAt(L, a);
+        if (L.stops.some((s) => s.arc > a - 1 && s.arc < a + 9.5)) continue;
+        const p = { ...pointAt(L, a) }; // (pointAt hands back a shared scratch object)
         const q = pointAt(L, a + 8);
-        if (Math.hypot(q.x - p.x, q.y - p.y) < 7.5) continue;
+        if (Math.hypot(q.x - p.x, q.y - p.y) < 6.5) continue;
         return { li, a };
       }
     }
-    throw new Error('no stretch');
+    throw new Error("no stretch");
   }
   const carAt = (n: RoadNet, li: number, arc: number, dir: number) => {
     const L = n.lines[li];
@@ -754,7 +754,7 @@ describe('crossings, emergency vehicles and the car scale', () => {
     const kerbOff = L.half - 0.2;
     const parked = { id: -2, x: p.x - p.ty * kerbOff, y: p.y + p.tx * kerbOff, yaw: Math.atan2(p.ty, p.tx), v: 0, loop: -1, ang: 0, left: 0, line: -1, dir: 1, driving: false, len: 0.9, wid: 0.38, kerb: true };
     let minClear = 1e9;
-    for (let t = 0; t < 12; t += 0.05) {
+    for (let t = 0; t < 20; t += 0.05) {
       drv.step(c, [c, parked], t, 0.05);
       const along = (c.x - parked.x) * Math.cos(parked.yaw) + (c.y - parked.y) * Math.sin(parked.yaw);
       const lat = Math.abs((c.x - parked.x) * -Math.sin(parked.yaw) + (c.y - parked.y) * Math.cos(parked.yaw));
