@@ -919,6 +919,8 @@ class Bld {
   noIdPanel = false;
   /** Detail bake of this template (null: plain tiling materials). */
   baked: BakeResult | null = null;
+  /** Static hull pitch (rad, nose up) about the rear road wheels (K2 hydropneumatic stance). */
+  stance = 0;
   /** Template key (mbt, apc, ...). */
   key = '';
   /** Hatches built with hatch() (z already narrowed); geos = the lid disc + handle in p's buckets. */
@@ -1099,6 +1101,17 @@ class Bld {
         p.g.add(mesh);
         tris += g.attributes.position.count / 3;
       }
+    }
+    if (this.stance) {
+      // tilt the hull and everything on it (not the running gear) about a pivot over the rear wheels
+      const pg = new THREE.Group();
+      pg.position.set(-0.4, 0.1, 0);
+      pg.rotation.z = this.stance;
+      const inner = new THREE.Group();
+      inner.position.set(0.4, -0.1, 0);
+      for (const c of [...this.body.g.children]) inner.add(c);
+      pg.add(inner);
+      this.body.g.add(pg);
     }
     this.root.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) meshes++;
@@ -2608,11 +2621,6 @@ function fuelDrums(B: Part, x: number, y: number, zs: number[]) {
   }
 }
 
-/** Unditching log across the rear. */
-function unditchLog(B: Part, x: number, y: number, len: number) {
-  B.cz(0.022, 0.024, len, x, y, 0, K.brown, 8);
-  for (const z of [-len * 0.35, len * 0.35]) B.cz(0.026, 0.026, 0.008, x, y, z, K.dark, 8);
-}
 
 /** Soviet-style hull (T-72 family): low hull, fenders, flat deck. Returns deck height. */
 function sovHull(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; lowFront?: number }) {
@@ -2823,7 +2831,7 @@ const CHASSIS: Record<string, ChassisSpec> = {
     name: 'M1A2 SEPv3 Abrams',
     lower: [[-0.5, 0.072], [0.4, 0.072], [0.54, 0.16], [-0.52, 0.16]],
     hw: 0.148,
-    upper: [[-0.528, 0.156], [0.55, 0.156], [0.572, 0.182], [0.31, 0.244], [-0.47, 0.25], [-0.53, 0.232]],
+    upper: [[-0.528, 0.156], [0.55, 0.156], [0.572, 0.18], [0.31, 0.232], [-0.47, 0.236], [-0.53, 0.218]],
     W: 0.52,
     run: { wheels: evenly(7, -0.355, 0.335), rw: 0.045, spr: [-0.472, 0.102, 0.046], idl: [0.455, 0.092, 0.042], rollers: rollers([-0.19, 0.14], 0.045, 0.017), gauge: 0.206, tw: 0.112, bt: 0.017, sag: 0.003, style: 'abrams', teeth: 11 },
     engine: 'rear',
@@ -2972,28 +2980,28 @@ function mbtAbrams(b: Bld) {
     B.box(0.76, 0.006, 0.03, 0.09, 0.204, s * 0.27, shade(b.base, 0.9)); // skirt top lip
     headlight(B, 0.556, 0.2, s * 0.235);
     B.box(0.03, 0.03, 0.03, 0.545, 0.19, s * 0.17, K.dark); // brush guard base
-    taillight(B, -0.533, 0.236, s * 0.24);
-    bin(B, 0.11, 0.038, 0.06, -0.43, 0.25, s * 0.225);
+    taillight(B, -0.533, 0.222, s * 0.24);
+    bin(B, 0.11, 0.038, 0.06, -0.43, 0.236, s * 0.225);
   }
   // driver: centre hatch with 3 periscopes in the glacis
-  hatch(B, 0.36, 0.236, 0, 0.034);
-  for (const z of [-0.036, 0, 0.036]) periscope(B, 0.41, 0.229, z, 0, 0.02);
+  hatch(B, 0.36, 0.226, 0, 0.034);
+  for (const z of [-0.036, 0, 0.036]) periscope(B, 0.41, 0.22, z, 0, 0.02);
   // engine deck: big rear grille + access doors, rear exhaust grille, SEPv3 UAPU armoured box (left rear)
-  grille(B, -0.39, 0.25, 0, 0.13, 0.32, 9);
-  lid(B, 0.11, 0.2, -0.24, 0.25, 0);
-  lid(B, 0.09, 0.2, -0.13, 0.25, 0);
+  grille(B, -0.39, 0.236, 0, 0.13, 0.32, 9);
+  lid(B, 0.11, 0.2, -0.24, 0.236, 0);
+  lid(B, 0.09, 0.2, -0.13, 0.236, 0);
   B.box(0.012, 0.055, 0.34, -0.533, 0.198, 0, K.black);
   for (let i = 0; i < 6; i++) B.box(0.006, 0.004, 0.34, -0.537, 0.178 + i * 0.008, 0, CAMO);
-  B.cbox(0.1, 0.05, 0.07, 0.006, -0.47, 0.275, -0.205, CAMO);
-  B.box(0.004, 0.03, 0.05, -0.521, 0.276, -0.205, K.black);
-  cable(B, [[-0.52, 0.244, -0.2], [-0.535, 0.215, -0.08], [-0.535, 0.215, 0.08], [-0.52, 0.244, 0.2]]);
+  B.cbox(0.1, 0.05, 0.07, 0.006, -0.47, 0.261, -0.205, CAMO);
+  B.box(0.004, 0.03, 0.05, -0.521, 0.262, -0.205, K.black);
+  cable(B, [[-0.52, 0.23, -0.2], [-0.535, 0.205, -0.08], [-0.535, 0.205, 0.08], [-0.52, 0.23, 0.2]]);
   for (const s of [-1, 1]) B.box(0.03, 0.026, 0.04, 0.47, 0.094, s * 0.1, K.dark); // tow eyes
-  teamPanel(B, 0.004, 0.03, 0.12, -0.536, 0.236, 0.06, b.team);
+  teamPanel(B, 0.004, 0.026, 0.12, -0.536, 0.222, 0.06, b.team);
   b.emit(-0.54, 0.2, 0.08);
   b.emit(-0.54, 0.2, -0.08);
 
   // ---- turret: flat, angular; cheeks with a chamfered roof edge; bustle overhangs the deck
-  const T = b.part(B, -0.045, 0.25, 0, 'turret');
+  const T = b.part(B, -0.045, 0.236, 0, 'turret');
   const P0: P2[] = [[0.285, 0], [0.285, 0.072], [0.245, 0.15], [0.19, 0.226], [0.13, 0.232], [-0.13, 0.232], [-0.165, 0.214], [-0.375, 0.205], [-0.388, 0]];
   const PT: P2[] = [[0.205, 0], [0.205, 0.07], [0.18, 0.148], [0.14, 0.208], [0.1, 0.214], [-0.13, 0.218], [-0.16, 0.202], [-0.365, 0.193], [-0.376, 0]];
   hloft(T, [
@@ -3392,55 +3400,58 @@ function mbtT90(b: Bld) {
   B.box(0.07, 0.032, 0.02, -0.32, 0.18, -0.268, K.black);
   b.emit(-0.32, 0.19, -0.29);
   grille(B, -0.37, deck, 0, 0.16, 0.28, 8);
-  unditchLog(B, -0.5, 0.25, 0.46);
+  fuelDrums(B, -0.515, 0.226, [-0.13, 0.13]);
   hatch(B, 0.32, deck, 0, 0.03);
   periscope(B, 0.36, deck, 0, 0, 0.026);
   cable(B, [[0.45, 0.17, -0.235], [0.2, 0.19, -0.225], [-0.1, 0.19, -0.235]]);
   teamPanel(B, 0.36, 0.02, 0.003, -0.02, 0.13, 0.299, b.team);
   teamPanel(B, 0.36, 0.02, 0.003, -0.02, 0.13, -0.299, b.team);
 
-  // ---- turret: welded, angular, Relikt front "brows", long rectangular bustle
-  const T = b.part(B, -0.04, deck, 0, 'turret');
-  const P0: P2[] = [[0.2, 0], [0.2, 0.07], [0.12, 0.19], [0.04, 0.215], [-0.13, 0.215], [-0.17, 0.19], [-0.36, 0.18], [-0.37, 0]];
-  hloft(T, [
-    { y: -0.004, h: sz(P0, 0.92) },
-    { y: 0.02, h: P0 },
-    { y: 0.085, h: slopeF(sz(P0, 0.9), 0.05, -0.03) },
-    { y: 0.1, h: slopeF(sz(P0, 0.84), 0.05, -0.06) },
-  ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  // ---- turret: compact rounded cast dome well forward, the V pair of Relikt "brows" ahead of it, Relikt boxes
+  // on the flanks, a short welded bustle wrapped in a slat cage, Kord RWS on the commander's cupola
+  const T = b.part(B, 0.0, deck, 0, 'turret');
+  T.loft(
+    [
+      { y: -0.004, p: ell(20, 0.162, 0.172, 0.0) },
+      { y: 0.028, p: ell(20, 0.168, 0.178, 0.0, 1.04, 0.96) },
+      { y: 0.062, p: ell(20, 0.148, 0.158, -0.004, 1.0, 0.95) },
+      { y: 0.086, p: ell(20, 0.112, 0.122, -0.01) },
+      { y: 0.097, p: ell(20, 0.066, 0.076, -0.014) },
+    ],
+    CAMO,
+    true,
+  );
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
-    // Relikt brow: thick wedge package each side of the gun; in side view its front face leans back ~45 deg
-    // from the gun level to the roof (T-90M reference photos), plan arrowhead towards the gun
-    const bot: P2[] = s > 0 ? [[0.32, 0.06], [0.15, 0.236], [0.08, 0.208], [0.2, 0.055]] : [[0.32, -0.06], [0.2, -0.055], [0.08, -0.208], [0.15, -0.236]];
-    const mid: P2[] = s > 0 ? [[0.28, 0.059], [0.13, 0.226], [0.075, 0.2], [0.19, 0.053]] : [[0.28, -0.059], [0.19, -0.053], [0.075, -0.2], [0.13, -0.226]];
-    const tp: P2[] = s > 0 ? [[0.2, 0.058], [0.1, 0.205], [0.07, 0.19], [0.15, 0.052]] : [[0.2, -0.058], [0.15, -0.052], [0.07, -0.19], [0.1, -0.205]];
-    T.loft([{ y: 0.004, p: bot }, { y: 0.045, p: mid }, { y: 0.1, p: tp }], CAMO);
+    // Relikt brow: in plan a V from the mantlet outward / back over the dome front, its face leaning back
+    const bot: P2[] = s > 0 ? [[0.25, 0.048], [0.12, 0.196], [0.06, 0.172], [0.16, 0.044]] : [[0.25, -0.048], [0.16, -0.044], [0.06, -0.172], [0.12, -0.196]];
+    const mid: P2[] = s > 0 ? [[0.22, 0.047], [0.105, 0.188], [0.055, 0.166], [0.15, 0.043]] : [[0.22, -0.047], [0.15, -0.043], [0.055, -0.166], [0.105, -0.188]];
+    const tp: P2[] = s > 0 ? [[0.15, 0.046], [0.075, 0.165], [0.05, 0.152], [0.11, 0.042]] : [[0.15, -0.046], [0.11, -0.042], [0.05, -0.152], [0.075, -0.165]];
+    T.loft([{ y: 0.004, p: bot }, { y: 0.04, p: mid }, { y: 0.088, p: tp }], CAMO);
     for (let i = 0; i < 4; i++) {
       const t = (i + 0.5) / 4;
-      T.box(0.004, 0.004, 0.07, 0.235 - t * 0.12, 0.099, s * (0.06 + t * 0.15), K.dark, 0, s * 0.85, 0);
+      T.box(0.004, 0.004, 0.055, 0.19 - t * 0.1, 0.0865, s * (0.06 + t * 0.11), K.dark, 0, s * 0.85, 0);
     }
-    // Relikt panels along the turret sides, smoke dischargers
-    for (let i = 0; i < 3; i++) T.piece(1, () => T.cbox(0.06, 0.055, 0.016, 0.004, 0.01 - i * 0.065, 0.05, s * 0.223, CAMO));
-    smokeBank(T, 0.06, 0.1, s * 0.19, s, 4, 1.0, 0.009);
-    // roof Relikt plates over the front
-    T.box(0.1, 0.014, 0.07, 0.11, 0.098, s * 0.09, CAMO, 0, 0, -0.08);
+    // Relikt boxes on the flanks, smoke dischargers
+    for (let i = 0; i < 3; i++) T.piece(1, () => T.cbox(0.05, 0.045, 0.016, 0.004, 0.02 - i * 0.058, 0.04, s * (0.168 + i * 0.004), CAMO, 0, s * (0.12 + i * 0.12), 0));
+    smokeBank(T, 0.04, 0.094, s * 0.15, s, 4, 1.0, 0.009);
   }
-  // bustle cage (slat armour + net)
-  slats(T, [-0.43, -0.2], [-0.43, 0.2], -0.01, 0.1, 10);
-  for (const s of [-1, 1]) slats(T, [-0.17, s * 0.22], [-0.43, s * 0.2], -0.01, 0.1, 6);
-  T.box(0.26, 0.004, 0.4, -0.3, -0.008, 0, 0x3a3d32);
-  teamPanel(T, 0.004, 0.022, 0.22, -0.372, 0.05, 0, b.team);
-  // commander PK-5 sight + Kord RWS (right), gunner Sosna-U (left front), commander / gunner hatches
-  T.cy(0.045, 0.05, 0.016, -0.07, 0.1, 0.09, CAMO, 14);
-  rws(T, -0.08, 0.116, 0.09, 0.9, true);
-  panoSight(T, 0.0, 0.1, 0.12, 0.04, 0.95);
-  T.cbox(0.06, 0.045, 0.05, 0.006, 0.07, 0.122, -0.11, CAMO);
-  T.box(0.004, 0.026, 0.036, 0.102, 0.124, -0.11, GLASS);
-  hatch(T, -0.07, 0.1, -0.09, 0.034);
-  antennas(b, T, -0.2, 0.1, [-0.14, 0.15], 0.24);
-  // 2A46M-5: 9.63 m gun forward vs 6.86 m hull = 2.77 m overhang
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.665, r: 0.014, fume: 0.6, mrs: false, mantlet: [0.04, 0.055, 0.08] });
+  // short welded bustle, slat cage round it
+  T.cbox(0.12, 0.07, 0.3, 0.008, -0.2, 0.037, 0, CAMO);
+  slats(T, [-0.275, -0.19], [-0.275, 0.19], -0.012, 0.085, 10);
+  for (const s of [-1, 1]) slats(T, [-0.1, s * 0.198], [-0.275, s * 0.19], -0.012, 0.085, 6);
+  T.box(0.18, 0.004, 0.38, -0.19, -0.012, 0, 0x3a3d32);
+  teamPanel(T, 0.004, 0.022, 0.2, -0.262, 0.05, 0, b.team);
+  // commander cupola with the Kord RWS (right), PK-5 panoramic sight, gunner Sosna-U (left front), hatches
+  T.cy(0.04, 0.045, 0.016, -0.06, 0.092, 0.075, CAMO, 14);
+  rws(T, -0.065, 0.108, 0.075, 0.85, true);
+  panoSight(T, 0.0, 0.094, 0.1, 0.036, 0.9);
+  T.cbox(0.055, 0.04, 0.045, 0.006, 0.06, 0.11, -0.09, CAMO);
+  T.box(0.004, 0.024, 0.032, 0.089, 0.112, -0.09, GLASS);
+  hatch(T, -0.06, 0.094, -0.075, 0.032);
+  antennas(b, T, -0.14, 0.09, [-0.13, 0.13], 0.24);
+  // 2A46M-5 125 mm: 9.63 m gun forward vs 6.86 m hull = 2.77 m overhang; thermal sleeve, evacuator forward
+  mainGun(b, T, 0.17, 0.042, 0, { len: 0.725, r: 0.0155, fume: 0.62, mrs: false, mantlet: [0.045, 0.05, 0.085] });
 }
 
 function mbtOplot(b: Bld) {
@@ -3466,47 +3477,48 @@ function mbtOplot(b: Bld) {
   b.emit(-0.51, 0.19, -0.09);
   hatch(B, 0.32, deck, 0, 0.03);
   periscope(B, 0.36, deck, 0, 0, 0.026);
-  unditchLog(B, -0.49, 0.262, 0.46);
+  fuelDrums(B, -0.535, 0.232, [-0.13, 0.13]);
   teamPanel(B, 0.36, 0.02, 0.003, 0.0, 0.13, 0.299, b.team);
   teamPanel(B, 0.36, 0.02, 0.003, 0.0, 0.13, -0.299, b.team);
 
-  // ---- turret: flat-sided welded box, Nozh chevron brows, long bustle box almost to the hull rear
-  const T = b.part(B, -0.05, deck, 0, 'turret');
-  // (side drawing: the bustle box ends well ahead of the stern)
-  const P0: P2[] = [[0.2, 0], [0.19, 0.09], [0.1, 0.205], [-0.12, 0.218], [-0.2, 0.2], [-0.36, 0.19], [-0.37, 0]];
+  // ---- turret: compact angular welded hexagon with flat Nozh plates on the cheeks, rear bustle box
+  const T = b.part(B, -0.02, deck, 0, 'turret');
+  const P0: P2[] = [[0.2, 0], [0.19, 0.08], [0.1, 0.19], [-0.08, 0.2], [-0.15, 0.188], [-0.3, 0.178], [-0.31, 0]];
   hloft(T, [
     { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: 0.105, h: slopeF(sz(P0, 0.92), 0.0, -0.02) },
+    { y: 0.022, h: P0 },
+    { y: 0.088, h: slopeF(sz(P0, 0.86), 0.0, -0.035) },
   ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
-    const bot: P2[] = s > 0 ? [[0.33, 0.06], [0.13, 0.235], [0.08, 0.212], [0.21, 0.052]] : [[0.33, -0.06], [0.21, -0.052], [0.08, -0.212], [0.13, -0.235]];
-    const tp: P2[] = s > 0 ? [[0.25, 0.058], [0.11, 0.205], [0.07, 0.19], [0.19, 0.05]] : [[0.25, -0.058], [0.19, -0.05], [0.07, -0.19], [0.11, -0.205]];
-    T.loft([{ y: 0.004, p: bot }, { y: 0.1, p: tp }], CAMO);
+    // Nozh: flat ERA plates forming a wedge over each cheek, cassette joints across them
+    const bot: P2[] = s > 0 ? [[0.28, 0.05], [0.11, 0.21], [0.07, 0.19], [0.19, 0.045]] : [[0.28, -0.05], [0.19, -0.045], [0.07, -0.19], [0.11, -0.21]];
+    const tp: P2[] = s > 0 ? [[0.22, 0.05], [0.1, 0.188], [0.06, 0.174], [0.17, 0.044]] : [[0.22, -0.05], [0.17, -0.044], [0.06, -0.174], [0.1, -0.188]];
+    T.loft([{ y: 0.006, p: bot }, { y: 0.082, p: tp }], CAMO);
     for (let i = 0; i < 3; i++) {
       const t = (i + 0.5) / 3;
-      T.box(0.005, 0.006, 0.075, 0.29 - t * 0.17, 0.052, s * (0.065 + t * 0.15), K.dark, 0, s * 0.9, 0);
+      T.box(0.005, 0.07, 0.004, 0.245 - t * 0.15, 0.044, s * (0.065 + t * 0.13), K.dark, 0, s * 0.9, 0);
     }
-    smokeBank(T, -0.04, 0.1, s * 0.21, s, 6, 1.0, 0.008);
-    T.cbox(0.12, 0.05, 0.022, 0.006, -0.27, 0.05, s * 0.2, CAMO);
+    smokeBank(T, -0.05, 0.088, s * 0.18, s, 6, 1.0, 0.008);
+    // bustle side boxes
+    T.cbox(0.11, 0.045, 0.02, 0.006, -0.235, 0.045, s * 0.188, CAMO);
     // Varta optical-jammer emitters on the front corners
-    T.cbox(0.03, 0.03, 0.03, 0.004, 0.06, 0.12, s * 0.18, 0x34363a);
-    T.box(0.004, 0.02, 0.02, 0.076, 0.12, s * 0.18, RED);
+    T.cbox(0.028, 0.028, 0.028, 0.004, 0.05, 0.104, s * 0.16, 0x34363a);
+    T.box(0.004, 0.018, 0.018, 0.065, 0.104, s * 0.16, RED);
   }
-  for (let i = 0; i < 2; i++) lid(T, 0.06, 0.24, -0.25 - i * 0.065, 0.105, 0);
-  teamPanel(T, 0.004, 0.022, 0.24, -0.372, 0.05, 0, b.team);
+  for (let i = 0; i < 2; i++) lid(T, 0.055, 0.22, -0.21 - i * 0.06, 0.088, 0);
+  teamPanel(T, 0.004, 0.022, 0.22, -0.312, 0.045, 0, b.team);
   // commander cupola + PNK-6 sight + MG (right), gunner sight (left)
-  T.cy(0.045, 0.05, 0.02, -0.05, 0.105, 0.09, CAMO, 14);
-  panoSight(T, -0.0, 0.125, 0.12, 0.03, 1.0);
-  mgun(T, -0.07, 0.15, 0.07, 0.1, 0.005, true);
-  T.box(0.03, 0.025, 0.03, -0.09, 0.135, 0.07, K.dark);
-  T.cbox(0.06, 0.04, 0.05, 0.006, 0.08, 0.124, -0.11, CAMO);
-  T.box(0.004, 0.024, 0.036, 0.112, 0.126, -0.11, GLASS);
-  hatch(T, -0.06, 0.105, -0.09, 0.034);
-  antennas(b, T, -0.27, 0.105, [-0.13, 0.13], 0.24);
-  // KBA-3: 9.72 m gun forward vs 7.08 m hull = 2.64 m overhang
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.67, r: 0.014, fume: 0.58, mrs: false, mantlet: [0.05, 0.055, 0.08] });
+  T.cy(0.042, 0.047, 0.018, -0.045, 0.088, 0.08, CAMO, 14);
+  panoSight(T, 0.0, 0.106, 0.11, 0.028, 0.95);
+  mgun(T, -0.06, 0.128, 0.07, 0.1, 0.005, true);
+  T.box(0.03, 0.025, 0.03, -0.08, 0.116, 0.07, K.dark);
+  T.cbox(0.055, 0.038, 0.048, 0.006, 0.07, 0.105, -0.1, CAMO);
+  T.box(0.004, 0.022, 0.034, 0.1, 0.107, -0.1, GLASS);
+  hatch(T, -0.05, 0.088, -0.08, 0.032);
+  antennas(b, T, -0.22, 0.088, [-0.12, 0.12], 0.24);
+  // KBA-3 125 mm: 9.72 m gun forward vs 7.08 m hull = 2.64 m overhang
+  mainGun(b, T, 0.2, 0.046, 0, { len: 0.71, r: 0.0155, fume: 0.58, mrs: false, mantlet: [0.05, 0.052, 0.08] });
 }
 
 function mbtKarrar(b: Bld) {
@@ -3534,41 +3546,46 @@ function mbtKarrar(b: Bld) {
   periscope(B, 0.36, deck, 0, 0, 0.026);
   teamPanel(B, 0.004, 0.024, 0.18, -0.494, 0.2, 0, b.team);
 
-  // ---- turret: angular welded, large ERA cheek blocks, square bustle box with slats
-  const T = b.part(B, -0.04, deck, 0, 'turret');
-  const P0: P2[] = [[0.22, 0], [0.21, 0.1], [0.12, 0.212], [-0.12, 0.222], [-0.22, 0.196], [-0.38, 0.186], [-0.39, 0]];
+  // ---- turret: compact T-90MS-style welded box, big ERA cheek blocks, bustle wrapped in netting and kit
+  const T = b.part(B, -0.01, deck, 0, 'turret');
+  const P0: P2[] = [[0.2, 0], [0.19, 0.1], [0.11, 0.19], [-0.1, 0.2], [-0.17, 0.186], [-0.3, 0.18], [-0.31, 0]];
   hloft(T, [
     { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: 0.1, h: slopeF(sz(P0, 0.93), 0.0, -0.02) },
+    { y: 0.022, h: P0 },
+    { y: 0.095, h: slopeF(sz(P0, 0.93), 0.0, -0.02) },
   ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
     // front ERA: 2 x 3 big blocks on each cheek
     const nx = 0.75;
     const nz = s * 0.66;
     for (let i = 0; i < 3; i++) {
       const t = (i + 0.5) / 3;
-      const x = 0.215 - 0.1 * t + nx * 0.016;
-      const z = s * (0.1 + 0.11 * t) + nz * 0.016;
-      for (let j = 0; j < 2; j++) T.piece(1, () => T.cbox(0.03, 0.04, 0.05, 0.004, x, 0.028 + j * 0.044, z, CAMO, 0, -Math.atan2(nz, nx), 0));
+      const x = 0.195 - 0.09 * t + nx * 0.016;
+      const z = s * (0.1 + 0.09 * t) + nz * 0.016;
+      for (let j = 0; j < 2; j++) T.piece(1, () => T.cbox(0.03, 0.038, 0.048, 0.004, x, 0.026 + j * 0.042, z, CAMO, 0, -Math.atan2(nz, nx), 0));
     }
-    T.box(0.08, 0.016, 0.07, 0.08, 0.104, s * 0.09, CAMO, 0, 0, -0.1);
-    smokeBank(T, 0.02, 0.09, s * 0.21, s, 6, 1.1, 0.008);
-    T.cbox(0.14, 0.05, 0.024, 0.006, -0.28, 0.05, s * 0.192, CAMO);
-    teamPanel(T, 0.14, 0.02, 0.003, -0.08, 0.05, s * 0.224, b.team);
+    T.box(0.07, 0.014, 0.065, 0.07, 0.099, s * 0.085, CAMO, 0, 0, -0.1);
+    smokeBank(T, 0.0, 0.088, s * 0.185, s, 6, 1.1, 0.008);
+    T.cbox(0.13, 0.05, 0.022, 0.006, -0.24, 0.05, s * 0.186, CAMO);
+    teamPanel(T, 0.12, 0.018, 0.003, -0.07, 0.05, s * 0.204, b.team);
   }
-  T.box(0.04, 0.085, 0.075, 0.24, 0.045, 0, CAMO);
-  slats(T, [-0.42, -0.18], [-0.42, 0.18], 0.0, 0.1, 9);
+  T.box(0.04, 0.08, 0.07, 0.22, 0.043, 0, CAMO);
+  // bustle: slat frame with a rolled camouflage net, kit bags and a tarp heaped over it
+  slats(T, [-0.355, -0.17], [-0.355, 0.17], 0.0, 0.095, 9);
+  T.cz(0.035, 0.035, 0.34, -0.33, 0.115, 0, 0x6c6444, 9);
+  T.cbox(0.06, 0.04, 0.12, 0.012, -0.29, 0.112, 0.1, 0x7a6a4a);
+  T.cbox(0.07, 0.045, 0.14, 0.014, -0.28, 0.11, -0.09, 0x8c7a56);
+  T.add(new THREE.SphereGeometry(0.06, 9, 5, 0, Math.PI * 2, 0, Math.PI / 2), 0x766a4c, TR(-0.31, 0.095, 0, 0, 0, 0, 1.0, 0.55, 2.6));
   // commander cupola + RWS, panoramic sight, gunner sight
-  T.cy(0.045, 0.05, 0.018, -0.06, 0.1, 0.09, CAMO, 14);
-  rws(T, -0.07, 0.118, 0.09, 0.85, true);
-  panoSight(T, 0.0, 0.1, 0.13, 0.03, 0.9);
-  T.cbox(0.07, 0.045, 0.055, 0.006, 0.08, 0.125, -0.11, CAMO);
-  T.box(0.004, 0.026, 0.04, 0.117, 0.127, -0.11, GLASS);
-  hatch(T, -0.06, 0.1, -0.09, 0.034);
-  antennas(b, T, -0.3, 0.1, [-0.13, 0.14], 0.22);
-  mainGun(b, T, 0.26, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.6, mrs: true, mantlet: [0.04, 0.05, 0.08] });
+  T.cy(0.042, 0.047, 0.018, -0.05, 0.095, 0.08, CAMO, 14);
+  rws(T, -0.06, 0.113, 0.08, 0.85, true);
+  panoSight(T, 0.0, 0.095, 0.12, 0.03, 0.9);
+  T.cbox(0.065, 0.042, 0.052, 0.006, 0.07, 0.118, -0.1, CAMO);
+  T.box(0.004, 0.024, 0.038, 0.104, 0.12, -0.1, GLASS);
+  hatch(T, -0.05, 0.095, -0.08, 0.032);
+  antennas(b, T, -0.24, 0.095, [-0.12, 0.13], 0.22);
+  mainGun(b, T, 0.24, 0.048, 0, { len: 0.63, r: 0.0155, fume: 0.6, mrs: true, mantlet: [0.04, 0.05, 0.08] });
 }
 
 function mbtType99(b: Bld) {
@@ -3668,16 +3685,29 @@ function mbtK2(b: Bld, altay: boolean) {
   // reference photos: the K2 turret sits well forward (mantlet ~0.2 hull lengths behind the nose) and is
   // tall and slab sided over a low hull; Altay's sits further back with a blunter face
   const T = b.part(B, altay ? -0.03 : 0.015, 0.253, 0, 'turret');
+  // Altay: blocky Leopard-2A4-like box, vertical sides and front; K2: shorter sloped wedge (faces and sides
+  // leaning back) over a long autoloader bustle, the hull riding nose-up on its hydropneumatics
   const P0: P2[] = altay
-    ? [[0.33, 0], [0.32, 0.07], [0.21, 0.19], [0.1, 0.23], [-0.15, 0.234], [-0.3, 0.22], [-0.46, 0.195], [-0.47, 0]]
-    : [[0.32, 0], [0.31, 0.065], [0.22, 0.155], [0.12, 0.222], [-0.12, 0.228], [-0.25, 0.218], [-0.44, 0.19], [-0.452, 0]];
-  const h = altay ? 0.125 : 0.126;
-  hloft(T, [
-    { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: h * 0.62, h: sz(slopeF(P0, 0.1, -0.008), 0.985) },
-    { y: h, h: sz(slopeF(P0, 0.1, altay ? -0.05 : -0.075), 0.92) },
-  ]);
+    ? [[0.33, 0], [0.32, 0.08], [0.24, 0.2], [0.1, 0.232], [-0.15, 0.234], [-0.3, 0.226], [-0.46, 0.2], [-0.47, 0]]
+    : [[0.27, 0], [0.26, 0.06], [0.17, 0.15], [0.08, 0.212], [-0.13, 0.22], [-0.22, 0.2], [-0.43, 0.182], [-0.44, 0]];
+  const h = altay ? 0.13 : 0.11;
+  hloft(
+    T,
+    altay
+      ? [
+          { y: -0.004, h: sz(P0, 0.95) },
+          { y: 0.02, h: P0 },
+          { y: h - 0.012, h: sz(P0, 0.995) },
+          { y: h, h: sz(slopeF(P0, 0.1, -0.012), 0.97) },
+        ]
+      : [
+          { y: -0.004, h: sz(P0, 0.93) },
+          { y: 0.02, h: P0 },
+          { y: h * 0.55, h: sz(slopeF(P0, 0.05, -0.035), 0.95) },
+          { y: h, h: sz(slopeF(P0, 0.05, -0.115), 0.85) },
+        ],
+  );
+  if (!altay) b.stance = 0.02;
   T.cy(0.19, 0.19, 0.012, 0, -0.012, 0, K.dark, 20);
   // armour-module seams on the wedge faces
   for (const s of [-1, 1]) {

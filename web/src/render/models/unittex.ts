@@ -350,8 +350,8 @@ function schemeAt(s: Scheme, u: number, v: number): number {
       return 0;
     }
     case 'pla': {
-      // woodland digital: blotches built from big pixels (~0.3 m on the hull) with a finer dithered fringe
-      const P = 20;
+      // Type 99A digital: blotches built from small square pixels (~0.12 m on the hull) with a dithered fringe
+      const P = 52;
       const iu = Math.floor(u * P);
       const iv = Math.floor(v * P);
       const fu = Math.floor(u * P * 2);
@@ -422,8 +422,14 @@ export function vehCamo(faction: string, dk = 0.8, baked = false): UnitTexSet {
         const k = Math.abs(t - 0.5) * 0.3;
         col = [base[0] + (alt[0] - base[0]) * k, base[1] + (alt[1] - base[1]) * k, base[2] + (alt[2] - base[2]) * k];
       } else {
-        // hard pattern edges, anti-aliased by the small blur pass below
         col = cols[idx[i]];
+      }
+      if (!plain && (spec.scheme === 'pla' || spec.scheme === 'uapix')) {
+        // digital schemes keep crisp pixel edges
+        const m = (fbm(u, v, 8, 811, 3) - 0.5) * 0.06;
+        col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
+      } else if (!plain) {
+        // hard pattern edges, anti-aliased by the small blur pass below
         const n4 = [idx[y * AN + ((x + 1) % AN)], idx[y * AN + ((x + AN - 1) % AN)], idx[((y + 1) % AN) * AN + x], idx[((y + AN - 1) % AN) * AN + x]];
         let r0 = col[0] * 4;
         let g0 = col[1] * 4;
