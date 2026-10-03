@@ -42,6 +42,8 @@ export interface BiomeLook {
   ground: { dirt: number; rock: number; sand: number; mud: number; soil: number; crop: number; wheat: number; hay: number; forest?: number; gravel?: number; snow?: number; asphalt?: number; paving?: number };
   /** Saturation of a photoscan layer's detail around its mean colour (1 = as scanned; ground.ts). */
   photoSat?: Partial<Record<'grass' | 'dirt' | 'rock' | 'sand' | 'mud' | 'forest' | 'gravel' | 'soil' | 'snow' | 'asphalt' | 'paving', number>>;
+  /** How far a photoscan layer's hue follows the look colour (0 = the scan's own, 1 = the look's; default 0.4). */
+  photoHue?: Partial<Record<'grass' | 'dirt' | 'rock' | 'sand' | 'mud' | 'forest' | 'gravel' | 'soil' | 'snow' | 'asphalt' | 'paving', number>>;
   /** 3D grass blades density multiplier (0 = none). */
   blades: number;
   /** Clover / wildflower patches (0..1). */
@@ -78,7 +80,7 @@ const TEMPERATE: BiomeLook = {
     gravel: scan('gravel', 0x8a8070, 0.4),
   },
   // the mossy cliff scan has lilac lichen-covered stone: calm it to grey
-  photoSat: { rock: 0.5 },
+  photoSat: { rock: 0.5, dirt: 0.8 },
   blades: 1,
   clover: 1,
   flowers: 1,
@@ -109,6 +111,8 @@ const LOOKS: Record<Biome, BiomeLook> = {
       hay: 0x9a8c50,
       gravel: scan('gravel', 0xa08a6a, 0.5),
     },
+    // the grey dune scan takes the desert's gold entirely
+    photoHue: { sand: 1 },
     blades: 0.35,
     clover: 0,
     flowers: 0.15,
@@ -139,6 +143,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
       // the scan's de-lit snow is mid grey: lift it to fresh snow
       snow: scan('snow', 0xdae2ee, 0.9),
     },
+    photoHue: { snow: 0.8 },
     blades: 0,
     clover: 0,
     flowers: 0,

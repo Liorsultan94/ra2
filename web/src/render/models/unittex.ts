@@ -335,8 +335,8 @@ function schemeAt(s: Scheme, u: number, v: number): number {
       return 0;
     }
     case 'uapix': {
-      // pixel clusters (~1 / 40 of the tile): olive ground, brown + khaki clusters, dark accents
-      const P = 40;
+      // pixel clusters (~1 / 26 of the tile): olive ground, brown + khaki clusters, dark accents
+      const P = 26;
       const iu = Math.floor(u * P);
       const iv = Math.floor(v * P);
       const cu = (iu + 0.5) / P;
@@ -350,8 +350,8 @@ function schemeAt(s: Scheme, u: number, v: number): number {
       return 0;
     }
     case 'pla': {
-      // woodland digital: blotches built from big pixels with a finer dithered fringe
-      const P = 32;
+      // woodland digital: blotches built from big pixels (~0.3 m on the hull) with a finer dithered fringe
+      const P = 20;
       const iu = Math.floor(u * P);
       const iv = Math.floor(v * P);
       const fu = Math.floor(u * P * 2);
@@ -361,7 +361,7 @@ function schemeAt(s: Scheme, u: number, v: number): number {
       const d = (hash(fu, fv, 413) - 0.5) * 0.07;
       const a = wfbm(cu, cv, 4, 411, 0.2) + d;
       const b = wfbm(cu + 0.3, cv, 4, 431, 0.2) + d;
-      if (b > 0.62) return 2;
+      if (b > 0.57) return 2;
       if (a > 0.57) return 1;
       if (a < 0.4) return 3;
       return 0;

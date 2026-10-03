@@ -97,7 +97,7 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
   const W = m.w;
   const H = m.h;
   const biome = m.biome;
-  const dens = quality === 'high' ? 1 : 0.62;
+  const dens = quality === 'high' ? 1 : 0.78;
   const info = (id: string) => man.props[id];
   const usable = (id: string) => !!info(id) && info(id).biomes.includes(biome);
   let salt = 0;
@@ -271,48 +271,55 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
       const hz = st.rot % 2 ? st.w / 2 : st.h / 2;
       const h = (k: number) => hash2(st.x * 7 + k, st.y * 13 + si, 4242);
       if (h(0) > 0.92 * dens + 0.08) return;
-      // back band (inside the footprint, behind the house): a row of clutter along the wall
-      const bz0 = -body.hz - 0.04;
-      const bandD = hz - body.hz;
-      if (bandD > 0.12) {
-        const n = 1 + Math.floor(h(1) * 3 * dens + 0.4);
+      // the house's four sides, ranked by how well the default camera (looking from +x / +z) sees them:
+      // clutter behind a house would be hidden under its roof
+      const sides = [
+        { nx: 0, nz: -1, wall: body.hz, band: hz - body.hz, len: hx - 0.16, rot: a, front: false },
+        { nx: 0, nz: 1, wall: body.hz, band: hz - body.hz, len: hx - 0.12, rot: a, front: true },
+        { nx: -1, nz: 0, wall: body.hx, band: hx - body.hx, len: hz - 0.16, rot: a + Math.PI / 2, front: false },
+        { nx: 1, nz: 0, wall: body.hx, band: hx - body.hx, len: hz - 0.16, rot: a + Math.PI / 2, front: false },
+      ]
+        .map((sd) => ({ ...sd, vis: (sd.nx * ca + sd.nz * sa - sd.nx * sa + sd.nz * ca) * Math.SQRT1_2 + (hash2(si, sd.nx * 2 + sd.nz + 3, 4243) - 0.5) * 0.3 }))
+        .sort((p, q) => q.vis - p.vis);
+      /** Local point on a side: `t` along the wall, `d` out from it. */
+      const at = (sd: (typeof sides)[number], t: number, d: number): [number, number] => {
+        const w = sd.wall + d;
+        return sd.nz ? W2(t, sd.nz * w) : W2(sd.nx * w, t);
+      };
+      const wallIds = avail(ys.wall);
+      sides.slice(0, 2).forEach((sd, rank) => {
+        if (sd.vis < -0.35 || !wallIds.length) return;
+        const n = rank === 0 ? 1 + Math.floor(h(1) * 2.4 * dens + 0.5) : h(2) < 0.6 * dens ? 1 : 0;
         for (let k = 0; k < n; k++) {
-          const id = pick(avail(ys.wall), h(10 + k));
-          if (!id) break;
-          const d = info(id).footprint;
-          const lx = (h(20 + k) - 0.5) * 2 * Math.max(0, hx - 0.2);
-          const lz = bz0 - Math.min(d[1], bandD * 0.5);
-          const [x, z] = W2(lx, lz);
-          if (id === 'woodpile' || id === 'crate_long') put(id, x, z, -a + (h(30 + k) - 0.5) * 0.15, { yard: true, sink: winterSink });
-          else cluster(x, z, [id, ...avail(ys.wall).filter((s) => s.startsWith('drum') || s === 'jerrycan')], 2 + Math.floor(h(40 + k) * 3), 0.12, st.x * 977 + st.y * 31 + k, { yard: true });
+          const id = pick(wallIds, h(10 + k + rank * 7));
+          // keep the door clear: front clutter only towards the corners
+          let t = (h(20 + k + rank * 7) - 0.5) * 2 * sd.len;
+          if (sd.front && Math.abs(t) < 0.42) t = Math.sign(t || 1) * (0.42 + h(27 + k) * Math.max(0, sd.len - 0.42));
+          const deep = info(id).footprint[1];
+          // inside the footprint band when there is room, else hugging the outside of the footprint
+          const d = sd.band > deep + 0.06 ? 0.03 + deep / 2 : sd.band + 0.04 + deep / 2;
+          const [x, z] = at(sd, t, d);
+          if (id === 'woodpile' || id === 'crate_long') put(id, x, z, sd.rot + (h(30 + k) - 0.5) * 0.15, { yard: true, sink: winterSink });
+          else cluster(x, z, [id, ...wallIds.filter((q) => q.startsWith('drum') || q === 'jerrycan' || q === 'barrel_wood')], 2 + Math.floor(h(40 + k) * 3), 0.13, st.x * 977 + st.y * 31 + k + rank * 5, { yard: true });
         }
-      }
-      // side bands: single drums / barrels against the gable walls
-      for (const s of [-1, 1]) {
-        if (h(50 + s) > 0.55 * dens) continue;
-        const id = pick(avail(ys.wall.filter((i) => i !== 'woodpile' && i !== 'crate_long')), h(52 + s));
-        if (!id) continue;
-        const [x, z] = W2(s * (body.hx + 0.09), (h(54 + s) - 0.5) * body.hz);
-        put(id, x, z, h(56 + s) * 6.28, { yard: true, sink: winterSink });
-      }
-      // just outside the footprint (behind / beside, never the front): bigger things
-      if (h(60) < 0.7 * dens) {
+      });
+      // just outside the footprint on a visible side: pallets, tyres, a generator
+      if (h(60) < 0.75 * dens) {
         const id = pick(avail(ys.out), h(61));
-        const side = h(62) < 0.5 ? -1 : 1;
-        const back = h(63) < 0.5;
-        if (id) {
-          const off = 0.05 + info(id).footprint[1] / 2;
-          const [x, z] = back ? W2((h(64) - 0.5) * hx, -hz - off) : W2(side * (hx + off), (h(64) - 0.6) * hz);
-          put(id, x, z, -a + (back ? 0 : Math.PI / 2) + (h(65) - 0.5) * 0.5, { sink: winterSink });
+        const sd = sides[h(62) < 0.6 ? 0 : 1];
+        if (id && !sd.front) {
+          const d = sd.band + 0.06 + info(id).footprint[1] / 2;
+          const [x, z] = at(sd, (h(64) - 0.5) * sd.len, d);
+          put(id, x, z, sd.rot + (h(65) - 0.5) * 0.5, { sink: winterSink });
         }
       }
-      if (h(70) < 0.32 * dens) {
+      // a car parked (or a log pile) beyond the yard fence (0.35 off the footprint)
+      if (h(70) < 0.34 * dens) {
         const id = pick(avail(ys.big), h(71));
+        const sd = sides.find((q) => !q.front && q.nx !== 0) ?? sides[0];
         if (id) {
-          const side = h(72) < 0.5 ? -1 : 1;
-          // outside the yard fence (0.35 off the footprint)
-          const [x, z] = W2(side * (hx + 0.42 + info(id).footprint[1] / 2), (h(73) - 0.5) * 0.3);
-          put(id, x, z, -a + Math.PI / 2 + (h(74) - 0.5) * 0.4, { sink: winterSink });
+          const [x, z] = at(sd, (h(73) - 0.5) * 0.4, sd.band + 0.42 + info(id).footprint[1] / 2);
+          put(id, x, z, sd.rot + (h(74) - 0.5) * 0.3, { sink: winterSink });
         }
       }
       // desert courtyards: the walled yard is full of stuff
@@ -336,7 +343,7 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
   if (ss)
     roads.forEach((r, ri) => {
       if (r.painted) return;
-      const step = Math.round((quality === 'high' ? 26 : 40) + hash2(ri, 3, 9100) * 12);
+      const step = Math.round((quality === 'high' ? 20 : 28) + hash2(ri, 3, 9100) * 10);
       for (let i = 10; i < r.pts.length - 10; i += step + Math.floor(hash2(ri, i, 9101) * 18)) {
         const p = r.pts[i];
         const q = r.pts[i + 1];
@@ -376,15 +383,32 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
   });
 
   // ------------------------------------------------ battle zones: bridge heads, fords / passes, river banks
+  /** A sandbag emplacement facing (faceX, faceZ): a front wall, usually wings bent back (a U), a crate / cans behind. */
   const fort = (x: number, z: number, faceX: number, faceZ: number, seed: number) => {
-    // a short sandbag wall facing (faceX, faceZ), an ammo crate / jerrycan behind it
-    const rot = Math.atan2(faceX, faceZ) + Math.PI; // wall's long axis (local x) across the facing
+    const fl = Math.hypot(faceX, faceZ) || 1;
+    const fx = faceX / fl;
+    const fz = faceZ / fl;
+    // the wall's long axis (local x) runs across the facing
+    const rot = Math.atan2(fx, fz) + Math.PI;
     const rx = Math.cos(rot);
     const rz = -Math.sin(rot);
-    let ok2 = put('sandbags', x, z, rot, { sink: winterSink });
-    if (ok2 && hash2(seed, 1, 9300) < 0.6) put('sandbags', x + rx * 0.47 - faceX * 0.08, z + rz * 0.47 - faceZ * 0.08, rot - 0.35, { sink: winterSink });
-    if (ok2 && hash2(seed, 2, 9300) < 0.6) put(pick(avail(['crate_ammo', 'jerrycan', 'crate_ammo']), hash2(seed, 3, 9300)), x - faceX * 0.24, z - faceZ * 0.24, rot + 0.3, { sink: winterSink });
-    return ok2;
+    if (!put('sandbags', x, z, rot, { sink: winterSink })) return false;
+    const L = usable('sandbags') ? info('sandbags').footprint[0] * 0.94 : 0.5;
+    const wings = hash2(seed, 1, 9300);
+    for (const side of [-1, 1]) {
+      if (wings > 0.75 || (wings > 0.45 && side < 0)) continue;
+      const bend = 0.95 + hash2(seed, side + 5, 9300) * 0.25;
+      const dx = side * rx * Math.cos(bend) - fx * Math.sin(bend);
+      const dz = side * rz * Math.cos(bend) - fz * Math.sin(bend);
+      const ex = x + side * rx * (L / 2) + dx * (L / 2) * 0.92;
+      const ez = z + side * rz * (L / 2) + dz * (L / 2) * 0.92;
+      put('sandbags', ex, ez, Math.atan2(-dz, dx), { sink: winterSink, tight: true });
+    }
+    if (hash2(seed, 2, 9300) < 0.7) {
+      const id = pick(avail(['crate_ammo', 'jerrycan', 'crate_ammo', 'generator']), hash2(seed, 3, 9300));
+      if (id) put(id, x - fx * 0.3 + rx * (hash2(seed, 4, 9300) - 0.5) * 0.3, z - fz * 0.3 + rz * (hash2(seed, 4, 9300) - 0.5) * 0.3, rot + 0.3, { sink: winterSink, tight: true });
+    }
+    return true;
   };
   const hedgehogs = (x: number, z: number, dirX: number, dirZ: number, n: number, seed: number) => {
     for (let k = 0; k < n; k++) {
@@ -425,7 +449,7 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
   }
   // river banks in no-man's land: an outpost every few tiles of bank
   if (biome !== 'urban') {
-    const step = quality === 'high' ? 5 : 7;
+    const step = quality === 'high' ? 4 : 5;
     let seed = 0;
     for (let tz = 4; tz < H - 4; tz += step)
       for (let tx = 4; tx < W - 4; tx += step) {
@@ -457,6 +481,29 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
         const bz = z - fz * 0.9;
         if (hash2(tx, tz, 9343) < 0.55) fort(bx, bz, fx, fz, seed);
         else if (usable('hedgehog')) hedgehogs(bx + fx * 0.3, bz + fz * 0.3, -fz, fx, 3, seed);
+      }
+  }
+
+  // ------------------------------------------------ no-man's land: abandoned positions in the open between the bases
+  if (biome !== 'urban') {
+    const step = quality === 'high' ? 8 : 10;
+    const [s0, s1] = m.starts;
+    for (let tz = 3; tz < H - 3; tz += step)
+      for (let tx = 3; tx < W - 3; tx += step) {
+        if (hash2(tx, tz, 9350) > 0.45 * dens) continue;
+        const x = tx + hash2(tx, tz, 9351) * step;
+        const z = tz + hash2(tx, tz, 9352) * step;
+        const d0 = Math.hypot(x - s0.x, z - s0.y);
+        const d1 = Math.hypot(x - s1.x, z - s1.y);
+        if (Math.min(d0, d1) < 20) continue;
+        // facing the nearer enemy base... from either side
+        const tgt = hash2(tx, tz, 9353) < 0.5 ? s0 : s1;
+        const fx = tgt.x - x;
+        const fz = tgt.y - z;
+        const roll = hash2(tx, tz, 9354);
+        if (roll < 0.55) fort(x, z, fx, fz, tx * 97 + tz);
+        else if (roll < 0.8 && usable('hedgehog')) hedgehogs(x, z, -fz / Math.hypot(fx, fz), fx / Math.hypot(fx, fz), 3 + Math.floor(hash2(tx, tz, 9355) * 3), tx * 31 + tz);
+        else cluster(x, z, ['crate_ammo', 'jerrycan', 'crate_ammo', 'drum_blue', 'pallets'], 3, 0.25, tx * 53 + tz);
       }
   }
 
@@ -800,7 +847,7 @@ export class Props {
     const k = this.kinds.find((q) => q.id === id);
     if (!k) return [];
     const o: [number, number][] = [];
-    for (let j = 0; j < k.ci.size; j++) o.push([k.ci.posX(j), k.ci.posZ(j)]);
+    for (let j = 0; j < k.ci.size; j++) if (k.ci.getMatrix(j, _m).elements[0] !== 0 || k.ci.getMatrix(j, _m).elements[1] !== 0) o.push([k.ci.posX(j), k.ci.posZ(j)]);
     return o;
   }
 

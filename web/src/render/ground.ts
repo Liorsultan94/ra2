@@ -187,7 +187,7 @@ export class Ground {
     this.photo =
       tier > 0
         ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
-          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 4, this.look.photoSat)
+          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 4, this.look.photoSat, this.look.photoHue)
         : null;
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);

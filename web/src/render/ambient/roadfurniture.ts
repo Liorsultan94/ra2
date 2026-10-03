@@ -261,48 +261,55 @@ const poly = (n: number, r: number, cy: number, rot: number): [number, number][]
  * Traffic light (facing +X): the pole at the origin, a mast arm reaching over
  * the inbound lane (local +Z, towards the road) with the head hanging from it.
  */
-const POLE_H = 0.64;
-const ARM = 0.55;
-const HEAD_Y = 0.5;
-const LAMP_DY = 0.052;
+const POLE_H = 0.78;
+const ARM = 0.6;
+const HEAD_Y = 0.6;
+const LAMP_DY = 0.068;
 function headGeometry(): THREE.BufferGeometry {
+  // (a little larger than life, like the rest of the RTS props: it's seen from high above)
   const parts: THREE.BufferGeometry[] = [];
   const body = C(0x1c1f1d);
-  const metal = C(0x8d9094);
-  parts.push(paint(new THREE.BoxGeometry(0.02, 0.02, ARM + 0.04).translate(0, POLE_H - 0.03, ARM / 2), metal));
-  parts.push(paint(new THREE.BoxGeometry(0.012, 0.05, 0.012).translate(0, POLE_H - 0.06, ARM), metal));
-  parts.push(paint(new THREE.BoxGeometry(0.056, 0.175, 0.06).translate(0, HEAD_Y, ARM), body));
-  // backboard with a white rim (reads against the dark street)
-  parts.push(paint(new THREE.BoxGeometry(0.006, 0.205, 0.1).translate(-0.031, HEAD_Y, ARM), C(0xeeeee8)));
-  parts.push(paint(new THREE.BoxGeometry(0.008, 0.19, 0.086).translate(-0.027, HEAD_Y, ARM), body));
+  const metal = C(0x9a9da2);
+  parts.push(paint(new THREE.BoxGeometry(0.032, 0.03, ARM + 0.05).translate(0, POLE_H - 0.03, ARM / 2), metal));
+  parts.push(paint(new THREE.BoxGeometry(0.016, 0.05, 0.016).translate(0, POLE_H - 0.07, ARM), metal));
+  parts.push(paint(new THREE.BoxGeometry(0.075, 0.23, 0.08).translate(0, HEAD_Y, ARM), body));
+  // backboard with a white rim (reads against the dark street), yellow top
+  parts.push(paint(new THREE.BoxGeometry(0.008, 0.27, 0.13).translate(-0.042, HEAD_Y, ARM), C(0xf2f2ea)));
+  parts.push(paint(new THREE.BoxGeometry(0.01, 0.25, 0.11).translate(-0.037, HEAD_Y, ARM), body));
+  parts.push(paint(new THREE.BoxGeometry(0.08, 0.012, 0.085).translate(0, HEAD_Y + 0.12, ARM), C(0xd8a91c)));
   for (const k of [-1, 0, 1]) {
     const y = HEAD_Y - k * LAMP_DY;
-    parts.push(paint(new THREE.BoxGeometry(0.006, 0.038, 0.038).translate(0.03, y, ARM), C(0x2a2a26))); // dark lens
-    parts.push(paint(new THREE.BoxGeometry(0.03, 0.005, 0.048).translate(0.043, y + 0.023, ARM), body)); // visor
+    parts.push(paint(new THREE.BoxGeometry(0.008, 0.05, 0.05).translate(0.04, y, ARM), C(0x2c2c28))); // dark lens
+    parts.push(paint(new THREE.BoxGeometry(0.04, 0.006, 0.064).translate(0.058, y + 0.03, ARM), body)); // visor
   }
   return merge(parts);
 }
 
+/** Sign plates lean back a little so they read from the high RTS camera. */
+function lean(g: THREE.BufferGeometry, y: number): THREE.BufferGeometry {
+  return g.translate(0, -y, 0).rotateZ(0.45).translate(0, y, 0);
+}
+
 function giveWayGeometry(): THREE.BufferGeometry {
-  const y = 0.37;
+  const y = 0.44;
   // inverted triangle: red rim, white face
   const tri = (r: number): [number, number][] => [
     [y - r, 0],
     [y + r * 0.5, r * 0.866],
     [y + r * 0.5, -r * 0.866],
   ];
-  return merge([plate(tri(0.075), 0.012, C(0xc8201c)), plate(tri(0.046), 0.0135, C(0xf2f2ee)), plate(tri(0.075), 0.01, C(0x8a8c8e), true)]);
+  return lean(merge([plate(tri(0.11), 0.012, C(0xc8201c)), plate(tri(0.066), 0.0135, C(0xf2f2ee)), plate(tri(0.11), 0.01, C(0x8a8c8e), true)]), y);
 }
 
 function stopGeometry(): THREE.BufferGeometry {
-  const y = 0.37;
+  const y = 0.44;
   const bar: [number, number][] = [
-    [y - 0.008, -0.034],
-    [y - 0.008, 0.034],
-    [y + 0.008, 0.034],
-    [y + 0.008, -0.034],
+    [y - 0.012, -0.05],
+    [y - 0.012, 0.05],
+    [y + 0.012, 0.05],
+    [y + 0.012, -0.05],
   ];
-  return merge([plate(poly(8, 0.058, y, Math.PI / 8), 0.012, C(0xc01818)), plate(bar, 0.0135, C(0xf4f4f0)), plate(poly(8, 0.058, y, Math.PI / 8), 0.01, C(0x8a8c8e), true)]);
+  return lean(merge([plate(poly(8, 0.085, y, Math.PI / 8), 0.012, C(0xc01818)), plate(bar, 0.0135, C(0xf4f4f0)), plate(poly(8, 0.085, y, Math.PI / 8), 0.01, C(0x8a8c8e), true)]), y);
 }
 
 function kerbGeometry(urban: boolean): THREE.BufferGeometry {
@@ -409,7 +416,7 @@ export class RoadFurniture {
         poles.push({ x: p.x, y: p.y, yaw: 0, s: POLE_H, h });
         this.heads.push({ x: p.x, y: p.y, yaw: p.yaw, s: 1, h, sig: p.ref, axis: p.axis });
       } else if (p.kind === PropKind.GiveWay || p.kind === PropKind.StopSign) {
-        poles.push({ x: p.x, y: p.y, yaw: 0, s: 0.4, h });
+        poles.push({ x: p.x, y: p.y, yaw: 0, s: 0.44, h });
         (p.kind === PropKind.GiveWay ? give : stop).push({ x: p.x, y: p.y, yaw: p.yaw, s: 1, h });
       } else if (p.kind === PropKind.Island) {
         kerbs.push({ x: p.x, y: p.y, yaw: 0, s: p.size, h: surfaceHeight(m, p.x, p.y) + LIFT - 0.02 });
@@ -441,7 +448,7 @@ export class RoadFurniture {
     add(shrubGeometry(map.biome), shrubs, 'furn-shrubs', shadow);
     if (this.heads.length) {
       // the lit lamp: unlit, bright, coloured per instance
-      const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.008, 0.036, 0.036), new THREE.MeshBasicMaterial({ toneMapped: false }), this.heads.length);
+      const lm = new THREE.InstancedMesh(new THREE.SphereGeometry(0.026, 8, 6), new THREE.MeshBasicMaterial({ toneMapped: false }), this.heads.length);
       lm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       lm.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.heads.length * 3), 3);
       lm.instanceColor.setUsage(THREE.DynamicDrawUsage);
@@ -647,15 +654,15 @@ export class RoadFurniture {
       const hx = hd.x - fy * ARM;
       const hy = hd.y + fx * ARM;
       _q.setFromAxisAngle(_up, -hd.yaw);
-      _m.compose(_p.set(hx + fx * 0.032, ly, hy + fy * 0.032), _q, _s.set(1, 1, 1));
+      _m.compose(_p.set(hx + fx * 0.04, ly, hy + fy * 0.04), _q, _s.set(1, 1, 1));
       lm.setMatrixAt(n, _m);
       if (light === Light.Red) _c.setRGB(2.4, 0.12, 0.06);
       else if (light === Light.Amber) _c.setRGB(2.4, 1.1, 0.05);
       else _c.setRGB(0.15, 2.2, 0.75);
       lm.setColorAt(n++, _c);
       // glow: a soft flare, stronger at night
-      const k = 0.55 + dk * 1.2;
-      this.lights.flare(hx + fx * 0.05, ly, hy + fy * 0.05, 0.085 + dk * 0.06, _c.r * k * 0.8, _c.g * k * 0.8, _c.b * k * 0.8);
+      const k = 0.6 + dk * 1.1;
+      this.lights.flare(hx + fx * 0.07, ly, hy + fy * 0.07, 0.12 + dk * 0.06, _c.r * k * 0.8, _c.g * k * 0.8, _c.b * k * 0.8);
     }
     lm.count = n;
     lm.visible = n > 0;

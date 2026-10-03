@@ -1,11 +1,13 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
 import { Tile, type MapId } from '../src/sim/map';
 import { buildLayout, occAt, OCC_ROAD, OCC_TRACK } from '../src/render/layout';
 import { planProps, type PropsManifest } from '../src/render/props';
 
-const man = JSON.parse(readFileSync(new URL('../public/props/props.json', import.meta.url), 'utf8')) as PropsManifest;
+// the manifest the runtime loads (tools/bake-props.mjs)
+import manRaw from '../public/props/props.json?raw';
+
+const man = JSON.parse(manRaw) as PropsManifest;
 
 describe('map props', () => {
   it('manifest stays within the triangle and download budgets', () => {

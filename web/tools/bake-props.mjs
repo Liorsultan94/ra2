@@ -115,42 +115,42 @@ const SUB = {
  * vehicles), tall (topples), fixed (never moves; blasts only char it).
  */
 const PROPS = [
-  { id: 'drum_red', src: 'Barrel_01', mpu: 0.22, tris: 700, kind: 'small', biomes: ['temperate', 'desert'], shadow: true },
-  { id: 'drum_blue', src: 'barrel_03', mpu: 0.21, tris: 700, kind: 'small', biomes: ['temperate', 'desert', 'winter'], shadow: true },
-  { id: 'drum_rust', src: 'barrel_stove', mpu: 0.22, tris: 800, kind: 'small', biomes: ['desert', 'winter', 'urban'], shadow: true },
-  { id: 'drum_plastic', src: 'Barrel_02', mpu: 0.21, tris: 700, kind: 'small', biomes: ['urban', 'temperate'], shadow: true },
-  { id: 'jerrycan', src: 'metal_jerrycan_green', nodes: ['metal_jerrycan_green_body', 'metal_jerrycan_green_cap'], mpu: 0.24, tris: 500, kind: 'small', biomes: ['desert', 'temperate', 'winter'] },
-  { id: 'propane', src: 'propane_tank', mpu: 0.23, tris: 600, kind: 'small', biomes: ['desert'] },
-  { id: 'crate_long', src: 'wooden_crate_02', rotY: Math.PI / 2, mpu: 0.22, tris: 600, kind: 'small', biomes: ['temperate', 'winter'], shadow: true },
-  { id: 'crate_ammo', src: 'old_military_crate', nodes: ['old_military_crate_a', 'old_military_crate_lid_a', 'old_military_crate_latch_a', 'old_military_crate_loop_a'], mpu: 0.22, tris: 800, kind: 'small', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
-  { id: 'barrel_wood', src: 'wine_barrel_01', mpu: 0.22, tris: 800, kind: 'small', biomes: ['temperate', 'winter'], shadow: true },
-  { id: 'tyre', src: 'old_tyre', mpu: 0.22, tris: 500, kind: 'small', biomes: ['temperate', 'desert', 'winter'] },
-  { id: 'tyre_stack', compose: 'tyreStack', mpu: 0.22, tris: 1200, kind: 'small', biomes: ['winter', 'desert'], shadow: true },
-  { id: 'woodpile', compose: 'woodpile', mpu: 0.2, tris: 1500, kind: 'big', biomes: ['winter', 'temperate'], shadow: true },
-  { id: 'stump', src: 'tree_stump_01', mpu: 0.17, tris: 900, kind: 'fixed', biomes: ['winter', 'temperate'] },
+  { id: 'drum_red', src: 'Barrel_01', mpu: 0.26, tris: 700, kind: 'small', biomes: ['temperate', 'desert'], shadow: true },
+  { id: 'drum_blue', src: 'barrel_03', mpu: 0.25, tris: 700, kind: 'small', biomes: ['temperate', 'desert', 'winter'], shadow: true },
+  { id: 'drum_rust', src: 'barrel_stove', mpu: 0.26, tris: 800, kind: 'small', biomes: ['desert', 'winter', 'urban'], shadow: true },
+  { id: 'drum_plastic', src: 'Barrel_02', mpu: 0.25, tris: 700, kind: 'small', biomes: ['urban', 'temperate'], shadow: true },
+  { id: 'jerrycan', src: 'metal_jerrycan_green', nodes: ['metal_jerrycan_green_body', 'metal_jerrycan_green_cap'], mpu: 0.27, tris: 500, kind: 'small', biomes: ['desert', 'temperate', 'winter'] },
+  { id: 'propane', src: 'propane_tank', mpu: 0.26, tris: 600, kind: 'small', biomes: ['desert'] },
+  { id: 'crate_long', src: 'wooden_crate_02', rotY: Math.PI / 2, mpu: 0.25, tris: 600, kind: 'small', biomes: ['temperate', 'winter'], shadow: true },
+  { id: 'crate_ammo', src: 'old_military_crate', nodes: ['old_military_crate_a', 'old_military_crate_lid_a', 'old_military_crate_latch_a', 'old_military_crate_loop_a'], mpu: 0.25, tris: 800, kind: 'small', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
+  { id: 'barrel_wood', src: 'wine_barrel_01', mpu: 0.25, tris: 800, kind: 'small', biomes: ['temperate', 'winter'], shadow: true },
+  { id: 'tyre', src: 'old_tyre', mpu: 0.25, tris: 500, kind: 'small', biomes: ['temperate', 'desert', 'winter'] },
+  { id: 'tyre_stack', compose: 'tyreStack', mpu: 0.25, tris: 1200, kind: 'small', biomes: ['winter', 'desert'], shadow: true },
+  { id: 'woodpile', compose: 'woodpile', mpu: 0.22, tris: 1500, kind: 'big', biomes: ['winter', 'temperate'], shadow: true },
+  { id: 'stump', src: 'tree_stump_01', mpu: 0.19, tris: 900, kind: 'fixed', biomes: ['winter', 'temperate'] },
   { id: 'car_covered', src: 'covered_car', rotY: Math.PI / 2, mpu: 0.155, tris: 1500, kind: 'big', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
-  { id: 'barrier', src: 'concrete_road_barrier', mpu: 0.22, tris: 900, kind: 'big', biomes: ['temperate', 'desert', 'urban'], shadow: true },
-  { id: 'block', src: 'concrete_road_barrier_02', mpu: 0.2, tris: 900, kind: 'big', biomes: ['desert', 'urban'], shadow: true },
-  { id: 'generator', src: 'portable_generator', drop: ['portable_generator_glass'], mpu: 0.22, tris: 1200, kind: 'big', biomes: ['temperate', 'desert'], shadow: true },
+  { id: 'barrier', src: 'concrete_road_barrier', mpu: 0.24, tris: 900, kind: 'big', biomes: ['temperate', 'desert', 'urban'], shadow: true },
+  { id: 'block', src: 'concrete_road_barrier_02', mpu: 0.22, tris: 900, kind: 'big', biomes: ['desert', 'urban'], shadow: true },
+  { id: 'generator', src: 'portable_generator', drop: ['portable_generator_glass'], mpu: 0.25, tris: 1200, kind: 'big', biomes: ['temperate', 'desert'], shadow: true },
   { id: 'lamp', src: 'street_lamp_01', drop: ['street_lamp_01_glass', 'street_lamp_01_bulb'], mpu: 0.19, tris: 1200, kind: 'tall', biomes: ['urban'], shadow: true },
   {
     id: 'bench',
     src: 'modular_street_seating',
     nodes: ['crossbar', 'legs_single', 'legs_double', 'suspended_support_01', 'back_support_r', 'back_support_l', 'arm_rest_01', 'arm_rest_02', 'seat', 'seat_back'],
-    mpu: 0.2,
+    mpu: 0.23,
     tris: 1000,
     kind: 'big',
     biomes: ['urban'],
   },
-  { id: 'bin', src: 'metal_trash_can', nodes: ['metal_trash_can', 'metal_trash_can_handle_left', 'metal_trash_can_handle_right'], mpu: 0.22, tris: 700, kind: 'small', biomes: ['urban'], shadow: true },
-  { id: 'trashbag', src: 'trashbag', mpu: 0.22, tris: 400, kind: 'small', biomes: ['urban'] },
-  { id: 'utility_box', src: 'utility_box_02', rotY: 0, mpu: 0.21, tris: 600, kind: 'big', biomes: ['urban'], shadow: true },
-  { id: 'hydrant', src: 'fire_hydrant', nodes: ['fire_hydrant_aged', 'fire_hydrant_cap_01_aged', 'fire_hydrant_cap_02_aged', 'fire_hydrant_cap_03_aged'], mpu: 0.22, tris: 600, kind: 'small', biomes: ['urban'] },
+  { id: 'bin', src: 'metal_trash_can', nodes: ['metal_trash_can', 'metal_trash_can_handle_left', 'metal_trash_can_handle_right'], mpu: 0.25, tris: 700, kind: 'small', biomes: ['urban'], shadow: true },
+  { id: 'trashbag', src: 'trashbag', mpu: 0.25, tris: 400, kind: 'small', biomes: ['urban'] },
+  { id: 'utility_box', src: 'utility_box_02', rotY: 0, mpu: 0.23, tris: 600, kind: 'big', biomes: ['urban'], shadow: true },
+  { id: 'hydrant', src: 'fire_hydrant', nodes: ['fire_hydrant_aged', 'fire_hydrant_cap_01_aged', 'fire_hydrant_cap_02_aged', 'fire_hydrant_cap_03_aged'], mpu: 0.25, tris: 600, kind: 'small', biomes: ['urban'] },
   { id: 'sandbags', proc: 'sandbags', mpu: 0.25, tris: 1300, kind: 'big', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
-  { id: 'hedgehog', proc: 'hedgehog', mpu: 0.22, tris: 300, kind: 'big', biomes: ['temperate', 'winter', 'urban'], shadow: true },
-  { id: 'dumpster', proc: 'dumpster', mpu: 0.2, tris: 400, kind: 'big', biomes: ['urban'], shadow: true },
-  { id: 'bollard', proc: 'bollard', mpu: 0.22, tris: 120, kind: 'fixed', biomes: ['urban'] },
-  { id: 'pallets', proc: 'pallets', mpu: 0.22, tris: 900, kind: 'small', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
+  { id: 'hedgehog', proc: 'hedgehog', mpu: 0.25, tris: 300, kind: 'big', biomes: ['temperate', 'winter', 'urban'], shadow: true },
+  { id: 'dumpster', proc: 'dumpster', mpu: 0.21, tris: 400, kind: 'big', biomes: ['urban'], shadow: true },
+  { id: 'bollard', proc: 'bollard', mpu: 0.24, tris: 120, kind: 'fixed', biomes: ['urban'] },
+  { id: 'pallets', proc: 'pallets', mpu: 0.24, tris: 900, kind: 'small', biomes: ['temperate', 'desert', 'winter', 'urban'], shadow: true },
 ];
 
 // ------------------------------------------------------------------ helpers
@@ -521,19 +521,22 @@ function mapped(o, rects, subName) {
 }
 
 const PROC = {
-  /** A short sandbag wall: 4 courses of 3 bags in a running bond (~1.9 m long, 0.6 m high). */
+  /** A short sandbag wall: 4 courses, two bags deep, 3 bags long in a running bond (~1.9 m long, 0.6 m high, 0.75 m thick). */
   sandbags(rects, lod) {
     const g = new Geo();
-    const [nu, nv] = lod ? [6, 2] : [10, 4];
+    const [nu, nv] = lod ? [3, 2] : [8, 3];
     let k = 0;
     for (let row = 0; row < 4; row++) {
       const off = row % 2 ? 0.3 : 0;
-      for (let i = 0; i < 3; i++) {
-        k++;
-        const jit = (Math.sin(k * 12.9898) * 43758.5453) % 1;
-        const x = -0.6 + i * 0.62 + off - (row % 2 ? 0.15 : 0);
-        const bag = pillow(0.3, 0.085, 0.19 - row * 0.012, nu, nv);
-        g.add(mapped(bag, rects, 'fabric'), mat(0, jit * 0.12, jit * 0.04, x, 0.075 + row * 0.15, (row % 2 ? 0.02 : -0.01) + row * -0.015));
+      // the wall tapers a little towards the top
+      for (const zr of [-0.19 + row * 0.02, 0.19 - row * 0.02]) {
+        for (let i = 0; i < 3; i++) {
+          k++;
+          const jit = Math.abs(Math.sin(k * 12.9898) * 43758.5453) % 1;
+          const x = -0.6 + i * 0.62 + off - (row % 2 ? 0.15 : 0);
+          const bag = pillow(0.3, 0.085, 0.19, nu, nv);
+          g.add(mapped(bag, rects, 'fabric'), mat(0, (jit - 0.5) * 0.14, (jit - 0.5) * 0.05, x, 0.075 + row * 0.15, zr));
+        }
       }
     }
     return g;
@@ -543,8 +546,9 @@ const PROC = {
     const g = new Geo();
     const L = 1.8;
     const beam = new Geo();
-    beam.add(mapped(box([0, 0, 0.03], [L, 0.012, 0.09], 0.6), rects, 'rust'));
-    beam.add(mapped(box([0, 0.039, 0], [L, 0.09, 0.012], 0.6), rects, 'rust'));
+    // angle iron, a little oversized so it reads at play zoom
+    beam.add(mapped(box([0, 0, 0.05], [L, 0.03, 0.14], 0.6), rects, 'rust'));
+    beam.add(mapped(box([0, 0.055, 0], [L, 0.14, 0.03], 0.6), rects, 'rust'));
     // beams along x, y and z, then the (1,1,1) diagonal turned upright
     const axes = [mat(0, 0, 0), mat(0, 0, Math.PI / 2), mat(0, Math.PI / 2, 0)];
     const tilt = Math.acos(1 / Math.sqrt(3));

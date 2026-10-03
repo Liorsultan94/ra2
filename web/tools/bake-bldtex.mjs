@@ -56,7 +56,8 @@ const T = { Panel: 0, Cast: 1, Corr: 2, Plate: 3, Paint: 4, Clad: 5, Bag: 9, Can
 
 /**
  * One photoscan per tile.
- *  mean: target mean albedo (sRGB, 0..1) = the procedural tile's mean
+ *  mean: target mean albedo (sRGB, 0..1): the procedural tile's mean + ~0.05 (the scans carry more
+ *        contrast and AO, which reads darker at the same mean)
  *  chroma: fraction of the colour kept (1 = original hue, 0 = grey + stains only via `stain`)
  *  stain: fraction of the per-pixel colour deviation (rust, runoff) kept on tinted tiles
  *  contrast: luminance contrast around the mean
@@ -67,22 +68,22 @@ const T = { Panel: 0, Cast: 1, Corr: 2, Plate: 3, Paint: 4, Clad: 5, Bag: 9, Can
  *  nrm: normal strength multiplier
  */
 const SOURCES = [
-  { tile: T.Panel, name: 'precast concrete', id: 'concrete_wall_008', mean: 0.8, chroma: 0.25, stain: 0.5, contrast: 1.35, ao: 1, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.2 },
-  { tile: T.Cast, name: 'board-formed concrete', id: 'concrete_layers_02', mean: 0.78, chroma: 0.25, stain: 0.5, contrast: 1.2, ao: 1, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.1 },
-  { tile: T.Corr, name: 'corrugated steel', id: 'corrugated_iron_02', mean: 0.8, chroma: 0.2, stain: 0.7, contrast: 1.2, scale: 0.32, metal: 'map', metalK: 0.75, rough: [1, 0], nrm: 3.2, ao: 1 },
-  { tile: T.Plate, name: 'steel plate', id: 'blue_metal_plate', mean: 0.78, chroma: 0.0, stain: 0.35, contrast: 1.3, ao: 1, scale: 1, metal: 0.62, rough: [0.9, 0.02], nrm: 1.3 },
-  { tile: T.Paint, name: 'painted metal', id: 'green_metal_rust', mean: 0.92, chroma: 0.0, stain: 0.45, contrast: 1.2, scale: 0.55, metal: 0.12, rough: [0.9, 0.06], nrm: 1 },
-  { tile: T.Clad, name: 'box profile cladding', id: 'box_profile_metal_sheet', mean: 0.84, chroma: 0.0, stain: 0.3, contrast: 1.2, scale: 0.45, metal: 'map', metalK: 0.4, rough: [1, 0.12], nrm: 2.6, ao: 1 },
-  { tile: T.Bag, name: 'sandbag hessian', id: 'hessian_230', mean: 0.78, chroma: 0.3, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0.06], nrm: 0.8, bulge: true },
-  { tile: T.Canvas, name: 'canvas', id: 'hessian_380', mean: 0.84, chroma: 0.15, stain: 0.3, contrast: 1.2, scale: 1, metal: 0, rough: [1, 0.05], nrm: 0.9 },
-  { tile: T.Asphalt, name: 'asphalt', id: 'asphalt_04', mean: 0.52, chroma: 0.1, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
-  { tile: T.Soil, name: 'gravel hardstand', id: 'gravel_floor_02', mean: 0.72, chroma: 0.3, stain: 0.3, contrast: 0.85, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
-  { tile: T.Brick, name: 'brick', id: 'brick_wall_001', mean: 0.5, chroma: 1, stain: 1, contrast: 1.1, ao: 1, scale: 0.75, metal: 0, rough: [1, 0], nrm: 1.2 },
-  { tile: T.Plaster, name: 'plaster', id: 'plaster_grey_04', mean: 0.9, chroma: 0.2, stain: 0.5, contrast: 0.9, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
-  { tile: T.Wood, name: 'wood planks', id: 'planks_brown_10', mean: 0.6, chroma: 1, stain: 1, contrast: 1, scale: 1.25, metal: 0, rough: [1, 0], nrm: 1.1 },
-  { tile: T.RoofTile, name: 'curved clay roof tiles', id: 'roof_09', mean: 0.78, chroma: 0.12, stain: 0.3, contrast: 1.0, scale: 0.8, metal: 0.03, rough: [1, 0], nrm: 1.2 },
-  { tile: T.Stone, name: 'rough-faced sandstone ashlar', id: 'sandstone_blocks_05', mean: 0.84, chroma: 0.35, stain: 0.4, contrast: 1.0, ao: 1, scale: 1, metal: 0, rough: [1, 0], nrm: 1.1 },
-  { tile: T.Roof, name: 'tar and gravel flat roof', id: 'tarred_gravel', mean: 0.76, chroma: 0.1, stain: 0.3, contrast: 1.1, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
+  { tile: T.Panel, name: 'precast concrete', id: 'concrete_wall_008', mean: 0.85, chroma: 0.25, stain: 0.5, contrast: 1.35, ao: 1, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.2 },
+  { tile: T.Cast, name: 'board-formed concrete', id: 'concrete_layers_02', mean: 0.83, chroma: 0.25, stain: 0.5, contrast: 1.2, ao: 1, scale: 1, metal: 0, rough: [1, 0.04], nrm: 1.1 },
+  { tile: T.Corr, name: 'corrugated steel', id: 'corrugated_iron_02', mean: 0.85, chroma: 0.2, stain: 0.7, contrast: 1.2, scale: 0.32, metal: 'map', metalK: 0.75, rough: [1, 0], nrm: 3.2, ao: 1 },
+  { tile: T.Plate, name: 'steel plate', id: 'blue_metal_plate', mean: 0.83, chroma: 0.0, stain: 0.35, contrast: 1.3, ao: 1, scale: 1, metal: 0.62, rough: [0.9, 0.02], nrm: 1.3 },
+  { tile: T.Paint, name: 'painted metal', id: 'green_metal_rust', mean: 0.95, chroma: 0.0, stain: 0.45, contrast: 1.2, scale: 0.55, metal: 0.12, rough: [0.9, 0.06], nrm: 1 },
+  { tile: T.Clad, name: 'box profile cladding', id: 'box_profile_metal_sheet', mean: 0.89, chroma: 0.0, stain: 0.3, contrast: 1.2, scale: 0.45, metal: 'map', metalK: 0.4, rough: [1, 0.12], nrm: 2.6, ao: 1 },
+  { tile: T.Bag, name: 'sandbag hessian', id: 'hessian_230', mean: 0.83, chroma: 0.3, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0.06], nrm: 0.8, bulge: true },
+  { tile: T.Canvas, name: 'canvas', id: 'hessian_380', mean: 0.89, chroma: 0.15, stain: 0.3, contrast: 1.2, scale: 1, metal: 0, rough: [1, 0.05], nrm: 0.9 },
+  { tile: T.Asphalt, name: 'asphalt', id: 'asphalt_04', mean: 0.57, chroma: 0.1, stain: 0.3, contrast: 1.0, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
+  { tile: T.Soil, name: 'gravel hardstand', id: 'gravel_floor_02', mean: 0.77, chroma: 0.3, stain: 0.3, contrast: 0.85, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
+  { tile: T.Brick, name: 'brick', id: 'brick_wall_001', mean: 0.55, chroma: 1, stain: 1, contrast: 1.1, ao: 1, scale: 0.75, metal: 0, rough: [1, 0], nrm: 1.2 },
+  { tile: T.Plaster, name: 'plaster', id: 'plaster_grey_04', mean: 0.95, chroma: 0.2, stain: 0.5, contrast: 0.9, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
+  { tile: T.Wood, name: 'wood planks', id: 'planks_brown_10', mean: 0.65, chroma: 1, stain: 1, contrast: 1, scale: 1.25, metal: 0, rough: [1, 0], nrm: 1.1 },
+  { tile: T.RoofTile, name: 'curved clay roof tiles', id: 'roof_09', mean: 0.83, chroma: 0.12, stain: 0.3, contrast: 1.0, scale: 0.8, metal: 0.03, rough: [1, 0], nrm: 1.2 },
+  { tile: T.Stone, name: 'rough-faced sandstone ashlar', id: 'sandstone_blocks_05', mean: 0.89, chroma: 0.35, stain: 0.4, contrast: 1.0, ao: 1, scale: 1, metal: 0, rough: [1, 0], nrm: 1.1 },
+  { tile: T.Roof, name: 'tar and gravel flat roof', id: 'tarred_gravel', mean: 0.81, chroma: 0.1, stain: 0.3, contrast: 1.1, scale: 1, metal: 0, rough: [1, 0], nrm: 1 },
 ];
 
 // ------------------------------------------------------------------ download

@@ -140,6 +140,7 @@ export class PhotoGround {
     looks: Partial<Record<PhotoSlot, number>>,
     private aniso = 4,
     sats: Partial<Record<PhotoSlot, number>> = {},
+    hues: Partial<Record<PhotoSlot, number>> = {},
   ) {
     const stack = photoStack(biome);
     this.stack = stack;
@@ -172,7 +173,8 @@ export class PhotoGround {
       // on a dark channel - the blue of brown soil - would otherwise tint the scan's highlights)
       const lum = (r: number, g: number, b: number) => r * 0.2126 + g * 0.7152 + b * 0.0722;
       const L = lum(c.r, c.g, c.b) / Math.max(1e-4, lum(m[0], m[1], m[2]));
-      const ch = (a: number, b: number) => L * (1 + (a / Math.max(1e-3, b) / L - 1) * 0.4);
+      const hk = hues[slot] ?? 0.4;
+      const ch = (a: number, b: number) => L * (1 + (a / Math.max(1e-3, b) / L - 1) * hk);
       tint[li].set(ch(c.r, m[0]), ch(c.g, m[1]), ch(c.b, m[2]));
     }
     this.tints = { value: tint };

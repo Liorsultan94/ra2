@@ -671,9 +671,9 @@ let atlas: { map: THREE.DataTexture; normalMap: THREE.DataTexture } | null = nul
 /**
  * Brightness gain of the atlas shader (the tiles are authored around ~0.8 grey so stains /
  * joints can darken them; the gain lifts them back). Tuned against the AgX + grade chain:
- * 1.45 blew pale walls out under a high sun, 1.22 keeps their texture readable.
+ * 1.45 blew pale walls out under a high sun, 1.28 keeps their texture readable.
  */
-export const BLD_GAIN = { value: 1.22 };
+export const BLD_GAIN = { value: 1.28 };
 /** Per tile uv multiplier (photoscans cover a different surface than the procedural tiles). */
 const TILE_SCALE = { value: new Array<number>(ATLAS_COLS * ATLAS_ROWS).fill(1) };
 
