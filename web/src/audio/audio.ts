@@ -82,6 +82,8 @@ interface Meta {
 
 const C = (lvl: number, wet: number, gap: number, weight: number, cap: number, live: LiveName, jitter = 0.06): Meta => ({ lvl, wet, gap, combat: true, weight, cap, jitter, live });
 
+// levels balanced by measured loudness: sustained roars (rocket / missile / thermobaric / jet) carry
+// 8-12 dB more RMS than the impulsive cannon and blast buffers, so they sit lower here
 const META: Record<Sfx, Meta> = {
   rifle: C(0.42, 0.12, 0.04, 0.8, 6, 'rifle'),
   mg: C(0.45, 0.1, 0.05, 0.8, 5, 'mg'),
@@ -89,13 +91,13 @@ const META: Record<Sfx, Meta> = {
   flak: C(0.5, 0.14, 0.05, 1, 4, 'flak'),
   cannon: C(0.72, 0.2, 0.05, 1.5, 5, 'cannon'),
   cannonHeavy: C(0.82, 0.22, 0.06, 1.6, 4, 'cannonHeavy'),
-  rocket: C(0.5, 0.16, 0.05, 1.3, 5, 'rocket'),
-  missileLaunch: C(0.62, 0.22, 0.08, 2, 3, 'missileLaunch'),
+  rocket: C(0.36, 0.16, 0.05, 1.3, 5, 'rocket'),
+  missileLaunch: C(0.38, 0.22, 0.08, 2, 3, 'missileLaunch'),
   interceptorLaunch: C(0.66, 0.2, 0.06, 1.8, 4, 'missileLaunch'),
   laser: C(0.45, 0.22, 0.05, 1.1, 3, 'laser'),
   artillery: C(0.85, 0.3, 0.06, 1.8, 4, 'artillery'),
   mortar: C(0.6, 0.22, 0.06, 1.2, 3, 'artillery', 0.08),
-  thermo: C(0.6, 0.2, 0.08, 1.8, 2, 'thermo'),
+  thermo: C(0.44, 0.2, 0.08, 1.8, 2, 'thermo'),
   explosionSmall: C(0.6, 0.2, 0.045, 1.2, 6, 'explosionSmall', 0.1),
   explosionMedium: C(0.78, 0.24, 0.05, 1.8, 5, 'explosionMedium', 0.08),
   explosionLarge: C(0.95, 0.28, 0.06, 2.6, 4, 'explosionLarge', 0.07),
@@ -104,7 +106,7 @@ const META: Record<Sfx, Meta> = {
   intercept: C(0.55, 0.16, 0.05, 1.3, 3, 'intercept'),
   droneLaunch: C(0.5, 0.15, 0.1, 1, 3, 'droneLaunch'),
   droneBuzz: C(0.35, 0.08, 0.08, 0.6, 2, 'droneBuzz'),
-  jetFlyby: C(0.7, 0.2, 0.8, 2, 2, 'droneBuzz', 0.05),
+  jetFlyby: C(0.5, 0.2, 0.8, 2, 2, 'droneBuzz', 0.05),
   thunder: C(0.9, 0.25, 0.5, 2.2, 2, 'explosionLarge', 0.12),
   jam: { lvl: 0.4, wet: 0.08, gap: 0.08, combat: false, weight: 1, cap: 2, jitter: 0, live: 'jam' },
   click: ui('click'),
