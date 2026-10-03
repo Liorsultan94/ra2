@@ -285,7 +285,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
         `#include <lights_fragment_end>
         reflectedLight.indirectDiffuse *= wAO;
         reflectedLight.indirectSpecular *= wAO * wAO;
-        reflectedLight.directDiffuse *= mix(1.0, wAO, 0.6);
+        reflectedLight.directDiffuse *= mix(1.0, wAO, 0.35);
         reflectedLight.directSpecular *= mix(1.0, wAO, 0.7);`,
       );
   }

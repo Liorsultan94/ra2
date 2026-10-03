@@ -67,7 +67,7 @@ export function forecastLine(weather: string | undefined, fronts?: { kind: strin
   // (to the quarter hour: it is a forecast)
   let line = `FORECAST · ${FRONT[f.kind] ?? f.kind.toUpperCase()} ~${hhmm(Math.round(f.hour * 4) / 4)}`;
   if (rest.some((e) => e.storm) && !f.storm) line += ' · STORMS LATER';
-  else if (rest.length) line += ` · ${FRONT[rest[0].kind] ?? 'MORE'} LATER`;
+  else if (rest.length) line += ` · ${rest[0].kind === f.kind ? 'MORE' : (FRONT[rest[0].kind] ?? 'MORE')} LATER`;
   return line;
 }
 const WEATHER_LINE: Record<string, string> = {

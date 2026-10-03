@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, type GameMap } from '../../sim/map';
+import type { GameMap } from '../../sim/map';
+import { rampHeight } from '../deckramp';
 import type { FogOfWar } from '../fog';
 import { surfaceHeight } from '../ground';
 import type { GeoBuilder } from '../geo';
@@ -131,14 +132,6 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
   const t = r.taper!;
   const n = r.pts.length;
   const across = [-1, -0.5, 0, 0.5, 1];
-  const D = Math.SQRT1_2;
-  const ends = m.bridges.flatMap((br) => {
-    const h = br.length / 2;
-    return [
-      { x: br.x - h * D, y: br.y + h * D },
-      { x: br.x + h * D, y: br.y - h * D },
-    ];
-  });
   // closed rings: the last point is the first again; the neighbours wrap and the texture repeats a whole number of times
   let total = 0;
   for (let i = 1; i < n; i++) total += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
@@ -156,11 +149,6 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
     const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
     const nx = -(c.y - a.y) / L;
     const ny = (c.x - a.x) / L;
-    let lift = 0;
-    for (const e of ends) {
-      const d = Math.hypot(p.x - e.x, p.y - e.y);
-      if (d < 2.2) lift = Math.max(lift, 1 - d / 2.2);
-    }
     const w = t.w[i] ?? r.width;
     const row = (variant: number) => {
       const u0 = variant === 0 ? 0.005 : 0.505;
@@ -168,7 +156,7 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
         const x = p.x + nx * o * (w / 2);
         const z = p.y + ny * o * (w / 2);
         const g = surfaceHeight(m, x, z);
-        const h = Math.max(g + 0.03 + (t.lift ?? 0), lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
+        const h = rampHeight(m, x, z, g, 0.03 + (t.lift ?? 0));
         _rv.set(x, h, z);
         return rb.vert(_rv, _rn, u0 + 0.49 * ((o + 1) / 2), (s / 6) * vScale, 1);
       });
@@ -634,22 +622,9 @@ export class RoadFurniture {
     const pal = palette(m.biome);
     const canvas = paintAtlas(pal);
     // bridge ramps: the road ribbons lift onto the decks near the bridge ends
-    const D = Math.SQRT1_2;
-    const ends = m.bridges.flatMap((br) => {
-      const h = br.length / 2;
-      return [
-        { x: br.x - h * D, y: br.y + h * D },
-        { x: br.x + h * D, y: br.y - h * D },
-      ];
-    });
     const height = (x: number, y: number) => {
       const g = surfaceHeight(m, x, y);
-      let lift = 0;
-      for (const e of ends) {
-        const d = Math.hypot(x - e.x, y - e.y);
-        if (d < 2.2) lift = Math.max(lift, 1 - d / 2.2);
-      }
-      return Math.max(g + LIFT, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) + 0.015 : -9);
+      return Math.max(g + LIFT, rampHeight(m, x, y, g, 0) + 0.015);
     };
     const pos: number[] = [];
     const uv: number[] = [];

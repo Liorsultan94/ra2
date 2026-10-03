@@ -7,9 +7,10 @@ import { GeoBuilder } from '../geo';
 import { type Layout, type V2 } from '../layout';
 import { BlobShadows, CIV_SCALE, CivilianInstances, HIP_Y, Opt, Pose, ballGeometry, marketStall } from '../models/civilians';
 import { planProps, type PropsManifest } from '../props';
+import { roadClear } from './clearance';
 import type { RoadNet } from './roadnet';
 import { groundAt, wrapAngle, type AmbientFrame, type Danger, type FogProbe, type Quality } from './shared';
-import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, zebraBands, type WalkGrid } from './walkgrid';
+import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion, zebraBands, type WalkGrid } from './walkgrid';
 
 /*
  * Pedestrians: the civilians of the villages and the city.
@@ -395,6 +396,15 @@ export class People {
     return costAt(this.grid, x, y) > 0 && !this.blockedFn(x | 0, y | 0);
   }
 
+  /** May p step onto (x, y)? Calm walkers keep off the road except on the zebras (or to get off it). */
+  private canStep(p: Ped, x: number, y: number) {
+    if (!this.passable(x, y)) return false;
+    if (p.s === S.Flee || p.s === S.Fetch || p.s === S.Alarm || p.s === S.Down) return true;
+    const f = flagAt(this.grid, x, y);
+    if ((f & (WF.Road | WF.Zebra)) !== WF.Road) return true;
+    return (flagAt(this.grid, p.x, p.y) & (WF.Road | WF.Zebra)) === WF.Road;
+  }
+
   /** Nearest cheap (pavement-like) cell within r of (x, y). */
   private snap(x: number, y: number, r: number, maxCost = 2): V2 | null {
     let best: V2 | null = null;
@@ -503,7 +513,7 @@ export class People {
           if (!c || c > 2 || flagAt(g, xx, yy) & (WF.Road | WF.Base | WF.Field | WF.Zebra)) return false;
           if (this.blockedFn(xx | 0, yy | 0)) return false;
         }
-      return true;
+      return roadClear(m, x, y, Math.max(hx, hy) + 0.2);
     };
     if (urban) {
       for (const f of this.layout.fields) {
@@ -511,7 +521,7 @@ export class People {
         if (m.starts.some((s) => Math.hypot(s.x - f.cx, s.y - f.cy) < 16)) continue;
         // two rows of stalls facing each other across a lane in the middle of the square
         for (const s of [-1, 1]) {
-          const y = f.cy + s * 0.75;
+          const y = f.cy + s * 1.4;
           if (free(f.cx, y, 1.3, 0.3)) sites.push({ x: f.cx, y, along: 0, n: 3 });
         }
       }
@@ -871,6 +881,8 @@ export class People {
   // ------------------------------------------------------------------ plans
 
   private setPath(p: Ped, x: number, y: number, panic: boolean): boolean {
+    // (a calm walker on the pavement can't reach the far side of a road without a zebra)
+    if (!panic && (flagAt(this.grid, p.x, p.y) & (WF.Road | WF.Zebra)) !== WF.Road && !sameRegion(this.grid, p.x, p.y, x, y)) return false;
     if (panic ? this.panicBudget <= 0 : this.pathBudget <= 0) return false;
     if (panic) this.panicBudget--;
     else this.pathBudget--;
@@ -1344,7 +1356,7 @@ export class People {
         const k = ((0.173 - d) / d) * 0.25;
         const nx = a.x + dx * k - Math.sin(a.yaw) * 0.004;
         const ny = a.y + dy * k + Math.cos(a.yaw) * 0.004;
-        if (this.passable(nx, ny)) {
+        if (this.canStep(a, nx, ny)) {
           a.x = nx;
           a.y = ny;
         }
@@ -1540,7 +1552,7 @@ export class People {
             const al = Math.hypot(ax, ay) || 1;
             const ox = tx - (ay / al) * p.side;
             const oy = ty + (ax / al) * p.side;
-            if (this.passable(ox, oy)) {
+            if (this.canStep(p, ox, oy)) {
               tx = ox;
               ty = oy;
             }
@@ -1592,12 +1604,12 @@ export class People {
       const sp = p.v * (off > 1.2 ? 0.2 : 1);
       const nx = p.x + Math.cos(p.yaw) * sp * dt;
       const ny = p.y + Math.sin(p.yaw) * sp * dt;
-      if (this.passable(nx, ny) || !this.passable(p.x, p.y)) {
+      if (this.canStep(p, nx, ny) || !this.passable(p.x, p.y)) {
         p.x = nx;
         p.y = ny;
         p.stuck = Math.max(0, p.stuck - dt);
-      } else if (this.passable(nx, p.y)) p.x = nx;
-      else if (this.passable(p.x, ny)) p.y = ny;
+      } else if (this.canStep(p, nx, p.y)) p.x = nx;
+      else if (this.canStep(p, p.x, ny)) p.y = ny;
       else {
         p.stuck += dt;
         if (p.stuck > 1.5) {
@@ -1737,9 +1749,7 @@ export class People {
     im.begin();
     sh.begin();
     let nb = 0;
-    // zoomed far out: figures are sub-pixel, skip them
-    const far = f.vx1 - f.vx0 > 80 || f.vy1 - f.vy0 > 80;
-    if (!far) {
+    {
       const cap = this.cap;
       for (let i = 0; i < this.peds.length && im.n < cap; i++) {
         const p = this.peds[i];

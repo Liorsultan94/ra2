@@ -3,7 +3,9 @@ import { createMap } from '../src/sim/maps';
 import type { MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { roadNetFor } from '../src/render/ambient/clearance';
-import { PathFinder, RES, WF, buildWalkGrid, costAt, flagAt, zebraBands, type WalkGrid } from '../src/render/ambient/walkgrid';
+import { PathFinder, RES, WF, buildWalkGrid, costAt, dryAt, flagAt, zebraBands, type WalkGrid } from '../src/render/ambient/walkgrid';
+import { Tile, WATER_LEVEL } from '../src/sim/map';
+import { surfaceHeight } from '../src/render/ground';
 
 const MAPS: MapId[] = ['frontline', 'desert', 'winter', 'urban'];
 
@@ -50,24 +52,40 @@ describe('pedestrian walk grid', () => {
           if (grid.cost[k] >= 6) dear++;
         }
       expect(road).toBeGreaterThan(100);
+      // nothing walkable in the water or on the waterline
+      for (let k = 0; k < grid.cost.length; k += 3) {
+        if (!grid.cost[k]) continue;
+        const x = ((k % grid.gw) + 0.5) / RES;
+        const y = (((k / grid.gw) | 0) + 0.5) / RES;
+        const t = m.tiles[(y | 0) * m.w + (x | 0)];
+        expect(t).not.toBe(Tile.Water);
+        if (t !== Tile.Bridge) expect(surfaceHeight(m, x, y)).toBeGreaterThan(WATER_LEVEL + 0.08);
+        expect(dryAt(m, x, y)).toBe(true);
+      }
       expect(dear / road).toBeGreaterThan(0.95);
     });
 
     it(`${id}: routes between nearby spots on the cheap ground`, () => {
       const { grid } = setup(id);
-      const pf = new PathFinder(grid, 9000);
-      const pts = cheapPoints(grid, 120, 3);
+      const pf = new PathFinder(grid, 20000);
+      const pts = cheapPoints(grid, 600, 3);
+      const lab = grid.region;
+      const cell = (p: { x: number; y: number }) => Math.floor(p.y * RES) * grid.gw + Math.floor(p.x * RES);
       const out = new Float32Array(96);
       let tried = 0;
       let ok = 0;
-      let maxExp = 0;
       for (let i = 0; i + 1 < pts.length; i += 2) {
         const a = pts[i];
         const b = pts[i + 1];
         if (Math.hypot(a.x - b.x, a.y - b.y) > 12) continue;
-        tried++;
+        const same = lab[cell(a)] === lab[cell(b)];
         const n = pf.find(a.x, a.y, b.x, b.y, out);
-        maxExp = Math.max(maxExp, pf.expanded);
+        // never a calm route between regions the road separates
+        if (!same) {
+          expect(n).toBe(0);
+          continue;
+        }
+        tried++;
         if (!n) continue;
         ok++;
         // ends on the goal, never through closed cells
@@ -86,7 +104,8 @@ describe('pedestrian walk grid', () => {
           py = qy;
         }
       }
-      expect(tried).toBeGreaterThan(3);
+      expect(tried).toBeGreaterThan(5);
+      // (same region but a long way round, e.g. a river with few bridges, may run out of the search budget)
       expect(ok / tried).toBeGreaterThan(0.6);
     });
   }
@@ -124,7 +143,8 @@ describe('pedestrian walk grid', () => {
       }
     }
     expect(roadCells).toBeGreaterThan(10);
-    expect(zebraCells / roadCells).toBeGreaterThan(0.7);
+    // calm walkers never set foot on the road outside the zebras
+    expect(zebraCells / roadCells).toBeGreaterThan(0.97);
   });
 
   it('panic routes may cross the road anywhere', () => {

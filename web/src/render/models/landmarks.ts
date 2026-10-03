@@ -217,8 +217,10 @@ export function turbineRotor(): THREE.BufferGeometry {
 export function castleRuin(k: Kit, seed: number) {
   const st = PAL.ruin;
   const dk = PAL.stoneDark;
-  // foundations reach down into the slope
-  k.box(3.3, 0.9, 2.4, 0, -0.5, 0, dk);
+  const tones = [0x8c8478, 0x978e80, 0x81796d, 0x9e9586, 0x7a7468];
+  const tone = (a: number, b: number) => tones[Math.floor(h3(seed, a, b) * tones.length)];
+  // foundations reach down into the rock (rough blocks, rock coloured)
+  for (let i = 0; i < 6; i++) k.box(1.2 + h3(seed, 60, i) * 0.4, 1.7, 1.0 + h3(seed, 61, i) * 0.5, -1.1 + (i % 3) * 1.1, -0.86, i < 3 ? -0.55 : 0.55, i % 2 ? 0x5e574e : 0x67605a, 0, h3(seed, 62, i) * 0.3);
   // curtain walls with gaps and ragged tops
   const wall = (x0: number, z0: number, x1: number, z1: number, h: number, salt: number) => {
     const L = Math.hypot(x1 - x0, z1 - z0);
@@ -229,7 +231,7 @@ export function castleRuin(k: Kit, seed: number) {
       const r = h3(seed, salt, i);
       if (r < 0.14) continue; // a breach
       const hh = h * (0.45 + 0.55 * h3(seed, salt + 9, i));
-      k.box(L / n + 0.01, hh, 0.18, x0 + (x1 - x0) * t, hh / 2, z0 + (z1 - z0) * t, i % 3 ? st : dk, 0, -ang);
+      k.box(L / n + 0.01, hh, 0.18, x0 + (x1 - x0) * t, hh / 2, z0 + (z1 - z0) * t, i % 5 === 4 ? dk : tone(salt, i), 0, -ang);
       // crenellations on the tall bits
       if (hh > h * 0.85 && i % 2 === 0) k.box(L / n * 0.5, 0.1, 0.2, x0 + (x1 - x0) * t, hh + 0.05, z0 + (z1 - z0) * t, st, 0, -ang);
     }
@@ -239,8 +241,8 @@ export function castleRuin(k: Kit, seed: number) {
   wall(1.5, 1.05, -1.5, 1.05, 0.65, 3);
   wall(-1.5, 1.05, -1.5, -1.05, 0.8, 4);
   // the keep: a tall square tower, one corner fallen
-  k.box(1.0, 1.7, 0.95, -0.6, 0.85, -0.3, st);
-  k.box(0.5, 0.55, 0.95, -0.85, 1.95, -0.3, st);
+  for (let y = 0; y < 5; y++) k.box(1.0 - (y % 2) * 0.02, 0.34, 0.95 - (y % 2) * 0.02, -0.6, 0.17 + y * 0.34, -0.3, tone(70, y));
+  k.box(0.5, 0.55, 0.95, -0.85, 1.95, -0.3, tone(71, 0));
   k.box(1.0, 0.3, 0.45, -0.6, 1.85, -0.55, dk);
   for (const [x, z] of [[-1.05, -0.75], [-0.15, -0.75], [-1.05, 0.15]] as const) k.box(0.16, 0.14, 0.16, x, 2.25 - (x > -0.5 ? 0.4 : 0), z, st);
   // dark window slits
@@ -449,7 +451,7 @@ export function fortRuin(k: Kit, seed: number) {
       if (h3(seed, salt, i) < 0.18) continue;
       const t = (i + 0.5) / n;
       const hh = h * (0.4 + 0.6 * h3(seed, salt + 5, i));
-      k.box(L / n + 0.01, hh, 0.22, x0 + (x1 - x0) * t, hh / 2, z0 + (z1 - z0) * t, i % 4 ? c : dk, 0, -ang);
+      k.box(L / n + 0.01, hh, 0.22, x0 + (x1 - x0) * t, hh / 2, z0 + (z1 - z0) * t, i % 4 ? [0xb89466, 0xae8a5c, 0xc29e70, 0xa88456][Math.floor(h3(seed, salt + 30, i) * 4)] : dk, 0, -ang);
       if (hh > h * 0.8) for (let m = 0; m < 2; m++) k.box(0.07, 0.1, 0.24, x0 + (x1 - x0) * (t - 0.25 / n + m * 0.5 / n), hh + 0.05, z0 + (z1 - z0) * (t - 0.25 / n + m * 0.5 / n), c, 0, -ang);
     }
   };
@@ -512,7 +514,7 @@ export function refinery(k: Kit) {
 
 /** Guyed lattice radio / TV mast, height MAST_H (warning lights every ~1.8). */
 export const MAST_H = 7.4;
-export function radioMast(k: Kit) {
+export function radioMast(k: Kit, anchorY: (ax: number, az: number) => number = () => 0) {
   const H = MAST_H;
   k.box(0.6, 0.12, 0.6, 0, 0.06, 0, PAL.concrete);
   const r = 0.13;
@@ -532,8 +534,9 @@ export function radioMast(k: Kit) {
   for (let a = 0; a < 3; a++) {
     const ax = Math.cos(a * 2.094 + 0.5) * 2.4;
     const az = Math.sin(a * 2.094 + 0.5) * 2.4;
-    for (const y of [H * 0.4, H * 0.75]) k.beam(ax, 0.05, az, 0, y, 0, 0.008, 0x303030);
-    k.box(0.16, 0.1, 0.16, ax, 0.05, az, PAL.concrete);
+    const ay = anchorY(ax, az);
+    for (const y of [H * 0.4, H * 0.75]) k.beam(ax, ay + 0.05, az, 0, y, 0, 0.008, 0x303030);
+    k.box(0.16, 0.3, 0.16, ax, ay - 0.05, az, PAL.concrete);
   }
   // equipment hut
   k.box(0.6, 0.35, 0.45, 0.6, 0.175, -0.4, 0x8a8e8a);
@@ -581,11 +584,11 @@ export function frozenLake(k: Kit, rx: number, rz: number) {
     p.setXYZ(i, x * rx * w, 0, z * rz * w);
   }
   g.computeVertexNormals();
-  k.add(g, null, 0xb8d4e2);
+  k.add(g, null, 0x86a8bc);
   // snow drifts on the ice, a ring of snow on the shore
   for (let i = 0; i < 7; i++) {
     const a = i * 0.9;
-    k.slab(0.8 + (i % 3) * 0.4, 0.3, Math.cos(a) * rx * 0.5, 0.008, Math.sin(a) * rz * 0.5, 0xe8eef4, a);
+    k.slab(0.8 + (i % 3) * 0.4, 0.3, Math.cos(a) * rx * 0.5, 0.008, Math.sin(a) * rz * 0.5, i % 2 ? 0xdde6ee : 0x6f90a4, a);
   }
   // fishing holes
   for (let i = 0; i < 4; i++) k.add(new THREE.CircleGeometry(0.07, 10).rotateX(-Math.PI / 2), local(0.6 + i * 0.35, 0.012, -0.3 + (i % 2) * 0.4), 0x1a2a34);
@@ -634,49 +637,50 @@ export function gondola(): THREE.BufferGeometry {
   return k.build();
 }
 
-/** A snowy mountain cone with ski runs (radius r, height h), at the origin. */
+/** A snowy mountain with ski runs down the face towards +Z (radius r, height h), smooth shaded, at the origin. */
 export function skiMountain(k: Kit, r: number, h: number, seed: number) {
-  const seg = 36;
-  const rings = 9;
-  const g = new THREE.BufferGeometry();
+  const seg = 56;
+  const rings = 16;
   const pos: number[] = [];
   const col: number[] = [];
-  const P = (ri: number, si: number): [number, number, number] => {
-    const t = ri / rings;
-    const a = (si / seg) * Math.PI * 2;
-    const rough = 1 + (h3(seed, ri, si % seg) - 0.5) * 0.18 * t;
-    const rr = r * t * rough;
-    const y = h * Math.pow(1 - t, 1.35) * (t > 0.98 ? 0 : 1) + (t >= 1 ? -0.4 : 0);
-    return [Math.cos(a) * rr, y, Math.sin(a) * rr];
-  };
-  const colOf = (ri: number, si: number) => {
-    const a = (si / seg) * Math.PI * 2;
-    // the runs: bands down the side facing +Z (towards the map), trees on the lower slopes elsewhere
-    const run = Math.abs(Math.sin(a * 3 + 0.4)) < 0.25 && Math.sin(a) > 0;
-    const rock = h3(seed, ri + 50, si % seg) < 0.12 && ri > 1 && ri < 6;
-    if (rock) return [0.42, 0.42, 0.44];
-    if (!run && ri >= 5) return h3(seed, ri, si + 100) < 0.6 ? [0.16, 0.24, 0.2] : [0.82, 0.86, 0.9];
-    return run ? [0.97, 0.98, 1] : [0.86, 0.9, 0.95];
-  };
+  const idx: number[] = [];
+  for (let ri = 0; ri <= rings; ri++)
+    for (let si = 0; si < seg; si++) {
+      const t = ri / rings;
+      const a = (si / seg) * Math.PI * 2;
+      // a lumpy massif: two summits, ridges, a skirt below the ground at the rim
+      const lump = 1 + (h3(seed, ri, si) - 0.5) * 0.08 * t + Math.sin(a * 3 + 1) * 0.06 * t;
+      const rr = r * t * lump;
+      const shoulder = Math.pow(Math.cos(t * Math.PI * 0.5), 1.5);
+      const ridge = 1 + 0.12 * Math.cos(a * 2 - 0.6) * (1 - t);
+      const y = ri === rings ? -0.6 : h * shoulder * ridge;
+      pos.push(Math.cos(a) * rr, y, Math.sin(a) * rr);
+      // runs: bands down the side facing +Z; dark forest on the lower slopes elsewhere; rock bands
+      const face = Math.sin(a);
+      const run = face > 0.55 && Math.abs(Math.sin(a * 5 + 0.3)) < 0.35 && t > 0.08;
+      const forest = !run && t > 0.55 && h3(seed, ri + 40, si) < 0.75;
+      const rock = !run && t > 0.12 && t < 0.5 && h3(seed, ri + 80, si) < 0.18;
+      const c = run ? [0.98, 0.99, 1] : forest ? [0.14, 0.2, 0.17] : rock ? [0.36, 0.36, 0.38] : [0.84, 0.88, 0.93];
+      col.push(...c);
+    }
   for (let ri = 0; ri < rings; ri++)
     for (let si = 0; si < seg; si++) {
-      const a = P(ri, si);
-      const b = P(ri + 1, si);
-      const c = P(ri + 1, si + 1);
-      const d = P(ri, si + 1);
-      const cc = colOf(ri, si);
-      if (ri > 0) pos.push(...a, ...c, ...b, ...a, ...d, ...c);
-      else pos.push(...a, ...c, ...b);
-      const nv = ri > 0 ? 6 : 3;
-      for (let i = 0; i < nv; i++) col.push(...cc);
+      const a = ri * seg + si;
+      const b = ri * seg + ((si + 1) % seg);
+      const c = (ri + 1) * seg + si;
+      const d = (ri + 1) * seg + ((si + 1) % seg);
+      idx.push(a, c, b, b, c, d);
     }
+  const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
   g.computeVertexNormals();
-  k.add(g, null, 0xffffff);
-  // the vertex colours: overwrite the white we just pushed
-  const n = pos.length / 3;
-  const off = k.col.length - n * 3;
-  for (let i = 0; i < n * 3; i++) k.col[off + i] = col[i];
+  const ng = g.toNonIndexed();
+  const start = k.count;
+  k.add(ng.clone(), null, 0xffffff);
+  const cc = ng.attributes.color.array as Float32Array;
+  for (let i = 0; i < cc.length; i++) k.col[start * 3 + i] = cc[i];
 }
 
 // ------------------------------------------------------------------ urban

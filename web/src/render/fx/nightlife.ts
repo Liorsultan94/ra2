@@ -168,8 +168,8 @@ void main() {
     if ( dead < 0.5 ) d = min( d, k );
   }
   vec3 nc = neonCol( vSig.z );
-  float core = 1.0 - smoothstep( 0.005, 0.011, d );
-  float halo = exp( -d * 38.0 ) * 0.55 + exp( -d * 9.0 ) * 0.12;
+  float core = 1.0 - smoothstep( 0.008, 0.016, d );
+  float halo = exp( -d * 30.0 ) * 0.8 + exp( -d * 8.0 ) * 0.2;
   // the halo fades out towards the card's edge
   halo *= 1.0 - smoothstep( 0.6, 0.8, max( abs( vUv.x ), abs( vUv.y ) ) );
   vec3 col = nc * halo + mix( nc, vec3( 1.0 ), 0.55 ) * core * 1.6;
@@ -178,7 +178,7 @@ void main() {
   on *= mix( 1.0, step( 0.3, nh( floor( uTime * 8.0 + vSig.w * 40.0 ) ) ) * 0.85 + 0.15 * step( 0.6, nh( floor( uTime * 3.0 + vSig.w * 9.0 ) ) ), broken );
   float vis = 1.0;
   if ( fogEnabled > 0.5 ) vis = smoothstep( 0.1, 0.45, fogSample( vW ) );
-  gl_FragColor = vec4( col * on * uNight * vis * 1.4, 1.0 );
+  gl_FragColor = vec4( col * on * uNight * vis * 2.0, 1.0 );
 }`;
 
 const NEON_RGB: [number, number, number][] = [
@@ -328,12 +328,12 @@ export class NightLife {
         sig.push(w, hh, c, seed);
       };
       // over the shop window, a little proud of the wall
-      const sw = Math.min(W * 0.62, 0.3 + h(2) * 0.25);
-      add((h(3) - 0.5) * (W - sw) * 0.6, 0.34 + h(4) * 0.04, D / 2 + 0.035, yaw, sw, 0.075 + h(6) * 0.035);
+      const sw = Math.min(W * 0.7, 0.42 + h(2) * 0.3);
+      add((h(3) - 0.5) * (W - sw) * 0.6, 0.36 + h(4) * 0.04, D / 2 + 0.035, yaw, sw, 0.11 + h(6) * 0.05);
       // a vertical blade sign at the corner, sticking out of the wall
       if (h(7) < 0.4) {
         const side = h(8) < 0.5 ? -1 : 1;
-        add(side * (W / 2 - 0.02), 0.62 + h(10) * 0.25, D / 2 + 0.06, yaw + Math.PI / 2, 0.075, 0.26 + h(11) * 0.14);
+        add(side * (W / 2 - 0.02), 0.62 + h(10) * 0.25, D / 2 + 0.06, yaw + Math.PI / 2, 0.1, 0.32 + h(11) * 0.16);
       }
       if (pos.length / 4 >= 160) break;
     }
@@ -565,7 +565,7 @@ export class NightLife {
         budget--;
         const kk = k * f;
         n.flare(L.x, L.y - 0.02, L.z, 0.22, 2.1 * kk, 1.55 * kk, 0.85 * kk);
-        n.pool(L.x, L.g, L.z, 0, 2.3, 2.3, 0.26 * kk, 0.19 * kk, 0.1 * kk);
+        n.pool(L.x, L.g, L.z, 0, 2.2, 2.2, 0.22 * kk, 0.16 * kk, 0.085 * kk);
       }
     }
     // neon spill on the pavement

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, StructureKind, Tile, type GameMap, type Structure } from '../sim/map';
+import { StructureKind, Tile, type GameMap, type Structure } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
+import { rampHeight } from './deckramp';
 import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { FieldType, type Layout } from './layout';
@@ -104,10 +105,6 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   roadMat.customProgramCacheKey = () => 'fog2-road2-b' + bc;
   ROAD_MATS.set(m, roadMat); // (bridge decks share it: render/bridgefx.ts)
   const rb = new GeoBuilder();
-  const bridgeEnds = m.bridges.flatMap((br) => {
-    const h = br.length / 2;
-    return [V(br.x - h * Math.SQRT1_2, 0, br.y + h * Math.SQRT1_2), V(br.x + h * Math.SQRT1_2, 0, br.y - h * Math.SQRT1_2)];
-  });
   for (const r of layout.roads) {
     if (r.painted || r.taper) continue; // city streets: drawn by the ground shader; joined roads: ambient/roadfurniture.ts
     const n = r.pts.length;
@@ -123,18 +120,12 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
       const nx = -(c.y - a.y) / L;
       const ny = (c.x - a.x) / L;
-      // ramp up onto bridge decks
-      let lift = 0;
-      for (const e of bridgeEnds) {
-        const d = Math.hypot(p.x - e.x, p.y - e.z);
-        if (d < 2.2) lift = Math.max(lift, 1 - d / 2.2);
-      }
       const row: number[] = [];
       for (const o of across) {
         const x = p.x + nx * o * (r.width / 2);
         const z = p.y + ny * o * (r.width / 2);
         const g = surfaceHeight(m, x, z);
-        const h = Math.max(g + 0.03, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
+        const h = rampHeight(m, x, z, g, 0.03); // ramps onto the bridge decks (render/deckramp.ts)
         row.push(rb.vert(V(x, h, z), V(0, 1, 0), u0 + 0.49 * ((o + 1) / 2), s / 6, 1));
       }
       rows.push(row);

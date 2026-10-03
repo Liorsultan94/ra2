@@ -69,7 +69,7 @@ void main() {
     // headlight beam on the road: starts at the bumper (x = -1), widens and fades forward
     float t = vUv.x * 0.5 + 0.5;
     float w = mix(0.22, 1.0, t);
-    a = (1.0 - smoothstep(w * 0.55, w, abs(vUv.y))) * smoothstep(0.0, 0.1, t) * pow(1.0 - t, 1.4) * 1.5;
+    a = (1.0 - smoothstep(w * 0.15, w, abs(vUv.y))) * smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.6) * 1.4;
   } else {
     float r = length(vUv);
     a = 1.0 - smoothstep(0.0, 1.0, r);
@@ -417,7 +417,7 @@ export class NightLights {
       const px = root.position.x + _f.x * (sx * 0.5 + 1.45);
       const pz = root.position.z + _f.z * (sx * 0.5 + 1.45);
       const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, px)), Math.max(0, Math.min(map.h - 0.01, pz)));
-      this.pool(px, gy, pz, yaw, 2.9, 1.8, 0.5 * k, 0.45 * k, 0.34 * k, true);
+      this.pool(px, gy, pz, yaw, 2.9, 1.8, 0.36 * k, 0.33 * k, 0.25 * k, true);
     }
     // civilian headlights (queued by the ambient life)
     const cq = this.cars;
@@ -430,8 +430,8 @@ export class NightLights {
       const k = cq[o + 4] * dk;
       const fx = Math.cos(yaw);
       const fz = -Math.sin(yaw);
-      this.pool(x + fx * 1.25, y, z + fz * 1.25, yaw, 2.5, 1.5, 0.5 * k, 0.45 * k, 0.33 * k, true);
-      this.cone(x, y + 0.09, z, yaw, -0.09, 1.9, 0.38, 0.5 * k, 0.46 * k, 0.36 * k);
+      this.pool(x + fx * 1.2, y, z + fz * 1.2, yaw, 2.4, 1.5, 0.34 * k, 0.31 * k, 0.23 * k, true);
+      this.cone(x, y + 0.09, z, yaw, -0.09, 1.9, 0.38, 0.32 * k, 0.3 * k, 0.24 * k);
     }
     this.nCars = 0;
     // retire finished outages

@@ -6,6 +6,7 @@ import { camelModel, catModel, chickenModel, deerModel, dogModel, goatModel, har
 import { Opt, Pose } from '../models/civilians';
 import { cowModel, sheepModel, type AnimalModel } from './models';
 import type { Figure } from './people';
+import { dryAt } from './walkgrid';
 import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type AmbientFrame, type FogProbe, type Quality } from './shared';
 
 /*
@@ -187,7 +188,7 @@ export class Animals {
       const cy = st.y + st.h / 2 + dy * (st.h / 2 + 0.9);
       const f = zone(cx, cy, r, r * 0.8);
       let ok = 0;
-      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (walkable(m, cx + i * r * 0.7, cy + j * r * 0.6)) ok++;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (this.ok(cx + i * r * 0.7, cy + j * r * 0.6)) ok++;
       return ok >= 7 ? f : null;
     };
     const add = (sp: Sp, kind: H, f: Field, n: number, base?: THREE.Color) => {
@@ -197,10 +198,11 @@ export class Animals {
       const b0 = base ?? new THREE.Color(coats[(Math.random() * coats.length) | 0]);
       for (let i = 0; i < n; i++) {
         const p = this.fieldPoint(f, 0.6);
+        if (!this.ok(p.x, p.y)) continue;
         const coat = (Math.random() < 0.7 ? b0.clone() : new THREE.Color(coats[(Math.random() * coats.length) | 0])).multiplyScalar(0.9 + Math.random() * 0.2);
         herd.animals.push(this.animal(sp, p.x, p.y, coat));
       }
-      this.herds.push(herd);
+      if (herd.animals.length) this.herds.push(herd);
       return herd;
     };
     if (biome === 'temperate' || biome === 'winter') {
@@ -263,7 +265,7 @@ export class Animals {
       for (const s of shuffle(spots).slice(0, nCat)) {
         const f = zone(s.x, s.y, 1.6, 1.6);
         const p = this.fieldPoint(f, 1);
-        if (!walkable(m, p.x, p.y)) continue;
+        if (!this.ok(p.x, p.y)) continue;
         add(Sp.Cat, H.Loner, f, 1);
       }
       for (const s of spots.slice(nCat, nCat + Math.round(2 * k))) add(Sp.Dog, H.Loner, zone(s.x, s.y, 4, 4), 1);
@@ -283,6 +285,11 @@ export class Animals {
       this.inst.push(inst);
       this.group.add(inst.mesh);
     });
+  }
+
+  /** Open, dry ground (no water, no waterline, no buildings). */
+  private ok(x: number, y: number) {
+    return walkable(this.map, x, y) && dryAt(this.map, x, y, 0.25);
   }
 
   private animal(sp: Sp, x: number, y: number, paint: THREE.Color): Animal {
@@ -315,6 +322,7 @@ export class Animals {
 
   /** A shepherd standing by the flock and his dog circling it. */
   private shepherd(h: Herd, biome: string) {
+    if (!h.animals.length) return;
     const f = this.man(biome);
     const c = h.animals[0];
     f.x = c.x + 0.8;
@@ -335,7 +343,7 @@ export class Animals {
     for (let k = 0; k < 900 && out.length < 12; k++) {
       const x = 2 + Math.random() * (m.w - 4);
       const y = 2 + Math.random() * (m.h - 4);
-      if (!walkable(m, x, y) || m.trees[(y | 0) * m.w + (x | 0)] || !far(x, y, 13)) continue;
+      if (!this.ok(x, y) || m.trees[(y | 0) * m.w + (x | 0)] || !far(x, y, 13)) continue;
       let wood = 0;
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (m.trees[Math.max(0, Math.min(m.h - 1, (y | 0) + dy)) * m.w + Math.max(0, Math.min(m.w - 1, (x | 0) + dx))]) wood++;
       if (wood >= 6 && out.every((o) => Math.hypot(o.x - x, o.y - y) > 5)) out.push({ x, y });
@@ -362,7 +370,7 @@ export class Animals {
         run = [];
       };
       for (const p of pts) {
-        if (m.starts.some((s) => Math.hypot(s.x - p.x, s.y - p.y) < 14) || !walkable(m, p.x, p.y)) flush();
+        if (m.starts.some((s) => Math.hypot(s.x - p.x, s.y - p.y) < 14) || !this.ok(p.x, p.y)) flush();
         else run.push(p);
       }
       flush();
@@ -376,7 +384,8 @@ export class Animals {
         const a = p[Math.max(0, i - 1)];
         const b = p[Math.min(p.length - 1, i + 1)];
         const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-        return { x: q.x - ((b.y - a.y) / L) * s, y: q.y + ((b.x - a.x) / L) * s };
+        const o = { x: q.x - ((b.y - a.y) / L) * s, y: q.y + ((b.x - a.x) / L) * s };
+        return this.ok(o.x, o.y) ? o : q;
       });
     const there = off(pts, 0.5);
     const back = off([...pts].reverse(), 0.5);
@@ -431,7 +440,7 @@ export class Animals {
       for (let j = -1; j <= 1; j++) {
         const a = (i / 2) * (f.hl - 0.3);
         const b = j * (f.hw - 0.3);
-        if (walkable(this.map, f.cx + ca * a - sa * b, f.cy + sa * a + ca * b)) ok++;
+        if (this.ok(f.cx + ca * a - sa * b, f.cy + sa * a + ca * b)) ok++;
       }
     return ok >= 14;
   }
@@ -444,7 +453,7 @@ export class Animals {
       const b = (Math.random() - 0.5) * 2 * Math.max(0.2, f.hw - 0.3) * spread;
       const x = f.cx + ca * a - sa * b;
       const y = f.cy + sa * a + ca * b;
-      if (walkable(this.map, x, y)) return { x, y };
+      if (this.ok(x, y)) return { x, y };
     }
     return { x: f.cx, y: f.cy };
   }
@@ -627,7 +636,7 @@ export class Animals {
       f.yaw = wrapAngle(f.yaw + Math.max(-dt * 4, Math.min(dt * 4, wrapAngle(Math.atan2(dy, dx) - f.yaw))));
       const nx = f.x + Math.cos(f.yaw) * sp * dt;
       const ny = f.y + Math.sin(f.yaw) * sp * dt;
-      if (walkable(this.map, nx, ny)) {
+      if (this.ok(nx, ny)) {
         f.x = nx;
         f.y = ny;
       }
@@ -689,7 +698,7 @@ export class Animals {
           const pull = h.animals.length > 1 ? 0.35 : 1;
           a.tx = hx + (p.x - hx) * pull + (Math.random() - 0.5) * 0.8 * pull;
           a.ty = hy + (p.y - hy) * pull + (Math.random() - 0.5) * 0.8 * pull;
-          if (!this.inField(h.f, a.tx, a.ty) || !walkable(m, a.tx, a.ty)) {
+          if (!this.inField(h.f, a.tx, a.ty) || !this.ok(a.tx, a.ty)) {
             a.tx = p.x;
             a.ty = p.y;
           }
@@ -748,7 +757,7 @@ export class Animals {
     if (a.v > 0.005) {
       const nx = a.x + Math.cos(a.yaw) * a.v * dt;
       const ny = a.y + Math.sin(a.yaw) * a.v * dt;
-      if (walkable(m, nx, ny)) {
+      if (this.ok(nx, ny)) {
         a.x = nx;
         a.y = ny;
       } else {

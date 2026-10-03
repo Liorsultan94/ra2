@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
 import type { FogOfWar } from '../fog';
 import { groundY } from '../landmarks/ground';
+import { roadClear } from './clearance';
 import { landmarkMaterial } from '../landmarks/material';
 import { civSound } from '../landmarks/sound';
 import { Kit } from '../models/landmarks';
@@ -108,6 +109,11 @@ export class WaterTransport {
     return m.tiles[ty * m.w + tx] === Tile.Water;
   }
 
+  /** Dry land (above the waterline, not a water tile). */
+  private dry(x: number, y: number) {
+    return !this.wet(x, y) && groundY(this.map, x, y) > WATER_LEVEL + 0.08;
+  }
+
   /** The ferry: a straight crossing well away from the bridges, the jetty and the weir, near the south-east corner. */
   private planFerry(k: Kit) {
     const R = this.river!;
@@ -162,14 +168,15 @@ export class WaterTransport {
       k.at(cx, (top + WATER_LEVEL - 0.15) / 2, cy, yaw).box(len, 0.08, 0.86, 0, 0, 0, 0x9a968e, 0, 0, 0, Math.atan2(drop, len));
       k.at(cx, (top + WATER_LEVEL - 0.15) / 2 - 0.25, cy, yaw).box(len, 0.4, 0.8, 0, 0, 0, 0x7a766e, 0, 0, 0, Math.atan2(drop, len));
       for (const sg of [-1, 1]) {
-        const px = sx + dx * 0.2 - dy * sg * 0.55;
-        const py = sy + dy * 0.2 + dx * sg * 0.55;
+        const px = sx + dx * 0.7 - dy * sg * 0.58;
+        const py = sy + dy * 0.7 + dx * sg * 0.58;
+        if (!this.dry(px, py)) continue;
         k.at(px, groundY(this.map, px, py) - 0.02, py, yaw).cyl(0.05, 0.045, 0.16, 0, 0, 0, 0x2a2a2a, 6).box(0.04, 0.3, 0.04, 0.3, 0.15, 0, 0xe8e8e8);
       }
       // a ticket hut and a sign
       const hx = sx + dx * 1.9 - dy * 0.75;
       const hy = sy + dy * 1.9 + dx * 0.75;
-      k.at(hx, groundY(this.map, hx, hy) - 0.02, hy, yaw).box(0.36, 0.3, 0.3, 0, 0.15, 0, 0xe8e0d0).box(0.42, 0.04, 0.36, 0, 0.32, 0, 0x2a5ab0).box(0.02, 0.12, 0.2, -0.19, 0.16, 0, 0xffd590, 1);
+      if (this.dry(hx, hy) && roadClear(this.map, hx, hy, 0.3)) k.at(hx, groundY(this.map, hx, hy) - 0.02, hy, yaw).box(0.36, 0.3, 0.3, 0, 0.15, 0, 0xe8e0d0).box(0.42, 0.04, 0.36, 0, 0.32, 0, 0x2a5ab0).box(0.02, 0.12, 0.2, -0.19, 0.16, 0, 0xffd590, 1);
     }
   }
 
@@ -202,7 +209,7 @@ export class WaterTransport {
     }
     // the quay walk along the channel
     k.at(x0 + 0.25, WATER_LEVEL + 0.1, -9.5, Math.PI / 2).box(12, 0.12, 0.5, 0, 0, 0, 0x8a6a4a);
-    for (let i = 0; i < 6; i++) k.at(x0 + 0.5, groundY(m, x0 + 0.5, -4 - i * 2) - 0.02, -4 - i * 2, 0).cyl(0.04, 0.03, 0.6, 0, 0, 0, 0x3a3a3a, 6).box(0.12, 0.04, 0.04, 0, 0.58, 0, 0x3a3a3a);
+    for (let i = 0; i < 6; i++) if (this.dry(x0 + 0.5, -4 - i * 2)) k.at(x0 + 0.5, groundY(m, x0 + 0.5, -4 - i * 2) - 0.02, -4 - i * 2, 0).cyl(0.04, 0.03, 0.6, 0, 0, 0, 0x3a3a3a, 6).box(0.12, 0.04, 0.04, 0, 0.58, 0, 0x3a3a3a);
   }
 
   // ---------------------------------------------------------------- frame

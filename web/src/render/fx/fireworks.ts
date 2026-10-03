@@ -225,7 +225,7 @@ export class Fireworks {
     const g = this.map ? groundHeight(this.map, Math.max(0, Math.min(this.map.w - 0.01, x)), Math.max(0, Math.min(this.map.h - 0.01, z))) : site.g;
     const type = Math.floor(Math.random() * 5);
     // fuse = life: bursts near the top of the climb
-    this.spawn(ROCKET, x, g + 0.1, z, (Math.random() - 0.5) * 1.2, 10.5 + Math.random() * 2.5, (Math.random() - 0.5) * 1.2, 1.0 + Math.random() * 0.35, 0.09, 1, 0.8, 0.5, 0.25, 6.5, type);
+    this.spawn(ROCKET, x, g + 0.1, z, (Math.random() - 0.5) * 1.2, 10.5 + Math.random() * 2.5, (Math.random() - 0.5) * 1.2, 1.0 + Math.random() * 0.35, 0.2, 1, 0.8, 0.5, 0.25, 6.5, type);
     this.sound?.('fwLaunch', 0.35 + Math.random() * 0.2, { x, y: z, z: 0 });
   }
 
@@ -261,9 +261,9 @@ export class Fireworks {
       }
       const sp = (type === 1 ? 2.6 : 3.4) * (type === 2 ? 1 : 0.85 + Math.random() * 0.3);
       const c = type === 1 ? PALETTE[3] : type === 4 && k % 2 ? c2 : c1;
-      if (type === 3) this.spawn(GLITTER, x, y, z, dx * sp, dy * sp, dz * sp, 1.3 + Math.random() * 0.6, 0.05, I * 1.2, I * 1.1, I * 0.9, 1.3, 1.6);
-      else if (type === 1) this.spawn(STAR, x, y, z, dx * sp, dy * sp + 0.4, dz * sp, 2.6 + Math.random() * 0.8, 0.055, I * c[0], I * c[1] * 0.85, I * c[2] * 0.6, 1.7, 1.2, 1);
-      else this.spawn(STAR, x, y, z, dx * sp, dy * sp, dz * sp, 1.5 + Math.random() * 0.5, 0.07, I * c[0], I * c[1], I * c[2], 1.25, 1.9);
+      if (type === 3) this.spawn(GLITTER, x, y, z, dx * sp, dy * sp, dz * sp, 1.3 + Math.random() * 0.6, 0.13, I * 1.2, I * 1.1, I * 0.9, 1.3, 1.6);
+      else if (type === 1) this.spawn(STAR, x, y, z, dx * sp, dy * sp + 0.4, dz * sp, 2.6 + Math.random() * 0.8, 0.14, I * c[0], I * c[1] * 0.85, I * c[2] * 0.6, 1.7, 1.2, 1);
+      else this.spawn(STAR, x, y, z, dx * sp, dy * sp, dz * sp, 1.5 + Math.random() * 0.5, 0.17, I * c[0], I * c[1], I * c[2], 1.25, 1.9);
     }
     // the flash: real light on the scene, a glow pool on the ground, the bang
     const lc = (Math.round(c1[0] * 255) << 16) | (Math.round(c1[1] * 255) << 8) | Math.round(c1[2] * 255);
@@ -346,7 +346,7 @@ export class Fireworks {
         a = 1;
         streak = 0.04;
         // the climbing trail
-        if (Math.random() < 0.8) this.spawn(EMBER, this.x[i], this.y[i] - 0.1, this.z[i], (Math.random() - 0.5) * 0.3, -0.3, (Math.random() - 0.5) * 0.3, 0.4 + Math.random() * 0.3, 0.05, 1.8, 1.1, 0.45, 1.5, 1);
+        if (Math.random() < 0.8) this.spawn(EMBER, this.x[i], this.y[i] - 0.1, this.z[i], (Math.random() - 0.5) * 0.3, -0.3, (Math.random() - 0.5) * 0.3, 0.4 + Math.random() * 0.3, 0.12, 1.8, 1.1, 0.45, 1.5, 1);
       } else if (kd === STAR) {
         a = lk < 0.7 ? 1 : 1 - (lk - 0.7) / 0.3;
         // gold willow streaks longer and droops; the rest twinkle out at the end
@@ -395,8 +395,8 @@ export class Fireworks {
     for (let j = 0; j < this.nFlash; j++) {
       const age = f[j * 7 + 6];
       if (age > 1.2) continue;
-      const k = Math.max(0, 1 - age / 1.2) * 0.5;
-      nl.pool(f[j * 7], f[j * 7 + 1], f[j * 7 + 2], 0, 9, 9, f[j * 7 + 3] * k, f[j * 7 + 4] * k, f[j * 7 + 5] * k);
+      const k = Math.max(0, 1 - age / 1.2) * 0.22;
+      nl.pool(f[j * 7], f[j * 7 + 1], f[j * 7 + 2], 0, 7, 7, f[j * 7 + 3] * k, f[j * 7 + 4] * k, f[j * 7 + 5] * k);
     }
   }
 

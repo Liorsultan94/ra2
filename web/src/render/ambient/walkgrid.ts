@@ -1,4 +1,5 @@
-import { Tile, type GameMap } from '../../sim/map';
+import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
+import { surfaceHeight } from '../ground';
 import { FieldType, OCC_FIELD, OCC_ROAD, OCC_TRACK, type Layout } from '../layout';
 import { MarkKind, onSurface, type RoadNet } from './roadnet';
 
@@ -37,6 +38,8 @@ export interface WalkGrid {
   cost: Uint8Array;
   flag: Uint8Array;
   urban: boolean;
+  /** Connected region per cell for calm walkers (-1 closed); filled by labelRegions. */
+  region: Int32Array;
 }
 
 export interface ZebraBand {
@@ -71,6 +74,31 @@ export function zebraBands(m: GameMap, layout: Layout, net: RoadNet | null): Zeb
   return out;
 }
 
+/**
+ * Dry ground (the vegetation rule): not a water tile, nor within `margin` of
+ * one, and the drawn surface clear of the water level. Bridge decks count as dry.
+ */
+export function dryAt(m: GameMap, x: number, y: number, margin = 0.3): boolean {
+  const tx0 = Math.floor(x);
+  const ty0 = Math.floor(y);
+  if (tx0 < 0 || ty0 < 0 || tx0 >= m.w || ty0 >= m.h) return false;
+  const t = m.tiles[ty0 * m.w + tx0];
+  if (t === Tile.Water) return false;
+  if (t === Tile.Bridge) return true;
+  if (surfaceHeight(m, x, y) < WATER_LEVEL + 0.08) return false;
+  for (const [dx, dy] of [
+    [-margin, 0],
+    [margin, 0],
+    [0, -margin],
+    [0, margin],
+  ]) {
+    const tx = Math.floor(x + dx);
+    const ty = Math.floor(y + dy);
+    if (tx >= 0 && ty >= 0 && tx < m.w && ty < m.h && m.tiles[ty * m.w + tx] === Tile.Water) return false;
+  }
+  return true;
+}
+
 export function buildWalkGrid(m: GameMap, layout: Layout, net: RoadNet | null, zebras = zebraBands(m, layout, net)): WalkGrid {
   const W = m.w;
   const H = m.h;
@@ -91,7 +119,7 @@ export function buildWalkGrid(m: GameMap, layout: Layout, net: RoadNet | null, z
       const ti = ty * W + tx;
       const k = gy * gw + gx;
       const t = m.tiles[ti];
-      if (t === Tile.Water || t === Tile.Rock || m.blocked[ti]) continue;
+      if (t === Tile.Water || t === Tile.Rock || m.blocked[ti] || !dryAt(m, x, y)) continue;
       const occ = layout.occ[Math.floor(y * R) * W * R + Math.floor(x * R)];
       let c = t === Tile.Dirt ? (urban ? 1 : 2) : 2;
       let fl = 0;
@@ -132,6 +160,16 @@ export function buildWalkGrid(m: GameMap, layout: Layout, net: RoadNet | null, z
   };
   for (const p of plazas) rect(p.cx - p.hl, p.cy - p.hw, p.cx + p.hl, p.cy + p.hw, WF.Plaza, 1);
   for (const p of parks) rect(p.x0 + 0.4, p.y0 + 0.4, p.x1 - 0.4, p.y1 - 0.4, WF.Park, 2);
+  // the fountains in the middle of the city squares (citybldgs.ts) are closed
+  if (urban)
+    for (const p of m.deco?.plazas ?? []) {
+      const cx = (p.x0 + p.x1) / 2;
+      const cy = (p.y0 + p.y1) / 2;
+      if (m.starts.some((s) => Math.hypot(s.x + 0.5 - cx, s.y + 0.5 - cy) < 16)) continue;
+      for (let gy = Math.floor((cy - 0.8) * RES); gy <= Math.ceil((cy + 0.8) * RES); gy++)
+        for (let gx = Math.floor((cx - 0.8) * RES); gx <= Math.ceil((cx + 0.8) * RES); gx++)
+          if (gx >= 0 && gy >= 0 && gx < gw && gy < gh && Math.hypot((gx + 0.5) / RES - cx, (gy + 0.5) / RES - cy) < 0.78) cost[gy * gw + gx] = 0;
+    }
   // zebra crossings: cheap again
   for (const z of zebras) {
     const r = z.hl + 0.3;
@@ -148,7 +186,47 @@ export function buildWalkGrid(m: GameMap, layout: Layout, net: RoadNet | null, z
         cost[k] = 1;
       }
   }
-  return { w: W, h: H, gw, gh, cost, flag, urban };
+  const g: WalkGrid = { w: W, h: H, gw, gh, cost, flag, urban, region: new Int32Array(gw * gh) };
+  labelRegions(g);
+  return g;
+}
+
+/** Label the regions calm walkers can reach (closed: no cost, or road off the zebras), 8-connected. */
+export function labelRegions(g: WalkGrid) {
+  const lab = g.region;
+  lab.fill(-1);
+  const open = (k: number) => g.cost[k] > 0 && (g.flag[k] & (WF.Road | WF.Zebra)) !== WF.Road;
+  let n = 0;
+  const st: number[] = [];
+  for (let k0 = 0; k0 < lab.length; k0++) {
+    if (lab[k0] >= 0 || !open(k0)) continue;
+    lab[k0] = n;
+    st.push(k0);
+    while (st.length) {
+      const k = st.pop()!;
+      const x = k % g.gw;
+      const y = (k / g.gw) | 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= g.gw || yy >= g.gh) continue;
+          const j = yy * g.gw + xx;
+          if (lab[j] >= 0 || !open(j)) continue;
+          if (dx && dy && (!g.cost[y * g.gw + xx] || !g.cost[yy * g.gw + x])) continue;
+          lab[j] = n;
+          st.push(j);
+        }
+    }
+    n++;
+  }
+}
+
+/** Can a calm walker get from (x0, y0) to (x1, y1) at all? */
+export function sameRegion(g: WalkGrid, x0: number, y0: number, x1: number, y1: number): boolean {
+  const a = cellOf(g, x0, y0);
+  const b = cellOf(g, x1, y1);
+  return a >= 0 && b >= 0 && g.region[a] >= 0 && g.region[a] === g.region[b];
 }
 
 export function cellOf(g: WalkGrid, x: number, y: number): number {
@@ -200,10 +278,15 @@ export class PathFinder {
     this.cells = new Int32Array(4096);
   }
 
+  /** Calm search that starts on the road (someone caught on it): road cells stay open. */
+  private onRoad = false;
+
   private cost(k: number, panic: boolean, blocked: ((tx: number, ty: number) => boolean) | null): number {
     const g = this.grid;
     const c = g.cost[k];
     if (!c) return 0;
+    // calm walkers cross the paved road only on the zebras
+    if (!panic && !this.onRoad && (g.flag[k] & (WF.Road | WF.Zebra)) === WF.Road) return 0;
     if (blocked) {
       const gx = k % g.gw;
       const gy = (k / g.gw) | 0;
@@ -265,7 +348,9 @@ export class PathFinder {
     const gw = G.gw;
     const s = cellOf(G, x0, y0);
     const t = cellOf(G, x1, y1);
-    if (s < 0 || t < 0 || !this.cost(t, panic, blocked)) return 0;
+    if (s < 0 || t < 0) return 0;
+    this.onRoad = !panic && (G.flag[s] & (WF.Road | WF.Zebra)) === WF.Road;
+    if (!this.cost(t, panic, blocked)) return 0;
     this.gen++;
     const gen = this.gen;
     const tx = t % gw;

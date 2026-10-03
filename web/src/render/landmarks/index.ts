@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, type GameMap } from '../../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
+import { roadClear } from '../ambient/clearance';
 import type { Effects } from '../effects';
 import type { FogOfWar } from '../fog';
 import type { AmbientFrame, FogProbe, LightSprites, Quality } from '../ambient/shared';
@@ -104,6 +105,8 @@ interface Light {
 }
 
 const FAR = 70;
+/** Kinds that belong in / on the water. */
+const WET_OK = new Set<Spot['kind']>(['suspension', 'pond', 'lake', 'icehut']);
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
@@ -202,9 +205,21 @@ export class MapLandmarks {
     k.at(x, base - h / 2, y, yaw).box(w, h, d, 0, 0, 0, col);
   }
 
+  /** Dry, open ground: not a water tile, above the waterline, off the roads (inside the map). */
+  private dryAt(x: number, y: number): boolean {
+    const m = this.map;
+    if (x >= 0 && y >= 0 && x < m.w && y < m.h) {
+      if (m.tiles[Math.floor(y) * m.w + Math.floor(x)] === Tile.Water) return false;
+      if (!roadClear(m, x, y, 0.3)) return false;
+    }
+    return groundY(m, x, y) > WATER_LEVEL + 0.08;
+  }
+
   private place(k: Kit, s: Spot) {
     const m = this.map;
     const { x, y, yaw } = s;
+    // nothing stands in the water or on a road, except what is meant to (bridge towers, ponds, the ice huts on the lake)
+    if (!WET_OK.has(s.kind) && !this.dryAt(x, y)) return;
     switch (s.kind) {
       case 'turbine': {
         const g = groundY(m, x, y) - 0.04;
@@ -219,8 +234,8 @@ export class MapLandmarks {
         break;
       }
       case 'castle': {
-        const { hi } = groundRange(m, x, y, 1.1);
-        const base = hi - 0.2;
+        const { lo, hi } = groundRange(m, x, y, 1.1);
+        const base = lo * 0.35 + hi * 0.65;
         const r = this.beginRange(k, s, x, base, y, 2.3, 1);
         k.at(x, base, y, yaw);
         castleRuin(k, 7);
@@ -239,7 +254,8 @@ export class MapLandmarks {
         const base = groundY(m, x, y) - 0.03;
         const r = this.beginRange(k, s, x, base, y, MAST_H, 0.7);
         k.at(x, base, y, yaw);
-        radioMast(k);
+        // guy anchors on the ground of the ridge (local offsets rotated by yaw)
+        radioMast(k, (ax, az) => groundY(m, x + Math.cos(yaw) * ax - Math.sin(yaw) * az, y + Math.sin(yaw) * ax + Math.cos(yaw) * az) - base);
         r.end = k.count;
         for (const f of [0.33, 0.66, 1.0]) this.light(x, base + MAST_H * f + (f === 1 ? 0.95 : 0), y, 0, f === 1 ? 0.36 : 0.26, r);
         break;
@@ -321,14 +337,14 @@ export class MapLandmarks {
       }
       case 'refinery': {
         const { lo, hi } = groundRange(m, x, y, 5);
-        k.at(x, (lo + hi) / 2, y, yaw);
+        const rb = lo * 0.7 + hi * 0.3;
+        k.at(x, rb, y, yaw);
         refinery(k);
-        this.plinth(k, x, y, lo - 0.3, (lo + hi) / 2, 11, 7, yaw, 0x6a665e);
         const fx = x + Math.cos(yaw) * FLARE.x - Math.sin(yaw) * FLARE.z;
         const fz = y + Math.sin(yaw) * FLARE.x + Math.cos(yaw) * FLARE.z;
-        this.flare = { x: fx, y: (lo + hi) / 2 + FLARE.h + 0.25, z: fz };
-        this.light(fx, (lo + hi) / 2 + FLARE.h * 0.5, fz, 0, 0.3);
-        for (const [cx, cz, h] of [[-0.8, -1.0, 5.8], [-2.5, -1.2, 5.2]] as const) this.light(x + cx, (lo + hi) / 2 + h + 0.32, y + cz, 0, 0.26);
+        this.flare = { x: fx, y: rb + FLARE.h + 0.25, z: fz };
+        this.light(fx, rb + FLARE.h * 0.5, fz, 0, 0.3);
+        for (const [cx, cz, h] of [[-0.8, -1.0, 5.8], [-2.5, -1.2, 5.2]] as const) this.light(x + cx, rb + h + 0.32, y + cz, 0, 0.26);
         break;
       }
       case 'factory': {
@@ -348,7 +364,6 @@ export class MapLandmarks {
         const g = groundRange(m, x, y, Math.max(s.a ?? 4, s.b ?? 3));
         k.at(x, g.lo + 0.03, y, yaw);
         frozenLake(k, s.a ?? 4, s.b ?? 3);
-        this.bank(k, x, y, s.a ?? 4, s.b ?? 3, g.lo, 0xe4ecf2);
         break;
       }
       case 'icehut': {
@@ -446,7 +461,7 @@ export class MapLandmarks {
     if (!M) return g;
     const t = Math.hypot(x - M.x, y - M.y) / M.r;
     if (t >= 1) return g;
-    return Math.max(g, M.base + M.h * Math.pow(1 - t, 1.35));
+    return Math.max(g, M.base + M.h * Math.pow(Math.cos(t * Math.PI * 0.5), 1.5));
   }
 
   /** A low bank ringing an ellipse (pond / lake), up to the surrounding ground. */

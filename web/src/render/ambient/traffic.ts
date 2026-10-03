@@ -9,6 +9,7 @@ import { carModel, type CarModel } from './models';
 import { RoadFurniture } from './roadfurniture';
 import { roadNetFor } from './clearance';
 import { SigMode, nearestArc, pointAt, type RoadNet } from './roadnet';
+import { deckSurface } from '../deckramp';
 import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
 /*
@@ -561,12 +562,18 @@ export class Traffic {
     const half = c.model.len * 0.4;
     const hx = Math.cos(c.yaw);
     const hy = Math.sin(c.yaw);
-    const g = groundAt(m, c.x, c.y);
+    // on and near the bridges: the deck (with its end ramps) and the ramped approach roads
+    const down = (i: number) => {
+      const k = this.bridges.findIndex((b) => b.idx === i);
+      return k >= 0 && !this.bridgeUp(k);
+    };
+    const at = (x: number, y: number) => deckSurface(m, x, y, down) ?? groundAt(m, x, y);
+    const g = at(c.x, c.y);
     if (!free) {
-      const gf = groundAt(m, c.x + hx * half, c.y + hy * half);
-      const gb = groundAt(m, c.x - hx * half, c.y - hy * half);
-      const gl = groundAt(m, c.x - hy * 0.1, c.y + hx * 0.1);
-      const gr = groundAt(m, c.x + hy * 0.1, c.y - hx * 0.1);
+      const gf = at(c.x + hx * half, c.y + hy * half);
+      const gb = at(c.x - hx * half, c.y - hy * half);
+      const gl = at(c.x - hy * 0.1, c.y + hx * 0.1);
+      const gr = at(c.x + hy * 0.1, c.y - hx * 0.1);
       const k = Math.min(1, dt * 10);
       c.hgt += (Math.max(g, (gf + gb) / 2) - c.hgt) * Math.min(1, dt * 14);
       c.pitch += (Math.atan2(gf - gb, half * 2) - c.pitch) * k;

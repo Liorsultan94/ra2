@@ -400,9 +400,9 @@ export class NatureFx {
         this.y[i] = ry;
         this.z[i] = rz;
         const ph = (age / this.rotV[i] + sd) % 1;
-        const glow = sstep(0, 0.06, ph) * (1 - sstep(0.1, 0.28, ph));
-        alpha *= (0.04 + glow) * night;
-        size *= 0.7 + 0.5 * glow;
+        const glow = sstep(0, 0.06, ph) * (1 - sstep(0.16, 0.4, ph));
+        alpha *= (0.1 + glow) * night;
+        size *= 0.75 + 0.6 * glow;
         if (rx < x0 - 4 || rx > x1 + 4 || rz < z0 - 4 || rz > z1 + 4 || night < 0.02) {
           this.kill(i);
           continue;
@@ -853,7 +853,7 @@ export class LivingWorld {
     const fb = this.flyB;
     const flyK = this.forced.fireflies ? 1 : this.biome === 'winter' || WX.wxSnow.value > 0.1 || rain > 0.05 ? 0 : sstep(0.55, 0.85, dark) * (1 - sstep(0.3, 0.8, wk));
     if (fb && flyK > 0.02) {
-      const want = Math.round((this.q === 'high' ? 80 : 44) * flyK);
+      const want = Math.round((this.q === 'high' ? 110 : 64) * flyK);
       let tries = 8;
       while (nat.count[FLY] < want && tries-- > 0) {
         const si = fb.pick(this.x0, this.z0, this.x1, this.z1);
@@ -863,7 +863,7 @@ export class LivingWorld {
         if (!this.probe.visible(x, z)) continue;
         const g = groundHeight(this.map, x, z);
         _c2.setRGB(0.75, 1.0, 0.32).multiplyScalar(1.4);
-        const i = nat.spawn(FLY, x, g, z, x, g + 0.18 + Math.random() * 0.5, z, 25 + Math.random() * 20, 0.13, _c2, 1, g);
+        const i = nat.spawn(FLY, x, g, z, x, g + 0.18 + Math.random() * 0.5, z, 25 + Math.random() * 20, 0.2, _c2, 1, g);
         nat.setSpin(i, 1.8 + Math.random() * 3.2);
       }
     }

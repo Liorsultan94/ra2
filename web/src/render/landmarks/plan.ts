@@ -1,4 +1,6 @@
-import { Tile, type GameMap } from '../../sim/map';
+import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
+import { roadClear } from '../ambient/clearance';
+import { surfaceHeight } from '../ground';
 
 /*
  * Where every map's set pieces go: unique landmarks, the railway lines, the
@@ -380,7 +382,7 @@ function desert(m: GameMap): LandmarkPlan {
   spots.push(spot('fort', 30.5, 63, Math.atan2(5, 6), 0, 0.61, { inMap: true }));
   // the refinery skyline north of the map, with its gas flare
   spots.push(spot('refinery', 68, -17.5, 0, 6.5));
-  return { spots, rails: [], lanes: [{ pts: smoothPath([{ x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -6.6, y: 70 }, { x: -10, y: 80 }], 3, 0.5), width: 0.75 }], camels };
+  return { spots, rails: [], lanes: [{ pts: smoothPath([{ x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -6.2, y: 70 }, { x: -6.0, y: 92 }], 3, 0.5), width: 0.75 }], camels };
 }
 
 /** Walkable spots ringing the map's oases (open sand or scrub, no trees, buildings or rock). */
@@ -420,6 +422,7 @@ function oasisRing(m: GameMap): P2[] {
       const j = ty * W + tx;
       const t = m.tiles[j];
       if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || m.trees[j] || m.blocked[j] || m.ore[j]) continue;
+      if (surfaceHeight(m, x, y) <= WATER_LEVEL + 0.08 || !roadClear(m, x, y, 0.6)) continue;
       if (m.starts.some((s) => Math.hypot(s.x - x, s.y - y) < 12)) continue;
       out.push({ x, y });
     }
