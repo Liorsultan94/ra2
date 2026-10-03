@@ -21,9 +21,12 @@
  *     renormalised after the downscale;
  *   - tiling check across the wrap edges (colour + height); a material whose
  *     seam stands out is cross-faded with a half-offset copy of itself.
- * Packed into two RGBA WebPs per material:
- *   <key>_a.webp   RGB albedo (sRGB), A height
- *   <key>_n.webp   RG normal XY (OpenGL, +Y = up in the image), B roughness, A AO
+ * Packed into two RGB WebPs per material (no alpha: WebP alpha is lossless
+ * only and would triple the download):
+ *   <key>_a.webp   albedo (sRGB) with half of the AO folded in
+ *   <key>_n.webp   R/G normal X/Y (OpenGL, +Y = up in the image), B height
+ * Roughness is reduced to a per-material mean (manifest), the shader varies
+ * it with the height.
  * The runtime (src/render/photoground.ts) uploads them as layers of two
  * texture arrays per map, only the materials that map's biome uses.
  *
@@ -200,8 +203,33 @@ function down(p, w, h, S) {
   return out;
 }
 
-/** Wrap-around separable gaussian blur of an S x S plane. */
+/** Wrap-around separable gaussian blur of an S x S plane (wide blurs run on a reduced copy). */
 function blur(p, S, sigma) {
+  if (sigma > 6 && S > 64) {
+    // box down to 64 x 64, blur there, bilinear (wrapping) back up
+    const s = 64;
+    const f = S / s;
+    const small = blur(down(p, S, S, s), s, sigma / f);
+    const o = new Float32Array(S * S);
+    for (let y = 0; y < S; y++) {
+      const fy = (y + 0.5) / f - 0.5;
+      const y0 = Math.floor(fy);
+      const ty = fy - y0;
+      const ya = ((y0 % s) + s) % s;
+      const yb = (ya + 1) % s;
+      for (let x = 0; x < S; x++) {
+        const fx = (x + 0.5) / f - 0.5;
+        const x0 = Math.floor(fx);
+        const tx = fx - x0;
+        const xa = ((x0 % s) + s) % s;
+        const xb = (xa + 1) % s;
+        const a = small[ya * s + xa] + (small[ya * s + xb] - small[ya * s + xa]) * tx;
+        const b = small[yb * s + xa] + (small[yb * s + xb] - small[yb * s + xa]) * tx;
+        o[y * S + x] = a + (b - a) * ty;
+      }
+    }
+    return o;
+  }
   const r = Math.ceil(sigma * 3);
   const k = new Float32Array(r * 2 + 1);
   let ks = 0;
@@ -271,12 +299,17 @@ function healSeams(planes, S) {
   });
 }
 
-function writeWebp(file, S, rgba, opts) {
-  const args = ['-size', `${S}x${S}`, '-depth', '8', 'rgba:-', '-define', 'webp:method=6'];
+/**
+ * RGB WebP from raw 8-bit RGB. Lossy files aim at a PSNR (dB) rather than a
+ * "quality" (ImageMagick 6 ignores -quality for WebP; target-psnr works and
+ * adapts the bit rate to how busy each texture is).
+ */
+function writeWebp(file, S, rgb, opts) {
+  const args = ['-size', `${S}x${S}`, '-depth', '8', 'rgb:-', '-define', 'webp:method=6'];
   if (opts.lossless) args.push('-define', 'webp:lossless=true', '-define', 'webp:exact=true');
-  else args.push('-quality', String(opts.q ?? 86), '-define', 'webp:alpha-quality=100', '-define', 'webp:use-sharp-yuv=true', '-define', 'webp:exact=true');
+  else args.push('-define', `webp:target-psnr=${opts.psnr ?? 38}`, '-define', 'webp:use-sharp-yuv=true');
   args.push(file);
-  execFileSync('convert', args, { input: Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength), maxBuffer: 1 << 28 });
+  execFileSync('convert', args, { input: Buffer.from(rgb.buffer, rgb.byteOffset, rgb.byteLength), maxBuffer: 1 << 28 });
   return statSync(file).size;
 }
 
@@ -341,35 +374,36 @@ function bakeMaterial(mat) {
       console.log(`  ${S}: seam ratio ${sr.toFixed(2)}${healed ? ' (healed)' : ''}`);
       continue;
     }
-    // ---- pack
-    const pa = new Uint8Array(S * S * 4);
-    const pn = new Uint8Array(S * S * 4);
+    // ---- pack (alpha-free: WebP alpha is lossless only and would triple the size)
+    //   _a: albedo with half of the AO folded in (sRGB)
+    //   _n: normal X, normal Y, height (roughness -> per-material mean, AO -> albedo)
+    const pa = new Uint8Array(S * S * 3);
+    const pn = new Uint8Array(S * S * 3);
     const nk = mat.nk ?? 1;
     const sum = [0, 0, 0];
     let rs = 0;
     for (let k = 0; k < S * S; k++) {
+      const ao = 1 - (1 - O[k]) * 0.5;
       for (let c = 0; c < 3; c++) {
-        const v = Math.min(1, A[c][k]);
+        const v = Math.min(1, A[c][k] * ao);
         sum[c] += v;
-        pa[k * 4 + c] = b8(l2s(v));
+        pa[k * 3 + c] = b8(l2s(v));
       }
-      pa[k * 4 + 3] = b8(H[k]);
       let nx = N[0][k] * nk;
       let ny = N[1][k] * nk;
       const nz = Math.max(0.05, N[2][k]);
       const l = Math.hypot(nx, ny, nz);
       nx /= l;
       ny /= l;
-      pn[k * 4] = b8(nx * 0.5 + 0.5);
-      pn[k * 4 + 1] = b8(ny * 0.5 + 0.5);
-      pn[k * 4 + 2] = b8(R[k]);
-      pn[k * 4 + 3] = b8(O[k]);
+      pn[k * 3] = b8(nx * 0.5 + 0.5);
+      pn[k * 3 + 1] = b8(ny * 0.5 + 0.5);
+      pn[k * 3 + 2] = b8(H[k]);
       rs += R[k];
     }
     const dir = join(OUT, String(S));
     mkdirSync(dir, { recursive: true });
-    const ba = writeWebp(join(dir, `${mat.key}_a.webp`), S, pa, { q: S >= 1024 ? 84 : 88 });
-    const bn = writeWebp(join(dir, `${mat.key}_n.webp`), S, pn, { q: S >= 1024 ? 86 : 90 });
+    const ba = writeWebp(join(dir, `${mat.key}_a.webp`), S, pa, { psnr: S >= 1024 ? 36 : 37 });
+    const bn = writeWebp(join(dir, `${mat.key}_n.webp`), S, pn, { psnr: S >= 1024 ? 34 : 36 });
     const meanLin = sum.map((v) => v / (S * S));
     out.sizes[S] = { bytes: ba + bn, seam: +sr.toFixed(2), healed };
     if (S === SIZES[0]) {
@@ -393,20 +427,19 @@ function bakeBark(b) {
   for (let k = 0; k < S * S; k++) L[k] = A[0][k] * 0.2126 + A[1][k] * 0.7152 + A[2][k] * 0.0722;
   const Lm = mean(L);
   const Lb = blur(L, S, S / 8);
-  const rgba = new Uint8Array(S * S * 4);
+  const rgb = new Uint8Array(S * S * 3);
   const sum = [0, 0, 0];
   for (let k = 0; k < S * S; k++) {
     const f = Math.pow(Lm / Math.max(1e-4, Lb[k]), 0.6);
     for (let c = 0; c < 3; c++) {
       const v = Math.min(1, A[c][k] * f);
       sum[c] += v;
-      rgba[k * 4 + c] = b8(l2s(v));
+      rgb[k * 3 + c] = b8(l2s(v));
     }
-    rgba[k * 4 + 3] = 255;
   }
   const dir = join(ROOT, 'public/tex/bark');
   mkdirSync(dir, { recursive: true });
-  const bytes = writeWebp(join(dir, `${b.key}.webp`), S, rgba, { q: 85 });
+  const bytes = writeWebp(join(dir, `${b.key}.webp`), S, rgb, { psnr: 37 });
   const m = sum.map((v) => v / (S * S));
   console.log(`  ${(bytes / 1024).toFixed(0)} KB`);
   return { bytes, page: src.page, mean: m.map((v) => +v.toFixed(4)) };

@@ -108,6 +108,10 @@ export interface UnitDef extends BaseDef {
   cruiseAlt?: number; // flight altitude above ground
   airlift?: boolean; // support-power transport plane: flies a straight drop run, then leaves the map
   supply?: boolean; // air-dropped supply pallet: heals friendly units nearby, then expires
+  /** Heavy ground vehicle that runs over enemy infantry in its path (crush.ts). */
+  crusher?: boolean;
+  /** Can be run over by an enemy crusher (infantry on the ground; crush.ts). */
+  crushable?: boolean;
 }
 
 export interface BuildingDef extends BaseDef {
@@ -184,6 +188,23 @@ export interface ParaState {
   z0: number; // exit altitude
   x0: number; // exit point
   y0: number;
+}
+
+/**
+ * Infantry sidestepping a vehicle about to run it over (crush.ts). The soldier keeps its order: it
+ * reacts at tick `go`, sprints to (x, y), dives and rolls on a close call, stands clear until the
+ * vehicle has passed, then resumes what it was doing.
+ */
+export interface DodgeState {
+  by: number; // the threatening vehicle
+  x: number; // sidestep goal
+  y: number;
+  go: number; // tick the soldier reacts (starts moving)
+  until: number; // tick the dodge ends at the latest
+  phase: 'wait' | 'run' | 'down' | 'clear';
+  downUntil: number; // dive: tick the soldier is back on his feet
+  dive: boolean; // close call: dive and roll
+  yield: boolean; // a friendly vehicle: just stepping out of its way
 }
 
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
@@ -265,6 +286,11 @@ export interface Entity {
   queue: QueuedOrder[]; // waypoints / orders to run after the current one
   patrol: { ax: number; ay: number; bx: number; by: number } | null; // patrolling between a and b
   guardId: number; // friendly unit / building this unit escorts, else -1
+
+  // crushing / dodging (see crush.ts)
+  dodge: DodgeState | null; // infantry: sidestepping a vehicle
+  dodgeAt: number; // infantry: tick before which it won't try another dodge (cooldown)
+  stillAt: number; // tick the unit last moved (dug in after standing still a while)
 }
 
 export interface QueueItem {
@@ -388,7 +414,11 @@ export type SimEvent =
    */
   | { t: 'airburst'; x: number; y: number; z: number; kind: 'kill' | 'hit' | 'miss' | 'expire'; weapon: string; victim?: Flight; victimId?: number; victimWeapon?: string; hpLeft?: number; maxHp?: number }
   | { t: 'intercept'; x: number; y: number; id: number }
-  | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building' }
+  | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building'; cause?: 'crushed' }
+  /** A vehicle (by, byDef, byOwner) ran over infantry (id); the 'death' event (cause 'crushed') follows. */
+  | { t: 'crushed'; id: number; def: string; owner: number; by: number; byDef: string; byOwner: number; x: number; y: number }
+  /** Infantry (id) saw a vehicle (by) coming and jumps out of its way; dive = close call. yield = a friendly vehicle. */
+  | { t: 'dodge'; id: number; owner: number; by: number; x: number; y: number; dive: boolean; yield: boolean }
   | { t: 'placed'; id: number; owner: number }
   | { t: 'unitReady'; owner: number; def: string }
   | { t: 'buildingReady'; owner: number; def: string }

@@ -421,6 +421,16 @@ function factionWeapon(f: FactionInfo, base: string, kind: 'unit' | 'building', 
   return id;
 }
 
+/**
+ * Crushing (crush.ts). Every ground vehicle in the roster is a crusher - tanks, IFVs / APCs, SPAAGs and
+ * self-propelled guns (20-60 t tracked or 8x8 hulls), the TOS, EW and missile trucks / TELs (15-40 t
+ * heavy trucks), the recovery tank, the harvester and the MCV - except the light unmanned robots: robot
+ * dogs weigh tens of kilograms and the small UGVs (THeMIS, Mission Master, Jaguar, Barkan) one to a few
+ * tonnes on a narrow footprint, and their remote operators steer round people. The roster has no jeeps or
+ * buggies; a ~5 t light vehicle would be the cut-off. Infantry on the ground are crushable.
+ */
+const LIGHT_VEHICLES = new Set(['robot', 'ugv']);
+
 const list: Def[] = [];
 
 for (const f of FACTIONS) {
@@ -451,6 +461,8 @@ for (const f of FACTIONS) {
     if (m.sight) u.sight += m.sight;
     if (f.id === 'iran' && u.weapon && ['rocket', 'missile'].includes(WEAPONS[u.weapon].warhead) && k !== 'at') u.cost = Math.round((u.cost * 0.8) / 10) * 10;
     if (u.weapon) u.weapon = factionWeapon(f, u.weapon, 'unit', cat);
+    if (cat === 'vehicle' && !u.temp && !u.supply && !LIGHT_VEHICLES.has(k)) u.crusher = true;
+    if (cat === 'infantry') u.crushable = true;
     list.push(u);
   }
   for (const [k, t] of Object.entries(MUNITIONS)) {
