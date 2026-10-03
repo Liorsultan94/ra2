@@ -950,7 +950,7 @@ export class People {
       const s = this.spots[(Math.random() * this.spots.length) | 0];
       if (!s) break;
       const d = Math.hypot(s.x - p.x, s.y - p.y);
-      if (Math.hypot(s.x - p.hx, s.y - p.hy) > p.roam || d < 2 || d > 11) continue;
+      if (Math.hypot(s.x - p.hx, s.y - p.hy) > p.roam || d < 2 || d > (this.grid.urban ? 11 : 8)) continue;
       if (this.walkTo(p, s.x, s.y, Goal.Stroll)) return;
       break;
     }

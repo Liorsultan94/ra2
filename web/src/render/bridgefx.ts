@@ -629,25 +629,38 @@ export class BridgeFx {
     const e0 = toW(xe, 0);
     const net = roadNetFor(m, buildLayout(m));
     const rings = net.loops.filter((lp) => Math.hypot(lp.x - e0.x, lp.y - e0.z) < lp.R + 4);
-    const others = net.lines.filter((ln) => {
-      if (ln.bridge >= 0) return false;
-      const a = ln.pts[0];
-      const b = ln.pts[ln.pts.length - 1];
-      if (Math.hypot(a.x - e0.x, a.y - e0.z) < 0.6 || Math.hypot(b.x - e0.x, b.y - e0.z) < 0.6) return false;
-      return ln.pts.some((p) => Math.hypot(p.x - e0.x, p.y - e0.z) < 4 + ln.half);
-    });
+    // road segments around here; the approach road's own first stretch from the deck end is left out
+    // (further along, where it may curve back past the bridge end, it counts)
+    const ax = toW(xe + end, 0).sub(e0).normalize();
+    const segs: { a: { x: number; y: number }; b: { x: number; y: number }; r: number }[] = [];
+    for (const ln of net.lines) {
+      if (ln.bridge >= 0 || !ln.pts.some((p) => Math.hypot(p.x - e0.x, p.y - e0.z) < 4 + ln.half)) continue;
+      const n = ln.pts.length;
+      let from = -1; // index of the endpoint at the deck end, if this is the approach road
+      for (const [k, k2] of [[0, 1], [n - 1, n - 2]]) {
+        const p = ln.pts[k];
+        const q = ln.pts[Math.max(0, Math.min(n - 1, k2))];
+        const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+        if (Math.hypot(p.x - e0.x, p.y - e0.z) < 0.6 && Math.abs(((q.x - p.x) * ax.x + (q.y - p.y) * ax.z) / l) > 0.7) from = k;
+      }
+      let arc = 0;
+      for (let j = 0; j < n - 1; j++) {
+        const i = from === n - 1 ? n - 2 - j : j;
+        const a = ln.pts[i];
+        const b = ln.pts[i + 1];
+        if (from < 0 || arc > 2.4) segs.push({ a, b, r: ln.half + 0.05 });
+        arc += Math.hypot(b.x - a.x, b.y - a.y);
+      }
+    }
     const busy = (x: number, z: number) => {
       const w = toW(x, z);
       for (const lp of rings) if (Math.hypot(w.x - lp.x, w.z - lp.y) < lp.R + 0.05) return true;
-      for (const ln of others)
-        for (let i = 0; i < ln.pts.length - 1; i++) {
-          const a = ln.pts[i];
-          const b = ln.pts[i + 1];
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.z - a.y) * dy) / (dx * dx + dy * dy || 1e-9)));
-          if (Math.hypot(w.x - a.x - dx * t, w.z - a.y - dy * t) < ln.half + 0.05) return true;
-        }
+      for (const { a, b, r } of segs) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.z - a.y) * dy) / (dx * dx + dy * dy || 1e-9)));
+        if (Math.hypot(w.x - a.x - dx * t, w.z - a.y - dy * t) < r) return true;
+      }
       return false;
     };
     const deckTop = DECK_Y + 0.1 + lift(xe);
