@@ -1265,13 +1265,16 @@ function makeMaterial(fog: FogOfWar, map: THREE.Texture, normal: THREE.Texture, 
     envMapIntensity: 0.8,
   });
   if (snowy) {
+    // the winter maps lie under a permanent snow floor (biome.ts): keep the props readable, a dusting on
+    // top (WX_SNOW_K scales the weather snow cover) and drifted snow around their feet
+    mat.defines = { ...mat.defines, WX_SNOW_K: '0.4' };
     mat.onBeforeCompile = (sh) => {
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying float vPropY;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvPropY = position.y;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vPropY;').replace(
         '#include <emissivemap_fragment>',
         `{
           // drifted snow around the foot of the prop (a noisy snow line)
-          float snl = 0.035 + ( texture2D( fogNoise, vFogP.xz * 1.9 ).r - 0.5 ) * 0.05;
+          float snl = 0.026 + ( texture2D( fogNoise, vFogP.xz * 1.9 ).r - 0.5 ) * 0.04;
           float snk = 1.0 - smoothstep( snl - 0.012, snl + 0.012, vPropY );
           diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.84, 0.88, 0.94 ), snk );
           roughnessFactor = mix( roughnessFactor, 0.6, snk );

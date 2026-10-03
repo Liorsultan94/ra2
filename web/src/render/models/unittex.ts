@@ -396,8 +396,8 @@ function schemeAt(s: Scheme, u: number, v: number): number {
 const camoCache = new Map<string, UnitTexSet>();
 
 /** Nation camo albedo (darkened by `dk` like the vertex-coloured base paint) over the shared armour plates. */
-export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
-  const key = faction + '|' + dk;
+export function vehCamo(faction: string, dk = 0.8, baked = false): UnitTexSet {
+  const key = faction + '|' + dk + (baked ? '|b' : '');
   let s = camoCache.get(key);
   if (s) return s;
   const spec = CAMO[faction] ?? { scheme: 'carc' as Scheme, cols: [0x8a8070, 0x80786a, 0x706858, 0x948a7a] };
@@ -437,6 +437,14 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         const m = (fbm(u, v, 8, 811, 3) - 0.5) * 0.08;
         col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
       }
+      if (baked) {
+        // baked templates: seams, bolts, edges and grime come from the per-vehicle bake (vehbake.ts / wear.ts);
+        // only paint variation here (faded patches, brush / spray tone, a few tiny chips)
+        const tone = 1 + (fbm(u, v, 12, 821, 3) - 0.5) * 0.07 + (fbm(u, v, 40, 823, 2) - 0.5) * 0.04;
+        const chip = P.chip[i] * 0.35;
+        for (let j = 0; j < 3; j++) c[i * 3 + j] = col[j] * tone * (1 - chip * 0.5) + PRIMER[j] * chip * 0.5;
+        continue;
+      }
       // plate detail: seams, edge wear, chipping to primer, grime streaks
       const k = Math.max(0.3, 1 - P.ao[i] * 0.45 - P.grime[i] * 0.12) + P.edge[i] * 0.07;
       const chip = P.chip[i];
@@ -446,11 +454,49 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         c[i * 3 + j] = ch;
       }
     }
-  const m = armourMaps();
+  const m = baked ? plainMaps() : armourMaps();
   freeLattices();
   s = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
   camoCache.set(key, s);
   return s;
+}
+
+let plainNR: { normalMap: THREE.Texture; roughnessMap: THREE.Texture } | null = null;
+/** Seam-free roughness (sun-faded paint, grime blots) for baked vehicles; the normal slot is unused there. */
+function plainMaps() {
+  if (plainNR) return plainNR;
+  const r = new Float32Array(AN * AN);
+  const h = new Float32Array(AN * AN);
+  for (let y = 0; y < AN; y++)
+    for (let x = 0; x < AN; x++) {
+      const u = (x + 0.5) / AN;
+      const v = (y + 0.5) / AN;
+      const i = y * AN + x;
+      r[i] = clamp01(0.74 + (fbm(u, v, 6, 831, 3) - 0.5) * 0.22 + (fbm(u, v, 48, 833, 2) - 0.5) * 0.12);
+      h[i] = 0.5 + (fbm(u, v, 48, 11, 2) - 0.5) * 0.01;
+    }
+  freeLattices();
+  plainNR = { normalMap: toTex(AN, normalFrom(AN, h, 3.4), 3, false), roughnessMap: roughTex(AN, r) };
+  return plainNR;
+}
+
+let modPlain: UnitTexSet | null = null;
+/** Seam-free near-white modulation for the vertex-coloured detail of baked vehicles. */
+export function armourModPlain(): UnitTexSet {
+  if (modPlain) return modPlain;
+  const P = plates();
+  const c = new Float32Array(AN * AN * 3);
+  for (let y = 0; y < AN; y++)
+    for (let x = 0; x < AN; x++) {
+      const i = y * AN + x;
+      const k = 1 + (fbm((x + 0.5) / AN, (y + 0.5) / AN, 16, 841, 3) - 0.5) * 0.08;
+      const ch = P.chip[i] * 0.3;
+      for (let j = 0; j < 3; j++) c[i * 3 + j] = k * (1 - ch * 0.55) + PRIMER[j] * ch * 0.55 * 1.6;
+    }
+  const m = plainMaps();
+  freeLattices();
+  modPlain = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
+  return modPlain;
 }
 
 // ------------------------------------------------------------ aircraft

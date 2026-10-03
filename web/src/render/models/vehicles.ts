@@ -5,7 +5,8 @@ import { factionCamo, pbrMaterial, worldUV } from '../textures';
 import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
-import { armourMod, unitLook, vehCamo } from './unittex';
+import { armourMod, armourModPlain, unitLook, vehCamo } from './unittex';
+import { bakeVehicle, type BakeResult } from './vehbake';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -356,6 +357,25 @@ function dullMat(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1.02, metalness: 0.12, normalScale: new THREE.Vector2(0.7, 0.7) });
 }
 const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial, DECAL_WEAR);
+
+/** Template keys whose armour gets the per-vehicle detail bake (vehbake.ts). */
+const BAKE_KEYS = new Set(['mbt', 'apc']);
+const VEH_BAKE: WearCfg = { dirt: true, loose: true, scale: 9, bake: true };
+/** Material of a baked bucket (camo / painted detail / metal) bound to the template's atlas. */
+function bakedMat(bk: string, f: string, res: BakeResult, fog: FogOfWar | null): THREE.Material {
+  const id = res.tex.uuid;
+  const ns = new THREE.Vector2(1, 1);
+  if (bk === 's' + CAMO)
+    return wmat(`bk|c|${f}|${id}`, fog, () => {
+      const t = vehCamo(f, 0.8, true);
+      return new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1, metalness: 0.15 });
+    }, VEH_BAKE);
+  if (bk === 'M') return wmat(`bk|m|${id}`, fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, normalMap: res.tex, normalScale: ns, roughness: 0.4, metalness: 0.7 }), VEH_BAKE);
+  return wmat(`bk|d|${id}`, fog, () => {
+    const t = armourModPlain();
+    return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1.02, metalness: 0.12 });
+  }, VEH_BAKE);
+}
 
 function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse = false) {
   return cmat(`glow${color}|${intensity}|${pulse}`, fog, () => {
@@ -844,6 +864,8 @@ class Bld {
   }
   /** Skip the air-recognition panel (set by builders with no suitable roof). */
   noIdPanel = false;
+  /** Detail bake of this template (null: plain tiling materials). */
+  baked: BakeResult | null = null;
   /** Template key (mbt, apc, ...). */
   key = '';
   /** Hatches built with hatch() (z already narrowed); geos = the lid disc + handle in p's buckets. */
@@ -1043,6 +1065,18 @@ class Bld {
     if (box.isEmpty()) box.setFromObject(this.root);
     const size = { x: box.max.x - box.min.x, y: box.max.y, z: box.max.z - box.min.z };
     this.bakeDirt();
+    if (BAKE_KEYS.has(this.key)) {
+      const res = bakeVehicle(this.root, this.key + '|' + this.f);
+      if (res) {
+        this.baked = res;
+        this.root.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh || !m.geometry.attributes.uv1) return;
+          const bk = (m as THREE.InstancedMesh).isInstancedMesh ? 'D' : (m.userData.bk as string);
+          if (bk === 's' + CAMO || bk === 'D' || bk === 'M') m.material = bakedMat(bk, this.f, res, this.fog);
+        });
+      }
+    }
     const ray = new Probe(this.root, skip);
     return {
       root: this.root,
