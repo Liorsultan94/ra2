@@ -145,7 +145,7 @@ function widenToDecks(m: GameMap, roads: Road[]) {
 
 function joinCloseEnds(m: GameMap, roads: Road[]) {
   // the router leaves the odd hairpin spike (at bridge approaches...): no road piece may double back
-  for (const r of roads) if (!r.painted && r.pts.length > 2) r.pts = unspike(r.pts);
+  for (const r of roads) if (!r.painted && r.pts.length > 2) r.pts = unspike(r.pts, 0.6);
   const hard = (x: number, y: number) => {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
@@ -313,9 +313,28 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
         const p0 = merged.pts[0];
         const p1 = merged.pts[merged.pts.length - 1];
         if (Math.hypot(p0.x - p1.x, p0.y - p1.y) < 0.6) {
-          // the last point becomes the first (welded)
-          merged.pts[merged.pts.length - 1] = { x: p0.x, y: p0.y };
-          merged.taper!.w[merged.taper!.w.length - 1] = merged.taper!.w[0];
+          // closed round: put the seam in the middle of the arrays, round it off like a joint, weld the ends
+          const t = merged.taper!;
+          const n0 = merged.pts.length - 1;
+          const h = n0 >> 1;
+          const rot = <U>(a: U[]) => {
+            const b = a.slice(0, n0);
+            return [...b.slice(h), ...b.slice(0, h)];
+          };
+          const P = rot(merged.pts);
+          const Wd = rot(t.w);
+          const Vd = rot(t.v);
+          const seam = n0 - h;
+          for (let it = 0; it < 24; it++) {
+            const cp = P.map((p) => ({ x: p.x, y: p.y }));
+            for (let q = Math.max(1, seam - 12); q <= Math.min(P.length - 2, seam + 12); q++) P[q] = { x: (cp[q - 1].x + 2 * cp[q].x + cp[q + 1].x) / 4, y: (cp[q - 1].y + 2 * cp[q].y + cp[q + 1].y) / 4 };
+          }
+          dekink(P, [Wd, Vd], 0.93, seam - 16, seam + 16);
+          P.push({ x: P[0].x, y: P[0].y });
+          Wd.push(Wd[0]);
+          Vd.push(Vd[0]);
+          merged.pts = P;
+          merged.taper = { ...t, w: Wd, v: Vd };
           merged.closed = true;
         }
       }

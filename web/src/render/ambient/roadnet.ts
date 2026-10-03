@@ -476,7 +476,7 @@ interface Cand {
  * Drop hairpin spikes the road router sometimes leaves at sharp corners (the
  * polyline overshoots and doubles back): no car could follow them.
  */
-export function unspike(src: V2[]): V2[] {
+export function unspike(src: V2[], minCos = 0.35): V2[] {
   const p = src.slice();
   for (let pass = 0; pass < 40; pass++) {
     let changed = false;
@@ -487,7 +487,7 @@ export function unspike(src: V2[]): V2[] {
       const by = p[i + 1].y - p[i].y;
       const la = Math.hypot(ax, ay);
       const lb = Math.hypot(bx, by);
-      if (la < 1e-6 || lb < 1e-6 || (ax * bx + ay * by) / (la * lb) < 0.35) {
+      if (la < 1e-6 || lb < 1e-6 || (ax * bx + ay * by) / (la * lb) < minCos) {
         p.splice(i, 1);
         i--;
         changed = true;

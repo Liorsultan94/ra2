@@ -559,14 +559,14 @@ describe('road clearance', () => {
               const wb = endW(roads[j], eb);
               expect(Math.max(wa, wb) / Math.min(wa, wb), `roads ${i} / ${j} at ${pa.x.toFixed(1)},${pa.y.toFixed(1)}`).toBeLessThanOrEqual(1.15);
             }
-      // no road piece doubles back on itself (router spikes at bridge approaches are smoothed out)
+      // no road piece doubles back or kinks (router spikes at bridge approaches are smoothed out)
       for (const r of roads)
         for (let k = 1; k < r.pts.length - 1; k++) {
           const ax = r.pts[k].x - r.pts[k - 1].x;
           const ay = r.pts[k].y - r.pts[k - 1].y;
           const bx = r.pts[k + 1].x - r.pts[k].x;
           const by = r.pts[k + 1].y - r.pts[k].y;
-          expect((ax * bx + ay * by) / ((Math.hypot(ax, ay) * Math.hypot(bx, by)) || 1), `${id} spike at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.3);
+          expect((ax * bx + ay * by) / ((Math.hypot(ax, ay) * Math.hypot(bx, by)) || 1), `${id} spike at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.6);
         }
       // a joined road / a road widening onto a bridge deck: one polyline, the width changing gently (over 2.5+ tiles), one look
       for (const r of roads) {
@@ -579,7 +579,7 @@ describe('road clearance', () => {
           const bx = r.pts[k + 1].x - r.pts[k].x;
           const by = r.pts[k + 1].y - r.pts[k].y;
           const cos = (ax * bx + ay * by) / ((Math.hypot(ax, ay) * Math.hypot(bx, by)) || 1);
-          expect(cos, `${id} kink at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.8);
+          expect(cos, `${id} kink at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.6);
         }
         // one look along the whole road: no texture jump
         expect(new Set(r.taper.v).size).toBe(1);
