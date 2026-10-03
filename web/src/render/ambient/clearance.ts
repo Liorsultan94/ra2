@@ -1,6 +1,7 @@
 import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, Road, Track, V2 } from '../layout';
 import { bridgeEnds, buildRoadNet, netInputFrom, pointAt, type RoadNet } from './roadnet';
+import { placeBoards, placeLots } from './sites';
 
 /*
  * Road clearance: the civilian lane graph (roadnet.ts) is built while the
@@ -87,9 +88,24 @@ function dense(a: V2, b: V2, step = 0.25): V2[] {
  * Mutates `roads` / `tracks` in place (the arrays become the layout's).
  */
 export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: Uint8Array, R: number): RoadNet {
+  // parking lots first: their access lanes are lanes of the network
+  const lots = placeLots(m, roads, occ, R);
   const net = buildRoadNet(netInputFrom(m, roads, tracks, bridgeEnds(m)));
   nets.set(roads, net);
   masks.set(m, { occ, R });
+  net.lots = lots;
+  lots.forEach((lot, i) => (lot.line = net.lines.findIndex((L) => L.lot === i)));
+  // the lots are drivable surface
+  {
+    const res = net.res;
+    for (const lot of lots)
+      for (let s = -lot.L / 2; s <= lot.L / 2; s += 0.1)
+        for (let t = -lot.D / 2; t <= lot.D / 2; t += 0.1) {
+          const ix = Math.floor((lot.x + lot.ux * s + lot.nx * t) * res);
+          const iy = Math.floor((lot.y + lot.uy * s + lot.ny * t) * res);
+          if (ix >= 0 && iy >= 0 && ix < net.w * res && iy < net.h * res) net.surface[iy * net.w * res + ix] = 1;
+        }
+  }
   const W = m.w * R;
   const H = m.h * R;
   const disc = (cx: number, cy: number, r: number) => {
@@ -111,6 +127,7 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
     disc(n.x, n.y, h + 0.3);
   }
   for (const k of net.links) capsule({ x: k.x0, y: k.y0 }, { x: k.x1, y: k.y1 }, k.half + 0.25);
+  for (const lot of lots) for (let i = 1; i < lot.access.length; i++) capsule(lot.access[i - 1], lot.access[i], 0.45);
 
   // cut the road ribbons back at the roundabouts (the ring is its own road piece); drop the stubs past dead-end circles
   const cut = <T extends { pts: V2[] }>(list: T[], paved: boolean) => {
@@ -176,6 +193,8 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
     if (k.paved) roads.push({ pts: dense(s, b), width: k.half * 2, variant: k.variant === 0 ? 0 : 1, ring: true });
     else tracks.push({ pts: dense(s, { x: k.x1, y: k.y1 }), width: k.half * 2, ring: true });
   }
+  // billboards by the roundabouts and crossings (after the circles are known)
+  net.boards = placeBoards(m, net, occ, R);
   return net;
 }
 

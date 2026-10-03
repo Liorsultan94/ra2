@@ -1,5 +1,6 @@
 import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, V2 } from '../layout';
+import type { Board, Lot } from './sites';
 
 /*
  * The civilian road network as a lane graph (pure logic, no three.js): the
@@ -36,6 +37,8 @@ export interface NetLine {
   painted: boolean;
   /** Road look: 0 highway, 1 country road (tracks: 1). */
   variant: number;
+  /** Access lane of parking lot #lot, -1 otherwise. */
+  lot: number;
   /** World bridge index for a deck crossing, -1 otherwise. */
   bridge: number;
   /** Endpoint at the map edge (cars leave / enter there). */
@@ -93,6 +96,8 @@ export const enum Ctl {
   Loop = 3,
   /** Dead end without room for a turning place: 3-point turn on the road. */
   Turn = 4,
+  /** End of a parking lot's access lane: the cars park. */
+  Lot = 5,
 }
 
 export interface NetNode {
@@ -106,6 +111,8 @@ export interface NetNode {
   village: boolean;
   /** Lines with priority (Yield nodes, and failed signals). */
   majorLines: number[];
+  /** Parking lot served (Ctl.Lot), -1 otherwise. */
+  lot: number;
 }
 
 export interface Loop {
@@ -193,6 +200,9 @@ export interface RoadNet {
   loops: Loop[];
   signals: Signal[];
   marks: Mark[];
+  /** Parking lots (sites.ts) and billboard spots, filled in by clearance.ts. */
+  lots: Lot[];
+  boards: Board[];
   /** Short links from a road / track end that stops short of the road it joins (drawn as road / track pieces). */
   links: { x0: number; y0: number; x1: number; y1: number; half: number; paved: boolean; variant: number; joinHalf: number }[];
   props: Prop[];
@@ -204,7 +214,7 @@ export interface RoadNet {
 export interface NetInput {
   w: number;
   h: number;
-  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean }[];
+  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number }[];
   tracks: readonly { pts: V2[]; width: number; ring?: boolean }[];
   bridges: readonly { ends: readonly V2[] }[];
   /** Tile (tx, ty) can't take a turning place (water, rock, trees, structures, ore, base areas, off map). */
@@ -500,7 +510,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
   const { w: W, h: H } = inp;
   const lines: NetLine[] = [];
   const edgeP = (p: V2) => p.x < 1.6 || p.y < 1.6 || p.x > W - 1.6 || p.y > H - 1.6;
-  const add = (raw: V2[], lane: number, half: number, paved: boolean, painted: boolean, bridge: number, variant = 1) => {
+  const add = (raw: V2[], lane: number, half: number, paved: boolean, painted: boolean, bridge: number, variant = 1, lot = -1) => {
     if (raw.length < 2) return;
     const pts = unspike(raw);
     const cum = cumulative(pts);
@@ -525,6 +535,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       paved,
       painted,
       variant,
+      lot,
       bridge,
       portal: [edgeP(pts[0]), edgeP(pts[pts.length - 1])],
       stops: [],
@@ -541,8 +552,8 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     if (r.ring) continue; // turning-circle rings drawn as road pieces: not lanes
     const painted = !!r.painted;
     // city avenues: two lanes a side, cars keep to the right one; streets: one lane a side
-    const lane = painted ? (r.variant === 0 ? 0.9 : 0.6) : r.width * (r.variant === 0 ? 0.24 : 0.22);
-    add(r.pts, lane, painted ? 1.22 : r.width / 2, true, painted, -1, r.variant);
+    const lane = r.lot !== undefined ? 0.13 : painted ? (r.variant === 0 ? 0.9 : 0.6) : r.width * (r.variant === 0 ? 0.24 : 0.22);
+    add(r.pts, lane, painted ? 1.22 : r.width / 2, true, painted, -1, r.variant, r.lot ?? -1);
   }
   // the city's "tracks" are park footpaths: no cars there
   if (!inp.urban)
@@ -731,7 +742,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       else arms.push(mk(arc, 1), mk(arc, -1));
     }
     if (arms.length === 2 && arms[0].line === arms[1].line) continue; // a line passing a node that lost its partner
-    nodes.push({ x, y, arms, ctl: Ctl.Free, loop: -1, signal: -1, village: false, majorLines: [] });
+    nodes.push({ x, y, arms, ctl: Ctl.Free, loop: -1, signal: -1, village: false, majorLines: [], lot: -1 });
   }
 
   // ---- villages (structures close by)
@@ -867,6 +878,12 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       // dead end: a turning place (slid back along the road until it fits)
       const a = arms[0];
       const L = lines[a.line];
+      if (L.lot >= 0) {
+        // a parking lot's aisle
+        n.ctl = Ctl.Lot;
+        n.lot = L.lot;
+        return;
+      }
       const paved = L.paved;
       const R0 = paved ? (L.painted ? 1.42 : 1.55) : 0.95;
       // don't slide past another junction on this line
@@ -999,7 +1016,8 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       const raw = new Float32Array(L.pts.length);
       for (let i = 0; i < L.pts.length; i++) {
         const p = L.pts[i];
-        if (L.painted) raw[i] = 0.8;
+        if (L.lot >= 0) raw[i] = 0.35;
+        else if (L.painted) raw[i] = 0.8;
         else if (village(p.x, p.y, 4.5) >= 2) raw[i] = 0.72;
         else raw[i] = L.paved ? 1.12 : 1;
       }
@@ -1089,7 +1107,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
   for (const lp of loops) disc(lp.x, lp.y, lp.R, 1);
   for (const lp of loops) if (lp.ri > 0) disc(lp.x, lp.y, lp.ri, 0);
 
-  return { w: W, h: H, lines, nodes, loops, signals, marks, links, props, surface, res };
+  return { w: W, h: H, lines, nodes, loops, signals, marks, links, props, surface, res, lots: [], boards: [] };
 }
 
 /** Is (x, y) on the drivable surface (road, track, turning place, junction)? */

@@ -720,9 +720,9 @@ export function treadTex(): UnitTexSet {
   const c = new Float32Array(NU * NV * 3);
   const h = new Float32Array(NU * NV);
   const r = new Float32Array(NU * NV);
-  const steel: [number, number, number] = [0.29, 0.275, 0.255];
+  const steel: [number, number, number] = [0.21, 0.2, 0.188];
   const rubber: [number, number, number] = [0.12, 0.118, 0.115];
-  const dirt: [number, number, number] = [0.3, 0.25, 0.19];
+  const dirt: [number, number, number] = [0.19, 0.165, 0.13];
   for (let y = 0; y < NV; y++)
     for (let x = 0; x < NU; x++) {
       const u = (x + 0.5) / NU;

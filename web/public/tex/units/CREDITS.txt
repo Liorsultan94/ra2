@@ -1,0 +1,9 @@
+Iron Front - unit texture assets (public/tex/units/)
+
+All CC0 1.0 Universal (public domain): https://creativecommons.org/publicdomain/zero/1.0/
+No attribution required; given as a courtesy.
+
+grunge.webp (512x512, packed by tools/bake-units-grunge.sh) - vehicle weathering masks
+  R  run-off streaks   acg:Leaking001 (Opacity)               https://ambientcg.com/view?id=Leaking001
+  G  smudges / dust    acg:Smear008 (Displacement)            https://ambientcg.com/view?id=Smear008
+  B  specks / chips    acg:SurfaceImperfections013 (Opacity)  https://ambientcg.com/view?id=SurfaceImperfections013

@@ -61,6 +61,11 @@ export interface DriveCar {
   brake: number;
   /** Extra offset to the right while passing an oncoming car on a narrow track (0..1). */
   aside: number;
+  /** Parking: 0 no, 1 to the bay's turn-in point, 2 into the bay, 3 parked, 4 backing out; lot, bay, timer. */
+  pk: number;
+  lot: number;
+  bay: number;
+  pkT: number;
 }
 
 /** Other cars as the rules see them. */
@@ -113,6 +118,10 @@ export function newDriveCar(kind: number, len: number, line: number, arc: number
     panic: 0,
     brake: 0,
     aside: 0,
+    pk: 0,
+    lot: -1,
+    bay: -1,
+    pkT: 0,
   };
 }
 
@@ -124,6 +133,8 @@ export interface DriveResult {
 }
 
 const out: DriveResult = { blocked: false, curve: 0 };
+/** How far a car backs out of its bay (tiles, nose past the aisle edge). */
+const BACK = 0.75;
 
 export class Driver {
   /** Minimum turning radius (tiles). */
@@ -158,7 +169,7 @@ export class Driver {
   choose(c: DriveCar, node: NetNode, inArm: number): number {
     const arms = node.arms;
     const loop = node.ctl === Ctl.Loop;
-    if (arms.length === 1) return loop ? 0 : -1;
+    if (arms.length === 1) return loop || node.ctl === Ctl.Lot ? 0 : -1;
     const inA = arms[inArm];
     const inHead = inA.ang + Math.PI;
     let tot = 0;
@@ -254,6 +265,10 @@ export class Driver {
     c.commit = -1;
     c.waitT = 0;
     if (c.plan >= 0 && !this.usable(node.arms[c.plan].line)) c.plan = this.choose(c, node, st.arm);
+    if (node.ctl === Ctl.Lot) {
+      if (!this.startPark(c, node.lot)) this.startTurn(c);
+      return;
+    }
     if (node.ctl === Ctl.Loop) {
       const lp = net.loops[node.loop];
       const ex = c.plan >= 0 ? c.plan : st.arm;
@@ -281,6 +296,122 @@ export class Driver {
     if (c.ind) c.indT = 1.2;
   }
 
+  /** Pick a free bay ahead in the lot's aisle; false when the lot is full. */
+  startPark(c: DriveCar, li: number): boolean {
+    const lot = this.net.lots[li];
+    if (!lot) return false;
+    const s0 = (c.x - lot.x) * lot.ux + (c.y - lot.y) * lot.uy;
+    let n = 0;
+    for (let k = 0; k < lot.bays.length; k++) {
+      const b = lot.bays[k];
+      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.45) continue;
+      n++;
+    }
+    if (!n) return false;
+    let r = Math.floor(this.rand() * n);
+    for (let k = 0; k < lot.bays.length; k++) {
+      const b = lot.bays[k];
+      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.45) continue;
+      if (r-- > 0) continue;
+      lot.taken[k] = c.id;
+      c.pk = 1;
+      c.lot = li;
+      c.bay = k;
+      // indicate towards the bay's side of the aisle (right of the travel direction = (-uy, ux))
+      c.ind = Math.cos(b.yaw) * -lot.uy + Math.sin(b.yaw) * lot.ux > 0 ? 1 : -1;
+      c.indT = 0;
+      return true;
+    }
+    return false;
+  }
+
+  /** Park a car in a bay right away (cars already parked when the map starts). */
+  parkAt(c: DriveCar, li: number, k: number, time: number) {
+    const lot = this.net.lots[li];
+    const b = lot.bays[k];
+    lot.taken[k] = c.id;
+    c.pk = 3;
+    c.lot = li;
+    c.bay = k;
+    c.pkT = time;
+    c.x = b.x;
+    c.y = b.y;
+    c.yaw = b.yaw;
+    c.v = 0;
+    c.line = lot.line;
+    c.loop = -1;
+  }
+
+  /** Drive towards (tx, ty) (forwards, or backwards: the rear leads) with the turning radius limit. */
+  private toward(c: DriveCar, tx: number, ty: number, vt: number, dt: number) {
+    const rev = vt < 0;
+    const want = rev ? Math.atan2(c.y - ty, c.x - tx) : Math.atan2(ty - c.y, tx - c.x);
+    const dyaw = wrapPi(want - c.yaw);
+    const maxTurn = (Math.abs(c.v) / Driver.rho(c.kind) + 0.02) * dt;
+    c.yaw = wrapPi(c.yaw + Math.max(-maxTurn, Math.min(maxTurn, dyaw)));
+    const acc = 0.8 * dt;
+    c.v = vt > c.v ? Math.min(vt, c.v + acc) : Math.max(vt, c.v - acc * 2);
+    c.x += Math.cos(c.yaw) * c.v * dt;
+    c.y += Math.sin(c.yaw) * c.v * dt;
+  }
+
+  /** In a parking lot: turn into the bay, stay a while, back out and leave down the aisle. */
+  private parkStep(c: DriveCar, cars: readonly OtherCar[], dt: number) {
+    const lot = this.net.lots[c.lot];
+    const b = lot.bays[c.bay];
+    c.waiting = false;
+    if (c.pk === 1) {
+      // the turn-in point: on the aisle a little before the bay
+      const tx = b.ax - lot.ux * 0.3;
+      const ty = b.ay - lot.uy * 0.3;
+      this.toward(c, tx, ty, 0.32, dt);
+      if (Math.hypot(tx - c.x, ty - c.y) < 0.2 || (c.x - tx) * lot.ux + (c.y - ty) * lot.uy > 0) c.pk = 2;
+    } else if (c.pk === 2) {
+      const tx = b.x + Math.cos(b.yaw) * 0.06;
+      const ty = b.y + Math.sin(b.yaw) * 0.06;
+      const d = Math.hypot(tx - c.x, ty - c.y);
+      this.toward(c, tx, ty, Math.min(0.25, d * 1.2 + 0.03), dt);
+      if (d < 0.1 || (c.x - b.x) * Math.cos(b.yaw) + (c.y - b.y) * Math.sin(b.yaw) > 0.05) {
+        c.pk = 3;
+        c.v = 0;
+        c.ind = 0;
+        c.pkT = 12 + this.rand() * 50;
+      }
+    } else if (c.pk === 3) {
+      c.v = 0;
+      c.yaw += wrapPi(b.yaw - c.yaw) * Math.min(1, dt * 2);
+      c.pkT -= dt;
+      if (c.pkT <= 0) {
+        // back out once the aisle behind is clear
+        let busy = false;
+        for (const o of cars) if (o !== (c as unknown) && o.driving && Math.hypot(o.x - b.ax, o.y - b.ay) < 0.8) busy = true;
+        if (!busy) {
+          c.pk = 4;
+          c.ind = 0;
+        } else c.pkT = 1;
+      }
+    } else {
+      // back out so the nose ends up pointing to the exit (the aisle's entry end)
+      const tx = b.ax + lot.ux * 0.32;
+      const ty = b.ay + lot.uy * 0.32;
+      this.toward(c, tx, ty, -0.16, dt);
+      if (Math.hypot(tx - c.x, ty - c.y) < 0.16 || (b.x - c.x) * Math.cos(b.yaw) + (b.y - c.y) * Math.sin(b.yaw) > BACK) {
+        // drive off down the aisle and out along the access lane
+        lot.taken[c.bay] = 0;
+        const L = this.net.lines[lot.line];
+        c.pk = 0;
+        c.v = 0;
+        c.line = lot.line;
+        c.dir = -1;
+        c.arc = Math.max(0, Math.min(L.len, (L.len - 0.3) - Math.max(0, (lot.x + lot.ux * (lot.L / 2 - 0.25) - c.x) * lot.ux + (lot.y + lot.uy * (lot.L / 2 - 0.25) - c.y) * lot.uy)));
+        c.planNode = -1;
+        c.passed = -1;
+        c.go = 0;
+      }
+    }
+    c.brake = c.pk === 3 ? 0 : Math.abs(c.v) < 0.03 ? 1 : 0;
+  }
+
   /** Start a 3-point turn (ends driving the other way along the same line). */
   startTurn(c: DriveCar) {
     if (c.kt || c.loop >= 0) return;
@@ -302,6 +433,10 @@ export class Driver {
     out.curve = 0;
     if (c.kt) {
       this.turnStep(c, dt);
+      return out;
+    }
+    if (c.pk) {
+      this.parkStep(c, cars, dt);
       return out;
     }
     const net = this.net;
@@ -367,7 +502,7 @@ export class Driver {
           if (wait) holdD = Math.max(0, hd);
         }
         // (dead end without a turning place: start the 3-point turn with road left ahead)
-        const hop = node.ctl === Ctl.Turn ? 1.1 : node.ctl === Ctl.Loop ? 0.08 : st.arc <= 0.01 || st.arc >= L.len - 0.01 ? 0.3 : 0.1;
+        const hop = node.ctl === Ctl.Lot ? net.lots[node.lot].L - 0.55 : node.ctl === Ctl.Turn ? 1.1 : node.ctl === Ctl.Loop ? 0.08 : st.arc <= 0.01 || st.arc >= L.len - 0.01 ? 0.3 : 0.1;
         if (!wait && dist <= hop) {
           this.transit(c, node, st);
           if (c.kt) {

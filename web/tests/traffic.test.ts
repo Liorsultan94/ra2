@@ -195,6 +195,11 @@ describe('lane graph', () => {
       expect(dead.length).toBeGreaterThan(0);
       for (const nd of dead) {
         const L = n.lines[nd.arms[0].line];
+        // a parking lot's aisle: the cars park (and leave the way they came)
+        if (nd.ctl === Ctl.Lot) {
+          expect(n.lots[nd.lot].line).toBe(nd.arms[0].line);
+          continue;
+        }
         if (nd.ctl === Ctl.Turn) {
           // no room for a circle (squeezed between quay walls): a wide road, turned on with a 3-point turn
           expect(L.half).toBeGreaterThanOrEqual(1);
@@ -268,10 +273,12 @@ describe('driving by the rules (headless)', () => {
       const off: string[] = [];
       let samples = 0;
       const still = new Map<number, number>();
+      const parked = new Set<number>();
       let longest = 0;
       const list = simulate(n, 24, 200, 33 + id.length, (c, t) => {
         samples++;
-        const s = c.v < 0.02 ? (still.get(c.id) ?? 0) + 0.05 : 0;
+        if (c.pk >= 2) parked.add(c.id);
+        const s = c.v < 0.02 && c.pk !== 3 ? (still.get(c.id) ?? 0) + 0.05 : 0;
         still.set(c.id, s);
         longest = Math.max(longest, s);
         // the car body centre stays on the drivable surface (a hair of tolerance for corner cutting)
@@ -282,11 +289,13 @@ describe('driving by the rules (headless)', () => {
       expect(samples).toBeGreaterThan(1000);
       expect(off).toEqual([]);
       // traffic flows: most cars are moving at the end, nobody is stuck for good
-      const moving = list.filter((c) => c.v > 0.05 || c.waiting).length;
+      const moving = list.filter((c) => Math.abs(c.v) > 0.05 || c.waiting || c.pk === 3).length;
       expect(moving).toBeGreaterThan(list.length * 0.5);
       expect(list.reduce((s, c) => s + c.loops, 0)).toBeGreaterThan(0);
-      // no gridlock: nobody stands still for half a minute
+      // no gridlock: nobody stands still for half a minute (parked cars aside)
       expect(longest).toBeLessThan(30);
+      // some cars turn into the parking lots and park
+      if (n.lots.length) expect(parked.size).toBeGreaterThan(0);
     });
   }
 

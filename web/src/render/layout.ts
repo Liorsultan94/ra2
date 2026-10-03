@@ -25,6 +25,8 @@ export interface Road {
   painted?: boolean;
   /** A piece fitted to the traffic network (link, turning loop): drawn, but no lane of its own. */
   ring?: boolean;
+  /** Access lane of parking lot #lot (ambient/sites.ts). */
+  lot?: number;
 }
 
 export interface Track {

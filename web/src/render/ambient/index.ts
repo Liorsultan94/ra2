@@ -78,7 +78,7 @@ export class AmbientLife {
     // dynamic weather starts clear; foulness is then followed per frame from the live rain/dust level
     this.dynamicWx = host.atmos.cfg.weather === 'dynamic';
     const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
-    this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone);
+    this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone, world.players.map((p) => p.faction));
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';

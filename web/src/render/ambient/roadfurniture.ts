@@ -5,6 +5,7 @@ import { surfaceHeight } from '../ground';
 import type { GeoBuilder } from '../geo';
 import type { Road } from '../layout';
 import { netForRoads } from './clearance';
+import { Landmarks, centrepiece } from './landmarks';
 import { Light, MarkKind, PropKind, headLight, pointAt, wrapPi, type Mark, type RoadNet } from './roadnet';
 import { groundAt, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
@@ -80,22 +81,46 @@ export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Ro
         };
         mouth = Math.max(mouth, 1 - sm(mo.h * 0.8, mo.h + 0.3, d));
         // curved corners: the edge swells out between the road edge and the ring
-        flare = Math.max(flare, 0.06 + 0.4 * sm(0, mo.h + 0.05, d) * (1 - sm(mo.h + 0.15, mo.h + 0.75, d)));
+        flare = Math.max(flare, 0.03 + 0.13 * sm(mo.h * 0.5, mo.h + 0.05, d) * (1 - sm(mo.h + 0.1, mo.h + 0.5, d)));
       }
       const Ro = lp.R + flare;
-      const uOut = 0.02 + 0.28 * mouth;
+      // across: the shoulder in a band as wide as a road's, then asphalt (no shoulder where an arm joins)
+      const uOut = 0.02 + 0.3 * mouth;
       const row: number[] = [];
       for (let k = 0; k <= K; k++) {
-        const t = k / K; // outer -> inner (the ribbon builder's winding)
-        const r = Ro + (rIn - Ro) * t;
+        // outer -> inner (the ribbon builder's winding)
+        const r = k === 0 ? Ro : k === 1 ? Ro - 0.12 : k === 2 ? Ro - 0.3 : Ro - 0.3 + ((rIn - Ro + 0.3) * (k - 2)) / (K - 2);
+        const uu = k === 0 ? uOut : k === 1 ? Math.max(uOut, 0.16) : k === 2 ? Math.max(uOut, 0.32) : 0.32 + (0.44 - 0.32) * ((k - 2) / (K - 2));
         const x = lp.x + Math.cos(th) * r;
         const z = lp.y + Math.sin(th) * r;
         _rv.set(x, surfaceHeight(m, x, z) + 0.038, z);
-        row.push(rb.vert(_rv, _rn, u0 + 0.49 * (uOut + (0.4 - uOut) * t), (i / N) * reps, 1));
+        row.push(rb.vert(_rv, _rn, u0 + 0.49 * uu, (i / N) * reps, 1));
       }
       rows.push(row);
     }
     for (let i = 0; i < N; i++) for (let k = 0; k < K; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
+  }
+  // parking lots: an asphalt apron with the road's shoulder round its edge
+  for (const lot of net.lots) {
+    const wx = -lot.uy;
+    const wy = lot.ux;
+    const ni = Math.ceil(lot.L / 0.25);
+    const nk = Math.ceil(lot.D / 0.25);
+    const rows: number[][] = [];
+    for (let i = 0; i <= ni; i++) {
+      const sx = -lot.L / 2 - 0.05 + ((lot.L + 0.1) * i) / ni;
+      const row: number[] = [];
+      for (let k = 0; k <= nk; k++) {
+        const t = -lot.D / 2 - 0.05 + ((lot.D + 0.1) * k) / nk;
+        const edge = Math.min(lot.L / 2 + 0.05 - Math.abs(sx), lot.D / 2 + 0.05 - Math.abs(t));
+        const x = lot.x + lot.ux * sx + wx * t;
+        const z = lot.y + lot.uy * sx + wy * t;
+        _rv.set(x, surfaceHeight(m, x, z) + 0.034, z);
+        row.push(rb.vert(_rv, _rn, 0.505 + 0.49 * Math.min(0.34, 0.02 + edge * 1.4), (sx + lot.L) / 6, 1));
+      }
+      rows.push(row);
+    }
+    for (let i = 0; i < ni; i++) for (let k = 0; k < nk; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
   }
 }
 
@@ -262,12 +287,11 @@ function paintAtlas(pal: Pal): HTMLCanvasElement | null {
           const k = (v * 9) % 1;
           if (k > 0.55 || u < 0.03 || u > 0.97) a = 0;
         } else {
-          // splitter island: a kerbed lens pointing away from the circle (u = 0 at the circle)
-          const w = Math.sin(Math.PI * Math.min(1, u * 1.05)) * (0.55 + 0.45 * (1 - u));
+          // splitter: a painted ghost island (white outline, diagonal hatching) pointing away from the circle
+          const w = Math.sin(Math.PI * Math.min(1, u * 1.04)) * (0.6 + 0.4 * (1 - u));
           const d = Math.abs(v - 0.5) * 2;
-          if (d > w) a = 0;
-          else if (d > w - 0.22 || u < 0.06 || u > 0.92) c = shade((Math.floor(u * 9) % 2 ? [222, 220, 212] : pal.urban ? [70, 72, 76] : [196, 60, 50]), 0.92);
-          else c = shade(mix(pal.island, pal.islandAlt, vnoise(x / 6, y / 4, 29)), 0.9);
+          const hatch = ((u * 7 + v * 1.2) % 1) < 0.28;
+          if (d > w || (d < w - 0.2 && !hatch)) a = 0;
         }
         put(x, py, c, a);
       }
@@ -467,6 +491,7 @@ export class RoadFurniture {
   private refreshT = 0;
   private lastView = [0, 0, 0, 0];
   private hidden = false;
+  private landmarks: Landmarks;
 
   constructor(
     private map: GameMap,
@@ -475,9 +500,12 @@ export class RoadFurniture {
     private probe: FogProbe,
     private lights: LightSprites,
     quality: Quality,
+    nations: string[] = [],
   ) {
     this.group.name = 'road-furniture';
     this.buildDecals(fog);
+    this.landmarks = new Landmarks(map, net, fog, probe, lights, quality, nations);
+    this.group.add(this.landmarks.group);
     if (quality === 'low') return; // the rules still apply, the hardware isn't drawn
     const mat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.15 }));
     const shadow = quality === 'high';
@@ -497,8 +525,9 @@ export class RoadFurniture {
         (p.kind === PropKind.GiveWay ? give : stop).push({ x: p.x, y: p.y, yaw: p.yaw, s: 1, h });
       } else if (p.kind === PropKind.Island) {
         kerbs.push({ x: p.x, y: p.y, yaw: 0, s: p.size, h: surfaceHeight(m, p.x, p.y) + LIFT - 0.02 });
-        // a few shrubs on the island (deterministic per island)
-        const n = map.biome === 'desert' ? 3 : 5;
+        // a few shrubs on the island (deterministic per island), unless it has a centrepiece
+        const lp = net.loops[p.ref];
+        const n = centrepiece(map.biome, p.ref, lp.ri, lp.dead) && lp.ri >= 0.4 ? 0 : map.biome === 'desert' ? 3 : 5;
         for (let k = 0; k < n; k++) {
           const a = (k / n) * Math.PI * 2 + hash(k, p.ref, 31) * 0.8;
           const r = k === 0 ? 0 : p.size * (0.45 + hash(k, p.ref, 32) * 0.2);
@@ -602,6 +631,35 @@ export class RoadFurniture {
       // (turning circles / gravel loops / links: road pieces and ring tracks, see clearance.ts)
     }
     const net = this.net;
+    // parking lots: bay lines and arrows
+    for (const lot of net.lots) {
+      const ang = Math.atan2(lot.ny, lot.nx);
+      const n = Math.floor((lot.L - 0.75) / 0.34);
+      for (let k = 0; k <= n; k++) {
+        const sx = -lot.L / 2 + 0.6 + k * 0.34;
+        for (const row of [-1, 1]) {
+          const t = row * (0.32 + 0.31);
+          quad({ kind: MarkKind.Bar, x: lot.x + lot.ux * sx + lot.nx * t, y: lot.y + lot.uy * sx + lot.ny * t, ang, len: 0.6, wid: 0.028 }, UV.bar, false);
+        }
+      }
+      // arrows on the aisle: in on one side, out on the other
+      for (const [side, dir] of [
+        [0.14, 1],
+        [-0.14, -1],
+      ]) {
+        const sx = -lot.L / 2 + 0.75;
+        const cx = lot.x + lot.ux * sx + lot.nx * side;
+        const cy = lot.y + lot.uy * sx + lot.ny * side;
+        const ua = Math.atan2(lot.uy * dir, lot.ux * dir);
+        quad({ kind: MarkKind.Bar, x: cx, y: cy, ang: ua, len: 0.3, wid: 0.03 }, UV.bar, false);
+        for (const sg of [-1, 1]) {
+          const ha = ua + sg * 2.5;
+          const hx = cx + Math.cos(ua) * 0.15 + Math.cos(ha) * 0.05;
+          const hy = cy + Math.sin(ua) * 0.15 + Math.sin(ha) * 0.05;
+          quad({ kind: MarkKind.Bar, x: hx, y: hy, ang: ha, len: 0.11, wid: 0.028 }, UV.bar, false);
+        }
+      }
+    }
     for (const lp of net.loops) {
       if (!lp.paved) continue;
       const nd = net.nodes[lp.node];
@@ -613,7 +671,7 @@ export class RoadFurniture {
         const L = net.lines[a.line];
         if (L.painted || L.lane < 0.2) continue;
         const p = pointAt(L, a.edge + a.dir * 0.5);
-        quad({ kind: MarkKind.Disc, x: p.x, y: p.y, ang: Math.atan2(p.ty * a.dir, p.tx * a.dir), len: 0.95, wid: Math.min(0.2, (L.lane - 0.11) * 2) }, UV.splitter, false);
+        quad({ kind: MarkKind.Disc, x: p.x, y: p.y, ang: Math.atan2(p.ty * a.dir, p.tx * a.dir), len: 0.9, wid: Math.min(0.2, (L.lane - 0.11) * 2) }, UV.splitter, false);
       }
     }
     const g = new THREE.BufferGeometry();
@@ -689,6 +747,7 @@ export class RoadFurniture {
   }
 
   draw(f: AmbientFrame, time: number) {
+    this.landmarks.draw(f, time);
     if (!this.banks.length && !this.lamps) return;
     const far = f.vx1 - f.vx0 > FAR;
     if (far) {

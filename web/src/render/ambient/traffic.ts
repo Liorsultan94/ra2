@@ -99,6 +99,8 @@ export class Traffic {
     private lights: LightSprites,
     quality: Quality,
     phone: boolean,
+    /** The players' nations (the local player first): flags and billboard languages. */
+    nations: string[] = [],
   ) {
     this.net = roadNetFor(map, layout, bridges);
     this.driver = new Driver(this.net, (li) => this.usableLine(li));
@@ -106,7 +108,7 @@ export class Traffic {
       if (L.bridge >= 0) return;
       for (let e = 0; e < 2; e++) if (L.portal[e]) this.portals.push({ line: li, end: e });
     });
-    this.furniture = new RoadFurniture(map, this.net, fog, probe, lights, quality);
+    this.furniture = new RoadFurniture(map, this.net, fog, probe, lights, quality, nations);
     this.group.add(this.furniture.group);
     const base = quality === 'high' ? 13 : quality === 'medium' ? 10 : 7;
     // the city's grid carries more traffic
@@ -116,11 +118,22 @@ export class Traffic {
       const m = carModel(k);
       this.models.push(m);
       const mat = ambientMaterial(fog, 'car', m.rig, k === 3 ? 0.7 : 0.45, k === 3 ? 0.1 : 0.35);
-      const inst = new AnimInstances(m.geo, mat, 32, `ambient-cars-${k}`, { shadow: quality === 'high', heat: true });
+      const inst = new AnimInstances(m.geo, mat, 80, `ambient-cars-${k}`, { shadow: quality === 'high', heat: true });
       this.inst.push(inst);
       this.group.add(inst.mesh);
     }
     for (let i = 0; i < this.target; i++) this.spawn(true);
+    // the parking lots start part full (they come and go later)
+    this.net.lots.forEach((lot, li) => {
+      if (lot.line < 0) return;
+      lot.bays.forEach((_, k) => {
+        if (Math.random() > (lot.city ? 0.6 : 0.45)) return;
+        const r = Math.random();
+        const c = this.makeCar(r < 0.6 ? 0 : r < 0.8 ? 1 : 2, lot.line, this.net.lines[lot.line].len, 1);
+        this.driver.parkAt(c, li, k, 10 + Math.random() * 220);
+        this.cars.push(c);
+      });
+    });
   }
 
   // ------------------------------------------------------------------ network
@@ -198,8 +211,13 @@ export class Traffic {
       if (bad) line = -1;
     }
     if (line < 0) return;
-    const Ln = L[line];
-    const kind = this.pickKind(Ln.paved);
+    const c = this.makeCar(this.pickKind(L[line].paved), line, arc, dir);
+    c.v = initial ? c.cruise * 0.8 : c.cruise * 0.6;
+    this.cars.push(c);
+  }
+
+  private makeCar(kind: number, line: number, arc: number, dir: number): Car {
+    const Ln = this.net.lines[line];
     const pal = kind === 1 ? VAN_PAINTS : kind === 3 ? TRACTOR_PAINTS : PAINTS;
     const pt = pointAt(Ln, arc);
     const yaw = Math.atan2(pt.ty * dir, pt.tx * dir);
@@ -208,8 +226,7 @@ export class Traffic {
     const cruise = CRUISE[kind] * (Ln.paved ? 1 : 0.62) * (0.85 + Math.random() * 0.3);
     const model = this.models[kind];
     const d = newDriveCar(kind, model.len, line, arc, dir, x, y, yaw, cruise);
-    d.v = initial ? cruise * 0.8 : cruise * 0.6;
-    const c: Car = Object.assign(d, {
+    return Object.assign(d, {
       model,
       s: S.Drive,
       paint: pal[(Math.random() * pal.length) | 0].clone().multiplyScalar(0.9 + Math.random() * 0.15),
@@ -232,7 +249,6 @@ export class Traffic {
       cd: 0,
       driving: true,
     });
-    this.cars.push(c);
   }
 
   // ------------------------------------------------------------------ reactions
@@ -251,7 +267,7 @@ export class Traffic {
       c.calm = 0;
       if (c.s === S.Abandoned) continue;
       c.panic = Math.max(c.panic, 7 + Math.random() * 5);
-      if (c.s !== S.Drive) continue;
+      if (c.s !== S.Drive || c.pk) continue; // (parked / parking: they sit it out)
       const hx = Math.cos(c.yaw);
       const hy = Math.sin(c.yaw);
       const ahead = (-dx * hx - dy * hy) / (dist || 1);
@@ -267,7 +283,7 @@ export class Traffic {
    * otherwise a 3-point turn on the road (roundabout cars just keep circulating).
    */
   private turnRound(c: Car) {
-    if (c.cd > 0) return;
+    if (c.cd > 0 || c.pk) return;
     if (c.panic > 0) {
       c.kt = 0;
       if (c.loop >= 0) return;
@@ -344,7 +360,7 @@ export class Traffic {
     let alive = 0;
     for (const c of this.cars) {
       c.driving = c.s === S.Drive;
-      if (c.s === S.Drive || c.s === S.Rejoin || c.s === S.Offroad) alive++;
+      if ((c.s === S.Drive && c.pk !== 3) || c.s === S.Rejoin || c.s === S.Offroad) alive++;
     }
     this.spawnT -= dt;
     if (alive < this.target && this.spawnT <= 0) {
@@ -352,7 +368,8 @@ export class Traffic {
       this.spawn(false, f.units, f.nUnits, f);
     }
     // too many wrecks / abandoned cars: clear the oldest one out of sight
-    let parked = this.cars.length - alive;
+    let parked = 0;
+    for (const c of this.cars) if (c.s === S.Wreck || c.s === S.Abandoned || c.s === S.Sinking) parked++;
     for (let i = 0; i < this.cars.length && parked > 7; i++) {
       const c = this.cars[i];
       if ((c.s === S.Wreck && c.fire <= 0) || c.s === S.Abandoned) {

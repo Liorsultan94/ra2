@@ -6,7 +6,7 @@ import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
 import { armourMod, armourModPlain, treadTex, unitLook, vehCamo } from './unittex';
-import { bakeVehicle, type BakeResult } from './vehbake';
+import { PAINT_LOUVRE, PAINT_MESH, bakeVehicle, type BakeResult } from './vehbake';
 import { lodGeos, registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
@@ -375,6 +375,7 @@ const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial,
 /** Template keys whose armour gets the per-vehicle detail bake (vehbake.ts). */
 const BAKE_KEYS = new Set(['mbt', 'apc']);
 const VEH_BAKE: WearCfg = { dirt: true, loose: true, scale: 9, bake: true };
+const WHEEL_BAKE: WearCfg = { dirt: true, loose: false, scale: 9, bake: true, run: 'inst' };
 /** Material of a baked bucket (camo / painted detail / metal) bound to the template's atlas. */
 function bakedMat(bk: string, f: string, res: BakeResult, fog: FogOfWar | null): THREE.Material {
   const id = res.tex.uuid;
@@ -385,10 +386,11 @@ function bakedMat(bk: string, f: string, res: BakeResult, fog: FogOfWar | null):
       return new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1, metalness: 0.15 });
     }, VEH_BAKE);
   if (bk === 'M') return wmat(`bk|m|${id}`, fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, normalMap: res.tex, normalScale: ns, roughness: 0.4, metalness: 0.7 }), VEH_BAKE);
-  return wmat(`bk|d|${id}`, fog, () => {
+  const wheel = bk === 'W';
+  return wmat(`bk|${wheel ? 'w' : 'd'}|${id}`, fog, () => {
     const t = armourModPlain();
     return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1.02, metalness: 0.12 });
-  }, VEH_BAKE);
+  }, wheel ? WHEEL_BAKE : VEH_BAKE);
 }
 
 function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse = false) {
@@ -465,8 +467,12 @@ class Acc {
     // LOD level: small parts drop out with distance (team colour and lamps never do)
     g.computeBoundingSphere();
     const rad = g.boundingSphere!.radius;
-    const auto = rad < 0.0055 ? 2 : rad < 0.011 ? 1 : 0;
+    // battle zoom (LOD1) is ~40 CSS px / unit on phones (x2.6 DPR), ~87 on desktop: parts under ~0.028 across
+    // are ~2.5 px there -> hero only; far zoom (LOD2, < ~25 px / unit): parts under ~0.056 across go too
+    const auto = rad < 0.014 ? 2 : rad < 0.028 ? 1 : 0;
     g.userData.lv = (key !== 'D' && key !== 'M' && key !== 's' + CAMO) || paint === this.teamHex ? 0 : this.lv ?? auto;
+    const dbg = (globalThis as { __LVDBG?: unknown[] }).__LVDBG;
+    if (dbg) dbg.push({ lv: g.userData.lv, n: g.attributes.position.count / 3, st: (new Error().stack ?? '').split('\n').slice(2, 6).map((l) => l.trim().split(' ')[1]).join('<') });
     if (key === 'D' || key === 'M') {
       const c = paint === GLASS ? K.glassC : paint >= MT ? paint - MT : paint;
       _col.setHex(c);
@@ -747,7 +753,7 @@ class Bld {
       const pos = g.attributes.position;
       let R = 1e-6;
       for (let i = 0; i < pos.count; i++) R = Math.max(R, Math.hypot(pos.getX(i), pos.getY(i)));
-      for (let i = 0; i < pos.count; i++) aw.setX(i, 0.55 + 0.45 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R));
+      for (let i = 0; i < pos.count; i++) aw.setX(i, 0.04 + 0.24 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R));
     }
     const im = new THREE.InstancedMesh(geo, this.material('D'), entries.length);
     im.userData.tag = tag;
@@ -957,30 +963,30 @@ class Bld {
     const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');
     F.g.scale.setScalar(CREW_K); // RTS exaggeration: readable at play zoom
     const figure = (Q: Part, glass: boolean) => {
-      Q.lv = 1; // the whole figure stays up to LOD1 and leaves together
+      Q.lv = 2; // the figure is hero detail (a few px at battle zoom); the hatch lid still opens at every LOD
       // torso in the hatch well, shoulders, collar of the vest
-      Q.add(gCylY(0.021, 0.019, 0.07, 9), uni, TR(0, -0.022, 0));
+      Q.add(gCylY(0.021, 0.019, 0.07, 7, true), uni, TR(0, -0.022, 0));
       Q.cbox(0.032, 0.02, 0.056, 0.007, 0, 0.018, 0, uni);
       Q.cbox(0.036, 0.012, 0.05, 0.004, 0.002, 0.008, 0, shade(uni, 0.72));
-      Q.cy(0.007, 0.008, 0.012, 0.001, 0.026, 0, skin, 7);
+      Q.add(gCylY(0.007, 0.008, 0.012, 6, true), skin, TR(0.001, 0.032, 0));
       // head + tanker helmet with ear cups, boom mic
-      Q.sph(0.0125, 0.002, 0.048, 0, skin, 9, 7);
-      Q.sph(0.0142, 0.0, 0.052, 0, helm, 10, 6, 0.9, true);
-      Q.add(gCylY(0.0142, 0.0142, 0.006, 10, true), helm, TR(0, 0.05, 0));
-      for (const s of [-1, 1]) Q.add(gCylZ(0.006, 0.006, 0.005, 8), helm, TR(0.0, 0.046, s * 0.0135));
+      Q.sph(0.0125, 0.002, 0.048, 0, skin, 7, 5);
+      Q.sph(0.0142, 0.0, 0.052, 0, helm, 8, 4, 0.9, true);
+      Q.add(gCylY(0.0142, 0.0142, 0.006, 8, true), helm, TR(0, 0.05, 0));
+      for (const s of [-1, 1]) Q.add(gCylZ(0.006, 0.006, 0.005, 6), helm, TR(0.0, 0.046, s * 0.0135));
       Q.box(0.012, 0.0018, 0.0018, 0.012, 0.04, 0.012, K.dark, 0, 0.5, 0.2);
       if (!glass) {
         // forearms resting on the hatch rim
         for (const s of [-1, 1]) {
-          Q.strut([0, 0.022, s * 0.026], [0.012, 0.004, s * 0.03], 0.0055, uni, 6);
-          Q.strut([0.012, 0.004, s * 0.03], [0.034, 0.004, s * 0.014], 0.005, uni, 6);
-          Q.sph(0.005, 0.036, 0.004, s * 0.012, K.olive, 6, 4);
+          Q.strut([0, 0.022, s * 0.026], [0.012, 0.004, s * 0.03], 0.0055, uni, 5);
+          Q.strut([0.012, 0.004, s * 0.03], [0.034, 0.004, s * 0.014], 0.005, uni, 5);
+          Q.sph(0.005, 0.036, 0.004, s * 0.012, K.olive, 5, 3);
         }
       } else {
         // binoculars up at the eyes, elbows out
         for (const s of [-1, 1]) {
-          Q.strut([0, 0.022, s * 0.026], [0.016, 0.028, s * 0.03], 0.0055, uni, 6);
-          Q.strut([0.016, 0.028, s * 0.03], [0.022, 0.046, s * 0.008], 0.005, uni, 6);
+          Q.strut([0, 0.022, s * 0.026], [0.016, 0.028, s * 0.03], 0.0055, uni, 5);
+          Q.strut([0.016, 0.028, s * 0.03], [0.022, 0.046, s * 0.008], 0.005, uni, 5);
           Q.add(gCylX(0.0045, 0.0045, 0.014, 7), K.black, TR(0.022, 0.049, s * 0.0055));
         }
         Q.box(0.006, 0.006, 0.006, 0.019, 0.049, 0, K.dark);
@@ -1120,8 +1126,8 @@ class Bld {
         this.root.traverse((o) => {
           const m = o as THREE.Mesh;
           if (!m.isMesh || !m.geometry.attributes.uv1) return;
-          const bk = (m as THREE.InstancedMesh).isInstancedMesh ? 'D' : (m.userData.bk as string);
-          if (bk === 's' + CAMO || bk === 'D' || bk === 'M') m.material = bakedMat(bk, this.f, res, this.fog);
+          const bk = (m as THREE.InstancedMesh).isInstancedMesh ? 'W' : (m.userData.bk as string);
+          if (bk === 's' + CAMO || bk === 'D' || bk === 'M' || bk === 'W') m.material = bakedMat(bk, this.f, res, this.fog);
         });
       }
     }
@@ -1580,7 +1586,7 @@ function treadBase(fog: FogOfWar | null) {
   });
 }
 
-const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9 };
+const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9, run: 'attr' };
 function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
   const m = new THREE.MeshStandardMaterial({
     map: base.map ? base.map.clone() : null,
@@ -1624,47 +1630,41 @@ function neutralUv1(g: THREE.BufferGeometry) {
  * LOD1: 10-sided tyre + flat disc + hub; LOD2: 8-sided drum. Registered as explicit geometry LODs.
  */
 function roadWheelGeo(b: Bld, r: number, w: number, style: WheelStyle): THREE.BufferGeometry {
-  const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.8) : shade(b.base, 0.9);
+  const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.68) : shade(b.base, 0.74);
   const rub = K.rubber;
   const hub = 0x3e4144;
   const zf = w / 2;
-  const S = 14;
+  const S = 12;
   const a = new Acc();
-  // tyre: tread band + shoulder + outer side wall (crease points duplicated)
-  a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.08], [r, zf - w * 0.1], [r, zf - w * 0.1], [r * 0.955, zf], [r * 0.955, zf], [r * 0.86, zf + 0.0008]], S), rub);
-  a.add(gRing(r * 0.3, r * 0.97, S), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  // tyre: tread band with a rounded shoulder into the outer side wall
+  a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.1], [r, zf - w * 0.12], [r * 0.95, zf], [r * 0.86, zf + 0.0008]], S), rub);
+  a.add(gDisc(r * 0.97, S), rub, TR(0, 0, -zf, 0, Math.PI, 0));
   // steel rim lip + dished disc + hub boss
-  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.84, zf + 0.0028], [r * 0.8, zf + 0.0028], [r * 0.8, zf + 0.0028], [r * 0.72, zf - 0.002], [r * 0.4, zf - 0.005], [r * 0.4, zf - 0.005], [r * 0.37, zf - 0.005]], S), disc);
-  a.add(gLatheZ([[r * 0.37, zf - 0.005], [r * 0.34, zf + 0.004], [r * 0.34, zf + 0.004], [r * 0.25, zf + 0.0075], [r * 0.25, zf + 0.0075], [r * 0.2, zf + 0.0095], [0.0001, zf + 0.0095]], 10), hub);
+  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.82, zf + 0.0028], [r * 0.74, zf - 0.0015], [r * 0.38, zf - 0.005]], S), disc);
+  a.add(gLatheZ([[r * 0.38, zf - 0.005], [r * 0.33, zf + 0.0045], [r * 0.22, zf + 0.008], [0.0001, zf + 0.0095]], 8), hub);
   // disc pattern
   if (style === 'sov') {
     for (let i = 0; i < 8; i++) {
       const t = (i / 8) * Math.PI * 2;
-      a.add(new THREE.BoxGeometry(r * 0.38, r * 0.07, 0.004), shade(disc, 0.82), TR(Math.cos(t) * r * 0.57, Math.sin(t) * r * 0.57, zf - 0.002, 0, 0, t));
+      a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.07), shade(disc, 0.6), TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0018, 0, 0, t));
     }
   } else {
     const holes = style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : style === 't80' ? 8 : 6;
     const hr = style === 't80' ? 0.075 : style === 'merk' ? 0.12 : 0.105;
     for (let i = 0; i < holes; i++) {
       const t = (i / holes) * Math.PI * 2 + 0.3;
-      a.add(gDisc(r * hr, 7), K.black, TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0028));
-      a.add(new THREE.TorusGeometry(r * hr, r * 0.018, 3, 7), shade(disc, 0.7), TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0028));
+      a.add(gDisc(r * hr, 6), K.black, TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0026));
     }
-  }
-  // hub nuts
-  for (let i = 0; i < 6; i++) {
-    const t = (i / 6) * Math.PI * 2;
-    a.add(gCylZ(r * 0.035, r * 0.035, 0.004, 6), mt(0x55585a), TR(Math.cos(t) * r * 0.29, Math.sin(t) * r * 0.29, zf + 0.007));
   }
   const g0 = a.merged('D')!;
   delete g0.userData.lodN;
   // LOD1
   const a1 = new Acc();
   a1.add(gCylZ(r, r, w, 10, true), rub);
-  a1.add(gRing(r * 0.8, r, 10), rub, TR(0, 0, zf));
-  a1.add(gDisc(r * 0.8, 10), disc, TR(0, 0, zf - 0.002));
-  a1.add(gRing(0.0001, r, 10), rub, TR(0, 0, -zf, 0, Math.PI, 0));
-  a1.add(gCylZ(r * 0.3, r * 0.36, 0.012, 6), hub, TR(0, 0, zf + 0.002));
+  a1.add(gDisc(r, 10), rub, TR(0, 0, zf));
+  a1.add(gDisc(r * 0.8, 8), disc, TR(0, 0, zf + 0.0012));
+  a1.add(gDisc(r, 8), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  a1.add(gCylZ(r * 0.3, r * 0.36, 0.012, 6, true), hub, TR(0, 0, zf + 0.002));
   const g1 = neutralUv1(a1.merged('D')!);
   // LOD2
   const a2 = new Acc();
@@ -1785,7 +1785,11 @@ function running(b: Bld, t: TrackSpec) {
     const zc = side * t.gauge * b.zk;
     const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
     const wa = new Float32Array(geo.attributes.position.count * 4);
-    for (let i = 0; i < wa.length; i += 4) wa[i] = 0.8;
+    const py = geo.attributes.position;
+    for (let i = 0; i < py.count; i++) {
+      wa[i * 4] = 0.22;
+      wa[i * 4 + 2] = py.getY(i); // root-space height: shade of the fenders (wear.ts run)
+    }
     geo.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
     const mesh = new THREE.Mesh(geo, base);
     mesh.userData.tag = 'belt';
@@ -1815,19 +1819,22 @@ function running(b: Bld, t: TrackSpec) {
   );
   // return rollers (static) and suspension arms / hubs
   const c = b.chassis;
-  for (const side of [-1, 1]) {
-    for (const r of t.rollers ?? []) {
-      c.cz(r[2], r[2], t.tw * 0.5, r[0], r[1], side * t.gauge, K.rubber, 10);
-      c.cz(r[2] * 0.5, r[2] * 0.5, t.tw * 0.55, r[0], r[1], side * t.gauge, 0x3e4144, 8);
-    }
-    if (t.arms !== false) {
-      for (const x of t.wheels) {
-        const zi = side * (t.gauge - t.tw / 2 - 0.012);
-        c.box(t.rw * 1.3, 0.018, 0.016, x + t.rw * 0.55, wy + 0.012, zi, K.dark, 0, 0, 0.35);
-        c.box(0.02, 0.02, 0.02, x + t.rw * 1.15, wy + t.rw * 0.35, zi, K.dark);
+  // (behind the wheels / under the skirts at battle zoom: hero detail)
+  c.at(2, () => {
+    for (const side of [-1, 1]) {
+      for (const r of t.rollers ?? []) {
+        c.cz(r[2], r[2], t.tw * 0.5, r[0], r[1], side * t.gauge, K.rubber, 10);
+        c.cz(r[2] * 0.5, r[2] * 0.5, t.tw * 0.55, r[0], r[1], side * t.gauge, 0x3e4144, 8);
+      }
+      if (t.arms !== false) {
+        for (const x of t.wheels) {
+          const zi = side * (t.gauge - t.tw / 2 - 0.012);
+          c.box(t.rw * 1.3, 0.018, 0.016, x + t.rw * 0.55, wy + 0.012, zi, K.dark, 0, 0, 0.35);
+          c.box(0.02, 0.02, 0.02, x + t.rw * 1.15, wy + t.rw * 0.35, zi, K.dark);
+        }
       }
     }
-  }
+  });
   b.gauge = t.gauge * b.zk;
   b.tw = t.tw;
 }
@@ -1954,8 +1961,10 @@ function jerry(p: Part, x: number, y: number, z: number, c = 0x4c5434) {
 
 /** Tow cable along a polyline with eye loops. */
 function cable(p: Part, pts: V3[], r = 0.0045) {
-  p.tube(pts, r, mt(0x3c3a36), 5);
-  for (const e of [pts[0], pts[pts.length - 1]]) p.add(new THREE.TorusGeometry(r * 2.4, r * 0.8, 4, 8), mt(0x3c3a36), TR(e[0], e[1], e[2], 0, 0, 0));
+  p.at(2, () => {
+    p.tube(pts, r, mt(0x3c3a36), 5);
+    for (const e of [pts[0], pts[pts.length - 1]]) p.add(new THREE.TorusGeometry(r * 2.4, r * 0.8, 4, 8), mt(0x3c3a36), TR(e[0], e[1], e[2], 0, 0, 0));
+  });
 }
 
 /** Engine deck grille: dark recess + slats along Z. */
@@ -2051,7 +2060,9 @@ function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) 
   rec.cx(r * 1.15, r * 1.3, L * 0.35, L * 0.47, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
   rec.cx(r, r * 1.12, L * 0.36, L * 0.81, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
   // sleeve clamps
-  for (const t of [0.3, 0.64]) rec.cx(r * 1.4, r * 1.4, 0.008, L * t, 0, 0, mt(K.gun), 12);
+  rec.at(2, () => {
+    for (const t of [0.3, 0.64]) rec.cx(r * 1.4, r * 1.4, 0.008, L * t, 0, 0, mt(K.gun), 12);
+  });
   const fume = o.fume ?? 0.45;
   if (fume >= 0) rec.cx(r * 1.75, r * 1.75, L * 0.16, L * fume, 0, 0, sp, 14);
   if (fume >= 0) {
@@ -2471,7 +2482,7 @@ function trophy(T: Part, x: number, y: number, z: number, side: number, team?: n
   T.sph(0.022, x - 0.08, y + 0.035, z - side * 0.01, mt(K.gun), 8, 4, 0.8, true);
   // flat radar panel
   T.cbox(0.075, 0.055, 0.012, 0.004, x, y - 0.005, z, CAMO, 0, side * 0.35, 0);
-  T.box(0.055, 0.04, 0.002, x + 0.004, y - 0.005, z + side * 0.006, 0x3a3d40, 0, side * 0.35, 0);
+  T.box(0.058, 0.043, 0.002, x + 0.004, y - 0.005, z + side * 0.006, shade(T.b.base, 0.78), 0, side * 0.35, 0);
   if (team !== undefined) T.box(0.02, 0.006, 0.002, x - 0.02, y + 0.018, z + side * 0.007, team, 0, side * 0.35, 0);
 }
 
@@ -2709,6 +2720,70 @@ function mbtAbrams(b: Bld) {
   mainGun(b, T, 0.28, 0.052, 0, { len: 0.585, r: 0.0145, fume: 0.47, mrs: true, mantlet: [0.05, 0.066, 0.104] });
 }
 
+/** Painted marking chevron (two bars, apex toward +X) on a side face at |z| = zf, centred (x, y), arm length l. */
+function chevron(p: Part, x: number, y: number, zf: number, l: number, th: number, side: number, color = 0xdcdad0) {
+  const a = 0.62;
+  for (const s of [-1, 1]) {
+    const dx = Math.cos(a) * l * 0.5;
+    const dy = Math.sin(a) * l * 0.5 * s;
+    p.box(l, th, 0.0016, x - dx, y + dy, side * zf, color, 0, 0, -s * a);
+  }
+}
+
+/** Basket on a turret bustle: tube frame, vertical bar mesh on the open faces, floor, stowed kit inside. */
+function basket(p: Part, x0: number, x1: number, zw: number, y0: number, h: number, sideTo: number, reg: string) {
+  const rk = 0x3c3e36;
+  const t = 0.0042;
+  // floor + rails (top, mid) around the rear (x0) and the two sides back to sideTo
+  p.box(x1 - x0, 0.004, zw * 2, (x0 + x1) / 2, y0 + 0.002, 0, rk);
+  for (const y of [y0 + h, y0 + h * 0.52]) {
+    p.add(gCylZ(t, t, zw * 2, 5), rk, TR(x0, y, 0));
+    for (const s of [-1, 1]) p.add(gCylX(t, t, sideTo - x0, 5), rk, TR((x0 + sideTo) / 2, y, s * zw));
+  }
+  for (const s of [-1, 1]) {
+    p.box(t * 1.4, h, t * 1.4, x0, y0 + h / 2, s * zw, rk);
+    p.box(t * 1.4, h, t * 1.4, sideTo, y0 + h / 2, s * zw, rk);
+  }
+  // bar mesh (dropped at far zoom; the bake keeps the rails' shading)
+  p.at(1, () => {
+    const n = Math.round((zw * 2) / 0.0125);
+    const bar = gCylY(0.0013, 0.0013, h * 0.96, 3, true);
+    for (let i = 1; i < n; i++) p.add(bar, rk, TR(x0, y0 + h * 0.5, -zw + (i * zw * 2) / n));
+    const m = Math.round((sideTo - x0) / 0.0125);
+    for (const s of [-1, 1]) for (let i = 1; i < m; i++) p.add(bar, rk, TR(x0 + (i * (sideTo - x0)) / m, y0 + h * 0.5, s * zw));
+  });
+  // stowed kit: rolled tarp, kit bags, ammo boxes
+  const bag = reg === 'mideast' ? [0x8c7a56, 0x6c6444, 0x7a6a4a] : [0x5c5a3c, 0x4e5434, 0x6a6448];
+  const dx = x1 - x0;
+  p.cz(h * 0.32, h * 0.32, zw * 1.6, x0 + dx * 0.5, y0 + h * 0.36, 0, bag[0], 9);
+  p.cbox(dx * 0.5, h * 0.55, zw * 0.5, 0.006, x0 + dx * 0.32, y0 + h * 0.3, zw * 0.45, bag[1]);
+  p.cbox(dx * 0.42, h * 0.5, zw * 0.45, 0.006, x0 + dx * 0.3, y0 + h * 0.3 + 0.004, -zw * 0.5, bag[2]);
+  p.box(dx * 0.3, h * 0.35, zw * 0.3, x0 + dx * 0.72, y0 + h * 0.2, -zw * 0.15, K.olive);
+}
+
+/** Ball-and-chain curtain hanging from a rail: n chains from a to b (plan points) at height y, length len. */
+function chains(p: Part, a: P2, c: P2, n: number, y: number, len: number) {
+  const ck = 0x34352f;
+  p.add(gCylX(0.003, 0.003, Math.hypot(c[0] - a[0], c[1] - a[1]), 5), ck, TR((a[0] + c[0]) / 2, y, (a[1] + c[1]) / 2, 0, -Math.atan2(c[1] - a[1], c[0] - a[0]), 0));
+  p.at(1, () => {
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const x = a[0] + (c[0] - a[0]) * t;
+      const z = a[1] + (c[1] - a[1]) * t;
+      const l = len * (0.9 + 0.2 * hash01(i * 7 + Math.round(x * 1000)));
+      p.add(gCylY(0.0018, 0.0018, l, 3, true), ck, TR(x, y - l / 2, z));
+      p.add(new THREE.OctahedronGeometry(0.0078, 0), mt(0x3a3a36), TR(x, y - l - 0.005, z, 0.3, i * 0.7, 0));
+    }
+  });
+}
+
+/** Thin armour module plate on a leaning turret side (lean angle th; side s), centred (x, y, z on the face). */
+function turretModule(p: Part, x: number, y: number, z: number, L: number, H: number, th: number, s: number, t = 0.0075) {
+  const nY = Math.sin(th);
+  const nZ = Math.cos(th);
+  p.cbox(L, H, t, 0.0022, x, y + nY * t * 0.5, s * (z + nZ * t * 0.5), CAMO, -s * th, 0, 0);
+}
+
 function mbtMerkava(b: Bld) {
   // Merkava Mk4: front engine, 7.6 m hull, 3.72 m wide; front sprocket, 6 large road wheels, rear idler;
   // very long low wedge turret mounted far back, ball-and-chain bustle curtain, Trophy APS, rear door
@@ -2726,94 +2801,145 @@ function mbtMerkava(b: Bld) {
     gauge: 0.208,
     tw: 0.114,
     style: 'merk',
+    teeth: 11,
   });
   lowerHull(B, [[-0.52, 0.068], [0.4, 0.068], [0.555, 0.165], [-0.55, 0.165]], 0.148);
   // long sloping glacis over the front engine, high flat rear
   B.side([[-0.553, 0.165], [0.565, 0.165], [0.59, 0.186], [0.08, 0.27], [-0.52, 0.276], [-0.555, 0.248]], 0.53, 0, CAMO, 0.01);
-  // big skirt modules: lower edge at hub height, sloped nose, rubber strip
-  skirts(B, [[-0.5, 0.105], [0.37, 0.105], [0.5, 0.13], [0.59, 0.198], [0.42, 0.226], [0.08, 0.262], [-0.52, 0.262]], 0.274, 0.018, [-0.33, -0.15, 0.03, 0.2, 0.37], CAMO, [0.106, 0.25]);
+  // ---- side skirts: seven bolted armour modules over a lower tier of thinner flaps, angled nose module
+  const zo = 0.284;
+  const top = (x: number) => (x <= 0.08 ? 0.266 : 0.266 - ((x - 0.08) * 0.04) / 0.34);
+  const xs = evenly(8, -0.515, 0.37);
   for (const s of [-1, 1]) {
-    B.box(1.02, 0.012, 0.012, 0.02, 0.1, s * 0.283, K.rubber);
+    for (let i = 0; i < 7; i++) {
+      const x0 = xs[i] + 0.0018;
+      const x1 = xs[i + 1] - 0.0018;
+      B.piece(
+        s > 0 ? 3 : 2,
+        () => {
+          B.side([[x0, 0.142], [x1, 0.142], [x1, top(x1)], [x0, top(x0)]], 0.017, s * (zo - 0.0085), CAMO, 0.003);
+          B.box(x1 - x0 - 0.004, 0.034, 0.009, (x0 + x1) / 2, 0.126, s * (zo - 0.0075), CAMO);
+        },
+        s > 0 ? x0 : x1,
+        top(x0),
+      );
+    }
+    B.piece(s > 0 ? 3 : 2, () => {
+      B.side([[0.373, 0.142], [0.47, 0.142], [0.548, 0.166], [0.588, 0.194], [0.373, top(0.373)]], 0.017, s * (zo - 0.0085), CAMO, 0.003);
+      B.side([[0.375, 0.112], [0.462, 0.124], [0.47, 0.143], [0.375, 0.143]], 0.009, s * (zo - 0.0075), CAMO, 0.002);
+    }, 0.373, top(0.373));
+    // skirt top ledge and the rubber strip along the bottom
+    B.box(0.89, 0.005, 0.024, -0.072, 0.268, s * (zo - 0.011), shade(b.base, 0.92));
+    B.box(0.97, 0.009, 0.006, -0.03, 0.105, s * (zo - 0.006), K.rubber);
+    // IDF chevron on the nose module
+    chevron(B, 0.455, 0.184, zo + 0.0009, 0.066, 0.011, s);
+    // hinges / lifting lugs along the ledge
+    B.at(2, () => {
+      for (let i = 0; i < 8; i++) B.box(0.008, 0.008, 0.006, xs[i], 0.258, s * (zo + 0.003), shade(b.base, 0.85));
+    });
   }
-  // engine deck grilles (front right), engine air louvres along the right of the glacis, driver front left
-  grille(B, 0.29, 0.225, 0.12, 0.2, 0.17, 8);
-  grille(B, 0.12, 0.255, 0.15, 0.1, 0.12, 5);
+  // engine air intake: big diamond-mesh grille high on the right hull side (front engine)
+  B.box(0.17, 0.046, 0.004, 0.245, 0.226, zo + 0.001, PAINT_MESH);
+  for (const y of [0.2025, 0.2495]) B.box(0.178, 0.005, 0.006, 0.245, y, zo + 0.002, CAMO);
+  for (const x of [0.157, 0.333]) B.box(0.006, 0.052, 0.006, x, 0.226, zo + 0.002, CAMO);
+  // exhaust louvres low on the left side behind the engine
+  B.box(0.085, 0.024, 0.004, 0.27, 0.19, -zo - 0.001, PAINT_LOUVRE);
+  // ---- glacis: engine deck access / air grilles (front right), driver front left, tow cable, lights
+  B.box(0.16, 0.004, 0.13, 0.31, 0.2325, 0.1, PAINT_LOUVRE, 0, 0, -0.165);
+  for (const z of [0.033, 0.167]) B.box(0.164, 0.006, 0.005, 0.31, 0.2335, z, CAMO, 0, 0, -0.165);
+  lid(B, 0.12, 0.1, 0.17, 0.252, 0.12);
   hatch(B, 0.17, 0.25, -0.13, 0.034);
   for (const z of [-0.17, -0.13, -0.09]) periscope(B, 0.215, 0.247, z, 0, 0.018);
   for (const s of [-1, 1]) {
+    // headlights in guards, tow eyes, mudguards
     headlight(B, 0.575, 0.2, s * 0.23);
+    B.at(1, () => {
+      B.box(0.004, 0.03, 0.05, 0.598, 0.2, s * 0.23, K.dark);
+      B.box(0.026, 0.004, 0.05, 0.585, 0.216, s * 0.23, K.dark);
+    });
+    B.box(0.03, 0.022, 0.034, 0.5, 0.122, s * 0.12, K.dark);
     taillight(B, -0.556, 0.255, s * 0.235);
   }
-  // exhaust grille on the right hull side behind the engine
-  B.box(0.09, 0.03, 0.006, 0.26, 0.2, 0.284, K.black);
-  for (let i = 0; i < 4; i++) B.box(0.09, 0.003, 0.008, 0.26, 0.189 + i * 0.007, 0.285, CAMO);
-  // rear: clamshell door (team panel), stowage baskets either side
+  cable(B, [[0.5, 0.21, 0.25], [0.2, 0.25, 0.25], [-0.2, 0.278, 0.24], [-0.4, 0.278, 0.22]]);
+  // rear: clamshell door, stowage racks either side, team panel
   B.box(0.008, 0.08, 0.13, -0.556, 0.205, 0, K.dark);
   B.cbox(0.006, 0.07, 0.115, 0.002, -0.559, 0.205, 0, CAMO);
   B.box(0.004, 0.03, 0.008, -0.563, 0.205, 0.04, mt(K.steel));
   teamPanel(B, 0.003, 0.022, 0.09, -0.563, 0.225, 0, b.team);
   for (const s of [-1, 1]) {
-    rack(B, -0.585, -0.555, s * 0.1, s * 0.245, 0.17, 0.06, 4);
+    B.at(2, () => rack(B, -0.585, -0.555, s * 0.1, s * 0.245, 0.17, 0.06, 4));
     B.cbox(0.025, 0.04, 0.1, 0.008, -0.57, 0.205, s * 0.18, K.canvas);
-    bin(B, 0.11, 0.035, 0.06, -0.44, 0.276, s * 0.225);
   }
-  cable(B, [[0.5, 0.21, 0.25], [0.2, 0.248, 0.25], [-0.2, 0.276, 0.24], [-0.4, 0.276, 0.22]]);
-  b.emit(0.28, 0.205, 0.28);
+  b.emit(0.27, 0.19, -0.29);
+  b.clutterN = 0; // the kit rides in the turret basket
 
-  // ---- turret: very long, low arrowhead wedge with steeply leaning sides; gun at the tip
-  // (reference photos: the wedge tip sits ~0.28 hull lengths behind the nose, the bustle ends over the hull rear)
-  const T = b.part(B, -0.19, 0.276, 0, 'turret');
-  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.228], [-0.33, 0.21], [-0.39, 0.17], [-0.4, 0]];
-  const PT: P2[] = [[0.3, 0], [0.3, 0.025], [0.21, 0.09], [0.08, 0.17], [-0.15, 0.18], [-0.32, 0.168], [-0.37, 0.13], [-0.38, 0]];
+  // ---- turret: very long, low arrowhead wedge with leaning sides; bolted add-on modules on the flanks
+  const T = b.part(B, -0.19, 0.288, 0, 'turret');
+  // beaked nose: the undercut lower facet rises to the tip (gun at mid height), the roof slopes down to it
+  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.226], [-0.33, 0.218], [-0.39, 0.17], [-0.4, 0]];
+  const PT: P2[] = [[0.29, 0], [0.29, 0.025], [0.2, 0.09], [0.07, 0.17], [-0.15, 0.18], [-0.32, 0.168], [-0.37, 0.13], [-0.38, 0]];
+  // the bustle underside slopes up to the rear: the chain curtain hangs in the gap above the deck
+  const under = (h: P2[]) => h.map(([x, z]) => [x < -0.19 ? -0.19 + (x + 0.19) * 0.08 : x, z] as P2);
   hloft(T, [
-    { y: -0.008, h: sz(P0, 0.9) },
-    { y: 0.018, h: P0 },
-    { y: 0.078, h: slopeF(sz(P0, 0.9), 0.0, -0.1) },
-    { y: 0.106, h: PT },
+    { y: -0.02, h: under(slopeF(sz(P0, 0.88), 0.0, -0.13)) },
+    { y: 0.03, h: P0 },
+    { y: 0.094, h: slopeF(sz(P0, 0.9), 0.0, -0.11) },
+    { y: 0.124, h: PT },
   ]);
-  T.cy(0.2, 0.2, 0.012, 0.0, -0.018, 0, K.dark, 20);
-  // ball-and-chain curtain under the bustle
-  for (let i = 0; i < 15; i++) {
-    const z = -0.17 + i * 0.0243;
-    T.box(0.003, 0.05, 0.003, -0.385, -0.033, z, 0x2e2e2c);
-    T.sph(0.007, -0.385, -0.06, z, mt(0x3a3a38), 5, 3);
-  }
+  T.cy(0.19, 0.19, 0.016, 0.0, -0.034, 0, K.dark, 20);
+  const lean = Math.atan2(0.0226, 0.064);
   for (const s of [-1, 1]) {
-    for (let i = 0; i < 4; i++) {
-      const x = -0.35 + i * 0.03;
-      T.box(0.003, 0.05, 0.003, x, -0.033, s * 0.2, 0x2e2e2c);
-      T.sph(0.007, x, -0.06, s * 0.2, mt(0x3a3a38), 5, 3);
-    }
-    T.box(0.13, 0.005, 0.005, -0.325, -0.006, s * 0.2, K.dark);
-    trophy(T, 0.06, 0.055, s * 0.222, s, b.team);
-    smokeBank(T, 0.18, 0.07, s * 0.15, s, 5, 0.6, 0.008);
-    // side stowage baskets on the rear half
-    rack(T, -0.3, -0.16, s * 0.228, s * 0.255, 0.03, 0.055, 3);
-    T.cbox(0.12, 0.045, 0.024, 0.008, -0.23, 0.058, s * 0.243, K.canvas);
-    teamPanel(T, 0.13, 0.02, 0.003, -0.07, 0.03, s * 0.229, b.team, 0, -s * 0.03, 0);
+    // flank modules (the number / ID stripe sit on the middle one)
+    turretModule(T, -0.262, 0.061, 0.2152, 0.112, 0.054, lean, s);
+    turretModule(T, -0.14, 0.061, 0.2185, 0.124, 0.054, lean, s);
+    turretModule(T, -0.03, 0.061, 0.2165, 0.088, 0.054, lean, s);
+    // ID stripe on the outer face of the middle module, under the number
+    teamPanel(T, 0.078, 0.0095, 0.0015, -0.14, 0.0425, s * 0.2342, b.team, -s * lean, 0, 0);
+    // lifting eyes
+    T.at(2, () => {
+      for (const x of [-0.3, 0.05]) T.add(new THREE.TorusGeometry(0.006, 0.0018, 4, 8), mt(0x4a4c48), TR(x, 0.126, s * 0.17, Math.PI / 2, 0, 0));
+    });
+    trophy(T, 0.06, 0.072, s * 0.218, s, b.team);
+    smokeBank(T, 0.15, 0.104, s * 0.15, s, 5, 0.6, 0.008);
   }
-  T.box(0.004, 0.006, 0.4, -0.385, -0.006, 0, K.dark);
-  teamPanel(T, 0.004, 0.022, 0.2, -0.396, 0.05, 0, b.team);
-  // mantlet: small armoured box at the wedge tip
-  T.cbox(0.06, 0.05, 0.075, 0.008, 0.45, 0.05, 0, CAMO);
+  // roof plates, bustle rails
+  lid(T, 0.15, 0.2, -0.25, 0.124, 0);
+  for (const s of [-1, 1]) lid(T, 0.09, 0.06, 0.13, 0.124, s * 0.06, 0);
+  // rear basket and the chain curtain under the bustle
+  basket(T, -0.49, -0.385, 0.205, 0.026, 0.104, -0.33, b.style.region);
+  chains(T, [-0.488, -0.2], [-0.488, 0.2], 22, 0.026, 0.06);
+  for (const s of [-1, 1]) chains(T, [-0.47, s * 0.207], [-0.25, s * 0.218], 12, 0.024, 0.042);
+  teamPanel(T, 0.004, 0.024, 0.2, -0.494, 0.07, 0, b.team);
+  // mantlet: armoured box at the wedge tip, coax
+  T.cbox(0.06, 0.056, 0.078, 0.008, 0.45, 0.05, 0, CAMO);
   coax(T, 0.47, 0.035, 0.035);
-  // roof: commander sight block (right), commander hatch, loader 7.62 MG (left), 60 mm mortar, gunner sight hood
-  T.cy(0.045, 0.05, 0.014, -0.1, 0.106, 0.09, CAMO, 14);
-  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.106, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
-  T.cbox(0.06, 0.06, 0.05, 0.006, -0.03, 0.14, 0.11, CAMO);
-  T.box(0.004, 0.032, 0.034, -0.0, 0.15, 0.11, GLASS);
-  rws(T, -0.13, 0.12, 0.09, 0.85, false);
-  hatch(T, -0.1, 0.106, -0.1, 0.036);
-  mgun(T, -0.04, 0.135, -0.13, 0.09);
-  T.box(0.02, 0.025, 0.02, -0.05, 0.118, -0.13, K.dark);
-  T.cx(0.011, 0.011, 0.09, -0.03, 0.128, -0.07, mt(K.gun), 8);
-  T.box(0.026, 0.02, 0.026, -0.08, 0.116, -0.07, K.dark);
-  T.cbox(0.06, 0.03, 0.045, 0.006, 0.12, 0.112, 0.07, CAMO);
-  T.box(0.004, 0.02, 0.032, 0.151, 0.114, 0.07, GLASS);
-  for (const s of [-1, 1]) lid(T, 0.1, 0.06, 0.15, 0.106, s * 0.06, 0);
-  antennas(b, T, -0.32, 0.106, [-0.13, 0.13], 0.24);
-  // MG253 L/44: 9.04 m gun forward vs 7.60 m hull = 1.44 m overhang
-  mainGun(b, T, 0.48, 0.05, 0, { len: 0.5, r: 0.0145, fume: 0.42, mrs: true });
+  // roof: commander's cupola (right rear) with sight block, panoramic sight, MG; loader hatch + MG (left),
+  // 60 mm mortar, gunner's sight hood (front right)
+  T.cy(0.045, 0.05, 0.016, -0.1, 0.124, 0.09, CAMO, 14);
+  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.126, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
+  panoSight(T, -0.035, 0.124, 0.14, 0.034, 1.05);
+  T.cbox(0.05, 0.05, 0.045, 0.006, -0.03, 0.164, 0.08, CAMO);
+  T.box(0.004, 0.026, 0.03, -0.004, 0.17, 0.08, GLASS);
+  // commander's MG on a pintle
+  T.cy(0.004, 0.005, 0.03, -0.155, 0.14, 0.09, K.dark, 6);
+  mgun(T, -0.13, 0.175, 0.09, 0.11, 0.0048, true);
+  hatch(T, -0.1, 0.124, -0.1, 0.036);
+  // loader MG on a ring mount with a small shield
+  T.cy(0.004, 0.005, 0.028, -0.05, 0.124, -0.135, K.dark, 6);
+  mgun(T, -0.035, 0.156, -0.135, 0.09);
+  T.box(0.004, 0.026, 0.04, -0.012, 0.16, -0.135, CAMO);
+  // 60 mm mortar tube with a muzzle cover
+  T.cx(0.011, 0.011, 0.09, -0.03, 0.146, -0.07, mt(K.gun), 8);
+  T.cx(0.0125, 0.0125, 0.012, 0.018, 0.146, -0.07, K.canvas, 8);
+  T.box(0.026, 0.02, 0.026, -0.08, 0.134, -0.07, K.dark);
+  T.cbox(0.06, 0.03, 0.045, 0.006, 0.1, 0.13, 0.07, CAMO);
+  T.box(0.004, 0.02, 0.032, 0.131, 0.132, 0.07, GLASS);
+  antennas(b, T, -0.34, 0.124, [-0.15, 0.15], 0.26);
+  // MG253 L/44: 9.04 m gun forward vs 7.60 m hull = 1.44 m overhang; white recognition bands on the sleeve
+  const g = mainGun(b, T, 0.48, 0.05, 0, { len: 0.5, r: 0.0158, fume: 0.42, mrs: true });
+  g.rec.at(2, () => {
+    for (const x of [0.36, 0.385]) g.rec.cx(0.0158 * 1.2, 0.0158 * 1.22, 0.009, x, 0, 0, 0xd4d2c8, 12);
+  });
 }
 /** Slim Soviet-lineage hull (T-72 / T-80 / T-90 family): low hull, fenders over the tracks, flat deck. */
 function sovHull2(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; fw?: number }) {

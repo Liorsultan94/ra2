@@ -377,6 +377,10 @@ function styleCharts(charts: Chart[], srcs: Src[]) {
     if (L > 0.2 && H > 0.035 && Math.abs(ch.N.y) < 0.8) {
       const n = Math.max(2, Math.round(L / 0.135));
       ch.seam = L / n;
+    } else if (L > 0.3 && H > 0.12 && ch.N.y > 0.8) {
+      // long decks / glacis: welded plate joints every ~1.5 m
+      const n = Math.max(2, Math.round(L / 0.21));
+      ch.seam = L / n;
     }
     // bolt rows along the long edges of rectangular plates
     if (fill > 0.8 && L > 0.07 && H > 0.03 && Math.abs(ch.N.y) < 0.8) ch.bolts = 1;
@@ -592,7 +596,7 @@ float detailH(vec2 c, out float cav) {
     float inRow = step(0.0, bk) * step(bk * 0.022 + 0.011, Hh - 0.008);
     float dyb = (by - bk) * 0.022;
     float dxb = abs(d - 0.0085);
-    h += 0.0016 * dome(length(vec2(dxb, dyb)), 0.0029) * inner * inRow;
+    h += 0.002 * dome(length(vec2(dxb, dyb)), 0.0034) * inner * inRow;
   }
   // bolt rows along the top and bottom of rectangular plates
   if (vSt.w > 0.5 && vSt.w < 1.5) {
@@ -603,7 +607,7 @@ float detailH(vec2 c, out float cav) {
     float dx = (bx - bk) * pitch;
     float dyT = c.y - (vCh.w - 0.0085);
     float dyB = c.y - (vCh.y + 0.0085);
-    h += 0.0016 * inRow * (dome(length(vec2(dx, dyT)), 0.0029) + dome(length(vec2(dx, dyB)), 0.0029));
+    h += 0.002 * inRow * (dome(length(vec2(dx, dyT)), 0.0034) + dome(length(vec2(dx, dyB)), 0.0034));
   }
   // non-slip grit on decks (inset patch)
   if (vSt.w > 1.5) {

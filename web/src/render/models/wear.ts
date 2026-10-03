@@ -31,6 +31,11 @@ export interface WearCfg {
    * crevice grime, edge wear, dust / mud / streak weathering in the map's biome colours.
    */
   bake?: boolean;
+  /**
+   * Running gear in the shadow of the hull: 'inst' = road wheels (own InstancedMesh, height from the
+   * instance matrix), 'attr' = track belts (root-space height in aWear.z). Darkens toward the fenders.
+   */
+  run?: 'inst' | 'attr';
 }
 
 /*
@@ -47,6 +52,25 @@ const BIOMES: Record<string, [number, number, number, number]> = {
   winter: [0xcfd3d8, 0x4c4642, 0x3a3634, 0.55],
   urban: [0x8c8884, 0x3c3834, 0x2c2a28, 0.2],
 };
+/**
+ * CC0 weathering masks (public/tex/units/grunge.webp, see its CREDITS.txt): r = run-off streaks
+ * (vertical), g = smudges, b = specks. Loaded on first use; a flat placeholder until then.
+ */
+const GRUNGE = { value: new THREE.DataTexture(new Uint8Array([80, 128, 40, 255]), 1, 1) as THREE.Texture };
+GRUNGE.value.needsUpdate = true;
+let grungeReq = false;
+function loadGrunge() {
+  if (grungeReq || typeof document === 'undefined') return;
+  grungeReq = true;
+  const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? './';
+  new THREE.TextureLoader().load(base + 'tex/units/grunge.webp', (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = 4;
+    GRUNGE.value = t;
+  });
+}
+
 /** Set the weathering palette for the map's biome ('temperate' | 'desert' | 'winter' | 'urban'). */
 export function setWearBiome(biome: string) {
   const b = BIOMES[biome] ?? BIOMES.temperate;
@@ -107,6 +131,10 @@ float wFbm(vec3 p) {
 
 function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg: WearCfg) {
   Object.assign(shader.uniforms, u);
+  if (cfg.bake) {
+    loadGrunge();
+    shader.uniforms.uGrunge = GRUNGE;
+  }
   const attr = cfg.dirt || cfg.loose;
   shader.vertexShader = shader.vertexShader.replace(
     '#include <common>',
@@ -116,8 +144,15 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
     ${attr ? 'attribute vec4 aWear;' : ''}
     varying vec3 vWPos;
     varying float vWDirt;
-    ${cfg.bake ? 'varying vec3 vWNrm;' : ''}`,
+    ${cfg.bake ? 'varying vec3 vWNrm;' : ''}
+    ${cfg.run ? 'varying float vRunY;' : ''}`,
   );
+  if (cfg.run)
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      ${cfg.run === 'inst' ? '#ifdef USE_INSTANCING\n vRunY = (instanceMatrix * vec4(position, 1.0)).y;\n #else\n vRunY = 0.0;\n #endif' : 'vRunY = aWear.z;'}`,
+    );
   if (cfg.bake)
     shader.vertexShader = shader.vertexShader.replace(
       '#include <defaultnormal_vertex>',
@@ -179,7 +214,8 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       uniform float uWet;
       varying vec3 vWPos;
       varying float vWDirt;
-      ${cfg.bake ? 'varying vec3 vWNrm;' : ''}`,
+      ${cfg.bake ? 'varying vec3 vWNrm;\n uniform sampler2D uGrunge;' : ''}
+      ${cfg.run ? 'varying float vRunY;' : ''}`,
     )
     .replace(
       '#include <color_fragment>',
@@ -187,6 +223,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       vec3 wP = vWPos * uWScale;
       float wSoot = 0.0;
       ${cfg.bake ? BAKE_COLOR : ''}
+      ${cfg.run ? 'diffuseColor.rgb *= mix(1.0, 0.42, smoothstep(0.075, 0.165, vRunY));' : ''}
       ${
         cfg.dirt && !cfg.bake
           ? `if (vWDirt > 0.01) {
@@ -259,7 +296,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
  */
 const BAKE_COLOR = /* glsl */ `
       vec4 wBk = texture2D(normalMap, vNormalMapUv);
-      float wAO = clamp(wBk.b * 1.08, 0.0, 1.0);
+      float wAO = clamp(wBk.b * 1.06, 0.0, 1.0);
       float wEdge = wBk.a;
       float wRough = 0.0;
       float wBare = 0.0;
@@ -267,35 +304,44 @@ const BAKE_COLOR = /* glsl */ `
         vec3 wn = normalize(vWNrm);
         float wUp = clamp(wn.y, 0.0, 1.0);
         float wSide = 1.0 - abs(wn.y);
-        float wCav = 1.0 - wAO;
+        float wN0 = wNoise(wP * 0.32 + 21.0);
         float wN1 = wNoise(wP * vec3(1.3, 0.5, 1.3) + 11.0);
         float wN2 = wNoise(wP * vec3(4.1, 1.2, 4.1) + 5.0);
-        float wN3 = wNoise(wP * vec3(13.0, 13.0, 13.0) + 2.0);
-        // crevice grime and occlusion in the albedo (seams, under fittings, between modules)
-        diffuseColor.rgb *= mix(1.0, 0.62 + 0.38 * wAO, 0.75);
-        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, smoothstep(0.25, 0.85, wCav) * 0.45);
-        // rain / dirt streaks running down vertical faces, heavier below ledges and fittings
-        float wStr = wNoise(vec3(wP.x * 7.0 + wP.z * 7.0, wP.y * 0.6, 3.0)) * 0.6 + wNoise(vec3(wP.x * 19.0 + wP.z * 19.0, wP.y * 1.3, 7.0)) * 0.4;
-        float wStreak = smoothstep(0.52, 0.8, wStr) * wSide * (0.35 + 0.65 * smoothstep(0.08, 0.5, wCav + 0.15 * wN1));
-        diffuseColor.rgb = mix(diffuseColor.rgb, mix(uGrime, uDust * 0.7, 0.4), wStreak * 0.38);
-        // dust: settles on decks and in their corners, rises up the hull from the ground (vWDirt), patchy
+        float wN3 = wNoise(wP * 13.0 + 2.0);
+        float wN4 = wNoise(wP * 34.0 + 9.0);
+        // CC0 grunge masks, box-mapped: walls (u along the face, v up), decks (x, z)
+        vec3 wNA = abs(wn);
+        vec2 wGu = (wNA.x > wNA.z ? wP.zy : wP.xy) * vec2(0.19, 0.37);
+        vec3 wG = wNA.y > 0.7 ? texture2D(uGrunge, wP.xz * 0.15).rgb : texture2D(uGrunge, wGu).rgb;
+        // paint tone: sun-faded / repainted patches, plate to plate
+        diffuseColor.rgb *= 0.9 + 0.2 * wN0 + 0.08 * (wN1 - 0.5);
+        // cavities: seams, crevices, under fittings and modules (grime collects there)
+        float wC = smoothstep(0.08, 0.9, wAO);
+        diffuseColor.rgb *= mix(0.4, 1.0, wC);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, (1.0 - wC) * 0.3);
+        // rain / grime streaks down the vertical faces
+        float wStreak = smoothstep(0.25, 0.85, wG.r) * wSide * (0.55 + 0.45 * wN1);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.68 + uGrime * 0.12, wStreak * 0.55);
+        // dust film on decks and roofs, thicker in their corners
         float wLow = clamp(vWDirt, 0.0, 1.0);
-        float wDust = wUp * (0.3 + 0.35 * wCav) * (0.55 + 0.6 * wN1) + wLow * (0.55 + 0.6 * wN2) + wSide * 0.1 * wN1;
-        wDust = clamp(wDust, 0.0, 1.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, uDust * (0.85 + 0.25 * wN3), wDust * 0.72);
-        // caked mud / slush splashes on the lower hull and the running gear
-        float wSplash = smoothstep(0.5, 0.75, wN2 * 0.55 + wN3 * 0.45 + (wLow - 0.55) * 0.9);
-        float wMud = clamp(smoothstep(0.45, 0.95, wLow) * 0.75 + wSplash * smoothstep(0.25, 0.6, wLow), 0.0, 1.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, uMud * (0.8 + 0.4 * wN3), wMud * 0.85);
-        // edge wear: paint worn back on convex edges (chips by noise), dusty-light; a little bare steel on the sharpest
-        float wChip = smoothstep(0.35, 0.75, wN3 * 0.7 + wN2 * 0.3 + wEdge * 0.35);
-        float wE = wEdge * wChip * (1.0 - wMud);
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.32 + uDust * 0.12, clamp(wE * 1.1, 0.0, 1.0));
-        wBare = smoothstep(0.55, 0.95, wEdge * wChip) * (1.0 - wMud) * 0.6;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.3, 0.29, 0.27), wBare * 0.6);
-        // wet look in winter / temperate maps: mud darker and glossier
-        wRough = max(wDust * 0.55, wMud * (0.85 - uWet * 0.5));
-        diffuseColor.rgb *= 1.0 - wMud * uWet * 0.25;
+        float wDust = clamp(wUp * (0.32 + 0.55 * (1.0 - wAO)) * (0.4 + 1.1 * wG.g) + wSide * 0.08 * wG.g + wG.b * 0.25, 0.0, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uDust * (0.9 + 0.2 * wN3), wDust * 0.6);
+        // grime band rising from the tracks: dust, then mud lowest, splatter along its ragged top edge
+        float wHi = wLow + (wN2 - 0.5) * 0.24 + (wG.g - 0.5) * 0.22 + (wN4 - 0.5) * 0.06;
+        float wBand = smoothstep(0.2, 0.52, wHi);
+        float wMudK = smoothstep(0.22, 0.62, wHi);
+        vec3 wDirtC = mix(uDust * 0.72, uMud, wMudK) * (0.85 + 0.3 * wN3);
+        float wSpl = smoothstep(0.45, 0.7, wG.b + wN4 * 0.3) * smoothstep(0.05, 0.3, wLow) * (1.0 - wBand);
+        diffuseColor.rgb = mix(diffuseColor.rgb, wDirtC, clamp(wBand * 0.86 + wSpl * 0.7, 0.0, 1.0));
+        // worn edges: paint rubbed back and dusty-light, a little bare steel on the sharpest
+        float wChip = smoothstep(0.3, 0.7, wN3 * 0.45 + wG.b * 0.6 + wN4 * 0.2 + wEdge * 0.3);
+        float wE = wEdge * wChip * (1.0 - wBand);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.45 + uDust * 0.08, clamp(wE, 0.0, 1.0));
+        wBare = smoothstep(0.6, 0.95, wEdge * wChip) * (1.0 - wBand) * 0.5;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.26, 0.25, 0.23), wBare * 0.6);
+        // wet maps: mud darker and glossier
+        wRough = max(wDust * 0.5, wBand * (0.8 - uWet * 0.5));
+        diffuseColor.rgb *= 1.0 - wMudK * wBand * uWet * 0.25;
       }
 `;
 
@@ -303,7 +349,7 @@ const BAKE_COLOR = /* glsl */ `
 export function wearPatch<T extends THREE.Material>(m: T, cfg: WearCfg): T {
   const prev = m.onBeforeCompile;
   const prevKey = m.customProgramCacheKey();
-  const key = `${prevKey}|wear${cfg.dirt ? 'D' : ''}${cfg.loose ? 'L' : ''}${cfg.bake ? 'B' : ''}`;
+  const key = `${prevKey}|wear${cfg.dirt ? 'D' : ''}${cfg.loose ? 'L' : ''}${cfg.bake ? 'B' : ''}${cfg.run ?? ''}`;
   m.onBeforeCompile = function (this: THREE.Material, shader, renderer) {
     prev.call(this, shader, renderer);
     const u = U.get(this);

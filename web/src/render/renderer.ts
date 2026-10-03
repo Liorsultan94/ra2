@@ -42,6 +42,8 @@ import { loadBuildingPhotos } from './models/bldtex';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
+import { setBakeRenderer, setBakeSize } from './models/vehbake';
+import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
 
@@ -337,6 +339,10 @@ export class GameRenderer {
     this.perf = new PerfProbe(this.renderer, this.scene, this.camera);
     this.instancer = new AutoInstancer(this.renderer, this.scene, this.camera, (m) => m.userData.outlineColor !== undefined);
     this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
+    // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
+    setBakeRenderer(this.renderer);
+    setBakeSize(quality === 'high' ? 1024 : 512);
+    setWearBiome(world.map.biome);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -2120,6 +2126,7 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    setBakeRenderer(null);
     this.perfHud.dispose();
     this.instancer.dispose();
     this.life.dispose();
