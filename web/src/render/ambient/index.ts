@@ -96,7 +96,6 @@ export class AmbientLife {
     const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
     this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone, world.players.map((p) => p.faction));
     this.people = new People(map, terrain.layout, world, roadNetFor(map, terrain.layout), fog, probe, quality, phone);
-    this.people.busy = this.busy;
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';

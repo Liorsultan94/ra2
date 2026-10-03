@@ -64,7 +64,8 @@ export function forecastLine(weather: string | undefined, fronts?: { kind: strin
   if (!fronts) return WEATHER_LINE[weather ?? 'clear'] ?? (weather ?? 'clear').toUpperCase();
   if (!fronts.length) return 'FORECAST · CLEAR ALL DAY';
   const [f, ...rest] = fronts;
-  let line = `FORECAST · ${FRONT[f.kind] ?? f.kind.toUpperCase()} ~${hhmm(f.hour)}`;
+  // (to the quarter hour: it is a forecast)
+  let line = `FORECAST · ${FRONT[f.kind] ?? f.kind.toUpperCase()} ~${hhmm(Math.round(f.hour * 4) / 4)}`;
   if (rest.some((e) => e.storm) && !f.storm) line += ' · STORMS LATER';
   else if (rest.length) line += ` · ${FRONT[rest[0].kind] ?? 'MORE'} LATER`;
   return line;

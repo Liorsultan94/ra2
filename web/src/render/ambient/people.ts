@@ -287,8 +287,8 @@ export class People {
   readonly group = new THREE.Group();
   /** Extra figures drawn with the civilians (filled in by other ambient systems). */
   readonly figures: Figure[] = [];
-  /** Sim building footprints (AmbientLife's busy mask, tile resolution), set by the owner. */
-  busy: Uint8Array | null = null;
+  /** Footprints of the players' buildings (tile resolution; civilian houses are in the walk grid already). */
+  private busy: Uint8Array;
   private peds: Ped[] = [];
   private grid: WalkGrid;
   private pf: PathFinder;
@@ -333,10 +333,9 @@ export class People {
     this.pf = new PathFinder(this.grid, phone ? 6000 : 9000);
     this.hw = Math.ceil(m.w / 4);
     this.heat = new Float32Array(this.hw * Math.ceil(m.h / 4)).fill(-1e9);
-    this.blockedFn = (tx, ty) => {
-      const b = this.busy;
-      return !!b && b[ty * this.map.w + tx] === 1;
-    };
+    this.busy = new Uint8Array(m.w * m.h);
+    this.scanBuildings();
+    this.blockedFn = (tx, ty) => this.busy[ty * this.map.w + tx] === 1;
     this.group.name = 'ambient-people';
     // ---- budgets
     const qk = quality === 'high' ? 1.7 : quality === 'medium' ? 1 : 0.22;
@@ -379,6 +378,18 @@ export class People {
   }
 
   // ------------------------------------------------------------------ places
+
+  private scanBuildings() {
+    const b = this.busy;
+    const W = this.map.w;
+    b.fill(0);
+    for (const e of this.world.entities.values()) {
+      if (e.kind !== 'building' || e.dead) continue;
+      const d = buildingDef(e.def);
+      if (!d || d.role === 'civilian') continue;
+      for (let y = Math.max(0, e.ty); y < Math.min(this.map.h, e.ty + d.h); y++) for (let x = Math.max(0, e.tx); x < Math.min(W, e.tx + d.w); x++) b[y * W + x] = 1;
+    }
+  }
 
   private passable(x: number, y: number) {
     return costAt(this.grid, x, y) > 0 && !this.blockedFn(x | 0, y | 0);
@@ -501,7 +512,7 @@ export class People {
         // two rows of stalls facing each other across a lane in the middle of the square
         for (const s of [-1, 1]) {
           const y = f.cy + s * 0.75;
-          if (free(f.cx, y, 1.6, 0.3)) sites.push({ x: f.cx, y, along: 0, n: 4 });
+          if (free(f.cx, y, 1.3, 0.3)) sites.push({ x: f.cx, y, along: 0, n: 3 });
         }
       }
     } else {
@@ -744,6 +755,19 @@ export class People {
       st.vendor = p;
       left--;
     }
+    // a crowd at the market
+    for (const st of this.stalls) {
+      if (left <= 0) break;
+      if (Math.random() < 0.3) continue;
+      const fx = Math.cos(st.yaw);
+      const fy = Math.sin(st.yaw);
+      const lat = (Math.random() - 0.5) * 0.4;
+      const p = this.makePed(this.randomKind(), st.x + fx * 0.34 - fy * lat, st.y + fy * 0.34 + fx * lat);
+      p.s = S.Shop;
+      p.t = 3 + Math.random() * 15;
+      p.yaw = wrapAngle(st.yaw + Math.PI);
+      left--;
+    }
     // kids at play: park lawns (city), yards (villages)
     if (rich && this.spots.length) {
       const nGroups = Math.max(1, Math.round(pop / (m.biome === 'urban' ? 22 : 16)));
@@ -887,22 +911,24 @@ export class People {
   }
 
   private goStroll(p: Ped) {
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < 40; k++) {
       const s = this.spots[(Math.random() * this.spots.length) | 0];
-      if (!s) return;
-      if (Math.hypot(s.x - p.hx, s.y - p.hy) > p.roam || Math.hypot(s.x - p.x, s.y - p.y) < 1.5) continue;
+      if (!s) break;
+      const d = Math.hypot(s.x - p.x, s.y - p.y);
+      if (Math.hypot(s.x - p.hx, s.y - p.hy) > p.roam || d < 2 || d > 11) continue;
       if (this.walkTo(p, s.x, s.y, Goal.Stroll)) return;
+      break;
     }
     p.s = S.Idle;
-    p.t = 2 + Math.random() * 4;
+    p.t = 1 + Math.random() * 3;
   }
 
   private goDoor(p: Ped): boolean {
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < 30; k++) {
       const i = (Math.random() * this.doors.length) | 0;
       const d = this.doors[i];
-      if (!d || !d.alive || Math.hypot(d.x - p.hx, d.y - p.hy) > p.roam) continue;
-      if (this.walkTo(p, d.x, d.y, Goal.Door, i)) return true;
+      if (!d || !d.alive || Math.hypot(d.x - p.hx, d.y - p.hy) > p.roam || Math.hypot(d.x - p.x, d.y - p.y) > 10) continue;
+      return this.walkTo(p, d.x, d.y, Goal.Door, i);
     }
     return false;
   }
@@ -943,8 +969,12 @@ export class People {
     let g: ChatGroup | null = null;
     for (const c of this.chats) if (c.members.length < 4 && Math.hypot(c.x - p.x, c.y - p.y) < 10) g = c;
     if (!g) {
-      const s = this.spots[(Math.random() * this.spots.length) | 0];
-      if (!s || Math.hypot(s.x - p.hx, s.y - p.hy) > p.roam) return false;
+      let s: Spot | null = null;
+      for (let k = 0; k < 12 && !s; k++) {
+        const c = this.spots[(Math.random() * this.spots.length) | 0];
+        if (c && Math.hypot(c.x - p.x, c.y - p.y) < 6 && Math.hypot(c.x - p.hx, c.y - p.hy) < p.roam && !this.chats.some((o) => Math.hypot(o.x - c.x, o.y - c.y) < 1)) s = c;
+      }
+      if (!s) return false;
       g = { x: s.x, y: s.y, n: 0, members: [] };
       this.chats.push(g);
     }
@@ -1275,8 +1305,9 @@ export class People {
     this.pathBudget = 3;
     this.panicBudget = 4;
     if (f.dangers.length) this.alarm(f);
-    // building states (doors of destroyed houses close)
+    // building states (doors of destroyed houses close), new bases
     if ((this.frameNo & 63) === 0) {
+      this.scanBuildings();
       for (const d of this.doors) {
         if (!d.alive || d.ent < 0) continue;
         const e = this.world.entities.get(d.ent);

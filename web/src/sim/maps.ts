@@ -466,6 +466,15 @@ export function createDesertMap(seed: number): GameMap {
       const i = y * W + x;
       const t = g.tiles[i];
       if ((t !== Tile.Grass && t !== Tile.Dirt && t !== Tile.Sand) || reserved(x, y) || g.ore[i]) continue;
+      // no trees on the waterline: a palm needs a full tile of dry ground between it and the oasis
+      let wet = false;
+      for (let dy = -1; dy <= 1 && !wet; dy++)
+        for (let dx = -1; dx <= 1 && !wet; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx >= 0 && yy >= 0 && xx < W && yy < H && g.tiles[yy * W + xx] === Tile.Water) wet = true;
+        }
+      if (wet) continue;
       let palm = 0;
       for (const o of oases) {
         const d = Math.hypot(x - o.x, y - o.y);
