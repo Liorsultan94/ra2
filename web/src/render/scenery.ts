@@ -8,6 +8,7 @@ import { FieldType, type Layout } from './layout';
 import { buildingTextures, roadTexture } from './terraintex';
 import { biomeLook } from './biome';
 import { buildCity, isCityKind } from './models/citybldgs';
+import { appendLoopRibbons } from './ambient/roadfurniture';
 import { snowLine } from './props';
 
 /*
@@ -145,6 +146,8 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     }
     for (let i = 0; i < rows.length - 1; i++) for (let k = 0; k < across.length - 1; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
   }
+  // roundabout / turning-circle rings: road pieces in the same mesh (ambient/roadfurniture.ts)
+  appendLoopRibbons(rb, m, layout.roads);
   const roadGeo = rb.build();
   roadGeo.computeVertexNormals();
   const roads = new THREE.Mesh(roadGeo, roadMat);

@@ -2,18 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
 import type { MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
+import { roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
 import {
   Ctl,
   Light,
   SIGNAL_TIMING,
   SigMode,
-  buildRoadNet,
   gapOk,
   headLight,
   loopGapFree,
   mustStop,
-  netInput,
   onSurface,
   pointAt,
   signalCycle,
@@ -22,15 +21,14 @@ import {
 } from '../src/render/ambient/roadnet';
 
 const MAPS: MapId[] = ['frontline', 'desert', 'winter', 'urban'];
-const D = Math.SQRT1_2;
 
 const nets = new Map<MapId, RoadNet>();
 function net(id: MapId): RoadNet {
   let n = nets.get(id);
   if (!n) {
     const m = createMap(id, 1);
-    const bridges = m.bridges.map((b) => ({ ends: [{ x: b.x - (b.length / 2) * D, y: b.y + (b.length / 2) * D }, { x: b.x + (b.length / 2) * D, y: b.y - (b.length / 2) * D }] }));
-    n = buildRoadNet(netInput(m, buildLayout(m), bridges));
+    // the lane graph the layout was fitted to (built while laying it out)
+    n = roadNetFor(m, buildLayout(m));
     nets.set(id, n);
   }
   return n;

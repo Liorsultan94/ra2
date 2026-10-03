@@ -343,6 +343,12 @@ function analyse(s: Src, si: number, charts: Chart[]): SrcData {
   return { P, FN, E, C, CU };
 }
 
+/** Paint codes (vertex colours of the painted-detail bucket) that bake as a diamond mesh grille / louvres. */
+export const PAINT_MESH = 0x2b2c2d;
+export const PAINT_LOUVRE = 0x2d2c2b;
+const C_MESH = new THREE.Color(PAINT_MESH);
+const C_LOUVRE = new THREE.Color(PAINT_LOUVRE);
+
 let seedK = 0;
 function styleCharts(charts: Chart[], srcs: Src[]) {
   for (const ch of charts) {
@@ -355,6 +361,16 @@ function styleCharts(charts: Chart[], srcs: Src[]) {
       continue;
     }
     ch.style = s.kind === 'camo' ? 1 : s.kind === 'D' ? 2 : 3;
+    if (ch.style === 2) {
+      // grille paints: diamond mesh / louvres baked into the normal + AO
+      const col = s.mesh.geometry.attributes.color;
+      if (col) {
+        const i = ch.tris[0] * 3;
+        const m = (c: THREE.Color) => Math.abs(col.getX(i) - c.r) + Math.abs(col.getY(i) - c.g) + Math.abs(col.getZ(i) - c.b) < 0.0015;
+        if (m(C_MESH)) ch.style = 4;
+        else if (m(C_LOUVRE)) ch.style = 5;
+      }
+    }
     if (ch.style !== 1) continue;
     const fill = ch.area / Math.max(1e-9, L * H);
     // module seams on long plates (~1 m pitch), not on the deck / roof (hatches and grilles live there)
@@ -537,6 +553,25 @@ float dome(float d, float r) { float t = clamp(1.0 - d * d / (r * r), 0.0, 1.0);
 float detailH(vec2 c, out float cav) {
   cav = 0.0;
   float st = vSt.x;
+  if (st > 3.5) {
+    vec2 q = c - vCh.xy;
+    float L0 = vCh.z - vCh.x;
+    float H0 = vCh.w - vCh.y;
+    float inF = step(0.003, q.x) * step(q.x, L0 - 0.003) * step(0.003, q.y) * step(q.y, H0 - 0.003);
+    if (st < 4.5) {
+      // diamond mesh: bars on a 45 deg grid, deep dark holes
+      vec2 d = vec2(q.x + q.y, q.x - q.y) / 0.0115;
+      vec2 f = min(fract(d), 1.0 - fract(d));
+      float bar = 1.0 - smoothstep(0.09, 0.17, min(f.x, f.y));
+      cav = (1.0 - bar) * inF;
+      return -0.004 * cav;
+    }
+    // louvres: slanted horizontal slats
+    float t = q.y / 0.0075;
+    float f = fract(t);
+    cav = smoothstep(0.62, 0.98, f) * inF;
+    return (-0.0028 * f) * inF;
+  }
   if (st < 0.5 || st > 1.5) return 0.0;
   float h = 0.0;
   float seed = vSt.y;
@@ -648,7 +683,7 @@ void main() {
   vec2 dcy = dFdy(vC) * vK;
   vec2 gA = vec2(dot(gC, dcx), dot(gC, dcy)) + gB;
   vec3 nm = normalize(vec3(-gA, 1.0));
-  ao *= 1.0 - 0.55 * cav;
+  ao *= 1.0 - (vSt.x > 3.5 ? 0.88 : 0.55) * cav;
   ao *= 1.0 - 0.35 * crease;
   oC = vec4(nm.xy * 0.5 + 0.5, clamp(ao, 0.0, 1.0), clamp(edge, 0.0, 1.0));
   // never write the "empty" marker

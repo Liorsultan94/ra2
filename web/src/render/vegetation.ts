@@ -10,6 +10,7 @@ import { Leaf, foliageAtlas, leafCell } from './terraintex';
 import { Shrub, buildTrees, shrubGeometry, shrubTint, treeMaterials } from './trees';
 import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
+import { roadClear } from './ambient/clearance';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -53,6 +54,7 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
   }
   // render-only trees of the hand-designed maps: street trees, roadside palms (sim/maps.ts deco)
   (m.deco?.trees ?? []).forEach((t, k) => {
+    if (!roadClear(m, t.x, t.y, 0.3)) return; // never on a road, turning circle or junction
     const r = hash2(k, 7, 43);
     const species = m.biome === 'desert' ? (t.kind === 2 ? Species.Palm : Species.Acacia) : m.biome === 'winter' ? Species.Birch : r < 0.7 ? Species.Young : Species.Fruit;
     out.push({ x: t.x, y: t.y, s: (m.biome === 'urban' ? 0.85 : 0.95) + hash2(k, 8, 43) * 0.3, species, rot: hash2(k, 9, 43) * Math.PI * 2 });

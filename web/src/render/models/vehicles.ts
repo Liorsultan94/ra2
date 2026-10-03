@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
-import { factionCamo, pbrMaterial, worldUV } from '../textures';
+import { factionCamo, worldUV } from '../textures';
 import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
-import { armourMod, armourModPlain, unitLook, vehCamo } from './unittex';
+import { armourMod, armourModPlain, treadTex, unitLook, vehCamo } from './unittex';
 import { bakeVehicle, type BakeResult } from './vehbake';
-import { registerLods } from '../perf/lod';
+import { lodGeos, registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -399,7 +399,7 @@ function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse =
   });
 }
 
-const TREAD_K = 4; // texture repeats per world unit along the belt (6 links per repeat)
+const TREAD_K = 4; // texture repeats per world unit along the belt (8 links per repeat, unittex treadTex)
 
 // ------------------------------------------------------------- build parts
 
@@ -741,9 +741,10 @@ class Bld {
   wheels(parent: Part | THREE.Object3D, geo: THREE.BufferGeometry, entries: WheelEntry[], tag = 'wheels') {
     if (this.zk !== 1) entries = entries.map((e) => ({ ...e, z: e.z * this.zk }));
     // running gear: mud caked on the rims and tyres, more toward the outside
-    const aw = geo.getAttribute('aWear') as THREE.BufferAttribute | undefined;
-    if (aw) {
-      const pos = geo.attributes.position;
+    for (const g of [geo, ...(lodGeos(geo) ?? [])]) {
+      const aw = g.getAttribute('aWear') as THREE.BufferAttribute | undefined;
+      if (!aw) continue;
+      const pos = g.attributes.position;
       let R = 1e-6;
       for (let i = 0; i < pos.count; i++) R = Math.max(R, Math.hypot(pos.getX(i), pos.getY(i)));
       for (let i = 0; i < pos.count; i++) aw.setX(i, 0.55 + 0.45 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R));
@@ -1134,7 +1135,9 @@ class Bld {
       const n = g.userData.lodN as number[] | undefined;
       const k = (m as THREE.InstancedMesh).isInstancedMesh ? (m as THREE.InstancedMesh).count : 1;
       let cnt = [total, total, total];
-      if (n && (n[0] < total || n[1] < total)) {
+      const ex = lodGeos(g);
+      if (ex) cnt = [total, ex[0].attributes.position.count, ex[1].attributes.position.count];
+      else if (n && (n[0] < total || n[1] < total)) {
         const g1 = n[1] < total ? subGeo(g, n[1]) : g;
         const g2 = n[0] < n[1] ? subGeo(g, n[0]) : g1;
         registerLods(g, [g1, g2]);
@@ -1571,7 +1574,10 @@ function beltGeo(loop: ReturnType<typeof beltLoop>, z0: number, z1: number, bt: 
 }
 
 function treadBase(fog: FogOfWar | null) {
-  return pbrMaterial('tread', { color: 0x3a3936, divisions: 6, grime: 0.55, seed: 3 }, fog);
+  return cmat('tread3', fog, () => {
+    const t = treadTex();
+    return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, metalness: 0.3, normalScale: new THREE.Vector2(1.1, 1.1) });
+  });
 }
 
 const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9 };
@@ -1595,63 +1601,131 @@ type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv';
 const gDisc = (r: number, seg = 12) => new THREE.CircleGeometry(r, seg);
 const gRing = (r0: number, r1: number, seg = 14) => new THREE.RingGeometry(r0, r1, seg, 1);
 
-/** Road wheel: axle along Z, outer face toward +Z, centred on the origin (low poly: faces are discs). */
+/** Lathe around the Z axis from a [radius, z] profile (outward faces: profile runs up the tread, then inward along the face). */
+function gLatheZ(pts: [number, number][], seg: number): THREE.BufferGeometry {
+  const g = new THREE.LatheGeometry(
+    pts.map(([r, z]) => new THREE.Vector2(r, z)),
+    seg,
+  );
+  g.rotateX(Math.PI / 2);
+  return g;
+}
+
+/** LOD stand-ins of a wheel shape carry a neutral baked texel (their own charts are LOD0 only). */
+function neutralUv1(g: THREE.BufferGeometry) {
+  const n = g.attributes.position.count;
+  g.setAttribute('uv1', new THREE.BufferAttribute(new Float32Array(n * 2).fill(0.003), 2));
+  return g;
+}
+
+/**
+ * Road wheel: axle along Z, outer face toward +Z, centred on the origin. LOD0: lathe-turned rubber tyre
+ * with a rounded shoulder, steel rim lip, dished disc (style: holes / ribs), raised hub with cap;
+ * LOD1: 10-sided tyre + flat disc + hub; LOD2: 8-sided drum. Registered as explicit geometry LODs.
+ */
 function roadWheelGeo(b: Bld, r: number, w: number, style: WheelStyle): THREE.BufferGeometry {
-  const a = new Acc();
   const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.8) : shade(b.base, 0.9);
+  const rub = K.rubber;
   const hub = 0x3e4144;
   const zf = w / 2;
-  a.add(gCylZ(r, r, w, 14, true), K.rubber);
-  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, zf));
-  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, -zf, 0, Math.PI, 0));
-  a.add(gCylZ(r * 0.78, r * 0.8, 0.008, 14, true), disc, TR(0, 0, zf - 0.004));
-  a.add(gDisc(r * 0.78, 14), disc, TR(0, 0, zf - 0.004 + 0.004));
+  const S = 14;
+  const a = new Acc();
+  // tyre: tread band + shoulder + outer side wall (crease points duplicated)
+  a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.08], [r, zf - w * 0.1], [r, zf - w * 0.1], [r * 0.955, zf], [r * 0.955, zf], [r * 0.86, zf + 0.0008]], S), rub);
+  a.add(gRing(r * 0.3, r * 0.97, S), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  // steel rim lip + dished disc + hub boss
+  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.84, zf + 0.0028], [r * 0.8, zf + 0.0028], [r * 0.8, zf + 0.0028], [r * 0.72, zf - 0.002], [r * 0.4, zf - 0.005], [r * 0.4, zf - 0.005], [r * 0.37, zf - 0.005]], S), disc);
+  a.add(gLatheZ([[r * 0.37, zf - 0.005], [r * 0.34, zf + 0.004], [r * 0.34, zf + 0.004], [r * 0.25, zf + 0.0075], [r * 0.25, zf + 0.0075], [r * 0.2, zf + 0.0095], [0.0001, zf + 0.0095]], 10), hub);
+  // disc pattern
   if (style === 'sov') {
     for (let i = 0; i < 8; i++) {
       const t = (i / 8) * Math.PI * 2;
-      a.add(new THREE.PlaneGeometry(r * 0.4, r * 0.08), shade(disc, 0.55), TR(Math.cos(t) * r * 0.55, Math.sin(t) * r * 0.55, zf + 0.002, 0, 0, t));
-    }
-  } else if (style === 't80') {
-    a.add(gRing(r * 0.5, r * 0.6, 14), shade(disc, 0.7), TR(0, 0, zf + 0.001));
-    for (let i = 0; i < 6; i++) {
-      const t = (i / 6) * Math.PI * 2;
-      a.add(gDisc(r * 0.08, 5), K.dark, TR(Math.cos(t) * r * 0.38, Math.sin(t) * r * 0.38, zf + 0.002));
+      a.add(new THREE.BoxGeometry(r * 0.38, r * 0.07, 0.004), shade(disc, 0.82), TR(Math.cos(t) * r * 0.57, Math.sin(t) * r * 0.57, zf - 0.002, 0, 0, t));
     }
   } else {
-    const holes = style === 'merk' ? 0 : style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : 6;
+    const holes = style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : style === 't80' ? 8 : 6;
+    const hr = style === 't80' ? 0.075 : style === 'merk' ? 0.12 : 0.105;
     for (let i = 0; i < holes; i++) {
-      const t = (i / holes) * Math.PI * 2;
-      a.add(gDisc(r * 0.11, 6), K.dark, TR(Math.cos(t) * r * 0.5, Math.sin(t) * r * 0.5, zf + 0.002));
-    }
-    if (style === 'merk') {
-      for (let i = 0; i < 6; i++) {
-        const t = (i / 6) * Math.PI * 2;
-        a.add(new THREE.PlaneGeometry(r * 0.46, r * 0.08), shade(disc, 0.6), TR(Math.cos(t) * r * 0.45, Math.sin(t) * r * 0.45, zf + 0.002, 0, 0, t));
-      }
+      const t = (i / holes) * Math.PI * 2 + 0.3;
+      a.add(gDisc(r * hr, 7), K.black, TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0028));
+      a.add(new THREE.TorusGeometry(r * hr, r * 0.018, 3, 7), shade(disc, 0.7), TR(Math.cos(t) * r * 0.56, Math.sin(t) * r * 0.56, zf - 0.0028));
     }
   }
-  a.add(gCylZ(r * 0.22, r * 0.3, 0.016, 8), hub, TR(0, 0, zf + 0.006));
-  a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.06), 0x8a8e90, TR(0, 0, zf + 0.0145));
-  return a.merged('D')!;
+  // hub nuts
+  for (let i = 0; i < 6; i++) {
+    const t = (i / 6) * Math.PI * 2;
+    a.add(gCylZ(r * 0.035, r * 0.035, 0.004, 6), mt(0x55585a), TR(Math.cos(t) * r * 0.29, Math.sin(t) * r * 0.29, zf + 0.007));
+  }
+  const g0 = a.merged('D')!;
+  delete g0.userData.lodN;
+  // LOD1
+  const a1 = new Acc();
+  a1.add(gCylZ(r, r, w, 10, true), rub);
+  a1.add(gRing(r * 0.8, r, 10), rub, TR(0, 0, zf));
+  a1.add(gDisc(r * 0.8, 10), disc, TR(0, 0, zf - 0.002));
+  a1.add(gRing(0.0001, r, 10), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  a1.add(gCylZ(r * 0.3, r * 0.36, 0.012, 6), hub, TR(0, 0, zf + 0.002));
+  const g1 = neutralUv1(a1.merged('D')!);
+  // LOD2
+  const a2 = new Acc();
+  a2.add(gCylZ(r, r, w, 8), rub);
+  a2.add(gDisc(r * 0.78, 8), disc, TR(0, 0, zf + 0.0005));
+  const g2 = neutralUv1(a2.merged('D')!);
+  delete g1.userData.lodN;
+  delete g2.userData.lodN;
+  registerLods(g0, [g1, g2]);
+  return g0;
 }
 
-/** Drive sprocket: toothed rim + hub. */
-function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeometry {
-  const a = new Acc();
-  const c = 0x3a3c3c;
-  const zf = w / 2;
-  a.add(gCylZ(r * 0.84, r * 0.84, w * 0.9, teeth, true), c);
+/** Toothed ring (extruded gear outline) of radius r, axle along Z, centred on z. */
+function gGear(r: number, teeth: number, depth: number): THREE.BufferGeometry {
+  const pts: P2[] = [];
+  const rr = r * 0.82;
   for (let i = 0; i < teeth; i++) {
-    const t = (i / teeth) * Math.PI * 2;
-    a.add(new THREE.BoxGeometry(r * 0.26, r * 0.2, w * 0.9), 0x47473f, TR(Math.cos(t) * r * 0.9, Math.sin(t) * r * 0.9, 0, 0, 0, t));
+    const t0 = (i / teeth) * Math.PI * 2;
+    const dt = (Math.PI * 2) / teeth;
+    for (const [f, rad] of [
+      [0.0, rr],
+      [0.22, rr],
+      [0.36, r],
+      [0.64, r],
+      [0.78, rr],
+    ] as [number, number][])
+      pts.push([Math.cos(t0 + f * dt) * rad, Math.sin(t0 + f * dt) * rad]);
   }
-  a.add(gDisc(r * 0.84, teeth), shade(b.base, 0.75), TR(0, 0, zf * 0.9));
-  a.add(gCylZ(r * 0.3, r * 0.42, 0.02, 8), 0x3e4144, TR(0, 0, zf * 0.9 + 0.008));
+  const g = gSide(pts, depth, 0);
+  return g;
+}
+
+/** Drive sprocket: two toothed rings, spoked / holed hub disc, hub boss (LOD1: one gear, LOD2: drum). */
+function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeometry {
+  const c = 0x4a4038; // worn / rusty teeth
+  const disc = shade(b.base, 0.75);
+  const zf = w / 2;
+  const a = new Acc();
+  for (const z of [-w * 0.27, w * 0.27]) a.add(gGear(r, teeth, w * 0.2), c, TR(0, 0, z));
+  a.add(gCylZ(r * 0.8, r * 0.8, w * 0.38, 14, true), shade(c, 0.8));
+  a.add(gLatheZ([[r * 0.82, zf * 0.72], [r * 0.7, zf * 0.72 + 0.003], [r * 0.45, zf * 0.72 + 0.001], [r * 0.45, zf * 0.72 + 0.001], [r * 0.32, zf * 0.72 + 0.009], [r * 0.32, zf * 0.72 + 0.009], [0.0001, zf * 0.72 + 0.011]], 12), disc);
+  a.add(gDisc(r * 0.82, 12), shade(c, 0.6), TR(0, 0, -zf * 0.72, 0, Math.PI, 0));
   for (let i = 0; i < 6; i++) {
     const t = (i / 6) * Math.PI * 2 + 0.5;
-    a.add(gDisc(r * 0.09, 5), K.dark, TR(Math.cos(t) * r * 0.6, Math.sin(t) * r * 0.6, zf * 0.9 + 0.001));
+    a.add(gDisc(r * 0.09, 6), K.black, TR(Math.cos(t) * r * 0.58, Math.sin(t) * r * 0.58, zf * 0.72 + 0.0035));
+    a.add(gCylZ(r * 0.035, r * 0.035, 0.004, 6), mt(0x55585a), TR(Math.cos(t + 0.5) * r * 0.25, Math.sin(t + 0.5) * r * 0.25, zf * 0.72 + 0.011));
   }
-  return a.merged('D')!;
+  const g0 = a.merged('D')!;
+  delete g0.userData.lodN;
+  const a1 = new Acc();
+  a1.add(gGear(r, teeth, w * 0.7), c);
+  a1.add(gDisc(r * 0.8, 10), disc, TR(0, 0, w * 0.35 + 0.002));
+  a1.add(gCylZ(r * 0.3, r * 0.36, 0.014, 6), 0x3e4144, TR(0, 0, w * 0.35 + 0.006));
+  const g1 = neutralUv1(a1.merged('D')!);
+  const a2 = new Acc();
+  a2.add(gCylZ(r * 0.9, r * 0.9, w * 0.7, 8), c);
+  const g2 = neutralUv1(a2.merged('D')!);
+  delete g1.userData.lodN;
+  delete g2.userData.lodN;
+  registerLods(g0, [g1, g2]);
+  return g0;
 }
 
 /** Truck / wheeled AFV tyre with hub (axle along Z, outer face +Z). */

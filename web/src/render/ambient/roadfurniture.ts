@@ -2,7 +2,10 @@ import * as THREE from 'three';
 import { BRIDGE_HEIGHT, type GameMap } from '../../sim/map';
 import type { FogOfWar } from '../fog';
 import { surfaceHeight } from '../ground';
-import { Light, MarkKind, PropKind, headLight, type Mark, type RoadNet } from './roadnet';
+import type { GeoBuilder } from '../geo';
+import type { Road } from '../layout';
+import { netForRoads } from './clearance';
+import { Light, MarkKind, PropKind, headLight, pointAt, wrapPi, type Mark, type RoadNet } from './roadnet';
 import { groundAt, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
 /*
@@ -30,6 +33,71 @@ const LIFT = 0.045;
 const FAR = 62;
 
 const C = (hex: number) => new THREE.Color(hex);
+
+// ------------------------------------------------------------------ ring ribbons
+
+const _rv = new THREE.Vector3();
+const _rn = new THREE.Vector3(0, 1, 0);
+
+/**
+ * The asphalt ring of every paved roundabout / turning circle as a road piece
+ * in the road ribbon mesh (scenery.ts): same material, texture and biome look
+ * as the roads it joins. Radially the ring is the outer half of a road (the
+ * outer edge is the road's shoulder and edge line, the inner part plain
+ * asphalt under the island); where an arm joins, the shoulder gives way to
+ * asphalt and the edge flares out in curved corners. The roads themselves are
+ * cut back to just inside the ring (clearance.ts), which sits a hair above them.
+ */
+export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Road[]) {
+  const net = netForRoads(roads);
+  if (!net) return;
+  for (const lp of net.loops) {
+    if (!lp.paved) continue;
+    const nd = net.nodes[lp.node];
+    const L0 = net.lines[nd.arms[0].line];
+    if (L0.painted) continue; // city streets: a decal on the painted asphalt
+    const mouths = nd.arms.map((a) => {
+      const L = net.lines[a.line];
+      const p = pointAt(L, a.edge);
+      return { ang: Math.atan2(p.y - lp.y, p.x - lp.x), h: L.half };
+    });
+    const u0 = nd.arms.some((a) => net.lines[a.line].variant === 0) ? 0.005 : 0.505;
+    const N = Math.max(40, Math.ceil(lp.R * 30));
+    const K = 5;
+    const rIn = Math.max(0.05, lp.ri - 0.08);
+    const rMid = (lp.R + rIn) / 2;
+    const reps = Math.max(1, Math.round((Math.PI * 2 * rMid) / 6));
+    const rows: number[][] = [];
+    for (let i = 0; i <= N; i++) {
+      const th = (i / N) * Math.PI * 2;
+      let mouth = 0;
+      let flare = 0;
+      for (const mo of mouths) {
+        const d = Math.abs(wrapPi(th - mo.ang)) * lp.R;
+        const sm = (a: number, b: number, x: number) => {
+          const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+          return t * t * (3 - 2 * t);
+        };
+        mouth = Math.max(mouth, 1 - sm(mo.h * 0.8, mo.h + 0.3, d));
+        // curved corners: the edge swells out between the road edge and the ring
+        flare = Math.max(flare, 0.06 + 0.4 * sm(0, mo.h + 0.05, d) * (1 - sm(mo.h + 0.15, mo.h + 0.75, d)));
+      }
+      const Ro = lp.R + flare;
+      const uOut = 0.02 + 0.28 * mouth;
+      const row: number[] = [];
+      for (let k = 0; k <= K; k++) {
+        const t = k / K; // outer -> inner (the ribbon builder's winding)
+        const r = Ro + (rIn - Ro) * t;
+        const x = lp.x + Math.cos(th) * r;
+        const z = lp.y + Math.sin(th) * r;
+        _rv.set(x, surfaceHeight(m, x, z) + 0.038, z);
+        row.push(rb.vert(_rv, _rn, u0 + 0.49 * (uOut + (0.4 - uOut) * t), (i / N) * reps, 1));
+      }
+      rows.push(row);
+    }
+    for (let i = 0; i < N; i++) for (let k = 0; k < K; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
+  }
+}
 
 // ------------------------------------------------------------------ atlas
 
@@ -83,11 +151,11 @@ const CELL = 256;
 /** Atlas cells (uv rects): paved disc, gravel disc, strip rows (stop bar, teeth, zebra, asphalt link) and a gravel link. */
 const UV = {
   disc: [0, 0, 0.5, 0.5],
-  gravel: [0.5, 0, 1, 0.5],
+  island: [0.5, 0, 1, 0.5],
   bar: [0, 0.5, 0.5, 0.625],
   teeth: [0, 0.625, 0.5, 0.75],
   zebra: [0, 0.75, 0.5, 0.875],
-  asphalt: [0, 0.875, 0.5, 1],
+  splitter: [0, 0.875, 0.5, 1],
   gravel2: [0.5, 0.5, 1, 1],
 } as const;
 
@@ -148,31 +216,37 @@ function paintAtlas(pal: Pal): HTMLCanvasElement | null {
       }
       put(x, y, c);
     }
-  // gravel turning loop of a dirt track
+  // roundabout island: striped kerb round grass / sand / snow
   for (let y = 0; y < CELL; y++)
     for (let x = 0; x < CELL; x++) {
       const dx = (x + 0.5) / (CELL / 2) - 1;
       const dy = (y + 0.5) / (CELL / 2) - 1;
       const r = Math.hypot(dx, dy);
       const ang = Math.atan2(dy, dx);
-      const edge = 0.86 + (vnoise(ang * 7 + 3, 1.5, 17) - 0.5) * 0.18;
-      if (r > edge) {
+      if (r > 1) {
         put(CELL + x, y, [0, 0, 0], 0);
         continue;
       }
-      let c = grav(x, y, pal.gravel);
-      // ruts round the loop
-      c = shade(c, 1 - Math.exp(-Math.pow((Math.abs(r - 0.55) - 0.07) / 0.035, 2)) * 0.22);
+      let c: number[];
+      if (r > 0.86) {
+        const seg = Math.floor(((ang + Math.PI) / (Math.PI * 2)) * 28) % 2;
+        c = shade(seg ? [222, 220, 212] : pal.urban ? [70, 72, 76] : [196, 60, 50], 0.9 + hash(x, y, 12) * 0.12);
+      } else {
+        const n = vnoise(x / 6, y / 6, 13);
+        c = shade(mix(pal.island, pal.islandAlt, n), 0.85 + hash(x, y, 14) * 0.25);
+        // a darker rim of soil just inside the kerb
+        if (r > 0.8) c = shade(c, 0.8);
+      }
       put(CELL + x, y, c);
     }
-  // strip rows: stop bar, give-way teeth, zebra stripes, asphalt link
+  // strip rows: stop bar, give-way teeth, zebra stripes, splitter island
   const RH = CELL / 4;
   for (let row = 0; row < 4; row++)
-    for (let y = 0; y < RH / 2; y++)
+    for (let y = 0; y < RH; y++)
       for (let x = 0; x < CELL; x++) {
-        const py = CELL + row * (RH / 2) + y;
+        const py = CELL + row * RH + y;
         const u = (x + 0.5) / CELL; // along (car side at u = 0)
-        const v = (y + 0.5) / (RH / 2); // across
+        const v = (y + 0.5) / RH; // across
         const wear = 0.82 + vnoise(x / 6, y / 3 + row * 7, 19) * 0.25;
         let a = 255;
         let c: number[] = shade(pal.paint, wear);
@@ -188,9 +262,12 @@ function paintAtlas(pal: Pal): HTMLCanvasElement | null {
           const k = (v * 9) % 1;
           if (k > 0.55 || u < 0.03 || u > 0.97) a = 0;
         } else {
-          c = asph(x, py);
-          if (v < 0.06 || v > 0.94) c = mix(c, grav(x, py, pal.shoulder), 0.7);
-          if (v < 0.015 || v > 0.985) a = 0;
+          // splitter island: a kerbed lens pointing away from the circle (u = 0 at the circle)
+          const w = Math.sin(Math.PI * Math.min(1, u * 1.05)) * (0.55 + 0.45 * (1 - u));
+          const d = Math.abs(v - 0.5) * 2;
+          if (d > w) a = 0;
+          else if (d > w - 0.22 || u < 0.06 || u > 0.92) c = shade((Math.floor(u * 9) % 2 ? [222, 220, 212] : pal.urban ? [70, 72, 76] : [196, 60, 50]), 0.92);
+          else c = shade(mix(pal.island, pal.islandAlt, vnoise(x / 6, y / 4, 29)), 0.9);
         }
         put(x, py, c, a);
       }
@@ -519,28 +596,24 @@ export class RoadFurniture {
         }
     };
     for (const mk of marks) {
-      switch (mk.kind) {
-        case MarkKind.Disc:
-          quad(mk, UV.disc, true);
-          break;
-        case MarkKind.Gravel:
-          quad(mk, UV.gravel, true);
-          break;
-        case MarkKind.Bar:
-          quad(mk, UV.bar, false);
-          break;
-        case MarkKind.Teeth:
-          quad(mk, UV.teeth, false);
-          break;
-        case MarkKind.Zebra:
-          quad(mk, UV.zebra, false);
-          break;
-        case MarkKind.Asphalt:
-          quad(mk, UV.asphalt, false);
-          break;
-        case MarkKind.Gravel2:
-          quad(mk, UV.gravel2, false);
-          break;
+      if (mk.kind === MarkKind.Bar) quad(mk, UV.bar, false);
+      else if (mk.kind === MarkKind.Teeth) quad(mk, UV.teeth, false);
+      else if (mk.kind === MarkKind.Zebra) quad(mk, UV.zebra, false);
+      // (turning circles / gravel loops / links: road pieces and ring tracks, see clearance.ts)
+    }
+    const net = this.net;
+    for (const lp of net.loops) {
+      if (!lp.paved) continue;
+      const nd = net.nodes[lp.node];
+      // city streets are painted by the ground: the circle is a decal on them
+      if (net.lines[nd.arms[0].line].painted) quad({ kind: MarkKind.Disc, x: lp.x, y: lp.y, ang: 0, len: lp.R, wid: lp.R }, UV.disc, true);
+      quad({ kind: MarkKind.Disc, x: lp.x, y: lp.y, ang: 0, len: lp.ri + 0.03, wid: 0 }, UV.island, true);
+      // splitter islands on the wider roads' mouths
+      for (const a of nd.arms) {
+        const L = net.lines[a.line];
+        if (L.painted || L.lane < 0.2) continue;
+        const p = pointAt(L, a.edge + a.dir * 0.5);
+        quad({ kind: MarkKind.Disc, x: p.x, y: p.y, ang: Math.atan2(p.ty * a.dir, p.tx * a.dir), len: 0.95, wid: Math.min(0.2, (L.lane - 0.11) * 2) }, UV.splitter, false);
       }
     }
     const g = new THREE.BufferGeometry();

@@ -7,7 +7,8 @@ import type { Layout } from '../layout';
 import { Driver, newDriveCar, type DriveCar } from './driver';
 import { carModel, type CarModel } from './models';
 import { RoadFurniture } from './roadfurniture';
-import { SigMode, buildRoadNet, nearestArc, netInput, pointAt, type RoadNet } from './roadnet';
+import { roadNetFor } from './clearance';
+import { SigMode, nearestArc, pointAt, type RoadNet } from './roadnet';
 import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
 /*
@@ -99,7 +100,7 @@ export class Traffic {
     quality: Quality,
     phone: boolean,
   ) {
-    this.net = buildRoadNet(netInput(map, layout, bridges));
+    this.net = roadNetFor(map, layout, bridges);
     this.driver = new Driver(this.net, (li) => this.usableLine(li));
     this.net.lines.forEach((L, li) => {
       if (L.bridge >= 0) return;

@@ -187,7 +187,7 @@ export class Ground {
     this.photo =
       tier > 0
         ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
-          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : (typeof location !== 'undefined' && /[?&]aniso=1\b/.test(location.search) ? 1 : 4), this.look.photoSat, this.look.photoHue)
+          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 2, this.look.photoSat, this.look.photoHue)
         : null;
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);
@@ -900,18 +900,15 @@ float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy)
 const PHOTO_MAP = /* glsl */ `
   phDx = dFdx(tw);
   phDy = dFdy(tw);
-  vec2 rw = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8);
-  vec4 dA = texture2D(detailTex, tw * 0.29);
-  vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
-  vec4 det = clamp((dA * 0.6 + dB * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
+  // (the procedural detail map is only fetched where the fields need it, below)
   vec4 gnz = texture2D(fogNoise, tw * 0.043);
-  float gDrift = (gnz.b - 0.5) + (texture2D(fogNoise, tw * 0.0117 + 0.5).g - 0.5);
+  float gDrift = (gnz.b - 0.5) * 1.6;
   float gFine = 1.0 - smoothstep(0.5, 1.5, fwidth(tw.x * (1.0 / GRASS_TILES)) * 40.0);
 #if PH_Q < 2
   phSel = smoothstep(0.32, 0.68, texture2D(fogNoise, tw * 0.093 + 0.21).g);
 #endif
   vec4 c2 = texture2D(ctl2Tex, mUV);
-  float dry = clamp(tnt.a + (dB.r - 0.5) * 0.3 + (det.g - 0.5) * 0.15, 0.0, 1.0);
+  float dry = clamp(tnt.a + (gnz.g - 0.5) * 0.3, 0.0, 1.0);
   // layer weights: grass takes what the splat leaves, worn turf gives way to soil, and the
   // soil splits into bare dirt / forest floor / gravel (ctl2)
   float wG = clamp(1.0 - spl.r - spl.g - spl.b - spl.a, 0.0, 1.0);
@@ -1004,6 +1001,10 @@ const PHOTO_MAP = /* glsl */ `
   float across = dot(tw, vec2(-fdir.y, fdir.x));
   float aa = fwidth(across);
   if (fMask > 0.001) {
+    vec2 rw = vec2(tw.x * 0.8 - tw.y * 0.6, tw.x * 0.6 + tw.y * 0.8);
+    vec4 dA = texture2D(detailTex, tw * 0.29);
+    vec4 dB = texture2D(detailTex, rw * 0.113 + 0.31);
+    vec4 det = clamp((dA * 0.6 + dB * 0.4 - 0.5) * 1.45 + 0.5, 0.0, 1.0);
     float ftype = floor((fld.g * 255.0 - 1.0) / FIELD_STEP + 0.5);
     vec3 fc = vec3(0.5);
     float fh = 0.0;

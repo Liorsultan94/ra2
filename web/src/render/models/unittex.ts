@@ -704,3 +704,96 @@ export function unitLook<T extends THREE.Material>(m: T, cfg: LookCfg): T {
   m.customProgramCacheKey = () => key;
   return m;
 }
+
+// ------------------------------------------------------------- track links
+
+let treadSet: UnitTexSet | null = null;
+/**
+ * Modern double-pin track (8 links per tile along U, V across the belt): steel shoes with two rubber
+ * pads, end connectors with wedge bolts at both edges, a centre connector / guide tooth, dark gaps
+ * between links packed with dirt. Albedo carries the cavity shading; tiles along U only.
+ */
+export function treadTex(): UnitTexSet {
+  if (treadSet) return treadSet;
+  const NU = 256;
+  const NV = 64;
+  const c = new Float32Array(NU * NV * 3);
+  const h = new Float32Array(NU * NV);
+  const r = new Float32Array(NU * NV);
+  const steel: [number, number, number] = [0.29, 0.275, 0.255];
+  const rubber: [number, number, number] = [0.12, 0.118, 0.115];
+  const dirt: [number, number, number] = [0.3, 0.25, 0.19];
+  for (let y = 0; y < NV; y++)
+    for (let x = 0; x < NU; x++) {
+      const u = (x + 0.5) / NU;
+      const v = (y + 0.5) / NV;
+      const lu = frac(u * 8);
+      const link = Math.floor(u * 8);
+      const i = y * NU + x;
+      const n = fbm(u, v * 0.25, 16, 951, 3);
+      // gap between links (pins) and the shoe body
+      const gap = 1 - sstep(0.03, 0.07, Math.min(lu, 1 - lu));
+      const edge = v < 0.11 || v > 0.89;
+      const mid = Math.abs(v - 0.5) < 0.065;
+      // rubber pads (slightly rounded), end connectors over the pins, centre guide
+      const padV = Math.min(sstep(0.13, 0.17, v) * (1 - sstep(0.43, 0.47, v)) + sstep(0.53, 0.57, v) * (1 - sstep(0.83, 0.87, v)), 1);
+      const padU = sstep(0.14, 0.2, lu) * (1 - sstep(0.8, 0.86, lu));
+      const pad = padV * padU;
+      const conn = (edge || mid) && (lu < 0.2 || lu > 0.8) ? 1 : 0;
+      const bolt = conn && Math.hypot((Math.min(lu, 1 - lu) - 0.08) * 1.6, (edge ? Math.min(v, 1 - v) - 0.055 : Math.abs(v - 0.5)) * 1.0) < 0.03 ? 1 : 0;
+      const grouser = !edge && !mid && Math.abs(lu - 0.5) < 0.05 ? 1 : 0;
+      let col: [number, number, number] = pad > 0.5 ? rubber : steel;
+      let ht = 0.42 + pad * 0.32 + conn * 0.36 + bolt * 0.12 + grouser * 0.1 - gap * 0.45 + (n - 0.5) * 0.06;
+      // wear: polished steel where the road wheels / ground rub, rubber pads chewed at the edges
+      const shine = conn ? 0.25 : grouser ? 0.35 : 0;
+      col = [col[0] * (1 + shine), col[1] * (1 + shine), col[2] * (1 + shine)];
+      // dirt packed in the gaps and around the pads, some caked patches
+      const caked = clamp01((fbm(u, v, 6, 957 + link, 3) - 0.55) * 3) * 0.6;
+      const dk = clamp01(gap * 0.9 + (1 - pad) * (1 - conn) * 0.25 + caked);
+      col = [col[0] * (1 - dk) + dirt[0] * dk, col[1] * (1 - dk) + dirt[1] * dk, col[2] * (1 - dk) + dirt[2] * dk];
+      const ao = 1 - gap * 0.6;
+      for (let j = 0; j < 3; j++) c[i * 3 + j] = col[j] * ao * (0.9 + n * 0.2);
+      h[i] = ht;
+      r[i] = pad > 0.5 ? 0.93 : conn || grouser ? 0.5 : 0.78;
+      if (caked > 0.2) r[i] = 0.95;
+    }
+  // tileable non-square: build the normals with wrap on both axes
+  const nrm = new Float32Array(NU * NV * 3);
+  const at = (x: number, y: number) => h[((y + NV) % NV) * NU + ((x + NU) % NU)];
+  for (let y = 0; y < NV; y++)
+    for (let x = 0; x < NU; x++) {
+      const dx = (at(x + 1, y) - at(x - 1, y)) * 4.5;
+      const dy = (at(x, y + 1) - at(x, y - 1)) * 4.5 * (NV / NU) * 4;
+      const len = Math.hypot(dx, dy, 1);
+      const i = (y * NU + x) * 3;
+      nrm[i] = (-dx / len) * 0.5 + 0.5;
+      nrm[i + 1] = (dy / len) * 0.5 + 0.5;
+      nrm[i + 2] = (1 / len) * 0.5 + 0.5;
+    }
+  const rr = new Float32Array(NU * NV * 3);
+  for (let i = 0; i < NU * NV; i++) {
+    rr[i * 3] = 1;
+    rr[i * 3 + 1] = r[i];
+  }
+  freeLattices();
+  treadSet = { map: toTexWH(NU, NV, c, true), normalMap: toTexWH(NU, NV, nrm, false), roughnessMap: toTexWH(NU, NV, rr, false) };
+  return treadSet;
+}
+
+function toTexWH(W: number, H: number, data: Float32Array, srgb: boolean) {
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  const img = ctx.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) {
+    for (let k = 0; k < 3; k++) img.data[i * 4 + k] = Math.max(0, Math.min(255, Math.round(data[i * 3 + k] * 255)));
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  return t;
+}
