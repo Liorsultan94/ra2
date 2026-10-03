@@ -763,7 +763,8 @@ export class Atmosphere {
       this.keys = this.buildKeys();
       this.preset = buildPreset({ ...this.cfg, tod: 'day' });
       if (this.wxCycle && !this.altP) this.altP = clonePreset(this.preset);
-      this.sunBase = new THREE.Vector3();
+      // a real direction right away: the cycle blend only rewrites it on the next frame, and a zero sun breaks shadows
+      this.sunBase = pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, new THREE.Vector3());
       this.active = true;
     }
     this.phaseOverride = u;

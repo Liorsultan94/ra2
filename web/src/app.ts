@@ -11,6 +11,11 @@ import { showAfterAction } from './ui/aar';
 import { isMapId } from './sim/maps';
 import type { MapId } from './sim/map';
 
+/** The demo battle behind the menu never needs more than medium: it only has to look alive, not burn the battery. */
+function demoQuality(q: ReturnType<typeof resolveQuality>): ReturnType<typeof resolveQuality> {
+  return q === 'high' || q === 'ultra' ? 'medium' : q;
+}
+
 /** ?map=frontline|desert|winter|urban picks the map (overrides the menu choice). */
 function urlMap(): MapId | undefined {
   const v = new URLSearchParams(location.search).get('map');
@@ -48,7 +53,7 @@ function startAttract() {
   const a = randomFaction();
   game = new Game(
     app,
-    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: resolveQuality(settings.quality) === 'high' ? 'medium' : resolveQuality(settings.quality), attract: true, cinematic: settings.cinematic, map: urlMap() },
+    { faction: a, enemy: randomFaction(a), difficulty: 'hard', credits: 10000, quality: demoQuality(resolveQuality(settings.quality)), attract: true, cinematic: settings.cinematic, map: urlMap() },
     audio,
     {
       onMenu: () => {
