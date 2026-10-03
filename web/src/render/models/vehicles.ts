@@ -1432,12 +1432,12 @@ interface Circ {
 }
 
 /** Closed belt centre line around the wheels (convex hull of circles), CCW in (x, y). */
-function beltLoop(circles: Circ[], bt: number, sag: number): { p: P2[]; n: P2[]; s: number[]; len: number } {
+function beltLoop(circles: Circ[], bt: number, sag: number, arc = 40, step = 0.025): { p: P2[]; n: P2[]; s: number[]; len: number } {
   const pts: P2[] = [];
   for (const c of circles) {
     const r = c.r + bt / 2;
-    for (let i = 0; i < 40; i++) {
-      const a = (i / 40) * Math.PI * 2;
+    for (let i = 0; i < arc; i++) {
+      const a = (i / arc) * Math.PI * 2;
       pts.push([c.x + Math.cos(a) * r, c.y + Math.sin(a) * r]);
     }
   }
@@ -1463,7 +1463,7 @@ function beltLoop(circles: Circ[], bt: number, sag: number): { p: P2[]; n: P2[];
     const a = hull[i];
     const b = hull[(i + 1) % hull.length];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const k = sag > 0 ? Math.max(1, Math.ceil(l / 0.025)) : 1;
+    const k = sag > 0 ? Math.max(1, Math.ceil(l / step)) : 1;
     for (let j = 0; j < k; j++) sub.push([a[0] + ((b[0] - a[0]) * j) / k, a[1] + ((b[1] - a[1]) * j) / k]);
   }
   hull = sub;
@@ -1743,17 +1743,16 @@ function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeom
   const disc = shade(b.base, 0.72);
   const zf = w / 2;
   const a = new Acc();
-  for (const z of [-w * 0.27, w * 0.27]) a.add(gGear(r, teeth, w * 0.2), c, TR(0, 0, z));
-  a.add(gCylZ(r * 0.62, r * 0.62, w * 0.36, 12, true), 0x262624);
+  a.add(gGear(r, teeth, w * 0.72), c);
   a.add(gSpokes(r * 0.8, r * 0.22, 6, 0.004), disc, TR(0, 0, zf * 0.72 + 0.002));
   a.add(gLatheZ([[r * 0.26, zf * 0.72], [r * 0.25, zf * 0.72 + 0.007], [r * 0.18, zf * 0.72 + 0.011], [0.0001, zf * 0.72 + 0.012]], 10), 0x3e4144);
   a.add(gDisc(r * 0.82, 12), shade(c, 0.6), TR(0, 0, -zf * 0.72, 0, Math.PI, 0));
   const g0 = a.merged('D')!;
   delete g0.userData.lodN;
   const a1 = new Acc();
-  a1.add(gGear(r, teeth, w * 0.7), c);
-  a1.add(gDisc(r * 0.8, 10), disc, TR(0, 0, w * 0.35 + 0.002));
-  a1.add(gCylZ(r * 0.24, r * 0.3, 0.014, 6), 0x3e4144, TR(0, 0, w * 0.35 + 0.006));
+  a1.add(gCylZ(r * 0.92, r * 0.92, w * 0.7, 11, true), c);
+  a1.add(gDisc(r * 0.92, 11), disc, TR(0, 0, w * 0.35 + 0.001));
+  a1.add(gCylZ(r * 0.24, r * 0.3, 0.014, 6, true), 0x3e4144, TR(0, 0, w * 0.35 + 0.006));
   const g1 = neutralUv1(a1.merged('D')!);
   const a2 = new Acc();
   a2.add(gCylZ(r * 0.9, r * 0.9, w * 0.7, 8), c);
@@ -1772,7 +1771,7 @@ function idlerGeo(b: Bld, r: number, w: number): THREE.BufferGeometry {
   a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.1], [r, zf - w * 0.12], [r * 0.95, zf], [r * 0.86, zf]], 15), K.rubber);
   a.add(gCylZ(r * 0.86, r * 0.86, w * 0.9, 15, true), 0x2a2a28);
   a.add(gSpokes(r * 0.87, r * 0.22, 6, 0.004), disc, TR(0, 0, zf - 0.003));
-  a.add(gSpokes(r * 0.87, r * 0.22, 6, 0.004), disc, TR(0, 0, -zf + 0.003, 0, Math.PI, 0));
+  a.add(gDisc(r * 0.87, 12), shade(disc, 0.7), TR(0, 0, -zf + 0.003, 0, Math.PI, 0));
   a.add(gLatheZ([[r * 0.26, zf - 0.004], [r * 0.25, zf + 0.004], [r * 0.18, zf + 0.008], [0.0001, zf + 0.009]], 10), 0x3e4144);
   const g0 = a.merged('D')!;
   delete g0.userData.lodN;
@@ -1842,19 +1841,26 @@ function running(b: Bld, t: TrackSpec) {
   circles.push({ x: t.spr[0], y: t.spr[1], r: t.spr[2] });
   circles.push({ x: t.idl[0], y: t.idl[1], r: t.idl[2] });
   for (const r of t.rollers ?? []) circles.push({ x: r[0], y: r[1], r: r[2] });
-  const loop = beltLoop(circles, bt, t.sag ?? 0);
+  const loop = beltLoop(circles, bt, t.sag ?? 0, 28, 0.034);
   const k = Math.max(1, Math.round(loop.len * TREAD_K)) / loop.len;
+  // LOD1 / LOD2 belts: coarser loops (no sag subdivision), the same link density
+  const loops = [loop, beltLoop(circles, bt, 0, 16), beltLoop(circles, bt, 0, 9)];
   const base = treadBase(b.fog);
   for (const side of [-1, 1]) {
     const zc = side * t.gauge * b.zk;
-    const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
-    const wa = new Float32Array(geo.attributes.position.count * 4);
-    const py = geo.attributes.position;
-    for (let i = 0; i < py.count; i++) {
-      wa[i * 4] = 0.4;
-      wa[i * 4 + 2] = py.getY(i); // root-space height: shade of the fenders (wear.ts run)
-    }
-    geo.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
+    const gs = loops.map((lp) => {
+      const g = beltGeo(lp, zc - t.tw / 2, zc + t.tw / 2, bt, (k * loop.len) / lp.len);
+      const wa = new Float32Array(g.attributes.position.count * 4);
+      const py = g.attributes.position;
+      for (let i = 0; i < py.count; i++) {
+        wa[i * 4] = 0.4;
+        wa[i * 4 + 2] = py.getY(i); // root-space height: shade of the fenders (wear.ts run)
+      }
+      g.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
+      return g;
+    });
+    const geo = gs[0];
+    registerLods(geo, [gs[1], gs[2]]);
     const mesh = new THREE.Mesh(geo, base);
     mesh.userData.tag = 'belt';
     mesh.userData.side = side;
@@ -2898,9 +2904,10 @@ function basket(p: Part, x0: number, x1: number, zw: number, y0: number, h: numb
   p.at(1, () => {
     const n = Math.round((zw * 2) / 0.0125);
     const bar = gCylY(0.0013, 0.0013, h * 0.96, 3, true);
-    for (let i = 1; i < n; i++) p.add(bar, rk, TR(x0, y0 + h * 0.5, -zw + (i * zw * 2) / n));
+    // every other bar is hero detail
+    for (let i = 1; i < n; i++) p.at(i % 2 ? 1 : 2, () => p.add(bar, rk, TR(x0, y0 + h * 0.5, -zw + (i * zw * 2) / n)));
     const m = Math.round((sideTo - x0) / 0.0125);
-    for (const s of [-1, 1]) for (let i = 1; i < m; i++) p.add(bar, rk, TR(x0 + (i * (sideTo - x0)) / m, y0 + h * 0.5, s * zw));
+    for (const s of [-1, 1]) for (let i = 1; i < m; i++) p.at(i % 2 ? 1 : 2, () => p.add(bar, rk, TR(x0 + (i * (sideTo - x0)) / m, y0 + h * 0.5, s * zw)));
   });
   // stowed kit: rolled tarp, kit bags, ammo boxes
   const bag = reg === 'mideast' ? [0x8c7a56, 0x6c6444, 0x7a6a4a] : [0x5c5a3c, 0x4e5434, 0x6a6448];
@@ -2915,16 +2922,16 @@ function basket(p: Part, x0: number, x1: number, zw: number, y0: number, h: numb
 function chains(p: Part, a: P2, c: P2, n: number, y: number, len: number) {
   const ck = 0x34352f;
   p.add(gCylX(0.003, 0.003, Math.hypot(c[0] - a[0], c[1] - a[1]), 5), ck, TR((a[0] + c[0]) / 2, y, (a[1] + c[1]) / 2, 0, -Math.atan2(c[1] - a[1], c[0] - a[0]), 0));
-  p.at(1, () => {
-    for (let i = 0; i <= n; i++) {
+  for (let i = 0; i <= n; i++) {
+    p.at(i % 2 ? 2 : 1, () => {
       const t = i / n;
       const x = a[0] + (c[0] - a[0]) * t;
       const z = a[1] + (c[1] - a[1]) * t;
       const l = len * (0.97 + 0.06 * hash01(i * 7 + Math.round(x * 1000)));
       p.add(gCylY(0.0018, 0.0018, l, 3, true), ck, TR(x, y - l / 2, z));
       p.add(new THREE.OctahedronGeometry(0.0078, 0), mt(0x3a3a36), TR(x, y - l - 0.005, z, 0.3, i * 0.7, 0));
-    }
-  });
+    });
+  }
 }
 
 /** Thin armour module plate on a leaning turret side (lean angle th; side s), centred (x, y, z on the face). */
@@ -2994,14 +3001,16 @@ function mbtMerkava(b: Bld) {
       }
     });
   }
-  // ---- front engine deck: big louvred air grille + access lids, driver front left, lights, tow cable
-  B.box(0.16, 0.004, 0.13, 0.31, 0.2325, 0.1, PAINT_LOUVRE, 0, 0, -0.165);
-  for (const z of [0.033, 0.167]) B.box(0.164, 0.006, 0.005, 0.31, 0.2335, z, CAMO, 0, 0, -0.165);
-  B.box(0.11, 0.004, 0.09, 0.37, 0.222, -0.06, PAINT_LOUVRE, 0, 0, -0.165);
-  lid(B, 0.12, 0.1, 0.17, 0.252, 0.12);
-  lid(B, 0.1, 0.08, 0.46, 0.2045, 0.12);
-  hatch(B, 0.17, 0.25, -0.13, 0.034);
-  for (const z of [-0.17, -0.13, -0.09]) periscope(B, 0.215, 0.247, z, 0, 0.018);
+  // ---- front engine deck (on the glacis): big louvred air grilles + access lids, driver front left
+  const gy = (x: number) => 0.272 - (x - 0.08) * 0.1057;
+  const ga = -Math.atan(0.1057);
+  B.box(0.16, 0.004, 0.13, 0.31, gy(0.31) + 0.0015, 0.1, PAINT_LOUVRE, 0, 0, ga);
+  for (const z of [0.033, 0.167]) B.box(0.164, 0.006, 0.005, 0.31, gy(0.31) + 0.002, z, CAMO, 0, 0, ga);
+  B.box(0.11, 0.004, 0.09, 0.4, gy(0.4) + 0.0015, -0.07, PAINT_LOUVRE, 0, 0, ga);
+  lid(B, 0.12, 0.1, 0.16, gy(0.16) - 0.0005, 0.12, 0);
+  lid(B, 0.08, 0.08, 0.49, gy(0.49) - 0.0005, 0.12, 0);
+  hatch(B, 0.17, gy(0.17), -0.13, 0.034);
+  for (const z of [-0.17, -0.13, -0.09]) periscope(B, 0.222, gy(0.222) - 0.002, z, 0, 0.018);
   for (const s of [-1, 1]) {
     headlight(B, 0.565, 0.22, s * 0.22);
     B.at(1, () => {
