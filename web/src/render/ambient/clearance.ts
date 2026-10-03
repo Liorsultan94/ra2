@@ -207,7 +207,7 @@ export function finishRoadLayout<L extends Layout>(m: GameMap, layout: L): L {
     const ix = Math.floor(x * R);
     const iy = Math.floor(y * R);
     if (ix < 0 || iy < 0 || ix >= m.w * R || iy >= m.h * R) return true;
-    return (layout.occ[iy * m.w * R + ix] & (OCC_FURN | OCC_ROAD)) !== 0;
+    return (layout.occ[iy * m.w * R + ix] & (OCC_FURN | OCC_ROAD | OCC_TRACK)) !== 0;
   };
   const tileOk = (x: number, y: number) => {
     const tx = Math.floor(x);
@@ -244,6 +244,28 @@ export function finishRoadLayout<L extends Layout>(m: GameMap, layout: L): L {
   }
   layout.poles.length = 0;
   layout.poles.push(...runs);
+  // power-line towers (the mirrored half isn't checked by the layout): slide along the line off the road, else skip one
+  layout.pylons.lines = layout.pylons.lines.map((line) => {
+    const out: V2[] = [];
+    line.forEach((p, i) => {
+      if (!furn(p.x, p.y) && !furn(p.x + 0.35, p.y) && !furn(p.x - 0.35, p.y) && !furn(p.x, p.y + 0.35) && !furn(p.x, p.y - 0.35)) {
+        out.push(p);
+        return;
+      }
+      const q = line[i + 1] ?? line[i - 1];
+      if (!q) return;
+      const d = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      for (const o of [0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) {
+        const x = p.x + ((q.x - p.x) / d) * o;
+        const y = p.y + ((q.y - p.y) / d) * o;
+        if (tileOk(x, y) && !furn(x, y) && !furn(x + 0.35, y) && !furn(x - 0.35, y) && !furn(x, y + 0.35) && !furn(x, y - 0.35)) {
+          out.push({ x, y });
+          return;
+        }
+      }
+    });
+    return out;
+  }).filter((l) => l.length > 1);
   const keep = layout.wrecks.filter((w) => {
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * Math.PI * 2;

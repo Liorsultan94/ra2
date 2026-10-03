@@ -509,6 +509,10 @@ export class Driver {
             this.turnStep(c, dt);
             return out;
           }
+          if (c.pk) {
+            this.parkStep(c, cars, dt);
+            return out;
+          }
           continue;
         }
       }

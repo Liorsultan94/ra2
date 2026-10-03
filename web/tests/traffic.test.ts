@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
 import type { MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
-import { roadNetFor } from '../src/render/ambient/clearance';
+import { roadClear, roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
 import {
   Ctl,
@@ -452,5 +452,91 @@ describe('driving by the rules (headless)', () => {
     expect(start.every((s) => s > 0)).toBe(true);
     expect(start[1]).toBeGreaterThan(start[0] + 0.2);
     expect(start[2]).toBeGreaterThan(start[1] + 0.2);
+  });
+});
+
+describe('road clearance', () => {
+  for (const id of MAPS) {
+    it(`${id}: nothing stands on the roads, turning circles or lots; roads end at the circles`, () => {
+      const m = createMap(id, 1);
+      const L = buildLayout(m);
+      const n = roadNetFor(m, L);
+      const inLoop = (x: number, y: number, pad: number) => n.loops.some((lp) => Math.hypot(lp.x - x, lp.y - y) < lp.R + pad);
+      const inLot = (x: number, y: number) =>
+        n.lots.some((lot) => Math.abs((x - lot.x) * lot.ux + (y - lot.y) * lot.uy) < lot.L / 2 + 0.1 && Math.abs((x - lot.x) * lot.nx + (y - lot.y) * lot.ny) < lot.D / 2 + 0.1);
+      for (const run of L.poles) for (const p of run) expect(inLoop(p.x, p.y, 0.15) || onSurface(n, p.x, p.y) || inLot(p.x, p.y), `pole ${p.x},${p.y}`).toBe(false);
+      for (const line of L.pylons.lines) for (const p of line) expect(inLoop(p.x, p.y, 0.3) || onSurface(n, p.x, p.y) || inLot(p.x, p.y), `pylon ${p.x},${p.y}`).toBe(false);
+      for (const w of L.wrecks) expect(inLoop(w.x, w.y, 0.1) || inLot(w.x, w.y)).toBe(false);
+      // render-only trees (the desert's roadside palms...) are filtered by the clearance
+      for (const t of m.deco?.trees ?? []) if (inLoop(t.x, t.y, 0.2) || inLot(t.x, t.y)) expect(roadClear(m, t.x, t.y, 0.3)).toBe(false);
+      for (const e of L.edges) expect(inLoop((e.a.x + e.b.x) / 2, (e.a.y + e.b.y) / 2, 0.1)).toBe(false);
+      for (const b of n.boards) expect(inLoop(b.x, b.y, 0.6) || onSurface(n, b.x, b.y) || inLot(b.x, b.y)).toBe(false);
+      // the road ribbons are cut back at the paved circles (the ring is drawn as its own road piece), no stub past a dead end
+      for (const lp of n.loops) {
+        if (!lp.paved || n.lines[n.nodes[lp.node].arms[0].line].painted) continue;
+        const arm = n.nodes[lp.node].arms[0];
+        const mouth = pointAt(n.lines[arm.line], arm.edge + arm.dir * 0.8);
+        const kx = mouth.x - lp.x;
+        const ky = mouth.y - lp.y;
+        for (const r of L.roads) {
+          if (r.ring || r.lot !== undefined) continue;
+          for (const p of r.pts) {
+            const d = Math.hypot(p.x - lp.x, p.y - lp.y);
+            expect(d).toBeGreaterThan(lp.R - 0.35);
+            if (lp.dead && d < lp.R + 2) expect((p.x - lp.x) * kx + (p.y - lp.y) * ky).toBeGreaterThan(-0.3);
+          }
+        }
+      }
+      // gravel loops: a ring track the ground paints
+      for (const lp of n.loops) if (!lp.paved) expect(L.tracks.some((t) => t.ring && Math.hypot(t.pts[0].x - lp.x, t.pts[0].y - lp.y) < lp.R)).toBe(true);
+      // lots: off the bases, ore and buildings, with bays and a lane of the network
+      for (const lot of n.lots) {
+        expect(lot.line).toBeGreaterThanOrEqual(0);
+        expect(lot.bays.length).toBeGreaterThan(5);
+        for (const s of m.starts) expect(Math.hypot(lot.x - s.x, lot.y - s.y)).toBeGreaterThan(12);
+        for (const b of lot.bays) {
+          const i = Math.floor(b.y) * m.w + Math.floor(b.x);
+          expect(m.ore[i] + m.blocked[i] + m.trees[i]).toBe(0);
+          expect(onSurface(n, b.x, b.y)).toBe(true);
+        }
+      }
+    });
+  }
+
+  it('is deterministic and every map gets parking lots, the city several', () => {
+    const sig = (id: MapId) => {
+      const m = createMap(id, 1);
+      const n = roadNetFor(m, buildLayout(m));
+      return JSON.stringify({ lots: n.lots.map((l) => [l.x, l.y]), boards: n.boards, loops: n.loops.map((l) => [l.x, l.y, l.R]) });
+    };
+    for (const id of MAPS) expect(sig(id)).toBe(sig(id));
+    const urban = roadNetFor(createMap('urban', 1), buildLayout(createMap('urban', 1)));
+    expect(urban.lots.length).toBeGreaterThanOrEqual(3);
+    expect(urban.boards.length).toBeGreaterThan(4);
+  });
+
+  it('a car turns into a parking lot, parks, backs out and leaves', () => {
+    const n = net('urban');
+    const li = 0;
+    const lot = n.lots[li];
+    lot.taken.fill(0);
+    const L = n.lines[lot.line];
+    const p = pointAt(L, 0.3);
+    const c = newDriveCar(0, 0.5, lot.line, 0.3, 1, p.x - p.ty * L.lane, p.y + p.tx * L.lane, Math.atan2(p.ty, p.tx), 1.1) as SimCar;
+    c.driving = true;
+    const drv = new Driver(n, () => true, rng(4));
+    let parked = false;
+    let left = false;
+    for (let t = 0; t < 140 && !left; t += 0.05) {
+      drv.step(c, [c], t, 0.05);
+      if (c.pk === 3) parked = true;
+      if (parked && c.pk === 0 && c.dir === -1) left = true;
+      let ok = onSurface(n, c.x, c.y);
+      for (let k = 0; k < 8 && !ok; k++) ok = onSurface(n, c.x + Math.cos(k * 0.785) * 0.12, c.y + Math.sin(k * 0.785) * 0.12);
+      expect(ok, `t ${t.toFixed(2)} pk ${c.pk} at ${c.x.toFixed(2)},${c.y.toFixed(2)}`).toBe(true);
+    }
+    expect(parked).toBe(true);
+    expect(left).toBe(true);
+    expect(lot.taken.filter((x) => x !== 0), JSON.stringify([c.id, lot.taken])).toEqual([]);
   });
 });

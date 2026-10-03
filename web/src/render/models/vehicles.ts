@@ -1194,7 +1194,39 @@ class Bld {
     });
   }
   /** Hull numbers + national marking spots on the turret (or hull) sides, found by ray casting the finished template. */
+  /**
+   * Builder-placed markings (instead of the probe search): on part `p`, centred (x, y) on a side face at
+   * |z| = z leaning in by `lean` (rad), number height h, white unless the paint is light.
+   */
+  markAt: { p: Part; x: number; y: number; z: number; lean: number; h: number } | null = null;
+  private layoutFixed(): DecalSpec | null {
+    const m = this.markAt;
+    if (!m) return null;
+    const f = this.f;
+    const lum = ((this.base >> 16) & 255) * 0.3 + ((this.base >> 8) & 255) * 0.59 + (this.base & 255) * 0.11;
+    const color = lum > 140 ? 0x1c1c1a : 0xf2f2ea;
+    const digits = f === 'israel' ? 2 : 3;
+    const numH = m.h;
+    const em: DecalSpot['emblem'] =
+      f === 'israel' ? { cell: chevronCell(), w: numH * 0.95, h: numH * 0.95, off: 0, color } : f === 'germany' || f === 'china' ? { cell: roundelCell(f), w: numH * 1.05, h: numH * 1.05, off: 0, color: 0xffffff } : f !== 'neutral' ? { cell: flagPatchCell(f), w: numH * 1.05, h: numH * 0.7, off: 0, color: 0xffffff } : null;
+    const numW = digits * numH * 0.47 + (digits - 1) * numH * 0.08;
+    const gap = numH * 0.35;
+    const tot = numW + (em ? gap + em.w : 0);
+    const start = -tot / 2;
+    const spots: DecalSpot[] = [];
+    for (const side of [1, -1]) {
+      const n = new THREE.Vector3(0, Math.sin(m.lean), side * Math.cos(m.lean));
+      const u = new THREE.Vector3(side, 0, 0);
+      const v = new THREE.Vector3().crossVectors(n, u).normalize();
+      const p = new THREE.Vector3(m.x, m.y, side * m.z).addScaledVector(n, 0.0012);
+      spots.push({ p, u, v, numH, numOff: em ? start + em.w + gap + numW / 2 : 0, emblem: em ? { ...em, off: start + em.w / 2 } : null });
+    }
+    const g = m.p.g;
+    g.userData.tag = ((g.userData.tag as string | undefined) ? g.userData.tag + ' ' : '') + 'decalT';
+    return { spots, digits, color };
+  }
   private layoutDecals(ray: Probe): DecalSpec | null {
+    if (this.markAt) return this.layoutFixed();
     const own = (t: THREE.Object3D) => t.children.filter((c) => (c as THREE.Mesh).isMesh && (c.userData.bk === 's' + CAMO || c.userData.bk === 'D')) as THREE.Mesh[];
     const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
     // candidate parts: the turret first, then the part with the largest painted side (hull, launcher box, cargo body...)
@@ -1602,7 +1634,7 @@ function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
 
 // ------------------------------------------------------------- wheel styles
 
-type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv';
+type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv' | 'abrams' | 'k2';
 
 const gDisc = (r: number, seg = 12) => new THREE.CircleGeometry(r, seg);
 const gRing = (r0: number, r1: number, seg = 14) => new THREE.RingGeometry(r0, r1, seg, 1);
@@ -1635,23 +1667,29 @@ function roadWheelGeo(b: Bld, r: number, w: number, style: WheelStyle): THREE.Bu
   const rub = K.rubber;
   const hub = 0x3e4144;
   const zf = w / 2;
-  const S = 13;
+  const S = 18;
   const a = new Acc();
   // tyre: tread band with a rounded shoulder into the outer side wall
   a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.12], [r, zf - w * 0.12], [r * 0.95, zf], [r * 0.86, zf + 0.0008]], S), rub);
-  a.add(gDisc(r * 0.97, S), rub, TR(0, 0, -zf, 0, Math.PI, 0));
-  // steel rim lip + shallow dish (with a stiffening ring) + hub boss
-  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.81, zf + 0.0028], [r * 0.6, zf - 0.003], [r * 0.54, zf - 0.0015], [r * 0.38, zf - 0.005]], S), disc);
-  a.add(gLatheZ([[r * 0.38, zf - 0.005], [r * 0.33, zf + 0.0035], [r * 0.21, zf + 0.0075], [0.0001, zf + 0.0095]], 10), hub);
+  a.add(gDisc(r * 0.97, 12), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  // steel rim lip + shallow dish + hub boss
+  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.81, zf + 0.0028], [r * 0.58, zf - 0.003], [r * 0.38, zf - 0.005]], S), disc);
+  a.add(gLatheZ([[r * 0.38, zf - 0.005], [r * 0.33, zf + 0.0035], [r * 0.21, zf + 0.0075], [0.0001, zf + 0.0095]], 16), hub);
   // disc pattern
   if (style === 'sov') {
     for (let i = 0; i < 8; i++) {
       const t = (i / 8) * Math.PI * 2;
       a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.07), shade(disc, 0.6), TR(Math.cos(t) * r * 0.62, Math.sin(t) * r * 0.62, zf - 0.0016, 0, 0, t));
     }
+  } else if (style === 'abrams') {
+    // M1: plain dished aluminium wheel with a ring of bolt heads
+    for (let i = 0; i < 10; i++) {
+      const t = (i / 10) * Math.PI * 2;
+      a.add(gDisc(r * 0.035, 4), K.dark, TR(Math.cos(t) * r * 0.66, Math.sin(t) * r * 0.66, zf - 0.0012));
+    }
   } else if (style !== 'merk') {
     const holes = style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : style === 't80' ? 8 : 6;
-    const hr = style === 't80' ? 0.075 : 0.1;
+    const hr = style === 't80' ? 0.075 : style === 'k2' ? 0.13 : 0.1;
     for (let i = 0; i < holes; i++) {
       const t = (i / holes) * Math.PI * 2 + 0.3;
       a.add(gDisc(r * hr, 7), K.black, TR(Math.cos(t) * r * 0.66, Math.sin(t) * r * 0.66, zf - 0.0018));
@@ -2068,14 +2106,6 @@ function antennas(b: Bld, parent: Part, x: number, y: number, zs: number[], h: n
   return ap;
 }
 
-/** Bolt row (tiny cylinders) along a vector. */
-function bolts(p: Part, a: V3, d: V3, n: number, axis: 'x' | 'y' | 'z' = 'y', r = 0.0035) {
-  for (let i = 0; i < n; i++) {
-    const t = n === 1 ? 0 : i / (n - 1);
-    const g = axis === 'x' ? gCylX(r, r, 0.006, 5) : axis === 'z' ? gCylZ(r, r, 0.006, 5) : gCylY(r, r, 0.006, 5);
-    p.add(g, mt(0x5a5e60), TR(a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t));
-  }
-}
 
 /** Grid of ERA / armour bricks on a plane: m maps plane (u = X, v = Z, normal = Y). */
 function bricks(p: Part, m: THREE.Matrix4, u0: number, u1: number, v0: number, v1: number, nu: number, nv: number, th: number, gap: number, paint: number = CAMO, stagger = false) {
@@ -2723,14 +2753,22 @@ interface ChassisSpec {
   lip?: V3;
   /** Rear crew door in the hull back plate: x of the plate, door centre y, height, width. */
   door?: [number, number, number, number];
+  /** T-72 / T-80 lineage: narrow hull with fenders over the tracks instead of the two profiles (sovHull2). */
+  sov?: { L: number; deck: number; nose: number; glacisX: number };
+  /** Reference notes (exhaust, skirts, turret) for the per-tank checklist. */
+  notes: string;
 }
 
 /** Lower + upper hull, bow lip, rear door and running gear from a chassis spec. */
-function chassis(b: Bld, c: ChassisSpec) {
+function chassis(b: Bld, c: ChassisSpec): number {
   const B = b.body;
   running(b, c.run);
-  lowerHull(B, c.lower, c.hw);
-  B.side(c.upper, c.W, 0, CAMO, 0.01);
+  let deck = Math.max(...c.upper.map((p) => p[1]));
+  if (c.sov) deck = sovHull2(b, c.sov);
+  else {
+    lowerHull(B, c.lower, c.hw);
+    B.side(c.upper, c.W, 0, CAMO, 0.01);
+  }
   if (c.lip) B.cz(c.lip[2], c.lip[2], c.W - 0.03, c.lip[0], c.lip[1], 0, CAMO, 10);
   if (c.door) {
     const [x, y, h, w] = c.door;
@@ -2739,6 +2777,12 @@ function chassis(b: Bld, c: ChassisSpec) {
     for (const dy of [-h * 0.32, h * 0.32]) B.cz(0.005, 0.005, 0.02, x - 0.006, y + dy, w / 2 - 0.004, mt(K.gun), 6);
     B.box(0.006, 0.006, 0.03, x - 0.01, y, -w * 0.25, mt(K.steel));
   }
+  return deck;
+}
+
+/** Return rollers over the road wheels (y from the wheel radius and belt). */
+function rollers(xs: number[], rw: number, bt: number, r = 0.012): V3[] {
+  return xs.map((x) => [x, rw * 2 + bt + r * 0.6, r] as V3);
 }
 
 const CHASSIS: Record<string, ChassisSpec> = {
@@ -2771,40 +2815,161 @@ const CHASSIS: Record<string, ChassisSpec> = {
     engine: 'front',
     lip: [0.596, 0.197, 0.008],
     door: [-0.556, 0.222, 0.05, 0.15],
+    notes: 'front engine: louvred exhaust on the left front panel, diamond-mesh intake right front, deck grilles on the glacis; bolted panel skirts + flap row; rear crew door; long wedge turret far back',
+  },
+  // M1A2 SEPv3: 7.93 x 3.66 m, 2.44 m; 7 road wheels (0.64 m) with wide gaps, 2 return rollers, rear sprocket,
+  // front idler; very shallow upper glacis, flat deck, turbine exhaust grille in the rear plate
+  usa: {
+    name: 'M1A2 SEPv3 Abrams',
+    lower: [[-0.5, 0.072], [0.4, 0.072], [0.54, 0.16], [-0.52, 0.16]],
+    hw: 0.148,
+    upper: [[-0.528, 0.156], [0.55, 0.156], [0.572, 0.182], [0.31, 0.244], [-0.47, 0.25], [-0.53, 0.232]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.355, 0.335), rw: 0.045, spr: [-0.472, 0.102, 0.046], idl: [0.455, 0.092, 0.042], rollers: rollers([-0.19, 0.14], 0.045, 0.017), gauge: 0.206, tw: 0.112, bt: 0.017, sag: 0.003, style: 'abrams', teeth: 11 },
+    engine: 'rear',
+    notes: 'rear turbine: exhaust grille in the rear plate, deck grilles; deep front skirt section with a notched step, thin rear skirts',
+  },
+  // Leopard 2A7/2A8: 7.72 x 3.75 m; 7 road wheels (0.7 m), 4 return rollers, rear sprocket, front idler; short
+  // steep glacis with the wedge add-on plate, long flat engine deck, exhaust grilles at the rear sides
+  germany: {
+    name: 'Leopard 2A8',
+    lower: [[-0.5, 0.074], [0.42, 0.074], [0.545, 0.16], [-0.52, 0.16]],
+    hw: 0.148,
+    upper: [[-0.535, 0.158], [0.548, 0.158], [0.565, 0.212], [0.36, 0.254], [-0.5, 0.258], [-0.537, 0.24]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.37, 0.345), rw: 0.049, spr: [-0.48, 0.108, 0.047], idl: [0.465, 0.098, 0.043], rollers: rollers([-0.27, -0.085, 0.1, 0.27], 0.049, 0.017), gauge: 0.207, tw: 0.112, bt: 0.017, sag: 0.004, style: 'nato', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: long flat deck with big grilles, exhaust louvres at the rear corners; tall heavy front skirts with a vertical front panel, thin rear skirts with rubber edge',
+  },
+  // T-90M: 6.86 x 3.78 m, 2.23 m (low); 6 road wheels (0.75 m) in T-72 spacing (gaps after the 1st and around
+  // the 4th), 3 small return rollers, rear sprocket, spoked front idler; fenders, rubber skirts with ERA
+  russia: {
+    name: 'T-90M',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 0.96, deck: 0.212, nose: 0.47, glacisX: 0.265 },
+    run: { wheels: [0.315, 0.165, 0.055, -0.085, -0.225, -0.335], rw: 0.052, spr: [-0.452, 0.1, 0.045], idl: [0.425, 0.086, 0.042], rollers: rollers([-0.23, 0.0, 0.22], 0.052, 0.016, 0.01), gauge: 0.205, tw: 0.105, bt: 0.016, sag: 0.01, style: 'sov', teeth: 13, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: deck grille, exhaust louvre on the left fender; Relikt glacis, rubber skirts with Relikt boxes on the front half, slat cage on the bustle',
+  },
+  // T-84 Oplot-M: 7.08 x 3.78 m, 2.2 m; T-80 running gear: 6 rubber-rimmed road wheels (0.67 m), 5 return
+  // rollers, rear sprocket; rear exhaust grille in the hull back (6TD)
+  ukraine: {
+    name: 'BM Oplot (T-84)',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 1.0, deck: 0.218, nose: 0.485, glacisX: 0.27 },
+    run: { wheels: evenly(6, -0.335, 0.31), rw: 0.047, spr: [-0.458, 0.098, 0.045], idl: [0.43, 0.086, 0.042], rollers: rollers([-0.27, -0.135, 0.0, 0.135, 0.27], 0.047, 0.016, 0.01), gauge: 0.205, tw: 0.11, bt: 0.016, sag: 0.006, style: 't80', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: exhaust grille across the hull back; Nozh/Duplet ERA glacis and skirt panels on the front half',
+  },
+  // Karrar: T-72 / T-90MS-derived: 6 road wheels in T-72 spacing, 3 return rollers, rear sprocket, spoked idler;
+  // low hull, box ERA skirts hanging over most of the wheels
+  iran: {
+    name: 'Karrar',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 0.97, deck: 0.216, nose: 0.475, glacisX: 0.27 },
+    run: { wheels: [0.32, 0.17, 0.06, -0.08, -0.22, -0.33], rw: 0.052, spr: [-0.455, 0.1, 0.045], idl: [0.43, 0.086, 0.042], rollers: rollers([-0.23, 0.0, 0.22], 0.052, 0.016, 0.01), gauge: 0.205, tw: 0.105, bt: 0.016, sag: 0.01, style: 'sov', teeth: 13, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: exhaust louvre on the left fender, external fuel drums; box ERA skirts all along',
+  },
+  // Type 99A: 7.6 x 3.5 m, 2.37 m; 6 large road wheels (0.78 m), return rollers behind deep skirts, rear
+  // sprocket, spoked front idler; ERA glacis, deep modular skirts, exhaust on the left rear side
+  china: {
+    name: 'Type 99A',
+    lower: [[-0.5, 0.074], [0.43, 0.074], [0.545, 0.17], [-0.525, 0.17]],
+    hw: 0.145,
+    upper: [[-0.53, 0.168], [0.548, 0.168], [0.568, 0.2], [0.33, 0.252], [-0.5, 0.256], [-0.533, 0.236]],
+    W: 0.5,
+    run: { wheels: [0.345, 0.215, 0.085, -0.05, -0.185, -0.32], rw: 0.056, spr: [-0.468, 0.11, 0.047], idl: [0.465, 0.1, 0.044], rollers: rollers([-0.25, -0.02, 0.2], 0.056, 0.017), gauge: 0.2, tw: 0.11, bt: 0.017, sag: 0.004, style: 'asia', teeth: 12, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles, exhaust louvre on the left rear side; ERA glacis, deep modular composite / ERA skirts along the whole run',
+  },
+  // K2 Black Panther: 7.5 x 3.6 m, 2.4 m; 6 road wheels (0.75 m) on in-arm hydropneumatic units (slightly raised
+  // stance), return rollers behind the skirts, rear sprocket, front idler
+  korea: {
+    name: 'K2 Black Panther',
+    lower: [[-0.5, 0.08], [0.43, 0.08], [0.548, 0.17], [-0.52, 0.17]],
+    hw: 0.148,
+    upper: [[-0.53, 0.168], [0.55, 0.168], [0.575, 0.198], [0.31, 0.252], [-0.5, 0.256], [-0.53, 0.236]],
+    W: 0.52,
+    run: { wheels: evenly(6, -0.35, 0.33), rw: 0.052, spr: [-0.47, 0.11, 0.046], idl: [0.455, 0.1, 0.043], rollers: rollers([-0.2, 0.0, 0.2], 0.052, 0.017), gauge: 0.205, tw: 0.112, bt: 0.017, sag: 0.003, style: 'k2', teeth: 11 },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles at the rear sides, exhaust at the rear; tall skirts with an angled nose section',
+  },
+  // Altay: 7.3 x 3.9 m, 2.6 m; 7 road wheels (0.68 m), 3 return rollers, rear sprocket, front idler;
+  // Leopard-like hull and skirts with its own boxy turret
+  turkey: {
+    name: 'Altay',
+    lower: [[-0.5, 0.072], [0.43, 0.072], [0.548, 0.164], [-0.52, 0.164]],
+    hw: 0.148,
+    upper: [[-0.53, 0.162], [0.55, 0.162], [0.568, 0.21], [0.33, 0.252], [-0.5, 0.256], [-0.53, 0.236]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.365, 0.335), rw: 0.047, spr: [-0.475, 0.106, 0.046], idl: [0.455, 0.096, 0.043], rollers: rollers([-0.22, 0.0, 0.22], 0.047, 0.017), gauge: 0.205, tw: 0.112, bt: 0.017, sag: 0.004, style: 'nato', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles, exhaust at the rear; tall skirts with a vertical front panel (Leopard-like)',
   },
 };
+
+/** Per-tank chassis checklist (studio harness): wheels, sprocket, height. */
+export function chassisChecklist(): Record<string, { name: string; wheels: number; sprocket: string; rollers: number; idler: string; deck: number; engine: string; notes: string }> {
+  const out: ReturnType<typeof chassisChecklist> = {};
+  for (const [k, c] of Object.entries(CHASSIS)) {
+    const deck = c.sov ? c.sov.deck : Math.max(...c.upper.map((p) => p[1]));
+    out[k] = { name: c.name, wheels: c.run.wheels.length, sprocket: c.run.spr[0] > 0 ? 'front' : 'rear', rollers: c.run.rollers?.length ?? 0, idler: c.run.idler ?? 'wheel', deck: Math.round((deck / 0.15) * 100) / 100, engine: c.engine, notes: c.notes };
+  }
+  return out;
+}
 
 /** Armour skirt panel of the side profile pts on side s (outer face at |z| = zo, thickness th), bevelled. */
 function skirtPanel(B: Part, pts: P2[], s: number, zo: number, th: number, bevel = 0.003) {
   B.side(pts, th, s * (zo - th / 2), CAMO, bevel);
 }
 
+/** Row of hinged skirt panels xs[i] .. xs[i + 1] (bottom y0, top y1) on both sides; split = horizontal mid joint. */
+function panelRow(B: Part, xs: number[], y0: number, y1: number, zo: number, th: number, split = false, gap = 0.0016) {
+  for (const s of [-1, 1])
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x0 = xs[i] + gap;
+      const x1 = xs[i + 1] - gap;
+      const mid = (y0 + y1) / 2;
+      B.piece(
+        s > 0 ? 3 : 2,
+        () => {
+          if (!split) skirtPanel(B, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], s, zo, th);
+          else {
+            skirtPanel(B, [[x0, mid + 0.0013], [x1, mid + 0.0013], [x1, y1], [x0, y1]], s, zo, th);
+            skirtPanel(B, [[x0, y0], [x1, y0], [x1, mid - 0.0013], [x0, mid - 0.0013]], s, zo, th);
+          }
+        },
+        s > 0 ? x0 : x1,
+        y1,
+      );
+    }
+}
+
 function mbtAbrams(b: Bld) {
   // M1A2 SEPv3: 7.93 m hull, 3.66 m wide, 2.44 m to the turret roof; 7 road wheels, 2 return rollers,
   // rear sprocket; flat angular turret with a long bustle + rack, CROWS, CITV, GPS "doghouse"
   const B = b.body;
-  running(b, {
-    wheels: evenly(7, -0.355, 0.335),
-    rw: 0.047,
-    spr: [-0.468, 0.104, 0.046],
-    idl: [0.452, 0.094, 0.042],
-    rollers: [
-      [-0.19, 0.129, 0.014],
-      [0.14, 0.129, 0.014],
-    ],
-    gauge: 0.206,
-    tw: 0.112,
-    style: 'nato',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.4, 0.072], [0.54, 0.16], [-0.52, 0.16]], 0.148);
-  // upper hull + sponsons: very shallow upper glacis, flat deck, slightly sloped rear deck edge
-  B.side([[-0.528, 0.156], [0.55, 0.156], [0.572, 0.182], [0.31, 0.244], [-0.47, 0.25], [-0.53, 0.232]], 0.52, 0, CAMO, 0.008);
-  // skirts: thick ballistic front panels over the first three wheels, thin rear panels, cut-away at the sprocket
-  skirts(B, [[-0.455, 0.096], [0.13, 0.096], [0.13, 0.2], [-0.47, 0.2]], 0.267, 0.012, [-0.31, -0.165, -0.02], CAMO, [0.098, 0.198]);
-  skirts(B, [[0.13, 0.086], [0.45, 0.086], [0.548, 0.15], [0.556, 0.2], [0.13, 0.2]], 0.271, 0.022, [0.26, 0.4], CAMO, [0.09, 0.198]);
+  chassis(b, CHASSIS.usa);
+  // skirts: thin rear panels; deep, thick ballistic section over the first three wheels whose rear edge steps
+  // down in a notch; angled leading panel
+  panelRow(B, [-0.47, -0.32, -0.17, -0.02, 0.13], 0.099, 0.2, 0.272, 0.01);
   for (const s of [-1, 1]) {
-    B.box(1.0, 0.006, 0.03, 0.04, 0.2, s * 0.268, shade(b.base, 0.9)); // skirt top lip
-    bolts(B, [-0.44, 0.188, s * 0.274], [0.56, 0, 0], 9, 'z', 0.003);
+    B.piece(s > 0 ? 3 : 2, () => {
+      skirtPanel(B, [[0.132, 0.099], [0.152, 0.082], [0.262, 0.082], [0.262, 0.202], [0.132, 0.202]], s, 0.284, 0.024);
+      skirtPanel(B, [[0.266, 0.082], [0.392, 0.082], [0.392, 0.202], [0.266, 0.202]], s, 0.284, 0.024);
+      skirtPanel(B, [[0.396, 0.082], [0.462, 0.082], [0.548, 0.146], [0.556, 0.202], [0.396, 0.202]], s, 0.284, 0.024);
+    }, 0.132, 0.202);
+    B.box(0.76, 0.006, 0.03, 0.09, 0.204, s * 0.27, shade(b.base, 0.9)); // skirt top lip
     headlight(B, 0.556, 0.2, s * 0.235);
     B.box(0.03, 0.03, 0.03, 0.545, 0.19, s * 0.17, K.dark); // brush guard base
     taillight(B, -0.533, 0.236, s * 0.24);
@@ -2923,13 +3088,15 @@ function chains(p: Part, a: P2, c: P2, n: number, y: number, len: number) {
   const ck = 0x34352f;
   p.add(gCylX(0.003, 0.003, Math.hypot(c[0] - a[0], c[1] - a[1]), 5), ck, TR((a[0] + c[0]) / 2, y, (a[1] + c[1]) / 2, 0, -Math.atan2(c[1] - a[1], c[0] - a[0]), 0));
   for (let i = 0; i <= n; i++) {
-    p.at(i % 2 ? 2 : 1, () => {
+    p.at(i % 3 ? 2 : 1, () => {
       const t = i / n;
       const x = a[0] + (c[0] - a[0]) * t;
       const z = a[1] + (c[1] - a[1]) * t;
       const l = len * (0.97 + 0.06 * hash01(i * 7 + Math.round(x * 1000)));
-      p.add(gCylY(0.0018, 0.0018, l, 3, true), ck, TR(x, y - l / 2, z));
-      p.add(new THREE.OctahedronGeometry(0.0078, 0), mt(0x3a3a36), TR(x, y - l - 0.005, z, 0.3, i * 0.7, 0));
+      // a chain of links (thin, beaded) ending in a round ball
+      p.add(gCylY(0.0011, 0.0011, l, 3, true), ck, TR(x, y - l / 2, z));
+      for (const k of [0.35, 0.7]) p.add(new THREE.OctahedronGeometry(0.0019, 0), ck, TR(x, y - l * k, z, 0, k * 2, 0, 1, 1.6, 1));
+      p.add(new THREE.IcosahedronGeometry(0.0058, 0), mt(0x3a3a36), TR(x, y - l - 0.0045, z));
     });
   }
 }
@@ -3038,60 +3205,62 @@ function mbtMerkava(b: Bld) {
   const PT: P2[] = [[0.29, 0], [0.29, 0.025], [0.2, 0.09], [0.07, 0.17], [-0.15, 0.18], [-0.32, 0.168], [-0.37, 0.13], [-0.38, 0]];
   // the bustle underside slopes up to the rear: the chain curtain hangs in the gap above the deck
   const under = (h: P2[]) => h.map(([x, z]) => [x < -0.19 ? -0.19 + (x + 0.19) * 0.08 : x, z] as P2);
+  // faceted flanks: a lower band sloping in to the ring, the main side leaning in, a steep upper bevel
   hloft(T, [
-    { y: -0.02, h: under(slopeF(sz(P0, 0.88), 0.0, -0.13)) },
-    { y: 0.03, h: P0 },
-    { y: 0.094, h: slopeF(sz(P0, 0.9), 0.0, -0.11) },
-    { y: 0.124, h: PT },
+    { y: -0.02, h: under(slopeF(sz(P0, 0.8), 0.0, -0.13)) },
+    { y: 0.026, h: P0 },
+    { y: 0.084, h: slopeF(sz(P0, 0.87), 0.0, -0.11) },
+    { y: 0.112, h: slopeF(sz(PT, 0.97), 0.0, 0.0) },
   ]);
   T.cy(0.19, 0.19, 0.016, 0.0, -0.034, 0, K.dark, 20);
-  const lean = Math.atan2(0.0226, 0.064);
+  const lean = Math.atan2(0.226 * 0.13, 0.058);
+  const zAt = (y: number) => 0.226 - ((y - 0.026) / 0.058) * 0.226 * 0.13;
   for (const s of [-1, 1]) {
-    // flank modules (the number / ID stripe sit on the middle one)
-    // a long rear module (carries the big number and the ID stripe) and a front one
-    turretModule(T, -0.245, 0.061, 0.2168, 0.25, 0.056, lean, s);
-    turretModule(T, -0.055, 0.061, 0.218, 0.118, 0.056, lean, s);
-    teamPanel(T, 0.1, 0.0095, 0.0015, -0.225, 0.0415, s * 0.2348, b.team, -s * lean, 0, 0);
+    // flank armour modules: a long rear one (the big number and the ID stripe) and a front one
+    turretModule(T, -0.245, 0.055, zAt(0.055), 0.25, 0.05, lean, s);
+    turretModule(T, -0.055, 0.055, zAt(0.055), 0.118, 0.05, lean, s);
+    teamPanel(T, 0.11, 0.0085, 0.0015, -0.245, 0.0365, s * (zAt(0.0365) + 0.0082), b.team, -s * lean, 0, 0);
     // lifting eyes
     T.at(2, () => {
-      for (const x of [-0.3, 0.05]) T.add(new THREE.TorusGeometry(0.006, 0.0018, 4, 8), mt(0x4a4c48), TR(x, 0.126, s * 0.17, Math.PI / 2, 0, 0));
+      for (const x of [-0.3, 0.05]) T.add(new THREE.TorusGeometry(0.006, 0.0018, 4, 8), mt(0x4a4c48), TR(x, 0.114, s * 0.16, Math.PI / 2, 0, 0));
     });
-    trophy(T, 0.06, 0.072, s * 0.218, s, b.team);
-    smokeBank(T, 0.15, 0.104, s * 0.15, s, 5, 0.6, 0.008);
+    trophy(T, 0.07, 0.066, s * 0.212, s, b.team);
+    smokeBank(T, 0.15, 0.094, s * 0.145, s, 5, 0.6, 0.008);
   }
+  b.markAt = { p: T, x: -0.25, y: 0.06, z: zAt(0.06) + 0.0076, lean, h: 0.042 };
   // roof plates, bustle rails
-  lid(T, 0.15, 0.2, -0.25, 0.124, 0);
-  for (const s of [-1, 1]) lid(T, 0.09, 0.06, 0.13, 0.124, s * 0.06, 0);
+  lid(T, 0.15, 0.2, -0.25, 0.112, 0);
+  for (const s of [-1, 1]) lid(T, 0.09, 0.06, 0.13, 0.112, s * 0.06, 0);
   // rear basket and the chain curtain under the bustle
   basket(T, -0.49, -0.385, 0.205, 0.026, 0.104, -0.33, b.style.region);
-  chains(T, [-0.488, -0.2], [-0.488, 0.2], 28, 0.026, 0.058);
-  for (const s of [-1, 1]) chains(T, [-0.475, s * 0.207], [-0.24, s * 0.218], 17, 0.024, 0.044);
+  chains(T, [-0.488, -0.2], [-0.488, 0.2], 30, 0.026, 0.07);
+  for (const s of [-1, 1]) chains(T, [-0.475, s * 0.207], [-0.24, s * 0.218], 16, 0.024, 0.05);
   teamPanel(T, 0.004, 0.024, 0.2, -0.494, 0.07, 0, b.team);
   // mantlet: armoured box at the wedge tip, coax
   T.cbox(0.06, 0.056, 0.078, 0.008, 0.45, 0.05, 0, CAMO);
   coax(T, 0.47, 0.035, 0.035);
   // roof: commander's cupola (right rear) with sight block, panoramic sight, MG; loader hatch + MG (left),
   // 60 mm mortar, gunner's sight hood (front right)
-  T.cy(0.045, 0.05, 0.016, -0.1, 0.124, 0.09, CAMO, 14);
-  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.126, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
-  panoSight(T, -0.035, 0.124, 0.14, 0.034, 1.05);
-  T.cbox(0.05, 0.05, 0.045, 0.006, -0.03, 0.164, 0.08, CAMO);
-  T.box(0.004, 0.026, 0.03, -0.004, 0.17, 0.08, GLASS);
+  T.cy(0.045, 0.05, 0.016, -0.1, 0.112, 0.09, CAMO, 14);
+  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.114, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
+  panoSight(T, -0.035, 0.112, 0.14, 0.034, 1.05);
+  T.cbox(0.05, 0.05, 0.045, 0.006, -0.03, 0.152, 0.08, CAMO);
+  T.box(0.004, 0.026, 0.03, -0.004, 0.158, 0.08, GLASS);
   // commander's MG on a pintle
-  T.cy(0.004, 0.005, 0.03, -0.155, 0.14, 0.09, K.dark, 6);
-  mgun(T, -0.13, 0.175, 0.09, 0.11, 0.0048, true);
-  hatch(T, -0.1, 0.124, -0.1, 0.036);
+  T.cy(0.004, 0.005, 0.03, -0.155, 0.128, 0.09, K.dark, 6);
+  mgun(T, -0.13, 0.163, 0.09, 0.11, 0.0048, true);
+  hatch(T, -0.1, 0.112, -0.1, 0.036);
   // loader MG on a ring mount with a small shield
-  T.cy(0.004, 0.005, 0.028, -0.05, 0.124, -0.135, K.dark, 6);
-  mgun(T, -0.035, 0.156, -0.135, 0.09);
-  T.box(0.004, 0.026, 0.04, -0.012, 0.16, -0.135, CAMO);
+  T.cy(0.004, 0.005, 0.028, -0.05, 0.112, -0.135, K.dark, 6);
+  mgun(T, -0.035, 0.144, -0.135, 0.09);
+  T.box(0.004, 0.026, 0.04, -0.012, 0.148, -0.135, CAMO);
   // 60 mm mortar tube with a muzzle cover
-  T.cx(0.011, 0.011, 0.09, -0.03, 0.146, -0.07, mt(K.gun), 8);
-  T.cx(0.0125, 0.0125, 0.012, 0.018, 0.146, -0.07, K.canvas, 8);
-  T.box(0.026, 0.02, 0.026, -0.08, 0.134, -0.07, K.dark);
-  T.cbox(0.06, 0.03, 0.045, 0.006, 0.1, 0.13, 0.07, CAMO);
-  T.box(0.004, 0.02, 0.032, 0.131, 0.132, 0.07, GLASS);
-  antennas(b, T, -0.34, 0.124, [-0.15, 0.15], 0.26);
+  T.cx(0.011, 0.011, 0.09, -0.03, 0.134, -0.07, mt(K.gun), 8);
+  T.cx(0.0125, 0.0125, 0.012, 0.018, 0.134, -0.07, K.canvas, 8);
+  T.box(0.026, 0.02, 0.026, -0.08, 0.122, -0.07, K.dark);
+  T.cbox(0.06, 0.03, 0.045, 0.006, 0.09, 0.118, 0.07, CAMO);
+  T.box(0.004, 0.02, 0.032, 0.121, 0.12, 0.07, GLASS);
+  antennas(b, T, -0.34, 0.112, [-0.15, 0.15], 0.26);
   // MG253 L/44: 9.04 m gun forward vs 7.60 m hull = 1.44 m overhang; white recognition bands on the sleeve
   const g = mainGun(b, T, 0.48, 0.05, 0, { len: 0.5, r: 0.0158, fume: 0.42, mrs: true });
   // the sleeve thickens toward the mantlet
@@ -3134,30 +3303,15 @@ function mbtLeopard(b: Bld) {
   // Leopard 2A8: 7.7 m hull, 3.75 m wide, 7 road wheels + 4 return rollers, rear sprocket; vertical-sided
   // turret with the arrowhead wedge add-on armour and wedge mantlet, EMES-15 + PERI R17, Trophy, L/55 gun
   const B = b.body;
-  running(b, {
-    wheels: evenly(7, -0.365, 0.33),
-    rw: 0.047,
-    spr: [-0.47, 0.106, 0.046],
-    idl: [0.452, 0.096, 0.042],
-    rollers: [
-      [-0.27, 0.13, 0.013],
-      [-0.085, 0.13, 0.013],
-      [0.1, 0.13, 0.013],
-      [0.27, 0.13, 0.013],
-    ],
-    gauge: 0.207,
-    tw: 0.112,
-    style: 'nato',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.42, 0.072], [0.545, 0.16], [-0.52, 0.16]], 0.148);
-  // short steep upper glacis with the 2A7 add-on plate, long flat deck, sloped rear plate
-  B.side([[-0.535, 0.158], [0.548, 0.158], [0.565, 0.212], [0.36, 0.254], [-0.5, 0.258], [-0.537, 0.24]], 0.52, 0, CAMO, 0.008);
+  chassis(b, CHASSIS.germany);
   B.add(gSide([[0.36, 0.256], [0.568, 0.214], [0.575, 0.198], [0.552, 0.196], [0.35, 0.24]], 0.4, 0.004), CAMO);
-  // heavy front skirt modules (2A7 armour package), thin rear skirts with a rubber lower edge
-  skirts(B, [[0.08, 0.088], [0.45, 0.088], [0.548, 0.14], [0.556, 0.212], [0.08, 0.212]], 0.272, 0.026, [0.2, 0.33]);
-  skirts(B, [[-0.48, 0.1], [0.08, 0.1], [0.08, 0.205], [-0.49, 0.205]], 0.267, 0.01, [-0.36, -0.22, -0.08]);
+  // heavy front skirt modules (2A7 armour package) ending in the tall vertical skirt-front panel; thin rear
+  // skirts with a rubber lower edge
+  panelRow(B, [-0.49, -0.35, -0.21, -0.07, 0.078], 0.104, 0.206, 0.268, 0.01);
+  panelRow(B, [0.08, 0.2, 0.32, 0.44], 0.086, 0.214, 0.284, 0.026, true);
   for (const s of [-1, 1]) {
-    B.box(0.56, 0.014, 0.008, -0.2, 0.094, s * 0.271, K.rubber);
+    B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.444, 0.086], [0.53, 0.086], [0.53, 0.1], [0.566, 0.13], [0.566, 0.214], [0.444, 0.214]], s, 0.286, 0.03), 0.444, 0.214);
+    B.box(0.57, 0.014, 0.008, -0.205, 0.097, s * 0.267, K.rubber);
     headlight(B, 0.556, 0.222, s * 0.225);
     taillight(B, -0.535, 0.242, s * 0.24);
     bin(B, 0.1, 0.035, 0.055, -0.43, 0.258, s * 0.225);
@@ -3221,23 +3375,8 @@ function mbtT90(b: Bld) {
   // T-90M Proryv: 6.86 m hull, 3.78 m, 2.23 m; 6 large spoked road wheels, 3 return rollers; low hull with
   // Relikt glacis + V splash board, welded turret with Relikt "brows", big ammunition bustle in a slat cage
   const B = b.body;
-  running(b, {
-    wheels: [-0.35, -0.24, -0.095, 0.02, 0.165, 0.28],
-    rw: 0.055,
-    spr: [-0.455, 0.102, 0.046],
-    idl: [0.42, 0.09, 0.043],
-    rollers: [
-      [-0.19, 0.143, 0.013],
-      [-0.03, 0.143, 0.013],
-      [0.13, 0.143, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 'sov',
-    sag: 0.012,
-  });
-  const deck = sovHull2(b, { L: 0.98, deck: 0.218, nose: 0.475, glacisX: 0.27 });
-  eraSkirt(b, -0.46, 0.49, 0.098, 0.16, 0.49, 0.276, 0.075);
+  const deck = chassis(b, CHASSIS.russia);
+  eraSkirt(b, -0.46, 0.49, 0.098, 0.16, 0.05, 0.276, 0.075);
   // Relikt on the glacis + V splash board + dozer blade
   bricks(B, slopePlane([0.27, deck], [0.487, 0.168], 0), 0.012, 0.21, -0.22, 0.22, 3, 6, 0.02, 0.008);
   for (const s of [-1, 1]) B.box(0.012, 0.028, 0.22, 0.3, deck + 0.02, s * 0.1, CAMO, 0, s * 0.45, -0.3);
@@ -3308,25 +3447,8 @@ function mbtOplot(b: Bld) {
   // T-84 Oplot-M: T-80UD-derived hull (6TD diesel, rear exhaust grille), 6 rubber-tyred road wheels + 5 return
   // rollers; welded box turret with Nozh ERA chevron brows, big rear ammunition bustle, PNK-6 panoramic sight
   const B = b.body;
-  running(b, {
-    wheels: evenly(6, -0.35, 0.3),
-    rw: 0.053,
-    spr: [-0.458, 0.102, 0.046],
-    idl: [0.425, 0.088, 0.043],
-    rollers: [
-      [-0.27, 0.143, 0.012],
-      [-0.13, 0.143, 0.012],
-      [0.01, 0.143, 0.012],
-      [0.15, 0.143, 0.012],
-      [0.28, 0.143, 0.012],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 't80',
-    sag: 0.006,
-  });
-  const deck = sovHull2(b, { L: 1.0, deck: 0.222, nose: 0.485, glacisX: 0.27 });
-  eraSkirt(b, -0.47, 0.5, 0.098, 0.162, 0.5, 0.276, 0.06);
+  const deck = chassis(b, CHASSIS.ukraine);
+  eraSkirt(b, -0.47, 0.5, 0.096, 0.162, -0.02, 0.276, 0.064);
   // Nozh ERA: long thin chevron cassettes on the glacis
   const gp = slopePlane([0.27, deck], [0.497, 0.17], 0);
   for (let i = 0; i < 4; i++) for (const s of [-1, 1]) B.add(new THREE.BoxGeometry(0.03, 0.02, 0.22), CAMO, gp.clone().multiply(TR(0.035 + i * 0.05, 0.011, s * 0.11, 0, s * 0.35, 0)));
@@ -3391,22 +3513,7 @@ function mbtKarrar(b: Bld) {
   // Karrar: T-72-derived hull with box-ERA skirts all along, T-90MS-style welded turret with big ERA cheeks,
   // stowage bustle with slat cage, RWS; desert tan
   const B = b.body;
-  running(b, {
-    wheels: [-0.35, -0.24, -0.095, 0.02, 0.165, 0.28],
-    rw: 0.055,
-    spr: [-0.455, 0.102, 0.046],
-    idl: [0.42, 0.09, 0.043],
-    rollers: [
-      [-0.19, 0.143, 0.013],
-      [-0.03, 0.143, 0.013],
-      [0.13, 0.143, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 'sov',
-    sag: 0.012,
-  });
-  const deck = sovHull2(b, { L: 0.98, deck: 0.22, nose: 0.475, glacisX: 0.27 });
+  const deck = chassis(b, CHASSIS.iran);
   for (const s of [-1, 1]) {
     // (reference photos: Karrar's box skirts hang low, covering most of the road wheels)
     B.box(0.95, 0.1, 0.008, 0.015, 0.113, s * 0.275, 0x2a2c2e);
@@ -3468,23 +3575,7 @@ function mbtType99(b: Bld) {
   // Type 99A: 7.6 m hull, 3.5 m wide; 6 road wheels unevenly spaced (close pairs front + rear, two far apart
   // in the middle), 4 return rollers; arrowhead ERA turret front, ERA side panels, laser dazzler, RWS
   const B = b.body;
-  running(b, {
-    wheels: [-0.37, -0.25, -0.07, 0.11, 0.225, 0.34],
-    rw: 0.058,
-    spr: [-0.47, 0.108, 0.047],
-    idl: [0.45, 0.096, 0.044],
-    rollers: [
-      [-0.3, 0.152, 0.013],
-      [-0.16, 0.152, 0.013],
-      [0.02, 0.152, 0.013],
-      [0.17, 0.152, 0.013],
-    ],
-    gauge: 0.2,
-    tw: 0.11,
-    style: 'asia',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.43, 0.072], [0.545, 0.17], [-0.525, 0.17]], 0.145);
-  B.side([[-0.53, 0.168], [0.548, 0.168], [0.568, 0.2], [0.33, 0.252], [-0.5, 0.256], [-0.533, 0.236]], 0.5, 0, CAMO, 0.008);
+  chassis(b, CHASSIS.china);
   // deep skirts (lower edge near the hub line) with bolted composite / ERA modules along the whole run
   skirts(B, [[-0.48, 0.088], [0.42, 0.088], [0.548, 0.15], [0.556, 0.212], [-0.49, 0.212]], 0.263, 0.012, [-0.3, -0.12, 0.06]);
   for (const s of [-1, 1]) {
@@ -3549,23 +3640,16 @@ function mbtK2(b: Bld, altay: boolean) {
   // K2: 7.5 m hull, 3.6 m; 6 road wheels (in-arm hydropneumatic), KCPS sight, MMW radar, L/55.
   // Altay: 7 road wheels + 3 return rollers, blunter taller turret, big rear basket, SARP RWS.
   const B = b.body;
-  running(b, {
-    wheels: altay ? evenly(7, -0.37, 0.335) : evenly(6, -0.355, 0.32),
-    rw: altay ? 0.047 : 0.053,
-    spr: [-0.47, 0.106, 0.046],
-    idl: [0.45, 0.096, 0.043],
-    rollers: [
-      [-0.2, 0.138, 0.013],
-      [0.0, 0.138, 0.013],
-      [0.2, 0.138, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.112,
-    style: altay ? 'nato' : 'asia',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.43, 0.072], [0.548, 0.164], [-0.52, 0.164]], 0.148);
-  B.side([[-0.53, 0.162], [0.55, 0.162], [0.575, 0.194], [0.31, 0.25], [-0.5, 0.253], [-0.53, 0.233]], 0.52, 0, CAMO, 0.008);
-  skirts(B, [[-0.47, 0.098], [0.4, 0.098], [0.53, 0.13], [0.565, 0.205], [-0.48, 0.205]], 0.27, 0.016, altay ? [-0.32, -0.16, 0.0, 0.16, 0.32] : [-0.25, 0.0, 0.25]);
+  chassis(b, altay ? CHASSIS.turkey : CHASSIS.korea);
+  if (altay) {
+    // Leopard-like: six panels and a tall vertical-front leading panel
+    panelRow(B, [-0.48, -0.33, -0.18, -0.03, 0.12, 0.27, 0.42], 0.096, 0.208, 0.274, 0.016);
+    for (const s of [-1, 1]) B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.424, 0.09], [0.53, 0.09], [0.562, 0.12], [0.562, 0.208], [0.424, 0.208]], s, 0.28, 0.024), 0.424, 0.208);
+  } else {
+    // K2: four tall panels with a horizontal joint, angled nose panel
+    panelRow(B, [-0.48, -0.26, -0.04, 0.18, 0.4], 0.102, 0.21, 0.274, 0.016, true);
+    for (const s of [-1, 1]) B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.404, 0.102], [0.5, 0.11], [0.55, 0.14], [0.568, 0.205], [0.404, 0.21]], s, 0.274, 0.016), 0.404, 0.21);
+  }
   for (const s of [-1, 1]) {
     B.box(1.0, 0.006, 0.028, 0.04, 0.205, s * 0.27, shade(b.base, 0.9));
     headlight(B, 0.56, 0.206, s * 0.225);
