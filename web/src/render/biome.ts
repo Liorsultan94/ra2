@@ -66,7 +66,8 @@ export interface BiomeLook {
 const TEMPERATE: BiomeLook = {
   biome: 'temperate',
   code: 0,
-  grass: { lush: scan('meadow', 0x2a5523, 0.9), mid: scan('meadow', 0x426f2b, 0.85), dry: 0x7e8047, fresh: 0x5f8e35, clover: 0x28542d },
+  // (a healthy summer green: the meadow scan itself is olive, so the look pulls its hue well towards green)
+  grass: { lush: scan('meadow', 0x2a5a26, 0.9), mid: scan('meadow', 0x3e7630, 0.9), dry: 0x6e8044, fresh: 0x5a9036, clover: 0x28542d },
   ground: {
     dirt: scan('drysoil', 0x7a6448, 0.55),
     rock: scan('mossrock', 0x77716a, 0.6),
@@ -81,6 +82,7 @@ const TEMPERATE: BiomeLook = {
   },
   // the mossy cliff scan has lilac lichen-covered stone: calm it to grey
   photoSat: { rock: 0.5, dirt: 0.8 },
+  photoHue: { grass: 0.75 },
   blades: 1,
   clover: 1,
   flowers: 1,

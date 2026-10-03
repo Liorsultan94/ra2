@@ -29,7 +29,9 @@ describe('post grade: look weights from time of day and weather', () => {
     g.blend(base({ daylight: 0.12, sunY: 0.5, warmth: -0.5 }));
     expect(g.weights().night).toBeGreaterThan(0.95);
     expect(g.temperature).toBeLessThan(-0.1);
-    expect(g.saturation).toBeGreaterThan(0.85);
+    // the landscape goes grey-blue; lights and team colours are spared by the protection band (shader)
+    expect(g.saturation).toBeLessThan(0.7);
+    expect(g.saturation).toBeGreaterThan(0.4);
   });
 
   it('rain greys the look, storms more; sandstorm is warm; weights sum sensibly', () => {

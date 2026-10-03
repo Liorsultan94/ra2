@@ -218,11 +218,13 @@ function todPreset(key: Key): { p: Preset; light: number } {
     case 'day':
       break;
     case 'dusk':
-      set({ sunI: 2.3, hemiI: 0.55, env: 0.24, cloud: 0.22, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.15, spec: 0.9, dark: 0.55 }, 0xff8a4c, 0x7a84b8, 0x4a3424, [0.3, 0.19, 0.16], [-0.012, 0.0, 0.04], [0.06, 0.015, -0.05], 0x1c1418, [0.72, 0.6, 0.62]);
+      // a soft amber, low-intensity key over a cool blue sky fill (no orange wash; atmos golden / sunset stops)
+      set({ sunI: 1.35, hemiI: 0.85, env: 0.4, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 1.02, spec: 0.9, dark: 0.55 }, 0xffb07e, 0x6c7cb8, 0x2e2a30, [0.34, 0.22, 0.22], [-0.016, 0.0, 0.045], [0.035, 0.01, -0.02], 0x1c1418, [0.72, 0.62, 0.68]);
       light = 0.6;
       break;
     case 'night':
-      set({ sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 }, 0x8ea8ff, 0x3a5296, 0x0e1118, [0.022, 0.03, 0.055], [-0.008, 0.0, 0.03], [0.0, 0.004, 0.012], 0x04060a, [0.2, 0.25, 0.38]);
+      // moonlight: a dim blue-grey key and sky (not a saturated blue: green grass under it turned teal)
+      set({ sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.2, spec: 0.35, dark: 1 }, 0xb0bce0, 0x4a5678, 0x0e1014, [0.026, 0.03, 0.045], [-0.008, 0.0, 0.03], [0.0, 0.004, 0.012], 0x04060a, [0.24, 0.27, 0.36]);
       light = 0.12;
       break;
     // ---- extra stops of the dynamic cycle
@@ -238,11 +240,11 @@ function todPreset(key: Key): { p: Preset; light: number } {
       set({ sunI: 2.75, hemiI: 0.82, env: 0.44, cloud: 0.32, sat: 1.0, vignette: 0.3, bloom: 0.4, exposure: 1.1, spec: 1, dark: 0 }, 0xffe8cc, 0x9cb8e6, 0x5c5240, [0.3, 0.3, 0.3], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2824, [1, 0.97, 0.95]);
       break;
     case 'golden':
-      set({ sunI: 1.9, hemiI: 1.05, env: 0.62, cloud: 0.28, sat: 1.0, vignette: 0.33, bloom: 0.5, exposure: 1.12, spec: 1, dark: 0.1 }, 0xffd6aa, 0x86a2dc, 0x3c3a3a, [0.3, 0.26, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x22201e, [0.92, 0.84, 0.8]);
+      set({ sunI: 2.0, hemiI: 0.92, env: 0.5, cloud: 0.28, sat: 1.0, vignette: 0.35, bloom: 0.5, exposure: 1.05, spec: 1, dark: 0.1 }, 0xffcc98, 0x86a2dc, 0x3c3a3a, [0.4, 0.3, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x2a221e, [0.92, 0.84, 0.8]);
       light = 0.85;
       break;
     case 'sunset':
-      set({ sunI: 1.25, hemiI: 1.15, env: 0.6, cloud: 0.22, sat: 1.0, vignette: 0.38, bloom: 0.56, exposure: 1.12, spec: 0.95, dark: 0.38 }, 0xffc496, 0x7894d4, 0x343238, [0.26, 0.21, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x1c1820, [0.78, 0.66, 0.7]);
+      set({ sunI: 1.5, hemiI: 0.88, env: 0.45, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.56, exposure: 0.98, spec: 0.95, dark: 0.38 }, 0xffba86, 0x7490d0, 0x343238, [0.42, 0.26, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x2a1c1c, [0.78, 0.66, 0.7]);
       light = 0.65;
       break;
     case 'twilight':
@@ -254,7 +256,7 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.28;
       break;
     case 'dawn':
-      set({ sunI: 1.4, hemiI: 1.05, env: 0.55, cloud: 0.2, sat: 1.0, vignette: 0.38, bloom: 0.55, exposure: 1.12, spec: 0.9, dark: 0.42 }, 0xffcaa8, 0x8098d4, 0x363438, [0.3, 0.26, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x1c1a22, [0.82, 0.74, 0.78]);
+      set({ sunI: 1.6, hemiI: 0.88, env: 0.45, cloud: 0.2, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 0.98, spec: 0.9, dark: 0.42 }, 0xffc094, 0x7c94d0, 0x363438, [0.4, 0.28, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x2a1e22, [0.82, 0.74, 0.78]);
       p.hazeP.set(3, 70, 0.45, 50); // morning mist
       light = 0.6;
       break;
@@ -773,7 +775,8 @@ export class Atmosphere {
     if (moon) pathAt(MOON_PATH, u, dir);
     else pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, dir);
     // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
-    const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
+    // (capped at 1.5: dawn and evening stay a little darker than the day, with crisp long shadows)
+    const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.5, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
     this.preset!.sunI *= comp;
     if (this.altP && a.alt) this.altP.sunI *= comp;
   }

@@ -46,7 +46,7 @@ const FinalShader = {
     /** Exposure trim of the AgX curve (matches the ACES fit's brightness). */
     agxExposure: { value: 1.25 },
     /** AgX look: power (contrast) and saturation in the encoded domain. */
-    agxLook: { value: new THREE.Vector2(1.35, 1.4) },
+    agxLook: { value: new THREE.Vector2(1.35, 1.2) },
     tLut: { value: null as THREE.Texture | null },
     lutOn: { value: 0 },
     tBloom: { value: null as THREE.Texture | null },

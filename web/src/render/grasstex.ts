@@ -12,10 +12,10 @@ import * as THREE from 'three';
 
 /** Grass colours (sRGB hex). Lush = wet low ground, Mid = ordinary meadow, Dry = hills / verges. */
 export const GRASS = {
-  lush: 0x2a5523,
-  mid: 0x426f2b,
-  dry: 0x7e8047,
-  fresh: 0x5f8e35,
+  lush: 0x2a5a26,
+  mid: 0x3e7630,
+  dry: 0x6e8044,
+  fresh: 0x5a9036,
   clover: 0x28542d,
 };
 
