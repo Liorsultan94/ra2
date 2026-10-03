@@ -561,11 +561,11 @@ export class Animals {
         if (a.s === A.Dead) continue;
         this.routeAt(h, h.arc - 0.5 - i * 0.75);
         if (a.s === A.Panic || a.s === A.Alert || Math.hypot(a.x - _pt.x, a.y - _pt.y) > 0.3) back = false;
-        if (a.s === A.Graze || a.s === A.Walk) {
+        if (a.s === A.Graze || a.s === A.Walk || a.s === A.Return) {
+          if (a.s !== A.Return || Math.hypot(a.tx - _pt.x, a.ty - _pt.y) > 0.05) a.t = 0;
           a.s = A.Return;
           a.tx = _pt.x;
           a.ty = _pt.y;
-          a.t = 0;
         }
       }
       this.manIdle(man, dt, h);

@@ -100,8 +100,9 @@ export function buildWalkGrid(m: GameMap, layout: Layout, net: RoadNet | null, z
         c = 1;
         fl |= WF.Track;
       }
-      if (occ & OCC_FIELD) {
-        c = urban ? 1 : 5;
+      // (city: OCC_FIELD marks the paved squares)
+      if (occ & OCC_FIELD && !urban) {
+        c = 5;
         fl |= WF.Field;
       }
       if (m.trees[ti]) c = Math.max(c, urban ? 3 : 4);
@@ -272,7 +273,8 @@ export class PathFinder {
     const heur = (k: number) => {
       const dx = Math.abs((k % gw) - tx);
       const dy = Math.abs(((k / gw) | 0) - ty);
-      return Math.max(dx, dy) + 0.414 * Math.min(dx, dy);
+      // weighted (x1.5): a near-optimal route for a fraction of the expansions
+      return (Math.max(dx, dy) + 0.414 * Math.min(dx, dy)) * 1.5;
     };
     this.hn = 0;
     this.g[s] = 0;
@@ -353,13 +355,20 @@ export class PathFinder {
     const bx = (b % gw) + 0.5;
     const by = ((b / gw) | 0) + 0.5;
     const L = Math.hypot(bx - ax, by - ay);
-    const steps = Math.ceil(L * 2);
+    const steps = Math.ceil(L * 3);
+    // a corridor half a cell wide either side: no clipping wall corners
+    const nx = (-(by - ay) / (L || 1)) * 0.45;
+    const ny = ((bx - ax) / (L || 1)) * 0.45;
     for (let i = 1; i < steps; i++) {
       const x = ax + ((bx - ax) * i) / steps;
       const y = ay + ((by - ay) * i) / steps;
-      const k = Math.floor(y) * gw + Math.floor(x);
-      const c = this.cost(k, panic, blocked);
-      if (!c || c > worst) return false;
+      for (let o = -1; o <= 1; o++) {
+        const px = x + nx * o;
+        const py = y + ny * o;
+        if (px < 0 || py < 0 || px >= gw || py >= G.gh) return false;
+        const c = this.cost(Math.floor(py) * gw + Math.floor(px), panic, blocked);
+        if (!c || c > worst) return false;
+      }
     }
     return true;
   }

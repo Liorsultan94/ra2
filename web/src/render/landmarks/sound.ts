@@ -6,7 +6,7 @@
  * plays them positionally. Capped, so a stalled drain never grows it.
  */
 
-export type CivSound = 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn';
+export type CivSound = 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn' | 'collapse';
 
 export interface CivSoundReq {
   name: CivSound;

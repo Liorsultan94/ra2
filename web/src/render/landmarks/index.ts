@@ -46,6 +46,7 @@ import {
 import { groundRange, groundY } from './ground';
 import { landmarkPlan, type Spot } from './plan';
 import { civSound } from './sound';
+import { LM_NIGHT, landmarkMaterial } from './material';
 
 /*
  * The maps' unique set pieces (plan.ts says where): a wind farm, a castle
@@ -116,7 +117,6 @@ const _xa = new THREE.Vector3(1, 0, 0);
 export class MapLandmarks {
   readonly group = new THREE.Group();
   private mesh: THREE.Mesh | null = null;
-  private night = { value: 0 };
   private ranges: Range[] = [];
   private lights: Light[] = [];
   private rotors: THREE.InstancedMesh | null = null;
@@ -129,7 +129,6 @@ export class MapLandmarks {
   private lastHour = -1;
   private toll = { n: 0, t: 0 };
   private time = 0;
-  private dirty = false;
   private animate: boolean;
 
   constructor(
@@ -150,7 +149,7 @@ export class MapLandmarks {
     for (const l of plan.lanes) this.lane(k, l.pts, l.width);
     if (!k.count) return;
     const geo = k.build();
-    const mat = this.material(fog);
+    const mat = landmarkMaterial(fog);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = 'landmarks-static';
     mesh.castShadow = quality === 'high';
@@ -184,53 +183,6 @@ export class MapLandmarks {
   }
 
   // ---------------------------------------------------------------- building
-
-  private material(fog: FogOfWar): THREE.MeshStandardMaterial {
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.05 });
-    const night = this.night;
-    mat.onBeforeCompile = (sh) => {
-      sh.uniforms.lmNight = night;
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute float aGlow;\nvarying float vLmGlow;\nvarying vec3 vLmN;')
-        .replace(
-          '#include <beginnormal_vertex>',
-          `#include <beginnormal_vertex>
-          vLmGlow = aGlow;
-          vLmN = normalize( mat3( modelMatrix ) * objectNormal );`,
-        );
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float lmNight;\nvarying float vLmGlow;\nvarying vec3 vLmN;')
-        .replace(
-          '#include <color_fragment>',
-          `#include <color_fragment>
-          float lmWin = 0.0;
-          float lmLit = 0.0;
-          if ( vLmGlow > 1.5 && vLmGlow < 2.5 ) {
-            // glass / office facade: a grid of windows on the walls (world space, so it never stretches)
-            vec2 q = abs( vLmN.x ) > 0.5 ? vec2( vFogP.z, vFogP.y ) : vec2( vFogP.x, vFogP.y );
-            vec2 cell = q * vec2( 4.2, 5.2 );
-            vec2 f = fract( cell );
-            lmWin = step( 0.16, f.x ) * step( f.x, 0.84 ) * step( 0.22, f.y ) * step( f.y, 0.78 ) * ( 1.0 - step( 0.5, abs( vLmN.y ) ) );
-            lmLit = step( 0.5, fract( sin( dot( floor( cell ), vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) );
-            diffuseColor.rgb *= 1.0 - lmWin * 0.42;
-          }`,
-        )
-        .replace(
-          '#include <emissivemap_fragment>',
-          `#include <emissivemap_fragment>
-          {
-            vec3 lmC = vColor.rgb;
-            if ( vLmGlow > 0.5 && vLmGlow < 1.5 ) totalEmissiveRadiance += lmC * lmNight * 1.5;
-            else if ( vLmGlow > 1.5 && vLmGlow < 2.5 ) totalEmissiveRadiance += lmWin * lmLit * lmNight * vec3( 1.0, 0.78, 0.48 ) * 1.1;
-            else if ( vLmGlow > 2.5 && vLmGlow < 3.5 ) totalEmissiveRadiance += lmC * ( 0.25 + lmNight * 1.2 );
-            else if ( vLmGlow > 3.5 ) totalEmissiveRadiance += lmC * lmNight * 0.2;
-          }`,
-        );
-    };
-    fog.apply(mat);
-    mat.customProgramCacheKey = () => 'fog2-landmarks';
-    return mat;
-  }
 
   /** Begin a destructible slice of the merged mesh. */
   private beginRange(k: Kit, s: Spot, px: number, py: number, pz: number, height: number, hp = 1, toggle?: number): Range {
@@ -352,11 +304,19 @@ export class MapLandmarks {
         break;
       }
       case 'pond': {
-        const g = groundRange(m, x, y, Math.max(s.a ?? 3, s.b ?? 2));
-        k.at(x, g.lo + 0.02, y, yaw);
-        frozenLake(k, s.a ?? 3, s.b ?? 2);
-        // tint the "ice" into water: overwrite the last disc colours
-        this.recolor(k, k.count - 1, 0x3e7c82, 0x5a9aa0);
+        const ra = s.a ?? 3;
+        const rb = s.b ?? 2;
+        const g = groundRange(m, x, y, Math.max(ra, rb));
+        k.at(x, g.lo + 0.04, y, yaw);
+        k.add(new THREE.CircleGeometry(1, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x3e7c82);
+        k.add(new THREE.RingGeometry(0.92, 1.08, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x8a7a50);
+        // reeds around the water
+        for (let i = 0; i < 22; i++) {
+          const a = (i / 22) * Math.PI * 2 + s.v;
+          k.cone(0.07, 0.3 + (i % 3) * 0.08, Math.cos(a) * ra * 1.02, 0, Math.sin(a) * rb * 1.02, i % 2 ? 0x5a7a2a : 0x6a8a32, 5);
+        }
+        // a sand bank around it hides where the ground rises above the water
+        this.bank(k, x, y, ra, rb, g.lo, 0xd2b88a);
         break;
       }
       case 'refinery': {
@@ -388,15 +348,7 @@ export class MapLandmarks {
         const g = groundRange(m, x, y, Math.max(s.a ?? 4, s.b ?? 3));
         k.at(x, g.lo + 0.03, y, yaw);
         frozenLake(k, s.a ?? 4, s.b ?? 3);
-        // a snow bank around it hides where the ground rises above the ice
-        for (let i = 0; i < 24; i++) {
-          const a = (i / 24) * Math.PI * 2;
-          const rx = (s.a ?? 4) * 1.04;
-          const rz = (s.b ?? 3) * 1.04;
-          const px = x + Math.cos(a) * rx;
-          const pz = y + Math.sin(a) * rz;
-          k.at(px, g.lo, pz, -a).box(0.5, Math.max(0.12, groundY(m, px, pz) - g.lo + 0.08), (Math.PI * 2 * Math.max(rx, rz)) / 24 + 0.15, 0, 0, 0, 0xe4ecf2);
-        }
+        this.bank(k, x, y, s.a ?? 4, s.b ?? 3, g.lo, 0xe4ecf2);
         break;
       }
       case 'icehut': {
@@ -497,20 +449,16 @@ export class MapLandmarks {
     return Math.max(g, M.base + M.h * Math.pow(1 - t, 1.35));
   }
 
-  private recolor(k: Kit, last: number, a: number, b: number) {
-    // the lake / pond disc: its 28 triangles come first after the placement; tint them as water
-    const ca = new THREE.Color(a);
-    const cb = new THREE.Color(b);
-    const n = 28 * 3;
-    const end = k.count;
-    void last;
-    // find the disc: the first n vertices of this model
-    const start = end - (n + 7 * 6 + 4 * 30);
-    for (let i = Math.max(0, start); i < start + n && i < end; i++) {
-      const c = (i % 3) === 0 ? cb : ca;
-      k.col[i * 3] = c.r;
-      k.col[i * 3 + 1] = c.g;
-      k.col[i * 3 + 2] = c.b;
+  /** A low bank ringing an ellipse (pond / lake), up to the surrounding ground. */
+  private bank(k: Kit, x: number, y: number, ra: number, rb: number, lo: number, col: number) {
+    const n = 26;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const px = x + Math.cos(a) * ra * 1.07;
+      const pz = y + Math.sin(a) * rb * 1.07;
+      const H = Math.max(0.12, groundY(this.map, px, pz) - lo + 0.1);
+      const w = (Math.PI * 2 * Math.max(ra, rb) * 1.07) / n + 0.2;
+      k.at(px, lo, pz, a + Math.PI / 2).box(w, H, 0.5, 0, H / 2 - 0.04, 0, col);
     }
   }
 
@@ -692,12 +640,7 @@ export class MapLandmarks {
     const g = r.py;
     for (let i = 0; i < 6; i++) this.effects.after(i * 0.12, () => this.effects.dust(r.px + (Math.random() - 0.5) * 2, g + 0.2, r.pz + (Math.random() - 0.5) * 2, 2.5));
     this.effects.explosion(r.px, g + 0.4, r.pz, 'small', 'dust');
-    civSound('trainHorn', 0, r.px, r.pz); // (no-op placeholder keeps the queue warm; collapse sound below)
-    this.collapseSound(r);
-  }
-
-  private collapseSound(r: Range) {
-    // the battle's own collapse rumble comes with building deaths; a landmark plays it through the effects shake
+    if (this.probe.visible(r.px, r.pz)) civSound('collapse', 0.9, r.px, r.pz, 0.5);
     this.effects.addShake(0.12, r.px, r.pz);
   }
 
@@ -843,7 +786,7 @@ export class MapLandmarks {
     if (!this.mesh) return;
     const dt = f.dt;
     this.time += dt;
-    this.night.value = f.dark;
+    LM_NIGHT.value = f.dark;
     // destruction
     for (const r of this.ranges) {
       if (r.toggle !== undefined) {
@@ -920,7 +863,7 @@ export class MapLandmarks {
         }
       }
     }
-    // the stadium pitch glows under its floodlights
+    // the gas flare's glow
     const fl = this.flare;
     if (fl && near(fl.x, fl.z, 10) && this.probe.visible(fl.x, fl.z)) {
       const fk = 0.8 + Math.sin(t * 17) * 0.15 + Math.sin(t * 7.3) * 0.1;

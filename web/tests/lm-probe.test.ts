@@ -1,22 +1,17 @@
 import { it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import { buildLayout } from '../src/render/layout';
 it('probe', () => {
-  const m = createMap('frontline', 1);
-  const L = buildLayout(m);
-  const rows: string[] = [];
-  for (let y = 0; y < 50; y++) {
-    let s = String(y).padStart(2) + ' ';
-    for (let x = 0; x < 14; x++) {
-      const i = y * m.w + x;
-      const t = m.tiles[i];
-      const R = L.occRes;
-      const o = L.occ[(y * R + 2) * m.w * R + x * R + 2];
-      s += m.trees[i] ? 'T' : t === 3 ? '~' : t === 4 ? '#' : o & 1 ? '=' : o & 2 ? '-' : m.blocked[i] ? 'B' : t === 1 ? ',' : '.';
+  for (const id of ['urban', 'frontline'] as const) {
+    const m = createMap(id, 1);
+    const rows: string[] = [];
+    for (const y0 of [0, 84]) for (let y = y0; y < y0 + 12; y++) {
+      let s = String(y).padStart(2) + ' ';
+      for (let x = (y0 ? 84 : 0); x < (y0 ? 96 : 12); x++) {
+        const t = m.tiles[y * m.w + x];
+        s += t === 3 ? '~' : t === 5 ? 'B' : m.blocked[y * m.w + x] ? '#' : '.';
+      }
+      rows.push(s);
     }
-    rows.push(s);
+    console.log(id + '\n' + rows.join('\n'));
   }
-  console.log(rows.join('\n'));
-  const r0 = L.roads.find((r) => r.pts[0].x < 1 || r.pts[r.pts.length - 1].x < 1)!;
-  console.log(r0.pts.slice(0, 40).filter((_, i) => i % 4 === 0).map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
 });

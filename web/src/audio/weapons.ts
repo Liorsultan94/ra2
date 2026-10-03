@@ -817,6 +817,112 @@ function cricketBed(b: BakeCtx): void {
 }
 
 // ---------------------------------------------------------------------------
+// Civilian ambience (render/landmarks: trains, crossings, bells, airliners, helicopters, ships)
+// ---------------------------------------------------------------------------
+
+/** A train rolling past: deep rumble swelling and fading, the da-dum of the bogies over rail joints, a steel hiss. */
+function trainPass(b: BakeCtx): void {
+  const { p, o, t, r, R } = b;
+  const T = 6.6;
+  p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 170 * r, a: 1.4, hold: 2.6, d: 2.4, peak: 0.95 });
+  p.nh(o, t, { kind: 'pink', type: 'bandpass', f: 420 * r, q: 0.7, a: 1.6, hold: 2.2, d: 2.4, peak: 0.28 });
+  p.nh(o, t + 0.4, { type: 'highpass', f: 3800, a: 1.5, hold: 1.8, d: 2.0, peak: 0.05 });
+  // rail joints: a pair of clacks per bogie pair, the level following the pass
+  const times: number[] = [];
+  const peaks: number[] = [];
+  let tt = t + 0.3;
+  while (tt < t + T - 0.6) {
+    const k = Math.min(1, (tt - t) / 1.6, (t + T - tt) / 2.2);
+    for (const dd of [0, 0.11]) {
+      times.push(tt + dd);
+      peaks.push(0.6 * k * (0.75 + 0.25 * R()));
+    }
+    tt += 0.36 + R() * 0.12;
+  }
+  const src = p.noise('white', t, t + T);
+  const bp = p.filter('bandpass', 900 * r, 1.4);
+  const g = p.gain(0);
+  spikes(g.gain, times, peaks, 0.018);
+  src.connect(bp);
+  bp.connect(g);
+  g.connect(o);
+  for (let i = 0; i < times.length; i += 2) p.th(o, times[i], { f: 95 * r, f2: 60, glide: 0.06, a: 0.002, d: 0.07, peak: peaks[i] * 0.5 });
+}
+
+/** Two-tone train horn: a long blast and a short one. */
+function trainHorn(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  for (const [t0, len] of [[0, 1.15], [1.45, 0.45]] as const) {
+    const lp = p.filter('lowpass', 2100, 0.8);
+    const g = p.gain(0);
+    g.gain.setValueAtTime(0, t + t0);
+    g.gain.linearRampToValueAtTime(0.42, t + t0 + 0.06);
+    g.gain.setValueAtTime(0.42, t + t0 + len);
+    g.gain.linearRampToValueAtTime(0, t + t0 + len + 0.18);
+    for (const f of [311, 370, 466]) p.osc('sawtooth', f * r, t + t0, t + t0 + len + 0.2).connect(lp);
+    lp.connect(g);
+    g.connect(o);
+  }
+}
+
+/** Level crossing bell: an electronic ding, four times. */
+function crossingBell(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  for (let i = 0; i < 4; i++) {
+    const ti = t + i * 0.58;
+    p.th(o, ti, { f: 1210 * r, a: 0.001, d: 0.35, peak: 0.5 });
+    p.th(o, ti, { f: 2960 * r, a: 0.001, d: 0.18, peak: 0.22 });
+    p.th(o, ti, { f: 4830 * r, a: 0.001, d: 0.09, peak: 0.1 });
+    p.nh(o, ti, { type: 'bandpass', f: 3500, q: 3, a: 0.0005, d: 0.01, peak: 0.25 });
+  }
+}
+
+/** A church bell stroke: the clapper's strike and the bell's partials (hum, prime, minor third, fifth, nominal) ringing out. */
+function churchBell(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  const f = 294 * r;
+  p.nh(o, t, { type: 'bandpass', f: 2200, q: 1.2, a: 0.0006, d: 0.03, peak: 0.35 });
+  for (const [k, d, a] of [[0.5, 4.2, 0.4], [1, 3.4, 0.5], [1.19, 2.6, 0.32], [1.5, 2.0, 0.18], [2, 1.8, 0.28], [2.52, 1.1, 0.12], [3.01, 0.8, 0.08]] as const) p.th(o, t, { f: f * k, a: 0.002, d, peak: a * 0.6 });
+}
+
+/** A distant airliner: a soft roar swelling and fading over several seconds, a faint turbine whine dropping in pitch. */
+function jetHigh(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 700 * r, a: 3.2, hold: 0.8, d: 4.2, peak: 0.8 });
+  p.nh(o, t, { kind: 'brown', type: 'lowpass', f: 140, a: 3.4, hold: 0.6, d: 4.4, peak: 0.6 });
+  p.th(o, t + 0.5, { f: 1650 * r, f2: 1380 * r, glide: 7, a: 2.6, hold: 0.8, d: 3.6, peak: 0.035 });
+}
+
+/** Helicopter blades passing: 5.25 slaps a second, fading in and out (replayed back to back). */
+function heliPass(b: BakeCtx): void {
+  const { p, o, t, R } = b;
+  const per = 1 / 5.25;
+  const n = 14;
+  for (let k = 0; k < n; k++) {
+    const ti = t + k * per;
+    const env = Math.min(1, (k + 1) / 3, (n - k) / 3);
+    const v = (0.85 + 0.15 * R()) * env;
+    p.nh(o, ti, { kind: 'pink', type: 'lowpass', f: 380, a: 0.004, d: 0.09, peak: 0.85 * v });
+    p.th(o, ti, { f: 64, f2: 48, glide: 0.06, a: 0.003, d: 0.08, peak: 0.5 * v });
+  }
+  p.nh(o, t, { type: 'highpass', f: 2400, a: 0.4, hold: 1.8, d: 0.5, peak: 0.07 });
+}
+
+/** A ship's horn: a deep, slightly beating two-note blast. */
+function shipHorn(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  const lp = p.filter('lowpass', 650, 0.9);
+  const g = p.gain(0);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.5, t + 0.18);
+  g.gain.setValueAtTime(0.5, t + 1.9);
+  g.gain.linearRampToValueAtTime(0, t + 2.5);
+  for (const f of [110, 111.2, 165]) p.osc('sawtooth', f * r, t, t + 2.6).connect(lp);
+  lp.connect(g);
+  g.connect(o);
+}
+
+// ---------------------------------------------------------------------------
 // The table
 // ---------------------------------------------------------------------------
 
@@ -824,7 +930,8 @@ export type BakedName =
   | 'rifle' | 'mg' | 'autocannon' | 'flak' | 'cannon' | 'cannonHeavy' | 'rocket' | 'missileLaunch' | 'interceptorLaunch'
   | 'laser' | 'artillery' | 'mortar' | 'thermo' | 'explosionSmall' | 'explosionMedium' | 'explosionLarge'
   | 'buildingCollapse' | 'bridgeCollapse' | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'jetFlyby' | 'thunder' | 'crush'
-  | 'jetLoop' | 'rotorLoop' | 'propLoop' | 'fpvLoop' | 'windBed' | 'rainBed' | 'riverBed' | 'cricketBed';
+  | 'jetLoop' | 'rotorLoop' | 'propLoop' | 'fpvLoop' | 'windBed' | 'rainBed' | 'riverBed' | 'cricketBed'
+  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn';
 
 const SR_HI = 32000;
 const SR_MID = 24000;
@@ -863,6 +970,13 @@ export const BAKED: Record<BakedName, BakeDef> = {
   rainBed: { dur: 4, variants: 1, sr: 22050, loop: 0.5, stereo: true, spread: 0, build: rainBed },
   riverBed: { dur: 4.5, variants: 1, sr: SR_LO, loop: 0.5, stereo: true, spread: 0, build: riverBed },
   cricketBed: { dur: 5.6, variants: 1, sr: SR_LO, loop: 0.4, stereo: true, spread: 0, build: cricketBed },
+  trainPass: { dur: 6.8, variants: 2, sr: SR_LO, spread: 0.1, build: trainPass },
+  trainHorn: { dur: 2.2, variants: 2, sr: SR_MID, spread: 0.04, build: trainHorn },
+  crossingBell: { dur: 2.4, variants: 1, sr: SR_MID, spread: 0, build: crossingBell },
+  churchBell: { dur: 4.4, variants: 2, sr: SR_MID, spread: 0.03, build: churchBell },
+  jetHigh: { dur: 8.4, variants: 2, sr: SR_LO, spread: 0.1, build: jetHigh },
+  heliPass: { dur: 2.8, variants: 2, sr: SR_LO, spread: 0.05, build: heliPass },
+  shipHorn: { dur: 2.7, variants: 1, sr: SR_LO, spread: 0, build: shipHorn },
 };
 
 /** Bake order: what a battle needs first comes first (ambience last, it fades in). */
@@ -871,6 +985,7 @@ export const BAKE_ORDER: BakedName[] = [
   'autocannon', 'cannonHeavy', 'artillery', 'interceptorLaunch', 'intercept', 'flak', 'buildingCollapse', 'mortar',
   'thermo', 'droneLaunch', 'laser', 'droneBuzz', 'crush', 'bridgeCollapse', 'jetFlyby', 'thunder',
   'jetLoop', 'rotorLoop', 'propLoop', 'fpvLoop', 'windBed', 'rainBed', 'riverBed', 'cricketBed',
+  'trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn',
 ];
 
 /** Length of the offline render for one definition (all variants back to back). */

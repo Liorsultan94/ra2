@@ -15,6 +15,10 @@ import { WX } from '../wxuniforms';
 import { queueHeadlights } from '../fx/nightlife';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
+import { MapLandmarks } from '../landmarks';
+import { Railway } from './rail';
+import { WaterTransport } from './ferry';
+import { AirTraffic } from './air';
 
 /*
  * "Life on the map": civilian traffic, grazing livestock and bird flocks.
@@ -56,10 +60,17 @@ export class AmbientLife {
   readonly birds: Birds;
   /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
   readonly river: RiverLife;
+  /** The map's set pieces (landmarks/), railways (rail.ts), ferry / canal boats (ferry.ts), civilian aircraft (air.ts). */
+  readonly landmarks: MapLandmarks;
+  readonly rail: Railway;
+  readonly water: WaterTransport;
+  readonly airTraffic: AirTraffic;
+  private clockT = 0;
+  private hours = 0;
   /** Pedestrians: walkers, market, kids at play, evacuation (people.ts). */
   readonly people: People;
   // (car lights, indicators and the traffic-light glow)
-  private lights = new LightSprites(320, 48);
+  private lights = new LightSprites(448, 64);
   private dangers: Danger[] = [];
   private units = new Float32Array(512);
   private air = new Float32Array(128);
@@ -90,7 +101,11 @@ export class AmbientLife {
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
     this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
-    this.group.add(this.traffic.group, this.people.group, this.animals.group, this.birds.group, this.river.group, this.lights.group);
+    this.landmarks = new MapLandmarks(map, fog, probe, this.lights, effects, quality, world.bridges);
+    this.rail = new Railway(map, fog, probe, this.lights, effects, quality);
+    this.water = new WaterTransport(map, terrain.river ?? null, fog, probe, this.lights, quality);
+    this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad);
+    this.group.add(this.traffic.group, this.people.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -121,6 +136,10 @@ export class AmbientLife {
         }
         const kill = Math.max(0.45, Math.min(3, (w.splash ?? 0.4) * 0.9 + 0.3 + (w.damage >= 300 ? 0.8 : 0)));
         this.danger(ev.x, ev.y, 6 + kill * 2.5, kill, Math.min(1, 0.5 + kill * 0.25));
+        // landmarks crumble, trains derail, the news helicopter takes note
+        this.landmarks.blast(ev.x, ev.y, kill);
+        this.rail.blast(ev.x, ev.y, kill);
+        this.airTraffic.blast(ev.x, ev.y, kill);
         break;
       }
       case 'airburst':
@@ -233,6 +252,16 @@ export class AmbientLife {
     this.animals.draw(f);
     this.birds.draw();
     this.river.draw(f);
+    this.clockT -= dt;
+    if (this.clockT <= 0) {
+      this.clockT = 0.5;
+      const atm = this.host.atmos as unknown as { clock?: () => { hours: number } };
+      this.hours = typeof atm.clock === 'function' ? atm.clock().hours : 0;
+    }
+    this.landmarks.update(f, this.hours);
+    this.rail.update(f);
+    this.water.update(f);
+    this.airTraffic.update(f);
     this.lights.commit();
   }
 

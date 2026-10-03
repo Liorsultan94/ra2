@@ -6,6 +6,9 @@ import type { World } from '../sim/world';
 import { BLASTS, type Effects } from './effects';
 import type { FogOfWar } from './fog';
 import { GeoBuilder } from './geo';
+import { surfaceHeight } from './ground';
+import { buildLayout } from './layout';
+import { sharedRoadMaterial } from './scenery';
 import { buildingTextures, roadTexture } from './terraintex';
 
 /*
@@ -85,14 +88,21 @@ interface Hole {
   hz: number;
 }
 
-/** Asphalt top quad (road texture, highway variant): u across the road, v along it (bridge-local x). */
+/**
+ * How the deck asphalt maps onto the road strip texture, set per bridge from the roads it carries:
+ * the same look (highway / country road) and the dash phase carried on from the approach road
+ * (v at bridge-local x, see BridgeFx.deckLook).
+ */
+const deckUV = { u0: 0.06, v0: 0, dv: 1 / 6 };
+
+/** Asphalt top quad (the road strip texture): u across the road, v along it (bridge-local x). */
 function asphalt(top: GeoBuilder, x0: number, x1: number, z0: number, z1: number, y: number, xBase: number, m: THREE.Matrix4) {
   const w = W - 0.6;
   const p = [V(x0, y, z0), V(x1, y, z0), V(x0, y, z1), V(x1, y, z1)].map((v) => v.applyMatrix4(m));
   const ids = p.map((q, k) => {
     const lx = k % 2 ? x1 : x0;
     const lz = k < 2 ? z0 : z1;
-    return top.vert(q, V(0, 1, 0), 0.06 + ((lz + w / 2) / w) * 0.38, (lx + xBase) / 6, 1);
+    return top.vert(q, V(0, 1, 0), deckUV.u0 + ((lz + w / 2) / w) * 0.38, deckUV.v0 + (lx + xBase) * deckUV.dv, 1);
   });
   top.quad(ids[0], ids[1], ids[2], ids[3]);
 }
@@ -317,9 +327,10 @@ export class BridgeFx {
     const shadows = quality !== 'low';
     const tex = buildingTextures(quality === 'low' ? 128 : 256);
     this.concMat = fog.apply(new THREE.MeshStandardMaterial({ map: tex.plaster, vertexColors: true, roughness: 0.9 }));
-    this.roadMat = fog.apply(
-      new THREE.MeshStandardMaterial({ map: roadTexture(quality === 'high' ? 256 : 128), alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
-    );
+    // the decks wear the roads' own asphalt (scenery.ts: photoscan + markings mask, biome dust / snow)
+    this.roadMat =
+      sharedRoadMaterial(world.map) ??
+      fog.apply(new THREE.MeshStandardMaterial({ map: roadTexture(quality === 'high' ? 256 : 128), alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
     this.decalMat = fog.apply(
       new THREE.MeshStandardMaterial({ map: decalAtlas(), transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }),
     );
@@ -341,6 +352,7 @@ export class BridgeFx {
       this.group.add(root);
       root.updateMatrixWorld(true);
       const seed = b.idx * 97 + 13;
+      this.deckLook(b, L);
       const piers = [-L / 2 + 1.5, 0, L / 2 - 1.5];
       // ---- fixed: piers, caps, abutments, bank stubs
       const fixed = new GeoBuilder();
@@ -353,12 +365,19 @@ export class BridgeFx {
       boxUV(fixed, 0, 2);
       addDeck(fixed, ftop, -L / 2, -L / 2 + STUB, trs(0, DECK_Y, 0), 0, seed + 1, null, false);
       addDeck(fixed, ftop, L / 2 - STUB, L / 2, trs(0, DECK_Y, 0), 0, seed + 2, null, false);
+      // the approaches: expansion joints, kerbs, wing walls under the ramps, flared guard rails
+      const rails = new GeoBuilder();
+      const fb = fixed.count;
+      for (const end of [-1, 1]) this.approach(root, L, end, fixed, rails);
+      boxUV(fixed, fb, 2);
       const fm = new THREE.Mesh(fixed.build(), this.concMat);
       fm.castShadow = shadows;
       fm.receiveShadow = true;
       const ft = new THREE.Mesh(ftop.build(), this.roadMat);
       ft.receiveShadow = true;
-      root.add(fm, ft);
+      const rm = new THREE.Mesh(rails.build(), steel);
+      rm.castShadow = shadows;
+      root.add(fm, ft, rm);
       // ---- broken stumps: jagged edges and bent rebar where spans tore away
       const bk = new GeoBuilder();
       const edges: [number, number][] = [
@@ -494,6 +513,134 @@ export class BridgeFx {
       const v: View = { b, root, spans, broken, scaffold, status: 'intact', t0: 0, lastHitAt: b.hitAt, nHits: 0, hitTier: -1, holed: false, smokeAcc: 0, scafOut: 0, orig: null };
       this.views.push(v);
       if (b.status !== 'intact') this.snapDown(v);
+    }
+  }
+
+  // ------------------------------------------------------------ approaches
+
+  /**
+   * Deck markings carried on from the roads at either end: their look (highway / country road) and
+   * the dash phase (the road strip's v at the deck end, running on in the same direction).
+   */
+  private deckLook(b: BridgeState, L: number) {
+    deckUV.u0 = 0.06;
+    deckUV.v0 = 0;
+    deckUV.dv = 1 / 6;
+    const roads = buildLayout(this.world.map).roads;
+    const at = (e: { x: number; y: number }) => {
+      for (const r of roads) {
+        if (r.painted || r.ring) continue;
+        const n = r.pts.length;
+        for (const k of [0, n - 1]) {
+          const p = r.pts[k];
+          if (Math.hypot(p.x - e.x, p.y - e.y) > 0.4) continue;
+          let len = 0;
+          for (let i = 1; i < n; i++) len += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+          const variant = r.taper?.v[k] ?? r.variant;
+          // v at the end, and +1 when the road's v grows towards the deck
+          return { v: k ? len / 6 : 0, grows: k ? 1 : -1, variant };
+        }
+      }
+      return null;
+    };
+    const a = at(b.ends[0]);
+    const c = at(b.ends[1]);
+    const look = a ?? c;
+    if (!look) return;
+    deckUV.u0 = look.variant === 0 ? 0.06 : 0.56;
+    // local x runs from ends[0] (x = -L/2) to ends[1] (x = +L/2): v carries on from the road at ends[0]
+    if (a) {
+      deckUV.dv = a.grows / 6;
+      deckUV.v0 = a.v + (L / 2) * deckUV.dv;
+      // and lands in phase with the road at the far end (the dashes repeat every 1/8 of v)
+      if (c && c.grows === -a.grows) {
+        const vEnd = deckUV.v0 + (L / 2) * deckUV.dv;
+        let d = c.v - vEnd;
+        d -= Math.round(d * 8) / 8;
+        deckUV.dv += d / L;
+        deckUV.v0 = a.v + (L / 2) * deckUV.dv;
+      }
+    } else if (c) {
+      deckUV.dv = -c.grows / 6;
+      deckUV.v0 = c.v - (L / 2) * deckUV.dv;
+    }
+  }
+
+  /**
+   * One end of a bridge (end = -1 at ends[0], +1 at ends[1], bridge-local x outwards): an expansion
+   * joint across the road at the deck end, the deck's kerbs running on and down the ramp, wing walls
+   * closing the space under the ramped road, and steel guard rails flaring out and down to the ground.
+   */
+  private approach(root: THREE.Group, L: number, end: number, conc: GeoBuilder, rails: GeoBuilder) {
+    const m = this.world.map;
+    root.updateMatrixWorld(true);
+    const toW = (x: number, z: number) => V(x, 0, z).applyMatrix4(root.matrixWorld);
+    // height of the road ribbon there (scenery.ts ramps the roads up onto the decks over 2.2 tiles)
+    const roadH = (x: number, z: number) => {
+      const w = toW(x, z);
+      const g = surfaceHeight(m, w.x, w.z);
+      const d = Math.abs(x - end * (L / 2));
+      const lift = Math.max(0, 1 - d / 2.2);
+      return Math.max(g + 0.03, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
+    };
+    const groundH = (x: number, z: number) => {
+      const w = toW(x, z);
+      return surfaceHeight(m, w.x, w.z);
+    };
+    const xe = end * (L / 2);
+    const deckTop = DECK_Y + 0.1;
+    // expansion joint: a steel strip with teeth across the whole deck at the end
+    box(conc, 0.07, 0.012, W - 0.02, trs(xe - end * 0.03, deckTop + 0.012, 0), 0.24);
+    for (let k = 0; k < 12; k++) box(conc, 0.02, 0.013, 0.07, trs(xe - end * 0.03, deckTop + 0.013, -W / 2 + 0.12 + (k / 11) * (W - 0.24)), 0.5);
+    // kerbs + wing walls along both sides of the ramp
+    const run = 1.6;
+    const N = 8;
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < N; i++) {
+        const t0 = i / N;
+        const t1 = (i + 1) / N;
+        const xa = xe + end * run * t0;
+        const xb = xe + end * run * t1;
+        // the kerb eases from the sidewalk's edge in to the road's shoulder
+        const za = side * (W / 2 - 0.12 - 0.08 * t0);
+        const zb = side * (W / 2 - 0.12 - 0.08 * t1);
+        const ha = roadH(xa, za);
+        const hb = roadH(xb, zb);
+        const kh = 0.05 * (1 - t0 * 0.7);
+        const mid = V((xa + xb) / 2, (ha + hb) / 2 + kh / 2, (za + zb) / 2);
+        const len = Math.hypot(xb - xa, zb - za);
+        const pitch = Math.atan2(hb - ha, (xb - xa) * end) * end;
+        box(conc, len + 0.02, kh, 0.08, new THREE.Matrix4().compose(mid, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(-(zb - za), xb - xa), pitch, 'YXZ')), V(1, 1, 1)), 0.82);
+        // wing wall: from under the kerb down into the ground (no daylight under the ramped road)
+        const gz = side * (W / 2 - 0.08);
+        const ga = Math.min(groundH(xa, gz), ha) - 0.3;
+        const gb = Math.min(groundH(xb, gz), hb) - 0.3;
+        const wall = new THREE.BufferGeometry();
+        const zz = side * (W / 2 - 0.06);
+        wall.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute([xa, ha, zz, xb, hb, zz, xa, ga, zz, xb, hb, zz, xb, gb, zz, xa, ga, zz, xa, ha, zz, xa, ga, zz, xb, hb, zz, xb, hb, zz, xa, ga, zz, xb, gb, zz], 3),
+        );
+        wall.computeVertexNormals();
+        conc.add(wall, new THREE.Matrix4(), null, 0.7);
+      }
+      // guard rail: from the parapet end, flaring out and down to an anchor in the ground
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= 6; i++) {
+        const t = i / 6;
+        const x = xe + end * 1.3 * t;
+        const z = side * (W / 2 - 0.03 + 0.32 * t * t);
+        const top = i === 0 ? deckTop + 0.2 : Math.max(groundH(x, z), roadH(x, z) - 0.02) + 0.16 * (1 - t * t * 0.85);
+        pts.push(V(x, top, z));
+      }
+      for (let i = 0; i < pts.length - 1; i++) {
+        beam(rails, pts[i], pts[i + 1], 0.035, 0.75);
+        beam(rails, pts[i].clone().setY(pts[i].y - 0.045), pts[i + 1].clone().setY(pts[i + 1].y - 0.045), 0.02, 0.7);
+      }
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        beam(rails, V(p.x, Math.min(groundH(p.x, p.z), p.y - 0.1) - 0.05, p.z), p, 0.022, 0.45);
+      }
     }
   }
 

@@ -39,7 +39,9 @@ export type Sfx =
   | LiveName
   | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder'
   /** A vehicle ran a soldier over (crunch + thud); a short alarmed radio squelch (soldiers dodging a vehicle). */
-  | 'crush' | 'squelch';
+  | 'crush' | 'squelch'
+  /** Civilian ambience of the render-only set pieces (render/landmarks/sound.ts): played only once baked. */
+  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn';
 
 /** A world position (sim x / y on the ground, z = height above it). */
 export interface SoundPos {
@@ -110,6 +112,14 @@ const META: Record<Sfx, Meta> = {
   droneBuzz: C(0.35, 0.08, 0.08, 0.6, 2, 'droneBuzz'),
   jetFlyby: C(0.5, 0.2, 0.8, 2, 2, 'droneBuzz', 0.05),
   thunder: C(0.9, 0.25, 0.5, 2.2, 2, 'explosionLarge', 0.12),
+  // civilian ambience: low priority (never steals a combat voice), one or two at a time
+  trainPass: C(0.5, 0.18, 3, 0.3, 2, 'droneBuzz', 0.04),
+  trainHorn: C(0.42, 0.3, 4, 0.4, 1, 'droneBuzz', 0.02),
+  crossingBell: C(0.3, 0.12, 1.5, 0.3, 2, 'droneBuzz', 0),
+  churchBell: C(0.42, 0.35, 1.2, 0.4, 2, 'droneBuzz', 0.01),
+  jetHigh: C(0.32, 0.25, 6, 0.25, 1, 'droneBuzz', 0.04),
+  heliPass: C(0.4, 0.12, 2, 0.35, 2, 'droneBuzz', 0.03),
+  shipHorn: C(0.42, 0.35, 5, 0.3, 1, 'droneBuzz', 0.02),
   crush: C(0.6, 0.1, 0.06, 1, 3, 'explosionSmall', 0.1),
   jam: { lvl: 0.4, wet: 0.08, gap: 0.08, combat: false, weight: 1, cap: 2, jitter: 0, live: 'jam' },
   click: ui('click'),
@@ -135,6 +145,9 @@ function ui(name: LiveName): Meta {
   const d = LIVE[name];
   return { lvl: d.lvl, wet: d.wet, gap: d.gap, combat: false, weight: 5, cap: 4, jitter: 0.08, live: name };
 }
+
+/** Civilian ambience sounds: no live fallback, silent until baked. */
+const CIVIL = new Set<Sfx>(['trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn']);
 
 /** Which baked sound a combat Sfx plays. */
 function bakedFor(name: Sfx): BakedName | null {
@@ -606,6 +619,7 @@ export class AudioSystem {
     this.reap(now);
     const bn = bakedFor(name);
     const baked = bn ? this.baked.get(bn) : undefined;
+    if (!baked && CIVIL.has(name)) return false;
     const rate = 1 + (Math.random() - 0.5) * meta.jitter;
     const t0 = now + 0.005 + sp.delay;
     const estDur = baked ? baked.dur / rate : 1.5;

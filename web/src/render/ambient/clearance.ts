@@ -113,25 +113,55 @@ function dekink(pts: V2[], arrs: unknown[][], minCos: number, i0 = 1, i1 = Infin
   }
 }
 
-/** Road surface width of a bridge deck (render/bridgefx.ts builds the decks 2 x BRIDGE_HALF_WIDTH wide, kerbs inside). */
-const DECK_W = 1.9;
+/**
+ * Road width where it meets a bridge deck: the deck's asphalt (render/bridgefx.ts DECK_ASPHALT) plus the
+ * road texture's gravel shoulders, which tuck under the deck's kerbs.
+ */
+export const DECK_ROAD_W = 1.86;
 
-/** Roads running onto a bridge widen smoothly to the deck's width over their last 4 tiles. */
+/**
+ * Roads at a bridge: anything running on onto the deck (the city's approaches) is cut back to the deck
+ * end, a road stopping short runs on up to it, and the last 4 tiles ease to the deck's width.
+ */
 function widenToDecks(m: GameMap, roads: Road[]) {
-  const ends = bridgeEnds(m).flatMap((b) => b.ends);
+  const decks = bridgeEnds(m);
   for (const r of roads) {
     if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 4) continue;
     for (const at of [0, 1] as const) {
-      const p = r.pts[at ? r.pts.length - 1 : 0];
-      const e = ends.find((e2) => Math.hypot(e2.x - p.x, e2.y - p.y) < 2.4);
-      if (!e) continue;
+      const p0 = r.pts[at ? r.pts.length - 1 : 0];
+      let hit: { e: V2; o: V2 } | null = null;
+      for (const d of decks)
+        for (const k of [0, 1]) {
+          const e = d.ends[k];
+          const o = d.ends[1 - k];
+          // the end lies near the deck end, or on the deck itself
+          const ax = o.x - e.x;
+          const ay = o.y - e.y;
+          const L = Math.hypot(ax, ay) || 1;
+          const t = ((p0.x - e.x) * ax + (p0.y - e.y) * ay) / L;
+          const lat = Math.abs((p0.x - e.x) * -ay + (p0.y - e.y) * ax) / L;
+          if (lat < 1.3 && t > -2.4 && t < L / 2) hit = { e, o };
+        }
+      if (!hit) continue;
+      const { e, o } = hit;
+      const ax = o.x - e.x;
+      const ay = o.y - e.y;
+      const L = Math.hypot(ax, ay) || 1;
       let w = r.taper?.w ?? r.pts.map(() => r.width);
       let v = r.taper?.v ?? r.pts.map(() => r.variant);
-      // a road stopping short of the deck runs on up to it (no strip of bare ground before the bridge)
+      // cut back what runs onto the deck
+      const onDeck = (p: V2) => ((p.x - e.x) * ax + (p.y - e.y) * ay) / L > -0.02 && Math.abs((p.x - e.x) * -ay + (p.y - e.y) * ax) / L < 1.3;
+      let cut = 0;
+      while (cut < r.pts.length - 4 && onDeck(r.pts[at ? r.pts.length - 1 - cut : cut])) cut++;
+      if (cut) {
+        r.pts = at ? r.pts.slice(0, r.pts.length - cut) : r.pts.slice(cut);
+        w = at ? w.slice(0, w.length - cut) : w.slice(cut);
+        v = at ? v.slice(0, v.length - cut) : v.slice(cut);
+      }
+      // and run on to the deck end, along the deck's axis for the last stretch
+      const p = r.pts[at ? r.pts.length - 1 : 0];
       const gap = Math.hypot(e.x - p.x, e.y - p.y);
-      const q = r.pts[at ? r.pts.length - 3 : 2];
-      const ahead = ((p.x - q.x) * (e.x - p.x) + (p.y - q.y) * (e.y - p.y)) / ((Math.hypot(p.x - q.x, p.y - q.y) || 1) * (gap || 1));
-      if (gap > 0.1 && ahead > 0.8) {
+      if (gap > 0.05) {
         const ext = dense(p, e).slice(1);
         if (at) {
           r.pts = [...r.pts, ...ext];
@@ -143,20 +173,48 @@ function widenToDecks(m: GameMap, roads: Road[]) {
           v = [...ext.map(() => v[0]), ...v];
         }
       }
+      // no doubling back where the run-on joins (an end that overshot to the side of the deck)
+      const pts = r.pts;
+      const span = Math.min(pts.length, Math.ceil(gap / 0.25) + 16);
+      dekink(pts, [w, v], 0.6, at ? pts.length - span : 1, at ? pts.length - 1 : span);
+      redensify(pts, w, v);
       const smooth = (x: number) => x * x * (3 - 2 * x);
       let along = 0;
-      for (let k = 0; k < r.pts.length; k++) {
-        const i = at ? r.pts.length - 1 - k : k;
+      for (let k = 0; k < pts.length; k++) {
+        const i = at ? pts.length - 1 - k : k;
         if (k > 0) {
           const j = at ? i + 1 : i - 1;
-          along += Math.hypot(r.pts[i].x - r.pts[j].x, r.pts[i].y - r.pts[j].y);
+          along += Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y);
         }
         if (along > 4) break;
         const f = smooth(1 - along / 4);
-        w[i] = w[i] + (Math.max(w[i], DECK_W) - w[i]) * f;
+        w[i] = w[i] + (DECK_ROAD_W - w[i]) * f;
       }
+      r.pts = pts;
       r.taper = { ...(r.taper ?? {}), w, v };
     }
+  }
+}
+
+/** Even spacing again (~0.25) where points were dropped, the per-point arrays interpolated along. */
+function redensify(pts: V2[], ws: number[], vs: (0 | 1)[]) {
+  for (let q = 1; q < pts.length; q++) {
+    const d = Math.hypot(pts[q].x - pts[q - 1].x, pts[q].y - pts[q - 1].y);
+    if (d <= 0.32) continue;
+    const nIns = Math.ceil(d / 0.25) - 1;
+    const a0 = pts[q - 1];
+    const b0 = pts[q];
+    const ins: V2[] = [];
+    const wi: number[] = [];
+    for (let k = 1; k <= nIns; k++) {
+      const f = k / (nIns + 1);
+      ins.push({ x: a0.x + (b0.x - a0.x) * f, y: a0.y + (b0.y - a0.y) * f });
+      wi.push(ws[q - 1] + (ws[q] - ws[q - 1]) * f);
+    }
+    pts.splice(q, 0, ...ins);
+    ws.splice(q, 0, ...wi);
+    vs.splice(q, 0, ...ins.map(() => vs[q - 1]));
+    q += nIns;
   }
 }
 

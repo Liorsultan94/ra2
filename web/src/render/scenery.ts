@@ -71,6 +71,13 @@ export interface SceneryHandles {
   rails: THREE.InstancedMesh[];
 }
 
+const ROAD_MATS = new WeakMap<GameMap, THREE.Material>();
+
+/** The road ribbons' material of this map (photoscanned asphalt, markings mask), once the scenery is built. */
+export function sharedRoadMaterial(m: GameMap): THREE.Material | null {
+  return ROAD_MATS.get(m) ?? null;
+}
+
 export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: SceneryHandles, lod?: SceneryLod): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
   const shadows = quality !== 'low';
@@ -95,6 +102,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   roadBase.defines = { ...roadBase.defines, ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
   const roadMat = fog.apply(roadBase);
   roadMat.customProgramCacheKey = () => 'fog2-road2-b' + bc;
+  ROAD_MATS.set(m, roadMat); // (bridge decks share it: render/bridgefx.ts)
   const rb = new GeoBuilder();
   const bridgeEnds = m.bridges.flatMap((br) => {
     const h = br.length / 2;
