@@ -93,9 +93,6 @@ function nearForbidden(m: GameMap, x: number, y: number, extra: number): boolean
 }
 
 /** Parking lots beside the paved roads (the access lanes are appended to `roads`). */
-export const LOT_STATS: Record<string, number> = {};
-const stat = (k: string) => (LOT_STATS[k] = (LOT_STATS[k] ?? 0) + 1);
-
 export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number): Lot[] {
   const city = m.biome === 'urban';
   const want = city ? 5 : 2;
@@ -115,10 +112,7 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
       const a2 = r.pts[i - 6];
       const b2 = r.pts[i + 6];
       const l2 = Math.hypot(b2.x - a2.x, b2.y - a2.y) || 1;
-      if (((b2.x - a2.x) * ux + (b2.y - a2.y) * uy) / l2 < 0.97) {
-        stat('bent');
-        continue;
-      }
+      if (((b2.x - a2.x) * ux + (b2.y - a2.y) * uy) / l2 < 0.97) continue;
       for (const side of [1, -1]) {
         const nx = -uy * side;
         const ny = ux * side;
@@ -126,28 +120,18 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
         const off = half + gap + D / 2;
         const cx = r.pts[i].x + nx * off;
         const cy = r.pts[i].y + ny * off;
-        if (nearForbidden(m, cx, cy, 1.4)) {
-          stat('forbidden');
-          continue;
-        }
+        if (nearForbidden(m, cx, cy, 1.4)) continue;
         // the whole footprint (+ margin) on free, fairly flat ground
         let ok = true;
         for (let s = -L / 2 - 0.25; s <= L / 2 + 0.25 && ok; s += 0.25)
           for (let t = -D / 2 + 0.1; t <= D / 2 + 0.25 && ok; t += 0.25) ok = siteFree(m, occ, R, cx + ux * s + nx * t, cy + uy * s + ny * t);
-        if (!ok) {
-          stat('footprint');
-          continue;
-        }
+        if (!ok) continue;
         const h = (x: number, y: number) => m.heights[Math.floor(y) * (m.w + 1) + Math.floor(x)] ?? 0;
         if (Math.abs(h(cx + ux * L * 0.5, cy + uy * L * 0.5) - h(cx - ux * L * 0.5, cy - uy * L * 0.5)) > 0.25) continue;
         // village lots: by houses / shops
         let near = 0;
         for (const st of m.structures) if (Math.hypot(st.x + st.w / 2 - cx, st.y + st.h / 2 - cy) < 7) near++;
-        if (!city && near < 1) {
-          stat('lonely');
-          continue;
-        }
-        stat('ok');
+        if (!city && near < 1) continue;
         // access lane: off the road centre at the lot's first end, down the aisle
         const e0x = cx - ux * (L / 2 - 0.3);
         const e0y = cy - uy * (L / 2 - 0.3);

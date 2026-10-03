@@ -144,7 +144,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
     ${attr ? 'attribute vec4 aWear;' : ''}
     varying vec3 vWPos;
     varying float vWDirt;
-    ${cfg.bake ? 'varying vec3 vWNrm;' : ''}
+    ${cfg.bake ? 'varying vec3 vWNrm;\n attribute float aTone;\n varying float vTone;' : ''}
     ${cfg.run ? 'varying float vRunY;' : ''}`,
   );
   if (cfg.run)
@@ -157,7 +157,8 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
     shader.vertexShader = shader.vertexShader.replace(
       '#include <defaultnormal_vertex>',
       `#include <defaultnormal_vertex>
-      vWNrm = objectNormal;`,
+      vWNrm = objectNormal;
+      vTone = aTone;`,
     );
   if (cfg.loose) {
     shader.vertexShader = shader.vertexShader
@@ -214,7 +215,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       uniform float uWet;
       varying vec3 vWPos;
       varying float vWDirt;
-      ${cfg.bake ? 'varying vec3 vWNrm;\n uniform sampler2D uGrunge;' : ''}
+      ${cfg.bake ? 'varying vec3 vWNrm;\n varying float vTone;\n uniform sampler2D uGrunge;' : ''}
       ${cfg.run ? 'varying float vRunY;' : ''}`,
     )
     .replace(
@@ -284,7 +285,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
         `#include <lights_fragment_end>
         reflectedLight.indirectDiffuse *= wAO;
         reflectedLight.indirectSpecular *= wAO * wAO;
-        reflectedLight.directDiffuse *= mix(1.0, wAO, 0.5);
+        reflectedLight.directDiffuse *= mix(1.0, wAO, 0.6);
         reflectedLight.directSpecular *= mix(1.0, wAO, 0.7);`,
       );
   }
@@ -313,12 +314,13 @@ const BAKE_COLOR = /* glsl */ `
         vec3 wNA = abs(wn);
         vec2 wGu = (wNA.x > wNA.z ? wP.zy : wP.xy) * vec2(0.19, 0.37);
         vec3 wG = wNA.y > 0.7 ? texture2D(uGrunge, wP.xz * 0.15).rgb : texture2D(uGrunge, wGu).rgb;
-        // paint tone: sun-faded / repainted patches, plate to plate
-        diffuseColor.rgb *= 0.9 + 0.2 * wN0 + 0.08 * (wN1 - 0.5);
+        // paint tone: sun-faded / repainted patches, plate to plate (slight value + hue shift per panel)
+        float wT = vTone - 0.5;
+        diffuseColor.rgb *= (0.92 + 0.16 * wN0 + 0.08 * (wN1 - 0.5)) * (1.0 + wT * 0.16) * vec3(1.0 + wT * 0.05, 1.0, 1.0 - wT * 0.07);
         // cavities: seams, crevices, under fittings and modules (grime collects there)
         float wC = smoothstep(0.08, 0.9, wAO);
-        diffuseColor.rgb *= mix(0.4, 1.0, wC);
-        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, (1.0 - wC) * 0.3);
+        diffuseColor.rgb *= mix(0.3, 1.0, wC);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, (1.0 - wC) * 0.38);
         // rain / grime streaks down the vertical faces
         float wStreak = smoothstep(0.25, 0.85, wG.r) * wSide * (0.55 + 0.45 * wN1);
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.68 + uGrime * 0.12, wStreak * 0.55);

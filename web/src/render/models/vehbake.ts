@@ -45,6 +45,8 @@ export interface BakeResult {
 interface CacheEntry {
   res: BakeResult;
   uvs: Float32Array[];
+  /** Per-vertex panel tone (chart seed 0..1; wear.ts varies the paint per panel). */
+  tones: Float32Array[];
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -93,6 +95,8 @@ interface Src {
   group: string;
   /** Bake-space transform (template root space; identity for wheel shapes). */
   m: THREE.Matrix4;
+  /** Part of a gun (under a 'recoil' / 'gunpiv' tag). */
+  gun: boolean;
 }
 
 const NEUTRAL_TAGS = ['crew', 'crewA', 'crewB', 'hlid', 'whip', 'spin'];
@@ -119,16 +123,18 @@ function collect(root: THREE.Object3D): Src[] {
     if (!kind) return;
     let group = 'hull';
     let neutral = false;
+    let gun = false;
     for (let q: THREE.Object3D | null = mesh; q && q !== root; q = q.parent) {
       const tg = tagsOf(q);
       if (tg.some((t) => NEUTRAL_TAGS.includes(t))) neutral = true;
+      if (tg.includes('recoil') || tg.includes('gunpiv')) gun = true;
       if (group === 'hull' && tg.includes('turret')) group = 't:' + q.uuid;
     }
     if (inst) group = 'w:' + mesh.geometry.uuid;
     if (neutral) group = '';
     const g = mesh.geometry;
     if (g.index || !g.attributes.position) group = '';
-    out.push({ mesh, kind, group, m: inst ? new THREE.Matrix4() : mesh.matrixWorld.clone() });
+    out.push({ mesh, kind, group, gun, m: inst ? new THREE.Matrix4() : mesh.matrixWorld.clone() });
   });
   return out;
 }
@@ -361,6 +367,8 @@ function styleCharts(charts: Chart[], srcs: Src[]) {
       continue;
     }
     ch.style = s.kind === 'camo' ? 1 : s.kind === 'D' ? 2 : 3;
+    // guns (recoiling barrels, sleeves): no plate seams or bolts
+    if (ch.style === 1 && s.gun) ch.style = 2;
     if (ch.style === 2) {
       // grille paints: diamond mesh / louvres baked into the normal + AO
       const col = s.mesh.geometry.attributes.color;
@@ -598,16 +606,25 @@ float detailH(vec2 c, out float cav) {
     float dxb = abs(d - 0.0085);
     h += 0.002 * dome(length(vec2(dxb, dyb)), 0.0034) * inner * inRow;
   }
-  // bolt rows along the top and bottom of rectangular plates
+  // bolt rows along the edges of rectangular armour plates (grime ring around each head)
   if (vSt.w > 0.5 && vSt.w < 1.5) {
-    float pitch = 0.024;
-    float bx = (c.x - vCh.x - 0.012) / pitch;
+    float pitch = 0.023;
+    float ins = 0.0075;
+    float bx = (c.x - vCh.x - ins) / pitch;
     float bk = floor(bx + 0.5);
-    float inRow = step(0.0, bk) * step(bk * pitch + 0.012, L - 0.008);
+    float inRow = step(0.0, bk) * step(bk * pitch + ins, L - ins + 0.001);
     float dx = (bx - bk) * pitch;
-    float dyT = c.y - (vCh.w - 0.0085);
-    float dyB = c.y - (vCh.y + 0.0085);
-    h += 0.002 * inRow * (dome(length(vec2(dx, dyT)), 0.0034) + dome(length(vec2(dx, dyB)), 0.0034));
+    float by = (c.y - vCh.y - ins) / pitch;
+    float bj = floor(by + 0.5);
+    float inCol = step(0.0, bj) * step(bj * pitch + ins, Hh - ins + 0.001);
+    float dy = (by - bj) * pitch;
+    float dT = length(vec2(dx, c.y - (vCh.w - ins)));
+    float dB = length(vec2(dx, c.y - (vCh.y + ins)));
+    float dL = length(vec2(c.x - (vCh.x + ins), dy));
+    float dR = length(vec2(c.x - (vCh.z - ins), dy));
+    float dm = min(min(dT, dB) + (1.0 - inRow) * 9.0, min(dL, dR) + (1.0 - inCol) * 9.0);
+    h += 0.0016 * dome(dm, 0.0024);
+    cav = max(cav, (smoothstep(0.0021, 0.0026, dm) - smoothstep(0.0034, 0.0046, dm)) * 0.75);
   }
   // non-slip grit on decks (inset patch)
   if (vSt.w > 1.5) {
@@ -850,15 +867,20 @@ function occluders(root: THREE.Object3D): Occ {
 function layout(srcs: Src[], data: (SrcData | null)[], seenGeo: Map<THREE.BufferGeometry, number>, charts: Chart[], S: number, D: number, gut: number) {
   const [nu, nvv] = neutralUV(S);
   const uvs: Float32Array[] = [];
+  const tones: Float32Array[] = [];
   const geos: { g: THREE.BufferGeometry; group: string }[] = [];
   srcs.forEach((s, si) => {
     const nv = s.mesh.geometry.attributes.position.count;
     let uv: Float32Array = new Float32Array(nv * 2);
+    let tone: Float32Array = new Float32Array(nv).fill(0.5);
     const d = data[si];
-    if (s.group && !d) uv = uvs[seenGeo.get(s.mesh.geometry)!];
-    else
+    if (s.group && !d) {
+      uv = uvs[seenGeo.get(s.mesh.geometry)!];
+      tone = tones[seenGeo.get(s.mesh.geometry)!];
+    } else
       for (let i = 0; i < nv; i++) {
         const ch = d ? charts[d.C[Math.floor(i / 3)]] : null;
+        if (ch) tone[i] = ch.seed;
         if (!ch || ch.tiny) {
           uv[i * 2] = nu;
           uv[i * 2 + 1] = nvv;
@@ -872,8 +894,9 @@ function layout(srcs: Src[], data: (SrcData | null)[], seenGeo: Map<THREE.Buffer
       }
     if (d) geos.push({ g: bakeGeometry(s, d, charts, uv, D), group: s.group });
     uvs.push(uv);
+    tones.push(tone);
   });
-  return { uvs, geos };
+  return { uvs, tones, geos };
 }
 
 /** GPU passes: depth tiles per group, atlas rasterisation, optional gutter dilation; returns RGBA8 pixels. */
@@ -1016,7 +1039,10 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
   const srcs = collect(root);
   const hit = cache.get(ck);
   if (hit && hit.uvs.length === srcs.length && srcs.every((s, i) => s.mesh.geometry.attributes.position.count * 2 === hit.uvs[i].length)) {
-    srcs.forEach((s, i) => s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(hit.uvs[i], 2)));
+    srcs.forEach((s, i) => {
+      s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(hit.uvs[i], 2));
+      s.mesh.geometry.setAttribute('aTone', new THREE.BufferAttribute(hit.tones[i], 1));
+    });
     return hit.res;
   }
   const r = renderer();
@@ -1039,6 +1065,7 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
   const gut = 2;
   let res: BakeResult | null = null;
   let uvs: Float32Array[] = [];
+  let tones: Float32Array[] = [];
   const dispose = (geos: { g: THREE.BufferGeometry }[]) => geos.forEach((b) => b.g.dispose());
   try {
     // ---- visibility pre-pass (quarter size): charts that are hidden (behind skirts, under the hull) or face
@@ -1078,6 +1105,7 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     if (!(D > 0)) return null;
     const fin = layout(srcs, data, seenGeo, charts, S, D, gut);
     uvs = fin.uvs;
+    tones = fin.tones;
     let px: Uint8Array;
     try {
       px = runGPU(r, S, fin.geos, occ, 4);
@@ -1102,8 +1130,11 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     res = null;
   }
   if (!res) return null;
-  srcs.forEach((s, i) => s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(uvs[i], 2)));
-  cache.set(ck, { res, uvs });
+  srcs.forEach((s, i) => {
+    s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(uvs[i], 2));
+    s.mesh.geometry.setAttribute('aTone', new THREE.BufferAttribute(tones[i], 1));
+  });
+  cache.set(ck, { res, uvs, tones });
   return res;
 }
 
