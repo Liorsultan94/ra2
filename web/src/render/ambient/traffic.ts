@@ -132,8 +132,26 @@ export class Traffic {
       };
       for (const z of zebraBands(map, layout, this.net)) onto(0, z.x, z.y, z.dx, z.dy, z.hw + 0.12);
       for (const lc of levelCrossings(map)) {
+        if (!lc.traffic) continue;
         this.crossings.push({ x: lc.x, y: lc.y });
+        const n0 = holds.length;
         onto(1, lc.x, lc.y, 0, 0, 0.95);
+        if (holds.length > n0) continue;
+        // just past a map-edge end of a road (the line stops at the edge): hold the cars heading out
+        // short of the edge (where they would leave the map) while it is closed
+        this.net.lines.forEach((Ln, li) => {
+          if (Ln.bridge >= 0) return;
+          for (let e = 0; e < 2; e++) {
+            if (!Ln.portal[e]) continue;
+            const p = pointAt(Ln, e ? Ln.len : 0);
+            const ox = e ? p.tx : -p.tx;
+            const oy = e ? p.ty : -p.ty;
+            const t = (lc.x - p.x) * ox + (lc.y - p.y) * oy;
+            const side = Math.abs((lc.x - p.x) * -oy + (lc.y - p.y) * ox);
+            if (t < -0.5 || t > 3 || side > 1.8) continue;
+            holds.push({ kind: 1, line: li, arc: e ? Ln.len + t : -t, gap: Math.max(0.95, t + 0.1), x: lc.x, y: lc.y });
+          }
+        });
       }
       this.driver.setHolds(holds, (h) => (h.kind === 1 ? levelCrossingClosed(h.x, h.y) : crossingBusy(h.x, h.y, 1.0)));
     }
