@@ -187,7 +187,7 @@ export class Ground {
     this.photo =
       tier > 0
         ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
-          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 4)
+          new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 4, this.look.photoSat)
         : null;
     const field = new Uint8Array(N * N * 4);
     this.paint(this.splat, this.tint, field, trees);
@@ -957,8 +957,10 @@ const PHOTO_MAP = /* glsl */ `
     if (k > 0.0) {
       int L = int(ll[i]);
       vec3 c = i == 0 ? phGrass(la[i].rgb, gPal) : la[i].rgb * phT[L];
+      // per-biome saturation of a scan's detail (around its own mean colour)
+      if (phP[L].w != 1.0) c = mix(phM[L] * phT[L] * dot(c, vec3(0.2126, 0.7152, 0.0722)) / max(1e-4, dot(phM[L] * phT[L], vec3(0.2126, 0.7152, 0.0722))), c, phP[L].w);
       // (the turf's own normals are busy: half strength keeps it from going grainy and dark)
-      vec2 n = ln[i].xy * phP[L].w * (i == 0 ? 0.55 : 1.0);
+      vec2 n = ln[i].xy * (i == 0 ? 0.55 : 1.0);
       float r = phP[L].z;
 #if BIOME == 2
       // ice on the ford / frozen banks: smooth and glossy
@@ -1129,7 +1131,7 @@ const PHOTO_MAP = /* glsl */ `
       float spark = step(0.985, texture2D(fogNoise, tw * 2.7).a) * gFine;
       snowC += spark * 0.25;
       col = mix(col, snowC, cover);
-      nxy = mix(nxy, sn.xy * phP[int(PH_SNOW)].w, cover);
+      nxy = mix(nxy, sn.xy, cover);
       terrH = mix(terrH, 0.25 + sa.a * 0.5, cover);
       terrB = mix(terrB, dn * 0.7, cover);
       terrRough = mix(terrRough, 0.6, cover);

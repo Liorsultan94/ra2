@@ -120,7 +120,7 @@ export class PhotoGround {
   readonly stack: PhotoStack;
   readonly albedo: { value: THREE.DataArrayTexture };
   readonly normal: { value: THREE.DataArrayTexture };
-  /** Per layer: x = 1 / repeat (tiles), y = regular pattern, z = roughness, w = normal strength. */
+  /** Per layer: x = 1 / repeat (tiles), y = regular pattern, z = roughness, w = saturation of the scan's detail. */
   readonly params: { value: THREE.Vector4[] };
   /** Per layer: photo mean albedo (linear). */
   readonly means: { value: THREE.Vector3[] };
@@ -139,6 +139,7 @@ export class PhotoGround {
     readonly size: PhotoTier,
     looks: Partial<Record<PhotoSlot, number>>,
     private aniso = 4,
+    sats: Partial<Record<PhotoSlot, number>> = {},
   ) {
     const stack = photoStack(biome);
     this.stack = stack;
@@ -155,6 +156,7 @@ export class PhotoGround {
     this.normal = { value: arrayTexture(nn, 1, n, false, 1) };
     this.params = { value: mats.map((m) => new THREE.Vector4(1 / m.tiles, m.regular ? 1 : 0, m.rough, 1)) };
     this.means = { value: mats.map((m) => new THREE.Vector3(...m.mean)) };
+    for (const [slot, v] of Object.entries(sats) as [PhotoSlot, number][]) if (stack.slot[slot] !== undefined) this.params.value[stack.slot[slot]].w = v;
     // colour factor per layer: the slot's biome colour over the scan's mean (the look table derives its
     // colours from these means, so this is ~1 except where a biome deliberately recolours a scan)
     const tint = mats.map(() => new THREE.Vector3(1, 1, 1));

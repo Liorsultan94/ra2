@@ -3310,7 +3310,9 @@ function apcBradley(b: Bld) {
     headlight(B, 0.465, 0.215, s * 0.24, 0.9);
     taillight(B, -0.47, 0.255, s * 0.25);
   }
-  grille(B, 0.2, 0.258, 0.17, 0.12, 0.14, 6);
+  // BRAT reactive tiles in a grid over the upper glacis (M2A3 reference photos)
+  bricks(B, slopePlane([0.3, 0.276], [0.475, 0.191], 0), 0.012, 0.18, -0.25, 0.25, 3, 5, 0.014, 0.008);
+  grille(B, 0.2, 0.268, 0.17, 0.1, 0.14, 6);
   B.box(0.04, 0.02, 0.05, 0.12, 0.29, 0.24, K.black);
   b.emit(0.12, 0.3, 0.24);
   hatch(B, 0.25, 0.27, -0.16, 0.032);
@@ -3354,14 +3356,15 @@ function apcNamer(b: Bld) {
     style: 'merk',
   });
   lowerHull(B, [[-0.52, 0.065], [0.42, 0.065], [0.55, 0.17], [-0.55, 0.17]], 0.172);
-  // front engine glacis, tall troop superstructure
+  // front engine glacis, tall troop superstructure (reference photos: the flat roof runs forward to ~0.35,
+  // then a shallow glacis drops to a high, blunt nose)
   B.side(
     [
       [-0.55, 0.17],
       [0.56, 0.17],
-      [0.585, 0.19],
-      [0.1, 0.285],
-      [0.0, 0.33],
+      [0.595, 0.2],
+      [0.59, 0.258],
+      [0.36, 0.33],
       [-0.52, 0.335],
       [-0.55, 0.3],
     ],
@@ -3373,19 +3376,19 @@ function apcNamer(b: Bld) {
   skirts(B, [[-0.5, 0.1], [0.36, 0.1], [0.5, 0.13], [0.585, 0.2], [0.58, 0.215], [-0.52, 0.215]], 0.322, 0.016, [-0.33, -0.15, 0.03, 0.2, 0.37]);
   // superstructure side armour modules
   for (const s of [-1, 1]) {
-    B.cbox(0.48, 0.07, 0.02, 0.006, -0.27, 0.27, s * 0.3, CAMO);
-    for (const x of [-0.42, -0.27, -0.12]) B.box(0.004, 0.06, 0.004, x, 0.27, s * 0.311, K.dark);
+    B.cbox(0.86, 0.07, 0.02, 0.006, -0.09, 0.27, s * 0.3, CAMO);
+    for (const x of [-0.42, -0.27, -0.12, 0.03, 0.18]) B.box(0.004, 0.06, 0.004, x, 0.27, s * 0.311, K.dark);
     headlight(B, 0.57, 0.205, s * 0.27);
     taillight(B, -0.555, 0.3, s * 0.27);
     trophy(B, 0.02, 0.31, s * 0.27, s, b.team);
   }
-  grille(B, 0.3, 0.226, 0.13, 0.17, 0.16, 7);
-  hatch(B, 0.18, 0.25, -0.14, 0.032);
-  for (const z of [-0.18, -0.1]) periscope(B, 0.22, 0.246, z, 0, 0.018);
+  grille(B, 0.42, 0.312, 0.13, 0.14, 0.16, 7);
+  hatch(B, 0.29, 0.335, -0.14, 0.032);
+  for (const z of [-0.18, -0.1]) periscope(B, 0.335, 0.333, z, 0, 0.018);
   rearRamp(B, -0.552, 0.11, 0.3, 0.34, b.team);
   for (const x of [-0.38, -0.2]) hatch(B, x, 0.335, 0.11, 0.035);
   for (let i = 0; i < 4; i++) periscope(B, -0.4 + i * 0.1, 0.335, -0.29, -Math.PI / 2, 0.018);
-  cable(B, [[0.5, 0.21, 0.31], [0.2, 0.25, 0.3], [0.04, 0.28, 0.29]]);
+  cable(B, [[0.5, 0.27, 0.31], [0.3, 0.315, 0.3], [0.04, 0.315, 0.29]]);
   teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, 0.322, b.team);
   teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, -0.322, b.team);
   b.emit(0.3, 0.24, 0.32);
@@ -3523,6 +3526,10 @@ function apcBMP3(b: Bld) {
   B.box(0.05, 0.02, 0.03, -0.2, 0.24, -0.29, K.black);
   b.emit(-0.2, 0.25, -0.3);
   hatch(B, 0.3, 0.228, 0, 0.026);
+  // OPVT snorkel tube stowed along the left of the roof (a BMP-3 signature)
+  B.cx(0.016, 0.016, 0.36, -0.24, 0.278, -0.22, CAMO, 10);
+  B.cx(0.02, 0.02, 0.05, -0.04, 0.278, -0.22, CAMO, 10);
+  for (const x of [-0.38, -0.12]) B.box(0.012, 0.022, 0.03, x, 0.266, -0.22, K.dark);
   teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, 0.301, b.team);
   teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, -0.301, b.team);
   // turret: low dome with 100mm launcher-gun + coaxial 30mm
@@ -3540,10 +3547,12 @@ function apcBMP3(b: Bld) {
   const g = b.part(T, 0.18, 0.05, 0);
   g.g.rotation.z = 0.03;
   const r100 = b.part(g, 0, 0, 0, 'recoil');
-  r100.cx(0.018, 0.022, 0.3, 0.15, 0, 0, mt(K.gun), 12);
-  r100.cx(0.023, 0.023, 0.03, 0.29, 0, 0, mt(K.gun), 12);
-  r100.cx(0.012, 0.012, 0.004, 0.306, 0, 0, mt(K.black), 10);
-  b.muzzle(r100, 0.31, 0, 0);
+  // 2A70 100 mm gun-launcher: a long, slim barrel (~2.6 m out of the mantlet, reference photos), thicker breech
+  r100.cx(0.016, 0.018, 0.08, 0.04, 0, 0, mt(K.gun), 12);
+  r100.cx(0.0115, 0.0125, 0.3, 0.23, 0, 0, mt(K.gun), 12);
+  r100.cx(0.0135, 0.0135, 0.02, 0.37, 0, 0, mt(K.gun), 12);
+  r100.cx(0.008, 0.008, 0.004, 0.381, 0, 0, mt(K.black), 10);
+  b.muzzle(r100, 0.385, 0, 0);
   cannon(b, T, 0.18, 0.05, 0.05, 0.27, 0.007, { brake: false });
   T.cx(0.004, 0.004, 0.05, 0.2, 0.04, -0.05, mt(K.dark), 5);
   T.cbox(0.05, 0.035, 0.04, 0.005, 0.04, 0.09, -0.08, CAMO);
@@ -4004,9 +4013,11 @@ function aaPantsir(b: Bld) {
   planarRadar(R, 0.2, 0.08, 0.3);
   for (const s of [-1, 1]) {
     // 6 missile tubes per side + twin 30mm
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.016, 0.016, 0.26, -0.04, 0.09 + i * 0.034, s * (0.13 + j * 0.034), 0x4e5634, 8);
-    T.box(0.27, 0.075, 0.11, -0.04, 0.105, s * 0.165, 0x4a5032);
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.011, 0.011, 0.004, 0.092, 0.09 + i * 0.034, s * (0.13 + j * 0.034), K.black, 6);
+    // (reference photos: the 57E6 containers are bare tubes, 2 rows x 3 per side, held by two clamp frames and
+    // reaching well ahead of the turret face - the Pantsir's bristling silhouette)
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.0165, 0.0165, 0.32, 0.0, 0.09 + i * 0.034, s * (0.13 + j * 0.034), 0x4e5634, 8);
+    for (const x of [-0.12, 0.06]) T.box(0.014, 0.075, 0.112, x, 0.107, s * 0.164, 0x3e4430);
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.012, 0.012, 0.004, 0.161, 0.09 + i * 0.034, s * (0.13 + j * 0.034), K.black, 6);
     T.cbox(0.12, 0.05, 0.05, 0.006, 0.05, 0.05, s * 0.12, CAMO);
     for (const dy of [-0.012, 0.012]) cannon(b, T, 0.1, 0.05 + dy, s * 0.12, 0.26, 0.0065, { brake: false });
     teamPanel(T, 0.12, 0.02, 0.003, -0.04, 0.09, s * 0.101, b.team);
@@ -4815,8 +4826,8 @@ const TELS: Record<string, TelCfg> = {
   tel_taurus: { axles: [0.38, -0.1, -0.27], steer: 1, L: 1.05, W: 0.5, r: 0.07, cab: [0.28, 0.52, 0.18], load: 'box', cols: 1, rows: 1, len: 0.66, w: 0.26, h: 0.1, mcol: CAMO, elev: 0.55 },
   // Hyunmoo-2: 8x8, two bare missiles
   tel_hyunmoo: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'bare', cols: 2, rows: 1, len: 0.82, w: 0.07, h: 0, mcol: 0xd6d8d2, elev: 1.15, nose: 0.13 },
-  // R-360 Neptune: KrAZ 6x6 with four round canisters (2 x 2)
-  tel_neptune: { axles: [0.4, -0.12, -0.28], steer: 1, L: 1.1, W: 0.5, r: 0.072, cab: [0.3, 0.54, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
+  // R-360 Neptune: USPU-360 launcher on the KrAZ-7634HE 8x8, four round canisters (2 x 2)
+  tel_neptune: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.5, r: 0.074, cab: [0.36, 0.6, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
   // Tayfun: 8x8 with two round canisters
   tel_tayfun: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'round', cols: 2, rows: 1, len: 0.8, w: 0.1, h: 0, mcol: CAMO, elev: 1.0 },
   // 9K720 Iskander-M: MZKT 8x8, two missiles under a rear cover

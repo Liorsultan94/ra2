@@ -40,6 +40,8 @@ export interface BiomeLook {
    * photo layers (forest floor and gravel split off the dirt layer; snow, streets, squares).
    */
   ground: { dirt: number; rock: number; sand: number; mud: number; soil: number; crop: number; wheat: number; hay: number; forest?: number; gravel?: number; snow?: number; asphalt?: number; paving?: number };
+  /** Saturation of a photoscan layer's detail around its mean colour (1 = as scanned; ground.ts). */
+  photoSat?: Partial<Record<'grass' | 'dirt' | 'rock' | 'sand' | 'mud' | 'forest' | 'gravel' | 'soil' | 'snow' | 'asphalt' | 'paving', number>>;
   /** 3D grass blades density multiplier (0 = none). */
   blades: number;
   /** Clover / wildflower patches (0..1). */
@@ -75,6 +77,8 @@ const TEMPERATE: BiomeLook = {
     forest: scan('litter', 0x5a4a30, 0.45),
     gravel: scan('gravel', 0x8a8070, 0.4),
   },
+  // the mossy cliff scan has lilac lichen-covered stone: calm it to grey
+  photoSat: { rock: 0.5 },
   blades: 1,
   clover: 1,
   flowers: 1,
