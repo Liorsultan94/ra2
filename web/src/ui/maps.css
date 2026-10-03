@@ -99,8 +99,8 @@
 }
 @media (max-height: 560px) {
   .mtile {
-    min-height: 48px;
-    padding: 5px 8px;
+    min-height: 40px;
+    padding: 4px 8px;
   }
   .mtile b {
     font-size: 13px;

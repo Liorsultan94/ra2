@@ -547,9 +547,10 @@ function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number) {
 
 /** A tiny tilted wall stub of a ruin (brick look). */
 function ruinWall(c: Chunk, P: Place, len: number, hgt: number, seed: number) {
-  const b = c.facade.brick;
+  // plain trim material: a ruin has no windows to light up at night
+  const b = c.trim;
   const n = 4;
-  const col = C(0xc8b8a8).multiplyScalar(0.7);
+  const col = C(0x8a5e4c);
   // jagged top: a strip of n segments with random heights
   for (let i = 0; i < n; i++) {
     const x0 = -len / 2 + (len * i) / n;
