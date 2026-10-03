@@ -49,7 +49,7 @@ const LOOKS = {
   /** Midday: neutral, a touch cool and crisp. */
   noon: L({ temp: -0.035, sat: 1.04, contrast: 1.06, shadowTint: [-0.008, 0.002, 0.018], highTint: [0.0, 0.002, 0.006] }),
   /** Golden hour / sunset: warm highlights, slightly teal shadows, rich colour. */
-  golden: L({ temp: 0.09, tint: 0.012, sat: 1.1, contrast: 1.07, gain: [1.02, 1.0, 0.96], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.035, 0.012, -0.03] }),
+  golden: L({ temp: 0.06, tint: 0.01, sat: 1.05, contrast: 1.06, gain: [1.015, 1.0, 0.97], lift: [0.004, 0.004, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.035, 0.012, -0.03] }),
   /** Night: blue-teal, lifted toe so units stay readable, lights left warm so they pop. */
   night: L({ temp: -0.19, tint: 0.012, sat: 0.88, protect: 0.85, contrast: 1.02, lift: [0.002, 0.012, 0.026], gamma: [0.97, 1.02, 1.08], shadowTint: [-0.012, 0.008, 0.034], highTint: [0.022, 0.008, -0.008] }),
   /** Rain: desaturated grey-green, soft contrast, a little haze in the blacks. */

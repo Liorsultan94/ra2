@@ -95,14 +95,14 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
             diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.66, 0.53, 0.36 ) * ( 0.88 + rn * 0.2 ), sandK * 0.9 );
           #else
             float rut = exp( -pow( ( abs( uL - 0.5 ) - 0.26 ) / 0.07, 2.0 ) );
-            float snowK = clamp( 0.75 + edgeK * 0.6 - rut * ( 0.75 + rn * 0.3 ) + ( rn - 0.5 ) * 0.35, 0.0, 1.0 );
-            vec3 slush = diffuseColor.rgb * vec3( 0.75, 0.78, 0.82 );
+            float snowK = clamp( 0.38 + edgeK * 0.8 - rut * ( 0.6 + rn * 0.3 ) + ( rn - 0.5 ) * 0.45, 0.0, 1.0 );
+            vec3 slush = diffuseColor.rgb * vec3( 0.62, 0.65, 0.7 );
             diffuseColor.rgb = mix( slush, vec3( 0.78, 0.82, 0.88 ) * ( 0.92 + rn * 0.12 ), snowK );
           #endif
         }`,
       );
     };
-    roadBase.defines = { ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
+    roadBase.defines = { ...roadBase.defines, ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
   }
   const roadMat = fog.apply(roadBase);
   if (bc === 1 || bc === 2) roadMat.customProgramCacheKey = () => 'fog2-road-b' + bc;

@@ -55,11 +55,11 @@ interface Spec {
 }
 
 const SPECS: Partial<Record<StructureKind, Spec>> = {
-  [StructureKind.Apartment]: { groundH: 0.36, ground: 'panel', floors: 5, floorH: 0.3, upper: 'panel', bay: 0.34, inset: 0.14, roof: 'flat' },
-  [StructureKind.Block]: { groundH: 0.36, ground: 'shop', floors: 4, floorH: 0.3, upper: 'brick', bay: 0.3, inset: 0.12, roof: 'flat' },
-  [StructureKind.Office]: { groundH: 0.4, ground: 'shop', floors: 8, floorH: 0.28, upper: 'glass', bay: 0.32, inset: 0.18, roof: 'flat' },
-  [StructureKind.Shop]: { groundH: 0.36, ground: 'shop', floors: 1, floorH: 0.3, upper: 'panel', bay: 0.3, inset: 0.13, roof: 'flat' },
-  [StructureKind.Townhouse]: { groundH: 0.34, ground: 'brick', floors: 2, floorH: 0.3, upper: 'brick', bay: 0.3, inset: 0.18, roof: 'mansard' },
+  [StructureKind.Apartment]: { groundH: 0.36, ground: 'panel', floors: 5, floorH: 0.3, upper: 'panel', bay: 0.34, inset: 0.09, roof: 'flat' },
+  [StructureKind.Block]: { groundH: 0.36, ground: 'shop', floors: 4, floorH: 0.3, upper: 'brick', bay: 0.3, inset: 0.08, roof: 'flat' },
+  [StructureKind.Office]: { groundH: 0.4, ground: 'shop', floors: 8, floorH: 0.28, upper: 'glass', bay: 0.32, inset: 0.15, roof: 'flat' },
+  [StructureKind.Shop]: { groundH: 0.36, ground: 'shop', floors: 1, floorH: 0.3, upper: 'panel', bay: 0.3, inset: 0.08, roof: 'flat' },
+  [StructureKind.Townhouse]: { groundH: 0.34, ground: 'brick', floors: 2, floorH: 0.3, upper: 'brick', bay: 0.3, inset: 0.1, roof: 'mansard' },
 };
 
 /** Top of a city building's walls (the roof flag and health bar sit on it). */
@@ -179,7 +179,7 @@ function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: T
     g.fillRect(N * 0.25, N * 0.13, N * 0.5, N * 0.06);
     g.fillRect(N * 0.25, N * 0.79, N * 0.5, N * 0.04);
   } else if (style === 'glass') {
-    glass(0, 0, 1, 0.8, [58, 78, 96]);
+    glass(0, 0, 1, 0.8, [78, 104, 124]);
     // spandrel band at the floor slab, mullions at the bay edges
     g.fillStyle = '#3a4048';
     g.fillRect(0, N * 0.8, N, N * 0.2);
@@ -791,10 +791,17 @@ function cityModel(kind: StructureKind): Builder {
     const base = Float32Array.from(pos.array as Float32Array);
     root.add(flag);
     // team-coloured band around the roof edge marks who holds it
-    const band = new THREE.Mesh(new THREE.BoxGeometry(fw - spec.inset * 2 + 0.06, 0.035, fd - spec.inset * 2 + 0.06), new THREE.MeshStandardMaterial({ color: style.team, emissive: style.team, emissiveIntensity: 0.25, roughness: 0.6 }));
-    if (fog) fog.apply(band.material as THREE.Material);
-    band.position.set(0, (kind === StructureKind.Townhouse ? H - 0.3 : H) + 0.04, 0);
-    root.add(band);
+    // a team-coloured ring along the roof edge (four thin rails)
+    const bw = fw - spec.inset * 2 + 0.07;
+    const bd = fd - spec.inset * 2 + 0.07;
+    const by = (kind === StructureKind.Townhouse ? H - 0.3 : H) + 0.03;
+    const bandMat = new THREE.MeshStandardMaterial({ color: style.team, emissive: style.team, emissiveIntensity: 0.3, roughness: 0.6 });
+    if (fog) fog.apply(bandMat);
+    for (const [w, d, x, zz] of [[bw, 0.035, 0, bd / 2], [bw, 0.035, 0, -bd / 2], [0.035, bd, bw / 2, 0], [0.035, bd, -bw / 2, 0]]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, d), bandMat);
+      rail.position.set(x, by, zz);
+      root.add(rail);
+    }
     const anim = (s: { time: number }) => {
       const a = cloth.attributes.position.array as Float32Array;
       for (let i = 0; i < pos.count; i++) a[i * 3 + 2] = Math.sin(s.time * 5 - base[i * 3] * 14) * 0.03 * (base[i * 3] / 0.4);

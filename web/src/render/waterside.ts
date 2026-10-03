@@ -232,8 +232,11 @@ export class Waterside implements WatersideHandles {
     this.group.userData.perfCat = 'waterside';
     if (!river.samples.length) return;
     this.buildBank();
-    this.buildReeds(layout);
-    this.buildStones(layout);
+    // the city canal is walled: no reeds or pebbles
+    if (map.biome !== 'urban') {
+      this.buildReeds(layout);
+      this.buildStones(layout);
+    }
     this.buildJetty();
     this.buildWeir();
   }

@@ -1,0 +1,111 @@
+/* skirmish map picker (menu.ts): four compact climate tiles */
+.mpick {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.mpick-title {
+  grid-column: 1 / -1;
+  font-family: var(--font-d);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mtile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1px;
+  min-height: 78px;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--dur), box-shadow var(--dur), transform var(--dur);
+}
+.mtile::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--sw);
+  opacity: 0.85;
+}
+.mtile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(8, 10, 14, 0) 20%, rgba(8, 10, 14, 0.82) 100%);
+}
+.mtile > * {
+  position: relative;
+  z-index: 1;
+}
+.mtile b {
+  font-family: var(--font-d);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.mtile small {
+  font-size: 11.5px;
+  line-height: 1.25;
+  color: #d4dbe2;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+.mtile:hover {
+  border-color: var(--line-3);
+}
+.mtile.sel {
+  border-color: color-mix(in srgb, var(--brand) 80%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 80%, transparent);
+}
+.mtile.sel b::after {
+  content: '';
+  display: inline-block;
+  vertical-align: -2px;
+  margin-left: 6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--brand) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 10px no-repeat;
+}
+.mtile[data-map='frontline'] {
+  --sw: radial-gradient(circle at 70% 30%, #6e8f4a 0 18%, transparent 19%), linear-gradient(135deg, #3f6a2e 0%, #4f7a34 42%, #2c5f7a 43%, #2c5f7a 52%, #5d7a3a 53%, #7a6a46 100%);
+}
+.mtile[data-map='desert'] {
+  --sw: radial-gradient(circle at 50% 45%, #2a8a92 0 12%, #4f7a3a 13% 19%, transparent 20%), repeating-linear-gradient(160deg, #d8b47e 0 9px, #c49a64 9px 16px), #c9a26e;
+}
+.mtile[data-map='winter'] {
+  --sw: radial-gradient(circle at 25% 70%, #2f4a3a 0 14%, transparent 15%), linear-gradient(135deg, #e6edf5 0%, #cdd8e4 44%, #7f9cb4 45%, #9fb8cc 53%, #dfe7f0 54%, #f2f5f9 100%);
+}
+.mtile[data-map='urban'] {
+  --sw: linear-gradient(135deg, transparent 46%, #3d5560 46% 54%, transparent 54%), repeating-linear-gradient(0deg, #2a2c30 0 4px, transparent 4px 22px), repeating-linear-gradient(90deg, #2a2c30 0 4px, #7d776e 4px 12px, #9a8e80 12px 22px);
+}
+/* phones: 2 x 2 in portrait, one compact row in landscape */
+@media (max-width: 560px) {
+  .mpick {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-height: 560px) {
+  .mtile {
+    min-height: 48px;
+    padding: 5px 8px;
+  }
+  .mtile b {
+    font-size: 13px;
+  }
+  .mtile small {
+    display: none;
+  }
+}

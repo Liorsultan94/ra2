@@ -1,3 +1,4 @@
+import { mapInfo } from '../sim/maps';
 import { DEFS, FACTION_INFO, buildingDef } from '../sim/defs';
 import { SW_BY_FACTION, SW_INFO } from '../sim/specialdefs';
 import type { Difficulty } from '../sim/ai';
@@ -155,18 +156,27 @@ export function buildBriefing(world: World, local: number, o: { seed: number; di
   const oils = neutral.filter((e) => e.def === 'oil');
   const gems = m.oreMines.filter((p) => m.oreKind[p.y * m.w + p.x] === 2);
 
-  const feats = [`${m.bridges.length} contested bridges`];
-  if (m.structures.length) feats.push('farming villages');
+  const biome = m.biome;
+  const civ = neutral.filter((e) => buildingDef(e.def).garrison);
+  const feats = m.bridges.length ? [`${m.bridges.length} contested bridges`] : [];
+  if (biome === 'desert') feats.push('mesas and oases');
+  if (biome === 'winter') feats.push('an ice ford');
+  if (m.structures.length) feats.push(biome === 'urban' ? `${civ.length} buildings to garrison` : biome === 'desert' ? 'oasis villages' : biome === 'winter' ? 'log villages' : 'farming villages');
   feats.push(`${m.oreMines.length} ore fields`);
   if (oils.length) feats.push(`${oils.length} oil derricks`);
   if (techs.length) feats.push(`${techs.length} tech sites`);
-  const region = `${m.name === 'Frontline Crossing' ? 'Temperate river valley' : 'Contested border region'} · ${feats.join(' · ')}`;
+  const region = `${m.id === 'frontline' ? 'Temperate river valley' : (mapInfo(m.id).region ?? 'Contested border region')} · ${feats.join(' · ')}`;
 
   // secondary objectives from the map features
   const secondary: string[] = [];
+  const lane = (m.lanes ?? []).slice().sort((a, b) => dist(a.x, a.y) - dist(b.x, b.y))[0];
   if (m.bridges.length) {
     const refs = [...m.bridges].sort((a, b) => dist(a.x, a.y) - dist(b.x, b.y)).map((b) => ref(b.x, b.y));
-    secondary.push(`Secure the ${m.bridges.length} river bridges (grids ${refs.join(', ')}), the only crossings for ground forces. Bridges can be blown.`);
+    if (biome === 'urban') secondary.push(`Hold the ${m.bridges.length} canal bridges (grids ${refs.join(', ')}): the only way across for armour. Bridges can be blown.`);
+    else if (biome === 'winter' && lane) secondary.push(`Secure the ${m.bridges.length} bridges (grids ${refs.join(', ')}) and the ice ford at grid ${ref(lane.x, lane.y)}, the only crossings of the frozen river. Bridges can be blown.`);
+    else secondary.push(`Secure the ${m.bridges.length} river bridges (grids ${refs.join(', ')}), the only crossings for ground forces. Bridges can be blown.`);
+  } else if (biome === 'desert') {
+    secondary.push(`Control the oasis town at grid ${ref(m.w / 2, m.h / 2)}: its ring road links every pass between the mesas. The wadi can be crossed anywhere.`);
   }
   const TECH_GAIN: Record<string, string> = { comms: 'free radar coverage of the valley', hospital: 'heals your infantry nearby', airport: 'airborne drops recharge 50% faster' };
   for (const kind of ['comms', 'hospital', 'airport']) {
@@ -179,17 +189,22 @@ export function buildBriefing(world: World, local: number, o: { seed: number; di
   secondary.push(gem ? `Protect your harvesters. The gem field at grid ${ref(gem.x, gem.y)} pays double.` : 'Protect your harvesters: no ore, no army.');
   const side = (x: number, y: number) => Math.sign(x - y) === Math.sign(home.x - home.y);
   const village = m.structures.filter((s) => side(s.x + s.w / 2, s.y + s.h / 2));
-  if (village.length >= 3) {
+  if (biome === 'urban') secondary.push('Fill the apartment blocks and office towers along the avenues with infantry: every street is a killing ground. Flamethrowers burn garrisons out.');
+  else if (village.length >= 3) {
     const vx = village.reduce((a, s) => a + s.x + s.w / 2, 0) / village.length;
     const vy = village.reduce((a, s) => a + s.y + s.h / 2, 0) / village.length;
     secondary.push(`Garrison the village houses at grid ${ref(vx, vy)} with infantry to hold the approach.`);
   }
 
   const bank = home.x - home.y < 0 ? 'western' : 'eastern';
-  const situation =
-    `${en.name} has massed its forces on the far bank of the river at ${m.name}. ` +
-    `Our MCV has reached the ${bank} bank with $${(o.credits ?? me.credits).toLocaleString('en-US')} in war funds. ` +
-    `Deploy, build up and break through before their ${en.sw.name} comes online.`;
+  const funds = `$${(o.credits ?? me.credits).toLocaleString('en-US')}`;
+  const SITUATION: Record<string, string> = {
+    temperate: `${en.name} has massed its forces on the far bank of the river at ${m.name}. Our MCV has reached the ${bank} bank with ${funds} in war funds. `,
+    desert: `${en.name} holds the far side of the wadi at ${m.name}, behind a wall of sandstone mesas. Our MCV has reached the ${bank} dunes with ${funds} in war funds; water and ore are scarce. `,
+    winter: `${en.name} is dug in across the frozen river at ${m.name}. Our MCV has reached the ${bank} bank through the snow with ${funds} in war funds. `,
+    urban: `${en.name} has taken the far half of ${m.name}, across the canal. Our MCV has reached a plaza on the ${bank} side with ${funds} in war funds; expect a fight for every block. `,
+  };
+  const situation = (SITUATION[biome] ?? SITUATION.temperate) + `Deploy, build up and break through before their ${en.sw.name} comes online.`;
 
   return {
     codename: operationName(o.seed),

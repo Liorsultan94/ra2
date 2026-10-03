@@ -874,7 +874,7 @@ const TERRAIN_MAP = /* glsl */ `
     dirt = cDirt * (0.84 + sh.x * 0.14 + (det.g - 0.5) * 0.22) * (1.0 - joint * 0.38) * (1.0 - grime * 0.18);
     bioH -= joint * 0.6 * bw.x;
     // rubble / gravel lots: broken brick and concrete
-    sand = cSand * (0.6 + det.a * 0.7) * mix(vec3(1.0), vec3(1.12, 0.92, 0.82), step(0.7, sh.y));
+    sand = cSand * (0.62 + det.a * 0.55) * mix(vec3(1.0), vec3(1.06, 0.96, 0.9), step(0.75, sh.y));
   }
 #endif
   vec3 col = grass * bg + dirt * bw.x + rock * bw.y + sand * bw.z + mud * bw.w;

@@ -596,6 +596,8 @@ export class RiverInfo {
     const m = this.map;
     const sa = this.samples;
     if (sa.length < 20) return;
+    // oases and the walled canal have no rapids, weir or jetty
+    if (m.biome === 'desert' || m.biome === 'urban') return;
     // usable stretch: the river inside the map, away from the edges
     const inside = sa.filter((c) => c.x > 6 && c.y > 6 && c.x < m.w - 6 && c.y < m.h - 6);
     if (!inside.length) return;

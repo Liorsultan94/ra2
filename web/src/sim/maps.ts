@@ -711,9 +711,19 @@ const BLOCKS: { kind: StructureKind; x: number; y: number; w: number; h: number;
   // perimeter block: corner apartments, shops and a tenement, open courtyard
   [
     { kind: StructureKind.Apartment, x: 0, y: 0, w: 3, h: 3, rot: 2 },
-    { kind: StructureKind.Shop, x: 5, y: 0, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.Shop, x: 4, y: 0, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.Townhouse, x: 7, y: 0, w: 2, h: 2, rot: 1 },
     { kind: StructureKind.Block, x: 0, y: 6, w: 3, h: 2, rot: 0 },
     { kind: StructureKind.Apartment, x: 6, y: 5, w: 3, h: 3, rot: 0 },
+  ],
+  // dense block: a ring of townhouses and shops around a slab
+  [
+    { kind: StructureKind.Block, x: 0, y: 0, w: 3, h: 2, rot: 2 },
+    { kind: StructureKind.Townhouse, x: 4, y: 0, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.Shop, x: 7, y: 0, w: 2, h: 2, rot: 1 },
+    { kind: StructureKind.Townhouse, x: 0, y: 4, w: 2, h: 2, rot: 3 },
+    { kind: StructureKind.Apartment, x: 4, y: 4, w: 3, h: 3, rot: 0 },
+    { kind: StructureKind.Shop, x: 0, y: 7, w: 2, h: 2, rot: 0 },
   ],
   // office corner
   [
