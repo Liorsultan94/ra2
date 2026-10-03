@@ -1,5 +1,5 @@
 import type { V2 } from '../layout';
-import { pointAt, type RoadNet } from './roadnet';
+import { mod2pi, pointAt, type RoadNet } from './roadnet';
 
 /*
  * Routes for the emergency vehicles (emergency.ts), pure logic on the lane
@@ -169,10 +169,44 @@ export function routePolyline(net: RoadNet, segs: RouteSeg[], step = 0.25, pull 
   let total = 0;
   for (const s of segs) total += Math.abs(s.a1 - s.a0);
   let run = 0;
+  // the lines run on to the roundabouts' centres: stop them at the circulating lane (the ring is added below)
+  const inLoop = (L: RoadNet['lines'][number], a: number) => {
+    const p = pointAt(L, a);
+    return net.loops.find((l) => Math.hypot(p.x - l.x, p.y - l.y) < l.rl - 0.02);
+  };
+  const clip = (L: RoadNet['lines'][number], from: number, to: number) => {
+    let a = from;
+    const d = to >= from ? 1 : -1;
+    for (let k = 0; k < 80 && inLoop(L, a) && (to - a) * d > 0.1; k++) a += d * 0.05;
+    return a;
+  };
+  segs = segs.map((s) => {
+    const L = net.lines[s.line];
+    const a0 = clip(L, s.a0, s.a1);
+    return { ...s, a0, a1: clip(L, s.a1, a0) };
+  });
   for (const s of segs) {
     const L = net.lines[s.line];
     const dir = s.a1 >= s.a0 ? 1 : -1;
     const n = Math.max(1, Math.ceil(Math.abs(s.a1 - s.a0) / step));
+    // from one line to the next across a roundabout: round the ring (counter-clockwise on screen), not over the island
+    if (out.length) {
+      const a = out[out.length - 1];
+      const p = pointAt(L, s.a0);
+      const lane = L.lane * laneK;
+      const bx = p.x - p.ty * dir * lane;
+      const by = p.y + p.tx * dir * lane;
+      const lp = Math.hypot(bx - a.x, by - a.y) > 0.5 ? net.loops.find((l) => Math.hypot(a.x - l.x, a.y - l.y) < l.R + 0.9 && Math.hypot(bx - l.x, by - l.y) < l.R + 0.9) : undefined;
+      if (lp) {
+        const a0 = Math.atan2(a.y - lp.y, a.x - lp.x);
+        const span = mod2pi(a0 - Math.atan2(by - lp.y, bx - lp.x));
+        const m = Math.max(2, Math.ceil((span * lp.rl) / step));
+        for (let i = 1; i < m; i++) {
+          const g = a0 - (span * i) / m;
+          out.push({ x: lp.x + Math.cos(g) * lp.rl, y: lp.y + Math.sin(g) * lp.rl });
+        }
+      }
+    }
     for (let k = out.length ? 1 : 0; k <= n; k++) {
       const a = s.a0 + ((s.a1 - s.a0) * k) / n;
       const p = pointAt(L, a);

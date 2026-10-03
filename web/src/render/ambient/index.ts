@@ -13,7 +13,6 @@ import { Emergency } from './emergency';
 import { People } from './people';
 import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
-import { queueHeadlights } from '../fx/nightlife';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
 import { MapLandmarks } from '../landmarks';
@@ -104,6 +103,7 @@ export class AmbientLife {
     this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
     this.emergency.snap = (x, y, r) => this.people.pavement(x, y, r);
     this.emergency.ahead = (x, y, yaw, hw) => this.traffic.blockerAhead(x, y, yaw, hw);
+    this.traffic.headlight = (x, y, z, yaw, k) => this.host.atmos.night?.carLight(x, y, z, yaw, k);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
@@ -259,8 +259,6 @@ export class AmbientLife {
     this.dangers.length = 0;
     this.lights.begin();
     this.traffic.draw(f, this.time);
-    // headlight beams / cones on the road at night (fx/nightlife.ts -> NightLights, no extra draw calls)
-    queueHeadlights(this.traffic, this.host.atmos.night, f);
     this.people.draw(f);
     this.emergency.draw(f, this.time);
     this.animals.draw(f);

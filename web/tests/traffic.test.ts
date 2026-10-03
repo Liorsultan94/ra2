@@ -782,6 +782,12 @@ describe('crossings, emergency vehicles and the car scale', () => {
         }
         expect((lot.D - 1.0) / 2).toBeGreaterThanOrEqual(0.54 * CAR_SCALE - 0.02);
       }
+      // circulating cars clear the island and stay on the ring
+      const hw = (0.21 * CAR_SCALE) / 2;
+      for (const lp of n.loops) {
+        expect(lp.rl - hw, `${id} loop R ${lp.R} ri ${lp.ri} rl ${lp.rl}`).toBeGreaterThan(lp.ri + 0.05);
+        expect(lp.rl + hw).toBeLessThan(lp.R);
+      }
     }
   });
 });

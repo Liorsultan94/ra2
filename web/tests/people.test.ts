@@ -198,7 +198,7 @@ describe('emergency vehicle routes', () => {
         if (!r) continue;
         ok++;
         expect(r.len).toBeGreaterThanOrEqual(12);
-        const poly = routePolyline(net, r.segs, 0.25, 1.4);
+        const poly = routePolyline(net, r.segs, 0.25, 1.4, 0.4); // (as emergency.ts drives it in: blue lights, near the centre line)
         const back = routePolyline(net, reverseSegs(r.segs));
         // ends near the house, comes back to where it started
         const end = poly[poly.length - 1];

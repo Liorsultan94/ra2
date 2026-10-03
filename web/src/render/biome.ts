@@ -67,7 +67,7 @@ const TEMPERATE: BiomeLook = {
   biome: 'temperate',
   code: 0,
   // (a healthy summer green: the meadow scan itself is olive, so the look pulls its hue well towards green)
-  grass: { lush: scan('meadow', 0x2a5a26, 0.9), mid: scan('meadow', 0x3e7630, 0.9), dry: 0x6e8044, fresh: 0x5a9036, clover: 0x28542d },
+  grass: { lush: scan('meadow', 0x265e26, 0.92), mid: scan('meadow', 0x367a30, 0.95), dry: 0x6a8244, fresh: 0x5a9036, clover: 0x28542d },
   ground: {
     dirt: scan('drysoil', 0x7a6448, 0.55),
     rock: scan('mossrock', 0x77716a, 0.6),
@@ -154,7 +154,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
     weather: 'snow',
     water: { turq: [0.02, 0.06, 0.075], deep: [0.004, 0.018, 0.03], bed: [0.18, 0.18, 0.17] },
     mini: { water: [70, 100, 120], tree: [40, 58, 46] },
-    atmos: { haze: [0.62, 0.68, 0.78], hazeK: 0.9, sky: 0xa8c0e8, gnd: 0xa8b0bc, sun: 0xe8eeff, sunK: 0.95, sat: 0.92, highTint: [-0.01, 0.0, 0.02] },
+    atmos: { haze: [0.62, 0.68, 0.78], hazeK: 0.9, sky: 0xbcc6d8, gnd: 0xb0b4bc, sun: 0xe8eeff, sunK: 0.95, sat: 0.92, highTint: [-0.01, 0.0, 0.02] },
   },
   urban: {
     biome: 'urban',
