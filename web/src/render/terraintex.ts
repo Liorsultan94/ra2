@@ -346,6 +346,55 @@ export function foliageAtlas(cellPx: number): THREE.CanvasTexture {
  * highway with markings, [0.5, 1) an older country road. V runs along the
  * road and repeats every 8 tiles. Alpha gives ragged gravel shoulders.
  */
+/**
+ * Layout mask of the country-road strip (same uv layout as roadTexture: two
+ * variants side by side, v along the road), for the photoscanned asphalt
+ * material (scenery.ts): r = asphalt (0 = gravel shoulder), g = painted
+ * marking (worn), b = shoulder gravel tone, a = coverage (ragged edge).
+ * The asphalt itself is sampled from the scan in world space, so the strip
+ * carries no tone of its own - no baked blotches.
+ */
+export function roadMaskTexture(px: number): THREE.DataTexture {
+  const W = px;
+  const H = px * 4;
+  const data = new Uint8Array(W * 2 * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W * 2; x++) {
+      const variant = x < W ? 0 : 1;
+      const u = (x % W) / W;
+      const v = y / H;
+      const edge = Math.min(u, 1 - u);
+      const ragged = 0.035 + pfbm(u * 0.25, v, 24, 7 + variant, 3) * (variant ? 0.09 : 0.05);
+      const asphaltEdge = (variant ? 0.12 : 0.07) + (pfbm(0, v, 32, 11 + variant, 3) - 0.5) * (variant ? 0.08 : 0.02);
+      // soft asphalt edge (a few texels), crumbling into the shoulder
+      const asph = smooth(asphaltEdge - 0.012, asphaltEdge + 0.012, edge + (hash(x, y, 31) - 0.5) * 0.01);
+      let mark = 0;
+      const worn = Math.min(1, 0.55 + pfbm(u, v, 20, 29, 3) * 0.6);
+      if (variant === 0) {
+        const line = (d: number, w: number) => 1 - smooth(w * 0.6, w, d);
+        mark = Math.max(line(Math.abs(edge - 0.115), 0.013), ((v * 8) % 1 < 0.45 ? 1 : 0) * line(Math.abs(u - 0.5), 0.013)) * worn;
+      } else if ((v * 8) % 1 < 0.3) mark = (1 - smooth(0.006, 0.011, Math.abs(u - 0.5))) * worn * 0.5;
+      const gv = 0.5 + (hash(x, y, 2) - 0.5) * 0.5 + (pfbm(u, v, 4, 3 + variant, 4) - 0.5) * 0.4;
+      const o = (y * W * 2 + x) * 4;
+      data[o] = asph * 255;
+      data[o + 1] = clamp01(mark * asph) * 255;
+      data[o + 2] = clamp01(gv) * 255;
+      data[o + 3] = edge > ragged ? 255 : 0;
+    }
+  }
+  const tex = new THREE.DataTexture(data, W * 2, H, THREE.RGBAFormat, THREE.UnsignedByteType);
+  // rows top-down like the canvas strip (v = y / H)
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export function roadTexture(px: number): THREE.CanvasTexture {
   const W = px; // per variant
   const H = px * 4;

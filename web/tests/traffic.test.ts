@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import type { MapId } from '../src/sim/map';
+import { Tile, type MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { roadClear, roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
@@ -502,6 +502,35 @@ describe('road clearance', () => {
       }
     });
   }
+
+  for (const id of MAPS)
+    it(`${id}: no turning circles side by side, no road split into two dead ends`, () => {
+      const m = createMap(id, 1);
+      const n = roadNetFor(m, buildLayout(m));
+      // rings at least ~2 tiles apart
+      for (let i = 0; i < n.loops.length; i++)
+        for (let j = i + 1; j < n.loops.length; j++) {
+          const a = n.loops[i];
+          const b = n.loops[j];
+          expect(Math.hypot(a.x - b.x, a.y - b.y) - a.R - b.R, `loops ${i} ${j} at ${a.x.toFixed(1)},${a.y.toFixed(1)}`).toBeGreaterThan(1.95);
+        }
+      // two paved dead ends close together with open ground between them would be one road split in two
+      const hard = (x: number, y: number) => {
+        const i = Math.floor(y) * m.w + Math.floor(x);
+        return m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Rock || m.tiles[i] === Tile.Bridge || m.blocked[i] > 0 || m.trees[i] > 0;
+      };
+      const dead = n.nodes.filter((nd) => nd.arms.length === 1 && nd.ctl !== Ctl.Lot && n.lines[nd.arms[0].line].paved);
+      for (let i = 0; i < dead.length; i++)
+        for (let j = i + 1; j < dead.length; j++) {
+          const a = dead[i];
+          const b = dead[j];
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          if (d > 5) continue;
+          let blocked = false;
+          for (let k = 0; k <= 20; k++) if (hard(a.x + ((b.x - a.x) * k) / 20, a.y + ((b.y - a.y) * k) / 20)) blocked = true;
+          expect(blocked, `dead ends ${a.x.toFixed(1)},${a.y.toFixed(1)} and ${b.x.toFixed(1)},${b.y.toFixed(1)}`).toBe(true);
+        }
+    });
 
   it('is deterministic and every map gets parking lots, the city several', () => {
     const sig = (id: MapId) => {

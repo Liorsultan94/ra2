@@ -788,9 +788,10 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       if (j === self) continue;
       const n = nodes[j];
       const lp = n.loop >= 0 ? loops[n.loop] : null;
-      if (Math.hypot(n.x - cx, n.y - cy) < R + (lp ? lp.R + 0.4 : 1.2)) return false;
+      if (n.arms.length && Math.hypot(n.x - cx, n.y - cy) < R + (lp ? lp.R + 2 : 1.2)) return false;
     }
-    for (const lp of loops) if (Math.hypot(lp.x - cx, lp.y - cy) < R + lp.R + 0.4) return false;
+    // two turning circles never come closer than ~2 tiles ring to ring (close dead ends share one instead)
+    for (const lp of loops) if (Math.hypot(lp.x - cx, lp.y - cy) < R + lp.R + 2) return false;
     return true;
   };
   /** Arc where line `L` (from `arc`, moving `dir`) leaves the circle; -1 if it ends inside. */
@@ -823,7 +824,11 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     const edges: number[] = [];
     for (const a of n.arms) {
       const L = lines[a.line];
-      const e = edgeArc(L, from >= 0 ? from : a.arc, a.dir, cx, cy, R);
+      const a0 = from >= 0 ? from : a.arc;
+      // the arm must start inside the circle
+      const p0 = pointAt(L, a0);
+      if (Math.hypot(p0.x - cx, p0.y - cy) > R - 0.25) return why('outside');
+      const e = edgeArc(L, a0, a.dir, cx, cy, R);
       if (e < 0) return why('edge');
       // keep a usable approach beyond the edge (unless it runs off the map edge)
       const rest = a.dir > 0 ? L.len - e : e;

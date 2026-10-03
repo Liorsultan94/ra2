@@ -5,7 +5,8 @@ import type { FogOfWar } from './fog';
 import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { FieldType, type Layout } from './layout';
-import { buildingTextures, roadTexture } from './terraintex';
+import { buildingTextures, roadMaskTexture } from './terraintex';
+import { assetBase, fetchBitmap } from './photoground';
 import { biomeLook } from './biome';
 import { buildCity, isCityKind } from './models/citybldgs';
 import { appendLoopRibbons } from './ambient/roadfurniture';
@@ -76,38 +77,24 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const tex = buildingTextures(quality === 'low' ? 128 : 256);
 
   // ------------------------------------------------------------- roads
-  const roadTex = roadTexture(quality === 'high' ? 256 : 128);
+  // country-road asphalt: the strip mask (shoulder / asphalt / markings, roadMaskTexture) over the
+  // photoscanned asphalt sampled in world space (even tone, fine grain), subtle tyre polish along the
+  // lane centres, sparse patches and cracks; biome dust / snow on top
+  const roadTex = roadMaskTexture(quality === 'high' ? 256 : 128);
   const look = biomeLook(m);
   const bc = look.code;
-  const roadBase = new THREE.MeshStandardMaterial({ map: roadTex, alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
-  if (bc === 1 || bc === 2) {
-    // desert: drifting sand over sun-bleached asphalt; winter: compacted snow with dark tyre ruts
-    roadBase.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
-        {
-          float uL = fract( vMapUv.x * 2.0 );
-          vec3 rwp = vFogP;
-          float rn = texture2D( fogNoise, rwp.xz * 0.21 ).r * 0.6 + texture2D( fogNoise, rwp.xz * 0.9 ).g * 0.4;
-          float edgeK = 1.0 - smoothstep( 0.08, 0.3, min( uL, 1.0 - uL ) );
-          #if ROAD_BIOME == 1
-            diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 1.25, 1.12, 0.95 ), 0.6 );
-            float sandK = smoothstep( 0.5, 0.75, rn + edgeK * 0.45 );
-            diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.66, 0.53, 0.36 ) * ( 0.88 + rn * 0.2 ), sandK * 0.9 );
-          #else
-            float rut = exp( -pow( ( abs( uL - 0.5 ) - 0.26 ) / 0.07, 2.0 ) );
-            float snowK = clamp( 0.38 + edgeK * 0.8 - rut * ( 0.6 + rn * 0.3 ) + ( rn - 0.5 ) * 0.45, 0.0, 1.0 );
-            vec3 slush = diffuseColor.rgb * vec3( 0.62, 0.65, 0.7 );
-            diffuseColor.rgb = mix( slush, vec3( 0.78, 0.82, 0.88 ) * ( 0.92 + rn * 0.12 ), snowK );
-          #endif
-        }`,
-      );
-    };
-    roadBase.defines = { ...roadBase.defines, ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
-  }
+  const roadU = roadAsphaltUniforms(quality);
+  const roadBase = new THREE.MeshStandardMaterial({ map: roadTex, alphaTest: 0.5, roughness: 0.88, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  roadBase.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, roadU);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nuniform sampler2D roadAsph;\nuniform vec3 roadAsphMean;\nuniform vec3 roadShoulder;\nfloat roadRough = 0.88;`)
+      .replace('#include <map_fragment>', ROAD_MAP)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = roadRough;');
+  };
+  roadBase.defines = { ...roadBase.defines, ROAD_BIOME: bc, ...(bc === 2 ? { WX_SNOW_K: '0.12' } : {}) };
   const roadMat = fog.apply(roadBase);
-  if (bc === 1 || bc === 2) roadMat.customProgramCacheKey = () => 'fog2-road-b' + bc;
+  roadMat.customProgramCacheKey = () => 'fog2-road2-b' + bc;
   const rb = new GeoBuilder();
   const bridgeEnds = m.bridges.flatMap((br) => {
     const h = br.length / 2;
@@ -643,3 +630,86 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   }
   return out;
 }
+
+// ------------------------------------------------------------------ road asphalt
+
+/** Mean of the asphalt scan (tools/bake-terrain.mjs), linear: the placeholder until it has loaded (and on low). */
+const ASPH_MEAN = new THREE.Vector3(0.1, 0.0987, 0.088);
+
+/**
+ * Asphalt uniforms: the CC0 asphalt photoscan (public/tex/terrain/512/asphalt_a.webp, ~70 KB) once it
+ * has streamed in (medium / high), a 1 x 1 texel of its mean colour before that and on low.
+ */
+function roadAsphaltUniforms(quality: 'low' | 'medium' | 'high') {
+  const px = new Uint8Array([89, 88, 84, 255]);
+  const ph = new THREE.DataTexture(px, 1, 1);
+  ph.colorSpace = THREE.SRGBColorSpace;
+  ph.needsUpdate = true;
+  const u = {
+    roadAsph: { value: ph as THREE.Texture },
+    roadAsphMean: { value: ASPH_MEAN.clone() },
+    roadShoulder: { value: new THREE.Color(0x8a8070) },
+  };
+  const photoOff = typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search);
+  if (quality !== 'low' && !photoOff && typeof createImageBitmap !== 'undefined')
+    void fetchBitmap(`${assetBase()}tex/terrain/512/asphalt_a.webp`)
+      .then((bmp) => {
+        const t = new THREE.Texture(bmp as unknown as HTMLImageElement);
+        t.flipY = false;
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.anisotropy = quality === 'high' ? 8 : 2;
+        t.needsUpdate = true;
+        u.roadAsph.value = t;
+      })
+      .catch((e) => console.warn('[photo] asphalt scan unavailable', e));
+  return u;
+}
+
+const ROAD_MAP = /* glsl */ `
+{
+  vec4 rm = texture2D( map, vMapUv );
+  diffuseColor.a *= rm.a;
+  float uL = fract( vMapUv.x * 2.0 );
+  vec2 rwp = vFogP.xz;
+  // the scan at two scales / orientations (no visible repeat along a long road), evened out towards its mean
+  vec3 a1 = texture2D( roadAsph, rwp * 0.42 ).rgb;
+  vec3 a2 = texture2D( roadAsph, vec2( rwp.x * 0.6 - rwp.y * 0.8, rwp.x * 0.8 + rwp.y * 0.6 ) * 0.29 + 0.37 ).rgb;
+  vec3 asph = mix( roadAsphMean, ( a1 + a2 ) * 0.5, 0.85 );
+  float rn = texture2D( fogNoise, rwp * 0.21 ).r * 0.6 + texture2D( fogNoise, rwp * 0.9 ).g * 0.4;
+  // tyre polish: two lanes a touch darker along their wheel paths
+  float lane = abs( uL - 0.5 );
+  float wear = exp( -pow( ( lane - 0.17 ) / 0.045, 2.0 ) ) + exp( -pow( ( lane - 0.33 ) / 0.045, 2.0 ) );
+  asph *= 1.0 - wear * 0.07;
+  // sparse repairs: the odd rectangular patch (slightly darker, smoother) and a few hairline cracks
+  vec2 pc = floor( rwp * vec2( 0.9, 0.9 ) );
+  float ph = fract( sin( dot( pc, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+  float pk = step( 0.93, ph ) * step( 0.3, rn );
+  asph = mix( asph, asph * 0.86, pk * 0.8 );
+  float ck = 1.0 - smoothstep( 0.0, 0.012, abs( texture2D( fogNoise, rwp * 0.13 + 0.71 ).a - 0.5 ) );
+  ck *= step( 0.72, texture2D( fogNoise, rwp * 0.031 ).b );
+  asph *= 1.0 - ck * 0.35;
+  roadRough = 0.86 - wear * 0.08 - pk * 0.06;
+  // gravel shoulder, blending into the verge
+  vec3 sh = roadShoulder * ( 0.6 + rm.b * 0.8 );
+  vec3 col = mix( sh, asph, rm.r );
+  // painted markings
+  col = mix( col, vec3( 0.72, 0.71, 0.64 ), rm.g );
+  roadRough = mix( 0.95, roadRough, rm.r );
+  float edgeK = 1.0 - smoothstep( 0.08, 0.3, min( uL, 1.0 - uL ) );
+  #if ROAD_BIOME == 1
+    // desert: sun-bleached asphalt, sand blown in from the verges (thin drifts, not blotches)
+    col *= vec3( 1.22, 1.12, 0.98 );
+    float sandK = smoothstep( 0.55, 0.85, edgeK * 0.75 + rn * 0.45 ) + smoothstep( 0.82, 0.95, rn ) * 0.35;
+    col = mix( col, vec3( 0.62, 0.48, 0.3 ) * ( 0.9 + rn * 0.2 ), clamp( sandK, 0.0, 1.0 ) * 0.85 );
+  #elif ROAD_BIOME == 2
+    // winter: compacted snow with dark tyre ruts
+    float rut = exp( -pow( ( lane - 0.26 ) / 0.07, 2.0 ) );
+    float snowK = clamp( 0.38 + edgeK * 0.8 - rut * ( 0.6 + rn * 0.3 ) + ( rn - 0.5 ) * 0.45, 0.0, 1.0 );
+    vec3 slush = col * vec3( 0.75, 0.78, 0.84 );
+    col = mix( slush, vec3( 0.78, 0.82, 0.88 ) * ( 0.92 + rn * 0.12 ), snowK );
+  #endif
+  diffuseColor.rgb *= col;
+}
+`;
+

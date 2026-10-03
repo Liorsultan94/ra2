@@ -83,11 +83,105 @@ function dense(a: V2, b: V2, step = 0.25): V2[] {
 }
 
 /**
+ * Two paved roads ending close together (both stopping short of a base, a
+ * gap left by the router...) are one road: join their ends with a smooth bend
+ * (cut back a little so it stays out of the base) instead of leaving two dead
+ * ends side by side, each with its own turning circle. Not across water,
+ * rock, trees or buildings, and not into a hairpin.
+ */
+function joinCloseEnds(m: GameMap, roads: Road[]) {
+  const hard = (x: number, y: number) => {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return true;
+    const i = ty * m.w + tx;
+    const t = m.tiles[i];
+    return t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || !!m.trees[i] || !!m.blocked[i] || !!m.ore[i];
+  };
+  const edge = (p: V2) => p.x < 1.6 || p.y < 1.6 || p.x > m.w - 1.6 || p.y > m.h - 1.6;
+  type End = { r: number; at: 0 | 1 };
+  const ends: End[] = [];
+  roads.forEach((r, i) => {
+    if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 12) return;
+    if (!edge(r.pts[0])) ends.push({ r: i, at: 0 });
+    if (!edge(r.pts[r.pts.length - 1])) ends.push({ r: i, at: 1 });
+  });
+  // a point `back` tiles in from the end, and the direction the road runs into the end
+  const probe = (e: End, back: number) => {
+    const pts = roads[e.r].pts;
+    const n = pts.length;
+    const idx = (k: number) => (e.at ? n - 1 - k : k);
+    let acc = 0;
+    let k = 0;
+    while (k < n - 2 && acc < back) {
+      acc += Math.hypot(pts[idx(k + 1)].x - pts[idx(k)].x, pts[idx(k + 1)].y - pts[idx(k)].y);
+      k++;
+    }
+    const p = pts[idx(k)];
+    const q = pts[idx(Math.max(0, k - 2))];
+    const d = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    return { k, p, dx: (q.x - p.x) / d, dy: (q.y - p.y) / d };
+  };
+  const used = new Set<string>();
+  const add: Road[] = [];
+  const cuts: { e: End; k: number }[] = [];
+  for (let i = 0; i < ends.length; i++)
+    for (let j = i + 1; j < ends.length; j++) {
+      const A = ends[i];
+      const B = ends[j];
+      if (A.r === B.r || used.has(`${A.r}:${A.at}`) || used.has(`${B.r}:${B.at}`)) continue;
+      const pa = roads[A.r].pts[A.at ? roads[A.r].pts.length - 1 : 0];
+      const pb = roads[B.r].pts[B.at ? roads[B.r].pts.length - 1 : 0];
+      const gap = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+      if (gap > 5.5 || gap < 0.3) continue;
+      // another road's end / a crossing in between: that's a junction, the lane graph handles it
+      const back = Math.min(1.4, gap * 0.3);
+      const a = probe(A, back);
+      const b = probe(B, back);
+      // the car comes in along a, leaves against b: no hairpins
+      const turn = Math.acos(Math.max(-1, Math.min(1, -(a.dx * b.dx + a.dy * b.dy))));
+      // cubic bend between the cut-back points; a U-bend is fine if it's wide enough
+      const span = Math.hypot(b.p.x - a.p.x, b.p.y - a.p.y);
+      if (span / (2 * Math.max(0.2, Math.sin(turn / 2))) < 1.3) continue;
+      const k = span * (0.38 + 0.3 * Math.max(0, (turn - 1.6) / 1.5));
+      const c1 = { x: a.p.x + a.dx * k, y: a.p.y + a.dy * k };
+      const c2 = { x: b.p.x + b.dx * k, y: b.p.y + b.dy * k };
+      const pts: V2[] = [];
+      const n = Math.max(4, Math.ceil((span * 1.3) / 0.25));
+      let free = true;
+      for (let s = 0; s <= n; s++) {
+        const t = s / n;
+        const u = 1 - t;
+        const x = u * u * u * a.p.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.p.x;
+        const y = u * u * u * a.p.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.p.y;
+        if (hard(x, y)) free = false;
+        pts.push({ x, y });
+      }
+      if (!free) continue;
+      // roads crossing the bend would make it a junction: leave those to the lane graph
+      const crosses = roads.some((r, ri) => ri !== A.r && ri !== B.r && !r.ring && r.pts.some((p) => pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 0.8)));
+      if (crosses) continue;
+      used.add(`${A.r}:${A.at}`);
+      used.add(`${B.r}:${B.at}`);
+      const ra = roads[A.r];
+      const rb = roads[B.r];
+      add.push({ pts, width: Math.min(ra.width, rb.width), variant: ra.variant === rb.variant ? ra.variant : 1 });
+      cuts.push({ e: A, k: a.k }, { e: B, k: b.k });
+    }
+  for (const { e, k } of cuts) {
+    const r = roads[e.r];
+    r.pts = e.at ? r.pts.slice(0, r.pts.length - k) : r.pts.slice(k);
+  }
+  roads.push(...add);
+}
+
+/**
  * Build the lane graph for the layout's roads / tracks, stamp the clearance
  * into the occupancy grid and fit the roads and tracks to the turning places.
  * Mutates `roads` / `tracks` in place (the arrays become the layout's).
  */
 export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: Uint8Array, R: number): RoadNet {
+  joinCloseEnds(m, roads);
   // parking lots first: their access lanes are lanes of the network
   const lots = placeLots(m, roads, occ, R);
   const net = buildRoadNet(netInputFrom(m, roads, tracks, bridgeEnds(m)));
