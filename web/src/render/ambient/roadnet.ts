@@ -214,7 +214,7 @@ export interface RoadNet {
 export interface NetInput {
   w: number;
   h: number;
-  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number }[];
+  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number; closed?: boolean }[];
   tracks: readonly { pts: V2[]; width: number; ring?: boolean }[];
   bridges: readonly { ends: readonly V2[] }[];
   /** Tile (tx, ty) can't take a turning place (water, rock, trees, structures, ore, base areas, off map). */
@@ -476,7 +476,7 @@ interface Cand {
  * Drop hairpin spikes the road router sometimes leaves at sharp corners (the
  * polyline overshoots and doubles back): no car could follow them.
  */
-function unspike(src: V2[]): V2[] {
+export function unspike(src: V2[]): V2[] {
   const p = src.slice();
   for (let pass = 0; pass < 40; pass++) {
     let changed = false;
@@ -553,6 +553,13 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     const painted = !!r.painted;
     // city avenues: two lanes a side, cars keep to the right one; streets: one lane a side
     const lane = r.lot !== undefined ? 0.13 : painted ? (r.variant === 0 ? 0.9 : 0.6) : r.width * (r.variant === 0 ? 0.24 : 0.22);
+    if (r.closed) {
+      // a ring road: two lanes-lines meeting at both ends
+      const h = r.pts.length >> 1;
+      add(r.pts.slice(0, h + 1), lane, r.width / 2, true, painted, -1, r.variant);
+      add(r.pts.slice(h), lane, r.width / 2, true, painted, -1, r.variant);
+      continue;
+    }
     add(r.pts, lane, painted ? 1.22 : r.width / 2, true, painted, -1, r.variant, r.lot ?? -1);
   }
   // the city's "tracks" are park footpaths: no cars there

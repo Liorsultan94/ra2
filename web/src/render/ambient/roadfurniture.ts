@@ -139,13 +139,20 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
       { x: br.x + h * D, y: br.y - h * D },
     ];
   });
+  // closed rings: the last point is the first again; the neighbours wrap and the texture repeats a whole number of times
+  let total = 0;
+  for (let i = 1; i < n; i++) total += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+  const vScale = r.closed ? Math.max(1, Math.round(total / 6)) / (total / 6) : 1;
+  const from = t.from ?? 0;
+  const to = Math.min(n, t.to ?? n);
   let s = 0;
   let prev: number[] | null = null;
   for (let i = 0; i < n; i++) {
     const p = r.pts[i];
     if (i > 0) s += Math.hypot(p.x - r.pts[i - 1].x, p.y - r.pts[i - 1].y);
-    const a = r.pts[Math.max(0, i - 1)];
-    const c = r.pts[Math.min(n - 1, i + 1)];
+    if (i < from || i >= to) continue;
+    const a = r.pts[i > 0 ? i - 1 : r.closed ? n - 2 : 0];
+    const c = r.pts[i < n - 1 ? i + 1 : r.closed ? 1 : n - 1];
     const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
     const nx = -(c.y - a.y) / L;
     const ny = (c.x - a.x) / L;
@@ -161,9 +168,9 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
         const x = p.x + nx * o * (w / 2);
         const z = p.y + ny * o * (w / 2);
         const g = surfaceHeight(m, x, z);
-        const h = Math.max(g + 0.03, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
+        const h = Math.max(g + 0.03 + (t.lift ?? 0), lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
         _rv.set(x, h, z);
-        return rb.vert(_rv, _rn, u0 + 0.49 * ((o + 1) / 2), s / 6, 1);
+        return rb.vert(_rv, _rn, u0 + 0.49 * ((o + 1) / 2), (s / 6) * vScale, 1);
       });
     };
     const v = t.v[i] ?? r.variant;

@@ -28,7 +28,9 @@ export interface Road {
   /** Access lane of parking lot #lot (ambient/sites.ts). */
   lot?: number;
   /** Two roads joined into one (ambient/clearance.ts): width and look per point (drawn by roadfurniture.ts). */
-  taper?: { w: number[]; v: (0 | 1)[] };
+  taper?: { w: number[]; v: (0 | 1)[]; from?: number; to?: number; lift?: number };
+  /** A closed loop (first point follows the last). */
+  closed?: boolean;
 }
 
 export interface Track {

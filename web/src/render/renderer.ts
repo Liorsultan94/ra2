@@ -42,7 +42,7 @@ import { loadBuildingPhotos } from './models/bldtex';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
-import { setBakeRenderer, setBakeSize } from './models/vehbake';
+import { setBakeEnabled, setBakeRenderer, setBakeSize } from './models/vehbake';
 import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
@@ -342,6 +342,7 @@ export class GameRenderer {
     // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
     setBakeRenderer(this.renderer);
     setBakeSize(quality === 'high' ? 1024 : 512);
+    setBakeEnabled(!/[?&]vbake=0\b/.test(location.search));
     setWearBiome(world.map.biome);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in

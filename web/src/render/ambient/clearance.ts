@@ -1,6 +1,6 @@
 import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, Road, Track, V2 } from '../layout';
-import { bridgeEnds, buildRoadNet, netInputFrom, pointAt, type RoadNet } from './roadnet';
+import { bridgeEnds, buildRoadNet, netInputFrom, pointAt, unspike, type RoadNet } from './roadnet';
 import { placeBoards, placeLots } from './sites';
 
 /*
@@ -92,7 +92,60 @@ function dense(a: V2, b: V2, step = 0.25): V2[] {
  * where the taper ends, see Road.taper). Not across water, rock, trees or
  * buildings, and not into a hairpin.
  */
+/** Drop points where the polyline kinks (cos < minCos), keeping the per-point arrays aligned; endpoints stay. */
+function dekink(pts: V2[], arrs: unknown[][], minCos: number, i0 = 1, i1 = Infinity) {
+  for (let pass = 0; pass < 60; pass++) {
+    let changed = false;
+    for (let i = Math.max(1, i0); i < Math.min(pts.length - 1, i1); i++) {
+      const ax = pts[i].x - pts[i - 1].x;
+      const ay = pts[i].y - pts[i - 1].y;
+      const bx = pts[i + 1].x - pts[i].x;
+      const by = pts[i + 1].y - pts[i].y;
+      const l = Math.hypot(ax, ay) * Math.hypot(bx, by);
+      if (l > 1e-9 && (ax * bx + ay * by) / l >= minCos) continue;
+      pts.splice(i, 1);
+      for (const a of arrs) a.splice(i, 1);
+      i--;
+      i1--;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+}
+
+/** Road surface width of a bridge deck (render/bridgefx.ts builds the decks 2 x BRIDGE_HALF_WIDTH wide, kerbs inside). */
+const DECK_W = 1.9;
+
+/** Roads running onto a bridge widen smoothly to the deck's width over their last 4 tiles. */
+function widenToDecks(m: GameMap, roads: Road[]) {
+  const ends = bridgeEnds(m).flatMap((b) => b.ends);
+  for (const r of roads) {
+    if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 4) continue;
+    for (const at of [0, 1] as const) {
+      const p = r.pts[at ? r.pts.length - 1 : 0];
+      if (!ends.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 0.8)) continue;
+      const w = r.taper?.w ?? r.pts.map(() => r.width);
+      const v = r.taper?.v ?? r.pts.map(() => r.variant);
+      const smooth = (x: number) => x * x * (3 - 2 * x);
+      let along = 0;
+      for (let k = 0; k < r.pts.length; k++) {
+        const i = at ? r.pts.length - 1 - k : k;
+        if (k > 0) {
+          const j = at ? i + 1 : i - 1;
+          along += Math.hypot(r.pts[i].x - r.pts[j].x, r.pts[i].y - r.pts[j].y);
+        }
+        if (along > 4) break;
+        const f = smooth(1 - along / 4);
+        w[i] = w[i] + (Math.max(w[i], DECK_W) - w[i]) * f;
+      }
+      r.taper = { ...(r.taper ?? {}), w, v };
+    }
+  }
+}
+
 function joinCloseEnds(m: GameMap, roads: Road[]) {
+  // the router leaves the odd hairpin spike (at bridge approaches...): no road piece may double back
+  for (const r of roads) if (!r.painted && r.pts.length > 2) r.pts = unspike(r.pts);
   const hard = (x: number, y: number) => {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
@@ -125,7 +178,7 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
   for (let pass = 0; pass < 16; pass++) {
     const ends: End[] = [];
     roads.forEach((r, i) => {
-      if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 12) return;
+      if (r.painted || r.ring || r.closed || r.lot !== undefined || r.pts.length < 12) return;
       if (!edge(r.pts[0])) ends.push({ r: i, at: 0 });
       if (!edge(r.pts[r.pts.length - 1])) ends.push({ r: i, at: 1 });
     });
@@ -138,19 +191,22 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
         const pa = roads[A.r].pts[A.at ? roads[A.r].pts.length - 1 : 0];
         const pb = roads[B.r].pts[B.at ? roads[B.r].pts.length - 1 : 0];
         const gap = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-        if (gap > 5.5 || gap < 0.3) continue;
-        const back = Math.min(1.4, gap * 0.3);
+        if (gap > 5.5) continue;
+        // touching ends running on (two pieces of one road): joined as they are, no bend
+        const touching = gap < 0.6;
+        const back = touching ? 0 : Math.min(1.4, gap * 0.3);
         const a = probe(A, back);
         const b = probe(B, back);
         // the car comes in along a, leaves against b; a U-bend is fine if it's wide enough
-        const turn = Math.acos(Math.max(-1, Math.min(1, -(a.dx * b.dx + a.dy * b.dy))));
+        const turn = Math.acos(Math.max(-1, Math.min(1, -(touching ? probe(A, 0.6).dx * probe(B, 0.6).dx + probe(A, 0.6).dy * probe(B, 0.6).dy : a.dx * b.dx + a.dy * b.dy))));
+        if (touching && turn > 0.7) continue;
         const span = Math.hypot(b.p.x - a.p.x, b.p.y - a.p.y);
-        if (span / (2 * Math.max(0.2, Math.sin(turn / 2))) < 1.3) continue;
+        if (!touching && span / (2 * Math.max(0.2, Math.sin(turn / 2))) < 1.3) continue;
         const kk = span * (0.38 + 0.3 * Math.max(0, (turn - 1.6) / 1.5));
         const c1 = { x: a.p.x + a.dx * kk, y: a.p.y + a.dy * kk };
         const c2 = { x: b.p.x + b.dx * kk, y: b.p.y + b.dy * kk };
         const bend: V2[] = [];
-        const n = Math.max(4, Math.ceil((span * 1.3) / 0.25));
+        const n = touching ? 0 : Math.max(4, Math.ceil((span * 1.3) / 0.25));
         let free = true;
         for (let s = 1; s < n; s++) {
           const t = s / n;
@@ -175,32 +231,74 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
         const pA = orient(ra.pts, A, a.k, true);
         const wA = orient(widthsOf(ra), A, a.k, true);
         const vA = orient(looksOf(ra), A, a.k, true);
-        const pB = orient(rb.pts, B, b.k, false);
+        let pB = orient(rb.pts, B, b.k, false);
         const wB = orient(widthsOf(rb), B, b.k, false);
         const vB = orient(looksOf(rb), B, b.k, false);
+        let wBx = wB;
+        if (touching) {
+          // pieces overlapping at the joint: drop B's points that don't lie ahead of A's end
+          const e = pA[pA.length - 1];
+          const f = pA[Math.max(0, pA.length - 3)];
+          const dl = Math.hypot(e.x - f.x, e.y - f.y) || 1;
+          let k2 = 0;
+          while (k2 < pB.length - 4 && ((pB[k2].x - e.x) * (e.x - f.x) + (pB[k2].y - e.y) * (e.y - f.y)) / dl < 0.12) k2++;
+          pB = pB.slice(k2);
+          wBx = wB.slice(k2);
+        }
         const w0 = wA[wA.length - 1];
-        const w1 = wB[0];
-        const wide = w0 >= w1 ? vA[vA.length - 1] : vB[0];
+        const w1 = wBx[0];
+        // one look for the whole road (no texture jump anywhere): the longer piece's
+        const lenOf = (pp: V2[]) => pp.reduce((acc, p, i) => (i ? acc + Math.hypot(p.x - pp[i - 1].x, p.y - pp[i - 1].y) : 0), 0);
+        const look: 0 | 1 = lenOf(pA) >= lenOf(pB) ? vA[vA.length - 1] : vB[vB.length - 1];
         // taper across the bend and 2.5 tiles on into the narrower side
         const pts = [...pA, ...bend, ...pB];
         const ws: number[] = [...wA];
-        const vs: (0 | 1)[] = [...vA];
-        const bendLen = bend.length * 0.25 + 0.5;
+        const vs: (0 | 1)[] = vA.map(() => look);
+        const bendLen = touching ? 0 : bend.length * 0.25 + 0.5;
         const taperLen = bendLen + 2.5;
         const smooth = (x: number) => x * x * (3 - 2 * x);
         bend.forEach((_, i2) => {
           const t = ((i2 + 1) * 0.25) / taperLen;
           ws.push(w0 + (w1 - w0) * smooth(Math.min(1, t)));
-          vs.push(wide);
+          vs.push(look);
         });
         let along = bendLen;
         pB.forEach((_, i2) => {
           if (i2 > 0) along += Math.hypot(pB[i2].x - pB[i2 - 1].x, pB[i2].y - pB[i2 - 1].y);
           const t = Math.min(1, along / taperLen);
-          ws.push(t < 1 ? w0 + (w1 - w0) * smooth(t) : wB[i2]);
-          // the wider road's look until the taper is done, then the road's own
-          vs.push(t < 1 ? wide : vB[i2]);
+          ws.push(t < 1 ? w0 + (w1 - w0) * smooth(t) : wBx[i2]);
+          vs.push(look);
         });
+        // ease the joint: a few rounds of smoothing on the points around it (no kink, no notch in the edges)
+        const jn = pA.length;
+        const win = touching ? 12 : 6;
+        for (let it = 0; it < (touching ? 24 : 6); it++) {
+          const cp = pts.map((p) => ({ x: p.x, y: p.y }));
+          for (let q = Math.max(1, jn - win); q <= Math.min(pts.length - 2, jn + bend.length + win); q++) {
+            pts[q] = { x: (cp[q - 1].x + 2 * cp[q].x + cp[q + 1].x) / 4, y: (cp[q - 1].y + 2 * cp[q].y + cp[q + 1].y) / 4 };
+          }
+        }
+        // (only round the joint: the rest of the road keeps its exact line)
+        dekink(pts, [ws, vs], 0.93, jn - win - 4, jn + bend.length + win + 4);
+        // even spacing again where points were dropped
+        for (let q = 1; q < pts.length; q++) {
+          const d = Math.hypot(pts[q].x - pts[q - 1].x, pts[q].y - pts[q - 1].y);
+          if (d <= 0.32) continue;
+          const nIns = Math.ceil(d / 0.25) - 1;
+          const a0 = pts[q - 1];
+          const b0 = pts[q];
+          const ins: V2[] = [];
+          const wi: number[] = [];
+          for (let k = 1; k <= nIns; k++) {
+            const f = k / (nIns + 1);
+            ins.push({ x: a0.x + (b0.x - a0.x) * f, y: a0.y + (b0.y - a0.y) * f });
+            wi.push(ws[q - 1] + (ws[q] - ws[q - 1]) * f);
+          }
+          pts.splice(q, 0, ...ins);
+          ws.splice(q, 0, ...wi);
+          vs.splice(q, 0, ...ins.map(() => vs[q - 1]));
+          q += nIns;
+        }
         const merged: Road = {
           pts,
           width: Math.min(...ws),
@@ -211,6 +309,15 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
         roads[A.r] = merged;
         roads.splice(B.r, 1);
         done = true;
+        // a road joined round into a ring (the oasis ring road...): closed, drawn without a seam
+        const p0 = merged.pts[0];
+        const p1 = merged.pts[merged.pts.length - 1];
+        if (Math.hypot(p0.x - p1.x, p0.y - p1.y) < 0.6) {
+          // the last point becomes the first (welded)
+          merged.pts[merged.pts.length - 1] = { x: p0.x, y: p0.y };
+          merged.taper!.w[merged.taper!.w.length - 1] = merged.taper!.w[0];
+          merged.closed = true;
+        }
       }
     if (!done) break;
   }
@@ -223,6 +330,7 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
  */
 export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: Uint8Array, R: number): RoadNet {
   joinCloseEnds(m, roads);
+  widenToDecks(m, roads);
   // parking lots first: their access lanes are lanes of the network
   const lots = placeLots(m, roads, occ, R);
   const net = buildRoadNet(netInputFrom(m, roads, tracks, bridgeEnds(m)));
@@ -265,15 +373,27 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
   for (const lot of lots) for (let i = 1; i < lot.access.length; i++) capsule(lot.access[i - 1], lot.access[i], 0.45);
 
   // cut the road ribbons back at the roundabouts (the ring is its own road piece); drop the stubs past dead-end circles
-  const cut = <T extends { pts: V2[]; taper?: Road["taper"] }>(list: T[], paved: boolean) => {
+  const cut = <T extends { pts: V2[]; taper?: Road["taper"]; closed?: boolean }>(list: T[], paved: boolean) => {
     const loops = net.loops.filter((lp) => lp.paved === paved && !(paved && net.lines[net.nodes[lp.node].arms[0].line].painted));
     if (!loops.length) return;
     const out: T[] = [];
-    for (const r of list) {
-      const inside = r.pts.map((p) => loops.findIndex((lp) => Math.hypot(p.x - lp.x, p.y - lp.y) < (paved ? lp.R - 0.3 : lp.rl)));
+    for (const r0 of list) {
+      let r = r0;
+      let inside = r.pts.map((p) => loops.findIndex((lp) => Math.hypot(p.x - lp.x, p.y - lp.y) < (paved ? lp.R - 0.3 : lp.rl)));
       if (inside.every((i) => i < 0)) {
         out.push(r);
         continue;
+      }
+      if (r.closed) {
+        // a ring road cut by a circle: start it there, so no piece is split at the ring's seam
+        const k = inside.findIndex((i) => i >= 0);
+        const rot = <U>(a: U[]) => {
+          const b = a.slice(0, -1);
+          const out2 = [...b.slice(k), ...b.slice(0, k)];
+          return [...out2, out2[0]];
+        };
+        r = { ...r, closed: false, pts: rot(r.pts), ...(r.taper ? { taper: { ...r.taper, w: rot(r.taper.w), v: rot(r.taper.v) } } : {}) };
+        inside = rot(inside);
       }
       // runs outside the circles, with the circle they touch at either end
       let i = 0;
@@ -301,7 +421,7 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
           const q = end === 0 ? pts[Math.min(pts.length - 1, 3)] : pts[Math.max(0, pts.length - 4)];
           if ((q.x - lp.x) * kx + (q.y - lp.y) * ky < 0) keep = false;
         }
-        if (keep) out.push({ ...r, pts, ...(r.taper ? { taper: { w: r.taper.w.slice(i0, i), v: r.taper.v.slice(i0, i) } } : {}) });
+        if (keep) out.push({ ...r, pts, closed: false, ...(r.taper ? { taper: { ...r.taper, w: r.taper.w.slice(i0, i), v: r.taper.v.slice(i0, i) } } : {}) });
       }
     }
     list.length = 0;

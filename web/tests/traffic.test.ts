@@ -543,6 +543,8 @@ describe('road clearance', () => {
       const m = createMap(id, 1);
       const L = buildLayout(m);
       const roads = L.roads.filter((r) => !r.painted && !r.ring && r.lot === undefined);
+      // closed ring roads: welded (last point = first)
+      for (const r of roads) if (r.closed) expect(r.pts[0]).toEqual(r.pts[r.pts.length - 1]);
       const endW = (r: (typeof roads)[0], at: 0 | 1) => (r.taper ? r.taper.w[at ? r.taper.w.length - 1 : 0] : r.width);
       for (let i = 0; i < roads.length; i++)
         for (let j = i + 1; j < roads.length; j++)
@@ -551,22 +553,44 @@ describe('road clearance', () => {
               const pa = roads[i].pts[ea ? roads[i].pts.length - 1 : 0];
               const pb = roads[j].pts[eb ? roads[j].pts.length - 1 : 0];
               if (Math.hypot(pa.x - pb.x, pa.y - pb.y) > 0.6) continue;
+              // pieces of one road are merged into one polyline (one ribbon, continuous texture)
+              expect(false, `roads ${i} / ${j} butt-joined at ${pa.x.toFixed(1)},${pa.y.toFixed(1)}`).toBe(true);
               const wa = endW(roads[i], ea);
               const wb = endW(roads[j], eb);
               expect(Math.max(wa, wb) / Math.min(wa, wb), `roads ${i} / ${j} at ${pa.x.toFixed(1)},${pa.y.toFixed(1)}`).toBeLessThanOrEqual(1.15);
             }
-      // a joined road: one polyline, the width changing gently (over 2+ tiles), the look switching only once the taper is done
+      // no road piece doubles back on itself (router spikes at bridge approaches are smoothed out)
+      for (const r of roads)
+        for (let k = 1; k < r.pts.length - 1; k++) {
+          const ax = r.pts[k].x - r.pts[k - 1].x;
+          const ay = r.pts[k].y - r.pts[k - 1].y;
+          const bx = r.pts[k + 1].x - r.pts[k].x;
+          const by = r.pts[k + 1].y - r.pts[k].y;
+          expect((ax * bx + ay * by) / ((Math.hypot(ax, ay) * Math.hypot(bx, by)) || 1), `${id} spike at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.3);
+        }
+      // a joined road / a road widening onto a bridge deck: one polyline, the width changing gently (over 2.5+ tiles), one look
       for (const r of roads) {
         if (!r.taper) continue;
         expect(r.taper.w.length).toBe(r.pts.length);
+        // no kinks / notches (where pieces were joined especially)
+        for (let k = 1; k < r.pts.length - 1; k++) {
+          const ax = r.pts[k].x - r.pts[k - 1].x;
+          const ay = r.pts[k].y - r.pts[k - 1].y;
+          const bx = r.pts[k + 1].x - r.pts[k].x;
+          const by = r.pts[k + 1].y - r.pts[k].y;
+          const cos = (ax * bx + ay * by) / ((Math.hypot(ax, ay) * Math.hypot(bx, by)) || 1);
+          expect(cos, `${id} kink at ${r.pts[k].x.toFixed(2)},${r.pts[k].y.toFixed(2)}`).toBeGreaterThan(0.8);
+        }
+        // one look along the whole road: no texture jump
+        expect(new Set(r.taper.v).size).toBe(1);
         for (let k = 1; k < r.pts.length; k++) {
           const step = Math.hypot(r.pts[k].x - r.pts[k - 1].x, r.pts[k].y - r.pts[k - 1].y) || 0.25;
-          expect(Math.abs(r.taper.w[k] - r.taper.w[k - 1]) / step).toBeLessThan(0.2);
+          expect(Math.abs(r.taper.w[k] - r.taper.w[k - 1]) / step).toBeLessThan(0.45);
           // no lateral offset: consecutive points stay close (a continuous centreline)
           expect(step).toBeLessThan(0.6);
         }
       }
-      if (id === 'desert' || id === 'frontline') expect(roads.filter((r) => r.taper).length).toBe(2);
+      if (id === 'desert' || id === 'frontline') expect(roads.filter((r) => r.taper).length).toBeGreaterThanOrEqual(2);
     });
 
   it('is deterministic and every map gets parking lots, the city several', () => {

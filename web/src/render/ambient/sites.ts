@@ -41,6 +41,8 @@ export interface Lot {
   bays: Bay[];
   /** Access lane polyline: road centre -> lot edge -> aisle end. */
   access: V2[];
+  /** Drawn part of the access lane (point indices [from, to)): road edge -> lot edge. */
+  draw: [number, number];
   /** City lot (booth + barrier). */
   city: boolean;
   /** Lane of the network that serves it (set when the network is built), -1 none. */
@@ -145,6 +147,10 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
         const p2 = { x: e0x, y: e0y };
         const p3 = { x: cx + ux * (L / 2 - 0.25), y: cy + uy * (L / 2 - 0.25) };
         push(p0, p1);
+        // the drive is drawn from the road's edge (it meets the road's own asphalt there) to the lot
+        let from = 0;
+        while (from < access.length - 1 && Math.hypot(access[from].x - p0.x, access[from].y - p0.y) < half - 0.08) from++;
+        const to = access.length;
         push(p1, p2);
         push(p2, p3);
         const bays: Bay[] = [];
@@ -156,7 +162,7 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
             bays.push({ x: cx + ux * s + nx * t, y: cy + uy * s + ny * t, yaw: Math.atan2(ny * row, nx * row), ax: cx + ux * s, ay: cy + uy * s });
           }
         }
-        cands.push({ lot: { x: cx, y: cy, ux, uy, nx, ny, L, D, bays, access, city, line: -1, taken: bays.map(() => 0) }, score: hash2(ri, i * 2 + (side > 0 ? 1 : 0), 977) + (city ? 0 : near * 0.1) });
+        cands.push({ lot: { x: cx, y: cy, ux, uy, nx, ny, L, D, bays, access, draw: [from, to], city, line: -1, taken: bays.map(() => 0) }, score: hash2(ri, i * 2 + (side > 0 ? 1 : 0), 977) + (city ? 0 : near * 0.1) });
       }
     }
   });
@@ -178,7 +184,8 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
         const iy = Math.floor(y * R);
         if (ix >= 0 && iy >= 0 && ix < m.w * R && iy < m.h * R) occ[iy * m.w * R + ix] |= 1 | 8 | 16;
       }
-    roads.push({ pts: lot.access, width: 0.62, variant: 1, lot: lots.indexOf(lot) });
+    const [d0, d1] = lot.draw;
+    roads.push({ pts: lot.access, width: 0.62, variant: 1, lot: lots.indexOf(lot), taper: { w: lot.access.map(() => 0.62), v: lot.access.map(() => 1), from: d0, to: d1, lift: 0.004 } });
   }
   return lots;
 }
