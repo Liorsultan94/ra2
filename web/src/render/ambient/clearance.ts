@@ -84,10 +84,13 @@ function dense(a: V2, b: V2, step = 0.25): V2[] {
 
 /**
  * Two paved roads ending close together (both stopping short of a base, a
- * gap left by the router...) are one road: join their ends with a smooth bend
- * (cut back a little so it stays out of the base) instead of leaving two dead
- * ends side by side, each with its own turning circle. Not across water,
- * rock, trees or buildings, and not into a hairpin.
+ * gap left by the router...) are one road: they are merged into a single
+ * polyline through a smooth bend (cut back a little so it stays out of the
+ * base) instead of leaving two dead ends side by side, each with its own
+ * turning circle. One polyline = one welded ribbon: the width tapers over the
+ * bend and the next 2.5 tiles, the markings run on (the road look switches
+ * where the taper ends, see Road.taper). Not across water, rock, trees or
+ * buildings, and not into a hairpin.
  */
 function joinCloseEnds(m: GameMap, roads: Road[]) {
   const hard = (x: number, y: number) => {
@@ -100,12 +103,9 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
   };
   const edge = (p: V2) => p.x < 1.6 || p.y < 1.6 || p.x > m.w - 1.6 || p.y > m.h - 1.6;
   type End = { r: number; at: 0 | 1 };
-  const ends: End[] = [];
-  roads.forEach((r, i) => {
-    if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 12) return;
-    if (!edge(r.pts[0])) ends.push({ r: i, at: 0 });
-    if (!edge(r.pts[r.pts.length - 1])) ends.push({ r: i, at: 1 });
-  });
+  // per-point width / look of a road (plain roads: constant)
+  const widthsOf = (r: Road) => r.taper?.w ?? r.pts.map(() => r.width);
+  const looksOf = (r: Road) => r.taper?.v ?? r.pts.map(() => r.variant);
   // a point `back` tiles in from the end, and the direction the road runs into the end
   const probe = (e: End, back: number) => {
     const pts = roads[e.r].pts;
@@ -122,57 +122,98 @@ function joinCloseEnds(m: GameMap, roads: Road[]) {
     const d = Math.hypot(q.x - p.x, q.y - p.y) || 1;
     return { k, p, dx: (q.x - p.x) / d, dy: (q.y - p.y) / d };
   };
-  const used = new Set<string>();
-  const add: Road[] = [];
-  const cuts: { e: End; k: number }[] = [];
-  for (let i = 0; i < ends.length; i++)
-    for (let j = i + 1; j < ends.length; j++) {
-      const A = ends[i];
-      const B = ends[j];
-      if (A.r === B.r || used.has(`${A.r}:${A.at}`) || used.has(`${B.r}:${B.at}`)) continue;
-      const pa = roads[A.r].pts[A.at ? roads[A.r].pts.length - 1 : 0];
-      const pb = roads[B.r].pts[B.at ? roads[B.r].pts.length - 1 : 0];
-      const gap = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-      if (gap > 5.5 || gap < 0.3) continue;
-      // another road's end / a crossing in between: that's a junction, the lane graph handles it
-      const back = Math.min(1.4, gap * 0.3);
-      const a = probe(A, back);
-      const b = probe(B, back);
-      // the car comes in along a, leaves against b: no hairpins
-      const turn = Math.acos(Math.max(-1, Math.min(1, -(a.dx * b.dx + a.dy * b.dy))));
-      // cubic bend between the cut-back points; a U-bend is fine if it's wide enough
-      const span = Math.hypot(b.p.x - a.p.x, b.p.y - a.p.y);
-      if (span / (2 * Math.max(0.2, Math.sin(turn / 2))) < 1.3) continue;
-      const k = span * (0.38 + 0.3 * Math.max(0, (turn - 1.6) / 1.5));
-      const c1 = { x: a.p.x + a.dx * k, y: a.p.y + a.dy * k };
-      const c2 = { x: b.p.x + b.dx * k, y: b.p.y + b.dy * k };
-      const pts: V2[] = [];
-      const n = Math.max(4, Math.ceil((span * 1.3) / 0.25));
-      let free = true;
-      for (let s = 0; s <= n; s++) {
-        const t = s / n;
-        const u = 1 - t;
-        const x = u * u * u * a.p.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.p.x;
-        const y = u * u * u * a.p.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.p.y;
-        if (hard(x, y)) free = false;
-        pts.push({ x, y });
+  for (let pass = 0; pass < 16; pass++) {
+    const ends: End[] = [];
+    roads.forEach((r, i) => {
+      if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 12) return;
+      if (!edge(r.pts[0])) ends.push({ r: i, at: 0 });
+      if (!edge(r.pts[r.pts.length - 1])) ends.push({ r: i, at: 1 });
+    });
+    let done = false;
+    for (let i = 0; i < ends.length && !done; i++)
+      for (let j = i + 1; j < ends.length && !done; j++) {
+        const A = ends[i];
+        const B = ends[j];
+        if (A.r === B.r) continue;
+        const pa = roads[A.r].pts[A.at ? roads[A.r].pts.length - 1 : 0];
+        const pb = roads[B.r].pts[B.at ? roads[B.r].pts.length - 1 : 0];
+        const gap = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+        if (gap > 5.5 || gap < 0.3) continue;
+        const back = Math.min(1.4, gap * 0.3);
+        const a = probe(A, back);
+        const b = probe(B, back);
+        // the car comes in along a, leaves against b; a U-bend is fine if it's wide enough
+        const turn = Math.acos(Math.max(-1, Math.min(1, -(a.dx * b.dx + a.dy * b.dy))));
+        const span = Math.hypot(b.p.x - a.p.x, b.p.y - a.p.y);
+        if (span / (2 * Math.max(0.2, Math.sin(turn / 2))) < 1.3) continue;
+        const kk = span * (0.38 + 0.3 * Math.max(0, (turn - 1.6) / 1.5));
+        const c1 = { x: a.p.x + a.dx * kk, y: a.p.y + a.dy * kk };
+        const c2 = { x: b.p.x + b.dx * kk, y: b.p.y + b.dy * kk };
+        const bend: V2[] = [];
+        const n = Math.max(4, Math.ceil((span * 1.3) / 0.25));
+        let free = true;
+        for (let s = 1; s < n; s++) {
+          const t = s / n;
+          const u = 1 - t;
+          const x = u * u * u * a.p.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.p.x;
+          const y = u * u * u * a.p.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.p.y;
+          if (hard(x, y)) free = false;
+          bend.push({ x, y });
+        }
+        if (!free) continue;
+        // roads crossing the bend would make it a junction: leave those to the lane graph
+        if (roads.some((r, ri) => ri !== A.r && ri !== B.r && !r.ring && r.pts.some((p) => bend.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 0.8)))) continue;
+        // one polyline: A (towards its joined end) + bend + B (away from its joined end)
+        const ra = roads[A.r];
+        const rb = roads[B.r];
+        const orient = <T>(arr: T[], e: End, k: number, towardEnd: boolean) => {
+          const cut = e.at ? arr.slice(0, arr.length - k) : arr.slice(k);
+          // cut runs from the far end to the joined end when e.at = 1
+          const toEnd = e.at ? cut : cut.slice().reverse();
+          return towardEnd ? toEnd : toEnd.slice().reverse();
+        };
+        const pA = orient(ra.pts, A, a.k, true);
+        const wA = orient(widthsOf(ra), A, a.k, true);
+        const vA = orient(looksOf(ra), A, a.k, true);
+        const pB = orient(rb.pts, B, b.k, false);
+        const wB = orient(widthsOf(rb), B, b.k, false);
+        const vB = orient(looksOf(rb), B, b.k, false);
+        const w0 = wA[wA.length - 1];
+        const w1 = wB[0];
+        const wide = w0 >= w1 ? vA[vA.length - 1] : vB[0];
+        // taper across the bend and 2.5 tiles on into the narrower side
+        const pts = [...pA, ...bend, ...pB];
+        const ws: number[] = [...wA];
+        const vs: (0 | 1)[] = [...vA];
+        const bendLen = bend.length * 0.25 + 0.5;
+        const taperLen = bendLen + 2.5;
+        const smooth = (x: number) => x * x * (3 - 2 * x);
+        bend.forEach((_, i2) => {
+          const t = ((i2 + 1) * 0.25) / taperLen;
+          ws.push(w0 + (w1 - w0) * smooth(Math.min(1, t)));
+          vs.push(wide);
+        });
+        let along = bendLen;
+        pB.forEach((_, i2) => {
+          if (i2 > 0) along += Math.hypot(pB[i2].x - pB[i2 - 1].x, pB[i2].y - pB[i2 - 1].y);
+          const t = Math.min(1, along / taperLen);
+          ws.push(t < 1 ? w0 + (w1 - w0) * smooth(t) : wB[i2]);
+          // the wider road's look until the taper is done, then the road's own
+          vs.push(t < 1 ? wide : vB[i2]);
+        });
+        const merged: Road = {
+          pts,
+          width: Math.min(...ws),
+          // (variant 1 if either part is a country road: its utility poles carry on)
+          variant: ra.variant === 1 || rb.variant === 1 ? 1 : 0,
+          taper: { w: ws, v: vs },
+        };
+        roads[A.r] = merged;
+        roads.splice(B.r, 1);
+        done = true;
       }
-      if (!free) continue;
-      // roads crossing the bend would make it a junction: leave those to the lane graph
-      const crosses = roads.some((r, ri) => ri !== A.r && ri !== B.r && !r.ring && r.pts.some((p) => pts.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 0.8)));
-      if (crosses) continue;
-      used.add(`${A.r}:${A.at}`);
-      used.add(`${B.r}:${B.at}`);
-      const ra = roads[A.r];
-      const rb = roads[B.r];
-      add.push({ pts, width: Math.min(ra.width, rb.width), variant: ra.variant === rb.variant ? ra.variant : 1 });
-      cuts.push({ e: A, k: a.k }, { e: B, k: b.k });
-    }
-  for (const { e, k } of cuts) {
-    const r = roads[e.r];
-    r.pts = e.at ? r.pts.slice(0, r.pts.length - k) : r.pts.slice(k);
+    if (!done) break;
   }
-  roads.push(...add);
 }
 
 /**
@@ -224,7 +265,7 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
   for (const lot of lots) for (let i = 1; i < lot.access.length; i++) capsule(lot.access[i - 1], lot.access[i], 0.45);
 
   // cut the road ribbons back at the roundabouts (the ring is its own road piece); drop the stubs past dead-end circles
-  const cut = <T extends { pts: V2[] }>(list: T[], paved: boolean) => {
+  const cut = <T extends { pts: V2[]; taper?: Road["taper"] }>(list: T[], paved: boolean) => {
     const loops = net.loops.filter((lp) => lp.paved === paved && !(paved && net.lines[net.nodes[lp.node].arms[0].line].painted));
     if (!loops.length) return;
     const out: T[] = [];
@@ -260,7 +301,7 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
           const q = end === 0 ? pts[Math.min(pts.length - 1, 3)] : pts[Math.max(0, pts.length - 4)];
           if ((q.x - lp.x) * kx + (q.y - lp.y) * ky < 0) keep = false;
         }
-        if (keep) out.push({ ...r, pts });
+        if (keep) out.push({ ...r, pts, ...(r.taper ? { taper: { w: r.taper.w.slice(i0, i), v: r.taper.v.slice(i0, i) } } : {}) });
       }
     }
     list.length = 0;

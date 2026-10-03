@@ -50,6 +50,8 @@ const _rn = new THREE.Vector3(0, 1, 0);
  * cut back to just inside the ring (clearance.ts), which sits a hair above them.
  */
 export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Road[]) {
+  // joined roads: one welded ribbon with the width tapering, the look switching on a shared row
+  for (const r of roads) if (r.taper && !r.painted) taperedRibbon(rb, m, r);
   const net = netForRoads(roads);
   if (!net) return;
   for (const lp of net.loops) {
@@ -121,6 +123,55 @@ export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Ro
       rows.push(row);
     }
     for (let i = 0; i < ni; i++) for (let k = 0; k < nk; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
+  }
+}
+
+/** The road ribbon of scenery.ts, with a width and look per point (Road.taper). */
+function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
+  const t = r.taper!;
+  const n = r.pts.length;
+  const across = [-1, -0.5, 0, 0.5, 1];
+  const D = Math.SQRT1_2;
+  const ends = m.bridges.flatMap((br) => {
+    const h = br.length / 2;
+    return [
+      { x: br.x - h * D, y: br.y + h * D },
+      { x: br.x + h * D, y: br.y - h * D },
+    ];
+  });
+  let s = 0;
+  let prev: number[] | null = null;
+  for (let i = 0; i < n; i++) {
+    const p = r.pts[i];
+    if (i > 0) s += Math.hypot(p.x - r.pts[i - 1].x, p.y - r.pts[i - 1].y);
+    const a = r.pts[Math.max(0, i - 1)];
+    const c = r.pts[Math.min(n - 1, i + 1)];
+    const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+    const nx = -(c.y - a.y) / L;
+    const ny = (c.x - a.x) / L;
+    let lift = 0;
+    for (const e of ends) {
+      const d = Math.hypot(p.x - e.x, p.y - e.y);
+      if (d < 2.2) lift = Math.max(lift, 1 - d / 2.2);
+    }
+    const w = t.w[i] ?? r.width;
+    const row = (variant: number) => {
+      const u0 = variant === 0 ? 0.005 : 0.505;
+      return across.map((o) => {
+        const x = p.x + nx * o * (w / 2);
+        const z = p.y + ny * o * (w / 2);
+        const g = surfaceHeight(m, x, z);
+        const h = Math.max(g + 0.03, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) : -9);
+        _rv.set(x, h, z);
+        return rb.vert(_rv, _rn, u0 + 0.49 * ((o + 1) / 2), s / 6, 1);
+      });
+    };
+    const v = t.v[i] ?? r.variant;
+    const vPrev = i > 0 ? (t.v[i - 1] ?? r.variant) : v;
+    // the look switches on a shared row: the old look's row closes the last quad, the new one starts the next
+    const cur = row(vPrev);
+    if (prev) for (let k = 0; k < across.length - 1; k++) rb.quad(prev[k], cur[k], prev[k + 1], cur[k + 1]);
+    prev = v !== vPrev ? row(v) : cur;
   }
 }
 

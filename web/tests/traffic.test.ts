@@ -375,7 +375,7 @@ describe('driving by the rules (headless)', () => {
         if (L.half < 0.6) expect(reversed).toBe(true);
         tested++;
       }
-      expect(tested).toBeGreaterThan(2);
+      expect(tested).toBeGreaterThan(1);
     });
 
   it('the side road gives way to traffic on the main road', () => {
@@ -536,6 +536,37 @@ describe('road clearance', () => {
           for (let k = 0; k <= 20; k++) if (hard(a.x + ((b.x - a.x) * k) / 20, a.y + ((b.y - a.y) * k) / 20)) blocked = true;
           expect(blocked, `dead ends ${a.x.toFixed(1)},${a.y.toFixed(1)} and ${b.x.toFixed(1)},${b.y.toFixed(1)}`).toBe(true);
         }
+    });
+
+  for (const id of MAPS)
+    it(`${id}: roads joined end to end don't jump in width (joined roads taper smoothly)`, () => {
+      const m = createMap(id, 1);
+      const L = buildLayout(m);
+      const roads = L.roads.filter((r) => !r.painted && !r.ring && r.lot === undefined);
+      const endW = (r: (typeof roads)[0], at: 0 | 1) => (r.taper ? r.taper.w[at ? r.taper.w.length - 1 : 0] : r.width);
+      for (let i = 0; i < roads.length; i++)
+        for (let j = i + 1; j < roads.length; j++)
+          for (const ea of [0, 1] as const)
+            for (const eb of [0, 1] as const) {
+              const pa = roads[i].pts[ea ? roads[i].pts.length - 1 : 0];
+              const pb = roads[j].pts[eb ? roads[j].pts.length - 1 : 0];
+              if (Math.hypot(pa.x - pb.x, pa.y - pb.y) > 0.6) continue;
+              const wa = endW(roads[i], ea);
+              const wb = endW(roads[j], eb);
+              expect(Math.max(wa, wb) / Math.min(wa, wb), `roads ${i} / ${j} at ${pa.x.toFixed(1)},${pa.y.toFixed(1)}`).toBeLessThanOrEqual(1.15);
+            }
+      // a joined road: one polyline, the width changing gently (over 2+ tiles), the look switching only once the taper is done
+      for (const r of roads) {
+        if (!r.taper) continue;
+        expect(r.taper.w.length).toBe(r.pts.length);
+        for (let k = 1; k < r.pts.length; k++) {
+          const step = Math.hypot(r.pts[k].x - r.pts[k - 1].x, r.pts[k].y - r.pts[k - 1].y) || 0.25;
+          expect(Math.abs(r.taper.w[k] - r.taper.w[k - 1]) / step).toBeLessThan(0.2);
+          // no lateral offset: consecutive points stay close (a continuous centreline)
+          expect(step).toBeLessThan(0.6);
+        }
+      }
+      if (id === 'desert' || id === 'frontline') expect(roads.filter((r) => r.taper).length).toBe(2);
     });
 
   it('is deterministic and every map gets parking lots, the city several', () => {

@@ -27,6 +27,8 @@ export interface Road {
   ring?: boolean;
   /** Access lane of parking lot #lot (ambient/sites.ts). */
   lot?: number;
+  /** Two roads joined into one (ambient/clearance.ts): width and look per point (drawn by roadfurniture.ts). */
+  taper?: { w: number[]; v: (0 | 1)[] };
 }
 
 export interface Track {

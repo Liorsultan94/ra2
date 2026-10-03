@@ -101,7 +101,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     return [V(br.x - h * Math.SQRT1_2, 0, br.y + h * Math.SQRT1_2), V(br.x + h * Math.SQRT1_2, 0, br.y - h * Math.SQRT1_2)];
   });
   for (const r of layout.roads) {
-    if (r.painted) continue; // city streets: drawn by the ground shader
+    if (r.painted || r.taper) continue; // city streets: drawn by the ground shader; joined roads: ambient/roadfurniture.ts
     const n = r.pts.length;
     const across = [-1, -0.5, 0, 0.5, 1];
     const u0 = r.variant === 0 ? 0.005 : 0.505;
