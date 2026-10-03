@@ -32,7 +32,6 @@ export const PHOTO_MATERIALS: Record<string, PhotoMaterial> = {
   meadow: { tiles: 2.4, regular: false, mean: [0.1176, 0.1486, 0.0321], hex: 0x606c32, rough: 0.86 },
   withered: { tiles: 2.4, regular: false, mean: [0.3879, 0.2784, 0.1854], hex: 0xa79077, rough: 0.808 },
   litter: { tiles: 2.6, regular: false, mean: [0.2441, 0.1495, 0.0491], hex: 0x876c3f, rough: 0.933 },
-  dirt: { tiles: 2.6, regular: false, mean: [0.1198, 0.0816, 0.0468], hex: 0x61513d, rough: 0.944 },
   drysoil: { tiles: 2.8, regular: false, mean: [0.2356, 0.1387, 0.065], hex: 0x856848, rough: 0.812 },
   gravel: { tiles: 2.2, regular: false, mean: [0.2477, 0.186, 0.1263], hex: 0x887764, rough: 0.82 },
   mossrock: { tiles: 5, regular: false, mean: [0.1555, 0.11, 0.0468], hex: 0x6e5d3d, rough: 0.817 },
@@ -52,9 +51,9 @@ export const PHOTO_MATERIALS: Record<string, PhotoMaterial> = {
 };
 
 export const PHOTO_STACKS: Record<'temperate' | 'desert' | 'winter' | 'urban', PhotoStack> = {
-  temperate: { layers: ["meadow","dirt","mossrock","beach","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1340216,1024: 4856604} },
+  temperate: { layers: ["meadow","drysoil","mossrock","beach","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1362360,1024: 4955164} },
   desert: { layers: ["withered","drysoil","sandstone","dunes","cracked","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,gravel: 5,soil: 6,forest: 1,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1112392,1024: 3963898} },
-  winter: { layers: ["withered","dirt","snowrock","snow","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1289062,1024: 4810664} },
+  winter: { layers: ["withered","drysoil","snowrock","snow","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1311206,1024: 4909224} },
   urban: { layers: ["meadow","pavement","greyrock","rubble","mud","gravel","asphalt","flags"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,gravel: 5,asphalt: 6,paving: 7,forest: 1,soil: 1,snow: 3}, bytes: {512: 979256,1024: 3707832} },
 };
 

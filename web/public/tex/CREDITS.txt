@@ -9,7 +9,6 @@ Ground materials (public/tex/terrain/):
   meadow     acg:Grass004               https://ambientcg.com/view?id=Grass004  (CC0)
   withered   ph:withered_grass          https://polyhaven.com/a/withered_grass  (CC0)
   litter     ph:forest_leaves_02        https://polyhaven.com/a/forest_leaves_02  (CC0)
-  dirt       ph:dirt                    https://polyhaven.com/a/dirt  (CC0)
   drysoil    ph:dry_ground_rocks        https://polyhaven.com/a/dry_ground_rocks  (CC0)
   gravel     ph:rocky_trail             https://polyhaven.com/a/rocky_trail  (CC0)
   mossrock   ph:aerial_rocks_02         https://polyhaven.com/a/aerial_rocks_02  (CC0)

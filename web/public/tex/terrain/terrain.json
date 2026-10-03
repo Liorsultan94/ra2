@@ -98,36 +98,10 @@
     }
    }
   },
-  "dirt": {
-   "src": "ph:dirt",
-   "page": "https://polyhaven.com/a/dirt",
-   "note": "bare soil, tracks",
-   "tiles": 2.6,
-   "regular": false,
-   "mean": [
-    0.1198,
-    0.0816,
-    0.0468
-   ],
-   "meanHex": "#61513d",
-   "rough": 0.944,
-   "sizes": {
-    "512": {
-     "bytes": 145752,
-     "seam": 1.19,
-     "healed": false
-    },
-    "1024": {
-     "bytes": 579346,
-     "seam": 1.17,
-     "healed": false
-    }
-   }
-  },
   "drysoil": {
    "src": "ph:dry_ground_rocks",
    "page": "https://polyhaven.com/a/dry_ground_rocks",
-   "note": "dry stony soil (desert)",
+   "note": "bare stony soil, tracks",
    "tiles": 2.8,
    "regular": false,
    "mean": [
@@ -545,7 +519,7 @@
   "temperate": {
    "layers": [
     "meadow",
-    "dirt",
+    "drysoil",
     "mossrock",
     "beach",
     "mud",
@@ -567,8 +541,8 @@
     "paving": 1
    },
    "bytes": {
-    "512": 1340216,
-    "1024": 4856604
+    "512": 1362360,
+    "1024": 4955164
    }
   },
   "desert": {
@@ -602,7 +576,7 @@
   "winter": {
    "layers": [
     "withered",
-    "dirt",
+    "drysoil",
     "snowrock",
     "snow",
     "mud",
@@ -624,8 +598,8 @@
     "paving": 1
    },
    "bytes": {
-    "512": 1289062,
-    "1024": 4810664
+    "512": 1311206,
+    "1024": 4909224
    }
   },
   "urban": {
