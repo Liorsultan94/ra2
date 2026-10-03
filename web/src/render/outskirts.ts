@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { groundHeight, type GameMap } from '../sim/map';
+import { groundHeight, type GameMap, WATER_LEVEL } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
@@ -497,6 +497,8 @@ export class Outskirts {
         if (landmarkClear(this.map, ox, oy, 0.8)) continue; // a landmark site / the railway (landmarks/plan.ts)
         const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
         const hy = this.height(ox, oy);
+        // no trees standing in the river / canal / lake running on past the map edge
+        if (hy < WATER_LEVEL + 0.1 || this.height(ox + 0.6, oy) < WATER_LEVEL || this.height(ox - 0.6, oy) < WATER_LEVEL || this.height(ox, oy + 0.6) < WATER_LEVEL || this.height(ox, oy - 0.6) < WATER_LEVEL) continue;
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
         // the map's leaf tints, a little deeper (haze lifts them with distance)
