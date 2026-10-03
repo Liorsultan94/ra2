@@ -153,6 +153,12 @@
     font-size: 14px;
   }
 }
+/* advanced HUD: centre the hint banner in the space left of the clock + view buttons row (~300 px) */
+.game-root:not(.simple-ui) .view-wrap .hint {
+  left: calc((100% - 300px) / 2);
+  max-width: min(560px, calc(100% - 330px));
+}
+
 /* portrait phones: the hint banner moves below the clock so they never overlap */
 @media (orientation: portrait) and (max-width: 600px) {
   .simple-ui .hint {

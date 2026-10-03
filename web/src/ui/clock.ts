@@ -67,7 +67,7 @@ export class HudClock {
   /** Refresh (cheap: re-reads the source a few times per second, touches the DOM only on a change). */
   update(dt: number, src: ClockSource | null | undefined) {
     this.acc += dt;
-    if (!src || this.acc < 0.2) return;
+    if (!src || this.acc < 0.1) return;
     this.acc = 0;
     const c = src.clock();
     this.state = c;

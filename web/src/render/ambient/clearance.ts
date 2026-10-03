@@ -123,9 +123,26 @@ function widenToDecks(m: GameMap, roads: Road[]) {
     if (r.painted || r.ring || r.lot !== undefined || r.pts.length < 4) continue;
     for (const at of [0, 1] as const) {
       const p = r.pts[at ? r.pts.length - 1 : 0];
-      if (!ends.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 0.8)) continue;
-      const w = r.taper?.w ?? r.pts.map(() => r.width);
-      const v = r.taper?.v ?? r.pts.map(() => r.variant);
+      const e = ends.find((e2) => Math.hypot(e2.x - p.x, e2.y - p.y) < 2.4);
+      if (!e) continue;
+      let w = r.taper?.w ?? r.pts.map(() => r.width);
+      let v = r.taper?.v ?? r.pts.map(() => r.variant);
+      // a road stopping short of the deck runs on up to it (no strip of bare ground before the bridge)
+      const gap = Math.hypot(e.x - p.x, e.y - p.y);
+      const q = r.pts[at ? r.pts.length - 3 : 2];
+      const ahead = ((p.x - q.x) * (e.x - p.x) + (p.y - q.y) * (e.y - p.y)) / ((Math.hypot(p.x - q.x, p.y - q.y) || 1) * (gap || 1));
+      if (gap > 0.1 && ahead > 0.8) {
+        const ext = dense(p, e).slice(1);
+        if (at) {
+          r.pts = [...r.pts, ...ext];
+          w = [...w, ...ext.map(() => w[w.length - 1])];
+          v = [...v, ...ext.map(() => v[v.length - 1])];
+        } else {
+          r.pts = [...ext.reverse(), ...r.pts];
+          w = [...ext.map(() => w[0]), ...w];
+          v = [...ext.map(() => v[0]), ...v];
+        }
+      }
       const smooth = (x: number) => x * x * (3 - 2 * x);
       let along = 0;
       for (let k = 0; k < r.pts.length; k++) {
