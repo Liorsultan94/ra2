@@ -153,6 +153,9 @@ interface Chart {
   w: number;
   h: number;
   rot: boolean;
+  /** Density scale (hidden / downward charts get fewer texels) and "too small: neutral texel" flag. */
+  k: number;
+  tiny: boolean;
   /** Procedural detail: 0 none, 1 armour panels (camo), 2 painted fitting, 3 metal. */
   style: number;
   seam: number;
@@ -305,7 +308,7 @@ function analyse(s: Src, si: number, charts: Chart[]): SrcData {
     }
     let area = 0;
     for (const t of tris) area += AR[t];
-    charts.push({ src: si, tris, U, V, N, u0: 0, v0: 0, u1: 0, v1: 0, area, x: 0, y: 0, w: 0, h: 0, rot: false, style: 0, seam: 0, bolts: 0, seed: 0 });
+    charts.push({ src: si, tris, U, V, N, u0: 0, v0: 0, u1: 0, v1: 0, area, x: 0, y: 0, w: 0, h: 0, rot: false, k: 1, tiny: false, style: 0, seam: 0, bolts: 0, seed: 0 });
   }
   // chart coordinates per vertex
   const CU = new Float32Array(nv * 2);
@@ -366,22 +369,28 @@ function styleCharts(charts: Chart[], srcs: Src[]) {
   }
 }
 
-/** Shelf packing (rects rotated to lie flat); returns false if it does not fit. */
+/** Shelf packing (rects rotated to lie flat); charts under ~2 texels are left out (tiny: neutral texel). */
 function pack(charts: Chart[], S: number, D: number, gut: number): boolean {
-  for (const ch of charts) {
-    let w = Math.max(1, Math.ceil((ch.u1 - ch.u0) * D)) + gut * 2;
-    let h = Math.max(1, Math.ceil((ch.v1 - ch.v0) * D)) + gut * 2;
+  const live: number[] = [];
+  charts.forEach((ch, i) => {
+    const L = (ch.u1 - ch.u0) * D * ch.k;
+    const H = (ch.v1 - ch.v0) * D * ch.k;
+    ch.tiny = Math.max(L, H) < 2.2;
+    if (ch.tiny) return;
+    let w = Math.max(1, Math.ceil(L)) + gut * 2;
+    let h = Math.max(1, Math.ceil(H)) + gut * 2;
     ch.rot = h > w;
     if (ch.rot) [w, h] = [h, w];
     ch.w = w;
     ch.h = h;
-  }
-  const idx = charts.map((_, i) => i).sort((a, b) => charts[b].h - charts[a].h || charts[b].w - charts[a].w);
+    live.push(i);
+  });
+  live.sort((a, b) => charts[b].h - charts[a].h || charts[b].w - charts[a].w);
   // texel block 0..5 x 0..5 is the neutral (unbaked parts) block
   let x = 6;
   let y = 0;
   let shelf = 6;
-  for (const i of idx) {
+  for (const i of live) {
     const ch = charts[i];
     if (ch.w > S) return false;
     if (x + ch.w > S) {
@@ -396,6 +405,18 @@ function pack(charts: Chart[], S: number, D: number, gut: number): boolean {
     shelf = Math.max(shelf, ch.h);
   }
   return true;
+}
+
+/** Largest density (texels / unit) whose packing fits an S x S atlas. */
+function fit(charts: Chart[], S: number, gut: number): number {
+  let area = 0;
+  for (const ch of charts) area += Math.max(ch.u1 - ch.u0, 0.002) * Math.max(ch.v1 - ch.v0, 0.002) * ch.k * ch.k;
+  let D = Math.min(1600, Math.sqrt((0.66 * S * S) / Math.max(1e-6, area)));
+  for (let it = 0; it < 40; it++) {
+    if (pack(charts, S, D, gut)) return D;
+    D *= 0.95;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------- shaders
@@ -463,6 +484,8 @@ in vec4 aSt;
 in vec3 aBary;
 in vec3 aAlt;
 in vec3 aEdge;
+in float aK;
+out float vK;
 out vec3 vP;
 out vec3 vN;
 out vec2 vC;
@@ -480,6 +503,7 @@ void main() {
   vBary = aBary;
   vAlt = aAlt;
   vEdge = aEdge;
+  vK = aK;
   gl_Position = vec4(uv1 * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
@@ -491,7 +515,7 @@ uniform sampler2D uDepth;
 uniform vec3 uC;
 uniform float uR;
 uniform float uT;
-uniform float uD;
+in float vK;
 in vec3 vP;
 in vec3 vN;
 in vec2 vC;
@@ -598,7 +622,7 @@ void main() {
   for (int k = 0; k < 3; k++) {
     float e = vEdge[k];
     float dk = dist[k];
-    vec2 gd = vec2(dFdx(dk), dFdy(dk)) * uD; // d(dist)/d(world) along atlas x / y
+    vec2 gd = vec2(dFdx(dk), dFdy(dk)) * vK; // d(dist)/d(world) along atlas x / y
     if (e > 0.0) {
       edge = max(edge, e * (1.0 - smoothstep(0.0015, 0.0055, dk)));
       // bevel: height rises from the edge over 6 mm
@@ -614,14 +638,14 @@ void main() {
   // ---------------- procedural detail -> slope via central differences in chart space
   float cav;
   float cav2;
-  float eps = 0.35 / uD;
+  float eps = 0.35 / vK;
   float h0 = detailH(vC, cav);
   float hu = detailH(vC + vec2(eps, 0.0), cav2) - detailH(vC - vec2(eps, 0.0), cav2);
   float hv = detailH(vC + vec2(0.0, eps), cav2) - detailH(vC - vec2(0.0, eps), cav2);
   vec2 gC = vec2(hu, hv) / (2.0 * eps);
   // chart coords -> atlas axes (charts may be rotated in the atlas)
-  vec2 dcx = dFdx(vC) * uD;
-  vec2 dcy = dFdy(vC) * uD;
+  vec2 dcx = dFdx(vC) * vK;
+  vec2 dcy = dFdy(vC) * vK;
   vec2 gA = vec2(dot(gC, dcx), dot(gC, dcy)) + gB;
   vec3 nm = normalize(vec3(-gA, 1.0));
   ao *= 1.0 - 0.55 * cav;
@@ -662,7 +686,7 @@ void main() {
 const N_DIRS = 64;
 const TILE = 256;
 
-function bakeGeometry(s: Src, d: SrcData, charts: Chart[], uv1: Float32Array): THREE.BufferGeometry {
+function bakeGeometry(s: Src, d: SrcData, charts: Chart[], uv1: Float32Array, D: number): THREE.BufferGeometry {
   const g = s.mesh.geometry;
   const nv = g.attributes.position.count;
   const nt = Math.floor(nv / 3);
@@ -680,6 +704,7 @@ function bakeGeometry(s: Src, d: SrcData, charts: Chart[], uv1: Float32Array): T
   const aBary = new Float32Array(nv * 3);
   const aAlt = new Float32Array(nv * 3);
   const aEdge = new Float32Array(nv * 3);
+  const aK = new Float32Array(nv);
   for (let t = 0; t < nt; t++) {
     const ch = charts[d.C[t]] ?? null;
     _a.fromArray(d.P, t * 9);
@@ -693,6 +718,7 @@ function bakeGeometry(s: Src, d: SrcData, charts: Chart[], uv1: Float32Array): T
     const alt = [A2 / Math.max(1e-9, la), A2 / Math.max(1e-9, lb), A2 / Math.max(1e-9, lc)];
     for (let k = 0; k < 3; k++) {
       const i = t * 3 + k;
+      aK[i] = D * (ch ? ch.k : 1);
       if (ch) {
         aCh.set([ch.u0, ch.v0, ch.u1, ch.v1], i * 4);
         aSt.set([ch.style, ch.seed, ch.seam, ch.bolts], i * 4);
@@ -712,6 +738,7 @@ function bakeGeometry(s: Src, d: SrcData, charts: Chart[], uv1: Float32Array): T
   bg.setAttribute('aBary', new THREE.BufferAttribute(aBary, 3));
   bg.setAttribute('aAlt', new THREE.BufferAttribute(aAlt, 3));
   bg.setAttribute('aEdge', new THREE.BufferAttribute(aEdge, 3));
+  bg.setAttribute('aK', new THREE.BufferAttribute(aK, 1));
   return bg;
 }
 
@@ -720,86 +747,11 @@ function neutralUV(S: number) {
   return [3 / S, 3 / S];
 }
 
-/**
- * Bake the template under `root` (charts + uv1 on the meshes + the atlas). Returns null when baking is
- * unavailable (no WebGL, e.g. unit tests); the caller keeps the plain tiling materials then.
- */
-export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | null {
-  if (!enabled) return null;
-  const S = atlasSize;
-  const ck = key + '|' + S;
-  const srcs = collect(root);
-  const hit = cache.get(ck);
-  if (hit && hit.uvs.length === srcs.length && srcs.every((s, i) => s.mesh.geometry.attributes.position.count * 2 === hit.uvs[i].length)) {
-    srcs.forEach((s, i) => s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(hit.uvs[i], 2)));
-    return hit.res;
-  }
-  const r = renderer();
-  if (!r) return null;
-  const t0 = performance.now();
-  // ---- charts (wheel shapes: once per geometry)
-  const charts: Chart[] = [];
-  const data: (SrcData | null)[] = [];
-  const seenGeo = new Map<THREE.BufferGeometry, number>();
-  srcs.forEach((s, si) => {
-    if (!s.group || seenGeo.has(s.mesh.geometry)) {
-      data.push(null);
-      return;
-    }
-    seenGeo.set(s.mesh.geometry, si);
-    data.push(analyse(s, si, charts));
-  });
-  styleCharts(charts, srcs);
-  let area = 0;
-  for (const ch of charts) area += Math.max(ch.u1 - ch.u0, 0.002) * Math.max(ch.v1 - ch.v0, 0.002);
-  const gut = 2;
-  let D = Math.min(1400, Math.sqrt((0.6 * S * S) / Math.max(1e-6, area)));
-  let ok = false;
-  for (let it = 0; it < 30 && !ok; it++) {
-    ok = pack(charts, S, D, gut);
-    if (!ok) D *= 0.93;
-  }
-  if (!ok) return null;
-  // ---- uv1 per vertex
-  const [nu, nvv] = neutralUV(S);
-  const uvs: Float32Array[] = [];
-  const bakeGeos: { g: THREE.BufferGeometry; group: string }[] = [];
-  srcs.forEach((s, si) => {
-    const g = s.mesh.geometry;
-    const nv = g.attributes.position.count;
-    let uv: Float32Array = new Float32Array(nv * 2);
-    const d = data[si];
-    if (!s.group) {
-      for (let i = 0; i < nv; i++) {
-        uv[i * 2] = nu;
-        uv[i * 2 + 1] = nvv;
-      }
-    } else if (!d) {
-      // shared geometry already charted
-      const prev = seenGeo.get(g)!;
-      uv = uvs[prev];
-    } else {
-      for (let i = 0; i < nv; i++) {
-        const ch = charts[d.C[Math.floor(i / 3)]];
-        if (!ch) {
-          uv[i * 2] = nu;
-          uv[i * 2 + 1] = nvv;
-          continue;
-        }
-        const cu = (d.CU[i * 2] - ch.u0) * D;
-        const cv = (d.CU[i * 2 + 1] - ch.v0) * D;
-        const px = ch.x + gut + (ch.rot ? cv : cu);
-        const py = ch.y + gut + (ch.rot ? cu : cv);
-        uv[i * 2] = px / S;
-        uv[i * 2 + 1] = py / S;
-      }
-      bakeGeos.push({ g: bakeGeometry(s, d, charts, uv), group: s.group });
-    }
-    uvs.push(uv);
-    g.setAttribute('uv1', new THREE.BufferAttribute(uv, 2));
-  });
-  // ---- occluders per group
-  const occ = new Map<string, { g: THREE.BufferGeometry; m: THREE.Matrix4 }[]>();
+type Occ = Map<string, { g: THREE.BufferGeometry; m: THREE.Matrix4 }[]>;
+
+/** Occluder lists per rigid group (see the header comment). */
+function occluders(root: THREE.Object3D): Occ {
+  const occ: Occ = new Map();
   const add = (grp: string, g: THREE.BufferGeometry, m: THREE.Matrix4) => {
     let l = occ.get(grp);
     if (!l) occ.set(grp, (l = []));
@@ -821,7 +773,7 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
         turObj = q;
       }
     }
-    const mat = mesh.material as THREE.Material & { emissiveIntensity?: number };
+    const mat = mesh.material as THREE.Material;
     if (skip || Array.isArray(mesh.material) || mat.transparent) return;
     const inst = mesh as THREE.InstancedMesh;
     if (inst.isInstancedMesh) {
@@ -850,10 +802,43 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     const hw = Math.min(tb.box.max.z - tb.piv.z, tb.piv.z - tb.box.min.z);
     const rad = Math.max(0.05, hw * 0.92);
     const h = Math.max(0.02, (tb.box.max.y - tb.piv.y) * 0.75);
-    const cyl = new THREE.CylinderGeometry(rad, rad, h, 24);
-    add('hull', cyl, new THREE.Matrix4().makeTranslation(tb.piv.x, tb.piv.y + h / 2, tb.piv.z));
+    add('hull', new THREE.CylinderGeometry(rad, rad, h, 24), new THREE.Matrix4().makeTranslation(tb.piv.x, tb.piv.y + h / 2, tb.piv.z));
   }
-  // ---- GPU passes
+  return occ;
+}
+
+/** uv1 for every source + the bake geometries of the charted ones, for a packing at density D. */
+function layout(srcs: Src[], data: (SrcData | null)[], seenGeo: Map<THREE.BufferGeometry, number>, charts: Chart[], S: number, D: number, gut: number) {
+  const [nu, nvv] = neutralUV(S);
+  const uvs: Float32Array[] = [];
+  const geos: { g: THREE.BufferGeometry; group: string }[] = [];
+  srcs.forEach((s, si) => {
+    const nv = s.mesh.geometry.attributes.position.count;
+    let uv: Float32Array = new Float32Array(nv * 2);
+    const d = data[si];
+    if (s.group && !d) uv = uvs[seenGeo.get(s.mesh.geometry)!];
+    else
+      for (let i = 0; i < nv; i++) {
+        const ch = d ? charts[d.C[Math.floor(i / 3)]] : null;
+        if (!ch || ch.tiny) {
+          uv[i * 2] = nu;
+          uv[i * 2 + 1] = nvv;
+          continue;
+        }
+        const k = D * ch.k;
+        const cu = (d!.CU[i * 2] - ch.u0) * k;
+        const cv = (d!.CU[i * 2 + 1] - ch.v0) * k;
+        uv[i * 2] = (ch.x + gut + (ch.rot ? cv : cu)) / S;
+        uv[i * 2 + 1] = (ch.y + gut + (ch.rot ? cu : cv)) / S;
+      }
+    if (d) geos.push({ g: bakeGeometry(s, d, charts, uv, D), group: s.group });
+    uvs.push(uv);
+  });
+  return { uvs, geos };
+}
+
+/** GPU passes: depth tiles per group, atlas rasterisation, optional gutter dilation; returns RGBA8 pixels. */
+function runGPU(r: THREE.WebGLRenderer, S: number, geos: { g: THREE.BufferGeometry; group: string }[], occ: Occ, dilate: number): Uint8Array {
   const prev = {
     rt: r.getRenderTarget(),
     vp: r.getViewport(new THREE.Vector4()),
@@ -864,9 +849,10 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     ac: r.autoClear,
   };
   const T = Math.ceil(Math.sqrt(N_DIRS));
-  const depthRT = new THREE.WebGLRenderTarget(T * TILE, T * TILE, { depthBuffer: true, stencilBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-  const atlasRT = new THREE.WebGLRenderTarget(S, S, { depthBuffer: false, stencilBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-  const pingRT = atlasRT.clone();
+  const opt = { depthBuffer: false, stencilBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter };
+  const depthRT = new THREE.WebGLRenderTarget(T * TILE, T * TILE, { ...opt, depthBuffer: true });
+  const atlasRT = new THREE.WebGLRenderTarget(S, S, opt);
+  const pingRT = dilate > 0 ? new THREE.WebGLRenderTarget(S, S, opt) : null;
   const cam = new THREE.OrthographicCamera();
   const depthMat = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
@@ -879,37 +865,39 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     glslVersion: THREE.GLSL3,
     vertexShader: ATLAS_VS,
     fragmentShader: ATLAS_FS,
-    uniforms: { uN: { value: N_DIRS }, uDepth: { value: depthRT.texture }, uC: { value: new THREE.Vector3() }, uR: { value: 1 }, uT: { value: T }, uD: { value: D } },
+    uniforms: { uN: { value: N_DIRS }, uDepth: { value: depthRT.texture }, uC: { value: new THREE.Vector3() }, uR: { value: 1 }, uT: { value: T } },
     side: THREE.DoubleSide,
     depthTest: false,
     depthWrite: false,
   });
+  const quadG = new THREE.BufferGeometry();
+  quadG.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+  const dil = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: QUAD_VS, fragmentShader: DILATE_FS, uniforms: { uT: { value: null }, uPx: { value: new THREE.Vector2(1 / S, 1 / S) } }, depthTest: false, depthWrite: false });
   const scene = new THREE.Scene();
   scene.matrixWorldAutoUpdate = false;
-  let res: BakeResult | null = null;
+  const px = new Uint8Array(S * S * 4);
   try {
     r.autoClear = false;
     r.setClearColor(0x000000, 0);
     r.setRenderTarget(atlasRT);
     r.clear(true, false, false);
-    const groups = new Set(bakeGeos.map((b) => b.group));
+    const groups = new Set(geos.map((b) => b.group));
     for (const grp of groups) {
       const list = occ.get(grp) ?? [];
-      // bounding sphere of the group's occluders
       const bb = new THREE.Box3();
       for (const e of list) {
         if (!e.g.boundingBox) e.g.computeBoundingBox();
         bb.union(e.g.boundingBox!.clone().applyMatrix4(e.m));
       }
-      for (const b of bakeGeos) if (b.group === grp) {
-        b.g.computeBoundingBox();
-        bb.union(b.g.boundingBox!);
-      }
+      for (const b of geos)
+        if (b.group === grp) {
+          b.g.computeBoundingBox();
+          bb.union(b.g.boundingBox!);
+        }
       const C = bb.getCenter(new THREE.Vector3());
       const R = Math.max(0.01, bb.getSize(new THREE.Vector3()).length() / 2) * 1.02;
       depthMat.uniforms.uC.value.copy(C);
       depthMat.uniforms.uR.value = R;
-      // depth tiles
       scene.clear();
       for (const e of list) {
         const m = new THREE.Mesh(e.g, depthMat);
@@ -932,11 +920,10 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
         depthMat.uniforms.uI.value = i;
         r.render(scene, cam);
       }
-      // atlas texels of this group
       scene.clear();
       atlasMat.uniforms.uC.value.copy(C);
       atlasMat.uniforms.uR.value = R;
-      for (const b of bakeGeos) {
+      for (const b of geos) {
         if (b.group !== grp) continue;
         const m = new THREE.Mesh(b.g, atlasMat);
         m.matrixAutoUpdate = false;
@@ -946,41 +933,121 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
       r.setRenderTarget(atlasRT);
       r.render(scene, cam);
     }
-    // gutters
-    const quadG = new THREE.BufferGeometry();
-    quadG.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
-    const dil = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: QUAD_VS, fragmentShader: DILATE_FS, uniforms: { uT: { value: null }, uPx: { value: new THREE.Vector2(1 / S, 1 / S) } }, depthTest: false, depthWrite: false });
-    const quad = new THREE.Mesh(quadG, dil);
-    quad.frustumCulled = false;
-    scene.clear();
-    scene.add(quad);
     let src = atlasRT;
-    let dst = pingRT;
-    for (let k = 0; k < 4; k++) {
-      dil.uniforms.uT.value = src.texture;
-      r.setRenderTarget(dst);
-      r.render(scene, cam);
-      [src, dst] = [dst, src];
+    if (pingRT) {
+      const quad = new THREE.Mesh(quadG, dil);
+      quad.frustumCulled = false;
+      scene.clear();
+      scene.add(quad);
+      let dst = pingRT;
+      for (let k = 0; k < dilate; k++) {
+        dil.uniforms.uT.value = src.texture;
+        r.setRenderTarget(dst);
+        r.render(scene, cam);
+        [src, dst] = [dst, src];
+      }
     }
-    const px = new Uint8Array(S * S * 4);
     r.readRenderTargetPixels(src, 0, 0, S, S, px);
-    // neutral block: flat, lightly occluded, no wear
-    for (let y = 0; y < 6; y++)
-      for (let x = 0; x < 6; x++) {
-        const i = (y * S + x) * 4;
-        px[i] = 128;
-        px[i + 1] = 128;
-        px[i + 2] = 215;
-        px[i + 3] = 0;
+  } finally {
+    depthRT.dispose();
+    atlasRT.dispose();
+    pingRT?.dispose();
+    depthMat.dispose();
+    atlasMat.dispose();
+    dil.dispose();
+    quadG.dispose();
+    r.setRenderTarget(prev.rt);
+    r.setViewport(prev.vp);
+    r.setScissor(prev.sc);
+    r.setScissorTest(prev.st);
+    r.setClearColor(prev.cc, prev.ca);
+    r.autoClear = prev.ac;
+  }
+  return px;
+}
+
+/**
+ * Bake the template under `root` (charts + uv1 on the meshes + the atlas). Returns null when baking is
+ * unavailable (no WebGL, e.g. unit tests); the caller keeps the plain tiling materials then.
+ */
+export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | null {
+  if (!enabled) return null;
+  const S = atlasSize;
+  const ck = key + '|' + S;
+  const srcs = collect(root);
+  const hit = cache.get(ck);
+  if (hit && hit.uvs.length === srcs.length && srcs.every((s, i) => s.mesh.geometry.attributes.position.count * 2 === hit.uvs[i].length)) {
+    srcs.forEach((s, i) => s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(hit.uvs[i], 2)));
+    return hit.res;
+  }
+  const r = renderer();
+  if (!r) return null;
+  const t0 = performance.now();
+  // ---- charts (shared shapes, e.g. one road wheel geometry for all wheels: charted once)
+  const charts: Chart[] = [];
+  const data: (SrcData | null)[] = [];
+  const seenGeo = new Map<THREE.BufferGeometry, number>();
+  srcs.forEach((s, si) => {
+    if (!s.group || seenGeo.has(s.mesh.geometry)) {
+      data.push(null);
+      return;
+    }
+    seenGeo.set(s.mesh.geometry, si);
+    data.push(analyse(s, si, charts));
+  });
+  styleCharts(charts, srcs);
+  const occ = occluders(root);
+  const gut = 2;
+  let res: BakeResult | null = null;
+  let uvs: Float32Array[] = [];
+  const dispose = (geos: { g: THREE.BufferGeometry }[]) => geos.forEach((b) => b.g.dispose());
+  try {
+    // ---- visibility pre-pass (quarter size): charts that are hidden (behind skirts, under the hull) or face
+    // the ground get a fraction of the texel density in the final atlas
+    const P = Math.max(128, S >> 2);
+    const D0 = fit(charts, P, 1);
+    if (D0 > 0) {
+      const pre = layout(srcs, data, seenGeo, charts, P, D0, 1);
+      let px: Uint8Array;
+      try {
+        px = runGPU(r, P, pre.geos, occ, 0);
+      } finally {
+        dispose(pre.geos);
       }
-    // still-empty texels (outside every gutter): flat normal
-    for (let i = 0; i < S * S * 4; i += 4)
-      if (px[i] + px[i + 1] < 2) {
-        px[i] = 128;
-        px[i + 1] = 128;
-        px[i + 2] = 200;
-        px[i + 3] = 0;
+      for (const ch of charts) {
+        let k = ch.N.y < -0.6 ? 0.35 : 1;
+        if (!ch.tiny) {
+          let sum = 0;
+          let n = 0;
+          for (let y = ch.y + 1; y < ch.y + ch.h - 1; y++)
+            for (let x = ch.x + 1; x < ch.x + ch.w - 1; x++) {
+              const i = (y * P + x) * 4;
+              if (px[i] + px[i + 1] < 2) continue;
+              sum += px[i + 2];
+              n++;
+            }
+          if (n > 0) {
+            const ao = sum / n / 255;
+            k = Math.min(k, ao < 0.06 ? 0.1 : ao < 0.14 ? 0.25 : ao < 0.28 ? 0.6 : 1);
+          }
+        }
+        ch.k = k;
       }
+    }
+    // ---- final atlas
+    const D = fit(charts, S, gut);
+    if (!(D > 0)) return null;
+    const fin = layout(srcs, data, seenGeo, charts, S, D, gut);
+    uvs = fin.uvs;
+    let px: Uint8Array;
+    try {
+      px = runGPU(r, S, fin.geos, occ, 4);
+    } finally {
+      dispose(fin.geos);
+    }
+    // neutral block: flat, lightly occluded, no wear; still-empty texels: flat
+    for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++) px.set([128, 128, 215, 0], (y * S + x) * 4);
+    for (let i = 0; i < S * S * 4; i += 4) if (px[i] + px[i + 1] < 2) px.set([128, 128, 200, 0], i);
     const tex = new THREE.DataTexture(px, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
     tex.colorSpace = THREE.NoColorSpace;
     tex.generateMipmaps = true;
@@ -990,30 +1057,13 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     tex.anisotropy = 4;
     tex.channel = 1;
     tex.needsUpdate = true;
-    dil.dispose();
-    quadG.dispose();
-    res = { tex, size: S, density: D, charts: charts.length, ms: Math.round(performance.now() - t0) };
+    res = { tex, size: S, density: D, charts: charts.filter((c) => !c.tiny).length, ms: Math.round(performance.now() - t0) };
   } catch (e) {
     console.warn('vehicle bake failed', e);
     res = null;
-  } finally {
-    depthRT.dispose();
-    atlasRT.dispose();
-    pingRT.dispose();
-    depthMat.dispose();
-    atlasMat.dispose();
-    for (const b of bakeGeos) b.g.dispose();
-    r.setRenderTarget(prev.rt);
-    r.setViewport(prev.vp);
-    r.setScissor(prev.sc);
-    r.setScissorTest(prev.st);
-    r.setClearColor(prev.cc, prev.ca);
-    r.autoClear = prev.ac;
   }
-  if (!res) {
-    for (const s of srcs) s.mesh.geometry.deleteAttribute('uv1');
-    return null;
-  }
+  if (!res) return null;
+  srcs.forEach((s, i) => s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(uvs[i], 2)));
   cache.set(ck, { res, uvs });
   return res;
 }

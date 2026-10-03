@@ -34,6 +34,8 @@ export interface NetLine {
   paved: boolean;
   /** City street painted by the ground shader. */
   painted: boolean;
+  /** Road look: 0 highway, 1 country road (tracks: 1). */
+  variant: number;
   /** World bridge index for a deck crossing, -1 otherwise. */
   bridge: number;
   /** Endpoint at the map edge (cars leave / enter there). */
@@ -191,6 +193,8 @@ export interface RoadNet {
   loops: Loop[];
   signals: Signal[];
   marks: Mark[];
+  /** Short links from a road / track end that stops short of the road it joins (drawn as road / track pieces). */
+  links: { x0: number; y0: number; x1: number; y1: number; half: number; paved: boolean; variant: number; joinHalf: number }[];
   props: Prop[];
   /** Drivable surface raster, `res` cells per tile: 1 road / track / turning place / junction. */
   surface: Uint8Array;
@@ -200,8 +204,8 @@ export interface RoadNet {
 export interface NetInput {
   w: number;
   h: number;
-  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean }[];
-  tracks: readonly { pts: V2[]; width: number }[];
+  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean }[];
+  tracks: readonly { pts: V2[]; width: number; ring?: boolean }[];
   bridges: readonly { ends: readonly V2[] }[];
   /** Tile (tx, ty) can't take a turning place (water, rock, trees, structures, ore, base areas, off map). */
   hard: (tx: number, ty: number) => boolean;
@@ -410,6 +414,21 @@ export function loopGapFree(loop: number, entry: number, rl: number, cars: reado
 const SIGNAL_CYCLE = signalCycle();
 
 export function netInput(m: GameMap, layout: Layout, bridges: readonly { ends: readonly V2[] }[]): NetInput {
+  return netInputFrom(m, layout.roads, layout.tracks, bridges);
+}
+
+/** Deck ends of the map's bridges (as the sim computes them). */
+export function bridgeEnds(m: GameMap): { ends: V2[] }[] {
+  const D = Math.SQRT1_2;
+  return m.bridges.map((b) => ({
+    ends: [
+      { x: b.x - (b.length / 2) * D, y: b.y + (b.length / 2) * D },
+      { x: b.x + (b.length / 2) * D, y: b.y - (b.length / 2) * D },
+    ],
+  }));
+}
+
+export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetInput['tracks'], bridges: readonly { ends: readonly V2[] }[]): NetInput {
   const W = m.w;
   const H = m.h;
   const urban = m.biome === 'urban';
@@ -417,8 +436,8 @@ export function netInput(m: GameMap, layout: Layout, bridges: readonly { ends: r
   return {
     w: W,
     h: H,
-    roads: layout.roads,
-    tracks: layout.tracks,
+    roads,
+    tracks,
     bridges,
     structures: m.structures,
     urban,
@@ -481,7 +500,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
   const { w: W, h: H } = inp;
   const lines: NetLine[] = [];
   const edgeP = (p: V2) => p.x < 1.6 || p.y < 1.6 || p.x > W - 1.6 || p.y > H - 1.6;
-  const add = (raw: V2[], lane: number, half: number, paved: boolean, painted: boolean, bridge: number) => {
+  const add = (raw: V2[], lane: number, half: number, paved: boolean, painted: boolean, bridge: number, variant = 1) => {
     if (raw.length < 2) return;
     const pts = unspike(raw);
     const cum = cumulative(pts);
@@ -505,6 +524,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       half,
       paved,
       painted,
+      variant,
       bridge,
       portal: [edgeP(pts[0]), edgeP(pts[pts.length - 1])],
       stops: [],
@@ -518,14 +538,16 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     });
   };
   for (const r of inp.roads) {
+    if (r.ring) continue; // turning-circle rings drawn as road pieces: not lanes
     const painted = !!r.painted;
     // city avenues: two lanes a side, cars keep to the right one; streets: one lane a side
     const lane = painted ? (r.variant === 0 ? 0.9 : 0.6) : r.width * (r.variant === 0 ? 0.24 : 0.22);
-    add(r.pts, lane, painted ? 1.22 : r.width / 2, true, painted, -1);
+    add(r.pts, lane, painted ? 1.22 : r.width / 2, true, painted, -1, r.variant);
   }
   // the city's "tracks" are park footpaths: no cars there
   if (!inp.urban)
     for (const t of inp.tracks) {
+      if (t.ring) continue;
       let run: V2[] = [];
       for (const p of t.pts) {
         if (inp.clip?.(p.x, p.y)) {
@@ -547,7 +569,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     const pts: V2[] = [];
     const n = Math.max(2, Math.ceil(Math.hypot(c.x - a.x, c.y - a.y) / 0.25));
     for (let i = 0; i <= n; i++) pts.push({ x: a.x + ((c.x - a.x) * i) / n, y: a.y + ((c.y - a.y) * i) / n });
-    add(pts, la.lane, Math.max(la.half, 0.5), true, la.painted, bi);
+    add(pts, la.lane, Math.max(la.half, 0.5), true, la.painted, bi, la.variant);
   });
   const nL = lines.length;
 
@@ -1028,6 +1050,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
         }
     }
   }
+  const links: RoadNet['links'] = [];
   const capsule = (ax: number, ay: number, bx: number, by: number, r: number) => {
     const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.1));
     for (let k = 0; k <= n; k++) disc(ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n, r, 1);
@@ -1058,13 +1081,15 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       }
       if (d < 0.2 || d > 3) continue;
       capsule(p.x, p.y, qx, qy, L.half);
-      marks.push({ kind: L.paved ? MarkKind.Asphalt : MarkKind.Gravel2, x: (p.x + qx) / 2, y: (p.y + qy) / 2, ang: Math.atan2(qy - p.y, qx - p.x), len: d + 0.25, wid: L.half * 2 });
+      let jh = 0.3;
+      for (const b of n.arms) if (b.line !== a.line) jh = Math.max(jh, lines[b.line].half);
+      links.push({ x0: p.x, y0: p.y, x1: qx, y1: qy, half: L.half, paved: L.paved, variant: L.variant, joinHalf: jh });
     }
   }
   for (const lp of loops) disc(lp.x, lp.y, lp.R, 1);
   for (const lp of loops) if (lp.ri > 0) disc(lp.x, lp.y, lp.ri, 0);
 
-  return { w: W, h: H, lines, nodes, loops, signals, marks, props, surface, res };
+  return { w: W, h: H, lines, nodes, loops, signals, marks, links, props, surface, res };
 }
 
 /** Is (x, y) on the drivable surface (road, track, turning place, junction)? */

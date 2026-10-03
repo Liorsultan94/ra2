@@ -7,6 +7,7 @@ import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numbe
 import type { AnimState, Model, ModelStyle } from './types';
 import { armourMod, armourModPlain, unitLook, vehCamo } from './unittex';
 import { bakeVehicle, type BakeResult } from './vehbake';
+import { registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -85,6 +86,19 @@ const _v = new THREE.Vector3();
 const _s = new THREE.Vector3();
 function TR(x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
   return new THREE.Matrix4().compose(_v.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
+}
+
+/** Index subset (first n vertices) of a non-indexed geometry, sharing its attribute buffers. */
+function subGeo(g: THREE.BufferGeometry, n: number): THREE.BufferGeometry {
+  const s = new THREE.BufferGeometry();
+  for (const k of Object.keys(g.attributes)) s.setAttribute(k, g.attributes[k]);
+  const idx = n > 65535 ? new Uint32Array(n) : new Uint16Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  s.setIndex(new THREE.BufferAttribute(idx, 1));
+  if (!g.boundingSphere) g.computeBoundingSphere();
+  s.boundingSphere = g.boundingSphere;
+  s.boundingBox = g.boundingBox;
+  return s;
 }
 
 // --------------------------------------------------------- raw geometries
@@ -422,6 +436,22 @@ class Acc {
     }
     return this;
   }
+  /**
+   * Detail level of what is added next (null = automatic by size): 0 = every LOD, 1 = LOD0 + LOD1
+   * (dropped far out), 2 = hero LOD0 only (close zoom, portrait, photo mode).
+   */
+  lv: number | null = null;
+  /** Run fn with an explicit detail level for everything it adds. */
+  at(level: number, fn: () => void): this {
+    const save = this.lv;
+    this.lv = level;
+    try {
+      fn();
+    } finally {
+      this.lv = save;
+    }
+    return this;
+  }
   add(geo: THREE.BufferGeometry, paint: number, m?: THREE.Matrix4): this {
     let g = geo.index ? geo.toNonIndexed() : geo;
     if (g === geo) g = geo.clone();
@@ -432,6 +462,11 @@ class Acc {
     if (m) g.applyMatrix4(m);
     worldUV(g, paint === CAMO ? 1.1 : 2);
     const key = bucketOf(paint);
+    // LOD level: small parts drop out with distance (team colour and lamps never do)
+    g.computeBoundingSphere();
+    const rad = g.boundingSphere!.radius;
+    const auto = rad < 0.0055 ? 2 : rad < 0.011 ? 1 : 0;
+    g.userData.lv = (key !== 'D' && key !== 'M' && key !== 's' + CAMO) || paint === this.teamHex ? 0 : this.lv ?? auto;
     if (key === 'D' || key === 'M') {
       const c = paint === GLASS ? K.glassC : paint >= MT ? paint - MT : paint;
       _col.setHex(c);
@@ -478,10 +513,21 @@ class Acc {
       }
     }
   }
+  /** Merge a bucket, coarse parts first: userData.lodN = vertex counts of the LOD2 and LOD1 prefixes. */
   merged(key: string): THREE.BufferGeometry | null {
     const list = this.buckets.get(key);
     if (!list || !list.length) return null;
-    return list.length === 1 ? list[0] : mergeGeometries(list, false);
+    const lvOf = (g: THREE.BufferGeometry) => (g.userData.lv as number | undefined) ?? 0;
+    const sorted = list.slice().sort((a, b) => lvOf(a) - lvOf(b));
+    const n = [0, 0];
+    for (const g of sorted) {
+      const c = g.attributes.position.count;
+      if (lvOf(g) <= 0) n[0] += c;
+      if (lvOf(g) <= 1) n[1] += c;
+    }
+    const out = sorted.length === 1 ? sorted[0] : mergeGeometries(sorted, false);
+    out.userData = { lodN: n };
+    return out;
   }
 }
 
@@ -573,7 +619,7 @@ interface Tpl {
   bob: number;
   /** Hull rock per main-gun shot (0 = none, 1 = 120 mm MBT, ~1.4 = SPH, ~0.25 = autocannon). */
   kick: number;
-  stats: { tris: number; meshes: number };
+  stats: { tris: number; meshes: number; lod?: number[] };
   key: string;
   decals: DecalSpec | null;
   fx: NonNullable<Model['damageFx']>;
@@ -910,6 +956,7 @@ class Bld {
     const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');
     F.g.scale.setScalar(CREW_K); // RTS exaggeration: readable at play zoom
     const figure = (Q: Part, glass: boolean) => {
+      Q.lv = 1; // the whole figure stays up to LOD1 and leaves together
       // torso in the hatch well, shoulders, collar of the vest
       Q.add(gCylY(0.021, 0.019, 0.07, 9), uni, TR(0, -0.022, 0));
       Q.cbox(0.032, 0.02, 0.056, 0.007, 0, 0.018, 0, uni);
@@ -1077,6 +1124,25 @@ class Bld {
         });
       }
     }
+    // LOD1 / LOD2: index subsets of the merged buffers (shared attributes, incl. the baked uv1)
+    let lodTris = [0, 0, 0];
+    this.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const g = m.geometry;
+      const total = g.attributes.position.count;
+      const n = g.userData.lodN as number[] | undefined;
+      const k = (m as THREE.InstancedMesh).isInstancedMesh ? (m as THREE.InstancedMesh).count : 1;
+      let cnt = [total, total, total];
+      if (n && (n[0] < total || n[1] < total)) {
+        const g1 = n[1] < total ? subGeo(g, n[1]) : g;
+        const g2 = n[0] < n[1] ? subGeo(g, n[0]) : g1;
+        registerLods(g, [g1, g2]);
+        cnt = [total, n[1], n[0]];
+      }
+      for (let i = 0; i < 3; i++) lodTris[i] += (cnt[i] / 3) * k;
+    });
+    lodTris = lodTris.map(Math.round);
     const ray = new Probe(this.root, skip);
     return {
       root: this.root,
@@ -1090,7 +1156,7 @@ class Bld {
       custom: this.custom,
       bob: this.bob,
       kick: this.kick || (this.mi > 0 ? 0.18 : 0),
-      stats: { tris: Math.round(tris), meshes },
+      stats: { tris: Math.round(tris), meshes, lod: lodTris },
       key: '',
       decals: this.layoutDecals(ray),
       fx: this.damagePoints(ray, box),
@@ -2286,8 +2352,8 @@ function beacon(b: Bld, p: Part, x: number, y: number, z: number, paint = AMBER)
 }
 
 /** Stats for the preview harness. */
-export function vehicleStats(): Record<string, { tris: number; meshes: number }> {
-  const out: Record<string, { tris: number; meshes: number }> = {};
+export function vehicleStats(): Record<string, { tris: number; meshes: number; lod?: number[] }> {
+  const out: Record<string, { tris: number; meshes: number; lod?: number[] }> = {};
   for (const [k, t] of templates) out[k] = t.stats;
   return out;
 }

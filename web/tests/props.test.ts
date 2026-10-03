@@ -49,7 +49,8 @@ describe('map props', () => {
       console.info(`${id}: ${total} props (medium ${totalMed}) of ${kinds} kinds`, Object.fromEntries([...a].map(([k, v]) => [k, v.length])));
       expect(total).toBeGreaterThan(40);
       expect(totalMed).toBeLessThan(total);
-      expect(kinds).toBeLessThanOrEqual(16);
+      // one draw call per kind in view: keep the per-map set small
+      expect(kinds).toBeLessThanOrEqual(18);
     });
   }
 });

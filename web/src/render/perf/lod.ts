@@ -25,7 +25,29 @@ export interface LodInfo {
   /** Casters currently switched on (off while the model and its shadow are off screen). */
   castOn: boolean;
   kind: 'infantry' | 'vehicle' | 'aircraft' | 'building';
+  /** Meshes with geometry LODs: [LOD0, LOD1, LOD2] geometries. */
+  swaps: { m: THREE.Mesh; g: THREE.BufferGeometry[] }[];
+  /** Current geometry LOD (0 hero .. 2 far). */
+  level: number;
 }
+
+/**
+ * Vehicle geometry LODs (models/vehicles.ts): a template's merged buffers are sorted coarse-first and
+ * LOD1 / LOD2 are index subsets sharing the same attributes, registered here by base geometry.
+ *  - LOD0 (hero: close zoom, portrait, photo mode): everything;
+ *  - LOD1 (battle zoom): without the smallest fittings (bolts, handles, periscope glass ...), the baked
+ *    normal / AO atlas keeps the surface detail;
+ *  - LOD2 (far): silhouette parts only.
+ */
+const LODS = new WeakMap<THREE.BufferGeometry, THREE.BufferGeometry[]>();
+export function registerLods(base: THREE.BufferGeometry, lods: [THREE.BufferGeometry, THREE.BufferGeometry]) {
+  LODS.set(base, lods);
+}
+/** [LOD1, LOD2] geometries of a base geometry (null: none). */
+export const lodGeos = (g: THREE.BufferGeometry) => LODS.get(g) ?? null;
+/** Model diameter on screen (CSS px) above which LOD0 is used / below which LOD2 (hysteresis applied). */
+export const VEH_LOD0_PX = 360;
+export const VEH_LOD2_PX = 95;
 
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
@@ -35,10 +57,13 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
   const tc = _c.setHex(team);
   root.updateMatrixWorld(true);
   const meshes: { m: THREE.Mesh; r: number }[] = [];
+  const swaps: LodInfo['swaps'] = [];
   let big = 0;
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh || !m.geometry) return;
+    const l = LODS.get(m.geometry);
+    if (l) swaps.push({ m, g: [m.geometry, l[0], l[1]] });
     const g = m.geometry;
     if (!g.boundingSphere) g.computeBoundingSphere();
     m.getWorldScale(_s);
@@ -65,7 +90,7 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
     detail.push(m);
   }
   const casters = meshes.filter((x) => x.m.castShadow).map((x) => x.m);
-  return { detail, radius: big, hidden: false, casters, castOn: true, kind };
+  return { detail, radius: big, hidden: false, casters, castOn: true, kind, swaps, level: 0 };
 }
 
 /**
@@ -74,11 +99,22 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
  */
 export function applyLod(info: LodInfo, pxPerUnit: number) {
   const px = pxPerUnit * info.radius * 2;
+  if (info.swaps.length) {
+    const cur = info.level;
+    const lv = cur === 0 ? (px < VEH_LOD0_PX * 0.88 ? (px < VEH_LOD2_PX ? 2 : 1) : 0) : cur === 1 ? (px > VEH_LOD0_PX ? 0 : px < VEH_LOD2_PX ? 2 : 1) : px > VEH_LOD2_PX * 1.15 ? (px > VEH_LOD0_PX ? 0 : 1) : 2;
+    if (lv !== cur) setGeoLod(info, lv);
+  }
   // buildings: drop the detail meshes once a tile is only ~20 px across (strategic zoom)
   const hide = info.kind === 'building' ? (info.hidden ? pxPerUnit < 26 : pxPerUnit < 21) : info.hidden ? px < 30 : px < 24;
   if (hide === info.hidden || !info.detail.length) return;
   info.hidden = hide;
   for (const m of info.detail) setHidden(m, HIDE_LOD, hide);
+}
+
+/** Switch a model to geometry LOD lv (0 hero .. 2 far). */
+export function setGeoLod(info: LodInfo, lv: number) {
+  info.level = lv;
+  for (const e of info.swaps) e.m.geometry = e.g[lv];
 }
 
 /** Reasons a mesh is kept off layer 0 (main view + shadow pass); it is drawn again once none is left. */

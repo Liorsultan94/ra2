@@ -138,6 +138,8 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
           for (let j = 0; j < B.length; j += 4) if (Math.abs(A[i].x - B[j].x) < 0.6 && Math.abs(A[i].y - B[j].y) < 0.6) junctions.push(A[i]);
       }
     }
+  // clearance around junctions (traffic lights, roundabouts); city crossings are compact
+  const junctionR = biome === 'urban' ? 2.4 : 3;
   const streets = layout.fields.filter((f) => f.type === FieldType.Avenue || f.type === FieldType.Street || f.type === FieldType.Crossing);
   for (const f of layout.fields) if (f.type === FieldType.Crossing) junctions.push({ x: f.cx, y: f.cy });
   const onStreet = (x: number, z: number, r: number) => {
@@ -201,7 +203,7 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
     }
     for (const mm of m.oreMines) if (Math.hypot(x - mm.x - 0.5, z - mm.y - 0.5) < 4.6) return false;
     for (const zn of zones) if (x > zn.x0 - r && x < zn.x1 + r && z > zn.z0 - r && z < zn.z1 + r) return false;
-    for (const j of junctions) if (Math.hypot(x - j.x, z - j.y) < 3 + r) return false;
+    for (const j of junctions) if (Math.hypot(x - j.x, z - j.y) < junctionR + r) return false;
     if (streets.length && onStreet(x, z, r)) return false;
     if (near(avoidPts, x, z, r)) return false;
     for (const b of m.bridges) if (Math.hypot(x - b.x, z - b.y) < b.length / 2 + 0.9) return false;
@@ -547,7 +549,12 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
         [{ x: p.x0 + inset, y: p.y1 - inset }, { x: p.x0 + inset, y: p.y0 + inset }, { x: 1, y: 0 }],
       ];
       // lamps in the corners
-      for (const [a] of edges) put('lamp', a.x, a.y, Math.atan2(cx - a.x, cz - a.y) - Math.PI / 2, { field: true });
+      for (const [a] of edges) {
+        // pulled in from the corner (the crossings' traffic lights stand just outside)
+        const lx = a.x + Math.sign(cx - a.x) * 0.45;
+        const lz = a.y + Math.sign(cz - a.y) * 0.45;
+        put('lamp', lx, lz, Math.atan2(cx - lx, cz - lz) - Math.PI / 2, { field: true });
+      }
       edges.forEach(([a, b, n], ei) => {
         const L = Math.hypot(b.x - a.x, b.y - a.y);
         const ux = (b.x - a.x) / L;
