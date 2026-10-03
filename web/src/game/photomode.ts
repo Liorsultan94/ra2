@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { formatClock, uToHour } from '../render/atmos';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { groundHeight } from '../sim/map';
 import { BASE_VIEW, type GameRenderer, type ViewHook } from '../render/renderer';
@@ -639,7 +640,7 @@ export class PhotoMode {
         [0.95, 'Morning'],
         [1.01, 'Noon'],
       ];
-      return names.find(([lim]) => u < lim)![1];
+      return `${names.find(([lim]) => u < lim)![1]} · ${formatClock(uToHour(u))}`;
     };
     const todV = ui.querySelector<HTMLElement>('.ph-todv')!;
     todV.textContent = todLabel(phase);

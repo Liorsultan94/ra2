@@ -172,8 +172,8 @@ export class WeatherCycle {
       }
       if (kind === 'showers' && this.opts.cold && clim !== 'desert' && r() < 0.5) kind = 'flurries';
       if (!last) {
-        // the first front always brings something down
-        if (kind === 'overcast') kind = FIRST[clim];
+        // the first front always brings something down (in the desert: dust)
+        if (kind === 'overcast' || clim === 'desert') kind = FIRST[clim];
         // ... and outside the desert it is a wet (or snowy) one
         if (kind === 'dust' && clim !== 'desert') kind = 'rain';
       }
@@ -181,7 +181,7 @@ export class WeatherCycle {
       if (kind === 'dust' && clim !== 'desert' && last?.kind === 'dust') kind = 'rain';
       const e: WxEvent = {
         kind,
-        fall: kind === 'dust' ? 'sandstorm' : kind === 'flurries' || kind === 'snowfall' ? 'snow' : 'rain',
+        fall: kind === 'dust' ? 'sandstorm' : kind === 'flurries' || kind === 'snowfall' || (kind === 'overcast' && clim === 'winter') ? 'snow' : 'rain',
         start,
         build: 60 + r() * 50,
         ramp: 30 + r() * 60,

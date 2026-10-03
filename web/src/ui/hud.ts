@@ -12,6 +12,7 @@ import { canRank } from '../sim/veterancy';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
+import { HudClock } from './clock';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -131,6 +132,8 @@ export class Hud {
   /** Where the control-group strip and the order bar dock in the simple scheme. */
   moreSlots!: { groups: HTMLElement; orders: HTMLElement };
   private viewCtrl!: HTMLElement;
+  /** Live day clock (top right of the view; clock.ts). */
+  readonly clock: HudClock;
   private toolsRow!: HTMLElement;
   private cmdKey = '';
   private selHtml = '';
@@ -173,6 +176,9 @@ export class Hud {
     };
     rot(-1, 'Rotate view left (Q)', 'rotL');
     rot(1, 'Rotate view right (E)', 'rotR');
+    // the live day clock leads the view buttons row (simple HUD: alone in the corner, see setSimple)
+    this.clock = new HudClock(vc);
+    vc.prepend(this.clock.el);
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -239,6 +245,8 @@ export class Hud {
     // rotate / thermal buttons live in the More panel; support powers ride in the quick bar
     if (on) this.moreView.appendChild(this.viewCtrl);
     else this.viewWrap.appendChild(this.viewCtrl);
+    if (on) this.viewWrap.appendChild(this.clock.el);
+    else this.viewCtrl.prepend(this.clock.el);
     for (const b of [...this.toolsRow.querySelectorAll<HTMLElement>('.support-btn'), ...this.qbPowers.querySelectorAll<HTMLElement>('.support-btn')]) {
       (on ? this.qbPowers : this.toolsRow).appendChild(b);
     }
@@ -511,6 +519,7 @@ export class Hud {
     }
     this.updateSelection();
     this.support.update();
+    this.clock.update(dt, this.renderer?.atmos);
     this.superweapons.update();
   }
 
