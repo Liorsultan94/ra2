@@ -8,8 +8,11 @@ import type { FogOfWar } from '../fog';
 import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
+import { roadNetFor } from './clearance';
+import { People } from './people';
 import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
+import { queueHeadlights } from '../fx/nightlife';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
 
@@ -53,6 +56,8 @@ export class AmbientLife {
   readonly birds: Birds;
   /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
   readonly river: RiverLife;
+  /** Pedestrians: walkers, market, kids at play, evacuation (people.ts). */
+  readonly people: People;
   // (car lights, indicators and the traffic-light glow)
   private lights = new LightSprites(320, 48);
   private dangers: Danger[] = [];
@@ -79,11 +84,13 @@ export class AmbientLife {
     this.dynamicWx = host.atmos.cfg.weather === 'dynamic';
     const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
     this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone, world.players.map((p) => p.faction));
-    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone);
+    this.people = new People(map, terrain.layout, world, roadNetFor(map, terrain.layout), fog, probe, quality, phone);
+    this.people.busy = this.busy;
+    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
     this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
-    this.group.add(this.traffic.group, this.animals.group, this.birds.group, this.river.group, this.lights.group);
+    this.group.add(this.traffic.group, this.people.group, this.animals.group, this.birds.group, this.river.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -122,6 +129,7 @@ export class AmbientLife {
       case 'death': {
         if (ev.kind === 'building') {
           this.danger(ev.x, ev.y, 10, 1.6, 1);
+          if (buildingDef(ev.def)?.role === 'civilian') this.people.houseDestroyed(ev.id);
           // traffic lights close by lose power / get damaged
           this.traffic.outage(ev.x, ev.y, buildingDef(ev.def)?.role === 'power');
         }
@@ -212,13 +220,17 @@ export class AmbientLife {
     f.vx1 = x1 + 3;
     f.vy1 = y1 + 3;
     this.traffic.update(f);
+    this.people.update(f);
     this.animals.update(f);
     this.birds.update(f);
     this.river.update(f);
     this.dangers.length = 0;
     this.lights.begin();
     this.traffic.draw(f, this.time);
-    this.animals.draw();
+    // headlight beams / cones on the road at night (fx/nightlife.ts -> NightLights, no extra draw calls)
+    queueHeadlights(this.traffic, this.host.atmos.night, f);
+    this.people.draw(f);
+    this.animals.draw(f);
     this.birds.draw();
     this.river.draw(f);
     this.lights.commit();
@@ -226,6 +238,6 @@ export class AmbientLife {
 
   /** Debug / tests: counts and car states. */
   stats() {
-    return { cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
+    return { people: this.people.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
   }
 }

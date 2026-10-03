@@ -167,6 +167,8 @@ const DOME_FRAG = /* glsl */ `
   uniform vec2 uSunXZ;
   uniform float uEnv;
   uniform float uGray;
+  uniform vec4 uMeteorA;
+  uniform vec4 uMeteorB;
   varying vec3 vDir;
   #ifdef HDRI
   ${HDRI_PARS}
@@ -210,6 +212,16 @@ const DOME_FRAG = /* glsl */ `
         float b = ( 1.0 - smoothstep( 0.0, 0.42, r ) ) * ( h - 0.985 ) * 66.0 * tw;
         col += vec3( 0.85, 0.9, 1.0 ) * b * 0.5 * uNight * ( 1.0 - over ) * smoothstep( 0.0, 0.25, up );
       }
+    }
+    // shooting star: a short bright streak whose head runs from uMeteorA.xyz to uMeteorB.xyz (w: brightness, progress)
+    if ( uMeteorA.w > 0.001 && up > 0.0 && uEnv < 0.5 ) {
+      vec3 mh = normalize( mix( uMeteorA.xyz, uMeteorB.xyz, uMeteorB.w ) );
+      vec3 mt = normalize( mix( uMeteorA.xyz, uMeteorB.xyz, max( 0.0, uMeteorB.w - 0.4 ) ) );
+      vec3 ms = mh - mt;
+      float mk = clamp( dot( d - mt, ms ) / max( 1e-7, dot( ms, ms ) ), 0.0, 1.0 );
+      float md = length( d - mt - ms * mk );
+      float mw = mix( 0.0006, 0.0016, mk );
+      col += vec3( 0.85, 0.92, 1.0 ) * exp( -md * md / ( mw * mw ) ) * mk * mk * uMeteorA.w * 3.0 * ( 1.0 - over );
     }
     // sun / moon discs (not in the environment capture)
     float cs = dot( d, uSun );
@@ -407,6 +419,8 @@ export class Sky {
         uSunXZ: { value: new THREE.Vector2(1, 0) },
         uEnv: { value: env ? 1 : 0 },
         uGray: { value: 0.05 },
+        uMeteorA: { value: new THREE.Vector4() },
+        uMeteorB: { value: new THREE.Vector4() },
         ...(hd ? hd.uniforms : {}),
       },
       vertexShader: DOME_VERT,
@@ -430,6 +444,7 @@ export class Sky {
    */
   update(dt: number, st: SkyState, sunCol: THREE.Color, ground: THREE.Color) {
     this.time += dt;
+    this.meteors(dt, st.night * (1 - smooth(0.45, 1, st.cover)));
     const night = st.night;
     // by night the moon lights the (much fainter) sky: same scattering model, different source
     const src = st.moon && night > 0.5 ? st.moon : st.sun;
@@ -488,6 +503,50 @@ export class Sky {
     fu.skySunXZ.value.copy(this.sunXZ);
     if (this.hdri?.update(st.sun, st.cover, night)) this.envKey.set(9, 9, 9);
     if (this.envCapture) this.captureEnv(light, st);
+  }
+
+  private meteorT = 0;
+  private meteorNext = 4;
+  private meteorDur = 0;
+
+  /** Now and then a shooting star on a clear night (uniforms only; purely visual randomness). */
+  private meteors(dt: number, clear: number) {
+    const a = this.mat.uniforms.uMeteorA.value as THREE.Vector4;
+    const b = this.mat.uniforms.uMeteorB.value as THREE.Vector4;
+    if (this.meteorDur > 0) {
+      this.meteorT += dt;
+      const k = this.meteorT / this.meteorDur;
+      if (k >= 1) {
+        this.meteorDur = 0;
+        a.w = 0;
+        this.meteorNext = 2.5 + Math.random() * 9;
+        return;
+      }
+      b.w = k;
+      a.w = Math.sin(Math.PI * Math.min(1, k * 1.15)) * (0.6 + 0.4 * clear);
+      return;
+    }
+    a.w = 0;
+    if (clear < 0.4) return;
+    this.meteorNext -= dt;
+    if (this.meteorNext > 0) return;
+    const az = Math.random() * Math.PI * 2;
+    const el = 0.45 + Math.random() * 0.7;
+    a.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az), 0);
+    // a 15-30 degree run across the sky, mostly sideways and a little down
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const run = 0.26 + Math.random() * 0.26;
+    const tx = -Math.sin(az) * side;
+    const tz = Math.cos(az) * side;
+    const dn = 0.3 + Math.random() * 0.5;
+    const ty = -dn * Math.cos(el);
+    b.set(a.x + (tx - dn * Math.sin(el) * Math.cos(az)) * run, a.y + ty * run, a.z + (tz - dn * Math.sin(el) * Math.sin(az)) * run, 0);
+    const L = Math.hypot(b.x, b.y, b.z) || 1;
+    b.x /= L;
+    b.y /= L;
+    b.z /= L;
+    this.meteorT = 0;
+    this.meteorDur = 0.45 + Math.random() * 0.5;
   }
 
   private captureEnv(light: THREE.Vector3, st: SkyState) {

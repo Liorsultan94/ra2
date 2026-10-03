@@ -8,6 +8,7 @@ import { Species } from './treekinds';
 import { grassRGB } from './grasstex';
 import { biomeLook, hexRGB, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
+import { landmarkClear } from './landmarks/plan';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
@@ -437,6 +438,7 @@ export class Outskirts {
           if (o < 4 || o > MARGIN - 8) continue;
           if ((x > w || y > h) && o < 10) continue;
           if (hash2(bx, by, 50) < 0.12) continue; // a park
+          if (landmarkClear(this.map, x, y, 2.2)) continue; // a landmark site (landmarks/plan.ts)
           const hh = 0.7 + hash2(bx, by, 80 + k) * (o > 20 ? 2.4 : 1.6);
           const sx = 2.6 + hash2(bx, by, 90 + k) * 1.4;
           const sz = 2.6 + hash2(bx, by, 95 + k) * 1.4;
@@ -492,6 +494,7 @@ export class Outskirts {
         const p = bk === 1 ? 0.012 : bk === 3 ? dense * 0.25 + 0.01 : dense * 0.85 + 0.035;
         if (hash2(k, 4, 5) > p) continue;
         if (o > MARGIN - 6) continue;
+        if (landmarkClear(this.map, ox, oy, 0.8)) continue; // a landmark site / the railway (landmarks/plan.ts)
         const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
         const hy = this.height(ox, oy);
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
@@ -540,3 +543,13 @@ export class Outskirts {
     }
   }
 }
+
+/** Ground height of the outskirts mesh's control points at (x, y) (landmarks/plan.ts stands its set pieces on it). */
+export function outskirtsHeight(m: GameMap, x: number, y: number): number {
+  const o = Object.create(Outskirts.prototype) as { map: GameMap; height(x: number, y: number): number };
+  o.map = m;
+  return o.height(x, y);
+}
+
+/** Outskirts mesh grid: origin and spacing (the mesh is linear between its control points). */
+export const OUTSKIRTS_GRID = { origin: -MARGIN, cell: CELL, margin: MARGIN };

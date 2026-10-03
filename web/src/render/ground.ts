@@ -261,6 +261,8 @@ export class Ground {
     mat.defines.TERR_DIRT_RELIEF = bc === 3 ? '0.0' : bc === 1 ? '0.06' : '0.1';
     // the winter ground paints its own snow (deeper, drifted, kept off roads and ruts)
     if (bc === 2) mat.defines.WX_SNOW_K = '0.0';
+    // the terrain paints its own puddles (below): no generic flat-surface puddles (wxuniforms.ts)
+    mat.defines.WX_NO_PUDDLE = 1;
     mat.customProgramCacheKey = () => 'terrain-splat-4-' + mat.defines!.TERR_POM + '-b' + bc + '-p' + mat.defines!.PHOTO + mat.defines!.PH_Q;
     this.material = mat;
 

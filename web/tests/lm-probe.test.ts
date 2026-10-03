@@ -1,16 +1,22 @@
 import { it } from 'vitest';
 import { createMap } from '../src/sim/maps';
 import { buildLayout } from '../src/render/layout';
-import { roadNetFor } from '../src/render/ambient/clearance';
 it('probe', () => {
-  for (const id of ['frontline', 'desert', 'winter', 'urban'] as const) {
-    const m = createMap(id, 1);
-    const n = roadNetFor(m, buildLayout(m));
-    const out: string[] = [];
-    n.lines.forEach((L, i) => {
-      for (const e of [0, 1]) if (L.portal[e]) { const p = e ? L.pts[L.pts.length - 1] : L.pts[0]; out.push(`L${i} paved=${L.paved} (${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
-    });
-    console.log(id, m.starts.map((s) => `${s.x},${s.y}`).join(' '), '\n ', out.join('\n  '));
-    console.log(' structures', m.structures.map((s) => `${s.kind}@${s.x},${s.y}`).join(' '));
+  const m = createMap('frontline', 1);
+  const L = buildLayout(m);
+  const rows: string[] = [];
+  for (let y = 0; y < 50; y++) {
+    let s = String(y).padStart(2) + ' ';
+    for (let x = 0; x < 14; x++) {
+      const i = y * m.w + x;
+      const t = m.tiles[i];
+      const R = L.occRes;
+      const o = L.occ[(y * R + 2) * m.w * R + x * R + 2];
+      s += m.trees[i] ? 'T' : t === 3 ? '~' : t === 4 ? '#' : o & 1 ? '=' : o & 2 ? '-' : m.blocked[i] ? 'B' : t === 1 ? ',' : '.';
+    }
+    rows.push(s);
   }
+  console.log(rows.join('\n'));
+  const r0 = L.roads.find((r) => r.pts[0].x < 1 || r.pts[r.pts.length - 1].x < 1)!;
+  console.log(r0.pts.slice(0, 40).filter((_, i) => i % 4 === 0).map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
 });

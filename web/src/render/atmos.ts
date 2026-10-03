@@ -16,6 +16,7 @@ import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
 import { WeatherCycle, type WxEventKind, type WxKind, type WxState } from './weathercycle';
 import { WX, WXM } from './wxuniforms';
+import { LivingWorld } from './fx/nature';
 import { biomeLook, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
@@ -539,6 +540,8 @@ export class Atmosphere {
   readonly weather: WeatherFx | null = null;
   readonly night: NightLights | null = null;
   readonly env: EnvDamage;
+  /** Living nature, the night life and the victory fireworks (render/fx/nature.ts). */
+  readonly living: LivingWorld;
   /** Drifting fog banks over the low ground (mist time of day, dawn in the cycle, dynamic weather). */
   readonly groundFog: GroundFog | null = null;
   /** Dynamic weather timeline (weather = 'dynamic'). */
@@ -610,6 +613,7 @@ export class Atmosphere {
     // environment destruction is always on (it only reacts to events)
     this.env = new EnvDamage(host.terrain, host.world.map, host.fog, host.effects, host.quality);
     host.scene.add(this.env.group);
+    this.living = new LivingWorld(this, host);
     // night vision is available everywhere (key N), the pass is only built on demand
     this.keyHandler = (e: KeyboardEvent) => {
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -982,6 +986,7 @@ export class Atmosphere {
   update(dt: number, time: number, visuals: VisualSource, target: THREE.Vector3, zoom: number, camera: THREE.Camera) {
     this.time = time;
     this.env.update(dt, visuals.values());
+    this.living.update(dt, time, target, zoom, camera);
     if (this.nvPass && this.nv) this.nvPass.uniforms.time.value = time;
     if (!this.active || !this.preset) return;
     const h = this.host;
@@ -998,7 +1003,7 @@ export class Atmosphere {
       WX.wxWet.value = st.wet;
       WX.wxRain.value = st.fall === 'rain' ? st.precip : 0;
       WX.wxDust.value = st.dust;
-      WX.wxSnow.value = Math.max(this.look.snowFloor, st.snow);
+      WX.wxSnow.value = Math.max(this.look.snowFloor, this.living.snow);
       // foliage sways faster in the wind (extra clock on top of the terrain's)
       this.swayExtra += dt * 1.8 * Math.max(0, st.wind - 0.2);
     }
@@ -1105,6 +1110,7 @@ export class Atmosphere {
       st.dust = w === 'sandstorm' ? 1 : 0;
     }
     sky.setFreeView(freeView, dt);
+    this.living.sky(keyDir, freeView);
     sky.update(dt, st, this.host.sun.color, this.host.hemi.groundColor);
     if (sky.env && this.host.scene.environment !== sky.env) {
       this.host.scene.environment = sky.env;
@@ -1152,11 +1158,13 @@ export class Atmosphere {
   /** A blast on the ground at tile (x, y): environment damage. `size` ~ blast profile size. */
   impact(x: number, y: number, size: number) {
     this.env.blast(x, y, size, this.time);
+    this.living.impact(x, y, size, this.time);
   }
 
   dispose() {
     if (this.keyHandler) window.removeEventListener('keydown', this.keyHandler);
     this.night?.dispose();
+    this.living.dispose();
     this.unhookWind?.();
     this.unhookWind = null;
     this.host.canvas.style.filter = '';

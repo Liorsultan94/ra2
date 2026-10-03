@@ -22,6 +22,7 @@ attribute vec4 aCard;   // anchor x, anchor z, size, height above the ground
 attribute vec4 aCard2;  // drift phase x / z (0..1), rotation, opacity
 uniform vec2 uDrift;
 uniform float uWrap;
+uniform float uDawn;
 varying vec2 vUv;
 varying vec3 vW;
 varying float vA;
@@ -29,7 +30,8 @@ varying float vCardY;
 void main() {
   vec2 rel = mod( uDrift + aCard2.xy * uWrap, uWrap ) - 0.5 * uWrap;
   vec2 e = abs( rel ) / ( 0.5 * uWrap );
-  vA = aCard2.w * ( 1.0 - smoothstep( 0.55, 1.0, e.x ) ) * ( 1.0 - smoothstep( 0.55, 1.0, e.y ) );
+  // negative opacity: the extra valley banks that only rise at dawn
+  vA = abs( aCard2.w ) * ( aCard2.w < 0.0 ? uDawn : 1.0 ) * ( 1.0 - smoothstep( 0.55, 1.0, e.x ) ) * ( 1.0 - smoothstep( 0.55, 1.0, e.y ) );
   float c = cos( aCard2.z );
   float s = sin( aCard2.z );
   vec2 q = position.xy * aCard.z;
@@ -46,6 +48,9 @@ uniform vec2 uHSize;
 uniform float uAmount;
 uniform float uFocus;
 uniform float uTimeF;
+uniform float uDawn;
+uniform vec3 uSunGlow;
+uniform vec3 uSunDir;
 varying vec2 vUv;
 varying vec3 vW;
 varying float vA;
@@ -68,7 +73,15 @@ void main() {
   // never over the shroud (unexplored land stays dark smoke)
   if ( fogEnabled > 0.5 ) a *= smoothstep( 0.1, 0.45, fogSample( vW ) );
   if ( a < 0.003 ) discard;
-  gl_FragColor = vec4( mistColor * ( 0.93 + 0.14 * n ), a );
+  vec3 mc = mistColor * ( 0.93 + 0.14 * n );
+  if ( uDawn > 0.001 ) {
+    // dawn: the low sun gilds the tops of the banks, strongest looking into the light (forward scattering)
+    vec3 vd = normalize( vW - cameraPosition );
+    float fw = pow( max( 0.0, dot( vd, uSunDir ) ), 3.0 );
+    mc += uSunGlow * uDawn * ( 0.25 + 0.75 * n ) * ( 0.35 + 1.2 * fw );
+    a = min( 1.0, a * ( 1.0 + 0.5 * uDawn ) );
+  }
+  gl_FragColor = vec4( mc, a );
 }`;
 
 export class GroundFog {
@@ -94,6 +107,8 @@ export class GroundFog {
       return (s >>> 0) / 4294967296;
     };
     const want = quality === 'high' ? 34 : quality === 'medium' ? 24 : 14;
+    // extra banks packed into the valley / riverbed that only rise at dawn (setDawn)
+    const dawnWant = quality === 'high' ? 16 : quality === 'medium' ? 10 : 0;
     const cand: [number, number, number][] = [];
     for (let y = 2; y < map.h - 2; y += 2)
       for (let x = 2; x < map.w - 2; x += 2) {
@@ -112,12 +127,18 @@ export class GroundFog {
       if (picked.some((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) < 6.5)) continue;
       picked.push(c);
     }
+    const nBase = picked.length;
+    for (const c of cand) {
+      if (picked.length >= nBase + dawnWant) break;
+      if (c[2] > 0.05 || picked.some((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) < 3.5)) continue;
+      picked.push(c);
+    }
     const n = Math.max(1, picked.length);
     const a1 = new Float32Array(n * 4);
     const a2 = new Float32Array(n * 4);
     picked.forEach(([x, z, h], i) => {
       a1.set([x, z, 8 + rnd() * 7, Math.max(h, WATER_LEVEL) + 0.35 + rnd() * 0.4], i * 4);
-      a2.set([rnd(), rnd(), rnd() * Math.PI * 2, 0.4 + rnd() * 0.25], i * 4);
+      a2.set([rnd(), rnd(), rnd() * Math.PI * 2, (0.4 + rnd() * 0.25) * (i >= nBase ? -1 : 1)], i * 4);
     });
     const base = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
@@ -135,6 +156,9 @@ export class GroundFog {
       uAmount: { value: 0 },
       uFocus: { value: 8 },
       uTimeF: { value: 0 },
+      uDawn: { value: 0 },
+      uSunGlow: { value: new THREE.Color() },
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     };
     const mat = new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
     this.mesh = new THREE.Mesh(geo, mat);
@@ -142,6 +166,17 @@ export class GroundFog {
     this.mesh.renderOrder = 5;
     this.mesh.name = 'ground-fog';
     this.mesh.visible = false;
+  }
+
+  /**
+   * Dawn 0..1 (render/fx/nature.ts): the extra valley banks rise and the low sun (colour, direction
+   * towards it) lights the mist.
+   */
+  setDawn(k: number, sunColor: THREE.Color, sunDir: THREE.Vector3) {
+    const u = this.u;
+    u.uDawn.value = k;
+    (u.uSunGlow.value as THREE.Color).copy(sunColor).multiplyScalar(0.22);
+    (u.uSunDir.value as THREE.Vector3).copy(sunDir).normalize();
   }
 
   /**

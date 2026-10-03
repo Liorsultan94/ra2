@@ -125,6 +125,10 @@ const META: Record<Sfx, Meta> = {
   deploy: ui('deploy'),
   repair: ui('repair'),
   squelch: { ...ui('ack'), gap: 3 },
+  // victory fireworks: non-positional live patches (panned), a few at once
+  fwLaunch: { ...ui('fwLaunch'), cap: 3 },
+  fwBoom: { ...ui('fwBoom'), cap: 4 },
+  fwCrackle: { ...ui('fwCrackle'), cap: 2 },
 };
 
 function ui(name: LiveName): Meta {

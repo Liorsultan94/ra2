@@ -254,6 +254,11 @@ export class NightLights {
     return f;
   }
 
+  /** 0 = daylight .. 1 = full night (this frame). */
+  get darkness() {
+    return this.dark;
+  }
+
   /** Dynamic day / night cycle: 0 = daylight (everything off) .. 1 = full night. */
   setDark(dark: number) {
     this.dark = Math.max(0, Math.min(1, dark));
@@ -409,10 +414,10 @@ export class NightLights {
       // tail lights
       _p.set(-sx * 0.48, Math.max(0.1, sy * 0.4), 0).applyMatrix4(root.matrix);
       this.flare(_p.x, _p.y, _p.z, 0.12, 1.4 * dk, 0.08 * dk, 0.04 * dk);
-      const px = root.position.x + _f.x * (sx * 0.5 + 1.3);
-      const pz = root.position.z + _f.z * (sx * 0.5 + 1.3);
+      const px = root.position.x + _f.x * (sx * 0.5 + 1.45);
+      const pz = root.position.z + _f.z * (sx * 0.5 + 1.45);
       const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, px)), Math.max(0, Math.min(map.h - 0.01, pz)));
-      this.pool(px, gy, pz, yaw, 2.8, 1.6, 0.32 * k, 0.29 * k, 0.22 * k);
+      this.pool(px, gy, pz, yaw, 2.9, 1.8, 0.5 * k, 0.45 * k, 0.34 * k, true);
     }
     // civilian headlights (queued by the ambient life)
     const cq = this.cars;

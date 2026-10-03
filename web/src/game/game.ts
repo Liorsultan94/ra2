@@ -782,6 +782,8 @@ export class Game {
     this.hud.root.classList.add('intro-on');
     this.renderer.selection.clear();
     if (win) this.audio.sting('heavy');
+    // victory fireworks over the base, the nearest town and the outro shot (render/fx/fireworks.ts)
+    if (win) this.renderer.atmos.living.celebrate(this.local, fall, (n, v, at) => this.audio.play(n, v, at));
   }
   private endWin = false;
   private reported = false;
