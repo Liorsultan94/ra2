@@ -4,7 +4,11 @@ import type { BridgeState } from '../../sim/bridges';
 import type { Effects } from '../effects';
 import type { FogOfWar } from '../fog';
 import type { Layout } from '../layout';
-import { Driver, newDriveCar, type DriveCar } from './driver';
+import { Driver, newDriveCar, type DriveCar, type HoldPoint, type OtherCar } from './driver';
+import { emergencyNear } from './emergency';
+import { crossingBusy } from './people';
+import { levelCrossingClosed, levelCrossings } from './rail';
+import { zebraBands } from './walkgrid';
 import { CAR_SCALE, carModel, type CarModel } from './models';
 import { RoadFurniture } from './roadfurniture';
 import { roadNetFor } from './clearance';
@@ -89,6 +93,9 @@ export class Traffic {
   private target: number;
   private spawnT = 3;
   private portals: { line: number; end: number }[] = [];
+  /** The cars plus the emergency vehicles, as the rules see them (rebuilt every update). */
+  private others: OtherCar[] = [];
+  private crossings: { x: number; y: number }[] = [];
 
   constructor(
     private map: GameMap,
@@ -109,6 +116,27 @@ export class Traffic {
       if (L.bridge >= 0) return;
       for (let e = 0; e < 2; e++) if (L.portal[e]) this.portals.push({ line: li, end: e });
     });
+    // zebra crossings (people on them) and level crossings (barriers down): the cars stop before them
+    {
+      const holds: HoldPoint[] = [];
+      const onto = (kind: number, x: number, y: number, wx: number, wy: number, gap: number) => {
+        this.net.lines.forEach((Ln, li) => {
+          if (Ln.bridge >= 0 || Ln.lot >= 0) return;
+          const { arc, d } = nearestArc(Ln, x, y);
+          if (d > Ln.half + 0.2 || arc < 0.05 || arc > Ln.len - 0.05) return;
+          // the crossing runs across this road (not along it)
+          const p = pointAt(Ln, arc);
+          if (wx || wy) if (Math.abs(p.tx * wx + p.ty * wy) > 0.55) return;
+          holds.push({ kind, line: li, arc, gap, x, y });
+        });
+      };
+      for (const z of zebraBands(map, layout, this.net)) onto(0, z.x, z.y, z.dx, z.dy, z.hw + 0.12);
+      for (const lc of levelCrossings(map)) {
+        this.crossings.push({ x: lc.x, y: lc.y });
+        onto(1, lc.x, lc.y, 0, 0, 0.95);
+      }
+      this.driver.setHolds(holds, (h) => (h.kind === 1 ? levelCrossingClosed(h.x, h.y) : crossingBusy(h.x, h.y, 1.0)));
+    }
     this.furniture = new RoadFurniture(map, this.net, fog, probe, lights, quality, nations);
     this.group.add(this.furniture.group);
     const base = quality === 'high' ? 13 : quality === 'medium' ? 10 : 7;
@@ -197,6 +225,12 @@ export class Traffic {
         line = p.line;
         arc = p.end ? L[line].len - 0.3 : 0.3;
         dir = p.end ? -1 : 1;
+        // a level crossing right by the entry with its barriers down: they wait outside the map
+        const q = pointAt(L[line], arc);
+        if (this.crossings.some((lc) => Math.hypot(lc.x - q.x, lc.y - q.y) < 3.2 && levelCrossingClosed(lc.x, lc.y))) {
+          line = -1;
+          continue;
+        }
       }
       const pt = pointAt(L[line], arc);
       const px = pt.x;
@@ -380,6 +414,11 @@ export class Traffic {
       }
     }
 
+    // the emergency vehicles take part in the rules: sirens (everyone pulls over), parked at the kerb (drive round)
+    this.others.length = 0;
+    for (const c of this.cars) this.others.push(c);
+    for (const e of emergencyNear(this.map.w / 2, this.map.h / 2, 1e5))
+      this.others.push({ id: -1, x: e.x, y: e.y, yaw: e.yaw, v: e.v, loop: -1, ang: 0, left: 0, line: -1, dir: 1, driving: !e.parked, len: e.len, wid: e.len * 0.42, siren: e.siren, kerb: e.parked });
     for (let ci = this.cars.length - 1; ci >= 0; ci--) {
       const c = this.cars[ci];
       this.react(c, f);
@@ -436,6 +475,27 @@ export class Traffic {
     }
   }
 
+  /**
+   * Distance to the nearest car in the way of a vehicle at (x, y) heading `yaw` with half width
+   * `halfW` (emergency.ts closes up behind it; cars pulled over for it don't count).
+   */
+  blockerAhead(x: number, y: number, yaw: number, halfW: number): number {
+    const hx = Math.cos(yaw);
+    const hy = Math.sin(yaw);
+    let best = 1e9;
+    for (const c of this.cars) {
+      const dx = c.x - x;
+      const dy = c.y - y;
+      const along = dx * hx + dy * hy;
+      if (along <= 0 || along > 4 || along >= best) continue;
+      const lat = Math.abs(dx * -hy + dy * hx);
+      // (pulled over for it: a little overlap is let through, it squeezes by)
+      const room = halfW + c.model.wid / 2 - (c.yieldT > 0 ? 0.12 : 0.02);
+      if (lat < room) best = along;
+    }
+    return best;
+  }
+
   private atPortalExit(c: Car): boolean {
     if (c.loop >= 0 || c.kt) return false;
     const Ln = this.net.lines[c.line];
@@ -455,7 +515,7 @@ export class Traffic {
         c.liftV = 0;
         return;
       }
-      const r = this.driver.step(c, this.cars, time, dt, nearUnit);
+      const r = this.driver.step(c, this.others, time, dt, nearUnit);
       c.blocked = r.blocked ? c.blocked + dt : 0;
       if (c.blocked > 3.5) {
         c.cd = 0;

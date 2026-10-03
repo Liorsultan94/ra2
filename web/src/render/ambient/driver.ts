@@ -166,7 +166,7 @@ const BACK = 1.2;
 export class Driver {
   /** Minimum turning radius (tiles). */
   static rho(kind: number) {
-    return kind === 3 ? 0.46 : 0.42;
+    return kind === 3 ? 0.34 : 0.3;
   }
 
   /** Zebra / level crossings per line, and whether one is busy / closed now. */
@@ -650,6 +650,7 @@ export class Driver {
         vt = Math.min(vt, 0.25 + along * 0.2);
         continue;
       }
+      if (oncoming) continue; // (in the other lane: passes by)
       if (along > (c.len + ol) / 2 + 0.7 || lat > side * 0.9) continue;
       // converging at an angle and each in the other's way: the lower id goes first
       if (o.driving && !oncoming && o.v > -0.01) {

@@ -4,6 +4,7 @@ import { Tile, type MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { roadClear, roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
+import { CAR_SCALE } from '../src/render/ambient/models';
 import {
   Ctl,
   Light,
@@ -21,6 +22,8 @@ import {
 } from '../src/render/ambient/roadnet';
 
 const MAPS: MapId[] = ['frontline', 'desert', 'winter', 'urban'];
+/** Sedan length (the civilian cars' scale, models.ts). */
+const SED = 0.5 * CAR_SCALE;
 
 const nets = new Map<MapId, RoadNet>();
 function net(id: MapId): RoadNet {
@@ -65,7 +68,7 @@ function simulate(n: RoadNet, cars: number, seconds: number, seed: number, onSte
       if (n.nodes.some((nd) => nd.arms.length > 1 && Math.hypot(nd.x - x, nd.y - y) < 2.5)) continue;
       if (list.some((o) => Math.hypot(o.x - x, o.y - y) < 1.2)) continue;
       const kind = L.paved ? Math.floor(rand() * 3) : 3;
-      const c = newDriveCar(kind, kind === 1 ? 0.56 : 0.5, li, arc, dir, x, y, Math.atan2(p.ty * dir, p.tx * dir), [1.25, 1.05, 1.1, 0.5][kind] * (L.paved ? 1 : 0.62)) as SimCar;
+      const c = newDriveCar(kind, (kind === 1 ? 0.54 : kind === 2 ? 0.56 : 0.5) * CAR_SCALE, li, arc, dir, x, y, Math.atan2(p.ty * dir, p.tx * dir), [1.25, 1.05, 1.1, 0.5][kind] * (L.paved ? 1 : 0.62)) as SimCar;
       c.driving = true;
       c.id = id++;
       c.loops = 0;
@@ -313,7 +316,7 @@ describe('driving by the rules (headless)', () => {
     const arc = arm.edge + arm.dir * 6;
     const dir = -arm.dir;
     const p = pointAt(L, arc);
-    const c = newDriveCar(0, 0.5, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.25) as SimCar;
+    const c = newDriveCar(0, SED, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.25) as SimCar;
     c.driving = true;
     const drv = new Driver(n, () => true, rng(3));
     let entered = false;
@@ -355,7 +358,7 @@ describe('driving by the rules (headless)', () => {
         const p = pointAt(L, arc);
         if (n.nodes.some((nd) => Math.hypot(nd.x - p.x, nd.y - p.y) < 4)) continue;
         const dir = rand() < 0.5 ? 1 : -1;
-        const c = newDriveCar(0, 0.5, li, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
+        const c = newDriveCar(0, SED, li, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
         c.v = 0.3;
         c.driving = true;
         const drv = new Driver(n, () => true, rng(2));
@@ -389,7 +392,7 @@ describe('driving by the rules (headless)', () => {
       const arc = arm.arc + arm.dir * dist;
       const dir = -arm.dir;
       const p = pointAt(L, arc);
-      const c = newDriveCar(0, 0.5, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
+      const c = newDriveCar(0, SED, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
       c.v = v;
       c.driving = true;
       return c;
@@ -429,7 +432,7 @@ describe('driving by the rules (headless)', () => {
     for (let k = 0; k < 3; k++) {
       const arc = arm.hold + arm.dir * (2.5 + k * 1.2);
       const p = pointAt(L, arc);
-      const c = newDriveCar(0, 0.5, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.1) as SimCar;
+      const c = newDriveCar(0, SED, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.1) as SimCar;
       c.v = 0.8;
       c.driving = true;
       cars.push(c);
@@ -612,7 +615,7 @@ describe('road clearance', () => {
     lot.taken.fill(0);
     const L = n.lines[lot.line];
     const p = pointAt(L, 0.3);
-    const c = newDriveCar(0, 0.5, lot.line, 0.3, 1, p.x - p.ty * L.lane, p.y + p.tx * L.lane, Math.atan2(p.ty, p.tx), 1.1) as SimCar;
+    const c = newDriveCar(0, SED, lot.line, 0.3, 1, p.x - p.ty * L.lane, p.y + p.tx * L.lane, Math.atan2(p.ty, p.tx), 1.1) as SimCar;
     c.driving = true;
     const drv = new Driver(n, () => true, rng(4));
     let parked = false;

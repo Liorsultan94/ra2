@@ -355,7 +355,7 @@ export class NatureFx {
       let flip = 1;
       if (kd === LEAF) {
         if (this.vy[i] !== 0) {
-          const k = Math.min(1, dt * 1.4);
+          const k = Math.min(1, dt * 0.7);
           this.vx[i] += (wx * 1.1 - this.vx[i]) * k;
           this.vz[i] += (wz * 1.1 - this.vz[i]) * k;
           // flutter: side-slips and a tumbling spin
@@ -808,11 +808,13 @@ export class LivingWorld {
         if (!BROADLEAF.has(t.species) || !this.probe.visible(t.x, t.y)) continue;
         const cr = CROWN_R[t.species] * t.s * 0.8;
         const ang = Math.random() * Math.PI * 2;
-        const rr = (0.75 + Math.random() * 0.55) * cr;
+        const rr = (0.9 + Math.random() * 0.4) * cr;
         const g = groundHeight(this.map, t.x, t.y);
         const lc = AUTUMN[Math.floor(Math.random() * AUTUMN.length)];
         _c2.copy(lc).multiplyScalar(0.85 + Math.random() * 0.3);
-        nat.spawn(LEAF, t.x + Math.cos(ang) * rr, g + (CROWN_Y[t.species] + (Math.random() - 0.3) * 0.25) * t.s, t.y + Math.sin(ang) * rr, wx, -(0.28 + Math.random() * 0.2), wz, 14, 0.12 + Math.random() * 0.06, _c2, 0.95, g);
+        // off the top / rim of the crown, drifting outwards: they flutter down in the open, not hidden under it
+        const out = 0.35 + Math.random() * 0.3;
+        nat.spawn(LEAF, t.x + Math.cos(ang) * rr, g + (CROWN_Y[t.species] + 0.12 + Math.random() * 0.25) * t.s, t.y + Math.sin(ang) * rr, wx + Math.cos(ang) * out, -(0.17 + Math.random() * 0.13), wz + Math.sin(ang) * out, 16, 0.12 + Math.random() * 0.06, _c2, 0.95, g);
       }
       if (this.acc.leaf > 3) this.acc.leaf = 3;
     }
