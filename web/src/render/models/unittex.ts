@@ -298,7 +298,7 @@ const CAMO: Record<string, CamoSpec> = {
   germany: { scheme: 'nato3', cols: [0x4a5838, 0x5a4634, 0x22231d, 0x4a5838] },
   russia: { scheme: 'ru3', cols: [0x55643c, 0x958a62, 0x24241c, 0x44502e] },
   ukraine: { scheme: 'uapix', cols: [0x5f6a3e, 0x6a5a3c, 0x2c2e22, 0x8a8260] },
-  china: { scheme: 'pla', cols: [0x63784a, 0x3e5236, 0x9c8a62, 0x34382a] }, // light green, dark green, tan, dark (Type 99A parade digital)
+  china: { scheme: 'pla', cols: [0x6f8a50, 0x3a5230, 0xb09a6a, 0x2c2e24] }, // light green, dark green, tan, dark (Type 99A parade digital)
   korea: { scheme: 'kor4', cols: [0x56623f, 0x5e4c36, 0x22241c, 0x8c8262] },
   turkey: { scheme: 'tr3', cols: [0x667050, 0x58483a, 0x26271f, 0x667050] },
   iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] },
@@ -361,9 +361,9 @@ function schemeAt(s: Scheme, u: number, v: number): number {
       const d = (hash(fu, fv, 413) - 0.5) * 0.07;
       const a = wfbm(cu, cv, 4, 411, 0.2) + d;
       const b = wfbm(cu + 0.3, cv, 4, 431, 0.2) + d;
-      if (b > 0.57) return 2;
-      if (a > 0.57) return 1;
-      if (a < 0.4) return 3;
+      if (b > 0.535) return 2;
+      if (a > 0.535) return 1;
+      if (a < 0.43) return 3;
       return 0;
     }
     case 'kor4': {
