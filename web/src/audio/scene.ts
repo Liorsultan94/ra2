@@ -17,6 +17,7 @@ import type { AudioSystem } from './audio';
 import type { EngineKind } from './ambience';
 import { ENGINE_SLOTS, engineKindFor } from './ambience';
 import { doppler, nightAmount } from './spatial';
+import { drainCivSounds } from '../render/landmarks/sound';
 
 /** Map tile value of open water (sim/map.ts Tile.Water; const enums don't cross isolated modules). */
 const TILE_WATER = 3;
@@ -78,7 +79,10 @@ export class AudioScene {
     this.halfW = halfH * (this.w / this.h);
     this.halfD = halfH / Math.max(0.35, cd.y);
     this.audio.setListener(r.target.x, r.target.z, rx, ry, this.halfW, this.halfD, r.zoom);
+    // trains, bells, airliners... queued by the render-only set pieces (render/landmarks/sound.ts)
+    const civ = drainCivSounds();
     if (!this.full || !this.audio.unlocked) return;
+    for (const c of civ) this.audio.play(c.name === 'collapse' ? 'buildingCollapse' : c.name, c.vol, { x: c.x, y: c.y, z: c.z });
     this.airT -= dt;
     if (this.airT <= 0) {
       this.airT = 0.1;

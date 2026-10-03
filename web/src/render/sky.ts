@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from './fog';
+import { HDRI_APPLY, HDRI_PARS, SkyHdri } from './skyhdri';
 
 /*
  * Physical sky (seen in photo mode, the intro flyover, cinematic and low
@@ -21,7 +22,8 @@ import type { FogOfWar } from './fog';
  *   colour the outskirts' far ground is blended to (fog.ts skyHor*), so the
  *   countryside melts into the sky without a seam.
  * - Environment lighting (high quality): the sky (without the sun disc) is
- *   re-captured into a PMREM environment every few seconds when it changed.
+ *   re-captured into a PMREM environment every few seconds when it changed,
+ *   with the structure of three photographed HDRIs blended in (skyhdri.ts).
  *
  * No program is ever recompiled: quality picks the defines once at creation.
  */
@@ -165,7 +167,12 @@ const DOME_FRAG = /* glsl */ `
   uniform vec2 uSunXZ;
   uniform float uEnv;
   uniform float uGray;
+  uniform vec4 uMeteorA;
+  uniform vec4 uMeteorB;
   varying vec3 vDir;
+  #ifdef HDRI
+  ${HDRI_PARS}
+  #endif
   float h13( vec3 p ) {
     p = fract( p * 0.1031 );
     p += dot( p, p.zyx + 31.32 );
@@ -205,6 +212,16 @@ const DOME_FRAG = /* glsl */ `
         float b = ( 1.0 - smoothstep( 0.0, 0.42, r ) ) * ( h - 0.985 ) * 66.0 * tw;
         col += vec3( 0.85, 0.9, 1.0 ) * b * 0.5 * uNight * ( 1.0 - over ) * smoothstep( 0.0, 0.25, up );
       }
+    }
+    // shooting star: a short bright streak whose head runs from uMeteorA.xyz to uMeteorB.xyz (w: brightness, progress)
+    if ( uMeteorA.w > 0.001 && up > 0.0 && uEnv < 0.5 ) {
+      vec3 mh = normalize( mix( uMeteorA.xyz, uMeteorB.xyz, uMeteorB.w ) );
+      vec3 mt = normalize( mix( uMeteorA.xyz, uMeteorB.xyz, max( 0.0, uMeteorB.w - 0.4 ) ) );
+      vec3 ms = mh - mt;
+      float mk = clamp( dot( d - mt, ms ) / max( 1e-7, dot( ms, ms ) ), 0.0, 1.0 );
+      float md = length( d - mt - ms * mk );
+      float mw = mix( 0.0006, 0.0016, mk );
+      col += vec3( 0.85, 0.92, 1.0 ) * exp( -md * md / ( mw * mw ) ) * mk * mk * uMeteorA.w * 3.0 * ( 1.0 - over );
     }
     // sun / moon discs (not in the environment capture)
     float cs = dot( d, uSun );
@@ -248,6 +265,9 @@ const DOME_FRAG = /* glsl */ `
     vec3 hz = mix( uHorB, uHorA, dot( vd, uSunXZ ) * 0.5 + 0.5 );
     col = mix( col, hz, 1.0 - smoothstep( -0.02, 0.09, up ) );
     if ( uEnv > 0.5 && up < 0.0 ) col = mix( hz, vec3( uGray ), ( 1.0 - smoothstep( -0.4, 0.0, up ) ) );
+    #ifdef HDRI
+    ${HDRI_APPLY}
+    #endif
     if ( any( isnan( col ) ) ) col = vec3( 0.0 );
     gl_FragColor = vec4( col, 1.0 );
   }
@@ -339,6 +359,8 @@ export class Sky {
   private lightN = new THREE.Vector3();
   /** The environment map captured from the sky (high quality); null until the first capture. */
   env: THREE.Texture | null = null;
+  /** Photographed HDRIs blended into the capture (high quality; ?photo=0 turns them off). */
+  private hdri: SkyHdri | null = null;
 
   constructor(
     private renderer: THREE.WebGLRenderer,
@@ -358,6 +380,8 @@ export class Sky {
       depthWrite: false,
     });
     this.lutScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.lutMat));
+    if (envCapture && !(typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search)))
+      this.hdri = new SkyHdri(() => this.envKey.set(9, 9, 9));
     this.mat = this.domeMaterial(false);
     // a unit sphere drawn on the far plane around whichever camera renders it (main view, water reflection)
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), this.mat);
@@ -374,8 +398,9 @@ export class Sky {
 
   private domeMaterial(env: boolean) {
     const fu = this.fog.uniforms;
+    const hd = env ? this.hdri : null;
     return new THREE.ShaderMaterial({
-      defines: this.quality === 'high' ? { HQ: 1 } : {},
+      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}) },
       uniforms: {
         uLut: { value: this.lut.texture },
         uNoise: fu.fogNoise,
@@ -394,6 +419,9 @@ export class Sky {
         uSunXZ: { value: new THREE.Vector2(1, 0) },
         uEnv: { value: env ? 1 : 0 },
         uGray: { value: 0.05 },
+        uMeteorA: { value: new THREE.Vector4() },
+        uMeteorB: { value: new THREE.Vector4() },
+        ...(hd ? hd.uniforms : {}),
       },
       vertexShader: DOME_VERT,
       fragmentShader: DOME_FRAG,
@@ -416,6 +444,7 @@ export class Sky {
    */
   update(dt: number, st: SkyState, sunCol: THREE.Color, ground: THREE.Color) {
     this.time += dt;
+    this.meteors(dt, st.night * (1 - smooth(0.45, 1, st.cover)));
     const night = st.night;
     // by night the moon lights the (much fainter) sky: same scattering model, different source
     const src = st.moon && night > 0.5 ? st.moon : st.sun;
@@ -472,7 +501,52 @@ export class Sky {
     fu.skyHorA.value.set(A.x, A.y, A.z, this.horizon);
     fu.skyHorB.value.set(B.x, B.y, B.z, 0);
     fu.skySunXZ.value.copy(this.sunXZ);
+    if (this.hdri?.update(st.sun, st.cover, night)) this.envKey.set(9, 9, 9);
     if (this.envCapture) this.captureEnv(light, st);
+  }
+
+  private meteorT = 0;
+  private meteorNext = 4;
+  private meteorDur = 0;
+
+  /** Now and then a shooting star on a clear night (uniforms only; purely visual randomness). */
+  private meteors(dt: number, clear: number) {
+    const a = this.mat.uniforms.uMeteorA.value as THREE.Vector4;
+    const b = this.mat.uniforms.uMeteorB.value as THREE.Vector4;
+    if (this.meteorDur > 0) {
+      this.meteorT += dt;
+      const k = this.meteorT / this.meteorDur;
+      if (k >= 1) {
+        this.meteorDur = 0;
+        a.w = 0;
+        this.meteorNext = 2.5 + Math.random() * 9;
+        return;
+      }
+      b.w = k;
+      a.w = Math.sin(Math.PI * Math.min(1, k * 1.15)) * (0.6 + 0.4 * clear);
+      return;
+    }
+    a.w = 0;
+    if (clear < 0.4) return;
+    this.meteorNext -= dt;
+    if (this.meteorNext > 0) return;
+    const az = Math.random() * Math.PI * 2;
+    const el = 0.45 + Math.random() * 0.7;
+    a.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az), 0);
+    // a 15-30 degree run across the sky, mostly sideways and a little down
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const run = 0.26 + Math.random() * 0.26;
+    const tx = -Math.sin(az) * side;
+    const tz = Math.cos(az) * side;
+    const dn = 0.3 + Math.random() * 0.5;
+    const ty = -dn * Math.cos(el);
+    b.set(a.x + (tx - dn * Math.sin(el) * Math.cos(az)) * run, a.y + ty * run, a.z + (tz - dn * Math.sin(el) * Math.sin(az)) * run, 0);
+    const L = Math.hypot(b.x, b.y, b.z) || 1;
+    b.x /= L;
+    b.y /= L;
+    b.z /= L;
+    this.meteorT = 0;
+    this.meteorDur = 0.45 + Math.random() * 0.5;
   }
 
   private captureEnv(light: THREE.Vector3, st: SkyState) {

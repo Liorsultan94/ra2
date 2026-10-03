@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
-import { factionCamo, pbrMaterial, worldUV } from '../textures';
+import { factionCamo, worldUV } from '../textures';
 import type { Builder } from './registry';
 import { chevronCell, decalQuad, flagPatchCell, hash01, makeDecalMaterial, numberQuads, roundelCell, type Cell } from './insignia';
 import type { AnimState, Model, ModelStyle } from './types';
-import { armourMod, unitLook, vehCamo } from './unittex';
+import { armourMod, armourModPlain, treadTex, unitLook, vehCamo } from './unittex';
+import { PAINT_LOUVRE, PAINT_MESH, bakeVehicle, type BakeResult } from './vehbake';
+import { lodGeos, registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 
 /*
@@ -84,6 +86,19 @@ const _v = new THREE.Vector3();
 const _s = new THREE.Vector3();
 function TR(x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
   return new THREE.Matrix4().compose(_v.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, rz)), _s.set(sx, sy, sz));
+}
+
+/** Index subset (first n vertices) of a non-indexed geometry, sharing its attribute buffers. */
+function subGeo(g: THREE.BufferGeometry, n: number): THREE.BufferGeometry {
+  const s = new THREE.BufferGeometry();
+  for (const k of Object.keys(g.attributes)) s.setAttribute(k, g.attributes[k]);
+  const idx = n > 65535 ? new Uint32Array(n) : new Uint16Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  s.setIndex(new THREE.BufferAttribute(idx, 1));
+  if (!g.boundingSphere) g.computeBoundingSphere();
+  s.boundingSphere = g.boundingSphere;
+  s.boundingBox = g.boundingBox;
+  return s;
 }
 
 // --------------------------------------------------------- raw geometries
@@ -357,6 +372,27 @@ function dullMat(): THREE.MeshStandardMaterial {
 }
 const decalMat = (fog: FogOfWar | null) => wmat('decal', fog, makeDecalMaterial, DECAL_WEAR);
 
+/** Template keys whose armour gets the per-vehicle detail bake (vehbake.ts). */
+const BAKE_KEYS = new Set(['mbt', 'apc']);
+const VEH_BAKE: WearCfg = { dirt: true, loose: true, scale: 9, bake: true };
+const WHEEL_BAKE: WearCfg = { dirt: true, loose: false, scale: 9, bake: true, run: 'inst' };
+/** Material of a baked bucket (camo / painted detail / metal) bound to the template's atlas. */
+function bakedMat(bk: string, f: string, res: BakeResult, fog: FogOfWar | null): THREE.Material {
+  const id = res.tex.uuid;
+  const ns = new THREE.Vector2(1, 1);
+  if (bk === 's' + CAMO)
+    return wmat(`bk|c|${f}|${id}`, fog, () => {
+      const t = vehCamo(f, 0.8, true);
+      return new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1, metalness: 0.15 });
+    }, VEH_BAKE);
+  if (bk === 'M') return wmat(`bk|m|${id}`, fog, () => new THREE.MeshStandardMaterial({ vertexColors: true, normalMap: res.tex, normalScale: ns, roughness: 0.4, metalness: 0.7 }), VEH_BAKE);
+  const wheel = bk === 'W';
+  return wmat(`bk|${wheel ? 'w' : 'd'}|${id}`, fog, () => {
+    const t = armourModPlain();
+    return new THREE.MeshStandardMaterial({ vertexColors: true, map: t.map, roughnessMap: t.roughnessMap, normalMap: res.tex, normalScale: ns, roughness: 1.02, metalness: 0.12 });
+  }, wheel ? WHEEL_BAKE : VEH_BAKE);
+}
+
 function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse = false) {
   return cmat(`glow${color}|${intensity}|${pulse}`, fog, () => {
     const m = new THREE.MeshStandardMaterial({ color: shade(color, 0.4), emissive: color, emissiveIntensity: intensity, roughness: 0.35, metalness: 0, toneMapped: false });
@@ -365,7 +401,7 @@ function glowMat(color: number, intensity: number, fog: FogOfWar | null, pulse =
   });
 }
 
-const TREAD_K = 4; // texture repeats per world unit along the belt (6 links per repeat)
+const TREAD_K = 4; // texture repeats per world unit along the belt (8 links per repeat, unittex treadTex)
 
 // ------------------------------------------------------------- build parts
 
@@ -402,6 +438,22 @@ class Acc {
     }
     return this;
   }
+  /**
+   * Detail level of what is added next (null = automatic by size): 0 = every LOD, 1 = LOD0 + LOD1
+   * (dropped far out), 2 = hero LOD0 only (close zoom, portrait, photo mode).
+   */
+  lv: number | null = null;
+  /** Run fn with an explicit detail level for everything it adds. */
+  at(level: number, fn: () => void): this {
+    const save = this.lv;
+    this.lv = level;
+    try {
+      fn();
+    } finally {
+      this.lv = save;
+    }
+    return this;
+  }
   add(geo: THREE.BufferGeometry, paint: number, m?: THREE.Matrix4): this {
     let g = geo.index ? geo.toNonIndexed() : geo;
     if (g === geo) g = geo.clone();
@@ -412,6 +464,15 @@ class Acc {
     if (m) g.applyMatrix4(m);
     worldUV(g, paint === CAMO ? 1.1 : 2);
     const key = bucketOf(paint);
+    // LOD level: small parts drop out with distance (team colour and lamps never do)
+    g.computeBoundingSphere();
+    const rad = g.boundingSphere!.radius;
+    // battle zoom (LOD1) is ~40 CSS px / unit on phones (x2.6 DPR), ~87 on desktop: parts under ~0.028 across
+    // are ~2.5 px there -> hero only; far zoom (LOD2, < ~25 px / unit): parts under ~0.056 across go too
+    const auto = rad < 0.014 ? 2 : rad < 0.028 ? 1 : 0;
+    g.userData.lv = (key !== 'D' && key !== 'M' && key !== 's' + CAMO) || paint === this.teamHex ? 0 : this.lv ?? auto;
+    const dbg = (globalThis as { __LVDBG?: unknown[] }).__LVDBG;
+    if (dbg) dbg.push({ lv: g.userData.lv, n: g.attributes.position.count / 3, st: (new Error().stack ?? '').split('\n').slice(2, 6).map((l) => l.trim().split(' ')[1]).join('<') });
     if (key === 'D' || key === 'M') {
       const c = paint === GLASS ? K.glassC : paint >= MT ? paint - MT : paint;
       _col.setHex(c);
@@ -458,10 +519,21 @@ class Acc {
       }
     }
   }
+  /** Merge a bucket, coarse parts first: userData.lodN = vertex counts of the LOD2 and LOD1 prefixes. */
   merged(key: string): THREE.BufferGeometry | null {
     const list = this.buckets.get(key);
     if (!list || !list.length) return null;
-    return list.length === 1 ? list[0] : mergeGeometries(list, false);
+    const lvOf = (g: THREE.BufferGeometry) => (g.userData.lv as number | undefined) ?? 0;
+    const sorted = list.slice().sort((a, b) => lvOf(a) - lvOf(b));
+    const n = [0, 0];
+    for (const g of sorted) {
+      const c = g.attributes.position.count;
+      if (lvOf(g) <= 0) n[0] += c;
+      if (lvOf(g) <= 1) n[1] += c;
+    }
+    const out = sorted.length === 1 ? sorted[0] : mergeGeometries(sorted, false);
+    out.userData = { lodN: n };
+    return out;
   }
 }
 
@@ -553,7 +625,7 @@ interface Tpl {
   bob: number;
   /** Hull rock per main-gun shot (0 = none, 1 = 120 mm MBT, ~1.4 = SPH, ~0.25 = autocannon). */
   kick: number;
-  stats: { tris: number; meshes: number };
+  stats: { tris: number; meshes: number; lod?: number[] };
   key: string;
   decals: DecalSpec | null;
   fx: NonNullable<Model['damageFx']>;
@@ -675,12 +747,13 @@ class Bld {
   wheels(parent: Part | THREE.Object3D, geo: THREE.BufferGeometry, entries: WheelEntry[], tag = 'wheels') {
     if (this.zk !== 1) entries = entries.map((e) => ({ ...e, z: e.z * this.zk }));
     // running gear: mud caked on the rims and tyres, more toward the outside
-    const aw = geo.getAttribute('aWear') as THREE.BufferAttribute | undefined;
-    if (aw) {
-      const pos = geo.attributes.position;
+    for (const g of [geo, ...(lodGeos(geo) ?? [])]) {
+      const aw = g.getAttribute('aWear') as THREE.BufferAttribute | undefined;
+      if (!aw) continue;
+      const pos = g.attributes.position;
       let R = 1e-6;
       for (let i = 0; i < pos.count; i++) R = Math.max(R, Math.hypot(pos.getX(i), pos.getY(i)));
-      for (let i = 0; i < pos.count; i++) aw.setX(i, 0.55 + 0.45 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R));
+      for (let i = 0; i < pos.count; i++) aw.setX(i, 0.08 + 0.44 * Math.min(1, Math.hypot(pos.getX(i), pos.getY(i)) / R) ** 2);
     }
     const im = new THREE.InstancedMesh(geo, this.material('D'), entries.length);
     im.userData.tag = tag;
@@ -844,6 +917,10 @@ class Bld {
   }
   /** Skip the air-recognition panel (set by builders with no suitable roof). */
   noIdPanel = false;
+  /** Detail bake of this template (null: plain tiling materials). */
+  baked: BakeResult | null = null;
+  /** Static hull pitch (rad, nose up) about the rear road wheels (K2 hydropneumatic stance). */
+  stance = 0;
   /** Template key (mbt, apc, ...). */
   key = '';
   /** Hatches built with hatch() (z already narrowed); geos = the lid disc + handle in p's buckets. */
@@ -888,29 +965,30 @@ class Bld {
     const F = this.part(P, h.x + r * 0.08, h.y, h.z, 'crew');
     F.g.scale.setScalar(CREW_K); // RTS exaggeration: readable at play zoom
     const figure = (Q: Part, glass: boolean) => {
+      Q.lv = 2; // the figure is hero detail (a few px at battle zoom); the hatch lid still opens at every LOD
       // torso in the hatch well, shoulders, collar of the vest
-      Q.add(gCylY(0.021, 0.019, 0.07, 9), uni, TR(0, -0.022, 0));
+      Q.add(gCylY(0.021, 0.019, 0.07, 7, true), uni, TR(0, -0.022, 0));
       Q.cbox(0.032, 0.02, 0.056, 0.007, 0, 0.018, 0, uni);
       Q.cbox(0.036, 0.012, 0.05, 0.004, 0.002, 0.008, 0, shade(uni, 0.72));
-      Q.cy(0.007, 0.008, 0.012, 0.001, 0.026, 0, skin, 7);
+      Q.add(gCylY(0.007, 0.008, 0.012, 6, true), skin, TR(0.001, 0.032, 0));
       // head + tanker helmet with ear cups, boom mic
-      Q.sph(0.0125, 0.002, 0.048, 0, skin, 9, 7);
-      Q.sph(0.0142, 0.0, 0.052, 0, helm, 10, 6, 0.9, true);
-      Q.add(gCylY(0.0142, 0.0142, 0.006, 10, true), helm, TR(0, 0.05, 0));
-      for (const s of [-1, 1]) Q.add(gCylZ(0.006, 0.006, 0.005, 8), helm, TR(0.0, 0.046, s * 0.0135));
+      Q.sph(0.0125, 0.002, 0.048, 0, skin, 7, 5);
+      Q.sph(0.0142, 0.0, 0.052, 0, helm, 8, 4, 0.9, true);
+      Q.add(gCylY(0.0142, 0.0142, 0.006, 8, true), helm, TR(0, 0.05, 0));
+      for (const s of [-1, 1]) Q.add(gCylZ(0.006, 0.006, 0.005, 6), helm, TR(0.0, 0.046, s * 0.0135));
       Q.box(0.012, 0.0018, 0.0018, 0.012, 0.04, 0.012, K.dark, 0, 0.5, 0.2);
       if (!glass) {
         // forearms resting on the hatch rim
         for (const s of [-1, 1]) {
-          Q.strut([0, 0.022, s * 0.026], [0.012, 0.004, s * 0.03], 0.0055, uni, 6);
-          Q.strut([0.012, 0.004, s * 0.03], [0.034, 0.004, s * 0.014], 0.005, uni, 6);
-          Q.sph(0.005, 0.036, 0.004, s * 0.012, K.olive, 6, 4);
+          Q.strut([0, 0.022, s * 0.026], [0.012, 0.004, s * 0.03], 0.0055, uni, 5);
+          Q.strut([0.012, 0.004, s * 0.03], [0.034, 0.004, s * 0.014], 0.005, uni, 5);
+          Q.sph(0.005, 0.036, 0.004, s * 0.012, K.olive, 5, 3);
         }
       } else {
         // binoculars up at the eyes, elbows out
         for (const s of [-1, 1]) {
-          Q.strut([0, 0.022, s * 0.026], [0.016, 0.028, s * 0.03], 0.0055, uni, 6);
-          Q.strut([0.016, 0.028, s * 0.03], [0.022, 0.046, s * 0.008], 0.005, uni, 6);
+          Q.strut([0, 0.022, s * 0.026], [0.016, 0.028, s * 0.03], 0.0055, uni, 5);
+          Q.strut([0.016, 0.028, s * 0.03], [0.022, 0.046, s * 0.008], 0.005, uni, 5);
           Q.add(gCylX(0.0045, 0.0045, 0.014, 7), K.black, TR(0.022, 0.049, s * 0.0055));
         }
         Q.box(0.006, 0.006, 0.006, 0.019, 0.049, 0, K.dark);
@@ -1024,6 +1102,17 @@ class Bld {
         tris += g.attributes.position.count / 3;
       }
     }
+    if (this.stance) {
+      // tilt the hull and everything on it (not the running gear) about a pivot over the rear wheels
+      const pg = new THREE.Group();
+      pg.position.set(-0.4, 0.1, 0);
+      pg.rotation.z = this.stance;
+      const inner = new THREE.Group();
+      inner.position.set(0.4, -0.1, 0);
+      for (const c of [...this.body.g.children]) inner.add(c);
+      pg.add(inner);
+      this.body.g.add(pg);
+    }
     this.root.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) meshes++;
     });
@@ -1043,6 +1132,39 @@ class Bld {
     if (box.isEmpty()) box.setFromObject(this.root);
     const size = { x: box.max.x - box.min.x, y: box.max.y, z: box.max.z - box.min.z };
     this.bakeDirt();
+    if (BAKE_KEYS.has(this.key)) {
+      const res = bakeVehicle(this.root, this.key + '|' + this.f);
+      if (res) {
+        this.baked = res;
+        this.root.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh || !m.geometry.attributes.uv1) return;
+          const bk = (m as THREE.InstancedMesh).isInstancedMesh ? 'W' : (m.userData.bk as string);
+          if (bk === 's' + CAMO || bk === 'D' || bk === 'M' || bk === 'W') m.material = bakedMat(bk, this.f, res, this.fog);
+        });
+      }
+    }
+    // LOD1 / LOD2: index subsets of the merged buffers (shared attributes, incl. the baked uv1)
+    let lodTris = [0, 0, 0];
+    this.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const g = m.geometry;
+      const total = g.attributes.position.count;
+      const n = g.userData.lodN as number[] | undefined;
+      const k = (m as THREE.InstancedMesh).isInstancedMesh ? (m as THREE.InstancedMesh).count : 1;
+      let cnt = [total, total, total];
+      const ex = lodGeos(g);
+      if (ex) cnt = [total, ex[0].attributes.position.count, ex[1].attributes.position.count];
+      else if (n && (n[0] < total || n[1] < total)) {
+        const g1 = n[1] < total ? subGeo(g, n[1]) : g;
+        const g2 = n[0] < n[1] ? subGeo(g, n[0]) : g1;
+        registerLods(g, [g1, g2]);
+        cnt = [total, n[1], n[0]];
+      }
+      for (let i = 0; i < 3; i++) lodTris[i] += (cnt[i] / 3) * k;
+    });
+    lodTris = lodTris.map(Math.round);
     const ray = new Probe(this.root, skip);
     return {
       root: this.root,
@@ -1056,7 +1178,7 @@ class Bld {
       custom: this.custom,
       bob: this.bob,
       kick: this.kick || (this.mi > 0 ? 0.18 : 0),
-      stats: { tris: Math.round(tris), meshes },
+      stats: { tris: Math.round(tris), meshes, lod: lodTris },
       key: '',
       decals: this.layoutDecals(ray),
       fx: this.damagePoints(ray, box),
@@ -1075,7 +1197,7 @@ class Bld {
       for (let i = 0; i < pos.count; i++) {
         if (aw.getX(i) < -0.5) continue; // team colour: kept clean
         _dv.fromBufferAttribute(pos, i).applyMatrix4(mw);
-        const low = clamp((0.2 - _dv.y) / 0.15, 0, 1);
+        const low = clamp((0.2 - _dv.y) / 0.13, 0, 1); // the lower third of the hull / skirts
         const ny = nor.getY(i);
         // caked on the lower hull / fenders, a light film of dust on decks and the glacis
         const d = low * low * (3 - 2 * low) + Math.max(0, ny) * 0.12 + (ny < -0.5 ? 0.25 : 0);
@@ -1085,7 +1207,39 @@ class Bld {
     });
   }
   /** Hull numbers + national marking spots on the turret (or hull) sides, found by ray casting the finished template. */
+  /**
+   * Builder-placed markings (instead of the probe search): on part `p`, centred (x, y) on a side face at
+   * |z| = z leaning in by `lean` (rad), number height h, white unless the paint is light.
+   */
+  markAt: { p: Part; x: number; y: number; z: number; lean: number; h: number } | null = null;
+  private layoutFixed(): DecalSpec | null {
+    const m = this.markAt;
+    if (!m) return null;
+    const f = this.f;
+    const lum = ((this.base >> 16) & 255) * 0.3 + ((this.base >> 8) & 255) * 0.59 + (this.base & 255) * 0.11;
+    const color = lum > 140 ? 0x1c1c1a : 0xf2f2ea;
+    const digits = f === 'israel' ? 2 : 3;
+    const numH = m.h;
+    const em: DecalSpot['emblem'] =
+      f === 'israel' ? { cell: chevronCell(), w: numH * 0.95, h: numH * 0.95, off: 0, color } : f === 'germany' || f === 'china' ? { cell: roundelCell(f), w: numH * 1.05, h: numH * 1.05, off: 0, color: 0xffffff } : f !== 'neutral' ? { cell: flagPatchCell(f), w: numH * 1.05, h: numH * 0.7, off: 0, color: 0xffffff } : null;
+    const numW = digits * numH * 0.47 + (digits - 1) * numH * 0.08;
+    const gap = numH * 0.35;
+    const tot = numW + (em ? gap + em.w : 0);
+    const start = -tot / 2;
+    const spots: DecalSpot[] = [];
+    for (const side of [1, -1]) {
+      const n = new THREE.Vector3(0, Math.sin(m.lean), side * Math.cos(m.lean));
+      const u = new THREE.Vector3(side, 0, 0);
+      const v = new THREE.Vector3().crossVectors(n, u).normalize();
+      const p = new THREE.Vector3(m.x, m.y, side * m.z).addScaledVector(n, 0.0012);
+      spots.push({ p, u, v, numH, numOff: em ? start + em.w + gap + numW / 2 : 0, emblem: em ? { ...em, off: start + em.w / 2 } : null });
+    }
+    const g = m.p.g;
+    g.userData.tag = ((g.userData.tag as string | undefined) ? g.userData.tag + ' ' : '') + 'decalT';
+    return { spots, digits, color };
+  }
   private layoutDecals(ray: Probe): DecalSpec | null {
+    if (this.markAt) return this.layoutFixed();
     const own = (t: THREE.Object3D) => t.children.filter((c) => (c as THREE.Mesh).isMesh && (c.userData.bk === 's' + CAMO || c.userData.bk === 'D')) as THREE.Mesh[];
     const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
     // candidate parts: the turret first, then the part with the largest painted side (hull, launcher box, cargo body...)
@@ -1323,12 +1477,12 @@ interface Circ {
 }
 
 /** Closed belt centre line around the wheels (convex hull of circles), CCW in (x, y). */
-function beltLoop(circles: Circ[], bt: number, sag: number): { p: P2[]; n: P2[]; s: number[]; len: number } {
+function beltLoop(circles: Circ[], bt: number, sag: number, arc = 40, step = 0.025): { p: P2[]; n: P2[]; s: number[]; len: number } {
   const pts: P2[] = [];
   for (const c of circles) {
     const r = c.r + bt / 2;
-    for (let i = 0; i < 40; i++) {
-      const a = (i / 40) * Math.PI * 2;
+    for (let i = 0; i < arc; i++) {
+      const a = (i / arc) * Math.PI * 2;
       pts.push([c.x + Math.cos(a) * r, c.y + Math.sin(a) * r]);
     }
   }
@@ -1354,7 +1508,7 @@ function beltLoop(circles: Circ[], bt: number, sag: number): { p: P2[]; n: P2[];
     const a = hull[i];
     const b = hull[(i + 1) % hull.length];
     const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const k = sag > 0 ? Math.max(1, Math.ceil(l / 0.025)) : 1;
+    const k = sag > 0 ? Math.max(1, Math.ceil(l / step)) : 1;
     for (let j = 0; j < k; j++) sub.push([a[0] + ((b[0] - a[0]) * j) / k, a[1] + ((b[1] - a[1]) * j) / k]);
   }
   hull = sub;
@@ -1471,10 +1625,13 @@ function beltGeo(loop: ReturnType<typeof beltLoop>, z0: number, z1: number, bt: 
 }
 
 function treadBase(fog: FogOfWar | null) {
-  return pbrMaterial('tread', { color: 0x3a3936, divisions: 6, grime: 0.55, seed: 3 }, fog);
+  return cmat('tread3', fog, () => {
+    const t = treadTex();
+    return new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, roughness: 1, metalness: 0.3, normalScale: new THREE.Vector2(1.1, 1.1) });
+  });
 }
 
-const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9 };
+const BELT_WEAR: WearCfg = { dirt: true, loose: false, scale: 9, run: 'attr' };
 function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
   const m = new THREE.MeshStandardMaterial({
     map: base.map ? base.map.clone() : null,
@@ -1490,68 +1647,197 @@ function treadInstance(base: THREE.MeshStandardMaterial, fog: FogOfWar | null) {
 
 // ------------------------------------------------------------- wheel styles
 
-type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv';
+type WheelStyle = 'nato' | 'sov' | 't80' | 'merk' | 'asia' | 'light' | 'ugv' | 'abrams' | 'k2';
 
 const gDisc = (r: number, seg = 12) => new THREE.CircleGeometry(r, seg);
 const gRing = (r0: number, r1: number, seg = 14) => new THREE.RingGeometry(r0, r1, seg, 1);
 
-/** Road wheel: axle along Z, outer face toward +Z, centred on the origin (low poly: faces are discs). */
+/** Lathe around the Z axis from a [radius, z] profile (outward faces: profile runs up the tread, then inward along the face). */
+function gLatheZ(pts: [number, number][], seg: number): THREE.BufferGeometry {
+  const g = new THREE.LatheGeometry(
+    pts.map(([r, z]) => new THREE.Vector2(r, z)),
+    seg,
+  );
+  g.rotateX(Math.PI / 2);
+  return g;
+}
+
+/** LOD stand-ins of a wheel shape carry a neutral baked texel (their own charts are LOD0 only). */
+function neutralUv1(g: THREE.BufferGeometry) {
+  const n = g.attributes.position.count;
+  g.setAttribute('uv1', new THREE.BufferAttribute(new Float32Array(n * 2).fill(0.003), 2));
+  g.setAttribute('aTone', new THREE.BufferAttribute(new Float32Array(n).fill(0.5), 1));
+  return g;
+}
+
+/**
+ * Road wheel: axle along Z, outer face toward +Z, centred on the origin. LOD0: lathe-turned rubber tyre
+ * with a rounded shoulder, steel rim lip, dished disc (style: holes / ribs), raised hub with cap;
+ * LOD1: 10-sided tyre + flat disc + hub; LOD2: 8-sided drum. Registered as explicit geometry LODs.
+ */
 function roadWheelGeo(b: Bld, r: number, w: number, style: WheelStyle): THREE.BufferGeometry {
-  const a = new Acc();
-  const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.8) : shade(b.base, 0.9);
+  const disc = style === 'sov' || style === 't80' ? shade(b.base, 0.68) : shade(b.base, 0.74);
+  const rub = K.rubber;
   const hub = 0x3e4144;
   const zf = w / 2;
-  a.add(gCylZ(r, r, w, 14, true), K.rubber);
-  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, zf));
-  a.add(gRing(r * 0.8, r, 14), K.rubber, TR(0, 0, -zf, 0, Math.PI, 0));
-  a.add(gCylZ(r * 0.78, r * 0.8, 0.008, 14, true), disc, TR(0, 0, zf - 0.004));
-  a.add(gDisc(r * 0.78, 14), disc, TR(0, 0, zf - 0.004 + 0.004));
+  const S = 18;
+  const a = new Acc();
+  // tyre: tread band with a rounded shoulder into the outer side wall
+  a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.12], [r, zf - w * 0.12], [r * 0.95, zf], [r * 0.86, zf + 0.0008]], S), rub);
+  a.add(gDisc(r * 0.97, 12), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  // steel rim lip + shallow dish + hub boss
+  a.add(gLatheZ([[r * 0.86, zf + 0.0008], [r * 0.81, zf + 0.0028], [r * 0.58, zf - 0.003], [r * 0.38, zf - 0.005]], S), disc);
+  a.add(gLatheZ([[r * 0.38, zf - 0.005], [r * 0.33, zf + 0.0035], [r * 0.21, zf + 0.0075], [0.0001, zf + 0.0095]], 16), hub);
+  // disc pattern
   if (style === 'sov') {
     for (let i = 0; i < 8; i++) {
       const t = (i / 8) * Math.PI * 2;
-      a.add(new THREE.PlaneGeometry(r * 0.4, r * 0.08), shade(disc, 0.55), TR(Math.cos(t) * r * 0.55, Math.sin(t) * r * 0.55, zf + 0.002, 0, 0, t));
+      a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.07), shade(disc, 0.6), TR(Math.cos(t) * r * 0.62, Math.sin(t) * r * 0.62, zf - 0.0016, 0, 0, t));
     }
-  } else if (style === 't80') {
-    a.add(gRing(r * 0.5, r * 0.6, 14), shade(disc, 0.7), TR(0, 0, zf + 0.001));
-    for (let i = 0; i < 6; i++) {
-      const t = (i / 6) * Math.PI * 2;
-      a.add(gDisc(r * 0.08, 5), K.dark, TR(Math.cos(t) * r * 0.38, Math.sin(t) * r * 0.38, zf + 0.002));
+  } else if (style === 'abrams') {
+    // M1: plain dished aluminium wheel with a ring of bolt heads
+    for (let i = 0; i < 10; i++) {
+      const t = (i / 10) * Math.PI * 2;
+      a.add(gDisc(r * 0.035, 4), K.dark, TR(Math.cos(t) * r * 0.66, Math.sin(t) * r * 0.66, zf - 0.0012));
     }
-  } else {
-    const holes = style === 'merk' ? 0 : style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : 6;
+  } else if (style !== 'merk') {
+    const holes = style === 'asia' ? 5 : style === 'light' || style === 'ugv' ? 4 : style === 't80' ? 8 : 6;
+    const hr = style === 't80' ? 0.075 : style === 'k2' ? 0.13 : 0.1;
     for (let i = 0; i < holes; i++) {
-      const t = (i / holes) * Math.PI * 2;
-      a.add(gDisc(r * 0.11, 6), K.dark, TR(Math.cos(t) * r * 0.5, Math.sin(t) * r * 0.5, zf + 0.002));
-    }
-    if (style === 'merk') {
-      for (let i = 0; i < 6; i++) {
-        const t = (i / 6) * Math.PI * 2;
-        a.add(new THREE.PlaneGeometry(r * 0.46, r * 0.08), shade(disc, 0.6), TR(Math.cos(t) * r * 0.45, Math.sin(t) * r * 0.45, zf + 0.002, 0, 0, t));
-      }
+      const t = (i / holes) * Math.PI * 2 + 0.3;
+      a.add(gDisc(r * hr, 7), K.black, TR(Math.cos(t) * r * 0.66, Math.sin(t) * r * 0.66, zf - 0.0018));
     }
   }
-  a.add(gCylZ(r * 0.22, r * 0.3, 0.016, 8), hub, TR(0, 0, zf + 0.006));
-  a.add(new THREE.PlaneGeometry(r * 0.36, r * 0.06), 0x8a8e90, TR(0, 0, zf + 0.0145));
-  return a.merged('D')!;
+  // hub bolt circle (lug nuts)
+  for (let i = 0; i < 6; i++) {
+    const t = (i / 6) * Math.PI * 2;
+    a.add(gCylZ(r * 0.032, r * 0.032, 0.003, 3, true), 0x56595a, TR(Math.cos(t) * r * 0.27, Math.sin(t) * r * 0.27, zf + 0.0055));
+  }
+  const g0 = a.merged('D')!;
+  delete g0.userData.lodN;
+  // LOD1
+  const a1 = new Acc();
+  a1.add(gCylZ(r, r, w, 10, true), rub);
+  a1.add(gDisc(r, 10), rub, TR(0, 0, zf));
+  a1.add(gDisc(r * 0.8, 8), disc, TR(0, 0, zf + 0.0012));
+  a1.add(gDisc(r, 8), rub, TR(0, 0, -zf, 0, Math.PI, 0));
+  a1.add(gCylZ(r * 0.3, r * 0.36, 0.012, 6, true), hub, TR(0, 0, zf + 0.002));
+  const g1 = neutralUv1(a1.merged('D')!);
+  // LOD2
+  const a2 = new Acc();
+  a2.add(gCylZ(r, r, w, 8), rub);
+  a2.add(gDisc(r * 0.78, 8), disc, TR(0, 0, zf + 0.0005));
+  const g2 = neutralUv1(a2.merged('D')!);
+  delete g1.userData.lodN;
+  delete g2.userData.lodN;
+  registerLods(g0, [g1, g2]);
+  return g0;
 }
 
-/** Drive sprocket: toothed rim + hub. */
-function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeometry {
-  const a = new Acc();
-  const c = 0x3a3c3c;
-  const zf = w / 2;
-  a.add(gCylZ(r * 0.84, r * 0.84, w * 0.9, teeth, true), c);
+/** Toothed ring (extruded gear outline) of radius r, axle along Z, centred on z. */
+function gGear(r: number, teeth: number, depth: number): THREE.BufferGeometry {
+  const pts: P2[] = [];
+  const rr = r * 0.82;
   for (let i = 0; i < teeth; i++) {
-    const t = (i / teeth) * Math.PI * 2;
-    a.add(new THREE.BoxGeometry(r * 0.26, r * 0.2, w * 0.9), 0x47473f, TR(Math.cos(t) * r * 0.9, Math.sin(t) * r * 0.9, 0, 0, 0, t));
+    const t0 = (i / teeth) * Math.PI * 2;
+    const dt = (Math.PI * 2) / teeth;
+    for (const [f, rad] of [
+      [0.0, rr],
+      [0.22, rr],
+      [0.36, r],
+      [0.64, r],
+      [0.78, rr],
+    ] as [number, number][])
+      pts.push([Math.cos(t0 + f * dt) * rad, Math.sin(t0 + f * dt) * rad]);
   }
-  a.add(gDisc(r * 0.84, teeth), shade(b.base, 0.75), TR(0, 0, zf * 0.9));
-  a.add(gCylZ(r * 0.3, r * 0.42, 0.02, 8), 0x3e4144, TR(0, 0, zf * 0.9 + 0.008));
-  for (let i = 0; i < 6; i++) {
-    const t = (i / 6) * Math.PI * 2 + 0.5;
-    a.add(gDisc(r * 0.09, 5), K.dark, TR(Math.cos(t) * r * 0.6, Math.sin(t) * r * 0.6, zf * 0.9 + 0.001));
+  const g = gSide(pts, depth, 0);
+  return g;
+}
+
+/** Flat spoked plate (axle along Z, centred on z = 0): outer ring to r, n spokes, hub hole free. */
+function gSpokes(r: number, rHub: number, n: number, depth: number, spokeW = 0.32): THREE.BufferGeometry {
+  const sh = new THREE.Shape();
+  const N = 20;
+  for (let i = 0; i <= N; i++) {
+    const t = (i / N) * Math.PI * 2;
+    if (i === 0) sh.moveTo(Math.cos(t) * r, Math.sin(t) * r);
+    else sh.lineTo(Math.cos(t) * r, Math.sin(t) * r);
   }
-  return a.merged('D')!;
+  const r0 = rHub * 1.15;
+  const r1 = r * 0.78;
+  for (let k = 0; k < n; k++) {
+    const a0 = (k / n) * Math.PI * 2 + spokeW / 2 * ((Math.PI * 2) / n);
+    const a1 = ((k + 1) / n) * Math.PI * 2 - spokeW / 2 * ((Math.PI * 2) / n);
+    const h = new THREE.Path();
+    const m = 3;
+    for (let i = 0; i <= m; i++) {
+      const t = a0 + ((a1 - a0) * i) / m;
+      const p = [Math.cos(t) * r1, Math.sin(t) * r1];
+      if (i === 0) h.moveTo(p[0], p[1]);
+      else h.lineTo(p[0], p[1]);
+    }
+    for (let i = 0; i <= 2; i++) {
+      const t = a1 - ((a1 - a0) * i) / 2;
+      h.lineTo(Math.cos(t) * r0, Math.sin(t) * r0);
+    }
+    h.closePath();
+    sh.holes.push(h);
+  }
+  const g = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false, curveSegments: 4 });
+  g.translate(0, 0, -depth / 2);
+  return g;
+}
+
+/** Drive sprocket: two toothed rings on a spoked carrier, dark gap between them, hub boss (LOD1: one gear, LOD2: drum). */
+function sprocketGeo(b: Bld, r: number, w: number, teeth = 12): THREE.BufferGeometry {
+  const c = 0x4a4038; // worn / rusty teeth
+  const disc = shade(b.base, 0.72);
+  const zf = w / 2;
+  const a = new Acc();
+  a.add(gGear(r, teeth, w * 0.72), c);
+  a.add(gSpokes(r * 0.8, r * 0.22, 6, 0.004), disc, TR(0, 0, zf * 0.72 + 0.002));
+  a.add(gLatheZ([[r * 0.26, zf * 0.72], [r * 0.25, zf * 0.72 + 0.007], [r * 0.18, zf * 0.72 + 0.011], [0.0001, zf * 0.72 + 0.012]], 10), 0x3e4144);
+  a.add(gDisc(r * 0.82, 12), shade(c, 0.6), TR(0, 0, -zf * 0.72, 0, Math.PI, 0));
+  const g0 = a.merged('D')!;
+  delete g0.userData.lodN;
+  const a1 = new Acc();
+  a1.add(gCylZ(r * 0.92, r * 0.92, w * 0.7, 11, true), c);
+  a1.add(gDisc(r * 0.92, 11), disc, TR(0, 0, w * 0.35 + 0.001));
+  a1.add(gCylZ(r * 0.24, r * 0.3, 0.014, 6, true), 0x3e4144, TR(0, 0, w * 0.35 + 0.006));
+  const g1 = neutralUv1(a1.merged('D')!);
+  const a2 = new Acc();
+  a2.add(gCylZ(r * 0.9, r * 0.9, w * 0.7, 8), c);
+  const g2 = neutralUv1(a2.merged('D')!);
+  delete g1.userData.lodN;
+  delete g2.userData.lodN;
+  registerLods(g0, [g1, g2]);
+  return g0;
+}
+
+/** Spoked idler: rubber-tyred rim on a spoked plate, hub boss (LOD1: disc wheel, LOD2: drum). */
+function idlerGeo(b: Bld, r: number, w: number): THREE.BufferGeometry {
+  const disc = shade(b.base, 0.72);
+  const zf = w / 2;
+  const a = new Acc();
+  a.add(gLatheZ([[r * 0.97, -zf], [r, -zf + w * 0.1], [r, zf - w * 0.12], [r * 0.95, zf], [r * 0.86, zf]], 15), K.rubber);
+  a.add(gCylZ(r * 0.86, r * 0.86, w * 0.9, 15, true), 0x2a2a28);
+  a.add(gSpokes(r * 0.87, r * 0.22, 6, 0.004), disc, TR(0, 0, zf - 0.003));
+  a.add(gDisc(r * 0.87, 12), shade(disc, 0.7), TR(0, 0, -zf + 0.003, 0, Math.PI, 0));
+  a.add(gLatheZ([[r * 0.26, zf - 0.004], [r * 0.25, zf + 0.004], [r * 0.18, zf + 0.008], [0.0001, zf + 0.009]], 10), 0x3e4144);
+  const g0 = a.merged('D')!;
+  delete g0.userData.lodN;
+  const a1 = new Acc();
+  a1.add(gCylZ(r, r, w, 10, true), K.rubber);
+  a1.add(gDisc(r, 10), disc, TR(0, 0, zf));
+  a1.add(gDisc(r, 8), disc, TR(0, 0, -zf, 0, Math.PI, 0));
+  const g1 = neutralUv1(a1.merged('D')!);
+  const a2 = new Acc();
+  a2.add(gCylZ(r, r, w, 8), K.rubber);
+  const g2 = neutralUv1(a2.merged('D')!);
+  delete g1.userData.lodN;
+  delete g2.userData.lodN;
+  registerLods(g0, [g1, g2]);
+  return g0;
 }
 
 /** Truck / wheeled AFV tyre with hub (axle along Z, outer face +Z). */
@@ -1595,6 +1881,8 @@ interface TrackSpec {
   style: WheelStyle;
   teeth?: number;
   arms?: boolean; // visible suspension arms
+  /** Idler shape: 'wheel' = same as the road wheels (default), 'spoked' = open spoked idler. */
+  idler?: 'wheel' | 'spoked';
 }
 
 function running(b: Bld, t: TrackSpec) {
@@ -1604,15 +1892,26 @@ function running(b: Bld, t: TrackSpec) {
   circles.push({ x: t.spr[0], y: t.spr[1], r: t.spr[2] });
   circles.push({ x: t.idl[0], y: t.idl[1], r: t.idl[2] });
   for (const r of t.rollers ?? []) circles.push({ x: r[0], y: r[1], r: r[2] });
-  const loop = beltLoop(circles, bt, t.sag ?? 0);
+  const loop = beltLoop(circles, bt, t.sag ?? 0, 28, 0.034);
   const k = Math.max(1, Math.round(loop.len * TREAD_K)) / loop.len;
+  // LOD1 / LOD2 belts: coarser loops (no sag subdivision), the same link density
+  const loops = [loop, beltLoop(circles, bt, 0, 16), beltLoop(circles, bt, 0, 9)];
   const base = treadBase(b.fog);
   for (const side of [-1, 1]) {
     const zc = side * t.gauge * b.zk;
-    const geo = beltGeo(loop, zc - t.tw / 2, zc + t.tw / 2, bt, k);
-    const wa = new Float32Array(geo.attributes.position.count * 4);
-    for (let i = 0; i < wa.length; i += 4) wa[i] = 0.8;
-    geo.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
+    const gs = loops.map((lp) => {
+      const g = beltGeo(lp, zc - t.tw / 2, zc + t.tw / 2, bt, (k * loop.len) / lp.len);
+      const wa = new Float32Array(g.attributes.position.count * 4);
+      const py = g.attributes.position;
+      for (let i = 0; i < py.count; i++) {
+        wa[i * 4] = 0.4;
+        wa[i * 4 + 2] = py.getY(i); // root-space height: shade of the fenders (wear.ts run)
+      }
+      g.setAttribute('aWear', new THREE.BufferAttribute(wa, 4));
+      return g;
+    });
+    const geo = gs[0];
+    registerLods(geo, [gs[1], gs[2]]);
     const mesh = new THREE.Mesh(geo, base);
     mesh.userData.tag = 'belt';
     mesh.userData.side = side;
@@ -1629,9 +1928,16 @@ function running(b: Bld, t: TrackSpec) {
   for (const side of [-1, 1]) {
     const z = side * t.gauge;
     for (const x of t.wheels) list.push({ x, y: wy, z, r: t.rw, s: 1, flip: side < 0 ? 1 : 0, steer: 0 });
-    list.push({ x: t.idl[0], y: t.idl[1], z, r: t.idl[2], s: t.idl[2] / t.rw, flip: side < 0 ? 1 : 0, steer: 0 });
+    if (t.idler !== 'spoked') list.push({ x: t.idl[0], y: t.idl[1], z, r: t.idl[2], s: t.idl[2] / t.rw, flip: side < 0 ? 1 : 0, steer: 0 });
   }
   b.wheels(b.root, rwGeo, list);
+  if (t.idler === 'spoked')
+    b.wheels(
+      b.root,
+      idlerGeo(b, t.idl[2], ww),
+      [-1, 1].map((side) => ({ x: t.idl[0], y: t.idl[1], z: side * t.gauge, r: t.idl[2], s: 1, flip: side < 0 ? 1 : 0, steer: 0 })),
+      'wheels',
+    );
   const spGeo = sprocketGeo(b, t.spr[2], ww, t.teeth ?? 12);
   b.wheels(
     b.root,
@@ -1641,19 +1947,22 @@ function running(b: Bld, t: TrackSpec) {
   );
   // return rollers (static) and suspension arms / hubs
   const c = b.chassis;
-  for (const side of [-1, 1]) {
-    for (const r of t.rollers ?? []) {
-      c.cz(r[2], r[2], t.tw * 0.5, r[0], r[1], side * t.gauge, K.rubber, 10);
-      c.cz(r[2] * 0.5, r[2] * 0.5, t.tw * 0.55, r[0], r[1], side * t.gauge, 0x3e4144, 8);
-    }
-    if (t.arms !== false) {
-      for (const x of t.wheels) {
-        const zi = side * (t.gauge - t.tw / 2 - 0.012);
-        c.box(t.rw * 1.3, 0.018, 0.016, x + t.rw * 0.55, wy + 0.012, zi, K.dark, 0, 0, 0.35);
-        c.box(0.02, 0.02, 0.02, x + t.rw * 1.15, wy + t.rw * 0.35, zi, K.dark);
+  // (behind the wheels / under the skirts at battle zoom: hero detail)
+  c.at(2, () => {
+    for (const side of [-1, 1]) {
+      for (const r of t.rollers ?? []) {
+        c.cz(r[2], r[2], t.tw * 0.5, r[0], r[1], side * t.gauge, K.rubber, 10);
+        c.cz(r[2] * 0.5, r[2] * 0.5, t.tw * 0.55, r[0], r[1], side * t.gauge, 0x3e4144, 8);
+      }
+      if (t.arms !== false) {
+        for (const x of t.wheels) {
+          const zi = side * (t.gauge - t.tw / 2 - 0.012);
+          c.box(t.rw * 1.3, 0.018, 0.016, x + t.rw * 0.55, wy + 0.012, zi, K.dark, 0, 0, 0.35);
+          c.box(0.02, 0.02, 0.02, x + t.rw * 1.15, wy + t.rw * 0.35, zi, K.dark);
+        }
       }
     }
-  }
+  });
   b.gauge = t.gauge * b.zk;
   b.tw = t.tw;
 }
@@ -1780,8 +2089,10 @@ function jerry(p: Part, x: number, y: number, z: number, c = 0x4c5434) {
 
 /** Tow cable along a polyline with eye loops. */
 function cable(p: Part, pts: V3[], r = 0.0045) {
-  p.tube(pts, r, mt(0x3c3a36), 5);
-  for (const e of [pts[0], pts[pts.length - 1]]) p.add(new THREE.TorusGeometry(r * 2.4, r * 0.8, 4, 8), mt(0x3c3a36), TR(e[0], e[1], e[2], 0, 0, 0));
+  p.at(2, () => {
+    p.tube(pts, r, mt(0x3c3a36), 5);
+    for (const e of [pts[0], pts[pts.length - 1]]) p.add(new THREE.TorusGeometry(r * 2.4, r * 0.8, 4, 8), mt(0x3c3a36), TR(e[0], e[1], e[2], 0, 0, 0));
+  });
 }
 
 /** Engine deck grille: dark recess + slats along Z. */
@@ -1808,14 +2119,6 @@ function antennas(b: Bld, parent: Part, x: number, y: number, zs: number[], h: n
   return ap;
 }
 
-/** Bolt row (tiny cylinders) along a vector. */
-function bolts(p: Part, a: V3, d: V3, n: number, axis: 'x' | 'y' | 'z' = 'y', r = 0.0035) {
-  for (let i = 0; i < n; i++) {
-    const t = n === 1 ? 0 : i / (n - 1);
-    const g = axis === 'x' ? gCylX(r, r, 0.006, 5) : axis === 'z' ? gCylZ(r, r, 0.006, 5) : gCylY(r, r, 0.006, 5);
-    p.add(g, mt(0x5a5e60), TR(a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t));
-  }
-}
 
 /** Grid of ERA / armour bricks on a plane: m maps plane (u = X, v = Z, normal = Y). */
 function bricks(p: Part, m: THREE.Matrix4, u0: number, u1: number, v0: number, v1: number, nu: number, nv: number, th: number, gap: number, paint: number = CAMO, stagger = false) {
@@ -1877,7 +2180,9 @@ function mainGun(b: Bld, tur: Part, x: number, y: number, z: number, o: GunOpt) 
   rec.cx(r * 1.15, r * 1.3, L * 0.35, L * 0.47, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
   rec.cx(r, r * 1.12, L * 0.36, L * 0.81, 0, 0, o.sleeve === 0 ? mt(K.gun) : sp, 12);
   // sleeve clamps
-  for (const t of [0.3, 0.64]) rec.cx(r * 1.4, r * 1.4, 0.008, L * t, 0, 0, mt(K.gun), 12);
+  rec.at(2, () => {
+    for (const t of [0.3, 0.64]) rec.cx(r * 1.4, r * 1.4, 0.008, L * t, 0, 0, mt(K.gun), 12);
+  });
   const fume = o.fume ?? 0.45;
   if (fume >= 0) rec.cx(r * 1.75, r * 1.75, L * 0.16, L * fume, 0, 0, sp, 14);
   if (fume >= 0) {
@@ -2252,8 +2557,8 @@ function beacon(b: Bld, p: Part, x: number, y: number, z: number, paint = AMBER)
 }
 
 /** Stats for the preview harness. */
-export function vehicleStats(): Record<string, { tris: number; meshes: number }> {
-  const out: Record<string, { tris: number; meshes: number }> = {};
+export function vehicleStats(): Record<string, { tris: number; meshes: number; lod?: number[] }> {
+  const out: Record<string, { tris: number; meshes: number; lod?: number[] }> = {};
   for (const [k, t] of templates) out[k] = t.stats;
   return out;
 }
@@ -2297,7 +2602,7 @@ function trophy(T: Part, x: number, y: number, z: number, side: number, team?: n
   T.sph(0.022, x - 0.08, y + 0.035, z - side * 0.01, mt(K.gun), 8, 4, 0.8, true);
   // flat radar panel
   T.cbox(0.075, 0.055, 0.012, 0.004, x, y - 0.005, z, CAMO, 0, side * 0.35, 0);
-  T.box(0.055, 0.04, 0.002, x + 0.004, y - 0.005, z + side * 0.006, 0x3a3d40, 0, side * 0.35, 0);
+  T.box(0.058, 0.043, 0.002, x + 0.004, y - 0.005, z + side * 0.006, shade(T.b.base, 0.78), 0, side * 0.35, 0);
   if (team !== undefined) T.box(0.02, 0.006, 0.002, x - 0.02, y + 0.018, z + side * 0.007, team, 0, side * 0.35, 0);
 }
 
@@ -2316,11 +2621,6 @@ function fuelDrums(B: Part, x: number, y: number, zs: number[]) {
   }
 }
 
-/** Unditching log across the rear. */
-function unditchLog(B: Part, x: number, y: number, len: number) {
-  B.cz(0.022, 0.024, len, x, y, 0, K.brown, 8);
-  for (const z of [-len * 0.35, len * 0.35]) B.cz(0.026, 0.026, 0.008, x, y, z, K.dark, 8);
-}
 
 /** Soviet-style hull (T-72 family): low hull, fenders, flat deck. Returns deck height. */
 function sovHull(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; lowFront?: number }) {
@@ -2438,56 +2738,270 @@ function rack(p: Part, x0: number, x1: number, z0: number, z1: number, y0: numbe
   p.box(Math.abs(x1 - x0), 0.003, Math.abs(z1 - z0), (x0 + x1) / 2, y0 + 0.002, (z0 + z1) / 2, rk);
 }
 
+// ---------------------------------------------------------------- MBT chassis specs
+/*
+ * Every MBT is built on its own chassis spec (CHASSIS below): hull profiles, running gear (road wheel
+ * count / size / spacing and hub style, return rollers, sprocket front or rear, idler), engine position,
+ * nose shape and rear. Proportions from published dimensions and the reference photos / drawings in
+ * tools/vehicle-refs.md (x ~0.139 / m along the hull, y ~0.15 / m). The skirts, engine deck, armour
+ * packages and turrets stay in each tank's builder.
+ */
+interface ChassisSpec {
+  /** Real vehicle (for the reference log / checklist). */
+  name: string;
+  /** Lower hull side profile (between the tracks) and its half width. */
+  lower: P2[];
+  hw: number;
+  /** Upper hull side profile over the tracks (nose, glacis, deck, rear) and its width. */
+  upper: P2[];
+  W: number;
+  run: TrackSpec;
+  engine: 'front' | 'rear';
+  /** Rounded bow lip across the nose: x, y, radius. */
+  lip?: V3;
+  /** Rear crew door in the hull back plate: x of the plate, door centre y, height, width. */
+  door?: [number, number, number, number];
+  /** T-72 / T-80 lineage: narrow hull with fenders over the tracks instead of the two profiles (sovHull2). */
+  sov?: { L: number; deck: number; nose: number; glacisX: number };
+  /** Reference notes (exhaust, skirts, turret) for the per-tank checklist. */
+  notes: string;
+}
+
+/** Lower + upper hull, bow lip, rear door and running gear from a chassis spec. */
+function chassis(b: Bld, c: ChassisSpec): number {
+  const B = b.body;
+  running(b, c.run);
+  let deck = Math.max(...c.upper.map((p) => p[1]));
+  if (c.sov) deck = sovHull2(b, c.sov);
+  else {
+    lowerHull(B, c.lower, c.hw);
+    B.side(c.upper, c.W, 0, CAMO, 0.01);
+  }
+  if (c.lip) B.cz(c.lip[2], c.lip[2], c.W - 0.03, c.lip[0], c.lip[1], 0, CAMO, 10);
+  if (c.door) {
+    const [x, y, h, w] = c.door;
+    B.box(0.006, h + 0.012, w + 0.012, x - 0.002, y, 0, K.dark);
+    B.cbox(0.008, h, w, 0.003, x - 0.004, y, 0, CAMO);
+    for (const dy of [-h * 0.32, h * 0.32]) B.cz(0.005, 0.005, 0.02, x - 0.006, y + dy, w / 2 - 0.004, mt(K.gun), 6);
+    B.box(0.006, 0.006, 0.03, x - 0.01, y, -w * 0.25, mt(K.steel));
+  }
+  return deck;
+}
+
+/** Return rollers over the road wheels (y from the wheel radius and belt). */
+function rollers(xs: number[], rw: number, bt: number, r = 0.012): V3[] {
+  return xs.map((x) => [x, rw * 2 + bt + r * 0.6, r] as V3);
+}
+
+const CHASSIS: Record<string, ChassisSpec> = {
+  // Merkava Mk4: front engine (sprocket front), 6 large road wheels, return rollers behind the skirts,
+  // rear idler; long sloped front deck to a rounded bow with a lip; rear crew door under the bustle
+  israel: {
+    name: 'Merkava Mk4',
+    lower: [[-0.52, 0.07], [0.4, 0.07], [0.545, 0.15], [0.572, 0.19], [-0.55, 0.19]],
+    hw: 0.148,
+    upper: [[-0.553, 0.19], [0.46, 0.19], [0.56, 0.172], [0.585, 0.176], [0.598, 0.19], [0.6, 0.203], [0.592, 0.213], [0.572, 0.22], [0.08, 0.272], [-0.52, 0.278], [-0.556, 0.252]],
+    W: 0.53,
+    run: {
+      wheels: evenly(6, -0.37, 0.31),
+      rw: 0.06,
+      spr: [0.478, 0.118, 0.054],
+      idl: [-0.5, 0.106, 0.05],
+      rollers: [
+        [-0.24, 0.166, 0.013],
+        [-0.03, 0.168, 0.013],
+        [0.18, 0.168, 0.013],
+      ],
+      gauge: 0.208,
+      tw: 0.114,
+      bt: 0.022,
+      sag: 0.004,
+      style: 'merk',
+      teeth: 11,
+      idler: 'spoked',
+    },
+    engine: 'front',
+    lip: [0.596, 0.197, 0.008],
+    door: [-0.556, 0.222, 0.05, 0.15],
+    notes: 'front engine: louvred exhaust on the left front panel, diamond-mesh intake right front, deck grilles on the glacis; bolted panel skirts + flap row; rear crew door; long wedge turret far back',
+  },
+  // M1A2 SEPv3: 7.93 x 3.66 m, 2.44 m; 7 road wheels (0.64 m) with wide gaps, 2 return rollers, rear sprocket,
+  // front idler; very shallow upper glacis, flat deck, turbine exhaust grille in the rear plate
+  usa: {
+    name: 'M1A2 SEPv3 Abrams',
+    lower: [[-0.5, 0.072], [0.4, 0.072], [0.54, 0.16], [-0.52, 0.16]],
+    hw: 0.148,
+    upper: [[-0.528, 0.156], [0.55, 0.156], [0.572, 0.18], [0.31, 0.232], [-0.47, 0.236], [-0.53, 0.218]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.355, 0.335), rw: 0.045, spr: [-0.472, 0.102, 0.046], idl: [0.455, 0.092, 0.042], rollers: rollers([-0.19, 0.14], 0.045, 0.017), gauge: 0.206, tw: 0.112, bt: 0.017, sag: 0.003, style: 'abrams', teeth: 11 },
+    engine: 'rear',
+    notes: 'rear turbine: exhaust grille in the rear plate, deck grilles; deep front skirt section with a notched step, thin rear skirts',
+  },
+  // Leopard 2A7/2A8: 7.72 x 3.75 m; 7 road wheels (0.7 m), 4 return rollers, rear sprocket, front idler; short
+  // steep glacis with the wedge add-on plate, long flat engine deck, exhaust grilles at the rear sides
+  germany: {
+    name: 'Leopard 2A8',
+    lower: [[-0.5, 0.074], [0.42, 0.074], [0.545, 0.16], [-0.52, 0.16]],
+    hw: 0.148,
+    upper: [[-0.535, 0.158], [0.548, 0.158], [0.565, 0.212], [0.36, 0.254], [-0.5, 0.258], [-0.537, 0.24]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.37, 0.345), rw: 0.049, spr: [-0.48, 0.108, 0.047], idl: [0.465, 0.098, 0.043], rollers: rollers([-0.27, -0.085, 0.1, 0.27], 0.049, 0.017), gauge: 0.207, tw: 0.112, bt: 0.017, sag: 0.004, style: 'nato', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: long flat deck with big grilles, exhaust louvres at the rear corners; tall heavy front skirts with a vertical front panel, thin rear skirts with rubber edge',
+  },
+  // T-90M: 6.86 x 3.78 m, 2.23 m (low); 6 road wheels (0.75 m) in T-72 spacing (gaps after the 1st and around
+  // the 4th), 3 small return rollers, rear sprocket, spoked front idler; fenders, rubber skirts with ERA
+  russia: {
+    name: 'T-90M',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 0.96, deck: 0.212, nose: 0.47, glacisX: 0.265 },
+    run: { wheels: [0.315, 0.165, 0.055, -0.085, -0.225, -0.335], rw: 0.052, spr: [-0.452, 0.1, 0.045], idl: [0.425, 0.086, 0.042], rollers: rollers([-0.23, 0.0, 0.22], 0.052, 0.016, 0.01), gauge: 0.205, tw: 0.105, bt: 0.016, sag: 0.01, style: 'sov', teeth: 13, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: deck grille, exhaust louvre on the left fender; Relikt glacis, rubber skirts with Relikt boxes on the front half, slat cage on the bustle',
+  },
+  // T-84 Oplot-M: 7.08 x 3.78 m, 2.2 m; T-80 running gear: 6 rubber-rimmed road wheels (0.67 m), 5 return
+  // rollers, rear sprocket; rear exhaust grille in the hull back (6TD)
+  ukraine: {
+    name: 'BM Oplot (T-84)',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 1.0, deck: 0.218, nose: 0.485, glacisX: 0.27 },
+    run: { wheels: evenly(6, -0.335, 0.31), rw: 0.047, spr: [-0.458, 0.098, 0.045], idl: [0.43, 0.086, 0.042], rollers: rollers([-0.27, -0.135, 0.0, 0.135, 0.27], 0.047, 0.016, 0.01), gauge: 0.205, tw: 0.11, bt: 0.016, sag: 0.006, style: 't80', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: exhaust grille across the hull back; Nozh/Duplet ERA glacis and skirt panels on the front half',
+  },
+  // Karrar: T-72 / T-90MS-derived: 6 road wheels in T-72 spacing, 3 return rollers, rear sprocket, spoked idler;
+  // low hull, box ERA skirts hanging over most of the wheels
+  iran: {
+    name: 'Karrar',
+    lower: [],
+    hw: 0.15,
+    upper: [],
+    W: 0.44,
+    sov: { L: 0.97, deck: 0.216, nose: 0.475, glacisX: 0.27 },
+    run: { wheels: [0.32, 0.17, 0.06, -0.08, -0.22, -0.33], rw: 0.052, spr: [-0.455, 0.1, 0.045], idl: [0.43, 0.086, 0.042], rollers: rollers([-0.23, 0.0, 0.22], 0.052, 0.016, 0.01), gauge: 0.205, tw: 0.105, bt: 0.016, sag: 0.01, style: 'sov', teeth: 13, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: exhaust louvre on the left fender, external fuel drums; box ERA skirts all along',
+  },
+  // Type 99A: 7.6 x 3.5 m, 2.37 m; 6 large road wheels (0.78 m), return rollers behind deep skirts, rear
+  // sprocket, spoked front idler; ERA glacis, deep modular skirts, exhaust on the left rear side
+  china: {
+    name: 'Type 99A',
+    lower: [[-0.5, 0.074], [0.43, 0.074], [0.545, 0.17], [-0.525, 0.17]],
+    hw: 0.145,
+    upper: [[-0.53, 0.168], [0.548, 0.168], [0.568, 0.2], [0.33, 0.252], [-0.5, 0.256], [-0.533, 0.236]],
+    W: 0.5,
+    run: { wheels: [0.345, 0.215, 0.085, -0.05, -0.185, -0.32], rw: 0.056, spr: [-0.468, 0.11, 0.047], idl: [0.465, 0.1, 0.044], rollers: rollers([-0.25, -0.02, 0.2], 0.056, 0.017), gauge: 0.2, tw: 0.11, bt: 0.017, sag: 0.004, style: 'asia', teeth: 12, idler: 'spoked' },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles, exhaust louvre on the left rear side; ERA glacis, deep modular composite / ERA skirts along the whole run',
+  },
+  // K2 Black Panther: 7.5 x 3.6 m, 2.4 m; 6 road wheels (0.75 m) on in-arm hydropneumatic units (slightly raised
+  // stance), return rollers behind the skirts, rear sprocket, front idler
+  korea: {
+    name: 'K2 Black Panther',
+    lower: [[-0.5, 0.08], [0.43, 0.08], [0.548, 0.17], [-0.52, 0.17]],
+    hw: 0.148,
+    upper: [[-0.53, 0.168], [0.55, 0.168], [0.575, 0.198], [0.31, 0.252], [-0.5, 0.256], [-0.53, 0.236]],
+    W: 0.52,
+    run: { wheels: evenly(6, -0.35, 0.33), rw: 0.052, spr: [-0.47, 0.11, 0.046], idl: [0.455, 0.1, 0.043], rollers: rollers([-0.2, 0.0, 0.2], 0.052, 0.017), gauge: 0.205, tw: 0.112, bt: 0.017, sag: 0.003, style: 'k2', teeth: 11 },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles at the rear sides, exhaust at the rear; tall skirts with an angled nose section',
+  },
+  // Altay: 7.3 x 3.9 m, 2.6 m; 7 road wheels (0.68 m), 3 return rollers, rear sprocket, front idler;
+  // Leopard-like hull and skirts with its own boxy turret
+  turkey: {
+    name: 'Altay',
+    lower: [[-0.5, 0.072], [0.43, 0.072], [0.548, 0.164], [-0.52, 0.164]],
+    hw: 0.148,
+    upper: [[-0.53, 0.162], [0.55, 0.162], [0.568, 0.21], [0.33, 0.252], [-0.5, 0.256], [-0.53, 0.236]],
+    W: 0.52,
+    run: { wheels: evenly(7, -0.365, 0.335), rw: 0.047, spr: [-0.475, 0.106, 0.046], idl: [0.455, 0.096, 0.043], rollers: rollers([-0.22, 0.0, 0.22], 0.047, 0.017), gauge: 0.205, tw: 0.112, bt: 0.017, sag: 0.004, style: 'nato', teeth: 12 },
+    engine: 'rear',
+    notes: 'rear engine: deck grilles, exhaust at the rear; tall skirts with a vertical front panel (Leopard-like)',
+  },
+};
+
+/** Per-tank chassis checklist (studio harness): wheels, sprocket, height. */
+export function chassisChecklist(): Record<string, { name: string; wheels: number; sprocket: string; rollers: number; idler: string; deck: number; engine: string; notes: string }> {
+  const out: ReturnType<typeof chassisChecklist> = {};
+  for (const [k, c] of Object.entries(CHASSIS)) {
+    const deck = c.sov ? c.sov.deck : Math.max(...c.upper.map((p) => p[1]));
+    out[k] = { name: c.name, wheels: c.run.wheels.length, sprocket: c.run.spr[0] > 0 ? 'front' : 'rear', rollers: c.run.rollers?.length ?? 0, idler: c.run.idler ?? 'wheel', deck: Math.round((deck / 0.15) * 100) / 100, engine: c.engine, notes: c.notes };
+  }
+  return out;
+}
+
+/** Armour skirt panel of the side profile pts on side s (outer face at |z| = zo, thickness th), bevelled. */
+function skirtPanel(B: Part, pts: P2[], s: number, zo: number, th: number, bevel = 0.003) {
+  B.side(pts, th, s * (zo - th / 2), CAMO, bevel);
+}
+
+/** Row of hinged skirt panels xs[i] .. xs[i + 1] (bottom y0, top y1) on both sides; split = horizontal mid joint. */
+function panelRow(B: Part, xs: number[], y0: number, y1: number, zo: number, th: number, split = false, gap = 0.0016) {
+  for (const s of [-1, 1])
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x0 = xs[i] + gap;
+      const x1 = xs[i + 1] - gap;
+      const mid = (y0 + y1) / 2;
+      B.piece(
+        s > 0 ? 3 : 2,
+        () => {
+          if (!split) skirtPanel(B, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], s, zo, th);
+          else {
+            skirtPanel(B, [[x0, mid + 0.0013], [x1, mid + 0.0013], [x1, y1], [x0, y1]], s, zo, th);
+            skirtPanel(B, [[x0, y0], [x1, y0], [x1, mid - 0.0013], [x0, mid - 0.0013]], s, zo, th);
+          }
+        },
+        s > 0 ? x0 : x1,
+        y1,
+      );
+    }
+}
+
 function mbtAbrams(b: Bld) {
   // M1A2 SEPv3: 7.93 m hull, 3.66 m wide, 2.44 m to the turret roof; 7 road wheels, 2 return rollers,
   // rear sprocket; flat angular turret with a long bustle + rack, CROWS, CITV, GPS "doghouse"
   const B = b.body;
-  running(b, {
-    wheels: evenly(7, -0.355, 0.335),
-    rw: 0.047,
-    spr: [-0.468, 0.104, 0.046],
-    idl: [0.452, 0.094, 0.042],
-    rollers: [
-      [-0.19, 0.129, 0.014],
-      [0.14, 0.129, 0.014],
-    ],
-    gauge: 0.206,
-    tw: 0.112,
-    style: 'nato',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.4, 0.072], [0.54, 0.16], [-0.52, 0.16]], 0.148);
-  // upper hull + sponsons: very shallow upper glacis, flat deck, slightly sloped rear deck edge
-  B.side([[-0.528, 0.156], [0.55, 0.156], [0.572, 0.182], [0.31, 0.244], [-0.47, 0.25], [-0.53, 0.232]], 0.52, 0, CAMO, 0.008);
-  // skirts: thick ballistic front panels over the first three wheels, thin rear panels, cut-away at the sprocket
-  skirts(B, [[-0.455, 0.096], [0.13, 0.096], [0.13, 0.2], [-0.47, 0.2]], 0.267, 0.012, [-0.31, -0.165, -0.02], CAMO, [0.098, 0.198]);
-  skirts(B, [[0.13, 0.086], [0.45, 0.086], [0.548, 0.15], [0.556, 0.2], [0.13, 0.2]], 0.271, 0.022, [0.26, 0.4], CAMO, [0.09, 0.198]);
+  chassis(b, CHASSIS.usa);
+  // skirts: thin rear panels; deep, thick ballistic section over the first three wheels whose rear edge steps
+  // down in a notch; angled leading panel
+  panelRow(B, [-0.47, -0.32, -0.17, -0.02, 0.13], 0.099, 0.2, 0.272, 0.01);
   for (const s of [-1, 1]) {
-    B.box(1.0, 0.006, 0.03, 0.04, 0.2, s * 0.268, shade(b.base, 0.9)); // skirt top lip
-    bolts(B, [-0.44, 0.188, s * 0.274], [0.56, 0, 0], 9, 'z', 0.003);
+    B.piece(s > 0 ? 3 : 2, () => {
+      skirtPanel(B, [[0.132, 0.099], [0.152, 0.082], [0.262, 0.082], [0.262, 0.202], [0.132, 0.202]], s, 0.284, 0.024);
+      skirtPanel(B, [[0.266, 0.082], [0.392, 0.082], [0.392, 0.202], [0.266, 0.202]], s, 0.284, 0.024);
+      skirtPanel(B, [[0.396, 0.082], [0.462, 0.082], [0.548, 0.146], [0.556, 0.202], [0.396, 0.202]], s, 0.284, 0.024);
+    }, 0.132, 0.202);
+    B.box(0.76, 0.006, 0.03, 0.09, 0.204, s * 0.27, shade(b.base, 0.9)); // skirt top lip
     headlight(B, 0.556, 0.2, s * 0.235);
     B.box(0.03, 0.03, 0.03, 0.545, 0.19, s * 0.17, K.dark); // brush guard base
-    taillight(B, -0.533, 0.236, s * 0.24);
-    bin(B, 0.11, 0.038, 0.06, -0.43, 0.25, s * 0.225);
+    taillight(B, -0.533, 0.222, s * 0.24);
+    bin(B, 0.11, 0.038, 0.06, -0.43, 0.236, s * 0.225);
   }
   // driver: centre hatch with 3 periscopes in the glacis
-  hatch(B, 0.36, 0.236, 0, 0.034);
-  for (const z of [-0.036, 0, 0.036]) periscope(B, 0.41, 0.229, z, 0, 0.02);
+  hatch(B, 0.36, 0.226, 0, 0.034);
+  for (const z of [-0.036, 0, 0.036]) periscope(B, 0.41, 0.22, z, 0, 0.02);
   // engine deck: big rear grille + access doors, rear exhaust grille, SEPv3 UAPU armoured box (left rear)
-  grille(B, -0.39, 0.25, 0, 0.13, 0.32, 9);
-  lid(B, 0.11, 0.2, -0.24, 0.25, 0);
-  lid(B, 0.09, 0.2, -0.13, 0.25, 0);
+  grille(B, -0.39, 0.236, 0, 0.13, 0.32, 9);
+  lid(B, 0.11, 0.2, -0.24, 0.236, 0);
+  lid(B, 0.09, 0.2, -0.13, 0.236, 0);
   B.box(0.012, 0.055, 0.34, -0.533, 0.198, 0, K.black);
   for (let i = 0; i < 6; i++) B.box(0.006, 0.004, 0.34, -0.537, 0.178 + i * 0.008, 0, CAMO);
-  B.cbox(0.1, 0.05, 0.07, 0.006, -0.47, 0.275, -0.205, CAMO);
-  B.box(0.004, 0.03, 0.05, -0.521, 0.276, -0.205, K.black);
-  cable(B, [[-0.52, 0.244, -0.2], [-0.535, 0.215, -0.08], [-0.535, 0.215, 0.08], [-0.52, 0.244, 0.2]]);
+  B.cbox(0.1, 0.05, 0.07, 0.006, -0.47, 0.261, -0.205, CAMO);
+  B.box(0.004, 0.03, 0.05, -0.521, 0.262, -0.205, K.black);
+  cable(B, [[-0.52, 0.23, -0.2], [-0.535, 0.205, -0.08], [-0.535, 0.205, 0.08], [-0.52, 0.23, 0.2]]);
   for (const s of [-1, 1]) B.box(0.03, 0.026, 0.04, 0.47, 0.094, s * 0.1, K.dark); // tow eyes
-  teamPanel(B, 0.004, 0.03, 0.12, -0.536, 0.236, 0.06, b.team);
+  teamPanel(B, 0.004, 0.026, 0.12, -0.536, 0.222, 0.06, b.team);
   b.emit(-0.54, 0.2, 0.08);
   b.emit(-0.54, 0.2, -0.08);
 
   // ---- turret: flat, angular; cheeks with a chamfered roof edge; bustle overhangs the deck
-  const T = b.part(B, -0.045, 0.25, 0, 'turret');
+  const T = b.part(B, -0.045, 0.236, 0, 'turret');
   const P0: P2[] = [[0.285, 0], [0.285, 0.072], [0.245, 0.15], [0.19, 0.226], [0.13, 0.232], [-0.13, 0.232], [-0.165, 0.214], [-0.375, 0.205], [-0.388, 0]];
   const PT: P2[] = [[0.205, 0], [0.205, 0.07], [0.18, 0.148], [0.14, 0.208], [0.1, 0.214], [-0.13, 0.218], [-0.16, 0.202], [-0.365, 0.193], [-0.376, 0]];
   hloft(T, [
@@ -2531,112 +3045,237 @@ function mbtAbrams(b: Bld) {
   T.cy(0.003, 0.003, 0.05, -0.32, 0.106, 0.03, K.dark, 4);
   T.box(0.02, 0.005, 0.005, -0.32, 0.158, 0.03, K.dark);
   antennas(b, T, -0.27, 0.106, [-0.165, 0.165], 0.24);
-  mainGun(b, T, 0.28, 0.052, 0, { len: 0.66, r: 0.0145, fume: 0.42, mrs: true, mantlet: [0.05, 0.066, 0.104] });
+  // M256 L/44: 9.77 m gun forward vs 7.93 m hull = 1.84 m overhang
+  mainGun(b, T, 0.28, 0.052, 0, { len: 0.585, r: 0.0145, fume: 0.47, mrs: true, mantlet: [0.05, 0.066, 0.104] });
+}
+
+/** Painted marking chevron (two bars, apex toward +X) on a side face at |z| = zf, centred (x, y), arm length l. */
+function chevron(p: Part, x: number, y: number, zf: number, l: number, th: number, side: number, color = 0xdcdad0) {
+  const a = 0.62;
+  for (const s of [-1, 1]) {
+    const dx = Math.cos(a) * l * 0.5;
+    const dy = Math.sin(a) * l * 0.5 * s;
+    p.box(l, th, 0.0016, x - dx, y + dy, side * zf, color, 0, 0, -s * a);
+  }
+}
+
+/** Basket on a turret bustle: tube frame, vertical bar mesh on the open faces, floor, stowed kit inside. */
+function basket(p: Part, x0: number, x1: number, zw: number, y0: number, h: number, sideTo: number, reg: string) {
+  const rk = 0x3c3e36;
+  const t = 0.0042;
+  // floor + rails (top, mid) around the rear (x0) and the two sides back to sideTo
+  p.box(x1 - x0, 0.004, zw * 2, (x0 + x1) / 2, y0 + 0.002, 0, rk);
+  for (const y of [y0 + h, y0 + h * 0.52]) {
+    p.add(gCylZ(t, t, zw * 2, 5), rk, TR(x0, y, 0));
+    for (const s of [-1, 1]) p.add(gCylX(t, t, sideTo - x0, 5), rk, TR((x0 + sideTo) / 2, y, s * zw));
+  }
+  for (const s of [-1, 1]) {
+    p.box(t * 1.4, h, t * 1.4, x0, y0 + h / 2, s * zw, rk);
+    p.box(t * 1.4, h, t * 1.4, sideTo, y0 + h / 2, s * zw, rk);
+  }
+  // bar mesh (dropped at far zoom; the bake keeps the rails' shading)
+  p.at(1, () => {
+    const n = Math.round((zw * 2) / 0.0125);
+    const bar = gCylY(0.0013, 0.0013, h * 0.96, 3, true);
+    // every other bar is hero detail
+    for (let i = 1; i < n; i++) p.at(i % 2 ? 1 : 2, () => p.add(bar, rk, TR(x0, y0 + h * 0.5, -zw + (i * zw * 2) / n)));
+    const m = Math.round((sideTo - x0) / 0.0125);
+    for (const s of [-1, 1]) for (let i = 1; i < m; i++) p.at(i % 2 ? 1 : 2, () => p.add(bar, rk, TR(x0 + (i * (sideTo - x0)) / m, y0 + h * 0.5, s * zw)));
+  });
+  // stowed kit: rolled tarp, kit bags, ammo boxes
+  const bag = reg === 'mideast' ? [0x8c7a56, 0x6c6444, 0x7a6a4a] : [0x5c5a3c, 0x4e5434, 0x6a6448];
+  const dx = x1 - x0;
+  p.cz(h * 0.32, h * 0.32, zw * 1.6, x0 + dx * 0.5, y0 + h * 0.36, 0, bag[0], 9);
+  p.cbox(dx * 0.5, h * 0.55, zw * 0.5, 0.006, x0 + dx * 0.32, y0 + h * 0.3, zw * 0.45, bag[1]);
+  p.cbox(dx * 0.42, h * 0.5, zw * 0.45, 0.006, x0 + dx * 0.3, y0 + h * 0.3 + 0.004, -zw * 0.5, bag[2]);
+  p.box(dx * 0.3, h * 0.35, zw * 0.3, x0 + dx * 0.72, y0 + h * 0.2, -zw * 0.15, K.olive);
+}
+
+/** Ball-and-chain curtain hanging from a rail: n chains from a to b (plan points) at height y, length len. */
+function chains(p: Part, a: P2, c: P2, n: number, y: number, len: number) {
+  const ck = 0x34352f;
+  p.add(gCylX(0.003, 0.003, Math.hypot(c[0] - a[0], c[1] - a[1]), 5), ck, TR((a[0] + c[0]) / 2, y, (a[1] + c[1]) / 2, 0, -Math.atan2(c[1] - a[1], c[0] - a[0]), 0));
+  for (let i = 0; i <= n; i++) {
+    p.at(i % 3 ? 2 : 1, () => {
+      const t = i / n;
+      const x = a[0] + (c[0] - a[0]) * t;
+      const z = a[1] + (c[1] - a[1]) * t;
+      const l = len * (0.97 + 0.06 * hash01(i * 7 + Math.round(x * 1000)));
+      // a chain of links (thin, beaded) ending in a round ball
+      p.add(gCylY(0.0011, 0.0011, l, 3, true), ck, TR(x, y - l / 2, z));
+      for (const k of [0.35, 0.7]) p.add(new THREE.OctahedronGeometry(0.0019, 0), ck, TR(x, y - l * k, z, 0, k * 2, 0, 1, 1.6, 1));
+      p.add(new THREE.IcosahedronGeometry(0.0058, 0), mt(0x3a3a36), TR(x, y - l - 0.0045, z));
+    });
+  }
+}
+
+/** Thin armour module plate on a leaning turret side (lean angle th; side s), centred (x, y, z on the face). */
+function turretModule(p: Part, x: number, y: number, z: number, L: number, H: number, th: number, s: number, t = 0.0075) {
+  const nY = Math.sin(th);
+  const nZ = Math.cos(th);
+  p.cbox(L, H, t, 0.0022, x, y + nY * t * 0.5, s * (z + nZ * t * 0.5), CAMO, -s * th, 0, 0);
 }
 
 function mbtMerkava(b: Bld) {
-  // Merkava Mk4: front engine, 7.6 m hull, 3.72 m wide; front sprocket, 6 large road wheels, rear idler;
-  // very long low wedge turret mounted far back, ball-and-chain bustle curtain, Trophy APS, rear door
+  // Merkava Mk4: front engine, very long low wedge turret mounted far back, ball-and-chain bustle curtain,
+  // Trophy APS, rear crew door (chassis: CHASSIS.israel)
   const B = b.body;
-  running(b, {
-    wheels: evenly(6, -0.36, 0.3),
-    rw: 0.056,
-    spr: [0.468, 0.112, 0.048],
-    idl: [-0.47, 0.1, 0.046],
-    rollers: [
-      [-0.21, 0.147, 0.013],
-      [-0.0, 0.149, 0.013],
-      [0.2, 0.149, 0.013],
-    ],
-    gauge: 0.208,
-    tw: 0.114,
-    style: 'merk',
-  });
-  lowerHull(B, [[-0.52, 0.068], [0.4, 0.068], [0.555, 0.165], [-0.55, 0.165]], 0.148);
-  // long sloping glacis over the front engine, high flat rear
-  B.side([[-0.553, 0.165], [0.565, 0.165], [0.59, 0.186], [0.08, 0.27], [-0.52, 0.276], [-0.555, 0.248]], 0.53, 0, CAMO, 0.01);
-  // big skirt modules: lower edge at hub height, sloped nose, rubber strip
-  skirts(B, [[-0.5, 0.105], [0.37, 0.105], [0.5, 0.13], [0.59, 0.198], [0.42, 0.226], [0.08, 0.262], [-0.52, 0.262]], 0.274, 0.018, [-0.33, -0.15, 0.03, 0.2, 0.37], CAMO, [0.106, 0.25]);
+  chassis(b, CHASSIS.israel);
+  // ---- side skirts: four long bolted panels (horizontal mid joint) per side, a front panel carrying the engine
+  // intake (right) / exhaust louvres (left), a nose panel tapering into the bow, a row of flaps under a rib
+  const zo = 0.284;
+  const top = (x: number) => 0.27 - (x + 0.47) * 0.011;
+  const yb = 0.147;
+  const xs = [-0.47, -0.31, -0.15, 0.01, 0.17, 0.37];
   for (const s of [-1, 1]) {
-    B.box(1.02, 0.012, 0.012, 0.02, 0.1, s * 0.283, K.rubber);
-  }
-  // engine deck grilles (front right), engine air louvres along the right of the glacis, driver front left
-  grille(B, 0.29, 0.225, 0.12, 0.2, 0.17, 8);
-  grille(B, 0.12, 0.255, 0.15, 0.1, 0.12, 5);
-  hatch(B, 0.17, 0.25, -0.13, 0.034);
-  for (const z of [-0.17, -0.13, -0.09]) periscope(B, 0.215, 0.247, z, 0, 0.018);
-  for (const s of [-1, 1]) {
-    headlight(B, 0.575, 0.2, s * 0.23);
-    taillight(B, -0.556, 0.255, s * 0.235);
-  }
-  // exhaust grille on the right hull side behind the engine
-  B.box(0.09, 0.03, 0.006, 0.26, 0.2, 0.284, K.black);
-  for (let i = 0; i < 4; i++) B.box(0.09, 0.003, 0.008, 0.26, 0.189 + i * 0.007, 0.285, CAMO);
-  // rear: clamshell door (team panel), stowage baskets either side
-  B.box(0.008, 0.08, 0.13, -0.556, 0.205, 0, K.dark);
-  B.cbox(0.006, 0.07, 0.115, 0.002, -0.559, 0.205, 0, CAMO);
-  B.box(0.004, 0.03, 0.008, -0.563, 0.205, 0.04, mt(K.steel));
-  teamPanel(B, 0.003, 0.022, 0.09, -0.563, 0.225, 0, b.team);
-  for (const s of [-1, 1]) {
-    rack(B, -0.585, -0.555, s * 0.1, s * 0.245, 0.17, 0.06, 4);
-    B.cbox(0.025, 0.04, 0.1, 0.008, -0.57, 0.205, s * 0.18, K.canvas);
-    bin(B, 0.11, 0.035, 0.06, -0.44, 0.276, s * 0.225);
-  }
-  cable(B, [[0.5, 0.21, 0.25], [0.2, 0.248, 0.25], [-0.2, 0.276, 0.24], [-0.4, 0.276, 0.22]]);
-  b.emit(0.28, 0.205, 0.28);
-
-  // ---- turret: very long, low arrowhead wedge with steeply leaning sides; gun at the tip
-  const T = b.part(B, -0.14, 0.276, 0, 'turret');
-  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.228], [-0.4, 0.21], [-0.46, 0.17], [-0.47, 0]];
-  const PT: P2[] = [[0.3, 0], [0.3, 0.025], [0.21, 0.09], [0.08, 0.17], [-0.15, 0.18], [-0.39, 0.168], [-0.44, 0.13], [-0.45, 0]];
-  hloft(T, [
-    { y: -0.008, h: sz(P0, 0.9) },
-    { y: 0.018, h: P0 },
-    { y: 0.078, h: slopeF(sz(P0, 0.9), 0.0, -0.1) },
-    { y: 0.106, h: PT },
-  ]);
-  T.cy(0.2, 0.2, 0.012, 0.0, -0.018, 0, K.dark, 20);
-  // ball-and-chain curtain under the bustle
-  for (let i = 0; i < 15; i++) {
-    const z = -0.17 + i * 0.0243;
-    T.box(0.003, 0.05, 0.003, -0.455, -0.033, z, 0x2e2e2c);
-    T.sph(0.007, -0.455, -0.06, z, mt(0x3a3a38), 5, 3);
-  }
-  for (const s of [-1, 1]) {
-    for (let i = 0; i < 4; i++) {
-      const x = -0.42 + i * 0.03;
-      T.box(0.003, 0.05, 0.003, x, -0.033, s * 0.2, 0x2e2e2c);
-      T.sph(0.007, x, -0.06, s * 0.2, mt(0x3a3a38), 5, 3);
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x0 = xs[i] + 0.0016;
+      const x1 = xs[i + 1] - 0.0016;
+      const mid = (yb + top((x0 + x1) / 2)) / 2;
+      B.piece(
+        s > 0 ? 3 : 2,
+        () => {
+          if (i === 4) {
+            // engine panel: frame around a big grille (left: exhaust louvres in two columns; right: diamond-mesh intake)
+            skirtPanel(B, [[x0, yb], [x1, yb], [x1, top(x1)], [x0, top(x0)]], s, zo, 0.012, 0.003);
+            const gx0 = x0 + 0.014;
+            const gx1 = x1 - 0.014;
+            const gy0 = yb + 0.014;
+            const gy1 = top(x1) - 0.014;
+            B.box(gx1 - gx0, gy1 - gy0, 0.004, (gx0 + gx1) / 2, (gy0 + gy1) / 2, s * (zo + 0.0005), s < 0 ? PAINT_LOUVRE : PAINT_MESH);
+            if (s < 0) B.box(0.006, gy1 - gy0, 0.006, (gx0 + gx1) / 2, (gy0 + gy1) / 2, s * (zo + 0.002), CAMO);
+            for (const y of [gy0 - 0.003, gy1 + 0.003]) B.box(gx1 - gx0 + 0.012, 0.006, 0.007, (gx0 + gx1) / 2, y, s * (zo + 0.002), CAMO);
+            for (const x of [gx0 - 0.003, gx1 + 0.003]) B.box(0.006, gy1 - gy0 + 0.012, 0.007, x, (gy0 + gy1) / 2, s * (zo + 0.002), CAMO);
+          } else {
+            skirtPanel(B, [[x0, mid + 0.0013], [x1, mid + 0.0013], [x1, top(x1)], [x0, top(x0)]], s, zo, 0.017);
+            skirtPanel(B, [[x0, yb], [x1, yb], [x1, mid - 0.0013], [x0, mid - 0.0013]], s, zo, 0.017);
+          }
+          // flap under the rib
+          B.box(x1 - x0 - 0.003, 0.033, 0.009, (x0 + x1) / 2, yb - 0.0185, s * (zo - 0.006), CAMO);
+        },
+        s > 0 ? x0 : x1,
+        top(x0),
+      );
     }
-    T.box(0.13, 0.005, 0.005, -0.395, -0.006, s * 0.2, K.dark);
-    trophy(T, 0.06, 0.055, s * 0.222, s, b.team);
-    smokeBank(T, 0.18, 0.07, s * 0.15, s, 5, 0.6, 0.008);
-    // side stowage baskets on the rear half
-    rack(T, -0.33, -0.18, s * 0.228, s * 0.255, 0.03, 0.055, 3);
-    T.cbox(0.13, 0.045, 0.024, 0.008, -0.255, 0.058, s * 0.243, K.canvas);
-    teamPanel(T, 0.13, 0.02, 0.003, -0.07, 0.03, s * 0.229, b.team, 0, -s * 0.03, 0);
+    // nose panel tapering into the bow, the sprocket left open under it
+    B.piece(s > 0 ? 3 : 2, () => {
+      skirtPanel(B, [[0.372, yb], [0.43, yb], [0.5, 0.18], [0.565, 0.2], [0.586, 0.214], [0.372, top(0.372)]], s, zo, 0.017);
+      B.side([[0.372, 0.114], [0.43, 0.114], [0.43, yb - 0.002], [0.372, yb - 0.002]], 0.009, s * (zo - 0.006), CAMO, 0.002);
+    }, 0.372, top(0.372));
+    // rib between the panels and the flap row, the top ledge, rubber strip
+    B.box(0.856, 0.005, 0.007, -0.05, yb - 0.0015, s * (zo + 0.001), shade(b.base, 0.9));
+    B.box(0.86, 0.005, 0.024, -0.05, top(-0.05) + 0.0025, s * (zo - 0.011), shade(b.base, 0.92), 0, 0, -0.011);
+    B.box(0.9, 0.008, 0.006, -0.03, 0.098, s * (zo - 0.006), K.rubber);
+    // IDF chevron on the nose panel
+    chevron(B, 0.452, 0.19, zo + 0.0009, 0.064, 0.011, s);
+    // grab handles / lifting brackets along the ledge
+    B.at(2, () => {
+      for (const x of [-0.39, -0.23, -0.07, 0.09, 0.27]) {
+        B.box(0.022, 0.004, 0.004, x, top(x) - 0.008, s * (zo + 0.006), shade(b.base, 0.85));
+        for (const dx of [-0.01, 0.01]) B.box(0.004, 0.009, 0.006, x + dx, top(x) - 0.004, s * (zo + 0.003), shade(b.base, 0.85));
+      }
+    });
   }
-  T.box(0.004, 0.006, 0.4, -0.455, -0.006, 0, K.dark);
-  teamPanel(T, 0.004, 0.022, 0.2, -0.468, 0.05, 0, b.team);
-  // mantlet: small armoured box at the wedge tip
-  T.cbox(0.06, 0.05, 0.075, 0.008, 0.45, 0.05, 0, CAMO);
+  // ---- front engine deck (on the glacis): big louvred air grilles + access lids, driver front left
+  const gy = (x: number) => 0.272 - (x - 0.08) * 0.1057;
+  const ga = -Math.atan(0.1057);
+  B.box(0.16, 0.004, 0.13, 0.31, gy(0.31) + 0.0015, 0.1, PAINT_LOUVRE, 0, 0, ga);
+  for (const z of [0.033, 0.167]) B.box(0.164, 0.006, 0.005, 0.31, gy(0.31) + 0.002, z, CAMO, 0, 0, ga);
+  B.box(0.11, 0.004, 0.09, 0.4, gy(0.4) + 0.0015, -0.07, PAINT_LOUVRE, 0, 0, ga);
+  lid(B, 0.12, 0.1, 0.16, gy(0.16) - 0.0005, 0.12, 0);
+  lid(B, 0.08, 0.08, 0.49, gy(0.49) - 0.0005, 0.12, 0);
+  hatch(B, 0.17, gy(0.17), -0.13, 0.034);
+  for (const z of [-0.17, -0.13, -0.09]) periscope(B, 0.222, gy(0.222) - 0.002, z, 0, 0.018);
+  for (const s of [-1, 1]) {
+    headlight(B, 0.565, 0.22, s * 0.22);
+    B.at(1, () => {
+      B.box(0.004, 0.03, 0.05, 0.588, 0.22, s * 0.22, K.dark);
+      B.box(0.026, 0.004, 0.05, 0.575, 0.236, s * 0.22, K.dark);
+    });
+    // tow hooks on the bow
+    B.box(0.022, 0.016, 0.026, 0.592, 0.178, s * 0.13, K.dark);
+    taillight(B, -0.558, 0.262, s * 0.235);
+  }
+  cable(B, [[0.5, 0.215, 0.25], [0.2, 0.255, 0.25], [-0.2, 0.28, 0.24], [-0.4, 0.28, 0.22]]);
+  // rear: stowage racks either side of the crew door, team panel
+  teamPanel(B, 0.003, 0.016, 0.09, -0.564, 0.259, 0, b.team);
+  for (const s of [-1, 1]) {
+    B.at(2, () => rack(B, -0.585, -0.556, s * 0.1, s * 0.245, 0.195, 0.055, 4));
+    B.cbox(0.025, 0.04, 0.07, 0.008, -0.57, 0.225, s * 0.2, K.canvas);
+  }
+  b.emit(0.27, 0.21, -0.29);
+  b.clutterN = 0; // the kit rides in the turret basket
+
+  // ---- turret: very long, low arrowhead wedge with leaning sides; bolted add-on modules on the flanks
+  const T = b.part(B, -0.19, 0.288, 0, 'turret');
+  // beaked nose: the undercut lower facet rises to the tip (gun at mid height), the roof slopes down to it
+  const P0: P2[] = [[0.47, 0], [0.47, 0.03], [0.32, 0.12], [0.16, 0.215], [-0.15, 0.226], [-0.33, 0.218], [-0.39, 0.17], [-0.4, 0]];
+  const PT: P2[] = [[0.29, 0], [0.29, 0.025], [0.2, 0.09], [0.07, 0.17], [-0.15, 0.18], [-0.32, 0.168], [-0.37, 0.13], [-0.38, 0]];
+  // the bustle underside slopes up to the rear: the chain curtain hangs in the gap above the deck
+  const under = (h: P2[]) => h.map(([x, z]) => [x < -0.19 ? -0.19 + (x + 0.19) * 0.08 : x, z] as P2);
+  // faceted flanks: a lower band sloping in to the ring, the main side leaning in, a steep upper bevel
+  hloft(T, [
+    { y: -0.02, h: under(slopeF(sz(P0, 0.8), 0.0, -0.13)) },
+    { y: 0.026, h: P0 },
+    { y: 0.084, h: slopeF(sz(P0, 0.87), 0.0, -0.11) },
+    { y: 0.112, h: slopeF(sz(PT, 0.97), 0.0, 0.0) },
+  ]);
+  T.cy(0.19, 0.19, 0.016, 0.0, -0.034, 0, K.dark, 20);
+  const lean = Math.atan2(0.226 * 0.13, 0.058);
+  const zAt = (y: number) => 0.226 - ((y - 0.026) / 0.058) * 0.226 * 0.13;
+  for (const s of [-1, 1]) {
+    // flank armour modules: a long rear one (the big number and the ID stripe) and a front one
+    turretModule(T, -0.245, 0.055, zAt(0.055), 0.25, 0.05, lean, s);
+    turretModule(T, -0.055, 0.055, zAt(0.055), 0.118, 0.05, lean, s);
+    teamPanel(T, 0.11, 0.0085, 0.0015, -0.245, 0.0365, s * (zAt(0.0365) + 0.0082), b.team, -s * lean, 0, 0);
+    // lifting eyes
+    T.at(2, () => {
+      for (const x of [-0.3, 0.05]) T.add(new THREE.TorusGeometry(0.006, 0.0018, 4, 8), mt(0x4a4c48), TR(x, 0.114, s * 0.16, Math.PI / 2, 0, 0));
+    });
+    trophy(T, 0.07, 0.066, s * 0.212, s, b.team);
+    smokeBank(T, 0.15, 0.094, s * 0.145, s, 5, 0.6, 0.008);
+  }
+  b.markAt = { p: T, x: -0.25, y: 0.06, z: zAt(0.06) + 0.0076, lean, h: 0.042 };
+  // roof plates, bustle rails
+  lid(T, 0.15, 0.2, -0.25, 0.112, 0);
+  for (const s of [-1, 1]) lid(T, 0.09, 0.06, 0.13, 0.112, s * 0.06, 0);
+  // rear basket and the chain curtain under the bustle
+  basket(T, -0.49, -0.385, 0.205, 0.026, 0.104, -0.33, b.style.region);
+  chains(T, [-0.488, -0.2], [-0.488, 0.2], 30, 0.026, 0.07);
+  for (const s of [-1, 1]) chains(T, [-0.475, s * 0.207], [-0.24, s * 0.218], 16, 0.024, 0.05);
+  teamPanel(T, 0.004, 0.024, 0.2, -0.494, 0.07, 0, b.team);
+  // mantlet: armoured box at the wedge tip, coax
+  T.cbox(0.06, 0.056, 0.078, 0.008, 0.45, 0.05, 0, CAMO);
   coax(T, 0.47, 0.035, 0.035);
-  // roof: commander sight block (right), commander hatch, loader 7.62 MG (left), 60 mm mortar, gunner sight hood
-  T.cy(0.045, 0.05, 0.014, -0.1, 0.106, 0.09, CAMO, 14);
-  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.106, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
-  T.cbox(0.06, 0.06, 0.05, 0.006, -0.03, 0.14, 0.11, CAMO);
-  T.box(0.004, 0.032, 0.034, -0.0, 0.15, 0.11, GLASS);
-  rws(T, -0.13, 0.12, 0.09, 0.85, false);
-  hatch(T, -0.1, 0.106, -0.1, 0.036);
-  mgun(T, -0.04, 0.135, -0.13, 0.09);
-  T.box(0.02, 0.025, 0.02, -0.05, 0.118, -0.13, K.dark);
-  T.cx(0.011, 0.011, 0.09, -0.03, 0.128, -0.07, mt(K.gun), 8);
-  T.box(0.026, 0.02, 0.026, -0.08, 0.116, -0.07, K.dark);
-  T.cbox(0.06, 0.03, 0.045, 0.006, 0.12, 0.112, 0.07, CAMO);
-  T.box(0.004, 0.02, 0.032, 0.151, 0.114, 0.07, GLASS);
-  for (const s of [-1, 1]) lid(T, 0.1, 0.06, 0.15, 0.106, s * 0.06, 0);
-  antennas(b, T, -0.38, 0.106, [-0.13, 0.13], 0.24);
-  mainGun(b, T, 0.48, 0.05, 0, { len: 0.6, r: 0.0145, fume: 0.38, mrs: true });
+  // roof: commander's cupola (right rear) with sight block, panoramic sight, MG; loader hatch + MG (left),
+  // 60 mm mortar, gunner's sight hood (front right)
+  T.cy(0.045, 0.05, 0.016, -0.1, 0.112, 0.09, CAMO, 14);
+  for (let i = 0; i < 5; i++) periscope(T, -0.1 + Math.cos(i * 1.2) * 0.045, 0.114, 0.09 + Math.sin(i * 1.2) * 0.045, -i * 1.2, 0.014);
+  panoSight(T, -0.035, 0.112, 0.14, 0.034, 1.05);
+  T.cbox(0.05, 0.05, 0.045, 0.006, -0.03, 0.152, 0.08, CAMO);
+  T.box(0.004, 0.026, 0.03, -0.004, 0.158, 0.08, GLASS);
+  // commander's MG on a pintle
+  T.cy(0.004, 0.005, 0.03, -0.155, 0.128, 0.09, K.dark, 6);
+  mgun(T, -0.13, 0.163, 0.09, 0.11, 0.0048, true);
+  hatch(T, -0.1, 0.112, -0.1, 0.036);
+  // loader MG on a ring mount with a small shield
+  T.cy(0.004, 0.005, 0.028, -0.05, 0.112, -0.135, K.dark, 6);
+  mgun(T, -0.035, 0.144, -0.135, 0.09);
+  T.box(0.004, 0.026, 0.04, -0.012, 0.148, -0.135, CAMO);
+  // 60 mm mortar tube with a muzzle cover
+  T.cx(0.011, 0.011, 0.09, -0.03, 0.134, -0.07, mt(K.gun), 8);
+  T.cx(0.0125, 0.0125, 0.012, 0.018, 0.134, -0.07, K.canvas, 8);
+  T.box(0.026, 0.02, 0.026, -0.08, 0.122, -0.07, K.dark);
+  T.cbox(0.06, 0.03, 0.045, 0.006, 0.09, 0.118, 0.07, CAMO);
+  T.box(0.004, 0.02, 0.032, 0.121, 0.12, 0.07, GLASS);
+  antennas(b, T, -0.34, 0.112, [-0.15, 0.15], 0.26);
+  // MG253 L/44: 9.04 m gun forward vs 7.60 m hull = 1.44 m overhang; white recognition bands on the sleeve
+  const g = mainGun(b, T, 0.48, 0.05, 0, { len: 0.5, r: 0.0158, fume: 0.42, mrs: true });
+  // the sleeve thickens toward the mantlet
+  g.rec.cx(0.0158 * 1.62, 0.0158 * 1.8, 0.075, 0.0375, 0, 0, CAMO, 14);
+  g.rec.at(2, () => {
+    for (const x of [0.36, 0.385]) g.rec.cx(0.0158 * 1.2, 0.0158 * 1.22, 0.009, x, 0, 0, 0xd4d2c8, 12);
+  });
 }
 /** Slim Soviet-lineage hull (T-72 / T-80 / T-90 family): low hull, fenders over the tracks, flat deck. */
 function sovHull2(b: Bld, o: { L: number; deck: number; nose: number; glacisX: number; W?: number; fw?: number }) {
@@ -2672,30 +3311,15 @@ function mbtLeopard(b: Bld) {
   // Leopard 2A8: 7.7 m hull, 3.75 m wide, 7 road wheels + 4 return rollers, rear sprocket; vertical-sided
   // turret with the arrowhead wedge add-on armour and wedge mantlet, EMES-15 + PERI R17, Trophy, L/55 gun
   const B = b.body;
-  running(b, {
-    wheels: evenly(7, -0.365, 0.33),
-    rw: 0.047,
-    spr: [-0.47, 0.106, 0.046],
-    idl: [0.452, 0.096, 0.042],
-    rollers: [
-      [-0.27, 0.13, 0.013],
-      [-0.085, 0.13, 0.013],
-      [0.1, 0.13, 0.013],
-      [0.27, 0.13, 0.013],
-    ],
-    gauge: 0.207,
-    tw: 0.112,
-    style: 'nato',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.42, 0.072], [0.545, 0.16], [-0.52, 0.16]], 0.148);
-  // short steep upper glacis with the 2A7 add-on plate, long flat deck, sloped rear plate
-  B.side([[-0.535, 0.158], [0.548, 0.158], [0.565, 0.212], [0.36, 0.254], [-0.5, 0.258], [-0.537, 0.24]], 0.52, 0, CAMO, 0.008);
+  chassis(b, CHASSIS.germany);
   B.add(gSide([[0.36, 0.256], [0.568, 0.214], [0.575, 0.198], [0.552, 0.196], [0.35, 0.24]], 0.4, 0.004), CAMO);
-  // heavy front skirt modules (2A7 armour package), thin rear skirts with a rubber lower edge
-  skirts(B, [[0.08, 0.088], [0.45, 0.088], [0.548, 0.14], [0.556, 0.212], [0.08, 0.212]], 0.272, 0.026, [0.2, 0.33]);
-  skirts(B, [[-0.48, 0.1], [0.08, 0.1], [0.08, 0.205], [-0.49, 0.205]], 0.267, 0.01, [-0.36, -0.22, -0.08]);
+  // heavy front skirt modules (2A7 armour package) ending in the tall vertical skirt-front panel; thin rear
+  // skirts with a rubber lower edge
+  panelRow(B, [-0.49, -0.35, -0.21, -0.07, 0.078], 0.104, 0.206, 0.268, 0.01);
+  panelRow(B, [0.08, 0.2, 0.32, 0.44], 0.086, 0.214, 0.284, 0.026, true);
   for (const s of [-1, 1]) {
-    B.box(0.56, 0.014, 0.008, -0.2, 0.094, s * 0.271, K.rubber);
+    B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.444, 0.086], [0.53, 0.086], [0.53, 0.1], [0.566, 0.13], [0.566, 0.214], [0.444, 0.214]], s, 0.286, 0.03), 0.444, 0.214);
+    B.box(0.57, 0.014, 0.008, -0.205, 0.097, s * 0.267, K.rubber);
     headlight(B, 0.556, 0.222, s * 0.225);
     taillight(B, -0.535, 0.242, s * 0.24);
     bin(B, 0.1, 0.035, 0.055, -0.43, 0.258, s * 0.225);
@@ -2751,30 +3375,16 @@ function mbtLeopard(b: Bld) {
   rws(T, -0.17, 0.128, -0.1, 0.85, false);
   for (const s of [-1, 1]) lid(T, 0.08, 0.06, 0.04, 0.128, s * 0.16 - (s > 0 ? 0.05 : 0));
   antennas(b, T, -0.36, 0.128, [-0.15, 0.15], 0.24);
-  mainGun(b, T, 0.27, 0.065, 0, { len: 0.8, r: 0.0145, fume: 0.36, mrs: true });
+  // L/55: 10.97 m gun forward vs 7.72 m hull; fume extractor a quarter of the way out
+  mainGun(b, T, 0.27, 0.065, 0, { len: 0.82, r: 0.0145, fume: 0.25, mrs: true });
 }
 
 function mbtT90(b: Bld) {
   // T-90M Proryv: 6.86 m hull, 3.78 m, 2.23 m; 6 large spoked road wheels, 3 return rollers; low hull with
   // Relikt glacis + V splash board, welded turret with Relikt "brows", big ammunition bustle in a slat cage
   const B = b.body;
-  running(b, {
-    wheels: [-0.35, -0.24, -0.095, 0.02, 0.165, 0.28],
-    rw: 0.055,
-    spr: [-0.455, 0.102, 0.046],
-    idl: [0.42, 0.09, 0.043],
-    rollers: [
-      [-0.19, 0.143, 0.013],
-      [-0.03, 0.143, 0.013],
-      [0.13, 0.143, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 'sov',
-    sag: 0.012,
-  });
-  const deck = sovHull2(b, { L: 0.98, deck: 0.218, nose: 0.475, glacisX: 0.27 });
-  eraSkirt(b, -0.46, 0.49, 0.098, 0.16, 0.49, 0.276, 0.075);
+  const deck = chassis(b, CHASSIS.russia);
+  eraSkirt(b, -0.46, 0.49, 0.098, 0.16, 0.05, 0.276, 0.075);
   // Relikt on the glacis + V splash board + dozer blade
   bricks(B, slopePlane([0.27, deck], [0.487, 0.168], 0), 0.012, 0.21, -0.22, 0.22, 3, 6, 0.02, 0.008);
   for (const s of [-1, 1]) B.box(0.012, 0.028, 0.22, 0.3, deck + 0.02, s * 0.1, CAMO, 0, s * 0.45, -0.3);
@@ -2790,77 +3400,66 @@ function mbtT90(b: Bld) {
   B.box(0.07, 0.032, 0.02, -0.32, 0.18, -0.268, K.black);
   b.emit(-0.32, 0.19, -0.29);
   grille(B, -0.37, deck, 0, 0.16, 0.28, 8);
-  unditchLog(B, -0.5, 0.25, 0.46);
+  fuelDrums(B, -0.515, 0.226, [-0.13, 0.13]);
   hatch(B, 0.32, deck, 0, 0.03);
   periscope(B, 0.36, deck, 0, 0, 0.026);
   cable(B, [[0.45, 0.17, -0.235], [0.2, 0.19, -0.225], [-0.1, 0.19, -0.235]]);
   teamPanel(B, 0.36, 0.02, 0.003, -0.02, 0.13, 0.299, b.team);
   teamPanel(B, 0.36, 0.02, 0.003, -0.02, 0.13, -0.299, b.team);
 
-  // ---- turret: welded, angular, Relikt front "brows", long rectangular bustle
-  const T = b.part(B, -0.04, deck, 0, 'turret');
-  const P0: P2[] = [[0.2, 0], [0.2, 0.07], [0.12, 0.19], [0.04, 0.215], [-0.13, 0.215], [-0.17, 0.19], [-0.36, 0.18], [-0.37, 0]];
-  hloft(T, [
-    { y: -0.004, h: sz(P0, 0.92) },
-    { y: 0.02, h: P0 },
-    { y: 0.085, h: slopeF(sz(P0, 0.9), 0.05, -0.03) },
-    { y: 0.1, h: slopeF(sz(P0, 0.84), 0.05, -0.06) },
-  ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  // ---- turret: compact rounded cast dome well forward, the V pair of Relikt "brows" ahead of it, Relikt boxes
+  // on the flanks, a short welded bustle wrapped in a slat cage, Kord RWS on the commander's cupola
+  const T = b.part(B, 0.0, deck, 0, 'turret');
+  T.loft(
+    [
+      { y: -0.004, p: ell(20, 0.162, 0.172, 0.0) },
+      { y: 0.028, p: ell(20, 0.168, 0.178, 0.0, 1.04, 0.96) },
+      { y: 0.062, p: ell(20, 0.148, 0.158, -0.004, 1.0, 0.95) },
+      { y: 0.086, p: ell(20, 0.112, 0.122, -0.01) },
+      { y: 0.097, p: ell(20, 0.066, 0.076, -0.014) },
+    ],
+    CAMO,
+    true,
+  );
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
-    // Relikt brow: thick angled package each side of the gun, top sloping down to the front
-    const bot: P2[] = s > 0 ? [[0.31, 0.06], [0.14, 0.232], [0.08, 0.205], [0.2, 0.055]] : [[0.31, -0.06], [0.2, -0.055], [0.08, -0.205], [0.14, -0.232]];
-    const tp: P2[] = s > 0 ? [[0.24, 0.058], [0.11, 0.208], [0.07, 0.19], [0.17, 0.052]] : [[0.24, -0.058], [0.17, -0.052], [0.07, -0.19], [0.11, -0.208]];
-    T.loft([{ y: 0.004, p: bot }, { y: 0.098, p: tp }], CAMO);
+    // Relikt brow: in plan a V from the mantlet outward / back over the dome front, its face leaning back
+    const bot: P2[] = s > 0 ? [[0.25, 0.048], [0.12, 0.196], [0.06, 0.172], [0.16, 0.044]] : [[0.25, -0.048], [0.16, -0.044], [0.06, -0.172], [0.12, -0.196]];
+    const mid: P2[] = s > 0 ? [[0.22, 0.047], [0.105, 0.188], [0.055, 0.166], [0.15, 0.043]] : [[0.22, -0.047], [0.15, -0.043], [0.055, -0.166], [0.105, -0.188]];
+    const tp: P2[] = s > 0 ? [[0.15, 0.046], [0.075, 0.165], [0.05, 0.152], [0.11, 0.042]] : [[0.15, -0.046], [0.11, -0.042], [0.05, -0.152], [0.075, -0.165]];
+    T.loft([{ y: 0.004, p: bot }, { y: 0.04, p: mid }, { y: 0.088, p: tp }], CAMO);
     for (let i = 0; i < 4; i++) {
       const t = (i + 0.5) / 4;
-      T.box(0.004, 0.004, 0.07, 0.235 - t * 0.12, 0.099, s * (0.06 + t * 0.15), K.dark, 0, s * 0.85, 0);
+      T.box(0.004, 0.004, 0.055, 0.19 - t * 0.1, 0.0865, s * (0.06 + t * 0.11), K.dark, 0, s * 0.85, 0);
     }
-    // Relikt panels along the turret sides, smoke dischargers
-    for (let i = 0; i < 3; i++) T.piece(1, () => T.cbox(0.06, 0.055, 0.016, 0.004, 0.01 - i * 0.065, 0.05, s * 0.223, CAMO));
-    smokeBank(T, 0.06, 0.1, s * 0.19, s, 4, 1.0, 0.009);
-    // roof Relikt plates over the front
-    T.box(0.1, 0.014, 0.07, 0.11, 0.098, s * 0.09, CAMO, 0, 0, -0.08);
+    // Relikt boxes on the flanks, smoke dischargers
+    for (let i = 0; i < 3; i++) T.piece(1, () => T.cbox(0.05, 0.045, 0.016, 0.004, 0.02 - i * 0.058, 0.04, s * (0.168 + i * 0.004), CAMO, 0, s * (0.12 + i * 0.12), 0));
+    smokeBank(T, 0.04, 0.094, s * 0.15, s, 4, 1.0, 0.009);
   }
-  // bustle cage (slat armour + net)
-  slats(T, [-0.43, -0.2], [-0.43, 0.2], -0.01, 0.1, 10);
-  for (const s of [-1, 1]) slats(T, [-0.17, s * 0.22], [-0.43, s * 0.2], -0.01, 0.1, 6);
-  T.box(0.26, 0.004, 0.4, -0.3, -0.008, 0, 0x3a3d32);
-  teamPanel(T, 0.004, 0.022, 0.22, -0.372, 0.05, 0, b.team);
-  // commander PK-5 sight + Kord RWS (right), gunner Sosna-U (left front), commander / gunner hatches
-  T.cy(0.045, 0.05, 0.016, -0.07, 0.1, 0.09, CAMO, 14);
-  rws(T, -0.08, 0.116, 0.09, 0.9, true);
-  panoSight(T, 0.0, 0.1, 0.12, 0.04, 0.95);
-  T.cbox(0.06, 0.045, 0.05, 0.006, 0.07, 0.122, -0.11, CAMO);
-  T.box(0.004, 0.026, 0.036, 0.102, 0.124, -0.11, GLASS);
-  hatch(T, -0.07, 0.1, -0.09, 0.034);
-  antennas(b, T, -0.2, 0.1, [-0.14, 0.15], 0.24);
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.6, mrs: false, mantlet: [0.04, 0.055, 0.08] });
+  // short welded bustle, slat cage round it
+  T.cbox(0.12, 0.07, 0.3, 0.008, -0.2, 0.037, 0, CAMO);
+  slats(T, [-0.275, -0.19], [-0.275, 0.19], -0.012, 0.085, 10);
+  for (const s of [-1, 1]) slats(T, [-0.1, s * 0.198], [-0.275, s * 0.19], -0.012, 0.085, 6);
+  T.box(0.18, 0.004, 0.38, -0.19, -0.012, 0, 0x3a3d32);
+  teamPanel(T, 0.004, 0.022, 0.2, -0.262, 0.05, 0, b.team);
+  // commander cupola with the Kord RWS (right), PK-5 panoramic sight, gunner Sosna-U (left front), hatches
+  T.cy(0.04, 0.045, 0.016, -0.06, 0.092, 0.075, CAMO, 14);
+  rws(T, -0.065, 0.108, 0.075, 0.85, true);
+  panoSight(T, 0.0, 0.094, 0.1, 0.036, 0.9);
+  T.cbox(0.055, 0.04, 0.045, 0.006, 0.06, 0.11, -0.09, CAMO);
+  T.box(0.004, 0.024, 0.032, 0.089, 0.112, -0.09, GLASS);
+  hatch(T, -0.06, 0.094, -0.075, 0.032);
+  antennas(b, T, -0.14, 0.09, [-0.13, 0.13], 0.24);
+  // 2A46M-5 125 mm: 9.63 m gun forward vs 6.86 m hull = 2.77 m overhang; thermal sleeve, evacuator forward
+  mainGun(b, T, 0.17, 0.042, 0, { len: 0.725, r: 0.0155, fume: 0.62, mrs: false, mantlet: [0.045, 0.05, 0.085] });
 }
 
 function mbtOplot(b: Bld) {
   // T-84 Oplot-M: T-80UD-derived hull (6TD diesel, rear exhaust grille), 6 rubber-tyred road wheels + 5 return
   // rollers; welded box turret with Nozh ERA chevron brows, big rear ammunition bustle, PNK-6 panoramic sight
   const B = b.body;
-  running(b, {
-    wheels: evenly(6, -0.35, 0.3),
-    rw: 0.053,
-    spr: [-0.458, 0.102, 0.046],
-    idl: [0.425, 0.088, 0.043],
-    rollers: [
-      [-0.27, 0.143, 0.012],
-      [-0.13, 0.143, 0.012],
-      [0.01, 0.143, 0.012],
-      [0.15, 0.143, 0.012],
-      [0.28, 0.143, 0.012],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 't80',
-    sag: 0.006,
-  });
-  const deck = sovHull2(b, { L: 1.0, deck: 0.222, nose: 0.485, glacisX: 0.27 });
-  eraSkirt(b, -0.47, 0.5, 0.098, 0.162, 0.5, 0.276, 0.06);
+  const deck = chassis(b, CHASSIS.ukraine);
+  eraSkirt(b, -0.47, 0.5, 0.096, 0.162, -0.02, 0.276, 0.064);
   // Nozh ERA: long thin chevron cassettes on the glacis
   const gp = slopePlane([0.27, deck], [0.497, 0.17], 0);
   for (let i = 0; i < 4; i++) for (const s of [-1, 1]) B.add(new THREE.BoxGeometry(0.03, 0.02, 0.22), CAMO, gp.clone().multiply(TR(0.035 + i * 0.05, 0.011, s * 0.11, 0, s * 0.35, 0)));
@@ -2878,70 +3477,59 @@ function mbtOplot(b: Bld) {
   b.emit(-0.51, 0.19, -0.09);
   hatch(B, 0.32, deck, 0, 0.03);
   periscope(B, 0.36, deck, 0, 0, 0.026);
-  unditchLog(B, -0.49, 0.262, 0.46);
+  fuelDrums(B, -0.535, 0.232, [-0.13, 0.13]);
   teamPanel(B, 0.36, 0.02, 0.003, 0.0, 0.13, 0.299, b.team);
   teamPanel(B, 0.36, 0.02, 0.003, 0.0, 0.13, -0.299, b.team);
 
-  // ---- turret: flat-sided welded box, Nozh chevron brows, long bustle box almost to the hull rear
-  const T = b.part(B, -0.05, deck, 0, 'turret');
-  const P0: P2[] = [[0.2, 0], [0.19, 0.09], [0.1, 0.205], [-0.12, 0.218], [-0.2, 0.2], [-0.42, 0.19], [-0.43, 0]];
+  // ---- turret: compact angular welded hexagon with flat Nozh plates on the cheeks, rear bustle box
+  const T = b.part(B, -0.02, deck, 0, 'turret');
+  const P0: P2[] = [[0.2, 0], [0.19, 0.08], [0.1, 0.19], [-0.08, 0.2], [-0.15, 0.188], [-0.3, 0.178], [-0.31, 0]];
   hloft(T, [
     { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: 0.105, h: slopeF(sz(P0, 0.92), 0.0, -0.02) },
+    { y: 0.022, h: P0 },
+    { y: 0.088, h: slopeF(sz(P0, 0.86), 0.0, -0.035) },
   ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
-    const bot: P2[] = s > 0 ? [[0.33, 0.06], [0.13, 0.235], [0.08, 0.212], [0.21, 0.052]] : [[0.33, -0.06], [0.21, -0.052], [0.08, -0.212], [0.13, -0.235]];
-    const tp: P2[] = s > 0 ? [[0.25, 0.058], [0.11, 0.205], [0.07, 0.19], [0.19, 0.05]] : [[0.25, -0.058], [0.19, -0.05], [0.07, -0.19], [0.11, -0.205]];
-    T.loft([{ y: 0.004, p: bot }, { y: 0.1, p: tp }], CAMO);
+    // Nozh: flat ERA plates forming a wedge over each cheek, cassette joints across them
+    const bot: P2[] = s > 0 ? [[0.28, 0.05], [0.11, 0.21], [0.07, 0.19], [0.19, 0.045]] : [[0.28, -0.05], [0.19, -0.045], [0.07, -0.19], [0.11, -0.21]];
+    const tp: P2[] = s > 0 ? [[0.22, 0.05], [0.1, 0.188], [0.06, 0.174], [0.17, 0.044]] : [[0.22, -0.05], [0.17, -0.044], [0.06, -0.174], [0.1, -0.188]];
+    T.loft([{ y: 0.006, p: bot }, { y: 0.082, p: tp }], CAMO);
     for (let i = 0; i < 3; i++) {
       const t = (i + 0.5) / 3;
-      T.box(0.005, 0.006, 0.075, 0.29 - t * 0.17, 0.052, s * (0.065 + t * 0.15), K.dark, 0, s * 0.9, 0);
+      T.box(0.005, 0.07, 0.004, 0.245 - t * 0.15, 0.044, s * (0.065 + t * 0.13), K.dark, 0, s * 0.9, 0);
     }
-    smokeBank(T, -0.04, 0.1, s * 0.21, s, 6, 1.0, 0.008);
-    T.cbox(0.14, 0.05, 0.022, 0.006, -0.3, 0.05, s * 0.2, CAMO);
+    smokeBank(T, -0.05, 0.088, s * 0.18, s, 6, 1.0, 0.008);
+    // bustle side boxes
+    T.cbox(0.11, 0.045, 0.02, 0.006, -0.235, 0.045, s * 0.188, CAMO);
     // Varta optical-jammer emitters on the front corners
-    T.cbox(0.03, 0.03, 0.03, 0.004, 0.06, 0.12, s * 0.18, 0x34363a);
-    T.box(0.004, 0.02, 0.02, 0.076, 0.12, s * 0.18, RED);
+    T.cbox(0.028, 0.028, 0.028, 0.004, 0.05, 0.104, s * 0.16, 0x34363a);
+    T.box(0.004, 0.018, 0.018, 0.065, 0.104, s * 0.16, RED);
   }
-  for (let i = 0; i < 3; i++) lid(T, 0.06, 0.24, -0.25 - i * 0.065, 0.105, 0);
-  teamPanel(T, 0.004, 0.022, 0.24, -0.432, 0.05, 0, b.team);
+  for (let i = 0; i < 2; i++) lid(T, 0.055, 0.22, -0.21 - i * 0.06, 0.088, 0);
+  teamPanel(T, 0.004, 0.022, 0.22, -0.312, 0.045, 0, b.team);
   // commander cupola + PNK-6 sight + MG (right), gunner sight (left)
-  T.cy(0.045, 0.05, 0.02, -0.05, 0.105, 0.09, CAMO, 14);
-  panoSight(T, -0.0, 0.125, 0.12, 0.03, 1.0);
-  mgun(T, -0.07, 0.15, 0.07, 0.1, 0.005, true);
-  T.box(0.03, 0.025, 0.03, -0.09, 0.135, 0.07, K.dark);
-  T.cbox(0.06, 0.04, 0.05, 0.006, 0.08, 0.124, -0.11, CAMO);
-  T.box(0.004, 0.024, 0.036, 0.112, 0.126, -0.11, GLASS);
-  hatch(T, -0.06, 0.105, -0.09, 0.034);
-  antennas(b, T, -0.3, 0.105, [-0.13, 0.13], 0.24);
-  mainGun(b, T, 0.27, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.58, mrs: false, mantlet: [0.05, 0.055, 0.08] });
+  T.cy(0.042, 0.047, 0.018, -0.045, 0.088, 0.08, CAMO, 14);
+  panoSight(T, 0.0, 0.106, 0.11, 0.028, 0.95);
+  mgun(T, -0.06, 0.128, 0.07, 0.1, 0.005, true);
+  T.box(0.03, 0.025, 0.03, -0.08, 0.116, 0.07, K.dark);
+  T.cbox(0.055, 0.038, 0.048, 0.006, 0.07, 0.105, -0.1, CAMO);
+  T.box(0.004, 0.022, 0.034, 0.1, 0.107, -0.1, GLASS);
+  hatch(T, -0.05, 0.088, -0.08, 0.032);
+  antennas(b, T, -0.22, 0.088, [-0.12, 0.12], 0.24);
+  // KBA-3 125 mm: 9.72 m gun forward vs 7.08 m hull = 2.64 m overhang
+  mainGun(b, T, 0.2, 0.046, 0, { len: 0.71, r: 0.0155, fume: 0.58, mrs: false, mantlet: [0.05, 0.052, 0.08] });
 }
 
 function mbtKarrar(b: Bld) {
   // Karrar: T-72-derived hull with box-ERA skirts all along, T-90MS-style welded turret with big ERA cheeks,
   // stowage bustle with slat cage, RWS; desert tan
   const B = b.body;
-  running(b, {
-    wheels: [-0.35, -0.24, -0.095, 0.02, 0.165, 0.28],
-    rw: 0.055,
-    spr: [-0.455, 0.102, 0.046],
-    idl: [0.42, 0.09, 0.043],
-    rollers: [
-      [-0.19, 0.143, 0.013],
-      [-0.03, 0.143, 0.013],
-      [0.13, 0.143, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.11,
-    style: 'sov',
-    sag: 0.012,
-  });
-  const deck = sovHull2(b, { L: 0.98, deck: 0.22, nose: 0.475, glacisX: 0.27 });
+  const deck = chassis(b, CHASSIS.iran);
   for (const s of [-1, 1]) {
-    B.box(0.95, 0.066, 0.008, 0.015, 0.128, s * 0.275, 0x2a2c2e);
-    for (let i = 0; i < 9; i++) B.piece(1, () => B.cbox(0.098, 0.062, 0.02, 0.004, -0.43 + i * 0.106, 0.128, s * 0.289, CAMO));
+    // (reference photos: Karrar's box skirts hang low, covering most of the road wheels)
+    B.box(0.95, 0.1, 0.008, 0.015, 0.113, s * 0.275, 0x2a2c2e);
+    for (let i = 0; i < 9; i++) B.piece(1, () => B.cbox(0.098, 0.096, 0.02, 0.004, -0.43 + i * 0.106, 0.115, s * 0.289, CAMO));
   }
   bricks(B, slopePlane([0.27, deck], [0.487, 0.168], 0), 0.006, 0.21, -0.22, 0.22, 2, 5, 0.024, 0.01);
   dozer(B, 0.39);
@@ -2958,67 +3546,57 @@ function mbtKarrar(b: Bld) {
   periscope(B, 0.36, deck, 0, 0, 0.026);
   teamPanel(B, 0.004, 0.024, 0.18, -0.494, 0.2, 0, b.team);
 
-  // ---- turret: angular welded, large ERA cheek blocks, square bustle box with slats
-  const T = b.part(B, -0.04, deck, 0, 'turret');
-  const P0: P2[] = [[0.22, 0], [0.21, 0.1], [0.12, 0.212], [-0.12, 0.222], [-0.22, 0.196], [-0.38, 0.186], [-0.39, 0]];
+  // ---- turret: compact T-90MS-style welded box, big ERA cheek blocks, bustle wrapped in netting and kit
+  const T = b.part(B, -0.01, deck, 0, 'turret');
+  const P0: P2[] = [[0.2, 0], [0.19, 0.1], [0.11, 0.19], [-0.1, 0.2], [-0.17, 0.186], [-0.3, 0.18], [-0.31, 0]];
   hloft(T, [
     { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: 0.1, h: slopeF(sz(P0, 0.93), 0.0, -0.02) },
+    { y: 0.022, h: P0 },
+    { y: 0.095, h: slopeF(sz(P0, 0.93), 0.0, -0.02) },
   ]);
-  T.cy(0.18, 0.18, 0.012, 0, -0.012, 0, K.dark, 20);
+  T.cy(0.17, 0.17, 0.012, 0, -0.014, 0, K.dark, 20);
   for (const s of [-1, 1]) {
     // front ERA: 2 x 3 big blocks on each cheek
     const nx = 0.75;
     const nz = s * 0.66;
     for (let i = 0; i < 3; i++) {
       const t = (i + 0.5) / 3;
-      const x = 0.215 - 0.1 * t + nx * 0.016;
-      const z = s * (0.1 + 0.11 * t) + nz * 0.016;
-      for (let j = 0; j < 2; j++) T.piece(1, () => T.cbox(0.03, 0.04, 0.05, 0.004, x, 0.028 + j * 0.044, z, CAMO, 0, -Math.atan2(nz, nx), 0));
+      const x = 0.195 - 0.09 * t + nx * 0.016;
+      const z = s * (0.1 + 0.09 * t) + nz * 0.016;
+      for (let j = 0; j < 2; j++) T.piece(1, () => T.cbox(0.03, 0.038, 0.048, 0.004, x, 0.026 + j * 0.042, z, CAMO, 0, -Math.atan2(nz, nx), 0));
     }
-    T.box(0.08, 0.016, 0.07, 0.08, 0.104, s * 0.09, CAMO, 0, 0, -0.1);
-    smokeBank(T, 0.02, 0.09, s * 0.21, s, 6, 1.1, 0.008);
-    T.cbox(0.14, 0.05, 0.024, 0.006, -0.28, 0.05, s * 0.192, CAMO);
-    teamPanel(T, 0.14, 0.02, 0.003, -0.08, 0.05, s * 0.224, b.team);
+    T.box(0.07, 0.014, 0.065, 0.07, 0.099, s * 0.085, CAMO, 0, 0, -0.1);
+    smokeBank(T, 0.0, 0.088, s * 0.185, s, 6, 1.1, 0.008);
+    T.cbox(0.13, 0.05, 0.022, 0.006, -0.24, 0.05, s * 0.186, CAMO);
+    teamPanel(T, 0.12, 0.018, 0.003, -0.07, 0.05, s * 0.204, b.team);
   }
-  T.box(0.04, 0.085, 0.075, 0.24, 0.045, 0, CAMO);
-  slats(T, [-0.42, -0.18], [-0.42, 0.18], 0.0, 0.1, 9);
+  T.box(0.04, 0.08, 0.07, 0.22, 0.043, 0, CAMO);
+  // bustle: slat frame with a rolled camouflage net, kit bags and a tarp heaped over it
+  slats(T, [-0.355, -0.17], [-0.355, 0.17], 0.0, 0.095, 9);
+  T.cz(0.035, 0.035, 0.34, -0.33, 0.115, 0, 0x6c6444, 9);
+  T.cbox(0.06, 0.04, 0.12, 0.012, -0.29, 0.112, 0.1, 0x7a6a4a);
+  T.cbox(0.07, 0.045, 0.14, 0.014, -0.28, 0.11, -0.09, 0x8c7a56);
+  T.add(new THREE.SphereGeometry(0.06, 9, 5, 0, Math.PI * 2, 0, Math.PI / 2), 0x766a4c, TR(-0.31, 0.095, 0, 0, 0, 0, 1.0, 0.55, 2.6));
   // commander cupola + RWS, panoramic sight, gunner sight
-  T.cy(0.045, 0.05, 0.018, -0.06, 0.1, 0.09, CAMO, 14);
-  rws(T, -0.07, 0.118, 0.09, 0.85, true);
-  panoSight(T, 0.0, 0.1, 0.13, 0.03, 0.9);
-  T.cbox(0.07, 0.045, 0.055, 0.006, 0.08, 0.125, -0.11, CAMO);
-  T.box(0.004, 0.026, 0.04, 0.117, 0.127, -0.11, GLASS);
-  hatch(T, -0.06, 0.1, -0.09, 0.034);
-  antennas(b, T, -0.3, 0.1, [-0.13, 0.14], 0.22);
-  mainGun(b, T, 0.26, 0.05, 0, { len: 0.64, r: 0.014, fume: 0.6, mrs: true, mantlet: [0.04, 0.05, 0.08] });
+  T.cy(0.042, 0.047, 0.018, -0.05, 0.095, 0.08, CAMO, 14);
+  rws(T, -0.06, 0.113, 0.08, 0.85, true);
+  panoSight(T, 0.0, 0.095, 0.12, 0.03, 0.9);
+  T.cbox(0.065, 0.042, 0.052, 0.006, 0.07, 0.118, -0.1, CAMO);
+  T.box(0.004, 0.024, 0.038, 0.104, 0.12, -0.1, GLASS);
+  hatch(T, -0.05, 0.095, -0.08, 0.032);
+  antennas(b, T, -0.24, 0.095, [-0.12, 0.13], 0.22);
+  mainGun(b, T, 0.24, 0.048, 0, { len: 0.63, r: 0.0155, fume: 0.6, mrs: true, mantlet: [0.04, 0.05, 0.08] });
 }
 
 function mbtType99(b: Bld) {
   // Type 99A: 7.6 m hull, 3.5 m wide; 6 road wheels unevenly spaced (close pairs front + rear, two far apart
   // in the middle), 4 return rollers; arrowhead ERA turret front, ERA side panels, laser dazzler, RWS
   const B = b.body;
-  running(b, {
-    wheels: [-0.37, -0.25, -0.07, 0.11, 0.225, 0.34],
-    rw: 0.058,
-    spr: [-0.47, 0.108, 0.047],
-    idl: [0.45, 0.096, 0.044],
-    rollers: [
-      [-0.3, 0.152, 0.013],
-      [-0.16, 0.152, 0.013],
-      [0.02, 0.152, 0.013],
-      [0.17, 0.152, 0.013],
-    ],
-    gauge: 0.2,
-    tw: 0.11,
-    style: 'asia',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.43, 0.072], [0.545, 0.17], [-0.525, 0.17]], 0.145);
-  B.side([[-0.53, 0.168], [0.548, 0.168], [0.568, 0.2], [0.33, 0.252], [-0.5, 0.256], [-0.533, 0.236]], 0.5, 0, CAMO, 0.008);
-  skirts(B, [[-0.48, 0.102], [0.42, 0.102], [0.548, 0.15], [0.556, 0.212], [-0.49, 0.212]], 0.263, 0.012, [-0.3, -0.12, 0.06]);
+  chassis(b, CHASSIS.china);
+  // deep skirts (lower edge near the hub line) with bolted composite / ERA modules along the whole run
+  skirts(B, [[-0.48, 0.088], [0.42, 0.088], [0.548, 0.15], [0.556, 0.212], [-0.49, 0.212]], 0.263, 0.012, [-0.3, -0.12, 0.06]);
   for (const s of [-1, 1]) {
-    for (let i = 0; i < 4; i++) B.piece(1, () => B.cbox(0.085, 0.072, 0.016, 0.004, 0.14 + i * 0.09, 0.156, s * 0.276, CAMO));
+    for (let i = 0; i < 9; i++) B.piece(1, () => B.cbox(0.094, 0.1, 0.018, 0.004, -0.43 + i * 0.1, 0.148, s * 0.277, CAMO));
     headlight(B, 0.556, 0.212, s * 0.225);
     taillight(B, -0.535, 0.236, s * 0.235);
     bin(B, 0.12, 0.035, 0.055, -0.42, 0.256, s * 0.22);
@@ -3030,8 +3608,8 @@ function mbtType99(b: Bld) {
   B.box(0.008, 0.05, 0.3, -0.537, 0.21, 0, K.black);
   b.emit(-0.54, 0.21, 0.09);
   b.emit(-0.54, 0.21, -0.09);
-  teamPanel(B, 0.38, 0.022, 0.003, -0.1, 0.19, 0.27, b.team);
-  teamPanel(B, 0.38, 0.022, 0.003, -0.1, 0.19, -0.27, b.team);
+  teamPanel(B, 0.38, 0.022, 0.003, -0.1, 0.17, 0.2875, b.team);
+  teamPanel(B, 0.38, 0.022, 0.003, -0.1, 0.17, -0.2875, b.team);
 
   // ---- turret: vertical-sided box with the long arrowhead ERA nose, bustle with stowage basket
   const T = b.part(B, -0.06, 0.256, 0, 'turret');
@@ -3056,6 +3634,10 @@ function mbtType99(b: Bld) {
   }
   rack(T, -0.45, -0.37, -0.17, 0.17, 0.02, 0.065, 5);
   T.cbox(0.06, 0.05, 0.14, 0.01, -0.41, 0.05, 0.06, K.canvas);
+  // big stowage cylinder along the right rear of the turret (a Type 99A signature)
+  T.cx(0.034, 0.034, 0.16, -0.36, 0.07, 0.205, CAMO, 14);
+  T.cx(0.036, 0.036, 0.006, -0.44, 0.07, 0.205, K.dark, 14);
+  T.box(0.012, 0.03, 0.03, -0.3, 0.05, 0.19, K.dark);
   teamPanel(T, 0.004, 0.024, 0.28, -0.453, 0.055, 0, b.team);
   // roof: laser dazzler / LWR box (right front), gunner sight (left), commander panoramic sight + RWS
   T.cbox(0.075, 0.055, 0.055, 0.006, 0.07, 0.14, 0.14, CAMO);
@@ -3066,7 +3648,8 @@ function mbtType99(b: Bld) {
   rws(T, -0.16, 0.112, 0.11, 0.85, true);
   hatch(T, -0.08, 0.112, -0.1, 0.035);
   antennas(b, T, -0.3, 0.112, [-0.14, 0.14], 0.24);
-  mainGun(b, T, 0.28, 0.056, 0, { len: 0.7, r: 0.0145, fume: 0.45, mrs: true, mantlet: [0.07, 0.07, 0.1] });
+  // ZPT-98A 125 mm L/50: 11.0 m gun forward vs 7.6 m hull = 3.4 m overhang
+  mainGun(b, T, 0.28, 0.056, 0, { len: 0.8, r: 0.0145, fume: 0.5, mrs: true, mantlet: [0.07, 0.07, 0.1] });
 }
 
 /** K2 / Altay family: sleek hull, angular wedge turret with a long autoloader / ammunition bustle. */
@@ -3074,23 +3657,16 @@ function mbtK2(b: Bld, altay: boolean) {
   // K2: 7.5 m hull, 3.6 m; 6 road wheels (in-arm hydropneumatic), KCPS sight, MMW radar, L/55.
   // Altay: 7 road wheels + 3 return rollers, blunter taller turret, big rear basket, SARP RWS.
   const B = b.body;
-  running(b, {
-    wheels: altay ? evenly(7, -0.37, 0.335) : evenly(6, -0.355, 0.32),
-    rw: altay ? 0.047 : 0.053,
-    spr: [-0.47, 0.106, 0.046],
-    idl: [0.45, 0.096, 0.043],
-    rollers: [
-      [-0.2, 0.138, 0.013],
-      [0.0, 0.138, 0.013],
-      [0.2, 0.138, 0.013],
-    ],
-    gauge: 0.205,
-    tw: 0.112,
-    style: altay ? 'nato' : 'asia',
-  });
-  lowerHull(B, [[-0.5, 0.072], [0.43, 0.072], [0.548, 0.164], [-0.52, 0.164]], 0.148);
-  B.side([[-0.53, 0.162], [0.55, 0.162], [0.575, 0.194], [0.31, 0.25], [-0.5, 0.253], [-0.53, 0.233]], 0.52, 0, CAMO, 0.008);
-  skirts(B, [[-0.47, 0.098], [0.4, 0.098], [0.53, 0.13], [0.565, 0.205], [-0.48, 0.205]], 0.27, 0.016, altay ? [-0.32, -0.16, 0.0, 0.16, 0.32] : [-0.25, 0.0, 0.25]);
+  chassis(b, altay ? CHASSIS.turkey : CHASSIS.korea);
+  if (altay) {
+    // Leopard-like: six panels and a tall vertical-front leading panel
+    panelRow(B, [-0.48, -0.33, -0.18, -0.03, 0.12, 0.27, 0.42], 0.096, 0.208, 0.274, 0.016);
+    for (const s of [-1, 1]) B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.424, 0.09], [0.53, 0.09], [0.562, 0.12], [0.562, 0.208], [0.424, 0.208]], s, 0.28, 0.024), 0.424, 0.208);
+  } else {
+    // K2: four tall panels with a horizontal joint, angled nose panel
+    panelRow(B, [-0.48, -0.26, -0.04, 0.18, 0.4], 0.102, 0.21, 0.274, 0.016, true);
+    for (const s of [-1, 1]) B.piece(s > 0 ? 3 : 2, () => skirtPanel(B, [[0.404, 0.102], [0.5, 0.11], [0.55, 0.14], [0.568, 0.205], [0.404, 0.21]], s, 0.274, 0.016), 0.404, 0.21);
+  }
   for (const s of [-1, 1]) {
     B.box(1.0, 0.006, 0.028, 0.04, 0.205, s * 0.27, shade(b.base, 0.9));
     headlight(B, 0.56, 0.206, s * 0.225);
@@ -3106,17 +3682,33 @@ function mbtK2(b: Bld, altay: boolean) {
   teamPanel(B, 0.42, 0.022, 0.003, -0.08, 0.17, -0.279, b.team);
   cable(B, [[0.52, 0.215, -0.235], [0.3, 0.25, -0.22], [-0.1, 0.254, -0.23]]);
 
-  const T = b.part(B, -0.04, 0.253, 0, 'turret');
+  // reference photos: the K2 turret sits well forward (mantlet ~0.2 hull lengths behind the nose) and is
+  // tall and slab sided over a low hull; Altay's sits further back with a blunter face
+  const T = b.part(B, altay ? -0.03 : 0.015, 0.253, 0, 'turret');
+  // Altay: blocky Leopard-2A4-like box, vertical sides and front; K2: shorter sloped wedge (faces and sides
+  // leaning back) over a long autoloader bustle, the hull riding nose-up on its hydropneumatics
   const P0: P2[] = altay
-    ? [[0.33, 0], [0.32, 0.07], [0.21, 0.19], [0.1, 0.23], [-0.15, 0.234], [-0.3, 0.22], [-0.46, 0.195], [-0.47, 0]]
-    : [[0.32, 0], [0.31, 0.065], [0.22, 0.155], [0.12, 0.222], [-0.12, 0.228], [-0.25, 0.218], [-0.44, 0.19], [-0.452, 0]];
-  const h = altay ? 0.125 : 0.112;
-  hloft(T, [
-    { y: -0.004, h: sz(P0, 0.93) },
-    { y: 0.02, h: P0 },
-    { y: h * 0.62, h: sz(slopeF(P0, 0.1, -0.008), 0.985) },
-    { y: h, h: sz(slopeF(P0, 0.1, altay ? -0.05 : -0.075), 0.92) },
-  ]);
+    ? [[0.33, 0], [0.32, 0.08], [0.24, 0.2], [0.1, 0.232], [-0.15, 0.234], [-0.3, 0.226], [-0.46, 0.2], [-0.47, 0]]
+    : [[0.27, 0], [0.26, 0.06], [0.17, 0.15], [0.08, 0.212], [-0.13, 0.22], [-0.22, 0.2], [-0.43, 0.182], [-0.44, 0]];
+  const h = altay ? 0.118 : 0.11;
+  hloft(
+    T,
+    altay
+      ? [
+          { y: -0.004, h: sz(P0, 0.95) },
+          { y: 0.02, h: P0 },
+          { y: h * 0.5, h: sz(slopeF(P0, 0.12, -0.02), 0.995) },
+          { y: h - 0.014, h: sz(slopeF(P0, 0.12, -0.075), 0.98) },
+          { y: h, h: sz(slopeF(P0, 0.1, -0.1), 0.93) },
+        ]
+      : [
+          { y: -0.004, h: sz(P0, 0.93) },
+          { y: 0.02, h: P0 },
+          { y: h * 0.55, h: sz(slopeF(P0, 0.05, -0.035), 0.95) },
+          { y: h, h: sz(slopeF(P0, 0.05, -0.115), 0.85) },
+        ],
+  );
+  if (!altay) b.stance = 0.02;
   T.cy(0.19, 0.19, 0.012, 0, -0.012, 0, K.dark, 20);
   // armour-module seams on the wedge faces
   for (const s of [-1, 1]) {
@@ -3149,7 +3741,9 @@ function mbtK2(b: Bld, altay: boolean) {
   rws(T, -0.12, h, altay ? 0.05 : 0.08, 0.9, true);
   hatch(T, -0.06, h, -0.1, 0.035);
   antennas(b, T, altay ? -0.38 : -0.36, h, [-0.15, 0.15], 0.24);
-  mainGun(b, T, 0.31, 0.058, 0, { len: 0.78, r: 0.0145, fume: 0.4, mrs: true, mantlet: [0.06, 0.062, 0.1] });
+  // L/55 120 mm: K2 10.8 m gun forward vs 7.5 m hull (3.3 m overhang), Altay 10.3 m vs 7.3 m (3.0 m)
+  // (both fume extractors sit just ahead of the mantlet)
+  mainGun(b, T, 0.31, 0.058, 0, { len: altay ? 0.7 : 0.72, r: 0.0145, fume: altay ? 0.2 : 0.14, mrs: true, mantlet: [0.06, 0.062, 0.1] });
 }
 
 function mbt(style: ModelStyle, fog: FogOfWar | null): Model {
@@ -3290,7 +3884,9 @@ function apcBradley(b: Bld) {
     headlight(B, 0.465, 0.215, s * 0.24, 0.9);
     taillight(B, -0.47, 0.255, s * 0.25);
   }
-  grille(B, 0.2, 0.258, 0.17, 0.12, 0.14, 6);
+  // BRAT reactive tiles in a grid over the upper glacis (M2A3 reference photos)
+  bricks(B, slopePlane([0.3, 0.276], [0.475, 0.191], 0), 0.012, 0.18, -0.25, 0.25, 3, 5, 0.014, 0.008);
+  grille(B, 0.2, 0.268, 0.17, 0.1, 0.14, 6);
   B.box(0.04, 0.02, 0.05, 0.12, 0.29, 0.24, K.black);
   b.emit(0.12, 0.3, 0.24);
   hatch(B, 0.25, 0.27, -0.16, 0.032);
@@ -3334,14 +3930,15 @@ function apcNamer(b: Bld) {
     style: 'merk',
   });
   lowerHull(B, [[-0.52, 0.065], [0.42, 0.065], [0.55, 0.17], [-0.55, 0.17]], 0.172);
-  // front engine glacis, tall troop superstructure
+  // front engine glacis, tall troop superstructure (reference photos: the flat roof runs forward to ~0.35,
+  // then a shallow glacis drops to a high, blunt nose)
   B.side(
     [
       [-0.55, 0.17],
       [0.56, 0.17],
-      [0.585, 0.19],
-      [0.1, 0.285],
-      [0.0, 0.33],
+      [0.595, 0.2],
+      [0.59, 0.258],
+      [0.36, 0.33],
       [-0.52, 0.335],
       [-0.55, 0.3],
     ],
@@ -3353,19 +3950,19 @@ function apcNamer(b: Bld) {
   skirts(B, [[-0.5, 0.1], [0.36, 0.1], [0.5, 0.13], [0.585, 0.2], [0.58, 0.215], [-0.52, 0.215]], 0.322, 0.016, [-0.33, -0.15, 0.03, 0.2, 0.37]);
   // superstructure side armour modules
   for (const s of [-1, 1]) {
-    B.cbox(0.48, 0.07, 0.02, 0.006, -0.27, 0.27, s * 0.3, CAMO);
-    for (const x of [-0.42, -0.27, -0.12]) B.box(0.004, 0.06, 0.004, x, 0.27, s * 0.311, K.dark);
+    B.cbox(0.86, 0.07, 0.02, 0.006, -0.09, 0.27, s * 0.3, CAMO);
+    for (const x of [-0.42, -0.27, -0.12, 0.03, 0.18]) B.box(0.004, 0.06, 0.004, x, 0.27, s * 0.311, K.dark);
     headlight(B, 0.57, 0.205, s * 0.27);
     taillight(B, -0.555, 0.3, s * 0.27);
     trophy(B, 0.02, 0.31, s * 0.27, s, b.team);
   }
-  grille(B, 0.3, 0.226, 0.13, 0.17, 0.16, 7);
-  hatch(B, 0.18, 0.25, -0.14, 0.032);
-  for (const z of [-0.18, -0.1]) periscope(B, 0.22, 0.246, z, 0, 0.018);
+  grille(B, 0.42, 0.312, 0.13, 0.14, 0.16, 7);
+  hatch(B, 0.29, 0.335, -0.14, 0.032);
+  for (const z of [-0.18, -0.1]) periscope(B, 0.335, 0.333, z, 0, 0.018);
   rearRamp(B, -0.552, 0.11, 0.3, 0.34, b.team);
   for (const x of [-0.38, -0.2]) hatch(B, x, 0.335, 0.11, 0.035);
   for (let i = 0; i < 4; i++) periscope(B, -0.4 + i * 0.1, 0.335, -0.29, -Math.PI / 2, 0.018);
-  cable(B, [[0.5, 0.21, 0.31], [0.2, 0.25, 0.3], [0.04, 0.28, 0.29]]);
+  cable(B, [[0.5, 0.27, 0.31], [0.3, 0.315, 0.3], [0.04, 0.315, 0.29]]);
   teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, 0.322, b.team);
   teamPanel(B, 0.3, 0.025, 0.003, -0.25, 0.25, -0.322, b.team);
   b.emit(0.3, 0.24, 0.32);
@@ -3503,6 +4100,10 @@ function apcBMP3(b: Bld) {
   B.box(0.05, 0.02, 0.03, -0.2, 0.24, -0.29, K.black);
   b.emit(-0.2, 0.25, -0.3);
   hatch(B, 0.3, 0.228, 0, 0.026);
+  // OPVT snorkel tube stowed along the left of the roof (a BMP-3 signature)
+  B.cx(0.016, 0.016, 0.36, -0.24, 0.278, -0.22, CAMO, 10);
+  B.cx(0.02, 0.02, 0.05, -0.04, 0.278, -0.22, CAMO, 10);
+  for (const x of [-0.38, -0.12]) B.box(0.012, 0.022, 0.03, x, 0.266, -0.22, K.dark);
   teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, 0.301, b.team);
   teamPanel(B, 0.36, 0.022, 0.003, -0.1, 0.2, -0.301, b.team);
   // turret: low dome with 100mm launcher-gun + coaxial 30mm
@@ -3520,10 +4121,12 @@ function apcBMP3(b: Bld) {
   const g = b.part(T, 0.18, 0.05, 0);
   g.g.rotation.z = 0.03;
   const r100 = b.part(g, 0, 0, 0, 'recoil');
-  r100.cx(0.018, 0.022, 0.3, 0.15, 0, 0, mt(K.gun), 12);
-  r100.cx(0.023, 0.023, 0.03, 0.29, 0, 0, mt(K.gun), 12);
-  r100.cx(0.012, 0.012, 0.004, 0.306, 0, 0, mt(K.black), 10);
-  b.muzzle(r100, 0.31, 0, 0);
+  // 2A70 100 mm gun-launcher: a long, slim barrel (~2.6 m out of the mantlet, reference photos), thicker breech
+  r100.cx(0.016, 0.018, 0.08, 0.04, 0, 0, mt(K.gun), 12);
+  r100.cx(0.0115, 0.0125, 0.3, 0.23, 0, 0, mt(K.gun), 12);
+  r100.cx(0.0135, 0.0135, 0.02, 0.37, 0, 0, mt(K.gun), 12);
+  r100.cx(0.008, 0.008, 0.004, 0.381, 0, 0, mt(K.black), 10);
+  b.muzzle(r100, 0.385, 0, 0);
   cannon(b, T, 0.18, 0.05, 0.05, 0.27, 0.007, { brake: false });
   T.cx(0.004, 0.004, 0.05, 0.2, 0.04, -0.05, mt(K.dark), 5);
   T.cbox(0.05, 0.035, 0.04, 0.005, 0.04, 0.09, -0.08, CAMO);
@@ -3984,9 +4587,11 @@ function aaPantsir(b: Bld) {
   planarRadar(R, 0.2, 0.08, 0.3);
   for (const s of [-1, 1]) {
     // 6 missile tubes per side + twin 30mm
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.016, 0.016, 0.26, -0.04, 0.09 + i * 0.034, s * (0.13 + j * 0.034), 0x4e5634, 8);
-    T.box(0.27, 0.075, 0.11, -0.04, 0.105, s * 0.165, 0x4a5032);
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.011, 0.011, 0.004, 0.092, 0.09 + i * 0.034, s * (0.13 + j * 0.034), K.black, 6);
+    // (reference photos: the 57E6 containers are bare tubes, 2 rows x 3 per side, held by two clamp frames and
+    // reaching well ahead of the turret face - the Pantsir's bristling silhouette)
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.0165, 0.0165, 0.32, 0.0, 0.09 + i * 0.034, s * (0.13 + j * 0.034), 0x4e5634, 8);
+    for (const x of [-0.12, 0.06]) T.box(0.014, 0.075, 0.112, x, 0.107, s * 0.164, 0x3e4430);
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) T.cx(0.012, 0.012, 0.004, 0.161, 0.09 + i * 0.034, s * (0.13 + j * 0.034), K.black, 6);
     T.cbox(0.12, 0.05, 0.05, 0.006, 0.05, 0.05, s * 0.12, CAMO);
     for (const dy of [-0.012, 0.012]) cannon(b, T, 0.1, 0.05 + dy, s * 0.12, 0.26, 0.0065, { brake: false });
     teamPanel(T, 0.12, 0.02, 0.003, -0.04, 0.09, s * 0.101, b.team);
@@ -4795,8 +5400,8 @@ const TELS: Record<string, TelCfg> = {
   tel_taurus: { axles: [0.38, -0.1, -0.27], steer: 1, L: 1.05, W: 0.5, r: 0.07, cab: [0.28, 0.52, 0.18], load: 'box', cols: 1, rows: 1, len: 0.66, w: 0.26, h: 0.1, mcol: CAMO, elev: 0.55 },
   // Hyunmoo-2: 8x8, two bare missiles
   tel_hyunmoo: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'bare', cols: 2, rows: 1, len: 0.82, w: 0.07, h: 0, mcol: 0xd6d8d2, elev: 1.15, nose: 0.13 },
-  // R-360 Neptune: KrAZ 6x6 with four round canisters (2 x 2)
-  tel_neptune: { axles: [0.4, -0.12, -0.28], steer: 1, L: 1.1, W: 0.5, r: 0.072, cab: [0.3, 0.54, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
+  // R-360 Neptune: USPU-360 launcher on the KrAZ-7634HE 8x8, four round canisters (2 x 2)
+  tel_neptune: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.5, r: 0.074, cab: [0.36, 0.6, 0.19], load: 'round', cols: 2, rows: 2, len: 0.66, w: 0.075, h: 0, mcol: CAMO, elev: 0.5 },
   // Tayfun: 8x8 with two round canisters
   tel_tayfun: { axles: [0.46, 0.3, -0.14, -0.3], steer: 2, L: 1.2, W: 0.52, r: 0.074, cab: [0.36, 0.6, 0.18], load: 'round', cols: 2, rows: 1, len: 0.8, w: 0.1, h: 0, mcol: CAMO, elev: 1.0 },
   // 9K720 Iskander-M: MZKT 8x8, two missiles under a rear cover

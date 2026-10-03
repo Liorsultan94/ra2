@@ -9,6 +9,7 @@ import { Ground } from './ground';
 import { buildLayout, type Layout } from './layout';
 import { Resources } from './resources';
 import { buildRocks } from './rocks';
+import { Props } from './props';
 import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
 import { RIVER, buildWater, type RiverInfo, type WaterReflection } from './water';
@@ -40,6 +41,8 @@ export class Terrain {
   /** Instanced plants, fences and village houses, for render-side environment damage. */
   readonly veg: VegetationHandles = { trees: [], bushes: [] };
   readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
+  /** Photoscanned props (barrels, crates, cars, barriers...); they stream in after the terrain is built. */
+  readonly props: Props;
 
   constructor(
     private map: GameMap,
@@ -60,7 +63,9 @@ export class Terrain {
     // camera) every frame; the vegetation and rocks switch models from it.
     const lod = new SceneryLod();
     this.lod = lod;
-    const onBefore = (_r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+    const onBefore = (r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
+      // stream the photoscanned ground layers into their texture arrays (a few per frame)
+      this.ground.prepare(r);
       // the mirrored water reflection camera must not drive LOD / culling
       if (cam.userData.waterReflection) return;
       this.camera = cam;
@@ -80,6 +85,9 @@ export class Terrain {
     for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(Object.assign(o, { name: o.name || 'vegetation' }));
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(Object.assign(o, { name: o.name || 'rocks' }));
     for (const o of buildScenery(map, this.layout, fog, quality, this.scenery, lod)) this.group.add(Object.assign(o, { name: o.name || 'scenery' }));
+    this.props = new Props(map, this.layout, fog, quality);
+    this.group.add(this.props.group);
+    void this.props.load();
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
     this.ground.mesh.userData.perfCat = 'ground';
@@ -121,12 +129,13 @@ export class Terrain {
     const gcol = [0, 0, 0];
     const look = g.look;
     const rgb = (v: number) => [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-    // temperate keeps its original minimap tones
-    const temperate = look.code === 0;
-    const dirtC = temperate ? [122, 100, 72] : rgb(look.ground.dirt);
-    const rockC = temperate ? [138, 132, 122] : rgb(look.ground.rock);
-    const sandC = temperate ? [168, 154, 122] : rgb(look.ground.sand);
-    const mudC = temperate ? [74, 62, 48] : rgb(look.ground.mud);
+    // the biome's ground colours: derived from the photoscanned materials' mean albedo (biome.ts),
+    // i.e. what each layer averages to on screen; a little lift so the small map reads in daylight
+    const lift = (c: number[]) => c.map((v) => Math.min(255, v * 1.12));
+    const dirtC = lift(rgb(look.ground.dirt));
+    const rockC = lift(rgb(look.ground.rock));
+    const sandC = lift(rgb(look.ground.sand));
+    const mudC = lift(rgb(look.ground.mud));
     for (let py = 0; py < c.height; py++) {
       for (let px = 0; px < c.width; px++) {
         const x = (px + 0.5) / S;
@@ -144,7 +153,8 @@ export class Terrain {
         // winter: the painted snow cover
         if (look.code === 2) {
           const sn = Math.max(0, Math.min(1, (g.ctl[k + 2] / 255 - 0.25) / 0.4));
-          col = col.map((v, j) => v + ([214, 222, 236][j] - v) * sn);
+          const snowC = lift(rgb(look.ground.snow ?? 0xd6deec));
+          col = col.map((v, j) => v + (snowC[j] - v) * sn);
         }
         const t = m.tiles[i];
         if (t === Tile.Water) col = [...look.mini.water];
@@ -177,6 +187,7 @@ export class Terrain {
     this.grass?.update(time, this.camera, units ?? null);
     // cull the scatter to last frame's view (the margin covers the lag)
     if (this.camera) this.lod.cull(this.camera);
+    this.props.frame(this.camera, time, units);
     RIVER.time.value = time;
     this.reflection?.tick();
     this.waterside?.update(time);

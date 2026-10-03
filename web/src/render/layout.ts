@@ -1,6 +1,7 @@
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import { buildBiomeLayout } from './biomelayout';
+import { finishRoadLayout, prepareRoadNet, setLayoutBuilder } from './ambient/clearance';
 
 /*
  * Scenery layout derived deterministically from the map: paved roads, dirt
@@ -22,11 +23,21 @@ export interface Road {
   variant: 0 | 1; // 0 highway with markings, 1 country road
   /** Drawn by the ground shader (city streets as Avenue / Street / Crossing fields), no ribbon mesh. */
   painted?: boolean;
+  /** A piece fitted to the traffic network (link, turning loop): drawn, but no lane of its own. */
+  ring?: boolean;
+  /** Access lane of parking lot #lot (ambient/sites.ts). */
+  lot?: number;
+  /** Two roads joined into one (ambient/clearance.ts): width and look per point (drawn by roadfurniture.ts). */
+  taper?: { w: number[]; v: (0 | 1)[]; from?: number; to?: number; lift?: number };
+  /** A closed loop (first point follows the last). */
+  closed?: boolean;
 }
 
 export interface Track {
   pts: V2[];
   width: number;
+  /** Turning loop / link of a dirt track (see Road.ring). */
+  ring?: boolean;
 }
 
 export const enum FieldType {
@@ -119,7 +130,17 @@ export function segDist(px: number, py: number, a: V2, b: V2) {
   return Math.hypot(px - a.x - dx * t, py - a.y - dy * t);
 }
 
+const layouts = new WeakMap<GameMap, Layout>();
+
+/** The map's scenery layout (built once per map: deterministic). */
 export function buildLayout(m: GameMap): Layout {
+  let l = layouts.get(m);
+  if (!l) layouts.set(m, (l = buildLayoutOnce(m)));
+  return l;
+}
+setLayoutBuilder(buildLayout);
+
+function buildLayoutOnce(m: GameMap): Layout {
   // the other maps hand their layout to the renderer as deco hints (sim/maps.ts)
   if (m.id !== 'frontline') return buildBiomeLayout(m);
   const W = m.w;
@@ -203,6 +224,8 @@ export function buildLayout(m: GameMap): Layout {
   };
   for (const r of roads) stampLine(r.pts, r.width / 2 + 0.25, OCC_ROAD);
   for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
+  // the civilian lane graph: turning circles / junctions kept clear, roads fitted to them (ambient/clearance.ts)
+  prepareRoadNet(m, roads, tracks, occ, R);
   for (const st of m.structures) {
     for (let y = (st.y - 0.6) * R; y < (st.y + st.h + 0.6) * R; y++)
       for (let x = (st.x - 0.6) * R; x < (st.x + st.w + 0.6) * R; x++) if (x >= 0 && y >= 0 && x < W * R && y < H * R) occ[Math.floor(y) * W * R + Math.floor(x)] |= OCC_BUILT;
@@ -429,7 +452,7 @@ export function buildLayout(m: GameMap): Layout {
     }
   }
 
-  return { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R };
+  return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R });
 }
 
 /**

@@ -32,15 +32,18 @@ import { Sky } from './sky';
 import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
 import type { TiltShiftPass } from './tiltshift';
-import { AirShadows, poseGroundVehicle, poseInfantry } from './unitpose';
+import { AirShadows, bumpVehicle, poseGroundVehicle, poseInfantry } from './unitpose';
 import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
+import { loadBuildingPhotos } from './models/bldtex';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
+import { setBakeEnabled, setBakeRenderer, setBakeSize } from './models/vehbake';
+import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
 
@@ -313,6 +316,8 @@ export class GameRenderer {
     this.viewer = viewer;
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
     this.quality = quality;
+    // CC0 photoscanned building materials, patched into the building atlas when they arrive
+    void loadBuildingPhotos(quality);
     const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
@@ -334,6 +339,11 @@ export class GameRenderer {
     this.perf = new PerfProbe(this.renderer, this.scene, this.camera);
     this.instancer = new AutoInstancer(this.renderer, this.scene, this.camera, (m) => m.userData.outlineColor !== undefined);
     this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
+    // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
+    setBakeRenderer(this.renderer);
+    setBakeSize(quality === 'high' ? 1024 : 512);
+    setBakeEnabled(!/[?&]vbake=0\b/.test(location.search));
+    setWearBiome(world.map.biome);
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -1319,7 +1329,7 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ wrecks
 
-  private toWreck(v: Visual, e: { def: string; x: number; y: number }) {
+  private toWreck(v: Visual, e: { def: string; x: number; y: number; cause?: 'crushed' }) {
     this.visuals.delete(v.id);
     // back on layer 0: wrecks and fracture rubble copy / reuse the meshes
     restoreMain(v.model.root);
@@ -1340,7 +1350,7 @@ export class GameRenderer {
     // killed under the canopy: the parachute carries the body down
     if (ud.category === 'infantry' && this.chutes.takeBody(v.id, v.model, v.anim)) return;
     if (ud.category === 'infantry') {
-      if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false } });
+      if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false, crushed: e.cause === 'crushed' ? 1 : 0, look: undefined, dive: 0 } });
       else this.wrecks.push({ ...base, kind: 'infantry', max: 2.2 });
       return;
     }
@@ -1804,7 +1814,7 @@ export class GameRenderer {
             const pos = v?.model.root.position ?? new THREE.Vector3(ev.x, gy + 1.5, ev.y);
             fx.blast(BLASTS.airSmall, pos.x, pos.y, pos.z, gy);
           } else if (ud.category === 'infantry') {
-            fx.explosion(ev.x, gy, ev.y, 'small', 'dust');
+            if (ev.cause !== 'crushed') fx.explosion(ev.x, gy, ev.y, 'small', 'dust'); // run over: the 'crushed' event's puff
           } else {
             fx.blast(ud.harvester || ud.mcv ? BLASTS.bigVehicle : BLASTS.vehicle, ev.x, gy + 0.25, ev.y, gy);
             // secondary ammunition cook-off
@@ -1816,6 +1826,16 @@ export class GameRenderer {
           if (shown) this.toWreck(v, ev);
           else this.removeVisual(v);
         }
+        break;
+      }
+      case 'crushed': {
+        // run over: the hull jolts over the body, a small puff of dust and grit under the tracks
+        const vv = this.visuals.get(ev.by);
+        if (vv) bumpVehicle(vv.model);
+        if (!this.visibleAt(ev.x, ev.y)) break;
+        const gy = standHeight(this.world.map, ev.x, ev.y);
+        for (let i = 0; i < 6; i++) fx.dust(ev.x, gy, ev.y, 0.9 + i * 0.12);
+        this.debris.burst('dirt', ev.x, gy + 0.03, ev.y, 5, 0.9, 0.035, { up: 0.6, spread: 0.12 });
         break;
       }
       case 'unitReady': {
@@ -2107,6 +2127,7 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    setBakeRenderer(null);
     this.perfHud.dispose();
     this.instancer.dispose();
     this.life.dispose();

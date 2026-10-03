@@ -13,6 +13,7 @@ import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality } from '../render/renderer';
+import { ATMOS_DEFAULTS } from '../render/atmos';
 import { ViewModes } from '../render/viewmodes';
 import { warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
@@ -49,6 +50,12 @@ export interface GameOptions {
    * 'off': the plain loading overlay and the classic end sequence.
    */
   briefing?: 'full' | 'quick' | 'off';
+  /**
+   * Battles started from the menu (skirmish, quick battle): unless the menu settings pick a time of day /
+   * weather, play the live day (1 real minute = 1 game hour, from 05:30) with the map climate's dynamic
+   * weather (render/atmos.ts ATMOS_DEFAULTS). Test URLs leave it off and keep the plain day.
+   */
+  liveSky?: boolean;
 }
 
 export interface GameCallbacks {
@@ -163,6 +170,7 @@ export class Game {
     });
     this.cine.enabled = opts.cinematic ?? true;
     if (attract) this.hud.root.classList.add('attract');
+    ATMOS_DEFAULTS.live = !!opts.liveSky && !attract;
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
@@ -270,8 +278,9 @@ export class Game {
 
   /** Mission briefing over the whole screen while the battle loads (src/ui/briefing.ts). */
   private openBriefing(container: HTMLElement) {
-    const atm = (this.renderer.atmos as unknown as { cfg?: { tod?: string; weather?: string } }).cfg ?? {};
-    const info = buildBriefing(this.world, this.local, { seed: this.seed, difficulty: this.opts.difficulty, tod: atm.tod, weather: atm.weather, credits: this.opts.credits });
+    const a = this.renderer.atmos;
+    const atm = a.cfg;
+    const info = buildBriefing(this.world, this.local, { seed: this.seed, difficulty: this.opts.difficulty, tod: atm.tod, weather: atm.weather, credits: this.opts.credits, start: atm.tod === 'cycle' ? a.startHour : undefined, forecast: a.forecast() });
     (this as { brief: BriefingInfo | null }).brief = info;
     this.briefing = new Briefing(container, info, this.world, this.local, this.renderer.terrain.minimapImage, {
       autoDeploy: this.opts.briefing === 'quick' ? 1.2 : 12,
@@ -665,6 +674,12 @@ export class Game {
         if (ev.owner === this.local && d.kind === 'building') this.say('Structure lost', 'warn');
         break;
       }
+      case 'crushed':
+        if (this.visibleToLocal(ev.x, ev.y)) this.sfx('crush', ev.x, ev.y, 0.9);
+        break;
+      case 'dodge':
+        if (mine && !ev.yield) this.sfx('squelch', ev.x, ev.y, 0.6); // one of ours yelling a warning
+        break;
       case 'placed':
         if (mine) this.sfx('place');
         break;
@@ -767,6 +782,8 @@ export class Game {
     this.hud.root.classList.add('intro-on');
     this.renderer.selection.clear();
     if (win) this.audio.sting('heavy');
+    // victory fireworks over the base, the nearest town and the outro shot (render/fx/fireworks.ts)
+    if (win) this.renderer.atmos.living.celebrate(this.local, fall, (n, v, at) => this.audio.play(n, v, at));
   }
   private endWin = false;
   private reported = false;

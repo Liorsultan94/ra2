@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { assetBase, fetchBitmap } from './photoground';
 
 /*
  * Procedural texture atlas for the trees (src/render/trees.ts): leaf-card
@@ -8,6 +9,11 @@ import * as THREE from 'three';
  * cards for the far LOD and three barks. Leaves are painted in light,
  * desaturated tones: the per-instance colour gives each tree its hue, so one
  * texture covers summer greens, olive and autumn tints.
+ *
+ * Medium / high quality replace the painted broadleaf, pine and palm barks with
+ * CC0 photoscanned bark (public/tex/bark, tools/bake-terrain.mjs) once it has
+ * streamed in, matched to the painted bark's brightness so the trunks keep
+ * their tone next to the photoreal ground. The birch keeps its painted bark.
  */
 
 export const enum TCell {
@@ -491,5 +497,56 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   cache.set(cellPx, tex);
+  const photoOff = typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search);
+  if (S >= 256 && !photoOff && typeof createImageBitmap !== 'undefined' && typeof document !== 'undefined') void photoBarks(tex, S);
   return tex;
+}
+
+/** Copy the photoscanned barks into their atlas cells (brightness matched to the painted ones). */
+async function photoBarks(tex: THREE.DataTexture, S: number) {
+  const cells: [TCell, string][] = [
+    [TCell.Bark, 'oak'],
+    [TCell.PineBark, 'pine'],
+    [TCell.PalmBark, 'palm'],
+  ];
+  try {
+    const bmps = await Promise.all(cells.map(([, k]) => fetchBitmap(`${assetBase()}tex/bark/${k}.webp`)));
+    const W = S * GRID;
+    const data = tex.image.data as Uint8Array;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = S;
+    const ctx = cv.getContext('2d', { willReadFrequently: true })!;
+    const lum = (r: number, g: number, b: number) => r * 0.2126 + g * 0.7152 + b * 0.0722;
+    cells.forEach(([cell, ], i) => {
+      ctx.drawImage(bmps[i], 0, 0, S, S);
+      bmps[i].close?.();
+      const px = ctx.getImageData(0, 0, S, S).data;
+      const cx = (cell % GRID) * S;
+      // atlas rows are stored bottom-up (canvas top = v = 1)
+      const row0 = W - (Math.floor(cell / GRID) + 1) * S;
+      // brightness of the painted cell vs the scan
+      let a = 0;
+      let b = 0;
+      for (let y = 0; y < S; y += 4)
+        for (let x = 0; x < S; x += 4) {
+          const o = ((row0 + y) * W + cx + x) * 4;
+          a += lum(data[o], data[o + 1], data[o + 2]);
+          const q = (y * S + x) * 4;
+          b += lum(px[q], px[q + 1], px[q + 2]);
+        }
+      const k = Math.pow(a / Math.max(1, b), 0.75);
+      for (let y = 0; y < S; y++)
+        for (let x = 0; x < S; x++) {
+          const q = (y * S + x) * 4;
+          const o = ((row0 + S - 1 - y) * W + cx + x) * 4;
+          data[o] = Math.min(255, px[q] * k);
+          data[o + 1] = Math.min(255, px[q + 1] * k);
+          data[o + 2] = Math.min(255, px[q + 2] * k);
+          data[o + 3] = 255;
+        }
+    });
+    tex.needsUpdate = true;
+  } catch (e) {
+    console.warn('[photo] bark scans unavailable, keeping the painted barks', e);
+  }
 }

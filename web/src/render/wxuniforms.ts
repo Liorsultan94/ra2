@@ -120,6 +120,20 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
     diffuseColor.rgb *= 1.0 - 0.38 * wet;
     #if defined( STANDARD )
       roughnessFactor = mix( roughnessFactor, roughnessFactor * 0.45, wet * smoothstep( 0.3, 0.8, wxUp ) );
+      #ifndef WX_NO_PUDDLE
+      {
+        // standing water on flat, non-metal tops (country roads, flat roofs, plazas): mirror-like patches
+        // that shrink into the dips as things dry (the terrain paints its own puddles: WX_NO_PUDDLE)
+        float wxFlat = smoothstep( 0.975, 0.995, wxUp ) * ( 1.0 - smoothstep( 0.15, 0.4, metalnessFactor ) );
+        if ( wxFlat > 0.01 ) {
+          float wxPn = texture2D( fogNoise, vFogP.xz * 0.37 + 0.21 ).g * 0.7 + wxNz.a * 0.3;
+          float wxPt = 0.66 - wxWet * 0.1;
+          float wxPd = smoothstep( wxPt, wxPt + 0.04, wxPn ) * wxFlat * min( 1.0, wxWet * 2.0 );
+          diffuseColor.rgb *= 1.0 - 0.32 * wxPd;
+          roughnessFactor = mix( roughnessFactor, 0.04, wxPd );
+        }
+      }
+      #endif
     #endif
   }
   if ( wxDust > 0.001 ) {

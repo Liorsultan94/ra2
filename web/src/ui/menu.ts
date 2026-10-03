@@ -23,9 +23,13 @@ export interface Settings {
   cinematic: boolean;
   /** Skirmish map (sim/maps.ts; ?map= overrides it). */
   map?: MapId;
-  /** Skirmish atmosphere (visual only; read by src/render/atmos.ts). 'map' / unset = the map's own weather. */
-  tod?: 'day' | 'dusk' | 'night';
-  weather?: 'map' | 'clear' | 'rain' | 'snow' | 'sandstorm';
+  /**
+   * Skirmish atmosphere (visual only; read by src/render/atmos.ts). Unset = the live day ('cycle':
+   * 1 real minute = 1 game hour, from 05:30) with dynamic weather following the map's climate;
+   * weather 'map' = the map's own fixed weather.
+   */
+  tod?: 'day' | 'dusk' | 'night' | 'cycle' | 'mist';
+  weather?: 'map' | 'clear' | 'rain' | 'snow' | 'sandstorm' | 'dynamic';
   /** Drone camera picture-in-picture: 'auto' shows the feed of a selected / attacking drone. */
   droneCam: 'auto' | 'off';
   /** Team-coloured silhouettes of units hidden behind buildings and trees. */
@@ -166,8 +170,9 @@ export class MainMenu {
           <label>Difficulty<select data-o="difficulty">${opt('easy', st.difficulty, 'Easy')}${opt('normal', st.difficulty, 'Normal')}${opt('hard', st.difficulty, 'Hard')}</select></label>
           <label>Credits<select data-o="credits">${[5000, 10000, 20000].map((c) => opt(String(c), String(st.credits), '$' + c.toLocaleString('en-US'))).join('')}</select></label>
 
-          <label>Time of day<select data-o="tod">${opt('day', st.tod ?? 'day', 'Day')}${opt('dusk', st.tod ?? 'day', 'Dusk')}${opt('night', st.tod ?? 'day', 'Night')}${opt('cycle', st.tod ?? 'day', 'Dynamic cycle')}${opt('mist', st.tod ?? 'day', 'Misty morning')}</select></label>
-          <label>Weather<select data-o="weather">${opt('map', st.weather ?? 'map', 'Map default')}${opt('clear', st.weather ?? 'map', 'Clear')}${opt('rain', st.weather ?? 'map', 'Rain')}${opt('snow', st.weather ?? 'map', 'Snow')}${opt('sandstorm', st.weather ?? 'map', 'Sandstorm')}${opt('dynamic', st.weather ?? 'map', 'Dynamic')}</select></label>
+          <label>Time of day<select data-o="tod">${opt('cycle', st.tod ?? 'cycle', 'Live day (1 min = 1 h)')}${opt('day', st.tod ?? 'cycle', 'Day (fixed)')}${opt('dusk', st.tod ?? 'cycle', 'Dusk (fixed)')}${opt('night', st.tod ?? 'cycle', 'Night (fixed)')}${opt('mist', st.tod ?? 'cycle', 'Misty morning (fixed)')}</select></label>
+          <label>Weather<select data-o="weather">${opt('dynamic', st.weather ?? 'dynamic', 'Live (map climate)')}${opt('map', st.weather ?? 'dynamic', 'Map default (fixed)')}${opt('clear', st.weather ?? 'dynamic', 'Clear')}${opt('rain', st.weather ?? 'dynamic', 'Rain')}${opt('snow', st.weather ?? 'dynamic', 'Snow')}${opt('sandstorm', st.weather ?? 'dynamic', 'Sandstorm')}</select></label>
+          <p class="note live-note">Live day &amp; weather (1 min = 1 hour): the battle starts at 05:30 before sunrise; the sun sets around 18:30, rain, snow or dust fronts come and go with the map's climate.</p>
         </div>
         <div class="row">
           <button class="mbtn" data-a="back">Back</button>

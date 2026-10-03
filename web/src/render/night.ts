@@ -17,6 +17,14 @@ import type { VisualLike } from './atmos';
 const MAX_FLARES = 900;
 const MAX_POOLS = 260;
 const MAX_CONES = 220;
+const MAX_CARS = 48;
+const MAX_OUTAGES = 16;
+
+/** Stable 0..1 hash of a position (which lamps die in an outage). */
+function hashXZ(x: number, z: number) {
+  const h = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+  return h - Math.floor(h);
+}
 
 const FLARE_VERT = /* glsl */ `
 varying vec2 vUv;
@@ -43,18 +51,31 @@ void main() {
 const POOL_VERT = /* glsl */ `
 varying vec2 vUv;
 varying vec3 vCol;
+varying float vShape;
 void main() {
   vUv = uv * 2.0 - 1.0;
   vCol = instanceColor;
+  // the pool lies flat (the plane has no height): its y scale picks the shape (1 round, 2 headlight beam)
+  vShape = length(instanceMatrix[1].xyz);
   gl_Position = projectionMatrix * viewMatrix * instanceMatrix * vec4(position, 1.0);
 }`;
 const POOL_FRAG = /* glsl */ `
 varying vec2 vUv;
 varying vec3 vCol;
+varying float vShape;
 void main() {
-  float r = length(vUv);
-  float a = 1.0 - smoothstep(0.0, 1.0, r);
-  gl_FragColor = vec4(vCol * a * a, 1.0);
+  float a;
+  if (vShape > 1.5) {
+    // headlight beam on the road: starts at the bumper (x = -1), widens and fades forward
+    float t = vUv.x * 0.5 + 0.5;
+    float w = mix(0.22, 1.0, t);
+    a = (1.0 - smoothstep(w * 0.15, w, abs(vUv.y))) * smoothstep(0.0, 0.12, t) * pow(1.0 - t, 1.6) * 1.4;
+  } else {
+    float r = length(vUv);
+    a = 1.0 - smoothstep(0.0, 1.0, r);
+    a *= a;
+  }
+  gl_FragColor = vec4(vCol * a, 1.0);
 }`;
 const CONE_VERT = /* glsl */ `
 varying float vT;
@@ -128,6 +149,17 @@ export class NightLights {
   private nf = 0;
   private np = 0;
   private nc = 0;
+  /**
+   * Extra lights drawn into the same instanced pools every lit frame (nightlife.ts: street lamps,
+   * searchlights, campfires, fireworks glow): no extra draw calls. Called before the commit.
+   */
+  hook: ((n: NightLights, dark: number, time: number) => void) | null = null;
+  /** Civilian headlights queued by the ambient life (x, y, z, yaw, k), drawn on the next update. */
+  private cars = new Float32Array(MAX_CARS * 5);
+  private nCars = 0;
+  /** Shelling knocks out the lamps around it for a while: x, z, radius, start, end (game-ish seconds). */
+  private outages = new Float32Array(MAX_OUTAGES * 5);
+  private nOut = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -163,27 +195,94 @@ export class NightLights {
     this.group.removeFromParent();
   }
 
+  /**
+   * Civilian car headlights (ambient life): a beam pool on the road ahead and a faint cone.
+   * (x, z) = the front bumper, y = road height, yaw = heading (world, atan2(-dirZ, dirX)), k = 0..1.
+   * Queued and drawn on the next update (a frame late: invisible at car speeds).
+   */
+  carLight(x: number, y: number, z: number, yaw: number, k: number) {
+    if (this.nCars >= MAX_CARS) return;
+    const c = this.cars;
+    const i = this.nCars++ * 5;
+    c[i] = x;
+    c[i + 1] = y;
+    c[i + 2] = z;
+    c[i + 3] = yaw;
+    c[i + 4] = k;
+  }
+
+  /**
+   * Shelling at (x, z): building lamps within r flicker; about half of them die for `dark`
+   * seconds and then stutter back on.
+   */
+  outage(x: number, z: number, r: number, time: number, dark: number) {
+    let i = this.nOut;
+    if (i >= MAX_OUTAGES) {
+      // replace the one ending soonest
+      i = 0;
+      for (let j = 1; j < MAX_OUTAGES; j++) if (this.outages[j * 5 + 4] < this.outages[i * 5 + 4]) i = j;
+    } else this.nOut++;
+    const o = this.outages;
+    o[i * 5] = x;
+    o[i * 5 + 1] = z;
+    o[i * 5 + 2] = r;
+    o[i * 5 + 3] = time;
+    o[i * 5 + 4] = time + dark;
+  }
+
+  /** Lamp brightness factor at (x, z) under the current outages (1 = normal, 0 = dead). */
+  lampFactor(x: number, z: number, time: number): number {
+    let f = 1;
+    const o = this.outages;
+    for (let j = 0; j < this.nOut; j++) {
+      const t0 = o[j * 5 + 3];
+      const t1 = o[j * 5 + 4];
+      if (time > t1 + 1.5 || time < t0) continue;
+      const dx = x - o[j * 5];
+      const dz = z - o[j * 5 + 1];
+      const r = o[j * 5 + 2];
+      if (dx * dx + dz * dz > r * r) continue;
+      const h = hashXZ(x, z);
+      const fl = Math.sin(time * 37 + h * 90) * Math.sin(time * 11.3 + h * 40) > 0.1 ? 1 : 0.08;
+      let k: number;
+      if (time < t0 + 0.4 + h * 1.5) k = fl; // the blast: everything stutters
+      else if (h < 0.5 && time < t1 - h * 8) k = 0; // dead for a while
+      else if (h < 0.5 && time < t1 - h * 8 + 1.5) k = fl * 0.7; // coming back on
+      else k = 1;
+      f = Math.min(f, k);
+    }
+    return f;
+  }
+
+  /** 0 = daylight .. 1 = full night (this frame). */
+  get darkness() {
+    return this.dark;
+  }
+
   /** Dynamic day / night cycle: 0 = daylight (everything off) .. 1 = full night. */
   setDark(dark: number) {
     this.dark = Math.max(0, Math.min(1, dark));
   }
 
-  private flare(x: number, y: number, z: number, size: number, r: number, g: number, b: number) {
+  /** A camera-facing additive light flare (lamps, fires, beacons). */
+  flare(x: number, y: number, z: number, size: number, r: number, g: number, b: number) {
     if (this.nf >= MAX_FLARES) return;
     _m.makeScale(size, size, size).setPosition(x, y, z);
     this.flares.setMatrixAt(this.nf, _m);
     this.flares.setColorAt(this.nf++, _c.setRGB(r, g, b));
   }
 
-  private pool(x: number, y: number, z: number, yaw: number, len: number, wid: number, r: number, g: number, b: number) {
+  /** A light pool on the ground (additive); `beam` = a headlight beam starting at the -x end. */
+  pool(x: number, y: number, z: number, yaw: number, len: number, wid: number, r: number, g: number, b: number, beam = false) {
     if (this.np >= MAX_POOLS) return;
     _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
-    _m.compose(_p.set(x, y + 0.04, z), _q, _s.set(len, 1, wid));
+    _m.compose(_p.set(x, y + 0.04, z), _q, _s.set(len, beam ? 2 : 1, wid));
     this.pools.setMatrixAt(this.np, _m);
     this.pools.setColorAt(this.np++, _c.setRGB(r, g, b));
   }
 
-  private cone(x: number, y: number, z: number, yaw: number, pitch: number, len: number, rad: number, r: number, g: number, b: number) {
+  /** A soft additive light cone from (x, y, z) along yaw / pitch (pitch < 0 = downwards). */
+  cone(x: number, y: number, z: number, yaw: number, pitch: number, len: number, rad: number, r: number, g: number, b: number) {
     if (this.nc >= MAX_CONES) return;
     _e.set(0, yaw, pitch, 'YXZ');
     _q.setFromEuler(_e);
@@ -234,6 +333,7 @@ export class NightLights {
         commit(im, 1);
       }
       for (const l of this.lights) l.intensity = 0;
+      this.nCars = 0;
       return;
     }
     const tx = target.x;
@@ -260,7 +360,8 @@ export class NightLights {
           for (const L of lamps) {
             _p.copy(L.pos).applyMatrix4(root.matrix);
             _c.setHex(L.color);
-            const k = L.intensity * pw * dk;
+            const k = L.intensity * pw * dk * (this.nOut ? this.lampFactor(_p.x, _p.z, time) : 1);
+            if (k <= 0.001) continue;
             const blink = L.color === 0xff3020 ? (Math.sin(time * 3 + v.id) > 0.3 ? 1 : 0.1) : 1;
             const fk = 1.3 * blink;
             this.flare(_p.x, _p.y, _p.z, 0.1 + L.intensity * 0.18, _c.r * k * fk, _c.g * k * fk, _c.b * k * fk);
@@ -313,11 +414,33 @@ export class NightLights {
       // tail lights
       _p.set(-sx * 0.48, Math.max(0.1, sy * 0.4), 0).applyMatrix4(root.matrix);
       this.flare(_p.x, _p.y, _p.z, 0.12, 1.4 * dk, 0.08 * dk, 0.04 * dk);
-      const px = root.position.x + _f.x * (sx * 0.5 + 1.3);
-      const pz = root.position.z + _f.z * (sx * 0.5 + 1.3);
+      const px = root.position.x + _f.x * (sx * 0.5 + 1.45);
+      const pz = root.position.z + _f.z * (sx * 0.5 + 1.45);
       const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, px)), Math.max(0, Math.min(map.h - 0.01, pz)));
-      this.pool(px, gy, pz, yaw, 2.8, 1.6, 0.32 * k, 0.29 * k, 0.22 * k);
+      this.pool(px, gy, pz, yaw, 2.9, 1.8, 0.36 * k, 0.33 * k, 0.25 * k, true);
     }
+    // civilian headlights (queued by the ambient life)
+    const cq = this.cars;
+    for (let i = 0; i < this.nCars; i++) {
+      const o = i * 5;
+      const x = cq[o];
+      const y = cq[o + 1];
+      const z = cq[o + 2];
+      const yaw = cq[o + 3];
+      const k = cq[o + 4] * dk;
+      const fx = Math.cos(yaw);
+      const fz = -Math.sin(yaw);
+      this.pool(x + fx * 1.2, y, z + fz * 1.2, yaw, 2.4, 1.5, 0.34 * k, 0.31 * k, 0.23 * k, true);
+      this.cone(x, y + 0.09, z, yaw, -0.09, 1.9, 0.38, 0.32 * k, 0.3 * k, 0.24 * k);
+    }
+    this.nCars = 0;
+    // retire finished outages
+    for (let j = this.nOut - 1; j >= 0; j--) {
+      if (time <= this.outages[j * 5 + 4] + 2) continue;
+      this.outages.copyWithin(j * 5, (this.nOut - 1) * 5, this.nOut * 5);
+      this.nOut--;
+    }
+    this.hook?.(this, dk, time);
     commit(this.flares, this.nf);
     commit(this.pools, this.np);
     commit(this.cones, this.nc);

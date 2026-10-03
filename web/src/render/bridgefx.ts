@@ -6,6 +6,11 @@ import type { World } from '../sim/world';
 import { BLASTS, type Effects } from './effects';
 import type { FogOfWar } from './fog';
 import { GeoBuilder } from './geo';
+import { roadNetFor } from './ambient/clearance';
+import { deckLift, deckRamps, rampHeight } from './deckramp';
+import { surfaceHeight } from './ground';
+import { buildLayout } from './layout';
+import { sharedRoadMaterial } from './scenery';
 import { buildingTextures, roadTexture } from './terraintex';
 
 /*
@@ -85,16 +90,43 @@ interface Hole {
   hz: number;
 }
 
-/** Asphalt top quad (road texture, highway variant): u across the road, v along it (bridge-local x). */
+/**
+ * How the deck asphalt maps onto the road strip texture, set per bridge from the roads it carries:
+ * the same look (highway / country road) and the dash phase carried on from the approach road
+ * (v at bridge-local x, see BridgeFx.deckLook).
+ */
+const deckUV = { u0: 0.06, v0: 0, dv: 1 / 6 };
+
+/** Asphalt top quad (the road strip texture): u across the road, v along it (bridge-local x). */
 function asphalt(top: GeoBuilder, x0: number, x1: number, z0: number, z1: number, y: number, xBase: number, m: THREE.Matrix4) {
   const w = W - 0.6;
-  const p = [V(x0, y, z0), V(x1, y, z0), V(x0, y, z1), V(x1, y, z1)].map((v) => v.applyMatrix4(m));
-  const ids = p.map((q, k) => {
-    const lx = k % 2 ? x1 : x0;
-    const lz = k < 2 ? z0 : z1;
-    return top.vert(q, V(0, 1, 0), 0.06 + ((lz + w / 2) / w) * 0.38, (lx + xBase) / 6, 1);
-  });
-  top.quad(ids[0], ids[1], ids[2], ids[3]);
+  const n = Math.max(1, Math.ceil((x1 - x0) / SEG));
+  for (let i = 0; i < n; i++) {
+    const xa = x0 + ((x1 - x0) * i) / n;
+    const xb = x0 + ((x1 - x0) * (i + 1)) / n;
+    const p = [V(xa, y, z0), V(xb, y, z0), V(xa, y, z1), V(xb, y, z1)].map((v) => v.applyMatrix4(m));
+    const ids = p.map((q, k) => {
+      const lx = k % 2 ? xb : xa;
+      const lz = k < 2 ? z0 : z1;
+      return top.vert(q, V(0, 1, 0), deckUV.u0 + ((lz + w / 2) / w) * 0.38, deckUV.v0 + (lx + xBase) * deckUV.dv, 1);
+    });
+    top.quad(ids[0], ids[1], ids[2], ids[3]);
+  }
+}
+
+/** Deck pieces are cut into SEG-long blocks so they can bend over a raised bank (render/deckramp.ts). */
+const SEG = 0.25;
+/** Asphalt overlaps the next deck piece a touch (no hairline cracks where separate meshes meet). */
+const LAP = 0.012;
+/** Asphalt height above the slab's top centre plane (clear of the slab pieces' end faces: no z-fighting). */
+const ASPH = 0.115;
+type Lift = (x: number) => number;
+const FLAT: Lift = () => 0;
+
+/** Raise vertices [from, count) of `b` by the deck lift at their x (+ xBase: frame offset along the deck). */
+function warp(b: GeoBuilder, from: number, lift: Lift, xBase: number) {
+  if (lift === FLAT) return;
+  for (let i = from; i < b.count; i++) b.pos[i * 3 + 1] += lift(b.pos[i * 3] + xBase);
 }
 
 /**
@@ -103,9 +135,8 @@ function asphalt(top: GeoBuilder, x0: number, x1: number, z0: number, z1: number
  * bridge centre (asphalt v continuity). Damaged: holed slab, missing / hanging
  * parapet segments, soot around the hole.
  */
-function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: THREE.Matrix4, xBase: number, seed: number, hole: Hole | null, broken: boolean) {
+function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: THREE.Matrix4, xBase: number, seed: number, hole: Hole | null, broken: boolean, lift: Lift = FLAT) {
   const len = x1 - x0;
-  const cx = (x0 + x1) / 2;
   const soot = (base: number): Col =>
     hole
       ? (p: THREE.Vector3) => {
@@ -117,14 +148,20 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
   const at = (x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) => m.clone().multiply(trs(x, y, z, rx, ry, rz));
   const pt = (x: number, y: number, z: number) => V(x, y, z).applyMatrix4(m);
   const base = conc.count;
+  const tbase = top.count;
+  // a box from xa to xb, its faces cut every SEG along x (bends with the lift)
+  const run = (xa: number, xb: number, h: number, d: number, y: number, z: number, c: Col) => {
+    const n = Math.max(1, Math.ceil((xb - xa) / SEG - 0.01));
+    conc.add(new THREE.BoxGeometry(xb - xa, h, d, n, 1, 1).toNonIndexed(), at((xa + xb) / 2, y, z), null, c);
+  };
   // slab (with a hole: four pieces around it)
   if (hole) {
     const hx0 = hole.x - hole.hx;
     const hx1 = hole.x + hole.hx;
     const hz0 = hole.z - hole.hz;
     const hz1 = hole.z + hole.hz;
-    box(conc, hx0 - x0, 0.2, W, at((x0 + hx0) / 2, 0, 0), soot(0.78));
-    box(conc, x1 - hx1, 0.2, W, at((hx1 + x1) / 2, 0, 0), soot(0.78));
+    run(x0, hx0, 0.2, W, 0, 0, soot(0.78));
+    run(hx1, x1, 0.2, W, 0, 0, soot(0.78));
     box(conc, hx1 - hx0, 0.2, hz0 + W / 2, at(hole.x, 0, (-W / 2 + hz0) / 2), soot(0.78));
     box(conc, hx1 - hx0, 0.2, W / 2 - hz1, at(hole.x, 0, (hz1 + W / 2) / 2), soot(0.78));
     // jagged rim chunks and bent rebar across the hole
@@ -139,12 +176,12 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
       beam(conc, pt(hx0 - 0.03, -0.02, z), pt(hole.x, -0.02 - sag, z + 0.02), 0.014, 0.22);
       if (hash2(seed, k, 7) < 0.6) beam(conc, pt(hole.x + 0.02, -0.02 - sag * 1.4, z), pt(hx1 - 0.08 * hash2(seed, k, 8), -0.06 - sag, z - 0.03), 0.014, 0.22);
     }
-  } else box(conc, len, 0.2, W, at(cx, 0, 0), 0.78);
+  } else run(x0, x1, 0.2, W, 0, 0, 0.78);
   // sidewalks, parapet segments and posts
   const nSeg = Math.max(2, Math.round(len / 0.75));
   const segL = len / nSeg;
   for (const side of [-1, 1]) {
-    box(conc, len, 0.04, 0.3, at(cx, 0.12, side * (W / 2 - 0.15)), soot(0.85));
+    run(x0, x1, 0.04, 0.3, 0.12, side * (W / 2 - 0.15), soot(0.85));
     const drop = broken ? Math.floor(hash2(seed, side, 11) * nSeg) : -1;
     const hang = broken && side === (hash2(seed, 0, 12) < 0.5 ? -1 : 1) ? (drop + 1 + Math.floor(hash2(seed, side, 13) * (nSeg - 1))) % nSeg : -1;
     for (let k = 0; k < nSeg; k++) {
@@ -160,7 +197,8 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
         box(conc, segL * 0.96, 0.12, 0.06, at(sx, 0.06, side * (W / 2 + 0.05), side * 0.9, 0, 0.12), 0.7);
         continue;
       }
-      box(conc, segL * 0.98, 0.12, 0.06, at(sx, 0.2, side * (W / 2 - 0.03)), soot(0.9));
+      if (lift === FLAT) box(conc, segL * 0.98, 0.12, 0.06, at(sx, 0.2, side * (W / 2 - 0.03)), soot(0.9));
+      else run(sx - segL * 0.49, sx + segL * 0.49, 0.12, 0.06, 0.2, side * (W / 2 - 0.03), soot(0.9));
       const pp = x0 + k * segL + 0.1;
       if (!broken || hash2(seed + k, side, 14) > 0.35) box(conc, 0.05, 0.04, 0.08, at(pp, 0.28, side * (W / 2 - 0.03)), 0.6);
     }
@@ -173,11 +211,13 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
     const hx1 = hole.x + hole.hx;
     const hz0 = Math.max(-aw, hole.z - hole.hz);
     const hz1 = Math.min(aw, hole.z + hole.hz);
-    asphalt(top, x0, hx0, -aw, aw, 0.104, xBase, m);
-    asphalt(top, hx1, x1, -aw, aw, 0.104, xBase, m);
-    if (hz0 > -aw) asphalt(top, hx0, hx1, -aw, hz0, 0.104, xBase, m);
-    if (hz1 < aw) asphalt(top, hx0, hx1, hz1, aw, 0.104, xBase, m);
-  } else asphalt(top, x0, x1, -aw, aw, 0.104, xBase, m);
+    asphalt(top, x0 - LAP, hx0, -aw, aw, ASPH, xBase, m);
+    asphalt(top, hx1, x1 + LAP, -aw, aw, ASPH, xBase, m);
+    if (hz0 > -aw) asphalt(top, hx0, hx1, -aw, hz0, ASPH, xBase, m);
+    if (hz1 < aw) asphalt(top, hx0, hx1, hz1, aw, ASPH, xBase, m);
+  } else asphalt(top, x0 - LAP, x1 + LAP, -aw, aw, ASPH, xBase, m);
+  warp(conc, base, lift, xBase);
+  warp(top, tbase, lift, xBase);
 }
 
 /** Scorch (left) and crack (right) decal atlas. */
@@ -294,6 +334,8 @@ interface View {
   smokeAcc: number;
   scafOut: number;
   orig: Uint8Array | null;
+  /** deck lift (above BRIDGE_HEIGHT) at bridge-local x: the ends rise onto banks higher than the deck */
+  lift: Lift;
 }
 
 export class BridgeFx {
@@ -317,9 +359,10 @@ export class BridgeFx {
     const shadows = quality !== 'low';
     const tex = buildingTextures(quality === 'low' ? 128 : 256);
     this.concMat = fog.apply(new THREE.MeshStandardMaterial({ map: tex.plaster, vertexColors: true, roughness: 0.9 }));
-    this.roadMat = fog.apply(
-      new THREE.MeshStandardMaterial({ map: roadTexture(quality === 'high' ? 256 : 128), alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
-    );
+    // the decks wear the roads' own asphalt (scenery.ts: photoscan + markings mask, biome dust / snow)
+    this.roadMat =
+      sharedRoadMaterial(world.map) ??
+      fog.apply(new THREE.MeshStandardMaterial({ map: roadTexture(quality === 'high' ? 256 : 128), alphaTest: 0.5, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
     this.decalMat = fog.apply(
       new THREE.MeshStandardMaterial({ map: decalAtlas(), transparent: true, depthWrite: false, roughness: 1, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }),
     );
@@ -341,6 +384,9 @@ export class BridgeFx {
       this.group.add(root);
       root.updateMatrixWorld(true);
       const seed = b.idx * 97 + 13;
+      this.deckLook(b, L);
+      const ramp = deckRamps(world.map)[b.idx];
+      const lift: Lift = ramp && ramp.lift.some((h) => h > 0) ? (x: number) => deckLift(ramp, x) : FLAT;
       const piers = [-L / 2 + 1.5, 0, L / 2 - 1.5];
       // ---- fixed: piers, caps, abutments, bank stubs
       const fixed = new GeoBuilder();
@@ -349,16 +395,27 @@ export class BridgeFx {
         box(fixed, 0.4, 1.5, W * 0.7, trs(k, BRIDGE_HEIGHT - 0.95, 0), 0.62);
         box(fixed, 0.6, 0.12, W * 0.85, trs(k, BRIDGE_HEIGHT - 0.24, 0), 0.7);
       }
-      for (const k of [-L / 2, L / 2]) box(fixed, 0.5, 1.0, W, trs(k + Math.sign(k) * 0.05, BRIDGE_HEIGHT - 0.6, 0), 0.65);
+      // abutments: up to the slab's underside, wherever the deck's end sits
+      for (const k of [-L / 2, L / 2]) {
+        const h = 1.0 + lift(k);
+        box(fixed, 0.5, h, W, trs(k + Math.sign(k) * 0.05, BRIDGE_HEIGHT - 1.1 + h / 2, 0), 0.65);
+      }
       boxUV(fixed, 0, 2);
-      addDeck(fixed, ftop, -L / 2, -L / 2 + STUB, trs(0, DECK_Y, 0), 0, seed + 1, null, false);
-      addDeck(fixed, ftop, L / 2 - STUB, L / 2, trs(0, DECK_Y, 0), 0, seed + 2, null, false);
+      addDeck(fixed, ftop, -L / 2, -L / 2 + STUB, trs(0, DECK_Y, 0), 0, seed + 1, null, false, lift);
+      addDeck(fixed, ftop, L / 2 - STUB, L / 2, trs(0, DECK_Y, 0), 0, seed + 2, null, false, lift);
+      // the approaches: expansion joints, kerbs, wing walls under the ramps, flared guard rails
+      const rails = new GeoBuilder();
+      const fb = fixed.count;
+      for (const end of [-1, 1]) this.approach(root, L, end, fixed, rails, lift);
+      boxUV(fixed, fb, 2);
       const fm = new THREE.Mesh(fixed.build(), this.concMat);
       fm.castShadow = shadows;
       fm.receiveShadow = true;
       const ft = new THREE.Mesh(ftop.build(), this.roadMat);
       ft.receiveShadow = true;
-      root.add(fm, ft);
+      const rm = new THREE.Mesh(rails.build(), steel);
+      rm.castShadow = shadows;
+      root.add(fm, ft, rm);
       // ---- broken stumps: jagged edges and bent rebar where spans tore away
       const bk = new GeoBuilder();
       const edges: [number, number][] = [
@@ -371,14 +428,14 @@ export class BridgeFx {
         for (let k = 0; k < 9; k++) {
           const z = -W / 2 + ((k + hash2(seed, ei * 9 + k, 21)) / 9) * W;
           const s = 0.06 + hash2(seed, ei * 9 + k, 22) * 0.1;
-          const y = pier ? BRIDGE_HEIGHT - 0.16 + hash2(seed, ei * 9 + k, 23) * 0.1 : DECK_Y + (hash2(seed, ei * 9 + k, 23) - 0.5) * 0.14;
+          const y = pier ? BRIDGE_HEIGHT - 0.16 + hash2(seed, ei * 9 + k, 23) * 0.1 : DECK_Y + lift(x) + (hash2(seed, ei * 9 + k, 23) - 0.5) * 0.14;
           box(bk, s, s * 0.9, s * 1.3, trs(x + dir * s * 0.3, y, z, k, k * 1.3, k * 0.7), 0.5);
         }
         if (!pier)
           for (let k = 0; k < 6; k++) {
             const z = -W / 2 + 0.2 + (k / 5) * (W - 0.4);
             const l = 0.14 + hash2(seed, ei * 6 + k, 24) * 0.2;
-            beam(bk, V(x, DECK_Y - 0.03, z), V(x + dir * l, DECK_Y - 0.05 - l * (0.3 + hash2(seed, k, 25)), z + (hash2(seed, k, 26) - 0.5) * 0.1), 0.016, 0.2);
+            beam(bk, V(x, DECK_Y + lift(x) - 0.03, z), V(x + dir * l, DECK_Y + lift(x) - 0.05 - l * (0.3 + hash2(seed, k, 25)), z + (hash2(seed, k, 26) - 0.5) * 0.1), 0.016, 0.2);
           }
       });
       boxUV(bk, 0, 2);
@@ -436,7 +493,7 @@ export class BridgeFx {
         const mk = (dmg: boolean) => {
           const c = new GeoBuilder();
           const t = new GeoBuilder();
-          addDeck(c, t, -len / 2, len / 2, new THREE.Matrix4(), cx, s, dmg ? hole : null, dmg);
+          addDeck(c, t, -len / 2, len / 2, new THREE.Matrix4(), cx, s, dmg ? hole : null, dmg, lift);
           const cm = new THREE.Mesh(c.build(), this.concMat);
           cm.castShadow = shadows;
           cm.receiveShadow = true;
@@ -453,8 +510,9 @@ export class BridgeFx {
           const n = 1 + Math.round(len * (0.6 + k * 0.4));
           for (let j = 0; j < n; j++) {
             const q = s * 13 + k * 101 + j;
-            decal(db, (hash2(q, 1, 40) - 0.5) * (len - 0.2), (hash2(q, 2, 41) - 0.5) * (W - 0.7), 0.106 + k * 0.0015 + j * 0.0002, 0.35 + hash2(q, 3, 42) * (0.35 + k * 0.2), hash2(q, 4, 43) * 6.28, hash2(q, 5, 44) < 0.45 ? 1 : 0);
+            decal(db, (hash2(q, 1, 40) - 0.5) * (len - 0.2), (hash2(q, 2, 41) - 0.5) * (W - 0.7), ASPH + 0.002 + k * 0.0015 + j * 0.0002, 0.35 + hash2(q, 3, 42) * (0.35 + k * 0.2), hash2(q, 4, 43) * 6.28, hash2(q, 5, 44) < 0.45 ? 1 : 0);
           }
+          warp(db, 0, lift, cx);
           const m = new THREE.Mesh(db.build(), this.decalMat);
           m.visible = false;
           m.renderOrder = 2;
@@ -491,9 +549,181 @@ export class BridgeFx {
           splashed: false,
         });
       }
-      const v: View = { b, root, spans, broken, scaffold, status: 'intact', t0: 0, lastHitAt: b.hitAt, nHits: 0, hitTier: -1, holed: false, smokeAcc: 0, scafOut: 0, orig: null };
+      const v: View = { b, root, spans, broken, scaffold, status: 'intact', t0: 0, lastHitAt: b.hitAt, nHits: 0, hitTier: -1, holed: false, smokeAcc: 0, scafOut: 0, orig: null, lift };
       this.views.push(v);
       if (b.status !== 'intact') this.snapDown(v);
+    }
+  }
+
+  // ------------------------------------------------------------ approaches
+
+  /**
+   * Deck markings carried on from the roads at either end: their look (highway / country road) and
+   * the dash phase (the road strip's v at the deck end, running on in the same direction).
+   */
+  private deckLook(b: BridgeState, L: number) {
+    deckUV.u0 = 0.06;
+    deckUV.v0 = 0;
+    deckUV.dv = 1 / 6;
+    const roads = buildLayout(this.world.map).roads;
+    const at = (e: { x: number; y: number }) => {
+      for (const r of roads) {
+        if (r.painted || r.ring) continue;
+        const n = r.pts.length;
+        for (const k of [0, n - 1]) {
+          const p = r.pts[k];
+          if (Math.hypot(p.x - e.x, p.y - e.y) > 0.4) continue;
+          let len = 0;
+          for (let i = 1; i < n; i++) len += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
+          const variant = r.taper?.v[k] ?? r.variant;
+          // v at the end, and +1 when the road's v grows towards the deck
+          return { v: k ? len / 6 : 0, grows: k ? 1 : -1, variant };
+        }
+      }
+      return null;
+    };
+    const a = at(b.ends[0]);
+    const c = at(b.ends[1]);
+    const look = a ?? c;
+    if (!look) return;
+    deckUV.u0 = look.variant === 0 ? 0.06 : 0.56;
+    // local x runs from ends[0] (x = -L/2) to ends[1] (x = +L/2): v carries on from the road at ends[0]
+    if (a) {
+      deckUV.dv = a.grows / 6;
+      deckUV.v0 = a.v + (L / 2) * deckUV.dv;
+      // and lands in phase with the road at the far end (the dashes repeat every 1/8 of v)
+      if (c && c.grows === -a.grows) {
+        const vEnd = deckUV.v0 + (L / 2) * deckUV.dv;
+        let d = c.v - vEnd;
+        d -= Math.round(d * 8) / 8;
+        deckUV.dv += d / L;
+        deckUV.v0 = a.v + (L / 2) * deckUV.dv;
+      }
+    } else if (c) {
+      deckUV.dv = -c.grows / 6;
+      deckUV.v0 = c.v - (L / 2) * deckUV.dv;
+    }
+  }
+
+  /**
+   * One end of a bridge (end = -1 at ends[0], +1 at ends[1], bridge-local x outwards): an expansion
+   * joint across the road at the deck end, the deck's kerbs running on and down the ramp, wing walls
+   * closing the space under the ramped road, and steel guard rails flaring out and down to the ground.
+   */
+  private approach(root: THREE.Group, L: number, end: number, conc: GeoBuilder, rails: GeoBuilder, lift: Lift) {
+    const m = this.world.map;
+    root.updateMatrixWorld(true);
+    const toW = (x: number, z: number) => V(x, 0, z).applyMatrix4(root.matrixWorld);
+    // height of the road ribbon there (scenery.ts ramps the roads onto the decks: render/deckramp.ts)
+    const roadH = (x: number, z: number) => {
+      const w = toW(x, z);
+      return rampHeight(m, w.x, w.z, surfaceHeight(m, w.x, w.z), 0.03);
+    };
+    const groundH = (x: number, z: number) => {
+      const w = toW(x, z);
+      return surfaceHeight(m, w.x, w.z);
+    };
+    const xe = end * (L / 2);
+    // another road's surface (a junction or roundabout right at the bridge): no kerb or rail across it
+    // (every lane but the deck's and the approach road's own)
+    const e0 = toW(xe, 0);
+    const net = roadNetFor(m, buildLayout(m));
+    const rings = net.loops.filter((lp) => Math.hypot(lp.x - e0.x, lp.y - e0.z) < lp.R + 4);
+    // road segments around here; the approach road's own first stretch from the deck end is left out
+    // (further along, where it may curve back past the bridge end, it counts)
+    const ax = toW(xe + end, 0).sub(e0).normalize();
+    const segs: { a: { x: number; y: number }; b: { x: number; y: number }; r: number }[] = [];
+    for (const ln of net.lines) {
+      if (ln.bridge >= 0 || !ln.pts.some((p) => Math.hypot(p.x - e0.x, p.y - e0.z) < 4 + ln.half)) continue;
+      const n = ln.pts.length;
+      let from = -1; // index of the endpoint at the deck end, if this is the approach road
+      for (const [k, k2] of [[0, 1], [n - 1, n - 2]]) {
+        const p = ln.pts[k];
+        const q = ln.pts[Math.max(0, Math.min(n - 1, k2))];
+        const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+        if (Math.hypot(p.x - e0.x, p.y - e0.z) < 0.6 && Math.abs(((q.x - p.x) * ax.x + (q.y - p.y) * ax.z) / l) > 0.7) from = k;
+      }
+      let arc = 0;
+      for (let j = 0; j < n - 1; j++) {
+        const i = from === n - 1 ? n - 2 - j : j;
+        const a = ln.pts[i];
+        const b = ln.pts[i + 1];
+        if (from < 0 || arc > 2.4) segs.push({ a, b, r: ln.half + 0.05 });
+        arc += Math.hypot(b.x - a.x, b.y - a.y);
+      }
+    }
+    const busy = (x: number, z: number) => {
+      const w = toW(x, z);
+      for (const lp of rings) if (Math.hypot(w.x - lp.x, w.z - lp.y) < lp.R + 0.05) return true;
+      for (const { a, b, r } of segs) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((w.x - a.x) * dx + (w.z - a.y) * dy) / (dx * dx + dy * dy || 1e-9)));
+        if (Math.hypot(w.x - a.x - dx * t, w.z - a.y - dy * t) < r) return true;
+      }
+      return false;
+    };
+    const deckTop = DECK_Y + 0.1 + lift(xe);
+    // expansion joint: a steel strip with teeth across the whole deck at the end
+    box(conc, 0.07, 0.012, W - 0.02, trs(xe - end * 0.03, deckTop + 0.024, 0), 0.24);
+    for (let k = 0; k < 12; k++) box(conc, 0.02, 0.013, 0.07, trs(xe - end * 0.03, deckTop + 0.025, -W / 2 + 0.12 + (k / 11) * (W - 0.24)), 0.5);
+    // kerbs + wing walls along both sides of the ramp
+    const run = 1.2;
+    const N = 6;
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < N; i++) {
+        const t0 = i / N;
+        const t1 = (i + 1) / N;
+        const xa = xe + end * run * t0;
+        const xb = xe + end * run * t1;
+        if (busy(xb, side * (W / 2 + 0.1))) break;
+        // the kerb eases from the sidewalk's edge in to the road's shoulder
+        const za = side * (W / 2 - 0.12 - 0.08 * t0);
+        const zb = side * (W / 2 - 0.12 - 0.08 * t1);
+        const ha = roadH(xa, za);
+        const hb = roadH(xb, zb);
+        const kh = 0.05 * (1 - t0 * 0.7);
+        const mid = V((xa + xb) / 2, (ha + hb) / 2 + kh / 2, (za + zb) / 2);
+        const len = Math.hypot(xb - xa, zb - za);
+        // (the box's +x points from a to b after the yaw: tilt it up by the rise from a to b)
+        const pitch = Math.atan2(hb - ha, len);
+        box(conc, Math.hypot(len, hb - ha) + 0.02, kh, 0.08, new THREE.Matrix4().compose(mid, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(-(zb - za), xb - xa), pitch, 'YXZ')), V(1, 1, 1)), 0.82);
+        // wing wall: from under the kerb down into the ground (no daylight under the ramped road)
+        const gz = side * (W / 2 - 0.08);
+        const ga = Math.min(groundH(xa, gz), ha) - 0.3;
+        const gb = Math.min(groundH(xb, gz), hb) - 0.3;
+        const wall = new THREE.BufferGeometry();
+        const zz = side * (W / 2 - 0.06);
+        wall.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute([xa, ha, zz, xb, hb, zz, xa, ga, zz, xb, hb, zz, xb, gb, zz, xa, ga, zz, xa, ha, zz, xa, ga, zz, xb, hb, zz, xb, hb, zz, xa, ga, zz, xb, gb, zz], 3),
+        );
+        wall.computeVertexNormals();
+        conc.add(wall, new THREE.Matrix4(), null, 0.7);
+      }
+      // guard rail: from the parapet end, flaring out and down to an anchor in the ground
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= 6; i++) {
+        const t = i / 6;
+        const x = xe + end * 1.3 * t;
+        const z = side * (W / 2 - 0.03 + 0.32 * t * t);
+        const top = i === 0 ? deckTop + 0.2 : Math.max(groundH(x, z), roadH(x, z) - 0.02) + 0.16 * (1 - t * t * 0.85);
+        if (i > 0 && busy(x, z + side * 0.12)) break;
+        pts.push(V(x, top, z));
+      }
+      if (pts.length > 1) {
+        // the rail's end: bent down into the ground (a short stub when another road is right there)
+        const q = pts[pts.length - 1];
+        if (pts.length < 7) pts.push(V(q.x + end * 0.08, Math.max(groundH(q.x, q.z), roadH(q.x, q.z) - 0.04), q.z));
+      }
+      for (let i = 0; i < pts.length - 1; i++) {
+        beam(rails, pts[i], pts[i + 1], 0.035, 0.75);
+        beam(rails, pts[i].clone().setY(pts[i].y - 0.045), pts[i + 1].clone().setY(pts[i + 1].y - 0.045), 0.02, 0.7);
+      }
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        beam(rails, V(p.x, Math.min(groundH(p.x, p.z), p.y - 0.1) - 0.05, p.z), p, 0.022, 0.45);
+      }
     }
   }
 
@@ -651,8 +881,9 @@ export class BridgeFx {
         if (s && Math.abs(lz) < W / 2 - 0.1) {
           if (s.hits.children.length >= 6) s.hits.remove(s.hits.children[0]);
           const m = new THREE.Mesh(this.hitGeo, this.decalMat);
-          m.position.set(lx - s.cx, 0.108 + (v.nHits++ % 8) * 0.0004, lz);
-          m.rotation.y = Math.random() * 6.28;
+          m.position.set(lx - s.cx, ASPH + 0.004 + v.lift(lx) + (v.nHits++ % 8) * 0.0004, lz);
+          // lying on the deck, also where it bends up onto a bank
+          m.rotation.set(0, Math.random() * 6.28, Math.atan((v.lift(lx + 0.1) - v.lift(lx - 0.1)) / 0.2), 'ZYX');
           m.scale.setScalar(0.5 + Math.random() * 0.35);
           m.renderOrder = 2;
           s.hits.add(m);

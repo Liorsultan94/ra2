@@ -1,5 +1,6 @@
 import { airdropStatus } from './airdrop';
 import { bridgeTactics } from './bridges';
+import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { Rng } from './rng';
@@ -572,6 +573,7 @@ export class AIController implements Controller {
     if (doc.airWing > 0) this.manageAirWing(force);
     this.manageWaves(force);
     this.manageArtillery(force);
+    if (micro > 0) this.manageCrush(force);
     if (micro >= 2 || (micro === 1 && this.thinks % 2 === 0)) this.focusFire();
   }
 
@@ -1032,6 +1034,42 @@ export class AIController implements Controller {
     this.waves = this.waves.filter((wv) => wv.ids.some((id) => w.get(id)));
   }
 
+  /** Is this unit busy running over a soldier (attack order on infantry in contact; crush.ts)? */
+  private crushing(u: Entity): boolean {
+    if (u.order.type !== 'attack' || !unitDef(u.def).crusher) return false;
+    const t = this.world.get(u.order.target);
+    return !!t && isCrushable(t) && Math.hypot(t.x - u.x, t.y - u.y) <= CRUSH_CHASE + 0.5;
+  }
+
+  /** Opportunistic crushing: heavy vehicles on the move or idle drive over enemy soldiers right in front of them, then carry on. */
+  private manageCrush(force: Entity[]) {
+    const w = this.world;
+    for (const u of force) {
+      const d = unitDef(u.def);
+      if (!d.crusher || !d.weapon || u.stance === 'hold' || this.roleOf(u) === 'retreat') continue;
+      const o = u.order;
+      if (o.type !== 'attackMove' && o.type !== 'idle') continue;
+      const wpn = WEAPONS[d.weapon];
+      const fx = Math.cos(u.facing);
+      const fy = Math.sin(u.facing);
+      let best: Entity | null = null;
+      let bd = CRUSH_CHASE - 0.2;
+      w.queryRadius(u.x, u.y, CRUSH_CHASE, (t) => {
+        if (!w.isEnemy(this.pid, t.owner) || !isCrushable(t) || !w.canHit(wpn, t) || !w.visibleTo(this.pid, t.x, t.y)) return;
+        const dx = t.x - u.x;
+        const dy = t.y - u.y;
+        const dist = Math.hypot(dx, dy);
+        // roughly ahead: no turning round for a soldier behind
+        if (dist >= bd || (dist > 0.3 && (dx * fx + dy * fy) / dist < 0.35)) return;
+        bd = dist;
+        best = t;
+      });
+      if (!best) continue;
+      this.cmd({ type: 'attack', ids: [u.id], target: (best as Entity).id });
+      if (o.type === 'attackMove') this.cmd({ type: 'move', ids: [u.id], x: o.x, y: o.y, attackMove: true, queue: true });
+    }
+  }
+
   /** Focus fire: units of a wave in contact shoot the same (weakest, most dangerous) enemy, then resume the advance. */
   private focusFire() {
     const w = this.world;
@@ -1068,7 +1106,7 @@ export class AIController implements Controller {
       const tgt = t as Entity;
       const ids = alive
         .filter((u) => {
-          if (u.order.type === 'attack' && u.order.target === tgt.id) return false;
+          if ((u.order.type === 'attack' && u.order.target === tgt.id) || this.crushing(u)) return false;
           const d = unitDef(u.def);
           const wpn = WEAPONS[d.weapon!];
           return wpn.projectile !== 'spawn' && w.canHit(wpn, tgt) && w.distTo(u, tgt) <= w.weaponRange(u, wpn) + 1.5;

@@ -18,10 +18,19 @@
  *   hold    peak (a storm event builds to lightning in here)
  *   ease    the rain eases and stops
  *   clear   the clouds break up and drift off; the ground dries afterwards
+ *
+ * The mix follows the map's climate (`climate` option): temperate and urban
+ * maps get showers, longer rain, thunderstorms and grey spells; the desert is
+ * mostly clear with dust fronts and only the odd shower; winter gets snow
+ * flurries and heavier snowfalls instead of rain. With the live day (atmos.ts,
+ * 1 real minute = 1 game hour at 1x speed) the gaps below make a 24 minute day
+ * hold two to four fronts: clear spells of a few game hours in between.
  */
 
 export type WxKind = 'rain' | 'snow' | 'sandstorm';
-export type WxEventKind = 'overcast' | 'showers' | 'rain' | 'storm' | 'dust' | 'flurries';
+export type WxEventKind = 'overcast' | 'showers' | 'rain' | 'storm' | 'dust' | 'flurries' | 'snowfall';
+/** Map climate (sim/map.ts Biome). */
+export type WxClimate = 'temperate' | 'desert' | 'winter' | 'urban';
 
 export interface WxEvent {
   kind: WxEventKind;
@@ -67,11 +76,24 @@ export interface WxState {
 }
 
 export interface WxOptions {
-  /** Allow (rare) dust fronts. */
+  /** Map climate: picks the mix of fronts (default temperate). */
+  climate?: WxClimate;
+  /** Allow (rare) dust fronts on a temperate map (the desert always has them). */
   dust?: boolean;
   /** Cold conditions: some showers fall as snow flurries. */
   cold?: boolean;
 }
+
+/** Relative odds of each kind of front per climate. */
+const MIX: Record<WxClimate, Partial<Record<WxEventKind, number>>> = {
+  temperate: { overcast: 0.18, showers: 0.34, rain: 0.24, storm: 0.16 },
+  urban: { overcast: 0.2, showers: 0.34, rain: 0.24, storm: 0.14 },
+  // mostly dry: dust fronts, high haze, now and then a shower or a desert thunderstorm
+  desert: { overcast: 0.22, dust: 0.56, showers: 0.14, storm: 0.08 },
+  winter: { overcast: 0.24, flurries: 0.42, snowfall: 0.34 },
+};
+/** The first front of a match always brings something down (rain, dust or snow). */
+const FIRST: Record<WxClimate, WxEventKind> = { temperate: 'showers', urban: 'showers', desert: 'dust', winter: 'flurries' };
 
 /** mulberry32 */
 function prng(seed: number) {
@@ -131,22 +153,35 @@ export class WeatherCycle {
     const r = this.rnd;
     while (!this.events.length || this.end(this.events[this.events.length - 1]) < t + 1) {
       const last = this.events[this.events.length - 1];
-      // the battle opens in clear weather; the first front shows up within a few minutes
-      const start = last ? this.end(last) + 150 + r() * 270 : 70 + r() * 110;
-      let pick = r();
-      const dustW = this.opts.dust ? 0.08 : 0;
-      let kind: WxEventKind;
-      if ((pick -= 0.15) < 0) kind = 'overcast';
-      else if ((pick -= 0.3) < 0) kind = 'showers';
-      else if ((pick -= 0.25) < 0) kind = 'rain';
-      else if ((pick -= dustW) < 0) kind = 'dust';
-      else kind = 'storm';
-      if (kind === 'showers' && this.opts.cold && r() < 0.5) kind = 'flurries';
-      // never two dust fronts in a row, and the first front is always a wet one
-      if (kind === 'dust' && (!last || last.kind === 'dust')) kind = 'rain';
+      const clim: WxClimate = this.opts.climate ?? 'temperate';
+      // the battle opens in clear weather (the sunrise of the live day); the first front shows up within a few
+      // game hours, then clear spells of ~2.5 to 7 hours (the desert stays clear for longer)
+      const gap = clim === 'desert' ? 210 + r() * 330 : 150 + r() * 270;
+      const start = last ? this.end(last) + gap : 90 + r() * 150;
+      const mix: Partial<Record<WxEventKind, number>> = { ...MIX[clim] };
+      if (this.opts.dust && clim !== 'desert') mix.dust = 0.08;
+      let total = 0;
+      for (const w of Object.values(mix)) total += w ?? 0;
+      let pick = r() * total;
+      let kind: WxEventKind = FIRST[clim];
+      for (const [k, w] of Object.entries(mix) as [WxEventKind, number][]) {
+        if ((pick -= w) < 0) {
+          kind = k;
+          break;
+        }
+      }
+      if (kind === 'showers' && this.opts.cold && clim !== 'desert' && r() < 0.5) kind = 'flurries';
+      if (!last) {
+        // the first front always brings something down (in the desert: dust)
+        if (kind === 'overcast' || clim === 'desert') kind = FIRST[clim];
+        // ... and outside the desert it is a wet (or snowy) one
+        if (kind === 'dust' && clim !== 'desert') kind = 'rain';
+      }
+      // never two dust fronts in a row on a temperate map
+      if (kind === 'dust' && clim !== 'desert' && last?.kind === 'dust') kind = 'rain';
       const e: WxEvent = {
         kind,
-        fall: kind === 'dust' ? 'sandstorm' : kind === 'flurries' ? 'snow' : 'rain',
+        fall: kind === 'dust' ? 'sandstorm' : kind === 'flurries' || kind === 'snowfall' || (kind === 'overcast' && clim === 'winter') ? 'snow' : 'rain',
         start,
         build: 60 + r() * 50,
         ramp: 30 + r() * 60,
@@ -162,7 +197,8 @@ export class WeatherCycle {
       switch (kind) {
         case 'overcast':
           e.hold = 90 + r() * 120;
-          e.cover = 0.55 + r() * 0.2;
+          // (the desert's is a high, thin haze)
+          e.cover = clim === 'desert' ? 0.35 + r() * 0.15 : 0.55 + r() * 0.2;
           e.precip = 0;
           e.wind = 0.3 + r() * 0.15;
           break;
@@ -198,6 +234,13 @@ export class WeatherCycle {
           e.cover = 0.75 + r() * 0.15;
           e.precip = 0.45 + r() * 0.35;
           e.wind = 0.3 + r() * 0.2;
+          break;
+        case 'snowfall':
+          e.ramp = 40 + r() * 50;
+          e.hold = 150 + r() * 130;
+          e.cover = 0.9 + r() * 0.1;
+          e.precip = 0.7 + r() * 0.25;
+          e.wind = 0.35 + r() * 0.25;
           break;
       }
       this.events.push(e);

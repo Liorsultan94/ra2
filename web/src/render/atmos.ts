@@ -14,8 +14,9 @@ import type { Sky, SkyState } from './sky';
 import type { Terrain } from './terrain';
 import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
-import { WeatherCycle, type WxKind, type WxState } from './weathercycle';
+import { WeatherCycle, type WxEventKind, type WxKind, type WxState } from './weathercycle';
 import { WX, WXM } from './wxuniforms';
+import { LivingWorld } from './fx/nature';
 import { biomeLook, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
@@ -35,7 +36,13 @@ import { TPS } from '../sim/types';
  * Ground fog (groundfog.ts + the height fog in the shared fog shader) rises at
  * dawn in the cycle, on the 'mist' time of day and after rain.
  *
- * Debug / screenshots: ?wxt=<game seconds> pins the weather timeline,
+ * The 'cycle' time of day is the live day: 1 real minute = 1 game hour at 1x
+ * game speed, starting at 05:30 (the HUD clock reads `clock()`); hourToU maps
+ * the clock onto the lighting stops. Battles started from the menu default to
+ * it with dynamic weather (ATMOS_DEFAULTS).
+ *
+ * Debug / screenshots: ?clock=HH:MM starts the live day at that time,
+ * ?todphase=<u> pins the cycle phase, ?wxt=<game seconds> pins the weather timeline,
  * ?wxseed=<n> picks the timeline, ?mist=<0..1> forces the ground fog
  * (also `wxTimeOverride`, `wxForce`, `mistOverride` on the instance).
  */
@@ -54,11 +61,22 @@ const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle', 'mist'];
 const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm', 'dynamic'];
 
 /**
- * Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings,
- * then to the map's own weather (`mapWeather`: snow on the winter map, ...).
+ * Defaults when neither the URL nor the saved menu settings pick a time of day / weather.
+ * `live` (set by the Game for battles started from the menu: skirmish and quick battle) makes the
+ * live day (the 'cycle' clock, 1 real minute = 1 game hour) with the map climate's dynamic weather
+ * the default; test / screenshot URLs (?play=, ?demo=) and the demo behind the menu keep the plain
+ * day with the map's own weather.
  */
-export function atmosConfig(viewer: number, mapWeather: Weather = 'clear'): AtmosConfig {
-  const cfg: AtmosConfig = { tod: 'day', weather: mapWeather, nv: false };
+export const ATMOS_DEFAULTS = { live: false };
+
+/**
+ * Resolve the atmosphere: URL params win; skirmishes (viewer >= 0) fall back to the saved menu settings,
+ * then to the defaults (ATMOS_DEFAULTS) and the map's own weather (`mapWeather`: snow on the winter map, ...).
+ * The saved weather 'map' means the map's own fixed weather.
+ */
+export function atmosConfig(viewer: number, mapWeather: Weather = 'clear', live = ATMOS_DEFAULTS.live): AtmosConfig {
+  const def = live && viewer >= 0;
+  const cfg: AtmosConfig = { tod: def ? 'cycle' : 'day', weather: def ? 'dynamic' : mapWeather, nv: false };
   let saved: { tod?: string; weather?: string } = {};
   if (viewer >= 0) {
     try {
@@ -72,6 +90,7 @@ export function atmosConfig(viewer: number, mapWeather: Weather = 'clear'): Atmo
   const wx = params.get('weather') ?? saved.weather;
   if (TODS.includes(tod as TimeOfDay)) cfg.tod = tod as TimeOfDay;
   if (WEATHERS.includes(wx as Weather)) cfg.weather = wx as Weather;
+  else if (wx === 'map') cfg.weather = mapWeather;
   cfg.nv = params.get('nv') === '1';
   return cfg;
 }
@@ -158,7 +177,7 @@ function applyBiome(p: Preset, light: number) {
 }
 
 /** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
-type Key = TimeOfDay | 'noon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
+type Key = TimeOfDay | 'noon' | 'afternoon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
 
 /** Base (clear weather) preset of a time-of-day key; `light` = overall daylight 0..1 (weather haze scaling). */
 function todPreset(key: Key): { p: Preset; light: number } {
@@ -199,23 +218,33 @@ function todPreset(key: Key): { p: Preset; light: number } {
     case 'day':
       break;
     case 'dusk':
-      set({ sunI: 2.3, hemiI: 0.55, env: 0.24, cloud: 0.22, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.15, spec: 0.9, dark: 0.55 }, 0xff8a4c, 0x7a84b8, 0x4a3424, [0.3, 0.19, 0.16], [-0.012, 0.0, 0.04], [0.06, 0.015, -0.05], 0x1c1418, [0.72, 0.6, 0.62]);
+      // a soft amber, low-intensity key over a cool blue sky fill (no orange wash; atmos golden / sunset stops)
+      set({ sunI: 1.35, hemiI: 0.85, env: 0.4, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 1.02, spec: 0.9, dark: 0.55 }, 0xffb07e, 0x6c7cb8, 0x2e2a30, [0.34, 0.22, 0.22], [-0.016, 0.0, 0.045], [0.035, 0.01, -0.02], 0x1c1418, [0.72, 0.62, 0.68]);
       light = 0.6;
       break;
     case 'night':
-      set({ sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.25, spec: 0.35, dark: 1 }, 0x8ea8ff, 0x3a5296, 0x0e1118, [0.022, 0.03, 0.055], [-0.008, 0.0, 0.03], [0.0, 0.004, 0.012], 0x04060a, [0.2, 0.25, 0.38]);
+      // moonlight: a dim blue-grey key and sky (not a saturated blue: green grass under it turned teal)
+      set({ sunI: 1.0, hemiI: 0.62, env: 0.08, cloud: 0.1, sat: 0.8, vignette: 0.5, bloom: 0.8, exposure: 1.2, spec: 0.35, dark: 1 }, 0xb0bce0, 0x4a5678, 0x0e1014, [0.026, 0.03, 0.045], [-0.008, 0.0, 0.03], [0.0, 0.004, 0.012], 0x04060a, [0.24, 0.27, 0.36]);
       light = 0.12;
       break;
     // ---- extra stops of the dynamic cycle
+    // Daylight stops: a near-white sun and a neutral bounce (the grade keeps the grass a natural mid-green).
+    // Low-sun stops (golden hour, sunset, dawn): the warmth is in the key light only (a soft amber, not a
+    // saturated orange) while a stronger cool sky fill (hemisphere + sky IBL) keeps the shadow side bluish,
+    // so sun-facing surfaces glow and everything else keeps its own colour.
     case 'noon':
-      set({ sunI: 3.3, hemiI: 0.85, env: 0.45, cloud: 0.34, sat: 1.04, vignette: 0.28, bloom: 0.38, exposure: 1.13, spec: 1, dark: 0 }, 0xfff0dc, 0xa6c4f0, 0x6a5434, [0.3, 0.31, 0.32], [-0.012, 0.0, 0.024], [0.015, 0.008, -0.015], 0x2a2824, [1, 1, 1]);
+      set({ sunI: 2.6, hemiI: 0.85, env: 0.45, cloud: 0.34, sat: 1.0, vignette: 0.28, bloom: 0.38, exposure: 1.06, spec: 1, dark: 0 }, 0xfff4e8, 0x9cb6e0, 0x5c5444, [0.3, 0.31, 0.32], [-0.012, 0.0, 0.024], [0.015, 0.008, -0.015], 0x2a2824, [1, 1, 1]);
+      break;
+    case 'afternoon':
+      // (the cycle's 15:00 stop: the static day sun's direction, a slightly warm afternoon light)
+      set({ sunI: 2.75, hemiI: 0.82, env: 0.44, cloud: 0.32, sat: 1.0, vignette: 0.3, bloom: 0.4, exposure: 1.1, spec: 1, dark: 0 }, 0xffe8cc, 0x9cb8e6, 0x5c5240, [0.3, 0.3, 0.3], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2824, [1, 0.97, 0.95]);
       break;
     case 'golden':
-      set({ sunI: 3.0, hemiI: 0.68, env: 0.34, cloud: 0.28, sat: 1.14, vignette: 0.33, bloom: 0.5, exposure: 1.2, spec: 1, dark: 0.1 }, 0xffa458, 0x8c9cd0, 0x5a4028, [0.34, 0.25, 0.19], [-0.014, 0.0, 0.032], [0.06, 0.02, -0.05], 0x241a16, [0.9, 0.78, 0.7]);
+      set({ sunI: 2.4, hemiI: 0.95, env: 0.5, cloud: 0.28, sat: 1.0, vignette: 0.35, bloom: 0.5, exposure: 1.1, spec: 1, dark: 0.1 }, 0xffcc98, 0x86a2dc, 0x3c3a3a, [0.4, 0.3, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x2a221e, [0.92, 0.84, 0.8]);
       light = 0.85;
       break;
     case 'sunset':
-      set({ sunI: 2.5, hemiI: 0.6, env: 0.27, cloud: 0.22, sat: 1.08, vignette: 0.38, bloom: 0.56, exposure: 1.17, spec: 0.95, dark: 0.38 }, 0xff9858, 0x7c86b8, 0x4a3628, [0.31, 0.21, 0.18], [-0.012, 0.0, 0.045], [0.05, 0.012, -0.045], 0x1e1418, [0.78, 0.62, 0.62]);
+      set({ sunI: 2.1, hemiI: 1.0, env: 0.5, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.56, exposure: 1.14, spec: 0.95, dark: 0.38 }, 0xffba86, 0x7490d0, 0x343238, [0.42, 0.26, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x2a1c1c, [0.78, 0.66, 0.7]);
       light = 0.65;
       break;
     case 'twilight':
@@ -227,12 +256,12 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.28;
       break;
     case 'dawn':
-      set({ sunI: 2.5, hemiI: 0.6, env: 0.26, cloud: 0.2, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.17, spec: 0.9, dark: 0.42 }, 0xff9468, 0x8a90c4, 0x4a3a34, [0.34, 0.24, 0.26], [-0.012, 0.0, 0.045], [0.07, 0.02, -0.03], 0x1c1820, [0.8, 0.68, 0.72]);
+      set({ sunI: 2.1, hemiI: 1.0, env: 0.5, cloud: 0.2, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 1.14, spec: 0.9, dark: 0.42 }, 0xffc094, 0x7c94d0, 0x363438, [0.4, 0.28, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x2a1e22, [0.82, 0.74, 0.78]);
       p.hazeP.set(3, 70, 0.45, 50); // morning mist
       light = 0.6;
       break;
     case 'morning':
-      set({ sunI: 3.0, hemiI: 0.78, env: 0.4, cloud: 0.3, sat: 1.04, vignette: 0.3, bloom: 0.42, exposure: 1.18, spec: 1, dark: 0.04 }, 0xffdcb0, 0x9ab8e6, 0x64503a, [0.3, 0.3, 0.31], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2826, [0.95, 0.95, 1]);
+      set({ sunI: 2.6, hemiI: 0.82, env: 0.42, cloud: 0.3, sat: 1.0, vignette: 0.3, bloom: 0.42, exposure: 1.1, spec: 1, dark: 0.04 }, 0xffeedd, 0x9ab4e0, 0x5a5244, [0.3, 0.3, 0.31], [-0.012, 0.0, 0.024], [0.02, 0.008, -0.015], 0x2a2826, [0.95, 0.95, 1]);
       p.hazeP.set(4, 80, 0.4, 52);
       light = 0.95;
       break;
@@ -320,17 +349,24 @@ function lerpPreset(out: Preset, a: Preset, b: Preset, k: number) {
 
 // ------------------------------------------------------------ dynamic day / night cycle
 
-/** One full day at 1x game speed: 22 real minutes (driven by the sim tick, so it follows the game speed). */
-export const CYCLE_TICKS = TPS * 60 * 22;
+/**
+ * The live day: one game hour = one real minute at 1x game speed, so a full day is 24 real minutes.
+ * Driven by the sim tick: it follows the game speed and pause and is the same for every player.
+ */
+export const GAME_HOUR_TICKS = TPS * 60;
+/** One full day of the cycle. */
+export const CYCLE_TICKS = GAME_HOUR_TICKS * 24;
+/** The live day starts just before sunrise (?clock=HH:MM overrides it for debugging / screenshots). */
+export const START_HOUR = 5.5;
 
 /**
  * Lighting stops of the cycle. u = fraction of the day starting at midday. Sun / moon paths are in degrees:
- * elevation and azimuth (0 = +x, 90 = +z) in the classic view frame; the late-afternoon 'day' stop sits
- * exactly on the static day sun so the cycle passes through the familiar look.
+ * elevation and azimuth (0 = +x, 90 = +z) in the classic view frame; the 15:00 'afternoon' stop sits
+ * exactly on the static day sun's direction (with a more neutral light than the fixed 'day' preset).
  */
 const CYCLE_KEYS: { u: number; key: Key }[] = [
   { u: 0.0, key: 'noon' },
-  { u: 0.2, key: 'day' },
+  { u: 0.2, key: 'afternoon' },
   { u: 0.31, key: 'golden' },
   { u: 0.375, key: 'sunset' },
   { u: 0.425, key: 'dusk' },
@@ -342,6 +378,93 @@ const CYCLE_KEYS: { u: number; key: Key }[] = [
   { u: 0.88, key: 'morning' },
   { u: 1.0, key: 'noon' },
 ];
+
+/**
+ * Clock hour -> cycle phase u. Each lighting stop of CYCLE_KEYS (and the sun / moon paths) sits at the
+ * hour it shows, so the clock reads true while the tuned look stays as it was: noon 12:00, the static
+ * 'day' sun 15:00, golden hour 17:30, sunset 18:30, dusk 19:15, twilight 19:45, night 21:00 .. 04:30,
+ * predawn 05:15, dawn 06:00, morning 08:00. Hours run noon .. next noon (12 .. 36); linear in between,
+ * so the game clock advances evenly and the night (21:00 .. 04:30) lasts 7.5 real minutes.
+ */
+export const HOUR_U: readonly (readonly [number, number])[] = [
+  [12, 0],
+  [15, 0.2],
+  [17.5, 0.31],
+  [18.5, 0.375],
+  [19.25, 0.425],
+  [19.75, 0.46],
+  [21, 0.51],
+  [28.5, 0.72],
+  [29.25, 0.77],
+  [30, 0.81],
+  [32, 0.88],
+  [36, 1],
+];
+
+/** Cycle phase u (0 = midday) of a clock hour (any number of hours; wraps every 24). */
+export function hourToU(hours: number): number {
+  let x = ((hours % 24) + 24) % 24;
+  if (x < 12) x += 24;
+  let i = 1;
+  while (i < HOUR_U.length - 1 && x > HOUR_U[i][0]) i++;
+  const [h0, u0] = HOUR_U[i - 1];
+  const [h1, u1] = HOUR_U[i];
+  return u0 + ((u1 - u0) * (x - h0)) / (h1 - h0);
+}
+
+/** Clock hour (0 .. 24) of a cycle phase u (the inverse of hourToU; photo mode's time slider). */
+export function uToHour(u: number): number {
+  const x = ((u % 1) + 1) % 1;
+  let i = 1;
+  while (i < HOUR_U.length - 1 && x > HOUR_U[i][1]) i++;
+  const [h0, u0] = HOUR_U[i - 1];
+  const [h1, u1] = HOUR_U[i];
+  return (h0 + ((h1 - h0) * (x - u0)) / (u1 - u0)) % 24;
+}
+
+/** Hours since midnight of day 1 at a sim tick (the live day starts at `start`). */
+export function clockHours(tick: number, start = START_HOUR): number {
+  return start + tick / GAME_HOUR_TICKS;
+}
+
+/** "HH:MM" of a clock hour (wraps every 24 hours; minutes are floored). */
+export function formatClock(hours: number): string {
+  const m = Math.floor((((hours % 24) + 24) % 24) * 60 + 1e-6) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/** Sky icon of the HUD clock. */
+export type ClockIcon = 'sunrise' | 'sun' | 'sunset' | 'moon';
+/** Weather icon of the HUD clock. */
+export type WxIcon = 'clear' | 'cloudy' | 'rain' | 'storm' | 'snow' | 'dust';
+
+/** Sunrise 05:00 .. 07:00, sun until 17:30, sunset until the twilight at 19:45, then the moon. */
+export function clockIcon(hours: number): ClockIcon {
+  const x = ((hours % 24) + 24) % 24;
+  if (x >= 5 && x < 7) return 'sunrise';
+  if (x >= 7 && x < 17.5) return 'sun';
+  if (x >= 17.5 && x < 19.75) return 'sunset';
+  return 'moon';
+}
+
+/** The clock of the fixed times of day (the hour each preset shows: 'day' is the 15:00 sun of the cycle). */
+export const FIXED_HOUR: Record<Exclude<TimeOfDay, 'cycle'>, number> = { day: 15, dusk: 19.25, night: 23, mist: 7.25 };
+
+/** What the HUD clock shows. */
+export interface ClockState {
+  /** Clock hour 0..23 and minute 0..59. */
+  hours: number;
+  minutes: number;
+  /** Day of the battle (1 = the first; only the live day moves on). */
+  day: number;
+  icon: ClockIcon;
+  weather: WxIcon;
+  /** The live day (the clock runs); false = a fixed time of day. */
+  live: boolean;
+  /** "HH:MM". */
+  text: string;
+}
+
 /** The key light hands over from the sun to the moon (and back) at these points, while it is dim. */
 const MOON_RISE = 0.46;
 const MOON_SET = 0.77;
@@ -427,6 +550,8 @@ export class Atmosphere {
   readonly weather: WeatherFx | null = null;
   readonly night: NightLights | null = null;
   readonly env: EnvDamage;
+  /** Living nature, the night life and the victory fireworks (render/fx/nature.ts). */
+  readonly living: LivingWorld;
   /** Drifting fog banks over the low ground (mist time of day, dawn in the cycle, dynamic weather). */
   readonly groundFog: GroundFog | null = null;
   /** Dynamic weather timeline (weather = 'dynamic'). */
@@ -473,6 +598,8 @@ export class Atmosphere {
   phaseOverride: number | null = null;
   /** Current phase of the cycle (0..1, 0 = midday), -1 when the time of day is fixed. */
   phase = -1;
+  /** Clock hour at the start of the battle (the live day; ?clock=HH:MM overrides it). */
+  startHour = START_HOUR;
   private keyI = 1;
 
   constructor(
@@ -496,6 +623,7 @@ export class Atmosphere {
     // environment destruction is always on (it only reacts to events)
     this.env = new EnvDamage(host.terrain, host.world.map, host.fog, host.effects, host.quality);
     host.scene.add(this.env.group);
+    this.living = new LivingWorld(this, host);
     // night vision is available everywhere (key N), the pass is only built on demand
     this.keyHandler = (e: KeyboardEvent) => {
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -517,7 +645,8 @@ export class Atmosphere {
       let seed = (rs ^ 0x9e3779b9) >>> 0;
       for (const ch of host.world.map.name) seed = (Math.imul(seed, 31) + ch.charCodeAt(0)) >>> 0;
       seed = num('wxseed') ?? seed;
-      this.wxCycle = new WeatherCycle(seed, { dust: true, cold: cfg.tod === 'night' });
+      // the map's climate picks the mix of fronts (desert dust, winter snow; weathercycle.ts)
+      this.wxCycle = new WeatherCycle(seed, { climate: look.biome, cold: cfg.tod === 'night' || look.biome === 'winter' });
       this.wxTimeOverride = num('wxt');
       this.wx = this.wxCycle.at(this.wxTimeOverride ?? host.world.tick / TPS);
     }
@@ -535,6 +664,8 @@ export class Atmosphere {
       this.sunBase = new THREE.Vector3();
       const q = params.get('todphase');
       if (q !== null && Number.isFinite(+q)) this.phaseOverride = +q;
+      const ck = /^(\d{1,2})(?::(\d{2}))?$/.exec(params.get('clock') ?? '');
+      if (ck) this.startHour = (+ck[1] % 24) + Math.min(59, +(ck[2] ?? 0)) / 60;
       this.blendCycle(host.world.tick);
     } else if (cfg.tod === 'mist') this.mistSun();
     this.applyPreset(p);
@@ -622,7 +753,7 @@ export class Atmosphere {
   /** Dynamic cycle: blend the lighting stops and move the sun / moon for this sim tick. */
   private blendCycle(tick: number) {
     const keys = this.keys!;
-    const u = (((this.phaseOverride ?? tick / CYCLE_TICKS) % 1) + 1) % 1;
+    const u = this.phaseOverride !== null ? ((this.phaseOverride % 1) + 1) % 1 : hourToU(clockHours(tick, this.startHour));
     this.phase = u;
     let i = Math.min(Math.max(1, this.keyI), keys.length - 1);
     if (u < keys[i - 1].u || u > keys[i].u) {
@@ -644,7 +775,8 @@ export class Atmosphere {
     if (moon) pathAt(MOON_PATH, u, dir);
     else pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, dir);
     // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
-    const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
+    // (capped at 1.5: dawn and evening stay a little darker than the day, with crisp long shadows)
+    const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.5, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
     this.preset!.sunI *= comp;
     if (this.altP && a.alt) this.altP.sunI *= comp;
   }
@@ -775,6 +907,43 @@ export class Atmosphere {
     return this.active && this.preset ? (this.keys ? this.light : this.baseLight) : 1;
   }
 
+  /**
+   * The HUD clock: the live day's time (from the sim tick, so it follows the game speed and pause),
+   * the photo mode preview's time, or the hour of a fixed time of day; with the sky and weather icons.
+   */
+  clock(): ClockState {
+    const live = this.cfg.tod === 'cycle';
+    const abs = live ? clockHours(this.host.world.tick, this.startHour) : FIXED_HOUR[this.cfg.tod as Exclude<TimeOfDay, 'cycle'>] ?? 12;
+    // photo mode preview / ?todphase pins the sky: show its time
+    const h = this.phaseOverride !== null ? uToHour(this.phaseOverride) : ((abs % 24) + 24) % 24;
+    const text = formatClock(h);
+    return { hours: +text.slice(0, 2), minutes: +text.slice(3), day: live ? Math.floor(abs / 24) + 1 : 1, icon: clockIcon(h), weather: this.wxIcon(), live, text };
+  }
+
+  /** Weather icon of this frame. */
+  private wxIcon(): WxIcon {
+    const st = this.wx;
+    if (st) {
+      if (st.precip > 0.06) return st.fall === 'snow' ? 'snow' : st.fall === 'sandstorm' ? 'dust' : st.storm > 0.3 ? 'storm' : 'rain';
+      return st.cover > 0.4 ? 'cloudy' : 'clear';
+    }
+    const w = this.cfg.weather;
+    return w === 'rain' ? 'rain' : w === 'snow' ? 'snow' : w === 'sandstorm' ? 'dust' : 'clear';
+  }
+
+  /**
+   * Briefing forecast: the fronts of the first `hours` game hours that bring something down (with the
+   * clock hour their rain / snow / dust begins), [] for a clear day, null without dynamic weather.
+   */
+  forecast(hours = 24): { kind: WxEventKind; hour: number; storm: boolean }[] | null {
+    const c = this.wxCycle;
+    if (!c) return null;
+    const secPerHour = GAME_HOUR_TICKS / TPS;
+    const t1 = hours * secPerHour;
+    c.eventAt(t1);
+    return c.events.filter((e) => e.precip > 0 && e.start < t1).map((e) => ({ kind: e.kind, hour: (this.startHour + (e.start + e.build) / secPerHour) % 24, storm: e.storm > 0 }));
+  }
+
   get nightVision() {
     return this.nv;
   }
@@ -828,6 +997,7 @@ export class Atmosphere {
   update(dt: number, time: number, visuals: VisualSource, target: THREE.Vector3, zoom: number, camera: THREE.Camera) {
     this.time = time;
     this.env.update(dt, visuals.values());
+    this.living.update(dt, time, target, zoom, camera);
     if (this.nvPass && this.nv) this.nvPass.uniforms.time.value = time;
     if (!this.active || !this.preset) return;
     const h = this.host;
@@ -844,7 +1014,7 @@ export class Atmosphere {
       WX.wxWet.value = st.wet;
       WX.wxRain.value = st.fall === 'rain' ? st.precip : 0;
       WX.wxDust.value = st.dust;
-      WX.wxSnow.value = Math.max(this.look.snowFloor, st.snow);
+      WX.wxSnow.value = Math.max(this.look.snowFloor, this.living.snow);
       // foliage sways faster in the wind (extra clock on top of the terrain's)
       this.swayExtra += dt * 1.8 * Math.max(0, st.wind - 0.2);
     }
@@ -858,7 +1028,8 @@ export class Atmosphere {
       // ground fog: dawn in the cycle, the misty morning, after rain; strong wind tears it up
       let mist = 0;
       if (this.cfg.tod === 'mist') mist = morningMist(gt);
-      if (this.keys) mist = Math.max(mist, dawnMist(this.phase));
+      // (with dynamic weather the dawn mist is light after a dry night, thick after a rainy one)
+      if (this.keys) mist = Math.max(mist, dawnMist(this.phase) * (st ? 0.55 + 0.45 * sstep(0.08, 0.45, st.wet) : 1));
       if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
       if (this.mistOverride !== null) mist = this.mistOverride;
       this.mist = mist;
@@ -950,6 +1121,7 @@ export class Atmosphere {
       st.dust = w === 'sandstorm' ? 1 : 0;
     }
     sky.setFreeView(freeView, dt);
+    this.living.sky(keyDir, freeView);
     sky.update(dt, st, this.host.sun.color, this.host.hemi.groundColor);
     if (sky.env && this.host.scene.environment !== sky.env) {
       this.host.scene.environment = sky.env;
@@ -970,10 +1142,11 @@ export class Atmosphere {
     if (st.stage === 'build') {
       if (e.kind === 'dust') text = 'Dust front approaching';
       else if (e.kind === 'flurries') text = 'Snow flurries moving in';
+      else if (e.kind === 'snowfall') text = 'Heavy snow moving in';
       else if (e.kind === 'storm') text = 'Storm front moving in';
       else if (e.kind !== 'overcast') text = 'Clouds gathering: rain expected';
     } else if (st.stage === 'hold' && st.storm > 0.5) text = 'Thunderstorm overhead';
-    else if (st.stage === 'clearing' && e.precip > 0) text = e.kind === 'dust' ? 'Dust settling' : 'Skies clearing';
+    else if (st.stage === 'clearing' && e.precip > 0) text = e.kind === 'dust' ? 'Dust settling' : e.fall === 'snow' ? 'Snow easing off' : 'Skies clearing';
     if (!text) return;
     try {
       const g = (window as unknown as { ironfront?: { game?: { hud?: { message(t: string, k?: 'info' | 'warn' | 'good'): void } } } }).ironfront?.game;
@@ -996,11 +1169,13 @@ export class Atmosphere {
   /** A blast on the ground at tile (x, y): environment damage. `size` ~ blast profile size. */
   impact(x: number, y: number, size: number) {
     this.env.blast(x, y, size, this.time);
+    this.living.impact(x, y, size, this.time);
   }
 
   dispose() {
     if (this.keyHandler) window.removeEventListener('keydown', this.keyHandler);
     this.night?.dispose();
+    this.living.dispose();
     this.unhookWind?.();
     this.unhookWind = null;
     this.host.canvas.style.filter = '';

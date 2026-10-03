@@ -1,0 +1,744 @@
+{
+ "version": 1,
+ "generated": "tools/bake-terrain.mjs",
+ "license": "CC0 1.0 (Poly Haven, ambientCG)",
+ "sizes": [
+  512,
+  1024
+ ],
+ "slots": [
+  "grass",
+  "dirt",
+  "rock",
+  "sand",
+  "mud",
+  "forest",
+  "gravel",
+  "soil",
+  "snow",
+  "asphalt",
+  "paving"
+ ],
+ "materials": {
+  "meadow": {
+   "src": "acg:Grass004",
+   "page": "https://ambientcg.com/view?id=Grass004",
+   "note": "lush meadow grass",
+   "tiles": 2.4,
+   "regular": false,
+   "mean": [
+    0.1176,
+    0.1486,
+    0.0321
+   ],
+   "meanHex": "#606c32",
+   "rough": 0.86,
+   "sizes": {
+    "512": {
+     "bytes": 212852,
+     "seam": 0.98,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 870060,
+     "seam": 1.04,
+     "healed": false
+    }
+   }
+  },
+  "withered": {
+   "src": "ph:withered_grass",
+   "page": "https://polyhaven.com/a/withered_grass",
+   "note": "dry / frozen grass, desert scrub",
+   "tiles": 2.4,
+   "regular": false,
+   "mean": [
+    0.3879,
+    0.2784,
+    0.1854
+   ],
+   "meanHex": "#a79077",
+   "rough": 0.808,
+   "sizes": {
+    "512": {
+     "bytes": 177302,
+     "seam": 0.94,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 726388,
+     "seam": 0.95,
+     "healed": false
+    }
+   }
+  },
+  "litter": {
+   "src": "ph:forest_leaves_02",
+   "page": "https://polyhaven.com/a/forest_leaves_02",
+   "note": "forest floor: moss and leaf litter",
+   "tiles": 2.6,
+   "regular": false,
+   "mean": [
+    0.2441,
+    0.1495,
+    0.0491
+   ],
+   "meanHex": "#876c3f",
+   "rough": 0.933,
+   "sizes": {
+    "512": {
+     "bytes": 213062,
+     "seam": 1.12,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 765602,
+     "seam": 1.11,
+     "healed": false
+    }
+   }
+  },
+  "drysoil": {
+   "src": "ph:dry_ground_rocks",
+   "page": "https://polyhaven.com/a/dry_ground_rocks",
+   "note": "bare stony soil, tracks",
+   "tiles": 2.8,
+   "regular": false,
+   "mean": [
+    0.2356,
+    0.1387,
+    0.065
+   ],
+   "meanHex": "#856848",
+   "rough": 0.812,
+   "sizes": {
+    "512": {
+     "bytes": 167896,
+     "seam": 1.14,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 677906,
+     "seam": 1.17,
+     "healed": false
+    }
+   }
+  },
+  "gravel": {
+   "src": "ph:rocky_trail",
+   "page": "https://polyhaven.com/a/rocky_trail",
+   "note": "gravel shoulders, stony tracks",
+   "tiles": 2.2,
+   "regular": false,
+   "mean": [
+    0.2477,
+    0.186,
+    0.1263
+   ],
+   "meanHex": "#887764",
+   "rough": 0.82,
+   "sizes": {
+    "512": {
+     "bytes": 174912,
+     "seam": 1,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 576540,
+     "seam": 1,
+     "healed": false
+    }
+   }
+  },
+  "mossrock": {
+   "src": "ph:aerial_rocks_02",
+   "page": "https://polyhaven.com/a/aerial_rocks_02",
+   "note": "mossy cliff rock (aerial scan)",
+   "tiles": 5,
+   "regular": false,
+   "mean": [
+    0.1555,
+    0.11,
+    0.0468
+   ],
+   "meanHex": "#6e5d3d",
+   "rough": 0.817,
+   "sizes": {
+    "512": {
+     "bytes": 131194,
+     "seam": 1.46,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 449756,
+     "seam": 1.5,
+     "healed": false
+    }
+   }
+  },
+  "sandstone": {
+   "src": "ph:sandstone_cracks",
+   "page": "https://polyhaven.com/a/sandstone_cracks",
+   "note": "desert mesa sandstone",
+   "tiles": 3.4,
+   "regular": false,
+   "mean": [
+    0.5534,
+    0.3118,
+    0.1556
+   ],
+   "meanHex": "#c4986e",
+   "rough": 0.908,
+   "sizes": {
+    "512": {
+     "bytes": 149612,
+     "seam": 1.2,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 560052,
+     "seam": 1.21,
+     "healed": false
+    }
+   }
+  },
+  "snowrock": {
+   "src": "ph:rocks_ground_05",
+   "page": "https://polyhaven.com/a/rocks_ground_05",
+   "note": "rocks with snow between",
+   "tiles": 3.2,
+   "regular": false,
+   "mean": [
+    0.199,
+    0.1714,
+    0.1464
+   ],
+   "meanHex": "#7b736b",
+   "rough": 0.714,
+   "sizes": {
+    "512": {
+     "bytes": 155336,
+     "seam": 0.9,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 579192,
+     "seam": 0.9,
+     "healed": false
+    }
+   }
+  },
+  "greyrock": {
+   "src": "ph:rock_boulder_dry",
+   "page": "https://polyhaven.com/a/rock_boulder_dry",
+   "note": "pale grey rock (quays)",
+   "tiles": 3.2,
+   "regular": false,
+   "mean": [
+    0.3853,
+    0.3266,
+    0.2627
+   ],
+   "meanHex": "#a79b8c",
+   "rough": 0.78,
+   "sizes": {
+    "512": {
+     "bytes": 46012,
+     "seam": 0.87,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 137702,
+     "seam": 0.87,
+     "healed": false
+    }
+   }
+  },
+  "beach": {
+   "src": "ph:coast_sand_01",
+   "page": "https://polyhaven.com/a/coast_sand_01",
+   "note": "river beach sand",
+   "tiles": 4.5,
+   "regular": false,
+   "mean": [
+    0.2214,
+    0.1696,
+    0.1073
+   ],
+   "meanHex": "#81725c",
+   "rough": 0.963,
+   "sizes": {
+    "512": {
+     "bytes": 122734,
+     "seam": 1.38,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 440636,
+     "seam": 1.27,
+     "healed": false
+    }
+   }
+  },
+  "dunes": {
+   "src": "ph:aerial_beach_01",
+   "page": "https://polyhaven.com/a/aerial_beach_01",
+   "note": "wind-rippled sand (aerial scan)",
+   "tiles": 6,
+   "regular": false,
+   "mean": [
+    0.2424,
+    0.2032,
+    0.1679
+   ],
+   "meanHex": "#877c72",
+   "rough": 0.9,
+   "sizes": {
+    "512": {
+     "bytes": 121562,
+     "seam": 1.03,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 329454,
+     "seam": 1.01,
+     "healed": false
+    }
+   }
+  },
+  "mud": {
+   "src": "ph:brown_mud_02",
+   "page": "https://polyhaven.com/a/brown_mud_02",
+   "note": "wet mud",
+   "tiles": 2.2,
+   "regular": false,
+   "mean": [
+    0.0721,
+    0.0568,
+    0.0378
+   ],
+   "meanHex": "#4c4337",
+   "rough": 0.952,
+   "sizes": {
+    "512": {
+     "bytes": 157002,
+     "seam": 0.92,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 531698,
+     "seam": 0.92,
+     "healed": false
+    }
+   }
+  },
+  "cracked": {
+   "src": "ph:mud_cracked_dry_03",
+   "page": "https://polyhaven.com/a/mud_cracked_dry_03",
+   "note": "cracked dry mud",
+   "tiles": 2.4,
+   "regular": false,
+   "mean": [
+    0.561,
+    0.3573,
+    0.2009
+   ],
+   "meanHex": "#c5a17c",
+   "rough": 0.756,
+   "sizes": {
+    "512": {
+     "bytes": 138400,
+     "seam": 0.84,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 450592,
+     "seam": 0.89,
+     "healed": false
+    }
+   }
+  },
+  "farmsoil": {
+   "src": "ph:farm_soil",
+   "page": "https://polyhaven.com/a/farm_soil",
+   "note": "ploughed field soil",
+   "tiles": 2.2,
+   "regular": false,
+   "mean": [
+    0.088,
+    0.046,
+    0.0194
+   ],
+   "meanHex": "#543d26",
+   "rough": 0.976,
+   "sizes": {
+    "512": {
+     "bytes": 182708,
+     "seam": 1.09,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 642966,
+     "seam": 1.06,
+     "healed": false
+    }
+   }
+  },
+  "snow": {
+   "src": "ph:snow_02",
+   "page": "https://polyhaven.com/a/snow_02",
+   "note": "snow",
+   "tiles": 3.4,
+   "regular": false,
+   "mean": [
+    0.2978,
+    0.2975,
+    0.3049
+   ],
+   "meanHex": "#949496",
+   "rough": 0.8,
+   "sizes": {
+    "512": {
+     "bytes": 106246,
+     "seam": 1.68,
+     "healed": true
+    },
+    "1024": {
+     "bytes": 491616,
+     "seam": 2.11,
+     "healed": true
+    }
+   }
+  },
+  "asphalt": {
+   "src": "ph:asphalt_02",
+   "page": "https://polyhaven.com/a/asphalt_02",
+   "note": "cracked asphalt",
+   "tiles": 2.4,
+   "regular": false,
+   "mean": [
+    0.1002,
+    0.0987,
+    0.088
+   ],
+   "meanHex": "#595854",
+   "rough": 0.77,
+   "sizes": {
+    "512": {
+     "bytes": 121774,
+     "seam": 1.06,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 576148,
+     "seam": 1.05,
+     "healed": false
+    }
+   }
+  },
+  "pavement": {
+   "src": "ph:concrete_pavement",
+   "page": "https://polyhaven.com/a/concrete_pavement",
+   "note": "concrete pavement slabs",
+   "tiles": 2,
+   "regular": true,
+   "mean": [
+    0.1972,
+    0.1627,
+    0.1247
+   ],
+   "meanHex": "#7b7063",
+   "rough": 0.862,
+   "sizes": {
+    "512": {
+     "bytes": 124004,
+     "seam": 1.27,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 590410,
+     "seam": 1.24,
+     "healed": false
+    }
+   }
+  },
+  "rubble": {
+   "src": "ph:rubble",
+   "page": "https://polyhaven.com/a/rubble",
+   "note": "concrete rubble lots",
+   "tiles": 2.2,
+   "regular": false,
+   "mean": [
+    0.3358,
+    0.2736,
+    0.2327
+   ],
+   "meanHex": "#9d8f85",
+   "rough": 0.895,
+   "sizes": {
+    "512": {
+     "bytes": 99342,
+     "seam": 1.13,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 291280,
+     "seam": 1.15,
+     "healed": false
+    }
+   }
+  },
+  "flags": {
+   "src": "ph:precast_stone_paving",
+   "page": "https://polyhaven.com/a/precast_stone_paving",
+   "note": "stone flags (city squares)",
+   "tiles": 2.4,
+   "regular": true,
+   "mean": [
+    0.1679,
+    0.1289,
+    0.0809
+   ],
+   "meanHex": "#726550",
+   "rough": 0.777,
+   "sizes": {
+    "512": {
+     "bytes": 43358,
+     "seam": 0.95,
+     "healed": false
+    },
+    "1024": {
+     "bytes": 133994,
+     "seam": 1,
+     "healed": false
+    }
+   }
+  }
+ },
+ "biomes": {
+  "temperate": {
+   "layers": [
+    "meadow",
+    "drysoil",
+    "mossrock",
+    "beach",
+    "mud",
+    "litter",
+    "gravel",
+    "farmsoil"
+   ],
+   "slot": {
+    "grass": 0,
+    "dirt": 1,
+    "rock": 2,
+    "sand": 3,
+    "mud": 4,
+    "forest": 5,
+    "gravel": 6,
+    "soil": 7,
+    "snow": 3,
+    "asphalt": 2,
+    "paving": 1
+   },
+   "bytes": {
+    "512": 1362360,
+    "1024": 4955164
+   }
+  },
+  "desert": {
+   "layers": [
+    "withered",
+    "drysoil",
+    "sandstone",
+    "dunes",
+    "cracked",
+    "gravel",
+    "farmsoil"
+   ],
+   "slot": {
+    "grass": 0,
+    "dirt": 1,
+    "rock": 2,
+    "sand": 3,
+    "mud": 4,
+    "gravel": 5,
+    "soil": 6,
+    "forest": 1,
+    "snow": 3,
+    "asphalt": 2,
+    "paving": 1
+   },
+   "bytes": {
+    "512": 1112392,
+    "1024": 3963898
+   }
+  },
+  "winter": {
+   "layers": [
+    "withered",
+    "drysoil",
+    "snowrock",
+    "snow",
+    "mud",
+    "litter",
+    "gravel",
+    "farmsoil"
+   ],
+   "slot": {
+    "grass": 0,
+    "dirt": 1,
+    "rock": 2,
+    "sand": 3,
+    "mud": 4,
+    "forest": 5,
+    "gravel": 6,
+    "soil": 7,
+    "snow": 3,
+    "asphalt": 2,
+    "paving": 1
+   },
+   "bytes": {
+    "512": 1334464,
+    "1024": 4991908
+   }
+  },
+  "urban": {
+   "layers": [
+    "meadow",
+    "pavement",
+    "greyrock",
+    "rubble",
+    "mud",
+    "gravel",
+    "asphalt",
+    "flags"
+   ],
+   "slot": {
+    "grass": 0,
+    "dirt": 1,
+    "rock": 2,
+    "sand": 3,
+    "mud": 4,
+    "gravel": 5,
+    "asphalt": 6,
+    "paving": 7,
+    "forest": 1,
+    "soil": 1,
+    "snow": 3
+   },
+   "bytes": {
+    "512": 979256,
+    "1024": 3707832
+   }
+  }
+ },
+ "barks": {
+  "oak": {
+   "src": "ph:bark_brown_02",
+   "page": "https://polyhaven.com/a/bark_brown_02",
+   "note": "broadleaf bark (oak, poplar, willow, fruit, acacia)",
+   "px": 256,
+   "bytes": 13246,
+   "mean": [
+    0.1264,
+    0.1035,
+    0.0608
+   ]
+  },
+  "pine": {
+   "src": "ph:pine_bark",
+   "page": "https://polyhaven.com/a/pine_bark",
+   "note": "pine / spruce bark",
+   "px": 256,
+   "bytes": 15772,
+   "mean": [
+    0.1386,
+    0.089,
+    0.0541
+   ]
+  },
+  "palm": {
+   "src": "ph:palm_bark",
+   "page": "https://polyhaven.com/a/palm_bark",
+   "note": "palm trunk",
+   "px": 256,
+   "bytes": 12654,
+   "mean": [
+    0.0993,
+    0.0763,
+    0.0598
+   ]
+  }
+ },
+ "hdris": {
+  "clear": {
+   "src": "noon_grass",
+   "page": "https://polyhaven.com/a/noon_grass",
+   "note": "clear midday, open field",
+   "w": 512,
+   "h": 256,
+   "bytes": 216384,
+   "sun": {
+    "u": 0.3022,
+    "v": 0.0244,
+    "elev": 85.6
+   },
+   "sky": [
+    0.1801,
+    0.2665,
+    0.5951
+   ],
+   "ground": [
+    0.1391,
+    0.2008,
+    0.0774
+   ]
+  },
+  "overcast": {
+   "src": "overcast_soil",
+   "page": "https://polyhaven.com/a/overcast_soil",
+   "note": "overcast, open field",
+   "w": 512,
+   "h": 256,
+   "bytes": 192582,
+   "sun": {
+    "u": 0.4673,
+    "v": 0.3076,
+    "elev": 34.6
+   },
+   "sky": [
+    1.2373,
+    1.2219,
+    1.2197
+   ],
+   "ground": [
+    0.0379,
+    0.0297,
+    0.0241
+   ]
+  },
+  "sunset": {
+   "src": "grasslands_sunset",
+   "page": "https://polyhaven.com/a/grasslands_sunset",
+   "note": "low sun, partly cloudy grassland",
+   "w": 512,
+   "h": 256,
+   "bytes": 248900,
+   "sun": {
+    "u": 0.5991,
+    "v": 0.4814,
+    "elev": 3.3
+   },
+   "sky": [
+    1.0164,
+    1.2094,
+    1.5016
+   ],
+   "ground": [
+    0.1138,
+    0.1377,
+    0.0762
+   ]
+  }
+ }
+}

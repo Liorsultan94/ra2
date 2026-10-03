@@ -45,13 +45,21 @@ const L = (o: Partial<Look>): Look => ({ temp: 0, tint: 0, lift: [0, 0, 0], gamm
 
 const LOOKS = {
   /** The classic late-afternoon battlefield (fixed 'day'): warm light already comes from the sun. */
-  day: L({ temp: 0.015, sat: 1.06, contrast: 1.07, shadowTint: [-0.008, 0.0, 0.016], highTint: [0.016, 0.006, -0.014] }),
+  // (the tone mapper's punchy AgX look already adds saturation: the daylight looks take some of it back so the
+  // grass reads as a natural mid-green, like a good photo, not a neon yellow-green)
+  day: L({ temp: 0.01, tint: -0.05, sat: 0.96, contrast: 1.06, shadowTint: [-0.008, 0.0, 0.016], highTint: [0.012, 0.005, -0.01] }),
   /** Midday: neutral, a touch cool and crisp. */
-  noon: L({ temp: -0.035, sat: 1.04, contrast: 1.06, shadowTint: [-0.008, 0.002, 0.018], highTint: [0.0, 0.002, 0.006] }),
-  /** Golden hour / sunset: warm highlights, slightly teal shadows, rich colour. */
-  golden: L({ temp: 0.06, tint: 0.01, sat: 1.05, contrast: 1.06, gain: [1.015, 1.0, 0.97], lift: [0.004, 0.004, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.035, 0.012, -0.03] }),
-  /** Night: blue-teal, lifted toe so units stay readable, lights left warm so they pop. */
-  night: L({ temp: -0.19, tint: 0.012, sat: 0.88, protect: 0.85, contrast: 1.02, lift: [0.002, 0.012, 0.026], gamma: [0.97, 1.02, 1.08], shadowTint: [-0.012, 0.008, 0.034], highTint: [0.022, 0.008, -0.008] }),
+  noon: L({ temp: -0.035, tint: -0.05, sat: 0.94, contrast: 1.05, shadowTint: [-0.008, 0.002, 0.018], highTint: [0.0, 0.002, 0.006] }),
+  /**
+   * Golden hour / sunrise / sunset: the warmth lives in the key light (atmos.ts), so the look only warms the
+   * highlights a little and cools the shadows; no global orange white balance.
+   */
+  golden: L({ temp: 0.03, sat: 0.96, contrast: 1.06, gain: [1.01, 1.0, 0.985], lift: [0.002, 0.004, 0.01], shadowTint: [-0.016, 0.002, 0.03], highTint: [0.03, 0.012, -0.022] }),
+  /**
+   * Night: a dark, desaturated blue-grey moonlight (no teal: a little magenta tint takes the green out), lifted
+   * toe so units stay readable; strongly saturated colours (lights, team colours) are spared so they glow.
+   */
+  night: L({ temp: -0.12, tint: 0.04, sat: 0.55, protect: 0.95, contrast: 1.02, lift: [0.006, 0.01, 0.022], gamma: [0.99, 1.0, 1.05], shadowTint: [-0.006, 0.0, 0.022], highTint: [0.022, 0.008, -0.008] }),
   /** Rain: desaturated grey-green, soft contrast, a little haze in the blacks. */
   rain: L({ temp: -0.05, tint: -0.045, sat: 0.7, protect: 0.75, contrast: 1.0, lift: [0.014, 0.019, 0.017], gain: [0.97, 1.0, 0.98], shadowTint: [-0.008, 0.008, 0.006], highTint: [-0.008, 0.008, 0.0] }),
   /** Thunderstorm (on top of rain): darker, flatter, greener. */
@@ -145,7 +153,8 @@ void main() {
   // saturation that spares saturated colours (team colours stay readable in desaturated looks)
   l = dot( e, LUMA );
   float chroma = max( e.r, max( e.g, e.b ) ) - min( e.r, min( e.g, e.b ) );
-  float s = mix( sat, max( sat, 1.0 ), protect * smoothstep( 0.18, 0.6, chroma ) );
+  // (the band starts above the landscape's chroma: grass and earth follow the look, team colours do not)
+  float s = mix( sat, max( sat, 1.0 ), protect * smoothstep( 0.4, 0.8, chroma ) );
   e = clamp( mix( vec3( l ), e, s ), 0.0, 1.0 );
   gl_FragColor = vec4( toSRGB( pow( e, vec3( 2.2 ) ) ), 1.0 );
 }`;

@@ -1,0 +1,189 @@
+/*
+ * HUD clock (src/ui/clock.ts). Advanced HUD: the first item of the round view buttons
+ * row (top right of the 3D view). Simple HUD (phones): the view buttons live in the
+ * More panel, so the clock sits alone in the top-right corner, inside the safe area.
+ */
+
+.hud-clock {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin-right: 2px;
+  padding: 0 11px 0 9px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--hud-blur);
+  backdrop-filter: var(--hud-blur);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color var(--dur), opacity 0.3s;
+}
+.view-ctrl .hud-clock {
+  align-self: center;
+}
+.hud-clock:hover {
+  border-color: var(--line-3);
+}
+.hc-time {
+  min-width: 2.9em;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-align: center;
+}
+.hud-clock.fixed .hc-time {
+  color: var(--muted);
+}
+.hc-day {
+  font-family: var(--font-d);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.hc-sky,
+.hc-wx {
+  display: flex;
+}
+.hc-sky .ico {
+  width: 18px;
+  height: 18px;
+  transition: color 0.6s;
+}
+.hc-wx .ico {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.hud-clock[data-sky='sun'] .hc-sky {
+  color: #f7cf6a;
+}
+.hud-clock[data-sky='sunrise'] .hc-sky,
+.hud-clock[data-sky='sunset'] .hc-sky {
+  color: #ff9f5a;
+}
+.hud-clock[data-sky='moon'] .hc-sky {
+  color: #b9c8ff;
+}
+.hud-clock[data-wx='rain'] .hc-wx .ico {
+  color: #8ec5ff;
+}
+.hud-clock[data-wx='storm'] .hc-wx .ico {
+  color: #ffd55a;
+}
+.hud-clock[data-wx='snow'] .hc-wx .ico {
+  color: #e6f0ff;
+}
+.hud-clock[data-wx='dust'] .hc-wx .ico {
+  color: #e2b06c;
+}
+
+/* tap / click: what the clock is */
+.hc-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 6px 10px;
+  background: var(--glass-hi);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-d);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity var(--dur), transform var(--dur) var(--ease);
+}
+.hud-clock.tip-on .hc-tip {
+  opacity: 1;
+  transform: none;
+}
+
+/* simple HUD (phones): alone in the top-right corner of the view, small */
+.view-wrap > .hud-clock {
+  position: absolute;
+  z-index: 3;
+  top: max(6px, env(safe-area-inset-top));
+  right: 6px;
+  height: 30px;
+  gap: 5px;
+  padding: 0 9px 0 7px;
+}
+.view-wrap > .hud-clock .hc-time {
+  font-size: 13.5px;
+}
+.view-wrap > .hud-clock .hc-sky .ico {
+  width: 16px;
+  height: 16px;
+}
+.view-wrap > .hud-clock .hc-wx .ico {
+  width: 14px;
+  height: 14px;
+}
+.view-wrap > .hud-clock .hc-day {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+/* phones in landscape (advanced HUD): a little smaller next to the 40 px view buttons */
+@media (max-height: 560px) and (orientation: landscape) {
+  .view-ctrl .hud-clock {
+    height: 32px;
+    padding: 0 9px 0 8px;
+  }
+  .view-ctrl .hud-clock .hc-time {
+    font-size: 14px;
+  }
+}
+/* advanced HUD: centre the hint banner in the space left of the clock + view buttons row (~300 px) */
+.game-root:not(.simple-ui) .view-wrap .hint {
+  left: calc((100% - 300px) / 2);
+  max-width: min(560px, calc(100% - 330px));
+}
+
+/* portrait phones: the hint banner moves below the clock so they never overlap */
+@media (orientation: portrait) and (max-width: 600px) {
+  .simple-ui .hint {
+    top: calc(max(6px, env(safe-area-inset-top)) + 38px);
+  }
+  .view-wrap > .hud-clock .hc-day {
+    display: none;
+  }
+}
+
+.game-root.attract .hud-clock {
+  display: none !important;
+}
+.view-wrap.cine-on .hud-clock {
+  opacity: 0;
+}
+
+/* skirmish setup: the live day note under the options */
+.opts .live-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  line-height: 1.35;
+}
+@media (max-height: 560px) {
+  .skirmish .opts .live-note {
+    display: none;
+  }
+}

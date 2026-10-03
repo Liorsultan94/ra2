@@ -17,7 +17,8 @@ describe('post grade: look weights from time of day and weather', () => {
     const g = new GradeLut();
     g.blend(base({ sunY: 0.37, warmth: 0.9, daylight: 0.85 }));
     expect(g.weights().golden).toBeGreaterThan(0.7);
-    expect(g.temperature).toBeGreaterThan(0.05);
+    // (warm, but only a little: the warmth of a golden hour lives in the key light)
+    expect(g.temperature).toBeGreaterThan(0.02);
     // fixed dusk keeps the day's key light direction: the warm colour alone makes it golden
     g.blend(base({ sunY: 0.62, warmth: 0.93, daylight: 0.6 }));
     expect(g.weights().golden).toBeGreaterThan(0.5);
@@ -28,7 +29,9 @@ describe('post grade: look weights from time of day and weather', () => {
     g.blend(base({ daylight: 0.12, sunY: 0.5, warmth: -0.5 }));
     expect(g.weights().night).toBeGreaterThan(0.95);
     expect(g.temperature).toBeLessThan(-0.1);
-    expect(g.saturation).toBeGreaterThan(0.85);
+    // the landscape goes grey-blue; lights and team colours are spared by the protection band (shader)
+    expect(g.saturation).toBeLessThan(0.7);
+    expect(g.saturation).toBeGreaterThan(0.4);
   });
 
   it('rain greys the look, storms more; sandstorm is warm; weights sum sensibly', () => {

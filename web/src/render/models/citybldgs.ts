@@ -5,6 +5,7 @@ import type { FogOfWar } from '../fog';
 import { GeoBuilder, type SceneryLod } from '../geo';
 import { surfaceHeight } from '../ground';
 import type { HouseHandle } from '../scenery';
+import { onBuildingPhotos, photoTileCanvas, Tile as BTile } from './bldtex';
 import type { Builder } from './registry';
 import type { Model, ModelStyle } from './types';
 
@@ -88,8 +89,28 @@ function rnd(seed: number) {
   };
 }
 
-/** One bay x one floor facade cell (colour + emissive window mask). */
-function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: THREE.Texture } {
+/**
+ * Photoscanned wall background for a facade cell (CC0 scans shared with the base buildings, see bldtex.ts):
+ * the part of the scan one bay x one floor (~0.3 tiles) covers. Null until the scans are loaded.
+ */
+const FACADE_SCAN: Partial<Record<Facade, { tile: BTile; frac: number }>> = {
+  panel: { tile: BTile.Panel, frac: 0.42 },
+  brick: { tile: BTile.Brick, frac: 0.34 },
+  shop: { tile: BTile.Cast, frac: 0.45 },
+};
+function scanCell(style: Facade, N: number): HTMLCanvasElement | null {
+  const f = FACADE_SCAN[style];
+  if (!f) return null;
+  const src = photoTileCanvas(f.tile, Math.round(N / f.frac));
+  if (!src) return null;
+  const { c, g } = canvas(N);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, 0, 0, N, N, 0, 0, N, N);
+  return c;
+}
+
+/** One bay x one floor facade cell (colour + emissive window mask); `scan` = photoscanned wall background. */
+function facadeTextures(style: Facade, N: number, scan: HTMLCanvasElement | null = null): { map: THREE.Texture; glow: THREE.Texture } {
   const { c, g } = canvas(N);
   const { c: ce, g: ge } = canvas(N);
   const r = rnd(style.length * 977 + N);
@@ -137,7 +158,8 @@ function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: T
   if (style === 'panel') {
     g.fillStyle = '#cfcac0';
     g.fillRect(0, 0, N, N);
-    grain(0.05);
+    if (scan) g.drawImage(scan, 0, 0);
+    else grain(0.05);
     // precast panel joints: the floor line and the bay edge
     g.fillStyle = 'rgba(40,36,30,0.45)';
     g.fillRect(0, N - N * 0.03, N, N * 0.03);
@@ -156,7 +178,8 @@ function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: T
   } else if (style === 'brick') {
     g.fillStyle = '#8a8076';
     g.fillRect(0, 0, N, N);
-    const rows = 10;
+    const rows = scan ? 0 : 10;
+    if (scan) g.drawImage(scan, 0, 0);
     for (let y = 0; y < rows; y++) {
       const off = (y % 2) * 0.5;
       for (let x = -1; x < 4; x++) {
@@ -166,7 +189,7 @@ function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: T
         g.fillRect(((x + off) / 3.5) * N + 1, (y / rows) * N + 1, N / 3.5 - 2, N / rows - 2);
       }
     }
-    grain(0.06);
+    if (!scan) grain(0.06);
     glass(0.28, 0.2, 0.72, 0.78, [48, 56, 64]);
     frame(0.28, 0.2, 0.72, 0.78, '#ecebe4', 0.04);
     g.fillStyle = '#ecebe4';
@@ -195,7 +218,11 @@ function facadeTextures(style: Facade, N: number): { map: THREE.Texture; glow: T
     // shop front: stone base and pillars, a big display window, a sign band
     g.fillStyle = '#9a948a';
     g.fillRect(0, 0, N, N);
-    grain(0.05);
+    if (scan) {
+      g.globalAlpha = 0.85;
+      g.drawImage(scan, 0, 0);
+      g.globalAlpha = 1;
+    } else grain(0.05);
     g.fillStyle = '#3e3c3a';
     g.fillRect(0, N * 0.06, N, N * 0.16);
     g.fillStyle = '#d6d2c8';
@@ -291,6 +318,19 @@ function cityMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high'): CityM
     m.customProgramCacheKey = () => 'fog2-cityfacade';
     facade[st] = m;
   }
+  // repaint the wall backgrounds with the photoscans once they are loaded (medium / high)
+  onBuildingPhotos(() => {
+    for (const st of ['panel', 'brick', 'shop'] as Facade[]) {
+      const scan = scanCell(st, N);
+      if (!scan) continue;
+      const t = facadeTextures(st, N, scan);
+      const map = facade[st].map!;
+      map.image = t.map.image;
+      map.needsUpdate = true;
+      t.map.dispose();
+      t.glow.dispose();
+    }
+  });
   const trim = fog.apply(new THREE.MeshStandardMaterial({ map: plainTexture(64, 11), vertexColors: true, roughness: 0.9, metalness: 0.02 }));
   const slate = fog.apply(new THREE.MeshStandardMaterial({ map: plainTexture(64, 13, true), vertexColors: true, roughness: 0.7, metalness: 0.1 }));
   const detail = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.25 }));

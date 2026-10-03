@@ -10,6 +10,7 @@ import { Leaf, foliageAtlas, leafCell } from './terraintex';
 import { Shrub, buildTrees, shrubGeometry, shrubTint, treeMaterials } from './trees';
 import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
+import { roadClear } from './ambient/clearance';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -22,6 +23,17 @@ export { Species, windTime, type TreeSpot } from './treekinds';
 
 /** Culling cell size (tiles). */
 const CELL = 4;
+
+/** A trunk stands on dry land: clear of the water surface and of water tiles (no trees growing in a lake). */
+function dryLand(m: GameMap, x: number, y: number): boolean {
+  if (surfaceHeight(m, x, y) < WATER_LEVEL + 0.08) return false;
+  for (const [dx, dy] of [[0, 0], [-0.55, 0], [0.55, 0], [0, -0.55], [0, 0.55]]) {
+    const tx = Math.floor(x + dx);
+    const ty = Math.floor(y + dy);
+    if (tx >= 0 && ty >= 0 && tx < m.w && ty < m.h && m.tiles[ty * m.w + tx] === Tile.Water) return false;
+  }
+  return true;
+}
 
 /** Deterministic tree placement for every tree tile of the map. */
 export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeSpot[] {
@@ -47,12 +59,15 @@ export function treeSpots(m: GameMap, quality: 'low' | 'medium' | 'high'): TreeS
         const forest = n4 >= 2;
         const species = treeSpecies(m, x, y, t, n4, r, ctx);
         const s = (forest ? 0.95 : 0.82) + hash2(x, y, 70 + k) * 0.45;
+        if (!dryLand(m, ox, oy)) continue;
         out.push({ x: ox, y: oy, s, species, rot: hash2(x, y, 90 + k) * Math.PI * 2 });
       }
     }
   }
   // render-only trees of the hand-designed maps: street trees, roadside palms (sim/maps.ts deco)
   (m.deco?.trees ?? []).forEach((t, k) => {
+    if (!roadClear(m, t.x, t.y, 0.3)) return; // never on a road, turning circle or junction
+    if (!dryLand(m, t.x, t.y)) return;
     const r = hash2(k, 7, 43);
     const species = m.biome === 'desert' ? (t.kind === 2 ? Species.Palm : Species.Acacia) : m.biome === 'winter' ? Species.Birch : r < 0.7 ? Species.Young : Species.Fruit;
     out.push({ x: t.x, y: t.y, s: (m.biome === 'urban' ? 0.85 : 0.95) + hash2(k, 8, 43) * 0.3, species, rot: hash2(k, 9, 43) * Math.PI * 2 });

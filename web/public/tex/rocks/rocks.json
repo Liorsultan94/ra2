@@ -1,0 +1,61 @@
+{
+ "version": 1,
+ "generated": "tools/bake-rocks.mjs",
+ "license": "CC0 1.0 (Poly Haven)",
+ "glb": {
+  "file": "rocks.glb",
+  "bytes": 71476
+ },
+ "atlas": {
+  "512": {
+   "albedo": 38222,
+   "normal": 30672
+  },
+  "1024": {
+   "albedo": 126770,
+   "normal": 171320
+  }
+ },
+ "rocks": [
+  {
+   "key": "outcrop",
+   "src": "namaqualand_boulder_03",
+   "page": "https://polyhaven.com/a/namaqualand_boulder_03",
+   "note": "ridge outcrop (blocky)",
+   "sourceTris": 64826,
+   "cell": 0,
+   "hiTris": 1400,
+   "loTris": 278
+  },
+  {
+   "key": "crag",
+   "src": "namaqualand_boulder_04",
+   "page": "https://polyhaven.com/a/namaqualand_boulder_04",
+   "note": "ridge outcrop (rounded, weathered)",
+   "sourceTris": 59066,
+   "cell": 1,
+   "hiTris": 1674,
+   "loTris": 300
+  },
+  {
+   "key": "boulder",
+   "src": "namaqualand_boulder_06",
+   "page": "https://polyhaven.com/a/namaqualand_boulder_06",
+   "note": "boulder",
+   "sourceTris": 109114,
+   "cell": 2,
+   "hiTris": 900,
+   "loTris": 198
+  },
+  {
+   "key": "stone",
+   "src": "namaqualand_boulder_05",
+   "page": "https://polyhaven.com/a/namaqualand_boulder_05",
+   "note": "flat stone (scree)",
+   "sourceTris": 89618,
+   "cell": 3,
+   "hiTris": 400,
+   "loTris": 90
+  }
+ ]
+}

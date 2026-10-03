@@ -35,12 +35,41 @@ export function operationName(seed: number): string {
 
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
+/** Fixed times of day (the hour the HUD clock shows for each: render/atmos.ts FIXED_HOUR). */
 const TOD_LINE: Record<string, string> = {
-  day: '0930 HRS · DAYLIGHT',
-  dusk: '1840 HRS · DUSK',
-  night: '0215 HRS · NIGHT',
-  cycle: '0600 HRS · FULL DAY CYCLE',
+  day: '1500 HRS · DAYLIGHT',
+  dusk: '1915 HRS · DUSK',
+  night: '2300 HRS · NIGHT',
+  mist: '0715 HRS · MORNING MIST',
+  cycle: '0530 HRS · DAWN · LIVE DAY',
 };
+/** Briefing names of the dynamic weather fronts (render/weathercycle.ts WxEventKind). */
+const FRONT: Record<string, string> = { showers: 'SHOWERS', rain: 'RAIN', storm: 'THUNDERSTORMS', dust: 'DUST STORM', flurries: 'SNOW FLURRIES', snowfall: 'HEAVY SNOW', overcast: 'OVERCAST' };
+const hhmm = (h: number) => {
+  const m = Math.floor((((h % 24) + 24) % 24) * 60) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}${String(m % 60).padStart(2, '0')}`;
+};
+const lightName = (h: number) => {
+  const x = ((h % 24) + 24) % 24;
+  return x >= 5 && x < 7 ? 'DAWN' : x >= 7 && x < 17.5 ? 'DAYLIGHT' : x >= 17.5 && x < 19.75 ? 'DUSK' : 'NIGHT';
+};
+
+/** The live day's start ("0530 HRS · DAWN · LIVE DAY") and the dynamic weather's forecast for the day. */
+export function timeLine(tod: string | undefined, start?: number): string {
+  if (tod === 'cycle' && start !== undefined) return `${hhmm(start)} HRS · ${lightName(start)} · LIVE DAY`;
+  return TOD_LINE[tod ?? 'day'] ?? `${(tod ?? 'day').toUpperCase()}`;
+}
+
+export function forecastLine(weather: string | undefined, fronts?: { kind: string; hour: number; storm: boolean }[] | null): string {
+  if (!fronts) return WEATHER_LINE[weather ?? 'clear'] ?? (weather ?? 'clear').toUpperCase();
+  if (!fronts.length) return 'FORECAST · CLEAR ALL DAY';
+  const [f, ...rest] = fronts;
+  // (to the quarter hour: it is a forecast)
+  let line = `FORECAST · ${FRONT[f.kind] ?? f.kind.toUpperCase()} ~${hhmm(Math.round(f.hour * 4) / 4)}`;
+  if (rest.some((e) => e.storm) && !f.storm) line += ' · STORMS LATER';
+  else if (rest.length) line += ` · ${rest[0].kind === f.kind ? 'MORE' : (FRONT[rest[0].kind] ?? 'MORE')} LATER`;
+  return line;
+}
 const WEATHER_LINE: Record<string, string> = {
   clear: 'CLEAR SKIES · GOOD VISIBILITY',
   rain: 'RAIN · WET GROUND',
@@ -48,6 +77,7 @@ const WEATHER_LINE: Record<string, string> = {
   sandstorm: 'SANDSTORM · POOR VISIBILITY',
   fog: 'FOG BANKS · LIMITED VISIBILITY',
   storm: 'THUNDERSTORM · HIGH WINDS',
+  dynamic: 'CHANGEABLE WEATHER',
 };
 
 const DIFF: Record<Difficulty, { label: string; note: string }> = {
@@ -141,7 +171,11 @@ function gridRef(w: number, h: number, x: number, y: number) {
   return `${'ABCDEFGH'[c]}${r + 1}`;
 }
 
-export function buildBriefing(world: World, local: number, o: { seed: number; difficulty: Difficulty; tod?: string; weather?: string; credits?: number }): BriefingInfo {
+export function buildBriefing(
+  world: World,
+  local: number,
+  o: { seed: number; difficulty: Difficulty; tod?: string; weather?: string; credits?: number; start?: number; forecast?: { kind: string; hour: number; storm: boolean }[] | null },
+): BriefingInfo {
   const m = world.map;
   const me = world.players[local];
   const foe = world.players[1 - local];
@@ -209,8 +243,8 @@ export function buildBriefing(world: World, local: number, o: { seed: number; di
   return {
     codename: operationName(o.seed),
     date: `${String(now.getDate()).padStart(2, '0')} ${MONTHS[now.getMonth()]} ${now.getFullYear()}`,
-    time: TOD_LINE[o.tod ?? 'day'] ?? `${(o.tod ?? 'day').toUpperCase()}`,
-    weather: WEATHER_LINE[o.weather ?? 'clear'] ?? (o.weather ?? 'clear').toUpperCase(),
+    time: timeLine(o.tod, o.start),
+    weather: forecastLine(o.weather, o.forecast),
     mapName: m.name,
     region,
     situation,

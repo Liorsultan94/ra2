@@ -1,5 +1,6 @@
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
+import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, makeRouter, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
 
 /*
@@ -58,6 +59,8 @@ export function buildBiomeLayout(m: GameMap): Layout {
   };
   for (const r of roads) stampLine(r.pts, r.width / 2 + 0.25, OCC_ROAD);
   for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
+  // the civilian lane graph: turning circles / junctions kept clear, roads fitted to them (ambient/clearance.ts)
+  prepareRoadNet(m, roads, tracks, occ, R);
   const stampRect = (x0: number, y0: number, x1: number, y1: number, bit: number) => {
     for (let y = Math.floor(y0 * R); y < Math.ceil(y1 * R); y++)
       for (let x = Math.floor(x0 * R); x < Math.ceil(x1 * R); x++) if (x >= 0 && y >= 0 && x < W * R && y < H * R) occ[y * W * R + x] |= bit;
@@ -312,5 +315,5 @@ export function buildBiomeLayout(m: GameMap): Layout {
   }
   // the park paths count as tracks in the occupancy grid
   for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
-  return { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R };
+  return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R });
 }

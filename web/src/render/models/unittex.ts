@@ -266,90 +266,128 @@ export function armourMod(): UnitTexSet {
 
 // ------------------------------------------------------- nation camo
 
-type Scheme = 'carc' | 'sinai' | 'nato3' | 'ru3' | 'ua3' | 'pla' | 'kor3' | 'tr4' | 'ir';
+type Scheme = 'carc' | 'sinai' | 'nato3' | 'ru3' | 'uapix' | 'pla' | 'kor4' | 'tr3' | 'ir';
 
 interface CamoSpec {
   scheme: Scheme;
   cols: number[]; // base, 2, 3, 4
 }
 
-/** Real-world paint schemes (colours close to the factionCamo() base so vertex-coloured parts match). */
+/*
+ * Real-world vehicle paint schemes, re-derived from reference photos (Wikimedia
+ * Commons, see tools/vehicle-refs.md; only used as reference, nothing shipped):
+ *  - US: CARC tan 686A (FS 33446), single colour, sun-faded.
+ *  - Israel: "Sinai grey" (khaki grey-olive), single colour.
+ *  - Germany: NATO three-tone (RAL 6031 bronze green / 8027 leather brown /
+ *    9021 tar black): big amorphous patches, black bordering the brown.
+ *  - Russia: T-90M factory 3-tone: green base, broad sand-khaki patches with
+ *    black edges, hand-painted wavy shapes.
+ *  - Ukraine: pixelated 4-colour (MM-14 derived): khaki / olive / brown /
+ *    dark olive in blocky clusters.
+ *  - China: PLA woodland digital (Type 99A): large pixel blotches of dark
+ *    green, khaki and black on green with a dithered pixel fringe.
+ *  - Korea: ROK 4-colour woodland (K1 / K2): green, brown, black and a sand
+ *    khaki in long wavy bands.
+ *  - Turkey: TSK 3-tone (Altay, Leopard 2A4TR): green, brown, black blotches.
+ *  - Iran: desert sand with soft brown / dark tan blotches (Karrar).
+ * Colours stay close to the factionCamo() base so the vertex-coloured parts match.
+ */
 const CAMO: Record<string, CamoSpec> = {
-  usa: { scheme: 'carc', cols: [0xb8a57c, 0xa8946a, 0x8c7a56, 0xc4b48c] }, // CARC tan 686A
-  israel: { scheme: 'sinai', cols: [0x9e9a7e, 0x8f8a6e, 0x7a7660, 0xaaa68a] }, // Sinai grey
-  germany: { scheme: 'nato3', cols: [0x4b5a38, 0x5e4a36, 0x1f2018, 0x4b5a38] }, // NATO 3-tone: green / brown / black
-  russia: { scheme: 'ru3', cols: [0x56663e, 0x8a8060, 0x26261c, 0x3e4a2c] }, // green / sand / black
-  ukraine: { scheme: 'ua3', cols: [0x5f6a3e, 0x6a5538, 0x2c2e22, 0x857a58] }, // green with brown + black bands
-  china: { scheme: 'pla', cols: [0x5d6b47, 0x3d4a2e, 0x26281e, 0x8a8462] }, // PLA digital
-  korea: { scheme: 'kor3', cols: [0x56623f, 0x5c4a34, 0x22241c, 0x7a6a4a] }, // ROK 3-tone
-  turkey: { scheme: 'tr4', cols: [0x6b7356, 0x4a5040, 0x2a2c24, 0x8c8a70] }, // TSK 4-tone
-  iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] }, // desert tan, brown blotches
+  usa: { scheme: 'carc', cols: [0xb8a57c, 0xa8946a, 0x8c7a56, 0xc4b48c] },
+  israel: { scheme: 'sinai', cols: [0x9a967a, 0x8b866a, 0x7a7660, 0xa8a488] },
+  germany: { scheme: 'nato3', cols: [0x4a5838, 0x5a4634, 0x22231d, 0x4a5838] },
+  russia: { scheme: 'ru3', cols: [0x55643c, 0x958a62, 0x24241c, 0x44502e] },
+  ukraine: { scheme: 'uapix', cols: [0x5f6a3e, 0x6a5a3c, 0x2c2e22, 0x8a8260] },
+  china: { scheme: 'pla', cols: [0x6f8a50, 0x3a5230, 0xb09a6a, 0x2c2e24] }, // light green, dark green, tan, dark (Type 99A parade digital)
+  korea: { scheme: 'kor4', cols: [0x56623f, 0x5e4c36, 0x22241c, 0x8c8262] },
+  turkey: { scheme: 'tr3', cols: [0x667050, 0x58483a, 0x26271f, 0x667050] },
+  iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] },
 };
 
-/** Index 0..3 of the camo colour at (u, v). `w` = soft weight for anti-aliasing (unused by hard schemes). */
+/** Domain-warped fBm: amorphous, hand-painted looking patch shapes (tileable). */
+function wfbm(u: number, v: number, f: number, s: number, warp = 0.18) {
+  const wu = fbm(u, v, 2, s + 5, 3) - 0.5;
+  const wv = fbm(u, v, 2, s + 9, 3) - 0.5;
+  return fbm(frac(u + wu * warp * 2), frac(v + wv * warp * 2), f, s, 4);
+}
+
+/** Index 0..3 of the camo colour at (u, v). */
 function schemeAt(s: Scheme, u: number, v: number): number {
   switch (s) {
     case 'carc':
     case 'sinai':
       return 0;
     case 'nato3': {
-      // large hard-edged blotches: brown and black over green
-      const a = fbm(u, v, 3, 101, 4);
-      const b = fbm(u + 0.37, v + 0.21, 3, 131, 4);
-      if (b > 0.6) return 2;
-      if (a > 0.54) return 1;
+      // ~45 % green, ~35 % brown, ~20 % black; the black patches hug the brown ones
+      const a = wfbm(u, v, 3, 101, 0.22);
+      const b = wfbm(u, v, 3, 131, 0.22);
+      if (b > 0.63 || (a > 0.47 && a < 0.5 && b > 0.5)) return 2;
+      if (a > 0.47) return 1;
       return 0;
     }
     case 'ru3': {
-      // wavy diagonal bands: sand + black on green (T-90M style)
-      const w = fbm(u, v, 2, 211, 3);
-      const t = frac((u * 2 + v * 1 + w * 0.9) * 1.0);
-      const n = fbm(u, v, 6, 223, 3);
-      if (t < 0.18 + n * 0.08) return 2;
-      if (t > 0.48 && t < 0.72 + n * 0.08) return 1;
+      // broad sand patches with black edging on green, plus a few lone black streaks
+      const a = wfbm(u, v, 3, 211, 0.25);
+      const n = fbm(u, v, 9, 223, 2) * 0.04;
+      if (a > 0.5 + n) return 1;
+      if (a > 0.47 + n) return 2;
+      if (wfbm(u, v, 4, 241, 0.3) > 0.67) return 2;
       return 0;
     }
-    case 'ua3': {
-      const a = fbm(u, v, 4, 311, 4);
-      const b = fbm(u + 0.5, v, 4, 331, 4);
-      if (b > 0.62) return 2;
-      if (a > 0.57) return 1;
-      if (a < 0.33) return 3;
+    case 'uapix': {
+      // pixel clusters (~1 / 26 of the tile): olive ground, brown + khaki clusters, dark accents
+      const P = 26;
+      const iu = Math.floor(u * P);
+      const iv = Math.floor(v * P);
+      const cu = (iu + 0.5) / P;
+      const cv = (iv + 0.5) / P;
+      const j = (hash(iu, iv, 313) - 0.5) * 0.09;
+      const a = wfbm(cu, cv, 4, 311, 0.2) + j;
+      const b = wfbm(cu + 0.5, cv, 4, 331, 0.2) + j;
+      if (b > 0.63) return 2;
+      if (a > 0.58) return 1;
+      if (a < 0.38) return 3;
       return 0;
     }
     case 'pla': {
-      // digital: 2-level pixel blocks
-      const P = 48;
-      const cu = (Math.floor(u * P) + 0.5) / P;
-      const cv = (Math.floor(v * P) + 0.5) / P;
-      const a = fbm(cu, cv, 4, 411, 3) + (hash(Math.floor(u * P), Math.floor(v * P), 413) - 0.5) * 0.08;
-      const b = fbm(cu + 0.3, cv, 5, 431, 3) + (hash(Math.floor(u * P), Math.floor(v * P), 433) - 0.5) * 0.08;
-      if (b > 0.6) return 2;
-      if (a > 0.56) return 1;
-      if (a < 0.36) return 3;
+      // Type 99A digital: blotches built from small square pixels (~0.12 m on the hull) with a dithered fringe
+      const P = 52;
+      const iu = Math.floor(u * P);
+      const iv = Math.floor(v * P);
+      const fu = Math.floor(u * P * 2);
+      const fv = Math.floor(v * P * 2);
+      const cu = (iu + 0.5) / P;
+      const cv = (iv + 0.5) / P;
+      const d = (hash(fu, fv, 413) - 0.5) * 0.07;
+      const a = wfbm(cu, cv, 4, 411, 0.2) + d;
+      const b = wfbm(cu + 0.3, cv, 4, 431, 0.2) + d;
+      if (b > 0.535) return 2;
+      if (a > 0.535) return 1;
+      if (a < 0.43) return 3;
       return 0;
     }
-    case 'kor3': {
-      // smaller, elongated brown + black patches on green
-      const a = fbm(u * 1.0, v * 1.0, 5, 511, 4);
-      const b = fbm(u + 0.2, v + 0.6, 5, 531, 4);
-      if (b > 0.61) return 2;
-      if (a > 0.58) return 1;
+    case 'kor4': {
+      // long wavy bands (MERDC-style woodland): green ground, brown + sand bands, black slashes
+      const w = fbm(u, v, 2, 511, 3);
+      const t = frac(u * 2 + v * 0.6 + w * 1.2);
+      const n = wfbm(u, v, 5, 521, 0.2);
+      if (n > 0.64) return 2;
+      if (t < 0.28) return 1;
+      if (t > 0.55 && t < 0.72) return 3;
       return 0;
     }
-    case 'tr4': {
-      const a = fbm(u, v, 4, 611, 4);
-      const b = fbm(u + 0.1, v + 0.4, 4, 631, 4);
-      if (b > 0.64) return 2;
-      if (a > 0.6) return 1;
-      if (a < 0.34) return 3;
+    case 'tr3': {
+      const a = wfbm(u, v, 3, 611, 0.22);
+      const b = wfbm(u + 0.1, v + 0.4, 4, 631, 0.22);
+      if (b > 0.66) return 2;
+      if (a > 0.5) return 1;
       return 0;
     }
     case 'ir': {
-      const a = fbm(u, v, 3, 711, 4);
-      const b = fbm(u, v, 6, 731, 3);
-      if (a > 0.61) return 1;
-      if (b > 0.68) return 2;
+      const a = wfbm(u, v, 3, 711, 0.25);
+      const b = wfbm(u, v, 5, 731, 0.2);
+      if (a > 0.6) return 1;
+      if (b > 0.67) return 2;
       return 0;
     }
   }
@@ -358,8 +396,8 @@ function schemeAt(s: Scheme, u: number, v: number): number {
 const camoCache = new Map<string, UnitTexSet>();
 
 /** Nation camo albedo (darkened by `dk` like the vertex-coloured base paint) over the shared armour plates. */
-export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
-  const key = faction + '|' + dk;
+export function vehCamo(faction: string, dk = 0.8, baked = false): UnitTexSet {
+  const key = faction + '|' + dk + (baked ? '|b' : '');
   let s = camoCache.get(key);
   if (s) return s;
   const spec = CAMO[faction] ?? { scheme: 'carc' as Scheme, cols: [0x8a8070, 0x80786a, 0x706858, 0x948a7a] };
@@ -384,8 +422,14 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         const k = Math.abs(t - 0.5) * 0.3;
         col = [base[0] + (alt[0] - base[0]) * k, base[1] + (alt[1] - base[1]) * k, base[2] + (alt[2] - base[2]) * k];
       } else {
-        // hard pattern edges, anti-aliased by the small blur pass below
         col = cols[idx[i]];
+      }
+      if (!plain && (spec.scheme === 'pla' || spec.scheme === 'uapix')) {
+        // digital schemes keep crisp pixel edges
+        const m = (fbm(u, v, 8, 811, 3) - 0.5) * 0.06;
+        col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
+      } else if (!plain) {
+        // hard pattern edges, anti-aliased by the small blur pass below
         const n4 = [idx[y * AN + ((x + 1) % AN)], idx[y * AN + ((x + AN - 1) % AN)], idx[((y + 1) % AN) * AN + x], idx[((y + AN - 1) % AN) * AN + x]];
         let r0 = col[0] * 4;
         let g0 = col[1] * 4;
@@ -399,6 +443,14 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         const m = (fbm(u, v, 8, 811, 3) - 0.5) * 0.08;
         col = [col[0] * (1 + m), col[1] * (1 + m), col[2] * (1 + m)];
       }
+      if (baked) {
+        // baked templates: seams, bolts, edges and grime come from the per-vehicle bake (vehbake.ts / wear.ts);
+        // only paint variation here (faded patches, brush / spray tone, a few tiny chips)
+        const tone = 1 + (fbm(u, v, 12, 821, 3) - 0.5) * 0.07 + (fbm(u, v, 40, 823, 2) - 0.5) * 0.04;
+        const chip = P.chip[i] * 0.35;
+        for (let j = 0; j < 3; j++) c[i * 3 + j] = col[j] * tone * (1 - chip * 0.5) + PRIMER[j] * chip * 0.5;
+        continue;
+      }
       // plate detail: seams, edge wear, chipping to primer, grime streaks
       const k = Math.max(0.3, 1 - P.ao[i] * 0.45 - P.grime[i] * 0.12) + P.edge[i] * 0.07;
       const chip = P.chip[i];
@@ -408,11 +460,49 @@ export function vehCamo(faction: string, dk = 0.8): UnitTexSet {
         c[i * 3 + j] = ch;
       }
     }
-  const m = armourMaps();
+  const m = baked ? plainMaps() : armourMaps();
   freeLattices();
   s = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
   camoCache.set(key, s);
   return s;
+}
+
+let plainNR: { normalMap: THREE.Texture; roughnessMap: THREE.Texture } | null = null;
+/** Seam-free roughness (sun-faded paint, grime blots) for baked vehicles; the normal slot is unused there. */
+function plainMaps() {
+  if (plainNR) return plainNR;
+  const r = new Float32Array(AN * AN);
+  const h = new Float32Array(AN * AN);
+  for (let y = 0; y < AN; y++)
+    for (let x = 0; x < AN; x++) {
+      const u = (x + 0.5) / AN;
+      const v = (y + 0.5) / AN;
+      const i = y * AN + x;
+      r[i] = clamp01(0.74 + (fbm(u, v, 6, 831, 3) - 0.5) * 0.22 + (fbm(u, v, 48, 833, 2) - 0.5) * 0.12);
+      h[i] = 0.5 + (fbm(u, v, 48, 11, 2) - 0.5) * 0.01;
+    }
+  freeLattices();
+  plainNR = { normalMap: toTex(AN, normalFrom(AN, h, 3.4), 3, false), roughnessMap: roughTex(AN, r) };
+  return plainNR;
+}
+
+let modPlain: UnitTexSet | null = null;
+/** Seam-free near-white modulation for the vertex-coloured detail of baked vehicles. */
+export function armourModPlain(): UnitTexSet {
+  if (modPlain) return modPlain;
+  const P = plates();
+  const c = new Float32Array(AN * AN * 3);
+  for (let y = 0; y < AN; y++)
+    for (let x = 0; x < AN; x++) {
+      const i = y * AN + x;
+      const k = 1 + (fbm((x + 0.5) / AN, (y + 0.5) / AN, 16, 841, 3) - 0.5) * 0.08;
+      const ch = P.chip[i] * 0.3;
+      for (let j = 0; j < 3; j++) c[i * 3 + j] = k * (1 - ch * 0.55) + PRIMER[j] * ch * 0.55 * 1.6;
+    }
+  const m = plainMaps();
+  freeLattices();
+  modPlain = { map: toTex(AN, c, 3, true), normalMap: m.normalMap, roughnessMap: m.roughnessMap };
+  return modPlain;
 }
 
 // ------------------------------------------------------------ aircraft
@@ -619,4 +709,97 @@ export function unitLook<T extends THREE.Material>(m: T, cfg: LookCfg): T {
   };
   m.customProgramCacheKey = () => key;
   return m;
+}
+
+// ------------------------------------------------------------- track links
+
+let treadSet: UnitTexSet | null = null;
+/**
+ * Modern double-pin track (8 links per tile along U, V across the belt): steel shoes with two rubber
+ * pads, end connectors with wedge bolts at both edges, a centre connector / guide tooth, dark gaps
+ * between links packed with dirt. Albedo carries the cavity shading; tiles along U only.
+ */
+export function treadTex(): UnitTexSet {
+  if (treadSet) return treadSet;
+  const NU = 256;
+  const NV = 64;
+  const c = new Float32Array(NU * NV * 3);
+  const h = new Float32Array(NU * NV);
+  const r = new Float32Array(NU * NV);
+  const steel: [number, number, number] = [0.21, 0.2, 0.188];
+  const rubber: [number, number, number] = [0.12, 0.118, 0.115];
+  const dirt: [number, number, number] = [0.19, 0.165, 0.13];
+  for (let y = 0; y < NV; y++)
+    for (let x = 0; x < NU; x++) {
+      const u = (x + 0.5) / NU;
+      const v = (y + 0.5) / NV;
+      const lu = frac(u * 8);
+      const link = Math.floor(u * 8);
+      const i = y * NU + x;
+      const n = fbm(u, v * 0.25, 16, 951, 3);
+      // gap between links (pins) and the shoe body
+      const gap = 1 - sstep(0.03, 0.07, Math.min(lu, 1 - lu));
+      const edge = v < 0.11 || v > 0.89;
+      const mid = Math.abs(v - 0.5) < 0.065;
+      // rubber pads (slightly rounded), end connectors over the pins, centre guide
+      const padV = Math.min(sstep(0.13, 0.17, v) * (1 - sstep(0.43, 0.47, v)) + sstep(0.53, 0.57, v) * (1 - sstep(0.83, 0.87, v)), 1);
+      const padU = sstep(0.14, 0.2, lu) * (1 - sstep(0.8, 0.86, lu));
+      const pad = padV * padU;
+      const conn = (edge || mid) && (lu < 0.2 || lu > 0.8) ? 1 : 0;
+      const bolt = conn && Math.hypot((Math.min(lu, 1 - lu) - 0.08) * 1.6, (edge ? Math.min(v, 1 - v) - 0.055 : Math.abs(v - 0.5)) * 1.0) < 0.03 ? 1 : 0;
+      const grouser = !edge && !mid && Math.abs(lu - 0.5) < 0.05 ? 1 : 0;
+      let col: [number, number, number] = pad > 0.5 ? rubber : steel;
+      let ht = 0.42 + pad * 0.32 + conn * 0.36 + bolt * 0.12 + grouser * 0.1 - gap * 0.45 + (n - 0.5) * 0.06;
+      // wear: polished steel where the road wheels / ground rub, rubber pads chewed at the edges
+      const shine = conn ? 0.25 : grouser ? 0.35 : 0;
+      col = [col[0] * (1 + shine), col[1] * (1 + shine), col[2] * (1 + shine)];
+      // dirt packed in the gaps and around the pads, some caked patches
+      const caked = clamp01((fbm(u, v, 6, 957 + link, 3) - 0.55) * 3) * 0.6;
+      const dk = clamp01(gap * 0.9 + (1 - pad) * (1 - conn) * 0.25 + caked);
+      col = [col[0] * (1 - dk) + dirt[0] * dk, col[1] * (1 - dk) + dirt[1] * dk, col[2] * (1 - dk) + dirt[2] * dk];
+      const ao = 1 - gap * 0.6;
+      for (let j = 0; j < 3; j++) c[i * 3 + j] = col[j] * ao * (0.9 + n * 0.2);
+      h[i] = ht;
+      r[i] = pad > 0.5 ? 0.93 : conn || grouser ? 0.5 : 0.78;
+      if (caked > 0.2) r[i] = 0.95;
+    }
+  // tileable non-square: build the normals with wrap on both axes
+  const nrm = new Float32Array(NU * NV * 3);
+  const at = (x: number, y: number) => h[((y + NV) % NV) * NU + ((x + NU) % NU)];
+  for (let y = 0; y < NV; y++)
+    for (let x = 0; x < NU; x++) {
+      const dx = (at(x + 1, y) - at(x - 1, y)) * 4.5;
+      const dy = (at(x, y + 1) - at(x, y - 1)) * 4.5 * (NV / NU) * 4;
+      const len = Math.hypot(dx, dy, 1);
+      const i = (y * NU + x) * 3;
+      nrm[i] = (-dx / len) * 0.5 + 0.5;
+      nrm[i + 1] = (dy / len) * 0.5 + 0.5;
+      nrm[i + 2] = (1 / len) * 0.5 + 0.5;
+    }
+  const rr = new Float32Array(NU * NV * 3);
+  for (let i = 0; i < NU * NV; i++) {
+    rr[i * 3] = 1;
+    rr[i * 3 + 1] = r[i];
+  }
+  freeLattices();
+  treadSet = { map: toTexWH(NU, NV, c, true), normalMap: toTexWH(NU, NV, nrm, false), roughnessMap: toTexWH(NU, NV, rr, false) };
+  return treadSet;
+}
+
+function toTexWH(W: number, H: number, data: Float32Array, srgb: boolean) {
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  const img = ctx.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) {
+    for (let k = 0; k < 3; k++) img.data[i * 4 + k] = Math.max(0, Math.min(255, Math.round(data[i * 3 + k] * 255)));
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 4;
+  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  return t;
 }

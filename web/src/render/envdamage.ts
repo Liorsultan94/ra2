@@ -5,6 +5,7 @@ import type { VisualLike } from './atmos';
 import type { Effects } from './effects';
 import type { FogOfWar } from './fog';
 import type { CulledInstances } from './geo';
+import type { Props } from './props';
 import type { HouseHandle } from './scenery';
 import type { Terrain } from './terrain';
 
@@ -88,6 +89,8 @@ export class EnvDamage {
   private rubbleN = 0;
   private time = 0;
   private dirtyIms = new Set<THREE.InstancedMesh>();
+  /** Photoscanned props (crushed by vehicles, thrown about by blasts). */
+  private props: Props;
 
   constructor(
     terrain: Terrain,
@@ -96,6 +99,8 @@ export class EnvDamage {
     private effects: Effects,
     quality: 'low' | 'medium' | 'high',
   ) {
+    this.props = terrain.props;
+    this.props.attach(effects);
     const veg = terrain.veg;
     const sc = terrain.scenery;
     let total = 0;
@@ -235,6 +240,7 @@ export class EnvDamage {
       const r = Math.max(0.3, (sz ? Math.max(sz.x, sz.z) : 0.8) * 0.5);
       _f.set(1, 0, 0).applyQuaternion(root.quaternion);
       const fl = Math.hypot(_f.x, _f.z) || 1;
+      this.props.crush(root.position.x, root.position.z, r, _f.x / fl, _f.z / fl, heavy);
       const nq = this.query(root.position.x, root.position.z, r);
       for (let q = 0; q < nq; q++) {
         const i = this.qi[q];
@@ -322,6 +328,7 @@ export class EnvDamage {
 
   /** A ground blast of profile size `size` at tile (x, y). */
   blast(x: number, y: number, size: number, _time: number) {
+    this.props.blast(x, y, size);
     if (size < 0.5) return;
     const knock = 0.25 + size * 0.7;
     const burnR = size >= 0.9 ? knock * 1.35 : 0;

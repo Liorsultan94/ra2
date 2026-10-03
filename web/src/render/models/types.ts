@@ -65,6 +65,12 @@ export interface AnimState {
   deploy?: number;
   /** Infantry: seconds since the soldier started digging in (undefined / 0 = not digging); the dig motion plays for the first ~2.4 s, then he kneels in the foxhole. */
   dig?: number;
+  /** Infantry death: 1 = run over by a vehicle (flattened, pressed into the ground) instead of the fall. */
+  crushed?: number;
+  /** Infantry: head yaw (radians, + = turned left in model space) towards a threat, e.g. a vehicle about to run him over; undefined = none. */
+  look?: number;
+  /** Infantry: seconds into a dive and roll out of a vehicle's path (undefined / 0 = none; ~1.2 s long). */
+  dive?: number;
   /** Production buildings: seconds since this building last rolled out a unit (undefined / Infinity = never); drives doors / lifts / beacons. */
   produced?: number;
   /** Stable per-unit seed (the entity id): de-synchronises idle motion, gestures and death variants. Render only. */

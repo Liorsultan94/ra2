@@ -8,7 +8,9 @@ export type LiveName =
   | 'rifle' | 'mg' | 'cannon' | 'cannonHeavy' | 'rocket' | 'missileLaunch' | 'flak' | 'laser'
   | 'artillery' | 'thermo' | 'explosionSmall' | 'explosionMedium' | 'explosionLarge' | 'buildingCollapse'
   | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'click' | 'tab' | 'build' | 'place' | 'sell' | 'error'
-  | 'select' | 'ack' | 'alarm' | 'money' | 'deploy' | 'repair' | 'jam';
+  | 'select' | 'ack' | 'alarm' | 'money' | 'deploy' | 'repair' | 'jam'
+  /** Victory fireworks (render/fx/fireworks.ts): a whistling launch, the burst, the glitter crackle. */
+  | 'fwLaunch' | 'fwBoom' | 'fwCrackle';
 
 export type Build = (p: Patch, o: AudioNode, t: number, r: number) => void;
 
@@ -31,6 +33,33 @@ function bigBoom(p: Patch, o: AudioNode, t: number, r: number): void {
 }
 
 export const LIVE: Record<LiveName, LiveDef> = {
+  fwLaunch: {
+    lvl: 0.4, wet: 0.2, gap: 0.05,
+    build(p, o, t, r) {
+      // the rising whistle and the hiss of the rocket motor
+      p.th(o, t + 0.02, { f: 900 * r, f2: 2600 * r, glide: 0.95, a: 0.05, d: 0.9, peak: 0.1 });
+      p.nh(o, t, { type: 'highpass', f: 3000, a: 0.03, d: 0.8, peak: 0.16 });
+      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 600, d: 0.12, peak: 0.3 });
+    },
+  },
+  fwBoom: {
+    lvl: 0.7, wet: 0.45, gap: 0.04,
+    build(p, o, t, r) {
+      // a sharp report with a rolling tail (lighter than a shell)
+      p.nh(o, t, { type: 'bandpass', f: 1400 * r, q: 0.9, d: 0.06, peak: 0.8 });
+      p.th(o, t, { f: 85 * r, f2: 38, glide: 0.5, d: 0.7, peak: 0.8, drive: 1.5 });
+      p.nh(o, t, { kind: 'pink', type: 'lowpass', f: 1800 * r, f2: 220, sweep: 1, d: 1.2, peak: 0.6 });
+      p.crackle(o, t + 0.12, 0.5, 5, 2600, 0.12);
+    },
+  },
+  fwCrackle: {
+    lvl: 0.5, wet: 0.35, gap: 0.08,
+    build(p, o, t) {
+      // glitter: dozens of tiny pops
+      p.crackle(o, t, 1.3, 46, 3600, 0.5);
+      p.crackle(o, t + 0.1, 1.1, 24, 1900, 0.35);
+    },
+  },
   rifle: {
     lvl: 0.55, wet: 0.1, gap: 0.045,
     build(p, o, t, r) {

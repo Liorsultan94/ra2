@@ -8,10 +8,17 @@ import type { FogOfWar } from '../fog';
 import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
+import { roadNetFor } from './clearance';
+import { Emergency } from './emergency';
+import { People } from './people';
 import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
+import { MapLandmarks } from '../landmarks';
+import { Railway } from './rail';
+import { WaterTransport } from './ferry';
+import { AirTraffic } from './air';
 
 /*
  * "Life on the map": civilian traffic, grazing livestock and bird flocks.
@@ -53,7 +60,19 @@ export class AmbientLife {
   readonly birds: Birds;
   /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
   readonly river: RiverLife;
-  private lights = new LightSprites();
+  /** The map's set pieces (landmarks/), railways (rail.ts), ferry / canal boats (ferry.ts), civilian aircraft (air.ts). */
+  readonly landmarks: MapLandmarks;
+  readonly rail: Railway;
+  readonly water: WaterTransport;
+  readonly airTraffic: AirTraffic;
+  private clockT = 0;
+  private hours = 0;
+  /** Pedestrians: walkers, market, kids at play, evacuation (people.ts). */
+  readonly people: People;
+  /** Police cars and ambulances at destroyed civilian buildings (emergency.ts). */
+  readonly emergency: Emergency;
+  // (car lights, indicators and the traffic-light glow)
+  private lights = new LightSprites(448, 64);
   private dangers: Danger[] = [];
   private units = new Float32Array(512);
   private air = new Float32Array(128);
@@ -77,12 +96,23 @@ export class AmbientLife {
     // dynamic weather starts clear; foulness is then followed per frame from the live rain/dust level
     this.dynamicWx = host.atmos.cfg.weather === 'dynamic';
     const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
-    this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone);
-    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone);
+    this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone, world.players.map((p) => p.faction));
+    const net = roadNetFor(map, terrain.layout);
+    this.people = new People(map, terrain.layout, world, net, fog, probe, quality, phone);
+    this.emergency = new Emergency(map, net, fog, probe, this.lights, this.people.figures, quality, phone);
+    this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
+    this.emergency.snap = (x, y, r) => this.people.pavement(x, y, r);
+    this.emergency.ahead = (x, y, yaw, hw) => this.traffic.blockerAhead(x, y, yaw, hw);
+    this.traffic.headlight = (x, y, z, yaw, k) => this.host.atmos.night?.carLight(x, y, z, yaw, k);
+    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
     this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
-    this.group.add(this.traffic.group, this.animals.group, this.birds.group, this.river.group, this.lights.group);
+    this.landmarks = new MapLandmarks(map, fog, probe, this.lights, effects, quality, world.bridges);
+    this.rail = new Railway(map, fog, probe, this.lights, effects, quality);
+    this.water = new WaterTransport(map, terrain.river ?? null, fog, probe, this.lights, quality);
+    this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad, () => (host as unknown as { camera?: THREE.Camera }).camera?.position.y ?? 30);
+    this.group.add(this.traffic.group, this.people.group, this.emergency.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -113,13 +143,25 @@ export class AmbientLife {
         }
         const kill = Math.max(0.45, Math.min(3, (w.splash ?? 0.4) * 0.9 + 0.3 + (w.damage >= 300 ? 0.8 : 0)));
         this.danger(ev.x, ev.y, 6 + kill * 2.5, kill, Math.min(1, 0.5 + kill * 0.25));
+        // landmarks crumble, trains derail, the news helicopter takes note
+        this.landmarks.blast(ev.x, ev.y, kill);
+        this.rail.blast(ev.x, ev.y, kill);
+        this.airTraffic.blast(ev.x, ev.y, kill);
         break;
       }
       case 'airburst':
         this.danger(ev.x, ev.y, 6, 0, 0.6);
         break;
       case 'death': {
-        if (ev.kind === 'building') this.danger(ev.x, ev.y, 10, 1.6, 1);
+        if (ev.kind === 'building') {
+          this.danger(ev.x, ev.y, 10, 1.6, 1);
+          if (buildingDef(ev.def)?.role === 'civilian') {
+            this.people.houseDestroyed(ev.id);
+            this.emergency.incident(ev.x, ev.y);
+          }
+          // traffic lights close by lose power / get damaged
+          this.traffic.outage(ev.x, ev.y, buildingDef(ev.def)?.role === 'power');
+        }
         else {
           const u = unitDef(ev.def);
           if (u.category === 'vehicle' || u.air) this.danger(ev.x, ev.y, 8, 0.9, 0.9);
@@ -207,20 +249,54 @@ export class AmbientLife {
     f.vx1 = x1 + 3;
     f.vy1 = y1 + 3;
     this.traffic.update(f);
+    // far zoom: the walkers are a few pixels tall (LOD: fewer of them, no shadows)
+    this.people.far = ((this.host as AmbientHost & { zoom?: number }).zoom ?? 2) < 1.1;
+    this.people.update(f);
+    this.emergency.update(f);
     this.animals.update(f);
     this.birds.update(f);
     this.river.update(f);
     this.dangers.length = 0;
     this.lights.begin();
     this.traffic.draw(f, this.time);
-    this.animals.draw();
+    this.people.draw(f);
+    this.emergency.draw(f, this.time);
+    this.animals.draw(f);
     this.birds.draw();
     this.river.draw(f);
+    this.clockT -= dt;
+    if (this.clockT <= 0) {
+      this.clockT = 0.5;
+      const atm = this.host.atmos as unknown as { clock?: () => { hours: number } };
+      this.hours = typeof atm.clock === 'function' ? atm.clock().hours : 0;
+    }
+    this.landmarks.update(f, this.hours);
+    this.rail.update(f);
+    this.water.update(f);
+    this.airTraffic.update(f);
     this.lights.commit();
+  }
+
+  /**
+   * Positional sound for the ambient life (sirens). The game can set it; by
+   * default it reaches the game's AudioSystem through window.ironfront.
+   */
+  onSound: ((name: 'siren' | 'sirenHiLo', vol: number, pos: { x: number; y: number }) => void) | null = null;
+  private sndPos = { x: 0, y: 0 };
+  private sound(name: 'siren' | 'sirenHiLo', vol: number, x: number, y: number) {
+    this.sndPos.x = x;
+    this.sndPos.y = y;
+    if (this.onSound) return this.onSound(name, vol, this.sndPos);
+    try {
+      const g = (window as unknown as { ironfront?: { game?: { audio?: { play(n: string, v: number, p: { x: number; y: number }): void } } } }).ironfront?.game;
+      g?.audio?.play(name, vol, this.sndPos);
+    } catch {
+      /* no audio */
+    }
   }
 
   /** Debug / tests: counts and car states. */
   stats() {
-    return { cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
+    return { people: this.people.debug(), emergency: this.emergency.debug(), animalKinds: this.animals.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
   }
 }
