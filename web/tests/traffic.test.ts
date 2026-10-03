@@ -667,3 +667,121 @@ describe('bridge deck ends', () => {
     }
   });
 });
+
+describe('crossings, emergency vehicles and the car scale', () => {
+  /** A straight-ish paved stretch of 8 tiles with no junction on it. */
+  function stretch(n: RoadNet) {
+    for (let li = 0; li < n.lines.length; li++) {
+      const L = n.lines[li];
+      if (!L.paved || L.bridge >= 0 || L.lot >= 0 || L.len < 12) continue;
+      for (let a = 2; a + 8 < L.len - 2; a += 1) {
+        if (L.stops.some((s) => s.arc > a - 2 && s.arc < a + 10)) continue;
+        const p = pointAt(L, a);
+        const q = pointAt(L, a + 8);
+        if (Math.hypot(q.x - p.x, q.y - p.y) < 7.5) continue;
+        return { li, a };
+      }
+    }
+    throw new Error('no stretch');
+  }
+  const carAt = (n: RoadNet, li: number, arc: number, dir: number) => {
+    const L = n.lines[li];
+    const p = pointAt(L, arc);
+    const c = newDriveCar(0, SED, li, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
+    c.driving = true;
+    c.v = 1;
+    return c;
+  };
+
+  it('cars wait before a busy zebra / a closed level crossing and go on when it clears', () => {
+    const n = net('frontline');
+    const { li, a } = stretch(n);
+    for (const kind of [0, 1]) {
+      const h = { kind, line: li, arc: a + 5, gap: 0.4, x: 0, y: 0 };
+      let busy = true;
+      const drv = new Driver(n, () => true, rng(5));
+      drv.setHolds([h], () => busy);
+      const c = carAt(n, li, a, 1);
+      for (let t = 0; t < 12; t += 0.05) drv.step(c, [c], t, 0.05);
+      // stopped with the front bumper short of the stop line
+      expect(c.v).toBeLessThan(0.02);
+      const front = c.arc + c.len / 2;
+      expect(front).toBeLessThan(h.arc - h.gap + 0.05);
+      expect(front).toBeGreaterThan(h.arc - h.gap - 0.6);
+      busy = false;
+      for (let t = 12; t < 18; t += 0.05) drv.step(c, [c], t, 0.05);
+      expect(c.arc).toBeGreaterThan(h.arc + 1);
+    }
+  });
+
+  it('cars pull over and stop for a siren behind them, then drive on', () => {
+    const n = net('frontline');
+    const { li, a } = stretch(n);
+    const drv = new Driver(n, () => true, rng(6));
+    const c = carAt(n, li, a + 3, 1);
+    const L = n.lines[li];
+    const amb = { id: -1, x: 0, y: 0, yaw: 0, v: 1.4, loop: -1, ang: 0, left: 0, line: -1, dir: 1, driving: true, len: 1.08, wid: 0.43, siren: true };
+    let sa = a;
+    let stopped = false;
+    let maxOff = 0;
+    for (let t = 0; t < 10; t += 0.05) {
+      // the ambulance comes up from behind near the centre line
+      sa += 1.4 * 0.05;
+      const p = pointAt(L, sa);
+      amb.x = p.x - p.ty * L.lane * 0.4;
+      amb.y = p.y + p.tx * L.lane * 0.4;
+      amb.yaw = Math.atan2(p.ty, p.tx);
+      drv.step(c, [c, amb], t, 0.05);
+      const q = pointAt(L, c.arc);
+      maxOff = Math.max(maxOff, (c.x - q.x) * -q.ty + (c.y - q.y) * q.tx);
+      if (sa < c.arc && c.v < 0.02) stopped = true;
+      if (sa > c.arc + 6) break;
+    }
+    expect(stopped).toBe(true);
+    // over to the right of its lane
+    expect(maxOff).toBeGreaterThan(L.lane + 0.08);
+    for (let t = 10; t < 16; t += 0.05) drv.step(c, [c], t, 0.05);
+    expect(c.v).toBeGreaterThan(0.3);
+  });
+
+  it('cars ease round a vehicle parked at the kerb instead of queueing behind it', () => {
+    const n = net('frontline');
+    const { li, a } = stretch(n);
+    const L = n.lines[li];
+    const drv = new Driver(n, () => true, rng(7));
+    const c = carAt(n, li, a, 1);
+    const p = pointAt(L, a + 4);
+    const kerbOff = L.half - 0.2;
+    const parked = { id: -2, x: p.x - p.ty * kerbOff, y: p.y + p.tx * kerbOff, yaw: Math.atan2(p.ty, p.tx), v: 0, loop: -1, ang: 0, left: 0, line: -1, dir: 1, driving: false, len: 0.9, wid: 0.38, kerb: true };
+    let minClear = 1e9;
+    for (let t = 0; t < 12; t += 0.05) {
+      drv.step(c, [c, parked], t, 0.05);
+      const along = (c.x - parked.x) * Math.cos(parked.yaw) + (c.y - parked.y) * Math.sin(parked.yaw);
+      const lat = Math.abs((c.x - parked.x) * -Math.sin(parked.yaw) + (c.y - parked.y) * Math.cos(parked.yaw));
+      if (Math.abs(along) < 0.9) minClear = Math.min(minClear, lat);
+    }
+    // went past it, without driving through it
+    expect(c.arc).toBeGreaterThan(a + 6);
+    expect(minClear).toBeGreaterThan((0.38 + c.wid) / 2 - 0.03);
+  });
+
+  it('the lanes, bays and turning circles fit the enlarged cars', () => {
+    for (const id of MAPS) {
+      const n = net(id);
+      for (const L of n.lines) {
+        if (!L.paved || L.lot >= 0 || L.half < 0.38) continue;
+        // a car in its lane stays on the asphalt and clear of the oncoming lane
+        expect(L.lane + (0.21 * CAR_SCALE) / 2, `${id} lane ${L.lane} half ${L.half}`).toBeLessThanOrEqual(L.half + 0.02);
+        expect(L.lane * 2, `${id} lane ${L.lane}`).toBeGreaterThanOrEqual(0.21 * CAR_SCALE - 0.01);
+      }
+      for (const lot of n.lots) {
+        // bays hold a sedan / van (length) with room either side
+        for (let k = 1; k < lot.bays.length; k++) {
+          const d = Math.hypot(lot.bays[k].x - lot.bays[k - 1].x, lot.bays[k].y - lot.bays[k - 1].y);
+          if (d < 0.9) expect(d).toBeGreaterThan(0.21 * CAR_SCALE + 0.08);
+        }
+        expect((lot.D - 1.0) / 2).toBeGreaterThanOrEqual(0.54 * CAR_SCALE - 0.02);
+      }
+    }
+  });
+});
