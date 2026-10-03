@@ -46,6 +46,13 @@ const DUST = { value: new THREE.Color(0x9c8a68) };
 const MUD = { value: new THREE.Color(0x45382a) };
 const GRIME = { value: new THREE.Color(0x3a342c) };
 const WET = { value: 0 };
+/**
+ * Baked-vehicle look controls shared by every baked material: x = weathering strength (cavity grime,
+ * streaks, lower grime band), y = baked AO on the lighting, z = albedo gain, w = sky top-light fill.
+ * Also reachable as globalThis.__vehLook for in-game tuning / measurement.
+ */
+export const VEH_LOOK = { value: new THREE.Vector4(1, 1, 1, 0) };
+(globalThis as { __vehLook?: typeof VEH_LOOK }).__vehLook = VEH_LOOK;
 const BIOMES: Record<string, [number, number, number, number]> = {
   temperate: [0x948062, 0x3f3226, 0x352e26, 0.25],
   desert: [0xc4a878, 0x8c704c, 0x5a4a38, 0],
@@ -134,6 +141,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
   if (cfg.bake) {
     loadGrunge();
     shader.uniforms.uGrunge = GRUNGE;
+    shader.uniforms.uLook = VEH_LOOK;
   }
   const attr = cfg.dirt || cfg.loose;
   shader.vertexShader = shader.vertexShader.replace(
@@ -215,7 +223,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       uniform float uWet;
       varying vec3 vWPos;
       varying float vWDirt;
-      ${cfg.bake ? 'varying vec3 vWNrm;\n varying float vTone;\n uniform sampler2D uGrunge;' : ''}
+      ${cfg.bake ? 'varying vec3 vWNrm;\n varying float vTone;\n uniform sampler2D uGrunge;\n uniform vec4 uLook;' : ''}
       ${cfg.run ? 'varying float vRunY;' : ''}`,
     )
     .replace(
@@ -283,10 +291,16 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
       .replace(
         '#include <lights_fragment_end>',
         `#include <lights_fragment_end>
-        reflectedLight.indirectDiffuse *= wAO;
-        reflectedLight.indirectSpecular *= wAO * wAO;
-        reflectedLight.directDiffuse *= mix(1.0, wAO, 0.35);
-        reflectedLight.directSpecular *= mix(1.0, wAO, 0.7);`,
+        {
+          float wAOl = mix(1.0, wAO, uLook.y);
+          reflectedLight.indirectDiffuse *= wAOl;
+          reflectedLight.indirectSpecular *= wAOl * wAOl;
+          reflectedLight.directDiffuse *= mix(1.0, wAOl, 0.35);
+          reflectedLight.directSpecular *= mix(1.0, wAOl, 0.7);
+          // sky top-light: a soft fill on up-facing armour so decks and turret roofs read at RTS zoom
+          vec3 wUpV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          reflectedLight.indirectDiffuse += diffuseColor.rgb * uLook.w * (0.35 + 0.65 * max(dot(normal, wUpV), 0.0)) * wAOl;
+        }`,
       );
   }
 }
@@ -298,6 +312,7 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
 const BAKE_COLOR = /* glsl */ `
       vec4 wBk = texture2D(normalMap, vNormalMapUv);
       float wAO = clamp(wBk.b * 1.06, 0.0, 1.0);
+      diffuseColor.rgb *= uLook.z;
       float wEdge = wBk.a;
       float wRough = 0.0;
       float wBare = 0.0;
@@ -319,11 +334,11 @@ const BAKE_COLOR = /* glsl */ `
         diffuseColor.rgb *= (0.92 + 0.16 * wN0 + 0.08 * (wN1 - 0.5)) * (1.0 + wT * 0.16) * vec3(1.0 + wT * 0.05, 1.0, 1.0 - wT * 0.07);
         // cavities: seams, crevices, under fittings and modules (grime collects there)
         float wC = smoothstep(0.08, 0.9, wAO);
-        diffuseColor.rgb *= mix(0.3, 1.0, wC);
-        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, (1.0 - wC) * 0.38);
+        diffuseColor.rgb *= mix(1.0 - 0.7 * uLook.x, 1.0, wC);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uGrime, (1.0 - wC) * 0.38 * uLook.x);
         // rain / grime streaks down the vertical faces
         float wStreak = smoothstep(0.25, 0.85, wG.r) * wSide * (0.55 + 0.45 * wN1);
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.68 + uGrime * 0.12, wStreak * 0.55);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.68 + uGrime * 0.12, wStreak * 0.55 * uLook.x);
         // dust film on decks and roofs, thicker in their corners
         float wLow = clamp(vWDirt, 0.0, 1.0);
         float wDust = clamp(wUp * (0.32 + 0.55 * (1.0 - wAO)) * (0.4 + 1.1 * wG.g) + wSide * 0.08 * wG.g + wG.b * 0.25, 0.0, 1.0);
@@ -334,7 +349,7 @@ const BAKE_COLOR = /* glsl */ `
         float wMudK = smoothstep(0.22, 0.62, wHi);
         vec3 wDirtC = mix(uDust * 0.72, uMud, wMudK) * (0.85 + 0.3 * wN3);
         float wSpl = smoothstep(0.45, 0.7, wG.b + wN4 * 0.3) * smoothstep(0.05, 0.3, wLow) * (1.0 - wBand);
-        diffuseColor.rgb = mix(diffuseColor.rgb, wDirtC, clamp(wBand * 0.86 + wSpl * 0.7, 0.0, 1.0));
+        diffuseColor.rgb = mix(diffuseColor.rgb, wDirtC, clamp(wBand * 0.86 + wSpl * 0.7, 0.0, 1.0) * uLook.x);
         // worn edges: paint rubbed back and dusty-light, a little bare steel on the sharpest
         float wChip = smoothstep(0.3, 0.7, wN3 * 0.45 + wG.b * 0.6 + wN4 * 0.2 + wEdge * 0.3);
         float wE = wEdge * wChip * (1.0 - wBand);
