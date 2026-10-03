@@ -1,14 +1,16 @@
 import { it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import type { MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { buildRoadNet, netInput } from '../src/render/ambient/roadnet';
 it('net', () => {
-  const id = (process.env.TFMAP || 'winter') as MapId;
-  const m = createMap(id, 1);
-  const D = Math.SQRT1_2;
-  const br = m.bridges.map((b) => ({ ends: [{ x: b.x - (b.length / 2) * D, y: b.y + (b.length / 2) * D }, { x: b.x + (b.length / 2) * D, y: b.y - (b.length / 2) * D }] }));
-  const net = buildRoadNet(netInput(m, buildLayout(m), br));
-  const ctl = ['Free', 'Yield', 'Signal', 'Loop', 'TURN'];
-  net.nodes.forEach((n, i) => console.log(' N', i, ctl[n.ctl], n.x.toFixed(1), n.y.toFixed(1), 'arms', n.arms.map((a) => `${a.line}${a.dir > 0 ? '+' : '-'}${a.major ? '*' : ''}@${a.arc.toFixed(1)}`).join(' '), n.loop >= 0 ? `R=${net.loops[n.loop].R.toFixed(2)}` : ''));
+  for (const id of ['frontline', 'desert', 'winter'] as const) {
+    const m = createMap(id, 1);
+    const net = buildRoadNet(netInput(m, buildLayout(m), []));
+    const ctl = ['Free', 'Yield', 'Signal', 'Loop', 'TURN'];
+    net.nodes.forEach((n, i) => {
+      if (n.arms.length < 3) return;
+      const near = m.structures.filter((s) => Math.hypot(s.x + s.w / 2 - n.x, s.y + s.h / 2 - n.y) < 8).length;
+      console.log(id, ' N', i, ctl[n.ctl], n.x.toFixed(1), n.y.toFixed(1), 'arms', n.arms.map((a) => `${a.line}${net.lines[a.line].paved ? 'P' : 't'}`).join(' '), 'structs<8', near);
+    });
+  }
 });

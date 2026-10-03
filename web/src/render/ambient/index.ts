@@ -53,7 +53,8 @@ export class AmbientLife {
   readonly birds: Birds;
   /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
   readonly river: RiverLife;
-  private lights = new LightSprites();
+  // (car lights, indicators and the traffic-light glow)
+  private lights = new LightSprites(320, 48);
   private dangers: Danger[] = [];
   private units = new Float32Array(512);
   private air = new Float32Array(128);
@@ -119,7 +120,11 @@ export class AmbientLife {
         this.danger(ev.x, ev.y, 6, 0, 0.6);
         break;
       case 'death': {
-        if (ev.kind === 'building') this.danger(ev.x, ev.y, 10, 1.6, 1);
+        if (ev.kind === 'building') {
+          this.danger(ev.x, ev.y, 10, 1.6, 1);
+          // traffic lights close by lose power / get damaged
+          this.traffic.outage(ev.x, ev.y, buildingDef(ev.def)?.role === 'power');
+        }
         else {
           const u = unitDef(ev.def);
           if (u.category === 'vehicle' || u.air) this.danger(ev.x, ev.y, 8, 0.9, 0.9);

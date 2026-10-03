@@ -271,7 +271,7 @@ describe('driving by the rules (headless)', () => {
       let samples = 0;
       const still = new Map<number, number>();
       let longest = 0;
-      const list = simulate(n, +(process.env.TFN || 18), +(process.env.TFS || 150), 33 + id.length, (c, t) => {
+      const list = simulate(n, 24, 200, 33 + id.length, (c, t) => {
         samples++;
         const s = c.v < 0.02 ? (still.get(c.id) ?? 0) + 0.05 : 0;
         still.set(c.id, s);
@@ -329,6 +329,76 @@ describe('driving by the rules (headless)', () => {
     // and drives back up the road on the other lane
     expect(c.dir).toBe(arm.dir);
     expect(c.line).toBe(arm.line);
+  });
+
+  for (const id of ['frontline', 'winter', 'urban'] as MapId[])
+    it(`${id}: a 3-point turn (road blocked ahead) stays on the road and ends driving the other way`, () => {
+      const n = net(id);
+      const rand = rng(11);
+      let tested = 0;
+      for (let li = 0; li < n.lines.length && tested < 8; li++) {
+        const L = n.lines[li];
+        if (!L.paved || L.bridge >= 0 || L.a1 - L.a0 < 12) continue;
+        // a straight-ish stretch away from junctions
+        const arc = L.a0 + 4 + rand() * (L.a1 - L.a0 - 8);
+        const p = pointAt(L, arc);
+        if (n.nodes.some((nd) => Math.hypot(nd.x - p.x, nd.y - p.y) < 4)) continue;
+        const dir = rand() < 0.5 ? 1 : -1;
+        const c = newDriveCar(0, 0.5, li, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
+        c.v = 0.3;
+        c.driving = true;
+        const drv = new Driver(n, () => true, rng(2));
+        drv.startTurn(c);
+        let t = 0;
+        let reversed = false;
+        for (; t < 30 && c.kt; t += 0.05) {
+          drv.step(c, [c], t, 0.05);
+          if (c.v < -0.02) reversed = true;
+          let ok = onSurface(n, c.x, c.y);
+          for (let k = 0; k < 8 && !ok; k++) ok = onSurface(n, c.x + Math.cos(k * 0.785) * 0.1, c.y + Math.sin(k * 0.785) * 0.1);
+          expect(ok, `${id} line ${li} t ${t.toFixed(2)} at ${c.x.toFixed(2)},${c.y.toFixed(2)}`).toBe(true);
+        }
+        expect(c.kt).toBe(0);
+        expect(c.dir).toBe(-dir);
+        // narrow country roads need the reverse leg, wide city streets may not
+        if (L.half < 0.6) expect(reversed).toBe(true);
+        tested++;
+      }
+      expect(tested).toBeGreaterThan(2);
+    });
+
+  it('the side road gives way to traffic on the main road', () => {
+    const n = net('frontline');
+    const nd = n.nodes.find((x) => x.ctl === Ctl.Yield && x.arms.some((a) => !a.major && (a.dir > 0 ? n.lines[a.line].len - a.arc : a.arc) > 4) && x.arms.filter((a) => a.major).every((a) => (a.dir > 0 ? n.lines[a.line].len - a.arc : a.arc) > 6))!;
+    expect(nd).toBeTruthy();
+    const minor = nd.arms.find((a) => !a.major)!;
+    const major = nd.arms.find((a) => a.major)!;
+    const place = (arm: typeof minor, dist: number, v: number) => {
+      const L = n.lines[arm.line];
+      const arc = arm.arc + arm.dir * dist;
+      const dir = -arm.dir;
+      const p = pointAt(L, arc);
+      const c = newDriveCar(0, 0.5, arm.line, arc, dir, p.x - p.ty * dir * L.lane, p.y + p.tx * dir * L.lane, Math.atan2(p.ty * dir, p.tx * dir), 1.2) as SimCar;
+      c.v = v;
+      c.driving = true;
+      return c;
+    };
+    const side = place(minor, 2.2, 0.5);
+    const main = place(major, 4.5, 1.0);
+    const drv = new Driver(n, () => true, rng(9));
+    const cars = [side, main];
+    let sideWaited = false;
+    let mainPassed = -1;
+    let sideCrossed = -1;
+    for (let t = 0; t < 14; t += 0.05) {
+      for (const c of cars) drv.step(c, cars, t, 0.05);
+      if (side.waiting && side.v < 0.05) sideWaited = true;
+      if (mainPassed < 0 && main.passed >= 0) mainPassed = t;
+      if (sideCrossed < 0 && side.passed >= 0) sideCrossed = t;
+    }
+    expect(sideWaited).toBe(true);
+    expect(mainPassed).toBeGreaterThan(0);
+    expect(sideCrossed).toBeGreaterThan(mainPassed);
   });
 
   it('cars queue at a red light and pull away one after another on green', () => {

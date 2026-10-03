@@ -706,7 +706,8 @@ export class Props {
 
   /** Fetch the manifest, geometry and atlases, plan and build (resolves false on failure / low quality). */
   async load(base = 'props/'): Promise<boolean> {
-    if (this.quality === 'low' || typeof fetch === 'undefined') return false;
+    // ?props=0 switches them off (comparison shots / debugging)
+    if (this.quality === 'low' || typeof fetch === 'undefined' || /[?&]props=0\b/.test(location.search)) return false;
     try {
       const res = await fetch(base + 'props.json');
       if (!res.ok) return false;
@@ -791,6 +792,15 @@ export class Props {
   counts(): Record<string, number> {
     const o: Record<string, number> = {};
     for (const k of this.kinds) o[k.id] = k.ci.size;
+    return o;
+  }
+
+  /** Instance positions of one prop kind (debug / screenshots). */
+  spots(id: string): [number, number][] {
+    const k = this.kinds.find((q) => q.id === id);
+    if (!k) return [];
+    const o: [number, number][] = [];
+    for (let j = 0; j < k.ci.size; j++) o.push([k.ci.posX(j), k.ci.posZ(j)]);
     return o;
   }
 

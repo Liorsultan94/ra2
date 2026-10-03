@@ -1,0 +1,662 @@
+import * as THREE from 'three';
+import { BRIDGE_HEIGHT, type GameMap } from '../../sim/map';
+import type { FogOfWar } from '../fog';
+import { surfaceHeight } from '../ground';
+import { Light, MarkKind, PropKind, headLight, type Mark, type RoadNet } from './roadnet';
+import { groundAt, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
+
+/*
+ * Road furniture of the civilian traffic (roadnet.ts decides where):
+ *
+ *  - markings as one static decal mesh over the ground and the road ribbons
+ *    (polygon offset, conforming to the terrain): turning circles /
+ *    roundabouts (asphalt ring, striped kerb, island), gravel turning loops,
+ *    stop lines, give-way "shark teeth", zebra crossings and the short links
+ *    where a road or track stops short of the road it joins. One atlas
+ *    texture painted for the map's biome (dusty desert, snowy winter, crisp
+ *    city asphalt), one draw call;
+ *  - traffic lights (pole + head, the lit lamp as a separate unlit instance
+ *    and a LightSprites flare that glows at night), give-way and stop signs,
+ *    roundabout island kerbs and shrubs: instanced, low-poly, one shared
+ *    material, fog-of-war culled, hidden at far zoom and skipped on low
+ *    quality (the rules still apply).
+ *
+ * Draw calls: decals 1, poles 1, heads 1, lit lamps 1, give-way signs 1,
+ * stop signs 1, kerbs 1, shrubs 1 (empty ones are skipped).
+ */
+
+const LIFT = 0.045;
+/** View width (tiles) beyond which the furniture is hidden. */
+const FAR = 62;
+
+const C = (hex: number) => new THREE.Color(hex);
+
+// ------------------------------------------------------------------ atlas
+
+interface Pal {
+  asphalt: [number, number, number];
+  shoulder: [number, number, number];
+  gravel: [number, number, number];
+  island: [number, number, number];
+  islandAlt: [number, number, number];
+  paint: [number, number, number];
+  urban: boolean;
+}
+
+function palette(biome: GameMap['biome']): Pal {
+  switch (biome) {
+    case 'desert':
+      return { asphalt: [104, 96, 86], shoulder: [168, 140, 104], gravel: [176, 150, 112], island: [190, 160, 118], islandAlt: [150, 140, 90], paint: [226, 218, 196], urban: false };
+    case 'winter':
+      return { asphalt: [150, 156, 166], shoulder: [196, 202, 212], gravel: [170, 168, 166], island: [222, 228, 236], islandAlt: [190, 198, 206], paint: [236, 238, 240], urban: false };
+    case 'urban':
+      return { asphalt: [92, 94, 98], shoulder: [150, 148, 142], gravel: [128, 120, 108], island: [82, 120, 58], islandAlt: [66, 104, 46], paint: [236, 234, 226], urban: true };
+    default:
+      return { asphalt: [70, 71, 75], shoulder: [118, 108, 92], gravel: [128, 116, 96], island: [86, 118, 56], islandAlt: [70, 100, 44], paint: [228, 226, 216], urban: false };
+  }
+}
+
+function hash(x: number, y: number, s: number) {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/** Smooth value noise in [0, 1). */
+function vnoise(x: number, y: number, s: number) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy, s);
+  const b = hash(ix + 1, iy, s);
+  const c = hash(ix, iy + 1, s);
+  const d = hash(ix + 1, iy + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+const CELL = 256;
+
+/** Atlas cells (uv rects): paved disc, gravel disc, strip rows (stop bar, teeth, zebra, asphalt link) and a gravel link. */
+const UV = {
+  disc: [0, 0, 0.5, 0.5],
+  gravel: [0.5, 0, 1, 0.5],
+  bar: [0, 0.5, 0.5, 0.625],
+  teeth: [0, 0.625, 0.5, 0.75],
+  zebra: [0, 0.75, 0.5, 0.875],
+  asphalt: [0, 0.875, 0.5, 1],
+  gravel2: [0.5, 0.5, 1, 1],
+} as const;
+
+function paintAtlas(pal: Pal): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const S = CELL * 2;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return null;
+  const img = ctx.createImageData(S, S);
+  const d = img.data;
+  const put = (x: number, y: number, c: readonly number[], a = 255) => {
+    const o = (y * S + x) * 4;
+    d[o] = Math.max(0, Math.min(255, c[0]));
+    d[o + 1] = Math.max(0, Math.min(255, c[1]));
+    d[o + 2] = Math.max(0, Math.min(255, c[2]));
+    d[o + 3] = a;
+  };
+  const shade = (c: readonly number[], k: number) => [c[0] * k, c[1] * k, c[2] * k];
+  const mix = (a: readonly number[], b: readonly number[], t: number) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const asph = (x: number, y: number) => {
+    const n = vnoise(x / 9, y / 9, 3) * 0.6 + vnoise(x / 3, y / 3, 4) * 0.4;
+    return shade(pal.asphalt, 0.86 + n * 0.2 + (hash(x, y, 5) - 0.5) * 0.12);
+  };
+  const grav = (x: number, y: number, base: readonly number[]) => shade(base, 0.8 + vnoise(x / 5, y / 5, 7) * 0.25 + (hash(x, y, 8) - 0.5) * 0.35);
+  // paved turning circle: asphalt ring, striped kerb round the island, island (grass / sand / snow)
+  for (let y = 0; y < CELL; y++)
+    for (let x = 0; x < CELL; x++) {
+      const dx = (x + 0.5) / (CELL / 2) - 1;
+      const dy = (y + 0.5) / (CELL / 2) - 1;
+      const r = Math.hypot(dx, dy);
+      const ang = Math.atan2(dy, dx);
+      const rag = (vnoise(ang * 9 + 20, 0.5, 11) - 0.5) * 0.04;
+      if (r > 1 + (pal.urban ? 0 : rag)) {
+        put(x, y, [0, 0, 0], 0);
+        continue;
+      }
+      let c: number[];
+      if (r < 0.42) {
+        if (r > 0.37) {
+          // kerb: alternating light / dark blocks
+          const seg = Math.floor(((ang + Math.PI) / (Math.PI * 2)) * 24) % 2;
+          c = seg ? [222, 220, 212] : pal.urban ? [70, 72, 76] : [196, 60, 50];
+          c = shade(c, 0.9 + hash(x, y, 12) * 0.12);
+        } else {
+          const n = vnoise(x / 6, y / 6, 13);
+          c = shade(mix(pal.island, pal.islandAlt, n), 0.85 + hash(x, y, 14) * 0.25);
+        }
+      } else {
+        c = asph(x, y);
+        // tyre-polished circulating lane, oil stains in the middle of it
+        c = shade(c, 1 - Math.exp(-Math.pow((r - 0.72) / 0.08, 2)) * 0.08);
+        if (r > 0.93) c = pal.urban ? shade([168, 166, 160], 0.9 + hash(x, y, 15) * 0.15) : mix(c, grav(x, y, pal.shoulder), Math.min(1, (r - 0.93) / 0.05));
+        // inner edge line (dashed) round the island
+        if (Math.abs(r - 0.455) < 0.008 && Math.floor(((ang + Math.PI) / (Math.PI * 2)) * 36) % 2 === 0) c = mix(c, pal.paint, 0.85);
+      }
+      put(x, y, c);
+    }
+  // gravel turning loop of a dirt track
+  for (let y = 0; y < CELL; y++)
+    for (let x = 0; x < CELL; x++) {
+      const dx = (x + 0.5) / (CELL / 2) - 1;
+      const dy = (y + 0.5) / (CELL / 2) - 1;
+      const r = Math.hypot(dx, dy);
+      const ang = Math.atan2(dy, dx);
+      const edge = 0.86 + (vnoise(ang * 7 + 3, 1.5, 17) - 0.5) * 0.18;
+      if (r > edge) {
+        put(CELL + x, y, [0, 0, 0], 0);
+        continue;
+      }
+      let c = grav(x, y, pal.gravel);
+      // ruts round the loop
+      c = shade(c, 1 - Math.exp(-Math.pow((Math.abs(r - 0.55) - 0.07) / 0.035, 2)) * 0.22);
+      put(CELL + x, y, c);
+    }
+  // strip rows: stop bar, give-way teeth, zebra stripes, asphalt link
+  const RH = CELL / 4;
+  for (let row = 0; row < 4; row++)
+    for (let y = 0; y < RH / 2; y++)
+      for (let x = 0; x < CELL; x++) {
+        const py = CELL + row * (RH / 2) + y;
+        const u = (x + 0.5) / CELL; // along (car side at u = 0)
+        const v = (y + 0.5) / (RH / 2); // across
+        const wear = 0.82 + vnoise(x / 6, y / 3 + row * 7, 19) * 0.25;
+        let a = 255;
+        let c: number[] = shade(pal.paint, wear);
+        if (row === 0) {
+          // stop line: solid, a little ragged at the ends
+          if (v < 0.03 || v > 0.97) a = 0;
+        } else if (row === 1) {
+          // shark teeth: apex towards the approaching car
+          const k = (v * 7) % 1;
+          if (Math.abs(k - 0.5) * 2 > u * 0.92 || k < 0.08 || k > 0.92) a = 0;
+        } else if (row === 2) {
+          // zebra: stripes along the road, alternating across it
+          const k = (v * 9) % 1;
+          if (k > 0.55 || u < 0.03 || u > 0.97) a = 0;
+        } else {
+          c = asph(x, py);
+          if (v < 0.06 || v > 0.94) c = mix(c, grav(x, py, pal.shoulder), 0.7);
+          if (v < 0.015 || v > 0.985) a = 0;
+        }
+        put(x, py, c, a);
+      }
+  // gravel link
+  for (let y = 0; y < CELL; y++)
+    for (let x = 0; x < CELL; x++) {
+      const v = (y + 0.5) / CELL;
+      const rag = (vnoise(x / 12, 4.5, 23) - 0.5) * 0.12;
+      put(CELL + x, CELL + y, grav(x, y + 900, pal.gravel), v < 0.06 + rag || v > 0.94 - rag ? 0 : 255);
+    }
+  ctx.putImageData(img, 0, 0);
+  return cv;
+}
+
+// ------------------------------------------------------------------ geometry helpers
+
+function paint(g: THREE.BufferGeometry, col: THREE.Color): THREE.BufferGeometry {
+  const ng = g.index ? g.toNonIndexed() : g;
+  const n = ng.attributes.position.count;
+  const c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    c[i * 3] = col.r;
+    c[i * 3 + 1] = col.g;
+    c[i * 3 + 2] = col.b;
+  }
+  ng.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  ng.deleteAttribute('uv');
+  return ng;
+}
+
+function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  let n = 0;
+  for (const p of parts) n += p.attributes.position.count;
+  const pos = new Float32Array(n * 3);
+  const nor = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  let o = 0;
+  for (const p of parts) {
+    if (!p.attributes.normal) p.computeVertexNormals();
+    pos.set(p.attributes.position.array as Float32Array, o * 3);
+    nor.set(p.attributes.normal.array as Float32Array, o * 3);
+    col.set(p.attributes.color.array as Float32Array, o * 3);
+    o += p.attributes.position.count;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+/** Flat polygon in the local YZ plane (facing +X) at depth x. */
+function plate(pts: [number, number][], x: number, col: THREE.Color, back = false): THREE.BufferGeometry {
+  const pos: number[] = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const tri = back ? [pts[0], pts[i + 1], pts[i]] : [pts[0], pts[i], pts[i + 1]];
+    for (const [y, z] of tri) pos.push(x, y, -z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return paint(g, col);
+}
+
+const poly = (n: number, r: number, cy: number, rot: number): [number, number][] => Array.from({ length: n }, (_, i) => [cy + Math.sin(rot + (i / n) * Math.PI * 2) * r, Math.cos(rot + (i / n) * Math.PI * 2) * r] as [number, number]);
+
+/** Traffic light head (facing +X), on top of a pole of height POLE_H. */
+const POLE_H = 0.44;
+const HEAD_Y = 0.52;
+const LAMP_DY = 0.048;
+function headGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const body = C(0x1c1f1d);
+  parts.push(paint(new THREE.BoxGeometry(0.05, 0.16, 0.056).translate(0, HEAD_Y, 0), body));
+  // backboard with a white rim (shows against dark ground)
+  parts.push(paint(new THREE.BoxGeometry(0.006, 0.19, 0.088).translate(-0.028, HEAD_Y, 0), C(0xe8e8e2)));
+  parts.push(paint(new THREE.BoxGeometry(0.008, 0.176, 0.074).translate(-0.024, HEAD_Y, 0), body));
+  for (const k of [-1, 0, 1]) {
+    const y = HEAD_Y - k * LAMP_DY;
+    parts.push(paint(new THREE.BoxGeometry(0.006, 0.034, 0.034).translate(0.027, y, 0), C(0x2a2a26))); // dark lens
+    parts.push(paint(new THREE.BoxGeometry(0.03, 0.005, 0.044).translate(0.04, y + 0.021, 0), body)); // visor
+  }
+  return merge(parts);
+}
+
+function giveWayGeometry(): THREE.BufferGeometry {
+  const y = 0.37;
+  // inverted triangle: red rim, white face
+  const tri = (r: number): [number, number][] => [
+    [y - r, 0],
+    [y + r * 0.5, r * 0.866],
+    [y + r * 0.5, -r * 0.866],
+  ];
+  return merge([plate(tri(0.075), 0.012, C(0xc8201c)), plate(tri(0.046), 0.0135, C(0xf2f2ee)), plate(tri(0.075), 0.01, C(0x8a8c8e), true)]);
+}
+
+function stopGeometry(): THREE.BufferGeometry {
+  const y = 0.37;
+  const bar: [number, number][] = [
+    [y - 0.008, -0.034],
+    [y - 0.008, 0.034],
+    [y + 0.008, 0.034],
+    [y + 0.008, -0.034],
+  ];
+  return merge([plate(poly(8, 0.058, y, Math.PI / 8), 0.012, C(0xc01818)), plate(bar, 0.0135, C(0xf4f4f0)), plate(poly(8, 0.058, y, Math.PI / 8), 0.01, C(0x8a8c8e), true)]);
+}
+
+function kerbGeometry(urban: boolean): THREE.BufferGeometry {
+  const col = urban ? C(0xc9c8c2) : C(0xbdbab2);
+  const wall = new THREE.CylinderGeometry(1, 1, 0.07, 28, 1, true).translate(0, 0.012, 0);
+  const top = new THREE.RingGeometry(0.9, 1, 28, 1).rotateX(-Math.PI / 2).translate(0, 0.047, 0);
+  return merge([paint(wall, col), paint(top, col)]);
+}
+
+function shrubGeometry(biome: GameMap['biome']): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, 0).toNonIndexed();
+  g.computeVertexNormals();
+  const base = biome === 'desert' ? C(0x7d7a3e) : biome === 'winter' ? C(0x2f4a36) : C(0x3f6e2a);
+  const top = biome === 'winter' ? C(0xe8edf2) : biome === 'desert' ? C(0x9b9450) : C(0x5d8f3a);
+  const P = g.attributes.position;
+  const col = new Float32Array(P.count * 3);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < P.count; i++) {
+    tmp.copy(base).lerp(top, Math.max(0, Math.min(1, P.getY(i) * 0.9 + 0.3)));
+    col[i * 3] = tmp.r;
+    col[i * 3 + 1] = tmp.g;
+    col[i * 3 + 2] = tmp.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.deleteAttribute('uv');
+  return g;
+}
+
+// ------------------------------------------------------------------ furniture
+
+interface Item {
+  x: number;
+  y: number;
+  yaw: number;
+  /** Uniform scale (kerbs: island radius; shrubs: size; poles: height). */
+  s: number;
+  h: number;
+}
+
+interface Head extends Item {
+  sig: number;
+  axis: number;
+}
+
+/** How an item's `s` scales its instance: 0 uniform, 1 height only (poles), 2 radius only (kerbs). */
+type ScaleMode = 0 | 1 | 2;
+
+class Bank {
+  readonly mesh: THREE.InstancedMesh;
+  n = 0;
+  constructor(geo: THREE.BufferGeometry, mat: THREE.Material, readonly items: Item[], name: string, shadow: boolean, readonly mode: ScaleMode) {
+    const m = new THREE.InstancedMesh(geo, mat, Math.max(1, items.length));
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.frustumCulled = false;
+    m.castShadow = shadow;
+    m.receiveShadow = false;
+    m.count = 0;
+    m.visible = false;
+    m.name = name;
+    this.mesh = m;
+  }
+}
+
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _p = new THREE.Vector3();
+const _s = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _c = new THREE.Color();
+
+export class RoadFurniture {
+  readonly group = new THREE.Group();
+  private banks: Bank[] = [];
+  private heads: Head[] = [];
+  private lamps: THREE.InstancedMesh | null = null;
+  /** Visible heads (indices into `heads`), refreshed with the static banks. */
+  private visHeads: number[] = [];
+  private refreshT = 0;
+  private lastView = [0, 0, 0, 0];
+  private hidden = false;
+
+  constructor(
+    private map: GameMap,
+    private net: RoadNet,
+    fog: FogOfWar,
+    private probe: FogProbe,
+    private lights: LightSprites,
+    quality: Quality,
+  ) {
+    this.group.name = 'road-furniture';
+    this.buildDecals(fog);
+    if (quality === 'low') return; // the rules still apply, the hardware isn't drawn
+    const mat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.15 }));
+    const shadow = quality === 'high';
+    const poles: Item[] = [];
+    const give: Item[] = [];
+    const stop: Item[] = [];
+    const kerbs: Item[] = [];
+    const shrubs: Item[] = [];
+    const m = map;
+    for (const p of net.props) {
+      const h = groundAt(m, p.x, p.y);
+      if (p.kind === PropKind.Light) {
+        poles.push({ x: p.x, y: p.y, yaw: 0, s: POLE_H + 0.02, h });
+        this.heads.push({ x: p.x, y: p.y, yaw: p.yaw, s: 1, h, sig: p.ref, axis: p.axis });
+      } else if (p.kind === PropKind.GiveWay || p.kind === PropKind.StopSign) {
+        poles.push({ x: p.x, y: p.y, yaw: 0, s: 0.4, h });
+        (p.kind === PropKind.GiveWay ? give : stop).push({ x: p.x, y: p.y, yaw: p.yaw, s: 1, h });
+      } else if (p.kind === PropKind.Island) {
+        kerbs.push({ x: p.x, y: p.y, yaw: 0, s: p.size, h: surfaceHeight(m, p.x, p.y) + LIFT - 0.02 });
+        // a few shrubs on the island (deterministic per island)
+        const n = map.biome === 'desert' ? 3 : 5;
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + hash(k, p.ref, 31) * 0.8;
+          const r = k === 0 ? 0 : p.size * (0.45 + hash(k, p.ref, 32) * 0.2);
+          const x = p.x + Math.cos(a) * r;
+          const y = p.y + Math.sin(a) * r;
+          const s = (k === 0 ? 0.13 : 0.075) * (0.8 + hash(k, p.ref, 33) * 0.4) * Math.min(1, p.size / 0.6);
+          shrubs.push({ x, y, yaw: a * 3, s, h: surfaceHeight(m, x, y) + LIFT + s * 0.5 });
+        }
+      }
+    }
+    const pole = paint(new THREE.CylinderGeometry(0.014, 0.018, 1, 6, 1).translate(0, 0.5, 0), C(0x8d9094));
+    const add = (geo: THREE.BufferGeometry, items: Item[], name: string, sh: boolean, mode: ScaleMode = 0) => {
+      if (!items.length) return null;
+      const b = new Bank(geo, mat, items, name, sh, mode);
+      this.banks.push(b);
+      this.group.add(b.mesh);
+      return b;
+    };
+    add(pole, poles, 'furn-poles', shadow, 1);
+    add(headGeometry(), this.heads, 'furn-heads', shadow);
+    add(giveWayGeometry(), give, 'furn-giveway', false);
+    add(stopGeometry(), stop, 'furn-stop', false);
+    add(kerbGeometry(map.biome === 'urban'), kerbs, 'furn-kerbs', false, 2);
+    add(shrubGeometry(map.biome), shrubs, 'furn-shrubs', shadow);
+    if (this.heads.length) {
+      // the lit lamp: unlit, bright, coloured per instance
+      const lm = new THREE.InstancedMesh(new THREE.BoxGeometry(0.008, 0.032, 0.032), new THREE.MeshBasicMaterial({ toneMapped: false }), this.heads.length);
+      lm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      lm.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.heads.length * 3), 3);
+      lm.instanceColor.setUsage(THREE.DynamicDrawUsage);
+      lm.frustumCulled = false;
+      lm.count = 0;
+      lm.visible = false;
+      lm.name = 'furn-lamps';
+      this.lamps = lm;
+      this.group.add(lm);
+    }
+  }
+
+  // ---------------------------------------------------------------- decals
+
+  private buildDecals(fog: FogOfWar) {
+    const marks = this.net.marks;
+    if (!marks.length) return;
+    const m = this.map;
+    const pal = palette(m.biome);
+    const canvas = paintAtlas(pal);
+    // bridge ramps: the road ribbons lift onto the decks near the bridge ends
+    const D = Math.SQRT1_2;
+    const ends = m.bridges.flatMap((br) => {
+      const h = br.length / 2;
+      return [
+        { x: br.x - h * D, y: br.y + h * D },
+        { x: br.x + h * D, y: br.y - h * D },
+      ];
+    });
+    const height = (x: number, y: number) => {
+      const g = surfaceHeight(m, x, y);
+      let lift = 0;
+      for (const e of ends) {
+        const d = Math.hypot(x - e.x, y - e.y);
+        if (d < 2.2) lift = Math.max(lift, 1 - d / 2.2);
+      }
+      return Math.max(g + LIFT, lift > 0 ? g + (BRIDGE_HEIGHT + 0.01 - g) * Math.min(1, lift * 1.15) + 0.015 : -9);
+    };
+    const pos: number[] = [];
+    const uv: number[] = [];
+    const idx: number[] = [];
+    const quad = (mk: Mark, rect: readonly number[], disc: boolean) => {
+      const [u0, v0, u1, v1] = rect;
+      const ca = Math.cos(mk.ang);
+      const sa = Math.sin(mk.ang);
+      const L = disc ? mk.len * 2 : mk.len;
+      const Wd = disc ? mk.len * 2 : mk.wid;
+      const nu = Math.max(1, Math.ceil(L / 0.3));
+      const nv = Math.max(1, Math.ceil(Wd / 0.3));
+      const base = pos.length / 3;
+      for (let j = 0; j <= nv; j++)
+        for (let i = 0; i <= nu; i++) {
+          const a = (i / nu - 0.5) * L; // along
+          const b = (j / nv - 0.5) * Wd; // across
+          const x = mk.x + ca * a - sa * b;
+          const y = mk.y + sa * a + ca * b;
+          pos.push(x, height(x, y), y);
+          // canvas rows grow downwards: v = 1 - row
+          uv.push(u0 + (u1 - u0) * (i / nu), 1 - (v0 + (v1 - v0) * (j / nv)));
+        }
+      for (let j = 0; j < nv; j++)
+        for (let i = 0; i < nu; i++) {
+          const a = base + j * (nu + 1) + i;
+          const b = a + 1;
+          const c = a + nu + 1;
+          const d = c + 1;
+          idx.push(a, c, b, b, c, d);
+        }
+    };
+    for (const mk of marks) {
+      switch (mk.kind) {
+        case MarkKind.Disc:
+          quad(mk, UV.disc, true);
+          break;
+        case MarkKind.Gravel:
+          quad(mk, UV.gravel, true);
+          break;
+        case MarkKind.Bar:
+          quad(mk, UV.bar, false);
+          break;
+        case MarkKind.Teeth:
+          quad(mk, UV.teeth, false);
+          break;
+        case MarkKind.Zebra:
+          quad(mk, UV.zebra, false);
+          break;
+        case MarkKind.Asphalt:
+          quad(mk, UV.asphalt, false);
+          break;
+        case MarkKind.Gravel2:
+          quad(mk, UV.gravel2, false);
+          break;
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    const tex = canvas ? new THREE.CanvasTexture(canvas) : null;
+    if (tex) {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+    }
+    const mat = new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 0.92, metalness: 0, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 });
+    const bc = m.biome === 'desert' ? 1 : m.biome === 'winter' ? 2 : 0;
+    if (bc) {
+      // desert: drifting sand; winter: snow lying on it (world-space noise, like the road ribbons)
+      mat.onBeforeCompile = (sh) => {
+        sh.fragmentShader = sh.fragmentShader.replace(
+          '#include <map_fragment>',
+          `#include <map_fragment>
+          {
+            float rn = texture2D( fogNoise, vFogP.xz * 0.21 ).r * 0.6 + texture2D( fogNoise, vFogP.xz * 0.9 ).g * 0.4;
+            #if FURN_BIOME == 1
+              diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.66, 0.53, 0.36 ) * ( 0.88 + rn * 0.2 ), smoothstep( 0.55, 0.8, rn ) * 0.75 );
+            #else
+              diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.8, 0.84, 0.9 ) * ( 0.92 + rn * 0.12 ), smoothstep( 0.42, 0.78, rn ) * 0.6 );
+            #endif
+          }`,
+        );
+      };
+      mat.defines = { ...mat.defines, FURN_BIOME: bc };
+    }
+    fog.apply(mat);
+    mat.customProgramCacheKey = () => 'fog2-roadfurn-b' + bc;
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.receiveShadow = true;
+    mesh.name = 'road-markings';
+    mesh.renderOrder = 1;
+    this.group.add(mesh);
+  }
+
+  // ---------------------------------------------------------------- per frame
+
+  /** Repack the static banks for what's in view and not under the fog (a few times a second). */
+  private refresh(f: AmbientFrame) {
+    const vis = (it: Item) => it.x > f.vx0 && it.x < f.vx1 && it.y > f.vy0 && it.y < f.vy1 && this.probe.visible(it.x, it.y);
+    for (const b of this.banks) {
+      let n = 0;
+      for (const it of b.items) {
+        if (!vis(it)) continue;
+        _q.setFromAxisAngle(_up, -it.yaw);
+        if (b.mode === 1) _s.set(1, it.s, 1);
+        else if (b.mode === 2) _s.set(it.s, 1, it.s);
+        else _s.set(it.s, it.s, it.s);
+        _m.compose(_p.set(it.x, it.h, it.y), _q, _s);
+        b.mesh.setMatrixAt(n++, _m);
+      }
+      b.n = n;
+      b.mesh.count = n;
+      b.mesh.visible = n > 0;
+      if (n) {
+        b.mesh.instanceMatrix.clearUpdateRanges();
+        b.mesh.instanceMatrix.addUpdateRange(0, n * 16);
+        b.mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
+    this.visHeads.length = 0;
+    this.heads.forEach((hd, i) => {
+      if (vis(hd)) this.visHeads.push(i);
+    });
+  }
+
+  draw(f: AmbientFrame, time: number) {
+    if (!this.banks.length && !this.lamps) return;
+    const far = f.vx1 - f.vx0 > FAR;
+    if (far) {
+      if (!this.hidden) {
+        for (const b of this.banks) b.mesh.visible = false;
+        if (this.lamps) this.lamps.visible = false;
+        this.hidden = true;
+      }
+      return;
+    }
+    const v = this.lastView;
+    this.refreshT -= f.dt;
+    if (this.hidden || this.refreshT <= 0 || Math.abs(v[0] - f.vx0) + Math.abs(v[1] - f.vy0) + Math.abs(v[2] - f.vx1) + Math.abs(v[3] - f.vy1) > 1.5) {
+      this.refreshT = 0.3;
+      v[0] = f.vx0;
+      v[1] = f.vy0;
+      v[2] = f.vx1;
+      v[3] = f.vy1;
+      this.refresh(f);
+      this.hidden = false;
+    }
+    // lit lamps (and their glow) follow the signal state every frame
+    const lm = this.lamps;
+    if (!lm) return;
+    const dk = f.dark;
+    let n = 0;
+    for (const i of this.visHeads) {
+      const hd = this.heads[i];
+      const sg = this.net.signals[hd.sig];
+      const light = headLight(sg.mode, time + sg.offset, hd.axis);
+      if (light === Light.Off) continue;
+      const ly = hd.h + HEAD_Y + (light === Light.Red ? LAMP_DY : light === Light.Amber ? 0 : -LAMP_DY);
+      const fx = Math.cos(hd.yaw);
+      const fy = Math.sin(hd.yaw);
+      _q.setFromAxisAngle(_up, -hd.yaw);
+      _m.compose(_p.set(hd.x + fx * 0.029, ly, hd.y + fy * 0.029), _q, _s.set(1, 1, 1));
+      lm.setMatrixAt(n, _m);
+      if (light === Light.Red) _c.setRGB(2.4, 0.12, 0.06);
+      else if (light === Light.Amber) _c.setRGB(2.4, 1.1, 0.05);
+      else _c.setRGB(0.15, 2.2, 0.75);
+      lm.setColorAt(n++, _c);
+      // glow: a soft flare, stronger at night
+      const k = 0.35 + dk * 1.3;
+      this.lights.flare(hd.x + fx * 0.05, ly, hd.y + fy * 0.05, 0.07 + dk * 0.06, _c.r * k * 0.8, _c.g * k * 0.8, _c.b * k * 0.8);
+    }
+    lm.count = n;
+    lm.visible = n > 0;
+    if (n) {
+      lm.instanceMatrix.clearUpdateRanges();
+      lm.instanceMatrix.addUpdateRange(0, n * 16);
+      lm.instanceMatrix.needsUpdate = true;
+      const ic = lm.instanceColor!;
+      ic.clearUpdateRanges();
+      ic.addUpdateRange(0, n * 3);
+      ic.needsUpdate = true;
+    }
+  }
+}

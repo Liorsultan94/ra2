@@ -8,13 +8,13 @@
    "albedo": "props-albedo-256.webp",
    "normal": "props-normal-256.webp",
    "orm": "props-orm-256.webp",
-   "bytes": 395774
+   "bytes": 395478
   },
   "512": {
    "albedo": "props-albedo-512.webp",
    "normal": "props-normal-512.webp",
    "orm": "props-orm-512.webp",
-   "bytes": 1302298
+   "bytes": 1301714
   }
  },
  "props": {
@@ -697,8 +697,8 @@
   }
  },
  "tiers": {
-  "medium": 811946,
-  "high": 1718470
+  "medium": 811650,
+  "high": 1717886
  },
  "modelBytes": 416172
 }
