@@ -57,7 +57,7 @@ const LOOKS = {
   /** Thunderstorm (on top of rain): darker, flatter, greener. */
   storm: L({ temp: -0.06, tint: -0.04, sat: 0.68, protect: 0.8, contrast: 1.05, lift: [0.008, 0.013, 0.014], gain: [0.93, 0.95, 0.95], shadowTint: [-0.008, 0.008, 0.01], highTint: [-0.006, 0.006, 0.004] }),
   /** Sandstorm: ochre haze, compressed contrast. */
-  sand: L({ temp: 0.16, tint: 0.01, sat: 0.88, protect: 0.75, contrast: 0.96, lift: [0.026, 0.016, 0.0], gain: [1.03, 0.98, 0.84], shadowTint: [0.014, 0.005, -0.016], highTint: [0.045, 0.022, -0.045] }),
+  sand: L({ temp: 0.07, tint: 0.006, sat: 0.84, protect: 0.85, contrast: 0.96, lift: [0.022, 0.016, 0.006], gain: [1.02, 0.99, 0.93], shadowTint: [0.01, 0.004, -0.01], highTint: [0.025, 0.012, -0.025] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };

@@ -39,7 +39,7 @@ describe('post grade: look weights from time of day and weather', () => {
     g.blend(base({ rain: 1, storm: 1 }));
     expect(g.saturation).toBeLessThan(rainSat);
     g.blend(base({ sand: 1 }));
-    expect(g.temperature).toBeGreaterThan(0.1);
+    expect(g.temperature).toBeGreaterThan(0.05);
     // at night the time of day survives part of the weather
     g.blend(base({ daylight: 0.12, rain: 1 }));
     expect(g.weights().rain).toBeLessThan(0.7);

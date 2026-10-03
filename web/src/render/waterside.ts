@@ -232,8 +232,9 @@ export class Waterside implements WatersideHandles {
     this.group.userData.perfCat = 'waterside';
     if (!river.samples.length) return;
     this.buildBank();
-    // the city canal is walled: no reeds or pebbles
-    if (map.biome !== 'urban') {
+    // the city canal is walled: stone quays instead of reeds and pebbles
+    if (map.biome === 'urban') this.buildQuays();
+    else {
       this.buildReeds(layout);
       this.buildStones(layout);
     }
@@ -387,6 +388,67 @@ export class Waterside implements WatersideHandles {
     const mesh = new THREE.Mesh(g, mat);
     mesh.renderOrder = 0;
     mesh.name = 'river-bank';
+    this.group.add(mesh);
+  }
+
+  // --------------------------------------------------------------- quays
+
+  /** City canal: dressed stone quay walls with a pale coping along both banks. */
+  private buildQuays() {
+    const m = this.map;
+    const R = this.river;
+    const pos: number[] = [];
+    const nor: number[] = [];
+    const col: number[] = [];
+    const idx: number[] = [];
+    const stone = [0.52, 0.5, 0.47];
+    const cope = [0.74, 0.72, 0.68];
+    const quad = (a: number[], b: number[], c: number[], d: number[], n: number[], k: number[]) => {
+      const i0 = pos.length / 3;
+      for (const p of [a, b, c, d]) {
+        pos.push(p[0], p[1], p[2]);
+        nor.push(n[0], n[1], n[2]);
+        col.push(k[0], k[1], k[2]);
+      }
+      idx.push(i0, i0 + 2, i0 + 1, i0 + 1, i0 + 2, i0 + 3);
+    };
+    for (const side of [1, -1]) {
+      let prev: { x: number; y: number; top: number } | null = null;
+      for (const c of R.samples) {
+        const half = c.width / 2 + 0.06;
+        const x = c.x - c.ty * half * side;
+        const y = c.y + c.tx * half * side;
+        if (x < -1 || y < -1 || x > m.w + 1 || y > m.h + 1) {
+          prev = null;
+          continue;
+        }
+        const top = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, x - c.ty * 0.5 * side)), Math.max(0, Math.min(m.h - 0.01, y + c.tx * 0.5 * side))) + 0.05;
+        if (prev && Math.hypot(x - prev.x, y - prev.y) < 1.2) {
+          // the wall face looks into the canal (towards the centreline)
+          const nx = c.ty * side;
+          const nz = -c.tx * side;
+          const lo = WATER_LEVEL - 0.35;
+          quad([prev.x, prev.top, prev.y], [x, top, y], [prev.x, lo, prev.y], [x, lo, y], [nx, 0, nz], stone);
+          // coping: a flat strip on top, a little proud of the wall
+          const ox = -nx * 0.12;
+          const oz = -nz * 0.12;
+          quad([prev.x + ox, prev.top + 0.02, prev.y + oz], [x + ox, top + 0.02, y + oz], [prev.x - nx * 0.04, prev.top + 0.02, prev.y - nz * 0.04], [x - nx * 0.04, top + 0.02, y - nz * 0.04], [0, 1, 0], cope);
+        }
+        prev = { x, y, top };
+      }
+    }
+    if (!pos.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(idx);
+    g.computeBoundingSphere();
+    const mat = this.fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.receiveShadow = true;
+    mesh.castShadow = this.quality !== 'low';
+    mesh.name = 'canal-quays';
     this.group.add(mesh);
   }
 
