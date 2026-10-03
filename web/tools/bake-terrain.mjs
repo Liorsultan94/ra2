@@ -61,7 +61,8 @@ const CHECK_ONLY = process.argv.includes('--check');
  * that keeps the detail readable from the camera). regular = man-made
  * patterns (slabs, flags): sampled without the random rotation of the
  * anti-tiling. flatten = how much of the photo's low-frequency brightness is
- * divided out. nk = normal strength. rough = roughness override (some scans'
+ * divided out. despeckle = fill in dark debris (twigs in the snow) that
+ * would repeat as obvious marks. nk = normal strength. rough = roughness override (some scans'
  * roughness maps are implausibly glossy for dry ground).
  */
 const MATS = [
@@ -79,7 +80,7 @@ const MATS = [
   { key: 'mud', src: 'ph:brown_mud_02', tiles: 2.2, flatten: 0.7, nk: 1.0, note: 'wet mud' },
   { key: 'cracked', src: 'ph:mud_cracked_dry_03', tiles: 2.4, flatten: 0.7, nk: 1.0, note: 'cracked dry mud' },
   { key: 'farmsoil', src: 'ph:farm_soil', tiles: 2.2, flatten: 0.8, nk: 1.0, note: 'ploughed field soil' },
-  { key: 'snow', src: 'ph:snow_02', tiles: 3.4, flatten: 0.8, nk: 1.4, note: 'snow' },
+  { key: 'snow', src: 'ph:snow_02', tiles: 3.4, flatten: 0.8, nk: 1.4, despeckle: true, note: 'snow' },
   { key: 'asphalt', src: 'ph:asphalt_02', tiles: 2.4, flatten: 0.85, nk: 1.0, note: 'cracked asphalt' },
   { key: 'pavement', src: 'ph:concrete_pavement', tiles: 2.0, flatten: 0.6, nk: 1.0, regular: true, note: 'concrete pavement slabs' },
   { key: 'rubble', src: 'ph:rubble', tiles: 2.2, flatten: 0.6, nk: 1.0, note: 'concrete rubble lots' },
@@ -375,6 +376,22 @@ function bakeMaterial(mat) {
     const h0 = percentile(H, 0.01);
     const h1 = percentile(H, 0.99);
     for (let k = 0; k < S * S; k++) H[k] = clamp01((H[k] - h0) / Math.max(1e-4, h1 - h0));
+    // ---- despeckle: dark debris (twigs, stones) blended into the surrounding surface
+    if (mat.despeckle) {
+      const Lm2 = percentile(L, 0.5);
+      const ref = [0, 1, 2].map((c) => percentile(A[c], 0.5));
+      const Hmed = percentile(H, 0.5);
+      for (let k = 0; k < S * S; k++) {
+        const r = L[k] / Math.max(1e-4, Lm2);
+        const t = r >= 0.92 ? 0 : r <= 0.6 ? 1 : (0.92 - r) / 0.32;
+        const m = t * t * (3 - 2 * t);
+        if (m <= 0) continue;
+        for (let c = 0; c < 3; c++) A[c][k] += (ref[c] - A[c][k]) * m;
+        N[0][k] *= 1 - m;
+        N[1][k] *= 1 - m;
+        H[k] += (Hmed - H[k]) * m;
+      }
+    }
     // ---- light unsharp mask (box downscale is soft)
     for (let c = 0; c < 3; c++) {
       const bl = blur(A[c], S, 0.9);

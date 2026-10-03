@@ -170,7 +170,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
       hay: 0x8e8a4a,
       gravel: scan('gravel', 0x7a7670, 0.5),
       asphalt: scan('asphalt', 0x58595c, 0.4),
-      paving: scan('flags', 0xb0aaa0, 0.6),
+      paving: scan('flags', 0xbab4aa, 0.85),
     },
     blades: 1,
     clover: 0.4,

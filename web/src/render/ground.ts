@@ -1091,9 +1091,18 @@ const PHOTO_MAP = /* glsl */ `
       fr = mix(phP[int(PH_ASPHALT)].z, 0.6, mark);
     }
     else if (ftype > 3.5) {
-      // city squares: photo stone flags
+      // city squares: big flags in a running bond (the procedural grid keeps them readable from the
+      // camera), each one cut from the photo stone, with its own tone
       phSample(PH_PAVING, tw, fa, fn);
-      fc = fa.rgb * phT[int(PH_PAVING)];
+      vec2 pq = tw * 1.6;
+      pq.x += mod(floor(pq.y), 2.0) * 0.5;
+      vec2 pf = fract(pq);
+      float jw = fwidth(pq.x) * 1.1 + 0.025;
+      float joint = 1.0 - smoothstep(jw * 0.5, jw, min(min(pf.x, 1.0 - pf.x), min(pf.y, 1.0 - pf.y)));
+      vec2 ph = wxHash2(floor(pq) + 17.0);
+      fc = fa.rgb * phT[int(PH_PAVING)] * (0.86 + ph.x * 0.24) * (1.0 - joint * 0.45);
+      fh = (1.0 - joint) * 0.4;
+      fn.xy *= 1.0 - joint;
       fr = phP[int(PH_PAVING)].z;
     }
 #endif
