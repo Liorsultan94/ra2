@@ -38,6 +38,7 @@ import { CONTACT_LAYER, ContactShadows } from './contactshadow';
 import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
+import { loadBuildingPhotos } from './models/bldtex';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
@@ -313,6 +314,8 @@ export class GameRenderer {
     this.viewer = viewer;
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
     this.quality = quality;
+    // CC0 photoscanned building materials, patched into the building atlas when they arrive
+    void loadBuildingPhotos(quality);
     const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain

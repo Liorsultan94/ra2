@@ -653,9 +653,9 @@ export interface AtlasSet {
   normalMap: THREE.Texture;
 }
 
-function makeTex(data: Uint8Array, srgb: boolean): THREE.Texture {
+function makeTex(data: Uint8Array, w: number, h: number, srgb: boolean): THREE.DataTexture {
   // a DataTexture (not a canvas): the alpha channels carry data and must not be premultiplied
-  const t = new THREE.DataTexture(data, AW, AH, THREE.RGBAFormat, THREE.UnsignedByteType);
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   t.anisotropy = 4;
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
@@ -666,9 +666,18 @@ function makeTex(data: Uint8Array, srgb: boolean): THREE.Texture {
   return t;
 }
 
-let atlas: AtlasSet | null = null;
+let atlas: { map: THREE.DataTexture; normalMap: THREE.DataTexture } | null = null;
 
-/** The shared building texture atlas (generated once, lazily). */
+/**
+ * Brightness gain of the atlas shader (the tiles are authored around ~0.8 grey so stains /
+ * joints can darken them; the gain lifts them back). Tuned against the AgX + grade chain:
+ * 1.45 blew pale walls out under a high sun, 1.22 keeps their texture readable.
+ */
+export const BLD_GAIN = { value: 1.22 };
+/** Per tile uv multiplier (photoscans cover a different surface than the procedural tiles). */
+const TILE_SCALE = { value: new Array<number>(ATLAS_COLS * ATLAS_ROWS).fill(1) };
+
+/** The shared building texture atlas (generated once, lazily; photoscans are patched in when loaded). */
 export function bldAtlas(): AtlasSet {
   if (atlas) return atlas;
   const alb = new Uint8Array(AW * AH * 4);
@@ -684,6 +693,8 @@ export function bldAtlas(): AtlasSet {
   const o: Px = { r: 0, g: 0, b: 0, h: 0, ro: 0, me: 0 };
   const q = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
   for (const { tile, strength, gen } of GENS) {
+    // photoscans already decoded: skip the procedural tiles they replace (saves the CPU on phones)
+    if (photo?.tiles.has(tile)) continue;
     const ox = (tile % ATLAS_COLS) * T;
     const oy = Math.floor(tile / ATLAS_COLS) * T;
     // data row 0 is v = 0: generator row y lands on tile row T - 1 - y, so the generators' v runs
@@ -712,8 +723,215 @@ export function bldAtlas(): AtlasSet {
         nrm[i + 2] = q((1 / len) * 0.5 + 0.5);
       }
   }
-  atlas = { map: makeTex(alb, true), normalMap: makeTex(nrm, false) };
+  atlas = { map: makeTex(alb, AW, AH, true), normalMap: makeTex(nrm, AW, AH, false) };
+  if (photo) applyPhotos();
   return atlas;
+}
+
+// ================================================================ photoscans
+
+/*
+ * CC0 photoscanned tiles (public/tex/buildings/, baked by tools/bake-bldtex.mjs):
+ * concrete, corrugated / plate / painted steel, cladding, sandbag hessian,
+ * canvas, asphalt, gravel, brick, plaster, planks, roof tiles, sandstone, tar
+ * roofing. They load asynchronously while the battle warms up; until then
+ * (and on low quality, where the download and the bigger upload are not worth
+ * it) the procedural tiles above are used. Camo, hazard stripes, glass, radar
+ * faces, solar cells and grating stay procedural. On high the atlas becomes
+ * 512 px per tile (the procedural tiles are upsampled into it).
+ */
+
+interface PhotoSet {
+  /** Tile px of the photo atlas. */
+  S: number;
+  tiles: Map<number, number>;
+  alb: Uint8ClampedArray;
+  nrm: Uint8ClampedArray;
+  rm: Uint8ClampedArray;
+  /** Merged into the atlas data (the decoded images are dropped then). */
+  inAtlas?: boolean;
+}
+interface PhotoManifest {
+  cols: number;
+  rows: number;
+  sizes: Record<string, { albedo: string; normal: string; rm: string }>;
+  tiles: { tile: number; scale: number }[];
+}
+let photo: PhotoSet | null = null;
+let photoLoad: Promise<boolean> | null = null;
+const photoListeners: (() => void)[] = [];
+
+async function decode(url: string, w: number, h: number): Promise<Uint8ClampedArray> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  // opaque RGB images: going through a 2D canvas is lossless (no premultiplied alpha)
+  const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  if (bmp.width !== w || bmp.height !== h) throw new Error(`${url}: unexpected size ${bmp.width}x${bmp.height}`);
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true })!;
+  c.drawImage(bmp, 0, 0);
+  bmp.close();
+  return c.getImageData(0, 0, w, h).data;
+}
+
+/**
+ * Start loading the photoscanned tiles (once; call when the quality is known).
+ * Resolves true when they are in the atlas (or will be, the moment it is built).
+ */
+export function loadBuildingPhotos(quality: 'low' | 'medium' | 'high', base = 'tex/buildings/'): Promise<boolean> {
+  if (quality === 'low' || typeof createImageBitmap === 'undefined') return photoLoad ?? Promise.resolve(false);
+  const want = quality === 'high' ? 512 : 256;
+  // already loading / loaded at this size or better (an atlas never shrinks back)
+  if (photoLoad && photoSize >= want) return photoLoad;
+  photoSize = want;
+  photoLoad = (async () => {
+    try {
+      const man = (await (await fetch(base + 'manifest.json')).json()) as PhotoManifest;
+      const S = man.sizes[String(want)] ? want : 256;
+      const f = man.sizes[String(S)];
+      if (!f || man.cols !== ATLAS_COLS || man.rows !== ATLAS_ROWS) return false;
+      const W = ATLAS_COLS * S;
+      const H = ATLAS_ROWS * S;
+      const [alb, nrm, rm] = await Promise.all([decode(base + f.albedo, W, H), decode(base + f.normal, W, H), decode(base + f.rm, W, H)]);
+      if (S !== photoSize) return false; // superseded by a bigger request
+      photo = { S, tiles: new Map(man.tiles.map((t) => [t.tile, t.scale])), alb, nrm, rm };
+      if (atlas) applyPhotos();
+      for (const l of photoListeners.splice(0)) l();
+      return true;
+    } catch (e) {
+      console.warn('building photoscans unavailable, keeping the procedural atlas', e);
+      return false;
+    }
+  })();
+  return photoLoad;
+}
+let photoSize = 0;
+
+/** Run `cb` once the photoscans are loaded (immediately when they already are; never on failure / low). */
+export function onBuildingPhotos(cb: () => void) {
+  if (photo) cb();
+  else photoListeners.push(cb);
+}
+
+/**
+ * A photoscan tile's albedo as a canvas (sRGB, `size` px), for the city facades;
+ * null until the photoscans are loaded or when the tile has none.
+ */
+export function photoTileCanvas(tile: Tile, size: number): HTMLCanvasElement | null {
+  if (!photo || !photo.tiles.has(tile)) return null;
+  const { S } = photo;
+  const W = ATLAS_COLS * S;
+  const ox = (tile % ATLAS_COLS) * S;
+  const oy = Math.floor(tile / ATLAS_COLS) * S;
+  const data = photo.inAtlas ? (atlas!.map.image.data as Uint8Array) : photo.alb;
+  const src = document.createElement('canvas');
+  src.width = src.height = S;
+  const c = src.getContext('2d')!;
+  const img = c.createImageData(S, S);
+  for (let y = 0; y < S; y++)
+    for (let x = 0; x < S; x++) {
+      const i = ((oy + y) * W + ox + x) * 4;
+      const j = (y * S + x) * 4;
+      img.data[j] = data[i];
+      img.data[j + 1] = data[i + 1];
+      img.data[j + 2] = data[i + 2];
+      img.data[j + 3] = 255;
+    }
+  c.putImageData(img, 0, 0);
+  if (size === S) return src;
+  const out = document.createElement('canvas');
+  out.width = out.height = size;
+  const g = out.getContext('2d')!;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, 0, 0, size, size);
+  return out;
+}
+
+/** Bilinear 2x (or any integer factor) upsample of one tile, wrapping inside the tile. */
+function upTile(src: Uint8Array, sw: number, dst: Uint8Array, dw: number, tile: number, k: number) {
+  const ox = (tile % ATLAS_COLS) * T;
+  const oy = Math.floor(tile / ATLAS_COLS) * T;
+  const D = T * k;
+  for (let y = 0; y < D; y++) {
+    const fy = (y + 0.5) / k - 0.5;
+    const y0 = Math.floor(fy);
+    const ty = fy - y0;
+    const ya = (y0 + T) % T;
+    const yb = (y0 + 1 + T) % T;
+    for (let x = 0; x < D; x++) {
+      const fx = (x + 0.5) / k - 0.5;
+      const x0 = Math.floor(fx);
+      const tx = fx - x0;
+      const xa = (x0 + T) % T;
+      const xb = (x0 + 1 + T) % T;
+      const a = ((oy + ya) * sw + ox + xa) * 4;
+      const b = ((oy + ya) * sw + ox + xb) * 4;
+      const c = ((oy + yb) * sw + ox + xa) * 4;
+      const d = ((oy + yb) * sw + ox + xb) * 4;
+      const o = ((oy * k + y) * dw + ox * k + x) * 4;
+      for (let ch = 0; ch < 4; ch++) {
+        const top = src[a + ch] + (src[b + ch] - src[a + ch]) * tx;
+        const bot = src[c + ch] + (src[d + ch] - src[c + ch]) * tx;
+        dst[o + ch] = top + (bot - top) * ty + 0.5;
+      }
+    }
+  }
+}
+
+function applyPhotos() {
+  if (!atlas || !photo) return;
+  const { S, tiles } = photo;
+  const W = ATLAS_COLS * S;
+  const H = ATLAS_ROWS * S;
+  let alb = atlas.map.image.data as Uint8Array;
+  let nrm = atlas.normalMap.image.data as Uint8Array;
+  if (atlas.map.image.width > W) return; // never shrink a bigger atlas
+  if (atlas.map.image.width < W) {
+    // bigger tiles (high): the procedural tiles that stay are upsampled into the new atlas
+    const k = S / T;
+    const a2 = new Uint8Array(W * H * 4);
+    const n2 = new Uint8Array(W * H * 4);
+    for (let t = 0; t < ATLAS_COLS * ATLAS_ROWS; t++) {
+      if (tiles.has(t)) continue;
+      upTile(alb, AW, a2, W, t, k);
+      upTile(nrm, AW, n2, W, t, k);
+    }
+    alb = a2;
+    nrm = n2;
+  }
+  for (const t of tiles.keys()) {
+    const ox = (t % ATLAS_COLS) * S;
+    const oy = Math.floor(t / ATLAS_COLS) * S;
+    // the photo atlas rows are top-down like the data texture rows (image top = top of the wall)
+    for (let y = 0; y < S; y++) {
+      let i = ((oy + y) * W + ox) * 4;
+      for (let x = 0; x < S; x++, i += 4) {
+        alb[i] = photo.alb[i];
+        alb[i + 1] = photo.alb[i + 1];
+        alb[i + 2] = photo.alb[i + 2];
+        alb[i + 3] = photo.rm[i + 1]; // metalness
+        nrm[i] = photo.nrm[i];
+        nrm[i + 1] = photo.nrm[i + 1];
+        nrm[i + 2] = photo.nrm[i + 2];
+        nrm[i + 3] = photo.rm[i]; // roughness
+      }
+    }
+    TILE_SCALE.value[t] = tiles.get(t) ?? 1;
+  }
+  for (const [tex, data] of [
+    [atlas.map, alb],
+    [atlas.normalMap, nrm],
+  ] as const) {
+    // a size change needs a fresh GPU texture (immutable storage)
+    if (tex.image.width !== W) tex.dispose();
+    tex.image = { data, width: W, height: H };
+    tex.needsUpdate = true;
+  }
+  // the decoded photo atlas is no longer needed (keep only the mask / scales)
+  photo.alb = photo.nrm = photo.rm = new Uint8ClampedArray(0);
+  photo.inAtlas = true;
 }
 
 /**
@@ -723,6 +941,8 @@ export function bldAtlas(): AtlasSet {
  */
 export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { value: THREE.Color[] }) {
   sh.uniforms.bPal = pal;
+  sh.uniforms.bGain = BLD_GAIN;
+  sh.uniforms.bScale = TILE_SCALE;
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <common>',
@@ -740,8 +960,11 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
       `#include <common>
       flat varying float vBTile;
       uniform vec3 bPal[4];
-      vec4 bAtlas( sampler2D t, vec2 uv ) {
+      uniform float bGain;
+      uniform float bScale[${ATLAS_COLS * ATLAS_ROWS}];
+      vec4 bAtlas( sampler2D t, vec2 uv0 ) {
         float ti = floor( vBTile + 0.5 );
+        vec2 uv = uv0 * bScale[ int( ti ) ];
         vec2 cell = vec2( mod( ti, ${ATLAS_COLS}.0 ), floor( ti / ${ATLAS_COLS}.0 ) );
         const vec2 GRID = vec2( ${ATLAS_COLS}.0, ${ATLAS_ROWS}.0 );
         const float IN = 1.5 / ${T}.0;
@@ -767,7 +990,7 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
           diffuseColor.rgb *= pc * pow( sampledDiffuseColor.g, 1.0 / 2.2 );
         } else {
           // tiles are authored around ~0.8 grey so stains / joints can darken them: lift back to full albedo
-          diffuseColor.rgb = min( diffuseColor.rgb * sampledDiffuseColor.rgb * 1.45, vec3( 1.0 ) );
+          diffuseColor.rgb = min( diffuseColor.rgb * sampledDiffuseColor.rgb * bGain, vec3( 1.0 ) );
         }
       #endif`,
     )

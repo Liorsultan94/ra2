@@ -1,0 +1,76 @@
+Iron Front - building material photoscans (public/tex/buildings/)
+
+All source textures are CC0 1.0 Universal (public domain dedication),
+https://creativecommons.org/publicdomain/zero/1.0/
+Downloaded from Poly Haven (https://polyhaven.com/license) and processed by
+tools/bake-bldtex.mjs (resized, recoloured towards neutral for per-vertex
+tinting, normal maps converted, packed into the building atlas layout).
+
+precast concrete (atlas tile 0): Poly Haven "concrete_wall_008" - https://polyhaven.com/a/concrete_wall_008 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_008/concrete_wall_008_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_008/concrete_wall_008_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_008/concrete_wall_008_rough_1k.jpg
+board-formed concrete (atlas tile 1): Poly Haven "concrete_layers_02" - https://polyhaven.com/a/concrete_layers_02 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_layers_02/concrete_layers_02_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_layers_02/concrete_layers_02_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_layers_02/concrete_layers_02_rough_1k.jpg
+corrugated steel (atlas tile 2): Poly Haven "corrugated_iron_02" - https://polyhaven.com/a/corrugated_iron_02 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_rough_1k.jpg
+    metal: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/corrugated_iron_02/corrugated_iron_02_metal_1k.jpg
+steel plate (atlas tile 3): Poly Haven "blue_metal_plate" - https://polyhaven.com/a/blue_metal_plate - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/blue_metal_plate/blue_metal_plate_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/blue_metal_plate/blue_metal_plate_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/blue_metal_plate/blue_metal_plate_rough_1k.jpg
+painted metal (atlas tile 4): Poly Haven "green_metal_rust" - https://polyhaven.com/a/green_metal_rust - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/green_metal_rust/green_metal_rust_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/green_metal_rust/green_metal_rust_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/green_metal_rust/green_metal_rust_rough_1k.jpg
+box profile cladding (atlas tile 5): Poly Haven "box_profile_metal_sheet" - https://polyhaven.com/a/box_profile_metal_sheet - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/box_profile_metal_sheet/box_profile_metal_sheet_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/box_profile_metal_sheet/box_profile_metal_sheet_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/box_profile_metal_sheet/box_profile_metal_sheet_rough_1k.jpg
+    metal: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/box_profile_metal_sheet/box_profile_metal_sheet_metal_1k.jpg
+sandbag hessian (atlas tile 9): Poly Haven "hessian_230" - https://polyhaven.com/a/hessian_230 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_230/hessian_230_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_230/hessian_230_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_230/hessian_230_rough_1k.jpg
+    metal: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_230/hessian_230_metal_1k.jpg
+canvas (atlas tile 10): Poly Haven "hessian_380" - https://polyhaven.com/a/hessian_380 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_380/hessian_380_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_380/hessian_380_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_380/hessian_380_rough_1k.jpg
+    metal: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/hessian_380/hessian_380_metal_1k.jpg
+asphalt (atlas tile 11): Poly Haven "asphalt_04" - https://polyhaven.com/a/asphalt_04 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_04/asphalt_04_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_04/asphalt_04_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_04/asphalt_04_rough_1k.jpg
+gravel hardstand (atlas tile 12): Poly Haven "gravel_floor_02" - https://polyhaven.com/a/gravel_floor_02 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_floor_02/gravel_floor_02_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_floor_02/gravel_floor_02_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_floor_02/gravel_floor_02_rough_1k.jpg
+brick (atlas tile 13): Poly Haven "brick_wall_001" - https://polyhaven.com/a/brick_wall_001 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_diffuse_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brick_wall_001/brick_wall_001_rough_1k.jpg
+plaster (atlas tile 14): Poly Haven "plaster_grey_04" - https://polyhaven.com/a/plaster_grey_04 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plaster_grey_04/plaster_grey_04_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plaster_grey_04/plaster_grey_04_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/plaster_grey_04/plaster_grey_04_rough_1k.jpg
+wood planks (atlas tile 16): Poly Haven "planks_brown_10" - https://polyhaven.com/a/planks_brown_10 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/planks_brown_10/planks_brown_10_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/planks_brown_10/planks_brown_10_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/planks_brown_10/planks_brown_10_rough_1k.jpg
+curved clay roof tiles (atlas tile 17): Poly Haven "roof_09" - https://polyhaven.com/a/roof_09 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_09/roof_09_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_09/roof_09_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/roof_09/roof_09_rough_1k.jpg
+rough-faced sandstone ashlar (atlas tile 19): Poly Haven "sandstone_blocks_05" - https://polyhaven.com/a/sandstone_blocks_05 - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sandstone_blocks_05/sandstone_blocks_05_rough_1k.jpg
+tar and gravel flat roof (atlas tile 23): Poly Haven "tarred_gravel" - https://polyhaven.com/a/tarred_gravel - CC0
+    diff: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/tarred_gravel/tarred_gravel_diff_1k.jpg
+    nor: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/tarred_gravel/tarred_gravel_nor_gl_1k.jpg
+    rough: https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/tarred_gravel/tarred_gravel_rough_1k.jpg

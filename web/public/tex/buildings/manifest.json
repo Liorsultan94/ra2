@@ -1,0 +1,118 @@
+{
+ "version": 1,
+ "note": "Photoscanned building atlas tiles (see tools/bake-bldtex.mjs). Layout = Tile enum of src/render/models/bldtex.ts.",
+ "cols": 4,
+ "rows": 6,
+ "sizes": {
+  "256": {
+   "albedo": "bld-albedo-256.webp",
+   "normal": "bld-normal-256.webp",
+   "rm": "bld-rm-256.webp",
+   "bytes": 243326
+  },
+  "512": {
+   "albedo": "bld-albedo-512.webp",
+   "normal": "bld-normal-512.webp",
+   "rm": "bld-rm-512.webp",
+   "bytes": 1170844
+  }
+ },
+ "tiles": [
+  {
+   "tile": 0,
+   "name": "precast concrete",
+   "id": "concrete_wall_008",
+   "scale": 1
+  },
+  {
+   "tile": 1,
+   "name": "board-formed concrete",
+   "id": "concrete_layers_02",
+   "scale": 1
+  },
+  {
+   "tile": 2,
+   "name": "corrugated steel",
+   "id": "corrugated_iron_02",
+   "scale": 0.42
+  },
+  {
+   "tile": 3,
+   "name": "steel plate",
+   "id": "blue_metal_plate",
+   "scale": 1
+  },
+  {
+   "tile": 4,
+   "name": "painted metal",
+   "id": "green_metal_rust",
+   "scale": 0.55
+  },
+  {
+   "tile": 5,
+   "name": "box profile cladding",
+   "id": "box_profile_metal_sheet",
+   "scale": 0.5
+  },
+  {
+   "tile": 9,
+   "name": "sandbag hessian",
+   "id": "hessian_230",
+   "scale": 1
+  },
+  {
+   "tile": 10,
+   "name": "canvas",
+   "id": "hessian_380",
+   "scale": 1
+  },
+  {
+   "tile": 11,
+   "name": "asphalt",
+   "id": "asphalt_04",
+   "scale": 1
+  },
+  {
+   "tile": 12,
+   "name": "gravel hardstand",
+   "id": "gravel_floor_02",
+   "scale": 1
+  },
+  {
+   "tile": 13,
+   "name": "brick",
+   "id": "brick_wall_001",
+   "scale": 0.75
+  },
+  {
+   "tile": 14,
+   "name": "plaster",
+   "id": "plaster_grey_04",
+   "scale": 1
+  },
+  {
+   "tile": 16,
+   "name": "wood planks",
+   "id": "planks_brown_10",
+   "scale": 1.25
+  },
+  {
+   "tile": 17,
+   "name": "curved clay roof tiles",
+   "id": "roof_09",
+   "scale": 0.8
+  },
+  {
+   "tile": 19,
+   "name": "rough-faced sandstone ashlar",
+   "id": "sandstone_blocks_05",
+   "scale": 1
+  },
+  {
+   "tile": 23,
+   "name": "tar and gravel flat roof",
+   "id": "tarred_gravel",
+   "scale": 1
+  }
+ ]
+}
