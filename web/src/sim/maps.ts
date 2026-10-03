@@ -629,7 +629,13 @@ export function createWinterMap(seed: number): GameMap {
     oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) ||
     oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) ||
     Math.abs((x + y) / 2 - fordS) < 4.5;
-  // spruce / pine forests (1), birch groves near the river (2), single trees
+  // spruce / pine forests (1), birch groves near the river (2), single trees. The forest threshold is a
+  // quantile of the noise over the open land, so every seed grows about as much forest (~11%)
+  const vals: number[] = [];
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) if (g.tiles[y * W + x] === Tile.Grass && !reserved(x, y) && river.dist(x, y) >= 4.5) vals.push(symNoise(x, y, 0.075, NS + 31));
+  vals.sort((a, b) => a - b);
+  const forestT = vals.length ? vals[Math.floor(vals.length * 0.89)] : 0.62;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
@@ -639,7 +645,7 @@ export function createWinterMap(seed: number): GameMap {
       const n = symNoise(x, y, 0.075, NS + 31);
       const single = symHash(x, y, NS + 3);
       const birch = rd < 9 && symNoise(x, y, 0.12, NS + 37) > 0.55;
-      if (n > 0.625 || single > 0.94) g.trees[i] = birch ? 2 : 1;
+      if (n > forestT || single > 0.94) g.trees[i] = birch ? 2 : 1;
       else if (birch && single > 0.8) g.trees[i] = 2;
     }
   for (let y = 0; y < H; y++)

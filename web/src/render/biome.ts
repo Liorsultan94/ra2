@@ -59,7 +59,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
     code: 1,
     // scrub: olive-khaki to bleached straw
     grass: { lush: 0x5e6233, mid: 0x857a48, dry: 0xb39b66, fresh: 0x7d8040, clover: 0x5a5c34 },
-    ground: { dirt: 0x9a8160, rock: 0xa8714a, sand: 0xd6b47e, mud: 0x6f5a42, soil: 0x7a5a3a, crop: 0x5c7a2c, wheat: 0xc4a35a, hay: 0x9a8c50 },
+    ground: { dirt: 0x9a8160, rock: 0x9c785c, sand: 0xd6b47e, mud: 0x6f5a42, soil: 0x7a5a3a, crop: 0x5c7a2c, wheat: 0xc4a35a, hay: 0x9a8c50 },
     blades: 0.35,
     clover: 0,
     flowers: 0.15,

@@ -106,7 +106,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
     new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.92, metalness: 0, flatShading: true }),
   );
   // desert sandstone / winter granite (temperate keeps the white base colour)
-  if (biome === 'desert') mat.color.setHex(0xe0a070);
+  if (biome === 'desert') mat.color.setHex(0xd6aa86);
   else if (biome === 'winter') mat.color.setHex(0xc4c8d0);
   const shadows = quality !== 'low';
   // [full, lite] pairs: the lite model is the same rock at a lower subdivision

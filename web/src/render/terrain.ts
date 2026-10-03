@@ -150,7 +150,7 @@ export class Terrain {
         if (t === Tile.Water) col = [...look.mini.water];
         else if (t === Tile.Bridge) col = [120, 116, 108];
         else if (m.trees[i]) col = [...look.mini.tree];
-        if (m.blocked[i]) col = [150, 80, 60];
+        if (m.blocked[i]) col = look.code === 3 ? [118, 112, 108] : [150, 80, 60];
         const hgt = groundHeight(m, x, y);
         const sh = 0.9 + Math.max(-0.2, Math.min(0.3, hgt * 0.12));
         img.data.set([col[0] * sh, col[1] * sh, col[2] * sh, 255], (py * c.width + px) * 4);

@@ -272,7 +272,7 @@ export class MatchTracker {
     // bridge collapses (bridges.ts keeps their state on the world)
     w.bridges.forEach((b, i) => {
       const down = b.status === 'down';
-      if (down && !this.bridgeDown[i]) this.note(`${['Centre', 'North', 'South'][i] ?? 'A'} bridge collapsed into the river`, 'info');
+      if (down && !this.bridgeDown[i]) this.note(w.map.id === 'frontline' ? `${['Centre', 'North', 'South'][i] ?? 'A'} bridge collapsed into the river` : `Bridge ${i + 1} collapsed into the ${w.map.biome === 'urban' ? 'canal' : 'river'}`, 'info');
       this.bridgeDown[i] = down;
     });
   }
