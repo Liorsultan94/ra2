@@ -44,7 +44,8 @@ const FRAG = /* glsl */ `
 varying vec2 vUv;
 varying vec4 vC;
 void main() {
-  float a = ( 1.0 - smoothstep( 0.2, 1.0, abs( vUv.x ) ) ) * smoothstep( -0.5, 0.35, vUv.y );
+  // a soft round head (front, y = 1) and a tail fading out behind it
+  float a = exp( -vUv.x * vUv.x * 4.0 ) * ( 0.25 + 0.75 * vUv.y * vUv.y ) * ( 1.0 - smoothstep( 0.85, 1.0, vUv.y ) * 0.6 );
   a *= vC.a;
   if ( a < 0.003 ) discard;
   gl_FragColor = vec4( vC.rgb * a, 1.0 );
@@ -408,8 +409,8 @@ export class Fireworks {
     for (let j = 0; j < this.nFlash; j++) {
       const age = f[j * 7 + 6];
       if (age > 1.2) continue;
-      const k = Math.max(0, 1 - age / 1.2) * 0.22;
-      nl.pool(f[j * 7], f[j * 7 + 1], f[j * 7 + 2], 0, 7, 7, f[j * 7 + 3] * k, f[j * 7 + 4] * k, f[j * 7 + 5] * k);
+      const k = Math.max(0, 1 - age / 0.9) * 0.13;
+      nl.pool(f[j * 7], f[j * 7 + 1], f[j * 7 + 2], 0, 5.5, 5.5, f[j * 7 + 3] * k, f[j * 7 + 4] * k, f[j * 7 + 5] * k);
     }
   }
 

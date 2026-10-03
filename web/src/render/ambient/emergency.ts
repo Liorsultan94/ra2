@@ -4,6 +4,7 @@ import type { FogOfWar } from '../fog';
 import { GeoBuilder } from '../geo';
 import type { V2 } from '../layout';
 import { Opt, Pose } from '../models/civilians';
+import { CAR_SCALE } from './models';
 import { planRoute, reverseSegs, routePolyline, type RouteSeg } from './emroute';
 import type { Figure } from './people';
 import type { RoadNet } from './roadnet';
@@ -131,12 +132,45 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3(1, 1, 1);
 const _pt = { x: 0, y: 0 };
 
+/** An emergency vehicle as the civilian traffic sees it (traffic.ts gives way / drives round). */
+export interface EmVehicle {
+  x: number;
+  y: number;
+  yaw: number;
+  v: number;
+  len: number;
+  /** Blue lights and siren on (on the way in). */
+  siren: boolean;
+  /** Stopped at the kerb by the incident. */
+  parked: boolean;
+}
+
+let activeEm: Emergency | null = null;
+
+/** The emergency vehicles within `r` of (x, y) (empty when there are none). */
+export function emergencyNear(x: number, y: number, r: number): EmVehicle[] {
+  if (!activeEm) return [];
+  return activeEm.vehicles.filter((e) => Math.abs(e.x - x) < r && Math.abs(e.y - y) < r && Math.hypot(e.x - x, e.y - y) < r);
+}
+
 export class Emergency {
+  /** The vehicles on the road now (refreshed every update). */
+  readonly vehicles: EmVehicle[] = [];
+  /** Distance to the nearest car in the way ahead of a vehicle (traffic.ts), so it doesn't drive through. */
+  ahead: ((x: number, y: number, yaw: number, halfW: number) => number) | null = null;
   readonly group = new THREE.Group();
   private units: Unit[] = [];
   private incidents: Incident[] = [];
   private inst: AnimInstances[] = [];
-  private models = [emergencyModel(0), emergencyModel(1)];
+  // (built at the old half scale like the civilian cars: enlarged the same way, models.ts CAR_SCALE)
+  private models = [emergencyModel(0), emergencyModel(1)].map((m) => {
+    const k = CAR_SCALE;
+    m.geo.scale(k, k, k);
+    m.geo.computeBoundingSphere();
+    m.rig.x *= k;
+    m.rig.y *= k;
+    return { ...m, len: m.len * k, barY: m.barY * k, barX: m.barX * k };
+  });
   private time = 0;
   private lastDanger: { x: number; y: number; t: number }[] = [];
   private maxUnits: number;
@@ -156,6 +190,7 @@ export class Emergency {
     phone: boolean,
   ) {
     this.maxUnits = quality === 'low' ? 0 : phone || quality === 'medium' ? 4 : 6;
+    activeEm = this;
     this.models.forEach((mdl, i) => {
       const mat = ambientMaterial(fog, 'car', mdl.rig, 0.45, 0.15);
       const im = new AnimInstances(mdl.geo, mat, 4, i ? 'ambient-ambulance' : 'ambient-police', { shadow: quality === 'high', heat: true });
@@ -201,7 +236,7 @@ export class Emergency {
       const dir = last.a1 >= last.a0 ? 1 : -1;
       last.a1 -= dir * Math.min(1.05, Math.abs(last.a1 - last.a0) * 0.8);
     }
-    const poly = routePolyline(this.net, segs, 0.25, 1.4);
+    const poly = routePolyline(this.net, segs, 0.25, 1.4, 0.4);
     if (poly.length < 3) return false;
     const cum = new Float32Array(poly.length);
     for (let i = 1; i < poly.length; i++) cum[i] = cum[i - 1] + Math.hypot(poly[i].x - poly[i - 1].x, poly[i].y - poly[i - 1].y);
@@ -266,6 +301,9 @@ export class Emergency {
       if (!inc.police && (!inc.ambulance || inc.t > 60)) this.incidents.splice(i, 1);
     }
     const P = _pt;
+    this.vehicles.length = 0;
+    for (const u of this.units)
+      if (u.s !== V.Done) this.vehicles.push({ x: u.x, y: u.y, yaw: u.yaw, v: u.v, len: this.models[u.kind].len, siren: u.s === V.In, parked: u.s === V.Parked });
     for (let i = this.units.length - 1; i >= 0; i--) {
       const u = this.units[i];
       u.t += dt;
@@ -277,7 +315,13 @@ export class Emergency {
         const ay = P.y - u.y;
         const turn = Math.abs(wrapAngle(Math.atan2(ay, ax) - u.yaw));
         const left = total - u.arc;
-        const vmax = Math.min(u.s === V.In ? 1.5 : 1.1, 0.45 + 1.4 * Math.max(0, 1 - turn * 1.3), u.s === V.In ? 0.25 + left * 0.45 : 9);
+        let vmax = Math.min(u.s === V.In ? 1.5 : 1.1, 0.45 + 1.4 * Math.max(0, 1 - turn * 1.3), u.s === V.In ? 0.25 + left * 0.45 : 9);
+        // a car still in the way: close up behind it, it pulls over (traffic.ts)
+        if (this.ahead) {
+          const mdl = this.models[u.kind];
+          const d = this.ahead(u.x, u.y, u.yaw, mdl.len * 0.21);
+          vmax = Math.min(vmax, Math.max(0, (d - mdl.len * 0.95) * 1.5));
+        }
         u.v += (vmax - u.v) * Math.min(1, dt * (vmax < u.v ? 3 : 1.2));
         u.arc = Math.min(total, u.arc + u.v * dt);
         this.at(u, u.arc, P);
@@ -347,8 +391,8 @@ export class Emergency {
     u.crew.forEach((c, i) => {
       // out of the doors on either side
       const side = i ? -1 : 1;
-      c.x = u.x + ca * 0.05 - sa * side * 0.2;
-      c.y = u.y + sa * 0.05 + ca * side * 0.2;
+      c.x = u.x + ca * 0.05 - sa * side * 0.2 * CAR_SCALE;
+      c.y = u.y + sa * 0.05 + ca * side * 0.2 * CAR_SCALE;
       c.yaw = u.yaw + side * 1.4;
       c.hgt = groundAt(this.map, c.x, c.y);
       c.show = true;
@@ -364,8 +408,8 @@ export class Emergency {
       let gy: number;
       if (!working) {
         const side = i ? -1 : 1;
-        gx = u.x - sa * side * 0.2;
-        gy = u.y + ca * side * 0.2;
+        gx = u.x - sa * side * 0.2 * CAR_SCALE;
+        gy = u.y + ca * side * 0.2 * CAR_SCALE;
       } else if (u.kind === 1) {
         // over to the pavement in front of the ruin
         const dx = u.tx - u.x;
@@ -386,8 +430,8 @@ export class Emergency {
           gy = u.goal[i * 2 + 1];
         }
       } else {
-        gx = u.x + (i ? -ca * 0.45 : ca * 0.42) - sa * 0.35;
-        gy = u.y + (i ? -sa * 0.45 : sa * 0.42) + ca * 0.35;
+        gx = u.x + (i ? -ca * 0.45 : ca * 0.42) * CAR_SCALE - sa * 0.35 * CAR_SCALE;
+        gy = u.y + (i ? -sa * 0.45 : sa * 0.42) * CAR_SCALE + ca * 0.35 * CAR_SCALE;
       }
       const dx = gx - c.x;
       const dy = gy - c.y;
@@ -410,7 +454,7 @@ export class Emergency {
   }
 
   private crewBack(u: Unit) {
-    for (const c of u.crew) if (Math.hypot(c.x - u.x, c.y - u.y) > 0.3) return false;
+    for (const c of u.crew) if (Math.hypot(c.x - u.x, c.y - u.y) > 0.25 * CAR_SCALE) return false;
     return true;
   }
 
@@ -446,7 +490,7 @@ export class Emergency {
         this.lights.flare(bxp + rx * sd * 0.07, y, byp + ry * sd * 0.07, 0.12 + dk * 0.08, cr * k, cg * k, cb * k);
         if (dk > 0.15) this.lights.pool(u.x + rx * sd * 0.3, groundAt(this.map, u.x, u.y), u.y + ry * sd * 0.3, -u.yaw, 0.9, 0.9, cr * 0.15 * dk, cg * 0.15 * dk, cb * 0.15 * dk);
       }
-      if (u.kind === 1 && Math.floor(time * 3) % 2) this.lights.flare(u.x + hx * (mdl.len / 2), u.hgt + 0.12, u.y + hy * (mdl.len / 2), 0.07 + dk * 0.05, 1.8 * k, 1.8 * k, 1.7 * k);
+      if (u.kind === 1 && Math.floor(time * 3) % 2) this.lights.flare(u.x + hx * (mdl.len / 2), u.hgt + 0.12 * CAR_SCALE, u.y + hy * (mdl.len / 2), 0.07 + dk * 0.05, 1.8 * k, 1.8 * k, 1.7 * k);
     }
     for (const im of this.inst) im.commit();
   }

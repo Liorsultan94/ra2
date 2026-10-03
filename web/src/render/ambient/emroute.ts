@@ -161,10 +161,10 @@ export function reverseSegs(segs: RouteSeg[]): RouteSeg[] {
 }
 
 /**
- * Sample the route on the right-hand lane every `step` tiles; the last
- * `pull` tiles drift a little further right (pulling over to the kerb).
+ * Sample the route on the right-hand lane (`laneK` of the lane offset) every `step` tiles; the
+ * last `pull` tiles drift further right (pulling over to the kerb).
  */
-export function routePolyline(net: RoadNet, segs: RouteSeg[], step = 0.25, pull = 0): V2[] {
+export function routePolyline(net: RoadNet, segs: RouteSeg[], step = 0.25, pull = 0, laneK = 1): V2[] {
   const out: V2[] = [];
   let total = 0;
   for (const s of segs) total += Math.abs(s.a1 - s.a0);
@@ -177,8 +177,9 @@ export function routePolyline(net: RoadNet, segs: RouteSeg[], step = 0.25, pull 
       const a = s.a0 + ((s.a1 - s.a0) * k) / n;
       const p = pointAt(L, a);
       const left = total - (run + (Math.abs(s.a1 - s.a0) * k) / n);
-      const extra = pull > 0 ? Math.max(0, 1 - left / pull) * Math.max(0, L.half - L.lane - 0.12) : 0;
-      const lane = L.lane + extra;
+      // (laneK < 1: blue lights on, nearer the centre line while the traffic pulls over to the right)
+      const pk = pull > 0 ? Math.max(0, 1 - left / pull) : 0;
+      const lane = L.lane * laneK + (L.lane * (1 - laneK) + Math.max(0, L.half - L.lane - 0.12)) * pk;
       out.push({ x: p.x - p.ty * dir * lane, y: p.y + p.tx * dir * lane });
     }
     run += Math.abs(s.a1 - s.a0);

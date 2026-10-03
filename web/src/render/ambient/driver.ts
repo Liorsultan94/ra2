@@ -23,8 +23,9 @@ export interface DriveCar {
   /** Unique, for tie-breaks. */
   id: number;
   kind: number;
-  /** Body length (tiles). */
+  /** Body length, width (tiles). */
   len: number;
+  wid: number;
   line: number;
   arc: number;
   dir: number;
@@ -66,6 +67,22 @@ export interface DriveCar {
   lot: number;
   bay: number;
   pkT: number;
+  /** Shifted left round a vehicle parked at the kerb ahead (tiles, eased). */
+  dodge: number;
+  /** Pulled over for an emergency vehicle: seconds left to stay there. */
+  yieldT: number;
+}
+
+/** Something on a lane cars must not drive into while it is busy: a zebra crossing, a level crossing. */
+export interface HoldPoint {
+  /** 0 zebra / pedestrian crossing, 1 level crossing. */
+  kind: number;
+  line: number;
+  /** Arc of its centre on the line, and how far before it the cars stop (front bumper). */
+  arc: number;
+  gap: number;
+  x: number;
+  y: number;
 }
 
 /** Other cars as the rules see them. */
@@ -82,15 +99,23 @@ export interface OtherCar {
   dir: number;
   /** Still driving (not wrecked / abandoned / swerving off). */
   driving: boolean;
+  /** Body length / width (default: as the car asking). */
+  len?: number;
+  wid?: number;
+  /** An emergency vehicle with its siren on (everyone pulls over). */
+  siren?: boolean;
+  /** Stopped at the kerb on purpose (drive round it, don't queue behind it). */
+  kerb?: boolean;
 }
 
 let nextId = 1;
 
-export function newDriveCar(kind: number, len: number, line: number, arc: number, dir: number, x: number, y: number, yaw: number, cruise: number): DriveCar {
+export function newDriveCar(kind: number, len: number, line: number, arc: number, dir: number, x: number, y: number, yaw: number, cruise: number, wid = len * 0.42): DriveCar {
   return {
     id: nextId++,
     kind,
     len,
+    wid,
     line,
     arc,
     dir,
@@ -122,6 +147,8 @@ export function newDriveCar(kind: number, len: number, line: number, arc: number
     lot: -1,
     bay: -1,
     pkT: 0,
+    dodge: 0,
+    yieldT: 0,
   };
 }
 
@@ -134,13 +161,17 @@ export interface DriveResult {
 
 const out: DriveResult = { blocked: false, curve: 0 };
 /** How far a car backs out of its bay (tiles, nose past the aisle edge). */
-const BACK = 0.75;
+const BACK = 1.2;
 
 export class Driver {
   /** Minimum turning radius (tiles). */
   static rho(kind: number) {
-    return kind === 3 ? 0.34 : 0.3;
+    return kind === 3 ? 0.46 : 0.42;
   }
+
+  /** Zebra / level crossings per line, and whether one is busy / closed now. */
+  private holds: HoldPoint[][] = [];
+  private closed: (h: HoldPoint) => boolean = () => false;
 
   constructor(
     readonly net: RoadNet,
@@ -148,6 +179,13 @@ export class Driver {
     private usable: (line: number) => boolean = () => true,
     private rand: () => number = Math.random,
   ) {}
+
+  /** The crossings cars stop at while `closed` says so (people on the zebra, barriers down). */
+  setHolds(points: readonly HoldPoint[], closed: (h: HoldPoint) => boolean) {
+    this.holds = this.net.lines.map(() => []);
+    for (const h of points) this.holds[h.line]?.push(h);
+    this.closed = closed;
+  }
 
   /** The next junction approach ahead on the car's line, or null. */
   nextStop(c: DriveCar): Stop | null {
@@ -306,14 +344,14 @@ export class Driver {
     let n = 0;
     for (let k = 0; k < lot.bays.length; k++) {
       const b = lot.bays[k];
-      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.45) continue;
+      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.7) continue;
       n++;
     }
     if (!n) return false;
     let r = Math.floor(this.rand() * n);
     for (let k = 0; k < lot.bays.length; k++) {
       const b = lot.bays[k];
-      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.45) continue;
+      if (lot.taken[k] || (b.ax - lot.x) * lot.ux + (b.ay - lot.y) * lot.uy < s0 + 0.7) continue;
       if (r-- > 0) continue;
       lot.taken[k] = c.id;
       c.pk = 1;
@@ -364,8 +402,8 @@ export class Driver {
     c.waiting = false;
     if (c.pk === 1) {
       // the turn-in point: on the aisle a little before the bay
-      const tx = b.ax - lot.ux * 0.3;
-      const ty = b.ay - lot.uy * 0.3;
+      const tx = b.ax - lot.ux * 0.45;
+      const ty = b.ay - lot.uy * 0.45;
       this.toward(c, tx, ty, 0.32, dt);
       if (Math.hypot(tx - c.x, ty - c.y) < 0.2 || (c.x - tx) * lot.ux + (c.y - ty) * lot.uy > 0) c.pk = 2;
     } else if (c.pk === 2) {
@@ -386,7 +424,7 @@ export class Driver {
       if (c.pkT <= 0) {
         // back out once the aisle behind is clear
         let busy = false;
-        for (const o of cars) if (o !== (c as unknown) && o.driving && Math.hypot(o.x - b.ax, o.y - b.ay) < 0.8) busy = true;
+        for (const o of cars) if (o !== (c as unknown) && o.driving && Math.hypot(o.x - b.ax, o.y - b.ay) < 1.2) busy = true;
         if (!busy) {
           c.pk = 4;
           c.ind = 0;
@@ -394,8 +432,8 @@ export class Driver {
       }
     } else {
       // back out so the nose ends up pointing to the exit (the aisle's entry end)
-      const tx = b.ax + lot.ux * 0.32;
-      const ty = b.ay + lot.uy * 0.32;
+      const tx = b.ax + lot.ux * 0.5;
+      const ty = b.ay + lot.uy * 0.5;
       this.toward(c, tx, ty, -0.16, dt);
       if (Math.hypot(tx - c.x, ty - c.y) < 0.16 || (b.x - c.x) * Math.cos(b.yaw) + (b.y - c.y) * Math.sin(b.yaw) > BACK) {
         // drive off down the aisle and out along the access lane
@@ -450,6 +488,8 @@ export class Driver {
     const fleeing = c.panic > 0;
     c.waiting = false;
     let holdD = -1;
+    let hz = -1;
+    let pulled = false;
     let slowTo = 1e9;
     for (let pass = 0; pass < 2; pass++) {
       if (c.loop >= 0) {
@@ -498,7 +538,8 @@ export class Driver {
           else if (c.plan >= 0 && Math.abs(wrapPi(node.arms[c.plan].ang - (node.arms[st.arm].ang + Math.PI))) > 0.5) slowTo = 0.32 + dist * 0.4;
         }
         let wait = false;
-        const hd = (st.hold - c.arc) * c.dir;
+        // (the hold arcs are set for a 0.5-long car: longer ones stop with their nose at the same place)
+        const hd = (st.hold - c.arc) * c.dir - Math.max(0, c.len / 2 - 0.25);
         if (!fleeing && c.commit !== st.node && hd > -0.05 && node.ctl !== Ctl.Free && node.ctl !== Ctl.Turn) {
           wait = this.mustWait(c, node, st, hd, cars, time);
           if (wait) holdD = Math.max(0, hd);
@@ -518,6 +559,16 @@ export class Driver {
           continue;
         }
       }
+      // zebra crossings with people on them, level crossings with the barriers down: stop before them
+      if (!fleeing && this.holds.length)
+        for (const h of this.holds[c.line] ?? []) {
+          const d = (h.arc - c.arc) * c.dir - h.gap - c.len / 2;
+          if (d < -0.05 || d > 4.5) continue;
+          // (a level crossing closing as the car is right on it: clear it)
+          if (h.kind === 1 && d < 0.15 && c.v > 0.1) continue;
+          if (!this.closed(h)) continue;
+          hz = hz < 0 ? Math.max(0, d) : Math.min(hz, Math.max(0, d));
+        }
       // lane following: carrot ahead on the right lane
       const L2 = net.lines[c.line];
       const p0 = pointAt(L2, c.arc);
@@ -526,8 +577,12 @@ export class Driver {
       const offRoad = Math.hypot(c.x - p0.x, c.y - p0.y) > L2.half + 0.05;
       const look = offRoad ? 0.1 : 0.32 + c.v * 0.3;
       const pa = pointAt(L2, c.arc + c.dir * look);
-      // narrow tracks: pull over to the right to pass oncoming traffic
-      const lane = L2.lane + c.aside * Math.max(0, L2.half - (L2.paved ? 0.12 : 0.08) - L2.lane);
+      // narrow tracks: pull over to the right to pass oncoming traffic; for an emergency vehicle
+      // right over (onto the verge on a narrow road); round a vehicle parked at the kerb: to the left
+      const roomR = Math.max(0, L2.half - (L2.paved ? 0.12 : 0.08) - L2.lane);
+      const pullR = c.yieldT > 0 ? Math.max(roomR, L2.half - c.wid / 2 - 0.05 >= L2.lane + 0.2 ? L2.half - c.wid / 2 - 0.05 - L2.lane : L2.half + 0.05 - L2.lane) : 0;
+      const lane = L2.lane + Math.max(c.aside * roomR, pullR) - c.dodge;
+      if (c.yieldT > 0) pulled = (c.x - p0.x) * -p0.ty * c.dir + (c.y - p0.y) * p0.tx * c.dir > L2.lane + pullR - 0.07;
       cx = pa.x - pa.ty * c.dir * lane;
       cy = pa.y + pa.tx * c.dir * lane;
       const pb = pointAt(L2, c.arc + c.dir * 1.3);
@@ -550,6 +605,10 @@ export class Driver {
     vt *= 1 - Math.min(0.65, curve * 0.55);
     vt *= 1 - Math.min(0.7, Math.abs(dyaw) * 0.6);
     if (!fleeing) vt = Math.min(vt, slowTo);
+    if (hz >= 0) {
+      vt = Math.min(vt, Math.sqrt(2 * 1.1 * Math.max(0, hz - 0.02)));
+      c.waiting = true;
+    }
     if (holdD >= 0) {
       // smooth stop with the front bumper at the line
       vt = Math.min(vt, Math.sqrt(2 * 1.1 * Math.max(0, holdD - 0.02)));
@@ -559,34 +618,61 @@ export class Driver {
     const hx = Math.cos(c.yaw);
     const hy = Math.sin(c.yaw);
     let meet = false;
+    let dodgeTo = 0;
+    let siren = 1e9;
     for (const o of cars) {
       if (o === (c as unknown)) continue;
       const dx = o.x - c.x;
       const dy = o.y - c.y;
       const along = dx * hx + dy * hy;
+      const ow = o.wid ?? c.wid;
+      const ol = o.len ?? c.len;
+      const side = (c.wid + ow) / 2;
+      // blue lights coming up behind, or towards us: pull over to the right and stop
+      if (o.siren && o.driving && Math.abs(along) < 5 && c.loop < 0) {
+        const same = Math.cos(o.yaw - c.yaw);
+        const latS = Math.abs(dx * -hy + dy * hx);
+        if (latS < 1.6 && ((along < 0 && same > 0.3) || (along > 0 && same < -0.3))) siren = Math.min(siren, Math.abs(along));
+      }
       if (along <= 0 || along > 3.5) continue;
-      const lat = Math.abs(dx * -hy + dy * hx);
+      const latR = dx * -hy + dy * hx;
+      const lat = Math.abs(latR);
+      // a vehicle stopped at the kerb on our side: ease out round it (slowly), don't queue behind it
+      if (o.kerb && along < 2.8 && latR > -0.1 && lat < side + 0.06) {
+        dodgeTo = Math.max(dodgeTo, side + 0.08 - latR - c.dodge);
+        vt = Math.min(vt, 0.3);
+        if (lat + c.dodge >= side) continue;
+      }
       const oncoming = o.driving && Math.cos(o.yaw - c.yaw) < -0.3;
-      if (oncoming && lat < 0.3) {
+      if (oncoming && lat < side - 0.04) {
         // head-on in one lane (narrow track, roads sharing a corridor): both pull over to the right and pass slowly
         meet = true;
         vt = Math.min(vt, 0.25 + along * 0.2);
         continue;
       }
-      if (along > 1.4 || lat > 0.19) continue;
+      if (along > (c.len + ol) / 2 + 0.7 || lat > side * 0.9) continue;
       // converging at an angle and each in the other's way: the lower id goes first
       if (o.driving && !oncoming && o.v > -0.01) {
         const ox = Math.cos(o.yaw);
         const oy = Math.sin(o.yaw);
         const back = -dx * ox - dy * oy;
-        if (back > 0 && back < 1.4 && Math.abs(-dx * -oy + -dy * ox) < 0.19 && c.id < o.id) continue;
+        if (back > 0 && back < (c.len + ol) / 2 + 0.7 && Math.abs(-dx * -oy + -dy * ox) < side * 0.9 && c.id < o.id) continue;
       }
       // keep ~0.2 tiles between bumpers in a queue, more at speed
-      const gap = along - 0.68;
+      const gap = along - (c.len + ol) / 2 - 0.18;
       vt = Math.min(vt, Math.max(0, gap * 1.8 + (o.driving ? Math.max(0, o.v) * 0.7 : 0)));
       if (gap < 0.25 && !o.driving) out.blocked = true;
     }
     c.aside = meet ? Math.min(1, c.aside + dt * 2.5) : Math.max(0, c.aside - dt * 0.8);
+    // round a parked emergency vehicle: shift left (and back once past)
+    const dg = dodgeTo > 0 ? c.dodge + dodgeTo : 0;
+    c.dodge += Math.max(-dt * 0.35, Math.min(dt * 0.5, dg - c.dodge));
+    if (siren < 1e9 && !fleeing) c.yieldT = 1.2;
+    if (c.yieldT > 0) {
+      c.yieldT -= dt;
+      // over to the right at a crawl, then wait there till it has gone by
+      vt = Math.min(vt, pulled ? 0 : 0.28);
+    }
     if (nearUnit < 1.6) {
       vt = Math.min(vt, Math.max(0, (nearUnit - 0.9) * 0.8));
       if (nearUnit < 1.2) out.blocked = true;

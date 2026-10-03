@@ -8,6 +8,7 @@ import type { Road } from '../layout';
 import { netForRoads } from './clearance';
 import { Landmarks, centrepiece } from './landmarks';
 import { Light, MarkKind, PropKind, headLight, pointAt, wrapPi, type Mark, type RoadNet } from './roadnet';
+import { AISLE, BAY_D, BAY_W } from './sites';
 import { groundAt, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
 /*
@@ -667,18 +668,18 @@ export class RoadFurniture {
     // parking lots: bay lines and arrows
     for (const lot of net.lots) {
       const ang = Math.atan2(lot.ny, lot.nx);
-      const n = Math.floor((lot.L - 0.75) / 0.34);
+      const n = Math.floor((lot.L - 0.75) / BAY_W);
       for (let k = 0; k <= n; k++) {
-        const sx = -lot.L / 2 + 0.6 + k * 0.34;
+        const sx = -lot.L / 2 + 0.6 + k * BAY_W;
         for (const row of [-1, 1]) {
-          const t = row * (0.32 + 0.31);
-          quad({ kind: MarkKind.Bar, x: lot.x + lot.ux * sx + lot.nx * t, y: lot.y + lot.uy * sx + lot.ny * t, ang, len: 0.6, wid: 0.028 }, UV.bar, false);
+          const t = row * (AISLE / 2 + BAY_D / 2);
+          quad({ kind: MarkKind.Bar, x: lot.x + lot.ux * sx + lot.nx * t, y: lot.y + lot.uy * sx + lot.ny * t, ang, len: BAY_D - 0.04, wid: 0.03 }, UV.bar, false);
         }
       }
       // arrows on the aisle: in on one side, out on the other
       for (const [side, dir] of [
-        [0.14, 1],
-        [-0.14, -1],
+        [0.22, 1],
+        [-0.22, -1],
       ]) {
         const sx = -lot.L / 2 + 0.75;
         const cx = lot.x + lot.ux * sx + lot.nx * side;

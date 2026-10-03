@@ -56,8 +56,28 @@ export interface CarModel {
   lightY: number;
 }
 
+/**
+ * Civilian vehicles are built at the old half scale below and enlarged by this: next to the
+ * people (an adult is 0.46 tiles tall) a sedan's roof comes up to about the shoulder, in line
+ * with the military vehicles' enlargement. A sedan is ~0.9 tiles long, 0.38 wide.
+ */
+export const CAR_SCALE = 1.8;
+
+/** Enlarge a model built at the old scale (geometry, door rig, sizes). */
+export function scaleCar(m: CarModel, k = CAR_SCALE): CarModel {
+  m.geo.scale(k, k, k);
+  m.geo.computeBoundingSphere();
+  m.rig.x *= k;
+  m.rig.y *= k;
+  return { ...m, len: m.len * k, wid: m.wid * k, lightY: m.lightY * k };
+}
+
 /** 0 sedan, 1 van, 2 pickup, 3 tractor */
 export function carModel(kind: number): CarModel {
+  return scaleCar(baseCarModel(kind));
+}
+
+function baseCarModel(kind: number): CarModel {
   const b = new GeoBuilder();
   if (kind === 0) {
     // sedan: 0.5 long

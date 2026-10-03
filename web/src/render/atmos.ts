@@ -240,11 +240,11 @@ function todPreset(key: Key): { p: Preset; light: number } {
       set({ sunI: 2.75, hemiI: 0.82, env: 0.44, cloud: 0.32, sat: 1.0, vignette: 0.3, bloom: 0.4, exposure: 1.1, spec: 1, dark: 0 }, 0xffe8cc, 0x9cb8e6, 0x5c5240, [0.3, 0.3, 0.3], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2824, [1, 0.97, 0.95]);
       break;
     case 'golden':
-      set({ sunI: 2.0, hemiI: 0.92, env: 0.5, cloud: 0.28, sat: 1.0, vignette: 0.35, bloom: 0.5, exposure: 1.05, spec: 1, dark: 0.1 }, 0xffcc98, 0x86a2dc, 0x3c3a3a, [0.4, 0.3, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x2a221e, [0.92, 0.84, 0.8]);
+      set({ sunI: 2.4, hemiI: 0.95, env: 0.5, cloud: 0.28, sat: 1.0, vignette: 0.35, bloom: 0.5, exposure: 1.1, spec: 1, dark: 0.1 }, 0xffcc98, 0x86a2dc, 0x3c3a3a, [0.4, 0.3, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x2a221e, [0.92, 0.84, 0.8]);
       light = 0.85;
       break;
     case 'sunset':
-      set({ sunI: 1.5, hemiI: 0.88, env: 0.45, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.56, exposure: 0.98, spec: 0.95, dark: 0.38 }, 0xffba86, 0x7490d0, 0x343238, [0.42, 0.26, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x2a1c1c, [0.78, 0.66, 0.7]);
+      set({ sunI: 2.1, hemiI: 1.0, env: 0.5, cloud: 0.22, sat: 1.0, vignette: 0.4, bloom: 0.56, exposure: 1.14, spec: 0.95, dark: 0.38 }, 0xffba86, 0x7490d0, 0x343238, [0.42, 0.26, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x2a1c1c, [0.78, 0.66, 0.7]);
       light = 0.65;
       break;
     case 'twilight':
@@ -256,7 +256,7 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.28;
       break;
     case 'dawn':
-      set({ sunI: 1.6, hemiI: 0.88, env: 0.45, cloud: 0.2, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 0.98, spec: 0.9, dark: 0.42 }, 0xffc094, 0x7c94d0, 0x363438, [0.4, 0.28, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x2a1e22, [0.82, 0.74, 0.78]);
+      set({ sunI: 2.1, hemiI: 1.0, env: 0.5, cloud: 0.2, sat: 1.0, vignette: 0.4, bloom: 0.55, exposure: 1.14, spec: 0.9, dark: 0.42 }, 0xffc094, 0x7c94d0, 0x363438, [0.4, 0.28, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x2a1e22, [0.82, 0.74, 0.78]);
       p.hazeP.set(3, 70, 0.45, 50); // morning mist
       light = 0.6;
       break;

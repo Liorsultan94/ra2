@@ -60,9 +60,10 @@ export interface Board {
   seed: number;
 }
 
-const BAY_W = 0.34;
-const BAY_D = 0.62;
-const AISLE = 0.64;
+/** Bay width / depth and the aisle (sized for the civilian cars, models.ts CAR_SCALE). */
+export const BAY_W = 0.52;
+export const BAY_D = 1.0;
+export const AISLE = 1.0;
 
 /** Is the ground free for a site footprint point? */
 function siteFree(m: GameMap, occ: Uint8Array, R: number, x: number, y: number): boolean {
@@ -98,7 +99,7 @@ function nearForbidden(m: GameMap, x: number, y: number, extra: number): boolean
 export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number): Lot[] {
   const city = m.biome === 'urban';
   const want = city ? 5 : 2;
-  const L = city ? 3.0 : 2.4;
+  const L = city ? 4.2 : 3.4;
   const D = BAY_D * 2 + AISLE;
   const cands: { lot: Lot; score: number }[] = [];
   roads.forEach((r, ri) => {
@@ -185,7 +186,7 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
         if (ix >= 0 && iy >= 0 && ix < m.w * R && iy < m.h * R) occ[iy * m.w * R + ix] |= 1 | 8 | 16;
       }
     const [d0, d1] = lot.draw;
-    roads.push({ pts: lot.access, width: 0.62, variant: 1, lot: lots.indexOf(lot), taper: { w: lot.access.map(() => 0.62), v: lot.access.map(() => 1), from: d0, to: d1, lift: 0.004 } });
+    roads.push({ pts: lot.access, width: 0.8, variant: 1, lot: lots.indexOf(lot), taper: { w: lot.access.map(() => 0.8), v: lot.access.map(() => 1), from: d0, to: d1, lift: 0.004 } });
   }
   return lots;
 }

@@ -82,7 +82,7 @@ const TEMPERATE: BiomeLook = {
   },
   // the mossy cliff scan has lilac lichen-covered stone: calm it to grey
   photoSat: { rock: 0.5, dirt: 0.8 },
-  photoHue: { grass: 0.75 },
+  photoHue: { grass: 0.9 },
   blades: 1,
   clover: 1,
   flowers: 1,

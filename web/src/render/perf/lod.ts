@@ -46,7 +46,7 @@ export function registerLods(base: THREE.BufferGeometry, lods: [THREE.BufferGeom
 /** [LOD1, LOD2] geometries of a base geometry (null: none). */
 export const lodGeos = (g: THREE.BufferGeometry) => LODS.get(g) ?? null;
 /** Model diameter on screen (CSS px) above which LOD0 is used / below which LOD2 (hysteresis applied). */
-export const VEH_LOD0_PX = 165;
+export const VEH_LOD0_PX = 240;
 export const VEH_LOD2_PX = 40;
 
 const _s = new THREE.Vector3();

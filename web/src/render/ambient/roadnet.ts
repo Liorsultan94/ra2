@@ -552,7 +552,8 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     if (r.ring) continue; // turning-circle rings drawn as road pieces: not lanes
     const painted = !!r.painted;
     // city avenues: two lanes a side, cars keep to the right one; streets: one lane a side
-    const lane = r.lot !== undefined ? 0.13 : painted ? (r.variant === 0 ? 0.9 : 0.6) : r.width * (r.variant === 0 ? 0.24 : 0.22);
+    // (country roads: the lane keeps a car (0.38 wide, models.ts CAR_SCALE) clear of the oncoming one and on the asphalt)
+    const lane = r.lot !== undefined ? 0.13 : painted ? (r.variant === 0 ? 0.9 : 0.6) : Math.min(r.width / 2 - 0.17, Math.max(0.21, r.width * (r.variant === 0 ? 0.24 : 0.22)));
     if (r.closed) {
       // a ring road: two lanes-lines meeting at both ends
       const h = r.pts.length >> 1;

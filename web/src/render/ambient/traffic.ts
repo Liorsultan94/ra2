@@ -5,7 +5,7 @@ import type { Effects } from '../effects';
 import type { FogOfWar } from '../fog';
 import type { Layout } from '../layout';
 import { Driver, newDriveCar, type DriveCar } from './driver';
-import { carModel, type CarModel } from './models';
+import { CAR_SCALE, carModel, type CarModel } from './models';
 import { RoadFurniture } from './roadfurniture';
 import { roadNetFor } from './clearance';
 import { SigMode, nearestArc, pointAt, type RoadNet } from './roadnet';
@@ -226,7 +226,7 @@ export class Traffic {
     const y = pt.y + pt.tx * dir * Ln.lane;
     const cruise = CRUISE[kind] * (Ln.paved ? 1 : 0.62) * (0.85 + Math.random() * 0.3);
     const model = this.models[kind];
-    const d = newDriveCar(kind, model.len, line, arc, dir, x, y, yaw, cruise);
+    const d = newDriveCar(kind, model.len, line, arc, dir, x, y, yaw, cruise, model.wid);
     return Object.assign(d, {
       model,
       s: S.Drive,
@@ -591,7 +591,7 @@ export class Traffic {
       c.seen = vis;
       if (!vis) continue;
       const mdl = c.model;
-      const h = 0.19;
+      const h = 0.19 * CAR_SCALE;
       // root: position, yaw (tile y = world z, so yaw is negated about +Y), terrain pitch / bank, roll for flipped wrecks
       const y = c.hgt + c.lift;
       _e.set(c.bank, -c.yaw, c.pitch, 'YXZ');
