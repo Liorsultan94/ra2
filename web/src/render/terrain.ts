@@ -129,12 +129,13 @@ export class Terrain {
     const gcol = [0, 0, 0];
     const look = g.look;
     const rgb = (v: number) => [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-    // temperate keeps its original minimap tones
-    const temperate = look.code === 0;
-    const dirtC = temperate ? [122, 100, 72] : rgb(look.ground.dirt);
-    const rockC = temperate ? [138, 132, 122] : rgb(look.ground.rock);
-    const sandC = temperate ? [168, 154, 122] : rgb(look.ground.sand);
-    const mudC = temperate ? [74, 62, 48] : rgb(look.ground.mud);
+    // the biome's ground colours: derived from the photoscanned materials' mean albedo (biome.ts),
+    // i.e. what each layer averages to on screen; a little lift so the small map reads in daylight
+    const lift = (c: number[]) => c.map((v) => Math.min(255, v * 1.12));
+    const dirtC = lift(rgb(look.ground.dirt));
+    const rockC = lift(rgb(look.ground.rock));
+    const sandC = lift(rgb(look.ground.sand));
+    const mudC = lift(rgb(look.ground.mud));
     for (let py = 0; py < c.height; py++) {
       for (let px = 0; px < c.width; px++) {
         const x = (px + 0.5) / S;
@@ -152,7 +153,8 @@ export class Terrain {
         // winter: the painted snow cover
         if (look.code === 2) {
           const sn = Math.max(0, Math.min(1, (g.ctl[k + 2] / 255 - 0.25) / 0.4));
-          col = col.map((v, j) => v + ([214, 222, 236][j] - v) * sn);
+          const snowC = lift(rgb(look.ground.snow ?? 0xd6deec));
+          col = col.map((v, j) => v + (snowC[j] - v) * sn);
         }
         const t = m.tiles[i];
         if (t === Tile.Water) col = [...look.mini.water];

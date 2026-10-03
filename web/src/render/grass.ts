@@ -61,6 +61,11 @@ uniform sampler2D trampleTex;
 uniform float gNow8;
 uniform float windTime;
 uniform float wxSnow;
+#if PHOTO
+uniform highp sampler2DArray phA;
+uniform vec4 phP[PH_N];
+uniform vec3 phM[PH_N];
+#endif
 varying vec3 vGrassC;
 vec3 gP;
 vec3 gN;
@@ -129,6 +134,12 @@ void grassBlade() {
   vec4 tn = texture2D( tintTex, uv );
   float drift = texture2D( gNoise, base * 0.043 ).b - 0.5 + texture2D( gNoise, base * 0.0117 + 0.5 ).g - 0.5;
   vec3 c = grassBase( ct.r, tn.a, drift * 0.8 );
+#if PHOTO
+  // the turf's own photoscan under the blade (a coarse mip): blades carry the ground's colour
+  vec3 pa = textureLod( phA, vec3( base * phP[ int( PH_GRASS ) ].x, PH_GRASS ), 2.5 ).rgb;
+  vec3 pr = clamp( pa / max( phM[ int( PH_GRASS ) ], vec3( 1e-3 ) ), vec3( 0.55 ), vec3( 1.6 ) );
+  c *= mix( vec3( dot( pr, vec3( 0.2126, 0.7152, 0.0722 ) ) ), pr, 0.45 );
+#endif
   float v = fract( bh.x * 31.7 );
   c = mix( c, gcFresh, step( 0.72, v ) * ( 0.5 - tn.a * 0.3 ) );
   c = mix( c, gcDry * vec3( 1.2, 1.08, 0.78 ), step( v, 0.1 ) * ( 0.35 + tn.a * 0.5 ) );
@@ -252,6 +263,7 @@ export class GrassBlades {
       gcDry: sh.gcDry,
       gcFresh: sh.gcFresh,
       gcClover: sh.gcClover,
+      ...(ground.photo ? { phA: sh.phA, phP: sh.phP, phM: sh.phM } : {}),
     };
     const mat = (this.mat = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: THREE.DoubleSide }));
     mat.onBeforeCompile = (shader) => {
@@ -266,7 +278,9 @@ export class GrassBlades {
         .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal );');
     };
     fog.apply(mat);
-    mat.customProgramCacheKey = () => 'grass-blades-1';
+    const ph = ground.photo;
+    mat.defines = { ...(mat.defines ?? {}), PHOTO: ph ? 1 : 0, ...(ph ? { PH_N: String(ph.stack.layers.length), PH_GRASS: ph.stack.slot.grass.toFixed(1) } : {}) };
+    mat.customProgramCacheKey = () => 'grass-blades-2-p' + (ph ? 1 : 0);
 
     const mesh = (this.mesh = new THREE.Mesh(geo, mat));
     mesh.frustumCulled = false;

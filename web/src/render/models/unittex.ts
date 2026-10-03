@@ -298,7 +298,7 @@ const CAMO: Record<string, CamoSpec> = {
   germany: { scheme: 'nato3', cols: [0x4a5838, 0x5a4634, 0x22231d, 0x4a5838] },
   russia: { scheme: 'ru3', cols: [0x55643c, 0x958a62, 0x24241c, 0x44502e] },
   ukraine: { scheme: 'uapix', cols: [0x5f6a3e, 0x6a5a3c, 0x2c2e22, 0x8a8260] },
-  china: { scheme: 'pla', cols: [0x5d6b47, 0x3a4630, 0x24261d, 0x8e8562] },
+  china: { scheme: 'pla', cols: [0x63784a, 0x3e5236, 0x9c8a62, 0x34382a] }, // light green, dark green, tan, dark (Type 99A parade digital)
   korea: { scheme: 'kor4', cols: [0x56623f, 0x5e4c36, 0x22241c, 0x8c8262] },
   turkey: { scheme: 'tr3', cols: [0x667050, 0x58483a, 0x26271f, 0x667050] },
   iran: { scheme: 'ir', cols: [0xb19a6c, 0x8a7552, 0x6a5a40, 0xc8b48a] },

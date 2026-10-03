@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
@@ -7,11 +9,19 @@ import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
+import { assetBase, fetchBitmap } from './photoground';
 
 /*
  * Natural rock: displaced, smooth-shaded icospheres with crevice darkening and
  * moss on top, laid along the ridges as cliff-like outcrops, plus scree,
  * riverbank stones and the odd field stone.
+ *
+ * Medium / high quality swap the procedural shapes for four CC0 photoscanned
+ * rocks once they have streamed in (public/tex/rocks, baked and decimated by
+ * tools/bake-rocks.mjs): same instancing, culling and LOD, the geometries are
+ * replaced in place and the material becomes the scans' shared texture atlas,
+ * graded per biome (grey and mossy in the temperate valley, warm sandstone in
+ * the desert, cold granite under the winter snow, pale city stone).
  */
 
 function noise3(x: number, y: number, z: number, seed: number) {
@@ -97,6 +107,132 @@ function finishRock(g: THREE.BufferGeometry, disp: Float32Array, seed: number): 
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   g.computeBoundingSphere();
   return g;
+}
+
+// ------------------------------------------------------------------ photoscans
+
+interface PhotoRocks {
+  /** Per rock class: near / far geometry (normalised like rockGeo: radius 1, base at y = -0.4). */
+  geos: { hi: THREE.BufferGeometry; lo: THREE.BufferGeometry }[];
+  albedo: THREE.Texture;
+  normal: THREE.Texture;
+}
+
+const ROCK_KEYS = ['outcrop', 'crag', 'boulder', 'stone'];
+let rocksLoad: Promise<PhotoRocks | null> | null = null;
+
+/** Plain float geometry (dequantised, node transform applied) from a loaded glTF mesh. */
+function bakeMesh(mesh: THREE.Mesh): THREE.BufferGeometry {
+  mesh.updateWorldMatrix(true, false);
+  const src = mesh.geometry;
+  const n = src.attributes.position.count;
+  const pos = new Float32Array(n * 3);
+  const nrm = new Float32Array(n * 3);
+  const uv = new Float32Array(n * 2);
+  const v = new THREE.Vector3();
+  const nm = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+  const P = src.attributes.position;
+  const N = src.attributes.normal;
+  const T = src.attributes.uv;
+  for (let i = 0; i < n; i++) {
+    v.fromBufferAttribute(P, i).applyMatrix4(mesh.matrixWorld);
+    pos.set([v.x, v.y, v.z], i * 3);
+    if (N) {
+      v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize();
+      nrm.set([v.x, v.y, v.z], i * 3);
+    }
+    if (T) uv.set([T.getX(i), T.getY(i)], i * 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  if (src.index) g.setIndex(new THREE.BufferAttribute(Uint16Array.from(src.index.array as ArrayLike<number>), 1));
+  g.computeBoundingSphere();
+  return g;
+}
+
+function loadPhotoRocks(size: number): Promise<PhotoRocks | null> {
+  if (rocksLoad) return rocksLoad;
+  const dir = `${assetBase()}tex/rocks/`;
+  const tex = async (url: string, srgb: boolean) => {
+    const t = new THREE.Texture(await fetchBitmap(url));
+    t.flipY = false;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    t.anisotropy = 4;
+    t.needsUpdate = true;
+    return t;
+  };
+  rocksLoad = (async () => {
+    try {
+      const loader = new GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      const [gltf, albedo, normal] = await Promise.all([loader.loadAsync(`${dir}rocks.glb`), tex(`${dir}rocks_a_${size}.webp`, true), tex(`${dir}rocks_n_${size}.webp`, false)]);
+      gltf.scene.updateMatrixWorld(true);
+      const find = (name: string) => {
+        let hit: THREE.Mesh | null = null;
+        gltf.scene.traverse((o) => {
+          if (!hit && (o as THREE.Mesh).isMesh && (o.name === name || o.parent?.name === name)) hit = o as THREE.Mesh;
+        });
+        if (!hit) throw new Error('rocks.glb: no mesh ' + name);
+        return bakeMesh(hit);
+      };
+      const geos = ROCK_KEYS.map((k) => ({ hi: find(`${k}_hi`), lo: find(`${k}_lo`) }));
+      return { geos, albedo, normal };
+    } catch (e) {
+      console.warn('[photo] rock scans unavailable, keeping the procedural rocks', e);
+      return null;
+    }
+  })();
+  return rocksLoad;
+}
+
+/** Swap a geometry's buffers in place (instanced meshes and the LOD table keep the same object). */
+function replaceGeometry(dst: THREE.BufferGeometry, src: THREE.BufferGeometry) {
+  dst.dispose();
+  for (const name of Object.keys(dst.attributes)) dst.deleteAttribute(name);
+  for (const [name, a] of Object.entries(src.attributes)) dst.setAttribute(name, a);
+  dst.setIndex(src.index);
+  dst.clearGroups();
+  dst.boundingBox = null;
+  dst.boundingSphere = src.boundingSphere?.clone() ?? null;
+}
+
+/** Biome grade of the (warm, sandstone) scans: saturation, colour, moss on top. */
+const ROCK_GRADE: Record<string, { sat: number; color: number; moss: number }> = {
+  temperate: { sat: 0.35, color: 0xb4b2aa, moss: 0.7 },
+  desert: { sat: 1.0, color: 0xf2dcc6, moss: 0 },
+  winter: { sat: 0.3, color: 0xb0b6c0, moss: 0.15 },
+  urban: { sat: 0.25, color: 0xb2b0aa, moss: 0.2 },
+};
+
+function photoRockMaterial(pr: PhotoRocks, biome: string, fog: FogOfWar): THREE.MeshStandardMaterial {
+  const gr = ROCK_GRADE[biome] ?? ROCK_GRADE.temperate;
+  const mat = new THREE.MeshStandardMaterial({ map: pr.albedo, normalMap: pr.normal, roughness: 0.88, metalness: 0, color: gr.color });
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        diffuseColor.rgb = mix( vec3( dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ), diffuseColor.rgb, ${gr.sat.toFixed(2)} );`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        #if ${gr.moss > 0 ? 1 : 0}
+        {
+          // moss and lichen on the upward faces
+          float up = inverseTransformDirection( normal, viewMatrix ).y;
+          float mn = texture2D( fogNoise, vFogP.xz * 0.9 ).g;
+          float moss = smoothstep( 0.5, 0.85, up + ( mn - 0.5 ) * 0.5 ) * ${gr.moss.toFixed(2)};
+          diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.07, 0.085, 0.03 ) * ( 0.7 + mn * 0.6 ), moss );
+        }
+        #endif`,
+      );
+  };
+  fog.apply(mat);
+  mat.customProgramCacheKey = () => 'photo-rock-' + biome;
+  return mat;
 }
 
 export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod): THREE.Object3D[] {
@@ -195,13 +331,30 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
     }
   }
   const out: THREE.Object3D[] = [];
+  const meshes: THREE.InstancedMesh[] = [];
   const loSpan = quality === 'high' ? 19 : 14.5;
   geos.forEach(([hi, lo], k) => {
     if (!lists[k].length) return;
     const ci = new CulledInstances(hi, mat, lists[k], m.w, m.h, 4, { castShadow: shadows && k < 3, receiveShadow: true, name: 'rocks' });
     out.push(ci.mesh);
+    meshes.push(ci.mesh);
     // scree is hidden when zoomed far out
     lod.addCulled(ci, lo, loSpan, k === 3 ? loSpan + 6 : Infinity);
   });
+  // photoscanned rocks (medium: the far model near too, it is as light as the procedural rock; ?photo=0 keeps these)
+  const photoOff = typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search);
+  if (!low && !photoOff && typeof createImageBitmap !== 'undefined')
+    void loadPhotoRocks(quality === 'high' ? 1024 : 512).then((pr) => {
+      if (!pr) return;
+      const pmat = photoRockMaterial(pr, biome ?? 'temperate', fog);
+      geos.forEach(([hi, lo], k) => {
+        const g = pr.geos[k];
+        replaceGeometry(hi, quality === 'high' ? g.hi : g.lo);
+        if (lo) replaceGeometry(lo, g.lo);
+      });
+      for (const im of meshes) im.material = pmat;
+      mat.dispose();
+      console.info('[photo] rock scans in place');
+    });
   return out;
 }

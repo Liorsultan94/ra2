@@ -740,7 +740,7 @@ export class Props {
     const c = new THREE.Color();
     for (const [id, spots] of plan) {
       const hi = geos.get(id);
-      const lo = geos.get(`${id}.lod1`);
+      const lo = geos.get(`${id}_lod1`);
       const info = man.props[id];
       if (!hi || !lo || !info || !spots.length) continue;
       const insts: Inst[] = spots.map((s) => {

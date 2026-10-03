@@ -5,6 +5,7 @@ import { DEF_LIST, unitDef } from '../src/sim/defs';
 import { TPS, type Entity, type SimEvent, type UnitDef } from '../src/sim/types';
 import { ELITE, VETERAN } from '../src/sim/veterancy';
 import { World } from '../src/sim/world';
+import { enterGarrison, isGarrison } from '../src/sim/garrison';
 
 /** Two human players, no starting forces, a construction yard each far away (keeps both alive). */
 function arena(seed = 5) {
@@ -149,14 +150,18 @@ describe('crushing', () => {
     expect(jumper.dead).toBe(false);
     expect(tank.x).toBeGreaterThan(x0 + 9);
 
-    // a garrison inside a civilian building is never on the ground
-    const house = w.list.find((e) => e.kind === 'building' && e.owner === -1 && (e.def.startsWith('civ_') || e.def.startsWith('civ')));
-    if (house) {
-      const g = w.spawnUnit('russia_rifle', 1, house.x, house.y);
-      g.inside = house.id;
-      house.passengers.push(g.id);
-      expect(isCrushable(g)).toBe(false);
-    }
+    // a garrison inside a civilian building: a tank driving right past the house can't touch it
+    const house = w.list.find((e) => isGarrison(e));
+    expect(house).toBeTruthy();
+    const g = w.spawnUnit('russia_rifle', 1, house!.x, house!.y);
+    expect(enterGarrison(w, g, house!)).toBe(true);
+    expect(isCrushable(g)).toBe(false);
+    const t2 = w.spawnUnit('usa_mbt', 0, house!.x - 3, house!.y);
+    t2.stance = 'holdFire';
+    w.issue(0, { type: 'move', ids: [t2.id], x: house!.x + 3, y: house!.y });
+    for (let t = 0; t < TPS * 6; t++) w.step();
+    expect(g.dead).toBe(false);
+    expect(g.inside).toBe(house!.id);
   });
 
   it('a stationary vehicle shoves infantry aside and crushes nobody', () => {
@@ -227,11 +232,16 @@ describe('crushing', () => {
     tank.stance = 'holdFire';
     w.issue(1, { type: 'move', ids: [s.id], x: x0 + 6.5, y: y + 3.5 });
     w.issue(0, { type: 'move', ids: [tank.id], x: x0 + 11.5, y: y + 0.5 });
-    for (let t = 0; t < TPS * 12; t++) w.step();
-    if (!s.dead) {
-      expect(s.dodge).toBe(null);
-      expect(Math.hypot(s.x - (x0 + 6.5), s.y - (y + 3.5))).toBeLessThan(0.6);
+    let dodged = false;
+    for (let t = 0; t < TPS * 12; t++) {
+      w.step();
+      for (const e of w.drainEvents()) if (e.t === 'dodge' && e.id === s.id) dodged = true;
     }
+    expect(dodged).toBe(true);
+    expect(s.dead).toBe(false);
+    expect(s.dodge).toBe(null);
+    expect(s.order.type).toBe('idle'); // the move finished
+    expect(Math.hypot(s.x - (x0 + 6.5), s.y - (y + 3.5))).toBeLessThan(0.6);
   });
 
   it('an attack order on infantry in contact runs them over', () => {

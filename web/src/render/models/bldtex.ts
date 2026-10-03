@@ -781,7 +781,9 @@ async function decode(url: string, w: number, h: number): Promise<Uint8ClampedAr
  * Resolves true when they are in the atlas (or will be, the moment it is built).
  */
 export function loadBuildingPhotos(quality: 'low' | 'medium' | 'high', base = 'tex/buildings/'): Promise<boolean> {
-  if (quality === 'low' || typeof createImageBitmap === 'undefined') return photoLoad ?? Promise.resolve(false);
+  // ?bldphoto=0 keeps the procedural atlas (A/B comparisons, perf checks)
+  const off = typeof location !== 'undefined' && /[?&]bldphoto=0\b/.test(location.search);
+  if (quality === 'low' || off || typeof createImageBitmap === 'undefined') return photoLoad ?? Promise.resolve(false);
   const want = quality === 'high' ? 512 : 256;
   // already loading / loaded at this size or better (an atlas never shrinks back)
   if (photoLoad && photoSize >= want) return photoLoad;

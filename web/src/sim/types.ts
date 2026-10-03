@@ -205,6 +205,7 @@ export interface DodgeState {
   downUntil: number; // dive: tick the soldier is back on his feet
   dive: boolean; // close call: dive and roll
   yield: boolean; // a friendly vehicle: just stepping out of its way
+  order: Order; // the order he had: a new one (player command) takes over once he is out of the way
 }
 
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';

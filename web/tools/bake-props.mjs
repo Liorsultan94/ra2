@@ -27,7 +27,7 @@
  *    textures load with flipY = false), so every prop instances with the same
  *    material.
  *  - output: props.glb (KHR_mesh_quantization + EXT_meshopt_compression; mesh
- *    "<id>" = LOD0, "<id>.lod1" = LOD1), props-{albedo,normal,orm}-{256,512}.webp,
+ *    "<id>" = LOD0, "<id>_lod1" = LOD1), props-{albedo,normal,orm}-{256,512}.webp,
  *    props.json (atlas layout, per-prop footprint / height / biomes /
  *    destructibility, download size per tier) and CREDITS.txt.
  */
@@ -755,7 +755,7 @@ async function main() {
     const lod0 = await simplifyTo(g, Math.min(p.tris, MAX_TRIS));
     const lod1 = await simplifyTo(lo ?? lod0, MAX_TRIS_LOD1);
     addMesh(p.id, lod0);
-    addMesh(`${p.id}.lod1`, lod1);
+    addMesh(`${p.id}_lod1`, lod1);
     const { mn, mx } = lod0.bounds();
     const r3 = (v) => Math.round(v * 1000) / 1000;
     manifest.props[p.id] = {

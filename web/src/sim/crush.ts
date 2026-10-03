@@ -269,7 +269,7 @@ function startDodge(w: World, o: Entity, od: UnitDef, v: Entity, vd: UnitDef, hx
     }
   }
   if (!goal) return; // nowhere to go
-  o.dodge = { by: v.id, x: goal[0], y: goal[1], go, until: go + Math.round(TPS * 2.5), phase: 'wait', downUntil: 0, dive, yield: !enemy };
+  o.dodge = { by: v.id, x: goal[0], y: goal[1], go, until: go + Math.round(TPS * 2.5), phase: 'wait', downUntil: 0, dive, yield: !enemy, order: o.order };
   w.events.push({ t: 'dodge', id: o.id, owner: o.owner, by: v.id, x: o.x, y: o.y, dive, yield: !enemy });
 }
 
@@ -316,6 +316,12 @@ export function stepDodge(w: World, e: Entity, d: UnitDef): boolean {
     return true;
   }
   e.moving = false;
+  if (e.order !== g.order) {
+    // ordered elsewhere meanwhile: that order takes over now he is out of the way
+    e.dodge = null;
+    e.dodgeAt = Math.max(e.dodgeAt, tick + (g.yield ? YIELD_COOLDOWN : DODGE_COOLDOWN));
+    return false;
+  }
   if (g.phase === 'down') {
     if (tick >= g.downUntil) g.phase = 'clear';
     return true;

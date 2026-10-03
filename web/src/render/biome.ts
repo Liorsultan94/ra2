@@ -62,10 +62,10 @@ export interface BiomeLook {
 const TEMPERATE: BiomeLook = {
   biome: 'temperate',
   code: 0,
-  grass: { lush: scan('meadow', 0x2a5523, 0.75), mid: scan('meadow', 0x426f2b, 0.45), dry: 0x7e8047, fresh: 0x5f8e35, clover: 0x28542d },
+  grass: { lush: scan('meadow', 0x2a5523, 0.9), mid: scan('meadow', 0x426f2b, 0.85), dry: 0x7e8047, fresh: 0x5f8e35, clover: 0x28542d },
   ground: {
     dirt: scan('dirt', 0x7a6448, 0.55),
-    rock: scan('mossrock', 0x77716a, 0.5),
+    rock: scan('mossrock', 0x77716a, 0.3),
     sand: scan('beach', 0xa89a7a, 0.5),
     mud: scan('mud', 0x4a3e30, 0.3),
     soil: scan('farmsoil', 0x5e4632, 0.5),
@@ -97,7 +97,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
       dirt: scan('drysoil', 0x9a8160, 0.5),
       rock: scan('sandstone', 0x9c785c, 0.5),
       // the dune scan is pale grey: its ripples, the biome's gold
-      sand: scan('dunes', 0xd6b47e, 0.85),
+      sand: scan('dunes', 0xdcb478, 0.95),
       mud: scan('cracked', 0x8a7052, 0.45),
       soil: scan('farmsoil', 0x7a5a3a, 0.6),
       crop: 0x5c7a2c,
@@ -149,7 +149,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
     biome: 'urban',
     code: 3,
     // park lawns: kept, watered, a little blue-green
-    grass: { lush: scan('meadow', 0x2c5a26, 0.75), mid: scan('meadow', 0x3f6e2c, 0.5), dry: 0x6c7442, fresh: 0x5a8c38, clover: 0x2a5530 },
+    grass: { lush: scan('meadow', 0x2c5a26, 0.9), mid: scan('meadow', 0x3f6e2c, 0.85), dry: 0x6c7442, fresh: 0x5a8c38, clover: 0x2a5530 },
     ground: {
       dirt: scan('pavement', 0x8e8a84, 0.6),
       rock: scan('greyrock', 0x77746e, 0.5),

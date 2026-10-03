@@ -790,6 +790,12 @@ vec2 phDx;
 vec2 phDy;
 vec2 phNxy = vec2(0.0);
 float phSel = 0.5;
+// grass: the scan's light / dark pattern (and a little of its hue) on the painted palette colour
+vec3 phGrass(vec3 alb, vec3 pal) {
+  vec3 r = alb / max(phM[int(PH_GRASS)], vec3(1e-3));
+  float rl = dot(r, vec3(0.2126, 0.7152, 0.0722));
+  return pal * mix(vec3(rl), r, 0.45);
+}
 mat2 phRot(float t) {
   float an = t * 6.2831853;
   float c = cos(an);
@@ -920,7 +926,7 @@ const PHOTO_MAP = /* glsl */ `
   float lw[7] = float[7](wG, wS - wF - wV, wF + wFloor, wV, spl.g, spl.b, spl.a);
   float ll[7] = float[7](PH_GRASS, PH_DIRT, PH_FOREST, PH_GRAVEL, PH_ROCK, PH_SAND, PH_MUD);
   // grass: the scan's detail on the painted palette (lush / dry / drift), as the 3D blades
-  vec3 gTint = grassBase(ctl.r, dry, gDrift) / max(phM[int(PH_GRASS)], vec3(1e-3));
+  vec3 gPal = grassBase(ctl.r, dry, gDrift);
   vec4 la[7];
   vec3 ln[7];
   float ls[7];
@@ -950,8 +956,9 @@ const PHOTO_MAP = /* glsl */ `
     float k = lb[i] / lt;
     if (k > 0.0) {
       int L = int(ll[i]);
-      vec3 c = la[i].rgb * (i == 0 ? gTint : phT[L]);
-      vec2 n = ln[i].xy * phP[L].w;
+      vec3 c = i == 0 ? phGrass(la[i].rgb, gPal) : la[i].rgb * phT[L];
+      // (the turf's own normals are busy: half strength keeps it from going grainy and dark)
+      vec2 n = ln[i].xy * phP[L].w * (i == 0 ? 0.55 : 1.0);
       float r = phP[L].z;
 #if BIOME == 2
       // ice on the ford / frozen banks: smooth and glossy
@@ -973,7 +980,7 @@ const PHOTO_MAP = /* glsl */ `
   // clover patches and wildflowers on the turf (the procedural micro texture's leaf / flower masks)
   if (bg > 0.0 && ctl.g + ctl.b > 0.01) {
     vec4 gT = texture2D(grassTex, tw * (1.0 / GRASS_TILES));
-    vec3 g0 = la[0].rgb * gTint;
+    vec3 g0 = phGrass(la[0].rgb, gPal);
     float clov = ctl.g * smoothstep(0.2, 0.5, gT.b);
     vec3 g1 = mix(g0, gcClover * (0.72 + gT.b * 0.5), clov * 0.85);
 #if BIOME != 2
@@ -1094,8 +1101,8 @@ const PHOTO_MAP = /* glsl */ `
       float st = smoothstep(0.47, 0.53, sw) * (1.0 - smoothstep(0.97, 1.0, sw));
       st = mix(0.5, st, clamp(1.0 - aa * 2.0, 0.0, 1.0));
       vec3 lawn = grassBase(0.3 + ctl.r * 0.4, 0.12, gDrift * 0.5);
-      fc = fa.rgb * lawn / max(phM[int(PH_GRASS)], vec3(1e-3)) * (0.86 + st * 0.24);
-      fn.xy *= 0.7;
+      fc = phGrass(fa.rgb, lawn) * (0.86 + st * 0.24);
+      fn.xy *= 0.45;
     }
     // darker rim along the field edge
     fc *= 0.82 + 0.18 * smoothstep(0.5, 0.95, fld.r);

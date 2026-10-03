@@ -46,7 +46,7 @@ interface Pal {
 function palette(biome: GameMap['biome']): Pal {
   switch (biome) {
     case 'desert':
-      return { asphalt: [104, 96, 86], shoulder: [168, 140, 104], gravel: [176, 150, 112], island: [190, 160, 118], islandAlt: [150, 140, 90], paint: [226, 218, 196], urban: false };
+      return { asphalt: [78, 74, 68], shoulder: [168, 140, 104], gravel: [176, 150, 112], island: [190, 160, 118], islandAlt: [150, 140, 90], paint: [226, 218, 196], urban: false };
     case 'winter':
       return { asphalt: [150, 156, 166], shoulder: [196, 202, 212], gravel: [170, 168, 166], island: [222, 228, 236], islandAlt: [190, 198, 206], paint: [236, 238, 240], urban: false };
     case 'urban':
@@ -306,7 +306,7 @@ function kerbGeometry(urban: boolean): THREE.BufferGeometry {
 }
 
 function shrubGeometry(biome: GameMap['biome']): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(1, 0).toNonIndexed();
+  const g = new THREE.IcosahedronGeometry(1, 0);
   g.computeVertexNormals();
   const base = biome === 'desert' ? C(0x7d7a3e) : biome === 'winter' ? C(0x2f4a36) : C(0x3f6e2a);
   const top = biome === 'winter' ? C(0xe8edf2) : biome === 'desert' ? C(0x9b9450) : C(0x5d8f3a);

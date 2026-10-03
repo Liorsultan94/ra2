@@ -166,7 +166,12 @@ export class PhotoGround {
       if (tint[li].x !== 1 || tint[li].y !== 1 || tint[li].z !== 1) continue;
       c.setHex(hex); // linear (ColorManagement)
       const m = mats[li].mean;
-      tint[li].set(c.r / Math.max(1e-3, m[0]), c.g / Math.max(1e-3, m[1]), c.b / Math.max(1e-3, m[2]));
+      // brightness follows the look colour fully, the hue only part of the way (a per-channel ratio
+      // on a dark channel - the blue of brown soil - would otherwise tint the scan's highlights)
+      const lum = (r: number, g: number, b: number) => r * 0.2126 + g * 0.7152 + b * 0.0722;
+      const L = lum(c.r, c.g, c.b) / Math.max(1e-4, lum(m[0], m[1], m[2]));
+      const ch = (a: number, b: number) => L * (1 + (a / Math.max(1e-3, b) / L - 1) * 0.4);
+      tint[li].set(ch(c.r, m[0]), ch(c.g, m[1]), ch(c.b, m[2]));
     }
     this.tints = { value: tint };
     if (size > 0)

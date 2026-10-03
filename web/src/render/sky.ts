@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from './fog';
+import { HDRI_APPLY, HDRI_PARS, SkyHdri } from './skyhdri';
 
 /*
  * Physical sky (seen in photo mode, the intro flyover, cinematic and low
@@ -21,7 +22,8 @@ import type { FogOfWar } from './fog';
  *   colour the outskirts' far ground is blended to (fog.ts skyHor*), so the
  *   countryside melts into the sky without a seam.
  * - Environment lighting (high quality): the sky (without the sun disc) is
- *   re-captured into a PMREM environment every few seconds when it changed.
+ *   re-captured into a PMREM environment every few seconds when it changed,
+ *   with the structure of three photographed HDRIs blended in (skyhdri.ts).
  *
  * No program is ever recompiled: quality picks the defines once at creation.
  */
@@ -166,6 +168,9 @@ const DOME_FRAG = /* glsl */ `
   uniform float uEnv;
   uniform float uGray;
   varying vec3 vDir;
+  #ifdef HDRI
+  ${HDRI_PARS}
+  #endif
   float h13( vec3 p ) {
     p = fract( p * 0.1031 );
     p += dot( p, p.zyx + 31.32 );
@@ -248,6 +253,9 @@ const DOME_FRAG = /* glsl */ `
     vec3 hz = mix( uHorB, uHorA, dot( vd, uSunXZ ) * 0.5 + 0.5 );
     col = mix( col, hz, 1.0 - smoothstep( -0.02, 0.09, up ) );
     if ( uEnv > 0.5 && up < 0.0 ) col = mix( hz, vec3( uGray ), ( 1.0 - smoothstep( -0.4, 0.0, up ) ) );
+    #ifdef HDRI
+    ${HDRI_APPLY}
+    #endif
     if ( any( isnan( col ) ) ) col = vec3( 0.0 );
     gl_FragColor = vec4( col, 1.0 );
   }
@@ -339,6 +347,8 @@ export class Sky {
   private lightN = new THREE.Vector3();
   /** The environment map captured from the sky (high quality); null until the first capture. */
   env: THREE.Texture | null = null;
+  /** Photographed HDRIs blended into the capture (high quality; ?photo=0 turns them off). */
+  private hdri: SkyHdri | null = null;
 
   constructor(
     private renderer: THREE.WebGLRenderer,
@@ -358,6 +368,8 @@ export class Sky {
       depthWrite: false,
     });
     this.lutScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.lutMat));
+    if (envCapture && !(typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search)))
+      this.hdri = new SkyHdri(() => this.envKey.set(9, 9, 9));
     this.mat = this.domeMaterial(false);
     // a unit sphere drawn on the far plane around whichever camera renders it (main view, water reflection)
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), this.mat);
@@ -374,8 +386,9 @@ export class Sky {
 
   private domeMaterial(env: boolean) {
     const fu = this.fog.uniforms;
+    const hd = env ? this.hdri : null;
     return new THREE.ShaderMaterial({
-      defines: this.quality === 'high' ? { HQ: 1 } : {},
+      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}) },
       uniforms: {
         uLut: { value: this.lut.texture },
         uNoise: fu.fogNoise,
@@ -394,6 +407,7 @@ export class Sky {
         uSunXZ: { value: new THREE.Vector2(1, 0) },
         uEnv: { value: env ? 1 : 0 },
         uGray: { value: 0.05 },
+        ...(hd ? hd.uniforms : {}),
       },
       vertexShader: DOME_VERT,
       fragmentShader: DOME_FRAG,
@@ -472,6 +486,7 @@ export class Sky {
     fu.skyHorA.value.set(A.x, A.y, A.z, this.horizon);
     fu.skyHorB.value.set(B.x, B.y, B.z, 0);
     fu.skySunXZ.value.copy(this.sunXZ);
+    if (this.hdri?.update(st.sun, st.cover, night)) this.envKey.set(9, 9, 9);
     if (this.envCapture) this.captureEnv(light, st);
   }
 

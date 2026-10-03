@@ -8,13 +8,13 @@
    "albedo": "bld-albedo-256.webp",
    "normal": "bld-normal-256.webp",
    "rm": "bld-rm-256.webp",
-   "bytes": 252198
+   "bytes": 258644
   },
   "512": {
    "albedo": "bld-albedo-512.webp",
    "normal": "bld-normal-512.webp",
    "rm": "bld-rm-512.webp",
-   "bytes": 1210942
+   "bytes": 1232224
   }
  },
  "tiles": [
