@@ -27,7 +27,32 @@ export const WX = {
    * wxWet so puddles can stay (and shrink) while the ground dries after the rain.
    */
   wxRain: { value: 0 },
+  /**
+   * Wet-surface tier, set by the ground for the battle's quality: 0 (low) = rain only darkens
+   * surfaces; 1 = also glossier, puddles with sky reflections and drop ripples.
+   */
+  wxGloss: { value: 1 },
 };
+
+/**
+ * Debug / screenshot pins: ?wet=<0..1>, ?rain=<0..1>, ?snow=<0..1> hold the shared surface uniforms
+ * at that value whatever the weather does (writes are ignored), e.g. `&weather=rain&wet=0.4`.
+ * The ?wx=<preset> URL (weathercycle.ts) drives the whole weather state instead.
+ */
+export function wxPins(search: string): Partial<Record<'wxWet' | 'wxRain' | 'wxSnow', number>> {
+  const q = new URLSearchParams(search);
+  const out: Partial<Record<'wxWet' | 'wxRain' | 'wxSnow', number>> = {};
+  for (const [k, u] of [['wet', 'wxWet'], ['rain', 'wxRain'], ['snow', 'wxSnow']] as const) {
+    const v = q.get(k);
+    if (v !== null && v !== '' && Number.isFinite(+v)) out[u] = Math.max(0, Math.min(1, +v));
+  }
+  return out;
+}
+if (typeof location !== 'undefined') {
+  for (const [k, v] of Object.entries(wxPins(location.search)) as ['wxWet' | 'wxRain' | 'wxSnow', number][]) {
+    Object.defineProperty(WX[k], 'value', { configurable: true, enumerable: true, get: () => v, set: () => {} });
+  }
+}
 
 /** GLSL declarations for the uniforms above. */
 export const WX_PARS = /* glsl */ `
@@ -37,6 +62,7 @@ uniform float wxWet;
 uniform float wxDust;
 uniform float wxTime;
 uniform float wxRain;
+uniform float wxGloss;
 `;
 
 /**
@@ -92,7 +118,11 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
   float wxUp = clamp( wxN.y, 0.0, 1.0 );
   vec4 wxNz = texture2D( fogNoise, vFogP.xz * 0.21 );
   if ( wxSnow > 0.001 ) {
-    float cover = smoothstep( 0.42, 0.78, wxUp + ( wxNz.r - 0.5 ) * 0.5 ) * wxSnow;
+    // accumulation: a light fall lies in patches (drifts against the noise), which spread and join
+    // as it builds (full cover from ~0.85) and shrink back the same way as it melts
+    float wxBld = wxNz.r * 0.65 + texture2D( fogNoise, vFogP.xz * 0.61 + 0.37 ).b * 0.35;
+    float wxThB = 1.15 - wxSnow * 1.35;
+    float cover = smoothstep( 0.42, 0.78, wxUp + ( wxNz.r - 0.5 ) * 0.5 ) * min( 1.0, smoothstep( wxThB - 0.12, wxThB + 0.12, wxBld ) * ( 0.55 + 0.6 * wxSnow ) );
     cover = max( cover, smoothstep( 0.1, 0.5, wxUp ) * wxSnow * 0.22 );
     if ( wxSnowThin > 0.001 ) {
       // early in the snowfall it lies in drifts with thinly dusted ground between; the gaps fill in over the battle
@@ -115,10 +145,13 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
       metalnessFactor = mix( metalnessFactor, 0.0, cover );
     #endif
   }
+  #ifndef WX_OWN_WET
   if ( wxWet > 0.001 ) {
     float wet = wxWet * ( 0.55 + 0.45 * wxUp );
     diffuseColor.rgb *= 1.0 - 0.38 * wet;
     #if defined( STANDARD )
+    // (low quality: darkening only)
+    if ( wxGloss > 0.5 ) {
       roughnessFactor = mix( roughnessFactor, roughnessFactor * 0.45, wet * smoothstep( 0.3, 0.8, wxUp ) );
       #ifndef WX_NO_PUDDLE
       {
@@ -134,8 +167,10 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
         }
       }
       #endif
+    }
     #endif
   }
+  #endif
   if ( wxDust > 0.001 ) {
     float dust = smoothstep( 0.3, 0.9, wxUp + ( wxNz.b - 0.5 ) * 0.4 ) * wxDust * 0.5;
     diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.62, 0.48, 0.3 ), dust );

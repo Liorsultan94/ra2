@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { groundHeight, type GameMap } from '../sim/map';
+import { WetGlints } from './wetglints';
 
 /*
  * Falling weather particles (rain streaks, snow flakes, blowing sand) in a
@@ -105,6 +106,9 @@ export class WeatherFx {
   private wind = new THREE.Vector3();
   private lastT = -1;
   private dynamic: boolean;
+  private quality: 'low' | 'medium' | 'high';
+  /** Light reflections in the wet ground (medium / high; wetglints.ts), added next to the particles. */
+  glints: WetGlints | null = null;
 
   constructor(
     kind: FallKind,
@@ -115,6 +119,7 @@ export class WeatherFx {
   ) {
     this.kind = kind;
     this.dynamic = dynamic;
+    this.quality = quality;
     const qk = (this.qk = quality === 'high' ? 1 : quality === 'medium' ? 0.6 : 0.3);
     const n = (this.n = Math.round((dynamic ? LOOK.rain.n : LOOK[kind].n) * qk));
     const base = new THREE.PlaneGeometry(1, 1);
@@ -253,6 +258,13 @@ export class WeatherFx {
     }
     flash = Math.min(1, flash);
     u.uFlash.value = flash;
+    // wet ground mirrors the lamps and headlights
+    const scene = this.mesh.parent;
+    if (scene && this.quality !== 'low') {
+      const g = (this.glints ??= new WetGlints(map, this.quality));
+      if (g.mesh.parent !== scene) scene.add(g.mesh);
+      g.update(scene, camera, time);
+    }
     return flash;
   }
 }

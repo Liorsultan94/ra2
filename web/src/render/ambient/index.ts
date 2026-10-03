@@ -103,7 +103,7 @@ export class AmbientLife {
     this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
     this.emergency.snap = (x, y, r) => this.people.pavement(x, y, r);
     this.emergency.ahead = (x, y, yaw, hw) => this.traffic.blockerAhead(x, y, yaw, hw);
-    this.traffic.headlight = (x, y, z, yaw, k) => this.host.atmos.night?.carLight(x, y, z, yaw, k);
+    this.traffic.headlight = (x, y, z, yaw, k, len) => this.host.atmos.night?.carLight(x, y, z, yaw, k, len);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';

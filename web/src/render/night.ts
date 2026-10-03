@@ -18,6 +18,13 @@ const MAX_FLARES = 900;
 const MAX_POOLS = 260;
 const MAX_CONES = 220;
 const MAX_CARS = 48;
+/** Floats per queued civilian headlight: x, y, z, yaw, k, size. */
+const CAR_STRIDE = 6;
+/** Car body length (tiles) the civilian beam below was tuned for (the old half-scale sedan). */
+export const CAR_LIGHT_REF_LEN = 0.5;
+/** Civilian beam pool at CAR_LIGHT_REF_LEN: length (from the bumper) and width. */
+const CAR_BEAM_LEN = 2.4;
+const CAR_BEAM_WID = 1.5;
 const MAX_OUTAGES = 16;
 
 /** Stable 0..1 hash of a position (which lamps die in an outage). */
@@ -155,7 +162,7 @@ export class NightLights {
    */
   hook: ((n: NightLights, dark: number, time: number) => void) | null = null;
   /** Civilian headlights queued by the ambient life (x, y, z, yaw, k), drawn on the next update. */
-  private cars = new Float32Array(MAX_CARS * 5);
+  private cars = new Float32Array(MAX_CARS * CAR_STRIDE);
   private nCars = 0;
   /** Shelling knocks out the lamps around it for a while: x, z, radius, start, end (game-ish seconds). */
   private outages = new Float32Array(MAX_OUTAGES * 5);
@@ -197,18 +204,33 @@ export class NightLights {
 
   /**
    * Civilian car headlights (ambient life): a beam pool on the road ahead and a faint cone.
-   * (x, z) = the front bumper, y = road height, yaw = heading (world, atan2(-dirZ, dirX)), k = 0..1.
+   * (x, z) = the front bumper, y = road height, yaw = heading (world, atan2(-dirZ, dirX)), k = 0..1,
+   * len = the car's body length in tiles (the beam, its pool and the lamp height scale with the car;
+   * CAR_LIGHT_REF_LEN = the size the pools were first tuned at).
    * Queued and drawn on the next update (a frame late: invisible at car speeds).
    */
-  carLight(x: number, y: number, z: number, yaw: number, k: number) {
-    if (this.nCars >= MAX_CARS) return;
+  carLight(x: number, y: number, z: number, yaw: number, k: number, len = CAR_LIGHT_REF_LEN) {
+    if (this.nCars >= MAX_CARS || !(len > 0)) return;
     const c = this.cars;
-    const i = this.nCars++ * 5;
+    const i = this.nCars++ * CAR_STRIDE;
     c[i] = x;
     c[i + 1] = y;
     c[i + 2] = z;
     c[i + 3] = yaw;
     c[i + 4] = k;
+    c[i + 5] = len / CAR_LIGHT_REF_LEN;
+  }
+
+  /** Beam pool of a queued civilian car (tests / debug): centre offset ahead of the bumper, length, width. */
+  carBeam(i: number): { ahead: number; len: number; wid: number } | null {
+    if (i < 0 || i >= this.nCars) return null;
+    const s = this.cars[i * CAR_STRIDE + 5];
+    return { ahead: CAR_BEAM_LEN * 0.5 * s, len: CAR_BEAM_LEN * s, wid: CAR_BEAM_WID * s };
+  }
+
+  /** Civilian headlights queued for the next update. */
+  get queuedCars(): number {
+    return this.nCars;
   }
 
   /**
@@ -422,16 +444,19 @@ export class NightLights {
     // civilian headlights (queued by the ambient life)
     const cq = this.cars;
     for (let i = 0; i < this.nCars; i++) {
-      const o = i * 5;
+      const o = i * CAR_STRIDE;
       const x = cq[o];
       const y = cq[o + 1];
       const z = cq[o + 2];
       const yaw = cq[o + 3];
       const k = cq[o + 4] * dk;
+      const s = cq[o + 5];
       const fx = Math.cos(yaw);
       const fz = -Math.sin(yaw);
-      this.pool(x + fx * 1.2, y, z + fz * 1.2, yaw, 2.4, 1.5, 0.34 * k, 0.31 * k, 0.23 * k, true);
-      this.cone(x, y + 0.09, z, yaw, -0.09, 1.9, 0.38, 0.32 * k, 0.3 * k, 0.24 * k);
+      // the beam starts at the bumper; pool and cone scale with the car (the same light per area)
+      const bl = CAR_BEAM_LEN * s;
+      this.pool(x + fx * bl * 0.5, y, z + fz * bl * 0.5, yaw, bl, CAR_BEAM_WID * s, 0.34 * k, 0.31 * k, 0.23 * k, true);
+      this.cone(x, y + 0.09 * s, z, yaw, -0.09, 1.9 * s, 0.38 * s, 0.32 * k, 0.3 * k, 0.24 * k);
     }
     this.nCars = 0;
     // retire finished outages

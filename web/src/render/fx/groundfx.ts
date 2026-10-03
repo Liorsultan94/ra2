@@ -157,11 +157,14 @@ export class GroundFx {
         if (WX.wxWet.value > 0.3) {
           // road spray off the tyres / tracks in the rain
           if (sp < 0.4) break;
-          const n = this.take(Math.floor(0.5 * sp * weight * rate + rnd()));
+          const wk = Math.min(1, (WX.wxWet.value - 0.3) / 0.5);
+          const n = this.take(Math.floor((0.5 + 0.4 * wk) * sp * weight * (wheeled ? 1.3 : 1) * rate + rnd()));
           for (let i = 0; i < n; i++) {
             const side = i % 2 ? 1 : -1;
             this.emit(rx + px * gauge * side, g + 0.12, rz + pz * gauge * side, -fx * 0.4 + px * side * 0.35, 0.3 + rnd() * 0.3, -fz * 0.4 + pz * side * 0.35, 0.5 + rnd() * 0.4, 0.06, 0.35 * weight, 0x8c949c, 0xb4bcc4, 0.28, 2, 0.3, 0.3);
           }
+          // a fine mist hangs in the wake of fast traffic (wet-weather spray)
+          if (sp > 0.7 && rnd() < 0.45 * wk * rate && this.take(1)) this.emit(rx - fx * 0.2, g + 0.16, rz - fz * 0.2, -fx * sp * 0.35, 0.12, -fz * sp * 0.35, 1.3 + rnd() * 0.6, 0.2 * weight, 0.85 * weight, 0x9aa2aa, 0xb8c0c8, 0.14 * wk, 1.4, -0.01, 0.6);
           break;
         }
         // a light haze only at speed
@@ -170,6 +173,8 @@ export class GroundFx {
         break;
       }
       case Surf.Grass: {
+        // soaked turf: a little spray in the wake at speed
+        if (WX.wxWet.value > 0.5 && sp > 0.6 && rnd() < 0.3 * rate && this.take(1)) this.emit(rx, g + 0.12, rz, -fx * sp * 0.3, 0.2, -fz * sp * 0.3, 0.9, 0.1 * weight, 0.5 * weight, 0x8a9290, 0xa8b0b0, 0.12, 1.8, 0.1, 0.4);
         // torn turf bits flicked off the tracks, a faint dust
         const n = this.take(Math.floor((0.5 + 0.7 * sp) * weight * rate + rnd()));
         for (let i = 0; i < n; i++) {

@@ -256,6 +256,8 @@ class DecalLayer {
     order: number,
     relief: THREE.Texture | null = null,
     snowTint = false,
+    /** Rain: 1 = prints on hard ground go darker (the tyres squeeze the water film off), 2 = ruts fill with water. */
+    wet = 0,
   ) {
     const geo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     this.birth = new Float32Array(max).fill(-1e6);
@@ -266,6 +268,7 @@ class DecalLayer {
     const defines: Record<string, number> = {};
     if (relief) defines.RELIEF = 1;
     if (snowTint) defines.SNOW_TINT = 1;
+    defines.WET = wet;
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -273,7 +276,7 @@ class DecalLayer {
       polygonOffsetFactor: -2 - order,
       polygonOffsetUnits: -2,
       defines,
-      uniforms: { map: { value: tex }, relief: { value: relief }, uSun: SUN, uSunK: SUN_K, wxSnow: WX.wxSnow, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
+      uniforms: { map: { value: tex }, relief: { value: relief }, uSun: SUN, uSunK: SUN_K, wxSnow: WX.wxSnow, wxWet: WX.wxWet, wxGloss: WX.wxGloss, time: this.uniforms.time, life: { value: life }, opacity: { value: opacity }, ...fog.uniforms },
       vertexShader: /* glsl */ `
         attribute float aBirth;
         varying vec2 vUv;
@@ -300,6 +303,9 @@ class DecalLayer {
         uniform vec3 uSun;
         uniform float uSunK;
         uniform float wxSnow;
+        uniform float wxWet;
+        uniform float wxGloss;
+        uniform vec3 hazeColor;
         uniform float life;
         uniform float opacity;
         uniform sampler2D fogTex;
@@ -333,6 +339,21 @@ class DecalLayer {
           float ao = 1.0 - ( 1.0 - w ) * ( 1.0 - ta );
           rgb = ( target * w + ( 1.0 - w ) * ta * t.rgb ) / max( ao, 1e-3 );
           ta = ao * smoothstep( 0.0, 0.08, t.a + w * 0.2 );
+          #endif
+          #if WET == 1
+          // wet road: the tyres wipe the water film off, the prints read darker and stay visible longer
+          rgb *= 1.0 - 0.45 * wxWet;
+          ta = min(1.0, ta * (1.0 + 0.8 * wxWet));
+          fade = mix(fade, 1.0 - smoothstep(0.8, 1.0, k), wxWet);
+          #elif WET == 2
+          // wet soft ground: the rut darkens and water stands in its bottom, catching the sky
+          rgb *= 1.0 - 0.35 * wxWet;
+          if ( wxGloss > 0.5 && wxWet > 0.2 ) {
+            float pool = smoothstep( 0.2, 0.05, abs( vUv.y - 0.5 ) ) * smoothstep( 0.2, 0.7, wxWet ) * ta;
+            vec3 sky = hazeColor / ( 1.0 + max( hazeColor.r, max( hazeColor.g, hazeColor.b ) ) );
+            rgb = mix( rgb, vec3( 0.02, 0.022, 0.026 ) + sky * 0.55, pool * 0.75 );
+            ta = max( ta, pool * 0.85 );
+          }
           #endif
           gl_FragColor = vec4(rgb, ta * fade * f);
           if (gl_FragColor.a < 0.004) discard;
@@ -396,10 +417,10 @@ export class GroundMarks {
     private map: GameMap,
     fog: FogOfWar,
   ) {
-    this.tread = new DecalLayer(TEX.tread(), 5000, 10, 0.55, fog, 0);
-    this.tire = new DecalLayer(TEX.tire(), 3000, 10, 0.45, fog, 0);
+    this.tread = new DecalLayer(TEX.tread(), 5000, 10, 0.55, fog, 0, null, false, 1);
+    this.tire = new DecalLayer(TEX.tire(), 3000, 10, 0.45, fog, 0, null, false, 1);
     // soft ground keeps deep ruts much longer
-    this.rut = new DecalLayer(TEX.rut(), 9000, 45, 0.8, fog, 0, RELIEF.rut(), true);
+    this.rut = new DecalLayer(TEX.rut(), 9000, 45, 0.8, fog, 0, RELIEF.rut(), true, 2);
     // battle damage persists: burnt patches ~4 min, craters ~4.5 min
     this.scorch = new DecalLayer(TEX.scorch(), 600, 240, 0.9, fog, 1);
     this.crater = new DecalLayer(TEX.crater(), 600, 270, 1, fog, 2, RELIEF.crater());
@@ -439,7 +460,7 @@ export class GroundMarks {
     if (this.paved[tz * m.w + tx]) return false;
     const t = m.tiles[tz * m.w + tx];
     if (t === Tile.Dirt || t === Tile.Sand) return true;
-    if (t === Tile.Grass) return WX.wxWet.value > 0 || WX.wxSnow.value > 0;
+    if (t === Tile.Grass) return WX.wxWet.value > 0.25 || WX.wxSnow.value > 0;
     return false;
   }
 

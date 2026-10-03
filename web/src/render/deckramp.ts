@@ -1,4 +1,4 @@
-import { BRIDGE_HEIGHT, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, standHeight, type GameMap } from '../sim/map';
 import { surfaceHeight } from './ground';
 
 /**
@@ -117,4 +117,19 @@ export function deckSurface(m: GameMap, x: number, y: number, down?: (i: number)
     }
   }
   return null;
+}
+
+/**
+ * Height a ground unit is drawn at (render only): the sim's standHeight, except on a standing
+ * bridge's tiles, where it follows the deck with its end ramps (deckSurface), so units ride up
+ * onto a raised bank instead of sinking into the ramp. The sim keeps BRIDGE_HEIGHT; never lower
+ * than it. (x, y) must lie on the map.
+ */
+export function unitStandHeight(m: GameMap, x: number, y: number): number {
+  const h = standHeight(m, x, y);
+  const tx = Math.floor(x);
+  const ty = Math.floor(y);
+  if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] !== Tile.Bridge || !m.bridges.length) return h;
+  const d = deckSurface(m, x, y);
+  return d === null ? h : Math.max(h, d);
 }

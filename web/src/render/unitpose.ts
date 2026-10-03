@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { Tile, standHeight, type GameMap } from '../sim/map';
+import { Tile, type GameMap } from '../sim/map';
+import { unitStandHeight } from './deckramp';
 import type { AnimState, Model } from './models';
 
 /*
@@ -34,7 +35,7 @@ const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
 
 function hAt(m: GameMap, x: number, z: number) {
-  return standHeight(m, clamp(x, 0, m.w - 0.01), clamp(z, 0, m.h - 0.01));
+  return unitStandHeight(m, clamp(x, 0, m.w - 0.01), clamp(z, 0, m.h - 0.01));
 }
 
 /** Tile roughness for the suspension bounce (bridges / sand smooth, dirt and ore fields bumpy). */
