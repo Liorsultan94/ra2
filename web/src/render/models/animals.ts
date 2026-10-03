@@ -8,7 +8,8 @@ import type { AnimalModel } from '../ambient/models';
  * goat, deer, hare, cat. Same conventions as ambient/models.ts: face +X,
  * origin on the ground, per-vertex `flex` part codes for the animal rig in
  * ambientMaterial: 1 coat (painted), 4 head + neck (pitches down about the
- * neck pivot), 5 / 6 the two diagonal leg pairs. Painted parts are white.
+ * neck pivot), 5 / 6 the two diagonal leg pairs. Painted parts are white;
+ * legs are not painted by the rig, so they carry a neutral tone of the species.
  */
 
 const C = (r: number, g: number, b: number) => new THREE.Color(r, g, b);
@@ -52,7 +53,7 @@ export function horseModel(): AnimalModel {
   box(b, 0.02, 0.04, 0.012, 0.24, 0.55, -0.02, WHITE, 4);
   box(b, 0.12, 0.03, 0.02, 0.17, 0.49, 0, DARK, 4, -0.6); // mane
   box(b, 0.025, 0.16, 0.025, -0.22, 0.3, 0, DARK, 0, -0.35); // tail
-  legs(b, 0.14, -0.15, 0.045, legTop, 0.034, WHITE, HOOF);
+  legs(b, 0.14, -0.15, 0.045, legTop, 0.034, C(0.2, 0.15, 0.11), HOOF);
   return { geo: b.build(true), rig: new THREE.Vector4(0.15, 0.4, 1.15, legTop) };
 }
 
@@ -66,7 +67,7 @@ export function dogModel(): AnimalModel {
   box(b, 0.015, 0.03, 0.012, 0.09, 0.2, 0.022, WHITE, 4); // ears
   box(b, 0.015, 0.03, 0.012, 0.09, 0.2, -0.022, WHITE, 4);
   box(b, 0.012, 0.07, 0.012, -0.11, 0.15, 0, WHITE, 0, -0.8); // tail
-  legs(b, 0.065, -0.065, 0.022, legTop, 0.018, WHITE, null);
+  legs(b, 0.065, -0.065, 0.022, legTop, 0.018, C(0.3, 0.24, 0.18), null);
   return { geo: b.build(true), rig: new THREE.Vector4(0.07, 0.14, 0.75, legTop) };
 }
 
@@ -88,19 +89,31 @@ export function chickenModel(): AnimalModel {
 
 export function camelModel(): AnimalModel {
   const b = new GeoBuilder();
-  const legTop = 0.34;
-  ell(b, 0.22, 0.08, 0.075, 0, 0.42, 0, WHITE, 1);
-  ell(b, 0.1, 0.085, 0.06, -0.01, 0.49, 0, WHITE, 1); // hump
-  box(b, 0.17, 0.05, 0.05, 0.24, 0.42, 0, WHITE, 4, 0.35); // neck, low then up
-  box(b, 0.05, 0.14, 0.045, 0.32, 0.5, 0, WHITE, 4);
-  box(b, 0.12, 0.05, 0.045, 0.35, 0.57, 0, WHITE, 4); // head
-  box(b, 0.02, 0.02, 0.01, 0.31, 0.6, 0.015, WHITE, 4);
-  box(b, 0.02, 0.02, 0.01, 0.31, 0.6, -0.015, WHITE, 4);
-  // saddle blanket
-  box(b, 0.14, 0.03, 0.16, 0.06, 0.47, 0, C(0.65, 0.15, 0.12));
-  box(b, 0.015, 0.11, 0.015, -0.22, 0.38, 0, WHITE, 0, -0.2); // tail
-  legs(b, 0.15, -0.14, 0.045, legTop, 0.028, WHITE, HOOF);
-  return { geo: b.build(true), rig: new THREE.Vector4(0.2, 0.43, 0.9, legTop) };
+  const legTop = 0.33;
+  // deep barrel body, a big hump, long legs with knobbly knees
+  ell(b, 0.2, 0.095, 0.085, 0, 0.43, 0, WHITE, 1);
+  ell(b, 0.11, 0.1, 0.07, -0.02, 0.52, 0, WHITE, 1);
+  // long neck: dipping forward from the chest, then rising to the head
+  box(b, 0.17, 0.065, 0.06, 0.24, 0.41, 0, WHITE, 4, -0.55);
+  box(b, 0.06, 0.15, 0.055, 0.33, 0.48, 0, WHITE, 4, 0.25);
+  box(b, 0.13, 0.06, 0.055, 0.37, 0.56, 0, WHITE, 4, 0.1);
+  box(b, 0.04, 0.035, 0.045, 0.44, 0.55, 0, C(0.45, 0.35, 0.25), 4); // muzzle
+  box(b, 0.02, 0.025, 0.012, 0.33, 0.595, 0.02, WHITE, 4);
+  box(b, 0.02, 0.025, 0.012, 0.33, 0.595, -0.02, WHITE, 4);
+  // saddle blanket and a bundle
+  box(b, 0.12, 0.03, 0.18, 0.08, 0.5, 0, C(0.65, 0.15, 0.12));
+  box(b, 0.08, 0.06, 0.2, -0.13, 0.48, 0, C(0.5, 0.42, 0.3));
+  box(b, 0.015, 0.11, 0.015, -0.2, 0.38, 0, WHITE, 0, -0.2); // tail
+  const lc = C(0.62, 0.5, 0.36);
+  legs(b, 0.13, -0.13, 0.05, legTop, 0.036, lc, HOOF);
+  for (const [x, z, p] of [
+    [0.13, 0.05, 5],
+    [0.13, -0.05, 6],
+    [-0.13, 0.05, 6],
+    [-0.13, -0.05, 5],
+  ])
+    box(b, 0.05, 0.04, 0.05, x, 0.18, z, lc, p); // knees
+  return { geo: b.build(true), rig: new THREE.Vector4(0.18, 0.43, 0.75, legTop) };
 }
 
 export function goatModel(): AnimalModel {
@@ -113,7 +126,7 @@ export function goatModel(): AnimalModel {
   box(b, 0.012, 0.05, 0.01, 0.1, 0.255, 0.012, C(0.35, 0.3, 0.25), 4, 0.6); // horns
   box(b, 0.012, 0.05, 0.01, 0.1, 0.255, -0.012, C(0.35, 0.3, 0.25), 4, 0.6);
   box(b, 0.012, 0.04, 0.012, -0.1, 0.18, 0, WHITE, 0, -0.9);
-  legs(b, 0.06, -0.06, 0.024, legTop, 0.016, WHITE, HOOF);
+  legs(b, 0.06, -0.06, 0.024, legTop, 0.016, C(0.3, 0.24, 0.18), HOOF);
   return { geo: b.build(true), rig: new THREE.Vector4(0.08, 0.18, 1.0, legTop) };
 }
 
@@ -132,7 +145,7 @@ export function deerModel(): AnimalModel {
     box(b, 0.008, 0.08, 0.008, 0.16, 0.45, s * 0.02, ant, 4, 0.2);
     box(b, 0.04, 0.008, 0.008, 0.16, 0.48, s * 0.03, ant, 4, 0.5);
   }
-  legs(b, 0.1, -0.1, 0.03, legTop, 0.018, WHITE, HOOF);
+  legs(b, 0.1, -0.1, 0.03, legTop, 0.018, C(0.42, 0.3, 0.19), HOOF);
   return { geo: b.build(true), rig: new THREE.Vector4(0.12, 0.3, 1.0, legTop) };
 }
 
@@ -144,7 +157,7 @@ export function hareModel(): AnimalModel {
   box(b, 0.012, 0.06, 0.008, 0.04, 0.12, 0.01, WHITE, 4, -0.25); // ears
   box(b, 0.012, 0.06, 0.008, 0.04, 0.12, -0.01, WHITE, 4, -0.25);
   ell(b, 0.012, 0.012, 0.012, -0.055, 0.06, 0, C(0.95, 0.94, 0.9));
-  legs(b, 0.03, -0.03, 0.016, legTop, 0.012, WHITE, null);
+  legs(b, 0.03, -0.03, 0.016, legTop, 0.012, C(0.5, 0.44, 0.35), null);
   return { geo: b.build(true), rig: new THREE.Vector4(0.03, 0.07, 0.6, legTop) };
 }
 
@@ -156,7 +169,7 @@ export function catModel(): AnimalModel {
   box(b, 0.01, 0.018, 0.01, 0.05, 0.1, 0.012, WHITE, 4); // ears
   box(b, 0.01, 0.018, 0.01, 0.05, 0.1, -0.012, WHITE, 4);
   box(b, 0.008, 0.07, 0.008, -0.06, 0.09, 0, WHITE, 1, 0.35); // tail up
-  legs(b, 0.035, -0.035, 0.012, legTop, 0.009, WHITE, null);
+  legs(b, 0.035, -0.035, 0.012, legTop, 0.009, C(0.3, 0.27, 0.24), null);
   return { geo: b.build(true), rig: new THREE.Vector4(0.04, 0.07, 0.6, legTop) };
 }
 

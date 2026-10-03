@@ -100,6 +100,8 @@ export class Fireworks {
   private t = -1;
   private wall = 0;
   private nextShell = 0;
+  /** Burst altitude (world units above the ground), fitted to the camera height so the show stays in view. */
+  private alt = 8;
   /** Recent bursts for the ground glow: x, g, z, r, g, b, age. */
   private flashes = new Float32Array(8 * 7);
   private nFlash = 0;
@@ -224,12 +226,21 @@ export class Fireworks {
     const z = site.y + (Math.random() - 0.5) * 6;
     const g = this.map ? groundHeight(this.map, Math.max(0, Math.min(this.map.w - 0.01, x)), Math.max(0, Math.min(this.map.h - 0.01, z))) : site.g;
     const type = Math.floor(Math.random() * 5);
-    // fuse = life: bursts near the top of the climb
-    this.spawn(ROCKET, x, g + 0.1, z, (Math.random() - 0.5) * 1.2, 10.5 + Math.random() * 2.5, (Math.random() - 0.5) * 1.2, 1.0 + Math.random() * 0.35, 0.2, 1, 0.8, 0.5, 0.25, 6.5, type);
+    // climbs to about `alt` (no drag on the rocket): v0 = sqrt(2 g h), the fuse burns out near the top
+    const h = this.alt * (0.8 + Math.random() * 0.35);
+    const v0 = Math.sqrt(2 * 6.5 * h);
+    const sk = this.scale();
+    this.spawn(ROCKET, x, g + 0.1, z, (Math.random() - 0.5) * 0.8 * sk, v0, (Math.random() - 0.5) * 0.8 * sk, (v0 / 6.5) * (0.88 + Math.random() * 0.08), 0.2 * sk, 1, 0.8, 0.5, 0, 6.5, type);
     this.sound?.('fwLaunch', 0.35 + Math.random() * 0.2, { x, y: z, z: 0 });
   }
 
+  /** Size of the show relative to the full 8-unit-high one (low camera: smaller bursts). */
+  private scale() {
+    return Math.max(0.45, Math.min(1.1, this.alt / 8));
+  }
+
   private burst(x: number, y: number, z: number, type: number) {
+    const sk = this.scale();
     const c1 = PALETTE[Math.floor(Math.random() * PALETTE.length)];
     const c2 = PALETTE[Math.floor(Math.random() * PALETTE.length)];
     const I = 3.2;
@@ -259,11 +270,11 @@ export class Fireworks {
         dx = Math.cos(a) * rr;
         dz = Math.sin(a) * rr;
       }
-      const sp = (type === 1 ? 2.6 : 3.4) * (type === 2 ? 1 : 0.85 + Math.random() * 0.3);
+      const sp = (type === 1 ? 2.6 : 3.4) * (type === 2 ? 1 : 0.85 + Math.random() * 0.3) * sk;
       const c = type === 1 ? PALETTE[3] : type === 4 && k % 2 ? c2 : c1;
-      if (type === 3) this.spawn(GLITTER, x, y, z, dx * sp, dy * sp, dz * sp, 1.3 + Math.random() * 0.6, 0.13, I * 1.2, I * 1.1, I * 0.9, 1.3, 1.6);
-      else if (type === 1) this.spawn(STAR, x, y, z, dx * sp, dy * sp + 0.4, dz * sp, 2.6 + Math.random() * 0.8, 0.14, I * c[0], I * c[1] * 0.85, I * c[2] * 0.6, 1.7, 1.2, 1);
-      else this.spawn(STAR, x, y, z, dx * sp, dy * sp, dz * sp, 1.5 + Math.random() * 0.5, 0.17, I * c[0], I * c[1], I * c[2], 1.25, 1.9);
+      if (type === 3) this.spawn(GLITTER, x, y, z, dx * sp, dy * sp, dz * sp, 1.3 + Math.random() * 0.6, 0.13 * sk, I * 1.2, I * 1.1, I * 0.9, 1.3, 1.6);
+      else if (type === 1) this.spawn(STAR, x, y, z, dx * sp, dy * sp + 0.4, dz * sp, 2.6 + Math.random() * 0.8, 0.14 * sk, I * c[0], I * c[1] * 0.85, I * c[2] * 0.6, 1.7, 1.2, 1);
+      else this.spawn(STAR, x, y, z, dx * sp, dy * sp, dz * sp, 1.5 + Math.random() * 0.5, 0.17 * sk, I * c[0], I * c[1], I * c[2], 1.25, 1.9);
     }
     // the flash: real light on the scene, a glow pool on the ground, the bang
     const lc = (Math.round(c1[0] * 255) << 16) | (Math.round(c1[1] * 255) << 8) | Math.round(c1[2] * 255);
@@ -288,9 +299,10 @@ export class Fireworks {
     }
   }
 
-  /** Per frame (real time). */
-  update() {
+  /** Per frame (real time); camH = the camera's height above the ground at the view centre. */
+  update(camH: number) {
     if (this.t < 0 && this.n === 0) return;
+    this.alt = Math.max(2.2, Math.min(9, camH * 0.28));
     const now = performance.now();
     const dt = Math.min(0.05, Math.max(0, (now - this.wall) / 1000));
     this.wall = now;

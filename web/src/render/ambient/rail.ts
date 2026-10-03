@@ -153,7 +153,7 @@ export class Railway {
     mesh.name = 'railway-track';
     mesh.receiveShadow = quality !== 'low';
     mesh.castShadow = quality === 'high';
-    mesh.frustumCulled = false;
+    mesh.frustumCulled = true;
     this.group.add(mesh);
     if (!this.animate) return;
     // rolling stock: one instanced mesh per car type

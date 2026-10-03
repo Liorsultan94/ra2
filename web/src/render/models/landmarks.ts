@@ -110,6 +110,32 @@ export class Kit {
   }
 
   /** Flat quad on the ground plane (local y), w along x, d along z. */
+  /** A sloped ring around an ellipse (rx, rz) at local y0, falling outwards by `drop` over `width` (shores, embankments). */
+  shore(rx: number, rz: number, y0: number, drop: number, width: number, col: number | THREE.Color, seg = 32): this {
+    const pos: number[] = [];
+    for (let i = 0; i < seg; i++) {
+      const a0 = (i / seg) * Math.PI * 2;
+      const a1 = ((i + 1) / seg) * Math.PI * 2;
+      const P = (a: number, o: number, y: number) => [Math.cos(a) * (rx + o), y, Math.sin(a) * (rz + o)];
+      const A = P(a0, -0.04, y0 + 0.01);
+      const B = P(a1, -0.04, y0 + 0.01);
+      const C = P(a1, width, y0 - drop);
+      const D = P(a0, width, y0 - drop);
+      pos.push(...A, ...C, ...B, ...A, ...D, ...C);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    // make sure the faces look up
+    const n = g.attributes.normal;
+    if (n.getY(0) < 0) {
+      const p = g.attributes.position.array as Float32Array;
+      for (let i = 0; i < p.length; i += 9) for (let j = 0; j < 3; j++) [p[i + 3 + j], p[i + 6 + j]] = [p[i + 6 + j], p[i + 3 + j]];
+      g.computeVertexNormals();
+    }
+    return this.add(g, null, col);
+  }
+
   slab(w: number, d: number, x: number, y: number, z: number, col: number | THREE.Color, ry = 0): this {
     const g = new THREE.PlaneGeometry(w, d).rotateX(-Math.PI / 2);
     return this.add(g, local(x, y, z, ry), col);
@@ -220,7 +246,7 @@ export function castleRuin(k: Kit, seed: number) {
   const tones = [0x8c8478, 0x978e80, 0x81796d, 0x9e9586, 0x7a7468];
   const tone = (a: number, b: number) => tones[Math.floor(h3(seed, a, b) * tones.length)];
   // foundations reach down into the rock (rough blocks, rock coloured)
-  for (let i = 0; i < 6; i++) k.box(1.2 + h3(seed, 60, i) * 0.4, 1.7, 1.0 + h3(seed, 61, i) * 0.5, -1.1 + (i % 3) * 1.1, -0.86, i < 3 ? -0.55 : 0.55, i % 2 ? 0x5e574e : 0x67605a, 0, h3(seed, 62, i) * 0.3);
+  for (let i = 0; i < 6; i++) k.box(0.95 + h3(seed, 60, i) * 0.2, 1.9, 0.75 + h3(seed, 61, i) * 0.2, -1.0 + (i % 3) * 1.0, -1.0, i < 3 ? -0.45 : 0.45, i % 2 ? 0x5e574e : 0x67605a, 0, (h3(seed, 62, i) - 0.5) * 0.2);
   // curtain walls with gaps and ragged tops
   const wall = (x0: number, z0: number, x1: number, z1: number, h: number, salt: number) => {
     const L = Math.hypot(x1 - x0, z1 - z0);

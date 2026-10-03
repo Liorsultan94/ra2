@@ -1467,7 +1467,7 @@ ${PHOTO_MAP}
     float n2 = texture2D(fogNoise, tw * 0.33 + 0.57).r;
     float lowSpot = n1 * 0.78 + n2 * 0.22 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05;
     // puddles shrink into the deepest spots as the ground dries (wxWet 1 = full size)
-    float wxPudT = 0.65 + (1.0 - wxWet) * 0.16;
+    float wxPudT = 0.61 + (1.0 - wxWet) * 0.18;
     wxPud = smoothstep(wxPudT, wxPudT + 0.03, lowSpot) * min(1.0, wxWet * 2.5);
     diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.62 + vec3(0.03, 0.035, 0.042), wxPud);
     terrRough = mix(terrRough, 0.03, wxPud);
@@ -1484,6 +1484,12 @@ const TERRAIN_AO = /* glsl */ `
   reflectedLight.indirectSpecular *= terrAO;
 #endif
 #include <aomap_fragment>
+  if (wxPud > 0.01) {
+    // puddles mirror the sky (Fresnel-boosted horizon / haze colour: the environment map alone is
+    // too faint at the RTS view angle to read as standing water)
+    vec3 pudSky = dot(skyHorA.xyz, vec3(1.0)) > 0.01 ? skyHorA.xyz * 1.5 : hazeColor * 2.4;
+    reflectedLight.indirectSpecular += pudSky * wxPud * 0.5;
+  }
 `;
 
 const TERRAIN_NORMAL = /* glsl */ `

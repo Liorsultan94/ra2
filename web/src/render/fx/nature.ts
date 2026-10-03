@@ -473,6 +473,7 @@ void main() {
 
 const BOW_FRAG = /* glsl */ `
 uniform float uAmount;
+uniform float uFeet;
 varying vec2 vQ;
 vec3 spectrum( float t ) {
   // t 0 = violet (inner) .. 1 = red (outer)
@@ -491,13 +492,13 @@ void main() {
   col += vec3( 0.06 ) * ( 1.0 - smoothstep( 0.6, 0.9, r ) ) * smoothstep( 0.2, 0.8, r );
   // feet: fades where the arc meets the ground / the ends of the mesh
   float ang = vQ.y / max( r, 1e-3 );
-  col *= smoothstep( 0.0, 0.35, ang );
+  col *= smoothstep( uFeet, uFeet + 0.35, ang );
   gl_FragColor = vec4( col * uAmount, 1.0 );
 }`;
 
 export class Rainbow {
   readonly mesh: THREE.Mesh;
-  private u = { uAmount: { value: 0 } };
+  private u = { uAmount: { value: 0 }, uFeet: { value: 0 } };
   private m = new THREE.Matrix4();
   private bx = new THREE.Vector3();
   private by = new THREE.Vector3();
@@ -509,7 +510,7 @@ export class Rainbow {
     this.mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: BOW_VERT, fragmentShader: BOW_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }));
     this.mesh.matrixAutoUpdate = false;
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 4;
+    this.mesh.renderOrder = 9;
     this.mesh.name = 'rainbow';
     this.mesh.visible = false;
   }
@@ -518,8 +519,8 @@ export class Rainbow {
    * amount 0..1; sun = direction towards the sun (world); free = free camera (physical placement),
    * otherwise it stands over the far side of the RTS view around `target` (vh = visible height).
    */
-  place(amount: number, cam: THREE.Camera, sun: THREE.Vector3, free: boolean, target: THREE.Vector3, vh: number, ground: number) {
-    this.u.uAmount.value = amount * 0.42;
+  place(amount: number, cam: THREE.Camera, sun: THREE.Vector3, free: boolean, target: THREE.Vector3, vh: number) {
+    this.u.uAmount.value = amount * 0.6;
     this.mesh.visible = amount > 0.004;
     if (!this.mesh.visible) return;
     const cp = cam.position;
@@ -533,17 +534,20 @@ export class Rainbow {
       const R = D * Math.tan(THREE.MathUtils.degToRad(42)) / 0.95;
       this.m.makeBasis(this.bx.multiplyScalar(R), this.by.multiplyScalar(R), this.bz).setPosition(this.c);
     } else {
-      // over the far side of the view, facing the camera horizontally
-      this.bz.set(cp.x - target.x, 0, cp.z - target.z);
-      if (this.bz.lengthSq() < 1e-6) this.bz.set(1, 0, 1);
-      this.bz.normalize();
-      this.by.set(0, 1, 0);
-      this.bx.crossVectors(this.by, this.bz);
-      const R = vh * 0.95;
-      this.c.copy(target).addScaledVector(this.bz, -vh * 0.75);
-      this.c.y = ground - 0.6;
-      this.m.makeBasis(this.bx.multiplyScalar(R), this.by.multiplyScalar(R * 0.8), this.bz).setPosition(this.c);
+      // the RTS camera looks down at the ground: a camera-facing arc through the view centre, drawn over
+      // the upper (far) half of the view like a bow standing over the far side; the feet fade out
+      const cam = this.bz.copy(cp).sub(target).normalize();
+      this.by.set(0, 1, 0).addScaledVector(cam, -cam.y).normalize();
+      this.bx.crossVectors(this.by, cam).normalize();
+      // the camera's up on screen (orthogonal to the view direction)
+      this.by.crossVectors(cam, this.bx).normalize();
+      const R = vh * 0.74;
+      this.c.copy(target).addScaledVector(this.by, -vh * 0.3);
+      this.m.makeBasis(this.bx.multiplyScalar(R), this.by.multiplyScalar(R), cam).setPosition(this.c);
     }
+    const mat = this.mesh.material as THREE.ShaderMaterial;
+    mat.depthTest = free;
+    this.u.uFeet.value = free ? 0 : 0.42;
     this.mesh.matrix.copy(this.m);
     this.mesh.matrixWorld.copy(this.m);
   }
@@ -770,7 +774,10 @@ export class LivingWorld {
     this.z1 = target.z + Rz;
     const gt = this.host.world.tick / TPS;
     this.nightlife.update(dt, time, gt, dark, a, this.x0, this.z0, this.x1, this.z1);
-    this.fireworks?.update();
+    if (this.fireworks) {
+      const tg = groundHeight(this.map, Math.max(0, Math.min(this.map.w - 0.01, target.x)), Math.max(0, Math.min(this.map.h - 0.01, target.z)));
+      this.fireworks.update(camera.position.y - tg);
+    }
     const nat = this.nature;
     if (!nat) return;
     // ---- weather state
@@ -897,9 +904,8 @@ export class LivingWorld {
       if (this.forced.rainbow) goal = 1;
       this.bow += Math.sign(goal - this.bow) * Math.min(Math.abs(goal - this.bow), dt / 8);
       if (this.bow > 0.004) {
-        const g = groundHeight(this.map, Math.max(0, Math.min(this.map.w - 0.01, target.x)), Math.max(0, Math.min(this.map.h - 0.01, target.z)));
-        rb.place(this.bow, camera, _sun, this.freeView, target, vh, g);
-      } else rb.place(0, camera, _sun, this.freeView, target, vh, 0);
+        rb.place(this.bow, camera, _sun, this.freeView, target, vh);
+      } else rb.place(0, camera, _sun, this.freeView, target, vh);
     }
     // ---- dawn: the valley fog catches the low sun
     const gf = a.groundFog;

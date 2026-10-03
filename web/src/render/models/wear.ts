@@ -51,7 +51,7 @@ const WET = { value: 0 };
  * streaks, lower grime band), y = baked AO on the lighting, z = albedo gain, w = sky top-light fill.
  * Also reachable as globalThis.__vehLook for in-game tuning / measurement.
  */
-export const VEH_LOOK = { value: new THREE.Vector4(1, 1, 1, 0) };
+export const VEH_LOOK = { value: new THREE.Vector4(0.75, 0.85, 1.22, 0.4) };
 (globalThis as { __vehLook?: typeof VEH_LOOK }).__vehLook = VEH_LOOK;
 const BIOMES: Record<string, [number, number, number, number]> = {
   temperate: [0x948062, 0x3f3226, 0x352e26, 0.25],

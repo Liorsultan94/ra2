@@ -157,7 +157,7 @@ export class MapLandmarks {
     mesh.name = 'landmarks-static';
     mesh.castShadow = quality === 'high';
     mesh.receiveShadow = quality !== 'low';
-    mesh.frustumCulled = false;
+    mesh.frustumCulled = true; // (bounding sphere of the whole set; the collapse animation stays inside it)
     this.mesh = mesh;
     this.group.add(mesh);
     // keep the original slices of the destructible pieces
@@ -195,7 +195,7 @@ export class MapLandmarks {
   }
 
   private light(x: number, y: number, z: number, kind: Light['kind'], size: number, range: Range | null = null) {
-    this.lights.push({ x, y, z, kind, size, phase: Math.random() * 6, range });
+    this.lights.push({ x, y, z, kind, size, phase: 0, range });
   }
 
   /** A plinth under a building on uneven ground: from below the lowest point up to its floor. */
@@ -322,17 +322,17 @@ export class MapLandmarks {
       case 'pond': {
         const ra = s.a ?? 3;
         const rb = s.b ?? 2;
-        const g = groundRange(m, x, y, Math.max(ra, rb));
-        k.at(x, g.lo + 0.04, y, yaw);
+        const g = groundRange(m, x, y, Math.max(ra, rb) * 1.15);
+        const lvl = g.hi + 0.03;
+        k.at(x, lvl, y, yaw);
         k.add(new THREE.CircleGeometry(1, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x3e7c82);
-        k.add(new THREE.RingGeometry(0.92, 1.08, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x8a7a50);
+        k.shore(ra, rb, 0, lvl - g.lo + 0.15, 1.1, 0xc8ae80);
         // reeds around the water
         for (let i = 0; i < 22; i++) {
           const a = (i / 22) * Math.PI * 2 + s.v;
-          k.cone(0.07, 0.3 + (i % 3) * 0.08, Math.cos(a) * ra * 1.02, 0, Math.sin(a) * rb * 1.02, i % 2 ? 0x5a7a2a : 0x6a8a32, 5);
+          k.cone(0.07, 0.3 + (i % 3) * 0.08, Math.cos(a) * ra * 1.04, 0, Math.sin(a) * rb * 1.04, i % 2 ? 0x5a7a2a : 0x6a8a32, 5);
         }
-        // a sand bank around it hides where the ground rises above the water
-        this.bank(k, x, y, ra, rb, g.lo, 0xd2b88a);
+        this.lakeLevel = lvl;
         break;
       }
       case 'refinery': {
@@ -361,14 +361,18 @@ export class MapLandmarks {
         break;
       }
       case 'lake': {
-        const g = groundRange(m, x, y, Math.max(s.a ?? 4, s.b ?? 3));
-        k.at(x, g.lo + 0.03, y, yaw);
-        frozenLake(k, s.a ?? 4, s.b ?? 3);
+        const ra = s.a ?? 4;
+        const rb = s.b ?? 3;
+        const g = groundRange(m, x, y, Math.max(ra, rb) * 1.15);
+        const lvl = g.hi + 0.03;
+        k.at(x, lvl, y, yaw);
+        frozenLake(k, ra, rb);
+        k.shore(ra, rb, 0, lvl - g.lo + 0.15, 1.2, 0xe6edf3);
+        this.lakeLevel = lvl;
         break;
       }
       case 'icehut': {
-        const lake = landmarkPlan(m).spots.find((o) => o.kind === 'lake');
-        const g = lake ? groundRange(m, lake.x, lake.y, Math.max(lake.a ?? 4, lake.b ?? 3)).lo + 0.03 : groundY(m, x, y);
+        const g = this.lakeLevel ?? groundY(m, x, y);
         k.at(x, g, y, yaw);
         iceHut(k);
         if (s.v < 0.6) this.smokers.push({ x: x - Math.cos(yaw) * 0.12, y: g + 0.75, z: y - Math.sin(yaw) * 0.12, size: 0.35, t: Math.random(), dark: false });
@@ -404,6 +408,7 @@ export class MapLandmarks {
           this.light(lx, hi + STADIUM_MAST_H + 0.12, lz, 1, 1.3);
           this.light(lx, hi + STADIUM_MAST_H + 0.75, lz, 0, 0.24);
         }
+        this.pitch = { x, y: hi, z: y, yaw };
         break;
       }
       case 'tower': {
@@ -450,7 +455,9 @@ export class MapLandmarks {
     }
   }
 
+  private lakeLevel: number | null = null;
   private mountain: { x: number; y: number; r: number; h: number; base: number } | null = null;
+  private pitch: { x: number; y: number; z: number; yaw: number } | null = null;
   /** Hospital helipad (world position; air.ts sends a helicopter). */
   helipad: { x: number; y: number; z: number } | null = null;
 
@@ -462,19 +469,6 @@ export class MapLandmarks {
     const t = Math.hypot(x - M.x, y - M.y) / M.r;
     if (t >= 1) return g;
     return Math.max(g, M.base + M.h * Math.pow(Math.cos(t * Math.PI * 0.5), 1.5));
-  }
-
-  /** A low bank ringing an ellipse (pond / lake), up to the surrounding ground. */
-  private bank(k: Kit, x: number, y: number, ra: number, rb: number, lo: number, col: number) {
-    const n = 26;
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const px = x + Math.cos(a) * ra * 1.07;
-      const pz = y + Math.sin(a) * rb * 1.07;
-      const H = Math.max(0.12, groundY(this.map, px, pz) - lo + 0.1);
-      const w = (Math.PI * 2 * Math.max(ra, rb) * 1.07) / n + 0.2;
-      k.at(px, lo, pz, a + Math.PI / 2).box(w, H, 0.5, 0, H / 2 - 0.04, 0, col);
-    }
   }
 
   /** The gondola lift: pylons up the slope and the looping cabins. */
@@ -878,6 +872,9 @@ export class MapLandmarks {
         }
       }
     }
+    // the pitch under the floodlights
+    const P = this.pitch;
+    if (P && dk > 0.15 && near(P.x, P.z, 8) && this.probe.visible(P.x, P.z)) L.pool(P.x, P.y + 0.04, P.z, -P.yaw, 9.5, 6.8, 0.55 * dk, 0.58 * dk, 0.5 * dk);
     // the gas flare's glow
     const fl = this.flare;
     if (fl && near(fl.x, fl.z, 10) && this.probe.visible(fl.x, fl.z)) {

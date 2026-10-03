@@ -172,7 +172,7 @@ void main() {
   float halo = exp( -d * 30.0 ) * 0.8 + exp( -d * 8.0 ) * 0.2;
   // the halo fades out towards the card's edge
   halo *= 1.0 - smoothstep( 0.6, 0.8, max( abs( vUv.x ), abs( vUv.y ) ) );
-  vec3 col = nc * halo + mix( nc, vec3( 1.0 ), 0.55 ) * core * 1.6;
+  vec3 col = nc * halo + mix( nc, vec3( 1.0 ), 0.22 ) * core * 1.15;
   // buzz, and a broken sign's stutter
   float on = 0.94 + 0.06 * sin( uTime * 50.0 + vSig.w * 20.0 );
   on *= mix( 1.0, step( 0.3, nh( floor( uTime * 8.0 + vSig.w * 40.0 ) ) ) * 0.85 + 0.15 * step( 0.6, nh( floor( uTime * 3.0 + vSig.w * 9.0 ) ) ), broken );

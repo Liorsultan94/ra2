@@ -102,7 +102,7 @@ export class AmbientLife {
     this.people = new People(map, terrain.layout, world, net, fog, probe, quality, phone);
     this.emergency = new Emergency(map, net, fog, probe, this.lights, this.people.figures, quality, phone);
     this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
-    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures);
+    this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
     this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
@@ -247,6 +247,8 @@ export class AmbientLife {
     f.vx1 = x1 + 3;
     f.vy1 = y1 + 3;
     this.traffic.update(f);
+    // far zoom: the walkers are a few pixels tall (LOD: fewer of them, no shadows)
+    this.people.far = ((this.host as AmbientHost & { zoom?: number }).zoom ?? 2) < 1.1;
     this.people.update(f);
     this.emergency.update(f);
     this.animals.update(f);

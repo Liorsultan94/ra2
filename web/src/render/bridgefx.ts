@@ -115,6 +115,8 @@ function asphalt(top: GeoBuilder, x0: number, x1: number, z0: number, z1: number
 
 /** Deck pieces are cut into SEG-long blocks so they can bend over a raised bank (render/deckramp.ts). */
 const SEG = 0.25;
+/** Asphalt overlaps the next deck piece a touch (no hairline cracks where separate meshes meet). */
+const LAP = 0.012;
 type Lift = (x: number) => number;
 const FLAT: Lift = () => 0;
 
@@ -206,11 +208,11 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
     const hx1 = hole.x + hole.hx;
     const hz0 = Math.max(-aw, hole.z - hole.hz);
     const hz1 = Math.min(aw, hole.z + hole.hz);
-    asphalt(top, x0, hx0, -aw, aw, 0.104, xBase, m);
-    asphalt(top, hx1, x1, -aw, aw, 0.104, xBase, m);
+    asphalt(top, x0 - LAP, hx0, -aw, aw, 0.104, xBase, m);
+    asphalt(top, hx1, x1 + LAP, -aw, aw, 0.104, xBase, m);
     if (hz0 > -aw) asphalt(top, hx0, hx1, -aw, hz0, 0.104, xBase, m);
     if (hz1 < aw) asphalt(top, hx0, hx1, hz1, aw, 0.104, xBase, m);
-  } else asphalt(top, x0, x1, -aw, aw, 0.104, xBase, m);
+  } else asphalt(top, x0 - LAP, x1 + LAP, -aw, aw, 0.104, xBase, m);
   warp(conc, base, lift, xBase);
   warp(top, tbase, lift, xBase);
 }

@@ -33,7 +33,7 @@ import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion,
  * Purely visual. One instanced draw call for every figure (models/civilians.ts:
  * vertex-animated), one for the blob shadows, one for the market stalls, one
  * for the balls. Hard caps on what is drawn; nothing under the fog of war or
- * off screen; skipped when zoomed far out. No per-frame allocation.
+ * off screen. No per-frame allocation.
  *
  * Other ambient systems hand in extra figures (shepherds, the caravan leader,
  * police officers, paramedics) through `figures`; traffic can ask
@@ -314,6 +314,8 @@ export class People {
   private frameNo = 0;
   private houseEnt = new Map<number, number[]>();
   private dark = 0;
+  /** Zoomed far out (set by the owner): half the figures, no blob shadows or balls. */
+  far = false;
   /** Debug / tests: counters. */
   readonly stat = { paths: 0, failed: 0, fled: 0, returned: 0 };
 
@@ -366,6 +368,11 @@ export class People {
     // benches come from the props plan (needs the props manifest)
     if (urban && quality !== 'low') void this.loadBenches();
     active = this;
+  }
+
+  /** Is tile (tx, ty) under a player's building (not the civilian houses)? */
+  builtAt(tx: number, ty: number): boolean {
+    return tx >= 0 && ty >= 0 && tx < this.map.w && ty < this.map.h && this.busy[ty * this.map.w + tx] === 1;
   }
 
   dispose() {
@@ -511,9 +518,9 @@ export class People {
         for (let xx = x - hx; xx <= x + hx; xx += 0.25) {
           const c = costAt(g, xx, yy);
           if (!c || c > 2 || flagAt(g, xx, yy) & (WF.Road | WF.Base | WF.Field | WF.Zebra)) return false;
-          if (this.blockedFn(xx | 0, yy | 0)) return false;
+          if (this.blockedFn(xx | 0, yy | 0) || !roadClear(m, xx, yy, 0.15)) return false;
         }
-      return roadClear(m, x, y, Math.max(hx, hy) + 0.2);
+      return true;
     };
     if (urban) {
       for (const f of this.layout.fields) {
@@ -1326,11 +1333,11 @@ export class People {
         if (!e || e.dead) d.alive = false;
       }
     }
-    const inView = (p: Ped) => p.x > f.vx0 && p.x < f.vx1 && p.y > f.vy0 && p.y < f.vy1;
     for (const p of this.peds) {
       // off screen: a quarter of the updates
-      if (!inView(p) && ((p.id + this.frameNo) & 3) !== 0 && p.s !== S.Flee) continue;
-      const pdt = inView(p) || p.s === S.Flee ? dt : dt * 4;
+      const seen = p.x > f.vx0 && p.x < f.vx1 && p.y > f.vy0 && p.y < f.vy1;
+      if (!seen && ((p.id + this.frameNo) & 3) !== 0 && p.s !== S.Flee) continue;
+      const pdt = seen || p.s === S.Flee ? dt : dt * 4;
       this.step(p, pdt, f);
     }
     for (const pg of this.plays) this.ball(pg, dt);
@@ -1489,7 +1496,8 @@ export class People {
         pose = Pose.Vendor;
         p.phase += dt * 2.5;
         // face the customers, now and then turn to the goods
-        const st = this.stalls.find((q) => q.vendor === p);
+        let st: Stall | null = null;
+        for (const q of this.stalls) if (q.vendor === p) st = q;
         if (st) want = Math.sin(this.time * 0.2 + p.id) > 0.8 ? st.yaw + 0.8 : st.yaw;
         break;
       }
@@ -1503,7 +1511,9 @@ export class People {
         const db = Math.hypot(pg.bx - p.x, pg.by - p.y);
         let tx: number;
         let ty: number;
-        if (db < 0.6 && pg.kids.every((k) => k === p || Math.hypot(pg.bx - k.x, pg.by - k.y) >= db)) {
+        let closest = db < 0.6;
+        for (const k of pg.kids) if (k !== p && Math.hypot(pg.bx - k.x, pg.by - k.y) < db) closest = false;
+        if (closest) {
           tx = pg.bx;
           ty = pg.by;
         } else {
@@ -1750,7 +1760,7 @@ export class People {
     sh.begin();
     let nb = 0;
     {
-      const cap = this.cap;
+      const cap = this.far ? this.cap >> 1 : this.cap;
       for (let i = 0; i < this.peds.length && im.n < cap; i++) {
         const p = this.peds[i];
         if (!p.show || p.s === S.Inside || p.s === S.Gone) continue;
@@ -1759,7 +1769,9 @@ export class People {
       for (const g of this.figures) if (g.show && im.n < cap + 16) this.drawFig(g, f, false);
       // balls
       for (const pg of this.plays) {
-        if (nb >= 8 || !pg.kids.some((k) => k.s === S.Play)) continue;
+        let playing = false;
+        for (const k of pg.kids) if (k.s === S.Play) playing = true;
+        if (nb >= 8 || !playing || this.far) continue;
         if (pg.bx < f.vx0 || pg.bx > f.vx1 || pg.by < f.vy0 || pg.by > f.vy1 || !this.probe.visible(pg.bx, pg.by)) continue;
         const h = groundAt(this.map, pg.bx, pg.by) + 0.11 * CIV_SCALE + pg.bz * 0.25;
         _m.makeRotationY(this.time * 3 + pg.bx * 5).setPosition(pg.bx, h, pg.by);
@@ -1792,7 +1804,7 @@ export class People {
       _m.multiply(_r);
     }
     this.inst.push(_m, p.phase, p.stride, p.pose, p.mask, p.skin, p.lean, p.top, p.bot, p.hat);
-    if (!sitting && p.pose !== Pose.Carried) this.shadows.push(p.x + Math.cos(p.yaw) * fall * 0.35 * k * -1, p.hgt, p.y + Math.sin(p.yaw) * fall * 0.35 * k * -1, (0.5 + fall * 0.4) * k);
+    if (!sitting && p.pose !== Pose.Carried && !this.far) this.shadows.push(p.x + Math.cos(p.yaw) * fall * 0.35 * k * -1, p.hgt, p.y + Math.sin(p.yaw) * fall * 0.35 * k * -1, (0.5 + fall * 0.4) * k);
   }
 }
 

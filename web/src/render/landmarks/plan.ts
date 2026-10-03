@@ -327,8 +327,8 @@ function frontline(m: GameMap): LandmarkPlan {
     { crossAt: [{ x: W - RAIL_X, y: H - hwyY, roadAng: 0, traffic: true }] },
   );
   const lanes = [
-    { pts: smoothPath([{ x: 0.4, y: hwyY }, { x: -9, y: hwyY }, { x: -18, y: hwyY + 2.5 }, { x: -30, y: hwyY + 8 }, { x: -46, y: hwyY + 10 }], 3, 0.5), width: 1.05 },
-    { pts: smoothPath([{ x: W - 0.4, y: H - hwyY }, { x: W + 9, y: H - hwyY }, { x: W + 18, y: H - hwyY - 2.5 }, { x: W + 30, y: H - hwyY - 8 }, { x: W + 46, y: H - hwyY - 10 }], 3, 0.5), width: 1.05 },
+    { pts: smoothPath([{ x: -0.05, y: hwyY }, { x: -9, y: hwyY }, { x: -18, y: hwyY + 2.5 }, { x: -30, y: hwyY + 8 }, { x: -46, y: hwyY + 10 }], 3, 0.5), width: 1.05 },
+    { pts: smoothPath([{ x: W + 0.05, y: H - hwyY }, { x: W + 9, y: H - hwyY }, { x: W + 18, y: H - hwyY - 2.5 }, { x: W + 30, y: H - hwyY - 8 }, { x: W + 46, y: H - hwyY - 10 }], 3, 0.5), width: 1.05 },
     // the village street behind the station
     { pts: smoothPath([{ x: -9, y: hwyY }, { x: -6.4, y: 64 }, { x: -6.0, y: 54 }, { x: -6.8, y: 44 }], 3, 0.5), width: 0.7 },
   ];

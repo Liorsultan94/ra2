@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { StructureKind, type GameMap } from '../../sim/map';
+import { StructureKind, Tile, type GameMap } from '../../sim/map';
 import type { FogOfWar } from '../fog';
 import { FieldType, type Field, type Layout, type V2 } from '../layout';
 import { camelModel, catModel, chickenModel, deerModel, dogModel, goatModel, hareModel, horseModel } from '../models/animals';
@@ -79,7 +79,7 @@ const SPECIES: SpDef[] = [
   { name: 'chickens', model: chickenModel, walk: 0.1, run: 0.6, stride: 0.035, bodyY: 0.065, halfW: 0.03, scale: 1.35, coats: [0xf0ece2, 0xa05a2a, 0x7a3a1c, 0x2a2420, 0xd8b890], rest: 2.5 },
   { name: 'camels', model: camelModel, walk: 0.2, run: 0.9, stride: 0.25, bodyY: 0.42, halfW: 0.075, scale: 1, coats: [0xc8a070, 0xb8905a, 0xd8b888, 0xa07a50], rest: 9 },
   { name: 'goats', model: goatModel, walk: 0.15, run: 1.2, stride: 0.09, bodyY: 0.15, halfW: 0.045, scale: 1.1, coats: [0x2a2420, 0x6a4a2a, 0xe8e2d8, 0x8a6a4a, 0xb89a7a], rest: 5 },
-  { name: 'deer', model: deerModel, walk: 0.15, run: 1.7, stride: 0.18, bodyY: 0.25, halfW: 0.05, scale: 1, coats: [0x8a5a32, 0x7a4e2a, 0x9a6a3a, 0x6a4422], rest: 7 },
+  { name: 'deer', model: deerModel, walk: 0.15, run: 1.7, stride: 0.18, bodyY: 0.25, halfW: 0.05, scale: 1.15, coats: [0x8a5a32, 0x7a4e2a, 0x9a6a3a, 0x6a4422], rest: 7 },
   { name: 'hares', model: hareModel, walk: 0.1, run: 1.6, stride: 0.09, bodyY: 0.055, halfW: 0.03, scale: 1.35, coats: [0x8a7a62, 0x7a6a52, 0xe8e6e0, 0x9a8a72], rest: 4 },
   { name: 'cats', model: catModel, walk: 0.1, run: 1.3, stride: 0.06, bodyY: 0.058, halfW: 0.022, scale: 1.45, coats: [0x2a2420, 0xd08a40, 0x8a8278, 0xe8e2d8, 0x5a4a3a, 0x1c1a18], rest: 10 },
 ].map((d) => ({ ...d }));
@@ -158,6 +158,8 @@ export class Animals {
     quality: Quality,
     phone: boolean,
     private figures: Figure[] = [],
+    /** Players' building footprints (people.ts); civilian houses are in map.blocked. */
+    private built: ((tx: number, ty: number) => boolean) | null = null,
   ) {
     const m = map;
     const biome = m.biome;
@@ -289,7 +291,16 @@ export class Animals {
 
   /** Open, dry ground (no water, no waterline, no buildings). */
   private ok(x: number, y: number) {
-    return walkable(this.map, x, y) && dryAt(this.map, x, y, 0.25);
+    const m = this.map;
+    if (this.built) {
+      // (walkable() keeps an apron round every sim building, the village houses too: animals may go in the yards)
+      if (x < 0.3 || y < 0.3 || x > m.w - 0.3 || y > m.h - 0.3) return false;
+      const i = (y | 0) * m.w + (x | 0);
+      const t = m.tiles[i];
+      if (t === Tile.Water || t === Tile.Bridge || t === Tile.Rock || m.blocked[i] || this.built(x | 0, y | 0)) return false;
+      return dryAt(m, x, y, 0.25);
+    }
+    return walkable(m, x, y) && dryAt(m, x, y, 0.25);
   }
 
   private animal(sp: Sp, x: number, y: number, paint: THREE.Color): Animal {
@@ -346,7 +357,8 @@ export class Animals {
       if (!this.ok(x, y) || m.trees[(y | 0) * m.w + (x | 0)] || !far(x, y, 13)) continue;
       let wood = 0;
       for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (m.trees[Math.max(0, Math.min(m.h - 1, (y | 0) + dy)) * m.w + Math.max(0, Math.min(m.w - 1, (x | 0) + dx))]) wood++;
-      if (wood >= 6 && out.every((o) => Math.hypot(o.x - x, o.y - y) > 5)) out.push({ x, y });
+      // the edge of a wood: trees behind, open snow in front (seen from the camera, not lost in the trees)
+      if (wood >= 4 && wood <= 11 && out.every((o) => Math.hypot(o.x - x, o.y - y) > 5)) out.push({ x, y });
     }
     return out;
   }
@@ -356,15 +368,18 @@ export class Animals {
     const m = this.map;
     let best: V2[] | null = null;
     let bl = 10;
-    const lines = [...layout.tracks.filter((t) => !t.ring).map((t) => t.pts), ...layout.roads.filter((r) => r.variant === 1 && !r.ring && !r.lot).map((r) => r.pts)];
-    for (const pts of lines) {
+    const lines = [...layout.tracks.filter((t) => !t.ring).map((t) => t.pts), ...layout.roads.filter((r) => r.variant === 1 && !r.ring && r.lot === undefined).map((r) => r.pts)];
+    const nTracks = layout.tracks.filter((t) => !t.ring).length;
+    for (const [li, pts] of lines.entries()) {
+      // dirt tracks first: a road only when it is much longer
+      const w = li < nTracks ? 1 : 0.5;
       // the longest run that stays clear of the bases
       let run: V2[] = [];
       const flush = () => {
         let L = 0;
         for (let i = 1; i < run.length; i++) L += Math.hypot(run[i].x - run[i - 1].x, run[i].y - run[i - 1].y);
-        if (L > bl) {
-          bl = L;
+        if (L * w > bl) {
+          bl = L * w;
           best = run;
         }
         run = [];

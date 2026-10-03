@@ -77,7 +77,7 @@ export class WaterTransport {
       const mesh = new THREE.Mesh(k.build(), mat);
       mesh.name = 'water-transport-static';
       mesh.receiveShadow = quality !== 'low';
-      mesh.frustumCulled = false;
+      mesh.frustumCulled = true;
       this.group.add(mesh);
     }
     if (!this.animate) return;
