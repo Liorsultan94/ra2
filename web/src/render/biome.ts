@@ -154,7 +154,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
     weather: 'snow',
     water: { turq: [0.02, 0.06, 0.075], deep: [0.004, 0.018, 0.03], bed: [0.18, 0.18, 0.17] },
     mini: { water: [70, 100, 120], tree: [40, 58, 46] },
-    atmos: { haze: [0.62, 0.68, 0.78], hazeK: 0.9, sky: 0xbcc6d8, gnd: 0xb0b4bc, sun: 0xe8eeff, sunK: 0.95, sat: 0.92, highTint: [-0.01, 0.0, 0.02] },
+    atmos: { haze: [0.62, 0.68, 0.78], hazeK: 0.9, sky: 0xa8c0e8, gnd: 0xa8b0bc, sun: 0xe8eeff, sunK: 0.95, sat: 0.92, highTint: [-0.01, 0.0, 0.02] },
   },
   urban: {
     biome: 'urban',

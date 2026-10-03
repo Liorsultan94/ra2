@@ -172,12 +172,8 @@ function applyBiome(p: Preset, light: number) {
   p.sunI *= 1 + (a.sunK - 1) * light;
   p.sat *= a.sat;
   if (a.highTint) p.highTint.lerp(new THREE.Vector3(...a.highTint), 0.6 * light);
-  // snow fields bounce a lot of light back up; a low sun's blue sky fill would turn the snow blue: keep it white
-  if (BIOME?.biome === 'winter') {
-    p.hemiI *= 1 + 0.15 * light;
-    if (a.sky !== null) p.sky.lerp(C(a.sky), 0.7 * (1 - light));
-    p.env *= 0.7 + 0.3 * light;
-  }
+  // snow fields bounce a lot of light back up
+  if (BIOME?.biome === 'winter') p.hemiI *= 1 + 0.15 * light;
 }
 
 /** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
