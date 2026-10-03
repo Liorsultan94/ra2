@@ -794,7 +794,7 @@ float phSel = 0.5;
 vec3 phGrass(vec3 alb, vec3 pal) {
   vec3 r = alb / max(phM[int(PH_GRASS)], vec3(1e-3));
   float rl = dot(r, vec3(0.2126, 0.7152, 0.0722));
-  return pal * mix(vec3(rl), r, 0.45);
+  return pal * mix(vec3(rl), r, 0.45) * 1.06;
 }
 mat2 phRot(float t) {
   float an = t * 6.2831853;
@@ -945,7 +945,7 @@ const PHOTO_MAP = /* glsl */ `
   float lb[7];
   float lt = 1e-4;
   for (int i = 0; i < 7; i++) {
-    lb[i] = max(ls[i] - smax + 0.2, 0.0);
+    lb[i] = max(ls[i] - smax + 0.15, 0.0);
     lt += lb[i];
   }
   vec3 col = vec3(0.0);
@@ -960,7 +960,7 @@ const PHOTO_MAP = /* glsl */ `
       // per-biome saturation of a scan's detail (around its own mean colour)
       if (phP[L].w != 1.0) c = mix(phM[L] * phT[L] * dot(c, vec3(0.2126, 0.7152, 0.0722)) / max(1e-4, dot(phM[L] * phT[L], vec3(0.2126, 0.7152, 0.0722))), c, phP[L].w);
       // (the turf's own normals are busy: half strength keeps it from going grainy and dark)
-      vec2 n = ln[i].xy * (i == 0 ? 0.55 : 1.0);
+      vec2 n = ln[i].xy * (i == 0 ? 0.42 : 1.0);
       float r = phP[L].z;
 #if BIOME == 2
       // ice on the ford / frozen banks: smooth and glossy
@@ -993,7 +993,8 @@ const PHOTO_MAP = /* glsl */ `
 #endif
     col += (g1 - g0) * bg;
   }
-  terrAO = 1.0 - (1.0 - smoothstep(0.0, 0.5, terrH)) * 0.35;
+  // (not on the turf: its own pattern already carries the gaps between the blades)
+  terrAO = 1.0 - (1.0 - smoothstep(0.0, 0.5, terrH)) * 0.35 * (1.0 - bg);
   terrRough += (0.5 - terrH) * 0.08;
   terrB = 0.0;
 

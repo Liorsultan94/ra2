@@ -66,8 +66,8 @@ const TEMPERATE: BiomeLook = {
   code: 0,
   grass: { lush: scan('meadow', 0x2a5523, 0.9), mid: scan('meadow', 0x426f2b, 0.85), dry: 0x7e8047, fresh: 0x5f8e35, clover: 0x28542d },
   ground: {
-    dirt: scan('dirt', 0x7a6448, 0.55),
-    rock: scan('mossrock', 0x77716a, 0.3),
+    dirt: scan('drysoil', 0x7a6448, 0.55),
+    rock: scan('mossrock', 0x77716a, 0.6),
     sand: scan('beach', 0xa89a7a, 0.5),
     mud: scan('mud', 0x4a3e30, 0.3),
     soil: scan('farmsoil', 0x5e4632, 0.5),
@@ -126,7 +126,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
     // frozen, bleached grass where the snow is thin
     grass: { lush: 0x4d5a40, mid: scan('withered', 0x6a6e52, 0.75), dry: 0x8c8466, fresh: 0x6f7856, clover: 0x4a5642 },
     ground: {
-      dirt: scan('dirt', 0x5e5248, 0.5),
+      dirt: scan('drysoil', 0x5e5248, 0.6),
       rock: scan('snowrock', 0x6c6e72, 0.4),
       sand: 0xb8c4cc,
       mud: scan('mud', 0x3a3632, 0.5),

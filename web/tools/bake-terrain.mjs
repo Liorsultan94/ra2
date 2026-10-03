@@ -68,8 +68,7 @@ const MATS = [
   { key: 'meadow', src: 'acg:Grass004', tiles: 2.4, flatten: 0.8, nk: 1.0, rough: 0.86, note: 'lush meadow grass' },
   { key: 'withered', src: 'ph:withered_grass', tiles: 2.4, flatten: 0.8, nk: 1.0, note: 'dry / frozen grass, desert scrub' },
   { key: 'litter', src: 'ph:forest_leaves_02', tiles: 2.6, flatten: 0.7, nk: 1.0, note: 'forest floor: moss and leaf litter' },
-  { key: 'dirt', src: 'ph:dirt', tiles: 2.6, flatten: 0.8, nk: 1.2, note: 'bare soil, tracks' },
-  { key: 'drysoil', src: 'ph:dry_ground_rocks', tiles: 2.8, flatten: 0.8, nk: 1.0, note: 'dry stony soil (desert)' },
+  { key: 'drysoil', src: 'ph:dry_ground_rocks', tiles: 2.8, flatten: 0.8, nk: 1.0, note: 'bare stony soil, tracks' },
   { key: 'gravel', src: 'ph:rocky_trail', tiles: 2.2, flatten: 0.7, nk: 1.0, rough: 0.82, note: 'gravel shoulders, stony tracks' },
   { key: 'mossrock', src: 'ph:aerial_rocks_02', tiles: 5, flatten: 0.55, nk: 1.0, note: 'mossy cliff rock (aerial scan)' },
   { key: 'sandstone', src: 'ph:sandstone_cracks', tiles: 3.4, flatten: 0.6, nk: 1.2, note: 'desert mesa sandstone' },
@@ -90,9 +89,9 @@ const MATS = [
 /** Layer slots of the ground shader (src/render/ground.ts), per biome: material key or null (= procedural / fallback). */
 const SLOTS = ['grass', 'dirt', 'rock', 'sand', 'mud', 'forest', 'gravel', 'soil', 'snow', 'asphalt', 'paving'];
 const BIOMES = {
-  temperate: { grass: 'meadow', dirt: 'dirt', rock: 'mossrock', sand: 'beach', mud: 'mud', forest: 'litter', gravel: 'gravel', soil: 'farmsoil' },
+  temperate: { grass: 'meadow', dirt: 'drysoil', rock: 'mossrock', sand: 'beach', mud: 'mud', forest: 'litter', gravel: 'gravel', soil: 'farmsoil' },
   desert: { grass: 'withered', dirt: 'drysoil', rock: 'sandstone', sand: 'dunes', mud: 'cracked', gravel: 'gravel', soil: 'farmsoil' },
-  winter: { grass: 'withered', dirt: 'dirt', rock: 'snowrock', sand: 'snow', mud: 'mud', forest: 'litter', gravel: 'gravel', soil: 'farmsoil', snow: 'snow' },
+  winter: { grass: 'withered', dirt: 'drysoil', rock: 'snowrock', sand: 'snow', mud: 'mud', forest: 'litter', gravel: 'gravel', soil: 'farmsoil', snow: 'snow' },
   urban: { grass: 'meadow', dirt: 'pavement', rock: 'greyrock', sand: 'rubble', mud: 'mud', gravel: 'gravel', asphalt: 'asphalt', paving: 'flags' },
 };
 /** Slot fallbacks when a biome has no material of its own for it. */
