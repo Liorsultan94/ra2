@@ -568,6 +568,47 @@ function droneBuzzFx(b: BakeCtx): void {
 }
 
 /**
+ * Emergency vehicle sirens (render/ambient/emergency.ts): the horn speaker is
+ * a square / saw pair through a driven band-pass, so it reads as a siren even
+ * on a phone speaker. `siren` wails up and down (police), `sirenHiLo`
+ * alternates two tones (ambulance). One ~2 s cycle, played back to back.
+ */
+function sirenFx(b: BakeCtx, hilo: boolean): void {
+  const { p, o, t } = b;
+  const end = t + 2.0;
+  const bp = p.filter('bandpass', 1400, 0.7);
+  const sh = p.shaper(1.8);
+  const lp = p.filter('lowpass', 3800, 0.7);
+  const e = p.gain(0);
+  e.gain.setValueAtTime(0, t);
+  e.gain.linearRampToValueAtTime(0.5, t + 0.04);
+  e.gain.setValueAtTime(0.5, end - 0.05);
+  e.gain.linearRampToValueAtTime(0, end);
+  for (const [type, mul, lvl] of [
+    ['square', 1, 0.6],
+    ['sawtooth', 2, 0.25],
+  ] as const) {
+    const s = p.osc(type, (hilo ? 960 : 620) * mul, t, end + 0.02);
+    const f = s.frequency;
+    if (hilo) {
+      for (let k = 0; k < 4; k++) f.setValueAtTime((k % 2 ? 730 : 960) * mul, t + k * 0.5);
+    } else {
+      f.setValueAtTime(620 * mul, t);
+      f.linearRampToValueAtTime(1450 * mul, t + 0.9);
+      f.setValueAtTime(1450 * mul, t + 1.05);
+      f.linearRampToValueAtTime(620 * mul, end);
+    }
+    const g = p.gain(lvl);
+    s.connect(g);
+    g.connect(bp);
+  }
+  bp.connect(sh);
+  sh.connect(lp);
+  lp.connect(e);
+  e.connect(o);
+}
+
+/**
  * Jet flyby: turbine roar and whine with the full doppler pitch fall, the
  * swelling level of the closest approach and the comb filter of the ground
  * reflection sweeping past (the "flanging" of a real low pass).
@@ -931,7 +972,8 @@ export type BakedName =
   | 'laser' | 'artillery' | 'mortar' | 'thermo' | 'explosionSmall' | 'explosionMedium' | 'explosionLarge'
   | 'buildingCollapse' | 'bridgeCollapse' | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'jetFlyby' | 'thunder' | 'crush'
   | 'jetLoop' | 'rotorLoop' | 'propLoop' | 'fpvLoop' | 'windBed' | 'rainBed' | 'riverBed' | 'cricketBed'
-  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn';
+  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn'
+  | 'siren' | 'sirenHiLo';
 
 const SR_HI = 32000;
 const SR_MID = 24000;
@@ -977,6 +1019,8 @@ export const BAKED: Record<BakedName, BakeDef> = {
   jetHigh: { dur: 8.4, variants: 2, sr: SR_LO, spread: 0.1, build: jetHigh },
   heliPass: { dur: 2.8, variants: 2, sr: SR_LO, spread: 0.05, build: heliPass },
   shipHorn: { dur: 2.7, variants: 1, sr: SR_LO, spread: 0, build: shipHorn },
+  siren: { dur: 2.05, variants: 1, sr: 22050, spread: 0, build: (b) => sirenFx(b, false) },
+  sirenHiLo: { dur: 2.05, variants: 1, sr: 22050, spread: 0, build: (b) => sirenFx(b, true) },
 };
 
 /** Bake order: what a battle needs first comes first (ambience last, it fades in). */
@@ -986,6 +1030,7 @@ export const BAKE_ORDER: BakedName[] = [
   'thermo', 'droneLaunch', 'laser', 'droneBuzz', 'crush', 'bridgeCollapse', 'jetFlyby', 'thunder',
   'jetLoop', 'rotorLoop', 'propLoop', 'fpvLoop', 'windBed', 'rainBed', 'riverBed', 'cricketBed',
   'trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn',
+  'siren', 'sirenHiLo',
 ];
 
 /** Length of the offline render for one definition (all variants back to back). */

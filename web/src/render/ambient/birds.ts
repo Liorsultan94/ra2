@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GameMap } from '../../sim/map';
 import type { FogOfWar } from '../fog';
-import type { Layout } from '../layout';
+import { FieldType, type Layout } from '../layout';
 import { birdModel } from './models';
 import { AnimInstances, ambientMaterial, clampX, clampY, groundAt, walkable, type AmbientFrame, type FogProbe, type Quality } from './shared';
 
@@ -61,6 +61,8 @@ interface Flock {
   paint: THREE.Color;
 }
 
+/** City pigeons: blue-grey, the odd white or brown one. */
+const PIGEONS = [0x6a6e78, 0x7a7e88, 0x5e626c, 0x8a8c92, 0xd8d6d0, 0x6a5a4a].map((c) => new THREE.Color(c));
 const PAINTS = [0x1c1c1f, 0x1c1c1f, 0x2a2826, 0x6a6c72, 0xd8d8d4].map((c) => new THREE.Color(c));
 
 const _m = new THREE.Matrix4();
@@ -85,9 +87,15 @@ export class Birds {
     foul: boolean,
   ) {
     const m = map;
+    // the city: pigeons on the squares and in the parks
+    const urban = m.biome === 'urban';
+    if (urban) {
+      for (const f of layout.fields) if (f.type === FieldType.Plaza) for (const [ox, oy] of [[-1.6, -1.6], [1.6, 1.6], [-1.6, 1.6], [1.6, -1.6]]) if (walkable(m, f.cx + ox, f.cy + oy)) this.spots.push({ x: f.cx + ox, y: f.cy + oy });
+      for (const p of m.deco?.parks ?? []) this.spots.push({ x: (p.x0 + p.x1) / 2 + 1.2, y: (p.y0 + p.y1) / 2 + 1.2 });
+    }
     // landing spots: fields and the grass along wood edges, away from the bases
-    for (const f of layout.fields) if (walkable(m, f.cx, f.cy)) this.spots.push({ x: f.cx, y: f.cy });
-    for (let k = 0; k < 400 && this.spots.length < 80; k++) {
+    if (!urban) for (const f of layout.fields) if (walkable(m, f.cx, f.cy)) this.spots.push({ x: f.cx, y: f.cy });
+    for (let k = 0; k < 400 && this.spots.length < 80 && !urban; k++) {
       const x = 2 + Math.random() * (m.w - 4);
       const y = 2 + Math.random() * (m.h - 4);
       const i = (y | 0) * m.w + (x | 0);
@@ -105,14 +113,14 @@ export class Birds {
     for (let i = 0; i < nFlocks; i++) {
       const sp = this.spots[(Math.random() * this.spots.length) | 0];
       const n = (phone ? 6 : 7) + Math.floor(Math.random() * (phone ? 4 : 6));
-      const paint = PAINTS[(Math.random() * PAINTS.length) | 0];
+      const paint = (urban ? PIGEONS : PAINTS)[(Math.random() * (urban ? PIGEONS : PAINTS).length) | 0];
       const fl: Flock = { s: F.Ground, t: Math.random() * 20, dur: 25 + Math.random() * 40, cx: sp.x, cy: sp.y, wx: sp.x, wy: sp.y, spin: Math.random() < 0.5 ? 0.35 : -0.35, sx: 0, sy: 0, birds: [], paint };
       for (let j = 0; j < n; j++) {
         const gx = (Math.random() - 0.5) * 1.4;
         const gy = (Math.random() - 0.5) * 1.0;
         const x = sp.x + gx;
         const y = sp.y + gy;
-        fl.birds.push({ x, y, z: groundAt(m, x, y), vx: 0, vy: 0, vz: 0, phase: Math.random() * 6.28, amp: 0, fold: 1, a: Math.random() * 6.28, r: 1.2 + Math.random() * 1.6, alt: 2.2 + Math.random() * 1.4, gx, gy, hop: Math.random() * 3, yaw: Math.random() * 6.28, bank: 0, size: 1.05 + Math.random() * 0.25 });
+        fl.birds.push({ x, y, z: groundAt(m, x, y), vx: 0, vy: 0, vz: 0, phase: Math.random() * 6.28, amp: 0, fold: 1, a: Math.random() * 6.28, r: urban ? 0.8 + Math.random() * 1.1 : 1.2 + Math.random() * 1.6, alt: urban ? 1.5 + Math.random() * 0.9 : 2.2 + Math.random() * 1.4, gx, gy, hop: Math.random() * 3, yaw: Math.random() * 6.28, bank: 0, size: 1.05 + Math.random() * 0.25 });
       }
       // half of them start in the air
       if (!foul && Math.random() < 0.5) this.takeOff(fl);

@@ -144,10 +144,10 @@ function addDeck(conc: GeoBuilder, top: GeoBuilder, x0: number, x1: number, m: T
   const pt = (x: number, y: number, z: number) => V(x, y, z).applyMatrix4(m);
   const base = conc.count;
   const tbase = top.count;
-  // a box from xa to xb cut into SEG-long blocks (bends with the lift)
+  // a box from xa to xb, its faces cut every SEG along x (bends with the lift)
   const run = (xa: number, xb: number, h: number, d: number, y: number, z: number, c: Col) => {
     const n = Math.max(1, Math.ceil((xb - xa) / SEG - 0.01));
-    for (let k = 0; k < n; k++) box(conc, (xb - xa) / n, h, d, at(xa + ((k + 0.5) * (xb - xa)) / n, y, z), c);
+    conc.add(new THREE.BoxGeometry(xb - xa, h, d, n, 1, 1).toNonIndexed(), at((xa + xb) / 2, y, z), null, c);
   };
   // slab (with a hole: four pieces around it)
   if (hole) {
@@ -624,8 +624,8 @@ export class BridgeFx {
     box(conc, 0.07, 0.012, W - 0.02, trs(xe - end * 0.03, deckTop + 0.012, 0), 0.24);
     for (let k = 0; k < 12; k++) box(conc, 0.02, 0.013, 0.07, trs(xe - end * 0.03, deckTop + 0.013, -W / 2 + 0.12 + (k / 11) * (W - 0.24)), 0.5);
     // kerbs + wing walls along both sides of the ramp
-    const run = 1.6;
-    const N = 8;
+    const run = 1.2;
+    const N = 6;
     for (const side of [-1, 1]) {
       for (let i = 0; i < N; i++) {
         const t0 = i / N;
@@ -640,8 +640,9 @@ export class BridgeFx {
         const kh = 0.05 * (1 - t0 * 0.7);
         const mid = V((xa + xb) / 2, (ha + hb) / 2 + kh / 2, (za + zb) / 2);
         const len = Math.hypot(xb - xa, zb - za);
-        const pitch = Math.atan2(hb - ha, (xb - xa) * end) * end;
-        box(conc, len + 0.02, kh, 0.08, new THREE.Matrix4().compose(mid, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(-(zb - za), xb - xa), pitch, 'YXZ')), V(1, 1, 1)), 0.82);
+        // (the box's +x points from a to b after the yaw: tilt it up by the rise from a to b)
+        const pitch = Math.atan2(hb - ha, len);
+        box(conc, Math.hypot(len, hb - ha) + 0.02, kh, 0.08, new THREE.Matrix4().compose(mid, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(-(zb - za), xb - xa), pitch, 'YXZ')), V(1, 1, 1)), 0.82);
         // wing wall: from under the kerb down into the ground (no daylight under the ramped road)
         const gz = side * (W / 2 - 0.08);
         const ga = Math.min(groundH(xa, gz), ha) - 0.3;

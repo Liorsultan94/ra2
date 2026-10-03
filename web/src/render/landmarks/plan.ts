@@ -108,6 +108,8 @@ export interface LandmarkPlan {
   rails: RailPlan[];
   /** Outskirts lanes (render only: a road running on past the edge, a works lane). Width per lane. */
   lanes: { pts: P2[]; width: number }[];
+  /** Extra clearings (outskirts trees / city blocks keep off): the canal running on past the edge. */
+  clears?: { x: number; y: number; r: number }[];
   /** Camel resting / grazing spots (desert; for the animals system). */
   camels: P2[];
 }
@@ -157,6 +159,7 @@ function maskFor(m: GameMap): Mask {
       }
   };
   for (const s of plan.spots) if (!s.inMap) disc(s.x, s.y, s.r);
+  for (const c of plan.clears ?? []) disc(c.x, c.y, c.r);
   for (const r of plan.rails) for (let i = 0; i < r.pts.length; i += 2) disc(r.pts[i].x, r.pts[i].y, r.elevated ? 1.4 : 1.6);
   for (const l of plan.lanes) for (const p of l.pts) disc(p.x, p.y, l.width / 2 + 0.6);
   mk = { data, x0, y0, w, h };
@@ -506,5 +509,11 @@ function urban(m: GameMap): LandmarkPlan {
   spots.push(spot('containers', 10.4, -11.4, Math.PI / 2, 2.4, 0.3));
   // suspension cables on the bridge nearest the centre on player 0's side
   if (m.bridges.length > 1) spots.push(spot('suspension', m.bridges[1].x, m.bridges[1].y, 0, 0, 0.5, { inMap: true, a: 1 }));
-  return { spots, rails: [metro], lanes: [], camels: [] };
+  // the canal runs on past the map's corners (outskirts water): keep the city blocks out of it
+  const clears: { x: number; y: number; r: number }[] = [];
+  for (let d = 0; d < 34; d += 2.5) {
+    clears.push({ x: 2.2, y: -1.5 - d, r: 3.2 }, { x: -1.5 - d, y: 1.6, r: 2.6 });
+    clears.push({ x: W - 2.2, y: m.h + 1.5 + d, r: 3.2 }, { x: W + 1.5 + d, y: m.h - 1.6, r: 2.6 });
+  }
+  return { spots, rails: [metro], lanes: [], camels: [], clears };
 }

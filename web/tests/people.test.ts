@@ -181,3 +181,35 @@ describe('pedestrian walk grid', () => {
     expect(panic).toBeLessThanOrEqual(calm * 1.001);
   });
 });
+
+describe('emergency vehicle routes', () => {
+  for (const id of MAPS) {
+    it(`${id}: reach the roads by the houses from an entry, on the drivable surface`, async () => {
+      const { planRoute, routePolyline, reverseSegs } = await import('../src/render/ambient/emroute');
+      const { onSurface } = await import('../src/render/ambient/roadnet');
+      const { m, net } = setup(id);
+      let tried = 0;
+      let ok = 0;
+      for (const st of m.structures.slice(0, 24)) {
+        const x = st.x + st.w / 2;
+        const y = st.y + st.h / 2;
+        tried++;
+        const r = planRoute(net, x, y, 4.5, 12, 75);
+        if (!r) continue;
+        ok++;
+        expect(r.len).toBeGreaterThanOrEqual(12);
+        const poly = routePolyline(net, r.segs, 0.25, 1.4);
+        const back = routePolyline(net, reverseSegs(r.segs));
+        // ends near the house, comes back to where it started
+        const end = poly[poly.length - 1];
+        expect(Math.hypot(end.x - x, end.y - y)).toBeLessThan(4.5 + Math.max(st.w, st.h));
+        // (the other lane: up to a wide avenue apart)
+        expect(Math.hypot(back[back.length - 1].x - poly[0].x, back[back.length - 1].y - poly[0].y)).toBeLessThan(2.2);
+        let on = 0;
+        for (const p of poly) if (onSurface(net, p.x, p.y)) on++;
+        expect(on / poly.length).toBeGreaterThan(0.9);
+      }
+      expect(ok / tried).toBeGreaterThan(0.5);
+    });
+  }
+});

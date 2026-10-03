@@ -9,6 +9,7 @@ import type { Terrain } from '../terrain';
 import { Animals } from './animals';
 import { Birds } from './birds';
 import { roadNetFor } from './clearance';
+import { Emergency } from './emergency';
 import { People } from './people';
 import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
@@ -69,6 +70,8 @@ export class AmbientLife {
   private hours = 0;
   /** Pedestrians: walkers, market, kids at play, evacuation (people.ts). */
   readonly people: People;
+  /** Police cars and ambulances at destroyed civilian buildings (emergency.ts). */
+  readonly emergency: Emergency;
   // (car lights, indicators and the traffic-light glow)
   private lights = new LightSprites(448, 64);
   private dangers: Danger[] = [];
@@ -95,7 +98,10 @@ export class AmbientLife {
     this.dynamicWx = host.atmos.cfg.weather === 'dynamic';
     const foul = !this.dynamicWx && host.atmos.cfg.weather !== 'clear';
     this.traffic = new Traffic(map, terrain.layout, world.bridges, fog, effects, probe, this.lights, quality, phone, world.players.map((p) => p.faction));
-    this.people = new People(map, terrain.layout, world, roadNetFor(map, terrain.layout), fog, probe, quality, phone);
+    const net = roadNetFor(map, terrain.layout);
+    this.people = new People(map, terrain.layout, world, net, fog, probe, quality, phone);
+    this.emergency = new Emergency(map, net, fog, probe, this.lights, this.people.figures, quality, phone);
+    this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures);
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
@@ -104,7 +110,7 @@ export class AmbientLife {
     this.rail = new Railway(map, fog, probe, this.lights, effects, quality);
     this.water = new WaterTransport(map, terrain.river ?? null, fog, probe, this.lights, quality);
     this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad, () => (host as unknown as { camera?: THREE.Camera }).camera?.position.y ?? 30);
-    this.group.add(this.traffic.group, this.people.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
+    this.group.add(this.traffic.group, this.people.group, this.emergency.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -147,7 +153,10 @@ export class AmbientLife {
       case 'death': {
         if (ev.kind === 'building') {
           this.danger(ev.x, ev.y, 10, 1.6, 1);
-          if (buildingDef(ev.def)?.role === 'civilian') this.people.houseDestroyed(ev.id);
+          if (buildingDef(ev.def)?.role === 'civilian') {
+            this.people.houseDestroyed(ev.id);
+            this.emergency.incident(ev.x, ev.y);
+          }
           // traffic lights close by lose power / get damaged
           this.traffic.outage(ev.x, ev.y, buildingDef(ev.def)?.role === 'power');
         }
@@ -239,6 +248,7 @@ export class AmbientLife {
     f.vy1 = y1 + 3;
     this.traffic.update(f);
     this.people.update(f);
+    this.emergency.update(f);
     this.animals.update(f);
     this.birds.update(f);
     this.river.update(f);
@@ -248,6 +258,7 @@ export class AmbientLife {
     // headlight beams / cones on the road at night (fx/nightlife.ts -> NightLights, no extra draw calls)
     queueHeadlights(this.traffic, this.host.atmos.night, f);
     this.people.draw(f);
+    this.emergency.draw(f, this.time);
     this.animals.draw(f);
     this.birds.draw();
     this.river.draw(f);
@@ -264,8 +275,26 @@ export class AmbientLife {
     this.lights.commit();
   }
 
+  /**
+   * Positional sound for the ambient life (sirens). The game can set it; by
+   * default it reaches the game's AudioSystem through window.ironfront.
+   */
+  onSound: ((name: 'siren' | 'sirenHiLo', vol: number, pos: { x: number; y: number }) => void) | null = null;
+  private sndPos = { x: 0, y: 0 };
+  private sound(name: 'siren' | 'sirenHiLo', vol: number, x: number, y: number) {
+    this.sndPos.x = x;
+    this.sndPos.y = y;
+    if (this.onSound) return this.onSound(name, vol, this.sndPos);
+    try {
+      const g = (window as unknown as { ironfront?: { game?: { audio?: { play(n: string, v: number, p: { x: number; y: number }): void } } } }).ironfront?.game;
+      g?.audio?.play(name, vol, this.sndPos);
+    } catch {
+      /* no audio */
+    }
+  }
+
   /** Debug / tests: counts and car states. */
   stats() {
-    return { people: this.people.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
+    return { people: this.people.debug(), emergency: this.emergency.debug(), animalKinds: this.animals.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
   }
 }

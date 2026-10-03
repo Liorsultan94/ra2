@@ -1197,7 +1197,7 @@ class Bld {
       for (let i = 0; i < pos.count; i++) {
         if (aw.getX(i) < -0.5) continue; // team colour: kept clean
         _dv.fromBufferAttribute(pos, i).applyMatrix4(mw);
-        const low = clamp((0.235 - _dv.y) / 0.165, 0, 1);
+        const low = clamp((0.2 - _dv.y) / 0.13, 0, 1); // the lower third of the hull / skirts
         const ny = nor.getY(i);
         // caked on the lower hull / fenders, a light film of dust on decks and the glacis
         const d = low * low * (3 - 2 * low) + Math.max(0, ny) * 0.12 + (ny < -0.5 ? 0.25 : 0);

@@ -703,23 +703,44 @@ export function stadium(k: Kit) {
   k.slab(0.04, 3.2, 0, 0.04, 0, 0xf4f4f4);
   k.add(new THREE.RingGeometry(0.42, 0.46, 24).rotateX(-Math.PI / 2), local(0, 0.04, 0), 0xf4f4f4);
   for (const s of [-1, 1]) k.box(0.06, 0.25, 0.5, s * 2.05, 0.12, 0, 0xf4f4f4);
-  // the bowl: stepped stands (coloured seats), an outer wall with lit facade, a roof ring
-  for (let i = 0; i < seg; i++) {
-    const a0 = (i / seg) * Math.PI * 2;
-    const a1 = ((i + 1) / seg) * Math.PI * 2;
-    const am = (a0 + a1) / 2;
-    const ca = Math.cos(am);
-    const sa = Math.sin(am);
-    const len = Math.hypot((Math.cos(a1) - Math.cos(a0)) * RX, (Math.sin(a1) - Math.sin(a0)) * RZ) + 0.02;
-    const ang = Math.atan2(Math.cos(am) * RZ, -Math.sin(am) * RX);
-    const seat = i % 10 < 5 ? 0x2a4ab0 : 0xc02a2a;
-    for (let r = 0; r < 4; r++) {
-      const f = 0.72 + r * 0.075;
-      k.box(len * f, 0.32 + r * 0.3, 0.42, ca * RX * f, (0.32 + r * 0.3) / 2, sa * RZ * f, r === 3 ? 0x8a8a8a : seat, 0, -ang + Math.PI / 2);
+  // the bowl: continuous stepped tiers of seats (blocks of colour), a concourse wall, the roof ring
+  const band = (f0: number, y0: number, f1: number, y1: number, col: (a: number) => number, glow = 0) => {
+    const pos: number[] = [];
+    const cols: number[] = [];
+    const c = new THREE.Color();
+    for (let i = 0; i < seg; i++) {
+      const a0 = (i / seg) * Math.PI * 2;
+      const a1 = ((i + 1) / seg) * Math.PI * 2;
+      const P = (a: number, f: number, y: number) => [Math.cos(a) * RX * f, y, Math.sin(a) * RZ * f];
+      const A = P(a0, f0, y0);
+      const B = P(a1, f0, y0);
+      const C2 = P(a1, f1, y1);
+      const D = P(a0, f1, y1);
+      // both windings: seen from the pitch and from outside
+      pos.push(...A, ...C2, ...B, ...A, ...D, ...C2, ...A, ...B, ...C2, ...A, ...C2, ...D);
+      c.setHex(col((a0 + a1) / 2));
+      for (let v = 0; v < 12; v++) cols.push(c.r, c.g, c.b);
     }
-    k.box(len * 1.02, 1.9, 0.12, ca * RX * 1.02, 0.95, sa * RZ * 1.02, 0xd8d8d0, 2, -ang + Math.PI / 2);
-    k.box(len * 1.05, 0.08, 0.9, ca * RX * 0.96, 1.95, sa * RZ * 0.96, 0xe8e8e8, 0, -ang + Math.PI / 2);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const start = k.count;
+    k.add(g, null, 0xffffff, glow);
+    for (let i = 0; i < cols.length; i++) k.col[start * 3 + i] = cols[i];
+  };
+  const seat = (a: number) => (Math.floor(((a / (Math.PI * 2)) * 16 + 0.5)) % 2 ? 0x2a4ab0 : 0xc02a2a);
+  for (let r = 0; r < 5; r++) {
+    const f0 = 0.74 + r * 0.06;
+    const f1 = f0 + 0.06;
+    const y = 0.15 + r * 0.32;
+    band(f0, y, f0, y + 0.32, () => 0x8a8a88); // riser
+    band(f0, y + 0.32, f1, y + 0.32, r === 4 ? () => 0x9a9a98 : seat); // tread (seats)
   }
+  band(0.74, 0.0, 0.74, 0.15, () => 0x6a6a6a);
+  band(1.04, 0, 1.04, 1.95, (a) => (Math.floor((a / (Math.PI * 2)) * 40) % 4 === 0 ? 0x9aa4ac : 0xd8d6d0));
+  band(1.04, 1.25, 1.045, 1.4, () => 0x2a4ab0, 3);
+  band(0.98, 1.95, 1.06, 1.95, () => 0x8a8a88);
+  band(0.88, 2.15, 1.06, 2.0, () => 0xf0f0ee);
   // floodlight masts with lamp banks (lit heads)
   for (const L of STADIUM_LIGHTS) {
     const x = L.x * 1.1;

@@ -41,7 +41,9 @@ export type Sfx =
   /** A vehicle ran a soldier over (crunch + thud); a short alarmed radio squelch (soldiers dodging a vehicle). */
   | 'crush' | 'squelch'
   /** Civilian ambience of the render-only set pieces (render/landmarks/sound.ts): played only once baked. */
-  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn';
+  | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn'
+  /** Police (wail) / ambulance (hi-lo) siren cycle, about 2 s (render/ambient/emergency.ts). */
+  | 'siren' | 'sirenHiLo';
 
 /** A world position (sim x / y on the ground, z = height above it). */
 export interface SoundPos {
@@ -120,6 +122,8 @@ const META: Record<Sfx, Meta> = {
   jetHigh: C(0.32, 0.25, 6, 0.25, 1, 'droneBuzz', 0.04),
   heliPass: C(0.4, 0.12, 2, 0.35, 2, 'droneBuzz', 0.03),
   shipHorn: C(0.42, 0.35, 5, 0.3, 1, 'droneBuzz', 0.02),
+  siren: C(0.34, 0.16, 1.5, 0.35, 2, 'droneBuzz', 0.01),
+  sirenHiLo: C(0.34, 0.16, 1.5, 0.35, 2, 'droneBuzz', 0.01),
   crush: C(0.6, 0.1, 0.06, 1, 3, 'explosionSmall', 0.1),
   jam: { lvl: 0.4, wet: 0.08, gap: 0.08, combat: false, weight: 1, cap: 2, jitter: 0, live: 'jam' },
   click: ui('click'),
@@ -147,7 +151,7 @@ function ui(name: LiveName): Meta {
 }
 
 /** Civilian ambience sounds: no live fallback, silent until baked. */
-const CIVIL = new Set<Sfx>(['trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn']);
+const CIVIL = new Set<Sfx>(['trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn', 'siren', 'sirenHiLo']);
 
 /** Which baked sound a combat Sfx plays. */
 function bakedFor(name: Sfx): BakedName | null {

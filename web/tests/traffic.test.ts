@@ -630,3 +630,37 @@ describe('road clearance', () => {
     expect(lot.taken.filter((x) => x !== 0), JSON.stringify([c.id, lot.taken])).toEqual([]);
   });
 });
+
+describe('bridge deck ends', () => {
+  it('the deck clears the banks and the approach roads meet its end flush, across the width', async () => {
+    const { BRIDGE_HEIGHT } = await import('../src/sim/map');
+    const { surfaceHeight } = await import('../src/render/ground');
+    const { deckRamps, deckLift, rampHeight, DECK_W } = await import('../src/render/deckramp');
+    const D = Math.SQRT1_2;
+    for (const id of MAPS) {
+      const m = createMap(id, 1);
+      deckRamps(m).forEach((d, bi) => {
+        const w = (x: number, z: number) => ({ x: d.x + (x + z) * D, y: d.y + (z - x) * D });
+        for (let x = -d.L / 2; x <= d.L / 2; x += 0.1) {
+          const top = BRIDGE_HEIGHT + deckLift(d, x);
+          for (let z = -DECK_W / 2; z <= DECK_W / 2; z += 0.15) {
+            const p = w(x, z);
+            // no bank poking up through the deck
+            expect(top, `${id} bridge ${bi} at ${x.toFixed(2)},${z.toFixed(2)}`).toBeGreaterThanOrEqual(surfaceHeight(m, p.x, p.y) + 0.01);
+          }
+        }
+        // the road ribbon at the deck's ends sits at the deck top (no step), over the road's whole width
+        for (const e of [-1, 1]) {
+          const top = BRIDGE_HEIGHT + deckLift(d, (e * d.L) / 2);
+          for (let z = -0.93; z <= 0.931; z += 0.31) {
+            const p = w(e * (d.L / 2 + 0.02), z);
+            const h = rampHeight(m, p.x, p.y, surfaceHeight(m, p.x, p.y), 0.03);
+            expect(Math.abs(h - top - 0.01), `${id} bridge ${bi} end ${e} z ${z.toFixed(2)}`).toBeLessThan(0.03);
+          }
+        }
+        // the ramps are gentle: the deck never climbs more than ~1 in 1.5
+        for (let x = -d.L / 2; x < d.L / 2; x += 0.05) expect(Math.abs(deckLift(d, x + 0.05) - deckLift(d, x)) / 0.05).toBeLessThan(0.7);
+      });
+    }
+  });
+});

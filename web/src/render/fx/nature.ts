@@ -370,7 +370,7 @@ export class NatureFx {
             // landed: lies still and fades
             this.y[i] = ry = this.gnd[i] + 0.015;
             this.vy[i] = 0;
-            this.life[i] = Math.min(life, age + 2.5 + sd * 2);
+            this.life[i] = Math.min(life, age + 4 + sd * 4);
           }
         } else flip = 0.35 + sd * 0.5;
       } else if (kd === SEED) {
@@ -791,7 +791,7 @@ export class LivingWorld {
     // ---- leaves (temperate / city parks; not under snow)
     const tb = this.treeB;
     if (tb && (this.biome === 'temperate' || this.biome === 'urban') && WX.wxSnow.value < 0.3) {
-      this.acc.leaf += fr * (this.q === 'high' ? 1 : 0.6) * (1.6 + 11 * Math.pow(wk, 1.5)) * (1 - 0.5 * rain) * this.forced.leaves;
+      this.acc.leaf += fr * (this.q === 'high' ? 1 : 0.6) * (2.6 + 14 * Math.pow(wk, 1.5)) * (1 - 0.5 * rain) * this.forced.leaves;
       let tries = 6;
       while (this.acc.leaf >= 1 && tries-- > 0 && nat.count[LEAF] < 260) {
         this.acc.leaf -= 1;
@@ -801,11 +801,11 @@ export class LivingWorld {
         if (!BROADLEAF.has(t.species) || !this.probe.visible(t.x, t.y)) continue;
         const cr = CROWN_R[t.species] * t.s * 0.8;
         const ang = Math.random() * Math.PI * 2;
-        const rr = Math.sqrt(Math.random()) * cr;
+        const rr = (0.75 + Math.random() * 0.55) * cr;
         const g = groundHeight(this.map, t.x, t.y);
         const lc = AUTUMN[Math.floor(Math.random() * AUTUMN.length)];
         _c2.copy(lc).multiplyScalar(0.85 + Math.random() * 0.3);
-        nat.spawn(LEAF, t.x + Math.cos(ang) * rr, g + (CROWN_Y[t.species] + (Math.random() - 0.3) * 0.25) * t.s, t.y + Math.sin(ang) * rr, wx, -(0.28 + Math.random() * 0.2), wz, 14, 0.085 + Math.random() * 0.045, _c2, 0.95, g);
+        nat.spawn(LEAF, t.x + Math.cos(ang) * rr, g + (CROWN_Y[t.species] + (Math.random() - 0.3) * 0.25) * t.s, t.y + Math.sin(ang) * rr, wx, -(0.28 + Math.random() * 0.2), wz, 14, 0.12 + Math.random() * 0.06, _c2, 0.95, g);
       }
       if (this.acc.leaf > 3) this.acc.leaf = 3;
     }
@@ -943,13 +943,13 @@ export class LivingWorld {
       }
       const vis = this.probe.visible(d.x, d.z);
       if (!vis) continue;
-      d.acc += dt * (this.q === 'high' ? 34 : 20) * env;
+      d.acc += dt * (this.q === 'high' ? 55 : 36) * env;
       const g = groundHeight(this.map, d.x, d.z);
       while (d.acc >= 1) {
         d.acc -= 1;
-        _c2.setRGB(0.78, 0.62, 0.42).multiplyScalar(0.85 + Math.random() * 0.3);
+        _c2.setRGB(0.72, 0.56, 0.38).multiplyScalar(0.8 + Math.random() * 0.3);
         const low = Math.random() < 0.3;
-        const i2 = nat.spawn(DUST, d.x, g + (low ? 0.02 : 0.05 + Math.random() * 0.2), d.z, d.vx, low ? 0.15 + Math.random() * 0.2 : 0.9 + Math.random() * 1.1, d.vz, 1.8 + Math.random() * 1.6, low ? 0.35 : 0.16 + Math.random() * 0.14, _c2, (low ? 0.28 : 0.4) * (0.6 + 0.4 * env), g);
+        const i2 = nat.spawn(DUST, d.x, g + (low ? 0.02 : 0.05 + Math.random() * 0.2), d.z, d.vx, low ? 0.15 + Math.random() * 0.2 : 0.9 + Math.random() * 1.1, d.vz, 1.8 + Math.random() * 1.6, low ? 0.45 : 0.2 + Math.random() * 0.16, _c2, (low ? 0.4 : 0.62) * (0.6 + 0.4 * env), g);
         nat.setSpin(i2, 5 + Math.random() * 4);
       }
     }
