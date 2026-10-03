@@ -526,6 +526,8 @@ describe('road clearance', () => {
           const b = dead[j];
           const d = Math.hypot(a.x - b.x, a.y - b.y);
           if (d > 5) continue;
+          // (city streets cut by the canal end at its quay, each as a cul-de-sac: their circles are kept apart above)
+          if (n.lines[a.arms[0].line].painted && n.lines[b.arms[0].line].painted) continue;
           let blocked = false;
           for (let k = 0; k <= 20; k++) if (hard(a.x + ((b.x - a.x) * k) / 20, a.y + ((b.y - a.y) * k) / 20)) blocked = true;
           expect(blocked, `dead ends ${a.x.toFixed(1)},${a.y.toFixed(1)} and ${b.x.toFixed(1)},${b.y.toFixed(1)}`).toBe(true);
