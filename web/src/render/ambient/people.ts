@@ -370,6 +370,11 @@ export class People {
     active = this;
   }
 
+  /** Nearest pavement-like (cheap, off-road) walkable spot within r of (x, y). */
+  pavement(x: number, y: number, r: number): V2 | null {
+    return this.snap(x, y, r, 2);
+  }
+
   /** Is tile (tx, ty) under a player's building (not the civilian houses)? */
   builtAt(tx: number, ty: number): boolean {
     return tx >= 0 && ty >= 0 && tx < this.map.w && ty < this.map.h && this.busy[ty * this.map.w + tx] === 1;

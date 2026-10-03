@@ -485,7 +485,7 @@ void main() {
   float p = ( r - 0.9 ) / 0.1;
   float s = ( 1.32 - r ) / 0.13;
   vec3 col = vec3( 0.0 );
-  float band = smoothstep( 0.0, 0.15, p ) * ( 1.0 - smoothstep( 0.85, 1.0, p ) );
+  float band = smoothstep( 0.0, 0.3, p ) * ( 1.0 - smoothstep( 0.7, 1.0, p ) );
   col += spectrum( clamp( p, 0.0, 1.0 ) ) * band;
   float band2 = smoothstep( 0.0, 0.2, s ) * ( 1.0 - smoothstep( 0.8, 1.0, s ) );
   col += spectrum( clamp( s, 0.0, 1.0 ) ) * band2 * 0.28;
@@ -520,7 +520,7 @@ export class Rainbow {
    * otherwise it stands over the far side of the RTS view around `target` (vh = visible height).
    */
   place(amount: number, cam: THREE.Camera, sun: THREE.Vector3, free: boolean, target: THREE.Vector3, vh: number) {
-    this.u.uAmount.value = amount * 0.6;
+    this.u.uAmount.value = amount * 0.3;
     this.mesh.visible = amount > 0.004;
     if (!this.mesh.visible) return;
     const cp = cam.position;

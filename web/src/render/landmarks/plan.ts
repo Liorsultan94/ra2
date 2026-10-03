@@ -349,7 +349,7 @@ function frontline(m: GameMap): LandmarkPlan {
   ];
   houses.forEach(([x, y, yaw], i) => spots.push(spot('cottage', x, y, yaw, 1.0, hh(i, 3, 11))));
   // the wind farm on the hills north of the map
-  [[14, -15], [26, -20.5], [38, -14.5], [50, -21], [62, -15.5], [74, -20], [86, -14.5]].forEach(([x, y], i) => spots.push(spot('turbine', x, y, Math.PI / 2, 1.2, hh(i, 5, 12))));
+  [[14, -10], [26, -13.5], [38, -9.5], [50, -14], [62, -10], [74, -13.5], [86, -9.5]].forEach(([x, y], i) => spots.push(spot('turbine', x, y, Math.PI / 2, 1.2, hh(i, 5, 12))));
   // the castle ruin on the rock ridge south-west of the centre bridge (impassable rock)
   spots.push(spot('castle', 42, 61, Math.atan2(58 - 64, 44 - 40), 0, 0.37, { inMap: true }));
   return { spots, rails: [west, east], lanes, camels: [] };
@@ -367,8 +367,8 @@ function desert(m: GameMap): LandmarkPlan {
   houses.forEach(([x, y], i) => spots.push(spot('mudhouse', x, y, (Math.round(hh(i, 4, 21) * 4) * Math.PI) / 2, 0.9, hh(i, 5, 21))));
   for (let i = 0; i < 9; i++) spots.push(spot('palm', -3.6 - hh(i, 6, 21) * 13, 38 + i * 3.6 + hh(i, 7, 21), hh(i, 8, 21) * 6, 0.4, hh(i, 9, 21)));
   // the palm grove by a spring, south of the town (camels rest here)
-  const gx = -12.5;
-  const gy = 76;
+  const gx = -11;
+  const gy = 79;
   spots.push(spot('pond', gx, gy, 0, 4.2, 0.5, { a: 3.0, b: 2.2 }));
   for (let i = 0; i < 14; i++) {
     const a = (i / 14) * Math.PI * 2 + hh(i, 1, 22);
@@ -384,8 +384,10 @@ function desert(m: GameMap): LandmarkPlan {
   // the ruined fort on the mesa west of the oasis town (impassable rock)
   spots.push(spot('fort', 30.5, 63, Math.atan2(5, 6), 0, 0.61, { inMap: true }));
   // the refinery skyline north of the map, with its gas flare
-  spots.push(spot('refinery', 68, -17.5, 0, 6.5));
-  return { spots, rails: [], lanes: [{ pts: smoothPath([{ x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -6.2, y: 70 }, { x: -6.0, y: 92 }], 3, 0.5), width: 0.75 }], camels };
+  spots.push(spot('refinery', 68, -11, 0, 6.5));
+  const lane = smoothPath([{ x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -5.0, y: 70 }, { x: -3.6, y: 92 }], 3, 0.5);
+  const offLane = spots.filter((sp) => sp.kind !== 'palm' || lane.every((p) => Math.hypot(p.x - sp.x, p.y - sp.y) > 1.1));
+  return { spots: offLane, rails: [], lanes: [{ pts: lane, width: 0.75 }], camels };
 }
 
 /** Walkable spots ringing the map's oases (open sand or scrub, no trees, buildings or rock). */
@@ -453,17 +455,17 @@ function winter(_m: GameMap): LandmarkPlan {
   spots.push(spot('station', -3.75, 40.5, 0, 1.6));
   spots.push(spot('factory', -11.6, 41.2, -Math.PI / 2, 3.4));
   // the frozen lake and its ice-fishing hut
-  spots.push(spot('lake', -13.5, 72, 0, 5.2, 0.5, { a: 4.6, b: 3.3 }));
-  spots.push(spot('icehut', -12.6, 72.6, 0.4, 0.5));
-  spots.push(spot('icehut', -15.4, 70.8, 2.2, 0.5, 0.8));
+  spots.push(spot('lake', -10.5, 72, 0, 5.2, 0.5, { a: 4.6, b: 3.3 }));
+  spots.push(spot('icehut', -9.6, 72.6, 0.4, 0.5));
+  spots.push(spot('icehut', -12.4, 70.8, 2.2, 0.5, 0.8));
   const cot: [number, number, number][] = [[-6.2, 63, Math.PI / 2], [-8.8, 66.6, 0], [-5.4, 69.4, Math.PI / 2], [-9.8, 60.2, Math.PI], [-4.4, 47.2, Math.PI / 2]];
   cot.forEach(([x, y, yaw], i) => spots.push(spot('cottage', x, y, yaw, 1.0, 0.2 + hh(i, 1, 31) * 0.3)));
   // the ski mountain north of the map with a gondola lift up its face
   const mx = 34;
-  const my = -31;
+  const my = -27;
   spots.push(spot('skimountain', mx, my, 0, 19, 0.5, { a: 19, b: 9.5 }));
-  spots.push(spot('liftstation', mx, -8.6, Math.PI / 2, 1.2, 0, { a: 0 }));
-  spots.push(spot('liftstation', mx, -24.4, -Math.PI / 2, 1.0, 1, { a: 1 }));
+  spots.push(spot('liftstation', mx, -6.5, Math.PI / 2, 1.2, 0, { a: 0 }));
+  spots.push(spot('liftstation', mx, -20.5, -Math.PI / 2, 1.0, 1, { a: 1 }));
   // the radio / TV mast on the rock ridge south of the centre (impassable rock)
   spots.push(spot('mast', 49, 68.5, 0, 0, 0.5, { inMap: true }));
   return { spots, rails: [west], lanes, camels: [] };
@@ -480,27 +482,27 @@ function urban(m: GameMap): LandmarkPlan {
     ],
     { elevated: 1.15, service: 'metro', stationX: { y: -2.6, x0: 22, x1: 30, side: 1 } },
   );
-  spots.push(spot('stadium', -17.5, 46, 0, 7.6));
+  spots.push(spot('stadium', -13.5, 46, 0, 7.6));
   spots.push(spot('hospital', -7.2, 24.5, Math.PI, 3.2));
   spots.push(spot('fuel', -4.6, 68.2, 0, 2.3));
   // the skyline: glass towers on the far sides (warning lights on the tall ones)
   const towers: [number, number, number][] = [
-    [-24, 8, 9],
-    [-31, 17, 12],
-    [-22, 27, 7.5],
-    [-36, 33, 10],
-    [-30, 62, 8.5],
-    [-38, 72, 13.5],
-    [-25, 82, 7],
-    [-42, 52, 11],
-    [8, -22, 8],
-    [19, -31, 14],
-    [33, -21, 9.5],
-    [47, -33, 12.5],
-    [60, -22, 8],
-    [72, -30, 15],
-    [86, -23, 9],
-    [97, -34, 11],
+    [-12, 8, 9],
+    [-19, 16, 12],
+    [-11, 28, 7.5],
+    [-21, 31, 10],
+    [-12, 62, 8.5],
+    [-20, 71, 13.5],
+    [-11, 83, 7],
+    [-25, 52, 11],
+    [17, -10, 8],
+    [21, -19, 14],
+    [33, -10, 9.5],
+    [46, -17, 12.5],
+    [58, -10, 8],
+    [70, -16, 15],
+    [84, -11, 9],
+    [95, -18, 11],
   ];
   towers.forEach(([x, y, h], i) => spots.push(spot('tower', x, y, (hh(i, 2, 41) - 0.5) * 0.3, 2.6, hh(i, 1, 41), { a: h, b: 1.9 + hh(i, 3, 41) * 1.1, c: 1.7 + hh(i, 4, 41) * 1.0 })));
   // the marina where the canal runs out of town (north-west), cranes and containers on the quay

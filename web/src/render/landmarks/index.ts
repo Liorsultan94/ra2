@@ -821,7 +821,7 @@ export class MapLandmarks {
     // chimneys, the stove pipe, the gas flare
     const near = (x: number, z: number, m: number) => x > f.vx0 - m && x < f.vx1 + m && z > f.vy0 - m && z < f.vy1 + m;
     for (const s of this.smokers) {
-      if (!near(s.x, s.z, 6) || !this.probe.visible(s.x, s.z)) continue;
+      if (!near(s.x, s.z, s.y + 8) || !this.probe.visible(s.x, s.z)) continue;
       s.t -= dt;
       if (s.t > 0) continue;
       s.t = s.size > 1 ? 0.22 : 0.6;
@@ -829,7 +829,7 @@ export class MapLandmarks {
       else this.effects.smoke(s.x, s.y, s.z, s.size, false);
     }
     const fl = this.flare;
-    if (fl && near(fl.x, fl.z, 10) && this.probe.visible(fl.x, fl.z)) {
+    if (fl && near(fl.x, fl.z, 28) && this.probe.visible(fl.x, fl.z)) {
       if (Math.random() < dt * 16) this.effects.flame(fl.x, fl.y, fl.z, 0.9);
       if (Math.random() < dt * 3) this.effects.smoke(fl.x, fl.y + 0.6, fl.z, 1.2, true);
     }
@@ -842,7 +842,7 @@ export class MapLandmarks {
     const t = this.time;
     for (const l of this.lights) {
       if (l.range && l.range.stage > 0) continue;
-      if (!near(l.x, l.z, l.y + 4) || !this.probe.visible(l.x, l.z)) continue;
+      if (!near(l.x, l.z, l.y * 1.6 + 6) || !this.probe.visible(l.x, l.z)) continue;
       switch (l.kind) {
         case 0: {
           // aircraft warning light: red, slow blink (dim by day)
@@ -877,7 +877,7 @@ export class MapLandmarks {
     if (P && dk > 0.15 && near(P.x, P.z, 8) && this.probe.visible(P.x, P.z)) L.pool(P.x, P.y + 0.04, P.z, -P.yaw, 9.5, 6.8, 0.55 * dk, 0.58 * dk, 0.5 * dk);
     // the gas flare's glow
     const fl = this.flare;
-    if (fl && near(fl.x, fl.z, 10) && this.probe.visible(fl.x, fl.z)) {
+    if (fl && near(fl.x, fl.z, 28) && this.probe.visible(fl.x, fl.z)) {
       const fk = 0.8 + Math.sin(t * 17) * 0.15 + Math.sin(t * 7.3) * 0.1;
       L.flare(fl.x, fl.y + 0.2, fl.z, 1.1 * fk, 2.4 * fk, 1.1 * fk, 0.25 * fk);
     }

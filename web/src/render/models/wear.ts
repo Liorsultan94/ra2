@@ -297,9 +297,10 @@ function inject(shader: THREE.WebGLProgramParametersWithUniforms, u: WearU, cfg:
           reflectedLight.indirectSpecular *= wAOl * wAOl;
           reflectedLight.directDiffuse *= mix(1.0, wAOl, 0.35);
           reflectedLight.directSpecular *= mix(1.0, wAOl, 0.7);
-          // sky top-light: a soft fill on up-facing armour so decks and turret roofs read at RTS zoom
+          // sky top-light: a soft cool fill on up-facing armour so decks and turret roofs read at RTS zoom (and the
+          // paint keeps its hue under the warm afternoon key light)
           vec3 wUpV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-          reflectedLight.indirectDiffuse += diffuseColor.rgb * uLook.w * (0.35 + 0.65 * max(dot(normal, wUpV), 0.0)) * wAOl;
+          reflectedLight.indirectDiffuse += diffuseColor.rgb * vec3(0.84, 0.95, 1.14) * uLook.w * (0.35 + 0.65 * max(dot(normal, wUpV), 0.0)) * wAOl;
         }`,
       );
   }

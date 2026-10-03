@@ -53,6 +53,8 @@ interface Unit {
   tx: number;
   ty: number;
   seen: boolean;
+  /** Crew destinations (x, y pairs; -1 = not chosen yet). */
+  goal: Float32Array;
 }
 
 interface Incident {
@@ -139,6 +141,8 @@ export class Emergency {
   private lastDanger: { x: number; y: number; t: number }[] = [];
   private maxUnits: number;
   sound: SoundFn | null = null;
+  /** Nearest pavement-like spot to (x, y) within r (people.ts), for the crew. */
+  snap: ((x: number, y: number, r: number) => { x: number; y: number } | null) | null = null;
   readonly stat = { incidents: 0, dispatched: 0, noRoute: 0 };
 
   constructor(
@@ -195,7 +199,7 @@ export class Emergency {
     if (kind === 1) {
       const last = segs[segs.length - 1];
       const dir = last.a1 >= last.a0 ? 1 : -1;
-      last.a1 -= dir * Math.min(0.75, Math.abs(last.a1 - last.a0) * 0.8);
+      last.a1 -= dir * Math.min(1.05, Math.abs(last.a1 - last.a0) * 0.8);
     }
     const poly = routePolyline(this.net, segs, 0.25, 1.4);
     if (poly.length < 3) return false;
@@ -224,7 +228,7 @@ export class Emergency {
       crew.push(f);
       this.figures.push(f);
     }
-    this.units.push({ kind, s: V.In, poly, cum, arc: 0, v: 0.6, x: poly[0].x, y: poly[0].y, yaw: Math.atan2(poly[1].y - poly[0].y, poly[1].x - poly[0].x), hgt: groundAt(this.map, poly[0].x, poly[0].y), door: 0, t: 0, siren: Math.random() * 2, segs, portal: r.portal, crew, tx: inc.x, ty: inc.y, seen: false });
+    this.units.push({ kind, s: V.In, poly, cum, arc: 0, v: 0.6, x: poly[0].x, y: poly[0].y, yaw: Math.atan2(poly[1].y - poly[0].y, poly[1].x - poly[0].x), hgt: groundAt(this.map, poly[0].x, poly[0].y), door: 0, t: 0, siren: Math.random() * 2, segs, portal: r.portal, crew, tx: inc.x, ty: inc.y, seen: false, goal: new Float32Array(4).fill(-1) });
     this.stat.dispatched++;
     return true;
   }
@@ -363,13 +367,24 @@ export class Emergency {
         gx = u.x - sa * side * 0.2;
         gy = u.y + ca * side * 0.2;
       } else if (u.kind === 1) {
-        // towards the ruin, stopping short of it
+        // over to the pavement in front of the ruin
         const dx = u.tx - u.x;
         const dy = u.ty - u.y;
         const d = Math.hypot(dx, dy) || 1;
         const k = Math.max(0, Math.min(d - 1.4, 2.2));
         gx = u.x + (dx / d) * k + (i ? 0.18 : -0.18) * (-dy / d);
         gy = u.y + (dy / d) * k + (i ? 0.18 : -0.18) * (dx / d);
+        if (u.goal[i * 2] < 0 && this.snap) {
+          const p = this.snap(gx, gy, 1.2);
+          if (p) {
+            u.goal[i * 2] = p.x;
+            u.goal[i * 2 + 1] = p.y;
+          }
+        }
+        if (u.goal[i * 2] >= 0) {
+          gx = u.goal[i * 2];
+          gy = u.goal[i * 2 + 1];
+        }
       } else {
         gx = u.x + (i ? -ca * 0.45 : ca * 0.42) - sa * 0.35;
         gy = u.y + (i ? -sa * 0.45 : sa * 0.42) + ca * 0.35;

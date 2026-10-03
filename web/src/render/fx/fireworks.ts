@@ -142,7 +142,8 @@ export class Fireworks {
     geo.setAttribute('aV', (this.aV = mk(4)));
     geo.setAttribute('aC', (this.aC = mk(4)));
     geo.instanceCount = 0;
-    this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+    // (double-sided: the streak's side axis can mirror the quad)
+    this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 8;

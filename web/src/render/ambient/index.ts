@@ -102,6 +102,7 @@ export class AmbientLife {
     this.people = new People(map, terrain.layout, world, net, fog, probe, quality, phone);
     this.emergency = new Emergency(map, net, fog, probe, this.lights, this.people.figures, quality, phone);
     this.emergency.sound = (name, vol, x, y) => this.sound(name, vol, x, y);
+    this.emergency.snap = (x, y, r) => this.people.pavement(x, y, r);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';

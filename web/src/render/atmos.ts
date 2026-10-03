@@ -177,7 +177,7 @@ function applyBiome(p: Preset, light: number) {
 }
 
 /** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
-type Key = TimeOfDay | 'noon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
+type Key = TimeOfDay | 'noon' | 'afternoon' | 'golden' | 'sunset' | 'twilight' | 'predawn' | 'dawn' | 'morning';
 
 /** Base (clear weather) preset of a time-of-day key; `light` = overall daylight 0..1 (weather haze scaling). */
 function todPreset(key: Key): { p: Preset; light: number } {
@@ -226,15 +226,23 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.12;
       break;
     // ---- extra stops of the dynamic cycle
+    // Daylight stops: a near-white sun and a neutral bounce (the grade keeps the grass a natural mid-green).
+    // Low-sun stops (golden hour, sunset, dawn): the warmth is in the key light only (a soft amber, not a
+    // saturated orange) while a stronger cool sky fill (hemisphere + sky IBL) keeps the shadow side bluish,
+    // so sun-facing surfaces glow and everything else keeps its own colour.
     case 'noon':
-      set({ sunI: 3.3, hemiI: 0.85, env: 0.45, cloud: 0.34, sat: 1.04, vignette: 0.28, bloom: 0.38, exposure: 1.13, spec: 1, dark: 0 }, 0xfff0dc, 0xa6c4f0, 0x6a5434, [0.3, 0.31, 0.32], [-0.012, 0.0, 0.024], [0.015, 0.008, -0.015], 0x2a2824, [1, 1, 1]);
+      set({ sunI: 2.6, hemiI: 0.85, env: 0.45, cloud: 0.34, sat: 1.0, vignette: 0.28, bloom: 0.38, exposure: 1.06, spec: 1, dark: 0 }, 0xfff4e8, 0x9cb6e0, 0x5c5444, [0.3, 0.31, 0.32], [-0.012, 0.0, 0.024], [0.015, 0.008, -0.015], 0x2a2824, [1, 1, 1]);
+      break;
+    case 'afternoon':
+      // (the cycle's 15:00 stop: the static day sun's direction, a slightly warm afternoon light)
+      set({ sunI: 2.75, hemiI: 0.82, env: 0.44, cloud: 0.32, sat: 1.0, vignette: 0.3, bloom: 0.4, exposure: 1.1, spec: 1, dark: 0 }, 0xffe8cc, 0x9cb8e6, 0x5c5240, [0.3, 0.3, 0.3], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2824, [1, 0.97, 0.95]);
       break;
     case 'golden':
-      set({ sunI: 3.0, hemiI: 0.68, env: 0.34, cloud: 0.28, sat: 1.14, vignette: 0.33, bloom: 0.5, exposure: 1.2, spec: 1, dark: 0.1 }, 0xffa458, 0x8c9cd0, 0x5a4028, [0.34, 0.25, 0.19], [-0.014, 0.0, 0.032], [0.06, 0.02, -0.05], 0x241a16, [0.9, 0.78, 0.7]);
+      set({ sunI: 1.9, hemiI: 1.05, env: 0.62, cloud: 0.28, sat: 1.0, vignette: 0.33, bloom: 0.5, exposure: 1.12, spec: 1, dark: 0.1 }, 0xffd6aa, 0x86a2dc, 0x3c3a3a, [0.3, 0.26, 0.24], [-0.016, 0.0, 0.034], [0.04, 0.016, -0.03], 0x22201e, [0.92, 0.84, 0.8]);
       light = 0.85;
       break;
     case 'sunset':
-      set({ sunI: 2.5, hemiI: 0.6, env: 0.27, cloud: 0.22, sat: 1.08, vignette: 0.38, bloom: 0.56, exposure: 1.17, spec: 0.95, dark: 0.38 }, 0xff9858, 0x7c86b8, 0x4a3628, [0.31, 0.21, 0.18], [-0.012, 0.0, 0.045], [0.05, 0.012, -0.045], 0x1e1418, [0.78, 0.62, 0.62]);
+      set({ sunI: 1.4, hemiI: 1.1, env: 0.55, cloud: 0.22, sat: 1.0, vignette: 0.38, bloom: 0.56, exposure: 1.12, spec: 0.95, dark: 0.38 }, 0xffc496, 0x7894d4, 0x343238, [0.26, 0.21, 0.22], [-0.016, 0.0, 0.045], [0.04, 0.012, -0.03], 0x1c1820, [0.78, 0.66, 0.7]);
       light = 0.65;
       break;
     case 'twilight':
@@ -246,12 +254,12 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.28;
       break;
     case 'dawn':
-      set({ sunI: 2.5, hemiI: 0.6, env: 0.26, cloud: 0.2, sat: 1.12, vignette: 0.38, bloom: 0.55, exposure: 1.17, spec: 0.9, dark: 0.42 }, 0xff9468, 0x8a90c4, 0x4a3a34, [0.34, 0.24, 0.26], [-0.012, 0.0, 0.045], [0.07, 0.02, -0.03], 0x1c1820, [0.8, 0.68, 0.72]);
+      set({ sunI: 1.4, hemiI: 1.05, env: 0.55, cloud: 0.2, sat: 1.0, vignette: 0.38, bloom: 0.55, exposure: 1.12, spec: 0.9, dark: 0.42 }, 0xffcaa8, 0x8098d4, 0x363438, [0.3, 0.26, 0.28], [-0.016, 0.0, 0.045], [0.04, 0.014, -0.02], 0x1c1a22, [0.82, 0.74, 0.78]);
       p.hazeP.set(3, 70, 0.45, 50); // morning mist
       light = 0.6;
       break;
     case 'morning':
-      set({ sunI: 3.0, hemiI: 0.78, env: 0.4, cloud: 0.3, sat: 1.04, vignette: 0.3, bloom: 0.42, exposure: 1.18, spec: 1, dark: 0.04 }, 0xffdcb0, 0x9ab8e6, 0x64503a, [0.3, 0.3, 0.31], [-0.012, 0.0, 0.024], [0.025, 0.01, -0.02], 0x2a2826, [0.95, 0.95, 1]);
+      set({ sunI: 2.6, hemiI: 0.82, env: 0.42, cloud: 0.3, sat: 1.0, vignette: 0.3, bloom: 0.42, exposure: 1.1, spec: 1, dark: 0.04 }, 0xffeedd, 0x9ab4e0, 0x5a5244, [0.3, 0.3, 0.31], [-0.012, 0.0, 0.024], [0.02, 0.008, -0.015], 0x2a2826, [0.95, 0.95, 1]);
       p.hazeP.set(4, 80, 0.4, 52);
       light = 0.95;
       break;
@@ -351,12 +359,12 @@ export const START_HOUR = 5.5;
 
 /**
  * Lighting stops of the cycle. u = fraction of the day starting at midday. Sun / moon paths are in degrees:
- * elevation and azimuth (0 = +x, 90 = +z) in the classic view frame; the late-afternoon 'day' stop sits
- * exactly on the static day sun so the cycle passes through the familiar look.
+ * elevation and azimuth (0 = +x, 90 = +z) in the classic view frame; the 15:00 'afternoon' stop sits
+ * exactly on the static day sun's direction (with a more neutral light than the fixed 'day' preset).
  */
 const CYCLE_KEYS: { u: number; key: Key }[] = [
   { u: 0.0, key: 'noon' },
-  { u: 0.2, key: 'day' },
+  { u: 0.2, key: 'afternoon' },
   { u: 0.31, key: 'golden' },
   { u: 0.375, key: 'sunset' },
   { u: 0.425, key: 'dusk' },

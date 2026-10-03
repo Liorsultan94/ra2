@@ -1487,8 +1487,9 @@ const TERRAIN_AO = /* glsl */ `
   if (wxPud > 0.01) {
     // puddles mirror the sky (Fresnel-boosted horizon / haze colour: the environment map alone is
     // too faint at the RTS view angle to read as standing water)
-    vec3 pudSky = dot(skyHorA.xyz, vec3(1.0)) > 0.01 ? skyHorA.xyz * 1.5 : hazeColor * 2.4;
-    reflectedLight.indirectSpecular += pudSky * wxPud * 0.5;
+    vec3 pudSky = dot(skyHorA.xyz, vec3(1.0)) > 0.01 ? skyHorA.xyz : hazeColor * 2.0;
+    pudSky /= 1.0 + max(pudSky.r, max(pudSky.g, pudSky.b));
+    reflectedLight.indirectSpecular += pudSky * wxPud * 0.22;
   }
 `;
 
