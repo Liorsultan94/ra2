@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from '../sim/rng';
-import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
 import { OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
@@ -422,7 +422,9 @@ export class Waterside implements WatersideHandles {
           prev = null;
           continue;
         }
-        const top = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, x - c.ty * 0.5 * side)), Math.max(0, Math.min(m.h - 0.01, y + c.tx * 0.5 * side))) + 0.05;
+        let top = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, x - c.ty * 0.5 * side)), Math.max(0, Math.min(m.h - 0.01, y + c.tx * 0.5 * side))) + 0.05;
+        // under a bridge deck the wall stops below it
+        if (R.bridgeS.some((bs) => Math.abs(bs - c.s) < 1.5)) top = Math.min(top, BRIDGE_HEIGHT - 0.06);
         if (prev && Math.hypot(x - prev.x, y - prev.y) < 1.2) {
           // the wall face looks into the canal (towards the centreline)
           const nx = c.ty * side;
