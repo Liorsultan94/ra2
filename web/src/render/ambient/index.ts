@@ -103,7 +103,7 @@ export class AmbientLife {
     this.landmarks = new MapLandmarks(map, fog, probe, this.lights, effects, quality, world.bridges);
     this.rail = new Railway(map, fog, probe, this.lights, effects, quality);
     this.water = new WaterTransport(map, terrain.river ?? null, fog, probe, this.lights, quality);
-    this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad);
+    this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad, () => (host as unknown as { camera?: THREE.Camera }).camera?.position.y ?? 30);
     this.group.add(this.traffic.group, this.people.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }

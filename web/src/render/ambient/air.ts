@@ -27,6 +27,9 @@ import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
  */
 
 const ALT_JET = 13.5;
+/** Airliner altitude / scale this frame (follows the camera height, smoothed). */
+let jetAlt = ALT_JET;
+let jetScale = 1;
 const ALT_NEWS = 4.6;
 const ALT_PLANE = 5.4;
 const TRAIL_N = 64;
@@ -105,6 +108,8 @@ export class AirTraffic {
     private lights: LightSprites,
     quality: Quality,
     private helipad: { x: number; y: number; z: number } | null,
+    /** Height of the camera (airliners fly at a fraction of it so they read as high and small). */
+    private camY: () => number = () => 30,
   ) {
     this.group.name = 'air-traffic';
     this.news = newHeli(false);
@@ -139,6 +144,7 @@ export class AirTraffic {
     const tm = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
+      side: THREE.DoubleSide,
       uniforms: { uNight: { value: 0 } },
       vertexShader: /* glsl */ `
         attribute vec2 aT;
@@ -215,6 +221,13 @@ export class AirTraffic {
       }
       this.jetWait = 55 + Math.random() * 70;
     }
+    // fly at ~55 % of the camera height, drawn smaller the closer to the camera: a distant airliner, never a giant
+    const cy0 = Math.max(8, this.camY());
+    const alt = Math.max(5.5, Math.min(ALT_JET, cy0 * 0.55));
+    jetAlt += (alt - jetAlt) * Math.min(1, dt * 0.5);
+    jetScale = Math.max(0.3, Math.min(1, ((cy0 - jetAlt) / cy0) * 0.95));
+    const ALT = jetAlt;
+    const SC = jetScale;
     const im = this.jetIm!;
     let n = 0;
     let q = 0;
@@ -244,19 +257,20 @@ export class AirTraffic {
       }
       if (!j.heard && Math.hypot(j.x - cx, j.y - cy) < 26) {
         j.heard = true;
-        civSound('jetHigh', 0.8, j.x, j.y, ALT_JET);
+        civSound('jetHigh', 0.8, j.x, j.y, ALT);
       }
       if (j.t < j.life && j.x > f.vx0 - 40 && j.x < f.vx1 + 40 && j.y > f.vy0 - 40 && j.y < f.vy1 + 40) {
         _q.setFromEuler(_e.set(0, -Math.atan2(j.dy, j.dx), 0, 'YXZ'));
-        _m.compose(_p.set(j.x, ALT_JET, j.y), _q, _s);
+        _m.compose(_p.set(j.x, ALT, j.y), _q, _s.set(SC, SC, SC));
+        _s.set(1, 1, 1);
         im.setMatrixAt(n++, _m);
         // navigation lights: red / green wingtips, white strobe
         const nx = -j.dy;
         const ny = j.dx;
         const k = 0.5 + f.dark;
-        this.lights.flare(j.x - j.dx * 0.25 + nx * 1.05, ALT_JET, j.y - j.dy * 0.25 + ny * 1.05, 0.14, 0.2 * k, 1.6 * k, 0.4 * k);
-        this.lights.flare(j.x - j.dx * 0.25 - nx * 1.05, ALT_JET, j.y - j.dy * 0.25 - ny * 1.05, 0.14, 1.8 * k, 0.15 * k, 0.1 * k);
-        if ((this.time * 1.2) % 1 < 0.08) this.lights.flare(j.x - j.dx * 1.2, ALT_JET + 0.35, j.y - j.dy * 1.2, 0.3, 2.5, 2.5, 2.5);
+        this.lights.flare(j.x - j.dx * 0.25 * SC + nx * 1.05 * SC, ALT, j.y - j.dy * 0.25 * SC + ny * 1.05 * SC, 0.14, 0.2 * k, 1.6 * k, 0.4 * k);
+        this.lights.flare(j.x - j.dx * 0.25 * SC - nx * 1.05 * SC, ALT, j.y - j.dy * 0.25 * SC - ny * 1.05 * SC, 0.14, 1.8 * k, 0.15 * k, 0.1 * k);
+        if ((this.time * 1.2) % 1 < 0.08) this.lights.flare(j.x - j.dx * 1.2, ALT + 0.35, j.y - j.dy * 1.2, 0.3, 2.5, 2.5, 2.5);
       }
       // contrail quads (two trails, one per engine pair)
       const nx = -j.dy;
@@ -267,14 +281,14 @@ export class AirTraffic {
         const ageA = (this.time - j.pts[a * 3 + 2]) / 24;
         const ageB = (this.time - j.pts[b * 3 + 2]) / 24;
         if (ageA >= 1) break;
-        const wA = 0.05 + ageA * 0.75;
-        const wB = 0.05 + Math.min(1, ageB) * 0.75;
+        const wA = (0.05 + ageA * 0.75) * SC;
+        const wB = (0.05 + Math.min(1, ageB) * 0.75) * SC;
         for (const side of [-0.45, 0.45]) {
-          const ax = j.pts[a * 3] + nx * side * (1 + ageA * 0.6);
-          const ay = j.pts[a * 3 + 1] + ny * side * (1 + ageA * 0.6);
-          const bx = j.pts[b * 3] + nx * side * (1 + ageB * 0.6);
-          const by = j.pts[b * 3 + 1] + ny * side * (1 + ageB * 0.6);
-          const h = ALT_JET - 0.05 - ageA * 0.4;
+          const ax = j.pts[a * 3] + nx * side * SC * (1 + ageA * 0.6);
+          const ay = j.pts[a * 3 + 1] + ny * side * SC * (1 + ageA * 0.6);
+          const bx = j.pts[b * 3] + nx * side * SC * (1 + ageB * 0.6);
+          const by = j.pts[b * 3 + 1] + ny * side * SC * (1 + ageB * 0.6);
+          const h = ALT - 0.05 - ageA * 0.4;
           const verts = [
             [ax - nx * wA, h, ay - ny * wA, ageA, -1],
             [ax + nx * wA, h, ay + ny * wA, ageA, 1],

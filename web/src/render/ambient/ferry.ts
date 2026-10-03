@@ -160,13 +160,19 @@ export class WaterTransport {
       void edge;
       const yaw = Math.atan2(dy, dx);
       const top = Math.max(groundY(this.map, sx + dx * 1.4, sy + dy * 1.4), WATER_LEVEL + 0.1);
-      // ramp: from 1.6 inland down to 0.7 into the water
-      const len = 2.3;
-      const cx = sx + dx * (1.6 - len / 2);
-      const cy = sy + dy * (1.6 - len / 2);
-      const drop = top - (WATER_LEVEL - 0.15);
-      k.at(cx, (top + WATER_LEVEL - 0.15) / 2, cy, yaw).box(len, 0.08, 0.86, 0, 0, 0, 0x9a968e, 0, 0, 0, Math.atan2(drop, len));
-      k.at(cx, (top + WATER_LEVEL - 0.15) / 2 - 0.25, cy, yaw).box(len, 0.4, 0.8, 0, 0, 0, 0x7a766e, 0, 0, 0, Math.atan2(drop, len));
+      // ramp: from 1.6 inland down to 0.7 into the water, in two pieces following the bank
+      const pts = [1.6, 0.35, -0.7].map((t) => ({ t, h: t > 0 ? Math.max(groundY(this.map, sx + dx * t, sy + dy * t), WATER_LEVEL) + 0.03 : WATER_LEVEL - 0.08 }));
+      for (let i = 0; i < 2; i++) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        const len = a.t - b.t;
+        const mx = sx + dx * (a.t + b.t) / 2;
+        const my = sy + dy * (a.t + b.t) / 2;
+        const tilt = Math.atan2(a.h - b.h, len);
+        k.at(mx, (a.h + b.h) / 2, my, yaw).box(len + 0.04, 0.08, 0.86, 0, 0, 0, 0x9a968e, 0, 0, 0, tilt);
+        k.at(mx, (a.h + b.h) / 2 - 0.3, my, yaw).box(len + 0.04, 0.5, 0.8, 0, 0, 0, 0x7a766e, 0, 0, 0, tilt);
+      }
+      void top;
       for (const sg of [-1, 1]) {
         const px = sx + dx * 0.7 - dy * sg * 0.58;
         const py = sy + dy * 0.7 + dx * sg * 0.58;
