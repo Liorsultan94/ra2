@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { phoneCaps } from './devicecaps';
 import type { Biome } from '../sim/map';
 import { PHOTO_MATERIALS, PHOTO_STACKS, type PhotoSlot, type PhotoStack } from './terrainset';
 
@@ -24,7 +25,8 @@ export function photoTier(quality: 'low' | 'medium' | 'high'): PhotoTier {
   const m = typeof location !== 'undefined' ? /[?&]photo=(\d+)/.exec(location.search) : null;
   if (m) return m[1] === '1024' ? 1024 : m[1] === '512' ? 512 : 0;
   if (typeof createImageBitmap === 'undefined') return 0;
-  return quality === 'low' ? 0 : quality === 'medium' ? 512 : 1024;
+  // (phones: 512, devicecaps.ts)
+  return quality === 'low' ? 0 : quality === 'medium' || phoneCaps() ? 512 : 1024;
 }
 
 /** Public asset base (relative: works from any GitHub Pages sub-path). */
@@ -52,6 +54,8 @@ interface Decoded {
   normal: ImageBitmap[];
   bytes: number;
   ms: number;
+  /** Taken by a PhotoGround (its bitmaps get closed after the upload). */
+  claimed?: boolean;
 }
 
 const loads = new Map<string, Promise<Decoded | null>>();
@@ -193,8 +197,25 @@ export class PhotoGround {
   private load() {
     if (this.size <= 0) return;
     const gen = this.gen;
+    const key = `${this.biome}:${this.size}`;
     void loadPhotoStack(this.biome, this.size).then((d) => {
-      if (gen !== this.gen) return;
+      // the bitmaps are closed once copied to the GPU: a decoded stack serves one ground only. The next match
+      // (or a second ground loading at the same time) fetches again from the HTTP cache instead of uploading
+      // detached bitmaps ("texSubImage3D: The source data has been detached": black / missing ground layers)
+      if (d?.claimed) {
+        loads.delete(key);
+        if (gen === this.gen) this.load();
+        return;
+      }
+      if (d) {
+        d.claimed = true;
+        loads.delete(key);
+      }
+      if (gen !== this.gen) {
+        // superseded (context restored): release the decoded images
+        for (const b of d ? [...d.albedo, ...d.normal] : []) b.close?.();
+        return;
+      }
       if (d) this.pending = d;
       else this.failed = true;
     });
@@ -288,6 +309,9 @@ export class PhotoGround {
   }
 
   dispose() {
+    this.gen++;
+    for (const b of this.pending ? [...this.pending.albedo, ...this.pending.normal] : []) b.close?.();
+    this.pending = null;
     this.albedo.value.dispose();
     this.normal.value.dispose();
   }

@@ -34,26 +34,57 @@ export function studioRig(scene: THREE.Scene): StudioRig {
   return { hemi, key, fill, rim };
 }
 
-/** Renders unit/building portraits ("cameos") for the build sidebar from the 3D models. */
+/** Transparent 1x1 placeholder shown until a cameo has been rendered. */
+export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
+const CANVAS_PX = 512;
+
+/** Yield to the event loop (input, rAF) between two steps of a cameo render. */
+const idle = () =>
+  new Promise<void>((res) => {
+    const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    if (ric) ric(() => res(), { timeout: 250 });
+    else setTimeout(res, 16);
+  });
+
+/**
+ * Renders unit/building portraits ("cameos") for the build sidebar from the 3D models.
+ *
+ * One factory (one offscreen GL context) serves the whole session: the menu's
+ * hero tank, every battle's sidebar and the live selection portrait
+ * (sharedCameos()). Cameos render in the background, one per idle slice: each
+ * one builds a model, compiles its shaders on this context and reads the
+ * frame back, which for the ~40 sidebar entries at once froze the battle
+ * start (and the menu, for the demo battle's hidden sidebar) for seconds on
+ * phones. `get()` returns the cached PNG or a transparent placeholder and
+ * queues the render; the finished image is patched into every
+ * `<img data-cameo>` showing it (see `img()` / `attr()`).
+ * The canvas has a fixed size: cameos and the live portrait render into a
+ * viewport at its top-left corner (resizing a GL canvas stalls on the GPU).
+ */
 export class CameoFactory {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(26, 4 / 3, 0.1, 100);
   private cache = new Map<string, string>();
-  private w = CW * SS;
-  private h = CH * SS;
+  private queue = new Map<string, { defId: string; style: ModelStyle }>();
+  private running = false;
+  /** While true (a battle is compiling its shaders under the loading screen) the background queue waits. */
+  paused = false;
   private env: THREE.Texture | null = null;
-  /** 2D canvas the supersampled frame is filtered down into (cameo PNGs). */
+  /** 2D canvas the supersampled frame is filtered down into (CPU backed: the PNG encode reads it back). */
   private out: HTMLCanvasElement | null = null;
 
   constructor() {
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = this.w;
-      canvas.height = this.h;
+      canvas.width = CANVAS_PX;
+      canvas.height = CANVAS_PX;
       this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+      this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
       this.renderer.setPixelRatio(1);
-      this.renderer.setSize(this.w, this.h, false);
+      this.renderer.setSize(CANVAS_PX, CANVAS_PX, false);
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.12;
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -78,18 +109,69 @@ export class CameoFactory {
     return this.env;
   }
 
+  private static key(defId: string, style: ModelStyle) {
+    return `${defId}:${style.team}`;
+  }
+
+  /** Cached PNG of a cameo, or the blank placeholder while it is queued (prefer `img()` / `attr()`, which get patched). */
   get(defId: string, style: ModelStyle): string {
-    const key = `${defId}:${style.team}`;
+    const key = CameoFactory.key(defId, style);
     const hit = this.cache.get(key);
-    if (hit !== undefined) return hit;
-    let url = '';
-    if (this.renderer) {
-      const d = DEFS[defId];
-      const model = createModel(d.model, style, null);
-      const root = model.root;
-      model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true });
-      this.resize(CW * SS, CH * SS);
-      this.scene.add(root);
+    if (hit !== undefined) return hit || CAMEO_BLANK;
+    if (!this.renderer) return CAMEO_BLANK;
+    if (!this.queue.has(key)) this.queue.set(key, { defId, style });
+    void this.pump();
+    return CAMEO_BLANK;
+  }
+
+  /** Point an <img> at a cameo (now if it is cached, else as soon as it has been rendered). */
+  img(img: HTMLImageElement, defId: string, style: ModelStyle) {
+    img.dataset.cameo = CameoFactory.key(defId, style);
+    img.src = this.get(defId, style);
+  }
+
+  /** `data-cameo` + `src` attributes for an <img> inside an HTML string. */
+  attr(defId: string, style: ModelStyle): string {
+    return `data-cameo="${CameoFactory.key(defId, style)}" src="${this.get(defId, style)}"`;
+  }
+
+  /** Render the queued cameos one at a time in idle slices. */
+  private async pump() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      while (this.queue.size && this.renderer) {
+        await idle();
+        if (this.paused || document.hidden) {
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        const [key, job] = this.queue.entries().next().value as [string, { defId: string; style: ModelStyle }];
+        this.queue.delete(key);
+        if (this.cache.has(key)) continue;
+        let url = '';
+        try {
+          url = await this.render(job.defId, job.style);
+        } catch (e) {
+          console.warn('[cameo] failed', job.defId, e);
+        }
+        this.cache.set(key, url);
+        if (url) for (const im of document.querySelectorAll<HTMLImageElement>(`img[data-cameo="${key}"]`)) im.src = url;
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async render(defId: string, style: ModelStyle): Promise<string> {
+    const r = this.renderer;
+    const d = DEFS[defId];
+    if (!r || !d) return '';
+    const model = createModel(d.model, style, null);
+    const root = model.root;
+    model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true });
+    this.scene.add(root);
+    try {
       root.updateMatrixWorld(true);
       // frame without the whip antennas (they would shrink the model in the frame)
       const box = frameBox(root, true);
@@ -105,29 +187,36 @@ export class CameoFactory {
       if (d.kind === 'unit') root.rotation.y = Math.PI * 0.18;
       root.updateMatrixWorld(true);
       fitCamera(this.camera, box, new THREE.Vector3(1, 0.8, 1.25), 0.86, root.matrixWorld);
-      this.renderer.setClearColor(0x000000, 0);
-      this.renderer.render(this.scene, this.camera);
-      url = this.downsample(this.renderer.domElement, CW, CH).toDataURL('image/png');
+      // compile this model's programs without blocking (parallel compile where the browser has it)
+      await r.compileAsync(this.scene, this.camera);
+      if (this.renderer !== r) return '';
+      await idle();
+      const w = CW * SS;
+      const h = CH * SS;
+      this.corner(w, h);
+      r.setClearColor(0x000000, 0);
+      r.clear();
+      r.render(this.scene, this.camera);
+      return this.downsample(r.domElement, w, h, CW, CH).toDataURL('image/png');
+    } finally {
       this.scene.remove(root);
     }
-    this.cache.set(key, url);
-    return url;
   }
 
-  /** Filter a supersampled frame down to w x h (box-filter quality via the 2D canvas' high-quality smoothing). */
-  private downsample(src: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+  /** Filter the top-left sw x sh of a supersampled frame down to w x h (high-quality 2D canvas smoothing). */
+  private downsample(src: HTMLCanvasElement, sw: number, sh: number, w: number, h: number): HTMLCanvasElement {
     if (!this.out) this.out = document.createElement('canvas');
     const c = this.out;
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;
     }
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', { willReadFrequently: true });
     if (!g) return src;
     g.clearRect(0, 0, w, h);
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
-    g.drawImage(src, 0, 0, src.width, src.height, 0, 0, w, h);
+    g.drawImage(src, 0, 0, sw, sh, 0, 0, w, h);
     return c;
   }
 
@@ -136,35 +225,62 @@ export class CameoFactory {
     return !!this.renderer;
   }
 
-  private resize(w: number, h: number) {
-    if (!this.renderer || (w === this.w && h === this.h)) return;
-    this.w = w;
-    this.h = h;
-    this.renderer.setSize(w, h, false);
+  /** Draw into the w x h top-left corner of the fixed-size canvas (the GL viewport origin is bottom-left). */
+  private corner(w: number, h: number) {
+    const r = this.renderer!;
+    w = Math.min(CANVAS_PX, Math.round(w));
+    h = Math.min(CANVAS_PX, Math.round(h));
+    r.setScissorTest(true);
+    r.setViewport(0, CANVAS_PX - h, w, h);
+    r.setScissor(0, CANVAS_PX - h, w, h);
   }
 
   /**
-   * Live 3D portrait (ui/portrait3d.ts): render a scene into this factory's
-   * offscreen canvas and return it for the caller to filter down and blit.
-   * Sharing the cameo GL context means the model shader programs already
-   * compiled for the sidebar cameos are reused (the portrait scene uses the
-   * same studioRig() + environment) and no extra context is opened on phones.
+   * Live 3D portrait (ui/portrait3d.ts): render a scene into the top-left w x h
+   * of this factory's offscreen canvas and return the canvas for the caller to
+   * filter down and blit (source rect 0, 0, w, h). Sharing the cameo GL context
+   * means the model shader programs already compiled for the sidebar cameos
+   * are reused (the portrait scene uses the same studioRig() + environment) and
+   * no extra context is opened on phones.
    */
+  /** Compile a live scene's programs on this context without blocking (parallel compile where available). */
+  prepare(scene: THREE.Scene, camera: THREE.Camera): Promise<void> {
+    if (!this.renderer) return Promise.resolve();
+    return this.renderer.compileAsync(scene, camera).then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
   renderLive(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): HTMLCanvasElement | null {
     if (!this.renderer) return null;
-    this.resize(w, h);
+    this.corner(w, h);
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.clear();
     this.renderer.render(scene, camera);
     return this.renderer.domElement;
   }
 
   dispose() {
+    this.queue.clear();
     this.env?.dispose();
     this.env = null;
     this.renderer?.dispose();
     this.renderer?.forceContextLoss();
     this.renderer = null;
   }
+}
+
+let shared: CameoFactory | null = null;
+
+/**
+ * The session's cameo factory: one offscreen GL context for the menu hero, the
+ * sidebar cameos and the live portrait of every battle (never re-created, so
+ * contexts never pile up, and cameos / programs carry over between battles).
+ */
+export function sharedCameos(): CameoFactory {
+  shared ??= new CameoFactory();
+  return shared;
 }
 
 /**

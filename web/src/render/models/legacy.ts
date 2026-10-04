@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from '../fog';
+import { onFogRelease, purgeKeys } from '../fogcache';
 
 /*
  * Procedural unit / building models. Everything is built from Three.js
@@ -75,6 +76,11 @@ function shade(a: number, f: number): number {
 
 const geoCache = new Map<string, THREE.BufferGeometry>();
 const matCache = new Map<string, THREE.Material>();
+// a finished match: drop its fog's materials (fogcache.ts)
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (id !== undefined) purgeKeys(matCache, (k) => k.startsWith('f' + id + '|'));
+});
 const fogIds = new WeakMap<FogOfWar, number>();
 let fogSeq = 0;
 

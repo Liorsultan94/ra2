@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { phoneCaps } from './devicecaps';
+import { releaseFog } from './fogcache';
+import type { Slicer } from './slice';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -50,6 +53,14 @@ import { treeSpots } from './vegetation';
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+
+/** Battlefield parts built ahead of the renderer in time slices (GameRenderer.prebuild). */
+export interface RendererParts {
+  fog: FogOfWar;
+  occluders: OccluderGrid;
+  terrain: Terrain;
+  outskirts: Outskirts;
+}
 /** The tier the scene subsystems (terrain, effects, weather, ...) are built for. */
 type BaseQuality = 'low' | 'medium' | 'high';
 
@@ -131,6 +142,8 @@ export interface Visual {
   occl: boolean;
   /** The model or its shadow may be on screen (last sync). */
   near: boolean;
+  /** Its programs are still compiling (parallel compile): not drawn yet. */
+  pending?: boolean;
 }
 
 interface Wreck {
@@ -308,11 +321,30 @@ export class GameRenderer {
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
 
+  /**
+   * Build the heavy CPU-side parts of the battlefield (terrain: ground paint, grass, water, vegetation,
+   * rocks, scenery, props; the outskirts) in time slices, ahead of the constructor. Built in one go they
+   * took seconds of main thread on a phone (the "Page unresponsive" dialog).
+   */
+  static async prebuild(world: World, requested: Quality, slicer: Slicer): Promise<RendererParts> {
+    const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
+    const { map } = world;
+    const fog = new FogOfWar(map.w, map.h);
+    const occluders = new OccluderGrid(map, treeSpots(map, quality));
+    await slicer.tick();
+    const terrain = await Terrain.build(map, fog, quality, slicer);
+    await slicer.tick();
+    const outskirts = new Outskirts(map, fog, quality, terrain.ground, terrain.water);
+    await slicer.tick();
+    return { fog, occluders, terrain, outskirts };
+  }
+
   constructor(
     readonly canvas: HTMLCanvasElement,
     readonly world: World,
     viewer: number,
     requested: Quality,
+    pre?: RendererParts | null,
   ) {
     this.viewer = viewer;
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
@@ -323,6 +355,8 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // production: no per-program info-log queries on first use (each one is a synchronous GPU round trip)
+    this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
     // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
     // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
     // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
@@ -355,7 +389,7 @@ export class GameRenderer {
     this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
     // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
     setBakeRenderer(this.renderer);
-    setBakeSize(quality === 'high' ? 1024 : 512);
+    setBakeSize(quality === 'high' && !phoneCaps() ? 1024 : 512);
     setBakeEnabled(!/[?&]vbake=0\b/.test(location.search));
     setWearBiome(world.map.biome);
 
@@ -389,11 +423,12 @@ export class GameRenderer {
     }
 
     const { map } = world;
-    this.fog = new FogOfWar(map.w, map.h);
-    this.occluders = new OccluderGrid(map, treeSpots(map, quality));
-    this.terrain = new Terrain(map, this.fog, quality);
+    // (the game builds these heavy parts ahead in time slices: GameRenderer.prebuild)
+    this.fog = pre?.fog ?? new FogOfWar(map.w, map.h);
+    this.occluders = pre?.occluders ?? new OccluderGrid(map, treeSpots(map, quality));
+    this.terrain = pre?.terrain ?? new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
-    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
+    this.outskirts = pre?.outskirts ?? new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
     this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     if (this.ultra) {
@@ -439,7 +474,7 @@ export class GameRenderer {
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0; // ultra: per cascade
+    const shadow = quality === 'high' ? (phoneCaps() ? 2048 : 4096) : quality === 'medium' ? 2048 : 0; // ultra: per cascade; phones: 2048 (memory)
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
@@ -526,6 +561,10 @@ export class GameRenderer {
   get postComposer(): EffectComposer | null {
     return this.composer;
   }
+  /** The post chain itself (warm-up compiles its programs ahead of the first frame). */
+  get postChain(): PostChain | null {
+    return this.post;
+  }
   /** True while frames go through the post chain (the quality governor can switch it off). */
   get postActive(): boolean {
     return !!this.composer && this.usePost;
@@ -572,7 +611,7 @@ export class GameRenderer {
   /** Current governor state, for debugging / screenshots. */
   perfStats() {
     const s = this.ladder[this.level];
-    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles, watchdog: this.watchdogSteps };
   }
 
   /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
@@ -983,7 +1022,7 @@ export class GameRenderer {
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
     const lod = prepareLod(model.root, cat, this.quality === 'medium', e.owner >= 0 ? this.world.players[e.owner].color : 0x9a9a9a);
     this.scene.add(model.root);
-    return {
+    const visual: Visual = {
       id: e.id,
       model,
       owner: e.owner,
@@ -1009,6 +1048,38 @@ export class GameRenderer {
       occl: true,
       near: true,
     };
+    this.compileAhead(visual, `${d.model}|${e.owner}`);
+    return visual;
+  }
+
+  private compiledKinds = new Set<string>();
+  private compileRT: THREE.WebGLRenderTarget | null = null;
+  /**
+   * The first model of a type in this match (one the warm-up did not cover, e.g. in the demo battle):
+   * with parallel shader compile, compile its programs in the background and hold it back for the
+   * few frames that takes, instead of linking them synchronously inside the next frame.
+   */
+  private compileAhead(v: Visual, kind: string) {
+    if (this.compiledKinds.has(kind)) return;
+    this.compiledKinds.add(kind);
+    if (!this.renderer.extensions.get('KHR_parallel_shader_compile')) return;
+    const gl = this.renderer;
+    const prev = gl.getRenderTarget();
+    // the scene renders into the post chain's linear target: compile that variant
+    if (this.postActive) gl.setRenderTarget((this.compileRT ??= new THREE.WebGLRenderTarget(4, 4)));
+    v.pending = true;
+    let p: Promise<unknown>;
+    try {
+      p = gl.compileAsync(v.model.root, this.camera, this.scene);
+    } catch {
+      p = Promise.resolve();
+    } finally {
+      gl.setRenderTarget(prev);
+    }
+    // (never hold a unit back for long, whatever the driver does)
+    const release = () => (v.pending = false);
+    void p.then(release, release);
+    setTimeout(release, 3000);
   }
 
   private removeVisual(v: Visual) {
@@ -1153,7 +1224,8 @@ export class GameRenderer {
         this.visuals.set(e.id, v);
       }
       const vis = this.isVisibleToViewer(e);
-      v.model.root.visible = vis;
+      // (a model of a type new to this match is held back until its shaders have compiled in the background)
+      v.model.root.visible = vis && !v.pending;
       v.visible = vis;
       const d = DEFS[e.def];
       const root = v.model.root;
@@ -2061,8 +2133,25 @@ export class GameRenderer {
     const now = performance.now();
     const gap = (now - this.lastFrameAt) / 1000;
     this.lastFrameAt = now;
+    if (!this.adaptive || this.governorHold || gap <= 0 || document.hidden) return;
+    // Watchdog: frames of a quarter second and more, again and again, mean the page is close to the browser's
+    // "Page unresponsive" dialog. Don't wait for a full measurement window: step down two rungs right away
+    // (the cheap rungs: lens extras, AO, bloom quality, then resolution; nothing gets rebuilt or recompiled).
+    if (gap >= 0.25 && gap <= 5) {
+      if (++this.stalls >= 3 && this.level < this.ladder.length - 1 && now - this.lastWatchdog > 2500) {
+        this.lastWatchdog = now;
+        this.stalls = 0;
+        this.frameTimes.length = 0;
+        this.goodWindows = 0;
+        this.upNeed = Math.min(40, this.upNeed * 2);
+        this.applyLevel(Math.min(this.ladder.length - 1, this.level + 2));
+        this.fastFrames = 60;
+        this.watchdogSteps++;
+        return;
+      }
+    } else if (gap < 0.1) this.stalls = Math.max(0, this.stalls - 0.25);
     // very long gaps are tab switches / pauses, not slow frames; the median filters GC spikes
-    if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
+    if (gap > 1.5) return;
     const ft = gap;
     this.frameTimes.push(ft);
     // short windows while the governor is still finding its level (first seconds, right after a step down)
@@ -2098,6 +2187,12 @@ export class GameRenderer {
   }
   private govFrames = 0;
   private fastFrames = 0;
+  /** Watchdog: recent very long frames (decays on normal ones), last time it stepped down, steps taken. */
+  private stalls = 0;
+  private lastWatchdog = -1e9;
+  watchdogSteps = 0;
+  /** True while loading work (shader warm-up) renders frames: they are not judged. */
+  governorHold = false;
   private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
@@ -2270,5 +2365,15 @@ export class GameRenderer {
     this.csm?.dispose();
     this.renderer.dispose();
     this.post?.dispose();
+    this.compileRT?.dispose();
+    // the model caches built for this match's fog of war (fogcache.ts)
+    releaseFog(this.fog);
+    // release this match's GPU memory now rather than whenever the canvas gets garbage collected: without it
+    // every match (and every demo battle behind the menu) left a live context behind until the next GC
+    try {
+      this.renderer.forceContextLoss();
+    } catch {
+      /* already lost */
+    }
   }
 }
