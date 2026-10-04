@@ -4,6 +4,7 @@ import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
+import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { Rng } from './rng';
 import { TPS, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
@@ -114,12 +115,20 @@ export class AIController implements Controller {
   private thinks = 0;
   private lastLane = -1;
   private chokeAt = 0;
+  /**
+   * Early-game grace (peace.ts): until this tick the AI builds, scouts and defends itself but
+   * launches nothing at the enemy. 0 = no grace (and waves leave as soon as they are big enough).
+   */
+  readonly peaceUntil: number;
+  private defensibleCache = { tick: -1, pts: [] as number[] };
 
   constructor(
     private world: World,
     private pid: number,
     difficulty: Difficulty,
+    opts: { peaceTicks?: number } = {},
   ) {
+    this.peaceUntil = Math.max(0, opts.peaceTicks ?? 0);
     this.cfg = CFG[difficulty];
     this.difficulty = difficulty;
     this.rng = new Rng(9001 + pid * 77);
@@ -131,6 +140,25 @@ export class AIController implements Controller {
 
   private get p(): Player {
     return this.world.players[this.pid];
+  }
+
+  /** Still in the early-game grace: no offensive action against the enemy. */
+  get peace(): boolean {
+    return this.world.tick < this.peaceUntil;
+  }
+
+  /** During the grace the AI only fights near home or next to one of its own structures (local defence). */
+  private defensible(x: number, y: number): boolean {
+    const [hx, hy] = this.home();
+    if (Math.hypot(x - hx, y - hy) <= PEACE_HOME_R) return true;
+    const c = this.defensibleCache;
+    if (c.tick !== this.world.tick) {
+      c.tick = this.world.tick;
+      c.pts.length = 0;
+      for (const e of this.world.list) if (!e.dead && e.owner === this.pid && e.kind === 'building') c.pts.push(e.x, e.y);
+    }
+    for (let i = 0; i < c.pts.length; i += 2) if (Math.hypot(x - c.pts[i], y - c.pts[i + 1]) <= PEACE_BUILDING_R) return true;
+    return false;
   }
 
   private cmd(c: Command) {
@@ -218,6 +246,8 @@ export class AIController implements Controller {
   /** Airborne drop: as soon as it is charged, drop behind the lines onto a weakly defended high-value target, else contest ore. */
   private manageSupport() {
     const w = this.world;
+    // after a grace the first drop waits one ramp gap, so the regular first wave comes first
+    if (this.peaceUntil > 0 && w.tick < this.peaceUntil + RAMP_GAP[this.difficulty]) return;
     if (!airdropStatus(w, this.pid).ready) return;
     const z = this.pickDropZone();
     if (z) w.issue(this.pid, { type: 'airdrop', x: z[0], y: z[1] });
@@ -588,7 +618,7 @@ export class AIController implements Controller {
     const ready = idle.filter((u) => u.cooldown <= 0);
     if (ready.length < salvo) return;
     const t = this.pickStrikeTarget(ready[0]);
-    if (t) this.cmd({ type: 'attack', ids: ready.map((u) => u.id), target: t });
+    if (t >= 0) this.cmd({ type: 'attack', ids: ready.map((u) => u.id), target: t });
   }
 
   /**
@@ -613,6 +643,7 @@ export class AIController implements Controller {
     for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 15)) {
       const e = w.get(id);
       if (!e || (!it.building && !w.visibleTo(this.pid, e.x, e.y))) continue;
+      if (this.peace && !this.defensible(it.x, it.y)) continue;
       const d = DEFS[it.def];
       let value: number;
       if (it.building) {
@@ -631,7 +662,7 @@ export class AIController implements Controller {
         best = id;
       }
     }
-    if (best < 0) {
+    if (best < 0 && !this.peace) {
       // nothing scouted yet: the enemy base location is common knowledge
       const enemy = this.enemyBase();
       if (enemy)
@@ -647,7 +678,9 @@ export class AIController implements Controller {
     const deep = this.doctrine.deep;
     let best = -1;
     let bd = Infinity;
+    const peace = this.peace;
     const consider = (id: number, x: number, y: number, bonus: number) => {
+      if (peace && !this.defensible(x, y)) return;
       const d = Math.hypot(x - from.x, y - from.y) - bonus;
       if (d < bd) {
         bd = d;
@@ -662,6 +695,11 @@ export class AIController implements Controller {
       const k = deep.indexOf(role);
       const bonus = k >= 0 ? 10 - k * 2 : role === 'def_aa' || role === 'conyard' ? 6 : role === 'refinery' || role === 'airfield' ? 4 : 0;
       consider(id, it.x, it.y, bonus);
+    }
+    if (peace) {
+      // grace: only enemy units pressing our base
+      for (const [id, it] of this.known((it) => !it.building, TPS * 5)) consider(id, it.x, it.y, 0);
+      return best;
     }
     if (best < 0) {
       // nothing scouted yet: the enemy base location is common knowledge
@@ -852,7 +890,7 @@ export class AIController implements Controller {
       }
       return;
     }
-    if (w.tick < this.raidAt) return;
+    if (w.tick < this.raidAt || this.peace) return;
     this.raidAt = w.tick + Math.round((TPS * 120) / this.doctrine.harass);
     const [rx, ry] = this.rally();
     const fast = force.filter((u) => {
@@ -908,6 +946,7 @@ export class AIController implements Controller {
     let best = -1;
     let bs = -Infinity;
     for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 20)) {
+      if (this.peace && !this.defensible(it.x, it.y)) continue;
       const d = DEFS[it.def];
       let value = it.building ? 3 : d.kind === 'unit' && d.harvester ? 7 : klass(it.def) === 'arty' || klass(it.def) === 'strike' ? 8 : klass(it.def) === 'aa' ? -10 : 4;
       if (it.building && this.doctrine.deep.includes(buildingDef(it.def).role)) value += 3;
@@ -967,9 +1006,13 @@ export class AIController implements Controller {
     if (strays.length) this.cmd({ type: 'move', ids: strays.map((u) => u.id), x: rx, y: ry });
 
     // AA stays home as air defence unless the enemy flies; artillery and support never count towards the wave size
-    const fighters = atRally.filter((u) => klass(u.def) === 'main');
+    let fighters = atRally.filter((u) => klass(u.def) === 'main');
     const sinceWave = w.tick - this.lastWave;
-    if (fighters.length >= this.waveSize || (fighters.length >= 4 && sinceWave > TPS * 240)) {
+    // early-game grace (peace.ts): mass at the rally point, launch nothing; afterwards ramp up wave by wave
+    const ramp = this.peaceUntil > 0;
+    const rampOk = !ramp || (!this.peace && (this.lastWave === 0 || sinceWave >= RAMP_GAP[this.difficulty]));
+    if (rampOk && (fighters.length >= this.waveSize || (fighters.length >= 4 && sinceWave > TPS * 240))) {
+      if (ramp && fighters.length > this.waveSize) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, this.waveSize);
       const target = this.pickTarget();
       const tx = target ? target[0] : enemy[0];
       const ty = target ? target[1] : enemy[1];
@@ -1000,7 +1043,9 @@ export class AIController implements Controller {
         if (ids.length) this.cmd({ type: 'guard', ids, target: leader.id });
       }
       // artillery follows behind the wave
-      const arty = atRally.filter((u) => klass(u.def) === 'arty').map((u) => u.id);
+      let arty = atRally.filter((u) => klass(u.def) === 'arty').map((u) => u.id);
+      // after a grace the guns massed at home go out a few at a time with the growing waves
+      if (ramp) arty = arty.slice(0, Math.max(1, Math.ceil(body.length / 4)));
       this.waves.push({ ids: [...body, ...wing, ...arty], tx, ty, focus: -1, born: w.tick });
       if (this.waves.length > 3) this.waves.shift();
       this.lastWave = w.tick;
@@ -1008,7 +1053,10 @@ export class AIController implements Controller {
     }
     // units that finished an attack-move far from home keep pushing toward the next target
     const deep = idle.filter((u) => Math.hypot(u.x - hx, u.y - hy) >= 22 && klass(u.def) !== 'arty');
-    if (deep.length) {
+    if (deep.length && this.peace) {
+      // grace: defenders that chased a raider away come back to the rally point
+      this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: rx, y: ry });
+    } else if (deep.length) {
       const target = this.pickTarget(deep[0]);
       const [tx, ty] = target ?? enemy;
       this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
@@ -1045,6 +1093,7 @@ export class AIController implements Controller {
       }
     }
     const [hx, hy] = this.home();
+    const peace = this.peace;
     for (const u of arty) {
       if (u.order.type === 'attack') continue;
       const d = unitDef(u.def);
@@ -1058,6 +1107,7 @@ export class AIController implements Controller {
         if (o.kind === 'unit' && (unitDef(o.def).temp || unitDef(o.def).air)) return;
         const dist = w.distTo(u, o);
         if (dist > range || dist < (wpn.minRange ?? 0) + 0.5 || !w.visibleTo(this.pid, o.x, o.y)) return;
+        if (peace && !this.defensible(o.x, o.y)) return;
         const k = o.kind === 'unit' ? klass(o.def) : 'none';
         let s = o.kind === 'building' ? (buildingDef(o.def).category === 'defense' ? 6 : 3) : 5;
         if (this.doctrine.counterBattery && (k === 'arty' || k === 'strike')) s += 10;
@@ -1097,6 +1147,7 @@ export class AIController implements Controller {
   /** Opportunistic crushing: heavy vehicles on the move or idle drive over enemy soldiers right in front of them, then carry on. */
   private manageCrush(force: Entity[]) {
     const w = this.world;
+    const peace = this.peace;
     for (const u of force) {
       const d = unitDef(u.def);
       if (!d.crusher || !d.weapon || u.stance === 'hold' || this.roleOf(u) === 'retreat') continue;
@@ -1109,6 +1160,7 @@ export class AIController implements Controller {
       let bd = CRUSH_CHASE - 0.2;
       w.queryRadius(u.x, u.y, CRUSH_CHASE, (t) => {
         if (!w.isEnemy(this.pid, t.owner) || !isCrushable(t) || !w.canHit(wpn, t) || !w.visibleTo(this.pid, t.x, t.y)) return;
+        if (peace && !this.defensible(t.x, t.y)) return;
         const dx = t.x - u.x;
         const dy = t.y - u.y;
         const dist = Math.hypot(dx, dy);

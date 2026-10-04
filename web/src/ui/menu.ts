@@ -4,85 +4,20 @@ import type { Faction, Player } from '../sim/types';
 import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
 import { autoQuality } from '../render/autoquality';
-import { setReadabilityPrefs } from '../render/readability';
 import { flagHtml } from './hud';
 import emblemSvg from './emblem.svg?raw';
 import { MAPS } from '../sim/maps';
+import { PEACE_DEFAULT_MIN, type PeaceOption } from '../sim/peace';
+import type { GameSpeed } from '../game/pace';
 import type { Game } from '../game/game';
 import { MenuHero, heroDef } from './menuhero';
 import { startMenuCamera } from './menucam';
 import './maps.css';
 import './menu.css';
 
-export interface Settings {
-  faction: Faction;
-  enemy: Faction | 'random';
-  difficulty: Difficulty;
-  credits: number;
-  quality: Quality | 'auto';
-  sfx: number;
-  music: number;
-  voice: boolean;
-  /** Slow-motion camera moments on big events (missile launches, interceptions, huge blasts). */
-  cinematic: boolean;
-  /** Skirmish map (sim/maps.ts; ?map= overrides it). */
-  map?: MapId;
-  /**
-   * Skirmish atmosphere (visual only; read by src/render/atmos.ts). Unset = the live day ('cycle':
-   * 1 real minute = 1 game hour, from 05:30) with dynamic weather following the map's climate;
-   * weather 'map' = the map's own fixed weather.
-   */
-  tod?: 'day' | 'dusk' | 'night' | 'cycle' | 'mist';
-  weather?: 'map' | 'clear' | 'rain' | 'snow' | 'sandstorm' | 'dynamic';
-  /** Drone camera picture-in-picture: 'auto' shows the feed of a selected / attacking drone. */
-  droneCam: 'auto' | 'off';
-  /** Team-coloured silhouettes of units hidden behind buildings and trees. */
-  xray: boolean;
-  /** Team-coloured strategic unit icons when zoomed out (src/render/readability.ts). */
-  icons?: boolean;
-  /** Thin team-coloured outline around every unit. */
-  outlines?: boolean;
-  /** Performance readout (fps, frame ms, draw calls; src/render/perf/hud.ts). */
-  showFps?: boolean;
-  /** Battery saver: cap the frame rate at 30 fps. */
-  battery?: boolean;
-  /**
-   * Control scheme: 'simple' (phones: tap = select / move, big ARMY button, decluttered HUD)
-   * or 'advanced' (the full RTS command set; mouse and keyboard always work the same).
-   */
-  controls: 'simple' | 'advanced';
-}
+import { loadSettings, saveSettings, type Settings } from './settings';
 
-/** Default control scheme: simple on touch screens, advanced with a mouse. */
-export function defaultControls(): Settings['controls'] {
-  return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced';
-}
-
-const KEY = 'ironfront.settings.v1';
-
-export function loadSettings(): Settings {
-  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true, controls: defaultControls() };
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const s: Settings = { ...def, ...JSON.parse(raw) };
-      setReadabilityPrefs(s);
-      return s;
-    }
-  } catch {
-    /* storage unavailable */
-  }
-  return def;
-}
-
-export function saveSettings(s: Settings) {
-  setReadabilityPrefs(s);
-  try {
-    localStorage.setItem(KEY, JSON.stringify(s));
-  } catch {
-    /* ignore */
-  }
-}
+export { defaultControls, loadSettings, saveSettings, type Settings } from './settings';
 
 export function resolveQuality(q: Settings['quality']): Quality {
   // auto: device probe (GPU, memory, float targets, micro-benchmark), cached, corrected by the frame-time governor (src/render/autoquality.ts)
@@ -132,6 +67,31 @@ const TOD_OPTS: [string, string][] = [
   ['day', 'Day'],
   ['dusk', 'Dusk'],
   ['night', 'Night'],
+];
+const PEACE_OPTS: [PeaceOption, string][] = [
+  ['auto', 'Auto'],
+  ['off', 'Off'],
+  ['3', '3 min'],
+  ['6', '6 min'],
+  ['10', '10 min'],
+  ['15', '15 min'],
+];
+/** What the peace time option means right now (the Rules tab label). */
+function peaceNote(st: Settings): string {
+  const p = st.peace ?? 'auto';
+  if (p === 'off') return 'The enemy may attack at once';
+  const min = p === 'auto' ? PEACE_DEFAULT_MIN[st.difficulty] : Number(p);
+  return `No enemy attacks for ${min} min${p === 'auto' ? ` (${DIFF_LABEL[st.difficulty]})` : ''}`;
+}
+/** "6 min peace" / "no peace" (loadout summary). */
+function peaceShort(st: Settings): string {
+  const p = st.peace ?? 'auto';
+  return p === 'off' ? 'no peace' : `${p === 'auto' ? PEACE_DEFAULT_MIN[st.difficulty] : Number(p)} min peace`;
+}
+const SPEED_OPTS: [GameSpeed, string][] = [
+  ['slow', 'Slow'],
+  ['normal', 'Normal'],
+  ['fast', 'Fast'],
 ];
 const WX_OPTS: [string, string][] = [
   ['dynamic', 'Live'],
@@ -339,6 +299,7 @@ export class MainMenu {
               <div class="mm-kicker">Rules of engagement</div>
               <div class="mm-field"><span class="mm-lbl">Opponent<b data-v="enemy"></b></span>${seg('enemy', 'o', st.enemy, enemies, 'Opponent nation', 'seg-flags')}</div>
               <div class="mm-field"><span class="mm-lbl">Difficulty<b data-v="difficulty"></b></span>${seg('difficulty', 'o', st.difficulty, [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], 'Difficulty')}</div>
+              <div class="mm-field"><span class="mm-lbl">Peace time<b data-v="peace"></b></span>${seg('peace', 'o', st.peace ?? 'auto', PEACE_OPTS, 'Peace time before the enemy attacks')}</div>
               <div class="mm-field"><span class="mm-lbl">Credits</span>${seg('credits', 'o', String(st.credits), [5000, 10000, 20000].map((c) => [String(c), '$' + c / 1000 + 'k'] as [string, string]), 'Starting credits')}</div>
               <div class="mm-field"><span class="mm-lbl">Start time</span>${seg('tod', 'o', st.tod ?? 'cycle', TOD_OPTS, 'Time of day')}</div>
               <div class="mm-field"><span class="mm-lbl">Weather</span>${seg('weather', 'o', st.weather ?? 'dynamic', WX_OPTS, 'Weather')}</div>
@@ -380,7 +341,8 @@ export class MainMenu {
       set('enemy', esc(en ? en.name : 'Random nation'));
       set('enemy2', en ? `${flagHtml(en.id)}${esc(en.name)}` : 'Random nation');
       set('difficulty', esc(DIFF_NOTE[st.difficulty]));
-      set('diff2', DIFF_LABEL[st.difficulty]);
+      set('peace', esc(peaceNote(st)));
+      set('diff2', `${DIFF_LABEL[st.difficulty]} · ${peaceShort(st)}`);
       const art = $('.sum-flagart');
       art.style.backgroundImage = `url("${(flagHtml(f.id).match(/src="([^"]+)"/) ?? [])[1] ?? ''}")`;
       s.style.setProperty('--nat', '#' + f.accent.toString(16).padStart(6, '0'));
@@ -443,6 +405,7 @@ export class MainMenu {
         else if (k === 'difficulty') st.difficulty = inp.value as Difficulty;
         else if (k === 'tod') st.tod = inp.value as Settings['tod'];
         else if (k === 'weather') st.weather = inp.value as Settings['weather'];
+        else if (k === 'peace') st.peace = inp.value as PeaceOption;
         sum();
       }),
     );
@@ -561,6 +524,11 @@ function settingsHtml(st: Settings, page = false) {
         <p class="note">Simple: tap to select, tap to move. Advanced: every RTS order.</p>
       </div>
       <div class="set-group">
+        <div class="mm-kicker">Gameplay</div>
+        <div class="mm-field"><span class="mm-lbl">Game speed</span>${seg('gameSpeed', 's', st.gameSpeed ?? 'normal', SPEED_OPTS, 'Game speed')}</div>
+        <p class="note">Slow 0.75× · Normal · Fast 1.25×. The whole battle runs slower or faster, the day clock too.</p>
+      </div>
+      <div class="set-group">
         <div class="mm-kicker">Audio</div>
         <label class="rng"><span class="mm-lbl">Sound effects</span><input type="range" min="0" max="1" step="0.05" data-s="sfx" value="${st.sfx}"></label>
         <label class="rng"><span class="mm-lbl">Music</span><input type="range" min="0" max="1" step="0.05" data-s="music" value="${st.music}"></label>
@@ -600,6 +568,7 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       else if (k === 'showFps') st.showFps = inp.checked;
       else if (k === 'controls') st.controls = inp.value === 'simple' ? 'simple' : 'advanced';
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
+      else if (k === 'gameSpeed') st.gameSpeed = inp.value === 'slow' || inp.value === 'fast' ? inp.value : 'normal';
       else if (k === 'sfx') st.sfx = Number(inp.value);
       else if (k === 'music') st.music = Number(inp.value);
       changed(st);

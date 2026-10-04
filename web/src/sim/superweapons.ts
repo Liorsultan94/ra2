@@ -319,10 +319,16 @@ function updateBeam(w: World, p: Player) {
  * next to them. Deterministic (decisions only from world state).
  */
 export class SuperweaponAI implements Controller {
+  /** Early-game grace (peace.ts): no offensive strike before this tick (the Iron Beam dome still defends). */
+  readonly peaceUntil: number;
+
   constructor(
     private w: World,
     private pid: number,
-  ) {}
+    opts: { peaceTicks?: number } = {},
+  ) {
+    this.peaceUntil = Math.max(0, opts.peaceTicks ?? 0);
+  }
 
   update() {
     const w = this.w;
@@ -331,7 +337,7 @@ export class SuperweaponAI implements Controller {
     this.build(p);
     if ((w.tick + this.pid * 7) % 200 === 0) this.garrison();
     const st = superweaponStatus(w, this.pid);
-    if (st.ready) {
+    if (st.ready && (st.info.defensive || w.tick >= this.peaceUntil)) {
       const t = st.info.defensive ? this.defensiveSpot() : this.offensiveSpot();
       if (t) w.issue(this.pid, { type: 'superweapon', x: t[0], y: t[1] });
     }

@@ -1,0 +1,119 @@
+/*
+ * "Peace time" countdown chip (src/ui/peace.ts): right under the HUD clock while the
+ * early-game grace runs. The superweapon countdown list moves down to make room.
+ */
+
+.peace-chip {
+  --pc: #7fdc9a;
+  position: absolute;
+  z-index: 3;
+  top: calc(max(8px, env(safe-area-inset-top)) + 44px);
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px 0 9px;
+  background: var(--glass, rgba(12, 16, 21, 0.84));
+  -webkit-backdrop-filter: var(--hud-blur);
+  backdrop-filter: var(--hud-blur);
+  border: 1px solid color-mix(in srgb, var(--pc) 45%, transparent);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  color: var(--text, #e8ecf0);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    opacity 0.3s,
+    border-color 0.6s;
+}
+.peace-chip.hidden {
+  display: none;
+}
+.peace-chip svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--pc);
+}
+.peace-chip b {
+  font-family: var(--font-d, system-ui, sans-serif);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.peace-chip .pc-time {
+  min-width: 2.6em;
+  font-family: var(--font, system-ui, sans-serif);
+  font-size: 14.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--pc);
+}
+/* the last minute: amber */
+.peace-chip.ending {
+  --pc: #ffbf4a;
+}
+.peace-chip .pc-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 6px 10px;
+  background: var(--glass-hi, rgba(12, 16, 21, 0.92));
+  border: 1px solid var(--line-2, rgba(255, 255, 255, 0.16));
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-d, system-ui, sans-serif);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--dur, 0.18s),
+    transform var(--dur, 0.18s);
+}
+.peace-chip.tip-on .pc-tip {
+  opacity: 1;
+  transform: none;
+}
+
+/* simple HUD (phones): the clock sits alone in the corner, smaller */
+.simple-ui .peace-chip {
+  top: calc(max(6px, env(safe-area-inset-top)) + 36px);
+  right: 6px;
+  height: 26px;
+  gap: 6px;
+  padding: 0 9px 0 7px;
+}
+.simple-ui .peace-chip b {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+.simple-ui .peace-chip .pc-time {
+  font-size: 13px;
+}
+
+/* make room under the chip */
+.view-wrap.peace-on .sw-timers {
+  transform: translateY(32px);
+}
+@media (orientation: portrait) and (max-width: 600px) {
+  .view-wrap.peace-on .hint {
+    top: calc(max(6px, env(safe-area-inset-top)) + 70px);
+  }
+}
+
+.game-root.attract .peace-chip {
+  display: none !important;
+}
+.view-wrap.cine-on .peace-chip {
+  opacity: 0;
+}
