@@ -558,7 +558,8 @@ export class Hud {
         if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
         if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
-        if (d.weapon && WEAPONS[d.weapon]) {
+        if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground');
+        else if (d.weapon && WEAPONS[d.weapon]) {
           const wp = WEAPONS[d.weapon];
           stats.push(`Range ${wp.range}`, wp.air === 'only' ? 'Anti-air' : wp.air === 'yes' ? 'Ground + air' : 'Ground');
         }
