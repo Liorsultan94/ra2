@@ -9,6 +9,7 @@ import { drawFlag } from '../flags';
 import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
 import { atlasPatch, bldAtlas, netTexture, signCell, signTexture, Tile, type SignSpec } from './bldtex';
 import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
+import { registerLods } from '../perf/lod';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -878,6 +879,8 @@ class Kit {
   private bins = new Map<THREE.Object3D, Map<Mat, THREE.BufferGeometry[]>>();
   /** Project texture UVs in the primitive's local frame instead of building space. */
   luv = false;
+  /** Bake weathering data (streak depth) into uv1.y for root level atlas parts. */
+  weather = true;
   /**
    * Vertical stretch of everything above the ground slab (root level only:
    * animated / turret parts keep their proportions, their pivots move up).
@@ -1003,6 +1006,20 @@ class Kit {
       const n = geo.attributes.position.count;
       const arr = new Float32Array(n * 2);
       for (let i = 0; i < n; i++) arr[i * 2] = tile;
+      if (this.cur === this.root && !mv.userData.team && this.weather) {
+        // weathering data (bldtex WEATHER_FRAG): 1 + depth below the top of this primitive, so run-off
+        // streaks start under every parapet / sill / cabinet top; flat or tiny parts only get dirt
+        const pa = geo.attributes.position;
+        let top = -Infinity;
+        let bot = Infinity;
+        for (let i = 0; i < n; i++) {
+          const y = pa.getY(i);
+          if (y > top) top = y;
+          if (y < bot) bot = y;
+        }
+        const tall = top - bot > 0.035;
+        for (let i = 0; i < n; i++) arr[i * 2 + 1] = tall ? 1 + (top - pa.getY(i)) : 9;
+      }
       geo.setAttribute('uv1', new THREE.BufferAttribute(arr, 2));
     }
     if ((m as SMat).vertexColors) {
@@ -1063,7 +1080,14 @@ class Kit {
   /** Merge everything into meshes. */
   finish() {
     for (const [obj, bin] of this.bins) {
-      for (const [m, list] of bin) {
+      for (const [m, src] of bin) {
+        // coarse parts first: the geometry LODs are prefixes of the merged buffer (perf/lod.ts swaps them)
+        const rad = new Map<THREE.BufferGeometry, number>();
+        for (const g of src) {
+          g.computeBoundingSphere();
+          rad.set(g, g.boundingSphere!.radius);
+        }
+        const list = src.length > 1 ? [...src].sort((a, b) => rad.get(b)! - rad.get(a)!) : src;
         let geo: THREE.BufferGeometry | null = null;
         try {
           geo = list.length === 1 ? list[0] : mergeGeometries(list, false);
@@ -1073,6 +1097,21 @@ class Kit {
         if (!geo) continue;
         if (list.length > 1) for (const g of list) g.dispose();
         geo.computeBoundingSphere();
+        if (obj !== this.detail && list.length > 1) {
+          let n1 = 0;
+          let n2 = 0;
+          for (const g of list) {
+            const r = rad.get(g)!;
+            const c = g.attributes.position.count;
+            if (r >= LOD1_R) n1 += c;
+            if (r >= LOD2_R) n2 += c;
+          }
+          const n = geo.attributes.position.count;
+          lodStats.tris += n / 3;
+          lodStats.lod1 += n1 / 3;
+          lodStats.lod2 += n2 / 3;
+          if (n1 < n * 0.97 && n > 600) registerLods(geo, [lodPrefix(geo, n1), lodPrefix(geo, n2)]);
+        }
         const mesh = new THREE.Mesh(geo, m);
         const sm = m as SMat;
         const isGlow = (!!sm.userData.baseEI || !!sm.userData.blinkEI) && !sm.map;
@@ -1278,6 +1317,28 @@ class Kit {
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
+}
+
+/**
+ * Geometry LODs of the merged building meshes (perf/lod.ts picks them from the on-screen size, like the
+ * vehicles): LOD1 (battle zoom) leaves out the small fittings (bolts, brackets, lamps' housings, rails),
+ * LOD2 (far) keeps the silhouette parts only. The parts are merged coarse-first, so a LOD is an index
+ * prefix sharing the full buffer's attributes (no extra vertex memory).
+ */
+const LOD1_R = 0.06;
+const LOD2_R = 0.16;
+/** Merged / LOD1 / LOD2 triangle totals of every building template built so far (debug / perf report). */
+export const lodStats = { tris: 0, lod1: 0, lod2: 0 };
+(globalThis as { __bldLod?: typeof lodStats }).__bldLod = lodStats;
+function lodPrefix(geo: THREE.BufferGeometry, n: number): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(geo.attributes)) g.setAttribute(name, a);
+  const idx = n > 65535 ? new Uint32Array(n) : new Uint16Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.boundingSphere = geo.boundingSphere;
+  g.name = geo.name;
+  return g;
 }
 
 function shapeOf(pts: P2[]): THREE.Shape {
@@ -1685,11 +1746,19 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
       hvac(k, px(0.8), y, pz(0.8), 0.12, 0.09);
       satDish(k, px(0.15), y, pz(0.85), 0.05, 0.6);
       break;
-    default:
-      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
-      vent(k, px(r()), y, pz(0.8));
-      vent(k, px(r()), y, pz(0.7));
+    default: {
+      // western roofs: HVAC packages, a photovoltaic array on big roofs (energy resilient bases), vents
+      const pv = W > 0.7 && D > 0.55;
+      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(pv ? 0.12 + r() * 0.12 : 0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
+      if (pv) {
+        const m = Math.max(2, Math.floor((W - 0.45) / 0.2));
+        for (let i = 0; i < m; i++) solarPanel(k, x0 + 0.16 + i * 0.2, y, pz(0.74), 0.18, 0.12, 0.5);
+        k.box(P.galv, 0.2 * (m - 1) + 0.02, 0.01, 0.025, x0 + 0.16 + 0.1 * (m - 1), y, pz(0.74) - 0.09);
+      }
+      vent(k, px(pv ? 0.93 : r()), y, pz(pv ? 0.42 : 0.8));
+      vent(k, px(pv ? 0.96 : r()), y, pz(pv ? 0.54 : 0.7));
       if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
+    }
   }
 }
 
@@ -2425,7 +2494,7 @@ function building(key: string, w: number, d: number, fn: (k: Kit) => void): Buil
 // ================================================================ shared structures
 
 /** Barrel vault roof (half cylinder flattened to `rise`), axis along Z (or X). */
-function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: number, span: number, len: number, rise: number, alongX = false, uvs = 4) {
+function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: number, span: number, len: number, rise: number, alongX = false, uvs = 4, ribs = 0) {
   const r = span / 2;
   k.at(cx, y, cz, alongX ? Math.PI / 2 : 0, () => {
     const g = new THREE.CylinderGeometry(r, r, len, 22, 1, true, -Math.PI / 2, Math.PI);
@@ -2440,6 +2509,13 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
       t.scale(1, (rise + 0.004) / (r + 0.004), 1.4);
       t.translate(0, 0, s * (len / 2 - 0.012));
       k.add(t, k.P.team, 0);
+    }
+    // structural steel arch ribs over the sheeting + a ridge vent / skylight strip
+    for (let i = 1; i <= ribs; i++) {
+      const t = new THREE.TorusGeometry(r + 0.006, 0.009, 3, 18, Math.PI);
+      t.scale(1, (rise + 0.006) / (r + 0.006), 1.2);
+      t.translate(0, 0, -len / 2 + (len * i) / (ribs + 1));
+      k.add(t, k.P.steel, 0);
     }
     if (endM) {
       const pts: P2[] = [];
@@ -3088,7 +3164,7 @@ function conyard(k: Kit) {
   k.box(shed, wx1 - wx0, 0.4, wz1 - wz0, wcx, Y0, wcz);
   dress(k, wx0, wx1, wz0, wz1, Y0, 0.4, { beacons: false, vent: false });
   k.box(P.team, wx1 - wx0 + 0.008, 0.026, wz1 - wz0 + 0.008, wcx, Y0 + 0.36, wcz);
-  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true);
+  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true, 4, 2);
   else gable(k, P.pitch, shed, wcx, Y0 + 0.4, wcz, wx1 - wx0, wz1 - wz0, 0.2, 0.03, true);
   rollDoor(k, 'z', 1, 0.42, Y0, wz1, 0.36, 0.3, 0.65);
   k.box(P.lamp, 0.24, 0.012, 0.01, 0.42, Y0 + 0.27, wz1 - 0.12);
@@ -3437,7 +3513,7 @@ function factory(k: Kit) {
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.3, zc);
     for (let i = 0; i < 3; i++) k.at(-0.9 + i * 0.9, rTop + 0.15, zc + L * 0.24, 0, () => k.box(P.glass, 0.3, 0.012, 0.16, 0, 0, 0), Math.atan2(0.3, L / 2));
   } else {
-    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true);
+    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true, 4, 4);
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.28, zc);
     k.box(P.glass, 2.2, 0.014, 0.12, 0, rTop + 0.29, zc + 0.12);
   }

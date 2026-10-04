@@ -6,6 +6,7 @@ import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import type { World } from '../sim/world';
+import { unitStandHeight } from './deckramp';
 import { BridgeFx } from './bridgefx';
 import { SuperFx } from './fx/superfx';
 import { Debris } from './debris';
@@ -931,7 +932,8 @@ export class GameRenderer {
   entityPos(e: Entity, alpha: number): THREE.Vector3 {
     const x = e.px + (e.x - e.px) * alpha;
     const y = e.py + (e.y - e.py) * alpha;
-    let h = standHeight(this.world.map, x, y);
+    // (ground units on a bridge follow the deck's end ramps up onto raised banks: deckramp.ts)
+    let h = unitStandHeight(this.world.map, Math.max(0, Math.min(this.world.map.w - 0.01, x)), Math.max(0, Math.min(this.world.map.h - 0.01, y)));
     if (e.kind === 'unit' && unitDef(e.def).air) {
       const d = unitDef(e.def);
       const z = e.pz + (e.z - e.pz) * alpha;

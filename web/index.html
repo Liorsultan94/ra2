@@ -66,13 +66,19 @@
       .bs-lines div.tap{color:#f5b941;font-size:15px;animation:spBlink 1.2s ease-in-out infinite}
       .bs-lines div.tap::before{content:''}
       .bs-lines div.tap::after{content:''}
-      .bs-bar{position:relative;height:3px;margin-top:8px;overflow:hidden;border-radius:2px;background:rgba(255,255,255,.1)}
+      .bs-bar{position:relative;height:3px;box-shadow:0 0 14px rgba(255,90,66,.18);margin-top:8px;overflow:hidden;border-radius:2px;background:rgba(255,255,255,.1)}
       .bs-bar i{position:absolute;inset:0;transform-origin:0 50%;transform:scaleX(.02);background:linear-gradient(90deg,#a3281a,#ff5a42 75%,#ffa588);transition:transform .35s ease-out}
       .bs-meta{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:#6c7782;letter-spacing:.16em;font-variant-numeric:tabular-nums}
       #splash.out .bs-bg{opacity:0}
       #splash.out .bs-load,#splash.out .bs-embers,#splash.out .bs-tag{opacity:0!important;transition:opacity .25s}
       #splash.out .bs-glow,#splash.out .bs-radar{opacity:0;transition:opacity .4s}
       #splash.out{pointer-events:none}
+      /* tactical corner ticks + film grain, as on the main menu (src/ui/menu.css) */
+      #splash::before,#splash::after{content:'';position:absolute;z-index:1;width:22px;height:22px;border:0 solid rgba(255,90,66,.8);pointer-events:none;transition:opacity .3s}
+      #splash::before{top:max(14px,env(safe-area-inset-top));left:max(18px,env(safe-area-inset-left));border-top-width:2px;border-left-width:2px}
+      #splash::after{right:max(18px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));border-right-width:2px;border-bottom-width:2px}
+      #splash.out::before,#splash.out::after{opacity:0}
+      .bs-bg>i{position:absolute;inset:0;opacity:.07;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E") 0 0/160px 160px}
       @keyframes spDraw{to{stroke-dashoffset:0}}
       @keyframes spFade{from{opacity:0}}
       @keyframes spPop{from{opacity:0;transform:scale(.9)}}
@@ -99,7 +105,7 @@
   </head>
   <body>
     <div id="splash" role="progressbar" aria-label="Loading Iron Front" aria-valuemin="0" aria-valuemax="100" aria-valuenow="2">
-      <div class="bs-bg"></div>
+      <div class="bs-bg"><i></i></div>
       <div class="bs-embers"></div>
       <div class="bs-main">
         <div class="bs-em"><div class="bs-glow"></div><div class="bs-radar"></div><div class="bs-shock"></div><!--emblem--></div>

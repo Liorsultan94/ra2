@@ -95,6 +95,33 @@ const MIX: Record<WxClimate, Partial<Record<WxEventKind, number>>> = {
 /** The first front of a match always brings something down (rain, dust or snow). */
 const FIRST: Record<WxClimate, WxEventKind> = { temperate: 'showers', urban: 'showers', desert: 'dust', winter: 'flurries' };
 
+/**
+ * Debug / screenshot weather presets (?wx=<name>, dynamic weather): the timeline is replaced by a
+ * fixed state. `wet` is the ground wetness the preset implies (dry, soaking, drying out).
+ */
+export const WX_PRESETS: Record<string, Partial<WxState>> = {
+  clear: { cover: 0, precip: 0, storm: 0, wind: 0.15, wet: 0, mist: 0, fall: 'rain' },
+  overcast: { cover: 0.7, precip: 0, storm: 0, wind: 0.3, wet: 0, mist: 0, fall: 'rain' },
+  drizzle: { cover: 0.8, precip: 0.25, storm: 0, wind: 0.3, wet: 0.35, mist: 0, fall: 'rain' },
+  light: { cover: 0.82, precip: 0.4, storm: 0, wind: 0.35, wet: 0.5, mist: 0, fall: 'rain' },
+  rain: { cover: 0.92, precip: 0.72, storm: 0, wind: 0.45, wet: 0.85, mist: 0, fall: 'rain' },
+  heavy: { cover: 1, precip: 1, storm: 0.2, wind: 0.6, wet: 1, mist: 0, fall: 'rain' },
+  storm: { cover: 1, precip: 1, storm: 0.9, wind: 0.85, wet: 1, mist: 0, fall: 'rain' },
+  /** An hour or two after the rain: puddles in the dips, the high ground drying. */
+  drying: { cover: 0.35, precip: 0, storm: 0, wind: 0.25, wet: 0.45, mist: 0.15, fall: 'rain' },
+  /** Nearly dry: damp patches in the hollows only. */
+  damp: { cover: 0.2, precip: 0, storm: 0, wind: 0.2, wet: 0.18, mist: 0, fall: 'rain' },
+  flurries: { cover: 0.8, precip: 0.5, storm: 0, wind: 0.35, wet: 0, mist: 0, fall: 'snow' },
+  snow: { cover: 0.95, precip: 0.85, storm: 0, wind: 0.4, wet: 0, mist: 0, fall: 'snow' },
+  dust: { cover: 0.6, precip: 0.9, storm: 0, wind: 0.95, wet: 0, mist: 0, fall: 'sandstorm' },
+};
+
+/** The ?wx= preset of a URL query (null when absent / unknown). */
+export function wxPreset(search: string): Partial<WxState> | null {
+  const k = new URLSearchParams(search).get('wx');
+  return k && Object.prototype.hasOwnProperty.call(WX_PRESETS, k) ? WX_PRESETS[k] : null;
+}
+
 /** mulberry32 */
 function prng(seed: number) {
   let s = seed >>> 0;
@@ -126,6 +153,9 @@ export class WeatherCycle {
   private sec = 0;
   private acc = { wet: 0, dust: 0, snow: 0 };
   private tmp: WxState = WeatherCycle.blank();
+  /** ?wx= preset (debug / screenshots): replaces the timeline's state. */
+  force: Partial<WxState> | null = null;
+  private forceCalls = 0;
 
   constructor(
     seed: number,
@@ -133,6 +163,7 @@ export class WeatherCycle {
   ) {
     this.seed = seed | 0;
     this.rnd = prng(seed ^ 0x5eed);
+    if (typeof location !== 'undefined') this.force = wxPreset(location.search);
   }
 
   private static blank(): WxState {
@@ -358,6 +389,13 @@ export class WeatherCycle {
     out.snow = snow;
     // mist rises off the wet ground once the rain has stopped (calm air keeps it)
     out.mist = sstep(0.25, 0.9, wet) * (1 - sstep(0.05, 0.3, out.precip)) * (1 - 0.6 * out.wind) * 0.4;
+    if (this.force) {
+      Object.assign(out, this.force);
+      out.event = null;
+      out.stage = 'clear';
+      // nothing falls for the first few frames: lets the particles switch to the preset's kind
+      if (this.forceCalls++ < 3) out.precip = 0;
+    }
     return out;
   }
 

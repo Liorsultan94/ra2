@@ -7,6 +7,7 @@ import { biomeLook, type BiomeLook } from './biome';
 import { FieldType, segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
 import { PhotoGround, photoTier } from './photoground';
+import { WX } from './wxuniforms';
 
 /*
  * Ground: a height-blended splat material. Low resolution control maps
@@ -263,7 +264,11 @@ export class Ground {
     if (bc === 2) mat.defines.WX_SNOW_K = '0.0';
     // the terrain paints its own puddles (below): no generic flat-surface puddles (wxuniforms.ts)
     mat.defines.WX_NO_PUDDLE = 1;
-    mat.customProgramCacheKey = () => 'terrain-splat-4-' + mat.defines!.TERR_POM + '-b' + bc + '-p' + mat.defines!.PHOTO + mat.defines!.PH_Q;
+    // ... and its own wet look (porosity, soaking from the hollows; below)
+    mat.defines.WX_OWN_WET = 1;
+    // low quality: rain only darkens surfaces (no gloss, puddles or ripples)
+    WX.wxGloss.value = quality === 'low' ? 0 : 1;
+    mat.customProgramCacheKey = () => 'terrain-splat-5-' + mat.defines!.TERR_POM + '-b' + bc + '-p' + mat.defines!.PHOTO + mat.defines!.PH_Q;
     this.material = mat;
 
     // mesh: one height field (so normals are continuous), cut into chunks
@@ -773,6 +778,14 @@ uniform vec3 cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
 float wxPud;
+// rain (wxWet): how much the surface darkens when soaked (porosity), its wet roughness, extra puddle
+// propensity (gutters, ruts, sunken patches, paving joints) and the wet sheen of the whole surface
+float wxPor = 0.42;
+float wxWetR = 0.32;
+float wxPudB = 0.0;
+float wxWetL = 0.0;
+// drop ripple strength on the puddles this fragment (rings catch the light)
+float wxRip = 0.0;
 float terrPomAO = 0.0;
 // procedural relief bumped on top of the normals (furrows, joints, markings; = terrH without photo layers)
 float terrB;
@@ -978,6 +991,9 @@ const PHOTO_MAP = /* glsl */ `
   float bg = lb[0] / lt;
   vec4 bw = vec4(lb[1] + lb[2] + lb[3], lb[4], lb[5], lb[6]) / lt;
   float gH = la[0].a;
+  // soaked: bare soil and mud darken most, turf (blades shed the water) and rock least; soil and mud go glossy
+  wxPor = 0.26 * bg + 0.42 * bw.x + 0.28 * bw.y + 0.38 * bw.z + 0.4 * bw.w;
+  wxWetR = 0.5 * bg + 0.3 * bw.x + 0.22 * bw.y + 0.36 * bw.z + 0.12 * bw.w;
   // clover patches and wildflowers on the turf (the procedural micro texture's leaf / flower masks)
   if (bg > 0.0 && ctl.g + ctl.b > 0.01) {
     vec4 gT = texture2D(grassTex, tw * (1.0 / GRASS_TILES));
@@ -1024,6 +1040,9 @@ const PHOTO_MAP = /* glsl */ `
         sv = mix(0.5, sv, k);
         fc = soil * (0.72 + sv * 0.5);
         fh = sv * 1.2;
+        // rain: water stands in the furrows
+        wxPudB += (1.0 - sv) * 0.1 * fMask;
+        wxPor = mix(wxPor, 0.44, fMask);
       } else if (ftype < 1.5) {
         // green crop rows on the soil
         float per = 0.2;
@@ -1092,6 +1111,15 @@ const PHOTO_MAP = /* glsl */ `
       fh += mark * 0.25;
       fn.xy *= 1.0 - mark * 0.7;
       fr = mix(phP[int(PH_ASPHALT)].z, 0.6, mark);
+      if (wxWet > 0.001) {
+        // rain: water runs into the gutters and stands in the worn wheel paths and sunken patches
+        float wAcr = abs(lq.x);
+        float wGut = ftype < 6.5 ? smoothstep(0.98, 1.12, wAcr) * (1.0 - smoothstep(1.2, 1.26, wAcr)) : 0.0;
+        float wRut = ftype < 6.5 ? (1.0 - smoothstep(0.0, 0.32, abs(fract(wAcr / 0.31) - 0.5) * 2.0)) * (1.0 - smoothstep(1.0, 1.1, wAcr)) : 0.0;
+        wxPudB = mix(wxPudB, wGut * 0.2 + wRut * 0.07 + patchK * 0.08 - mark * 0.05, fMask);
+        wxPor = mix(wxPor, 0.32, fMask);
+        wxWetR = mix(wxWetR, 0.14, fMask);
+      }
     }
     else if (ftype > 3.5) {
       // city squares: big flags in a running bond (the procedural grid keeps them readable from the
@@ -1107,6 +1135,10 @@ const PHOTO_MAP = /* glsl */ `
       fh = (1.0 - joint) * 0.4;
       fn.xy *= 1.0 - joint;
       fr = phP[int(PH_PAVING)].z;
+      // rain: the joints fill first, some flags have sunk and hold a film of water
+      wxPudB = mix(wxPudB, joint * 0.1 + (ph.y - 0.5) * 0.04, fMask);
+      wxPor = mix(wxPor, 0.36, fMask);
+      wxWetR = mix(wxWetR, 0.24, fMask);
     }
 #endif
     else {
@@ -1329,6 +1361,8 @@ ${PHOTO_MAP}
 #if BIOME == 2
   terrRough -= bw.z * 0.6;
 #endif
+  wxPor = 0.26 * bg + 0.42 * bw.x + 0.28 * bw.y + 0.38 * bw.z + 0.4 * bw.w;
+  wxWetR = 0.5 * bg + 0.3 * bw.x + 0.22 * bw.y + 0.36 * bw.z + 0.12 * bw.w;
 
   // farm fields
   float fMask = smoothstep(0.3, 0.7, fld.r);
@@ -1460,19 +1494,34 @@ ${PHOTO_MAP}
   col *= 1.0 - terrPomAO;
 #endif
   diffuseColor.rgb = col;
-  // rain: puddles collect in low, muddy spots (flat, dark, mirror-like)
+  // rain (wxWet): the ground soaks from the hollows outwards as the rain goes on (and dries back into
+  // them, the tops of stones and clods first): darker by porosity, a little richer in colour, glossier;
+  // puddles collect in low, muddy spots, gutters, wheel paths and furrows (flat, dark, mirror-like).
+  // Low quality (wxGloss 0) only darkens.
   wxPud = 0.0;
   if (wxWet > 0.001) {
     float n1 = texture2D(fogNoise, tw * 0.085 + 0.13).g;
     float n2 = texture2D(fogNoise, tw * 0.33 + 0.57).r;
-    float lowSpot = n1 * 0.78 + n2 * 0.22 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05;
-    // puddles shrink into the deepest spots as the ground dries (wxWet 1 = full size)
-    float wxPudT = 0.61 + (1.0 - wxWet) * 0.18;
-    wxPud = smoothstep(wxPudT, wxPudT + 0.03, lowSpot) * min(1.0, wxWet * 2.5);
-    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.62 + vec3(0.03, 0.035, 0.042), wxPud);
-    terrRough = mix(terrRough, 0.03, wxPud);
-    terrH = mix(terrH, 0.0, wxPud);
-    terrB = mix(terrB, 0.0, wxPud);
+    // (turf soaks it up: water only stands in the meadows' real hollows; bare soil, mud and tracks pool readily)
+    float lowSpot = n1 * 0.66 + n2 * 0.34 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05 + wxPudB - bg * 0.06;
+    float expo = clamp((0.72 - lowSpot) * 2.2 + terrH * 0.35, 0.0, 1.0);
+    wxWetL = clamp(wxWet * 1.7 - expo * 0.75, 0.0, 1.0);
+    vec3 c0 = diffuseColor.rgb;
+    float l0 = dot(c0, vec3(0.2126, 0.7152, 0.0722));
+    diffuseColor.rgb = max(mix(vec3(l0), c0, 1.0 + 0.16 * wxWetL), 0.0) * (1.0 - wxPor * wxWetL);
+    if (wxGloss > 0.5) {
+      terrRough = mix(terrRough, min(terrRough, wxWetR), wxWetL);
+      // puddles shrink into the deepest spots as the ground dries (wxWet 1 = full size)
+      float wxPudT = 0.61 + (1.0 - wxWet) * 0.18;
+      wxPud = smoothstep(wxPudT, wxPudT + 0.03, lowSpot) * min(1.0, wxWet * 2.5);
+      // a soaked, darker rim round each puddle
+      float wxRim = smoothstep(wxPudT - 0.06, wxPudT, lowSpot) * (1.0 - wxPud) * min(1.0, wxWet * 2.0);
+      diffuseColor.rgb *= 1.0 - 0.18 * wxRim;
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.6 + vec3(0.015, 0.018, 0.024), wxPud);
+      terrRough = mix(terrRough, 0.03, wxPud);
+      terrH = mix(terrH, 0.0, wxPud);
+      terrB = mix(terrB, 0.0, wxPud);
+    }
   }
 }
 `;
@@ -1486,10 +1535,23 @@ const TERRAIN_AO = /* glsl */ `
 #include <aomap_fragment>
   if (wxPud > 0.01) {
     // puddles mirror the sky (Fresnel-boosted horizon / haze colour: the environment map alone is
-    // too faint at the RTS view angle to read as standing water)
+    // too faint at the RTS view angle to read as standing water); the reflected ray climbs from the
+    // horizon to a deeper zenith, so the drop ripples (TERRAIN_NORMAL) show as rings in it
     vec3 pudSky = dot(skyHorA.xyz, vec3(1.0)) > 0.01 ? skyHorA.xyz : hazeColor * 2.0;
     pudSky /= 1.0 + max(pudSky.r, max(pudSky.g, pudSky.b));
-    reflectedLight.indirectSpecular += pudSky * wxPud * 0.22;
+    vec3 pN = inverseTransformDirection(normal, viewMatrix);
+    vec3 pV = normalize(cameraPosition - vTerrW);
+    float pUp = clamp(reflect(-pV, pN).y, 0.0, 1.0);
+    vec3 pR = reflect(-pV, pN);
+    vec3 pRefl = mix(pudSky * 1.15, pudSky * vec3(0.6, 0.68, 0.84), smoothstep(0.35, 0.95, pUp));
+    // the cloud deck drifting overhead, seen in the water (parallax through the reflected ray)
+    vec2 pCl = (vTerrW.xz + pR.xz / max(pR.y, 0.2) * 7.0) * 0.021 + vec2(0.55, 0.22) * fogTime * 0.011;
+    float pCn = texture2D(fogNoise, pCl).b * 0.65 + texture2D(fogNoise, pCl * 2.6 + 0.31).a * 0.35;
+    pRefl *= 0.35 + 0.95 * smoothstep(0.3, 0.75, pCn);
+    // drop rings catch the light
+    pRefl *= 1.0 + wxRip * 0.9;
+    float pFres = 0.13 + 0.87 * pow(1.0 - clamp(dot(pN, pV), 0.0, 1.0), 5.0);
+    reflectedLight.indirectSpecular += pRefl * wxPud * pFres;
   }
 `;
 
@@ -1502,7 +1564,7 @@ const TERRAIN_NORMAL = /* glsl */ `
     vec3 nW = inverseTransformDirection(normal, viewMatrix);
     vec3 T = normalize(vec3(1.0, 0.0, 0.0) - nW * nW.x);
     vec3 B = cross(nW, T);
-    vec2 pxy = phNxy * (1.0 - wxPud);
+    vec2 pxy = phNxy * (1.0 - wxPud) * (1.0 - 0.45 * wxWetL);
     vec3 pn = T * pxy.x + B * pxy.y + nW * sqrt(max(0.04, 1.0 - dot(pxy, pxy)));
     normal = normalize((viewMatrix * vec4(pn, 0.0)).xyz);
   }
@@ -1529,6 +1591,7 @@ const TERRAIN_NORMAL = /* glsl */ `
       float wv = sin(d * 38.0) * exp(-abs(d) * 14.0) * (1.0 - ph);
       g += normalize(o + 1e-4) * wv;
     }
+    wxRip = min(1.0, length(g)) * wxRain;
     normal = normalize(normal + (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz * 0.35 * wxPud * wxRain);
   }
 }

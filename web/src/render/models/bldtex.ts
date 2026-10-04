@@ -937,6 +937,86 @@ function applyPhotos() {
 }
 
 /**
+ * Weathering of the building atlas surfaces (cheap, procedural, no extra textures):
+ * x = overall strength, y = run-off streaks under top edges, z = dust / splash band at the
+ * foot of walls, w = roof ponding stains + macro blotches. Also reachable as
+ * globalThis.__bldWeather for in-game tuning.
+ *
+ * Per vertex the builder stores in uv1.y the depth below the top of the primitive the vertex
+ * belongs to (+1; 0 = no data: animated parts, team colour trims), so streaks start at every
+ * parapet / sill / cabinet top and run down the wall below it. uv1 survives the fracture
+ * rebuild, so wreck chunks keep their grime.
+ */
+export const BLD_WEATHER = { value: new THREE.Vector4(1, 1.8, 1.4, 1.3) };
+(globalThis as { __bldWeather?: typeof BLD_WEATHER }).__bldWeather = BLD_WEATHER;
+
+const WEATHER_VARY = `varying float vBDrip;
+      varying vec3 vBLp;
+      varying vec3 vBWp;
+      varying vec3 vBWn;`;
+
+const WEATHER_FUNCS = `
+      float bH1( float n ) { return fract( sin( n * 127.1 ) * 43758.5453 ); }
+      float bH2( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+      float bVn( vec2 p ) {
+        vec2 i = floor( p );
+        vec2 f = fract( p );
+        f = f * f * ( 3.0 - 2.0 * f );
+        return mix( mix( bH2( i ), bH2( i + vec2( 1.0, 0.0 ) ), f.x ), mix( bH2( i + vec2( 0.0, 1.0 ) ), bH2( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+      }
+      float bGrime = 0.0;`;
+
+const WEATHER_FRAG = `{
+        float wti = floor( vBTile + 0.5 );
+        // glazing, radar faces and solar cells stay clean
+        if ( ( wti < 19.5 || wti > 22.5 ) && bWeather.x > 0.0 ) {
+          vec3 wn = normalize( vBWn );
+          float vert = 1.0 - smoothstep( 0.35, 0.75, abs( wn.y ) );
+          float up = smoothstep( 0.6, 0.92, wn.y );
+          vec2 wxz = vBWp.xz;
+          // macro blotches: big flat walls and roofs never read as one flat colour
+          float mN = bVn( wxz * 2.1 + vBWp.y * 1.9 ) * 0.62 + bVn( wxz * 6.3 - vBWp.y * 4.7 + 9.0 ) * 0.38;
+          diffuseColor.rgb *= 1.0 + ( mN - 0.5 ) * 0.28 * bWeather.w * bWeather.x;
+          if ( vBDrip > 0.5 ) {
+            float d = vBDrip - 1.0;
+            bool metal = wti > 1.5 && wti < 5.5;
+            bool ground = wti > 10.5 && wti < 12.5;
+            // run-off streaks: columns along the face, each with its own strength and length
+            vec2 tg = normalize( vec2( -wn.z, wn.x ) + vec2( 1e-4, 0.0 ) );
+            float s = dot( wxz, tg ) + dot( wn.xz, vec2( 3.1, 7.7 ) );
+            float cx = s * 24.0;
+            float c0 = floor( cx );
+            float k = smoothstep( 0.15, 0.85, fract( cx ) );
+            float ha = bH1( c0 );
+            float hb = bH1( c0 + 1.0 );
+            float str = mix( ha * ha, hb * hb, k );
+            float len = mix( 0.05 + 0.42 * bH1( c0 + 17.3 ), 0.05 + 0.42 * bH1( c0 + 18.3 ), k );
+            float wob = bVn( vec2( cx * 0.9, vBWp.y * 11.0 ) ) - 0.5;
+            float streak = str * ( 1.0 - smoothstep( 0.0, len, d + 0.05 * wob ) );
+            // a soft drip band right under every top edge
+            float band = ( 1.0 - smoothstep( 0.0, 0.07, d ) ) * ( 0.55 + 0.45 * mN );
+            float g = clamp( vert * ( streak * 1.3 + band * 0.4 ) * bWeather.y, 0.0, 1.0 );
+            vec3 gc = metal ? vec3( 0.6, 0.38, 0.24 ) : vec3( 0.5, 0.47, 0.42 );
+            diffuseColor.rgb *= mix( vec3( 1.0 ), gc, g * bWeather.x );
+            // dust / splash band at the foot of walls (root space height above the slab)
+            float h = vBLp.y - 0.04;
+            float foot = vert * ( 1.0 - smoothstep( 0.0, 0.05 + 0.08 * mN, h ) ) * step( -0.002, h );
+            diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.74, 0.68, 0.6 ), foot * 0.75 * bWeather.z * bWeather.x );
+            // worn top edges: a lighter chipped line along parapets, sills and cabinet tops
+            float chip = vert * ( 1.0 - smoothstep( 0.003, 0.011, d ) ) * step( 0.42, bVn( vec2( s * 70.0, vBWp.y * 40.0 ) ) );
+            diffuseColor.rgb = mix( diffuseColor.rgb, min( diffuseColor.rgb * 1.3 + 0.035, vec3( 1.0 ) ), chip * 0.55 * bWeather.x );
+            // roofs: ponding stains and wind-blown dirt (not on the ground hardstand)
+            if ( !ground ) {
+              float pn = bVn( wxz * 9.0 + 3.7 ) * 0.6 + bVn( wxz * 23.0 ) * 0.4;
+              float pond = up * smoothstep( 0.52, 0.78, pn * 0.7 + mN * 0.3 );
+              diffuseColor.rgb *= 1.0 - pond * 0.22 * bWeather.w * bWeather.x;
+            }
+            bGrime = clamp( g * 0.8 + foot * 0.5, 0.0, 1.0 ) * bWeather.x;
+          }
+        }
+      }`;
+
+/**
  * Shader patch for a MeshStandardMaterial using the atlas (map + normalMap;
  * roughness / metalness come from their alpha channels). `pal` holds the 4 camo colours
  * (linear) used by the camo tiles. Chain it into onBeforeCompile.
@@ -945,6 +1025,7 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
   sh.uniforms.bPal = pal;
   sh.uniforms.bGain = BLD_GAIN;
   sh.uniforms.bScale = TILE_SCALE;
+  sh.uniforms.bWeather = BLD_WEATHER;
   sh.vertexShader = sh.vertexShader
     .replace(
       '#include <common>',
@@ -954,13 +1035,18 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
       #endif
       flat varying float vBTile;`,
     )
-    .replace('#include <uv_vertex>', '#include <uv_vertex>\nvBTile = uv1.x;');
+    .replace('#include <uv_vertex>', '#include <uv_vertex>\nvBTile = uv1.x;\nvBDrip = uv1.y;\nvBLp = position;')
+    .replace('#include <project_vertex>', '#include <project_vertex>\nvBWp = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;\nvBWn = normalize( mat3( modelMatrix ) * objectNormal );')
+    .replace('flat varying float vBTile;', 'flat varying float vBTile;\n' + WEATHER_VARY);
   const C = THREE.ShaderChunk;
   sh.fragmentShader = sh.fragmentShader
     .replace(
       '#include <common>',
       `#include <common>
       flat varying float vBTile;
+      ${WEATHER_VARY}
+      ${WEATHER_FUNCS}
+      uniform vec4 bWeather;
       uniform vec3 bPal[4];
       uniform float bGain;
       uniform float bScale[${ATLAS_COLS * ATLAS_ROWS}];
@@ -996,8 +1082,9 @@ export function atlasPatch(sh: THREE.WebGLProgramParametersWithUniforms, pal: { 
         }
       #endif`,
     )
+    .replace('#include <color_fragment>', '#include <color_fragment>\n' + WEATHER_FRAG)
     // roughness lives in the normal map's alpha, metalness in the albedo's alpha
-    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * bAtlas( normalMap, vNormalMapUv ).a;')
+    .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * bAtlas( normalMap, vNormalMapUv ).a;\nroughnessFactor = mix( roughnessFactor, 1.0, bGrime * 0.6 );')
     .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = metalness * bAtlas( map, vMapUv ).a;')
     .replace('#include <normal_fragment_maps>', C.normal_fragment_maps.split('texture2D( normalMap, vNormalMapUv )').join('bAtlas( normalMap, vNormalMapUv )'));
 }

@@ -96,8 +96,11 @@ export class Traffic {
   /** The cars plus the emergency vehicles, as the rules see them (rebuilt every update). */
   private others: OtherCar[] = [];
   private crossings: { x: number; y: number }[] = [];
-  /** Night headlight beams on the road (index.ts wires NightLights.carLight): front bumper, road height, world yaw, 0..1. */
-  headlight: ((x: number, y: number, z: number, yaw: number, k: number) => void) | null = null;
+  /**
+   * Night headlight beams on the road (index.ts wires NightLights.carLight): front bumper, road height, world yaw, 0..1,
+   * and the car's body length (tiles, CAR_SCALE included) that sizes the beam and its pool.
+   */
+  headlight: ((x: number, y: number, z: number, yaw: number, k: number, len: number) => void) | null = null;
 
   constructor(
     private map: GameMap,
@@ -708,7 +711,7 @@ export class Traffic {
         for (const sx of [fl, -fl]) Lt.flare(c.x + hx * sx + rx * sd * sw * 1.25, ly, c.y + hy * sx + ry * sd * sw * 1.25, 0.075 + dk * 0.04, 1.9 * k, 0.85 * k, 0.12 * k);
       }
       // the beam on the road ahead (night.ts; abandoned cars stand dark)
-      if (dk > 0.08 && c.s !== S.Abandoned && this.headlight) this.headlight(c.x + hx * fl, c.hgt + c.lift, c.y + hy * fl, -c.yaw, 1);
+      if (dk > 0.08 && c.s !== S.Abandoned && this.headlight) this.headlight(c.x + hx * fl, c.hgt + c.lift, c.y + hy * fl, -c.yaw, 1, mdl.len);
       const braking = c.brake > 0 && c.s === S.Drive;
       if (dk > 0.08 && c.s !== S.Abandoned) {
         const k = dk;

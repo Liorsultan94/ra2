@@ -87,6 +87,7 @@ function showMainMenu(newDemo = true) {
       applyAudio(s);
     },
     onUnlockAudio: unlockMenuAudio,
+    demo: () => game,
   });
   return menu;
 }

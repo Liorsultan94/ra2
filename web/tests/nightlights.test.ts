@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { NightLights } from '../src/render/night';
-import { queueHeadlights } from '../src/render/fx/nightlife';
+import { CAR_LIGHT_REF_LEN, NightLights } from '../src/render/night';
+import { CAR_SCALE, carModel } from '../src/render/ambient/models';
 
 describe('night lights (render/night.ts)', () => {
   it('shelling knocks some lamps out for a while, then they come back', () => {
@@ -24,18 +24,32 @@ describe('night lights (render/night.ts)', () => {
     for (let x = 8; x <= 12; x += 0.5) expect(n.lampFactor(x, 10, 140)).toBe(1);
   });
 
-  it('civilian headlights read the car list read-only and respect the view', () => {
+  it('civilian headlights size their beam pool from the car', () => {
     const n = new NightLights(new THREE.Scene(), 'low', 1);
-    const car = (x: number, s = 0, seen = true) => ({ x, y: 5, yaw: 0, hgt: 0, lift: 0, s, seen, model: { len: 0.4 } });
-    const traffic = { cars: [car(5), car(6, 4), car(7, 0, false), car(50)] };
-    const before = JSON.stringify(traffic);
-    queueHeadlights(traffic, n, { vx0: 0, vy0: 0, vx1: 20, vy1: 20 });
-    expect(JSON.stringify(traffic)).toBe(before);
-    expect((n as unknown as { nCars: number }).nCars).toBe(1);
-    // daylight: nothing queued
-    n.setDark(0);
-    const m = new NightLights(new THREE.Scene(), 'low', 0);
-    queueHeadlights(traffic, m, { vx0: 0, vy0: 0, vx1: 20, vy1: 20 });
-    expect((m as unknown as { nCars: number }).nCars).toBe(0);
+    // default size: the car the beam was tuned for
+    n.carLight(5, 0, 5, 0, 1);
+    const ref = n.carBeam(0)!;
+    expect(ref.len).toBeGreaterThan(1);
+    // the beam starts at the bumper: its centre sits half its length ahead
+    expect(ref.ahead).toBeCloseTo(ref.len / 2, 6);
+    // a car at unit scale (CAR_SCALE) throws a proportionally longer and wider pool
+    const sedan = carModel(0);
+    expect(sedan.len).toBeCloseTo(0.5 * CAR_SCALE, 6);
+    n.carLight(6, 0, 5, 0, 1, sedan.len);
+    const big = n.carBeam(1)!;
+    const s = Math.sqrt(sedan.len / CAR_LIGHT_REF_LEN); // pools grow with sqrt(size) (no white wash in queues)
+    expect(big.len).toBeCloseTo(ref.len * s, 5);
+    expect(big.wid).toBeCloseTo(ref.wid * s, 5);
+    expect(big.ahead).toBeCloseTo(big.len / 2, 5);
+    // a bad size is ignored, and the queue is capped
+    n.carLight(7, 0, 5, 0, 1, 0);
+    n.carLight(7, 0, 5, 0, 1, Number.NaN);
+    expect(n.queuedCars).toBe(2);
+    for (let i = 0; i < 100; i++) n.carLight(i, 0, 5, 0, 1, 0.9);
+    expect(n.queuedCars).toBeLessThanOrEqual(64);
+    expect(n.carBeam(n.queuedCars)).toBeNull();
+    // the next update draws the queue and empties it
+    n.update(0.016, 1, [], new THREE.Vector3(), { map: { w: 8, h: 8 } } as never);
+    expect(n.queuedCars).toBe(0);
   });
 });

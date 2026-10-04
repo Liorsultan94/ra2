@@ -86,8 +86,9 @@ export function atmosConfig(viewer: number, mapWeather: Weather = 'clear', live 
     }
   }
   const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
-  const tod = params.get('tod') ?? saved.tod;
-  const wx = params.get('weather') ?? saved.weather;
+  // (?clock=HH:MM implies the live day, ?wx=<preset> the dynamic weather: weathercycle.ts WX_PRESETS)
+  const tod = params.get('tod') ?? (params.get('clock') ? 'cycle' : null) ?? saved.tod;
+  const wx = params.get('weather') ?? (params.get('wx') ? 'dynamic' : null) ?? saved.weather;
   if (TODS.includes(tod as TimeOfDay)) cfg.tod = tod as TimeOfDay;
   if (WEATHERS.includes(wx as Weather)) cfg.weather = wx as Weather;
   else if (wx === 'map') cfg.weather = mapWeather;
@@ -156,22 +157,52 @@ const C = (h: number) => new THREE.Color(h);
 /** The battle's biome look (set by the Atmosphere; every preset passes through its grade). */
 let BIOME: BiomeLook | null = null;
 
+/**
+ * Winter: how much of a lighting stop is a low sun (golden hour .. dusk, dawn). White snow shows its
+ * light colour plainly: under the cold winter grade and the blue dusk sky fill it read blue at sunset.
+ * On these stops the snow keeps the warm key and a neutral fill instead; it cools to the moonlit
+ * blue-grey only as the twilight goes and the night comes.
+ */
+const WINTER_LOW_SUN: Partial<Record<Key, number>> = { golden: 0.6, sunset: 1, dusk: 1, twilight: 0.55, predawn: 0.25, dawn: 0.85, mist: 0.4 };
+/** Winter low sun: a soft peach key (white snow turns a saturated amber sun to terracotta), a pale warm grey sky / bounce and a soft warm haze. */
+const WINTER_DUSK_SUN = 0xffdcc4;
+const WINTER_DUSK_SKY = 0xa29a9c;
+const WINTER_DUSK_GND = 0xb0a8a4;
+const WINTER_DUSK_HAZE: [number, number, number] = [0.66, 0.58, 0.55];
+const WINTER_DUSK_HIGH: [number, number, number] = [0.03, 0.014, -0.018];
+const WINTER_DUSK_SHADOW: [number, number, number] = [-0.006, 0.0, 0.016];
+
 /** Climate grade of a time-of-day preset (in place): haze, sky / ground light, sun tint, saturation. */
-function applyBiome(p: Preset, light: number) {
+function applyBiome(p: Preset, light: number, key: Key) {
   const a = BIOME?.atmos;
   if (!a) return;
+  // winter's low-sun share of this stop (0 for every other climate: their looks are unchanged)
+  const low = BIOME?.biome === 'winter' ? (WINTER_LOW_SUN[key] ?? 0) : 0;
   if (a.haze) {
-    p.haze.lerp(new THREE.Color(a.haze[0], a.haze[1], a.haze[2]).multiplyScalar(Math.max(0.1, light)), 0.7);
-    p.bg.lerp(new THREE.Color(a.haze[0], a.haze[1], a.haze[2]).multiplyScalar(0.35 * Math.max(0.1, light)), 0.5);
+    const hz = new THREE.Color(a.haze[0], a.haze[1], a.haze[2]);
+    if (low > 0) hz.lerp(new THREE.Color(...WINTER_DUSK_HAZE), low);
+    p.haze.lerp(hz.clone().multiplyScalar(Math.max(0.1, light)), 0.7);
+    p.bg.lerp(hz.multiplyScalar(0.35 * Math.max(0.1, light)), 0.5);
   }
   p.hazeP.y *= a.hazeK;
   p.hazeP.z = Math.min(0.62, p.hazeP.z / a.hazeK);
-  if (a.sky !== null) p.sky.lerp(C(a.sky), 0.5 * light);
-  if (a.gnd !== null) p.gnd.lerp(C(a.gnd), 0.6 * Math.max(0.3, light));
-  if (a.sun !== null) p.sunC.lerp(C(a.sun), 0.45 * light);
+  if (a.sky !== null) p.sky.lerp(C(a.sky), 0.5 * light * (1 - low));
+  if (a.gnd !== null) p.gnd.lerp(C(a.gnd), 0.6 * Math.max(0.3, light) * (1 - low));
+  // (the cold winter sun tint would turn a low amber sun white-blue)
+  if (a.sun !== null) p.sunC.lerp(C(a.sun), 0.45 * light * (1 - low));
   p.sunI *= 1 + (a.sunK - 1) * light;
   p.sat *= a.sat;
-  if (a.highTint) p.highTint.lerp(new THREE.Vector3(...a.highTint), 0.6 * light);
+  if (a.highTint) p.highTint.lerp(new THREE.Vector3(...a.highTint), 0.6 * light * (1 - low));
+  if (low > 0) {
+    // the blue sky fill and the sky light (IBL) of a low sun painted the snow blue: a neutral fill,
+    // warm highlights and only a hint of cool in the shadows
+    p.sunC.lerp(C(WINTER_DUSK_SUN), 0.4 * low);
+    p.sky.lerp(C(WINTER_DUSK_SKY), 0.75 * low);
+    p.gnd.lerp(C(WINTER_DUSK_GND), 0.5 * low);
+    p.env *= 1 - 0.5 * low;
+    p.highTint.lerp(new THREE.Vector3(...WINTER_DUSK_HIGH), 0.6 * low);
+    p.shadowTint.lerp(new THREE.Vector3(...WINTER_DUSK_SHADOW), 0.65 * low);
+  }
   // snow fields bounce a lot of light back up
   if (BIOME?.biome === 'winter') p.hemiI *= 1 + 0.15 * light;
 }
@@ -272,7 +303,7 @@ function todPreset(key: Key): { p: Preset; light: number } {
       light = 0.8;
       break;
   }
-  applyBiome(p, light);
+  applyBiome(p, light, key);
   return { p, light };
 }
 

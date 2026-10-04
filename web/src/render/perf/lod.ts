@@ -48,6 +48,9 @@ export const lodGeos = (g: THREE.BufferGeometry) => LODS.get(g) ?? null;
 /** Model diameter on screen (CSS px) above which LOD0 is used / below which LOD2 (hysteresis applied). */
 export const VEH_LOD0_PX = 240;
 export const VEH_LOD2_PX = 40;
+/** Infantry (models/infantry.ts): hero detail once a soldier is ~70 px across, the silhouette build under ~15 px. */
+export const INF_LOD0_PX = 80;
+export const INF_LOD2_PX = 15;
 
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
@@ -101,7 +104,9 @@ export function applyLod(info: LodInfo, pxPerUnit: number) {
   const px = pxPerUnit * info.radius * 2;
   if (info.swaps.length) {
     const cur = info.level;
-    const lv = cur === 0 ? (px < VEH_LOD0_PX * 0.88 ? (px < VEH_LOD2_PX ? 2 : 1) : 0) : cur === 1 ? (px > VEH_LOD0_PX ? 0 : px < VEH_LOD2_PX ? 2 : 1) : px > VEH_LOD2_PX * 1.15 ? (px > VEH_LOD0_PX ? 0 : 1) : 2;
+    const p0 = info.kind === 'infantry' ? INF_LOD0_PX : VEH_LOD0_PX;
+    const p2 = info.kind === 'infantry' ? INF_LOD2_PX : VEH_LOD2_PX;
+    const lv = cur === 0 ? (px < p0 * 0.88 ? (px < p2 ? 2 : 1) : 0) : cur === 1 ? (px > p0 ? 0 : px < p2 ? 2 : 1) : px > p2 * 1.15 ? (px > p0 ? 0 : 1) : 2;
     if (lv !== cur) setGeoLod(info, lv);
   }
   // buildings: drop the detail meshes once a tile is only ~20 px across (strategic zoom)

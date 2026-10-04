@@ -628,36 +628,3 @@ export class NightLife {
   }
 }
 
-// ------------------------------------------------------------ civilian headlights
-
-/** The parts of an ambient car the headlight pools read (ambient/traffic.ts, read-only). */
-interface CarLike {
-  x: number;
-  y: number;
-  yaw: number;
-  hgt: number;
-  lift: number;
-  s: number;
-  seen: boolean;
-  model: { len: number };
-}
-
-/**
- * Civilian headlights: queue a beam pool and a faint cone ahead of every lit car in view into the
- * night lights (called by AmbientLife after the traffic is drawn; reads the car list read-only).
- * Traffic could instead call `NightLights.carLight()` itself per car (then drop this bridge).
- */
-export function queueHeadlights(traffic: unknown, night: NightLights | null, f: { vx0: number; vy0: number; vx1: number; vy1: number }) {
-  if (!night || night.darkness < 0.08) return;
-  const cars = (traffic as { cars?: CarLike[] }).cars;
-  if (!Array.isArray(cars)) return;
-  for (const c of cars) {
-    // driving / off-road / rejoining only (not abandoned, wrecked or sinking: traffic.ts S)
-    if (!c.seen || c.s === 2 || c.s >= 4) continue;
-    if (c.x < f.vx0 || c.x > f.vx1 || c.y < f.vy0 || c.y > f.vy1) continue;
-    const hx = Math.cos(c.yaw);
-    const hy = Math.sin(c.yaw);
-    const fl = (c.model?.len ?? 0.4) / 2;
-    night.carLight(c.x + hx * fl, c.hgt + c.lift, c.y + hy * fl, -c.yaw, 1);
-  }
-}
