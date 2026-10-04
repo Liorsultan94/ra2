@@ -3,10 +3,8 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
 import { pbrMaterial, worldUV, type CamoPattern, type MatOpts } from '../textures';
-import { registerLods } from '../perf/lod';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle } from './types';
-import { gearWebbing } from './infbake';
 import { uniformCamo, unitLook } from './unittex';
 
 /*
@@ -56,23 +54,13 @@ function xf<T extends G>(g: T, p: V3 = [0, 0, 0], r: V3 = [0, 0, 0], s: V3 | num
   else _s.set(s[0], s[1], s[2]);
   _m.compose(_v.set(p[0], p[1], p[2]), _q, _s);
   g.applyMatrix4(_m);
-  (g.userData.lo as G | undefined)?.applyMatrix4(_m);
   return g;
 }
-/** Attach a cheaper stand-in used at geometry LOD1/2 (Rig.add splits the part). */
-function withLo<T extends G>(hi: T, lo: G): T {
-  hi.userData.lo = lo;
-  return hi;
-}
-const sph = (rx: number, ry: number, rz: number, w = 8, h = 6) => {
-  const g = new THREE.SphereGeometry(1, w, h);
-  if (w >= 7) withLo(g, new THREE.SphereGeometry(1, Math.max(5, Math.ceil(w * 0.6)), Math.max(3, Math.ceil(h * 0.6))));
-  return xf(g, undefined, undefined, [rx, ry, rz]);
-};
+const sph = (rx: number, ry: number, rz: number, w = 8, h = 6) => xf(new THREE.SphereGeometry(1, w, h), undefined, undefined, [rx, ry, rz]);
 const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 /** Rounded box; tiny ones degrade to plain boxes (invisible at game scale). */
 const rbox = (w: number, h: number, d: number, r: number, seg = 1): G =>
-  Math.max(w, h, d) < 0.16 ? new THREE.BoxGeometry(w, h, d) : withLo(new RoundedBoxGeometry(w, h, d, Math.min(seg, 1), Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)), new THREE.BoxGeometry(w, h, d));
+  Math.max(w, h, d) < 0.16 ? new THREE.BoxGeometry(w, h, d) : new RoundedBoxGeometry(w, h, d, Math.min(seg, 1), Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4));
 const cylY = (rt: number, rb: number, h: number, seg = 6, open = false) => new THREE.CylinderGeometry(rt, rb, h, seg, 1, open);
 /** Cylinder along +X (rt at +X end). */
 const cylX = (rt: number, rb: number, h: number, seg = 6, open = false) => xf(cylY(rt, rb, h, seg, open), undefined, [0, 0, -PI / 2]);
@@ -122,8 +110,8 @@ function strut(a: V3, b: V3, r: number, seg = 5): G {
 
 // --------------------------------------------------------------- kits
 
-type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair';
-const MK_ORDER: MK[] = ['camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat'];
+type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat';
+const MK_ORDER: MK[] = ['camo', 'gear', 'skin', 'dark', 'gun', 'tube', 'team', 'glow', 'hat'];
 /** Texture repeats per metre (worldUV) for textured materials. */
 const UVS: Partial<Record<MK, number>> = { camo: 2.6, gear: 3.5, dark: 5, gun: 4, tube: 3 };
 
@@ -145,10 +133,6 @@ interface Kit {
   tube: number;
   earpro: boolean;
   gloves: 'gear' | 'dark' | 'skin';
-  /** Uniform tint (multiplies the camo texture). */
-  camoTint?: number;
-  beard?: boolean;
-  shades?: boolean;
 }
 
 const cam = (pattern: CamoPattern, color: number, color2: number, color3: number, color4: number, seed: number): MatOpts => ({ pattern, color, color2, color3, color4, seed, grime: 0.12, size: 256 });
@@ -161,7 +145,6 @@ const KITS: Record<string, Kit> = {
     gear: canvas(0x8c7854), // coyote brown
     bootsGear: true,
     skin: 0xb58a6a,
-    shades: true,
     helmet: 'fast',
     vest: 'pc',
     rifle: 'm4',
@@ -267,7 +250,6 @@ const KITS: Record<string, Kit> = {
     gear: canvas(0x95835f),
     bootsGear: false,
     skin: 0xa27656,
-    beard: true,
     helmet: 'boonie',
     vest: 'rig',
     rifle: 'akm',
@@ -283,7 +265,6 @@ const KITS: Record<string, Kit> = {
     gear: canvas(0x6a6447),
     bootsGear: false,
     skin: 0xae8463,
-    beard: true,
     helmet: 'm92',
     vest: 'pc',
     rifle: 'mpt76',
@@ -311,92 +292,12 @@ function fogId(fog: FogOfWar | null) {
   return id;
 }
 const stdCache = new Map<string, THREE.MeshStandardMaterial>();
-
-/**
- * Infantry "hero fill": soldiers are small, dark and often back-lit from the RTS camera,
- * so their indirect (sky / hemisphere / IBL) light is lifted and the sun wraps a little
- * round onto the shaded side. Both scale with the scene's own lights, so night stays night. Chained after fog.apply / unitLook.
- */
-const INF_FILL = 1.45;
-/** Share of the sun wrapped round onto the shaded side. */
-const INF_WRAP = 0.8;
-function infLook<T extends THREE.Material>(m: T, fill = INF_FILL): T {
-  const prev = m.onBeforeCompile;
-  const key = `${m.customProgramCacheKey()}|inf${fill}`;
-  m.onBeforeCompile = function (this: THREE.Material, shader, renderer) {
-    prev.call(this, shader, renderer);
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <lights_fragment_end>',
-      `#include <lights_fragment_end>
-      reflectedLight.indirectDiffuse *= ${fill.toFixed(3)};
-      #if NUM_DIR_LIGHTS > 0
-      {
-        // wrapped sun: the side away from the sun keeps some of its light (soft terminator)
-        vec3 infWrap = vec3( 0.0 );
-        float infNl;
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {
-          infNl = dot( normal, directionalLights[ i ].direction );
-          infWrap += directionalLights[ i ].color * max( ( infNl + 0.6 ) / 1.6 - max( infNl, 0.0 ), 0.0 );
-        }
-        #pragma unroll_loop_end
-        reflectedLight.directDiffuse += infWrap * ${INF_WRAP.toFixed(3)} * BRDF_Lambert( material.diffuseColor );
-      }
-      #endif`,
-    );
-  };
-  m.customProgramCacheKey = () => key;
-  return m;
-}
-
-/** Infantry materials read the baked vertex shading (Rig.add) and carry the unit rim light. */
-function stdMat(key: string, fog: FogOfWar | null, p: THREE.MeshStandardMaterialParameters, rim = 0.5) {
+function stdMat(key: string, fog: FogOfWar | null, p: THREE.MeshStandardMaterialParameters) {
   const k = `${fogId(fog)}:${key}`;
   let m = stdCache.get(k);
   if (!m) {
-    m = new THREE.MeshStandardMaterial({ ...p, vertexColors: true });
+    m = new THREE.MeshStandardMaterial(p);
     if (fog) fog.apply(m);
-    if (rim > 0) unitLook(m, { rim });
-    infLook(m);
-    stdCache.set(k, m);
-  }
-  return m;
-}
-/** Private copy of a shared procedural PBR material (textures shared) with vertex colours on. */
-function pbrCopy(key: string, fog: FogOfWar | null, make: () => THREE.MeshStandardMaterial, rim = 0.55) {
-  const k = `${fogId(fog)}:pbr:${key}`;
-  let m = stdCache.get(k);
-  if (!m) {
-    const base = make();
-    m = new THREE.MeshStandardMaterial({
-      map: base.map,
-      normalMap: base.normalMap,
-      roughnessMap: base.roughnessMap,
-      roughness: base.roughness,
-      metalness: base.metalness,
-      normalScale: base.normalScale.clone(),
-      color: base.color.clone(),
-      vertexColors: true,
-    });
-    if (fog) fog.apply(m);
-    unitLook(m, { rim });
-    infLook(m);
-    stdCache.set(k, m);
-  }
-  return m;
-}
-
-/** Nylon load-bearing gear: MOLLE webbing on cordura (infbake.ts) in the kit colour. */
-function gearMat(color: number, fog: FogOfWar | null) {
-  const k = `${fogId(fog)}:gear:${color}`;
-  let m = stdCache.get(k);
-  if (!m) {
-    const t = gearWebbing();
-    m = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, color, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.8, 0.8), vertexColors: true });
-    m.color.multiplyScalar(1.1);
-    if (fog) fog.apply(m);
-    unitLook(m, { rim: 0.6 });
-    infLook(m);
     stdCache.set(k, m);
   }
   return m;
@@ -408,12 +309,9 @@ function uniformMat(faction: string, tint: number, fog: FogOfWar | null) {
   let m = stdCache.get(k);
   if (!m) {
     const t = uniformCamo(faction);
-    m = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, color: tint, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.7, 0.7), vertexColors: true });
-    // a little lighter than the cloth swatch: value contrast against grass and shade at RTS zoom
-    m.color.multiplyScalar(1.14);
+    m = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap, color: tint, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.6, 0.6) });
     if (fog) fog.apply(m);
-    unitLook(m, { rim: 0.75 });
-    infLook(m);
+    unitLook(m, { rim: 0.7 });
     stdCache.set(k, m);
   }
   return m;
@@ -422,64 +320,28 @@ function uniformMat(faction: string, tint: number, fog: FogOfWar | null) {
 function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: number): Record<MK, THREE.Material> {
   const fac = KITS[style.faction] ? style.faction : (REGION_FALLBACK[style.region] ?? 'usa');
   return {
-    camo: uniformMat(fac, kit.camoTint ?? 0xffffff, fog),
-    gear: kit.gearTex === 'camo' ? uniformMat(fac, 0xd6d6d6, fog) : gearMat(kit.gear.color ?? 0x8c7854, fog),
-    dark: stdMat('dark', fog, { color: 0x2d2c29, roughness: 0.82, metalness: 0 }, 0.45),
-    gun: pbrCopy(`gun:${kit.gun}`, fog, () => pbrMaterial('metalPanel', { color: kit.gun, size: 128, divisions: 1, grime: 0.15, metalness: 0.45, roughness: 0.7 }), 0.45),
-    tube: pbrCopy(`tube:${kit.tube}`, fog, () => pbrMaterial('metalPanel', { color: kit.tube, size: 128, divisions: 1, grime: 0.35, metalness: 0.25, roughness: 1 })),
-    skin: stdMat(`skin:${kit.skin}`, fog, { color: kit.skin, roughness: 0.68, metalness: 0 }, 0.35),
-    team: stdMat(`team:${style.team}`, fog, { color: style.team, roughness: 0.45, metalness: 0.05, emissive: style.team, emissiveIntensity: 0.3 }, 0.8),
-    glow: stdMat(`glow:${glow}`, fog, { color: 0x101010, emissive: glow, emissiveIntensity: 2.6, roughness: 0.4 }, 0),
+    camo: uniformMat(fac, 0xffffff, fog),
+    gear: kit.gearTex === 'camo' ? uniformMat(fac, 0xe4e4e4, fog) : pbrMaterial(kit.gearTex, { ...kit.gear, normalScale: 0.6 }, fog),
+    dark: pbrMaterial('rubber', { color: 0x2a2a27, size: 128, roughness: 0.9 }, fog),
+    gun: pbrMaterial('metalPanel', { color: kit.gun, size: 128, divisions: 1, grime: 0.15, metalness: 0.45, roughness: 0.85 }, fog),
+    tube: pbrMaterial('metalPanel', { color: kit.tube, size: 128, divisions: 1, grime: 0.35, metalness: 0.25, roughness: 1 }, fog),
+    skin: stdMat(`skin:${kit.skin}`, fog, { color: kit.skin, roughness: 0.72, metalness: 0 }),
+    team: stdMat(`team:${style.team}`, fog, { color: style.team, roughness: 0.5, metalness: 0.05, emissive: style.team, emissiveIntensity: 0.6 }),
+    glow: stdMat(`glow:${glow}`, fog, { color: 0x101010, emissive: glow, emissiveIntensity: 2.6, roughness: 0.4 }),
     hat: stdMat('hat', fog, { color: 0xe2b322, roughness: 0.42, metalness: 0.05 }),
-    hair: stdMat('hair', fog, { color: 0x2a1f17, roughness: 0.95, metalness: 0 }, 0.3),
   };
 }
 
 // ------------------------------------------------------------------- rig
 
-/*
- * Geometry LOD masks (bit n = drawn at geometry LOD n, see perf/lod.ts):
- *   LOD0 hero (close zoom, portraits, photo mode), LOD1 battle zoom, LOD2 far / strategic.
- * Every part is tagged; parts tagged LOD1|LOD2 only are the low-poly stand-ins for
- * the hero versions. The LOD geometries are index subsets sharing one vertex buffer.
- */
-const L0 = 1;
-const L_ALL = 7;
-const L_LO = 6;
-const L_HI = 3;
-
-/** Baked vertex shading: sky occlusion (dark undersides) and a vertical value ramp (light helmet / shoulders, darker legs and boots) that keeps the silhouette readable from the RTS camera. */
-const GRADED: Partial<Record<MK, number>> = { camo: 1, gear: 1, dark: 1, skin: 0.6, tube: 0.4, gun: 0.25 };
-
-/** Cylindrical UVs about the local Y axis (constant texel density on a ~9 cm radius limb). */
-function cylUV(g: G, sc: number) {
-  const pos = g.attributes.position;
-  const uv = new Float32Array(pos.count * 2);
-  for (let i = 0; i < pos.count; i++) {
-    uv[i * 2] = Math.atan2(pos.getZ(i), pos.getX(i)) * 0.095 * sc;
-    uv[i * 2 + 1] = -pos.getY(i) * sc;
-  }
-  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-}
-
 class Rig {
   readonly top = new THREE.Group();
   readonly bones: THREE.Bone[] = [];
-  private parts = new Map<MK, { g: G; mask: number }[]>();
+  private parts = new Map<MK, G[]>();
   /** Geometry added to the key bone is modelled in the value's rest frame (the joint sits higher up the same chain). */
   readonly frames = new Map<THREE.Bone, THREE.Object3D>();
   /** Soft skinning: vertices of the key bone blend into `lo` below frame-local height y1 (fully `lo` under y0). */
   readonly soft = new Map<THREE.Bone, { lo: THREE.Bone; y0: number; y1: number }>();
-  /** LOD mask applied to the parts being added. */
-  mask = L_ALL;
-  /** Albedo multiplier baked into the parts being added (pouch flaps, straps ...). */
-  shade = 1;
-  /** Texture repeats per metre by material (set before building; falls back to UVS). */
-  uvs: Partial<Record<MK, number>> = {};
-  /** Parts being added are round about their bone's Y axis (limbs, torso): cylindrical UVs, no box-projection seams. */
-  cyl = false;
-  /** Triangles per geometry LOD after finish(). */
-  readonly lodTris = [0, 0, 0];
 
   bone(name: string, parent: THREE.Object3D | null, x: number, y: number, z: number): THREE.Bone {
     const b = new THREE.Bone();
@@ -497,32 +359,8 @@ class Rig {
     parent.add(o);
     return o;
   }
-  /** Add parts with an explicit LOD mask (and optional shade). */
-  addL(mask: number, b: THREE.Bone, mk: MK, ...geos: G[]): void {
-    const m = this.mask;
-    this.mask = mask;
-    this.add(b, mk, ...geos);
-    this.mask = m;
-  }
   /** Add parts (modelled in the bone's local frame at its rest pose). */
-  add(b: THREE.Bone, mk: MK, ...geos: G[]): void {
-    // parts with a cheap stand-in: hero version at LOD0, the stand-in at LOD1/2
-    if (this.mask & L_LO && geos.some((g) => g.userData.lo)) {
-      const mask = this.mask;
-      for (const g of geos) {
-        const lo = g.userData.lo as G | undefined;
-        if (!lo) {
-          this.add(b, mk, g);
-          continue;
-        }
-        delete g.userData.lo;
-        if (mask & L0) this.addL(L0, b, mk, g);
-        this.addL(mask & L_LO, b, mk, lo);
-      }
-      this.mask = mask;
-      return;
-    }
-    for (const g of geos) delete g.userData.lo;
+  add(b: THREE.Bone, mk: MK, ...geos: G[]) {
     const fr = this.frames.get(b) ?? b;
     fr.updateWorldMatrix(true, false);
     const idx = this.bones.indexOf(b);
@@ -530,18 +368,14 @@ class Rig {
     const lo = sf ? this.bones.indexOf(sf.lo) : -1;
     let list = this.parts.get(mk);
     if (!list) this.parts.set(mk, (list = []));
-    const gr = GRADED[mk] ?? 0;
     for (const g of geos) {
-      for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
-      if (!g.attributes.normal) g.computeVertexNormals();
-      const n = g.attributes.position.count;
-      const sc = this.uvs[mk] ?? UVS[mk];
-      if (sc && this.cyl) cylUV(g, sc);
       if (!g.index) {
+        const n = g.attributes.position.count;
         const ix: number[] = [];
         for (let i = 0; i < n; i++) ix.push(i);
         g.setIndex(ix);
       }
+      const n = g.attributes.position.count;
       const si = new Uint16Array(n * 4);
       const sw = new Float32Array(n * 4);
       const pos = g.attributes.position;
@@ -555,22 +389,9 @@ class Rig {
         }
       }
       g.applyMatrix4(fr.matrixWorld);
-      if (sc && !this.cyl) worldUV(g, sc);
       g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
       g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
-      // baked shading (body space: soles at y = 0, helmet top ~1.85 m)
-      const col = new Float32Array(n * 3);
-      const nor = g.attributes.normal;
-      for (let i = 0; i < n; i++) {
-        const y = pos.getY(i);
-        const ny = nor.getY(i);
-        const ramp = 0.68 + 0.32 * sstep(0.02, 1.45, y) + 0.06 * sstep(1.6, 1.85, y);
-        const occ = 0.74 + 0.26 * (ny * 0.5 + 0.5);
-        const c = this.shade * mix(1, ramp * occ, gr);
-        col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = c;
-      }
-      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      list.push({ g, mask: this.mask });
+      list.push(g);
     }
   }
   /** World (body-space) position of a bone-local point at rest. */
@@ -578,7 +399,7 @@ class Rig {
     b.updateWorldMatrix(true, false);
     return new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(b.matrixWorld);
   }
-  finish(mats: Record<MK, THREE.Material>, sphere: THREE.Sphere): { skel: THREE.Skeleton; tris: number } {
+  finish(mats: Record<MK, THREE.Material>, sphere: THREE.Sphere, uvs: Partial<Record<MK, number>>): { skel: THREE.Skeleton; tris: number } {
     this.top.updateMatrixWorld(true);
     const skel = new THREE.Skeleton(this.bones);
     const bind = new THREE.Matrix4();
@@ -586,35 +407,15 @@ class Rig {
     for (const mk of MK_ORDER) {
       const list = this.parts.get(mk);
       if (!list || !list.length) continue;
-      const g = mergeGeometries(
-        list.map((x) => x.g),
-        false,
-      );
-      if (!g) continue;
-      // each part's index range in the merged buffer -> per-LOD index subsets
-      const lods: number[][] = [[], [], []];
-      const src = g.index!.array;
-      let at = 0;
-      for (const { g: pg, mask } of list) {
-        const cnt = pg.index!.count;
-        for (let lv = 0; lv < 3; lv++) if (mask & (1 << lv)) for (let i = at; i < at + cnt; i++) lods[lv].push(src[i]);
-        at += cnt;
-        pg.dispose();
+      for (const g of list) {
+        for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv' && name !== 'skinIndex' && name !== 'skinWeight') g.deleteAttribute(name);
       }
-      const big = g.attributes.position.count > 65535;
-      const mkIndex = (a: number[]) => (big ? new THREE.Uint32BufferAttribute(a, 1) : new THREE.Uint16BufferAttribute(a, 1));
-      const sub = (a: number[]) => {
-        const s = new THREE.BufferGeometry();
-        for (const name of Object.keys(g.attributes)) s.setAttribute(name, g.attributes[name]);
-        s.setIndex(mkIndex(a));
-        s.boundingSphere = sphere.clone();
-        return s;
-      };
-      g.setIndex(mkIndex(lods[0]));
-      g.computeBoundingSphere();
-      registerLods(g, [sub(lods[1]), sub(lods[2])]);
-      for (let lv = 0; lv < 3; lv++) this.lodTris[lv] += lods[lv].length / 3;
-      tris += lods[0].length / 3;
+      const g = mergeGeometries(list, false);
+      for (const x of list) x.dispose();
+      if (!g) continue;
+      const sc = uvs[mk] ?? UVS[mk];
+      if (sc) worldUV(g, sc);
+      tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
       const m = new THREE.SkinnedMesh(g, mats[mk]);
       m.name = 'skin_' + mk;
       m.castShadow = true;
@@ -898,31 +699,6 @@ const CLAV: V3 = [0, 0.36 - CH, 0.035]; // clavicle root (chest frame, right sid
 const CLAV_UA: V3 = [0, SHOULDER[1] - 0.36, SHOULDER[2] - 0.035]; // clavicle -> shoulder joint
 const WRIST = 0.255; // elbow -> wrist
 
-/** Hero part + its low-poly stand-in for LOD1/2. */
-function hiLo(r: Rig, b: THREE.Bone, mk: MK, hi: G, lo: G) {
-  r.addL(L0, b, mk, hi);
-  r.addL(L_LO, b, mk, lo);
-}
-/** Round parts (limbs, torso): cylindrical UVs. */
-function round(r: Rig, fn: () => void) {
-  r.cyl = true;
-  fn();
-  r.cyl = false;
-}
-/** Shaded parts (pouch flaps, straps): albedo multiplier baked into the vertex colour. */
-function shaded(r: Rig, k: number, fn: () => void) {
-  const s = r.shade;
-  r.shade = k;
-  fn();
-  r.shade = s;
-}
-
-/*
- * Proportions are a little heroic for the RTS camera: larger head and helmet,
- * broad plate-carrier shoulders, thick limbs and big boots, so the silhouette
- * (helmet dome, shoulders, pack, weapon) survives at phone zoom. The joints
- * stay where the animation expects them.
- */
 function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, helmet: HelmetKind, pack: PackKind): Body {
   const hips = r.bone(p + 'hips', null, x, 0.98, z);
   hips.rotation.y = yaw;
@@ -947,163 +723,123 @@ function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, he
   const bootM: MK = kit.bootsGear ? 'gear' : 'dark';
   const kneeM: MK = kit.gearTex === 'canvas' ? 'gear' : 'dark';
 
-  // ---- pelvis, belt (battle belt with pouches)
-  round(r, () => hiLo(r, hips, 'camo', xf(sph(0.138, 0.13, 0.185, 12, 7), [0, -0.05, 0]), xf(sph(0.138, 0.13, 0.185, 8, 5), [0, -0.05, 0])));
-  r.add(hips, 'gear', xf(cylY(1, 1, 0.06, 14, true), [0, 0.03, 0], [0, 0, 0], [0.15, 1, 0.196]));
-  shaded(r, 0.92, () => {
-    r.addL(L0, hips, 'gear', xf(rbox(0.065, 0.09, 0.07, 0.016), [-0.075, -0.005, 0.165]), xf(rbox(0.08, 0.08, 0.13, 0.018), [-0.15, -0.015, 0]), xf(rbox(0.065, 0.085, 0.06, 0.014), [-0.07, -0.005, -0.172]));
-    r.addL(L0, hips, 'gear', xf(rbox(0.05, 0.08, 0.05, 0.012), [0.07, 0.0, 0.17]), xf(rbox(0.05, 0.08, 0.05, 0.012), [0.07, 0.0, -0.17]));
-    r.addL(L_LO, hips, 'gear', xf(box(0.08, 0.08, 0.36), [-0.1, -0.01, 0]));
-  });
+  // ---- pelvis, belt
+  r.add(hips, 'camo', xf(sph(0.125, 0.125, 0.172, 8, 5), [0, -0.05, 0]));
+  r.add(hips, 'gear', xf(cylY(1, 1, 0.05, 14, true), [0, 0.03, 0], [0, 0, 0], [0.137, 1, 0.183]));
+  r.add(hips, 'gear', xf(rbox(0.06, 0.08, 0.06, 0.014), [-0.07, 0.0, 0.15]), xf(rbox(0.07, 0.07, 0.11, 0.016), [-0.14, -0.01, 0]), xf(rbox(0.06, 0.075, 0.05, 0.012), [-0.06, 0.0, -0.16]));
 
-  // ---- legs: thick thighs with cargo pockets, knee pads, big boots
+  // ---- legs
   for (const sd of [1, -1]) {
     const s = sd > 0 ? 'R' : 'L';
     const th = r.bone(p + 'th' + s, hips, 0, -0.04, sd * 0.095);
     const sh = r.bone(p + 'sh' + s, th, 0, -TH, 0);
     const ft = r.bone(p + 'ft' + s, sh, 0, -SH, 0);
-    round(r, () => hiLo(r, th, 'camo', xf(limb(0.116, 0.084, TH, 10), [0, 0, 0], [0, 0, 0], [1.1, 1, 1.02]), xf(limb(0.116, 0.084, TH, 6), [0, 0, 0], [0, 0, 0], [1.1, 1, 1.02])));
-    shaded(r, 0.94, () => r.addL(L_HI, th, 'camo', xf(rbox(0.12, 0.13, 0.045, 0.016), [0.0, -0.22, sd * 0.078])));
-    round(r, () => hiLo(r, sh, 'camo', limb(0.086, 0.064, 0.36, 10), limb(0.086, 0.064, 0.36, 6)));
-    // knee pad (hard cap + strap)
-    r.add(sh, kneeM, xf(sph(0.045, 0.075, 0.076, 7, 5), [0.066, -0.015, 0]));
-    r.addL(L0, sh, kneeM, xf(cylY(0.083, 0.083, 0.022, 10, true), [0.0, -0.05, 0], [0, 0, 0.2], [1, 1, 1]));
-    // boot: shaft, upper, toe cap, sole with heel
-    hiLo(r, ft, bootM, xf(cylY(0.063, 0.067, 0.17, 10), [-0.005, 0.04, 0]), xf(cylY(0.063, 0.067, 0.17, 6), [-0.005, 0.04, 0]));
-    r.add(ft, bootM, xf(rbox(0.275, 0.09, 0.118, 0.035), [0.05, -0.027, 0]));
-    r.addL(L0, ft, bootM, xf(sph(0.06, 0.04, 0.058, 8, 4), [0.15, -0.035, 0]));
-    r.add(ft, 'dark', xf(box(0.285, 0.022, 0.124), [0.05, -0.063, 0]));
+    r.add(th, 'camo', xf(limb(0.096, 0.068, TH, 8), [0, 0, 0], [0, 0, 0], [1.08, 1, 1]));
+    r.add(th, 'camo', xf(rbox(0.1, 0.12, 0.04, 0.014), [0.0, -0.22, sd * 0.07]));
+    r.add(sh, 'camo', limb(0.068, 0.051, 0.36));
+    r.add(sh, kneeM, xf(sph(0.037, 0.066, 0.064, 5, 4), [0.057, -0.01, 0]));
+    r.add(ft, bootM, xf(cylY(0.053, 0.058, 0.16, 8), [-0.005, 0.035, 0]), xf(rbox(0.245, 0.08, 0.1, 0.03), [0.045, -0.03, 0]));
+    r.add(ft, 'dark', xf(box(0.25, 0.016, 0.104), [0.045, -0.066, 0]));
   }
 
   // ---- torso
-  const tp: [number, number][] = [
-    [0.13, -0.06],
-    [0.143, 0.04],
-    [0.16, 0.14],
-    [0.176, 0.24],
-    [0.183, 0.32],
-    [0.17, 0.38],
-    [0.125, 0.43],
-    [0.06, 0.47],
-    [0.045, 0.49],
-  ];
-  round(r, () => hiLo(r, chest, 'camo', xf(lathe(tp, 14), [0, 0, 0], [0, 0, 0], [0.76, 1, 1.08]), xf(lathe(tp, 8), [0, 0, 0], [0, 0, 0], [0.76, 1, 1.08])));
+  const torso = lathe(
+    [
+      [0.128, -0.06],
+      [0.14, 0.04],
+      [0.155, 0.14],
+      [0.17, 0.24],
+      [0.176, 0.32],
+      [0.164, 0.38],
+      [0.12, 0.43],
+      [0.06, 0.47],
+      [0.045, 0.49],
+    ],
+    10,
+  );
+  r.add(chest, 'camo', xf(torso, [0, 0, 0], [0, 0, 0], [0.72, 1, 1]));
   vest(r, chest, kit);
   backpack(r, chest, kit, pack, p);
 
-  // ---- arms (broad deltoids, rolled-up feel at the cuff, gloves)
+  // ---- arms
   for (const sd of [1, -1]) {
     const ua = sd > 0 ? uaR : uaL;
     const fa = sd > 0 ? faR : faL;
-    const hd = sd > 0 ? hdR : hdL;
-    hiLo(r, ua, 'camo', xf(sph(0.085, 0.083, 0.08, 10, 7), [0, -0.02, 0]), xf(sph(0.085, 0.083, 0.08, 7, 4), [0, -0.02, 0]));
-    round(r, () => hiLo(r, ua, 'camo', limb(0.077, 0.061, UA - 0.02, 9), limb(0.077, 0.061, UA - 0.02, 6)));
-    if (kit.vest === 'bulky') r.add(ua, 'gear', xf(sph(0.092, 0.066, 0.09, 8, 5), [0, -0.01, sd * 0.004]));
-    // team armband (wide, wraps the sleeve) + velcro flag patch on the shoulder
-    r.add(ua, 'team', xf(cylY(0.082, 0.076, 0.085, 10, true), [0, -0.135, 0]));
-    r.addL(L0, ua, 'team', xf(rbox(0.07, 0.06, 0.016, 0.006), [0.0, -0.055, sd * 0.078], [sd * -0.12, 0, 0]));
-    round(r, () => hiLo(r, fa, 'camo', limb(0.062, 0.046, 0.235, 9), limb(0.062, 0.046, 0.235, 6)));
-    shaded(r, 0.9, () => r.addL(L0, fa, 'camo', xf(cylY(0.06, 0.06, 0.035, 9, true), [0, -0.02, 0])));
-    // glove: palm + fingers + thumb
-    r.add(hd, glove, xf(sph(0.043, 0.058, 0.038, 7, 5), [0, -0.29, 0]));
-    r.addL(L0, hd, glove, xf(box(0.024, 0.052, 0.022), [0.032, -0.27, -sd * 0.016]));
+    r.add(ua, 'camo', xf(sph(0.074, 0.075, 0.072, 7, 5), [0, -0.02, 0]), limb(0.063, 0.05, UA - 0.02, 6));
+    if (kit.vest === 'bulky') r.add(ua, 'gear', xf(sph(0.082, 0.06, 0.08, 8, 5), [0, -0.01, sd * 0.004]));
+    r.add(ua, 'team', xf(cylY(0.067, 0.062, 0.1, 10, true), [0, -0.13, 0]), xf(box(0.075, 0.08, 0.02), [0.0, -0.05, sd * 0.07]));
+    r.add(fa, 'camo', limb(0.052, 0.04, 0.235, 6));
+    r.add(sd > 0 ? hdR : hdL, glove, xf(sph(0.04, 0.056, 0.036, 6, 4), [0, -0.292, 0]), xf(box(0.022, 0.05, 0.02), [0.03, -0.272, -sd * 0.015]));
   }
 
-  // ---- neck & head (head parts are modelled in the neck-base frame; heroic 1.08 head)
-  r.add(neck, 'skin', xf(limb(0.056, 0.06, 0.11, 7), [0, 0.075, 0]));
-  const H = (g: G) => {
-    (g.userData.lo as G | undefined)?.translate(0, -0.12, 0);
-    return xf(g.translate(0, -0.12, 0), [0, 0.12, 0], [0, 0, 0], 1.06);
-  };
-  hiLo(r, head, 'skin', H(xf(sph(0.098, 0.115, 0.083, 12, 9), [0.0, 0.13, 0])), H(xf(sph(0.098, 0.115, 0.083, 8, 6), [0.0, 0.13, 0])));
-  hiLo(r, head, 'skin', H(xf(sph(0.074, 0.072, 0.068, 10, 7), [0.034, 0.066, 0])), H(xf(sph(0.074, 0.072, 0.068, 6, 4), [0.034, 0.066, 0])));
-  // face: nose, brow ridge, ears, eyes, brows
-  r.addL(L0, head, 'skin', H(xf(sph(0.02, 0.03, 0.016, 6, 4), [0.1, 0.11, 0], [0, 0, -0.25])), H(xf(sph(0.03, 0.014, 0.075, 8, 4), [0.083, 0.15, 0])), H(xf(sph(0.016, 0.028, 0.011, 5, 4), [-0.004, 0.115, 0.084])), H(xf(sph(0.016, 0.028, 0.011, 5, 4), [-0.004, 0.115, -0.084])));
-  r.addL(L0, head, 'dark', H(xf(sph(0.011, 0.008, 0.013, 6, 4), [0.091, 0.134, 0.032])), H(xf(sph(0.011, 0.008, 0.013, 6, 4), [0.091, 0.134, -0.032])), H(xf(box(0.01, 0.007, 0.032), [0.097, 0.153, 0.032])), H(xf(box(0.01, 0.007, 0.032), [0.097, 0.153, -0.032])));
-  if (kit.beard) r.addL(L_HI, head, 'hair', H(xf(sph(0.072, 0.05, 0.066, 8, 5), [0.045, 0.058, 0])));
-  if (kit.shades) r.addL(L_HI, head, 'dark', H(xf(rbox(0.025, 0.03, 0.15, 0.008), [0.093, 0.135, 0])));
+  // ---- neck & head (head parts are modelled in the neck-base frame)
+  r.add(neck, 'skin', xf(limb(0.052, 0.056, 0.11, 6), [0, 0.075, 0]));
+  r.add(
+    head,
+    'skin',
+    xf(sph(0.098, 0.117, 0.082, 9, 7), [0.0, 0.13, 0]),
+    xf(sph(0.072, 0.07, 0.066, 10, 6), [0.034, 0.068, 0]),
+    xf(sph(0.022, 0.032, 0.016, 5, 4), [0.1, 0.11, 0], [0, 0, -0.25]),
+    xf(sph(0.016, 0.028, 0.011, 5, 4), [-0.004, 0.115, 0.082]),
+    xf(sph(0.016, 0.028, 0.011, 5, 4), [-0.004, 0.115, -0.082]),
+  );
+  r.add(head, 'dark', xf(sph(0.011, 0.008, 0.013, 6, 4), [0.088, 0.137, 0.031]), xf(sph(0.011, 0.008, 0.013, 6, 4), [0.088, 0.137, -0.031]), xf(box(0.008, 0.006, 0.03), [0.092, 0.152, 0.031]), xf(box(0.008, 0.006, 0.03), [0.092, 0.152, -0.031]));
   hat(r, head, kit, helmet);
   return { hips, spine, chest, neck, head, uaR, uaL, faR, faL };
 }
 
-/** Helmet shell scale (heroic: about 10 % over life size). */
-const HS = 1.1;
-
 function hat(r: Rig, head: THREE.Bone, kit: Kit, kind: HelmetKind) {
-  // all helmet parts in the neck frame; `hx` = helmet transform (centre y, tilt, radii)
-  const shell = (cap: number, y: number, tilt: number, rx: number, ry: number, rz: number, mk: MK = 'camo') => {
-    const s: V3 = [rx * HS, ry * HS, rz * HS];
-    hiLo(r, head, mk, xf(dome(cap, 18, 8), [0.0, y, 0], [0, 0, tilt], s), xf(dome(cap, 10, 4), [0.0, y, 0], [0, 0, tilt], s));
-  };
-  // team colour: band round the shell + an ID patch on the crown (readable from the RTS camera)
-  const band = (y: number, tilt: number, rx: number, rz: number, h = 0.03) => r.add(head, 'team', xf(cylY(1, 1, h, 14, true), [0.0, y, 0], [0, 0, tilt], [rx * HS * 1.012, 1, rz * HS * 1.012]));
-  const crown = (y: number, tilt: number, rx: number, ry: number, rz: number, cap = 0.5) => r.add(head, 'team', xf(dome(cap, 12, 2), [0.0, y, 0], [0, 0, tilt], [rx * HS * 1.018, ry * HS * 1.018, rz * HS * 1.018]));
-  const earpro = (y: number, zz: number) => {
-    if (kit.earpro) r.addL(L_HI, head, 'dark', xf(sph(0.034, 0.045, 0.026, 7, 5), [-0.005, y, zz * HS]), xf(sph(0.034, 0.045, 0.026, 7, 5), [-0.005, y, -zz * HS]));
-  };
+  const band = (sx: number, sz: number, y: number, tilt: number, h = 0.045) => r.add(head, 'team', xf(cylY(1, 1, h, 12, true), [0.0, y, 0], [0, 0, tilt], [sx, 1, sz]));
+  const top = (y: number) => r.add(head, 'team', xf(box(0.12, 0.014, 0.1), [-0.01, y, 0]));
   switch (kind) {
     case 'fast': {
-      // high-cut ballistic helmet: rails, NVG shroud, counterweight pouch
-      shell(1.5, 0.15, 0.2, 0.122, 0.122, 0.108);
-      r.addL(L_HI, head, 'dark', xf(rbox(0.035, 0.055, 0.05, 0.01), [0.13, 0.205, 0], [0, 0, 0.3]));
-      r.addL(L0, head, 'dark', xf(box(0.1, 0.016, 0.014), [0.0, 0.165, 0.118]), xf(box(0.1, 0.016, 0.014), [0.0, 0.165, -0.118]));
-      shaded(r, 0.9, () => r.addL(L_HI, head, 'gear', xf(rbox(0.04, 0.06, 0.09, 0.014), [-0.13, 0.165, 0])));
-      earpro(0.115, 0.092);
-      band(0.17, 0.2, 0.124, 0.11);
-      crown(0.15, 0.2, 0.122, 0.122, 0.108);
+      r.add(head, 'camo', xf(dome(1.5), [0.0, 0.14, 0], [0, 0, 0.2], [0.122, 0.122, 0.108]));
+      r.add(head, 'dark', xf(rbox(0.03, 0.05, 0.045, 0.008), [0.118, 0.2, 0], [0, 0, 0.3]), xf(box(0.09, 0.014, 0.012), [0.0, 0.16, 0.106]), xf(box(0.09, 0.014, 0.012), [0.0, 0.16, -0.106]));
+      r.add(head, 'gear', xf(rbox(0.035, 0.055, 0.08, 0.012), [-0.117, 0.16, 0]));
+      if (kit.earpro) r.add(head, 'dark', xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.115, 0.092]), xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.115, -0.092]));
+      band(0.124, 0.11, 0.17, 0.2);
+      top(0.258);
       break;
     }
     case 'mitz': {
-      // IDF: shell under the floppy "mitznefet" cover
-      shell(1.62, 0.13, 0.1, 0.123, 0.126, 0.11);
-      hiLo(r, head, 'camo', jitter(xf(dome(1.9, 16, 7), [0, 0, 0], [0, 0, 0], [0.142 * HS, 0.135 * HS, 0.132 * HS]), 0.12, 7).translate(0.0, 0.135, 0), jitter(xf(dome(1.9, 10, 4), [0, 0, 0], [0, 0, 0], [0.142 * HS, 0.135 * HS, 0.132 * HS]), 0.1, 7).translate(0.0, 0.135, 0));
-      r.add(head, 'camo', xf(new THREE.ConeGeometry(0.04, 0.08, 5), [-0.045, 0.28, 0.035], [0.3, 0, 0.5]), xf(new THREE.ConeGeometry(0.034, 0.07, 5), [0.02, 0.285, -0.055], [-0.4, 0, -0.2]));
-      band(0.16, 0.05, 0.141, 0.129, 0.03);
-      crown(0.135, 0, 0.142, 0.135, 0.132, 0.45);
+      r.add(head, 'camo', xf(dome(1.62), [0.0, 0.13, 0], [0, 0, 0.1], [0.123, 0.126, 0.11]));
+      r.add(head, 'camo', jitter(xf(dome(1.9, 12, 6), [0, 0, 0], [0, 0, 0], [0.142, 0.135, 0.132]), 0.12, 7).translate(0.0, 0.135, 0));
+      r.add(head, 'camo', xf(new THREE.ConeGeometry(0.035, 0.07, 5), [-0.04, 0.265, 0.03], [0.3, 0, 0.5]), xf(new THREE.ConeGeometry(0.03, 0.06, 5), [0.02, 0.27, -0.05], [-0.4, 0, -0.2]));
+      band(0.141, 0.129, 0.16, 0.05, 0.03);
+      top(0.26);
       break;
     }
     case 'm92':
     case 'qgf': {
-      // full-cut shell with a flared brim
-      shell(1.66, 0.13, 0.1, 0.125, 0.128, 0.112);
-      r.add(head, 'camo', xf(cylY(0.128 * HS, 0.146 * HS, 0.028, 16, true), [0.0, 0.112, 0], [0, 0, 0.1], [1, 1, 0.9]));
-      if (kind === 'qgf') r.addL(L_HI, head, 'dark', xf(box(0.022, 0.02, 0.18), [0.125, 0.175, 0]));
-      if (kind === 'm92') shaded(r, 0.85, () => r.addL(L0, head, 'camo', xf(cylY(1, 1, 0.025, 14, true), [0, 0.2, 0], [0, 0, 0.1], [0.123 * HS, 1, 0.11 * HS])));
-      earpro(0.105, 0.094);
-      band(0.175, 0.1, 0.127, 0.114);
-      crown(0.13, 0.1, 0.125, 0.128, 0.112, 0.48);
+      r.add(head, 'camo', xf(dome(1.66), [0.0, 0.13, 0], [0, 0, 0.1], [0.125, 0.128, 0.112]));
+      r.add(head, 'camo', xf(cylY(0.128, 0.142, 0.025, 14, true), [0.0, 0.11, 0], [0, 0, 0.1], [1, 1, 0.9]));
+      if (kind === 'qgf') r.add(head, 'dark', xf(box(0.02, 0.018, 0.17), [0.115, 0.17, 0]));
+      if (kit.earpro) r.add(head, 'dark', xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.105, 0.094]), xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.105, -0.094]));
+      band(0.127, 0.114, 0.175, 0.1);
+      top(0.255);
       break;
     }
     case '6b47': {
-      // Ratnik 6B47 with cover, goggles on the brow
-      shell(1.72, 0.13, 0.12, 0.128, 0.13, 0.116);
-      r.addL(L_HI, head, 'dark', xf(rbox(0.045, 0.04, 0.12, 0.014), [0.12, 0.215, 0], [0, 0, 0.25]));
-      shaded(r, 0.9, () => r.addL(L_HI, head, 'gear', xf(rbox(0.04, 0.055, 0.09, 0.014), [-0.135, 0.15, 0])));
-      earpro(0.1, 0.1);
-      band(0.17, 0.12, 0.13, 0.118);
-      crown(0.13, 0.12, 0.128, 0.13, 0.116, 0.48);
+      r.add(head, 'camo', xf(dome(1.72), [0.0, 0.13, 0], [0, 0, 0.12], [0.128, 0.13, 0.116]));
+      r.add(head, 'dark', xf(rbox(0.04, 0.035, 0.1, 0.012), [0.11, 0.21, 0], [0, 0, 0.25])); // goggles on the brow
+      r.add(head, 'gear', xf(rbox(0.035, 0.05, 0.08, 0.012), [-0.122, 0.15, 0]));
+      if (kit.earpro) r.add(head, 'dark', xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.1, 0.1]), xf(sph(0.03, 0.04, 0.022, 6, 4), [-0.005, 0.1, -0.1]));
+      band(0.13, 0.118, 0.17, 0.12);
+      top(0.26);
       break;
     }
     case 'boonie': {
-      const hp: [number, number][] = [
-        [0.112, 0.155],
-        [0.112, 0.205],
-        [0.102, 0.25],
-        [0.055, 0.262],
-        [0.0, 0.264],
-      ];
-      hiLo(r, head, 'camo', xf(lathe(hp, 16), [0.005, 0, 0], [0, 0, 0], [1.08, 1, 0.96]), xf(lathe(hp, 10), [0.005, 0, 0], [0, 0, 0], [1.08, 1, 0.96]));
-      // wide floppy brim, a little droop
-      hiLo(r, head, 'camo', jitter(xf(cylY(0.19, 0.205, 0.014, 18), [0.005, 0.15, 0], [0, 0, 0.06], [1.05, 1, 0.95]), 0.05, 3), xf(cylY(0.19, 0.205, 0.014, 10), [0.005, 0.15, 0], [0, 0, 0.06], [1.05, 1, 0.95]));
-      r.add(head, 'team', xf(cylY(1, 1, 0.038, 14, true), [0.005, 0.178, 0], [0, 0, 0], [0.121, 1, 0.108]));
-      r.add(head, 'team', xf(cylY(0.06, 0.06, 0.006, 10), [0.005, 0.266, 0]));
+      r.add(head, 'camo', xf(lathe([[0.104, 0.155], [0.104, 0.2], [0.095, 0.245], [0.05, 0.255], [0.0, 0.257]], 12), [0.005, 0, 0], [0, 0, 0], [1.08, 1, 0.96]));
+      r.add(head, 'camo', xf(cylY(0.17, 0.185, 0.012, 14), [0.005, 0.148, 0], [0, 0, 0.06], [1.05, 1, 0.95]));
+      band(0.113, 0.1, 0.175, 0, 0.035);
+      top(0.258);
       break;
     }
     case 'hardhat': {
-      r.add(head, 'hat', xf(dome(1.5, 14, 6), [0.0, 0.14, 0], [0, 0, 0.1], [0.125 * HS, 0.125 * HS, 0.112 * HS]));
-      r.add(head, 'hat', xf(cylY(0.13 * HS, 0.148 * HS, 0.02, 14), [0.01, 0.15, 0], [0, 0, 0.1], [1.12, 1, 0.94]));
-      r.add(head, 'hat', xf(box(0.17, 0.024, 0.026), [0.0, 0.28, 0], [0, 0, 0.1]));
-      band(0.19, 0.1, 0.127, 0.114, 0.032);
+      r.add(head, 'hat', xf(dome(1.5, 14, 6), [0.0, 0.14, 0], [0, 0, 0.1], [0.125, 0.125, 0.112]));
+      r.add(head, 'hat', xf(cylY(0.13, 0.145, 0.018, 14), [0.01, 0.15, 0], [0, 0, 0.1], [1.12, 1, 0.94]));
+      r.add(head, 'hat', xf(box(0.16, 0.022, 0.025), [0.0, 0.258, 0], [0, 0, 0.1]));
+      band(0.127, 0.114, 0.185, 0.1, 0.03);
       break;
     }
   }
@@ -1111,109 +847,76 @@ function hat(r: Rig, head: THREE.Bone, kit: Kit, kind: HelmetKind) {
 
 function vest(r: Rig, chest: THREE.Bone, kit: Kit) {
   const g = (...gs: G[]) => r.add(chest, 'gear', ...gs);
-  const gH = (...gs: G[]) => r.addL(L0, chest, 'gear', ...gs);
-  const gL = (...gs: G[]) => r.addL(L_LO, chest, 'gear', ...gs);
   if (kit.vest === 'rig') {
     // chest rig: harness + row of mag pouches over the belly
-    g(xf(cylY(1, 1, 0.13, 14, true), [0, 0.17, 0], [0, 0, 0], [0.136, 1, 0.18]));
-    shaded(r, 1.06, () => {
-      for (const z of [-0.1, -0.034, 0.034, 0.1]) gH(xf(rbox(0.055, 0.12, 0.06, 0.012), [0.142, 0.17, z]), xf(box(0.02, 0.03, 0.062), [0.168, 0.22, z]));
-      gL(xf(box(0.06, 0.12, 0.26), [0.142, 0.17, 0]));
-    });
-    shaded(r, 0.85, () => {
-      for (const sd of [1, -1]) g(xf(box(0.22, 0.024, 0.05), [0, 0.43, sd * 0.105]), xf(box(0.03, 0.26, 0.045), [-0.125, 0.31, sd * 0.07], [sd * 0.35, 0, 0]));
-      gH(xf(box(0.03, 0.2, 0.045), [0.13, 0.33, 0.07], [-0.3, 0, -0.05]), xf(box(0.03, 0.2, 0.045), [0.13, 0.33, -0.07], [0.3, 0, -0.05]));
-    });
-    r.add(chest, 'team', xf(box(0.014, 0.07, 0.14), [0.142, 0.33, 0], [0, 0, -0.15]));
+    g(xf(cylY(1, 1, 0.12, 14, true), [0, 0.17, 0], [0, 0, 0], [0.128, 1, 0.172]));
+    for (const z of [-0.09, -0.03, 0.03, 0.09]) g(xf(rbox(0.05, 0.11, 0.055, 0.01), [0.135, 0.17, z]));
+    for (const sd of [1, -1]) g(xf(box(0.2, 0.02, 0.04), [0, 0.43, sd * 0.1]), xf(box(0.025, 0.24, 0.04), [-0.12, 0.31, sd * 0.07], [sd * 0.35, 0, 0]));
+    r.add(chest, 'team', xf(box(0.014, 0.09, 0.18), [0.13, 0.33, 0], [0, 0, -0.15]));
     return;
   }
   const big = kit.vest === 'bulky';
-  const t = big ? 0.07 : 0.055;
-  const w = big ? 0.34 : 0.3;
-  const hh = big ? 0.35 : 0.31;
-  // cummerbund, front + back plate bags, broad shoulder straps
-  g(xf(cylY(1, 1, big ? 0.25 : 0.19, 16, true), [0, big ? 0.17 : 0.19, 0], [0, 0, 0], [big ? 0.152 : 0.142, 1, big ? 0.2 : 0.194]));
-  hiLo(r, chest, 'gear', xf(rbox(t, hh, w, 0.022, 2), [0.125, 0.26, 0], [0, 0, -0.06]), xf(box(t, hh, w), [0.125, 0.26, 0], [0, 0, -0.06]));
-  g(xf(box(t, hh, w), [-0.128, 0.27, 0], [0, 0, 0.04]));
-  shaded(r, 0.92, () => {
-    for (const sd of [1, -1]) g(xf(box(0.27, 0.03, 0.075), [0, 0.43, sd * 0.11]));
-    // shoulder pads give the broad silhouette
-    for (const sd of [1, -1]) r.add(chest, 'gear', xf(rbox(0.14, 0.035, 0.09, 0.012), [0, 0.425, sd * 0.16], [sd * 0.38, 0, 0]));
-  });
-  // triple mag pouches + admin pouch + flaps (hero); one block at LOD1/2
-  shaded(r, 1.05, () => {
-    for (const z of [-0.088, 0, 0.088]) {
-      gH(xf(rbox(0.055, 0.11, 0.08, 0.014), [0.17, 0.155, z]));
-      shaded(r, 0.92, () => gH(xf(rbox(0.06, 0.028, 0.082, 0.008), [0.172, 0.215, z])));
-    }
-    gH(xf(rbox(0.045, 0.08, 0.15, 0.014), [0.163, 0.29, 0]));
-    gL(xf(box(0.06, 0.12, 0.26), [0.168, 0.16, 0]));
-  });
-  // side pouches: IFAK / grenade
-  shaded(r, 0.96, () => {
-    gH(xf(rbox(0.08, 0.1, 0.05, 0.014), [0.02, 0.16, 0.2]), xf(rbox(0.06, 0.08, 0.05, 0.012), [0.06, 0.16, -0.2]));
-  });
+  const t = big ? 0.065 : 0.05;
+  const w = big ? 0.32 : 0.28;
+  g(xf(cylY(1, 1, big ? 0.24 : 0.18, 14, true), [0, big ? 0.17 : 0.19, 0], [0, 0, 0], [big ? 0.145 : 0.135, 1, big ? 0.192 : 0.186]));
+  g(xf(rbox(t, big ? 0.34 : 0.3, w, 0.02, 2), [0.118, 0.26, 0], [0, 0, -0.06]));
+  g(xf(box(t, big ? 0.34 : 0.3, w), [-0.122, 0.27, 0], [0, 0, 0.04]));
+  for (const sd of [1, -1]) g(xf(box(0.25, 0.024, 0.06), [0, 0.425, sd * 0.105]));
+  // mag pouches + admin
+  for (const z of [-0.08, 0, 0.08]) g(xf(rbox(0.05, 0.1, 0.07, 0.012), [0.163, 0.155, z]));
   if (big) {
     // 6B45-style collar and groin protector
-    r.add(chest, 'gear', xf(new THREE.TorusGeometry(0.115, 0.034, 6, 14, PI * 1.35), [-0.01, 0.44, 0], [PI / 2, 0, PI * 0.82], [0.95, 1.1, 1]));
-    g(xf(rbox(0.045, 0.14, 0.18, 0.02), [0.135, -0.06, 0], [0, 0, 0.1]));
+    g(xf(new THREE.TorusGeometry(0.105, 0.03, 5, 12, PI * 1.35), [-0.01, 0.44, 0], [PI / 2, 0, PI * 0.82], [0.95, 1.1, 1]));
+    g(xf(rbox(0.04, 0.13, 0.17, 0.02), [0.13, -0.06, 0], [0, 0, 0.1]));
   }
   // radio + antenna (left side)
-  r.addL(L_HI, chest, 'dark', xf(rbox(0.06, 0.13, 0.05, 0.012), [-0.04, 0.27, -0.215]));
-  r.addL(L0, chest, 'dark', xf(cylY(0.0035, 0.006, 0.42, 4), [-0.06, 0.53, -0.215], [0.1, 0, 0.05]));
-  // team ID panel on the chest plate (velcro patch)
-  r.add(chest, 'team', xf(box(0.014, 0.075, 0.17), [0.157, 0.355, 0], [0, 0, -0.06]));
+  r.add(chest, 'dark', xf(rbox(0.06, 0.12, 0.045, 0.01), [-0.04, 0.27, -0.2]), xf(cylY(0.0035, 0.006, 0.42, 4), [-0.06, 0.53, -0.2], [0.1, 0, 0.05]));
+  // team ID patch on the chest
+  r.add(chest, 'team', xf(box(0.014, 0.115, 0.23), [0.15, 0.33, 0], [0, 0, -0.06]));
 }
 
 function backpack(r: Rig, chest: THREE.Bone, kit: Kit, pack: PackKind, p: string) {
   const g = (...gs: G[]) => r.add(chest, 'gear', ...gs);
-  /** Team-colour lid on top of the pack (readable from the RTS camera) and a small marker panel on its back. */
-  const lid = (x: number, y: number, w: number, d: number) => {
-    r.add(chest, 'team', xf(rbox(w, 0.03, d, 0.012), [x, y, 0]));
-    r.addL(L_HI, chest, 'team', xf(box(0.014, 0.06, d * 0.6), [x - w / 2 - 0.004, y - 0.06, 0]));
-  };
-  const assault = (x: number, y: number, w: number, h: number, d: number) => {
-    hiLo(r, chest, 'gear', xf(rbox(w, h, d, 0.05, 2), [x, y, 0]), xf(box(w, h, d), [x, y, 0]));
-    shaded(r, 0.9, () => r.addL(L_HI, chest, 'gear', xf(rbox(0.05, h * 0.45, d * 0.75, 0.014), [x - w / 2 - 0.02, y - h * 0.18, 0])));
-    shaded(r, 0.85, () => r.addL(L0, chest, 'gear', xf(box(0.02, h * 0.9, 0.03), [x - w / 2 - 0.005, y, d * 0.3]), xf(box(0.02, h * 0.9, 0.03), [x - w / 2 - 0.005, y, -d * 0.3])));
-    lid(x - 0.005, y + h / 2 + 0.005, w * 0.95, d * 0.95);
-  };
+  const teamBack = (x: number, y: number) => r.add(chest, 'team', xf(box(0.014, 0.12, 0.23), [x, y, 0]), xf(box(0.08, 0.014, 0.2), [x + 0.04, y + 0.115, 0]));
   switch (pack) {
     case 'assault':
     case 'rpg': {
-      assault(-0.225, 0.25, 0.16, 0.33, 0.28);
+      g(xf(rbox(0.15, 0.32, 0.27, 0.045, 2), [-0.215, 0.25, 0]), xf(box(0.05, 0.14, 0.2), [-0.3, 0.2, 0]));
+      teamBack(-0.296, 0.355);
       if (pack === 'rpg') {
-        for (const z of [-0.07, 0.07]) {
-          r.add(chest, 'tube', xf(cylY(0.045, 0.045, 0.13, 8), [-0.21, 0.48, z]), xf(cylY(0.006, 0.045, 0.14, 8), [-0.21, 0.615, z]));
+        for (const z of [-0.065, 0.065]) {
+          r.add(chest, 'tube', xf(cylY(0.042, 0.042, 0.13, 8), [-0.2, 0.47, z]), xf(cylY(0.006, 0.042, 0.13, 8), [-0.2, 0.6, z]));
         }
       }
       break;
     }
     case 'tool': {
-      assault(-0.215, 0.26, 0.14, 0.29, 0.26);
+      g(xf(rbox(0.13, 0.28, 0.25, 0.04, 2), [-0.21, 0.26, 0]));
+      teamBack(-0.28, 0.33);
       // slung carbine across the back
       const { parts } = rifleGeo(kit.rifle, true);
-      for (const [mk, geo] of parts) r.add(chest, mk, xf(geo, [-0.31, 0.25, 0], [PI / 2, 0, 0.75], [1, 1.12, 1.25]));
+      for (const [mk, geo] of parts) r.add(chest, mk, xf(geo, [-0.3, 0.25, 0], [PI / 2, 0, 0.75]));
       break;
     }
     case 'radio': {
-      assault(-0.215, 0.26, 0.14, 0.29, 0.26);
-      r.add(chest, 'dark', xf(rbox(0.06, 0.16, 0.12, 0.012), [-0.3, 0.3, -0.04]), xf(cylY(0.004, 0.007, 0.6, 4), [-0.29, 0.66, -0.08], [0.12, 0, 0.1]));
+      g(xf(rbox(0.13, 0.28, 0.25, 0.04, 2), [-0.21, 0.26, 0]));
+      r.add(chest, 'dark', xf(rbox(0.06, 0.16, 0.12, 0.01), [-0.29, 0.3, -0.04]), xf(cylY(0.004, 0.007, 0.6, 4), [-0.28, 0.66, -0.08], [0.12, 0, 0.1]));
+      teamBack(-0.275, 0.24);
       break;
     }
     case 'bombbag': {
-      hiLo(r, chest, 'gear', xf(rbox(0.17, 0.31, 0.29, 0.045, 2), [-0.225, 0.24, 0]), xf(box(0.17, 0.31, 0.29), [-0.225, 0.24, 0]));
-      for (const z of [-0.08, 0, 0.08]) r.add(chest, 'tube', xf(cylY(0.032, 0.032, 0.12, 6), [-0.225, 0.44, z]), xf(cylY(0.012, 0.032, 0.04, 6), [-0.225, 0.52, z]));
-      lid(-0.23, 0.39, 0.16, 0.26);
+      g(xf(rbox(0.16, 0.3, 0.28, 0.04, 2), [-0.22, 0.24, 0]));
+      for (const z of [-0.08, 0, 0.08]) r.add(chest, 'tube', xf(cylY(0.03, 0.03, 0.12, 6), [-0.22, 0.43, z]), xf(cylY(0.012, 0.03, 0.04, 6), [-0.22, 0.51, z]));
+      teamBack(-0.303, 0.3);
       break;
     }
     case 'jammer': {
       // big backpack jammer: frame + RF box with fins
       g(xf(rbox(0.07, 0.42, 0.28, 0.02), [-0.17, 0.27, 0]));
       r.add(chest, 'dark', xf(rbox(0.17, 0.4, 0.3, 0.025, 2), [-0.29, 0.27, 0]));
-      for (const y of [0.13, 0.19, 0.25, 0.31, 0.37]) r.addL(L_HI, chest, 'gun', xf(box(0.02, 0.012, 0.26), [-0.385, y, 0]));
+      for (const y of [0.13, 0.19, 0.25, 0.31, 0.37]) r.add(chest, 'gun', xf(box(0.02, 0.012, 0.26), [-0.385, y, 0]));
       r.add(chest, 'gun', xf(rbox(0.13, 0.06, 0.26, 0.012), [-0.29, 0.5, 0]));
-      r.add(chest, 'team', xf(box(0.014, 0.12, 0.23), [-0.385, 0.44, 0]), xf(box(0.08, 0.014, 0.2), [-0.345, 0.555, 0]));
+      teamBack(-0.385, 0.44);
       // antenna cluster on its own bone so it can sway
       const ant = r.bone(p + 'ant', chest, -0.29, 0.53 - CH, 0);
       const tips: V3[] = [
@@ -1223,27 +926,28 @@ function backpack(r: Rig, chest: THREE.Bone, kit: Kit, pack: PackKind, p: string
         [0.06, 0.5, -0.04],
       ];
       for (const [i, t] of tips.entries()) {
-        r.add(ant, 'dark', strut([t[0] * 0.05, 0.0, t[2] * 0.6], t, i === 3 ? 0.009 : 0.006, 4));
-        r.add(ant, 'dark', xf(cylY(0.015, 0.015, 0.04, 6), [t[0] * 0.05, 0.02, t[2] * 0.6]));
+        r.add(ant, 'dark', strut([t[0] * 0.05, 0.0, t[2] * 0.6], t, i === 3 ? 0.008 : 0.005, 4));
+        r.add(ant, 'dark', xf(cylY(0.014, 0.014, 0.04, 6), [t[0] * 0.05, 0.02, t[2] * 0.6]));
       }
       r.add(ant, 'glow', xf(sph(0.03, 0.03, 0.03, 6, 4), [0.06, 0.0, 0.1]), xf(sph(0.022, 0.022, 0.022, 6, 4), [0.06, 0.0, -0.1]), xf(box(0.008, 0.05, 0.2), [0.116, -0.05, 0]));
       for (const [i, t] of tips.entries()) r.point(p + 'tip' + i, ant, t);
       break;
     }
     case 'drone': {
-      assault(-0.215, 0.25, 0.14, 0.31, 0.27);
+      g(xf(rbox(0.13, 0.3, 0.26, 0.04, 2), [-0.21, 0.25, 0]));
+      teamBack(-0.28, 0.4);
       // quadcopter strapped flat against the pack (own bone: hidden after launch)
-      const dr = r.bone(p + 'drone', chest, -0.33, 0.27 - CH, 0);
+      const dr = r.bone(p + 'drone', chest, -0.32, 0.27 - CH, 0);
       r.add(dr, 'dark', xf(rbox(0.05, 0.1, 0.09, 0.015), [0, 0, 0]));
-      for (const a of [PI / 4, -PI / 4]) r.add(dr, 'dark', xf(box(0.02, 0.32, 0.027), [-0.005, 0, 0], [a, 0, 0]));
+      for (const a of [PI / 4, -PI / 4]) r.add(dr, 'dark', xf(box(0.018, 0.32, 0.025), [-0.005, 0, 0], [a, 0, 0]));
       for (const [y, z] of [
         [0.14, 0.14],
         [0.14, -0.14],
         [-0.14, 0.14],
         [-0.14, -0.14],
       ] as const) {
-        r.addL(L_HI, dr, 'gun', xf(cylX(0.02, 0.02, 0.04, 6), [-0.03, y * 0.8, z * 0.8]));
-        r.add(dr, 'dark', xf(cylX(0.062, 0.062, 0.005, 10), [-0.055, y * 0.8, z * 0.8]));
+        r.add(dr, 'gun', xf(cylX(0.02, 0.02, 0.04, 6), [-0.03, y * 0.8, z * 0.8]));
+        r.add(dr, 'dark', xf(cylX(0.06, 0.06, 0.004, 10), [-0.055, y * 0.8, z * 0.8]));
       }
       r.add(dr, 'tube', xf(cylY(0.03, 0.03, 0.13, 8), [-0.03, -0.1, 0]), xf(cylY(0.006, 0.03, 0.06, 8), [-0.03, -0.195, 0], [PI, 0, 0]));
       r.add(dr, 'team', xf(box(0.01, 0.05, 0.06), [-0.03, 0.04, 0]));
@@ -1269,18 +973,14 @@ interface Tpl {
   tris: number;
 }
 
-const RIFLE_K: V3 = [1, 1.12, 1.3];
-
 /** Adds the weapon bone + geometry for a soldier; returns weapon info and muzzle name. */
 function arm(r: Rig, b: Body, p: string, kind: 'rifle' | 'carbine' | AtKind | 'controller', kit: Kit, muzzles: string[]): WInfo {
   const wpn = r.bone(p + 'wpn', b.chest, 0.3, 0.2 - CH, 0.12);
   if (kind === 'rifle' || kind === 'carbine') {
-    // a touch chunkier than life (cross-section only) so the rifle reads at phone zoom
     const g = rifleGeo(kit.rifle, kind === 'carbine');
-    for (const [mk, geo] of g.parts) r.add(wpn, mk, xf(geo, [0, 0, 0], [0, 0, 0], RIFLE_K));
-    r.point(p + 'muzzle0', wpn, [g.muzzle[0], g.muzzle[1] * RIFLE_K[1], 0]);
+    for (const [mk, geo] of g.parts) r.add(wpn, mk, geo);
+    r.point(p + 'muzzle0', wpn, g.muzzle);
     muzzles.push(p + 'muzzle0');
-    for (const v of [g.w.grip, g.w.fore, g.w.pivot]) v.y *= RIFLE_K[1];
     return g.w;
   }
   if (kind === 'controller') {
@@ -1411,13 +1111,12 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
     key,
     tris: 0,
   };
-  const pat = kit.camo.pattern;
-  r.uvs = { camo: pat === 'digital' ? 1.5 : pat === 'flecktarn' ? 1.9 : 2.3, gear: kit.gearTex === 'camo' ? (pat === 'digital' ? 1.8 : 2.2) : 3.5 };
   if (key === 'mortar') buildMortarTpl(r, kit, t);
   else buildSoldierTpl(r, kit, key, t);
   const glowColor = key === 'ewinf' ? 0x5dff7a : 0x63d8ff;
   const mats = materials(kit, style, fog, glowColor);
-  const { skel, tris } = r.finish(mats, t.sphere);
+  const pat = kit.camo.pattern;
+  const { skel, tris } = r.finish(mats, t.sphere, { camo: pat === 'digital' ? 1.5 : pat === 'flecktarn' ? 1.9 : 2.3, gear: kit.gearTex === 'camo' ? (pat === 'digital' ? 1.8 : 2.2) : 3.5 });
   t.skel = skel;
   t.tris = tris;
   t.top.traverse((o) => {
