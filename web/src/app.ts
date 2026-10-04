@@ -9,6 +9,8 @@ import { MainMenu, loadSettings, resolveQuality, showEndScreen, showPauseMenu, t
 import type { Splash } from './ui/splash';
 import { showAfterAction } from './ui/aar';
 import { isMapId } from './sim/maps';
+import { isPeaceOption } from './sim/peace';
+import { speedFactor } from './game/pace';
 import type { MapId } from './sim/map';
 
 /** The demo battle behind the menu never needs more than medium: it only has to look alive, not burn the battery. */
@@ -80,7 +82,7 @@ function showMainMenu(newDemo = true) {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map, liveSky: true });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map, liveSky: true, peace: s.peace ?? 'auto', gameSpeed: s.gameSpeed });
     },
     onSettings: (s) => {
       settings = s;
@@ -118,6 +120,7 @@ function startBattle(opts: GameOptions) {
           game?.setCinematic(s.cinematic);
           game?.setViewSettings({ droneCam: s.droneCam, xray: s.xray });
           game?.setControls(s.controls);
+          if (game) game.speed = speedFactor(s.gameSpeed);
         },
       });
     },
@@ -173,9 +176,11 @@ export async function boot(splash: Splash) {
     splash.dismiss();
   } else if (play) {
     const [f, e, d] = play.split(',');
+    // ?peace=auto|off|3|6|10|15 (default off: test sessions start fighting at once)
+    const peace = params.get('peace');
     // ?brief=0: no briefing / intro / outro; ?brief=1: the full sequence; default: quick briefing, no intro
     const brief = params.get('brief');
-    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls, map: urlMap() ?? settings.map });
+    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls, map: urlMap() ?? settings.map, peace: isPeaceOption(peace) ? peace : 'off', gameSpeed: settings.gameSpeed });
     const speed = Number(params.get('speed'));
     const g = game as Game | null;
     if (speed && g) g.speed = speed;

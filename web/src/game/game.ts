@@ -4,10 +4,12 @@ import { AIController, type Difficulty } from '../sim/ai';
 import { canGarrisonUnit, garrisonRoom } from '../sim/garrison';
 import { SW_INFO, type SwKind } from '../sim/specialdefs';
 import { SuperweaponAI } from '../sim/superweapons';
+import { peaceTicks, type PeaceOption } from '../sim/peace';
+import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
@@ -56,6 +58,10 @@ export interface GameOptions {
    * weather (render/atmos.ts ATMOS_DEFAULTS). Test URLs leave it off and keep the plain day.
    */
   liveSky?: boolean;
+  /** Early-game grace before the AI attacks (sim/peace.ts; default 'off': test URLs / demo battles). */
+  peace?: PeaceOption;
+  /** Game speed: simulation ticks per real second (game/pace.ts; default normal). */
+  gameSpeed?: GameSpeed;
 }
 
 export interface GameCallbacks {
@@ -76,11 +82,16 @@ export class Game {
   private local: number;
   private raf = 0;
   private last = 0;
-  private acc = 0;
+  /** Fixed-step accumulator (pace.ts). */
+  private pacer = new TickPacer();
   private hudTimer = 0;
   private mmTimer = 0;
   paused = false;
+  /** Tick-rate multiplier (game speed setting, pace.ts): never changes what a tick does, only how often one runs. */
   speed = 1;
+  /** Early-game grace: the enemy AI launches no attack before this tick (0 = none; sim/peace.ts). */
+  readonly peaceUntil: number;
+  private peaceTold = 0;
   private mode: Mode = 'normal';
   private placing: string | null = null;
   /** Control groups, stance / patrol / guard order modes (src/game/controls.ts) and their widgets. */
@@ -146,10 +157,14 @@ export class Game {
     });
     this.local = attract ? -1 : 0;
     this.ctl = new ControlGroups(this.controlsHost());
+    this.speed = speedFactor(opts.gameSpeed);
+    // early-game grace (peace.ts): the enemy builds up and defends, but sends nothing at the player until it ends
+    const peace = attract ? 0 : peaceTicks(opts.difficulty, opts.peace ?? 'off');
+    this.peaceUntil = peace;
     if (attract) this.world.controllers.push(new AIController(this.world, 0, 'hard'));
-    this.world.controllers.push(new AIController(this.world, 1, attract ? 'hard' : opts.difficulty));
+    this.world.controllers.push(new AIController(this.world, 1, attract ? 'hard' : opts.difficulty, { peaceTicks: peace }));
     // superweapon builder / user (superweapons.ts)
-    for (const p of this.world.players) if (p.isAI) this.world.controllers.push(new SuperweaponAI(this.world, p.id));
+    for (const p of this.world.players) if (p.isAI) this.world.controllers.push(new SuperweaponAI(this.world, p.id, { peaceTicks: peace }));
 
     this.hud = new Hud(container, this.cameos, {
       onCameo: (id, cat, shift) => this.onCameo(id, cat, shift),
@@ -173,6 +188,7 @@ export class Game {
     ATMOS_DEFAULTS.live = !!opts.liveSky && !attract;
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
+    this.hud.peace.setUntil(this.peaceUntil);
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
     // positional audio: the camera is the listener (src/audio/scene.ts)
     this.audio.setNation(attract ? null : opts.faction);
@@ -335,7 +351,7 @@ export class Game {
   /** Control to the player: the simulation starts now. */
   private startBattleClock() {
     this.last = performance.now();
-    this.acc = 0;
+    this.pacer.reset();
     this.startTime = performance.now();
     this.audio.say('Battle control online');
   }
@@ -467,17 +483,15 @@ export class Game {
     this.hud.setCinematic(this.cine.active);
     const ts = this.cine.timeScale * (this.outro ? this.outro.timeScale : 1);
     if (!this.paused) {
-      this.acc += dt * 1000 * this.speed * ts;
-      let steps = 0;
-      while (this.acc >= TICK_MS && steps < 6) {
+      // game speed scales the tick rate only (pace.ts): every tick is the same deterministic step
+      const steps = this.pacer.advance(dt, this.speed * ts);
+      for (let i = 0; i < steps; i++) {
         this.world.step();
-        this.acc -= TICK_MS;
-        steps++;
         for (const ev of this.world.drainEvents()) this.onEvent(ev);
       }
-      if (steps >= 6) this.acc = 0;
+      if (steps) this.checkPeace();
     }
-    const alpha = this.paused ? 1 : Math.min(1, this.acc / TICK_MS);
+    const alpha = this.paused ? 1 : this.pacer.alpha;
     this.tracker?.update();
     if (!this.cine.active && !this.photo.active && !this.outro) this.updateCamera(dt);
     if (this.local >= 0 && !this.photo.active) this.updateHover();
@@ -751,6 +765,19 @@ export class Game {
       case 'gameOver':
         this.finish(ev.winner === this.local);
         break;
+    }
+  }
+
+  /** Early-game grace announcements: one minute left, then the end ("Enemy forces are mobilising"). */
+  private checkPeace() {
+    if (!this.peaceUntil || this.peaceTold >= 2 || this.local < 0) return;
+    const t = this.world.tick;
+    if (this.peaceTold === 0 && t >= this.peaceUntil - 60 * TPS && t < this.peaceUntil) {
+      this.peaceTold = 1;
+      this.hud.message('Peace time ends in 1 minute', 'info');
+    } else if (t >= this.peaceUntil) {
+      this.peaceTold = 2;
+      this.say('Enemy forces are mobilising', 'warn');
     }
   }
 

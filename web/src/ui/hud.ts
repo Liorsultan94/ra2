@@ -14,6 +14,7 @@ import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
 import { HudClock } from './clock';
+import { PeaceChip } from './peace';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -135,6 +136,8 @@ export class Hud {
   private viewCtrl!: HTMLElement;
   /** Live day clock (top right of the view; clock.ts). */
   readonly clock: HudClock;
+  /** Early-game grace countdown under the clock (peace.ts). */
+  readonly peace: PeaceChip;
   private toolsRow!: HTMLElement;
   private cmdKey = '';
   private selHtml = '';
@@ -180,6 +183,7 @@ export class Hud {
     // the live day clock leads the view buttons row (simple HUD: alone in the corner, see setSimple)
     this.clock = new HudClock(vc);
     vc.prepend(this.clock.el);
+    this.peace = new PeaceChip(this.viewWrap);
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -528,6 +532,7 @@ export class Hud {
     this.updateSelection();
     this.support.update();
     this.clock.update(dt, this.renderer?.atmos);
+    this.peace.update(w.tick);
     this.superweapons.update();
   }
 
