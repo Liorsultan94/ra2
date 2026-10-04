@@ -9,6 +9,7 @@ import { drawFlag } from '../flags';
 import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
 import { atlasPatch, bldAtlas, netTexture, signCell, signTexture, Tile, type SignSpec } from './bldtex';
 import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
+import { registerLods } from '../perf/lod';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -1079,7 +1080,14 @@ class Kit {
   /** Merge everything into meshes. */
   finish() {
     for (const [obj, bin] of this.bins) {
-      for (const [m, list] of bin) {
+      for (const [m, src] of bin) {
+        // coarse parts first: the geometry LODs are prefixes of the merged buffer (perf/lod.ts swaps them)
+        const rad = new Map<THREE.BufferGeometry, number>();
+        for (const g of src) {
+          g.computeBoundingSphere();
+          rad.set(g, g.boundingSphere!.radius);
+        }
+        const list = src.length > 1 ? [...src].sort((a, b) => rad.get(b)! - rad.get(a)!) : src;
         let geo: THREE.BufferGeometry | null = null;
         try {
           geo = list.length === 1 ? list[0] : mergeGeometries(list, false);
@@ -1089,6 +1097,21 @@ class Kit {
         if (!geo) continue;
         if (list.length > 1) for (const g of list) g.dispose();
         geo.computeBoundingSphere();
+        if (obj !== this.detail && list.length > 1) {
+          let n1 = 0;
+          let n2 = 0;
+          for (const g of list) {
+            const r = rad.get(g)!;
+            const c = g.attributes.position.count;
+            if (r >= LOD1_R) n1 += c;
+            if (r >= LOD2_R) n2 += c;
+          }
+          const n = geo.attributes.position.count;
+          lodStats.tris += n / 3;
+          lodStats.lod1 += n1 / 3;
+          lodStats.lod2 += n2 / 3;
+          if (n1 < n * 0.97 && n > 600) registerLods(geo, [lodPrefix(geo, n1), lodPrefix(geo, n2)]);
+        }
         const mesh = new THREE.Mesh(geo, m);
         const sm = m as SMat;
         const isGlow = (!!sm.userData.baseEI || !!sm.userData.blinkEI) && !sm.map;
@@ -1294,6 +1317,28 @@ class Kit {
     this.on(o, () => this.sph(this.P.red_l, r, 0, 0, 0, 8, 6));
     this.specs.push({ k: 'blink', n, per, on: 0.45, p });
   }
+}
+
+/**
+ * Geometry LODs of the merged building meshes (perf/lod.ts picks them from the on-screen size, like the
+ * vehicles): LOD1 (battle zoom) leaves out the small fittings (bolts, brackets, lamps' housings, rails),
+ * LOD2 (far) keeps the silhouette parts only. The parts are merged coarse-first, so a LOD is an index
+ * prefix sharing the full buffer's attributes (no extra vertex memory).
+ */
+const LOD1_R = 0.06;
+const LOD2_R = 0.16;
+/** Merged / LOD1 / LOD2 triangle totals of every building template built so far (debug / perf report). */
+export const lodStats = { tris: 0, lod1: 0, lod2: 0 };
+(globalThis as { __bldLod?: typeof lodStats }).__bldLod = lodStats;
+function lodPrefix(geo: THREE.BufferGeometry, n: number): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(geo.attributes)) g.setAttribute(name, a);
+  const idx = n > 65535 ? new Uint32Array(n) : new Uint16Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.boundingSphere = geo.boundingSphere;
+  g.name = geo.name;
+  return g;
 }
 
 function shapeOf(pts: P2[]): THREE.Shape {

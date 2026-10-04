@@ -9,6 +9,7 @@ import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
+import { buildRelief, reliefField, reliefHeight } from './relief';
 import { assetBase, fetchBitmap } from './photoground';
 
 /*
@@ -253,6 +254,8 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   };
   const geos = [pair(2, 11, { strata: 9, cuts: 7 }), pair(2, 23, { strata: 7, cuts: 6 }), pair(1, 41), pair(0, 61, { cuts: 3 })];
   const lists: Inst[][] = [[], [], [], []];
+  // cliff faces over the rock (relief.ts); off with ?relief=0
+  const relief = !(typeof location !== 'undefined' && /[?&]relief=0\b/.test(location.search)) && reliefField(m).count > 0;
   const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === Tile.Rock;
 
   for (let y = 0; y < m.h; y++) {
@@ -277,10 +280,12 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         const cx = x + 0.5 + (hash2(x, y, 1) - 0.5) * 0.4;
         const cz = y + 0.5 + (hash2(x, y, 2) - 0.5) * 0.4;
         const s = 0.3 + hash2(x, y, 3) * 0.22;
-        const h = groundHeight(m, cx, cz);
+        // on the relief's cliffs (relief.ts): crags along the crest, sunk deeper into the slope
+        const h = relief ? reliefHeight(m, cx, cz) : groundHeight(m, cx, cz);
+        if (relief && hash2(x, y, 15) < 0.35) continue;
         lists[hash2(x, y, 4) < 0.5 ? 0 : 1].push({
           x: cx,
-          y: h - s * 0.3,
+          y: h - s * (relief ? 0.45 : 0.3),
           z: cz,
           rotY: -ang + (hash2(x, y, 5) - 0.5) * 0.5,
           sx: s * 1.5,
@@ -290,11 +295,11 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
           tiltZ: (hash2(x, y, 8) - 0.5) * 0.3,
         });
         // a second, smaller boulder
-        for (let j = 0; j < 2; j++) {
+        for (let j = 0; j < (relief ? 1 : 2); j++) {
           const bx = x + hash2(x, y, 10 + j * 7);
           const bz = y + hash2(x, y, 11 + j * 7);
           const bs = 0.14 + hash2(x, y, 12 + j * 7) * 0.16;
-          lists[2].push({ x: bx, y: groundHeight(m, bx, bz) - bs * 0.2, z: bz, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
+          lists[2].push({ x: bx, y: (relief ? reliefHeight(m, bx, bz) - bs * 0.35 : groundHeight(m, bx, bz) - bs * 0.2), z: bz, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
         }
         continue;
       }
@@ -330,7 +335,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       }
     }
   }
-  const out: THREE.Object3D[] = [];
+  const out: THREE.Object3D[] = relief ? buildRelief(m, fog, quality, lod) : [];
   const meshes: THREE.InstancedMesh[] = [];
   const loSpan = quality === 'high' ? 19 : 14.5;
   geos.forEach(([hi, lo], k) => {
