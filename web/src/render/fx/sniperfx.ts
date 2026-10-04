@@ -93,8 +93,8 @@ uniform float uLen;
 varying vec2 vUv;
 void main() {
   float v = abs(vUv.y - 0.5) * 2.0; // 0 centre .. 1 edge
-  float core = 1.0 - smoothstep(0.0, 0.18, v);
-  float glow = exp(-v * 3.5) * 0.6;
+  float core = 1.0 - smoothstep(0.0, 0.2, v);
+  float glow = exp(-v * 2.4) * 0.75 * (1.0 - smoothstep(0.7, 1.0, v));
   // dust in the beam: faint travelling sparkle; ends fade in / out
   float motes = 0.82 + 0.18 * sin(vUv.x * uLen * 37.0 - uTime * 7.0) * sin(vUv.x * uLen * 11.0 + uTime * 3.0);
   float ends = smoothstep(0.0, 0.03, vUv.x) * (0.55 + 0.45 * smoothstep(1.0, 0.85, vUv.x));
@@ -176,8 +176,7 @@ export class SniperFx {
     // crisp flash (white-hot, small), a faint tracer, dust kicked up by the muzzle blast
     fx.muzzle(a, dir, 0.55, 0xfff4d8);
     fx.flashLight(a.x, a.y, a.z, 2.2, 0xfff0d0, 0.06);
-    fx.beam(a, tp, 0xfff2d8, 0.01, 0.1);
-    fx.beam(a, tp, 0xffd9a0, 0.028, 0.06);
+    fx.beam(a, tp, 0xfff2d8, 0.005, 0.08);
     if (src.inside < 0) fx.dust(a.x + dir.x * 0.25, standHeight(w.map, a.x, a.z), a.z + dir.z * 0.25, 0.55);
     // the hit: a puff on the target (sparks off armour)
     const armoured = t && t.kind === 'unit' && unitDef(t.def).category !== 'infantry';
@@ -328,7 +327,7 @@ export class SniperFx {
     if (this.side.lengthSq() < 1e-8) this.side.set(0, 1, 0);
     this.side.normalize();
     const px = this.pxAt(mid);
-    const width = Math.max(0.05, px * 6); // thin, but never under ~6 px of glow (core ~1 px)
+    const width = Math.max(0.06, px * 8); // thin, but never under ~8 px of glow (core ~1.5 px)
     this.nrm.crossVectors(this.fwd, this.side).normalize();
     this.m4.makeBasis(this.fwd.clone().multiplyScalar(len), this.side.clone().multiplyScalar(width), this.nrm);
     this.m4.setPosition(a);
@@ -336,20 +335,20 @@ export class SniperFx {
     l.beam.matrixWorldNeedsUpdate = true;
     const u = l.mat.uniforms;
     (u.uColor.value as THREE.Color).copy(this.color);
-    u.uOpacity.value = 0.85 * l.fade;
+    u.uOpacity.value = l.fade;
     u.uTime.value = this.time;
     u.uLen.value = len;
     // the dot: a hot core and a soft halo, a constant few pixels whatever the zoom
     const pd = this.pxAt(b);
     const flick = 0.92 + 0.08 * Math.sin(this.time * 37 + l.seed * 20);
-    const ds = Math.max(0.09, pd * 13) * (0.85 + 0.15 * bright);
+    const ds = Math.max(0.1, pd * 15) * (0.85 + 0.15 * bright);
     l.dot.position.copy(b);
     l.dot.scale.set(ds, ds, 1);
     l.dotMat.color.copy(this.color).lerp(WHITE, 0.45).multiplyScalar(2.2 * l.fade * flick * bright);
     l.halo.position.copy(b);
-    const hs = Math.max(0.24, pd * 34);
+    const hs = Math.max(0.3, pd * 42);
     l.halo.scale.set(hs, hs, 1);
-    l.haloMat.color.copy(this.color).multiplyScalar(0.9 * l.fade * bright);
+    l.haloMat.color.copy(this.color).multiplyScalar(1.3 * l.fade * bright);
   }
 
   dispose() {
