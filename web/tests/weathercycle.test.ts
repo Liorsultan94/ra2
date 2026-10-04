@@ -54,3 +54,54 @@ describe('dynamic weather timeline', () => {
     }
   });
 });
+
+describe('desert sandstorm', () => {
+  const HOUR = 60; // game seconds per game hour (1 real minute at 1x)
+  const firstDust = (seed: number) => {
+    const w = new WeatherCycle(seed, { climate: 'desert' });
+    w.at(24 * HOUR);
+    return { w, e: w.events.find((e) => e.kind === 'dust')! };
+  };
+
+  it('comes at a random (seeded, deterministic) hour, not always in the morning', () => {
+    const starts: number[] = [];
+    for (let seed = 1; seed <= 60; seed++) {
+      const { e } = firstDust(seed * 7919);
+      expect(e).toBeTruthy();
+      starts.push(e.start / HOUR + 5.5);
+      // deterministic: the same seed lays out the same storm
+      expect(firstDust(seed * 7919).e.start).toBe(e.start);
+    }
+    const lo = Math.min(...starts);
+    const hi = Math.max(...starts);
+    // spread over most of the day (old timeline: always 07:00 .. 09:30)
+    expect(hi - lo).toBeGreaterThan(6);
+    expect(starts.filter((h) => h > 11).length).toBeGreaterThan(15);
+  });
+
+  it('blows for about 30 s (half a game hour), fading in and out gradually, as a thin haze', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const { w, e } = firstDust(seed * 104729);
+      let on = 0;
+      let prev = 0;
+      let maxStep = 0;
+      let peak = 0;
+      let cover = 0;
+      for (let t = e.start - 5; t < w.end(e) + 5; t += 0.25) {
+        const s = w.at(t);
+        if (s.fall === 'sandstorm' && s.precip > 0.05) on += 0.25;
+        maxStep = Math.max(maxStep, Math.abs(s.precip - prev));
+        prev = s.precip;
+        peak = Math.max(peak, s.precip);
+        cover = Math.max(cover, s.cover);
+      }
+      expect(on).toBeGreaterThan(18);
+      expect(on).toBeLessThan(42);
+      expect(peak).toBeGreaterThan(0.6);
+      // gradual: no jumps (a quarter second never moves the intensity by more than 8%)
+      expect(maxStep).toBeLessThan(0.08);
+      // a sandy haze, not a dark overcast front
+      expect(cover).toBeLessThanOrEqual(0.35);
+    }
+  });
+});

@@ -335,18 +335,126 @@ function applyWeather(p: Preset, weather: Weather, light: number) {
     p.water.multiplyScalar(0.9);
     p.dark = Math.min(1, p.dark + 0.15);
   } else if (weather === 'sandstorm') {
-    p.sunI *= 0.42;
-    mixC(p.sunC, 0xffa860, 0.6);
-    mixC(p.sky, 0xc49a64, 0.7);
-    mixC(p.gnd, 0x7a5530, 0.6);
-    p.haze.setRGB(0.58, 0.4, 0.22).multiplyScalar(Math.max(0.12, light));
-    p.hazeP.set(0, 30, 0.8, 40);
-    p.cloud = 0;
-    p.sat *= 0.9;
-    p.highTint.set(0.05, 0.02, -0.04);
-    p.water.multiplyScalar(0.85);
-    p.dark = Math.min(1, p.dark + 0.3);
+    // blowing sand: a warm, bright, sand-coloured veil, NOT a dark front. The airborne sand scatters the sun
+    // all around (a softer key, a stronger warm sky fill) and tints the distance; the view stays daylight-bright
+    // (the grade warms it towards the sand colour: post/grade.ts 'sand').
+    p.sunI *= 0.72;
+    mixC(p.sunC, 0xffd6a0, 0.5);
+    mixC(p.sky, 0xe0c08c, 0.6);
+    mixC(p.gnd, 0xa07a4a, 0.45);
+    p.hemiI *= 1.18;
+    p.env *= 0.9;
+    p.haze.setRGB(0.8, 0.63, 0.42).multiplyScalar(Math.max(0.15, light));
+    p.hazeP.set(2, 64, 0.44, 46);
+    p.cloud = 0.04;
+    p.sat *= 0.95;
+    p.highTint.set(0.05, 0.026, -0.04);
+    p.water.multiplyScalar(0.92);
+    p.exposure *= 1.04;
   }
+}
+
+const lum = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+
+/** Rough ground illuminance of a preset (key light at elevation sine `sunY` + sky / ground fill), for the weather floor. */
+export function lightLevel(p: Pick<Preset, 'sunI' | 'sunC' | 'hemiI' | 'sky' | 'gnd'>, sunY: number): number {
+  return p.sunI * lum(p.sunC) * Math.max(0.15, sunY) + p.hemiI * 0.5 * (lum(p.sky) + lum(p.gnd));
+}
+
+/**
+ * Weather never drives the daytime into darkness: like the eye (or a camera's auto exposure) adapting under
+ * an overcast sky, the exposure opens up (at most 1.45x) when clouds, rain or dust take the light below a floor
+ * (72% of the clear-sky level by day, 60% in a thunderstorm), and the soft sky fill makes up the rest. The
+ * weather keeps its look (flat grey light, soft shadows, the grade), the battlefield stays readable. By night
+ * (daylight < ~0.35) the floor fades out: a stormy night may be dark. `clear` = lightLevel * exposure of the
+ * clear-sky preset of this frame.
+ */
+export function weatherFloor(p: Preset, clear: number, sunY: number, daylight: number, storm = 0) {
+  const day = sstep(0.3, 0.75, daylight);
+  if (day <= 0 || !(clear > 0)) return;
+  const want = clear * (0.72 - 0.12 * Math.min(1, storm)) * day;
+  const have = lightLevel(p, sunY) * p.exposure;
+  if (!(have > 0) || have >= want) return;
+  // the eye adapts first (exposure, at most 1.45x) ...
+  const ex = Math.min(1.45, Math.sqrt(want / have));
+  p.exposure *= ex;
+  // ... then the diffuse sky light under the cloud deck fills in (flat light), then a little of the veiled sun
+  const need = want / p.exposure;
+  const sun = p.sunI * lum(p.sunC) * Math.max(0.15, sunY);
+  const fill = lightLevel(p, sunY) - sun;
+  if (fill > 1e-4 && sun + fill < need) p.hemiI *= Math.min(3, (need - sun) / fill);
+  const fill2 = lightLevel(p, sunY) - sun;
+  if (sun > 1e-4 && sun + fill2 < need) p.sunI *= Math.min(2.2, (need - fill2) / sun);
+}
+
+const fin = (x: number, lo: number, hi: number, d: number) => (Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d);
+function saneRGB(c: THREE.Color, d: THREE.Color, hi = 4): boolean {
+  if (!Number.isFinite(c.r + c.g + c.b)) {
+    c.copy(d);
+    return true;
+  }
+  c.setRGB(fin(c.r, 0, hi, d.r), fin(c.g, 0, hi, d.g), fin(c.b, 0, hi, d.b));
+  return false;
+}
+function saneVec<V extends THREE.Vector3 | THREE.Vector4>(v: V, d: V, lo: number, hi: number): boolean {
+  const a = v.toArray() as number[];
+  if (a.every((x) => Number.isFinite(x))) {
+    v.fromArray(a.map((x) => Math.min(hi, Math.max(lo, x))));
+    return false;
+  }
+  (v as THREE.Vector4).copy(d as THREE.Vector4);
+  return true;
+}
+
+/** Clear-day fallback for the hard guards (a broken value falls back to this, never to black). */
+let SAFE: Preset | null = null;
+
+/**
+ * Hard guard on everything the atmosphere hands to the renderer: non-finite values (NaN / Infinity from a
+ * degenerate blend) fall back to the clear day, finite ones are clamped to sane ranges. The sky fill and the
+ * exposure have floors, so whatever the clock or the weather does the view can never go fully black.
+ * Returns true when something had to be repaired (not just clamped).
+ */
+export function sanitizePreset(p: Preset): boolean {
+  const d = (SAFE ??= todPreset('day').p);
+  let bad = false;
+  for (const x of [p.sunI, p.hemiI, p.env, p.exposure, p.sat, p.vignette, p.bloom, p.cloud, p.spec, p.dark]) if (!Number.isFinite(x)) bad = true;
+  p.sunI = fin(p.sunI, 0, 10, d.sunI);
+  p.hemiI = fin(p.hemiI, 0.15, 6, d.hemiI);
+  p.env = fin(p.env, 0, 3, d.env);
+  p.exposure = fin(p.exposure, 0.7, 2.5, d.exposure);
+  p.sat = fin(p.sat, 0.2, 2, d.sat);
+  p.vignette = fin(p.vignette, 0, 0.9, d.vignette);
+  p.bloom = fin(p.bloom, 0, 2, d.bloom);
+  p.cloud = fin(p.cloud, 0, 1.6, d.cloud);
+  p.spec = fin(p.spec, 0, 2, d.spec);
+  p.dark = fin(p.dark, 0, 1, d.dark);
+  if (saneRGB(p.sunC, d.sunC)) bad = true;
+  if (saneRGB(p.sky, d.sky)) bad = true;
+  if (saneRGB(p.gnd, d.gnd)) bad = true;
+  if (saneRGB(p.haze, d.haze)) bad = true;
+  if (saneRGB(p.bg, d.bg)) bad = true;
+  if (saneVec(p.hazeP, d.hazeP, -50, 500)) bad = true;
+  p.hazeP.z = Math.min(0.9, Math.max(0, p.hazeP.z));
+  p.hazeP.w = Math.max(1, p.hazeP.w);
+  if (p.hazeP.y < p.hazeP.x + 1) p.hazeP.y = p.hazeP.x + 1;
+  if (saneVec(p.shadowTint, d.shadowTint, -0.2, 0.2)) bad = true;
+  if (saneVec(p.highTint, d.highTint, -0.2, 0.2)) bad = true;
+  if (saneVec(p.water, d.water, 0, 2)) bad = true;
+  return bad;
+}
+
+/** A usable key light direction (unit, above the horizon) in place, or the static day sun when `v` is degenerate. */
+export function saneSunDir(v: THREE.Vector3): THREE.Vector3 {
+  const l = v.length();
+  if (!Number.isFinite(l) || l < 1e-4) return v.copy(SUN_DIR_DAY);
+  v.divideScalar(l);
+  if (v.y < 0.02) {
+    // never below the horizon (a key light from underneath lights nothing)
+    const h = Math.hypot(v.x, v.z) || 1;
+    v.set((v.x / h) * Math.cos(0.02), Math.sin(0.02), (v.z / h) * Math.cos(0.02));
+  }
+  return v;
 }
 
 function buildPreset(cfg: AtmosConfig): Preset {
@@ -784,7 +892,8 @@ export class Atmosphere {
   /** Dynamic cycle: blend the lighting stops and move the sun / moon for this sim tick. */
   private blendCycle(tick: number) {
     const keys = this.keys!;
-    const u = this.phaseOverride !== null ? ((this.phaseOverride % 1) + 1) % 1 : hourToU(clockHours(tick, this.startHour));
+    let u = this.phaseOverride !== null ? ((this.phaseOverride % 1) + 1) % 1 : hourToU(clockHours(tick, this.startHour));
+    if (!Number.isFinite(u)) u = 0.2;
     this.phase = u;
     let i = Math.min(Math.max(1, this.keyI), keys.length - 1);
     if (u < keys[i - 1].u || u > keys[i].u) {
@@ -805,6 +914,7 @@ export class Atmosphere {
     const moon = u > MOON_RISE && u < MOON_SET;
     if (moon) pathAt(MOON_PATH, u, dir);
     else pathAt(SUN_PATH, u > MOON_SET ? u - 1 : u, dir);
+    saneSunDir(dir);
     // a low sun grazes the ground: give it back part of the lost irradiance so the map doesn't go dark too early
     // (capped at 1.5: dawn and evening stay a little darker than the day, with crisp long shadows)
     const comp = Math.max(1, moon ? Math.min(Math.min(1.8, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))), 1.3) : Math.min(1.5, Math.sqrt(Math.sin(THREE.MathUtils.degToRad(DAY_ELEV)) / Math.max(0.05, dir.y))));
@@ -817,6 +927,8 @@ export class Atmosphere {
     const a = this.altP!;
     const c = st.cover;
     const k = Math.max(c, st.precip);
+    const sunY = this.sunBase ? this.sunBase.y : SUN_DIR_DAY.y;
+    const clearLevel = lightLevel(p, sunY) * p.exposure;
     const cloud0 = p.cloud;
     lerpPreset(p, p, a, k);
     // broken cloud while it clouds over / clears: more drifting cloud shadows, then flat overcast light
@@ -831,6 +943,7 @@ export class Atmosphere {
       p.haze.multiplyScalar(1 - 0.3 * s);
       p.vignette += 0.06 * s;
     }
+    weatherFloor(p, clearLevel, sunY, this.keys ? this.light : this.baseLight, s);
   }
 
   private mistC = new THREE.Color();
@@ -840,6 +953,7 @@ export class Atmosphere {
     const lk = 0.16 + 0.84 * light;
     mc.setRGB(0.4, 0.42, 0.46).multiplyScalar(lk * (1 - 0.3 * cover));
     mc.lerp(this.mistC.copy(p.sunC).multiplyScalar(0.62 * lk), 0.2 * (1 - cover));
+    if (!Number.isFinite(mc.r + mc.g + mc.b)) mc.setRGB(0.4, 0.42, 0.46);
     WXM.mistAmount.value = mist;
     if (mist <= 0.001) return;
     p.haze.lerp(mc, 0.3 * mist);
@@ -935,7 +1049,8 @@ export class Atmosphere {
 
   /** Overall daylight of this frame, 0 (night) .. 1 (full day): drives the post-processing grade (post/grade.ts). */
   get daylight(): number {
-    return this.active && this.preset ? (this.keys ? this.light : this.baseLight) : 1;
+    const d = this.active && this.preset ? (this.keys ? this.light : this.baseLight) : 1;
+    return Number.isFinite(d) ? Math.min(1, Math.max(0, d)) : 1;
   }
 
   /**
@@ -994,8 +1109,12 @@ export class Atmosphere {
     }
   }
 
+  /** Frames whose lighting had to be repaired by the hard guard (debug / tests). */
+  repaired = 0;
+
   private applyPreset(p: Preset) {
     const h = this.host;
+    if (sanitizePreset(p)) this.repaired++;
     h.sun.color.copy(p.sunC);
     h.sun.intensity = p.sunI;
     h.hemi.color.copy(p.sky);
@@ -1056,6 +1175,8 @@ export class Atmosphere {
         if (this.alt && this.altP) lerpPreset(this.altP, this.alt[st?.fall ?? 'rain'], this.alt[st?.fall ?? 'rain'], 0);
       }
       if (st && this.altP) this.applyDynamic(p, st);
+      // hard guard before anything derives from the blend (mist colour, night lights, particles)
+      if (sanitizePreset(p)) this.repaired++;
       // ground fog: dawn in the cycle, the misty morning, after rain; strong wind tears it up
       let mist = 0;
       if (this.cfg.tod === 'mist') mist = morningMist(gt);
@@ -1142,9 +1263,11 @@ export class Atmosphere {
     }
     const wx = this.wx;
     if (wx) {
-      st.cover = Math.max(0.2, wx.cover, wx.precip);
+      // blowing sand turns the sky sandy and hazy, not into a grey overcast
+      const sand = wx.fall === 'sandstorm';
+      st.cover = Math.max(0.2, wx.cover, sand ? wx.precip * 0.45 : wx.precip);
       st.storm = wx.storm;
-      st.dust = wx.dust;
+      st.dust = sand ? Math.max(wx.dust, wx.precip * 0.9) : wx.dust;
     } else {
       const w = this.cfg.weather;
       st.cover = w === 'rain' ? 0.95 : w === 'snow' ? 0.85 : w === 'sandstorm' ? 0.55 : 0.28 + (p ? p.cloud : 0.32) * 0.6;

@@ -29,7 +29,8 @@ uniform float prefilter;
 uniform vec4 thr; // threshold, threshold - knee, 2 knee, 0.25 / knee
 varying vec2 vUv;
 float lum( vec3 c ) { return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ); }
-vec3 tap( vec2 o ) { return min( texture2D( tSrc, vUv + o * texel ).rgb, vec3( 256.0 ) ); }
+// (NaN / Inf from a broken pixel is dropped here: the mip chain would otherwise smear it over the whole frame)
+vec3 tap( vec2 o ) { vec3 c = texture2D( tSrc, vUv + o * texel ).rgb; return any( isnan( c ) ) ? vec3( 0.0 ) : min( c, vec3( 256.0 ) ); }
 vec3 soft( vec3 c ) {
   float br = max( c.r, max( c.g, c.b ) );
   float s = clamp( br - thr.y, 0.0, thr.z );
@@ -70,11 +71,12 @@ vec3 soft( vec3 c ) {
   s = s * s * thr.w;
   return c * ( max( s, br - thr.x ) / max( br, 1e-4 ) );
 }
+vec3 tap( vec2 o ) { vec3 c = texture2D( tSrc, vUv + o * texel ).rgb; return any( isnan( c ) ) ? vec3( 0.0 ) : min( c, vec3( 256.0 ) ); }
 void main() {
-  vec3 a = min( texture2D( tSrc, vUv + vec2( -1.0, -1.0 ) * texel ).rgb, vec3( 256.0 ) );
-  vec3 b = min( texture2D( tSrc, vUv + vec2( 1.0, -1.0 ) * texel ).rgb, vec3( 256.0 ) );
-  vec3 c = min( texture2D( tSrc, vUv + vec2( -1.0, 1.0 ) * texel ).rgb, vec3( 256.0 ) );
-  vec3 d = min( texture2D( tSrc, vUv + vec2( 1.0, 1.0 ) * texel ).rgb, vec3( 256.0 ) );
+  vec3 a = tap( vec2( -1.0, -1.0 ) );
+  vec3 b = tap( vec2( 1.0, -1.0 ) );
+  vec3 c = tap( vec2( -1.0, 1.0 ) );
+  vec3 d = tap( vec2( 1.0, 1.0 ) );
   vec3 o;
   if ( prefilter > 0.5 ) {
     float wa = 1.0 / ( 1.0 + lum( a ) ), wb = 1.0 / ( 1.0 + lum( b ) ), wc = 1.0 / ( 1.0 + lum( c ) ), wd = 1.0 / ( 1.0 + lum( d ) );

@@ -49,7 +49,7 @@ export class SupportPower {
   ) {
     const b = (this.btn = document.createElement('button'));
     b.className = 'tool-btn support-btn locked';
-    b.title = 'Airborne drop - paratroopers + supply pallet (needs a Drone Hub)';
+    b.title = 'Airborne drop - paratroopers + supply pallet (needs an Airbase)';
     b.innerHTML = `<svg class="sp-ring" viewBox="0 0 36 36"><circle class="sp-track" cx="18" cy="18" r="${RING_R}"/><circle class="sp-fill" cx="18" cy="18" r="${RING_R}" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"/></svg><svg class="sp-icon" viewBox="0 0 24 24" fill="currentColor">${ICON}</svg><span class="sp-time"></span>`;
     this.ring = b.querySelector('.sp-fill') as SVGCircleElement;
     this.timer = b.querySelector('.sp-time') as HTMLElement;
@@ -138,7 +138,7 @@ export class SupportPower {
     }
     const st = airdropStatus(this.host.world, this.host.player);
     if (!st.unlocked) {
-      this.host.message('Airborne drop needs a Drone Hub', 'warn');
+      this.host.message('Airborne drop needs an Airbase', 'warn');
       return;
     }
     if (!st.ready) {

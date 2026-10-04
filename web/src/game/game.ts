@@ -707,6 +707,12 @@ export class Game {
       case 'noFunds':
         if (mine) this.say('Insufficient funds', 'warn');
         break;
+      case 'sortie':
+        // jet sortie cycle (sim/airbase.ts): only the bad news is worth a voice line
+        if (mine && ev.what === 'orbit') this.say('Airbase lost - jets need a free pad', 'warn');
+        else if (mine && ev.what === 'divert') this.say('Jets diverting to another airbase', 'warn');
+        else if (mine && ev.what === 'crash') this.say('Jet lost with its airbase', 'warn');
+        break;
       case 'lowPower':
         if (mine) this.say('Low power', 'warn');
         break;

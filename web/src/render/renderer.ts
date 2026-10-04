@@ -25,7 +25,7 @@ import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { loadSkyEnvironment, type FinalPass } from './post';
 import { PostChain } from './post/chain';
-import type { GradeInput } from './post/grade';
+import { sanitizeGrade, type GradeInput } from './post/grade';
 import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
@@ -323,6 +323,19 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
+    // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
+    // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
+    this.onContextLost = (e: Event) => e.preventDefault();
+    this.onContextRestored = () => {
+      this.post?.lut.invalidate();
+      this.sky?.invalidate();
+      // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
+      this.terrain.ground.photo?.restore();
+      this.shadowAge = 1e9;
+    };
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
     // (the post chain tone maps itself, AgX + grade LUT; this only covers direct-to-screen frames)
     this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -618,6 +631,8 @@ export class GameRenderer {
       if (pd) pc.setDof(dist * Math.pow(2, (pd.focus - 0.5) * 3.2), pd.amount);
       else pc.setDof(dist, this.cinematicDof);
     } else pc.setDof(20, 0);
+    // hard guard: never hand NaN to the grade (a NaN look bakes a black LUT)
+    sanitizeGrade(g);
     pc.update(dt, g);
   }
 
@@ -704,6 +719,8 @@ export class GameRenderer {
     // the sun turns with the view so the scene is always lit from the upper left of the screen
     // (the dynamic day / night cycle moves the sun and moon across the sky: atmos.sunBase)
     this.sunDir.copy(this.atmos?.sunBase ?? SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    // hard guard: a degenerate key light (NaN / zero) would turn every lit pixel NaN, i.e. a black screen
+    if (!Number.isFinite(this.sunDir.x + this.sunDir.y + this.sunDir.z) || this.sunDir.lengthSq() < 1e-8) this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, Number.isFinite(this.yaw) ? -this.yaw : 0);
     this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
     this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
     const D = this.camDir;
@@ -1007,6 +1024,53 @@ export class GameRenderer {
   private castSphere = new THREE.Sphere();
   private occlFrame = 0;
 
+  /**
+   * Height of a building's ground slab. The airbase (7 x 4) sits level on the highest ground under it,
+   * its concrete skirt hiding the slope (a centre sample would let bumps poke through the runway).
+   */
+  slabHeight(b: Entity): number {
+    const map = this.world.map;
+    const c = Math.max(groundHeight(map, b.x, b.y), -0.1);
+    const bd = buildingDef(b.def);
+    if (bd.role !== 'airfield') return c;
+    let top = c;
+    for (let y = b.ty; y <= b.ty + bd.h; y++) for (let x = b.tx; x <= b.tx + bd.w; x++) top = Math.max(top, groundHeight(map, x, y));
+    return Math.min(top, c + 0.35);
+  }
+
+  /**
+   * Strike jet on the airbase sortie cycle: it sits on its landing gear on the slab (taxi, roll), the gear
+   * cycles on climb-out / approach, the nose comes up at rotation, stays up on final and in the flare.
+   */
+  private poseJet(e: Entity, v: Visual, a: AnimState, alpha: number) {
+    const s = e.sortie!;
+    const ph = s.phase;
+    const z = e.pz + (e.z - e.pz) * alpha;
+    const onGround = ph === 'parked' || ph === 'taxiOut' || ph === 'hold' || ph === 'lineup' || ph === 'rollout' || ph === 'taxiIn' || (ph === 'takeoff' && z < 0.005);
+    a.ground = onGround ? 1 : 0;
+    const gearDown = onGround || ph === 'takeoff' || ph === 'final' || (ph === 'sortie' && z < 0.9) || (ph === 'return' && z < 1.6 && s.v * TPS < 3.6);
+    a.gear = gearDown ? 1 : 0;
+    // attitude: the flight path angle, plus rotation, approach attitude and the flare
+    const ds = Math.hypot(e.x - e.px, e.y - e.py);
+    let pitch = ds > 1e-4 ? Math.atan2(e.z - e.pz, ds) * 0.9 : 0;
+    if (ph === 'takeoff' && z > 0.001) pitch = Math.max(pitch, 0.17);
+    else if (ph === 'final') pitch = z < 0.3 ? 0.17 : 0.07;
+    else if (onGround) pitch = 0;
+    a.pitch = Math.max(-0.3, Math.min(0.4, pitch));
+    // sit on the gear: wheels on the airbase slab (or the terrain off base), blending out on climb-out
+    const root = v.model.root;
+    const b = s.base >= 0 ? this.world.get(s.base) : undefined;
+    const k = Math.max(0, Math.min(1, 1 - z / 0.5));
+    if (k > 0) {
+      const map = this.world.map;
+      const g = b ? this.slabHeight(b) + 0.05 : Math.max(standHeight(map, root.position.x, root.position.z), 0);
+      const drop = (v.model.gearDrop ?? 0.08) * root.scale.y;
+      const len = v.model.size?.x ?? 1;
+      const air = Math.max(standHeight(map, root.position.x, root.position.z), 0) + z;
+      root.position.y = air + (g + z + drop + Math.max(0, a.pitch) * len * 0.3 - air) * k;
+    }
+  }
+
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   private addContact(e: Entity, v: Visual) {
     const c = this.contact!;
@@ -1100,8 +1164,8 @@ export class GameRenderer {
       a.damage = 1 - e.hp / e.maxHp;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
-        const h = groundHeight(w.map, e.x, e.y);
-        root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
+        const h = this.slabHeight(e);
+        root.position.set(e.tx + bd.w / 2, h, e.ty + bd.h / 2);
         const k = e.buildAnim;
         a.built = k;
         if (this.deployFx.active) {
@@ -1161,6 +1225,8 @@ export class GameRenderer {
         } else {
           root.rotation.set(0, yaw, 0);
         }
+        // airbase sortie: wheels on the runway, gear, rotation / flare attitude (sim/airbase.ts)
+        if (e.sortie && ud.fixedWing) this.poseJet(e, v, a, alpha);
         // airborne drop: transport ramp door, jumpers / supply pallet under canopy
         if (ud.airlift) a.ramp = e.drop?.ramp ?? 0;
         if (v.model.infantry) a.para = e.para ? 1 : 0;
@@ -1323,7 +1389,9 @@ export class GameRenderer {
     if (!v.visible || (!sel && this.hover !== e.id)) return;
     const rp = v.model.root.position;
     const air = e.kind === 'unit' && unitDef(e.def).air;
-    const gy = air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
+    // a jet on its wheels: the ring goes on the airbase slab under it
+    const onPad = !!e.sortie && e.z < 0.3 && e.sortie.base >= 0 ? this.world.get(e.sortie.base) : undefined;
+    const gy = onPad ? this.slabHeight(onPad) + 0.05 : air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
     const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
     const bd = e.kind === 'building' ? buildingDef(e.def) : null;
     this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4, e.rank >= 2);
@@ -1363,7 +1431,7 @@ export class GameRenderer {
     });
     if (ud.air) {
       const sp = ud.speed * (ud.fixedWing ? 1 : 0.4);
-      this.wrecks.push({ ...base, kind: 'air', max: 30, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
+      this.wrecks.push({ ...base, kind: 'air', max: 30, size: ud.fixedWing ? 1 : 0.8, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
       return;
     }
     // crew ducks inside / hatch slammed shut on the burning hull
@@ -1446,8 +1514,7 @@ export class GameRenderer {
         r.position.set(w.x, w.y, w.z);
         r.rotation.y += w.spin * dt;
         r.rotation.z = Math.max(-0.9, r.rotation.z - dt * 0.8);
-        this.effects.smoke(w.x, w.y, w.z, 0.8);
-        this.effects.flame(w.x, w.y, w.z, 0.7);
+        this.effects.wreckTrail(w.x, w.y, w.z, w.vx, w.vy, w.vz, dt, 1);
         const g = standHeight(map, Math.max(0, Math.min(map.w - 0.01, w.x)), Math.max(0, Math.min(map.h - 0.01, w.z)));
         if (w.y <= g + 0.1) {
           w.landed = true;
@@ -1456,8 +1523,7 @@ export class GameRenderer {
           w.max = 18;
           r.position.y = w.y;
           r.rotation.x = (Math.random() - 0.5) * 0.4;
-          this.effects.blast(BLASTS.aircraft, w.x, g + 0.2, w.z, g);
-          this.marks.craterAt(w.x, w.z, 0.5);
+          this.effects.airCrash(w.x, g, w.z, w.size);
         }
       } else if (w.kind === 'building' && w.frac) {
         // chunks topple, bounce and pile up (fracture.ts); the rubble then sinks away slowly
@@ -1544,7 +1610,8 @@ export class GameRenderer {
       let v = this.projVis.get(p.id);
       if (!v) {
         const obj = p.flight === 'shell' ? new THREE.Group() : this.munition(p);
-        const streak = p.flight === 'shell' || p.flight === 'artillery' ? new THREE.Mesh(this.streakGeo, this.streakMat) : null;
+        // falling jet bombs get the speed streak too, so the drop reads from the RTS camera
+        const streak = p.flight === 'shell' || p.flight === 'artillery' || p.flight === 'bomb' ? new THREE.Mesh(this.streakGeo, this.streakMat) : null;
         if (streak) {
           streak.renderOrder = 4;
           this.scene.add(streak);
@@ -1578,7 +1645,7 @@ export class GameRenderer {
         const wdt = p.flight === 'shell' ? 0.02 : 0.03;
         v.streak.scale.set(wdt, wdt, Math.min(len, 1.2));
       }
-      if (visible && !v.first) {
+      if (visible && !v.first && p.flight !== 'bomb') {
         const k = p.T > 0 ? p.age / p.T : 0;
         const boost =
           p.flight === 'ballistic' ? k < 0.4 : p.flight === 'hypersonic' ? k < 0.3 : p.flight === 'rocketSalvo' ? k < 0.6 : p.flight === 'artillery' || p.flight === 'mortar' || p.flight === 'shell' ? false : true;
@@ -1638,6 +1705,7 @@ export class GameRenderer {
     const w = WEAPONS[weaponId];
     if (!w) return null;
     if (weaponId.includes('shahed')) return BLASTS.shahed;
+    if (/bomb/i.test(weaponId)) return BLASTS.bomb;
     if (weaponId.includes('fpv') || weaponId.includes('micro')) return BLASTS.drone;
     if (w.projectile === 'instant') return w.warhead === 'flak' ? BLASTS.flak : null;
     if (w.projectile === 'beam') return null;
@@ -1660,7 +1728,11 @@ export class GameRenderer {
         p = BLASTS.ballistic;
         break;
       case 'cruise':
-        p = w.damage >= 300 ? BLASTS.ballistic : BLASTS.missile;
+        p = BLASTS.heavyMissile;
+        break;
+      case 'bomb':
+        // a jet's 2,000 lb bomb: the big one
+        p = BLASTS.ballistic;
         break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
@@ -1748,6 +1820,25 @@ export class GameRenderer {
         fx.blast(prof, ev.x, Math.max(ev.z, g + 0.05), ev.y, g);
         break;
       }
+      case 'sortie': {
+        // jets (sim/airbase.ts): tyre smoke at touchdown, a dust kick at the start of the take-off roll
+        if (!this.visibleAt(ev.x, ev.y)) break;
+        const j = this.world.get(ev.id);
+        const gy = j?.sortie && j.sortie.base >= 0 ? (() => {
+          const b = this.world.get(j.sortie!.base);
+          return b ? this.slabHeight(b) + 0.06 : standHeight(this.world.map, ev.x, ev.y);
+        })() : standHeight(this.world.map, ev.x, ev.y);
+        if (ev.what === 'touchdown') {
+          const dx = j ? Math.cos(j.facing) : 1;
+          const dz = j ? Math.sin(j.facing) : 0;
+          for (let i = 0; i < 5; i++) fx.smoke(ev.x - dx * (0.15 + i * 0.12) + (Math.random() - 0.5) * 0.12, gy, ev.y - dz * (0.15 + i * 0.12) + (Math.random() - 0.5) * 0.12, 0.45 + i * 0.05, false);
+        } else if (ev.what === 'takeoff') {
+          const dx = j ? Math.cos(j.facing) : 1;
+          const dz = j ? Math.sin(j.facing) : 0;
+          for (let i = 0; i < 3; i++) fx.dust(ev.x - dx * (0.6 + i * 0.2), gy, ev.y - dz * (0.6 + i * 0.2), 0.8);
+        }
+        break;
+      }
       case 'promoted': {
         // veterancy: golden burst under the unit (only if the local player can see it)
         const t = this.world.get(ev.id);
@@ -1814,7 +1905,7 @@ export class GameRenderer {
         if (shown) {
           if (ud.air) {
             const pos = v?.model.root.position ?? new THREE.Vector3(ev.x, gy + 1.5, ev.y);
-            fx.blast(BLASTS.airSmall, pos.x, pos.y, pos.z, gy);
+            fx.airKill(pos.x, pos.y, pos.z, gy, ud.fixedWing ? 1 : 0.8);
           } else if (ud.category === 'infantry') {
             if (ev.cause !== 'crushed') fx.explosion(ev.x, gy, ev.y, 'small', 'dust'); // run over: the 'crushed' event's puff
           } else {
@@ -2046,6 +2137,7 @@ export class GameRenderer {
     // world matrices once per frame: the main view, AO, outline mask, drone feed and heat mask all reuse them
     const scene = this.scene;
     scene.updateMatrixWorld();
+    this.guardLights();
     scene.matrixWorldAutoUpdate = false;
     // identical unit parts drawn as instanced batches (models on or casting into the view only)
     const roots = this.instRoots;
@@ -2069,6 +2161,41 @@ export class GameRenderer {
     this.perf.frame();
     const st = this.ladder[this.level];
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
+  }
+
+  private onContextLost: (e: Event) => void;
+  private onContextRestored: () => void;
+  private lightList: THREE.Light[] = [];
+  private lightScan = 0;
+  /** Lights switched off by guardLights (debug / tests). */
+  badLights = 0;
+  /**
+   * Hard guard: one light with a NaN / Infinity position, colour or intensity (even at intensity 0) turns
+   * every lit pixel NaN, i.e. a black frame. Such a light is repaired or left out of the frame. The light
+   * list is rebuilt every 60 frames; the check itself is a few float tests per light.
+   */
+  private guardLights() {
+    if (this.lightScan-- <= 0) {
+      this.lightScan = 60;
+      const list = this.lightList;
+      list.length = 0;
+      this.scene.traverse((o) => {
+        if ((o as THREE.Light).isLight) list.push(o as THREE.Light);
+      });
+    }
+    for (const l of this.lightList) {
+      const e = l.matrixWorld.elements;
+      const c = l.color;
+      if (Number.isFinite(e[12] + e[13] + e[14] + c.r + c.g + c.b + l.intensity)) continue;
+      this.badLights++;
+      if (!Number.isFinite(l.intensity)) l.intensity = 0;
+      if (!Number.isFinite(c.r + c.g + c.b)) c.setRGB(1, 1, 1);
+      const p = l.position;
+      if (!Number.isFinite(p.x + p.y + p.z)) p.set(this.target.x, 8, this.target.z);
+      l.updateMatrixWorld(true);
+      // still broken (a NaN parent): leave it out of this frame
+      if (!Number.isFinite(l.matrixWorld.elements[12] + l.matrixWorld.elements[13] + l.matrixWorld.elements[14])) l.visible = false;
+    }
   }
 
   private shadowKey = new Float64Array(9);
@@ -2136,6 +2263,8 @@ export class GameRenderer {
     this.deployFx.dispose();
     this.atmos.dispose();
     this.sky?.dispose();
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.readability.dispose();
     this.contact?.dispose();
     this.csm?.dispose();

@@ -20,6 +20,7 @@ import { bridgeHutEnter, bridgeProof, canHurtBridge, initBridges, isBridge, upda
 import { DEFAULT_STANCE, applyOrderCommand, autoFire, idleReturn, leashRange, ordersIdle, queueCap, scanRange } from './orders';
 import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
+import { isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, updateSortie, freePad } from './airbase';
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import {
   CATEGORIES,
@@ -200,14 +201,21 @@ export class World {
     return false;
   }
 
-  canBuild(player: number, defId: string): boolean {
+  /**
+   * inQueue: the head of a production queue asking whether it may finish (it is already counted among
+   * the queued jets, so the jet cap leaves room for it).
+   */
+  canBuild(player: number, defId: string, inQueue = false): boolean {
     const p = this.players[player];
     const d = DEFS[defId];
     if (!d || !d.buildable || d.faction !== p.faction) return false;
     if (d.category === 'building' || d.category === 'defense') {
       if (!this.hasRole(player, 'conyard')) return false;
     }
-    return d.prereq.every((r) => this.hasRole(player, r));
+    if (!d.prereq.every((r) => this.hasRole(player, r))) return false;
+    // jet cap: one parking pad per jet, 4 per airbase (airbase.ts)
+    if (d.kind === 'unit' && isSortieJet(d)) return jetCount(this, player) + jetsQueued(this, player) - (inQueue ? 1 : 0) < padCap(this, player);
+    return true;
   }
 
   // ------------------------------------------------------------ entities
@@ -284,6 +292,7 @@ export class World {
       dodge: null,
       dodgeAt: 0,
       stillAt: 0,
+      sortie: null,
     };
   }
 
@@ -344,8 +353,9 @@ export class World {
     return Math.hypot(t.x - e.x, t.y - e.y);
   }
 
+  /** Airborne (a jet on its wheels at its airbase is a ground target: airbase.ts). */
   isAir(e: Entity) {
-    return e.kind === 'unit' && !!unitDef(e.def).air;
+    return e.kind === 'unit' && !!unitDef(e.def).air && !jetGrounded(e);
   }
 
   canHit(wpn: WeaponDef, t: Entity) {
@@ -539,7 +549,7 @@ export class World {
           if (q.length > 0 || p.ready[d.category]) break;
           q.push({ def: d.id, progress: 0, paid: 0 });
         } else {
-          for (let k = 0, cap = queueCap(this.producerCount(p, d.category)); k < n && q.length < cap; k++) q.push({ def: d.id, progress: 0, paid: 0 });
+          for (let k = 0, cap = queueCap(this.producerCount(p, d.category)); k < n && q.length < cap && (k === 0 || this.canBuild(pid, d.id)); k++) q.push({ def: d.id, progress: 0, paid: 0 });
         }
         break;
       }
@@ -969,9 +979,9 @@ export class World {
     for (const e of this.list) {
       if (e.dead || e.kind !== 'unit' || e.inside >= 0 || e.para) continue;
       const d = unitDef(e.def);
-      if (d.supply || d.airlift) continue;
+      if (d.supply || d.airlift || (e.sortie && e.z < 1)) continue;
       this.queryRadius(e.x, e.y, 1.2, (o) => {
-        if (o === e || o.kind !== 'unit' || o.id < e.id || o.para) return;
+        if (o === e || o.kind !== 'unit' || o.id < e.id || o.para || (o.sortie && o.z < 1)) return;
         const od = unitDef(o.def);
         if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
         // heavy vehicles and infantry: enemies go under the tracks, the rest are shoved aside (crush.ts)
@@ -1148,7 +1158,8 @@ export class World {
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
     if (src.inside >= 0 && garrisonOf(this, src)) amount *= GARRISON_FIREPOWER;
     if (!raw && t.passengers.length && isGarrison(t)) amount = garrisonHit(this, t, amount, warhead, src);
-    t.hp -= amount * VERSUS[warhead][d.armor];
+    // a jet on its wheels is soft-skinned, not an aircraft dodging flak (airbase.ts)
+    t.hp -= amount * VERSUS[warhead][jetGrounded(t) ? 'light' : d.armor];
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
       const p = this.players[t.owner];
@@ -1231,6 +1242,10 @@ export class World {
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
     if (e.dodge && stepDodge(this, e, d)) return; // jumping out of a vehicle's way (crush.ts)
+    if (isSortieJet(d)) {
+      updateSortie(this, e, d); // airbase sortie cycle (airbase.ts)
+      return;
+    }
     if (d.air) {
       const alt = d.cruiseAlt ?? (d.model === 'heavy_uav' ? 2.0 : 1.7);
       e.z += Math.max(-0.05, Math.min(0.05, alt - e.z));
@@ -1240,10 +1255,6 @@ export class World {
       return;
     }
     if (e.order.type === 'idle' && (e.queue.length || e.patrol || e.guardId >= 0)) ordersIdle(this, e); // orders.ts
-    if (d.fixedWing) {
-      this.updateJet(e, d);
-      return;
-    }
     const o = e.order;
     if (d.weapon && !jammed && o.type !== 'attack' && autoFire(e) && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
     switch (o.type) {
@@ -1415,68 +1426,6 @@ export class World {
       if (wpn.splash) this.splash(e.x, e.y, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id);
       this.events.push({ t: 'impact', x: e.x, y: e.y, z: standHeight(this.map, e.x, e.y) + e.z, weapon: wpn.id, direct: true });
       this.remove(e);
-    }
-  }
-
-  /** Fixed-wing jets never stop: they orbit, and attack in strafing passes. */
-  private updateJet(e: Entity, d: UnitDef) {
-    const o = e.order;
-    const wpn = WEAPONS[d.weapon!];
-    let t: Entity | undefined;
-    if (o.type === 'attack') {
-      t = this.get(o.target);
-      if (!t || !this.isEnemy(e.owner, t.owner)) {
-        e.order = { type: 'idle' };
-        e.guardX = e.x;
-        e.guardY = e.y;
-        t = undefined;
-      }
-    } else if (o.type === 'idle' || o.type === 'attackMove') {
-      t = this.get(e.targetId);
-      if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > d.sight + 4 || !autoFire(e))) t = undefined;
-      if (!t && this.tick >= e.scanAt && autoFire(e)) {
-        e.scanAt = this.tick + 8;
-        t = this.findTarget(e, d.sight) ?? undefined;
-      }
-    }
-    e.targetId = t ? t.id : -1;
-    let gx: number;
-    let gy: number;
-    if (t) {
-      gx = t.x;
-      gy = t.y;
-    } else if (o.type === 'move' || o.type === 'attackMove') {
-      gx = o.x;
-      gy = o.y;
-      if (Math.hypot(gx - e.x, gy - e.y) < 1.4) {
-        e.order = { type: 'idle' };
-        e.guardX = gx;
-        e.guardY = gy;
-      }
-    } else {
-      const a = Math.atan2(e.y - e.guardY, e.x - e.guardX) + 0.5;
-      gx = e.guardX + Math.cos(a) * 2.4;
-      gy = e.guardY + Math.sin(a) * 2.4;
-    }
-    const want = Math.atan2(gy - e.y, gx - e.x);
-    const dist = t ? this.distTo(e, t) : Math.hypot(gx - e.x, gy - e.y);
-    // overshoot after a pass instead of pivoting on the spot
-    if (!(t && dist < 1.5)) e.facing = turnToward(e.facing, want, d.turnRate);
-    e.turret = e.facing;
-    const jammed = e.jammedUntil > this.tick;
-    const step = (d.speed / TPS) * (jammed ? 0.5 : 1);
-    e.x = Math.max(0.5, Math.min(this.map.w - 0.5, e.x + Math.cos(e.facing) * step));
-    e.y = Math.max(0.5, Math.min(this.map.h - 0.5, e.y + Math.sin(e.facing) * step));
-    if (e.x <= 0.5 || e.y <= 0.5 || e.x >= this.map.w - 0.5 || e.y >= this.map.h - 0.5) e.facing += 0.2;
-    e.moving = true;
-    e.path = null;
-    if (t && !jammed && e.cooldown <= 0 && e.burstLeft === 0 && this.canHit(wpn, t)) {
-      const aligned = Math.abs(angleDiff(e.facing, Math.atan2(t.y - e.y, t.x - e.x))) < 0.55;
-      if (aligned && dist <= this.weaponRange(e, wpn) && dist >= 1.0) {
-        e.burstLeft = wpn.burst ?? 1;
-        e.burstTimer = 0;
-        e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
-      }
     }
   }
 
@@ -1911,8 +1860,8 @@ export class World {
     if (q.length === 0 || p.ready[cat]) return;
     const item = q[0];
     const d = DEFS[item.def];
-    if (!this.canBuild(p.id, item.def)) {
-      // lost prerequisite: refund and drop
+    if (!this.canBuild(p.id, item.def, true)) {
+      // lost prerequisite (or the jet cap shrank with a lost airbase): refund and drop
       p.credits += item.paid;
       q.shift();
       return;
@@ -1954,6 +1903,22 @@ export class World {
       }
     }
     if (!factory) return;
+    if (isSortieJet(d)) {
+      // combat jets roll out onto a free parking pad of an airbase (airbase.ts)
+      let pads: Entity | null = null;
+      for (const e of this.list) {
+        if (e.dead || e.owner !== p.id || e.kind !== 'building' || buildingDef(e.def).role !== 'airfield' || e.buildAnim < 1) continue;
+        if (freePad(this, e) >= 0) {
+          pads = e;
+          break;
+        }
+      }
+      if (!pads) return;
+      const u = this.spawnUnit(d.id, p.id, pads.x, pads.y);
+      parkJet(this, u, pads);
+      this.events.push({ t: 'unitReady', owner: p.id, def: d.id });
+      return;
+    }
     const fd = buildingDef(factory.def);
     const ex = fd.exit ?? [Math.floor(fd.w / 2), fd.h];
     let sx = factory.tx + ex[0];

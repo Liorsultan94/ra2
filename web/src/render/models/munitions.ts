@@ -16,9 +16,10 @@ export type ExtraMunitionKind =
   | 'heavyBallistic' // Khorramshahr-class MRBM: fat finless body, blunt tri-conic re-entry vehicle
   | 'quasiBallistic' // Iskander / LORA / PrSM / Hyunmoo / Tayfun: slender ogive body, grid-like tail fins
   | 'cruiseMissile' // Tomahawk / Neptune: tube body, straight pop-out wings, cruciform tail, ventral intake
-  | 'stealthCruise'; // Taurus KEPD 350: faceted flat body, swept wings, chisel nose
+  | 'stealthCruise' // Taurus KEPD 350: faceted flat body, swept wings, chisel nose
+  | 'bomb'; // jet-dropped 2,000 lb bomb (Mk 84 body with a JDAM tail kit): no motor
 
-export const EXTRA_MUNITIONS: ReadonlySet<string> = new Set<ExtraMunitionKind>(['heavyBallistic', 'quasiBallistic', 'cruiseMissile', 'stealthCruise']);
+export const EXTRA_MUNITIONS: ReadonlySet<string> = new Set<ExtraMunitionKind>(['heavyBallistic', 'quasiBallistic', 'cruiseMissile', 'stealthCruise', 'bomb']);
 
 type P2 = [number, number];
 type V3 = [number, number, number];
@@ -193,6 +194,57 @@ function build(kind: ExtraMunitionKind, team: number): Built {
   let len = 0.5;
   let rr = 0.024; // motor throat radius (normalised)
   switch (kind) {
+    case 'bomb': {
+      // Mk 84 / GBU-31: 3.8 m, 0.46 m low-drag body, yellow nose band (live HE), JDAM strakes and tail kit.
+      // Drawn larger than life (~1/3 of the jet) so the drop reads from the RTS camera.
+      len = 0.5;
+      const R = 0.064;
+      add(
+        body(
+          [
+            [0, 0],
+            [0.04, R * 0.42],
+            [0.12, R * 0.84],
+            [0.22, R],
+            [0.66, R],
+            [0.8, R * 0.76],
+            [0.88, R * 0.6],
+            [1.0, R * 0.55],
+            [1.0, 0],
+          ],
+          14,
+          (d) => (d < 0.05 ? 0x3a3e36 : d > 0.12 && d < 0.17 ? 0xe8c030 : d > 0.5 && d < 0.55 ? team : d > 0.8 ? 0x9a9e96 : 0x8a907c),
+        ),
+      );
+      add(
+        fins(
+          4,
+          [
+            [0.32, R],
+            [0.37, R * 1.4],
+            [0.5, R * 1.4],
+            [0.53, R],
+          ],
+          0.006,
+          0x8a907c,
+        ),
+      );
+      add(
+        fins(
+          4,
+          [
+            [0.82, R * 0.6],
+            [0.9, R * 2.3],
+            [0.99, R * 2.3],
+            [1.0, R * 0.55],
+          ],
+          0.01,
+          0x9a9e96,
+        ),
+      );
+      rr = 0;
+      break;
+    }
     case 'heavyBallistic': {
       // Khorramshahr: 13 m, 1.5 m diameter, finless liquid-fuel body with a separating tri-conic RV
       len = 0.86;
@@ -371,8 +423,7 @@ function build(kind: ExtraMunitionKind, team: number): Built {
   }
   const merged = mergeGeometries(parts, false)!;
   merged.scale(len, len, len);
-  const glowParts = [throat(rr), tf(prep(new THREE.ConeGeometry(rr * 0.8, rr * 4, 8, 1, true)), [-0.505 - rr * 2, 0, 0], [0, 0, PI / 2])];
-  const glow = mergeGeometries(glowParts, false);
+  const glow = rr > 0 ? mergeGeometries([throat(rr), tf(prep(new THREE.ConeGeometry(rr * 0.8, rr * 4, 8, 1, true)), [-0.505 - rr * 2, 0, 0], [0, 0, PI / 2])], false) : null;
   glow?.scale(len, len, len);
   return { body: merged, glow, len, nozzle: new THREE.Vector3(-len / 2, 0, 0) };
 }
