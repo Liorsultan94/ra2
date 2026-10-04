@@ -14,6 +14,7 @@ import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
 import { RIVER, buildWater, type RiverInfo, type WaterReflection } from './water';
 import { Waterside } from './waterside';
+import type { Slicer } from './slice';
 
 /*
  * The battlefield landscape: splat-shaded ground, river, vegetation, rocks,
@@ -24,10 +25,10 @@ import { Waterside } from './waterside';
 export class Terrain {
   group = new THREE.Group();
   water!: THREE.Mesh;
-  readonly layout: Layout;
-  readonly ground: Ground;
+  layout!: Layout;
+  ground!: Ground;
   /** Zoom-driven level of detail for vegetation and rocks. */
-  readonly lod: SceneryLod;
+  readonly lod = new SceneryLod();
   private camera: THREE.Camera | null = null;
   /** River shader (weather / time of day tint its light via wxLight / wxSpec). */
   waterMat!: THREE.ShaderMaterial;
@@ -36,33 +37,50 @@ export class Terrain {
   /** The river analysis (centreline, flow, feature spots) and its banks, reeds, jetty and weir. */
   river!: RiverInfo;
   waterside: Waterside | null = null;
-  private resources: Resources;
-  readonly minimapImage: HTMLCanvasElement;
+  private resources!: Resources;
+  minimapImage!: HTMLCanvasElement;
   /** Instanced plants, fences and village houses, for render-side environment damage. */
   readonly veg: VegetationHandles = { trees: [], bushes: [] };
   readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
   /** Photoscanned props (barrels, crates, cars, barriers...); they stream in after the terrain is built. */
-  readonly props: Props;
+  props!: Props;
 
+  /** Build synchronously (tests, tools); the game uses `Terrain.build()`, which yields between the steps. */
   constructor(
     private map: GameMap,
     private fog: FogOfWar,
-    quality: 'low' | 'medium' | 'high',
+    private quality: 'low' | 'medium' | 'high',
+    deferred = false,
   ) {
+    if (!deferred) for (const _ of this.steps()) void _;
+  }
+
+  /** Build in time slices (the main thread gets back to input / the loading screen between the steps). */
+  static async build(map: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high', slicer: Slicer): Promise<Terrain> {
+    const t = new Terrain(map, fog, quality, true);
+    for (const _ of t.steps()) await slicer.tick();
+    return t;
+  }
+
+  /** The construction, one yield per step. */
+  private *steps(): Generator<void> {
+    const { map, fog, quality, lod } = this;
     const t0 = performance.now();
     this.layout = buildLayout(map);
+    yield;
     const trees = treeSpots(map, quality);
+    yield;
     this.ground = new Ground(map, this.layout, trees.map((t) => ({ x: t.x, y: t.y, r: canopyRadius(t) })), fog, quality);
     this.group.add(this.ground.mesh);
+    yield;
     // 3D grass blades near the camera (medium / high)
     if (quality !== 'low') {
       this.grass = new GrassBlades(map, this.ground, fog, quality);
       this.group.add(this.grass.mesh);
+      yield;
     }
     // Zoom-based LOD: the ground chunks report the view span (orthographic
     // camera) every frame; the vegetation and rocks switch models from it.
-    const lod = new SceneryLod();
-    this.lod = lod;
     const onBefore = (r: THREE.WebGLRenderer, _s: THREE.Scene, cam: THREE.Camera) => {
       // stream the photoscanned ground layers into their texture arrays (a few per frame)
       this.ground.prepare(r);
@@ -81,22 +99,27 @@ export class Terrain {
     skirt.name = 'skirt';
     this.group.add(skirt);
     this.buildWater(quality);
+    yield;
     // names double as draw call breakdown categories (src/render/perf/probe.ts)
     for (const o of buildVegetation(map, this.layout, trees, fog, quality, lod, this.veg)) this.group.add(Object.assign(o, { name: o.name || 'vegetation' }));
+    yield;
     for (const o of buildRocks(map, this.layout, fog, quality, lod)) this.group.add(Object.assign(o, { name: o.name || 'rocks' }));
+    yield;
     for (const o of buildScenery(map, this.layout, fog, quality, this.scenery, lod)) this.group.add(Object.assign(o, { name: o.name || 'scenery' }));
+    yield;
     this.props = new Props(map, this.layout, fog, quality);
     this.group.add(this.props.group);
     void this.props.load();
+    yield;
     this.resources = new Resources(map, fog, quality);
     this.group.add(this.resources.group);
     this.ground.mesh.userData.perfCat = 'ground';
     this.resources.group.userData.perfCat = 'resources';
     this.group.name = 'terrain';
+    yield;
     this.minimapImage = this.buildMinimap();
     console.info(`terrain built in ${Math.round(performance.now() - t0)} ms`);
   }
-
   private buildWater(quality: 'low' | 'medium' | 'high') {
     const w = buildWater(this.map, this.fog, quality);
     this.water = w.mesh;
@@ -180,7 +203,7 @@ export class Terrain {
   }
 
   /** Instanced grass blades (null on low quality). */
-  readonly grass: GrassBlades | null = null;
+  grass: GrassBlades | null = null;
 
   /** Per frame. `units` (the world's entity list) lets vehicles flatten the grass blades. */
   update(time: number, units?: readonly Entity[]) {

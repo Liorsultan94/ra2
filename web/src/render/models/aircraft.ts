@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
+import { onFogRelease, purgeKeys } from '../fogcache';
 import { factionCamo, pbr, worldUV, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import { decalQuad, makeDecalMaterial, roundelCell } from './insignia';
@@ -2886,6 +2887,13 @@ interface Template {
   gearDrop?: number;
 }
 const templates = new Map<string, Template>();
+// a finished match: drop its fog's templates and materials (fogcache.ts)
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (id === undefined) return;
+  purgeKeys(templates, (k) => k.endsWith('|' + id));
+  purgeKeys(mats, (k) => k.endsWith('|' + id));
+});
 
 function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Template {
   const faction = style.faction;

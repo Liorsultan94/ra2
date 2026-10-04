@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
+import { onFogRelease, purgeKeys } from '../fogcache';
 import { pbrMaterial, worldUV, type CamoPattern, type MatOpts } from '../textures';
 import { registerLods } from '../perf/lod';
 import type { Builder } from './registry';
@@ -1391,6 +1392,13 @@ function buildMortarTpl(r: Rig, kit: Kit, t: Tpl) {
 }
 
 const tplCache = new Map<string, Tpl>();
+// a finished match: drop its fog's templates and materials (fogcache.ts)
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (!id) return;
+  purgeKeys(tplCache, (k) => k.endsWith('|' + id));
+  purgeKeys(stdCache, (k) => k.startsWith(id + ':'));
+});
 
 function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
   const ck = `${key}|${style.faction}|${style.region}|${style.team}|${fogId(fog)}`;

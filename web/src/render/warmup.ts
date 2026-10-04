@@ -247,3 +247,49 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
   }
   return { ms: Math.round(performance.now() - t0), models: n, programs: gl.info.programs?.length ?? 0, worst: Math.round(slicer.worst) };
 }
+
+/**
+ * Background model prefetch for the demo battle behind the menu (its boot
+ * warm-up covers the scene only, to keep the boot short). Builds one model of
+ * every unit / building type of the given factions in small idle slices and
+ * compiles its programs off-screen (not added to the scene), so a type the
+ * demo AI builds later appears without a template build / vehicle bake /
+ * shader link in the middle of a frame. Stops when `alive()` turns false.
+ */
+export async function prefetchModels(r: GameRenderer, factions: Faction[], alive: () => boolean): Promise<number> {
+  const slicer = new Slicer(12, () => !alive());
+  const rt = new THREE.WebGLRenderTarget(4, 4);
+  const gl = r.renderer;
+  const world = r.world;
+  const owners = new Map<Faction, number>();
+  world.players.forEach((p, i) => owners.has(p.faction) || owners.set(p.faction, i));
+  let n = 0;
+  try {
+    for (const f of factions) {
+      const style = styleFor(world, owners.get(f) ?? 0);
+      for (const d of DEF_LIST) {
+        if (d.faction !== f) continue;
+        await slicer.yield();
+        let root: THREE.Object3D;
+        try {
+          root = createModel(d.model, style, r.fog).root;
+        } catch {
+          continue;
+        }
+        await slicer.yield();
+        // (the scene renders into a linear target when the post chain is on: compile that variant)
+        const prev = gl.getRenderTarget();
+        gl.setRenderTarget(r.postActive ? rt : null);
+        gl.compile(root, r.camera, r.scene);
+        gl.setRenderTarget(prev);
+        await settlePrograms(gl, slicer);
+        n++;
+      }
+    }
+  } catch {
+    /* aborted: the demo battle was replaced */
+  } finally {
+    rt.dispose();
+  }
+  return n;
+}

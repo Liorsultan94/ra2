@@ -243,6 +243,15 @@ export class CameoFactory {
    * are reused (the portrait scene uses the same studioRig() + environment) and
    * no extra context is opened on phones.
    */
+  /** Compile a live scene's programs on this context without blocking (parallel compile where available). */
+  prepare(scene: THREE.Scene, camera: THREE.Camera): Promise<void> {
+    if (!this.renderer) return Promise.resolve();
+    return this.renderer.compileAsync(scene, camera).then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
   renderLive(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): HTMLCanvasElement | null {
     if (!this.renderer) return null;
     this.corner(w, h);

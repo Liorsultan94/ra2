@@ -51,6 +51,22 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/**
+ * The cache lives for the session (every match of the same nations reuses it), so it is capped: each
+ * entry holds its atlas pixels (1 MB at 512, 4 MB at 1024) for re-uploads to the next match's context.
+ * Oldest entries go first; a dropped atlas still in use stays alive with its models (it is not disposed).
+ */
+const CACHE_BYTES = () => (atlasSize > 512 ? 96 : 32) * 1048576;
+function trimCache() {
+  let total = 0;
+  for (const e of cache.values()) total += e.res.size * e.res.size * 4;
+  for (const [k, e] of cache) {
+    if (total <= CACHE_BYTES() || cache.size <= 1) break;
+    total -= e.res.size * e.res.size * 4;
+    cache.delete(k);
+  }
+}
+
 let bakeR: THREE.WebGLRenderer | null = null;
 let ownR = false;
 let atlasSize = 1024;
@@ -1046,6 +1062,9 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
       s.mesh.geometry.setAttribute('uv1', new THREE.BufferAttribute(hit.uvs[i], 2));
       s.mesh.geometry.setAttribute('aTone', new THREE.BufferAttribute(hit.tones[i], 1));
     });
+    // LRU: most recently used last
+    cache.delete(ck);
+    cache.set(ck, hit);
     return hit.res;
   }
   const r = renderer();
@@ -1138,6 +1157,7 @@ export function bakeVehicle(root: THREE.Object3D, key: string): BakeResult | nul
     s.mesh.geometry.setAttribute('aTone', new THREE.BufferAttribute(tones[i], 1));
   });
   cache.set(ck, { res, uvs, tones });
+  trimCache();
   return res;
 }
 

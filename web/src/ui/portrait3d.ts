@@ -40,6 +40,8 @@ interface Entry {
   hy: number;
   floorY: number;
   air: boolean;
+  /** Programs compiled (compileAsync): drawn from then on, so a new model never links its shaders mid-frame. */
+  ready: boolean;
 }
 
 export class LivePortrait {
@@ -173,7 +175,7 @@ export class LivePortrait {
       center.set(0, model.height / 2, 0);
       box.min.y = 0;
     }
-    const e: Entry = { key, model, center, rh: 0.5 * Math.hypot(size.x, size.z), hy: size.y * 0.5, floorY: air ? box.min.y - size.y * 0.35 : box.min.y + 0.005, air };
+    const e: Entry = { key, model, center, rh: 0.5 * Math.hypot(size.x, size.z), hy: size.y * 0.5, floorY: air ? box.min.y - size.y * 0.35 : box.min.y + 0.005, air, ready: false };
     this.cache.set(key, e);
     while (this.cache.size > CACHE) {
       const [k, old] = this.cache.entries().next().value as [string, Entry];
@@ -182,6 +184,7 @@ export class LivePortrait {
       old.model.root.removeFromParent();
     }
     this.show(e);
+    void this.cameos.prepare(this.scene, this.camera).then(() => (e.ready = true));
     return e;
   }
 
@@ -250,6 +253,8 @@ export class LivePortrait {
     cam.far = this.dist * 4 + 10;
     cam.lookAt(0, cy, 0);
     cam.updateProjectionMatrix();
+    // (a model whose shaders are still compiling keeps the static cameo for a moment)
+    if (!cur.ready) return;
     const src = this.cameos.renderLive(this.scene, cam, rw, rh);
     if (!src) return this.detach();
     if (this.canvas.width !== w || this.canvas.height !== h) {

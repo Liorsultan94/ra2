@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { phoneCaps } from './devicecaps';
+import { releaseFog } from './fogcache';
+import type { Slicer } from './slice';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -51,6 +53,14 @@ import { treeSpots } from './vegetation';
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+
+/** Battlefield parts built ahead of the renderer in time slices (GameRenderer.prebuild). */
+export interface RendererParts {
+  fog: FogOfWar;
+  occluders: OccluderGrid;
+  terrain: Terrain;
+  outskirts: Outskirts;
+}
 /** The tier the scene subsystems (terrain, effects, weather, ...) are built for. */
 type BaseQuality = 'low' | 'medium' | 'high';
 
@@ -132,6 +142,8 @@ export interface Visual {
   occl: boolean;
   /** The model or its shadow may be on screen (last sync). */
   near: boolean;
+  /** Its programs are still compiling (parallel compile): not drawn yet. */
+  pending?: boolean;
 }
 
 interface Wreck {
@@ -309,11 +321,30 @@ export class GameRenderer {
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
 
+  /**
+   * Build the heavy CPU-side parts of the battlefield (terrain: ground paint, grass, water, vegetation,
+   * rocks, scenery, props; the outskirts) in time slices, ahead of the constructor. Built in one go they
+   * took seconds of main thread on a phone (the "Page unresponsive" dialog).
+   */
+  static async prebuild(world: World, requested: Quality, slicer: Slicer): Promise<RendererParts> {
+    const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
+    const { map } = world;
+    const fog = new FogOfWar(map.w, map.h);
+    const occluders = new OccluderGrid(map, treeSpots(map, quality));
+    await slicer.tick();
+    const terrain = await Terrain.build(map, fog, quality, slicer);
+    await slicer.tick();
+    const outskirts = new Outskirts(map, fog, quality, terrain.ground, terrain.water);
+    await slicer.tick();
+    return { fog, occluders, terrain, outskirts };
+  }
+
   constructor(
     readonly canvas: HTMLCanvasElement,
     readonly world: World,
     viewer: number,
     requested: Quality,
+    pre?: RendererParts | null,
   ) {
     this.viewer = viewer;
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
@@ -392,11 +423,12 @@ export class GameRenderer {
     }
 
     const { map } = world;
-    this.fog = new FogOfWar(map.w, map.h);
-    this.occluders = new OccluderGrid(map, treeSpots(map, quality));
-    this.terrain = new Terrain(map, this.fog, quality);
+    // (the game builds these heavy parts ahead in time slices: GameRenderer.prebuild)
+    this.fog = pre?.fog ?? new FogOfWar(map.w, map.h);
+    this.occluders = pre?.occluders ?? new OccluderGrid(map, treeSpots(map, quality));
+    this.terrain = pre?.terrain ?? new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
-    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
+    this.outskirts = pre?.outskirts ?? new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
     this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     if (this.ultra) {
@@ -990,7 +1022,7 @@ export class GameRenderer {
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
     const lod = prepareLod(model.root, cat, this.quality === 'medium', e.owner >= 0 ? this.world.players[e.owner].color : 0x9a9a9a);
     this.scene.add(model.root);
-    return {
+    const visual: Visual = {
       id: e.id,
       model,
       owner: e.owner,
@@ -1016,6 +1048,38 @@ export class GameRenderer {
       occl: true,
       near: true,
     };
+    this.compileAhead(visual, `${d.model}|${e.owner}`);
+    return visual;
+  }
+
+  private compiledKinds = new Set<string>();
+  private compileRT: THREE.WebGLRenderTarget | null = null;
+  /**
+   * The first model of a type in this match (one the warm-up did not cover, e.g. in the demo battle):
+   * with parallel shader compile, compile its programs in the background and hold it back for the
+   * few frames that takes, instead of linking them synchronously inside the next frame.
+   */
+  private compileAhead(v: Visual, kind: string) {
+    if (this.compiledKinds.has(kind)) return;
+    this.compiledKinds.add(kind);
+    if (!this.renderer.extensions.get('KHR_parallel_shader_compile')) return;
+    const gl = this.renderer;
+    const prev = gl.getRenderTarget();
+    // the scene renders into the post chain's linear target: compile that variant
+    if (this.postActive) gl.setRenderTarget((this.compileRT ??= new THREE.WebGLRenderTarget(4, 4)));
+    v.pending = true;
+    let p: Promise<unknown>;
+    try {
+      p = gl.compileAsync(v.model.root, this.camera, this.scene);
+    } catch {
+      p = Promise.resolve();
+    } finally {
+      gl.setRenderTarget(prev);
+    }
+    // (never hold a unit back for long, whatever the driver does)
+    const release = () => (v.pending = false);
+    void p.then(release, release);
+    setTimeout(release, 3000);
   }
 
   private removeVisual(v: Visual) {
@@ -1160,7 +1224,8 @@ export class GameRenderer {
         this.visuals.set(e.id, v);
       }
       const vis = this.isVisibleToViewer(e);
-      v.model.root.visible = vis;
+      // (a model of a type new to this match is held back until its shaders have compiled in the background)
+      v.model.root.visible = vis && !v.pending;
       v.visible = vis;
       const d = DEFS[e.def];
       const root = v.model.root;
@@ -2300,6 +2365,9 @@ export class GameRenderer {
     this.csm?.dispose();
     this.renderer.dispose();
     this.post?.dispose();
+    this.compileRT?.dispose();
+    // the model caches built for this match's fog of war (fogcache.ts)
+    releaseFog(this.fog);
     // release this match's GPU memory now rather than whenever the canvas gets garbage collected: without it
     // every match (and every demo battle behind the menu) left a live context behind until the next GC
     try {
