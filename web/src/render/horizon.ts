@@ -184,13 +184,16 @@ export class Horizon {
     this.group.name = 'horizon';
     this.world = horizonWorld(map);
     HORIZON.hzCentre.value.set(map.w / 2, map.h / 2);
-    this.buildRing();
-    this.buildWater(terrainWater);
-    this.buildPaths();
-    const towns = this.buildTowns();
-    this.buildForest(towns);
-    if (this.world.sea) this.buildHarbour();
-    this.buildLights();
+    // debug: ?hzskip=ring,water,paths,towns,forest,harbour,lights (or all)
+    const skip = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('hzskip')) || '';
+    const on = (k: string) => !skip.includes(k) && !skip.includes('all');
+    if (on('ring')) this.buildRing();
+    if (on('water')) this.buildWater(terrainWater);
+    if (on('paths')) this.buildPaths();
+    const towns = on('towns') ? this.buildTowns() : [];
+    if (on('forest')) this.buildForest(towns);
+    if (this.world.sea && on('harbour')) this.buildHarbour();
+    if (on('lights')) this.buildLights();
   }
 
   // ------------------------------------------------------------------ terrain ring

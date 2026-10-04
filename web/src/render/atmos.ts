@@ -164,7 +164,8 @@ let BIOME: BiomeLook | null = null;
  * blue-grey only as the twilight goes and the night comes.
  */
 const WINTER_LOW_SUN: Partial<Record<Key, number>> = { golden: 0.6, sunset: 1, dusk: 1, twilight: 0.55, predawn: 0.25, dawn: 0.85, mist: 0.4 };
-/** Winter low-sun fill: a pale warm grey sky / bounce and a soft warm haze (not the cold daylight ones). */
+/** Winter low sun: a soft peach key (white snow turns a saturated amber sun to terracotta), a pale warm grey sky / bounce and a soft warm haze. */
+const WINTER_DUSK_SUN = 0xffdcc4;
 const WINTER_DUSK_SKY = 0xa29a9c;
 const WINTER_DUSK_GND = 0xb0a8a4;
 const WINTER_DUSK_HAZE: [number, number, number] = [0.66, 0.58, 0.55];
@@ -195,9 +196,10 @@ function applyBiome(p: Preset, light: number, key: Key) {
   if (low > 0) {
     // the blue sky fill and the sky light (IBL) of a low sun painted the snow blue: a neutral fill,
     // warm highlights and only a hint of cool in the shadows
-    p.sky.lerp(C(WINTER_DUSK_SKY), 0.6 * low);
+    p.sunC.lerp(C(WINTER_DUSK_SUN), 0.4 * low);
+    p.sky.lerp(C(WINTER_DUSK_SKY), 0.75 * low);
     p.gnd.lerp(C(WINTER_DUSK_GND), 0.5 * low);
-    p.env *= 1 - 0.4 * low;
+    p.env *= 1 - 0.5 * low;
     p.highTint.lerp(new THREE.Vector3(...WINTER_DUSK_HIGH), 0.6 * low);
     p.shadowTint.lerp(new THREE.Vector3(...WINTER_DUSK_SHADOW), 0.65 * low);
   }

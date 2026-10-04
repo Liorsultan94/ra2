@@ -32,7 +32,7 @@ const base = (): AnimState => ({ dt: 0.033, time: 1, moving: false, speed: 0, di
 describe('infantry: hero / battle / far geometry LODs', () => {
   for (const key of ['rifle', 'at', 'engineer', 'mortar', 'fpvteam', 'ewinf']) {
     it(`${key}: every skinned mesh has LOD1 / LOD2 index subsets, fewer triangles each step`, () => {
-      const m = INFANTRY[key](style('russia'), null);
+      const m = INFANTRY[key](style(key === 'rifle' ? 'iran' : key === 'at' ? 'israel' : 'russia'), null);
       const t = [0, 0, 0];
       let n = 0;
       m.root.traverse((o) => {

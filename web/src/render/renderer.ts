@@ -238,6 +238,8 @@ export class GameRenderer {
   readonly marks: GroundMarks;
   /** Persistent craters, scorched earth, ruins and hulks (src/render/scars.ts). */
   readonly scars: BattleScars;
+  /** ?scars=0 turns the lasting battle scars off (before / after comparisons): fading marks, wrecks sink away. */
+  private scarsOn = typeof location === 'undefined' || new URLSearchParams(location.search).get('scars') !== '0';
   readonly bridgeFx: BridgeFx;
   /** Garrison window fire, house damage sync, superweapon blasts / Iron Beam dome (fx/superfx.ts). */
   readonly superFx: SuperFx;
@@ -416,7 +418,7 @@ export class GameRenderer {
     this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
     this.scars = new BattleScars({ map, fog: this.fog, effects: this.effects, quality, visibleAt: (x, z) => this.visibleAt(x, z), isPaved: (x, z) => this.marks.isPaved(x, z) });
-    this.effects.scars = this.scars;
+    if (this.scarsOn) this.effects.scars = this.scars;
     this.scene.add(this.scars.group);
     // collapsible bridges: per-span meshes, damage, collapse and rebuild (bridgefx.ts)
     this.bridgeFx = new BridgeFx(world, this.effects, this.fog, quality, this.terrain.waterMat);
@@ -490,7 +492,7 @@ export class GameRenderer {
     this.bridgeFx.group.name = 'bridges';
     this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom as unknown as UnrealBloomPass | null, canvas }, viewer);
-    this.atmos.env.scars = this.scars;
+    if (this.scarsOn) this.atmos.env.scars = this.scars;
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
@@ -1445,7 +1447,7 @@ export class GameRenderer {
       w.t += dt;
       const r = w.root;
       // battle scars: a burnt-out vehicle stays as a rusting hulk instead of sinking away (scars.ts)
-      if ((w.kind === 'vehicle' || (w.kind === 'air' && w.landed)) && !w.kept && w.t > w.max - 2.5) {
+      if (this.scarsOn && (w.kind === 'vehicle' || (w.kind === 'air' && w.landed)) && !w.kept && w.t > w.max - 2.5) {
         w.kept = true;
         const tt = w.turret;
         if (this.scars.adoptHulk(tt ? [r, tt.obj] : [r], w.x, w.y, w.z, w.size, w.kind === 'vehicle')) {
@@ -1456,7 +1458,7 @@ export class GameRenderer {
         }
       }
       // ...and a destroyed building leaves its ruin, rising as the collapse rubble settles into it
-      if (w.ruin && w.t > w.max - (w.frac ? 5 : 3)) {
+      if (this.scarsOn && w.ruin && w.t > w.max - (w.frac ? 5 : 3)) {
         w.ruin = false;
         this.scars.ruin(w.x, w.z, w.w, w.d, { root: r, rise: w.frac ? 4 : 2.5 });
       }

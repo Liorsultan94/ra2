@@ -947,7 +947,7 @@ function applyPhotos() {
  * parapet / sill / cabinet top and run down the wall below it. uv1 survives the fracture
  * rebuild, so wreck chunks keep their grime.
  */
-export const BLD_WEATHER = { value: new THREE.Vector4(1, 1, 1, 1) };
+export const BLD_WEATHER = { value: new THREE.Vector4(1, 1.8, 1.4, 1.3) };
 (globalThis as { __bldWeather?: typeof BLD_WEATHER }).__bldWeather = BLD_WEATHER;
 
 const WEATHER_VARY = `varying float vBDrip;
