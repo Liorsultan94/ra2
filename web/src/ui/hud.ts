@@ -1161,7 +1161,7 @@ function sortieLabel(e: Entity): string {
     case 'taxiIn':
       return 'Taxiing in';
     case 'orbit':
-      return `No free pad - fuel ${Math.ceil(s.fuel / TPS)} s`;
+      return 'No free pad - circling';
   }
 }
 

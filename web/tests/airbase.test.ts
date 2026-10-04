@@ -216,7 +216,7 @@ describe('airbase loss', () => {
     expect(j.x).toBeCloseTo(g2.pads[j.sortie!.pad], 1);
   });
 
-  it('with no airbase left they circle and crash when the fuel runs out', () => {
+  it('with no airbase left they circle with no time limit (no fuel-out crash)', () => {
     const { w, af } = airWorld();
     const tgt = w.spawnBuilding('russia_factory', 1, 40, 20, true);
     const j = jetAt(w, af);
@@ -225,14 +225,15 @@ describe('airbase loss', () => {
     w.kill(af, 1);
     const evs: SimEvent[] = [];
     let orbitAt = -1;
-    for (let i = 0; i < FUEL_TICKS + TPS * 5 && !j.dead; i++) {
+    for (let i = 0; i < FUEL_TICKS * 4 && !j.dead; i++) {
       w.step();
       evs.push(...w.drainEvents());
       if (orbitAt < 0 && j.sortie!.phase === 'orbit') orbitAt = w.tick;
     }
     expect(orbitAt).toBeGreaterThan(0);
-    expect(sorties(evs, 'crash').length).toBe(1);
-    expect(j.dead).toBe(true);
+    expect(sorties(evs, 'crash').length).toBe(0);
+    expect(j.dead).toBe(false);
+    expect(j.sortie!.phase).toBe('orbit');
   });
 
   it('a new airbase built while they circle takes them in', () => {

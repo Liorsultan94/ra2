@@ -9,8 +9,7 @@
 // the jet cap is the number of pads (4 per completed airbase).
 //
 // Losing the airbase: jets on the ground die with it; airborne jets divert to another
-// airbase with a free pad, or circle until one frees up and crash when their fuel
-// runs out (30 s).
+// airbase with a free pad, or circle (with no time limit) until one is built or frees up.
 //
 // Everything here is plain arithmetic on entity state in tick order, no randomness,
 // so every client computes the same thing.
@@ -447,11 +446,7 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
     }
   }
   if (!base) {
-    // homeless: the clock is running
-    if (--s.fuel <= 0) {
-      crash(w, e);
-      return;
-    }
+    // homeless: circle with no time limit until an airbase is built or frees up (the owner's call: no fuel-out crash)
     if ((w.tick + e.id) % 20 === 0) {
       const nb = findBase(w, e);
       if (nb) {
