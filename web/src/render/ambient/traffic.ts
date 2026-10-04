@@ -279,6 +279,8 @@ export class Traffic {
       const py = pt.y;
       let bad = false;
       if (units) for (let i = 0; i < nUnits && !bad; i++) if (Math.hypot(units[i * 2] - px, units[i * 2 + 1] - py) < 7) bad = true;
+      // (maps without edge entries: not where it is dangerous or was until a minute ago)
+      if (!initial && (this.danger.at(px, py) >= 0.08 || this.danger.calm(px, py) < 60)) bad = true;
       for (const c of this.cars) if (Math.hypot(c.x - px, c.y - py) < 1.2) bad = true;
       // not inside a junction or on a turning circle
       for (const lp of net.loops) if (Math.hypot(lp.x - px, lp.y - py) < lp.R + 0.4) bad = true;
