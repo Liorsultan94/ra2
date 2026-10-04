@@ -181,3 +181,18 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
   }
 }
 `;
+
+/** Current ground wetness 0..1 (rises in rain, dries slowly after; also drives the puddles). For other render systems. */
+export function wetness(): number {
+  return WX.wxWet.value;
+}
+
+/** Rain falling right now 0..1 (drop ripples). */
+export function rainfall(): number {
+  return WX.wxRain.value;
+}
+
+/** Current snow cover on upward-facing surfaces 0..1 (builds while it snows, melts after; 1 on the winter map). */
+export function snowCover(): number {
+  return WX.wxSnow.value;
+}

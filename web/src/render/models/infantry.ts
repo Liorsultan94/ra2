@@ -56,13 +56,23 @@ function xf<T extends G>(g: T, p: V3 = [0, 0, 0], r: V3 = [0, 0, 0], s: V3 | num
   else _s.set(s[0], s[1], s[2]);
   _m.compose(_v.set(p[0], p[1], p[2]), _q, _s);
   g.applyMatrix4(_m);
+  (g.userData.lo as G | undefined)?.applyMatrix4(_m);
   return g;
 }
-const sph = (rx: number, ry: number, rz: number, w = 8, h = 6) => xf(new THREE.SphereGeometry(1, w, h), undefined, undefined, [rx, ry, rz]);
+/** Attach a cheaper stand-in used at geometry LOD1/2 (Rig.add splits the part). */
+function withLo<T extends G>(hi: T, lo: G): T {
+  hi.userData.lo = lo;
+  return hi;
+}
+const sph = (rx: number, ry: number, rz: number, w = 8, h = 6) => {
+  const g = new THREE.SphereGeometry(1, w, h);
+  if (w >= 7) withLo(g, new THREE.SphereGeometry(1, Math.max(5, Math.ceil(w * 0.6)), Math.max(3, Math.ceil(h * 0.6))));
+  return xf(g, undefined, undefined, [rx, ry, rz]);
+};
 const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 /** Rounded box; tiny ones degrade to plain boxes (invisible at game scale). */
 const rbox = (w: number, h: number, d: number, r: number, seg = 1): G =>
-  Math.max(w, h, d) < 0.16 ? new THREE.BoxGeometry(w, h, d) : new RoundedBoxGeometry(w, h, d, Math.min(seg, 1), Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4));
+  Math.max(w, h, d) < 0.16 ? new THREE.BoxGeometry(w, h, d) : withLo(new RoundedBoxGeometry(w, h, d, Math.min(seg, 1), Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)), new THREE.BoxGeometry(w, h, d));
 const cylY = (rt: number, rb: number, h: number, seg = 6, open = false) => new THREE.CylinderGeometry(rt, rb, h, seg, 1, open);
 /** Cylinder along +X (rt at +X end). */
 const cylX = (rt: number, rb: number, h: number, seg = 6, open = false) => xf(cylY(rt, rb, h, seg, open), undefined, [0, 0, -PI / 2]);
@@ -304,10 +314,12 @@ const stdCache = new Map<string, THREE.MeshStandardMaterial>();
 
 /**
  * Infantry "hero fill": soldiers are small, dark and often back-lit from the RTS camera,
- * so their indirect (sky / hemisphere / IBL) light is lifted. It scales with the ambient
- * light, so night stays night. Chained after fog.apply / unitLook.
+ * so their indirect (sky / hemisphere / IBL) light is lifted and the sun wraps a little
+ * round onto the shaded side. Both scale with the scene's own lights, so night stays night. Chained after fog.apply / unitLook.
  */
-const INF_FILL = 1.55;
+const INF_FILL = 1.45;
+/** Share of the sun wrapped round onto the shaded side. */
+const INF_WRAP = 0.8;
 function infLook<T extends THREE.Material>(m: T, fill = INF_FILL): T {
   const prev = m.onBeforeCompile;
   const key = `${m.customProgramCacheKey()}|inf${fill}`;
@@ -316,7 +328,21 @@ function infLook<T extends THREE.Material>(m: T, fill = INF_FILL): T {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <lights_fragment_end>',
       `#include <lights_fragment_end>
-      reflectedLight.indirectDiffuse *= ${fill.toFixed(3)};`,
+      reflectedLight.indirectDiffuse *= ${fill.toFixed(3)};
+      #if NUM_DIR_LIGHTS > 0
+      {
+        // wrapped sun: the side away from the sun keeps some of its light (soft terminator)
+        vec3 infWrap = vec3( 0.0 );
+        float infNl;
+        #pragma unroll_loop_start
+        for ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {
+          infNl = dot( normal, directionalLights[ i ].direction );
+          infWrap += directionalLights[ i ].color * max( ( infNl + 0.6 ) / 1.6 - max( infNl, 0.0 ), 0.0 );
+        }
+        #pragma unroll_loop_end
+        reflectedLight.directDiffuse += infWrap * ${INF_WRAP.toFixed(3)} * BRDF_Lambert( material.diffuseColor );
+      }
+      #endif`,
     );
   };
   m.customProgramCacheKey = () => key;
@@ -472,14 +498,31 @@ class Rig {
     return o;
   }
   /** Add parts with an explicit LOD mask (and optional shade). */
-  addL(mask: number, b: THREE.Bone, mk: MK, ...geos: G[]) {
+  addL(mask: number, b: THREE.Bone, mk: MK, ...geos: G[]): void {
     const m = this.mask;
     this.mask = mask;
     this.add(b, mk, ...geos);
     this.mask = m;
   }
   /** Add parts (modelled in the bone's local frame at its rest pose). */
-  add(b: THREE.Bone, mk: MK, ...geos: G[]) {
+  add(b: THREE.Bone, mk: MK, ...geos: G[]): void {
+    // parts with a cheap stand-in: hero version at LOD0, the stand-in at LOD1/2
+    if (this.mask & L_LO && geos.some((g) => g.userData.lo)) {
+      const mask = this.mask;
+      for (const g of geos) {
+        const lo = g.userData.lo as G | undefined;
+        if (!lo) {
+          this.add(b, mk, g);
+          continue;
+        }
+        delete g.userData.lo;
+        if (mask & L0) this.addL(L0, b, mk, g);
+        this.addL(mask & L_LO, b, mk, lo);
+      }
+      this.mask = mask;
+      return;
+    }
+    for (const g of geos) delete g.userData.lo;
     const fr = this.frames.get(b) ?? b;
     fr.updateWorldMatrix(true, false);
     const idx = this.bones.indexOf(b);

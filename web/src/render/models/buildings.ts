@@ -2462,7 +2462,7 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
       const t = new THREE.TorusGeometry(r + 0.006, 0.009, 3, 18, Math.PI);
       t.scale(1, (rise + 0.006) / (r + 0.006), 1.2);
       t.translate(0, 0, -len / 2 + (len * i) / (ribs + 1));
-      k.add(t, k.P.trim, 0);
+      k.add(t, k.P.steel, 0);
     }
     if (endM) {
       const pts: P2[] = [];
@@ -3111,7 +3111,7 @@ function conyard(k: Kit) {
   k.box(shed, wx1 - wx0, 0.4, wz1 - wz0, wcx, Y0, wcz);
   dress(k, wx0, wx1, wz0, wz1, Y0, 0.4, { beacons: false, vent: false });
   k.box(P.team, wx1 - wx0 + 0.008, 0.026, wz1 - wz0 + 0.008, wcx, Y0 + 0.36, wcz);
-  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true, 4, 3);
+  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true, 4, 2);
   else gable(k, P.pitch, shed, wcx, Y0 + 0.4, wcz, wx1 - wx0, wz1 - wz0, 0.2, 0.03, true);
   rollDoor(k, 'z', 1, 0.42, Y0, wz1, 0.36, 0.3, 0.65);
   k.box(P.lamp, 0.24, 0.012, 0.01, 0.42, Y0 + 0.27, wz1 - 0.12);
@@ -3460,7 +3460,7 @@ function factory(k: Kit) {
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.3, zc);
     for (let i = 0; i < 3; i++) k.at(-0.9 + i * 0.9, rTop + 0.15, zc + L * 0.24, 0, () => k.box(P.glass, 0.3, 0.012, 0.16, 0, 0, 0), Math.atan2(0.3, L / 2));
   } else {
-    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true, 4, 6);
+    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true, 4, 4);
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.28, zc);
     k.box(P.glass, 2.2, 0.014, 0.12, 0, rTop + 0.29, zc + 0.12);
   }

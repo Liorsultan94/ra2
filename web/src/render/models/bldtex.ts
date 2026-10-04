@@ -976,7 +976,7 @@ const WEATHER_FRAG = `{
           vec2 wxz = vBWp.xz;
           // macro blotches: big flat walls and roofs never read as one flat colour
           float mN = bVn( wxz * 2.1 + vBWp.y * 1.9 ) * 0.62 + bVn( wxz * 6.3 - vBWp.y * 4.7 + 9.0 ) * 0.38;
-          diffuseColor.rgb *= 1.0 + ( mN - 0.5 ) * 0.2 * bWeather.w * bWeather.x;
+          diffuseColor.rgb *= 1.0 + ( mN - 0.5 ) * 0.28 * bWeather.w * bWeather.x;
           if ( vBDrip > 0.5 ) {
             float d = vBDrip - 1.0;
             bool metal = wti > 1.5 && wti < 5.5;
@@ -989,14 +989,14 @@ const WEATHER_FRAG = `{
             float k = smoothstep( 0.15, 0.85, fract( cx ) );
             float ha = bH1( c0 );
             float hb = bH1( c0 + 1.0 );
-            float str = mix( ha * ha * ha, hb * hb * hb, k );
+            float str = mix( ha * ha, hb * hb, k );
             float len = mix( 0.05 + 0.42 * bH1( c0 + 17.3 ), 0.05 + 0.42 * bH1( c0 + 18.3 ), k );
             float wob = bVn( vec2( cx * 0.9, vBWp.y * 11.0 ) ) - 0.5;
             float streak = str * ( 1.0 - smoothstep( 0.0, len, d + 0.05 * wob ) );
             // a soft drip band right under every top edge
             float band = ( 1.0 - smoothstep( 0.0, 0.07, d ) ) * ( 0.55 + 0.45 * mN );
-            float g = vert * clamp( streak * 1.15 + band * 0.32, 0.0, 1.0 ) * bWeather.y;
-            vec3 gc = metal ? vec3( 0.66, 0.44, 0.3 ) : vec3( 0.6, 0.57, 0.52 );
+            float g = clamp( vert * ( streak * 1.3 + band * 0.4 ) * bWeather.y, 0.0, 1.0 );
+            vec3 gc = metal ? vec3( 0.6, 0.38, 0.24 ) : vec3( 0.5, 0.47, 0.42 );
             diffuseColor.rgb *= mix( vec3( 1.0 ), gc, g * bWeather.x );
             // dust / splash band at the foot of walls (root space height above the slab)
             float h = vBLp.y - 0.04;
