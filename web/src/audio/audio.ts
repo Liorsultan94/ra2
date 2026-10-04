@@ -92,6 +92,8 @@ const C = (lvl: number, wet: number, gap: number, weight: number, cap: number, l
 // 8-12 dB more RMS than the impulsive cannon and blast buffers, so they sit lower here
 const META: Record<Sfx, Meta> = {
   rifle: C(0.42, 0.12, 0.04, 0.8, 6, 'rifle'),
+  sniper: C(0.6, 0.3, 0.05, 1.5, 4, 'sniper', 0.04),
+  scopeLock: C(0.24, 0.04, 0.1, 0.4, 2, 'scopeLock', 0.02),
   mg: C(0.45, 0.1, 0.05, 0.8, 5, 'mg'),
   autocannon: C(0.55, 0.14, 0.06, 1.1, 4, 'flak'),
   flak: C(0.5, 0.14, 0.05, 1, 4, 'flak'),

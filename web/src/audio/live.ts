@@ -10,7 +10,9 @@ export type LiveName =
   | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'click' | 'tab' | 'build' | 'place' | 'sell' | 'error'
   | 'select' | 'ack' | 'alarm' | 'money' | 'deploy' | 'repair' | 'jam'
   /** Victory fireworks (render/fx/fireworks.ts): a whistling launch, the burst, the glitter crackle. */
-  | 'fwLaunch' | 'fwBoom' | 'fwCrackle';
+  | 'fwLaunch' | 'fwBoom' | 'fwCrackle'
+  /** Sniper rifle crack (render/fx/sniperfx.ts) and the quiet click when its aim locks. */
+  | 'sniper' | 'scopeLock';
 
 export type Build = (p: Patch, o: AudioNode, t: number, r: number) => void;
 
@@ -33,6 +35,22 @@ function bigBoom(p: Patch, o: AudioNode, t: number, r: number): void {
 }
 
 export const LIVE: Record<LiveName, LiveDef> = {
+  sniper: {
+    lvl: 0.62, wet: 0.3, gap: 0.05,
+    build(p, o, t, r) {
+      p.nh(o, t, { type: 'highpass', f: 4500, d: 0.02, peak: 0.4 });
+      p.nh(o, t, { type: 'bandpass', f: 1300 * r, q: 0.8, d: 0.09, peak: 1 });
+      p.th(o, t, { f: 110 * r, f2: 40, glide: 0.12, d: 0.2, peak: 0.6 });
+      p.nh(o, t + 0.02, { kind: 'pink', type: 'lowpass', f: 700, d: 0.9, peak: 0.25 });
+    },
+  },
+  scopeLock: {
+    lvl: 0.25, wet: 0.04, gap: 0.08,
+    build(p, o, t, r) {
+      p.nh(o, t, { type: 'bandpass', f: 4200 * r, q: 7, a: 0.0005, d: 0.008, peak: 0.25 });
+      p.nh(o, t + 0.05, { type: 'bandpass', f: 5200 * r, q: 7, a: 0.0005, d: 0.008, peak: 0.16 });
+    },
+  },
   fwLaunch: {
     lvl: 0.4, wet: 0.2, gap: 0.05,
     build(p, o, t, r) {

@@ -9,6 +9,7 @@ import type { World } from '../sim/world';
 import { unitStandHeight } from './deckramp';
 import { BridgeFx } from './bridgefx';
 import { SuperFx } from './fx/superfx';
+import { SniperFx } from './fx/sniperfx';
 import { Debris } from './debris';
 import { Fracture, type FracWreck } from './fracture';
 import { Secondaries } from './fx/secondary';
@@ -233,6 +234,8 @@ export class GameRenderer {
   readonly bridgeFx: BridgeFx;
   /** Garrison window fire, house damage sync, superweapon blasts / Iron Beam dome (fx/superfx.ts). */
   readonly superFx: SuperFx;
+  /** Sniper laser designator: beam + swaying dot while aiming, the shot (fx/sniperfx.ts). */
+  readonly sniperFx: SniperFx;
   /** Civilian traffic, livestock and birds (src/render/ambient, visual only). */
   readonly ambient: AmbientLife | null = null;
   /** River weather, ring waves, fuel slicks, floating debris (fx/waterfx.ts, visual only). */
@@ -498,6 +501,24 @@ export class GameRenderer {
       this.scene.add(this.sky.mesh);
     }
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
+    this.sniperFx = new SniperFx({
+      world,
+      scene: this.scene,
+      effects: this.effects,
+      camera: this.camera,
+      viewHeight: () => this.height,
+      hour: () => {
+        const c = this.atmos.clock();
+        return c.hours + c.minutes / 60;
+      },
+      muzzle: (e) => this.sniperMuzzle(e),
+      entityPos: (e, a) => this.entityPos(e, a),
+      visibleAt: (x, y) => this.visibleAt(x, y),
+      markFired: (e) => {
+        const v = this.visuals.get(e.id);
+        if (v) v.lastFire = this.time;
+      },
+    });
     this.river = new WaterFx({ world, terrain: this.terrain, effects: this.effects, atmos: this.atmos, fog: this.fog, scene: this.scene, quality, target: this.target, visibleAt: (x, y) => this.visibleAt(x, y) });
     this.life = new UnitLife(this.scene, this.effects, world, (x, z) => standHeight(world.map, x, z), (id) => this.visuals.get(id)?.model);
     this.deployFx = new DeployFx(this.scene, this.effects, (id) => !!world.get(id));
@@ -652,6 +673,7 @@ export class GameRenderer {
       'terrain': sys(this.terrain, 'update'),
       'bridges': sys(this.bridgeFx, 'update'),
       'superfx': sys(this.superFx, 'update'),
+      'sniperfx': sys(this.sniperFx, 'update'),
       'fog': sys(this.fog, 'update'),
       ...(this.ambient ? { ambient: sys(this.ambient, 'update') } : {}),
       'instancer': sys(this.instancer, 'update'),
@@ -1161,6 +1183,7 @@ export class GameRenderer {
       a.dt = dt;
       a.time = this.time;
       a.fired = this.time - v.lastFire;
+      a.aim = e.aimTarget >= 0 ? 1 : 0; // sniper lock-on: shouldered, kneeling (sim/sniper.ts)
       a.damage = 1 - e.hp / e.maxHp;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
@@ -1665,6 +1688,15 @@ export class GameRenderer {
 
   // ------------------------------------------------------------------ events
 
+  /** World position of a unit's first muzzle on its posed model (null without a visible model). */
+  private sniperMuzzle(e: Entity): THREE.Vector3 | null {
+    const v = this.visuals.get(e.id);
+    if (!v || !v.visible || !v.model.muzzles.length) return null;
+    const m = v.model.muzzles[0];
+    m.updateWorldMatrix(true, false);
+    return m.getWorldPosition(new THREE.Vector3());
+  }
+
   private muzzleOf(e: Entity): { pos: THREE.Vector3; dir: THREE.Vector3 } {
     const v = this.visuals.get(e.id);
     const dir = new THREE.Vector3(Math.cos(e.turret), 0, Math.sin(e.turret));
@@ -1747,6 +1779,7 @@ export class GameRenderer {
   handleEvent(ev: SimEvent) {
     this.ambient?.onEvent(ev);
     this.river.onEvent(ev);
+    if (this.sniperFx.onEvent(ev)) return; // sniper shots: flash, faint tracer, hit puff (fx/sniperfx.ts)
     if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
@@ -2126,6 +2159,7 @@ export class GameRenderer {
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
     this.superFx.update(dt, this.time);
+    this.sniperFx.update(dt, alpha);
     this.effects.update(dt);
     this.river.update(dt);
     this.updateCamera();
@@ -2261,6 +2295,7 @@ export class GameRenderer {
     this.instancer.dispose();
     this.life.dispose();
     this.deployFx.dispose();
+    this.sniperFx.dispose();
     this.atmos.dispose();
     this.sky?.dispose();
     this.canvas.removeEventListener('webglcontextlost', this.onContextLost);

@@ -650,7 +650,8 @@ export class Game {
         if (w.flight && w.flight !== 'shell' && w.flight !== 'artillery' && w.flight !== 'mortar') break; // launch event plays it
         if (ev.targetId < 0 && w.projectile !== 'beam') break;
         const snd: Sfx =
-          w.projectile === 'beam' ? 'laser'
+          w.aim ? 'sniper'
+          : w.projectile === 'beam' ? 'laser'
           : w.projectile === 'spawn' ? 'droneLaunch'
           : ev.weapon === 'autocannon' ? 'autocannon'
           : w.warhead === 'flak' ? 'flak'
@@ -660,13 +661,17 @@ export class Game {
           : w.projectile === 'artillery' ? (w.flight === 'mortar' ? 'mortar' : 'artillery')
           : w.projectile === 'shell' ? (w.damage > 70 ? 'cannonHeavy' : 'cannon')
           : w.rof < 10 ? 'mg' : 'rifle';
-        this.sfx(snd, ev.x, ev.y, snd === 'mg' || snd === 'rifle' ? 0.5 : 0.8);
+        this.sfx(snd, ev.x, ev.y, snd === 'mg' || snd === 'rifle' ? 0.5 : snd === 'sniper' ? 0.95 : 0.8);
         break;
       }
+      case 'aim':
+        // sniper lock-on (sim/sniper.ts): a quiet click as the aim goes steady
+        if (ev.phase === 'lock' && this.visibleToLocal(ev.x, ev.y)) this.sfx('scopeLock', ev.x, ev.y, ev.owner === this.local ? 0.9 : 0.5);
+        break;
       case 'impact': {
         if (!this.visibleToLocal(ev.x, ev.y)) break;
         const w = WEAPONS[ev.weapon];
-        if (w.projectile === 'instant' && w.damage < 30) break;
+        if ((w.projectile === 'instant' && w.damage < 30) || w.aim) break; // (a sniper's hit is just the crack)
         if (w.projectile === 'beam') break;
         const big = w.damage >= 200 || w.warhead === 'thermo';
         this.sfx(big ? 'explosionLarge' : w.damage >= 70 || w.splash ? 'explosionMedium' : 'explosionSmall', ev.x, ev.y, big ? 1 : 0.8, ev.air ? ev.z : 0);

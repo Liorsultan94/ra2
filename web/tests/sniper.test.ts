@@ -61,7 +61,8 @@ function duel(dist = 9, foeDef = 'russia_rifle', n = 1) {
   return { w, s, foes, x, y };
 }
 
-const fires = (log: Ev[], id: number) => log.filter((e) => e.t === 'fire' && e.id === id);
+type FireEv = Extract<SimEvent, { t: 'fire' }> & { tick: number };
+const fires = (log: Ev[], id: number) => log.filter((e): e is FireEv => e.t === 'fire' && e.id === id);
 const aims = (log: Ev[], id: number, phase: 'start' | 'lock') => log.filter((e) => e.t === 'aim' && e.id === id && e.phase === phase);
 
 describe('sniper: roster and stats', () => {
@@ -361,4 +362,30 @@ describe('sniper determinism', () => {
     expect(snap(a)).toBe(snap(b));
     expect(unitDef('israel_sniper').aiWeight).toBeGreaterThan(0);
   }, 120000);
+});
+
+describe('sniper laser (render helpers)', () => {
+  it('the dot sways like a hand: big figure-8 drift early, settling, dead steady for the final lock', async () => {
+    const { swayOffset, laserIsGreen, SWAY_AMP } = await import('../src/render/fx/sniperfx');
+    const steady = 1 - 8 / 60;
+    const amp = (k: number) => {
+      let m = 0;
+      for (let t = 0; t < 3; t += 0.05) {
+        const [x, y] = swayOffset(k, t, 0.37, steady);
+        m = Math.max(m, Math.hypot(x, y));
+      }
+      return m;
+    };
+    expect(amp(0.05)).toBeGreaterThan(SWAY_AMP * 0.6);
+    expect(amp(0.5)).toBeLessThan(amp(0.05));
+    expect(amp(0.8)).toBeLessThan(amp(0.5));
+    expect(amp(steady)).toBe(0);
+    expect(amp(1)).toBe(0);
+    // green by day, red at dusk / night / dawn
+    expect(laserIsGreen(12)).toBe(true);
+    expect(laserIsGreen(9)).toBe(true);
+    expect(laserIsGreen(19)).toBe(false);
+    expect(laserIsGreen(22)).toBe(false);
+    expect(laserIsGreen(4)).toBe(false);
+  });
 });
