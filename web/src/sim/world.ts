@@ -22,6 +22,7 @@ import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankF
 import { Rng } from './rng';
 import { isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, updateSortie, freePad } from './airbase';
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
+import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from './sniper';
 import {
   CATEGORIES,
   TPS,
@@ -293,6 +294,8 @@ export class World {
       dodgeAt: 0,
       stillAt: 0,
       sortie: null,
+      aimTarget: -1,
+      aimTicks: 0,
     };
   }
 
@@ -369,7 +372,7 @@ export class World {
     let r = wpn.range;
     if (e.inside >= 0) {
       const h = garrisonOf(this, e);
-      if (h) r += garrisonRangeBonus(h); // firing from a civilian building (garrison.ts)
+      if (h) r += garrisonRangeBonus(h, wpn); // firing from a civilian building (garrison.ts)
     }
     if (e.owner >= 0) {
       const p = this.players[e.owner];
@@ -468,6 +471,7 @@ export class World {
     if (!p || p.defeated) return;
     const own = (ids: number[]) =>
       ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+    if ('ids' in cmd) for (const e of own(cmd.ids)) aimOrder(e, cmd); // a new order breaks a sniper's aim (sniper.ts)
     if (applyOrderCommand(this, pid, cmd, own)) return; // stances, patrol, guard, queued waypoints (orders.ts)
     switch (cmd.type) {
       case 'move': {
@@ -1046,6 +1050,12 @@ export class World {
       if (dist > range) return;
       if (vis && !vis.visible[this.tileOf(t.x, t.y)]) return;
       let score = dist;
+      if (wpn?.aim) {
+        // lock-on weapons (sniper.ts): infantry first, no buildings
+        const s = aimTargetScore(t);
+        if (s === null) return;
+        score += s;
+      }
       if (t.kind === 'building') {
         const bd = buildingDef(t.def);
         score += bd.weapon ? 3 : 8;
@@ -1069,7 +1079,10 @@ export class World {
     const wpn = WEAPONS[d.weapon!];
     const dist = this.distTo(e, t);
     if (!this.canHit(wpn, t)) return 'out';
-    if (dist > this.weaponRange(e, wpn) || (wpn.minRange && dist < wpn.minRange)) return 'out';
+    if (dist > this.weaponRange(e, wpn) || (wpn.minRange && dist < wpn.minRange) || (wpn.aim && !aimSees(this, e, t))) {
+      if (wpn.aim) cancelAim(e); // target left range / sight: the lock is lost (sniper.ts)
+      return 'out';
+    }
     const want = Math.atan2(t.y - e.y, t.x - e.x);
     let aligned: boolean;
     if (d.kind === 'building') {
@@ -1083,6 +1096,17 @@ export class World {
       e.facing = turnToward(e.facing, want, ud.category === 'infantry' ? 1 : ud.turnRate);
       e.turret = e.facing;
       aligned = Math.abs(angleDiff(e.facing, want)) < 0.15;
+    }
+    if (wpn.aim) {
+      // lock-on weapon (sniper.ts): hold the aim, then release the shot this very tick
+      if (aimStep(this, e, t, wpn) && aligned && e.cooldown <= 0 && e.burstLeft === 0) {
+        e.burstLeft = 1;
+        e.burstTimer = 0;
+        e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
+        this.processBurst(e);
+        if (t.dead) cancelAim(e);
+      }
+      return 'aiming';
     }
     if (aligned && e.cooldown <= 0 && e.burstLeft === 0) {
       e.burstLeft = wpn.burst ?? 1;
@@ -1159,7 +1183,9 @@ export class World {
     if (src.inside >= 0 && garrisonOf(this, src)) amount *= GARRISON_FIREPOWER;
     if (!raw && t.passengers.length && isGarrison(t)) amount = garrisonHit(this, t, amount, warhead, src);
     // a jet on its wheels is soft-skinned, not an aircraft dodging flak (airbase.ts)
-    t.hp -= amount * VERSUS[warhead][jetGrounded(t) ? 'light' : d.armor];
+    let dealt = amount * VERSUS[warhead][jetGrounded(t) ? 'light' : d.armor];
+    if (warhead === 'sniper' && d.armor === 'infantry') dealt = Math.max(dealt, t.hp); // one shot, one kill (sniper.ts)
+    t.hp -= dealt;
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
       const p = this.players[t.owner];
@@ -1241,6 +1267,7 @@ export class World {
     if (e.rank >= ELITE && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * ELITE_HEAL);
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
+    aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (e.dodge && stepDodge(this, e, d)) return; // jumping out of a vehicle's way (crush.ts)
     if (isSortieJet(d)) {
       updateSortie(this, e, d); // airbase sortie cycle (airbase.ts)
@@ -1440,6 +1467,7 @@ export class World {
     e.y = e.py = apc.y;
     if (e.cooldown > 0) e.cooldown--;
     this.processBurst(e);
+    aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (!d.weapon || d.engineer) return;
     const wpn = WEAPONS[d.weapon];
     let t = this.get(e.targetId);
