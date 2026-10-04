@@ -220,7 +220,7 @@ export class MainMenu {
             <h3>Goal</h3>
             <p>Deploy your <b>MCV</b> into a Construction Yard, build a base, harvest <b>ore</b> for credits and destroy every enemy structure.</p>
             <h3>Economy</h3>
-            <p>Power Plant → Ore Refinery (comes with a harvester) → Barracks → War Factory → Radar → Drone Hub → Battle Lab. Keep power above use or production slows and defenses shut down. Capture <b>Oil Derricks</b> with an Engineer for extra income.</p>
+            <p>Power Plant → Ore Refinery (comes with a harvester) → Barracks → War Factory → Radar → Airbase → Battle Lab. Keep power above use or production slows and defenses shut down. Capture <b>Oil Derricks</b> with an Engineer for extra income.</p>
             <h3>Counters</h3>
             <p>Tanks beat infantry & vehicles, AT teams and ATGMs beat tanks, MGs shred infantry and drones, AA vehicles and SAM sites stop drones and jets. EW jams drones. Artillery out-ranges everything but is fragile.</p>
           </div>

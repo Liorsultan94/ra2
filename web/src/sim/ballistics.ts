@@ -68,6 +68,8 @@ const SPEC: Record<Flight, FlightSpec> = {
   hypersonic: { time: (d) => 2.4 + d * 0.07, arc: (d) => 4.5 + d * 0.3 },
   // subsonic: ~2.9 tiles/s along a track ~10% longer than the chord (stepped by stepCruise, not analyticPos)
   cruise: { time: (d) => 0.8 + (d * 1.1) / 2.9, arc: () => 0 },
+  // jet bomb: keeps most of the jet's forward speed while it falls (the arc is set from the drop height in launch)
+  bomb: { time: (d) => 0.25 + d / 3.6, arc: () => 0 },
   atgm: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 9, accel: 30, turn: 4.5, hit: 0.35, life: 6 },
   topAttack: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 8, accel: 22, turn: 5, hit: 0.35, life: 8 },
   airMissile: { time: () => 0, arc: () => 0, guided: true, maxSpeed: 12, accel: 35, turn: 5, hit: 0.4, life: 6 },
@@ -144,6 +146,11 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
   if (!spec.guided) {
     p.T = Math.max(2, Math.round(spec.time(dist) * (weapon.flightTime ?? 1) * TPS));
     p.arc = spec.arc(dist) * (weapon.apogee ?? 1);
+    // released in level flight: z = sz - (sz - tz) k^2, a true free-fall curve (chord + 4k(1-k) lift)
+    if (flight === 'bomb') {
+      p.z = p.sz = p.pz = p.z - 0.2; // off the belly pylon
+      p.arc = (p.z - p.tz) / 4;
+    }
     if (flight === 'cruise') {
       // dog-leg route: the ground track bows out to one side (alternating per round) around a waypoint
       const h = Math.min(5, dist * 0.3) * (p.id % 2 ? 1 : -1);
@@ -573,7 +580,7 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
       }
     }
     const near = t.kind === 'building' ? w.distTo({ x: p.x, y: p.y } as Entity, t) < 0.6 : Math.hypot(t.x - p.x, t.y - p.y) < 0.75;
-    if (near && (!unitDef(t.def)?.air || t.kind === 'building' || wpn.air !== 'no')) {
+    if (near && (!w.isAir(t) || wpn.air !== 'no')) {
       w.damage(t, wpn.damage * dmgMul, wpn.warhead, src);
       direct = true;
     }

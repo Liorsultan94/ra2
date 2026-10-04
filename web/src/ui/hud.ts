@@ -9,6 +9,7 @@ import { SupportPower } from './support';
 import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
+import { isSortieJet, jetCount, jetsQueued, padCap, rearmProgress } from '../sim/airbase';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
@@ -454,6 +455,12 @@ export class Hud {
     if (extra.length) lines.push(`<div class="tt-stats">${extra.join(' · ')}</div>`);
     const missing = d.prereq.filter((r) => !this.world.hasRole(this.player, r));
     if (missing.length) lines.push(`<div class="tt-req">Requires: ${missing.map(roleName).join(', ')}</div>`);
+    else if (d.kind === 'unit' && isSortieJet(d)) {
+      // jet cap: one parking pad per jet (airbase.ts)
+      const used = jetCount(this.world, this.player) + jetsQueued(this.world, this.player);
+      const cap = padCap(this.world, this.player);
+      lines.push(`<div class="${used >= cap ? 'tt-req' : 'tt-stats'}">Airbase pads ${used}/${cap}${used >= cap ? ' - build another Airbase for more jets' : ''}</div>`);
+    }
     this.tooltip.innerHTML = lines.join('');
     this.tooltip.classList.remove('hidden');
     const r = anchor.getBoundingClientRect();
@@ -503,7 +510,8 @@ export class Hud {
       b.classList.toggle('blocked', can && d.kind === 'building' && ((q.length > 0 && q[0].def !== id) || (!!p.ready[cat] && !ready)));
       (b.querySelector('.c-prog') as HTMLElement).style.setProperty('--p', head ? String(head.progress) : count ? '0' : '1');
       (b.querySelector('.c-count') as HTMLElement).textContent = count > 1 ? String(count) : '';
-      (b.querySelector('.c-status') as HTMLElement).textContent = ready ? 'READY' : head && p.credits <= 0 ? 'NO FUNDS' : head && w.isLowPower(p) ? 'LOW POWER' : '';
+      const padsFull = !can && !head && d.kind === 'unit' && isSortieJet(d) && d.prereq.every((r) => w.hasRole(this.player, r));
+      (b.querySelector('.c-status') as HTMLElement).textContent = ready ? 'READY' : head && p.credits <= 0 ? 'NO FUNDS' : head && w.isLowPower(p) ? 'LOW POWER' : padsFull ? 'PADS FULL' : '';
       const st = tabState.get(cat) ?? { ready: false, busy: false, avail: false };
       st.ready ||= ready;
       st.busy ||= !!head;
@@ -527,7 +535,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}` : ''}`).join(',');
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
     const own = sel.filter((e) => e.owner === this.player);
@@ -555,12 +563,14 @@ export class Hud {
           stats.push(`Range ${wp.range}`, wp.air === 'only' ? 'Anti-air' : wp.air === 'yes' ? 'Ground + air' : 'Ground');
         }
         if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
+        // jets: sortie status and rearm progress, shown in the simple (phone) UI too
+        const jet = e.sortie && e.owner === this.player ? `<div class="sp-jet${e.sortie.rearm > 0 ? ' rearm' : ''}"><span>${sortieLabel(e)}</span>${e.sortie.phase === 'parked' ? `<i style="--k:${rearmProgress(e).toFixed(3)}"></i>` : ''}</div>` : '';
         const segs = 12;
         const on = Math.ceil(hp * segs);
         const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
         const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
         const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
       } else {
@@ -933,7 +943,9 @@ export class Hud {
         st.flash = Math.max(0, st.flash - dt * 3.5);
         st.ghost = st.ghost > hp ? Math.max(hp, st.ghost - dt * 0.45) : hp;
       }
-      const bar = selected || e.id === hover || recent;
+      // own jets rearming on their pads always show the rearm bar (airbase.ts)
+      const rearming = !!e.sortie && e.sortie.rearm > 0 && e.owner === this.player;
+      const bar = selected || e.id === hover || recent || rearming;
       const pop = e.kind === 'unit' ? this.rankPops.pop(e, now) : 0;
       if (!bar && !e.rank) continue;
       if (e.kind === 'unit' && unitDef(e.def).temp) continue;
@@ -995,6 +1007,17 @@ export class Hud {
         const k = e.cargo / 900;
         ctx.fillStyle = '#e8c040';
         for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + bh + 3, 4, 3);
+      }
+      if (e.sortie && e.owner === this.player && (rearming || (selected && e.sortie.phase === 'parked'))) {
+        // jet rearm bar under the health bar: amber while rearming, green when armed and ready
+        const k = Math.max(0, rearmProgress(e));
+        const ry = y0 + bh + 3;
+        ctx.fillStyle = 'rgba(4,8,10,0.78)';
+        ctx.fillRect(x0 - 1, ry - 1, width + 2, 5);
+        ctx.fillStyle = k >= 1 ? '#56e06a' : '#ffb020';
+        ctx.fillRect(x0, ry, Math.max(1, width * k), 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(x0, ry, Math.max(1, width * k), 1);
       }
       const g = groups.get(e.id);
       if (g !== undefined && selected) {
@@ -1114,6 +1137,33 @@ export function flagHtml(faction: string) {
   return `<img class="flag" src="${flagDataUrl(faction)}" alt="">`;
 }
 
+/** Jet status line for the selection panel (airbase.ts sortie cycle). */
+function sortieLabel(e: Entity): string {
+  const s = e.sortie!;
+  const pct = Math.round(rearmProgress(e) * 100);
+  switch (s.phase) {
+    case 'parked':
+      return s.rearm > 0 ? `Rearming ${pct}%` : s.ammo > 0 ? 'Armed - tap a target' : 'Rearming';
+    case 'taxiOut':
+    case 'hold':
+    case 'lineup':
+      return 'Taxiing out';
+    case 'takeoff':
+      return 'Taking off';
+    case 'sortie':
+      return s.ammo > 0 ? 'Strike run' : 'In flight';
+    case 'return':
+      return 'Returning to base';
+    case 'final':
+      return 'Landing';
+    case 'rollout':
+    case 'taxiIn':
+      return 'Taxiing in';
+    case 'orbit':
+      return `No free pad - fuel ${Math.ceil(s.fuel / TPS)} s`;
+  }
+}
+
 function roleName(r: string) {
   const map: Record<string, string> = {
     conyard: 'Construction Yard',
@@ -1122,7 +1172,7 @@ function roleName(r: string) {
     barracks: 'Barracks',
     factory: 'War Factory',
     radar: 'Radar Center',
-    airfield: 'Drone Hub',
+    airfield: 'Airbase',
     tech: 'Battle Lab',
   };
   return map[r] ?? r;

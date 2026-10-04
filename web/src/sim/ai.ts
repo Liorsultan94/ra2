@@ -1,4 +1,5 @@
 import { airdropStatus } from './airdrop';
+import { isSortieJet, jetReady } from './airbase';
 import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
@@ -55,7 +56,7 @@ const BUILD_ORDER: [string, number][] = [
   ['power', 6],
 ];
 
-type Klass = 'main' | 'arty' | 'strike' | 'aa' | 'support' | 'none';
+type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
 type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing';
 
 interface Intel {
@@ -78,6 +79,7 @@ function klass(def: string): Klass {
   const d = unitDef(def);
   if (d.harvester || d.mcv || d.engineer || d.temp || d.airlift || d.supply) return 'none';
   if (isStrike(def)) return 'strike';
+  if (isSortieJet(d)) return 'jet';
   if (d.aiTag === 'support') return 'support';
   if (!d.weapon) return 'none';
   if (d.aiTag === 'arty') return 'arty';
@@ -561,7 +563,8 @@ export class AIController implements Controller {
     }
     const combat = units.filter((u) => klass(u.def) !== 'none');
     this.manageStrikes(combat.filter((u) => klass(u.def) === 'strike'));
-    const force = combat.filter((u) => klass(u.def) !== 'strike');
+    this.manageJets(combat.filter((u) => klass(u.def) === 'jet'));
+    const force = combat.filter((u) => klass(u.def) !== 'strike' && klass(u.def) !== 'jet');
     if (force.length === 0) return;
 
     if (micro > 0) this.manageRetreats(force);
@@ -586,6 +589,56 @@ export class AIController implements Controller {
     if (ready.length < salvo) return;
     const t = this.pickStrikeTarget(ready[0]);
     if (t) this.cmd({ type: 'attack', ids: ready.map((u) => u.id), target: t });
+  }
+
+  /**
+   * Strike jets fly the airbase sortie cycle (airbase.ts): every jet that sits armed on its pad is sent
+   * against the best target it knows - enemy forces pressing the base first, then artillery / missile
+   * launchers, harvesters and high-value structures, away from heavy air defences. Jets that are ready
+   * together strike together.
+   */
+  private manageJets(jets: Entity[]) {
+    const ready = jets.filter((u) => jetReady(u) && u.order.type === 'idle');
+    if (!ready.length) return;
+    const t = this.pickJetTarget(ready[0]);
+    if (t >= 0) this.cmd({ type: 'attack', ids: ready.map((u) => u.id), target: t });
+  }
+
+  private pickJetTarget(from: Entity): number {
+    const w = this.world;
+    const [hx, hy] = this.home();
+    const deep = this.doctrine.deep;
+    let best = -1;
+    let bs = -Infinity;
+    for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 15)) {
+      const e = w.get(id);
+      if (!e || (!it.building && !w.visibleTo(this.pid, e.x, e.y))) continue;
+      const d = DEFS[it.def];
+      let value: number;
+      if (it.building) {
+        const role = buildingDef(it.def).role;
+        const k = deep.indexOf(role);
+        value = 5 + (k >= 0 ? 6 - k : role === 'conyard' || role === 'superweapon' ? 5 : role === 'refinery' ? 3 : 0);
+      } else {
+        const k = klass(it.def);
+        value = d.kind === 'unit' && d.harvester ? 8 : k === 'arty' || k === 'strike' ? 9 : k === 'aa' ? 2 : d.category === 'infantry' ? 1 : 5;
+        // armour pressing our base: hit it before it gets in
+        if (Math.hypot(it.x - hx, it.y - hy) < 16) value += 6;
+      }
+      const s = value * 3 - this.threatAt(it.x, it.y, 7, true) * 2.5 - Math.hypot(it.x - from.x, it.y - from.y) * 0.04;
+      if (s > bs) {
+        bs = s;
+        best = id;
+      }
+    }
+    if (best < 0) {
+      // nothing scouted yet: the enemy base location is common knowledge
+      const enemy = this.enemyBase();
+      if (enemy)
+        for (const e of w.list)
+          if (!e.dead && e.kind === 'building' && w.isEnemy(this.pid, e.owner) && buildingDef(e.def).category !== 'defense' && Math.hypot(e.x - enemy[0], e.y - enemy[1]) < 10) return e.id;
+    }
+    return best;
   }
 
   /** Strike target: a known high-value structure (or enemy artillery for counter-battery doctrines), nearest first. */
