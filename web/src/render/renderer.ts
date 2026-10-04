@@ -329,6 +329,8 @@ export class GameRenderer {
     this.onContextRestored = () => {
       this.post?.lut.invalidate();
       this.sky?.invalidate();
+      // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
+      this.terrain.ground.photo?.restore();
       this.shadowAge = 1e9;
     };
     canvas.addEventListener('webglcontextlost', this.onContextLost);

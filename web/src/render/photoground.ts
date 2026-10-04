@@ -153,6 +153,8 @@ export class PhotoGround {
       a.set([srgbByte(m.mean[0]), srgbByte(m.mean[1]), srgbByte(m.mean[2]), 255], i * 4);
       nn.set([128, 128, 128, 255], i * 4);
     });
+    this.phA = a;
+    this.phN = nn;
     this.albedo = { value: arrayTexture(a, 1, n, true, 1) };
     this.normal = { value: arrayTexture(nn, 1, n, false, 1) };
     this.params = { value: mats.map((m) => new THREE.Vector4(1 / m.tiles, m.regular ? 1 : 0, m.rough, 1)) };
@@ -178,11 +180,46 @@ export class PhotoGround {
       tint[li].set(ch(c.r, m[0]), ch(c.g, m[1]), ch(c.b, m[2]));
     }
     this.tints = { value: tint };
-    if (size > 0)
-      void loadPhotoStack(biome, size).then((d) => {
-        if (d) this.pending = d;
-        else this.failed = true;
-      });
+    this.biome = biome;
+    this.load();
+  }
+
+  private biome: Biome | undefined;
+  /** Placeholder pixels (one per layer), kept to rebuild the placeholders after a lost GPU context. */
+  private phA: Uint8Array;
+  private phN: Uint8Array;
+  private gen = 0;
+
+  private load() {
+    if (this.size <= 0) return;
+    const gen = this.gen;
+    void loadPhotoStack(this.biome, this.size).then((d) => {
+      if (gen !== this.gen) return;
+      if (d) this.pending = d;
+      else this.failed = true;
+    });
+  }
+
+  /**
+   * The WebGL context was lost and restored. The real arrays live only on the GPU (the scans were
+   * copied in GPU-side and their bitmaps closed), so they came back empty: black ground. Go back to the
+   * mean-colour placeholders right away, then fetch (HTTP cache) and stream the scans in again.
+   */
+  restore() {
+    if (this.size <= 0) return;
+    this.gen++;
+    const n = this.stack.layers.length;
+    this.realA?.dispose();
+    this.realN?.dispose();
+    this.realA = this.realN = null;
+    this.albedo.value = arrayTexture(this.phA, 1, n, true, 1);
+    this.normal.value = arrayTexture(this.phN, 1, n, false, 1);
+    this.pending = null;
+    this.next = 0;
+    this.ready = false;
+    this.failed = false;
+    loads.delete(`${this.biome}:${this.size}`);
+    this.load();
   }
 
   /** Slot -> array layer (shader defines). */
