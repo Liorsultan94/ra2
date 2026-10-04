@@ -1005,6 +1005,53 @@ export class GameRenderer {
   private castSphere = new THREE.Sphere();
   private occlFrame = 0;
 
+  /**
+   * Height of a building's ground slab. The airbase (7 x 4) sits level on the highest ground under it,
+   * its concrete skirt hiding the slope (a centre sample would let bumps poke through the runway).
+   */
+  slabHeight(b: Entity): number {
+    const map = this.world.map;
+    const c = Math.max(groundHeight(map, b.x, b.y), -0.1);
+    const bd = buildingDef(b.def);
+    if (bd.role !== 'airfield') return c;
+    let top = c;
+    for (let y = b.ty; y <= b.ty + bd.h; y++) for (let x = b.tx; x <= b.tx + bd.w; x++) top = Math.max(top, groundHeight(map, x, y));
+    return Math.min(top, c + 0.35);
+  }
+
+  /**
+   * Strike jet on the airbase sortie cycle: it sits on its landing gear on the slab (taxi, roll), the gear
+   * cycles on climb-out / approach, the nose comes up at rotation, stays up on final and in the flare.
+   */
+  private poseJet(e: Entity, v: Visual, a: AnimState, alpha: number) {
+    const s = e.sortie!;
+    const ph = s.phase;
+    const z = e.pz + (e.z - e.pz) * alpha;
+    const onGround = ph === 'parked' || ph === 'taxiOut' || ph === 'hold' || ph === 'lineup' || ph === 'rollout' || ph === 'taxiIn' || (ph === 'takeoff' && z < 0.005);
+    a.ground = onGround ? 1 : 0;
+    const gearDown = onGround || ph === 'takeoff' || ph === 'final' || (ph === 'sortie' && z < 0.9) || (ph === 'return' && z < 1.6 && s.v * TPS < 3.6);
+    a.gear = gearDown ? 1 : 0;
+    // attitude: the flight path angle, plus rotation, approach attitude and the flare
+    const ds = Math.hypot(e.x - e.px, e.y - e.py);
+    let pitch = ds > 1e-4 ? Math.atan2(e.z - e.pz, ds) * 0.9 : 0;
+    if (ph === 'takeoff' && z > 0.001) pitch = Math.max(pitch, 0.17);
+    else if (ph === 'final') pitch = z < 0.3 ? 0.17 : 0.07;
+    else if (onGround) pitch = 0;
+    a.pitch = Math.max(-0.3, Math.min(0.4, pitch));
+    // sit on the gear: wheels on the airbase slab (or the terrain off base), blending out on climb-out
+    const root = v.model.root;
+    const b = s.base >= 0 ? this.world.get(s.base) : undefined;
+    const k = Math.max(0, Math.min(1, 1 - z / 0.5));
+    if (k > 0) {
+      const map = this.world.map;
+      const g = b ? this.slabHeight(b) + 0.05 : Math.max(standHeight(map, root.position.x, root.position.z), 0);
+      const drop = (v.model.gearDrop ?? 0.08) * root.scale.y;
+      const len = v.model.size?.x ?? 1;
+      const air = Math.max(standHeight(map, root.position.x, root.position.z), 0) + z;
+      root.position.y = air + (g + z + drop + Math.max(0, a.pitch) * len * 0.3 - air) * k;
+    }
+  }
+
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   private addContact(e: Entity, v: Visual) {
     const c = this.contact!;
@@ -1098,8 +1145,8 @@ export class GameRenderer {
       a.damage = 1 - e.hp / e.maxHp;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
-        const h = groundHeight(w.map, e.x, e.y);
-        root.position.set(e.tx + bd.w / 2, Math.max(h, -0.1), e.ty + bd.h / 2);
+        const h = this.slabHeight(e);
+        root.position.set(e.tx + bd.w / 2, h, e.ty + bd.h / 2);
         const k = e.buildAnim;
         a.built = k;
         if (this.deployFx.active) {
@@ -1159,6 +1206,8 @@ export class GameRenderer {
         } else {
           root.rotation.set(0, yaw, 0);
         }
+        // airbase sortie: wheels on the runway, gear, rotation / flare attitude (sim/airbase.ts)
+        if (e.sortie && ud.fixedWing) this.poseJet(e, v, a, alpha);
         // airborne drop: transport ramp door, jumpers / supply pallet under canopy
         if (ud.airlift) a.ramp = e.drop?.ramp ?? 0;
         if (v.model.infantry) a.para = e.para ? 1 : 0;
@@ -1321,7 +1370,9 @@ export class GameRenderer {
     if (!v.visible || (!sel && this.hover !== e.id)) return;
     const rp = v.model.root.position;
     const air = e.kind === 'unit' && unitDef(e.def).air;
-    const gy = air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
+    // a jet on its wheels: the ring goes on the airbase slab under it
+    const onPad = !!e.sortie && e.z < 0.3 && e.sortie.base >= 0 ? this.world.get(e.sortie.base) : undefined;
+    const gy = onPad ? this.slabHeight(onPad) + 0.05 : air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
     const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
     const bd = e.kind === 'building' ? buildingDef(e.def) : null;
     this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4, e.rank >= 2);
@@ -1542,7 +1593,8 @@ export class GameRenderer {
       let v = this.projVis.get(p.id);
       if (!v) {
         const obj = p.flight === 'shell' ? new THREE.Group() : this.munition(p);
-        const streak = p.flight === 'shell' || p.flight === 'artillery' ? new THREE.Mesh(this.streakGeo, this.streakMat) : null;
+        // falling jet bombs get the speed streak too, so the drop reads from the RTS camera
+        const streak = p.flight === 'shell' || p.flight === 'artillery' || p.flight === 'bomb' ? new THREE.Mesh(this.streakGeo, this.streakMat) : null;
         if (streak) {
           streak.renderOrder = 4;
           this.scene.add(streak);
@@ -1576,7 +1628,7 @@ export class GameRenderer {
         const wdt = p.flight === 'shell' ? 0.02 : 0.03;
         v.streak.scale.set(wdt, wdt, Math.min(len, 1.2));
       }
-      if (visible && !v.first) {
+      if (visible && !v.first && p.flight !== 'bomb') {
         const k = p.T > 0 ? p.age / p.T : 0;
         const boost =
           p.flight === 'ballistic' ? k < 0.4 : p.flight === 'hypersonic' ? k < 0.3 : p.flight === 'rocketSalvo' ? k < 0.6 : p.flight === 'artillery' || p.flight === 'mortar' || p.flight === 'shell' ? false : true;
@@ -1659,6 +1711,10 @@ export class GameRenderer {
         break;
       case 'cruise':
         p = w.damage >= 300 ? BLASTS.ballistic : BLASTS.missile;
+        break;
+      case 'bomb':
+        // a jet's 2,000 lb bomb: the big one
+        p = BLASTS.ballistic;
         break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
@@ -1744,6 +1800,25 @@ export class GameRenderer {
         if (!prof) break;
         const g = standHeight(this.world.map, ev.x, ev.y);
         fx.blast(prof, ev.x, Math.max(ev.z, g + 0.05), ev.y, g);
+        break;
+      }
+      case 'sortie': {
+        // jets (sim/airbase.ts): tyre smoke at touchdown, a dust kick at the start of the take-off roll
+        if (!this.visibleAt(ev.x, ev.y)) break;
+        const j = this.world.get(ev.id);
+        const gy = j?.sortie && j.sortie.base >= 0 ? (() => {
+          const b = this.world.get(j.sortie!.base);
+          return b ? this.slabHeight(b) + 0.06 : standHeight(this.world.map, ev.x, ev.y);
+        })() : standHeight(this.world.map, ev.x, ev.y);
+        if (ev.what === 'touchdown') {
+          const dx = j ? Math.cos(j.facing) : 1;
+          const dz = j ? Math.sin(j.facing) : 0;
+          for (let i = 0; i < 5; i++) fx.smoke(ev.x - dx * (0.15 + i * 0.12) + (Math.random() - 0.5) * 0.12, gy, ev.y - dz * (0.15 + i * 0.12) + (Math.random() - 0.5) * 0.12, 0.45 + i * 0.05, false);
+        } else if (ev.what === 'takeoff') {
+          const dx = j ? Math.cos(j.facing) : 1;
+          const dz = j ? Math.sin(j.facing) : 0;
+          for (let i = 0; i < 3; i++) fx.dust(ev.x - dx * (0.6 + i * 0.2), gy, ev.y - dz * (0.6 + i * 0.2), 0.8);
+        }
         break;
       }
       case 'promoted': {

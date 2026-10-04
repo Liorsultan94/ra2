@@ -3778,118 +3778,152 @@ function parkedDrone(k: Kit, x: number, y: number, z: number, ry: number, s = 1)
   });
 }
 
+/** Painted runway designator / stand number (white on transparent), read from the approach end. */
+function texPaint(text: string, color = '#f2f0e8') {
+  return canvasTex('paint|' + text + color, 128, 128, (c, w, h) => {
+    c.clearRect(0, 0, w, h);
+    c.fillStyle = color;
+    c.font = 'bold 92px "DejaVu Sans Condensed", Arial Narrow, sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(text, w / 2, h / 2 + 4);
+  });
+}
+
+/** Bomb trolley with two heavy bombs (stand dressing: the rearm crew's load). */
+function bombTrolley(k: Kit, x: number, z: number, ry: number, y = Y0) {
+  const P = k.P;
+  const olive = P.mats.col(0x5c6248, 0.6, 0.25);
+  k.at(x, y, z, ry, () => {
+    k.box(P.yellow, 0.2, 0.012, 0.09, 0, 0.026, 0);
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.cyl(P.rubber, 0.014, 0.012, sx * 0.08, 0.004, sz * 0.045, 8);
+    k.tube(P.dark, [0.1, 0.03, 0], [0.17, 0.03, 0], 0.004, 4);
+    for (const sz of [-1, 1]) {
+      k.tube(olive, [-0.085, 0.058, sz * 0.024], [0.07, 0.058, sz * 0.024], 0.02, 10);
+      k.sph(olive, 0.02, 0.07, 0.058, sz * 0.024, 8, 6);
+      k.box(P.yellow, 0.004, 0.042, 0.042, 0.04, 0.038, sz * 0.024);
+      k.box(P.dark, 0.03, 0.03, 0.004, -0.095, 0.045, sz * 0.024);
+    }
+  });
+}
+
+/**
+ * Airbase (7 x 4 tiles; sim/airbase.ts): runway along the front row, a taxiway across the middle,
+ * four revetted jet stands along the back (1.5 tiles apart, centred 0.75 + 1.5 i from the left edge)
+ * and the control tower in the back-right corner. The sim parks its jets on the stands; the runway
+ * is used one way (take-off and landing in the same direction).
+ */
 function airfield(k: Kit) {
   const P = k.P;
   const N = P.N;
-  const R = P.R;
-  slab(k, 3, 3);
-  // runway strip along the front with edge lights
-  const rz = 1.0;
-  k.box(P.asphalt, 2.96, 0.004, 0.78, 0, Y0, rz);
-  for (const sz of [-1, 1]) k.box(P.white, 2.9, 0.002, 0.014, 0, Y0 + 0.004, rz + sz * 0.35);
-  dashes(k, P.white, -1.0, rz, 1.0, rz, 0.12, 0.08, 0.016, Y0 + 0.004);
-  for (let i = 0; i <= 7; i++) {
-    const x = -1.4 + i * 0.4;
-    for (const sz of [-1, 1]) k.box(i === 0 || i === 7 ? P.green_l : P.lamp, 0.016, 0.012, 0.016, x, Y0 + 0.004, rz + sz * 0.375);
-  }
-  // launch / recovery pad (aircraft spawn at the centre)
-  k.cyl(P.concrete, 0.47, 0.006, 0, Y0, 0, 32);
-  k.decal(P.mats.canvas('helipad', texHelipad('#e8d070'), { alphaTest: 0.5 }), 0, Y0 + 0.007, 0, 0.8, 0.8);
-  k.ring(P.team, 0.46, 0.012, 0, Y0 + 0.006, 0, 40);
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * TAU;
-    k.box(P.amber_l, 0.02, 0.012, 0.02, Math.cos(a) * 0.48, Y0, Math.sin(a) * 0.48);
-  }
-  k.box(P.asphalt, 0.26, 0.004, 0.2, 0, Y0, 0.52);
-
-  // ------------------------------------------------ hangar (back left)
-  const hx0 = -1.42;
-  const hx1 = -0.1;
-  const hz0 = -1.42;
-  const hz1 = -0.55;
-  const hcx = (hx0 + hx1) / 2;
-  const hcz = (hz0 + hz1) / 2;
-  const span = hx1 - hx0;
-  const hl = hz1 - hz0;
-  if (R === 'east') {
-    // hardened aircraft shelter: concrete arch half buried under earth
-    const rise = 0.5;
-    k.at(hcx, Y0, hcz, 0, () => {
-      const g = new THREE.CylinderGeometry(span / 2 + 0.06, span / 2 + 0.06, hl + 0.02, 22, 1, true, -Math.PI / 2, Math.PI);
-      g.rotateX(-Math.PI / 2);
-      g.scale(1, (rise + 0.06) / (span / 2 + 0.06), 1);
-      k.add(g, P.soil);
-    });
-    vault(k, P.panel, null, hcx, Y0, hcz + 0.02, span - 0.02, hl + 0.02, rise, false, 3);
-    const outer: P2[] = [];
-    for (let i = 0; i <= 18; i++) {
-      const a = (i / 18) * Math.PI;
-      outer.push([hcx + (Math.cos(a) * span) / 2, Y0 + Math.sin(a) * rise]);
+  // level slab with a deep skirt: it sits on the highest ground under the footprint (renderer slabHeight)
+  k.plan(P.slab, rect(7 - 0.024, 4 - 0.024), Y0 + 0.4, 0, -0.4, 0, 0.008);
+  const yM = Y0 + 0.006; // paint
+  // ------------------------------------------------ runway (local z 0.62 .. 1.78)
+  const rz = 1.2;
+  const rw = 1.16;
+  const rx = 3.48;
+  k.box(P.asphalt, rx * 2, 0.005, rw, 0, Y0, rz);
+  // shoulders
+  for (const sz of [-1, 1]) k.box(P.concrete, rx * 2, 0.004, 0.05, 0, Y0, rz + sz * (rw / 2 + 0.02));
+  for (const sz of [-1, 1]) k.box(P.white, rx * 2 - 0.1, 0.002, 0.018, 0, yM, rz + sz * (rw / 2 - 0.04));
+  dashes(k, P.white, -2.25, rz, 2.25, rz, 0.22, 0.14, 0.022, yM);
+  for (const sx of [-1, 1]) {
+    const xe = sx * (rx - 0.05);
+    // threshold piano keys
+    for (let i = 0; i < 8; i++) {
+      const zz = rz - rw / 2 + 0.11 + (i + (i >= 4 ? 1 : 0)) * ((rw - 0.22) / 8);
+      k.box(P.white, 0.3, 0.002, 0.045, xe - sx * 0.2, yM, zz);
     }
-    const op = rect(span * 0.7, rise * 0.62, hcx, (rise * 0.62) / 2 + 0.002).map(([a, b]) => [a, b + Y0] as P2);
-    k.prism(P.panel, outer, 0.06, 0, 0, hz1 + 0.03, undefined, [op]);
-    k.box(P.black, span * 0.7, rise * 0.62, 0.01, hcx, Y0, hz1 - 0.2);
-    for (const sx of [-1, 1]) k.box(P.wallB, span * 0.2, rise * 0.62, 0.06, hcx + sx * span * 0.42, Y0, hz1 + 0.09);
-    k.box(P.team, span * 0.7, 0.03, 0.012, hcx, Y0 + rise * 0.62 + 0.01, hz1 + 0.066);
-    stencil(k, '04', 'z', 1, hcx, Y0 + rise * 0.7, hz1 + 0.06, 0.3);
-  } else {
-    // fabric arch shelter (Rubb style) in camo with an open front
-    const rise = 0.42;
-    const wh = 0.12;
-    const fab = P.camo;
-    k.box(P.base, span + 0.012, 0.02, hl + 0.012, hcx, Y0, hcz);
-    for (const sx of [-1, 1]) k.box(fab, 0.03, wh, hl, hcx + sx * (span / 2 - 0.015), Y0, hcz);
-    vault(k, fab, null, hcx, Y0 + wh, hcz, span + 0.02, hl + 0.02, rise, false, 2);
-    // steel arch ribs
-    for (let i = 0; i < 5; i++) {
-      const g = new THREE.TorusGeometry(span / 2 + 0.012, 0.008, 4, 18, Math.PI);
-      g.scale(1, (rise + 0.012) / (span / 2 + 0.012), 1);
-      g.translate(hcx, Y0 + wh, hz0 + 0.04 + (i * (hl - 0.08)) / 4);
-      k.add(g, P.drab, 0);
+    // designator: 09 at the west end, 27 at the east end (read on the approach)
+    const num = sx < 0 ? '09' : '27';
+    k.decal(P.mats.canvas('rwy' + num, texPaint(num), { alphaTest: 0.45 }), xe - sx * 0.62, yM + 0.001, rz, 0.34, 0.34, [0, 0, 1, 1], sx < 0 ? Math.PI / 2 : -Math.PI / 2);
+    // aiming point and touchdown zone bars
+    for (const sz of [-1, 1]) {
+      k.box(P.white, 0.36, 0.002, 0.07, sx * 1.75, yM, rz + sz * 0.26);
+      k.box(P.white, 0.2, 0.002, 0.035, sx * 2.35, yM, rz + sz * 0.3);
+      k.box(P.white, 0.2, 0.002, 0.035, sx * 2.35, yM, rz + sz * 0.22);
     }
-    // back end wall + interior
-    const back: P2[] = [[hx0 + 0.02, Y0], [hx1 - 0.02, Y0]];
-    for (let i = 0; i <= 12; i++) {
-      const a = (i / 12) * Math.PI;
-      back.push([hcx + (Math.cos(a) * (span - 0.04)) / 2, Y0 + wh + Math.sin(a) * (rise - 0.02)]);
+    // runway end lights: green threshold bar, red end bar behind it
+    for (let i = 0; i < 7; i++) {
+      const zz = rz - rw / 2 + 0.08 + (i * (rw - 0.16)) / 6;
+      k.box(P.green_l, 0.022, 0.012, 0.022, xe, Y0, zz);
     }
-    back.splice(2, 0, [hx1 - 0.02, Y0 + wh]);
-    back.push([hx0 + 0.02, Y0 + wh]);
-    k.prism(P.dark, back, 0.01, 0, 0, hz0 + 0.03);
-    k.box(P.lamp, span * 0.5, 0.012, 0.01, hcx, Y0 + wh + 0.2, hz0 + 0.05);
-    // front: canvas door curtains rolled to the sides + team header
-    for (const sx of [-1, 1]) k.box(fab, 0.12, wh + rise * 0.6, 0.03, hcx + sx * (span / 2 - 0.08), Y0, hz1 + 0.01);
-    k.box(P.team, span * 0.6, 0.03, 0.02, hcx, Y0 + wh + rise * 0.82, hz1 + 0.012);
   }
-  parkedDrone(k, hcx, Y0, hz1 - 0.28, Math.PI / 2, 1.1);
-  // drone parking under a camo net (front left of the pad)
-  camoNet(k, -1.42, -0.62, -0.42, 0.42, 0.28, 0.04);
-  parkedDrone(k, -1.02, Y0, -0.0, 0.3, 1.0);
-  ammoBoxes(k, -0.75, 0.3, 4, 0.5);
+  // edge lights (white, every half tile) and the approach strobe posts
+  for (let i = 0; i <= 13; i++) {
+    const x = -rx + 0.25 + i * 0.5;
+    for (const sz of [-1, 1]) k.box(P.lamp, 0.018, 0.014, 0.018, x, Y0, rz + sz * (rw / 2 + 0.035));
+  }
+  // ------------------------------------------------ taxiway (local z -0.18 .. 0.28) + links to the runway ends
+  const tz = 0.05;
+  k.box(P.asphalt, 6.9, 0.004, 0.46, 0, Y0, tz);
+  for (const sx of [-1, 1]) k.box(P.asphalt, 0.62, 0.004, 0.4, sx * 2.95, Y0, 0.42);
+  // yellow centreline + lead-ins
+  k.box(P.yellow, 6.4, 0.002, 0.016, -0.05, yM, tz);
+  for (const sx of [-1, 1]) k.box(P.yellow, 0.016, 0.002, 1.1, sx * 2.95, yM, 0.6);
+  // holding position markings (double solid + double dashed) at both runway links
+  for (const sx of [-1, 1]) {
+    for (const dz of [0, 0.035]) k.box(P.yellow, 0.56, 0.002, 0.01, sx * 2.95, yM, 0.5 + dz);
+    dashes(k, P.yellow, sx * 2.95 - 0.27, 0.58, sx * 2.95 + 0.27, 0.58, 0.05, 0.04, 0.01, yM);
+  }
+  // blue taxiway edge lights
+  for (let i = 0; i < 12; i++) {
+    const x = -3.2 + i * 0.56;
+    for (const sz of [-1, 1]) k.box(P.cyan_l, 0.014, 0.012, 0.014, x, Y0, tz + sz * 0.25);
+  }
 
-  // ------------------------------------------------ control tower (back right): stacked containers + glass cab
-  const tx = 1.0;
-  const tz = -1.0;
-  cabin(k, tx, Y0, tz + 0.18, 0, N.wall, 0.6);
-  cabin(k, tx, Y0, tz - 0.2, 0, N.boxes[0], 0.6);
-  cabin(k, tx, Y0 + 0.17, tz - 0.01, 0, N.wall, 0.6, false);
-  k.box(P.steel, 0.28, 0.02, 0.28, tx, Y0 + 0.34, tz);
-  k.box(P.mats.col(0x2a4258, 0.15, 0.8), 0.24, 0.12, 0.24, tx, Y0 + 0.36, tz);
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.dark, 0.012, 0.12, 0.012, tx + sx * 0.12, Y0 + 0.36, tz + sz * 0.12);
-  k.box(P.lamp, 0.22, 0.004, 0.22, tx, Y0 + 0.42, tz);
-  k.box(P.dark, 0.3, 0.03, 0.3, tx, Y0 + 0.48, tz);
-  k.box(P.team, 0.302, 0.014, 0.302, tx, Y0 + 0.5, tz);
-  stairs(k, tx - 0.36, tz + 0.12, Y0, Y0 + 0.34, true, 1, 0.07);
-  antenna(k, tx - 0.08, Y0 + 0.51, tz, 0.35);
-  satDish(k, tx + 0.08, Y0 + 0.51, tz - 0.05, 0.05, 0.6);
-  k.blinkLight(tx, Y0 + 0.9, tz, 0.016, 1.3, 0);
-  k.cyl(P.dark, 0.004, 0.38, tx, Y0 + 0.51, tz, 4);
-  wallSign(k, 'z', 1, tx, Y0 + 0.08, tz + 0.27, 0.3, 'main');
+  // ------------------------------------------------ four jet stands (local x -2.75, -1.25, 0.25, 1.75; z -1.95 .. -0.2)
+  const pz = -1.15;
+  for (let i = 0; i < 4; i++) {
+    const cx = -2.75 + i * 1.5;
+    k.box(P.concrete, 1.36, 0.005, 1.66, cx, Y0, -1.1);
+    // expansion joints
+    for (const dz of [-0.55, 0]) k.box(P.dark, 1.34, 0.001, 0.008, cx, Y0 + 0.005, -1.1 + dz);
+    // lead-in line from the taxiway to the nose wheel stop, then the stop bar
+    k.box(P.yellow, 0.016, 0.002, 1.05, cx, yM, -0.68);
+    k.box(P.yellow, 0.2, 0.002, 0.03, cx, yM, pz - 0.38);
+    // stand number on the apron
+    const n = String(i + 1);
+    k.decal(P.mats.canvas('stand' + n, texPaint(n, '#f2d23a'), { alphaTest: 0.45 }), cx + 0.42, yM + 0.001, -0.42, 0.22, 0.22);
+    // team chevron in front of the stand
+    k.box(P.team, 0.5, 0.003, 0.03, cx, yM, -0.3);
+    // ground equipment: bomb trolley (the 10 s rearm), chocks rack, power cart
+    bombTrolley(k, cx - 0.5, -1.72, 0);
+    k.rbox(P.mats.col(0xd8c040, 0.6, 0.15), 0.12, 0.06, 0.08, cx + 0.48, Y0, -1.74, 0.01);
+    k.box(P.dark, 0.08, 0.02, 0.04, cx + 0.48, Y0 + 0.06, -1.74);
+    // stand floodlight
+    if (i % 2 === 0) lightPole(k, cx - 0.66, -1.88, 0.42, 0.6, Y0);
+  }
+  // revetments: precast T-walls between and behind the stands, low enough to see the jets from the RTS camera
+  for (let i = 0; i <= 4; i++) {
+    const x = -3.42 + i * 1.5 - (i === 4 ? 0.02 : 0);
+    tWall(k, [x, -1.95], [x, -0.72], 0.13, Y0);
+  }
+  tWall(k, [-3.42, -1.95], [2.48, -1.95], 0.13, Y0);
 
-  // ------------------------------------------------ windsock + fuel bowser + ground power + lights
-  k.cyl(P.concrete, 0.025, 0.02, 1.3, Y0, 0.42, 8);
-  k.cyl(P.galv, 0.007, 0.36, 1.3, Y0, 0.42, 6);
-  const sock = k.node('sock', 1.3, Y0 + 0.35, 0.42, -0.6);
+  // ------------------------------------------------ control tower (back-right corner): stacked containers + glass cab
+  const tx = 3.0;
+  const twz = -1.2;
+  cabin(k, tx, Y0, twz + 0.18, 0, N.wall, 0.6);
+  cabin(k, tx, Y0, twz - 0.2, 0, N.boxes[0], 0.6);
+  cabin(k, tx, Y0 + 0.17, twz - 0.01, 0, N.wall, 0.6, false);
+  k.box(P.steel, 0.28, 0.02, 0.28, tx, Y0 + 0.34, twz);
+  k.box(P.mats.col(0x2a4258, 0.15, 0.8), 0.24, 0.12, 0.24, tx, Y0 + 0.36, twz);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) k.box(P.dark, 0.012, 0.12, 0.012, tx + sx * 0.12, Y0 + 0.36, twz + sz * 0.12);
+  k.box(P.lamp, 0.22, 0.004, 0.22, tx, Y0 + 0.42, twz);
+  k.box(P.dark, 0.3, 0.03, 0.3, tx, Y0 + 0.48, twz);
+  k.box(P.team, 0.302, 0.014, 0.302, tx, Y0 + 0.5, twz);
+  stairs(k, tx - 0.36, twz + 0.12, Y0, Y0 + 0.34, true, 1, 0.07);
+  antenna(k, tx - 0.08, Y0 + 0.51, twz, 0.35);
+  satDish(k, tx + 0.08, Y0 + 0.51, twz - 0.05, 0.05, 0.6);
+  k.blinkLight(tx, Y0 + 0.9, twz, 0.016, 1.3, 0);
+  k.cyl(P.dark, 0.004, 0.38, tx, Y0 + 0.51, twz, 4);
+  wallSign(k, 'z', 1, tx, Y0 + 0.08, twz + 0.27, 0.3, 'main');
+  // windsock
+  k.cyl(P.concrete, 0.025, 0.02, 3.3, Y0, -0.42, 8);
+  k.cyl(P.galv, 0.007, 0.36, 3.3, Y0, -0.42, 6);
+  const sock = k.node('sock', 3.3, Y0 + 0.35, -0.42, -0.6);
   k.on(sock, () => {
     k.ring(P.galv, 0.026, 0.004, 0, 0, 0, 10);
     for (let i = 0; i < 5; i++) {
@@ -3900,13 +3934,14 @@ function airfield(k: Kit) {
     }
   });
   k.osc('sock', 'y', 0.35, 0.9, 0, 0);
-  k.blinkLight(1.3, Y0 + 0.39, 0.42, 0.01, 1.0, 0.2);
-  truck(k, 0.95, -0.3, 2.6, 'fuel', 1.0);
-  fuelBladder(k, 1.02, 0.12, 0.42, 0.22, 0);
-  genset(k, 0.5, -0.42, 0, 0.8);
-  floodMast(k, -1.38, 0.5, 0.5, 0);
-  floodMast(k, 0.55, -0.62, 0.5, Math.PI);
-  k.height = 1.4;
+  k.blinkLight(3.3, Y0 + 0.39, -0.42, 0.01, 1.0, 0.2);
+  // fuel bowser by the tower, fuel bladder, generator
+  truck(k, 2.75, -0.55, Math.PI, 'fuel', 0.9);
+  fuelBladder(k, 3.22, -1.82, 0.36, 0.2, Math.PI / 2);
+  genset(k, 2.68, -1.88, 0, 0.7);
+  floodMast(k, 3.38, 0.4, 0.5, Math.PI);
+  floodMast(k, -3.38, -0.1, 0.5, 0);
+  k.height = 1.3;
 }
 
 // ================================================================ BATTLE LAB / RESEARCH CENTRE (3x3)
@@ -4921,7 +4956,7 @@ export const BUILDINGS: Record<string, Builder> = {
   barracks: building('barracks', 2, 2, barracks),
   factory: building('factory', 3, 3, factory),
   radar: building('radar', 2, 2, radar),
-  airfield: building('airfield', 3, 3, airfield),
+  airfield: building('airfield', 7, 4, airfield),
   tech: building('tech', 3, 3, tech),
   bunker: building('bunker', 1, 1, bunker),
   sentry: building('sentry', 1, 1, sentry),

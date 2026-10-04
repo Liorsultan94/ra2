@@ -2883,6 +2883,7 @@ interface Template {
   size: { x: number; y: number; z: number };
   kind: Built['kind'];
   fx: NonNullable<Model['damageFx']>;
+  gearDrop?: number;
 }
 const templates = new Map<string, Template>();
 
@@ -2951,7 +2952,42 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
       bank.add(o);
     }
   }
-  return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind, fx };
+  // retractable landing gear (jets: airbase taxi / take-off / landing). Built after the bounds so the
+  // footprint and the health-bar height stay those of the clean airframe. The group's origin sits in the
+  // belly; anim scales it in y to retract it.
+  let gearDrop: number | undefined;
+  if (kind === 'jet') {
+    const belly = ab.min.y + Hh * 0.22;
+    const foot = ab.min.y - Math.max(0.035, Hh * 0.2);
+    const wr = Math.max(0.016, Hh * 0.075);
+    const nose = ab.max.x - L * 0.16;
+    const main = ab.max.x - L * 0.6;
+    const zc = (ab.min.z + ab.max.z) / 2;
+    const parts: THREE.BufferGeometry[] = [];
+    const leg = (x: number, z: number, r: number) => {
+      const h = belly - (foot + r);
+      parts.push(prep(tf(new THREE.CylinderGeometry(r * 0.28, r * 0.32, h, 6), [x, -h / 2, z])));
+      parts.push(prep(tf(new THREE.CylinderGeometry(r, r, r * 0.7, 10), [x, -(belly - foot - r), z], [PI / 2, 0, 0])));
+      // gear door
+      parts.push(prep(tf(new THREE.BoxGeometry(r * 2.2, h * 0.75, 0.004), [x, -h * 0.45, z + (z >= zc ? 1 : -1) * r * 0.9])));
+    };
+    leg(nose, zc, wr * 0.8);
+    for (const sd of [-1, 1]) leg(main, zc + sd * Wd * 0.13, wr);
+    const geo = mergeGeometries(parts, false);
+    if (geo) {
+      const gm = cmat('gear', fog, () => new THREE.MeshStandardMaterial({ color: 0x8a8c8e, roughness: 0.55, metalness: 0.5 }));
+      const mesh = new THREE.Mesh(geo, gm);
+      mesh.castShadow = true;
+      const gear = new THREE.Group();
+      gear.userData.gear = true;
+      gear.position.y = belly;
+      gear.add(mesh);
+      gear.visible = false;
+      bank.add(gear);
+      gearDrop = -foot;
+    }
+  }
+  return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind, fx, gearDrop };
 }
 
 /** Per-instance copy of a shared (possibly fog-patched) material. */
@@ -3097,6 +3133,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   const flares: THREE.Object3D[] = [];
   const tips: THREE.Object3D[] = [];
   const ramps: THREE.Object3D[] = [];
+  const gears: THREE.Object3D[] = [];
   const glow: THREE.Material[] = [];
   // per-instance rotor materials (blades fade into the blur disc as the rotor spools up)
   let bladeM: THREE.MeshStandardMaterial | null = null;
@@ -3112,6 +3149,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
     if (u.flare) flares.push(o);
     if (u.vapor) tips.push(o);
     if (u.ramp) ramps.push(o);
+    if (u.gear) gears.push(o);
     if (o instanceof THREE.Mesh) {
       if (u.bk === 'blade') o.material = bladeM ??= ownMat(o.material as THREE.MeshStandardMaterial);
       else if (u.bk === 'disc') {
@@ -3146,6 +3184,8 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   let climb = 0;
   let rpm = 0.8;
   let rampV = 0;
+  let gearV = 0;
+  let jPitch = 0;
   const discList = [...discMs.values()];
   const vapor = kind === 'jet' && tips.length === 2 ? new Vapor(root, tips) : null;
   const anim = (s: AnimState) => {
@@ -3180,12 +3220,23 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       if (bladeM) bladeM.opacity = 0.72 * (1 - 0.82 * bl);
       for (const m of discList) m.opacity = 0.75 + 0.85 * bl;
     }
+    if (gears.length) {
+      // landing gear: ~1.2 s to cycle; scales up out of the belly
+      const tgt = clamp(s.gear ?? 0, 0, 1);
+      gearV += clamp(tgt - gearV, -dt * 0.85, dt * 0.85);
+      const e = gearV * gearV * (3 - 2 * gearV);
+      for (const g of gears) {
+        g.visible = e > 0.02;
+        g.scale.set(1, Math.max(0.02, e), 1);
+      }
+    }
+    const gnd = clamp(s.ground ?? 0, 0, 1);
     const b = bank as THREE.Object3D | null;
     const k = Math.min(1, dt * 4);
     if (b) {
       const turn = Number.isFinite(s.turn) ? s.turn : 0;
       const maxRoll = kind === 'jet' ? 0.75 : kind === 'heli' ? 0.3 : kind === 'quad' ? 0.45 : kind === 'cargo' ? 0.32 : 0.4;
-      roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) - roll) * k;
+      roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) * (1 - gnd) - roll) * k;
       if (kind === 'heli') {
         // nose down to fly forward (more while accelerating), nose-up flare while slowing; a damped spring so it settles
         const pitchT = -Math.min(1, sp / 3) * 0.13 - clamp(accS * 0.08, -0.17, 0.12);
@@ -3200,7 +3251,9 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
         const pitchT = kind === 'quad' ? -Math.min(1, sp / 5) * 0.4 : 0;
         pitch += (pitchT - pitch) * k;
       }
-      b.rotation.set(roll, 0, pitch);
+      // jets: rotation, climb-out and landing-flare attitude from the renderer (nose up = +z)
+      jPitch += ((s.pitch ?? 0) - jPitch) * Math.min(1, dt * 3);
+      b.rotation.set(roll, 0, pitch + jPitch);
       if (kind === 'heli') {
         // gentle hover sway, fading out in forward flight
         const hov = 1 - Math.min(1, sp / 1.5);
@@ -3217,7 +3270,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       }
       if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012 + Math.sin(s.time * 0.37 + phase * 3) * 0.008;
       else if (kind === 'quad') b.position.y = Math.sin(s.time * 3.1 + phase) * 0.006;
-      else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008;
+      else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008 * (1 - gnd);
     }
     // anti-collision lights (white strobes + red beacons): double flash
     const ts = (s.time + phase) % 1.3;
@@ -3247,6 +3300,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   for (const p of plumes) p.visible = false;
   for (const o of strobes) o.visible = false;
   const model: Model = { root, muzzles, height: t.height, size: t.size, glow, emitters: [], anim, damageFx: t.fx.map((f) => ({ pos: f.pos.clone(), kind: f.kind, at: f.at })) };
+  if (t.gearDrop !== undefined) model.gearDrop = t.gearDrop;
   if (flares.length) model.flareDispensers = flares;
   return model;
 }

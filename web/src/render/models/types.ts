@@ -71,6 +71,12 @@ export interface AnimState {
   look?: number;
   /** Infantry: seconds into a dive and roll out of a vehicle's path (undefined / 0 = none; ~1.2 s long). */
   dive?: number;
+  /** Jets (airbase sortie): landing gear 0 retracted .. 1 down; the model eases towards it. */
+  gear?: number;
+  /** Jets: extra nose-up pitch (radians) for rotation, climb-out and the landing flare. */
+  pitch?: number;
+  /** Jets: 1 while rolling on the ground (no bank, no bob). */
+  ground?: number;
   /** Production buildings: seconds since this building last rolled out a unit (undefined / Infinity = never); drives doors / lifts / beacons. */
   produced?: number;
   /** Stable per-unit seed (the entity id): de-synchronises idle motion, gestures and death variants. Render only. */
@@ -112,6 +118,8 @@ export interface Model {
   damageFx?: { pos: THREE.Vector3; kind: 'smoke' | 'fire' | 'spark'; at: number }[];
   /** Aircraft: empty objects at the rear (flare / chaff dispensers); use getWorldPosition() to spawn flares (they follow the bank / roll). */
   flareDispensers?: THREE.Object3D[];
+  /** Jets: distance from the root origin down to the bottom of the extended landing gear (root-local units, before root scale). */
+  gearDrop?: number;
   /** Buildings: local-space lamp/floodlight points for night mode (shared per template, read-only). */
   nightLights?: { pos: THREE.Vector3; color: number; intensity: number }[];
 
