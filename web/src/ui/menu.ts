@@ -300,7 +300,7 @@ export class MainMenu {
       (f, i) => `
       <button class="fcard${f.id === st.faction ? ' sel' : ''}" data-f="${f.id}" role="radio" aria-checked="${f.id === st.faction}" style="--i:${i}">
         <span class="fc-flag">${flagHtml(f.id)}</span>
-        <span class="fc-txt"><b>${f.name}</b><span class="fc-doc">${f.doctrine}</span></span>
+        <span class="fc-txt"><b>${f.name}</b><span class="fc-doc">${f.doctrine}</span><span class="fc-bon">${f.bonuses.map((b) => `<span>${esc(b)}</span>`).join('')}</span></span>
       </button>`,
     ).join('');
     const maps = MAPS.map((m, i) => {

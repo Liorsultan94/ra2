@@ -851,6 +851,46 @@
   color: #9fb4c8;
 }
 
+/* bonuses on the cards only where there is room (tall desktop screens) */
+.fc-bon {
+  display: none;
+}
+@media (min-height: 860px) and (min-width: 1200px) {
+  .mm .fgrid {
+    grid-auto-rows: minmax(64px, 190px);
+    align-content: start;
+  }
+  .mm .fcard {
+    align-items: start;
+    padding: 16px;
+  }
+  .fc-bon {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    font-size: 12px;
+    line-height: 1.35;
+    color: #c4ccd3;
+  }
+  .fc-bon span {
+    position: relative;
+    padding-left: 12px;
+  }
+  .fc-bon span::before {
+    content: '';
+    position: absolute;
+    left: 1px;
+    top: 0.5em;
+    width: 4px;
+    height: 4px;
+    transform: rotate(45deg);
+    background: var(--mm-accent);
+  }
+}
+
 /* rules: label / segmented control rows */
 .mm .opts {
   display: flex;
@@ -1568,9 +1608,6 @@
   .seg-i span {
     font-size: 12px;
     padding: 0 4px;
-  }
-  .seg-flags .seg-i {
-    flex: 1 0 40px;
   }
   .seg-flags .flag {
     width: 24px;
