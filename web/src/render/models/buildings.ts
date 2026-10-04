@@ -878,6 +878,8 @@ class Kit {
   private bins = new Map<THREE.Object3D, Map<Mat, THREE.BufferGeometry[]>>();
   /** Project texture UVs in the primitive's local frame instead of building space. */
   luv = false;
+  /** Bake weathering data (streak depth) into uv1.y for root level atlas parts. */
+  weather = true;
   /**
    * Vertical stretch of everything above the ground slab (root level only:
    * animated / turret parts keep their proportions, their pivots move up).
@@ -1003,6 +1005,20 @@ class Kit {
       const n = geo.attributes.position.count;
       const arr = new Float32Array(n * 2);
       for (let i = 0; i < n; i++) arr[i * 2] = tile;
+      if (this.cur === this.root && !mv.userData.team && this.weather) {
+        // weathering data (bldtex WEATHER_FRAG): 1 + depth below the top of this primitive, so run-off
+        // streaks start under every parapet / sill / cabinet top; flat or tiny parts only get dirt
+        const pa = geo.attributes.position;
+        let top = -Infinity;
+        let bot = Infinity;
+        for (let i = 0; i < n; i++) {
+          const y = pa.getY(i);
+          if (y > top) top = y;
+          if (y < bot) bot = y;
+        }
+        const tall = top - bot > 0.035;
+        for (let i = 0; i < n; i++) arr[i * 2 + 1] = tall ? 1 + (top - pa.getY(i)) : 9;
+      }
       geo.setAttribute('uv1', new THREE.BufferAttribute(arr, 2));
     }
     if ((m as SMat).vertexColors) {
@@ -2425,7 +2441,7 @@ function building(key: string, w: number, d: number, fn: (k: Kit) => void): Buil
 // ================================================================ shared structures
 
 /** Barrel vault roof (half cylinder flattened to `rise`), axis along Z (or X). */
-function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: number, span: number, len: number, rise: number, alongX = false, uvs = 4) {
+function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: number, span: number, len: number, rise: number, alongX = false, uvs = 4, ribs = 0) {
   const r = span / 2;
   k.at(cx, y, cz, alongX ? Math.PI / 2 : 0, () => {
     const g = new THREE.CylinderGeometry(r, r, len, 22, 1, true, -Math.PI / 2, Math.PI);
@@ -2440,6 +2456,13 @@ function vault(k: Kit, m: Mat, endM: Mat | null, cx: number, y: number, cz: numb
       t.scale(1, (rise + 0.004) / (r + 0.004), 1.4);
       t.translate(0, 0, s * (len / 2 - 0.012));
       k.add(t, k.P.team, 0);
+    }
+    // structural steel arch ribs over the sheeting + a ridge vent / skylight strip
+    for (let i = 1; i <= ribs; i++) {
+      const t = new THREE.TorusGeometry(r + 0.006, 0.009, 3, 18, Math.PI);
+      t.scale(1, (rise + 0.006) / (r + 0.006), 1.2);
+      t.translate(0, 0, -len / 2 + (len * i) / (ribs + 1));
+      k.add(t, k.P.trim, 0);
     }
     if (endM) {
       const pts: P2[] = [];
@@ -3088,7 +3111,7 @@ function conyard(k: Kit) {
   k.box(shed, wx1 - wx0, 0.4, wz1 - wz0, wcx, Y0, wcz);
   dress(k, wx0, wx1, wz0, wz1, Y0, 0.4, { beacons: false, vent: false });
   k.box(P.team, wx1 - wx0 + 0.008, 0.026, wz1 - wz0 + 0.008, wcx, Y0 + 0.36, wcz);
-  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true);
+  if (roof === 'flat') vault(k, P.mats.at(Tile.Corr, N.pitch, 1.8), shed, wcx, Y0 + 0.4, wcz, wz1 - wz0 + 0.04, wx1 - wx0 + 0.04, 0.2, true, 4, 3);
   else gable(k, P.pitch, shed, wcx, Y0 + 0.4, wcz, wx1 - wx0, wz1 - wz0, 0.2, 0.03, true);
   rollDoor(k, 'z', 1, 0.42, Y0, wz1, 0.36, 0.3, 0.65);
   k.box(P.lamp, 0.24, 0.012, 0.01, 0.42, Y0 + 0.27, wz1 - 0.12);
@@ -3437,7 +3460,7 @@ function factory(k: Kit) {
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.3, zc);
     for (let i = 0; i < 3; i++) k.at(-0.9 + i * 0.9, rTop + 0.15, zc + L * 0.24, 0, () => k.box(P.glass, 0.3, 0.012, 0.16, 0, 0, 0), Math.atan2(0.3, L / 2));
   } else {
-    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true);
+    vault(k, P.mats.at(Tile.Corr, N.pitch, 1.6), hall, 0, rTop, zc, L + 0.04, 2.9, 0.3, true, 4, 6);
     for (let i = 0; i < 4; i++) turbineVent(k, 'tv' + i, -1.05 + i * 0.7, rTop + 0.28, zc);
     k.box(P.glass, 2.2, 0.014, 0.12, 0, rTop + 0.29, zc + 0.12);
   }

@@ -784,6 +784,8 @@ float wxPor = 0.42;
 float wxWetR = 0.32;
 float wxPudB = 0.0;
 float wxWetL = 0.0;
+// drop ripple strength on the puddles this fragment (rings catch the light)
+float wxRip = 0.0;
 float terrPomAO = 0.0;
 // procedural relief bumped on top of the normals (furrows, joints, markings; = terrH without photo layers)
 float terrB;
@@ -1134,7 +1136,7 @@ const PHOTO_MAP = /* glsl */ `
       fn.xy *= 1.0 - joint;
       fr = phP[int(PH_PAVING)].z;
       // rain: the joints fill first, some flags have sunk and hold a film of water
-      wxPudB = mix(wxPudB, joint * 0.12 + (ph.y - 0.5) * 0.1, fMask);
+      wxPudB = mix(wxPudB, joint * 0.1 + (ph.y - 0.5) * 0.04, fMask);
       wxPor = mix(wxPor, 0.36, fMask);
       wxWetR = mix(wxWetR, 0.24, fMask);
     }
@@ -1500,7 +1502,8 @@ ${PHOTO_MAP}
   if (wxWet > 0.001) {
     float n1 = texture2D(fogNoise, tw * 0.085 + 0.13).g;
     float n2 = texture2D(fogNoise, tw * 0.33 + 0.57).r;
-    float lowSpot = n1 * 0.78 + n2 * 0.22 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05 + wxPudB;
+    // (turf soaks it up: water only stands in the meadows' real hollows; bare soil, mud and tracks pool readily)
+    float lowSpot = n1 * 0.66 + n2 * 0.34 - terrH * 0.1 + (bw.x + bw.w) * 0.1 - bw.y * 0.25 - fMask * 0.05 + wxPudB - bg * 0.06;
     float expo = clamp((0.72 - lowSpot) * 2.2 + terrH * 0.35, 0.0, 1.0);
     wxWetL = clamp(wxWet * 1.7 - expo * 0.75, 0.0, 1.0);
     vec3 c0 = diffuseColor.rgb;
@@ -1511,7 +1514,10 @@ ${PHOTO_MAP}
       // puddles shrink into the deepest spots as the ground dries (wxWet 1 = full size)
       float wxPudT = 0.61 + (1.0 - wxWet) * 0.18;
       wxPud = smoothstep(wxPudT, wxPudT + 0.03, lowSpot) * min(1.0, wxWet * 2.5);
-      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.7 + vec3(0.02, 0.024, 0.03), wxPud);
+      // a soaked, darker rim round each puddle
+      float wxRim = smoothstep(wxPudT - 0.06, wxPudT, lowSpot) * (1.0 - wxPud) * min(1.0, wxWet * 2.0);
+      diffuseColor.rgb *= 1.0 - 0.18 * wxRim;
+      diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.6 + vec3(0.015, 0.018, 0.024), wxPud);
       terrRough = mix(terrRough, 0.03, wxPud);
       terrH = mix(terrH, 0.0, wxPud);
       terrB = mix(terrB, 0.0, wxPud);
@@ -1536,8 +1542,15 @@ const TERRAIN_AO = /* glsl */ `
     vec3 pN = inverseTransformDirection(normal, viewMatrix);
     vec3 pV = normalize(cameraPosition - vTerrW);
     float pUp = clamp(reflect(-pV, pN).y, 0.0, 1.0);
+    vec3 pR = reflect(-pV, pN);
     vec3 pRefl = mix(pudSky * 1.15, pudSky * vec3(0.6, 0.68, 0.84), smoothstep(0.35, 0.95, pUp));
-    float pFres = 0.2 + 0.8 * pow(1.0 - clamp(dot(pN, pV), 0.0, 1.0), 5.0);
+    // the cloud deck drifting overhead, seen in the water (parallax through the reflected ray)
+    vec2 pCl = (vTerrW.xz + pR.xz / max(pR.y, 0.2) * 7.0) * 0.021 + vec2(0.55, 0.22) * fogTime * 0.011;
+    float pCn = texture2D(fogNoise, pCl).b * 0.65 + texture2D(fogNoise, pCl * 2.6 + 0.31).a * 0.35;
+    pRefl *= 0.35 + 0.95 * smoothstep(0.3, 0.75, pCn);
+    // drop rings catch the light
+    pRefl *= 1.0 + wxRip * 0.9;
+    float pFres = 0.13 + 0.87 * pow(1.0 - clamp(dot(pN, pV), 0.0, 1.0), 5.0);
     reflectedLight.indirectSpecular += pRefl * wxPud * pFres;
   }
 `;
@@ -1578,6 +1591,7 @@ const TERRAIN_NORMAL = /* glsl */ `
       float wv = sin(d * 38.0) * exp(-abs(d) * 14.0) * (1.0 - ph);
       g += normalize(o + 1e-4) * wv;
     }
+    wxRip = min(1.0, length(g)) * wxRain;
     normal = normalize(normal + (viewMatrix * vec4(g.x, 0.0, g.y, 0.0)).xyz * 0.35 * wxPud * wxRain);
   }
 }

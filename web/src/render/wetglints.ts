@@ -47,7 +47,7 @@ void main() {
   float c = q.x + 0.25;
   a *= 0.45 + 1.1 * exp(-c * c * 9.0);
   // puddle field (as the ground's puddles: they mirror sharply) and the broken water film between them
-  float pud = smoothstep(0.52, 0.66, texture2D(fogNoise, vW.xz * 0.085 + 0.13).g * 0.78 + texture2D(fogNoise, vW.xz * 0.33 + 0.57).r * 0.22 + (1.0 - wxWet) * -0.1);
+  float pud = smoothstep(0.52, 0.66, texture2D(fogNoise, vW.xz * 0.085 + 0.13).g * 0.66 + texture2D(fogNoise, vW.xz * 0.33 + 0.57).r * 0.34 + (1.0 - wxWet) * -0.1);
   float film = smoothstep(0.25, 0.75, texture2D(fogNoise, vW.xz * vec2(2.3, 1.7) + 0.4).r);
   a *= mix(0.25 + 0.5 * film, 1.25, pud) * smoothstep(0.0, 0.6, wxWet);
   // falling drops ruffle the water: the glint shimmers

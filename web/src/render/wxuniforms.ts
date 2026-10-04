@@ -164,6 +164,10 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
           float wxPd = smoothstep( wxPt, wxPt + 0.04, wxPn ) * wxFlat * min( 1.0, wxWet * 2.0 );
           diffuseColor.rgb *= 1.0 - 0.32 * wxPd;
           roughnessFactor = mix( roughnessFactor, 0.04, wxPd );
+          // the water mirrors the (cloudy) sky: without it the patches read as black paint at this view angle
+          vec3 wxSky = dot( skyHorA.xyz, vec3( 1.0 ) ) > 0.01 ? skyHorA.xyz : hazeColor * 2.0;
+          wxSky /= 1.0 + max( wxSky.r, max( wxSky.g, wxSky.b ) );
+          totalEmissiveRadiance += wxSky * wxPd * ( 0.1 + 0.08 * wxNz.b );
         }
       }
       #endif
