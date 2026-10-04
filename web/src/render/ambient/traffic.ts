@@ -5,6 +5,7 @@ import type { Effects } from '../effects';
 import type { FogOfWar } from '../fog';
 import type { Layout } from '../layout';
 import { Driver, newDriveCar, type DriveCar, type HoldPoint, type OtherCar } from './driver';
+import { DangerField, LOW, Wary } from './danger';
 import { emergencyNear } from './emergency';
 import { crossingBusy } from './people';
 import { levelCrossingClosed, levelCrossings } from './rail';
@@ -25,11 +26,16 @@ import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type Amb
  * a 3-point turn on the road), leaving / entering at the map edges.
  * Collapsed bridges are not crossed.
  *
- * Combat overrides the rules: nearby fighting makes them flee (speed up and
- * turn away, lights ignored), some swerve off the road and are abandoned with
- * doors open and hazard lights blinking; blasts wreck them (burnt, sometimes
- * flipped, burning for a while). Destroyed buildings knock the traffic lights
- * close by out (blinking amber or dark).
+ * Combat (danger.ts: a coarse danger field from the troops, blasts, gunfire
+ * and burning wrecks): drivers slow down when it is tense, stop for danger
+ * on the road ahead and turn round on the road (or take another exit) and
+ * drive away faster with the hazards on; very close / under fire it is an
+ * emergency stop and some drivers leave the car on the road and run (a
+ * pedestrian, people.ts). No new cars come in on roads that lead into the
+ * fighting, fewer overall while it lasts; traffic returns 1-2 minutes after
+ * it calmed down. Blasts wreck cars (burnt, sometimes flipped, burning for a
+ * while; police and ambulance come once it is quiet). Destroyed buildings
+ * knock the traffic lights close by out (blinking amber or dark).
  *
  * One instanced draw call per vehicle type (4); lights (head / tail / brake /
  * indicators / reversing) share LightSprites; road furniture: roadfurniture.ts.
@@ -56,7 +62,6 @@ interface Car extends DriveCar {
   lift: number;
   liftV: number;
   fire: number;
-  blocked: number;
   tx: number;
   ty: number;
   hgt: number;
@@ -64,8 +69,6 @@ interface Car extends DriveCar {
   bank: number;
   seen: boolean;
   sink: number;
-  /** U-turn cooldown (s): a car mid-turn must not flip back. */
-  cd: number;
   /** Still driving (for the rules of the others). */
   driving: boolean;
 }
@@ -87,6 +90,15 @@ export class Traffic {
   readonly net: RoadNet;
   readonly furniture: RoadFurniture;
   private driver: Driver;
+  /** How dangerous each place is (AmbientLife feeds it; people.ts reads it too). */
+  readonly danger: DangerField;
+  /** The drivers' reaction to it. */
+  readonly wary: Wary;
+  /** A car was wrecked at (x, y) (the emergency services come). */
+  onWreck: ((x: number, y: number) => void) | null = null;
+  /** A driver got out at (x, y) and runs away from (sx, sy). */
+  onBail: ((x: number, y: number, sx: number, sy: number) => void) | null = null;
+  private pk = { x: 0, y: 0, v: 0 };
   private cars: Car[] = [];
   private inst: AnimInstances[] = [];
   private models: CarModel[] = [];
@@ -117,6 +129,8 @@ export class Traffic {
   ) {
     this.net = roadNetFor(map, layout, bridges);
     this.driver = new Driver(this.net, (li) => this.usableLine(li));
+    this.danger = new DangerField(map.w, map.h);
+    this.wary = new Wary(this.net, this.driver, this.danger);
     this.net.lines.forEach((L, li) => {
       if (L.bridge >= 0) return;
       for (let e = 0; e < 2; e++) if (L.portal[e]) this.portals.push({ line: li, end: e });
@@ -179,7 +193,7 @@ export class Traffic {
     this.net.lots.forEach((lot, li) => {
       if (lot.line < 0) return;
       lot.bays.forEach((_, k) => {
-        if (Math.random() > (lot.city ? 0.6 : 0.45)) return;
+        if (lot.taken[k] || Math.random() > (lot.city ? 0.6 : 0.45)) return;
         const r = Math.random();
         const c = this.makeCar(r < 0.6 ? 0 : r < 0.8 ? 1 : 2, lot.line, this.net.lines[lot.line].len, 1);
         this.driver.parkAt(c, li, k, 10 + Math.random() * 220);
@@ -254,6 +268,11 @@ export class Traffic {
           line = -1;
           continue;
         }
+        // the road in leads into the fighting (or it has not been quiet for long): nobody drives in there
+        if (!this.wary.entryOk(line, arc, dir)) {
+          line = -1;
+          continue;
+        }
       }
       const pt = pointAt(L[line], arc);
       const px = pt.x;
@@ -296,7 +315,6 @@ export class Traffic {
       lift: 0,
       liftV: 0,
       fire: 0,
-      blocked: 0,
       tx: 0,
       ty: 0,
       hgt: groundAt(this.map, x, y),
@@ -304,13 +322,13 @@ export class Traffic {
       bank: 0,
       seen: false,
       sink: 0,
-      cd: 0,
       driving: true,
     });
   }
 
   // ------------------------------------------------------------------ reactions
 
+  /** Blasts: cars inside the lethal radius are wrecked (the rest is up to the drivers: danger.ts). */
   private react(c: Car, f: AmbientFrame) {
     for (const d of f.dangers) {
       const dx = c.x - d.x;
@@ -323,62 +341,12 @@ export class Traffic {
         continue;
       }
       c.calm = 0;
-      if (c.s === S.Abandoned) continue;
-      c.panic = Math.max(c.panic, 7 + Math.random() * 5);
-      if (c.s !== S.Drive || c.pk) continue; // (parked / parking: they sit it out)
-      const hx = Math.cos(c.yaw);
-      const hy = Math.sin(c.yaw);
-      const ahead = (-dx * hx - dy * hy) / (dist || 1);
-      // some bail out off the road (more likely when it's loud and close)
-      const bail = (d.power > 0.5 ? 0.35 : 0.15) * (dist < d.r * 0.6 ? 1.4 : 1);
-      if (c.kind !== 3 && Math.random() < bail && this.trySwerve(c, d.x, d.y)) continue;
-      if (ahead > 0.25) this.turnRound(c); // danger in front: turn round
     }
   }
 
-  /**
-   * Turn round: fleeing cars swing round on the spot (combat: anything goes);
-   * otherwise a 3-point turn on the road (roundabout cars just keep circulating).
-   */
-  private turnRound(c: Car) {
-    if (c.cd > 0 || c.pk) return;
-    if (c.panic > 0) {
-      c.kt = 0;
-      if (c.loop >= 0) return;
-      c.dir = -c.dir;
-      c.planNode = -1;
-      c.passed = -1;
-      c.cd = 3;
-      return;
-    }
-    if (c.kt || c.loop >= 0) return;
-    this.driver.startTurn(c);
-    c.cd = 6;
-  }
-
-  /** Swerve off the road away from (sx, sy): picks a free spot to the side. */
-  private trySwerve(c: Car, sx: number, sy: number): boolean {
-    const hx = Math.cos(c.yaw);
-    const hy = Math.sin(c.yaw);
-    const rx = -hy;
-    const ry = hx;
-    const side = (c.x - sx) * rx + (c.y - sy) * ry >= 0 ? 1 : -1;
-    for (const sgn of [side, -side]) {
-      const off = 0.9 + Math.random() * 0.9;
-      const tx = c.x + rx * sgn * off + hx * (0.6 + c.v * 0.5);
-      const ty = c.y + ry * sgn * off + hy * (0.6 + c.v * 0.5);
-      let ok = true;
-      for (let k = 1; k <= 4 && ok; k++) ok = walkable(this.map, c.x + ((tx - c.x) * k) / 4, c.y + ((ty - c.y) * k) / 4) && !this.map.trees[((c.y + ((ty - c.y) * k) / 4) | 0) * this.map.w + ((c.x + ((tx - c.x) * k) / 4) | 0)];
-      if (!ok) continue;
-      c.s = S.Offroad;
-      c.tx = tx;
-      c.ty = ty;
-      c.loop = -1;
-      c.kt = 0;
-      c.ind = 0;
-      return true;
-    }
-    return false;
+  /** Burning wrecks frighten the others (stamped into the danger field on each refresh). */
+  stampFires() {
+    for (const c of this.cars) if (c.s === S.Wreck && c.fire > 0) this.danger.unit(c.x, c.y, 3, 0.5);
   }
 
   private wreck(c: Car, dx: number, dy: number, dist: number, d: { kill: number; power: number }) {
@@ -398,10 +366,12 @@ export class Traffic {
     c.tx = (dx / l) * (0.2 + k * 0.5);
     c.ty = (dy / l) * (0.2 + k * 0.5);
     c.v = 0;
+    c.haz = 0;
     if (this.probe.visible(c.x, c.y)) {
       const g = groundAt(this.map, c.x, c.y);
       this.effects.explosion(c.x, g + 0.15, c.y, 'small', 'fire');
     }
+    this.onWreck?.(c.x, c.y);
   }
 
   // ------------------------------------------------------------------ update
@@ -414,15 +384,18 @@ export class Traffic {
       if (d.kill < 0.9) continue;
       for (const sg of this.net.signals) if (sg.mode !== SigMode.Dark && Math.hypot(sg.x - d.x, sg.y - d.y) < d.kill + 1.6) sg.mode = Math.random() < 0.5 ? SigMode.Flash : SigMode.Dark;
     }
-    // keep the density up: new cars come in from the map edges
+    // keep the density up: new cars come in from the map edges (fewer while there is fighting)
+    this.wary.tick(dt);
+    const dens = this.wary.density;
     let alive = 0;
     for (const c of this.cars) {
-      c.driving = c.s === S.Drive;
+      // (stopped in the lane for the danger: an obstacle to the others, they turn round rather than queue for ever)
+      c.driving = c.s === S.Drive && !this.wary.stoppedInLane(c);
       if ((c.s === S.Drive && c.pk !== 3) || c.s === S.Rejoin || c.s === S.Offroad) alive++;
     }
     this.spawnT -= dt;
-    if (alive < this.target && this.spawnT <= 0) {
-      this.spawnT = 4 + Math.random() * 6;
+    if (alive < Math.round(this.target * dens) && this.spawnT <= 0) {
+      this.spawnT = (4 + Math.random() * 6) / Math.max(0.4, dens);
       this.spawn(false, f.units, f.nUnits, f);
     }
     // too many wrecks / abandoned cars: clear the oldest one out of sight
@@ -451,35 +424,28 @@ export class Traffic {
         if (c.s === S.Sinking && c.sink > 3) this.cars.splice(ci, 1);
         continue;
       }
-      // military units close by: unease (they turn round when units block the road ahead)
+      // the closest military unit (the rules stop short of one in the road; the reaction is danger.ts)
       let near = 1e9;
-      let nx = 0;
-      let ny = 0;
       for (let i = 0; i < f.nUnits; i++) {
-        const d = Math.hypot(f.units[i * 2] - c.x, f.units[i * 2 + 1] - c.y);
-        if (d < near) {
-          near = d;
-          nx = f.units[i * 2];
-          ny = f.units[i * 2 + 1];
-        }
-      }
-      if (near < 5 && c.s === S.Drive) {
-        if (c.panic <= 0) {
-          const ahead = ((nx - c.x) * Math.cos(c.yaw) + (ny - c.y) * Math.sin(c.yaw)) / (near || 1);
-          if (ahead > 0.3) this.turnRound(c);
-        }
-        c.panic = Math.max(c.panic, 3);
+        const dx = f.units[i * 2] - c.x;
+        const dy = f.units[i * 2 + 1] - c.y;
+        if (dx > 8 || dx < -8 || dy > 8 || dy < -8) continue;
+        near = Math.min(near, Math.hypot(dx, dy));
       }
       c.panic = Math.max(0, c.panic - dt);
-      c.cd = Math.max(0, c.cd - dt);
       c.calm += dt;
       if (c.s === S.Abandoned) {
         c.door = Math.min(1, c.door + dt * 1.6);
         c.v = 0;
-        if (c.calm > 35 && near > 8) {
+        c.cd = Math.max(0, c.cd - dt);
+        if (this.danger.at(c.x, c.y) >= LOW * 0.5) c.calm = 0;
+        if (c.calm > 45 && near > 8) {
           // the driver comes back: doors shut, back onto the road
           c.s = S.Rejoin;
           c.arc = nearestArc(this.net.lines[c.line], c.x, c.y).arc;
+          c.wy = 0;
+          c.bail = 0;
+          c.vmax = 1e9;
         }
       } else c.door = Math.max(0, c.door - dt * 1.4);
       if (c.s === S.Abandoned) {
@@ -538,12 +504,16 @@ export class Traffic {
         c.liftV = 0;
         return;
       }
-      const r = this.driver.step(c, this.others, time, dt, nearUnit);
-      c.blocked = r.blocked ? c.blocked + dt : 0;
-      if (c.blocked > 3.5) {
-        c.cd = 0;
-        this.turnRound(c);
-        c.blocked = 0;
+      if (this.wary.drive(c, this.others, time, dt, nearUnit)) {
+        // the driver gets out and runs: the car stays on the road, doors open, hazards blinking
+        c.s = S.Abandoned;
+        c.calm = 0;
+        c.v = 0;
+        c.kt = 0;
+        c.ind = 0;
+        c.driving = false;
+        const pk = this.danger.peak(c.x, c.y, 8, this.pk);
+        this.onBail?.(c.x + Math.sin(c.yaw) * 0.25, c.y - Math.cos(c.yaw) * 0.25, pk.v > 0 ? pk.x : c.x + Math.cos(c.yaw), pk.v > 0 ? pk.y : c.y + Math.sin(c.yaw));
       }
     } else this.offroad(c, dt);
     // tractors on dirt kick up a little dust
@@ -697,7 +667,7 @@ export class Traffic {
       const ly = y + mdl.lightY;
       const sw = mdl.wid * 0.33;
       const blink = Math.sin(time * 9 + c.id) > 0;
-      if (c.s === S.Abandoned || (c.panic > 0 && c.s !== S.Drive)) {
+      if (c.s === S.Abandoned || c.haz > 0 || (c.panic > 0 && c.s !== S.Drive)) {
         // hazard blinkers (day and night)
         if (blink) {
           const k = 0.8 + dk * 1.2;
@@ -750,6 +720,8 @@ export class Traffic {
       kind: c.kind,
       v: +c.v.toFixed(2),
       panic: +c.panic.toFixed(1),
+      wy: c.wy,
+      haz: c.haz > 0,
       seen: c.seen,
       line: c.line,
       dir: c.dir,

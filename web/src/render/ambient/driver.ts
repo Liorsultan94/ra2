@@ -53,6 +53,9 @@ export interface DriveCar {
   /** 3-point turn phase (0 none, 1 forward, 2 reverse, 3 forward) and the direction it ends in. */
   kt: number;
   ktDir: number;
+  /** Distance driven in the current leg of the turn; the heading it ends in (fixed at the start). */
+  ktS: number;
+  ktYaw: number;
   /** Node where it ran an amber light (no second thoughts). */
   commit: number;
   /** Waiting at a stop / give-way line (s). */
@@ -71,6 +74,19 @@ export interface DriveCar {
   dodge: number;
   /** Pulled over for an emergency vehicle: seconds left to stay there. */
   yieldT: number;
+  /** Speed cap from the driver's reaction to the fighting (danger.ts Wary; 1e9: none). */
+  vmax: number;
+  /** Wary state (danger.ts W), time in it, time to the next look at the danger. */
+  wy: number;
+  wyT: number;
+  scanT: number;
+  /** Hazard lights on (s left). */
+  haz: number;
+  /** Gets out and runs when stopped: 0 undecided, 1 yes, -1 no. */
+  bail: number;
+  /** Stuck behind an obstacle (s); turn-round cooldown (s). */
+  blocked: number;
+  cd: number;
 }
 
 /** Something on a lane cars must not drive into while it is busy: a zebra crossing, a level crossing. */
@@ -137,6 +153,8 @@ export function newDriveCar(kind: number, len: number, line: number, arc: number
     delay: 0.5,
     kt: 0,
     ktDir: 1,
+    ktS: 0,
+    ktYaw: 0,
     commit: -1,
     waitT: 0,
     waiting: false,
@@ -149,6 +167,14 @@ export function newDriveCar(kind: number, len: number, line: number, arc: number
     pkT: 0,
     dodge: 0,
     yieldT: 0,
+    vmax: 1e9,
+    wy: 0,
+    wyT: 0,
+    scanT: 0,
+    haz: 0,
+    bail: 0,
+    blocked: 0,
+    cd: 0,
   };
 }
 
@@ -172,13 +198,25 @@ export class Driver {
   /** Zebra / level crossings per line, and whether one is busy / closed now. */
   private holds: HoldPoint[][] = [];
   private closed: (h: HoldPoint) => boolean = () => false;
+  /** Danger along an exit (line, arc leaving the node, dir), 0..1: exits into the fighting are avoided (danger.ts). */
+  risk: ((line: number, arc: number, dir: number) => number) | null = null;
+  private armRisk = new Float32Array(16);
 
   constructor(
     readonly net: RoadNet,
     /** Can the cars use this line (bridge decks: still standing)? */
     private usable: (line: number) => boolean = () => true,
     private rand: () => number = Math.random,
-  ) {}
+  ) {
+    // bays whose parked car would poke into a roundabout / turning circle are never used (the circulating
+    // traffic would queue behind it for good): marked taken for good (-1)
+    for (const lot of net.lots)
+      lot.bays.forEach((b, k) => {
+        for (const lp of net.loops)
+          for (const f of [0, 0.5])
+            if (Math.hypot(b.x + Math.cos(b.yaw) * f - lp.x, b.y + Math.sin(b.yaw) * f - lp.y) < lp.R + 0.1) lot.taken[k] = -1;
+      });
+  }
 
   /** The crossings cars stop at while `closed` says so (people on the zebra, barriers down). */
   setHolds(points: readonly HoldPoint[], closed: (h: HoldPoint) => boolean) {
@@ -195,7 +233,8 @@ export class Driver {
     for (const st of L.stops) {
       if (st.dir !== c.dir) continue;
       const d = (st.arc - c.arc) * c.dir;
-      if (d < -0.3 || d >= bd) continue;
+      // (a roundabout / turning circle just behind: the car turned round inside its edge, it joins it from there)
+      if (d < (st.node !== c.passed && this.net.nodes[st.node].ctl === Ctl.Loop ? -1.5 : -0.3) || d >= bd) continue;
       if (st.node === c.passed && d < 1.5) continue;
       best = st;
       bd = d;
@@ -210,12 +249,24 @@ export class Driver {
     if (arms.length === 1) return loop || node.ctl === Ctl.Lot ? 0 : -1;
     const inA = arms[inArm];
     const inHead = inA.ang + Math.PI;
+    // exits into the fighting: avoided when there is another way
+    let safe = false;
+    const rk = this.armRisk;
+    for (let j = 0; j < arms.length && j < rk.length; j++) {
+      rk[j] = 0;
+      if (!this.risk || j === inArm) continue;
+      const a = arms[j];
+      rk[j] = this.risk(a.line, a.arc, a.dir);
+    }
+    for (let j = 0; j < arms.length && j < rk.length; j++) if (j !== inArm && this.usable(arms[j].line) && !(arms[j].line === inA.line && arms[j].dir === inA.dir) && rk[j] < 0.3) safe = true;
     let tot = 0;
     for (let pass = 0; pass < 2; pass++) {
       let r = pass ? this.rand() * tot : 0;
       for (let j = 0; j < arms.length; j++) {
         const a = arms[j];
         if (j === inArm || !this.usable(a.line)) continue;
+        const risk = j < rk.length ? rk[j] : 0;
+        if (safe && risk >= 0.3) continue;
         // a car never turns back onto the line it came along (that's a U-turn)
         if (a.line === inA.line && a.dir === inA.dir) continue;
         const L = this.net.lines[a.line];
@@ -224,6 +275,7 @@ export class Driver {
         if (L.lot >= 0) wgt = c.kind === 3 ? 0 : 1.6;
         const turn = Math.abs(wrapPi(a.ang - inHead));
         if (turn < 0.5) wgt *= 1.6; // straight on is the usual way
+        if (risk > 0.05) wgt *= Math.max(0.05, 1 - risk * 2.5);
         // a hairpin turn off a junction isn't drivable (roundabouts are fine)
         if (turn > 2.1 && !loop) continue;
         if (pass === 0) tot += wgt;
@@ -456,7 +508,13 @@ export class Driver {
   startTurn(c: DriveCar) {
     if (c.kt || c.loop >= 0) return;
     c.kt = 1;
+    c.ktS = 0;
     c.ktDir = -c.dir;
+    // (the way back along the road here: a kink in the line close by must not move the goal while it swings round)
+    const L = this.net.lines[c.line];
+    c.arc = projectNear(L, c.arc, c.x, c.y);
+    const p = pointAt(L, c.arc);
+    c.ktYaw = Math.atan2(-p.ty * c.dir, -p.tx * c.dir);
     c.waitT = 0;
     c.ind = -1;
     c.indT = 0;
@@ -527,6 +585,12 @@ export class Driver {
       const L = net.lines[c.line];
       c.arc = projectNear(L, c.arc, c.x, c.y);
       const st = this.nextStop(c);
+      if (!st && !L.portal[c.dir > 0 ? 1 : 0] && (c.dir > 0 ? L.len - c.arc : c.arc) < 0.6) {
+        // the end of the road and nowhere to go (turned round past the last junction): turn round again
+        this.startTurn(c);
+        this.turnStep(c, dt);
+        return out;
+      }
       if (st) {
         const node = net.nodes[st.node];
         const dist = (st.arc - c.arc) * c.dir;
@@ -610,6 +674,8 @@ export class Driver {
     vt *= 1 - Math.min(0.65, curve * 0.55);
     vt *= 1 - Math.min(0.7, Math.abs(dyaw) * 0.6);
     if (!fleeing) vt = Math.min(vt, slowTo);
+    // hesitating / stopping for the fighting (danger.ts)
+    vt = Math.min(vt, c.vmax);
     if (hz >= 0) {
       vt = Math.min(vt, Math.sqrt(2 * 1.1 * Math.max(0, hz - 0.02)));
       c.waiting = true;
@@ -730,7 +796,7 @@ export class Driver {
     // right of the original direction
     const nx = -ty;
     const ny = tx;
-    const target = Math.atan2(-ty, -tx);
+    const target = c.ktYaw;
     // turning left = tile angle decreasing
     const rem = mod2pi(c.yaw - target);
     if (rem < 0.12 || rem > Math.PI * 2 - 0.25) {
@@ -750,12 +816,21 @@ export class Driver {
     const latB = (c.x - hx * reach - px) * nx + (c.y - hy * reach - py) * ny;
     const rho = Driver.rho(c.kind);
     let vt: number;
+    // (each leg goes a little way at least: a car longer than the road is wide swings round in more points
+    // instead of rocking on the spot)
+    const leg = c.ktS > 0.08;
     if (c.kt === 2) {
       vt = -0.16;
-      if (latB > half || rem < 1.1) c.kt = 3;
+      if ((latB > half && leg) || rem < 1.1) {
+        c.kt = 3;
+        c.ktS = 0;
+      }
     } else {
       vt = 0.2;
-      if (latF < -half && rem > 0.5) c.kt = 2;
+      if (latF < -half && rem > 0.5 && leg) {
+        c.kt = 2;
+        c.ktS = 0;
+      }
     }
     if ((c.kt === 2 && c.v > 0) || (c.kt !== 2 && c.v < 0)) vt = 0; // stop before changing gear
     const acc = 0.9 * dt;
@@ -765,6 +840,8 @@ export class Driver {
     c.yaw = wrapPi(c.yaw + (steerLeft ? -1 : 1) * (c.v / rho) * dt);
     c.x += Math.cos(c.yaw) * c.v * dt;
     c.y += Math.sin(c.yaw) * c.v * dt;
+    // (only movement in this leg's gear counts)
+    if ((c.kt === 2) === c.v < 0) c.ktS += Math.abs(c.v) * dt;
     c.brake = Math.abs(c.v) < 0.03 ? 1 : 0;
     c.ind = -1;
     // a turn that can't be finished (blocked in a narrow lane): give up and drive off the other way
@@ -773,6 +850,9 @@ export class Driver {
       c.kt = 0;
       c.dir = c.ktDir;
       c.waitT = 0;
+      c.planNode = -1;
+      c.passed = -1;
+      c.go = 0;
     }
   }
 }

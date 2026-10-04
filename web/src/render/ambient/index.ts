@@ -15,6 +15,7 @@ import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
+import type { DangerField } from './danger';
 import { MapLandmarks } from '../landmarks';
 import { Railway } from './rail';
 import { WaterTransport } from './ferry';
@@ -104,6 +105,11 @@ export class AmbientLife {
     this.emergency.snap = (x, y, r) => this.people.pavement(x, y, r);
     this.emergency.ahead = (x, y, yaw, hw) => this.traffic.blockerAhead(x, y, yaw, hw);
     this.traffic.headlight = (x, y, z, yaw, k, len) => this.host.atmos.night?.carLight(x, y, z, yaw, k, len);
+    // the danger field (danger.ts): the drivers and the walkers read it, the police / ambulance come to wrecked cars
+    this.field = this.traffic.danger;
+    this.people.field = this.field;
+    this.traffic.onBail = (x, y, sx, sy) => this.people.bolt(x, y, sx, sy);
+    this.traffic.onWreck = (x, y) => this.emergency.incident(x, y);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.group.name = 'ambient-life';
@@ -116,8 +122,13 @@ export class AmbientLife {
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
+  private field: DangerField;
+  private fieldT = 0;
+
   private danger(x: number, y: number, r: number, kill: number, power: number) {
     if (this.dangers.length < 64) this.dangers.push({ x, y, r, kill, power });
+    // (lingers in the danger field: ~40 s for a heavy blast)
+    this.field.event(x, y, r * 0.8, Math.min(1.1, power + kill * 0.2));
   }
 
   /** Sim events: blasts, gunfire and deaths frighten (and sometimes kill) the locals. */
@@ -197,11 +208,21 @@ export class AmbientLife {
           this.air[na * 2 + 1] = e.y;
           na++;
         }
-      } else if (n < this.units.length / 2) {
+        // (low helicopters / drones: a little unsettling)
+        if (!u.temp) this.field.unit(e.x, e.y, 3.5, 0.3);
+        continue;
+      }
+      if (n < this.units.length / 2) {
         this.units[n * 2] = e.x;
         this.units[n * 2 + 1] = e.y;
         n++;
       }
+      // troops near the road: tanks and artillery frighten more (and further) than infantry; trucks hardly
+      const wpn = u.weapon ? WEAPONS[u.weapon] : undefined;
+      if (u.category === 'infantry') this.field.unit(e.x, e.y, 4, 0.6);
+      else if (!wpn) this.field.unit(e.x, e.y, 3, 0.3);
+      else if (wpn.projectile === 'artillery') this.field.unit(e.x, e.y, 6.5, 1.15);
+      else this.field.unit(e.x, e.y, u.armor === 'heavy' ? 5.5 : 5, u.armor === 'heavy' ? 1.05 : 0.9);
     }
     this.nUnits = n;
     this.nAir = na;
@@ -212,9 +233,15 @@ export class AmbientLife {
     const f = this.frame;
     if (this.dynamicWx) f.foul = WX.wxRain.value > 0.3 || WX.wxDust.value > 0.3;
     this.scanT -= dt;
+    this.fieldT += dt;
     if (this.scanT <= 0) {
       this.scanT = 0.25;
+      // the danger field: troops and burning wrecks restamped, blasts fading (4 Hz)
+      this.field.begin();
       this.scanUnits();
+      this.traffic.stampFires();
+      this.field.commit(this.fieldT);
+      this.fieldT = 0;
     }
     this.busyT -= dt;
     if (this.busyT <= 0) {
