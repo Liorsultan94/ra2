@@ -188,6 +188,8 @@ export class SuperFx {
     h.env?.scorchAt(x, y, p.ring * 0.5);
     if (!h.visibleAt(x, y)) return;
     fx.flashLight(x, g + 2, y, p.flash, p.color, p.mushroom ? 1.4 : 0.6);
+    // the warhead's own billowing fireball (with its mushroom cap), scaled with the blast ring
+    if (p.ring >= 4) fx.blast({ ...BLASTS.superweapon, size: BLASTS.superweapon.size * Math.min(1.25, p.ring / 5) }, x, g + 0.05, y, g);
     for (let i = 0; i < p.extra; i++) {
       const a = (i / Math.max(1, p.extra)) * Math.PI * 2 + Math.random();
       const r = p.ring * 0.35 * Math.random();

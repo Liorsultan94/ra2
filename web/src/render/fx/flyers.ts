@@ -8,7 +8,7 @@ import type { FxLights } from './lights';
  * drawing goes through the shared particle systems.
  */
 
-export type FlyerKind = 'flare' | 'burning' | 'ember';
+export type FlyerKind = 'flare' | 'burning' | 'ember' | 'spark';
 
 interface Flyer {
   kind: FlyerKind;
@@ -69,8 +69,9 @@ export class Flyers {
       f.life += dt;
       const flare = f.kind === 'flare';
       // flares are light and draggy: they arc out and sink slowly; fragments fall like stones
-      const drag = flare ? 1.6 : f.kind === 'ember' ? 1.0 : 0.25;
-      const g = flare ? 2.2 : f.kind === 'ember' ? 3 : 8;
+      const spark = f.kind === 'spark';
+      const drag = flare ? 1.6 : f.kind === 'ember' ? 1.0 : spark ? 0.9 : 0.25;
+      const g = flare ? 2.2 : f.kind === 'ember' ? 3 : spark ? 9 : 8;
       const k = Math.max(0, 1 - drag * dt);
       f.vx *= k;
       f.vz *= k;
@@ -90,7 +91,7 @@ export class Flyers {
       }
       const fade = 1 - f.life / f.max;
       // emit at a steady rate, independent of frame rate
-      f.acc += dt * (flare ? 40 : 30);
+      f.acc += dt * (flare ? 40 : spark ? 70 : 30);
       while (f.acc >= 1) {
         f.acc -= 1;
         const j = Math.random();
@@ -100,6 +101,9 @@ export class Flyers {
         if (flare) {
           s.spawnFire({ x: px, y: py, z: pz, life: 0.12, size: 0.32 * f.size * (0.6 + 0.4 * fade), sizeEnd: 0.12, color: 0xffffff, colorEnd: 0xffd890, alpha: 1 });
           s.spawnSmoke({ x: px, y: py, z: pz, vx: (Math.random() - 0.5) * 0.1, vy: 0.05, vz: (Math.random() - 0.5) * 0.1, life: 1.8 + Math.random(), size: 0.08, sizeEnd: 0.5, color: 0xe8e6e2, colorEnd: 0xf4f2f0, alpha: 0.45 * fade, drag: 0.6, wind: 0.8 });
+        } else if (spark) {
+          // white-hot fragment: a thin streak that cools to orange as it slows
+          s.spawnFire({ x: px, y: py, z: pz, life: 0.09 + 0.06 * fade, size: 0.07 * f.size, sizeEnd: 0.03, color: fade > 0.5 ? 0xfff4d8 : 0xffc070, colorEnd: 0xff5000, alpha: 0.95 });
         } else if (f.kind === 'burning') {
           s.spawnFire({ x: px, y: py, z: pz, life: 0.18, size: 0.22 * f.size * (0.5 + 0.5 * fade), sizeEnd: 0.08, color: 0xffd080, colorEnd: 0xff3a00, alpha: 0.9 });
           s.spawnSmoke({ x: px, y: py, z: pz, vy: 0.08, life: 1.6 + Math.random(), size: 0.07 * f.size, sizeEnd: 0.45 * f.size, color: 0x24201d, colorEnd: 0x6a6460, alpha: 0.55, drag: 0.6, wind: 0.8 });

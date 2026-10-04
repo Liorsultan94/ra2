@@ -126,6 +126,16 @@ export const BLASTS: Record<string, BlastProfile> = {
   vehicle: { size: 1.4, fire: 1.6, sparks: 26, smoke: 1.6, column: true, dirt: 0.8, ring: 1.4, debris: [{ kind: 'metal', n: 14, power: 6, size: 0.07 }, { kind: 'burnt', n: 8, power: 4, size: 0.09 }], crater: 0.5, scorch: 0.9, light: 9, shake: 0.18 },
   bigVehicle: { size: 2.0, fire: 2.2, sparks: 34, smoke: 2.2, column: true, dirt: 1, ring: 2.2, debris: [{ kind: 'metal', n: 22, power: 7, size: 0.08 }, { kind: 'burnt', n: 12, power: 5, size: 0.1 }], crater: 0.7, scorch: 1.3, light: 12, shake: 0.3 },
   aircraft: { size: 1.3, fire: 1.6, sparks: 24, smoke: 1.3, dirt: 0, ring: 0, debris: [{ kind: 'metal', n: 12, power: 4, size: 0.05 }], crater: 0, scorch: 0, light: 7, shake: 0.08 },
+  /** Heavy cruise missile: a clear step up from the small air-launched missile. */
+  heavyMissile: { size: 1.95, fire: 1.9, sparks: 22, smoke: 2, column: true, dirt: 2.6, ring: 2.6, debris: [{ kind: 'dirt', n: 18, power: 6, size: 0.09 }, { kind: 'concrete', n: 5, power: 5, size: 0.07 }], crater: 1.1, scorch: 1.3, light: 11, shake: 0.24 },
+  /** Heavy jet bomb (2000 lb class): the biggest non-superweapon blast, with a mushroom cap. */
+  bomb: { size: 3.0, fire: 2.8, sparks: 38, smoke: 3, column: true, dirt: 4, ring: 4.4, debris: [{ kind: 'dirt', n: 36, power: 9, size: 0.12 }, { kind: 'concrete', n: 12, power: 8, size: 0.1 }], crater: 1.9, scorch: 2.4, light: 19, shake: 0.55 },
+  /** Superweapon warhead core (fx/superfx.ts adds its rings and the extra blasts around it). */
+  superweapon: { size: 4.2, fire: 3.4, fireColor: 'white', sparks: 50, smoke: 4, column: true, dirt: 5, ring: 6, debris: [{ kind: 'dirt', n: 44, power: 11, size: 0.14 }, { kind: 'concrete', n: 16, power: 9, size: 0.12 }], crater: 2.4, scorch: 3.2, light: 28, shake: 0.8 },
+  /** Aircraft blown apart in the air (Effects.airKill). */
+  aircraftKill: { size: 1.25, fire: 1.7, sparks: 30, smoke: 1.5, dirt: 0, ring: 0, debris: [{ kind: 'burnt', n: 6, power: 3, size: 0.06 }], crater: 0, scorch: 0, light: 10, shake: 0.08 },
+  /** Its burning wreck hitting the ground (Effects.airCrash). */
+  aircraftCrash: { size: 1.55, fire: 2, sparks: 24, smoke: 1.8, column: true, dirt: 1.4, ring: 1.8, debris: [{ kind: 'metal', n: 14, power: 5, size: 0.06 }, { kind: 'burnt', n: 8, power: 4, size: 0.08 }], crater: 0.5, scorch: 1.4, light: 11, shake: 0.2, afterburn: 3.5 },
   building: { size: 2.0, fire: 2, sparks: 24, smoke: 2.4, column: true, dirt: 1.2, ring: 2.6, debris: [{ kind: 'concrete', n: 26, power: 6, size: 0.12 }, { kind: 'metal', n: 8, power: 5, size: 0.07 }, { kind: 'glass', n: 6, power: 5, size: 0.04 }], crater: 0, scorch: 1.6, light: 12, shake: 0.35 },
 };
 
@@ -135,8 +145,8 @@ export class Effects {
   readonly smokeSys: GpuParticles;
   /** Uniforms shared by the particle shaders (clock, wind, sun, camera, fire lights). */
   readonly pu = particleUniforms();
-  /** Volumetric-looking 3D fireballs (high quality only). */
-  readonly fireballs: Fireballs | null = null;
+  /** Billowing 3D fireball clusters (fx/fireball.ts; every tier, one instanced draw call). */
+  readonly fireballs: Fireballs;
   /**
    * Pre-rendered volumetric flipbooks (fx/flipbook.ts; medium: half-res atlases, low: none).
    * Loaded lazily: blasts use the procedural sprites until `flip.ready`.
@@ -191,7 +201,8 @@ export class Effects {
     const smokeCap = quality === 'low' ? 7000 : quality === 'medium' ? 18000 : 28000;
     this.fire = new GpuParticles(fireCap, true, fog, makeSpriteTexture('glow'), this.pu);
     this.smokeSys = new GpuParticles(smokeCap, false, fog, this.smokeTex, this.pu);
-    if (quality === 'high') this.fireballs = new Fireballs(this.group, fog, 12);
+    this.fireballs = new Fireballs(this.group, fog, quality === 'high' ? 110 : quality === 'medium' ? 64 : 28, this.pu, quality);
+    this.fireballs.wind = this.wind;
     if (quality !== 'low' && !/[?&]flip=0\b/.test(typeof location !== 'undefined' ? location.search : '')) {
       this.flip = new Flipbooks(quality === 'high' ? 320 : 160, quality === 'medium', fog, this.pu);
       this.flip.wind = this.wind;
@@ -201,6 +212,7 @@ export class Effects {
     }
     this.lights = new FxLights(quality, fog);
     this.lights.heightAt = (x, z) => this.groundAt(x, z);
+    this.fireballs.lights = this.lights;
     this.tracers = new Tracers(quality === 'low' ? 64 : 160);
     this.tracers.onArrive = (x, y, z) => {
       if (Math.random() < 0.6) this.fire.spawn({ x, y, z, vx: this.rand(-1, 1), vy: this.rand(0.5, 1.5), vz: this.rand(-1, 1), life: 0.12, size: 0.05, color: 0xffe0a0, gravity: 6 });
@@ -412,17 +424,25 @@ export class Effects {
           : p.fireColor === 'white'
             ? { hot: 0xffffff, mid: 0xffb050, end: 0x4a1000 }
             : { hot: 0xffc070, mid: 0xff5a10, end: 0x3c0c00 };
-    // 1. flash
+    // the billowing 3D fireball cluster (fx/fireball.ts) is the body of every real explosion
+    const ball = p.fire >= 0.5 && S >= 0.45 && p.fireColor !== 'laser';
+    // 1. flash: a split-second white-hot glare (blooms) over the light pulse
     if (p.fire > 0) {
       this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.08 + 0.03 * S, size: 1.0 * S, sizeEnd: 1.6 * S, color: 0xfff2d8, colorEnd: pal.hot, alpha: 0.55 });
       this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.2 });
+      if (ball && S >= 0.9) {
+        this.fire.spawn({ x, y: y + 0.35 * S, z, life: 0.07 + 0.02 * S, size: 2.4 * S, sizeEnd: 3.4 * S, color: 0xffffff, colorEnd: 0xffe2b0, alpha: 0.9 });
+        this.fire.spawn({ x, y: y + 0.4 * S, z, life: 0.16 + 0.04 * S, size: 4.2 * S, sizeEnd: 5 * S, color: 0xffe8c8, colorEnd: 0xff9040, alpha: 0.28 });
+      }
     }
-    // 2. fireball: pre-rendered volumetric flipbooks when loaded, plus expanding, rising, cooling puffs
-    // (and the 3D fireball mesh on high quality while the flipbooks are not available)
+    // 2. fireball: billowing puffs, plus the pre-rendered flipbooks (flash burst, sparks, dust, smoke) when loaded
     const fb = this.flip?.ready ? this.flip : null;
-    if (fb && p.fire > 0 && p.fireColor !== 'laser') this.flipBlast(fb, p, x, y, z, ground, airborne);
-    if (!fb && this.fireballs && S >= 0.9 && p.fire >= 0.8 && p.fireColor !== 'laser') this.fireballs.spawn(x, airborne ? y : Math.max(y, ground), z, S * Math.min(1.1, Math.sqrt(p.fire)), thermo ? 'thermo' : p.fireColor === 'white' ? 'white' : 'normal', airborne);
-    const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S) * (fb && p.fireColor !== 'laser' ? 0.35 : 1)));
+    if (ball) {
+      const heat = p.fireColor === 'white' ? 0.12 : thermo ? -0.08 : 0;
+      this.fireballs.blast(x, airborne ? y : ground, z, S, p.fire, thermo ? 'thermo' : p.fireColor === 'white' ? 'white' : 'normal', airborne, heat);
+    }
+    if (fb && p.fire > 0 && p.fireColor !== 'laser') this.flipBlast(fb, p, x, y, z, ground, airborne, ball);
+    const nFire = this.q(Math.round(12 * Math.sqrt(p.fire) * Math.sqrt(S) * (ball ? 0.3 : fb && p.fireColor !== 'laser' ? 0.35 : 1)));
     for (let i = 0; i < nFire; i++) {
       const a = Math.random() * Math.PI * 2;
       const el = Math.random() * (airborne ? Math.PI : Math.PI / 2);
@@ -450,6 +470,16 @@ export class Effects {
       const a = Math.random() * Math.PI * 2;
       const sp = this.rand(2, 7) * Math.sqrt(S);
       this.fire.spawn({ x, y: y + 0.1, z, vx: Math.cos(a) * sp, vy: this.rand(1, 6) * Math.sqrt(S), vz: Math.sin(a) * sp, life: this.rand(0.3, 0.9), size: this.rand(0.04, 0.08), color: 0xffe6a0, colorEnd: 0xff4000, gravity: 9, drag: 0.6 });
+    }
+    // hot fragments streaking out on trails
+    if (p.sparks >= 10 && S >= 0.7) {
+      const n = this.q(Math.min(16, Math.round(1 + p.sparks * 0.12 * Math.sqrt(S))));
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const el = airborne ? this.rand(-0.6, 1.2) : this.rand(0.35, 1.25);
+        const sp = this.rand(4, 8) * Math.sqrt(S);
+        this.flyers.add('spark', x, y + 0.15 * S, z, Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp, this.rand(0.5, 1.1), this.rand(0.7, 1.2));
+      }
     }
     // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white)
     const snow = WX.wxSnow.value > 0.3;
@@ -536,7 +566,12 @@ export class Effects {
       }
     }
     // 8. light and camera shake
-    if (p.light) this.flashLight(x, y, z, p.light, p.fireColor === 'laser' ? 0xff5030 : thermo ? 0xff8a30 : 0xffa04a, 0.25 + 0.06 * S);
+    if (p.light) {
+      // white-hot pulse (lights the ground and the units around it), then the burning cluster keeps a warm glow
+      this.flashLight(x, y + 0.3 * S, z, p.light * (ball ? 1.5 : 1), p.fireColor === 'laser' ? 0xff5030 : thermo ? 0xff8a30 : ball ? 0xffd2a0 : 0xffa04a, (ball ? 0.16 : 0.25) + 0.05 * S);
+    }
+    // big ground blasts: the pressure wave shows as a brief condensation dome
+    if (!airborne && S >= 2.2 && !thermo) this.pressureDome(x, ground, z, 1.9 * S, 0.3, 0.07);
     this.addShake(p.shake, x, z);
     if (p.afterburn) this.burns.push({ x, y: ground, z, t: p.afterburn, size: S });
     if (thermo) this.thermobaric(x, y, z, ground, S, airborne);
@@ -549,13 +584,25 @@ export class Effects {
    * fuel-air / mid-air variants), its sparks, the dirt plume of a ground burst and the
    * lingering lit smoke it leaves. The procedural particles keep the small stuff.
    */
-  private flipBlast(fb: Flipbooks, p: BlastProfile, x: number, y: number, z: number, ground: number, airborne: boolean) {
+  private flipBlast(fb: Flipbooks, p: BlastProfile, x: number, y: number, z: number, ground: number, airborne: boolean, ball = false) {
     const S = p.size;
     const thermo = p.fireColor === 'thermo';
     const heat = p.fireColor === 'white' ? 0.45 : thermo ? 0.12 : 0;
     const snow = WX.wxSnow.value > 0.3;
     const gy = airborne ? y : ground;
-    if (airborne) {
+    if (ball) {
+      // the 3D cluster is the fireball; a quick baked burst gives it torn, flame-licked edges for the first instant
+      fb.spawn(airborne ? 'airburst' : 'burst', { x, y: gy + (airborne ? 0 : 0.05 * S), z, size: 1.7 * S, sizeEnd: 2.3 * S, tint: 0x3a3632, heat: heat + 0.1, emissive: 1.2, ground: !airborne, rot: airborne ? Math.PI : 0.35, life: airborne ? 1.1 : 0.9, warp: 0.8 });
+      if (!airborne && S >= 1.3) {
+        // base surge: a skirt of dust rolling out along the ground
+        const n = Math.max(3, Math.round((S >= 2.4 ? 8 : 5) * (this.quality === 'high' ? 1 : 0.6)));
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + this.rand(-0.3, 0.3);
+          const sp = this.rand(1.6, 2.4) * S;
+          fb.spawn('dust', { x: x + Math.cos(a) * 0.4 * S, y: ground, z: z + Math.sin(a) * 0.4 * S, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, drag: 1.6, size: 1.1 * S, sizeEnd: 2.4 * S, life: this.rand(2.6, 3.6), delay: 0.04, tint: snow ? 0xdde4ec : 0x8a7a62, ground: true, rot: 0.25, alpha: 0.7, emissive: 0, wind: 0.4 });
+        }
+      }
+    } else if (airborne) {
       fb.spawn('airburst', { x, y, z, size: 2.3 * S, sizeEnd: 3.2 * S, tint: 0x45413d, heat, emissive: 1.1, wind: 0.3, rise: -0.05 });
     } else if (S < 0.9) {
       fb.spawn('burst', { x, y: gy + 0.05 * S, z, size: 1.9 * S, sizeEnd: 2.5 * S, tint: 0x5a5550, heat, ground: true, rot: 0.35 });
@@ -613,14 +660,7 @@ export class Effects {
   private thermobaric(x: number, y: number, z: number, ground: number, S: number, airborne: boolean) {
     const R = 2.4 * S;
     if (!airborne) {
-      // pressure dome
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffd8a8, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-      const m = new THREE.Mesh(this.domeGeo, mat);
-      m.position.set(x, ground, z);
-      m.scale.setScalar(0.3);
-      m.renderOrder = 3;
-      this.group.add(m);
-      this.timed.push({ obj: m, mat, life: 0, max: 0.4, grow: R, base: 0.3, alpha0: 0.09 });
+      this.pressureDome(x, ground, z, R, 0.4, 0.09);
       // dust wall pushed out by the wave
       const n = this.q(36);
       for (let i = 0; i < n; i++) {
@@ -651,6 +691,63 @@ export class Effects {
       this.addShake(0.12, x, z);
       if (this.haze) this.haze.heat(x, y + 0.8 * S, z, 2.6 * S, 1.8, 0.005, 0.8);
     });
+  }
+
+  /** A fast-expanding translucent hemisphere: the visible pressure wave of a big ground burst. */
+  private pressureDome(x: number, ground: number, z: number, R: number, life: number, alpha: number) {
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffe2c0, transparent: true, opacity: alpha, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const m = new THREE.Mesh(this.domeGeo, mat);
+    m.position.set(x, ground, z);
+    m.scale.setScalar(0.3);
+    m.renderOrder = 3;
+    this.group.add(m);
+    this.timed.push({ obj: m, mat, life: 0, max: life, grow: R, base: 0.3, alpha0: alpha });
+  }
+
+  // ------------------------------------------------------------ aircraft kills
+
+  /**
+   * An aircraft blown apart in the air: a round mid-air fireball, a shower of
+   * burning fragments and metal, and a sooty cloud left hanging where it died.
+   * S ~ 1 for a jet, ~0.8 for a helicopter / drone.
+   */
+  airKill(x: number, y: number, z: number, ground: number, S = 1) {
+    this.blast({ ...BLASTS.aircraftKill, size: BLASTS.aircraftKill.size * S }, x, y, z, ground);
+    // fuel tanks rupture a beat later: a second, oilier billow trailing the first
+    this.after(0.12, () => this.fireballs.blast(x + this.rand(-0.2, 0.2) * S, y - 0.15 * S, z + this.rand(-0.2, 0.2) * S, 1.1 * S, 1.5, 'thermo', true, -0.05));
+    if (this.debris) this.debris.burst('metal', x, y, z, this.q(Math.round(10 * S)), 3.5 * S, 0.05, { up: 0.3, smoke: 0.6 });
+    const nb = this.q(Math.round(5 * S));
+    for (let i = 0; i < nb; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = this.rand(1.2, 3.4) * S;
+      this.flyers.add('burning', x, y, z, Math.cos(a) * sp, this.rand(0.5, 3), Math.sin(a) * sp, this.rand(2.5, 4.5), this.rand(0.8, 1.3));
+    }
+    this.addShake(0.08 * S, x, z);
+  }
+
+  /**
+   * One frame of a burning wreck falling out of the sky (call every frame):
+   * a thick black smoke trail, flames streaming off it and a flickering light.
+   * (vx, vy, vz) = its velocity; k = 0..1 how fiercely it burns.
+   */
+  wreckTrail(x: number, y: number, z: number, vx: number, vy: number, vz: number, dt: number, k = 1) {
+    const n = Math.max(1, Math.round(dt * 70 * this.rate * (0.5 + 0.5 * k)));
+    for (let i = 0; i < n; i++) {
+      const j = Math.random();
+      const px = x - vx * dt * j;
+      const py = y - vy * dt * j;
+      const pz = z - vz * dt * j;
+      this.smokeSys.spawn({ x: px + this.rand(-0.05, 0.05), y: py, z: pz + this.rand(-0.05, 0.05), vx: this.rand(-0.1, 0.1), vy: this.rand(0.1, 0.35), vz: this.rand(-0.1, 0.1), life: this.rand(3, 5), size: 0.22, sizeEnd: this.rand(1.1, 1.6), color: 0x141210, colorEnd: 0x4a4540, alpha: 0.8, drag: 0.7, wind: 0.8, glow: 0.6 });
+      if (i % 2 === 0) this.fire.spawn({ x: px, y: py, z: pz, vx: -vx * 0.15, vy: 0.4, vz: -vz * 0.15, life: this.rand(0.18, 0.32), size: this.rand(0.32, 0.5) * (0.6 + 0.4 * k), sizeEnd: 0.12, color: 0xffd890, colorEnd: 0xd02a00, alpha: 0.85, drag: 2 });
+    }
+    if (Math.random() < dt * 6) this.fire.spawn({ x, y, z, vx: this.rand(-1.5, 1.5), vy: this.rand(-0.5, 1.5), vz: this.rand(-1.5, 1.5), life: this.rand(0.4, 0.8), size: 0.05, color: 0xffe0a0, colorEnd: 0xff4000, gravity: 7 });
+    this.lights.sustain(x, y, z, 2.5 + 1.5 * k, 0xff8a30, 0.5);
+  }
+
+  /** The wreck hits the ground: a fuel-fed second explosion that leaves the wreck burning. */
+  airCrash(x: number, ground: number, z: number, S = 1) {
+    this.blast({ ...BLASTS.aircraftCrash, size: BLASTS.aircraftCrash.size * S }, x, ground + 0.15, z, ground);
+    this.marks?.craterAt(x, z, 0.5 * S);
   }
 
   /** Shell / missile / debris hitting water: tall white column, spray and a ring. */
@@ -1125,7 +1222,7 @@ export class Effects {
     this.flyers.update(dt);
     this.ground.update(dt);
     this.grass?.update(dt);
-    this.fireballs?.update(dt);
+    this.fireballs.update(dt, this.camera);
     this.flip?.update(dt, this.camera);
     this.tracers.update(dt);
     this.haze?.update(dt);
@@ -1168,7 +1265,7 @@ export class Effects {
       tracers: this.tracers.active,
       flyers: this.flyers.active,
       grassFires: this.grass?.active ?? 0,
-      fireballs: this.fireballs?.active ?? 0,
+      fireballs: this.fireballs.active,
       trauma: Math.round(this.shaker.trauma * 100) / 100,
       groundFx: this.ground.spawned,
     };
