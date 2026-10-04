@@ -150,7 +150,7 @@ function ridges(b: GeoBuilder, m: GameMap, f: Field, gap: number, h: number, w: 
         ids.push(b.vert(V(c.x, g + lift + hv, c.z), V(0, 1, 0), 0, 1, tmp, 1));
         ids.push(b.vert(V(c.x + nx * w, g + lift, c.z + nz * w), V(nx * 0.45, 0.9, nz * 0.45), 0, 0, lo, 0));
       }
-      if (prev) for (let q = 0; q < ids.length - 1; q++) b.quad(prev[q + 1], ids[q + 1], prev[q], ids[q]);
+      if (prev) for (let q = 0; q < ids.length - 1; q++) b.quad(prev[q], ids[q], prev[q + 1], ids[q + 1]);
       prev = ids;
     }
   }

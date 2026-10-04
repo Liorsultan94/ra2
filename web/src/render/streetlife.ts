@@ -130,21 +130,17 @@ function stall(b: GeoBuilder, signs: GeoBuilder, M: THREE.Matrix4, seed: number,
 function cafeSet(): THREE.BufferGeometry {
   const g = new GeoBuilder();
   const metal = C(0x3a3a3a);
-  g.add(new THREE.CylinderGeometry(0.045, 0.045, 0.008, 10), new THREE.Matrix4().makeTranslation(0, 0.075, 0), null, C(0xf0ece4));
+  g.add(new THREE.CylinderGeometry(0.045, 0.045, 0.008, 8, 1).translate(0, 0.075, 0), new THREE.Matrix4(), null, C(0xf0ece4));
   g.add(new THREE.CylinderGeometry(0.005, 0.005, 0.075, 5), new THREE.Matrix4().makeTranslation(0, 0.037, 0), null, metal);
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.4;
     const m4 = new THREE.Matrix4().compose(V(Math.cos(a) * 0.08, 0, Math.sin(a) * 0.08), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), -a + Math.PI / 2), V(1, 1, 1));
     const chair = C(i % 2 ? 0xc8a878 : 0x9a5a3a);
-    g.add(new THREE.BoxGeometry(0.04, 0.006, 0.04).translate(0, 0.045, 0), m4, null, chair);
-    g.add(new THREE.BoxGeometry(0.04, 0.04, 0.006).translate(0, 0.068, 0.02), m4, null, chair);
-    for (const [lx, lz] of [
-      [-0.016, -0.016],
-      [0.016, -0.016],
-      [-0.016, 0.016],
-      [0.016, 0.016],
-    ])
-      g.add(new THREE.BoxGeometry(0.004, 0.045, 0.004).translate(lx, 0.022, lz), m4, null, metal);
+    // seat and back as quads, the legs as two crossed frames (the material is double sided)
+    g.add(new THREE.PlaneGeometry(0.04, 0.04).rotateX(-Math.PI / 2).translate(0, 0.045, 0), m4, null, chair);
+    g.add(new THREE.PlaneGeometry(0.04, 0.04).translate(0, 0.068, 0.02), m4, null, chair);
+    g.add(new THREE.PlaneGeometry(0.036, 0.045).translate(0, 0.022, 0), m4, null, metal.clone().multiplyScalar(0.8));
+    g.add(new THREE.PlaneGeometry(0.036, 0.045).rotateY(Math.PI / 2).translate(0, 0.022, 0), m4, null, metal.clone().multiplyScalar(0.8));
   }
   return g.build();
 }
@@ -186,12 +182,12 @@ export function buildStreetLife(m: GameMap, layout: Layout, fog: FogOfWar, quali
     const sa = Math.sin(f.angle);
     for (const side of [-1, 1]) {
       const off = side * 1.27;
-      let prev: number[] | null = null;
+      let prev: [number, number, number] | null = null;
       run++;
       // a painted run here and there (red / white: no stopping; blue / white: paid parking)
       const paint = hash2(run, Math.floor(f.cx), 5201);
       const pcol = paint < 0.15 ? red : paint < 0.28 ? blue : null;
-      const step = 0.25;
+      const step = pcol ? 0.5 : 1.0;
       for (let a = -f.hl; a <= f.hl + 1e-6; a += step) {
         const x = f.cx + ca * a - sa * off;
         const z = f.cy + sa * a + ca * off;
@@ -201,8 +197,8 @@ export function buildStreetLife(m: GameMap, layout: Layout, fog: FogOfWar, quali
         }
         const gy = surfaceHeight(m, x, z);
         const k = Math.round((a + f.hl) / step);
-        const col = pcol && k % 2 ? pcol : pcol ? white : stone.clone().multiplyScalar(0.92 + hash2(k, run, 5202) * 0.12);
-        // across: road side (lower, the face) .. pavement side
+        const col = pcol ? (k % 2 ? pcol : white) : stone.clone().multiplyScalar(0.92 + hash2(k, run, 5202) * 0.12);
+        // across: road side (the face) .. pavement side; each segment owns its start vertices (crisp stripes)
         const nx = -sa * side;
         const nz = ca * side;
         const pts = [
@@ -210,12 +206,15 @@ export function buildStreetLife(m: GameMap, layout: Layout, fog: FogOfWar, quali
           [-0.03, 0.03],
           [0.03, 0.03],
         ];
-        const ids = pts.map(([o, y], i) => kb.vert(V(x + nx * o, gy + y, z + nz * o), i === 0 ? V(-nx, 0.2, -nz).normalize() : V(0, 1, 0), 0, 0, col));
+        const mk = (px: number, py: number, pz: number) => pts.map(([o, y], i) => kb.vert(V(px + nx * o, py + y, pz + nz * o), i === 0 ? V(-nx, 0.2, -nz).normalize() : V(0, 1, 0), 0, 0, col));
         if (prev) {
-          kb.quad(prev[1], ids[1], prev[0], ids[0]);
-          kb.quad(prev[2], ids[2], prev[1], ids[1]);
+          const [px, py, pz] = prev;
+          const s0 = mk(px, py, pz);
+          const s1 = mk(x, gy, z);
+          kb.quad(s0[1], s1[1], s0[0], s1[0]);
+          kb.quad(s0[2], s1[2], s0[1], s1[1]);
         }
-        prev = ids;
+        prev = [x, gy, z];
       }
     }
   }

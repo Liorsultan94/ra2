@@ -491,6 +491,7 @@ function cityMaterials(
       vertexColors: true,
       roughness: 0.6,
       metalness: 0.25,
+      side: THREE.DoubleSide,
     }),
   );
   return { facade, trim, slate, detail };
@@ -673,12 +674,42 @@ function flatRoof(
 // ------------------------------------------------- roof and facade dressing (detail mesh: hidden at far zoom)
 
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
-const UNIT_CYL = new THREE.CylinderGeometry(1, 1, 1, 8);
+const UNIT_CYL = new THREE.CylinderGeometry(1, 1, 1, 6);
+/*
+ * Paper-thin parts (shutters, clothes, panels) are single quads and thin rods (rails, balusters,
+ * lines, legs) two crossed quads instead of 12-triangle boxes: the detail material is double sided.
+ */
+const QUAD_Z = new THREE.PlaneGeometry(1, 1);
+const QUAD_X = QUAD_Z.clone().rotateY(Math.PI / 2);
+const QUAD_Y = QUAD_Z.clone().rotateX(-Math.PI / 2);
+function cross(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
+  const g = new GeoBuilder();
+  g.add(a, new THREE.Matrix4(), null, 1);
+  g.add(b, new THREE.Matrix4(), null, 1);
+  const out = g.build();
+  out.deleteAttribute("color");
+  return out;
+}
+const ROD_X = cross(QUAD_Y, QUAD_Z);
+const ROD_Y = cross(QUAD_X, QUAD_Z);
+const ROD_Z = cross(QUAD_X, QUAD_Y);
+/** The cheapest stand-in for a unit box scaled (sx, sy, sz). */
+function thin(g: THREE.BufferGeometry, sx: number, sy: number, sz: number) {
+  if (g !== UNIT_BOX) return g;
+  const T = 0.012;
+  const tx = sx <= T;
+  const ty = sy <= T;
+  const tz = sz <= T;
+  const n = +tx + +ty + +tz;
+  if (n === 1) return tx ? QUAD_X : ty ? QUAD_Y : QUAD_Z;
+  if (n >= 2) return !tx ? ROD_X : !ty ? ROD_Y : ROD_Z;
+  return g;
+}
 const UNIT_BALL = new THREE.IcosahedronGeometry(1, 0);
 const DISH = new THREE.SphereGeometry(
   1,
-  8,
-  3,
+  6,
+  2,
   0,
   Math.PI * 2,
   0,
@@ -705,7 +736,7 @@ function put(
 ) {
   _q.setFromEuler(_e.set(rx, ry, rz, "YXZ"));
   b.add(
-    g,
+    thin(g, sx, sy, sz),
     P.m
       .clone()
       .multiply(new THREE.Matrix4().compose(V(x, y, z), _q, V(sx, sy, sz))),
@@ -792,7 +823,7 @@ function solarHeater(
     ry,
     UNIT_BOX,
     0,
-    0.05,
+    0.044,
     0.03,
     0.155,
     0.004,
@@ -868,13 +899,13 @@ function acUnit(
     y,
     z,
     ry,
-    UNIT_CYL,
+    UNIT_BOX,
     0.012,
     0.035,
     0.028,
-    0.022,
+    0.04,
     0.004,
-    0.022,
+    0.04,
     DARK_C,
     Math.PI / 2,
   );
@@ -1128,7 +1159,7 @@ function balcony(
   railC: THREE.Color,
 ) {
   const z = sz * (D / 2 + 0.05);
-  put(b, P, UNIT_BOX, x, y + 0.008, z, w, 0.016, 0.1, col);
+  put(b, P, UNIT_BOX, x, y + 0.012, z, w, 0.012, 0.1, col); // slab (a quad: seen from above only)
   if (!rail) {
     put(b, P, UNIT_BOX, x, y + 0.045, sz * (D / 2 + 0.095), w, 0.06, 0.01, col);
     for (const s of [-1, 1])
@@ -1139,12 +1170,12 @@ function balcony(
   const zo = sz * (D / 2 + 0.096);
   put(b, P, UNIT_BOX, x, y + 0.085, zo, w, 0.008, 0.008, railC);
   put(b, P, UNIT_BOX, x, y + 0.045, zo, w, 0.005, 0.005, railC);
-  for (let i = 0; i <= 4; i++)
+  for (let i = 0; i <= 2; i++)
     put(
       b,
       P,
       UNIT_BOX,
-      x - w / 2 + (w * i) / 4,
+      x - w / 2 + (w * i) / 2,
       y + 0.05,
       zo,
       0.006,
@@ -2284,7 +2315,7 @@ export function buildCity(
             V(1, 1, 1),
           );
           det.add(
-            UNIT_BOX,
+            ROD_X,
             M.clone().multiply(
               new THREE.Matrix4().makeScale(len, 0.004, 0.004),
             ),
@@ -2298,7 +2329,7 @@ export function buildCity(
             const ch = 0.04 + hash2(c2, j + k, 1957) * 0.06;
             const lx = -len / 2 + (len * (c2 + 0.5)) / n;
             det.add(
-              UNIT_BOX,
+              QUAD_Z,
               M.clone().multiply(
                 new THREE.Matrix4().compose(
                   V(
