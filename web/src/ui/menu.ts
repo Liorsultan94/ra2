@@ -127,11 +127,11 @@ const CLIMATE: Record<string, { label: string; icon: string }> = {
   urban: { label: 'Urban', icon: 'city' },
 };
 const TOD_OPTS: [string, string][] = [
-  ['cycle', 'Live'],
+  ['cycle', 'Dawn'],
+  ['mist', 'Misty'],
   ['day', 'Day'],
   ['dusk', 'Dusk'],
   ['night', 'Night'],
-  ['mist', 'Mist'],
 ];
 const WX_OPTS: [string, string][] = [
   ['dynamic', 'Live'],
@@ -340,9 +340,9 @@ export class MainMenu {
               <div class="mm-field"><span class="mm-lbl">Opponent<b data-v="enemy"></b></span>${seg('enemy', 'o', st.enemy, enemies, 'Opponent nation', 'seg-flags')}</div>
               <div class="mm-field"><span class="mm-lbl">Difficulty<b data-v="difficulty"></b></span>${seg('difficulty', 'o', st.difficulty, [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], 'Difficulty')}</div>
               <div class="mm-field"><span class="mm-lbl">Credits</span>${seg('credits', 'o', String(st.credits), [5000, 10000, 20000].map((c) => [String(c), '$' + c / 1000 + 'k'] as [string, string]), 'Starting credits')}</div>
-              <div class="mm-field"><span class="mm-lbl">Time of day</span>${seg('tod', 'o', st.tod ?? 'cycle', TOD_OPTS, 'Time of day')}</div>
+              <div class="mm-field"><span class="mm-lbl">Start time</span>${seg('tod', 'o', st.tod ?? 'cycle', TOD_OPTS, 'Time of day')}</div>
               <div class="mm-field"><span class="mm-lbl">Weather</span>${seg('weather', 'o', st.weather ?? 'dynamic', WX_OPTS, 'Weather')}</div>
-              <p class="note live-note">Live day &amp; weather (1 min = 1 hour): the battle starts at 05:30 before sunrise; the sun sets around 18:30, rain, snow or dust fronts come and go with the map's climate. Map: the battlefield's own fixed weather.</p>
+              <p class="note live-note">The clock always runs (1 min = 1 hour): pick when the battle starts, at dawn 05:30, misty 06:00, day 10:00, dusk 17:30 or night 21:00. The sun sets around 18:30, rain, snow or dust fronts come and go with the map's climate. Map: the battlefield's own fixed weather.</p>
             </div>
           </section>
           <aside class="mm-sum mm-glass mm-rise" style="--i:2" aria-label="Loadout">

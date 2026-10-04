@@ -88,6 +88,26 @@ describe('atmosphere defaults', () => {
     // the attract demo never gets it
     expect(atmosConfig(-1, 'clear', true)).toMatchObject({ tod: 'day', weather: 'clear' });
   });
+
+  it("a menu battle's day / dusk / night / mist pick is a start time on the running clock, never a frozen sky", () => {
+    const g = globalThis as { localStorage?: unknown };
+    const prev = g.localStorage;
+    const store: Record<string, string> = {};
+    g.localStorage = { getItem: (k: string) => store[k] ?? null, setItem: (k: string, v: string) => (store[k] = v) };
+    try {
+      for (const [tod, h] of [['day', 10], ['dusk', 17.5], ['night', 21], ['mist', 6]] as const) {
+        store['ironfront.settings.v1'] = JSON.stringify({ tod });
+        expect(atmosConfig(0, 'clear', true)).toMatchObject({ tod: 'cycle', startHour: h });
+      }
+      store['ironfront.settings.v1'] = JSON.stringify({ tod: 'cycle' });
+      expect(atmosConfig(0, 'clear', true).startHour).toBeUndefined();
+      // test URLs (not live) keep the fixed sky
+      store['ironfront.settings.v1'] = JSON.stringify({ tod: 'night' });
+      expect(atmosConfig(0, 'clear', false)).toMatchObject({ tod: 'night' });
+    } finally {
+      g.localStorage = prev;
+    }
+  });
 });
 
 describe('briefing lines', () => {
