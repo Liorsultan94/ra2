@@ -307,7 +307,7 @@ export class MainMenu {
       const c = CLIMATE[m.biome] ?? CLIMATE.temperate;
       return `
       <button class="mtile${m.id === curMap ? ' sel' : ''}" data-map="${m.id}" role="radio" aria-checked="${m.id === curMap}" style="--i:${i}">
-        <img class="mt-img" src="${mapThumb(m.id)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">
+        <img class="mt-img" src="${mapThumb(m.id)}" alt="" decoding="async" onerror="this.remove()">
         <span class="mt-badge" data-c="${m.biome}">${mi(c.icon)}${c.label}</span>
         <span class="mt-txt"><b>${m.name}</b><small>${m.blurb}</small></span>
       </button>`;

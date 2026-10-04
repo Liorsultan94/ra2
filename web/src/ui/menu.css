@@ -669,7 +669,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 42px;
+  min-height: 44px;
   min-width: 44px;
   padding: 0 16px;
   border: 0;
@@ -736,8 +736,8 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
-.mm-panel[hidden] {
-  display: none;
+.mm .mm-panel[hidden] {
+  display: none !important;
 }
 .mm-panel.mm-in > :not(.mm-kicker),
 .mm-panel.mm-in .fgrid > *,
@@ -886,7 +886,7 @@
 .seg {
   display: flex;
   gap: 2px;
-  padding: 3px;
+  padding: 2px;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--mm-line);
@@ -911,7 +911,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 8px;
   border-radius: 9px;
   font-family: var(--font);
@@ -1268,10 +1268,16 @@
   width: min(520px, 94vw);
 }
 .mm .settings {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
-  align-content: start;
-  gap: 16px 28px;
+  display: block;
+  columns: 2 340px;
+  column-gap: 28px;
+}
+.mm .settings .set-group {
+  break-inside: avoid;
+  margin-bottom: 16px;
+}
+.mm .settings-page .panel.settings {
+  flex: 0 1 auto;
 }
 .settings .set-group {
   display: flex;
@@ -1495,7 +1501,7 @@
     font-size: 10px;
   }
   .mm-tab {
-    min-height: 40px;
+    min-height: 44px;
     padding: 0 12px;
     font-size: 14.5px;
     gap: 6px;
@@ -1543,6 +1549,20 @@
     font-size: 13px;
   }
   .mm-lbl b {
+    display: none;
+  }
+  .mm-field:has(.seg-flags) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .seg-flags {
+    flex-wrap: nowrap;
+  }
+  .seg-flags .seg-i,
+  .seg-flags .seg-i:first-child {
+    flex: 1 1 0;
+  }
+  .seg-flags em {
     display: none;
   }
   .seg-i span {
@@ -1601,8 +1621,10 @@
     padding: 12px 14px;
   }
   .mm .settings {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px 18px;
+    column-gap: 18px;
+  }
+  .mm .settings .set-group {
+    margin-bottom: 10px;
   }
   .settings .mm-field,
   .settings label.rng {
@@ -1654,7 +1676,7 @@
     display: none;
   }
   .mm .settings {
-    grid-template-columns: 1fr;
+    columns: 1;
   }
 }
 /* large desktop: more air */
