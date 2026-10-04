@@ -188,13 +188,21 @@ export class FogOfWar {
   update(explored: Uint8Array, visible: Uint8Array, dt: number, snap = false) {
     const k = snap ? 1 : Math.min(1, dt * 5);
     const n = this.w * this.h;
+    const cur = this.cur;
+    const data = this.data;
+    let changed = false;
     for (let i = 0; i < n; i++) {
       const target = visible[i] ? 1 : explored[i] ? 0.5 : 0;
-      const c = this.cur[i] + (target - this.cur[i]) * k;
-      this.cur[i] = c;
-      this.data[i] = (c * 255) | 0;
+      const c = cur[i] + (target - cur[i]) * k;
+      cur[i] = c;
+      const b = (c * 255) | 0;
+      if (data[i] !== b) {
+        data[i] = b;
+        changed = true;
+      }
     }
-    this.texture.needsUpdate = true;
+    // (settled shroud: the same bytes, no texture upload this frame)
+    if (changed) this.texture.needsUpdate = true;
   }
 
   revealAll() {

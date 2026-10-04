@@ -309,6 +309,11 @@ export class Game {
       if (this.simple && this.smallScreen() && window.innerHeight > window.innerWidth) this.hud.message('Tip: turn your phone sideways for a bigger battlefield', 'info');
     }
     this.bindInput();
+    // (idle frame gate: any input brings the full frame rate back)
+    for (const t of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'input'] as const) {
+      window.addEventListener(t, this.noteInput, { capture: true, passive: true });
+      this.disposers.push(() => window.removeEventListener(t, this.noteInput, { capture: true }));
+    }
     const onResize = () => this.resize();
     window.addEventListener('resize', onResize);
     this.disposers.push(() => window.removeEventListener('resize', onResize));
@@ -512,6 +517,7 @@ export class Game {
     if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.frame);
     if (skipFrame(now)) return; // battery saver: 30 fps cap (render/perf/hud.ts)
+    if (this.idleSkip(now)) return; // menu / pause screens / idle photo mode: fewer frames (battery)
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
     if (this.warming || this.briefing) return;
@@ -566,6 +572,30 @@ export class Game {
       if (++this.mmFrame % 2 === 0) this.hud.tickMinimap(now / 1000);
     }
   };
+
+  /** Last time a frame was drawn through the idle gate, and the last user input (photo mode idle). */
+  private gateShown = -1e9;
+  private lastInput = performance.now();
+  private readonly noteInput = () => (this.lastInput = performance.now());
+
+  /**
+   * Battery: frames nobody needs at 60 fps. The demo battle behind the menu runs at 30 fps; with the
+   * pause menu / end screen up the battle is frozen (the render clock stands still, so every frame is
+   * the same picture) and 5 fps keep the view current; photo mode drops to 10 fps once the camera and
+   * the controls have been left alone for a moment (any input brings full rate back at once).
+   * Returns true when this animation frame should be skipped (before its dt is taken, so the next
+   * drawn frame gets the whole elapsed time).
+   */
+  private idleSkip(now: number): boolean {
+    let fps = 0;
+    if (this.opts.attract) fps = 30;
+    else if (this.photo.active) fps = now - this.lastInput > 1500 && !this.photo.busy() ? 10 : 0;
+    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) fps = 5;
+    if (!fps) return false;
+    if (now - this.gateShown < 1000 / fps - 2) return true;
+    this.gateShown = now;
+    return false;
+  }
 
   /** Rotate the camera by 90 degree steps (Q / E, or the on-screen buttons). */
   rotateView(steps: number) {

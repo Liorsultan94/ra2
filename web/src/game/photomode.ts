@@ -188,6 +188,11 @@ export class PhotoMode {
 
   constructor(private host: PhotoHost) {}
 
+  /** A gesture or a held key is moving the camera right now (the game keeps full frame rate). */
+  busy(): boolean {
+    return this.pointers.size > 0 || this.keys.size > 0;
+  }
+
   toggle(resumeOnExit?: boolean) {
     if (this.active) this.exit();
     else this.enter(resumeOnExit);

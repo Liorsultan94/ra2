@@ -1093,6 +1093,8 @@ export class GameRenderer {
   private viewFrustum = new THREE.Frustum();
   private projView = new THREE.Matrix4();
   private castSphere = new THREE.Sphere();
+  /** Scratch: an emitter's world position (exhaust, sparks, chimneys). */
+  private emitP = new THREE.Vector3();
   private occlFrame = 0;
 
   /**
@@ -1342,7 +1344,8 @@ export class GameRenderer {
     this.airShadows.end();
     this.contact?.end();
     this.chutes.end(dt, this.time);
-    for (const v of [...this.visuals.values()]) {
+    // (deleting the current entry while iterating a Map is safe: no per-frame copy of the visual list)
+    if (this.visuals.size > seen.size) for (const v of this.visuals.values()) {
       if (seen.has(v.id)) continue;
       // boarding a transport: the soldier first walks up the ramp (unitlife.ts)
       if (v.model.infantry && this.life.adopt(v.id, v.model)) {
@@ -1388,14 +1391,14 @@ export class GameRenderer {
         v.exhaustTimer = 0.08;
         for (const em of m.emitters) {
           if (em.kind !== 'smoke') continue;
-          const wp = em.pos.clone().applyMatrix4(m.root.matrixWorld);
+          const wp = this.emitP.copy(em.pos).applyMatrix4(m.root.matrixWorld);
           this.effects.exhaust(wp.x, wp.y, wp.z);
         }
       }
     }
     for (const em of m.emitters) {
       if (em.kind === 'spark' && Math.random() < dt * 3) {
-        const wp = em.pos.clone().applyMatrix4(m.root.matrixWorld);
+        const wp = this.emitP.copy(em.pos).applyMatrix4(m.root.matrixWorld);
         this.effects.spark(wp.x, wp.y, wp.z);
       }
     }
@@ -1433,7 +1436,7 @@ export class GameRenderer {
     if (v.model.emitters.length && v.emitTimer <= 0 && e.buildAnim >= 1) {
       v.emitTimer = lowPower ? 0.6 : 0.22;
       for (const em of v.model.emitters) {
-        const wp = em.pos.clone().applyMatrix4(root.matrixWorld);
+        const wp = this.emitP.copy(em.pos).applyMatrix4(root.matrixWorld);
         if (em.kind === 'spark') this.effects.spark(wp.x, wp.y, wp.z);
         else if (em.kind === 'fire') this.effects.flame(wp.x, wp.y, wp.z, 0.6);
         else this.effects.smoke(wp.x, wp.y, wp.z, em.kind === 'steam' ? 0.9 : 0.6, em.kind === 'smoke');
