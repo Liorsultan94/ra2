@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { groundHeight, type GameMap, WATER_LEVEL } from '../sim/map';
+import { type GameMap, WATER_LEVEL } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
@@ -9,6 +9,8 @@ import { grassRGB } from './grasstex';
 import { biomeLook, hexRGB, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { landmarkClear } from './landmarks/plan';
+import { HZ_CELL, HZ_MARGIN, horizonWorld, type HorizonWorld } from './horizonworld';
+import { HORIZON, Horizon, hzApply, hzClone, hzFragment, hzWaterClone } from './horizon';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
@@ -19,10 +21,10 @@ export interface GroundMaps {
   res: number;
 }
 
-/** How far the countryside continues past each map edge (world units). */
-const MARGIN = 84;
+/** How far the countryside continues past each map edge (world units); the far ring (horizon.ts) takes over from there. */
+const MARGIN = HZ_MARGIN;
 /** Grid spacing of the outskirts mesh. */
-const CELL = 2;
+const CELL = HZ_CELL;
 
 const smoothstep = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
@@ -120,6 +122,9 @@ export class Outskirts {
   readonly group = new THREE.Group();
   private edge: { data: Float32Array; size: number } | null = null;
   private look: BiomeLook;
+  private world: HorizonWorld;
+  /** The world beyond the outskirts, out to the horizon (horizon.ts). */
+  readonly horizon: Horizon;
 
   constructor(
     private map: GameMap,
@@ -130,12 +135,15 @@ export class Outskirts {
   ) {
     this.group.name = 'outskirts';
     this.look = biomeLook(map);
+    this.world = horizonWorld(map);
     this.edge = terrainGround ? this.sampleGround(terrainGround) : null;
     const ground = this.buildGround(fog);
     this.group.add(ground);
     this.buildTrees(fog, quality);
     if (this.look.code === 3) this.buildCityRing(fog, quality);
     this.buildWater(fog, terrainWater);
+    this.horizon = new Horizon(map, fog, quality, terrainWater);
+    this.group.add(this.horizon.group);
   }
 
   /**
@@ -152,9 +160,10 @@ export class Outskirts {
     const rect = (x0: number, y0: number, x1: number, y1: number) =>
       new THREE.PlaneGeometry(x1 - x0, y1 - y0).rotateX(-Math.PI / 2).translate((x0 + x1) / 2, 0, (y0 + y1) / 2);
     const geo = mergeGeometries([rect(-M, -M, w + M, 0), rect(-M, h, w + M, h + M), rect(-M, 0, 0, h), rect(w, 0, w + M, h)])!;
-    // share the terrain's water material (its fog block upgraded to the smoky shroud / haze)
+    // the terrain's water material (its fog block upgraded to the smoky shroud / haze), with the horizon's
+    // aerial perspective past the edge instead of the dark surround (same uniforms, so it stays in sync)
     fog.upgradeShader(src);
-    const mat: THREE.Material = src;
+    const mat: THREE.Material = hzWaterClone(src) ?? src;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = terrainWater!.position.y;
     mesh.renderOrder = terrainWater!.renderOrder;
@@ -229,44 +238,21 @@ export class Outskirts {
   }
 
   private outside(x: number, y: number) {
-    const { w, h } = this.map;
-    const dx = Math.max(0, -x, x - w);
-    const dy = Math.max(0, -y, y - h);
-    return Math.hypot(dx, dy);
+    return this.world.outside(x, y);
   }
 
   private edgeHeight(x: number, y: number) {
-    const { w, h } = this.map;
-    return groundHeight(this.map, Math.max(0, Math.min(w - 0.001, x)), Math.max(0, Math.min(h - 0.001, y)));
+    return this.world.edgeHeight(x, y);
   }
 
   /** 1 where the map edge next to this point is under water (rivers flow on past the edge). */
   private wetNear(x: number, y: number) {
-    const { w, h } = this.map;
-    const ox = x < 0 || x > w;
-    const oy = y < 0 || y > h;
-    if (ox === oy) return 0; // inside, or in a corner quadrant
-    let m = 0;
-    for (let k = -4; k <= 4; k++) {
-      const hh = ox && !oy ? this.edgeHeight(x, y + k) : !ox && oy ? this.edgeHeight(x + k, y) : this.edgeHeight(x, y);
-      m = Math.max(m, smoothstep(0.05, -0.3, hh) * (1 - Math.abs(k) / 5));
-    }
-    return m;
+    return this.world.wetNear(x, y);
   }
 
+  /** Ground height (horizonworld.ts: the near belt, the far relief, rivers, the bay). */
   private height(x: number, y: number) {
-    const d = this.outside(x, y);
-    const base = this.edgeHeight(x, y);
-    if (d <= 0) return base - 0.14;
-    // flatten towards a gentle plain, then rolling hills further out
-    const plain = Math.max(base, 0) * (1 - smoothstep(0, 10, d));
-    const hills = (fbm(x * 0.035, y * 0.035, 909, 3) - 0.38) * 5.5;
-    const near = this.wetNear(x, y);
-    const dry = plain + Math.max(-0.2, hills) * smoothstep(6, 46, d) * (1 - near) - 0.14 * (1 - smoothstep(0, 3, d));
-    // river beds continue straight out at the edge's depth
-    const corner = (x < 0 || x > this.map.w) && (y < 0 || y > this.map.h);
-    const wet = corner ? 0 : smoothstep(0.0, -0.3, base);
-    return dry * (1 - wet) + base * wet;
+    return this.world.height(x, y);
   }
 
   private woods(x: number, y: number) {
@@ -295,6 +281,16 @@ export class Outskirts {
         let blend = o <= 0 ? 0 : smoothstep(1.5, 11, o + jitter * 0.6) * (1 - near);
         if (o > 0 && near <= 0 && this.edgeHeight(x < 0 ? -x : x > w ? 2 * w - x : x, y < 0 ? -y : y > h ? 2 * h - y : y) < -0.05) blend = 1;
         this.terrainColor(x, y, t, near > 0);
+        if (this.world.sea && o > 0) {
+          // the bay: sand on the beach, concrete in the container yard, a sandy bed under the water
+          const { u, v } = this.world.seaV(x, y);
+          const sea = this.world.sea;
+          const hb = u > sea.harbour[0] && u < sea.harbour[1];
+          const k = 1 - smoothstep(hb ? -46 : -12, hb ? -40 : -4, v);
+          const c = hb ? [0.52, 0.52, 0.5] : [0.84, 0.76, 0.58];
+          for (let j = 0; j < 3; j++) t[j] += (c[j] - t[j]) * k;
+          blend *= 1 - k;
+        }
         const i = (py * size + px) * 4;
         edge[i] = Math.min(255, t[0] * 255);
         edge[i + 1] = Math.min(255, t[1] * 255);
@@ -364,8 +360,8 @@ export class Outskirts {
     const prev = mat.onBeforeCompile;
     mat.onBeforeCompile = (shader, r) => {
       prev.call(mat, shader, r);
-      Object.assign(shader.uniforms, uniforms);
-      shader.fragmentShader = shader.fragmentShader
+      Object.assign(shader.uniforms, uniforms, HORIZON);
+      shader.fragmentShader = hzFragment(shader.fragmentShader)
         .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>\n${OUTSKIRTS_GLSL}`)
         .replace(
           '#include <map_fragment>',
@@ -390,7 +386,7 @@ export class Outskirts {
       maps.woods.needsUpdate = true;
     }
     const bk = this.look.code;
-    mat.customProgramCacheKey = () => 'outskirts-ground-2-b' + bk;
+    mat.customProgramCacheKey = () => 'outskirts-ground-hz1-b' + bk;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'outskirts-ground';
@@ -424,7 +420,7 @@ export class Outskirts {
     map.colorSpace = THREE.SRGBColorSpace;
     const em = new THREE.CanvasTexture(ce);
     const mat = new THREE.MeshStandardMaterial({ map, emissiveMap: em, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.85, vertexColors: false });
-    fog.apply(mat);
+    hzApply(fog, mat, 'city-ring');
     const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     // drop the bottom face's UV stretch: the roofs read as flat concrete through the texture's border colour
     const list: { m: THREE.Matrix4; c: THREE.Color }[] = [];
@@ -439,6 +435,12 @@ export class Outskirts {
           if ((x > w || y > h) && o < 10) continue;
           if (hash2(bx, by, 50) < 0.12) continue; // a park
           if (landmarkClear(this.map, x, y, 2.2)) continue; // a landmark site (landmarks/plan.ts)
+          if (this.world.sea) {
+            // the bay, its beach and the container yard
+            const { u, v } = this.world.seaV(x, y);
+            const sea = this.world.sea;
+            if (v > (u > sea.harbour[0] - 4 && u < sea.harbour[1] + 4 ? -50 : -16)) continue;
+          }
           const hh = 0.7 + hash2(bx, by, 80 + k) * (o > 20 ? 2.4 : 1.6);
           const sx = 2.6 + hash2(bx, by, 90 + k) * 1.4;
           const sz = 2.6 + hash2(bx, by, 95 + k) * 1.4;
@@ -495,6 +497,8 @@ export class Outskirts {
         if (hash2(k, 4, 5) > p) continue;
         if (o > MARGIN - 6) continue;
         if (landmarkClear(this.map, ox, oy, 0.8)) continue; // a landmark site / the railway (landmarks/plan.ts)
+        if (this.world.nearPath(ox, oy, 0.5)) continue; // a road / railway running on to the horizon
+        if (this.world.sea && this.world.seaV(ox, oy).v > -8) continue;
         const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
         const hy = this.height(ox, oy);
         // no trees standing in the river / canal / lake running on past the map edge
@@ -514,7 +518,10 @@ export class Outskirts {
         if (pines.length + leafy.length >= budget) break;
       }
     }
-    const { mat, depth } = treeMaterials(fog, quality);
+    const tm = treeMaterials(fog, quality);
+    const depth = tm.depth;
+    // the battlefield's tree material with the horizon's aerial perspective instead of the dark surround
+    const mat = hzClone(tm.mat, 'osk-trees');
     // one instanced mesh per type and sector so off-screen sectors are frustum culled
     const G = 5;
     const cell = (Math.max(w, h) + MARGIN * 2) / G;
@@ -548,9 +555,7 @@ export class Outskirts {
 
 /** Ground height of the outskirts mesh's control points at (x, y) (landmarks/plan.ts stands its set pieces on it). */
 export function outskirtsHeight(m: GameMap, x: number, y: number): number {
-  const o = Object.create(Outskirts.prototype) as { map: GameMap; height(x: number, y: number): number };
-  o.map = m;
-  return o.height(x, y);
+  return horizonWorld(m).height(x, y);
 }
 
 /** Outskirts mesh grid: origin and spacing (the mesh is linear between its control points). */

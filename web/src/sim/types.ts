@@ -112,6 +112,8 @@ export interface UnitDef extends BaseDef {
   crusher?: boolean;
   /** Can be run over by an enemy crusher (infantry on the ground; crush.ts). */
   crushable?: boolean;
+  /** Side-event prop (sideevents.ts): a crashed aircraft, a money crate or a neutral convoy truck. */
+  event?: 'wreck' | 'cash' | 'truck';
 }
 
 export interface BuildingDef extends BaseDef {
@@ -440,4 +442,11 @@ export type SimEvent =
   | { t: 'superweapon'; owner: number; sw: string; phase: 'detected' | 'ready' | 'launch' | 'lost' | 'beam' | 'end'; x: number; y: number; z?: number; tx?: number; ty?: number; tz?: number }
   /** Infantry entered (enter) or left a civilian building (garrison.ts). */
   | { t: 'garrison'; id: number; owner: number; enter: boolean }
+  /**
+   * Side event (sideevents.ts): started (marker at x, y), claimed (owner got reward credits / the intel), ended
+   * (done; owner = who won it, -1 = shared or nobody) or failed (expired, burnt down, the convoy got away).
+   */
+  | { t: 'side'; id: number; kind: 'crash' | 'supply' | 'rescue' | 'convoy'; phase: 'start' | 'claim' | 'end' | 'fail'; x: number; y: number; owner: number; reward?: number }
+  /** Battle conditions changed (conditions.ts): night falls / day breaks, fog, mud, snow. on = started. */
+  | { t: 'conditions'; kind: 'night' | 'fog' | 'dust' | 'mud' | 'rain' | 'snow'; on: boolean }
   | { t: 'gameOver'; winner: number };

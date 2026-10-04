@@ -17,6 +17,15 @@ if (typeof (globalThis as { document?: unknown }).document === 'undefined') {
 }
 
 const style = (faction: string) => ({ team: 0x2f6fd0, hull: 0x777755, accent: 0x333333, flag: 0, faction, region: 'west' }) as never;
+/** Bounds of the vertices a geometry's index actually uses (body-space metres). */
+function box(g: THREE.BufferGeometry) {
+  const b = new THREE.Box3();
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  const ix = g.index!;
+  for (let i = 0; i < ix.count; i++) b.expandByPoint(v.fromBufferAttribute(p, ix.getX(i)));
+  return b;
+}
 const tris = (g: THREE.BufferGeometry) => (g.index ? g.index.count : g.attributes.position.count) / 3;
 const base = (): AnimState => ({ dt: 0.033, time: 1, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true, seed: 3, lod: 0 });
 
@@ -37,6 +46,12 @@ describe('infantry: hero / battle / far geometry LODs', () => {
         t[2] += tris(l![1]);
         // subsets share the vertex buffer
         expect(l![0].attributes.position).toBe(sm.geometry.attributes.position);
+        // stand-ins sit where the hero parts are (no stray / floating pieces)
+        const b0 = box(sm.geometry).expandByScalar(0.03);
+        for (const g of l!) {
+          const b = box(g);
+          if (!b.isEmpty()) expect(b0.containsBox(b)).toBe(true);
+        }
       });
       expect(n).toBeGreaterThan(4);
       expect(t[1]).toBeLessThan(t[0] * 0.6);

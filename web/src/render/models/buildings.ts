@@ -1746,11 +1746,19 @@ function roofKit(k: Kit, x0: number, x1: number, z0: number, z1: number, y: numb
       hvac(k, px(0.8), y, pz(0.8), 0.12, 0.09);
       satDish(k, px(0.15), y, pz(0.85), 0.05, 0.6);
       break;
-    default:
-      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
-      vent(k, px(r()), y, pz(0.8));
-      vent(k, px(r()), y, pz(0.7));
+    default: {
+      // western roofs: HVAC packages, a photovoltaic array on big roofs (energy resilient bases), vents
+      const pv = W > 0.7 && D > 0.55;
+      for (let i = 0; i < n; i++) hvac(k, px((i + 0.5) / n), y, pz(pv ? 0.12 + r() * 0.12 : 0.25 + r() * 0.2), 0.16, 0.11, r() > 0.5 ? 0 : Math.PI / 2);
+      if (pv) {
+        const m = Math.max(2, Math.floor((W - 0.45) / 0.2));
+        for (let i = 0; i < m; i++) solarPanel(k, x0 + 0.16 + i * 0.2, y, pz(0.74), 0.18, 0.12, 0.5);
+        k.box(P.galv, 0.2 * (m - 1) + 0.02, 0.01, 0.025, x0 + 0.16 + 0.1 * (m - 1), y, pz(0.74) - 0.09);
+      }
+      vent(k, px(pv ? 0.93 : r()), y, pz(pv ? 0.42 : 0.8));
+      vent(k, px(pv ? 0.96 : r()), y, pz(pv ? 0.54 : 0.7));
       if (W > 0.6) k.box(P.wall2, 0.14, 0.1, 0.12, px(0.85), y, pz(0.75)); // stair housing
+    }
   }
 }
 

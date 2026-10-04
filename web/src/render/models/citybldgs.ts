@@ -42,7 +42,7 @@ export function isCityKind(k: StructureKind) {
   return CITY_KINDS.has(k);
 }
 
-type Facade = 'panel' | 'brick' | 'glass' | 'shop';
+type Facade = 'panel' | 'brick' | 'glass' | 'shop' | 'stone';
 interface Spec {
   /** Ground floor height and style; upper floors count, height and style. */
   groundH: number;
@@ -97,6 +97,7 @@ const FACADE_SCAN: Partial<Record<Facade, { tile: BTile; frac: number }>> = {
   panel: { tile: BTile.Panel, frac: 0.42 },
   brick: { tile: BTile.Brick, frac: 0.34 },
   shop: { tile: BTile.Cast, frac: 0.45 },
+  stone: { tile: BTile.Stone, frac: 0.4 },
 };
 function scanCell(style: Facade, N: number): HTMLCanvasElement | null {
   const f = FACADE_SCAN[style];
@@ -214,6 +215,52 @@ function facadeTextures(style: Facade, N: number, scan: HTMLCanvasElement | null
     g.fillRect(0, N * 0.78, N, N * 0.025);
     ge.fillRect(0, 0, N * 0.04, N);
     ge.fillRect(N * 0.96, 0, N * 0.04, N);
+  } else if (style === 'stone') {
+    // Mediterranean limestone ashlar ("Jerusalem stone"): coursed blocks, a deep-set window, stone sill and lintel
+    g.fillStyle = '#dccbaa';
+    g.fillRect(0, 0, N, N);
+    if (scan) {
+      g.globalAlpha = 0.75;
+      g.drawImage(scan, 0, 0);
+      g.globalAlpha = 1;
+    }
+    const rows = 5;
+    for (let y = 0; y < rows; y++) {
+      let x = -(y % 2) * 0.27;
+      while (x < 1) {
+        const bw = 0.32 + r() * 0.26;
+        const t = r();
+        g.fillStyle = `rgba(${(226 + t * 22) | 0},${(208 + t * 20) | 0},${(170 + t * 22) | 0},${scan ? 0.35 : 0.9})`;
+        g.fillRect(x * N + 1, (y / rows) * N + 1, bw * N - 2, N / rows - 2);
+        // chiselled face: a few darker pits
+        for (let k = 0; k < 6; k++) {
+          g.fillStyle = `rgba(120,96,64,${(r() * 0.18).toFixed(3)})`;
+          g.fillRect((x + r() * bw) * N, ((y + r()) / rows) * N, 1 + r() * 2, 1 + r() * 2);
+        }
+        x += bw;
+      }
+      g.fillStyle = 'rgba(150,128,96,0.45)';
+      g.fillRect(0, (y / rows) * N, N, Math.max(1, N * 0.012));
+    }
+    if (!scan) grain(0.05);
+    // deep reveal, glass, frame, mullion
+    g.fillStyle = 'rgba(70,56,40,0.55)';
+    g.fillRect(N * 0.27, N * 0.2, N * 0.46, N * 0.58);
+    glass(0.31, 0.25, 0.69, 0.76, [46, 54, 60]);
+    frame(0.31, 0.25, 0.69, 0.76, '#f2ede2', 0.03);
+    g.fillStyle = '#f2ede2';
+    g.fillRect(N * 0.49, N * 0.25, N * 0.022, N * 0.51);
+    ge.fillStyle = '#000';
+    ge.fillRect(N * 0.49, N * 0.25, N * 0.022, N * 0.51);
+    // a half-lowered roller shutter box over the top of the pane
+    g.fillStyle = '#c8c2b4';
+    g.fillRect(N * 0.31, N * 0.25, N * 0.38, N * 0.07);
+    ge.fillRect(N * 0.31, N * 0.25, N * 0.38, N * 0.07);
+    g.fillStyle = 'rgba(80,72,60,0.35)';
+    for (let k = 0; k < 4; k++) g.fillRect(N * 0.31, N * (0.265 + k * 0.015), N * 0.38, 1);
+    g.fillStyle = '#efe4c8';
+    g.fillRect(N * 0.25, N * 0.14, N * 0.5, N * 0.06);
+    g.fillRect(N * 0.25, N * 0.78, N * 0.5, N * 0.045);
   } else {
     // shop front: stone base and pillars, a big display window, a sign band
     g.fillStyle = '#9a948a';
@@ -298,7 +345,7 @@ interface CityMats {
 function cityMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high'): CityMats {
   const N = quality === 'low' ? 64 : 128;
   const facade = {} as Record<Facade, THREE.MeshStandardMaterial>;
-  for (const st of ['panel', 'brick', 'glass', 'shop'] as Facade[]) {
+  for (const st of ['panel', 'brick', 'glass', 'shop', 'stone'] as Facade[]) {
     const t = facadeTextures(st, N);
     const glassy = st === 'glass';
     const m = new THREE.MeshStandardMaterial({
@@ -320,7 +367,7 @@ function cityMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high'): CityM
   }
   // repaint the wall backgrounds with the photoscans once they are loaded (medium / high)
   onBuildingPhotos(() => {
-    for (const st of ['panel', 'brick', 'shop'] as Facade[]) {
+    for (const st of ['panel', 'brick', 'shop', 'stone'] as Facade[]) {
       const scan = scanCell(st, N);
       if (!scan) continue;
       const t = facadeTextures(st, N, scan);
@@ -346,8 +393,8 @@ interface Chunk {
   slate: GeoBuilder;
   detail: GeoBuilder;
 }
-const newChunk = (): Chunk => ({ facade: { panel: new GeoBuilder(), brick: new GeoBuilder(), glass: new GeoBuilder(), shop: new GeoBuilder() }, trim: new GeoBuilder(), slate: new GeoBuilder(), detail: new GeoBuilder() });
-const chunkBuilders = (c: Chunk) => [c.facade.panel, c.facade.brick, c.facade.glass, c.facade.shop, c.trim, c.slate, c.detail];
+const newChunk = (): Chunk => ({ facade: { panel: new GeoBuilder(), brick: new GeoBuilder(), glass: new GeoBuilder(), shop: new GeoBuilder(), stone: new GeoBuilder() }, trim: new GeoBuilder(), slate: new GeoBuilder(), detail: new GeoBuilder() });
+const chunkBuilders = (c: Chunk) => [c.facade.panel, c.facade.brick, c.facade.glass, c.facade.shop, c.facade.stone, c.trim, c.slate, c.detail];
 
 /** Placement of one building: local (front = +z) to world. */
 class Place {
@@ -426,27 +473,242 @@ function flatRoof(c: Chunk, P: Place, w: number, d: number, top: number, roofC: 
   box(c.trim, P, -w / 2 + t / 2, top, 0, t, ph, d - 2 * t, edgeC, 2);
 }
 
-function roofClutter(c: Chunk, P: Place, w: number, d: number, top: number, h: (k: number) => number, big: boolean) {
-  const grey = C(0x8a8a86);
-  // stair / lift head
-  box(c.trim, P, (h(30) - 0.5) * w * 0.4, top, (h(31) - 0.5) * d * 0.3, 0.32, 0.18, 0.26, C(0xb4b0a8), 2);
-  // AC units and a water tank
-  const n = big ? 4 : 2;
-  for (let i = 0; i < n; i++) box(c.detail, P, (h(40 + i) - 0.5) * w * 0.7, top, (h(50 + i) - 0.5) * d * 0.7, 0.1, 0.06, 0.12, grey);
-  if (h(32) < 0.6) {
-    c.detail.add(new THREE.CylinderGeometry(0.07, 0.07, 0.16, 10), P.m.clone().multiply(new THREE.Matrix4().makeTranslation((h(33) - 0.5) * w * 0.5, top + 0.08, (h(34) - 0.5) * d * 0.5)), null, C(0x6a6c70));
+// ------------------------------------------------- roof and facade dressing (detail mesh: hidden at far zoom)
+
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const UNIT_CYL = new THREE.CylinderGeometry(1, 1, 1, 8);
+const UNIT_BALL = new THREE.IcosahedronGeometry(1, 0);
+const DISH = new THREE.SphereGeometry(1, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2.8);
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+
+/** Add a unit geometry into the building's local frame: at (x, y, z), turned (ry, then rx, rz), scaled. */
+function put(b: GeoBuilder, P: Place, g: THREE.BufferGeometry, x: number, y: number, z: number, sx: number, sy: number, sz: number, col: THREE.Color, ry = 0, rx = 0, rz = 0) {
+  _q.setFromEuler(_e.set(rx, ry, rz, 'YXZ'));
+  b.add(g, P.m.clone().multiply(new THREE.Matrix4().compose(V(x, y, z), _q, V(sx, sy, sz))), null, col);
+}
+
+/** Same, but in a sub-frame (x0, y0, z0, yaw ry0) of the building: for items that face a fixed way. */
+function putIn(b: GeoBuilder, P: Place, x0: number, y0: number, z0: number, ry0: number, g: THREE.BufferGeometry, x: number, y: number, z: number, sx: number, sy: number, sz: number, col: THREE.Color, rx = 0, rz = 0) {
+  const c = Math.cos(ry0);
+  const s = Math.sin(ry0);
+  put(b, P, g, x0 + x * c + z * s, y0 + y, z0 - x * s + z * c, sx, sy, sz, col, ry0, rx, rz);
+}
+
+const PANEL_C = C(0x1c2a44);
+const BOILER_C = C(0xe8e8e2);
+const ALU_C = C(0xa8acae);
+const DARK_C = C(0x26282a);
+
+/** Israeli-style solar water heater: a tilted collector panel facing local +z (yaw ry), the white boiler behind it on a frame. */
+function solarHeater(b: GeoBuilder, P: Place, x: number, y: number, z: number, ry: number) {
+  putIn(b, P, x, y, z, ry, UNIT_BOX, 0, 0.05, 0.03, 0.15, 0.008, 0.115, PANEL_C, 0.7);
+  putIn(b, P, x, y, z, ry, UNIT_BOX, 0, 0.05, 0.03, 0.155, 0.004, 0.12, ALU_C, 0.7); // frame edge peeks out
+  putIn(b, P, x, y, z, ry, UNIT_CYL, 0, 0.105, -0.04, 0.03, 0.17, 0.03, BOILER_C, 0, Math.PI / 2);
+  for (const sx of [-0.065, 0.065]) putIn(b, P, x, y, z, ry, UNIT_BOX, sx, 0.045, -0.04, 0.008, 0.09, 0.008, ALU_C);
+}
+
+function acUnit(b: GeoBuilder, P: Place, x: number, y: number, z: number, ry: number) {
+  putIn(b, P, x, y, z, ry, UNIT_BOX, 0, 0.033, 0, 0.09, 0.066, 0.055, C(0xd4d4cc));
+  putIn(b, P, x, y, z, ry, UNIT_CYL, 0.012, 0.035, 0.028, 0.022, 0.004, 0.022, DARK_C, Math.PI / 2);
+}
+
+function antenna(b: GeoBuilder, P: Place, x: number, y: number, z: number, H: number, ry: number) {
+  put(b, P, UNIT_BOX, x, y + H / 2, z, 0.008, H, 0.008, C(0x5a5e62));
+  for (let k = 0; k < 3; k++) putIn(b, P, x, y, z, ry, UNIT_BOX, 0, H - 0.02 - k * 0.045, 0, 0.13 - k * 0.025, 0.005, 0.005, C(0x6a6e72));
+}
+
+function dish(b: GeoBuilder, P: Place, x: number, y: number, z: number, ry: number) {
+  putIn(b, P, x, y, z, ry, UNIT_BOX, 0, 0.025, 0, 0.01, 0.05, 0.01, ALU_C);
+  putIn(b, P, x, y, z, ry, DISH, 0, 0.06, 0, 0.05, 0.05, 0.05, C(0xe4e4e0), -1.1);
+}
+
+/** Rooftop garden: planters with shrubs and a pergola. */
+function roofGarden(b: GeoBuilder, P: Place, x: number, y: number, z: number, w: number, d: number, h: (k: number) => number) {
+  const pot = C([0xa0583a, 0x8a7a68, 0xb8a888][Math.floor(h(70) * 3)]);
+  const leaf = C(0x4a7a34);
+  for (const sz of [-1, 1]) {
+    put(b, P, UNIT_BOX, x, y + 0.025, z + sz * (d / 2 - 0.04), w, 0.05, 0.06, pot);
+    for (let i = 0; i < 3; i++) put(b, P, UNIT_BALL, x - w / 2 + (w * (i + 0.5)) / 3, y + 0.07, z + sz * (d / 2 - 0.04), 0.045, 0.04, 0.035, leaf.clone().multiplyScalar(0.85 + h(71 + i) * 0.3));
   }
-  // antenna mast
-  if (h(35) < 0.7) box(c.detail, P, (h(36) - 0.5) * w * 0.6, top, (h(37) - 0.5) * d * 0.6, 0.015, 0.4 + h(38) * 0.3, 0.015, C(0x505458));
+  // pergola: four posts and slats
+  const wood = C(0x8a6a4a);
+  for (const [px, pz] of [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ])
+    put(b, P, UNIT_BOX, x + px * (w / 2 - 0.03), y + 0.07, z + pz * (d / 2 - 0.12), 0.012, 0.14, 0.012, wood);
+  for (let i = 0; i < 4; i++) put(b, P, UNIT_BOX, x - w / 2 + 0.03 + ((w - 0.06) * i) / 3, y + 0.145, z, 0.012, 0.01, d - 0.2, wood);
+  // a table under it
+  put(b, P, UNIT_CYL, x, y + 0.03, z, 0.04, 0.06, 0.04, C(0xe8e4dc));
+}
+
+interface RoofOpts {
+  heaters: number;
+  tanks: number;
+  ac: number;
+  dish: boolean;
+  antenna: boolean;
+  garden: boolean;
+  /** The building's rot (heaters all face the same way in the world). */
+  rot: number;
+  /** Keep this local x range clear (a penthouse). */
+  clear?: [number, number];
+}
+
+function roofClutter(c: Chunk, P: Place, w: number, d: number, top: number, h: (k: number) => number, o: RoofOpts) {
+  const b = c.detail;
+  // stair / lift head
+  const sx = (h(30) - 0.5) * w * 0.4;
+  const sz = (h(31) - 0.5) * d * 0.3;
+  box(c.trim, P, sx, top, sz, 0.32, 0.18, 0.26, C(0xb4b0a8), 2);
+  const taken: [number, number, number][] = [[sx, sz, 0.24], [0, 0, 0.12]];
+  const free = (x: number, z: number, r: number) => {
+    if (Math.abs(x) > w / 2 - r - 0.04 || Math.abs(z) > d / 2 - r - 0.04) return false;
+    if (o.clear && x > o.clear[0] - r && x < o.clear[1] + r) return false;
+    if (taken.some(([tx, tz, tr]) => Math.hypot(tx - x, tz - z) < tr + r)) return false;
+    taken.push([x, z, r]);
+    return true;
+  };
+  // the solar heaters face one way in the world (towards +z)
+  const face = (-o.rot * Math.PI) / 2;
+  let n = 0;
+  for (let row = 0; row < 3 && n < o.heaters; row++)
+    for (let i = 0; n < o.heaters && i < 12; i++) {
+      const x = -w / 2 + 0.13 + i * 0.19;
+      const z = -d / 2 + 0.16 + row * 0.24;
+      if (x > w / 2 - 0.1) break;
+      if (!free(x, z, 0.09)) continue;
+      solarHeater(b, P, x, top, z, face);
+      n++;
+    }
+  // water tanks: black plastic or galvanised
+  for (let i = 0, k = 0; i < o.tanks && k < 10; k++) {
+    const x = (h(80 + k) - 0.5) * w * 0.8;
+    const z = (h(90 + k) - 0.5) * d * 0.8;
+    if (!free(x, z, 0.06)) continue;
+    const r = 0.04 + h(100 + k) * 0.015;
+    put(b, P, UNIT_CYL, x, top + 0.05, z, r, 0.1, r, h(110 + k) < 0.7 ? C(0x1e1e20) : C(0x9a9c9e));
+    i++;
+  }
+  for (let i = 0, k = 0; i < o.ac && k < 12; k++) {
+    const x = (h(40 + k) - 0.5) * w * 0.8;
+    const z = (h(50 + k) - 0.5) * d * 0.8;
+    if (!free(x, z, 0.06)) continue;
+    acUnit(b, P, x, top, z, Math.floor(h(60 + k) * 4) * (Math.PI / 2));
+    i++;
+  }
+  if (o.dish) {
+    const x = w / 2 - 0.1;
+    const z = (h(37) - 0.5) * d * 0.6;
+    if (free(x, z, 0.06)) dish(b, P, x, top, z, face + 0.6);
+  }
+  if (o.antenna) {
+    const x = (h(36) - 0.5) * w * 0.6;
+    const z = (h(38) - 0.5) * d * 0.6;
+    if (free(x, z, 0.04)) antenna(b, P, x, top, z, 0.32 + h(39) * 0.25, h(35) * 3);
+  }
+  if (o.garden) {
+    const gw = Math.min(0.6, w * 0.4);
+    const gx = o.clear ? -w / 2 + gw / 2 + 0.08 : (h(72) < 0.5 ? -1 : 1) * (w / 2 - gw / 2 - 0.08);
+    const gz = d / 2 - 0.3;
+    if (free(gx, gz, 0.2)) roofGarden(b, P, gx, top, gz, gw, 0.42, h);
+  }
+}
+
+/** Balcony on the front (sz = 1) or back (-1) wall: slab and either a solid parapet or a railing. */
+function balcony(b: GeoBuilder, P: Place, x: number, y: number, D: number, sz: number, w: number, col: THREE.Color, rail: boolean, railC: THREE.Color) {
+  const z = sz * (D / 2 + 0.05);
+  put(b, P, UNIT_BOX, x, y + 0.008, z, w, 0.016, 0.1, col);
+  if (!rail) {
+    put(b, P, UNIT_BOX, x, y + 0.045, sz * (D / 2 + 0.095), w, 0.06, 0.01, col);
+    for (const s of [-1, 1]) put(b, P, UNIT_BOX, x + (s * w) / 2, y + 0.045, z, 0.01, 0.06, 0.09, col);
+    return;
+  }
+  // railing: top and mid rails and a few balusters (cheap at this size)
+  const zo = sz * (D / 2 + 0.096);
+  put(b, P, UNIT_BOX, x, y + 0.085, zo, w, 0.008, 0.008, railC);
+  put(b, P, UNIT_BOX, x, y + 0.045, zo, w, 0.005, 0.005, railC);
+  for (let i = 0; i <= 4; i++) put(b, P, UNIT_BOX, x - w / 2 + (w * i) / 4, y + 0.05, zo, 0.006, 0.07, 0.006, railC);
+  for (const s of [-1, 1]) put(b, P, UNIT_BOX, x + (s * w) / 2, y + 0.085, z, 0.008, 0.008, 0.09, railC);
+}
+
+const CLOTHES = [0xe8e8e8, 0xc83a32, 0x3a64b0, 0xf0d040, 0x6aa060, 0xe08aa8, 0x404040, 0xf4f0e0];
+
+/** Laundry rack outside a window (face k: 0 front +z, 1 +x, 2 back -z, 3 -x): brackets, three lines, a few clothes. */
+function laundry(b: GeoBuilder, P: Place, k: number, along: number, y: number, W: number, D: number, h: (k: number) => number, seed: number) {
+  const ry = [0, Math.PI / 2, Math.PI, -Math.PI / 2][k];
+  const off = k % 2 === 0 ? D / 2 : W / 2;
+  const x0 = Math.sin(ry) * off + Math.cos(ry) * along;
+  const z0 = Math.cos(ry) * off - Math.sin(ry) * along;
+  const ln = 0.2;
+  for (const s of [-1, 1]) putIn(b, P, x0, y, z0, ry, UNIT_BOX, (s * ln) / 2, 0, 0.045, 0.006, 0.006, 0.09, ALU_C);
+  for (let i = 0; i < 3; i++) putIn(b, P, x0, y, z0, ry, UNIT_BOX, 0, 0.002, 0.02 + i * 0.03, ln, 0.003, 0.003, C(0xd8d8d8));
+  const n = 2 + Math.floor(h(seed) * 3);
+  for (let i = 0; i < n; i++) {
+    const cw = 0.035 + h(seed + 1 + i) * 0.04;
+    const ch = 0.04 + h(seed + 5 + i) * 0.05;
+    putIn(b, P, x0, y, z0, ry, UNIT_BOX, -ln / 2 + 0.03 + (i / n) * (ln - 0.05) + cw / 2, -ch / 2, 0.02 + (i % 3) * 0.03, cw, ch, 0.003, C(CLOTHES[Math.floor(h(seed + 9 + i) * CLOTHES.length)]));
+  }
+}
+
+/** Wall-mounted AC compressors on a face (k as laundry), on random bays / floors. */
+function wallAc(b: GeoBuilder, P: Place, k: number, W: number, D: number, y0: number, floors: number, fh: number, n: number, h: (k: number) => number, seed: number) {
+  const ry = [0, Math.PI / 2, Math.PI, -Math.PI / 2][k];
+  const off = (k % 2 === 0 ? D / 2 : W / 2) + 0.028;
+  const len = k % 2 === 0 ? W : D;
+  for (let i = 0; i < n; i++) {
+    const along = (h(seed + i) - 0.5) * (len - 0.2);
+    const f = Math.floor(h(seed + 20 + i) * floors);
+    const x = Math.sin(ry) * off + Math.cos(ry) * along;
+    const z = Math.cos(ry) * off - Math.sin(ry) * along;
+    put(b, P, UNIT_BOX, x, y0 + f * fh + 0.02, z, k % 2 === 0 ? 0.075 : 0.05, 0.055, k % 2 === 0 ? 0.05 : 0.075, C(0xd8d8d0), 0);
+  }
+}
+
+/** Shutters beside the windows of the front and back walls (window half-width `win` of a bay). */
+function shutters(b: GeoBuilder, P: Place, W: number, D: number, y0: number, floors: number, fh: number, bay: number, win: number, col: THREE.Color, h: (k: number) => number, skipDoor: boolean) {
+  const nb = Math.max(1, Math.round(W / bay));
+  const bw = W / nb;
+  const sw = bw * 0.2;
+  for (let f = 0; f < floors; f++)
+    for (let i = 0; i < nb; i++)
+      for (const sz of [1, -1]) {
+        if (skipDoor && f === 0 && sz > 0 && i === Math.floor(nb / 2)) continue;
+        if (h(200 + f * 17 + i * 3 + (sz > 0 ? 0 : 1)) < 0.2) continue; // a few lost / closed ones
+        const x = -W / 2 + bw * (i + 0.5);
+        const z = sz * (D / 2 + 0.004);
+        const y = y0 + f * fh + fh * 0.22;
+        const tone = col.clone().multiplyScalar(0.85 + h(300 + f * 13 + i) * 0.3);
+        for (const s of [-1, 1]) put(b, P, UNIT_BOX, x + s * (win * bw + sw / 2), y + fh * 0.29, z, sw, fh * 0.58, 0.006, tone);
+      }
+}
+
+/** Striped cloth awning (local frame), tilted down to the front, with a valance. */
+function awning(b: GeoBuilder, P: Place, x: number, y: number, z: number, ry: number, w: number, col: THREE.Color) {
+  const n = Math.max(3, Math.round(w / 0.07));
+  const white = C(0xf2efe6);
+  for (let i = 0; i < n; i++) {
+    const c = i % 2 === 0 ? col : white;
+    const lx = -w / 2 + (w * (i + 0.5)) / n;
+    putIn(b, P, x, y, z, ry, UNIT_BOX, lx, 0, 0.09, w / n, 0.012, 0.18, c, 0.35);
+    putIn(b, P, x, y, z, ry, UNIT_BOX, lx, -0.055, 0.172, w / n, 0.035, 0.004, c);
+  }
 }
 
 const APT_TINTS = [0xffffff, 0xf3e8d4, 0xe2eaf0, 0xf2dcd0, 0xe8ecd8];
 const BRICK_TINTS = [0xffffff, 0xe8d0c0, 0xd8c8b8, 0xf0e0d0];
 const PLASTER_TINTS = [0xf4e6c8, 0xe6d0a8, 0xd8e0e4, 0xf0d4c4, 0xe4e8d0];
+/** Limestone: cream to honey. */
+const STONE_TINTS = [0xffffff, 0xfff2dc, 0xf6e6c8, 0xfaeee0, 0xece0c8];
 const AWNINGS = [0xb83a2a, 0x2a6aa8, 0x2f8a5a, 0xd8a030, 0x6a3a8a, 0x404448];
+const SHUTTERS = [0x3a6a4a, 0x2e5a8a, 0x6a4a32, 0x4a7a8a, 0x8a3a2a];
+const RAILS = [0x2a2c30, 0xd8d8d4, 0x4a5a4a];
 
 /** One city building into the chunk builders. */
-function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number) {
+function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number, rich: boolean) {
   const spec = SPECS[st.kind]!;
   const cx = st.x + st.w / 2;
   const cz = st.y + st.h / 2;
@@ -468,44 +730,89 @@ function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number) {
   const base = 0.06; // sunk below the ground
   const gH = spec.groundH + base;
   const groundTint = C(0xffffff);
+  const dt = c.detail;
   let upperTint: THREE.Color;
   let top: number;
   switch (st.kind) {
     case StructureKind.Apartment: {
-      upperTint = C(APT_TINTS[Math.floor(v * APT_TINTS.length)]);
-      facade(c.facade.panel, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.92));
-      facade(c.facade.panel, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 3, upperTint);
+      // concrete panel blocks, or the same clad in limestone
+      const stone = h(60) < 0.5;
+      const fb = stone ? c.facade.stone : c.facade.panel;
+      upperTint = C(stone ? STONE_TINTS[Math.floor(v * STONE_TINTS.length)] : APT_TINTS[Math.floor(v * APT_TINTS.length)]);
+      facade(fb, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.92));
+      facade(fb, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 3, upperTint);
       top = gH + spec.floors * spec.floorH;
       flatRoof(c, P, W + 0.04, D + 0.04, top, C(0x5c5a56), upperTint.clone().multiplyScalar(0.86));
-      // balconies on the front and back, every other bay
+      // balconies on the front and back, every other bay: solid parapets or railings, some with laundry
       const nb = Math.max(1, Math.round(W / spec.bay));
       const bw = W / nb;
       const balC = upperTint.clone().multiplyScalar(0.8);
+      const rail = h(62) < 0.55;
+      const railC = C(RAILS[Math.floor(h(63) * RAILS.length)]);
       for (let f = 0; f < spec.floors; f++)
         for (let i = (f + Math.floor(v * 2)) % 2; i < nb; i += 2)
-          for (const sz of [1, -1]) box(c.detail, P, -W / 2 + bw * (i + 0.5), gH + f * spec.floorH + 0.01, sz * (D / 2 + 0.05), bw * 0.82, 0.1, 0.1, balC);
+          for (const sz of [1, -1]) {
+            const y = gH + f * spec.floorH + 0.01;
+            if (rich) balcony(dt, P, -W / 2 + bw * (i + 0.5), y, D, sz, bw * 0.82, balC, rail, railC);
+            else box(dt, P, -W / 2 + bw * (i + 0.5), y, sz * (D / 2 + 0.05), bw * 0.82, 0.1, 0.1, balC);
+          }
       // entrance canopy
-      box(c.detail, P, 0, spec.groundH * 0.85, D / 2 + 0.09, 0.42, 0.03, 0.18, C(0x6a6c70));
-      roofClutter(c, P, W, D, top, h, true);
+      box(dt, P, 0, spec.groundH * 0.85, D / 2 + 0.09, 0.42, 0.03, 0.18, C(0x6a6c70));
+      // a set-back roof apartment on some (kept off the roof centre: the owner's flag stands there)
+      let clear: [number, number] | undefined;
+      if (h(61) < 0.4) {
+        const pw = W * 0.38;
+        const pd = D * 0.62;
+        const ox = W * 0.27;
+        const PP = new Place(0, 0, 0, st.rot);
+        PP.m.copy(P.m).multiply(new THREE.Matrix4().makeTranslation(ox, top, -D * 0.12));
+        facade(fb, PP, pw, pd, 0, 1, spec.floorH, spec.bay, uOff + 11, upperTint);
+        flatRoof(c, PP, pw + 0.03, pd + 0.03, spec.floorH, C(0x5c5a56), upperTint.clone().multiplyScalar(0.86));
+        if (rich) {
+          // its terrace: a pergola and a parasol
+          put(dt, P, UNIT_CYL, ox, top + 0.09, D * 0.3, 0.006, 0.18, 0.006, ALU_C);
+          put(dt, P, new THREE.ConeGeometry(1, 1, 8), ox, top + 0.2, D * 0.3, 0.12, 0.04, 0.12, C(AWNINGS[Math.floor(h(64) * AWNINGS.length)]));
+        }
+        clear = [ox - pw / 2 - 0.02, ox + pw / 2 + 0.02];
+      }
+      if (rich) {
+        roofClutter(c, P, W, D, top, h, { heaters: 3 + Math.floor(h(65) * 6), tanks: 1 + Math.floor(h(66) * 3), ac: 2 + Math.floor(h(67) * 3), dish: h(68) < 0.6, antenna: h(69) < 0.7, garden: false, rot: st.rot, clear });
+        for (const k of [1, 3]) wallAc(dt, P, k, W, D, gH, spec.floors, spec.floorH, 2 + Math.floor(h(120 + k) * 3), h, 130 + k * 10);
+        for (let i = 0; i < 3; i++) if (h(150 + i) < 0.6) laundry(dt, P, 2, (h(160 + i) - 0.5) * (W - 0.4), gH + (1 + Math.floor(h(170 + i) * (spec.floors - 1))) * spec.floorH + 0.04, W, D, h, 180 + i * 12);
+      } else box(c.trim, P, (h(30) - 0.5) * W * 0.4, top, (h(31) - 0.5) * D * 0.3, 0.32, 0.18, 0.26, C(0xb4b0a8), 2);
       break;
     }
     case StructureKind.Block: {
-      upperTint = C(BRICK_TINTS[Math.floor(v * BRICK_TINTS.length)]);
+      const stone = h(60) < 0.35;
+      upperTint = C(stone ? STONE_TINTS[Math.floor(v * STONE_TINTS.length)] : BRICK_TINTS[Math.floor(v * BRICK_TINTS.length)]);
+      const fb = stone ? c.facade.stone : c.facade.brick;
       facade(c.facade.shop, P, W, D, 0, 1, gH, spec.bay * 2, uOff, groundTint, [true, false, true, false]);
-      facade(c.facade.brick, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.85), [false, true, false, true]);
-      facade(c.facade.brick, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 5, upperTint);
+      facade(fb, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.85), [false, true, false, true]);
+      facade(fb, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 5, upperTint);
       top = gH + spec.floors * spec.floorH;
       flatRoof(c, P, W + 0.06, D + 0.06, top, C(0x55524e), C(0xd2c8b8));
       // cornice and a string course over the shops
       box(c.trim, P, 0, top - 0.04, 0, W + 0.1, 0.04, D + 0.1, C(0xd8d0c0), 2);
       box(c.trim, P, 0, gH - 0.02, 0, W + 0.04, 0.03, D + 0.04, C(0xd8d0c0), 2);
-      // shop awnings
+      // striped shop awnings
       const aw = C(AWNINGS[Math.floor(h(3) * AWNINGS.length)]);
       for (const sz of [1, -1]) {
-        const am = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(0, spec.groundH * 0.9, sz * (D / 2 + 0.09))).multiply(new THREE.Matrix4().makeRotationX(sz * 0.35));
-        c.detail.add(new THREE.BoxGeometry(W * 0.85, 0.015, 0.18), am, null, aw);
+        if (rich) awning(dt, P, 0, spec.groundH * 0.9, sz * (D / 2), sz > 0 ? 0 : Math.PI, W * 0.85, aw);
+        else {
+          const am = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(0, spec.groundH * 0.9, sz * (D / 2 + 0.09))).multiply(new THREE.Matrix4().makeRotationX(sz * 0.35));
+          dt.add(new THREE.BoxGeometry(W * 0.85, 0.015, 0.18), am, null, aw);
+        }
       }
-      roofClutter(c, P, W, D, top, h, false);
+      if (rich) {
+        // shuttered windows (brick: Mediterranean green / blue), small railed balconies on the top floor
+        shutters(dt, P, W, D, gH, spec.floors, spec.floorH, spec.bay, stone ? 0.19 : 0.22, C(SHUTTERS[Math.floor(h(4) * SHUTTERS.length)]), h, false);
+        const nb = Math.max(1, Math.round(W / spec.bay));
+        const bw = W / nb;
+        for (let i = 0; i < nb; i++) if (h(90 + i) < 0.5) balcony(dt, P, -W / 2 + bw * (i + 0.5), gH + (spec.floors - 1) * spec.floorH + 0.01, D, 1, bw * 0.8, upperTint.clone().multiplyScalar(0.8), true, DARK_C);
+        roofClutter(c, P, W, D, top, h, { heaters: 2 + Math.floor(h(65) * 4), tanks: Math.floor(h(66) * 3), ac: 1 + Math.floor(h(67) * 3), dish: h(68) < 0.5, antenna: h(69) < 0.5, garden: h(70) < 0.4, rot: st.rot });
+        for (const k of [1, 3]) wallAc(dt, P, k, W, D, gH, spec.floors, spec.floorH, 1 + Math.floor(h(120 + k) * 3), h, 130 + k * 10);
+        if (h(150) < 0.7) laundry(dt, P, 1, (h(160) - 0.5) * (D - 0.4), gH + (1 + Math.floor(h(170) * (spec.floors - 1))) * spec.floorH + 0.04, W, D, h, 180);
+      } else box(c.trim, P, 0, top, 0, 0.3, 0.16, 0.24, C(0xb4b0a8), 2);
       break;
     }
     case StructureKind.Office: {
@@ -518,27 +825,41 @@ function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number) {
       flatRoof(c, P, W + 0.02, D + 0.02, top, C(0x6a6e72), C(0x9aa0a6));
       // corner fins
       for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) box(c.trim, P, (sx * W) / 2, gH, (sz * D) / 2, 0.05, top - gH + 0.05, 0.05, C(0xa8aeb4), 3);
-      // rooftop plant and a mast
-      box(c.trim, P, 0, top, 0, W * 0.5, 0.16, D * 0.45, C(0x9a9ea2), 2);
-      box(c.detail, P, W * 0.15, top + 0.16, 0, 0.02, 0.6, 0.02, C(0xc8ccd0));
-      roofClutter(c, P, W * 0.9, D * 0.9, top, h, true);
+      // rooftop plant room, a mast and a row of chiller units
+      box(c.trim, P, 0, top, -D * 0.18, W * 0.5, 0.16, D * 0.4, C(0x9a9ea2), 2);
+      box(dt, P, W * 0.15, top + 0.16, -D * 0.18, 0.02, 0.6, 0.02, C(0xc8ccd0));
+      if (rich) {
+        for (let i = 0; i < 3; i++) acUnit(dt, P, -W * 0.3 + i * 0.13, top, D * 0.3, 0);
+        dish(dt, P, -W * 0.38, top, -D * 0.38, 0.8);
+      }
       break;
     }
     case StructureKind.Shop: {
-      upperTint = C(PLASTER_TINTS[Math.floor(v * PLASTER_TINTS.length)]);
+      const stone = h(60) < 0.4;
+      upperTint = C(stone ? STONE_TINTS[Math.floor(v * STONE_TINTS.length)] : PLASTER_TINTS[Math.floor(v * PLASTER_TINTS.length)]);
+      const fb = stone ? c.facade.stone : c.facade.panel;
       facade(c.facade.shop, P, W, D, 0, 1, gH, spec.bay * 2, uOff, groundTint, [true, true, false, false]);
-      facade(c.facade.panel, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.85), [false, false, true, true]);
-      facade(c.facade.panel, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 3, upperTint);
+      facade(fb, P, W, D, 0, 1, gH, spec.bay, uOff, upperTint.clone().multiplyScalar(0.85), [false, false, true, true]);
+      facade(fb, P, W, D, gH, spec.floors, spec.floorH, spec.bay, uOff + 3, upperTint);
       top = gH + spec.floors * spec.floorH;
       flatRoof(c, P, W + 0.04, D + 0.04, top, C(0x5c5a56), upperTint.clone().multiplyScalar(0.8));
       // awnings on the two shop fronts and a sign
       const aw = C(AWNINGS[Math.floor(h(4) * AWNINGS.length)]);
-      const am1 = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(0, spec.groundH * 0.9, D / 2 + 0.09)).multiply(new THREE.Matrix4().makeRotationX(0.35));
-      c.detail.add(new THREE.BoxGeometry(W * 0.9, 0.015, 0.18), am1, null, aw);
-      const am2 = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(W / 2 + 0.09, spec.groundH * 0.9, 0)).multiply(new THREE.Matrix4().makeRotationZ(-0.35));
-      c.detail.add(new THREE.BoxGeometry(0.18, 0.015, D * 0.9), am2, null, aw);
-      box(c.detail, P, -W * 0.15, gH + 0.04, D / 2 + 0.02, W * 0.45, 0.09, 0.03, C([0xe8e0c8, 0xd84030, 0x2a5a9a, 0xf0c040][Math.floor(h(5) * 4)]));
-      roofClutter(c, P, W, D, top, h, false);
+      if (rich) {
+        awning(dt, P, 0, spec.groundH * 0.9, D / 2, 0, W * 0.9, aw);
+        awning(dt, P, W / 2, spec.groundH * 0.9, 0, Math.PI / 2, D * 0.9, aw);
+      } else {
+        const am1 = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(0, spec.groundH * 0.9, D / 2 + 0.09)).multiply(new THREE.Matrix4().makeRotationX(0.35));
+        dt.add(new THREE.BoxGeometry(W * 0.9, 0.015, 0.18), am1, null, aw);
+        const am2 = P.m.clone().multiply(new THREE.Matrix4().makeTranslation(W / 2 + 0.09, spec.groundH * 0.9, 0)).multiply(new THREE.Matrix4().makeRotationZ(-0.35));
+        dt.add(new THREE.BoxGeometry(0.18, 0.015, D * 0.9), am2, null, aw);
+      }
+      box(dt, P, -W * 0.15, gH + 0.04, D / 2 + 0.02, W * 0.45, 0.09, 0.03, C([0xe8e0c8, 0xd84030, 0x2a5a9a, 0xf0c040][Math.floor(h(5) * 4)]));
+      if (rich) {
+        shutters(dt, P, W, D, gH, spec.floors, spec.floorH, spec.bay, stone ? 0.19 : 0.3, C(SHUTTERS[Math.floor(h(6) * SHUTTERS.length)]), h, false);
+        roofClutter(c, P, W, D, top, h, { heaters: 1 + Math.floor(h(65) * 3), tanks: Math.floor(h(66) * 2), ac: 1 + Math.floor(h(67) * 2), dish: h(68) < 0.5, antenna: false, garden: h(70) < 0.5, rot: st.rot });
+        wallAc(dt, P, 3, W, D, gH, spec.floors, spec.floorH, 1 + Math.floor(h(121) * 2), h, 140);
+      } else box(c.trim, P, (h(30) - 0.5) * W * 0.4, top, (h(31) - 0.5) * D * 0.3, 0.3, 0.16, 0.24, C(0xb4b0a8), 2);
       break;
     }
     default: {
@@ -576,8 +897,25 @@ function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number) {
       for (const sx of [-0.3, 0.3]) box(c.slate, P, sx * W, top + 0.05, D / 2 - 0.12, 0.16, 0.16, 0.12, upperTint.clone().multiplyScalar(0.9), 2);
       for (const sx of [-1, 1]) box(c.trim, P, sx * (W / 2 - 0.12), top + rh - 0.05, 0, 0.1, 0.22, 0.14, C(0x9a6a58), 2);
       // door and steps
-      box(c.detail, P, 0, 0.04, D / 2 + 0.005, 0.14, 0.26, 0.02, C([0x2a3a5a, 0x5a2a2a, 0x2a4a3a, 0x222222][Math.floor(h(8) * 4)]));
+      box(dt, P, 0, 0.04, D / 2 + 0.005, 0.14, 0.26, 0.02, C([0x2a3a5a, 0x5a2a2a, 0x2a4a3a, 0x222222][Math.floor(h(8) * 4)]));
       box(c.trim, P, 0, 0.0, D / 2 + 0.06, 0.24, 0.07, 0.12, C(0xc8c0b0), 2);
+      if (rich) {
+        // painted shutters, French balconies on the first floor, window boxes with flowers
+        const shC = C(SHUTTERS[Math.floor(h(9) * SHUTTERS.length)]);
+        shutters(dt, P, W, D, 0, 1, gH, spec.bay, 0.22, shC, h, true);
+        shutters(dt, P, W, D, gH, spec.floors, spec.floorH, spec.bay, 0.22, shC, h, false);
+        const nb = Math.max(1, Math.round(W / spec.bay));
+        const bw = W / nb;
+        for (let i = 0; i < nb; i++) {
+          const x = -W / 2 + bw * (i + 0.5);
+          if (h(220 + i) < 0.5) put(dt, P, UNIT_BOX, x, gH + 0.09, D / 2 + 0.03, bw * 0.5, 0.05, 0.004, DARK_C);
+          else if (h(230 + i) < 0.6) {
+            put(dt, P, UNIT_BOX, x, gH + spec.floorH + 0.07, D / 2 + 0.025, bw * 0.48, 0.03, 0.04, C(0x8a5a3a));
+            put(dt, P, UNIT_BALL, x, gH + spec.floorH + 0.095, D / 2 + 0.03, bw * 0.24, 0.025, 0.025, C([0xd83a4a, 0xe8c040, 0xc85aa8][Math.floor(h(240 + i) * 3)]));
+          }
+        }
+        if (h(150) < 0.6) laundry(dt, P, 2, (h(160) - 0.5) * (W - 0.4), gH + 0.04, W, D, h, 180);
+      }
       top += rh;
       break;
     }
@@ -617,12 +955,67 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
     if (!c) chunks.set(key, (c = newChunk()));
     return c;
   };
+  const avoidAlley = (x: number, y: number) => {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return true;
+    const t = m.tiles[ty * m.w + tx];
+    return t === Tile.Water || t === Tile.Bridge;
+  };
   const spans: { st: Structure; c: Chunk; from: number[]; to: number[] }[] = [];
+  // washing strung across the narrow alleys between neighbouring buildings (wall to wall)
+  // (part of building i's vertex ranges, so the lines go down with it)
+  const alleys = (i: number, det: GeoBuilder) => {
+    if (quality === 'low') return;
+    for (let j = 0; j < city.length; j++) {
+        if (i === j) continue;
+        const p = city[i];
+        const q = city[j];
+        const ip = SPECS[p.kind]!.inset;
+        const iq = SPECS[q.kind]!.inset;
+        for (const axis of [0, 1]) {
+          // q lies past p's far edge along the axis
+          const pe = axis === 0 ? p.x + p.w : p.y + p.h;
+          const qs = axis === 0 ? q.x : q.y;
+          const gap = qs - pe;
+          if (gap < 0 || gap > 2) continue;
+          const o0 = Math.max(axis === 0 ? p.y : p.x, axis === 0 ? q.y : q.x) + 0.35;
+          const o1 = Math.min(axis === 0 ? p.y + p.h : p.x + p.w, axis === 0 ? q.y + q.h : q.x + q.w) - 0.35;
+          if (o1 - o0 < 0.3) continue;
+          const a0 = pe - ip;
+          const a1 = qs + iq;
+          if (a1 - a0 < 0.25) continue;
+          const nLines = hash2(i * 31 + j, axis, 1951) < 0.55 ? 1 + Math.floor(hash2(i, j, 1952) * 2) : 0;
+          for (let k = 0; k < nLines; k++) {
+            const o = o0 + (o1 - o0) * (nLines === 1 ? hash2(i, j + k, 1953) : k / (nLines - 1));
+            const mid = (a0 + a1) / 2;
+            const wx = axis === 0 ? mid : o;
+            const wz = axis === 0 ? o : mid;
+            if (avoidAlley(wx, wz)) continue;
+            const gy = surfaceHeight(m, wx, wz) - 0.06;
+            const y = gy + Math.min(cityHeight(p.kind), cityHeight(q.kind)) * (0.35 + hash2(i, j + k, 1954) * 0.3);
+            const len = a1 - a0;
+            const ry = axis === 0 ? 0 : -Math.PI / 2;
+            const M = new THREE.Matrix4().compose(V(wx, y, wz), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), ry), V(1, 1, 1));
+            det.add(UNIT_BOX, M.clone().multiply(new THREE.Matrix4().makeScale(len, 0.004, 0.004)), null, C(0xd8d8d0));
+            const n = Math.max(2, Math.floor(len / 0.12));
+            for (let c2 = 0; c2 < n; c2++) {
+              if (hash2(i * 7 + c2, j + k, 1955) < 0.25) continue;
+              const cw = 0.04 + hash2(c2, i + k, 1956) * 0.04;
+              const ch = 0.04 + hash2(c2, j + k, 1957) * 0.06;
+              const lx = -len / 2 + (len * (c2 + 0.5)) / n;
+              det.add(UNIT_BOX, M.clone().multiply(new THREE.Matrix4().compose(V(lx, -ch / 2 - 0.004 - Math.sin(((c2 + 0.5) / n) * Math.PI) * 0.02, 0), new THREE.Quaternion(), V(cw, ch, 0.003))), null, C(CLOTHES[Math.floor(hash2(c2, i * 3 + j, 1958) * CLOTHES.length)]));
+            }
+          }
+        }
+      }
+  };
   city.forEach((st, i) => {
     const c = chunkOf(st.x + st.w / 2, st.y + st.h / 2);
     const bs = chunkBuilders(c);
     const from = bs.map((b) => b.count);
-    buildOne(m, st, c, i * 17);
+    buildOne(m, st, c, i * 17, quality !== 'low');
+    alleys(i, c.detail);
     spans.push({ st, c, from, to: bs.map((b) => b.count) });
   });
 
@@ -665,6 +1058,7 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
       [c.facade.brick, mats.facade.brick, shadows, 'city-facade'],
       [c.facade.glass, mats.facade.glass, shadows, 'city-facade'],
       [c.facade.shop, mats.facade.shop, shadows, 'city-facade'],
+      [c.facade.stone, mats.facade.stone, shadows, 'city-facade'],
       [c.trim, mats.trim, shadows, 'city-trim'],
       [c.slate, mats.slate, shadows, 'city-roof'],
       [c.detail, mats.detail, false, 'city-detail'],

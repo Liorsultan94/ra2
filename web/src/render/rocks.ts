@@ -9,7 +9,7 @@ import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
-import { buildRelief, reliefField, reliefHeight } from './relief';
+import { buildRelief, reliefEnabled, reliefField, reliefHeight } from './relief';
 import { assetBase, fetchBitmap } from './photoground';
 
 /*
@@ -255,7 +255,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   const geos = [pair(2, 11, { strata: 9, cuts: 7 }), pair(2, 23, { strata: 7, cuts: 6 }), pair(1, 41), pair(0, 61, { cuts: 3 })];
   const lists: Inst[][] = [[], [], [], []];
   // cliff faces over the rock (relief.ts); off with ?relief=0
-  const relief = !(typeof location !== 'undefined' && /[?&]relief=0\b/.test(location.search)) && reliefField(m).count > 0;
+  const relief = reliefEnabled() && reliefField(m).count > 0;
   const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === Tile.Rock;
 
   for (let y = 0; y < m.h; y++) {

@@ -12,6 +12,8 @@ import { biomeLook } from './biome';
 import { buildCity, isCityKind } from './models/citybldgs';
 import { appendLoopRibbons } from './ambient/roadfurniture';
 import { snowLine } from './props';
+import { buildFarm } from './farm';
+import { buildStreetLife } from './streetlife';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -272,6 +274,21 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       }
       if (h(12) < 0.5) metal.add(new THREE.CylinderGeometry(0.06, 0.02, 0.025, 10).toNonIndexed(), L(trs(ox - lx * 0.3, hw + 0.08, oz + dz * 0.25, 0, 0.6)), null, new THREE.Color(0.86, 0.86, 0.84));
       if (h(13) < 0.4) boxAt(walls, 0.2, 0.16, 0.2, L(trs(ox - lx * 0.28, hw + 0.08, oz - dz * 0.22)), wallC.clone().multiplyScalar(0.95));
+      if (lx > 1 && h(16) < 0.65) {
+        // solar water heater: tilted collector, white boiler behind it on a frame (faces +z in the world)
+        const sm = L(trs(ox + lx * 0.05, hw, oz + dz * 0.12, (-st.rot * Math.PI) / 2));
+        metal.add(new THREE.BoxGeometry(0.15, 0.008, 0.115), sm.clone().multiply(trs(0, 0.05, 0.03, 0, 0.7)), null, new THREE.Color(0.1, 0.14, 0.22));
+        metal.add(new THREE.CylinderGeometry(0.03, 0.03, 0.17, 8), sm.clone().multiply(trs(0, 0.105, -0.04, 0, 0, Math.PI / 2)), null, new THREE.Color(0.9, 0.9, 0.88));
+        for (const sx of [-0.065, 0.065]) boxAt(metal, 0.008, 0.09, 0.008, sm.clone().multiply(trs(sx, 0.045, -0.04)), new THREE.Color(0.6, 0.62, 0.62));
+      }
+      if (h(17) < 0.45) {
+        // washing drying on the roof
+        const lm = L(trs(ox - lx * 0.1, hw, oz - dz * 0.3));
+        for (const sx of [-0.22, 0.22]) boxAt(wood, 0.01, 0.14, 0.01, lm.clone().multiply(trs(sx, 0.07, 0)), new THREE.Color(0.4, 0.32, 0.24));
+        boxAt(trim, 0.44, 0.004, 0.004, lm.clone().multiply(trs(0, 0.13, 0)), new THREE.Color(0.85, 0.85, 0.85));
+        const cl = [new THREE.Color(0.9, 0.9, 0.88), new THREE.Color(0.75, 0.2, 0.18), new THREE.Color(0.2, 0.35, 0.65), new THREE.Color(0.85, 0.7, 0.25), new THREE.Color(0.3, 0.55, 0.35)];
+        for (let i = 0; i < 4; i++) boxAt(trim, 0.06, 0.06 + h(30 + i) * 0.04, 0.004, lm.clone().multiply(trs(-0.15 + i * 0.1, 0.1 - h(30 + i) * 0.02, 0)), cl[Math.floor(h(40 + i) * cl.length)]);
+      }
     };
 
     if (bc === 1 && (st.kind === StructureKind.House || st.kind === StructureKind.Cottage || st.kind === StructureKind.MudHouse)) {
@@ -333,13 +350,28 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         boxAt(wood, 0.6, 0.48, 0.03, L(trs(0, 0.24, 0.76)), barnC.clone().multiplyScalar(0.6));
         boxAt(trim, 0.04, 0.5, 0.04, L(trs(-0.32, 0.25, 0.78)), frame);
         boxAt(trim, 0.04, 0.5, 0.04, L(trs(0.32, 0.25, 0.78)), frame);
+        // white X bracing on the doors, a hayloft door in the gable end, a vent cupola on the ridge
+        for (const s2 of [-1, 1]) {
+          const xm = s2 * 0.15;
+          for (const r2 of [0.95, -0.95]) boxAt(trim, 0.025, 0.5, 0.015, L(trs(xm, 0.24, 0.785).multiply(new THREE.Matrix4().makeRotationZ(r2 * 0.5))), frame);
+        }
+        boxAt(trim, 0.6, 0.03, 0.015, L(trs(0, 0.49, 0.785)), frame);
+        boxAt(wood, 0.03, 0.26, 0.26, L(trs(1.26, 0.72, 0)), barnC.clone().multiplyScalar(0.55));
+        boxAt(trim, 0.035, 0.03, 0.3, L(trs(1.265, 0.86, 0)), frame);
+        boxAt(wood, 0.22, 0.14, 0.22, L(trs(0, 0.6 + 0.75 * Math.tan(0.62) + 0.05, 0)), barnC.clone().multiplyScalar(0.9));
+        boxAt(metal, 0.28, 0.03, 0.28, L(trs(0, 0.6 + 0.75 * Math.tan(0.62) + 0.13, 0)), new THREE.Color(0.4, 0.4, 0.42));
         break;
       }
       case StructureKind.Silo: {
         const c0 = metal.count;
         metal.add(new THREE.CylinderGeometry(0.3, 0.3, 1.35, 16, 1, true).translate(0, 0.62, 0), base, null, new THREE.Color(0.7, 0.72, 0.72));
-        metal.add(new THREE.ConeGeometry(0.33, 0.25, 16, 1, true).translate(0, 1.42, 0), base, null, new THREE.Color(0.6, 0.62, 0.62));
+        metal.add(new THREE.SphereGeometry(0.31, 16, 4, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.7, 1).translate(0, 1.29, 0), base, null, new THREE.Color(0.62, 0.64, 0.64));
         boxUV(metal, c0, 4);
+        // hoops, a caged ladder up the side, the filler pipe
+        for (let k = 0; k < 6; k++) metal.add(new THREE.CylinderGeometry(0.306, 0.306, 0.02, 16, 1, true).translate(0, 0.12 + k * 0.22, 0), base, null, new THREE.Color(0.52, 0.54, 0.55));
+        for (const sx of [-0.04, 0.04]) boxAt(metal, 0.01, 1.32, 0.01, L(trs(sx, 0.66, 0.32)), new THREE.Color(0.45, 0.46, 0.47));
+        for (let k = 0; k < 12; k++) boxAt(metal, 0.08, 0.006, 0.006, L(trs(0, 0.08 + k * 0.11, 0.32)), new THREE.Color(0.45, 0.46, 0.47));
+        beam(metal, V(0.2, 0.15, 0.2).applyMatrix4(base), V(0.12, 1.5, 0.08).applyMatrix4(base), 0.025, new THREE.Color(0.55, 0.56, 0.56));
         break;
       }
       case StructureKind.WaterTower: {
@@ -429,6 +461,8 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
 
   // city blocks, street lamps, fountains and ruins (urban maps)
   out.push(...buildCity(m, fog, quality, sink, lod));
+  // kerbs, the street market and cafes on the squares (render/streetlife.ts)
+  out.push(...buildStreetLife(m, layout, fog, quality, lod));
 
   // ------------------------------------------------------------- fences
   const posts: Inst[] = [];
@@ -609,24 +643,63 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   if (wreckInst.length) out.push(...chunkedInstances(car.build(), fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.35 })), wreckInst, 96, { castShadow: shadows }));
 
   // ------------------------------------------------------- hay bales
+  // round bales in the harvested rows (straw, or wrapped silage: white / black / green film),
+  // square bales stacked by the field edge
   const bales: Inst[] = [];
+  const squares: Inst[] = [];
+  const straw = new THREE.Color(0xc0a868);
+  const wraps = [new THREE.Color(0xeef0ec), new THREE.Color(0x26282a), new THREE.Color(0x4a6a3a)];
   layout.fields.forEach((f, k) => {
     if (f.type !== FieldType.Fallow && !(f.type === FieldType.Wheat && hash2(k, 0, 44) < 0.3)) return;
-    const n = 4 + Math.floor(hash2(k, 1, 44) * 7);
     const ca = Math.cos(f.angle);
     const sa = Math.sin(f.angle);
-    for (let j = 0; j < n; j++) {
-      const a = (hash2(k, j, 45) - 0.5) * 2 * (f.hl - 0.4);
-      const b = (hash2(k, j, 46) - 0.5) * 2 * (f.hw - 0.3);
-      const x = f.cx + ca * a - sa * b;
-      const z = f.cy + sa * a + ca * b;
-      bales.push({ x, y: surfaceHeight(m, x, z) + 0.055, z, rotY: hash2(k, j, 47) * 6.28, sx: 1, sy: 1, sz: 1 });
+    const wrapped = bc !== 1 && hash2(k, 2, 44) < 0.35;
+    const wc = wraps[Math.floor(hash2(k, 3, 44) * wraps.length)];
+    // in rows along the field (as the baler dropped them), a few rolled out of line
+    const rows = Math.max(1, Math.min(3, Math.floor(f.hw / 0.7)));
+    const per = 2 + Math.floor(hash2(k, 1, 44) * 4);
+    for (let r = 0; r < rows; r++)
+      for (let j = 0; j < per; j++) {
+        const a = (-1 + ((j + 0.5) / per) * 2) * (f.hl - 0.5) + (hash2(k * 7 + r, j, 45) - 0.5) * 0.5;
+        const b = (rows === 1 ? 0 : -1 + (r / (rows - 1)) * 2) * (f.hw - 0.45) + (hash2(k * 7 + r, j, 46) - 0.5) * 0.25;
+        const x = f.cx + ca * a - sa * b;
+        const z = f.cy + sa * a + ca * b;
+        const tx = Math.floor(x);
+        const tz = Math.floor(z);
+        if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h || m.blocked[tz * m.w + tx] || m.trees[tz * m.w + tx]) continue;
+        const tone = 0.88 + hash2(k * 7 + r, j, 48) * 0.22;
+        bales.push({ x, y: surfaceHeight(m, x, z) + 0.06, z, rotY: f.angle + (hash2(k * 7 + r, j, 47) - 0.5) * 0.8, sx: 1, sy: 1, sz: 1, color: (wrapped ? wc : straw).clone().multiplyScalar(tone) });
+      }
+    // a stack of square bales at one end
+    if (hash2(k, 4, 44) < 0.5) {
+      const a = (hash2(k, 5, 44) < 0.5 ? -1 : 1) * (f.hl - 0.35);
+      for (let lv = 0; lv < 3; lv++)
+        for (let i = 0; i < 3 - lv; i++) {
+          const b = (i - (2 - lv) / 2) * 0.1;
+          const x = f.cx + ca * a - sa * b;
+          const z = f.cy + sa * a + ca * b;
+          squares.push({ x, y: surfaceHeight(m, x, z) + 0.025 + lv * 0.05, z, rotY: f.angle + Math.PI / 2, sx: 1, sy: 1, sz: 1, color: straw.clone().multiplyScalar(0.92 + lv * 0.04) });
+        }
     }
   });
   if (bales.length) {
-    const bale = new THREE.CylinderGeometry(0.065, 0.065, 0.1, 10).rotateZ(Math.PI / 2);
-    out.push(...chunkedInstances(bale, fog.apply(new THREE.MeshStandardMaterial({ color: 0xb8a060, roughness: 0.95, map: tex.planks })), bales, 96, { castShadow: shadows }));
+    // the end faces show the rolled spiral: lighter rim, darker core
+    const bale = new THREE.CylinderGeometry(0.065, 0.065, 0.1, 12, 1).rotateZ(Math.PI / 2);
+    const bc2: number[] = [];
+    const bp = bale.attributes.position;
+    for (let i = 0; i < bp.count; i++) {
+      const r = Math.hypot(bp.getY(i), bp.getZ(i));
+      const cap = Math.abs(bp.getX(i)) > 0.049 && r < 0.06;
+      const t = cap ? 0.78 : 1;
+      bc2.push(t, t, t);
+    }
+    bale.setAttribute('color', new THREE.Float32BufferAttribute(bc2, 3));
+    out.push(...chunkedInstances(bale, fog.apply(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.8, map: tex.planks })), bales, 96, { castShadow: shadows, name: 'farm-bales' }));
   }
+  if (squares.length) out.push(...chunkedInstances(new THREE.BoxGeometry(0.09, 0.05, 0.05), fog.apply(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, map: tex.planks })), squares, 96, { castShadow: shadows, name: 'farm-bales' }));
+
+  // standing crops, orchards, vineyards, greenhouses, centre pivots and tractors (render/farm.ts)
+  out.push(...buildFarm(m, layout, fog, quality, lod));
   return out;
 }
 

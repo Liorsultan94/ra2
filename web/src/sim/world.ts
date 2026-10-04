@@ -21,6 +21,8 @@ import { DEFAULT_STANCE, applyOrderCommand, autoFire, idleReturn, leashRange, or
 import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
+import { Conditions, LIGHT_RADIUS, MUZZLE_REVEAL_TICKS } from './conditions';
+import { SideEvents, isPrey } from './sideevents';
 import {
   CATEGORIES,
   TPS,
@@ -74,6 +76,20 @@ const INF_SLOTS: [number, number][] = [
 ];
 
 const DISCS: [number, number][][] = [];
+/** Discs of fractional radius (quarter tiles; conditions.ts sight modifiers). Integer radii match disc(). */
+const FDISCS = new Map<number, [number, number][]>();
+function discQ(r: number) {
+  const q = Math.max(0, Math.round(r * 4));
+  let d = FDISCS.get(q);
+  if (!d) {
+    const rr = q / 4;
+    const n = Math.ceil(rr);
+    d = [];
+    for (let y = -n; y <= n; y++) for (let x = -n; x <= n; x++) if (x * x + y * y <= rr * rr + rr) d.push([x, y]);
+    FDISCS.set(q, d);
+  }
+  return d;
+}
 function disc(r: number) {
   if (!DISCS[r]) {
     const d: [number, number][] = [];
@@ -112,6 +128,10 @@ export class World {
   over = false;
   /** Collapsible river bridges (bridges.ts). */
   bridges: BridgeState[] = [];
+  /** Time of day / weather as battle rules (conditions.ts; off until the match configures it). */
+  cond: Conditions;
+  /** Seeded side events (sideevents.ts; off until the match enables them). */
+  side: SideEvents;
   private nextId = 1;
   private pending: { player: number; cmd: Command }[] = [];
   private grid: Entity[][];
@@ -169,6 +189,8 @@ export class World {
     spawnGarrisons(this); // garrisonable village houses (garrison.ts)
     spawnTechSites(this); // capturable tech structures (capture.ts)
     this.bridges = initBridges(this);
+    this.cond = new Conditions(this);
+    this.side = new SideEvents(this, opts.seed ?? 12345);
     this.updateVisibility();
   }
 
@@ -845,7 +867,9 @@ export class World {
     e.slotX = x;
     e.slotY = y;
     e.moveGoal = gy * this.map.w + gx;
-    e.path = unitDef(e.def).air ? [] : this.pf.find(sx, sy, gx, gy);
+    const ud = unitDef(e.def);
+    // in mud / snow vehicles prefer the roads (path costs from conditions.ts)
+    e.path = ud.air ? [] : this.pf.find(sx, sy, gx, gy, 12000, ud.category === 'vehicle' && this.cond.enabled ? this.cond.cost : null);
     e.pathIdx = 0;
     e.moving = true;
     e.repathAt = this.tick + 20;
@@ -909,7 +933,8 @@ export class World {
     const dx = wx - e.x;
     const dy = wy - e.y;
     const dist = Math.hypot(dx, dy);
-    const step = d.speed / TPS;
+    // mud / snow off-road (conditions.ts)
+    const step = (d.speed / TPS) * (this.cond.enabled ? this.cond.moveMul(d, this.tileOf(e.x, e.y)) : 1);
     if (dist < 0.02) {
       if (atEnd) {
         e.path = null;
@@ -969,11 +994,11 @@ export class World {
     for (const e of this.list) {
       if (e.dead || e.kind !== 'unit' || e.inside >= 0 || e.para) continue;
       const d = unitDef(e.def);
-      if (d.supply || d.airlift) continue;
+      if (d.supply || d.airlift || d.event) continue;
       this.queryRadius(e.x, e.y, 1.2, (o) => {
         if (o === e || o.kind !== 'unit' || o.id < e.id || o.para) return;
         const od = unitDef(o.def);
-        if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
+        if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift || od.event) return;
         // heavy vehicles and infantry: enemies go under the tracks, the rest are shoved aside (crush.ts)
         if ((d.crusher && od.crushable) || (od.crusher && d.crushable)) {
           if (crushContact(this, e, d, o, od)) return;
@@ -1132,6 +1157,7 @@ export class World {
   }
 
   splash(x: number, y: number, r: number, dmg: number, warhead: keyof typeof VERSUS, src: Entity, skip: number) {
+    this.cond.crater(x, y, r, dmg); // big explosions leave craters (cover; conditions.ts)
     this.queryRadius(x, y, r, (o) => {
       if (o.id === skip || !this.isEnemy(src.owner, o.owner)) return;
       const dist = this.distTo({ x, y } as Entity, o);
@@ -1148,6 +1174,7 @@ export class World {
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
     if (src.inside >= 0 && garrisonOf(this, src)) amount *= GARRISON_FIREPOWER;
     if (!raw && t.passengers.length && isGarrison(t)) amount = garrisonHit(this, t, amount, warhead, src);
+    if (this.cond.enabled) amount *= this.cond.coverMul(t); // infantry in craters / ruins (conditions.ts)
     t.hp -= amount * VERSUS[warhead][d.armor];
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
@@ -1180,6 +1207,8 @@ export class World {
       this.players[by].stats.killed++;
       if (killer) this.creditKill(killer, t);
     }
+    if (t.kind === 'building') this.cond.ruin(t); // ruins: cover (conditions.ts)
+    else if (t.owner < 0) this.side.onKill(t, by); // convoy truck bounty (sideevents.ts)
     this.remove(t);
   }
 
@@ -1208,6 +1237,7 @@ export class World {
 
   private updateUnit(e: Entity) {
     const d = unitDef(e.def);
+    if (d.event && d.event !== 'cash') return; // side-event props are driven by sideevents.ts
     if (e.inside >= 0) {
       this.updatePassenger(e, d);
       return;
@@ -1287,7 +1317,7 @@ export class World {
       }
       case 'attack': {
         const t = this.get(o.target);
-        if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t)) || !d.weapon) {
+        if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t) && !isPrey(t)) || !d.weapon) {
           e.order = { type: 'idle' };
           e.targetId = -1;
           e.path = null;
@@ -2000,19 +2030,65 @@ export class World {
   updateVisibility() {
     const { w, h } = this.map;
     for (const p of this.players) p.visible.fill(0);
+    const cond = this.cond.enabled ? this.cond : null;
     for (const e of this.list) {
       if (e.dead || e.owner < 0) continue;
       const p = this.players[e.owner];
-      const r = Math.round(DEFS[e.def].sight);
+      const sight = DEFS[e.def].sight;
+      // night / fog / rain shrink sight (conditions.ts); night-vision units only lose it to fog and rain
+      const shape = cond ? discQ(cond.sightOf(e, sight)) : disc(Math.round(sight));
       const cx = Math.floor(e.x);
       const cy = Math.floor(e.y);
-      for (const [ox, oy] of disc(r)) {
+      for (const [ox, oy] of shape) {
         const x = cx + ox;
         const y = cy + oy;
         if (x < 0 || y < 0 || x >= w || y >= h) continue;
         const i = y * w + x;
         p.visible[i] = 1;
         p.explored[i] = 1;
+      }
+    }
+    if (cond?.dim) this.revealLights();
+    // crashed-aircraft intel (sideevents.ts): the whole map for a while
+    if (this.side.enabled) {
+      for (const p of this.players) {
+        if (!this.side.revealed(p.id)) continue;
+        p.visible.fill(1);
+        p.explored.fill(1);
+      }
+    }
+  }
+
+  /**
+   * While sight is reduced (conditions.ts): muzzle flashes give the shooter away for a moment, burning things
+   * light up the ground around them and, at night, lit buildings (powered bases, civilian houses) too - for everybody.
+   */
+  private revealLights() {
+    const { w, h } = this.map;
+    const lit = this.cond.state.dark > 0.4;
+    const lights = (this.cond.lights = [] as { x: number; y: number; r: number }[]);
+    for (const e of this.list) {
+      if (e.dead || e.inside >= 0) continue;
+      let r = 0;
+      if (e.owner >= 0 && this.tick - e.firedAt < MUZZLE_REVEAL_TICKS) r = 1.5;
+      if (e.hp < e.maxHp * 0.3 && (e.kind === 'building' || unitDef(e.def).category === 'vehicle') && !(e.kind === 'unit' && unitDef(e.def).temp)) r = Math.max(r, LIGHT_RADIUS);
+      if (lit && e.kind === 'building' && e.buildAnim >= 1 && DEFS[e.def].sight > 0 && (e.owner < 0 ? isGarrison(e) : !this.isLowPower(this.players[e.owner]))) {
+        const d = buildingDef(e.def);
+        r = Math.max(r, Math.max(d.w, d.h) / 2 + LIGHT_RADIUS - 0.5);
+      }
+      if (r <= 0) continue;
+      lights.push({ x: e.x, y: e.y, r });
+      const cx = Math.floor(e.x);
+      const cy = Math.floor(e.y);
+      for (const [ox, oy] of discQ(r)) {
+        const x = cx + ox;
+        const y = cy + oy;
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const i = y * w + x;
+        for (const p of this.players) {
+          p.visible[i] = 1;
+          p.explored[i] = 1;
+        }
       }
     }
   }
@@ -2078,6 +2154,7 @@ export class World {
     this.pending = [];
     for (const c of cmds) this.applyCommand(c.player, c.cmd);
 
+    this.cond.update(this.tick); // time of day / weather rules, once per game second (conditions.ts)
     this.rebuildGrid();
     this.updateEconomy();
     updateTechs(this); // captured tech structures (capture.ts)
@@ -2090,6 +2167,7 @@ export class World {
       else this.updateBuilding(e);
     }
     stepProjectiles(this);
+    this.side.update(); // side events (sideevents.ts)
     updateGarrisons(this); // garrison.ts
     updateBridges(this, ev0);
     this.updateAuras();

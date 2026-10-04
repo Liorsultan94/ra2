@@ -77,6 +77,8 @@ export interface Layout {
   pylons: { lines: V2[][] };
   poles: V2[][];
   wrecks: { x: number; y: number; rot: number; kind: number }[];
+  /** Desert centre-pivot circles (render/farm.ts), tile space; their discs count as fields in `occ`. */
+  pivots?: { x: number; y: number; r: number }[];
   /** 4 cells per tile: bit 1 paved road, 2 track, 4 field, 8 structure / yard */
   occ: Uint8Array;
   occRes: number;

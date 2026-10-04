@@ -1011,7 +1011,10 @@ function body(r: Rig, kit: Kit, p: string, x: number, z: number, yaw: number, he
 
   // ---- neck & head (head parts are modelled in the neck-base frame; heroic 1.08 head)
   r.add(neck, 'skin', xf(limb(0.056, 0.06, 0.11, 7), [0, 0.075, 0]));
-  const H = (g: G) => xf(g.translate(0, -0.12, 0), [0, 0.12, 0], [0, 0, 0], 1.06);
+  const H = (g: G) => {
+    (g.userData.lo as G | undefined)?.translate(0, -0.12, 0);
+    return xf(g.translate(0, -0.12, 0), [0, 0.12, 0], [0, 0, 0], 1.06);
+  };
   hiLo(r, head, 'skin', H(xf(sph(0.098, 0.115, 0.083, 12, 9), [0.0, 0.13, 0])), H(xf(sph(0.098, 0.115, 0.083, 8, 6), [0.0, 0.13, 0])));
   hiLo(r, head, 'skin', H(xf(sph(0.074, 0.072, 0.068, 10, 7), [0.034, 0.066, 0])), H(xf(sph(0.074, 0.072, 0.068, 6, 4), [0.034, 0.066, 0])));
   // face: nose, brow ridge, ears, eyes, brows

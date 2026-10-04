@@ -35,6 +35,11 @@ import { rockTexture } from './terraintex';
  * (rocks.ts lays its photoscanned boulders along the crests; waterfalls).
  */
 
+/** Relief on? (?relief=0 turns the cliffs, waterfalls and spray off for comparisons.) */
+export function reliefEnabled(): boolean {
+  return !(typeof location !== 'undefined' && /[?&]relief=0\b/.test(location.search));
+}
+
 /** Field samples per tile. */
 export const RELIEF_F = 4;
 /** How far the relief sinks under the ground at the rock's border. */

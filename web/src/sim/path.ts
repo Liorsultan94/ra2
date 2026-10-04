@@ -72,9 +72,11 @@ export class PathFinder {
 
   /**
    * Returns a list of tile indices from (sx,sy) (exclusive) to the goal or to
-   * the closest reachable tile if the goal can't be reached.
+   * the closest reachable tile if the goal can't be reached. `cost` (>= 1 per
+   * tile, optional) makes some tiles slower to cross: vehicles in mud prefer
+   * the roads (sim/conditions.ts).
    */
-  find(sx: number, sy: number, gx: number, gy: number, maxNodes = 12000): number[] {
+  find(sx: number, sy: number, gx: number, gy: number, maxNodes = 12000, cost: Float32Array | null = null): number[] {
     const w = this.w;
     this.cur++;
     if (this.cur > 0xfffffff0) {
@@ -122,7 +124,7 @@ export class PathFinder {
         if (k >= 4 && (!this.passable(x + DX[k], y) || !this.passable(x, y + DY[k]))) continue;
         const ni = ny * w + nx;
         if (this.closed[ni] === cur) continue;
-        const ng = gNode + (k >= 4 ? SQRT2 : 1);
+        const ng = gNode + (k >= 4 ? SQRT2 : 1) * (cost ? cost[ni] : 1);
         if (this.stamp[ni] !== cur || ng < this.g[ni]) {
           this.stamp[ni] = cur;
           this.g[ni] = ng;
@@ -138,11 +140,11 @@ export class PathFinder {
       n = this.parent[n];
     }
     path.reverse();
-    return this.smooth(sx, sy, path);
+    return this.smooth(sx, sy, path, cost);
   }
 
   /** Straight walkable line between tile centers (supercover walk). */
-  lineClear(x0: number, y0: number, x1: number, y1: number): boolean {
+  lineClear(x0: number, y0: number, x1: number, y1: number, cost: Float32Array | null = null, maxCost = 1): boolean {
     let dx = Math.abs(x1 - x0);
     let dy = Math.abs(y1 - y0);
     let x = x0;
@@ -155,6 +157,8 @@ export class PathFinder {
     let n = 1 + Math.abs(x1 - x0) + Math.abs(y1 - y0);
     while (n-- > 0) {
       if (!this.passable(x, y)) return false;
+      // (with costs: no short cut across slower ground than the ends)
+      if (cost && cost[y * this.w + x] > maxCost) return false;
       if (err > 0) {
         x += sx;
         err -= dy;
@@ -173,7 +177,7 @@ export class PathFinder {
     return true;
   }
 
-  private smooth(sx: number, sy: number, path: number[]): number[] {
+  private smooth(sx: number, sy: number, path: number[], cost: Float32Array | null = null): number[] {
     if (path.length < 3) return path;
     const w = this.w;
     const out: number[] = [];
@@ -185,7 +189,7 @@ export class PathFinder {
       for (; j > i; j--) {
         const px = path[j] % w;
         const py = (path[j] - px) / w;
-        if (this.lineClear(ax, ay, px, py)) break;
+        if (cost ? this.lineClear(ax, ay, px, py, cost, Math.max(cost[ay * w + ax], cost[path[j]]) + 1e-4) : this.lineClear(ax, ay, px, py)) break;
       }
       out.push(path[j]);
       ax = path[j] % w;

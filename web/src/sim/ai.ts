@@ -1,6 +1,8 @@
 import { airdropStatus } from './airdrop';
 import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
+import { hasNightVision } from './conditions';
+import type { SideEvent } from './sideevents';
 import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { Rng } from './rng';
@@ -56,7 +58,7 @@ const BUILD_ORDER: [string, number][] = [
 ];
 
 type Klass = 'main' | 'arty' | 'strike' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'event';
 
 interface Intel {
   x: number;
@@ -112,6 +114,8 @@ export class AIController implements Controller {
   private thinks = 0;
   private lastLane = -1;
   private chokeAt = 0;
+  /** Side events (sideevents.ts) we sent a detachment to: event id -> unit ids. */
+  private eventTeams = new Map<number, number[]>();
 
   constructor(
     private world: World,
@@ -468,6 +472,8 @@ export class AIController implements Controller {
     // counter-battery doctrines answer enemy artillery with their own guns
     const enemyArty = this.cfg.micro > 0 && doc.counterBattery ? this.known((it) => !it.building && klass(it.def) === 'arty').length : 0;
 
+    const cs = w.cond.enabled ? w.cond.state : null;
+    const nightSoon = !!cs && (cs.dark > 0.3 || (cs.hour >= 16 && cs.hour < 21));
     const queues: [typeof iq, 'infantry' | 'vehicle' | 'air', number][] = [
       [iq, 'infantry', 300],
       [vq, 'vehicle', 700],
@@ -483,6 +489,8 @@ export class AIController implements Controller {
         let wgt = d.aiWeight * (doc.bias[d.id.slice(prefix)] ?? 1);
         if (d.aiTag === 'aa') wgt = wantAA ? 10 : enemyAir > 0 ? 2 : 0.3 * (doc.bias[d.id.slice(prefix)] ?? 1);
         if (d.aiTag === 'arty' && enemyArty > 0) wgt *= 1.8;
+        // dusk falls: night-vision units for the night attack (conditions.ts)
+        if (nightSoon && hasNightVision(d.id)) wgt *= 1 + 0.6 * doc.nightOps;
         opts.push([d.id, wgt]);
       }
       const pick = this.weighted(opts);
@@ -571,6 +579,7 @@ export class AIController implements Controller {
     if (micro > 0 && doc.choke > 0) this.manageChoke(force);
     if (micro > 0 && doc.harass > 0) this.manageRaids(force);
     if (doc.airWing > 0) this.manageAirWing(force);
+    if (w.side.enabled) this.manageEvents(force);
     this.manageWaves(force);
     this.manageArtillery(force);
     if (micro > 0) this.manageCrush(force);
@@ -897,6 +906,73 @@ export class AIController implements Controller {
     return this.bank(lanes[best], 3);
   }
 
+  /**
+   * Side events (sideevents.ts): send a small detachment to contest each one we can reach in time - infantry to
+   * a crash site or a burning building, a few fast units to a supply drop or to stop the convoy. They rejoin
+   * the army when it is over.
+   */
+  private manageEvents(force: Entity[]) {
+    const w = this.world;
+    const doc = this.doctrine;
+    const active = new Map<number, SideEvent>();
+    for (const ev of w.side.active) active.set(ev.id, ev);
+    // finished: back to the rally point
+    for (const [id, ids] of this.eventTeams) {
+      const ev = active.get(id);
+      if (ev) continue;
+      const alive = ids.filter((u) => w.get(u));
+      this.setRole(alive, 'army');
+      const [rx, ry] = this.rally();
+      if (alive.length) this.cmd({ type: 'move', ids: alive, x: rx, y: ry });
+      this.eventTeams.delete(id);
+    }
+    if (doc.scavenge <= 0) return;
+    // slower reactions on easy
+    const delay = this.cfg.micro === 0 ? TPS * 25 : this.cfg.micro === 1 ? TPS * 8 : TPS * 3;
+    const busy = new Set<number>();
+    for (const ids of this.eventTeams.values()) for (const id of ids) busy.add(id);
+    for (const ev of active.values()) {
+      const team = this.eventTeams.get(ev.id);
+      if (team) {
+        // the convoy keeps moving: keep heading for its lead truck
+        const alive = team.filter((u) => w.get(u));
+        if (ev.kind === 'convoy' && alive.length) this.cmd({ type: 'move', ids: alive, x: ev.x, y: ev.y });
+        else if (ev.kind === 'supply' && alive.length) {
+          // pick up the crates on the ground, one runner each
+          const crates = ev.ents.map((c) => w.get(c)).filter((c): c is Entity => !!c && !c.para);
+          alive.forEach((uid, i) => {
+            const u = w.get(uid)!;
+            const c = crates[i % Math.max(1, crates.length)];
+            if (c && u.order.type === 'idle' && Math.hypot(u.x - c.x, u.y - c.y) > 0.6) this.cmd({ type: 'move', ids: [uid], x: c.x, y: c.y });
+          });
+        } else if (alive.length === 0) this.eventTeams.delete(ev.id);
+        continue;
+      }
+      if (w.tick - ev.start < delay) continue;
+      const infantryOnly = ev.kind === 'crash' || ev.kind === 'rescue';
+      const want = ev.kind === 'convoy' ? 3 : ev.kind === 'supply' ? 2 : 2;
+      const [hx, hy] = this.home();
+      const reach = 34 + 20 * doc.scavenge;
+      if (Math.hypot(ev.x - hx, ev.y - hy) > reach * 1.6) continue;
+      const pool = force
+        .filter((u) => {
+          if (busy.has(u.id) || u.para || unitDef(u.def).air) return false;
+          const r = this.roleOf(u);
+          if (r !== 'army' && r !== 'choke') return false;
+          if (infantryOnly && unitDef(u.def).category !== 'infantry') return false;
+          return Math.hypot(u.x - ev.x, u.y - ev.y) < reach;
+        })
+        // idle units first, then the closest
+        .sort((a, b) => (a.order.type === 'idle' ? 0 : 1) - (b.order.type === 'idle' ? 0 : 1) || Math.hypot(a.x - ev.x, a.y - ev.y) - Math.hypot(b.x - ev.x, b.y - ev.y) || a.id - b.id);
+      const ids = pool.slice(0, want).map((u) => u.id);
+      if (!ids.length) continue;
+      for (const id of ids) busy.add(id);
+      this.eventTeams.set(ev.id, ids);
+      this.setRole(ids, 'event');
+      this.cmd({ type: 'move', ids, x: ev.x, y: ev.y, attackMove: ev.kind !== 'convoy' });
+    }
+  }
+
   /** Gather at the rally point; launch waves along a lane (sometimes splitting off a flanking wing), with AA / EW escorts. */
   private manageWaves(force: Entity[]) {
     const w = this.world;
@@ -916,7 +992,13 @@ export class AIController implements Controller {
     // AA stays home as air defence unless the enemy flies; artillery and support never count towards the wave size
     const fighters = atRally.filter((u) => klass(u.def) === 'main');
     const sinceWave = w.tick - this.lastWave;
-    if (fighters.length >= this.waveSize || (fighters.length >= 4 && sinceWave > TPS * 240)) {
+    // night attacks (conditions.ts): with enough night-vision units the wave goes early, while the defenders see little
+    let need = this.waveSize;
+    if (w.cond.enabled && w.cond.state.dark > 0.6 && doc.nightOps > 0 && fighters.length) {
+      const nv = fighters.filter((u) => hasNightVision(u.def)).length / fighters.length;
+      if (nv >= 0.3) need = Math.max(4, Math.round(this.waveSize * (1 - 0.35 * doc.nightOps)));
+    }
+    if (fighters.length >= need || (fighters.length >= 4 && sinceWave > TPS * 240)) {
       const target = this.pickTarget();
       const tx = target ? target[0] : enemy[0];
       const ty = target ? target[1] : enemy[1];

@@ -315,5 +315,77 @@ export function buildBiomeLayout(m: GameMap): Layout {
   }
   // the park paths count as tracks in the occupancy grid
   for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
-  return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R });
+  const pivots = biome === 'desert' ? findPivots(m, occ, R, pylons.lines, poles, wrecks) : [];
+  return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, pivots, occ, occRes: R });
+}
+
+/**
+ * Desert centre-pivot circles (render/farm.ts): flat, open ground clear of roads, tracks, fields,
+ * structures, ore, oil, tech sites, power lines and the bases. Placed on player 0's half and mirrored
+ * (point symmetry, like the map); the discs are marked as fields so nothing else grows on them.
+ */
+function findPivots(m: GameMap, occ: Uint8Array, R: number, lines: V2[][], poles: V2[][], wrecks: Layout['wrecks']): { x: number; y: number; r: number }[] {
+  const W = m.w;
+  const H = m.h;
+  const posts = [...lines.flat(), ...poles.flat(), ...wrecks.map((w) => v(w.x, w.y))];
+  const tech: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  for (const t of m.techSites ?? [])
+    for (const [ax, ay] of t.at)
+      for (const [px, py] of [
+        [ax, ay],
+        [W - ax - 3, H - ay - 3],
+      ])
+        tech.push({ x0: px - 1.5, y0: py - 1.5, x1: px + 4.5, y1: py + 4.5 });
+  const okAt = (x: number, y: number) => {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) return false;
+    const i = ty * W + tx;
+    const t = m.tiles[i];
+    if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || m.trees[i] || m.blocked[i] || m.ore[i] || m.oreKind[i]) return false;
+    if (occ[Math.floor(y * R) * W * R + Math.floor(x * R)] & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD)) return false;
+    if (m.starts.some((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5) < 16)) return false;
+    for (const mm of m.oreMines) if (Math.hypot(x - mm.x - 0.5, y - mm.y - 0.5) < 7) return false;
+    for (const o of m.oils) if (x > o.x - 2 && x < o.x + 4 && y > o.y - 2 && y < o.y + 4) return false;
+    for (const z of tech) if (x > z.x0 && x < z.x1 && y > z.y0 && y < z.y1) return false;
+    return true;
+  };
+  const discOk = (cx: number, cy: number, r: number) => {
+    let lo = 1e9;
+    let hi = -1e9;
+    for (let y = -r - 0.4; y <= r + 0.4; y += 0.5)
+      for (let x = -r - 0.4; x <= r + 0.4; x += 0.5) {
+        if (x * x + y * y > (r + 0.4) * (r + 0.4)) continue;
+        if (!okAt(cx + x, cy + y)) return false;
+        const h = groundHeight(m, cx + x, cy + y);
+        lo = Math.min(lo, h);
+        hi = Math.max(hi, h);
+      }
+    if (hi - lo > 0.3) return false;
+    return !posts.some((p) => Math.hypot(p.x - cx, p.y - cy) < r + 0.8);
+  };
+  const out: { x: number; y: number; r: number }[] = [];
+  const mark = (p: { x: number; y: number; r: number }) => {
+    const rr = p.r + 0.3;
+    for (let y = Math.floor((p.y - rr) * R); y <= Math.ceil((p.y + rr) * R); y++)
+      for (let x = Math.floor((p.x - rr) * R); x <= Math.ceil((p.x + rr) * R); x++) {
+        if (x < 0 || y < 0 || x >= W * R || y >= H * R) continue;
+        if (Math.hypot((x + 0.5) / R - p.x, (y + 0.5) / R - p.y) < rr) occ[y * W * R + x] |= OCC_FIELD;
+      }
+  };
+  for (const r of [4.2, 3.4, 2.7]) {
+    for (let y = 4; y < H - 4 && out.length < 4; y += 1.5)
+      for (let x = 4; x < W - 4 && out.length < 4; x += 1.5) {
+        // player 0's half (y > x), mirrored onto the other
+        if (y - x < r + 1) continue;
+        const a = { x: x + 0.25, y: y + 0.25, r };
+        const b = { x: W - a.x, y: H - a.y, r };
+        if (out.some((p) => Math.hypot(p.x - a.x, p.y - a.y) < p.r + r + 2.5 || Math.hypot(p.x - b.x, p.y - b.y) < p.r + r + 2.5)) continue;
+        if (!discOk(a.x, a.y, r) || !discOk(b.x, b.y, r)) continue;
+        out.push(a, b);
+        mark(a);
+        mark(b);
+      }
+  }
+  return out;
 }
