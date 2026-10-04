@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { phoneCaps } from './devicecaps';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -323,6 +324,8 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // production: no per-program info-log queries on first use (each one is a synchronous GPU round trip)
+    this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
     // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
     // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
     // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
@@ -355,7 +358,7 @@ export class GameRenderer {
     this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
     // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
     setBakeRenderer(this.renderer);
-    setBakeSize(quality === 'high' ? 1024 : 512);
+    setBakeSize(quality === 'high' && !phoneCaps() ? 1024 : 512);
     setBakeEnabled(!/[?&]vbake=0\b/.test(location.search));
     setWearBiome(world.map.biome);
 
@@ -439,7 +442,7 @@ export class GameRenderer {
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0; // ultra: per cascade
+    const shadow = quality === 'high' ? (phoneCaps() ? 2048 : 4096) : quality === 'medium' ? 2048 : 0; // ultra: per cascade; phones: 2048 (memory)
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
@@ -526,6 +529,10 @@ export class GameRenderer {
   get postComposer(): EffectComposer | null {
     return this.composer;
   }
+  /** The post chain itself (warm-up compiles its programs ahead of the first frame). */
+  get postChain(): PostChain | null {
+    return this.post;
+  }
   /** True while frames go through the post chain (the quality governor can switch it off). */
   get postActive(): boolean {
     return !!this.composer && this.usePost;
@@ -572,7 +579,7 @@ export class GameRenderer {
   /** Current governor state, for debugging / screenshots. */
   perfStats() {
     const s = this.ladder[this.level];
-    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles, watchdog: this.watchdogSteps };
   }
 
   /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
@@ -2061,8 +2068,25 @@ export class GameRenderer {
     const now = performance.now();
     const gap = (now - this.lastFrameAt) / 1000;
     this.lastFrameAt = now;
+    if (!this.adaptive || this.governorHold || gap <= 0 || document.hidden) return;
+    // Watchdog: frames of a quarter second and more, again and again, mean the page is close to the browser's
+    // "Page unresponsive" dialog. Don't wait for a full measurement window: step down two rungs right away
+    // (the cheap rungs: lens extras, AO, bloom quality, then resolution; nothing gets rebuilt or recompiled).
+    if (gap >= 0.25 && gap <= 5) {
+      if (++this.stalls >= 3 && this.level < this.ladder.length - 1 && now - this.lastWatchdog > 2500) {
+        this.lastWatchdog = now;
+        this.stalls = 0;
+        this.frameTimes.length = 0;
+        this.goodWindows = 0;
+        this.upNeed = Math.min(40, this.upNeed * 2);
+        this.applyLevel(Math.min(this.ladder.length - 1, this.level + 2));
+        this.fastFrames = 60;
+        this.watchdogSteps++;
+        return;
+      }
+    } else if (gap < 0.1) this.stalls = Math.max(0, this.stalls - 0.25);
     // very long gaps are tab switches / pauses, not slow frames; the median filters GC spikes
-    if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
+    if (gap > 1.5) return;
     const ft = gap;
     this.frameTimes.push(ft);
     // short windows while the governor is still finding its level (first seconds, right after a step down)
@@ -2098,6 +2122,12 @@ export class GameRenderer {
   }
   private govFrames = 0;
   private fastFrames = 0;
+  /** Watchdog: recent very long frames (decays on normal ones), last time it stepped down, steps taken. */
+  private stalls = 0;
+  private lastWatchdog = -1e9;
+  watchdogSteps = 0;
+  /** True while loading work (shader warm-up) renders frames: they are not judged. */
+  governorHold = false;
   private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
@@ -2270,5 +2300,12 @@ export class GameRenderer {
     this.csm?.dispose();
     this.renderer.dispose();
     this.post?.dispose();
+    // release this match's GPU memory now rather than whenever the canvas gets garbage collected: without it
+    // every match (and every demo battle behind the menu) left a live context behind until the next GC
+    try {
+      this.renderer.forceContextLoss();
+    } catch {
+      /* already lost */
+    }
   }
 }

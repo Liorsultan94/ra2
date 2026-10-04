@@ -58,7 +58,10 @@ let enabled = true;
 
 /** Use this renderer for baking (the game's; otherwise a private 1x1 canvas context is created on demand). */
 export function setBakeRenderer(r: THREE.WebGLRenderer | null) {
-  if (ownR && bakeR && bakeR !== r) bakeR.dispose();
+  if (ownR && bakeR && bakeR !== r) {
+    bakeR.dispose();
+    bakeR.forceContextLoss();
+  }
   bakeR = r;
   ownR = false;
 }

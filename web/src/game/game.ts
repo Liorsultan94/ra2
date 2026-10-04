@@ -10,7 +10,7 @@ import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
-import { CameoFactory } from '../render/cameo';
+import { sharedCameos } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality } from '../render/renderer';
 import { ATMOS_DEFAULTS } from '../render/atmos';
@@ -72,7 +72,8 @@ export class Game {
   readonly world: World;
   readonly renderer: GameRenderer;
   readonly hud: Hud;
-  private cameos = new CameoFactory();
+  /** The session's cameo factory (shared: one offscreen GL context for every battle and the menu). */
+  private cameos = sharedCameos();
   private local: number;
   private raf = 0;
   private last = 0;
@@ -172,7 +173,8 @@ export class Game {
     if (attract) this.hud.root.classList.add('attract');
     ATMOS_DEFAULTS.live = !!opts.liveSky && !attract;
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
-    this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
+    // (the demo battle behind the menu has no sidebar: no cameos, no live portrait)
+    this.hud.attach(this.world, this.renderer, Math.max(0, this.local), !attract);
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
     // positional audio: the camera is the listener (src/audio/scene.ts)
     this.audio.setNation(attract ? null : opts.faction);
@@ -343,17 +345,20 @@ export class Game {
   /** Compile every shader / material of this match under a loading overlay before the first battle frame. */
   private startWarmup() {
     this.warming = true;
+    // the cameo queue waits: its readbacks would queue behind this match's shader compiles on the GPU
+    this.cameos.paused = true;
     const progress = (k: number) => (this.briefing ? this.briefing.setProgress(k) : this.hud.setLoading(k));
     progress(0);
     const factions = [...new Set(this.world.players.map((p) => p.faction))];
-    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k))
+    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k), () => !this.destroyed)
       .then((res) => {
         this.warmup = res;
-        console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms`);
+        console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms (longest slice ${res.worst} ms)`);
       })
-      .catch((e) => console.warn('[warmup] failed', e))
+      .catch((e) => !this.destroyed && console.warn('[warmup] failed', e))
       .finally(() => {
         if (this.destroyed) return;
+        this.cameos.paused = false;
         this.warming = false;
         if (this.briefing) this.briefing.setReady(() => this.deploy());
         else this.hud.setLoading(null);
@@ -371,10 +376,10 @@ export class Game {
     this.warming = true;
     try {
       const factions = full ? [...new Set(this.world.players.map((p) => p.faction))] : [];
-      this.warmup = await warmUp(this.renderer, factions, null, (k) => !this.destroyed && onProgress(k));
-      console.info(`[warmup] attract: ${this.warmup.models} models, ${this.warmup.programs} programs in ${this.warmup.ms} ms`);
+      this.warmup = await warmUp(this.renderer, factions, null, (k) => !this.destroyed && onProgress(k), () => !this.destroyed);
+      console.info(`[warmup] attract: ${this.warmup.models} models, ${this.warmup.programs} programs in ${this.warmup.ms} ms (longest slice ${this.warmup.worst} ms)`);
     } catch (e) {
-      console.warn('[warmup] failed', e);
+      if (!this.destroyed) console.warn('[warmup] failed', e);
     } finally {
       if (!this.destroyed) {
         this.warming = false;
@@ -1697,7 +1702,7 @@ export class Game {
     this.renderer.dispose();
     this.audioScene.dispose();
     this.ctlUI?.destroy();
-    this.cameos.dispose();
+    this.cameos.paused = false;
     this.hud.destroy();
   }
 }

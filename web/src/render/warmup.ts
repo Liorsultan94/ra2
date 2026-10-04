@@ -4,6 +4,7 @@ import { groundHeight } from '../sim/map';
 import type { Faction } from '../sim/types';
 import { createModel, createMunition, type AnimState, type MunitionKind } from './models';
 import { styleFor, type GameRenderer } from './renderer';
+import { Slicer, nextFrame, settlePrograms } from './slice';
 import type { ViewModes } from './viewmodes';
 
 /*
@@ -15,16 +16,25 @@ import type { ViewModes } from './viewmodes';
  * of every unit / building / munition type of the factions in this match
  * (buildings both mid-construction and finished), make every hidden pooled
  * object (effects, night lights, weather) visible for a moment, compile all of
- * it with compileAsync (parallel compile where the driver supports it) in
- * chunks to report progress, and finally render two real frames through the
- * full pipeline (shadows, AO, bloom, thermal / night-vision passes) so the
- * remaining variants and all geometry / texture uploads happen now.
+ * it, and finally render real frames through the full pipeline (shadows, AO,
+ * bloom, thermal / night-vision passes) so the remaining variants and all
+ * geometry / texture uploads happen now.
+ *
+ * Everything is time sliced (slice.ts): a phone used to spend many seconds in
+ * one task here (model builds + vehicle bakes, then every program linked in
+ * the first full frame), long enough for the browser's "Page unresponsive"
+ * dialog. Now models are built a few per slice, programs are compiled one
+ * model at a time and settled (parallel compile where available, otherwise
+ * one blocking link per step), the post chain's own programs are compiled the
+ * same way, and the real frames show the warm-up models in small groups.
  */
 
 export interface WarmupResult {
   ms: number;
   models: number;
   programs: number;
+  /** Longest slice (ms) the warm-up ran without yielding. */
+  worst: number;
 }
 
 const MUNITION_FALLBACK: Record<string, MunitionKind> = {
@@ -42,57 +52,85 @@ const MUNITION_FALLBACK: Record<string, MunitionKind> = {
   cruise: 'airMissile',
 };
 
-const nextFrame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
-
 function anim(built: number): AnimState {
   return { dt: 0.016, time: 0, moving: true, speed: 1, dist: 0.3, turn: 0, fired: 0.05, dead: 0, damage: 0.8, built, powered: true };
 }
 
-export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewModes | null, onProgress: (k: number) => void): Promise<WarmupResult> {
+/** compile() walks an object tree: wrap a list of objects without re-parenting them. */
+function holder(objs: THREE.Object3D[]): THREE.Group {
+  const h = new THREE.Group();
+  (h as unknown as { children: THREE.Object3D[] }).children = objs;
+  return h;
+}
+
+/** Every material held by a post-processing pass (fields, full-screen quads, one level of nesting). */
+function passMaterials(root: object): THREE.Material[] {
+  const out = new Set<THREE.Material>();
+  const seen = new Set<object>();
+  const visit = (o: unknown, depth: number) => {
+    if (!o || typeof o !== 'object' || seen.has(o)) return;
+    seen.add(o);
+    const m = o as THREE.Material & { material?: unknown; _mesh?: unknown };
+    if (m.isMaterial) {
+      out.add(m);
+      return;
+    }
+    if ((o as THREE.Texture).isTexture || (o as THREE.WebGLRenderTarget).isRenderTarget || (o as THREE.Object3D).isObject3D && !(o as THREE.Mesh).isMesh) return;
+    if ((o as THREE.Mesh).isMesh) {
+      visit((o as THREE.Mesh).material, depth);
+      return;
+    }
+    if (depth <= 0) return;
+    for (const v of Object.values(o)) visit(v, depth - 1);
+  };
+  visit(root, 3);
+  return [...out];
+}
+
+export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewModes | null, onProgress: (k: number) => void, alive: () => boolean = () => true): Promise<WarmupResult> {
   const t0 = performance.now();
+  const slicer = new Slicer(35, () => !alive());
+  r.governorHold = true;
   const gl = r.renderer;
   const world = r.world;
   const group = new THREE.Group();
   group.name = 'warmup';
   const objs: THREE.Object3D[] = [];
-  // one model of every type per side in this match
+  // one model of every type per side in this match (built a few per slice: vehicle bakes are heavy)
   const owners = new Map<Faction, number>();
   world.players.forEach((p, i) => owners.has(p.faction) || owners.set(p.faction, i));
+  const builds: (() => THREE.Object3D | null)[] = [];
   for (const f of factions) {
     const owner = owners.get(f) ?? 0;
     const style = styleFor(world, owner);
     for (const d of DEF_LIST) {
       if (d.faction !== f) continue;
-      try {
-        const reps = d.kind === 'building' ? [0.45, 1] : [1];
-        for (const b of reps) {
+      const reps = d.kind === 'building' ? [0.45, 1] : [1];
+      for (const b of reps)
+        builds.push(() => {
           const m = createModel(d.model, style, r.fog);
           m.anim?.(anim(b));
-          objs.push(m.root);
-        }
-      } catch {
-        /* a broken builder must not block the battle */
-      }
+          return m.root;
+        });
     }
   }
-  try {
-    const m = createModel('oil', styleFor(world, -1), r.fog);
-    objs.push(m.root);
-  } catch {
-    /* ignore */
-  }
+  builds.push(() => createModel('oil', styleFor(world, -1), r.fog).root);
   const kinds = new Set<MunitionKind>();
   for (const w of Object.values(WEAPONS)) {
     const k = (w.munition as MunitionKind | undefined) ?? (w.flight ? MUNITION_FALLBACK[w.flight] : undefined);
     if (k) kinds.add(k);
   }
-  for (const k of kinds) {
+  for (const k of kinds) builds.push(() => createMunition(k, world.players[0]?.color ?? 0x2f8fff)?.root ?? null);
+  // building the models: 0 .. 0.3 of the progress bar
+  for (let i = 0; i < builds.length; i++) {
     try {
-      const m = createMunition(k, world.players[0]?.color ?? 0x2f8fff);
-      if (m) objs.push(m.root);
+      const o = builds[i]();
+      if (o) objs.push(o);
     } catch {
-      /* ignore */
+      /* a broken builder must not block the battle */
     }
+    if (i % 4 === 3) onProgress(((i + 1) / builds.length) * 0.3);
+    await slicer.tick();
   }
   // lay them out around the view centre (inside the frustum for the real frames)
   const n = objs.length;
@@ -125,34 +163,70 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
   // the main pass renders into a (linear) render target when the post chain is on; the drone camera always does
   const rtTarget = new THREE.WebGLRenderTarget(4, 4);
   const targets: (THREE.WebGLRenderTarget | null)[] = r.postActive ? [rtTarget] : [null, rtTarget];
+  const quad = new THREE.PlaneGeometry(1, 1);
   try {
-    // chunks: the scene itself (terrain, scenery, effect pools...), then the models in groups
-    const chunks: (THREE.Object3D[] | null)[] = [null];
-    const per = Math.max(4, Math.ceil(n / 12));
-    for (let i = 0; i < n; i += per) chunks.push(objs.slice(i, i + per));
-    let done = 0;
-    for (const c of chunks) {
+    await slicer.yield();
+    // the scene itself (terrain, scenery, effect pools...): its top-level groups one at a time
+    const top = r.scene.children.filter((c) => c !== group);
+    let step = 0;
+    const steps = top.length + n + 1;
+    const compileStep = async (objsToCompile: THREE.Object3D[]) => {
       for (const t of targets) {
         gl.setRenderTarget(t);
-        if (!c) {
-          await gl.compileAsync(r.scene, r.camera);
-          continue;
-        }
-        // compile() walks an object tree; wrap the chunk without re-parenting it
-        const holder = new THREE.Group();
-        (holder as unknown as { children: THREE.Object3D[] }).children = c;
-        await gl.compileAsync(holder, r.camera, r.scene);
+        gl.compile(holder(objsToCompile), r.camera, r.scene);
       }
       gl.setRenderTarget(prevRT);
-      if (!c) r.scene.add(group);
-      done++;
-      onProgress((done / (chunks.length + 2)) * 0.9);
-      await nextFrame();
+      await settlePrograms(gl, slicer);
+      onProgress(0.3 + (++step / steps) * 0.55);
+      await slicer.tick();
+    };
+    for (const c of top) await compileStep([c]);
+    r.scene.add(group);
+    // the warm-up models, one at a time
+    for (const o of objs) await compileStep([o]);
+    // post-processing passes (full-screen quads into linear targets; the last passes also to the screen)
+    const post = r.postComposer;
+    if (post) {
+      // (plus the grade LUT bake, which renders into its own target)
+      const lutMat = r.postChain ? passMaterials(r.postChain.lut) : [];
+      const passes = post.passes;
+      const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      const scene = new THREE.Scene();
+      for (let pi = 0; pi < passes.length; pi++) {
+        const mats = passMaterials(passes[pi]);
+        if (pi === 0) mats.push(...lutMat);
+        const last = pi >= passes.length - 2;
+        for (const m of mats) {
+          const mesh = new THREE.Mesh(quad, m);
+          mesh.frustumCulled = false;
+          for (const t of last ? [rtTarget, null] : [rtTarget]) {
+            gl.setRenderTarget(t);
+            gl.compile(mesh, cam, scene);
+          }
+          gl.setRenderTarget(prevRT);
+          await settlePrograms(gl, slicer);
+        }
+      }
     }
-    // real frames through the whole pipeline: shadow / AO / bloom variants, buffer and texture uploads
-    r.render(1, 0);
-    onProgress(0.93);
+    onProgress(0.88);
     await nextFrame();
+    slicer.reset();
+    // real frames through the whole pipeline (shadow / AO / bloom variants, buffer and texture uploads):
+    // the scene alone first, then the warm-up models in groups so no frame compiles too much at once
+    const per = Math.max(4, Math.ceil(n / 10));
+    for (const o of objs) o.visible = false;
+    r.render(1, 0);
+    await settlePrograms(gl, slicer);
+    await nextFrame();
+    for (let i = 0; i < n; i += per) {
+      for (let k = 0; k < n; k++) objs[k].visible = k >= i && k < i + per;
+      r.render(1, 0);
+      await settlePrograms(gl, slicer);
+      onProgress(0.88 + ((i + per) / n) * 0.08);
+      await nextFrame();
+      slicer.reset();
+    }
+    for (const o of objs) o.visible = true;
     if (modes) {
       const nv = r.atmos.nightVision;
       modes.setThermal(true);
@@ -160,13 +234,16 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
       r.render(1, 0);
       r.atmos.setNightVision(nv);
       modes.setThermal(false);
+      await settlePrograms(gl, slicer);
     }
     onProgress(1);
   } finally {
     gl.setRenderTarget(prevRT);
     restore();
+    r.governorHold = false;
     r.scene.remove(group);
     rtTarget.dispose();
+    quad.dispose();
   }
-  return { ms: Math.round(performance.now() - t0), models: n, programs: gl.info.programs?.length ?? 0 };
+  return { ms: Math.round(performance.now() - t0), models: n, programs: gl.info.programs?.length ?? 0, worst: Math.round(slicer.worst) };
 }
