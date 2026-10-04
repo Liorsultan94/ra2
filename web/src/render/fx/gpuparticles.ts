@@ -287,7 +287,8 @@ export class GpuParticles {
     this.points = new THREE.Points(geo, this.material);
     this.points.frustumCulled = false;
     bindViewHeight(this.points, this.material);
-    this.points.renderOrder = additive ? 3 : 2;
+    // additive fire after the crater decals (3) and the fireball clusters (3.2): flashes glare over the fireball
+    this.points.renderOrder = additive ? 3.4 : 2;
   }
 
   /** A points object drawing this system's particles as plain density (alpha) - for occlusion buffers. */

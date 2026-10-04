@@ -63,7 +63,7 @@ export function billowPlan(S: number, fire: number, q: FxQuality, airborne = fal
     puffs: 1 + billows + cap + stem,
     cap,
     stem,
-    r: 0.36 * S * Math.min(1.25, f) * (thermo ? 1.2 : 1),
+    r: 0.3 * S * Math.min(1.2, f) * (thermo ? 1.15 : 1),
     hot: (0.55 + 0.42 * S) * (thermo ? 1.6 : 1) * (airborne ? 0.8 : 1),
     smoke: (2.2 + 2.2 * S) * (airborne ? 1.3 : 1),
     light: 2.5 + 3.2 * S * f,
@@ -84,11 +84,11 @@ const NOISE = /* glsl */ `
                 mix( mix( fbHash( i + vec3( 0, 0, 1 ) ), fbHash( i + vec3( 1, 0, 1 ) ), f.x ), mix( fbHash( i + vec3( 0, 1, 1 ) ), fbHash( i + vec3( 1, 1, 1 ) ), f.x ), f.y ), f.z );
   }
   // billowy fbm: rounded lumps with sharp creases between them (cauliflower)
+  // (two octaves: the vertex grid can carry them; finer detail is shaded per pixel)
   float billow( vec3 q ) {
     float a = 1.0 - abs( fbNoise( q ) * 2.0 - 1.0 );
     float b = 1.0 - abs( fbNoise( q * 2.13 + 7.1 ) * 2.0 - 1.0 );
-    float c = fbNoise( q * 4.37 + 3.3 );
-    return a * 0.58 + b * 0.3 + c * 0.12;
+    return a * 0.68 + b * 0.32;
   }
 `;
 
@@ -106,12 +106,13 @@ const VERT = /* glsl */ `
   varying vec4 vB;
   varying vec4 vC;
   varying float vLump;
+  varying vec3 vSph;
   void main() {
     vec3 p = position;
     float age = iC.x;
     // the noise field scrolls down through the puff: lumps roll up and over the top
     vec3 off = vec3( iB.y, iB.y * 0.71 - age * 0.55, iB.y * 1.37 );
-    float fr = 1.55;
+    float fr = 1.85;
     float n = billow( p * fr + off );
     // finite-difference gradient for a lumpy normal
     float e = 0.12;
@@ -119,15 +120,22 @@ const VERT = /* glsl */ `
     float ny = billow( ( p + vec3( 0.0, e, 0.0 ) ) * fr + off );
     float nz = billow( ( p + vec3( 0.0, 0.0, e ) ) * fr + off );
     vec3 g = ( vec3( nx, ny, nz ) - n ) / e;
-    float amp = 0.42;
+    float amp = 0.5;
     vLump = n;
     vec3 dp = p * ( 1.0 + ( n - 0.55 ) * amp );
     // flattened underside on the ground, squashed / stretched puffs (cap, stem)
     if ( dp.y < 0.0 ) dp.y *= 1.0 - 0.45 * iC.w;
     dp.y *= iB.w;
-    vec3 nrm = normalize( p - amp * 0.9 * ( g - dot( g, p ) * p ) );
+    // lumpy normal (tilt limited: a soft, rounded cauliflower rather than a crumpled one)
+    vec3 gt = g - dot( g, p ) * p;
+    float gl = length( gt );
+    gt *= min( 1.0, 1.2 / max( gl, 1e-4 ) );
+    vec3 nrm = normalize( p - amp * 0.75 * gt );
     nrm.y /= max( 0.3, iB.w );
     vN = normalize( nrm );
+    vec3 sph = p;
+    sph.y /= max( 0.3, iB.w );
+    vSph = normalize( sph );
     vObj = p;
     vec3 wp = iA.xyz + dp * iA.w;
     vWorld = wp;
@@ -154,31 +162,36 @@ const FRAG = /* glsl */ `
   varying vec4 vB;
   varying vec4 vC;
   varying float vLump;
+  varying vec3 vSph;
   // white-hot -> yellow -> peach -> orange -> deep red (linear HDR, blooms)
   vec3 ramp( float t ) {
-    vec3 c = vec3( 0.32, 0.035, 0.006 ) * smoothstep( 0.08, 0.3, t );
-    c = mix( c, vec3( 1.0, 0.3, 0.06 ) * 2.2, smoothstep( 0.25, 0.5, t ) );
-    c = mix( c, vec3( 1.0, 0.52, 0.34 ) * 3.4, smoothstep( 0.45, 0.7, t ) );
-    c = mix( c, vec3( 1.0, 0.78, 0.42 ) * 5.0, smoothstep( 0.66, 0.9, t ) );
-    c = mix( c, vec3( 1.0, 0.96, 0.86 ) * 8.0, smoothstep( 0.9, 1.25, t ) );
+    vec3 c = vec3( 0.3, 0.03, 0.005 ) * smoothstep( 0.08, 0.3, t );
+    c = mix( c, vec3( 1.0, 0.26, 0.04 ) * 1.5, smoothstep( 0.25, 0.5, t ) );
+    c = mix( c, vec3( 1.0, 0.46, 0.26 ) * 2.1, smoothstep( 0.45, 0.72, t ) );
+    c = mix( c, vec3( 1.0, 0.72, 0.36 ) * 2.9, smoothstep( 0.7, 0.95, t ) );
+    c = mix( c, vec3( 1.0, 0.93, 0.8 ) * 4.5, smoothstep( 0.98, 1.35, t ) );
     return c;
   }
   void main() {
     vec3 V = normalize( cameraPosition - vWorld );
     vec3 N = normalize( vN );
-    float facing = clamp( dot( N, V ), 0.0, 1.0 );
-    float age = vC.x;
-    float fine = fbNoise( vObj * 5.3 + vec3( vB.y, -age * 1.4, vB.y ) );
+    // fine per-pixel lumps on top of the vertex billows
+    float fine = fbNoise( vObj * 5.3 + vec3( vB.y, -vC.x * 1.4, vB.y ) );
+    float fine2 = fbNoise( vObj * 11.0 + vec3( vB.y * 1.3, -vC.x * 2.0, 0.0 ) );
+    N = normalize( N + ( vObj * ( fine - 0.5 ) + vec3( fine2 - 0.5, 0.0, 0.5 - fine2 ) ) * 0.35 );
+    // silhouette / optical depth from the smooth puff shape, lighting from the lumpy one
+    float facing = clamp( dot( normalize( vSph ), V ), 0.0, 1.0 );
     float temp0 = vB.x;
     // optically thick: we see hot gas through the middle of the disc, cooler gas at the rim and in the creases
-    float depth = 0.45 + 0.75 * facing;
+    float depth = 0.3 + 0.85 * facing * sqrt( facing );
     float crease = smoothstep( 0.25, 0.75, vLump );
     float t = temp0 * depth * ( 0.55 + 0.45 * crease ) * ( 0.8 + 0.4 * fine ) * ( 1.0 + vC.z );
     vec3 emit = ramp( t );
     float hotMask = smoothstep( 0.18, 0.45, t );
     // smoke: dark sooty albedo lit by sun (wrapped), sky and the fire still glowing inside / below
-    float wrap = clamp( dot( N, uSunDir ) * 0.6 + 0.4, 0.0, 1.0 );
-    vec3 light = uSunCol * wrap * wrap * 1.1 + uAmbCol * ( 0.75 + 0.35 * N.y );
+    float wrap = clamp( dot( N, uSunDir ) * 0.5 + 0.5, 0.0, 1.0 );
+    float ambL = dot( uAmbCol, vec3( 0.3, 0.59, 0.11 ) );
+    vec3 light = uSunCol * wrap * wrap * 1.25 + mix( vec3( ambL ), uAmbCol, 0.35 ) * ( 0.6 + 0.35 * N.y );
     vec3 warm = vec3( 0.0 );
     for ( int i = 0; i < 4; i++ ) {
       vec3 d = vWorld - uFireP[i].xyz;
@@ -188,11 +201,12 @@ const FRAG = /* glsl */ `
     light += min( warm * 0.18, vec3( 2.0 ) );
     // inner glow bleeding through thin smoke (peach-lit billows)
     vec3 inner = ramp( temp0 * 0.62 ) * 0.22 * ( 1.0 - facing * 0.5 );
-    vec3 albedo = vec3( vC.y ) * mix( 0.75, 1.15, fine ) * vec3( 1.0, 0.97, 0.94 );
+    vec3 albedo = vec3( vC.y ) * mix( 0.7, 1.2, fine ) * vec3( 1.0, 0.9, 0.8 );
     vec3 col = mix( albedo * light + inner, emit, hotMask );
     float a = smoothstep( 0.0, 0.32, facing ) * vB.z;
     // cool smoke thins out unevenly
-    a *= mix( 1.0, 0.55 + 0.45 * fine, smoothstep( 0.3, 0.0, temp0 ) );
+    float cold = smoothstep( 0.3, 0.0, temp0 );
+    a *= mix( 1.0, smoothstep( 0.15, 0.75, fine + facing * 0.35 ), cold * 0.85 );
     if ( heightOn > 0.5 ) {
       float gh = texture2D( heightTex, ( vWorld.xz + 0.5 ) / heightSize ).r;
       a *= smoothstep( -0.05, 0.25, vWorld.y - gh );
@@ -306,7 +320,7 @@ export class Fireballs {
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
     // after the lit smoke and the flipbooks, before the additive fire (the flash glares over the young fireball)
-    this.mesh.renderOrder = 2.8;
+    this.mesh.renderOrder = 3.2;
     this.mesh.name = 'fireballs';
     group.add(this.mesh);
   }
@@ -374,10 +388,10 @@ export class Fireballs {
     this.clusters.push(cl);
     const R = plan.r;
     const thermo = pal === 'thermo';
-    const albedo = thermo ? 0.05 : airborne ? 0.12 : 0.08;
+    const albedo = thermo ? 0.09 : airborne ? 0.16 : 0.13;
     const life = plan.hot + plan.smoke;
     const baseY = airborne ? y : y + R * 0.55;
-    const h0 = 1.15 + (pal === 'white' ? 0.15 : 0) + heat;
+    const h0 = 0.98 + (pal === 'white' ? 0.12 : 0) + heat;
     // white-hot core
     this.add(cl, { x, y: baseY, z, r: R * 0.95, r0: 0.3, hot: h0 + 0.1, cool: plan.hot * 0.9, life, vy: 0.5 * R, rise: 0.9 * Math.sqrt(S), drag: 1.2, flat: airborne ? 0 : 1, albedo, heat, wind: 0.5 });
     // rolling outer billows: thrown out and up, slightly later, a little cooler
@@ -517,10 +531,11 @@ export class Fireballs {
       // violent expansion (ease-out), then a slow swell as it cools
       const e = Math.min(1, p.age / Math.max(0.05, p.cool * 0.3));
       const grow = p.r0 + (1 - p.r0) * (1 - (1 - e) * (1 - e) * (1 - e));
-      const swell = 1 + 0.9 * Math.min(1, p.age / (p.life * 0.6));
+      const swell = 1 + 0.6 * Math.min(1, p.age / (p.life * 0.6));
       const ck = p.age / p.cool;
       const temp = ck < 1 ? p.hot * (1 - ck * ck * (3 - 2 * ck) * 0.85) * Math.exp(-ck * 0.6) : Math.max(0, 0.0823 * p.hot * (2 - ck));
-      const alpha = Math.min(1, p.age / 0.04) * (1 - smooth(0.6, 1, t));
+      // the smoke thins out as it spreads
+      const alpha = Math.min(1, p.age / 0.04) * (1 - smooth(0.55, 1, t)) * (1 - 0.4 * smooth(0.2, 0.8, t));
       const o = n * STRIDE;
       d[o] = p.x;
       d[o + 1] = p.y;
@@ -531,7 +546,7 @@ export class Fireballs {
       d[o + 6] = alpha;
       d[o + 7] = p.squash;
       d[o + 8] = p.age;
-      d[o + 9] = p.albedo * (1 + 1.4 * smooth(0.3, 1, t));
+      d[o + 9] = p.albedo * (1 + 1.1 * smooth(0.25, 1, t));
       d[o + 10] = p.heat;
       d[o + 11] = p.flat;
       n++;
