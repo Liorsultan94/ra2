@@ -110,7 +110,7 @@ export class Secondaries {
   /** Fuel fireball: a rolling orange ball that rises under a black mushroom, with a long light. */
   fuelball(x: number, gy: number, z: number, S = 1) {
     const fx = this.fx;
-    const n = Math.round(18 * Math.sqrt(S) * fx.rate);
+    const n = Math.round(9 * Math.sqrt(S) * fx.rate);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = this.r(0, 0.35) * S;
@@ -154,7 +154,7 @@ export class Secondaries {
         glow: 0.55,
       });
     }
-    fx.fireballs?.spawn(x, gy + 0.4 * S, z, 1.1 * S, 'normal', false);
+    fx.fireballs.blast(x, gy, z, 1.1 * S, 1.6, 'thermo', false);
     fx.flashLight(x, gy + 0.8 * S, z, 10 * S, 0xff9038, 0.9);
     fx.addShake(0.08 * S, x, z);
     if (fx.haze) fx.haze.heat(x, gy + 1.2 * S, z, 2.4 * S, 2, 0.005, 1);

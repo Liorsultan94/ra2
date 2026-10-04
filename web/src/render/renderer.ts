@@ -1361,7 +1361,7 @@ export class GameRenderer {
     });
     if (ud.air) {
       const sp = ud.speed * (ud.fixedWing ? 1 : 0.4);
-      this.wrecks.push({ ...base, kind: 'air', max: 30, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
+      this.wrecks.push({ ...base, kind: 'air', max: 30, size: ud.fixedWing ? 1 : 0.8, vx: Math.cos(-root.rotation.y) * sp, vz: Math.sin(-root.rotation.y) * sp, vy: 0.5, spin: (Math.random() - 0.5) * 6, landed: false });
       return;
     }
     // crew ducks inside / hatch slammed shut on the burning hull
@@ -1444,8 +1444,7 @@ export class GameRenderer {
         r.position.set(w.x, w.y, w.z);
         r.rotation.y += w.spin * dt;
         r.rotation.z = Math.max(-0.9, r.rotation.z - dt * 0.8);
-        this.effects.smoke(w.x, w.y, w.z, 0.8);
-        this.effects.flame(w.x, w.y, w.z, 0.7);
+        this.effects.wreckTrail(w.x, w.y, w.z, w.vx, w.vy, w.vz, dt, 1);
         const g = standHeight(map, Math.max(0, Math.min(map.w - 0.01, w.x)), Math.max(0, Math.min(map.h - 0.01, w.z)));
         if (w.y <= g + 0.1) {
           w.landed = true;
@@ -1454,8 +1453,7 @@ export class GameRenderer {
           w.max = 18;
           r.position.y = w.y;
           r.rotation.x = (Math.random() - 0.5) * 0.4;
-          this.effects.blast(BLASTS.aircraft, w.x, g + 0.2, w.z, g);
-          this.marks.craterAt(w.x, w.z, 0.5);
+          this.effects.airCrash(w.x, g, w.z, w.size);
         }
       } else if (w.kind === 'building' && w.frac) {
         // chunks topple, bounce and pile up (fracture.ts); the rubble then sinks away slowly
@@ -1636,6 +1634,7 @@ export class GameRenderer {
     const w = WEAPONS[weaponId];
     if (!w) return null;
     if (weaponId.includes('shahed')) return BLASTS.shahed;
+    if (/bomb/i.test(weaponId)) return BLASTS.bomb;
     if (weaponId.includes('fpv') || weaponId.includes('micro')) return BLASTS.drone;
     if (w.projectile === 'instant') return w.warhead === 'flak' ? BLASTS.flak : null;
     if (w.projectile === 'beam') return null;
@@ -1658,7 +1657,7 @@ export class GameRenderer {
         p = BLASTS.ballistic;
         break;
       case 'cruise':
-        p = w.damage >= 300 ? BLASTS.ballistic : BLASTS.missile;
+        p = BLASTS.heavyMissile;
         break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
@@ -1812,7 +1811,7 @@ export class GameRenderer {
         if (shown) {
           if (ud.air) {
             const pos = v?.model.root.position ?? new THREE.Vector3(ev.x, gy + 1.5, ev.y);
-            fx.blast(BLASTS.airSmall, pos.x, pos.y, pos.z, gy);
+            fx.airKill(pos.x, pos.y, pos.z, gy, ud.fixedWing ? 1 : 0.8);
           } else if (ud.category === 'infantry') {
             if (ev.cause !== 'crushed') fx.explosion(ev.x, gy, ev.y, 'small', 'dust'); // run over: the 'crushed' event's puff
           } else {
