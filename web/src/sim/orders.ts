@@ -45,10 +45,22 @@ export function autoFire(e: Entity) {
   return e.stance !== 'holdFire';
 }
 
-/** Radius an idle unit scans for targets: hold-position units only look as far as they can shoot. */
+/** Classic fog: how far beyond its own sight a long-range unit picks targets on revealed ground by itself. */
+export const CLASSIC_REACH = 6;
+
+/**
+ * Radius an idle unit scans for targets: hold-position units only look as far as they can shoot.
+ * Classic fog (RA2): revealed ground stays visible, so long-range units (artillery, launchers) also
+ * pick targets out to their weapon range (at most CLASSIC_REACH tiles beyond their sight).
+ */
 export function scanRange(w: World, e: Entity, d: UnitDef) {
-  if (e.stance !== 'hold' || !d.weapon) return d.sight;
-  return Math.min(d.sight, w.weaponRange(e, WEAPONS[d.weapon]));
+  if (!d.weapon) return d.sight;
+  const range = w.weaponRange(e, WEAPONS[d.weapon]);
+  if (w.fog === 'classic') {
+    const reach = Math.min(range, d.sight + CLASSIC_REACH);
+    return e.stance === 'hold' ? reach : Math.max(d.sight, reach);
+  }
+  return e.stance === 'hold' ? Math.min(d.sight, range) : d.sight;
 }
 
 /** Idle unit without a target: return to its post (guard), stay put (hold), or make this its new post (aggressive). */

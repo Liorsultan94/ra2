@@ -56,6 +56,23 @@ describe('settings', () => {
     }
   });
 
+  it('fog of war defaults to classic (off), auto-defend to on; both round-trip and fall back', () => {
+    const s = loadSettings();
+    expect(s.fog).toBe('classic');
+    expect(s.autoDefend).toBe(true);
+    s.fog = 'modern';
+    s.autoDefend = false;
+    saveSettings(s);
+    const back = loadSettings();
+    expect(back.fog).toBe('modern');
+    expect(back.autoDefend).toBe(false);
+    const ls = g.localStorage as ReturnType<typeof fakeStorage>;
+    ls.setItem(SETTINGS_KEY, JSON.stringify({ fog: 'thick', autoDefend: 'yes' }));
+    const bad = loadSettings();
+    expect(bad.fog).toBe('classic');
+    expect(bad.autoDefend).toBe(true);
+  });
+
   it('older saves and bad values fall back to the defaults', () => {
     const ls = g.localStorage as ReturnType<typeof fakeStorage>;
     ls.setItem(SETTINGS_KEY, JSON.stringify({ difficulty: 'easy', credits: 5000 }));

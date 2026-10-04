@@ -1,6 +1,6 @@
 import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
-import type { Faction, Player } from '../sim/types';
+import type { Faction, FogMode, Player } from '../sim/types';
 import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
 import { autoQuality } from '../render/autoquality';
@@ -88,6 +88,14 @@ function peaceShort(st: Settings): string {
   const p = st.peace ?? 'auto';
   return p === 'off' ? 'no peace' : `${p === 'auto' ? PEACE_DEFAULT_MIN[st.difficulty] : Number(p)} min peace`;
 }
+const FOG_OPTS: [FogMode, string][] = [
+  ['classic', 'Off (classic)'],
+  ['modern', 'On (modern)'],
+];
+const FOG_NOTE: Record<FogMode, string> = {
+  classic: 'Explored ground stays revealed, as in Red Alert 2',
+  modern: 'Only what your forces see right now',
+};
 const SPEED_OPTS: [GameSpeed, string][] = [
   ['slow', 'Slow'],
   ['normal', 'Normal'],
@@ -300,6 +308,7 @@ export class MainMenu {
               <div class="mm-field"><span class="mm-lbl">Opponent<b data-v="enemy"></b></span>${seg('enemy', 'o', st.enemy, enemies, 'Opponent nation', 'seg-flags')}</div>
               <div class="mm-field"><span class="mm-lbl">Difficulty<b data-v="difficulty"></b></span>${seg('difficulty', 'o', st.difficulty, [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], 'Difficulty')}</div>
               <div class="mm-field"><span class="mm-lbl">Peace time<b data-v="peace"></b></span>${seg('peace', 'o', st.peace ?? 'auto', PEACE_OPTS, 'Peace time before the enemy attacks')}</div>
+              <div class="mm-field"><span class="mm-lbl">Fog of war<b data-v="fog"></b></span>${seg('fog', 'o', st.fog === 'modern' ? 'modern' : 'classic', FOG_OPTS, 'Fog of war')}</div>
               <div class="mm-field"><span class="mm-lbl">Credits</span>${seg('credits', 'o', String(st.credits), [5000, 10000, 20000].map((c) => [String(c), '$' + c / 1000 + 'k'] as [string, string]), 'Starting credits')}</div>
               <div class="mm-field"><span class="mm-lbl">Start time</span>${seg('tod', 'o', st.tod ?? 'cycle', TOD_OPTS, 'Time of day')}</div>
               <div class="mm-field"><span class="mm-lbl">Weather</span>${seg('weather', 'o', st.weather ?? 'dynamic', WX_OPTS, 'Weather')}</div>
@@ -342,6 +351,7 @@ export class MainMenu {
       set('enemy2', en ? `${flagHtml(en.id)}${esc(en.name)}` : 'Random nation');
       set('difficulty', esc(DIFF_NOTE[st.difficulty]));
       set('peace', esc(peaceNote(st)));
+      set('fog', esc(FOG_NOTE[st.fog === 'modern' ? 'modern' : 'classic']));
       set('diff2', `${DIFF_LABEL[st.difficulty]} · ${peaceShort(st)}`);
       const art = $('.sum-flagart');
       art.style.backgroundImage = `url("${(flagHtml(f.id).match(/src="([^"]+)"/) ?? [])[1] ?? ''}")`;
@@ -406,6 +416,7 @@ export class MainMenu {
         else if (k === 'tod') st.tod = inp.value as Settings['tod'];
         else if (k === 'weather') st.weather = inp.value as Settings['weather'];
         else if (k === 'peace') st.peace = inp.value as PeaceOption;
+        else if (k === 'fog') st.fog = inp.value === 'modern' ? 'modern' : 'classic';
         sum();
       }),
     );
@@ -527,6 +538,7 @@ function settingsHtml(st: Settings, page = false) {
         <div class="mm-kicker">Gameplay</div>
         <div class="mm-field"><span class="mm-lbl">Game speed</span>${seg('gameSpeed', 's', st.gameSpeed ?? 'normal', SPEED_OPTS, 'Game speed')}</div>
         <p class="note">Slow 0.75× · Normal · Fast 1.25×. The whole battle runs slower or faster, the day clock too.</p>
+        ${chk('autoDefend', st.autoDefend !== false, 'Auto-defend base', 'Idle units near the base engage attackers, then return')}
       </div>
       <div class="set-group">
         <div class="mm-kicker">Audio</div>
@@ -568,6 +580,7 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
       else if (k === 'showFps') st.showFps = inp.checked;
       else if (k === 'controls') st.controls = inp.value === 'simple' ? 'simple' : 'advanced';
       else if (k === 'quality') st.quality = inp.value as Settings['quality'];
+      else if (k === 'autoDefend') st.autoDefend = inp.checked;
       else if (k === 'gameSpeed') st.gameSpeed = inp.value === 'slow' || inp.value === 'fast' ? inp.value : 'normal';
       else if (k === 'sfx') st.sfx = Number(inp.value);
       else if (k === 'music') st.music = Number(inp.value);

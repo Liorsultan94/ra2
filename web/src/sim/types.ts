@@ -160,6 +160,14 @@ export type Order =
   | { type: 'enter'; target: number }
   | { type: 'deploy' };
 
+/**
+ * Fog of war rule (World option, the same for every player):
+ * 'classic' (Red Alert 2): once explored, ground stays revealed - terrain, structures and units there
+ * stay visible and targetable; only the black shroud of unexplored ground hides anything.
+ * 'modern': explored ground outside current sight is dimmed fog and hides enemy units.
+ */
+export type FogMode = 'classic' | 'modern';
+
 /** Unit stance (see orders.ts): how far a unit goes on its own to fight. */
 export type Stance = 'aggressive' | 'guard' | 'hold' | 'holdFire';
 
@@ -311,6 +319,11 @@ export interface Entity {
   queue: QueuedOrder[]; // waypoints / orders to run after the current one
   patrol: { ax: number; ay: number; bx: number; by: number } | null; // patrolling between a and b
   guardId: number; // friendly unit / building this unit escorts, else -1
+  orderAt: number; // tick of the owner's last explicit order to this unit (move / attack / stop ...), else -9999
+  hurtBy: number; // the enemy that last damaged this entity (its container for garrison / APC shots), else -1
+
+  // automatic base defence (see basedefense.ts)
+  defend: { x: number; y: number } | null; // pulled in to defend the base: the post it returns to afterwards
 
   // crushing / dodging (see crush.ts)
   dodge: DodgeState | null; // infantry: sidestepping a vehicle
@@ -355,6 +368,8 @@ export interface Player {
   sw: SuperweaponState;
   /** Repeat-build per production category: finished units are queued again. */
   repeat?: Partial<Record<Category, boolean>>;
+  /** Automatic base defence (basedefense.ts): idle units near the base engage attackers on their own. */
+  autoDefend: boolean;
 }
 
 export interface Projectile {
@@ -429,7 +444,9 @@ export type Command =
   /** Fire the player's superweapon at (x, y) (superweapons.ts). */
   | { type: 'superweapon'; x: number; y: number }
   /** Send the garrison out of an occupied civilian building (garrison.ts). */
-  | { type: 'evacuate'; id: number };
+  | { type: 'evacuate'; id: number }
+  /** Automatic base defence on / off for the issuing player (basedefense.ts). */
+  | { type: 'autoDefend'; on: boolean };
 
 export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
