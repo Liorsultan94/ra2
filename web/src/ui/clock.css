@@ -90,6 +90,56 @@
   color: #e2b06c;
 }
 
+/* battle conditions chip (sim/conditions.ts): icon + the sight / speed penalty */
+.hc-cond {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 1px;
+  padding: 2px 7px 2px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.32);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #cfe0ff;
+}
+.hc-cond.hidden {
+  display: none;
+}
+.hc-cond .ico {
+  width: 14px;
+  height: 14px;
+}
+.hc-cond .hc-c2 {
+  margin-left: 2px;
+  opacity: 0.8;
+}
+.hud-clock[data-cond='night'] .hc-cond {
+  color: #b9c8ff;
+}
+.hud-clock[data-cond='fog'] .hc-cond {
+  color: #d6dde6;
+}
+.hud-clock[data-cond='mud'] .hc-cond {
+  color: #d9b07a;
+}
+.hud-clock[data-cond='dust'] .hc-cond {
+  color: #e2b06c;
+}
+.hud-clock[data-cond='snow'] .hc-cond {
+  color: #e6f0ff;
+}
+.hud-clock[data-cond='rain'] .hc-cond {
+  color: #8ec5ff;
+}
+.view-wrap > .hud-clock .hc-cond {
+  font-size: 11px;
+  padding: 2px 6px 2px 4px;
+}
+
 /* tap / click: what the clock is */
 .hc-tip {
   position: absolute;
@@ -106,7 +156,9 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text);
-  white-space: nowrap;
+  white-space: pre;
+  text-align: right;
+  line-height: 1.45;
   pointer-events: none;
   opacity: 0;
   transform: translateY(-4px);

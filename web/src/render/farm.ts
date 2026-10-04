@@ -44,10 +44,10 @@ export function cropOf(m: GameMap, f: Field, k: number): Crop {
   }
   if (f.type === FieldType.Wheat) return hash2(k, 0, 44) < 0.3 ? 'stubble' : 'wheat';
   if (f.type === FieldType.Plowed) {
-    if (biome === 'desert') return r < 0.6 ? 'greenhouse' : r < 0.8 ? 'vineyard' : 'plain';
-    return r < 0.3 ? 'vineyard' : r < 0.5 ? 'greenhouse' : 'plain';
+    if (biome === 'desert') return r < (f.plot ? 0.75 : 0.6) ? 'greenhouse' : r < 0.85 ? 'vineyard' : 'plain';
+    return f.plot ? (r < 0.5 ? 'greenhouse' : 'vineyard') : r < 0.3 ? 'vineyard' : r < 0.5 ? 'greenhouse' : 'plain';
   }
-  if (f.type === FieldType.Green) return r < (biome === 'desert' ? 0.45 : 0.35) ? 'orchard' : 'plain';
+  if (f.type === FieldType.Green) return r < (f.plot ? 0.6 : biome === 'desert' ? 0.45 : 0.35) ? 'orchard' : 'plain';
   return 'plain';
 }
 

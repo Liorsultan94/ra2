@@ -1,4 +1,4 @@
-import { Tile, groundHeight, type GameMap } from '../sim/map';
+import { StructureKind, Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, makeRouter, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
@@ -316,6 +316,15 @@ export function buildBiomeLayout(m: GameMap): Layout {
   // the park paths count as tracks in the occupancy grid
   for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
   const pivots = biome === 'desert' ? findPivots(m, occ, R, pylons.lines, poles, wrecks) : [];
+  // small plots round the villages and farmsteads (render only: greenhouses, orchards, crops)
+  if (biome !== 'urban') {
+    const posts = [...pylons.lines.flat(), ...poles.flat(), ...wrecks.map((w) => v(w.x, w.y))];
+    const pick = (r: number) =>
+      biome === 'desert'
+        ? r < 0.4 ? FieldType.Plowed : r < 0.85 ? FieldType.Green : FieldType.Wheat
+        : r < 0.5 ? FieldType.Plowed : FieldType.Fallow;
+    fields.push(...villagePlots(m, fieldOk, markField, biome === 'desert' ? 26 : 14, pick, posts, edges));
+  }
   return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, pivots, occ, occRes: R });
 }
 
@@ -387,5 +396,54 @@ function findPivots(m: GameMap, occ: Uint8Array, R: number, lines: V2[][], poles
         mark(b);
       }
   }
+  return out;
+}
+
+/**
+ * Kitchen gardens, greenhouses and orchards round the villages: small plots next to the houses
+ * (render only), wherever a whole rectangle is clear (`fieldOk`: no roads, tracks, structures,
+ * trees, ore or steep ground; away from the bases). Deterministic.
+ */
+export function villagePlots(m: GameMap, fieldOk: (f: Field) => boolean, mark: (f: Field) => void, max: number, pick: (r: number) => FieldType, posts: V2[], edges?: Edge[]): Field[] {
+  const out: Field[] = [];
+  const houses = m.structures.filter((st) => st.kind !== StructureKind.Tower && st.kind !== StructureKind.WaterTower);
+  const dirs = [
+    [1, 0],
+    [0, 1],
+    [-1, 0],
+    [0, -1],
+    [1, 1],
+    [-1, 1],
+    [1, -1],
+    [-1, -1],
+  ];
+  houses.forEach((st, si) => {
+    let n = 0;
+    for (let k = 0; k < dirs.length && out.length < max && n < 2; k++) {
+      const [dx, dy] = dirs[(k + si) % dirs.length];
+      const along = hash2(si, k, 616) < 0.5;
+      const hl = 1.5 + hash2(si, k, 617) * 1.3;
+      const hw = 0.8 + hash2(si, k, 618) * 0.6;
+      const ex = along ? hl : hw;
+      const ey = along ? hw : hl;
+      const cx = st.x + st.w / 2 + dx * (st.w / 2 + 1.1 + ex);
+      const cy = st.y + st.h / 2 + dy * (st.h / 2 + 1.1 + ey);
+      const f: Field = { cx, cy, hl, hw, angle: along ? 0 : Math.PI / 2, type: pick(hash2(si, k, 619)), plot: true };
+      if (!fieldOk(f)) continue;
+      if (posts.some((p) => Math.abs(p.x - cx) < ex + 0.6 && Math.abs(p.y - cy) < ey + 0.6)) continue;
+      out.push(f);
+      mark(f);
+      n++;
+      // a garden fence along the far long side
+      if (edges && hash2(si, k, 620) < 0.6) {
+        const ca = Math.cos(f.angle);
+        const sa = Math.sin(f.angle);
+        const side = (along ? dy : dx) >= 0 ? 1 : -1;
+        const nx = -sa * (hw + 0.3) * side;
+        const ny = ca * (hw + 0.3) * side;
+        edges.push({ a: v(cx - ca * hl + nx, cy - sa * hl + ny), b: v(cx + ca * hl + nx, cy + sa * hl + ny), kind: 'fence' });
+      }
+    }
+  });
   return out;
 }

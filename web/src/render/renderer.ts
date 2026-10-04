@@ -18,6 +18,7 @@ import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
+import { reliefClearance } from './relief';
 import { Paradrop } from './paradrop';
 import { UnitLife } from './unitlife';
 import { DeployFx } from './deployfx';
@@ -949,7 +950,8 @@ export class GameRenderer {
     if (e.kind === 'unit' && unitDef(e.def).air) {
       const d = unitDef(e.def);
       const z = e.pz + (e.z - e.pz) * alpha;
-      h = Math.max(h, 0) + z + (d.kamikaze || d.fixedWing ? 0 : Math.sin(this.time * 1.7 + e.id) * 0.04);
+      // (relief.ts: climb over the render-only cliffs, fading out as a drone dives onto its target)
+      h = Math.max(h, 0) + z + reliefClearance(this.world.map, x, y) * Math.min(1, z * 2) + (d.kamikaze || d.fixedWing ? 0 : Math.sin(this.time * 1.7 + e.id) * 0.04);
     } else if (e.para || e.pz > 0) {
       // under a parachute canopy
       h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;

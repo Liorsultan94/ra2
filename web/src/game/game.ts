@@ -4,10 +4,11 @@ import { AIController, type Difficulty } from '../sim/ai';
 import { canGarrisonUnit, garrisonRoom } from '../sim/garrison';
 import { SW_INFO, type SwKind } from '../sim/specialdefs';
 import { SuperweaponAI } from '../sim/superweapons';
+import { SIDE } from '../sim/sideevents';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
@@ -64,6 +65,23 @@ export interface GameCallbacks {
 }
 
 type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove' | 'patrol' | 'guard';
+
+/** Radio lines when a side event starts (sim/sideevents.ts). */
+const SIDE_SAY: Record<Extract<SimEvent, { t: 'side' }>['kind'], string> = {
+  crash: 'Aircraft down in the combat zone. Send infantry to recover the intel',
+  supply: 'Supply drop inbound. Secure the crates',
+  rescue: 'Civilians trapped in a burning building. Send infantry',
+  convoy: 'Neutral supply convoy crossing the area. Capture or destroy it',
+};
+/** Radio lines when the battle conditions change (sim/conditions.ts): [starts, ends]. */
+const COND_SAY: Record<Extract<SimEvent, { t: 'conditions' }>['kind'], [string, string]> = {
+  night: ['Night falls. Visibility reduced', 'Dawn breaking. Visibility restored'],
+  fog: ['Fog rolling in. Visibility reduced', 'Fog lifting'],
+  dust: ['Dust storm. Visibility reduced', 'Dust storm passing'],
+  mud: ['Ground turning to mud. Vehicles slowed off-road, use the roads', 'Ground drying out'],
+  rain: ['Heavy rain. Visibility reduced', 'Rain easing'],
+  snow: ['Snow cover. Vehicles slowed off-road', 'Snow melting'],
+};
 
 const PLAYER_COLOR = 0x2f8fff;
 const ENEMY_COLOR = 0xe8352b;
@@ -174,6 +192,16 @@ export class Game {
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
+    // battle conditions (sim/conditions.ts): the sky on screen becomes battle rules. The sim gets the same
+    // time-of-day / weather settings and weather seed as the renderer (render/atmos.ts), so both always agree.
+    {
+      const a = this.renderer.atmos;
+      const seed = (a.wxCycle as unknown as { seed?: number } | null)?.seed;
+      this.world.cond.configure({ tod: a.cfg.tod, weather: a.cfg.weather, startHour: a.startHour, seed: seed === undefined ? undefined : seed >>> 0 });
+      // side events (sim/sideevents.ts): skirmishes; ?events=0 turns them off, ?events=fast brings the first one at 0:20
+      this.world.side.enabled = !attract && !/[?&]events=0\b/.test(location.search);
+      if (/[?&]events=fast\b/.test(location.search)) this.world.side.next = TPS * 20;
+    }
     // positional audio: the camera is the listener (src/audio/scene.ts)
     this.audio.setNation(attract ? null : opts.faction);
     this.audioScene = new AudioScene(this.audio, this.world, this.renderer, (x, y) => this.visibleToLocal(x, y), !attract);
@@ -742,10 +770,41 @@ export class Game {
       case 'sold':
         if (mine) this.sfx('sell');
         break;
+      case 'side':
+        this.onSideEvent(ev);
+        break;
+      case 'conditions': {
+        const [on, off] = COND_SAY[ev.kind];
+        this.say(ev.on ? on : off, 'info');
+        break;
+      }
       case 'gameOver':
         this.finish(ev.winner === this.local);
         break;
     }
+  }
+
+  /** Side events (sim/sideevents.ts): radio lines; the HUD draws the chips, markers and radar pings itself. */
+  private onSideEvent(ev: Extract<SimEvent, { t: 'side' }>) {
+    if (this.local < 0) return;
+    const me = ev.owner === this.local;
+    const foe = ev.owner >= 0 && !me;
+    const cash = ev.reward ? ` +$${ev.reward}` : '';
+    if (ev.phase === 'start') {
+      this.say(SIDE_SAY[ev.kind], 'info');
+      this.sfx('alarm', undefined, undefined, 0.35);
+    } else if (ev.phase === 'claim') {
+      if (ev.kind === 'crash') this.say(me ? 'Intel recovered: enemy positions revealed' : 'Enemy recovered the flight recorder', me ? 'good' : 'warn');
+      else if (ev.kind === 'supply') this.say(me ? `Supply crate secured${cash}` : 'Enemy secured a supply crate', me ? 'good' : 'warn');
+      else if (ev.kind === 'rescue') this.say(me ? `Civilians rescued${cash}` : 'Enemy rescued the civilians', me ? 'good' : 'warn');
+      else if (ev.kind === 'convoy') this.say(me ? (ev.reward === SIDE.BOUNTY ? `Convoy truck destroyed${cash}` : `Convoy truck captured${cash}`) : 'Enemy seized a convoy truck', me ? 'good' : 'warn');
+      if (me) this.sfx('sell', undefined, undefined, 0.6);
+    } else if (ev.phase === 'fail') {
+      if (ev.kind === 'rescue') this.say('The burning building has collapsed', 'info');
+      else if (ev.kind === 'convoy') this.say('The convoy has left the area', 'info');
+      else if (ev.kind === 'crash') this.say('Crash site lost', 'info');
+    }
+    void foe;
   }
 
   private lastSay = new Map<string, number>();
@@ -1198,6 +1257,13 @@ export class Game {
         });
         if (target.owner >= 0 && attackers.length) {
           return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id, queue: this.queueing() }, target, true) };
+        }
+        // side events (sim/sideevents.ts): a tap on a convoy truck / wreck / crate sends the units to it (capture,
+        // recover, collect); Ctrl + click shoots a convoy truck instead (bounty)
+        const evProp = target.kind === 'unit' && target.owner < 0 ? unitDef(target.def).event : undefined;
+        if (evProp) {
+          if (evProp === 'truck' && ctrl && attackers.length) return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id }, target, true) };
+          return { cursor: 'move', run: () => this.order({ type: 'move', ids: units.map((u) => u.id), x: target.x, y: target.y, queue: this.queueing() }, null, false, { x: target.x, y: target.y }) };
         }
         if (isBridge(target)) {
           // bridges: Ctrl force-fires heavy ordnance at the deck; otherwise the deck is just ground to move onto

@@ -1,4 +1,5 @@
 import type { ClockState } from '../render/atmos';
+import type { CondLine } from '../sim/conditions';
 import { icon } from './icons';
 import './clock.css';
 
@@ -10,6 +11,11 @@ import './clock.css';
  * The live day (render/atmos.ts) runs 1 real minute = 1 game hour at 1x speed, so
  * the minutes tick about once a real second. A fixed time of day shows its hour,
  * frozen and dimmed (the weather icon still follows dynamic weather).
+ *
+ * Battle conditions (sim/conditions.ts) ride next to it: a small chip with the
+ * condition that matters most ("moon -35%": night sight, "mud -20%": vehicles
+ * off-road, fog, snow, dust) and a second icon when two apply; the tap tip lists
+ * them in full ("Night: sight -35% (night vision unaffected)").
  */
 
 const WX_LABEL: Record<ClockState['weather'], string> = { clear: 'Clear', cloudy: 'Cloudy', rain: 'Rain', storm: 'Thunderstorm', snow: 'Snow', dust: 'Dust storm' };
@@ -18,6 +24,13 @@ const SKY_LABEL: Record<ClockState['icon'], string> = { sunrise: 'Sunrise', sun:
 export interface ClockSource {
   clock(): ClockState;
 }
+
+/** Battle conditions (World.cond). */
+export interface ConditionSource {
+  summary(): CondLine[];
+}
+
+const COND_ICON: Record<CondLine['kind'], string> = { night: 'moon', fog: 'fog', dust: 'dust', mud: 'mud', rain: 'rain', snow: 'snow' };
 
 export class HudClock {
   readonly el: HTMLButtonElement;
@@ -32,17 +45,21 @@ export class HudClock {
   private acc = 1;
   private tipTimer = 0;
   private state: ClockState | null = null;
+  private cond: HTMLElement;
+  private condKey = '';
+  private lines: CondLine[] = [];
 
   constructor(parent: HTMLElement) {
     const b = (this.el = document.createElement('button'));
     b.type = 'button';
     b.className = 'hud-clock';
-    b.innerHTML = '<span class="hc-day hidden"></span><span class="hc-sky"></span><span class="hc-time">--:--</span><span class="hc-wx hidden"></span><span class="hc-tip" role="tooltip"></span>';
+    b.innerHTML = '<span class="hc-day hidden"></span><span class="hc-sky"></span><span class="hc-time">--:--</span><span class="hc-wx hidden"></span><span class="hc-cond hidden"></span><span class="hc-tip" role="tooltip"></span>';
     this.day = b.querySelector('.hc-day')!;
     this.sky = b.querySelector('.hc-sky')!;
     this.time = b.querySelector('.hc-time')!;
     this.wx = b.querySelector('.hc-wx')!;
     this.tip = b.querySelector('.hc-tip')!;
+    this.cond = b.querySelector('.hc-cond')!;
     // a tap on the clock never reaches the battlefield
     b.addEventListener('pointerdown', (e) => e.stopPropagation());
     b.addEventListener('click', (e) => {
@@ -54,8 +71,8 @@ export class HudClock {
 
   private tipText(c: ClockState): string {
     const wx = WX_LABEL[c.weather];
-    if (!c.live) return `Fixed time of day · ${SKY_LABEL[c.icon]} · ${wx}`;
-    return `Live day: 1 min = 1 hour · Day ${c.day} · ${wx}`;
+    const head = !c.live ? `Fixed time of day · ${SKY_LABEL[c.icon]} · ${wx}` : `Live day: 1 min = 1 hour · Day ${c.day} · ${wx}`;
+    return [head, ...this.lines.map((l) => l.text)].join('\n');
   }
 
   private showTip(on: boolean) {
@@ -65,10 +82,19 @@ export class HudClock {
   }
 
   /** Refresh (cheap: re-reads the source a few times per second, touches the DOM only on a change). */
-  update(dt: number, src: ClockSource | null | undefined) {
+  update(dt: number, src: ClockSource | null | undefined, conditions?: ConditionSource | null) {
     this.acc += dt;
     if (!src || this.acc < 0.1) return;
     this.acc = 0;
+    const lines = (this.lines = conditions?.summary() ?? []);
+    const ck = lines.map((l) => `${l.kind}${l.short}`).join('|');
+    if (ck !== this.condKey) {
+      this.condKey = ck;
+      const [a, b] = lines;
+      this.cond.innerHTML = a ? `${icon(COND_ICON[a.kind])}<span>${a.short}</span>${b ? icon(COND_ICON[b.kind], 'hc-c2') : ''}` : '';
+      this.cond.classList.toggle('hidden', !a);
+      this.el.dataset.cond = a?.kind ?? '';
+    }
     const c = src.clock();
     this.state = c;
     const key = `${c.text}|${c.day}|${c.live}`;

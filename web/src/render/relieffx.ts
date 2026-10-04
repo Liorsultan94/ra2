@@ -93,7 +93,8 @@ export function buildSpray(emitters: SprayEmitter[], fog: FogOfWar, wxLight: { v
         vec3 right = vec3( viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0] );
         vec3 up = vec3( viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1] );
         vec3 wp = c + ( right * position.x + up * position.y ) * s;
-        vA = smoothstep( 0.0, 0.12, t ) * ( 1.0 - t ) * ( 1.0 - t );
+        // frozen water throws no spray
+        vA = smoothstep( 0.0, 0.12, t ) * ( 1.0 - t ) * ( 1.0 - t ) * ( 1.0 - wState.w * 0.9 );
         vSeed = aPar.w;
         vUv = uv;
         vWorld = wp;

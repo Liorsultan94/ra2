@@ -25,7 +25,7 @@ import { rockTexture } from './terraintex';
  *    slope), a ridged noise crest turns the frontline / winter ridges into
  *    jagged ridge lines, a wiggled contour cuts gullies and spurs into the
  *    faces;
- *  - one merged mesh per 16 x 16 tile sector (frustum culled), a half
+ *  - one merged mesh per 24 x 24 tile sector (frustum culled), a half
  *    resolution far LOD, smooth normals;
  *  - triplanar photoscanned rock (the CC0 ground stack's rock layers:
  *    sandstone in the desert, weathered grey rock elsewhere on the faces, the
@@ -40,12 +40,14 @@ export function reliefEnabled(): boolean {
   return !(typeof location !== 'undefined' && /[?&]relief=0\b/.test(location.search));
 }
 
+const ON = reliefEnabled();
+
 /** Field samples per tile. */
 export const RELIEF_F = 4;
 /** How far the relief sinks under the ground at the rock's border. */
 const SINK = 0.08;
 /** Sector size (tiles) of the merged meshes. */
-const SECTOR = 16;
+const SECTOR = 24;
 
 interface Style {
   /** Width (tiles) of the cliff ramp. */
@@ -54,6 +56,8 @@ interface Style {
   crest: number;
   /** Raised lip at the cliff edge. */
   rim: number;
+  /** Extra height of the rock wall over the local top (the ridges' faces). */
+  wall: number;
   /** Ledges on the cliff (0 = one face). */
   terraces: number;
   /** Contour wiggle (gullies / spurs), tiles. */
@@ -61,10 +65,10 @@ interface Style {
 }
 
 const STYLE: Record<Biome, Style> = {
-  temperate: { ramp: 0.42, crest: 0.62, rim: 0.05, terraces: 0, wiggle: 0.5 },
-  desert: { ramp: 0.58, crest: 0.05, rim: 0.07, terraces: 2, wiggle: 0.62 },
-  winter: { ramp: 0.42, crest: 0.58, rim: 0.05, terraces: 1, wiggle: 0.5 },
-  urban: { ramp: 0.42, crest: 0.5, rim: 0.05, terraces: 0, wiggle: 0.5 },
+  temperate: { ramp: 0.3, crest: 0.5, rim: 0.05, wall: 0.32, terraces: 0, wiggle: 0.5 },
+  desert: { ramp: 0.34, crest: 0.05, rim: 0.07, wall: 0.08, terraces: 2, wiggle: 0.62 },
+  winter: { ramp: 0.3, crest: 0.46, rim: 0.05, wall: 0.3, terraces: 1, wiggle: 0.5 },
+  urban: { ramp: 0.3, crest: 0.4, rim: 0.05, wall: 0.3, terraces: 0, wiggle: 0.5 },
 };
 
 export interface ReliefField {
@@ -82,6 +86,8 @@ export interface ReliefField {
   /** Height of the cliff ramp 0..1 per vertex (0 at the foot, 1 on top). */
   readonly p: Float32Array;
   readonly count: number;
+  /** Smooth clearance over the relief per tile corner ((w + 1) x (h + 1)): how much aircraft climb to clear it. */
+  readonly clr: Float32Array;
 }
 
 const smooth = (e0: number, e1: number, x: number) => {
@@ -196,8 +202,9 @@ export function reliefField(m: GameMap): ReliefField {
   const jx = new Float32Array(N);
   const jz = new Float32Array(N);
   const p = new Float32Array(N);
+  const clr = new Float32Array((m.w + 1) * (m.h + 1));
   if (!any) {
-    rf = { F, NW, NH, H, d, jx, jz, p, count: 0 };
+    rf = { F, NW, NH, H, d, jx, jz, p, count: 0, clr };
     fields.set(m, rf);
     return rf;
   }
@@ -222,9 +229,8 @@ export function reliefField(m: GameMap): ReliefField {
       const k = j * NW + i;
       d[k] = dist[k] / F;
       if (d[k] > 0) count++;
-      // only the rock and its border need the ground height
-      if (d[k] > 0 || dist[Math.min(N - 1, k + 1)] > 0 || dist[Math.max(0, k - 1)] > 0 || dist[Math.min(N - 1, k + NW)] > 0 || dist[Math.max(0, k - NW)] > 0)
-        G[k] = surfaceHeight(m, i / F, j / F);
+      // every corner of a rock cell needs the ground height (the meshes only cover rock tiles)
+      if (cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
     }
   const st = STYLE[m.biome] ?? STYLE.temperate;
   // local top: the highest rock ground nearby (the sim's crest / mesa top), a separable max filter
@@ -271,7 +277,7 @@ export function reliefField(m: GameMap): ReliefField {
       const crest = st.crest * (0.3 + 0.7 * rn * rn) * smooth(0.2, 0.95, dn);
       const crag = (valueNoise(x * 3.3, y * 3.3, 829) - 0.5) * 0.12 * smooth(0.12, 0.4, dn);
       const rim = st.rim * smooth(0.25, 0.55, dn);
-      H[k] = G[k] + (tk + rim - G[k]) * pr + crest + crag;
+      H[k] = G[k] + (tk + rim + st.wall - G[k]) * pr + crest + crag;
       p[k] = pr;
       // horizontal jitter off the border (keeps it inside the rock)
       const jk = 0.09 * smooth(0.18, 0.45, dk);
@@ -280,9 +286,45 @@ export function reliefField(m: GameMap): ReliefField {
         jz[k] = (valueNoise(x * 2.1, y * 2.1, 843) - 0.5) * 2 * jk;
       }
     }
-  rf = { F, NW, NH, H, d, jx, jz, p, count };
+  // aircraft clearance: the relief's lift over the sim ground, dilated by a tile and smoothed so they climb gently
+  const TW = m.w + 1;
+  const TH = m.h + 1;
+  for (let k = 0; k < N; k++) {
+    if (d[k] <= 0) continue;
+    const lift = H[k] - G[k];
+    if (lift <= 0) continue;
+    const i = k % NW;
+    const j = (k - i) / NW;
+    const tx0 = Math.max(0, Math.floor(i / F - 1.2));
+    const tx1 = Math.min(TW - 1, Math.ceil(i / F + 1.2));
+    const ty0 = Math.max(0, Math.floor(j / F - 1.2));
+    const ty1 = Math.min(TH - 1, Math.ceil(j / F + 1.2));
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) if (clr[ty * TW + tx] < lift) clr[ty * TW + tx] = lift;
+  }
+  boxBlur(clr, TW, TH, 1);
+  rf = { F, NW, NH, H, d, jx, jz, p, count, clr };
   fields.set(m, rf);
   return rf;
+}
+
+/** How far aircraft rise over the relief at (x, y) (smooth; 0 away from the rock). renderer.ts adds it to their altitude. */
+export function reliefClearance(m: GameMap, x: number, y: number): number {
+  if (!ON) return 0;
+  const rf = reliefField(m);
+  if (!rf.count) return 0;
+  const TW = m.w + 1;
+  const fx = Math.max(0, Math.min(m.w - 0.001, x));
+  const fy = Math.max(0, Math.min(m.h - 0.001, y));
+  const i = Math.floor(fx);
+  const j = Math.floor(fy);
+  const tx = fx - i;
+  const ty = fy - j;
+  const c = rf.clr;
+  const a = c[j * TW + i];
+  const b = c[j * TW + i + 1];
+  const e = c[(j + 1) * TW + i];
+  const f = c[(j + 1) * TW + i + 1];
+  return a + (b - a) * tx + (e - a) * ty + (a - b - e + f) * tx * ty;
 }
 
 /**

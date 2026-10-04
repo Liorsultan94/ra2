@@ -338,6 +338,12 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         // chimney
         const cx2 = (h(4) - 0.5) * lx * 0.6;
         boxAt(walls, 0.12, 0.3, 0.12, L(trs(cx2, hw + rise * 0.75, -dz * 0.18)), wallC.clone().multiplyScalar(0.8));
+        // a TV aerial on the chimney, a satellite dish under the eaves on some
+        if (h(18) < 0.45) {
+          boxAt(metal, 0.008, 0.3, 0.008, L(trs(cx2, hw + rise * 0.75 + 0.27, -dz * 0.18)), new THREE.Color(0.4, 0.42, 0.44));
+          for (let k = 0; k < 3; k++) boxAt(metal, 0.12 - k * 0.025, 0.005, 0.005, L(trs(cx2, hw + rise * 0.75 + 0.38 - k * 0.04, -dz * 0.18, 0.5)), new THREE.Color(0.45, 0.47, 0.48));
+        }
+        if (h(19) < 0.35) metal.add(new THREE.SphereGeometry(0.05, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2.8).toNonIndexed(), L(trs(lx / 2 - 0.12, hw - 0.08, dz / 2 + 0.05, 0, 1.2)), null, new THREE.Color(0.88, 0.88, 0.86));
         // a lean-to shed or garage on some houses
         if (h(5) < 0.5) {
           house(0.45, 0.6, 0.28, 0.4, wood, new THREE.Color(0.55, 0.45, 0.35), roofC.clone().multiplyScalar(0.8), 1.5);

@@ -1868,98 +1868,6 @@ kbd {
     opacity: 0;
   }
 }
-
-.title-screen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 30px;
-  text-align: center;
-}
-.logo {
-  position: relative;
-  font-family: var(--font-d);
-  font-weight: 700;
-  line-height: 0.86;
-  text-transform: uppercase;
-}
-/* the boot-splash emblem settles here, behind the wordmark (src/ui/splash.ts) */
-.logo-emblem {
-  position: absolute;
-  z-index: -1;
-  left: 50%;
-  top: calc(clamp(56px, 13vw, 132px) * 0.86);
-  width: calc(clamp(56px, 13vw, 132px) * 2.05);
-  aspect-ratio: 1;
-  transform: translate(-50%, -50%);
-  opacity: 0.22;
-  pointer-events: none;
-}
-.logo-emblem svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-/* title intro: hidden while the splash lockup flies in, then a short crossfade */
-.title-screen .logo > *,
-.title-screen .menu-buttons,
-.title-screen .menu-foot {
-  transition:
-    opacity 0.45s ease,
-    transform 0.55s var(--ease);
-}
-.title-screen .menu-buttons {
-  transition-delay: 0.1s;
-}
-.title-screen .menu-foot {
-  transition-delay: 0.2s;
-}
-.title-screen.intro .logo > *,
-.title-screen.intro .menu-buttons,
-.title-screen.intro .menu-foot {
-  opacity: 0;
-  transition: none;
-}
-.title-screen.intro .menu-buttons {
-  transform: translateY(18px);
-}
-.logo-top,
-.logo-bottom {
-  font-size: clamp(56px, 13vw, 132px);
-  letter-spacing: 0.08em;
-  margin-right: -0.08em;
-  color: #f3f5f7;
-  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55);
-}
-.logo-bottom {
-  color: var(--brand);
-}
-.logo-sub {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 14px;
-  font-family: var(--font);
-  font-size: clamp(10px, 1.6vw, 13px);
-  font-weight: 600;
-  letter-spacing: 0.38em;
-  color: rgba(232, 236, 240, 0.78);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
-}
-.logo-sub::before,
-.logo-sub::after {
-  content: '';
-  width: 28px;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.35);
-}
-.menu-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(360px, 86vw);
-}
 .mbtn {
   position: relative;
   display: flex;
@@ -2013,30 +1921,6 @@ kbd {
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--muted);
-}
-/* main menu: Quick Battle shows the nation it starts with */
-.mbtn small.qb-nation {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px 2px 3px;
-  background: rgba(0, 0, 0, 0.22);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #fff;
-  letter-spacing: 0.04em;
-}
-.mbtn small.qb-nation .flag {
-  width: 18px;
-  height: 12px;
-  border-radius: 2px;
-}
-.menu-foot {
-  max-width: 480px;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.5;
-  color: rgba(232, 236, 240, 0.55);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
 
 .panel {
@@ -2110,107 +1994,6 @@ kbd {
 .panel .row .mbtn {
   min-width: 140px;
 }
-
-/* skirmish nation cards */
-.fgrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-}
-.fcard {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: stretch;
-  gap: 2px;
-  text-align: left;
-  padding: 12px 14px;
-  background: var(--fill);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: border-color var(--dur), background var(--dur), box-shadow var(--dur);
-}
-.fcard:hover {
-  background: var(--fill-2);
-  border-color: var(--line-3);
-}
-.fcard.sel {
-  background: color-mix(in srgb, var(--brand) 9%, rgba(255, 255, 255, 0.03));
-  border-color: color-mix(in srgb, var(--brand) 75%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 75%, transparent);
-}
-.fc-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-d);
-  font-size: 19px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.fc-head b {
-  font-weight: 600;
-}
-.fcard.sel .fc-head::after {
-  content: '';
-  margin-left: auto;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--brand) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center / 12px no-repeat;
-}
-.fc-doc {
-  margin: 4px 0 2px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: #8fcaff;
-}
-.fcard ul {
-  margin: 4px 0 6px;
-  padding-left: 16px;
-  font-size: 12.5px;
-  font-weight: 400;
-  line-height: 1.45;
-  color: #c4ccd3;
-}
-.fcard li::marker {
-  color: var(--dim);
-}
-.fc-sig {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.fc-sig span {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  background: var(--fill-2);
-  border: 1px solid var(--line);
-  color: #e3d3a8;
-}
-
-/* form controls */
-.opts {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px 12px;
-  margin-top: 16px;
-}
-.opts label,
-.settings label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-family: var(--font-d);
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
 select {
   -webkit-appearance: none;
   appearance: none;
@@ -2252,32 +2035,6 @@ input[type='checkbox'] {
   height: 18px;
   margin: 0;
   accent-color: var(--brand);
-  cursor: pointer;
-}
-.settings {
-  width: min(480px, 94vw);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.settings h2 {
-  margin-bottom: 2px;
-}
-.settings label.chk {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 6px 12px;
-  background: var(--fill);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  font-family: var(--font);
-  font-size: 13.5px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text);
   cursor: pointer;
 }
 .note {
@@ -2353,66 +2110,6 @@ input[type='checkbox'] {
 .end .row {
   justify-content: center;
 }
-
-/* skirmish setup: keep options and buttons visible, scroll the nation list */
-.panel.skirmish {
-  display: flex;
-  flex-direction: column;
-}
-.skirmish .fgrid {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
-  padding: 2px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
-}
-.skirmish h2 {
-  font-size: 22px;
-}
-
-/* phones in landscape: title left, buttons right, so the whole title screen fits the height */
-@media (max-height: 560px) and (orientation: landscape) {
-  .title-screen {
-    --lf: clamp(40px, 16vh, 84px);
-    flex-flow: row wrap;
-    justify-content: center;
-    align-items: center;
-    gap: 10px 7vw;
-  }
-  .title-screen .logo-top,
-  .title-screen .logo-bottom {
-    font-size: var(--lf);
-  }
-  .title-screen .logo-emblem {
-    top: calc(var(--lf) * 0.86);
-    width: calc(var(--lf) * 2.05);
-  }
-  .title-screen .logo-sub {
-    margin-top: 10px;
-    font-size: 9.5px;
-    letter-spacing: 0.26em;
-  }
-  .title-screen .logo-sub::before,
-  .title-screen .logo-sub::after {
-    width: 14px;
-  }
-  .title-screen .menu-buttons {
-    width: min(320px, 42vw);
-    gap: 7px;
-  }
-  .title-screen .mbtn {
-    min-height: 46px;
-    padding: 6px 16px;
-    font-size: 17px;
-  }
-  .title-screen .menu-foot {
-    flex-basis: 100%;
-    max-width: none;
-    font-size: 10.5px;
-  }
-}
 @media (max-height: 560px) {
   .panel {
     padding: 12px 14px;
@@ -2421,91 +2118,13 @@ input[type='checkbox'] {
   .panel h2 {
     margin-bottom: 8px;
   }
-  .fcard ul {
-    display: none;
-  }
-  .opts {
-    margin-top: 10px;
-  }
   .panel .row {
     margin-top: 10px;
-  }
-  /* skirmish setup on phones: every nation visible at once, the options in one row, Deploy always on screen */
-  .skirmish h2 {
-    margin-bottom: 8px;
-    font-size: 17px;
-  }
-  .skirmish .fgrid {
-    grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
-    gap: 6px;
-  }
-  .skirmish .fcard {
-    justify-content: center;
-    min-height: 46px;
-    padding: 7px 11px;
-    border-radius: 10px;
-  }
-  .skirmish .fc-head {
-    font-size: 16px;
-  }
-  .skirmish .fc-doc,
-  .skirmish .fc-sig {
-    display: none;
-  }
-  .skirmish .fcard.sel .fc-doc {
-    display: block;
-    margin: 2px 0 0;
-    font-size: 11px;
-    line-height: 1.25;
-  }
-  .skirmish .opts {
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 6px 8px;
-  }
-  /* the only map: no need to show the (disabled) picker on a small screen */
-  .skirmish .opts label:has(select:disabled) {
-    display: none;
-  }
-  .skirmish .opts label {
-    gap: 4px;
-    font-size: 11px;
-  }
-  .skirmish .opts select {
-    min-height: 40px;
-    font-size: 13.5px;
-  }
-  .skirmish .row .mbtn {
-    min-height: 46px;
   }
 }
 
 /* settings on phones (landscape): two columns so everything fits without scrolling far */
 @media (max-height: 560px) and (orientation: landscape) {
-  .settings {
-    width: min(820px, 96vw);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 14px;
-    align-items: start;
-  }
-  .settings h2,
-  .settings .note,
-  .settings .row {
-    grid-column: 1 / -1;
-  }
-  .settings h2 {
-    margin-bottom: 0;
-  }
-  .settings label {
-    font-size: 11px;
-  }
-  .settings label.chk {
-    min-height: 44px;
-    font-size: 12.5px;
-  }
-  .settings select {
-    min-height: 44px;
-  }
   .pause {
     width: min(340px, 92vw);
   }
@@ -2526,18 +2145,3 @@ input[type='checkbox'] {
   }
 }
 
-/* settings: the Back button stays in reach while the list scrolls */
-.settings .row {
-  position: sticky;
-  bottom: -20px;
-  margin: 6px -24px -20px;
-  padding: 12px 24px 16px;
-  background: linear-gradient(180deg, rgba(11, 14, 19, 0), rgba(11, 14, 19, 0.96) 35%);
-}
-@media (max-height: 560px) {
-  .settings .row {
-    bottom: -12px;
-    margin: 4px -14px -12px;
-    padding: 10px 14px 10px;
-  }
-}

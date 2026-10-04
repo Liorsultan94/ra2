@@ -88,7 +88,7 @@ type Px = (u: number, v: number) => [number, number, number, number];
 function craterPx(seed: number, oblique: number): Px {
   // clods: random blobs on the ejecta apron
   const clods: [number, number, number][] = [];
-  for (let i = 0; i < 46; i++) {
+  for (let i = 0; i < 70; i++) {
     const a = hash(i, 1, seed) * Math.PI * 2;
     const bias = 1 + oblique * Math.cos(a - 0.6);
     const r = (0.48 + Math.pow(hash(i, 2, seed), 1.6) * 0.42) * Math.min(1.05, 0.85 + 0.2 * bias);
@@ -104,8 +104,9 @@ function craterPx(seed: number, oblique: number): Px {
     const rim = gauss(r - R - 0.03, 0.085) * (0.75 + 0.5 * fbm(u * 6, v * 6, seed + 5));
     // ejecta rays (an oblique hit throws them to one side)
     const bias = 1 + oblique * Math.cos(a - 0.6);
-    const ray = Math.pow(anoise(a, 9, seed + 2), 2.2) * 2.2;
-    const apron = sstep(0.98 * Math.min(1.05, 0.62 + 0.3 * bias), 0.42, r0) * (0.55 + 0.45 * ray);
+    const ray = Math.min(1, Math.pow(anoise(a, 9, seed + 2) * 1.6, 4) * 1.2);
+    const reach = Math.min(1.02, (0.6 + 0.32 * bias) * (0.8 + 0.35 * ray));
+    const apron = Math.pow(sstep(reach, 0.42, r0), 0.8) * (0.35 + 0.65 * ray);
     let soil = Math.max(bowl > 0 ? 0.85 : 0, sstep(0.55, 0.38, r), apron * (0.6 + 0.4 * fbm(u * 9, v * 9, seed + 7)));
     let rimH = rim;
     for (const [cx, cy, cr] of clods) {

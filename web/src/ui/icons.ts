@@ -43,6 +43,9 @@ const P: Record<string, string> = {
   storm: '<path d="M7.2 14.5h10.1a3.7 3.7 0 0 0 .3-7.4 5.3 5.3 0 0 0-10.2-1.2 4.3 4.3 0 0 0-.2 8.6z"/><path d="M13 15.5l-2.5 3.5h3.2l-2.2 3.5"/>',
   snow: '<path d="M7.2 14.5h10.1a3.7 3.7 0 0 0 .3-7.4 5.3 5.3 0 0 0-10.2-1.2 4.3 4.3 0 0 0-.2 8.6z"/><path d="M8 17.8v.1M12 18.6v.1M16 17.8v.1M10 21.2v.1M14 21.2v.1" stroke-width="2.6"/>',
   dust: '<path d="M3 8.5h10.5a2.6 2.6 0 1 0-2.6-2.6"/><path d="M3 13h15.5a2.6 2.6 0 1 1-2.6 2.6"/><path d="M3 17.5h7"/><path d="M19.5 7.5v.1M21 11v.1M13.5 20v.1" stroke-width="2.4"/>',
+  // battle conditions (sim/conditions.ts): fog banks, mud (tyre tracks in the wet)
+  fog: '<path d="M3 8h13M6 12h15M3 16h14M7 20h10"/>',
+  mud: '<path d="M3 17c2.2-1.6 4.4 1.6 6.6 0s4.4-1.6 6.6 0 3.4 1.2 4.8.2"/><path d="M7 4l-1.6 9M10.5 4l-1.6 9M14.5 4l1.6 9M18 4l1.6 9"/>',
 };
 
 export type IconName = keyof typeof P;

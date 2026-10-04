@@ -1,6 +1,6 @@
 import { Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
-import { buildBiomeLayout } from './biomelayout';
+import { buildBiomeLayout, villagePlots } from './biomelayout';
 import { finishRoadLayout, prepareRoadNet, setLayoutBuilder } from './ambient/clearance';
 
 /*
@@ -61,6 +61,8 @@ export interface Field {
   hw: number;
   angle: number; // row direction
   type: FieldType;
+  /** A small plot by a village house (render/farm.ts favours gardens, greenhouses and orchards there). */
+  plot?: boolean;
 }
 
 export interface Edge {
@@ -454,6 +456,19 @@ function buildLayoutOnce(m: GameMap): Layout {
     }
   }
 
+  // kitchen gardens, orchards and greenhouses round the village houses (render only)
+  const markPlot = (g: Field) => {
+    const ca = Math.cos(g.angle);
+    const sa = Math.sin(g.angle);
+    for (let a = -g.hl - 0.3; a <= g.hl + 0.3; a += 0.2)
+      for (let b = -g.hw - 0.3; b <= g.hw + 0.3; b += 0.2) {
+        const ix = Math.floor((g.cx + ca * a - sa * b) * R);
+        const iy = Math.floor((g.cy + sa * a + ca * b) * R);
+        if (ix >= 0 && iy >= 0 && ix < W * R && iy < H * R) occ[iy * W * R + ix] |= OCC_FIELD;
+      }
+  };
+  const posts = [...pylons.lines.flat(), ...poles.flat(), ...wrecks.map((w) => v(w.x, w.y))];
+  fields.push(...villagePlots(m, fieldOk, markPlot, 22, (r) => (r < 0.35 ? FieldType.Wheat : r < 0.65 ? FieldType.Plowed : FieldType.Green), posts, edges));
   return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R });
 }
 
