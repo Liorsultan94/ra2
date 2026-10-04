@@ -37,7 +37,7 @@ describe('night lights (render/night.ts)', () => {
     expect(sedan.len).toBeCloseTo(0.5 * CAR_SCALE, 6);
     n.carLight(6, 0, 5, 0, 1, sedan.len);
     const big = n.carBeam(1)!;
-    const s = sedan.len / CAR_LIGHT_REF_LEN;
+    const s = Math.sqrt(sedan.len / CAR_LIGHT_REF_LEN); // pools grow with sqrt(size) (no white wash in queues)
     expect(big.len).toBeCloseTo(ref.len * s, 5);
     expect(big.wid).toBeCloseTo(ref.wid * s, 5);
     expect(big.ahead).toBeCloseTo(big.len / 2, 5);

@@ -224,7 +224,7 @@ export class NightLights {
   /** Beam pool of a queued civilian car (tests / debug): centre offset ahead of the bumper, length, width. */
   carBeam(i: number): { ahead: number; len: number; wid: number } | null {
     if (i < 0 || i >= this.nCars) return null;
-    const s = this.cars[i * CAR_STRIDE + 5];
+    const s = Math.sqrt(this.cars[i * CAR_STRIDE + 5]);
     return { ahead: CAR_BEAM_LEN * 0.5 * s, len: CAR_BEAM_LEN * s, wid: CAR_BEAM_WID * s };
   }
 
@@ -450,13 +450,14 @@ export class NightLights {
       const z = cq[o + 2];
       const yaw = cq[o + 3];
       const k = cq[o + 4] * dk;
-      const s = cq[o + 5];
+      // pools grow with the car's size but slower (sqrt) and dimmer, or a queue of cars merges into one white wash
+      const s = Math.sqrt(cq[o + 5]);
       const fx = Math.cos(yaw);
       const fz = -Math.sin(yaw);
-      // the beam starts at the bumper; pool and cone scale with the car (the same light per area)
+      // the beam starts at the bumper
       const bl = CAR_BEAM_LEN * s;
-      this.pool(x + fx * bl * 0.5, y, z + fz * bl * 0.5, yaw, bl, CAR_BEAM_WID * s, 0.34 * k, 0.31 * k, 0.23 * k, true);
-      this.cone(x, y + 0.09 * s, z, yaw, -0.09, 1.9 * s, 0.38 * s, 0.32 * k, 0.3 * k, 0.24 * k);
+      this.pool(x + fx * bl * 0.5, y, z + fz * bl * 0.5, yaw, bl, CAR_BEAM_WID * s, 0.2 * k, 0.185 * k, 0.14 * k, true);
+      this.cone(x, y + 0.09 * s, z, yaw, -0.09, 1.9 * s, 0.38 * s, 0.2 * k, 0.19 * k, 0.15 * k);
     }
     this.nCars = 0;
     // retire finished outages

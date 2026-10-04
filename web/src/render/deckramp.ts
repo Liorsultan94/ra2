@@ -100,7 +100,7 @@ export function rampHeight(m: GameMap, x: number, y: number, g: number, base: nu
  * The drivable surface under a car near a bridge: the deck (with its end ramps) or the ramped
  * approach road; null away from bridges (or on a deck that is down, `down(i)`).
  */
-export function deckSurface(m: GameMap, x: number, y: number, down?: (i: number) => boolean): number | null {
+export function deckSurface(m: GameMap, x: number, y: number, down?: (i: number) => boolean, side = 0.4): number | null {
   const ds = deckRamps(m);
   for (let i = 0; i < ds.length; i++) {
     const d = ds[i];
@@ -109,7 +109,7 @@ export function deckSurface(m: GameMap, x: number, y: number, down?: (i: number)
     if (Math.abs(dx) > d.L / 2 + RAMP_RUN + 1 || Math.abs(dz) > d.L / 2 + RAMP_RUN + 1) continue;
     const lx = (dx - dz) * D;
     const lz = (dx + dz) * D;
-    if (Math.abs(lz) > DECK_W / 2 + 0.4) continue;
+    if (Math.abs(lz) > DECK_W / 2 + side) continue;
     if (Math.abs(lx) <= d.L / 2) return down?.(i) ? null : BRIDGE_HEIGHT + deckLift(d, lx);
     if (Math.abs(lx) < d.L / 2 + RAMP_RUN) {
       const g = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, y)));
@@ -130,6 +130,8 @@ export function unitStandHeight(m: GameMap, x: number, y: number): number {
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] !== Tile.Bridge || !m.bridges.length) return h;
-  const d = deckSurface(m, x, y);
+  // only on the deck itself: a unit on a bridge tile beside the deck (outside the rails) keeps the sim height
+  // rather than floating at the raised deck end over the railing
+  const d = deckSurface(m, x, y, undefined, -0.05);
   return d === null ? h : Math.max(h, d);
 }
