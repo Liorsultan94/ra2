@@ -13,7 +13,6 @@ import type { Model, ModelStyle, MunitionKind, MunitionModel } from './models/ty
 import { VEHICLES } from './models/vehicles';
 import { TECH_MODELS } from './models/techbldgs';
 import { CITY_MODELS } from './models/citybldgs';
-import { EVENT_PROPS } from './models/eventprops';
 
 export type { AnimState, Model, ModelStyle, MunitionKind, MunitionModel, Region } from './models/types';
 export { FACTION_REGION } from './models/types';
@@ -28,7 +27,7 @@ function footprintOf(key: string) {
   return footprints.get(key);
 }
 
-const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY, CARGO, BRIDGE_MODELS, TECH_MODELS, CITY_MODELS, EVENT_PROPS];
+const ALL: Record<string, Builder>[] = [BUILDINGS, VEHICLES, AIRCRAFT, INFANTRY, CARGO, BRIDGE_MODELS, TECH_MODELS, CITY_MODELS];
 
 /** Build the model for a model key: glTF override > detailed builder > legacy builder. */
 export function createModel(key: string, style: ModelStyle, fog: FogOfWar | null): Model {

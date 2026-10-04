@@ -7,8 +7,6 @@ import { surfaceHeight } from './ground';
 import { OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { RIVER, chamfer, type RiverInfo } from './water';
 import { WX, WX_PARS } from './wxuniforms';
-import { buildFalls, buildSpray, type SprayEmitter } from './relieffx';
-import { reliefEnabled } from './relief';
 
 /*
  * Living river banks (all visual, built once from the river analysis in
@@ -232,14 +230,6 @@ export class Waterside implements WatersideHandles {
   ) {
     this.group.name = 'waterside';
     this.group.userData.perfCat = 'waterside';
-    // waterfalls off the relief's cliffs into the pools, spray over them and the rapids (relieffx.ts)
-    if (reliefEnabled()) {
-      this.bedRocks = this.pickBedRocks(layout);
-      const falls = buildFalls(map, layout, fog, wxLight, waveTex, this.bedRocks.map((b) => ({ x: b.x, y: b.y, r: b.r + 0.16 })));
-      for (const o of falls.objects) this.group.add(o);
-      const spray = buildSpray([...falls.spray, ...this.rapidsSpray()], fog, wxLight, waveTex);
-      if (spray) this.group.add(spray);
-    }
     if (!river.samples.length) return;
     this.buildBank();
     // the city canal is walled: stone quays instead of reeds and pebbles
@@ -320,9 +310,6 @@ export class Waterside implements WatersideHandles {
       polygonOffsetUnits: -4,
       uniforms: {
         bankTex: { value: tex },
-        // embankment soil per biome (the walled canal has none)
-        cutCol: { value: new THREE.Color(m.biome === 'desert' ? 0x8a6a48 : m.biome === 'winter' ? 0x4a3c30 : 0x5e4a36) },
-        cutAmt: { value: m.biome === 'urban' || !reliefEnabled() ? 0 : 1 },
         waveTex: { value: this.waveTex },
         mapSize: { value: new THREE.Vector2(m.w, m.h) },
         time: RIVER.time,
@@ -335,20 +322,12 @@ export class Waterside implements WatersideHandles {
       },
       vertexShader: /* glsl */ `
         varying vec3 vWorld;
-        varying float vNy;
-        varying vec3 vN;
         void main() {
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vWorld = wp.xyz;
-          vNy = normal.y;
-          vN = normal;
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: /* glsl */ `
-        uniform vec3 cutCol;
-        uniform float cutAmt;
-        varying float vNy;
-        varying vec3 vN;
         uniform sampler2D bankTex;
         uniform sampler2D waveTex;
         uniform vec2 mapSize;
@@ -375,11 +354,7 @@ export class Waterside implements WatersideHandles {
           float lapT = sin(time * 0.85 + n * 5.0 + dot(p, vec2(0.21, 0.17)));
           float edge = reach * (0.5 + 0.5 * lapT) - 0.015;
           float wetW = 0.45 + 0.55 * n + wxWet * 0.9;
-          // embankment (relief): the steep upper bank is a cut of bare earth with strata, pebbles and roots,
-          // a flush decal on the ground the units stand on
-          float steep = smoothstep(0.9, 0.72, vNy + (n2 - 0.5) * 0.08);
-          float cut = steep * smoothstep(0.02, 0.22, d) * (1.0 - smoothstep(1.0, 1.45, d + (n - 0.5) * 0.4)) * cutAmt;
-          if (d > wetW + 0.1 && cut < 0.02) discard;
+          if (d > wetW + 0.1) discard;
           // wet sand / mud: darker toward the water, the band left by the last wave glistens
           float wet = 1.0 - smoothstep(0.0, wetW, d);
           float fresh = (1.0 - smoothstep(edge, edge + reach * 0.9 + 0.04, d)) * step(-0.02, d);
@@ -392,19 +367,6 @@ export class Waterside implements WatersideHandles {
           float foamL = exp(-fq * fq) * smoothstep(0.35, 0.8, n2) * (0.5 + 0.5 * chop) * (1.0 - ice) * step(-0.06, d);
           col = mix(col, vec3(0.05, 0.075, 0.065), sheet * 0.7);
           a = max(a, sheet * 0.55);
-          if (cut > 0.02) {
-            float sy = vWorld.y * 34.0 + n * 5.0 + n2 * 2.0;
-            float strata = 0.82 + 0.18 * sin(sy) + 0.1 * sin(sy * 2.7 + 1.3);
-            float pebble = smoothstep(0.72, 0.8, texture2D(waveTex, p * 4.1 + vWorld.y * 0.7).a);
-            float root = smoothstep(0.86, 0.95, texture2D(waveTex, vec2(p.x * 0.9 + p.y * 0.9, vWorld.y * 5.0)).a) * smoothstep(0.5, 1.1, d);
-            vec3 earth = cutCol * strata * (1.0 - wet * 0.45);
-            earth = mix(earth, vec3(0.42, 0.4, 0.36), pebble * 0.6);
-            earth *= 1.0 - root * 0.55;
-            earth *= wxLight * (0.55 + 0.6 * max(dot(normalize(vN), sunDir), 0.0));
-            float ca = cut * (0.78 - 0.5 * wxSnow);
-            col = mix(col, earth, ca / max(ca + a * (1.0 - ca), 1e-3));
-            a = a + ca * (1.0 - a);
-          }
           col *= wxLight;
           vec3 V = normalize(cameraPosition - vWorld);
           float sp = pow(max(dot(reflect(-V, vec3(0.0, 1.0, 0.0)), sunDir), 0.0), 40.0);
@@ -490,48 +452,6 @@ export class Waterside implements WatersideHandles {
     mesh.castShadow = this.quality !== 'low';
     mesh.name = 'canal-quays';
     this.group.add(mesh);
-  }
-
-  /** Riverbed boulders (relief): bigger rocks breaking the surface along the edges of the rapids. */
-  private bedRocks: { x: number; y: number; r: number }[] = [];
-
-  private pickBedRocks(layout: Layout): { x: number; y: number; r: number }[] {
-    const R = this.river;
-    const f = R.features;
-    const out: { x: number; y: number; r: number }[] = [];
-    if (!f.rapids || this.map.biome === 'urban') return out;
-    for (let i = 0; i < 9; i++) {
-      const s = f.rapids.s0 - 1.5 + (i / 8) * (f.rapids.s1 - f.rapids.s0 + 3) + (hash2(i, 1, 1401) - 0.5) * 0.6;
-      const c = R.sample(s);
-      if (!c) continue;
-      const side = i % 2 ? 1 : -1;
-      const off = side * (0.5 + hash2(i, 2, 1401) * 0.28) * c.width * 0.5;
-      const p = R.at(s, off);
-      if (this.avoid(p.x, p.y, layout, true) || R.depthAt(p.x, p.y) < 0.15) continue;
-      if (f.rocks.some((r) => Math.hypot(r.x - p.x, r.y - p.y) < 0.6)) continue;
-      out.push({ x: p.x, y: p.y, r: 0.2 + hash2(i, 3, 1401) * 0.14 });
-    }
-    return out;
-  }
-
-  /** Spray off the rapids' rocks (downstream drift) and a low mist along the whitewater. */
-  private rapidsSpray(): SprayEmitter[] {
-    const R = this.river;
-    const f = R.features;
-    const out: SprayEmitter[] = [];
-    if (!f.rapids || this.map.biome === 'urban') return out;
-    const k = this.quality === 'low' ? 0.5 : 1;
-    const v = { x: 0, y: 0 };
-    for (const rk of [...f.rocks, ...this.bedRocks]) {
-      R.velAt(rk.x, rk.y, v);
-      out.push({ x: rk.x, y: WATER_LEVEL + 0.06, z: rk.y, r: rk.r * 0.8, h: 0.16 + rk.r * 0.4, size: 0.18, n: Math.round(7 * k), dx: v.x * 0.5, dz: v.y * 0.5 });
-    }
-    for (let s = f.rapids.s0 + 0.8; s < f.rapids.s1; s += 1.6) {
-      const p = R.at(s, 0);
-      R.velAt(p.x, p.y, v);
-      out.push({ x: p.x, y: WATER_LEVEL + 0.03, z: p.y, r: 0.6, h: 0.1, size: 0.36, n: Math.round(5 * k), dx: v.x * 0.8, dz: v.y * 0.8 });
-    }
-    return out;
   }
 
   // --------------------------------------------------------------- reeds
@@ -633,9 +553,9 @@ export class Waterside implements WatersideHandles {
       const r = big ? 0.09 + hash2(seed, 4, 903) * 0.08 : 0.025 + hash2(seed, 4, 903) * 0.045;
       add(x, surfaceHeight(m, x, y) + r * 0.12, y, r, r * (big ? 0.75 : 0.6), seed, 0.36 + hash2(seed, 6, 903) * 0.22);
     }
-    // the rapids' rocks break the surface (plus the relief's riverbed boulders)
+    // the rapids' rocks break the surface
     let k = 0;
-    for (const rk of [...R.features.rocks, ...this.bedRocks]) {
+    for (const rk of R.features.rocks) {
       k++;
       const gh = groundHeight(m, rk.x, rk.y);
       const top = WATER_LEVEL + 0.04 + rk.r * 0.35;

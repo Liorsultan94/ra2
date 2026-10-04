@@ -34,14 +34,6 @@ export interface Doctrine {
   deep: string[];
   /** Spending priority per production line (> 1 = buys from it with less money in the bank). */
   spend: { infantry: number; vehicle: number; air: number };
-  /**
-   * Night operations 0..1 (sim/conditions.ts): how much this army likes to attack in the dark with its
-   * night-vision units (thermal-sight tanks, drones, UGVs): smaller waves go at night, and more
-   * night-vision units are bought as dusk falls.
-   */
-  nightOps: number;
-  /** Appetite for side events (sideevents.ts: crashed aircraft, supply drops, rescues, convoys) 0..1. */
-  scavenge: number;
 }
 
 const BASE_DEF = ['def_gun', 'def_aa', 'def_at', 'def_gun', 'def_at', 'def_aa'];
@@ -63,8 +55,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 3,
     deep: ['radar', 'airfield', 'factory', 'tech'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
-    nightOps: 1,
-    scavenge: 0.8,
   },
   israel: {
     summary: 'Precision strikes and a layered air-defence umbrella; Merkava/Trophy armour is preserved and pulled back to repair.',
@@ -82,8 +72,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['tech', 'factory', 'radar'],
     spend: { infantry: 1, vehicle: 1.1, air: 1 },
-    nightOps: 0.9,
-    scavenge: 0.7,
   },
   china: {
     summary: 'A2/AD and drone swarms: swarm carriers lead, DF-17 hypersonic salvos strike the rear, cheap massed aircraft.',
@@ -101,8 +89,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'tech', 'conyard'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
-    nightOps: 0.6,
-    scavenge: 0.8,
   },
   russia: {
     summary: 'Mass artillery attrition: TOS/howitzer fire behind big armour waves, Krasukha EW escorting against drones.',
@@ -120,8 +106,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['conyard', 'factory', 'refinery'],
     spend: { infantry: 0.9, vehicle: 1.3, air: 0.8 },
-    nightOps: 0.5,
-    scavenge: 0.6,
   },
   germany: {
     summary: 'Heavy mechanised manoeuvre: early, fast Leopard/Puma thrusts through the flanks with Bergepanzer recovery.',
@@ -139,8 +123,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'refinery', 'conyard'],
     spend: { infantry: 0.8, vehicle: 1.4, air: 0.8 },
-    nightOps: 0.8,
-    scavenge: 0.7,
   },
   korea: {
     summary: 'Fortified defence with K9 counter-battery fire: holds the bridges, out-guns enemy artillery, then counter-attacks in strength.',
@@ -158,8 +140,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'conyard'],
     spend: { infantry: 1.1, vehicle: 1.1, air: 0.9 },
-    nightOps: 0.8,
-    scavenge: 0.6,
   },
   ukraine: {
     summary: 'Asymmetric drone war: FPV teams and EW troopers in small mobile groups that raid harvesters and strike the flanks.',
@@ -177,8 +157,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['refinery', 'factory', 'radar'],
     spend: { infantry: 1.5, vehicle: 1, air: 1.1 },
-    nightOps: 0.9,
-    scavenge: 1,
   },
   turkey: {
     summary: 'Persistent UAV dominance: TB2 / Akinci wings hunt harvesters, artillery and launchers far ahead of the ground forces.',
@@ -196,8 +174,6 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 4,
     deep: ['refinery', 'radar', 'factory'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
-    nightOps: 1,
-    scavenge: 0.8,
   },
   iran: {
     summary: 'Missile saturation: Fateh / Khorramshahr launchers fire in coordinated volleys while Shahed loitering munitions swarm the defences.',
@@ -215,7 +191,5 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['def_aa', 'factory', 'refinery'],
     spend: { infantry: 1.1, vehicle: 1.2, air: 0.8 },
-    nightOps: 0.4,
-    scavenge: 0.9,
   },
 };

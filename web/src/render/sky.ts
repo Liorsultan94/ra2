@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from './fog';
 import { HDRI_APPLY, HDRI_PARS, SkyHdri } from './skyhdri';
-import { HORIZON } from './horizon';
 
 /*
  * Physical sky (seen in photo mode, the intro flyover, cinematic and low
@@ -502,9 +501,6 @@ export class Sky {
     fu.skyHorA.value.set(A.x, A.y, A.z, this.horizon);
     fu.skyHorB.value.set(B.x, B.y, B.z, 0);
     fu.skySunXZ.value.copy(this.sunXZ);
-    // the far ring (horizon.ts) melts into this horizon colour; bad weather thickens the air
-    HORIZON.hzSky.value = 1;
-    HORIZON.hzDens.value = (1 / 520) * (1 + 2.2 * over + 2.5 * st.storm + 4 * st.dust);
     if (this.hdri?.update(st.sun, st.cover, night)) this.envKey.set(9, 9, 9);
     if (this.envCapture) this.captureEnv(light, st);
   }

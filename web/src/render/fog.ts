@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { hash2 } from '../sim/rng';
-import { CLOUD, CLOUD_LIGHT_GLSL, CLOUD_SHADOW_GLSL } from './cloudshadow';
 import { MIST_GLSL, WX, WX_PARS, WX_SURFACE, WXM } from './wxuniforms';
 
 /** Tileable 4-channel value-noise fbm texture (each channel an independent field). */
@@ -65,60 +64,27 @@ uniform vec3 fogTarget;
 uniform vec3 fogView;
 uniform vec3 hazeColor;
 uniform vec4 hazeParams;
-// unexplored cloud sea: lit tops / deep gaps (follow the key and sky light), sun direction on the ground
-uniform vec3 shroudLit;
-uniform vec3 shroudShade;
-uniform vec2 shroudSun;
+uniform float cloudAmount;
 // physical sky horizon (sky.ts): rgb towards / away from the sun, skyHorA.a = how much the far
 // outskirts melt into it (free cameras that see the horizon; 0 = the classic dark surround)
 uniform vec4 skyHorA;
 uniform vec4 skyHorB;
 uniform vec2 skySunXZ;
 ${MIST_GLSL}
-${CLOUD_SHADOW_GLSL}
 
-// fog texture through a cubic B-spline (4 bilinear taps): smooth round contours, no tile diamonds
-float fogTexSmooth( vec2 q ) {
-  vec2 st = q - 0.5;
-  vec2 i = floor( st );
-  vec2 f = st - i;
-  vec2 f2 = f * f;
-  vec2 f3 = f2 * f;
-  vec2 w0 = ( 1.0 - 3.0 * f + 3.0 * f2 - f3 ) / 6.0;
-  vec2 w1 = ( 4.0 - 6.0 * f2 + 3.0 * f3 ) / 6.0;
-  vec2 w2 = ( 1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3 ) / 6.0;
-  vec2 w3 = f3 / 6.0;
-  vec2 g0 = w0 + w1;
-  vec2 g1 = w2 + w3;
-  vec2 p0 = ( i - 0.5 + w1 / g0 ) / fogSize;
-  vec2 p1 = ( i + 1.5 + w3 / g1 ) / fogSize;
-  return g0.y * ( g0.x * texture2D( fogTex, p0 ).r + g1.x * texture2D( fogTex, vec2( p1.x, p0.y ) ).r )
-       + g1.y * ( g0.x * texture2D( fogTex, vec2( p0.x, p1.y ) ).r + g1.x * texture2D( fogTex, p1 ).r );
-}
-
-// 0 = unexplored, 0.5 = explored, 1 = visible; edges are wobbled by slowly drifting noise
+// 0 = unexplored, 0.5 = explored, 1 = visible; edges are wobbled by noise
 float fogSample( vec3 p ) {
   vec4 n = texture2D( fogNoise, p.xz * 0.045 + vec2( fogTime * 0.006, fogTime * 0.004 ) );
   vec2 q = p.xz + ( n.rg - 0.5 ) * 2.2;
-  return fogTexSmooth( q );
+  return texture2D( fogTex, q / fogSize ).r;
 }
 
-// unexplored: a slowly drifting, self-shadowed cloud sea. s = ground-plane coordinates along the
-// view ray (screen-stable: tall things in the shroud show the same cloud as the ground behind them)
-vec3 shroudCloud( vec2 s, out float n ) {
-  vec2 w1 = vec2( fogTime * 0.0042, -fogTime * 0.0027 );
-  vec2 w2 = vec2( -fogTime * 0.0061, fogTime * 0.0036 );
-  vec4 a = texture2D( fogNoise, s * 0.017 + w1 );
-  // domain warp by the big layer: curling, organic billows instead of plain value noise
-  vec2 sw = s + ( a.rg - 0.5 ) * 9.0;
-  float b = texture2D( fogNoise, sw * 0.046 + w2 ).b;
-  float c = texture2D( fogNoise, sw * 0.125 - w1 * 2.0 ).g;
-  n = a.a * 0.5 + b * 0.34 + c * 0.16;
-  // self-shadowing: the puffs a little further towards the sun (lit on the sun side, shaded behind)
-  float bs = texture2D( fogNoise, ( sw + shroudSun * 2.4 ) * 0.046 + w2 ).b;
-  float h = smoothstep( 0.3, 0.74, n );
-  float lit = clamp( 0.5 + ( b - bs ) * 3.4 + ( h - 0.5 ) * 0.55, 0.0, 1.0 );
-  return mix( shroudShade, shroudLit, lit * ( 0.3 + 0.7 * h ) ) * ( 0.82 + 0.3 * c );
+float cloudShadow( vec3 p ) {
+  vec2 wind = vec2( 0.55, 0.22 ) * fogTime;
+  float a = texture2D( fogNoise, ( p.xz + wind ) * 0.011 ).b;
+  float b = texture2D( fogNoise, ( p.xz + wind * 1.4 ) * 0.027 + 0.37 ).a;
+  float c = a * 0.7 + b * 0.3;
+  return 1.0 - cloudAmount * smoothstep( 0.47, 0.68, c );
 }
 
 vec3 fogShade( vec3 col, vec3 p ) {
@@ -140,25 +106,22 @@ vec3 fogShade( vec3 col, vec3 p ) {
   if ( fogEnabled > 0.5 ) {
     float v = fogSample( p );
     float vis = smoothstep( 0.56, 0.92, v );
-    // explored but not seen right now: a desaturated, cool "recon map" print of the land
-    if ( vis < 0.999 ) {
-      float l = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
-      vec3 recon = mix( vec3( l ), col, 0.22 ) * vec3( 0.74, 0.82, 0.94 ) * 0.78 + vec3( 0.004, 0.006, 0.011 );
-      col = mix( recon, col, vis );
-    }
-    float e = clamp( v * 2.04, 0.0, 1.0 );
-    if ( e < 0.985 ) {
+    float expl = smoothstep( 0.06, 0.4, v );
+    // explored but not currently seen: desaturated, darker, slightly cool
+    float l = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+    vec3 memo = mix( vec3( l ), col, 0.3 ) * vec3( 0.56, 0.59, 0.66 );
+    col = mix( memo, col, vis );
+    if ( expl < 0.999 ) {
+      // unexplored: dark drifting smoke instead of a flat black hole
+      // sample the smoke in screen-stable coordinates so trees/buildings don't show through
       vec2 s = p.xz - p.y * fogView.xz / fogView.y;
-      float n;
-      vec3 cloud = shroudCloud( s, n );
-      // the cloud front: thin parts of the billows open first as land is explored, the thick ones last
-      float x = ( 1.0 - e ) * ( 0.7 + 0.6 * n );
-      float cov = smoothstep( 0.3, 0.62, x );
-      float halo = smoothstep( 0.05, 0.42, x );
-      // the bank darkens the land just outside it (shadow / occlusion) and its thin edge catches the light
-      col *= 1.0 - 0.42 * halo * ( 1.0 - cov );
-      cloud += shroudLit * 0.5 * cov * ( 1.0 - cov ) * smoothstep( 0.4, 0.75, n );
-      col = mix( col, cloud, cov );
+      float m1 = texture2D( fogNoise, s * 0.021 + vec2( fogTime * 0.0045, -fogTime * 0.003 ) ).a;
+      float m2 = texture2D( fogNoise, s * 0.06 + vec2( -fogTime * 0.008, fogTime * 0.005 ) ).b;
+      float smoke = m1 * 0.65 + m2 * 0.35;
+      vec3 shroud = mix( vec3( 0.008, 0.009, 0.011 ), vec3( 0.05, 0.052, 0.058 ), smoothstep( 0.3, 0.75, smoke ) );
+      // a faint warm rim where the smoke meets explored land
+      shroud += vec3( 0.05, 0.035, 0.02 ) * smoothstep( 0.0, 0.5, expl ) * ( 1.0 - expl );
+      col = mix( shroud, col, expl );
     }
   }
   return col;
@@ -187,11 +150,7 @@ export class FogOfWar {
     skyHorA: { value: THREE.Vector4 };
     skyHorB: { value: THREE.Vector4 };
     skySunXZ: { value: THREE.Vector2 };
-    shroudLit: { value: THREE.Color };
-    shroudShade: { value: THREE.Color };
-    shroudSun: { value: THREE.Vector2 };
-  } & typeof WXM &
-    typeof CLOUD;
+  } & typeof WXM;
   private data: Uint8Array;
   private cur: Float32Array;
 
@@ -221,11 +180,6 @@ export class FogOfWar {
       skyHorA: { value: new THREE.Vector4(0, 0, 0, 0) },
       skyHorB: { value: new THREE.Vector4(0, 0, 0, 0) },
       skySunXZ: { value: new THREE.Vector2(1, 0) },
-      shroudLit: { value: new THREE.Color(0.27, 0.28, 0.3) },
-      shroudShade: { value: new THREE.Color(0.045, 0.05, 0.058) },
-      shroudSun: { value: new THREE.Vector2(-0.7, -0.7) },
-      // cloud shadows (shared objects: cloudshadow.ts drives them)
-      ...CLOUD,
       // ground fog / mist (shared objects: the atmosphere drives them)
       ...WXM,
     };
@@ -233,41 +187,15 @@ export class FogOfWar {
 
   update(explored: Uint8Array, visible: Uint8Array, dt: number, snap = false) {
     const k = snap ? 1 : Math.min(1, dt * 5);
-    // the cloud over newly explored land rolls back over ~0.8 s (render only: the sim's visibility is instant)
-    const open = snap ? 1 : dt * 0.62;
     const n = this.w * this.h;
     for (let i = 0; i < n; i++) {
       const target = visible[i] ? 1 : explored[i] ? 0.5 : 0;
-      let c = this.cur[i];
-      if (c < 0.5 && target > c) c = Math.min(target, c + open);
-      else c += (target - c) * k;
+      const c = this.cur[i] + (target - this.cur[i]) * k;
       this.cur[i] = c;
       this.data[i] = (c * 255) | 0;
     }
     this.texture.needsUpdate = true;
   }
-
-  private lum = (c: THREE.Color) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
-  /**
-   * Per frame: light the unexplored cloud sea with the scene's key and sky light (time of day,
-   * weather), lit from `sunDir` (towards the light, world space).
-   */
-  setLight(sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight, sunDir: THREE.Vector3) {
-    const u = this.uniforms;
-    const si = sun.intensity;
-    const hi = hemi.intensity;
-    // keep it a mid-dark grey-blue sea: never brighter than the battlefield, never a black hole
-    u.shroudLit.value.copy(sun.color).multiplyScalar(si * 0.072).add(this.tmpC.copy(hemi.color).multiplyScalar(hi * 0.13));
-    const l = this.lum(u.shroudLit.value);
-    if (l > 0.3) u.shroudLit.value.multiplyScalar(0.3 / l);
-    u.shroudShade.value.copy(hemi.color).multiplyScalar(hi * 0.06).lerp(this.tmpC.copy(hemi.groundColor).multiplyScalar(hi * 0.1), 0.35);
-    u.shroudShade.value.r += 0.008;
-    u.shroudShade.value.g += 0.009;
-    u.shroudShade.value.b += 0.012;
-    const h = Math.hypot(sunDir.x, sunDir.z) || 1;
-    u.shroudSun.value.set(sunDir.x / h, sunDir.z / h);
-  }
-  private tmpC = new THREE.Color();
 
   revealAll() {
     this.cur.fill(1);
@@ -321,8 +249,15 @@ export class FogOfWar {
         .replace('#include <common>', `#include <common>\nvarying vec3 vFogP;\n${FOG_GLSL}\n${WX_PARS}`)
         // weather: snow cover / wet / dust on upward-facing surfaces (all zero = untouched)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${WX_SURFACE}`)
-        // cloud shadows (+ canopy sun flecks) on the direct light: cloudshadow.ts
-        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${CLOUD_LIGHT_GLSL}`)
+        .replace(
+          '#include <lights_fragment_end>',
+          `#include <lights_fragment_end>
+          {
+            float cloudK = cloudShadow( vFogP );
+            reflectedLight.directDiffuse *= cloudK;
+            reflectedLight.directSpecular *= cloudK;
+          }`,
+        )
         .replace(
           '#include <opaque_fragment>',
           `outgoingLight = fogShade( outgoingLight, vFogP );

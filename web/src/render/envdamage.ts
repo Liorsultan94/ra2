@@ -6,7 +6,6 @@ import type { Effects } from './effects';
 import type { FogOfWar } from './fog';
 import type { CulledInstances } from './geo';
 import type { Props } from './props';
-import type { BattleScars } from './scars';
 import type { HouseHandle } from './scenery';
 import type { Terrain } from './terrain';
 
@@ -92,8 +91,6 @@ export class EnvDamage {
   private dirtyIms = new Set<THREE.InstancedMesh>();
   /** Photoscanned props (crushed by vehicles, thrown about by blasts). */
   private props: Props;
-  /** Persistent battle scars (scars.ts): when set, burnt ground and house ruins go there. */
-  scars: BattleScars | null = null;
 
   constructor(
     terrain: Terrain,
@@ -460,11 +457,6 @@ export class EnvDamage {
       const st = H.h.st;
       this.burning.push({ x: cx, y: gy + 0.2, z: cz, t: 14 + Math.random() * 8, size: 1.1 });
       this.addScorch(cx, cz, Math.max(st.w, st.h) * 0.8);
-      if (this.scars) {
-        // a lasting ruin: rubble heap, broken wall stubs, charred beams (scars.ts)
-        this.scars.ruin(cx, cz, st.w, st.h, { civil: true, colors: houseColors(H), rise: 1.6 });
-        return;
-      }
       // a heap of rubble over the footprint
       const n = Math.min(26, 8 + st.w * st.h * 4);
       for (let i = 0; i < n; i++) {
@@ -547,7 +539,6 @@ export class EnvDamage {
   }
 
   private addScorch(x: number, z: number, r: number) {
-    if (this.scars) return this.scars.scorchAt(x, z, r);
     const im = this.scorch;
     const max = im.instanceMatrix.count;
     const i = this.scorchN++ % max;
@@ -573,23 +564,6 @@ export class EnvDamage {
     im.instanceMatrix.needsUpdate = true;
     im.instanceColor!.needsUpdate = true;
   }
-}
-
-/** Average wall colour of a village house (its vertex colours), plus a brick tone. */
-function houseColors(H: HouseState): number[] {
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let n = 0;
-  for (const c of H.col ?? [])
-    for (let i = 0; i < c.length; i += 9) {
-      r += c[i];
-      g += c[i + 1];
-      b += c[i + 2];
-      n++;
-    }
-  if (!n) return [0x8a7a68, 0x7a4c3a];
-  return [_c.setRGB(r / n, g / n, b / n).getHex(), 0x7a4c3a, 0x8a8070];
 }
 
 function scorchTexture(): THREE.Texture {

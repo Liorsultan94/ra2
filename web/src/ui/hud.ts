@@ -13,7 +13,6 @@ import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
 import { HudClock } from './clock';
-import { SitRep } from './sitrep';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -135,8 +134,6 @@ export class Hud {
   private viewCtrl!: HTMLElement;
   /** Live day clock (top right of the view; clock.ts). */
   readonly clock: HudClock;
-  /** Side event chips / markers / radar pings (sitrep.ts). */
-  readonly sitrep: SitRep;
   private toolsRow!: HTMLElement;
   private cmdKey = '';
   private selHtml = '';
@@ -182,7 +179,6 @@ export class Hud {
     // the live day clock leads the view buttons row (simple HUD: alone in the corner, see setSimple)
     this.clock = new HudClock(vc);
     vc.prepend(this.clock.el);
-    this.sitrep = new SitRep(this.viewWrap, (x, y) => this.actions.onMinimap(x, y, false));
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -523,8 +519,7 @@ export class Hud {
     }
     this.updateSelection();
     this.support.update();
-    this.clock.update(dt, this.renderer?.atmos, this.world?.cond);
-    this.sitrep.update(dt, this.world ?? null);
+    this.clock.update(dt, this.renderer?.atmos);
     this.superweapons.update();
   }
 
@@ -795,7 +790,6 @@ export class Hud {
       ctx.stroke();
       ctx.restore();
     }
-    this.sitrep.drawMinimap(ctx, this.world, M, now);
     // camera view: the frustum footprint (a trapezoid with the perspective camera)
     const corners = this.renderer.viewCorners();
     ctx.strokeStyle = 'rgba(255,255,255,0.95)';
@@ -890,7 +884,6 @@ export class Hud {
       }
       ctx.setLineDash([]);
     }
-    if (!attract) this.sitrep.drawMarkers(ctx, w, r, this.overlay.clientWidth, this.overlay.clientHeight, now);
     // order / selection flashes: a ring that opens around each unit, and tap ripples
     for (let i = this.flashes.length - 1; i >= 0; i--) {
       const F = this.flashes[i];
