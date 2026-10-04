@@ -293,7 +293,8 @@ export class NightLights {
 
   private candidate(x: number, y: number, z: number, col: THREE.Color, k: number, tx: number, tz: number) {
     const d = Math.hypot(x - tx, z - tz);
-    if (d > 14) return;
+    // (a NaN lamp would light every pixel NaN: the whole frame black)
+    if (!(d <= 14) || !Number.isFinite(x + y + z + col.r + col.g + col.b + k)) return;
     let i = this.nCand;
     if (i >= 64) {
       // replace the farthest
@@ -459,6 +460,13 @@ export class NightLights {
       l.color.setRGB(c[best * 7 + 3] / mx, c[best * 7 + 4] / mx, c[best * 7 + 5] / mx);
       l.intensity = 2.2 * mx;
       c[best * 7 + 6] = -1;
+    }
+    // hard guard: a light (even at intensity 0) with a NaN position or colour turns every lit pixel NaN
+    for (const l of this.lights) {
+      if (Number.isFinite(l.position.x + l.position.y + l.position.z + l.color.r + l.color.g + l.color.b + l.intensity)) continue;
+      l.position.set(tx, 1, tz);
+      l.color.setRGB(1, 1, 1);
+      l.intensity = 0;
     }
   }
 }

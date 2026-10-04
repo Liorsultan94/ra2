@@ -121,8 +121,10 @@ describe('weather over a live day (24 game hours = 1440 game seconds)', () => {
           if (s.cover < 0.05 && s.precip === 0) clearSec += 10;
         }
         // at least one episode, the climate's own kind first, and plenty of clear sky in between
-        expect(precipSec).toBeGreaterThan(60);
-        expect(fall).toBeGreaterThan(60);
+        // (a desert sandstorm blows for only ~30 s: weathercycle.ts DUST_SHAPE)
+        const minSec = climate === 'desert' ? 20 : 61;
+        expect(precipSec).toBeGreaterThanOrEqual(minSec);
+        expect(fall).toBeGreaterThanOrEqual(minSec);
         expect(clearSec).toBeGreaterThan(DAY * 0.25);
         // noticeable but not constant: 1 .. 5 fronts a day
         w.at(DAY);

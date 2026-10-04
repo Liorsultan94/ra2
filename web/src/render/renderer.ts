@@ -24,7 +24,7 @@ import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { loadSkyEnvironment, type FinalPass } from './post';
 import { PostChain } from './post/chain';
-import type { GradeInput } from './post/grade';
+import { sanitizeGrade, type GradeInput } from './post/grade';
 import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
@@ -617,6 +617,8 @@ export class GameRenderer {
       if (pd) pc.setDof(dist * Math.pow(2, (pd.focus - 0.5) * 3.2), pd.amount);
       else pc.setDof(dist, this.cinematicDof);
     } else pc.setDof(20, 0);
+    // hard guard: never hand NaN to the grade (a NaN look bakes a black LUT)
+    sanitizeGrade(g);
     pc.update(dt, g);
   }
 
@@ -703,6 +705,8 @@ export class GameRenderer {
     // the sun turns with the view so the scene is always lit from the upper left of the screen
     // (the dynamic day / night cycle moves the sun and moon across the sky: atmos.sunBase)
     this.sunDir.copy(this.atmos?.sunBase ?? SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    // hard guard: a degenerate key light (NaN / zero) would turn every lit pixel NaN, i.e. a black screen
+    if (!Number.isFinite(this.sunDir.x + this.sunDir.y + this.sunDir.z) || this.sunDir.lengthSq() < 1e-8) this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, Number.isFinite(this.yaw) ? -this.yaw : 0);
     this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
     this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
     const D = this.camDir;
