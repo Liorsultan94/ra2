@@ -20,9 +20,28 @@ function world(seed = 5, map: MapId = 'frontline') {
   });
 }
 
-/** Clear the start armies away from (x, y) so tests see only what they place. */
+/** Clear the start armies (the MCVs stay: the players must not lose) so tests see only what they place. */
 function clearUnits(w: World) {
-  for (const e of w.list) if (e.kind === 'unit' && e.owner >= 0) w.remove(e);
+  for (const e of w.list) if (e.kind === 'unit' && e.owner >= 0 && !unitDef(e.def).mcv) w.remove(e);
+}
+
+/** An open spot with no structure within r tiles. */
+function openSpot(w: World, r = 10): [number, number] {
+  const m = w.map;
+  for (let y = r; y < m.h - r; y += 2)
+    for (let x = r; x < m.w - r; x += 2) {
+      if (!w.pf.passable(x, y)) continue;
+      if (w.list.some((e) => !e.dead && (e.kind === 'building' || unitDef(e.def).mcv) && Math.hypot(e.x - x, e.y - y) < r)) continue;
+      return [x + 0.5, y + 0.5];
+    }
+  return [m.w / 2, m.h / 2];
+}
+
+/** Visible tiles of a player within radius r of (x, y). */
+function visibleAround(w: World, pid: number, x: number, y: number, r: number) {
+  let n = 0;
+  for (let ty = Math.floor(y - r); ty <= y + r; ty++) for (let tx = Math.floor(x - r); tx <= x + r; tx++) if (Math.hypot(tx + 0.5 - x, ty + 0.5 - y) <= r && w.visibleTo(pid, tx + 0.5, ty + 0.5)) n++;
+  return n;
 }
 
 /** Visible tiles of a player around (x, y) within radius r. */
@@ -119,8 +138,9 @@ describe('night sight', () => {
     const w = world();
     clearUnits(w);
     w.updateVisibility();
-    const rifle = w.spawnUnit('usa_rifle', 0, 30.5, 30.5); // sight 6 (5 + USA +1)
-    const tank = w.spawnUnit('usa_mbt', 1, 70.5, 70.5); // thermal sights
+    const [ox, oy] = openSpot(w);
+    const rifle = w.spawnUnit('usa_rifle', 0, ox, oy); // sight 6 (5 + USA +1)
+    const tank = w.spawnUnit('usa_mbt', 1, ox, oy); // thermal sights
     expect(hasNightVision('usa_rifle')).toBe(false);
     expect(hasNightVision('usa_mbt')).toBe(true);
     expect(hasNightVision('russia_uav')).toBe(true);
@@ -128,8 +148,8 @@ describe('night sight', () => {
     const r0 = w.cond.sightOf(rifle, unitDef(rifle.def).sight);
     expect(r0).toBe(unitDef(rifle.def).sight);
     w.updateVisibility();
-    const day0 = visibleCount(w, 0);
-    const day1 = visibleCount(w, 1);
+    const day0 = visibleAround(w, 0, ox, oy, 8);
+    const day1 = visibleAround(w, 1, ox, oy, 8);
     w.cond.configure({ tod: 'night', weather: 'clear' });
     expect(w.cond.state.dark).toBe(1);
     expect(w.cond.state.sight).toBeCloseTo(1 - NIGHT_SIGHT, 6);
@@ -137,10 +157,10 @@ describe('night sight', () => {
     expect(w.cond.sightOf(tank, unitDef(tank.def).sight)).toBe(unitDef(tank.def).sight);
     w.updateVisibility();
     // the rifleman sees ~0.65^2 of the area; the tank (night vision) the same as by day
-    const ratio = visibleCount(w, 0) / day0;
+    const ratio = visibleAround(w, 0, ox, oy, 8) / day0;
     expect(ratio).toBeGreaterThan(0.3);
     expect(ratio).toBeLessThan(0.6);
-    expect(visibleCount(w, 1)).toBe(day1);
+    expect(visibleAround(w, 1, ox, oy, 8)).toBe(day1);
     // dusk: part of the way
     w.cond.configure({ tod: 'dusk', weather: 'clear' });
     expect(w.cond.state.sight).toBeGreaterThan(1 - NIGHT_SIGHT);
@@ -152,8 +172,9 @@ describe('night sight', () => {
     const w = world();
     clearUnits(w);
     w.cond.configure({ tod: 'night', weather: 'clear' });
-    const a = w.spawnUnit('usa_rifle', 0, 30.5, 30.5);
-    const b = w.spawnUnit('russia_rifle', 1, 40.5, 30.5);
+    const [ox, oy] = openSpot(w, 12);
+    const a = w.spawnUnit('usa_rifle', 0, ox - 4, oy);
+    const b = w.spawnUnit('russia_rifle', 1, ox + 4, oy);
     w.updateVisibility();
     expect(w.visibleTo(1, a.x, a.y)).toBe(false);
     a.firedAt = w.tick;
