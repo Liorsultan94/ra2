@@ -134,10 +134,14 @@ function buildCanopy(map: GameMap) {
   CLOUD.csMap.value.set(map.w, map.h);
 }
 
-/** Debug / screenshots: ?cshadow=0 turns the cloud shadows off, ?shafts=0 the cloud god rays. */
+/**
+ * Debug / screenshots: ?cshadow=0 turns the cloud shadows off; ?shafts=0|1 and ?dapple=0|1 force the
+ * cloud god rays / canopy sun flecks off or on whatever the quality tier.
+ */
 const PARAMS = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
 const OFF = PARAMS.get('cshadow') === '0';
-const NO_SHAFTS = PARAMS.get('shafts') === '0';
+const SHAFTS = PARAMS.get('shafts');
+const DAPPLE = PARAMS.get('dapple');
 
 /**
  * Per frame (after the atmosphere and the camera): cloud cover, darkness, wind drift, sun angle.
@@ -185,6 +189,7 @@ export function updateCloudShadows(dt: number, atmos: AtmosLike, cloudAmount: nu
   // shafts: broken cloud (not clear, not a lid), strongest with a low sun
   const broken = sstep(0.12, 0.4, c) * (1 - sstep(0.78, 0.98, c));
   const low = 1 - sstep(0.35, 0.85, sunDir.y);
-  CLOUD.csShafts.value = NO_SHAFTS || quality !== 'high' ? 0 : broken * (0.55 + 0.45 * low) * day;
-  CLOUD.csDapple.value = quality === 'high' ? day * (1 - 0.85 * sstep(0.55, 0.9, c)) : 0;
+  const hi = quality === 'high';
+  CLOUD.csShafts.value = SHAFTS === '0' || (!hi && SHAFTS !== '1') ? 0 : broken * (0.55 + 0.45 * low) * day;
+  CLOUD.csDapple.value = DAPPLE === '0' || (!hi && DAPPLE !== '1') ? 0 : day * (1 - 0.85 * sstep(0.55, 0.9, c));
 }
