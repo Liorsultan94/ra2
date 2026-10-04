@@ -10,6 +10,7 @@ import { planProps, type PropsManifest } from '../props';
 import { roadClear } from './clearance';
 import type { RoadNet } from './roadnet';
 import { groundAt, wrapAngle, type AmbientFrame, type Danger, type FogProbe, type Quality } from './shared';
+import { LOW, type DangerField } from './danger';
 import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion, zebraBands, type WalkGrid } from './walkgrid';
 
 /*
@@ -28,7 +29,10 @@ import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion,
  * hands up, then run for the nearest standing house or away to the map
  * edge, parents grabbing their children (small ones are carried, the others
  * pulled along by the hand); blasts knock people over (they get up and run).
- * The streets empty. After a long calm they slowly come back out.
+ * The danger field (danger.ts) keeps them off the streets near troops,
+ * fighting and burning wrecks (no more crossing there); drivers who leave
+ * their car run too (bolt). The streets empty. After a long calm they slowly
+ * come back out.
  *
  * Purely visual. One instanced draw call for every figure (models/civilians.ts:
  * vertex-animated), one for the blob shadows, one for the market stalls, one
@@ -138,6 +142,10 @@ interface Ped extends Figure {
   ang: number;
   baseLean: number;
   rescuer: Ped | null;
+  /** A driver who left the car (bolt): leaves the scene for good once inside / off the map. */
+  bolted: boolean;
+  /** Seconds since it bolted. */
+  life: number;
 }
 
 interface Door {
@@ -316,6 +324,9 @@ export class People {
   private dark = 0;
   /** Zoomed far out (set by the owner): half the figures, no blob shadows or balls. */
   far = false;
+  /** How dangerous each place is (danger.ts; set by AmbientLife). */
+  field: DangerField | null = null;
+  private pk = { x: 0, y: 0, v: 0 };
   /** Debug / tests: counters. */
   readonly stat = { paths: 0, failed: 0, fled: 0, returned: 0 };
 
@@ -753,6 +764,8 @@ export class People {
       ang: Math.random() * 6.28,
       baseLean: kind === K.Elder ? 0.22 + Math.random() * 0.1 : 0,
       rescuer: null,
+      bolted: false,
+      life: 0,
     };
     this.dress(kind, p);
     this.peds.push(p);
@@ -1244,6 +1257,42 @@ export class People {
     p.gy = p.y + dy * 6;
   }
 
+  /** A driver leaves the car at (x, y) and runs from (sx, sy) (traffic.ts). At most a few at a time. */
+  bolt(x: number, y: number, sx: number, sy: number) {
+    let n = 0;
+    for (const p of this.peds) if (p.bolted) n++;
+    if (n >= 10) return;
+    const p = this.makePed(Math.random() < 0.6 ? K.Man : K.Woman, x, y);
+    p.bolted = true;
+    p.hx = x;
+    p.hy = y;
+    p.yaw = Math.atan2(y - sy, x - sx);
+    this.stat.fled++;
+    // (no route search left this frame: it runs straight away first, then finds a way)
+    this.flee(p, sx, sy, 1, false);
+    if (p.s === S.Alarm) {
+      p.s = S.Flee;
+      p.np = 0;
+      p.goal = Goal.Away;
+      p.gx = x + Math.cos(p.yaw) * 6;
+      p.gy = y + Math.sin(p.yaw) * 6;
+      p.t = 0;
+    }
+  }
+
+  /** The danger field says it is dangerous here (troops, fighting, fire): p.fx / fy set to where it comes from. */
+  private fieldDanger(p: Ped): boolean {
+    const fd = this.field;
+    if (!fd) return false;
+    const v = fd.at(p.x, p.y);
+    // on the road it takes less to get off it (no crossing near the fighting)
+    if (v < (p.onRoad ? LOW : 0.25)) return false;
+    const pk = fd.peak(p.x, p.y, 6, this.pk);
+    p.fx = pk.x;
+    p.fy = pk.y;
+    return true;
+  }
+
   private alarm(f: AmbientFrame) {
     for (const d of f.dangers) {
       const R = d.r * 1.4 + d.power * 5 + 2.5;
@@ -1362,6 +1411,17 @@ export class People {
       if (!seen && ((p.id + this.frameNo) & 3) !== 0 && p.s !== S.Flee) continue;
       const pdt = seen || p.s === S.Flee ? dt : dt * 4;
       this.step(p, pdt, f);
+      if (p.bolted) p.life += pdt;
+    }
+    // drivers who left their cars: gone once they are inside / off the map (or after a while, out of sight)
+    for (let i = this.peds.length - 1; i >= 0; i--) {
+      const p = this.peds[i];
+      if (!p.bolted || p.child || p.parent || p.rescuer) continue;
+      const seen = p.x > f.vx0 && p.x < f.vx1 && p.y > f.vy0 && p.y < f.vy1;
+      if (p.s === S.Inside || p.s === S.Gone || (p.life > 90 && !seen && p.s !== S.Flee)) {
+        this.leaveGroups(p);
+        this.peds.splice(i, 1);
+      }
     }
     for (const pg of this.plays) this.ball(pg, dt);
     this.separate();
@@ -1404,7 +1464,7 @@ export class People {
     p.unitT -= dt;
     if (p.unitT <= 0) {
       p.unitT = 0.4 + Math.random() * 0.3;
-      if (p.s !== S.Inside && p.s !== S.Gone && p.s !== S.Flee && p.s !== S.Down && p.s !== S.Follow && p.s !== S.Fetch && p.s !== S.Alarm && this.unitsNear(p, f)) {
+      if (p.s !== S.Inside && p.s !== S.Gone && p.s !== S.Flee && p.s !== S.Down && p.s !== S.Follow && p.s !== S.Fetch && p.s !== S.Alarm && (this.unitsNear(p, f) || this.fieldDanger(p))) {
         this.stat.fled++;
         this.flee(p, p.fx, p.fy, 0.3, Math.random() < 0.3);
       }
