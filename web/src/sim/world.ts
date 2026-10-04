@@ -22,6 +22,7 @@ import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankF
 import { Rng } from './rng';
 import { isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, updateSortie, freePad } from './airbase';
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
+import { releaseDefender, setAutoDefend, updateBaseDefense } from './basedefense';
 import {
   CATEGORIES,
   TPS,
@@ -31,6 +32,7 @@ import {
   type Def,
   type Entity,
   type Faction,
+  type FogMode,
   type Player,
   type Projectile,
   type SimEvent,
@@ -43,6 +45,8 @@ export interface PlayerSetup {
   faction: Faction;
   color: number;
   isAI: boolean;
+  /** Automatic base defence for this player (basedefense.ts; default off in the sim, the game passes the setting). */
+  autoDefend?: boolean;
 }
 
 export interface WorldOptions {
@@ -51,6 +55,8 @@ export interface WorldOptions {
   credits?: number;
   /** Which map (default Frontline Crossing); the seed varies its details (sim/maps.ts). */
   map?: MapId;
+  /** Fog of war rule for every player (types.ts FogMode; default 'modern', the game passes the setting). */
+  fog?: FogMode;
 }
 
 export interface Controller {
@@ -113,6 +119,8 @@ export class World {
   over = false;
   /** Collapsible river bridges (bridges.ts). */
   bridges: BridgeState[] = [];
+  /** Fog of war rule (classic: explored = revealed for good; modern: explored ground outside sight is fogged). */
+  readonly fog: FogMode;
   private nextId = 1;
   private pending: { player: number; cmd: Command }[] = [];
   private grid: Entity[][];
@@ -121,6 +129,7 @@ export class World {
 
   constructor(opts: WorldOptions) {
     this.rng = new Rng(opts.seed ?? 12345);
+    this.fog = opts.fog === 'classic' ? 'classic' : 'modern';
     this.map = createMap(opts.map ?? 'frontline', opts.seed ?? 12345);
     const { w, h } = this.map;
     this.pass = new Uint8Array(w * h);
@@ -157,6 +166,7 @@ export class World {
         airdropAt: -1,
         airdropFrom: 0,
         sw: newSuperweaponState(),
+        autoDefend: !!ps.autoDefend,
       });
       const f = ps.faction;
       this.spawnUnit(factionUnit(f, (d) => !!d.mcv).id, i, s.x + 0.5, s.y + 0.5);
@@ -289,6 +299,9 @@ export class World {
       queue: [],
       patrol: null,
       guardId: -1,
+      orderAt: -9999,
+      hurtBy: -1,
+      defend: null,
       dodge: null,
       dodgeAt: 0,
       stillAt: 0,
@@ -466,8 +479,20 @@ export class World {
   private applyCommand(pid: number, cmd: Command) {
     const p = this.players[pid];
     if (!p || p.defeated) return;
-    const own = (ids: number[]) =>
-      ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+    const own = (ids: number[]) => {
+      const units = ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+      // an explicit order: base defence leaves these units alone for a while (basedefense.ts);
+      // a stance change only calls them off a defence run
+      for (const e of units) {
+        if (cmd.type !== 'stance') e.orderAt = this.tick;
+        if (e.defend) releaseDefender(this, e, cmd.type === 'stance');
+      }
+      return units;
+    };
+    if (cmd.type === 'autoDefend') {
+      setAutoDefend(this, pid, !!cmd.on);
+      return;
+    }
     if (applyOrderCommand(this, pid, cmd, own)) return; // stances, patrol, guard, queued waypoints (orders.ts)
     switch (cmd.type) {
       case 'move': {
@@ -1169,6 +1194,7 @@ export class World {
       }
       // retaliate
       const att = this.get(src.inside >= 0 ? src.inside : src.id); // shots from a garrison / APC: answer the container
+      if (att) t.hurtBy = att.spawner >= 0 && this.get(att.spawner) ? att.spawner : att.id; // a drone: blame its launcher
       if (t.kind === 'unit' && d.weapon && autoFire(t) && (t.order.type === 'idle' || t.order.type === 'attackMove') && t.targetId < 0 && att && this.canHit(WEAPONS[d.weapon], att)) {
         t.targetId = att.id;
         t.autoTarget = true;
@@ -1980,6 +2006,8 @@ export class World {
         p.explored[i] = 1;
       }
     }
+    // classic (RA2): explored ground stays revealed for good - what is there stays visible and targetable
+    if (this.fog === 'classic') for (const p of this.players) p.visible.set(p.explored);
   }
 
   // ------------------------------------------------------------ victory
@@ -2044,6 +2072,7 @@ export class World {
     for (const c of cmds) this.applyCommand(c.player, c.cmd);
 
     this.rebuildGrid();
+    updateBaseDefense(this); // idle units near an attacked base engage on their own (basedefense.ts)
     this.updateEconomy();
     updateTechs(this); // captured tech structures (capture.ts)
     updateSuperweapons(this); // superweapon timers, salvos, Iron Beam (superweapons.ts)

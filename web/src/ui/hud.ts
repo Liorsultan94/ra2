@@ -739,12 +739,14 @@ export class Hud {
     }
     this.fogCanvas.getContext('2d')!.putImageData(this.fogImg, 0, 0);
     ctx.drawImage(this.fogCanvas, 0, 0);
-    // entities (only what the player can see; enemies need the radar)
+    // entities (only what the player can see; units need the radar). Classic fog (RA2): structures on
+    // explored ground are map knowledge and stay on the map even without a radar.
+    const classic = w.fog === 'classic';
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       const own = e.owner === this.player;
       if (!own && !this.renderer.isShown(e.id)) continue;
-      if (!radar && !(own && e.kind === 'building')) continue;
+      if (!radar && !(e.kind === 'building' && (own || classic))) continue;
       const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
       if (e.kind === 'building') {
         const d = buildingDef(e.def);
