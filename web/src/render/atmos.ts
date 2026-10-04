@@ -55,7 +55,16 @@ export interface AtmosConfig {
   tod: TimeOfDay;
   weather: Weather;
   nv: boolean;
+  /** Clock hour the live day starts at (battles from the menu: the picked start time; default START_HOUR). */
+  startHour?: number;
 }
+
+/**
+ * Battles started from the menu always run the live clock: the menu's day / dusk / night / mist pick
+ * only sets the hour it starts at (a frozen sky read as "the time doesn't move"). Fixed skies stay
+ * available to test / screenshot URLs (?tod=day ...).
+ */
+export const LIVE_START: Record<Exclude<TimeOfDay, 'cycle'>, number> = { day: 10, dusk: 17.5, night: 21, mist: 6 };
 
 const TODS: TimeOfDay[] = ['day', 'dusk', 'night', 'cycle', 'mist'];
 const WEATHERS: Weather[] = ['clear', 'rain', 'snow', 'sandstorm', 'dynamic'];
@@ -90,6 +99,11 @@ export function atmosConfig(viewer: number, mapWeather: Weather = 'clear', live 
   const tod = params.get('tod') ?? (params.get('clock') ? 'cycle' : null) ?? saved.tod;
   const wx = params.get('weather') ?? (params.get('wx') ? 'dynamic' : null) ?? saved.weather;
   if (TODS.includes(tod as TimeOfDay)) cfg.tod = tod as TimeOfDay;
+  // menu battles: the saved pick is a start time on the live clock, never a frozen sky
+  if (def && params.get('tod') === null && cfg.tod !== 'cycle') {
+    cfg.startHour = LIVE_START[cfg.tod];
+    cfg.tod = 'cycle';
+  }
   if (WEATHERS.includes(wx as Weather)) cfg.weather = wx as Weather;
   else if (wx === 'map') cfg.weather = mapWeather;
   cfg.nv = params.get('nv') === '1';
@@ -799,6 +813,7 @@ export class Atmosphere {
       this.altP = clonePreset(this.alt.rain);
     }
     if (cfg.tod === 'cycle') {
+      if (cfg.startHour !== undefined && Number.isFinite(cfg.startHour)) this.startHour = ((cfg.startHour % 24) + 24) % 24;
       this.keys = this.buildKeys();
       this.sunBase = new THREE.Vector3();
       const q = params.get('todphase');
