@@ -21,7 +21,7 @@
  *
  * The mix follows the map's climate (`climate` option): temperate and urban
  * maps get showers, longer rain, thunderstorms and grey spells; the desert is
- * mostly clear with dust fronts and only the odd shower; winter gets snow
+ * mostly clear with short sandstorms (~30 s, at a random hour) and only the odd shower; winter gets snow
  * flurries and heavier snowfalls instead of rain. With the live day (atmos.ts,
  * 1 real minute = 1 game hour at 1x speed) the gaps below make a 24 minute day
  * hold two to four fronts: clear spells of a few game hours in between.
@@ -92,6 +92,12 @@ const MIX: Record<WxClimate, Partial<Record<WxEventKind, number>>> = {
   desert: { overcast: 0.22, dust: 0.56, showers: 0.14, storm: 0.08 },
   winter: { overcast: 0.24, flurries: 0.42, snowfall: 0.34 },
 };
+/**
+ * Sandstorm envelope (game seconds = real seconds at 1x; [min, random extra]): the wind and a thin sandy haze
+ * build up, the sand blows in, peaks and dies away over ~30 s (ramp + hold + ease), then the haze clears.
+ */
+export const DUST_SHAPE = { build: [8, 4], ramp: [6, 3], hold: [10, 6], ease: [6, 3], clear: [8, 4] } as const;
+
 /** The first front of a match always brings something down (rain, dust or snow). */
 const FIRST: Record<WxClimate, WxEventKind> = { temperate: 'showers', urban: 'showers', desert: 'dust', winter: 'flurries' };
 
@@ -188,7 +194,8 @@ export class WeatherCycle {
       // the battle opens in clear weather (the sunrise of the live day); the first front shows up within a few
       // game hours, then clear spells of ~2.5 to 7 hours (the desert stays clear for longer)
       const gap = clim === 'desert' ? 210 + r() * 330 : 150 + r() * 270;
-      const start = last ? this.end(last) + gap : 90 + r() * 150;
+      // (the desert's first sandstorm blows in at a random hour of the day: 07:30 .. 17:30 from a 05:30 start)
+      const start = last ? this.end(last) + gap : clim === 'desert' ? 120 + r() * 600 : 90 + r() * 150;
       const mix: Partial<Record<WxEventKind, number>> = { ...MIX[clim] };
       if (this.opts.dust && clim !== 'desert') mix.dust = 0.08;
       let total = 0;
@@ -254,10 +261,15 @@ export class WeatherCycle {
           e.wind = 0.7 + r() * 0.3;
           break;
         case 'dust':
-          e.build = 45 + r() * 30;
-          e.hold = 70 + r() * 80;
-          e.cover = 0.6;
-          e.precip = 0.75 + r() * 0.25;
+          // a short sandstorm: the sand blows for about half a game hour (~30 real seconds at 1x), fading in and
+          // out; a thin sandy haze, not a dark front (atmos.ts keeps it bright)
+          e.build = DUST_SHAPE.build[0] + r() * DUST_SHAPE.build[1];
+          e.ramp = DUST_SHAPE.ramp[0] + r() * DUST_SHAPE.ramp[1];
+          e.hold = DUST_SHAPE.hold[0] + r() * DUST_SHAPE.hold[1];
+          e.ease = DUST_SHAPE.ease[0] + r() * DUST_SHAPE.ease[1];
+          e.clear = DUST_SHAPE.clear[0] + r() * DUST_SHAPE.clear[1];
+          e.cover = 0.3;
+          e.precip = 0.8 + r() * 0.2;
           e.wind = 0.85 + r() * 0.15;
           break;
         case 'flurries':

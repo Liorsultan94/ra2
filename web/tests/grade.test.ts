@@ -62,3 +62,41 @@ describe('post grade: look weights from time of day and weather', () => {
     }
   });
 });
+
+
+describe('grade LUT survives a lost GPU context (the black screen)', () => {
+  const r = { getRenderTarget: () => null, setRenderTarget: () => {} } as never;
+  const blit = { draw: () => {} } as never;
+  const day = { daylight: 1, sunY: 0.62, warmth: 0.73, rain: 0, storm: 0, sand: 0, snow: 0 };
+
+  it('re-bakes after invalidate() even when the look holds still', () => {
+    const g = new GradeLut();
+    g.update(r, blit, { ...day });
+    const n = g.bakes;
+    g.update(r, blit, { ...day });
+    expect(g.bakes).toBe(n);
+    // WebGL context restored: the LUT render target came back empty (every pixel graded to black)
+    g.invalidate();
+    g.update(r, blit, { ...day });
+    expect(g.bakes).toBe(n + 1);
+  });
+
+  it('refreshes the LUT every ~2 s regardless, so a lost LUT can never stick', () => {
+    const g = new GradeLut();
+    g.update(r, blit, { ...day });
+    const n = g.bakes;
+    for (let i = 0; i < 400; i++) g.update(r, blit, { ...day });
+    expect(g.bakes).toBeGreaterThanOrEqual(n + 3);
+    expect(g.bakes).toBeLessThanOrEqual(n + 4);
+  });
+
+  it('never bakes a NaN look', () => {
+    const g = new GradeLut();
+    g.update(r, blit, { ...day });
+    const n = g.bakes;
+    g.invalidate();
+    g.update(r, blit, { ...day, daylight: NaN, warmth: NaN, sunY: Infinity });
+    // (sanitised to the clear day: a finite look is baked)
+    expect(g.bakes).toBe(n + 1);
+  });
+});

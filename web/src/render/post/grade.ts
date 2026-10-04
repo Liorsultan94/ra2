@@ -64,8 +64,11 @@ const LOOKS = {
   rain: L({ temp: -0.05, tint: -0.045, sat: 0.7, protect: 0.75, contrast: 1.0, lift: [0.014, 0.019, 0.017], gain: [0.97, 1.0, 0.98], shadowTint: [-0.008, 0.008, 0.006], highTint: [-0.008, 0.008, 0.0] }),
   /** Thunderstorm (on top of rain): darker, flatter, greener. */
   storm: L({ temp: -0.06, tint: -0.04, sat: 0.68, protect: 0.8, contrast: 1.05, lift: [0.008, 0.013, 0.014], gain: [0.93, 0.95, 0.95], shadowTint: [-0.008, 0.008, 0.01], highTint: [-0.006, 0.006, 0.004] }),
-  /** Sandstorm: ochre haze, compressed contrast. */
-  sand: L({ temp: 0.07, tint: 0.006, sat: 0.84, protect: 0.85, contrast: 0.96, lift: [0.022, 0.016, 0.006], gain: [1.02, 0.99, 0.93], shadowTint: [0.01, 0.004, -0.01], highTint: [0.025, 0.012, -0.025] }),
+  /**
+   * Sandstorm: a light orange-yellow veil in the desert's sand colour (warm white balance, lifted sandy blacks,
+   * softer contrast); bright, never dark.
+   */
+  sand: L({ temp: 0.075, tint: 0.008, sat: 0.9, protect: 0.85, contrast: 0.97, lift: [0.034, 0.025, 0.01], gain: [1.03, 1.0, 0.92], shadowTint: [0.012, 0.006, -0.01], highTint: [0.028, 0.014, -0.028] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };
@@ -114,6 +117,21 @@ export interface GradeInput {
   storm: number;
   sand: number;
   snow: number;
+}
+
+const GRADE_SAFE: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
+
+/** Hard guard (in place): NaN / Infinity in the grade input fall back to the clear day, the rest is clamped. */
+export function sanitizeGrade(g: GradeInput): GradeInput {
+  const f = (x: number, lo: number, hi: number, d: number) => (Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d);
+  g.daylight = f(g.daylight, 0, 1, GRADE_SAFE.daylight);
+  g.sunY = f(g.sunY, -1, 1, GRADE_SAFE.sunY);
+  g.warmth = f(g.warmth, -4, 4, GRADE_SAFE.warmth);
+  g.rain = f(g.rain, 0, 1, 0);
+  g.storm = f(g.storm, 0, 1, 0);
+  g.sand = f(g.sand, 0, 1, 0);
+  g.snow = f(g.snow, 0, 1, 0);
+  return g;
 }
 
 const sstep = (a: number, b: number, x: number) => {
@@ -212,12 +230,30 @@ export class GradeLut {
     return this.w;
   }
 
-  /** Blend the looks for this frame; re-bake the LUT when the result moved. */
+  /** Frames since the last bake (the LUT is refreshed now and then even when the look holds still). */
+  private age = 0;
+
+  /**
+   * The LUT's GPU contents are gone (WebGL context lost and restored): re-bake on the next update.
+   * Without this a restored context leaves the LUT render target empty, i.e. every pixel graded to black,
+   * until the look happens to move (which on a steady clear day can take many minutes).
+   */
+  invalidate() {
+    this.bakedAmount = -1;
+  }
+
+  /**
+   * Blend the looks for this frame; re-bake the LUT when the result moved, after invalidate(), and every
+   * ~2 s regardless (32k pixels: microseconds), so a lost or corrupted LUT can never stick.
+   */
   update(r: THREE.WebGLRenderer, blit: Blitter, g: GradeInput) {
     const v = this.blend(g);
-    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4;
-    for (let i = 0; i < P_LEN && !moved; i++) if (Math.abs(v[i] - this.baked[i]) > 4e-4) moved = true;
+    // (a NaN look would bake a black LUT: keep the last good one)
+    for (let i = 0; i < P_LEN; i++) if (!Number.isFinite(v[i])) return;
+    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4 || ++this.age > 120;
+    for (let i = 0; i < P_LEN && !moved; i++) if (!(Math.abs(v[i] - this.baked[i]) <= 4e-4)) moved = true;
     if (!moved) return;
+    this.age = 0;
     this.baked.set(v);
     this.bakedAmount = this.amount;
     this.bake(r, blit, v);
@@ -225,6 +261,7 @@ export class GradeLut {
 
   /** The look weights (see weights()) and blended parameter vector for an input (CPU only, no allocation). */
   blend(g: GradeInput): Float32Array {
+    sanitizeGrade(g);
     const w = this.w;
     for (const k of KEYS) w[k] = 0;
     if (this.force) w[this.force] = 1;

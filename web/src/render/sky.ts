@@ -549,6 +549,14 @@ export class Sky {
     this.meteorDur = 0.45 + Math.random() * 0.5;
   }
 
+  /** The GPU contents are gone (WebGL context restored): re-render the scattering LUT and the environment. */
+  invalidate() {
+    this.lastScale = -1;
+    this.lastLight.set(0, -2, 0);
+    this.envKey.set(9, 9, 9);
+    this.envAt = -1e9;
+  }
+
   private captureEnv(light: THREE.Vector3, st: SkyState) {
     const changed = light.distanceTo(this.envKey) > 0.035 || Math.abs(st.cover - this.envCover) > 0.08;
     if (!changed || this.time - this.envAt < 2) return;

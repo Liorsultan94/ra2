@@ -196,7 +196,11 @@ const FinalShader = {
     void main() {
       // heat haze / shockwave refraction (UV offsets from a low-res distortion buffer)
       vec2 uv = vUv;
-      if ( distortOn > 0.5 ) uv = clamp( uv + texture2D( tDistort, vUv ).rg, vec2( 0.001 ), vec2( 0.999 ) );
+      if ( distortOn > 0.5 ) {
+        // (a NaN / Inf offset would send every pixel's lookup to one corner: a uniformly dark frame)
+        vec2 off = texture2D( tDistort, vUv ).rg;
+        if ( !any( isnan( off ) ) && !any( isinf( off ) ) ) uv = clamp( uv + clamp( off, vec2( -0.08 ), vec2( 0.08 ) ), vec2( 0.001 ), vec2( 0.999 ) );
+      }
       vec3 c = sampleAA( uv );
       // lateral chromatic aberration: the outer edge of the frame only
       if ( caAmt > 0.0 ) {
@@ -213,19 +217,28 @@ const FinalShader = {
         float k = aoStrength * ( 1.0 - smoothstep( 1.2, 4.0, max( c.r, max( c.g, c.b ) ) * exposure ) );
         if ( dofOn > 0.5 ) k *= 1.0 - texture2D( tDiffuse, uv ).a;
         float ao = aoAt( gl_FragCoord.xy, vUv );
+        if ( isnan( ao ) || isinf( ao ) ) ao = 1.0;
         if ( debugView == 1.0 ) { gl_FragColor = vec4( vec3( ao ), 1.0 ); return; }
         c *= mix( 1.0, ao, k );
       }
       // crepuscular light / shadow shafts through smoke (signed, linear HDR; see fx/godrays.ts)
-      if ( raysOn > 0.5 ) c = max( c + texture2D( tRays, uv ).rgb * ( 0.35 + 0.65 * min( vec3( 1.0 ), c * 4.0 ) ), vec3( 0.0 ) );
+      if ( raysOn > 0.5 ) {
+        vec3 ry = texture2D( tRays, uv ).rgb;
+        if ( !any( isnan( ry ) ) && !any( isinf( ry ) ) ) c = max( c + ry * ( 0.35 + 0.65 * min( vec3( 1.0 ), c * 4.0 ) ), vec3( 0.0 ) );
+      }
       // bloom (normalised mip chain, post/bloom.ts) + lens extras
+      // hard guard: a NaN / Inf pixel stays one pixel (it never spreads through the bloom / AO into a black frame)
+      if ( any( isnan( c ) ) ) c = vec3( 0.0 );
+      vec3 sc = c;
       if ( bloomOn > 0.5 ) {
-        c += texture2D( tBloom, uv ).rgb * bloomStrength;
+        vec3 bl = texture2D( tBloom, uv ).rgb;
+        if ( !any( isnan( bl ) ) && !any( isinf( bl ) ) ) c += bl * bloomStrength;
         if ( debugView == 2.0 ) c = texture2D( tBloom, uv ).rgb * bloomStrength;
         if ( dirtAmt > 0.0 ) c += texture2D( tBloomWide, uv ).rgb * texture2D( tDirt, vUv ).rgb * dirtAmt;
         if ( streakAmt > 0.0 ) c += texture2D( tStreak, uv ).rgb * ( streakAmt * vec3( 0.8, 0.92, 1.15 ) );
+        if ( any( isnan( c ) ) ) c = sc;
       }
-      c *= exposure;
+      c *= clamp( exposure, 0.25, 4.0 );
       c = tonemap > 0.5 ? agxEnc( c ) : acesEnc( c );
       c = lutOn > 0.5 ? applyLut( c ) : toSRGB( pow( c, vec3( 2.2 ) ) );
       // vignette: soft, keeps the middle of the battlefield untouched
@@ -292,6 +305,8 @@ export class FinalPass extends Pass {
   render(renderer: THREE.WebGLRenderer, writeBuffer: THREE.WebGLRenderTarget, readBuffer: THREE.WebGLRenderTarget) {
     const u = this.uniforms;
     u.tDiffuse.value = readBuffer.texture;
+    // hard guard: a NaN exposure would black out the whole frame
+    if (!Number.isFinite(u.exposure.value)) u.exposure.value = 1.2;
     const d = this.haze ? this.haze.render(renderer) : null;
     u.tDistort.value = d;
     u.distortOn.value = d ? 1 : 0;
@@ -305,7 +320,7 @@ export class FinalPass extends Pass {
     if (bloomOn) {
       u.tBloom.value = b.texture;
       // UnrealBloomPass-scale strength (atmos.ts presets) -> share of the normalised blur added back
-      u.bloomStrength.value = b.strength * 1.15;
+      u.bloomStrength.value = Number.isFinite(b.strength) ? Math.min(3, Math.max(0, b.strength)) * 1.15 : 0.5;
       u.tBloomWide.value = b.wide;
       u.dirtAmt.value = b.wide ? this.dirt * b.strength : 0;
       u.tStreak.value = b.streak;

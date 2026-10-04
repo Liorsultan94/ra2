@@ -25,7 +25,7 @@ import { Readability } from './readability';
 import { emitDamageFx, ejectCasing, popFlares } from './fx/unitfx';
 import { loadSkyEnvironment, type FinalPass } from './post';
 import { PostChain } from './post/chain';
-import type { GradeInput } from './post/grade';
+import { sanitizeGrade, type GradeInput } from './post/grade';
 import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
@@ -323,6 +323,17 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
+    // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
+    // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
+    this.onContextLost = (e: Event) => e.preventDefault();
+    this.onContextRestored = () => {
+      this.post?.lut.invalidate();
+      this.sky?.invalidate();
+      this.shadowAge = 1e9;
+    };
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
     // (the post chain tone maps itself, AgX + grade LUT; this only covers direct-to-screen frames)
     this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -618,6 +629,8 @@ export class GameRenderer {
       if (pd) pc.setDof(dist * Math.pow(2, (pd.focus - 0.5) * 3.2), pd.amount);
       else pc.setDof(dist, this.cinematicDof);
     } else pc.setDof(20, 0);
+    // hard guard: never hand NaN to the grade (a NaN look bakes a black LUT)
+    sanitizeGrade(g);
     pc.update(dt, g);
   }
 
@@ -704,6 +717,8 @@ export class GameRenderer {
     // the sun turns with the view so the scene is always lit from the upper left of the screen
     // (the dynamic day / night cycle moves the sun and moon across the sky: atmos.sunBase)
     this.sunDir.copy(this.atmos?.sunBase ?? SUN_DIR).applyAxisAngle(this.yAxis, -this.yaw);
+    // hard guard: a degenerate key light (NaN / zero) would turn every lit pixel NaN, i.e. a black screen
+    if (!Number.isFinite(this.sunDir.x + this.sunDir.y + this.sunDir.z) || this.sunDir.lengthSq() < 1e-8) this.sunDir.copy(SUN_DIR).applyAxisAngle(this.yAxis, Number.isFinite(this.yaw) ? -this.yaw : 0);
     this.sunRight.crossVectors(this.yAxis, this.sunDir).normalize();
     this.sunUp.crossVectors(this.sunDir, this.sunRight).normalize();
     const D = this.camDir;
@@ -2120,6 +2135,7 @@ export class GameRenderer {
     // world matrices once per frame: the main view, AO, outline mask, drone feed and heat mask all reuse them
     const scene = this.scene;
     scene.updateMatrixWorld();
+    this.guardLights();
     scene.matrixWorldAutoUpdate = false;
     // identical unit parts drawn as instanced batches (models on or casting into the view only)
     const roots = this.instRoots;
@@ -2143,6 +2159,41 @@ export class GameRenderer {
     this.perf.frame();
     const st = this.ladder[this.level];
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
+  }
+
+  private onContextLost: (e: Event) => void;
+  private onContextRestored: () => void;
+  private lightList: THREE.Light[] = [];
+  private lightScan = 0;
+  /** Lights switched off by guardLights (debug / tests). */
+  badLights = 0;
+  /**
+   * Hard guard: one light with a NaN / Infinity position, colour or intensity (even at intensity 0) turns
+   * every lit pixel NaN, i.e. a black frame. Such a light is repaired or left out of the frame. The light
+   * list is rebuilt every 60 frames; the check itself is a few float tests per light.
+   */
+  private guardLights() {
+    if (this.lightScan-- <= 0) {
+      this.lightScan = 60;
+      const list = this.lightList;
+      list.length = 0;
+      this.scene.traverse((o) => {
+        if ((o as THREE.Light).isLight) list.push(o as THREE.Light);
+      });
+    }
+    for (const l of this.lightList) {
+      const e = l.matrixWorld.elements;
+      const c = l.color;
+      if (Number.isFinite(e[12] + e[13] + e[14] + c.r + c.g + c.b + l.intensity)) continue;
+      this.badLights++;
+      if (!Number.isFinite(l.intensity)) l.intensity = 0;
+      if (!Number.isFinite(c.r + c.g + c.b)) c.setRGB(1, 1, 1);
+      const p = l.position;
+      if (!Number.isFinite(p.x + p.y + p.z)) p.set(this.target.x, 8, this.target.z);
+      l.updateMatrixWorld(true);
+      // still broken (a NaN parent): leave it out of this frame
+      if (!Number.isFinite(l.matrixWorld.elements[12] + l.matrixWorld.elements[13] + l.matrixWorld.elements[14])) l.visible = false;
+    }
   }
 
   private shadowKey = new Float64Array(9);
@@ -2210,6 +2261,8 @@ export class GameRenderer {
     this.deployFx.dispose();
     this.atmos.dispose();
     this.sky?.dispose();
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.readability.dispose();
     this.contact?.dispose();
     this.csm?.dispose();
