@@ -22,7 +22,8 @@ export type Flight =
   | 'airMissile' // air-launched guided missile
   | 'ballistic' // boost, apogee, steep terminal dive
   | 'hypersonic' // boost then manoeuvring glide
-  | 'cruise'; // subsonic, terrain-hugging, dog-leg route, pop-up and terminal dive
+  | 'cruise' // subsonic, terrain-hugging, dog-leg route, pop-up and terminal dive
+  | 'bomb'; // free-fall / glide bomb released by a jet in level flight (airbase.ts sortie)
 
 /** Flights that air defences can shoot down. */
 export const INTERCEPTABLE: Flight[] = ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'];
@@ -208,6 +209,29 @@ export interface DodgeState {
   order: Order; // the order he had: a new one (player command) takes over once he is out of the way
 }
 
+/**
+ * Fixed-wing combat jet sortie cycle (airbase.ts): parked on its pad -> taxi -> hold short -> line up ->
+ * take-off roll -> strike sortie -> return -> final approach -> roll-out -> taxi in -> rearm on the pad.
+ * 'orbit': its airbase is gone and no other has a free pad: it circles until a pad frees up or fuel runs out.
+ */
+export type SortiePhase = 'parked' | 'taxiOut' | 'hold' | 'lineup' | 'takeoff' | 'sortie' | 'return' | 'final' | 'rollout' | 'taxiIn' | 'orbit';
+
+export interface Sortie {
+  phase: SortiePhase;
+  base: number; // airbase (airfield building) id, -1 = none
+  pad: number; // parking pad index 0..3 on that base, -1 = none
+  ammo: number; // strikes aboard (0 or 1)
+  rearm: number; // ticks of rearming left on the pad (0 = done)
+  v: number; // ground / air speed, tiles per tick
+  path: number[]; // taxi waypoints [x0, y0, x1, y1, ...]
+  wp: number; // next waypoint index (pairs)
+  tx: number; // last known strike aim point (target lost: look for another one near it)
+  ty: number;
+  fuel: number; // ticks of fuel left while homeless (orbit)
+  ox: number; // orbit centre
+  oy: number;
+}
+
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
 
 export interface Entity {
@@ -292,6 +316,9 @@ export interface Entity {
   dodge: DodgeState | null; // infantry: sidestepping a vehicle
   dodgeAt: number; // infantry: tick before which it won't try another dodge (cooldown)
   stillAt: number; // tick the unit last moved (dug in after standing still a while)
+
+  // fixed-wing combat jets (airbase.ts)
+  sortie: Sortie | null;
 }
 
 export interface QueueItem {
@@ -440,4 +467,6 @@ export type SimEvent =
   | { t: 'superweapon'; owner: number; sw: string; phase: 'detected' | 'ready' | 'launch' | 'lost' | 'beam' | 'end'; x: number; y: number; z?: number; tx?: number; ty?: number; tz?: number }
   /** Infantry entered (enter) or left a civilian building (garrison.ts). */
   | { t: 'garrison'; id: number; owner: number; enter: boolean }
+  /** Jet sortie milestones (airbase.ts): take-off roll begins, wheels touch down, bomb away, base lost (diverting / orbiting), out of fuel. */
+  | { t: 'sortie'; id: number; owner: number; what: 'takeoff' | 'touchdown' | 'release' | 'divert' | 'orbit' | 'crash'; x: number; y: number }
   | { t: 'gameOver'; winner: number };

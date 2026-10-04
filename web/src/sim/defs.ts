@@ -65,6 +65,9 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'autocannon', damage: 16, range: 5.5, rof: 7, warhead: 'flak', projectile: 'instant', air: 'yes' },
   { id: 'heliMissile', damage: 105, range: 7, rof: 70, burst: 2, burstDelay: 10, warhead: 'missile', projectile: 'rocket', speed: 0.55, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'airMissile', damage: 95, range: 8, rof: 70, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'yes' , flight: 'airMissile', munition: 'airMissile' },
+  // jet sortie (airbase.ts): ONE heavy bomb per sortie, released in level flight ~3 tiles short of the target.
+  // Tuned to the 2000-credit jet and its ~45 s cycle: a direct hit kills a main battle tank, two sorties a refinery.
+  { id: 'jetBomb', damage: 400, range: 3.2, rof: 1, warhead: 'missile', projectile: 'missile', speed: 0.2, splash: 1.9, air: 'no', flight: 'bomb', munition: 'bomb', precise: true },
   { id: 'uavMissile', damage: 48, range: 6, rof: 50, warhead: 'rocket', projectile: 'rocket', speed: 0.6, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'heavyUavMissile', damage: 90, range: 7, rof: 60, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'fpvLaunch', damage: 0, range: 9, rof: 110, warhead: 'rocket', projectile: 'spawn', spawn: 'fpv', air: 'no' },
@@ -227,7 +230,8 @@ const BUILDINGS: Record<string, BldTpl> = {
   barracks: { name: 'Barracks', category: 'building', role: 'barracks', model: 'barracks', cost: 500, buildTime: 7, hp: 800, sight: 5, w: 2, h: 2, power: -10, exit: [1, 2], produces: 'infantry', prereq: ['power'], desc: 'Trains infantry.' },
   factory: { name: 'War Factory', category: 'building', role: 'factory', model: 'factory', cost: 2000, buildTime: 18, hp: 1500, sight: 5, w: 3, h: 3, power: -25, passable: [[1, 1], [1, 2]], exit: [1, 1], produces: 'vehicle', prereq: ['refinery', 'barracks'], desc: 'Builds vehicles.' },
   radar: { name: 'Radar Center', category: 'building', role: 'radar', model: 'radar', cost: 1000, buildTime: 12, hp: 1000, sight: 9, w: 2, h: 2, power: -50, prereq: ['refinery'], desc: 'Enables the radar minimap.' },
-  airfield: { name: 'Drone Hub', category: 'building', role: 'airfield', model: 'airfield', cost: 1000, buildTime: 12, hp: 900, sight: 6, w: 3, h: 3, power: -40, exit: [1, 1], produces: 'air', prereq: ['radar'], desc: 'Builds drones and aircraft.' },
+  // airbase (airbase.ts): runway along the front row, 4 jet stands along the back; each base parks 4 jets (the jet cap)
+  airfield: { name: 'Airbase', category: 'building', role: 'airfield', model: 'airfield', cost: 1000, buildTime: 12, hp: 1100, sight: 6, w: 7, h: 4, power: -40, exit: [6, 3], produces: 'air', prereq: ['radar'], desc: 'Runway and 4 jet stands: builds aircraft and drones. Each airbase parks and rearms 4 jets.' },
   tech: { name: 'Battle Lab', category: 'building', role: 'tech', model: 'tech', cost: 2000, buildTime: 20, hp: 1000, sight: 5, w: 3, h: 3, power: -100, prereq: ['factory', 'radar'], desc: 'Unlocks advanced technology.' },
   def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', prereq: ['barracks'], desc: 'Machine gun nest. Hits infantry and drones.' },
   def_aa: { name: 'SAM Battery', category: 'defense', role: 'def_aa', model: 'sam', cost: 900, buildTime: 9, hp: 550, sight: 10, w: 1, h: 1, power: -40, weapon: 'sam', needsPower: true, prereq: ['barracks'], desc: 'Surface-to-air interceptors. Shoots down aircraft, drones, rockets and missiles. Needs power.' },
@@ -246,7 +250,7 @@ const UNITS: Record<string, UnitTpl> = {
   apc: { name: 'Infantry Fighting Vehicle', category: 'vehicle', model: 'apc', cost: 800, buildTime: 9, hp: 320, armor: 'light', sight: 7, speed: 2.6, turnRate: 0.12, turret: true, radius: 0.45, weapon: 'autocannon', transport: 5, prereq: ['factory'], desc: 'Autocannon IFV. Carries 5 infantry who fire from inside.', aiWeight: 3, aiTag: 'main' },
   robot: { name: 'Combat Robot', category: 'vehicle', model: 'ugv', cost: 450, buildTime: 6, hp: 200, armor: 'light', sight: 7, speed: 2.8, turnRate: 0.2, turret: true, radius: 0.3, weapon: 'mgHeavy', prereq: ['factory'], desc: 'Unmanned armed ground robot.', aiWeight: 2, aiTag: 'scout' },
   heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles.', aiWeight: 3, aiTag: 'main' },
-  fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'airMissile', prereq: ['airfield', 'tech'], desc: 'Multirole fighter. Strikes ground and air targets with missiles.', aiWeight: 2, aiTag: 'main' },
+  fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands and rearms (10 s). 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
   uav: { name: 'Strike UAV', category: 'air', model: 'uav', cost: 900, buildTime: 10, hp: 180, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.15, turret: false, radius: 0.4, air: true, weapon: 'uavMissile', prereq: ['airfield'], desc: 'Armed drone. Attacks ground targets.', aiWeight: 3, aiTag: 'main' },
 };
 
@@ -284,7 +288,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     laser: { replaces: 'aa', name: 'DE M-SHORAD', model: 'laser', category: 'vehicle', cost: 900, hp: 240, armor: 'light', weapon: 'laser', desc: 'Directed-energy air defense. Shreds drones, also hits ground targets.', aiWeight: 2, aiTag: 'aa' },
     arty: { name: 'M109A7 Paladin' },
     heli: { name: 'AH-64E Apache' },
-    fighter: { name: 'F-35A Lightning II', sight: 11, desc: 'Fifth-generation stealth fighter and sensor node. Hits ground and air.' },
+    fighter: { name: 'F-35A Lightning II', sight: 11, desc: 'Fifth-generation stealth strike jet: one 2,000 lb JDAM per sortie, then back to its airbase to rearm. 4 jets per airbase.' },
     robot: { name: 'Vision 60 Robot Dog', model: 'robodog' },
     uav: { name: 'MQ-9 Reaper' },
     himars: { name: 'M142 HIMARS (PrSM)', model: 'tel_himars', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
