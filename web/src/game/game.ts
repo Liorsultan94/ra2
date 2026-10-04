@@ -9,7 +9,7 @@ import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type FogMode, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
@@ -62,6 +62,10 @@ export interface GameOptions {
   peace?: PeaceOption;
   /** Game speed: simulation ticks per real second (game/pace.ts; default normal). */
   gameSpeed?: GameSpeed;
+  /** Fog of war rule (sim types.ts FogMode; default 'classic' = Red Alert 2: explored ground stays revealed). */
+  fog?: FogMode;
+  /** Automatic base defence for the local player (sim/basedefense.ts; default on). */
+  autoDefend?: boolean;
 }
 
 export interface GameCallbacks {
@@ -150,8 +154,9 @@ export class Game {
       seed: this.seed,
       map: opts.map,
       credits: opts.credits,
+      fog: opts.fog ?? 'classic',
       players: [
-        { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract },
+        { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract, autoDefend: !attract && opts.autoDefend !== false },
         { name: FACTIONS.find((f) => f.id === opts.enemy)!.name, faction: opts.enemy, color: ENEMY_COLOR, isAI: true },
       ],
     });
@@ -521,6 +526,12 @@ export class Game {
     if (this.cine.active) this.cine.skip();
     this.renderer.rotateView(steps);
     this.sfx('click', undefined, undefined, 0.5);
+  }
+
+  /** Settings toggle: automatic base defence (a sim command, so it stays deterministic; sim/basedefense.ts). */
+  setAutoDefend(on: boolean) {
+    if (this.local < 0 || this.world.players[this.local].autoDefend === on) return;
+    this.issue({ type: 'autoDefend', on });
   }
 
   /** Settings toggle: cinematic moments on / off. */

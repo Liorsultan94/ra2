@@ -82,7 +82,7 @@ function showMainMenu(newDemo = true) {
     onStart: (s) => {
       settings = s;
       const enemy = s.enemy === 'random' ? randomFaction(s.faction) : s.enemy;
-      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map, liveSky: true, peace: s.peace ?? 'auto', gameSpeed: s.gameSpeed });
+      startBattle({ faction: s.faction, enemy, difficulty: s.difficulty, credits: s.credits, quality: resolveQuality(s.quality), cinematic: s.cinematic, droneCam: s.droneCam, xray: s.xray, controls: s.controls, map: urlMap() ?? s.map, liveSky: true, peace: s.peace ?? 'auto', gameSpeed: s.gameSpeed, fog: s.fog, autoDefend: s.autoDefend !== false });
     },
     onSettings: (s) => {
       settings = s;
@@ -121,6 +121,8 @@ function startBattle(opts: GameOptions) {
           game?.setViewSettings({ droneCam: s.droneCam, xray: s.xray });
           game?.setControls(s.controls);
           if (game) game.speed = speedFactor(s.gameSpeed);
+          game?.setAutoDefend(s.autoDefend !== false);
+          if (lastOptions) lastOptions.autoDefend = s.autoDefend !== false; // a restart keeps the choice
         },
       });
     },
@@ -178,9 +180,12 @@ export async function boot(splash: Splash) {
     const [f, e, d] = play.split(',');
     // ?peace=auto|off|3|6|10|15 (default off: test sessions start fighting at once)
     const peace = params.get('peace');
+    // ?fog=on (modern) | off (classic RA2); ?defend=0|1: automatic base defence (default: the saved settings)
+    const fogParam = params.get('fog');
+    const defendParam = params.get('defend');
     // ?brief=0: no briefing / intro / outro; ?brief=1: the full sequence; default: quick briefing, no intro
     const brief = params.get('brief');
-    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls, map: urlMap() ?? settings.map, peace: isPeaceOption(peace) ? peace : 'off', gameSpeed: settings.gameSpeed });
+    startBattle({ briefing: brief === '0' ? 'off' : brief === '1' ? 'full' : 'quick', faction: (f as Faction) || 'usa', enemy: (e as Faction) || 'russia', difficulty: (d as GameOptions['difficulty']) || 'normal', credits: 10000, quality: (params.get('q') as GameOptions['quality']) || resolveQuality(settings.quality), cinematic: settings.cinematic, droneCam: settings.droneCam, xray: settings.xray, controls: (params.get('controls') as GameOptions['controls']) || settings.controls, map: urlMap() ?? settings.map, peace: isPeaceOption(peace) ? peace : 'off', gameSpeed: settings.gameSpeed, fog: fogParam === 'on' ? 'modern' : fogParam === 'off' ? 'classic' : settings.fog, autoDefend: defendParam === '0' ? false : defendParam === '1' ? true : settings.autoDefend !== false });
     const speed = Number(params.get('speed'));
     const g = game as Game | null;
     if (speed && g) g.speed = speed;
