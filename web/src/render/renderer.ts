@@ -322,6 +322,17 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
+    // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
+    // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
+    this.onContextLost = (e: Event) => e.preventDefault();
+    this.onContextRestored = () => {
+      this.post?.lut.invalidate();
+      this.sky?.invalidate();
+      this.shadowAge = 1e9;
+    };
+    canvas.addEventListener('webglcontextlost', this.onContextLost);
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored);
     // (the post chain tone maps itself, AgX + grade LUT; this only covers direct-to-screen frames)
     this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.2;
@@ -2074,6 +2085,8 @@ export class GameRenderer {
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
   }
 
+  private onContextLost: (e: Event) => void;
+  private onContextRestored: () => void;
   private lightList: THREE.Light[] = [];
   private lightScan = 0;
   /** Lights switched off by guardLights (debug / tests). */
@@ -2172,6 +2185,8 @@ export class GameRenderer {
     this.deployFx.dispose();
     this.atmos.dispose();
     this.sky?.dispose();
+    this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);
     this.readability.dispose();
     this.contact?.dispose();
     this.csm?.dispose();

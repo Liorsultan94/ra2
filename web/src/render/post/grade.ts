@@ -230,13 +230,30 @@ export class GradeLut {
     return this.w;
   }
 
-  /** Blend the looks for this frame; re-bake the LUT when the result moved. */
+  /** Frames since the last bake (the LUT is refreshed now and then even when the look holds still). */
+  private age = 0;
+
+  /**
+   * The LUT's GPU contents are gone (WebGL context lost and restored): re-bake on the next update.
+   * Without this a restored context leaves the LUT render target empty, i.e. every pixel graded to black,
+   * until the look happens to move (which on a steady clear day can take many minutes).
+   */
+  invalidate() {
+    this.bakedAmount = -1;
+  }
+
+  /**
+   * Blend the looks for this frame; re-bake the LUT when the result moved, after invalidate(), and every
+   * ~2 s regardless (32k pixels: microseconds), so a lost or corrupted LUT can never stick.
+   */
   update(r: THREE.WebGLRenderer, blit: Blitter, g: GradeInput) {
     const v = this.blend(g);
+    // (a NaN look would bake a black LUT: keep the last good one)
     for (let i = 0; i < P_LEN; i++) if (!Number.isFinite(v[i])) return;
-    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4;
-    for (let i = 0; i < P_LEN && !moved; i++) if (Math.abs(v[i] - this.baked[i]) > 4e-4) moved = true;
+    let moved = Math.abs(this.amount - this.bakedAmount) > 1e-4 || ++this.age > 120;
+    for (let i = 0; i < P_LEN && !moved; i++) if (!(Math.abs(v[i] - this.baked[i]) <= 4e-4)) moved = true;
     if (!moved) return;
+    this.age = 0;
     this.baked.set(v);
     this.bakedAmount = this.amount;
     this.bake(r, blit, v);

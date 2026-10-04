@@ -23,7 +23,7 @@ const LOOK: Record<FallKind, { vel: [number, number, number]; size: [number, num
   rain: { vel: [1.4, -15, 0.7], size: [0.022, 0.5], sway: 0.6, color: [0.55, 0.6, 0.68], alpha: 0.2, n: 6500 },
   snow: { vel: [0.35, -1.0, 0.18], size: [0.075, 0], sway: 0.45, color: [0.95, 0.97, 1], alpha: 0.85, n: 4500 },
   // blowing sand: fine, short, light grains in the desert's sand colour, carried fast by the wind
-  sandstorm: { vel: [9, -0.35, 3.2], size: [0.024, 0.42], sway: 0.75, color: [0.95, 0.78, 0.52], alpha: 0.3, n: 6000 },
+  sandstorm: { vel: [9, -0.35, 3.2], size: [0.022, 0.3], sway: 0.75, color: [0.95, 0.78, 0.52], alpha: 0.28, n: 6200 },
 };
 
 const VERT = /* glsl */ `
