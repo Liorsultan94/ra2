@@ -9,7 +9,7 @@ import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { CameoFactory } from '../render/cameo';
@@ -91,7 +91,6 @@ export class Game {
   speed = 1;
   /** Early-game grace: the enemy AI launches no attack before this tick (0 = none; sim/peace.ts). */
   readonly peaceUntil: number;
-  private peaceTold = 0;
   private mode: Mode = 'normal';
   private placing: string | null = null;
   /** Control groups, stance / patrol / guard order modes (src/game/controls.ts) and their widgets. */
@@ -188,7 +187,8 @@ export class Game {
     ATMOS_DEFAULTS.live = !!opts.liveSky && !attract;
     this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
     this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
-    this.hud.peace.setUntil(this.peaceUntil);
+    // (the owner wants the first attack to come as a surprise: no peace-time countdown chip and no announcements)
+    this.hud.peace.setUntil(0);
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
     // positional audio: the camera is the listener (src/audio/scene.ts)
     this.audio.setNation(attract ? null : opts.faction);
@@ -489,7 +489,6 @@ export class Game {
         this.world.step();
         for (const ev of this.world.drainEvents()) this.onEvent(ev);
       }
-      if (steps) this.checkPeace();
     }
     const alpha = this.paused ? 1 : this.pacer.alpha;
     this.tracker?.update();
@@ -765,19 +764,6 @@ export class Game {
       case 'gameOver':
         this.finish(ev.winner === this.local);
         break;
-    }
-  }
-
-  /** Early-game grace announcements: one minute left, then the end ("Enemy forces are mobilising"). */
-  private checkPeace() {
-    if (!this.peaceUntil || this.peaceTold >= 2 || this.local < 0) return;
-    const t = this.world.tick;
-    if (this.peaceTold === 0 && t >= this.peaceUntil - 60 * TPS && t < this.peaceUntil) {
-      this.peaceTold = 1;
-      this.hud.message('Peace time ends in 1 minute', 'info');
-    } else if (t >= this.peaceUntil) {
-      this.peaceTold = 2;
-      this.say('Enemy forces are mobilising', 'warn');
     }
   }
 
