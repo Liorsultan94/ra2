@@ -1,5 +1,6 @@
 import { WEAPONS, unitDef } from './defs';
 import { standHeight } from './map';
+import { DECOY_RANGE, evasionChance, releaseDecoy, stepDecoy } from './stealth';
 import { INTERCEPTABLE, TPS, type Entity, type Flight, type Projectile, type WeaponDef } from './types';
 import type { World } from './world';
 
@@ -120,6 +121,14 @@ function blank(w: World, src: Entity, weapon: WeaponDef, flight: Flight): Projec
     dk: 0,
     wx: 0,
     wy: 0,
+    decoy: 0,
+    dcx: 0,
+    dcy: 0,
+    dcz: 0,
+    dcvx: 0,
+    dcvy: 0,
+    dcvz: 0,
+    dcAt: 0,
     dead: false,
   };
 }
@@ -185,6 +194,9 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
     p.vy = (diry / n) * speed;
     p.vz = (dirz / n) * speed;
     p.speed = speed;
+    // a missile at an evasive aircraft (stealth.ts): the seeded roll says now whether its flares will fool it
+    const ev = evasionChance(w, weapon, t);
+    if (ev > 0) p.decoy = w.rng.next() < ev ? 1 : -1;
   }
   w.projectiles.push(p);
   w.events.push({ t: 'launch', id: p.id, flight, weapon: weapon.id, x: p.x, y: p.y, z: p.z, owner: p.owner, sourceId: src.id });
@@ -380,7 +392,19 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   let tvx = 0;
   let tvy = 0;
   let tvz = 0;
-  if (p.targetProj >= 0) {
+  if (p.decoy === 2) {
+    // fooled (stealth.ts): chase the decoy flare, give up once it burns out
+    if (!stepDecoy(p, groundZ(w, p.dcx, p.dcy))) {
+      airburst(w, p, 'expire');
+      return;
+    }
+    ax = p.dcx;
+    ay = p.dcy;
+    az = p.dcz;
+    tvx = p.dcvx;
+    tvy = p.dcvy;
+    tvz = p.dcvz;
+  } else if (p.targetProj >= 0) {
     let t = byId.get(p.targetProj);
     if (!t || t.dead) {
       const nt = retarget(w, p);
@@ -413,6 +437,16 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
       p.tx = ax;
       p.ty = ay;
       p.tz = az;
+      // the jet's flare fools it: from here on it homes on the flare (stealth.ts)
+      if (p.decoy === 1 && t.kind === 'unit' && w.isAir(t) && Math.hypot(ax - p.x, ay - p.y, az - p.z) < DECOY_RANGE) {
+        releaseDecoy(w, p, t, az);
+        ax = p.dcx;
+        ay = p.dcy;
+        az = p.dcz;
+        tvx = p.dcvx;
+        tvy = p.dcvy;
+        tvz = p.dcvz;
+      }
     } else {
       // target gone: keep flying at the last known point
       ax = p.tx;
@@ -492,7 +526,11 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
     p.x = p.px + sx * tt;
     p.y = p.py + sy * tt;
     p.z = p.pz + sz * tt;
-    if (p.targetProj >= 0) interceptResolve(w, p, byId.get(p.targetProj)!);
+    if (p.decoy === 2) {
+      // bursts on the flare: no harm to the jet
+      p.dead = true;
+      w.events.push({ t: 'airburst', x: p.x, y: p.y, z: p.z, kind: 'miss', weapon: p.weapon, decoy: true });
+    } else if (p.targetProj >= 0) interceptResolve(w, p, byId.get(p.targetProj)!);
     else detonate(w, p, true);
     return;
   }
@@ -504,6 +542,10 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   }
   if (p.z <= gnd - 0.02) {
     p.z = groundZ(w, p.x, p.y);
+    if (p.decoy === 2) {
+      airburst(w, p, 'expire');
+      return;
+    }
     detonate(w, p, false);
     return;
   }

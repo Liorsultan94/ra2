@@ -4,7 +4,11 @@
 // taxis out along the taxiway, holds short of the runway until the runway is free,
 // lines up, rolls and takes off, flies to the target and drops ONE heavy bomb in
 // level flight, flies home, joins the final approach, lands, rolls out, taxis back
-// to its pad and rearms there for 10 s. Only one jet uses a runway at a time (the
+// to its pad and rearms there for 10 s, while the ground crew repairs any battle damage (free, REPAIR_RATE).
+// It takes off again only when armed AND fully repaired, except that a fresh order the owner gives that jet
+// launches it as soon as it is armed. Automatic re-strike: if the target survives the bomb, the jet keeps the
+// attack order, and after rearm and repair it sorties against the same target again, until the target is
+// destroyed, is no longer a valid / visible target, or the owner gives a new order. Only one jet uses a runway at a time (the
 // airbase's `dockedBy` holds the runway lock), taxiing jets keep their distance, and
 // the jet cap is the number of pads (4 per completed airbase).
 //
@@ -23,6 +27,8 @@ import type { World } from './world';
 export const PADS_PER_BASE = 4;
 /** Rearm time on the pad after a strike. */
 export const REARM_TICKS = TPS * 10;
+/** Free repair on the pad: fraction of max HP per second (runs alongside the rearm). */
+export const REPAIR_RATE = 0.04;
 /** Endurance of a jet that has lost its airbase. */
 export const FUEL_TICKS = TPS * 30;
 
@@ -30,7 +36,8 @@ const TAXI_V = 1.5 / TPS; // tiles per tick
 const TAXI_ACC = 1.6 / TPS / TPS;
 const TAXI_TURN = 0.12; // rad per tick
 const TO_ACC = 2.4 / TPS / TPS; // take-off roll acceleration
-const ROTATE_K = 0.66; // rotate at this fraction of cruise speed
+const ROTATE_K = 0.66; // rotate at this fraction of the reference cruise speed
+const REF_V = 5.0 / TPS; // reference cruise speed for the take-off roll: faster jets (F-35) rotate at the same speed, then accelerate in the air
 const CLIMB = 0.028; // tiles per tick on climb-out
 const APPROACH_V = 3.2 / TPS;
 const TOUCH_V = 2.6 / TPS;
@@ -167,7 +174,7 @@ export function jetsQueued(w: World, pid: number): number {
 }
 
 function newSortie(e: Entity, d: UnitDef): Sortie {
-  return { phase: 'return', base: -1, pad: -1, ammo: 1, rearm: 0, v: d.speed / TPS, path: [], wp: 0, tx: -1, ty: -1, fuel: FUEL_TICKS, ox: e.x, oy: e.y };
+  return { phase: 'return', base: -1, pad: -1, ammo: 1, rearm: 0, v: d.speed / TPS, path: [], wp: 0, tx: -1, ty: -1, fuel: FUEL_TICKS, ox: e.x, oy: e.y, auto: -1, autoAt: 0 };
 }
 
 /** Put a jet on a free pad of base b, parked, armed and ready (new jets from production). */
@@ -186,6 +193,7 @@ export function parkJet(w: World, e: Entity, b: Entity): boolean {
   s.rearm = 0;
   s.path = [];
   s.wp = 0;
+  s.auto = -1;
   e.x = e.px = g.pads[pad];
   e.y = e.py = g.padY;
   e.z = e.pz = 0;
@@ -195,10 +203,30 @@ export function parkJet(w: World, e: Entity, b: Entity): boolean {
   return true;
 }
 
-/** Ready for a strike: parked on its pad, armed, rearm finished. */
+/** Ready for a strike: parked on its pad, armed, rearm finished and fully repaired. */
 export function jetReady(e: Entity): boolean {
   const s = e.sortie;
-  return !!s && s.phase === 'parked' && s.ammo > 0 && s.rearm <= 0;
+  return !!s && s.phase === 'parked' && s.ammo > 0 && s.rearm <= 0 && e.hp >= e.maxHp;
+}
+
+/** Being repaired: a damaged jet parked on its pad. */
+export function jetRepairing(e: Entity): boolean {
+  return !!e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp;
+}
+
+/** Repair state 0..1 for the UI (the jet's health; 1 = fully repaired), or -1 for non-jets. */
+export function repairProgress(e: Entity): number {
+  if (!e.sortie) return -1;
+  return Math.min(1, Math.max(0, e.hp / e.maxHp));
+}
+
+/** Is the jet's attack order an automatic re-strike (kept after a release, not a fresh order from its owner)? */
+export function autoStrike(e: Entity): boolean {
+  const s = e.sortie;
+  if (!s || s.auto < 0) return false;
+  if (e.order.type === 'attack' && e.order.target === s.auto && e.orderAt === s.autoAt) return true;
+  s.auto = -1; // a new order (or stop) replaced it
+  return false;
 }
 
 /** Rearm progress 0..1 for the UI (1 = ready / not rearming), or -1 for non-jets. */
@@ -326,16 +354,26 @@ function targetNear(w: World, e: Entity, x: number, y: number, r: number): Entit
   return best;
 }
 
-/** The current strike target of an attack order, re-acquired near the last aim point if it is gone. */
+/**
+ * The current strike target of an attack order, re-acquired near the last aim point if it is gone.
+ * An automatic re-strike never re-acquires: once its target is destroyed, or is no longer a valid target
+ * (a unit out of sight, captured, airborne), the order is dropped and the jet stays home / heads home.
+ */
 function strikeTarget(w: World, e: Entity, s: Sortie): Entity | null {
   const o = e.order;
   if (o.type !== 'attack') return null;
   const wpn = WEAPONS[unitDef(e.def).weapon!];
   const t = w.get(o.target);
-  if (t && w.isEnemy(e.owner, t.owner) && w.canHit(wpn, t)) {
+  const auto = autoStrike(e);
+  if (t && w.isEnemy(e.owner, t.owner) && w.canHit(wpn, t) && (!auto || t.kind === 'building' || w.visibleTo(e.owner, t.x, t.y))) {
     s.tx = t.x;
     s.ty = t.y;
     return t;
+  }
+  if (auto) {
+    s.auto = -1;
+    e.order = { type: 'idle' };
+    return null;
   }
   if (s.tx >= 0) {
     const n = targetNear(w, e, s.tx, s.ty, 2.5);
@@ -366,7 +404,10 @@ function release(w: World, e: Entity, d: UnitDef, s: Sortie, t: Entity) {
   launch(w, e, t, wpn, t.x, t.y);
   e.firedAt = w.tick;
   s.ammo = 0;
-  e.order = { type: 'idle' };
+  // keep the attack order: if the target survives the bomb, the jet comes back for it after rearm and repair
+  e.order = { type: 'attack', target: t.id, forced: true };
+  s.auto = t.id;
+  s.autoAt = e.orderAt;
   e.targetId = -1;
   s.phase = 'return';
   w.events.push({ t: 'sortie', id: e.id, owner: e.owner, what: 'release', x: e.x, y: e.y });
@@ -462,6 +503,7 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
   const g = base ? baseGeo(w, base) : null;
   const cruise = d.cruiseAlt ?? 2.6;
   const vCruise = d.speed / TPS;
+  const vRef = Math.min(vCruise, REF_V);
   const dirA = g ? (g.dir > 0 ? 0 : Math.PI) : 0;
 
   switch (s.phase) {
@@ -478,7 +520,10 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
       e.turret = e.facing;
       if (s.rearm > 0 && --s.rearm === 0) s.ammo = 1;
       if (s.rearm <= 0 && s.ammo <= 0) s.ammo = 1;
-      if (s.rearm <= 0 && hasMission(w, e, s)) {
+      // the ground crew patches up battle damage while it rearms (free)
+      if (e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + (e.maxHp * REPAIR_RATE) / TPS);
+      // off again once armed and fully repaired; a fresh order from its owner launches it as soon as it is armed
+      if (s.rearm <= 0 && hasMission(w, e, s) && (e.hp >= e.maxHp || !autoStrike(e))) {
         setPath(s, [px, g.taxiY, g.startX, g.taxiY]);
         s.phase = 'taxiOut';
       }
@@ -534,7 +579,7 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
       e.x += Math.cos(e.facing) * s.v;
       e.y += Math.sin(e.facing) * s.v;
       if (g && e.z < 0.05) e.y += (g.rwyY - e.y) * 0.3;
-      if (s.v >= vCruise * ROTATE_K) e.z = Math.min(cruise, e.z + CLIMB * clamp((s.v - vCruise * ROTATE_K) / (vCruise * 0.12), 0.25, 1));
+      if (s.v >= vRef * ROTATE_K) e.z = Math.min(cruise, e.z + CLIMB * clamp((s.v - vRef * ROTATE_K) / (vRef * 0.12), 0.25, 1));
       e.moving = true;
       e.turret = e.facing;
       // stream take-off: the next jet may line up once this one is well down the runway
