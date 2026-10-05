@@ -199,6 +199,45 @@ describe('Rocket Team (AT/AA): RPG for the ground, shoulder-fired missile for th
     expect(tank.hp).toBeLessThan(1e5);
   });
 
+  it('switches from an automatic ground target to an aircraft entering missile range, but keeps an ordered one', () => {
+    const scene = (ordered: boolean) => {
+      const w = arena(43);
+      const team = at(w, 'usa_at', 0, 40, 40);
+      team.hp = team.maxHp = 1e5;
+      team.stance = 'hold';
+      const tank = at(w, 'russia_mbt', 1, team.x + 4, team.y + 1);
+      tank.hp = tank.maxHp = 1e5;
+      tank.stance = 'holdFire';
+      if (ordered) w.issue(0, { type: 'attack', ids: [team.id], target: tank.id });
+      const shots: { tick: number; weapon: string; target: number }[] = [];
+      const rec = (e: SimEvent) => {
+        if (e.t === 'fire' && e.id === team.id) shots.push({ tick: w.tick, weapon: e.weapon, target: e.targetId });
+      };
+      run(w, TPS * 4, rec);
+      expect(shots.length).toBeGreaterThan(0);
+      expect(shots.every((s) => s.weapon === 'atRocket' && s.target === tank.id)).toBe(true);
+      // a helicopter turns up inside the 7-tile missile reach while the RPG is busy with the tank
+      const heli = aircraft(w, 'russia_heli', 1, team.x - 3, team.y - 3);
+      heli.hp = heli.maxHp = 1e5;
+      const n = shots.length;
+      run(w, TPS * 8, rec);
+      return { w, team, tank, heli, before: shots.slice(0, n), after: shots.slice(n) };
+    };
+    const auto = scene(false);
+    const aa = auto.after.filter((s) => s.weapon === 'manpads');
+    expect(aa.length).toBeGreaterThan(0);
+    expect(aa.every((s) => s.target === auto.heli.id)).toBe(true);
+    // the switch waits for the launcher swap after the last RPG shot
+    const lastRpg = [...auto.before, ...auto.after].filter((s) => s.weapon === 'atRocket' && s.tick < aa[0].tick).pop()!;
+    expect(aa[0].tick - lastRpg.tick).toBeGreaterThanOrEqual(WEAPON_SWAP);
+    expect(auto.team.targetId).toBe(auto.heli.id);
+    // the player ordered the tank: it stays on the tank with the RPG
+    const ord = scene(true);
+    expect(ord.after.length).toBeGreaterThan(0);
+    expect(ord.after.every((s) => s.weapon === 'atRocket' && s.target === ord.tank.id)).toBe(true);
+    expect(ord.heli.hp).toBe(1e5);
+  });
+
   it('against a fast jet the small warhead needs about 4 hits', () => {
     const w = arena(17, 'usa', 'china');
     const team = at(w, 'usa_at', 0, 40, 40);

@@ -1096,14 +1096,31 @@ export class World {
 
   // ------------------------------------------------------------ combat
 
-  private findTarget(e: Entity, range: number): Entity | null {
+  /**
+   * Two-weapon units (the Rocket Team's RPG + AA missile) busy with a ground target they picked themselves:
+   * an aircraft that comes inside the AA missile's reach takes over (checked every 8 ticks). A target the
+   * player ordered (forced attack) is kept. The launcher swap delay (WEAPON_SWAP) still applies.
+   */
+  private airPreempt(e: Entity, t: Entity | undefined): Entity | undefined {
+    const d = DEFS[e.def];
+    if (!t || d.kind !== 'unit' || !d.weapon2 || this.isAir(t) || (this.tick + e.id) % 8 !== 0 || !autoFire(e)) return t;
+    if (e.order.type === 'attack' && e.order.forced) return t;
+    const a = this.findTarget(e, this.weaponRange(e, WEAPONS[d.weapon2]), true);
+    if (!a) return t;
+    e.targetId = a.id;
+    e.autoTarget = true;
+    if (e.order.type === 'attack') e.order = { type: 'attack', target: a.id };
+    return a;
+  }
+
+  private findTarget(e: Entity, range: number, airOnly = false): Entity | null {
     let best: Entity | null = null;
     let bestScore = Infinity;
     const vis = this.players[e.owner];
     const d0 = DEFS[e.def];
     const two = d0.kind === 'unit' && !!d0.weapon2;
     this.queryRadius(e.x, e.y, range + 2, (t) => {
-      if (!this.isEnemy(e.owner, t.owner) || t.dead) return;
+      if (!this.isEnemy(e.owner, t.owner) || t.dead || (airOnly && !this.isAir(t))) return;
       // the weapon for this target (main, or the secondary AA missile); unarmed (kamikaze steering) scans everything
       const wpn = d0.weapon ? this.weaponVs(e.def, t) : null;
       if (d0.weapon && !wpn) return;
@@ -1385,7 +1402,7 @@ export class World {
         break;
       case 'attackMove': {
         if (d.weapon) {
-          let t = this.get(e.targetId);
+          let t = this.airPreempt(e, this.get(e.targetId));
           if (!t && this.tick >= e.scanAt && autoFire(e)) {
             e.scanAt = this.tick + 8;
             t = this.findTarget(e, d.sight) ?? undefined;
@@ -1412,7 +1429,7 @@ export class World {
         break;
       }
       case 'attack': {
-        const t = this.get(o.target);
+        const t = this.airPreempt(e, this.get(o.target));
         if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t)) || !d.weapon) {
           e.order = { type: 'idle' };
           e.targetId = -1;
@@ -1558,7 +1575,7 @@ export class World {
     this.processBurst(e);
     aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (!d.weapon || d.engineer) return;
-    let t = this.get(e.targetId);
+    let t = this.airPreempt(e, this.get(e.targetId));
     const tw = t ? this.weaponVs(e.def, t) : null;
     if (t && (!tw || !this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, tw, t))) t = undefined;
     if (!t && this.tick >= e.scanAt) {
@@ -1609,6 +1626,7 @@ export class World {
     if (!d.weapon) return;
     let t = this.get(e.targetId);
     if (t && (!this.isEnemy(e.owner, t.owner) || !autoFire(e))) t = undefined;
+    t = this.airPreempt(e, t);
     if (!t && this.tick >= e.scanAt && autoFire(e)) {
       e.scanAt = this.tick + 10;
       t = this.findTarget(e, scanRange(this, e, d)) ?? undefined;
