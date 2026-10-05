@@ -9,7 +9,8 @@ import { BloomPass } from './bloom';
 import { DofPass } from './dof';
 import { GradeLut, type GradeInput } from './grade';
 import { makeLensDirt } from './lens';
-import { Blitter, halfFloatTargets } from './util';
+import { BlackFrameWatch } from './heal';
+import { Blitter, halfFloatTargets, syncDepthSize } from './util';
 
 /*
  * The cinematic post chain (all quality levels with a half-float target):
@@ -64,6 +65,12 @@ export class PostChain {
   private dofFocus = 20;
   private dofAmount = 0;
   private dofGoal = 0;
+  /** Self-heal: async black-frame probe (post/heal.ts) and the repairs it triggered. */
+  private watch = new BlackFrameWatch();
+  private lastRepair = -1e9;
+  repairs = 0;
+  /** Called after a repair (the renderer re-bakes what lives outside the chain, e.g. the sky LUT). */
+  onRepair: (() => void) | null = null;
 
   /** Can this device run the chain at all (half-float colour targets)? */
   static supported(r: THREE.WebGLRenderer): boolean {
@@ -184,12 +191,68 @@ export class PostChain {
       if (this.tilt) this.tilt.enabled = !!tilt;
     }
     this.composer.render(dt);
+    // self-heal: a black finished frame re-checks the chain's buffers and re-bakes the grade (rate-limited)
+    if (this.watch.tick(this.renderer)) {
+      const now = performance.now();
+      if (now - this.lastRepair > 3000) {
+        this.lastRepair = now;
+        this.repairs++;
+        const rebuilt = this.repair();
+        // (a black frame with nothing broken is legitimate, e.g. a view over unexplored shroud: no noise then)
+        if (rebuilt) console.warn(`[post] black frame: ${rebuilt} scene buffer(s) rebuilt`);
+        this.onRepair?.();
+      }
+    }
   }
 
   setSize(w: number, h: number, pixelRatio: number) {
     this.composer.setPixelRatio(pixelRatio);
     this.composer.setSize(w, h);
+    // the scene buffers' depth textures follow the new size right away (see syncDepthSize)
+    syncDepthSize(this.composer.renderTarget1);
+    syncDepthSize(this.composer.renderTarget2);
     this.tilt?.setSize(w * pixelRatio, h * pixelRatio);
+  }
+
+  /**
+   * Repair after a black frame: re-bake the grade LUT, and rebuild any scene buffer whose framebuffer is not
+   * complete (it is freed and set up again, at its current size, the next time it is drawn into). Returns the
+   * number of buffers rebuilt.
+   */
+  repair(): number {
+    this.lut.invalidate();
+    const r = this.renderer;
+    const gl = r.getContext();
+    const props = r.properties;
+    let n = 0;
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      syncDepthSize(rt);
+      const p = props.get(rt) as { __webglFramebuffer?: WebGLFramebuffer; __webglMultisampledFramebuffer?: WebGLFramebuffer };
+      let ok = true;
+      for (const fb of [p.__webglFramebuffer, p.__webglMultisampledFramebuffer]) {
+        if (!fb || !ok) continue;
+        r.state.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      }
+      if (!ok) {
+        rt.dispose();
+        n++;
+      }
+    }
+    r.state.bindFramebuffer(gl.FRAMEBUFFER, null);
+    r.setRenderTarget(null);
+    if (n) this.temporal?.reset();
+    return n;
+  }
+
+  /** The GL objects are gone (context restored): the black-frame probe starts over. */
+  contextRestored() {
+    this.watch.reset();
+  }
+
+  /** Self-heal counters (debug / perf report). */
+  healStats() {
+    return { probes: this.watch.probes, blacks: this.watch.blacks, repairs: this.repairs };
   }
 
   /** Enabled passes and their full-screen draws (debug / perf report). */
@@ -213,6 +276,7 @@ export class PostChain {
     this.composer.dispose();
     for (const p of this.composer.passes) (p as { dispose?: () => void }).dispose?.();
     this.lut.dispose();
+    this.watch.dispose(this.renderer);
     this.dirtTex?.dispose();
     this.blit.dispose();
   }

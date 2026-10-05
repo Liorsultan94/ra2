@@ -317,6 +317,10 @@ export class FinalPass extends Pass {
     const b = this.bloom;
     const bloomOn = !!b && b.enabled && !!b.texture;
     u.bloomOn.value = bloomOn ? 1 : 0;
+    // (inputs of a pass that did not run this frame are unbound, never left pointing at a buffer that may have
+    // been resized or freed since: a stale depth texture in a sampler gets re-uploaded at its old size, see
+    // syncDepthSize in post/util.ts; the shader does not read them while their switch is off)
+    if (!bloomOn) u.tBloom.value = u.tBloomWide.value = u.tStreak.value = null;
     if (bloomOn) {
       u.tBloom.value = b.texture;
       // UnrealBloomPass-scale strength (atmos.ts presets) -> share of the normalised blur added back
@@ -332,6 +336,7 @@ export class FinalPass extends Pass {
     const depth = this.depth?.texture ?? null;
     const aoOn = !!ao && ao.enabled && !!ao.texture && !!depth;
     u.aoOn.value = aoOn ? 1 : 0;
+    if (!aoOn) u.tAO.value = u.tDepth.value = null;
     if (aoOn) {
       u.tAO.value = ao.texture;
       ao.sizeInto(u.aoSize.value);

@@ -387,6 +387,7 @@ export class GameRenderer {
     this.onContextLost = (e: Event) => e.preventDefault();
     this.onContextRestored = () => {
       this.post?.lut.invalidate();
+      this.post?.contextRestored();
       this.sky?.invalidate();
       // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
       this.terrain.ground.photo?.restore();
@@ -546,6 +547,8 @@ export class GameRenderer {
     if (post) {
       const pc = (this.post = new PostChain(this.renderer, this.scene, this.camera, quality, this.ultra, this.fog.uniforms.fogNoise.value));
       this.composer = pc.composer;
+      // self-heal after a black frame (post/heal.ts): the sky's scattering LUT is re-rendered too
+      pc.onRepair = () => this.sky?.invalidate();
       this.bloom = pc.bloom;
       this.finalPass = pc.final;
       this.tilt = pc.tilt;
@@ -680,7 +683,7 @@ export class GameRenderer {
   /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
   postStats() {
     const st = this.post?.stats();
-    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive } : null;
+    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive, heal: this.post!.healStats() } : null;
   }
 
   /**
@@ -2280,7 +2283,7 @@ export class GameRenderer {
         this.frameTimes.length = 0;
         this.goodWindows = 0;
         this.upNeed = Math.min(40, this.upNeed * 2);
-        this.applyLevel(Math.min(this.ladder.length - 1, this.level + 2));
+        this.queueLevel(Math.min(this.ladder.length - 1, this.level + 2));
         this.fastFrames = 60;
         this.watchdogSteps++;
         return;
@@ -2311,18 +2314,28 @@ export class GameRenderer {
       this.goodWindows = 0;
       // far off the target (under ~22 fps): skip rungs
       const steps = med > 1 / 16 ? 3 : med > 1 / 24 ? 2 : 1;
-      this.applyLevel(Math.min(this.ladder.length - 1, this.level + steps));
+      this.queueLevel(Math.min(this.ladder.length - 1, this.level + steps));
       this.fastFrames = 60;
     } else if (med < fast && this.level > 0) {
       if (++this.goodWindows >= this.upNeed) {
         this.goodWindows = 0;
         this.lastUpAt = now;
-        this.applyLevel(this.level - 1);
+        this.queueLevel(this.level - 1);
       }
     } else this.goodWindows = 0;
   }
   private govFrames = 0;
   private fastFrames = 0;
+  /** Governor step waiting for the start of the next frame (-1 = none). */
+  private pendingLevel = -1;
+  /**
+   * The governor decides after a frame has been drawn; a new rung can change the pixel ratio, and resizing the
+   * canvas clears what was just drawn (that frame would be shown black). The step is applied before the next
+   * frame draws instead.
+   */
+  private queueLevel(level: number) {
+    this.pendingLevel = level;
+  }
   /** Watchdog: recent very long frames (decays on normal ones), last time it stepped down, steps taken. */
   private stalls = 0;
   private lastWatchdog = -1e9;
@@ -2332,6 +2345,11 @@ export class GameRenderer {
   private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
+    if (this.pendingLevel >= 0) {
+      const l = this.pendingLevel;
+      this.pendingLevel = -1;
+      this.applyLevel(l);
+    }
     this.time += dt;
     this.renderer.info.reset();
     for (let i = this.scheduled.length - 1; i >= 0; i--) {
