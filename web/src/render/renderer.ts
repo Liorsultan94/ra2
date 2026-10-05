@@ -1120,6 +1120,8 @@ export class GameRenderer {
   private viewFrustum = new THREE.Frustum();
   private projView = new THREE.Matrix4();
   private castSphere = new THREE.Sphere();
+  /** Off-screen pose animation skip (?pfanim=0 turns it off: A/B checks with the same random sequence). */
+  private animSkip = typeof location === 'undefined' || !/[?&]pfanim=0\b/.test(location.search);
   /** Scratch: an entity's interpolated position (syncEntities). */
   private posTmp = new THREE.Vector3();
   /** Scratch: an emitter's world position (exhaust, sparks, chimneys). */
@@ -1354,7 +1356,7 @@ export class GameRenderer {
       // Vehicles / buildings / aircraft off screen (model and shadow) or under the shroud: no pose animation.
       // The time is banked and handed over in one step once the model can be seen again (spinners, blends
       // and timers end up where they would have been); infantry have their own cheap off-screen cycle.
-      if (!nearNow && !v.model.infantry && !this.photoCam) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
+      if (!nearNow && !v.model.infantry && !this.photoCam && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
       else {
         const debt = v.animDebt ?? 0;
         if (debt) {

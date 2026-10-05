@@ -78,7 +78,24 @@ export class CameoFactory {
   /** Full-size frame rebuilt from the asynchronous readback (CPU backed). */
   private big: HTMLCanvasElement | null = null;
 
+  /** Cameos persisted by an earlier session of the same build (IndexedDB), loaded into the cache. */
+  private restored: Promise<void>;
+
+  private patch(key: string, url: string) {
+    for (const im of document.querySelectorAll<HTMLImageElement>(`img[data-cameo="${key}"]`)) im.src = url;
+  }
+
   constructor() {
+    this.restored = storeLoad()
+      .then((m) => {
+        for (const [k, b] of m) {
+          if (this.cache.has(k)) continue;
+          const url = URL.createObjectURL(b);
+          this.cache.set(k, url);
+          this.patch(k, url);
+        }
+      })
+      .catch(() => {});
     try {
       const canvas = document.createElement('canvas');
       canvas.width = CANVAS_PX;
@@ -142,6 +159,8 @@ export class CameoFactory {
     if (this.running) return;
     this.running = true;
     try {
+      // cameos kept from an earlier session of this build first: no model build, shader compile or readback
+      await this.restored;
       while (this.queue.size && this.renderer) {
         await idle();
         if (this.paused || document.hidden) {
@@ -158,7 +177,10 @@ export class CameoFactory {
           console.warn('[cameo] failed', job.defId, e);
         }
         this.cache.set(key, url);
-        if (url) for (const im of document.querySelectorAll<HTMLImageElement>(`img[data-cameo="${key}"]`)) im.src = url;
+        if (url) {
+          this.patch(key, url);
+          if (url.startsWith('blob:')) void fetch(url).then((r) => r.blob()).then((b) => storePut(key, b)).catch(() => {});
+        }
       }
     } finally {
       this.running = false;
@@ -361,6 +383,71 @@ export class CameoFactory {
     this.renderer?.dispose();
     this.renderer?.forceContextLoss();
     this.renderer = null;
+  }
+}
+
+// ------------------------------------------------------------------ persistence
+
+/*
+ * Rendered cameos are kept in IndexedDB, keyed by the build: a later session of
+ * the same build shows the sidebar without building, compiling and reading back
+ * ~40 models in the background at battle start (the PNGs are the very same
+ * images). A new build (another code chunk URL) starts over and drops the old set.
+ */
+const DB_NAME = 'ironfront-cameos';
+const BUILD = typeof import.meta !== 'undefined' ? import.meta.url : '';
+let dbp: Promise<IDBDatabase | null> | null = null;
+
+function db(): Promise<IDBDatabase | null> {
+  if (dbp) return dbp;
+  dbp = new Promise((res) => {
+    try {
+      if (typeof indexedDB === 'undefined' || import.meta.env?.DEV) return res(null);
+      const rq = indexedDB.open(DB_NAME, 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('c');
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => res(null);
+      rq.onblocked = () => res(null);
+    } catch {
+      res(null);
+    }
+  });
+  return dbp;
+}
+
+async function storeLoad(): Promise<Map<string, Blob>> {
+  const out = new Map<string, Blob>();
+  const d = await db();
+  if (!d) return out;
+  return new Promise((res) => {
+    try {
+      const tx = d.transaction('c', 'readwrite');
+      const st = tx.objectStore('c');
+      const rq = st.openCursor();
+      rq.onsuccess = () => {
+        const c = rq.result;
+        if (!c) return;
+        const v = c.value as { build: string; blob: Blob } | undefined;
+        if (v && v.build === BUILD && v.blob instanceof Blob) out.set(String(c.key), v.blob);
+        else c.delete();
+        c.continue();
+      };
+      tx.oncomplete = () => res(out);
+      tx.onerror = () => res(out);
+      tx.onabort = () => res(out);
+    } catch {
+      res(out);
+    }
+  });
+}
+
+async function storePut(key: string, blob: Blob) {
+  const d = await db();
+  if (!d) return;
+  try {
+    d.transaction('c', 'readwrite').objectStore('c').put({ build: BUILD, blob }, key);
+  } catch {
+    /* quota / private mode: just not kept */
   }
 }
 
