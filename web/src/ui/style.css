@@ -1023,10 +1023,28 @@ kbd {
   letter-spacing: 0.03em;
   line-height: 1.1;
   text-align: left;
-  white-space: nowrap;
+  /* long names ("Rocket Team (AT/AA)", "Typhon MRC (Tomahawk)") take two balanced lines; hud.ts
+     fitName drops a size step (.c-small) when even two would clip, never cutting the name */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  text-wrap: balance;
+  overflow-wrap: break-word;
   overflow: hidden;
-  text-overflow: ellipsis;
   pointer-events: none;
+}
+.c-name.c-small {
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+/* a two-line name: the gradient reaches higher, the ready / progress pill sits above it */
+.cameo.c-2l .c-name {
+  padding-top: 14px;
+}
+.cameo.c-2l.ready .c-status,
+.cameo.c-2l.building .c-status:not(:empty) {
+  bottom: 33px;
 }
 .c-cost {
   position: absolute;
@@ -1746,6 +1764,9 @@ kbd {
   }
   .c-name {
     font-size: 11px;
+  }
+  .c-name.c-small {
+    font-size: 10px;
   }
   .msg {
     padding: 4px 10px 4px 8px;
