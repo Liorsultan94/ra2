@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { phoneCaps } from './devicecaps';
 import { releaseFog } from './fogcache';
+import { ShadowCache } from './shadowcache';
 import type { Slicer } from './slice';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -50,6 +51,9 @@ import { setBakeEnabled, setBakeRenderer, setBakeSize } from './models/vehbake';
 import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
+
+/** Largest sun step the shadow lags behind (radians, 0.02 degrees). */
+const SHADOW_STEP = 0.02 * (Math.PI / 180);
 
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
@@ -367,6 +371,7 @@ export class GameRenderer {
       // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
       this.terrain.ground.photo?.restore();
       this.shadowAge = 1e9;
+      this.shadowCache?.invalidate();
     };
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -540,6 +545,13 @@ export class GameRenderer {
       this.ambient = new AmbientLife(this);
       this.scene.add(this.ambient.group);
       this.ambient.group.name = 'ambient';
+    }
+    // static shadow casters cached between sun shadow refreshes (shadowcache.ts)
+    if (!this.csm && this.sun.castShadow) {
+      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group];
+      this.shadowCache = new ShadowCache(this.renderer, this.scene, () => roots);
+      this.shadowCache.enabled = !/[?&]scache=0\b/.test(location.search);
+      this.shadowCache.install(this.sun);
     }
     if (/[?&]perf=1\b/.test(location.search)) this.enablePerf();
 
@@ -824,8 +836,21 @@ export class GameRenderer {
       return;
     }
     if (!this.sun.castShadow) return;
-    const R = this.sunRight;
-    const U = this.sunUp;
+    // The shadow follows the sun in steps of at most SHADOW_STEP (0.02 degrees: a fraction of a shadow texel
+    // even for tall buildings): the live day / night cycle moves the sun a little every tick, and every move
+    // re-renders the whole shadow map (static casters included, shadowcache.ts). Lighting follows the same
+    // direction (it is the light's own position), a difference far below one colour level.
+    const sd = this.shadowDir;
+    if (this.shadowDirSet !== this.sunDir.x + this.sunDir.y * 3 + this.sunDir.z * 7) {
+      this.shadowDirSet = this.sunDir.x + this.sunDir.y * 3 + this.sunDir.z * 7;
+      if (sd.lengthSq() === 0 || sd.angleTo(this.sunDir) > SHADOW_STEP) {
+        sd.copy(this.sunDir);
+        this.shadowR.crossVectors(this.yAxis, sd).normalize();
+        this.shadowU.crossVectors(sd, this.shadowR).normalize();
+      }
+    }
+    const R = this.shadowR;
+    const U = this.shadowU;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -875,10 +900,10 @@ export class GameRenderer {
       sc.far = 140;
       sc.updateProjectionMatrix();
     }
-    const cz = this.target.x * -this.sunDir.x + ty * -this.sunDir.y + this.target.z * -this.sunDir.z;
-    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(this.sunDir, -cz);
+    const cz = this.target.x * -sd.x + ty * -sd.y + this.target.z * -sd.z;
+    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(sd, -cz);
     this.sun.target.position.copy(c);
-    this.sun.position.copy(c).addScaledVector(this.sunDir, 70);
+    this.sun.position.copy(c).addScaledVector(sd, 70);
     this.sun.target.updateMatrixWorld();
     this.sun.updateMatrixWorld();
   }
@@ -985,7 +1010,7 @@ export class GameRenderer {
   // ---------------------------------------------------------------- entities
 
   /** World position of an entity (x, height, y). Aircraft use their simulated altitude. */
-  entityPos(e: Entity, alpha: number): THREE.Vector3 {
+  entityPos(e: Entity, alpha: number, out?: THREE.Vector3): THREE.Vector3 {
     const x = e.px + (e.x - e.px) * alpha;
     const y = e.py + (e.y - e.py) * alpha;
     // (ground units on a bridge follow the deck's end ramps up onto raised banks: deckramp.ts)
@@ -998,7 +1023,7 @@ export class GameRenderer {
       // under a parachute canopy
       h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;
     }
-    return new THREE.Vector3(x, h, y);
+    return out ? out.set(x, h, y) : new THREE.Vector3(x, h, y);
   }
 
   isVisibleToViewer(e: Entity): boolean {
@@ -1093,6 +1118,8 @@ export class GameRenderer {
   private viewFrustum = new THREE.Frustum();
   private projView = new THREE.Matrix4();
   private castSphere = new THREE.Sphere();
+  /** Scratch: an entity's interpolated position (syncEntities). */
+  private posTmp = new THREE.Vector3();
   /** Scratch: an emitter's world position (exhaust, sparks, chimneys). */
   private emitP = new THREE.Vector3();
   private occlFrame = 0;
@@ -1260,7 +1287,8 @@ export class GameRenderer {
         if (a.damage > 0.45 && k >= 1) this.fracture.prewarm(root, bd.w, bd.h);
       } else {
         const ud = unitDef(e.def);
-        const p = this.entityPos(e, alpha);
+        // (a scratch vector: nothing below keeps it past this entity)
+        const p = this.entityPos(e, alpha, this.posTmp);
         root.position.copy(p);
         const yaw = -lerpAngle(e.pfacing, e.facing, alpha);
         const moved = Math.hypot(p.x - v.lastX, p.z - v.lastZ);
@@ -2296,6 +2324,13 @@ export class GameRenderer {
     }
   }
 
+  /** Static shadow caster cache (null on low / ultra). */
+  readonly shadowCache: ShadowCache | null = null;
+  /** The sun direction the shadow (and the key light) currently use, and its right / up axes (fitShadow). */
+  private shadowDir = new THREE.Vector3(0, 0, 0);
+  private shadowR = new THREE.Vector3();
+  private shadowU = new THREE.Vector3();
+  private shadowDirSet = NaN;
   private shadowKey = new Float64Array(9);
   private shadowAge = 0;
   /**
@@ -2369,6 +2404,7 @@ export class GameRenderer {
     this.renderer.dispose();
     this.post?.dispose();
     this.compileRT?.dispose();
+    this.shadowCache?.dispose();
     // the model caches built for this match's fog of war (fogcache.ts)
     releaseFog(this.fog);
     // release this match's GPU memory now rather than whenever the canvas gets garbage collected: without it
