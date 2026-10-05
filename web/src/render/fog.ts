@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { hash2 } from '../sim/rng';
+import { CLOUD, CLOUD_LIGHT_GLSL, CLOUD_SHADOW_GLSL } from './cloudshadow';
 import { MIST_GLSL, WX, WX_PARS, WX_SURFACE, WXM } from './wxuniforms';
 
 /** Tileable 4-channel value-noise fbm texture (each channel an independent field). */
@@ -64,7 +65,6 @@ uniform vec3 fogTarget;
 uniform vec3 fogView;
 uniform vec3 hazeColor;
 uniform vec4 hazeParams;
-uniform float cloudAmount;
 // physical sky horizon (sky.ts): rgb towards / away from the sun, skyHorA.a = how much the far
 // outskirts melt into it (free cameras that see the horizon; 0 = the classic dark surround)
 uniform vec4 skyHorA;
@@ -79,13 +79,8 @@ float fogSample( vec3 p ) {
   return texture2D( fogTex, q / fogSize ).r;
 }
 
-float cloudShadow( vec3 p ) {
-  vec2 wind = vec2( 0.55, 0.22 ) * fogTime;
-  float a = texture2D( fogNoise, ( p.xz + wind ) * 0.011 ).b;
-  float b = texture2D( fogNoise, ( p.xz + wind * 1.4 ) * 0.027 + 0.37 ).a;
-  float c = a * 0.7 + b * 0.3;
-  return 1.0 - cloudAmount * smoothstep( 0.47, 0.68, c );
-}
+// drifting cloud shadows (+ canopy sun flecks on high): cloudshadow.ts drives the shared uniforms
+${CLOUD_SHADOW_GLSL}
 
 vec3 fogShade( vec3 col, vec3 p ) {
   // aerial perspective: things further from the camera fade into the haze
@@ -150,7 +145,8 @@ export class FogOfWar {
     skyHorA: { value: THREE.Vector4 };
     skyHorB: { value: THREE.Vector4 };
     skySunXZ: { value: THREE.Vector2 };
-  } & typeof WXM;
+  } & typeof WXM &
+    typeof CLOUD;
   private data: Uint8Array;
   private cur: Float32Array;
 
@@ -180,6 +176,8 @@ export class FogOfWar {
       skyHorA: { value: new THREE.Vector4(0, 0, 0, 0) },
       skyHorB: { value: new THREE.Vector4(0, 0, 0, 0) },
       skySunXZ: { value: new THREE.Vector2(1, 0) },
+      // cloud shadows (shared objects: cloudshadow.ts drives them)
+      ...CLOUD,
       // ground fog / mist (shared objects: the atmosphere drives them)
       ...WXM,
     };
@@ -257,15 +255,8 @@ export class FogOfWar {
         .replace('#include <common>', `#include <common>\nvarying vec3 vFogP;\n${FOG_GLSL}\n${WX_PARS}`)
         // weather: snow cover / wet / dust on upward-facing surfaces (all zero = untouched)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${WX_SURFACE}`)
-        .replace(
-          '#include <lights_fragment_end>',
-          `#include <lights_fragment_end>
-          {
-            float cloudK = cloudShadow( vFogP );
-            reflectedLight.directDiffuse *= cloudK;
-            reflectedLight.directSpecular *= cloudK;
-          }`,
-        )
+        // cloud shadows (+ canopy sun flecks) on the direct light: cloudshadow.ts
+        .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${CLOUD_LIGHT_GLSL}`)
         .replace(
           '#include <opaque_fragment>',
           `outgoingLight = fogShade( outgoingLight, vFogP );
