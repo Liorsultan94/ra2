@@ -56,12 +56,29 @@ export function heatMaterial(): THREE.MeshMatcapMaterial {
   return sharedHeatMat;
 }
 
+let occludedHeatMat: THREE.MeshMatcapMaterial | null = null;
+/** The heat material pulled a hair towards the camera, for a mask depth-tested against the colour pass (drone feed). */
+function occludedHeatMaterial(): THREE.MeshMatcapMaterial {
+  if (!occludedHeatMat) {
+    const base = heatMaterial();
+    const m = base.clone();
+    m.onBeforeCompile = base.onBeforeCompile;
+    m.polygonOffset = true;
+    m.polygonOffsetFactor = -2;
+    m.polygonOffsetUnits = -4;
+    occludedHeatMat = m;
+  }
+  return occludedHeatMat;
+}
+
 /**
  * Render the heat mask (hot meshes only) into `target` from `camera`.
  * Shadows are not re-rendered and the background is cleared to black.
+ * `occluded`: `target` shares the depth buffer of the colour pass just drawn from the same camera; the
+ * depth is kept, so hot bodies hidden behind buildings, trees or terrain stay hidden (drone feed).
  */
 const savedClear = new THREE.Color();
-export function renderHeatMask(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, target: THREE.WebGLRenderTarget) {
+export function renderHeatMask(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, target: THREE.WebGLRenderTarget, occluded = false) {
   const mask = camera.layers.mask;
   const bg = scene.background;
   const env = scene.environment;
@@ -73,12 +90,16 @@ export function renderHeatMask(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   camera.layers.set(HEAT_LAYER);
   scene.background = null;
   scene.environment = null;
-  scene.overrideMaterial = heatMaterial();
+  scene.overrideMaterial = occluded ? occludedHeatMaterial() : heatMaterial();
   renderer.shadowMap.autoUpdate = false;
   renderer.setClearColor(0x000000, 1);
   renderer.setRenderTarget(target);
-  renderer.clear();
+  renderer.clear(true, !occluded, !occluded);
+  // (render() would clear the shared depth again)
+  const autoClear = renderer.autoClear;
+  renderer.autoClear = false;
   renderer.render(scene, camera);
+  renderer.autoClear = autoClear;
   renderer.setRenderTarget(prevRT);
   renderer.setClearColor(clear, clearA);
   renderer.shadowMap.autoUpdate = sh;
@@ -97,23 +118,37 @@ uniform vec2 res;
 uniform float polarity;   // 1 = white-hot, -1 = black-hot
 uniform float linearIn;   // 1 when tDiffuse holds linear, un-tonemapped colour
 uniform float grain;
+uniform float hdrIn;      // 1 when tDiffuse holds unclamped HDR colour (drone feed): heat from true brightness
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-vec3 srcColor(vec2 uv) {
-  vec3 c = texture2D(tDiffuse, uv).rgb;
+vec3 mapSrc(vec3 c) {
   if (linearIn > 0.5) {
     c = c / (1.0 + c) * 1.6;
     c = pow(clamp(c, 0.0, 1.0), vec3(0.4545));
   }
   return clamp(c, 0.0, 1.0);
 }
+vec3 srcColor(vec2 uv) {
+  return mapSrc(texture2D(tDiffuse, uv).rgb);
+}
 float heatAt(vec2 uv) {
-  vec3 c = srcColor(uv);
+  vec3 raw = texture2D(tDiffuse, uv).rgb;
+  vec3 c = mapSrc(raw);
   float l = dot(c, vec3(0.3, 0.59, 0.11));
   // cool world: compressed grey range keeps the terrain readable
   float cold = 0.05 + 0.5 * pow(l, 1.15);
   // fire, explosions, tracers, muzzle flashes, lit windows: hot orange-yellow-white
-  float warm = smoothstep(0.22, 0.6, c.r - c.b) * smoothstep(0.5, 0.95, c.r);
-  float white = smoothstep(0.86, 1.0, min(c.r, min(c.g, c.b))) * 0.75;
+  float warm;
+  float white;
+  if (hdrIn > 0.5) {
+    // emitters are far brighter than anything sunlit: sunlit smoke, snow or roofs stay cool, flames and blasts burn
+    float pk = max(raw.r, max(raw.g, raw.b));
+    float chroma = (raw.r - raw.b) / max(pk, 1e-3);
+    warm = smoothstep(1.8, 4.0, pk) * smoothstep(0.3, 0.55, chroma);
+    white = smoothstep(3.5, 8.0, min(raw.r, min(raw.g, raw.b))) * 0.9;
+  } else {
+    warm = smoothstep(0.22, 0.6, c.r - c.b) * smoothstep(0.5, 0.95, c.r);
+    white = smoothstep(0.86, 1.0, min(c.r, min(c.g, c.b))) * 0.75;
+  }
   float v = max(cold, max(warm, white));
   // hot bodies: blurred mask so engines bloom a little; the visible image adds surface detail
   vec2 px = 1.0 / res;
@@ -150,6 +185,7 @@ export function thermalUniforms() {
     polarity: { value: 1 },
     linearIn: { value: 0 },
     grain: { value: 0.05 },
+    hdrIn: { value: 0 },
   };
 }
 
