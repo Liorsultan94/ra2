@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { FinalPass } from '../src/render/post';
 import { PostChain } from '../src/render/post/chain';
+import { isBlackSample } from '../src/render/post/heal';
 import { syncDepthSize } from '../src/render/post/util';
 
 /** Just enough of a WebGLRenderer for the chain's CPU side (no GL in the test runner). */
@@ -61,5 +62,16 @@ describe('post chain: no black frames after a resize (phone quality steps)', () 
     expect(f.uniforms.tBloom.value).toBeNull();
     // what the pass does read is untouched
     expect(f.uniforms.tDiffuse.value).toBe(rt.texture);
+  });
+});
+
+describe('black frame watch (self-heal probe)', () => {
+  it('counts a frame as black only when every sample is black (dither / grain allowed)', () => {
+    expect(isBlackSample(new Uint8Array([0, 0, 0, 255, 1, 1, 1, 255, 0, 1, 0, 255]))).toBe(true);
+    expect(isBlackSample(new Uint8Array([0, 0, 0, 255, 2, 3, 2, 255]))).toBe(true);
+    // a dark night pixel or one lit pixel is not a black frame
+    expect(isBlackSample(new Uint8Array([0, 0, 0, 255, 6, 8, 14, 255]))).toBe(false);
+    expect(isBlackSample(new Uint8Array([0, 0, 0, 255, 0, 0, 90, 255]))).toBe(false);
+    expect(isBlackSample(new Uint8Array(0))).toBe(false);
   });
 });

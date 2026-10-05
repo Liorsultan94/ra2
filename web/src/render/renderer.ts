@@ -387,6 +387,7 @@ export class GameRenderer {
     this.onContextLost = (e: Event) => e.preventDefault();
     this.onContextRestored = () => {
       this.post?.lut.invalidate();
+      this.post?.contextRestored();
       this.sky?.invalidate();
       // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
       this.terrain.ground.photo?.restore();
@@ -546,6 +547,8 @@ export class GameRenderer {
     if (post) {
       const pc = (this.post = new PostChain(this.renderer, this.scene, this.camera, quality, this.ultra, this.fog.uniforms.fogNoise.value));
       this.composer = pc.composer;
+      // self-heal after a black frame (post/heal.ts): the sky's scattering LUT is re-rendered too
+      pc.onRepair = () => this.sky?.invalidate();
       this.bloom = pc.bloom;
       this.finalPass = pc.final;
       this.tilt = pc.tilt;
@@ -680,7 +683,7 @@ export class GameRenderer {
   /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
   postStats() {
     const st = this.post?.stats();
-    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive } : null;
+    return st ? { ...st, active: this.usePost, looks: { ...this.post!.lut.weights() }, dof: this.post!.dofActive, heal: this.post!.healStats() } : null;
   }
 
   /**
