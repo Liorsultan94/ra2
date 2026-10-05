@@ -454,6 +454,7 @@ export interface Projectile {
   dcvy: number;
   dcvz: number;
   dcAt: number; // age at which it was diverted
+  dcr: number; // distance to the flare last tick (closest-approach fuze)
   dead: boolean;
 }
 

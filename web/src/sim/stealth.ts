@@ -7,7 +7,7 @@
 //
 // Evasion: each anti-air shot or missile aimed at it misses with chance `evasion`, decided by the seeded
 // world RNG (never Math.random), so every lockstep client agrees. Guided missiles roll once at launch; a
-// fooled missile chases the jet until it closes to DECOY_RANGE, then the jet's decoy flare leaves it and
+// fooled missile chases the jet until it closes to DECOY_RANGE (and has flown DECOY_AGE ticks), then the jet's decoy flare leaves it and
 // the missile turns onto the flare and bursts on it (stepDecoy / releaseDecoy, called from ballistics.ts).
 // Gun, flak and beam shots that miss just miss (World.fire).
 //
@@ -18,7 +18,9 @@ import { TPS, type Entity, type Projectile, type WeaponDef } from './types';
 import type { World } from './world';
 
 /** A fooled missile turns onto the flare once it is this close to the jet (tiles, 3D). */
-export const DECOY_RANGE = 4;
+export const DECOY_RANGE = 7;
+/** ... but not before it is off the rail and visibly homing on the jet (ticks; SAM boost is 6). */
+export const DECOY_AGE = 9;
 /** A missile that has not reached its flare after this long self-destructs. */
 const DECOY_LIFE = TPS * 2;
 // decoy flare flight: light and draggy, it arcs out behind the jet and sinks (matches render/fx/flyers.ts)
@@ -73,10 +75,12 @@ export function releaseDecoy(w: World, p: Projectile, jet: Entity, jz: number) {
   p.dcx = jet.x - fx * 0.25;
   p.dcy = jet.y - fy * 0.25;
   p.dcz = jz - 0.08;
-  p.dcvx = vx * 0.45 - fy * side * 1.3;
-  p.dcvy = vy * 0.45 + fx * side * 1.3;
+  p.dcvx = vx * 0.45 - fy * side * 1.6;
+  p.dcvy = vy * 0.45 + fx * side * 1.6;
   p.dcvz = 0.7;
   p.dcAt = p.age;
+  p.dcr = 1e9;
+  p.turn *= 2.5; // seeker locked on the much hotter flare: it hauls round onto it
   p.targetId = -1;
   w.events.push({ t: 'decoy', id: jet.id, owner: jet.owner, proj: p.id, x: p.dcx, y: p.dcy, z: p.dcz, vx: p.dcvx, vy: p.dcvy, vz: p.dcvz });
 }

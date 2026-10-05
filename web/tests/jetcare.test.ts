@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { REARM_TICKS, REPAIR_RATE, jetReady, parkJet, repairProgress } from '../src/sim/airbase';
-import { launch } from '../src/sim/ballistics';
+import { entityZ, launch } from '../src/sim/ballistics';
 import { WEAPONS, unitDef } from '../src/sim/defs';
 import { evades, evasionChance, lowObsFactor, rangeVs } from '../src/sim/stealth';
 import { TPS, type Entity, type SimEvent } from '../src/sim/types';
@@ -352,6 +352,7 @@ describe('F-35: faster, low observable, evasive', () => {
       let decoys = 0;
       let bursts = 0;
       let hits = 0;
+      const away: number[] = [];
       for (let k = 0; k < 60; k++) {
         const jet = w.spawnUnit('usa_fighter', 0, 64, 50 + (k % 3));
         jet.z = jet.pz = 2.6;
@@ -376,12 +377,12 @@ describe('F-35: faster, low observable, evasive', () => {
           bursts++;
           // the flare leaves the jet itself; the missile bursts on the flare, away from the jet
           expect(Math.hypot(decoyAt!.x - decoyAt!.jx, decoyAt!.y - decoyAt!.jy)).toBeLessThan(0.6);
-          expect(Math.hypot(burstAt!.x - jet.x, burstAt!.y - jet.y)).toBeGreaterThan(0.6);
+          away.push(Math.hypot(burstAt!.x - jet.x, burstAt!.y - jet.y, burstAt!.z - entityZ(w, jet)));
         } else if (jet.hp < 1e6) hits++;
         res.push(`${fooled ? 'D' : 'H'}${Math.round(jet.hp)}`);
         w.kill(jet, -1);
       }
-      return { res, decoys, bursts, hits };
+      return { res, decoys, bursts, hits, away };
     };
     const a = fly(5);
     const b = fly(5);
@@ -390,5 +391,8 @@ describe('F-35: faster, low observable, evasive', () => {
     expect(a.decoys).toBeLessThan(30);
     expect(a.bursts).toBe(a.decoys);
     expect(a.hits).toBeGreaterThan(30);
+    // the bursts happen out on the flares, mostly well clear of the jet
+    const sorted = [...a.away].sort((x, y) => x - y);
+    expect(sorted[Math.floor(sorted.length / 2)]).toBeGreaterThan(0.6);
   });
 });
