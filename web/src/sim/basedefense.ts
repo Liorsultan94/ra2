@@ -181,15 +181,15 @@ function think(w: World, pid: number) {
 }
 
 /** The best threat for this unit: one its weapon hits well, the structure's attacker first, then the nearest. */
-function pick(w: World, e: Entity, d: UnitDef, threats: Map<number, Entity>, attackers: Set<number>, px: number, py: number, inRangeOnly = false): Entity | null {
-  const wpn = WEAPONS[d.weapon!];
-  const range = w.weaponRange(e, wpn);
+function pick(w: World, e: Entity, _d: UnitDef, threats: Map<number, Entity>, attackers: Set<number>, px: number, py: number, inRangeOnly = false): Entity | null {
   let best: Entity | null = null;
   let bs = Infinity;
   for (const t of threats.values()) {
-    if (t.dead || !w.canHit(wpn, t)) continue;
+    // the weapon for this threat (main, or a secondary AA missile); units that can't hit aircraft are never sent at one
+    const wpn = t.dead ? null : w.weaponVs(e.def, t);
+    if (!wpn) continue;
     const dist = w.distTo(e, t);
-    if (inRangeOnly ? dist > range * lowObsFactor(w, wpn, t) || dist < (wpn.minRange ?? 0) : Math.hypot(t.x - px, t.y - py) > DEFEND_LEASH) continue;
+    if (inRangeOnly ? dist > w.weaponRange(e, wpn) * lowObsFactor(w, wpn, t) || dist < (wpn.minRange ?? 0) : Math.hypot(t.x - px, t.y - py) > DEFEND_LEASH) continue;
     const eff = VERSUS[wpn.warhead][DEFS[t.def].armor];
     if (eff <= 0) continue;
     let s = dist - eff * 4;

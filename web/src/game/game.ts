@@ -1306,7 +1306,7 @@ export class Game {
         }
         const attackers = units.filter((u) => {
           const d = unitDef(u.def);
-          return d.weapon && !d.temp && WEAPONS[d.weapon] && w.canHit(WEAPONS[d.weapon], target);
+          return d.weapon && !d.temp && WEAPONS[d.weapon] && w.canAttack(d.id, target);
         });
         if (target.owner >= 0 && attackers.length) {
           return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id, queue: this.queueing() }, target, true) };

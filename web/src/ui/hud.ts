@@ -77,6 +77,13 @@ const FACTION_MOTTO: Record<string, string> = {
   iran: 'IRGC Aerospace Force',
 };
 
+/** What a weapon can engage: rifles / MGs / RPGs / autocannons are ground-only, MANPADS / AA / SAMs air-only. */
+function airLabel(air: 'no' | 'yes' | 'only', long: boolean): string {
+  if (air === 'only') return long ? 'Air targets only' : 'Air only';
+  if (air === 'yes') return long ? 'Hits ground + air' : 'Ground + air';
+  return long ? 'Ground targets only' : 'Ground only';
+}
+
 function roleLabel(d: Def): string {
   if (d.kind === 'building') return d.category === 'defense' ? 'Defense' : 'Structure';
   return d.category === 'infantry' ? 'Infantry' : d.category === 'air' ? 'Aircraft' : 'Vehicle';
@@ -452,8 +459,9 @@ export class Hud {
       extra.push(`HP ${d.hp}`);
       if (d.weapon) {
         const w = WEAPONS[d.weapon];
-        extra.push(`Range ${w.range}`);
-        extra.push(w.air === 'only' ? 'Anti-air only' : w.air === 'yes' ? 'Hits ground + air' : 'Ground targets');
+        const w2 = d.weapon2 ? WEAPONS[d.weapon2] : undefined;
+        if (w2) extra.push(`RPG range ${w.range}: ${airLabel(w.air, true)}`, `AA missile range ${w2.range}: ${airLabel(w2.air, true)}`);
+        else extra.push(`Range ${w.range}`, airLabel(w.air, true));
       }
       if (d.aps) extra.push(`APS ${Math.round(d.aps * 100)}%`);
     }
@@ -565,12 +573,15 @@ export class Hud {
         if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
         if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
-        if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground');
+        if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground only');
         if (d.kind === 'unit' && d.lowObservable) stats.push('Stealth');
         if (d.kind === 'unit' && d.evasion) stats.push(`Evasion ${Math.round(d.evasion * 100)}%`);
         else if (d.weapon && WEAPONS[d.weapon]) {
           const wp = WEAPONS[d.weapon];
-          stats.push(`Range ${wp.range}`, wp.air === 'only' ? 'Anti-air' : wp.air === 'yes' ? 'Ground + air' : 'Ground');
+          const w2 = d.kind === 'unit' && d.weapon2 ? WEAPONS[d.weapon2] : undefined;
+          // two weapons (Rocket Team): RPG for the ground, AA missile for the air
+          if (w2) stats.push(`Range ${wp.range} / AA ${w2.range}`, 'Ground + air');
+          else stats.push(`Range ${wp.range}`, airLabel(wp.air, false));
         }
         if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
         // jets: sortie status and rearm progress, shown in the simple (phone) UI too

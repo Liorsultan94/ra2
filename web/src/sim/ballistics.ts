@@ -24,6 +24,9 @@ import type { World } from './world';
  */
 
 const DT = 1 / TPS;
+/** Shoulder-launched missiles (MANPADS): launch height above the gunner's feet (tiles) and the superelevation of the tube. */
+const SHOULDER_Z = 0.2;
+const SHOULDER_LOFT = 0.45;
 const TAU = Math.PI * 2;
 
 // cruise missile profile (heights above the terrain, distances in tiles)
@@ -147,7 +150,13 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
   const dy = ay - p.y;
   const dist = Math.hypot(dx, dy);
   // start the round slightly ahead of the launcher, at the muzzle
-  if (dist > 0.01 && flight !== 'sam' && flight !== 'interceptor') {
+  if (weapon.shoulder && dist > 0.01) {
+    // MANPADS: off the tube on the gunner's shoulder, a little ahead of him
+    const off = Math.min(0.14, dist * 0.5);
+    p.x = p.sx = p.px = src.x + (dx / dist) * off;
+    p.y = p.sy = p.py = src.y + (dy / dist) * off;
+    p.z = p.sz = p.pz = p.z + SHOULDER_Z;
+  } else if (dist > 0.01 && flight !== 'sam' && flight !== 'interceptor') {
     const off = src.kind === 'unit' && unitDef(src.def).category === 'infantry' ? 0.12 : 0.45;
     p.x = p.sx = p.px = src.x + (dx / dist) * Math.min(off, dist * 0.5);
     p.y = p.sy = p.py = src.y + (dy / dist) * Math.min(off, dist * 0.5);
@@ -184,7 +193,12 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
       dirz = -0.25;
       speed = unitDef(src.def).speed + 2;
     }
-    if (flight === 'sam' || flight === 'interceptor') {
+    if (weapon.shoulder) {
+      // shoulder launch: ejected along the line of sight, superelevated, then a short kick-up as the motor lights
+      dirz = Math.max(0.35, (p.tz - p.z) / h + SHOULDER_LOFT);
+      speed = p.maxSpeed * 0.2;
+      p.phase = 1;
+    } else if (flight === 'sam' || flight === 'interceptor') {
       dirx *= 0.25;
       diry *= 0.25;
       dirz = 1;
@@ -641,7 +655,9 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
     }
     const near = t.kind === 'building' ? w.distTo({ x: p.x, y: p.y } as Entity, t) < 0.6 : Math.hypot(t.x - p.x, t.y - p.y) < 0.75;
     if (near && (!w.isAir(t) || wpn.air !== 'no')) {
-      w.damage(t, wpn.damage * dmgMul, wpn.warhead, src);
+      // small warheads against fast jets (MANPADS: WeaponDef.vsFixedWing)
+      const jet = wpn.vsFixedWing !== undefined && t.kind === 'unit' && !!unitDef(t.def).fixedWing && w.isAir(t);
+      w.damage(t, wpn.damage * dmgMul * (jet ? wpn.vsFixedWing! : 1), wpn.warhead, src);
       direct = true;
     }
   }

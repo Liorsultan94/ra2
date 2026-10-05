@@ -24,14 +24,21 @@ export const VERSUS: Record<Warhead, Record<ArmorClass, number>> = {
 // ------------------------------------------------------------------ weapons
 
 const BASE_WEAPONS: WeaponDef[] = [
-  { id: 'rifle', damage: 15, range: 4.5, rof: 18, warhead: 'mg', projectile: 'instant', air: 'yes' },
+  // Ground-only small arms, MGs, RPGs and autocannons: only dedicated air defence (AA vehicles, SAM sites,
+  // the M-SHORAD laser, the Rocket Team's shoulder-fired missile) and air-to-air missiles can engage aircraft.
+  { id: 'rifle', damage: 15, range: 4.5, rof: 18, warhead: 'mg', projectile: 'instant', air: 'no' },
   // sniper rifle: 2.5x the rifleman's reach, a 3 s lock-on per new target (sniper.ts), bolt cycle 2.5 s
   { id: 'sniper', damage: 125, range: 4.5 * 2.5, rof: 50, warhead: 'sniper', projectile: 'instant', air: 'no', aim: SNIPER_AIM_TICKS },
-  { id: 'mgHeavy', damage: 14, range: 5, rof: 7, warhead: 'mg', projectile: 'instant', air: 'yes' },
-  { id: 'atRocket', damage: 42, range: 5.5, rof: 42, warhead: 'rocket', projectile: 'rocket', speed: 0.45, air: 'yes' , flight: 'atgm', munition: 'rpg' },
+  { id: 'mgHeavy', damage: 14, range: 5, rof: 7, warhead: 'mg', projectile: 'instant', air: 'no' },
+  { id: 'atRocket', damage: 42, range: 5.5, rof: 42, warhead: 'rocket', projectile: 'rocket', speed: 0.45, air: 'no' , flight: 'atgm', munition: 'rpg' },
   { id: 'cannon', damage: 62, range: 5.5, rof: 42, warhead: 'cannon', projectile: 'shell', speed: 0.9, air: 'no' , flight: 'shell', munition: 'tankShell' },
   { id: 'cannonHeavy', damage: 76, range: 6, rof: 44, warhead: 'cannon', projectile: 'shell', speed: 0.95, air: 'no' , flight: 'shell', munition: 'tankShell' },
   { id: 'flak', damage: 20, range: 7, rof: 6, warhead: 'flak', projectile: 'instant', air: 'only' },
+  // MANPADS (Stinger / Verba / QW-2 / Misagh...): the Rocket Team's secondary weapon (UnitDef.weapon2), a shoulder-launched
+  // IR-homing missile, air targets only. Slow to reload (3.5 s, its own reload apart from the RPG's). 3 hits down an attack
+  // helicopter (2 a light one); the small warhead does 60% against a fast jet (4 hits). Stealth and decoy flares (stealth.ts)
+  // apply as to any anti-air weapon.
+  { id: 'manpads', damage: 180, range: 7, rof: 70, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only', flight: 'sam', munition: 'manpads', shoulder: true, vsFixedWing: 0.6 },
   { id: 'sam', damage: 80, range: 9, rof: 45, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only' , flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.8, pkHypersonic: 0.3, pkBy: { cruise: 0.7 }, ceiling: 9 } },
   // ---- national air & missile defence (all also engage aircraft). pk per engagement; heavy missiles need several hits.
   // Iron Dome: Tamir interceptors, superb vs rockets / shells / cruise missiles; cues David's Sling Stunners vs ballistic threats
@@ -71,7 +78,7 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'tomahawk', damage: 300, range: 22, minRange: 6, rof: 320, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.6, air: 'no', precise: true, flight: 'cruise', munition: 'cruiseMissile', lowObservable: 0.4 },
   { id: 'taurus', damage: 360, range: 20, minRange: 6, rof: 340, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.3, air: 'no', precise: true, flight: 'cruise', munition: 'stealthCruise', lowObservable: 0.3 },
   { id: 'neptune', damage: 280, range: 19, minRange: 6, rof: 300, warhead: 'missile', projectile: 'missile', speed: 0.15, splash: 1.6, air: 'no', precise: true, flight: 'cruise', munition: 'cruiseMissile', lowObservable: 0.45 },
-  { id: 'autocannon', damage: 16, range: 5.5, rof: 7, warhead: 'flak', projectile: 'instant', air: 'yes' },
+  { id: 'autocannon', damage: 16, range: 5.5, rof: 7, warhead: 'flak', projectile: 'instant', air: 'no' },
   { id: 'heliMissile', damage: 105, range: 7, rof: 70, burst: 2, burstDelay: 10, warhead: 'missile', projectile: 'rocket', speed: 0.55, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'airMissile', damage: 95, range: 8, rof: 70, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'yes' , flight: 'airMissile', munition: 'airMissile' },
   // jet sortie (airbase.ts): ONE heavy bomb per sortie, released in level flight ~3 tiles short of the target.
@@ -242,14 +249,15 @@ const BUILDINGS: Record<string, BldTpl> = {
   // airbase (airbase.ts): runway along the front row, 4 jet stands along the back; each base parks 4 jets (the jet cap)
   airfield: { name: 'Airbase', category: 'building', role: 'airfield', model: 'airfield', cost: 1000, buildTime: 12, hp: 1100, sight: 6, w: 7, h: 4, power: -40, exit: [6, 3], produces: 'air', prereq: ['radar'], desc: 'Runway and 4 jet stands: builds aircraft and drones. Each airbase parks and rearms 4 jets.' },
   tech: { name: 'Battle Lab', category: 'building', role: 'tech', model: 'tech', cost: 2000, buildTime: 20, hp: 1000, sight: 5, w: 3, h: 3, power: -100, prereq: ['factory', 'radar'], desc: 'Unlocks advanced technology.' },
-  def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', prereq: ['barracks'], desc: 'Machine gun nest. Hits infantry and drones.' },
+  def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', prereq: ['barracks'], desc: 'Machine gun nest. Shreds infantry; ground targets only.' },
   def_aa: { name: 'SAM Battery', category: 'defense', role: 'def_aa', model: 'sam', cost: 900, buildTime: 9, hp: 550, sight: 10, w: 1, h: 1, power: -40, weapon: 'sam', needsPower: true, prereq: ['barracks'], desc: 'Surface-to-air interceptors. Shoots down aircraft, drones, rockets and missiles. Needs power.' },
   def_at: { name: 'ATGM Tower', category: 'defense', role: 'def_at', model: 'atgm', cost: 1200, buildTime: 12, hp: 700, sight: 8, w: 1, h: 1, power: -60, weapon: 'atgm', needsPower: true, prereq: ['radar'], desc: 'Long-range anti-tank missiles. Needs power.' },
 };
 
 const UNITS: Record<string, UnitTpl> = {
-  rifle: { name: 'Rifleman', category: 'infantry', model: 'rifle', cost: 150, buildTime: 4, hp: 110, armor: 'infantry', sight: 5, speed: 1.35, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'rifle', prereq: ['barracks'], desc: 'Basic infantry. Can fire at drones.', aiWeight: 5, aiTag: 'main' },
-  at: { name: 'AT Rocket Team', category: 'infantry', model: 'at', cost: 300, buildTime: 5, hp: 110, armor: 'infantry', sight: 6, speed: 1.25, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'atRocket', prereq: ['barracks'], desc: 'Anti-armor rockets. Also hits aircraft.', aiWeight: 4, aiTag: 'main' },
+  rifle: { name: 'Rifleman', category: 'infantry', model: 'rifle', cost: 150, buildTime: 4, hp: 110, armor: 'infantry', sight: 5, speed: 1.35, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'rifle', prereq: ['barracks'], desc: 'Basic infantry. Ground targets only: cannot hit aircraft.', aiWeight: 5, aiTag: 'main' },
+  // the one soldier that fights both: RPG against ground targets, a shoulder-fired guided missile (weapon2) against aircraft
+  at: { name: 'Rocket Team (AT/AA)', category: 'infantry', model: 'at', cost: 400, buildTime: 5, hp: 110, armor: 'infantry', sight: 7, speed: 1.25, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'atRocket', weapon2: 'manpads', prereq: ['barracks'], desc: 'RPG against tanks, infantry and buildings, plus a shoulder-fired guided missile against helicopters, jets and drones.', aiWeight: 4, aiTag: 'main' },
   sniper: { name: 'Sniper', category: 'infantry', model: 'sniper', cost: 600, buildTime: 8, hp: 90, armor: 'infantry', sight: 11, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'sniper', prereq: ['barracks', 'radar'], desc: 'Long-range marksman: 2.5x rifle range, takes 3 s to lock on to each new target, then one shot kills any soldier. Barely scratches armour; cannot hit aircraft. +20% range from a building window.', aiWeight: 2, aiTag: 'main' },
   engineer: { name: 'Engineer', category: 'infantry', model: 'engineer', cost: 500, buildTime: 6, hp: 75, armor: 'infantry', sight: 4, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, engineer: true, prereq: ['barracks'], desc: 'Captures enemy and neutral buildings, repairs your own.', aiWeight: 0 },
   mbt: { name: 'Main Battle Tank', category: 'vehicle', model: 'mbt', cost: 800, buildTime: 9, hp: 380, armor: 'heavy', sight: 6, speed: 2.2, turnRate: 0.11, turret: true, radius: 0.45, weapon: 'cannon', prereq: ['factory'], desc: 'Main battle tank.', aiWeight: 7, aiTag: 'main' },
@@ -257,7 +265,7 @@ const UNITS: Record<string, UnitTpl> = {
   arty: { name: 'Self-Propelled Howitzer', category: 'vehicle', model: 'arty', cost: 1000, buildTime: 11, hp: 180, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.09, turret: true, radius: 0.45, weapon: 'howitzer', prereq: ['factory', 'radar'], desc: 'Long-range artillery.', aiWeight: 2, aiTag: 'arty' },
   harvester: { name: 'Ore Harvester', category: 'vehicle', model: 'harvester', cost: 1400, buildTime: 14, hp: 1000, armor: 'heavy', sight: 4, speed: 1.6, turnRate: 0.1, turret: false, radius: 0.5, harvester: true, prereq: ['factory', 'refinery'], desc: 'Gathers ore and gems.', aiWeight: 0 },
   mcv: { name: 'MCV', category: 'vehicle', model: 'mcv', cost: 3000, buildTime: 30, hp: 1000, armor: 'heavy', sight: 5, speed: 1.4, turnRate: 0.08, turret: false, radius: 0.55, mcv: true, prereq: ['factory', 'radar'], desc: 'Deploys into a Construction Yard.', aiWeight: 0 },
-  apc: { name: 'Infantry Fighting Vehicle', category: 'vehicle', model: 'apc', cost: 800, buildTime: 9, hp: 320, armor: 'light', sight: 7, speed: 2.6, turnRate: 0.12, turret: true, radius: 0.45, weapon: 'autocannon', transport: 5, prereq: ['factory'], desc: 'Autocannon IFV. Carries 5 infantry who fire from inside.', aiWeight: 3, aiTag: 'main' },
+  apc: { name: 'Infantry Fighting Vehicle', category: 'vehicle', model: 'apc', cost: 800, buildTime: 9, hp: 320, armor: 'light', sight: 7, speed: 2.6, turnRate: 0.12, turret: true, radius: 0.45, weapon: 'autocannon', transport: 5, prereq: ['factory'], desc: 'Autocannon IFV. Carries 5 infantry who fire from inside. Ground targets only.', aiWeight: 3, aiTag: 'main' },
   robot: { name: 'Combat Robot', category: 'vehicle', model: 'ugv', cost: 450, buildTime: 6, hp: 200, armor: 'light', sight: 7, speed: 2.8, turnRate: 0.2, turret: true, radius: 0.3, weapon: 'mgHeavy', prereq: ['factory'], desc: 'Unmanned armed ground robot.', aiWeight: 2, aiTag: 'scout' },
   heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles.', aiWeight: 3, aiTag: 'main' },
   fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands, repairs and rearms (10 s), then strikes again until the target is destroyed. 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
@@ -400,7 +408,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     sniper: { name: 'Nakhjir Sniper' },
     mbt: { name: 'Karrar' },
     apc: { name: 'Boragh' },
-    at: { cost: 240 },
+    at: { cost: 320 },
     aa: { name: 'ZSU-23-4 Shilka' },
     arty: { name: 'Raad-2' },
     shahedl: { name: 'Shahed-136 Launcher', model: 'container', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 6, speed: 1.9, turnRate: 0.1, turret: false, weapon: 'shahedLaunch', prereq: ['factory', 'airfield'], desc: 'Container launcher for long-range loitering munitions.', aiWeight: 3, aiTag: 'arty' },
@@ -420,7 +428,7 @@ const FACTION_BUILDINGS: Partial<Record<Faction, Record<string, Partial<BldTpl>>
   russia: { def_aa: { name: 'S-400 Battery', weapon: 's400', desc: 'Very long-range area air and missile defence, slow to reload. Needs power.' } },
   germany: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },
   korea: {
-    def_gun: { name: 'SGR-A1 Sentry', model: 'sentry', cost: 400, hp: 650, sight: 9, desc: 'Automated thermal-tracking sentry gun. Hits infantry and drones.' },
+    def_gun: { name: 'SGR-A1 Sentry', model: 'sentry', cost: 400, hp: 650, sight: 9, desc: 'Automated thermal-tracking sentry gun. Shreds infantry; ground targets only.' },
     def_aa: { name: 'Cheongung II KM-SAM', weapon: 'kmsam', desc: 'Hit-to-kill medium-range SAM, good against ballistic missiles. Needs power.' },
   },
   ukraine: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },
@@ -436,7 +444,7 @@ function factionWeapon(f: FactionInfo, base: string, kind: 'unit' | 'building', 
   let dmg = 1;
   let range = 0;
   if (m.artilleryDamage && (w.projectile === 'artillery' || w.warhead === 'thermo')) dmg *= m.artilleryDamage;
-  if (m.infantryDamage && category === 'infantry') dmg *= m.infantryDamage;
+  if (m.infantryDamage && category === 'infantry' && w.air !== 'only') dmg *= m.infantryDamage; // close combat, not MANPADS
   if (m.defenseRange && kind === 'building') range += m.defenseRange;
   if (dmg === 1 && range === 0) return base;
   const id = `${f.id}_${base}_${kind}`;
@@ -484,6 +492,7 @@ for (const f of FACTIONS) {
     if (m.sight) u.sight += m.sight;
     if (f.id === 'iran' && u.weapon && ['rocket', 'missile'].includes(WEAPONS[u.weapon].warhead) && k !== 'at') u.cost = Math.round((u.cost * 0.8) / 10) * 10;
     if (u.weapon) u.weapon = factionWeapon(f, u.weapon, 'unit', cat);
+    if (u.weapon2) u.weapon2 = factionWeapon(f, u.weapon2, 'unit', cat);
     if (cat === 'vehicle' && !u.temp && !u.supply && !LIGHT_VEHICLES.has(k)) u.crusher = true;
     if (cat === 'infantry') u.crushable = true;
     list.push(u);
@@ -575,6 +584,20 @@ export function unitDef(id: string): UnitDef {
 }
 export function buildingDef(id: string): BuildingDef {
   return DEFS[id] as BuildingDef;
+}
+
+/** What a unit / structure can engage, main and secondary weapons together (an RPG + MANPADS team: 'yes'). */
+export function airReach(d: Def): 'no' | 'yes' | 'only' {
+  if (!d.weapon) return 'no';
+  const a = WEAPONS[d.weapon].air;
+  const w2 = d.kind === 'unit' && d.weapon2 ? WEAPONS[d.weapon2].air : undefined;
+  if (!w2 || w2 === a) return a;
+  return a === 'yes' || w2 === 'yes' || (a === 'no') !== (w2 === 'no') ? 'yes' : a;
+}
+
+/** Can this unit shoot at aircraft at all (dedicated AA, or a secondary AA weapon)? */
+export function hitsAir(d: Def): boolean {
+  return airReach(d) !== 'no';
 }
 
 export function defsForFaction(f: Faction): Def[] {

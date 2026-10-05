@@ -72,6 +72,13 @@ export interface WeaponDef {
    * building or vehicle, or dies, and when the shooter moves or gets another order.
    */
   aim?: number;
+  /**
+   * Shoulder-launched (MANPADS, ballistics.ts launch): the missile leaves the tube at the gunner's shoulder,
+   * along his line of sight at a raised launch angle, with only a short kick-up instead of a vertical boost.
+   */
+  shoulder?: boolean;
+  /** Damage multiplier against airborne fixed-wing aircraft (fast jets are hard to hit squarely with a small warhead). */
+  vsFixedWing?: number;
 }
 
 export interface BaseDef {
@@ -107,6 +114,11 @@ export interface UnitDef extends BaseDef {
   air?: boolean;
   kamikaze?: boolean;
   temp?: boolean; // spawned munition: not selectable, expires
+  /**
+   * Secondary weapon, used against the targets the main weapon can't hit (World.weaponVs): the Rocket Team's
+   * shoulder-fired AA missile next to its ground-only RPG. It has its own reload (Entity.cooldown2).
+   */
+  weapon2?: string;
   aps?: number; // active protection: chance to intercept rockets / missiles
   ewRadius?: number; // electronic warfare jamming radius vs drones
   repairAura?: number; // repairs friendly vehicles within radius
@@ -294,6 +306,10 @@ export interface Entity {
   targetId: number;
   autoTarget: boolean;
   cooldown: number;
+  /** Reload of the secondary weapon (UnitDef.weapon2). */
+  cooldown2: number;
+  /** Weapon of the burst in progress ('' = the main weapon). */
+  burstWpn: string;
   burstLeft: number;
   burstTimer: number;
   scanAt: number;

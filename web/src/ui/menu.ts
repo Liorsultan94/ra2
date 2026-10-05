@@ -490,7 +490,7 @@ function howToHtml() {
             <h3>Economy</h3>
             <p>Power Plant → Ore Refinery (comes with a harvester) → Barracks → War Factory → Radar → Airbase → Battle Lab. Keep power above use or production slows and defenses shut down. Capture <b>Oil Derricks</b> with an Engineer for extra income.</p>
             <h3>Counters</h3>
-            <p>Tanks beat infantry & vehicles, AT teams and ATGMs beat tanks, MGs shred infantry and drones, AA vehicles and SAM sites stop drones and jets. EW jams drones. Artillery out-ranges everything but is fragile.</p>
+            <p>Tanks beat infantry & vehicles, Rocket Teams and ATGMs beat tanks, MGs shred infantry. Only AA vehicles, SAM sites and Rocket Teams (shoulder-fired AA missile) can shoot down drones, helicopters and jets: rifles, MGs and IFV cannons are ground-only. EW jams drones. Artillery out-ranges everything but is fragile.</p>
           </div>
           <div>
             <h3>Mouse & keyboard</h3>
