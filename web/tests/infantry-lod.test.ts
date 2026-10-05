@@ -30,7 +30,7 @@ const tris = (g: THREE.BufferGeometry) => (g.index ? g.index.count : g.attribute
 const base = (): AnimState => ({ dt: 0.033, time: 1, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true, seed: 3, lod: 0 });
 
 describe('infantry: hero / battle / far geometry LODs', () => {
-  for (const key of ['rifle', 'at', 'engineer', 'mortar', 'fpvteam', 'ewinf']) {
+  for (const key of ['rifle', 'at', 'engineer', 'mortar', 'fpvteam', 'ewinf', 'medic']) {
     it(`${key}: every skinned mesh has LOD1 / LOD2 index subsets, fewer triangles each step`, () => {
       const m = INFANTRY[key](style(key === 'rifle' ? 'iran' : key === 'at' ? 'israel' : 'russia'), null);
       const t = [0, 0, 0];
@@ -97,5 +97,51 @@ describe('infantry: hero / battle / far geometry LODs', () => {
         }
       }
     }
+  });
+
+  it('wounded soldiers lie on the ground and get back up; a medic kneels to treat (sim/medic.ts)', () => {
+    const hipsY = (m: ReturnType<(typeof INFANTRY)['rifle']>, p = 'a') => {
+      m.root.updateMatrixWorld(true);
+      return m.root.getObjectByName(p + 'hips')!.getWorldPosition(new THREE.Vector3()).y;
+    };
+    const run = (m: ReturnType<(typeof INFANTRY)['rifle']>, st: Partial<AnimState>, n: number, from = 1) => {
+      const a = { ...base(), ...st };
+      for (let i = 0; i < n; i++) {
+        a.time = from + i * 0.033;
+        if (st.wounded) a.wounded = st.wounded + i * 0.033;
+        if (st.treat) a.treat = st.treat + i * 0.033;
+        m.anim!(a);
+      }
+      m.root.updateMatrixWorld(true);
+      m.root.traverse((o) => {
+        for (const v of o.matrixWorld.elements) expect(Number.isFinite(v)).toBe(true);
+      });
+    };
+    for (const key of ['rifle', 'at', 'sniper', 'medic', 'mortar']) {
+      const m = INFANTRY[key](style('usa'), null);
+      const p = key === 'mortar' ? 'g' : 'a';
+      run(m, {}, 10);
+      const stand = hipsY(m, p);
+      // down wounded: on his back, an arm moving now and then (several gesture cycles)
+      run(m, { wounded: 0.01 }, 300);
+      const lying = hipsY(m, p);
+      expect(lying).toBeLessThan(stand * 0.4);
+      // bled out: stays where he lies (no second fall)
+      run(m, { wounded: 10, dead: 0.2 }, 20);
+      expect(Math.abs(hipsY(m, p) - lying)).toBeLessThan(stand * 0.15);
+      // a fresh one treated: back on his feet within ~1.5 s
+      const m2 = INFANTRY[key](style('usa'), null);
+      run(m2, { wounded: 0.01 }, 120);
+      run(m2, {}, 50, 10);
+      expect(hipsY(m2, p)).toBeGreaterThan(stand * 0.85);
+    }
+    // medic at work: kneeling
+    const md = INFANTRY.medic(style('china'), null);
+    run(md, {}, 10);
+    const up = hipsY(md);
+    run(md, { treat: 0.1 }, 90);
+    expect(hipsY(md)).toBeLessThan(up * 0.75);
+    run(md, {}, 90, 10);
+    expect(hipsY(md)).toBeGreaterThan(up * 0.9);
   });
 });
