@@ -75,6 +75,8 @@ export class CameoFactory {
   private env: THREE.Texture | null = null;
   /** 2D canvas the supersampled frame is filtered down into (CPU backed: the PNG encode reads it back). */
   private out: HTMLCanvasElement | null = null;
+  /** Full-size frame rebuilt from the asynchronous readback (CPU backed). */
+  private big: HTMLCanvasElement | null = null;
 
   constructor() {
     try {
@@ -197,10 +199,101 @@ export class CameoFactory {
       r.setClearColor(0x000000, 0);
       r.clear();
       r.render(this.scene, this.camera);
+      // read the frame back without waiting on the GPU (a synchronous readback stalled the main thread
+      // until the cameo context had compiled and drawn everything queued: seconds on slow phones)
+      const px = await this.readback(r, w, h);
+      if (this.renderer !== r) return '';
+      if (px) return await this.encode(px, w, h);
       return this.downsample(r.domElement, w, h, CW, CH).toDataURL('image/png');
     } finally {
       this.scene.remove(root);
     }
+  }
+
+  /**
+   * Asynchronous readback of the top-left w x h of the canvas: readPixels into a pixel buffer, a fence,
+   * then poll the fence in idle slices; the pixels are copied out only once the GPU is done (WebGL 2).
+   * Null where that is unavailable (the caller falls back to the synchronous path).
+   */
+  private async readback(r: THREE.WebGLRenderer, w: number, h: number): Promise<Uint8Array | null> {
+    const gl = r.getContext();
+    if (typeof WebGL2RenderingContext === 'undefined' || !(gl instanceof WebGL2RenderingContext)) return null;
+    const size = w * h * 4;
+    const buf = gl.createBuffer();
+    if (!buf) return null;
+    let sync: WebGLSync | null = null;
+    try {
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+      // (three leaves the canvas' own framebuffer bound after rendering to it)
+      gl.readPixels(0, CANVAS_PX - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!sync) return null;
+      gl.flush();
+      const t0 = performance.now();
+      for (;;) {
+        await new Promise((res) => setTimeout(res, 20));
+        if (this.renderer !== r || gl.isContextLost()) return null;
+        const st = gl.clientWaitSync(sync, 0, 0);
+        if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED) break;
+        // (a driver that never signals: copy anyway after a while; the data is complete by then)
+        if (st === gl.WAIT_FAILED || performance.now() - t0 > 10000) break;
+      }
+      const out = new Uint8Array(size);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      return out;
+    } catch {
+      return null;
+    } finally {
+      if (sync) gl.deleteSync(sync);
+      gl.deleteBuffer(buf);
+    }
+  }
+
+  /** Bottom-up premultiplied RGBA (the GL frame) -> filtered down to the cameo size -> PNG (encoded off the main thread). */
+  private async encode(px: Uint8Array, w: number, h: number): Promise<string> {
+    if (!this.big) this.big = document.createElement('canvas');
+    const big = this.big;
+    if (big.width !== w || big.height !== h) {
+      big.width = w;
+      big.height = h;
+    }
+    const bg = big.getContext('2d', { willReadFrequently: true });
+    if (!bg) return '';
+    const img = bg.createImageData(w, h);
+    const d = img.data;
+    for (let y = 0; y < h; y++) {
+      let si = (h - 1 - y) * w * 4;
+      let di = y * w * 4;
+      for (let x = 0; x < w; x++, si += 4, di += 4) {
+        const a = px[si + 3];
+        if (a === 0) continue;
+        if (a === 255) {
+          d[di] = px[si];
+          d[di + 1] = px[si + 1];
+          d[di + 2] = px[si + 2];
+        } else {
+          const k = 255 / a;
+          d[di] = Math.min(255, Math.round(px[si] * k));
+          d[di + 1] = Math.min(255, Math.round(px[si + 1] * k));
+          d[di + 2] = Math.min(255, Math.round(px[si + 2] * k));
+        }
+        d[di + 3] = a;
+      }
+    }
+    bg.putImageData(img, 0, 0);
+    const c = this.downsample(big, w, h, CW, CH);
+    const blob = await new Promise<Blob | null>((res) => {
+      try {
+        c.toBlob(res, 'image/png');
+      } catch {
+        res(null);
+      }
+    });
+    return blob ? URL.createObjectURL(blob) : c.toDataURL('image/png');
   }
 
   /** Filter the top-left sw x sh of a supersampled frame down to w x h (high-quality 2D canvas smoothing). */
