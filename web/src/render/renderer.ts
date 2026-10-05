@@ -54,6 +54,7 @@ import { loadBuildingPhotos } from './models/bldtex';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
+import { FlareFx, UnitVeil } from './nightops';
 import { setBakeEnabled, setBakeRenderer, setBakeSize } from './models/vehbake';
 import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
@@ -159,6 +160,8 @@ export interface Visual {
   animDebt?: number;
   /** Its programs are still compiling (parallel compile): not drawn yet. */
   pending?: boolean;
+  /** Night: an enemy unit fading in / out of view (0 = in the dark .. 1 = seen; nightops.ts UnitVeil). */
+  fade?: number;
 }
 
 interface Wreck {
@@ -339,6 +342,9 @@ export class GameRenderer {
   readonly perf: PerfProbe;
   /** Per-frame automatic instancing of identical unit parts (src/render/perf/instancer.ts). */
   readonly instancer: AutoInstancer;
+  /** Night combat: enemy units fading in / out of the dark, illumination flares (nightops.ts). */
+  readonly veil = new UnitVeil();
+  readonly flareFx: FlareFx;
   private instRoots: THREE.Object3D[] = [];
   private perfHud = new PerfHud();
   selection = new Set<number>();
@@ -571,6 +577,9 @@ export class GameRenderer {
     this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom as unknown as UnrealBloomPass | null, canvas }, viewer);
     if (this.scarsOn) this.atmos.env.scars = this.scars;
+    // illumination flares: their light on the ground goes through the night's light pools (nightops.ts)
+    this.flareFx = new FlareFx(this.scene, quality, this.camera);
+    if (this.atmos.night) this.atmos.night.opsHook = this.flareFx.nightHook;
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
@@ -1093,11 +1102,13 @@ export class GameRenderer {
     const p = this.world.players[this.viewer];
     const { w } = this.world.map;
     if (e.kind === 'building') {
+      // discovered structures stay shown (last known), by day and by night
       const d = buildingDef(e.def);
       for (let y = e.ty; y < e.ty + d.h; y++) for (let x = e.tx; x < e.tx + d.w; x++) if (p.explored[y * w + x]) return true;
       return false;
     }
-    return p.visible[Math.floor(e.y) * w + Math.floor(e.x)] > 0;
+    // units: on visible ground, or given away by a muzzle flash by night (sim/night.ts)
+    return this.world.sees(this.viewer, e);
   }
 
   private makeVisual(e: Entity): Visual {
@@ -1169,6 +1180,7 @@ export class GameRenderer {
   }
 
   private removeVisual(v: Visual) {
+    if (v.fade !== undefined) this.veil.set(v.id, v.model.root, 1);
     this.scene.remove(v.model.root);
     if (v.ring) this.scene.remove(v.ring);
     this.visuals.delete(v.id);
@@ -1253,7 +1265,23 @@ export class GameRenderer {
   }
 
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
-  private addContact(e: Entity, v: Visual) {
+  /** Shadows an object near the burning flares throws away from them (nightops.ts FlareFx.shadow). */
+  private flareShadow(e: Entity, v: Visual) {
+    const m = v.model;
+    const sz = m.size;
+    if (e.kind === 'building') {
+      const bd = buildingDef(e.def);
+      this.flareFx.shadow(this.world.map, e.tx + bd.w / 2, e.ty + bd.h / 2, (m.height ?? 1) * Math.min(1, v.anim.built * 1.5), Math.min(bd.w, bd.h) * 0.42);
+      return;
+    }
+    const ud = unitDef(e.def);
+    if (ud.air) return;
+    const p = m.root.position;
+    const r = m.infantry ? 0.09 : sz ? Math.max(sz.x, sz.z) * 0.3 : 0.3;
+    this.flareFx.shadow(this.world.map, p.x, p.z, m.height ?? (m.infantry ? 0.35 : 0.5), r);
+  }
+
+  private addContact(e: Entity, v: Visual, fade = 1) {
     const c = this.contact!;
     const m = v.model;
     const root = m.root;
@@ -1263,16 +1291,16 @@ export class GameRenderer {
       const bd = buildingDef(e.def);
       const hl = Math.min(bd.w * 0.5, sz ? sz.x * 0.5 : bd.w * 0.45) * 0.96;
       const hw = Math.min(bd.h * 0.5, sz ? sz.z * 0.5 : bd.h * 0.45) * 0.96;
-      c.add(map, root.position.x, root.position.z, root.rotation.y, hl, hw, 0.3, 0.5 * Math.min(1, v.anim.built * 2));
+      c.add(map, root.position.x, root.position.z, root.rotation.y, hl, hw, 0.3, 0.5 * Math.min(1, v.anim.built * 2) * fade);
       return;
     }
     if (unitDef(e.def).air) return;
     const p = root.position;
     const above = p.y - standHeight(map, p.x, p.z);
     if (above > 0.6) return;
-    const fade = Math.min(1, 1 - above / 0.6);
-    if (m.infantry) c.add(map, p.x, p.z, root.rotation.y, 0.08, 0.08, 0.15, 0.45 * fade);
-    else c.add(map, p.x, p.z, 0, (sz ? sz.x * 0.5 : 0.4) * 0.84, (sz ? sz.z * 0.5 : 0.25) * 0.9, 0.24, 0.55 * fade, root.quaternion);
+    const lift = Math.min(1, 1 - above / 0.6) * fade;
+    if (m.infantry) c.add(map, p.x, p.z, root.rotation.y, 0.08, 0.08, 0.15, 0.45 * lift);
+    else c.add(map, p.x, p.z, 0, (sz ? sz.x * 0.5 : 0.4) * 0.84, (sz ? sz.z * 0.5 : 0.25) * 0.9, 0.24, 0.55 * lift, root.quaternion);
   }
   private yAxis = new THREE.Vector3(0, 1, 0);
 
@@ -1339,8 +1367,25 @@ export class GameRenderer {
         }
       }
       const vis = this.isVisibleToViewer(e);
+      // night: an enemy unit coming into view (sight, a muzzle flash, a flare) fades in out of the dark and
+      // fades out again when it drops out of view (nightops.ts); by day it shows / hides as it always has
+      let show = vis;
+      let fade = 1;
+      if (e.kind === 'unit' && this.viewer >= 0 && e.owner !== this.viewer && (w.night || v.fade !== undefined)) {
+        const f0 = v.fade ?? (vis ? 1 : 0);
+        const f = vis ? Math.min(1, f0 + dt / 0.35) : Math.max(0, f0 - dt / 0.6);
+        if (!w.night && (f >= 1 || f <= 0)) {
+          v.fade = undefined;
+          this.veil.set(e.id, v.model.root, 1);
+        } else {
+          v.fade = f;
+          this.veil.set(e.id, v.model.root, f);
+        }
+        fade = f;
+        show = f > 0.01;
+      }
       // (a model of a type new to this match is held back until its shaders have compiled in the background)
-      v.model.root.visible = vis && !v.pending;
+      v.model.root.visible = show && !v.pending;
       v.visible = vis;
       const d = DEFS[e.def];
       const root = v.model.root;
@@ -1407,7 +1452,7 @@ export class GameRenderer {
             const climb = (e.z - e.pz) * TPS;
             root.rotation.z = Math.max(-0.9, Math.min(0.4, climb * 0.25));
           }
-          if (vis) {
+          if (show) {
             const sz = v.model.size;
             this.airShadows.add(w.map, p.x, p.z, yaw, p.y - standHeight(w.map, p.x, p.z), sz ? sz.x : 0.6, sz ? sz.z : 0.5, !ud.fixedWing && d.model !== 'uav' && d.model !== 'heavy_uav' && d.model !== 'shahed');
           }
@@ -1463,7 +1508,9 @@ export class GameRenderer {
         for (const r of v.model.recoil) r.position.x = (r.userData.baseX ??= r.position.x) - v.recoil * 0.12;
       }
       this.updateRing(e, v, d);
-      if (vis && this.contact) this.addContact(e, v);
+      if (show && this.contact) this.addContact(e, v, fade);
+      // moving shadows under illumination flares (nightops.ts)
+      if (show && this.flareFx.now.length) this.flareShadow(e, v);
       if (vis) {
         const rp = root.position;
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
@@ -2024,6 +2071,14 @@ export class GameRenderer {
     if (this.superFx.onEvent(ev)) return; // garrison window fire etc. (fx/superfx.ts)
     const fx = this.effects;
     switch (ev.t) {
+      case 'illum': {
+        // illumination round (sim/night.ts): the gun's flash (the shot gives it away), the shell's arc, the flare
+        const src = this.world.get(ev.id);
+        const { pos, dir } = src ? this.muzzleOf(src) : { pos: new THREE.Vector3(ev.x, standHeight(this.world.map, ev.x, ev.y) + 0.4, ev.y), dir: new THREE.Vector3(0, 1, 0) };
+        if (src && (this.viewer < 0 || src.owner === this.viewer || this.world.sees(this.viewer, src))) fx.muzzle(pos, dir, unitDef(src.def).category === 'infantry' ? 0.7 : 1.5);
+        this.flareFx.onIllum(ev, pos, this.world.tick / TPS);
+        break;
+      }
       case 'fire': {
         const src = this.world.get(ev.id);
         if (!src) break;
@@ -2451,7 +2506,11 @@ export class GameRenderer {
       const p = this.world.players[this.viewer];
       this.fog.update(p.explored, p.visible, dt);
     }
+    // illumination flares of this frame (their shadows go in with the units)
+    const simT = (this.world.tick + alpha) / TPS;
+    this.flareFx.prepare(this.world, simT, this.target);
     this.syncEntities(alpha, dt);
+    this.flareFx.update(dt, this.world, simT, this.effects);
     this.life.update(dt, this.time);
     this.deployFx.update(dt, this.time);
     this.overlay.endFrame();
@@ -2483,7 +2542,8 @@ export class GameRenderer {
     // identical unit parts drawn as instanced batches (models on or casting into the view only)
     const roots = this.instRoots;
     roots.length = 0;
-    if (this.instancer.enabled) for (const v of this.visuals.values()) if (v.visible && v.near && v.lod.kind !== 'infantry') roots.push(v.model.root);
+    // (units fading in / out of the dark wear a veil over their own meshes: they stay out of the batches)
+    if (this.instancer.enabled) for (const v of this.visuals.values()) if (v.visible && v.near && v.lod.kind !== 'infantry' && (v.fade === undefined || v.fade >= 1)) roots.push(v.model.root);
     this.instancer.update(roots);
     try {
       if (vh?.renderMain()) {
@@ -2611,6 +2671,8 @@ export class GameRenderer {
     this.deployFx.dispose();
     this.sniperFx.dispose();
     this.atmos.dispose();
+    this.flareFx.dispose();
+    this.veil.dispose();
     this.scars.dispose();
     this.sky?.dispose();
     this.canvas.removeEventListener('webglcontextlost', this.onContextLost);

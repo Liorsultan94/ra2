@@ -1,4 +1,5 @@
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, defsForFaction, unitDef } from '../sim/defs';
+import { illumWait } from '../sim/night';
 import { standHeight } from '../sim/map';
 import { TPS, type Category, type Def, type Entity } from '../sim/types';
 import type { World } from '../sim/world';
@@ -32,7 +33,7 @@ export interface HudActions {
   onMore(): void;
 }
 
-export type HudCommand = 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode';
+export type HudCommand = 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode' | 'illum';
 
 const TABS: { cat: Category; label: string; icon: string }[] = [
   { cat: 'building', label: 'Base', icon: 'base' },
@@ -58,6 +59,7 @@ const ICONS = {
   box: icon('box'),
   cancel: icon('cancel'),
   more: icon('more'),
+  flare: icon('flare'),
 };
 
 /** Line icons for the view buttons other modules add by title (thermal, photo mode); filled glyph otherwise. */
@@ -467,6 +469,8 @@ export class Hud {
       }
       if (d.aps) extra.push(`APS ${Math.round(d.aps * 100)}%`);
       if (d.medic) extra.push('Treats wounded soldiers', 'Unarmed');
+      if (d.nvg) extra.push('Night vision');
+      if (d.illum) extra.push('Illumination rounds');
     }
     if (extra.length) lines.push(`<div class="tt-stats">${extra.join(' · ')}</div>`);
     const missing = d.prereq.filter((r) => !this.world.hasRole(this.player, r));
@@ -588,6 +592,9 @@ export class Hud {
           else stats.push(`Range ${wp.range}`, airLabel(wp.air, false));
         }
         if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
+        // night combat (sim/night.ts): full sight by night; illumination rounds
+        if (d.kind === 'unit' && d.nvg) stats.push('Night vision');
+        if (d.kind === 'unit' && d.illum) stats.push(e.owner === this.player && illumWait(w, e) > 0 ? `Illumination ${Math.ceil(illumWait(w, e))}s` : 'Illumination');
         // jets: sortie status and rearm progress, shown in the simple (phone) UI too
         // repair is the dominant line (and bar) while both run
         const jfix = !!e.sortie && jetRepairing(e);
@@ -632,6 +639,8 @@ export class Hud {
       cmds.push(['Stop', 'S', 'stop', ICONS.stop], ['Attack-Move', 'A', 'attackMove', ICONS.attackMove]);
       if (units.some((u) => unitDef(u.def).mcv)) cmds.push(['Deploy', 'D', 'deploy', ICONS.deploy]);
       if (units.some((u) => u.passengers.length > 0)) cmds.push(['Unload', 'D', 'deploy', ICONS.unload]);
+      const illum = this.illumLabel(units);
+      if (illum) cmds.push([illum, 'L', 'illum', ICONS.flare]);
       cmds.push(['Deselect', '', 'deselect', ICONS.deselect]);
     } else if (ownBuilding) {
       if (DEFS[ownBuilding.def].faction === 'neutral') {
@@ -652,7 +661,20 @@ export class Hud {
       b.title = label + (key2 ? ` (${key2})` : '');
       b.innerHTML = `${ico}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
       b.onclick = () => this.actions.onCommand(id);
+      // (illumination reloading: the button counts down)
+      if (id === 'illum' && label !== 'Illumination') b.disabled = true;
     }
+  }
+
+  /**
+   * Artillery / mortars selected (sim/night.ts): the Illumination button's label - "Illumination" when a gun has
+   * its round ready, else the seconds until the first one is; null without such a gun.
+   */
+  private illumLabel(units: Entity[]): string | null {
+    let wait = Infinity;
+    for (const u of units) if (unitDef(u.def).illum) wait = Math.min(wait, illumWait(this.world, u));
+    if (wait === Infinity) return null;
+    return wait <= 0 ? 'Illumination' : `Illum ${Math.ceil(wait)}s`;
   }
 
   private aimText = '';
@@ -690,6 +712,8 @@ export class Hud {
     if (sel.length) b.push(['deselect', 'Clear', ICONS.deselect, cmd('deselect'), 'Deselect']);
     if (units.some((u) => unitDef(u.def).mcv)) b.push(['ctx deploy', 'Deploy', ICONS.deploy, cmd('deploy'), 'Deploy the MCV into a Construction Yard']);
     if (units.some((u) => u.passengers.length > 0)) b.push(['ctx', 'Unload', ICONS.unload, cmd('deploy'), 'Unload the passengers']);
+    const illum = this.illumLabel(units);
+    if (illum) b.push([illum === 'Illumination' ? `ctx${mode === 'illum' ? ' on' : ''}` : 'ctx wait', illum === 'Illumination' ? 'Illuminate' : illum.replace('Illum ', ''), ICONS.flare, cmd('illum'), 'Illumination: tap the map, a gun fires a parachute flare that lights the area for 30 s']);
     if (ownBuilding) {
       if (ownBuilding.passengers.length) b.push(['ctx', 'Evacuate', ICONS.unload, cmd('evacuate'), 'Send the garrison out']);
       if (ownBuilding.hp < ownBuilding.maxHp) b.push(['ctx', 'Repair', ICONS.repair, cmd('repairSel'), 'Repair this building']);
@@ -782,14 +806,14 @@ export class Hud {
     }
     this.fogCanvas.getContext('2d')!.putImageData(this.fogImg, 0, 0);
     ctx.drawImage(this.fogCanvas, 0, 0);
-    // entities (only what the player can see; units need the radar). Classic fog (RA2): structures on
-    // explored ground are map knowledge and stay on the map even without a radar.
-    const classic = w.fog === 'classic';
+    // entities (only what the player can see; units need the radar). Structures on explored ground are map
+    // knowledge and stay on the map even without a radar, by day and by night (last known; sim/night.ts).
+    // Units follow the renderer: by night only those in sight, under a flare or given away by a muzzle flash.
     for (const e of w.list) {
       if (e.dead || e.inside >= 0) continue;
       const own = e.owner === this.player;
       if (!own && !this.renderer.isShown(e.id)) continue;
-      if (!radar && !(e.kind === 'building' && (own || classic))) continue;
+      if (!radar && e.kind !== 'building') continue;
       const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
       if (e.kind === 'building') {
         const d = buildingDef(e.def);

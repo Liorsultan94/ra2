@@ -14,6 +14,10 @@ there are no copyrighted game assets.
 - Ground, artillery and **air units** (strike UAVs, jets, kamikaze drones) with anti-air counters.
 - Skirmish vs. a doctrine AI — every nation fights its own way (scouting, flanks, harvester raids, focus fire,
   retreat-to-repair, artillery standoff, missile salvos) on easy / normal / hard; fog of war, minimap.
+- A live day / night clock (1 real minute = 1 game hour) that changes the fighting: by night units see half as
+  far and the fog of war only shows what your forces see right now; snipers, tanks, attack helicopters, drones
+  and jets carry night vision; muzzle flashes give shooters away for 5 s (hold fire to stay hidden); artillery
+  and mortars fire illumination flares (L); powered bases light floodlights.
 - RTS controls: control groups (Ctrl/Shift + 1-9, phone group strip), stances (Alt+A/S/D/F: aggressive, guard,
   hold position, hold fire), patrol (P), escort (G), Shift-queued waypoints, attack-move, repeat build.
 - Isometric 3D graphics with shadows, bloom, animated water, particles and dynamic explosion lights.
