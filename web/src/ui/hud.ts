@@ -9,6 +9,7 @@ import { SupportPower } from './support';
 import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
+import { aimStatus, aimWeapon } from '../sim/sniper';
 import { isSortieJet, jetCount, jetsQueued, padCap, rearmProgress } from '../sim/airbase';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
@@ -541,6 +542,7 @@ export class Hud {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
     const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}` : ''}`).join(',');
+    this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
     const own = sel.filter((e) => e.owner === this.player);
@@ -576,7 +578,10 @@ export class Hud {
         const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
         const rel = e.owner === this.player ? 'own' : e.owner < 0 ? 'neutral' : 'enemy';
         const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        // snipers: lock-on status, refreshed every frame by updateAim
+        const aim = e.kind === 'unit' && e.owner === this.player && aimWeapon(e) ? '<div class="sp-aim"><span>Ready</span><i></i></div>' : '';
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        this.aimText = '';
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
       } else {
@@ -626,6 +631,22 @@ export class Hud {
       b.innerHTML = `${ico}<span>${label}</span>${key2 ? `<kbd>${key2}</kbd>` : ''}`;
       b.onclick = () => this.actions.onCommand(id);
     }
+  }
+
+  private aimText = '';
+  /** Sniper selected: "Aiming 2.1s" / "Locked" / "Ready" and the lock progress bar (no panel rebuild). */
+  private updateAim(sel: Entity[]) {
+    if (sel.length !== 1) return;
+    const box = this.selPanel.querySelector<HTMLElement>('.sp-aim');
+    if (!box) return;
+    const st = aimStatus(sel[0]);
+    const txt = !st ? 'Ready' : st.k >= 1 ? 'Locked - fire' : `Aiming ${st.left.toFixed(1)}s`;
+    if (txt === this.aimText) return;
+    this.aimText = txt;
+    box.firstElementChild!.textContent = txt;
+    box.classList.toggle('on', !!st);
+    box.classList.toggle('locked', !!st && st.k >= 1);
+    box.style.setProperty('--k', st ? st.k.toFixed(3) : '0');
   }
 
   private setSelHtml(html: string): boolean {

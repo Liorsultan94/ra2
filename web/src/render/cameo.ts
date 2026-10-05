@@ -87,7 +87,8 @@ export class CameoFactory {
       const d = DEFS[defId];
       const model = createModel(d.model, style, null);
       const root = model.root;
-      model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true });
+      // (snipers pose with the rifle shouldered: the long scoped rifle is what tells them apart)
+      model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true, aim: d.model === 'sniper' ? 1 : 0 });
       this.resize(CW * SS, CH * SS);
       this.scene.add(root);
       root.updateMatrixWorld(true);

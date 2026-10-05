@@ -1,5 +1,9 @@
 import type { ArmorClass, BuildingDef, Def, Faction, UnitDef, Warhead, WeaponDef } from './types';
 import { CIVILIAN_BUILDINGS, SW_WEAPONS, TECH_BUILDINGS, superweaponBuilding } from './specialdefs';
+import { TPS } from './types';
+
+/** Sniper lock-on: 3 s on every new target (sniper.ts SNIPER_AIM). */
+const SNIPER_AIM_TICKS = 3 * TPS;
 
 // ----------------------------------------------------------------- warheads
 
@@ -12,12 +16,17 @@ export const VERSUS: Record<Warhead, Record<ArmorClass, number>> = {
   missile: { infantry: 0.5, light: 1.0, heavy: 1.0, building: 1.1, aircraft: 1.0 },
   laser: { infantry: 0.8, light: 0.7, heavy: 0.25, building: 0.3, aircraft: 1.6 },
   thermo: { infantry: 1.3, light: 0.7, heavy: 0.35, building: 1.2, aircraft: 0 },
+  // sniper rifle (sniper.ts): one shot kills any soldier (World.damage), a scratch on light armour,
+  // next to nothing on tanks and buildings, can't engage aircraft
+  sniper: { infantry: 1.0, light: 0.13, heavy: 0.03, building: 0.02, aircraft: 0 },
 };
 
 // ------------------------------------------------------------------ weapons
 
 const BASE_WEAPONS: WeaponDef[] = [
   { id: 'rifle', damage: 15, range: 4.5, rof: 18, warhead: 'mg', projectile: 'instant', air: 'yes' },
+  // sniper rifle: 2.5x the rifleman's reach, a 3 s lock-on per new target (sniper.ts), bolt cycle 2.5 s
+  { id: 'sniper', damage: 125, range: 4.5 * 2.5, rof: 50, warhead: 'sniper', projectile: 'instant', air: 'no', aim: SNIPER_AIM_TICKS },
   { id: 'mgHeavy', damage: 14, range: 5, rof: 7, warhead: 'mg', projectile: 'instant', air: 'yes' },
   { id: 'atRocket', damage: 42, range: 5.5, rof: 42, warhead: 'rocket', projectile: 'rocket', speed: 0.45, air: 'yes' , flight: 'atgm', munition: 'rpg' },
   { id: 'cannon', damage: 62, range: 5.5, rof: 42, warhead: 'cannon', projectile: 'shell', speed: 0.9, air: 'no' , flight: 'shell', munition: 'tankShell' },
@@ -241,6 +250,7 @@ const BUILDINGS: Record<string, BldTpl> = {
 const UNITS: Record<string, UnitTpl> = {
   rifle: { name: 'Rifleman', category: 'infantry', model: 'rifle', cost: 150, buildTime: 4, hp: 110, armor: 'infantry', sight: 5, speed: 1.35, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'rifle', prereq: ['barracks'], desc: 'Basic infantry. Can fire at drones.', aiWeight: 5, aiTag: 'main' },
   at: { name: 'AT Rocket Team', category: 'infantry', model: 'at', cost: 300, buildTime: 5, hp: 110, armor: 'infantry', sight: 6, speed: 1.25, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'atRocket', prereq: ['barracks'], desc: 'Anti-armor rockets. Also hits aircraft.', aiWeight: 4, aiTag: 'main' },
+  sniper: { name: 'Sniper', category: 'infantry', model: 'sniper', cost: 600, buildTime: 8, hp: 90, armor: 'infantry', sight: 11, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'sniper', prereq: ['barracks', 'radar'], desc: 'Long-range marksman: 2.5x rifle range, takes 3 s to lock on to each new target, then one shot kills any soldier. Barely scratches armour; cannot hit aircraft. +20% range from a building window.', aiWeight: 2, aiTag: 'main' },
   engineer: { name: 'Engineer', category: 'infantry', model: 'engineer', cost: 500, buildTime: 6, hp: 75, armor: 'infantry', sight: 4, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, engineer: true, prereq: ['barracks'], desc: 'Captures enemy and neutral buildings, repairs your own.', aiWeight: 0 },
   mbt: { name: 'Main Battle Tank', category: 'vehicle', model: 'mbt', cost: 800, buildTime: 9, hp: 380, armor: 'heavy', sight: 6, speed: 2.2, turnRate: 0.11, turret: true, radius: 0.45, weapon: 'cannon', prereq: ['factory'], desc: 'Main battle tank.', aiWeight: 7, aiTag: 'main' },
   aa: { name: 'AA Vehicle', category: 'vehicle', model: 'aa', cost: 700, buildTime: 8, hp: 230, armor: 'light', sight: 8, speed: 2.3, turnRate: 0.12, turret: true, radius: 0.42, weapon: 'flak', prereq: ['factory'], desc: 'Rapid-fire air defense. Air targets only.', aiWeight: 1, aiTag: 'aa' },
@@ -283,6 +293,7 @@ const TRANSPORT_TPL: UnitTpl = { name: 'Transport', category: 'air', model: 'tr_
 type UnitOverride = Partial<UnitTpl> & { replaces?: string; remove?: boolean };
 const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
   usa: {
+    sniper: { name: 'M2010 Sniper' },
     mbt: { name: 'M1A2 Abrams' },
     apc: { name: 'M2A4 Bradley' },
     laser: { replaces: 'aa', name: 'DE M-SHORAD', model: 'laser', category: 'vehicle', cost: 900, hp: 240, armor: 'light', weapon: 'laser', desc: 'Directed-energy air defense. Shreds drones, also hits ground targets.', aiWeight: 2, aiTag: 'aa' },
@@ -295,6 +306,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     typhon: { name: 'Typhon MRC (Tomahawk)', model: 'tel_typhon', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
+    sniper: { name: 'Matzpen Sniper' },
     mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 0.55, desc: 'Front-engined heavy tank with Trophy active protection.' },
     apc: { name: 'Namer', hp: 430, armor: 'heavy', cost: 950, desc: 'Heavily armored infantry carrier on a Merkava chassis.' },
     aa: { name: 'Machbet' },
@@ -307,6 +319,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     lora: { name: 'LORA Launcher', model: 'tel_lora', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   china: {
+    sniper: { name: 'QBU-88 Sharpshooter' },
     mbt: { name: 'Type 99A' },
     apc: { name: 'ZBL-08' },
     aa: { name: 'PGZ-09' },
@@ -319,6 +332,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     uav: { name: 'Wing Loong II' },
   },
   russia: {
+    sniper: { name: 'SV-98 Sniper' },
     mbt: { name: 'T-90M', hp: 420 },
     apc: { name: 'BMP-3' },
     aa: { name: 'Pantsir-S1' },
@@ -331,6 +345,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     iskander: { name: '9K720 Iskander-M', model: 'tel_iskander', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   germany: {
+    sniper: { name: 'G29 Sniper' },
     mbt: { name: 'Leopard 2A8', model: 'mbt_heavy', cost: 1000, buildTime: 11, hp: 540, speed: 2.4, weapon: 'cannonHeavy', desc: 'Superior tank with modular composite armor.' },
     apc: { name: 'Puma', hp: 360 },
     berge: { name: 'Bergepanzer 3', model: 'berge', category: 'vehicle', cost: 800, buildTime: 9, hp: 450, armor: 'heavy', sight: 6, speed: 2.1, turnRate: 0.1, turret: false, repairAura: 3, prereq: ['factory'], desc: 'Armored recovery vehicle. Repairs nearby vehicles.', aiWeight: 1, aiTag: 'support' },
@@ -343,6 +358,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     taurus: { name: 'Taurus KEPD 350 Launcher', model: 'tel_taurus', category: 'vehicle', cost: 1900, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'taurus', prereq: ['factory', 'tech'], desc: 'Stealthy bunker-busting cruise missile. Terrain-following; defences spot it only at a third of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   korea: {
+    sniper: { name: 'K14 Sniper' },
     mbt: { name: 'K2 Black Panther' },
     apc: { name: 'K21' },
     aa: { name: 'K30 Biho' },
@@ -354,6 +370,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     hyunmoo: { name: 'Hyunmoo-2 TEL', model: 'tel_hyunmoo', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'hyunmoo', prereq: ['factory', 'tech'], desc: 'Precision ballistic missile with a heavy warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   ukraine: {
+    sniper: { name: 'UAR-10 Sniper' },
     mbt: { name: 'T-84 Oplot' },
     apc: { name: 'BTR-4' },
     aa: { name: 'Gepard' },
@@ -367,6 +384,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     neptune: { name: 'R-360 Neptune Launcher', model: 'tel_neptune', category: 'vehicle', cost: 1600, buildTime: 16, hp: 200, armor: 'light', sight: 6, speed: 1.8, turnRate: 0.08, weapon: 'neptune', prereq: ['factory', 'tech'], desc: 'Sea-skimming cruise missile. Hugs the ground; defences spot it only at half range.', aiWeight: 1, aiTag: 'arty' },
   },
   turkey: {
+    sniper: { name: 'KNT-308 Sniper' },
     mbt: { name: 'Altay' },
     apc: { name: 'Pars III' },
     aa: { name: 'Korkut' },
@@ -379,6 +397,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     tayfun: { name: 'Tayfun TEL', model: 'tel_tayfun', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   iran: {
+    sniper: { name: 'Nakhjir Sniper' },
     mbt: { name: 'Karrar' },
     apc: { name: 'Boragh' },
     at: { cost: 240 },
