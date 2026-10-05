@@ -146,6 +146,8 @@ export interface Visual {
   occl: boolean;
   /** The model or its shadow may be on screen (last sync). */
   near: boolean;
+  /** Animation time banked while off screen (handed to the next pose update). */
+  animDebt?: number;
   /** Its programs are still compiling (parallel compile): not drawn yet. */
   pending?: boolean;
 }
@@ -1337,8 +1339,32 @@ export class GameRenderer {
         if (vis) this.unitFx(e, v, p, yaw, moved, dt);
       }
       if (v.model.infantry) a.lod = !vis ? 2 : a.lod === 2 && v.near ? 0 : a.lod;
-      if (v.model.anim) v.model.anim(a);
-      this.legacyAnim(v.model, a);
+      // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
+      let nearNow = false;
+      if (vis) {
+        const rp = root.position;
+        const h = v.model.height ?? 1;
+        const tx = shadowsOn ? throwX * h : 0;
+        const tz = shadowsOn ? throwZ * h : 0;
+        const sph = this.castSphere;
+        sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
+        sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
+        nearNow = fr.intersectsSphere(sph);
+      }
+      // Vehicles / buildings / aircraft off screen (model and shadow) or under the shroud: no pose animation.
+      // The time is banked and handed over in one step once the model can be seen again (spinners, blends
+      // and timers end up where they would have been); infantry have their own cheap off-screen cycle.
+      if (!nearNow && !v.model.infantry && !this.photoCam) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
+      else {
+        const debt = v.animDebt ?? 0;
+        if (debt) {
+          a.dt = dt + debt;
+          v.animDebt = 0;
+        }
+        if (v.model.anim) v.model.anim(a);
+        this.legacyAnim(v.model, a);
+        a.dt = dt;
+      }
       if (v.model.recoil && v.recoil > 0) {
         v.recoil = Math.max(0, v.recoil - dt * 4);
         for (const r of v.model.recoil) r.position.x = (r.userData.baseX ??= r.position.x) - v.recoil * 0.12;
@@ -1350,14 +1376,7 @@ export class GameRenderer {
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
         applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
         {
-          // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
-          const h = v.model.height ?? 1;
-          const tx = shadowsOn ? throwX * h : 0;
-          const tz = shadowsOn ? throwZ * h : 0;
-          const sph = this.castSphere;
-          sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
-          sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
-          v.near = fr.intersectsSphere(sph);
+          v.near = nearNow;
           if (shadowsOn) setCasting(v.lod, v.near);
           // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
           if (v.model.infantry) {
