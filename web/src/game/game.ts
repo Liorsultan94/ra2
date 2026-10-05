@@ -725,7 +725,8 @@ export class Game {
       case 'launch': {
         if (!this.visibleToLocal(ev.x, ev.y)) break;
         const f = ev.flight;
-        const snd: Sfx = f === 'interceptor' ? 'interceptorLaunch' : f === 'sam' || f === 'ballistic' || f === 'hypersonic' || f === 'cruise' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
+        const shoulder = !!WEAPONS[ev.weapon]?.shoulder; // shoulder-fired AA missile: a lighter launch
+        const snd: Sfx = f === 'interceptor' || shoulder ? 'interceptorLaunch' : f === 'sam' || f === 'ballistic' || f === 'hypersonic' || f === 'cruise' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
         this.sfx(snd, ev.x, ev.y, f === 'ballistic' || f === 'hypersonic' ? 1 : 0.75);
         break;
       }

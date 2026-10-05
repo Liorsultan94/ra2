@@ -83,7 +83,7 @@ describe('infantry: hero / battle / far geometry LODs', () => {
     for (const f of ['usa', 'israel', 'china', 'russia', 'germany', 'korea', 'ukraine', 'turkey', 'iran']) {
       for (const key of ['rifle', 'at']) {
         const m = INFANTRY[key](style(f), null);
-        const states: Partial<AnimState>[] = [{ moving: true, speed: 1.3, dist: 0.5 }, { fired: 0.05 }, { fired: 0.5, dig: 3 }, { dive: 0.4 }, { dead: 2 }, { dead: 0.5, crushed: 1 }];
+        const states: Partial<AnimState>[] = [{ moving: true, speed: 1.3, dist: 0.5 }, { fired: 0.05 }, { fired: 0.05, alt: 1, elev: 0.9, aim: 1 }, { alt: 1, dead: 1 }, { fired: 0.5, dig: 3 }, { dive: 0.4 }, { dead: 2 }, { dead: 0.5, crushed: 1 }];
         for (const st of states) {
           const a = { ...base(), ...st };
           for (let i = 0; i < 5; i++) {
