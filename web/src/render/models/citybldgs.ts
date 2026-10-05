@@ -1119,10 +1119,16 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
   const mats = cityMaterials(fog, quality);
   const CH = 48;
   const chunks = new Map<string, Chunk>();
+  // The walls, trim and roofs are a few hundred to a few thousand triangles for the whole city (boxes UV-mapped
+  // in bays x floors): one mesh per material for the map instead of one per chunk and material (up to 4x fewer
+  // draw calls, main view and shadow map). Only the heavy detail mesh (balconies, awnings, roof clutter: ~50k
+  // triangles) stays split per chunk so the chunks off screen are culled. Same vertices, same materials, same
+  // draw order between materials (three sorts opaque objects by material first): the picture is unchanged.
+  const shared = newChunk();
   const chunkOf = (x: number, y: number) => {
     const key = `${Math.floor(x / CH)},${Math.floor(y / CH)}`;
     let c = chunks.get(key);
-    if (!c) chunks.set(key, (c = newChunk()));
+    if (!c) chunks.set(key, (c = { ...shared, detail: new GeoBuilder() }));
     return c;
   };
   const avoidAlley = (x: number, y: number) => {
@@ -1239,7 +1245,7 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
       [c.detail, mats.detail, false, 'city-detail'],
     ];
     for (const [b, mat, cast, name] of pairs) {
-      if (!b.count) continue;
+      if (!b.count || built.has(b)) continue;
       const g = b.build();
       g.computeBoundingSphere();
       const mesh = new THREE.Mesh(g, mat);
@@ -1274,6 +1280,12 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
       });
       sink.houses.push({ st, cx, cz, gy, ranges });
     }
+  // the builders' arrays are garbage now, but the lamp heads' onBeforeRender below keeps this whole scope
+  // (and through `spans` / `chunks` every builder) alive for the match: ~20 MB of JS heap on Canal City
+  for (const c of chunks.values()) for (const b of chunkBuilders(c)) b.release();
+  spans.length = 0;
+  chunks.clear();
+  built.clear();
 
   // ---- street lamps along the avenues (instanced; the heads glow after dark)
   const lampPts: { x: number; z: number; rot: number }[] = [];

@@ -50,6 +50,7 @@ import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { loadBuildingPhotos } from './models/bldtex';
+import { releaseBuildFx } from './models/buildfx';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
@@ -2434,6 +2435,8 @@ export class GameRenderer {
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time, this.world.list);
+    // far world night lights / lighthouse beam switch (its ring, which also calls it, is culled in sectors now)
+    this.outskirts.horizon?.update();
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
     this.superFx.update(dt, this.time);
@@ -2583,6 +2586,10 @@ export class GameRenderer {
     this.life.dispose();
     this.deployFx.dispose();
     this.sniperFx.dispose();
+    // module-level pointers into this match (ambient singletons, the burning-building registry): cleared, or
+    // the old scene stays reachable through them while the next match loads
+    this.ambient?.dispose();
+    releaseBuildFx(this.scene);
     this.atmos.dispose();
     this.scars.dispose();
     this.sky?.dispose();

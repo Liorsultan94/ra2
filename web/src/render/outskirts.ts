@@ -12,6 +12,7 @@ import { landmarkClear } from './landmarks/plan';
 import { HZ_CELL, HZ_MARGIN, horizonWorld, type HorizonWorld } from './horizonworld';
 import { HORIZON, Horizon, hzApply, hzClone, hzFragment, hzWaterClone } from './horizon';
 import type { Slicer } from './slice';
+import { gridSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
@@ -126,6 +127,12 @@ export class Outskirts {
   private world: HorizonWorld;
   /** The world beyond the outskirts, out to the horizon (horizon.ts). */
   horizon!: Horizon;
+
+  /** Frustum culling sectors of the belt round the map (sectors.ts): a 4 x 4 grid over its square. */
+  private sectors(): SectorOf {
+    const ext = Math.max(this.map.w, this.map.h) + MARGIN * 2;
+    return gridSectors(ext / 4, -MARGIN, -MARGIN);
+  }
 
   /** Build synchronously (tests, tools); the game uses `Outskirts.build()`, which yields between the steps. */
   constructor(
@@ -413,7 +420,8 @@ export class Outskirts {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'outskirts-ground';
-    this.group.add(mesh);
+    // (in sectors: only the stretch of the belt in view is drawn, sectors.ts)
+    this.group.add(...splitMeshBySector(mesh, this.sectors()));
   }
 
   /** City map: the town goes on past the edge (instanced blocks on the street grid, lit windows at night). */
@@ -484,7 +492,7 @@ export class Outskirts {
     im.onBeforeRender = () => {
       mat.emissiveIntensity = CITY_NIGHT.value * 1.4;
     };
-    this.group.add(im);
+    this.group.add(...splitInstancesBySector(im, this.sectors()));
   }
 
   private buildTrees(fog: FogOfWar, quality: 'low' | 'medium' | 'high') {

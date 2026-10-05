@@ -6,6 +6,7 @@ import { FOG_GLSL, type FogOfWar } from './fog';
 import { CITY_NIGHT } from './models/citybldgs';
 import { RIVER } from './water';
 import { HZ_CELL, HZ_MARGIN, HZ_RADIUS, horizonWorld, type HorizonWorld } from './horizonworld';
+import { radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /*
  * The world past the map edge, out to the horizon (render only; see horizonworld.ts for the
@@ -174,6 +175,8 @@ export class Horizon {
   private lights: { pos: number[]; col: number[]; size: number[] } = { pos: [], col: [], size: [] };
   private beamMesh: THREE.Mesh | null = null;
   private lampPos: THREE.Vector3 | null = null;
+  /** Frustum culling sectors of the far meshes (sectors.ts): 12 wedges round the map centre, 3 rings. */
+  private sectors: SectorOf;
 
   constructor(
     private map: GameMap,
@@ -184,6 +187,7 @@ export class Horizon {
   ) {
     this.group.name = 'horizon';
     this.world = horizonWorld(map);
+    this.sectors = radialSectors(map.w / 2, map.h / 2, 12, [200, 330]);
     HORIZON.hzCentre.value.set(map.w / 2, map.h / 2);
     if (!deferred) for (const _ of this.steps()) void _;
   }
@@ -405,7 +409,8 @@ export class Horizon {
     // night lights / lighthouse beam switch (the ring is always in view of any camera that sees the outskirts)
     mesh.onBeforeRender = () => this.update();
     mesh.receiveShadow = false;
-    this.group.add(mesh);
+    // (in sectors: from the RTS camera the far ring is almost never on screen; GameRenderer also calls update())
+    this.group.add(...splitMeshBySector(mesh, this.sectors));
   }
 
   // ------------------------------------------------------------------ water
@@ -787,7 +792,7 @@ export class Horizon {
       im.onBeforeRender = () => {
         mat.emissiveIntensity = CITY_NIGHT.value * 1.5;
       };
-      this.group.add(im);
+      this.group.add(...splitInstancesBySector(im, this.sectors));
     };
     // house: a box with a gable roof (roof faces map to the plain wall corner of the texture; vertex colour = roof tint)
     const body = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
@@ -930,7 +935,7 @@ export class Horizon {
     geo.setAttribute('aCell', new THREE.InstancedBufferAttribute(cells, 1));
     im.computeBoundingSphere();
     im.name = 'horizon-forest';
-    this.group.add(im);
+    this.group.add(...splitInstancesBySector(im, this.sectors));
   }
 
   // ------------------------------------------------------------------ Canal City's harbour
@@ -1123,7 +1128,7 @@ export class Horizon {
     mesh.name = 'horizon-harbour';
     mesh.castShadow = this.quality === 'high';
     mesh.receiveShadow = this.quality === 'high';
-    this.group.add(mesh);
+    this.group.add(...splitMeshBySector(mesh, this.sectors));
     this.buildBeam();
   }
 

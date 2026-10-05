@@ -1492,6 +1492,20 @@ const _v4 = new THREE.Vector4();
 const ALL_FX = new Set<BuildFx>();
 const INFERNO = new Set<BuildFx>();
 
+/**
+ * A match is over: forget its buildings. Their roots are still parented in the old scene, so the registry
+ * (only pruned of detached roots during an inferno) kept every finished match's whole scene alive.
+ */
+export function releaseBuildFx(scene: THREE.Object3D) {
+  const inScene = (fx: BuildFx) => {
+    let o: THREE.Object3D = fx.root;
+    while (o.parent) o = o.parent;
+    return o === scene;
+  };
+  for (const fx of ALL_FX) if (inScene(fx)) ALL_FX.delete(fx);
+  for (const fx of INFERNO) if (inScene(fx)) INFERNO.delete(fx);
+}
+
 /** Per-instance construction / damage driver, called from the model's anim. */
 export class BuildFx {
   readonly damageFx: DamageFx[];
