@@ -145,6 +145,13 @@ export interface UnitDef extends BaseDef {
   rotary?: boolean;
   /** Combat medic (medic.ts): treats wounded friendly soldiers and slowly heals hurt ones nearby. Unarmed. */
   medic?: boolean;
+  /**
+   * Night vision / thermal equipment (night.ts): keeps its full sight by night (snipers, main battle tanks,
+   * attack helicopters, drones / UAVs, fighter jets while airborne). Set in defs.ts for every faction alike.
+   */
+  nvg?: boolean;
+  /** Artillery / mortar: can fire an illumination round (night.ts). Set in defs.ts. */
+  illum?: boolean;
 }
 
 export interface BuildingDef extends BaseDef {
@@ -195,13 +202,17 @@ export type Order =
    * Medic (medic.ts): run to a wounded friendly soldier and treat him. auto = picked up on his own (not a player
    * order); x, y: the attack-move he was on, resumed afterwards.
    */
-  | { type: 'treat'; target: number; auto?: boolean; x?: number; y?: number };
+  | { type: 'treat'; target: number; auto?: boolean; x?: number; y?: number }
+  /** Artillery / mortar (night.ts): get within range of (x, y) and fire an illumination round over it. */
+  | { type: 'illum'; x: number; y: number };
 
 /**
- * Fog of war rule (World option, the same for every player):
- * 'classic' (Red Alert 2): once explored, ground stays revealed - terrain, structures and units there
+ * Fog of war rule, the same for every player. It is automatic: the day / night clock picks it (sim/clock.ts,
+ * World.fog); there is no player choice.
+ * 'classic' (by day; Red Alert 2): once explored, ground stays revealed - terrain, structures and units there
  * stay visible and targetable; only the black shroud of unexplored ground hides anything.
- * 'modern': explored ground outside current sight is dimmed fog and hides enemy units.
+ * 'modern' (by night): explored ground outside current sight is dimmed fog and hides enemy units (discovered
+ * structures stay shown as last known); muzzle flashes, illumination flares and base floodlights reveal (night.ts).
  */
 export type FogMode = 'classic' | 'modern';
 
@@ -416,6 +427,27 @@ export interface Entity {
 
   // attack helicopters (helipad.ts): on its way to / at an airbase for repair
   heli: HeliPad | null;
+
+  // night combat (night.ts)
+  flashAt: number; // tick of its last shot (a container: of its occupants' last shot): the muzzle flash gives it away by night
+  illumAt: number; // artillery / mortar: tick its next illumination round is ready
+}
+
+/**
+ * Illumination flare (night.ts): a parachute flare over (x, y), fired by `from` for `owner`. The shell is in
+ * the air until `at`; from then the flare burns, lighting and revealing FLARE_RADIUS around it to its owner,
+ * until `end`.
+ */
+export interface Flare {
+  id: number;
+  owner: number;
+  from: number;
+  x: number;
+  y: number;
+  /** Tick the shell was fired. */
+  fired: number;
+  at: number;
+  end: number;
 }
 
 export interface QueueItem {
@@ -547,10 +579,14 @@ export type Command =
   /** Medics: treat this wounded friendly soldier (medic.ts). */
   | { type: 'treat'; ids: number[]; target: number }
   /** Attack helicopters: fly to this own airbase, land and be repaired (helipad.ts). */
-  | { type: 'land'; ids: number[]; target: number };
+  | { type: 'land'; ids: number[]; target: number }
+  /** Artillery / mortar: fire an illumination round over (x, y) (night.ts; one unit fires, the nearest ready one). */
+  | { type: 'illum'; ids: number[]; x: number; y: number };
 
 export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
+  /** An illumination round fired (night.ts): from (x, y) towards (tx, ty); flare = the Flare it becomes (lit from flare.at). */
+  | { t: 'illum'; id: number; owner: number; x: number; y: number; tx: number; ty: number; flare: number }
   | { t: 'impact'; x: number; y: number; z: number; weapon: string; air?: boolean; direct?: boolean }
   | { t: 'launch'; id: number; flight: Flight; weapon: string; x: number; y: number; z: number; owner: number; sourceId: number }
   /**

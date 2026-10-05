@@ -56,21 +56,33 @@ describe('settings', () => {
     }
   });
 
-  it('fog of war defaults to classic (off), auto-defend to on; both round-trip and fall back', () => {
+  it('auto-defend defaults to on, round-trips and falls back; there is no fog of war setting any more', () => {
     const s = loadSettings();
-    expect(s.fog).toBe('classic');
+    expect('fog' in s).toBe(false);
     expect(s.autoDefend).toBe(true);
-    s.fog = 'modern';
     s.autoDefend = false;
     saveSettings(s);
     const back = loadSettings();
-    expect(back.fog).toBe('modern');
     expect(back.autoDefend).toBe(false);
     const ls = g.localStorage as ReturnType<typeof fakeStorage>;
-    ls.setItem(SETTINGS_KEY, JSON.stringify({ fog: 'thick', autoDefend: 'yes' }));
+    ls.setItem(SETTINGS_KEY, JSON.stringify({ autoDefend: 'yes' }));
     const bad = loadSettings();
-    expect(bad.fog).toBe('classic');
     expect(bad.autoDefend).toBe(true);
+  });
+
+  it('old saved settings with a fog of war choice still load (the choice is dropped: the fog is automatic now)', () => {
+    const ls = g.localStorage as ReturnType<typeof fakeStorage>;
+    for (const fog of ['modern', 'classic', 'thick', 7, null]) {
+      ls.setItem(SETTINGS_KEY, JSON.stringify({ fog, difficulty: 'hard', credits: 20000, autoDefend: false }));
+      const s = loadSettings();
+      expect('fog' in s).toBe(false);
+      expect(s.difficulty).toBe('hard');
+      expect(s.credits).toBe(20000);
+      expect(s.autoDefend).toBe(false);
+      // saving again writes no fog key
+      saveSettings(s);
+      expect(JSON.parse(ls.getItem(SETTINGS_KEY)!).fog).toBeUndefined();
+    }
   });
 
   it('older saves and bad values fall back to the defaults', () => {

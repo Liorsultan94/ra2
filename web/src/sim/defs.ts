@@ -582,6 +582,20 @@ list.push({
 // garrisonable civilian houses and capturable tech structures (specialdefs.ts)
 list.push(...CIVILIAN_BUILDINGS, ...TECH_BUILDINGS);
 
+/**
+ * Night combat equipment (night.ts), the same for every faction:
+ *  - night vision / thermal sights (UnitDef.nvg, full sight by night): snipers, main battle tanks, attack
+ *    helicopters, drones / UAVs (the kamikaze drones too), fighter jets;
+ *  - illumination rounds (UnitDef.illum): tube artillery, mortars and rocket artillery.
+ */
+export const NVG_MODELS: ReadonlySet<string> = new Set(['sniper', 'mbt', 'mbt_heavy', 'heli', 'uav', 'heavy_uav', 'fighter', 'fpv', 'micro', 'shahed']);
+for (const d of list) {
+  if (d.kind !== 'unit') continue;
+  if (NVG_MODELS.has(d.model) && !d.airlift && !d.supply) d.nvg = true;
+  const f = d.weapon && d.category !== 'air' ? WEAPONS[d.weapon]?.flight : undefined;
+  if (f === 'artillery' || f === 'mortar' || f === 'rocketSalvo') d.illum = true;
+}
+
 export const DEFS: Record<string, Def> = Object.fromEntries(list.map((d) => [d.id, d]));
 export const DEF_LIST = list;
 

@@ -45,7 +45,7 @@ export function aimStatus(e: Entity): { k: number; left: number } | null {
 /** Can the shooter hold a lock on t: alive, out in the open, and in its owner's sight. */
 export function aimSees(w: World, e: Entity, t: Entity): boolean {
   if (t.dead || t.inside >= 0 || t.wound) return false;
-  return e.owner < 0 || w.visibleTo(e.owner, t.x, t.y);
+  return e.owner < 0 || w.sees(e.owner, t);
 }
 
 /**

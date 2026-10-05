@@ -20,6 +20,7 @@ import { LivingWorld } from './fx/nature';
 import { biomeLook, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
+import { GAME_HOUR_TICKS, START_HOUR, clockHours, type SimClock } from '../sim/clock';
 
 /*
  * Time of day, weather and night vision (all purely visual).
@@ -502,15 +503,9 @@ function lerpPreset(out: Preset, a: Preset, b: Preset, k: number) {
 
 // ------------------------------------------------------------ dynamic day / night cycle
 
-/**
- * The live day: one game hour = one real minute at 1x game speed, so a full day is 24 real minutes.
- * Driven by the sim tick: it follows the game speed and pause and is the same for every player.
- */
-export const GAME_HOUR_TICKS = TPS * 60;
-/** One full day of the cycle. */
-export const CYCLE_TICKS = GAME_HOUR_TICKS * 24;
-/** The live day starts just before sunrise (?clock=HH:MM overrides it for debugging / screenshots). */
-export const START_HOUR = 5.5;
+// The live day clock (1 real minute = 1 game hour, from the sim tick) lives sim side (sim/clock.ts):
+// the sim plays the night the sky shows.
+export { CYCLE_TICKS, GAME_HOUR_TICKS, START_HOUR, clockHours } from '../sim/clock';
 
 /**
  * Lighting stops of the cycle. u = fraction of the day starting at midday. Sun / moon paths are in degrees:
@@ -575,15 +570,35 @@ export function uToHour(u: number): number {
   return (h0 + ((h1 - h0) * (x - u0)) / (u1 - u0)) % 24;
 }
 
-/** Hours since midnight of day 1 at a sim tick (the live day starts at `start`). */
-export function clockHours(tick: number, start = START_HOUR): number {
-  return start + tick / GAME_HOUR_TICKS;
-}
-
 /** "HH:MM" of a clock hour (wraps every 24 hours; minutes are floored). */
 export function formatClock(hours: number): string {
   const m = Math.floor((((hours % 24) + 24) % 24) * 60 + 1e-6) % 1440;
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Clock hour the live day starts at: ?clock=HH:MM, else the menu's start time (AtmosConfig.startHour), else
+ * START_HOUR. The sky (Atmosphere) and the sim (simClockOf -> World clock) both take it from here.
+ */
+export function liveStartHour(cfg: AtmosConfig, params: URLSearchParams = urlParams()): number {
+  const ck = /^(\d{1,2})(?::(\d{2}))?$/.exec(params.get('clock') ?? '');
+  if (ck) return (+ck[1] % 24) + Math.min(59, +(ck[2] ?? 0)) / 60;
+  if (cfg.startHour !== undefined && Number.isFinite(cfg.startHour)) return ((cfg.startHour % 24) + 24) % 24;
+  return START_HOUR;
+}
+
+function urlParams() {
+  return new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+}
+
+/**
+ * The match's sim clock for a resolved atmosphere (sim/clock.ts): the live day from its start hour, or the
+ * fixed hour of a fixed time of day (FIXED_HOUR: what the HUD clock shows). Vision by night is sim side,
+ * so the sim must play exactly the clock the sky shows (tests/nightcombat.test.ts checks they agree).
+ */
+export function simClockOf(cfg: AtmosConfig, params: URLSearchParams = urlParams()): SimClock {
+  if (cfg.tod === 'cycle') return { start: liveStartHour(cfg, params), live: true };
+  return { start: FIXED_HOUR[cfg.tod], live: false };
 }
 
 /** Sky icon of the HUD clock. */
@@ -619,8 +634,8 @@ export interface ClockState {
 }
 
 /** The key light hands over from the sun to the moon (and back) at these points, while it is dim. */
-const MOON_RISE = 0.46;
-const MOON_SET = 0.77;
+export const MOON_RISE = 0.46;
+export const MOON_SET = 0.77;
 const SUN_DIR_DAY = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
 const DAY_ELEV = THREE.MathUtils.radToDeg(Math.asin(SUN_DIR_DAY.y));
 const DAY_AZ = THREE.MathUtils.radToDeg(Math.atan2(SUN_DIR_DAY.z, SUN_DIR_DAY.x));
@@ -813,13 +828,12 @@ export class Atmosphere {
       this.altP = clonePreset(this.alt.rain);
     }
     if (cfg.tod === 'cycle') {
-      if (cfg.startHour !== undefined && Number.isFinite(cfg.startHour)) this.startHour = ((cfg.startHour % 24) + 24) % 24;
+      // (the sim plays the same clock: simClockOf)
+      this.startHour = liveStartHour(cfg, params);
       this.keys = this.buildKeys();
       this.sunBase = new THREE.Vector3();
       const q = params.get('todphase');
       if (q !== null && Number.isFinite(+q)) this.phaseOverride = +q;
-      const ck = /^(\d{1,2})(?::(\d{2}))?$/.exec(params.get('clock') ?? '');
-      if (ck) this.startHour = (+ck[1] % 24) + Math.min(59, +(ck[2] ?? 0)) / 60;
       this.blendCycle(host.world.tick);
     } else if (cfg.tod === 'mist') this.mistSun();
     this.applyPreset(p);

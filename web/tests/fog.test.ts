@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
-import { TPS, type Faction, type FogMode } from '../src/sim/types';
+import { TPS, type Faction } from '../src/sim/types';
 import { World } from '../src/sim/world';
+import type { SimClock } from '../src/sim/clock';
 
-function duel(fog?: FogMode, seed = 9) {
+/** The fog of war is automatic (sim/clock.ts, sim/night.ts): classic by day, the night fog by night. */
+type When = 'day' | 'night';
+const CLOCK: Record<When, SimClock | undefined> = { day: undefined, night: { start: 23, live: false } };
+
+function duel(when: When = 'day', seed = 9) {
   const w = new World({
     seed,
-    fog,
+    clock: CLOCK[when],
     players: [
       { name: 'A', faction: 'usa', color: 0, isAI: false },
       { name: 'B', faction: 'russia', color: 0, isAI: false },
@@ -32,8 +37,8 @@ function run(w: World, ticks: number) {
 }
 
 /** A scout drives past an enemy outpost and comes home; returns what the player still sees there. */
-function scoutPast(fog?: FogMode) {
-  const w = duel(fog);
+function scoutPast(when: When = 'day') {
+  const w = duel(when);
   const post = w.spawnBuilding('russia_power', 1, 60, 50, true);
   const tank = at(w, 'russia_mbt', 1, 62, 55);
   for (const e of [post, tank]) e.hp = e.maxHp = 1e6;
@@ -61,8 +66,8 @@ function scoutPast(fog?: FogMode) {
 }
 
 describe('fog of war', () => {
-  it('classic (RA2): explored ground stays revealed, structures and units on it stay visible after the scout leaves', () => {
-    const r = scoutPast('classic');
+  it('by day, classic (RA2): explored ground stays revealed, structures and units on it stay visible after the scout leaves', () => {
+    const r = scoutPast('day');
     expect(r.w.fog).toBe('classic');
     expect(r.explored).toBe(true);
     expect(r.post).toBe(true);
@@ -72,17 +77,17 @@ describe('fog of war', () => {
     expect(p.visible).toEqual(p.explored);
   });
 
-  it('modern: explored ground outside sight is fogged and hides what is there (unchanged default)', () => {
-    const r = scoutPast();
+  it('by night, the night fog: explored ground outside sight is fogged and hides what is there', () => {
+    const r = scoutPast('night');
     expect(r.w.fog).toBe('modern');
     expect(r.explored).toBe(true);
     expect(r.post).toBe(false);
     expect(r.tank).toBe(false);
   });
 
-  it('classic: artillery shells revealed targets beyond its own sight on its own; modern does not', () => {
-    const shots = (fog: FogMode) => {
-      const w = duel(fog);
+  it('by day artillery shells revealed targets beyond its own sight on its own; by night it does not', () => {
+    const shots = (when: When) => {
+      const w = duel(when);
       const arty = at(w, 'usa_arty', 0, 40, 60);
       const tank = at(w, 'russia_mbt', 1, 49, 60);
       tank.hp = tank.maxHp = 1e6;
@@ -100,15 +105,14 @@ describe('fog of war', () => {
       }
       return fired;
     };
-    expect(shots('classic')).toBeGreaterThan(0);
-    expect(shots('modern')).toBe(0);
+    expect(shots('day')).toBeGreaterThan(0);
+    expect(shots('night')).toBe(0);
   });
 
-  it('classic applies to the AI as well: AI games run sensibly and stay deterministic', () => {
+  it('classic (by day) applies to the AI as well: AI games run sensibly and stay deterministic', () => {
     const game = (a: Faction, b: Faction, seed: number) => {
       const w = new World({
         seed,
-        fog: 'classic',
         players: [
           { name: a, faction: a, color: 0, isAI: true },
           { name: b, faction: b, color: 0, isAI: true },

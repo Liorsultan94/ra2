@@ -110,7 +110,7 @@ function think(w: World, pid: number) {
   const alerts: Entity[] = [];
   const threats = new Map<number, Entity>();
   const attackers = new Set<number>();
-  const seen = (o: Entity) => w.isEnemy(pid, o.owner) && o.inside < 0 && !o.para && w.visibleTo(pid, o.x, o.y);
+  const seen = (o: Entity) => w.isEnemy(pid, o.owner) && o.inside < 0 && !o.para && w.sees(pid, o);
   for (const b of w.list) {
     if (b.dead || b.owner !== pid || b.kind !== 'building') continue;
     let alerted = false;

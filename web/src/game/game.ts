@@ -9,14 +9,14 @@ import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type FogMode, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { sharedCameos } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality, type RendererParts } from '../render/renderer';
 import { Slicer } from '../render/slice';
-import { ATMOS_DEFAULTS } from '../render/atmos';
+import { ATMOS_DEFAULTS, atmosConfig, simClockOf } from '../render/atmos';
 import { ViewModes } from '../render/viewmodes';
 import { prefetchModels, warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
@@ -63,8 +63,6 @@ export interface GameOptions {
   peace?: PeaceOption;
   /** Game speed: simulation ticks per real second (game/pace.ts; default normal). */
   gameSpeed?: GameSpeed;
-  /** Fog of war rule (sim types.ts FogMode; default 'classic' = Red Alert 2: explored ground stays revealed). */
-  fog?: FogMode;
   /** Automatic base defence for the local player (sim/basedefense.ts; default on). */
   autoDefend?: boolean;
 }
@@ -150,7 +148,8 @@ export class Game {
       seed,
       map: opts.map,
       credits: opts.credits,
-      fog: opts.fog ?? 'classic',
+      // the day clock the sky shows (render/atmos.ts): the fog of war and sight follow it by night (sim/night.ts)
+      clock: simClockOf(atmosConfig(attract ? -1 : 0, 'clear', !!opts.liveSky && !attract)),
       players: [
         { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract, autoDefend: !attract && opts.autoDefend !== false },
         { name: FACTIONS.find((f) => f.id === opts.enemy)!.name, faction: opts.enemy, color: ENEMY_COLOR, isAI: true },
