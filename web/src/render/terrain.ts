@@ -12,7 +12,7 @@ import { buildRocks } from './rocks';
 import { Props } from './props';
 import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
-import { RIVER, buildWater, type RiverInfo, type WaterReflection } from './water';
+import { RIVER, buildWater, setRapidsRocks, type RiverInfo, type WaterReflection } from './water';
 import { Waterside } from './waterside';
 import type { Slicer } from './slice';
 
@@ -129,6 +129,8 @@ export class Terrain {
     this.group.add(w.mesh);
     this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
     this.group.add(this.waterside.group);
+    // the whitewater flows around all the rocks breaking the surface, the relief's boulders too
+    setRapidsRocks(w.material, this.waterside.rapidsRocks());
   }
 
   /**

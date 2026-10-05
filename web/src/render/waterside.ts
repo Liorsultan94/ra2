@@ -514,6 +514,11 @@ export class Waterside implements WatersideHandles {
     return out;
   }
 
+  /** The rocks breaking the surface of the rapids (their own and the relief's riverbed boulders). */
+  rapidsRocks(): { x: number; y: number; r: number }[] {
+    return [...this.river.features.rocks, ...this.bedRocks];
+  }
+
   /** Spray off the rapids' rocks (downstream drift) and a low mist along the whitewater. */
   private rapidsSpray(): SprayEmitter[] {
     const R = this.river;
