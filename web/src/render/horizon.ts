@@ -387,9 +387,11 @@ export class Horizon {
             float camD = length( vFogP - cameraPosition );
             float fk = vFk * ( 1.0 - smoothstep( 170.0, 380.0, camD ) );
             if ( fk > 0.01 ) c = mix( c, oskFields( vFogP.xz ), fk );
-            vec4 gn = texture2D( fogNoise, vFogP.xz * 0.37 );
-            vec4 gn2 = texture2D( fogNoise, vFogP.xz * 1.9 );
-            vec4 gf = texture2D( fogNoise, vFogP.xz * 0.023 + 0.31 );
+            // (the height shears the lookup: steep mountain faces get grain, not vertical streaks)
+            vec2 nq = vFogP.xz + vec2( vFogP.y * 0.71, -vFogP.y * 0.53 );
+            vec4 gn = texture2D( fogNoise, nq * 0.37 );
+            vec4 gn2 = texture2D( fogNoise, nq * 1.9 );
+            vec4 gf = texture2D( fogNoise, nq * 0.023 + 0.31 );
             float fine = 0.86 + gn.r * 0.18 + gn2.g * 0.12;
             float coarse = 0.8 + gf.r * 0.3;
             c *= mix( fine, coarse, smoothstep( 60.0, 160.0, camD ) );
