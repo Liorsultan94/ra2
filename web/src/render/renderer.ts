@@ -1535,6 +1535,11 @@ export class GameRenderer {
     if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2));
     // decoy flares when a missile is homing in
     if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
+    // ground crew patching up a damaged jet on its pad (sim/airbase.ts): green repair sparks, as on a building under repair
+    if (e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp && Math.random() < dt * 4) {
+      const r = (m.size?.x ?? 0.8) * 0.4;
+      this.effects.spark(p.x + (Math.random() - 0.5) * 2 * r, p.y + 0.08 + Math.random() * 0.22, p.z + (Math.random() - 0.5) * 2 * r, 0x80ff80);
+    }
   }
 
   private buildingFx(e: Entity, v: Visual, dt: number) {
@@ -1837,6 +1842,11 @@ export class GameRenderer {
         }
       }
       if ((p.flight === 'sam' || p.flight === 'airMissile') && p.targetId >= 0) this.effects.threaten(p.targetId);
+      // fooled by a decoy flare (sim/stealth.ts): keep the drawn flare on the sim's track, which the missile chases
+      if (p.decoy === 2) {
+        const back = (1 - alpha) / TPS;
+        this.effects.steerDecoy(p.id, p.dcx - p.dcvx * back, p.dcz - p.dcvz * back, p.dcy - p.dcvy * back, p.dcvx, p.dcvz, p.dcvy);
+      }
       if (v.streak) {
         v.streak.visible = visible;
         const from = v.first ? pos.clone().addScaledVector(vel, -0.03) : v.last;
@@ -2012,8 +2022,21 @@ export class GameRenderer {
         fx.launch(ev.flight, p, dir, standHeight(this.world.map, ev.x, ev.y));
         break;
       }
+      case 'decoy': {
+        // a stealth jet's flare fools a missile (sim/stealth.ts): a full salvo from the dispensers and the hot decoy it turns onto
+        if (!this.visibleAt(ev.x, ev.y)) break;
+        const j = this.world.get(ev.id);
+        const jv = j ? this.visuals.get(j.id) : undefined;
+        if (j && jv && jv.visible) popFlares(fx, jv.model, -j.facing);
+        fx.decoyFlare(ev.proj, ev.x, ev.z, ev.y, ev.vx, ev.vz, ev.vy);
+        break;
+      }
       case 'airburst': {
         if (!this.visibleAt(ev.x, ev.y)) break;
+        if (ev.decoy) {
+          fx.decoyBurst(ev.x, ev.z, ev.y, standHeight(this.world.map, ev.x, ev.y));
+          break;
+        }
         if (ev.kind === 'hit') {
           fx.airHit(ev.x, ev.z, ev.y, ev.maxHp ? 1 - (ev.hpLeft ?? 0) / ev.maxHp : 0.5);
           break;

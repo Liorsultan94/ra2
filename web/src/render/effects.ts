@@ -1069,6 +1069,32 @@ export class Effects {
     this.flashLight(p.x, p.y, p.z, 3, 0xfff0d0, 0.15);
   }
 
+  /**
+   * The decoy flare a fooled missile chases (sim/stealth.ts): a bigger, longer-burning magnesium flare that the
+   * renderer keeps on the sim's track (steerDecoy) until the missile bursts on it, then it burns on and falls.
+   */
+  decoyFlare(key: number, x: number, y: number, z: number, vx: number, vy: number, vz: number) {
+    this.flyers.add('flare', x, y, z, vx, vy, vz, 2.8, 1.45, key);
+    this.fire.spawn({ x, y, z, life: 0.12, size: 0.9, color: 0xffffff, colorEnd: 0xfff0c0 });
+    this.flashLight(x, y, z, 4, 0xfff0d0, 0.2);
+  }
+
+  steerDecoy(key: number, x: number, y: number, z: number, vx: number, vy: number, vz: number) {
+    this.flyers.steer(key, x, y, z, vx, vy, vz);
+  }
+
+  /** A fooled missile bursting on the decoy flare: proximity-fuze flash, a spray of hot fragments, a smoke puff. */
+  decoyBurst(x: number, y: number, z: number, ground: number) {
+    this.airburst(x, y, z, false, ground, false);
+    this.fire.spawn({ x, y, z, life: 0.16, size: 1.1, color: 0xfff6e0, colorEnd: 0xff9a40 });
+    for (let i = 0; i < this.q(5); i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = this.rand(1.5, 3.5);
+      this.flyers.add('spark', x, y, z, Math.cos(a) * sp, this.rand(-0.5, 2), Math.sin(a) * sp, this.rand(0.4, 0.8), 1);
+    }
+    this.flashLight(x, y, z, 5, 0xffd8a0, 0.14);
+  }
+
   /** Rotor downwash: a ring of dust blown outwards on the ground. strength 0..1 (lower = stronger). */
   rotorWash(x: number, g: number, z: number, strength: number) {
     this.ground.rotorWash(x, g, z, strength);

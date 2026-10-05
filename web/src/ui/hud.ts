@@ -10,7 +10,7 @@ import { SuperweaponPower } from './superweapons';
 import { RankPops, drawRankInsignia, rankBadgeSvg, rankLineHtml } from './veterancy';
 import { canRank } from '../sim/veterancy';
 import { aimStatus, aimWeapon } from '../sim/sniper';
-import { isSortieJet, jetCount, jetsQueued, padCap, rearmProgress } from '../sim/airbase';
+import { isSortieJet, jetCount, jetRepairing, jetsQueued, padCap, rearmProgress, repairProgress } from '../sim/airbase';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
@@ -541,7 +541,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}` : ''}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}`).join(',');
     this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
@@ -566,13 +566,17 @@ export class Hud {
         if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
         if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground');
+        if (d.kind === 'unit' && d.lowObservable) stats.push('Stealth');
+        if (d.kind === 'unit' && d.evasion) stats.push(`Evasion ${Math.round(d.evasion * 100)}%`);
         else if (d.weapon && WEAPONS[d.weapon]) {
           const wp = WEAPONS[d.weapon];
           stats.push(`Range ${wp.range}`, wp.air === 'only' ? 'Anti-air' : wp.air === 'yes' ? 'Ground + air' : 'Ground');
         }
         if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
         // jets: sortie status and rearm progress, shown in the simple (phone) UI too
-        const jet = e.sortie && e.owner === this.player ? `<div class="sp-jet${e.sortie.rearm > 0 ? ' rearm' : ''}"><span>${sortieLabel(e)}</span>${e.sortie.phase === 'parked' ? `<i style="--k:${rearmProgress(e).toFixed(3)}"></i>` : ''}</div>` : '';
+        // repair is the dominant line (and bar) while both run
+        const jfix = !!e.sortie && jetRepairing(e);
+        const jet = e.sortie && e.owner === this.player ? `<div class="sp-jet${jfix ? ' repair' : e.sortie.rearm > 0 ? ' rearm' : ''}"><span>${sortieLabel(e)}</span>${e.sortie.phase === 'parked' ? `<i style="--k:${(jfix ? repairProgress(e) : rearmProgress(e)).toFixed(3)}"></i>` : ''}</div>` : '';
         const segs = 12;
         const on = Math.ceil(hp * segs);
         const bar = Array.from({ length: segs }, (_, i) => `<i class="${i < on ? 'on' : ''}"></i>`).join('');
@@ -973,7 +977,7 @@ export class Hud {
         st.ghost = st.ghost > hp ? Math.max(hp, st.ghost - dt * 0.45) : hp;
       }
       // own jets rearming on their pads always show the rearm bar (airbase.ts)
-      const rearming = !!e.sortie && e.sortie.rearm > 0 && e.owner === this.player;
+      const rearming = !!e.sortie && (e.sortie.rearm > 0 || jetRepairing(e)) && e.owner === this.player;
       const bar = selected || e.id === hover || recent || rearming;
       const pop = e.kind === 'unit' ? this.rankPops.pop(e, now) : 0;
       if (!bar && !e.rank) continue;
@@ -1038,15 +1042,28 @@ export class Hud {
         for (let i = 0; i < Math.ceil(k * 5); i++) ctx.fillRect(x0 + i * 6, y0 + bh + 3, 4, 3);
       }
       if (e.sortie && e.owner === this.player && (rearming || (selected && e.sortie.phase === 'parked'))) {
-        // jet rearm bar under the health bar: amber while rearming, green when armed and ready
-        const k = Math.max(0, rearmProgress(e));
+        // jet rearm bar under the health bar: amber while rearming, green when armed and ready;
+        // cyan repair progress instead while the ground crew patches it up (the dominant state)
+        const fix = jetRepairing(e);
+        const k = Math.max(0, fix ? repairProgress(e) : rearmProgress(e));
         const ry = y0 + bh + 3;
         ctx.fillStyle = 'rgba(4,8,10,0.78)';
         ctx.fillRect(x0 - 1, ry - 1, width + 2, 5);
-        ctx.fillStyle = k >= 1 ? '#56e06a' : '#ffb020';
+        ctx.fillStyle = fix ? '#46d2ff' : k >= 1 ? '#56e06a' : '#ffb020';
         ctx.fillRect(x0, ry, Math.max(1, width * k), 3);
         ctx.fillStyle = 'rgba(255,255,255,0.35)';
         ctx.fillRect(x0, ry, Math.max(1, width * k), 1);
+        if (fix) {
+          // pulsing repair cross left of the bar
+          const a = 0.55 + 0.45 * Math.sin(now * 0.006);
+          const cx = x0 - 7;
+          const cy = ry + 1;
+          ctx.fillStyle = 'rgba(4,8,10,0.7)';
+          ctx.fillRect(cx - 4, cy - 4, 9, 9);
+          ctx.fillStyle = `rgba(110,240,140,${a.toFixed(3)})`;
+          ctx.fillRect(cx - 3, cy - 0.5 - 0.5, 7, 2);
+          ctx.fillRect(cx - 0.5 - 0.5, cy - 3, 2, 7);
+        }
       }
       const g = groups.get(e.id);
       if (g !== undefined && selected) {
@@ -1170,9 +1187,12 @@ export function flagHtml(faction: string) {
 function sortieLabel(e: Entity): string {
   const s = e.sortie!;
   const pct = Math.round(rearmProgress(e) * 100);
+  const again = s.auto >= 0 && e.order.type === 'attack' && e.order.target === s.auto;
   switch (s.phase) {
     case 'parked':
-      return s.rearm > 0 ? `Rearming ${pct}%` : s.ammo > 0 ? 'Armed - tap a target' : 'Rearming';
+      // repair first (the jet waits for it), then the rearm; a kept target means it goes again on its own
+      if (jetRepairing(e)) return `Repairing ${Math.round(repairProgress(e) * 100)}%${s.rearm > 0 ? ` - rearming ${pct}%` : again ? ' - then re-strike' : ''}`;
+      return s.rearm > 0 ? `Rearming ${pct}%${again ? ' - then re-strike' : ''}` : s.ammo > 0 ? 'Armed - tap a target' : 'Rearming';
     case 'taxiOut':
     case 'hold':
     case 'lineup':
@@ -1182,7 +1202,7 @@ function sortieLabel(e: Entity): string {
     case 'sortie':
       return s.ammo > 0 ? 'Strike run' : 'In flight';
     case 'return':
-      return 'Returning to base';
+      return again ? 'Returning - will re-strike' : 'Returning to base';
     case 'final':
       return 'Landing';
     case 'rollout':

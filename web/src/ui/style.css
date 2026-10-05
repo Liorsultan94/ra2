@@ -471,6 +471,9 @@ kbd {
 .sp-jet.rearm {
   color: #ffc04a;
 }
+.sp-jet.repair {
+  color: #6fdcff;
+}
 .sp-jet i {
   display: block;
   width: 104px;
