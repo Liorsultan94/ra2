@@ -9,7 +9,7 @@ import { BloomPass } from './bloom';
 import { DofPass } from './dof';
 import { GradeLut, type GradeInput } from './grade';
 import { makeLensDirt } from './lens';
-import { Blitter, halfFloatTargets } from './util';
+import { Blitter, halfFloatTargets, syncDepthSize } from './util';
 
 /*
  * The cinematic post chain (all quality levels with a half-float target):
@@ -189,6 +189,9 @@ export class PostChain {
   setSize(w: number, h: number, pixelRatio: number) {
     this.composer.setPixelRatio(pixelRatio);
     this.composer.setSize(w, h);
+    // the scene buffers' depth textures follow the new size right away (see syncDepthSize)
+    syncDepthSize(this.composer.renderTarget1);
+    syncDepthSize(this.composer.renderTarget2);
     this.tilt?.setSize(w * pixelRatio, h * pixelRatio);
   }
 

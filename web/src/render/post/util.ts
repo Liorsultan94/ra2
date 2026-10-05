@@ -16,6 +16,29 @@ export function halfFloatTargets(r: THREE.WebGLRenderer): boolean {
   }
 }
 
+/**
+ * Keep a render target's depth texture sized with the target (call after every setSize).
+ *
+ * three's RenderTarget.setSize resizes the colour textures but leaves `depthTexture.image` at the old size,
+ * and only corrects it when that target is next bound for rendering. Until then any material that still has
+ * the depth texture in a sampler uniform (the final pass keeps the AO pass's depth there while AO is off)
+ * uploads it at the OLD size: depth textures get immutable storage (texStorage2D), so when the target is
+ * bound afterwards its framebuffer has a colour attachment at the new size and a depth attachment at the old
+ * one ("Framebuffer is incomplete: attachments are not all the same size"). Every draw into that target then
+ * fails, and as the composer alternates its two buffers every other frame came out black. With the image
+ * kept in step, such an early upload already allocates the right size.
+ * Returns true when the size had to be corrected.
+ */
+export function syncDepthSize(rt: THREE.RenderTarget): boolean {
+  const d = rt.depthTexture;
+  if (!d) return false;
+  const img = d.image as { width: number; height: number; depth?: number };
+  if (img.width === rt.width && img.height === rt.height) return false;
+  img.width = rt.width;
+  img.height = rt.height;
+  return true;
+}
+
 /** A colour-only render target (no depth), linear filtered, no mipmaps. */
 export function colorTarget(w: number, h: number, type: THREE.TextureDataType, filter: THREE.MagnificationTextureFilter = THREE.LinearFilter): THREE.WebGLRenderTarget {
   const rt = new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type, depthBuffer: false, stencilBuffer: false, minFilter: filter, magFilter: filter, generateMipmaps: false });
