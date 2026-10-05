@@ -556,7 +556,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.treat > 0 ? 1 : 0}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.treat > 0 ? 1 : 0}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
     this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;

@@ -339,7 +339,7 @@ export class NightLights {
       const gy = groundHeight(map, Math.max(0, Math.min(map.w - 0.01, lx)), Math.max(0, Math.min(map.h - 0.01, lz)));
       const ly = Math.max(gy, base) + mastH;
       // aim: out on the ring, ~2/3 of the floodlight radius from the centre
-      const reach = FLOOD_RADIUS * 0.66 - ol * 0.5;
+      const reach = Math.max(1.6, FLOOD_RADIUS * 0.5 - ol * 0.4);
       const ax = lx + ux * reach;
       const az = lz + uz * reach;
       const ag = standHeight(map, Math.max(0, Math.min(map.w - 0.01, ax)), Math.max(0, Math.min(map.h - 0.01, az)));
@@ -347,15 +347,15 @@ export class NightLights {
       const pitch = -Math.atan2(ly - ag, reach);
       const len = Math.hypot(ly - ag, reach);
       const k = k0;
-      this.cone(lx, ly, lz, yaw, pitch, len, 0.95, 0.85 * k, 0.9 * k, 1.0 * k);
-      this.flare(lx, ly, lz, 0.32, 2.4 * k, 2.5 * k, 2.6 * k);
-      this.pool(ax, ag, az, yaw, 4.2, 3.0, 0.3 * k, 0.32 * k, 0.34 * k);
+      this.cone(lx, ly, lz, yaw, pitch, len, 0.6, 0.38 * k, 0.4 * k, 0.44 * k);
+      this.flare(lx, ly, lz, 0.2, 1.7 * k, 1.8 * k, 1.9 * k);
+      this.pool(ax, ag, az, yaw, 3.6, 2.6, 0.22 * k, 0.235 * k, 0.25 * k);
       _c.setRGB(0.92, 0.96, 1);
       this.candidate(lx, ly, lz, _c, 0.9 * k, vx, vz);
     }
     // the lit ring: a soft wide pool around the structure
     const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, cx)), Math.max(0, Math.min(map.h - 0.01, cz)));
-    this.pool(cx, gy, cz, 0, FLOOD_RADIUS * 2, FLOOD_RADIUS * 2, 0.07 * k0, 0.075 * k0, 0.085 * k0);
+    this.pool(cx, gy, cz, 0, FLOOD_RADIUS * 2, FLOOD_RADIUS * 2, 0.035 * k0, 0.038 * k0, 0.043 * k0);
   }
 
   private candidate(x: number, y: number, z: number, col: THREE.Color, k: number, tx: number, tz: number) {
