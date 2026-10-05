@@ -2995,6 +2995,8 @@ function buildTemplate(key: string, style: ModelStyle, fog: FogOfWar | null): Te
       gearDrop = -foot;
     }
   }
+  // helicopters: their wheels / skids are the lowest point of the airframe (set down at an airbase: helipad.ts)
+  if (kind === 'heli') gearDrop = -bb.min.y;
   return { root, height: Math.max(0.08, bb.max.y + 0.04), size: { x: sz.x, y: sz.y, z: sz.z }, kind: built.kind, fx, gearDrop };
 }
 
@@ -3194,6 +3196,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
   let rampV = 0;
   let gearV = 0;
   let jPitch = 0;
+  let landW = 0;
   const discList = [...discMs.values()];
   const vapor = kind === 'jet' && tips.length === 2 ? new Vapor(root, tips) : null;
   const anim = (s: AnimState) => {
@@ -3208,12 +3211,17 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       lastY = y;
     }
     lastSp = sp;
+    // set down at an airbase (helicopters, AnimState.landed): the rotors spool down to idle and back up for lift-off
+    if (kind === 'heli') landW += (clamp(s.landed ?? 0, 0, 1) - landW) * Math.min(1, dt * 1.6);
     // rotor RPM: hover ~0.8, rising with forward speed and climb (collective); spin follows it
     if (discList.length || bladeM) {
-      const tr = clamp(0.78 + sp * 0.12 + Math.max(0, climb) * 0.2, 0.7, 1.05);
+      let tr = clamp(0.78 + sp * 0.12 + Math.max(0, climb) * 0.2, 0.7, 1.05);
+      if (landW > 0) tr += (0.36 - tr) * landW;
       rpm += (tr - rpm) * Math.min(1, dt * 1.5);
     }
-    for (const sp_ of spins) sp_.rotation.y += (sp_.userData.spin as number) * dt * (0.6 + rpm * 0.45);
+    // (idling on the ground the blades turn visibly slower)
+    const spinK = landW > 0 ? 1 - 0.62 * landW : 1;
+    for (const sp_ of spins) sp_.rotation.y += (sp_.userData.spin as number) * dt * (0.6 + rpm * 0.45) * spinK;
     if (ramps.length) {
       // loading ramp: hydraulics lower it to level for the drop (~2.5 s), and close it again
       const tgt = s.dead > 0 ? rampV : clamp(s.ramp ?? 0, 0, 1);
@@ -3238,7 +3246,7 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
         g.scale.set(1, Math.max(0.02, e), 1);
       }
     }
-    const gnd = clamp(s.ground ?? 0, 0, 1);
+    const gnd = Math.max(clamp(s.ground ?? 0, 0, 1), landW);
     const b = bank as THREE.Object3D | null;
     const k = Math.min(1, dt * 4);
     if (b) {
@@ -3247,7 +3255,9 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       roll += (clamp(-turn * (kind === 'jet' ? 0.9 : 0.5), -maxRoll, maxRoll) * (1 - gnd) - roll) * k;
       if (kind === 'heli') {
         // nose down to fly forward (more while accelerating), nose-up flare while slowing; a damped spring so it settles
-        const pitchT = -Math.min(1, sp / 3) * 0.13 - clamp(accS * 0.08, -0.17, 0.12);
+        // (sitting on its wheels / skids: level)
+        let pitchT = -Math.min(1, sp / 3) * 0.13 - clamp(accS * 0.08, -0.17, 0.12);
+        if (landW > 0) pitchT *= 1 - landW;
         let h = Math.min(dt, 0.1);
         while (h > 1e-5) {
           const st = Math.min(h, 1 / 60);
@@ -3263,20 +3273,20 @@ function instance(key: string, style: ModelStyle, fog: FogOfWar | null): Model {
       jPitch += ((s.pitch ?? 0) - jPitch) * Math.min(1, dt * 3);
       b.rotation.set(roll, 0, pitch + jPitch);
       if (kind === 'heli') {
-        // gentle hover sway, fading out in forward flight
-        const hov = 1 - Math.min(1, sp / 1.5);
+        // gentle hover sway, fading out in forward flight (and on the ground)
+        const hov = (1 - Math.min(1, sp / 1.5)) * (1 - landW);
         b.rotation.x += hov * 0.02 * Math.sin(s.time * 0.73 + phase);
         b.rotation.z += hov * 0.012 * Math.sin(s.time * 0.51 + phase * 2);
       }
       // badly hit airframes struggle: a shaky, lopsided attitude (helicopters most)
       const dmg = s.dead > 0 ? 1 : s.damage || 0;
       if (dmg > 0.5) {
-        const w = (dmg - 0.5) * 2 * (kind === 'heli' ? 1 : 0.45);
+        const w = (dmg - 0.5) * 2 * (kind === 'heli' ? 1 - landW : 0.45);
         b.rotation.x += w * (0.06 * Math.sin(s.time * 2.3 + phase) + 0.025 * Math.sin(s.time * 7.1 + phase * 2) + 0.05 * lop);
         b.rotation.z += w * 0.03 * Math.sin(s.time * 1.7 + phase * 3);
         b.rotation.y = w * 0.05 * Math.sin(s.time * 1.1 + phase);
       }
-      if (kind === 'heli') b.position.y = Math.sin(s.time * 1.6 + phase) * 0.012 + Math.sin(s.time * 0.37 + phase * 3) * 0.008;
+      if (kind === 'heli') b.position.y = (Math.sin(s.time * 1.6 + phase) * 0.012 + Math.sin(s.time * 0.37 + phase * 3) * 0.008) * (1 - landW);
       else if (kind === 'quad') b.position.y = Math.sin(s.time * 3.1 + phase) * 0.006;
       else b.position.y = Math.sin(s.time * 0.9 + phase) * 0.008 * (1 - gnd);
     }

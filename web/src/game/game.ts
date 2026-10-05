@@ -919,8 +919,9 @@ export class Game {
     if (this.local >= 0) this.world.issue(this.local, cmd);
   }
 
+  /** (a soldier lying wounded takes no orders: sim/medic.ts) */
   private selectedOwnUnits(): Entity[] {
-    return [...this.renderer.selection].map((id) => this.world.get(id)).filter((e): e is Entity => !!e && e.owner === this.local && e.kind === 'unit');
+    return [...this.renderer.selection].map((id) => this.world.get(id)).filter((e): e is Entity => !!e && e.owner === this.local && e.kind === 'unit' && !e.wound);
   }
 
   private select(ids: number[], add = false, sound = true) {
@@ -1215,7 +1216,9 @@ export class Game {
   private contextAction(sx: number, sy: number, ctrl: boolean): { cursor: string; run: () => void } {
     const w = this.world;
     const units = this.selectedOwnUnits();
-    const target = this.pick(sx, sy);
+    const picked = this.pick(sx, sy);
+    // an enemy soldier lying wounded is out of the fight: the ground under him (sim/medic.ts)
+    const target = picked && picked.wound && picked.owner !== this.local ? null : picked;
     const g = this.renderer.screenToGround(sx, sy);
     const none = { cursor: 'default', run: () => {} };
     if (this.mode === 'place' && this.placing) {
@@ -1275,6 +1278,16 @@ export class Game {
       };
     }
     if (target && target.owner === this.local && !(ctrl && ownSel)) {
+      // medics onto a wounded soldier of ours (sim/medic.ts)
+      const medics = units.filter((u) => unitDef(u.def).medic);
+      if (target.wound && medics.length) {
+        return { cursor: 'enter', run: () => this.order({ type: 'treat', ids: medics.map((u) => u.id), target: target.id }, target, false) };
+      }
+      // helicopters onto our airbase: land there for repair (sim/helipad.ts)
+      const helis = units.filter((u) => unitDef(u.def).rotary);
+      if (target.kind === 'building' && helis.length && buildingDef(target.def).role === 'airfield' && target.buildAnim >= 1) {
+        return { cursor: 'repair', run: () => this.order({ type: 'land', ids: helis.map((u) => u.id), target: target.id }, target, false) };
+      }
       // own unit/building: select, deploy MCV, or engineer repair
       const eng = units.filter((u) => unitDef(u.def).engineer);
       if (target.kind === 'building' && eng.length && target.hp < target.maxHp) {

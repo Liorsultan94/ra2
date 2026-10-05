@@ -107,6 +107,7 @@ export class MatchTracker {
   private firstIntercept = false;
   private firstDrop = [false, false];
   private firstCrush = false;
+  private firstRevive = false;
   private bigBlast: { score: number; t: number; weapon: string } | null = null;
 
   constructor(
@@ -226,6 +227,13 @@ export class MatchTracker {
         const e = w.get(ev.id);
         if (!e || ev.owner !== this.local) break;
         this.note(`Captured the ${this.nameOf(e.def)}`, 'good');
+        break;
+      }
+      case 'wounded': {
+        // (a soldier who goes down wounded is counted lost / killed only if he bleeds out: the 'death' event)
+        if (ev.phase !== 'revived' || this.firstRevive || ev.owner !== this.local || this.local < 0) break;
+        this.firstRevive = true;
+        this.note(`A medic got your wounded ${this.nameOf(ev.def)} back into the fight`, 'good');
         break;
       }
       case 'crushed': {

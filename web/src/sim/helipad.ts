@@ -234,8 +234,9 @@ export function updateHeli(w: World, e: Entity, d: UnitDef): boolean {
     e.heli = null;
     return false;
   }
-  if (!isBase(w.get(h.base), e.owner)) {
-    // airbase lost (destroyed, sold, captured): another one, or back to the fight
+  // airbase lost (destroyed, sold, captured), or a structure has gone up on the landing spot
+  if (!isBase(w.get(h.base), e.owner) || (h.phase !== 'takeoff' && w.occ[w.tileOf(h.x, h.y)] !== 0)) {
+    // another spot / airbase, or back to the fight
     const keepManual = h.manual;
     if (!startHeliRepair(w, e, keepManual)) {
       resume(w, e, h); // nowhere to land: back to what it was doing, in the air

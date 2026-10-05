@@ -123,8 +123,9 @@ function strut(a: V3, b: V3, r: number, seg = 5): G {
 
 // --------------------------------------------------------------- kits
 
-type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair';
-const MK_ORDER: MK[] = ['camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat'];
+// ('med' / 'red': the medic's white field and red cross - only medics carry them, so nobody else gets the draw calls)
+type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair' | 'med' | 'red';
+const MK_ORDER: MK[] = ['camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat', 'med', 'red'];
 /** Texture repeats per metre (worldUV) for textured materials. */
 const UVS: Partial<Record<MK, number>> = { camo: 2.6, gear: 3.5, dark: 5, gun: 4, tube: 3 };
 
@@ -433,6 +434,8 @@ function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: numb
     glow: stdMat(`glow:${glow}`, fog, { color: 0x101010, emissive: glow, emissiveIntensity: 2.6, roughness: 0.4 }, 0),
     hat: stdMat('hat', fog, { color: 0xe2b322, roughness: 0.42, metalness: 0.05 }),
     hair: stdMat('hair', fog, { color: 0x2a1f17, roughness: 0.95, metalness: 0 }, 0.3),
+    med: stdMat('med', fog, { color: 0xecebe4, roughness: 0.62, metalness: 0 }, 0.5),
+    red: stdMat('red', fog, { color: 0xc4141c, roughness: 0.55, metalness: 0, emissive: 0x3a0000, emissiveIntensity: 0.25 }, 0.45),
   };
 }
 
@@ -1000,8 +1003,8 @@ function manpadsTube(r: Rig, b: THREE.Bone, p: string): { w: WInfo; muzzle: stri
 
 // ------------------------------------------------------------------ body
 
-type Role = 'rifle' | 'at' | 'engineer' | 'fpv' | 'ew' | 'gunner' | 'loader' | 'sniper';
-type PackKind = 'assault' | 'rpg' | 'tool' | 'jammer' | 'drone' | 'radio' | 'bombbag';
+type Role = 'rifle' | 'at' | 'engineer' | 'fpv' | 'ew' | 'gunner' | 'loader' | 'sniper' | 'medic';
+type PackKind = 'assault' | 'rpg' | 'tool' | 'jammer' | 'drone' | 'radio' | 'bombbag' | 'medic';
 
 interface SolDef {
   p: string;
@@ -1381,6 +1384,23 @@ function backpack(r: Rig, chest: THREE.Bone, kit: Kit, pack: PackKind, p: string
       for (const [i, t] of tips.entries()) r.point(p + 'tip' + i, ant, t);
       break;
     }
+    case 'medic': {
+      // medical rucksack: a big soft pack with side pouches, the generic medical symbol (a red cross on a
+      // white disc) on its back and on the top flap so it reads from the RTS camera
+      hiLo(r, chest, 'gear', xf(rbox(0.18, 0.37, 0.31, 0.055, 2), [-0.23, 0.25, 0]), xf(box(0.18, 0.37, 0.31), [-0.23, 0.25, 0]));
+      shaded(r, 0.88, () => {
+        for (const z of [-0.175, 0.175]) r.add(chest, 'gear', xf(rbox(0.12, 0.17, 0.06, 0.02), [-0.23, 0.2, z]));
+        r.addL(L0, chest, 'gear', xf(box(0.02, 0.33, 0.03), [-0.325, 0.25, 0.1]), xf(box(0.02, 0.33, 0.03), [-0.325, 0.25, -0.1]));
+      });
+      lid(-0.235, 0.44, 0.17, 0.29);
+      // back: white disc, red cross
+      r.add(chest, 'med', xf(cylX(0.092, 0.092, 0.012, 18), [-0.326, 0.27, 0]));
+      r.add(chest, 'red', xf(box(0.008, 0.115, 0.034), [-0.333, 0.27, 0]), xf(box(0.008, 0.034, 0.115), [-0.333, 0.27, 0]));
+      // top flap: a smaller one, seen from above
+      r.add(chest, 'med', xf(cylY(0.062, 0.062, 0.01, 16), [-0.24, 0.462, 0]));
+      r.add(chest, 'red', xf(box(0.078, 0.008, 0.024), [-0.24, 0.468, 0]), xf(box(0.024, 0.008, 0.078), [-0.24, 0.468, 0]));
+      break;
+    }
     case 'drone': {
       assault(-0.215, 0.25, 0.14, 0.31, 0.27);
       // quadcopter strapped flat against the pack (own bone: hidden after launch)
@@ -1455,8 +1475,8 @@ function arm(r: Rig, b: Body, p: string, kind: 'rifle' | 'carbine' | AtKind | 'c
 
 function buildSoldierTpl(r: Rig, kit: Kit, key: string, t: Tpl) {
   const p = 'a';
-  const role: Role = key === 'at' ? 'at' : key === 'engineer' ? 'engineer' : key === 'fpvteam' ? 'fpv' : key === 'ewinf' ? 'ew' : 'rifle';
-  const pack: PackKind = role === 'at' ? (kit.at === 'rpg7' || kit.at === 'rpg29' || kit.at === 'pf98' ? 'rpg' : 'assault') : role === 'engineer' ? 'tool' : role === 'fpv' ? 'drone' : role === 'ew' ? 'jammer' : 'assault';
+  const role: Role = key === 'at' ? 'at' : key === 'engineer' ? 'engineer' : key === 'fpvteam' ? 'fpv' : key === 'ewinf' ? 'ew' : key === 'medic' ? 'medic' : 'rifle';
+  const pack: PackKind = role === 'at' ? (kit.at === 'rpg7' || kit.at === 'rpg29' || kit.at === 'pf98' ? 'rpg' : 'assault') : role === 'engineer' ? 'tool' : role === 'fpv' ? 'drone' : role === 'ew' ? 'jammer' : role === 'medic' ? 'medic' : 'assault';
   const helmet: HelmetKind = role === 'engineer' ? 'hardhat' : kit.helmet === 'boonie' && role !== 'rifle' ? 'm92' : kit.helmet;
   const b = body(r, kit, p, 0, 0, 0, helmet, pack);
   let w: WInfo | null = null;
@@ -1490,6 +1510,16 @@ function buildSoldierTpl(r: Rig, kit: Kit, key: string, t: Tpl) {
       // FPV goggles over the helmet brim
       r.add(b.head, 'dark', xf(rbox(0.06, 0.055, 0.15, 0.015), [0.1, 0.14, 0]), xf(cylY(0.108, 0.108, 0.025, 12, true), [0.0, 0.145, 0], [0, 0, 0.05], [1, 1, 0.86]));
       r.add(b.head, 'glow', xf(box(0.01, 0.012, 0.012), [0.132, 0.16, 0.045]));
+      break;
+    }
+    case 'medic': {
+      // unarmed; a white armband with a red cross on the left upper arm (below the team band)
+      r.add(b.uaL, 'med', xf(cylY(0.081, 0.077, 0.075, 12, true), [0, -0.21, 0]));
+      r.add(b.uaL, 'red', xf(box(0.018, 0.056, 0.01), [0.0, -0.21, -0.081]), xf(box(0.052, 0.018, 0.01), [0.0, -0.21, -0.081]));
+      r.addL(L0, b.uaL, 'red', xf(box(0.01, 0.056, 0.018), [0.081, -0.21, 0]), xf(box(0.01, 0.018, 0.052), [0.081, -0.21, 0]));
+      // trauma pouch on the belt (front left)
+      r.add(b.hips, 'med', xf(rbox(0.07, 0.07, 0.05, 0.012), [0.11, -0.01, -0.13]));
+      r.addL(L0, b.hips, 'red', xf(box(0.012, 0.04, 0.008), [0.11, -0.01, -0.157]), xf(box(0.04, 0.012, 0.008), [0.11, -0.01, -0.157]));
       break;
     }
     case 'engineer': {
@@ -1774,6 +1804,12 @@ interface Sol {
   /** Head turned towards a threat (AnimState.look): weight and smoothed yaw. */
   thrW: number;
   thrY: number;
+  /** Wounded (AnimState.wounded): lying weight (eases out as he gets back up) and the time down it was last posed at. */
+  woundW: number;
+  woundT: number;
+  /** Medic at work (AnimState.treat): blend weight and the last treatment time. */
+  treatW: number;
+  treatT: number;
 }
 
 const tmpA = new THREE.Vector3();
@@ -2342,6 +2378,10 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): S
     bl: null,
     thrW: 0,
     thrY: 0,
+    woundW: 0,
+    woundT: 0,
+    treatW: 0,
+    treatT: 0,
   };
   reseed(sol, 100000 + solSeq++);
   return sol;
@@ -2372,7 +2412,9 @@ function animSoldier(sol: Sol, s: AnimState) {
     threatPose(sol, s);
     const dv = s.dive ?? 0;
     if (dv > 0) divePose(sol, dv);
+    treatPose(sol, s);
   }
+  woundPose(sol, s);
   const tgt = s.dead > 0 ? 0 : clamp(s.para ?? 0, 0, 1);
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   sol.paraW = dt === 0 && s.time === 0 ? tgt : approach(sol.paraW, tgt, dt, tgt > sol.paraW ? 20 : 5);
@@ -2424,6 +2466,127 @@ function divePose(sol: Sol, t: number) {
   sol.spine.rotation.z += 0.25 * legs;
   sol.neck.rotation.z += 0.35 * legs;
   sol.head.rotation.z += 0.3 * legs;
+}
+
+// ------------------------------------------------------------ wounded / medic
+
+/** Bones of a soldier's pose (the weapon bone included) blended between the standing pose and lying wounded. */
+const _woq: THREE.Quaternion[] = Array.from({ length: 24 }, () => new THREE.Quaternion());
+const _whp = new THREE.Vector3();
+const _wwp = new THREE.Vector3();
+
+/**
+ * Down wounded (AnimState.wounded seconds): he collapses onto his back (the death fall, variant "on the back"),
+ * then lies there breathing hard, his head rolling now and then, one arm or the other lifting off the ground
+ * and pressing on his wound, a knee drawn up. Getting back up (wounded cleared) the lying pose eases out into
+ * the pose of the moment over ~0.8 s. Bled out (dead with wounded set): the last lying pose, still.
+ */
+function woundPose(sol: Sol, s: AnimState) {
+  const wt = s.wounded ?? 0;
+  const dt = Math.min(Math.max(s.dt, 0), 0.1);
+  const dead = s.dead > 0;
+  if (wt > 0) sol.woundT = wt;
+  const tgt = wt > 0 || (dead && sol.woundW > 0.5) ? 1 : 0;
+  // (the fall plays from the standing pose itself: in at once; getting up eases out)
+  sol.woundW = tgt ? 1 : dt === 0 && s.time === 0 ? 0 : Math.max(0, sol.woundW - dt * 1.25);
+  const k = sol.woundW;
+  if (k <= 0.001 || (!dead && (s.lod ?? 0) >= 2 && tgt)) return;
+  const bones = (sol.bl ??= solBones(sol));
+  const blend = k < 0.999;
+  if (blend) {
+    for (let i = 0; i < bones.length && i < _woq.length; i++) _woq[i].copy(bones[i].quaternion);
+    _whp.copy(sol.hips.position);
+    if (sol.wpn) _wwp.copy(sol.wpn.position);
+  }
+  const t = sol.woundT;
+  // the fall, then lying on the back (the death fall's variant 1 settles by ~0.8 s)
+  ragdoll(sol, Math.min(t, 1.6), 1);
+  sol.snap = null;
+  if (!dead) {
+    const side = hashSeed(sol.sid * 13 + 5) > 0.5 ? 1 : -1;
+    const lie = sstep(0.9, 1.6, t);
+    // laboured breathing: the chest heaves
+    const br = Math.sin(t * 3.1 + sol.seed * 9);
+    sol.chest.rotation.z += 0.035 * br * lie;
+    // head: rolls from side to side now and then, lifts a little to look at the wound
+    const hs = Math.floor((t + sol.seed * 7) / 2.7);
+    const hv = hashSeed(sol.sid * 19 + hs);
+    sol.neck.rotation.y += (hv - 0.5) * 0.5 * lie;
+    sol.head.rotation.z += (0.12 + 0.12 * Math.sin(t * 0.9 + sol.seed * 5)) * lie;
+    // an arm moves now and then: lifts off the ground, reaches across and presses on the wound, sinks back
+    const per = 3.2 + 1.6 * sol.seed;
+    const tt = t + sol.seed * per;
+    const slot = Math.floor(tt / per);
+    const tau = tt - slot * per;
+    const g = tau < 2.2 ? Math.sin((PI * tau) / 2.2) * lie : 0;
+    if (g > 0.002) {
+      const right = hashSeed(sol.sid * 23 + slot) < 0.5;
+      const ua = right ? sol.uaR : sol.uaL;
+      const fa = right ? sol.faR : sol.faL;
+      const sd = right ? 1 : -1;
+      _dq[0].copy(ua.quaternion);
+      _dq[1].copy(fa.quaternion);
+      // (on his back the arm's forward swing points it up off the ground; flexed across to the belly)
+      const grab = hashSeed(sol.sid * 29 + slot) < 0.6;
+      freeArm(ua, fa, sd, grab ? 1.25 : 1.75 + 0.2 * Math.sin(tau * 5), grab ? 0.1 : 0.45, grab ? 1.55 : 0.5 + 0.25 * Math.sin(tau * 3));
+      blendFrom(ua, _dq[0], g);
+      blendFrom(fa, _dq[1], g);
+    }
+    // a knee drawn up and let down again, slowly
+    const kn = Math.max(0, Math.sin(t * 0.55 + sol.seed * 11)) * lie;
+    const th = side > 0 ? sol.thR : sol.thL;
+    const sh = side > 0 ? sol.shR : sol.shL;
+    th.rotation.z += 0.75 * kn;
+    sh.rotation.z -= 1.2 * kn;
+  }
+  if (blend) {
+    for (let i = 0; i < bones.length && i < _woq.length; i++) bones[i].quaternion.slerpQuaternions(_woq[i], tmpQ2.copy(bones[i].quaternion), k);
+    sol.hips.position.lerpVectors(_whp, tmpE.copy(sol.hips.position), k);
+    if (sol.wpn) sol.wpn.position.lerpVectors(_wwp, tmpE.copy(sol.wpn.position), k);
+  }
+}
+
+const POLE_TREAT = new THREE.Vector3(-0.2, -1, 0).normalize();
+const POLE_TREAT_L = new THREE.Vector3(-0.2, -1, -0.5).normalize();
+
+/**
+ * Medic at work (AnimState.treat seconds): kneeling (the kneel pose), leaning over the patient lying in front
+ * of his knees. A 4.5 s cycle: chest compressions (both hands stacked, pumping), then dressing the wound
+ * (the hands wind a bandage round each other, the head down watching). Blended in and out.
+ */
+function treatPose(sol: Sol, s: AnimState) {
+  const tr = s.treat ?? 0;
+  const dt = Math.min(Math.max(s.dt, 0), 0.1);
+  if (tr > 0) sol.treatT = tr;
+  sol.treatW = dt === 0 && s.time === 0 ? (tr > 0 ? 1 : 0) : approach(sol.treatW, tr > 0 ? 1 : 0, dt, tr > 0 ? 7 : 5);
+  const k = sol.treatW;
+  if (k <= 0.001) return;
+  const t = sol.treatT;
+  const cyc = (t + sol.seed * 2) % 4.5;
+  const cpr = cyc < 2.2 ? sstep(0, 0.25, cyc) * (1 - sstep(1.95, 2.2, cyc)) : 0;
+  const pump = cpr * (0.5 + 0.5 * Math.sin(t * 2 * PI * 1.8));
+  const wrap = 1 - cpr;
+  // lean over him
+  sol.spine.rotation.z += (-0.32 - 0.08 * pump) * k;
+  sol.chest.rotation.z += (-0.18 - 0.1 * pump) * k;
+  sol.head.rotation.z += (-0.2 + 0.1 * cpr) * k;
+  sol.neck.rotation.z += -0.1 * k;
+  _dq[0].copy(sol.uaR.quaternion);
+  _dq[1].copy(sol.faR.quaternion);
+  _dq[2].copy(sol.uaL.quaternion);
+  _dq[3].copy(sol.faL.quaternion);
+  // hands (spine-frame numbers), at the patient's chest in front of the knees
+  const a = t * 5.2;
+  const rx = 0.5 + 0.02 * pump;
+  const ry = -0.08 - 0.08 * pump - CH;
+  RT.set(rx + wrap * 0.05 * Math.cos(a), ry + wrap * (0.05 + 0.04 * Math.sin(a)), 0.04 + wrap * 0.05 * Math.sin(a));
+  LT.set(rx - 0.01 + wrap * 0.05 * Math.cos(a + PI), ry + 0.02 + wrap * (0.05 + 0.04 * Math.sin(a + PI)), -0.03 * cpr - wrap * (0.06 + 0.04 * Math.sin(a + PI)));
+  ik(sol, 1, RT, POLE_TREAT);
+  ik(sol, -1, LT, POLE_TREAT_L);
+  blendFrom(sol.uaR, _dq[0], k);
+  blendFrom(sol.faR, _dq[1], k);
+  blendFrom(sol.uaL, _dq[2], k);
+  blendFrom(sol.faL, _dq[3], k);
 }
 
 /** Length of the digging-in motion (AnimState.dig seconds); afterwards the soldier kneels in his foxhole. */
@@ -2568,6 +2731,10 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   }
   const w = held(sol);
   const air = sol.altOn ? 1 : 0;
+  if (s.dead > 0 && ((s.wounded ?? 0) > 0 || sol.woundW > 0.5)) {
+    // bled out where he lay: he stays as he was (woundPose holds the lying pose, still)
+    return;
+  }
   if (s.dead > 0) {
     deathPose(sol, s.dead, !!s.crushed);
     if (sol.extra && role === 'fpv') sol.extra.scale.setScalar(1);
@@ -2591,7 +2758,8 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const aimT = s.fired < holdAim || (s.aim ?? 0) > 0 ? 1 : 0;
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
   trackShots(sol, s, dt);
-  const dig = (s.dig ?? 0) > 0;
+  // (a medic kneels at a wounded soldier's side to treat him)
+  const dig = (s.dig ?? 0) > 0 || (s.treat ?? 0) > 0;
   // (the AA gunner stands to track an aircraft)
   const kneelT = !moving && ((role === 'fpv' && aimT > 0) || dig || (sol.crouch && aimT > 0 && !air)) ? 1 : 0;
   sol.kneelW = approach(sol.kneelW, kneelT, dt, kneelT ? 6 : 4);
@@ -3017,7 +3185,12 @@ function build(key: string): Builder {
           packed: false,
         };
         ms.l.wpn = ms.bomb;
-        anim = (s) => animMortar(ms, s);
+        anim = (s) => {
+          animMortar(ms, s);
+          // down wounded: both crew lie where they were (the team is one unit)
+          woundPose(ms.g, s);
+          woundPose(ms.l, s);
+        };
       } else {
         const sol = sols[0];
         anim = (s) => animSoldier(sol, s);
@@ -3064,4 +3237,5 @@ export const INFANTRY: Record<string, Builder> = {
   fpvteam: build('fpvteam'),
   ewinf: build('ewinf'),
   sniper: build('sniper'),
+  medic: build('medic'),
 };

@@ -9,6 +9,7 @@ import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPas
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
+import { heliRepairing } from '../sim/helipad';
 import { entityZ } from '../sim/ballistics';
 import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
@@ -1233,6 +1234,24 @@ export class GameRenderer {
     }
   }
 
+  /**
+   * Attack helicopter on a repair trip (sim/helipad.ts): below half a tile it settles onto its wheels / skids
+   * on the ground (the model's gearDrop), level, rotors idling (AnimState.landed); lifting off it blends back.
+   */
+  private poseHeli(e: Entity, v: Visual, a: AnimState, alpha: number) {
+    const z = e.pz + (e.z - e.pz) * alpha;
+    const k = e.heli ? Math.max(0, Math.min(1, 1 - z / 0.5)) : 0;
+    a.landed = e.heli ? Math.max(0, Math.min(1, 1 - z / 0.25)) : 0;
+    if (k <= 0) return;
+    const root = v.model.root;
+    const map = this.world.map;
+    const g = Math.max(standHeight(map, root.position.x, root.position.z), 0);
+    const drop = (v.model.gearDrop ?? 0.1) * root.scale.y;
+    // (from where entityPos put it: altitude, relief clearance and the hover bob, blended out on the way down)
+    const air = root.position.y;
+    root.position.y = air + (g + z + drop - air) * k;
+  }
+
   /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   private addContact(e: Entity, v: Visual) {
     const c = this.contact!;
@@ -1330,6 +1349,11 @@ export class GameRenderer {
       a.time = this.time;
       a.fired = this.time - v.lastFire;
       a.aim = e.aimTarget >= 0 ? 1 : 0; // sniper lock-on: shouldered, kneeling (sim/sniper.ts)
+      if (e.kind === 'unit') {
+        // down wounded: seconds since he fell; a medic at work: seconds into the treatment (sim/medic.ts)
+        a.wounded = e.wound ? Math.max(1e-3, (w.tick - e.wound.at + alpha) / TPS) : 0;
+        a.treat = e.treat > 0 ? (e.treat + alpha) / TPS : 0;
+      }
       if (e.kind === 'unit' && unitDef(e.def).weapon2) this.altAim(e, v, a);
       a.damage = 1 - e.hp / e.maxHp;
       if (e.kind === 'building') {
@@ -1398,6 +1422,8 @@ export class GameRenderer {
         }
         // airbase sortie: wheels on the runway, gear, rotation / flare attitude (sim/airbase.ts)
         if (e.sortie && ud.fixedWing) this.poseJet(e, v, a, alpha);
+        // helicopter set down beside its airbase for repair: on its wheels / skids, rotors idling (sim/helipad.ts)
+        if (ud.rotary) this.poseHeli(e, v, a, alpha);
         // airborne drop: transport ramp door, jumpers / supply pallet under canopy
         if (ud.airlift) a.ramp = e.drop?.ramp ?? 0;
         if (v.model.infantry) a.para = e.para ? 1 : 0;
@@ -1535,12 +1561,13 @@ export class GameRenderer {
       }
     }
     if (e.jammedUntil > this.world.tick && Math.random() < dt * 8) this.effects.spark(p.x, p.y, p.z, 0x70b0ff);
-    // rotor downwash kicks up dust under low-flying helicopters
-    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2));
+    // rotor downwash kicks up dust under low-flying helicopters (a light swirl from idling rotors on the ground)
+    if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2) * (1 - 0.7 * (v.anim.landed ?? 0)));
     // decoy flares when a missile is homing in
     if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
-    // ground crew patching up a damaged jet on its pad (sim/airbase.ts): green repair sparks, as on a building under repair
-    if (e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp) {
+    // ground crew patching up a damaged jet on its pad (sim/airbase.ts), or a helicopter set down beside the airbase
+    // (sim/helipad.ts): green repair sparks, as on a building under repair
+    if ((e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp) || heliRepairing(e)) {
       if (Math.random() < dt * 6) {
         const r = (m.size?.x ?? 0.8) * 0.4;
         this.effects.spark(p.x + (Math.random() - 0.5) * 2 * r, p.y + 0.08 + Math.random() * 0.22, p.z + (Math.random() - 0.5) * 2 * r, 0x80ff80);

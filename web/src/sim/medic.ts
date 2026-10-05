@@ -43,9 +43,15 @@ export const HEAL_RATE = 0.02;
 export const HEAL_RANGE = 2.5;
 /** Explosions from weapons of this much damage or more (artillery, missiles, bombs) kill outright. */
 export const BIG_BLAST = 90;
-/** The medic works this close to the patient (tiles). */
-export const TREAT_DIST = 0.5;
-const TREAT_STAND = 0.3;
+/**
+ * Where the medic kneels: beside the patient's chest. A soldier down wounded lies on his back with his
+ * torso TORSO_BACK tiles behind his position (along his facing); the medic kneels TREAT_SIDE to the side.
+ */
+const TORSO_BACK = 0.17;
+const TREAT_SIDE = 0.16;
+/** Close enough to the kneeling spot to start (tiles); or this close to the patient once the path has ended. */
+const TREAT_ARRIVE = 0.12;
+const TREAT_NEAR = 0.5;
 
 const BLAST_FLIGHTS: ReadonlySet<Flight> = new Set<Flight>(['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise', 'bomb']);
 const BLAST_WARHEADS: ReadonlySet<Warhead> = new Set<Warhead>(['artillery', 'missile', 'thermo']);
@@ -252,34 +258,43 @@ export function updateMedic(w: World, e: Entity, d: UnitDef): boolean {
     return true;
   }
   p.wound.healer = e.id;
-  const dx = e.x - p.x;
-  const dy = e.y - p.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist > TREAT_DIST) {
+  const [sx, sy, cx, cy] = treatSpot(p, e);
+  const dist = Math.hypot(sx - e.x, sy - e.y);
+  const near = Math.hypot(cx - e.x, cy - e.y);
+  if (dist > TREAT_ARRIVE && (near > TREAT_NEAR || (e.path && e.treat === 0))) {
     e.treat = 0;
     // the patient is out of reach of an automatic pick-up (pushed off, blocked): give up on him
-    if (o.auto && dist > MEDIC_RANGE + 3) {
+    if (o.auto && near > MEDIC_RANGE + 3) {
       finishTreat(w, e);
       return true;
     }
     if (!e.path || w.tick >= e.repathAt) {
-      const k = dist > 1e-3 ? TREAT_STAND / dist : 0;
-      w.pathTo(e, p.x + (dist > 1e-3 ? dx * k : TREAT_STAND), p.y + dy * k);
+      w.pathTo(e, sx, sy);
       e.repathAt = w.tick + 30;
     }
-    w.walk(e, d);
+    if (w.walk(e, d) && near <= TREAT_NEAR) e.path = null;
     return true;
   }
-  // at his side: kneel and work on him
+  // at his side: kneel and work on his chest
   e.path = null;
   e.moving = false;
-  e.facing = e.turret = Math.atan2(p.y - e.y, p.x - e.x);
+  e.facing = e.turret = Math.atan2(cy - e.y, cx - e.x);
   e.treat++;
   if (e.treat >= TREAT_TICKS) {
     revive(w, p, e);
     finishTreat(w, e);
   }
   return true;
+}
+
+/** The kneeling spot beside wounded soldier p for medic m (on m's side of him), and the patient's chest: [sx, sy, cx, cy]. */
+export function treatSpot(p: Entity, m: Entity): [number, number, number, number] {
+  const fx = Math.cos(p.facing);
+  const fy = Math.sin(p.facing);
+  const cx = p.x - fx * TORSO_BACK;
+  const cy = p.y - fy * TORSO_BACK;
+  const side = (m.x - cx) * -fy + (m.y - cy) * fx >= 0 ? 1 : -1;
+  return [cx - fy * side * TREAT_SIDE, cy + fx * side * TREAT_SIDE, cx, cy];
 }
 
 /** Treatment over (done, or the patient is gone): back to the attack-move he was on, or stand here. */
