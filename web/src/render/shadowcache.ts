@@ -184,24 +184,10 @@ export class ShadowCache {
     const ot = this.others;
     st.length = 0;
     ot.length = 0;
-    const layers = camera.layers;
-    const demoted = this.demoted;
     // (only leaf casters are cached: hiding a cached caster for the dynamic pass must not hide anything else,
     // and everything under a dynamic caster stays dynamic)
-    const visit = (o: THREE.Object3D, dynParent: boolean) => {
-      if (!o.visible) return;
-      const m = o as Caster;
-      const ch = o.children;
-      if ((m.isMesh || (m as unknown as THREE.Points).isPoints || (m as unknown as THREE.Line).isLine) && m.castShadow && o.layers.test(layers)) {
-        const dyn = dynParent || ch.length > 0 || demoted.has(o.id) || !!m.customDepthMaterial || (m as unknown as THREE.SkinnedMesh).isSkinnedMesh || !!m.morphTargetInfluences || o.onBeforeShadow !== THREE.Object3D.prototype.onBeforeShadow || !m.isMesh;
-        if (dyn) {
-          ot.push(o);
-          dynParent = true;
-        } else st.push(m);
-      }
-      for (let i = 0; i < ch.length; i++) visit(ch[i], dynParent);
-    };
-    for (const r of this.roots()) if (r.parent === this.scene) visit(r, false);
+    const roots = this.roots();
+    for (let i = 0; i < roots.length; i++) if (roots[i].parent === this.scene) this.visit(roots[i], false, camera.layers);
     // signature
     const n = st.length * STRIDE;
     if (this.sig.length !== n) this.sig = new Float64Array(n);
@@ -220,6 +206,21 @@ export class ShadowCache {
       const e = m.matrixWorld.elements;
       for (let j = 0; j < 16; j++) s[o + 6 + j] = e[j];
     }
+  }
+
+  /** collect(): one object of the static roots (a method, not a closure per refresh: no allocation). */
+  private visit(o: THREE.Object3D, dynParent: boolean, layers: THREE.Layers) {
+    if (!o.visible) return;
+    const m = o as Caster;
+    const ch = o.children;
+    if ((m.isMesh || (m as unknown as THREE.Points).isPoints || (m as unknown as THREE.Line).isLine) && m.castShadow && o.layers.test(layers)) {
+      const dyn = dynParent || ch.length > 0 || this.demoted.has(o.id) || !!m.customDepthMaterial || (m as unknown as THREE.SkinnedMesh).isSkinnedMesh || !!m.morphTargetInfluences || o.onBeforeShadow !== THREE.Object3D.prototype.onBeforeShadow || !m.isMesh;
+      if (dyn) {
+        this.others.push(o);
+        dynParent = true;
+      } else this.statics.push(m);
+    }
+    for (let i = 0; i < ch.length; i++) this.visit(ch[i], dynParent, layers);
   }
 
   /** Did any static caster change since the last refresh? Blames the ones that did. */

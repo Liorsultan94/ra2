@@ -1039,7 +1039,7 @@ export class GameRenderer {
   private ray = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
 
-  screenToGround(sx: number, sy: number): { x: number; y: number } {
+  screenToGround(sx: number, sy: number, out: { x: number; y: number } = { x: 0, y: 0 }): { x: number; y: number } {
     this.ndc.set((sx / this.width) * 2 - 1, -(sy / this.height) * 2 + 1);
     this.ray.setFromCamera(this.ndc, this.camera);
     const o = this.ray.ray.origin;
@@ -1054,7 +1054,9 @@ export class GameRenderer {
       const { w, h: mh } = this.world.map;
       h = standHeight(this.world.map, Math.max(0, Math.min(w - 0.01, px)), Math.max(0, Math.min(mh - 0.01, pz)));
     }
-    return { x: px, y: pz };
+    out.x = px;
+    out.y = pz;
+    return out;
   }
 
   private v3 = new THREE.Vector3();
@@ -1063,9 +1065,16 @@ export class GameRenderer {
     return { x: ((this.v3.x + 1) / 2) * this.width, y: ((1 - this.v3.y) / 2) * this.height };
   }
 
+  /** The view's ground footprint (screen corners on the ground). The array is reused: read it right away. */
   viewCorners(): { x: number; y: number }[] {
-    return [this.screenToGround(0, 0), this.screenToGround(this.width, 0), this.screenToGround(this.width, this.height), this.screenToGround(0, this.height)];
+    const c = this.corners4;
+    this.screenToGround(0, 0, c[0]);
+    this.screenToGround(this.width, 0, c[1]);
+    this.screenToGround(this.width, this.height, c[2]);
+    this.screenToGround(0, this.height, c[3]);
+    return c;
   }
+  private corners4 = [0, 1, 2, 3].map(() => ({ x: 0, y: 0 }));
 
   // ---------------------------------------------------------------- entities
 

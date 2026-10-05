@@ -647,6 +647,18 @@ interface DecalSpec {
   color: number;
 }
 
+/**
+ * Marking layouts found by the ray-cast search (Probe.flatSpot: thousands of rays against the whole
+ * model, seconds of main thread per tank on a phone, in the battle's loading), kept across matches:
+ * the templates are rebuilt for every match's fog of war (and per team colour), the layout only depends on
+ * the geometry, the faction's markings and the paint's lightness. Keyed by those and a hash of everything
+ * the search reads (vertices, triangles, placement, tags...), so a template only reuses a layout found on
+ * exactly the same model. Value: the spec and the part it went on.
+ */
+const decalLayouts = new Map<string, { spec: DecalSpec | null; part: number }>();
+const _sigF = new Float32Array(1);
+const _sigU = new Uint32Array(_sigF.buffer);
+
 class Bld {
   readonly root = new THREE.Group();
   readonly parts: Part[] = [];
@@ -1239,8 +1251,66 @@ class Bld {
     g.userData.tag = ((g.userData.tag as string | undefined) ? g.userData.tag + ' ' : '') + 'decalT';
     return { spots, digits, color };
   }
+  /** decalLayouts key: style + every mesh's vertex positions and world placement (FNV-1a over the float bits). */
+  private decalSig(): string {
+    let h = 0x811c9dc5;
+    const mix = (v: number) => {
+      _sigF[0] = v;
+      h = Math.imul(h ^ _sigU[0], 16777619);
+    };
+    // everything the search reads: the hierarchy's tags (candidate parts, skipped / turret parts), each mesh's
+    // vertices, triangles, draw range, placement, instances, paint bucket, culled side and loose-part flags
+    this.root.traverse((o) => {
+      const tag = typeof o.userData.tag === 'string' ? (o.userData.tag as string) : '';
+      mix(tag.length);
+      for (let i = 0; i < tag.length; i++) mix(tag.charCodeAt(i));
+      mix(o.children.length);
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const g = m.geometry;
+      const pos = g.attributes.position;
+      const a = pos.array as Float32Array;
+      mix(pos.count);
+      for (let i = 0; i < a.length; i++) mix(a[i]);
+      const idx = g.index;
+      mix(idx ? idx.count : -1);
+      if (idx) for (let i = 0; i < idx.count; i++) mix(idx.getX(i));
+      mix(g.drawRange.start);
+      mix(g.drawRange.count === Infinity ? -1 : g.drawRange.count);
+      for (const e of m.matrixWorld.elements) mix(e);
+      const im = m as THREE.InstancedMesh;
+      if (im.isInstancedMesh) {
+        mix(im.count);
+        const ia = im.instanceMatrix.array as Float32Array;
+        for (let i = 0; i < im.count * 16; i++) mix(ia[i]);
+      }
+      mix(m.userData.bk === 's' + CAMO ? 1 : m.userData.bk === 'D' ? 2 : 0);
+      const mat = m.material;
+      mix(Array.isArray(mat) ? -1 : mat.side);
+      const aw = g.getAttribute('aWear');
+      if (aw) for (let i = 0; i < aw.count; i++) mix(aw.getY(i));
+    });
+    // (the spec's own inputs besides the geometry: the faction's markings and the paint's lightness)
+    return `${this.key}|${this.f}|${this.base}|${(h >>> 0).toString(36)}`;
+  }
+
   private layoutDecals(ray: Probe): DecalSpec | null {
     if (this.markAt) return this.layoutFixed();
+    const sig = this.decalSig();
+    const known = decalLayouts.get(sig);
+    if (known) {
+      if (known.part >= 0) {
+        const g = this.parts[known.part].g;
+        g.userData.tag = ((g.userData.tag as string | undefined) ? g.userData.tag + ' ' : '') + 'decalT';
+      }
+      return known.spec;
+    }
+    const found = this.searchDecals(ray);
+    decalLayouts.set(sig, { spec: found.spec, part: found.part });
+    return found.spec;
+  }
+
+  private searchDecals(ray: Probe): { spec: DecalSpec | null; part: number } {
     const own = (t: THREE.Object3D) => t.children.filter((c) => (c as THREE.Mesh).isMesh && (c.userData.bk === 's' + CAMO || c.userData.bk === 'D')) as THREE.Mesh[];
     const tagged = (o: THREE.Object3D, t: string) => typeof o.userData.tag === 'string' && (o.userData.tag as string).split(' ').includes(t);
     // candidate parts: the turret first, then the part with the largest painted side (hull, launcher box, cargo body...)
@@ -1261,10 +1331,10 @@ class Bld {
       const r = this.layoutOn(ray, c.g, c.turret ? 'turret' : 'body', own);
       if (r) {
         c.g.userData.tag = ((c.g.userData.tag as string | undefined) ? c.g.userData.tag + ' ' : '') + 'decalT';
-        return r;
+        return { spec: r, part: this.parts.findIndex((p) => p.g === c.g) };
       }
     }
-    return null;
+    return { spec: null, part: -1 };
   }
   private layoutOn(ray: Probe, tg: THREE.Object3D, tkind: 'turret' | 'body', own: (t: THREE.Object3D) => THREE.Mesh[]): DecalSpec | null {
     const meshes = own(tg);
@@ -2229,6 +2299,8 @@ onFogRelease((f) => {
   if (id === undefined) return;
   purgeKeys(templates, (k) => k.endsWith('|' + id));
   purgeKeys(matCache, (k) => k.startsWith(id + '|'));
+  // the markings meshes built on its templates (template key | hull number)
+  purgeKeys(decalGeos, (k) => k.split('|')[3] === String(id));
 });
 /** Field stowage items per template key (see Bld.clutter). */
 /**
