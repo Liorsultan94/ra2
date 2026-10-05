@@ -1536,9 +1536,13 @@ export class GameRenderer {
     // decoy flares when a missile is homing in
     if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
     // ground crew patching up a damaged jet on its pad (sim/airbase.ts): green repair sparks, as on a building under repair
-    if (e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp && Math.random() < dt * 6) {
-      const r = (m.size?.x ?? 0.8) * 0.4;
-      this.effects.spark(p.x + (Math.random() - 0.5) * 2 * r, p.y + 0.08 + Math.random() * 0.22, p.z + (Math.random() - 0.5) * 2 * r, 0x80ff80);
+    if (e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp) {
+      if (Math.random() < dt * 6) {
+        const r = (m.size?.x ?? 0.8) * 0.4;
+        this.effects.spark(p.x + (Math.random() - 0.5) * 2 * r, p.y + 0.08 + Math.random() * 0.22, p.z + (Math.random() - 0.5) * 2 * r, 0x80ff80);
+      }
+      // and a soft pulsing green work light over the stand
+      this.effects.lights.sustain(p.x, p.y + 0.35, p.z, 0.7 + 0.5 * Math.sin(this.time * 5 + e.id), 0x70ff90, 0.1);
     }
   }
 

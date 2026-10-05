@@ -122,6 +122,8 @@ export class Flyers {
         const pz = f.z - f.vz * dt * j;
         if (flare) {
           s.spawnFire({ x: px, y: py, z: pz, life: 0.12, size: 0.32 * f.size * (0.6 + 0.4 * fade), sizeEnd: 0.12, color: 0xffffff, colorEnd: 0xffd890, alpha: 1 });
+          // warm magnesium halo round the white-hot core (every other puff: cheap)
+          if (j < 0.5) s.spawnFire({ x: px, y: py, z: pz, life: 0.07, size: 0.75 * f.size * (0.5 + 0.5 * fade), sizeEnd: 0.3 * f.size, color: 0xfff0c8, colorEnd: 0xffb050, alpha: 0.45 });
           s.spawnSmoke({ x: px, y: py, z: pz, vx: (Math.random() - 0.5) * 0.1, vy: 0.05, vz: (Math.random() - 0.5) * 0.1, life: 1.8 + Math.random(), size: 0.08, sizeEnd: 0.5, color: 0xe8e6e2, colorEnd: 0xf4f2f0, alpha: 0.45 * fade, drag: 0.6, wind: 0.8 });
         } else if (spark) {
           // white-hot fragment: a thin streak that cools to orange as it slows

@@ -1056,13 +1056,13 @@ export class Hud {
         if (fix) {
           // pulsing repair cross left of the bar
           const a = 0.55 + 0.45 * Math.sin(now * 0.006);
-          const cx = x0 - 7;
-          const cy = ry + 1;
-          ctx.fillStyle = 'rgba(4,8,10,0.7)';
-          ctx.fillRect(cx - 4, cy - 4, 9, 9);
+          const cx = x0 - 9;
+          const cy = ry;
+          ctx.fillStyle = 'rgba(4,8,10,0.75)';
+          ctx.fillRect(cx - 6, cy - 6, 13, 13);
           ctx.fillStyle = `rgba(110,240,140,${a.toFixed(3)})`;
-          ctx.fillRect(cx - 3, cy - 0.5 - 0.5, 7, 2);
-          ctx.fillRect(cx - 0.5 - 0.5, cy - 3, 2, 7);
+          ctx.fillRect(cx - 4, cy - 1, 9, 3);
+          ctx.fillRect(cx - 1, cy - 4, 3, 9);
         }
       }
       const g = groups.get(e.id);

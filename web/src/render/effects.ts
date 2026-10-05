@@ -1083,16 +1083,16 @@ export class Effects {
     this.flyers.steer(key, x, y, z, vx, vy, vz);
   }
 
-  /** A fooled missile bursting on the decoy flare: proximity-fuze flash, a spray of hot fragments, a smoke puff. */
+  /** A fooled missile bursting on the decoy flare: a small proximity-fuze fireball, hot fragments, a smoke puff. */
   decoyBurst(x: number, y: number, z: number, ground: number) {
-    this.airburst(x, y, z, false, ground, false);
+    this.blast({ ...BLASTS.airSmall, size: 0.75, fire: 0.9, sparks: 14, smoke: 0.9, light: 5 }, x, y, z, ground);
     this.fire.spawn({ x, y, z, life: 0.16, size: 1.1, color: 0xfff6e0, colorEnd: 0xff9a40 });
     for (let i = 0; i < this.q(5); i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = this.rand(1.5, 3.5);
       this.flyers.add('spark', x, y, z, Math.cos(a) * sp, this.rand(-0.5, 2), Math.sin(a) * sp, this.rand(0.4, 0.8), 1);
     }
-    this.flashLight(x, y, z, 5, 0xffd8a0, 0.14);
+    this.smokeSys.spawn({ x, y, z, vy: 0.1, life: 2.5, size: 0.3, sizeEnd: 1.1, color: 0x6a6662, alpha: 0.55, drag: 1, wind: 0.6 });
   }
 
   /** Rotor downwash: a ring of dust blown outwards on the ground. strength 0..1 (lower = stronger). */
