@@ -363,7 +363,7 @@ function strikeTarget(w: World, e: Entity, s: Sortie): Entity | null {
   const o = e.order;
   if (o.type !== 'attack') return null;
   const wpn = WEAPONS[unitDef(e.def).weapon!];
-  const t = w.get(o.target);
+  const t = w.foe(o.target); // (a soldier lying wounded is no target: medic.ts)
   const auto = autoStrike(e);
   if (t && w.isEnemy(e.owner, t.owner) && w.canHit(wpn, t) && (!auto || t.kind === 'building' || w.visibleTo(e.owner, t.x, t.y))) {
     s.tx = t.x;

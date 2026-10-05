@@ -69,7 +69,8 @@ const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
 
 /** Infantry on the ground that a vehicle can run over (not inside anything, not under canopy). */
 export function isCrushable(e: Entity): boolean {
-  return e.kind === 'unit' && !e.dead && e.inside < 0 && !e.para && e.z < 0.05 && !!unitDef(e.def).crushable;
+  // (a soldier lying wounded is off the grid and out of the fight: medic.ts)
+  return e.kind === 'unit' && !e.dead && e.inside < 0 && !e.para && !e.wound && e.z < 0.05 && !!unitDef(e.def).crushable;
 }
 
 /** A ground vehicle that runs infantry over. */

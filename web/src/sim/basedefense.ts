@@ -53,7 +53,8 @@ function isArtillery(d: UnitDef) {
 
 /** May the unit be pulled into a defence right now (stance, recent orders, current activity)? */
 function available(w: World, e: Entity): boolean {
-  if (e.inside >= 0 || e.para || e.drop) return false;
+  // (nor a soldier lying wounded, or a helicopter on its repair trip: medic.ts, helipad.ts)
+  if (e.inside >= 0 || e.para || e.drop || e.wound || e.heli) return false;
   if (e.stance !== 'guard' && e.stance !== 'aggressive') return false;
   if (w.tick - e.orderAt < ORDER_GRACE) return false;
   if (e.defend) return e.order.type === 'idle' || (e.order.type === 'attack' && !e.order.forced);

@@ -259,6 +259,8 @@ const UNITS: Record<string, UnitTpl> = {
   // the one soldier that fights both: RPG against ground targets, a shoulder-fired guided missile (weapon2) against aircraft
   at: { name: 'Rocket Team (AT/AA)', category: 'infantry', model: 'at', cost: 400, buildTime: 5, hp: 110, armor: 'infantry', sight: 7, speed: 1.25, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'atRocket', weapon2: 'manpads', prereq: ['barracks'], desc: 'RPG against tanks, infantry and buildings, plus a shoulder-fired guided missile against helicopters, jets and drones.', aiWeight: 4, aiTag: 'main' },
   sniper: { name: 'Sniper', category: 'infantry', model: 'sniper', cost: 600, buildTime: 8, hp: 90, armor: 'infantry', sight: 11, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, weapon: 'sniper', prereq: ['barracks', 'radar'], desc: 'Long-range marksman: 2.5x rifle range, takes 3 s to lock on to each new target, then one shot kills any soldier. Barely scratches armour; cannot hit aircraft. +20% range from a building window.', aiWeight: 2, aiTag: 'main' },
+  // combat medic (medic.ts): unarmed, treats wounded friendly soldiers back onto their feet, slowly heals hurt ones nearby
+  medic: { name: 'Combat Medic', category: 'infantry', model: 'medic', cost: 300, buildTime: 5, hp: 100, armor: 'infantry', sight: 6, speed: 1.35, turnRate: 0.5, turret: false, radius: 0.18, medic: true, prereq: ['barracks'], desc: 'Unarmed. Runs to wounded soldiers nearby and treats them back into the fight before they bleed out; slowly heals hurt infantry around him.', aiWeight: 0, aiTag: 'support' },
   engineer: { name: 'Engineer', category: 'infantry', model: 'engineer', cost: 500, buildTime: 6, hp: 75, armor: 'infantry', sight: 4, speed: 1.2, turnRate: 0.5, turret: false, radius: 0.18, engineer: true, prereq: ['barracks'], desc: 'Captures enemy and neutral buildings, repairs your own.', aiWeight: 0 },
   mbt: { name: 'Main Battle Tank', category: 'vehicle', model: 'mbt', cost: 800, buildTime: 9, hp: 380, armor: 'heavy', sight: 6, speed: 2.2, turnRate: 0.11, turret: true, radius: 0.45, weapon: 'cannon', prereq: ['factory'], desc: 'Main battle tank.', aiWeight: 7, aiTag: 'main' },
   aa: { name: 'AA Vehicle', category: 'vehicle', model: 'aa', cost: 700, buildTime: 8, hp: 230, armor: 'light', sight: 8, speed: 2.3, turnRate: 0.12, turret: true, radius: 0.42, weapon: 'flak', prereq: ['factory'], desc: 'Rapid-fire air defense. Air targets only.', aiWeight: 1, aiTag: 'aa' },
@@ -267,7 +269,7 @@ const UNITS: Record<string, UnitTpl> = {
   mcv: { name: 'MCV', category: 'vehicle', model: 'mcv', cost: 3000, buildTime: 30, hp: 1000, armor: 'heavy', sight: 5, speed: 1.4, turnRate: 0.08, turret: false, radius: 0.55, mcv: true, prereq: ['factory', 'radar'], desc: 'Deploys into a Construction Yard.', aiWeight: 0 },
   apc: { name: 'Infantry Fighting Vehicle', category: 'vehicle', model: 'apc', cost: 800, buildTime: 9, hp: 320, armor: 'light', sight: 7, speed: 2.6, turnRate: 0.12, turret: true, radius: 0.45, weapon: 'autocannon', transport: 5, prereq: ['factory'], desc: 'Autocannon IFV. Carries 5 infantry who fire from inside. Ground targets only.', aiWeight: 3, aiTag: 'main' },
   robot: { name: 'Combat Robot', category: 'vehicle', model: 'ugv', cost: 450, buildTime: 6, hp: 200, armor: 'light', sight: 7, speed: 2.8, turnRate: 0.2, turret: true, radius: 0.3, weapon: 'mgHeavy', prereq: ['factory'], desc: 'Unmanned armed ground robot.', aiWeight: 2, aiTag: 'scout' },
-  heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles.', aiWeight: 3, aiTag: 'main' },
+  heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, rotary: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles. Badly damaged, it flies back to its airbase to land and be repaired.', aiWeight: 3, aiTag: 'main' },
   fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands, repairs and rearms (10 s), then strikes again until the target is destroyed. 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
   uav: { name: 'Strike UAV', category: 'air', model: 'uav', cost: 900, buildTime: 10, hp: 180, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.15, turret: false, radius: 0.4, air: true, weapon: 'uavMissile', prereq: ['airfield'], desc: 'Armed drone. Attacks ground targets.', aiWeight: 3, aiTag: 'main' },
 };
@@ -314,6 +316,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     typhon: { name: 'Typhon MRC (Tomahawk)', model: 'tel_typhon', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
+    medic: { name: 'Medic' },
     sniper: { name: 'Matzpen Sniper' },
     mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 0.55, desc: 'Front-engined heavy tank with Trophy active protection.' },
     apc: { name: 'Namer', hp: 430, armor: 'heavy', cost: 950, desc: 'Heavily armored infantry carrier on a Merkava chassis.' },
@@ -327,6 +330,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     lora: { name: 'LORA Launcher', model: 'tel_lora', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   china: {
+    medic: { name: 'Field Medic' },
     sniper: { name: 'QBU-88 Sharpshooter' },
     mbt: { name: 'Type 99A' },
     apc: { name: 'ZBL-08' },
@@ -340,6 +344,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     uav: { name: 'Wing Loong II' },
   },
   russia: {
+    medic: { name: 'Field Medic' },
     sniper: { name: 'SV-98 Sniper' },
     mbt: { name: 'T-90M', hp: 420 },
     apc: { name: 'BMP-3' },
@@ -405,6 +410,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     tayfun: { name: 'Tayfun TEL', model: 'tel_tayfun', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   iran: {
+    medic: { name: 'Medic' },
     sniper: { name: 'Nakhjir Sniper' },
     mbt: { name: 'Karrar' },
     apc: { name: 'Boragh' },
