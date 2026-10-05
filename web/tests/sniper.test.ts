@@ -366,7 +366,7 @@ describe('sniper determinism', () => {
 
 describe('sniper laser (render helpers)', () => {
   it('the dot sways like a hand: big figure-8 drift early, settling, dead steady for the final lock', async () => {
-    const { swayOffset, laserIsGreen, SWAY_AMP } = await import('../src/render/fx/sniperfx');
+    const { swayOffset, SWAY_AMP } = await import('../src/render/fx/sniperfx');
     const steady = 1 - 8 / 60;
     const amp = (k: number) => {
       let m = 0;
@@ -381,11 +381,5 @@ describe('sniper laser (render helpers)', () => {
     expect(amp(0.8)).toBeLessThan(amp(0.5));
     expect(amp(steady)).toBe(0);
     expect(amp(1)).toBe(0);
-    // green by day, red at dusk / night / dawn
-    expect(laserIsGreen(12)).toBe(true);
-    expect(laserIsGreen(9)).toBe(true);
-    expect(laserIsGreen(19)).toBe(false);
-    expect(laserIsGreen(22)).toBe(false);
-    expect(laserIsGreen(4)).toBe(false);
   });
 });

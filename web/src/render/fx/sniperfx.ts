@@ -12,7 +12,7 @@ import type { Effects } from '../effects';
  * While a sniper holds its aim (Entity.aimTarget / aimTicks) a thin laser beam runs from the rifle
  * muzzle (or a window of the building it garrisons) to a bright dot on the target. The dot is held
  * by a human hand: a slow figure-8 drift plus a fine tremor, both shrinking as the aim settles, and
- * dead steady for the final SNIPER_STEADY ticks. GREEN by day, RED at dusk and night (live day clock).
+ * dead steady for the final SNIPER_STEADY ticks. Always RED, day and night (the owner's call).
  * Beam and dot are additive with a soft glow and a minimum on-screen width, so they read on a phone
  * while staying thin. The shot: crisp flash, a faint tracer, a dust kick at the muzzle, a puff on the
  * target. The target does not react (visual only).
@@ -40,7 +40,6 @@ export interface SniperFxHost {
 const CITY_TALL: Record<string, number> = { civ_apartment: 1.4, civ_office: 1.9, civ_block: 1.1, civ_townhouse: 0.55, civ_shop: 0.3 };
 
 const RED = new THREE.Color(0xff2414);
-const GREEN = new THREE.Color(0x33ff4a);
 const WHITE = new THREE.Color(1, 1, 1);
 
 /** Hand sway: figure-8 drift amplitude (tiles) at the start of the aim, its period (s), tremor amplitude. */
@@ -71,12 +70,6 @@ export function swayOffset(k: number, t: number, seed: number, steadyFrom: numbe
   x += (Math.sin(t * 21.7 + seed * 40) * 0.6 + Math.sin(t * 33.1 + seed * 13) * 0.4) * tr;
   y += (Math.sin(t * 26.3 + seed * 27) * 0.6 + Math.sin(t * 39.7 + seed * 7) * 0.4) * tr;
   return [x, y];
-}
-
-/** Laser colour of the hour: green by day (06:30 .. 18:00), red at dusk, night and dawn. */
-export function laserIsGreen(hour: number): boolean {
-  const h = ((hour % 24) + 24) % 24;
-  return h >= 6.5 && h < 18;
 }
 
 const BEAM_VS = /* glsl */ `
@@ -196,8 +189,7 @@ export class SniperFx {
     this.time += dt;
     const h = this.host;
     const w = h.world;
-    const green = laserIsGreen(h.hour());
-    this.color.copy(green ? GREEN : RED);
+    this.color.copy(RED);
     for (const l of this.lasers.values()) l.live = false;
     for (const e of w.list) {
       if (e.dead || e.aimTarget < 0 || e.kind !== 'unit') continue;
