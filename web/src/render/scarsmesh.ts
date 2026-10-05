@@ -261,7 +261,7 @@ const HULK_COLOR = /* glsl */ `
     float scN = texture2D( fogNoise, vFogP.xz * 1.9 + vFogP.y * 0.8 ).r;
     float scN2 = texture2D( fogNoise, vFogP.xz * 6.3 - vFogP.y * 2.1 ).g;
     float scRust = smoothstep( 0.32, 0.72, vColor.r + ( scN - 0.5 ) * 0.7 + ( scN2 - 0.5 ) * 0.25 );
-    vec3 scChar = vec3( 0.011, 0.0095, 0.0085 ) * ( 0.8 + 0.5 * scN2 );
+    vec3 scChar = vec3( 0.03, 0.027, 0.024 ) * ( 0.75 + 0.6 * scN2 );
     vec3 scRustC = mix( vec3( 0.13, 0.042, 0.014 ), vec3( 0.075, 0.03, 0.012 ), scN );
     diffuseColor.rgb = mix( scChar, scRustC, scRust ) * vColor.g;
   }
