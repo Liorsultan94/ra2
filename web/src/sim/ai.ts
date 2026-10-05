@@ -264,8 +264,8 @@ export class AIController implements Controller {
     let threat = 0;
     w.queryRadius(x, y, r, (o) => {
       if (!w.isEnemy(this.pid, o.owner)) return;
-      // only what we know of: structures we have found, units we see now (fog of war, night.ts)
-      if (o.kind === 'building' ? !this.knowsBuilding(o) : !w.sees(this.pid, o)) return;
+      // by night only what we know of: structures we have found, units we see now (night.ts)
+      if (w.night && (o.kind === 'building' ? !this.knowsBuilding(o) : !w.sees(this.pid, o))) return;
       const od = DEFS[o.def];
       if (!od.weapon || Math.hypot(o.x - x, o.y - y) > r) return;
       const air = airReach(od); // main + secondary weapon (an RPG + MANPADS team counts as 'yes')
@@ -284,8 +284,8 @@ export class AIController implements Controller {
     let bestScore = 0;
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
-      // only targets we know of: structures we have found, harvesters we see now (fog of war, night.ts)
-      if (e.kind === 'building' ? !this.knowsBuilding(e) : !w.sees(this.pid, e)) continue;
+      // by night only targets we know of: structures we have found, harvesters we see now (night.ts)
+      if (w.night && (e.kind === 'building' ? !this.knowsBuilding(e) : !w.sees(this.pid, e))) continue;
       let value: number;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
@@ -762,8 +762,8 @@ export class AIController implements Controller {
     let airThreat: Entity | null = null;
     w.queryRadius(threatened.x, threatened.y, 10, (o) => {
       if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp) return;
-      // only threats we can see, or the one that just fired at us (it gave itself away: night.ts)
-      if (o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
+      // by night only threats we can see, or the one that just fired at us (it gave itself away: night.ts)
+      if (w.night && o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
       if (w.isAir(o)) airThreat ??= o;
       else threat ??= o;
     });
