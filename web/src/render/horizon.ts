@@ -6,7 +6,7 @@ import { FOG_GLSL, type FogOfWar } from './fog';
 import { CITY_NIGHT } from './models/citybldgs';
 import { RIVER } from './water';
 import { HZ_CELL, HZ_MARGIN, HZ_RADIUS, horizonWorld, type HorizonWorld } from './horizonworld';
-import { radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
+import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /*
  * The world past the map edge, out to the horizon (render only; see horizonworld.ts for the
@@ -175,7 +175,7 @@ export class Horizon {
   private lights: { pos: number[]; col: number[]; size: number[] } = { pos: [], col: [], size: [] };
   private beamMesh: THREE.Mesh | null = null;
   private lampPos: THREE.Vector3 | null = null;
-  /** Frustum culling sectors of the far meshes (sectors.ts): 12 wedges round the map centre, 3 rings. */
+  /** Frustum culling sectors of the forest cards and towns (sectors.ts): 12 wedges round the map centre, 3 rings. */
   private sectors: SectorOf;
 
   constructor(
@@ -409,8 +409,10 @@ export class Horizon {
     // night lights / lighthouse beam switch (the ring is always in view of any camera that sees the outskirts)
     mesh.onBeforeRender = () => this.update();
     mesh.receiveShadow = false;
-    // (in sectors: from the RTS camera the far ring is almost never on screen; GameRenderer also calls update())
-    this.group.add(...splitMeshBySector(mesh, this.sectors));
+    // (in sectors: from the RTS camera the far ring is almost never on screen; GameRenderer also calls update()).
+    // Near the map 64 unit cells (a camera over the map catches big pieces' spheres), radial pieces further out.
+    const { w: mw, h: mh } = this.map;
+    this.group.add(...splitMeshBySector(mesh, hybridSectors(mw / 2, mh / 2, 260, 64, 12, [400])));
   }
 
   // ------------------------------------------------------------------ water
@@ -1128,7 +1130,7 @@ export class Horizon {
     mesh.name = 'horizon-harbour';
     mesh.castShadow = this.quality === 'high';
     mesh.receiveShadow = this.quality === 'high';
-    this.group.add(...splitMeshBySector(mesh, this.sectors));
+    this.group.add(...splitMeshBySector(mesh, gridSectors(64)));
     this.buildBeam();
   }
 

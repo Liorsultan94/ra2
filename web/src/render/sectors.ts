@@ -36,6 +36,16 @@ export function radialSectors(cx: number, cz: number, wedges: number, bands: num
 }
 
 /**
+ * Square cells of `size` within `r0` of (cx, cz) (the part a camera over the map can come close to: small
+ * pieces, tight spheres), radial sectors beyond it (few big pieces, only a low camera sees them).
+ */
+export function hybridSectors(cx: number, cz: number, r0: number, size: number, wedges: number, bands: number[]): SectorOf {
+  const grid = gridSectors(size);
+  const radial = radialSectors(cx, cz, wedges, bands);
+  return (x, z) => (Math.hypot(x - cx, z - cz) < r0 ? grid(x, z) : -1 - radial(x, z));
+}
+
+/**
  * Split a static mesh by the sector of each triangle's centroid. Returns the pieces (in ascending sector
  * order, triangles in their original order within a piece), or `[mesh]` when it all falls in one sector.
  */
