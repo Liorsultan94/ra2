@@ -306,7 +306,7 @@ export class Outskirts {
           const { u, v } = this.world.seaV(x, y);
           const sea = this.world.sea;
           const hb = u > sea.harbour[0] && u < sea.harbour[1];
-          const k = 1 - smoothstep(hb ? -46 : -12, hb ? -40 : -4, v);
+          const k = smoothstep(hb ? -46 : -12, hb ? -40 : -4, v);
           const c = hb ? [0.52, 0.52, 0.5] : [0.84, 0.76, 0.58];
           for (let j = 0; j < 3; j++) t[j] += (c[j] - t[j]) * k;
           blend *= 1 - k;

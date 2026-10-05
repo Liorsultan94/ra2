@@ -107,6 +107,16 @@ function slabGeo(): THREE.BufferGeometry {
   return prep(g);
 }
 
+/**
+ * Create the batch's per-instance colour texture now: three adds it (and with it the USE_BATCHING_COLOR
+ * program variant) at the first setColorAt, which would compile a new program mid-battle at the first
+ * crater / hulk instead of in the warm-up.
+ */
+function initBatchColors(mesh: THREE.BatchedMesh) {
+  const m = mesh as unknown as { _colorsTexture: unknown; _initColorsTexture?: () => void };
+  if (m._colorsTexture === null && typeof m._initColorsTexture === 'function') m._initColorsTexture();
+}
+
 export const enum Piece {
   Rock = 0,
   Rock2 = 1,
@@ -151,6 +161,7 @@ export class ScarPieces {
     this.mesh.frustumCulled = false;
     this.mesh.name = 'scars-pieces';
     this.mesh.visible = false;
+    initBatchColors(this.mesh);
     for (const g of geos) this.geoIds.push(this.mesh.addGeometry(g));
   }
 
@@ -279,6 +290,7 @@ export class ScarHulks {
     this.mesh.frustumCulled = false;
     this.mesh.name = 'scars-hulks';
     this.mesh.visible = false;
+    initBatchColors(this.mesh);
   }
 
   get vertsUsed() {

@@ -187,7 +187,7 @@ const WET = /* glsl */ `
       roughnessFactor = mix( roughnessFactor, 0.07, scPud );
       float scFr = 0.04 + 0.96 * pow( 1.0 - clamp( dot( normal, normalize( vViewPosition ) ), 0.0, 1.0 ), 5.0 );
       vec3 scSky = hazeColor / ( 1.0 + max( hazeColor.r, max( hazeColor.g, hazeColor.b ) ) );
-      totalEmissiveRadiance += scSky * scPud * ( 0.12 + 0.8 * scFr );
+      totalEmissiveRadiance += scSky * scPud * ( 0.04 + 0.75 * scFr );
     }
   }
   // embers glow in a fresh crater for a few seconds

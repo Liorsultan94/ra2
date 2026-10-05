@@ -261,7 +261,7 @@ export class Horizon {
     if (W.sea) {
       const { u, v } = W.seaV(x, y);
       const hb = u > W.sea.harbour[0] && u < W.sea.harbour[1];
-      const k = 1 - ss(hb ? -46 : -12, hb ? -40 : -4, v);
+      const k = ss(hb ? -46 : -12, hb ? -40 : -4, v);
       mix(hb ? [0.5, 0.5, 0.48] : [0.84, 0.76, 0.58], k);
       fk *= 1 - k;
     }

@@ -82,10 +82,14 @@ function cropMaterial(fog: FogOfWar, sway: number, rough = 0.92): THREE.MeshStan
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vSway;')
       // the bent-over ears catch the light: the rolling sheen over a wheat field
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= 1.0 + vSway * 0.22;');
+      // (plus a fine grain of ears / leaves so the rows do not read as smooth plastic ridges)
+      .replace(
+        '#include <color_fragment>',
+        '#include <color_fragment>\ndiffuseColor.rgb *= ( 1.0 + vSway * 0.22 ) * ( 0.8 + 0.36 * ( texture2D( fogNoise, vFogP.xz * 3.1 ).r * 0.55 + texture2D( fogNoise, vFogP.xz * 11.0 ).g * 0.45 ) );',
+      );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'fog2-cropsway';
+  mat.customProgramCacheKey = () => 'fog2-cropsway2';
   return mat;
 }
 
