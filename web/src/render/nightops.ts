@@ -383,7 +383,7 @@ export class FlareFx {
       d.halo.scale.setScalar(1.7 + 1.2 * k);
       d.chuteMat.color.setRGB(0.25 + 0.55 * k, 0.24 + 0.52 * k, 0.21 + 0.45 * k);
       // one real light each, for the nearest few (the shared pool ranks them with the fires and blasts)
-      if (i < lit) fx.lights.sustain(f.x, f.y - 0.5, f.z, 7.5 * k, 0xfff0cc, 0.08);
+      if (i < lit) fx.lights.sustain(f.x, f.y - 0.5, f.z, 9 * k, 0xfff0cc, 0.08);
       // the smoke trail it leaves as it sinks and swings
       const acc = (this.smokeAcc.get(f.id) ?? 0) + dt * fx.rate * 9;
       let n = Math.floor(acc);
@@ -402,8 +402,8 @@ export class FlareFx {
       // the lit area widens as the flare sinks a little, then tightens near the ground
       const r = Math.min(FLARE_RADIUS + 0.5, 3 + h * 0.85);
       const k = f.k * (0.35 + 0.65 * dark) * Math.min(1, 2.2 / Math.sqrt(h));
-      n.pool(f.x, f.g, f.z, 0, r * 2, r * 2, 0.36 * k, 0.33 * k, 0.26 * k);
-      n.pool(f.x, f.g, f.z, 0, r * 1.1, r * 1.1, 0.22 * k, 0.2 * k, 0.15 * k);
+      n.pool(f.x, f.g, f.z, 0, r * 2, r * 2, 0.5 * k, 0.46 * k, 0.36 * k);
+      n.pool(f.x, f.g, f.z, 0, r * 1.1, r * 1.1, 0.3 * k, 0.27 * k, 0.2 * k);
     }
   };
 
