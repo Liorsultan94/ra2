@@ -172,7 +172,8 @@ export class AIController implements Controller {
     this.thinks++;
     const mine = w.list.filter((e) => !e.dead && e.owner === this.pid);
     const buildings = mine.filter((e) => e.kind === 'building');
-    const units = mine.filter((e) => e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+    // (soldiers lying wounded don't count as fighting units, and helicopters on a repair trip are left alone: medic.ts, helipad.ts)
+    const units = mine.filter((e) => e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound && !e.heli);
 
     const conyard = buildings.find((b) => buildingDef(b.def).role === 'conyard');
     if (!conyard) {
@@ -204,7 +205,7 @@ export class AIController implements Controller {
     const w = this.world;
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
-      if (e.kind === 'unit' && (unitDef(e.def).temp || e.inside >= 0)) continue;
+      if (e.kind === 'unit' && (unitDef(e.def).temp || e.inside >= 0 || e.wound)) continue;
       if (!w.visibleTo(this.pid, e.x, e.y)) continue;
       const it = this.intel.get(e.id);
       if (it) {
@@ -493,6 +494,21 @@ export class AIController implements Controller {
       w.issue(this.pid, { type: 'produce', def: eng });
     }
 
+    // medics (medic.ts): a couple once it fields infantry
+    const med = `${f}_medic`;
+    if (w.canBuild(this.pid, med) && p.credits > 400) {
+      let soldiers = 0;
+      let medics = 0;
+      for (const u of units) {
+        const ud = unitDef(u.def);
+        if (ud.medic) medics++;
+        else if (ud.category === 'infantry' && ud.weapon) soldiers++;
+      }
+      for (const q of iq) if (q.def === med) medics++;
+      const want = soldiers >= 3 ? (this.difficulty === 'hard' ? 3 : this.difficulty === 'easy' ? 1 : 2) : 0;
+      if (medics < want) w.issue(this.pid, { type: 'produce', def: med });
+    }
+
     // react to enemy air power (and drone launchers) with more anti-air
     const enemyAir = this.enemyAirCount();
     // dedicated AA counts fully, a Rocket Team (RPG + shoulder-fired AA missile) as half a launcher
@@ -601,7 +617,8 @@ export class AIController implements Controller {
     const combat = units.filter((u) => klass(u.def) !== 'none');
     this.manageStrikes(combat.filter((u) => klass(u.def) === 'strike'));
     this.manageJets(combat.filter((u) => klass(u.def) === 'jet'));
-    const force = combat.filter((u) => klass(u.def) !== 'strike' && klass(u.def) !== 'jet');
+    // (a medic at work on a wounded soldier is left to finish: medic.ts)
+    const force = combat.filter((u) => klass(u.def) !== 'strike' && klass(u.def) !== 'jet' && u.order.type !== 'treat');
     if (force.length === 0) return;
 
     if (micro > 0) this.manageRetreats(force);

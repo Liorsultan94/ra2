@@ -35,7 +35,7 @@ interface Entry {
 const loaded = new Map<string, { scene: THREE.Group; entry: Entry }>();
 
 const DEFAULT_LENGTH: Record<string, number> = {
-  rifle: 0.36, at: 0.36, engineer: 0.36, mortar: 0.4, fpvteam: 0.36, ewinf: 0.36, sniper: 0.36,
+  rifle: 0.36, at: 0.36, engineer: 0.36, mortar: 0.4, fpvteam: 0.36, ewinf: 0.36, sniper: 0.36, medic: 0.36,
   mbt: 1.05, mbt_heavy: 1.1, apc: 0.95, aa: 0.95, laser: 0.95, arty: 1.1, tos: 1.05, ew: 1.1, berge: 1.05,
   ugv: 0.6, robodog: 0.45, swarm: 1.0, missile_truck: 1.25, container: 1.15, harvester: 1.15, mcv: 1.25,
   uav: 0.9, heavy_uav: 1.2, jet: 1.1, fighter: 1.1, heli: 1.0, fpv: 0.18, micro: 0.16, shahed: 0.5,

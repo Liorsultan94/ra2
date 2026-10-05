@@ -666,7 +666,8 @@ describe('veterancy', () => {
     tank.hp = tank.maxHp = 1e6;
     for (let i = 0; i < 6; i++) v.spawnUnit('russia_rifle', 1, 44.5, 59.5 + i * 0.4);
     for (let t = 0; t < TPS * 60; t++) v.step();
-    const killed = 6 - v.list.filter((e) => !e.dead && e.owner === 1 && e.kind === 'unit').length;
+    // (a soldier who goes down wounded already earns the shooter the kill's experience: medic.ts)
+    const killed = 6 - v.list.filter((e) => !e.dead && !e.wound && e.owner === 1 && e.kind === 'unit').length;
     expect(killed).toBeGreaterThan(2);
     expect(tank.xp).toBe(killed * 150);
     expect(tank.rank).toBe(rankFor('usa_mbt', tank.xp));

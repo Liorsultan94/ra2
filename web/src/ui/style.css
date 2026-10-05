@@ -482,6 +482,22 @@ kbd {
   background: linear-gradient(90deg, currentColor calc(var(--k) * 100%), rgba(255, 255, 255, 0.12) 0);
   border-radius: 2px;
 }
+/* soldier down wounded: bleed-out countdown + time-left bar (sim/medic.ts) */
+.sp-wound {
+  margin-top: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #ff7a62;
+  font-weight: 600;
+}
+.sp-wound i {
+  display: block;
+  width: 104px;
+  height: 4px;
+  margin-top: 2px;
+  background: linear-gradient(90deg, currentColor calc(var(--k) * 100%), rgba(255, 255, 255, 0.12) 0);
+  border-radius: 2px;
+}
 /* sniper lock-on: "Aiming 2.1s" + progress (sim/sniper.ts) */
 .sp-aim {
   margin-top: 3px;

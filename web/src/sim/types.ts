@@ -141,6 +141,10 @@ export interface UnitDef extends BaseDef {
    * (seeded roll). Missiles are decoyed onto a flare, gun / flak / beam shots just miss.
    */
   evasion?: number;
+  /** Rotary-wing combat aircraft (attack helicopters): flies home to its airbase to land and be repaired (helipad.ts). */
+  rotary?: boolean;
+  /** Combat medic (medic.ts): treats wounded friendly soldiers and slowly heals hurt ones nearby. Unarmed. */
+  medic?: boolean;
 }
 
 export interface BuildingDef extends BaseDef {
@@ -186,7 +190,12 @@ export type Order =
   | { type: 'harvest' }
   | { type: 'capture'; target: number }
   | { type: 'enter'; target: number }
-  | { type: 'deploy' };
+  | { type: 'deploy' }
+  /**
+   * Medic (medic.ts): run to a wounded friendly soldier and treat him. auto = picked up on his own (not a player
+   * order); x, y: the attack-move he was on, resumed afterwards.
+   */
+  | { type: 'treat'; target: number; auto?: boolean; x?: number; y?: number };
 
 /**
  * Fog of war rule (World option, the same for every player):
@@ -269,6 +278,35 @@ export interface Sortie {
   /** Automatic re-strike: the target kept after a bomb release (-1 = none), while the attack order is the one given at tick autoAt. */
   auto: number;
   autoAt: number;
+}
+
+/**
+ * A soldier down WOUNDED instead of dead (medic.ts): lying on the ground, out of the fight and untargetable,
+ * bleeding out at tick `until` unless a medic treats him.
+ */
+export interface WoundState {
+  at: number; // tick he went down
+  until: number; // tick he bleeds out
+  by: number; // player who put him down (credited with the kill if he bleeds out), -1 = none
+  healer: number; // medic working on / running to him, -1 = none
+  order: Order; // the order he had: he picks it up again once he is back on his feet
+}
+
+/**
+ * Attack helicopter flying home to an airbase to land and be repaired (helipad.ts): back to the pad ->
+ * descend -> on the ground under repair -> lift off -> resume its previous task.
+ */
+export interface HeliPad {
+  phase: 'return' | 'land' | 'landed' | 'takeoff';
+  base: number; // airbase (airfield) id
+  spot: number; // landing spot index on that airbase (helipadSpots)
+  x: number; // landing spot (world tiles)
+  y: number;
+  at: number; // tick the trip began (a newer order from the owner cancels it)
+  manual: boolean; // sent by its owner (not the automatic damage return)
+  order: Order; // what it was doing: resumed after the repair
+  ox: number; // where it was: it hovers back there when it had no attack / attack-move order
+  oy: number;
 }
 
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
@@ -371,6 +409,13 @@ export interface Entity {
   // lock-on weapons (sniper.ts): the target being aimed at (-1 = none) and the ticks aimed so far
   aimTarget: number;
   aimTicks: number;
+
+  // wounded soldiers and medics (medic.ts)
+  wound: WoundState | null; // down wounded, waiting for a medic
+  treat: number; // medic: ticks spent treating the current patient (0 = not at work)
+
+  // attack helicopters (helipad.ts): on its way to / at an airbase for repair
+  heli: HeliPad | null;
 }
 
 export interface QueueItem {
@@ -498,7 +543,11 @@ export type Command =
   /** Send the garrison out of an occupied civilian building (garrison.ts). */
   | { type: 'evacuate'; id: number }
   /** Automatic base defence on / off for the issuing player (basedefense.ts). */
-  | { type: 'autoDefend'; on: boolean };
+  | { type: 'autoDefend'; on: boolean }
+  /** Medics: treat this wounded friendly soldier (medic.ts). */
+  | { type: 'treat'; ids: number[]; target: number }
+  /** Attack helicopters: fly to this own airbase, land and be repaired (helipad.ts). */
+  | { type: 'land'; ids: number[]; target: number };
 
 export type SimEvent =
   | { t: 'fire'; id: number; weapon: string; x: number; y: number; tx: number; ty: number; targetId: number; owner: number }
@@ -517,6 +566,10 @@ export type SimEvent =
   | { t: 'decoy'; id: number; owner: number; proj: number; x: number; y: number; z: number; vx: number; vy: number; vz: number }
   | { t: 'intercept'; x: number; y: number; id: number }
   | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building'; cause?: 'crushed' }
+  /** A soldier went down wounded (by: the player who shot him) / a medic got him back on his feet / he bled out (a 'death' follows). */
+  | { t: 'wounded'; id: number; def: string; owner: number; by: number; x: number; y: number; phase: 'down' | 'revived' | 'bledOut'; medic?: number }
+  /** Attack helicopter repair trip (helipad.ts): heading home, wheels down at the airbase, lifting off repaired. */
+  | { t: 'heliPad'; id: number; owner: number; what: 'return' | 'landed' | 'takeoff'; x: number; y: number }
   /** A vehicle (by, byDef, byOwner) ran over infantry (id); the 'death' event (cause 'crushed') follows. */
   | { t: 'crushed'; id: number; def: string; owner: number; by: number; byDef: string; byOwner: number; x: number; y: number }
   /** Infantry (id) saw a vehicle (by) coming and jumps out of its way; dive = close call. yield = a friendly vehicle. */

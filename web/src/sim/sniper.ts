@@ -44,7 +44,7 @@ export function aimStatus(e: Entity): { k: number; left: number } | null {
 
 /** Can the shooter hold a lock on t: alive, out in the open, and in its owner's sight. */
 export function aimSees(w: World, e: Entity, t: Entity): boolean {
-  if (t.dead || t.inside >= 0) return false;
+  if (t.dead || t.inside >= 0 || t.wound) return false;
   return e.owner < 0 || w.visibleTo(e.owner, t.x, t.y);
 }
 
@@ -75,9 +75,11 @@ export function aimStep(w: World, e: Entity, t: Entity, wpn: WeaponDef): boolean
 export function aimUpkeep(w: World, e: Entity) {
   if (e.aimTarget < 0) return;
   const t = w.get(e.aimTarget);
-  if (!t || t.inside >= 0 || e.targetId !== e.aimTarget || (e.moving && e.inside < 0)) {
-    if (t && t.inside >= 0 && e.order.type === 'attack' && e.order.target === t.id) e.order = { type: 'idle' };
-    if (t && t.inside >= 0) e.targetId = -1;
+  // (a target lying wounded is out of the fight too: medic.ts)
+  const gone = !!t && (t.inside >= 0 || !!t.wound);
+  if (!t || gone || e.targetId !== e.aimTarget || (e.moving && e.inside < 0)) {
+    if (t && gone && e.order.type === 'attack' && e.order.target === t.id) e.order = { type: 'idle' };
+    if (t && gone) e.targetId = -1;
     cancelAim(e);
   }
 }

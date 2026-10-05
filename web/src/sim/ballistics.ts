@@ -3,6 +3,7 @@ import { standHeight } from './map';
 import { DECOY_AGE, DECOY_RANGE, evasionChance, releaseDecoy, stepDecoy } from './stealth';
 import { INTERCEPTABLE, TPS, type Entity, type Flight, type Projectile, type WeaponDef } from './types';
 import type { World } from './world';
+import { bigBlast } from './medic';
 
 /*
  * Deterministic 3D projectile physics.
@@ -642,6 +643,8 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
   const t = w.get(p.targetId);
   // an intercepted-but-surviving missile arrives with a damaged warhead
   const dmgMul = p.hits ? Math.max(0.5, 1 - 0.15 * p.hits) : 1;
+  // artillery shells, missiles and bombs this heavy leave nobody wounded (medic.ts)
+  const big = bigBlast(wpn);
   let direct = false;
   if (t && onTarget) {
     // active protection systems defeat rockets and missiles before they hit
@@ -657,11 +660,11 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
     if (near && (!w.isAir(t) || wpn.air !== 'no')) {
       // small warheads against fast jets (MANPADS: WeaponDef.vsFixedWing)
       const jet = wpn.vsFixedWing !== undefined && t.kind === 'unit' && !!unitDef(t.def).fixedWing && w.isAir(t);
-      w.damage(t, wpn.damage * dmgMul * (jet ? wpn.vsFixedWing! : 1), wpn.warhead, src);
+      w.damage(t, wpn.damage * dmgMul * (jet ? wpn.vsFixedWing! : 1), wpn.warhead, src, false, big);
       direct = true;
     }
   }
-  if (wpn.splash) w.splash(p.x, p.y, wpn.splash, wpn.damage * 0.7 * dmgMul, wpn.warhead, src, direct ? (t?.id ?? -1) : -1);
+  if (wpn.splash) w.splash(p.x, p.y, wpn.splash, wpn.damage * 0.7 * dmgMul, wpn.warhead, src, direct ? (t?.id ?? -1) : -1, big);
   const air = p.z - groundZ(w, p.x, p.y) > 0.6;
   w.events.push({ t: 'impact', x: p.x, y: p.y, z: p.z, weapon: p.weapon, air, direct });
 }

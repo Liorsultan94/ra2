@@ -25,6 +25,8 @@ import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import { releaseDefender, setAutoDefend, updateBaseDefense } from './basedefense';
 import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from './sniper';
 import { evades, lowObsFactor, rangeVs } from './stealth';
+import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, updateMedic, updateWounded, woundUnit } from './medic';
+import { heliGrounded, isHeli, orderLand, updateHeli } from './helipad';
 import {
   CATEGORIES,
   TPS,
@@ -125,6 +127,10 @@ export class World {
   bridges: BridgeState[] = [];
   /** Fog of war rule (classic: explored = revealed for good; modern: explored ground outside sight is fogged). */
   readonly fog: FogMode;
+  /** The match seed (seeded per-event rolls that must not disturb the shared RNG stream, e.g. medic.ts wound rolls). */
+  readonly seed: number;
+  /** Soldiers down wounded, waiting for a medic (medic.ts): the short list medics search instead of scanning everything. */
+  wounded: Entity[] = [];
   private nextId = 1;
   private pending: { player: number; cmd: Command }[] = [];
   private grid: Entity[][];
@@ -133,6 +139,7 @@ export class World {
 
   constructor(opts: WorldOptions) {
     this.rng = new Rng(opts.seed ?? 12345);
+    this.seed = (opts.seed ?? 12345) | 0;
     this.fog = opts.fog === 'classic' ? 'classic' : 'modern';
     this.map = createMap(opts.map ?? 'frontline', opts.seed ?? 12345);
     const { w, h } = this.map;
@@ -200,6 +207,12 @@ export class World {
   get(id: number): Entity | undefined {
     const e = this.entities.get(id);
     return e && !e.dead ? e : undefined;
+  }
+
+  /** A live entity that can be fought: not a soldier lying wounded (medic.ts: nobody targets him). */
+  foe(id: number): Entity | undefined {
+    const e = this.entities.get(id);
+    return e && !e.dead && !e.wound ? e : undefined;
   }
 
   def(e: Entity): Def {
@@ -314,6 +327,9 @@ export class World {
       sortie: null,
       aimTarget: -1,
       aimTicks: 0,
+      wound: null,
+      treat: 0,
+      heli: null,
     };
   }
 
@@ -374,9 +390,9 @@ export class World {
     return Math.hypot(t.x - e.x, t.y - e.y);
   }
 
-  /** Airborne (a jet on its wheels at its airbase is a ground target: airbase.ts). */
+  /** Airborne (a jet on its wheels at its airbase, or a helicopter set down there for repair, is a ground target: airbase.ts, helipad.ts). */
   isAir(e: Entity) {
-    return e.kind === 'unit' && !!unitDef(e.def).air && !jetGrounded(e);
+    return e.kind === 'unit' && !!unitDef(e.def).air && !jetGrounded(e) && !heliGrounded(e);
   }
 
   canHit(wpn: WeaponDef, t: Entity) {
@@ -460,7 +476,8 @@ export class World {
   private rebuildGrid() {
     for (const cell of this.grid) cell.length = 0;
     for (const e of this.list) {
-      if (e.dead || e.inside >= 0) continue;
+      // (soldiers lying wounded are off the grid: nothing targets, splashes, crushes or shoves them; medic.ts)
+      if (e.dead || e.inside >= 0 || e.wound) continue;
       const gx = Math.min(this.gridW - 1, Math.max(0, Math.floor(e.x / SPATIAL_CELL)));
       const gy = Math.min(this.gridH - 1, Math.max(0, Math.floor(e.y / SPATIAL_CELL)));
       this.grid[gy * this.gridW + gx].push(e);
@@ -516,12 +533,15 @@ export class World {
     const p = this.players[pid];
     if (!p || p.defeated) return;
     const own = (ids: number[]) => {
-      const units = ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop);
+      // (a soldier lying wounded takes no orders: medic.ts)
+      const units = ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound);
       // an explicit order: base defence leaves these units alone for a while (basedefense.ts);
       // a stance change only calls them off a defence run
       for (const e of units) {
         if (cmd.type !== 'stance') e.orderAt = this.tick;
         if (e.defend) releaseDefender(this, e, cmd.type === 'stance');
+        // a medic given another order leaves his patient for someone else (medic.ts)
+        if (cmd.type !== 'stance' && cmd.type !== 'treat') releasePatient(this, e);
       }
       return units;
     };
@@ -539,7 +559,7 @@ export class World {
         break;
       }
       case 'attack': {
-        const t = this.get(cmd.target);
+        const t = this.foe(cmd.target);
         if (!t) break;
         for (const e of own(cmd.ids)) {
           const d = unitDef(e.def);
@@ -676,6 +696,18 @@ export class World {
       case 'superweapon':
         fireSuperweapon(this, pid, cmd.x, cmd.y); // validated there (superweapons.ts)
         break;
+      case 'treat': {
+        // medics to a wounded friendly soldier (medic.ts)
+        const t = this.get(cmd.target);
+        if (t && t.owner === pid && t.wound) orderTreat(this, own(cmd.ids), t);
+        break;
+      }
+      case 'land': {
+        // helicopters to an own airbase for repair (helipad.ts)
+        const b = this.get(cmd.target);
+        if (b && b.owner === pid && b.kind === 'building') orderLand(this, own(cmd.ids), b);
+        break;
+      }
       case 'evacuate': {
         const b = this.get(cmd.id);
         if (b && b.owner === pid && isGarrison(b)) ejectAll(this, b, false); // garrison.ts
@@ -927,6 +959,11 @@ export class World {
     e.progAt = this.tick;
   }
 
+  /** Walk one tick along the current path (medic.ts). Returns true when the destination is reached. */
+  walk(e: Entity, d: UnitDef): boolean {
+    return this.followPath(e, d);
+  }
+
   /** Advance along the path. Returns true when the destination is reached. */
   private followPath(e: Entity, d: UnitDef): boolean {
     if (!e.path) return true;
@@ -1042,9 +1079,9 @@ export class World {
     for (const e of this.list) {
       if (e.dead || e.kind !== 'unit' || e.inside >= 0 || e.para) continue;
       const d = unitDef(e.def);
-      if (d.supply || d.airlift || (e.sortie && e.z < 1)) continue;
+      if (d.supply || d.airlift || (e.sortie && e.z < 1) || (e.heli && e.z < 1) || e.wound) continue;
       this.queryRadius(e.x, e.y, 1.2, (o) => {
-        if (o === e || o.kind !== 'unit' || o.id < e.id || o.para || (o.sortie && o.z < 1)) return;
+        if (o === e || o.kind !== 'unit' || o.id < e.id || o.para || (o.sortie && o.z < 1) || (o.heli && o.z < 1)) return;
         const od = unitDef(o.def);
         if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
         // heavy vehicles and infantry: enemies go under the tracks, the rest are shoved aside (crush.ts)
@@ -1120,7 +1157,7 @@ export class World {
     const d0 = DEFS[e.def];
     const two = d0.kind === 'unit' && !!d0.weapon2;
     this.queryRadius(e.x, e.y, range + 2, (t) => {
-      if (!this.isEnemy(e.owner, t.owner) || t.dead || (airOnly && !this.isAir(t))) return;
+      if (!this.isEnemy(e.owner, t.owner) || t.dead || t.wound || (airOnly && !this.isAir(t))) return;
       // the weapon for this target (main, or the secondary AA missile); unarmed (kamikaze steering) scans everything
       const wpn = d0.weapon ? this.weaponVs(e.def, t) : null;
       if (d0.weapon && !wpn) return;
@@ -1215,7 +1252,7 @@ export class World {
       e.burstTimer--;
       return;
     }
-    const t = this.get(e.targetId);
+    const t = this.foe(e.targetId);
     const d = DEFS[e.def];
     if (!t || !d.weapon) {
       e.burstLeft = 0;
@@ -1268,25 +1305,27 @@ export class World {
     launch(this, e, t, wpn, tx, ty);
   }
 
-  splash(x: number, y: number, r: number, dmg: number, warhead: keyof typeof VERSUS, src: Entity, skip: number) {
+  /** big: a big explosion (medic.ts bigBlast): nobody it brings down is left wounded. */
+  splash(x: number, y: number, r: number, dmg: number, warhead: keyof typeof VERSUS, src: Entity, skip: number, big = false) {
     this.queryRadius(x, y, r, (o) => {
       if (o.id === skip || !this.isEnemy(src.owner, o.owner)) return;
       const dist = this.distTo({ x, y } as Entity, o);
       if (dist > r) return;
-      this.damage(o, dmg * (1 - dist / (r + 0.01)), warhead, src);
+      this.damage(o, dmg * (1 - dist / (r + 0.01)), warhead, src, false, big);
     });
   }
 
-  damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity, raw = false) {
+  /** big: the hit comes from a big explosion (medic.ts bigBlast): a soldier it brings down dies outright. */
+  damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity, raw = false, big = false) {
     if (!raw && t.inside >= 0) t = garrisonOf(this, t) ?? t; // garrisoned infantry: the house takes the hit (garrison.ts)
-    if (t.dead || bridgeProof(t)) return; // bridges take damage from impacts (bridges.ts)
+    if (t.dead || t.wound || bridgeProof(t)) return; // bridges take damage from impacts (bridges.ts); the wounded lie out of the fight (medic.ts)
     const d = DEFS[t.def];
     // veterancy: the shooter's firepower and the target's armour
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
     if (src.inside >= 0 && garrisonOf(this, src)) amount *= GARRISON_FIREPOWER;
     if (!raw && t.passengers.length && isGarrison(t)) amount = garrisonHit(this, t, amount, warhead, src);
-    // a jet on its wheels is soft-skinned, not an aircraft dodging flak (airbase.ts)
-    let dealt = amount * VERSUS[warhead][jetGrounded(t) ? 'light' : d.armor];
+    // a jet on its wheels (or a helicopter set down for repair) is soft-skinned, not an aircraft dodging flak (airbase.ts, helipad.ts)
+    let dealt = amount * VERSUS[warhead][jetGrounded(t) || heliGrounded(t) ? 'light' : d.armor];
     if (warhead === 'sniper' && d.armor === 'infantry') dealt = Math.max(dealt, t.hp); // one shot, one kill (sniper.ts)
     t.hp -= dealt;
     t.lastHurt = this.tick;
@@ -1304,12 +1343,19 @@ export class World {
         t.autoTarget = true;
       }
     }
-    if (t.hp <= 0) this.kill(t, src.owner, src);
+    if (t.hp <= 0) {
+      // a soldier may go down wounded instead (medic.ts): never to a sniper or a big explosion, never inside anything
+      if (canWound(this, t, warhead, big)) woundUnit(this, t, src.owner, src);
+      else this.kill(t, src.owner, src);
+    }
   }
 
+  /** Dies outright (no wounded state: crushing, the passengers of a destroyed vehicle, a defeated player's army...). */
   kill(t: Entity, by: number, killer?: Entity, cause?: 'crushed') {
     if (t.dead) return;
     t.hp = 0;
+    if (t.wound) forgetWounded(this, t);
+    releasePatient(this, t); // a medic killed on the job (medic.ts)
     if (t.passengers.length && isGarrison(t)) for (const p of ejectAll(this, t, true)) this.kill(p, by, killer); // garrison.ts
     for (const pid of t.passengers) {
       const p = this.get(pid);
@@ -1325,7 +1371,7 @@ export class World {
   }
 
   /** Veterancy: the unit that destroyed `victim` (or the launcher of the drone that did) gains its value as experience. */
-  private creditKill(killer: Entity, victim: Entity) {
+  creditKill(killer: Entity, victim: Entity) {
     let k = this.get(killer.id);
     if (k && k.spawner >= 0) k = this.get(k.spawner);
     if (!k || k.kind !== 'unit' || !this.isEnemy(k.owner, victim.owner) || !canRank(DEFS[k.def])) return;
@@ -1365,6 +1411,10 @@ export class World {
       this.updateKamikaze(e, d);
       return;
     }
+    if (e.wound) {
+      updateWounded(this, e); // lying wounded, bleeding out (medic.ts)
+      return;
+    }
     const jammed = e.jammedUntil > this.tick;
     if (jammed) e.cooldown = Math.max(e.cooldown, 2);
     if (d.selfHeal && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + d.selfHeal);
@@ -1378,6 +1428,7 @@ export class World {
       updateSortie(this, e, d); // airbase sortie cycle (airbase.ts)
       return;
     }
+    if (isHeli(d) && updateHeli(this, e, d)) return; // repair trip to the airbase (helipad.ts)
     if (d.air) {
       const alt = d.cruiseAlt ?? (d.model === 'heavy_uav' ? 2.0 : 1.7);
       e.z += Math.max(-0.05, Math.min(0.05, alt - e.z));
@@ -1387,6 +1438,7 @@ export class World {
       return;
     }
     if (e.order.type === 'idle' && (e.queue.length || e.patrol || e.guardId >= 0)) ordersIdle(this, e); // orders.ts
+    if (d.medic && updateMedic(this, e, d)) return; // treating the wounded (medic.ts)
     const o = e.order;
     if (d.weapon && !jammed && o.type !== 'attack' && autoFire(e) && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
     switch (o.type) {
@@ -1402,7 +1454,7 @@ export class World {
         break;
       case 'attackMove': {
         if (d.weapon) {
-          let t = this.airPreempt(e, this.get(e.targetId));
+          let t = this.airPreempt(e, this.foe(e.targetId));
           if (!t && this.tick >= e.scanAt && autoFire(e)) {
             e.scanAt = this.tick + 8;
             t = this.findTarget(e, d.sight) ?? undefined;
@@ -1429,7 +1481,7 @@ export class World {
         break;
       }
       case 'attack': {
-        const t = this.airPreempt(e, this.get(o.target));
+        const t = this.airPreempt(e, this.foe(o.target));
         if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t)) || !d.weapon) {
           e.order = { type: 'idle' };
           e.targetId = -1;
@@ -1503,7 +1555,7 @@ export class World {
       return;
     }
     const prof = d.model === 'shahed' ? { cruise: 2.3, dive: 3.2, weave: 0 } : d.model === 'fpv' ? { cruise: 0.55, dive: 1.3, weave: 0.45 } : { cruise: 1.0, dive: 2.0, weave: 0.15 };
-    let t = this.get(e.targetId);
+    let t = this.foe(e.targetId);
     if (!t || !this.isEnemy(e.owner, t.owner) || this.isAir(t)) {
       t = this.findTarget(e, 7) ?? undefined;
       e.targetId = t ? t.id : -1;
@@ -1554,8 +1606,9 @@ export class World {
     if (!t) return;
     const wpn = WEAPONS[d.weapon!];
     if (dist <= wpn.range && Math.abs(e.z - tz) < 0.5) {
-      this.damage(t, wpn.damage, wpn.warhead, e);
-      if (wpn.splash) this.splash(e.x, e.y, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id);
+      const big = bigBlast(wpn);
+      this.damage(t, wpn.damage, wpn.warhead, e, false, big);
+      if (wpn.splash) this.splash(e.x, e.y, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id, big);
       this.events.push({ t: 'impact', x: e.x, y: e.y, z: standHeight(this.map, e.x, e.y) + e.z, weapon: wpn.id, direct: true });
       this.remove(e);
     }
@@ -1575,7 +1628,7 @@ export class World {
     this.processBurst(e);
     aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (!d.weapon || d.engineer) return;
-    let t = this.airPreempt(e, this.get(e.targetId));
+    let t = this.airPreempt(e, this.foe(e.targetId));
     const tw = t ? this.weaponVs(e.def, t) : null;
     if (t && (!tw || !this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, tw, t))) t = undefined;
     if (!t && this.tick >= e.scanAt) {
@@ -1624,7 +1677,7 @@ export class World {
       return;
     }
     if (!d.weapon) return;
-    let t = this.get(e.targetId);
+    let t = this.foe(e.targetId);
     if (t && (!this.isEnemy(e.owner, t.owner) || !autoFire(e))) t = undefined;
     t = this.airPreempt(e, t);
     if (!t && this.tick >= e.scanAt && autoFire(e)) {
@@ -1912,7 +1965,7 @@ export class World {
       const bw = WEAPONS[d.weapon];
       if (bw.intercept) tryIntercept(this, b, bw);
       const range = this.weaponRange(b, bw);
-      let t = this.get(b.targetId);
+      let t = this.foe(b.targetId);
       if (t && (this.distTo(b, t) > rangeVs(this, b, bw, t) || !this.isEnemy(b.owner, t.owner))) t = undefined;
       if (!t && this.tick >= b.scanAt) {
         b.scanAt = this.tick + 6;

@@ -89,6 +89,12 @@ export interface AnimState {
   elev?: number;
   /** Infantry animation detail: 0 / undefined = full (leg IK, gestures), 1 = cheap cycle (far zoom / low quality), 2 = off screen (clocks only). */
   lod?: number;
+  /** Infantry: seconds since the soldier went down wounded (sim medic.ts; undefined / 0 = not wounded): lying on his back, an arm moving now and then. Kept on the wreck when he bleeds out. */
+  wounded?: number;
+  /** Infantry (medics): seconds into treating a wounded soldier (undefined / 0 = not at work): kneeling, hands working on the patient in front. */
+  treat?: number;
+  /** Helicopters set down at an airbase (sim helipad.ts): 1 = on the ground (level, no hover sway, rotors idling), blending in / out with the altitude. */
+  landed?: number;
 }
 
 export interface Model {

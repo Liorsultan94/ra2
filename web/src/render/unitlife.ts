@@ -356,6 +356,12 @@ export class UnitLife {
     if (ex) this.walkOut(e.id, ex, model, a, vis, dt);
     a.dig = 0;
     if (e.para || DEFS[e.def].model === 'mortar') return;
+    // lying wounded, or a medic kneeling at work (sim/medic.ts): no digging in, and out of any foxhole
+    if (e.wound || e.treat > 0) {
+      if (st.t > 0) this.leave(st);
+      st.still = 0;
+      return;
+    }
     const moved = Math.abs(root.position.x - st.x) + Math.abs(root.position.z - st.z) > 0.06 || e.moving || !!ex;
     if (moved) {
       st.x = root.position.x;
