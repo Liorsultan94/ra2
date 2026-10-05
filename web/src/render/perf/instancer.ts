@@ -115,9 +115,33 @@ export class AutoInstancer {
       }
       if (n > p.cap) this.grow(p, n);
       const arr = p.mesh.instanceMatrix.array as Float32Array;
+      // bounds of this frame's instances: the pool is frustum culled like a plain mesh (the water
+      // reflection's narrow view, the shadow pass), instead of always drawn
+      const g = p.mesh.geometry;
+      if (!g.boundingSphere) g.computeBoundingSphere();
+      const gs = g.boundingSphere!;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let z0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      let z1 = -Infinity;
       for (let i = 0; i < n; i++) {
         const m = p.members[i] as Tracked;
-        arr.set(m.matrixWorld.elements, i * 16);
+        const e = m.matrixWorld.elements;
+        arr.set(e, i * 16);
+        // the geometry's sphere centre in world space, its radius scaled by the largest axis scale
+        const cx = e[0] * gs.center.x + e[4] * gs.center.y + e[8] * gs.center.z + e[12];
+        const cy = e[1] * gs.center.x + e[5] * gs.center.y + e[9] * gs.center.z + e[13];
+        const cz = e[2] * gs.center.x + e[6] * gs.center.y + e[10] * gs.center.z + e[14];
+        const sc = Math.sqrt(Math.max(e[0] * e[0] + e[1] * e[1] + e[2] * e[2], e[4] * e[4] + e[5] * e[5] + e[6] * e[6], e[8] * e[8] + e[9] * e[9] + e[10] * e[10]));
+        const r = gs.radius * sc;
+        if (cx - r < x0) x0 = cx - r;
+        if (cy - r < y0) y0 = cy - r;
+        if (cz - r < z0) z0 = cz - r;
+        if (cx + r > x1) x1 = cx + r;
+        if (cy + r > y1) y1 = cy + r;
+        if (cz + r > z1) z1 = cz + r;
         const st = m.__pfi!;
         st.f = f;
         if (!st.hid) {
@@ -126,6 +150,10 @@ export class AutoInstancer {
         }
         next.push(m);
       }
+      const bs = (p.mesh.boundingSphere ??= new THREE.Sphere());
+      bs.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      bs.radius = 0.5 * Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+      p.mesh.frustumCulled = Number.isFinite(bs.radius);
       p.mesh.count = n;
       p.mesh.visible = true;
       const im = p.mesh.instanceMatrix;

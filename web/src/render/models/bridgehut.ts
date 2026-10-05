@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from '../fog';
+import { onFogRelease } from '../fogcache';
 import type { Builder } from './registry';
 import type { Model } from './types';
 
@@ -14,6 +15,8 @@ import type { Model } from './types';
  */
 
 const mats = new Map<string, THREE.Material>();
+// a finished match: drop the materials bound to its fog (fogcache.ts); the next match binds its own
+onFogRelease(() => mats.clear());
 function mat(key: string, fog: FogOfWar | null, make: () => THREE.MeshStandardMaterial) {
   let m = mats.get(key);
   if (!m) {

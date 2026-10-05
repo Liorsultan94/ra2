@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { StructureKind, Tile, type GameMap, type Structure } from '../../sim/map';
 import { hash2 } from '../../sim/rng';
 import type { FogOfWar } from '../fog';
+import { onFogRelease } from '../fogcache';
 import { GeoBuilder, type SceneryLod } from '../geo';
 import { surfaceHeight } from '../ground';
 import type { HouseHandle } from '../scenery';
@@ -788,6 +789,8 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
 // --------------------------------------------------- entity models (flag + lamps)
 
 const flagMat = new Map<string, THREE.Material>();
+// a finished match: drop the material bound to its fog (fogcache.ts); the next match binds its own
+onFogRelease(() => flagMat.delete('f'));
 
 function cityModel(kind: StructureKind): Builder {
   return (style: ModelStyle, fog: FogOfWar | null): Model => {

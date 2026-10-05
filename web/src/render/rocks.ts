@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { phoneCaps } from './devicecaps';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
@@ -344,7 +345,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   // photoscanned rocks (medium: the far model near too, it is as light as the procedural rock; ?photo=0 keeps these)
   const photoOff = typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search);
   if (!low && !photoOff && typeof createImageBitmap !== 'undefined')
-    void loadPhotoRocks(quality === 'high' ? 1024 : 512).then((pr) => {
+    void loadPhotoRocks(quality === 'high' && !phoneCaps() ? 1024 : 512).then((pr) => {
       if (!pr) return;
       const pmat = photoRockMaterial(pr, biome ?? 'temperate', fog);
       geos.forEach(([hi, lo], k) => {

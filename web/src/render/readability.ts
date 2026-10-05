@@ -471,6 +471,43 @@ const MASK_FRAG = /* glsl */ `
 uniform vec3 color;
 void main() { gl_FragColor = vec4(color, 1.0); }`;
 
+/** Instanced mask: the same transform as MASK_VERT (project_vertex applies instanceMatrix), the colour per instance. */
+const MASK_INST_VERT = /* glsl */ `
+#include <common>
+varying vec3 vMaskColor;
+void main() {
+  #include <begin_vertex>
+  #include <project_vertex>
+  #ifdef USE_INSTANCING_COLOR
+    vMaskColor = instanceColor;
+  #else
+    vMaskColor = vec3(1.0);
+  #endif
+}`;
+
+const MASK_INST_FRAG = /* glsl */ `
+varying vec3 vMaskColor;
+void main() { gl_FragColor = vec4(vMaskColor, 1.0); }`;
+
+/** Instanced mask draws: all tagged copies of one geometry in one call. */
+interface MaskPool {
+  mesh: THREE.InstancedMesh;
+  cap: number;
+  n: number;
+}
+
+/** Can this tagged mesh go into an instanced mask draw (same pixels as drawing it alone)? */
+function poolable(m: THREE.Mesh): boolean {
+  const g = m.geometry;
+  return !(m as THREE.SkinnedMesh).isSkinnedMesh && !(m as THREE.InstancedMesh).isInstancedMesh && !(m as THREE.BatchedMesh & THREE.Mesh).isBatchedMesh && !g.morphAttributes.position && g.drawRange.start === 0 && g.drawRange.count === Infinity && !m.morphTargetInfluences;
+}
+
+/** Shown in the scene graph: the mesh and every ancestor visible. */
+function shown(o: THREE.Object3D): boolean {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) return false;
+  return true;
+}
+
 const RIM_VERT = /* glsl */ `
 varying vec2 vUv;
 void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -499,7 +536,11 @@ void main() {
 
 interface Tagged {
   root: THREE.Object3D;
+  /** Drawn one by one through OUTLINE_LAYER (skinned infantry...). */
   meshes: THREE.Mesh[];
+  /** Drawn through the instanced mask pools. */
+  pooled: THREE.Mesh[];
+  color: THREE.Color;
 }
 
 const noopBR = THREE.Object3D.prototype.onBeforeRender;
@@ -592,13 +633,21 @@ class UnitOutlines {
 
   private tag(root: THREE.Object3D, teamColor: number, max: number): Tagged {
     const col = new THREE.Color(teamColor).lerp(new THREE.Color(0xffffff), 0.32);
-    const meshes = outlineMeshes(root, max);
-    for (const m of meshes) {
-      m.layers.enable(OUTLINE_LAYER);
+    const all = outlineMeshes(root, max);
+    const meshes: THREE.Mesh[] = [];
+    const pooled: THREE.Mesh[] = [];
+    for (const m of all) {
       m.userData.outlineColor = col;
+      // (a mesh with its own onBeforeRender hook keeps the one-by-one path: the hook may change what it draws)
+      if (poolable(m) && m.onBeforeRender === noopBR) {
+        pooled.push(m);
+        continue;
+      }
+      meshes.push(m);
+      m.layers.enable(OUTLINE_LAYER);
       if (m.onBeforeRender === noopBR) m.onBeforeRender = this.brMask;
     }
-    return { root, meshes };
+    return { root, meshes, pooled, color: col };
   }
 
   private untag(t: Tagged) {
@@ -607,7 +656,105 @@ class UnitOutlines {
       if (m.onBeforeRender === this.brMask) m.onBeforeRender = noopBR;
       delete m.userData.outlineColor;
     }
+    for (const m of t.pooled) delete m.userData.outlineColor;
     t.meshes.length = 0;
+    t.pooled.length = 0;
+  }
+
+  // ---- instanced mask pools (one draw per distinct geometry instead of one per tagged mesh)
+  private poolScene = new THREE.Scene();
+  private pools = new Map<THREE.BufferGeometry, MaskPool>();
+  private instMat = new THREE.ShaderMaterial({ vertexShader: MASK_INST_VERT, fragmentShader: MASK_INST_FRAG, fog: false, toneMapped: false });
+
+  private pool(g: THREE.BufferGeometry, need: number): MaskPool {
+    let p = this.pools.get(g);
+    if (p && p.cap >= need) return p;
+    let cap = p ? p.cap : 4;
+    while (cap < need) cap *= 2;
+    const mesh = new THREE.InstancedMesh(g, this.instMat, cap);
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.layers.set(OUTLINE_LAYER);
+    mesh.count = 0;
+    if (p) {
+      // keep the copies gathered so far this frame
+      (mesh.instanceMatrix.array as Float32Array).set((p.mesh.instanceMatrix.array as Float32Array).subarray(0, p.n * 16));
+      (mesh.instanceColor.array as Float32Array).set((p.mesh.instanceColor!.array as Float32Array).subarray(0, p.n * 3));
+      this.poolScene.remove(p.mesh);
+      p.mesh.dispose();
+      p.mesh = mesh;
+      p.cap = cap;
+    } else {
+      p = { mesh, cap, n: 0 };
+      this.pools.set(g, p);
+    }
+    this.poolScene.add(mesh);
+    return p;
+  }
+
+  /** Gather this frame's shown pooled meshes into their pools; returns the number of instanced draws. */
+  private fillPools(): number {
+    for (const p of this.pools.values()) p.n = 0;
+    for (const t of this.tagged.values()) {
+      if (!t.pooled.length || !shown(t.root)) continue;
+      const c = t.color;
+      for (const m of t.pooled) {
+        if (!shown(m)) continue;
+        const mat = m.material as THREE.Material;
+        if (!mat || !mat.visible) continue;
+        const cur = this.pools.get(m.geometry);
+        const p = this.pool(m.geometry, (cur ? cur.n : 0) + 1);
+        const i = p.n++;
+        (p.mesh.instanceMatrix.array as Float32Array).set(m.matrixWorld.elements, i * 16);
+        const ca = p.mesh.instanceColor!.array as Float32Array;
+        ca[i * 3] = c.r;
+        ca[i * 3 + 1] = c.g;
+        ca[i * 3 + 2] = c.b;
+      }
+    }
+    let draws = 0;
+    for (const p of this.pools.values()) {
+      const m = p.mesh;
+      m.count = p.n;
+      m.visible = p.n > 0;
+      if (!p.n) continue;
+      draws++;
+      m.instanceMatrix.clearUpdateRanges();
+      m.instanceMatrix.addUpdateRange(0, p.n * 16);
+      m.instanceMatrix.needsUpdate = true;
+      m.instanceColor!.clearUpdateRanges();
+      m.instanceColor!.addUpdateRange(0, p.n * 3);
+      m.instanceColor!.needsUpdate = true;
+    }
+    return draws;
+  }
+
+  /** Compile the instanced mask program ahead (the battle's shader warm-up). */
+  warm(gl: THREE.WebGLRenderer, camera: THREE.Camera) {
+    const g = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    const m = new THREE.InstancedMesh(g, this.instMat, 1);
+    m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(3), 3);
+    m.layers.set(OUTLINE_LAYER);
+    const sc = new THREE.Scene();
+    sc.add(m);
+    const mask = camera.layers.mask;
+    camera.layers.set(OUTLINE_LAYER);
+    const rt = gl.getRenderTarget();
+    // (the mask renders into a linear target: compile that variant)
+    const tmp = new THREE.WebGLRenderTarget(4, 4);
+    gl.setRenderTarget(tmp);
+    try {
+      gl.compile(sc, camera);
+    } finally {
+      gl.setRenderTarget(rt);
+      camera.layers.mask = mask;
+      m.dispose();
+      g.dispose();
+      tmp.dispose();
+    }
   }
 
   /** Mask pass + rim composite, straight to the screen. */
@@ -645,6 +792,12 @@ class UnitOutlines {
     gl.autoClear = true;
     const calls = gl.info.render.calls;
     gl.render(scene, camera);
+    // the instanced mask draws into the same mask (no clear: the depth test sorts overlapping units as before)
+    if (this.fillPools()) {
+      gl.autoClear = false;
+      gl.render(this.poolScene, camera);
+      gl.autoClear = true;
+    }
     this.drawn = gl.info.autoReset ? gl.info.render.calls : gl.info.render.calls - calls;
     gl.setRenderTarget(null);
     gl.setClearColor(clear, clearA);
@@ -665,7 +818,7 @@ class UnitOutlines {
 
   get meshCount() {
     let n = 0;
-    for (const t of this.tagged.values()) n += t.meshes.length;
+    for (const t of this.tagged.values()) n += t.meshes.length + t.pooled.length;
     return n;
   }
 
@@ -675,6 +828,9 @@ class UnitOutlines {
     this.rt?.dispose();
     this.maskMat.dispose();
     this.rimMat.dispose();
+    for (const p of this.pools.values()) p.mesh.dispose();
+    this.pools.clear();
+    this.instMat.dispose();
     this.quad.dispose();
   }
 }
