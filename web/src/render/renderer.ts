@@ -420,7 +420,9 @@ export class GameRenderer {
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    // (cube size 128, the size of the HDRI's and the sky capture's PMREM: the environment's size is part of every lit
+    // program, so a different one made every material compile again mid-battle when the HDRI swapped in)
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04, 0.1, 100, { size: 128 }).texture;
     this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
     void loadSkyEnvironment(this.renderer).then((env) => {
