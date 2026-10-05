@@ -993,6 +993,14 @@ export class WaterReflection {
     pm[10] = clip.z + 1 - 0.003;
     pm[14] = clip.w;
     this.matrix.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1).multiply(vc.projectionMatrix).multiply(vc.matrixWorldInverse);
+    // Only the part of the mirrored image under visible water is ever sampled (plus the ripple distortion):
+    // render just that rectangle. Same projection, same pixels there; everything that can only land outside
+    // it is frustum culled (most of the units and scenery when the river is a band across the view).
+    const sub = this.waterRect(cam, w, h);
+    if (sub && sub[2] <= 0) {
+      // no water on screen: nothing samples the reflection this frame
+      return;
+    }
     // render
     this.rendering = true;
     const prevTarget = renderer.getRenderTarget();
@@ -1005,10 +1013,39 @@ export class WaterReflection {
     renderer.shadowMap.autoUpdate = false;
     scene.background = null;
     renderer.setClearColor(0x000000, 0);
-    renderer.setRenderTarget(this.target);
+    const T = this.target;
+    T.viewport.set(0, 0, w, h);
+    T.scissor.set(0, 0, w, h);
+    T.scissorTest = false;
+    renderer.setRenderTarget(T);
     renderer.state.buffers.depth.setMask(true);
-    if (renderer.autoClear === false) renderer.clear();
+    if (sub) {
+      // (texels outside the rectangle read as 'nothing reflected' should a ripple ever reach them)
+      renderer.clear();
+      const [px, py, pw, ph] = sub;
+      // P' = S P: the rectangle's pixels land exactly where the full frame puts them
+      const a = w / pw;
+      const b = (w - 2 * px) / pw - 1;
+      const c = h / ph;
+      const d = (h - 2 * py) / ph - 1;
+      const e = vc.projectionMatrix.elements;
+      for (let i = 0; i < 4; i++) {
+        e[i * 4] = a * e[i * 4] + b * e[i * 4 + 3];
+        e[i * 4 + 1] = c * e[i * 4 + 1] + d * e[i * 4 + 3];
+      }
+      vc.projectionMatrixInverse.copy(vc.projectionMatrix).invert();
+      T.viewport.set(px, py, pw, ph);
+      T.scissor.set(px, py, pw, ph);
+      T.scissorTest = true;
+      renderer.setRenderTarget(null);
+      renderer.setRenderTarget(T);
+    } else if (renderer.autoClear === false) renderer.clear();
     renderer.render(scene, vc);
+    if (sub) {
+      T.viewport.set(0, 0, w, h);
+      T.scissor.set(0, 0, w, h);
+      T.scissorTest = false;
+    }
     this.meshes.forEach((m, i) => (m.visible = vis[i]));
     renderer.setClearColor(this.clearC, prevAlpha);
     scene.background = prevBg;
@@ -1023,7 +1060,151 @@ export class WaterReflection {
   dispose() {
     this.target.dispose();
   }
+
+  // ------------------------------------------------ visible water rectangle
+
+  /** Water surface rectangles (x0, z0, x1, z1 in world units) of the reflecting meshes. */
+  private rects: Float32Array | null = null;
+  private rectMeshes = 0;
+  private readonly fp: number[] = [];
+  private readonly poly: number[] = [];
+  private readonly tmp: number[] = [];
+  private readonly far = new THREE.Vector3();
+
+  private buildRects() {
+    const seen = new Set<string>();
+    const out: number[] = [];
+    const v = new THREE.Vector3();
+    for (const mesh of this.meshes) {
+      const g = mesh.geometry;
+      const pos = g.attributes.position as THREE.BufferAttribute | undefined;
+      if (!pos) continue;
+      mesh.updateMatrixWorld();
+      const idx = g.index;
+      const n = idx ? idx.count : pos.count;
+      for (let t = 0; t + 2 < n; t += 3) {
+        let x0 = Infinity;
+        let z0 = Infinity;
+        let x1 = -Infinity;
+        let z1 = -Infinity;
+        for (let k = 0; k < 3; k++) {
+          const i = idx ? idx.getX(t + k) : t + k;
+          v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+          x0 = Math.min(x0, v.x);
+          x1 = Math.max(x1, v.x);
+          z0 = Math.min(z0, v.z);
+          z1 = Math.max(z1, v.z);
+        }
+        const key = `${x0},${z0},${x1},${z1}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(x0, z0, x1, z1);
+      }
+    }
+    this.rects = new Float32Array(out);
+    this.rectMeshes = this.meshes.length;
+  }
+
+  /**
+   * Pixel rectangle [x, y, w, h] of the reflection target that the visible water can sample (its
+   * reflected uv's bounding box plus the ripple distortion), [0, 0, 0, 0] when no water is on screen,
+   * or null to render the whole frame (view reaching the horizon, or most of the frame anyway).
+   */
+  private waterRect(cam: THREE.PerspectiveCamera, w: number, h: number): [number, number, number, number] | null {
+    if (!this.rects || this.rectMeshes !== this.meshes.length) this.buildRects();
+    const L = this.level;
+    // the view's footprint on the water plane (the four corner rays)
+    const fp = this.fp;
+    fp.length = 0;
+    const camPos = this.v1.setFromMatrixPosition(cam.matrixWorld);
+    for (const [nx, ny] of CORNERS) {
+      const p = this.far.set(nx, ny, 1).unproject(cam);
+      const dy = p.y - camPos.y;
+      if (dy >= -1e-6) return null;
+      const t = (L - camPos.y) / dy;
+      if (t <= 0 || t > 1e4) return null;
+      fp.push(camPos.x + (p.x - camPos.x) * t, camPos.z + (p.z - camPos.z) * t);
+    }
+    // make the footprint counter-clockwise (x, z) for the clip
+    let area = 0;
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      area += fp[i * 2] * fp[j * 2 + 1] - fp[j * 2] * fp[i * 2 + 1];
+    }
+    const sgn = area >= 0 ? 1 : -1;
+    const r = this.rects!;
+    const M = this.matrix.elements;
+    let u0 = Infinity;
+    let v0 = Infinity;
+    let u1 = -Infinity;
+    let v1 = -Infinity;
+    let poly = this.poly;
+    let tmp = this.tmp;
+    for (let k = 0; k < r.length; k += 4) {
+      poly.length = 0;
+      poly.push(r[k], r[k + 1], r[k + 2], r[k + 1], r[k + 2], r[k + 3], r[k], r[k + 3]);
+      // Sutherland-Hodgman against the four footprint edges
+      for (let e = 0; e < 4 && poly.length; e++) {
+        const ax = fp[e * 2];
+        const az = fp[e * 2 + 1];
+        const bx = fp[((e + 1) % 4) * 2];
+        const bz = fp[((e + 1) % 4) * 2 + 1];
+        const side = (x: number, z: number) => sgn * ((bx - ax) * (z - az) - (bz - az) * (x - ax));
+        tmp.length = 0;
+        const n = poly.length / 2;
+        for (let i = 0; i < n; i++) {
+          const px = poly[i * 2];
+          const pz = poly[i * 2 + 1];
+          const qx = poly[((i + 1) % n) * 2];
+          const qz = poly[((i + 1) % n) * 2 + 1];
+          const sp = side(px, pz);
+          const sq = side(qx, qz);
+          if (sp >= 0) tmp.push(px, pz);
+          if ((sp >= 0) !== (sq >= 0)) {
+            const t = sp / (sp - sq);
+            tmp.push(px + (qx - px) * t, pz + (qz - pz) * t);
+          }
+        }
+        const sw = poly;
+        poly = tmp;
+        tmp = sw;
+      }
+      for (let i = 0; i < poly.length; i += 2) {
+        const x = poly[i];
+        const z = poly[i + 1];
+        // reflMatrix * (x, L, z, 1)
+        const cw = M[3] * x + M[7] * L + M[11] * z + M[15];
+        if (cw <= 1e-6) return null;
+        const u = (M[0] * x + M[4] * L + M[8] * z + M[12]) / cw;
+        const v = (M[1] * x + M[5] * L + M[9] * z + M[13]) / cw;
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+        if (v < v0) v0 = v;
+        if (v > v1) v1 = v;
+      }
+    }
+    this.poly.length = 0;
+    this.tmp.length = 0;
+    if (u0 > u1) return [0, 0, 0, 0];
+    // ripple distortion (n.xz * 0.05 in the shader) and bilinear filtering
+    const m = 0.06;
+    const x0 = Math.max(0, Math.floor((u0 - m) * w) - 2);
+    const x1 = Math.min(w, Math.ceil((u1 + m) * w) + 2);
+    const y0 = Math.max(0, Math.floor((v0 - m) * h) - 2);
+    const y1 = Math.min(h, Math.ceil((v1 + m) * h) + 2);
+    if (x1 <= x0 || y1 <= y0) return [0, 0, 0, 0];
+    // (most of the frame anyway: render it whole)
+    if ((x1 - x0) * (y1 - y0) > 0.85 * w * h) return null;
+    return [x0, y0, x1 - x0, y1 - y0];
+  }
 }
+
+const CORNERS: [number, number][] = [
+  [-1, -1],
+  [1, -1],
+  [1, 1],
+  [-1, 1],
+];
 
 
 export interface WaterBuild {
