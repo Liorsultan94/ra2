@@ -282,6 +282,8 @@ export class ScarHulks {
     this.maxHulks = quality === 'low' ? 6 : quality === 'medium' ? 14 : 28;
     this.maxVerts = quality === 'low' ? 40000 : quality === 'medium' ? 110000 : 240000;
     const mat = batchFog(fog, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.2 }), 'hulks', (s) => s.replace('#include <color_fragment>', HULK_COLOR));
+    // still warm from the fire: only a dusting of the winter's snow settles on them (wxuniforms.ts WX_SNOW_K)
+    mat.defines = { ...(mat.defines ?? {}), WX_SNOW_K: '0.3' };
     this.mesh = new THREE.BatchedMesh(this.maxHulks, this.maxVerts, this.maxVerts * 2, mat);
     this.mesh.sortObjects = false;
     this.mesh.perObjectFrustumCulled = true;
