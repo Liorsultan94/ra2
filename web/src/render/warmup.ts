@@ -208,6 +208,13 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
         }
       }
     }
+    // the unit outlines' instanced mask (readability.ts)
+    try {
+      r.readability.outlines.warm(gl, r.camera);
+      await settlePrograms(gl, slicer);
+    } catch {
+      /* not fatal */
+    }
     onProgress(0.88);
     await nextFrame();
     slicer.reset();
