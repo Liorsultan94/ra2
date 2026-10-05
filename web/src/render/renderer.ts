@@ -1264,7 +1264,6 @@ export class GameRenderer {
     root.position.y = air + (g + z + drop - air) * k;
   }
 
-  /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows). */
   /** Shadows an object near the burning flares throws away from them (nightops.ts FlareFx.shadow). */
   private flareShadow(e: Entity, v: Visual) {
     const m = v.model;
@@ -1281,6 +1280,7 @@ export class GameRenderer {
     this.flareFx.shadow(this.world.map, p.x, p.z, m.height ?? (m.infantry ? 0.35 : 0.5), r);
   }
 
+  /** Contact shadow footprint for one ground unit / building (aircraft have AirShadows); fade: night fade in / out. */
   private addContact(e: Entity, v: Visual, fade = 1) {
     const c = this.contact!;
     const m = v.model;
@@ -1374,13 +1374,9 @@ export class GameRenderer {
       if (e.kind === 'unit' && this.viewer >= 0 && e.owner !== this.viewer && (w.night || v.fade !== undefined)) {
         const f0 = v.fade ?? (vis ? 1 : 0);
         const f = vis ? Math.min(1, f0 + dt / 0.35) : Math.max(0, f0 - dt / 0.6);
-        if (!w.night && (f >= 1 || f <= 0)) {
-          v.fade = undefined;
-          this.veil.set(e.id, v.model.root, 1);
-        } else {
-          v.fade = f;
-          this.veil.set(e.id, v.model.root, f);
-        }
+        v.fade = !w.night && (f >= 1 || f <= 0) ? undefined : f;
+        // (the veil only while it fades: fully seen or fully dark needs none)
+        this.veil.set(e.id, v.model.root, f > 0 && f < 1 ? f : 1);
         fade = f;
         show = f > 0.01;
       }
