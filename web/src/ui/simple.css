@@ -330,6 +330,9 @@
 .simple-ui .c-name {
   font-size: 12px;
 }
+.simple-ui .c-name.c-small {
+  font-size: 11px;
+}
 .simple-ui .c-cost {
   font-size: 11.5px;
   font-weight: 650;

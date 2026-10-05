@@ -106,6 +106,7 @@ export class Hud {
   private grid!: HTMLElement;
   private tabEls = new Map<Category, HTMLElement>();
   private cameoEls = new Map<string, HTMLElement>();
+  private gridRo: ResizeObserver | null = null;
   private messages!: HTMLElement;
   private selPanel!: HTMLElement;
   private cmdBar!: HTMLElement;
@@ -398,12 +399,44 @@ export class Hud {
       this.tabEls.set(t.cat, b);
     }
     this.grid = el('div', 'sb-grid', sb);
+    // long unit names wrap / shrink to fit the card: refit when the grid is laid out at a new size
+    // (orientation, the sidebar unfolding) and once the display font has loaded
+    if (typeof ResizeObserver !== 'undefined') {
+      this.gridRo = new ResizeObserver(() => this.fitNames());
+      this.gridRo.observe(this.grid);
+    }
+    document.fonts?.ready.then(() => this.fitNames()).catch(() => {});
+  }
+
+  /** Fits the visible build cards' names (fitName). */
+  fitNames() {
+    for (const b of this.cameoEls.values()) {
+      if (b.style.display === 'none') continue;
+      const nm = b.querySelector<HTMLElement>('.c-name');
+      if (nm) this.fitName(nm);
+    }
+  }
+
+  /**
+   * A build card's name: up to two lines (style.css), a step smaller when even two lines would
+   * clip it; a two-line name lifts the ready / progress pill above it. Hidden cards are fitted
+   * when their tab shows.
+   */
+  fitName(nm: HTMLElement) {
+    const b = nm.parentElement;
+    if (!b || !nm.clientWidth) return;
+    nm.classList.remove('c-small');
+    if (nm.scrollHeight > nm.clientHeight + 1 || nm.scrollWidth > nm.clientWidth + 1) nm.classList.add('c-small');
+    const cs = getComputedStyle(nm);
+    const text = nm.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    b.classList.toggle('c-2l', text > parseFloat(cs.fontSize) * 1.6);
   }
 
   setTab(cat: Category) {
     this.tab = cat;
     for (const [c, b] of this.tabEls) b.classList.toggle('active', c === cat);
     for (const [id, b] of this.cameoEls) b.style.display = DEFS[id].category === cat ? '' : 'none';
+    this.fitNames();
   }
 
   private buildCameos() {
@@ -1232,6 +1265,7 @@ export class Hud {
   }
 
   destroy() {
+    this.gridRo?.disconnect();
     this.live?.dispose();
     this.live = null;
     this.support.destroy();

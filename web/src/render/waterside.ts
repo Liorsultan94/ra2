@@ -514,6 +514,11 @@ export class Waterside implements WatersideHandles {
     return out;
   }
 
+  /** The rocks breaking the surface of the rapids (their own and the relief's riverbed boulders). */
+  rapidsRocks(): { x: number; y: number; r: number }[] {
+    return [...this.river.features.rocks, ...this.bedRocks];
+  }
+
   /** Spray off the rapids' rocks (downstream drift) and a low mist along the whitewater. */
   private rapidsSpray(): SprayEmitter[] {
     const R = this.river;
@@ -530,6 +535,17 @@ export class Waterside implements WatersideHandles {
       const p = R.at(s, 0);
       R.velAt(p.x, p.y, v);
       out.push({ x: p.x, y: WATER_LEVEL + 0.03, z: p.y, r: 0.6, h: 0.1, size: 0.36, n: Math.round(5 * k), dx: v.x * 0.8, dz: v.y * 0.8 });
+    }
+    // where it drops: a row of spray thrown up across the river along the churning line at the head (water.ts rDrop)
+    const sd = f.rapids.s0 + 0.55;
+    const c = R.sample(sd);
+    if (c) {
+      const half = c.width / 2;
+      for (let i = 0; i < 5; i++) {
+        const p = R.at(sd + (hash2(i, 2, 1402) - 0.5) * 0.3, ((i + 0.5) / 5 - 0.5) * 2 * half * 0.78);
+        R.velAt(p.x, p.y, v);
+        out.push({ x: p.x, y: WATER_LEVEL + 0.04, z: p.y, r: 0.42, h: 0.3, size: 0.26, n: Math.round(6 * k), dx: v.x * 0.7, dz: v.y * 0.7 });
+      }
     }
     return out;
   }
