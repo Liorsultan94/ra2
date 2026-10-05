@@ -131,6 +131,36 @@ export class BattleScars {
     return m.tiles[tz * m.w + tx];
   }
 
+  /**
+   * Largest radius <= r around (x, z) that stays off water and bridge tiles: a decal is a flat quad at the
+   * ground's height, so one reaching over a river would float on the water surface.
+   */
+  private dryRadius(x: number, z: number, r: number): number {
+    const m = this.map;
+    let best = r;
+    const x0 = Math.max(0, Math.floor(x - r));
+    const x1 = Math.min(m.w - 1, Math.floor(x + r));
+    const z0 = Math.max(0, Math.floor(z - r));
+    const z1 = Math.min(m.h - 1, Math.floor(z + r));
+    for (let tz = z0; tz <= z1; tz++)
+      for (let tx = x0; tx <= x1; tx++) {
+        const t = m.tiles[tz * m.w + tx];
+        if (t !== Tile.Water && t !== Tile.Bridge) continue;
+        const dx = Math.max(tx - x, 0, x - tx - 1);
+        const dz = Math.max(tz - z, 0, z - tz - 1);
+        best = Math.min(best, Math.hypot(dx, dz));
+      }
+    return best;
+  }
+
+  /** Decal size s (full width) shrunk to stay off the water; 0 = too close to place one. */
+  private fit(x: number, z: number, s: number): number {
+    const d = this.dryRadius(x, z, s * 0.48);
+    if (d >= s * 0.48) return s;
+    const f = (d / 0.48) * 0.95;
+    return f < 0.45 ? 0 : f;
+  }
+
   // ------------------------------------------------------------ ground scars
 
   /** A blast crater of radius ~r (same signature as GroundMarks.craterAt). */
@@ -140,7 +170,8 @@ export class BattleScars {
     const ang = Math.random() * Math.PI * 2;
     if (this.host.isPaved?.(x, z)) {
       // a pothole in a web of cracks; now and then next to an older tar patch
-      const s = r * 2.6 + 0.25;
+      const s = this.fit(x, z, r * 2.6 + 0.25);
+      if (!s) return;
       this.decals.add(ScarKind.Pothole, x, z, ang, s, s, 0.06 + r * 0.08, 0.6);
       if (Math.random() < 0.35) {
         const a = Math.random() * Math.PI * 2;
@@ -149,7 +180,8 @@ export class BattleScars {
       this.throwClods(x, z, r * 0.7, Math.round(2 + r * 5), [0x3a3a3a, 0x2c2c2c, 0x6a665e]);
       return;
     }
-    const s = r * 3.2 + 0.2;
+    const s = this.fit(x, z, r * 3.2 + 0.2);
+    if (!s) return;
     this.decals.add(Math.random() < 0.5 ? ScarKind.CraterA : ScarKind.CraterB, x, z, ang, s, s * rnd(0.9, 1.1), 0.08 + r * 0.16, r >= 0.45 ? 1 : 0.5);
     if (r >= 0.4) this.throwClods(x, z, r, Math.min(18, Math.round(3 + r * 11)), this.clod);
   }
@@ -158,7 +190,8 @@ export class BattleScars {
   scorchAt(x: number, z: number, r: number) {
     const t = this.tile(x, z);
     if (t === Tile.Water || this.host.occupied?.(x, z)) return;
-    const s = r * 2.5;
+    const s = this.fit(x, z, r * 2.5);
+    if (!s) return;
     this.decals.add(Math.random() < 0.5 ? ScarKind.ScorchA : ScarKind.ScorchB, x, z, Math.random() * Math.PI * 2, s, s * rnd(0.85, 1.15), 0, 0.7);
     if (r >= 0.45) this.emit({ x, y: this.ground(x, z) + 0.05, z, t: 0, dur: 30 + r * 40, rate: 0.5 + r * 0.6, size: Math.min(1.2, 0.4 + r * 0.4), kind: 0 });
   }
