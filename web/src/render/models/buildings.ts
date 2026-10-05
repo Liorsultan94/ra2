@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
+import { onFogRelease, purgeKeys } from '../fogcache';
 import { pbr, worldUV, type TexKind, type TexOpts } from '../textures';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle, Region } from './types';
@@ -2309,6 +2310,16 @@ function dashes(k: Kit, m: Mat, x0: number, z0: number, x1: number, z1: number, 
 // ================================================================ templates & instances
 
 const tplCache = new Map<string, Tpl>();
+// a finished match: drop its fog's templates and materials (fogcache.ts)
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (!id) return;
+  purgeKeys(tplCache, (k) => k.endsWith('|' + id));
+  // fog materials, then the per-colour stand-ins ('v|' keys) that point at them
+  const dead = new Set<THREE.Material>();
+  purgeKeys(matCache, (k, m) => k.startsWith(id + '|') && !!dead.add(m));
+  purgeKeys(matCache, (k, m) => k.startsWith('v|') && dead.has(m.userData.real as THREE.Material));
+});
 
 /** Vertical stretch per building (the pump jack keeps its exact linkage geometry). */
 const STRETCH: Record<string, number> = { conyard: 1.2, power: 1.2, refinery: 1.2, barracks: 1.22, factory: 1.18, radar: 1.18, airfield: 1.18, tech: 1.2, bunker: 1.12, sentry: 1.1, sam: 1.08, atgm: 1.15, oil: 1 };

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { phoneCaps } from '../devicecaps';
 
 /*
  * Procedural PBR surface textures for the detailed buildings (no image
@@ -784,7 +785,7 @@ export function loadBuildingPhotos(quality: 'low' | 'medium' | 'high', base = 't
   // ?bldphoto=0 keeps the procedural atlas (A/B comparisons, perf checks)
   const off = typeof location !== 'undefined' && /[?&]bldphoto=0\b/.test(location.search);
   if (quality === 'low' || off || typeof createImageBitmap === 'undefined') return photoLoad ?? Promise.resolve(false);
-  const want = quality === 'high' ? 512 : 256;
+  const want = quality === 'high' && !phoneCaps() ? 512 : 256;
   // already loading / loaded at this size or better (an atlas never shrinks back)
   if (photoLoad && photoSize >= want) return photoLoad;
   photoSize = want;

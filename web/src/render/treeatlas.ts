@@ -71,7 +71,8 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   const S = cellPx;
   const c = document.createElement('canvas');
   c.width = c.height = S * GRID;
-  const ctx = c.getContext('2d')!;
+  // CPU-backed: painted once and read back below (a GPU canvas readback waits for the whole GPU queue)
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
   const rnd = prng(1234);
   const R = (a: number, b: number) => a + (b - a) * rnd();
 

@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { phoneCaps } from './devicecaps';
+import { releaseFog } from './fogcache';
+import { ShadowCache } from './shadowcache';
+import type { Slicer } from './slice';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -49,8 +53,19 @@ import { setWearBiome } from './models/wear';
 import { OccluderGrid } from './perf/occlusion';
 import { treeSpots } from './vegetation';
 
+/** Largest sun step the shadow lags behind (radians, 0.02 degrees). */
+const SHADOW_STEP = 0.02 * (Math.PI / 180);
+
 /** 'ultra' (manual choice only) = 'high' plus TAA, cascaded shadows, SSR and screen-space contact shadows. */
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
+
+/** Battlefield parts built ahead of the renderer in time slices (GameRenderer.prebuild). */
+export interface RendererParts {
+  fog: FogOfWar;
+  occluders: OccluderGrid;
+  terrain: Terrain;
+  outskirts: Outskirts;
+}
 /** The tier the scene subsystems (terrain, effects, weather, ...) are built for. */
 type BaseQuality = 'low' | 'medium' | 'high';
 
@@ -132,6 +147,10 @@ export interface Visual {
   occl: boolean;
   /** The model or its shadow may be on screen (last sync). */
   near: boolean;
+  /** Animation time banked while off screen (handed to the next pose update). */
+  animDebt?: number;
+  /** Its programs are still compiling (parallel compile): not drawn yet. */
+  pending?: boolean;
 }
 
 interface Wreck {
@@ -311,11 +330,30 @@ export class GameRenderer {
   /** Player whose fog of war is shown (-1 = reveal all, e.g. attract mode). */
   viewer: number;
 
+  /**
+   * Build the heavy CPU-side parts of the battlefield (terrain: ground paint, grass, water, vegetation,
+   * rocks, scenery, props; the outskirts) in time slices, ahead of the constructor. Built in one go they
+   * took seconds of main thread on a phone (the "Page unresponsive" dialog).
+   */
+  static async prebuild(world: World, requested: Quality, slicer: Slicer): Promise<RendererParts> {
+    const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
+    const { map } = world;
+    const fog = new FogOfWar(map.w, map.h);
+    const occluders = new OccluderGrid(map, treeSpots(map, quality));
+    await slicer.tick();
+    const terrain = await Terrain.build(map, fog, quality, slicer);
+    await slicer.tick();
+    const outskirts = new Outskirts(map, fog, quality, terrain.ground, terrain.water);
+    await slicer.tick();
+    return { fog, occluders, terrain, outskirts };
+  }
+
   constructor(
     readonly canvas: HTMLCanvasElement,
     readonly world: World,
     viewer: number,
     requested: Quality,
+    pre?: RendererParts | null,
   ) {
     this.viewer = viewer;
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
@@ -326,6 +364,8 @@ export class GameRenderer {
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
+    // production: no per-program info-log queries on first use (each one is a synchronous GPU round trip)
+    this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
     // Phones (and desktop GPUs after a driver reset) lose the WebGL context now and then; three.js restores it,
     // but render targets that are only re-rendered on change come back empty. The grade LUT is one of them:
     // left empty it grades every pixel to black (the 'black screen' with only the overlay outlines on top).
@@ -336,6 +376,7 @@ export class GameRenderer {
       // the photoscanned ground arrays exist only on the GPU: rebuild them (else the ground stays black)
       this.terrain.ground.photo?.restore();
       this.shadowAge = 1e9;
+      this.shadowCache?.invalidate();
     };
     canvas.addEventListener('webglcontextlost', this.onContextLost);
     canvas.addEventListener('webglcontextrestored', this.onContextRestored);
@@ -358,7 +399,7 @@ export class GameRenderer {
     this.instancer.enabled = !/[?&]inst=0\b/.test(location.search);
     // vehicle detail bake (models/vehbake.ts) on this context; weathering palette from the map biome
     setBakeRenderer(this.renderer);
-    setBakeSize(quality === 'high' ? 1024 : 512);
+    setBakeSize(quality === 'high' && !phoneCaps() ? 1024 : 512);
     setBakeEnabled(!/[?&]vbake=0\b/.test(location.search));
     setWearBiome(world.map.biome);
 
@@ -392,11 +433,12 @@ export class GameRenderer {
     }
 
     const { map } = world;
-    this.fog = new FogOfWar(map.w, map.h);
-    this.occluders = new OccluderGrid(map, treeSpots(map, quality));
-    this.terrain = new Terrain(map, this.fog, quality);
+    // (the game builds these heavy parts ahead in time slices: GameRenderer.prebuild)
+    this.fog = pre?.fog ?? new FogOfWar(map.w, map.h);
+    this.occluders = pre?.occluders ?? new OccluderGrid(map, treeSpots(map, quality));
+    this.terrain = pre?.terrain ?? new Terrain(map, this.fog, quality);
     this.scene.add(this.terrain.group);
-    this.outskirts = new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
+    this.outskirts = pre?.outskirts ?? new Outskirts(map, this.fog, quality, this.terrain.ground, this.terrain.water);
     this.scene.add(this.outskirts.group);
     this.effects = new Effects(this.scene, this.fog, quality);
     if (this.ultra) {
@@ -442,7 +484,7 @@ export class GameRenderer {
     const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
     const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? 4096 : quality === 'medium' ? 2048 : 0; // ultra: per cascade
+    const shadow = quality === 'high' ? (phoneCaps() ? 2048 : 4096) : quality === 'medium' ? 2048 : 0; // ultra: per cascade; phones: 2048 (memory)
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
@@ -527,6 +569,13 @@ export class GameRenderer {
       this.scene.add(this.ambient.group);
       this.ambient.group.name = 'ambient';
     }
+    // static shadow casters cached between sun shadow refreshes (shadowcache.ts)
+    if (!this.csm && this.sun.castShadow) {
+      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group];
+      this.shadowCache = new ShadowCache(this.renderer, this.scene, () => roots);
+      this.shadowCache.enabled = !/[?&]scache=0\b/.test(location.search);
+      this.shadowCache.install(this.sun);
+    }
     if (/[?&]perf=1\b/.test(location.search)) this.enablePerf();
 
     if (viewer >= 0) {
@@ -546,6 +595,10 @@ export class GameRenderer {
   /** The post-processing chain, when this quality level has one. */
   get postComposer(): EffectComposer | null {
     return this.composer;
+  }
+  /** The post chain itself (warm-up compiles its programs ahead of the first frame). */
+  get postChain(): PostChain | null {
+    return this.post;
   }
   /** True while frames go through the post chain (the quality governor can switch it off). */
   get postActive(): boolean {
@@ -593,7 +646,7 @@ export class GameRenderer {
   /** Current governor state, for debugging / screenshots. */
   perfStats() {
     const s = this.ladder[this.level];
-    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles };
+    return { level: this.level, of: this.ladder.length, ...s, frameMs: Math.round(this.lastFt * 10000) / 10, calls: this.renderer.info.render.calls, tris: this.renderer.info.render.triangles, watchdog: this.watchdogSteps };
   }
 
   /** Post chain state (debug / perf report): enabled passes, their full-screen draws, grade look weights. */
@@ -807,8 +860,21 @@ export class GameRenderer {
       return;
     }
     if (!this.sun.castShadow) return;
-    const R = this.sunRight;
-    const U = this.sunUp;
+    // The shadow follows the sun in steps of at most SHADOW_STEP (0.02 degrees: a fraction of a shadow texel
+    // even for tall buildings): the live day / night cycle moves the sun a little every tick, and every move
+    // re-renders the whole shadow map (static casters included, shadowcache.ts). Lighting follows the same
+    // direction (it is the light's own position), a difference far below one colour level.
+    const sd = this.shadowDir;
+    if (this.shadowDirSet !== this.sunDir.x + this.sunDir.y * 3 + this.sunDir.z * 7) {
+      this.shadowDirSet = this.sunDir.x + this.sunDir.y * 3 + this.sunDir.z * 7;
+      if (sd.lengthSq() === 0 || sd.angleTo(this.sunDir) > SHADOW_STEP) {
+        sd.copy(this.sunDir);
+        this.shadowR.crossVectors(this.yAxis, sd).normalize();
+        this.shadowU.crossVectors(sd, this.shadowR).normalize();
+      }
+    }
+    const R = this.shadowR;
+    const U = this.shadowU;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -858,10 +924,10 @@ export class GameRenderer {
       sc.far = 140;
       sc.updateProjectionMatrix();
     }
-    const cz = this.target.x * -this.sunDir.x + ty * -this.sunDir.y + this.target.z * -this.sunDir.z;
-    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(this.sunDir, -cz);
+    const cz = this.target.x * -sd.x + ty * -sd.y + this.target.z * -sd.z;
+    const c = this.corner.copy(R).multiplyScalar(cx).addScaledVector(U, cy).addScaledVector(sd, -cz);
     this.sun.target.position.copy(c);
-    this.sun.position.copy(c).addScaledVector(this.sunDir, 70);
+    this.sun.position.copy(c).addScaledVector(sd, 70);
     this.sun.target.updateMatrixWorld();
     this.sun.updateMatrixWorld();
   }
@@ -968,7 +1034,7 @@ export class GameRenderer {
   // ---------------------------------------------------------------- entities
 
   /** World position of an entity (x, height, y). Aircraft use their simulated altitude. */
-  entityPos(e: Entity, alpha: number): THREE.Vector3 {
+  entityPos(e: Entity, alpha: number, out?: THREE.Vector3): THREE.Vector3 {
     const x = e.px + (e.x - e.px) * alpha;
     const y = e.py + (e.y - e.py) * alpha;
     // (ground units on a bridge follow the deck's end ramps up onto raised banks: deckramp.ts)
@@ -981,7 +1047,7 @@ export class GameRenderer {
       // under a parachute canopy
       h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;
     }
-    return new THREE.Vector3(x, h, y);
+    return out ? out.set(x, h, y) : new THREE.Vector3(x, h, y);
   }
 
   isVisibleToViewer(e: Entity): boolean {
@@ -1005,7 +1071,7 @@ export class GameRenderer {
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
     const lod = prepareLod(model.root, cat, this.quality === 'medium', e.owner >= 0 ? this.world.players[e.owner].color : 0x9a9a9a);
     this.scene.add(model.root);
-    return {
+    const visual: Visual = {
       id: e.id,
       model,
       owner: e.owner,
@@ -1031,6 +1097,38 @@ export class GameRenderer {
       occl: true,
       near: true,
     };
+    this.compileAhead(visual, `${d.model}|${e.owner}`);
+    return visual;
+  }
+
+  private compiledKinds = new Set<string>();
+  private compileRT: THREE.WebGLRenderTarget | null = null;
+  /**
+   * The first model of a type in this match (one the warm-up did not cover, e.g. in the demo battle):
+   * with parallel shader compile, compile its programs in the background and hold it back for the
+   * few frames that takes, instead of linking them synchronously inside the next frame.
+   */
+  private compileAhead(v: Visual, kind: string) {
+    if (this.compiledKinds.has(kind)) return;
+    this.compiledKinds.add(kind);
+    if (!this.renderer.extensions.get('KHR_parallel_shader_compile')) return;
+    const gl = this.renderer;
+    const prev = gl.getRenderTarget();
+    // the scene renders into the post chain's linear target: compile that variant
+    if (this.postActive) gl.setRenderTarget((this.compileRT ??= new THREE.WebGLRenderTarget(4, 4)));
+    v.pending = true;
+    let p: Promise<unknown>;
+    try {
+      p = gl.compileAsync(v.model.root, this.camera, this.scene);
+    } catch {
+      p = Promise.resolve();
+    } finally {
+      gl.setRenderTarget(prev);
+    }
+    // (never hold a unit back for long, whatever the driver does)
+    const release = () => (v.pending = false);
+    void p.then(release, release);
+    setTimeout(release, 3000);
   }
 
   private removeVisual(v: Visual) {
@@ -1044,6 +1142,12 @@ export class GameRenderer {
   private viewFrustum = new THREE.Frustum();
   private projView = new THREE.Matrix4();
   private castSphere = new THREE.Sphere();
+  /** Off-screen pose animation skip (?pfanim=0 turns it off: A/B checks with the same random sequence). */
+  private animSkip = typeof location === 'undefined' || !/[?&]pfanim=0\b/.test(location.search);
+  /** Scratch: an entity's interpolated position (syncEntities). */
+  private posTmp = new THREE.Vector3();
+  /** Scratch: an emitter's world position (exhaust, sparks, chimneys). */
+  private emitP = new THREE.Vector3();
   private occlFrame = 0;
 
   /**
@@ -1175,7 +1279,8 @@ export class GameRenderer {
         this.visuals.set(e.id, v);
       }
       const vis = this.isVisibleToViewer(e);
-      v.model.root.visible = vis;
+      // (a model of a type new to this match is held back until its shaders have compiled in the background)
+      v.model.root.visible = vis && !v.pending;
       v.visible = vis;
       const d = DEFS[e.def];
       const root = v.model.root;
@@ -1209,7 +1314,8 @@ export class GameRenderer {
         if (a.damage > 0.45 && k >= 1) this.fracture.prewarm(root, bd.w, bd.h);
       } else {
         const ud = unitDef(e.def);
-        const p = this.entityPos(e, alpha);
+        // (a scratch vector: nothing below keeps it past this entity)
+        const p = this.entityPos(e, alpha, this.posTmp);
         root.position.copy(p);
         const yaw = -lerpAngle(e.pfacing, e.facing, alpha);
         const moved = Math.hypot(p.x - v.lastX, p.z - v.lastZ);
@@ -1258,8 +1364,32 @@ export class GameRenderer {
         if (vis) this.unitFx(e, v, p, yaw, moved, dt);
       }
       if (v.model.infantry) a.lod = !vis ? 2 : a.lod === 2 && v.near ? 0 : a.lod;
-      if (v.model.anim) v.model.anim(a);
-      this.legacyAnim(v.model, a);
+      // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
+      let nearNow = false;
+      if (vis) {
+        const rp = root.position;
+        const h = v.model.height ?? 1;
+        const tx = shadowsOn ? throwX * h : 0;
+        const tz = shadowsOn ? throwZ * h : 0;
+        const sph = this.castSphere;
+        sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
+        sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
+        nearNow = fr.intersectsSphere(sph);
+      }
+      // Vehicles / buildings / aircraft off screen (model and shadow) or under the shroud: no pose animation.
+      // The time is banked and handed over in one step once the model can be seen again (spinners, blends
+      // and timers end up where they would have been); infantry have their own cheap off-screen cycle.
+      if (!nearNow && !v.model.infantry && !this.photoCam && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
+      else {
+        const debt = v.animDebt ?? 0;
+        if (debt) {
+          a.dt = dt + debt;
+          v.animDebt = 0;
+        }
+        if (v.model.anim) v.model.anim(a);
+        this.legacyAnim(v.model, a);
+        a.dt = dt;
+      }
       if (v.model.recoil && v.recoil > 0) {
         v.recoil = Math.max(0, v.recoil - dt * 4);
         for (const r of v.model.recoil) r.position.x = (r.userData.baseX ??= r.position.x) - v.recoil * 0.12;
@@ -1271,14 +1401,7 @@ export class GameRenderer {
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
         applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
         {
-          // the model or its shadow may be on screen (bounding sphere around the model and its shadow throw)
-          const h = v.model.height ?? 1;
-          const tx = shadowsOn ? throwX * h : 0;
-          const tz = shadowsOn ? throwZ * h : 0;
-          const sph = this.castSphere;
-          sph.center.set(rp.x + tx * 0.5, rp.y + h * 0.5, rp.z + tz * 0.5);
-          sph.radius = v.lod.radius + Math.hypot(tx, tz) * 0.5 + h * 0.5 + 1.5;
-          v.near = fr.intersectsSphere(sph);
+          v.near = nearNow;
           if (shadowsOn) setCasting(v.lod, v.near);
           // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
           if (v.model.infantry) {
@@ -1293,7 +1416,8 @@ export class GameRenderer {
     this.airShadows.end();
     this.contact?.end();
     this.chutes.end(dt, this.time);
-    for (const v of [...this.visuals.values()]) {
+    // (deleting the current entry while iterating a Map is safe: no per-frame copy of the visual list)
+    if (this.visuals.size > seen.size) for (const v of this.visuals.values()) {
       if (seen.has(v.id)) continue;
       // boarding a transport: the soldier first walks up the ramp (unitlife.ts)
       if (v.model.infantry && this.life.adopt(v.id, v.model)) {
@@ -1339,14 +1463,14 @@ export class GameRenderer {
         v.exhaustTimer = 0.08;
         for (const em of m.emitters) {
           if (em.kind !== 'smoke') continue;
-          const wp = em.pos.clone().applyMatrix4(m.root.matrixWorld);
+          const wp = this.emitP.copy(em.pos).applyMatrix4(m.root.matrixWorld);
           this.effects.exhaust(wp.x, wp.y, wp.z);
         }
       }
     }
     for (const em of m.emitters) {
       if (em.kind === 'spark' && Math.random() < dt * 3) {
-        const wp = em.pos.clone().applyMatrix4(m.root.matrixWorld);
+        const wp = this.emitP.copy(em.pos).applyMatrix4(m.root.matrixWorld);
         this.effects.spark(wp.x, wp.y, wp.z);
       }
     }
@@ -1384,7 +1508,7 @@ export class GameRenderer {
     if (v.model.emitters.length && v.emitTimer <= 0 && e.buildAnim >= 1) {
       v.emitTimer = lowPower ? 0.6 : 0.22;
       for (const em of v.model.emitters) {
-        const wp = em.pos.clone().applyMatrix4(root.matrixWorld);
+        const wp = this.emitP.copy(em.pos).applyMatrix4(root.matrixWorld);
         if (em.kind === 'spark') this.effects.spark(wp.x, wp.y, wp.z);
         else if (em.kind === 'fire') this.effects.flame(wp.x, wp.y, wp.z, 0.6);
         else this.effects.smoke(wp.x, wp.y, wp.z, em.kind === 'steam' ? 0.9 : 0.6, em.kind === 'smoke');
@@ -2094,8 +2218,25 @@ export class GameRenderer {
     const now = performance.now();
     const gap = (now - this.lastFrameAt) / 1000;
     this.lastFrameAt = now;
+    if (!this.adaptive || this.governorHold || gap <= 0 || document.hidden) return;
+    // Watchdog: frames of a quarter second and more, again and again, mean the page is close to the browser's
+    // "Page unresponsive" dialog. Don't wait for a full measurement window: step down two rungs right away
+    // (the cheap rungs: lens extras, AO, bloom quality, then resolution; nothing gets rebuilt or recompiled).
+    if (gap >= 0.25 && gap <= 5) {
+      if (++this.stalls >= 3 && this.level < this.ladder.length - 1 && now - this.lastWatchdog > 2500) {
+        this.lastWatchdog = now;
+        this.stalls = 0;
+        this.frameTimes.length = 0;
+        this.goodWindows = 0;
+        this.upNeed = Math.min(40, this.upNeed * 2);
+        this.applyLevel(Math.min(this.ladder.length - 1, this.level + 2));
+        this.fastFrames = 60;
+        this.watchdogSteps++;
+        return;
+      }
+    } else if (gap < 0.1) this.stalls = Math.max(0, this.stalls - 0.25);
     // very long gaps are tab switches / pauses, not slow frames; the median filters GC spikes
-    if (!this.adaptive || gap <= 0 || gap > 1.5 || document.hidden) return;
+    if (gap > 1.5) return;
     const ft = gap;
     this.frameTimes.push(ft);
     // short windows while the governor is still finding its level (first seconds, right after a step down)
@@ -2131,6 +2272,12 @@ export class GameRenderer {
   }
   private govFrames = 0;
   private fastFrames = 0;
+  /** Watchdog: recent very long frames (decays on normal ones), last time it stepped down, steps taken. */
+  private stalls = 0;
+  private lastWatchdog = -1e9;
+  watchdogSteps = 0;
+  /** True while loading work (shader warm-up) renders frames: they are not judged. */
+  governorHold = false;
   private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
@@ -2232,6 +2379,13 @@ export class GameRenderer {
     }
   }
 
+  /** Static shadow caster cache (null on low / ultra). */
+  readonly shadowCache: ShadowCache | null = null;
+  /** The sun direction the shadow (and the key light) currently use, and its right / up axes (fitShadow). */
+  private shadowDir = new THREE.Vector3(0, 0, 0);
+  private shadowR = new THREE.Vector3();
+  private shadowU = new THREE.Vector3();
+  private shadowDirSet = NaN;
   private shadowKey = new Float64Array(9);
   private shadowAge = 0;
   /**
@@ -2305,5 +2459,16 @@ export class GameRenderer {
     this.csm?.dispose();
     this.renderer.dispose();
     this.post?.dispose();
+    this.compileRT?.dispose();
+    this.shadowCache?.dispose();
+    // the model caches built for this match's fog of war (fogcache.ts)
+    releaseFog(this.fog);
+    // release this match's GPU memory now rather than whenever the canvas gets garbage collected: without it
+    // every match (and every demo battle behind the menu) left a live context behind until the next GC
+    try {
+      this.renderer.forceContextLoss();
+    } catch {
+      /* already lost */
+    }
   }
 }

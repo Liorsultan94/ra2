@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from '../fog';
+import { onFogRelease, purgeKeys } from '../fogcache';
 import { GeoBuilder } from '../geo';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle } from './types';
@@ -18,6 +19,8 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 const C = (hex: number) => new THREE.Color(hex);
 
 const matCache = new Map<string, THREE.Material>();
+// a finished match: drop the materials bound to its fog (fogcache.ts); the next match binds its own
+onFogRelease(() => purgeKeys(matCache, (k) => k.endsWith(':f')));
 function mat(key: string, fog: FogOfWar | null, make: () => THREE.Material): THREE.Material {
   const k = `${key}:${fog ? 'f' : 'n'}`;
   let m = matCache.get(k);

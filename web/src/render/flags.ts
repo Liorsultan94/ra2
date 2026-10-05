@@ -259,7 +259,8 @@ export function flagDataUrl(faction: string): string {
   const cv = document.createElement('canvas');
   cv.width = 120;
   cv.height = 80;
-  const c = cv.getContext('2d')!;
+  // CPU-backed canvas: the PNG encode reads it back, which on a GPU canvas waits for the whole GPU queue
+  const c = cv.getContext('2d', { willReadFrequently: true })!;
   if (!drawFlag(c, faction, cv.width, cv.height)) {
     c.fillStyle = '#777';
     c.fillRect(0, 0, cv.width, cv.height);

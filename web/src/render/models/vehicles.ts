@@ -9,6 +9,7 @@ import { armourMod, armourModPlain, treadTex, unitLook, vehCamo } from './unitte
 import { PAINT_LOUVRE, PAINT_MESH, bakeVehicle, type BakeResult } from './vehbake';
 import { lodGeos, registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
+import { onFogRelease, purgeKeys } from '../fogcache';
 
 /*
  * Detailed procedural ground vehicles (one design per nation for the shared
@@ -2222,6 +2223,13 @@ function cannon(b: Bld, parent: Part, x: number, y: number, z: number, len: numb
 // ------------------------------------------------------------- instancing
 
 const templates = new Map<string, Tpl>();
+// a finished match: drop its fog's templates and materials (fogcache.ts)
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (id === undefined) return;
+  purgeKeys(templates, (k) => k.endsWith('|' + id));
+  purgeKeys(matCache, (k) => k.startsWith(id + '|'));
+});
 /** Field stowage items per template key (see Bld.clutter). */
 /**
  * Width factors (Bld.zk) per template key or key|faction: older designs were authored ~20-30 % wider than

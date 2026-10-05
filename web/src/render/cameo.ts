@@ -34,26 +34,76 @@ export function studioRig(scene: THREE.Scene): StudioRig {
   return { hemi, key, fill, rim };
 }
 
-/** Renders unit/building portraits ("cameos") for the build sidebar from the 3D models. */
+/** Transparent 1x1 placeholder shown until a cameo has been rendered. */
+export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+/** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
+const CANVAS_PX = 512;
+
+/** Yield to the event loop (input, rAF) between two steps of a cameo render. */
+const idle = () =>
+  new Promise<void>((res) => {
+    const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    if (ric) ric(() => res(), { timeout: 250 });
+    else setTimeout(res, 16);
+  });
+
+/**
+ * Renders unit/building portraits ("cameos") for the build sidebar from the 3D models.
+ *
+ * One factory (one offscreen GL context) serves the whole session: the menu's
+ * hero tank, every battle's sidebar and the live selection portrait
+ * (sharedCameos()). Cameos render in the background, one per idle slice: each
+ * one builds a model, compiles its shaders on this context and reads the
+ * frame back, which for the ~40 sidebar entries at once froze the battle
+ * start (and the menu, for the demo battle's hidden sidebar) for seconds on
+ * phones. `get()` returns the cached PNG or a transparent placeholder and
+ * queues the render; the finished image is patched into every
+ * `<img data-cameo>` showing it (see `img()` / `attr()`).
+ * The canvas has a fixed size: cameos and the live portrait render into a
+ * viewport at its top-left corner (resizing a GL canvas stalls on the GPU).
+ */
 export class CameoFactory {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(26, 4 / 3, 0.1, 100);
   private cache = new Map<string, string>();
-  private w = CW * SS;
-  private h = CH * SS;
+  private queue = new Map<string, { defId: string; style: ModelStyle }>();
+  private running = false;
+  /** While true (a battle is compiling its shaders under the loading screen) the background queue waits. */
+  paused = false;
   private env: THREE.Texture | null = null;
-  /** 2D canvas the supersampled frame is filtered down into (cameo PNGs). */
+  /** 2D canvas the supersampled frame is filtered down into (CPU backed: the PNG encode reads it back). */
   private out: HTMLCanvasElement | null = null;
+  /** Full-size frame rebuilt from the asynchronous readback (CPU backed). */
+  private big: HTMLCanvasElement | null = null;
+
+  /** Cameos persisted by an earlier session of the same build (IndexedDB), loaded into the cache. */
+  private restored: Promise<void>;
+
+  private patch(key: string, url: string) {
+    for (const im of document.querySelectorAll<HTMLImageElement>(`img[data-cameo="${key}"]`)) im.src = url;
+  }
 
   constructor() {
+    this.restored = storeLoad()
+      .then((m) => {
+        for (const [k, b] of m) {
+          if (this.cache.has(k)) continue;
+          const url = URL.createObjectURL(b);
+          this.cache.set(k, url);
+          this.patch(k, url);
+        }
+      })
+      .catch(() => {});
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = this.w;
-      canvas.height = this.h;
+      canvas.width = CANVAS_PX;
+      canvas.height = CANVAS_PX;
       this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+      this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
       this.renderer.setPixelRatio(1);
-      this.renderer.setSize(this.w, this.h, false);
+      this.renderer.setSize(CANVAS_PX, CANVAS_PX, false);
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 1.12;
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -78,19 +128,75 @@ export class CameoFactory {
     return this.env;
   }
 
+  private static key(defId: string, style: ModelStyle) {
+    return `${defId}:${style.team}`;
+  }
+
+  /** Cached PNG of a cameo, or the blank placeholder while it is queued (prefer `img()` / `attr()`, which get patched). */
   get(defId: string, style: ModelStyle): string {
-    const key = `${defId}:${style.team}`;
+    const key = CameoFactory.key(defId, style);
     const hit = this.cache.get(key);
-    if (hit !== undefined) return hit;
-    let url = '';
-    if (this.renderer) {
-      const d = DEFS[defId];
-      const model = createModel(d.model, style, null);
-      const root = model.root;
-      // (snipers pose with the rifle shouldered: the long scoped rifle is what tells them apart)
-      model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true, aim: d.model === 'sniper' ? 1 : 0 });
-      this.resize(CW * SS, CH * SS);
-      this.scene.add(root);
+    if (hit !== undefined) return hit || CAMEO_BLANK;
+    if (!this.renderer) return CAMEO_BLANK;
+    if (!this.queue.has(key)) this.queue.set(key, { defId, style });
+    void this.pump();
+    return CAMEO_BLANK;
+  }
+
+  /** Point an <img> at a cameo (now if it is cached, else as soon as it has been rendered). */
+  img(img: HTMLImageElement, defId: string, style: ModelStyle) {
+    img.dataset.cameo = CameoFactory.key(defId, style);
+    img.src = this.get(defId, style);
+  }
+
+  /** `data-cameo` + `src` attributes for an <img> inside an HTML string. */
+  attr(defId: string, style: ModelStyle): string {
+    return `data-cameo="${CameoFactory.key(defId, style)}" src="${this.get(defId, style)}"`;
+  }
+
+  /** Render the queued cameos one at a time in idle slices. */
+  private async pump() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      // cameos kept from an earlier session of this build first: no model build, shader compile or readback
+      await this.restored;
+      while (this.queue.size && this.renderer) {
+        await idle();
+        if (this.paused || document.hidden) {
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        const [key, job] = this.queue.entries().next().value as [string, { defId: string; style: ModelStyle }];
+        this.queue.delete(key);
+        if (this.cache.has(key)) continue;
+        let url = '';
+        try {
+          url = await this.render(job.defId, job.style);
+        } catch (e) {
+          console.warn('[cameo] failed', job.defId, e);
+        }
+        this.cache.set(key, url);
+        if (url) {
+          this.patch(key, url);
+          if (url.startsWith('blob:')) void fetch(url).then((r) => r.blob()).then((b) => storePut(key, b)).catch(() => {});
+        }
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async render(defId: string, style: ModelStyle): Promise<string> {
+    const r = this.renderer;
+    const d = DEFS[defId];
+    if (!r || !d) return '';
+    const model = createModel(d.model, style, null);
+    const root = model.root;
+    // (snipers pose with the rifle shouldered: the long scoped rifle is what tells them apart)
+    model.anim?.({ dt: 0, time: 0, moving: false, speed: 0, dist: 0, turn: 0, fired: Infinity, dead: 0, damage: 0, built: 1, powered: true, aim: d.model === 'sniper' ? 1 : 0 });
+    this.scene.add(root);
+    try {
       root.updateMatrixWorld(true);
       // frame without the whip antennas (they would shrink the model in the frame)
       const box = frameBox(root, true);
@@ -106,29 +212,127 @@ export class CameoFactory {
       if (d.kind === 'unit') root.rotation.y = Math.PI * 0.18;
       root.updateMatrixWorld(true);
       fitCamera(this.camera, box, new THREE.Vector3(1, 0.8, 1.25), 0.86, root.matrixWorld);
-      this.renderer.setClearColor(0x000000, 0);
-      this.renderer.render(this.scene, this.camera);
-      url = this.downsample(this.renderer.domElement, CW, CH).toDataURL('image/png');
+      // compile this model's programs without blocking (parallel compile where the browser has it)
+      await r.compileAsync(this.scene, this.camera);
+      if (this.renderer !== r) return '';
+      await idle();
+      const w = CW * SS;
+      const h = CH * SS;
+      this.corner(w, h);
+      r.setClearColor(0x000000, 0);
+      r.clear();
+      r.render(this.scene, this.camera);
+      // read the frame back without waiting on the GPU (a synchronous readback stalled the main thread
+      // until the cameo context had compiled and drawn everything queued: seconds on slow phones)
+      const px = await this.readback(r, w, h);
+      if (this.renderer !== r) return '';
+      if (px) return await this.encode(px, w, h);
+      return this.downsample(r.domElement, w, h, CW, CH).toDataURL('image/png');
+    } finally {
       this.scene.remove(root);
     }
-    this.cache.set(key, url);
-    return url;
   }
 
-  /** Filter a supersampled frame down to w x h (box-filter quality via the 2D canvas' high-quality smoothing). */
-  private downsample(src: HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+  /**
+   * Asynchronous readback of the top-left w x h of the canvas: readPixels into a pixel buffer, a fence,
+   * then poll the fence in idle slices; the pixels are copied out only once the GPU is done (WebGL 2).
+   * Null where that is unavailable (the caller falls back to the synchronous path).
+   */
+  private async readback(r: THREE.WebGLRenderer, w: number, h: number): Promise<Uint8Array | null> {
+    const gl = r.getContext();
+    if (typeof WebGL2RenderingContext === 'undefined' || !(gl instanceof WebGL2RenderingContext)) return null;
+    const size = w * h * 4;
+    const buf = gl.createBuffer();
+    if (!buf) return null;
+    let sync: WebGLSync | null = null;
+    try {
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+      // (three leaves the canvas' own framebuffer bound after rendering to it)
+      gl.readPixels(0, CANVAS_PX - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!sync) return null;
+      gl.flush();
+      const t0 = performance.now();
+      for (;;) {
+        await new Promise((res) => setTimeout(res, 20));
+        if (this.renderer !== r || gl.isContextLost()) return null;
+        const st = gl.clientWaitSync(sync, 0, 0);
+        if (st === gl.ALREADY_SIGNALED || st === gl.CONDITION_SATISFIED) break;
+        // (a driver that never signals: copy anyway after a while; the data is complete by then)
+        if (st === gl.WAIT_FAILED || performance.now() - t0 > 10000) break;
+      }
+      const out = new Uint8Array(size);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      return out;
+    } catch {
+      return null;
+    } finally {
+      if (sync) gl.deleteSync(sync);
+      gl.deleteBuffer(buf);
+    }
+  }
+
+  /** Bottom-up premultiplied RGBA (the GL frame) -> filtered down to the cameo size -> PNG (encoded off the main thread). */
+  private async encode(px: Uint8Array, w: number, h: number): Promise<string> {
+    if (!this.big) this.big = document.createElement('canvas');
+    const big = this.big;
+    if (big.width !== w || big.height !== h) {
+      big.width = w;
+      big.height = h;
+    }
+    const bg = big.getContext('2d', { willReadFrequently: true });
+    if (!bg) return '';
+    const img = bg.createImageData(w, h);
+    const d = img.data;
+    for (let y = 0; y < h; y++) {
+      let si = (h - 1 - y) * w * 4;
+      let di = y * w * 4;
+      for (let x = 0; x < w; x++, si += 4, di += 4) {
+        const a = px[si + 3];
+        if (a === 0) continue;
+        if (a === 255) {
+          d[di] = px[si];
+          d[di + 1] = px[si + 1];
+          d[di + 2] = px[si + 2];
+        } else {
+          const k = 255 / a;
+          d[di] = Math.min(255, Math.round(px[si] * k));
+          d[di + 1] = Math.min(255, Math.round(px[si + 1] * k));
+          d[di + 2] = Math.min(255, Math.round(px[si + 2] * k));
+        }
+        d[di + 3] = a;
+      }
+    }
+    bg.putImageData(img, 0, 0);
+    const c = this.downsample(big, w, h, CW, CH);
+    const blob = await new Promise<Blob | null>((res) => {
+      try {
+        c.toBlob(res, 'image/png');
+      } catch {
+        res(null);
+      }
+    });
+    return blob ? URL.createObjectURL(blob) : c.toDataURL('image/png');
+  }
+
+  /** Filter the top-left sw x sh of a supersampled frame down to w x h (high-quality 2D canvas smoothing). */
+  private downsample(src: HTMLCanvasElement, sw: number, sh: number, w: number, h: number): HTMLCanvasElement {
     if (!this.out) this.out = document.createElement('canvas');
     const c = this.out;
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;
     }
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', { willReadFrequently: true });
     if (!g) return src;
     g.clearRect(0, 0, w, h);
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
-    g.drawImage(src, 0, 0, src.width, src.height, 0, 0, w, h);
+    g.drawImage(src, 0, 0, sw, sh, 0, 0, w, h);
     return c;
   }
 
@@ -137,35 +341,127 @@ export class CameoFactory {
     return !!this.renderer;
   }
 
-  private resize(w: number, h: number) {
-    if (!this.renderer || (w === this.w && h === this.h)) return;
-    this.w = w;
-    this.h = h;
-    this.renderer.setSize(w, h, false);
+  /** Draw into the w x h top-left corner of the fixed-size canvas (the GL viewport origin is bottom-left). */
+  private corner(w: number, h: number) {
+    const r = this.renderer!;
+    w = Math.min(CANVAS_PX, Math.round(w));
+    h = Math.min(CANVAS_PX, Math.round(h));
+    r.setScissorTest(true);
+    r.setViewport(0, CANVAS_PX - h, w, h);
+    r.setScissor(0, CANVAS_PX - h, w, h);
   }
 
   /**
-   * Live 3D portrait (ui/portrait3d.ts): render a scene into this factory's
-   * offscreen canvas and return it for the caller to filter down and blit.
-   * Sharing the cameo GL context means the model shader programs already
-   * compiled for the sidebar cameos are reused (the portrait scene uses the
-   * same studioRig() + environment) and no extra context is opened on phones.
+   * Live 3D portrait (ui/portrait3d.ts): render a scene into the top-left w x h
+   * of this factory's offscreen canvas and return the canvas for the caller to
+   * filter down and blit (source rect 0, 0, w, h). Sharing the cameo GL context
+   * means the model shader programs already compiled for the sidebar cameos
+   * are reused (the portrait scene uses the same studioRig() + environment) and
+   * no extra context is opened on phones.
    */
+  /** Compile a live scene's programs on this context without blocking (parallel compile where available). */
+  prepare(scene: THREE.Scene, camera: THREE.Camera): Promise<void> {
+    if (!this.renderer) return Promise.resolve();
+    return this.renderer.compileAsync(scene, camera).then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
   renderLive(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): HTMLCanvasElement | null {
     if (!this.renderer) return null;
-    this.resize(w, h);
+    this.corner(w, h);
     this.renderer.setClearColor(0x000000, 0);
+    this.renderer.clear();
     this.renderer.render(scene, camera);
     return this.renderer.domElement;
   }
 
   dispose() {
+    this.queue.clear();
     this.env?.dispose();
     this.env = null;
     this.renderer?.dispose();
     this.renderer?.forceContextLoss();
     this.renderer = null;
   }
+}
+
+// ------------------------------------------------------------------ persistence
+
+/*
+ * Rendered cameos are kept in IndexedDB, keyed by the build: a later session of
+ * the same build shows the sidebar without building, compiling and reading back
+ * ~40 models in the background at battle start (the PNGs are the very same
+ * images). A new build (another code chunk URL) starts over and drops the old set.
+ */
+const DB_NAME = 'ironfront-cameos';
+const BUILD = typeof import.meta !== 'undefined' ? import.meta.url : '';
+let dbp: Promise<IDBDatabase | null> | null = null;
+
+function db(): Promise<IDBDatabase | null> {
+  if (dbp) return dbp;
+  dbp = new Promise((res) => {
+    try {
+      if (typeof indexedDB === 'undefined' || import.meta.env?.DEV) return res(null);
+      const rq = indexedDB.open(DB_NAME, 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore('c');
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => res(null);
+      rq.onblocked = () => res(null);
+    } catch {
+      res(null);
+    }
+  });
+  return dbp;
+}
+
+async function storeLoad(): Promise<Map<string, Blob>> {
+  const out = new Map<string, Blob>();
+  const d = await db();
+  if (!d) return out;
+  return new Promise((res) => {
+    try {
+      const tx = d.transaction('c', 'readwrite');
+      const st = tx.objectStore('c');
+      const rq = st.openCursor();
+      rq.onsuccess = () => {
+        const c = rq.result;
+        if (!c) return;
+        const v = c.value as { build: string; blob: Blob } | undefined;
+        if (v && v.build === BUILD && v.blob instanceof Blob) out.set(String(c.key), v.blob);
+        else c.delete();
+        c.continue();
+      };
+      tx.oncomplete = () => res(out);
+      tx.onerror = () => res(out);
+      tx.onabort = () => res(out);
+    } catch {
+      res(out);
+    }
+  });
+}
+
+async function storePut(key: string, blob: Blob) {
+  const d = await db();
+  if (!d) return;
+  try {
+    d.transaction('c', 'readwrite').objectStore('c').put({ build: BUILD, blob }, key);
+  } catch {
+    /* quota / private mode: just not kept */
+  }
+}
+
+let shared: CameoFactory | null = null;
+
+/**
+ * The session's cameo factory: one offscreen GL context for the menu hero, the
+ * sidebar cameos and the live portrait of every battle (never re-created, so
+ * contexts never pile up, and cameos / programs carry over between battles).
+ */
+export function sharedCameos(): CameoFactory {
+  shared ??= new CameoFactory();
+  return shared;
 }
 
 /**

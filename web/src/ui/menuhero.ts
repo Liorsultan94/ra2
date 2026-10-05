@@ -1,4 +1,4 @@
-import { CameoFactory } from '../render/cameo';
+import { sharedCameos, type CameoFactory } from '../render/cameo';
 import { FACTION_REGION, type ModelStyle } from '../render/models';
 import { DEFS, FACTION_INFO } from '../sim/defs';
 import type { Entity, Faction } from '../sim/types';
@@ -44,7 +44,7 @@ export class MenuHero {
     const def = heroDef(f);
     if (!def) return this.hide();
     try {
-      shared ??= new CameoFactory();
+      shared ??= sharedCameos();
       live ??= new LivePortrait(shared, true);
     } catch {
       return;

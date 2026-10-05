@@ -12,12 +12,13 @@ import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type FogMode, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
-import { CameoFactory } from '../render/cameo';
+import { sharedCameos } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
-import { GameRenderer, type Quality } from '../render/renderer';
+import { GameRenderer, type Quality, type RendererParts } from '../render/renderer';
+import { Slicer } from '../render/slice';
 import { ATMOS_DEFAULTS } from '../render/atmos';
 import { ViewModes } from '../render/viewmodes';
-import { warmUp, type WarmupResult } from '../render/warmup';
+import { prefetchModels, warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
 import { ControlsUI, type OrderMode } from '../ui/controls';
 import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
@@ -82,7 +83,8 @@ export class Game {
   readonly world: World;
   readonly renderer: GameRenderer;
   readonly hud: Hud;
-  private cameos = new CameoFactory();
+  /** The session's cameo factory (shared: one offscreen GL context for every battle and the menu). */
+  private cameos = sharedCameos();
   private local: number;
   private raf = 0;
   private last = 0;
@@ -141,16 +143,11 @@ export class Game {
   /** Listener / ambience / aircraft engines (reads the world, never writes it). */
   private audioScene: AudioScene;
 
-  constructor(
-    container: HTMLElement,
-    readonly opts: GameOptions,
-    readonly audio: AudioSystem,
-    private cb: GameCallbacks,
-  ) {
+  /** The match's world (the deterministic simulation; identical whichever way the game is built). */
+  private static makeWorld(opts: GameOptions, seed: number): World {
     const attract = !!opts.attract;
-    this.seed = opts.seed ?? Math.floor(Math.random() * 1e9);
-    this.world = new World({
-      seed: this.seed,
+    return new World({
+      seed,
       map: opts.map,
       credits: opts.credits,
       fog: opts.fog ?? 'classic',
@@ -159,6 +156,42 @@ export class Game {
         { name: FACTIONS.find((f) => f.id === opts.enemy)!.name, faction: opts.enemy, color: ENEMY_COLOR, isAI: true },
       ],
     });
+  }
+
+  /**
+   * Build a game without long main-thread tasks: the world, then the heavy
+   * battlefield parts (GameRenderer.prebuild) in ~35 ms slices with progress
+   * (0..1), then the rest synchronously. `alive()` returning false (the player
+   * left meanwhile) abandons the build (rejects with slice.ts Aborted).
+   */
+  static async create(container: HTMLElement, opts: GameOptions, audio: AudioSystem, cb: GameCallbacks, onProgress?: (k: number) => void, alive: () => boolean = () => true): Promise<Game> {
+    const slicer = new Slicer(35, () => !alive());
+    const seed = opts.seed ?? Math.floor(Math.random() * 1e9);
+    onProgress?.(0.05);
+    await slicer.yield();
+    const world = Game.makeWorld(opts, seed);
+    onProgress?.(0.2);
+    await slicer.yield();
+    // the renderer's (and ambient life's) settings follow the battle type, as in the constructor
+    ATMOS_DEFAULTS.live = !!opts.liveSky && !opts.attract;
+    const parts = await GameRenderer.prebuild(world, opts.quality, slicer);
+    onProgress?.(0.85);
+    await slicer.yield();
+    const g = new Game(container, { ...opts, seed }, audio, cb, { world, parts });
+    onProgress?.(1);
+    return g;
+  }
+
+  constructor(
+    container: HTMLElement,
+    readonly opts: GameOptions,
+    readonly audio: AudioSystem,
+    private cb: GameCallbacks,
+    pre?: { world: World; parts: RendererParts } | null,
+  ) {
+    const attract = !!opts.attract;
+    this.seed = opts.seed ?? Math.floor(Math.random() * 1e9);
+    this.world = pre?.world ?? Game.makeWorld(opts, this.seed);
     this.local = attract ? -1 : 0;
     this.ctl = new ControlGroups(this.controlsHost());
     this.speed = speedFactor(opts.gameSpeed);
@@ -190,8 +223,9 @@ export class Game {
     this.cine.enabled = opts.cinematic ?? true;
     if (attract) this.hud.root.classList.add('attract');
     ATMOS_DEFAULTS.live = !!opts.liveSky && !attract;
-    this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality);
-    this.hud.attach(this.world, this.renderer, Math.max(0, this.local));
+    this.renderer = new GameRenderer(this.hud.canvas, this.world, this.local, opts.quality, pre?.parts);
+    // (the demo battle behind the menu has no sidebar: no cameos, no live portrait)
+    this.hud.attach(this.world, this.renderer, Math.max(0, this.local), !attract);
     // (the owner wants the first attack to come as a surprise: no peace-time countdown chip and no announcements)
     this.hud.peace.setUntil(0);
     this.renderer.atmos.onThunder = (v) => this.audio.thunder(v);
@@ -275,6 +309,11 @@ export class Game {
       if (this.simple && this.smallScreen() && window.innerHeight > window.innerWidth) this.hud.message('Tip: turn your phone sideways for a bigger battlefield', 'info');
     }
     this.bindInput();
+    // (idle frame gate: any input brings the full frame rate back)
+    for (const t of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'input'] as const) {
+      window.addEventListener(t, this.noteInput, { capture: true, passive: true });
+      this.disposers.push(() => window.removeEventListener(t, this.noteInput, { capture: true }));
+    }
     const onResize = () => this.resize();
     window.addEventListener('resize', onResize);
     this.disposers.push(() => window.removeEventListener('resize', onResize));
@@ -364,17 +403,20 @@ export class Game {
   /** Compile every shader / material of this match under a loading overlay before the first battle frame. */
   private startWarmup() {
     this.warming = true;
+    // the cameo queue waits: its readbacks would queue behind this match's shader compiles on the GPU
+    this.cameos.paused = true;
     const progress = (k: number) => (this.briefing ? this.briefing.setProgress(k) : this.hud.setLoading(k));
     progress(0);
     const factions = [...new Set(this.world.players.map((p) => p.faction))];
-    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k))
+    void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k), () => !this.destroyed)
       .then((res) => {
         this.warmup = res;
-        console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms`);
+        console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms (longest slice ${res.worst} ms)`);
       })
-      .catch((e) => console.warn('[warmup] failed', e))
+      .catch((e) => !this.destroyed && console.warn('[warmup] failed', e))
       .finally(() => {
         if (this.destroyed) return;
+        this.cameos.paused = false;
         this.warming = false;
         if (this.briefing) this.briefing.setReady(() => this.deploy());
         else this.hud.setLoading(null);
@@ -392,16 +434,26 @@ export class Game {
     this.warming = true;
     try {
       const factions = full ? [...new Set(this.world.players.map((p) => p.faction))] : [];
-      this.warmup = await warmUp(this.renderer, factions, null, (k) => !this.destroyed && onProgress(k));
-      console.info(`[warmup] attract: ${this.warmup.models} models, ${this.warmup.programs} programs in ${this.warmup.ms} ms`);
+      this.warmup = await warmUp(this.renderer, factions, null, (k) => !this.destroyed && onProgress(k), () => !this.destroyed);
+      console.info(`[warmup] attract: ${this.warmup.models} models, ${this.warmup.programs} programs in ${this.warmup.ms} ms (longest slice ${this.warmup.worst} ms)`);
     } catch (e) {
-      console.warn('[warmup] failed', e);
+      if (!this.destroyed) console.warn('[warmup] failed', e);
     } finally {
       if (!this.destroyed) {
         this.warming = false;
         this.last = performance.now();
       }
     }
+  }
+
+  /**
+   * Demo battle: after the scene warm-up, build both sides' unit / building models and compile their
+   * shaders in the background (small idle slices), so the AI's first tank of a type does not stall a frame.
+   */
+  prefetch() {
+    if (!this.opts.attract || this.destroyed) return;
+    const factions = [...new Set(this.world.players.map((p) => p.faction))];
+    void prefetchModels(this.renderer, factions, () => !this.destroyed).then((n) => n && console.info(`[warmup] demo: ${n} models prefetched`));
   }
 
   /** Switch the control scheme (Settings → Controls; can change mid-battle). */
@@ -465,6 +517,7 @@ export class Game {
     if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.frame);
     if (skipFrame(now)) return; // battery saver: 30 fps cap (render/perf/hud.ts)
+    if (this.idleSkip(now)) return; // menu / pause screens / idle photo mode: fewer frames (battery)
     const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
     this.last = now;
     if (this.warming || this.briefing) return;
@@ -519,6 +572,30 @@ export class Game {
       if (++this.mmFrame % 2 === 0) this.hud.tickMinimap(now / 1000);
     }
   };
+
+  /** Last time a frame was drawn through the idle gate, and the last user input (photo mode idle). */
+  private gateShown = -1e9;
+  private lastInput = performance.now();
+  private readonly noteInput = () => (this.lastInput = performance.now());
+
+  /**
+   * Battery: frames nobody needs at 60 fps. The demo battle behind the menu runs at 30 fps; with the
+   * pause menu / end screen up the battle is frozen (the render clock stands still, so every frame is
+   * the same picture) and 5 fps keep the view current; photo mode drops to 10 fps once the camera and
+   * the controls have been left alone for a moment (any input brings full rate back at once).
+   * Returns true when this animation frame should be skipped (before its dt is taken, so the next
+   * drawn frame gets the whole elapsed time).
+   */
+  private idleSkip(now: number): boolean {
+    let fps = 0;
+    if (this.opts.attract) fps = 30;
+    else if (this.photo.active) fps = now - this.lastInput > 1500 && !this.photo.busy() ? 10 : 0;
+    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) fps = 5;
+    if (!fps) return false;
+    if (now - this.gateShown < 1000 / fps - 2) return true;
+    this.gateShown = now;
+    return false;
+  }
 
   /** Rotate the camera by 90 degree steps (Q / E, or the on-screen buttons). */
   rotateView(steps: number) {
@@ -1726,7 +1803,7 @@ export class Game {
     this.renderer.dispose();
     this.audioScene.dispose();
     this.ctlUI?.destroy();
-    this.cameos.dispose();
+    this.cameos.paused = false;
     this.hud.destroy();
   }
 }

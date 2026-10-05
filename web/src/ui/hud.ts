@@ -294,7 +294,7 @@ export class Hud {
     this.viewWrap.classList.toggle('cine-on', on);
   }
 
-  attach(world: World, renderer: GameRenderer, player: number) {
+  attach(world: World, renderer: GameRenderer, player: number, sidebar = true) {
     this.world = world;
     this.renderer = renderer;
     this.player = player;
@@ -308,10 +308,10 @@ export class Hud {
     (this.sidebar.querySelector('.sb-faction') as HTMLElement).innerHTML = `${flagHtml(f.id)}<span><small>${FACTION_MOTTO[f.id] ?? 'Command'}</small>${f.name}</span>`;
     this.mmStatic.width = this.minimap.width;
     this.mmStatic.height = this.minimap.height;
-    this.buildCameos();
+    if (sidebar) this.buildCameos();
     this.setTab('building');
     this.live?.dispose();
-    this.live = new LivePortrait(this.cameos, renderer.quality !== 'low' && player >= 0);
+    this.live = new LivePortrait(this.cameos, sidebar && renderer.quality !== 'low' && player >= 0);
   }
 
   // --------------------------------------------------------------- sidebar
@@ -406,7 +406,7 @@ export class Hud {
       const b = el('button', 'cameo', this.grid);
       b.dataset.def = d.id;
       const img = el('img', '', b) as HTMLImageElement;
-      img.src = this.cameos.get(d.id, style);
+      this.cameos.img(img, d.id, style);
       img.alt = d.name;
       img.draggable = false;
       el('span', 'c-name', b).textContent = d.name;
@@ -559,7 +559,7 @@ export class Hud {
         const d = DEFS[e.def];
         const owner = e.owner < 0 ? 'Neutral' : w.players[e.owner].name;
         const hp = e.hp / e.maxHp;
-        const img = e.owner === this.player ? this.cameos.get(e.def, style) : this.cameos.get(e.def, styleFor(w, e.owner));
+        const img = this.cameos.attr(e.def, e.owner === this.player ? style : styleFor(w, e.owner));
         const stats: string[] = [];
         if (d.kind === 'unit' && d.harvester) stats.push(`Cargo $${e.cargo}`);
         if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
@@ -580,7 +580,7 @@ export class Hud {
         const vet = rankLineHtml(e, e.owner === this.player, canRank(d));
         // snipers: lock-on status, refreshed every frame by updateAim
         const aim = e.kind === 'unit' && e.owner === this.player && aimWeapon(e) ? '<div class="sp-aim"><span>Ready</span><i></i></div>' : '';
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img src="${img}" alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
         this.aimText = '';
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
@@ -588,7 +588,7 @@ export class Hud {
         const counts = new Map<string, number>();
         for (const e of sel) counts.set(e.def, (counts.get(e.def) ?? 0) + 1);
         const html = `<div class="sp-multi">${[...counts]
-          .map(([id, n]) => `<button class="sp-type" data-def="${id}" title="${DEFS[id].name}"><img src="${this.cameos.get(id, style)}"><span>${n}</span></button>`)
+          .map(([id, n]) => `<button class="sp-type" data-def="${id}" title="${DEFS[id].name}"><img ${this.cameos.attr(id, style)}><span>${n}</span></button>`)
           .join('')}</div>`;
         // only rebuild when it changed (a rebuild under the finger would eat the tap)
         if (this.setSelHtml(html)) this.selPanel.querySelectorAll<HTMLElement>('.sp-type').forEach((b) => (b.onclick = () => this.actions.onSelectType(b.dataset.def!)));

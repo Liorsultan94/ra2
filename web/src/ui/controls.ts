@@ -191,7 +191,7 @@ export class ControlsUI {
       s.b.classList.toggle('sel', sel);
       const img = s.b.querySelector('img') as HTMLImageElement;
       if (info.def) {
-        img.src = this.cameos.get(info.def, style);
+        this.cameos.img(img, info.def, style);
         img.style.visibility = '';
       } else img.style.visibility = 'hidden';
       (s.b.querySelector('span') as HTMLElement).textContent = info.count ? String(info.count) : '';

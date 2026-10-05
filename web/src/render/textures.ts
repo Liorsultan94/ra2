@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from './fog';
+import { onFogRelease, purgeKeys } from './fogcache';
 
 /*
  * Procedural PBR texture library. Every texture is generated on a canvas at
@@ -576,6 +577,10 @@ export interface MatOpts extends TexOpts {
 const matCache = new Map<string, THREE.MeshStandardMaterial>();
 const fogIds = new WeakMap<FogOfWar, number>();
 let fogCounter = 0;
+onFogRelease((f) => {
+  const id = fogIds.get(f);
+  if (id !== undefined) purgeKeys(matCache, (k) => k.startsWith(id + ':'));
+});
 
 /**
  * Cached PBR material. Texture repeat is NOT set here: use worldUV() on the
