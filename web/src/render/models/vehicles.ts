@@ -1443,6 +1443,144 @@ function loose(h: THREE.Intersection): boolean {
   return !!(aw && h.face && aw.getY(h.face.a) > 0.5);
 }
 
+const ascDistance = (a: THREE.Intersection, b: THREE.Intersection) => a.distance - b.distance;
+const _tv = new THREE.Vector3();
+
+/**
+ * Ray casting against one mesh of a template, for rays along a world axis (straight down, or along +-Z):
+ * three's own Mesh.raycast, run on a stand-in geometry whose index holds only the triangles whose world
+ * footprint across the ray contains it (a grid built once per mesh and plane), in their original order.
+ * Same triangles tested by the same code, so the same hits (points, distances, faces); the search for the
+ * markings' spots casts thousands of rays per model, and testing every triangle of a hull for each was
+ * seconds of main thread per tank type on a phone.
+ */
+class TriFilter {
+  private readonly proxy: THREE.Mesh;
+  private readonly idx: Uint32Array;
+  private readonly grids: ({ x0: number; y0: number; cs: number; n: number; cells: number[][]; box: Float32Array; at: number[] } | null)[] = [null, null];
+  private readonly cand: number[] = [];
+  private readonly tmp: THREE.Intersection[] = [];
+
+  private constructor(private readonly mesh: THREE.Mesh) {
+    const g = mesh.geometry;
+    const n = g.index ? g.index.count : g.attributes.position.count;
+    this.idx = new Uint32Array(Math.max(3, n));
+    const pg = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(g.attributes)) pg.setAttribute(k, a);
+    pg.setIndex(new THREE.BufferAttribute(this.idx, 1));
+    this.proxy = new THREE.Mesh(pg, mesh.material);
+  }
+
+  /** A filter for plain meshes (no instances, skinning, morphs or material groups), else null (three as is). */
+  static for(m: THREE.Mesh): TriFilter | null {
+    const g = m.geometry;
+    if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || (m as THREE.SkinnedMesh).isSkinnedMesh || (m as unknown as { isBatchedMesh?: boolean }).isBatchedMesh) return null;
+    if (Array.isArray(m.material) || m.material === undefined || m.morphTargetInfluences || Object.keys(g.morphAttributes).length || !g.attributes.position) return null;
+    if (m.raycast !== THREE.Mesh.prototype.raycast) return null;
+    return new TriFilter(m);
+  }
+
+  /** The triangles (index positions i of i, i+1, i+2, as three walks them) whose footprint grid cell holds the point. */
+  private grid(plane: number) {
+    let gr = this.grids[plane];
+    if (gr) return gr;
+    const m = this.mesh;
+    const g = m.geometry;
+    const index = g.index;
+    const pos = g.attributes.position;
+    const dr = g.drawRange;
+    const start = Math.max(0, dr.start);
+    const end = Math.min(index ? index.count : pos.count, dr.start + dr.count);
+    const at: number[] = [];
+    const box: number[] = [];
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    const EPS = 1e-4;
+    for (let i = start; i < end; i += 3) {
+      let a0 = Infinity;
+      let b0 = Infinity;
+      let a1 = -Infinity;
+      let b1 = -Infinity;
+      for (let k = 0; k < 3; k++) {
+        const v = index ? index.getX(i + k) : i + k;
+        _tv.fromBufferAttribute(pos, v).applyMatrix4(m.matrixWorld);
+        const a = _tv.x;
+        const b = plane === 1 ? _tv.z : _tv.y;
+        a0 = Math.min(a0, a);
+        a1 = Math.max(a1, a);
+        b0 = Math.min(b0, b);
+        b1 = Math.max(b1, b);
+      }
+      at.push(i);
+      box.push(a0 - EPS, b0 - EPS, a1 + EPS, b1 + EPS);
+      x0 = Math.min(x0, a0 - EPS);
+      y0 = Math.min(y0, b0 - EPS);
+      x1 = Math.max(x1, a1 + EPS);
+      y1 = Math.max(y1, b1 + EPS);
+    }
+    const N = 32;
+    const cs = Math.max(1e-6, (x1 - x0) / N, (y1 - y0) / N);
+    const cells: number[][] = Array.from({ length: N * N }, () => []);
+    for (let t = 0; t < at.length; t++) {
+      const ca0 = Math.max(0, Math.min(N - 1, Math.floor((box[t * 4] - x0) / cs)));
+      const ca1 = Math.max(0, Math.min(N - 1, Math.floor((box[t * 4 + 2] - x0) / cs)));
+      const cb0 = Math.max(0, Math.min(N - 1, Math.floor((box[t * 4 + 1] - y0) / cs)));
+      const cb1 = Math.max(0, Math.min(N - 1, Math.floor((box[t * 4 + 3] - y0) / cs)));
+      for (let cb = cb0; cb <= cb1; cb++) for (let ca = ca0; ca <= ca1; ca++) cells[cb * N + ca].push(t);
+    }
+    gr = { x0, y0, cs, n: N, cells, box: Float32Array.from(box), at };
+    this.grids[plane] = gr;
+    return gr;
+  }
+
+  /** Mesh.raycast(rc, out) for a ray from `o` along a world axis (plane 1: vertical, 0: along Z). */
+  raycast(rc: THREE.Raycaster, o: THREE.Vector3, plane: number, out: THREE.Intersection[]) {
+    const gr = this.grid(plane);
+    const a = o.x;
+    const b = plane === 1 ? o.z : o.y;
+    const cand = this.cand;
+    cand.length = 0;
+    const ca = Math.floor((a - gr.x0) / gr.cs);
+    const cb = Math.floor((b - gr.y0) / gr.cs);
+    if (ca >= 0 && cb >= 0 && ca < gr.n && cb < gr.n) {
+      const bx = gr.box;
+      for (const t of gr.cells[cb * gr.n + ca]) if (a >= bx[t * 4] && a <= bx[t * 4 + 2] && b >= bx[t * 4 + 1] && b <= bx[t * 4 + 3]) cand.push(t);
+    }
+    // no candidate: three's test would only have rejected (bounding volumes) or missed every triangle
+    if (!cand.length) return;
+    const m = this.mesh;
+    const g = m.geometry;
+    const index = g.index;
+    const idx = this.idx;
+    let n = 0;
+    for (const t of cand) {
+      const i = gr.at[t];
+      idx[n++] = index ? index.getX(i) : i;
+      idx[n++] = index ? index.getX(i + 1) : i + 1;
+      idx[n++] = index ? index.getX(i + 2) : i + 2;
+    }
+    const p = this.proxy;
+    const pg = p.geometry;
+    // the original's bounding volumes (three computes the sphere on the first ray cast, as it would have)
+    if (g.boundingSphere === null) g.computeBoundingSphere();
+    pg.boundingSphere = g.boundingSphere;
+    pg.boundingBox = g.boundingBox;
+    pg.setDrawRange(0, n);
+    p.material = m.material;
+    p.matrixWorld.copy(m.matrixWorld);
+    p.layers.mask = m.layers.mask;
+    const tmp = this.tmp;
+    tmp.length = 0;
+    THREE.Mesh.prototype.raycast.call(p, rc, tmp);
+    for (const h of tmp) {
+      h.object = m;
+      out.push(h);
+    }
+  }
+}
+
 /** Ray casts against a finished template (marking placement, damage points). */
 class Probe {
   private readonly rc = new THREE.Raycaster();
@@ -1464,8 +1602,27 @@ class Probe {
   }
   private first(list: THREE.Object3D[]) {
     this.rc.set(this.o, this.d);
-    const h = this.rc.intersectObjects(list, false);
-    return h.length ? h[0] : null;
+    // = this.rc.intersectObjects(list, false)[0]: every mesh in list order, all hits sorted by distance, the
+    // nearest; but each plain mesh only gets the triangles the axis-aligned ray can touch (TriFilter below)
+    const plane = Math.abs(this.d.y) === 1 && this.d.x === 0 && this.d.z === 0 ? 1 : Math.abs(this.d.z) === 1 && this.d.x === 0 && this.d.y === 0 ? 0 : -1;
+    const hits = this.hits;
+    hits.length = 0;
+    for (const o of list) {
+      if (!o.layers.test(this.rc.layers)) continue;
+      const m = o as THREE.Mesh;
+      const f = plane < 0 ? null : this.filter(m);
+      if (!f) m.raycast(this.rc, hits);
+      else f.raycast(this.rc, this.o, plane, hits);
+    }
+    hits.sort(ascDistance);
+    return hits.length ? hits[0] : null;
+  }
+  private readonly hits: THREE.Intersection[] = [];
+  private readonly filters = new Map<THREE.Object3D, TriFilter | null>();
+  private filter(m: THREE.Mesh): TriFilter | null {
+    let f = this.filters.get(m);
+    if (f === undefined) this.filters.set(m, (f = TriFilter.for(m)));
+    return f;
   }
   /** Height of the first surface straight below (x, z). */
   topY(x: number, z: number, hullOnly: boolean): number {

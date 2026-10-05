@@ -70,7 +70,10 @@ export class Terrain {
     yield;
     const trees = treeSpots(map, quality);
     yield;
-    this.ground = new Ground(map, this.layout, trees.map((t) => ({ x: t.x, y: t.y, r: canopyRadius(t) })), fog, quality);
+    // (painted in slices: seconds of work on a phone)
+    const ground = new Ground(map, this.layout, trees.map((t) => ({ x: t.x, y: t.y, r: canopyRadius(t) })), fog, quality, true);
+    yield* ground.steps();
+    this.ground = ground;
     this.group.add(this.ground.mesh);
     yield;
     // 3D grass blades near the camera (medium / high)
