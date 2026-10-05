@@ -119,6 +119,16 @@ export interface UnitDef extends BaseDef {
   crusher?: boolean;
   /** Can be run over by an enemy crusher (infantry on the ground; crush.ts). */
   crushable?: boolean;
+  /**
+   * Stealth aircraft (stealth.ts): while airborne, enemy air-targeting weapons acquire and fire at it only
+   * within this fraction of their normal range (the aircraft counterpart of WeaponDef.lowObservable).
+   */
+  lowObservable?: number;
+  /**
+   * Stealth aircraft (stealth.ts): chance that each anti-air shot or missile aimed at it while airborne misses
+   * (seeded roll). Missiles are decoyed onto a flare, gun / flak / beam shots just miss.
+   */
+  evasion?: number;
 }
 
 export interface BuildingDef extends BaseDef {
@@ -244,6 +254,9 @@ export interface Sortie {
   fuel: number; // ticks of fuel left while homeless (orbit)
   ox: number; // orbit centre
   oy: number;
+  /** Automatic re-strike: the target kept after a bomb release (-1 = none), while the attack order is the one given at tick autoAt. */
+  auto: number;
+  autoAt: number;
 }
 
 export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
@@ -429,6 +442,19 @@ export interface Projectile {
   // cruise missiles: dog-leg waypoint (control point of the ground track)
   wx: number;
   wy: number;
+  /**
+   * Missiles fired at an evasive aircraft (stealth.ts): 0 = not rolled, -1 = not fooled, 1 = will be decoyed,
+   * 2 = diverted onto the decoy flare at (dcx, dcy, dcz) moving at (dcvx, dcvy, dcvz) tiles/s (absolute height z).
+   */
+  decoy: number;
+  dcx: number;
+  dcy: number;
+  dcz: number;
+  dcvx: number;
+  dcvy: number;
+  dcvz: number;
+  dcAt: number; // age at which it was diverted
+  dcr: number; // distance to the flare last tick (closest-approach fuze)
   dead: boolean;
 }
 
@@ -467,7 +493,12 @@ export type SimEvent =
    * threat but it survived (hpLeft > 0, it flies on damaged); 'miss' / 'expire' = interceptor self-destructed.
    * victimId / victimWeapon / hpLeft / maxHp are set for 'kill' and 'hit'.
    */
-  | { t: 'airburst'; x: number; y: number; z: number; kind: 'kill' | 'hit' | 'miss' | 'expire'; weapon: string; victim?: Flight; victimId?: number; victimWeapon?: string; hpLeft?: number; maxHp?: number }
+  | { t: 'airburst'; x: number; y: number; z: number; kind: 'kill' | 'hit' | 'miss' | 'expire'; weapon: string; victim?: Flight; victimId?: number; victimWeapon?: string; hpLeft?: number; maxHp?: number; decoy?: boolean }
+  /**
+   * A missile (proj) homing on an evasive aircraft (id, owner) was fooled: the jet's decoy flare leaves (x, y, z)
+   * at (vx, vy, vz) tiles/s and the missile turns onto it (stealth.ts). The airburst on the flare follows ('miss', decoy).
+   */
+  | { t: 'decoy'; id: number; owner: number; proj: number; x: number; y: number; z: number; vx: number; vy: number; vz: number }
   | { t: 'intercept'; x: number; y: number; id: number }
   | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building'; cause?: 'crushed' }
   /** A vehicle (by, byDef, byOwner) ran over infantry (id); the 'death' event (cause 'crushed') follows. */

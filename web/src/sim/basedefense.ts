@@ -22,6 +22,7 @@
 import { DEFS, VERSUS, WEAPONS, buildingDef, unitDef } from './defs';
 import { isSortieJet } from './airbase';
 import { isBridge } from './bridges';
+import { lowObsFactor } from './stealth';
 import { TPS, type Entity, type UnitDef } from './types';
 import type { World } from './world';
 
@@ -188,7 +189,7 @@ function pick(w: World, e: Entity, d: UnitDef, threats: Map<number, Entity>, att
   for (const t of threats.values()) {
     if (t.dead || !w.canHit(wpn, t)) continue;
     const dist = w.distTo(e, t);
-    if (inRangeOnly ? dist > range || dist < (wpn.minRange ?? 0) : Math.hypot(t.x - px, t.y - py) > DEFEND_LEASH) continue;
+    if (inRangeOnly ? dist > range * lowObsFactor(w, wpn, t) || dist < (wpn.minRange ?? 0) : Math.hypot(t.x - px, t.y - py) > DEFEND_LEASH) continue;
     const eff = VERSUS[wpn.warhead][DEFS[t.def].armor];
     if (eff <= 0) continue;
     let s = dist - eff * 4;

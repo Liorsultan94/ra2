@@ -61,9 +61,12 @@ describe('airbase sortie cycle', () => {
       }
       if (ph === 'taxiOut' || ph === 'taxiIn' || ph === 'lineup' || ph === 'rollout') maxZtaxi = Math.max(maxZtaxi, j.z);
       if (ph === 'takeoff' && j.z === 0) rollY = Math.max(rollY, Math.abs(j.y - g.rwyY));
-      if (seq.length > 10 && ph === 'parked' && j.sortie!.ammo > 0) break;
+      if (seq.length > 10 && j.sortie!.ammo > 0) break;
     }
-    expect(seq).toEqual(['parked', 'taxiOut', 'hold', 'lineup', 'takeoff', 'sortie', 'return', 'final', 'rollout', 'taxiIn', 'parked']);
+    // the factory survives one bomb: the jet keeps the attack order and heads out again the moment it is rearmed
+    expect(seq).toEqual(['parked', 'taxiOut', 'hold', 'lineup', 'takeoff', 'sortie', 'return', 'final', 'rollout', 'taxiIn', 'parked', 'taxiOut']);
+    expect(tgt.dead).toBe(false);
+    expect(j.order).toMatchObject({ type: 'attack', target: tgt.id });
     // wheels on the ground until the take-off roll, which runs down the runway centreline
     expect(maxZtaxi).toBe(0);
     expect(rollY).toBeLessThan(0.05);

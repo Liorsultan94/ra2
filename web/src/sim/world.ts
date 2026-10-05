@@ -24,6 +24,7 @@ import { isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, update
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import { releaseDefender, setAutoDefend, updateBaseDefense } from './basedefense';
 import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from './sniper';
+import { evades, lowObsFactor, rangeVs } from './stealth';
 import {
   CATEGORIES,
   TPS,
@@ -1074,6 +1075,8 @@ export class World {
       if (wpn && !this.canHit(wpn, t)) return;
       const dist = this.distTo(e, t);
       if (dist > range) return;
+      // stealth aircraft: picked up only well inside weapon range (stealth.ts)
+      if (wpn && lowObsFactor(this, wpn, t) < 1 && dist > rangeVs(this, e, wpn, t)) return;
       if (vis && !vis.visible[this.tileOf(t.x, t.y)]) return;
       let score = dist;
       if (wpn?.aim) {
@@ -1105,7 +1108,7 @@ export class World {
     const wpn = WEAPONS[d.weapon!];
     const dist = this.distTo(e, t);
     if (!this.canHit(wpn, t)) return 'out';
-    if (dist > this.weaponRange(e, wpn) || (wpn.minRange && dist < wpn.minRange) || (wpn.aim && !aimSees(this, e, t))) {
+    if (dist > rangeVs(this, e, wpn, t) || (wpn.minRange && dist < wpn.minRange) || (wpn.aim && !aimSees(this, e, t))) {
       if (wpn.aim) cancelAim(e); // target left range / sight: the lock is lost (sniper.ts)
       return 'out';
     }
@@ -1183,6 +1186,12 @@ export class World {
       return;
     }
     if (wpn.projectile === 'instant' || wpn.projectile === 'beam') {
+      if (evades(this, wpn, t)) {
+        // an evasive stealth jet jinks: the burst goes wide (stealth.ts)
+        const a = Math.atan2(t.y - e.y, t.x - e.x) + (this.tick % 2 ? 1 : -1) * Math.PI * 0.5;
+        this.events.push({ t: 'impact', x: t.x + Math.cos(a) * 0.7, y: t.y + Math.sin(a) * 0.7, z: entityZ(this, t) + 0.2, weapon: weaponId, direct: false, air: true });
+        return;
+      }
       this.damage(t, wpn.damage, wpn.warhead, e);
       if (wpn.splash) this.splash(tx, ty, wpn.splash, wpn.damage * 0.6, wpn.warhead, e, t.id);
       this.events.push({ t: 'impact', x: tx, y: ty, z: entityZ(this, t), weapon: weaponId, direct: true, air: this.isAir(t) });
@@ -1498,7 +1507,7 @@ export class World {
     if (!d.weapon || d.engineer) return;
     const wpn = WEAPONS[d.weapon];
     let t = this.get(e.targetId);
-    if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > this.weaponRange(e, wpn))) t = undefined;
+    if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, wpn, t))) t = undefined;
     if (!t && this.tick >= e.scanAt) {
       e.scanAt = this.tick + 8;
       t = this.findTarget(e, this.weaponRange(e, wpn)) ?? undefined;
@@ -1833,7 +1842,7 @@ export class World {
       if (bw.intercept) tryIntercept(this, b, bw);
       const range = this.weaponRange(b, bw);
       let t = this.get(b.targetId);
-      if (t && (this.distTo(b, t) > range || !this.isEnemy(b.owner, t.owner))) t = undefined;
+      if (t && (this.distTo(b, t) > rangeVs(this, b, bw, t) || !this.isEnemy(b.owner, t.owner))) t = undefined;
       if (!t && this.tick >= b.scanAt) {
         b.scanAt = this.tick + 6;
         t = this.findTarget(b, range) ?? undefined;

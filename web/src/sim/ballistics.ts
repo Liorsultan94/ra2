@@ -1,5 +1,6 @@
 import { WEAPONS, unitDef } from './defs';
 import { standHeight } from './map';
+import { DECOY_AGE, DECOY_RANGE, evasionChance, releaseDecoy, stepDecoy } from './stealth';
 import { INTERCEPTABLE, TPS, type Entity, type Flight, type Projectile, type WeaponDef } from './types';
 import type { World } from './world';
 
@@ -120,6 +121,15 @@ function blank(w: World, src: Entity, weapon: WeaponDef, flight: Flight): Projec
     dk: 0,
     wx: 0,
     wy: 0,
+    decoy: 0,
+    dcx: 0,
+    dcy: 0,
+    dcz: 0,
+    dcvx: 0,
+    dcvy: 0,
+    dcvz: 0,
+    dcAt: 0,
+    dcr: 1e9,
     dead: false,
   };
 }
@@ -185,6 +195,9 @@ export function launch(w: World, src: Entity, t: Entity, weapon: WeaponDef, ax: 
     p.vy = (diry / n) * speed;
     p.vz = (dirz / n) * speed;
     p.speed = speed;
+    // a missile at an evasive aircraft (stealth.ts): the seeded roll says now whether its flares will fool it
+    const ev = evasionChance(w, weapon, t);
+    if (ev > 0) p.decoy = w.rng.next() < ev ? 1 : -1;
   }
   w.projectiles.push(p);
   w.events.push({ t: 'launch', id: p.id, flight, weapon: weapon.id, x: p.x, y: p.y, z: p.z, owner: p.owner, sourceId: src.id });
@@ -380,7 +393,19 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   let tvx = 0;
   let tvy = 0;
   let tvz = 0;
-  if (p.targetProj >= 0) {
+  if (p.decoy === 2) {
+    // fooled (stealth.ts): chase the decoy flare, give up once it burns out
+    if (!stepDecoy(p, groundZ(w, p.dcx, p.dcy))) {
+      airburst(w, p, 'expire');
+      return;
+    }
+    ax = p.dcx;
+    ay = p.dcy;
+    az = p.dcz;
+    tvx = p.dcvx;
+    tvy = p.dcvy;
+    tvz = p.dcvz;
+  } else if (p.targetProj >= 0) {
     let t = byId.get(p.targetProj);
     if (!t || t.dead) {
       const nt = retarget(w, p);
@@ -413,6 +438,19 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
       p.tx = ax;
       p.ty = ay;
       p.tz = az;
+      // the jet's flare fools it: from here on it homes on the flare (stealth.ts)
+      // (point-blank once it is homing: at once, so a fooled missile can never reach the jet)
+      const rj = p.decoy === 1 ? Math.hypot(ax - p.x, ay - p.y, az - p.z) : Infinity;
+      const boost = (p.flight === 'sam' || p.flight === 'interceptor') && p.age < (p.phase === 1 ? 2 : 6);
+      if (p.decoy === 1 && (p.age >= DECOY_AGE || (rj < 2.5 && !boost)) && t.kind === 'unit' && w.isAir(t) && rj < DECOY_RANGE) {
+        releaseDecoy(w, p, t, az);
+        ax = p.dcx;
+        ay = p.dcy;
+        az = p.dcz;
+        tvx = p.dcvx;
+        tvy = p.dcvy;
+        tvz = p.dcvz;
+      }
     } else {
       // target gone: keep flying at the last known point
       ax = p.tx;
@@ -480,7 +518,7 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   p.z += p.vz * DT;
 
   // ----- fuzing
-  const hit = spec.hit ?? 0.4;
+  const hit = (spec.hit ?? 0.4) * (p.decoy === 2 ? 1.5 : 1); // a blazing flare sets the proximity fuze off a little further out
   // segment-point distance so fast missiles don't tunnel through the target
   const sx = p.x - p.px;
   const sy = p.y - p.py;
@@ -492,9 +530,21 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
     p.x = p.px + sx * tt;
     p.y = p.py + sy * tt;
     p.z = p.pz + sz * tt;
-    if (p.targetProj >= 0) interceptResolve(w, p, byId.get(p.targetProj)!);
+    if (p.decoy === 2) {
+      decoyBurst(w, p);
+      return;
+    } else if (p.targetProj >= 0) interceptResolve(w, p, byId.get(p.targetProj)!);
     else detonate(w, p, true);
     return;
+  }
+  if (p.decoy === 2) {
+    // proximity fuze on the flare: past the closest approach, close enough -> burst
+    const r = Math.hypot(ax - p.x, ay - p.y, az - p.z);
+    if (r > p.dcr && p.dcr < 1.4) {
+      decoyBurst(w, p);
+      return;
+    }
+    p.dcr = r;
   }
   // guided missiles fly nap-of-the-earth: never dip below the terrain while still away from the target
   const gnd = groundZ(w, p.x, p.y);
@@ -504,10 +554,20 @@ function stepGuided(w: World, p: Projectile, spec: FlightSpec, byId: Map<number,
   }
   if (p.z <= gnd - 0.02) {
     p.z = groundZ(w, p.x, p.y);
+    if (p.decoy === 2) {
+      airburst(w, p, 'expire');
+      return;
+    }
     detonate(w, p, false);
     return;
   }
   if (p.age > (spec.life ?? 6) * TPS || p.x < -2 || p.y < -2 || p.x > w.map.w + 2 || p.y > w.map.h + 2) airburst(w, p, 'expire');
+}
+
+/** A fooled missile bursts on the decoy flare (stealth.ts): no harm to the jet. */
+function decoyBurst(w: World, p: Projectile) {
+  p.dead = true;
+  w.events.push({ t: 'airburst', x: p.x, y: p.y, z: p.z, kind: 'miss', weapon: p.weapon, decoy: true });
 }
 
 function airburst(w: World, p: Projectile, kind: 'kill' | 'miss' | 'expire', victim?: Projectile) {

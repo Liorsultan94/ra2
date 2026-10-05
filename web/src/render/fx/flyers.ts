@@ -22,6 +22,7 @@ interface Flyer {
   max: number;
   acc: number;
   size: number;
+  key: number; // sim-steered flyer (decoy flare: its projectile id), else -1
 }
 
 export interface FlyerSink {
@@ -34,6 +35,7 @@ export interface FlyerSink {
 export class Flyers {
   private list: Flyer[] = [];
   private pool: Flyer[] = [];
+  private keyed = new Map<number, Flyer>();
 
   constructor(
     private sink: FlyerSink,
@@ -44,9 +46,13 @@ export class Flyers {
     return this.list.length;
   }
 
-  add(kind: FlyerKind, x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size = 1) {
-    if (this.list.length >= this.max) return;
-    const f = this.pool.pop() ?? { kind, x, y, z, vx, vy, vz, life: 0, max: life, acc: 0, size };
+  /**
+   * key >= 0: a sim-steered flyer (the decoy flare a fooled missile chases, sim/stealth.ts) that steer() keeps on
+   * the sim's track; it is always admitted, even at the cap, since the missile visibly bursts on it.
+   */
+  add(kind: FlyerKind, x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size = 1, key = -1) {
+    if (this.list.length >= this.max && key < 0) return;
+    const f = this.pool.pop() ?? { kind, x, y, z, vx, vy, vz, life: 0, max: life, acc: 0, size, key };
     f.kind = kind;
     f.x = x;
     f.y = y;
@@ -58,7 +64,21 @@ export class Flyers {
     f.max = life;
     f.acc = Math.random();
     f.size = size;
+    f.key = key;
+    if (key >= 0) this.keyed.set(key, f);
     this.list.push(f);
+  }
+
+  /** Put a sim-steered flyer on the sim's position / velocity (render axes: y up). */
+  steer(key: number, x: number, y: number, z: number, vx: number, vy: number, vz: number) {
+    const f = this.keyed.get(key);
+    if (!f) return;
+    f.x = x;
+    f.y = y;
+    f.z = z;
+    f.vx = vx;
+    f.vy = vy;
+    f.vz = vz;
   }
 
   update(dt: number) {
@@ -86,6 +106,8 @@ export class Flyers {
           s.spawnSmoke({ x: f.x, y: ground + 0.05, z: f.z, vy: 0.3, life: 2.5, size: 0.15 * f.size, sizeEnd: 0.7 * f.size, color: 0x2e2a26, colorEnd: 0x6a6460, alpha: 0.5, drag: 0.8, wind: 0.6 });
           s.spawnFire({ x: f.x, y: ground + 0.05, z: f.z, life: 0.25, size: 0.35 * f.size, color: 0xffc060, colorEnd: 0xff3000 });
         }
+        if (f.key >= 0 && this.keyed.get(f.key) === f) this.keyed.delete(f.key);
+        f.key = -1;
         this.pool.push(f);
         continue;
       }
@@ -100,6 +122,8 @@ export class Flyers {
         const pz = f.z - f.vz * dt * j;
         if (flare) {
           s.spawnFire({ x: px, y: py, z: pz, life: 0.12, size: 0.32 * f.size * (0.6 + 0.4 * fade), sizeEnd: 0.12, color: 0xffffff, colorEnd: 0xffd890, alpha: 1 });
+          // warm magnesium halo round the white-hot core (every other puff: cheap)
+          if (j < 0.5) s.spawnFire({ x: px, y: py, z: pz, life: 0.07, size: 0.75 * f.size * (0.5 + 0.5 * fade), sizeEnd: 0.3 * f.size, color: 0xfff0c8, colorEnd: 0xffb050, alpha: 0.45 });
           s.spawnSmoke({ x: px, y: py, z: pz, vx: (Math.random() - 0.5) * 0.1, vy: 0.05, vz: (Math.random() - 0.5) * 0.1, life: 1.8 + Math.random(), size: 0.08, sizeEnd: 0.5, color: 0xe8e6e2, colorEnd: 0xf4f2f0, alpha: 0.45 * fade, drag: 0.6, wind: 0.8 });
         } else if (spark) {
           // white-hot fragment: a thin streak that cools to orange as it slows

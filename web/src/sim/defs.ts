@@ -260,7 +260,7 @@ const UNITS: Record<string, UnitTpl> = {
   apc: { name: 'Infantry Fighting Vehicle', category: 'vehicle', model: 'apc', cost: 800, buildTime: 9, hp: 320, armor: 'light', sight: 7, speed: 2.6, turnRate: 0.12, turret: true, radius: 0.45, weapon: 'autocannon', transport: 5, prereq: ['factory'], desc: 'Autocannon IFV. Carries 5 infantry who fire from inside.', aiWeight: 3, aiTag: 'main' },
   robot: { name: 'Combat Robot', category: 'vehicle', model: 'ugv', cost: 450, buildTime: 6, hp: 200, armor: 'light', sight: 7, speed: 2.8, turnRate: 0.2, turret: true, radius: 0.3, weapon: 'mgHeavy', prereq: ['factory'], desc: 'Unmanned armed ground robot.', aiWeight: 2, aiTag: 'scout' },
   heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles.', aiWeight: 3, aiTag: 'main' },
-  fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands and rearms (10 s). 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
+  fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands, repairs and rearms (10 s), then strikes again until the target is destroyed. 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
   uav: { name: 'Strike UAV', category: 'air', model: 'uav', cost: 900, buildTime: 10, hp: 180, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.15, turret: false, radius: 0.4, air: true, weapon: 'uavMissile', prereq: ['airfield'], desc: 'Armed drone. Attacks ground targets.', aiWeight: 3, aiTag: 'main' },
 };
 
@@ -299,7 +299,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     laser: { replaces: 'aa', name: 'DE M-SHORAD', model: 'laser', category: 'vehicle', cost: 900, hp: 240, armor: 'light', weapon: 'laser', desc: 'Directed-energy air defense. Shreds drones, also hits ground targets.', aiWeight: 2, aiTag: 'aa' },
     arty: { name: 'M109A7 Paladin' },
     heli: { name: 'AH-64E Apache' },
-    fighter: { name: 'F-35A Lightning II', sight: 11, desc: 'Fifth-generation stealth strike jet: one 2,000 lb JDAM per sortie, then back to its airbase to rearm. 4 jets per airbase.' },
+    fighter: { name: 'F-35A Lightning II', sight: 11, speed: 6.0, lowObservable: 0.6, evasion: 0.3, desc: 'Fifth-generation stealth strike jet, 20% faster: one 2,000 lb JDAM per sortie, then back to its airbase to repair, rearm and strike again. Stealth: enemy air defences only lock on at 60% of their range. Evasion: decoy flares and jinking make 30% of anti-air shots and missiles miss. 4 jets per airbase.' },
     robot: { name: 'Vision 60 Robot Dog', model: 'robodog' },
     uav: { name: 'MQ-9 Reaper' },
     himars: { name: 'M142 HIMARS (PrSM)', model: 'tel_himars', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
@@ -314,7 +314,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     mortar: { name: 'Iron Sting Mortar Team', model: 'mortar', category: 'infantry', cost: 450, buildTime: 6, hp: 90, armor: 'infantry', sight: 7, speed: 1.1, weapon: 'mortar', prereq: ['barracks', 'radar'], desc: 'Precision-guided mortar.', aiWeight: 2, aiTag: 'arty' },
     ugv: { replaces: 'robot', name: 'Jaguar UGV', model: 'ugv', category: 'vehicle', cost: 450, buildTime: 6, hp: 220, armor: 'light', sight: 7, speed: 3.0, turnRate: 0.2, turret: true, weapon: 'mgHeavy', radius: 0.32, prereq: ['factory'], desc: 'Armed unmanned ground vehicle for route clearance.', aiWeight: 3, aiTag: 'scout' },
     heli: { name: 'AH-64D Saraf' },
-    fighter: { name: 'F-35I Adir' },
+    fighter: { name: 'F-35I Adir', speed: 6.0, lowObservable: 0.6, evasion: 0.3, desc: 'Israeli stealth strike jet, 20% faster: one heavy bomb per sortie, then back to its airbase to repair, rearm and strike again. Stealth: enemy air defences only lock on at 60% of their range. Evasion: decoy flares and jinking make 30% of anti-air shots and missiles miss. 4 jets per airbase.' },
     uav: { name: 'Hermes 450' },
     lora: { name: 'LORA Launcher', model: 'tel_lora', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
