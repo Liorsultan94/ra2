@@ -12,6 +12,7 @@ import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from '.
 import { rockTexture } from './terraintex';
 import { buildRelief, reliefEnabled, reliefField, reliefHeight } from './relief';
 import { assetBase, fetchBitmap } from './photoground';
+import { landmarkClear } from './landmarks/plan';
 
 /*
  * Natural rock: displaced, smooth-shaded icospheres with crevice darkening and
@@ -283,7 +284,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         const s = 0.3 + hash2(x, y, 3) * 0.22;
         // on the relief's cliffs (relief.ts): crags along the crest, sunk deeper into the slope
         const h = relief ? reliefHeight(m, cx, cz) : groundHeight(m, cx, cz);
-        if (relief && hash2(x, y, 15) < 0.35) continue;
+        if (relief && (hash2(x, y, 15) < 0.35 || landmarkClear(m, cx, cz, 0.7))) continue;
         lists[hash2(x, y, 4) < 0.5 ? 0 : 1].push({
           x: cx,
           y: h - s * (relief ? 0.45 : 0.3),

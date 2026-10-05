@@ -1,6 +1,9 @@
 import type { GameMap } from '../../sim/map';
 import { surfaceHeight } from '../ground';
 import { OUTSKIRTS_GRID, outskirtsHeight } from '../outskirts';
+import { reliefEnabled, reliefHeight } from '../relief';
+
+const RELIEF = reliefEnabled();
 
 /*
  * Ground height for set pieces inside and beyond the map: the drawn terrain
@@ -24,7 +27,8 @@ function grid(m: GameMap, i: number, j: number): number {
 
 /** Height of the drawn ground at (x, y) in tile space (inside: the terrain; outside: the outskirts mesh). */
 export function groundY(m: GameMap, x: number, y: number): number {
-  if (x >= 0.3 && y >= 0.3 && x <= m.w - 0.3 && y <= m.h - 0.3) return surfaceHeight(m, x, y);
+  // (inside: on the relief's cliffs where they rise over the rock: the castle ruin, the fort, the mast stand on top)
+  if (x >= 0.3 && y >= 0.3 && x <= m.w - 0.3 && y <= m.h - 0.3) return RELIEF ? Math.max(surfaceHeight(m, x, y), reliefHeight(m, x, y)) : surfaceHeight(m, x, y);
   const g = OUTSKIRTS_GRID;
   const fx = (x - g.origin) / g.cell;
   const fy = (y - g.origin) / g.cell;
