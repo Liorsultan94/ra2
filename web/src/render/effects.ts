@@ -177,6 +177,8 @@ export class Effects {
   private domeGeo = new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2);
   debris: Debris | null = null;
   marks: GroundMarks | null = null;
+  /** Persistent battle scars (render/scars.ts): when set, blast craters and burnt ground go there instead of the fading marks. */
+  scars: Pick<GroundMarks, 'craterAt' | 'scorchAt'> | null = null;
   /** Water hook (fx/waterfx.ts): ring waves and floating bits where something hits the river. */
   onSplash: ((x: number, z: number, size: number) => void) | null = null;
   private burns: { x: number; y: number; z: number; t: number; size: number }[] = [];
@@ -378,7 +380,7 @@ export class Effects {
         lights: this.lights,
         groundAt: (x: number, z: number) => this.groundAt(x, z),
         haze: this.haze,
-        scorch: (x: number, z: number, r: number) => this.marks?.scorchAt(x, z, r),
+        scorch: (x: number, z: number, r: number) => (this.scars ?? this.marks)?.scorchAt(x, z, r),
       };
       this.grass = new GrassFires(sink, m, this.quality === 'low' ? 4 : this.quality === 'medium' ? 8 : 14);
     }
@@ -553,8 +555,9 @@ export class Effects {
     if (this.debris && p.debris) for (const d of p.debris) this.debris.burst(d.kind, x, Math.max(y, ground + 0.1), z, this.q(d.n), d.power, d.size, { smoke: d.kind === 'burnt' || d.kind === 'metal' ? 0.35 : 0 });
     // (bridge decks carry their own scorch decals that fall with the spans: render/bridgefx.ts)
     if (this.marks && !airborne && !(this.map && this.map.tiles[Math.floor(z) * this.map.w + Math.floor(x)] === Tile.Bridge)) {
-      if (p.scorch) this.marks.scorchAt(x, z, p.scorch * this.rand(0.85, 1.15));
-      if (p.crater) this.marks.craterAt(x, z, p.crater * this.rand(0.85, 1.15));
+      const gm = this.scars ?? this.marks;
+      if (p.scorch) gm.scorchAt(x, z, p.scorch * this.rand(0.85, 1.15));
+      if (p.crater) gm.craterAt(x, z, p.crater * this.rand(0.85, 1.15));
     }
     // big blasts throw burning embers on arcs
     if (S >= 1.3 && p.fire >= 1) {
@@ -747,7 +750,7 @@ export class Effects {
   /** The wreck hits the ground: a fuel-fed second explosion that leaves the wreck burning. */
   airCrash(x: number, ground: number, z: number, S = 1) {
     this.blast({ ...BLASTS.aircraftCrash, size: BLASTS.aircraftCrash.size * S }, x, ground + 0.15, z, ground);
-    this.marks?.craterAt(x, z, 0.5 * S);
+    (this.scars ?? this.marks)?.craterAt(x, z, 0.5 * S);
   }
 
   /** Shell / missile / debris hitting water: tall white column, spray and a ring. */
@@ -1125,7 +1128,7 @@ export class Effects {
   }
 
   scorch(x: number, _y: number, z: number, r: number) {
-    this.marks?.scorchAt(x, z, r);
+    (this.scars ?? this.marks)?.scorchAt(x, z, r);
   }
 
   smoke(x: number, y: number, z: number, size = 1, dark = true) {

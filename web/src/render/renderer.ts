@@ -10,18 +10,21 @@ import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import type { World } from '../sim/world';
-import { unitStandHeight } from './deckramp';
 import { BridgeFx } from './bridgefx';
+import { unitStandHeight } from './deckramp';
 import { SuperFx } from './fx/superfx';
 import { SniperFx } from './fx/sniperfx';
 import { Debris } from './debris';
 import { Fracture, type FracWreck } from './fracture';
+import { BattleScars } from './scars';
+import { prefetchScarAtlas, scarAtlasTile } from './scarsdecal';
 import { Secondaries } from './fx/secondary';
 import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
 import { GroundMarks } from './marks';
 import { FACTION_REGION, createModel, createMunition, type AnimState, type Model, type ModelStyle, type MunitionKind } from './models';
 import { Outskirts } from './outskirts';
+import { reliefClearance } from './relief';
 import { Paradrop } from './paradrop';
 import { UnitLife } from './unitlife';
 import { DeployFx } from './deployfx';
@@ -35,6 +38,7 @@ import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
 import { Sky } from './sky';
+import { updateCloudShadows } from './cloudshadow';
 import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
 import type { TiltShiftPass } from './tiltshift';
@@ -175,6 +179,11 @@ interface Wreck {
   anim?: AnimState;
   /** Buildings on medium / high: the model broken into rigid chunks (fracture.ts). */
   frac?: FracWreck;
+  /** Battle scars (scars.ts): the building still owes its ruin / the vehicle was offered as a hulk. */
+  ruin?: boolean;
+  /** ...as a flat cratered slab (the airbase), not a rubble heap with wall stubs. */
+  flatRuin?: boolean;
+  kept?: boolean;
 }
 
 interface ProjVisual {
@@ -250,6 +259,10 @@ export class GameRenderer {
   /** Ammo / fuel / missile cook-offs after deaths (visual only; fx/secondary.ts). */
   readonly secondaries: Secondaries;
   readonly marks: GroundMarks;
+  /** Persistent craters, scorched earth, ruins and hulks (src/render/scars.ts). */
+  readonly scars: BattleScars;
+  /** ?scars=0 turns the lasting battle scars off (before / after comparisons): fading marks, wrecks sink away. */
+  private scarsOn = typeof location === 'undefined' || new URLSearchParams(location.search).get('scars') !== '0';
   readonly bridgeFx: BridgeFx;
   /** Garrison window fire, house damage sync, superweapon blasts / Iron Beam dome (fx/superfx.ts). */
   readonly superFx: SuperFx;
@@ -339,11 +352,13 @@ export class GameRenderer {
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
     const { map } = world;
     const fog = new FogOfWar(map.w, map.h);
+    // battle-scar decal atlas: built in a worker while the terrain is built here (scarsdecal.ts)
+    void prefetchScarAtlas(scarAtlasTile(quality));
     const occluders = new OccluderGrid(map, treeSpots(map, quality));
     await slicer.tick();
     const terrain = await Terrain.build(map, fog, quality, slicer);
     await slicer.tick();
-    const outskirts = new Outskirts(map, fog, quality, terrain.ground, terrain.water);
+    const outskirts = await Outskirts.build(map, fog, quality, slicer, terrain.ground, terrain.water);
     await slicer.tick();
     return { fog, occluders, terrain, outskirts };
   }
@@ -405,7 +420,9 @@ export class GameRenderer {
 
     // image based lighting: a neutral room right away, swapped for a real sky HDRI once it has streamed in
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    // (cube size 128, the size of the HDRI's and the sky capture's PMREM: the environment's size is part of every lit
+    // program, so a different one made every material compile again mid-battle when the HDRI swapped in)
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04, 0.1, 100, { size: 128 }).texture;
     this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
     void loadSkyEnvironment(this.renderer).then((env) => {
@@ -465,6 +482,15 @@ export class GameRenderer {
     this.effects.setView(this.target, this.camera);
     this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
+    this.scars = new BattleScars({ map, fog: this.fog, effects: this.effects, quality, visibleAt: (x, z) => this.visibleAt(x, z), isPaved: (x, z) => this.marks.isPaved(x, z),
+      occupied: (x, z) => {
+        const tx = Math.floor(x);
+        const tz = Math.floor(z);
+        return tx >= 0 && tz >= 0 && tx < map.w && tz < map.h && this.world.occ[tz * map.w + tx] !== 0;
+      },
+    });
+    if (this.scarsOn) this.effects.scars = this.scars;
+    this.scene.add(this.scars.group);
     // collapsible bridges: per-span meshes, damage, collapse and rebuild (bridgefx.ts)
     this.bridgeFx = new BridgeFx(world, this.effects, this.fog, quality, this.terrain.waterMat);
     this.scene.add(this.bridgeFx.group);
@@ -537,6 +563,7 @@ export class GameRenderer {
     this.bridgeFx.group.name = 'bridges';
     this.overlay.group.name = 'overlay';
     this.atmos = new Atmosphere({ renderer: this.renderer, scene: this.scene, camera: this.camera, sun: this.sun, hemi: this.hemi, fog: this.fog, terrain: this.terrain, effects: this.effects, marks: this.marks, world, quality, composer: this.composer, finalPass: this.finalPass, bloom: this.bloom as unknown as UnrealBloomPass | null, canvas }, viewer);
+    if (this.scarsOn) this.atmos.env.scars = this.scars;
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
@@ -571,7 +598,8 @@ export class GameRenderer {
     }
     // static shadow casters cached between sun shadow refreshes (shadowcache.ts)
     if (!this.csm && this.sun.castShadow) {
-      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group];
+      // (battle scars: ruins / hulks only change when one is added, so they are cached like the scenery)
+      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group, this.scars.group];
       this.shadowCache = new ShadowCache(this.renderer, this.scene, () => roots);
       this.shadowCache.enabled = !/[?&]scache=0\b/.test(location.search);
       this.shadowCache.install(this.sun);
@@ -716,6 +744,7 @@ export class GameRenderer {
     this.perf.enable({
       'sync entities': sys(this, 'syncEntities'),
       'wrecks': sys(this, 'updateWrecks'),
+      'scars': sys(this.scars, 'update'),
       'projectiles': sys(this, 'syncProjectiles'),
       'readability': sys(this, 'updateReadability'),
       'outline+icons draw': sys(this.readability, 'renderOverlays'),
@@ -1042,7 +1071,8 @@ export class GameRenderer {
     if (e.kind === 'unit' && unitDef(e.def).air) {
       const d = unitDef(e.def);
       const z = e.pz + (e.z - e.pz) * alpha;
-      h = Math.max(h, 0) + z + (d.kamikaze || d.fixedWing ? 0 : Math.sin(this.time * 1.7 + e.id) * 0.04);
+      // (relief.ts: climb over the render-only cliffs, fading out as a drone dives onto its target)
+      h = Math.max(h, 0) + z + reliefClearance(this.world.map, x, y) * Math.min(1, z * 2) + (d.kamikaze || d.fixedWing ? 0 : Math.sin(this.time * 1.7 + e.id) * 0.04);
     } else if (e.para || e.pz > 0) {
       // under a parachute canopy
       h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;
@@ -1277,6 +1307,11 @@ export class GameRenderer {
       if (!v) {
         v = this.makeVisual(e);
         this.visuals.set(e.id, v);
+        // a building going up clears the old battle's rubble / hulks / fresh craters off its footprint (scars.ts)
+        if (e.kind === 'building') {
+          const bd = buildingDef(e.def);
+          this.scars.clearArea(e.tx, e.ty, e.tx + bd.w, e.ty + bd.h);
+        }
       }
       const vis = this.isVisibleToViewer(e);
       // (a model of a type new to this match is held back until its shaders have compiled in the background)
@@ -1560,7 +1595,7 @@ export class GameRenderer {
       // medium / high: break the model into rigid chunks (falls back to the sink collapse when the chunk pool is full)
       const frac = this.fracture.shatter(root, bd.w, bd.h, this.scene) ?? undefined;
       if (frac) this.scene.remove(root);
-      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac });
+      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac, ruin: !bd.garrison, flatRuin: bd.role === 'airfield' });
       return;
     }
     const ud = unitDef(e.def);
@@ -1645,6 +1680,22 @@ export class GameRenderer {
       const w = this.wrecks[i];
       w.t += dt;
       const r = w.root;
+      // battle scars: a burnt-out vehicle stays as a rusting hulk instead of sinking away (scars.ts)
+      if (this.scarsOn && (w.kind === 'vehicle' || (w.kind === 'air' && w.landed)) && !w.kept && w.t > w.max - 2.5) {
+        w.kept = true;
+        const tt = w.turret;
+        if (this.scars.adoptHulk(tt ? [r, tt.obj] : [r], w.x, w.y, w.z, w.size, w.kind === 'vehicle')) {
+          this.scene.remove(r);
+          if (tt) this.scene.remove(tt.obj);
+          this.wrecks.splice(i, 1);
+          continue;
+        }
+      }
+      // ...and a destroyed building leaves its ruin, rising as the collapse rubble settles into it
+      if (this.scarsOn && w.ruin && w.t > w.max - (w.frac ? 5 : 3)) {
+        w.ruin = false;
+        this.scars.ruin(w.x, w.z, w.w, w.d, { root: r, rise: w.frac ? 4 : 2.5, flat: w.flatRuin });
+      }
       if (w.kind === 'infantry') {
         if (w.anim && w.model.anim) {
           w.anim.dead = w.t;
@@ -2299,6 +2350,7 @@ export class GameRenderer {
     this.deployFx.update(dt, this.time);
     this.overlay.endFrame();
     this.updateWrecks(dt);
+    this.scars.update(dt, this.renderer);
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
@@ -2311,6 +2363,8 @@ export class GameRenderer {
     this.river.update(dt);
     this.updateCamera();
     if (this.sky) this.atmos.driveSky(this.sky, dt, this.sunDir, !!this.photoCam);
+    // cloud shadows drifting with the wind, god-ray shafts through the gaps (cloudshadow.ts)
+    updateCloudShadows(dt, this.atmos, this.fog.uniforms.cloudAmount.value, this.sunDir, this.fog.uniforms.fogTarget.value.y, this.world.map, this.quality);
     this.scheduleShadow(dt);
     this.updateReadability(dt);
     const vh = this.viewHook;
@@ -2451,6 +2505,7 @@ export class GameRenderer {
     this.deployFx.dispose();
     this.sniperFx.dispose();
     this.atmos.dispose();
+    this.scars.dispose();
     this.sky?.dispose();
     this.canvas.removeEventListener('webglcontextlost', this.onContextLost);
     this.canvas.removeEventListener('webglcontextrestored', this.onContextRestored);

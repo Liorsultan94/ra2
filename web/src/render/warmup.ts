@@ -208,6 +208,13 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
         }
       }
     }
+    // the battle scars' bake pass (its own scene, rendered into the scar layer: scarsdecal.ts)
+    try {
+      r.scars.decals.warm(gl);
+      await settlePrograms(gl, slicer);
+    } catch {
+      /* not fatal */
+    }
     // the unit outlines' instanced mask (readability.ts)
     try {
       r.readability.outlines.warm(gl, r.camera);

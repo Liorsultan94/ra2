@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { CLOUD, CLOUD_COVER_GLSL } from '../cloudshadow';
+import { noiseTexture } from '../fog';
 
 /*
  * Crepuscular rays through smoke (high quality only).
@@ -21,7 +23,14 @@ const RAYS_FRAG = /* glsl */ `
   uniform vec2 uDir;      // screen-space step towards the sun (uv per sample)
   uniform vec3 uCol;
   uniform float uOn;
+  uniform sampler2D fogNoise;
+  uniform float csShafts;
+  uniform float csGround;
+  uniform mat4 uInvProj;
+  uniform mat4 uCamWorld;
+  uniform vec3 uSunW;
   varying vec2 vUv;
+  ${CLOUD_COVER_GLSL}
   void main() {
     float d0 = texture2D( tDens, vUv ).r;
     float occ = 0.0;
@@ -37,6 +46,34 @@ const RAYS_FRAG = /* glsl */ `
     // in-scatter: thin / mid smoke that the sun reaches lights up; haze behind dense smoke is shadowed
     float scatter = smoothstep( 0.02, 0.5, d0 ) * ( 1.0 - smoothstep( 0.9, 2.5, d0 ) );
     float shaft = scatter * T * 0.35 - ( 1.0 - T ) * 0.06 * ( 1.0 - 0.5 * min( d0, 1.0 ) );
+    if ( csShafts > 0.001 ) {
+      // the pixel's view ray (works for the orthographic and the perspective camera)
+      vec2 ndc = vUv * 2.0 - 1.0;
+      vec4 ra = uCamWorld * ( uInvProj * vec4( ndc, -1.0, 1.0 ) );
+      vec4 rb = uCamWorld * ( uInvProj * vec4( ndc, 1.0, 1.0 ) );
+      vec3 ro = ra.xyz / ra.w;
+      vec3 rd = normalize( rb.xyz / rb.w - ro );
+      if ( rd.y < -0.05 ) {
+        float tG = ( csGround - ro.y ) / rd.y;
+        float t0 = max( 0.0, ( csGround + 8.0 - ro.y ) / rd.y );
+        if ( tG > t0 ) {
+          float dt = ( tG - t0 ) / 10.0;
+          float t = t0 + dt * j;
+          float L = 0.0;
+          for ( int i = 0; i < 10; i++ ) {
+            vec3 P = ro + rd * t;
+            L += 1.0 - cloudCover( P.xz - csSunXZ * P.y );
+            t += dt;
+          }
+          L *= 0.1;
+          vec3 G = ro + rd * tG;
+          float lg = 1.0 - cloudCover( G.xz - csSunXZ * G.y );
+          // forward scattering: looking towards the sun the shafts glow more
+          float ph = 0.75 + 0.5 * max( 0.0, dot( rd, uSunW ) );
+          shaft += ( L * ( 1.0 - lg ) * 0.55 - ( 1.0 - L ) * lg * 0.16 ) * ph * csShafts;
+        }
+      }
+    }
     gl_FragColor = vec4( uCol * shaft * uOn, 1.0 );
   }
 `;
@@ -66,7 +103,17 @@ export class GodRays {
     this.rays = new THREE.WebGLRenderTarget(1, 1, opts);
     this.scene.add(density);
     this.mat = new THREE.ShaderMaterial({
-      uniforms: { tDens: { value: this.dens.texture }, uDir: { value: new THREE.Vector2() }, uCol: { value: this.col }, uOn: { value: 1 } },
+      uniforms: {
+        tDens: { value: this.dens.texture },
+        uDir: { value: new THREE.Vector2() },
+        uCol: { value: this.col },
+        uOn: { value: 1 },
+        fogNoise: { value: noiseTexture() },
+        uInvProj: { value: new THREE.Matrix4() },
+        uCamWorld: { value: new THREE.Matrix4() },
+        uSunW: { value: this.sunDir },
+        ...CLOUD,
+      },
       vertexShader: /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`,
       fragmentShader: RAYS_FRAG,
       depthTest: false,
@@ -107,6 +154,8 @@ export class GodRays {
     dx = (dx / l) * step * (this.dens.height / Math.max(1, this.dens.width));
     dy = (dy / l) * step;
     this.mat.uniforms.uDir.value.set(dx, dy);
+    this.mat.uniforms.uInvProj.value.copy(cam.projectionMatrixInverse);
+    this.mat.uniforms.uCamWorld.value.copy(cam.matrixWorld);
     const prevTarget = renderer.getRenderTarget();
     const prevAlpha = renderer.getClearAlpha();
     renderer.getClearColor(this.clear);
