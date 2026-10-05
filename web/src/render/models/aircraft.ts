@@ -3594,6 +3594,30 @@ function buildMunition(kind: MunitionKind, team: number) {
       add(mFins(4, [[0.86, R], [0.9, R * 2.8], [1.0, R * 2.8], [1.0, R]], 0.008, 0xe0e0da));
       break;
     }
+    case 'manpads': {
+      // shoulder-fired IR missile (Stinger / Verba / QW-2 class): slender rolling airframe, glass seeker dome,
+      // four nose canards, flip-out tail fins, yellow HE band and the motor's brown band
+      len = 0.17;
+      const R = 0.026;
+      add(
+        mLathe(
+          [
+            [0, 0],
+            [0.02, R * 0.55],
+            [0.05, R * 0.85],
+            [0.07, R],
+            [0.97, R],
+            [1, R * 0.82],
+            [1, 0],
+          ],
+          10,
+          (d) => (d < 0.06 ? 0x2a3038 : d > 0.2 && d < 0.24 ? C.yellow : d > 0.42 && d < 0.45 ? team : d > 0.62 && d < 0.66 ? 0x8a5a2a : 0xd4d2c6),
+        ),
+      );
+      add(mFins(4, [[0.1, R], [0.13, R * 2.2], [0.17, R * 2.2], [0.18, R]], 0.008, 0xc8c6ba));
+      add(mFins(4, [[0.86, R], [0.92, R * 2.9], [1.0, R * 2.9], [1.0, R]], 0.008, 0xc8c6ba, 0));
+      break;
+    }
     case 'airMissile': {
       len = 0.18;
       const R = 0.014 * 1.25;
@@ -3687,7 +3711,7 @@ function buildMunition(kind: MunitionKind, team: number) {
   }
   if (powered && !glows.length) {
     // hot motor throat: a small glowing disc + short core cone at the nozzle (the renderer adds the flame / trail)
-    const rr = kind === 'thermoRocket' ? 0.026 : kind === 'sam' || kind === 'ballistic' || kind === 'hypersonic' ? 0.024 : kind === 'rocket' ? 0.018 : 0.03;
+    const rr = kind === 'manpads' ? 0.02 : kind === 'thermoRocket' ? 0.026 : kind === 'sam' || kind === 'ballistic' || kind === 'hypersonic' ? 0.024 : kind === 'rocket' ? 0.018 : 0.03;
     glows.push(prep(discX(rr, rr, [-0.505, 0, 0], true, 10)));
     glows.push(prep(tf(new THREE.ConeGeometry(rr * 0.8, rr * 4, 8, 1, true), [-0.505 - rr * 2, 0, 0], [0, 0, PI / 2])));
   }

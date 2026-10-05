@@ -68,6 +68,8 @@ export interface Controller {
 const HARVEST_CAPACITY = 900;
 const BUILD_RADIUS = 5;
 const SPATIAL_CELL = 4;
+/** Units with two weapons (UnitDef.weapon2): ticks to swap launchers before the other one can fire. */
+export const WEAPON_SWAP = TPS;
 
 // Precomputed offsets sorted by distance, used for formations and spiral searches.
 const SPIRAL: [number, number][] = (() => {
@@ -266,6 +268,8 @@ export class World {
       targetId: -1,
       autoTarget: false,
       cooldown: 0,
+      cooldown2: 0,
+      burstWpn: '',
       burstLeft: 0,
       burstTimer: 0,
       scanAt: this.tick + (this.nextId % 10),
@@ -380,6 +384,34 @@ export class World {
     if (wpn.air === 'only') return air;
     if (wpn.air === 'no') return !air;
     return true;
+  }
+
+  /**
+   * The weapon a unit / structure of this def uses against t: its main weapon, else its secondary one
+   * (UnitDef.weapon2: the Rocket Team's shoulder-fired AA missile next to its ground-only RPG); null if neither can hit it.
+   */
+  weaponVs(defId: string, t: Entity): WeaponDef | null {
+    const d = DEFS[defId];
+    if (!d?.weapon) return null;
+    const main = WEAPONS[d.weapon];
+    if (this.canHit(main, t)) return main;
+    const id2 = d.kind === 'unit' ? d.weapon2 : undefined;
+    const alt = id2 ? WEAPONS[id2] : undefined;
+    return alt && this.canHit(alt, t) ? alt : null;
+  }
+
+  /** Can a unit / structure of this def shoot at t with any of its weapons? */
+  canAttack(defId: string, t: Entity) {
+    return !!this.weaponVs(defId, t);
+  }
+
+  /** Longest reach of an entity's weapons (main and secondary). */
+  maxWeaponRange(e: Entity) {
+    const d = DEFS[e.def];
+    if (!d.weapon) return 0;
+    const r = this.weaponRange(e, WEAPONS[d.weapon]);
+    const id2 = d.kind === 'unit' ? d.weapon2 : undefined;
+    return id2 ? Math.max(r, this.weaponRange(e, WEAPONS[id2])) : r;
   }
 
   weaponRange(e: Entity, wpn: WeaponDef) {
@@ -518,7 +550,7 @@ export class World {
             }
             continue;
           }
-          if (!d.weapon || t.owner === pid || d.temp || !this.canHit(WEAPONS[d.weapon], t)) continue;
+          if (!d.weapon || t.owner === pid || d.temp || !this.canAttack(d.id, t)) continue;
           if (isBridge(t) && !canHurtBridge(d.weapon)) continue; // only heavy ordnance can drop a bridge
           e.order = { type: 'attack', target: t.id, forced: true };
           e.targetId = t.id;
@@ -1064,15 +1096,34 @@ export class World {
 
   // ------------------------------------------------------------ combat
 
-  private findTarget(e: Entity, range: number): Entity | null {
+  /**
+   * Two-weapon units (the Rocket Team's RPG + AA missile) busy with a ground target they picked themselves:
+   * an aircraft that comes inside the AA missile's reach takes over (checked every 8 ticks). A target the
+   * player ordered (forced attack) is kept. The launcher swap delay (WEAPON_SWAP) still applies.
+   */
+  private airPreempt(e: Entity, t: Entity | undefined): Entity | undefined {
+    const d = DEFS[e.def];
+    if (!t || d.kind !== 'unit' || !d.weapon2 || this.isAir(t) || (this.tick + e.id) % 8 !== 0 || !autoFire(e)) return t;
+    if (e.order.type === 'attack' && e.order.forced) return t;
+    const a = this.findTarget(e, this.weaponRange(e, WEAPONS[d.weapon2]), true);
+    if (!a) return t;
+    e.targetId = a.id;
+    e.autoTarget = true;
+    if (e.order.type === 'attack') e.order = { type: 'attack', target: a.id };
+    return a;
+  }
+
+  private findTarget(e: Entity, range: number, airOnly = false): Entity | null {
     let best: Entity | null = null;
     let bestScore = Infinity;
     const vis = this.players[e.owner];
-    const wid = DEFS[e.def].weapon;
-    const wpn = wid ? WEAPONS[wid] : null;
+    const d0 = DEFS[e.def];
+    const two = d0.kind === 'unit' && !!d0.weapon2;
     this.queryRadius(e.x, e.y, range + 2, (t) => {
-      if (!this.isEnemy(e.owner, t.owner) || t.dead) return;
-      if (wpn && !this.canHit(wpn, t)) return;
+      if (!this.isEnemy(e.owner, t.owner) || t.dead || (airOnly && !this.isAir(t))) return;
+      // the weapon for this target (main, or the secondary AA missile); unarmed (kamikaze steering) scans everything
+      const wpn = d0.weapon ? this.weaponVs(e.def, t) : null;
+      if (d0.weapon && !wpn) return;
       const dist = this.distTo(e, t);
       if (dist > range) return;
       // stealth aircraft: picked up only well inside weapon range (stealth.ts)
@@ -1093,6 +1144,8 @@ export class World {
         if (td.supply) return;
         if (td.weapon) score -= 1;
         if (td.temp) score -= wpn?.air === 'no' ? 0 : 3; // shoot down incoming drones first
+        // two weapons (RPG + MANPADS): air threats first, the RPG keeps its own reload for the ground
+        if (two && wpn?.air === 'only') score -= 3;
       }
       if (score < bestScore) {
         bestScore = score;
@@ -1105,9 +1158,11 @@ export class World {
   /** Aim and fire at a target. Returns 'fired' | 'aiming' | 'out' (out of range). */
   private engage(e: Entity, t: Entity): 'aiming' | 'out' {
     const d = DEFS[e.def];
-    const wpn = WEAPONS[d.weapon!];
+    const wpn = this.weaponVs(e.def, t);
+    if (!wpn) return 'out';
     const dist = this.distTo(e, t);
-    if (!this.canHit(wpn, t)) return 'out';
+    // the secondary weapon (UnitDef.weapon2) reloads on its own clock
+    const alt = wpn.id !== d.weapon;
     if (dist > rangeVs(this, e, wpn, t) || (wpn.minRange && dist < wpn.minRange) || (wpn.aim && !aimSees(this, e, t))) {
       if (wpn.aim) cancelAim(e); // target left range / sight: the lock is lost (sniper.ts)
       return 'out';
@@ -1131,16 +1186,25 @@ export class World {
       if (aimStep(this, e, t, wpn) && aligned && e.cooldown <= 0 && e.burstLeft === 0) {
         e.burstLeft = 1;
         e.burstTimer = 0;
+        e.burstWpn = '';
         e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
         this.processBurst(e);
         if (t.dead) cancelAim(e);
       }
       return 'aiming';
     }
-    if (aligned && e.cooldown <= 0 && e.burstLeft === 0) {
+    // one weapon at a time: a new burst only once the previous one (of either weapon) is out
+    if (aligned && (alt ? e.cooldown2 : e.cooldown) <= 0 && e.burstLeft === 0) {
       e.burstLeft = wpn.burst ?? 1;
       e.burstTimer = 0;
-      e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
+      e.burstWpn = alt ? wpn.id : '';
+      if (alt) e.cooldown2 = Math.round(wpn.rof * RANK_ROF[e.rank]);
+      else e.cooldown = Math.round(wpn.rof * RANK_ROF[e.rank]);
+      // two launchers: putting one down and shouldering the other takes a moment
+      if (d.kind === 'unit' && d.weapon2) {
+        if (alt) e.cooldown = Math.max(e.cooldown, WEAPON_SWAP);
+        else e.cooldown2 = Math.max(e.cooldown2, WEAPON_SWAP);
+      }
     }
     return 'aiming';
   }
@@ -1157,7 +1221,11 @@ export class World {
       e.burstLeft = 0;
       return;
     }
-    const wpn = WEAPONS[d.weapon];
+    const wpn = WEAPONS[e.burstWpn || d.weapon];
+    if (!this.canHit(wpn, t)) {
+      e.burstLeft = 0; // the target changed (landed / took off) mid-burst
+      return;
+    }
     this.fire(e, t, wpn.id);
     e.burstLeft--;
     e.burstTimer = wpn.burstDelay ?? 0;
@@ -1231,7 +1299,7 @@ export class World {
       // retaliate
       const att = this.get(src.inside >= 0 ? src.inside : src.id); // shots from a garrison / APC: answer the container
       if (att) t.hurtBy = att.spawner >= 0 && this.get(att.spawner) ? att.spawner : att.id; // a drone: blame its launcher
-      if (t.kind === 'unit' && d.weapon && autoFire(t) && (t.order.type === 'idle' || t.order.type === 'attackMove') && t.targetId < 0 && att && this.canHit(WEAPONS[d.weapon], att)) {
+      if (t.kind === 'unit' && d.weapon && autoFire(t) && (t.order.type === 'idle' || t.order.type === 'attackMove') && t.targetId < 0 && att && this.canAttack(t.def, att)) {
         t.targetId = att.id;
         t.autoTarget = true;
       }
@@ -1302,6 +1370,7 @@ export class World {
     if (d.selfHeal && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + d.selfHeal);
     if (e.rank >= ELITE && e.hp < e.maxHp && this.tick % TPS === 0) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * ELITE_HEAL);
     if (e.cooldown > 0) e.cooldown--;
+    if (e.cooldown2 > 0) e.cooldown2--;
     this.processBurst(e);
     aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (e.dodge && stepDodge(this, e, d)) return; // jumping out of a vehicle's way (crush.ts)
@@ -1333,7 +1402,7 @@ export class World {
         break;
       case 'attackMove': {
         if (d.weapon) {
-          let t = this.get(e.targetId);
+          let t = this.airPreempt(e, this.get(e.targetId));
           if (!t && this.tick >= e.scanAt && autoFire(e)) {
             e.scanAt = this.tick + 8;
             t = this.findTarget(e, d.sight) ?? undefined;
@@ -1360,7 +1429,7 @@ export class World {
         break;
       }
       case 'attack': {
-        const t = this.get(o.target);
+        const t = this.airPreempt(e, this.get(o.target));
         if (!t || (!this.isEnemy(e.owner, t.owner) && !isBridge(t)) || !d.weapon) {
           e.order = { type: 'idle' };
           e.targetId = -1;
@@ -1502,15 +1571,16 @@ export class World {
     e.x = e.px = apc.x;
     e.y = e.py = apc.y;
     if (e.cooldown > 0) e.cooldown--;
+    if (e.cooldown2 > 0) e.cooldown2--;
     this.processBurst(e);
     aimUpkeep(this, e); // sniper lock-on (sniper.ts)
     if (!d.weapon || d.engineer) return;
-    const wpn = WEAPONS[d.weapon];
-    let t = this.get(e.targetId);
-    if (t && (!this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, wpn, t))) t = undefined;
+    let t = this.airPreempt(e, this.get(e.targetId));
+    const tw = t ? this.weaponVs(e.def, t) : null;
+    if (t && (!tw || !this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, tw, t))) t = undefined;
     if (!t && this.tick >= e.scanAt) {
       e.scanAt = this.tick + 8;
-      t = this.findTarget(e, this.weaponRange(e, wpn)) ?? undefined;
+      t = this.findTarget(e, this.maxWeaponRange(e)) ?? undefined;
     }
     e.targetId = t ? t.id : -1;
     if (t && this.engage(e, t) === 'out') e.targetId = -1;
@@ -1556,6 +1626,7 @@ export class World {
     if (!d.weapon) return;
     let t = this.get(e.targetId);
     if (t && (!this.isEnemy(e.owner, t.owner) || !autoFire(e))) t = undefined;
+    t = this.airPreempt(e, t);
     if (!t && this.tick >= e.scanAt && autoFire(e)) {
       e.scanAt = this.tick + 10;
       t = this.findTarget(e, scanRange(this, e, d)) ?? undefined;
@@ -1569,7 +1640,7 @@ export class World {
     e.targetId = t.id;
     if (this.engage(e, t) === 'out') {
       // leash: don't chase far from where we were told to stand
-      if (Math.hypot(t.x - e.guardX, t.y - e.guardY) > leashRange(e, d) || e.stance === 'hold' || (WEAPONS[d.weapon].minRange ?? 0) > this.distTo(e, t)) {
+      if (Math.hypot(t.x - e.guardX, t.y - e.guardY) > leashRange(e, d) || e.stance === 'hold' || (this.weaponVs(e.def, t)?.minRange ?? 0) > this.distTo(e, t)) {
         e.targetId = -1;
         return;
       }

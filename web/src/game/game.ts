@@ -725,7 +725,8 @@ export class Game {
       case 'launch': {
         if (!this.visibleToLocal(ev.x, ev.y)) break;
         const f = ev.flight;
-        const snd: Sfx = f === 'interceptor' ? 'interceptorLaunch' : f === 'sam' || f === 'ballistic' || f === 'hypersonic' || f === 'cruise' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
+        const shoulder = !!WEAPONS[ev.weapon]?.shoulder; // shoulder-fired AA missile: a lighter launch
+        const snd: Sfx = f === 'interceptor' || shoulder ? 'interceptorLaunch' : f === 'sam' || f === 'ballistic' || f === 'hypersonic' || f === 'cruise' ? 'missileLaunch' : f === 'rocketSalvo' ? 'thermo' : 'rocket';
         this.sfx(snd, ev.x, ev.y, f === 'ballistic' || f === 'hypersonic' ? 1 : 0.75);
         break;
       }
@@ -1306,7 +1307,7 @@ export class Game {
         }
         const attackers = units.filter((u) => {
           const d = unitDef(u.def);
-          return d.weapon && !d.temp && WEAPONS[d.weapon] && w.canHit(WEAPONS[d.weapon], target);
+          return d.weapon && !d.temp && WEAPONS[d.weapon] && w.canAttack(d.id, target);
         });
         if (target.owner >= 0 && attackers.length) {
           return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: attackers.map((u) => u.id), target: target.id, queue: this.queueing() }, target, true) };

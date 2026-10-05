@@ -837,6 +837,25 @@ export class Effects {
         this.fire.spawn({ x: p.x + back.x * 0.15, y: p.y, z: p.z + back.z * 0.15, life: 0.08, size: 0.45, color: 0xfff0c0, colorEnd: 0xff6000 });
         this.flashLight(p.x, p.y, p.z, 2, 0xffc070, 0.12);
         break;
+      case 'manpads': {
+        // shoulder-fired AA missile (p = tube muzzle, dir = along the raised tube): the eject motor's flash and
+        // puff at the muzzle, a backblast cone out of the rear of the tube, then the flight motor lights (the trail)
+        const tube = 0.4;
+        const rx = p.x - dir.x * tube;
+        const ry = p.y - dir.y * tube;
+        const rz = p.z - dir.z * tube;
+        this.fire.spawn({ x: p.x + dir.x * 0.05, y: p.y + dir.y * 0.05, z: p.z + dir.z * 0.05, life: 0.1, size: 0.7, color: 0xffffff, colorEnd: 0xffb050 });
+        this.fire.spawn({ x: rx, y: ry, z: rz, life: 0.12, size: 0.65, color: 0xfff0c0, colorEnd: 0xff6000 });
+        for (let i = 0; i < this.q(6); i++)
+          this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: dir.x * this.rand(0.3, 1) + this.rand(-0.25, 0.25), vy: dir.y * this.rand(0.3, 1) + this.rand(0, 0.2), vz: dir.z * this.rand(0.3, 1) + this.rand(-0.25, 0.25), life: this.rand(0.7, 1.3), size: 0.08, sizeEnd: 0.32, color: 0xd6d2ca, colorEnd: 0xeeece8, alpha: 0.5, drag: 2.5, wind: 0.4 });
+        for (let i = 0; i < this.q(12); i++)
+          this.smokeSys.spawn({ x: rx, y: ry, z: rz, vx: -dir.x * this.rand(1.8, 3.6) + this.rand(-0.5, 0.5), vy: -dir.y * this.rand(1.2, 2.6) + this.rand(0, 0.5), vz: -dir.z * this.rand(1.8, 3.6) + this.rand(-0.5, 0.5), life: this.rand(0.7, 1.4), size: 0.12, sizeEnd: 0.5, color: 0xb9b2a6, colorEnd: 0xd8d4cc, alpha: 0.45, drag: 3, wind: 0.4 });
+        // the blast kicks dust up off the ground behind the gunner
+        for (let i = 0; i < this.q(5); i++)
+          this.smokeSys.spawn({ x: rx - dir.x * 0.2, y: ground + 0.05, z: rz - dir.z * 0.2, vx: -dir.x * this.rand(0.6, 1.4) + this.rand(-0.4, 0.4), vy: this.rand(0.1, 0.4), vz: -dir.z * this.rand(0.6, 1.4) + this.rand(-0.4, 0.4), life: this.rand(1, 1.8), size: 0.15, sizeEnd: 0.55, color: 0xa89a82, colorEnd: 0xc4b8a2, alpha: 0.4, drag: 2.5, wind: 0.4 });
+        this.flashLight(p.x, p.y, p.z, 2.6, 0xffc070, 0.14);
+        break;
+      }
       case 'sam':
       case 'interceptor':
       case 'ballistic':
@@ -904,6 +923,8 @@ export class Effects {
         ? TRAIL_BALLISTIC
         : kind === 'sam' || kind === 'interceptor'
           ? TRAIL_SAM
+          : kind === 'manpads'
+            ? TRAIL_MANPADS
           : kind === 'rocketSalvo'
             ? TRAIL_ROCKET
             : kind === 'airMissile'
@@ -912,6 +933,8 @@ export class Effects {
                 ? TRAIL_CRUISE
                 : TRAIL_ATGM; // atgm / topAttack
     const sam = kind === 'sam' || kind === 'interceptor';
+    // shoulder-fired AA missiles spin (rolling airframe): a tighter corkscrew than the big SAMs
+    const roll = kind === 'manpads';
     if (boost) {
       const fl = cfg.flame * (sam ? 1.35 : 1);
       this.fire.spawn({ x: b.x - dir.x * 0.05, y: b.y - dir.y * 0.05, z: b.z - dir.z * 0.05, life: 0.05, size: fl * 1.4, color: 0xffffff, colorEnd: 0xffb050 });
@@ -920,6 +943,9 @@ export class Effects {
         // long bright motor plume
         this.fire.spawn({ x: b.x - dir.x * 0.3, y: b.y - dir.y * 0.3, z: b.z - dir.z * 0.3, life: 0.1, size: fl * 0.8, sizeEnd: fl * 0.3, color: 0xffc070, colorEnd: 0xff3000, alpha: 0.7 });
         this.lights.sustain(b.x, b.y, b.z, kind === 'ballistic' || kind === 'hypersonic' ? 5 : 2.6, 0xffb060, 0.3);
+      } else if (roll) {
+        this.fire.spawn({ x: b.x - dir.x * 0.22, y: b.y - dir.y * 0.22, z: b.z - dir.z * 0.22, life: 0.08, size: fl * 0.7, sizeEnd: fl * 0.25, color: 0xffd090, colorEnd: 0xff3000, alpha: 0.7 });
+        this.lights.sustain(b.x, b.y, b.z, 1.6, 0xffb060, 0.25);
         if (this.haze && Math.random() < 0.35) this.haze.heat(b.x - dir.x * 0.4, b.y - dir.y * 0.4, b.z - dir.z * 0.4, 0.5 + cfg.flame, 0.35, 0.004, 0);
       } else if (kind !== 'cruise') this.lights.sustain(b.x, b.y, b.z, 1.1, 0xffb060, 0.3);
     } else if (kind === 'hypersonic' || kind === 'ballistic') {
@@ -934,7 +960,7 @@ export class Effects {
     let vx = 0;
     let vy = 0;
     let vz = 0;
-    if (sam) {
+    if (sam || roll) {
       const u = this.tu.set(0, 1, 0).cross(dir);
       if (u.lengthSq() < 1e-4) u.set(1, 0, 0);
       u.normalize();
@@ -953,9 +979,9 @@ export class Effects {
       let ox = 0;
       let oy = 0;
       let oz = 0;
-      if (sam) {
-        const ang = phase * 9 + t * len * 4.5;
-        const r = 0.07;
+      if (sam || roll) {
+        const ang = phase * (roll ? 14 : 9) + t * len * (roll ? 7 : 4.5);
+        const r = roll ? 0.035 : 0.07;
         const c = Math.cos(ang) * r;
         const s2 = Math.sin(ang) * r;
         ox = ux * c + vx * s2;
@@ -1302,6 +1328,7 @@ export class Effects {
 }
 
 const TRAIL_BALLISTIC = { step: 0.12, life: 4.5, s0: 0.22, s1: 1.3, flame: 0.7, col: 0xe8e4de, alpha: 1 };
+const TRAIL_MANPADS = { step: 0.06, life: 2.8, s0: 0.08, s1: 0.5, flame: 0.3, col: 0xeeebe6, alpha: 1 };
 const TRAIL_SAM = { step: 0.07, life: 3.4, s0: 0.12, s1: 0.75, flame: 0.4, col: 0xf0eeea, alpha: 1 };
 const TRAIL_ROCKET = { step: 0.1, life: 1.8, s0: 0.12, s1: 0.6, flame: 0.4, col: 0xb8b2a8, alpha: 1 };
 const TRAIL_AIR = { step: 0.08, life: 1.6, s0: 0.08, s1: 0.45, flame: 0.32, col: 0xd8d4ce, alpha: 1 };

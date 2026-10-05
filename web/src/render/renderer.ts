@@ -9,6 +9,7 @@ import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPas
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
+import { entityZ } from '../sim/ballistics';
 import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
 import { unitStandHeight } from './deckramp';
@@ -142,6 +143,8 @@ export interface Visual {
   speed: number;
   turn: number;
   lastFire: number;
+  /** Two-launcher infantry (Rocket Team): renderer time of the last AA missile launch. */
+  altAt?: number;
   trackAcc: number;
   bank: number;
   anim: AnimState;
@@ -1327,6 +1330,7 @@ export class GameRenderer {
       a.time = this.time;
       a.fired = this.time - v.lastFire;
       a.aim = e.aimTarget >= 0 ? 1 : 0; // sniper lock-on: shouldered, kneeling (sim/sniper.ts)
+      if (e.kind === 'unit' && unitDef(e.def).weapon2) this.altAim(e, v, a);
       a.damage = 1 - e.hp / e.maxHp;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
@@ -1791,6 +1795,22 @@ export class GameRenderer {
     }
   }
 
+  /**
+   * Two-launcher infantry (the Rocket Team's RPG + shoulder-fired AA missile): the AA tube comes up while an
+   * aircraft is the target (and for a moment after a launch), tracking it at its elevation.
+   */
+  private altAim(e: Entity, v: Visual, a: AnimState) {
+    const w = this.world;
+    const t = e.targetId >= 0 ? w.get(e.targetId) : undefined;
+    const air = !!t && w.isAir(t);
+    a.alt = air || this.time - (v.altAt ?? -1e9) < 2.5 ? 1 : 0;
+    if (air) {
+      const dz = entityZ(w, t) - entityZ(w, e) - 0.25;
+      a.elev = Math.atan2(dz, Math.max(0.3, Math.hypot(t.x - e.x, t.y - e.y)));
+      a.aim = 1;
+    }
+  }
+
   // ------------------------------------------------------------- projectiles
 
   private munition(p: Projectile): THREE.Object3D {
@@ -1864,7 +1884,9 @@ export class GameRenderer {
         const k = p.T > 0 ? p.age / p.T : 0;
         const boost =
           p.flight === 'ballistic' ? k < 0.4 : p.flight === 'hypersonic' ? k < 0.3 : p.flight === 'rocketSalvo' ? k < 0.6 : p.flight === 'artillery' || p.flight === 'mortar' || p.flight === 'shell' ? false : true;
-        this.effects.trail(v.last, pos, p.flight, boost, p.age / TPS + p.id * 0.37);
+        // shoulder-fired AA missiles: their own thinner, corkscrewing (rolling airframe) trail
+        const tk = WEAPONS[p.weapon]?.munition === 'manpads' ? 'manpads' : p.flight;
+        this.effects.trail(v.last, pos, tk, boost, p.age / TPS + p.id * 0.37);
         if (p.hits > 0) this.effects.damagedTrail(v.last, pos, p.hits / Math.max(1, p.maxHp));
       }
       v.last.copy(pos);
@@ -2020,6 +2042,18 @@ export class GameRenderer {
         if (src) {
           const v = this.visuals.get(src.id);
           if (v) v.lastFire = this.time;
+          // shoulder-fired AA missile: launch flash and backblast at the tube on the gunner's shoulder
+          const am = v?.model.altMuzzle;
+          if (v && am && WEAPONS[ev.weapon]?.shoulder) {
+            v.altAt = this.time;
+            if (v.visible) {
+              am.updateWorldMatrix(true, false);
+              const mp = new THREE.Vector3().setFromMatrixPosition(am.matrixWorld);
+              const md = new THREE.Vector3(1, 0, 0).applyQuaternion(am.getWorldQuaternion(new THREE.Quaternion())).normalize();
+              fx.launch('manpads', mp, md, standHeight(this.world.map, ev.x, ev.y));
+              break;
+            }
+          }
         }
         const p = new THREE.Vector3(ev.x, ev.z, ev.y);
         const dir = src ? new THREE.Vector3(Math.cos(src.turret), 0, Math.sin(src.turret)) : new THREE.Vector3(1, 0, 0);

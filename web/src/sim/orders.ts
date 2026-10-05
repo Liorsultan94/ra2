@@ -2,7 +2,7 @@
 // waypoints. Everything here runs inside the deterministic simulation and is
 // driven only by commands (see World.applyCommand / World.updateUnit hooks).
 
-import { WEAPONS, unitDef } from './defs';
+import { unitDef } from './defs';
 import type { Category, Command, Entity, QueuedOrder, Stance, UnitDef } from './types';
 import type { World } from './world';
 
@@ -55,7 +55,7 @@ export const CLASSIC_REACH = 6;
  */
 export function scanRange(w: World, e: Entity, d: UnitDef) {
   if (!d.weapon) return d.sight;
-  const range = w.weaponRange(e, WEAPONS[d.weapon]);
+  const range = w.maxWeaponRange(e); // main and secondary weapon (the Rocket Team's AA missile)
   if (w.fog === 'classic') {
     const reach = Math.min(range, d.sight + CLASSIC_REACH);
     return e.stance === 'hold' ? reach : Math.max(d.sight, reach);
@@ -232,7 +232,7 @@ export function applyOrderCommand(w: World, pid: number, cmd: Command, own: (ids
 
 function canAttack(w: World, e: Entity, t: Entity) {
   const d = unitDef(e.def);
-  return !!d.weapon && !d.temp && t.owner !== e.owner && w.canHit(WEAPONS[d.weapon], t);
+  return !!d.weapon && !d.temp && t.owner !== e.owner && w.canAttack(e.def, t);
 }
 
 function goTo(w: World, e: Entity, x: number, y: number, attackMove: boolean) {
@@ -305,7 +305,7 @@ export function ordersIdle(w: World, e: Entity) {
         let best: Entity | null = null;
         let bd = Infinity;
         w.queryRadius(t.x, t.y, d.sight, (o) => {
-          if (!w.isEnemy(e.owner, o.owner) || o.kind !== 'unit' || unitDef(o.def).temp || !w.canHit(WEAPONS[d.weapon!], o)) return;
+          if (!w.isEnemy(e.owner, o.owner) || o.kind !== 'unit' || unitDef(o.def).temp || !w.canAttack(e.def, o)) return;
           const dd = Math.hypot(o.x - t.x, o.y - t.y);
           if (dd < bd && w.visibleTo(e.owner, o.x, o.y)) {
             bd = dd;

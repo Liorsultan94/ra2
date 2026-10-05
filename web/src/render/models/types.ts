@@ -83,6 +83,10 @@ export interface AnimState {
   seed?: number;
   /** Infantry (snipers): 1 while holding a lock-on aim (sim Entity.aimTarget >= 0): shouldered and kneeling. */
   aim?: number;
+  /** Infantry with two launchers (Rocket Team): 1 while the AA missile tube is in use (target airborne), 0 = the RPG. */
+  alt?: number;
+  /** Infantry: elevation angle (radians) of the current target above the shooter's shoulder (aircraft: aim upwards). */
+  elev?: number;
   /** Infantry animation detail: 0 / undefined = full (leg IK, gestures), 1 = cheap cycle (far zoom / low quality), 2 = off screen (clocks only). */
   lod?: number;
 }
@@ -111,6 +115,8 @@ export interface Model {
   wheeled?: boolean;
   /** Infantry: the model plays its own death animation via anim(s.dead > 0); renderer removes it after ~2.5 s. */
   infantry?: boolean;
+  /** Infantry with a second launcher (Rocket Team's AA missile tube): its muzzle (+X = launch direction). */
+  altMuzzle?: THREE.Object3D;
   /**
    * Battle-damage particle sources (vehicles / aircraft), in root-local space.
    * Each point starts emitting once AnimState.damage >= `at` (e.g. engine deck
@@ -149,6 +155,7 @@ export type MunitionKind =
   | 'thermoRocket'
   | 'sam'
   | 'interceptor'
+  | 'manpads' // shoulder-fired IR missile (the Rocket Team's AA round)
   | 'airMissile' // air-to-ground / air-to-air missile (Hellfire, AIM-120 style)
   | 'ballistic' // Fateh-110 style
   | 'hypersonic'; // DF-17 style glide vehicle on a booster

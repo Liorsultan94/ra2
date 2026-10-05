@@ -83,6 +83,7 @@ const SW_WEAPON_NAME: Record<string, string> = {
 
 function weaponLabel(id: string): string {
   if (SW_WEAPON_NAME[id]) return SW_WEAPON_NAME[id];
+  if (id.includes('manpads')) return 'Shoulder-fired AA missile';
   const words = id.replace(/^[a-z]+_/, (m) => (m === 'sw_' ? '' : m)).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }

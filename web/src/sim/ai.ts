@@ -2,7 +2,7 @@ import { airdropStatus } from './airdrop';
 import { isSortieJet, jetReady } from './airbase';
 import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
-import { DEFS, WEAPONS, buildingDef, defsForFaction, factionDefByRole, unitDef } from './defs';
+import { DEFS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { Rng } from './rng';
@@ -261,7 +261,7 @@ export class AIController implements Controller {
       if (!w.isEnemy(this.pid, o.owner)) return;
       const od = DEFS[o.def];
       if (!od.weapon || Math.hypot(o.x - x, o.y - y) > r) return;
-      const air = WEAPONS[od.weapon].air;
+      const air = airReach(od); // main + secondary weapon (an RPG + MANPADS team counts as 'yes')
       if (airOnly && air === 'no') return;
       if (o.kind === 'building') threat += air === 'only' ? 3 : 4;
       else if (od.category === 'air') threat += 1;
@@ -495,7 +495,13 @@ export class AIController implements Controller {
 
     // react to enemy air power (and drone launchers) with more anti-air
     const enemyAir = this.enemyAirCount();
-    const myAA = units.filter((u) => unitDef(u.def).aiTag === 'aa').length;
+    // dedicated AA counts fully, a Rocket Team (RPG + shoulder-fired AA missile) as half a launcher
+    let myAA = 0;
+    for (const u of units) {
+      const d = unitDef(u.def);
+      if (d.aiTag === 'aa') myAA++;
+      else if (d.weapon2 && hitsAir(d)) myAA += 0.5;
+    }
     const wantAA = enemyAir > 0 && myAA < Math.ceil(enemyAir * 0.7) + 1;
     // counter-battery doctrines answer enemy artillery with their own guns
     const enemyArty = this.cfg.micro > 0 && doc.counterBattery ? this.known((it) => !it.building && klass(it.def) === 'arty').length : 0;
@@ -514,6 +520,7 @@ export class AIController implements Controller {
         if (d.kind !== 'unit' || d.category !== cat || !d.aiWeight) continue;
         let wgt = d.aiWeight * (doc.bias[d.id.slice(prefix)] ?? 1);
         if (d.aiTag === 'aa') wgt = wantAA ? 10 : enemyAir > 0 ? 2 : 0.3 * (doc.bias[d.id.slice(prefix)] ?? 1);
+        else if (enemyAir > 0 && d.weapon2 && hitsAir(d)) wgt *= wantAA ? 2.5 : 1.5; // Rocket Teams double as AA
         if (d.aiTag === 'arty' && enemyArty > 0) wgt *= 1.8;
         opts.push([d.id, wgt]);
       }
@@ -715,16 +722,22 @@ export class AIController implements Controller {
     const w = this.world;
     const threatened = [...buildings, ...units.filter((u) => unitDef(u.def).harvester)].find((b) => w.tick - b.lastHurt < TPS * 3);
     if (!threatened) return false;
+    // ground attackers first; an aircraft is answered only by units that can shoot at aircraft (AA, MANPADS)
     let threat: Entity | null = null;
+    let airThreat: Entity | null = null;
     w.queryRadius(threatened.x, threatened.y, 10, (o) => {
-      if (!threat && o.kind === 'unit' && w.isEnemy(this.pid, o.owner) && !unitDef(o.def).temp) threat = o;
+      if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp) return;
+      if (w.isAir(o)) airThreat ??= o;
+      else threat ??= o;
     });
-    if (!threat) return false;
-    const t = threat as Entity;
+    const t = (threat ?? airThreat) as Entity | null;
+    if (!t) return false;
+    const air = w.isAir(t);
     const [hx, hy] = this.home();
     const home = force.filter((u) => {
       const r = this.roleOf(u);
       if (u.order.type === 'attack') return false;
+      if (air && !w.canAttack(u.def, t)) return false;
       // already on its way there: don't re-plan every think
       if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
       return (r === 'army' || r === 'wing' || r === 'retreat') && Math.hypot(u.x - hx, u.y - hy) < 28;
@@ -1212,9 +1225,8 @@ export class AIController implements Controller {
       const ids = alive
         .filter((u) => {
           if ((u.order.type === 'attack' && u.order.target === tgt.id) || this.crushing(u)) return false;
-          const d = unitDef(u.def);
-          const wpn = WEAPONS[d.weapon!];
-          return wpn.projectile !== 'spawn' && w.canHit(wpn, tgt) && w.distTo(u, tgt) <= w.weaponRange(u, wpn) + 1.5;
+          const wpn = w.weaponVs(u.def, tgt);
+          return !!wpn && wpn.projectile !== 'spawn' && w.distTo(u, tgt) <= w.weaponRange(u, wpn) + 1.5;
         })
         .map((u) => u.id);
       if (ids.length < 2) continue;

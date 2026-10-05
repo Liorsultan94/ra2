@@ -948,6 +948,56 @@ function launcherGeo(kind: AtKind): { parts: Part[]; round: Part[]; w: WInfo; mu
   };
 }
 
+/*
+ * Shoulder-fired AA missile (the Rocket Team's second launcher; sim weapon 'manpads'): Stinger-class
+ * launch tube with end caps, a grip-stock underneath (pistol grip, trigger housing, the battery /
+ * coolant unit plugged in ahead of the grip), the folding IFF antenna grid and the open sight on the
+ * left side, a shoulder pad. Modelled in metres, +X forward, the pistol grip at the origin like the
+ * RPGs; parts carry their own LOD masks.
+ */
+const MP_H = 0.12; // tube axis above the grip
+const MP_R = 0.042;
+function manpadsTube(r: Rig, b: THREE.Bone, p: string): { w: WInfo; muzzle: string } {
+  const h = MP_H;
+  const R = MP_R;
+  // tube and end caps
+  hiLo(r, b, 'tube', xf(cylX(R, R, 1.5, 12), [0.08, h, 0]), xf(cylX(R, R, 1.5, 7), [0.08, h, 0]));
+  r.add(b, 'gun', xf(cylX(R + 0.012, R + 0.012, 0.075, 12), [0.8, h, 0]), xf(cylX(R + 0.01, R + 0.01, 0.06, 12), [-0.645, h, 0]));
+  r.addL(L_HI, b, 'dark', xf(cylX(R * 0.75, R * 0.75, 0.01, 10), [0.84, h, 0])); // front seal
+  r.addL(L_HI, b, 'team', xf(cylX(R + 0.003, R + 0.003, 0.035, 12, true), [-0.42, h, 0])); // team band
+  r.addL(L_HI, b, 'gun', xf(cylX(R + 0.004, R + 0.004, 0.025, 12, true), [0.45, h, 0])); // sling ring
+  // grip-stock: body under the tube, pistol grip, trigger housing, BCU, front handguard
+  r.add(b, 'gun', xf(rbox(0.3, 0.07, 0.055, 0.012), [0.05, h - R - 0.032, 0]));
+  r.add(b, 'gun', xf(rbox(0.034, 0.1, 0.028, 0.008), [0, 0.0, 0], [0, 0, -0.25]));
+  r.addL(L_HI, b, 'dark', xf(box(0.05, 0.012, 0.03), [0.035, 0.025, 0])); // trigger guard
+  r.add(b, 'dark', xf(cylY(0.021, 0.021, 0.11, 8), [0.13, h - R - 0.11, 0], [0, 0, 0.12]));
+  r.addL(L_HI, b, 'gun', xf(cylY(0.024, 0.024, 0.02, 8), [0.137, h - R - 0.165, 0], [0, 0, 0.12])); // BCU end cap
+  r.add(b, 'gun', xf(rbox(0.1, 0.045, 0.05, 0.012), [0.31, h - R - 0.02, 0]));
+  r.addL(L_HI, b, 'dark', xf(rbox(0.16, 0.026, 0.07, 0.01), [-0.22, h - R - 0.01, 0])); // shoulder pad
+  // open sight on the left of the tube (eye level)
+  r.add(b, 'gun', xf(rbox(0.08, 0.045, 0.035, 0.01), [0.1, h + 0.025, -R - 0.03]));
+  r.addL(L_HI, b, 'dark', xf(box(0.006, 0.05, 0.05), [0.17, h + 0.05, -R - 0.035]), xf(box(0.006, 0.022, 0.022), [0.06, h + 0.04, -R - 0.035]));
+  // IFF antenna: a flat grid on an arm, out to the left of the front of the tube
+  const ax = 0.42;
+  const az = -R - 0.075;
+  const ay = h + 0.035;
+  r.add(b, 'dark', strut([ax - 0.04, h, -R + 0.005], [ax - 0.04, ay - 0.02, az], 0.006, 4));
+  for (const [dx, dy, w, hh] of [
+    [0, 0.06, 0.17, 0.008],
+    [0, -0.06, 0.17, 0.008],
+    [0.081, 0, 0.008, 0.12],
+    [-0.081, 0, 0.008, 0.12],
+  ] as const)
+    r.add(b, 'dark', xf(box(w, hh, 0.006), [ax + dx, ay + dy, az]));
+  for (const dx of [-0.04, 0, 0.04]) r.addL(L0, b, 'dark', xf(box(0.004, 0.11, 0.004), [ax + dx, ay, az]));
+  for (const dy of [-0.025, 0.025]) r.addL(L0, b, 'dark', xf(box(0.16, 0.004, 0.004), [ax, ay + dy, az]));
+  r.point(p + 'muzzle1', b, [0.86, h, 0]);
+  return {
+    w: { kind: 'launcher', grip: new THREE.Vector3(-0.005, -0.01, 0.006), fore: new THREE.Vector3(0.31, h - R - 0.045, -0.01), pivot: new THREE.Vector3(-0.2, h - R, 0), round: false },
+    muzzle: p + 'muzzle1',
+  };
+}
+
 // ------------------------------------------------------------------ body
 
 type Role = 'rifle' | 'at' | 'engineer' | 'fpv' | 'ew' | 'gunner' | 'loader' | 'sniper';
@@ -960,6 +1010,8 @@ interface SolDef {
   z: number;
   yaw: number;
   w: WInfo | null;
+  /** Second launcher (Rocket Team: the AA missile tube, bone p + 'wpn2'), slung on the back while the first is in use. */
+  w2?: WInfo | null;
 }
 
 interface Body {
@@ -1366,6 +1418,8 @@ interface Tpl {
   size: { x: number; y: number; z: number };
   key: string;
   tris: number;
+  /** Muzzle of the second launcher (Model.altMuzzle). */
+  altMuzzle?: string;
 }
 
 const RIFLE_K: V3 = [1, 1.12, 1.3];
@@ -1421,9 +1475,15 @@ function buildSoldierTpl(r: Rig, kit: Kit, key: string, t: Tpl) {
         }
       }
       break;
-    case 'at':
+    case 'at': {
       w = arm(r, b, p, kit.at, kit, t.muzzles);
-      break;
+      // the Rocket Team also carries a shoulder-fired AA missile (sim weapon2 'manpads'), slung on the back
+      const w2b = r.bone(p + 'wpn2', b.chest, -0.38, 0.28 - CH, 0);
+      const mp = manpadsTube(r, w2b, p);
+      t.altMuzzle = mp.muzzle;
+      t.sols.push({ p, role, x: 0, z: 0, yaw: 0, w, w2: mp.w });
+      return;
+    }
     case 'fpv': {
       w = arm(r, b, p, 'controller', kit, t.muzzles);
       t.muzzles.push(p + 'muzzle0'); // launch point on the drone
@@ -1658,6 +1718,12 @@ interface Sol {
   ftR: THREE.Bone;
   ftL: THREE.Bone;
   wpn: THREE.Bone | null;
+  /** Two launchers (Rocket Team): the RPG bone, the AA missile bone; `wpn` is whichever is in the hands. */
+  wA: THREE.Bone | null;
+  wB: THREE.Bone | null;
+  /** The AA missile tube is in the hands (AnimState.alt), and the smoothed target elevation. */
+  altOn: boolean;
+  elev: number;
   round: THREE.Bone | null;
   extra: THREE.Bone | null; // antenna / drone
   /** Per-unit random in [0, 1) and its integer source (hashing). */
@@ -1770,6 +1836,30 @@ function ik(sol: Sol, sd: number, T: THREE.Vector3, pole: THREE.Vector3) {
 function freeArm(ua: THREE.Bone, fa: THREE.Bone, sd: number, swing: number, abduct: number, flex: number) {
   ua.rotation.set(-sd * abduct, 0, swing);
   fa.rotation.set(0, 0, flex);
+}
+
+/** The weapon info of what the soldier holds (the Rocket Team's AA tube while it is in use). */
+function held(sol: Sol): WInfo | null {
+  return sol.altOn && sol.def.w2 ? sol.def.w2 : sol.def.w;
+}
+
+const _sx = new THREE.Vector3();
+const _sy = new THREE.Vector3();
+const _sz = new THREE.Vector3();
+/**
+ * A launcher slung diagonally across the back, behind the pack (chest space): muzzle up over one shoulder
+ * (side +1 = right, -1 = left), grip-stock against the pack.
+ */
+function slingOnBack(b: THREE.Bone, w: WInfo, side: number) {
+  _sx.set(0, 0.8, 0.6 * side);
+  _sy.set(-1, 0, 0);
+  _sz.crossVectors(_sx, _sy);
+  tmpM.makeBasis(_sx, _sy, _sz);
+  b.quaternion.setFromRotationMatrix(tmpM);
+  // tube centre ~0.27 m ahead of the shoulder-contact pivot
+  tmpA.set(w.pivot.x + 0.27, w.pivot.y + 0.05, w.pivot.z).applyQuaternion(b.quaternion);
+  b.position.set(-0.4, 0.27 - CH, 0.02 * side).sub(tmpA);
+  b.scale.setScalar(1);
 }
 
 /** Pose the weapon bone so its pivot sits at P (spine-frame numbers, chest space) with the given yaw/pitch/roll. */
@@ -2130,8 +2220,9 @@ function ragdoll(sol: Sol, d: number, force = -1) {
 
 /** The weapon leaves the hands and lies beside the body. */
 function dropWeapon(sol: Sol, d: number, back: boolean) {
-  if (sol.wpn && sol.def.w && sol.def.w.kind !== 'bomb') {
-    const w = sol.def.w;
+  const hw = held(sol);
+  if (sol.wpn && hw && hw.kind !== 'bomb') {
+    const w = hw;
     const kw = sstep(0.05, 0.6, d);
     if (w.kind === 'rifle') placeWeapon(sol, w, 0.1, 0.3, 0.17, -0.6, 0.5, 0.25, 0);
     else if (w.kind === 'launcher') placeWeapon(sol, w, 0.02, 0.43, 0.17, 0.5, 0.05, 0, 0);
@@ -2211,6 +2302,10 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): S
     ftR: g('ftR'),
     ftL: g('ftL'),
     wpn: (map.get(def.p + 'wpn') as THREE.Bone) ?? (map.get(def.p + 'bomb') as THREE.Bone) ?? null,
+    wA: (map.get(def.p + 'wpn') as THREE.Bone) ?? null,
+    wB: (map.get(def.p + 'wpn2') as THREE.Bone) ?? null,
+    altOn: false,
+    elev: 0,
     round: (map.get(def.p + 'round') as THREE.Bone) ?? null,
     extra: (map.get(def.p + 'ant') as THREE.Bone) ?? (map.get(def.p + 'drone') as THREE.Bone) ?? null,
     seed: 0,
@@ -2356,7 +2451,7 @@ function digPose(sol: Sol, dig: number) {
   _dq[1].copy(sol.faR.quaternion);
   _dq[2].copy(sol.uaL.quaternion);
   _dq[3].copy(sol.faL.quaternion);
-  const w = sol.def.w;
+  const w = held(sol);
   if (w && sol.wpn) {
     _dwp.copy(sol.wpn.position);
     _dwq.copy(sol.wpn.quaternion);
@@ -2413,7 +2508,7 @@ function paraPose(sol: Sol, k: number, t: number) {
   blendBone(sol.chest, 0, 0, 0.03, k);
   blendBone(sol.neck, 0, 0, -0.12, k);
   blendBone(sol.head, 0, 0, -0.18, k);
-  const w = sol.def.w;
+  const w = held(sol);
   if (w && sol.wpn) {
     _wp.copy(sol.wpn.position);
     _wq.copy(sol.wpn.quaternion);
@@ -2457,10 +2552,22 @@ function reloadHand(sol: Sol, r: number, out: THREE.Vector3) {
 
 function animSoldierBase(sol: Sol, s: AnimState) {
   const role = sol.def.role;
-  const w = sol.def.w;
   const t = s.time + sol.seed * 40;
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
   const init = dt === 0 && s.time === 0;
+  // two launchers: the AA missile tube comes off the back for an aircraft, the RPG goes onto it (and back again)
+  if (sol.wB && sol.wA && sol.def.w2 && !(s.dead > 0)) {
+    const want = (s.alt ?? 0) > 0.5;
+    if (want !== sol.altOn) {
+      sol.altOn = want;
+      sol.wpn = want ? sol.wB : sol.wA;
+      sol.aimW = 0; // the new tube comes up from the low ready
+    }
+    slingOnBack(want ? sol.wA : sol.wB, want ? sol.def.w! : sol.def.w2, want ? -1 : 1);
+    sol.elev = init ? (s.elev ?? 0) : approach(sol.elev, s.elev ?? 0, dt, 5);
+  }
+  const w = held(sol);
+  const air = sol.altOn ? 1 : 0;
   if (s.dead > 0) {
     deathPose(sol, s.dead, !!s.crushed);
     if (sol.extra && role === 'fpv') sol.extra.scale.setScalar(1);
@@ -2485,7 +2592,8 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
   trackShots(sol, s, dt);
   const dig = (s.dig ?? 0) > 0;
-  const kneelT = !moving && ((role === 'fpv' && aimT > 0) || dig || (sol.crouch && aimT > 0)) ? 1 : 0;
+  // (the AA gunner stands to track an aircraft)
+  const kneelT = !moving && ((role === 'fpv' && aimT > 0) || dig || (sol.crouch && aimT > 0 && !air)) ? 1 : 0;
   sol.kneelW = approach(sol.kneelW, kneelT, dt, kneelT ? 6 : 4);
   if (init) {
     sol.moveW = moving ? 1 : 0;
@@ -2534,7 +2642,10 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   const gRoll = gk === 3 ? ge * Math.sin(gs * 2 * PI) : 0;
 
   // ---- spine / chest: lean (speed, aim, kneel, acceleration), counter-twist, breathing, flinch
-  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw - 0.1 * kw + 0.12 * fl - clamp(sol.accL * 0.012, -0.08, 0.1) * mw;
+  // aiming up at an aircraft: the tube goes up on the shoulder and the gunner leans back into it
+  // (exaggerated like the game's altitudes, plus superelevation: the missile is launched above the line of sight)
+  const up = air * clamp(sol.elev * 1.5 + 0.45, 0, 1.2);
+  const lean = -0.04 - 0.14 * mw * (0.3 + 0.7 * L.runK) - 0.07 * aw * (1 - air) - 0.1 * kw + 0.12 * fl - clamp(sol.accL * 0.012, -0.08, 0.1) * mw + 0.16 * up * aw;
   // shoulders counter-rotate against the pelvis (less with a rifle in both hands, square to the target when aiming)
   const twistUp = -L.tw * mix(w ? 1.35 : 1.8, 1, aw) + 0.2 * fl * sol.flinchDir + 0.3 * gBack * backSide;
   sol.spine.rotation.set(-L.roll * 0.55 + 0.02 * Math.sin(t * 0.45 + sol.seed * 6) * (1 - mw) + 0.06 * fl * sol.flinchDir, twistUp * 0.4, lean * 0.45);
@@ -2563,7 +2674,7 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   lookT = lookT * (1 - aw) + clamp(s.turn * 0.22, -0.5, 0.5) * mw + gBack * backSide * 1.1;
   sol.lookY = init ? lookT : approach(sol.lookY, lookT, dt, 4.5);
   sol.lookP = init ? lookP : approach(sol.lookP, lookP * (1 - aw), dt, 3);
-  const headP = -tot * 0.85 - 0.12 * aw - 0.22 * rifleAim + sol.lookP + 0.025 * Math.sin(t * 0.7) * still + 0.1 * kick + (gk === 1 ? -0.18 * ge : 0) - 0.3 * rw;
+  const headP = -tot * 0.85 - 0.12 * aw * (1 - air) + 0.75 * up * aw - 0.22 * rifleAim + sol.lookP + 0.025 * Math.sin(t * 0.7) * still + 0.1 * kick + (gk === 1 ? -0.18 * ge : 0) - 0.3 * rw;
   const headY = sol.lookY - twistAll + 0.2 * rw;
   const tilt = 0.16 * rifleAim + (gk === 4 ? -0.28 * ge : 0) + 0.12 * gRoll * backSide;
   sol.neck.rotation.set(tilt * 0.3, headY * 0.4, headP * 0.35);
@@ -2613,12 +2724,12 @@ function animSoldierBase(sol: Sol, s: AnimState) {
     const px = mix(0.02, 0.0, aw);
     const py = mix(0.43, 0.445, aw) + 0.01 * bob;
     const pz = mix(0.17, 0.155, aw);
-    const pitch = mix(0.5 - 0.1 * mw, -tot + 0.04, aw) + kick * 0.18 + swayP * 0.6;
+    const pitch = mix(0.5 - 0.1 * mw, -tot + 0.04 + up, aw) + kick * 0.18 + swayP * 0.6;
     const yaw = mix(0.06, 0.03 - twistAll, aw) + swayY * 0.5;
-    placeWeapon(sol, w, px, py, pz, pitch, yaw, 0, kick * 1.5);
+    placeWeapon(sol, w, px, py + 0.03 * up * aw, pz, pitch, yaw, 0, kick * 1.5);
     handTargets(sol, w, RT, LT);
     // reload: warhead gone after the shot, left hand fetches a new one
-    if (sol.round) {
+    if (sol.round && !air) {
       const f = s.fired;
       const gone = f > 0.04 && f < 1.6;
       sol.round.scale.setScalar(gone ? 1e-3 : 1);
@@ -2919,6 +3030,7 @@ function build(key: string): Builder {
         glow: t.glowMat ? [t.glowMat] : [],
         emitters: t.emitters.map((e) => ({ pos: e.pos.clone(), kind: e.kind })),
         infantry: true,
+        altMuzzle: t.altMuzzle ? inst.map.get(t.altMuzzle) : undefined,
         anim: (s) => {
           try {
             // stride length is matched in model metres: follow the renderer's unit scale
