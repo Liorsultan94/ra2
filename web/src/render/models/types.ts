@@ -81,6 +81,8 @@ export interface AnimState {
   produced?: number;
   /** Stable per-unit seed (the entity id): de-synchronises idle motion, gestures and death variants. Render only. */
   seed?: number;
+  /** Infantry (snipers): 1 while holding a lock-on aim (sim Entity.aimTarget >= 0): shouldered and kneeling. */
+  aim?: number;
   /** Infantry animation detail: 0 / undefined = full (leg IK, gestures), 1 = cheap cycle (far zoom / low quality), 2 = off screen (clocks only). */
   lod?: number;
 }

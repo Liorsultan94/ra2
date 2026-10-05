@@ -13,11 +13,13 @@
 
 import { DEFS, buildingDef, unitDef } from './defs';
 import { StructureKind } from './map';
-import type { Entity, Warhead } from './types';
+import type { Entity, Warhead, WeaponDef } from './types';
 import type { World } from './world';
 
 /** Weapon range bonus (tiles) for infantry firing from a building. */
 export const GARRISON_RANGE = 1.5;
+/** Lock-on weapons (snipers, sniper.ts) gain this share of their range instead, when it is more. */
+export const GARRISON_SNIPER_RANGE = 0.2;
 /** Firepower multiplier for garrisoned infantry. */
 export const GARRISON_FIREPOWER = 1.25;
 /** Thermobaric / flame hits on a held house: extra damage to the structure and the share that burns the occupants. */
@@ -54,10 +56,14 @@ export function isGarrison(e: Entity | undefined): boolean {
   return !!e && e.kind === 'building' && !!buildingDef(e.def).garrison;
 }
 
-/** Range bonus for infantry inside house h: measured from the house centre, so half its size plus the bonus. */
-export function garrisonRangeBonus(h: Entity): number {
+/**
+ * Range bonus for infantry inside house h: measured from the house centre, so half its size plus the bonus
+ * (a sniper's window shot reaches +20% further: GARRISON_SNIPER_RANGE).
+ */
+export function garrisonRangeBonus(h: Entity, wpn?: WeaponDef): number {
   const d = buildingDef(h.def);
-  return GARRISON_RANGE + Math.max(d.w, d.h) / 2;
+  const bonus = wpn?.aim ? Math.max(GARRISON_RANGE, wpn.range * GARRISON_SNIPER_RANGE) : GARRISON_RANGE;
+  return bonus + Math.max(d.w, d.h) / 2;
 }
 
 /** The civilian building a unit is garrisoning, if any. */

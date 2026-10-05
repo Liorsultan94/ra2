@@ -728,6 +728,104 @@ function rifleGeo(kind: RifleKind, short: boolean): { parts: Part[]; w: WInfo; m
   };
 }
 
+/*
+ * Sniper rifles (render only; sim weapon 'sniper'). Long barrel with a muzzle brake, a big
+ * day scope with bells and turrets, a deployed bipod under the fore-end, a cheek riser.
+ *   bolt:    tactical bolt-action chassis rifle (M2010, Matzpen, SV-98, G29, K14, UAR-10, KNT-308)
+ *   svd:     Dragunov-pattern DMR with a skeleton (thumbhole) stock in dark wood (Nakhjir)
+ *   bullpup: QBU-88-style bullpup marksman rifle
+ */
+type SniperKind = 'bolt' | 'svd' | 'bullpup';
+const SNIPER_RIFLE: Record<string, SniperKind> = { china: 'bullpup', iran: 'svd' };
+
+function sniperRifleGeo(kind: SniperKind): { parts: Part[]; w: WInfo; muzzle: V3 } {
+  const parts: Part[] = [];
+  const P = (g: G) => parts.push(['gun', g]);
+  const D = (g: G) => parts.push(['dark', g]);
+  const W = (g: G) => parts.push([kind === 'svd' ? 'hair' : 'gun', g]); // furniture: dark wood on the SVD
+  const by = 0.055; // bore height above the grip
+  // scope: main tube, objective / ocular bells, turrets, rings (shared, shifted per layout)
+  const scope = (x: number, y: number, len: number, z = 0) => {
+    P(xf(cylX(0.019, 0.019, len, 10), [x, y, z]));
+    P(xf(cylX(0.033, 0.021, 0.085, 10), [x + len / 2 + 0.035, y, z]));
+    P(xf(cylX(0.025, 0.02, 0.055, 10), [x - len / 2 - 0.022, y, z]));
+    D(xf(cylX(0.029, 0.029, 0.012, 10), [x + len / 2 + 0.08, y, z])); // lens cap rim
+    P(xf(cylY(0.013, 0.013, 0.03, 8), [x + 0.01, y + 0.03, z]));
+    P(xf(cylY(0.012, 0.012, 0.028, 8), [x + 0.01, y, z + 0.03], [PI / 2, 0, 0]));
+    for (const dx of [-len * 0.28, len * 0.28]) P(xf(box(0.022, y - 0.075, 0.026), [x + dx, 0.075 + (y - 0.075) / 2, z]));
+  };
+  // deployed bipod: two splayed legs with feet under the fore-end
+  const bipod = (x: number) => {
+    P(xf(rbox(0.04, 0.025, 0.04, 0.008), [x, 0.02, 0]));
+    for (const sd of [1, -1]) {
+      parts.push(['gun', strut([x, 0.015, sd * 0.012], [x + 0.13, -0.2, sd * 0.075], 0.0075)]);
+      parts.push(['dark', xf(sph(0.014, 0.01, 0.014, 6, 4), [x + 0.13, -0.205, sd * 0.075])]);
+    }
+  };
+  const brake = (x: number) => {
+    P(xf(cylX(0.019, 0.019, 0.075, 8), [x, by, 0]));
+    D(xf(box(0.012, 0.03, 0.042), [x + 0.012, by, 0]));
+  };
+  if (kind === 'bullpup') {
+    // QBU-88 style: long polymer body, action behind the grip, scope on a raised rail
+    W(xf(rbox(0.6, 0.085, 0.045, 0.02), [-0.15, 0.045, 0]));
+    W(xf(rbox(0.14, 0.05, 0.046, 0.015), [0.18, 0.06, 0])); // fore-end
+    P(xf(rbox(0.035, 0.09, 0.026, 0.008), [-0.005, -0.03, 0], [0, 0, -0.25])); // grip
+    P(xf(rbox(0.042, 0.11, 0.024, 0.006), [-0.17, -0.035, 0], [0, 0, -0.12])); // mag behind the grip
+    W(xf(rbox(0.035, 0.13, 0.05, 0.012), [-0.45, 0.02, 0])); // butt pad
+    P(xf(cylX(0.011, 0.011, 0.44, 8), [0.47, by, 0]));
+    brake(0.72);
+    scope(-0.06, 0.15, 0.24);
+    bipod(0.2);
+    const muzzle: V3 = [0.765, by, 0];
+    return { parts, muzzle, w: { kind: 'rifle', grip: new THREE.Vector3(-0.01, -0.01, 0.006), fore: new THREE.Vector3(0.17, 0.02, 0), pivot: new THREE.Vector3(-0.46, 0.04, 0), round: false } };
+  }
+  const svd = kind === 'svd';
+  // receiver, bolt, magazine, trigger group
+  P(xf(box(0.24, 0.064, 0.04), [0.05, 0.05, 0]));
+  if (!svd) {
+    P(xf(cylX(0.011, 0.011, 0.07, 6), [-0.045, 0.06, 0.03])); // bolt body
+    P(strut([-0.04, 0.06, 0.03], [-0.035, 0.035, 0.075], 0.007));
+    D(xf(sph(0.014, 0.014, 0.014, 6, 4), [-0.035, 0.035, 0.078])); // bolt knob
+    P(xf(rbox(0.06, 0.07, 0.028, 0.006), [0.085, 0.0, 0]));
+  } else {
+    P(xf(rbox(0.045, 0.08, 0.024, 0.006), [0.09, -0.005, 0], [0, 0, -0.14])); // curved 10-round mag
+    P(xf(rbox(0.045, 0.06, 0.024, 0.006), [0.105, -0.07, 0], [0, 0, -0.38]));
+  }
+  P(xf(rbox(0.034, 0.1, 0.028, 0.008), [-0.012, -0.005, 0], [0, 0, -0.3])); // pistol grip
+  // fore-end / handguard
+  if (svd) {
+    W(xf(rbox(0.26, 0.055, 0.05, 0.016), [0.31, 0.055, 0]));
+    P(xf(cylX(0.011, 0.011, 0.36, 8), [0.6, by, 0]));
+    P(xf(cylX(0.016, 0.014, 0.06, 8), [0.81, by, 0])); // flash hider
+  } else {
+    P(xf(rbox(0.36, 0.055, 0.048, 0.016), [0.35, 0.056, 0]));
+    for (const x of [0.22, 0.32, 0.42]) D(xf(box(0.04, 0.022, 0.05), [x, 0.056, 0])); // M-LOK slots
+    P(xf(cylX(0.012, 0.012, 0.34, 8), [0.7, by, 0]));
+    brake(0.9);
+  }
+  // stock
+  if (svd) {
+    // skeleton thumbhole stock: upper comb, lower strut, butt
+    W(xf(rbox(0.3, 0.04, 0.036, 0.012), [-0.22, 0.06, 0]));
+    W(xf(rbox(0.26, 0.03, 0.034, 0.01), [-0.24, -0.04, 0], [0, 0, 0.18]));
+    W(xf(rbox(0.05, 0.15, 0.04, 0.014), [-0.38, 0.015, 0]));
+    W(xf(rbox(0.1, 0.03, 0.03, 0.01), [-0.21, 0.09, 0])); // cheek pad
+  } else {
+    P(xf(rbox(0.34, 0.05, 0.036, 0.012), [-0.24, 0.045, 0])); // chassis comb
+    P(xf(rbox(0.14, 0.035, 0.034, 0.01), [-0.25, 0.085, 0])); // adjustable cheek riser
+    P(xf(rbox(0.045, 0.15, 0.04, 0.014), [-0.42, 0.02, 0])); // butt plate
+    P(xf(box(0.2, 0.018, 0.022), [-0.3, -0.03, 0], [0, 0, 0.12])); // lower rail
+    P(xf(cylY(0.008, 0.008, 0.07, 5), [-0.36, -0.07, 0])); // rear monopod
+  }
+  if (svd) scope(0.05, 0.13, 0.17, -0.012);
+  else scope(0.04, 0.135, 0.26);
+  bipod(svd ? 0.36 : 0.44);
+  const muzzle: V3 = svd ? [0.85, by, 0] : [0.94, by, 0];
+  const butt = svd ? -0.405 : -0.445;
+  return { parts, muzzle, w: { kind: 'rifle', grip: new THREE.Vector3(-0.012, -0.012, 0.006), fore: new THREE.Vector3(svd ? 0.27 : 0.3, 0.015, 0), pivot: new THREE.Vector3(butt, 0.045, 0), round: false } };
+}
+
 function launcherGeo(kind: AtKind): { parts: Part[]; round: Part[]; w: WInfo; muzzle: V3; roundAt: V3 | null } {
   const parts: Part[] = [];
   const round: Part[] = [];
@@ -851,7 +949,7 @@ function launcherGeo(kind: AtKind): { parts: Part[]; round: Part[]; w: WInfo; mu
 
 // ------------------------------------------------------------------ body
 
-type Role = 'rifle' | 'at' | 'engineer' | 'fpv' | 'ew' | 'gunner' | 'loader';
+type Role = 'rifle' | 'at' | 'engineer' | 'fpv' | 'ew' | 'gunner' | 'loader' | 'sniper';
 type PackKind = 'assault' | 'rpg' | 'tool' | 'jammer' | 'drone' | 'radio' | 'bombbag';
 
 interface SolDef {
@@ -1347,6 +1445,61 @@ function buildSoldierTpl(r: Rig, kit: Kit, key: string, t: Tpl) {
   t.sols.push({ p, role, x: 0, z: 0, yaw: 0, w });
 }
 
+/** Deterministic 0..1 noise for the ghillie strands. */
+const gh = (i: number, k: number) => {
+  const h = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
+  return h - Math.floor(h);
+};
+
+/**
+ * Ghillie hood and cape: a shaggy shoulder cape and hanging burlap strands in the nation's camo and
+ * gear colours, a veil off the boonie brim. Hero strands only at LOD0; LOD1/2 keep the cape shape.
+ */
+function ghillie(r: Rig, b: Body) {
+  // cape over the shoulders and upper back (soft-skinned with the chest)
+  hiLo(r, b.chest, 'camo', jitter(xf(dome(1.75, 16, 7), [-0.03, 0.27, 0], [0, 0, 0.32], [0.21, 0.24, 0.25]), 0.16, 11), xf(dome(1.75, 9, 4), [-0.03, 0.27, 0], [0, 0, 0.32], [0.21, 0.24, 0.25]));
+  shaded(r, 0.8, () => r.addL(L_HI, b.chest, 'gear', jitter(xf(dome(1.6, 14, 6), [-0.05, 0.31, 0], [0, 0, 0.35], [0.2, 0.2, 0.23]), 0.22, 5)));
+  // strands: around the cape edge, down the back
+  for (let i = 0; i < 26; i++) {
+    const a = (i / 26) * PI * 2 + gh(i, 1) * 0.3;
+    const back = Math.cos(a) < 0.2; // fewer in front (rifle stock, arms)
+    if (!back && i % 3) continue;
+    const len = 0.1 + 0.14 * gh(i, 2) + (Math.cos(a) < -0.5 ? 0.08 : 0);
+    const x = -0.03 + Math.cos(a) * 0.2;
+    const z = Math.sin(a) * 0.24;
+    const y = 0.27 - len / 2 + 0.03 * gh(i, 3);
+    const mk: MK = gh(i, 4) < 0.55 ? 'camo' : 'gear';
+    shaded(r, 0.72 + 0.4 * gh(i, 5), () => r.addL(i % 2 ? L0 : L_HI, b.chest, mk, xf(box(0.018 + 0.014 * gh(i, 6), len, 0.035 + 0.02 * gh(i, 7)), [x, y, z], [Math.sin(a) * 0.25 + (gh(i, 8) - 0.5) * 0.3, -a, -Math.cos(a) * 0.25])));
+  }
+  // veil hanging off the back and sides of the boonie brim
+  const H = (g: G) => xf(g.translate(0, -0.12, 0), [0, 0.12, 0], [0, 0, 0], 1.06);
+  for (let i = 0; i < 16; i++) {
+    const a = PI * 0.45 + (i / 15) * PI * 1.1 + gh(i, 9) * 0.1;
+    const len = 0.09 + 0.08 * gh(i, 10);
+    const mk: MK = gh(i, 11) < 0.5 ? 'camo' : 'gear';
+    shaded(r, 0.75 + 0.35 * gh(i, 12), () => r.addL(i % 2 ? L0 : L_HI, b.head, mk, H(xf(box(0.016, len, 0.03), [Math.cos(a) * 0.19, 0.15 - len / 2, Math.sin(a) * 0.18], [Math.sin(a) * 0.3, -a, -Math.cos(a) * 0.3]))));
+  }
+  // burlap tufts on the hat crown
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * PI * 2;
+    shaded(r, 0.8 + 0.3 * gh(i, 13), () => r.addL(L0, b.head, i % 2 ? 'gear' : 'camo', H(xf(box(0.014, 0.07, 0.03), [Math.cos(a) * 0.07, 0.27, Math.sin(a) * 0.06], [Math.sin(a) * 0.6, -a, -Math.cos(a) * 0.6]))));
+  }
+}
+
+/** Sniper: boonie with a ghillie veil and cape, long scoped rifle on a bipod, radio pack. */
+function buildSniperTpl(r: Rig, kit: Kit, style: ModelStyle, t: Tpl) {
+  const p = 'a';
+  const b = body(r, kit, p, 0, 0, 0, 'boonie', 'radio');
+  ghillie(r, b);
+  const wpn = r.bone(p + 'wpn', b.chest, 0.3, 0.2 - CH, 0.12);
+  const g = sniperRifleGeo(SNIPER_RIFLE[style.faction] ?? 'bolt');
+  for (const [mk, geo] of g.parts) r.add(wpn, mk, xf(geo, [0, 0, 0], [0, 0, 0], RIFLE_K));
+  r.point(p + 'muzzle0', wpn, [g.muzzle[0], g.muzzle[1] * RIFLE_K[1], 0]);
+  t.muzzles.push(p + 'muzzle0');
+  for (const v of [g.w.grip, g.w.fore, g.w.pivot]) v.y *= RIFLE_K[1];
+  t.sols.push({ p, role: 'sniper', x: 0, z: 0, yaw: 0, w: g.w });
+}
+
 // mortar team layout (metres, team-local)
 const M_BASE: V3 = [0.32, 0, 0]; // mortar bone (baseplate centre)
 const M_ELEV = 1.08; // tube elevation (rad)
@@ -1414,6 +1567,7 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
   const pat = kit.camo.pattern;
   r.uvs = { camo: pat === 'digital' ? 1.5 : pat === 'flecktarn' ? 1.9 : 2.3, gear: kit.gearTex === 'camo' ? (pat === 'digital' ? 1.8 : 2.2) : 3.5 };
   if (key === 'mortar') buildMortarTpl(r, kit, t);
+  else if (key === 'sniper') buildSniperTpl(r, kit, style, t);
   else buildSoldierTpl(r, kit, key, t);
   const glowColor = key === 'ewinf' ? 0x5dff7a : 0x63d8ff;
   const mats = materials(kit, style, fog, glowColor);
@@ -2020,7 +2174,7 @@ function reseed(sol: Sol, n: number) {
   sol.seed = hashSeed(sol.sid);
   sol.mag = 4 + Math.floor(hashSeed(sol.sid * 3 + 1) * 4);
   const role = sol.def.role;
-  sol.crouch = hashSeed(sol.sid * 5 + 2) < (role === 'at' ? 0.75 : role === 'rifle' ? 0.4 : role === 'ew' ? 0.3 : 0);
+  sol.crouch = hashSeed(sol.sid * 5 + 2) < (role === 'sniper' ? 1 : role === 'at' ? 0.75 : role === 'rifle' ? 0.4 : role === 'ew' ? 0.3 : 0);
 }
 
 function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): Sol {
@@ -2317,8 +2471,9 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   sol.lastDmg = dmg;
   sol.flinch = Math.max(0, sol.flinch - dt);
   const fl = sol.flinch > 0 ? Math.sin((1 - sol.flinch / 0.32) * PI) : 0;
-  const holdAim = role === 'at' ? 3 : role === 'fpv' ? 5 : 1.4;
-  const aimT = s.fired < holdAim ? 1 : 0;
+  const holdAim = role === 'at' ? 3 : role === 'fpv' ? 5 : role === 'sniper' ? 2.6 : 1.4;
+  // snipers: shouldered and kneeling for the whole lock-on (AnimState.aim), not just after a shot
+  const aimT = s.fired < holdAim || (s.aim ?? 0) > 0 ? 1 : 0;
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
   trackShots(sol, s, dt);
   const dig = (s.dig ?? 0) > 0;
@@ -2437,6 +2592,12 @@ function animSoldierBase(sol: Sol, s: AnimState) {
     placeWeapon(sol, w, px, py, pz, pitch, yaw, roll, kick);
     handTargets(sol, w, RT, LT);
     if (rw > 0.002 && lod === 0) reloadHand(sol, rw, LT);
+    if (role === 'sniper' && lod === 0 && f0 > 0.3 && f0 < 1.1) {
+      // work the bolt: the right hand leaves the grip, up-back-forward-down on the bolt knob, then back
+      const k = sstep(0.3, 0.45, f0) * (1 - sstep(0.95, 1.1, f0));
+      const pull = sstep(0.5, 0.65, f0) * (1 - sstep(0.75, 0.9, f0));
+      RT.lerp(onWeapon(sol, -0.035 - 0.07 * pull, 0.04, 0.085, tmpC), k);
+    }
     ik(sol, 1, RT, POLE_R);
     if (lift > 0.002) gestureHand(gk, ge, gs, LT);
     ik(sol, -1, LT, POLE_L);
@@ -2782,4 +2943,5 @@ export const INFANTRY: Record<string, Builder> = {
   mortar: build('mortar'),
   fpvteam: build('fpvteam'),
   ewinf: build('ewinf'),
+  sniper: build('sniper'),
 };

@@ -6,7 +6,7 @@ export const TICK_MS = 1000 / TPS;
 
 export type Faction = 'usa' | 'israel' | 'china' | 'russia' | 'germany' | 'korea' | 'ukraine' | 'turkey' | 'iran';
 export type ArmorClass = 'infantry' | 'light' | 'heavy' | 'building' | 'aircraft';
-export type Warhead = 'mg' | 'cannon' | 'rocket' | 'artillery' | 'flak' | 'missile' | 'laser' | 'thermo';
+export type Warhead = 'mg' | 'cannon' | 'rocket' | 'artillery' | 'flak' | 'missile' | 'laser' | 'thermo' | 'sniper';
 export type ProjectileKind = 'instant' | 'shell' | 'rocket' | 'beam' | 'artillery' | 'missile' | 'spawn';
 
 /** Physical flight model of a travelling projectile. */
@@ -66,6 +66,12 @@ export interface WeaponDef {
   maneuver?: number;
   spawn?: string; // unit launched by a 'spawn' weapon (drones)
   precise?: boolean; // artillery without scatter
+  /**
+   * Lock-on (sniper.ts): ticks the shooter must hold its aim on a NEW target before the first shot.
+   * The aim resets on a new target and cancels when the target leaves range / sight, hides inside a
+   * building or vehicle, or dies, and when the shooter moves or gets another order.
+   */
+  aim?: number;
 }
 
 export interface BaseDef {
@@ -332,6 +338,10 @@ export interface Entity {
 
   // fixed-wing combat jets (airbase.ts)
   sortie: Sortie | null;
+
+  // lock-on weapons (sniper.ts): the target being aimed at (-1 = none) and the ticks aimed so far
+  aimTarget: number;
+  aimTicks: number;
 }
 
 export interface QueueItem {
@@ -486,4 +496,6 @@ export type SimEvent =
   | { t: 'garrison'; id: number; owner: number; enter: boolean }
   /** Jet sortie milestones (airbase.ts): take-off roll begins, wheels touch down, bomb away, base lost (diverting / orbiting), out of fuel. */
   | { t: 'sortie'; id: number; owner: number; what: 'takeoff' | 'touchdown' | 'release' | 'divert' | 'orbit' | 'crash'; x: number; y: number }
+  /** Lock-on weapons (sniper.ts): aim taken on a new target ('start') and steady for the final shot ('lock'). */
+  | { t: 'aim'; id: number; owner: number; target: number; phase: 'start' | 'lock'; x: number; y: number }
   | { t: 'gameOver'; winner: number };

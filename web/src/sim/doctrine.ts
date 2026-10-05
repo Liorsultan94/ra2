@@ -58,7 +58,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
   },
   israel: {
     summary: 'Precision strikes and a layered air-defence umbrella; Merkava/Trophy armour is preserved and pulled back to repair.',
-    bias: { mbt: 1.5, apc: 1.2, mortar: 1.5, lora: 1.8, aa: 1.3, ugv: 1.2, uav: 1.2 },
+    bias: { mbt: 1.5, apc: 1.2, mortar: 1.5, lora: 1.8, aa: 1.3, ugv: 1.2, uav: 1.2, sniper: 1.4 },
     defense: 1,
     samFloor: 2,
     defenseOrder: ['def_gun', 'def_aa', 'def_at', 'def_aa', 'def_gun', 'def_aa'],
@@ -143,7 +143,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
   },
   ukraine: {
     summary: 'Asymmetric drone war: FPV teams and EW troopers in small mobile groups that raid harvesters and strike the flanks.',
-    bias: { fpvteam: 1.8, ewinf: 1.5, apc: 1.3, robot: 1.5, uav: 1.3, mbt: 0.8, neptune: 1.3 },
+    bias: { fpvteam: 1.8, ewinf: 1.5, apc: 1.3, robot: 1.5, uav: 1.3, mbt: 0.8, neptune: 1.3, sniper: 1.3 },
     defense: 0.9,
     samFloor: 1,
     defenseOrder: BASE_DEF,

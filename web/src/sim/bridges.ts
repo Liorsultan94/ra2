@@ -43,6 +43,7 @@ export const BRIDGE_VERSUS: Record<Warhead, number> = {
   artillery: 1,
   missile: 1,
   thermo: 0.7,
+  sniper: 0,
 };
 
 export type BridgeStatus = 'intact' | 'down' | 'repairing';

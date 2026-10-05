@@ -315,6 +315,35 @@ function rifleShot(b: BakeCtx): void {
   p.nh(o, t + 0.01, { kind: 'pink', type: 'bandpass', f: 800, q: 0.5, a: 0.02, d: 0.32, peak: 0.12 });
 }
 
+/**
+ * Sniper rifle (.308 / .338 class): a sharp supersonic crack ahead of a big, dry report, a heavy
+ * thump, a long rolling echo down the valley, then the bolt being worked (up, back, forward, down).
+ */
+function sniperShot(b: BakeCtx): void {
+  const { p, o, t, r, R } = b;
+  // the bullet's ballistic crack: brighter and longer than a rifle's
+  crack(p, o, t, 1.15 * (0.95 + 0.1 * R()), 0.95, 900);
+  p.nh(o, t, { type: 'highpass', f: 4800, a: 0.0003, d: 0.02, peak: 0.45 });
+  report(p, o, t + 0.004, r * 0.92, R, { crackMs: 1.3, f: 1250, q: 0.7, d: 0.085, peak: 1, thump: 120, drive: 3.6 });
+  p.th(o, t, { f: 72 * r, f2: 34, glide: 0.18, d: 0.26, peak: 0.6, drive: 1.6 });
+  // slap-back and the long valley echo
+  p.nh(o, t + 0.12 + R() * 0.05, { kind: 'pink', type: 'bandpass', f: 900, q: 0.6, a: 0.01, d: 0.22, peak: 0.16 });
+  tail(p, o, t + 0.02, 700, 0.06, 1.2, 0.34, 0.55);
+  // bolt cycle
+  const bt = t + 0.55 + R() * 0.06;
+  mech(p, o, bt, 2600 * r, 0.06); // lift
+  mech(p, o, bt + 0.09, 1900 * r, 0.075); // back (case out)
+  mech(p, o, bt + 0.22, 2100 * r, 0.07); // forward
+  mech(p, o, bt + 0.29, 3000 * r, 0.06); // lock down
+}
+
+/** Scope lock: a tiny double tick of the safety / trigger take-up, very quiet. */
+function scopeLock(b: BakeCtx): void {
+  const { p, o, t, r } = b;
+  mech(p, o, t, 4200 * r, 0.11);
+  mech(p, o, t + 0.05, 5200 * r, 0.07);
+}
+
 function mgBurst(b: BakeCtx): void {
   const { p, o, t, r, R } = b;
   const n = 3 + Math.floor(R() * 2.2);
@@ -973,7 +1002,7 @@ export type BakedName =
   | 'buildingCollapse' | 'bridgeCollapse' | 'intercept' | 'droneLaunch' | 'droneBuzz' | 'jetFlyby' | 'thunder' | 'crush'
   | 'jetLoop' | 'rotorLoop' | 'propLoop' | 'fpvLoop' | 'windBed' | 'rainBed' | 'riverBed' | 'cricketBed'
   | 'trainPass' | 'trainHorn' | 'crossingBell' | 'churchBell' | 'jetHigh' | 'heliPass' | 'shipHorn'
-  | 'siren' | 'sirenHiLo';
+  | 'siren' | 'sirenHiLo' | 'sniper' | 'scopeLock';
 
 const SR_HI = 32000;
 const SR_MID = 24000;
@@ -981,6 +1010,8 @@ const SR_LO = 16000;
 
 export const BAKED: Record<BakedName, BakeDef> = {
   rifle: { dur: 0.75, variants: 5, sr: SR_HI, build: rifleShot },
+  sniper: { dur: 1.3, variants: 2, sr: SR_MID, build: sniperShot },
+  scopeLock: { dur: 0.15, variants: 1, sr: SR_MID, spread: 0.05, build: scopeLock },
   mg: { dur: 0.95, variants: 4, sr: SR_HI, build: mgBurst },
   autocannon: { dur: 1.6, variants: 4, sr: SR_MID, build: autocannonBurst },
   flak: { dur: 1.0, variants: 3, sr: SR_HI, build: flakBurst },
@@ -1030,7 +1061,7 @@ export const BAKE_ORDER: BakedName[] = [
   'thermo', 'droneLaunch', 'laser', 'droneBuzz', 'crush', 'bridgeCollapse', 'jetFlyby', 'thunder',
   'jetLoop', 'rotorLoop', 'propLoop', 'fpvLoop', 'windBed', 'rainBed', 'riverBed', 'cricketBed',
   'trainPass', 'trainHorn', 'crossingBell', 'churchBell', 'jetHigh', 'heliPass', 'shipHorn',
-  'siren', 'sirenHiLo',
+  'siren', 'sirenHiLo', 'sniper', 'scopeLock',
 ];
 
 /** Length of the offline render for one definition (all variants back to back). */

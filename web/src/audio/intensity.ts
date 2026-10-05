@@ -16,6 +16,7 @@ import type { Sfx } from './audio';
 /** energy per event at volume 1 (UI sounds contribute nothing) */
 export const HEAT_WEIGHT: Partial<Record<Sfx, number>> = {
   rifle: 0.16,
+  sniper: 0.3,
   mg: 0.14,
   flak: 0.25,
   laser: 0.4,
