@@ -2280,7 +2280,7 @@ export class GameRenderer {
         this.frameTimes.length = 0;
         this.goodWindows = 0;
         this.upNeed = Math.min(40, this.upNeed * 2);
-        this.applyLevel(Math.min(this.ladder.length - 1, this.level + 2));
+        this.queueLevel(Math.min(this.ladder.length - 1, this.level + 2));
         this.fastFrames = 60;
         this.watchdogSteps++;
         return;
@@ -2311,18 +2311,28 @@ export class GameRenderer {
       this.goodWindows = 0;
       // far off the target (under ~22 fps): skip rungs
       const steps = med > 1 / 16 ? 3 : med > 1 / 24 ? 2 : 1;
-      this.applyLevel(Math.min(this.ladder.length - 1, this.level + steps));
+      this.queueLevel(Math.min(this.ladder.length - 1, this.level + steps));
       this.fastFrames = 60;
     } else if (med < fast && this.level > 0) {
       if (++this.goodWindows >= this.upNeed) {
         this.goodWindows = 0;
         this.lastUpAt = now;
-        this.applyLevel(this.level - 1);
+        this.queueLevel(this.level - 1);
       }
     } else this.goodWindows = 0;
   }
   private govFrames = 0;
   private fastFrames = 0;
+  /** Governor step waiting for the start of the next frame (-1 = none). */
+  private pendingLevel = -1;
+  /**
+   * The governor decides after a frame has been drawn; a new rung can change the pixel ratio, and resizing the
+   * canvas clears what was just drawn (that frame would be shown black). The step is applied before the next
+   * frame draws instead.
+   */
+  private queueLevel(level: number) {
+    this.pendingLevel = level;
+  }
   /** Watchdog: recent very long frames (decays on normal ones), last time it stepped down, steps taken. */
   private stalls = 0;
   private lastWatchdog = -1e9;
@@ -2332,6 +2342,11 @@ export class GameRenderer {
   private autoMon: AutoQualityMonitor;
 
   render(alpha: number, dt: number) {
+    if (this.pendingLevel >= 0) {
+      const l = this.pendingLevel;
+      this.pendingLevel = -1;
+      this.applyLevel(l);
+    }
     this.time += dt;
     this.renderer.info.reset();
     for (let i = this.scheduled.length - 1; i >= 0; i--) {
