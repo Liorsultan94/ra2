@@ -210,6 +210,15 @@ export class ScarPieces {
     g.onEvict?.();
   }
 
+  /** Rubble inside the rectangle makes way for a new building (its ground splat is baked; hidden under it). */
+  clearArea(x0: number, z0: number, x1: number, z1: number) {
+    for (let i = this.groups.length - 1; i >= 0; i--) {
+      const g = this.groups[i];
+      const m = g.r * 0.5;
+      if (g.x > x0 - m && g.x < x1 + m && g.z > z0 - m && g.z < z1 + m) this.evict(g);
+    }
+  }
+
   update(dt: number) {
     for (const g of this.groups) if (g.rise) {
       g.rise.t += dt;
@@ -379,6 +388,14 @@ export class ScarHulks {
     onEvict(h);
     // compact so the freed space can be reused
     this.mesh.optimize();
+  }
+
+  /** Hulks inside the rectangle sink away (a building goes up there). */
+  clearArea(x0: number, z0: number, x1: number, z1: number) {
+    for (const h of this.hulks) {
+      const m = h.size * 0.5;
+      if (h.sink < 0 && h.x > x0 - m && h.x < x1 + m && h.z > z0 - m && h.z < z1 + m) h.sink = 0;
+    }
   }
 
   /** Rust level over time and the sinking of hulks marked for removal. */

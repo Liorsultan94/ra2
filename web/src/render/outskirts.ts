@@ -11,6 +11,7 @@ import { CITY_NIGHT } from './models/citybldgs';
 import { landmarkClear } from './landmarks/plan';
 import { HZ_CELL, HZ_MARGIN, horizonWorld, type HorizonWorld } from './horizonworld';
 import { HORIZON, Horizon, hzApply, hzClone, hzFragment, hzWaterClone } from './horizon';
+import type { Slicer } from './slice';
 
 /** The terrain's painted control maps (see ground.ts). */
 export interface GroundMaps {
@@ -124,25 +125,44 @@ export class Outskirts {
   private look: BiomeLook;
   private world: HorizonWorld;
   /** The world beyond the outskirts, out to the horizon (horizon.ts). */
-  readonly horizon: Horizon;
+  horizon!: Horizon;
 
+  /** Build synchronously (tests, tools); the game uses `Outskirts.build()`, which yields between the steps. */
   constructor(
     private map: GameMap,
-    fog: FogOfWar,
-    quality: 'low' | 'medium' | 'high',
-    terrainGround?: GroundMaps,
-    terrainWater?: THREE.Mesh,
+    private fog: FogOfWar,
+    private quality: 'low' | 'medium' | 'high',
+    private terrainGround?: GroundMaps,
+    private terrainWater?: THREE.Mesh,
+    deferred = false,
   ) {
     this.group.name = 'outskirts';
     this.look = biomeLook(map);
     this.world = horizonWorld(map);
-    this.edge = terrainGround ? this.sampleGround(terrainGround) : null;
-    const ground = this.buildGround(fog);
-    this.group.add(ground);
+    if (!deferred) for (const _ of this.steps()) void _;
+  }
+
+  /** Build in time slices (slice.ts): the far world is several heavy steps on a phone. */
+  static async build(map: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high', slicer: Slicer, terrainGround?: GroundMaps, terrainWater?: THREE.Mesh): Promise<Outskirts> {
+    const o = new Outskirts(map, fog, quality, terrainGround, terrainWater, true);
+    for (const _ of o.steps()) await slicer.tick();
+    return o;
+  }
+
+  /** The construction, one yield per step (the horizon's own steps included). */
+  private *steps(): Generator<void> {
+    const { fog, quality, terrainWater } = this;
+    this.edge = this.terrainGround ? this.sampleGround(this.terrainGround) : null;
+    yield;
+    yield* this.buildGround(fog);
+    yield;
     this.buildTrees(fog, quality);
+    yield;
     if (this.look.code === 3) this.buildCityRing(fog, quality);
     this.buildWater(fog, terrainWater);
-    this.horizon = new Horizon(map, fog, quality, terrainWater);
+    yield;
+    this.horizon = new Horizon(this.map, fog, quality, terrainWater, true);
+    yield* this.horizon.steps();
     this.group.add(this.horizon.group);
   }
 
@@ -264,7 +284,7 @@ export class Outskirts {
    * edge, a = how much the procedural farmland (drawn crisply in the shader)
    * takes over. A second map holds the woodland floor mask.
    */
-  private paint(size: number, ext: number) {
+  private *paint(size: number, ext: number): Generator<void, { edge: THREE.DataTexture; woods: THREE.DataTexture }> {
     const edge = new Uint8Array(size * size * 4);
     const woods = new Uint8Array(size * size);
     const t = [0, 0, 0];
@@ -298,6 +318,7 @@ export class Outskirts {
         edge[i + 3] = Math.round(blend * 255);
         woods[py * size + px] = o < 5 ? 0 : Math.round(smoothstep(0.55, 0.65, this.woods(x, y)) * smoothstep(5, 12, o) * 255);
       }
+      if ((py & 15) === 15) yield;
     }
     const tex = (data: Uint8Array, fmt: THREE.PixelFormat) => {
       const tx = new THREE.DataTexture(data, size, size, fmt, THREE.UnsignedByteType);
@@ -311,7 +332,7 @@ export class Outskirts {
     return { edge: tex(edge, THREE.RGBAFormat), woods: tex(woods, THREE.RedFormat) };
   }
 
-  private buildGround(fog: FogOfWar): THREE.Mesh {
+  private *buildGround(fog: FogOfWar): Generator<void> {
     const { w, h } = this.map;
     const x0 = -MARGIN;
     const y0 = -MARGIN;
@@ -343,13 +364,15 @@ export class Outskirts {
         const d = vert(i + 1, j + 1);
         idx.push(a, c, b, b, c, d);
       }
+      if ((j & 7) === 7) yield;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(idx);
     geo.computeVertexNormals();
-    const maps = this.paint(384, ext);
+    yield;
+    const maps = yield* this.paint(384, ext);
     const uniforms = {
       oskEdge: { value: maps.edge },
       oskWoods: { value: maps.woods },
@@ -390,7 +413,7 @@ export class Outskirts {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.name = 'outskirts-ground';
-    return mesh;
+    this.group.add(mesh);
   }
 
   /** City map: the town goes on past the edge (instanced blocks on the street grid, lit windows at night). */

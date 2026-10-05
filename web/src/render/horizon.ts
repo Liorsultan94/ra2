@@ -179,20 +179,32 @@ export class Horizon {
     private map: GameMap,
     private fog: FogOfWar,
     private quality: Q,
-    terrainWater?: THREE.Mesh,
+    private terrainWater?: THREE.Mesh,
+    deferred = false,
   ) {
     this.group.name = 'horizon';
     this.world = horizonWorld(map);
     HORIZON.hzCentre.value.set(map.w / 2, map.h / 2);
+    if (!deferred) for (const _ of this.steps()) void _;
+  }
+
+  /** The construction, one yield per part (outskirts.ts runs them in time slices). */
+  *steps(): Generator<void> {
     // debug: ?hzskip=ring,water,paths,towns,forest,harbour,lights (or all)
     const skip = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('hzskip')) || '';
     const on = (k: string) => !skip.includes(k) && !skip.includes('all');
-    if (on('ring')) this.buildRing();
-    if (on('water')) this.buildWater(terrainWater);
+    if (on('ring')) yield* this.buildRing();
+    yield;
+    if (on('water')) this.buildWater(this.terrainWater);
+    yield;
     if (on('paths')) this.buildPaths();
+    yield;
     const towns = on('towns') ? this.buildTowns() : [];
+    yield;
     if (on('forest')) this.buildForest(towns);
+    yield;
     if (this.world.sea && on('harbour')) this.buildHarbour();
+    yield;
     if (on('lights')) this.buildLights();
   }
 
@@ -259,7 +271,7 @@ export class Horizon {
     return fk;
   }
 
-  private buildRing() {
+  private *buildRing(): Generator<void> {
     const W = this.world;
     const { w } = this.map;
     const M = HZ_MARGIN;
@@ -285,7 +297,8 @@ export class Horizon {
     const loopStart: number[] = [];
     // positions and heights first, then slopes from the neighbours (one height evaluation per vertex)
     const hs: number[] = [];
-    loops.forEach((sk, k) => {
+    for (let k = 0; k < loops.length; k++) {
+      const sk = loops[k];
       const N = k === 0 ? N0 : N1;
       loopStart.push(pos.length / 3);
       const wk = ss(0, 1, (sk - s0) / 260);
@@ -303,12 +316,13 @@ export class Horizon {
         pos.push(x, h, y);
         hs.push(h);
       }
-    });
+      if ((k & 3) === 3) yield;
+    }
     const vAt = (k: number, i: number) => {
       const N = k === 0 ? N0 : N1;
       return loopStart[k] + (((i % N) + N) % N);
     };
-    loops.forEach((_, k) => {
+    for (let k = 0; k < loops.length; k++) {
       const N = k === 0 ? N0 : N1;
       for (let i = 0; i < N; i++) {
         const a = vAt(k, i);
@@ -329,7 +343,8 @@ export class Horizon {
         col.push(c3[0], c3[1], c3[2]);
         fks.push(fk);
       }
-    });
+      if ((k & 3) === 3) yield;
+    }
     const idx: number[] = [];
     // loop 0 (outskirts resolution) stitched to loop 1 (counter-clockwise from above = front faces up)
     const a0 = loopStart[0];

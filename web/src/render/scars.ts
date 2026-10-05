@@ -49,6 +49,8 @@ export interface RuinOpts {
   colors?: number[];
   /** Pieces rise out of the ground over this many seconds (the collapse rubble sinks into them). */
   rise?: number;
+  /** A flat structure (the airbase's runway and stands): a cratered, scorched slab with scattered debris, no walls. */
+  flat?: boolean;
 }
 
 const CLOD: Record<Biome, number[]> = {
@@ -83,6 +85,8 @@ export interface ScarsHost {
   visibleAt: (x: number, z: number) => boolean;
   /** Paved road under (x, z) (potholes instead of craters). */
   isPaved?: (x: number, z: number) => boolean;
+  /** A standing building covers (x, z): it takes the hit itself, the ground under it keeps no crater / clods. */
+  occupied?: (x: number, z: number) => boolean;
 }
 
 export class BattleScars {
@@ -132,7 +136,7 @@ export class BattleScars {
   /** A blast crater of radius ~r (same signature as GroundMarks.craterAt). */
   craterAt(x: number, z: number, r: number) {
     const t = this.tile(x, z);
-    if (t === Tile.Water || t === Tile.Bridge) return;
+    if (t === Tile.Water || t === Tile.Bridge || this.host.occupied?.(x, z)) return;
     const ang = Math.random() * Math.PI * 2;
     if (this.host.isPaved?.(x, z)) {
       // a pothole in a web of cracks; now and then next to an older tar patch
@@ -153,7 +157,7 @@ export class BattleScars {
   /** Burnt ground of radius ~r (same signature as GroundMarks.scorchAt): big ones smoke for a while. */
   scorchAt(x: number, z: number, r: number) {
     const t = this.tile(x, z);
-    if (t === Tile.Water) return;
+    if (t === Tile.Water || this.host.occupied?.(x, z)) return;
     const s = r * 2.5;
     this.decals.add(Math.random() < 0.5 ? ScarKind.ScorchA : ScarKind.ScorchB, x, z, Math.random() * Math.PI * 2, s, s * rnd(0.85, 1.15), 0, 0.7);
     if (r >= 0.45) this.emit({ x, y: this.ground(x, z) + 0.05, z, t: 0, dur: 30 + r * 40, rate: 0.5 + r * 0.6, size: Math.min(1.2, 0.4 + r * 0.4), kind: 0 });
@@ -167,7 +171,7 @@ export class BattleScars {
       const d = r * (0.7 + Math.pow(Math.random(), 1.5) * 1.1);
       const px = x + Math.cos(a) * d;
       const pz = z + Math.sin(a) * d;
-      if (this.tile(px, pz) === Tile.Water) continue;
+      if (this.tile(px, pz) === Tile.Water || this.host.occupied?.(px, pz)) continue;
       const sz = rnd(0.035, 0.085) * (0.8 + r * 0.6);
       _e.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
       _q.setFromEuler(_e);
@@ -180,6 +184,7 @@ export class BattleScars {
 
   /** The ruin of a destroyed building centred at (x, z) with a w x d tile footprint. */
   ruin(x: number, z: number, w: number, d: number, opts: RuinOpts = {}) {
+    if (opts.flat) return this.flatRuin(x, z, w, d, opts.rise);
     const civil = !!opts.civil;
     const gy = this.ground(x, z);
     const pal = opts.colors?.length ? opts.colors : opts.root ? sampleColors(opts.root) : [];
@@ -290,6 +295,48 @@ export class BattleScars {
       const pz = z + (Math.random() - 0.5) * d * 0.6;
       this.emit({ x: px, y: this.ground(px, pz) + heap(px, pz) * 0.8, z: pz, t: 0, dur: rnd(150, 420), rate: 1, size: rnd(0.55, 0.85), kind: 2 });
     }
+  }
+
+  /**
+   * A building goes up on the tiles x0..x1, z0..z1: ruins, hulks and fresh craters there make way (pieces
+   * bake their ground splat, hulks sink away), so nothing of an old battle pokes through the new building.
+   */
+  clearArea(x0: number, z0: number, x1: number, z1: number) {
+    this.pieces.clearArea(x0, z0, x1, z1);
+    this.hulks.clearArea(x0, z0, x1, z1);
+    this.decals.clearArea(x0, z0, x1, z1);
+    this.emitters = this.emitters.filter((e) => e.x < x0 || e.x > x1 || e.z < z0 || e.z > z1);
+  }
+
+  /** A flat structure's remains: the slab stays, cratered and burnt, with concrete chunks and twisted bits scattered over it. */
+  private flatRuin(x: number, z: number, w: number, d: number, rise?: number) {
+    const gy = this.ground(x, z);
+    this.decals.add(ScarKind.ScorchA, x, z, Math.random() * 6.28, Math.max(w, d) * 1.1, Math.min(w, d) * 1.4, 0, 0.4);
+    const holes = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < holes; i++) {
+      const px = x + (Math.random() - 0.5) * (w - 1);
+      const pz = z + (Math.random() - 0.5) * (d - 1);
+      const s = rnd(0.9, 1.6);
+      this.decals.add(ScarKind.Pothole, px, pz, Math.random() * 6.28, s, s, 0.1, 0.8);
+    }
+    const n = Math.min(40, Math.round(w * d * 1.2));
+    const g = this.pieces.begin(n, x, z, Math.max(w, d), () => this.decals.bake(ScarKind.Clods, x, z, Math.random() * 6.28, w * 0.9, d * 0.9, 0.6));
+    if (!g) return;
+    const drops: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const px = x + (Math.random() - 0.5) * w * 0.95;
+      const pz = z + (Math.random() - 0.5) * d * 0.95;
+      const sz = rnd(0.05, 0.16);
+      _e.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+      _q.setFromEuler(_e);
+      const slab = i % 5 === 0;
+      _m.compose(_p.set(px, this.ground(px, pz) + sz * 0.1, pz), _q, slab ? _s.set(sz * 1.6, 1, sz * 1.2) : _s.set(sz * rnd(0.8, 1.5), sz * rnd(0.4, 0.8), sz * rnd(0.8, 1.5)));
+      this.pieces.add(g, slab ? Piece.Slab : i % 2 ? Piece.Rock : Piece.Rock2, _m, Math.random() < 0.3 ? pick(BURNT) : pick(CONCRETE));
+      drops.push(sz + 0.05);
+    }
+    if (rise) this.pieces.rise(g, rise, (i) => drops[i] ?? 0.2);
+    this.emit({ x, y: gy + 0.1, z, t: 0, dur: 80, rate: 1.2, size: 0.9, kind: 0 });
+    if (Math.random() < 0.6) this.emit({ x: x + rnd(-1, 1), y: gy + 0.1, z: z + rnd(-0.5, 0.5), t: 0, dur: rnd(120, 300), rate: 1, size: 0.7, kind: 2 });
   }
 
   // ------------------------------------------------------------------ hulks

@@ -17,6 +17,7 @@ import { SniperFx } from './fx/sniperfx';
 import { Debris } from './debris';
 import { Fracture, type FracWreck } from './fracture';
 import { BattleScars } from './scars';
+import { prefetchScarAtlas, scarAtlasTile } from './scarsdecal';
 import { Secondaries } from './fx/secondary';
 import { BLASTS, Effects, type BlastProfile } from './effects';
 import { FogOfWar } from './fog';
@@ -180,6 +181,8 @@ interface Wreck {
   frac?: FracWreck;
   /** Battle scars (scars.ts): the building still owes its ruin / the vehicle was offered as a hulk. */
   ruin?: boolean;
+  /** ...as a flat cratered slab (the airbase), not a rubble heap with wall stubs. */
+  flatRuin?: boolean;
   kept?: boolean;
 }
 
@@ -349,11 +352,13 @@ export class GameRenderer {
     const quality: BaseQuality = requested === 'ultra' ? 'high' : requested;
     const { map } = world;
     const fog = new FogOfWar(map.w, map.h);
+    // battle-scar decal atlas: built in a worker while the terrain is built here (scarsdecal.ts)
+    void prefetchScarAtlas(scarAtlasTile(quality));
     const occluders = new OccluderGrid(map, treeSpots(map, quality));
     await slicer.tick();
     const terrain = await Terrain.build(map, fog, quality, slicer);
     await slicer.tick();
-    const outskirts = new Outskirts(map, fog, quality, terrain.ground, terrain.water);
+    const outskirts = await Outskirts.build(map, fog, quality, slicer, terrain.ground, terrain.water);
     await slicer.tick();
     return { fog, occluders, terrain, outskirts };
   }
@@ -475,7 +480,13 @@ export class GameRenderer {
     this.effects.setView(this.target, this.camera);
     this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);
-    this.scars = new BattleScars({ map, fog: this.fog, effects: this.effects, quality, visibleAt: (x, z) => this.visibleAt(x, z), isPaved: (x, z) => this.marks.isPaved(x, z) });
+    this.scars = new BattleScars({ map, fog: this.fog, effects: this.effects, quality, visibleAt: (x, z) => this.visibleAt(x, z), isPaved: (x, z) => this.marks.isPaved(x, z),
+      occupied: (x, z) => {
+        const tx = Math.floor(x);
+        const tz = Math.floor(z);
+        return tx >= 0 && tz >= 0 && tx < map.w && tz < map.h && this.world.occ[tz * map.w + tx] !== 0;
+      },
+    });
     if (this.scarsOn) this.effects.scars = this.scars;
     this.scene.add(this.scars.group);
     // collapsible bridges: per-span meshes, damage, collapse and rebuild (bridgefx.ts)
@@ -585,7 +596,8 @@ export class GameRenderer {
     }
     // static shadow casters cached between sun shadow refreshes (shadowcache.ts)
     if (!this.csm && this.sun.castShadow) {
-      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group];
+      // (battle scars: ruins / hulks only change when one is added, so they are cached like the scenery)
+      const roots = [this.terrain.group, this.outskirts.group, this.bridgeFx.group, this.scars.group];
       this.shadowCache = new ShadowCache(this.renderer, this.scene, () => roots);
       this.shadowCache.enabled = !/[?&]scache=0\b/.test(location.search);
       this.shadowCache.install(this.sun);
@@ -1293,6 +1305,11 @@ export class GameRenderer {
       if (!v) {
         v = this.makeVisual(e);
         this.visuals.set(e.id, v);
+        // a building going up clears the old battle's rubble / hulks / fresh craters off its footprint (scars.ts)
+        if (e.kind === 'building') {
+          const bd = buildingDef(e.def);
+          this.scars.clearArea(e.tx, e.ty, e.tx + bd.w, e.ty + bd.h);
+        }
       }
       const vis = this.isVisibleToViewer(e);
       // (a model of a type new to this match is held back until its shaders have compiled in the background)
@@ -1576,7 +1593,7 @@ export class GameRenderer {
       // medium / high: break the model into rigid chunks (falls back to the sink collapse when the chunk pool is full)
       const frac = this.fracture.shatter(root, bd.w, bd.h, this.scene) ?? undefined;
       if (frac) this.scene.remove(root);
-      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac, ruin: !bd.garrison });
+      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac, ruin: !bd.garrison, flatRuin: bd.role === 'airfield' });
       return;
     }
     const ud = unitDef(e.def);
@@ -1675,7 +1692,7 @@ export class GameRenderer {
       // ...and a destroyed building leaves its ruin, rising as the collapse rubble settles into it
       if (this.scarsOn && w.ruin && w.t > w.max - (w.frac ? 5 : 3)) {
         w.ruin = false;
-        this.scars.ruin(w.x, w.z, w.w, w.d, { root: r, rise: w.frac ? 4 : 2.5 });
+        this.scars.ruin(w.x, w.z, w.w, w.d, { root: r, rise: w.frac ? 4 : 2.5, flat: w.flatRuin });
       }
       if (w.kind === 'infantry') {
         if (w.anim && w.model.anim) {

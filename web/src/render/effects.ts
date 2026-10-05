@@ -750,7 +750,7 @@ export class Effects {
   /** The wreck hits the ground: a fuel-fed second explosion that leaves the wreck burning. */
   airCrash(x: number, ground: number, z: number, S = 1) {
     this.blast({ ...BLASTS.aircraftCrash, size: BLASTS.aircraftCrash.size * S }, x, ground + 0.15, z, ground);
-    this.marks?.craterAt(x, z, 0.5 * S);
+    (this.scars ?? this.marks)?.craterAt(x, z, 0.5 * S);
   }
 
   /** Shell / missile / debris hitting water: tall white column, spray and a ring. */
