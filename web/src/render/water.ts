@@ -1229,6 +1229,11 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   const Q = quality === 'high' ? 2 : quality === 'medium' ? 1 : 0;
   // biome water: clear turquoise oasis, icy river, murky canal (temperate = the original river)
   const bw = biomeLook(m).water;
+  // the rapids' frame: centre + downstream direction (world x / z), and half length, so the whitewater is
+  // drawn in stable flow-aligned coordinates (dot(worldPos, localFlowDir) warps into marbled swirls)
+  const rap = river.features.rapids;
+  const rapC = rap ? river.sample((rap.s0 + rap.s1) / 2) : null;
+  const rapF = rapC ? new THREE.Vector4(rapC.x, rapC.y, rapC.tx, rapC.ty) : new THREE.Vector4(0, 0, 1, 0);
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -1263,6 +1268,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       wSlicks: RIVER.wSlicks,
       wLightP: RIVER.wLightP,
       wLightC: RIVER.wLightC,
+      rapF: { value: rapF },
+      rapH: { value: rap ? (rap.s1 - rap.s0) / 2 : 0 },
       ...fog.uniforms,
       ...WX,
     },
@@ -1305,6 +1312,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform vec4 wSlicks[${MAX_SLICKS}];
       uniform vec4 wLightP[${MAX_WLIGHTS}];
       uniform vec3 wLightC[${MAX_WLIGHTS}];
+      uniform vec4 rapF;
+      uniform float rapH;
       ${WX_PARS}
       uniform sampler2D fogTex;
       uniform vec2 fogSize;
@@ -1367,11 +1376,37 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         }
         // a slow cross swell so still water isn't dead
         g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 2.3 + time * 1.1) * 0.012 * (1.0 - 0.7 * calm);
-        // rapids: standing waves locked behind the rocks
         float alongR = dot(p, fd);
+        // ---- rapids: whitewater in a stable flow-aligned frame about the rapids' centre (rapF);
+        // dot(p, fd) with the per-pixel flow direction swings by whole texture periods and marbles
+        float rCov = 0.0;   // whitewater coverage, with a ragged soft edge into the calm river
+        float rN = 0.5;     // churning streak noise (contrast-stretched, ~0..1)
+        float rDrop = 0.0;  // the tumbling line where the river drops into the rapids
+        vec2 rUv2 = vec2(0.0);
         if (rapids > 0.01) {
-          float sw = sin(alongR * 8.0 + texture2D(waveTex, p * 0.23).b * 7.0);
-          g += fd * sw * rapids * 0.09;
+          vec2 rd = rapF.zw;
+          vec2 rq = p - rapF.xy;
+          float ra = dot(rq, rd);                 // downstream
+          float rc = dot(rq, vec2(-rd.y, rd.x));  // across
+          // long streaks and shorter, faster ones dragged downstream; slower boils break them up
+          vec2 rUv1 = vec2(rc * 0.6, (ra - time * 1.1) * 0.07);
+          rUv2 = vec2(rc * 1.5 + 0.31, (ra - time * 1.55) * 0.2 + 0.17);
+          vec2 rUv3 = vec2(rc * 0.4, (ra - time * 0.8) * 0.22) + 0.61;
+          float s1 = texture2D(waveTex, rUv1).a;
+          float s2 = texture2D(waveTex, rUv2).a;
+          float s3 = texture2D(waveTex, rUv3).a;
+          // standing waves: crests across the flow behind the rocks, wobbling with the boils
+          float sw = sin(ra * 7.0 + s3 * 6.0 + rc * 0.9);
+          rN = (s1 * 0.45 + s2 * 0.4 + s3 * 0.15 - 0.5) * 2.6 + 0.5 + max(sw, 0.0) * 0.12;
+          float dz = ra + rapH - 0.55 + (s2 - 0.5) * 0.5;
+          rDrop = exp(-dz * dz * 9.0) * rapids;
+          rCov = clamp(rapids * 1.3 - 0.2 + (s3 - 0.5) * 0.9, 0.0, 1.0);
+          // a churned surface: choppy slopes from the streak and boil layers, plus the standing waves
+          g += (waveN(rUv2 * 1.7) * 0.6 + waveN(rUv3 * 2.3) * 0.4) * 0.2 * rCov;
+          g += rd * sw * rapids * 0.08;
+          #if WATER_Q > 0
+            g += waveN(vec2(rc * 2.9, (ra - time * 2.0) * 1.1) + 0.27) * 0.08 * rCov;
+          #endif
         }
         if (wxRain > 0.001) {
           // rain: rings from drops on the surface (wxRain: while it rains)
@@ -1491,22 +1526,40 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #else
           float fB = fA * 0.8 + 0.1;
         #endif
+        // ---- whitewater on the rapids: broken bright foam streaks over dark aerated troughs
+        float wwF = 0.0;
+        if (rCov > 0.001) {
+          // the streaks break into tumbling clumps carried by the real flow (fB: flow-mapped foam noise)
+          rN += (fB - 0.5) * 0.55;
+          float th = mix(0.92, 0.52, rCov);
+          wwF = max(smoothstep(th, th + 0.16, rN), rDrop * smoothstep(0.32, 0.6, fA * 0.5 + fB * 0.5 + 0.08)) * smoothstep(0.0, 0.7, rCov) * (1.0 - oil * 0.85);
+          col *= 1.0 - 0.38 * rCov * (1.0 - wwF);
+          // thin foam is a translucent grey-green, thick foam bright white, shaded by the churned surface
+          float thick = smoothstep(th, th + 0.45, rN);
+          float lit = 0.72 + 0.38 * clamp(dot(n, sunDir), 0.0, 1.0);
+          vec3 wwC = mix(vec3(0.6, 0.7, 0.7), vec3(0.97, 0.99, 1.0), thick) * lit * wxLight * (1.0 - 0.42 * dark);
+          col = mix(col, wwC, wwF * 0.96);
+          // sparkle off the broken surface and the wet foam
+          #if WATER_Q > 0
+            float gl = smoothstep(0.76, 0.9, texture2D(waveTex, rUv2 * 2.6 + vec2(0.0, time * 0.35)).b);
+          #else
+            float gl = smoothstep(0.7, 0.85, rN);
+          #endif
+          col += sunCol * wxSpec * (pow(sd, 6.0) * 1.4 + pow(sd, 40.0) * 2.0) * gl * rCov * (1.0 - 0.7 * ice);
+        }
         float lapK = 1.0 + chop * 1.2 - calm * 0.5;
         float band = 1.0 - smoothstep(0.0, (0.22 + fA * 0.28) * lapK, shore);
         float lap = 0.5 + 0.5 * sin(shore * 18.0 - time * 1.7 + fA * 5.0);
         float foam = band * smoothstep(0.5, 0.85, fB * 0.6 + lap * 0.4 + band * 0.2) * 0.85 * (1.0 - 0.4 * calm);
         foam = max(foam, (1.0 - smoothstep(0.0, 0.05 + fB * 0.05, shore)) * smoothstep(0.35, 0.75, fB) * 0.6);
-        // streaks dragged along the flow: pier wakes, whitewater on the rapids
-        float wk = max(dat.a, rapids);
-        if (wk > 0.003) {
+        // streaks dragged along the flow: pier wakes (the rapids' whitewater is drawn above)
+        if (dat.a > 0.003) {
           vec2 ax = vec2(alongR, dot(p, sideV));
           float sp2 = 1.0 + rapids * 1.6;
           float st = texture2D(waveTex, vec2(ax.x * 0.3 - time * 0.4 * sp2, ax.y * 2.2)).a;
           float st2 = texture2D(waveTex, vec2(ax.x * 0.9 - time * 0.9 * sp2, ax.y * 4.1) + 0.5).a;
           float streak = smoothstep(0.5, 0.78, st * 0.65 + st2 * 0.35 + dat.a * 0.12);
           foam = max(foam, dat.a * dat.a * mix(streak, 1.0, smoothstep(0.85, 1.0, dat.a)) * 0.8);
-          float ww = smoothstep(0.3, 0.6, st * 0.55 + st2 * 0.45 + 0.12 * sin(alongR * 8.0 + 1.2));
-          foam = max(foam, rapids * mix(ww, 1.0, rapids * rapids * 0.35) * 0.95);
         }
         // eddies swirl foam; rocks and the weir churn it white
         foam = max(foam, dat2.b * smoothstep(0.42, 0.75, fB) * 0.75);
@@ -1550,10 +1603,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float fogK = fogV < 0.5 ? fogV * 0.9 : 0.45 + (fogV - 0.5) * 1.1;
         col *= mix(1.0, fogK, fogEnabled);
         #if WATER_Q > 0
-          float alpha = smoothstep(0.0, 0.06, depthW) * (0.9 + 0.1 * fres) + foam * 0.1 + oil * 0.3;
+          float alpha = smoothstep(0.0, 0.06, depthW) * (0.9 + 0.1 * fres) + max(foam, wwF) * 0.1 + oil * 0.3;
           alpha *= smoothstep(0.0, 0.06, depthW);
         #else
-          float alpha = (max(mix(0.55, 0.92, depth), fres * 0.85) + foam * 0.25 + oil * 0.3) * smoothstep(0.0, 0.06, depthW);
+          float alpha = (max(mix(0.55, 0.92, depth), fres * 0.85) + max(foam, wwF) * 0.25 + oil * 0.3) * smoothstep(0.0, 0.06, depthW);
         #endif
         // never hand NaN / Inf to the HDR chain (bloom would smear it over the frame)
         col = (col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0) ? min(col, vec3(32.0)) : vec3(0.0);
