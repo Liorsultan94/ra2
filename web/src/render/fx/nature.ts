@@ -1132,7 +1132,7 @@ export class LivingWorld {
         const colH = 2.4 * env;
         const len = 0.55 + colH * stretch * 0.55;
         const off = len * 0.5 - 0.2;
-        sh.add(d.x + sdx * off, g + 0.03, d.z + sdz * off, sdx, sdz, len, 0.55 + 0.25 * env, 0.3 * env * sstep(0.55, 0.85, day));
+        sh.add(d.x + sdx * off, g + 0.03, d.z + sdz * off, sdx, sdz, len, 0.6 + 0.3 * env, 0.4 * env * sstep(0.55, 0.85, day));
       }
       d.acc += dt * (this.q === 'high' ? 80 : 50) * env;
       while (d.acc >= 1) {
@@ -1141,9 +1141,9 @@ export class LivingWorld {
         // a dusty skirt churning at the foot, small grains spiralling up the funnel, a few soft body puffs
         const k = Math.random();
         const low = k < 0.25;
-        const body = k > 0.85;
-        const size = low ? 0.42 + Math.random() * 0.12 : body ? 0.3 + Math.random() * 0.12 : 0.11 + Math.random() * 0.11;
-        const alpha = (low ? 0.38 : body ? 0.34 : 0.7) * (0.6 + 0.4 * env);
+        const body = k > 0.8;
+        const size = low ? 0.42 + Math.random() * 0.12 : body ? 0.34 + Math.random() * 0.14 : 0.15 + Math.random() * 0.12;
+        const alpha = (low ? 0.4 : body ? 0.4 : 0.66) * (0.6 + 0.4 * env);
         const i2 = nat.spawn(DUST, d.x, g + (low ? 0.02 : 0.05 + Math.random() * 0.2), d.z, d.vx, low ? 0.15 + Math.random() * 0.2 : 0.9 + Math.random() * 1.1, d.vz, 1.8 + Math.random() * 1.6, size, _c2, alpha, g);
         nat.setSpin(i2, (body ? 4 : 6) + Math.random() * 4);
       }
