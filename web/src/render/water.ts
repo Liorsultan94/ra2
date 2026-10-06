@@ -76,6 +76,11 @@ export const RIVER = {
   /** Key light (sun / moon) direction (world, towards the light) and colour. */
   sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
   sunCol: { value: new THREE.Vector3(1, 0.97, 0.9) },
+  /**
+   * x: sun glare 0..1 (1 = a clear sky with the sun out; overcast, rain and dust spread it into a soft sheen),
+   * yzw: spare. Written by fx/waterfx.ts.
+   */
+  wState3: { value: new THREE.Vector4(1, 0, 0, 0) },
   /** Water clock (seconds; Terrain.update). */
   time: { value: 0 },
 };
@@ -753,6 +758,8 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
   }
   const data = new Uint8Array(N * NH * 4);
   const data2 = new Uint8Array(N * NH * 4);
+  // still water (the desert's oases): no current at all, calm ripples only
+  const still = m.biome === 'desert';
   for (let j = 0; j < NH; j++)
     for (let i = 0; i < N; i++) {
       const k = j * N + i;
@@ -770,7 +777,12 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
       let rapids = 0;
       let eddy = 0;
       let obst = 0;
-      if (c && !dry[k]) {
+      // the velocity the shader advects its ripples / foam with: the smooth base current only. The eddies'
+      // swirl (kept in info.vx / vy for the drifting debris) would wind the flow-mapped noise into marbled
+      // spirals within one 3 s cycle; the eddy zones show as soft foam and calmer water instead.
+      let ax = 0;
+      let ay = 0;
+      if (c && !dry[k] && !still) {
         const half = c.width / 2;
         const off = -(x - c.x) * c.ty + (y - c.y) * c.tx;
         const prof = Math.max(0.12, 1 - (off / Math.max(0.5, half)) ** 2);
@@ -798,6 +810,8 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
         }
         vx = tx * sp;
         vy = ty * sp;
+        ax = vx;
+        ay = vy;
         // eddies
         for (const v of vort) {
           const dx = x - v.x;
@@ -826,6 +840,8 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
               const back = roll * 0.9;
               vx -= weir.tx * sp * back * 2;
               vy -= weir.ty * sp * back * 2;
+              ax -= weir.tx * sp * back * 0.8;
+              ay -= weir.ty * sp * back * 0.8;
               eddy = Math.max(eddy, (1 - smooth(0.3, 2.2, along)) * 0.6);
             }
           }
@@ -838,8 +854,8 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
       info.vx[k] = vx;
       info.vy[k] = vy;
       data[o + 2] = Math.round(rapids * 255);
-      data2[o] = Math.max(0, Math.min(255, Math.round((vx / VMAX) * 127.5 + 127.5)));
-      data2[o + 1] = Math.max(0, Math.min(255, Math.round((vy / VMAX) * 127.5 + 127.5)));
+      data2[o] = Math.max(0, Math.min(255, Math.round((ax / VMAX) * 127.5 + 127.5)));
+      data2[o + 1] = Math.max(0, Math.min(255, Math.round((ay / VMAX) * 127.5 + 127.5)));
       data2[o + 2] = Math.round(Math.min(1, eddy) * 255);
       data2[o + 3] = Math.round(Math.min(1, obst) * 255);
     }
@@ -1281,6 +1297,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       wLightP: RIVER.wLightP,
       wLightC: RIVER.wLightC,
       rapF: { value: rapF },
+      // the river's main axis: a stable frame for the pier wakes (no per-pixel flow direction: it marbles)
+      wAxis: { value: new THREE.Vector2(river.ax, river.ay) },
+      wStill: { value: m.biome === 'desert' ? 1 : 0 },
+      wState3: RIVER.wState3,
       rapH: { value: rap ? (rap.s1 - rap.s0) / 2 : 0 },
       rapRocks: { value: Array.from({ length: MAX_RAPID_ROCKS }, () => new THREE.Vector4()) },
       ...fog.uniforms,
@@ -1327,6 +1347,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform vec3 wLightC[${MAX_WLIGHTS}];
       uniform vec4 rapF;
       uniform float rapH;
+      uniform vec2 wAxis;
+      uniform float wStill;
+      uniform vec4 wState3;
       uniform vec4 rapRocks[${MAX_RAPID_ROCKS}];
       ${WX_PARS}
       uniform sampler2D fogTex;
@@ -1347,10 +1370,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         vec2 vel = (dat2.rg * 2.0 - 1.0) * VMAX;
         float spd = length(vel);
         vec2 fd = spd > 0.002 ? vel / spd : vec2(0.7071);
-        vec2 sideV = vec2(-fd.y, fd.x);
         float rapids = dat.b;
-        float chop = wState.x;
-        float calm = wState.y * (1.0 - rapids);
+        // still water (an oasis) has no fetch: the wind only ruffles it, it never breaks into whitecaps
+        float chop = wState.x * (1.0 - 0.7 * wStill);
+        float calm = max(wState.y, 0.45 * wStill) * (1.0 - rapids);
         float mud = wState.z;
         float ice = wState.w;
         float dark = wState2.x;
@@ -1376,7 +1399,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float w1 = 1.0 - w0;
         vec2 q0 = p - vel * (ph0 * 3.0);
         vec2 q1 = p - vel * (ph1 * 3.0) + 0.37;
-        float amp = 0.07 * (1.0 - 0.78 * calm) * (1.0 + 1.5 * chop) * (1.0 + rapids * 0.7) * (1.0 - 0.65 * oil);
+        // zoomed out the ripple lattice would read as rows of bright dots: the far surface lies flatter
+        float farK = smoothstep(16.0, 60.0, length(cameraPosition - vWorld));
+        float amp = 0.07 * (1.0 - 0.55 * farK) * (1.0 - 0.78 * calm) * (1.0 + 1.5 * chop) * (1.0 + rapids * 0.7) * (1.0 - 0.65 * oil);
         vec2 g = (waveN(q0 * 0.42) * w0 + waveN(q1 * 0.42) * w1) * amp;
         #if WATER_Q > 0
           g += (waveN(q0 * 1.13 + 0.21) * w0 + waveN(q1 * 1.13 + 0.53) * w1) * amp * 0.5;
@@ -1390,7 +1415,6 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         }
         // a slow cross swell so still water isn't dead
         g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 2.3 + time * 1.1) * 0.012 * (1.0 - 0.7 * calm);
-        float alongR = dot(p, fd);
         // ---- rapids: whitewater in a stable flow-aligned frame about the rapids' centre (rapF);
         // dot(p, fd) with the per-pixel flow direction swings by whole texture periods and marbles
         float rCov = 0.0;   // whitewater coverage, with a ragged soft edge into the calm river
@@ -1553,11 +1577,23 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         col *= wxLight * (1.0 - 0.22 * chop);
         // ---- light on the surface: sun / moon highlight and its glitter path, nearby lamps and fires
         float sd = max(dot(R, sunDir), 0.0);
-        float spec = pow(sd, mix(90.0, 420.0, calm)) * mix(1.6, 2.6, calm);
+        // the sun glint: a small, sharp highlight broken up by the ripples. Capped (the HDR chain and bloom
+        // would blow an uncapped one out into a white sheet), gone under cloud / rain / blowing sand (glare),
+        // and narrowed and dimmed with the camera distance: zoomed out the ripples shrink under a pixel and a
+        // broad lobe would paint the whole reach white (the view direction barely changes across the screen)
+        float glare = wState3.x;
+        float spec = pow(sd, mix(mix(240.0, 700.0, calm), 1600.0, farK)) * mix(1.2, 1.7, calm) * glare * (1.0 - 0.75 * farK);
+        // a soft sheen round it (also the bright patch of sky behind thin cloud)
+        spec += pow(sd, 28.0) * mix(0.05, 0.03, farK) * (0.35 + 0.65 * glare);
         #if WATER_Q > 0
-          float spark = smoothstep(0.66, 0.93, texture2D(waveTex, q0 * 1.9).b * w0 + texture2D(waveTex, q1 * 1.9).b * w1);
-          spec += pow(sd, 12.0) * spark * (0.06 + 2.4 * dark) * (1.0 - 0.6 * calm);
+          // glitter: sparse facets catching the light, an irregular pattern (two rotated noise octaves; the
+          // ripple height map is a sum of lattice waves and thresholds into a regular dotted grid)
+          float gn = texture2D(waveTex, q0 * 1.7).a * w0 + texture2D(waveTex, q1 * 1.7 + 0.5).a * w1;
+          float gn2 = texture2D(waveTex, mat2(0.8, -0.6, 0.6, 0.8) * p * 2.9 + vec2(time * 0.03, -time * 0.02)).a;
+          float spark = smoothstep(0.7, 0.86, gn * 0.55 + gn2 * 0.45);
+          spec += pow(sd, 24.0) * spark * (0.05 * glare + 0.9 * dark) * (1.0 - 0.6 * calm) * (1.0 - 0.7 * farK);
         #endif
+        spec = min(spec, 0.95);
         col += sunCol * spec * wxSpec * (1.0 - 0.7 * ice);
         #if WATER_Q > 0
         for (int i = 0; i < ${MAX_WLIGHTS}; i++) {
@@ -1606,16 +1642,18 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           #else
             float gl = smoothstep(0.7, 0.85, rN);
           #endif
-          col += sunCol * wxSpec * (pow(sd, 6.0) * 1.4 + pow(sd, 40.0) * 2.0) * gl * rCov * (1.0 - 0.6 * rVee) * (1.0 - 0.7 * ice);
+          col += sunCol * wxSpec * min(pow(sd, 6.0) * 1.0 + pow(sd, 40.0) * 1.4, 1.2) * (0.3 + 0.7 * glare) * gl * rCov * (1.0 - 0.6 * rVee) * (1.0 - 0.7 * ice);
         }
         float lapK = 1.0 + chop * 1.2 - calm * 0.5;
         float band = 1.0 - smoothstep(0.0, (0.22 + fA * 0.28) * lapK, shore);
         float lap = 0.5 + 0.5 * sin(shore * 18.0 - time * 1.7 + fA * 5.0);
         float foam = band * smoothstep(0.5, 0.85, fB * 0.6 + lap * 0.4 + band * 0.2) * 0.85 * (1.0 - 0.4 * calm);
         foam = max(foam, (1.0 - smoothstep(0.0, 0.05 + fB * 0.05, shore)) * smoothstep(0.35, 0.75, fB) * 0.6);
+        // still water laps at its shore without breaking: a faint wet line, no surf
+        foam *= 1.0 - 0.8 * wStill;
         // streaks dragged along the flow: pier wakes (the rapids' whitewater is drawn above)
         if (dat.a > 0.003) {
-          vec2 ax = vec2(alongR, dot(p, sideV));
+          vec2 ax = vec2(dot(p, wAxis), dot(p, vec2(-wAxis.y, wAxis.x)));
           float sp2 = 1.0 + rapids * 1.6;
           float st = texture2D(waveTex, vec2(ax.x * 0.3 - time * 0.4 * sp2, ax.y * 2.2)).a;
           float st2 = texture2D(waveTex, vec2(ax.x * 0.9 - time * 0.9 * sp2, ax.y * 4.1) + 0.5).a;
@@ -1623,7 +1661,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           foam = max(foam, dat.a * dat.a * mix(streak, 1.0, smoothstep(0.85, 1.0, dat.a)) * 0.8);
         }
         // eddies swirl foam; rocks and the weir churn it white
-        foam = max(foam, dat2.b * smoothstep(0.42, 0.75, fB) * 0.75);
+        foam = max(foam, dat2.b * smoothstep(0.5, 0.85, fB) * 0.45);
         // (in the rapids the rocks' collars and wakes above take over from the round churn)
         foam = max(foam, dat2.a * smoothstep(0.25, 0.65, fA * 0.5 + fB * 0.5 + dat2.a * 0.35) * (1.0 - rapids));
         #if WATER_Q > 0
@@ -1632,7 +1670,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           foam = max(foam, smoothstep(0.35, 0.8, fl.r) * (0.15 + 0.85 * max(max(rapids, dat2.b), dat2.a * 0.8)) * 0.7 * (1.0 - calm * 0.4));
         #endif
         // storm whitecaps
-        if (chop > 0.3) foam = max(foam, (chop - 0.3) * 1.4 * smoothstep(0.74, 0.92, texture2D(waveTex, p * 0.7 - wind * time * 0.7).b * 0.8 + fB * 0.3));
+        // storm whitecaps: only in a real gale, sparse (a river has little fetch)
+        if (chop > 0.45) foam = max(foam, (chop - 0.45) * 1.2 * smoothstep(0.8, 0.95, texture2D(waveTex, p * 0.7 - wind * time * 0.7).a * 0.75 + fB * 0.3));
         foam *= 1.0 - 0.8 * rVee;
         foam = max(foam, ringFoam);
         foam = clamp(foam * (1.0 - oil * 0.85), 0.0, 1.0);
