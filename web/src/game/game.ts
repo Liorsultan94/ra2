@@ -835,6 +835,7 @@ export class Game {
         if (mine) {
           const base = this.world.list.some((e) => !e.dead && e.owner === this.local && e.kind === 'building' && Math.hypot(e.x - ev.x, e.y - ev.y) < 0.01);
           this.say(base ? 'Our base is under attack' : 'Unit under attack', 'warn');
+          this.hud.minimapPing(ev.x, ev.y, 'attack');
           this.sfx('alarm', undefined, undefined, 0.5);
         }
         break;
