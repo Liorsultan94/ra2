@@ -41,6 +41,13 @@ function isStrike(def: string) {
 /** Missile-defence batteries the AI wants once the enemy fields strike missiles. */
 const MISSILE_DEFENSE: Record<Difficulty, number> = { easy: 1, normal: 2, hard: 4 };
 
+/** Our harvesters keep this far (tiles) from an enemy base centre: its home ore fields lie inside it. */
+export const HARVEST_KEEP_OUT = 24;
+/** A scout looks at the enemy base from this far out (tiles from its centre), at the edge of its sight. */
+export const SCOUT_LOOKOUT_R = 22;
+/** During the grace the scout keeps this far from the enemy base: the middle of the map only. */
+export const SCOUT_PEACE_KEEP_OUT = 34;
+
 const BUILD_ORDER: [string, number][] = [
   ['power', 1],
   ['refinery', 1],
@@ -124,6 +131,7 @@ export class AIController implements Controller {
    */
   readonly peaceUntil: number;
   private defensibleCache = { tick: -1, pts: [] as number[] };
+  private baseCache = { tick: -1, pts: [] as number[] };
 
   constructor(
     private world: World,
@@ -195,6 +203,7 @@ export class AIController implements Controller {
     }
     this.updateIntel();
     this.manageProduction(buildings, units);
+    this.manageHarvesters(units);
     this.manageArmy(buildings, units);
     this.manageRepairs(buildings);
     this.manageIllum(buildings, units);
@@ -823,7 +832,13 @@ export class AIController implements Controller {
     }
   }
 
-  /** One fast unit tours the map on hold-fire (bridges, enemy ore fields, the enemy base) and comes home. */
+  /**
+   * Scouting: limited, and never into the enemy base. One light, fast vehicle on hold-fire tours and comes home:
+   * - during the grace one tour of the middle of the map (the centre lane, the contested ore field, a side lane),
+   *   well clear of the enemy base, so the first attack stays a surprise;
+   * - afterwards, now and then, it also looks at the enemy base from the edge of its sight (a lookout just outside
+   *   the base on our side of it). It never drives through the base or parks in it.
+   */
   private manageScout(force: Entity[]) {
     const w = this.world;
     const scout = force.find((u) => this.roleOf(u) === 'scout');
@@ -835,29 +850,118 @@ export class AIController implements Controller {
       return;
     }
     if (w.tick < this.scoutAt || this.scoutsSent >= (this.cfg.micro > 0 ? 3 : 1)) return;
+    const enemy = this.enemyBase();
+    if (!enemy) return;
     const [rx, ry] = this.rally();
-    const cands = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && !unitDef(u.def).fixedWing && klass(u.def) === 'main');
+    // a light vehicle: no main battle tank (that reads as an attack), no infantry walking across the map, no aircraft
+    const cands = force.filter((u) => {
+      const d = unitDef(u.def);
+      return this.roleOf(u) === 'army' && u.order.type === 'idle' && d.category === 'vehicle' && d.armor === 'light' && klass(u.def) === 'main';
+    });
     if (!cands.length) return;
     const speed = (u: Entity) => unitDef(u.def).speed - DEFS[u.def].cost / 2000 + (unitDef(u.def).aiTag === 'scout' ? 2 : 0);
     cands.sort((a, b) => speed(b) - speed(a) || Math.hypot(a.x - rx, a.y - ry) - Math.hypot(b.x - rx, b.y - ry) || a.id - b.id);
     const u = cands[0];
-    const enemy = this.enemyBase();
-    if (!enemy) return;
+    const peace = this.peace;
+    const keepOut = peace ? SCOUT_PEACE_KEEP_OUT : SCOUT_LOOKOUT_R - 1;
     const pts: [number, number][] = [];
+    const add = (x: number, y: number) => {
+      const p = w.nearestPassable(x, y, 4);
+      if (p && !this.nearEnemyBase(p[0] + 0.5, p[1] + 0.5, keepOut)) pts.push([p[0] + 0.5, p[1] + 0.5]);
+    };
+    const mid = (x: number, y: number) => Math.hypot(x - w.map.w / 2, y - w.map.h / 2);
     const lanes = this.lanes();
-    const center = lanes.reduce((b, l) => (Math.hypot(l.x - w.map.w / 2, l.y - w.map.h / 2) < Math.hypot(b.x - w.map.w / 2, b.y - w.map.h / 2) ? l : b), lanes[0]);
-    if (center) pts.push([center.x, center.y]);
-    const ores = [...w.map.oreMines].sort((a, b) => Math.hypot(a.x - enemy[0], a.y - enemy[1]) - Math.hypot(b.x - enemy[0], b.y - enemy[1]));
-    for (const m of ores.slice(0, 2)) pts.push([m.x + 0.5, m.y + 0.5]);
-    pts.push([enemy[0] + this.rng.range(-6, 6), enemy[1] + this.rng.range(-6, 6)]);
+    const center = lanes.reduce((b, l) => (mid(l.x, l.y) < mid(b.x, b.y) ? l : b), lanes[0]);
+    if (center) add(center.x, center.y);
+    // the contested ore field: the one about as far from both bases
+    const [hx, hy] = this.home();
+    let ore: { x: number; y: number } | null = null;
+    let od = Infinity;
+    for (const m of w.map.oreMines) {
+      const d = Math.abs(Math.hypot(m.x - hx, m.y - hy) - Math.hypot(m.x - enemy[0], m.y - enemy[1]));
+      if (d < od) {
+        od = d;
+        ore = m;
+      }
+    }
+    if (ore) add(ore.x + 0.5, ore.y + 0.5);
+    if (!peace) {
+      // lookout: the edge of the enemy base, seen from our side of it, a little to one flank
+      const a = Math.atan2(hy - enemy[1], hx - enemy[0]) + this.rng.range(-0.6, 0.6);
+      add(enemy[0] + Math.cos(a) * SCOUT_LOOKOUT_R, enemy[1] + Math.sin(a) * SCOUT_LOOKOUT_R);
+    }
     const side = lanes[(this.scoutsSent + 1) % Math.max(1, lanes.length)];
-    if (side) pts.push([side.x, side.y]);
+    if (side && side !== center) add(side.x, side.y);
+    if (!pts.length) {
+      this.scoutAt = w.tick + TPS * 30;
+      return;
+    }
     pts.push([rx, ry]);
     this.setRole([u.id], 'scout');
     this.stance([u.id], 'holdFire');
     pts.forEach(([x, y], i) => this.cmd({ type: 'move', ids: [u.id], x, y, queue: i > 0 }));
-    this.scoutsSent++;
-    this.scoutAt = w.tick + TPS * 150;
+    if (peace) {
+      // one tour of the middle during the grace; the base lookouts come after it
+      this.scoutAt = Math.max(w.tick + TPS * 150, this.peaceUntil);
+    } else {
+      this.scoutsSent++;
+      this.scoutAt = w.tick + TPS * 240;
+    }
+  }
+
+  /** Centres of the enemy bases: every enemy's start and the construction yards we know of (an MCV that moved). Cached per tick. */
+  private enemyBaseCentres(): number[] {
+    const c = this.baseCache;
+    const w = this.world;
+    if (c.tick === w.tick) return c.pts;
+    c.tick = w.tick;
+    c.pts.length = 0;
+    for (const p of w.players) if (p.id !== this.pid && !p.defeated && w.isEnemy(this.pid, p.id)) c.pts.push(p.startX + 0.5, p.startY + 0.5);
+    for (const e of w.list) {
+      if (e.dead || e.kind !== 'building' || !w.isEnemy(this.pid, e.owner) || buildingDef(e.def).role !== 'conyard') continue;
+      if (this.knowsBuilding(e)) c.pts.push(e.x, e.y);
+    }
+    return c.pts;
+  }
+
+  /** Is a point within `r` tiles of an enemy base? */
+  private nearEnemyBase(x: number, y: number, r: number): boolean {
+    const pts = this.enemyBaseCentres();
+    for (let i = 0; i < pts.length; i += 2) if (Math.hypot(x - pts[i], y - pts[i + 1]) <= r) return true;
+    return false;
+  }
+
+  /**
+   * Our harvesters never work the ore fields of an enemy base (its home fields lie inside it). One that picked
+   * such a field (its own fields mined out, say) is sent to the nearest ore outside every enemy base instead,
+   * or home when there is none.
+   */
+  private manageHarvesters(units: Entity[]) {
+    const w = this.world;
+    const { map } = w;
+    for (const u of units) {
+      if (!unitDef(u.def).harvester || u.order.type !== 'harvest' || u.oreTile < 0) continue;
+      if (u.hstate !== 'toOre' && u.hstate !== 'mining') continue;
+      const ox = u.oreTile % map.w;
+      const oy = (u.oreTile - ox) / map.w;
+      if (!this.nearEnemyBase(ox + 0.5, oy + 0.5, HARVEST_KEEP_OUT)) continue;
+      let best = -1;
+      let bd = Infinity;
+      for (let t = 0; t < map.ore.length; t++) {
+        if (map.ore[t] <= 0) continue;
+        const x = t % map.w;
+        const y = (t - x) / map.w;
+        const d = Math.hypot(x + 0.5 - u.x, y + 0.5 - u.y);
+        if (d >= bd || !w.pf.passable(x, y) || this.nearEnemyBase(x + 0.5, y + 0.5, HARVEST_KEEP_OUT)) continue;
+        bd = d;
+        best = t;
+      }
+      if (best >= 0) this.cmd({ type: 'harvest', ids: [u.id], x: (best % map.w) + 0.5, y: Math.floor(best / map.w) + 0.5 });
+      else {
+        const [hx, hy] = this.home();
+        this.cmd({ type: 'move', ids: [u.id], x: hx, y: hy });
+      }
+    }
   }
 
   /** Bridges the armies can cross (the lanes of the map), skipping any that are impassable (destroyed). */
