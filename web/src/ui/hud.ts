@@ -1,5 +1,8 @@
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, defsForFaction, unitDef } from '../sim/defs';
-import { illumWait } from '../sim/night';
+import { FLOOD_RADIUS, floodCentre, floodlit, illumWait } from '../sim/night';
+import { BRIDGE_DEF } from '../sim/bridges';
+import { fillFog } from '../render/minimap';
+import { MinimapPings, OreLayer, noiseFrames, type PingKind } from './minimapfx';
 import { standHeight } from '../sim/map';
 import { TPS, type Category, type Def, type Entity } from '../sim/types';
 import type { World } from '../sim/world';
@@ -131,6 +134,10 @@ export class Hud {
   private mmInv = new DOMMatrix();
   private mmYaw = NaN;
   private mmDirty = true;
+  /** Minimap overlays (minimapfx.ts): ore highlight, offline static frames, alert pings. */
+  private mmOre: OreLayer | null = null;
+  private mmNoise: HTMLCanvasElement[] | null = null;
+  private readonly mmPings = new MinimapPings();
   private cineEl!: HTMLElement;
   private hpState = new Map<number, { hp: number; ghost: number; flash: number }>();
   private rankPops = new RankPops();
@@ -813,10 +820,48 @@ export class Hud {
     return { x: p.x, y: p.y };
   }
 
-  /** Static radar layer: terrain, ore, units and fog (redrawn a few times per second). */
+  /**
+   * Match the minimap's backing store to its size on screen (device pixels, so it stays crisp on a phone's
+   * high-dpi screen; capped). Checked at the static layer's cadence; a resize redraws everything.
+   */
+  private mmResize() {
+    const c = this.minimap;
+    const cw = c.clientWidth;
+    const ch = c.clientHeight;
+    if (!cw || !ch) return;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    let w = Math.round(cw * dpr);
+    let h = Math.round(ch * dpr);
+    // between the old fixed 400 x 300 and 600 px wide (the baked photo has ~5 px per tile)
+    const k = Math.max(400 / w, Math.min(1, 600 / w));
+    w = Math.round(w * k);
+    h = Math.round(h * k);
+    if (Math.abs(w - c.width) < 8 && Math.abs(h - c.height) < 8) return;
+    c.width = this.mmStatic.width = w;
+    c.height = this.mmStatic.height = h;
+    this.mmNoise = null;
+    this.mmYaw = NaN;
+  }
+
+  /** Size unit of the minimap's marks (1 on the old 400 x 300 canvas). */
+  private get mmU() {
+    return Math.max(1, Math.min(this.minimap.width / 400, this.minimap.height / 300));
+  }
+
+  /** Alert ping on the minimap (a base / unit under attack). */
+  minimapPing(x: number, y: number, kind: PingKind = 'attack') {
+    this.mmPings.add(x, y, kind, performance.now() / 1000);
+  }
+
+  /**
+   * Static radar layer, redrawn a few times per second: the baked recon photo of the battlefield
+   * (render/minimap.ts; a dim grey silhouette while the radar is offline), the ore fields, night and its
+   * lights, the fog of war, then the structures and units.
+   */
   drawMinimap() {
     const w = this.world;
     const { map } = w;
+    this.mmResize();
     this.mmTransform();
     this.mmDirty = false;
     const ctx = this.mmStatic.getContext('2d')!;
@@ -830,20 +875,57 @@ export class Hud {
     const M = this.mmM;
     ctx.setTransform(M.a, M.b, M.c, M.d, M.e, M.f);
     ctx.imageSmoothingEnabled = true;
-    // real terrain colours (grass, fields, roads, water, rock) baked by the terrain
-    ctx.drawImage(this.renderer.terrain.minimapImage, 0, 0, map.w, map.h);
-    // ore
-    for (let i = 0; i < map.ore.length; i++) {
-      if (map.ore[i] && p.explored[i]) {
-        ctx.fillStyle = map.oreKind[i] === 2 ? '#c060ff' : '#e0b840';
-        ctx.fillRect(i % map.w, Math.floor(i / map.w), 1, 1);
+    ctx.imageSmoothingQuality = 'high';
+    const bake = this.renderer.terrain.minimap;
+    if (bake?.canvas) {
+      // destroyed / rebuilt bridges re-bake their patch of the photo (ruins come from the renderer)
+      for (const b of w.bridges) bake.setBridgeDown(b.idx, b.status !== 'intact');
+      ctx.drawImage(bake.canvas, 0, 0, map.w, map.h);
+    } else ctx.drawImage(this.renderer.terrain.minimapImage, 0, 0, map.w, map.h);
+    if (!radar) {
+      // offline: the photo drained of colour and dimmed to a silhouette (the static goes on per frame)
+      ctx.globalCompositeOperation = 'saturation';
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, map.w, map.h);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = 'rgb(112,128,122)';
+      ctx.fillRect(0, 0, map.w, map.h);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // ore and gem fields, highlighted
+    if (!this.mmOre) this.mmOre = new OreLayer(map);
+    this.mmOre.update(p.explored);
+    ctx.globalAlpha = radar ? 0.6 : 0.4;
+    ctx.drawImage(this.mmOre.canvas, 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = radar ? 0.32 : 0.15;
+    ctx.drawImage(this.mmOre.canvas, -0.35, -0.35, map.w + 0.7, map.h + 0.7);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    // night: the land darkens; lit windows, street lamps and the bases' floodlights glow
+    const nl = w.nightLevel;
+    if (nl > 0.01) {
+      ctx.fillStyle = `rgba(4,9,24,${0.4 * nl})`;
+      ctx.fillRect(0, 0, map.w, map.h);
+      ctx.globalCompositeOperation = 'lighter';
+      if (bake?.lights) {
+        ctx.globalAlpha = 0.85 * nl;
+        ctx.drawImage(bake.lights, 0, 0, map.w, map.h);
       }
+      ctx.globalAlpha = 1;
+      for (const e of w.list) {
+        if (e.kind !== 'building' || (e.owner !== this.player && !this.renderer.isShown(e.id)) || !floodlit(w, e)) continue;
+        const [fx, fy] = floodCentre(e);
+        const g = ctx.createRadialGradient(fx, fy, 0, fx, fy, FLOOD_RADIUS * 0.75);
+        g.addColorStop(0, `rgba(255,236,190,${0.2 * nl})`);
+        g.addColorStop(1, 'rgba(255,236,190,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(fx - FLOOD_RADIUS, fy - FLOOD_RADIUS, FLOOD_RADIUS * 2, FLOOD_RADIUS * 2);
+      }
+      ctx.globalCompositeOperation = 'source-over';
     }
-    // fog
-    const data = this.fogImg.data;
-    for (let i = 0; i < map.w * map.h; i++) {
-      data[i * 4 + 3] = p.visible[i] ? 0 : p.explored[i] ? 120 : 255;
-    }
+    // fog: unexplored dark, explored but out of sight dimmed (the night fog; by day classic fog keeps it clear)
+    fillFog(this.fogImg.data, p.visible, p.explored);
     this.fogCanvas.getContext('2d')!.putImageData(this.fogImg, 0, 0);
     ctx.drawImage(this.fogCanvas, 0, 0);
     // entities (only what the player can see; units need the radar). Structures on explored ground are map
@@ -854,6 +936,8 @@ export class Hud {
       const own = e.owner === this.player;
       if (!own && !this.renderer.isShown(e.id)) continue;
       if (!radar && e.kind !== 'building') continue;
+      // the bridges and the unclaimed village houses are in the photo itself
+      if (e.kind === 'building' && e.owner < 0 && (e.def === BRIDGE_DEF || buildingDef(e.def).garrison)) continue;
       const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
       if (e.kind === 'building') {
         const d = buildingDef(e.def);
@@ -870,13 +954,27 @@ export class Hud {
     }
   }
 
-  /** Per-frame radar: composite the static layer, the sweep and the camera frustum footprint. */
+  /** The map diamond as a clip path (canvas pixels). */
+  private mmClip(ctx: CanvasRenderingContext2D) {
+    const { map } = this.world;
+    const M = this.mmM;
+    ctx.beginPath();
+    for (const [x, y] of [[0, 0], [map.w, 0], [map.w, map.h], [0, map.h]]) {
+      const q = M.transformPoint(new DOMPoint(x, y));
+      ctx.lineTo(q.x, q.y);
+    }
+    ctx.closePath();
+    ctx.clip();
+  }
+
+  /** Per-frame radar: composite the static layer, the sweep (or the offline static), pings and the camera frustum. */
   tickMinimap(now: number) {
     if (!this.world) return;
     this.mmTransform();
     if (this.mmDirty) this.drawMinimap();
     const ctx = this.minimap.getContext('2d')!;
     const { map } = this.world;
+    const u = this.mmU;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.mmStatic, 0, 0);
     const M = this.mmM;
@@ -887,13 +985,7 @@ export class Hud {
       const R = Math.hypot(this.minimap.width, this.minimap.height) * 0.6;
       const ang = (now * 1.3) % (Math.PI * 2);
       ctx.save();
-      ctx.beginPath();
-      for (const [x, y] of [[0, 0], [map.w, 0], [map.w, map.h], [0, map.h]]) {
-        const q = M.transformPoint(new DOMPoint(x, y));
-        ctx.lineTo(q.x, q.y);
-      }
-      ctx.closePath();
-      ctx.clip();
+      this.mmClip(ctx);
       const g = (ctx as CanvasRenderingContext2D & { createConicGradient?: (a: number, x: number, y: number) => CanvasGradient }).createConicGradient?.(ang - 1.1, c.x, c.y);
       if (g) {
         g.addColorStop(0, 'rgba(90,255,160,0)');
@@ -908,30 +1000,52 @@ export class Hud {
         ctx.fill();
       }
       ctx.strokeStyle = 'rgba(150,255,190,0.85)';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.5 * u;
       ctx.beginPath();
       ctx.moveTo(c.x, c.y);
       ctx.lineTo(c.x + Math.cos(ang) * R, c.y + Math.sin(ang) * R);
       ctx.stroke();
       ctx.restore();
+    } else {
+      // offline: faint static over the silhouette, a slow interference band rolling down
+      const W = this.minimap.width;
+      const H = this.minimap.height;
+      if (!this.mmNoise) this.mmNoise = noiseFrames(Math.min(200, Math.ceil(W / 2)), Math.min(150, Math.ceil(H / 2)));
+      ctx.save();
+      this.mmClip(ctx);
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = 0.22;
+      ctx.drawImage(this.mmNoise[Math.floor(now * 14) % this.mmNoise.length], 0, 0, W, H);
+      ctx.globalAlpha = 1;
+      const by = ((now * 0.18) % 1.3) * H - 0.15 * H;
+      const band = ctx.createLinearGradient(0, by, 0, by + H * 0.16);
+      band.addColorStop(0, 'rgba(160,190,175,0)');
+      band.addColorStop(0.5, 'rgba(160,190,175,0.08)');
+      band.addColorStop(1, 'rgba(160,190,175,0)');
+      ctx.fillStyle = band;
+      ctx.fillRect(0, by, W, H * 0.16);
+      ctx.restore();
     }
+    // alerts: rings opening where we are under attack
+    this.mmPings.draw(ctx, (x, y) => M.transformPoint(new DOMPoint(x, y)), now, u);
     // our soldiers down wounded (sim/medic.ts): small red crosses, blinking in their last seconds
     for (const e of this.world.wounded) {
       if (e.dead || e.owner !== this.player) continue;
       if (bleedFrac(this.world, e) > 0.7 && Math.sin(now * 9) < 0) continue;
       const q = M.transformPoint(new DOMPoint(e.x, e.y));
+      const s = (n: number) => Math.round(n * u);
       ctx.fillStyle = 'rgba(250,250,245,0.95)';
-      ctx.fillRect(Math.round(q.x) - 4, Math.round(q.y) - 4, 9, 9);
+      ctx.fillRect(Math.round(q.x) - s(4), Math.round(q.y) - s(4), s(9), s(9));
       ctx.fillStyle = '#d0141c';
-      ctx.fillRect(Math.round(q.x) - 1, Math.round(q.y) - 3, 3, 7);
-      ctx.fillRect(Math.round(q.x) - 3, Math.round(q.y) - 1, 7, 3);
+      ctx.fillRect(Math.round(q.x) - s(1), Math.round(q.y) - s(3), s(3), s(7));
+      ctx.fillRect(Math.round(q.x) - s(3), Math.round(q.y) - s(1), s(7), s(3));
     }
     // camera view: the frustum footprint (a trapezoid with the perspective camera)
     const corners = this.renderer.viewCorners();
     ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.6 * u;
     ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 3;
+    ctx.shadowBlur = 3 * u;
     ctx.beginPath();
     corners.forEach((pt, i) => {
       const q = M.transformPoint(new DOMPoint(pt.x, pt.y));

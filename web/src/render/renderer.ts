@@ -9,6 +9,7 @@ import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPas
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { treatPoseOf } from '../sim/medic';
 import { groundHeight, standHeight } from '../sim/map';
+import { BRIDGE_DEF } from '../sim/bridges';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import { heliRepairing } from '../sim/helipad';
 import { harvesterRepairing } from '../sim/harvest';
@@ -2244,6 +2245,8 @@ export class GameRenderer {
         if (d.kind === 'building' || (unitDef(ev.def).category === 'vehicle' && !unitDef(ev.def).air)) this.atmos.impact(ev.x, ev.y, d.kind === 'building' ? 2 : 1.1);
         if (d.kind === 'building') {
           const bd = buildingDef(ev.def);
+          // its ruin goes into the minimap's photo (garrisoned houses: when their model collapses, envdamage.ts)
+          if (shown && !bd.garrison && ev.def !== BRIDGE_DEF) this.terrain.minimap?.ruin(ev.x, ev.y, bd.w, bd.h);
           if (shown) {
             for (let i = 0; i < Math.min(7, bd.w * bd.h); i++) {
               const ex = ev.x + (Math.random() - 0.5) * bd.w;

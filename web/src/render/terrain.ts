@@ -14,6 +14,7 @@ import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
 import { RIVER, buildWater, setRapidsRocks, type RiverInfo, type WaterReflection } from './water';
 import { Waterside } from './waterside';
+import { MinimapBake } from './minimap';
 import type { Slicer } from './slice';
 
 /*
@@ -38,7 +39,10 @@ export class Terrain {
   river!: RiverInfo;
   waterside: Waterside | null = null;
   private resources!: Resources;
+  /** Flat map colours (the briefing's map print). */
   minimapImage!: HTMLCanvasElement;
+  /** The minimap's recon photo of the battlefield (minimap.ts), baked in slices at load. */
+  minimap!: MinimapBake;
   /** Instanced plants, fences and village houses, for render-side environment damage. */
   readonly veg: VegetationHandles = { trees: [], bushes: [] };
   readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
@@ -121,6 +125,11 @@ export class Terrain {
     this.group.name = 'terrain';
     yield;
     this.minimapImage = this.buildMinimap();
+    yield;
+    // the minimap's recon photo: a band of rows per slice
+    this.minimap = new MinimapBake({ map, layout: this.layout, look: this.ground.look, ground: this.ground, trees });
+    yield* this.minimap.steps();
+    console.info(`minimap baked in ${Math.round(this.minimap.totalMs)} ms (worst slice ${this.minimap.worstSliceMs.toFixed(1)} ms, ${(this.minimap.bytes() / 1048576).toFixed(2)} MB)`);
     console.info(`terrain built in ${Math.round(performance.now() - t0)} ms`);
   }
   private buildWater(quality: 'low' | 'medium' | 'high') {

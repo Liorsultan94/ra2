@@ -9,6 +9,7 @@ import type { Props } from './props';
 import type { BattleScars } from './scars';
 import type { HouseHandle } from './scenery';
 import type { Terrain } from './terrain';
+import type { MinimapBake } from './minimap';
 
 /*
  * Render-side environment destruction (visual only, not deterministic):
@@ -91,6 +92,8 @@ export class EnvDamage {
   private time = 0;
   private dirtyIms = new Set<THREE.InstancedMesh>();
   /** Photoscanned props (crushed by vehicles, thrown about by blasts). */
+  /** The minimap's recon photo (collapsed houses become ruins there). */
+  private minimap: MinimapBake | null;
   private props: Props;
   /** Persistent battle scars (scars.ts): when set, burnt ground and house ruins go there. */
   scars: BattleScars | null = null;
@@ -102,6 +105,7 @@ export class EnvDamage {
     private effects: Effects,
     quality: 'low' | 'medium' | 'high',
   ) {
+    this.minimap = terrain.minimap ?? null;
     this.props = terrain.props;
     this.props.attach(effects);
     const veg = terrain.veg;
@@ -458,6 +462,8 @@ export class EnvDamage {
       H.collapseT = 0;
       H.lean = (Math.random() - 0.5) * 0.25;
       const st = H.h.st;
+      // the minimap photo shows the ruin in its place (minimap.ts)
+      this.minimap?.ruin(st.x + st.w / 2, st.y + st.h / 2, st.w, st.h);
       this.burning.push({ x: cx, y: gy + 0.2, z: cz, t: 14 + Math.random() * 8, size: 1.1 });
       this.addScorch(cx, cz, Math.max(st.w, st.h) * 0.8);
       if (this.scars) {
