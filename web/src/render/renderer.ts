@@ -2611,6 +2611,10 @@ export class GameRenderer {
     this.contact?.dispose();
     this.csm?.dispose();
     this.renderer.dispose();
+    // three's texture / geometry dispose listeners (left on the session-shared ones) keep this renderer's
+    // info object, and info.programs is its whole program cache: emptied, the old match keeps no programs
+    const progs = this.renderer.info.programs;
+    if (progs) progs.length = 0;
     this.post?.dispose();
     this.compileRT?.dispose();
     this.shadowCache?.dispose();
