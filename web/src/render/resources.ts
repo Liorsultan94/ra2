@@ -242,16 +242,17 @@ function oreMaterial(a: CrystalAssets, fog: FogOfWar, winter: boolean) {
   patch(mat, a.mask, {
     color: /* glsl */ `
       vec3 oreM = texture2D( oreMask, vNormalMapUv ).rgb; // ao, veins, nugget flag
-      float oreSpark = max( oreM.b, smoothstep( 0.04, 0.4, oreM.g ) ); // nuggets, veins (thickened)
-      vec3 rockC = vec3( 0.16, 0.11, 0.085 ) * ( 0.85 + 0.3 * fract( vSeed * 3.7 ) );
+      float oreSpark = max( oreM.b, smoothstep( 0.0, 0.16, oreM.g ) ); // nuggets, veins (thickened to read at play zoom)
+      // the host rock itself is mineralised: warm bronze with a dull metallic sheen
+      vec3 rockC = vec3( 0.21, 0.135, 0.07 ) * ( 0.85 + 0.3 * fract( vSeed * 3.7 ) );
       diffuseColor.rgb = mix( rockC, vec3( 1.0, 0.68, 0.26 ), oreSpark ) * ( 0.3 + 0.7 * oreM.r );`,
     rough: /* glsl */ `
-      roughnessFactor = mix( 0.88, 0.24, oreSpark );
-      metalnessFactor = oreSpark;`,
+      roughnessFactor = mix( 0.62, 0.22, oreSpark );
+      metalnessFactor = mix( 0.3, 1.0, oreSpark );`,
     spec: '',
     // a little self-light so the gold still reads in shade and by night (the env map alone goes flat)
     emis: /* glsl */ `
-      totalEmissiveRadiance += vec3( 0.55, 0.33, 0.1 ) * oreSpark * oreM.r * ( 0.3 + 0.45 * oreNight );`,
+      totalEmissiveRadiance += vec3( 0.55, 0.33, 0.1 ) * oreSpark * oreM.r * ( 0.45 + 0.45 * oreNight );`,
     glint: 9,
   });
   if (winter) mat.defines = { ...mat.defines, WX_SNOW_K: '0.2' };
