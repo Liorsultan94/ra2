@@ -27,9 +27,16 @@ import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
  */
 
 const ALT_JET = 13.5;
-/** Airliner altitude / scale this frame (follows the camera height, smoothed). */
+/**
+ * Contrails hang at a fixed altitude high in the sky, above any game camera (the RTS camera never sees
+ * them; a low photo / cinematic view sees them up in the sky, thin, fading with distance). They never
+ * come near the ground, so they can't read as roads or bars across the map.
+ */
+const ALT_SKY = 78;
+/** Airliner altitude / scale this frame (follows the camera height, smoothed; at ALT_SKY when the view looks out at the sky). */
 let jetAlt = ALT_JET;
 let jetScale = 1;
+let jetSky = false;
 const ALT_NEWS = 4.6;
 const ALT_PLANE = 5.4;
 const TRAIL_N = 64;
@@ -108,8 +115,8 @@ export class AirTraffic {
     private lights: LightSprites,
     quality: Quality,
     private helipad: { x: number; y: number; z: number } | null,
-    /** Height of the camera (airliners fly at a fraction of it so they read as high and small). */
-    private camY: () => number = () => 30,
+    /** The view camera (airliners fly at a fraction of its height so they read as high and small). */
+    private cam: () => THREE.Camera | undefined = () => undefined,
   ) {
     this.group.name = 'air-traffic';
     this.news = newHeli(false);
@@ -149,17 +156,23 @@ export class AirTraffic {
       vertexShader: /* glsl */ `
         attribute vec2 aT;
         varying vec2 vT;
+        varying float vFade;
         void main() {
           vT = aT;
+          // thin out with distance (and never in the camera's face)
+          float dist = length( position - cameraPosition );
+          vFade = smoothstep( 520.0, 260.0, dist ) * smoothstep( 25.0, 60.0, dist );
           gl_Position = projectionMatrix * viewMatrix * vec4( position, 1.0 );
         }`,
       fragmentShader: /* glsl */ `
         uniform float uNight;
         varying vec2 vT;
+        varying float vFade;
         void main() {
           // vT.x: age 0..1, vT.y: across -1..1
           float edge = 1.0 - vT.y * vT.y;
-          float a = edge * ( 1.0 - vT.x ) * smoothstep( 0.0, 0.04, vT.x ) * 0.55;
+          float a = edge * ( 1.0 - vT.x ) * smoothstep( 0.0, 0.04, vT.x ) * 0.42 * vFade;
+          if ( a < 0.003 ) discard;
           vec3 c = mix( vec3( 0.97, 0.97, 1.0 ), vec3( 0.32, 0.34, 0.4 ), uNight );
           gl_FragColor = vec4( c, a );
         }`,
@@ -221,11 +234,22 @@ export class AirTraffic {
       }
       this.jetWait = 55 + Math.random() * 70;
     }
-    // fly at ~55 % of the camera height, drawn smaller the closer to the camera: a distant airliner, never a giant
-    const cy0 = Math.max(8, this.camY());
-    const alt = Math.max(5.5, Math.min(ALT_JET, cy0 * 0.55));
+    // fly at ~55 % of the camera height, drawn smaller the closer to the camera: a distant airliner, never a giant;
+    // a view looking out at the sky (photo / cinematic cameras) sees it up at its contrails' altitude instead
+    const cam = this.cam();
+    const cy0 = Math.max(8, cam?.position.y ?? 30);
+    let sky = false;
+    if (cam) {
+      cam.getWorldDirection(_p);
+      sky = _p.y > -0.42;
+    }
+    if (sky !== jetSky) {
+      jetSky = sky;
+      jetAlt = sky ? ALT_SKY : Math.max(5.5, Math.min(ALT_JET, cy0 * 0.55));
+    }
+    const alt = sky ? ALT_SKY : Math.max(5.5, Math.min(ALT_JET, cy0 * 0.55));
     jetAlt += (alt - jetAlt) * Math.min(1, dt * 0.5);
-    jetScale = Math.max(0.3, Math.min(1, ((cy0 - jetAlt) / cy0) * 0.95));
+    jetScale = sky ? 3.4 : Math.max(0.3, Math.min(1, ((cy0 - jetAlt) / cy0) * 0.95));
     const ALT = jetAlt;
     const SC = jetScale;
     const im = this.jetIm!;
@@ -281,14 +305,15 @@ export class AirTraffic {
         const ageA = (this.time - j.pts[a * 3 + 2]) / 24;
         const ageB = (this.time - j.pts[b * 3 + 2]) / 24;
         if (ageA >= 1) break;
-        const wA = (0.05 + ageA * 0.75) * SC;
-        const wB = (0.05 + Math.min(1, ageB) * 0.75) * SC;
-        for (const side of [-0.45, 0.45]) {
-          const ax = j.pts[a * 3] + nx * side * SC * (1 + ageA * 0.6);
-          const ay = j.pts[a * 3 + 1] + ny * side * SC * (1 + ageA * 0.6);
-          const bx = j.pts[b * 3] + nx * side * SC * (1 + ageB * 0.6);
-          const by = j.pts[b * 3 + 1] + ny * side * SC * (1 + ageB * 0.6);
-          const h = ALT - 0.05 - ageA * 0.4;
+        // thin trails that spread as they age, at the fixed sky altitude (contrail world units, not the jet's scale)
+        const wA = 0.22 + ageA * 1.9;
+        const wB = 0.22 + Math.min(1, ageB) * 1.9;
+        for (const side of [-0.9, 0.9]) {
+          const ax = j.pts[a * 3] + nx * side * (1 + ageA * 0.8);
+          const ay = j.pts[a * 3 + 1] + ny * side * (1 + ageA * 0.8);
+          const bx = j.pts[b * 3] + nx * side * (1 + ageB * 0.8);
+          const by = j.pts[b * 3 + 1] + ny * side * (1 + ageB * 0.8);
+          const h = ALT_SKY - ageA * 1.5;
           const verts = [
             [ax - nx * wA, h, ay - ny * wA, ageA, -1],
             [ax + nx * wA, h, ay + ny * wA, ageA, 1],
