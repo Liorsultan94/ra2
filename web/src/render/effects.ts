@@ -12,6 +12,7 @@ import { Tracers } from './fx/tracers';
 import { Fireballs } from './fx/fireball';
 import { Flipbooks } from './fx/flipbook';
 import { GodRays } from './fx/godrays';
+import { godRayTier } from './fx/atmosrules';
 import { GpuParticles, particleUniforms, type ParticleOpts } from './fx/gpuparticles';
 import type { GroundMarks } from './marks';
 import { GroundFx } from './fx/groundfx';
@@ -247,10 +248,14 @@ export class Effects {
     return this.haze;
   }
 
-  /** Turn on crepuscular light shafts (high quality only); hand the result to the final post pass. */
+  /**
+   * Turn on crepuscular light shafts; hand the result to the final post pass. High: through smoke and the
+   * cloud gaps; medium (phones): the cloud gaps only, at low resolution (fx/atmosrules.ts godRayTier); low: none.
+   */
   enableGodRays(camera: THREE.Camera): GodRays | null {
-    if (this.quality !== 'high') return null;
-    this.godRays ??= new GodRays(camera, this.smokeSys.densityPoints(this.smokeTex, this.pu, this.fog));
+    const tier = godRayTier(this.quality);
+    if (!tier.on) return null;
+    this.godRays ??= new GodRays(camera, tier.smoke ? this.smokeSys.densityPoints(this.smokeTex, this.pu, this.fog) : null, this.quality);
     return this.godRays;
   }
 

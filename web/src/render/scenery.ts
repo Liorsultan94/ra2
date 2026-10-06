@@ -64,6 +64,16 @@ export interface HouseHandle {
   /** Ground height under the footprint (the structure's base). */
   gy: number;
   ranges: { mesh: THREE.Mesh; start: number; end: number }[];
+  /** Damage stage (envdamage.ts): 0 / undefined intact, 1 damaged, 2 collapsed (the chimney stops smoking). */
+  stage?: number;
+}
+
+/** The top of a house chimney (world), for the chimney smoke (fx/chimneys.ts). */
+export interface ChimneyTop {
+  x: number;
+  y: number;
+  z: number;
+  st: Structure;
 }
 
 /** Handles for render-side environment damage (src/render/envdamage.ts). */
@@ -72,6 +82,8 @@ export interface SceneryHandles {
   /** Fence posts / rails (origin of a post at its foot, of a rail at its centre). */
   posts: THREE.InstancedMesh[];
   rails: THREE.InstancedMesh[];
+  /** Chimney tops of the village houses and town houses. */
+  chimneys?: ChimneyTop[];
 }
 
 const ROAD_MATS = new WeakMap<GameMap, THREE.Material>();
@@ -156,6 +168,11 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const roofColors = bc === 2 ? [0x3a3a3c, 0x2e3a30, 0x4a3a30, 0x34383e] : [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
   const builders = [walls, roofs, trim, wood, metal];
   const spans: { st: Structure; from: number[]; to: number[] }[] = [];
+  const chims: ChimneyTop[] = [];
+  const chimney = (st: Structure, base: THREE.Matrix4, x: number, y: number, z: number) => {
+    const p = V(x, y, z).applyMatrix4(base);
+    chims.push({ x: p.x, y: p.y, z: p.z, st });
+  };
   for (const st of m.structures) {
     if (isCityKind(st.kind)) continue; // city blocks: models/citybldgs.ts
     const from = builders.map((b) => b.count);
@@ -323,6 +340,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
           const rise = house(lx, dz, hw, (big ? 0.68 : 0.8) + 0.12, wood, wallC, roofC, 1.6);
           windows(lx, dz, hw, big ? 2 : 1, true);
           boxAt(walls, 0.13, 0.32, 0.13, L(trs((h(4) - 0.5) * lx * 0.6, hw + rise * 0.75, -dz * 0.18)), new THREE.Color(0.55, 0.53, 0.5));
+          chimney(st, base, (h(4) - 0.5) * lx * 0.6, hw + rise * 0.75 + 0.16, -dz * 0.18);
           // corner posts
           for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) boxAt(wood, 0.05, hw, 0.05, L(trs((sx * lx) / 2, hw / 2, (sz * dz) / 2)), wallC.clone().multiplyScalar(0.7));
           if (h(5) < 0.6) house(0.5, 0.62, 0.3, 0.55, wood, new THREE.Color(0.38, 0.3, 0.24), roofC.clone().multiplyScalar(0.85), 1.5);
@@ -338,6 +356,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         // chimney
         const cx2 = (h(4) - 0.5) * lx * 0.6;
         boxAt(walls, 0.12, 0.3, 0.12, L(trs(cx2, hw + rise * 0.75, -dz * 0.18)), wallC.clone().multiplyScalar(0.8));
+        chimney(st, base, cx2, hw + rise * 0.75 + 0.15, -dz * 0.18);
         // a TV aerial on the chimney, a satellite dish under the eaves on some
         if (h(18) < 0.45) {
           boxAt(metal, 0.008, 0.3, 0.008, L(trs(cx2, hw + rise * 0.75 + 0.27, -dz * 0.18)), new THREE.Color(0.4, 0.42, 0.44));
@@ -464,6 +483,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       });
       sink.houses.push({ st, cx, cz, gy, ranges });
     }
+  if (sink) (sink.chimneys ??= []).push(...chims);
   // (closures made in here, e.g. the materials' shader patches, keep this scope alive: free the builders' arrays)
   for (const b of builders) b.release();
   rb.release();
@@ -471,7 +491,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   built.clear();
 
   // city blocks, street lamps, fountains and ruins (urban maps)
-  out.push(...buildCity(m, fog, quality, sink, lod));
+  out.push(...buildCity(m, fog, quality, sink, lod, sink ? (sink.chimneys ??= []) : undefined));
   // kerbs, the street market and cafes on the squares (render/streetlife.ts)
   out.push(...buildStreetLife(m, layout, fog, quality, lod));
 

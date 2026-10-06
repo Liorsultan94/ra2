@@ -455,10 +455,12 @@ export class EnvDamage {
     const cz = H.h.cz;
     if (H.stage === 0) {
       H.stage = 1;
+      H.h.stage = H.stage;
       this.burning.push({ x: cx + (bx - cx) * 0.3, y: H.top - 0.15, z: cz + (bz - cz) * 0.3, t: 5 + size * 3, size: 0.7 });
     }
     if (H.hp <= 0 || (size >= 2.2 && !H.sim)) {
       H.stage = 2;
+      H.h.stage = H.stage;
       H.collapseT = 0;
       H.lean = (Math.random() - 0.5) * 0.25;
       const st = H.h.st;

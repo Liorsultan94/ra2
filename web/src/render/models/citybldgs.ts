@@ -5,7 +5,7 @@ import type { FogOfWar } from '../fog';
 import { onFogRelease } from '../fogcache';
 import { GeoBuilder, type SceneryLod } from '../geo';
 import { surfaceHeight } from '../ground';
-import type { HouseHandle } from '../scenery';
+import type { ChimneyTop, HouseHandle } from '../scenery';
 import { onBuildingPhotos, photoTileCanvas, Tile as BTile } from './bldtex';
 import type { Builder } from './registry';
 import type { Model, ModelStyle } from './types';
@@ -835,6 +835,9 @@ const AWNINGS = [0xb83a2a, 0x2a6aa8, 0x2f8a5a, 0xd8a030, 0x6a3a8a, 0x404448];
 const SHUTTERS = [0x3a6a4a, 0x2e5a8a, 0x6a4a32, 0x4a7a8a, 0x8a3a2a];
 const RAILS = [0x2a2c30, 0xd8d8d4, 0x4a5a4a];
 
+/** Chimney tops of the town houses being built (buildCity's sink; null = not collected). */
+let chimOut: ChimneyTop[] | null = null;
+
 /** One city building into the chunk builders. */
 function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number, rich: boolean) {
   const spec = SPECS[st.kind]!;
@@ -1066,6 +1069,11 @@ function buildOne(m: GameMap, st: Structure, c: Chunk, uOff: number, rich: boole
       // dormers on the front slope
       for (const sx of [-0.3, 0.3]) box(c.slate, P, sx * W, top + 0.05, D / 2 - 0.12, 0.16, 0.16, 0.12, upperTint.clone().multiplyScalar(0.9), 2);
       for (const sx of [-1, 1]) box(c.trim, P, sx * (W / 2 - 0.12), top + rh - 0.05, 0, 0.1, 0.22, 0.14, C(0x9a6a58), 2);
+      if (chimOut)
+        for (const sx of [-1, 1]) {
+          const q = P.p(sx * (W / 2 - 0.12), top + rh + 0.17, 0);
+          chimOut.push({ x: q.x, y: q.y, z: q.z, st });
+        }
       // door and steps
       box(dt, P, 0, 0.04, D / 2 + 0.005, 0.14, 0.26, 0.02, C([0x2a3a5a, 0x5a2a2a, 0x2a4a3a, 0x222222][Math.floor(h(8) * 4)]));
       box(c.trim, P, 0, 0.0, D / 2 + 0.06, 0.24, 0.07, 0.12, C(0xc8c0b0), 2);
@@ -1111,7 +1119,7 @@ function ruinWall(c: Chunk, P: Place, len: number, hgt: number, seed: number) {
  * Build the city: buildings (merged per material and chunk, with damage handles), street lamps,
  * fountains on the squares and ruins on the rubble lots.
  */
-export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: { houses: HouseHandle[] }, lod?: SceneryLod): THREE.Object3D[] {
+export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: { houses: HouseHandle[] }, lod?: SceneryLod, chimneys?: ChimneyTop[]): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
   const city = m.structures.filter((st) => isCityKind(st.kind));
   const deco = m.deco;
@@ -1195,7 +1203,9 @@ export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' |
     const c = chunkOf(st.x + st.w / 2, st.y + st.h / 2);
     const bs = chunkBuilders(c);
     const from = bs.map((b) => b.count);
+    chimOut = chimneys ?? null;
     buildOne(m, st, c, i * 17, quality !== 'low');
+    chimOut = null;
     alleys(i, c.detail);
     spans.push({ st, c, from, to: bs.map((b) => b.count) });
   });

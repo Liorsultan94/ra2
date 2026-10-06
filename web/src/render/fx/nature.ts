@@ -6,6 +6,8 @@ import { FogProbe } from '../ambient/shared';
 import type { NightLights } from '../night';
 import { Species, treeSpots, type TreeSpot } from '../vegetation';
 import { WX } from '../wxuniforms';
+import { chimneyAmount, dawnBanksAt, dawnGlowAt, devilCap, devilLife, devilMaySpawn, mistClimateK, steamAmount } from './atmosrules';
+import { ChimneySmoke } from './chimneys';
 import { Fireworks, type FireworkSound } from './fireworks';
 import { NightLife } from './nightlife';
 
@@ -53,6 +55,8 @@ const FLY = 3;
 const DUST = 4;
 /** Campfire sparks (nightlife.ts spawns them). */
 export const SPARK = 5;
+/** Steam rising off the wet ground when the sun comes back after rain. */
+const STEAM = 6;
 
 const VERT = /* glsl */ `
 attribute vec4 aP;   // x, y, z, size
@@ -66,6 +70,8 @@ void main() {
   vec4 mv = viewMatrix * vec4( aP.xyz, 1.0 );
   vec2 q = position.xy;
   q.x *= aK.w;
+  // steam: tall, thin wisps
+  if ( aK.x > 5.5 ) q *= vec2( 0.7, 1.7 );
   float c = cos( aK.y );
   float s = sin( aK.y );
   mv.xy += vec2( c * q.x - s * q.y, s * q.x + c * q.y ) * aP.w;
@@ -108,10 +114,14 @@ void main() {
   } else if ( vKind < 4.5 ) {
     a = pow( max( 0.0, 1.0 - sqrt( r2 ) ), 1.6 );
     col = vCol * uLight;
-  } else {
+  } else if ( vKind < 5.5 ) {
     a = exp( -r2 * 14.0 ) * 1.6;
     col = vCol;
     add = 1.0;
+  } else {
+    // steam: a faint, soft veil (no core), lit by the scene
+    a = exp( -r2 * 3.2 ) * ( 1.0 - exp( -r2 * 18.0 ) * 0.35 );
+    col = vCol * uLight;
   }
   a *= vA;
   if ( a < 0.003 ) discard;
@@ -212,7 +222,7 @@ export class NatureFx {
   private geo: THREE.InstancedBufferGeometry;
   private mat: THREE.ShaderMaterial;
   /** Live particles per kind (budget shares). */
-  readonly count = new Int32Array(6);
+  readonly count = new Int32Array(7);
 
   constructor(quality: Q) {
     const max = (this.max = quality === 'high' ? 900 : 460);
@@ -415,11 +425,21 @@ export class NatureFx {
         ry = this.y[i] += this.vy[i] * dt;
         this.rot[i] += this.rotV[i] * dt;
         const h = ry - this.gnd[i];
-        const rad = 0.08 + h * 0.3 + sd * 0.08;
+        // a narrow foot widening into a funnel
+        const rad = 0.05 + h * 0.27 + sd * 0.06;
         const a = this.rot[i];
         rx = this.x[i] + Math.cos(a) * rad;
         rz = this.z[i] + Math.sin(a) * rad;
         size *= 1 + age * 0.55;
+      } else if (kd === STEAM) {
+        // steam: lifts off slowly, slows as it cools, leans with the wind, spreads and thins out
+        this.vy[i] *= 1 - dt * 0.25;
+        rx = this.x[i] += (this.vx[i] + wx * 0.45) * dt;
+        ry = this.y[i] += this.vy[i] * dt;
+        rz = this.z[i] += (this.vz[i] + wz * 0.45) * dt;
+        size *= 1 + age * 0.45;
+        alpha *= 1 - age / life;
+        this.rot[i] += this.rotV[i] * dt * 0.1;
       } else {
         // spark: buoyant, wind-blown, dimming
         this.vy[i] -= 0.6 * dt;
@@ -459,6 +479,100 @@ export class NatureFx {
   dispose() {
     this.geo.dispose();
     this.mat.dispose();
+  }
+}
+
+// ------------------------------------------------------------ dust devil shadows
+
+const SHADOW_VERT = /* glsl */ `
+attribute vec4 aS;   // centre x, y, z, opacity
+attribute vec4 aE;   // long axis x / z (unit), length, width
+varying vec2 vQ;
+varying float vA;
+void main() {
+  vec2 d = aE.xy;
+  vec2 n = vec2( -d.y, d.x );
+  vec2 xz = aS.xz + d * position.x * aE.z + n * position.y * aE.w;
+  vQ = position.xy * 2.0;
+  vA = aS.w;
+  gl_Position = projectionMatrix * viewMatrix * vec4( xz.x, aS.y, xz.y, 1.0 );
+}`;
+
+const SHADOW_FRAG = /* glsl */ `
+varying vec2 vQ;
+varying float vA;
+void main() {
+  // soft ellipse, darkest under the foot of the column
+  float r = length( vQ );
+  float a = ( 1.0 - smoothstep( 0.15, 1.0, r ) ) * vA;
+  if ( a < 0.003 ) discard;
+  gl_FragColor = vec4( 0.0, 0.0, 0.0, a );
+}`;
+
+/** Soft shadows the dust columns cast on the sand (one instanced draw call while any whirl is up). */
+export class DevilShadows {
+  readonly mesh: THREE.Mesh;
+  private aS: THREE.InstancedBufferAttribute;
+  private aE: THREE.InstancedBufferAttribute;
+  private geo: THREE.InstancedBufferGeometry;
+  private n = 0;
+  static readonly MAX = 4;
+
+  constructor() {
+    const base = new THREE.PlaneGeometry(1, 1);
+    const geo = (this.geo = new THREE.InstancedBufferGeometry());
+    geo.index = base.index;
+    geo.setAttribute('position', base.getAttribute('position'));
+    const mk = () => {
+      const a = new THREE.InstancedBufferAttribute(new Float32Array(DevilShadows.MAX * 4), 4);
+      a.setUsage(THREE.DynamicDrawUsage);
+      return a;
+    };
+    geo.setAttribute('aS', (this.aS = mk()));
+    geo.setAttribute('aE', (this.aE = mk()));
+    geo.instanceCount = 0;
+    const mat = new THREE.ShaderMaterial({ vertexShader: SHADOW_VERT, fragmentShader: SHADOW_FRAG, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 4;
+    this.mesh.name = 'devil-shadows';
+    this.mesh.visible = false;
+  }
+
+  begin() {
+    this.n = 0;
+  }
+
+  /** One shadow: centre, long axis (unit x / z), length, width, opacity. */
+  add(x: number, y: number, z: number, dx: number, dz: number, len: number, wid: number, a: number) {
+    if (this.n >= DevilShadows.MAX) return;
+    const i = this.n++ * 4;
+    const S = this.aS.array as Float32Array;
+    const E = this.aE.array as Float32Array;
+    S[i] = x;
+    S[i + 1] = y;
+    S[i + 2] = z;
+    S[i + 3] = a;
+    E[i] = dx;
+    E[i + 1] = dz;
+    E[i + 2] = len;
+    E[i + 3] = wid;
+  }
+
+  end() {
+    this.geo.instanceCount = this.n;
+    this.mesh.visible = this.n > 0;
+    if (!this.n) return;
+    for (const a of [this.aS, this.aE]) {
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, this.n * 4);
+      a.needsUpdate = true;
+    }
+  }
+
+  dispose() {
+    this.geo.dispose();
+    (this.mesh.material as THREE.Material).dispose();
   }
 }
 
@@ -588,7 +702,12 @@ export class LivingWorld {
   private flyB: Buckets | null = null;
   private devils: Devil[] = [];
   private devilT = 4;
-  private acc = { leaf: 0, seed: 0, snow: 0, fly: 0, heat: 0 };
+  private devilRule = { biome: '', day: 0, precip: 0, wet: 0, forced: false };
+  /** Smoke from the village chimneys (medium and high; ?chimneys=0 off). */
+  readonly chimneys: ChimneySmoke | null = null;
+  /** Ground shadows of the dust columns (desert / ?devil=1, medium and high). */
+  readonly devilShadows: DevilShadows | null = null;
+  private acc = { leaf: 0, seed: 0, snow: 0, fly: 0, heat: 0, steam: 0 };
   private lastTick = -1;
   private keyDir = new THREE.Vector3(-0.985, 0.8, 0.2).normalize();
   private freeView = false;
@@ -635,6 +754,17 @@ export class LivingWorld {
       });
       this.treeB = new Buckets(map.w, map.h, 8, tx, ty, this.trees.length);
       this.fireflySpots();
+      this.devilRule.biome = this.biome;
+      this.devilRule.forced = this.forced.devil;
+      if (this.biome === 'desert' || this.forced.devil) {
+        this.devilShadows = new DevilShadows();
+        host.scene.add(this.devilShadows.mesh);
+      }
+      const tops = host.terrain.scenery.chimneys;
+      if (tops?.length && this.biome !== 'desert' && this.params.get('chimneys') !== '0') {
+        this.chimneys = new ChimneySmoke(tops, host.terrain.scenery.houses, host.fog, q);
+        host.scene.add(this.chimneys.mesh);
+      }
     }
     this.nightlife = new NightLife(host, atmos.look.biome, q, this.probe, this.nature, this.enabled);
   }
@@ -795,6 +925,12 @@ export class LivingWorld {
     _c.lerp(this.host.hemi.color, 0.25);
     nat.setLight(_c);
     const fr = Math.min(0.1, dt);
+    // ---- chimney smoke: breakfast and evening fires, more in the cold, the windows' glow at night
+    const ch = this.chimneys;
+    if (ch) {
+      const amt = chimneyAmount(a.hour, this.biome, WX.wxSnow.value);
+      ch.update(dt, time, amt, w.x * 1.5, w.z * 1.5, _c, sstep(0.3, 0.8, dark), target.x, target.z, Math.max(R, Rz) + 3, WX.wxSnow.value);
+    }
     // ---- leaves (temperate / city parks; not under snow)
     const tb = this.treeB;
     if (tb && (this.biome === 'temperate' || this.biome === 'urban') && WX.wxSnow.value < 0.3) {
@@ -878,6 +1014,26 @@ export class LivingWorld {
     }
     // ---- dust devils crossing the desert by day
     if (this.biome === 'desert' || this.forced.devil) this.dustDevils(dt, nat, day, precip, wx, wz);
+    // ---- steam off the wet ground once the sun is back after the rain (the ground dries over a few minutes)
+    const stK = steamAmount(WX.wxWet.value, precip, day, cover);
+    if (stK > 0.01) {
+      this.acc.steam += fr * (this.q === 'high' ? 22 : 11) * stK;
+      const capN = this.q === 'high' ? 150 : 70;
+      let tries = 10;
+      while (this.acc.steam >= 1 && tries-- > 0 && nat.count[STEAM] < capN) {
+        this.acc.steam -= 1;
+        const x = this.x0 + Math.random() * (this.x1 - this.x0);
+        const z = this.z0 + Math.random() * (this.z1 - this.z0);
+        if (x < 0 || z < 0 || x >= this.map.w || z >= this.map.h) continue;
+        const ti = (z | 0) * this.map.w + (x | 0);
+        if (this.map.tiles[ti] === Tile.Water || !this.probe.visible(x, z)) continue;
+        const g = groundHeight(this.map, x, z);
+        _c2.setRGB(0.93, 0.94, 0.96);
+        const i = nat.spawn(STEAM, x, g + 0.05, z, (Math.random() - 0.5) * 0.05, 0.06 + Math.random() * 0.08, (Math.random() - 0.5) * 0.05, 5 + Math.random() * 3.5, 0.28 + Math.random() * 0.2, _c2, 0.07 + 0.08 * stK, g);
+        nat.setSpin(i, (Math.random() - 0.5) * 2);
+      }
+      if (this.acc.steam > 3) this.acc.steam = 3;
+    }
     // ---- heat shimmer over the desert on hot afternoons (high: the existing haze field)
     const hz = this.host.effects.haze;
     if (hz && this.q === 'high' && this.biome === 'desert' && day > 0.8 && precip < 0.05) {
@@ -912,55 +1068,87 @@ export class LivingWorld {
     // ---- dawn: the valley fog catches the low sun
     const gf = a.groundFog;
     if (gf) {
+      // live clock: the valley banks rise from ~05:00 and burn off by 08:30, gilded once the sun is up (atmosrules.ts)
       const u = a.phase;
-      const dawn = u >= 0 ? sstep(0.74, 0.8, u) * (1 - sstep(0.86, 0.92, u)) : a.cfg.tod === 'mist' ? 1 - sstep(200, 700, gt) * 0.6 : 0;
-      gf.setDawn(dawn, this.host.sun.color, this.keyDir);
+      const hr = a.hour;
+      const banks = u >= 0 ? dawnBanksAt(hr) * mistClimateK(this.biome) : a.cfg.tod === 'mist' ? 1 - sstep(200, 700, gt) * 0.6 : 0;
+      gf.setDawn(banks, u >= 0 ? dawnGlowAt(hr) : banks, this.host.sun.color, this.keyDir);
     }
   }
 
   private dustDevils(dt: number, nat: NatureFx, day: number, precip: number, wx: number, wz: number) {
-    const on = (day > 0.55 && precip < 0.05) || this.forced.devil;
-    const maxN = this.q === 'high' ? 2 : 1;
+    // the rules (atmosrules.ts): desert, by day, dry and calm; capped per tier
+    const rule = this.devilRule;
+    rule.day = day;
+    rule.precip = precip;
+    rule.wet = WX.wxWet.value;
+    const cap = devilCap(rule, this.q);
     this.devilT -= dt;
-    if (on && this.devils.length < maxN && this.devilT <= 0) {
+    if (devilMaySpawn(rule, this.q, this.devils.length, this.devilT)) {
       this.devilT = 6 + Math.random() * 14;
-      // start just outside / at the edge of the view, upwind, so it crosses it
-      for (let k = 0; k < 6; k++) {
+      // somewhere on open sand in the view; it wanders downwind across it
+      for (let k = 0; k < 8; k++) {
         const x = this.x0 + Math.random() * (this.x1 - this.x0);
         const z = this.z0 + Math.random() * (this.z1 - this.z0);
         if (x < 1 || z < 1 || x >= this.map.w - 1 || z >= this.map.h - 1) continue;
-        const t = this.map.tiles[(z | 0) * this.map.w + (x | 0)];
-        if (t === Tile.Water || t === Tile.Rock || this.map.blocked[(z | 0) * this.map.w + (x | 0)]) continue;
+        const ti = (z | 0) * this.map.w + (x | 0);
+        const t = this.map.tiles[ti];
+        if (this.map.blocked[ti] || this.map.trees[ti]) continue;
+        if (this.biome === 'desert' ? t !== Tile.Sand : t === Tile.Water || t === Tile.Rock) continue;
+        if (!this.probe.visible(x, z)) continue;
         const wl = Math.hypot(wx, wz) || 1;
         const sp = 0.7 + Math.random() * 0.5;
-        this.devils.push({ x, z, vx: (wx / wl) * sp + (Math.random() - 0.5) * 0.4, vz: (wz / wl) * sp + (Math.random() - 0.5) * 0.4, age: 0, life: 22 + Math.random() * 20, acc: 0 });
+        this.devils.push({ x, z, vx: (wx / wl) * sp + (Math.random() - 0.5) * 0.4, vz: (wz / wl) * sp + (Math.random() - 0.5) * 0.4, age: 0, life: devilLife(Math.random()), acc: 0 });
         break;
       }
     }
+    const sh = this.devilShadows;
+    sh?.begin();
+    // the low sun stretches the shadows away from it (capped: a grazing sun would throw them across the map)
+    const sun = this.keyDir;
+    const sxz = Math.hypot(sun.x, sun.z) || 1;
+    const stretch = Math.min(2.4, sxz / Math.max(0.15, sun.y));
+    const sdx = -sun.x / sxz;
+    const sdz = -sun.z / sxz;
     for (let i = this.devils.length - 1; i >= 0; i--) {
       const d = this.devils[i];
+      // the weather turned (rain, dusk) or too many: the whirl dies down over a few seconds
+      if (i >= cap && d.life > d.age + 3) d.life = d.age + 3;
       d.age += dt;
       // wanders: the track meanders
       const wob = Math.sin(d.age * 0.45 + i * 3) * 0.35;
       d.x += (d.vx - d.vz * wob) * dt;
       d.z += (d.vz + d.vx * wob) * dt;
-      const env = sstep(0, 4, d.age) * (1 - sstep(d.life - 5, d.life, d.age));
       if (d.age >= d.life || d.x < 0 || d.z < 0 || d.x >= this.map.w || d.z >= this.map.h) {
         this.devils.splice(i, 1);
         continue;
       }
+      const env = sstep(0, 3, d.age) * (1 - sstep(d.life - 4, d.life, d.age));
       const vis = this.probe.visible(d.x, d.z);
       if (!vis) continue;
-      d.acc += dt * (this.q === 'high' ? 55 : 36) * env;
       const g = groundHeight(this.map, d.x, d.z);
+      if (sh) {
+        // the column (~2.5 tall) throws a soft, sun-stretched shadow from its foot
+        const colH = 2.4 * env;
+        const len = 0.55 + colH * stretch * 0.55;
+        const off = len * 0.5 - 0.2;
+        sh.add(d.x + sdx * off, g + 0.03, d.z + sdz * off, sdx, sdz, len, 0.6 + 0.3 * env, 0.4 * env * sstep(0.55, 0.85, day));
+      }
+      d.acc += dt * (this.q === 'high' ? 80 : 50) * env;
       while (d.acc >= 1) {
         d.acc -= 1;
         _c2.setRGB(0.72, 0.56, 0.38).multiplyScalar(0.8 + Math.random() * 0.3);
-        const low = Math.random() < 0.3;
-        const i2 = nat.spawn(DUST, d.x, g + (low ? 0.02 : 0.05 + Math.random() * 0.2), d.z, d.vx, low ? 0.15 + Math.random() * 0.2 : 0.9 + Math.random() * 1.1, d.vz, 1.8 + Math.random() * 1.6, low ? 0.45 : 0.2 + Math.random() * 0.16, _c2, (low ? 0.4 : 0.62) * (0.6 + 0.4 * env), g);
-        nat.setSpin(i2, 5 + Math.random() * 4);
+        // a dusty skirt churning at the foot, small grains spiralling up the funnel, a few soft body puffs
+        const k = Math.random();
+        const low = k < 0.25;
+        const body = k > 0.8;
+        const size = low ? 0.42 + Math.random() * 0.12 : body ? 0.34 + Math.random() * 0.14 : 0.15 + Math.random() * 0.12;
+        const alpha = (low ? 0.4 : body ? 0.4 : 0.66) * (0.6 + 0.4 * env);
+        const i2 = nat.spawn(DUST, d.x, g + (low ? 0.02 : 0.05 + Math.random() * 0.2), d.z, d.vx, low ? 0.15 + Math.random() * 0.2 : 0.9 + Math.random() * 1.1, d.vz, 1.8 + Math.random() * 1.6, size, _c2, alpha, g);
+        nat.setSpin(i2, (body ? 4 : 6) + Math.random() * 4);
       }
     }
+    sh?.end();
   }
 
   /** Night lights hook (NightLights.update): the night life's lamps, beams and fires. */
@@ -975,6 +1163,7 @@ export class LivingWorld {
     return {
       particles: n ? Array.from(n.count) : null,
       devils: this.devils.length,
+      chimneys: this.chimneys?.stats() ?? null,
       snow: +this.snow.toFixed(3),
       bow: +this.bow.toFixed(3),
       fireworks: this.fireworks?.live ?? 0,
@@ -987,6 +1176,10 @@ export class LivingWorld {
     this.nature?.dispose();
     this.rainbow?.mesh.removeFromParent();
     this.rainbow?.dispose();
+    this.devilShadows?.mesh.removeFromParent();
+    this.devilShadows?.dispose();
+    this.chimneys?.mesh.removeFromParent();
+    this.chimneys?.dispose();
     this.nightlife.dispose();
     this.fireworks?.dispose();
     if (this.atmos.night) this.atmos.night.hook = null;

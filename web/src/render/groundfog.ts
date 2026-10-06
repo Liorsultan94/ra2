@@ -49,6 +49,7 @@ uniform float uAmount;
 uniform float uFocus;
 uniform float uTimeF;
 uniform float uDawn;
+uniform float uGlow;
 uniform vec3 uSunGlow;
 uniform vec3 uSunDir;
 varying vec2 vUv;
@@ -75,10 +76,10 @@ void main() {
   if ( a < 0.003 ) discard;
   vec3 mc = mistColor * ( 0.93 + 0.14 * n );
   if ( uDawn > 0.001 ) {
-    // dawn: the low sun gilds the tops of the banks, strongest looking into the light (forward scattering)
+    // dawn: the banks thicken; once the sun is up it gilds their tops, strongest looking into the light (forward scattering)
     vec3 vd = normalize( vW - cameraPosition );
     float fw = pow( max( 0.0, dot( vd, uSunDir ) ), 3.0 );
-    mc += uSunGlow * uDawn * ( 0.25 + 0.75 * n ) * ( 0.35 + 1.2 * fw );
+    mc += uSunGlow * uGlow * ( 0.25 + 0.75 * n ) * ( 0.35 + 1.2 * fw );
     a = min( 1.0, a * ( 1.0 + 0.5 * uDawn ) );
   }
   gl_FragColor = vec4( mc, a );
@@ -157,6 +158,7 @@ export class GroundFog {
       uFocus: { value: 8 },
       uTimeF: { value: 0 },
       uDawn: { value: 0 },
+      uGlow: { value: 0 },
       uSunGlow: { value: new THREE.Color() },
       uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     };
@@ -169,12 +171,13 @@ export class GroundFog {
   }
 
   /**
-   * Dawn 0..1 (render/fx/nature.ts): the extra valley banks rise and the low sun (colour, direction
-   * towards it) lights the mist.
+   * Dawn 0..1 (render/fx/nature.ts): the extra valley banks rise (`banks`) and, once the sun is up,
+   * the low sun (colour, direction towards it) lights the mist (`glow`, 0..1).
    */
-  setDawn(k: number, sunColor: THREE.Color, sunDir: THREE.Vector3) {
+  setDawn(banks: number, glow: number, sunColor: THREE.Color, sunDir: THREE.Vector3) {
     const u = this.u;
-    u.uDawn.value = k;
+    u.uDawn.value = banks;
+    u.uGlow.value = Math.min(banks, glow);
     (u.uSunGlow.value as THREE.Color).copy(sunColor).multiplyScalar(0.22);
     (u.uSunDir.value as THREE.Vector3).copy(sunDir).normalize();
   }
