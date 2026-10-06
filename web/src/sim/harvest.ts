@@ -51,6 +51,8 @@ const MINE_TICKS = 7;
 const UNLOAD_RATE = 15;
 /** A harvester making no headway towards its ore tile for this long (ticks) picks another. */
 const STUCK_LIMIT = TPS * 3;
+/** Least distance between two waiting / repair spots beside a refinery (tiles). */
+const SPOT_GAP = 1.9;
 /** Threat / calm scan period (ticks). */
 const SCAN = 10;
 /** A granted harvester that cannot reach the dock for this long goes to the back of the line. */
@@ -96,7 +98,7 @@ function apronXY(ref: Entity): [number, number] {
 /**
  * Spots beside a refinery (tile centres), off the dock lane and the apron in front of it: `repair` spots on
  * the sides and back of the building (where damaged harvesters park), `queue` spots in order of closeness
- * to the lane (where harvesters wait their turn). Spots are at least 1.4 tiles apart.
+ * to the lane (where harvesters wait their turn). Spots are at least SPOT_GAP tiles apart.
  */
 export function refinerySpots(w: World, ref: Entity): Spots {
   // cached per refinery for a second (they only change when something is built next to it)
@@ -138,10 +140,13 @@ function computeSpots(w: World, ref: Entity): Spots {
     }
   }
   const chosen: [number, number][] = [];
-  const spaced = (x: number, y: number) => chosen.every(([px, py]) => Math.hypot(px - x - 0.5, py - y - 0.5) >= 1.4);
+  // (a harvester is some 1.6 tiles long: spots this far apart keep parked ones from looking piled up)
+  const spaced = (x: number, y: number) => chosen.every(([px, py]) => Math.hypot(px - x - 0.5, py - y - 0.5) >= SPOT_GAP);
   const repair: [number, number][] = [];
   const side = cands.filter((c) => c.ring <= 2 && c.a <= 0);
-  side.sort((p, q) => p.ring - q.ring || Math.hypot(p.x + 0.5 - cx, p.y + 0.5 - cy) - Math.hypot(q.x + 0.5 - cx, q.y + 0.5 - cy) || p.y - q.y || p.x - q.x);
+  // beside the middle of the building first (in view, and clear of the queue by the lane), then behind it
+  const mid = -Math.floor((l.sy !== 0 ? bd.h : bd.w) / 2);
+  side.sort((p, q) => p.ring - q.ring || Math.abs(p.a - mid) - Math.abs(q.a - mid) || Math.hypot(p.x + 0.5 - cx, p.y + 0.5 - cy) - Math.hypot(q.x + 0.5 - cx, q.y + 0.5 - cy) || p.y - q.y || p.x - q.x);
   for (const c of side) {
     if (repair.length >= 4) break;
     if (!spaced(c.x, c.y)) continue;
