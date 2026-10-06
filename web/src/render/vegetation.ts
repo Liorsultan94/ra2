@@ -11,6 +11,7 @@ import { Shrub, buildTrees, shrubGeometry, shrubTint, treeMaterials } from './tr
 import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
 import { roadClear } from './ambient/clearance';
+import { inKeepOut, oreKeepOut } from './orefield';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -201,20 +202,8 @@ export interface VegetationHandles {
   bushes: CulledInstances[];
 }
 
-export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod, sink?: VegetationHandles): THREE.Object3D[] {
-  const atlas = foliageAtlas(quality === 'low' ? 128 : 256);
-  const { mat, depth } = foliageMaterial(atlas, fog, quality);
-  const out: THREE.Object3D[] = [];
-  const shadows = quality !== 'low';
-
-  const low = quality === 'low';
-  // view span (world units) beyond which the lighter models / no clutter are used
-  const treeLo = quality === 'high' ? 19 : 14.5;
-  const grassHide = quality === 'high' ? 24 : quality === 'medium' ? 17 : 13.5;
-  // trees: species models, materials and instancing live in trees.ts
-  out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees));
-
-  // ---- ground cover
+/** Ground cover placement: grass tufts (low quality), bushes, hedgerow shrubs, reeds (deterministic). */
+export function planGroundCover(m: GameMap, layout: Layout, quality: 'low' | 'medium' | 'high'): { grass: Inst[]; bushes: Inst[]; hedges: Inst[]; reeds: Inst[] } {
   const grass: Inst[] = [];
   const bushes: Inst[] = [];
   const hedges: Inst[] = [];
@@ -226,6 +215,8 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   const isTree = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.trees[y * m.w + x] > 0;
   let seed = 0;
   const tuftRGB = [0, 0, 0];
+  // ore fields and a tile around them stay clear of render-only plants (orefield.ts)
+  const keep = oreKeepOut(m, 1);
   for (let y = 0; y < m.h; y++) {
     for (let x = 0; x < m.w; x++) {
       const i = y * m.w + x;
@@ -238,7 +229,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         if (hash2(x, y, 300) < 0.15 + 0.15 * density) {
           const px = x + hash2(x, y, 301);
           const pz = y + hash2(x, y, 302);
-          if (dry(px, pz)) bushes.push(mk(px, pz, 0.8 + hash2(x, y, 303) * 0.6, 0.3, 0.32));
+          if (dry(px, pz) && !inKeepOut(m, keep, px, pz)) bushes.push(mk(px, pz, 0.8 + hash2(x, y, 303) * 0.6, 0.3, 0.32));
         }
         continue;
       }
@@ -264,7 +255,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         const px = x + hash2(seed, 1, 305);
         const pz = y + hash2(seed, 2, 305);
         const occ = occAt(layout, m, px, pz);
-        if (occ & (OCC_ROAD | OCC_BUILT | OCC_FIELD) || !dry(px, pz)) continue;
+        if (occ & (OCC_ROAD | OCC_BUILT | OCC_FIELD) || !dry(px, pz) || inKeepOut(m, keep, px, pz)) continue;
         if (occ & OCC_TRACK && hash2(seed, 3, 305) < 0.85) continue;
         const r = hash2(seed, 4, 305);
         const dryK = Math.max(0, Math.min(1, (dryness - 0.4) * 1.6 + (r - 0.5) * 0.6 + (t === Tile.Sand ? 0.5 : 0)));
@@ -281,7 +272,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       for (let k = 0; k < nb; k++) {
         const px = x + hash2(x, y, 310 + k);
         const pz = y + hash2(x, y, 320 + k);
-        if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD) || !dry(px, pz)) continue;
+        if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD) || !dry(px, pz) || inKeepOut(m, keep, px, pz)) continue;
         bushes.push(mk(px, pz, 0.7 + hash2(x, y, 330 + k) * 0.8, 0.28, 0.3));
       }
     }
@@ -301,7 +292,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const pz = e.a.y + (e.b.y - e.a.y) * t + (hash2(seed, 2, 340) - 0.5) * 0.12;
       const tx = Math.floor(px);
       const ty = Math.floor(pz);
-      if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] === Tile.Water || !dry(px, pz)) continue;
+      if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] === Tile.Water || !dry(px, pz) || inKeepOut(m, keep, px, pz)) continue;
       hedges.push(mk(px, pz, (1.05 + hash2(seed, 3, 340) * 0.5) * Math.sqrt(hs), 0.25, 0.28));
     }
   }
@@ -340,6 +331,25 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     const c = new THREE.Color().setHSL(0.22 + (r - 0.5) * hueJ, 0.05 + sat * 0.1, 0.92 + (r - 0.5) * 0.16);
     return { x: px, y: surfaceHeight(m, px, pz) - 0.01, z: pz, rotY: r * Math.PI * 2, sx: s, sy: s * (0.85 + r * 0.3), sz: s, color: c };
   }
+  return { grass, bushes, hedges, reeds };
+}
+
+export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod, sink?: VegetationHandles): THREE.Object3D[] {
+  const atlas = foliageAtlas(quality === 'low' ? 128 : 256);
+  const { mat, depth } = foliageMaterial(atlas, fog, quality);
+  const out: THREE.Object3D[] = [];
+  const shadows = quality !== 'low';
+
+  const low = quality === 'low';
+  // view span (world units) beyond which the lighter models / no clutter are used
+  const treeLo = quality === 'high' ? 19 : 14.5;
+  const grassHide = quality === 'high' ? 24 : quality === 'medium' ? 17 : 13.5;
+  // trees: species models, materials and instancing live in trees.ts
+  out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees));
+
+  // ---- ground cover
+  const biome = m.biome;
+  const { grass, bushes, hedges, reeds } = planGroundCover(m, layout, quality);
 
   const groups: [THREE.BufferGeometry, THREE.BufferGeometry | null, Inst[], boolean, number, number][] = [
     [tuftGeo(Leaf.Grass, 0.22, 0.32, 0.72), null, grass, false, Infinity, grassHide],

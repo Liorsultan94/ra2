@@ -236,4 +236,14 @@ export class Terrain {
   updateOre(force = false) {
     this.resources.update(force);
   }
+
+  /** 0 = daylight .. 1 = full night: the resource crystals' night glow. */
+  setOreNight(dark: number) {
+    this.resources.setNight(dark);
+  }
+
+  /** The Blender crystal models have streamed in (debug / screenshots). */
+  get oreModelsReady(): boolean {
+    return this.resources.crystalsReady;
+  }
 }

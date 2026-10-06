@@ -2543,6 +2543,8 @@ export class GameRenderer {
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time, this.world.list);
+    // crystals glow by night (their inner light and the light pools on the ground)
+    this.terrain.setOreNight(this.atmos.night?.darkness ?? 0);
     // far world night lights / lighthouse beam switch (its ring, which also calls it, is culled in sectors now)
     this.outskirts.horizon?.update();
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
