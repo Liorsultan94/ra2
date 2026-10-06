@@ -143,5 +143,10 @@ describe('infantry: hero / battle / far geometry LODs', () => {
     expect(hipsY(md)).toBeLessThan(up * 0.75);
     run(md, {}, 90, 10);
     expect(hipsY(md)).toBeGreaterThan(up * 0.9);
+    // a hurt soldier on his feet: kneeling to dress his wound; one walking on: on his feet beside him
+    run(md, { treat: 0.1, treatHurt: 1 }, 90, 20);
+    expect(hipsY(md)).toBeLessThan(up * 0.75);
+    run(md, { treat: 3, treatHurt: 1, treatStand: 1 }, 90, 30);
+    expect(hipsY(md)).toBeGreaterThan(up * 0.85);
   });
 });

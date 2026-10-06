@@ -1810,6 +1810,9 @@ interface Sol {
   /** Medic at work (AnimState.treat): blend weight and the last treatment time. */
   treatW: number;
   treatT: number;
+  /** ... on a soldier still on his feet (AnimState.treatHurt: dressing, no chest compressions) / standing up to work (AnimState.treatStand): blend weights. */
+  treatHW: number;
+  treatSW: number;
 }
 
 const tmpA = new THREE.Vector3();
@@ -2382,6 +2385,8 @@ function makeSol(def: SolDef, map: Map<string, THREE.Object3D>, salt: number): S
     woundT: 0,
     treatW: 0,
     treatT: 0,
+    treatHW: 0,
+    treatSW: 0,
   };
   reseed(sol, 100000 + solSeq++);
   return sol;
@@ -2553,32 +2558,45 @@ const POLE_TREAT_L = new THREE.Vector3(-0.2, -1, -0.5).normalize();
  * Medic at work (AnimState.treat seconds): kneeling (the kneel pose), leaning over the patient lying in front
  * of his knees. A 4.5 s cycle: chest compressions (both hands stacked, pumping), then dressing the wound
  * (the hands wind a bandage round each other, the head down watching). Blended in and out.
+ * A soldier still on his feet (AnimState.treatHurt) only gets the dressing, at his leg in front of the kneeling
+ * medic; one walking on (AnimState.treatStand) gets it from a medic on his feet, hands at waist height.
  */
 function treatPose(sol: Sol, s: AnimState) {
   const tr = s.treat ?? 0;
   const dt = Math.min(Math.max(s.dt, 0), 0.1);
-  if (tr > 0) sol.treatT = tr;
-  sol.treatW = dt === 0 && s.time === 0 ? (tr > 0 ? 1 : 0) : approach(sol.treatW, tr > 0 ? 1 : 0, dt, tr > 0 ? 7 : 5);
+  const snap = dt === 0 && s.time === 0;
+  if (tr > 0) {
+    sol.treatT = tr;
+    const h = (s.treatHurt ?? 0) > 0 ? 1 : 0;
+    const st = (s.treatStand ?? 0) > 0 ? 1 : 0;
+    sol.treatHW = snap ? h : approach(sol.treatHW, h, dt, 5);
+    sol.treatSW = snap ? st : approach(sol.treatSW, st, dt, 6);
+  }
+  sol.treatW = snap ? (tr > 0 ? 1 : 0) : approach(sol.treatW, tr > 0 ? 1 : 0, dt, tr > 0 ? 7 : 5);
   const k = sol.treatW;
   if (k <= 0.001) return;
   const t = sol.treatT;
+  const hk = sol.treatHW;
+  const up = sol.treatSW;
   const cyc = (t + sol.seed * 2) % 4.5;
-  const cpr = cyc < 2.2 ? sstep(0, 0.25, cyc) * (1 - sstep(1.95, 2.2, cyc)) : 0;
+  const cpr = (cyc < 2.2 ? sstep(0, 0.25, cyc) * (1 - sstep(1.95, 2.2, cyc)) : 0) * (1 - hk);
   const pump = cpr * (0.5 + 0.5 * Math.sin(t * 2 * PI * 1.8));
   const wrap = 1 - cpr;
-  // lean over him
-  sol.spine.rotation.z += (-0.32 - 0.08 * pump) * k;
-  sol.chest.rotation.z += (-0.18 - 0.1 * pump) * k;
-  sol.head.rotation.z += (-0.2 + 0.1 * cpr) * k;
+  // lean over him (less over a soldier on his feet, little when standing to work)
+  const lean = mix(mix(1, 0.6, hk), 0.3, up);
+  sol.spine.rotation.z += (-0.32 - 0.08 * pump) * k * lean;
+  sol.chest.rotation.z += (-0.18 - 0.1 * pump) * k * lean;
+  sol.head.rotation.z += (-0.2 + 0.1 * cpr) * k * mix(1, 0.7, up);
   sol.neck.rotation.z += -0.1 * k;
   _dq[0].copy(sol.uaR.quaternion);
   _dq[1].copy(sol.faR.quaternion);
   _dq[2].copy(sol.uaL.quaternion);
   _dq[3].copy(sol.faL.quaternion);
-  // hands (spine-frame numbers), at the patient's chest in front of the knees
+  // hands (spine-frame numbers), at the patient's chest in front of the knees; at a standing soldier's
+  // leg (kneeling) or arm (standing)
   const a = t * 5.2;
-  const rx = 0.5 + 0.02 * pump;
-  const ry = -0.08 - 0.08 * pump - CH;
+  const rx = mix(mix(0.5, 0.44, hk), 0.36, up) + 0.02 * pump;
+  const ry = mix(mix(-0.08, 0.04, hk), 0.2, up) - 0.08 * pump - CH;
   RT.set(rx + wrap * 0.05 * Math.cos(a), ry + wrap * (0.05 + 0.04 * Math.sin(a)), 0.04 + wrap * 0.05 * Math.sin(a));
   LT.set(rx - 0.01 + wrap * 0.05 * Math.cos(a + PI), ry + 0.02 + wrap * (0.05 + 0.04 * Math.sin(a + PI)), -0.03 * cpr - wrap * (0.06 + 0.04 * Math.sin(a + PI)));
   ik(sol, 1, RT, POLE_TREAT);
@@ -2759,7 +2777,7 @@ function animSoldierBase(sol: Sol, s: AnimState) {
   sol.aimW = approach(sol.aimW, aimT, dt, role === 'at' ? 7 : 12);
   trackShots(sol, s, dt);
   // (a medic kneels at a wounded soldier's side to treat him)
-  const dig = (s.dig ?? 0) > 0 || (s.treat ?? 0) > 0;
+  const dig = (s.dig ?? 0) > 0 || ((s.treat ?? 0) > 0 && !((s.treatStand ?? 0) > 0));
   // (the AA gunner stands to track an aircraft)
   const kneelT = !moving && ((role === 'fpv' && aimT > 0) || dig || (sol.crouch && aimT > 0 && !air)) ? 1 : 0;
   sol.kneelW = approach(sol.kneelW, kneelT, dt, kneelT ? 6 : 4);

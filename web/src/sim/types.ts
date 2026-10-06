@@ -148,7 +148,7 @@ export interface UnitDef extends BaseDef {
   evasion?: number;
   /** Rotary-wing combat aircraft (attack helicopters): flies home to its airbase to land and be repaired (helipad.ts). */
   rotary?: boolean;
-  /** Combat medic (medic.ts): treats wounded friendly soldiers and slowly heals hurt ones nearby. Unarmed. */
+  /** Combat medic (medic.ts): treats wounded and hurt friendly soldiers. Unarmed. */
   medic?: boolean;
   /**
    * Night vision / thermal equipment (night.ts): keeps its full sight by night (snipers, main battle tanks,
@@ -204,8 +204,8 @@ export type Order =
   | { type: 'enter'; target: number }
   | { type: 'deploy' }
   /**
-   * Medic (medic.ts): run to a wounded friendly soldier and treat him. auto = picked up on his own (not a player
-   * order); x, y: the attack-move he was on, resumed afterwards.
+   * Medic (medic.ts): run to a wounded or hurt friendly soldier and treat him. auto = picked up on his own (not a
+   * player order); x, y: the attack-move he was on, resumed afterwards.
    */
   | { type: 'treat'; target: number; auto?: boolean; x?: number; y?: number }
   /** Artillery / mortar (night.ts): get within range of (x, y) and fire an illumination round over it. */
@@ -429,6 +429,7 @@ export interface Entity {
   // wounded soldiers and medics (medic.ts)
   wound: WoundState | null; // down wounded, waiting for a medic
   treat: number; // medic: ticks spent treating the current patient (0 = not at work)
+  tendedBy: number; // a hurt soldier (not down wounded): the medic treating him / on his way to him, -1 = none
 
   // attack helicopters (helipad.ts): on its way to / at an airbase for repair
   heli: HeliPad | null;
@@ -586,7 +587,7 @@ export type Command =
   | { type: 'evacuate'; id: number }
   /** Automatic base defence on / off for the issuing player (basedefense.ts). */
   | { type: 'autoDefend'; on: boolean }
-  /** Medics: treat this wounded friendly soldier (medic.ts). */
+  /** Medics: treat this wounded or hurt friendly soldier (medic.ts). */
   | { type: 'treat'; ids: number[]; target: number }
   /** Attack helicopters: fly to this own airbase, land and be repaired (helipad.ts). */
   | { type: 'land'; ids: number[]; target: number }

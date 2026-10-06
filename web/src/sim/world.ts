@@ -25,7 +25,7 @@ import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import { releaseDefender, setAutoDefend, updateBaseDefense } from './basedefense';
 import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from './sniper';
 import { evades, lowObsFactor, rangeVs } from './stealth';
-import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, updateMedic, updateWounded, woundUnit } from './medic';
+import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, treatable, updateMedic, updateWounded, woundUnit } from './medic';
 import { heliGrounded, isHeli, orderLand, updateHeli } from './helipad';
 import { DAY_CLOCK, isNight, nightLevel, nightSight, simHours, type SimClock } from './clock';
 import { FLARE_RADIUS, FLOOD_RADIUS, flareLit, flashLit, floodCentre, floodlit, hasNightVision, muzzleFlash, orderIllum, pickIllum, stepIllum, updateFlares } from './night';
@@ -351,6 +351,7 @@ export class World {
       aimTicks: 0,
       wound: null,
       treat: 0,
+      tendedBy: -1,
       heli: null,
       flashAt: -9999,
       illumAt: 0,
@@ -762,9 +763,9 @@ export class World {
         fireSuperweapon(this, pid, cmd.x, cmd.y); // validated there (superweapons.ts)
         break;
       case 'treat': {
-        // medics to a wounded friendly soldier (medic.ts)
+        // medics to a wounded or hurt friendly soldier (medic.ts)
         const t = this.get(cmd.target);
-        if (t && t.owner === pid && t.wound) orderTreat(this, own(cmd.ids), t);
+        if (t && t.owner === pid && treatable(t)) orderTreat(this, own(cmd.ids), t);
         break;
       }
       case 'illum': {
@@ -1512,7 +1513,7 @@ export class World {
       return;
     }
     if (e.order.type === 'idle' && (e.queue.length || e.patrol || e.guardId >= 0)) ordersIdle(this, e); // orders.ts
-    if (d.medic && updateMedic(this, e, d)) return; // treating the wounded (medic.ts)
+    if (d.medic && updateMedic(this, e, d)) return; // treating the wounded and hurt (medic.ts)
     const o = e.order;
     if (d.weapon && !jammed && o.type !== 'attack' && autoFire(e) && WEAPONS[d.weapon].intercept) tryIntercept(this, e, WEAPONS[d.weapon]);
     switch (o.type) {
