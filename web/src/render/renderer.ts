@@ -51,6 +51,7 @@ import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { loadBuildingPhotos } from './models/bldtex';
 import { releaseBuildFx } from './models/buildfx';
+import { releaseMaterialListeners } from './glrelease';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
@@ -2589,6 +2590,8 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    // (first, while the scene still holds this match's materials: they tell this renderer's listener apart)
+    releaseMaterialListeners(this.scene);
     setBakeRenderer(null);
     this.perfHud.dispose();
     this.instancer.dispose();
@@ -2624,7 +2627,8 @@ export class GameRenderer {
     // them only when the resource itself is disposed), and the session caches share some resources between
     // matches (munitions, cargo, unit textures...): the old WebGLRenderer stays reachable, and with it its
     // canvas, whose parent chain (the old HUD and its button listeners) held the whole finished Game. Taking
-    // the canvas out of the page breaks that chain: what is left of the old renderer is a few KB.
+    // the canvas out of the page breaks that chain. The material listeners (and with them the renderer's program
+    // cache) are taken off at the top (glrelease.ts).
     this.canvas.remove();
   }
 }
