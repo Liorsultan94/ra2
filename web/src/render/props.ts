@@ -5,7 +5,7 @@ import { hash2 } from '../sim/rng';
 import type { Entity } from '../sim/types';
 import type { Effects } from './effects';
 import type { FogOfWar } from './fog';
-import { CulledInstances, type Inst } from './geo';
+import { CulledInstances, footprintKey, groundFootprint, type Inst } from './geo';
 import { surfaceHeight } from './ground';
 import { FieldType, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, segDist, type Layout, type V2 } from './layout';
 
@@ -706,9 +706,6 @@ const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _ax = new THREE.Vector3();
-const _v0 = new THREE.Vector3();
-const _v1 = new THREE.Vector3();
-const _ray = new THREE.Ray();
 
 /** Span (world units) where the props swap to LOD1, and where the small ones hide. */
 const LO_SPAN = 15;
@@ -734,7 +731,7 @@ export class Props {
   private fading: { item: number; t: number; base: THREE.Matrix4; depth: number }[] = [];
   private time = 0;
   private lastT = -1;
-  private camKey = '';
+  private camKey = new Int32Array(8).fill(-0x7fffffff);
   private versions = -1;
   private lod = -1;
   private span = 12;
@@ -892,30 +889,16 @@ export class Props {
   }
 
   private cull(cam: THREE.Camera) {
-    cam.updateMatrixWorld();
-    const poly: number[] = [];
-    for (const [x, y] of [
-      [-1, -1],
-      [1, -1],
-      [1, 1],
-      [-1, 1],
-    ]) {
-      _v0.set(x, y, -1).unproject(cam);
-      _v1.set(x, y, 1).unproject(cam);
-      _ray.set(_v0, _v1.sub(_v0).normalize());
-      const dy = _ray.direction.y;
-      const t = Math.abs(dy) > 1e-4 ? (0.3 - _ray.origin.y) / dy : 0;
-      _ray.at(Math.max(0, Math.min(1e4, t)), _v0);
-      poly.push(_v0.x, _v0.z);
-    }
-    const key = poly.map((v) => Math.round(v / 1.5)).join(',');
+    // (per frame, allocation free: geo.ts footprint helpers)
+    const poly = groundFootprint(cam, 0.3, this.poly);
+    const changed = footprintKey(poly, this.camKey);
     let ver = 0;
     for (const k of this.kinds) ver += k.ci.version;
-    if (key === this.camKey && ver === this.versions) return;
-    this.camKey = key;
+    if (!changed && ver === this.versions) return;
     this.versions = ver;
     for (const k of this.kinds) k.ci.cull(poly, 3);
   }
+  private poly = new Float64Array(8);
 
   // ------------------------------------------------------------ destruction
 

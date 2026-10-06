@@ -464,6 +464,11 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       });
       sink.houses.push({ st, cx, cz, gy, ranges });
     }
+  // (closures made in here, e.g. the materials' shader patches, keep this scope alive: free the builders' arrays)
+  for (const b of builders) b.release();
+  rb.release();
+  spans.length = 0;
+  built.clear();
 
   // city blocks, street lamps, fountains and ruins (urban maps)
   out.push(...buildCity(m, fog, quality, sink, lod));

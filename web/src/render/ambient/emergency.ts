@@ -204,6 +204,11 @@ export class Emergency {
   }
 
   /** A civilian building came down at (x, y). */
+  /** Match over: drop the module's pointer to this instance (it would keep the whole old scene alive). */
+  dispose() {
+    if (activeEm === this) activeEm = null;
+  }
+
   incident(x: number, y: number) {
     if (!this.net || this.maxUnits <= 0) return;
     if (this.incidents.some((i) => Math.hypot(i.x - x, i.y - y) < 6) || this.units.some((u) => u.s !== V.Out && Math.hypot(u.tx - x, u.ty - y) < 6)) return;

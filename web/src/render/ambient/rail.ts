@@ -9,6 +9,7 @@ import { civSound } from '../landmarks/sound';
 import { Kit, platform } from '../models/landmarks';
 import { COACH_LEN, GAUGE, LOCO_LEN, METRO_LEN, TANK_LEN, WAGON_LEN, boxWagon, coach, locomotive, metroCar, tankWagon } from '../models/landmarks-vehicles';
 import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
+import { gridSectors, splitMeshBySector } from '../sectors';
 
 /*
  * The railways (render only; landmarks/plan.ts lays the lines out in the
@@ -154,7 +155,8 @@ export class Railway {
     mesh.receiveShadow = quality !== 'low';
     mesh.castShadow = quality === 'high';
     mesh.frustumCulled = true;
-    this.group.add(mesh);
+    // (in 32 unit sectors: the line crosses the whole map and runs on past its edges; only the stretch in view is drawn)
+    this.group.add(...splitMeshBySector(mesh, gridSectors(32)));
     if (!this.animate) return;
     // rolling stock: one instanced mesh per car type
     const geos = [locomotive(), coach(), boxWagon(), tankWagon(), metroCar()];
@@ -531,6 +533,11 @@ export class Railway {
   }
 
   /** Is a crossing within 1.6 tiles of (x, y) closed? */
+  /** Match over: drop the module's pointer to this railway (it would keep the whole old scene alive). */
+  dispose() {
+    if (current === this) current = null;
+  }
+
   closedAt(x: number, y: number): boolean {
     for (const l of this.lines) for (const c of l.crossings) if (c.closed && Math.hypot(c.x - x, c.y - y) < 1.6) return true;
     return false;

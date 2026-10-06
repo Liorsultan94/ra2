@@ -94,6 +94,20 @@ export class GeoBuilder {
     geo.computeBoundingSphere();
     return geo;
   }
+
+  /**
+   * Drop the accumulated arrays once the geometry is built (8 bytes per number in a JS array: a city's
+   * builders hold ~20 MB). A builder captured by a closure that outlives its build (a lamp's onBeforeRender
+   * keeps the whole building function's scope alive) would otherwise keep them for the rest of the match.
+   */
+  release() {
+    this.pos = [];
+    this.nor = [];
+    this.uv = [];
+    this.col = [];
+    this.flex = [];
+    this.idx = [];
+  }
 }
 
 export interface Inst {
@@ -254,7 +268,7 @@ export class CulledInstances {
   }
 
   /** Keep the instances whose cell lies within `margin` of the convex ground polygon `poly` (x/z pairs). */
-  cull(poly: number[], margin: number) {
+  cull(poly: ArrayLike<number>, margin: number) {
     let x0 = Infinity;
     let x1 = -Infinity;
     let z0 = Infinity;
@@ -344,10 +358,8 @@ export class SceneryLod {
   private versions = 0;
   private state = -1;
   private last = -1;
-  private camKey = '';
-  private ray = new THREE.Ray();
-  private v0 = new THREE.Vector3();
-  private v1 = new THREE.Vector3();
+  /** Last footprint key (footprintKey); the first call always differs. */
+  private camKey = new Int32Array(8).fill(-0x7fffffff);
 
   /**
    * Register meshes: they use `lo` once the view spans more than `loSpan`
@@ -362,7 +374,7 @@ export class SceneryLod {
   addCulled(ci: CulledInstances, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity) {
     this.culled.push(ci);
     this.add([ci.mesh], ci.mesh.geometry, lo, loSpan, hideSpan);
-    this.camKey = '';
+    this.camKey.fill(-0x7fffffff);
   }
 
   /** View height in world units (orthographic span). */
@@ -388,29 +400,51 @@ export class SceneryLod {
    */
   cull(cam: THREE.Camera) {
     if (!this.culled.length) return;
-    cam.updateMatrixWorld();
-    const poly: number[] = [];
-    for (const [x, y] of [
-      [-1, -1],
-      [1, -1],
-      [1, 1],
-      [-1, 1],
-    ]) {
-      this.v0.set(x, y, -1).unproject(cam);
-      this.v1.set(x, y, 1).unproject(cam);
-      this.ray.set(this.v0, this.v1.sub(this.v0).normalize());
-      const dy = this.ray.direction.y;
-      // footprint on a plane slightly above the ground (tree crowns / roofs)
-      const t = Math.abs(dy) > 1e-4 ? (0.6 - this.ray.origin.y) / dy : 0;
-      this.ray.at(Math.max(0, Math.min(1e4, t)), this.v0);
-      poly.push(this.v0.x, this.v0.z);
-    }
-    const key = poly.map((v) => Math.round(v / 1.5)).join(',');
+    // footprint on a plane slightly above the ground (tree crowns / roofs)
+    const poly = groundFootprint(cam, 0.6, this.poly);
+    // (per frame: no allocation; the key is the footprint in 1.5 unit steps)
+    const changed = footprintKey(poly, this.camKey);
     let ver = 0;
     for (const ci of this.culled) ver += ci.version;
-    if (key === this.camKey && ver === this.versions) return;
-    this.camKey = key;
+    if (!changed && ver === this.versions) return;
     this.versions = ver;
     for (const ci of this.culled) ci.cull(poly, 4);
   }
+  private poly = new Float64Array(8);
+}
+
+const _fv0 = new THREE.Vector3();
+const _fv1 = new THREE.Vector3();
+const _fray = new THREE.Ray();
+const FOOT_CORNERS = [-1, -1, 1, -1, 1, 1, -1, 1];
+
+/** The camera's footprint on the plane y = h: where its four corner rays hit it (x, z pairs, into `out`). */
+export function groundFootprint(cam: THREE.Camera, h: number, out: Float64Array): Float64Array {
+  cam.updateMatrixWorld();
+  for (let k = 0; k < 4; k++) {
+    const x = FOOT_CORNERS[k * 2];
+    const y = FOOT_CORNERS[k * 2 + 1];
+    _fv0.set(x, y, -1).unproject(cam);
+    _fv1.set(x, y, 1).unproject(cam);
+    _fray.set(_fv0, _fv1.sub(_fv0).normalize());
+    const dy = _fray.direction.y;
+    const t = Math.abs(dy) > 1e-4 ? (h - _fray.origin.y) / dy : 0;
+    _fray.at(Math.max(0, Math.min(1e4, t)), _fv0);
+    out[k * 2] = _fv0.x;
+    out[k * 2 + 1] = _fv0.z;
+  }
+  return out;
+}
+
+/** Store the footprint quantised to 1.5 units in `key`; true when that changed. */
+export function footprintKey(poly: ArrayLike<number>, key: Int32Array): boolean {
+  let changed = false;
+  for (let i = 0; i < 8; i++) {
+    const q = Math.round(poly[i] / 1.5) | 0;
+    if (key[i] !== q) {
+      key[i] = q;
+      changed = true;
+    }
+  }
+  return changed;
 }

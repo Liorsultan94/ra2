@@ -41,5 +41,9 @@ export function startMenuCamera(get: () => Game | null): () => void {
     r.yaw = yaw;
   };
   raf = requestAnimationFrame(step);
-  return () => cancelAnimationFrame(raf);
+  return () => {
+    cancelAnimationFrame(raf);
+    // (the closure outlives the menu in places: do not keep the last demo battle with it)
+    cur = null;
+  };
 }

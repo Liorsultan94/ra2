@@ -323,6 +323,17 @@ export class AmbientLife {
   }
 
   /** Debug / tests: counts and car states. */
+  /**
+   * Match over. The pedestrians, the police / ambulance dispatch and the railway are reachable from module
+   * globals (for the traffic's queries); left set, the next match's whole loading ran with the old match
+   * (its scene, through the groups' parents) still in memory: twice the battlefield at the peak.
+   */
+  dispose() {
+    this.people.dispose();
+    this.emergency.dispose();
+    this.rail.dispose();
+  }
+
   stats() {
     return { people: this.people.debug(), emergency: this.emergency.debug(), animalKinds: this.animals.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
   }
