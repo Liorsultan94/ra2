@@ -1,5 +1,7 @@
 import type { GameMap } from '../../sim/map';
-import { surfaceHeight } from '../ground';
+import { APRON_W, surfaceHeight } from '../ground';
+import { apronHeight } from '../apron';
+import { horizonWorld } from '../horizonworld';
 import { OUTSKIRTS_GRID, outskirtsHeight } from '../outskirts';
 import { reliefEnabled, reliefHeight } from '../relief';
 
@@ -29,6 +31,9 @@ function grid(m: GameMap, i: number, j: number): number {
 export function groundY(m: GameMap, x: number, y: number): number {
   // (inside: on the relief's cliffs where they rise over the rock: the castle ruin, the fort, the mast stand on top)
   if (x >= 0.3 && y >= 0.3 && x <= m.w - 0.3 && y <= m.h - 0.3) return RELIEF ? Math.max(surfaceHeight(m, x, y), reliefHeight(m, x, y)) : surfaceHeight(m, x, y);
+  // the terrain's apron past the edge (apron.ts), then the outskirts mesh
+  const W = horizonWorld(m);
+  if (W.outside(x, y) < APRON_W - 3) return apronHeight(m, W, x, y);
   const g = OUTSKIRTS_GRID;
   const fx = (x - g.origin) / g.cell;
   const fy = (y - g.origin) / g.cell;

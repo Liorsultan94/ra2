@@ -257,8 +257,8 @@ export class Ground {
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, uniforms);
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vTerrW;')
-        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTerrW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        .replace('#include <common>', `#include <common>\nvarying vec3 vTerrW;\n${APRON_VERT_PARS}`)
+        .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvTerrW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvApS = aApS;\nvApT = aApT;\nvApC = aApC;\nvApO = aApO;');
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>\n${GRASS_GLSL}\n${TERRAIN_PARS}`)
         .replace('#include <map_fragment>', TERRAIN_MAP)
@@ -275,6 +275,7 @@ export class Ground {
     mat.defines = { ...(mat.defines ?? {}), TERR_POM: photo ? 0 : pom, PHOTO: photo ? 1 : 0, PH_Q: quality === 'high' ? 2 : 1, ...(photo ? photo.defines() : {}) };
     this.pomSteps = pom;
     mat.defines.GRASS_TILES = GRASS_TEX_TILES.toFixed(3);
+    mat.defines.APRON_W = APRON_W.toFixed(1);
     // biome branches of the splat shader (0 = the original temperate look, untouched)
     const bc = this.look.code;
     mat.defines.BIOME = bc;
@@ -811,6 +812,8 @@ export class Ground {
         if (w[4] > 0.05 || w[5] > 0.05) dens *= 0.2;
         // biome: sparse short scrub in the desert, none in the snow, park lawns only in the city
         dens *= look.blades;
+        // thinning out towards the map edge (the ground runs on past it without blades: apron.ts)
+        dens *= smooth(0.2, 3, Math.min(x, y, m.w - x, m.h - y));
         if (bc === 1) dens *= smooth(0.35, 0.65, patchN(x * 1.7, y * 1.7));
         bladeMap[o] = Math.max(0, Math.min(1, dens)) * 255;
         let tall = 0.35 + smooth(0.42, 0.75, tallN(x, y)) * 0.5 + lush * 0.25 - dryC * 0.2 - base * 0.3 - worn * 0.3;
@@ -824,8 +827,29 @@ export class Ground {
 
 // ------------------------------------------------------------------ GLSL
 
+/**
+ * The terrain's apron past the map edge (apron.ts): extra ground meshes with this same material whose
+ * control values come per vertex (outside the map the control textures would only clamp), fading over
+ * its outer half into the outskirts' colour (aApO, outskirts.ts) so there is no seam.
+ */
+export const APRON_W = 20;
+const APRON_VERT_PARS = /* glsl */ `
+attribute vec4 aApS;
+attribute vec4 aApT;
+attribute vec4 aApC;
+attribute vec4 aApO;
+varying vec4 vApS;
+varying vec4 vApT;
+varying vec4 vApC;
+varying vec4 vApO;
+`;
+
 const TERRAIN_PARS = /* glsl */ `
 varying vec3 vTerrW;
+varying vec4 vApS;
+varying vec4 vApT;
+varying vec4 vApC;
+varying vec4 vApO;
 uniform sampler2D splatTex;
 uniform sampler2D tintTex;
 uniform sampler2D fieldTex;
@@ -981,7 +1005,7 @@ const PHOTO_MAP = /* glsl */ `
 #if PH_Q < 2
   phSel = smoothstep(0.32, 0.68, texture2D(fogNoise, tw * 0.093 + 0.21).g);
 #endif
-  vec4 c2 = texture2D(ctl2Tex, mUV);
+  vec4 c2 = texture2D(ctl2Tex, mUV) * (1.0 - apIn);
   float dry = clamp(tnt.a + (gnz.g - 0.5) * 0.3, 0.0, 1.0);
   // layer weights: grass takes what the splat leaves, worn turf gives way to soil, and the
   // soil splits into bare dirt / forest floor / gravel (ctl2)
@@ -1250,10 +1274,13 @@ const TERRAIN_MAP = /* glsl */ `
 {
   vec2 tw = vTerrW.xz;
   vec2 mUV = tw / terrMapSize;
-  vec4 spl = texture2D(splatTex, mUV);
-  vec4 tnt = texture2D(tintTex, mUV);
-  vec4 fld = texture2D(fieldTex, mUV);
-  vec4 ctl = texture2D(ctlTex, mUV);
+  // past the map edge (the apron): control values from the vertices
+  float apOut = length(max(max(-tw, tw - terrMapSize), 0.0));
+  float apIn = step(1e-4, apOut);
+  vec4 spl = mix(texture2D(splatTex, mUV), vApS, apIn);
+  vec4 tnt = mix(texture2D(tintTex, mUV), vApT, apIn);
+  vec4 fld = texture2D(fieldTex, mUV) * (1.0 - apIn);
+  vec4 ctl = mix(texture2D(ctlTex, mUV), vApC, apIn);
 #if PHOTO
 ${PHOTO_MAP}
 #else
@@ -1581,6 +1608,24 @@ ${PHOTO_MAP}
       terrH = mix(terrH, 0.0, wxPud);
       terrB = mix(terrB, 0.0, wxPud);
     }
+  }
+  if (apOut > 0.0) {
+    // the apron's outer half melts into the outskirts' ground (same colour and grain as outskirts.ts),
+    // along a ragged line
+    float apN = texture2D(fogNoise, vTerrW.xz * 0.043 + 0.37).g;
+    float apF = max(smoothstep(APRON_W * 0.42, APRON_W * 0.88, apOut + (apN - 0.5) * 7.0), smoothstep(APRON_W - 2.5, APRON_W - 1.0, apOut));
+    vec4 apG = texture2D(fogNoise, vTerrW.xz * 0.37);
+    vec4 apG2 = texture2D(fogNoise, vTerrW.xz * 1.9);
+    vec3 apC = pow(vApO.rgb * (0.86 + apG.r * 0.18 + apG2.g * 0.12), vec3(2.2));
+    diffuseColor.rgb = mix(diffuseColor.rgb, apC, apF);
+    terrRough = mix(terrRough, 0.97, apF);
+    terrB *= 1.0 - apF;
+    terrH *= 1.0 - apF;
+    wxPud *= 1.0 - apF;
+#if PHOTO
+    phNxy *= 1.0 - apF;
+    terrAO = mix(terrAO, 1.0, apF);
+#endif
   }
 }
 `;
