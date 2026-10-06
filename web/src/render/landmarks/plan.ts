@@ -307,9 +307,11 @@ function frontline(m: GameMap): LandmarkPlan {
       { x: -3.6, y: 97 },
       { x: RAIL_X, y: 84 },
       { x: RAIL_X, y: 14 },
+      // (out of the corner westwards: the river leaves the map north-westwards, horizonworld.ts)
       { x: -3.8, y: 1 },
-      { x: -14, y: -14 },
-      { x: -34, y: -42 },
+      { x: -16, y: -6 },
+      { x: -38, y: -16 },
+      { x: -60, y: -24 },
     ],
     { crossAt: [{ x: RAIL_X, y: hwyY, roadAng: 0, traffic: true }], stationAt: { x: RAIL_X, y0: 52.5, y1: 60.5, side: -1 } },
   );
@@ -321,8 +323,9 @@ function frontline(m: GameMap): LandmarkPlan {
       { x: W - RAIL_X, y: H - 84 },
       { x: W - RAIL_X, y: H - 14 },
       { x: W + 3.8, y: H - 1 },
-      { x: W + 14, y: H + 14 },
-      { x: W + 34, y: H + 42 },
+      { x: W + 16, y: H + 6 },
+      { x: W + 38, y: H + 16 },
+      { x: W + 60, y: H + 24 },
     ],
     { crossAt: [{ x: W - RAIL_X, y: H - hwyY, roadAng: 0, traffic: true }] },
   );
