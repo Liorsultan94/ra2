@@ -929,7 +929,7 @@ export class LivingWorld {
     const ch = this.chimneys;
     if (ch) {
       const amt = chimneyAmount(a.hour, this.biome, WX.wxSnow.value);
-      ch.update(dt, time, amt, w.x * 1.5, w.z * 1.5, _c, sstep(0.3, 0.8, dark), target.x, target.z, Math.max(R, Rz) + 3);
+      ch.update(dt, time, amt, w.x * 1.5, w.z * 1.5, _c, sstep(0.3, 0.8, dark), target.x, target.z, Math.max(R, Rz) + 3, WX.wxSnow.value);
     }
     // ---- leaves (temperate / city parks; not under snow)
     const tb = this.treeB;
