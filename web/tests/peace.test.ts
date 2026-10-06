@@ -111,9 +111,10 @@ describe('peace time (early-game grace)', () => {
       // nothing reaches the player's base during the grace (plus at least the travel time across the map)
       expect(log.arrival < 0 || log.arrival >= peace + TPS * 15).toBe(true);
       expect(log.firstHit < 0 || log.firstHit >= peace).toBe(true);
-      // ... but the AI does attack once the grace is over
+      // ... but the AI does attack once the grace is over: its waves get into the base, or at least hit it (a
+      // defender with a working economy - sim/harvest.ts - may stop them short of the base region)
       expect(log.firstWave).toBeGreaterThanOrEqual(peace);
-      expect(log.arrival).toBeGreaterThan(0);
+      expect(log.arrival > 0 || log.firstHit >= peace).toBe(true);
     }, 240000);
   }
 

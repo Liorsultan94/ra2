@@ -325,7 +325,21 @@ export interface HeliPad {
   oy: number;
 }
 
-export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading';
+export type HarvestState = 'seek' | 'toOre' | 'mining' | 'toRefinery' | 'unloading' | 'leaving';
+
+/**
+ * Harvester run home after an attack (harvest.ts): back to the refinery (unloading what it carries on the way)
+ * -> parked beside it under repair -> back to work once repaired and its field is calm.
+ */
+export interface HarvestFlee {
+  phase: 'return' | 'repair';
+  at: number; // tick the run began (a newer order from the owner cancels it)
+  fx: number; // the ore field it left (world tiles): it goes back there once that is calm
+  fy: number;
+  ref: number; // refinery it parks beside, -1 = not chosen yet
+  spot: number; // repair spot index beside that refinery (refinerySpots), -1 = none yet
+  parked: boolean; // on its spot (being repaired while damaged)
+}
 
 export interface Entity {
   id: number;
@@ -375,6 +389,20 @@ export interface Entity {
   hstate: HarvestState;
   htimer: number;
   oreTile: number;
+  /** Place in the refinery's dock queue (harvest.ts; World.hvSeq ticket, lower goes first), -1 = not queued. */
+  dockSeq: number;
+  /** Its waiting spot beside the refinery while in the dock queue (harvest.ts refinerySpots index), -1 = none. */
+  qspot: number;
+  /** Ore tile it just failed to reach: passed over on the next pick (harvest.ts), -1 = none. */
+  oreAvoid: number;
+  /** Run home to unload and be repaired after an attack (harvest.ts), else null. */
+  hflee: HarvestFlee | null;
+  /** Tick it was last hit by another player, else -9999. */
+  hitAt: number;
+  /** Harvester: closest it has got to its ore tile so far (harvest.ts headway watchdog). */
+  hvProg: number;
+  /** Harvester: tick it last went back to work after a run home (harvest.ts). */
+  hresumeAt: number;
 
   // building
   tx: number;
@@ -486,6 +514,8 @@ export interface Player {
   stats: { built: number; lost: number; killed: number; harvested: number };
   noFundsWarnAt: number;
   attackWarnAt: number;
+  /** Tick of the last "harvester under attack" alert (harvest.ts). */
+  harvWarnAt: number;
   lowPowerWarned: boolean;
   radarOnline: boolean;
   /** Airborne-drop support power: tick it is ready at (-1 = locked: no completed airfield), and when it started charging. */
@@ -627,6 +657,8 @@ export type SimEvent =
   | { t: 'noFunds'; owner: number }
   | { t: 'lowPower'; owner: number }
   | { t: 'underAttack'; owner: number; x: number; y: number }
+  /** A harvester attacked (hit, or a hostile closing in): it runs home to unload and be repaired (harvest.ts). */
+  | { t: 'harvesterAttack'; id: number; owner: number; x: number; y: number }
   | { t: 'captured'; id: number; owner: number }
   | { t: 'sold'; id: number; owner: number }
   | { t: 'deployed'; id: number; owner: number }
