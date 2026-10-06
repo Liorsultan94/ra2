@@ -391,14 +391,17 @@ export class BridgeFx {
       // ---- fixed: piers, caps, abutments, bank stubs
       const fixed = new GeoBuilder();
       const ftop = new GeoBuilder();
+      // piers: up to the (graded) deck
       for (const k of piers) {
-        box(fixed, 0.4, 1.5, W * 0.7, trs(k, BRIDGE_HEIGHT - 0.95, 0), 0.62);
-        box(fixed, 0.6, 0.12, W * 0.85, trs(k, BRIDGE_HEIGHT - 0.24, 0), 0.7);
+        const lk = lift(k);
+        box(fixed, 0.4, 1.5 + lk, W * 0.7, trs(k, BRIDGE_HEIGHT - 0.95 + lk / 2, 0), 0.62);
+        box(fixed, 0.6, 0.12, W * 0.85, trs(k, BRIDGE_HEIGHT - 0.24 + lk, 0), 0.7);
       }
-      // abutments: up to the slab's underside, wherever the deck's end sits
+      // abutments: up to the slab's underside, wherever the deck's end sits; tucked in under the deck's
+      // end (not standing proud of it on a low bank)
       for (const k of [-L / 2, L / 2]) {
         const h = 1.0 + lift(k);
-        box(fixed, 0.5, h, W, trs(k + Math.sign(k) * 0.05, BRIDGE_HEIGHT - 1.1 + h / 2, 0), 0.65);
+        box(fixed, 0.5, h, W * 0.94, trs(k - Math.sign(k) * 0.2, BRIDGE_HEIGHT - 1.1 + h / 2, 0), 0.65);
       }
       boxUV(fixed, 0, 2);
       addDeck(fixed, ftop, -L / 2, -L / 2 + STUB, trs(0, DECK_Y, 0), 0, seed + 1, null, false, lift);
@@ -717,7 +720,13 @@ export class BridgeFx {
         if (i > 0 && busy(x, z + side * 0.12)) break;
         pts.push(V(x, top, z));
       }
-      if (pts.length > 1) {
+      if (pts.length === 1) {
+        // another road right at the deck end: the parapet still gets its rail end, bent down to the ground
+        const x = xe + end * 0.3;
+        const z = side * (W / 2 - 0.03);
+        pts.push(V(x, Math.max(groundH(x, z), roadH(x, z) - 0.02) + 0.14, z));
+      }
+      {
         // the rail's end: bent down into the ground (a short stub when another road is right there)
         const q = pts[pts.length - 1];
         if (pts.length < 7) pts.push(V(q.x + end * 0.08, Math.max(groundH(q.x, q.z), roadH(q.x, q.z) - 0.04), q.z));
