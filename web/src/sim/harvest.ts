@@ -476,6 +476,7 @@ export function updateHarvester(w: World, e: Entity, d: UnitDef) {
       if (e.hstate === 'toRefinery' && r && r.dockedBy === e.id) r.dockedBy = -1;
       leaveQueue(e);
       f.phase = 'repair';
+      e.hstate = 'seek'; // (not in anyone's dock line any more)
       e.path = null;
     }
     if (f.phase === 'return' && (e.hstate === 'seek' || e.hstate === 'toOre' || e.hstate === 'mining')) {
