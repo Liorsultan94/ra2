@@ -366,6 +366,10 @@ export interface Entity {
   progX: number;
   progY: number;
   progAt: number;
+  /** jostle watchdog (World.followPath): waypoint index and closest approach to it at the last check, windows without progress */
+  progIdx: number;
+  progBest: number;
+  noProg: number;
   moveGoal: number; // tile index of current path goal, -1 if none
   slotX: number; // sub-tile offset for infantry
   slotY: number;
