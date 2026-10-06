@@ -206,5 +206,9 @@ describe('minimap biomes', () => {
     if (id === 'desert') expect(r).toBeGreaterThan(bl * 1.2);
     if (id === 'urban') expect(Math.abs(r - bl)).toBeLessThan(r * 0.25);
     expect(biomeLook(map).biome).toBe(map.biome);
+    // night lights: lit windows and street lamps glow (the city most of all)
+    let lit = 0;
+    for (let i = 0; i < b.lightPixels!.length; i += 4) if (b.lightPixels![i] > 40) lit++;
+    expect(lit).toBeGreaterThan(id === 'urban' ? 400 : 20);
   });
 });
