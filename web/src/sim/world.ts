@@ -187,6 +187,7 @@ export class World {
         ready: { building: null, defense: null, infantry: null, vehicle: null, air: null },
         explored: new Uint8Array(w * h),
         visible: new Uint8Array(w * h),
+        airVisible: new Uint8Array(w * h),
         defeated: false,
         startX: s.x,
         startY: s.y,
@@ -500,7 +501,15 @@ export class World {
    */
   sees(player: number, e: Entity): boolean {
     if (e.owner === player) return true;
-    return this.visibleTo(player, e.x, e.y) || flashLit(this, e);
+    return this.visibleTo(player, e.x, e.y) || flashLit(this, e) || (this.nightLevel > 0 && this.airSeen(player, e));
+  }
+
+  /** By night: an airborne target inside this player's air defence sensor cover (night.ts, Player.airVisible). */
+  private airSeen(player: number, e: Entity): boolean {
+    const tx = Math.floor(e.x);
+    const ty = Math.floor(e.y);
+    if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) return false;
+    return this.players[player].airVisible[ty * this.map.w + tx] > 0 && this.isAir(e);
   }
 
   visibleTo(player: number, x: number, y: number) {
@@ -1229,7 +1238,7 @@ export class World {
       if (dist > range) return;
       // stealth aircraft: picked up only well inside weapon range (stealth.ts)
       if (wpn && lowObsFactor(this, wpn, t) < 1 && dist > rangeVs(this, e, wpn, t)) return;
-      if (vis && !vis.visible[this.tileOf(t.x, t.y)] && !flashLit(this, t)) return;
+      if (vis && !this.sees(e.owner, t)) return;
       let score = dist;
       if (wpn?.aim) {
         // lock-on weapons (sniper.ts): infantry first, no buildings
@@ -2221,6 +2230,16 @@ export class World {
   updateVisibility() {
     const { w, h } = this.map;
     for (const p of this.players) p.visible.fill(0);
+    // air defence sensors keep their daytime reach against aircraft by night (night.ts)
+    const night = this.nightLevel > 0;
+    if (night) for (const p of this.players) p.airVisible.fill(0);
+    const radar = (p: Player, cx: number, cy: number, r: number) => {
+      for (const [ox, oy] of disc(r)) {
+        const x = cx + ox;
+        const y = cy + oy;
+        if (x >= 0 && y >= 0 && x < w && y < h) p.airVisible[y * w + x] = 1;
+      }
+    };
     const reveal = (p: Player, cx: number, cy: number, r: number) => {
       for (const [ox, oy] of disc(r)) {
         const x = cx + ox;
@@ -2235,6 +2254,7 @@ export class World {
       if (e.dead || e.owner < 0) continue;
       // (by night ordinary units see half as far, night vision keeps its full sight: night.ts)
       reveal(this.players[e.owner], Math.floor(e.x), Math.floor(e.y), Math.round(this.sightOf(e)));
+      if (night && DEFS[e.def].airSensor && e.inside < 0) radar(this.players[e.owner], Math.floor(e.x), Math.floor(e.y), Math.round(DEFS[e.def].sight));
       // base floodlights by night (powered structures)
       if (e.kind === 'building' && this.night && floodlit(this, e)) {
         const [fx, fy] = floodCentre(e);

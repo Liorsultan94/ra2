@@ -156,6 +156,54 @@ describe('night combat: sight and the night fog', () => {
   });
 });
 
+describe('night combat: air defence sensors', () => {
+  it('by night a SAM site acquires a helicopter at its full range; its sight against ground units still halves', () => {
+    const w = duel(NIGHT);
+    w.spawnBuilding('usa_power', 0, 20, 70, true);
+    const sam = w.spawnBuilding('usa_def_aa', 0, 30, 60, true);
+    sam.hp = sam.maxHp = 1e6;
+    expect(DEFS.usa_def_aa.airSensor).toBe(true);
+    expect(DEFS.russia_aa.airSensor).toBe(true);
+    expect(DEFS.usa_laser.airSensor).toBe(true);
+    expect(DEFS.usa_at.airSensor).toBe(true); // the Rocket Team's IR-seeker AA missile
+    expect(DEFS.usa_mbt.airSensor).toBeFalsy();
+    const heli = w.spawnUnit('russia_heli', 1, sam.x + 9, sam.y);
+    heli.hp = heli.maxHp = 1e6;
+    heli.stance = 'holdFire';
+    heli.z = heli.pz = 1.7;
+    const apc = at(w, 'russia_apc', 1, sam.x - 8, sam.y);
+    apc.stance = 'holdFire';
+    apc.x = apc.px = apc.guardX = sam.x - 7.5;
+    apc.y = apc.py = apc.guardY = sam.y;
+    run(w, 8);
+    expect(w.night).toBe(true);
+    expect(w.sightOf(sam)).toBeLessThan(DEFS.usa_def_aa.sight); // halved for the ground...
+    expect(w.sees(0, heli)).toBe(true); // ... the radar still has the helicopter at 9 tiles
+    expect(w.sees(0, apc)).toBe(false);
+    let engaged = false;
+    run(w, TPS * 8, (ev) => {
+      if ((ev.t === 'fire' && ev.id === sam.id && ev.targetId === heli.id) || (ev.t === 'launch' && ev.sourceId === sam.id)) engaged = true;
+    });
+    expect(engaged).toBe(true);
+  });
+
+  it('by night an ordinary rifleman does not see a helicopter beyond his halved sight', () => {
+    const seen = (clock: SimClock) => {
+      const w = duel(clock);
+      const rifle = at(w, 'usa_rifle', 0, 30, 60);
+      rifle.stance = 'holdFire';
+      const heli = w.spawnUnit('russia_heli', 1, rifle.x + 4.6, rifle.y);
+      heli.hp = heli.maxHp = 1e6;
+      heli.stance = 'holdFire';
+      heli.z = heli.pz = 1.7;
+      run(w, 8);
+      return w.sees(0, heli);
+    };
+    expect(seen(DAY)).toBe(true);
+    expect(seen(NIGHT)).toBe(false);
+  });
+});
+
 describe('night combat: muzzle flashes', () => {
   /** An enemy sniper (night sight) 8 tiles from our rifleman (night sight 3): it shoots, we can't see it. */
   function sniperDuel(stance: 'aggressive' | 'holdFire') {

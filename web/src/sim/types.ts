@@ -98,6 +98,11 @@ export interface BaseDef {
   model: string;
   aiWeight?: number;
   aiTag?: 'main' | 'aa' | 'arty' | 'support' | 'scout';
+  /**
+   * Dedicated air defence (radar / IR sensors: flak, SAM batteries, laser air defence, the Rocket Team's IR-seeker
+   * AA missile): keeps its full daytime sight against airborne targets by night (night.ts). Set in defs.ts.
+   */
+  airSensor?: boolean;
 }
 
 export interface UnitDef extends BaseDef {
@@ -469,6 +474,11 @@ export interface Player {
   ready: Record<Category, string | null>; // completed building awaiting placement
   explored: Uint8Array;
   visible: Uint8Array;
+  /**
+   * Night only (night.ts): ground where this player's air defence (radar / IR: UnitDef / BuildingDef airSensor)
+   * picks up AIRBORNE targets at its full daytime sight. Not exploration, not ground units.
+   */
+  airVisible: Uint8Array;
   defeated: boolean;
   startX: number;
   startY: number;

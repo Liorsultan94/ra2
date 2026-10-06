@@ -586,10 +586,16 @@ list.push(...CIVILIAN_BUILDINGS, ...TECH_BUILDINGS);
  * Night combat equipment (night.ts), the same for every faction:
  *  - night vision / thermal sights (UnitDef.nvg, full sight by night): snipers, main battle tanks, attack
  *    helicopters, drones / UAVs (the kamikaze drones too), fighter jets;
- *  - illumination rounds (UnitDef.illum): tube artillery, mortars and rocket artillery.
+ *  - illumination rounds (UnitDef.illum): tube artillery, mortars and rocket artillery;
+ *  - air defence sensors (airSensor: radar / IR, full sight against aircraft by night): flak, SAM sites, laser
+ *    air defence, the Rocket Team's IR-seeker AA missile.
  */
 export const NVG_MODELS: ReadonlySet<string> = new Set(['sniper', 'mbt', 'mbt_heavy', 'heli', 'uav', 'heavy_uav', 'fighter', 'fpv', 'micro', 'shahed']);
 for (const d of list) {
+  // dedicated air defence: an air-only weapon (flak, SAMs, MANPADS) or an air-capable interceptor (laser air defence)
+  const aw = d.weapon ? WEAPONS[d.weapon] : undefined;
+  const aw2 = d.kind === 'unit' && d.weapon2 ? WEAPONS[d.weapon2] : undefined;
+  if ((aw && (aw.air === 'only' || (aw.air === 'yes' && aw.intercept))) || aw2?.air === 'only') d.airSensor = true;
   if (d.kind !== 'unit') continue;
   if (NVG_MODELS.has(d.model) && !d.airlift && !d.supply) d.nvg = true;
   const f = d.weapon && d.category !== 'air' ? WEAPONS[d.weapon]?.flight : undefined;
