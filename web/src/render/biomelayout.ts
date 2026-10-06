@@ -1,7 +1,7 @@
 import { StructureKind, Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
-import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, makeRouter, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
+import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, SITE_CLEAR, detourSpans, edgesOffSites, makeRouter, nearSite, pylonFooting, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
 
 /*
  * Scenery layout of the hand-designed biome maps (desert, winter, city):
@@ -84,7 +84,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     const t = m.tiles[i];
     if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || m.trees[i] || m.blocked[i] || m.ore[i]) return false;
     if (occAt(x, y) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD)) return false;
-    if (nearStart(x, y, 12)) return false;
+    if (nearStart(x, y, 12) || nearSite(m, x, y, SITE_CLEAR)) return false;
     for (const mm of m.oreMines) if (Math.abs(x - mm.x - 0.5) < 5.5 && Math.abs(y - mm.y - 0.5) < 5.5) return false;
     const h0 = groundHeight(m, x, y);
     return Math.abs(groundHeight(m, x + 0.5, y) - h0) + Math.abs(groundHeight(m, x, y + 0.5) - h0) <= 0.32;
@@ -240,7 +240,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     if (occAt(x, y) & (OCC_ROAD | OCC_TRACK | OCC_BUILT)) return false;
     if (nearStart(x, y, 9)) return false;
     for (const mm of m.oreMines) if (Math.hypot(x - mm.x - 0.5, y - mm.y - 0.5) < 6) return false;
-    return true;
+    return !nearSite(m, x, y, 0.8) && pylonFooting(m, x, y);
   };
   const line = (pts: V2[], spacing: number) => {
     const out: V2[] = [];
@@ -265,7 +265,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     }
     return out;
   };
-  const pylons = { lines: (deco?.power ?? []).map((l) => line(l.map((p) => v(p.x + 0.5, p.y + 0.5)), 7.6)).filter((l) => l.length > 1) };
+  const pylons = { lines: (deco?.power ?? []).flatMap((l) => detourSpans(m, line(l.map((p) => v(p.x + 0.5, p.y + 0.5)), 7.6), valid)).filter((l) => l.length > 1) };
 
   // ---- utility poles along the country roads (not in the city)
   const poles: V2[][] = [];
@@ -280,7 +280,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
         const p = v(r.pts[i].x - ((b.y - a.y) / L) * (r.width / 2 + 0.45), r.pts[i].y + ((b.x - a.x) / L) * (r.width / 2 + 0.45));
         const tx = Math.floor(p.x);
         const ty = Math.floor(p.y);
-        const ok = tx >= 0 && ty >= 0 && tx < W && ty < H && m.tiles[ty * W + tx] !== Tile.Water && m.tiles[ty * W + tx] !== Tile.Bridge && !m.trees[ty * W + tx] && !m.blocked[ty * W + tx] && !nearStart(p.x, p.y, 7);
+        const ok = tx >= 0 && ty >= 0 && tx < W && ty < H && m.tiles[ty * W + tx] !== Tile.Water && m.tiles[ty * W + tx] !== Tile.Bridge && !m.trees[ty * W + tx] && !m.blocked[ty * W + tx] && !nearStart(p.x, p.y, 7) && !nearSite(m, p.x, p.y, 0.5);
         if (ok) run.push(p);
         else if (run.length > 1) poles.push(run.splice(0));
         else run.length = 0;
@@ -304,7 +304,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
       const off = r.width / 2 + (biome === 'urban' ? -0.35 : 0.15) + hash2(wseed, 2, 62) * 0.35;
       const x = r.pts[i].x - Math.sin(ang) * off * side;
       const y = r.pts[i].y + Math.cos(ang) * off * side;
-      if (nearStart(x, y, 10)) continue;
+      if (nearStart(x, y, 10) || nearSite(m, x, y, 0.5)) continue;
       const tx = Math.floor(x);
       const ty = Math.floor(y);
       if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
@@ -325,6 +325,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
         : r < 0.5 ? FieldType.Plowed : FieldType.Fallow;
     fields.push(...villagePlots(m, fieldOk, markField, biome === 'desert' ? 26 : 14, pick, posts, edges));
   }
+  edgesOffSites(m, edges);
   return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, pivots, occ, occRes: R });
 }
 

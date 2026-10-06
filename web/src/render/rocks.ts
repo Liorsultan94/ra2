@@ -122,6 +122,8 @@ interface PhotoRocks {
 }
 
 const ROCK_KEYS = ['outcrop', 'crag', 'boulder', 'stone'];
+/** Where seat() tries a rock (in units of its footprint radius): the spot itself, then inwards round it. */
+const SEAT_OFFSETS: [number, number][] = [[0, 0], [0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6], [0.45, 0.45], [-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [1.1, 0], [-1.1, 0], [0, 1.1], [0, -1.1]];
 let rocksLoad: Promise<PhotoRocks | null> | null = null;
 
 /** Plain float geometry (dequantised, node transform applied) from a loaded glTF mesh. */
@@ -260,6 +262,26 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   const relief = reliefEnabled() && reliefField(m).count > 0;
   const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === Tile.Rock;
 
+  /**
+   * Seat a rock of footprint radius r on the relief: the spot near (cx, cz) where the ground under it
+   * drops least (on the rim, not out over the cliff), sunk so its underside never shows over the
+   * lowest ground beneath it. Null where it would still hang over the edge.
+   */
+  const seat = (cx: number, cz: number, r: number, s: number) => {
+    let best: { x: number; z: number; hc: number; lo: number } | null = null;
+    for (const [ox, oz] of SEAT_OFFSETS) {
+      const x = cx + ox * r;
+      const z = cz + oz * r;
+      if (!isRock(Math.floor(x), Math.floor(z))) continue;
+      const hc = reliefHeight(m, x, z);
+      let lo = hc;
+      for (let k = 0; k < 8; k++) lo = Math.min(lo, reliefHeight(m, x + Math.cos(k * 0.785) * r, z + Math.sin(k * 0.785) * r));
+      if (!best || hc - lo < best.hc - best.lo) best = { x, z, hc, lo };
+    }
+    if (!best || best.hc - best.lo > r * 0.9) return null;
+    return { x: best.x, z: best.z, y: Math.min(best.hc - s * 0.45, best.lo + s * 0.1) };
+  };
+
   for (let y = 0; y < m.h; y++) {
     for (let x = 0; x < m.w; x++) {
       const i = y * m.w + x;
@@ -281,18 +303,25 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
         const cx = x + 0.5 + (hash2(x, y, 1) - 0.5) * 0.4;
         const cz = y + 0.5 + (hash2(x, y, 2) - 0.5) * 0.4;
-        const s = 0.3 + hash2(x, y, 3) * 0.22;
-        // on the relief's cliffs (relief.ts): crags along the crest, sunk deeper into the slope
-        const h = relief ? reliefHeight(m, cx, cz) : groundHeight(m, cx, cz);
+        // sizes vary a lot (a few big blocks, more small ones), never a flat slab: height >= 0.7 of the width
+        const s = 0.26 + Math.pow(hash2(x, y, 3), 1.6) * 0.36;
+        const sx = s * (1.05 + hash2(x, y, 16) * 0.45);
+        const sz = s * (0.8 + hash2(x, y, 17) * 0.35);
+        const sy = Math.max(s * (0.8 + hash2(x, y, 6) * 0.6), Math.max(sx, sz) * 0.7);
         if (relief && (hash2(x, y, 15) < 0.35 || landmarkClear(m, cx, cz, 0.7))) continue;
+        // desert mesa rims: in irregular clusters with gaps, not one lump per tile
+        if (biome === 'desert' && hash2(Math.floor(x / 3), Math.floor(y / 3), 18) < 0.3 && hash2(x, y, 19) < 0.7) continue;
+        const at = relief ? seat(cx, cz, Math.max(sx, sz) * 0.75, s) : { x: cx, z: cz, y: groundHeight(m, cx, cz) - s * 0.3 };
+        if (!at) continue;
         lists[hash2(x, y, 4) < 0.5 ? 0 : 1].push({
-          x: cx,
-          y: h - s * (relief ? 0.45 : 0.3),
-          z: cz,
-          rotY: -ang + (hash2(x, y, 5) - 0.5) * 0.5,
-          sx: s * 1.5,
-          sy: s * (0.8 + hash2(x, y, 6) * 0.6),
-          sz: s * 0.9,
+          x: at.x,
+          y: at.y,
+          z: at.z,
+          // ridge crags follow the ridge line; mesa rim blocks lie every which way
+          rotY: biome === 'desert' ? hash2(x, y, 5) * Math.PI * 2 : -ang + (hash2(x, y, 5) - 0.5) * 0.5,
+          sx,
+          sy,
+          sz,
           tiltX: (hash2(x, y, 7) - 0.5) * 0.3,
           tiltZ: (hash2(x, y, 8) - 0.5) * 0.3,
         });
@@ -301,7 +330,8 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
           const bx = x + hash2(x, y, 10 + j * 7);
           const bz = y + hash2(x, y, 11 + j * 7);
           const bs = 0.14 + hash2(x, y, 12 + j * 7) * 0.16;
-          lists[2].push({ x: bx, y: (relief ? reliefHeight(m, bx, bz) - bs * 0.35 : groundHeight(m, bx, bz) - bs * 0.2), z: bz, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
+          const b = relief ? seat(bx, bz, bs * 0.8, bs) : { x: bx, z: bz, y: groundHeight(m, bx, bz) - bs * 0.2 };
+          if (b) lists[2].push({ x: b.x, y: b.y, z: b.z, rotY: hash2(x, y, 14 + j) * 6.28, sx: bs, sy: bs * 0.8, sz: bs });
         }
         continue;
       }

@@ -236,6 +236,7 @@ export class EnvDamage {
     if (dt <= 0) return;
     // moving ground vehicles push through the scenery
     for (const v of visuals) {
+      if (!this.covered.has(v.id) && DEFS[v.def]?.kind === 'building') this.cover(v);
       if (v.speed < 0.15) continue;
       const d = DEFS[v.def];
       if (!d || d.kind !== 'unit') continue;
@@ -302,6 +303,25 @@ export class EnvDamage {
       if (B.t > 2) this.effects.burnGlow(B.x, B.y + 0.3, B.z, 1.2 * B.size);
     }
     for (const H of this.houses) if (H.stage === 2 && H.collapseT >= 0) this.animateCollapse(H, dt);
+  }
+
+  /** Buildings whose footprint has been cleared. */
+  private covered = new Set<number>();
+
+  /** A new building swallows the bushes, render-only trees and fence pieces on its footprint (props.ts does the same for its props). */
+  private cover(v: VisualLike) {
+    this.covered.add(v.id);
+    const d = DEFS[v.def] as { w?: number; h?: number };
+    const p = v.model.root.position;
+    const hw = (d.w ?? 1) / 2 + 0.15;
+    const hh = (d.h ?? 1) / 2 + 0.15;
+    const n = this.query(p.x, p.z, Math.hypot(hw, hh));
+    for (let q = 0; q < n; q++) {
+      const i = this.qi[q];
+      if (Math.abs(this.ix[i] - p.x) > hw || Math.abs(this.iz[i] - p.z) > hh) continue;
+      this.down[i] = 1;
+      this.setMatrix(i, _m.makeScale(0, 0, 0));
+    }
   }
 
   private qi = new Int32Array(1024);

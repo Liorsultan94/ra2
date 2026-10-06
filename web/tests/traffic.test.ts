@@ -604,7 +604,8 @@ describe('road clearance', () => {
     };
     for (const id of MAPS) expect(sig(id)).toBe(sig(id));
     const urban = roadNetFor(createMap('urban', 1), buildLayout(createMap('urban', 1)));
-    expect(urban.lots.length).toBeGreaterThanOrEqual(3);
+    // (one pair: the derricks now stand in their rubble lots, off the street, where the second pair parked)
+    expect(urban.lots.length).toBeGreaterThanOrEqual(2);
     expect(urban.boards.length).toBeGreaterThan(4);
   });
 
