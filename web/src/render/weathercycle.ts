@@ -122,6 +122,23 @@ export const WX_PRESETS: Record<string, Partial<WxState>> = {
   dust: { cover: 0.6, precip: 0.9, storm: 0, wind: 0.95, wet: 0, mist: 0, fall: 'sandstorm' },
 };
 
+/**
+ * One game second of ground wetness: full wet after ~45 s of heavy rain; once the rain has
+ * stopped it dries gradually over ~5 minutes (slower under cloud, faster in wind). The
+ * surfaces follow it (wxuniforms.ts WX.wxWet): the dark, glossy ground and roofs lighten, the
+ * puddles shrink into the dips (ground.ts) and steam rises while the sun is out (fx/nature.ts).
+ */
+export function wetStep(wet: number, rain: number, cover: number, wind: number): number {
+  wet = Math.min(1, wet + (rain * (1 - wet * 0.6)) / 40);
+  if (rain < 0.05) wet = Math.max(0, wet - dryRate(cover, wind));
+  return wet;
+}
+
+/** Wetness lost per game second of dry weather. */
+export function dryRate(cover: number, wind: number): number {
+  return (1 / 320) * (1 - 0.55 * cover) * (0.8 + 0.6 * wind);
+}
+
 /** The ?wx= preset of a URL query (null when absent / unknown). */
 export function wxPreset(search: string): Partial<WxState> | null {
   const k = new URLSearchParams(search).get('wx');
@@ -364,9 +381,7 @@ export class WeatherCycle {
   private step(s: WxState) {
     const a = this.acc;
     const rain = s.fall === 'rain' ? s.precip : 0;
-    // full wet after ~45 s of heavy rain; dries in ~5 min (slower under cloud, faster in wind)
-    a.wet = Math.min(1, a.wet + rain * (1 - a.wet * 0.6) / 40);
-    if (rain < 0.05) a.wet = Math.max(0, a.wet - (1 / 320) * (1 - 0.55 * s.cover) * (0.8 + 0.6 * s.wind));
+    a.wet = wetStep(a.wet, rain, s.cover, s.wind);
     const dust = s.fall === 'sandstorm' ? s.precip : 0;
     a.dust = Math.min(0.85, a.dust + dust / 90);
     if (dust < 0.05) a.dust = Math.max(0, a.dust - 1 / 400 - a.wet / 60);

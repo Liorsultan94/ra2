@@ -17,6 +17,7 @@ import { WeatherFx } from './weather';
 import { WeatherCycle, type WxEventKind, type WxKind, type WxState } from './weathercycle';
 import { WX, WXM } from './wxuniforms';
 import { LivingWorld } from './fx/nature';
+import { dawnMistAt, mistClimateK } from './fx/atmosrules';
 import { biomeLook, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
@@ -694,9 +695,13 @@ const sstep = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-/** Ground fog over the cycle phase (0 = midday): a little in the small hours, thick at dawn, burnt off by mid-morning. */
-function dawnMist(u: number) {
-  return Math.min(1, 0.22 * sstep(0.55, 0.7, u) * (1 - sstep(0.8, 0.84, u)) + sstep(0.72, 0.8, u) * (1 - sstep(0.85, 0.93, u)));
+/**
+ * Ground fog over the cycle phase (0 = midday): a little in the small hours, thick at dawn (from ~05:00 on the
+ * clock), burnt off as the sun climbs (gone by 08:30); full in the temperate and winter valleys, a trace in the
+ * desert (fx/atmosrules.ts dawnMistAt, mistClimateK).
+ */
+function dawnMist(u: number, biome: string) {
+  return dawnMistAt(uToHour(u)) * mistClimateK(biome);
 }
 
 /** 'Misty morning': thick for the first minutes of the battle, then the sun thins it to a light valley mist. */
@@ -1077,6 +1082,12 @@ export class Atmosphere {
   }
 
   /** Overall daylight of this frame, 0 (night) .. 1 (full day): drives the post-processing grade (post/grade.ts). */
+  /** Clock hour of the sky being shown, 0..24 (live day, photo preview / ?todphase, or the fixed time of day). */
+  get hour(): number {
+    if (this.phase >= 0) return uToHour(this.phase);
+    return this.cfg.tod === 'cycle' ? 12 : FIXED_HOUR[this.cfg.tod];
+  }
+
   get daylight(): number {
     const d = this.active && this.preset ? (this.keys ? this.light : this.baseLight) : 1;
     return Number.isFinite(d) ? Math.min(1, Math.max(0, d)) : 1;
@@ -1210,7 +1221,7 @@ export class Atmosphere {
       let mist = 0;
       if (this.cfg.tod === 'mist') mist = morningMist(gt);
       // (with dynamic weather the dawn mist is light after a dry night, thick after a rainy one)
-      if (this.keys) mist = Math.max(mist, dawnMist(this.phase) * (st ? 0.55 + 0.45 * sstep(0.08, 0.45, st.wet) : 1));
+      if (this.keys) mist = Math.max(mist, dawnMist(this.phase, this.look.biome) * (st ? 0.55 + 0.45 * sstep(0.08, 0.45, st.wet) : 1));
       if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
       if (this.mistOverride !== null) mist = this.mistOverride;
       this.mist = mist;

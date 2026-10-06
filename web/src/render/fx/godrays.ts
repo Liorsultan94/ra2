@@ -2,9 +2,15 @@ import * as THREE from 'three';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { CLOUD, CLOUD_COVER_GLSL } from '../cloudshadow';
 import { noiseTexture } from '../fog';
+import { godRayTier, type GodRayTier, type Tier } from './atmosrules';
 
 /*
- * Crepuscular rays through smoke (high quality only).
+ * Crepuscular rays through smoke and through the gaps of a broken cloud deck.
+ *
+ * Tiers (atmosrules.ts godRayTier): high runs everything below at quarter resolution; medium
+ * (phones) skips the smoke (no extra particle draw) and marches only the cloud-shadow field
+ * (analytic shafts, step 2's second half) at an eighth of the resolution with fewer samples,
+ * and only while the shafts are on (broken cloud, the sun up): otherwise it costs nothing.
  *
  * 1. The smoke particles are drawn once more, as plain density, into a
  *    quarter-resolution buffer.
@@ -32,9 +38,11 @@ const RAYS_FRAG = /* glsl */ `
   varying vec2 vUv;
   ${CLOUD_COVER_GLSL}
   void main() {
+    float j = fract( sin( dot( gl_FragCoord.xy, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+    float shaft = 0.0;
+    #ifdef GR_SMOKE
     float d0 = texture2D( tDens, vUv ).r;
     float occ = 0.0;
-    float j = fract( sin( dot( gl_FragCoord.xy, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
     vec2 p = vUv + uDir * j;
     for ( int i = 0; i < 20; i++ ) {
       p += uDir;
@@ -45,7 +53,8 @@ const RAYS_FRAG = /* glsl */ `
     float T = exp( -occ * 0.35 );
     // in-scatter: thin / mid smoke that the sun reaches lights up; haze behind dense smoke is shadowed
     float scatter = smoothstep( 0.02, 0.5, d0 ) * ( 1.0 - smoothstep( 0.9, 2.5, d0 ) );
-    float shaft = scatter * T * 0.35 - ( 1.0 - T ) * 0.06 * ( 1.0 - 0.5 * min( d0, 1.0 ) );
+    shaft = scatter * T * 0.35 - ( 1.0 - T ) * 0.06 * ( 1.0 - 0.5 * min( d0, 1.0 ) );
+    #endif
     if ( csShafts > 0.001 ) {
       // the pixel's view ray (works for the orthographic and the perspective camera)
       vec2 ndc = vUv * 2.0 - 1.0;
@@ -57,15 +66,15 @@ const RAYS_FRAG = /* glsl */ `
         float tG = ( csGround - ro.y ) / rd.y;
         float t0 = max( 0.0, ( csGround + 8.0 - ro.y ) / rd.y );
         if ( tG > t0 ) {
-          float dt = ( tG - t0 ) / 10.0;
+          float dt = ( tG - t0 ) / float( GR_STEPS );
           float t = t0 + dt * j;
           float L = 0.0;
-          for ( int i = 0; i < 10; i++ ) {
+          for ( int i = 0; i < GR_STEPS; i++ ) {
             vec3 P = ro + rd * t;
             L += 1.0 - cloudCover( P.xz - csSunXZ * P.y );
             t += dt;
           }
-          L *= 0.1;
+          L /= float( GR_STEPS );
           vec3 G = ro + rd * tG;
           float lg = 1.0 - cloudCover( G.xz - csSunXZ * G.y );
           // forward scattering: looking towards the sun the shafts glow more
@@ -79,6 +88,8 @@ const RAYS_FRAG = /* glsl */ `
 `;
 
 export class GodRays {
+  /** The tier's settings (atmosrules.ts). */
+  readonly tier: GodRayTier;
   private dens: THREE.WebGLRenderTarget;
   private rays: THREE.WebGLRenderTarget;
   private scene = new THREE.Scene();
@@ -96,13 +107,17 @@ export class GodRays {
 
   constructor(
     private camera: THREE.Camera,
-    density: THREE.Points,
+    density: THREE.Points | null,
+    quality: Tier = 'high',
   ) {
+    const tier = (this.tier = godRayTier(quality));
     const opts = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
     this.dens = new THREE.WebGLRenderTarget(1, 1, opts);
     this.rays = new THREE.WebGLRenderTarget(1, 1, opts);
-    this.scene.add(density);
+    const smoke = tier.smoke && !!density;
+    if (density && smoke) this.scene.add(density);
     this.mat = new THREE.ShaderMaterial({
+      defines: { GR_STEPS: Math.max(1, tier.steps), ...(smoke ? { GR_SMOKE: 1 } : {}) },
       uniforms: {
         tDens: { value: this.dens.texture },
         uDir: { value: new THREE.Vector2() },
@@ -123,9 +138,10 @@ export class GodRays {
   }
 
   setSize(w: number, h: number) {
-    const W = Math.max(1, Math.round(w / 4));
-    const H = Math.max(1, Math.round(h / 4));
-    this.dens.setSize(W, H);
+    const W = Math.max(1, Math.round(w / this.tier.div));
+    const H = Math.max(1, Math.round(h / this.tier.div));
+    // (no smoke march: the density buffer is never drawn, keep it tiny)
+    if (this.tier.smoke) this.dens.setSize(W, H);
     this.rays.setSize(W, H);
   }
 
@@ -139,6 +155,8 @@ export class GodRays {
   /** Render the rays buffer (null when there is nothing to add). */
   render(renderer: THREE.WebGLRenderer): THREE.Texture | null {
     if (this.strength < 0.02) return null;
+    // cloud gaps only (phones): nothing to draw unless the shafts are on
+    if (!this.tier.smoke && CLOUD.csShafts.value < 0.01) return null;
     // screen direction towards the sun: project the view centre and a point a little sunwards of it
     const cam = this.camera;
     cam.getWorldDirection(this.a);
@@ -159,10 +177,12 @@ export class GodRays {
     const prevTarget = renderer.getRenderTarget();
     const prevAlpha = renderer.getClearAlpha();
     renderer.getClearColor(this.clear);
-    renderer.setRenderTarget(this.dens);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear(true, false, false);
-    renderer.render(this.scene, cam);
+    if (this.tier.smoke) {
+      renderer.setRenderTarget(this.dens);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+      renderer.render(this.scene, cam);
+    }
     renderer.setRenderTarget(this.rays);
     this.quad.render(renderer);
     renderer.setClearColor(this.clear, prevAlpha);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { GameMap } from '../sim/map';
 import type { WxState } from './weathercycle';
+import { godRayTier, postRainShaftBoost } from './fx/atmosrules';
 
 /*
  * Cloud shadows: big soft shadows of the cloud deck sweeping across the map with the wind.
@@ -190,6 +191,10 @@ export function updateCloudShadows(dt: number, atmos: AtmosLike, cloudAmount: nu
   const broken = sstep(0.12, 0.4, c) * (1 - sstep(0.78, 0.98, c));
   const low = 1 - sstep(0.35, 0.85, sunDir.y);
   const hi = quality === 'high';
-  CLOUD.csShafts.value = SHAFTS === '0' || (!hi && SHAFTS !== '1') ? 0 : broken * (0.55 + 0.45 * low) * day;
+  // tiers (fx/atmosrules.ts): high full, medium (phones) a lighter cloud-gap-only pass, low none;
+  // after rain the moist air glows more in the shafts while the sun is back
+  const tier = godRayTier(quality === 'high' || quality === 'medium' ? quality : 'low');
+  const wet = wx ? postRainShaftBoost(wx.wet, wx.precip) : 1;
+  CLOUD.csShafts.value = SHAFTS === '0' || (!tier.on && SHAFTS !== '1') ? 0 : Math.min(1, broken * (0.55 + 0.45 * low) * day * (tier.on ? tier.strength : 1) * wet);
   CLOUD.csDapple.value = DAPPLE === '0' || (!hi && DAPPLE !== '1') ? 0 : day * (1 - 0.85 * sstep(0.55, 0.9, c));
 }
