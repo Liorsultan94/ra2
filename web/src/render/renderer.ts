@@ -2620,5 +2620,11 @@ export class GameRenderer {
     } catch {
       /* already lost */
     }
+    // Every material / geometry / texture this renderer drew keeps a 'dispose' listener of it (three removes
+    // them only when the resource itself is disposed), and the session caches share some resources between
+    // matches (munitions, cargo, unit textures...): the old WebGLRenderer stays reachable, and with it its
+    // canvas, whose parent chain (the old HUD and its button listeners) held the whole finished Game. Taking
+    // the canvas out of the page breaks that chain: what is left of the old renderer is a few KB.
+    this.canvas.remove();
   }
 }
