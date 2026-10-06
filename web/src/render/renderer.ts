@@ -2483,7 +2483,11 @@ export class GameRenderer {
   governorHold = false;
   private autoMon: AutoQualityMonitor;
 
+  /** Interpolation factor between the last two sim ticks of the frame being drawn (view hooks: drone feed). */
+  frameAlpha = 1;
+
   render(alpha: number, dt: number) {
+    this.frameAlpha = alpha;
     if (this.pendingLevel >= 0) {
       const l = this.pendingLevel;
       this.pendingLevel = -1;
