@@ -323,6 +323,7 @@ export class World {
       dockSeq: -1,
       qspot: -1,
       oreAvoid: -1,
+      hfield: -1,
       hflee: null,
       hitAt: -9999,
       hresumeAt: -9999,
