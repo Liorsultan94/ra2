@@ -1,20 +1,35 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { ORE_MAX, Tile, type GameMap } from '../sim/map';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { Tile, type GameMap } from '../sim/map';
 import { hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { GeoBuilder } from './geo';
 import { surfaceHeight } from './ground';
+import { PER_GEM, PER_ORE, oreFieldKinds, pieceScale, planOreSlots, type OreSlot } from './orefield';
+import { assetBase, fetchBitmap } from './photoground';
 
 /*
- * Harvestable resources, modern style: ore (oreKind 1) is a rare-earth / metal
- * ore deposit - dark rust-brown rubble with metallic nuggets; "gems" (oreKind
- * 2) are a high-grade lithium deposit - pale blue-white mineral rubble with
- * glinting crystals. Rubble pieces disappear and shrink as tiles are mined.
+ * Harvestable resources. Gems (oreKind 2) are faceted crystal clusters
+ * growing out of the ground: translucent violet glass with inclusions, an
+ * inner glow, facet glints that flash as the camera or the sun moves and a
+ * soft emissive light by night. Ore (oreKind 1) is dark rock rubble cut by
+ * native-gold veins, with gold nuggets that glint.
+ *
+ * The models are authored in Blender (tools/blender/crystals.py): low-poly
+ * game meshes with a normal map (bevelled, chipped edges) and a mask (AO,
+ * inclusions / veins, glass-or-gold flag) baked from high-poly sources, in
+ * public/tex/crystals/. Until they stream in (or if they fail to load) the
+ * old procedural rubble stands in.
+ *
+ * Pieces come from orefield.ts (planOreSlots): every tile of a field gets a
+ * few, and they shrink and vanish as the tile is mined (pieceScale). One
+ * instanced mesh per deposit and piece type; the night glow pools on the
+ * ground are one more instanced mesh for the whole map, drawn only at night.
  * Each regrowth point (map.oreMines) gets a small drilling rig.
  */
 
-const PER = 5; // pieces per tile: 0..2 rubble piles, 3..4 nuggets/crystals
+// ------------------------------------------------------------ procedural stand-ins
 
 function chunkGeo(seed: number, detail: number, sharp: number): THREE.BufferGeometry {
   let g: THREE.BufferGeometry = new THREE.IcosahedronGeometry(1, detail);
@@ -35,7 +50,7 @@ function chunkGeo(seed: number, detail: number, sharp: number): THREE.BufferGeom
 }
 
 /** Several chunks merged into one "pile" geometry with per-vertex colour. */
-function pileGeo(seed: number, n: number, col: (k: number, y: number) => THREE.Color): THREE.BufferGeometry {
+function pileGeo(seed: number, n: number, col: (k: number) => THREE.Color): THREE.BufferGeometry {
   const b = new GeoBuilder();
   for (let k = 0; k < n; k++) {
     const c = chunkGeo(seed + k * 7, 0, 0.7);
@@ -47,26 +62,249 @@ function pileGeo(seed: number, n: number, col: (k: number, y: number) => THREE.C
       new THREE.Quaternion().setFromEuler(new THREE.Euler(hash2(k, seed, 4) * 3, hash2(k, seed, 5) * 3, hash2(k, seed, 6) * 3)),
       new THREE.Vector3(s, s * 0.7, s),
     );
-    const cc = col(k, 0);
-    b.add(c, m, null, (p) => {
-      const sh = 0.75 + Math.min(0.35, p.y * 0.6) + (hash2(Math.floor(p.x * 50), Math.floor(p.z * 50), k) - 0.5) * 0.2;
-      return cc.clone().multiplyScalar(sh);
-    });
+    const cc = col(k);
+    b.add(c, m, null, (p) => cc.clone().multiplyScalar(0.75 + Math.min(0.35, p.y * 0.6) + (hash2(Math.floor(p.x * 50), Math.floor(p.z * 50), k) - 0.5) * 0.2));
   }
   return b.build();
 }
 
-interface Slot {
-  tile: number;
-  k: number;
-  base: THREE.Matrix4;
+function standIns(quality: 'low' | 'medium' | 'high') {
+  const rust = (k: number) => new THREE.Color().setRGB(0.3 + hash2(k, 1, 9) * 0.1, 0.17 + hash2(k, 2, 9) * 0.05, 0.11 + hash2(k, 3, 9) * 0.04);
+  const chunks = quality === 'high' ? 4 : 3;
+  const nugget = new GeoBuilder();
+  for (let k = 0; k < 2; k++) {
+    const m4 = new THREE.Matrix4().compose(new THREE.Vector3((k - 1) * 0.5, 0.2, (hash2(k, 4, 4) - 0.5) * 0.6), new THREE.Quaternion().setFromEuler(new THREE.Euler(k, k * 2, k * 0.5)), new THREE.Vector3(0.45, 0.4, 0.45));
+    nugget.add(chunkGeo(40 + k, 0, 0.9), m4, null, new THREE.Color().setRGB(0.72, 0.45 + k * 0.05, 0.22));
+  }
+  const crystal = new GeoBuilder();
+  for (let k = 0; k < 3; k++) {
+    const c = new THREE.OctahedronGeometry(0.3, 0).scale(0.55, 1.6, 0.55);
+    c.computeVertexNormals();
+    const m4 = new THREE.Matrix4().compose(
+      new THREE.Vector3((hash2(k, 1, 5) - 0.5) * 0.7, 0.25, (hash2(k, 2, 5) - 0.5) * 0.7),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler((hash2(k, 3, 5) - 0.5) * 1.2, hash2(k, 4, 5) * 3, (hash2(k, 5, 5) - 0.5) * 1.2)),
+      new THREE.Vector3(0.6 + k * 0.1, 0.6 + k * 0.12, 0.6 + k * 0.1),
+    );
+    crystal.add(c, m4, null, new THREE.Color().setRGB(0.9, 0.9, 0.95));
+  }
+  const cr = crystal.build();
+  return { gemBig: cr, gemSmall: cr, oreBig: pileGeo(3, chunks, rust), oreSmall: nugget.build() };
 }
+
+// ------------------------------------------------------------ baked models (Blender)
+
+interface CrystalAssets {
+  geos: Record<string, THREE.BufferGeometry>;
+  normal: THREE.Texture;
+  mask: THREE.Texture;
+}
+
+const MODELS = ['gem_big_a', 'gem_big_b', 'gem_small', 'ore_rock_a', 'ore_rock_b', 'ore_nugget'];
+let assetsLoad: Promise<CrystalAssets | null> | null = null;
+
+/** Plain float geometry (node transform applied) from a loaded glTF mesh. */
+function flatten(mesh: THREE.Mesh): THREE.BufferGeometry {
+  mesh.updateWorldMatrix(true, false);
+  const g = mesh.geometry.clone();
+  g.applyMatrix4(mesh.matrixWorld);
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+  g.computeBoundingSphere();
+  g.computeBoundingBox();
+  return g;
+}
+
+function loadCrystals(): Promise<CrystalAssets | null> {
+  if (assetsLoad) return assetsLoad;
+  const dir = `${assetBase()}tex/crystals/`;
+  const tex = async (url: string) => {
+    const t = new THREE.Texture(await fetchBitmap(url));
+    t.flipY = false;
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = 4;
+    t.needsUpdate = true;
+    return t;
+  };
+  assetsLoad = (async () => {
+    try {
+      const [gltf, normal, mask] = await Promise.all([new GLTFLoader().loadAsync(`${dir}crystals.glb`), tex(`${dir}crystals_n.webp`), tex(`${dir}crystals_m.webp`)]);
+      gltf.scene.updateMatrixWorld(true);
+      const geos: Record<string, THREE.BufferGeometry> = {};
+      for (const name of MODELS) {
+        let hit: THREE.Mesh | null = null;
+        gltf.scene.traverse((o) => {
+          if (!hit && (o as THREE.Mesh).isMesh && (o.name === name || o.parent?.name === name)) hit = o as THREE.Mesh;
+        });
+        if (!hit) throw new Error('crystals.glb: no mesh ' + name);
+        geos[name] = flatten(hit);
+      }
+      return { geos, normal, mask };
+    } catch (e) {
+      console.warn('[resources] crystal models unavailable, keeping the procedural rubble', e);
+      return null;
+    }
+  })();
+  return assetsLoad;
+}
+
+// ------------------------------------------------------------ shading
+
+/** 0 = day .. 1 = full night (the renderer sets it every frame). */
+const NIGHT = { value: 0 };
+
+const VERT_PARS = /* glsl */ `
+varying float vSeed;
+varying float vH;`;
+const VERT_MAIN = /* glsl */ `
+vH = position.y;
+{
+  vec3 seedP = vec3( 0.0 );
+  #ifdef USE_INSTANCING
+    seedP = instanceMatrix[ 3 ].xyz;
+  #endif
+  // one value per facet (flat normals) and instance: which facets glint, and where they point
+  vSeed = fract( sin( dot( normal, vec3( 12.9898, 78.233, 37.719 ) ) + dot( seedP, vec3( 0.731, 0.0, 1.379 ) ) ) * 43758.5453 );
+}`;
+const FRAG_PARS = /* glsl */ `
+uniform sampler2D oreMask;
+uniform float oreNight;
+varying float vSeed;
+varying float vH;
+// a facet is a tiny mirror tilted a little off its face: it flashes when it throws the sun into the camera
+float oreGlint( vec3 N, vec3 V, vec3 L, float seed, float spread, float power ) {
+  vec3 j = fract( sin( vec3( seed * 91.3, seed * 47.1 + 3.1, seed * 13.7 + 7.7 ) ) * 43758.5453 ) - 0.5;
+  vec3 Ng = normalize( N + j * spread );
+  return pow( max( dot( reflect( -V, Ng ), L ), 0.0 ), power );
+}`;
+const GLINT = (k: number) => /* glsl */ `
+#if NUM_DIR_LIGHTS > 0
+{
+  vec3 gV = normalize( vViewPosition );
+  float gl = oreGlint( nonPerturbedNormal, gV, directionalLights[ 0 ].direction, vSeed, 0.6, 160.0 ) * step( 0.4, fract( vSeed * 7.31 ) );
+  reflectedLight.directSpecular += directionalLights[ 0 ].color * gl * oreSpark * ${k.toFixed(2)};
+}
+#endif`;
+
+function patch(mat: THREE.MeshStandardMaterial, mask: THREE.Texture, frag: { color: string; rough: string; spec: string; emis: string; glint: number }) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.oreMask = { value: mask };
+    shader.uniforms.oreNight = NIGHT;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${VERT_PARS}`).replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERT_MAIN}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${FRAG_PARS}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\n${frag.color}`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\n${frag.rough}`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${frag.emis}`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>\n${frag.spec}`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${GLINT(frag.glint)}`);
+  };
+}
+
+/** Gem crystals: dark coloured glass (instance colour = hue), inclusions, inner glow, tinted reflections, glints. */
+function gemMaterial(a: CrystalAssets, fog: FogOfWar, winter: boolean) {
+  const mat = new THREE.MeshStandardMaterial({ normalMap: a.normal, roughness: 0.1, metalness: 0 });
+  patch(mat, a.mask, {
+    color: /* glsl */ `
+      vec3 oreM = texture2D( oreMask, vNormalMapUv ).rgb; // ao, inclusions, glass flag
+      vec3 gemC = diffuseColor.rgb;
+      float oreSpark = oreM.b;
+      diffuseColor.rgb = mix( vec3( 0.075, 0.066, 0.06 ), gemC * ( 0.32 + 0.3 * oreM.g ), oreSpark ) * ( 0.35 + 0.65 * oreM.r );`,
+    rough: /* glsl */ `
+      roughnessFactor = mix( 0.85, 0.05 + 0.12 * oreM.g, oreSpark );
+      metalnessFactor = 0.0;`,
+    // high-index glass: stronger, colour-tinted reflections than plain dielectrics
+    spec: /* glsl */ `
+      material.specularColorBlended = mix( material.specularColorBlended, ( gemC * 0.5 + 0.5 ) * 0.14, oreSpark );`,
+    emis: /* glsl */ `
+      {
+        // light caught inside: a core that glows from the base, seen through the facets facing the viewer,
+        // and internal reflections that slide across each facet as the view turns (a refracted ray against
+        // a plane picked per facet), dimmed by the cracks and veils; much brighter by night
+        vec3 eV = normalize( vViewPosition );
+        float ndv = clamp( dot( normal, eV ), 0.0, 1.0 );
+        vec3 eR = refract( -eV, normal, 0.6 );
+        vec3 pd = normalize( fract( sin( vec3( vSeed * 12.9, vSeed * 78.2 + 1.3, vSeed * 37.7 + 2.1 ) ) * 43758.5 ) - 0.5 );
+        float band = pow( abs( dot( eR, pd ) ), 6.0 );
+        float core = ( 1.0 - clamp( vH, 0.0, 1.0 ) * 0.6 ) * ( 0.3 + 0.7 * ndv );
+        vec3 inner = gemC * ( core * ( 0.55 + 0.9 * oreM.g ) + band * 1.3 ) * ( 0.35 + 0.65 * oreM.r );
+        totalEmissiveRadiance += inner * oreSpark * ( 0.8 + 1.4 * oreNight );
+      }`,
+    glint: 7,
+  });
+  if (winter) mat.defines = { ...mat.defines, WX_SNOW_K: '0.15' };
+  fog.apply(mat);
+  mat.customProgramCacheKey = () => 'fog2-gem-crystal' + (winter ? '-w' : '');
+  return mat;
+}
+
+/** Ore: dark rock with native-gold veins (mask G) and gold nuggets (mask B); the gold glints. */
+function oreMaterial(a: CrystalAssets, fog: FogOfWar, winter: boolean) {
+  const mat = new THREE.MeshStandardMaterial({ normalMap: a.normal, roughness: 0.85, metalness: 0 });
+  patch(mat, a.mask, {
+    color: /* glsl */ `
+      vec3 oreM = texture2D( oreMask, vNormalMapUv ).rgb; // ao, veins, nugget flag
+      float oreSpark = max( oreM.b, smoothstep( 0.04, 0.4, oreM.g ) ); // nuggets, veins (thickened)
+      vec3 rockC = vec3( 0.16, 0.11, 0.085 ) * ( 0.85 + 0.3 * fract( vSeed * 3.7 ) );
+      diffuseColor.rgb = mix( rockC, vec3( 1.0, 0.68, 0.26 ), oreSpark ) * ( 0.3 + 0.7 * oreM.r );`,
+    rough: /* glsl */ `
+      roughnessFactor = mix( 0.88, 0.24, oreSpark );
+      metalnessFactor = oreSpark;`,
+    spec: '',
+    // a little self-light so the gold still reads in shade and by night (the env map alone goes flat)
+    emis: /* glsl */ `
+      totalEmissiveRadiance += vec3( 0.55, 0.33, 0.1 ) * oreSpark * oreM.r * ( 0.3 + 0.45 * oreNight );`,
+    glint: 9,
+  });
+  if (winter) mat.defines = { ...mat.defines, WX_SNOW_K: '0.2' };
+  fog.apply(mat);
+  mat.customProgramCacheKey = () => 'fog2-ore-gold' + (winter ? '-w' : '');
+  return mat;
+}
+
+// ------------------------------------------------------------ night glow pools
+
+const POOL_VERT = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vCol;
+varying vec3 vWp;
+void main() {
+  vUv = uv * 2.0 - 1.0;
+  vCol = instanceColor;
+  vec4 wp = modelMatrix * instanceMatrix * vec4( position, 1.0 );
+  vWp = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}`;
+const POOL_FRAG = /* glsl */ `
+uniform float oreNight;
+uniform sampler2D fogTex;
+uniform vec2 fogSize;
+uniform float fogEnabled;
+varying vec2 vUv;
+varying vec3 vCol;
+varying vec3 vWp;
+void main() {
+  float r = length( vUv );
+  float a = 1.0 - smoothstep( 0.0, 1.0, r );
+  a *= a;
+  // nothing shows through the shroud; dimmer on explored-but-unseen ground
+  float v = fogEnabled > 0.5 ? texture2D( fogTex, vWp.xz / fogSize ).r : 1.0;
+  float vis = smoothstep( 0.06, 0.4, v ) * ( 0.45 + 0.55 * smoothstep( 0.56, 0.92, v ) );
+  gl_FragColor = vec4( vCol * a * oreNight * vis, 1.0 );
+}`;
+
+// ------------------------------------------------------------ the deposits
 
 /** One instanced mesh per deposit and piece type, compacted to the pieces still present. */
 interface Batch {
   mesh: THREE.InstancedMesh;
-  slots: Slot[];
+  slots: OreSlot[];
+  base: THREE.Matrix4[];
   tiles: number[];
+  gem: boolean;
+  big: boolean;
+  /** Which baked model variant (deposits alternate). */
+  variant: number;
+  /** Per-slot crystal colour (gems). */
+  colors: THREE.Color[];
 }
 
 export class Resources {
@@ -74,6 +312,11 @@ export class Resources {
   private batches: Batch[] = [];
   private cache: Uint8Array;
   private beacon: THREE.MeshStandardMaterial;
+  private glow: THREE.InstancedMesh;
+  private glowTiles: number[] = [];
+  private glowBase: THREE.Color[] = [];
+  /** The Blender models are in (tests / screenshots). */
+  crystalsReady = false;
 
   constructor(
     private map: GameMap,
@@ -83,133 +326,148 @@ export class Resources {
     const m = map;
     this.cache = new Uint8Array(m.w * m.h).fill(255);
     const shadows = quality === 'high';
+    const winter = m.biome === 'winter';
 
-    // materials
-    // the winter map's lasting snow must not bury the ore (it stays readable); other maps unchanged
+    // stand-in materials (the old procedural look) until the models stream in
     const oreRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.15, flatShading: true }));
     const oreNuggetMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.85, flatShading: true, emissive: 0x2a1404, emissiveIntensity: 0.6 }));
-    const gemRubbleMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.05, flatShading: true }));
-    if (m.biome === 'winter') for (const mt of [oreRubbleMat, oreNuggetMat, gemRubbleMat]) mt.defines = { ...mt.defines, WX_SNOW_K: '0.25' };
-    const gemCrystalMat = fog.apply(
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, flatShading: true, emissive: 0x1e4a66, emissiveIntensity: 0.4 }),
-    );
+    const gemCrystalMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, flatShading: true, emissive: 0x1e2a66, emissiveIntensity: 0.4 }));
+    if (winter) for (const mt of [oreRubbleMat, oreNuggetMat]) mt.defines = { ...mt.defines, WX_SNOW_K: '0.25' };
+    const stand = standIns(quality);
 
-    // geometries: rubble piles (several chunks each) and single nuggets / crystals
-    const rust = (k: number) => new THREE.Color().setRGB(0.3 + hash2(k, 1, 9) * 0.1, 0.17 + hash2(k, 2, 9) * 0.05, 0.11 + hash2(k, 3, 9) * 0.04);
-    // lithium-bearing pegmatite: grey-blue host rock with pale spodumene chunks
-    const pale = (k: number) =>
-      k % 2
-        ? new THREE.Color().setRGB(0.3 + hash2(k, 1, 8) * 0.06, 0.35 + hash2(k, 2, 8) * 0.05, 0.42 + hash2(k, 3, 8) * 0.06)
-        : new THREE.Color().setRGB(0.52 + hash2(k, 1, 8) * 0.08, 0.58 + hash2(k, 2, 8) * 0.06, 0.66 + hash2(k, 3, 8) * 0.06);
-    const chunks = quality === 'high' ? 4 : 3;
-    const orePile = pileGeo(3, chunks, rust);
-    const gemPile = pileGeo(17, chunks, pale);
-    const nugget = (() => {
-      const b = new GeoBuilder();
-      for (let k = 0; k < 2; k++) {
-        const c = chunkGeo(40 + k, 0, 0.9);
-        const m4 = new THREE.Matrix4().compose(
-          new THREE.Vector3((k - 1) * 0.5, 0.2, (hash2(k, 4, 4) - 0.5) * 0.6),
-          new THREE.Quaternion().setFromEuler(new THREE.Euler(k, k * 2, k * 0.5)),
-          new THREE.Vector3(0.45, 0.4, 0.45),
-        );
-        b.add(c, m4, null, new THREE.Color().setRGB(0.72, 0.45 + k * 0.05, 0.22));
-      }
-      return b.build();
-    })();
-    const crystal = (() => {
-      const b = new GeoBuilder();
-      for (let k = 0; k < 3; k++) {
-        const c = new THREE.OctahedronGeometry(0.3, 0).scale(0.55, 1.6, 0.55);
-        c.computeVertexNormals();
-        const m4 = new THREE.Matrix4().compose(
-          new THREE.Vector3((hash2(k, 1, 5) - 0.5) * 0.7, 0.25, (hash2(k, 2, 5) - 0.5) * 0.7),
-          new THREE.Quaternion().setFromEuler(new THREE.Euler((hash2(k, 3, 5) - 0.5) * 1.2, hash2(k, 4, 5) * 3, (hash2(k, 5, 5) - 0.5) * 1.2)),
-          new THREE.Vector3(0.6 + k * 0.1, 0.6 + k * 0.12, 0.6 + k * 0.1),
-        );
-        b.add(c, m4, null, new THREE.Color().setRGB(0.66, 0.84, 0.96));
-      }
-      return b.build();
-    })();
-
-    // every tile that can ever hold ore gets slots (ore regrows around the rigs)
-    const candidate = (i: number) => m.oreKind[i] > 0 || m.oreMines.some((mm) => Math.abs((i % m.w) - mm.x) <= 3 && Math.abs(Math.floor(i / m.w) - mm.y) <= 3);
+    const kinds = oreFieldKinds(m);
+    const slots = planOreSlots(m, kinds);
     // deposit = nearest rig (tiles without a rig nearby form their own group per 16x16 cell)
-    const groups = new Map<string, number[]>();
-    for (let i = 0; i < m.w * m.h; i++) {
-      if (!candidate(i) || m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Rock || m.blocked[i]) continue;
-      const x = i % m.w;
-      const y = Math.floor(i / m.w);
-      let key = `c${Math.floor(x / 16)},${Math.floor(y / 16)}`;
-      let bd = 9;
-      m.oreMines.forEach((mm, k) => {
-        const d = Math.max(Math.abs(x - mm.x), Math.abs(y - mm.y));
-        if (d < bd) {
-          bd = d;
-          key = `m${k}`;
-        }
-      });
-      let g = groups.get(key);
-      if (!g) groups.set(key, (g = []));
-      g.push(i);
-    }
-    const kindOf = (i: number) => {
-      if (m.oreKind[i]) return m.oreKind[i];
-      let best = 1;
-      let bd = 1e9;
-      for (const mm of m.oreMines) {
-        const dd = Math.abs((i % m.w) - mm.x) + Math.abs(Math.floor(i / m.w) - mm.y);
-        if (dd < bd) {
-          bd = dd;
-          best = m.oreKind[mm.y * m.w + mm.x] || 1;
-        }
+    const groups = new Map<string, OreSlot[]>();
+    const keyOf = new Map<number, string>();
+    for (const s of slots) {
+      let key = keyOf.get(s.tile);
+      if (!key) {
+        const x = s.tile % m.w;
+        const y = Math.floor(s.tile / m.w);
+        key = `c${Math.floor(x / 16)},${Math.floor(y / 16)}`;
+        let bd = 9;
+        m.oreMines.forEach((mm, k) => {
+          const d = Math.max(Math.abs(x - mm.x), Math.abs(y - mm.y));
+          if (d < bd) {
+            bd = d;
+            key = `m${k}`;
+          }
+        });
+        keyOf.set(s.tile, key);
       }
-      return best;
-    };
+      const full = `${key}:${s.kind}:${s.big ? 1 : 0}`;
+      let g = groups.get(full);
+      if (!g) groups.set(full, (g = []));
+      g.push(s);
+    }
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
-    for (const tiles of groups.values()) {
-      // split the group by kind, then by piece type
-      for (const gem of [false, true]) {
-        const kt = tiles.filter((i) => (kindOf(i) === 2) === gem);
-        if (!kt.length) continue;
-        for (const nug of [false, true]) {
-          const slots: Slot[] = [];
-          for (const i of kt) {
-            const x = i % m.w;
-            const y = Math.floor(i / m.w);
-            for (let k = nug ? 3 : 0; k < (nug ? PER : 3); k++) {
-              const ox = x + 0.15 + hash2(x, y, 100 + k) * 0.7;
-              const oy = y + 0.15 + hash2(x, y, 200 + k) * 0.7;
-              e.set((hash2(x, y, 300 + k) - 0.5) * 0.3, hash2(x, y, 400 + k) * 6.28, (hash2(x, y, 500 + k) - 0.5) * 0.3);
-              q.setFromEuler(e);
-              const sc = nug ? 0.13 + hash2(x, y, 600 + k) * 0.08 : 0.22 + hash2(x, y, 600 + k) * 0.14;
-              const base = new THREE.Matrix4().compose(new THREE.Vector3(ox, surfaceHeight(m, ox, oy) - 0.02, oy), q, new THREE.Vector3(sc, sc * (nug ? 1 : 0.8), sc));
-              slots.push({ tile: i, k, base });
-            }
-          }
-          const geo = gem ? (nug ? crystal : gemPile) : nug ? nugget : orePile;
-          const mat = gem ? (nug ? gemCrystalMat : gemRubbleMat) : nug ? oreNuggetMat : oreRubbleMat;
-          const im = new THREE.InstancedMesh(geo, mat, slots.length);
-          im.castShadow = shadows && !nug;
-          im.receiveShadow = true;
-          im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-          // bounds from every slot (before compaction), so culling stays valid as pieces vanish
-          slots.forEach((sl, k) => im.setMatrixAt(k, sl.base));
-          im.computeBoundingSphere();
-          im.computeBoundingBox();
-          im.name = 'resources';
-          this.group.add(im);
-          this.batches.push({ mesh: im, slots, tiles: [...new Set(slots.map((sl) => sl.tile))] });
-        }
-      }
+    let deposit = 0;
+    const hueOf = new Map<string, number>();
+    for (const [full, list] of groups) {
+      const [key, kindS, bigS] = full.split(':');
+      const gem = kindS === '2';
+      const big = bigS === '1';
+      if (!hueOf.has(key)) hueOf.set(key, deposit++);
+      const dep = hueOf.get(key)!;
+      const base = list.map((s) => {
+        e.set(s.tiltX, s.rotY, s.tiltZ, 'YXZ');
+        q.setFromEuler(e);
+        const y = surfaceHeight(m, s.x, s.z) - 0.015;
+        return new THREE.Matrix4().compose(new THREE.Vector3(s.x, y, s.z), q, new THREE.Vector3(s.scale, s.scale, s.scale));
+      });
+      const geo = gem ? (big ? stand.gemBig : stand.gemSmall) : big ? stand.oreBig : stand.oreSmall;
+      const mat = gem ? gemCrystalMat : big ? oreRubbleMat : oreNuggetMat;
+      const im = new THREE.InstancedMesh(geo, mat, list.length);
+      im.castShadow = shadows && big;
+      im.receiveShadow = true;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // each gem deposit has its own shade of violet; every crystal varies a little around it
+      const h0 = 0.74 + (hash2(dep, 3, 77) - 0.5) * 0.12;
+      const colors = gem
+        ? list.map((s) => {
+            const r = hash2(Math.floor(s.x * 31), Math.floor(s.z * 31), 78);
+            return new THREE.Color().setHSL(h0 + (r - 0.5) * 0.07, 0.72, 0.6 + (r - 0.5) * 0.12);
+          })
+        : [];
+      colors.forEach((c, k) => im.setColorAt(k, c));
+      const b: Batch = { mesh: im, slots: list, base, tiles: [...new Set(list.map((s) => s.tile))], gem, big, variant: dep % 2, colors };
+      this.rebound(b);
+      im.name = 'resources';
+      this.group.add(im);
+      this.batches.push(b);
     }
+
+    // night glow pools: one soft light disc per field tile (gems violet, ore a faint warm gold)
+    const tiles: number[] = [];
+    for (let i = 0; i < kinds.length; i++) if (kinds[i] && !m.blocked[i]) tiles.push(i);
+    this.glowTiles = tiles;
+    const pg = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const pmat = new THREE.ShaderMaterial({
+      vertexShader: POOL_VERT,
+      fragmentShader: POOL_FRAG,
+      uniforms: { oreNight: NIGHT, fogTex: fog.uniforms.fogTex, fogSize: fog.uniforms.fogSize, fogEnabled: fog.uniforms.fogEnabled },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -4,
+    });
+    this.glow = new THREE.InstancedMesh(pg, pmat, Math.max(1, tiles.length));
+    this.glow.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, tiles.length) * 3), 3);
+    const up = new THREE.Vector3(0, 1, 0);
+    const nrm = new THREE.Vector3();
+    tiles.forEach((i, k) => {
+      const x = (i % m.w) + 0.5;
+      const z = Math.floor(i / m.w) + 0.5;
+      const gem = kinds[i] === 2;
+      // lie on the slope of the ground
+      nrm.set(surfaceHeight(m, x - 0.4, z) - surfaceHeight(m, x + 0.4, z), 0.8, surfaceHeight(m, x, z - 0.4) - surfaceHeight(m, x, z + 0.4)).normalize();
+      const s = gem ? 1.9 : 1.3;
+      this.glow.setMatrixAt(k, new THREE.Matrix4().compose(new THREE.Vector3(x, surfaceHeight(m, x, z) + 0.02, z), new THREE.Quaternion().setFromUnitVectors(up, nrm), new THREE.Vector3(s, 1, s)));
+      const r = hash2(x | 0, z | 0, 79);
+      this.glowBase.push(gem ? new THREE.Color().setHSL(0.75 + (r - 0.5) * 0.05, 0.85, 0.5).multiplyScalar(0.22) : new THREE.Color(0.5, 0.3, 0.08).multiplyScalar(0.12));
+    });
+    this.glow.count = tiles.length;
+    this.glow.frustumCulled = false;
+    this.glow.renderOrder = 2;
+    this.glow.visible = false;
+    this.glow.name = 'resource-glow';
+    this.group.add(this.glow);
 
     // survey stakes around each deposit + drilling rigs
     this.beacon = new THREE.MeshStandardMaterial({ color: 0xff8a20, emissive: 0xff7010, emissiveIntensity: 2, toneMapped: false });
     fog.apply(this.beacon);
     this.buildRigs(fog, quality !== 'low');
     this.update(true);
+
+    // the Blender models: swap geometry and material in place once they are in
+    void loadCrystals().then((a) => {
+      if (!a) return;
+      const gemMat = gemMaterial(a, fog, winter);
+      const oreMat = oreMaterial(a, fog, winter);
+      for (const b of this.batches) {
+        const name = b.gem ? (b.big ? (b.variant ? 'gem_big_b' : 'gem_big_a') : 'gem_small') : b.big ? (b.variant ? 'ore_rock_b' : 'ore_rock_a') : 'ore_nugget';
+        b.mesh.geometry = a.geos[name];
+        b.mesh.material = b.gem ? gemMat : oreMat;
+        this.rebound(b);
+      }
+      this.update(true);
+      this.crystalsReady = true;
+    });
+  }
+
+  /** Bounds from every slot at full size (before compaction), so culling stays valid as pieces vanish. */
+  private rebound(b: Batch) {
+    const n = b.mesh.count;
+    b.mesh.count = b.base.length;
+    b.base.forEach((mm, k) => b.mesh.setMatrixAt(k, mm));
+    b.mesh.computeBoundingSphere();
+    b.mesh.computeBoundingBox();
+    b.mesh.count = n;
   }
 
   private buildRigs(fog: FogOfWar, shadows: boolean) {
@@ -322,25 +580,45 @@ export class Resources {
 
   private tmp = new THREE.Matrix4();
   private sc = new THREE.Matrix4();
+  private col = new THREE.Color();
 
-  /** Sync rubble with the simulation's ore amounts. */
+  /** Sync the pieces (and their night glow) with the simulation's ore amounts. */
   update(force = false) {
     const m = this.map;
     for (const b of this.batches) {
       if (!force && !b.tiles.some((t) => this.cache[t] !== m.ore[t])) continue;
       let n = 0;
-      for (const s of b.slots) {
-        const amt = m.ore[s.tile];
-        if (amt <= s.k * (ORE_MAX / PER) * 0.75) continue;
-        const f = 0.5 + 0.5 * Math.min(1, amt / ORE_MAX);
-        this.tmp.copy(s.base).multiply(this.sc.makeScale(f, f, f));
-        b.mesh.setMatrixAt(n++, this.tmp);
+      for (let k = 0; k < b.slots.length; k++) {
+        const s = b.slots[k];
+        const f = pieceScale(m.ore[s.tile], s.rank, s.kind === 2 ? PER_GEM : PER_ORE);
+        if (f <= 0) continue;
+        this.tmp.copy(b.base[k]).multiply(this.sc.makeScale(f, f, f));
+        b.mesh.setMatrixAt(n, this.tmp);
+        if (b.colors.length) b.mesh.setColorAt(n, b.colors[k]);
+        n++;
       }
       b.mesh.count = n;
       b.mesh.visible = n > 0;
       b.mesh.instanceMatrix.needsUpdate = true;
+      if (b.mesh.instanceColor) b.mesh.instanceColor.needsUpdate = true;
+    }
+    let glowDirty = force;
+    for (const t of this.glowTiles) if (this.cache[t] !== m.ore[t]) glowDirty = true;
+    if (glowDirty) {
+      this.glowTiles.forEach((t, k) => {
+        const f = pieceScale(m.ore[t], 0, PER_GEM);
+        this.glow.setColorAt(k, this.col.copy(this.glowBase[k]).multiplyScalar(f));
+      });
+      this.glow.instanceColor!.needsUpdate = true;
     }
     for (const b of this.batches) for (const t of b.tiles) this.cache[t] = m.ore[t];
+    for (const t of this.glowTiles) this.cache[t] = m.ore[t];
+  }
+
+  /** 0 = daylight .. 1 = full night: the crystals' inner light and the glow pools on the ground. */
+  setNight(dark: number) {
+    NIGHT.value = Math.max(0, Math.min(1, dark));
+    this.glow.visible = NIGHT.value > 0.03;
   }
 
   animate(time: number) {

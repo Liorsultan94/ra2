@@ -8,6 +8,7 @@ import type { FogOfWar } from './fog';
 import { CulledInstances, footprintKey, groundFootprint, type Inst } from './geo';
 import { surfaceHeight } from './ground';
 import { FieldType, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, segDist, type Layout, type V2 } from './layout';
+import { oreFieldKinds } from './orefield';
 
 /*
  * Photoscanned battlefield props (CC0 scans from Poly Haven / ambientCG,
@@ -182,6 +183,8 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
     sink?: number;
   }
   /** Can a prop of radius r stand at (x, z)? */
+  // ore fields incl. the ground where ore regrows around the rigs (orefield.ts)
+  const fieldK = oreFieldKinds(m);
   const ok = (x: number, z: number, r: number, o: Opts = {}) => {
     if (x < 1.2 || z < 1.2 || x > W - 1.2 || z > H - 1.2) return false;
     if (m.starts.some((s) => Math.hypot(x - s.x - 0.5, z - s.y - 0.5) < BASE_CLEAR)) return false;
@@ -195,7 +198,7 @@ export function planProps(m: GameMap, layout: Layout, quality: Q, man: PropsMani
       const i = tile(x + sx, z + sz);
       if (i < 0) return false;
       const t = m.tiles[i];
-      if (t === Tile.Water || t === Tile.Bridge || t === Tile.Rock || m.trees[i] || m.ore[i] || m.oreKind[i]) return false;
+      if (t === Tile.Water || t === Tile.Bridge || t === Tile.Rock || m.trees[i] || m.ore[i] || m.oreKind[i] || fieldK[i]) return false;
       if (m.blocked[i] && !o.yard) return false;
       const oc = occAt(layout, m, x + sx, z + sz);
       if (oc & (OCC_ROAD | OCC_TRACK)) return false;
