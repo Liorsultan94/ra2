@@ -137,7 +137,7 @@ export function buildSpray(emitters: SprayEmitter[], fog: FogOfWar, wxLight: { v
 
 // ------------------------------------------------------------------ waterfalls
 
-interface Fall {
+export interface Fall {
   /** Path points (x, y, z), cumulative length, steepness 0..1, half width. */
   pts: { x: number; y: number; z: number; s: number; steep: number; hw: number }[];
   plunge: THREE.Vector3;
@@ -146,27 +146,90 @@ interface Fall {
 }
 
 /**
- * Find the waterfall spots: per body of water, the cliff of the relief whose
- * cap rock lies closest to its shore (at most ~3 tiles of slope between),
- * with a clear run down to the water (no road, track, building or bridge).
+ * Find the waterfall spots: per body of running water (a river or stream that
+ * flows through the map: it enters and leaves at the map edge), the cliff of
+ * the relief whose cap rock lies closest to its shore (at most ~3 tiles of
+ * slope between), with a clear run down to the water (no road, track,
+ * building or bridge). Still water (an oasis, a pond, a basin) never gets a
+ * fall: nothing feeds it from the rock above, so a cascade off a dry mesa
+ * into it would be water from nowhere.
  */
-function findFalls(m: GameMap, layout: Layout): Fall[] {
+/** Running water: the body meets the map edge at two places ~12+ tiles apart (it comes in at one end, out at the other). */
+function isRunning(mouths: { x: number; y: number }[]): boolean {
+  return mouths.some((a) => mouths.some((b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) > 12));
+}
+
+/** Per water tile: 1 when it belongs to running water (a river through the map), 0 for still water (oasis, pond); -1 dry. */
+export function runningWater(m: GameMap): Int8Array {
+  const out = new Int8Array(m.w * m.h).fill(-1);
+  const wet = (t: number) => t === Tile.Water || t === Tile.Bridge;
+  for (let i = 0; i < m.w * m.h; i++) {
+    if (!wet(m.tiles[i]) || out[i] !== -1) continue;
+    const body: number[] = [];
+    const mouths: { x: number; y: number }[] = [];
+    const st = [i];
+    out[i] = 0;
+    while (st.length) {
+      const c = st.pop()!;
+      body.push(c);
+      const cx = c % m.w;
+      const cy = (c - cx) / m.w;
+      if (cx === 0 || cy === 0 || cx === m.w - 1 || cy === m.h - 1) mouths.push({ x: cx, y: cy });
+      const visit = (n: number) => {
+        if (!wet(m.tiles[n]) || out[n] !== -1) return;
+        out[n] = 0;
+        st.push(n);
+      };
+      if (cx > 0) visit(c - 1);
+      if (cx < m.w - 1) visit(c + 1);
+      if (cy > 0) visit(c - m.w);
+      if (cy < m.h - 1) visit(c + m.w);
+    }
+    if (isRunning(mouths)) for (const c of body) out[c] = 1;
+  }
+  return out;
+}
+
+export function findFalls(m: GameMap, layout: Layout): Fall[] {
   const rf = reliefField(m);
   if (!rf.count) return [];
   const F = rf.F;
-  // label the water bodies
+  // label the water bodies (a river runs on under its bridges: one body)
+  const wet = (t: number) => t === Tile.Water || t === Tile.Bridge;
   const lab = new Int32Array(m.w * m.h).fill(-1);
   const bodies: { x: number; y: number }[][] = [];
   for (let i = 0; i < m.w * m.h; i++) {
     if (m.tiles[i] !== Tile.Water || lab[i] >= 0) continue;
     const id = bodies.length;
     const shore: { x: number; y: number }[] = [];
+    // where the body meets the map edge: running water comes in at one place and leaves at another
+    const mouths: { x: number; y: number }[] = [];
     const st = [i];
     lab[i] = id;
     while (st.length) {
       const c = st.pop()!;
       const cx = c % m.w;
       const cy = (c - cx) / m.w;
+      if (cx === 0 || cy === 0 || cx === m.w - 1 || cy === m.h - 1) mouths.push({ x: cx, y: cy });
+      if (m.tiles[c] !== Tile.Water) {
+        // a bridge tile: only carries the label on
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ]) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= m.w || ny >= m.h) continue;
+          const n = ny * m.w + nx;
+          if (wet(m.tiles[n]) && lab[n] < 0) {
+            lab[n] = id;
+            st.push(n);
+          }
+        }
+        continue;
+      }
       let edge = false;
       for (const [dx, dy] of [
         [1, 0],
@@ -178,7 +241,7 @@ function findFalls(m: GameMap, layout: Layout): Fall[] {
         const ny = cy + dy;
         if (nx < 0 || ny < 0 || nx >= m.w || ny >= m.h) continue;
         const n = ny * m.w + nx;
-        if (m.tiles[n] === Tile.Water) {
+        if (wet(m.tiles[n])) {
           if (lab[n] < 0) {
             lab[n] = id;
             st.push(n);
@@ -187,7 +250,7 @@ function findFalls(m: GameMap, layout: Layout): Fall[] {
       }
       if (edge && groundHeight(m, cx + 0.5, cy + 0.5) < WATER_LEVEL - 0.05) shore.push({ x: cx + 0.5, y: cy + 0.5 });
     }
-    bodies.push(shore);
+    bodies.push(isRunning(mouths) ? shore : []);
   }
   const falls: Fall[] = [];
   const clear = (x: number, y: number) => {
