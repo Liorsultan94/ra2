@@ -1425,7 +1425,11 @@ export class Hud {
     setTimeout(() => m.remove(), 5200);
   }
 
+  /** The hint on screen (showHint), null when none. */
+  hintHtml: string | null = null;
+
   showHint(html: string | null) {
+    this.hintHtml = html;
     if (!html) {
       this.hint.classList.add('hidden');
       return;
