@@ -45,7 +45,7 @@ export class Terrain {
   minimap!: MinimapBake;
   /** Instanced plants, fences and village houses, for render-side environment damage. */
   readonly veg: VegetationHandles = { trees: [], bushes: [] };
-  readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [] };
+  readonly scenery: SceneryHandles = { houses: [], posts: [], rails: [], chimneys: [] };
   /** Photoscanned props (barrels, crates, cars, barriers...); they stream in after the terrain is built. */
   props!: Props;
 
