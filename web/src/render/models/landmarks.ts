@@ -421,8 +421,12 @@ export function mosque(k: Kit) {
 export function soukStall(k: Kit, v: number) {
   const cols = [0xc0392b, 0x2e86c1, 0xd68910, 0x7d3c98, 0x1e8449, 0xe6b0aa];
   const c = cols[Math.floor(v * cols.length) % cols.length];
-  k.box(0.55, 0.42, 0.5, -0.15, 0.21, 0, 0xd7bf96);
-  k.box(0.02, 0.28, 0.36, 0.13, 0.2, 0, 0x3a2a1a);
+  // the booth: each one its own size and plaster
+  const bw = 0.42 + ((v * 13.7) % 1) * 0.22;
+  const bh = 0.34 + ((v * 7.3) % 1) * 0.18;
+  const walls = [0xd7bf96, 0xc9a97c, 0xe0cfae, 0xb89a72];
+  k.box(0.55, bh, bw, -0.15, bh / 2, 0, walls[Math.floor(v * 29) % walls.length]);
+  k.box(0.02, bh * 0.66, bw * 0.72, 0.13, bh * 0.48, 0, 0x3a2a1a);
   // the awning: a sloped striped canvas on poles
   for (let i = 0; i < 3; i++) k.box(0.36, 0.015, 0.17, 0.3, 0.43 - 0.05, -0.17 + i * 0.17, i % 2 ? c : 0xf2ead8, 0, 0, 0, -0.32);
   for (const s of [-1, 1]) k.beam(0.46, 0, s * 0.24, 0.46, 0.33, s * 0.24, 0.015, 0x5a4030);

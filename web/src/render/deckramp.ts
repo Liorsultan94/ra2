@@ -3,7 +3,8 @@ import { surfaceHeight } from './ground';
 
 /**
  * Where a bridge deck meets a bank that sits higher than the deck (Frontline's plateau banks, the
- * raised city quays), the deck's last stretch rises to sit on the bank instead of running into it,
+ * raised city quays), the deck is graded straight from bank to bank to sit on them (piers and
+ * abutments grow to carry it, bridgefx.ts) instead of running into them,
  * and the approach roads come down to meet the deck's end exactly. One height profile per bridge,
  * shared by the deck (bridgefx.ts), the road ribbons (scenery.ts, ambient/roadfurniture.ts) and
  * the cars (ambient/traffic.ts), so they all agree.
@@ -48,12 +49,26 @@ export function deckRamps(m: GameMap): DeckRamp[] {
       }
       need[i] = h > 0.01 ? h : 0;
     }
-    // a smooth hump over every point that needs it, eased out at no more than ~1 in 2
+    // the deck runs as one straight grade from bank to bank, at the height each bank needs at its end
+    // (a short hump at each end bent the deck into an S), with a slight camber when both ends rise;
+    // a smooth hump over any point in between that still needs more
+    const end = Math.round(1.6 / STEP);
+    let e0 = 0;
+    let e1 = 0;
+    for (let i = 0; i <= end && i < n; i++) {
+      e0 = Math.max(e0, need[i]);
+      e1 = Math.max(e1, need[n - 1 - i]);
+    }
+    const camber = 0.05 * smooth((Math.min(e0, e1) - 0.05) / 0.15);
     const lift = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      lift[i] = e0 + (e1 - e0) * t + camber * Math.sin(Math.PI * t);
+    }
     for (let j = 0; j < n; j++) {
       const h = need[j];
-      if (!h) continue;
-      const R = 0.35 + h / 0.42;
+      if (h <= lift[j]) continue;
+      const R = 0.35 + h / 0.2;
       const k0 = Math.max(0, Math.floor(j - R / STEP));
       const k1 = Math.min(n - 1, Math.ceil(j + R / STEP));
       for (let k = k0; k <= k1; k++) lift[k] = Math.max(lift[k], h * smooth(1 - (Math.abs(k - j) * STEP) / R));
