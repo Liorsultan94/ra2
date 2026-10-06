@@ -275,7 +275,7 @@ export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict 
       // a little extra for tiles behind it: a slow-turning harvester keeps working forwards
       if (dd > 0) score += (Math.abs(angleDiff(e.facing, Math.atan2(y + 0.5 - e.y, x + 0.5 - e.x))) / Math.PI) * 1.5;
       if (taken.has(t)) score += 400;
-      else if (taken.has(t - 1) || taken.has(t + 1) || taken.has(t - W) || taken.has(t + W)) score += 2;
+      else if (taken.size) score += crowding(taken, x, y, W);
       if (t === e.oreAvoid) score += 400;
       // on a hot field, or the way there runs past one (one it is at already does not count for the way)
       if (hot.length && hot.some((f) => Math.hypot(f.x - x - 0.5, f.y - y - 0.5) <= HV_FIELD_R || (f.far && segDist(f.x, f.y, e.x, e.y, x + 0.5, y + 0.5) <= HV_THREAT_R + 1))) {
@@ -302,6 +302,20 @@ export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict 
     if (y < H - 1) push(t + W);
   }
   return best;
+}
+
+/**
+ * Extra cost of an ore tile for its claimed neighbours: harvesters are some 1.6 tiles long, so two on tiles
+ * next to each other look (and drive) piled up - keep a tile or two between them when there is room.
+ */
+function crowding(taken: Set<number>, x: number, y: number, W: number): number {
+  let c = 0;
+  for (let dy = -2; dy <= 2; dy++)
+    for (let dx = -2; dx <= 2; dx++) {
+      if ((dx === 0 && dy === 0) || !taken.has((y + dy) * W + x + dx)) continue;
+      c += Math.max(Math.abs(dx), Math.abs(dy)) === 1 ? 3 : 1;
+    }
+  return c;
 }
 
 function goToOre(w: World, e: Entity, t: number) {
