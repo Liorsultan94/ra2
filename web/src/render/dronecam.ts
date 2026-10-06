@@ -507,6 +507,7 @@ export class DroneCam {
     };
     this.title.textContent = this.feed.title;
     this.el.classList.remove('hidden', 'lost');
+    this.box.style.display = 'none';
     this.el.classList.toggle('kamikaze', kind === 'kami');
     this.impactLost = false;
     this.flashAt = -1;
@@ -722,28 +723,32 @@ export class DroneCam {
       loc.union(bb);
     });
     if (loc.isEmpty()) return false;
-    const c = this.corners;
-    out.makeEmpty();
-    for (let i = 0; i < 8; i++) {
-      c[i].set(i & 1 ? loc.max.x : loc.min.x, i & 2 ? loc.max.y : loc.min.y, i & 4 ? loc.max.z : loc.min.z).applyMatrix4(root.matrixWorld);
-      out.expandByPoint(c[i]);
-    }
     // the body only: a model may carry wide helpers (ground aprons, glow cards) beyond it
     const d = DEFS[t.def];
-    const p = this.r.entityPos(t, this.r.frameAlpha, this.tmp2);
+    const c = this.corners;
     if (t.kind === 'building' && d?.kind === 'building') {
+      // buildings stand square to the map: their footprint bounds the box
+      out.makeEmpty();
+      for (let i = 0; i < 8; i++) out.expandByPoint(c[i].set(i & 1 ? loc.max.x : loc.min.x, i & 2 ? loc.max.y : loc.min.y, i & 4 ? loc.max.z : loc.min.z).applyMatrix4(root.matrixWorld));
+      const p = this.r.entityPos(t, this.r.frameAlpha, this.tmp2);
       bb.min.set(t.tx - 0.1, p.y - 0.3, t.ty - 0.1);
       bb.max.set(t.tx + d.w + 0.1, p.y + Math.max(0.6, this.r.visualHeight(t.id) * 1.2), t.ty + d.h + 0.1);
-    } else {
-      const r = Math.max(0.6, (d?.kind === 'unit' ? unitDef(t.def).radius : 0.5) * 2.5);
-      bb.min.set(p.x - r, p.y - 0.4, p.z - r);
-      bb.max.set(p.x + r, p.y + Math.max(0.8, this.r.visualHeight(t.id) * 1.5), p.z + r);
+      if (!bb.containsBox(out)) {
+        out.intersect(bb);
+        if (out.isEmpty()) return false;
+        for (let i = 0; i < 8; i++) c[i].set(i & 1 ? out.max.x : out.min.x, i & 2 ? out.max.y : out.min.y, i & 4 ? out.max.z : out.min.z);
+      }
+      return true;
     }
-    if (!bb.containsBox(out)) {
-      out.intersect(bb);
-      if (out.isEmpty()) return false;
-      for (let i = 0; i < 8; i++) c[i].set(i & 1 ? out.max.x : out.min.x, i & 2 ? out.max.y : out.min.y, i & 4 ? out.max.z : out.min.z);
-    }
+    // units: in the model's own frame (the box turns with the hull)
+    const k = Math.max(1e-3, root.scale.x);
+    const r = Math.max(0.6, (d?.kind === 'unit' ? unitDef(t.def).radius : 0.5) * 2.5) / k;
+    bb.min.set(-r, -0.4 / k, -r);
+    bb.max.set(r, Math.max(0.8, this.r.visualHeight(t.id) * 1.5) / k, r);
+    loc.intersect(bb);
+    if (loc.isEmpty()) return false;
+    out.makeEmpty();
+    for (let i = 0; i < 8; i++) out.expandByPoint(c[i].set(i & 1 ? loc.max.x : loc.min.x, i & 2 ? loc.max.y : loc.min.y, i & 4 ? loc.max.z : loc.min.z).applyMatrix4(root.matrixWorld));
     return true;
   }
 
@@ -843,11 +848,16 @@ export class DroneCam {
       f.tgtExtent = Math.max(this.bb.max.x - this.bb.min.x, this.bb.max.z - this.bb.min.z);
       const b = projectCorners(el, this.corners, W, H);
       if (b && b.x1 > 0 && b.y1 > 0 && b.x0 < W && b.y0 < H) {
+        // (a target filling the picture, close under a diving munition: the box frames its visible part)
         const pad = 3;
-        const bw = Math.max(12, b.x1 - b.x0 + pad * 2);
-        const bh = Math.max(12, b.y1 - b.y0 + pad * 2);
-        const cx = (b.x0 + b.x1) / 2;
-        const cy = (b.y0 + b.y1) / 2;
+        const x0 = Math.max(2, b.x0 - pad);
+        const y0 = Math.max(2, b.y0 - pad);
+        const x1 = Math.min(W - 2, b.x1 + pad);
+        const y1 = Math.min(H - 2, b.y1 + pad);
+        const bw = Math.max(12, x1 - x0);
+        const bh = Math.max(12, y1 - y0);
+        const cx = (x0 + x1) / 2;
+        const cy = (y0 + y1) / 2;
         this.box.style.width = `${bw.toFixed(1)}px`;
         this.box.style.height = `${bh.toFixed(1)}px`;
         this.box.style.transform = `translate(${(cx - bw / 2).toFixed(1)}px, ${(cy - bh / 2).toFixed(1)}px)`;
@@ -924,7 +934,7 @@ export class DroneCam {
     f.gs = f.gs < 0 ? now : f.gs + (now - f.gs) * smoothK(this.time - f.gsAt, 2);
     f.gsAt = this.time;
     const gs = f.gs;
-    this.txtTL.textContent = `${f.title}\nWHT  ${fovTag}`;
+    this.txtTL.textContent = `${f.kind === 'kami' ? f.callsign : f.title}\nWHT  ${fovTag}`;
     this.txtTR.textContent = `ALT ${fmtAlt(ro.altFt)} FT\nGS ${Math.round(gs)} KT\nHDG ${fmtHdg(facingHeading(e.facing))}`;
     this.txtBL.textContent = tgt ? `TGT ${f.tgtName}\n${f.kind === 'kami' ? 'DIVE' : acq ? 'ACQ' : 'LOCK'}` : 'SCANNING\nTRK';
     this.txtBR.textContent = `RNG ${fmtRange(ro.slantM)} M${tti >= 0 ? `\nTTI ${fmtTti(tti)} S` : ''}`;

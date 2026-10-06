@@ -145,6 +145,9 @@ float heatAt(vec2 uv) {
     float chroma = (raw.r - raw.b) / max(pk, 1e-3);
     warm = smoothstep(1.8, 4.0, pk) * smoothstep(0.3, 0.55, chroma);
     white = smoothstep(3.5, 8.0, min(raw.r, min(raw.g, raw.b))) * 0.9;
+    // solar loading: sunlit roofs, walls and hulls run warmer than shaded ground (structure stays readable)
+    // a wider cool range than the full-screen view (it was floored flat by the body term below)
+    cold = 0.03 + 0.6 * pow(l, 1.35) + 0.22 * smoothstep(0.35, 1.6, pk);
   } else {
     warm = smoothstep(0.22, 0.6, c.r - c.b) * smoothstep(0.5, 0.95, c.r);
     white = smoothstep(0.86, 1.0, min(c.r, min(c.g, c.b))) * 0.75;
@@ -157,6 +160,8 @@ float heatAt(vec2 uv) {
     + (texture2D(tHeat, uv + vec2(px.x * 2.0, 0.0)).r + texture2D(tHeat, uv - vec2(px.x * 2.0, 0.0)).r
      + texture2D(tHeat, uv + vec2(0.0, px.y * 2.0)).r + texture2D(tHeat, uv - vec2(0.0, px.y * 2.0)).r) * 0.1;
   float body = 0.3 + h * 0.5 + (l - 0.35) * 0.45 * step(0.02, h0);
+  // (HDR feed: only where there is a hot body; the full-screen view keeps its 0.3 floor)
+  if (hdrIn > 0.5) body *= smoothstep(0.0, 0.12, h);
   v = max(v, body);
   return v;
 }

@@ -257,7 +257,7 @@ describe('which strike the feed follows', () => {
     expect(feedTitle('heli', unitDef('turkey_heli').name, 'X')).toBe('T129 · ASELFLIR');
     expect(feedTitle('heli', unitDef('russia_heli').name, 'X')).toBe('KA-52 · FLIR');
     expect(feedTitle('uav', unitDef('usa_uav').name, 'REAPER-07')).toBe('MQ-9 · REAPER-07');
-    expect(feedTitle('kami', 'Loitering Munition', 'MUNITION-07')).toBe('MUNITION FEED · MUNITION-07');
+    expect(feedTitle('kami', 'Loitering Munition', 'MUNITION-07')).toBe('SEEKER · MUNITION-07');
     expect(airframe('Su-35')).toBe('SU-35');
   });
 });

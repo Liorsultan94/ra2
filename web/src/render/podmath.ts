@@ -205,7 +205,7 @@ export function feedTitle(kind: FeedKind, name: string, callsign: string): strin
   if (kind === 'jet') return `${airframe(name)} · TGT POD`;
   if (kind === 'heli') return `${airframe(name)} · ${heliSight(name)}`;
   if (kind === 'uav') return `${airframe(name)} · ${callsign}`;
-  return `MUNITION FEED · ${callsign}`;
+  return `SEEKER · ${callsign}`;
 }
 
 // ------------------------------------------------------------------ which strike the feed follows
