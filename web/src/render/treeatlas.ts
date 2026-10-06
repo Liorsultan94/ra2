@@ -246,12 +246,15 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
   // ------------------------------------------------------------ willow curtain
   {
     clip(TCell.Willow);
+    // loose strands of uneven length with gaps between them (a dense even fringe reads as a grey curtain wall)
     for (let layer = 0; layer < 2; layer++)
-      for (let i = 0; i < 16; i++) {
-        const x0 = S * (0.06 + 0.88 * ((i + rnd() * 0.8) / 16));
-        const len = S * R(0.6, 0.95);
+      for (let i = 0; i < 12; i++) {
+        if (rnd() < 0.3) continue;
+        const u = (i + rnd() * 0.8) / 12;
+        const x0 = S * (0.06 + 0.88 * u);
+        const len = S * R(0.35, 0.95) * (0.55 + 0.45 * Math.sin(Math.PI * u));
         const sway = R(-0.08, 0.08) * S;
-        ctx.strokeStyle = 'rgba(80,72,50,0.7)';
+        ctx.strokeStyle = 'rgba(70,84,44,0.55)';
         ctx.lineWidth = Math.max(0.6, S * 0.005);
         ctx.beginPath();
         ctx.moveTo(x0, 0);
@@ -264,7 +267,7 @@ export function treeAtlas(cellPx: number): THREE.DataTexture {
           const y = len * t;
           const side = k % 2 ? 1 : -1;
           const lit = 78 * (layer === 0 ? 0.68 : 1) * (1.04 - t * 0.2) * R(0.88, 1.1);
-          leaf('lance', x, y, Math.PI / 2 + side * R(0.25, 0.6), S * R(0.07, 0.1), S * 0.03, 70 + R(-6, 6), 28, lit);
+          leaf('lance', x, y, Math.PI / 2 + side * R(0.25, 0.6), S * R(0.07, 0.1), S * 0.03, 78 + R(-6, 6), 40, lit);
         }
       }
   }

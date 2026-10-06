@@ -1043,7 +1043,7 @@ export function createUrbanMap(seed: number): GameMap {
     blocked,
     techSites: [
       // (in the park's south-west corner, off the street)
-      { def: 'tech_hospital', at: [[22, 49], [22, 50], [24, 46], [20, 54], [10, 54], [22, 58]] },
+      { def: 'tech_hospital', at: [[22, 49], [24, 46], [20, 54], [10, 54], [22, 58]] },
       { def: 'tech_comms', at: [[56, 84], [58, 88], [54, 80], [46, 82], [34, 92]] },
       { def: 'tech_airport', at: [[2, 22], [4, 26], [10, 22], [2, 34], [22, 22]] },
     ],
