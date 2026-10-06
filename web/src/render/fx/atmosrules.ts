@@ -148,7 +148,7 @@ export interface GodRayTier {
  */
 export function godRayTier(q: Tier): GodRayTier {
   if (q === 'high') return { on: true, smoke: true, div: 4, steps: 10, strength: 1 };
-  if (q === 'medium') return { on: true, smoke: false, div: 8, steps: 8, strength: 0.8 };
+  if (q === 'medium') return { on: true, smoke: false, div: 8, steps: 8, strength: 1 };
   return { on: false, smoke: false, div: 8, steps: 0, strength: 0 };
 }
 
