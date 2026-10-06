@@ -33,7 +33,14 @@ export function groundY(m: GameMap, x: number, y: number): number {
   if (x >= 0.3 && y >= 0.3 && x <= m.w - 0.3 && y <= m.h - 0.3) return RELIEF ? Math.max(surfaceHeight(m, x, y), reliefHeight(m, x, y)) : surfaceHeight(m, x, y);
   // the terrain's apron past the edge (apron.ts), then the outskirts mesh
   const W = horizonWorld(m);
-  if (W.outside(x, y) < APRON_W - 3) return apronHeight(m, W, x, y);
+  const o = W.outside(x, y);
+  if (o < APRON_W - 3) return apronHeight(m, W, x, y);
+  const og = outskirtsY(m, x, y);
+  // (the apron's rim lies a hair above the outskirts mesh where they overlap)
+  return o < APRON_W ? Math.max(og, apronHeight(m, W, x, y)) : og;
+}
+
+function outskirtsY(m: GameMap, x: number, y: number): number {
   const g = OUTSKIRTS_GRID;
   const fx = (x - g.origin) / g.cell;
   const fy = (y - g.origin) / g.cell;
