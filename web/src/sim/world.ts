@@ -3,6 +3,7 @@ import {
   ORE_MAX,
   standHeight,
   terrainBuildable,
+  tileOpen,
   terrainPassable,
   type GameMap,
   type MapId,
@@ -564,10 +565,9 @@ export class World {
     const d = buildingDef(defId);
     const { w, h } = this.map;
     if (tx < 0 || ty < 0 || tx + d.w > w || ty + d.h > h) return false;
-    for (let y = ty; y < ty + d.h; y++)
-      for (let x = tx; x < tx + d.w; x++) {
-        if (!terrainBuildable(this.map, x, y) || this.occ[y * w + x] !== 0) return false;
-      }
+    // open, gentle ground off the bridge heads (map.ts), not taken by another building
+    if (!terrainBuildable(this.map, tx, ty, d.w, d.h)) return false;
+    for (let y = ty; y < ty + d.h; y++) for (let x = tx; x < tx + d.w; x++) if (this.occ[y * w + x] !== 0) return false;
     // enemy units block placement
     let blocked = false;
     this.queryRadius(tx + d.w / 2, ty + d.h / 2, Math.max(d.w, d.h), (e) => {
@@ -1854,7 +1854,7 @@ export class World {
         const y = m.y + this.rng.int(7) - 3;
         if (x < 0 || y < 0 || x >= w || y >= h) continue;
         const i = y * w + x;
-        if (!terrainBuildable(this.map, x, y) && ore[i] === 0) continue;
+        if (!tileOpen(this.map, x, y) && ore[i] === 0) continue;
         if (this.occ[i] || !this.pass[i]) continue;
         const kind = oreKind[i] || oreKind[m.y * w + m.x] || 1;
         if (ore[i] < ORE_MAX) {
