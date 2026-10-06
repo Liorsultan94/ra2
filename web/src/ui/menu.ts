@@ -356,7 +356,8 @@ export class MainMenu {
       const art = $('.sum-flagart');
       art.style.backgroundImage = `url("${(flagHtml(f.id).match(/src="([^"]+)"/) ?? [])[1] ?? ''}")`;
       s.style.setProperty('--nat', '#' + f.accent.toString(16).padStart(6, '0'));
-      this.hero.show($('.sum-stage'), f.id);
+      // (the deferred first call can land after the menu is gone: the hero would then hold the old menu)
+      if (s.isConnected) this.hero.show($('.sum-stage'), f.id);
     };
     const setTab = (t: Tab, focus = false) => {
       this.tab = t;

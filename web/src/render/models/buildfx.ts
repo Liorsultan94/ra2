@@ -1493,17 +1493,19 @@ const ALL_FX = new Set<BuildFx>();
 const INFERNO = new Set<BuildFx>();
 
 /**
- * A match is over: forget its buildings. Their roots are still parented in the old scene, so the registry
- * (only pruned of detached roots during an inferno) kept every finished match's whole scene alive.
+ * A match is over: forget its buildings, and every model that is in no scene (the warm-up's and the
+ * prefetch's models, removed visuals). The registry (only pruned of detached roots during an inferno)
+ * kept every finished match's whole scene alive, and the detached models piled up match after match.
+ * Only buildings standing in a live scene can catch fire from a neighbour, so nothing else needs them.
  */
 export function releaseBuildFx(scene: THREE.Object3D) {
-  const inScene = (fx: BuildFx) => {
+  const gone = (fx: BuildFx) => {
     let o: THREE.Object3D = fx.root;
     while (o.parent) o = o.parent;
-    return o === scene;
+    return o === scene || !(o as THREE.Scene).isScene;
   };
-  for (const fx of ALL_FX) if (inScene(fx)) ALL_FX.delete(fx);
-  for (const fx of INFERNO) if (inScene(fx)) INFERNO.delete(fx);
+  for (const fx of ALL_FX) if (gone(fx)) ALL_FX.delete(fx);
+  for (const fx of INFERNO) if (gone(fx)) INFERNO.delete(fx);
 }
 
 /** Per-instance construction / damage driver, called from the model's anim. */
