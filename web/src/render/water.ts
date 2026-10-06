@@ -1658,7 +1658,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float st = texture2D(waveTex, vec2(ax.x * 0.3 - time * 0.4 * sp2, ax.y * 2.2)).a;
           float st2 = texture2D(waveTex, vec2(ax.x * 0.9 - time * 0.9 * sp2, ax.y * 4.1) + 0.5).a;
           float streak = smoothstep(0.5, 0.78, st * 0.65 + st2 * 0.35 + dat.a * 0.12);
-          foam = max(foam, dat.a * dat.a * mix(streak, 1.0, smoothstep(0.85, 1.0, dat.a)) * 0.8);
+          foam = max(foam, dat.a * dat.a * mix(streak, 1.0, smoothstep(0.9, 1.0, dat.a)) * 0.55);
         }
         // eddies swirl foam; rocks and the weir churn it white
         foam = max(foam, dat2.b * smoothstep(0.5, 0.85, fB) * 0.45);
