@@ -1,6 +1,6 @@
 import { DEFS, FACTIONS } from '../sim/defs';
 import type { Difficulty } from '../sim/ai';
-import type { Faction, FogMode, Player } from '../sim/types';
+import type { Faction, Player } from '../sim/types';
 import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
 import { autoQuality } from '../render/autoquality';
@@ -88,14 +88,6 @@ function peaceShort(st: Settings): string {
   const p = st.peace ?? 'auto';
   return p === 'off' ? 'no peace' : `${p === 'auto' ? PEACE_DEFAULT_MIN[st.difficulty] : Number(p)} min peace`;
 }
-const FOG_OPTS: [FogMode, string][] = [
-  ['classic', 'Off (classic)'],
-  ['modern', 'On (modern)'],
-];
-const FOG_NOTE: Record<FogMode, string> = {
-  classic: 'Explored ground stays revealed, as in Red Alert 2',
-  modern: 'Only what your forces see right now',
-};
 const SPEED_OPTS: [GameSpeed, string][] = [
   ['slow', 'Slow'],
   ['normal', 'Normal'],
@@ -308,11 +300,10 @@ export class MainMenu {
               <div class="mm-field"><span class="mm-lbl">Opponent<b data-v="enemy"></b></span>${seg('enemy', 'o', st.enemy, enemies, 'Opponent nation', 'seg-flags')}</div>
               <div class="mm-field"><span class="mm-lbl">Difficulty<b data-v="difficulty"></b></span>${seg('difficulty', 'o', st.difficulty, [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']], 'Difficulty')}</div>
               <div class="mm-field"><span class="mm-lbl">Peace time<b data-v="peace"></b></span>${seg('peace', 'o', st.peace ?? 'auto', PEACE_OPTS, 'Peace time before the enemy attacks')}</div>
-              <div class="mm-field"><span class="mm-lbl">Fog of war<b data-v="fog"></b></span>${seg('fog', 'o', st.fog === 'modern' ? 'modern' : 'classic', FOG_OPTS, 'Fog of war')}</div>
               <div class="mm-field"><span class="mm-lbl">Credits</span>${seg('credits', 'o', String(st.credits), [5000, 10000, 20000].map((c) => [String(c), '$' + c / 1000 + 'k'] as [string, string]), 'Starting credits')}</div>
               <div class="mm-field"><span class="mm-lbl">Start time</span>${seg('tod', 'o', st.tod ?? 'cycle', TOD_OPTS, 'Time of day')}</div>
               <div class="mm-field"><span class="mm-lbl">Weather</span>${seg('weather', 'o', st.weather ?? 'dynamic', WX_OPTS, 'Weather')}</div>
-              <p class="note live-note">The clock always runs (1 min = 1 hour): pick when the battle starts, at dawn 05:30, misty 06:00, day 10:00, dusk 17:30 or night 21:00. The sun sets around 18:30, rain, snow or dust fronts come and go with the map's climate. Map: the battlefield's own fixed weather.</p>
+              <p class="note live-note">The clock always runs (1 min = 1 hour): pick when the battle starts, at dawn 05:30, misty 06:00, day 10:00, dusk 17:30 or night 21:00. The sun sets around 18:30, rain, snow or dust fronts come and go with the map's climate. Map: the battlefield's own fixed weather. By night (about 19:45 to 05:15) units see half as far and only what your forces see right now shows; snipers, tanks, attack helicopters, drones and jets carry night vision, muzzle flashes give shooters away, artillery fires illumination flares and powered bases light floodlights.</p>
             </div>
           </section>
           <aside class="mm-sum mm-glass mm-rise" style="--i:2" aria-label="Loadout">
@@ -351,7 +342,6 @@ export class MainMenu {
       set('enemy2', en ? `${flagHtml(en.id)}${esc(en.name)}` : 'Random nation');
       set('difficulty', esc(DIFF_NOTE[st.difficulty]));
       set('peace', esc(peaceNote(st)));
-      set('fog', esc(FOG_NOTE[st.fog === 'modern' ? 'modern' : 'classic']));
       set('diff2', `${DIFF_LABEL[st.difficulty]} · ${peaceShort(st)}`);
       const art = $('.sum-flagart');
       art.style.backgroundImage = `url("${(flagHtml(f.id).match(/src="([^"]+)"/) ?? [])[1] ?? ''}")`;
@@ -416,7 +406,6 @@ export class MainMenu {
         else if (k === 'tod') st.tod = inp.value as Settings['tod'];
         else if (k === 'weather') st.weather = inp.value as Settings['weather'];
         else if (k === 'peace') st.peace = inp.value as PeaceOption;
-        else if (k === 'fog') st.fog = inp.value === 'modern' ? 'modern' : 'classic';
         sum();
       }),
     );

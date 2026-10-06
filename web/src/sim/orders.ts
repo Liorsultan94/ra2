@@ -54,13 +54,14 @@ export const CLASSIC_REACH = 6;
  * pick targets out to their weapon range (at most CLASSIC_REACH tiles beyond their sight).
  */
 export function scanRange(w: World, e: Entity, d: UnitDef) {
-  if (!d.weapon) return d.sight;
+  const sight = w.sightOf(e); // half by night without night vision (night.ts)
+  if (!d.weapon) return sight;
   const range = w.maxWeaponRange(e); // main and secondary weapon (the Rocket Team's AA missile)
   if (w.fog === 'classic') {
-    const reach = Math.min(range, d.sight + CLASSIC_REACH);
-    return e.stance === 'hold' ? reach : Math.max(d.sight, reach);
+    const reach = Math.min(range, sight + CLASSIC_REACH);
+    return e.stance === 'hold' ? reach : Math.max(sight, reach);
   }
-  return e.stance === 'hold' ? Math.min(d.sight, range) : d.sight;
+  return e.stance === 'hold' ? Math.min(sight, range) : sight;
 }
 
 /** Idle unit without a target: return to its post (guard), stay put (hold), or make this its new post (aggressive). */
@@ -301,13 +302,12 @@ export function ordersIdle(w: World, e: Entity) {
       guardPoint(e, t);
       // defend the charge: go for whoever is shooting at it
       if (e.targetId < 0 && autoFire(e) && w.tick - t.lastHurt < 30 && unitDef(e.def).weapon) {
-        const d = unitDef(e.def);
         let best: Entity | null = null;
         let bd = Infinity;
-        w.queryRadius(t.x, t.y, d.sight, (o) => {
+        w.queryRadius(t.x, t.y, w.sightOf(e), (o) => {
           if (!w.isEnemy(e.owner, o.owner) || o.kind !== 'unit' || unitDef(o.def).temp || !w.canAttack(e.def, o)) return;
           const dd = Math.hypot(o.x - t.x, o.y - t.y);
-          if (dd < bd && w.visibleTo(e.owner, o.x, o.y)) {
+          if (dd < bd && w.sees(e.owner, o)) {
             bd = dd;
             best = o;
           }

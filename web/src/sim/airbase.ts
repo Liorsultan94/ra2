@@ -341,7 +341,7 @@ function targetNear(w: World, e: Entity, x: number, y: number, r: number): Entit
   w.queryRadius(x, y, r, (o) => {
     if (!w.isEnemy(e.owner, o.owner) || o.inside >= 0 || !w.canHit(wpn, o)) return;
     if (o.kind === 'unit' && unitDef(o.def).temp) return;
-    if (!w.visibleTo(e.owner, o.x, o.y)) return;
+    if (!w.sees(e.owner, o)) return;
     const dd = Math.hypot(o.x - x, o.y - y);
     if (dd > r) return;
     // structures and armour first: a heavy bomb is wasted on one rifleman
@@ -365,7 +365,7 @@ function strikeTarget(w: World, e: Entity, s: Sortie): Entity | null {
   const wpn = WEAPONS[unitDef(e.def).weapon!];
   const t = w.foe(o.target); // (a soldier lying wounded is no target: medic.ts)
   const auto = autoStrike(e);
-  if (t && w.isEnemy(e.owner, t.owner) && w.canHit(wpn, t) && (!auto || t.kind === 'building' || w.visibleTo(e.owner, t.x, t.y))) {
+  if (t && w.isEnemy(e.owner, t.owner) && w.canHit(wpn, t) && (!auto || t.kind === 'building' || w.sees(e.owner, t))) {
     s.tx = t.x;
     s.ty = t.y;
     return t;
@@ -403,6 +403,7 @@ function release(w: World, e: Entity, d: UnitDef, s: Sortie, t: Entity) {
   const wpn = WEAPONS[d.weapon!];
   launch(w, e, t, wpn, t.x, t.y);
   e.firedAt = w.tick;
+  e.flashAt = w.tick; // the release gives the jet away by night (night.ts)
   s.ammo = 0;
   // keep the attack order: if the target survives the bomb, the jet comes back for it after rearm and repair
   e.order = { type: 'attack', target: t.id, forced: true };

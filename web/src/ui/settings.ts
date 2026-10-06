@@ -1,7 +1,7 @@
 // Player settings (main menu, skirmish setup and pause menu; src/ui/menu.ts), saved in localStorage.
 
 import type { Difficulty } from '../sim/ai';
-import type { Faction, FogMode } from '../sim/types';
+import type { Faction } from '../sim/types';
 import type { MapId } from '../sim/map';
 import type { Quality } from '../render/renderer';
 import { isPeaceOption, type PeaceOption } from '../sim/peace';
@@ -49,8 +49,6 @@ export interface Settings {
   peace?: PeaceOption;
   /** Game speed: slow 0.75x / normal / fast 1.25x simulation ticks per real second (game/pace.ts). */
   gameSpeed?: GameSpeed;
-  /** Skirmish fog of war: 'classic' = Off (Red Alert 2: explored ground stays revealed), 'modern' = On (sim types.ts). */
-  fog?: FogMode;
   /** Idle units near the base engage attackers on their own (sim/basedefense.ts; can change mid-battle). */
   autoDefend?: boolean;
 }
@@ -65,7 +63,7 @@ export const SETTINGS_KEY = 'ironfront.settings.v1';
 const KEY = SETTINGS_KEY;
 
 export function loadSettings(): Settings {
-  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true, controls: defaultControls(), peace: 'auto', gameSpeed: 'normal', fog: 'classic', autoDefend: true };
+  const def: Settings = { faction: 'usa', enemy: 'random', difficulty: 'normal', credits: 10000, quality: 'auto', sfx: 0.8, music: 0.35, voice: true, cinematic: true, droneCam: 'auto', xray: true, controls: defaultControls(), peace: 'auto', gameSpeed: 'normal', autoDefend: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
@@ -73,7 +71,8 @@ export function loadSettings(): Settings {
       // values from an older or hand-edited save fall back to the defaults
       if (!isPeaceOption(s.peace)) s.peace = def.peace;
       if (!isGameSpeed(s.gameSpeed)) s.gameSpeed = def.gameSpeed;
-      if (s.fog !== 'classic' && s.fog !== 'modern') s.fog = def.fog;
+      // (the fog of war is automatic now: classic by day, the night fog by night; an old save's choice is dropped)
+      delete (s as { fog?: unknown }).fog;
       if (typeof s.autoDefend !== 'boolean') s.autoDefend = def.autoDefend;
       setReadabilityPrefs(s);
       return s;

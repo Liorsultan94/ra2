@@ -6,6 +6,7 @@ import { DEFS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole,
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { Rng } from './rng';
+import { FLARE_RADIUS, illumReady, pickIllum } from './night';
 import { TPS, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
 
@@ -115,6 +116,8 @@ export class AIController implements Controller {
   private thinks = 0;
   private lastLane = -1;
   private chokeAt = 0;
+  /** Night: no new illumination call before this tick (night.ts). */
+  private illumNext = 0;
   /**
    * Early-game grace (peace.ts): until this tick the AI builds, scouts and defends itself but
    * launches nothing at the enemy. 0 = no grace (and waves leave as soon as they are big enough).
@@ -194,6 +197,7 @@ export class AIController implements Controller {
     this.manageProduction(buildings, units);
     this.manageArmy(buildings, units);
     this.manageRepairs(buildings);
+    this.manageIllum(buildings, units);
     this.manageSupport();
     bridgeTactics(w, this.pid, units); // rebuild fallen bridges, drop one under a big assault (bridges.ts)
   }
@@ -206,7 +210,7 @@ export class AIController implements Controller {
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
       if (e.kind === 'unit' && (unitDef(e.def).temp || e.inside >= 0 || e.wound)) continue;
-      if (!w.visibleTo(this.pid, e.x, e.y)) continue;
+      if (!w.sees(this.pid, e)) continue;
       const it = this.intel.get(e.id);
       if (it) {
         it.x = e.x;
@@ -260,6 +264,8 @@ export class AIController implements Controller {
     let threat = 0;
     w.queryRadius(x, y, r, (o) => {
       if (!w.isEnemy(this.pid, o.owner)) return;
+      // by night only what we know of: structures we have found, units we see now (night.ts)
+      if (w.night && (o.kind === 'building' ? !this.knowsBuilding(o) : !w.sees(this.pid, o))) return;
       const od = DEFS[o.def];
       if (!od.weapon || Math.hypot(o.x - x, o.y - y) > r) return;
       const air = airReach(od); // main + secondary weapon (an RPG + MANPADS team counts as 'yes')
@@ -278,6 +284,8 @@ export class AIController implements Controller {
     let bestScore = 0;
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
+      // by night only targets we know of: structures we have found, harvesters we see now (night.ts)
+      if (w.night && (e.kind === 'building' ? !this.knowsBuilding(e) : !w.sees(this.pid, e))) continue;
       let value: number;
       if (e.kind === 'building') {
         const bd = buildingDef(e.def);
@@ -452,6 +460,16 @@ export class AIController implements Controller {
       }
     }
     return true;
+  }
+
+  /**
+   * Does the AI know of this enemy structure: found (intel), or part of the enemy base around its start
+   * (common knowledge, as for the waves' objective)? Never anything else (fog of war, night.ts).
+   */
+  private knowsBuilding(b: Entity): boolean {
+    if (this.intel.has(b.id)) return true;
+    const p = this.world.players[b.owner];
+    return !!p && Math.hypot(b.x - p.startX - 0.5, b.y - p.startY - 0.5) < 10;
   }
 
   private enemyBase(): [number, number] | null {
@@ -666,7 +684,7 @@ export class AIController implements Controller {
     let bs = -Infinity;
     for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 15)) {
       const e = w.get(id);
-      if (!e || (!it.building && !w.visibleTo(this.pid, e.x, e.y))) continue;
+      if (!e || (!it.building && !w.sees(this.pid, e))) continue;
       if (this.peace && !this.defensible(it.x, it.y)) continue;
       const d = DEFS[it.def];
       let value: number;
@@ -744,6 +762,8 @@ export class AIController implements Controller {
     let airThreat: Entity | null = null;
     w.queryRadius(threatened.x, threatened.y, 10, (o) => {
       if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp) return;
+      // by night only threats we can see, or the one that just fired at us (it gave itself away: night.ts)
+      if (w.night && o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
       if (w.isAir(o)) airThreat ??= o;
       else threat ??= o;
     });
@@ -1125,7 +1145,7 @@ export class AIController implements Controller {
     const [hx, hy] = this.home();
     const peace = this.peace;
     for (const u of arty) {
-      if (u.order.type === 'attack') continue;
+      if (u.order.type === 'attack' || u.order.type === 'illum') continue;
       const d = unitDef(u.def);
       const wpn = WEAPONS[d.weapon!];
       const range = w.weaponRange(u, wpn);
@@ -1136,7 +1156,7 @@ export class AIController implements Controller {
         if (!w.isEnemy(this.pid, o.owner) || o.dead) return;
         if (o.kind === 'unit' && (unitDef(o.def).temp || unitDef(o.def).air)) return;
         const dist = w.distTo(u, o);
-        if (dist > range || dist < (wpn.minRange ?? 0) + 0.5 || !w.visibleTo(this.pid, o.x, o.y)) return;
+        if (dist > range || dist < (wpn.minRange ?? 0) + 0.5 || !w.sees(this.pid, o)) return;
         if (peace && !this.defensible(o.x, o.y)) return;
         const k = o.kind === 'unit' ? klass(o.def) : 'none';
         let s = o.kind === 'building' ? (buildingDef(o.def).category === 'defense' ? 6 : 3) : 5;
@@ -1167,6 +1187,63 @@ export class AIController implements Controller {
     this.waves = this.waves.filter((wv) => wv.ids.some((id) => w.get(id)));
   }
 
+  /**
+   * Night (night.ts): illumination rounds from the artillery / mortars, under the same rules as the player.
+   * - Suspected enemies near the base: one of our structures was hit in the last seconds. The shooter's muzzle
+   *   flash may show it, but what comes with it stays dark: light up the structure (or, when the shooter is
+   *   seen, the ground between the two).
+   * - Attacking: a wave closing on its objective lights the ground ahead of its front.
+   * Only spots no flare of ours already lights, only guns that have them in range (nobody leaves its post
+   * for it), at most one call every few seconds.
+   */
+  private manageIllum(buildings: Entity[], units: Entity[]) {
+    const w = this.world;
+    if (!w.night || w.tick < this.illumNext) return;
+    const guns = units.filter((u) => illumReady(w, u) && u.order.type !== 'illum' && this.roleOf(u) !== 'retreat');
+    if (!guns.length) return;
+    const lit = (x: number, y: number) => w.flares.some((f) => f.owner === this.pid && f.end - w.tick > 6 * TPS && Math.hypot(f.x - x, f.y - y) < FLARE_RADIUS * 0.7);
+    const spots: [number, number][] = [];
+    for (const b of buildings) {
+      if (w.tick - b.lastHurt >= TPS * 4) continue;
+      const a = w.get(b.hurtBy);
+      const [x, y] = a && !a.dead && w.sees(this.pid, a) ? [(a.x + b.x) / 2, (a.y + b.y) / 2] : [b.x, b.y];
+      if (!lit(x, y)) spots.push([x, y]);
+      if (spots.length >= 2) break;
+    }
+    if (!this.peace) {
+      for (const wave of this.waves) {
+        let cx = 0;
+        let cy = 0;
+        let n = 0;
+        for (const id of wave.ids) {
+          const u = w.get(id);
+          if (!u || klass(u.def) === 'arty') continue;
+          cx += u.x;
+          cy += u.y;
+          n++;
+        }
+        if (!n) continue;
+        cx /= n;
+        cy /= n;
+        const dx = wave.tx - cx;
+        const dy = wave.ty - cy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 18) continue;
+        const ahead = Math.min(dist, 5);
+        const x = cx + (dist > 0 ? (dx / dist) * ahead : 0);
+        const y = cy + (dist > 0 ? (dy / dist) * ahead : 0);
+        if (!lit(x, y)) spots.push([x, y]);
+      }
+    }
+    for (const [x, y] of spots) {
+      const gun = pickIllum(w, guns, x, y);
+      if (!gun || Math.hypot(gun.x - x, gun.y - y) > w.weaponRange(gun, WEAPONS[unitDef(gun.def).weapon!])) continue;
+      this.cmd({ type: 'illum', ids: [gun.id], x, y });
+      this.illumNext = w.tick + TPS * 6;
+      return;
+    }
+  }
+
   /** Is this unit busy running over a soldier (attack order on infantry in contact; crush.ts)? */
   private crushing(u: Entity): boolean {
     if (u.order.type !== 'attack' || !unitDef(u.def).crusher) return false;
@@ -1189,7 +1266,7 @@ export class AIController implements Controller {
       let best: Entity | null = null;
       let bd = CRUSH_CHASE - 0.2;
       w.queryRadius(u.x, u.y, CRUSH_CHASE, (t) => {
-        if (!w.isEnemy(this.pid, t.owner) || !isCrushable(t) || !w.canHit(wpn, t) || !w.visibleTo(this.pid, t.x, t.y)) return;
+        if (!w.isEnemy(this.pid, t.owner) || !isCrushable(t) || !w.canHit(wpn, t) || !w.sees(this.pid, t)) return;
         if (peace && !this.defensible(t.x, t.y)) return;
         const dx = t.x - u.x;
         const dy = t.y - u.y;
@@ -1220,13 +1297,13 @@ export class AIController implements Controller {
       cx /= alive.length;
       cy /= alive.length;
       let t = w.get(wave.focus);
-      if (!t || Math.hypot(t.x - cx, t.y - cy) > 9 || !w.visibleTo(this.pid, t.x, t.y)) {
+      if (!t || Math.hypot(t.x - cx, t.y - cy) > 9 || !w.sees(this.pid, t)) {
         t = undefined;
         let bs = Infinity;
         w.queryRadius(cx, cy, 8, (o) => {
           if (!w.isEnemy(this.pid, o.owner) || o.kind !== 'unit' || o.dead) return;
           const od = unitDef(o.def);
-          if (od.temp || !od.weapon || !w.visibleTo(this.pid, o.x, o.y)) return;
+          if (od.temp || !od.weapon || !w.sees(this.pid, o)) return;
           // weakest first, dangerous ones (artillery, launchers, anti-tank) a little earlier
           const k = klass(o.def);
           const s = o.hp * (k === 'arty' || k === 'strike' ? 0.6 : 1) + Math.hypot(o.x - cx, o.y - cy) * 25;

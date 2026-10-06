@@ -27,6 +27,8 @@ import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from
 import { evades, lowObsFactor, rangeVs } from './stealth';
 import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, updateMedic, updateWounded, woundUnit } from './medic';
 import { heliGrounded, isHeli, orderLand, updateHeli } from './helipad';
+import { DAY_CLOCK, isNight, nightLevel, nightSight, simHours, type SimClock } from './clock';
+import { FLARE_RADIUS, FLOOD_RADIUS, flareLit, flashLit, floodCentre, floodlit, hasNightVision, muzzleFlash, orderIllum, pickIllum, stepIllum, updateFlares } from './night';
 import {
   CATEGORIES,
   TPS,
@@ -36,6 +38,7 @@ import {
   type Def,
   type Entity,
   type Faction,
+  type Flare,
   type FogMode,
   type Player,
   type Projectile,
@@ -59,7 +62,15 @@ export interface WorldOptions {
   credits?: number;
   /** Which map (default Frontline Crossing); the seed varies its details (sim/maps.ts). */
   map?: MapId;
-  /** Fog of war rule for every player (types.ts FogMode; default 'modern', the game passes the setting). */
+  /**
+   * The match's day clock (sim/clock.ts; the game passes the one the sky shows: render/atmos.ts simClockOf).
+   * Default: a fixed afternoon (DAY_CLOCK).
+   */
+  clock?: SimClock;
+  /**
+   * Tests only: force a fog rule whatever the hour. Default: automatic (types.ts FogMode), classic by day and
+   * the night fog by night; there is no player choice.
+   */
   fog?: FogMode;
 }
 
@@ -125,8 +136,16 @@ export class World {
   over = false;
   /** Collapsible river bridges (bridges.ts). */
   bridges: BridgeState[] = [];
-  /** Fog of war rule (classic: explored = revealed for good; modern: explored ground outside sight is fogged). */
-  readonly fog: FogMode;
+  /** The match's day clock (sim/clock.ts): the hour is derived from the tick. */
+  readonly clock: SimClock;
+  /** Forced fog rule (tests), else null: automatic by the clock. */
+  private forcedFog: FogMode | null;
+  /** 0 = day .. 1 = night (clock.ts nightLevel), updated at the fog cadence: scales the sight of ordinary units. */
+  nightLevel = 0;
+  /** The night rules apply (night fog, muzzle flashes, floodlights; night.ts), updated at the fog cadence. */
+  night = false;
+  /** Illumination flares in flight / burning (night.ts). */
+  flares: Flare[] = [];
   /** The match seed (seeded per-event rolls that must not disturb the shared RNG stream, e.g. medic.ts wound rolls). */
   readonly seed: number;
   /** Soldiers down wounded, waiting for a medic (medic.ts): the short list medics search instead of scanning everything. */
@@ -140,7 +159,9 @@ export class World {
   constructor(opts: WorldOptions) {
     this.rng = new Rng(opts.seed ?? 12345);
     this.seed = (opts.seed ?? 12345) | 0;
-    this.fog = opts.fog === 'classic' ? 'classic' : 'modern';
+    this.clock = opts.clock && Number.isFinite(opts.clock.start) ? { start: opts.clock.start, live: !!opts.clock.live } : DAY_CLOCK;
+    this.forcedFog = opts.fog === 'classic' || opts.fog === 'modern' ? opts.fog : null;
+    this.updateNight();
     this.map = createMap(opts.map ?? 'frontline', opts.seed ?? 12345);
     const { w, h } = this.map;
     this.pass = new Uint8Array(w * h);
@@ -166,6 +187,7 @@ export class World {
         ready: { building: null, defense: null, infantry: null, vehicle: null, air: null },
         explored: new Uint8Array(w * h),
         visible: new Uint8Array(w * h),
+        airVisible: new Uint8Array(w * h),
         defeated: false,
         startX: s.x,
         startY: s.y,
@@ -330,6 +352,8 @@ export class World {
       wound: null,
       treat: 0,
       heli: null,
+      flashAt: -9999,
+      illumAt: 0,
     };
   }
 
@@ -445,6 +469,47 @@ export class World {
 
   isEnemy(a: number, b: number) {
     return a !== b && a >= 0 && b >= 0;
+  }
+
+  /**
+   * Fog of war rule now (types.ts FogMode): automatic, classic (Red Alert 2: explored ground stays revealed)
+   * by day, the night fog ('modern': only current sight shows units) by night.
+   */
+  get fog(): FogMode {
+    return this.forcedFog ?? (this.night ? 'modern' : 'classic');
+  }
+
+  /** Clock hour now (clock.ts; may pass 24 on later days). */
+  hours(): number {
+    return simHours(this.tick, this.clock);
+  }
+
+  private updateNight() {
+    this.nightLevel = nightLevel(this.hours());
+    this.night = isNight(this.nightLevel);
+  }
+
+  /** Sight radius of an entity now: half by night for ordinary units and structures, full with night vision (night.ts). */
+  sightOf(e: Entity): number {
+    const s = DEFS[e.def].sight;
+    return this.nightLevel > 0 && !hasNightVision(e) ? s * nightSight(this.nightLevel) : s;
+  }
+
+  /**
+   * Can this player see this entity now? Its own always; others on currently visible ground (night.ts: by night
+   * that is current sight, flares and floodlights), or given away by a muzzle flash by night.
+   */
+  sees(player: number, e: Entity): boolean {
+    if (e.owner === player) return true;
+    return this.visibleTo(player, e.x, e.y) || flashLit(this, e) || (this.nightLevel > 0 && this.airSeen(player, e));
+  }
+
+  /** By night: an airborne target inside this player's air defence sensor cover (night.ts, Player.airVisible). */
+  private airSeen(player: number, e: Entity): boolean {
+    const tx = Math.floor(e.x);
+    const ty = Math.floor(e.y);
+    if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) return false;
+    return this.players[player].airVisible[ty * this.map.w + tx] > 0 && this.isAir(e);
   }
 
   visibleTo(player: number, x: number, y: number) {
@@ -700,6 +765,14 @@ export class World {
         // medics to a wounded friendly soldier (medic.ts)
         const t = this.get(cmd.target);
         if (t && t.owner === pid && t.wound) orderTreat(this, own(cmd.ids), t);
+        break;
+      }
+      case 'illum': {
+        // illumination round (night.ts): the nearest ready gun of the selection takes the fire mission
+        if (!Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) break;
+        const cand = cmd.ids.map((id) => this.get(id)).filter((e): e is Entity => !!e && e.owner === pid && e.kind === 'unit' && e.inside < 0 && !e.para && !e.wound);
+        const gun = pickIllum(this, cand, cmd.x, cmd.y);
+        if (gun) for (const e of own([gun.id])) orderIllum(this, e, cmd.x, cmd.y);
         break;
       }
       case 'land': {
@@ -1165,7 +1238,7 @@ export class World {
       if (dist > range) return;
       // stealth aircraft: picked up only well inside weapon range (stealth.ts)
       if (wpn && lowObsFactor(this, wpn, t) < 1 && dist > rangeVs(this, e, wpn, t)) return;
-      if (vis && !vis.visible[this.tileOf(t.x, t.y)]) return;
+      if (vis && !this.sees(e.owner, t)) return;
       let score = dist;
       if (wpn?.aim) {
         // lock-on weapons (sniper.ts): infantry first, no buildings
@@ -1278,6 +1351,7 @@ export class World {
       ty += this.rng.range(-spread, spread);
     }
     e.firedAt = this.tick;
+    muzzleFlash(this, e); // gives the shooter away by night (night.ts)
     this.events.push({ t: 'fire', id: e.id, weapon: weaponId, x: e.x, y: e.y, tx, ty, targetId: t.id, owner: e.owner });
     if (wpn.projectile === 'spawn') {
       const m = this.spawnUnit(munitionDef(DEFS[e.def].faction, wpn.spawn!), e.owner, e.x, e.y);
@@ -1457,7 +1531,7 @@ export class World {
           let t = this.airPreempt(e, this.foe(e.targetId));
           if (!t && this.tick >= e.scanAt && autoFire(e)) {
             e.scanAt = this.tick + 8;
-            t = this.findTarget(e, d.sight) ?? undefined;
+            t = this.findTarget(e, this.sightOf(e)) ?? undefined;
             if (t) e.targetId = t.id;
           }
           if (t) {
@@ -1519,6 +1593,9 @@ export class World {
       }
       case 'deploy':
         e.order = { type: 'idle' };
+        break;
+      case 'illum':
+        stepIllum(this, e, d); // illumination round (night.ts)
         break;
       case 'enter': {
         const t = this.get(o.target);
@@ -2153,12 +2230,17 @@ export class World {
   updateVisibility() {
     const { w, h } = this.map;
     for (const p of this.players) p.visible.fill(0);
-    for (const e of this.list) {
-      if (e.dead || e.owner < 0) continue;
-      const p = this.players[e.owner];
-      const r = Math.round(DEFS[e.def].sight);
-      const cx = Math.floor(e.x);
-      const cy = Math.floor(e.y);
+    // air defence sensors keep their daytime reach against aircraft by night (night.ts)
+    const night = this.nightLevel > 0;
+    if (night) for (const p of this.players) p.airVisible.fill(0);
+    const radar = (p: Player, cx: number, cy: number, r: number) => {
+      for (const [ox, oy] of disc(r)) {
+        const x = cx + ox;
+        const y = cy + oy;
+        if (x >= 0 && y >= 0 && x < w && y < h) p.airVisible[y * w + x] = 1;
+      }
+    };
+    const reveal = (p: Player, cx: number, cy: number, r: number) => {
       for (const [ox, oy] of disc(r)) {
         const x = cx + ox;
         const y = cy + oy;
@@ -2167,8 +2249,21 @@ export class World {
         p.visible[i] = 1;
         p.explored[i] = 1;
       }
+    };
+    for (const e of this.list) {
+      if (e.dead || e.owner < 0) continue;
+      // (by night ordinary units see half as far, night vision keeps its full sight: night.ts)
+      reveal(this.players[e.owner], Math.floor(e.x), Math.floor(e.y), Math.round(this.sightOf(e)));
+      if (night && DEFS[e.def].airSensor && e.inside < 0) radar(this.players[e.owner], Math.floor(e.x), Math.floor(e.y), Math.round(DEFS[e.def].sight));
+      // base floodlights by night (powered structures)
+      if (e.kind === 'building' && this.night && floodlit(this, e)) {
+        const [fx, fy] = floodCentre(e);
+        reveal(this.players[e.owner], Math.floor(fx), Math.floor(fy), FLOOD_RADIUS);
+      }
     }
-    // classic (RA2): explored ground stays revealed for good - what is there stays visible and targetable
+    // illumination flares: their owner sees the lit area as by day
+    for (const f of this.flares) if (flareLit(f, this.tick) && this.players[f.owner]) reveal(this.players[f.owner], Math.floor(f.x), Math.floor(f.y), FLARE_RADIUS);
+    // classic (RA2, by day): explored ground stays revealed for good - what is there stays visible and targetable
     if (this.fog === 'classic') for (const p of this.players) p.visible.set(p.explored);
   }
 
@@ -2252,7 +2347,12 @@ export class World {
     this.separate();
     updateCrush(this); // vehicles run over enemy infantry, infantry jump out of the way (crush.ts)
     this.growOre();
-    if (this.tick % 4 === 0) this.updateVisibility();
+    updateFlares(this); // burnt-out illumination flares go (night.ts)
+    if (this.tick % 4 === 0) {
+      // the day clock moves the night rules on at the fog cadence (clock.ts, night.ts)
+      this.updateNight();
+      this.updateVisibility();
+    }
     if (this.tick % TPS === 0) this.checkVictory();
     if (this.tick % 50 === 0) {
       for (const e of this.list) if (e.dead) this.entities.delete(e.id);

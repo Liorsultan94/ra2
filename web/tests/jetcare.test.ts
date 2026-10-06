@@ -7,9 +7,11 @@ import { TPS, type Entity, type SimEvent } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
 /** USA (player 0) vs Russia, starting forces cleared; an airbase for player 0 at (10, 60). */
-function airWorld(seed = 3, factions: ['usa' | 'israel' | 'china', 'russia'] = ['usa', 'russia'], base = true) {
+function airWorld(seed = 3, factions: ['usa' | 'israel' | 'china', 'russia'] = ['usa', 'russia'], base = true, night = false) {
   const w = new World({
     seed,
+    // by night (sim/night.ts) explored ground outside sight hides units; by day it stays revealed (classic)
+    clock: night ? { start: 23, live: false } : undefined,
     players: [
       { name: 'A', faction: factions[0], color: 0, isAI: false },
       { name: 'B', faction: factions[1], color: 0, isAI: false },
@@ -174,7 +176,7 @@ describe('automatic re-strike', () => {
   });
 
   it('drops the re-strike when the target is no longer valid (a unit out of sight)', () => {
-    const { w, af } = airWorld();
+    const { w, af } = airWorld(3, ['usa', 'russia'], true, true);
     const tank = w.spawnUnit('russia_mbt', 1, 40, 30);
     tank.maxHp = tank.hp = 5000; // survives the bomb
     const j = jetAt(w, af);
