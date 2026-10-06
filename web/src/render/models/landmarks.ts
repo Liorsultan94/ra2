@@ -246,7 +246,8 @@ export function castleRuin(k: Kit, seed: number) {
   const tones = [0x8c8478, 0x978e80, 0x81796d, 0x9e9586, 0x7a7468];
   const tone = (a: number, b: number) => tones[Math.floor(h3(seed, a, b) * tones.length)];
   // foundations reach down into the rock (rough blocks, rock coloured)
-  for (let i = 0; i < 6; i++) k.box(0.95 + h3(seed, 60, i) * 0.2, 1.9, 0.75 + h3(seed, 61, i) * 0.2, -1.0 + (i % 3) * 1.0, -1.0, i < 3 ? -0.45 : 0.45, i % 2 ? 0x5e574e : 0x67605a, 0, (h3(seed, 62, i) - 0.5) * 0.2);
+  // (inside the walls' footprint, never wider: where the rock falls away they go down into it, they don't stick out)
+  for (let i = 0; i < 6; i++) k.box(0.9 + h3(seed, 60, i) * 0.1, 2.6, 0.95 + h3(seed, 61, i) * 0.1, -1.0 + (i % 3) * 1.0, -1.35, i < 3 ? -0.5 : 0.5, i % 2 ? 0x5e574e : 0x67605a, 0, (h3(seed, 62, i) - 0.5) * 0.1);
   // curtain walls with gaps and ragged tops
   const wall = (x0: number, z0: number, x1: number, z1: number, h: number, salt: number) => {
     const L = Math.hypot(x1 - x0, z1 - z0);

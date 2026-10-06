@@ -2,6 +2,7 @@ import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, Road, Track, V2 } from '../layout';
 import { bridgeEnds, buildRoadNet, netInputFrom, pointAt, unspike, type RoadNet } from './roadnet';
 import { placeBoards, placeLots } from './sites';
+import { pylonFooting } from '../pylonsite';
 
 /*
  * Road clearance: the civilian lane graph (roadnet.ts) is built while the
@@ -597,7 +598,7 @@ export function finishRoadLayout<L extends Layout>(m: GameMap, layout: L): L {
   layout.pylons.lines = layout.pylons.lines.map((line) => {
     const out: V2[] = [];
     line.forEach((p, i) => {
-      if (!furn(p.x, p.y) && !furn(p.x + 0.35, p.y) && !furn(p.x - 0.35, p.y) && !furn(p.x, p.y + 0.35) && !furn(p.x, p.y - 0.35)) {
+      if (!furn(p.x, p.y) && !furn(p.x + 0.35, p.y) && !furn(p.x - 0.35, p.y) && !furn(p.x, p.y + 0.35) && !furn(p.x, p.y - 0.35) && pylonFooting(m, p.x, p.y)) {
         out.push(p);
         return;
       }
@@ -607,7 +608,7 @@ export function finishRoadLayout<L extends Layout>(m: GameMap, layout: L): L {
       for (const o of [0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) {
         const x = p.x + ((q.x - p.x) / d) * o;
         const y = p.y + ((q.y - p.y) / d) * o;
-        if (tileOk(x, y) && !furn(x, y) && !furn(x + 0.35, y) && !furn(x - 0.35, y) && !furn(x, y + 0.35) && !furn(x, y - 0.35)) {
+        if (tileOk(x, y) && pylonFooting(m, x, y) && !furn(x, y) && !furn(x + 0.35, y) && !furn(x - 0.35, y) && !furn(x, y + 0.35) && !furn(x, y - 0.35)) {
           out.push({ x, y });
           return;
         }
