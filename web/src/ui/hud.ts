@@ -13,7 +13,7 @@ import { canRank } from '../sim/veterancy';
 import { aimStatus, aimWeapon } from '../sim/sniper';
 import { isSortieJet, jetCount, jetRepairing, jetsQueued, padCap, rearmProgress, repairProgress } from '../sim/airbase';
 import { heliRepairing, heliStatus } from '../sim/helipad';
-import { bleedFrac, bleedLeft } from '../sim/medic';
+import { bleedFrac, bleedLeft, treatProgress } from '../sim/medic';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
 import './simple.css';
@@ -501,7 +501,7 @@ export class Hud {
         else extra.push(`Range ${w.range}`, airLabel(w.air, true));
       }
       if (d.aps) extra.push(`APS ${Math.round(d.aps * 100)}%`);
-      if (d.medic) extra.push('Treats wounded soldiers', 'Unarmed');
+      if (d.medic) extra.push('Treats wounded and injured soldiers', 'Unarmed');
       if (d.nvg) extra.push('Night vision');
       if (d.illum) extra.push('Illumination rounds');
     }
@@ -589,7 +589,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.treat > 0 ? 1 : 0}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.treat > 0 ? Math.round(treatProgress(w, e) * 100) : ''}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
     this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
@@ -614,7 +614,7 @@ export class Hud {
         if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
         if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground only');
-        if (d.kind === 'unit' && d.medic) stats.push(e.treat > 0 ? 'Treating a wounded soldier' : 'Treats wounded soldiers', 'Unarmed');
+        if (d.kind === 'unit' && d.medic) stats.push('Treats wounded and injured soldiers', 'Unarmed');
         if (d.kind === 'unit' && d.lowObservable) stats.push('Stealth');
         if (d.kind === 'unit' && d.evasion) stats.push(`Evasion ${Math.round(d.evasion * 100)}%`);
         else if (d.weapon && WEAPONS[d.weapon]) {
@@ -641,8 +641,11 @@ export class Hud {
         const aim = e.kind === 'unit' && e.owner === this.player && aimWeapon(e) && !e.wound ? '<div class="sp-aim"><span>Ready</span><i></i></div>' : '';
         // down wounded: the bleed-out countdown (sim/medic.ts); a helicopter's repair trip (sim/helipad.ts)
         const hurt = e.wound ? `<div class="sp-wound"><span>Wounded - bleeding out ${Math.ceil(bleedLeft(w, e))} s</span><i style="--k:${(1 - bleedFrac(w, e)).toFixed(3)}"></i></div>` : '';
+        // a medic at work (sim/medic.ts): the treatment's progress (a wounded soldier) or the patient's health (a hurt one)
+        const tp = e.owner === this.player && e.kind === 'unit' && unitDef(e.def).medic ? treatProgress(w, e) : -1;
+        const tend = tp >= 0 ? `<div class="sp-jet"><span>Treating ${Math.round(tp * 100)}%</span><i style="--k:${tp.toFixed(3)}"></i></div>` : '';
         const hfix = e.heli && e.owner === this.player ? `<div class="sp-jet${e.heli.phase === 'landed' ? ' repair' : ''}"><span>${heliStatus(e)}</span>${e.heli.phase === 'landed' ? `<i style="--k:${Math.min(1, e.hp / e.maxHp).toFixed(3)}"></i>` : ''}</div>` : '';
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${hfix}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${hfix}${tend}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
         this.aimText = '';
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
@@ -990,6 +993,32 @@ export class Hud {
     ctx.fillRect(cx - l, cy - a, l * 2, a * 2);
   }
 
+  /** Our medic at work (sim/medic.ts): a small "Treating NN%" tag over him, above where his health bar goes. */
+  private drawTreating(ctx: CanvasRenderingContext2D, e: Entity, alpha: number, bk: number, bh: number) {
+    const k = treatProgress(this.world, e);
+    if (k < 0) return;
+    const r = this.renderer;
+    const p = r.entityPos(e, alpha);
+    const top = r.project(p.x, p.y + r.visualHeight(e.id) + 0.14, p.z);
+    const lift = r.readability.fadeAtPoint(p.x, p.y + r.visualHeight(e.id), p.z) * 25;
+    const text = `Treating ${Math.round(k * 100)}%`;
+    const fs = Math.max(9, Math.round(10 * bk));
+    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    const tw = Math.ceil(ctx.measureText(text).width);
+    const cx = Math.round(top.x);
+    // (clear of the health bar's frame below it)
+    const y = Math.round(top.y - 3 - bh - lift - 12 - fs);
+    const x0 = cx - Math.round(tw / 2) - 5;
+    ctx.fillStyle = 'rgba(4,8,10,0.78)';
+    ctx.fillRect(x0, y, tw + 10, fs + 6);
+    ctx.fillStyle = 'rgba(110,240,140,0.95)';
+    ctx.fillRect(x0, y + fs + 4, Math.max(1, (tw + 10) * k), 2);
+    ctx.fillStyle = '#c8f7d2';
+    ctx.textBaseline = 'top';
+    ctx.fillText(text, x0 + 5, y + 2);
+    ctx.textBaseline = 'alphabetic';
+  }
+
   private seen(e: Entity) {
     if (e.owner === this.player) return true;
     if (!this.renderer.isShown(e.id)) return false;
@@ -1105,6 +1134,8 @@ export class Hud {
         if (e.owner === this.player && !attract && this.seen(e)) this.drawWounded(ctx, e, alpha, bk, now);
         continue;
       }
+      // our medic at work (sim/medic.ts): "Treating NN%" over him
+      if (e.treat > 0 && e.owner === this.player && !attract && e.kind === 'unit' && unitDef(e.def).medic) this.drawTreating(ctx, e, alpha, bk, bh);
       // own jets rearming on their pads always show the rearm bar (airbase.ts); helicopters under repair beside it (helipad.ts)
       const heliFix = heliRepairing(e) && e.owner === this.player;
       const rearming = (!!e.sortie && (e.sortie.rearm > 0 || jetRepairing(e)) && e.owner === this.player) || heliFix;

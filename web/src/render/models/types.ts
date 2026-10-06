@@ -93,6 +93,10 @@ export interface AnimState {
   wounded?: number;
   /** Infantry (medics): seconds into treating a wounded soldier (undefined / 0 = not at work): kneeling, hands working on the patient in front. */
   treat?: number;
+  /** Medics at work (treat > 0): 1 = the patient is on his feet (hurt, not down wounded): dressing his wound, no chest compressions. */
+  treatHurt?: number;
+  /** Medics at work: 1 = working standing up, keeping pace with a patient who walks on (no kneeling). */
+  treatStand?: number;
   /** Helicopters set down at an airbase (sim helipad.ts): 1 = on the ground (level, no hover sway, rotors idling), blending in / out with the altitude. */
   landed?: number;
 }

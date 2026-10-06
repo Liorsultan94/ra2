@@ -9,6 +9,7 @@ import { peaceTicks, type PeaceOption } from '../sim/peace';
 import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
+import { treatable } from '../sim/medic';
 import { standHeight, terrainPassable } from '../sim/map';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
@@ -1315,9 +1316,9 @@ export class Game {
       };
     }
     if (target && target.owner === this.local && !(ctrl && ownSel)) {
-      // medics onto a wounded soldier of ours (sim/medic.ts)
-      const medics = units.filter((u) => unitDef(u.def).medic);
-      if (target.wound && medics.length) {
+      // medics onto a wounded or hurt soldier of ours (sim/medic.ts)
+      const medics = units.filter((u) => unitDef(u.def).medic && u.id !== target.id);
+      if (treatable(target) && medics.length) {
         return { cursor: 'enter', run: () => this.order({ type: 'treat', ids: medics.map((u) => u.id), target: target.id }, target, false) };
       }
       // helicopters onto our airbase: land there for repair (sim/helipad.ts)

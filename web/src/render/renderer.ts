@@ -7,6 +7,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
+import { treatPoseOf } from '../sim/medic';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import { heliRepairing } from '../sim/helipad';
@@ -1405,6 +1406,12 @@ export class GameRenderer {
         // down wounded: seconds since he fell; a medic at work: seconds into the treatment (sim/medic.ts)
         a.wounded = e.wound ? Math.max(1e-3, (w.tick - e.wound.at + alpha) / TPS) : 0;
         a.treat = e.treat > 0 ? (e.treat + alpha) / TPS : 0;
+        // a hurt soldier on his feet: dressing only; standing up to work beside one who walks on
+        if (e.treat > 0) {
+          const [hurt, stand] = treatPoseOf(w, e);
+          a.treatHurt = hurt ? 1 : 0;
+          a.treatStand = stand ? 1 : 0;
+        } else a.treatHurt = a.treatStand = 0;
       }
       if (e.kind === 'unit' && unitDef(e.def).weapon2) this.altAim(e, v, a);
       a.damage = 1 - e.hp / e.maxHp;
