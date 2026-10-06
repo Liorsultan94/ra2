@@ -12,6 +12,7 @@ import {
   godRayTier,
   mistClimateK,
   postRainShaftBoost,
+  smokeShade,
   steamAmount,
 } from '../src/render/fx/atmosrules';
 import { WeatherCycle, dryRate, wetStep } from '../src/render/weathercycle';
@@ -182,6 +183,28 @@ describe('chimney smoke', () => {
     expect(chimneyAmount(13, 'temperate', 0.8)).toBeGreaterThan(chimneyAmount(13, 'temperate', 0));
     expect(chimneyAmount(7.5, 'desert')).toBe(0);
     for (let h = 0; h < 24; h += 0.5) expect(chimneyAmount(h, 'winter')).toBeLessThanOrEqual(1);
+  });
+
+  it('reads against snow: darker and denser over white ground, unchanged over grass', () => {
+    // the plume's lit grey (~0.62 x the scene light 0.83) is about as bright as sunlit snow (~0.7 linear)
+    const lit = 0.62 * 0.83;
+    const over = (bg: number, snow: number) => {
+      const s = smokeShade(snow);
+      const lum = lit * (0.3 * s.tint[0] + 0.59 * s.tint[1] + 0.11 * s.tint[2]);
+      // half-way out from a puff's centre (the shader caps the opacity at 0.9)
+      const a = Math.min(0.9, 0.5 * s.alpha);
+      return lum * a + bg * (1 - a);
+    };
+    // the old plain grey barely changed the snow (it vanished on the winter map) ...
+    expect((0.7 - (lit * 0.25 + 0.7 * 0.75)) / 0.7).toBeLessThan(0.1);
+    // ... the snow shading darkens it clearly
+    expect((0.7 - over(0.7, 1)) / 0.7).toBeGreaterThan(0.5);
+    // over grass (no snow) the plume stays the pale grey it was
+    expect(smokeShade(0)).toEqual({ alpha: 0.5, tint: [1, 1, 1] });
+    expect(over(0.05, 0)).toBeGreaterThan(0.05 * 1.8);
+    // bad input is harmless
+    expect(smokeShade(NaN)).toEqual(smokeShade(0));
+    expect(smokeShade(4)).toEqual(smokeShade(1));
   });
 
   it('distance-capped per tier, none on low', () => {
