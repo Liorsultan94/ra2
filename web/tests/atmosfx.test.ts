@@ -191,15 +191,17 @@ describe('chimney smoke', () => {
     const over = (bg: number, snow: number) => {
       const s = smokeShade(snow);
       const lum = lit * (0.3 * s.tint[0] + 0.59 * s.tint[1] + 0.11 * s.tint[2]);
-      return lum * s.alpha + bg * (1 - s.alpha);
+      // half-way out from a puff's centre (the shader caps the opacity at 0.9)
+      const a = Math.min(0.9, 0.5 * s.alpha);
+      return lum * a + bg * (1 - a);
     };
     // the old plain grey barely changed the snow (it vanished on the winter map) ...
-    expect(Math.abs(lit * 0.5 + 0.7 * 0.5 - 0.7) / 0.7).toBeLessThan(0.15);
+    expect((0.7 - (lit * 0.25 + 0.7 * 0.75)) / 0.7).toBeLessThan(0.1);
     // ... the snow shading darkens it clearly
-    expect((0.7 - over(0.7, 1)) / 0.7).toBeGreaterThan(0.4);
+    expect((0.7 - over(0.7, 1)) / 0.7).toBeGreaterThan(0.5);
     // over grass (no snow) the plume stays the pale grey it was
     expect(smokeShade(0)).toEqual({ alpha: 0.5, tint: [1, 1, 1] });
-    expect(over(0.05, 0)).toBeGreaterThan(0.05 * 2);
+    expect(over(0.05, 0)).toBeGreaterThan(0.05 * 1.8);
     // bad input is harmless
     expect(smokeShade(NaN)).toEqual(smokeShade(0));
     expect(smokeShade(4)).toEqual(smokeShade(1));
