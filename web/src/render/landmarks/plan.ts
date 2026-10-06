@@ -359,9 +359,14 @@ function desert(m: GameMap): LandmarkPlan {
   const spots: Spot[] = [];
   // the old town west of the map: a mosque, the souk street, houses and palms
   spots.push(spot('mosque', -9.4, 49.5, 0, 3.2));
-  for (let i = 0; i < 6; i++) {
-    spots.push(spot('souk', -7.0, 55.2 + i * 0.62, 0, 0.6, hh(i, 1, 21)));
-    spots.push(spot('souk', -4.6, 55.4 + i * 0.62, Math.PI, 0.6, hh(i, 2, 21)));
+  // the souk street: stalls of all sizes, unevenly spaced and set, an alley here and there
+  for (const [sx, yaw, sd] of [[-7.0, 0, 1], [-4.6, Math.PI, 2]] as const) {
+    let y = 54.9 + hh(0, sd, 23) * 0.3;
+    for (let i = 0; i < 7 && y < 59.6; i++) {
+      const v = hh(i, sd, 21);
+      if (!(i === 3 && sd === 1) && !(i === 1 && sd === 2)) spots.push(spot('souk', sx + (hh(i, sd + 4, 23) - 0.5) * 0.25, y, yaw + (hh(i, sd + 6, 23) - 0.5) * 0.25, 0.6, v));
+      y += 0.56 + hh(i, sd + 8, 23) * 0.3;
+    }
   }
   const houses: [number, number][] = [[-12.8, 44.2], [-13.4, 55.4], [-12.4, 61.2], [-6.4, 43.2], [-9.6, 66.2], [-14.8, 50.2], [-5.2, 64.6], [-16.2, 58.8], [-8.4, 40.2]];
   houses.forEach(([x, y], i) => spots.push(spot('mudhouse', x, y, (Math.round(hh(i, 4, 21) * 4) * Math.PI) / 2, 0.9, hh(i, 5, 21))));
@@ -370,10 +375,13 @@ function desert(m: GameMap): LandmarkPlan {
   const gx = -11;
   const gy = 79;
   spots.push(spot('pond', gx, gy, 0, 4.2, 0.5, { a: 3.0, b: 2.2 }));
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2 + hh(i, 1, 22);
-    const r = 3.4 + hh(i, 2, 22) * 1.6;
-    spots.push(spot('palm', gx + Math.cos(a) * r * 1.2, gy + Math.sin(a) * r, a * 3, 0.4, hh(i, 3, 22)));
+  // a grove, not a ring: clumps of date palms, thickest on the spring's sheltered (west) side, a few strays
+  for (let i = 0; i < 18; i++) {
+    const a = Math.PI * (0.35 + hh(i, 1, 22) * 1.5) + (hh(i, 4, 22) - 0.5) * 0.8;
+    const r = 4.0 + Math.pow(hh(i, 2, 22), 1.6) * 5.5;
+    const p = { x: gx + Math.cos(a) * r * 1.25, y: gy + Math.sin(a) * r };
+    if (spots.some((q) => q.kind === 'palm' && Math.hypot(q.x - p.x, q.y - p.y) < 0.9)) continue;
+    spots.push(spot('palm', p.x, p.y, hh(i, 5, 22) * 6.28, 0.4, hh(i, 3, 22)));
   }
   const camels: P2[] = [];
   for (let i = 0; i < 6; i++) {
@@ -385,7 +393,8 @@ function desert(m: GameMap): LandmarkPlan {
   spots.push(spot('fort', 30.5, 63, Math.atan2(5, 6), 0, 0.61, { inMap: true }));
   // the refinery skyline north of the map, with its gas flare
   spots.push(spot('refinery', 68, -11, 0, 6.5));
-  const lane = smoothPath([{ x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -5.0, y: 70 }, { x: -3.6, y: 92 }], 3, 0.5);
+  // the caravan track past the town: from the dunes in the north-west, on south to the horizon (horizonworld.ts continues it)
+  const lane = smoothPath([{ x: -21, y: 8 }, { x: -12, y: 24 }, { x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -5.0, y: 70 }, { x: -4.6, y: 92 }, { x: -7.5, y: 106 }, { x: -12, y: 118 }], 3, 0.5);
   const offLane = spots.filter((sp) => sp.kind !== 'palm' || lane.every((p) => Math.hypot(p.x - sp.x, p.y - sp.y) > 1.1));
   return { spots: offLane, rails: [], lanes: [{ pts: lane, width: 0.75 }], camels };
 }

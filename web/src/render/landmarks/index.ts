@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
 import { roadClear } from '../ambient/clearance';
+import { hash2 } from '../../sim/rng';
 import type { Effects } from '../effects';
 import type { FogOfWar } from '../fog';
 import type { AmbientFrame, FogProbe, LightSprites, Quality } from '../ambient/shared';
@@ -323,14 +324,25 @@ export class MapLandmarks {
         const ra = s.a ?? 3;
         const rb = s.b ?? 2;
         const g = groundRange(m, x, y, Math.max(ra, rb) * 1.15);
-        const lvl = g.hi + 0.03;
+        // the desert spring is carved into the ground (horizonworld.ts) and drawn by the outskirts' water
+        // (the river shader: depth, shallows, shore); elsewhere a pond of its own
+        const carved = m.biome === 'desert';
+        const lvl = carved ? WATER_LEVEL : g.hi + 0.03;
         k.at(x, lvl, y, yaw);
-        k.add(new THREE.CircleGeometry(1, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x3e7c82);
-        k.shore(ra, rb, 0, lvl - g.lo + 0.15, 1.1, 0xc8ae80);
+        if (!carved) {
+          k.add(new THREE.CircleGeometry(1, 28).rotateX(-Math.PI / 2).scale(ra, 1, rb), null, 0x3e7c82);
+          k.shore(ra, rb, 0, lvl - g.lo + 0.15, 1.1, 0xc8ae80);
+        }
         // reeds around the water
-        for (let i = 0; i < 22; i++) {
-          const a = (i / 22) * Math.PI * 2 + s.v;
-          k.cone(0.07, 0.3 + (i % 3) * 0.08, Math.cos(a) * ra * 1.04, 0, Math.sin(a) * rb * 1.04, i % 2 ? 0x5a7a2a : 0x6a8a32, 5);
+        // (in clumps of different heights and greens, not a picket fence)
+        for (let i = 0; i < 40; i++) {
+          const h1 = hash2(i, 1, 433);
+          const h2 = hash2(i, 2, 433);
+          const a = h1 * Math.PI * 2 + s.v;
+          // fewer on the open south-east side
+          if (Math.sin(a + 0.6) > 0.45 && h2 < 0.6) continue;
+          const rr = 1.0 + (h2 - 0.4) * 0.16;
+          k.cone(0.04 + h2 * 0.05, 0.18 + hash2(i, 3, 433) * 0.32, Math.cos(a) * ra * rr, 0, Math.sin(a) * rb * rr, [0x5a7a2a, 0x6a8a32, 0x7a8a3a, 0x4e6a26][i % 4], 5);
         }
         this.lakeLevel = lvl;
         break;
@@ -593,6 +605,15 @@ export class MapLandmarks {
       const ang = Math.atan2(b.y - a.y, b.x - a.x);
       // ribbon slab, following the ground across
       const g = Math.max(groundY(m, mx, my), groundY(m, mx - Math.sin(ang) * hw, my + Math.cos(ang) * hw), groundY(m, mx + Math.sin(ang) * hw, my - Math.cos(ang) * hw));
+      if (m.biome === 'desert') {
+        // a packed-sand track (no asphalt out here) that thins out into the dunes at both ends
+        // (its far end runs on to the horizon: horizonworld.ts paths)
+        const taper = Math.min(1, (i + 1) / 6);
+        const c = new THREE.Color(0xa08c6c).lerp(new THREE.Color(0xc2a678), 1 - taper);
+        k.at(mx, g + 0.012, my, ang);
+        k.box(L + 0.1, 0.02, width * (0.35 + 0.65 * taper), 0, -0.008, 0, c.getHex());
+        continue;
+      }
       k.at(mx, g + 0.035, my, ang);
       k.box(L + 0.06, 0.04, width, 0, -0.02, 0, 0x3c3c3e);
       if (width > 0.8) {
