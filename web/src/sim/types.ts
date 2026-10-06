@@ -366,6 +366,10 @@ export interface Entity {
   progX: number;
   progY: number;
   progAt: number;
+  /** jostle watchdog (World.followPath): waypoint index and closest approach to it at the last check, windows without progress */
+  progIdx: number;
+  progBest: number;
+  noProg: number;
   moveGoal: number; // tile index of current path goal, -1 if none
   slotX: number; // sub-tile offset for infantry
   slotY: number;
@@ -395,6 +399,8 @@ export interface Entity {
   qspot: number;
   /** Ore tile it just failed to reach: passed over on the next pick (harvest.ts), -1 = none. */
   oreAvoid: number;
+  /** Ore tile of the field its owner sent it to (harvest.ts): it keeps working that field, -1 = nearest field. */
+  hfield: number;
   /** Run home to unload and be repaired after an attack (harvest.ts), else null. */
   hflee: HarvestFlee | null;
   /** Tick it was last hit by another player, else -9999. */

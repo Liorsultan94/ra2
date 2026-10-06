@@ -426,3 +426,69 @@ describe('harvesters under attack', () => {
     expect(snap()).toBe(snap());
   });
 });
+
+describe('ordered ore field', () => {
+  /** Ore fields of the map: connected ore tiles, with their centres. */
+  function fields(w: World) {
+    const { w: W, h: H, ore } = w.map;
+    const seen = new Uint8Array(W * H);
+    const out: { x: number; y: number; tiles: number[] }[] = [];
+    for (let i = 0; i < W * H; i++) {
+      if (!ore[i] || seen[i]) continue;
+      const st = [i];
+      const tiles: number[] = [];
+      seen[i] = 1;
+      while (st.length) {
+        const j = st.pop()!;
+        tiles.push(j);
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const x = (j % W) + dx;
+            const y = Math.floor(j / W) + dy;
+            const k = y * W + x;
+            if (x >= 0 && y >= 0 && x < W && y < H && ore[k] && !seen[k]) {
+              seen[k] = 1;
+              st.push(k);
+            }
+          }
+      }
+      out.push({ x: tiles.reduce((s, j) => s + (j % W), 0) / tiles.length + 0.5, y: tiles.reduce((s, j) => s + Math.floor(j / W), 0) / tiles.length + 0.5, tiles });
+    }
+    return out;
+  }
+
+  it('a crowd of harvesters sent to a far field keeps working that field', () => {
+    const { w, ref } = hvWorld();
+    // the farthest field from the refinery on our side (nearer to us than to the enemy base)
+    const rx = ref.tx + 1.5;
+    const ry = ref.ty + 1.5;
+    const en = w.map.starts[1];
+    const far = fields(w)
+      .filter((f) => f.tiles.length >= 8 && Math.hypot(f.x - rx, f.y - ry) < Math.hypot(f.x - en.x, f.y - en.y))
+      .sort((a, b) => Math.hypot(b.x - rx, b.y - ry) - Math.hypot(a.x - rx, a.y - ry))[0];
+    expect(Math.hypot(far.x - rx, far.y - ry)).toBeGreaterThan(15);
+    const hs: Entity[] = [];
+    for (let k = 0; k < 6; k++) hs.push(harvester(w, rx - 3 + (k % 3) * 1.5, ry + 4 + Math.floor(k / 3) * 1.5));
+    const t = far.tiles[Math.floor(far.tiles.length / 2)];
+    w.issue(0, { type: 'harvest', ids: hs.map((h) => h.id), x: (t % w.map.w) + 0.5, y: Math.floor(t / w.map.w) + 0.5 });
+    // (ore regrows round its mine, so a field grows past its first tiles: judge by distance)
+    const onField = (j: number) => Math.hypot((j % w.map.w) + 0.5 - far.x, Math.floor(j / w.map.w) + 0.5 - far.y) < HV_FIELD_R;
+    const off: string[] = [];
+    let loads = 0;
+    const prev = hs.map(() => 0);
+    // (until the field is about worked out, some 4 minutes in)
+    for (let i = 0; i < TPS * 200; i++) {
+      w.step();
+      w.drainEvents();
+      hs.forEach((h, k) => {
+        if (h.cargo > prev[k]) {
+          loads++;
+          if (!onField(h.oreTile)) off.push(`#${k} @${h.x.toFixed(1)},${h.y.toFixed(1)} at second ${(i / TPS).toFixed(0)}`);
+        }
+        prev[k] = h.cargo;
+      });
+    }
+    expect(off).toEqual([]);
+    expect(loads).toBeGreaterThan(20);
+  }, 120_000);
+});

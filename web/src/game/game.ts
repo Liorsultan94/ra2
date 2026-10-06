@@ -109,6 +109,9 @@ export class Game {
   private ended = false;
   private startTime = performance.now();
   private hintShown = true;
+  /** The MCV the opening "Your MCV is selected" hint is about (-1: that hint is not up). */
+  private mcvHint = -1;
+  private mcvHintHtml = '';
   private destroyed = false;
   private disposers: (() => void)[] = [];
   readonly cine = new CinematicDirector();
@@ -281,11 +284,11 @@ export class Game {
         this.renderer.centerOn(mcv.x, mcv.y);
       }
       const simple = (opts.controls ?? (window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced')) === 'simple';
-      this.hud.showHint(
-        simple
-          ? 'Your MCV is selected. Tap <b>Deploy</b> (or tap the MCV again) to build your Construction Yard.'
-          : 'Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.',
-      );
+      this.mcvHintHtml = simple
+        ? 'Your MCV is selected. Tap <b>Deploy</b> (or tap the MCV again) to build your Construction Yard.'
+        : 'Your MCV is selected. Press <b>Deploy</b> (or <kbd>D</kbd>, or click the MCV again) to build your Construction Yard.';
+      this.hud.showHint(this.mcvHintHtml);
+      this.mcvHint = mcv ? mcv.id : -1;
       if ((opts.briefing ?? 'full') === 'off') this.audio.say('Battle control online');
     }
     if (!attract) {
@@ -562,6 +565,11 @@ export class Game {
       if (this.local >= 0) this.hud.update(0.1);
       this.ctlUI?.update(this.selectedOwnUnits());
       this.pruneSelection();
+      // the opening MCV hint goes once its MCV is gone (deployed, destroyed) or deselected
+      if (this.mcvHint >= 0 && (!this.world.get(this.mcvHint) || !this.renderer.selection.has(this.mcvHint))) {
+        if (this.hud.hintHtml === this.mcvHintHtml) this.hud.showHint(null); // (not a newer hint)
+        this.mcvHint = -1;
+      }
     }
     this.mmTimer -= dt;
     if (this.local >= 0) {

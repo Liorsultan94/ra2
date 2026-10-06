@@ -155,8 +155,9 @@ export function env(p: AudioParam, t: number, peak: number, a: number, hold: num
 }
 
 export function glide(p: AudioParam, t: number, from: number, to: number, dur: number): void {
-  p.setValueAtTime(Math.max(from, 0.01), t);
-  p.exponentialRampToValueAtTime(Math.max(to, 0.01), t + Math.max(dur, 0.002));
+  // (kept inside the param's nominal range: a frequency above Nyquist only draws a console warning)
+  p.setValueAtTime(Math.min(Math.max(from, 0.01), p.maxValue), t);
+  p.exponentialRampToValueAtTime(Math.min(Math.max(to, 0.01), p.maxValue), t + Math.max(dur, 0.002));
 }
 
 /** Short spikes on a gain param (crackles, ratchets, claps). Times must be ascending. */
@@ -224,7 +225,7 @@ export class Patch {
   filter(type: BiquadFilterType, f: number, q = 0.707): BiquadFilterNode {
     const n = this.add(this.ctx.createBiquadFilter());
     n.type = type;
-    n.frequency.value = f;
+    n.frequency.value = Math.min(f, this.ctx.sampleRate / 2);
     n.Q.value = q;
     return n;
   }
@@ -244,7 +245,7 @@ export class Patch {
   osc(type: OscillatorType, f: number, t0: number, t1: number): OscillatorNode {
     const o = this.add(this.ctx.createOscillator());
     o.type = type;
-    o.frequency.value = f;
+    o.frequency.value = Math.min(f, this.ctx.sampleRate / 2);
     this.sched(o, t0, t1, 0);
     return o;
   }

@@ -299,6 +299,9 @@ export class World {
       progX: x,
       progY: y,
       progAt: 0,
+      progIdx: 0,
+      progBest: 1e9,
+      noProg: 0,
       moveGoal: -1,
       slotX: 0,
       slotY: 0,
@@ -320,6 +323,7 @@ export class World {
       dockSeq: -1,
       qspot: -1,
       oreAvoid: -1,
+      hfield: -1,
       hflee: null,
       hitAt: -9999,
       hresumeAt: -9999,
@@ -1034,6 +1038,9 @@ export class World {
     e.progX = e.x;
     e.progY = e.y;
     e.progAt = this.tick;
+    e.progIdx = 0;
+    e.progBest = 1e9;
+    e.noProg = 0;
   }
 
   /** Walk one tick along the current path (medic.ts). Returns true when the destination is reached. */
@@ -1068,8 +1075,34 @@ export class World {
           this.pathTo(e, sx, sy);
           e.stuckTicks = st;
         }
-      } else e.stuckTicks = 0;
+      } else {
+        e.stuckTicks = 0;
+        // jostle watchdog: shoved about by the crowd, moving but getting no nearer to the waypoint. Skip a
+        // waypoint we can see past after 6 s, re-plan after 10 s, settle where we are after 30 s.
+        const k = e.pathIdx;
+        const wp = k < e.path.length ? e.path[k] : -1;
+        const dw = wp < 0 ? Math.hypot(e.slotX - e.x, e.slotY - e.y) : Math.hypot((wp % w) + 0.5 - e.x, Math.floor(wp / w) + 0.5 - e.y);
+        if (k !== e.progIdx || dw < e.progBest - 0.25) {
+          e.progIdx = k;
+          e.progBest = dw;
+          e.noProg = 0;
+        } else if (++e.noProg >= 30) {
+          e.path = null;
+          e.moving = false;
+          e.noProg = 0;
+          return true;
+        } else if (e.noProg % 6 === 0 && k < e.path.length && this.legClear(e, k + 1)) {
+          e.pathIdx++;
+        } else if (e.noProg === 10) {
+          const n = e.noProg;
+          this.pathTo(e, e.slotX, e.slotY);
+          e.noProg = n;
+        }
+      }
     }
+    // a waypoint counts as reached once we are inside its tile and can drive straight on to the next one: a
+    // group sharing one string-pulled corner would otherwise circle its exact centre, shoving each other off it
+    while (e.pathIdx < e.path.length && this.tileOf(e.x, e.y) === e.path[e.pathIdx] && this.legClear(e, e.pathIdx + 1)) e.pathIdx++;
     const atEnd = e.pathIdx >= e.path.length;
     let wx: number;
     let wy: number;
@@ -1129,6 +1162,29 @@ export class World {
       e.y += (dy / dist) * step;
     }
     return false;
+  }
+
+  /** Can e drive in a straight line from where it stands to path waypoint k (past the end: its slot)? */
+  private legClear(e: Entity, k: number): boolean {
+    const path = e.path!;
+    const { w } = this.map;
+    let tx: number;
+    let ty: number;
+    if (k >= path.length) {
+      if (path.length && path[path.length - 1] !== e.moveGoal) return false; // partial path: walk to its end
+      tx = e.slotX;
+      ty = e.slotY;
+    } else {
+      tx = (path[k] % w) + 0.5;
+      ty = Math.floor(path[k] / w) + 0.5;
+    }
+    const L = Math.hypot(tx - e.x, ty - e.y);
+    const n = Math.ceil(L / 0.25);
+    for (let i = 1; i <= n; i++) {
+      const f = i / n;
+      if (!this.pass[this.tileOf(e.x + (tx - e.x) * f, e.y + (ty - e.y) * f)]) return false;
+    }
+    return true;
   }
 
   /** Aircraft fly straight to their goal, banking round in an arc. */
@@ -1194,10 +1250,12 @@ export class World {
         const wo = 1 - we;
         this.nudge(e, -nx * push * we * 2, -ny * push * we * 2);
         this.nudge(o, nx * push * wo * 2, ny * push * wo * 2);
-        // two vehicles meeting head-on both keep right, so they slide past instead of deadlocking in a lane
-        if (e.moving && o.moving && !d.air && d.category === 'vehicle' && od.category === 'vehicle' && Math.abs(angleDiff(e.facing, o.facing)) > 2.3) {
-          this.nudge(e, -Math.sin(e.facing) * 0.05, Math.cos(e.facing) * 0.05);
-          this.nudge(o, -Math.sin(o.facing) * 0.05, Math.cos(o.facing) * 0.05);
+        // two vehicles (or two soldiers) meeting head-on both keep right, so they slide past instead of
+        // deadlocking in a lane or on a bridge
+        if (e.moving && o.moving && !d.air && d.category === od.category && d.category !== 'air' && Math.abs(angleDiff(e.facing, o.facing)) > 2.3) {
+          const k = d.category === 'vehicle' ? 0.05 : 0.025;
+          this.nudge(e, -Math.sin(e.facing) * k, Math.cos(e.facing) * k);
+          this.nudge(o, -Math.sin(o.facing) * k, Math.cos(o.facing) * k);
         }
       });
     }

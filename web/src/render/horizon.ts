@@ -117,8 +117,13 @@ export function hzClone<T extends THREE.Material>(src: T, key: string): T {
 /** A copy of the battlefield's water ShaderMaterial (same uniforms, live) with the horizon fog block. */
 export function hzWaterClone(src: THREE.ShaderMaterial): THREE.ShaderMaterial | null {
   if (!src.fragmentShader.includes('col = fogShade(col, vWorld);')) return null;
+  // copied without its uniforms (the live ones are shared below): cloning them would try to copy the
+  // reflection render-target textures, which three refuses with a console warning
+  const live = src.uniforms;
+  src.uniforms = {};
   const m = src.clone();
-  m.uniforms = { ...src.uniforms, ...HORIZON };
+  src.uniforms = live;
+  m.uniforms = { ...live, ...HORIZON };
   m.fragmentShader = src.fragmentShader.replace('col = fogShade(col, vWorld);', 'col = hzShade(col, vWorld);').replace(/void main\(\)\s*\{/, `${HZ_GLSL}\nvoid main() {`);
   m.userData = src.userData;
   return m;

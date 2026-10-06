@@ -35,6 +35,8 @@ export const HV_REPAIR_RATE = 0.03;
 export const HV_THREAT_R = 5;
 /** Radius (tiles) of an ore field around the point a harvester worked at, for the calm check. */
 export const HV_FIELD_R = 7;
+/** How far (path steps) from the tile its owner picked a harvester looks for ore on that field (pickOre). */
+const HV_FIELD_KEEP = 10;
 /** A field must have been calm this long (ticks) before a harvester goes back to it. */
 export const HV_CALM = TPS * 15;
 /** At most one "harvester under attack" alert per player this often (ticks). */
@@ -254,7 +256,7 @@ function claims(w: World, self: Entity): Set<number> {
  * is): the nearest one nobody has claimed, preferring tiles with no claimed neighbour and off hot fields.
  * `strict`: never a tile on a hot field (going back to work after an attack). -1 when there is none.
  */
-export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict = false): number {
+export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict = false, maxDist = Infinity): number {
   const { w: W, h: H, ore } = w.map;
   const taken = claims(w, e);
   const hot = hotList(w, e.owner).map((f) => ({ x: f.x, y: f.y, far: Math.hypot(f.x - e.x, f.y - e.y) > HV_THREAT_R + 1 }));
@@ -267,7 +269,7 @@ export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict 
   for (let qi = 0; qi < queue.length && qi < 6000; qi++) {
     const t = queue[qi];
     const dd = dist[qi];
-    if (dd > bestScore) break;
+    if (dd > bestScore || dd > maxDist) break;
     if (ore[t] > 0) {
       const x = t % W;
       const y = (t - x) / W;
@@ -316,6 +318,23 @@ function crowding(taken: Set<number>, x: number, y: number, W: number): number {
       c += Math.max(Math.abs(dx), Math.abs(dy)) === 1 ? 3 : 1;
     }
   return c;
+}
+
+/**
+ * Next ore tile for a harvester: on the field its owner sent it to while that field has ore and is not under
+ * attack (a crowd there queues or spreads over it, it does not wander off to the nearest field), else the
+ * best one anywhere.
+ */
+function pickOre(w: World, e: Entity): number {
+  if (e.hfield >= 0) {
+    const W = w.map.w;
+    if (!fieldHot(w, e.owner, (e.hfield % W) + 0.5, Math.floor(e.hfield / W) + 0.5)) {
+      const t = findOre(w, e, e.hfield, false, HV_FIELD_KEEP);
+      if (t >= 0) return t;
+      e.hfield = -1; // worked out
+    }
+  }
+  return findOre(w, e);
 }
 
 function goToOre(w: World, e: Entity, t: number) {
@@ -472,6 +491,7 @@ export function orderHarvest(w: World, e: Entity, x: number, y: number) {
   leaveQueue(e);
   e.oreAvoid = -1;
   const t = w.tileOf(x, y);
+  e.hfield = w.map.ore[t] > 0 ? t : -1;
   if (w.map.ore[t] > 0) goToOre(w, e, t);
   else {
     e.hstate = e.cargo > 0 ? 'toRefinery' : 'seek';
@@ -516,7 +536,7 @@ export function updateHarvester(w: World, e: Entity, d: UnitDef) {
         if (e.path) w.walk(e, d);
         break;
       }
-      const t = findOre(w, e);
+      const t = pickOre(w, e);
       if (t < 0) {
         if (e.cargo > 0) e.hstate = 'toRefinery';
         else e.htimer = TPS * 3;
@@ -573,7 +593,7 @@ export function updateHarvester(w: World, e: Entity, d: UnitDef) {
         break;
       }
       if (ore[t] === 0) {
-        const next = findOre(w, e);
+        const next = pickOre(w, e);
         if (next >= 0) goToOre(w, e, next);
         else if (e.cargo > 0) {
           e.hstate = 'toRefinery';
