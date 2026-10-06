@@ -1440,8 +1440,15 @@ export class AIController implements Controller {
     const deep = this.doctrine.deep;
     let best: [number, number] | null = null;
     let bd = Infinity;
+    const [hx, hy] = this.home();
+    const enemy = this.enemyBase();
     for (const [, it] of this.known(() => true, TPS * 15)) {
-      let d = Math.hypot(it.x - ox, it.y - oy) + (it.building ? 0 : 15);
+      // units are worth a wave's trip when they press our base or stand in theirs; ones roaming the middle get
+      // fought on the way (attack-move), else every wave just trades with the other side's in the open middle
+      // of a map with no river between the bases (desert) and nobody ever reaches a base
+      // (an outpost - a captured derrick or tech site, a forward gun - is worth less than the base itself)
+      const away = Math.hypot(it.x - hx, it.y - hy) > 20 && (!enemy || Math.hypot(it.x - enemy[0], it.y - enemy[1]) > 20);
+      let d = Math.hypot(it.x - ox, it.y - oy) + (it.building ? (away ? 40 : 0) : away ? 100 : 15);
       if (it.building) {
         const k = deep.indexOf(buildingDef(it.def).role);
         if (k >= 0 && this.cfg.micro > 0) d -= 6 - k * 1.5;
@@ -1451,10 +1458,7 @@ export class AIController implements Controller {
         best = [it.x, it.y];
       }
     }
-    if (!best) {
-      const enemy = this.enemyBase();
-      if (enemy) best = [enemy[0], enemy[1]];
-    }
+    if (!best && enemy) best = [enemy[0], enemy[1]];
     return best;
   }
 
