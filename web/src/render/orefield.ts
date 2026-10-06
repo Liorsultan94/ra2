@@ -7,8 +7,9 @@ import { hash2 } from '../sim/rng';
  * The field of a deposit is every tile that holds ore when the battle starts
  * plus the square around its rig where the sim regrows ore (world.ts growOre:
  * rig +-3 tiles). Ore can never appear anywhere else, so this is where the
- * ground stain goes, where the crystals may stand, and what render-only props
- * (bushes, scree) keep out of.
+ * crystals may stand and what render-only props (bushes, scree) keep out of.
+ * (The ground stain stays the organic patch of the starting field: growing it
+ * to the regrowth square made square stains.)
  */
 
 /** Regrowth reach around a rig (tiles, Chebyshev): world.ts growOre picks rig + int(7) - 3. */
@@ -108,7 +109,7 @@ export function planOreSlots(m: GameMap, kinds = oreFieldKinds(m)): OreSlot[] {
       const px = Math.min(0.86, Math.max(0.14, 0.5 + Math.cos(a) * r));
       const pz = Math.min(0.86, Math.max(0.14, 0.5 + Math.sin(a) * r));
       const h = hash2(x, y, 720 + k);
-      const scale = kind === 2 ? (big ? 0.36 + h * 0.1 : 0.3 + h * 0.12) : big ? 0.36 + h * 0.08 : 0.32 + h * 0.08;
+      const scale = kind === 2 ? (big ? 0.42 + h * 0.1 : 0.34 + h * 0.12) : big ? 0.36 + h * 0.08 : 0.4 + h * 0.08;
       out.push({
         tile: i,
         rank: k,

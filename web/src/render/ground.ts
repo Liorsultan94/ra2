@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { oreFieldKinds } from './orefield';
 import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
 import { fbm, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
@@ -401,9 +400,6 @@ export class Ground {
       }
     const TW = 7;
     const tileW = new Float32Array(W * m.h * TW);
-    // the whole field: the ore tiles plus the ground around the rig where ore regrows (orefield.ts);
-    // only the ore tiles feather the edge, so the stain does not grow a ring around the regrowth square
-    const fieldK = oreFieldKinds(m);
     const oreNear = (i: number, kind: number) => {
       const x = i % W;
       const y = (i / W) | 0;
@@ -431,16 +427,16 @@ export class Ground {
       }
       const ore = oreNear(i, 1);
       const gem = oreNear(i, 2);
-      if (fieldK[i] === 1 || ore > 0.3) {
+      if (m.oreKind[i] === 1 || ore > 0.3) {
         tileW[o] = Math.max(tileW[o], 0.75);
         tileW[o + 3] = 0.2;
-        tileW[o + 4] = Math.max(ore, fieldK[i] === 1 ? 0.8 : 0);
+        tileW[o + 4] = Math.max(ore, m.oreKind[i] === 1 ? 0.8 : 0);
       }
-      if (fieldK[i] === 2 || gem > 0.3) {
+      if (m.oreKind[i] === 2 || gem > 0.3) {
         tileW[o] = Math.max(tileW[o], 0.35);
         tileW[o + 1] = Math.max(tileW[o + 1], 0.35);
         tileW[o + 2] = Math.max(tileW[o + 2], 0.2);
-        tileW[o + 5] = Math.max(gem, fieldK[i] === 2 ? 0.8 : 0);
+        tileW[o + 5] = Math.max(gem, m.oreKind[i] === 2 ? 0.8 : 0);
       }
       if (m.trees[i]) tileW[o + 6] = 1;
     }

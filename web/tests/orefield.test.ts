@@ -70,7 +70,7 @@ describe('ore fields are tidy', () => {
     });
   }
 
-  it('the regrowing ore never leaves the field (the ground stain and the crystals cover it all)', () => {
+  it('the regrowing ore never leaves the planned field (crystals and keep-out cover it all)', () => {
     const w = new World({
       seed: 5,
       players: [
