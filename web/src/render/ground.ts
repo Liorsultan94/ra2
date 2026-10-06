@@ -282,7 +282,7 @@ export class Ground {
     mat.defines.FIELD_STEP = bc === 3 ? '30.0' : '60.0';
     mat.defines.TERR_DIRT_RELIEF = bc === 3 ? '0.0' : bc === 1 ? '0.06' : '0.1';
     // the winter ground paints its own snow (deeper, drifted, kept off roads and ruts)
-    if (bc === 2) mat.defines.WX_SNOW_K = '0.0';
+    if (bc === 2) mat.defines.WX_SNOW_K = 'apSnowK';
     // the terrain paints its own puddles (below): no generic flat-surface puddles (wxuniforms.ts)
     mat.defines.WX_NO_PUDDLE = 1;
     // ... and its own wet look (porosity, soaking from the hollows; below)
@@ -846,6 +846,8 @@ varying vec4 vApO;
 
 const TERRAIN_PARS = /* glsl */ `
 varying vec3 vTerrW;
+// the weather snow the outskirts get (wxuniforms.ts) is let in on the apron's rim (winter: WX_SNOW_K)
+float apSnowK = 0.0;
 varying vec4 vApS;
 varying vec4 vApT;
 varying vec4 vApC;
@@ -1617,7 +1619,9 @@ ${PHOTO_MAP}
     vec4 apG = texture2D(fogNoise, vTerrW.xz * 0.37);
     vec4 apG2 = texture2D(fogNoise, vTerrW.xz * 1.9);
     vec3 apC = pow(vApO.rgb * (0.86 + apG.r * 0.18 + apG2.g * 0.12), vec3(2.2));
-    diffuseColor.rgb = mix(diffuseColor.rgb, apC, apF);
+    // (the outskirts get the generic rain darkening and snow cover: so does the rim)
+    diffuseColor.rgb = mix(diffuseColor.rgb, apC * (1.0 - 0.38 * wxWet), apF);
+    apSnowK = apF;
     terrRough = mix(terrRough, 0.97, apF);
     terrB *= 1.0 - apF;
     terrH *= 1.0 - apF;
