@@ -837,6 +837,13 @@ export class Game {
           this.sfx('alarm', undefined, undefined, 0.5);
         }
         break;
+      case 'harvesterAttack':
+        // a harvester running home to unload and be repaired (sim/harvest.ts throttles it to one per 20 s)
+        if (mine) {
+          this.say('Harvester under attack', 'warn');
+          this.sfx('alarm', undefined, undefined, 0.5);
+        }
+        break;
       case 'captured':
         if (mine) this.say('Building captured', 'good');
         break;

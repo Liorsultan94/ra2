@@ -13,6 +13,7 @@ import { canRank } from '../sim/veterancy';
 import { aimStatus, aimWeapon } from '../sim/sniper';
 import { isSortieJet, jetCount, jetRepairing, jetsQueued, padCap, rearmProgress, repairProgress } from '../sim/airbase';
 import { heliRepairing, heliStatus } from '../sim/helipad';
+import { harvestStatus, harvesterRepairing } from '../sim/harvest';
 import { bleedFrac, bleedLeft } from '../sim/medic';
 import { LivePortrait } from './portrait3d';
 import { hasIcon, icon } from './icons';
@@ -589,7 +590,7 @@ export class Hud {
   private updateSelection() {
     const w = this.world;
     const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.treat > 0 ? 1 : 0}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
+    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.hflee ? harvestStatus(e) : ''}:${e.treat > 0 ? 1 : 0}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
     this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
@@ -642,7 +643,10 @@ export class Hud {
         // down wounded: the bleed-out countdown (sim/medic.ts); a helicopter's repair trip (sim/helipad.ts)
         const hurt = e.wound ? `<div class="sp-wound"><span>Wounded - bleeding out ${Math.ceil(bleedLeft(w, e))} s</span><i style="--k:${(1 - bleedFrac(w, e)).toFixed(3)}"></i></div>` : '';
         const hfix = e.heli && e.owner === this.player ? `<div class="sp-jet${e.heli.phase === 'landed' ? ' repair' : ''}"><span>${heliStatus(e)}</span>${e.heli.phase === 'landed' ? `<i style="--k:${Math.min(1, e.hp / e.maxHp).toFixed(3)}"></i>` : ''}</div>` : '';
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${hfix}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        // a harvester's run home after an attack (sim/harvest.ts): returning, then repairing beside the refinery
+        const hvs = e.owner === this.player ? harvestStatus(e) : '';
+        const hvfix = hvs ? `<div class="sp-jet${e.hflee?.parked ? ' repair' : ' rearm'}"><span>${hvs}</span>${e.hflee?.parked ? `<i style="--k:${Math.min(1, e.hp / e.maxHp).toFixed(3)}"></i>` : ''}</div>` : '';
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${hfix}${hvfix}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
         this.aimText = '';
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));
@@ -1106,7 +1110,8 @@ export class Hud {
         continue;
       }
       // own jets rearming on their pads always show the rearm bar (airbase.ts); helicopters under repair beside it (helipad.ts)
-      const heliFix = heliRepairing(e) && e.owner === this.player;
+      // (and harvesters parked for repair beside the refinery: sim/harvest.ts)
+      const heliFix = (heliRepairing(e) || harvesterRepairing(e)) && e.owner === this.player;
       const rearming = (!!e.sortie && (e.sortie.rearm > 0 || jetRepairing(e)) && e.owner === this.player) || heliFix;
       const bar = selected || e.id === hover || recent || rearming;
       const pop = e.kind === 'unit' ? this.rankPops.pop(e, now) : 0;

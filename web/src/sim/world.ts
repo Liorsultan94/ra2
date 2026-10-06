@@ -1,8 +1,6 @@
 import { DEFS, FACTION_INFO, VERSUS, WEAPONS, buildingDef, factionDefByRole, factionUnit, munitionDef, unitDef } from './defs';
 import {
-  GEM_VALUE,
   ORE_MAX,
-  ORE_VALUE,
   standHeight,
   terrainBuildable,
   terrainPassable,
@@ -27,6 +25,7 @@ import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from
 import { evades, lowObsFactor, rangeVs } from './stealth';
 import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, updateMedic, updateWounded, woundUnit } from './medic';
 import { heliGrounded, isHeli, orderLand, updateHeli } from './helipad';
+import { harvesterHit, hvPriority, orderHarvest, updateHarvester } from './harvest';
 import { DAY_CLOCK, isNight, nightLevel, nightSight, simHours, type SimClock } from './clock';
 import { FLARE_RADIUS, FLOOD_RADIUS, flareLit, flashLit, floodCentre, floodlit, hasNightVision, muzzleFlash, orderIllum, pickIllum, stepIllum, updateFlares } from './night';
 import {
@@ -78,7 +77,6 @@ export interface Controller {
   update(): void;
 }
 
-const HARVEST_CAPACITY = 900;
 const BUILD_RADIUS = 5;
 const SPATIAL_CELL = 4;
 /** Units with two weapons (UnitDef.weapon2): ticks to swap launchers before the other one can fire. */
@@ -150,6 +148,10 @@ export class World {
   readonly seed: number;
   /** Soldiers down wounded, waiting for a medic (medic.ts): the short list medics search instead of scanning everything. */
   wounded: Entity[] = [];
+  /** Refinery dock queue tickets handed out so far (harvest.ts). */
+  hvSeq = 0;
+  /** Ore fields where harvesters were attacked or saw hostiles lately, per player (harvest.ts). */
+  hvHot: { owner: number; x: number; y: number; at: number; chk: number }[] = [];
   private nextId = 1;
   private pending: { player: number; cmd: Command }[] = [];
   private grid: Entity[][];
@@ -194,6 +196,7 @@ export class World {
         stats: { built: 0, lost: 0, killed: 0, harvested: 0 },
         noFundsWarnAt: -9999,
         attackWarnAt: -9999,
+        harvWarnAt: -9999,
         lowPowerWarned: false,
         radarOnline: false,
         airdropAt: -1,
@@ -314,6 +317,13 @@ export class World {
       hstate: 'seek',
       htimer: 0,
       oreTile: -1,
+      dockSeq: -1,
+      qspot: -1,
+      oreAvoid: -1,
+      hflee: null,
+      hitAt: -9999,
+      hresumeAt: -9999,
+      hvProg: 0,
       tx: 0,
       ty: 0,
       buildAnim: 1,
@@ -605,6 +615,8 @@ export class World {
       for (const e of units) {
         if (cmd.type !== 'stance') e.orderAt = this.tick;
         if (e.defend) releaseDefender(this, e, cmd.type === 'stance');
+        // a harvester running home after an attack does what it is told instead (harvest.ts)
+        if (cmd.type !== 'stance') e.hflee = null;
         // a medic given another order leaves his patient for someone else (medic.ts)
         if (cmd.type !== 'stance' && cmd.type !== 'treat') releasePatient(this, e);
       }
@@ -677,16 +689,7 @@ export class World {
         break;
       }
       case 'harvest':
-        for (const e of own(cmd.ids)) {
-          if (!unitDef(e.def).harvester) continue;
-          e.order = { type: 'harvest' };
-          const t = this.tileOf(cmd.x, cmd.y);
-          if (this.map.ore[t] > 0) {
-            e.oreTile = t;
-            e.hstate = 'toOre';
-            this.pathTo(e, (t % this.map.w) + 0.5, Math.floor(t / this.map.w) + 0.5);
-          } else e.hstate = e.cargo > 0 ? 'toRefinery' : 'seek';
-        }
+        for (const e of own(cmd.ids)) if (unitDef(e.def).harvester) orderHarvest(this, e, cmd.x, cmd.y); // harvest.ts
         break;
       case 'produce': {
         if (!this.canBuild(pid, cmd.def)) break;
@@ -1108,7 +1111,12 @@ export class World {
     } else {
       e.facing = turnToward(e.facing, want, d.turnRate);
       if (!d.turret) e.turret = e.facing;
-      if (Math.abs(angleDiff(e.facing, want)) > 0.7) return false; // turn in place
+      if (Math.abs(angleDiff(e.facing, want)) > 0.7) {
+        // turn in place; a slow-turning harvester swinging round is not stuck (harvest.ts: it would give up on a
+        // tile behind it and swing back and forth between two tiles)
+        if (d.harvester) e.progAt = this.tick;
+        return false;
+      }
     }
     e.moving = true;
     if (dist <= step) {
@@ -1176,6 +1184,12 @@ export class World {
         const eh = !e.moving && e.stance === 'hold';
         const oh = !o.moving && o.stance === 'hold';
         if (eh !== oh) we = eh ? 0 : 1;
+        // harvesters of one owner give way by task: the one on the dock, then miners, then the rest (harvest.ts)
+        if (d.harvester && od.harvester && e.owner === o.owner) {
+          const pe = hvPriority(this, e);
+          const po = hvPriority(this, o);
+          if (pe !== po) we = pe > po ? 0.1 : 0.9;
+        }
         const wo = 1 - we;
         this.nudge(e, -nx * push * we * 2, -ny * push * we * 2);
         this.nudge(o, nx * push * wo * 2, ny * push * wo * 2);
@@ -1405,7 +1419,10 @@ export class World {
     t.lastHurt = this.tick;
     if (t.owner >= 0 && src.owner !== t.owner) {
       const p = this.players[t.owner];
-      if (this.tick - p.attackWarnAt > TPS * 12) {
+      t.hitAt = this.tick;
+      // a harvester runs home and its owner hears "harvester under attack" (harvest.ts)
+      if (t.kind === 'unit' && (d as UnitDef).harvester) harvesterHit(this, t);
+      else if (this.tick - p.attackWarnAt > TPS * 12) {
         p.attackWarnAt = this.tick;
         this.events.push({ t: 'underAttack', owner: t.owner, x: t.x, y: t.y });
       }
@@ -1576,7 +1593,7 @@ export class World {
         break;
       }
       case 'harvest':
-        this.updateHarvester(e, d);
+        updateHarvester(this, e, d); // harvest.ts
         break;
       case 'capture': {
         const t = this.get(o.target);
@@ -1824,188 +1841,6 @@ export class World {
   }
 
   // ------------------------------------------------------------ harvesting
-
-  private findOre(e: Entity): number {
-    const { w, h, ore } = this.map;
-    const start = this.tileOf(e.x, e.y);
-    const seen = new Uint8Array(w * h);
-    const queue = [start];
-    seen[start] = 1;
-    // prefer tiles not claimed by other harvesters
-    const claimed = new Set<number>();
-    for (const o of this.list) if (!o.dead && o !== e && o.oreTile >= 0 && o.owner === e.owner) claimed.add(o.oreTile);
-    let fallback = -1;
-    for (let qi = 0; qi < queue.length && qi < 6000; qi++) {
-      const t = queue[qi];
-      if (ore[t] > 0) {
-        if (!claimed.has(t)) return t;
-        if (fallback < 0) fallback = t;
-      }
-      const x = t % w;
-      const y = (t - x) / w;
-      if (x > 0 && !seen[t - 1] && this.pass[t - 1]) (seen[t - 1] = 1), queue.push(t - 1);
-      if (x < w - 1 && !seen[t + 1] && this.pass[t + 1]) (seen[t + 1] = 1), queue.push(t + 1);
-      if (y > 0 && !seen[t - w] && this.pass[t - w]) (seen[t - w] = 1), queue.push(t - w);
-      if (y < h - 1 && !seen[t + w] && this.pass[t + w]) (seen[t + w] = 1), queue.push(t + w);
-    }
-    return fallback;
-  }
-
-  private nearestRefinery(e: Entity): Entity | null {
-    let best: Entity | null = null;
-    let bd = Infinity;
-    for (const b of this.list) {
-      if (b.dead || b.owner !== e.owner || b.kind !== 'building' || !buildingDef(b.def).dock) continue;
-      const dist = Math.hypot(b.x - e.x, b.y - e.y) + (b.dockedBy >= 0 && b.dockedBy !== e.id ? 6 : 0);
-      if (dist < bd) {
-        bd = dist;
-        best = b;
-      }
-    }
-    return best;
-  }
-
-  private updateHarvester(e: Entity, d: UnitDef) {
-    const { w, ore, oreKind } = this.map;
-    e.idleTicks = 0;
-    switch (e.hstate) {
-      case 'seek': {
-        if (e.htimer > 0) {
-          e.htimer--;
-          break;
-        }
-        const t = this.findOre(e);
-        if (t < 0) {
-          if (e.cargo > 0) e.hstate = 'toRefinery';
-          else e.htimer = TPS * 3;
-          break;
-        }
-        e.oreTile = t;
-        e.hstate = 'toOre';
-        this.pathTo(e, (t % w) + 0.5, Math.floor(t / w) + 0.5);
-        break;
-      }
-      case 'toOre': {
-        if (ore[e.oreTile] === 0) {
-          e.hstate = 'seek';
-          e.oreTile = -1;
-          break;
-        }
-        if (this.followPath(e, d)) {
-          if (this.tileOf(e.x, e.y) === e.oreTile) {
-            e.hstate = 'mining';
-            e.htimer = 0;
-          } else e.hstate = 'seek';
-        }
-        break;
-      }
-      case 'mining': {
-        e.moving = false;
-        if (++e.htimer < 7) break;
-        e.htimer = 0;
-        const t = e.oreTile;
-        if (ore[t] > 0) {
-          ore[t]--;
-          e.cargo += oreKind[t] === 2 ? GEM_VALUE : ORE_VALUE;
-          if (ore[t] === 0) oreKind[t] = 0;
-        }
-        if (e.cargo >= HARVEST_CAPACITY) {
-          e.hstate = 'toRefinery';
-          e.path = null;
-          break;
-        }
-        if (ore[t] === 0) {
-          // move to adjacent ore if possible
-          const x = t % w;
-          const y = (t - x) / w;
-          let next = -1;
-          for (let r = 1; r <= 2 && next < 0; r++)
-            for (let oy = -r; oy <= r && next < 0; oy++)
-              for (let ox = -r; ox <= r; ox++) {
-                const nx = x + ox;
-                const ny = y + oy;
-                if (!this.pf.passable(nx, ny)) continue;
-                if (ore[ny * w + nx] > 0) {
-                  next = ny * w + nx;
-                  break;
-                }
-              }
-          if (next >= 0) {
-            e.oreTile = next;
-            e.hstate = 'toOre';
-            this.pathTo(e, (next % w) + 0.5, Math.floor(next / w) + 0.5);
-          } else e.hstate = e.cargo > 0 ? 'toRefinery' : 'seek';
-        }
-        break;
-      }
-      case 'toRefinery': {
-        const r = this.get(e.targetId);
-        let ref = r && r.owner === e.owner && buildingDef(r.def).dock ? r : null;
-        if (!ref) {
-          ref = this.nearestRefinery(e);
-          if (!ref) {
-            e.order = { type: 'idle' };
-            e.path = null;
-            break;
-          }
-          e.targetId = ref.id;
-          e.path = null;
-        }
-        const dock = buildingDef(ref.def).dock!;
-        const dx = ref.tx + dock[0] + 0.5;
-        const dy = ref.ty + dock[1] + 0.5;
-        const dist = Math.hypot(e.x - dx, e.y - dy);
-        if (ref.dockedBy >= 0 && ref.dockedBy !== e.id) {
-          // wait our turn near the refinery
-          if (dist < 3.2) {
-            e.path = null;
-            e.moving = false;
-          } else {
-            if (!e.path) this.pathTo(e, dx, dy);
-            this.followPath(e, d);
-          }
-          break;
-        }
-        if (dist < 0.08) {
-          ref.dockedBy = e.id;
-          e.hstate = 'unloading';
-          e.path = null;
-          e.moving = false;
-          break;
-        }
-        if (!e.path || e.moveGoal !== this.tileOf(dx, dy)) this.pathTo(e, dx, dy);
-        if (this.followPath(e, d) && dist >= 0.08) {
-          if (Math.hypot(e.x - dx, e.y - dy) > 0.1) e.path = null; // retry
-        }
-        break;
-      }
-      case 'unloading': {
-        e.facing = turnToward(e.facing, -Math.PI / 2, d.turnRate);
-        const ref = this.get(e.targetId);
-        if (!ref) {
-          e.hstate = 'toRefinery';
-          break;
-        }
-        const amt = Math.min(e.cargo, 15);
-        e.cargo -= amt;
-        const p = this.players[e.owner];
-        p.credits += amt;
-        p.stats.harvested += amt;
-        if (e.cargo <= 0) {
-          e.cargo = 0;
-          ref.dockedBy = -1;
-          e.hstate = 'seek';
-          e.targetId = -1;
-          // leave the pad
-          const ex = buildingDef(ref.def).exit ?? [1, 3];
-          this.pathTo(e, ref.tx + ex[0] + 0.5, ref.ty + ex[1] + 1.5);
-          e.htimer = 10;
-        }
-        break;
-      }
-    }
-    if (e.hstate === 'seek' && e.path) this.followPath(e, d);
-  }
 
   private growOre() {
     const { w, h, ore, oreKind, oreMines } = this.map;

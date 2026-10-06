@@ -10,6 +10,7 @@ import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { groundHeight, standHeight } from '../sim/map';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import { heliRepairing } from '../sim/helipad';
+import { harvesterRepairing } from '../sim/harvest';
 import { entityZ } from '../sim/ballistics';
 import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
@@ -1619,9 +1620,10 @@ export class GameRenderer {
     if (ud.air && !ud.fixedWing && !ud.kamikaze && e.z < 1.6 && Math.random() < dt * 14) this.effects.rotorWash(p.x, standHeight(this.world.map, p.x, p.z), p.z, Math.min(1, (1.7 - e.z) / 1.2) * (1 - 0.7 * (v.anim.landed ?? 0)));
     // decoy flares when a missile is homing in
     if (ud.air && !ud.kamikaze && this.effects.flaresDue(e.id)) popFlares(this.effects, m, yaw);
-    // ground crew patching up a damaged jet on its pad (sim/airbase.ts), or a helicopter set down beside the airbase
-    // (sim/helipad.ts): green repair sparks, as on a building under repair
-    if ((e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp) || heliRepairing(e)) {
+    // ground crew patching up a damaged jet on its pad (sim/airbase.ts), a helicopter set down beside the airbase
+    // (sim/helipad.ts) or a harvester parked beside its refinery (sim/harvest.ts): green repair sparks, as on a
+    // building under repair
+    if ((e.sortie && e.sortie.phase === 'parked' && e.hp < e.maxHp) || heliRepairing(e) || harvesterRepairing(e)) {
       if (Math.random() < dt * 6) {
         const r = (m.size?.x ?? 0.8) * 0.4;
         this.effects.spark(p.x + (Math.random() - 0.5) * 2 * r, p.y + 0.08 + Math.random() * 0.22, p.z + (Math.random() - 0.5) * 2 * r, 0x80ff80);
