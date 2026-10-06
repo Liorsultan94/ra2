@@ -1320,7 +1320,8 @@ kbd {
 .dronecam {
   position: absolute;
   top: 58px;
-  right: 8px;
+  /* clear of the sidebar toggle tab on the view's right edge (it overlapped the feed on phones) */
+  right: 32px;
   width: min(30%, 380px);
   z-index: 3;
   display: flex;
@@ -1389,65 +1390,180 @@ kbd {
   overflow: hidden;
   text-shadow: 0 0 2px #000, 0 0 1px #000;
 }
+.dc-sym {
+  /* the sensor symbology (dronecam.ts): delicate phosphor green over the white-hot picture, kept to the
+     edges so it never hides the strike; it fades out further for the munition's last seconds and the blast */
+  --hud: #3dff6e;
+  --hud-glow: rgba(61, 255, 110, 0.35);
+  --hud-w: 1px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--hud);
+  opacity: 0.78;
+  font: 500 9px/1.2 var(--font-m);
+  /* slashed zero: at 8-9 px a glowing 0 was read as a 6 ("HDG 061" seen as "661") */
+  font-variant-numeric: tabular-nums slashed-zero;
+  letter-spacing: 0.03em;
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.85),
+    0 0 2px var(--hud-glow);
+  transition: opacity 0.3s;
+}
+.dronecam.fade .dc-sym {
+  opacity: 0.4;
+}
 .dc-cross {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   transform: translate(-50%, -50%);
   background:
-    linear-gradient(#fff, #fff) center / 1px 9px no-repeat,
-    linear-gradient(#fff, #fff) center / 9px 1px no-repeat,
-    linear-gradient(#fff, #fff) left center / 10px 1px no-repeat,
-    linear-gradient(#fff, #fff) right center / 10px 1px no-repeat,
-    linear-gradient(#fff, #fff) center top / 1px 10px no-repeat,
-    linear-gradient(#fff, #fff) center bottom / 1px 10px no-repeat;
-  opacity: 0.75;
-  pointer-events: none;
+    linear-gradient(var(--hud), var(--hud)) left center / 9px var(--hud-w) no-repeat,
+    linear-gradient(var(--hud), var(--hud)) right center / 9px var(--hud-w) no-repeat,
+    linear-gradient(var(--hud), var(--hud)) center top / var(--hud-w) 9px no-repeat,
+    linear-gradient(var(--hud), var(--hud)) center bottom / var(--hud-w) 9px no-repeat;
+  filter: drop-shadow(0 0 1px var(--hud-glow));
 }
 .dc-box {
+  /* sized and placed by the feed (the target's projected bounding box, dronecam.ts) */
   position: absolute;
   left: 0;
   top: 0;
   width: 26%;
-  aspect-ratio: 1;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  pointer-events: none;
+  height: 26%;
+  box-sizing: border-box;
+  border: var(--hud-w) dashed var(--hud);
+  box-shadow: 0 0 2px var(--hud-glow);
+}
+.dc-box.acq {
+  animation: dc-acq 0.5s steps(2) infinite;
+}
+@keyframes dc-acq {
+  50% {
+    opacity: 0.3;
+  }
 }
 .dc-box.lock {
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
-  animation: dc-lock 0.8s ease-in-out infinite alternate;
-}
-@keyframes dc-lock {
-  to {
-    width: 22%;
-  }
+  border-style: solid;
 }
 .dc-t {
   position: absolute;
   white-space: pre;
-  pointer-events: none;
-  opacity: 0.92;
 }
 .dc-t.tl {
-  left: 6px;
-  top: 5px;
+  left: 5px;
+  top: 4px;
 }
 .dc-t.tr {
-  right: 6px;
-  top: 5px;
+  right: 5px;
+  top: 4px;
   text-align: right;
 }
 .dc-t.bl {
-  left: 6px;
-  bottom: 5px;
+  left: 5px;
+  bottom: 4px;
 }
 .dc-t.br {
-  right: 6px;
-  bottom: 5px;
+  right: 5px;
+  bottom: 4px;
   text-align: right;
+}
+/* compass: a narrow heading tape (sensor line-of-sight bearing) along the top edge, caret and bearing */
+.dc-tape {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 32%;
+  height: 11px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent);
+}
+.dc-tape-in {
+  /* 480 degrees of tape, 80 degrees in the window */
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 600%;
+}
+.dc-tape-in i {
+  position: absolute;
+  bottom: 0;
+  width: var(--hud-w);
+  background: var(--hud);
+}
+.dc-tape-in i.mj {
+  height: 4px;
+}
+.dc-tape-in i.mn {
+  height: 2px;
+}
+.dc-tape-in b {
+  position: absolute;
+  top: -1px;
+  transform: translateX(-50%);
+  font-size: 7px;
+  line-height: 8px;
+  font-weight: 500;
+}
+.dc-caret {
+  position: absolute;
+  top: 13px;
+  left: 50%;
+  margin-left: -3px;
+  border: 3px solid transparent;
+  border-top: 0;
+  border-bottom: 3px solid var(--hud);
+}
+.dc-brg {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  line-height: 9px;
+}
+/* north arrow (bottom edge): where north is in the picture */
+.dc-north {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 12px;
+  height: 18px;
+  margin-left: -6px;
+}
+.dc-north::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  border: 3px solid transparent;
+  border-top: 0;
+  border-bottom: 4px solid var(--hud);
+}
+.dc-north::after {
+  content: '';
+  position: absolute;
+  left: 5.5px;
+  top: 11px;
+  width: var(--hud-w);
+  height: 6px;
+  background: var(--hud);
+}
+.dc-north b {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  text-align: center;
+  font-size: 7px;
+  line-height: 8px;
+  font-weight: 500;
 }
 .dronecam.lost .dc-screen::after {
   content: 'SIGNAL LOST';
@@ -1462,8 +1578,7 @@ kbd {
   font-size: 12px;
   letter-spacing: 0.12em;
 }
-.dronecam.lost .dc-cross,
-.dronecam.lost .dc-box {
+.dronecam.lost .dc-sym {
   display: none;
 }
 .dronecam.collapsed {
@@ -1847,8 +1962,12 @@ kbd {
     font-size: 9px;
   }
   .dc-cross {
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
+  }
+  .dc-sym {
+    --hud-w: 1.5px;
+    font-size: 8px;
   }
 }
 
