@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { hash2 } from '../sim/rng';
 import { CLOUD, CLOUD_LIGHT_GLSL, CLOUD_SHADOW_GLSL } from './cloudshadow';
-import { MIST_GLSL, WX, WX_PARS, WX_SURFACE, WXM } from './wxuniforms';
+import { MIST_GLSL, SAND_GLSL, WX, WX_PARS, WX_SURFACE, WXM, WXS } from './wxuniforms';
 
 /** Tileable 4-channel value-noise fbm texture (each channel an independent field). */
 function makeNoiseTexture(size = 128): THREE.DataTexture {
@@ -71,6 +71,7 @@ uniform vec4 skyHorA;
 uniform vec4 skyHorB;
 uniform vec2 skySunXZ;
 ${MIST_GLSL}
+${SAND_GLSL}
 
 // 0 = unexplored, 0.5 = explored, 1 = visible; edges are wobbled by noise
 float fogSample( vec3 p ) {
@@ -92,6 +93,16 @@ vec3 fogShade( vec3 col, vec3 p ) {
   col = mix( col, hazeColor, haze );
   // low ground fog / valley mist (wxuniforms.ts; zero = skipped)
   col = mistShade( col, p );
+  // blowing sand (wxuniforms.ts; zero = skipped)
+  if ( sandAmt > 0.002 ) {
+    float sk = sandAmt * sandK( p );
+    if ( sk > 0.002 ) {
+      #ifdef SAND_GROUND
+      col = sandGround( col, p, sk );
+      #endif
+      col = sandVeil( col, p, depth, sk );
+    }
+  }
   col *= 1.0 - smoothstep( hazeParams.w * 0.6, hazeParams.w * 1.6, outside ) * 0.55 * ( 1.0 - skyHorA.a );
   if ( skyHorA.a > 0.0 ) {
     vec2 vd = normalize( p.xz - cameraPosition.xz + 1e-4 );
@@ -146,6 +157,7 @@ export class FogOfWar {
     skyHorB: { value: THREE.Vector4 };
     skySunXZ: { value: THREE.Vector2 };
   } & typeof WXM &
+    typeof WXS &
     typeof CLOUD;
   private data: Uint8Array;
   private cur: Float32Array;
@@ -180,6 +192,8 @@ export class FogOfWar {
       ...CLOUD,
       // ground fog / mist (shared objects: the atmosphere drives them)
       ...WXM,
+      // blowing sand (shared objects: sandstorm.ts drives them)
+      ...WXS,
     };
   }
 

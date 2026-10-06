@@ -83,6 +83,69 @@ export const WXM = {
 };
 
 /**
+ * Blowing sand (sandstorm.ts drives them; the fog-of-war uniform set spreads them like WXM, so every
+ * fog-shaded material gets the airborne sand veil and the terrain the streaming sand sheets).
+ * sandAmt 0 = every branch skipped.
+ */
+export const WXS = {
+  /** Blowing sand behind the storm front, 0..1. */
+  sandAmt: { value: 0 },
+  /** xy: wind direction (unit, world x / z), z: sand drift along it (world units), w: spare. */
+  sandWind: { value: new THREE.Vector4(1, 0, 0, 0) },
+  /** x: the storm's leading edge, y: its trailing edge (positions along the wind axis), z: edge softness. */
+  sandFront: { value: new THREE.Vector4(1e6, -1e6, 6, 0) },
+  /** Lit colour of the airborne sand. */
+  sandCol: { value: new THREE.Color(0.9, 0.7, 0.46) },
+};
+
+/** Declarations + the storm front mask (vertex and fragment shaders). */
+export const SAND_FRONT_GLSL = /* glsl */ `
+uniform float sandAmt;
+uniform vec4 sandWind;
+uniform vec4 sandFront;
+uniform vec3 sandCol;
+// 1 inside the storm: upwind of the leading edge, downwind of the trailing edge
+float sandK( vec3 p ) {
+  float s = dot( p.xz, sandWind.xy );
+  return ( 1.0 - smoothstep( sandFront.x - sandFront.z, sandFront.x + sandFront.z, s ) ) * smoothstep( sandFront.y - sandFront.z, sandFront.y + sandFront.z, s );
+}
+`;
+
+/**
+ * Blowing sand, inserted into FOG_GLSL after the mist (needs fogNoise).
+ *  - sandGround (terrain only, SAND_GROUND): sheets of sand streaming over the ground in long wind-aligned
+ *    streamers, and thin sinuous sand snakes creeping across the dunes, all racing downwind;
+ *  - sandVeil (everything): the airborne sand, in rolling gusts; visibility falls off with the distance
+ *    past the view centre (the player's units there stay readable).
+ */
+export const SAND_GLSL = /* glsl */ `
+${SAND_FRONT_GLSL}
+vec3 sandGround( vec3 col, vec3 p, float k ) {
+  vec2 d = sandWind.xy;
+  float a = dot( p.xz, d ) - sandWind.z;
+  float c = dot( p.xz, vec2( -d.y, d.x ) );
+  float n1 = texture2D( fogNoise, vec2( a * 0.022, c * 0.12 ) ).r;
+  float n2 = texture2D( fogNoise, vec2( ( a - sandWind.z * 0.5 ) * 0.07 + n1 * 0.3, c * 0.9 + 0.21 ) ).g;
+  // sheets: patchy fields (n1) of fine streamers (n2) racing downwind
+  float sheet = smoothstep( 0.45, 0.75, n1 ) * smoothstep( 0.4, 0.8, n2 );
+  float w = texture2D( fogNoise, vec2( a * 0.011 + 0.4, c * 0.035 + 0.37 ) ).b;
+  float sn = abs( fract( c * 0.4 + ( w - 0.5 ) * 3.2 + n1 * 0.45 ) - 0.5 );
+  float snake = ( 1.0 - smoothstep( 0.03, 0.1, sn ) ) * smoothstep( 0.42, 0.72, texture2D( fogNoise, vec2( a * 0.04 + 0.5, c * 0.11 ) ).a );
+  float amt = clamp( sheet * 0.6 + snake * 0.6 + smoothstep( 0.4, 0.8, n1 ) * 0.12, 0.0, 1.0 ) * k;
+  return mix( col, sandCol * ( 0.9 + 0.2 * n2 ), amt * 0.55 );
+}
+vec3 sandVeil( vec3 col, vec3 p, float depth, float k ) {
+  vec2 d = sandWind.xy;
+  float a = dot( p.xz, d ) - sandWind.z * 0.7;
+  float c = dot( p.xz, vec2( -d.y, d.x ) );
+  float g = texture2D( fogNoise, vec2( a * 0.016, c * 0.03 ) ).g * 0.65 + texture2D( fogNoise, vec2( a * 0.045 + 0.3, c * 0.07 ) ).r * 0.35;
+  float far = smoothstep( -10.0, 34.0, depth );
+  float v = k * ( 0.08 + 0.55 * far ) * ( 0.55 + 0.9 * g );
+  return mix( col, sandCol, clamp( v, 0.0, 0.8 ) );
+}
+`;
+
+/**
  * Height fog, inserted into FOG_GLSL (needs fogNoise and fogTarget declared before it).
  * Dense in the river valley and hollows, thin on the plateaus, gone on the ridges; it
  * thins out around the view centre (where the player is looking / their units are)
@@ -152,7 +215,7 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
     #if defined( STANDARD )
     // (low quality: darkening only)
     if ( wxGloss > 0.5 ) {
-      roughnessFactor = mix( roughnessFactor, roughnessFactor * 0.45, wet * smoothstep( 0.3, 0.8, wxUp ) );
+      roughnessFactor = mix( roughnessFactor, min( roughnessFactor, max( roughnessFactor * 0.45, 0.12 + 0.1 * wxRain ) ), wet * smoothstep( 0.3, 0.8, wxUp ) );
       #ifndef WX_NO_PUDDLE
       {
         // standing water on flat, non-metal tops (country roads, flat roofs, plazas): mirror-like patches
@@ -163,7 +226,7 @@ if ( wxSnow + wxWet + wxDust > 0.001 ) {
           float wxPt = 0.66 - wxWet * 0.1;
           float wxPd = smoothstep( wxPt, wxPt + 0.04, wxPn ) * wxFlat * min( 1.0, wxWet * 2.0 );
           diffuseColor.rgb *= 1.0 - 0.32 * wxPd;
-          roughnessFactor = mix( roughnessFactor, 0.04, wxPd );
+          roughnessFactor = mix( roughnessFactor, 0.04 + 0.16 * wxRain, wxPd );
           // the water mirrors the (cloudy) sky: without it the patches read as black paint at this view angle
           vec3 wxSky = dot( skyHorA.xyz, vec3( 1.0 ) ) > 0.01 ? skyHorA.xyz : hazeColor * 2.0;
           wxSky /= 1.0 + max( wxSky.r, max( wxSky.g, wxSky.b ) );

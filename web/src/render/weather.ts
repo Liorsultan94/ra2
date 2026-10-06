@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { groundHeight, type GameMap } from '../sim/map';
 import { WetGlints } from './wetglints';
+import { SAND_FRONT_GLSL, WXS } from './wxuniforms';
 
 /*
  * Falling weather particles (rain streaks, snow flakes, blowing sand) in a
@@ -23,8 +24,9 @@ export type FallKind = keyof typeof KIND;
 const LOOK: Record<FallKind, { vel: [number, number, number]; size: [number, number]; sway: number; color: [number, number, number]; alpha: number; n: number }> = {
   rain: { vel: [1.4, -15, 0.7], size: [0.022, 0.5], sway: 0.6, color: [0.55, 0.6, 0.68], alpha: 0.2, n: 6500 },
   snow: { vel: [0.35, -1.0, 0.18], size: [0.075, 0], sway: 0.45, color: [0.95, 0.97, 1], alpha: 0.85, n: 4500 },
-  // blowing sand: fine, short, light grains in the desert's sand colour, carried fast by the wind
-  sandstorm: { vel: [9, -0.35, 3.2], size: [0.022, 0.3], sway: 0.75, color: [0.95, 0.78, 0.52], alpha: 0.28, n: 6200 },
+  // blowing sand: grains in the desert's sand colour carried fast by the wind, most of them skimming the
+  // ground (saltation), thick enough to read at play zoom
+  sandstorm: { vel: [9, -0.35, 3.2], size: [0.04, 0.3], sway: 0.75, color: [0.84, 0.64, 0.4], alpha: 0.5, n: 9000 },
 };
 
 const VERT = /* glsl */ `
@@ -37,6 +39,10 @@ uniform vec3 uOff;
 uniform vec2 uSize;
 uniform float uKind;
 uniform float uSway;
+uniform sampler2D uHeight;
+uniform vec2 uHSize;
+uniform float uHOn;
+${SAND_FRONT_GLSL}
 varying vec2 vUv;
 varying float vA;
 void main() {
@@ -52,6 +58,13 @@ void main() {
   vec3 wp = uCenter + rel;
   vec3 e = abs(rel) / (0.5 * uBox);
   vA = (1.0 - smoothstep(0.65, 1.0, max(e.x, e.z))) * (1.0 - smoothstep(0.7, 1.0, e.y));
+  if (uKind > 1.5 && uHOn > 0.5) {
+    // sand skims the ground (mesa tops too): most grains within a body height of it, a few lofted higher;
+    // only inside the storm front
+    float gh = texture2D(uHeight, (wp.xz + 0.5) / uHSize).r * 8.0 - 1.5;
+    wp.y = gh + 0.03 + pow(aSeed.y, 2.6) * uBox.y * 0.5;
+    vA = (1.0 - smoothstep(0.65, 1.0, max(e.x, e.z))) * sandK(wp) * (0.7 + 0.6 * aSeed.w);
+  }
   vUv = position.xy + 0.5;
   if (abs(uKind - 1.0) > 0.5) {
     // streak along the velocity, turned to face the camera
@@ -122,7 +135,7 @@ export class WeatherFx {
     this.dynamic = dynamic;
     this.quality = quality;
     const qk = (this.qk = quality === 'high' ? 1 : quality === 'medium' ? 0.6 : 0.3);
-    const n = (this.n = Math.round((dynamic ? LOOK.rain.n : LOOK[kind].n) * qk));
+    const n = (this.n = Math.round((dynamic ? Math.max(LOOK.rain.n, LOOK.sandstorm.n) : LOOK[kind].n) * qk));
     const base = new THREE.PlaneGeometry(1, 1);
     const geo = (this.geo = new THREE.InstancedBufferGeometry());
     geo.index = base.index;
@@ -146,6 +159,10 @@ export class WeatherFx {
       uColor: { value: new THREE.Color() },
       uAlpha: { value: 0 },
       uFlash: { value: 0 },
+      uHeight: { value: null },
+      uHSize: { value: new THREE.Vector2(1, 1) },
+      uHOn: { value: 0 },
+      ...WXS,
     };
     this.setKind(kind);
     this.mat = new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, toneMapped: false });
@@ -203,6 +220,18 @@ export class WeatherFx {
     v.addScaledVector(this.wind, carry);
     // streak axis needs a direction even in dead calm
     if (v.lengthSq() < 1e-4) v.y = -0.3;
+  }
+
+  /** How hard it falls right now, 0..1. */
+  get level() {
+    return this.intensity;
+  }
+
+  /** Ground height for the sand grains (sandstorm.ts sandHeightTexture). */
+  setGround(tex: THREE.Texture, w: number, h: number) {
+    this.u.uHeight.value = tex;
+    (this.u.uHSize.value as THREE.Vector2).set(w, h);
+    this.u.uHOn.value = 1;
   }
 
   /** Lightning now (dynamic weather drives the timing deterministically). */

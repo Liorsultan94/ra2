@@ -8,6 +8,7 @@ import type { FogOfWar } from './fog';
 import type { GroundMarks } from './marks';
 import type { AnimState, Model } from './models';
 import { GroundFog } from './groundfog';
+import { SandStorm } from './sandstorm';
 import { NightLights, NightVisionPass } from './night';
 import type { FinalPass } from './post';
 import type { Sky, SkyState } from './sky';
@@ -15,7 +16,7 @@ import type { Terrain } from './terrain';
 import { windTime } from './vegetation';
 import { WeatherFx } from './weather';
 import { WeatherCycle, type WxEventKind, type WxKind, type WxState } from './weathercycle';
-import { WX, WXM } from './wxuniforms';
+import { WX, WXM, WXS } from './wxuniforms';
 import { LivingWorld } from './fx/nature';
 import { dawnMistAt, mistClimateK } from './fx/atmosrules';
 import { biomeLook, type BiomeLook } from './biome';
@@ -727,6 +728,8 @@ export class Atmosphere {
   readonly living: LivingWorld;
   /** Drifting fog banks over the low ground (mist time of day, dawn in the cycle, dynamic weather). */
   readonly groundFog: GroundFog | null = null;
+  /** Blowing sand you can see at play zoom: sheets, billows, the dust wall, grain puffs (desert dust fronts, static sandstorm). */
+  readonly sand: SandStorm | null = null;
   /** Dynamic weather timeline (weather = 'dynamic'). */
   readonly wxCycle: WeatherCycle | null = null;
   /** Dynamic weather state of this frame. */
@@ -849,6 +852,23 @@ export class Atmosphere {
     } else if (cfg.weather !== 'clear' && cfg.weather !== 'dynamic') {
       this.weather = new WeatherFx(cfg.weather, host.quality, fxTod);
       host.scene.add(this.weather.mesh);
+    }
+    if ((dynamic && look.biome === 'desert') || cfg.weather === 'sandstorm') {
+      const world = host.world;
+      this.sand = new SandStorm(
+        {
+          map: world.map,
+          get list() {
+            return world.list;
+          },
+          groundAt: (x, z) => host.effects.groundAt(x, z),
+          puff: (x, y, z, vx, vz) => host.effects.sandPuff(x, y, z, vx, vz),
+        },
+        host.fog,
+        host.quality,
+      );
+      host.scene.add(this.sand.mesh);
+      this.weather?.setGround(this.sand.heightTex, world.map.w + 1, world.map.h + 1);
     }
     if (dynamic || cfg.tod === 'mist' || cfg.tod === 'cycle') {
       this.groundFog = new GroundFog(host.world.map, host.fog, host.quality, this.wxCycle ? this.wxCycle.events.length + host.world.map.w * 131 : 7);
@@ -1239,10 +1259,39 @@ export class Atmosphere {
     drift.x = (drift.x - this.windX * wv * dt * 0.4) % 9600;
     drift.y = (drift.y - this.windZ * wv * dt * 0.4) % 9600;
     this.groundFog?.update(dt, time, WXM.mistAmount.value, this.windX * wv * 1.4, this.windZ * wv * 1.4, focus);
+    // blowing sand: the storm front rolls across the map on the weather timeline (sandstorm.ts)
+    let sandAmt = 0;
+    if (this.sand) {
+      const fr = WXS.sandFront.value;
+      const e = st && !this.wxForce && st.event && st.event.kind === 'dust' ? st.event : null;
+      // (a static sandstorm blows along the grains' fixed drift: weather.ts)
+      let dx = st ? this.windX : 0.94;
+      let dz = st ? this.windZ : 0.33;
+      let wall = 0;
+      if (e) {
+        dx = Math.cos(e.dir);
+        dz = Math.sin(e.dir);
+        sandAmt = SandStorm.front(h.world.map, e, this.wxTimeOverride ?? gt, this.wxCycle!.end(e), dx, dz, fr);
+        // the wall while its leading edge is on its way across (fades in / out beyond the map edges)
+        const m = h.world.map;
+        const c0 = (m.w / 2) * dx + (m.h / 2) * dz;
+        const R = (Math.abs(dx) * m.w + Math.abs(dz) * m.h) / 2 + 30;
+        const prog = (fr.x - (c0 - R)) / (2 * R);
+        wall = sandAmt > 0 ? Math.max(0, Math.min(1, prog * 10, (1 - prog) * 10)) : 0;
+      } else {
+        SandStorm.front(h.world.map, null, 0, 0, dx, dz, fr);
+        sandAmt = st ? (st.fall === 'sandstorm' ? st.precip : 0) : this.cfg.weather === 'sandstorm' ? 1 : 0;
+      }
+      if (Math.hypot(dx, dz) < 1e-3) dx = 1;
+      const dl = Math.hypot(dx, dz);
+      this.sand.update(dt, sandAmt, wall, dx / dl, dz / dl, st ? st.wind : 0.9, this.keys ? this.light : this.baseLight, target, zoom);
+    }
     if (st && this.weather) {
       const wf = this.weather;
-      if (wf.kind !== st.fall && st.precip < 0.03) wf.setKind(st.fall);
-      wf.setIntensity(wf.kind === st.fall ? st.precip : 0);
+      // (switch kinds once nothing of the old kind falls: also when a forced state jumps straight to a downpour)
+      if (wf.kind !== st.fall && (st.precip < 0.03 || wf.level < 0.03)) wf.setKind(st.fall);
+      // (the sand grains come with the front: masked in the shader, so they can blow at full strength behind it)
+      wf.setIntensity(wf.kind === st.fall ? (st.fall === 'sandstorm' ? Math.max(st.precip, sandAmt) : st.precip) : 0);
       wf.setWind(this.windX * st.wind * 6, this.windZ * st.wind * 6);
       // lightning on whole game seconds picked by the seeded timeline (the same for every player)
       const sec = Math.floor(this.wxTimeOverride ?? gt);
@@ -1378,6 +1427,7 @@ export class Atmosphere {
     WX.wxSnow.value = 0;
     WX.wxDust.value = 0;
     WXM.mistAmount.value = 0;
+    this.sand?.dispose();
     CITY_NIGHT.value = 0;
     BIOME = null;
   }

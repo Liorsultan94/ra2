@@ -52,6 +52,10 @@ vi.mock('../src/render/weather', () => ({
     setIntensity(k: number) {
       this.intensity = k;
     }
+    get level() {
+      return this.intensity;
+    }
+    setGround() {}
     setWind() {}
     setLight(k: number) {
       this.light = k;

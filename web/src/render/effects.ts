@@ -1230,6 +1230,12 @@ export class Effects {
     this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15), y: y + 0.03, z: z + this.rand(-0.15, 0.15), vx: this.rand(-0.2, 0.2), vy: this.rand(0.1, 0.3), vz: this.rand(-0.2, 0.2), life: this.rand(0.8, 1.4), size: 0.12 * size, sizeEnd: 0.5 * size, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.35, drag: 1.5, wind: 0.3 });
   }
 
+  /** A sandstorm's grains striking something: a small, fast puff of sand blown downwind (sandstorm.ts). */
+  sandPuff(x: number, y: number, z: number, vx: number, vz: number) {
+    if (Math.random() > this.budget) return;
+    this.smokeSys.spawn({ x, y, z, vx: vx + this.rand(-0.4, 0.4), vy: this.rand(0.05, 0.4), vz: vz + this.rand(-0.4, 0.4), life: this.rand(0.35, 0.7), size: 0.07, sizeEnd: 0.3, color: 0xc8a272, colorEnd: 0xdcbc8c, alpha: 0.42, drag: 1.2, wind: 0.5 });
+  }
+
   flame(x: number, y: number, z: number, size = 1) {
     // sustained fires call this many times a second: now and then lay a looping flame flipbook under the particles
     if (this.flip?.ready && Math.random() < 0.07 * this.budget) this.flip.spawn('flame', { x, y: y - 0.05 * size, z, size: this.rand(0.75, 1.0) * size, ground: true, rot: 0.15, life: this.rand(1.4, 2.2), emissive: 0.9, alpha: 0.85, tint: 0x302c28, wind: 0.2 });
