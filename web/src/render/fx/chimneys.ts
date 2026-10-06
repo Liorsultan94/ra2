@@ -80,10 +80,10 @@ void main() {
   float a = ( 1.0 - smoothstep( 0.25, 1.0, r + ( n - 0.5 ) * 0.55 ) ) * vA * 0.5;
   if ( fogEnabled > 0.5 ) a *= smoothstep( 0.1, 0.45, fogSample( vW ) );
   if ( a < 0.003 ) discard;
-  // wood smoke: a warm grey, paler as it thins out, lit by the scene
-  vec3 col = mix( vec3( 0.62, 0.6, 0.58 ), vec3( 0.8, 0.8, 0.8 ), vAge ) * uLight;
+  // wood smoke: a warm grey, paler as it thins out, lit by the scene (dimmer by night: only the sky lights it)
+  vec3 col = mix( vec3( 0.62, 0.6, 0.58 ), vec3( 0.8, 0.8, 0.8 ), vAge ) * uLight * ( 1.0 - 0.45 * uNight );
   // by night the bottom of the plume catches the warm light of the windows below
-  col += uWarm * uNight * ( 1.0 - smoothstep( 0.0, 0.35, vAge ) );
+  col += uWarm * uNight * ( 1.0 - smoothstep( 0.0, 0.4, vAge ) ) * ( 0.6 + 0.4 * n );
   gl_FragColor = vec4( col * a, a );
 }`;
 
@@ -137,7 +137,7 @@ export class ChimneySmoke {
       uAmount: { value: 0 },
       uWind: { value: new THREE.Vector2() },
       uLight: { value: new THREE.Color(1, 1, 1) },
-      uWarm: { value: new THREE.Color(0.55, 0.3, 0.12) },
+      uWarm: { value: new THREE.Color(0.75, 0.38, 0.12) },
       uNight: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({

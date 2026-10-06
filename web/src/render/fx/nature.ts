@@ -70,6 +70,8 @@ void main() {
   vec4 mv = viewMatrix * vec4( aP.xyz, 1.0 );
   vec2 q = position.xy;
   q.x *= aK.w;
+  // steam: tall, thin wisps
+  if ( aK.x > 5.5 ) q *= vec2( 0.7, 1.7 );
   float c = cos( aK.y );
   float s = sin( aK.y );
   mv.xy += vec2( c * q.x - s * q.y, s * q.x + c * q.y ) * aP.w;
@@ -117,9 +119,8 @@ void main() {
     col = vCol;
     add = 1.0;
   } else {
-    // steam: a thin, ragged veil (two offset lobes), lit by the scene
-    float r = sqrt( r2 );
-    a = ( 1.0 - smoothstep( 0.15, 1.0, r ) ) * ( 0.6 + 0.4 * sin( q.x * 3.1 + q.y * 2.3 + vA * 9.0 ) );
+    // steam: a faint, soft veil (no core), lit by the scene
+    a = exp( -r2 * 3.2 ) * ( 1.0 - exp( -r2 * 18.0 ) * 0.35 );
     col = vCol * uLight;
   }
   a *= vA;
@@ -1015,7 +1016,7 @@ export class LivingWorld {
     // ---- steam off the wet ground once the sun is back after the rain (the ground dries over a few minutes)
     const stK = steamAmount(WX.wxWet.value, precip, day, cover);
     if (stK > 0.01) {
-      this.acc.steam += fr * (this.q === 'high' ? 16 : 8) * stK;
+      this.acc.steam += fr * (this.q === 'high' ? 22 : 11) * stK;
       const capN = this.q === 'high' ? 150 : 70;
       let tries = 10;
       while (this.acc.steam >= 1 && tries-- > 0 && nat.count[STEAM] < capN) {
@@ -1027,7 +1028,7 @@ export class LivingWorld {
         if (this.map.tiles[ti] === Tile.Water || !this.probe.visible(x, z)) continue;
         const g = groundHeight(this.map, x, z);
         _c2.setRGB(0.93, 0.94, 0.96);
-        const i = nat.spawn(STEAM, x, g + 0.03, z, (Math.random() - 0.5) * 0.06, 0.09 + Math.random() * 0.12, (Math.random() - 0.5) * 0.06, 4 + Math.random() * 3.5, 0.2 + Math.random() * 0.2, _c2, 0.13 + 0.14 * stK, g);
+        const i = nat.spawn(STEAM, x, g + 0.05, z, (Math.random() - 0.5) * 0.05, 0.06 + Math.random() * 0.08, (Math.random() - 0.5) * 0.05, 5 + Math.random() * 3.5, 0.28 + Math.random() * 0.2, _c2, 0.07 + 0.08 * stK, g);
         nat.setSpin(i, (Math.random() - 0.5) * 2);
       }
       if (this.acc.steam > 3) this.acc.steam = 3;

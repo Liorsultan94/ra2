@@ -1220,8 +1220,8 @@ export class Atmosphere {
       // ground fog: dawn in the cycle, the misty morning, after rain; strong wind tears it up
       let mist = 0;
       if (this.cfg.tod === 'mist') mist = morningMist(gt);
-      // (with dynamic weather the dawn mist is light after a dry night, thick after a rainy one)
-      if (this.keys) mist = Math.max(mist, dawnMist(this.phase, this.look.biome) * (st ? 0.55 + 0.45 * sstep(0.08, 0.45, st.wet) : 1));
+      // (with dynamic weather the dawn mist is lighter after a dry night, thick after a rainy one)
+      if (this.keys) mist = Math.max(mist, dawnMist(this.phase, this.look.biome) * (st ? 0.7 + 0.3 * sstep(0.08, 0.45, st.wet) : 1));
       if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
       if (this.mistOverride !== null) mist = this.mistOverride;
       this.mist = mist;
