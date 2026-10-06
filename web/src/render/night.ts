@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad, Pass } from 'three/addons/postprocessing/Pass.js';
-import { DEFS, unitDef } from '../sim/defs';
+import { DEFS, buildingDef, unitDef } from '../sim/defs';
+import { FLOOD_RADIUS, floodlit } from '../sim/night';
 import { groundHeight, standHeight } from '../sim/map';
 import type { World } from '../sim/world';
 import type { VisualLike } from './atmos';
@@ -161,6 +162,8 @@ export class NightLights {
    * searchlights, campfires, fireworks glow): no extra draw calls. Called before the commit.
    */
   hook: ((n: NightLights, dark: number, time: number) => void) | null = null;
+  /** Night combat lights (nightops.ts: illumination flares' ground light), drawn the same way. */
+  opsHook: ((n: NightLights, dark: number, time: number) => void) | null = null;
   /** Civilian headlights queued by the ambient life (x, y, z, yaw, k), drawn on the next update. */
   private cars = new Float32Array(MAX_CARS * CAR_STRIDE);
   private nCars = 0;
@@ -313,6 +316,48 @@ export class NightLights {
     this.cones.setColorAt(this.nc++, _c.setRGB(r, g, b));
   }
 
+  /**
+   * Floodlights of one structure: lamp masts on its corners (two on a big footprint, one on a small one), each
+   * throwing a cone down and out and a pool of light on the ground, with a soft lit ring out to FLOOD_RADIUS.
+   */
+  private floodlights(id: number, tx0: number, ty0: number, w: number, h: number, base: number, height: number, dk: number, time: number, map: World['map'], vx: number, vz: number) {
+    const cx = tx0 + w / 2;
+    const cz = ty0 + h / 2;
+    const k0 = dk * (this.nOut ? this.lampFactor(cx, cz, time) : 1);
+    if (k0 <= 0.01) return;
+    const mastH = Math.max(0.9, Math.min(1.8, height * 0.85 + 0.25));
+    const big = w * h >= 4;
+    // the corners: a diagonal pair picked by id (structures side by side don't all light the same corners)
+    const flip = id % 2 === 0;
+    const corners: [number, number][] = big ? (flip ? [[tx0, ty0], [tx0 + w, ty0 + h]] : [[tx0 + w, ty0], [tx0, ty0 + h]]) : [[flip ? tx0 + w : tx0, ty0 + h]];
+    for (const [lx, lz] of corners) {
+      const ox = lx - cx;
+      const oz = lz - cz;
+      const ol = Math.hypot(ox, oz) || 1;
+      const ux = ox / ol;
+      const uz = oz / ol;
+      const gy = groundHeight(map, Math.max(0, Math.min(map.w - 0.01, lx)), Math.max(0, Math.min(map.h - 0.01, lz)));
+      const ly = Math.max(gy, base) + mastH;
+      // aim: out on the ring, ~2/3 of the floodlight radius from the centre
+      const reach = Math.max(1.6, FLOOD_RADIUS * 0.5 - ol * 0.4);
+      const ax = lx + ux * reach;
+      const az = lz + uz * reach;
+      const ag = standHeight(map, Math.max(0, Math.min(map.w - 0.01, ax)), Math.max(0, Math.min(map.h - 0.01, az)));
+      const yaw = Math.atan2(-uz, ux);
+      const pitch = -Math.atan2(ly - ag, reach);
+      const len = Math.hypot(ly - ag, reach);
+      const k = k0;
+      this.cone(lx, ly, lz, yaw, pitch, len, 0.6, 0.38 * k, 0.4 * k, 0.44 * k);
+      this.flare(lx, ly, lz, 0.2, 1.7 * k, 1.8 * k, 1.9 * k);
+      this.pool(ax, ag, az, yaw, 3.6, 2.6, 0.22 * k, 0.235 * k, 0.25 * k);
+      _c.setRGB(0.92, 0.96, 1);
+      this.candidate(lx, ly, lz, _c, 0.9 * k, vx, vz);
+    }
+    // the lit ring: a soft wide pool around the structure
+    const gy = standHeight(map, Math.max(0, Math.min(map.w - 0.01, cx)), Math.max(0, Math.min(map.h - 0.01, cz)));
+    this.pool(cx, gy, cz, 0, FLOOD_RADIUS * 2, FLOOD_RADIUS * 2, 0.035 * k0, 0.038 * k0, 0.043 * k0);
+  }
+
   private candidate(x: number, y: number, z: number, col: THREE.Color, k: number, tx: number, tz: number) {
     const d = Math.hypot(x - tx, z - tz);
     // (a NaN lamp would light every pixel NaN: the whole frame black)
@@ -398,6 +443,9 @@ export class NightLights {
             }
           }
         }
+        // base floodlights (sim/night.ts): powered structures light a ring around them by night; low power puts them out
+        const be = world.get(v.id);
+        if (be && floodlit(world, be)) this.floodlights(be.id, be.tx, be.ty, buildingDef(be.def).w, buildingDef(be.def).h, root.position.y, m.height ?? 1, dk, time, map, tx, tz);
         // searchlights on defences: a slow sweep around the post
         if ((d as { category?: string }).category === 'defense' && v.anim.powered && v.id % 2 === 0) {
           const h = (m.height ?? 0.8) * 0.95;
@@ -467,6 +515,7 @@ export class NightLights {
       this.outages.copyWithin(j * 5, (this.nOut - 1) * 5, this.nOut * 5);
       this.nOut--;
     }
+    this.opsHook?.(this, dk, time);
     this.hook?.(this, dk, time);
     commit(this.flares, this.nf);
     commit(this.pools, this.np);

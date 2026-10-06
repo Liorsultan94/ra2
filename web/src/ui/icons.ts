@@ -13,6 +13,8 @@ const P: Record<string, string> = {
   air: '<path d="M12 2.5c1 0 1.6 1.2 1.6 3v4.2l7.4 4.3v2l-7.4-2.2v4l2.4 2v1.7L12 20.4l-4 1.1v-1.7l2.4-2v-4L3 16v-2l7.4-4.3V5.5c0-1.8.6-3 1.6-3z"/>',
   // orders
   stop: '<rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/>',
+  // illumination round: a flare under its little parachute, shining
+  flare: '<path d="M6 8.5a6 4.5 0 0 1 12 0z"/><path d="M6 8.5l6 6.5 6-6.5M12 8.5V15"/><circle cx="12" cy="17.2" r="1.6" fill="currentColor" stroke="none"/><path d="M12 20.5v1.5M8.6 18.6l-1.3 1M15.4 18.6l1.3 1"/>',
   attackMove: '<circle cx="12" cy="12" r="7.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
   deploy: '<path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/><path d="M4 4l5.5 5.5M20 4l-5.5 5.5M4 20l5.5-5.5M20 20l-5.5-5.5"/>',
   unload: '<path d="M3.5 8.5h11v9h-11z"/><path d="M14.5 11h3.5l2.5 3v3.5h-6"/><circle cx="7" cy="18.5" r="1.5"/><circle cx="17" cy="18.5" r="1.5"/><path d="M9 2.5v4M7 4.5l2 2 2-2"/>',

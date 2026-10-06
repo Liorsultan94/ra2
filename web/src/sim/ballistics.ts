@@ -708,6 +708,7 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
   e.turret = Math.atan2(best.y - e.y, best.x - e.x);
   if (wpn.projectile === 'beam') {
     // directed energy: hit instantly, chance to burn it down
+    e.flashAt = w.tick; // the shot gives the launcher away by night (night.ts)
     w.events.push({ t: 'fire', id: e.id, weapon: wpn.id, x: e.x, y: e.y, tx: best.x, ty: best.y, targetId: -1, owner: e.owner });
     if (w.rng.next() < interceptPk(wpn, best)) hitThreat(w, best, wpn.id, best.x, best.y, best.z);
     return true;
@@ -718,6 +719,7 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
   launchInterceptor(w, e, best, iw);
   // shoot-shoot doctrine: ballistic, hypersonic and multi-hit threats get a pair, within the engagement cap
   if ((best.flight === 'ballistic' || best.flight === 'hypersonic' || best.hp >= 2) && best.engaged < maxEngage(best)) launchInterceptor(w, e, best, iw);
+  e.flashAt = w.tick; // the launch gives the battery away by night (night.ts)
   w.events.push({ t: 'fire', id: e.id, weapon: wpn.id, x: e.x, y: e.y, tx: best.x, ty: best.y, targetId: -1, owner: e.owner });
   return true;
 }

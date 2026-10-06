@@ -3,20 +3,21 @@ import { AudioScene } from '../audio/scene';
 import { AIController, type Difficulty } from '../sim/ai';
 import { canGarrisonUnit, garrisonRoom } from '../sim/garrison';
 import { SW_INFO, type SwKind } from '../sim/specialdefs';
+import { illumReady, illumWait } from '../sim/night';
 import { SuperweaponAI } from '../sim/superweapons';
 import { peaceTicks, type PeaceOption } from '../sim/peace';
 import { TickPacer, speedFactor, type GameSpeed } from './pace';
 import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { standHeight, terrainPassable } from '../sim/map';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type FogMode, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { sharedCameos } from '../render/cameo';
 import { CinematicDirector, type CineShot } from '../render/cinematic';
 import { GameRenderer, type Quality, type RendererParts } from '../render/renderer';
 import { Slicer } from '../render/slice';
-import { ATMOS_DEFAULTS } from '../render/atmos';
+import { ATMOS_DEFAULTS, atmosConfig, simClockOf } from '../render/atmos';
 import { ViewModes } from '../render/viewmodes';
 import { prefetchModels, warmUp, type WarmupResult } from '../render/warmup';
 import { Hud } from '../ui/hud';
@@ -63,8 +64,6 @@ export interface GameOptions {
   peace?: PeaceOption;
   /** Game speed: simulation ticks per real second (game/pace.ts; default normal). */
   gameSpeed?: GameSpeed;
-  /** Fog of war rule (sim types.ts FogMode; default 'classic' = Red Alert 2: explored ground stays revealed). */
-  fog?: FogMode;
   /** Automatic base defence for the local player (sim/basedefense.ts; default on). */
   autoDefend?: boolean;
 }
@@ -74,7 +73,7 @@ export interface GameCallbacks {
   onEnd(win: boolean, stats: { you: World['players'][0]; enemy: World['players'][0]; time: number; report?: MatchReport; codename?: string }): void;
 }
 
-type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove' | 'patrol' | 'guard';
+type Mode = 'normal' | 'place' | 'sell' | 'repair' | 'attackMove' | 'patrol' | 'guard' | 'illum';
 
 const PLAYER_COLOR = 0x2f8fff;
 const ENEMY_COLOR = 0xe8352b;
@@ -150,7 +149,8 @@ export class Game {
       seed,
       map: opts.map,
       credits: opts.credits,
-      fog: opts.fog ?? 'classic',
+      // the day clock the sky shows (render/atmos.ts): the fog of war and sight follow it by night (sim/night.ts)
+      clock: simClockOf(atmosConfig(attract ? -1 : 0, 'clear', !!opts.liveSky && !attract)),
       players: [
         { name: attract ? FACTIONS.find((f) => f.id === opts.faction)!.name : 'You', faction: opts.faction, color: PLAYER_COLOR, isAI: attract, autoDefend: !attract && opts.autoDefend !== false },
         { name: FACTIONS.find((f) => f.id === opts.enemy)!.name, faction: opts.enemy, color: ENEMY_COLOR, isAI: true },
@@ -753,6 +753,13 @@ export class Game {
         this.sfx(snd, ev.x, ev.y, snd === 'mg' || snd === 'rifle' ? 0.5 : snd === 'sniper' ? 0.95 : 0.8);
         break;
       }
+      case 'illum': {
+        // illumination round (sim/night.ts): the gun's report; the flare pops a moment later
+        const src = this.world.get(ev.id);
+        if (ev.owner !== this.local && !(src && this.local >= 0 && this.world.sees(this.local, src)) && !this.visibleToLocal(ev.tx, ev.ty)) break;
+        this.sfx(src && unitDef(src.def).category === 'infantry' ? 'mortar' : 'artillery', ev.x, ev.y, 0.7);
+        break;
+      }
       case 'aim':
         // sniper lock-on (sim/sniper.ts): a quiet click as the aim goes steady
         if (ev.phase === 'lock' && this.visibleToLocal(ev.x, ev.y)) this.sfx('scopeLock', ev.x, ev.y, ev.owner === this.local ? 0.9 : 0.5);
@@ -954,6 +961,7 @@ export class Game {
       const hint =
         m === 'place' ? 'Tap the map to preview the building, then tap it <b>again</b> to build it.'
         : m === 'attackMove' ? 'Tap the map: units move there and fight everything on the way.'
+        : m === 'illum' ? 'Tap the map: a gun fires an <b>illumination flare</b> there (30 s of light).'
         : m === 'sell' ? 'Tap one of your buildings to sell it.'
         : m === 'repair' ? 'Tap a damaged building to repair it.'
         : this.boxSelectMode ? '<b>Drag</b> on the map to select units.'
@@ -1051,10 +1059,24 @@ export class Game {
     this.setMode(this.mode === t ? 'normal' : t);
   }
 
-  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode') {
+  private onCommand(c: 'stop' | 'attackMove' | 'deploy' | 'selectArmy' | 'selectScreen' | 'deselect' | 'sellSel' | 'repairSel' | 'evacuate' | 'cancel' | 'repairMode' | 'sellMode' | 'illum') {
     this.audio.unlock();
     const units = this.selectedOwnUnits();
     switch (c) {
+      case 'illum': {
+        // illumination round (sim/night.ts): pick the spot next
+        const guns = units.filter((u) => unitDef(u.def).illum);
+        if (!guns.length) break;
+        if (!guns.some((u) => illumReady(this.world, u))) {
+          this.sfx('error');
+          this.hud.message(`Illumination round reloading (${Math.ceil(Math.min(...guns.map((u) => illumWait(this.world, u))))} s)`, 'warn');
+          break;
+        }
+        this.setMode(this.mode === 'illum' ? 'normal' : 'illum');
+        this.sfx('click');
+        if (this.mode === 'illum' && !this.simple) this.hud.message('Illumination: click the spot to light up', 'info');
+        break;
+      }
       case 'stop':
         if (units.length) this.issue({ type: 'stop', ids: units.map((u) => u.id) });
         this.sfx('ack');
@@ -1256,6 +1278,21 @@ export class Game {
       };
     }
     const ownSel = units.length > 0;
+    if (this.mode === 'illum' && ownSel) {
+      // illumination round over the spot (sim/night.ts): the nearest ready gun of the selection fires it
+      const guns = units.filter((u) => unitDef(u.def).illum);
+      return {
+        cursor: guns.length ? 'attack' : 'nope',
+        run: () => {
+          if (!guns.length) return this.sfx('error');
+          this.issue({ type: 'illum', ids: guns.map((u) => u.id), x: g.x, y: g.y });
+          this.sfx('ack');
+          this.renderer.overlay.order('attackMove', g.x, g.y);
+          if (this.mouse.type === 'touch') navigator.vibrate?.(10);
+          this.setMode('normal');
+        },
+      };
+    }
     if ((this.mode === 'patrol' || this.mode === 'guard') && ownSel) {
       const ids = orderable(units).map((u) => u.id);
       if (this.mode === 'guard') {
@@ -1745,6 +1782,9 @@ export class Game {
         break;
       case 'a':
         if (units.length) this.setMode('attackMove');
+        break;
+      case 'l':
+        this.onCommand('illum');
         break;
       case 'd':
         if (units.length) this.issue({ type: 'deploy', ids: units.map((u) => u.id) });
