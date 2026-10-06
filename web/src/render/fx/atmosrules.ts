@@ -112,6 +112,17 @@ export function chimneyAmount(hours: number, biome: string, snow = 0): number {
   return Math.min(1, a);
 }
 
+/**
+ * Chimney smoke shading against the ground under it: `alpha` scales the puff opacity, `tint`
+ * multiplies its (scene-lit) grey. The smoke's lit grey is about as bright as sunlit snow, so on a
+ * snow map a plain grey plume vanishes (it only shows over dark grass); over snow the plume turns a
+ * darker blue-grey and denser so it reads by day and by night. snow = snow lying 0..1.
+ */
+export function smokeShade(snow: number): { alpha: number; tint: [number, number, number] } {
+  const s = Math.max(0, Math.min(1, Number.isFinite(snow) ? snow : 0));
+  return { alpha: 0.5 + 0.4 * s, tint: [1 - 0.66 * s, 1 - 0.64 * s, 1 - 0.58 * s] };
+}
+
 /** Puffs per chimney and the most chimneys smoking at once (the nearest to the view) per tier. */
 export const CHIMNEY_TIER: Record<Tier, { puffs: number; max: number }> = { low: { puffs: 0, max: 0 }, medium: { puffs: 7, max: 18 }, high: { puffs: 10, max: 40 } };
 

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FOG_GLSL, type FogOfWar } from '../fog';
 import type { ChimneyTop, HouseHandle } from '../scenery';
-import { CHIMNEY_TIER, type Tier } from './atmosrules';
+import { CHIMNEY_TIER, smokeShade, type Tier } from './atmosrules';
 
 /*
  * Chimney smoke over the villages and town houses (purely visual).
@@ -66,7 +66,8 @@ const FRAG = /* glsl */ `
 uniform vec3 uLight;
 uniform vec3 uWarm;
 uniform float uNight;
-uniform float uSnow;
+uniform float uShadeA;
+uniform vec3 uTint;
 varying vec2 vUv;
 varying float vA;
 varying float vAge;
@@ -78,13 +79,13 @@ void main() {
   float r = length( q );
   // ragged: the noise eats the edge of each puff
   float n = texture2D( fogNoise, vUv * 0.45 + vec2( vSeed * 3.1, vAge * 0.35 ) ).g;
-  float a = ( 1.0 - smoothstep( 0.25, 1.0, r + ( n - 0.5 ) * 0.55 ) ) * vA * ( 0.5 + 0.15 * uSnow );
+  float a = ( 1.0 - smoothstep( 0.25, 1.0, r + ( n - 0.5 ) * 0.55 ) ) * vA * uShadeA;
   if ( fogEnabled > 0.5 ) a *= smoothstep( 0.1, 0.45, fogSample( vW ) );
   if ( a < 0.003 ) discard;
   // wood smoke: a warm grey, paler as it thins out, lit by the scene (dimmer by night: only the sky lights it)
   vec3 col = mix( vec3( 0.62, 0.6, 0.58 ), vec3( 0.8, 0.8, 0.8 ), vAge ) * uLight * ( 1.0 - 0.45 * uNight );
-  // over snow wood smoke reads as a darker blue-grey (pale grey would vanish against the white)
-  col *= mix( vec3( 1.0 ), vec3( 0.5, 0.53, 0.6 ), uSnow );
+  // over snow a darker blue-grey (the lit grey is as bright as the snow and would vanish: atmosrules.ts smokeShade)
+  col *= uTint;
   // by night the bottom of the plume catches the warm light of the windows below
   col += uWarm * uNight * ( 1.0 - smoothstep( 0.0, 0.4, vAge ) ) * ( 0.6 + 0.4 * n );
   gl_FragColor = vec4( col * a, a );
@@ -142,7 +143,8 @@ export class ChimneySmoke {
       uLight: { value: new THREE.Color(1, 1, 1) },
       uWarm: { value: new THREE.Color(0.75, 0.38, 0.12) },
       uNight: { value: 0 },
-      uSnow: { value: 0 },
+      uShadeA: { value: 0.5 },
+      uTint: { value: new THREE.Color(1, 1, 1) },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.u,
@@ -176,7 +178,9 @@ export class ChimneySmoke {
     (u.uWind.value as THREE.Vector2).set(windX, windZ);
     (u.uLight.value as THREE.Color).copy(light);
     u.uNight.value = night;
-    u.uSnow.value = Math.max(0, Math.min(1, snow));
+    const sh = smokeShade(snow);
+    u.uShadeA.value = sh.alpha;
+    (u.uTint.value as THREE.Color).setRGB(sh.tint[0], sh.tint[1], sh.tint[2]);
     // re-pick the chimneys near the view when it moved or every half second (houses get wrecked)
     this.wait -= dt;
     if (this.wait <= 0 || Math.abs(cx - this.lastX) + Math.abs(cz - this.lastZ) > 1.5) this.repick(cx, cz, r);
