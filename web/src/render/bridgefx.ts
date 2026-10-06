@@ -416,6 +416,10 @@ export class BridgeFx {
       const rm = new THREE.Mesh(rails.build(), steel);
       rm.castShadow = shadows;
       root.add(fm, ft, rm);
+      // (the deck lift closure kept in the view holds this block's scope: free the builders' arrays)
+      fixed.release();
+      ftop.release();
+      rails.release();
       // ---- broken stumps: jagged edges and bent rebar where spans tore away
       const bk = new GeoBuilder();
       const edges: [number, number][] = [
@@ -443,6 +447,7 @@ export class BridgeFx {
       broken.castShadow = shadows;
       broken.visible = false;
       root.add(broken);
+      bk.release();
       // ---- scaffolding (grows up from the river bed while rebuilding)
       const sc = new GeoBuilder();
       const base = RIVERBED - 0.1;
@@ -468,6 +473,7 @@ export class BridgeFx {
       for (const p of [piers[0], piers[2]]) box(sc, 0.1, 0.07, 0.07, trs(p, top + 0.08, 0.66), new THREE.Color(1, 0.85, 0.4));
       const scaffold = new THREE.Group();
       const sm = new THREE.Mesh(sc.build(), steel);
+      sc.release();
       sm.castShadow = shadows;
       scaffold.add(sm);
       scaffold.position.y = base;

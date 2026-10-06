@@ -51,6 +51,8 @@ import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
 import { loadBuildingPhotos } from './models/bldtex';
+import { releaseBuildFx } from './models/buildfx';
+import { releaseMaterialListeners } from './glrelease';
 import { PerfProbe } from './perf/probe';
 import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
@@ -1048,7 +1050,7 @@ export class GameRenderer {
   private ray = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
 
-  screenToGround(sx: number, sy: number): { x: number; y: number } {
+  screenToGround(sx: number, sy: number, out: { x: number; y: number } = { x: 0, y: 0 }): { x: number; y: number } {
     this.ndc.set((sx / this.width) * 2 - 1, -(sy / this.height) * 2 + 1);
     this.ray.setFromCamera(this.ndc, this.camera);
     const o = this.ray.ray.origin;
@@ -1063,7 +1065,9 @@ export class GameRenderer {
       const { w, h: mh } = this.world.map;
       h = standHeight(this.world.map, Math.max(0, Math.min(w - 0.01, px)), Math.max(0, Math.min(mh - 0.01, pz)));
     }
-    return { x: px, y: pz };
+    out.x = px;
+    out.y = pz;
+    return out;
   }
 
   private v3 = new THREE.Vector3();
@@ -1072,9 +1076,16 @@ export class GameRenderer {
     return { x: ((this.v3.x + 1) / 2) * this.width, y: ((1 - this.v3.y) / 2) * this.height };
   }
 
+  /** The view's ground footprint (screen corners on the ground). The array is reused: read it right away. */
   viewCorners(): { x: number; y: number }[] {
-    return [this.screenToGround(0, 0), this.screenToGround(this.width, 0), this.screenToGround(this.width, this.height), this.screenToGround(0, this.height)];
+    const c = this.corners4;
+    this.screenToGround(0, 0, c[0]);
+    this.screenToGround(this.width, 0, c[1]);
+    this.screenToGround(this.width, this.height, c[2]);
+    this.screenToGround(0, this.height, c[3]);
+    return c;
   }
+  private corners4 = [0, 1, 2, 3].map(() => ({ x: 0, y: 0 }));
 
   // ---------------------------------------------------------------- entities
 
@@ -2520,6 +2531,8 @@ export class GameRenderer {
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
     this.terrain.update(this.time, this.world.list);
+    // far world night lights / lighthouse beam switch (its ring, which also calls it, is culled in sectors now)
+    this.outskirts.horizon?.update();
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
     this.bridgeFx.update(dt);
     this.superFx.update(dt, this.time);
@@ -2664,12 +2677,18 @@ export class GameRenderer {
 
   dispose() {
     this.disposed = true;
+    // (first, while the scene still holds this match's materials: they tell this renderer's listener apart)
+    releaseMaterialListeners(this.scene);
     setBakeRenderer(null);
     this.perfHud.dispose();
     this.instancer.dispose();
     this.life.dispose();
     this.deployFx.dispose();
     this.sniperFx.dispose();
+    // module-level pointers into this match (ambient singletons, the burning-building registry): cleared, or
+    // the old scene stays reachable through them while the next match loads
+    this.ambient?.dispose();
+    releaseBuildFx(this.scene);
     this.atmos.dispose();
     this.flareFx.dispose();
     this.veil.dispose();
@@ -2681,6 +2700,10 @@ export class GameRenderer {
     this.contact?.dispose();
     this.csm?.dispose();
     this.renderer.dispose();
+    // three's texture / geometry dispose listeners (left on the session-shared ones) keep this renderer's
+    // info object, and info.programs is its whole program cache: emptied, the old match keeps no programs
+    const progs = this.renderer.info.programs;
+    if (progs) progs.length = 0;
     this.post?.dispose();
     this.compileRT?.dispose();
     this.shadowCache?.dispose();
@@ -2693,5 +2716,12 @@ export class GameRenderer {
     } catch {
       /* already lost */
     }
+    // Every material / geometry / texture this renderer drew keeps a 'dispose' listener of it (three removes
+    // them only when the resource itself is disposed), and the session caches share some resources between
+    // matches (munitions, cargo, unit textures...): the old WebGLRenderer stays reachable, and with it its
+    // canvas, whose parent chain (the old HUD and its button listeners) held the whole finished Game. Taking
+    // the canvas out of the page breaks that chain. The material listeners (and with them the renderer's program
+    // cache) are taken off at the top (glrelease.ts).
+    this.canvas.remove();
   }
 }

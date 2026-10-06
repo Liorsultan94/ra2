@@ -145,7 +145,7 @@ export class Ground {
   /** The ground, split into square chunks so off-screen parts are culled. */
   readonly mesh = new THREE.Group();
   readonly chunks: THREE.Mesh[] = [];
-  readonly material: THREE.MeshStandardMaterial;
+  material!: THREE.MeshStandardMaterial;
   /** Painted control maps, also reused for the minimap. */
   readonly splat: Uint8Array;
   readonly tint: Uint8Array;
@@ -159,11 +159,11 @@ export class Ground {
   readonly photo: PhotoGround | null;
   readonly res: number;
   /** Rendered surface heights on the mesh grid (hx * hy vertices, SUB per tile). */
-  readonly heights: Float32Array;
-  readonly hx: number;
-  readonly hy: number;
+  heights!: Float32Array;
+  hx!: number;
+  hy!: number;
   /** Textures and palette uniforms shared with the grass blades. */
-  readonly shared: Record<string, { value: unknown }>;
+  shared!: Record<string, { value: unknown }>;
   /** The map's biome look (palette, blades, snow; render/biome.ts). */
   readonly look: BiomeLook;
 
@@ -173,6 +173,7 @@ export class Ground {
     trees: TreeShade[],
     fog: FogOfWar,
     quality: 'low' | 'medium' | 'high',
+    deferred = false,
   ) {
     const m = map;
     this.look = biomeLook(m);
@@ -190,8 +191,25 @@ export class Ground {
         ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
           new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 2, this.look.photoSat, this.look.photoHue)
         : null;
+    this.pending = { trees, fog, quality };
+    if (!deferred) for (const _ of this.steps()) void _;
+  }
+
+  /** Construction inputs until steps() has run. */
+  private pending: { trees: TreeShade[]; fog: FogOfWar; quality: 'low' | 'medium' | 'high' } | null = null;
+
+  /**
+   * The construction, one yield per slice of work (Terrain.build runs it in time slices): painting the
+   * control maps is a loop per texel (590k on medium) and was seconds of main thread on a phone in one task.
+   */
+  *steps(): Generator<void> {
+    const { trees, fog, quality } = this.pending!;
+    this.pending = null;
+    const m = this.map;
+    const N = m.w * this.res;
     const field = new Uint8Array(N * N * 4);
-    this.paint(this.splat, this.tint, field, trees);
+    yield* this.paint(this.splat, this.tint, field, trees);
+    yield;
     const tex = (data: Uint8Array) => {
       const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
       t.magFilter = THREE.LinearFilter;
@@ -207,7 +225,9 @@ export class Ground {
     fieldTex.minFilter = THREE.LinearFilter;
     fieldTex.generateMipmaps = false;
     const detail = groundDetailTexture(quality === 'low' ? 256 : 512);
+    yield;
     const grassTex = grassTexture(quality === 'low' ? 256 : 512);
+    yield;
 
     const mat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
     const col = (hex: number) => new THREE.Color(hex);
@@ -286,6 +306,7 @@ export class Ground {
     this.hy = ny;
     this.heights = new Float32Array(nx * ny);
     for (let k = 0; k < nx * ny; k++) this.heights[k] = pos[k * 3 + 1];
+    yield;
     const nor = new Float32Array(nx * ny * 3);
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
@@ -295,6 +316,7 @@ export class Ground {
         const l = Math.hypot(dx, 1, dz);
         nor.set([-dx / l, 1 / l, -dz / l], (j * nx + i) * 3);
       }
+    yield;
     const CH = 24 * SUB; // chunk size in vertices
     for (let cj = 0; cj < ny - 1; cj += CH)
       for (let ci = 0; ci < nx - 1; ci += CH) {
@@ -359,7 +381,7 @@ export class Ground {
 
   // ------------------------------------------------------------ painting
 
-  private paint(splat: Uint8Array, tint: Uint8Array, field: Uint8Array, trees: TreeShade[]) {
+  private *paint(splat: Uint8Array, tint: Uint8Array, field: Uint8Array, trees: TreeShade[]): Generator<void> {
     const m = this.map;
     const L = this.layout;
     const P = this.res;
@@ -435,6 +457,7 @@ export class Ground {
     const cloverN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.3 + 11, y * 0.3, 71, 3));
     const flowerN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.22, y * 0.22 + 5, 73, 3));
     const tallN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.16, y * 0.16, 79, 3));
+    yield;
 
     // distance (tiles) to the nearest water tile: lush banks, no blades on the shore
     const wd = new Float32Array(W * m.h).fill(1e3);
@@ -483,17 +506,26 @@ export class Ground {
           }
       }
     };
-    for (const r of L.roads) stamp(r.pts, r.width / 2 + 1, roadD, r.width, roadW);
-    for (const t of L.tracks) stamp(t.pts, 1, trackD, t.width, null);
+    for (const r of L.roads) {
+      stamp(r.pts, r.width / 2 + 1, roadD, r.width, roadW);
+      yield;
+    }
+    for (const t of L.tracks) {
+      stamp(t.pts, 1, trackD, t.width, null);
+      yield;
+    }
     // trodden footpaths: village houses to the nearest road, and between neighbouring houses
     const pathD = new Float32Array(N * N).fill(99);
     for (const p of footpaths(m, L)) stamp(p, 0.7, pathD, 0, null);
+    yield;
 
     // fields: coverage + type + row direction (dilated so filtering stays stable)
     const fieldMask = new Float32Array(N * N);
     // type step in the green channel (the city needs 8 types: streets / crossings, see FIELD_STEP in the shader)
     const fstep = this.look.code === 3 ? 30 : 60;
+    let nf = 0;
     for (const f of L.fields) {
+      if ((++nf & 7) === 0) yield;
       // streets / crossings store their local coordinates in b / a (linear, so filtering keeps them exact)
       const local = f.type >= FieldType.Avenue;
       const ca = Math.cos(f.angle);
@@ -530,6 +562,7 @@ export class Ground {
         }
     }
     for (let k = 0; k < N * N; k++) field[k * 4] = fieldMask[k] * 255;
+    yield;
 
     // tree shade (soft AO under canopies)
     const shade = new Float32Array(N * N);
@@ -551,9 +584,31 @@ export class Ground {
       for (const s of m.starts) best = Math.min(best, Math.hypot(x - s.x - 0.5, y - s.y - 0.5));
       return best;
     };
+    // Per tile lists of what can matter at a point of that tile (rectangles grown by the reach that counts):
+    // the paint loop runs per texel (590k on medium), and Canal City has hundreds of buildings and lots;
+    // scanning them all per texel was seconds of main thread on a phone. Same values: a building / lot
+    // out of reach could not change the result.
+    const near = (rects: { x0: number; y0: number; x1: number; y1: number }[], reach: number) => {
+      const cells: number[][] = Array.from({ length: W * m.h }, () => []);
+      rects.forEach((r, i) => {
+        const tx0 = Math.max(0, Math.floor(r.x0 - reach));
+        const tx1 = Math.min(W - 1, Math.floor(r.x1 + reach));
+        const ty0 = Math.max(0, Math.floor(r.y0 - reach));
+        const ty1 = Math.min(m.h - 1, Math.floor(r.y1 + reach));
+        for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) cells[ty * W + tx].push(i);
+      });
+      return (x: number, y: number) => cells[Math.min(m.h - 1, Math.max(0, Math.floor(y))) * W + Math.min(W - 1, Math.max(0, Math.floor(x)))];
+    };
+    // (the yard distance only matters under 1.5: dirt < 1.2, worn / snow < 1.5, blade density saturates at 0.9)
+    const structs = m.structures;
+    const structNear = near(
+      structs.map((st) => ({ x0: st.x, y0: st.y, x1: st.x + st.w, y1: st.y + st.h })),
+      1.55,
+    );
     const yard = (x: number, y: number) => {
       let best = 99;
-      for (const st of m.structures) {
+      for (const i of structNear(x, y)) {
+        const st = structs[i];
         const dx = Math.max(st.x - x, 0, x - st.x - st.w);
         const dy = Math.max(st.y - y, 0, y - st.y - st.h);
         best = Math.min(best, Math.hypot(dx, dy));
@@ -563,9 +618,12 @@ export class Ground {
 
     // city rubble lots (sim/maps.ts deco): broken gravel and brick dust
     const lots = m.deco?.lots ?? [];
+    // (a lot only counts within 0.4 of its edge)
+    const lotNear = near(lots, 0.45);
     const inLot = (x: number, y: number) => {
       let k = 0;
-      for (const r of lots) {
+      for (const i of lotNear(x, y)) {
+        const r = lots[i];
         const d = Math.max(r.x0 - x, x - r.x1, r.y0 - y, y - r.y1);
         if (d < 0.4) k = Math.max(k, 1 - smooth(-0.6, 0.4, d));
       }
@@ -581,6 +639,7 @@ export class Ground {
     const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
     for (let py = 0; py < N; py++) {
+      if ((py & 7) === 7) yield;
       for (let px = 0; px < N; px++) {
         const x = (px + 0.5) / P;
         const y = (py + 0.5) / P;
