@@ -1384,7 +1384,8 @@ kbd {
   color: var(--hud);
   opacity: 0.78;
   font: 500 9px/1.2 var(--font-m);
-  font-variant-numeric: tabular-nums;
+  /* slashed zero: at 8-9 px a glowing 0 was read as a 6 ("HDG 061" seen as "661") */
+  font-variant-numeric: tabular-nums slashed-zero;
   letter-spacing: 0.03em;
   text-shadow:
     0 0 1px rgba(0, 0, 0, 0.85),

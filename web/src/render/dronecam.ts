@@ -14,6 +14,7 @@ import {
   fmtAlt,
   fmtHdg,
   fmtRange,
+  fmtSpeed,
   fmtTti,
   footprintFor,
   fovFor,
@@ -21,6 +22,7 @@ import {
   jetRunStarted,
   northInPicture,
   tapeLabel,
+  wrapDeg,
   pickFeed,
   podPosition,
   projectCorners,
@@ -935,11 +937,11 @@ export class DroneCam {
     f.gsAt = this.time;
     const gs = f.gs;
     this.txtTL.textContent = `${f.kind === 'kami' ? f.callsign : f.title}\nWHT  ${fovTag}`;
-    this.txtTR.textContent = `ALT ${fmtAlt(ro.altFt)} FT\nGS ${Math.round(gs)} KT\nHDG ${fmtHdg(facingHeading(e.facing))}`;
+    this.txtTR.textContent = `ALT ${fmtAlt(ro.altFt)} FT\nGS ${fmtSpeed(gs)} KT\nHDG ${fmtHdg(facingHeading(e.facing))}`;
     this.txtBL.textContent = tgt ? `TGT ${f.tgtName}\n${f.kind === 'kami' ? 'DIVE' : acq ? 'ACQ' : 'LOCK'}` : 'SCANNING\nTRK';
     this.txtBR.textContent = `RNG ${fmtRange(ro.slantM)} M${tti >= 0 ? `\nTTI ${fmtTti(tti)} S` : ''}`;
     // compass tape: the bearing the sensor looks along; north arrow: where north is in this picture
-    this.tape.style.transform = `translateX(${(-((ro.losHdg + TAPE_SPAN) / (360 + 2 * TAPE_SPAN)) * 100).toFixed(3)}%)`;
+    this.tape.style.transform = `translateX(${(-((wrapDeg(ro.losHdg) + TAPE_SPAN) / (360 + 2 * TAPE_SPAN)) * 100).toFixed(3)}%)`;
     this.brg.textContent = fmtHdg(ro.losHdg);
     const camR = this.tmp.setFromMatrixColumn(this.cam.matrixWorld, 0);
     const camU = this.tmp2.setFromMatrixColumn(this.cam.matrixWorld, 1);

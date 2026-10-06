@@ -42,8 +42,7 @@ export function podPosition(aircraft: V3, groundY: number, minAgl = 0.4): V3 {
 
 /** Compass heading (degrees, 0 = north = -z, 90 = east = +x) of a horizontal direction. */
 export function headingDeg(dx: number, dz: number): number {
-  const h = (Math.atan2(dx, -dz) * 180) / Math.PI;
-  return ((h % 360) + 360) % 360;
+  return wrapDeg((Math.atan2(dx, -dz) * 180) / Math.PI);
 }
 
 /** Heading of a sim facing (radians, 0 = +x east, PI/2 = +y south). */
@@ -163,21 +162,38 @@ export function northInPicture(right: V3, up: V3): number {
 
 /** Compass tape label at a 30 degree mark. */
 export function tapeLabel(deg: number): string {
-  const d = ((Math.round(deg) % 360) + 360) % 360;
-  return d === 0 ? 'N' : d === 90 ? 'E' : d === 180 ? 'S' : d === 270 ? 'W' : String(d / 10).padStart(2, '0');
+  const d = Math.round(wrapDeg(deg)) % 360;
+  return d === 0 ? 'N' : d === 90 ? 'E' : d === 180 ? 'S' : d === 270 ? 'W' : String(Math.round(d / 10) % 36).padStart(2, '0');
+}
+
+/** A finite, non-negative readout value (NaN / Infinity / negatives read 0). */
+function nonNeg(v: number): number {
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** Compass degrees wrapped to [0, 360) (any finite angle, negatives too; NaN reads 0). */
+export function wrapDeg(d: number): number {
+  if (!Number.isFinite(d)) return 0;
+  const w = ((d % 360) + 360) % 360;
+  return w >= 360 ? 0 : w;
 }
 
 export function fmtAlt(ft: number): string {
-  return `${Math.round(ft / 10) * 10}`;
+  return `${Math.round(nonNeg(ft) / 10) * 10}`;
 }
 export function fmtRange(m: number): string {
-  return m >= 10000 ? `${(m / 1000).toFixed(1)}K` : `${Math.round(m / 10) * 10}`;
+  const v = nonNeg(m);
+  return v >= 10000 ? `${(v / 1000).toFixed(1)}K` : `${Math.round(v / 10) * 10}`;
 }
+/** Heading 000..359 (rounded first, so 359.6 reads 000, never 360). */
 export function fmtHdg(h: number): string {
-  return String(Math.round(h) % 360).padStart(3, '0');
+  return String(Math.round(wrapDeg(h)) % 360).padStart(3, '0');
+}
+export function fmtSpeed(kt: number): string {
+  return `${Math.round(nonNeg(kt))}`;
 }
 export function fmtTti(s: number): string {
-  const v = Math.max(0, s);
+  const v = Math.min(99, nonNeg(s));
   return v >= 10 ? v.toFixed(0).padStart(2, '0') : `0${v.toFixed(1)}`;
 }
 

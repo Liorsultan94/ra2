@@ -14,6 +14,12 @@ import {
   groundSpeedKt,
   northInPicture,
   tapeLabel,
+  fmtAlt,
+  fmtHdg,
+  fmtRange,
+  fmtSpeed,
+  fmtTti,
+  wrapDeg,
   fovFor,
   headingDeg,
   jetRunStarted,
@@ -184,6 +190,51 @@ describe('strike camera geometry and readouts', () => {
     expect(Math.abs(arrow(new THREE.Vector3(10, 5, 4), t))).toBeCloseTo(180, 3);
     // straight down with the picture's up towards the east: north is to the left
     expect(arrow(new THREE.Vector3(10, 8, 10), t, new THREE.Vector3(1, 0, 0))).toBeCloseTo(-90, 3);
+  });
+
+  it('headings read 000-359 for any facing: beyond 2 PI, negative, many turns, NaN; the compass tape too', () => {
+    const TAU = Math.PI * 2;
+    for (const f of [0, 0.3, Math.PI, TAU - 1e-9, TAU, TAU + 0.5, 7 * TAU + 1.1, -0.2, -TAU - 0.5, -9 * TAU + 2, 1e6, -1e6]) {
+      const hdg = fmtHdg(facingHeading(f));
+      expect(hdg).toMatch(/^[0-3]\d\d$/);
+      expect(+hdg).toBeGreaterThanOrEqual(0);
+      expect(+hdg).toBeLessThan(360);
+      // same angle, whole turns apart: same reading
+      expect(fmtHdg(facingHeading(f + TAU * 3))).toBe(hdg);
+    }
+    expect(fmtHdg(facingHeading(-Math.PI / 2 + 6 * Math.PI))).toBe('000');
+    expect(fmtHdg(359.6)).toBe('000');
+    expect(fmtHdg(-0.4)).toBe('000');
+    expect(fmtHdg(-1)).toBe('359');
+    expect(fmtHdg(721)).toBe('001');
+    expect(fmtHdg(NaN)).toBe('000');
+    for (const d of [-30, -390, 390, 750, 359.7, -0.2, 3600, NaN]) {
+      const w = wrapDeg(d);
+      expect(w).toBeGreaterThanOrEqual(0);
+      expect(w).toBeLessThan(360);
+      expect(tapeLabel(d)).toMatch(/^([NESW]|[0-3]\d)$/);
+    }
+    expect(tapeLabel(-60)).toBe('30');
+    expect(tapeLabel(-90)).toBe('W');
+    expect(tapeLabel(720)).toBe('N');
+  });
+
+  it('readouts are never negative, NaN or Infinity', () => {
+    for (const bad of [-5, -0.01, NaN, Infinity, -Infinity]) {
+      expect(fmtAlt(bad)).toBe('0');
+      expect(fmtRange(bad)).toBe('0');
+      expect(fmtSpeed(bad)).toBe('0');
+      expect(fmtTti(bad)).toBe('00.0');
+    }
+    expect(fmtTti(2.34)).toBe('02.3');
+    expect(fmtTti(12.6)).toBe('13');
+    expect(fmtRange(12345)).toBe('12.3K');
+    // a sensor below the ground level it is measured from still reads 0 ft, not negative
+    const ro = readouts({ x: 0, y: -1, z: 0 }, { x: 3, y: 0, z: 0 }, 0);
+    expect(ro.altFt).toBe(0);
+    expect(Number.isFinite(ro.slantM) && ro.slantM >= 0).toBe(true);
+    expect(groundSpeedKt(NaN, 0, 20)).toBeNaN(); // raw value; fmtSpeed guards the display
+    expect(fmtSpeed(groundSpeedKt(NaN, 0, 20))).toBe('0');
   });
 
   it('slewAngle turns the short way and never overshoots', () => {
