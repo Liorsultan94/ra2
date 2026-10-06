@@ -80,6 +80,7 @@ void main() {
   // ragged: the noise eats the edge of each puff
   float n = texture2D( fogNoise, vUv * 0.45 + vec2( vSeed * 3.1, vAge * 0.35 ) ).g;
   float a = ( 1.0 - smoothstep( 0.25, 1.0, r + ( n - 0.5 ) * 0.55 ) ) * vA * uShadeA;
+  a = min( a, 0.9 );
   if ( fogEnabled > 0.5 ) a *= smoothstep( 0.1, 0.45, fogSample( vW ) );
   if ( a < 0.003 ) discard;
   // wood smoke: a warm grey, paler as it thins out, lit by the scene (dimmer by night: only the sky lights it)

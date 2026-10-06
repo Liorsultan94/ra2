@@ -120,7 +120,7 @@ export function chimneyAmount(hours: number, biome: string, snow = 0): number {
  */
 export function smokeShade(snow: number): { alpha: number; tint: [number, number, number] } {
   const s = Math.max(0, Math.min(1, Number.isFinite(snow) ? snow : 0));
-  return { alpha: 0.5 + 0.4 * s, tint: [1 - 0.66 * s, 1 - 0.64 * s, 1 - 0.58 * s] };
+  return { alpha: 0.5 + 0.7 * s, tint: [1 - 0.7 * s, 1 - 0.68 * s, 1 - 0.62 * s] };
 }
 
 /** Puffs per chimney and the most chimneys smoking at once (the nearest to the view) per tier. */
