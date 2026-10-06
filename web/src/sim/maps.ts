@@ -19,6 +19,7 @@ import {
   WATER_LEVEL,
   createFrontlineMap,
   distToSegment,
+  sealPockets,
   smoothstep,
   type Biome,
   type GameMap,
@@ -61,16 +62,10 @@ export function mapInfo(id: MapId): MapInfo {
 
 /** Build a map. Frontline Crossing ignores the seed (it is the fixed original). */
 export function createMap(id: MapId = 'frontline', seed = 1): GameMap {
-  switch (id) {
-    case 'desert':
-      return createDesertMap(seed);
-    case 'winter':
-      return createWinterMap(seed);
-    case 'urban':
-      return createUrbanMap(seed);
-    default:
-      return createFrontlineMap();
-  }
+  const m = id === 'desert' ? createDesertMap(seed) : id === 'winter' ? createWinterMap(seed) : id === 'urban' ? createUrbanMap(seed) : createFrontlineMap();
+  // no walkable pockets nobody can ever reach (map.ts)
+  sealPockets(m);
+  return m;
 }
 
 // ------------------------------------------------------------------ shared
@@ -258,6 +253,8 @@ interface PlaceOpts {
   startClear: number;
   /** Max height difference over a footprint tile. */
   flat: number;
+  /** Max height difference over the whole footprint: a pair on steeper ground moves up to a tile to a gentler spot, else is skipped. */
+  footFlat?: number;
   tilesOk: Tile[];
 }
 
@@ -297,16 +294,55 @@ function placeStructures(g: Grids, layout: Structure[], o: PlaceOpts) {
   let reachable = flood(g, blocked, o.starts[0]).n;
   // mirrored pairs go in together so the map stays fair
   const n = layout.length;
-  for (let k = 0; k < n; k++) {
-    const pair = [all[k], all[k + n]];
-    let ok = true;
+  const fits = (pair: Structure[]) => {
     for (const st of pair)
-      for (let y = st.y - 1; y <= st.y + st.h && ok; y++)
-        for (let x = st.x - 1; x <= st.x + st.w && ok; x++) {
+      for (let y = st.y - 1; y <= st.y + st.h; y++)
+        for (let x = st.x - 1; x <= st.x + st.w; x++) {
           const inside = x >= st.x && y >= st.y && x < st.x + st.w && y < st.y + st.h;
-          if (inside ? !okTile(x, y) : x < 0 || y < 0 || x >= W || y >= H || blocked[y * W + x] || !walkable(g, null, y * W + x)) ok = false;
+          if (inside ? !okTile(x, y) : x < 0 || y < 0 || x >= W || y >= H || blocked[y * W + x] || !walkable(g, null, y * W + x)) return false;
         }
-    if (!ok) continue;
+    return true;
+  };
+  const rise = (st: Structure) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let y = st.y; y <= st.y + st.h; y++)
+      for (let x = st.x; x <= st.x + st.w; x++) {
+        lo = Math.min(lo, vh(x, y));
+        hi = Math.max(hi, vh(x, y));
+      }
+    return hi - lo;
+  };
+  const gentle = (pair: Structure[]) => o.footFlat === undefined || pair.every((st) => rise(st) <= o.footFlat!);
+  const nudges = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+    [1, 1],
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+  ];
+  for (let k = 0; k < n; k++) {
+    let pair = [all[k], all[k + n]];
+    if (!fits(pair)) continue;
+    if (!gentle(pair)) {
+      // too steep where it was drawn: the nearest gentle spot a tile away (mirrored), if any
+      const base = pair;
+      pair = [];
+      for (const [dx, dy] of nudges) {
+        const q = [
+          { ...base[0], x: base[0].x + dx, y: base[0].y + dy },
+          { ...base[1], x: base[1].x - dx, y: base[1].y - dy },
+        ];
+        if (fits(q) && gentle(q)) {
+          pair = q;
+          break;
+        }
+      }
+      if (!pair.length) continue;
+    }
     const mark = (v: number) => {
       for (const st of pair) for (let y = st.y; y < st.y + st.h; y++) for (let x = st.x; x < st.x + st.w; x++) blocked[y * W + x] = v;
     };
@@ -506,7 +542,7 @@ export function createDesertMap(seed: number): GameMap {
     { kind: StructureKind.MudHouse, x: 12, y: 55, w: 2, h: 2, rot: 1 },
     { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
   ];
-  const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
+  const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
 
   const deco = emptyDeco();
@@ -521,6 +557,9 @@ export function createDesertMap(seed: number): GameMap {
     [
       { x: 2, y: 58 },
       { x: 30, y: 30 },
+      // round the north mesa's west end (no wires over the mesa top)
+      { x: 41, y: 14 },
+      { x: 45, y: 4 },
       { x: 60, y: 2 },
     ],
   ];
@@ -837,7 +876,8 @@ export function createUrbanMap(seed: number): GameMap {
     { x: 13, y: 38, r: 2.5, kind: 2 },
     { x: 49, y: 89, r: 2.5, kind: 2 },
   ]);
-  const oils = halfOils([{ x: 35, y: 75 }]);
+  // (in its lot, a tile clear of the street at y = 76)
+  const oils = halfOils([{ x: 35, y: 72 }]);
   const roles = new Map<Cell, 'base' | 'ore' | 'park' | 'square' | 'lot' | 'block'>();
   for (const c of own) {
     const m = cellMid(c);
@@ -1002,7 +1042,8 @@ export function createUrbanMap(seed: number): GameMap {
     structures,
     blocked,
     techSites: [
-      { def: 'tech_hospital', at: [[22, 50], [24, 46], [20, 54], [10, 54], [22, 58]] },
+      // (in the park's south-west corner, off the street)
+      { def: 'tech_hospital', at: [[22, 49], [24, 46], [20, 54], [10, 54], [22, 58]] },
       { def: 'tech_comms', at: [[56, 84], [58, 88], [54, 80], [46, 82], [34, 92]] },
       { def: 'tech_airport', at: [[2, 22], [4, 26], [10, 22], [2, 34], [22, 22]] },
     ],

@@ -66,7 +66,7 @@ interface Style {
 
 const STYLE: Record<Biome, Style> = {
   temperate: { ramp: 0.3, crest: 0.5, rim: 0.05, wall: 0.32, terraces: 0, wiggle: 0.5 },
-  desert: { ramp: 0.34, crest: 0.05, rim: 0.07, wall: 0.08, terraces: 2, wiggle: 0.62 },
+  desert: { ramp: 0.34, crest: 0.05, rim: 0.07, wall: 0.08, terraces: 2, wiggle: 0.45 },
   winter: { ramp: 0.3, crest: 0.46, rim: 0.05, wall: 0.3, terraces: 1, wiggle: 0.5 },
   urban: { ramp: 0.3, crest: 0.4, rim: 0.05, wall: 0.3, terraces: 0, wiggle: 0.5 },
 };

@@ -238,7 +238,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         if (hash2(x, y, 300) < 0.15 + 0.15 * density) {
           const px = x + hash2(x, y, 301);
           const pz = y + hash2(x, y, 302);
-          bushes.push(mk(px, pz, 0.8 + hash2(x, y, 303) * 0.6, 0.3, 0.32));
+          if (dry(px, pz)) bushes.push(mk(px, pz, 0.8 + hash2(x, y, 303) * 0.6, 0.3, 0.32));
         }
         continue;
       }
@@ -264,7 +264,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         const px = x + hash2(seed, 1, 305);
         const pz = y + hash2(seed, 2, 305);
         const occ = occAt(layout, m, px, pz);
-        if (occ & (OCC_ROAD | OCC_BUILT | OCC_FIELD)) continue;
+        if (occ & (OCC_ROAD | OCC_BUILT | OCC_FIELD) || !dry(px, pz)) continue;
         if (occ & OCC_TRACK && hash2(seed, 3, 305) < 0.85) continue;
         const r = hash2(seed, 4, 305);
         const dryK = Math.max(0, Math.min(1, (dryness - 0.4) * 1.6 + (r - 0.5) * 0.6 + (t === Tile.Sand ? 0.5 : 0)));
@@ -281,7 +281,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       for (let k = 0; k < nb; k++) {
         const px = x + hash2(x, y, 310 + k);
         const pz = y + hash2(x, y, 320 + k);
-        if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD)) continue;
+        if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD) || !dry(px, pz)) continue;
         bushes.push(mk(px, pz, 0.7 + hash2(x, y, 330 + k) * 0.8, 0.28, 0.3));
       }
     }
@@ -301,7 +301,7 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
       const pz = e.a.y + (e.b.y - e.a.y) * t + (hash2(seed, 2, 340) - 0.5) * 0.12;
       const tx = Math.floor(px);
       const ty = Math.floor(pz);
-      if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] === Tile.Water) continue;
+      if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h || m.tiles[ty * m.w + tx] === Tile.Water || !dry(px, pz)) continue;
       hedges.push(mk(px, pz, (1.05 + hash2(seed, 3, 340) * 0.5) * Math.sqrt(hs), 0.25, 0.28));
     }
   }
@@ -322,6 +322,18 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
         reeds.push(mk(px, pz, 0.8 + hash2(seed, 3, 350) * 0.6, 0.7, 0.12));
       }
     }
+
+  /** Clear of the water: the bank under a shrub's whole crown stands above the waterline (a sand tile's edge can dip into the river). */
+  function dry(px: number, pz: number) {
+    for (let k = 0; k < 5; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      const r = k === 4 ? 0 : 0.3;
+      const x = Math.max(0, Math.min(m.w - 0.01, px + Math.cos(a) * r));
+      const z = Math.max(0, Math.min(m.h - 0.01, pz + Math.sin(a) * r));
+      if (surfaceHeight(m, x, z) < WATER_LEVEL + 0.1 || m.tiles[Math.floor(z) * m.w + Math.floor(x)] === Tile.Water) return false;
+    }
+    return true;
+  }
 
   function mk(px: number, pz: number, s: number, sat: number, hueJ: number): Inst {
     const r = hash2(Math.floor(px * 97), Math.floor(pz * 97), 9);

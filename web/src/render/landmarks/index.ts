@@ -234,10 +234,23 @@ export class MapLandmarks {
         break;
       }
       case 'castle': {
-        const { lo, hi } = groundRange(m, x, y, 1.1);
-        const base = lo * 0.35 + hi * 0.65;
-        const r = this.beginRange(k, s, x, base, y, 2.3, 1);
-        k.at(x, base, y, yaw);
+        // on the flattest bit of the ridge top near the planned spot, small enough to sit on it: its
+        // foundations must not stick out over the cliff
+        let cx = x;
+        let cy = y;
+        let best = groundRange(m, x, y, 1.3);
+        for (let oy = -1.5; oy <= 1.5; oy += 0.5)
+          for (let ox = -1.5; ox <= 1.5; ox += 0.5) {
+            const g = groundRange(m, x + ox, y + oy, 1.3);
+            if (g.hi - g.lo < best.hi - best.lo - 0.02 || (Math.abs(g.hi - g.lo - (best.hi - best.lo)) <= 0.02 && g.hi > best.hi + 0.05)) {
+              best = g;
+              cx = x + ox;
+              cy = y + oy;
+            }
+          }
+        const base = best.lo * 0.45 + best.hi * 0.55;
+        const r = this.beginRange(k, s, cx, base, cy, 2.0, 1);
+        k.at(cx, base, cy, yaw, 0.8);
         castleRuin(k, 7);
         r.end = k.count;
         break;

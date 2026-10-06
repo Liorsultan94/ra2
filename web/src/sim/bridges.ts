@@ -1,5 +1,5 @@
 import { WEAPONS, unitDef } from './defs';
-import { Tile, terrainBuildable, terrainPassable } from './map';
+import { Tile, terrainPassable, tileOpen } from './map';
 import { TPS, type Entity, type Warhead } from './types';
 import type { World } from './world';
 
@@ -146,7 +146,7 @@ function hutTile(w: World, ex: number, ey: number, out: number, reach: number): 
       for (let dx = -3; dx <= 3; dx++) {
         const tx = Math.floor(cx) + dx;
         const ty = Math.floor(cy) + dy;
-        if (!terrainBuildable(m, tx, ty) || w.occ[ty * m.w + tx] !== 0) continue;
+        if (!tileOpen(m, tx, ty) || w.occ[ty * m.w + tx] !== 0) continue; // (the hut belongs on the bridge head)
         const px = tx + 0.5;
         const py = ty + 0.5;
         // keep the approach road (deck end and 4 tiles beyond) and the bank next to the deck clear

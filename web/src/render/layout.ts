@@ -1,4 +1,7 @@
+import { neutralSites } from '../sim/capture';
 import { Tile, groundHeight, type GameMap } from '../sim/map';
+import { pylonFooting, spanClear } from './pylonsite';
+export { pylonFooting, spanClear } from './pylonsite';
 import { hash2 } from '../sim/rng';
 import { buildBiomeLayout, villagePlots } from './biomelayout';
 import { finishRoadLayout, prepareRoadNet, setLayoutBuilder } from './ambient/clearance';
@@ -134,6 +137,82 @@ export function segDist(px: number, py: number, a: V2, b: V2) {
   return Math.hypot(px - a.x - dx * t, py - a.y - dy * t);
 }
 
+/**
+ * Is (x, y) within `margin` of a neutral site's footprint (oil derricks, tech structures: sim/capture.ts
+ * neutralSites, the same plan the world spawns)? Roads, tracks, fields, hedges, power lines and wrecks
+ * keep off them, so no car drives through a compound and no hedge runs through a derrick.
+ */
+export function nearSite(m: GameMap, x: number, y: number, margin: number): boolean {
+  for (const s of neutralSites(m)) if (x > s.x - margin && x < s.x + s.w + margin && y > s.y - margin && y < s.y + s.h + margin) return true;
+  return false;
+}
+/** Drop the hedges / fences that would run through a neutral site (park hedges, yard fences: not routed). */
+export function edgesOffSites(m: GameMap, edges: Edge[]) {
+  const keep = edges.filter((e) => {
+    const L = Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y);
+    const n = Math.max(1, Math.ceil(L / 0.2));
+    for (let k = 0; k <= n; k++) if (nearSite(m, e.a.x + ((e.b.x - e.a.x) * k) / n, e.a.y + ((e.b.y - e.a.y) * k) / n, 0.3)) return false;
+    return true;
+  });
+  edges.length = 0;
+  edges.push(...keep);
+}
+/** Roads and tracks are routed this far (tiles) clear of a neutral site; fields keep SITE_CLEAR + their hedge's offset. */
+export const SITE_CLEAR = 1;
+
+/**
+ * Power-line spans that would cut through a mesa / ridge (or skim a hill) get an extra tower beside
+ * the obstacle: the line bends round it. Deterministic; a span with no detour is dropped (the line splits).
+ */
+export function detourSpans(m: GameMap, line: V2[], valid: (x: number, y: number) => boolean): V2[][] {
+  const out: V2[][] = [];
+  if (line.length < 2) return out;
+  let cur: V2[] = [line[0]];
+  for (let i = 1; i < line.length; i++) {
+    const a = cur[cur.length - 1];
+    const b = line[i];
+    if (spanClear(m, a, b)) {
+      cur.push(b);
+      continue;
+    }
+    const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const nx = -(b.y - a.y) / L;
+    const ny = (b.x - a.x) / L;
+    let via: V2 | null = null;
+    // a tower off to one side (nearest first, along the span), both new spans clear
+    for (let off = 2; off <= 7 && !via; off += 0.5)
+      for (const side of [1, -1]) {
+        for (const t of [0.5, 0.35, 0.65, 0.2, 0.8, 0.05, 0.95]) {
+          const p = { x: a.x + (b.x - a.x) * t + nx * off * side, y: a.y + (b.y - a.y) * t + ny * off * side };
+          if (valid(p.x, p.y) && spanClear(m, a, p) && spanClear(m, p, b)) {
+            via = p;
+            break;
+          }
+        }
+        if (via) break;
+      }
+    // a longer obstacle: two towers out to the same side
+    let via2: V2[] | null = null;
+    for (let off = 2; off <= 7 && !via && !via2; off += 0.5)
+      for (const side of [1, -1]) {
+        const p = { x: a.x + (b.x - a.x) * 0.15 + nx * off * side, y: a.y + (b.y - a.y) * 0.15 + ny * off * side };
+        const q = { x: a.x + (b.x - a.x) * 0.85 + nx * off * side, y: a.y + (b.y - a.y) * 0.85 + ny * off * side };
+        if (valid(p.x, p.y) && valid(q.x, q.y) && spanClear(m, a, p) && spanClear(m, p, q) && spanClear(m, q, b)) {
+          via2 = [p, q];
+          break;
+        }
+      }
+    if (via) cur.push(via, b);
+    else if (via2) cur.push(...via2, b);
+    else {
+      if (cur.length > 1) out.push(cur);
+      cur = [b];
+    }
+  }
+  if (cur.length > 1) out.push(cur);
+  return out;
+}
+
 const layouts = new WeakMap<GameMap, Layout>();
 
 /** The map's scenery layout (built once per map: deterministic). */
@@ -253,6 +332,8 @@ function buildLayoutOnce(m: GameMap): Layout {
     if (m.trees[i] || m.blocked[i]) return false;
     if (occAt(x, y) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD)) return false;
     if (nearStart(x, y, 12)) return false;
+    // neutral sites, with room for a hedge
+    if (nearSite(m, x, y, SITE_CLEAR)) return false;
     // ore (and where ore regrows) stays clear
     for (const mm of m.oreMines) if (Math.abs(x - mm.x - 0.5) < 5.5 && Math.abs(y - mm.y - 0.5) < 5.5) return false;
     if (m.ore[i]) return false;
@@ -384,7 +465,7 @@ function buildLayoutOnce(m: GameMap): Layout {
     if (occAt(x, y) & (OCC_ROAD | OCC_TRACK | OCC_BUILT)) return false;
     if (nearStart(x, y, 9)) return false;
     for (const mm of m.oreMines) if (Math.hypot(x - mm.x - 0.5, y - mm.y - 0.5) < 6) return false;
-    return true;
+    return !nearSite(m, x, y, 0.8) && pylonFooting(m, x, y);
   };
   const line = (a: V2, b: V2, spacing: number) => {
     const L = Math.hypot(b.x - a.x, b.y - a.y);
@@ -406,8 +487,8 @@ function buildLayoutOnce(m: GameMap): Layout {
     }
     return out;
   };
-  const pl0 = line(v(0.6, 62.4), v(62.4, 0.6), 7.6);
-  const pylons = { lines: [pl0, rev(mirAll(pl0))] };
+  const pl0 = detourSpans(m, line(v(0.6, 62.4), v(62.4, 0.6), 7.6), valid);
+  const pylons = { lines: [...pl0, ...pl0.map((l) => rev(mirAll(l)))] };
 
   // ---- wooden utility poles along the country roads
   const poles: V2[][] = [];
@@ -423,7 +504,7 @@ function buildLayoutOnce(m: GameMap): Layout {
       const p = v(r.pts[i].x + nx * (r.width / 2 + 0.45), r.pts[i].y + ny * (r.width / 2 + 0.45));
       const tx = Math.floor(p.x);
       const ty = Math.floor(p.y);
-      const ok = tx >= 0 && ty >= 0 && tx < W && ty < H && m.tiles[ty * W + tx] !== Tile.Water && m.tiles[ty * W + tx] !== Tile.Bridge && !m.trees[ty * W + tx] && !m.blocked[ty * W + tx] && !nearStart(p.x, p.y, 7);
+      const ok = tx >= 0 && ty >= 0 && tx < W && ty < H && m.tiles[ty * W + tx] !== Tile.Water && m.tiles[ty * W + tx] !== Tile.Bridge && !m.trees[ty * W + tx] && !m.blocked[ty * W + tx] && !nearStart(p.x, p.y, 7) && !nearSite(m, p.x, p.y, 0.5);
       if (ok) run.push(p);
       else if (run.length > 1) {
         poles.push(run.splice(0));
@@ -446,7 +527,7 @@ function buildLayoutOnce(m: GameMap): Layout {
       const off = r.width / 2 + 0.15 + hash2(wseed, 2, 62) * 0.35;
       const x = r.pts[i].x - Math.sin(ang) * off * side;
       const y = r.pts[i].y + Math.cos(ang) * off * side;
-      if (nearStart(x, y, 10)) continue;
+      if (nearStart(x, y, 10) || nearSite(m, x, y, 0.5)) continue;
       const tx = Math.floor(x);
       const ty = Math.floor(y);
       if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
@@ -469,6 +550,7 @@ function buildLayoutOnce(m: GameMap): Layout {
   };
   const posts = [...pylons.lines.flat(), ...poles.flat(), ...wrecks.map((w) => v(w.x, w.y))];
   fields.push(...villagePlots(m, fieldOk, markPlot, 22, (r) => (r < 0.35 ? FieldType.Wheat : r < 0.65 ? FieldType.Plowed : FieldType.Green), posts, edges));
+  edgesOffSites(m, edges);
   return finishRoadLayout(m, { roads, tracks, fields, edges, pylons, poles, wrecks, occ, occRes: R });
 }
 
@@ -486,6 +568,9 @@ export function makeRouter(m: GameMap) {
     const t = m.tiles[i];
     if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge || m.trees[i] || m.blocked[i]) hard[i] = 1;
   }
+  // neutral sites (oil derricks, tech structures) and a ring around them: no road or track runs through
+  for (const s of neutralSites(m))
+    for (let y = s.y - SITE_CLEAR; y < s.y + s.h + SITE_CLEAR; y++) for (let x = s.x - SITE_CLEAR; x < s.x + s.w + SITE_CLEAR; x++) if (x >= 0 && y >= 0 && x < W && y < H) hard[y * W + x] = 1;
   const isHard = (x: number, y: number) => x < 0 || y < 0 || x >= W || y >= H || hard[y * W + x] === 1;
   // distance (in tiles, chamfer) to the nearest hard tile
   const near = new Float32Array(W * H).fill(99);

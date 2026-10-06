@@ -124,10 +124,100 @@ export function terrainPassable(m: GameMap, x: number, y: number): boolean {
   return t !== Tile.Water && t !== Tile.Rock && m.trees[i] === 0 && m.blocked[i] === 0;
 }
 
-export function terrainBuildable(m: GameMap, x: number, y: number): boolean {
+/** Open ground for a single tile: walkable, no bridge deck, no ore (no slope or bridge-head rule: see terrainBuildable). */
+export function tileOpen(m: GameMap, x: number, y: number): boolean {
   if (!terrainPassable(m, x, y)) return false;
   const i = y * m.w + x;
   return m.tiles[i] !== Tile.Bridge && m.ore[i] === 0;
+}
+
+/**
+ * Steepest ground a footprint may stand on: the largest height difference between its corner
+ * vertices, growing with its size (a 1x1 0.33, 2x2 0.46, 3x3 0.59, 4x4 0.72; about one in five).
+ * Steeper slots float the apron on the downhill side and bury the back wall in the hill / cliff.
+ */
+export const buildMaxRise = (w: number, h: number) => 0.2 + 0.13 * Math.max(w, h);
+/** Bridge heads: the deck plus its approach ramps this far beyond each deck end (render/deckramp.ts RAMP_RUN 2.2, plus margin)... */
+export const BRIDGE_HEAD_RUN = 3;
+/** ...and this far either side of the deck's centreline (deck half width 1.05, the rails, a tile's half diagonal). */
+export const BRIDGE_HEAD_HALF = 1.9;
+
+/** Height difference over the vertices of a footprint. */
+export function footprintRise(m: GameMap, tx: number, ty: number, w: number, h: number): number {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let vy = ty; vy <= ty + h; vy++)
+    for (let vx = tx; vx <= tx + w; vx++) {
+      const v = vertexHeight(m, vx, vy);
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  return hi - lo;
+}
+
+/** Does tile (x, y) belong to a bridge's deck or head ramps (the deck rectangle stretched along its axis)? */
+export function onBridgeHead(m: GameMap, x: number, y: number): boolean {
+  const px = x + 0.5;
+  const py = y + 0.5;
+  for (const b of m.bridges) {
+    const ux = Math.cos(b.angle);
+    const uy = Math.sin(b.angle);
+    const a = b.length / 2 + BRIDGE_HEAD_RUN;
+    const t = Math.max(-a, Math.min(a, (px - b.x) * ux + (py - b.y) * uy));
+    if (Math.hypot(px - b.x - ux * t, py - b.y - uy * t) < BRIDGE_HEAD_HALF) return true;
+  }
+  return false;
+}
+
+/**
+ * Can a w x h structure stand with its top-left tile at (x, y), terrain-wise (other buildings are the
+ * world's business)? Every tile open ground (tileOpen), never on a bridge deck or head ramp, and the
+ * ground no steeper than buildMaxRise.
+ */
+export function terrainBuildable(m: GameMap, x: number, y: number, w = 1, h = 1): boolean {
+  for (let ty = y; ty < y + h; ty++) for (let tx = x; tx < x + w; tx++) if (!tileOpen(m, tx, ty) || onBridgeHead(m, tx, ty)) return false;
+  return footprintRise(m, x, y, w, h) <= buildMaxRise(w, h);
+}
+
+/**
+ * No walkable land the armies can never reach: every walkable tile cut off from player 0's start
+ * (4-connected, as the path finder moves: no corner cutting) gets a tree, so it is impassable like
+ * the forest or bank that walls it in (Frontline's border pockets behind the edge forest). Returns the
+ * number of tiles sealed. Deterministic, and point symmetric on a symmetric map.
+ */
+export function sealPockets(m: GameMap): number {
+  const W = m.w;
+  const H = m.h;
+  const seen = new Uint8Array(W * H);
+  const q: number[] = [];
+  for (const s of m.starts) {
+    const i = s.y * W + s.x;
+    if (!seen[i] && terrainPassable(m, s.x, s.y)) {
+      seen[i] = 1;
+      q.push(i);
+    }
+  }
+  while (q.length) {
+    const t = q.pop()!;
+    const x = t % W;
+    const y = (t / W) | 0;
+    if (x > 0 && !seen[t - 1] && terrainPassable(m, x - 1, y)) (seen[t - 1] = 1), q.push(t - 1);
+    if (x < W - 1 && !seen[t + 1] && terrainPassable(m, x + 1, y)) (seen[t + 1] = 1), q.push(t + 1);
+    if (y > 0 && !seen[t - W] && terrainPassable(m, x, y - 1)) (seen[t - W] = 1), q.push(t - W);
+    if (y < H - 1 && !seen[t + W] && terrainPassable(m, x, y + 1)) (seen[t + W] = 1), q.push(t + W);
+  }
+  let n = 0;
+  for (let i = 0; i < W * H; i++) {
+    const x = i % W;
+    const y = (i / W) | 0;
+    if (seen[i] || !terrainPassable(m, x, y) || m.tiles[i] === Tile.Bridge) continue;
+    // (the same kind on both mirrored tiles)
+    m.trees[i] = hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y), 6) < 0.5 ? 1 : 2;
+    m.ore[i] = 0;
+    m.oreKind[i] = 0;
+    n++;
+  }
+  return n;
 }
 
 function vertexHeight(m: GameMap, vx: number, vy: number) {

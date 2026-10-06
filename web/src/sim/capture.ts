@@ -6,10 +6,12 @@
 //  - Comms Tower: wide sight (its def) and works as a radar;
 //  - Oil Derricks (the map's existing pairs): steady income (BuildingDef.income).
 // Sites are mirrored through the map centre (fair for both starts) and validated
-// at world creation: open buildable ground, a walkable margin, and a flood fill
-// proving no part of the map is cut off. Deterministic: no randomness at all.
+// at world creation (neutralSites, a pure function of the map): open, gentle buildable ground off the
+// roads, a walkable margin, and a flood fill proving no part of the map is cut off. Deterministic: no
+// randomness at all.
 
 import { buildingDef, unitDef } from './defs';
+import { distToSegment, terrainBuildable, terrainPassable, type GameMap } from './map';
 import { HOSPITAL_HEAL, HOSPITAL_RADIUS } from './specialdefs';
 import { TPS } from './types';
 import type { World } from './world';
@@ -21,64 +23,119 @@ const SITES: { def: string; at: [number, number][] }[] = [
   { def: 'tech_airport', at: [[6, 30], [8, 24], [4, 36], [10, 34], [12, 28]] },
 ];
 
-function reachable(w: World): number {
-  const { w: W, h: H } = w.map;
-  const s = w.map.starts[0];
-  const seen = new Uint8Array(W * H);
-  const q = [s.y * W + s.x];
-  seen[q[0]] = 1;
-  let n = 0;
-  while (q.length) {
-    const t = q.pop()!;
-    n++;
-    const x = t % W;
-    const y = (t / W) | 0;
-    if (x > 0 && !seen[t - 1] && w.pass[t - 1]) (seen[t - 1] = 1), q.push(t - 1);
-    if (x < W - 1 && !seen[t + 1] && w.pass[t + 1]) (seen[t + 1] = 1), q.push(t + 1);
-    if (y > 0 && !seen[t - W] && w.pass[t - W]) (seen[t - W] = 1), q.push(t - W);
-    if (y < H - 1 && !seen[t + W] && w.pass[t + W]) (seen[t + W] = 1), q.push(t + W);
-  }
-  return n;
+/** A neutral structure placed at world creation: oil derricks and the capturable tech sites. */
+export interface NeutralSite {
+  def: string;
+  /** Footprint: top-left tile and size. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-function siteOk(w: World, defId: string, tx: number, ty: number): boolean {
-  const d = buildingDef(defId);
-  const { w: W, h: H } = w.map;
-  if (tx < 2 || ty < 2 || tx + d.w > W - 2 || ty + d.h > H - 2 || !w.canPlace(-1, defId, tx, ty, -1, false)) return false;
-  // a walkable ring all around
-  for (let y = ty - 1; y <= ty + d.h; y++)
-    for (let x = tx - 1; x <= tx + d.w; x++) {
-      const inside = x >= tx && y >= ty && x < tx + d.w && y < ty + d.h;
-      if (!inside && !w.pass[y * W + x]) return false;
-    }
-  // keep clear of the start areas
-  for (const s of w.map.starts) if (Math.hypot(tx + d.w / 2 - s.x, ty + d.h / 2 - s.y) < 14) return false;
-  return true;
-}
+const plans = new WeakMap<GameMap, NeutralSite[]>();
 
-/** Place the mirrored pairs of tech structures (neutral, capturable). */
-export function spawnTechSites(w: World) {
-  const { w: W, h: H } = w.map;
-  let reach = reachable(w);
-  for (const site of w.map.techSites ?? SITES) {
-    const d = buildingDef(site.def);
-    for (const [x, y] of site.at) {
-      // mirror the footprint through the centre
-      const mx = W - x - d.w;
-      const my = H - y - d.h;
-      if (!siteOk(w, site.def, x, y) || !siteOk(w, site.def, mx, my)) continue;
-      const a = w.spawnBuilding(site.def, -1, x, y, true);
-      const b = w.spawnBuilding(site.def, -1, mx, my, true);
-      const now = reachable(w);
-      if (now !== reach - 2 * d.w * d.h) {
-        w.remove(a);
-        w.remove(b);
-        continue;
+/**
+ * Where the oil derricks and the tech structures stand: a pure function of the map, so the world
+ * (spawnTechSites) and the renderer's scenery layout (roads, tracks, fields and hedges keep off
+ * these footprints) agree. Tech sites take the first candidate pair that is open, gentle ground
+ * (terrainBuildable) with a walkable ring, away from the starts and off the map's roads, and cuts
+ * nothing off (flood fill); if no candidate is off the roads, the first one that fits otherwise.
+ */
+export function neutralSites(m: GameMap): NeutralSite[] {
+  let out = plans.get(m);
+  if (out) return out;
+  out = [];
+  const { w: W, h: H } = m;
+  const pass = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) pass[y * W + x] = terrainPassable(m, x, y) ? 1 : 0;
+  const taken = new Uint8Array(W * H);
+  const put = (s: NeutralSite, v: number) => {
+    for (let y = s.y; y < s.y + s.h; y++)
+      for (let x = s.x; x < s.x + s.w; x++) {
+        const i = y * W + x;
+        taken[i] = v;
+        pass[i] = v ? 0 : terrainPassable(m, x, y) ? 1 : 0;
       }
-      reach = now;
-      break;
+  };
+  for (const o of m.oils) {
+    const s = { def: 'oil', x: Math.min(o.x, W - 2), y: Math.min(o.y, H - 2), w: 2, h: 2 };
+    out.push(s);
+    put(s, 1);
+  }
+  const reachable = () => {
+    const st = m.starts[0];
+    const seen = new Uint8Array(W * H);
+    const q = [st.y * W + st.x];
+    seen[q[0]] = 1;
+    let n = 0;
+    while (q.length) {
+      const t = q.pop()!;
+      n++;
+      const x = t % W;
+      const y = (t / W) | 0;
+      if (x > 0 && !seen[t - 1] && pass[t - 1]) (seen[t - 1] = 1), q.push(t - 1);
+      if (x < W - 1 && !seen[t + 1] && pass[t + 1]) (seen[t + 1] = 1), q.push(t + 1);
+      if (y > 0 && !seen[t - W] && pass[t - W]) (seen[t - W] = 1), q.push(t - W);
+      if (y < H - 1 && !seen[t + W] && pass[t + W]) (seen[t + W] = 1), q.push(t + W);
+    }
+    return n;
+  };
+  const roadDist = (px: number, py: number) => {
+    let best = Infinity;
+    for (const r of m.roads) for (let k = 0; k < r.length - 1; k++) best = Math.min(best, distToSegment(px, py, r[k].x + 0.5, r[k].y + 0.5, r[k + 1].x + 0.5, r[k + 1].y + 0.5));
+    return best;
+  };
+  const siteOk = (tx: number, ty: number, dw: number, dh: number, offRoad: boolean) => {
+    if (tx < 2 || ty < 2 || tx + dw > W - 2 || ty + dh > H - 2 || !terrainBuildable(m, tx, ty, dw, dh)) return false;
+    // a walkable ring all around, nothing else on the footprint
+    for (let y = ty - 1; y <= ty + dh; y++)
+      for (let x = tx - 1; x <= tx + dw; x++) {
+        const inside = x >= tx && y >= ty && x < tx + dw && y < ty + dh;
+        if (inside ? taken[y * W + x] : !pass[y * W + x]) return false;
+        // (a street is up to three tiles wide: the footprint keeps a tile clear of the paving)
+        if (inside && offRoad && roadDist(x + 0.5, y + 0.5) < SITE_ROAD_CLEAR) return false;
+      }
+    // keep clear of the start areas
+    for (const s of m.starts) if (Math.hypot(tx + dw / 2 - s.x, ty + dh / 2 - s.y) < 14) return false;
+    return true;
+  };
+  let reach = reachable();
+  for (const site of m.techSites ?? SITES) {
+    const d = buildingDef(site.def);
+    let done = false;
+    for (const offRoad of [true, false]) {
+      for (const [x, y] of site.at) {
+        // mirror the footprint through the centre
+        const a = { def: site.def, x, y, w: d.w, h: d.h };
+        const b = { def: site.def, x: W - x - d.w, y: H - y - d.h, w: d.w, h: d.h };
+        if (!siteOk(a.x, a.y, d.w, d.h, offRoad) || !siteOk(b.x, b.y, d.w, d.h, offRoad)) continue;
+        put(a, 1);
+        put(b, 1);
+        const now = reachable();
+        if (now !== reach - 2 * d.w * d.h) {
+          put(a, 0);
+          put(b, 0);
+          continue;
+        }
+        reach = now;
+        out.push(a, b);
+        done = true;
+        break;
+      }
+      if (done) break;
     }
   }
+  plans.set(m, out);
+  return out;
+}
+
+/** Tech sites keep their footprint tile centres this far from the map's road centre lines (when a candidate allows). */
+const SITE_ROAD_CLEAR = 2;
+
+/** Place the mirrored pairs of tech structures (neutral, capturable): neutralSites' plan. */
+export function spawnTechSites(w: World) {
+  for (const s of neutralSites(w.map)) if (s.def !== 'oil') w.spawnBuilding(s.def, -1, s.x, s.y, true);
 }
 
 /** Effects of captured tech structures. Runs every tick right after the economy update. */
