@@ -295,6 +295,7 @@ const SAY_CUES: Record<string, { floor: number; hold: number; sting?: StingerKin
   'Unit under attack': { floor: 0.35, hold: 8 },
   'Structure lost': { floor: 0.6, hold: 12, sting: 'dread' },
   'Ore harvester lost': { floor: 0.4, hold: 8 },
+  'Harvester under attack': { floor: 0.35, hold: 8 },
   'Mission failed': { floor: 0, hold: 0, sting: 'dread' },
 };
 
