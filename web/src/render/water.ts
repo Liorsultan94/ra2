@@ -1413,6 +1413,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             g += waveN(p * 2.7 - wind * time * 1.5 + 0.71) * chop * 0.045 * (1.0 - oil);
           #endif
         }
+        // the rapids draw their own churned surface in a stable frame (below): the flow-mapped ripples, sheared by the
+        // fast current across the channel, would marble it
+        g *= 1.0 - 0.8 * rapids;
         // a slow cross swell so still water isn't dead
         g += vec2(0.8, 0.6) * cos(dot(p, vec2(0.8, 0.6)) * 2.3 + time * 1.1) * 0.012 * (1.0 - 0.7 * calm);
         // ---- rapids: whitewater in a stable flow-aligned frame about the rapids' centre (rapF);
@@ -1444,7 +1447,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             float da = dot(d, rd);
             float dc = dot(d, rs);
             float dist = sqrt(r2);
-            bend -= dc * min(R * R / max(r2, 1e-4), 1.0) * exp(-r2 / (R * R * 3.0 + 0.12));
+            bend -= dc * min(R * R / max(r2, 1e-4), 1.0) * exp(-r2 / (R * R * 1.6 + 0.05));
             // a thin collar all round, a pillow piled on the upstream face
             float up = smoothstep(0.3, -0.8, da / max(dist, 1e-3));
             rCol = max(rCol, (1.0 - smoothstep(R * 0.95, R + 0.04 + 0.24 * up * up, dist)) * (0.35 + 0.65 * up));
@@ -1456,10 +1459,14 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             float el = abs(dc) - wv;
             rWake = max(rWake, behind * exp(-el * el / (ew * ew)) * (1.0 - smoothstep(L * 0.4, L * 2.2, da)));
           }
+          // (many rocks close together: their bends add up and fold the streak coordinate into closed rings; a
+          // gentle, bounded parting reads as flow, a large one as marble)
+          bend = clamp(bend, -0.22, 0.22);
           // meanders: one smooth low-frequency lookup (two noise channels) warps the flow coordinates
           vec4 mw = texture2D(waveTex, vec2(rc * 0.07 + 0.13, (ra - time * 0.45) * 0.035));
-          float rcM = rc + (mw.b - 0.5) * 2.2 + (mw.a - 0.5) * 1.2;
-          float raW = ra + (mw.a - 0.5) * 1.5;
+          // (a gentle warp: a strong one folds the streak coordinate into marbled swirls)
+          float rcM = rc + (mw.b - 0.5) * 0.7 + (mw.a - 0.5) * 0.35;
+          float raW = ra + (mw.a - 0.5) * 0.6;
           // streak fBm: three octaves stretched along the flow and scrolled downstream, each sheared a little
           // (by the unbent coordinate) so the noise lattice never lines up into bars; the width varies with the
           // meander, and the streaks part round the rocks
@@ -1582,7 +1589,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // and narrowed and dimmed with the camera distance: zoomed out the ripples shrink under a pixel and a
         // broad lobe would paint the whole reach white (the view direction barely changes across the screen)
         float glare = wState3.x;
-        float spec = pow(sd, mix(mix(240.0, 700.0, calm), 1600.0, farK)) * mix(1.2, 1.7, calm) * glare * (1.0 - 0.75 * farK);
+        float spec = pow(sd, mix(mix(240.0, 700.0, calm), 1600.0, farK)) * mix(0.85, 1.3, calm) * glare * (1.0 - 0.75 * farK);
         // a soft sheen round it (also the bright patch of sky behind thin cloud)
         spec += pow(sd, 28.0) * mix(0.05, 0.03, farK) * (0.35 + 0.65 * glare);
         #if WATER_Q > 0
@@ -1593,7 +1600,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float spark = smoothstep(0.7, 0.86, gn * 0.55 + gn2 * 0.45);
           spec += pow(sd, 24.0) * spark * (0.05 * glare + 0.9 * dark) * (1.0 - 0.6 * calm) * (1.0 - 0.7 * farK);
         #endif
-        spec = min(spec, 0.95);
+        spec = min(spec, 0.7);
         col += sunCol * spec * wxSpec * (1.0 - 0.7 * ice);
         #if WATER_Q > 0
         for (int i = 0; i < ${MAX_WLIGHTS}; i++) {
@@ -1616,8 +1623,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float wwF = 0.0;
         if (rapids > 0.01) {
           // the streaks break into tumbling clumps carried by the real flow (fB: flow-mapped foam noise)
-          rN += (fB - 0.5) * 0.3;
-          float fine = fB * 0.55 + rFine * 0.45;
+          rN += (fB - 0.5) * 0.1;
+          float fine = fB * 0.2 + rFine * 0.8;
           float th = mix(0.95, 0.5, rCov);
           float cov = smoothstep(0.0, 0.7, rCov);
           // a soft band, not a cut: feathered edges, wisps thinning out where the streaks taper
