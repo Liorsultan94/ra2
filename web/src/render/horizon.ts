@@ -6,6 +6,8 @@ import { FOG_GLSL, type FogOfWar } from './fog';
 import { CITY_NIGHT } from './models/citybldgs';
 import { RIVER } from './water';
 import { HZ_CELL, HZ_MARGIN, HZ_RADIUS, horizonWorld, type HorizonWorld } from './horizonworld';
+import { apronHeight } from './apron';
+import { APRON_W } from './ground';
 import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /*
@@ -622,7 +624,8 @@ export class Horizon {
         for (const k of [-1, 0, 1]) {
           const x = pts[i].x - dy * hw * k;
           const y = pts[i].y + dx * hw * k;
-          const h = Math.max(W.height(x, y), WATER_LEVEL + 0.25);
+          // (on the terrain's apron near the map, apron.ts)
+          const h = Math.max(W.outside(x, y) < APRON_W ? Math.max(W.height(x, y), apronHeight(this.map, W, x, y)) : W.height(x, y), WATER_LEVEL + 0.25);
           pos.push(x, h + lift, y);
           const c = p.kind === 'rail' ? (k === 0 ? rail : ballast) : W.code === 1 && p.width < 0.9 ? sand : k === 0 ? line : asphalt;
           col.push(c.r, c.g, c.b);

@@ -42,7 +42,7 @@ const ss = (a: number, b: number, x: number) => {
 };
 const ridged = (x: number, y: number, seed: number) => 1 - Math.abs(fbm(x, y, seed, 4) * 2 - 1);
 
-interface RiverExit {
+export interface RiverExit {
   /** 0 west, 1 east, 2 north, 3 south. */
   side: number;
   /** Lateral centre along the edge. */
@@ -50,6 +50,30 @@ interface RiverExit {
   hw: number;
   amp: number;
   phase: number;
+  /** Lateral drift per unit outward where it leaves the map (the channel's own direction in the map). */
+  s: number;
+  /** A dry wadi (desert), not a river. */
+  dry: boolean;
+  /** Cross-section at the edge (heights at lateral t = -pr .. pr, PROF_STEP apart; mirrored at a corner). */
+  prof: Float32Array;
+  /** The edge's own cut (the profile at the edge itself, before the mirrored one takes over). */
+  raw: Float32Array;
+  pr: number;
+}
+
+/** Lateral drift: the channel keeps its in-map direction, then swings out from the map over ~DRIFT_B units. */
+const DRIFT_B = 46;
+const PROF_STEP = 0.25;
+
+/** channelAt's output: the carved bed height (or +inf), the valley weights, the nearest channel's lateral offset t / distance past the edge d, and the edge point it came from (sx, sy). */
+export interface ChannelSample {
+  bed: number;
+  valley: number;
+  wet: number;
+  t: number;
+  d: number;
+  sx: number;
+  sy: number;
 }
 
 export interface Sea {
@@ -89,10 +113,25 @@ export class HorizonWorld {
   readonly h: number;
   readonly cx: number;
   readonly cy: number;
+  /** Rivers leaving the map (wet channels). */
   readonly rivers: RiverExit[] = [];
+  /** Every channel leaving the map: the rivers and the desert's dry wadi. */
+  readonly channels: RiverExit[] = [];
   readonly sea: Sea | null = null;
   readonly lakes: Lake[] = [];
   private _paths: FarPath[] | null = null;
+  private _ponds: { x: number; y: number; a: number; b: number }[] | null = null;
+
+  /** Ponds carved into the ground past the edge (the desert's spring by the palm grove). */
+  get ponds() {
+    if (!this._ponds) this._ponds = this.code === 1 ? landmarkPlan(this.map).spots.filter((s) => s.kind === 'pond').map((s) => ({ x: s.x, y: s.y, a: s.a ?? 3, b: s.b ?? 2.2 })) : [];
+    return this._ponds;
+  }
+
+  /** Near a carved pond (within r of its rim, in units)? */
+  nearPond(x: number, y: number, r = 2) {
+    return this.ponds.some((p) => Math.hypot((x - p.x) / (p.a + r), (y - p.y) / (p.b + r)) < 1);
+  }
   private pathGrid: Map<number, number> | null = null;
 
   constructor(readonly map: GameMap) {
@@ -137,33 +176,107 @@ export class HorizonWorld {
 
   private findRivers() {
     const { w, h } = this;
+    const dryOk = this.code === 1;
     for (let side = 0; side < 4; side++) {
       const len = side < 2 ? h : w;
-      let run = -1;
-      for (let L = 0.25; L <= len; L += 0.5) {
-        const x = side === 0 ? 0 : side === 1 ? w : L;
-        const y = side === 2 ? 0 : side === 3 ? h : L;
-        const wet = L < len - 0.3 && this.edgeHeight(x, y) < WATER_LEVEL + 0.02;
-        if (wet && run < 0) run = L;
-        if (!wet && run >= 0) {
-          if (L - run >= 1.5) {
-            const i = this.rivers.length;
-            this.rivers.push({ side, c: (run + L - 0.5) / 2, hw: (L - run) / 2, amp: 16 + hash2(i, side, 71) * 22, phase: hash2(i, side, 72) * 6.28 });
+      for (const dry of dryOk ? [false, true] : [false]) {
+        let run = -1;
+        for (let L = 0.25; L <= len + 0.25; L += 0.5) {
+          const x = side === 0 ? 0 : side === 1 ? w : L;
+          const y = side === 2 ? 0 : side === 3 ? h : L;
+          const e = L < len ? this.edgeHeight(x, y) : 9;
+          const wet = dry ? e < -0.03 : e < WATER_LEVEL + 0.02;
+          if (wet && run < 0) run = L;
+          if (!wet && run >= 0) {
+            if (L - run >= 1.5) this.addChannel(side, run, L - 0.5, dry);
+            run = -1;
           }
-          run = -1;
         }
       }
     }
+    // (a channel crossing a corner shows up on both sides: both carry on, carving the same bed)
+    for (const c of this.channels) if (!c.dry) this.rivers.push(c);
   }
 
-  /** River centre line offset (lateral) at d units past the edge (0 within the near belt). */
+  /** Map point at lateral L, i units in from the edge of a side. */
+  private sidePoint(side: number, L: number, i: number): P2 {
+    return side === 0 ? { x: i, y: L } : side === 1 ? { x: this.w - i, y: L } : side === 2 ? { x: L, y: i } : { x: L, y: this.h - i };
+  }
+
+  private addChannel(side: number, a: number, b: number, dry: boolean) {
+    const len = side < 2 ? this.h : this.w;
+    const thr = dry ? -0.03 : WATER_LEVEL + 0.02;
+    const c = (a + b) / 2;
+    const hw = (b - a) / 2;
+    // the in-map direction: the channel's centroid on lines parallel to the edge, 2..10 tiles in
+    const pts: [number, number][] = [];
+    let lo = a;
+    let hi = b;
+    for (let i = 1; i <= 10; i++) {
+      let sw = 0;
+      let sl = 0;
+      let nlo = 1e9;
+      let nhi = -1e9;
+      for (let L = Math.max(0.25, lo - 3); L <= Math.min(len - 0.25, hi + 3); L += 0.5) {
+        const p = this.sidePoint(side, L, i);
+        const k = thr - groundHeight(this.map, p.x, p.y);
+        if (k <= 0) continue;
+        sw += k;
+        sl += k * L;
+        nlo = Math.min(nlo, L);
+        nhi = Math.max(nhi, L);
+      }
+      if (sw <= 0) break;
+      lo = nlo;
+      hi = nhi;
+      if (i >= 2) pts.push([i, sl / sw]);
+    }
+    let s = 0;
+    if (pts.length >= 3) {
+      const n = pts.length;
+      const mi = pts.reduce((q, p) => q + p[0], 0) / n;
+      const ml = pts.reduce((q, p) => q + p[1], 0) / n;
+      let num = 0;
+      let den = 0;
+      for (const [i, L] of pts) {
+        num += (i - mi) * (L - ml);
+        den += (i - mi) * (i - mi);
+      }
+      s = -Math.max(-1.6, Math.min(1.6, num / (den || 1)));
+    }
+    // the cross-section: as cut by the edge; mirrored from its far half where it runs into a corner
+    const pr = hw + 7;
+    const n = Math.round((pr * 2) / PROF_STEP) + 1;
+    const prof = new Float32Array(n);
+    const raw = new Float32Array(n);
+    const atLo = a <= 0.5;
+    const atHi = b >= len - 0.5;
+    for (let k = 0; k < n; k++) {
+      const t = -pr + k * PROF_STEP;
+      const L = atLo && !atHi ? c + Math.abs(t) : atHi && !atLo ? c - Math.abs(t) : c + t;
+      const p = this.sidePoint(side, Math.max(0, Math.min(len - 0.001, L)), 0);
+      prof[k] = this.edgeHeight(p.x, p.y);
+      const q = this.sidePoint(side, Math.max(0, Math.min(len - 0.001, c + t)), 0);
+      raw[k] = this.edgeHeight(q.x, q.y);
+    }
+    const i = this.channels.length;
+    this.channels.push({ side, c, hw, amp: 16 + hash2(i, side, 71) * 22, phase: hash2(i, side, 72) * 6.28, s, dry, prof, raw, pr });
+  }
+
+  /** Lateral offset of a channel's centre line d units past the edge: its own direction, then the far meander. */
   private meander(r: RiverExit, d: number) {
-    if (d <= HZ_MARGIN) return 0;
-    return r.amp * (Math.sin((d - HZ_MARGIN) * 0.014 + r.phase) - Math.sin(r.phase)) * ss(HZ_MARGIN, HZ_MARGIN + 70, d);
+    const drift = r.s * DRIFT_B * (1 - Math.exp(-Math.max(0, d) / DRIFT_B));
+    if (d <= HZ_MARGIN) return drift;
+    return drift + r.amp * (Math.sin((d - HZ_MARGIN) * 0.014 + r.phase) - Math.sin(r.phase)) * ss(HZ_MARGIN, HZ_MARGIN + 70, d);
+  }
+
+  /** Channel widening with distance (the near belt's cross-section scale). */
+  private widen(d: number) {
+    return 1 + Math.max(0, d) / 220;
   }
 
   private riverHalfWidth(r: RiverExit, d: number) {
-    return r.hw * (1 + Math.max(0, d - HZ_MARGIN) / 120) + Math.max(0, d - HZ_MARGIN) * 0.012;
+    return r.hw * this.widen(d) * (1 + Math.max(0, d - HZ_MARGIN) / 120) + Math.max(0, d - HZ_MARGIN) * 0.012;
   }
 
   riverPoint(r: RiverExit, d: number): P2 {
@@ -177,6 +290,52 @@ export class HorizonWorld {
         return { x: L, y: -d };
       default:
         return { x: L, y: this.h + d };
+    }
+  }
+
+  /** Distance past a side's edge and lateral coordinate. */
+  private sideCoords(side: number, x: number, y: number): [number, number] {
+    return side === 0 ? [-x, y] : side === 1 ? [x - this.w, y] : side === 2 ? [-y, x] : [y - this.h, x];
+  }
+
+  /**
+   * The channels near (x, y) outside the map: the carved bed height (or +inf), and how much the
+   * point lies in a channel's valley (0..1; wet = a river's valley).
+   */
+  channelAt(x: number, y: number, out: ChannelSample) {
+    out.bed = Infinity;
+    out.valley = 0;
+    out.wet = 0;
+    out.t = 1e9;
+    out.d = 0;
+    out.sx = x;
+    out.sy = y;
+    for (const r of this.channels) {
+      const [d, L] = this.sideCoords(r.side, x, y);
+      if (d <= 0) continue;
+      const wd = this.widen(d);
+      const t = (L - r.c - this.meander(r, d)) / wd;
+      const at = Math.abs(t);
+      const v = 1 - ss(r.hw + 3, r.hw + 16, at);
+      if (v > out.valley) out.valley = v;
+      if (!r.dry && v > out.wet) out.wet = v;
+      if (at < Math.abs(out.t)) {
+        out.t = t;
+        out.d = d;
+        // where the channel crossed the edge at this lateral offset
+        const len = r.side < 2 ? this.h : this.w;
+        const p = this.sidePoint(r.side, Math.max(0, Math.min(len - 0.01, r.c + t)), 0);
+        out.sx = p.x;
+        out.sy = p.y;
+      }
+      if (at >= r.pr) continue;
+      const f = (t + r.pr) / PROF_STEP;
+      const k = Math.min(r.prof.length - 2, Math.floor(f));
+      let P = r.prof[k] + (r.prof[k + 1] - r.prof[k]) * (f - k);
+      if (d < 6) P += (r.raw[k] + (r.raw[k + 1] - r.raw[k]) * (f - k) - P) * (1 - ss(0, 6, d));
+      // fade into the plain at the profile's reach
+      const kk = 1 - ss(r.pr - 3, r.pr, at);
+      out.bed = Math.min(out.bed, P + (1 - kk) * 50);
     }
   }
 
@@ -257,46 +416,62 @@ export class HorizonWorld {
 
   // ---------------------------------------------------------------- height
 
-  /** 1 where the map edge next to this point is under water (rivers flow on past the edge). */
+  /** 1 in a river's valley past the map edge (the rivers flow on in their own direction). */
   wetNear(x: number, y: number) {
-    const { w, h } = this;
-    const ox = x < 0 || x > w;
-    const oy = y < 0 || y > h;
-    if (ox === oy) return 0;
-    let m = 0;
-    for (let k = -4; k <= 4; k++) {
-      const hh = ox && !oy ? this.edgeHeight(x, y + k) : this.edgeHeight(x + k, y);
-      m = Math.max(m, ss(0.05, -0.3, hh) * (1 - Math.abs(k) / 5));
-    }
-    return m;
+    if (this.outside(x, y) <= 0) return 0;
+    this.channelAt(x, y, this.ch);
+    return this.ch.wet;
+  }
+
+  /** 1 in any channel's valley (rivers and the desert wadi), see channelAt. */
+  valleyNear(x: number, y: number) {
+    if (this.outside(x, y) <= 0) return 0;
+    this.channelAt(x, y, this.ch);
+    return this.ch.valley;
   }
 
   private rv = { water: 0, valley: 0 };
+  private ch: ChannelSample = { bed: Infinity, valley: 0, wet: 0, t: 0, d: 0, sx: 0, sy: 0 };
 
-  /** Ground height outside the map (inside: the sim height). See the header. */
-  height(x: number, y: number): number {
+  /**
+   * Ground height outside the map (inside: the sim height). See the header. `drop`: the near belt sinks
+   * 0.14 under the battlefield's edge (the outskirts mesh tucks under the terrain); false = flush with it
+   * (the terrain's own apron past the edge, apron.ts).
+   */
+  height(x: number, y: number, drop = true): number {
     const d = this.outside(x, y);
     const base = this.edgeHeight(x, y);
-    if (d <= 0) return base - 0.14;
+    if (d <= 0) return base - (drop ? 0.14 : 0);
     // near belt: flatten towards a gentle plain, then rolling hills
     const plain = Math.max(base, 0) * (1 - ss(0, 10, d));
     const hills = (fbm(x * 0.035, y * 0.035, 909, 3) - 0.38) * 5.5;
-    const near = this.wetNear(x, y);
-    let dry = plain + Math.max(-0.2, hills) * ss(6, 46, d) * (1 - near) - 0.14 * (1 - ss(0, 3, d));
+    const ch = this.ch;
+    this.channelAt(x, y, ch);
+    const near = ch.valley;
+    let dry = plain + Math.max(-0.2, hills) * ss(6, 46, d) * (1 - near * 0.85) - (drop ? 0.14 * (1 - ss(0, 3, d)) : 0);
     const lift = HORIZON_EDGE.lift;
     if (lift) dry += lift(x, y, d) * (1 - ss(HZ_MARGIN - 20, HZ_MARGIN, d));
-    // river beds continue straight out at the edge's depth (then meander on in the far ring)
-    const corner = (x < 0 || x > this.w) && (y < 0 || y > this.h);
-    const wet = (corner ? 0 : ss(0.0, -0.3, base)) * (1 - ss(HZ_MARGIN - 6, HZ_MARGIN + 10, d));
+    const bed = ch.bed;
     const rv = this.rv;
     this.riverAt(x, y, rv);
-    // far relief, kept off the river valleys
-    const relief = d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near * (1 - ss(40, 80, d)))) : 0;
-    let hgt = (dry + relief) * (1 - wet) + base * wet;
+    // far relief, kept off the river valleys and the wadi
+    const relief = d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near)) : 0;
+    // channel beds (rivers, the wadi) carry on in their own direction with the edge's cross-section
+    let hgt = Math.min(dry + relief, bed);
     if (d > HZ_MARGIN - 14) {
       if (rv.water > 0) hgt = hgt + (WATER_LEVEL - 0.55 - hgt) * rv.water;
       // dry land stays well clear of the far water sheet (depth precision far from the camera)
       else if (d > HZ_MARGIN) hgt = Math.max(hgt, WATER_LEVEL + 0.12 + ss(HZ_MARGIN, HZ_MARGIN + 40, d) * 0.4);
+    }
+    // the desert's springs out past the edge (landmarks: the palm grove's pond)
+    for (const p of this.ponds) {
+      const r0 = Math.hypot((x - p.x) / p.a, (y - p.y) / p.b);
+      if (r0 > 2.6) continue;
+      const r = r0 + (fbm(x * 0.6, y * 0.6, 931, 2) - 0.5) * 0.3;
+      if (r < 2.4) {
+        const bowl = r < 1 ? WATER_LEVEL - 0.42 * (1 - r * r) : WATER_LEVEL + (r - 1) * 0.45;
+        hgt = Math.min(hgt, bowl + ss(1.8, 2.4, r) * 5);
+      }
     }
     // the bay
     if (this.sea) {
@@ -404,6 +579,14 @@ export class HorizonWorld {
           const oy = y - this.cy;
           const out = (Math.cos(ang) * ox + Math.sin(ang) * oy) / (Math.hypot(ox, oy) || 1);
           if (out < 0.35) ang += Math.sign(Math.cos(ang) * -oy + Math.sin(ang) * ox) * -0.08;
+        }
+        // skirt round the lake rather than run into it
+        if (this.lakes.length && d > 10) {
+          for (let tries = 0; tries < 8 && this.lakeV(x + Math.cos(ang) * 14, y + Math.sin(ang) * 14) > -8; tries++) {
+            const l = this.lakes[0];
+            const side = Math.cos(ang) * (y - l.y) - Math.sin(ang) * (x - l.x);
+            ang += side >= 0 ? 0.1 : -0.1;
+          }
         }
         x += Math.cos(ang) * step;
         y += Math.sin(ang) * step;

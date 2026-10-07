@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { type GameMap, WATER_LEVEL } from '../sim/map';
+import { type GameMap, WATER_LEVEL, groundHeight as groundHeightAt } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
@@ -9,7 +9,9 @@ import { grassRGB } from './grasstex';
 import { biomeLook, hexRGB, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { landmarkClear } from './landmarks/plan';
-import { HZ_CELL, HZ_MARGIN, horizonWorld, type HorizonWorld } from './horizonworld';
+import { HZ_CELL, HZ_MARGIN, horizonWorld, type ChannelSample, type HorizonWorld } from './horizonworld';
+import { APRON_W } from './ground';
+import { apronHeight, buildApron } from './apron';
 import { HORIZON, Horizon, hzApply, hzClone, hzFragment, hzWaterClone } from './horizon';
 import type { Slicer } from './slice';
 import { gridSectors, splitMeshBySector, type SectorOf } from './sectors';
@@ -21,6 +23,8 @@ export interface GroundMaps {
   /** Grass control map (r = lush), see ground.ts. */
   ctl?: Uint8Array;
   res: number;
+  /** The terrain's material: the apron past the edge is drawn with it (apron.ts). */
+  material?: THREE.Material;
 }
 
 /** How far the countryside continues past each map edge (world units); the far ring (horizon.ts) takes over from there. */
@@ -46,16 +50,40 @@ uniform float oskExt;
 float oskHash( vec2 c ) { return fract( sin( dot( c, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
 vec3 oskFields( vec2 p ) {
 #if OSK_BIOME == 1
-  // desert: long dunes, gravel flats, a sandstone outcrop now and then
+  // desert: wind-shaped dune fields (gentle lit windward slopes, short dark lee faces, sharp crests,
+  // wind ripples up close) between stony flats (reg) crossed by dry wadis
   {
     vec4 n = texture2D( fogNoise, p * 0.11 );
-    float big = texture2D( fogNoise, p * 0.013 + 0.4 ).r;
-    float u = dot( p, vec2( 0.29, 0.13 ) ) + big * 9.0;
-    float dune = pow( 0.5 + 0.5 * cos( u * 2.1 ), 1.6 );
-    vec3 c = mix( vec3( 0.7, 0.55, 0.36 ), vec3( 0.86, 0.7, 0.48 ), dune );
-    c = mix( c, vec3( 0.58, 0.5, 0.4 ), smoothstep( 0.62, 0.7, big ) * 0.8 );
-    c = mix( c, vec3( 0.62, 0.38, 0.25 ), smoothstep( 0.74, 0.78, texture2D( fogNoise, p * 0.021 + 0.7 ).g ) );
-    return c * ( 0.9 + n.g * 0.16 ) * 0.86;
+    float big = texture2D( fogNoise, p * 0.0093 + 0.4 ).r;
+    float warp = texture2D( fogNoise, p * 0.019 + 0.13 ).g;
+    const vec2 wd = vec2( 0.82, 0.57 );
+    float along = dot( p, wd );
+    float across = dot( p, vec2( -wd.y, wd.x ) );
+    // crests meander: the phase drifts along them
+    float u = along * 0.13 + warp * 4.0 + sin( across * 0.07 + warp * 3.0 ) * 0.8;
+    float ph = fract( u );
+    float wind = ph / 0.8;
+    float lee = smoothstep( 0.78, 0.82, ph ) * ( 1.0 - smoothstep( 0.96, 1.0, ph ) );
+    float crest = smoothstep( 0.7, 0.8, ph ) * ( 1.0 - smoothstep( 0.8, 0.83, ph ) );
+    vec3 lit = vec3( 0.88, 0.73, 0.52 );
+    vec3 shade = vec3( 0.7, 0.55, 0.38 );
+    vec3 dune = mix( shade, lit, 0.35 + 0.65 * clamp( wind, 0.0, 1.0 ) );
+    dune *= 1.0 - 0.2 * lee;
+    dune += vec3( 0.05, 0.045, 0.03 ) * crest;
+    // ripples (faded out where they would shimmer)
+    float rf = along * 1.6 + warp * 9.0;
+    float rAA = clamp( 1.0 - fwidth( rf ) * 1.5, 0.0, 1.0 );
+    dune *= 1.0 + ( sin( rf * 6.2832 ) * 0.035 ) * rAA * ( 1.0 - lee );
+    // reg: flat gravel plain, grey-brown, speckled with darker stones
+    float stones = texture2D( fogNoise, p * 0.83 + 0.27 ).a;
+    vec3 reg = mix( vec3( 0.6, 0.51, 0.39 ), vec3( 0.67, 0.58, 0.45 ), n.r ) * ( 1.0 - 0.12 * smoothstep( 0.62, 0.8, stones ) );
+    float duneK = smoothstep( 0.38, 0.52, big + ( n.g - 0.5 ) * 0.08 );
+    vec3 c = mix( reg, dune, duneK );
+    // dry wadis: braided pale beds of silt and pebbles winding over the reg
+    float wn = texture2D( fogNoise, p * 0.0061 + 0.61 ).b + ( n.b - 0.5 ) * 0.02;
+    float wadi = 1.0 - smoothstep( 0.008, 0.022, abs( wn - 0.5 ) );
+    c = mix( c, vec3( 0.76, 0.68, 0.56 ) * ( 0.94 + n.a * 0.1 ), wadi * 0.7 * ( 1.0 - duneK * 0.8 ) );
+    return c * ( 0.93 + n.g * 0.1 ) * 0.86;
   }
 #elif OSK_BIOME == 2
   // winter: snowfields, fence lines and dark copses
@@ -161,6 +189,7 @@ export class Outskirts {
     const { fog, quality, terrainWater } = this;
     this.edge = this.terrainGround ? this.sampleGround(this.terrainGround) : null;
     yield;
+    yield* this.buildApron();
     yield* this.buildGround(fog);
     yield;
     this.buildTrees(fog, quality);
@@ -191,6 +220,7 @@ export class Outskirts {
     // aerial perspective past the edge instead of the dark surround (same uniforms, so it stays in sync)
     fog.upgradeShader(src);
     const mat: THREE.Material = hzWaterClone(src) ?? src;
+    if (mat !== src) this.channelWater(mat as THREE.ShaderMaterial, src);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.y = terrainWater!.position.y;
     mesh.renderOrder = terrainWater!.renderOrder;
@@ -202,6 +232,197 @@ export class Outskirts {
       mesh.onBeforeRender = refl.hook;
     }
     this.group.add(mesh);
+  }
+
+  /** Width of the terrain's apron past the edge (0 = none: tests / tools without the terrain). */
+  private apronW = 0;
+  private chS: ChannelSample = { bed: Infinity, valley: 0, wet: 0, t: 0, d: 0, sx: 0, sy: 0 };
+
+  /**
+   * The battlefield ground carried on past the edge (apron.ts), drawn with the terrain's own material;
+   * that material gets the horizon fog block (identical inside the map: it only differs past the edge).
+   */
+  private *buildApron(): Generator<void> {
+    const g = this.terrainGround;
+    const mat = g?.material;
+    if (!g || !mat || !g.ctl) return;
+    const prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = (shader, r) => {
+      prev.call(mat, shader, r);
+      Object.assign(shader.uniforms, HORIZON);
+      shader.fragmentShader = hzFragment(shader.fragmentShader);
+    };
+    const ck = mat.customProgramCacheKey.bind(mat);
+    mat.customProgramCacheKey = () => ck() + '-hz';
+    mat.needsUpdate = true;
+    this.apronW = APRON_W;
+    const meshes: THREE.Mesh[] = [];
+    const t0 = performance.now();
+    yield* buildApron({ map: this.map, world: this.world, look: this.look, splat: g.splat, tint: g.tint, ctl: g.ctl, res: g.res, material: mat, edgeColour: (x, y, o) => this.edgeColour(x, y, o) }, meshes);
+    const grp = new THREE.Group();
+    grp.name = 'ground-apron';
+    grp.add(...meshes);
+    this.group.add(grp);
+    console.info(`ground apron: ${meshes.reduce((a, m) => a + m.geometry.attributes.position.count, 0)} vertices in ${Math.round(performance.now() - t0)} ms`);
+  }
+
+  /**
+   * The rivers past the edge run on in their own direction (horizonworld.ts channels), so the water ring
+   * can't read its depth / shore / flow from the battlefield's maps (they clamp at the edge, i.e. a
+   * straight strip out of the edge): a map of its own (1 texel per unit over the belt: bed height, shore
+   * distance, flow), blended in over the first 2.5 units past the edge.
+   */
+  private channelWater(mat: THREE.ShaderMaterial, src: THREE.ShaderMaterial) {
+    const W = this.world;
+    if (!W.rivers.length && !W.ponds.length) return;
+    let fs = mat.fragmentShader;
+    const gRe = /float ground = texture2D\(heightTex,[^;]*;/;
+    const dat2 = 'vec4 dat2 = texture2D(waterData2, tuv);';
+    if (!gRe.test(fs) || !fs.includes(dat2) || !fs.includes('vec4 dat = texture2D(waterData, tuv);') || !/void main\(\)\s*\{/.test(fs)) {
+      console.warn('outskirts water: the river shader changed, rivers past the edge keep the edge strip');
+      return;
+    }
+    const { w, h } = this.map;
+    const M = MARGIN;
+    const S = Math.round(w + 2 * M);
+    const hgt = new Float32Array(S * S).fill(9);
+    const wet = new Uint8Array(S * S);
+    const vel = new Float32Array(S * S * 2);
+    // the flow where each river leaves the map (the battlefield's velocity map), to carry on with
+    const v2 = (src.uniforms.waterData2?.value as THREE.DataTexture | undefined)?.image as { data: Uint8Array; width: number; height: number } | undefined;
+    const ch: ChannelSample = { bed: Infinity, valley: 0, wet: 0, t: 0, d: 0, sx: 0, sy: 0 };
+    for (let j = 0; j < S; j++)
+      for (let i = 0; i < S; i++) {
+        const x = i + 0.5 - M;
+        const y = j + 0.5 - M;
+        const o = this.outside(x, y);
+        if (o > M) continue;
+        const k = j * S + i;
+        if (o <= 0) {
+          // a rim inside the map (bilinear filtering across the edge)
+          if (Math.min(x, y, w - x, h - y) < 2) hgt[k] = groundHeightAt(this.map, x, y);
+          continue;
+        }
+        W.channelAt(x, y, ch);
+        if (ch.wet <= 0 && !W.nearPond(x, y)) continue;
+        const hh = o < APRON_W ? apronHeight(this.map, W, x, y) : W.height(x, y);
+        hgt[k] = hh;
+        if (hh < WATER_LEVEL) wet[k] = 1;
+      }
+    // shore distance (units) by a two-pass chamfer transform over the wet texels
+    const sd = new Float32Array(S * S);
+    for (let k = 0; k < S * S; k++) sd[k] = wet[k] ? 1e3 : 0;
+    const rel = (k: number, q: number, c: number) => {
+      if (sd[q] + c < sd[k]) sd[k] = sd[q] + c;
+    };
+    for (let j = 1; j < S - 1; j++)
+      for (let i = 1; i < S - 1; i++) {
+        const k = j * S + i;
+        if (!wet[k]) continue;
+        rel(k, k - 1, 1);
+        rel(k, k - S, 1);
+        rel(k, k - S - 1, 1.414);
+        rel(k, k - S + 1, 1.414);
+      }
+    for (let j = S - 2; j > 0; j--)
+      for (let i = S - 2; i > 0; i--) {
+        const k = j * S + i;
+        if (!wet[k]) continue;
+        rel(k, k + 1, 1);
+        rel(k, k + S, 1);
+        rel(k, k + S + 1, 1.414);
+        rel(k, k + S - 1, 1.414);
+      }
+    // flow: along the channel (its centre line's direction), the edge's speed and sense
+    for (const r of W.rivers) {
+      const p0 = W.riverPoint(r, 0);
+      const p1 = W.riverPoint(r, 1.5);
+      let ux = p1.x - p0.x;
+      let uy = p1.y - p0.y;
+      const ul = Math.hypot(ux, uy) || 1;
+      ux /= ul;
+      uy /= ul;
+      let sense = 1;
+      let speed = 0.35;
+      if (v2) {
+        const ix = Math.max(0, Math.min(v2.width - 1, Math.floor(((p0.x - ux * 1.5) / w) * v2.width)));
+        const iy = Math.max(0, Math.min(v2.height - 1, Math.floor(((p0.y - uy * 1.5) / h) * v2.height)));
+        const q = (iy * v2.width + ix) * 4;
+        const vx = (v2.data[q] / 255) * 2 - 1;
+        const vy = (v2.data[q + 1] / 255) * 2 - 1;
+        speed = Math.min(0.8, Math.max(0.12, Math.hypot(vx, vy)));
+        sense = vx * ux + vy * uy < 0 ? -1 : 1;
+      }
+      for (let dd = 0; dd < M; dd += 0.5) {
+        const a = W.riverPoint(r, dd);
+        const b = W.riverPoint(r, dd + 0.5);
+        const tx = ((b.x - a.x) / 0.5) * sense * speed;
+        const ty = ((b.y - a.y) / 0.5) * sense * speed;
+        const hwd = r.hw * (1 + dd / 220) * 1.8 + 2;
+        for (let t = -hwd; t <= hwd; t += 0.5) {
+          const x = a.x + (r.side < 2 ? 0 : t);
+          const y = a.y + (r.side < 2 ? t : 0);
+          const i = Math.floor(x + M);
+          const j = Math.floor(y + M);
+          if (i < 0 || j < 0 || i >= S || j >= S) continue;
+          const k = j * S + i;
+          vel[k * 2] = tx;
+          vel[k * 2 + 1] = ty;
+        }
+      }
+    }
+    const data = new Uint16Array(S * S * 4);
+    const hf = THREE.DataUtils.toHalfFloat;
+    for (let k = 0; k < S * S; k++) {
+      data[k * 4] = hf(hgt[k]);
+      data[k * 4 + 1] = hf(Math.min(60, sd[k]));
+      data[k * 4 + 2] = hf(vel[k * 2]);
+      data[k * 4 + 3] = hf(vel[k * 2 + 1]);
+    }
+    const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.magFilter = tex.minFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    mat.uniforms.oskWater = { value: tex };
+    mat.uniforms.oskWBox = { value: new THREE.Vector4(-M, -M, 1 / S, 0) };
+    fs = fs.replace(/void main\(\)\s*\{/, 'uniform sampler2D oskWater;\nuniform vec4 oskWBox;\nvoid main() {');
+    fs = fs.replace(gRe, (g) => `${g}
+        float oskK = smoothstep(0.0, 2.5, length(max(max(-p, p - mapSize), 0.0)));
+        vec4 oskW = texture2D(oskWater, (p - oskWBox.xy) * oskWBox.z);
+        ground = mix(ground, oskW.r, oskK);`);
+    fs = fs.replace(dat2, `${dat2}
+        dat.g = mix(dat.g, oskW.g / SHORE, oskK);
+        dat.ba *= 1.0 - oskK;
+        dat2.rg = mix(dat2.rg, clamp(oskW.ba, -1.0, 1.0) * 0.5 + 0.5, oskK);
+        dat2.ba *= 1.0 - oskK;`);
+    mat.fragmentShader = fs;
+    mat.needsUpdate = true;
+  }
+
+  /** Mean colour of the map's dry ground (stands in where the mirrored map would show water). */
+  private dryMean: number[] | null = null;
+
+  /**
+   * The outskirts' own ground colour past the edge (sRGB 0-1): the map's colours mirrored back in, and
+   * along a channel (river, wadi) the colours of the edge it came through, so its banks run on.
+   */
+  edgeColour(x: number, y: number, out: number[]) {
+    const { w, h } = this.map;
+    this.terrainColor(x, y, out);
+    const mx = x < 0 ? -x : x > w ? 2 * w - x : x;
+    const my = y < 0 ? -y : y > h ? 2 * h - y : y;
+    const o = this.outside(x, y);
+    if (o <= 0) return;
+    const ch = this.chS;
+    this.world.channelAt(x, y, ch);
+    const v = ch.valley;
+    // the mirror lands in the river: dry ground colour instead
+    if (v < 0.99 && this.edgeHeight(mx, my) < WATER_LEVEL + 0.12 && this.dryMean) for (let j = 0; j < 3; j++) out[j] = this.dryMean[j];
+    if (v > 0) {
+      const t = [0, 0, 0];
+      this.terrainColor(ch.sx, ch.sy, t, true);
+      for (let j = 0; j < 3; j++) out[j] += (t[j] - out[j]) * v;
+    }
   }
 
   /**
@@ -220,6 +441,7 @@ export class Outskirts {
     const rock = hexRGB(L.ground.rock);
     const sand = hexRGB(L.ground.sand);
     const mud = hexRGB(L.ground.mud);
+    const mean = [0, 0, 0, 0];
     for (let py = 0; py < size; py++)
       for (let px = 0; px < size; px++) {
         const x = ((px + 0.5) / size) * w;
@@ -240,6 +462,40 @@ export class Outskirts {
           // a touch darker: the splat shader's detail maps darken the flat palette colours
           data[(py * size + px) * 3 + j] = Math.min(1, 0.88 * c * Math.pow((g.tint[k + j] / 255) * 2, 0.6));
         }
+        if (groundHeightAt(this.map, x, y) > WATER_LEVEL + 0.2) {
+          for (let j = 0; j < 3; j++) mean[j] += data[(py * size + px) * 3 + j];
+          mean[3]++;
+        }
+      }
+    if (mean[3]) this.dryMean = [mean[0] / mean[3], mean[1] / mean[3], mean[2] / mean[3]];
+    // soften it (two box passes, ~3 units): mirrored back past the edge, the map's yards, fields and
+    // tracks would otherwise show as blurred blocks; the apron carries the crisp detail (apron.ts)
+    const tmp = new Float32Array(data.length);
+    const R = 6;
+    for (let pass = 0; pass < 2; pass++)
+      for (const dir of [0, 1]) {
+        const src = dir ? tmp : data;
+        const dst = dir ? data : tmp;
+        for (let a = 0; a < size; a++)
+          for (let b = 0; b < size; b++) {
+            let r = 0;
+            let g = 0;
+            let bl = 0;
+            let n = 0;
+            for (let k = -R; k <= R; k++) {
+              const q = b + k;
+              if (q < 0 || q >= size) continue;
+              const i = (dir ? q * size + a : a * size + q) * 3;
+              r += src[i];
+              g += src[i + 1];
+              bl += src[i + 2];
+              n++;
+            }
+            const o = (dir ? b * size + a : a * size + b) * 3;
+            dst[o] = r / n;
+            dst[o + 1] = g / n;
+            dst[o + 2] = bl / n;
+          }
       }
     return { data, size };
   }
@@ -272,14 +528,16 @@ export class Outskirts {
     return this.world.edgeHeight(x, y);
   }
 
-  /** 1 where the map edge next to this point is under water (rivers flow on past the edge). */
-  private wetNear(x: number, y: number) {
-    return this.world.wetNear(x, y);
-  }
-
   /** Ground height (horizonworld.ts: the near belt, the far relief, rivers, the bay). */
   private height(x: number, y: number) {
     return this.world.height(x, y);
+  }
+
+  /** Desert: acacia scrub along the wadi's banks (and a rare one out on the reg). */
+  private wadiScrub(x: number, y: number) {
+    this.world.channelAt(x, y, this.chS);
+    const t = Math.abs(this.chS.t);
+    return (1 - smoothstep(3, 8, t)) * smoothstep(1.5, 3, t) * 0.14 + 0.0006;
   }
 
   private woods(x: number, y: number) {
@@ -296,18 +554,17 @@ export class Outskirts {
     const woods = new Uint8Array(size * size);
     const t = [0, 0, 0];
     const ppu = size / ext;
-    const { w, h } = this.map;
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
         const x = (px + 0.5) / ppu - MARGIN;
         const y = (py + 0.5) / ppu - MARGIN;
         const o = this.outside(x, y);
         const jitter = o <= 0 ? 0 : (valueNoise(x * 0.25, y * 0.25, 77) - 0.5) * 6;
-        const near = o <= 0 ? 0 : this.wetNear(x, y);
-        // farmland starts just past the edge so the seam reads as a field boundary, not a smear
-        let blend = o <= 0 ? 0 : smoothstep(1.5, 11, o + jitter * 0.6) * (1 - near);
-        if (o > 0 && near <= 0 && this.edgeHeight(x < 0 ? -x : x > w ? 2 * w - x : x, y < 0 ? -y : y > h ? 2 * h - y : y) < -0.05) blend = 1;
-        this.terrainColor(x, y, t, near > 0);
+        const val = o <= 0 ? 0 : this.world.valleyNear(x, y);
+        // past the apron (the battlefield ground carried on) the farmland / dunes take over along a ragged line
+        const a0 = this.apronW;
+        let blend = o <= 0 ? 0 : smoothstep(a0 + 1.5, a0 + 11, o + jitter * 0.6) * (1 - val * 0.9);
+        this.edgeColour(x, y, t);
         if (this.world.sea && o > 0) {
           // the bay: sand on the beach, concrete in the container yard, a sandy bed under the water
           const { u, v } = this.world.seaV(x, y);
@@ -323,7 +580,7 @@ export class Outskirts {
         edge[i + 1] = Math.min(255, t[1] * 255);
         edge[i + 2] = Math.min(255, t[2] * 255);
         edge[i + 3] = Math.round(blend * 255);
-        woods[py * size + px] = o < 5 ? 0 : Math.round(smoothstep(0.55, 0.65, this.woods(x, y)) * smoothstep(5, 12, o) * 255);
+        woods[py * size + px] = o < a0 + 5 ? 0 : Math.round(smoothstep(0.55, 0.65, this.woods(x, y)) * smoothstep(a0 + 5, a0 + 12, o) * 255);
       }
       if ((py & 15) === 15) yield;
     }
@@ -365,6 +622,8 @@ export class Outskirts {
         const cy0 = y0 + j * CELL;
         // skip cells well inside the map (the terrain covers them); keep a 2 unit overlap
         if (cx0 >= 2 && cx0 + CELL <= w - 2 && cy0 >= 2 && cy0 + CELL <= h - 2) continue;
+        // under the terrain's apron (apron.ts): only its rim overlaps
+        if (this.apronW > 0 && Math.max(this.outside(cx0, cy0), this.outside(cx0 + CELL, cy0), this.outside(cx0, cy0 + CELL), this.outside(cx0 + CELL, cy0 + CELL)) < this.apronW - 2.5) continue;
         const a = vert(i, j);
         const b = vert(i + 1, j);
         const c = vert(i, j + 1);
@@ -525,20 +784,24 @@ export class Outskirts {
         const wd = this.woods(ox, oy);
         const dense = smoothstep(0.56, 0.66, wd);
         // scattered trees along hedgerows / in meadows
-        const p = bk === 1 ? 0.012 : bk === 3 ? dense * 0.25 + 0.01 : dense * 0.85 + 0.035;
+        // rivers running on past the edge keep a fringe of trees on their banks; the desert's scrub keeps to
+        // the wadi (no palms out on the open dunes: they only stand at water, the oasis spots)
+        const riv = bk === 3 ? 0 : this.world.wetNear(ox, oy);
+        const p = bk === 1 ? this.wadiScrub(ox, oy) : bk === 3 ? dense * 0.25 + 0.01 : dense * 0.85 + 0.035 + riv * riv * 0.3;
         if (hash2(k, 4, 5) > p) continue;
         if (o > MARGIN - 6) continue;
         if (landmarkClear(this.map, ox, oy, 0.8)) continue; // a landmark site / the railway (landmarks/plan.ts)
         if (this.world.nearPath(ox, oy, 0.5)) continue; // a road / railway running on to the horizon
         if (this.world.sea && this.world.seaV(ox, oy).v > -8) continue;
-        const s = 1.15 + hash2(k, 5, 5) * 0.75 + dense * 0.45;
+        // the battlefield's own tree sizes (vegetation.ts: 0.82 .. 1.4)
+        const s = 0.85 + hash2(k, 5, 5) * 0.45 + dense * 0.15;
         const hy = this.height(ox, oy);
         // no trees standing in the river / canal / lake running on past the map edge
         if (hy < WATER_LEVEL + 0.1 || this.height(ox + 0.6, oy) < WATER_LEVEL || this.height(ox - 0.6, oy) < WATER_LEVEL || this.height(ox, oy + 0.6) < WATER_LEVEL || this.height(ox, oy - 0.6) < WATER_LEVEL) continue;
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
         // the map's leaf tints, a little deeper (haze lifts them with distance)
-        const pine = hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5);
+        const pine = bk === 1 || hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5) - riv * 0.3;
         const c = treeTint(pine ? spA : spB, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
         if (pine) {
           pines.push(m);
