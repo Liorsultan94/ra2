@@ -372,6 +372,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const remap = new Map<number, number>();
   const pos: number[] = [];
   const col: number[] = [];
+  const rp: number[] = [];
   const idx: number[] = [];
   const vert = (i: number, j: number) => {
     const k = j * rf.NW + i;
@@ -388,6 +389,8 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     const cav = 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
     const c = tone * cav;
     col.push(c, c, c);
+    // height up the cliff ramp (0 at the foot): the rock shader puts its talus there
+    rp.push(dk > 0 ? rf.p[k] : 0);
     return v;
   };
   for (let j = j0; j < j1; j += stride)
@@ -414,6 +417,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('rp', new THREE.Float32BufferAttribute(rp, 1));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
   g.computeVertexNormals();
   g.computeBoundingSphere();
@@ -475,6 +479,8 @@ function loadTile(name: string, kind: 'a' | 'n', size: number): Promise<THREE.Te
 }
 
 function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.MeshStandardMaterial {
+  const rs = ROCK_SURF[biome];
+  if (rs && quality !== 'low' && !/[?&]rocksurf=0\b/.test(typeof location !== 'undefined' ? location.search : '')) return rockSurfaceMaterial(biome, rs, fog, quality);
   const lk = LOOK[biome] ?? LOOK.temperate;
   const flatN = placeholder(128, 128, 255);
   const u = {
@@ -575,6 +581,192 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
       if (tn) u.rTopN.value = tn;
     });
   }
+  return mat;
+}
+
+// ------------------------------------------------------------- authored rock surfaces
+
+/**
+ * Authored rock faces (web/tools/blender/rock_surfaces.py, public/tex/rock): the cliff sides
+ * of the desert mesas and the temperate crags. Medium and high quality (low keeps the
+ * procedural rock); the winter and city rock keep the photoscans above.
+ */
+interface RockSurf {
+  /** Texture key in public/tex/rock. */
+  key: string;
+  /** World units per texture repeat (the V axis is world height). */
+  span: number;
+  /** Linear multiplier on the side albedo. */
+  sideGain: [number, number, number];
+  /** Normal map strength. */
+  nk: number;
+  /** World strata with dip and wave (desert), talus at the foot. */
+  strata: boolean;
+  /** Moss on the up-facing, shaded and damp parts (temperate). */
+  moss: number;
+}
+
+const ROCK_SURF: Partial<Record<Biome, RockSurf>> = {
+  desert: { key: 'sandstone', span: 2.5, sideGain: [1.12, 1.0, 0.94], nk: 1.25, strata: true, moss: 0 },
+  temperate: { key: 'granite', span: 2.0, sideGain: [0.92, 0.92, 0.9], nk: 1.15, strata: false, moss: 1 },
+};
+
+/** Moss favours the side away from the usual sun path (atmos.ts: it comes from -x most of the day). */
+const SHADE_DIR = [0.999, 0.04];
+
+const rockLoads = new Map<string, Promise<THREE.Texture | null>>();
+
+function loadRock(key: string, kind: 'a' | 'n'): Promise<THREE.Texture | null> {
+  const k = key + kind;
+  let p = rockLoads.get(k);
+  if (!p) {
+    p = fetchBitmap(`${assetBase()}tex/rock/${key}_${kind}.webp`)
+      .then((bm) => {
+        const t = new THREE.Texture(bm);
+        t.flipY = false;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.colorSpace = kind === 'a' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+        t.anisotropy = 4;
+        t.needsUpdate = true;
+        return t;
+      })
+      .catch((e) => {
+        console.warn('[relief] authored rock texture unavailable', key, e);
+        return null;
+      });
+    rockLoads.set(k, p);
+  }
+  return p;
+}
+
+function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality: 'medium' | 'high'): THREE.MeshStandardMaterial {
+  const lk = LOOK[biome] ?? LOOK.temperate;
+  const flatN = placeholder(128, 128, 255);
+  const u = {
+    rSideA: { value: placeholder(170, 150, 128) as THREE.Texture },
+    rTopA: { value: placeholder(150, 144, 136) as THREE.Texture },
+    rSideN: { value: placeholder(128, 128, 230) as THREE.Texture },
+    rTopN: { value: flatN as THREE.Texture },
+    rSideGain: { value: new THREE.Vector3(...rs.sideGain) },
+    rTopTint: { value: new THREE.Color(lk.topTint) },
+  };
+  const f = (x: number) => x.toFixed(4);
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float rp;\nvarying vec3 vRWp;\nvarying vec3 vRWn;\nvarying float vRp;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRWp = position;\nvRWn = normal;\nvRp = rp;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vRWp;
+        varying vec3 vRWn;
+        varying float vRp;
+        uniform sampler2D rSideA;
+        uniform sampler2D rTopA;
+        uniform sampler2D rSideN;
+        uniform sampler2D rTopN;
+        uniform vec3 rSideGain;
+        uniform vec3 rTopTint;
+        vec3 rWN;
+        float rRough;`,
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+        {
+          vec3 n = normalize( vRWn );
+          vec3 bw = pow( abs( n ), vec3( 4.0 ) );
+          bw /= dot( bw, vec3( 1.0 ) );
+          float up = smoothstep( 0.45, 0.85, n.y );
+          float sx = n.x >= 0.0 ? 1.0 : -1.0;
+          float sz = n.z >= 0.0 ? 1.0 : -1.0;
+          #if ${rs.strata ? 1 : 0}
+            // world strata: the texture's V is height, with a slight dip and a slow wave, so the beds
+            // run level round the whole mesa and carry on at the same height in the next one
+            float sw = texture2D( fogNoise, vRWp.xz * 0.04 ).r;
+            float sv = vRWp.y + vRWp.x * 0.03 - vRWp.z * 0.018 + ( sw - 0.5 ) * 0.32;
+          #else
+            float sv = vRWp.y;
+          #endif
+          // side projections: u runs along the face (mirrored so it reads left to right from outside), v up the wall
+          vec2 uvX = vec2( -sx * vRWp.z, -sv ) * ${f(1 / rs.span)};
+          vec2 uvZ = vec2( sz * vRWp.x, -sv ) * ${f(1 / rs.span)} + vec2( 0.37, 0.0 );
+          vec4 ax = texture2D( rSideA, uvX );
+          vec4 az = texture2D( rSideA, uvZ );
+          vec4 nxs = texture2D( rSideN, uvX );
+          vec4 nzs = texture2D( rSideN, uvZ );
+          vec2 tq = vRWp.xz * 0.44;
+          vec3 ay = texture2D( rTopA, tq ).rgb;
+          vec3 tny = texture2D( rTopN, tq ).xyz * 2.0 - 1.0;
+          float sideW = max( 1e-3, bw.x + bw.z );
+          vec3 side = ( ax.rgb * bw.x + az.rgb * bw.z ) / sideW * rSideGain;
+          float ao = ( nxs.b * bw.x + nzs.b * bw.z ) / sideW;
+          vec2 tx = ( nxs.rg * 2.0 - 1.0 ) * ${f(rs.nk)};
+          vec2 tz = ( nzs.rg * 2.0 - 1.0 ) * ${f(rs.nk)};
+          vec3 nX = normalize( vec3( 0.0, tx.y, -sx * tx.x ) + n );
+          vec3 nZ = normalize( vec3( sz * tz.x, tz.y, 0.0 ) + n );
+          vec3 nY = normalize( vec3( tny.xy + n.xz, abs( tny.z ) * n.y ).xzy );
+          float topW = max( up, bw.y * 0.6 );
+          vec3 top = ay * rTopTint * 1.6;
+          top = mix( vec3( dot( top, vec3( 0.2126, 0.7152, 0.0722 ) ) ), top, ${lk.sat.toFixed(2)} );
+          vec3 wn = normalize( mix( normalize( nX * bw.x + nZ * bw.z + n * 1e-3 ), nY, topW ) );
+          float aoS = mix( ao, 1.0, topW );
+          rRough = 1.0;
+          #if ${rs.strata ? 1 : 0}
+          {
+            // talus: the foot of the wall breaks up into scree, the same rock in loose pebbles
+            float peb = texture2D( fogNoise, vRWp.xz * 2.7 + vRWp.y * 0.9 ).g;
+            float talus = ( 1.0 - smoothstep( 0.03, 0.22, vRp ) ) * ( 1.0 - topW );
+            vec3 scree = vec3( 0.52, 0.36, 0.22 ) * ( 0.72 + 0.56 * peb );
+            side = mix( side, scree, talus * 0.6 );
+            aoS = mix( aoS, aoS * ( 0.7 + 0.5 * peb ), talus );
+          }
+          #endif
+          vec3 alb = mix( side, top, topW );
+          #if ${rs.moss > 0 ? 1 : 0}
+          {
+            // moss: on what faces up, on the shaded side, deep in the joints; broken up in clumps
+            float mn = texture2D( fogNoise, vRWp.xz * 0.55 + vRWp.y * 0.31 ).g;
+            float mn2 = texture2D( fogNoise, vRWp.xz * 2.3 - vRWp.y * 0.77 ).b;
+            float upM = smoothstep( 0.3, 0.85, wn.y );
+            float shade = smoothstep( 0.0, 0.75, dot( wn.xz, vec2( ${f(SHADE_DIR[0])}, ${f(SHADE_DIR[1])} ) ) ) * ( 1.0 - upM );
+            float crev = 1.0 - smoothstep( 0.4, 0.85, aoS );
+            float m = upM * 0.8 + shade * 0.62 + crev * 0.4 + ( mn - 0.5 ) * 1.0 + ( mn2 - 0.5 ) * 0.4;
+            float moss = smoothstep( 0.42, 0.7, m ) * ${f(rs.moss)};
+            vec3 mossC = mix( vec3( 0.045, 0.07, 0.02 ), vec3( 0.14, 0.18, 0.045 ), smoothstep( 0.25, 0.8, mn2 * 0.7 + upM * 0.3 ) );
+            alb = mix( alb, mossC, moss );
+            rRough = mix( 1.0, 1.06, moss );
+            // damp, dark joints (darker still after rain)
+            float damp = crev * ( 0.45 + 0.3 * wxWet );
+            alb *= 1.0 - damp;
+            rRough *= 1.0 - 0.3 * crev;
+          }
+          #else
+            alb *= 0.55 + 0.45 * aoS;
+          #endif
+          diffuseColor.rgb *= alb;
+          rWN = wn;
+        }`,
+      )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = min( 1.0, roughnessFactor * rRough );')
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        normal = normalize( ( viewMatrix * vec4( rWN, 0.0 ) ).xyz );`,
+      );
+  };
+  fog.apply(mat);
+  mat.customProgramCacheKey = () => 'relief-rocksurf-' + biome;
+  const size = quality === 'high' ? 1024 : 512;
+  void Promise.all([loadRock(rs.key, 'a'), loadRock(rs.key, 'n'), loadTile(lk.top, 'a', size), loadTile(lk.top, 'n', size)]).then(([sa, sn, ta, tn]) => {
+    if (sa) u.rSideA.value = sa;
+    if (sn) u.rSideN.value = sn;
+    if (ta) u.rTopA.value = ta;
+    if (tn) u.rTopN.value = tn;
+  });
   return mat;
 }
 
