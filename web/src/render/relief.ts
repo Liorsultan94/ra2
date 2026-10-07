@@ -88,6 +88,17 @@ export interface ReliefField {
   readonly count: number;
   /** Smooth clearance over the relief per tile corner ((w + 1) x (h + 1)): how much aircraft climb to clear it. */
   readonly clr: Float32Array;
+  /**
+   * Cliff skirt (outside the rock, d = 0): 1 where the sim's own ground still climbs steeply at the cliff's
+   * foot. The cliff mesh carries on over it exactly on the ground (H = G, units stand there), so the beds run
+   * on down to the talus instead of stopping at a tile-toothed line ("stilts").
+   */
+  readonly sk: Uint8Array;
+  /** Smoothed skirt normals (x, z; y = 1 before normalising), only where sk. */
+  readonly skn: Float32Array;
+  /** Skirt height (the rendered ground there) and how cliff-like it is (0 = talus .. 0.55), only where sk. */
+  readonly skh: Float32Array;
+  readonly skp: Float32Array;
 }
 
 const smooth = (e0: number, e1: number, x: number) => {
@@ -203,8 +214,12 @@ export function reliefField(m: GameMap): ReliefField {
   const jz = new Float32Array(N);
   const p = new Float32Array(N);
   const clr = new Float32Array((m.w + 1) * (m.h + 1));
+  const sk = new Uint8Array(N);
+  const skn = new Float32Array(N * 2);
+  const skh = new Float32Array(N);
+  const skp = new Float32Array(N);
   if (!any) {
-    rf = { F, NW, NH, H, d, jx, jz, p, count: 0, clr };
+    rf = { F, NW, NH, H, d, jx, jz, p, count: 0, clr, sk, skn, skh, skp };
     fields.set(m, rf);
     return rf;
   }
@@ -286,6 +301,69 @@ export function reliefField(m: GameMap): ReliefField {
         jz[k] = (valueNoise(x * 2.1, y * 2.1, 843) - 0.5) * 2 * jk;
       }
     }
+  // cliff skirts: vertices within a tile of the rock where the sim ground is still steep
+  {
+    const near = (i: number, j: number) => {
+      const tx = Math.floor(i / F);
+      const ty = Math.floor(j / F);
+      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (rockTile(tx + a, ty + b) || rockTile(Math.floor((i - 1) / F) + a, Math.floor((j - 1) / F) + b)) return true;
+      return false;
+    };
+    const e = 0.25;
+    const R2 = F; // blur radius (samples): a tile
+    const gb = new Float32Array(N);
+    for (let j = 0; j < NH; j++)
+      for (let i = 0; i < NW; i++) {
+        const k = j * NW + i;
+        if (d[k] > 0 || !near(i, j)) continue;
+        const x = i / F;
+        const y = j / F;
+        const gx = (groundHeight(m, x + e, y) - groundHeight(m, x - e, y)) / (2 * e);
+        const gy = (groundHeight(m, x, y + e) - groundHeight(m, x, y - e)) / (2 * e);
+        const gr = Math.hypot(gx, gy);
+        if (gr > 0.5) {
+          sk[k] = 1;
+          skh[k] = surfaceHeight(m, x, y);
+          skp[k] = 0.55 * smooth(0.5, 1.4, gr);
+        }
+      }
+    // smoothed normals over the skirt: a blurred copy of the ground there (tile-wide box, twice)
+    for (let j = 0; j < NH; j++) for (let i = 0; i < NW; i++) gb[j * NW + i] = groundHeight(m, Math.min(m.w, i / F), Math.min(m.h, j / F));
+    const tmp2 = new Float32Array(Math.max(NW, NH));
+    for (let rep = 0; rep < 2; rep++) {
+      for (let j = 0; j < NH; j++) {
+        for (let i = 0; i < NW; i++) {
+          let a = 0;
+          let c = 0;
+          for (let q = Math.max(0, i - R2); q <= Math.min(NW - 1, i + R2); q++) {
+            a += gb[j * NW + q];
+            c++;
+          }
+          tmp2[i] = a / c;
+        }
+        gb.set(tmp2.subarray(0, NW), j * NW);
+      }
+      for (let i = 0; i < NW; i++) {
+        for (let j = 0; j < NH; j++) {
+          let a = 0;
+          let c = 0;
+          for (let q = Math.max(0, j - R2); q <= Math.min(NH - 1, j + R2); q++) {
+            a += gb[q * NW + i];
+            c++;
+          }
+          tmp2[j] = a / c;
+        }
+        for (let j = 0; j < NH; j++) gb[j * NW + i] = tmp2[j];
+      }
+    }
+    for (let j = 1; j < NH - 1; j++)
+      for (let i = 1; i < NW - 1; i++) {
+        const k = j * NW + i;
+        if (!sk[k]) continue;
+        skn[k * 2] = -(gb[k + 1] - gb[k - 1]) * F * 0.5;
+        skn[k * 2 + 1] = -(gb[k + NW] - gb[k - NW]) * F * 0.5;
+      }
+  }
   // aircraft clearance: the relief's lift over the sim ground, dilated by a tile and smoothed so they climb gently
   const TW = m.w + 1;
   const TH = m.h + 1;
@@ -302,7 +380,7 @@ export function reliefField(m: GameMap): ReliefField {
     for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) if (clr[ty * TW + tx] < lift) clr[ty * TW + tx] = lift;
   }
   boxBlur(clr, TW, TH, 1);
-  rf = { F, NW, NH, H, d, jx, jz, p, count, clr };
+  rf = { F, NW, NH, H, d, jx, jz, p, count, clr, sk, skn, skh, skp };
   fields.set(m, rf);
   return rf;
 }
@@ -363,7 +441,7 @@ export function reliefDepth(m: GameMap, x: number, y: number): number {
 // ------------------------------------------------------------------ meshes
 
 /** One sector's merged cliff geometry at a sample stride (1 = full, 2 = far LOD). */
-function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, stride: number): THREE.BufferGeometry | null {
+function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, stride: number, skirt = false): THREE.BufferGeometry | null {
   const F = rf.F;
   const i0 = sx * SECTOR * F;
   const j0 = sy * SECTOR * F;
@@ -374,23 +452,26 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const col: number[] = [];
   const rp: number[] = [];
   const idx: number[] = [];
+  const keys: number[] = [];
+  const isSk = (k: number) => skirt && rf.sk[k] === 1;
   const vert = (i: number, j: number) => {
     const k = j * rf.NW + i;
     let v = remap.get(k);
     if (v !== undefined) return v;
     v = pos.length / 3;
     remap.set(k, v);
+    keys.push(k);
     const x = i / F;
     const y = j / F;
-    pos.push(x + rf.jx[k], rf.H[k], y + rf.jz[k]);
+    pos.push(x + rf.jx[k], isSk(k) ? rf.skh[k] : rf.H[k], y + rf.jz[k]);
     // crevices and the damp cliff foot darker, sun-bleached tops
     const dk = rf.d[k];
     const tone = 0.82 + valueNoise(x * 1.7, y * 1.7, 851) * 0.3;
-    const cav = 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
+    const cav = isSk(k) ? 0.78 + 0.22 * smooth(0.0, 0.5, rf.skp[k]) : 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
     const c = tone * cav;
     col.push(c, c, c);
     // height up the cliff ramp (0 at the foot): the rock shader puts its talus there
-    rp.push(dk > 0 ? rf.p[k] : 0);
+    rp.push(dk > 0 ? rf.p[k] : isSk(k) ? rf.skp[k] : 0);
     return v;
   };
   for (let j = j0; j < j1; j += stride)
@@ -400,6 +481,8 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
       // any sample of the cell inside the rock?
       let hit = false;
       for (let b = j; b <= je && !hit; b++) for (let a = i; a <= ie && !hit; a++) if (rf.d[b * rf.NW + a] > 0) hit = true;
+      // ... or a skirt cell (every corner on the steep ground at the cliff's foot)
+      if (!hit && skirt) hit = isSk(j * rf.NW + i) && isSk(j * rf.NW + ie) && isSk(je * rf.NW + i) && isSk(je * rf.NW + ie);
       if (!hit) continue;
       const a = vert(i, j);
       const b = vert(ie, j);
@@ -420,6 +503,17 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   g.setAttribute('rp', new THREE.Float32BufferAttribute(rp, 1));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
   g.computeVertexNormals();
+  if (skirt) {
+    // the skirt shades as one smooth talus apron (the sim's tile-wise zigzag stays in the shape only)
+    const nr = g.attributes.normal as THREE.BufferAttribute;
+    keys.forEach((k, vi) => {
+      if (!isSk(k)) return;
+      const nx = rf.skn[k * 2];
+      const nz = rf.skn[k * 2 + 1];
+      const l = Math.hypot(nx, 1, nz);
+      nr.setXYZ(vi, nx / l, 1 / l, nz / l);
+    });
+  }
   g.computeBoundingSphere();
   g.computeBoundingBox();
   void m;
@@ -480,7 +574,7 @@ function loadTile(name: string, kind: 'a' | 'n', size: number): Promise<THREE.Te
 
 function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.MeshStandardMaterial {
   const rs = ROCK_SURF[biome];
-  if (rs && quality !== 'low' && !/[?&]rocksurf=0\b/.test(typeof location !== 'undefined' ? location.search : '')) return rockSurfaceMaterial(biome, rs, fog, quality);
+  if (rs && rockSurfOn(biome, quality)) return rockSurfaceMaterial(biome, rs, fog, quality as 'medium' | 'high');
   const lk = LOOK[biome] ?? LOOK.temperate;
   const flatN = placeholder(128, 128, 255);
   const u = {
@@ -611,6 +705,11 @@ const ROCK_SURF: Partial<Record<Biome, RockSurf>> = {
   temperate: { key: 'granite', span: 2.0, sideGain: [0.92, 0.92, 0.9], nk: 1.15, strata: false, moss: 1 },
 };
 
+/** Authored rock faces for this biome and quality? (?rocksurf=0 keeps the photoscan cliffs, for comparisons.) */
+function rockSurfOn(biome: Biome, quality: 'low' | 'medium' | 'high'): boolean {
+  return !!ROCK_SURF[biome] && quality !== 'low' && !(typeof location !== 'undefined' && /[?&]rocksurf=0\b/.test(location.search));
+}
+
 /** Moss favours the side away from the usual sun path (atmos.ts: it comes from -x most of the day). */
 const SHADE_DIR = [0.999, 0.04];
 
@@ -651,7 +750,8 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
     rTopTint: { value: new THREE.Color(lk.topTint) },
   };
   const f = (x: number) => x.toFixed(4);
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  // the skirt cells lie exactly on the ground mesh: pulled forward a hair so they win the depth test
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -781,12 +881,13 @@ export function buildRelief(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium'
   const mat = cliffMaterial(m.biome ?? 'temperate', fog, quality);
   const out: THREE.Object3D[] = [];
   const low = quality === 'low';
+  const skirt = rockSurfOn(m.biome ?? 'temperate', quality);
   let tris = 0;
   for (let sy = 0; sy * SECTOR < m.h; sy++)
     for (let sx = 0; sx * SECTOR < m.w; sx++) {
-      const hi = sectorGeometry(m, rf, sx, sy, low ? 2 : 1);
+      const hi = sectorGeometry(m, rf, sx, sy, low ? 2 : 1, skirt);
       if (!hi) continue;
-      const lo = low ? null : sectorGeometry(m, rf, sx, sy, 2);
+      const lo = low ? null : sectorGeometry(m, rf, sx, sy, 2, skirt);
       const mesh = new THREE.Mesh(hi, mat);
       mesh.name = 'relief';
       mesh.castShadow = !low;
