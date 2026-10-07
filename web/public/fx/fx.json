@@ -1,60 +1,102 @@
 {
- "version": 1,
+ "version": 2,
  "frame": 128,
- "grid": 8,
+ "grid": 6,
  "blocks": [
   4,
-  2
+  3
  ],
  "encoding": "sqrt",
+ "motion": {
+  "scale": 16
+ },
  "effects": {
   "fireball": {
    "block": 0,
    "life": 3.2,
    "loop": false,
-   "emission": 0.6349
+   "emission": 0.98162,
+   "light": 0.1609
   },
   "burst": {
    "block": 1,
    "life": 0.9,
    "loop": false,
-   "emission": 0.9797
+   "emission": 0.94836,
+   "light": 0.15904
   },
   "fuel": {
    "block": 2,
    "life": 3.8,
    "loop": false,
-   "emission": 0.9951
+   "emission": 0.70139,
+   "light": 0.15348
   },
   "dust": {
    "block": 3,
    "life": 2.6,
    "loop": false,
-   "emission": 1
+   "emission": 0.0,
+   "light": 0.15227
   },
   "smoke": {
    "block": 4,
-   "life": 6,
+   "life": 6.0,
    "loop": false,
-   "emission": 1
+   "emission": 0.0,
+   "light": 0.17148
   },
   "flame": {
    "block": 5,
-   "life": 2.4,
+   "life": 1.8,
    "loop": true,
-   "emission": 0.8613
+   "emission": 1.4788,
+   "light": 0.17686
   },
   "sparks": {
    "block": 6,
-   "life": 1,
+   "life": 1.0,
    "loop": false,
-   "emission": 1
+   "emission": 24.54432,
+   "light": 0.0
   },
   "airburst": {
    "block": 7,
-   "life": 3,
+   "life": 3.0,
    "loop": false,
-   "emission": 0.6779
+   "emission": 0.98192,
+   "light": 0.16712
+  },
+  "collapse": {
+   "block": 8,
+   "life": 4.5,
+   "loop": false,
+   "emission": 0.0,
+   "light": 0.15602
+  },
+  "smokeloop": {
+   "block": 9,
+   "life": 2.6,
+   "loop": true,
+   "emission": 0.45096,
+   "light": 0.16999
+  },
+  "puff": {
+   "block": 10,
+   "life": 1.1,
+   "loop": false,
+   "emission": 0.0,
+   "light": 0.17325
+  },
+  "debris": {
+   "block": 11,
+   "life": 1.8,
+   "loop": false,
+   "emission": 0.0,
+   "light": 0.14546
   }
+ },
+ "layout": {
+  "light": 0.5
  }
 }
