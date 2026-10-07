@@ -281,6 +281,9 @@ export class WaterFx {
     const lum = sc.x * 0.3 + sc.y * 0.59 + sc.z * 0.11;
     const caus = smooth(0.35, 0.9, lum) * smooth(0.05, 0.3, pu.uSunDir.value.y) * (1 - (st ? st.cover : cfg === 'clear' ? 0 : 0.8) * 0.85) * (1 - dark);
     RIVER.wState2.value.set(dark, wind.x / wl, wind.z / wl, caus);
+    // sun glare on the water: a hard glint needs the sun out; cloud, rain and blowing sand spread it into a soft sheen
+    const cover = st ? Math.max(st.cover, st.precip * (st.fall === 'sandstorm' ? 0.8 : 1)) : cfg === 'clear' || cfg === 'dynamic' ? 0 : 0.85;
+    RIVER.wState3.value.x = (1 - smooth(0.15, 0.85, cover) * 0.92) * smooth(0.02, 0.2, pu.uSunDir.value.y);
   }
 
   /** A light candidate for the water reflections (kept: the strongest near the view). */

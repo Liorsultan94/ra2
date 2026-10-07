@@ -287,6 +287,8 @@ export class Ground {
     mat.defines.WX_NO_PUDDLE = 1;
     // ... and its own wet look (porosity, soaking from the hollows; below)
     mat.defines.WX_OWN_WET = 1;
+    // blowing sand streams over the ground in sheets and snakes (wxuniforms.ts SAND_GLSL; skipped without a sandstorm)
+    mat.defines.SAND_GROUND = 1;
     // low quality: rain only darkens surfaces (no gloss, puddles or ripples)
     WX.wxGloss.value = quality === 'low' ? 0 : 1;
     mat.customProgramCacheKey = () => 'terrain-splat-5-' + mat.defines!.TERR_POM + '-b' + bc + '-p' + mat.defines!.PHOTO + mat.defines!.PH_Q;
@@ -1606,7 +1608,8 @@ ${PHOTO_MAP}
       float wxRim = smoothstep(wxPudT - 0.06, wxPudT, lowSpot) * (1.0 - wxPud) * min(1.0, wxWet * 2.0);
       diffuseColor.rgb *= 1.0 - 0.18 * wxRim;
       diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.6 + vec3(0.015, 0.018, 0.024), wxPud);
-      terrRough = mix(terrRough, 0.03, wxPud);
+      // (falling drops ruffle the surface: no mirror-sharp sun glint while it rains)
+      terrRough = mix(terrRough, 0.03 + 0.06 * wxRain, wxPud);
       terrH = mix(terrH, 0.0, wxPud);
       terrB = mix(terrB, 0.0, wxPud);
     }
@@ -1642,6 +1645,9 @@ const TERRAIN_AO = /* glsl */ `
 #endif
 #include <aomap_fragment>
   if (wxPud > 0.01) {
+    // the sun's glint off a puddle stays a highlight, never a blown-out white blob (HDR + bloom); while it rains the
+    // sun is behind the cloud and the drops break the surface: hardly any glint at all
+    reflectedLight.directSpecular = mix(reflectedLight.directSpecular, min(reflectedLight.directSpecular * (1.0 - 0.75 * wxRain), vec3(0.45)), wxPud);
     // puddles mirror the sky (Fresnel-boosted horizon / haze colour: the environment map alone is
     // too faint at the RTS view angle to read as standing water); the reflected ray climbs from the
     // horizon to a deeper zenith, so the drop ripples (TERRAIN_NORMAL) show as rings in it
@@ -1657,7 +1663,7 @@ const TERRAIN_AO = /* glsl */ `
     float pCn = texture2D(fogNoise, pCl).b * 0.65 + texture2D(fogNoise, pCl * 2.6 + 0.31).a * 0.35;
     pRefl *= 0.35 + 0.95 * smoothstep(0.3, 0.75, pCn);
     // drop rings catch the light
-    pRefl *= 1.0 + wxRip * 0.9;
+    pRefl *= 1.0 + wxRip * 0.35;
     float pFres = 0.13 + 0.87 * pow(1.0 - clamp(dot(pN, pV), 0.0, 1.0), 5.0);
     reflectedLight.indirectSpecular += pRefl * wxPud * pFres;
   }
