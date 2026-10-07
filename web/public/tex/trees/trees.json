@@ -1,0 +1,223 @@
+{
+ "frames": {
+  "grid": 6,
+  "az": 12,
+  "els": [
+   12,
+   38,
+   64
+  ]
+ },
+ "cells": {
+  "grid": [
+   6,
+   4
+  ],
+  "names": [
+   "oak",
+   "young",
+   "birch",
+   "poplar",
+   "willow",
+   "fruit",
+   "spruce",
+   "pine",
+   "palm",
+   "acacia",
+   "spruce_snow",
+   "pine_snow",
+   "birch_bare",
+   "bush",
+   "hedge",
+   "scrub",
+   "bush_bare",
+   "willow_strand",
+   "palm_dead",
+   "bark_oak",
+   "bark_birch",
+   "bark_pine",
+   "bark_palm",
+   "bark_pine_top"
+  ]
+ },
+ "framePx": [
+  96,
+  48
+ ],
+ "cellPx": [
+  256,
+  128
+ ],
+ "kinds": {
+  "oak": {
+   "H": 1,
+   "Rf": 0.6886,
+   "Cx": 0,
+   "Cy": 0.5,
+   "Cz": 0,
+   "flexK": 0.045,
+   "heroTris": 424,
+   "fullTris": 343864
+  },
+  "young": {
+   "H": 0.74,
+   "Rf": 0.3848,
+   "Cx": 0,
+   "Cy": 0.37,
+   "Cz": 0,
+   "flexK": 0.05,
+   "heroTris": 240,
+   "fullTris": 12040
+  },
+  "birch": {
+   "H": 1.1,
+   "Rf": 0.6868,
+   "Cx": 0,
+   "Cy": 0.55,
+   "Cz": 0,
+   "flexK": 0.06,
+   "heroTris": 376,
+   "fullTris": 185440
+  },
+  "poplar": {
+   "H": 1.26,
+   "Rf": 0.6513,
+   "Cx": 0,
+   "Cy": 0.63,
+   "Cz": 0,
+   "flexK": 0.07,
+   "heroTris": 622,
+   "fullTris": 161456
+  },
+  "willow": {
+   "H": 0.88,
+   "Rf": 0.7096,
+   "Cx": 0,
+   "Cy": 0.44,
+   "Cz": 0,
+   "flexK": 0.05,
+   "heroTris": 354,
+   "fullTris": 294484
+  },
+  "fruit": {
+   "H": 0.7,
+   "Rf": 0.5899,
+   "Cx": 0,
+   "Cy": 0.35,
+   "Cz": 0,
+   "flexK": 0.04,
+   "heroTris": 204,
+   "fullTris": 37472
+  },
+  "spruce": {
+   "H": 1.05,
+   "Rf": 0.7988,
+   "Cx": 0,
+   "Cy": 0.525,
+   "Cz": 0,
+   "flexK": 0.03,
+   "heroTris": 330,
+   "fullTris": 164056
+  },
+  "pine": {
+   "H": 1.06,
+   "Rf": 0.8013,
+   "Cx": 0,
+   "Cy": 0.53,
+   "Cz": 0,
+   "flexK": 0.034,
+   "heroTris": 152,
+   "fullTris": 117198
+  },
+  "palm": {
+   "H": 1.34,
+   "Rf": 0.8733,
+   "Cx": 0.06,
+   "Cy": 0.6968,
+   "Cz": 0,
+   "flexK": 0.05,
+   "heroTris": 254,
+   "fullTris": 20312
+  },
+  "acacia": {
+   "H": 0.94,
+   "Rf": 0.8828,
+   "Cx": 0,
+   "Cy": 0.47,
+   "Cz": 0,
+   "flexK": 0.035,
+   "heroTris": 326,
+   "fullTris": 300204
+  },
+  "spruce_snow": {
+   "H": 1.05,
+   "Rf": 0.7988,
+   "Cx": 0,
+   "Cy": 0.525,
+   "Cz": 0,
+   "flexK": 0.03,
+   "heroTris": 330,
+   "fullTris": 182816
+  },
+  "pine_snow": {
+   "H": 1.06,
+   "Rf": 0.8013,
+   "Cx": 0,
+   "Cy": 0.53,
+   "Cz": 0,
+   "flexK": 0.034,
+   "heroTris": 148,
+   "fullTris": 150110
+  },
+  "birch_bare": {
+   "H": 1.1,
+   "Rf": 0.673,
+   "Cx": 0,
+   "Cy": 0.55,
+   "Cz": 0,
+   "flexK": 0.06,
+   "heroTris": 740,
+   "fullTris": 67764
+  },
+  "bush": {
+   "H": 0.34,
+   "Rf": 0.2302,
+   "Cx": 0,
+   "Cy": 0.17,
+   "Cz": 0,
+   "flexK": 0.02,
+   "heroTris": 224,
+   "fullTris": 145332
+  },
+  "hedge": {
+   "H": 0.34,
+   "Rf": 0.2483,
+   "Cx": 0,
+   "Cy": 0.17,
+   "Cz": 0,
+   "flexK": 0.015,
+   "heroTris": 284,
+   "fullTris": 499844
+  },
+  "scrub": {
+   "H": 0.2,
+   "Rf": 0.1586,
+   "Cx": 0,
+   "Cy": 0.1,
+   "Cz": 0,
+   "flexK": 0.02,
+   "heroTris": 244,
+   "fullTris": 56956
+  },
+  "bush_bare": {
+   "H": 0.34,
+   "Rf": 0.2417,
+   "Cx": 0,
+   "Cy": 0.17,
+   "Cz": 0,
+   "flexK": 0.02,
+   "heroTris": 216,
+   "fullTris": 59080
+  }
+ }
+}

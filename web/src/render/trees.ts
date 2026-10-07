@@ -48,7 +48,7 @@ let wK = 0.32;
  * foliage clock (windTime) faster than the scene clock (fogTime) in strong
  * wind (rate = 1.8 * (wind - 0.2)), so the gap's growth rate gives the wind.
  */
-function updateWind(fogTime: number) {
+export function updateWind(fogTime: number) {
   if (fogTime === wLast) return;
   const extra = windTime.value - fogTime;
   if (wLast >= 0) {
@@ -65,7 +65,7 @@ function updateWind(fogTime: number) {
   treeWind.value.set(Math.cos(a), Math.sin(a), wK);
 }
 
-const WIND_VERT = /* glsl */ `
+export const WIND_VERT = /* glsl */ `
 {
   #ifdef USE_INSTANCING
     vec3 wo = instanceMatrix[3].xyz;
@@ -97,7 +97,7 @@ const WIND_VERT = /* glsl */ `
 `;
 
 /** Keep alpha-tested leaves from thinning out in the smaller mipmaps (far trees stay dense). */
-const ALPHA_MIP = (px: number) => /* glsl */ `
+export const ALPHA_MIP = (px: number) => /* glsl */ `
 #ifdef USE_MAP
 {
   vec2 tdx = dFdx( vMapUv * ${px.toFixed(1)} );
@@ -746,7 +746,7 @@ export function shrubTint(biome: string, k: Shrub, r1: number, r2: number, r3: n
 const CELL = 4;
 
 /** Instanced trees, one CulledInstances per species (registered with the LOD and the damage sink). */
-export function buildTrees(m: GameMap, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod, sink?: CulledInstances[]): THREE.Object3D[] {
+export function buildTrees(m: GameMap, trees: TreeSpot[], fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod, sink?: CulledInstances[], species?: { ci: CulledInstances; sp: Species }[]): THREE.Object3D[] {
   const { mat, depth } = treeMaterials(fog, quality);
   const out: THREE.Object3D[] = [];
   const shadows = quality !== 'low';
@@ -780,6 +780,7 @@ export function buildTrees(m: GameMap, trees: TreeSpot[], fog: FogOfWar, quality
     out.push(ci.mesh);
     lod.addCulled(ci, lo, treeLo);
     sink?.push(ci);
+    species?.push({ ci, sp: sp as Species });
   });
   return out;
 }

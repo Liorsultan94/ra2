@@ -255,6 +255,11 @@ export class CulledInstances {
   /** Replace an instance's transform (e.g. a tree knocked over); takes effect on the next cull. */
   setMatrix(j: number, m: THREE.Matrix4) {
     m.toArray(this.mats, j * 16);
+    // tilted over (a toppled tree): kept on the full model (see attachFar)
+    const e = m.elements;
+    const up = e[5] / Math.max(1e-6, Math.hypot(e[4], e[5], e[6]));
+    if (up < 0.97) this.forced.add(j);
+    else this.forced.delete(j);
     this.version++;
   }
 
@@ -305,34 +310,106 @@ export class CulledInstances {
       }
       return true;
     };
-    const dst = this.mesh.instanceMatrix.array as Float32Array;
-    const dcol = this.mesh.instanceColor ? (this.mesh.instanceColor.array as Float32Array) : null;
-    let n = 0;
+    const near = this.near;
+    near.begin(this.mesh, this.mats, this.cols);
+    const far = this.far;
+    far?.out.begin(far.mesh, this.mats, this.cols);
+    const split = far?.split;
     for (let cz = cz0; cz <= cz1; cz++) {
-      let runA = -1;
-      let runB = -1;
-      const flush = () => {
-        if (runA < 0 || runB <= runA) return;
-        dst.set(this.mats.subarray(runA * 16, runB * 16), n * 16);
-        if (dcol && this.cols) dcol.set(this.cols.subarray(runA * 3, runB * 3), n * 3);
-        n += runB - runA;
-      };
       for (let cx = cx0; cx <= cx1; cx++) {
         const k = cz * this.gw + cx;
         const a = this.start[k];
         const b = this.start[k + 1];
         if (a === b) continue;
-        if (!inside((cx + 0.5) * c, (cz + 0.5) * c)) continue;
-        if (a === runB) runB = b;
-        else {
-          flush();
-          runA = a;
-          runB = b;
-        }
+        const px = (cx + 0.5) * c;
+        const pz = (cz + 0.5) * c;
+        if (!inside(px, pz)) continue;
+        // far LOD (tree impostors): the near and / or the far mesh draw this cell (both while it crossfades)
+        const lod = split ? split(px, pz, c) : 1;
+        if (lod & 1) near.run(a, b);
+        if (lod & 2) far!.out.run(a, b);
+        if (!(lod & 1) && far && this.forced.size) far.pending.push(a, b);
       }
-      flush();
     }
-    const im = this.mesh;
+    // toppled trees always draw the full model (the impostors only show standing trees)
+    if (far && this.forced.size) {
+      const pend = far.pending;
+      for (const j of this.forced) {
+        let draw = false;
+        for (let i = 0; i < pend.length; i += 2)
+          if (j >= pend[i] && j < pend[i + 1]) {
+            draw = true;
+            break;
+          }
+        if (draw) near.run(j, j + 1);
+      }
+      pend.length = 0;
+    }
+    near.end();
+    far?.out.end();
+  }
+
+  private near = new RunWriter();
+  private far: { mesh: THREE.InstancedMesh; split: (x: number, z: number, cell: number) => number; out: RunWriter; pending: number[] } | null = null;
+  /** Instances drawn by the main mesh whatever their distance (toppled trees). */
+  private forced = new Set<number>();
+
+  /**
+   * A second, far LOD mesh (tree impostors) fed from the same instances: `split(x, z, cell)` says for a
+   * visible cell (centre x, z) whether the main mesh (bit 1), the far mesh (bit 2) or both draw it.
+   */
+  attachFar(mesh: THREE.InstancedMesh, split: (x: number, z: number, cell: number) => number) {
+    this.far = { mesh, split, out: new RunWriter(), pending: [] };
+    this.version++;
+  }
+
+  /** Replace an instance's colour (asset swap: new tints). */
+  setColor(j: number, r: number, g: number, b: number) {
+    if (!this.cols) return;
+    this.cols[j * 3] = r;
+    this.cols[j * 3 + 1] = g;
+    this.cols[j * 3 + 2] = b;
+    this.version++;
+  }
+}
+
+/** Copies runs of instances (matrices + colours) into an instanced mesh's buffers. */
+class RunWriter {
+  private im: THREE.InstancedMesh | null = null;
+  private mats: Float32Array | null = null;
+  private cols: Float32Array | null = null;
+  private n = 0;
+  private a = -1;
+  private b = -1;
+  begin(im: THREE.InstancedMesh, mats: Float32Array, cols: Float32Array | null) {
+    this.im = im;
+    this.mats = mats;
+    this.cols = cols;
+    this.n = 0;
+    this.a = this.b = -1;
+  }
+  /** Add instances [a, b) (joined with the previous run when contiguous). */
+  run(a: number, b: number) {
+    if (a === this.b) this.b = b;
+    else {
+      this.flush();
+      this.a = a;
+      this.b = b;
+    }
+  }
+  flush() {
+    if (this.a >= 0 && this.b > this.a) {
+      const im = this.im!;
+      (im.instanceMatrix.array as Float32Array).set(this.mats!.subarray(this.a * 16, this.b * 16), this.n * 16);
+      if (im.instanceColor && this.cols) (im.instanceColor.array as Float32Array).set(this.cols.subarray(this.a * 3, this.b * 3), this.n * 3);
+      this.n += this.b - this.a;
+    }
+    this.a = this.b = -1;
+  }
+  end() {
+    this.flush();
+    const im = this.im!;
+    const n = this.n;
     im.count = n;
     im.instanceMatrix.clearUpdateRanges();
     im.instanceMatrix.addUpdateRange(0, n * 16);
@@ -368,6 +445,17 @@ export class SceneryLod {
   add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity) {
     this.entries.push({ meshes, hi, lo, loSpan, hideSpan });
     this.state = -1;
+  }
+
+  /** Swap the models of a registered mesh (assets streamed in). */
+  retarget(mesh: THREE.Mesh, hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null) {
+    for (const e of this.entries)
+      if (e.meshes.includes(mesh)) {
+        e.hi = hi;
+        e.lo = lo;
+      }
+    this.state = -1;
+    this.last = -1;
   }
 
   /** Map-wide instanced scatter, culled to the view by `cull()`. */
