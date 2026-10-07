@@ -5,6 +5,7 @@ import { FACTIONS } from './sim/defs';
 import type { Faction } from './sim/types';
 import { Game, type GameOptions } from './game/game';
 import { loadModelOverrides } from './render/models';
+import { loadSkins } from './render/models/blenderskin';
 import { MainMenu, loadSettings, resolveQuality, showEndScreen, showPauseMenu, type Settings } from './ui/menu';
 import type { Splash } from './ui/splash';
 import { showAfterAction } from './ui/aar';
@@ -208,7 +209,8 @@ export async function boot(splash: Splash) {
   splash.onGesture(unlockMenuAudio);
 
   splash.stage('Loading models', 0.55, 0.6);
-  await loadModelOverrides(import.meta.env.BASE_URL);
+  // Blender-authored skins (models/blenderskin.ts) next to the optional manifest overrides
+  await Promise.all([loadModelOverrides(import.meta.env.BASE_URL), loadSkins(import.meta.env.BASE_URL)]);
 
   // Debug/test hooks: ?play=usa,russia,normal jumps straight into a battle, ?demo=usa,russia watches one.
   const params = new URLSearchParams(location.search);

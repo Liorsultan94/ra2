@@ -10,6 +10,7 @@ import { PAINT_LOUVRE, PAINT_MESH, bakeVehicle, type BakeResult } from './vehbak
 import { lodGeos, registerLods } from '../perf/lod';
 import { WearDriver, isWearMaterial, wearPatch, type WearCfg } from './wear';
 import { onFogRelease, purgeKeys } from '../fogcache';
+import { skinFor, skinMaterial, transferAttr, triCount, type Skin } from './blenderskin';
 
 /*
  * Detailed procedural ground vehicles (one design per nation for the shared
@@ -626,7 +627,7 @@ interface Tpl {
   bob: number;
   /** Hull rock per main-gun shot (0 = none, 1 = 120 mm MBT, ~1.4 = SPH, ~0.25 = autocannon). */
   kick: number;
-  stats: { tris: number; meshes: number; lod?: number[] };
+  stats: { tris: number; meshes: number; lod?: number[]; skin?: string };
   key: string;
   decals: DecalSpec | null;
   fx: NonNullable<Model['damageFx']>;
@@ -2488,10 +2489,72 @@ function build(key: string, style: ModelStyle, fog: FogOfWar | null, fn: (b: Bld
     b.crewOn = key === 'mbt' || key === 'apc';
     fn(b);
     t = b.finish();
+    const skin = skinFor(key, style.faction);
+    if (skin) applySkin(t, skin, style, fog);
     t.key = ck;
     templates.set(ck, t);
   }
   return instantiate(t, fog);
+}
+
+/** Blender skins (models/blenderskin.ts): no dust attribute (baked into the albedo), loose skirts / bins kept. */
+const SKIN_WEAR: WearCfg = { dirt: false, loose: true, scale: 9 };
+const SKIN_BUCKETS = new Set(['s' + CAMO, 'D', 'M']);
+
+/**
+ * Swap the static merged meshes (camo / painted / metal buckets) of the skinned parts for the Blender low
+ * poly. Everything else of the template stays: part pivots, muzzles, recoil, wheels, belts, crew, hatch,
+ * antennas, lamps, decal anchor, damage points. The procedural `aWear` (loose-part ids and hinges) is
+ * copied onto the skin by nearest vertex, so skirts still hang and bins still fly off when hit.
+ * Returns false (template untouched) if the skin does not fit this template.
+ */
+function applySkin(t: Tpl, skin: Skin, style: ModelStyle, fog: FogOfWar | null): boolean {
+  try {
+    const groups = new Map<string, THREE.Object3D>();
+    t.root.traverse((o) => {
+      const tg = (o.userData.tag as string | undefined)?.split(' ')[0];
+      if (tg && skin.parts.has(tg) && !groups.has(tg)) groups.set(tg, o);
+    });
+    if (groups.size !== skin.parts.size) return false;
+    const plan: { g: THREE.Object3D; old: THREE.Mesh[]; geos: THREE.BufferGeometry[] }[] = [];
+    for (const [p, geos] of skin.parts) {
+      const g = groups.get(p)!;
+      const old = g.children.filter((o): o is THREE.Mesh => (o as THREE.Mesh).isMesh && !(o as THREE.InstancedMesh).isInstancedMesh && SKIN_BUCKETS.has(o.userData.bk as string));
+      if (!old.length) return false;
+      plan.push({ g, old, geos });
+    }
+    const mat = wmat(`skin|${skin.def.id}|${style.team}`, fog, () => unitLook(skinMaterial(skin, style.team, fog ? 'veh|fog' : 'veh'), { rim: 0.9, team: false }), SKIN_WEAR);
+    let d0 = 0;
+    let d1 = 0;
+    let d2 = 0;
+    for (const { old, geos } of plan) for (const geo of geos) transferAttr(geo, old.map((m) => m.geometry), 'aWear', (a, i) => (a[i * 4] = 0));
+    for (const { g, old, geos } of plan) {
+      for (const m of old) {
+        g.remove(m);
+        const n = triCount(m.geometry);
+        const l = lodGeos(m.geometry);
+        d0 -= n;
+        d1 -= l ? triCount(l[0]) : n;
+        d2 -= l ? triCount(l[1]) : n;
+      }
+      const mesh = new THREE.Mesh(geos[0], mat);
+      mesh.userData.bk = 'skin';
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      g.add(mesh);
+      if (geos.length === 3) registerLods(geos[0], [geos[1], geos[2]]);
+      d0 += triCount(geos[0]);
+      d1 += triCount(geos[1] ?? geos[0]);
+      d2 += triCount(geos[2] ?? geos[1] ?? geos[0]);
+    }
+    t.stats.tris += d0;
+    if (t.stats.lod) t.stats.lod = [t.stats.lod[0] + d0, t.stats.lod[1] + d1, t.stats.lod[2] + d2];
+    t.stats.skin = skin.def.id;
+    return true;
+  } catch (e) {
+    console.warn('[glb] skin failed, procedural model kept', skin.def.id, e);
+    return false;
+  }
 }
 
 let instSeq = 0;
@@ -2794,8 +2857,8 @@ function beacon(b: Bld, p: Part, x: number, y: number, z: number, paint = AMBER)
 }
 
 /** Stats for the preview harness. */
-export function vehicleStats(): Record<string, { tris: number; meshes: number; lod?: number[] }> {
-  const out: Record<string, { tris: number; meshes: number; lod?: number[] }> = {};
+export function vehicleStats(): Record<string, { tris: number; meshes: number; lod?: number[]; skin?: string }> {
+  const out: Record<string, { tris: number; meshes: number; lod?: number[]; skin?: string }> = {};
   for (const [k, t] of templates) out[k] = t.stats;
   return out;
 }

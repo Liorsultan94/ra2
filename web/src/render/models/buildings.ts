@@ -11,6 +11,7 @@ import { BuildFx, FxTpl, newRec, type FxModel, type FxRec } from './buildfx';
 import { atlasPatch, bldAtlas, netTexture, signCell, signTexture, Tile, type SignSpec } from './bldtex';
 import { flagPatchCell, makeDecalMaterial, roundelCell, type Cell } from './insignia';
 import { registerLods } from '../perf/lod';
+import { skinFor, skinMaterial, type Skin } from './blenderskin';
 
 /*
  * Detailed procedural buildings, one design per building type, with four
@@ -2324,6 +2325,43 @@ onFogRelease((f) => {
 /** Vertical stretch per building (the pump jack keeps its exact linkage geometry). */
 const STRETCH: Record<string, number> = { conyard: 1.2, power: 1.2, refinery: 1.2, barracks: 1.22, factory: 1.18, radar: 1.18, airfield: 1.18, tech: 1.2, bunker: 1.12, sentry: 1.1, sam: 1.08, atgm: 1.15, oil: 1 };
 
+/**
+ * Blender skin (models/blenderskin.ts): swap the static atlas-textured structure (root level + the
+ * small-detail group) for the Blender low poly. Animated nodes (doors, beacons, ventilators), lamps /
+ * window glow, signs and flags stay procedural; construction / damage effects and night lights are
+ * built from the same template records as before.
+ */
+function applySkin(root: THREE.Group, skin: Skin, s: ModelStyle, fog: FogOfWar | null): boolean {
+  const geos = skin.parts.get('root');
+  if (!geos) return false;
+  const isAtlas = (o: THREE.Object3D): o is THREE.Mesh => {
+    const m = o as THREE.Mesh;
+    const uv1 = m.isMesh ? m.geometry.getAttribute('uv1') : undefined;
+    const mat = m.material as SMat;
+    return !!uv1 && uv1.itemSize === 2 && !Array.isArray(m.material) && !mat.transparent && !mat.alphaTest && !mat.userData.baseEI && !mat.userData.blinkEI;
+  };
+  const detail = root.children.find((o) => o.name === 'lod-detail');
+  const old = [...root.children.filter(isAtlas), ...(detail ? detail.children.filter(isAtlas) : [])];
+  if (!old.length) return false;
+  const k = `${fogId(fog)}|skin|${skin.def.id}|${s.team}`;
+  let mat = matCache.get(k);
+  if (!mat) {
+    mat = skinMaterial(skin, s.team, fog ? 'bld|fog' : 'bld');
+    // open shells (vault roof, awnings) are single sheets in the procedural kit too: both faces drawn
+    mat.side = THREE.DoubleSide;
+    if (fog) fog.apply(mat);
+    matCache.set(k, mat);
+  }
+  for (const o of old) o.parent!.remove(o);
+  const mesh = new THREE.Mesh(geos[0], mat);
+  mesh.name = 'skin';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  root.add(mesh);
+  if (geos.length === 3) registerLods(geos[0], [geos[1], geos[2]]);
+  return true;
+}
+
 function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d: number, fn: (k: Kit) => void): Tpl {
   const P = makePal(s, fog);
   const k = new Kit(P, strHash(key + ':' + s.faction));
@@ -2332,6 +2370,8 @@ function buildTpl(key: string, s: ModelStyle, fog: FogOfWar | null, w: number, d
   k.height = k.wy(k.height);
   k.finish();
   k.root.name = 'building:' + key;
+  const skin = skinFor(key, s.faction);
+  if (skin) applySkin(k.root, skin, s, fog);
   return {
     root: k.root,
     specs: k.specs,
