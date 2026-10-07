@@ -490,8 +490,14 @@ export class Effects {
     }
     // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white)
     const snow = WX.wxSnow.value > 0.3;
-    if (!airborne && p.dirt > 0) {
-      const n = this.q(Math.round(10 * p.dirt * (fb ? 0.5 : 1)));
+    // small ground hits: a pre-rendered impact puff instead of the dirt particles
+    const puff = !!fb && !airborne && p.dirt > 0 && S < 0.45;
+    if (puff) fb.spawn('puff', { x, y: ground, z, size: 1.2 * Math.max(0.3, S * 2.2), sizeEnd: 1.5 * Math.max(0.3, S * 2.2), tint: snow ? 0xdde4ec : 0x8a7a62, ground: true, rot: 0.3, alpha: 0.9, emissive: 0, wind: 0.3 });
+    if (!airborne && p.dirt > 0 && !puff) {
+      // ground hits that throw earth: tumbling clods with dust trails (flipbook) take over a share of the spray
+      const clods = !!fb && p.dirt >= 0.8 && !!p.debris?.some((d) => d.kind === 'dirt');
+      if (clods) fb.spawn('debris', { x, y: ground, z, size: 1.6 * S * Math.sqrt(p.dirt), sizeEnd: 1.8 * S * Math.sqrt(p.dirt), tint: snow ? 0xd8dee6 : 0x6e604c, ground: true, rot: 0.25, alpha: 1, emissive: 0, wind: 0.2 });
+      const n = this.q(Math.round(10 * p.dirt * (fb ? (clods ? 0.3 : 0.5) : 1)));
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const r = this.rand(0, 0.25) * S;
@@ -1197,6 +1203,27 @@ export class Effects {
    * rises fast, slows, then leans over and drifts downwind.
    */
   column(x: number, y: number, z: number, size = 1, dark = true) {
+    // one in four puffs is a pre-rendered, sun-lit rolling smoke loop instead of a particle (same fill)
+    if (this.flip?.ready && Math.random() < 0.25) {
+      this.flip.spawn('smokeloop', {
+        x: x + this.rand(-0.08, 0.08) * size,
+        y: y - 0.1 * size,
+        z: z + this.rand(-0.08, 0.08) * size,
+        vy: this.rand(0.7, 1.0) * Math.sqrt(size),
+        size: 1.1 * size,
+        sizeEnd: 2.2 * size,
+        life: this.rand(3.2, 4.2),
+        ground: true,
+        rot: 0.12,
+        tint: dark ? 0x2a2622 : 0x9a958e,
+        alpha: dark ? 0.85 : 0.55,
+        emissive: dark ? 0.6 : 0,
+        drag: 0.3,
+        rise: 0.05,
+        wind: 1,
+      });
+      return;
+    }
     this.smokeSys.spawn({
       x: x + this.rand(-0.08, 0.08) * size,
       y,
@@ -1214,6 +1241,42 @@ export class Effects {
       gravity: -0.02,
       wind: 1,
     });
+  }
+
+  /**
+   * A building coming down: rolling walls of dust spill out of the footprint (pre-rendered
+   * collapse clouds). Returns false when the flipbooks are not available (callers keep their
+   * particle dust).
+   */
+  collapse(x: number, y: number, z: number, w: number, d: number): boolean {
+    const fb = this.flip?.ready ? this.flip : null;
+    if (!fb) return false;
+    const S = Math.max(w, d);
+    const snow = WX.wxSnow.value > 0.3;
+    const n = Math.max(2, Math.min(5, Math.round(S * (this.quality === 'high' ? 1.4 : 1))));
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + this.rand(-0.4, 0.4);
+      const r = this.rand(0.1, 0.35) * S;
+      fb.spawn('collapse', {
+        x: x + Math.cos(a) * r,
+        y,
+        z: z + Math.sin(a) * r,
+        vx: Math.cos(a) * 0.35 * S,
+        vz: Math.sin(a) * 0.35 * S,
+        drag: 0.8,
+        size: (1.0 + 0.35 * S) * this.rand(0.9, 1.1),
+        sizeEnd: (1.5 + 0.55 * S) * this.rand(0.9, 1.1),
+        life: this.rand(4.5, 6),
+        delay: this.rand(0, 0.5),
+        tint: snow ? 0xd4d8dc : 0x9a8f80,
+        ground: true,
+        rot: 0.18,
+        alpha: 0.9,
+        emissive: 0,
+        wind: 0.5,
+      });
+    }
+    return true;
   }
 
   /** Light + heat shimmer for a sustained fire (call every frame while it burns). */

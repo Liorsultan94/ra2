@@ -195,6 +195,8 @@ interface Wreck {
   ruin?: boolean;
   /** ...as a flat cratered slab (the airbase), not a rubble heap with wall stubs. */
   flatRuin?: boolean;
+  /** The collapse dust clouds (pre-rendered flipbooks) were spawned: fewer particle dust puffs. */
+  dusty?: boolean;
   kept?: boolean;
 }
 
@@ -1702,7 +1704,8 @@ export class GameRenderer {
       // medium / high: break the model into rigid chunks (falls back to the sink collapse when the chunk pool is full)
       const frac = this.fracture.shatter(root, bd.w, bd.h, this.scene) ?? undefined;
       if (frac) this.scene.remove(root);
-      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac, ruin: !bd.garrison, flatRuin: bd.role === 'airfield' });
+      const dusty = !frac && this.effects.collapse(pos.x, pos.y, pos.z, bd.w, bd.h);
+      this.wrecks.push({ ...base, kind: 'building', max: frac ? 44 : 40, w: bd.w, d: bd.h, size: Math.max(bd.w, bd.h), frac, ruin: !bd.garrison, flatRuin: bd.role === 'airfield', dusty });
       return;
     }
     const ud = unitDef(e.def);
@@ -1841,7 +1844,8 @@ export class GameRenderer {
         r.scale.y = Math.max(0.08, 1 - k * 0.85);
         r.rotation.z = Math.sin(w.t * 9) * 0.01 * (1 - k) + k * 0.04;
         if (w.t < 2.4) {
-          if (Math.random() < dt * 30) this.effects.dust(w.x + (Math.random() - 0.5) * w.w, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d, 3);
+          // (the pre-rendered collapse clouds carry most of the dust when they are loaded)
+          if (Math.random() < dt * (w.dusty ? 8 : 30)) this.effects.dust(w.x + (Math.random() - 0.5) * w.w, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d, 3);
           if (Math.random() < dt * 8) this.debris.burst('concrete', w.x + (Math.random() - 0.5) * w.w, w.y + w.h * (1 - k), w.z + (Math.random() - 0.5) * w.d, 2, 2, 0.08);
         } else if (w.t < 25 && Math.random() < dt * 10) {
           this.effects.column(w.x + (Math.random() - 0.5) * w.w * 0.8, w.y + 0.2, w.z + (Math.random() - 0.5) * w.d * 0.8, 1.4);
