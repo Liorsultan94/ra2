@@ -41,8 +41,9 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'manpads', damage: 180, range: 7, rof: 70, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only', flight: 'sam', munition: 'manpads', shoulder: true, vsFixedWing: 0.6 },
   { id: 'sam', damage: 80, range: 9, rof: 45, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'only' , flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.8, pkHypersonic: 0.3, pkBy: { cruise: 0.7 }, ceiling: 9 } },
   // ---- national air & missile defence (all also engage aircraft). pk per engagement; heavy missiles need several hits.
-  // Iron Dome: Tamir interceptors, superb vs rockets / shells / cruise missiles; cues David's Sling Stunners vs ballistic threats
-  { id: 'ironDome', damage: 80, range: 10, rof: 26, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'interceptor', munition: 'interceptor', intercept: { kinds: ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'], pk: 0.92, pkHypersonic: 0.35, pkBy: { ballistic: 0.55, cruise: 0.85 }, ceiling: 6, layer: { kinds: ['ballistic', 'hypersonic'], weapon: 'stunner' } } },
+  // Iron Dome: Tamir interceptors, superb vs rockets / shells / cruise missiles; cues David's Sling Stunners vs ballistic threats;
+  // fires up to 6 interceptors a second into a salvo (each at its own threat)
+  { id: 'ironDome', damage: 80, range: 10, rof: 26, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'interceptor', munition: 'interceptor', intercept: { kinds: ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'], pk: 0.92, pkHypersonic: 0.35, pkBy: { ballistic: 0.55, cruise: 0.85 }, ceiling: 6, layer: { kinds: ['ballistic', 'hypersonic'], weapon: 'stunner' }, perSec: 6 } },
   { id: 'stunner', damage: 80, range: 10, rof: 26, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic'], pk: 0.8, pkHypersonic: 0.45, ceiling: 12 } },
   // Patriot PAC-3 MSE: hit-to-kill, the best ballistic-missile killer
   { id: 'patriot', damage: 85, range: 11, rof: 34, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam', intercept: { kinds: ['ballistic', 'hypersonic', 'rocketSalvo', 'cruise'], pk: 0.75, pkBy: { ballistic: 0.92, hypersonic: 0.45, cruise: 0.7 }, ceiling: 12 } },
@@ -114,7 +115,7 @@ export interface FactionMods {
   defenseRange?: number;
   artilleryDamage?: number;
   infantryDamage?: number;
-  aps?: number; // APS fitted to every vehicle
+  aps?: number; // Trophy-style active protection fitted to every vehicle (1 = full system; ballistics.ts APS_PK)
   radarRange?: number; // weapon range bonus while a radar is online
 }
 
@@ -150,7 +151,7 @@ export const FACTIONS: FactionInfo[] = [
     hull: 0x9c9878,
     accent: 0x2f5fa8,
     flag: [0x0038b8, 0xffffff, 0x0038b8],
-    mods: { aps: 0.3, infantryDamage: 1.2 },
+    mods: { aps: 1, infantryDamage: 1.2 },
     signature: ['israel_mbt', 'israel_mortar'],
   },
   {
@@ -318,7 +319,7 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
   israel: {
     medic: { name: 'Medic' },
     sniper: { name: 'Matzpen Sniper' },
-    mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 0.55, desc: 'Front-engined heavy tank with Trophy active protection.' },
+    mbt: { name: 'Merkava Mk4', model: 'mbt_heavy', cost: 1000, hp: 470, aps: 1, desc: 'Front-engined heavy tank with Trophy active protection.' },
     apc: { name: 'Namer', hp: 430, armor: 'heavy', cost: 950, desc: 'Heavily armored infantry carrier on a Merkava chassis.' },
     aa: { name: 'Machbet' },
     arty: { name: 'M109 Doher' },

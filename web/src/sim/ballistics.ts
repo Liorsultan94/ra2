@@ -345,6 +345,11 @@ export function stepProjectiles(w: World) {
   for (const p of w.projectiles) byId.set(p.id, p);
   for (const p of w.projectiles) {
     if (p.dead) continue;
+    // active protection (Trophy) on the target vehicle: one hard-kill try as the round closes in
+    if (!p.apsTried && p.targetId >= 0 && APS_PK[p.flight] !== undefined) {
+      const t = w.get(p.targetId);
+      if (t && t.kind === 'unit' && Math.hypot(t.x - p.x, t.y - p.y) < APS_RANGE && apsTry(w, p, t)) continue;
+    }
     p.px = p.x;
     p.py = p.y;
     p.pz = p.z;
@@ -635,6 +640,32 @@ function interceptResolve(w: World, p: Projectile, threat: Projectile) {
   } else airburst(w, p, 'miss');
 }
 
+/**
+ * Trophy-style active protection (UnitDef.aps): radars on the hull pick up an incoming RPG / ATGM / missile and
+ * a launcher fires an explosively formed charge that destroys it about a tile and a half out. Chance per flight
+ * type (x UnitDef.aps); kinetic tank rounds are mostly too fast and too dense. After an intercept the launchers
+ * need APS_RELOAD ticks before the next one, so a salvo can still saturate it.
+ */
+export const APS_PK: Partial<Record<Flight, number>> = { atgm: 0.9, topAttack: 0.75, airMissile: 0.8, shell: 0.08 };
+/** Stand-off distance (tiles) at which the charge meets the incoming round. */
+export const APS_RANGE = 1.5;
+/** Launcher turnaround after an intercept (ticks). */
+export const APS_RELOAD = 25;
+
+/** One APS try against projectile p aimed at t; true when it was destroyed (p is dead, the event is out). */
+function apsTry(w: World, p: Projectile, t: Entity): boolean {
+  p.apsTried = true;
+  if (t.kind !== 'unit' || t.dead) return false;
+  const aps = unitDef(t.def).aps ?? 0;
+  const pk = APS_PK[p.flight];
+  if (!aps || pk === undefined || (t.apsAt ?? 0) > w.tick) return false;
+  if (w.rng.next() >= pk * aps) return false;
+  t.apsAt = w.tick + APS_RELOAD;
+  p.dead = true;
+  w.events.push({ t: 'intercept', x: p.x, y: p.y, z: p.z, id: t.id });
+  return true;
+}
+
 /** Warhead functions: direct hit + splash, active protection. */
 function detonate(w: World, p: Projectile, onTarget: boolean) {
   p.dead = true;
@@ -647,15 +678,8 @@ function detonate(w: World, p: Projectile, onTarget: boolean) {
   const big = bigBlast(wpn);
   let direct = false;
   if (t && onTarget) {
-    // active protection systems defeat rockets and missiles before they hit
-    if (t.kind === 'unit' && (p.flight === 'atgm' || p.flight === 'topAttack' || p.flight === 'airMissile' || p.flight === 'shell')) {
-      const aps = unitDef(t.def).aps ?? 0;
-      const chance = p.flight === 'shell' ? aps * 0.4 : p.flight === 'topAttack' ? aps * 0.6 : aps;
-      if (chance > 0 && w.rng.next() < chance) {
-        w.events.push({ t: 'intercept', x: t.x, y: t.y, id: t.id });
-        return;
-      }
-    }
+    // active protection: a round fast enough to slip past the stand-off check gets its one try on contact
+    if (!p.apsTried && apsTry(w, p, t)) return;
     const near = t.kind === 'building' ? w.distTo({ x: p.x, y: p.y } as Entity, t) < 0.6 : Math.hypot(t.x - p.x, t.y - p.y) < 0.75;
     if (near && (!w.isAir(t) || wpn.air !== 'no')) {
       // small warheads against fast jets (MANPADS: WeaponDef.vsFixedWing)
@@ -704,7 +728,11 @@ export function tryIntercept(w: World, e: Entity, wpn: WeaponDef): boolean {
     }
   }
   if (!best) return false;
-  e.cooldown = Math.max(8, Math.round(wpn.rof * 0.5));
+  // launch cadence: ic.perSec launches a second (6/s at 20 TPS: gaps of 3, 4, 3, 3, 4, 3 ticks), else half the rof
+  if (ic.perSec) {
+    const n = (e.icShots = (e.icShots ?? 0) + 1);
+    e.cooldown = Math.round((n * TPS) / ic.perSec) - Math.round(((n - 1) * TPS) / ic.perSec);
+  } else e.cooldown = Math.max(8, Math.round(wpn.rof * 0.5));
   e.turret = Math.atan2(best.y - e.y, best.x - e.x);
   if (wpn.projectile === 'beam') {
     // directed energy: hit instantly, chance to burn it down

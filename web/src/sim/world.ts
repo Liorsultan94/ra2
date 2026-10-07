@@ -72,6 +72,11 @@ export interface WorldOptions {
    * the night fog by night; there is no player choice.
    */
   fog?: FogMode;
+  /**
+   * Wounded soldiers (medic.ts): off in the game (the owner's call: a soldier brought to 0 HP dies, medics
+   * heal the hurt on their feet). Tests only switch it on to keep the dormant mechanic covered.
+   */
+  wounds?: boolean;
 }
 
 export interface Controller {
@@ -82,6 +87,8 @@ const BUILD_RADIUS = 5;
 const SPATIAL_CELL = 4;
 /** Units with two weapons (UnitDef.weapon2): ticks to swap launchers before the other one can fire. */
 export const WEAPON_SWAP = TPS;
+/** Soldiers firing on the move (a plain move order) shoot this much slower than standing. */
+export const MOVE_FIRE_ROF = 1.4;
 
 // Precomputed offsets sorted by distance, used for formations and spiral searches.
 const SPIRAL: [number, number][] = (() => {
@@ -149,6 +156,8 @@ export class World {
   readonly seed: number;
   /** Soldiers down wounded, waiting for a medic (medic.ts): the short list medics search instead of scanning everything. */
   wounded: Entity[] = [];
+  /** Soldiers may go down wounded instead of dying (WorldOptions.wounds; off in the game). */
+  wounds = false;
   /** Refinery dock queue tickets handed out so far (harvest.ts). */
   hvSeq = 0;
   /** Ore fields where harvesters were attacked or saw hostiles lately, per player (harvest.ts). */
@@ -162,6 +171,7 @@ export class World {
   constructor(opts: WorldOptions) {
     this.rng = new Rng(opts.seed ?? 12345);
     this.seed = (opts.seed ?? 12345) | 0;
+    this.wounds = !!opts.wounds;
     this.clock = opts.clock && Number.isFinite(opts.clock.start) ? { start: opts.clock.start, live: !!opts.clock.live } : DAY_CLOCK;
     this.forcedFog = opts.fog === 'classic' || opts.fog === 'modern' ? opts.fog : null;
     this.updateNight();
@@ -1338,6 +1348,47 @@ export class World {
     return best;
   }
 
+  /**
+   * Fire on the move (a plain 'move' order): a soldier keeps walking his path and shoots at any enemy within
+   * weapon range, rifle half-raised (MOVE_FIRE_ROF x slower). Never chases: a target that leaves range is
+   * dropped. Lock-on weapons (snipers) and indirect fire (mortars) can't shoot on the move. Facing stays on
+   * the path (it drives the movement); the aim goes into turret, which the renderer turns him to while he
+   * shoots (Entity.moveFireAt).
+   */
+  private fireOnTheMove(e: Entity, d: UnitDef) {
+    let t = this.foe(e.targetId);
+    let wpn = t ? this.weaponVs(e.def, t) : undefined;
+    if (!t || !wpn || this.distTo(e, t) > rangeVs(this, e, wpn, t)) {
+      t = undefined;
+      e.targetId = -1;
+      if (this.tick < e.scanAt) return;
+      e.scanAt = this.tick + 8;
+      const main = WEAPONS[d.weapon!];
+      t = this.findTarget(e, Math.max(main.range, d.weapon2 ? WEAPONS[d.weapon2].range : 0)) ?? undefined;
+      if (!t) return;
+      wpn = this.weaponVs(e.def, t);
+      if (!wpn || this.distTo(e, t) > rangeVs(this, e, wpn, t)) return;
+      e.targetId = t.id;
+      e.autoTarget = true;
+    }
+    if (!wpn || wpn.aim || wpn.flight === 'mortar' || wpn.flight === 'artillery' || wpn.spawn) return;
+    if (wpn.minRange && this.distTo(e, t) < wpn.minRange) return;
+    e.turret = Math.atan2(t.y - e.y, t.x - e.x);
+    e.moveFireAt = this.tick;
+    const alt = wpn.id !== d.weapon;
+    if ((alt ? e.cooldown2 : e.cooldown) > 0 || e.burstLeft !== 0) return;
+    e.burstLeft = wpn.burst ?? 1;
+    e.burstTimer = 0;
+    e.burstWpn = alt ? wpn.id : '';
+    const rof = Math.round(wpn.rof * RANK_ROF[e.rank] * MOVE_FIRE_ROF);
+    if (alt) e.cooldown2 = rof;
+    else e.cooldown = rof;
+    if (d.weapon2) {
+      if (alt) e.cooldown = Math.max(e.cooldown, WEAPON_SWAP);
+      else e.cooldown2 = Math.max(e.cooldown2, WEAPON_SWAP);
+    }
+  }
+
   /** Aim and fire at a target. Returns 'fired' | 'aiming' | 'out' (out of range). */
   private engage(e: Entity, t: Entity): 'aiming' | 'out' {
     const d = DEFS[e.def];
@@ -1601,6 +1652,8 @@ export class World {
           e.guardX = e.x;
           e.guardY = e.y;
         }
+        // soldiers on the march shoot at what comes into range without stopping
+        else if (d.category === 'infantry' && d.weapon && !jammed && autoFire(e)) this.fireOnTheMove(e, d);
         break;
       case 'attackMove': {
         if (d.weapon) {

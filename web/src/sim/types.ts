@@ -53,7 +53,11 @@ export interface WeaponDef {
    * layer: fire a different interceptor (another weapon id, with its own pk / munition) at these
    * threat kinds, e.g. Iron Dome batteries cueing David's Sling Stunners against ballistic missiles.
    */
-  intercept?: { kinds: Flight[]; pk: number; pkHypersonic?: number; pkBy?: Partial<Record<Flight, number>>; ceiling?: number; layer?: { kinds: Flight[]; weapon: string } };
+  /**
+   * Interceptor weapon: threat kinds, kill probability (by kind), engagement ceiling, layered heavier interceptor;
+   * perSec: interceptor launches per second against a salvo (default: one per half the weapon's rof, min 8 ticks).
+   */
+  intercept?: { kinds: Flight[]; pk: number; pkHypersonic?: number; pkBy?: Partial<Record<Flight, number>>; ceiling?: number; layer?: { kinds: Flight[]; weapon: string }; perSec?: number };
   /** Interceptable munitions: successful intercepts needed to destroy one round (default 1). */
   interceptHp?: number;
   /** Interceptable munitions: fraction of a defence's range at which it is detected (cruise missiles; default 1). */
@@ -384,6 +388,12 @@ export interface Entity {
   burstWpn: string;
   burstLeft: number;
   burstTimer: number;
+  /** Active protection (Trophy): tick its launchers are ready again after an intercept (ballistics.ts). */
+  apsAt?: number;
+  /** Interceptor launches so far (ballistics.ts tryIntercept: the per-second cadence of intercept.perSec). */
+  icShots?: number;
+  /** Soldiers firing on the move (world.ts fireOnTheMove): tick of the last aim; the renderer turns him to his turret aim meanwhile. */
+  moveFireAt?: number;
   scanAt: number;
   guardX: number;
   guardY: number;
@@ -573,6 +583,8 @@ export interface Projectile {
   maxHp: number;
   /** Times this round was hit by an interceptor and survived (render: damaged = hits > 0 -> smoke, sparks, wobble). */
   hits: number;
+  /** The target's active protection (Trophy) has already had its one try at this round (ballistics.ts apsCheck). */
+  apsTried?: boolean;
   // aim error from intercept damage: the impact point drifts from (dbx, dby) at progress dk to (dox, doy) at impact
   dox: number;
   doy: number;
@@ -647,7 +659,7 @@ export type SimEvent =
    * at (vx, vy, vz) tiles/s and the missile turns onto it (stealth.ts). The airburst on the flare follows ('miss', decoy).
    */
   | { t: 'decoy'; id: number; owner: number; proj: number; x: number; y: number; z: number; vx: number; vy: number; vz: number }
-  | { t: 'intercept'; x: number; y: number; id: number }
+  | { t: 'intercept'; x: number; y: number; z?: number; id: number } // active protection (Trophy) destroyed a round at (x, y, z) short of vehicle id
   | { t: 'death'; id: number; def: string; x: number; y: number; owner: number; kind: 'unit' | 'building'; cause?: 'crushed' }
   /** A soldier went down wounded (by: the player who shot him) / a medic got him back on his feet / he bled out (a 'death' follows). */
   | { t: 'wounded'; id: number; def: string; owner: number; by: number; x: number; y: number; phase: 'down' | 'revived' | 'bledOut'; medic?: number }

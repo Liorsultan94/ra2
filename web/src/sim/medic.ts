@@ -1,5 +1,8 @@
 // Wounded soldiers and combat medics (deterministic lockstep).
 //
+// The wounded state is OFF in the game (World.wounds, the owner's call): a soldier brought to 0 HP dies, and
+// medics treat hurt soldiers on their feet. The mechanic below stays for tests (WorldOptions.wounds).
+//
 // Wounded instead of dead: a soldier (UnitDef category 'infantry') brought to 0 HP goes down WOUNDED
 // with a seeded chance of WOUND_CHANCE instead of dying, except when the blow could not leave anyone
 // alive to save: a sniper's shot, a big explosion (artillery, missiles and bombs of BIG_BLAST damage or
@@ -102,7 +105,7 @@ export function woundRoll(w: World, t: Entity): boolean {
 
 /** Can this blow leave soldier t wounded rather than dead (and does the roll say so)? */
 export function canWound(w: World, t: Entity, warhead: Warhead, big: boolean): boolean {
-  if (t.kind !== 'unit' || t.dead || t.wound || t.owner < 0) return false;
+  if (!w.wounds || t.kind !== 'unit' || t.dead || t.wound || t.owner < 0) return false;
   if (warhead === 'sniper' || big) return false;
   if (t.inside >= 0 || t.para || t.z > 0.05) return false;
   const d = DEFS[t.def];
