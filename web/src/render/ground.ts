@@ -70,6 +70,99 @@ function coarseField(w: number, h: number, res: number, fn: (x: number, y: numbe
   };
 }
 
+/**
+ * Cliff skirts (render only): the sim's ground climbs the last metre of a mesa or ridge on the
+ * passable tiles at its foot, sampled one height per tile, so on a curved or diagonal cliff line
+ * the slope zigzags tile by tile and its facets light up and fall dark in turn: a row of toothed
+ * "stilts" under the cliff. The geometry has to stay (units stand on it), so near the rock the
+ * mesh normals come from a smoothed copy of the heights (box blur over about a tile): the skirt
+ * shades as one talus apron. Away from the rock the normals are untouched.
+ */
+function skirtNormals(m: GameMap, pos: Float32Array, nor: Float32Array, nx: number, ny: number) {
+  const W = m.w;
+  const H = m.h;
+  // tile distance (chessboard, capped) to the nearest rock tile
+  const dist = new Uint8Array(W * H).fill(255);
+  let any = false;
+  for (let k = 0; k < W * H; k++)
+    if (m.tiles[k] === Tile.Rock) {
+      dist[k] = 0;
+      any = true;
+    }
+  if (!any) return;
+  for (let pass = 1; pass <= 3; pass++)
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        if (dist[y * W + x] !== 255) continue;
+        let hit = false;
+        for (let j = -1; j <= 1 && !hit; j++)
+          for (let i = -1; i <= 1 && !hit; i++) {
+            const xx = x + i;
+            const yy = y + j;
+            if (xx >= 0 && yy >= 0 && xx < W && yy < H && dist[yy * W + xx] === pass - 1) hit = true;
+          }
+        if (hit) dist[y * W + x] = pass;
+      }
+  const hs = new Float32Array(nx * ny);
+  for (let k = 0; k < nx * ny; k++) hs[k] = pos[k * 3 + 1];
+  // two box blurs of radius SUB (one tile): a tent over two tiles
+  const tmp = new Float32Array(Math.max(nx, ny));
+  const R = SUB;
+  for (let rep = 0; rep < 2; rep++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        let a = 0;
+        let c = 0;
+        for (let k = Math.max(0, i - R); k <= Math.min(nx - 1, i + R); k++) {
+          a += hs[j * nx + k];
+          c++;
+        }
+        tmp[i] = a / c;
+      }
+      hs.set(tmp.subarray(0, nx), j * nx);
+    }
+    for (let i = 0; i < nx; i++) {
+      for (let j = 0; j < ny; j++) {
+        let a = 0;
+        let c = 0;
+        for (let k = Math.max(0, j - R); k <= Math.min(ny - 1, j + R); k++) {
+          a += hs[k * nx + i];
+          c++;
+        }
+        tmp[j] = a / c;
+      }
+      for (let j = 0; j < ny; j++) hs[j * nx + i] = tmp[j];
+    }
+  }
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      // nearest rock over the tiles touching this vertex
+      let d = 255;
+      const tx = Math.floor((i - 0.5) / SUB);
+      const ty = Math.floor((j - 0.5) / SUB);
+      for (let b = 0; b <= 1; b++)
+        for (let a = 0; a <= 1; a++) {
+          const xx = Math.min(W - 1, Math.max(0, tx + a));
+          const yy = Math.min(H - 1, Math.max(0, ty + b));
+          d = Math.min(d, dist[yy * W + xx]);
+        }
+      if (d > 2) continue;
+      const w = d <= 1 ? 1 : 0.5;
+      const at = (ii: number, jj: number) => hs[Math.max(0, Math.min(ny - 1, jj)) * nx + Math.max(0, Math.min(nx - 1, ii))];
+      const dx = (at(i + 1, j) - at(i - 1, j)) * SUB * 0.5;
+      const dz = (at(i, j + 1) - at(i, j - 1)) * SUB * 0.5;
+      const l = Math.hypot(dx, 1, dz);
+      const o = (j * nx + i) * 3;
+      const ax = nor[o] * (1 - w) + (-dx / l) * w;
+      const ay = nor[o + 1] * (1 - w) + (1 / l) * w;
+      const az = nor[o + 2] * (1 - w) + (-dz / l) * w;
+      const ll = Math.hypot(ax, ay, az);
+      nor[o] = ax / ll;
+      nor[o + 1] = ay / ll;
+      nor[o + 2] = az / ll;
+    }
+}
+
 const smooth = (e0: number, e1: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);
@@ -317,6 +410,7 @@ export class Ground {
         const l = Math.hypot(dx, 1, dz);
         nor.set([-dx / l, 1 / l, -dz / l], (j * nx + i) * 3);
       }
+    skirtNormals(m, pos, nor, nx, ny);
     yield;
     const CH = 24 * SUB; // chunk size in vertices
     for (let cj = 0; cj < ny - 1; cj += CH)
@@ -639,6 +733,18 @@ export class Ground {
     const hasForest = !!st && st.slot.forest !== st.slot.dirt;
     const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
+    // cliff skirts: passable tiles touching the rock (skirtNormals above)
+    const skirt = new Uint8Array(m.w * m.h);
+    for (let ty = 0; ty < m.h; ty++)
+      for (let tx = 0; tx < m.w; tx++) {
+        if (m.tiles[ty * m.w + tx] === Tile.Rock) continue;
+        for (let j = -1; j <= 1; j++)
+          for (let i = -1; i <= 1; i++) {
+            const xx = tx + i;
+            const yy = ty + j;
+            if (xx >= 0 && yy >= 0 && xx < m.w && yy < m.h && m.tiles[yy * m.w + xx] === Tile.Rock) skirt[ty * m.w + tx] = 1;
+          }
+      }
     for (let py = 0; py < N; py++) {
       if ((py & 7) === 7) yield;
       for (let px = 0; px < N; px++) {
@@ -667,6 +773,13 @@ export class Ground {
         const h0 = groundHeight(m, x, y);
         const slope = Math.abs(groundHeight(m, x + 0.3, y) - h0) + Math.abs(groundHeight(m, x, y + 0.3) - h0);
         rock = Math.max(rock, smooth(0.16, 0.34, slope + (pn - 0.5) * 0.12));
+        if (skirt[Math.min(m.h - 1, Math.floor(y)) * m.w + Math.min(m.w - 1, Math.floor(x))]) {
+          // the climb under a cliff is talus: rock over a wider (smoother) stencil, the sand slides off it
+          const sl2 = (Math.abs(groundHeight(m, x + 0.5, y) - groundHeight(m, x - 0.5, y)) + Math.abs(groundHeight(m, x, y + 0.5) - groundHeight(m, x, y - 0.5))) * 0.3;
+          const tal = smooth(0.14, 0.3, sl2 + (pn - 0.5) * 0.08);
+          rock = Math.max(rock, tal);
+          sand *= 1 - 0.85 * tal;
+        }
         // riverbank: wet sand -> mud at the waterline
         const wl = h0 - WATER_LEVEL;
         if (bc === 3) {

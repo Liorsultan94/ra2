@@ -230,6 +230,17 @@ function photoRockMaterial(pr: PhotoRocks, biome: string, fog: FogOfWar): THREE.
           float up = inverseTransformDirection( normal, viewMatrix ).y;
           float mn = texture2D( fogNoise, vFogP.xz * 0.9 ).g;
           float moss = smoothstep( 0.5, 0.85, up + ( mn - 0.5 ) * 0.5 ) * ${gr.moss.toFixed(2)};
+          #if ${biome === 'temperate' ? 1 : 0}
+          {
+            // temperate stone: moss also creeps up the shaded side (away from the usual sun, relief.ts SHADE_DIR),
+            // pale lichen rosettes on the bare faces
+            vec3 wn = inverseTransformDirection( normal, viewMatrix );
+            float shade = smoothstep( 0.1, 0.8, dot( wn.xz, vec2( 0.999, 0.04 ) ) ) * ( 1.0 - smoothstep( 0.5, 0.85, up ) );
+            moss = max( moss, smoothstep( 0.45, 0.75, shade + ( mn - 0.5 ) * 0.8 ) * 0.6 );
+            float li = texture2D( fogNoise, vFogP.xz * 3.1 + vFogP.y * 1.7 ).b;
+            diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.42, 0.44, 0.36 ), smoothstep( 0.68, 0.74, li ) * 0.55 * ( 1.0 - moss ) );
+          }
+          #endif
           diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.07, 0.085, 0.03 ) * ( 0.7 + mn * 0.6 ), moss );
         }
         #endif`,
