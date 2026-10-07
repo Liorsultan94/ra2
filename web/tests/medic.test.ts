@@ -10,6 +10,7 @@ import { World } from '../src/sim/world';
 function medWorld(seed = 7, ai = false) {
   const w = new World({
     seed,
+    wounds: true,
     players: [
       { name: 'A', faction: 'usa', color: 0, isAI: ai },
       { name: 'B', faction: 'russia', color: 0, isAI: false },
@@ -56,6 +57,24 @@ function woundedSoldier(w: World, x: number, y: number, src: Entity): Entity {
   }
   throw new Error('no wounded soldier in 40 tries');
 }
+
+describe('wounded state is off in the game', () => {
+  it('a soldier brought to 0 HP dies outright (no wounded state), on both sides', () => {
+    const w = new World({ seed: 7, players: [{ name: 'A', faction: 'israel', color: 0, isAI: false }, { name: 'B', faction: 'iran', color: 0, isAI: true }] });
+    expect(w.wounds).toBe(false);
+    const a = w.spawnUnit('iran_rifle', 1, 60, 60);
+    const b = w.spawnUnit('israel_rifle', 0, 61, 60);
+    for (let i = 0; i < 30; i++) {
+      for (const [owner, def, src] of [[0, 'israel_rifle', a], [1, 'iran_rifle', b]] as const) {
+        const s = w.spawnUnit(def, owner, 20 + i * 0.5, 20 + owner * 3);
+        shoot(w, s, src);
+        expect(s.dead).toBe(true);
+        expect(s.wound).toBeNull();
+      }
+    }
+    expect(w.wounded.length).toBe(0);
+  });
+});
 
 describe('wounded soldiers', () => {
   it('the wound chance is deterministic and about 60%', () => {

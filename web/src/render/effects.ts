@@ -130,7 +130,8 @@ export const BLASTS: Record<string, BlastProfile> = {
   /** Heavy cruise missile: a clear step up from the small air-launched missile. */
   heavyMissile: { size: 1.95, fire: 1.9, sparks: 22, smoke: 2, column: true, dirt: 2.6, ring: 2.6, debris: [{ kind: 'dirt', n: 18, power: 6, size: 0.09 }, { kind: 'concrete', n: 5, power: 5, size: 0.07 }], crater: 1.1, scorch: 1.3, light: 11, shake: 0.24 },
   /** Heavy jet bomb (2000 lb class): the biggest non-superweapon blast, with a mushroom cap. */
-  bomb: { size: 3.0, fire: 2.8, sparks: 38, smoke: 3, column: true, dirt: 4, ring: 4.4, debris: [{ kind: 'dirt', n: 36, power: 9, size: 0.12 }, { kind: 'concrete', n: 12, power: 8, size: 0.1 }], crater: 1.9, scorch: 2.4, light: 19, shake: 0.55 },
+  // the jet's heavy bomb (owner: a bit stronger, ~+15% fireball): below the superweapons, within the phone puff pool
+  bomb: { size: 3.45, fire: 3.0, sparks: 44, smoke: 3.45, column: true, dirt: 4.6, ring: 5.1, debris: [{ kind: 'dirt', n: 42, power: 10, size: 0.13 }, { kind: 'concrete', n: 14, power: 9, size: 0.11 }], crater: 2.2, scorch: 2.8, light: 22, shake: 0.65 },
   /** Superweapon warhead core (fx/superfx.ts adds its rings and the extra blasts around it). */
   superweapon: { size: 4.2, fire: 3.4, fireColor: 'white', sparks: 50, smoke: 4, column: true, dirt: 5, ring: 6, debris: [{ kind: 'dirt', n: 44, power: 11, size: 0.14 }, { kind: 'concrete', n: 16, power: 9, size: 0.12 }], crater: 2.4, scorch: 3.2, light: 28, shake: 0.8 },
   /** Aircraft blown apart in the air (Effects.airKill). */
@@ -1248,12 +1249,16 @@ export class Effects {
     this.fire.spawn({ x, y, z, life: 0.12, size: 0.3, color });
   }
 
-  intercept(p: THREE.Vector3) {
-    // active protection: explosively formed charge meets the incoming round a metre out
-    for (let i = 0; i < this.q(14); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3, 3), vy: this.rand(0, 3), vz: this.rand(-3, 3), life: 0.35, size: 0.07, color: 0xfff0c0, colorEnd: 0xff8000, gravity: 6 });
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.12, size: 0.9, color: 0xffffff, colorEnd: 0xffa040 });
-    for (let i = 0; i < this.q(4); i++) this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.5, 0.5), vy: 0.4, vz: this.rand(-0.5, 0.5), life: 1.4, size: 0.2, sizeEnd: 0.7, color: 0x7a7a7a, alpha: 0.6, drag: 1.5 });
-    this.flashLight(p.x, p.y, p.z, 3, 0xfff0c0, 0.12);
+  /** Active protection (Trophy) kill: the charge from the launcher at `from` meets the incoming round at p. */
+  intercept(p: THREE.Vector3, from?: THREE.Vector3) {
+    if (from) this.beam(from, p, 0xfff2c8, 0.05, 0.08);
+    // the round blown apart: a hard white flash, a burst of hot fragments and a falling spray of debris
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.14, size: 1.5, color: 0xffffff, colorEnd: 0xffa040 });
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.32, size: 0.8, sizeEnd: 0.2, color: 0xffd080, colorEnd: 0xff5000 });
+    for (let i = 0; i < this.q(22); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-4, 4), vy: this.rand(-0.5, 3.5), vz: this.rand(-4, 4), life: this.rand(0.25, 0.5), size: 0.07, color: 0xfff0c0, colorEnd: 0xff7000, gravity: 7 });
+    for (let i = 0; i < this.q(6); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.9, size: 0.05, color: 0x5a5048, gravity: 6 });
+    for (let i = 0; i < this.q(6); i++) this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.6, 0.6), vy: 0.45, vz: this.rand(-0.6, 0.6), life: 1.8, size: 0.25, sizeEnd: 0.95, color: 0x7d7a74, alpha: 0.65, drag: 1.5 });
+    this.flashLight(p.x, p.y, p.z, 5, 0xfff0c0, 0.14);
   }
 
   jamPulse(x: number, y: number, z: number, r: number) {

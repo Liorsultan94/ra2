@@ -119,6 +119,8 @@ describe('airbase sortie cycle', () => {
     for (const ax of [10, 70]) {
       const { w, af } = airWorld(5, ax, 60);
       const tgt = w.spawnBuilding('russia_factory', 1, 40, 20, true);
+      // tough enough to need all four bombs (scaled with the bomb: the factory took four at 400 damage each)
+      tgt.hp = tgt.maxHp = Math.round((tgt.maxHp * WEAPONS.jetBomb.damage) / 400);
       const jets = [0, 1, 2, 3].map(() => jetAt(w, af));
       expect(new Set(jets.map((j) => j.sortie!.pad))).toEqual(new Set([0, 1, 2, 3]));
       w.issue(0, { type: 'attack', ids: jets.map((j) => j.id), target: tgt.id });

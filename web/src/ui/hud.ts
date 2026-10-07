@@ -515,7 +515,7 @@ export class Hud {
         if (w2) extra.push(`RPG range ${w.range}: ${airLabel(w.air, true)}`, `AA missile range ${w2.range}: ${airLabel(w2.air, true)}`);
         else extra.push(`Range ${w.range}`, airLabel(w.air, true));
       }
-      if (d.aps) extra.push(`APS ${Math.round(d.aps * 100)}%`);
+      if (d.aps) extra.push('Trophy APS');
       if (d.medic) extra.push('Treats wounded and injured soldiers', 'Unarmed');
       if (d.nvg) extra.push('Night vision');
       if (d.illum) extra.push('Illumination rounds');
@@ -639,7 +639,7 @@ export class Hud {
           if (w2) stats.push(`Range ${wp.range} / AA ${w2.range}`, 'Ground + air');
           else stats.push(`Range ${wp.range}`, airLabel(wp.air, false));
         }
-        if (d.kind === 'unit' && d.aps) stats.push(`APS ${Math.round(d.aps * 100)}%`);
+        if (d.kind === 'unit' && d.aps) stats.push('Trophy APS');
         // night combat (sim/night.ts): full sight by night; illumination rounds
         if (d.kind === 'unit' && d.nvg) stats.push('Night vision');
         if (d.kind === 'unit' && d.illum) stats.push(e.owner === this.player && illumWait(w, e) > 0 ? `Illumination ${Math.ceil(illumWait(w, e))}s` : 'Illumination');

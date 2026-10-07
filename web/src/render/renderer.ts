@@ -1444,7 +1444,9 @@ export class GameRenderer {
         // (a scratch vector: nothing below keeps it past this entity)
         const p = this.entityPos(e, alpha, this.posTmp);
         root.position.copy(p);
-        const yaw = -lerpAngle(e.pfacing, e.facing, alpha);
+        // a soldier firing on the move turns to his target while his legs keep walking the path (sim world.ts fireOnTheMove)
+        const strafe = ud.category === 'infantry' && e.moveFireAt !== undefined && this.world.tick - e.moveFireAt < TPS && e.moving;
+        const yaw = strafe ? -lerpAngle(e.pturret, e.turret, alpha) : -lerpAngle(e.pfacing, e.facing, alpha);
         const moved = Math.hypot(p.x - v.lastX, p.z - v.lastZ);
         v.lastX = p.x;
         v.lastZ = p.z;
@@ -2069,7 +2071,7 @@ export class GameRenderer {
         break;
       case 'bomb':
         // a jet's 2,000 lb bomb: the big one
-        p = BLASTS.ballistic;
+        p = BLASTS.bomb;
         break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
@@ -2230,11 +2232,12 @@ export class GameRenderer {
       case 'intercept': {
         const t = this.world.get(ev.id);
         if (!t || !this.visibleAt(ev.x, ev.y)) break;
+        // the Trophy launcher on the turret side facing the threat fires; the round dies where the sim killed it
         const p = this.entityPos(t, 1);
-        p.y += 0.45;
-        p.x += Math.cos(t.turret) * 0.5;
-        p.z += Math.sin(t.turret) * 0.5;
-        fx.intercept(p);
+        const a = Math.atan2(ev.y - t.y, ev.x - t.x);
+        const from = new THREE.Vector3(p.x + Math.cos(a) * 0.3, p.y + 0.5, p.z + Math.sin(a) * 0.3);
+        const at = ev.z !== undefined ? new THREE.Vector3(ev.x, Math.max(ev.z, p.y + 0.25), ev.y) : new THREE.Vector3(p.x + Math.cos(a) * 1.2, p.y + 0.55, p.z + Math.sin(a) * 1.2);
+        fx.intercept(at, from);
         break;
       }
       case 'death': {
