@@ -1,0 +1,54 @@
+## Project and rules (common)
+"Iron Front": a browser RTS in the style of Red Alert 2.
+- Stack: TypeScript + Three.js r186, Vite, vitest, TS strict.
+- Code is in `web/`. Live at https://liorsultan94.github.io/ra2/.
+- The owner plays mostly on a phone, sometimes on a desktop.
+
+You work in an isolated git worktree based on the latest master (c046fc9). Commit locally with clear messages, each ending with these two trailer lines, and do NOT push:
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AfPbHWRnbNkqsFSA7HPjiC
+
+Hard rules:
+- **Graphics quality:** never reduce graphics or effects quality. Performance work must be pixel-identical.
+- **Sim determinism:** the sim is deterministic lockstep: 20 TPS, seeded RNG, NEVER `Math.random` in sim code, no render state in the sim.
+- **Content:**
+  - no real brands in ads;
+  - Iran has no fighter jets;
+  - no concrete pad markings under buildings.
+- **Browsers:**
+  - Chromium: `/opt/pw-browsers/chromium-1194/chrome-linux/chrome` with args `--use-angle=swiftshader --enable-unsafe-swiftshader --ignore-gpu-blocklist`, via `playwright-core`.
+  - Wrap EVERY browser run in `flock /tmp/claude-0/pw.lock node ...`, so only one browser runs at a time on this machine. Other agents share this lock, so keep each run short and don't hold the lock idle.
+  - Serve your own build with `npx vite build && npx vite preview --port <your port> --strictPort` from your worktree's `web/`. Symlink `node_modules` from `/home/user/ra2/web/node_modules` if it is missing.
+  - Software GL is slow: 1.5–3 min per page load.
+- **Processes:** never `pkill -f` / `pgrep -f` with patterns that could match your own shell.
+- **Debugging helpers:**
+  - URL: `?play=usa,russia,normal&brief=0&map=frontline&warm=0` (phone: viewport 860x400, dpr 2.6, `q=medium&controls=simple`, isMobile/hasTouch).
+  - Debug handle: `window.ironfront.game`.
+  - Existing helper scripts live in `/tmp/claude-0/pw/`.
+- **Verification:**
+  - `npx tsc --noEmit -p .` clean;
+  - the full `npx vitest run` green: `sim.test.ts` "every faction can play a full AI game" is slow, so run it alone if the full run times out;
+  - `npx vite build` OK.
+- **Report back concisely:**
+  - changes;
+  - numbers;
+  - test results;
+  - screenshot paths;
+  - branch and commits;
+  - gaps.
+- **Blender (installed 2026-10-06; the owner approved using it):**
+  - The binary is `/opt/blender/blender` (5.2.2 LTS, same version as the owner's PC). Run it headless only: `/opt/blender/blender -b --factory-startup -P script.py -- args`. Cycles CPU rendering and texture baking work; there is no GPU, so EEVEE may not.
+  - Example: `/tmp/claude-0/BLENDER/test.py` is a working example: a crystal cluster, a Cycles render and a glTF (GLB) export.
+  - Use Blender as an authoring tool:
+    - model high-detail geometry (geometry nodes, modifiers, displacement);
+    - bake normal, AO or curvature maps from high-poly onto low-poly meshes;
+    - bake tileable textures;
+    - pre-render flipbooks or sprites;
+    - export GLB.
+  - Keep the Blender scripts in the repo under `web/tools/blender/`. Any generated asset must be reproducible from a committed script.
+  - Commit generated assets under `web/public/` (or wherever the repo already keeps assets).
+  - Budgets:
+    - keep downloads small: KTX2/WebP/PNG compressed, typically ≤256–512 KB per asset family;
+    - meshes must fit the phone triangle budget;
+    - check the phone frame time stays the same.
+  - Blender runs CPU-heavy: render small, keep sample counts modest, and do not run more than one Blender process at a time per agent.

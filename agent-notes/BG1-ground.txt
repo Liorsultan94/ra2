@@ -1,0 +1,17 @@
+First read `/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/common-rules.txt` (including the Blender section at the end). Work from the latest origin/master and rebase before you report if master moved. Your preview port is 4755.
+
+TASK BG1: rich high-detail ground materials in "Iron Front" (/web), authored in Blender 5.2.2.
+- Audit the current terrain/ground shader and textures: grass ground, dirt, mud, sand ripples, snow, asphalt and roads, tracks, fields, and the photo layers used by FX4's apron and the minimap bake.
+- Produce tileable PBR sets in Blender (albedo, normal, roughness and AO/height), several variants each to break up tiling:
+  - meadow soil with grass roots, forest floor with leaf litter, mud with puddles, gravel;
+  - desert sand with wind ripples, hard-packed desert pan, stony desert;
+  - fresh/wind-crusted snow and icy ruts;
+  - cracked asphalt and road shoulders, plus field furrows.
+- Shader work:
+  - height-based blending between layers, so mud fills the low points and grass sits on top;
+  - detail normal at close range and macro variation to kill tiling;
+  - keep wet-after-rain, snow and night behaviour.
+- GX2 is doing rock and cliff materials and GX4 the ground under buildings. Stay in your lane and merge cleanly with them; if they have landed on master, build on them.
+- Make sure the minimap/recon bake and the map-edge apron still match the new ground.
+- Before/after screenshots go in /tmp/claude-0/BG1/: all 4 maps; close, play and zoom-out; desk and phone; day, night and rain. Also produce a Blender swatch sheet.
+Budgets and rules: the phone frame time must stay the same (measure before and after on phone medium, 860x400). No graphics quality loss anywhere: the owner asked for this to be RICH and HIGH QUALITY. Rendering only; the sim is deterministic, so do not touch it. Compressed assets (WebP/KTX2). Keep the generating scripts in web/tools/blender/ with a "Blender 5.2.2" header so everything is reproducible. Run one Blender process at a time under nice -n 10, and do small test renders before long ones. Be economical with quota: no long exploratory loops. Report concisely: what changed, numbers (asset KB, triangles, phone frame time before/after), tests (tsc, full vitest, build), screenshot paths, branch and commits, gaps.

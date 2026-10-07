@@ -1,0 +1,14 @@
+First read `/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/common-rules.txt` (including the Blender section at the end). Work from the latest origin/master and rebase before you report if master moved. Your preview port is 4765.
+
+TASK BW1: rich destruction remains in "Iron Front" (/web), authored in Blender 5.2.2.
+- Audit the existing wrecks, debris, craters, scorch marks, building fracture/rubble and battle scars (render/fx*, wrecks, craters, scars, envdamage).
+- Another agent (BX1) is doing explosion/smoke/fire flipbooks. Do NOT touch those; coordinate only through the existing hooks.
+- Build in Blender and bake to compact low-poly + PBR:
+  - burnt-out vehicle hulks: generic MBT, IFV/APC, truck/harvester and helicopter wreck. They should have charred paint, rust, a blown-off or skewed turret and slumped tracks, and keep a faction-neutral burnt look. Also a crashed jet debris field.
+  - building rubble sets: concrete chunks, rebar and twisted beams, broken walls with a few standing wall stubs, small/medium/large footprints.
+  - crater decals: shell, bomb and missile craters with ejecta rays, scorched soil and depth via normal/parallax, per biome (grass, sand, snow, asphalt).
+  - scorch and soot decals.
+- Wrecks should smoulder, using the existing smoke hooks, then go cold, stay realistic at night (embers glow) and get wet in rain.
+- Keep any sim-visible behaviour (wreck lifetime/blocking) unchanged.
+- Before/after screenshots go in /tmp/claude-0/BW1/: after a battle on Frontline and desert (destroyed tanks, a destroyed building, bomb craters); close and play zoom; desk and phone; day and night. Also produce a Blender contact sheet.
+Budgets and rules: the phone frame time must stay the same (measure before and after on phone medium, 860x400). No graphics quality loss anywhere: the owner asked for this to be RICH and HIGH QUALITY. Rendering only; the sim is deterministic, so do not touch it. Compressed assets (WebP/KTX2). Keep the generating scripts in web/tools/blender/ with a "Blender 5.2.2" header so everything is reproducible. Run one Blender process at a time under nice -n 10, and do small test renders before long ones. Be economical with quota: no long exploratory loops. Report concisely: what changed, numbers (asset KB, triangles, phone frame time before/after), tests (tsc, full vitest, build), screenshot paths, branch and commits, gaps.

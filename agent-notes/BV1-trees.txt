@@ -1,0 +1,20 @@
+First read `/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/common-rules.txt` (including the Blender section at the end). Work from the latest origin/master and rebase before you report if master moved. Your preview port is 4785.
+
+TASK BV1: rich, realistic trees and vegetation in "Iron Front" (/web), authored in Blender 5.2.2.
+- Audit the current trees, bushes, hedges, palms, willows, reeds and 3D grass: find where they live (render/*trees*, layout, outskirts, props) and how they are instanced.
+- In Blender, build species per biome:
+  - temperate: oak, poplar/birch, pine and willow; FIX the willow's grey hanging "card" curtains;
+  - desert: date palm and acacia;
+  - winter: snow-laden spruce and bare birch;
+  - shrubs and hedges.
+- Give them real branching, leaf clusters and bark.
+- Bake them for the game:
+  - octahedral or multi-angle impostor atlases (albedo + normal + depth/AO) for mid and far distance;
+  - compact low-poly hero meshes with leaf cards for close range;
+  - LOD switching with a crossfade.
+- Lighting: correct lighting from the game sun at all times of day, with translucent leaves backlit at dawn and dusk, wind sway, and night lighting.
+- Variety: colour variation per instance and seasonal tint per biome.
+- Must keep working: tree destruction/fire behaviour and the minimap bake.
+- Out-of-map outskirts trees use the same assets at the right scale.
+- Before/after screenshots go in /tmp/claude-0/BV1/: a Frontline forest and riverbank (including the NW corner willows at about 3,2), desert palm grove/oasis, winter forest; close, play and zoomed-out; desk and phone; day, dawn and night. Also produce one Blender contact sheet of the species.
+Budgets and rules: the phone frame time must stay the same (measure before and after on phone medium, 860x400). No graphics quality loss anywhere: the owner asked for this to be RICH and HIGH QUALITY. Rendering only; the sim is deterministic, so do not touch it. Compressed assets (WebP/KTX2). Keep the generating scripts in web/tools/blender/ with a "Blender 5.2.2" header so everything is reproducible. Run one Blender process at a time under nice -n 10, and do small test renders before long ones. Be economical with quota: no long exploratory loops. Report concisely: what changed, numbers (asset KB, triangles, phone frame time before/after), tests (tsc, full vitest, build), screenshot paths, branch and commits, gaps.

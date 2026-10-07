@@ -1,0 +1,16 @@
+First read `/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/common-rules.txt` (including the Blender section at the end). Work from the latest origin/master and rebase before you report if master moved. Your preview port is 4775.
+
+TASK BS1: rich skies and clouds in "Iron Front" (/web), authored in Blender 5.2.2.
+- Audit the current physical sky, clouds, cloud shadows, weather (overcast/rain/snow/sandstorm), the day clock (1 real min = 1 game hour; MOON_RISE 19:45, MOON_SET 05:15), the moon/stars and the horizon/outskirts (FX4 just redid the map edges).
+- Render in Blender (Cycles volumetrics):
+  - cloud material: layered cumulus, stratocumulus, cirrus and storm-cloud sets as lit cloud atlases (6-way lightmaps or similar, so they relight with the game sun and colour through sunrise, day, sunset and night);
+  - distant horizon cloud banks and a mountain/haze silhouette band per biome where it fits;
+  - a night sky with a Milky Way and star field, moon detail and moonlit clouds.
+- Integrate:
+  - drifting layered clouds whose coverage follows the weather state;
+  - matching cloud shadows on the ground;
+  - god rays where present already;
+  - the sky must blend with the horizon fog block that FX4 added.
+- Sky is mostly visible in low/tilted and cinematic or photo-mode views and in the strike camera; also make sure the default RTS view gets the benefit through reflections in the water and the cloud shadows.
+- Before/after screenshots go in /tmp/claude-0/BS1/: horizon views (hz_*), the photo-mode camera and the water reflection at play zoom; dawn, noon, sunset and night; clear, cloudy and storm; Frontline and desert; desk and phone. Also produce a Blender contact sheet of the cloud atlases.
+Budgets and rules: the phone frame time must stay the same (measure before and after on phone medium, 860x400). No graphics quality loss anywhere: the owner asked for this to be RICH and HIGH QUALITY. Rendering only; the sim is deterministic, so do not touch it. Compressed assets (WebP/KTX2). Keep the generating scripts in web/tools/blender/ with a "Blender 5.2.2" header so everything is reproducible. Run one Blender process at a time under nice -n 10, and do small test renders before long ones. Be economical with quota: no long exploratory loops. Report concisely: what changed, numbers (asset KB, triangles, phone frame time before/after), tests (tsc, full vitest, build), screenshot paths, branch and commits, gaps.
