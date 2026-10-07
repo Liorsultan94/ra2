@@ -318,7 +318,8 @@ export class MinimapBake {
           col = hsl(0.3 + r1 * 0.05, 0.28 + r2 * 0.08, 0.2 + r2 * 0.04);
           break;
         case Species.Birch:
-          col = hsl(0.21 + r1 * 0.04, 0.42 + r2 * 0.1, 0.3 + r2 * 0.05);
+          // winter birches stand bare (treeassets.ts birch_bare): a grey-brown twig crown
+          col = code === 2 ? hsl(0.08 + r1 * 0.03, 0.1 + r2 * 0.05, 0.3 + r2 * 0.05) : hsl(0.21 + r1 * 0.04, 0.42 + r2 * 0.1, 0.3 + r2 * 0.05);
           break;
         case Species.Palm:
           col = hsl(0.19 + r1 * 0.05, 0.36 + r2 * 0.1, 0.27 + r2 * 0.05);

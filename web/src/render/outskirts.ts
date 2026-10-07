@@ -5,6 +5,7 @@ import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
 import { Species } from './treekinds';
+import { treeAssetsWanted, treeKind, upgradeOutskirtTrees, type OutskirtTrees } from './treeassets';
 import { grassRGB } from './grasstex';
 import { biomeLook, hexRGB, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
@@ -767,8 +768,13 @@ export class Outskirts {
     const leafy: THREE.Matrix4[] = [];
     const pc: THREE.Color[] = [];
     const lc: THREE.Color[] = [];
+    // the randoms of each tree (the Blender assets recolour them with relative tints)
+    const pr: number[] = [];
+    const lr: number[] = [];
     const q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
+    // Blender trees: impostors (one quad a tree, treeassets.ts) once streamed in
+    const assets = treeAssetsWanted(quality);
     const budget = quality === 'low' ? 900 : quality === 'medium' ? 1600 : 2400;
     const step = 1.3;
     let k = 0;
@@ -806,9 +812,11 @@ export class Outskirts {
         if (pine) {
           pines.push(m);
           pc.push(c);
+          pr.push(hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5));
         } else {
           leafy.push(m);
           lc.push(c);
+          lr.push(hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5));
         }
         if (pines.length + leafy.length >= budget) break;
       }
@@ -825,9 +833,10 @@ export class Outskirts {
       const gy = Math.max(0, Math.min(G - 1, Math.floor((m.elements[14] + MARGIN) / cell)));
       return gy * G + gx;
     };
-    for (const [geo, mats, cols] of [
-      [pineGeo, pines, pc],
-      [leafyGeo, leafy, lc],
+    const upgrade: OutskirtTrees[] = [];
+    for (const [geo, mats, cols, rnd, sp] of [
+      [pineGeo, pines, pc, pr, spA],
+      [leafyGeo, leafy, lc, lr, spB],
     ] as const) {
       for (let sct = 0; sct < G * G; sct++) {
         const idx: number[] = [];
@@ -838,6 +847,7 @@ export class Outskirts {
           im.setMatrixAt(i, mats[src]);
           im.setColorAt(i, cols[src]);
         });
+        upgrade.push({ mesh: im, kind: treeKind(sp, this.map.biome), rnd: idx.flatMap((i) => [rnd[i * 3], rnd[i * 3 + 1], rnd[i * 3 + 2]]) });
         im.castShadow = quality === 'high';
         im.customDepthMaterial = depth;
         im.receiveShadow = false;
@@ -845,6 +855,7 @@ export class Outskirts {
         this.group.add(im);
       }
     }
+    if (assets) upgradeOutskirtTrees(this.map.biome, upgrade, fog, quality, (m) => hzClone(m, 'osk-imp'));
   }
 }
 

@@ -11,6 +11,7 @@ import { Shrub, buildTrees, shrubGeometry, shrubTint, treeMaterials } from './tr
 import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
 import { roadClear } from './ambient/clearance';
+import { type PlantSet, treeKind, upgradePlants } from './treeassets';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -212,7 +213,9 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   const treeLo = quality === 'high' ? 19 : 14.5;
   const grassHide = quality === 'high' ? 24 : quality === 'medium' ? 17 : 13.5;
   // trees: species models, materials and instancing live in trees.ts
-  out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees));
+  const treeSets: { ci: CulledInstances; sp: Species }[] = [];
+  out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees, treeSets));
+  const plantSets: PlantSet[] = treeSets.map(({ ci, sp }) => ({ ci, kind: treeKind(sp, m.biome), hashK: 7 }));
 
   // ---- ground cover
   const grass: Inst[] = [];
@@ -354,11 +357,17 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   }
   // shrubs and hedgerows: built like the trees (leaf-card crowns, wrap lighting, translucency, wind)
   const tm = treeMaterials(fog, quality);
-  const shrubSets: [Shrub, Inst[]][] = [
-    [biome === 'desert' ? Shrub.Scrub : Shrub.Bush, bushes],
-    [Shrub.Hedge, hedges],
+  const shrubSets: [Shrub, Inst[], string][] = [
+    [biome === 'desert' ? Shrub.Scrub : Shrub.Bush, bushes, biome === 'desert' ? 'scrub' : 'bush'],
+    [Shrub.Hedge, hedges, 'hedge'],
   ];
-  for (const [kind, list] of shrubSets) {
+  if (biome === 'winter') {
+    // the bare winter bushes (shrubTint's bare twigs) get their own model with the Blender assets
+    const bare = (it: Inst) => hash2(Math.floor(it.x * 13), Math.floor(it.z * 13), 5) < 0.4;
+    shrubSets[0] = [Shrub.Bush, bushes.filter((it) => !bare(it)), 'bush'];
+    shrubSets.push([Shrub.Bush, bushes.filter(bare), 'bush_bare']);
+  }
+  for (const [kind, list, assetKind] of shrubSets) {
     if (!list.length) continue;
     for (const it of list) {
       const kx = Math.floor(it.x * 13);
@@ -372,6 +381,9 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
     out.push(ci.mesh);
     lod.addCulled(ci, low ? null : lo, treeLo - 2, Infinity);
     sink?.bushes.push(ci);
+    plantSets.push({ ci, kind: assetKind, hashK: 13 });
   }
+  // the Blender-built species replace these once streamed in (treeassets.ts)
+  upgradePlants(m, plantSets, fog, quality, lod);
   return out;
 }
