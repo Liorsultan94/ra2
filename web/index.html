@@ -10,13 +10,13 @@
     <title>Iron Front</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161c22'/%3E%3Cpath d='M16 4l10 6v12l-10 6-10-6V10z' fill='%23d8402c'/%3E%3Cpath d='M16 10l5 3v6l-5 3-5-3v-6z' fill='%23f2d9a0'/%3E%3C/svg%3E" />
     <!-- self-hosted UI fonts (SIL OFL, public/fonts): Inter for text and numbers, Barlow Condensed for labels and the wordmark -->
-    <link rel="preload" href="./fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="./fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
     <style>
-      @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(./fonts/inter-latin.woff2) format('woff2')}
-      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;src:url(./fonts/barlow-condensed-500.woff2) format('woff2')}
-      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:600;font-display:swap;src:url(./fonts/barlow-condensed-600.woff2) format('woff2')}
-      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;src:url(./fonts/barlow-condensed-700.woff2) format('woff2')}
+      @font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(/fonts/inter-latin.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;src:url(/fonts/barlow-condensed-500.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:600;font-display:swap;src:url(/fonts/barlow-condensed-600.woff2) format('woff2')}
+      @font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;src:url(/fonts/barlow-condensed-700.woff2) format('woff2')}
       /* ---- splash: painted before any JS downloads (logic in src/ui/splash.ts) ---- */
       html,body{margin:0;height:100%;overflow:hidden;background:#050607}
       #splash{--E:min(52vh,34vw,340px);position:fixed;inset:0;z-index:1000;overflow:hidden;color:#e8ecf0;font:500 13px Inter,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:default}

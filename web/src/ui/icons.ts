@@ -28,6 +28,7 @@ const P: Record<string, string> = {
   more: '<circle cx="5.5" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="18.5" cy="12" r="1.4" fill="currentColor"/>',
   // chrome
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  pause: '<path d="M8 5.5v13M16 5.5v13" stroke-width="2.8"/>',
   chevron: '<path d="M9.5 6l6 6-6 6"/>',
   rotL: '<path d="M3.5 4.5v5h5"/><path d="M4 9.5a8.5 8.5 0 1 1-.5 5"/>',
   rotR: '<path d="M20.5 4.5v5h-5"/><path d="M20 9.5a8.5 8.5 0 1 0 .5 5"/>',

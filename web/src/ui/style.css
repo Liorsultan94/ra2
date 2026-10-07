@@ -1251,6 +1251,10 @@ kbd {
 .vc-btn:hover {
   border-color: var(--line-3);
 }
+.vc-btn.vc-pause:hover {
+  border-color: rgba(255, 90, 66, 0.75);
+  color: #fff;
+}
 .vc-btn:active {
   transform: scale(0.94);
 }

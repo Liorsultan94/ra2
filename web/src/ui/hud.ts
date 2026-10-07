@@ -70,6 +70,7 @@ const ICONS = {
 const VIEW_ICONS: [RegExp, string][] = [
   [/^Thermal/i, 'thermal'],
   [/^Photo/i, 'photo'],
+  [/^Pause/i, 'pause'],
 ];
 
 /** Short rallying line under the nation name in the sidebar header. */
@@ -201,6 +202,12 @@ export class Hud {
     };
     rot(-1, 'Rotate view left (Q)', 'rotL');
     rot(1, 'Rotate view right (E)', 'rotR');
+    const pauseBtn = el('button', 'vc-btn vc-pause', vc);
+    pauseBtn.innerHTML = icon('pause');
+    pauseBtn.title = 'Pause / Menu (Esc)';
+    pauseBtn.setAttribute('aria-label', 'Pause game');
+    pauseBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    pauseBtn.onclick = () => this.actions.onTool('menu');
     // the live day clock leads the view buttons row (simple HUD: alone in the corner, see setSimple)
     this.clock = new HudClock(vc);
     vc.prepend(this.clock.el);

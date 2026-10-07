@@ -1777,6 +1777,7 @@ export class Game {
     }
     switch (k.toLowerCase()) {
       case 'escape':
+      case 'pause':
         if (this.mode !== 'normal') this.setMode('normal');
         else this.cb.onMenu();
         break;
