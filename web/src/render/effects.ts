@@ -120,6 +120,8 @@ export const BLASTS: Record<string, BlastProfile> = {
   rocket: { size: 1.0, fire: 1, sparks: 10, smoke: 1, dirt: 1.4, ring: 1.0, debris: [{ kind: 'dirt', n: 8, power: 4, size: 0.07 }], crater: 0.5, scorch: 0.5, light: 4, shake: 0.06 },
   thermo: { size: 1.7, fire: 2.6, fireColor: 'thermo', sparks: 10, smoke: 1.6, column: true, dirt: 1, ring: 2.6, crater: 0.6, scorch: 1.4, light: 10, shake: 0.2, afterburn: 2.5 },
   missile: { size: 1.4, fire: 1.3, sparks: 14, smoke: 1.4, column: true, dirt: 2, ring: 1.8, debris: [{ kind: 'dirt', n: 12, power: 5, size: 0.08 }], crater: 0.8, scorch: 0.8, light: 7, shake: 0.14 },
+  // a jet's 2,000 lb bomb: bigger than a ballistic warhead, a taller column, a wider ring and crater
+  jetBomb: { size: 3.3, fire: 3.1, fireColor: 'white', sparks: 40, smoke: 3.3, column: true, dirt: 4.4, ring: 4.8, debris: [{ kind: 'dirt', n: 40, power: 9.5, size: 0.13 }, { kind: 'concrete', n: 14, power: 8, size: 0.11 }], crater: 2, scorch: 2.6, light: 20, shake: 0.6 },
   ballistic: { size: 2.6, fire: 2.4, fireColor: 'white', sparks: 30, smoke: 2.6, column: true, dirt: 3.5, ring: 3.8, debris: [{ kind: 'dirt', n: 30, power: 8, size: 0.12 }, { kind: 'concrete', n: 10, power: 7, size: 0.1 }], crater: 1.6, scorch: 2, light: 16, shake: 0.45 },
   drone: { size: 0.75, fire: 0.9, sparks: 14, smoke: 0.8, dirt: 0.8, ring: 0.6, debris: [{ kind: 'metal', n: 5, power: 3, size: 0.04 }], crater: 0.3, scorch: 0.45, light: 3.5, shake: 0.04 },
   shahed: { size: 1.6, fire: 1.8, sparks: 20, smoke: 1.6, column: true, dirt: 2, ring: 2.2, debris: [{ kind: 'dirt', n: 14, power: 6, size: 0.09 }, { kind: 'metal', n: 6, power: 5, size: 0.05 }], crater: 0.9, scorch: 1.1, light: 9, shake: 0.2 },

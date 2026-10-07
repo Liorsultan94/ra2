@@ -84,7 +84,7 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'airMissile', damage: 95, range: 8, rof: 70, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.8, air: 'yes' , flight: 'airMissile', munition: 'airMissile' },
   // jet sortie (airbase.ts): ONE heavy bomb per sortie, released in level flight ~3 tiles short of the target.
   // Tuned to the 2000-credit jet and its ~45 s cycle: a direct hit kills a main battle tank, two sorties a refinery.
-  { id: 'jetBomb', damage: 400, range: 3.2, rof: 1, warhead: 'missile', projectile: 'missile', speed: 0.2, splash: 1.9, air: 'no', flight: 'bomb', munition: 'bomb', precise: true },
+  { id: 'jetBomb', damage: 500, range: 3.2, rof: 1, warhead: 'missile', projectile: 'missile', speed: 0.2, splash: 2.4, air: 'no', flight: 'bomb', munition: 'bomb', precise: true },
   { id: 'uavMissile', damage: 48, range: 6, rof: 50, warhead: 'rocket', projectile: 'rocket', speed: 0.6, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'heavyUavMissile', damage: 90, range: 7, rof: 60, burst: 2, burstDelay: 8, warhead: 'missile', projectile: 'rocket', speed: 0.6, air: 'no' , flight: 'airMissile', munition: 'airMissile' },
   { id: 'fpvLaunch', damage: 0, range: 9, rof: 110, warhead: 'rocket', projectile: 'spawn', spawn: 'fpv', air: 'no' },

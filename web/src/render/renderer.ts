@@ -2071,7 +2071,7 @@ export class GameRenderer {
         break;
       case 'bomb':
         // a jet's 2,000 lb bomb: the big one
-        p = BLASTS.ballistic;
+        p = BLASTS.jetBomb;
         break;
       case 'airMissile':
         p = w.warhead === 'missile' ? BLASTS.missile : BLASTS.heat;
