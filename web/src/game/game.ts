@@ -92,7 +92,14 @@ export class Game {
   private pacer = new TickPacer();
   private hudTimer = 0;
   private mmTimer = 0;
-  paused = false;
+  private _paused = false;
+  get paused(): boolean {
+    return this._paused;
+  }
+  set paused(v: boolean) {
+    this._paused = v;
+    this.hud?.setPaused(v);
+  }
   /** Tick-rate multiplier (game speed setting, pace.ts): never changes what a tick does, only how often one runs. */
   speed = 1;
   /** Early-game grace: the enemy AI launches no attack before this tick (0 = none; sim/peace.ts). */
@@ -599,7 +606,9 @@ export class Game {
     let fps = 0;
     if (this.opts.attract) fps = 30;
     else if (this.photo.active) fps = now - this.lastInput > 1500 && !this.photo.busy() ? 10 : 0;
-    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) fps = 5;
+    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) {
+      fps = now - this.lastInput > 1500 && !this.keys.size && !this.drag ? 10 : 0;
+    }
     if (!fps) return false;
     if (now - this.gateShown < 1000 / fps - 2) return true;
     this.gateShown = now;
@@ -693,10 +702,11 @@ export class Game {
     const speed = 900 * dt;
     let dx = 0;
     let dy = 0;
-    if (this.keys.has('ArrowLeft')) dx -= speed;
-    if (this.keys.has('ArrowRight')) dx += speed;
-    if (this.keys.has('ArrowUp')) dy -= speed;
-    if (this.keys.has('ArrowDown')) dy += speed;
+    const arrowOrW = (arr: string, w: string) => this.keys.has(arr) || (this.paused && (this.keys.has(w) || this.keys.has(w.toUpperCase())));
+    if (arrowOrW('ArrowLeft', 'a')) dx -= speed;
+    if (arrowOrW('ArrowRight', 'd')) dx += speed;
+    if (arrowOrW('ArrowUp', 'w')) dy -= speed;
+    if (arrowOrW('ArrowDown', 's')) dy += speed;
     if (this.mouse.inside && this.mouse.type === 'mouse' && !this.drag && document.hasFocus()) {
       const rect = this.hud.viewWrap.getBoundingClientRect();
       const m = 8;
@@ -1060,9 +1070,20 @@ export class Game {
     if (this.hintShown && d.kind === 'building') this.hud.showHint(null);
   }
 
-  private onTool(t: 'repair' | 'sell' | 'menu' | 'boxselect') {
+  /** Toggle tactical pause: freezes simulation while allowing free camera exploration and unit inspection. */
+  togglePause(force?: boolean) {
+    this.audio.unlock();
+    this.paused = force !== undefined ? force : !this.paused;
+    this.sfx(this.paused ? 'click' : 'ack');
+  }
+
+  private onTool(t: 'repair' | 'sell' | 'menu' | 'boxselect' | 'pause') {
     this.audio.unlock();
     this.sfx('click');
+    if (t === 'pause') {
+      this.togglePause();
+      return;
+    }
     if (t === 'menu') {
       this.cb.onMenu();
       return;
@@ -1668,6 +1689,22 @@ export class Game {
       return;
     }
     const target = this.pick(x, y);
+    if (this.paused) {
+      if (target) {
+        if (shift) {
+          const sel = this.renderer.selection;
+          if (sel.has(target.id)) sel.delete(target.id);
+          else sel.add(target.id);
+          this.hud.forceSelectionRefresh();
+          this.sfx('select');
+        } else {
+          this.select([target.id]);
+        }
+      } else {
+        if (!shift) this.select([]);
+      }
+      return;
+    }
     // double click selects all of that type on screen
     if (target && target.owner === this.local && target.kind === 'unit' && now - this.lastClick.t < 350 && this.lastClick.id === target.id && this.mode === 'normal') {
       const rect = this.hud.viewWrap.getBoundingClientRect();
@@ -1707,6 +1744,16 @@ export class Game {
     // (escort mode wants a friendly unit under the finger: generous there)
     this.touchPick = units.length && this.mode !== 'guard' ? 'tight' : 'loose';
     try {
+      if (this.paused) {
+        const target = this.pick(x, y);
+        if (target) {
+          this.select([target.id]);
+          navigator.vibrate?.(6);
+        } else {
+          this.select([]);
+        }
+        return;
+      }
       if (this.mode === 'place' && this.placing) {
         this.click(x, y, false, false);
         return;
@@ -1754,18 +1801,42 @@ export class Game {
       if ((e.target as HTMLElement)?.tagName !== 'INPUT') this.enterPhotoMode();
       return;
     }
-    if (this.local < 0 || (this.paused && down)) return;
+    if (this.local < 0) return;
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
+
+    // Tactical pause toggle with Pause key or Space
+    if (down && !e.repeat && (k === 'Pause' || k === ' ' || e.code === 'Space')) {
+      e.preventDefault();
+      this.togglePause();
+      return;
+    }
+
+    // Escape always cancels current mode or opens the main pause menu
+    if (down && !e.repeat && k === 'Escape') {
+      if (this.mode !== 'normal') this.setMode('normal');
+      else this.cb.onMenu();
+      return;
+    }
+
     if (down) this.keys.add(k);
     else {
       this.keys.delete(k);
       return;
     }
+
     if (k.startsWith('Arrow')) {
       e.preventDefault();
       return;
     }
+
+    // While battle is paused, only camera rotation and panning are allowed (no unit orders)
+    if (this.paused) {
+      if (down && (k === 'q' || k === 'Q')) this.rotateView(-1);
+      if (down && (k === 'e' || k === 'E')) this.rotateView(1);
+      return;
+    }
+
     const units = this.selectedOwnUnits();
     // control groups (Ctrl+N assign, Shift+N add, N select, NN centre) and Alt+A/S/D/F stances
     if (this.ctl.onKey(e)) return;
@@ -1776,11 +1847,6 @@ export class Game {
       return;
     }
     switch (k.toLowerCase()) {
-      case 'escape':
-      case 'pause':
-        if (this.mode !== 'normal') this.setMode('normal');
-        else this.cb.onMenu();
-        break;
       case 'p':
         this.toggleOrderMode('patrol');
         break;

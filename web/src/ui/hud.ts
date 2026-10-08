@@ -27,7 +27,7 @@ import { PeaceChip } from './peace';
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
   onCancel(defId: string): void;
-  onTool(tool: 'repair' | 'sell' | 'menu' | 'boxselect'): void;
+  onTool(tool: 'repair' | 'sell' | 'menu' | 'boxselect' | 'pause'): void;
   onCommand(cmd: HudCommand): void;
   onMinimap(x: number, y: number, drag: boolean): void;
   onSelectType(defId: string): void;
@@ -173,6 +173,8 @@ export class Hud {
   player = 0;
   /** Live 3D portrait of the selection (portrait3d.ts); static cameos on 'low' quality. */
   private live: LivePortrait | null = null;
+  private pauseBtn!: HTMLButtonElement;
+  private pauseBanner!: HTMLElement;
 
   constructor(
     parent: HTMLElement,
@@ -202,16 +204,29 @@ export class Hud {
     };
     rot(-1, 'Rotate view left (Q)', 'rotL');
     rot(1, 'Rotate view right (E)', 'rotR');
-    const pauseBtn = el('button', 'vc-btn vc-pause', vc);
+    const pauseBtn = (this.pauseBtn = el('button', 'vc-btn vc-pause', vc) as HTMLButtonElement);
     pauseBtn.innerHTML = icon('pause');
-    pauseBtn.title = 'Pause / Menu (Esc)';
+    pauseBtn.title = 'Pause / Freeze view (Space)';
     pauseBtn.setAttribute('aria-label', 'Pause game');
     pauseBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-    pauseBtn.onclick = () => this.actions.onTool('menu');
+    pauseBtn.onclick = () => this.actions.onTool('pause');
     // the live day clock leads the view buttons row (simple HUD: alone in the corner, see setSimple)
     this.clock = new HudClock(vc);
     vc.prepend(this.clock.el);
     this.peace = new PeaceChip(this.viewWrap);
+
+    // tactical pause banner (shows when frozen, allows free map exploration and inspection)
+    const pb = (this.pauseBanner = el('div', 'pause-banner hidden', this.viewWrap));
+    pb.innerHTML = `
+      <div class="pb-content">
+        <span class="pb-tag">⏸ BATTLE PAUSED</span>
+        <span class="pb-hint">Explore map · Inspect units</span>
+      </div>
+      <button class="pb-resume" title="Resume battle (Space / Pause)">RESUME <span class="pb-ico">▶</span></button>
+    `;
+    const resBtn = pb.querySelector('.pb-resume') as HTMLButtonElement;
+    resBtn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    resBtn.onclick = () => this.actions.onTool('pause');
     const bottomLeft = el('div', 'bottom-left', this.viewWrap);
     this.selPanel = el('div', 'selpanel hidden', bottomLeft);
     this.cmdBar = el('div', 'cmdbar', bottomLeft);
@@ -319,6 +334,17 @@ export class Hud {
   /** Letterbox bars while a cinematic moment plays. */
   setCinematic(on: boolean) {
     this.viewWrap.classList.toggle('cine-on', on);
+  }
+
+  /** Update HUD elements when the battle is tactically paused. */
+  setPaused(paused: boolean) {
+    if (this.pauseBtn) {
+      this.pauseBtn.classList.toggle('on', paused);
+      this.pauseBtn.innerHTML = paused ? icon('play') : icon('pause');
+      this.pauseBtn.title = paused ? 'Resume battle (Space / Pause)' : 'Pause / Freeze view (Space)';
+    }
+    this.pauseBanner?.classList.toggle('hidden', !paused);
+    this.root.classList.toggle('tactical-pause', paused);
   }
 
   attach(world: World, renderer: GameRenderer, player: number, sidebar = true) {

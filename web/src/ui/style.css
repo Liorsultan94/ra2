@@ -290,6 +290,87 @@ kbd {
   }
 }
 
+.pause-banner {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 6px 5px 16px;
+  border-radius: 999px;
+  background: rgba(16, 20, 26, 0.9);
+  border: 1px solid rgba(255, 140, 50, 0.75);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7), 0 0 20px rgba(255, 120, 40, 0.25);
+  -webkit-backdrop-filter: var(--hud-blur);
+  backdrop-filter: var(--hud-blur);
+  z-index: 10;
+  color: #fff;
+  animation: pause-pop 0.25s var(--ease) both;
+  pointer-events: auto;
+}
+.pause-banner.hidden {
+  display: none !important;
+}
+@keyframes pause-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+.pb-content {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.pb-tag {
+  font-family: var(--font-d, 'Barlow Condensed', sans-serif);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff9d42;
+}
+.pb-hint {
+  font-size: 12px;
+  color: rgba(230, 235, 240, 0.8);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.pb-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid #ff7a29;
+  background: linear-gradient(135deg, #d8451c, #ff6c26);
+  color: #fff;
+  font-family: var(--font-d, 'Barlow Condensed', sans-serif);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(216, 69, 28, 0.45);
+  transition: transform 120ms, filter 150ms;
+}
+.pb-resume:hover {
+  filter: brightness(1.15);
+  transform: scale(1.03);
+}
+.pb-resume:active {
+  transform: scale(0.96);
+}
+.pb-ico {
+  font-size: 10px;
+}
+
 .tooltip {
   position: fixed;
   z-index: 40;
@@ -1254,6 +1335,12 @@ kbd {
 .vc-btn.vc-pause:hover {
   border-color: rgba(255, 90, 66, 0.75);
   color: #fff;
+}
+.vc-btn.vc-pause.on {
+  background: rgba(220, 70, 30, 0.9);
+  border-color: #ff9142;
+  color: #fff;
+  box-shadow: 0 0 16px rgba(255, 110, 40, 0.6);
 }
 .vc-btn:active {
   transform: scale(0.94);
