@@ -204,7 +204,7 @@ export type Order =
   | { type: 'attackMove'; x: number; y: number }
   | { type: 'attack'; target: number; forced?: boolean }
   | { type: 'harvest' }
-  | { type: 'capture'; target: number }
+  | { type: 'capture'; target: number; repair?: boolean }
   | { type: 'enter'; target: number }
   | { type: 'deploy' }
   /**

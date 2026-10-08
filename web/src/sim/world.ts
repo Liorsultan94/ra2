@@ -658,7 +658,7 @@ export class World {
           if (d.engineer && t.kind === 'building') {
             const bd = buildingDef(t.def);
             if (t.owner !== pid || t.hp < t.maxHp) {
-              if (t.owner === pid || bd.capturable || t.owner >= 0) e.order = { type: 'capture', target: t.id };
+              if (t.owner === pid || bd.capturable || t.owner >= 0) e.order = { type: 'capture', target: t.id, repair: t.owner === pid };
             }
             continue;
           }
@@ -674,7 +674,8 @@ export class World {
       case 'capture': {
         const t = this.get(cmd.target);
         if (!t || t.kind !== 'building') break;
-        for (const e of own(cmd.ids)) if (unitDef(e.def).engineer) e.order = { type: 'capture', target: t.id };
+        const isRepair = t.owner === pid;
+        for (const e of own(cmd.ids)) if (unitDef(e.def).engineer) e.order = { type: 'capture', target: t.id, repair: isRepair };
         break;
       }
       case 'stop':
@@ -1711,10 +1712,23 @@ export class World {
         const t = this.get(o.target);
         if (!t || t.kind !== 'building') {
           e.order = { type: 'idle' };
+          e.path = null;
+          break;
+        }
+        // If ordered to capture an enemy/neutral building, stop if it is already ours
+        if (!o.repair && t.owner === e.owner) {
+          e.order = { type: 'idle' };
+          e.path = null;
+          break;
+        }
+        // If ordered to repair our building, stop if it is already at full HP or no longer ours
+        if (o.repair && (t.owner !== e.owner || t.hp >= t.maxHp)) {
+          e.order = { type: 'idle' };
+          e.path = null;
           break;
         }
         if (this.distTo(e, t) < 0.75) {
-          this.engineerEnter(e, t);
+          this.engineerEnter(e, t, o);
           break;
         }
         this.chase(e, t, d);
@@ -1927,19 +1941,38 @@ export class World {
     return [cx, cy];
   }
 
-  private engineerEnter(e: Entity, t: Entity) {
+  private engineerEnter(e: Entity, t: Entity, o?: { repair?: boolean }) {
     if (t.def === 'bridgehut') {
       if (bridgeHutEnter(this, t, e)) this.remove(e);
-      else e.order = { type: 'idle' };
+      else {
+        e.order = { type: 'idle' };
+        e.path = null;
+      }
       return;
     }
     const td = buildingDef(t.def);
     if (td.garrison && t.owner !== e.owner) {
       e.order = { type: 'idle' }; // engineers can't clear or capture civilian buildings (garrison.ts)
+      e.path = null;
       return;
     }
     if (t.owner === e.owner) {
-      t.hp = t.maxHp;
+      // If the engineer was ordered to capture an enemy/neutral building, but it is already ours:
+      // He cannot enter it and stands outside!
+      if (o && !o.repair) {
+        e.order = { type: 'idle' };
+        e.path = null;
+        return;
+      }
+      // If repairing our building, only enter if it's damaged
+      if (t.hp < t.maxHp) {
+        t.hp = t.maxHp;
+        this.remove(e);
+      } else {
+        e.order = { type: 'idle' };
+        e.path = null;
+      }
+      return;
     } else if (t.owner === -1 ? td.capturable : true) {
       const old = t.owner;
       t.owner = e.owner;
@@ -1948,8 +1981,12 @@ export class World {
       t.targetId = -1;
       this.events.push({ t: 'captured', id: t.id, owner: e.owner });
       if (old >= 0) this.players[old].stats.lost++;
-    } else return;
-    this.remove(e);
+      this.remove(e);
+    } else {
+      e.order = { type: 'idle' };
+      e.path = null;
+      return;
+    }
   }
 
   // ------------------------------------------------------------ harvesting
