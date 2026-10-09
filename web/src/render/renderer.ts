@@ -460,7 +460,7 @@ export class GameRenderer {
     this.scene.add(this.sun, this.sun.target);
     if (this.ultra) {
       // cascaded sun shadows: the directional light stays the controller (atmos / effects read it) but is hidden
-      this.csm = new CascadeSun(this.scene, this.camera, 4096);
+      this.csm = new CascadeSun(this.scene, this.camera, 2048);
       this.sun.castShadow = false;
       this.sun.visible = false;
     }
@@ -523,10 +523,10 @@ export class GameRenderer {
 
     // ---- quality ladder (index 0 = best). The governor sheds, in order: lens extras -> AO -> bloom quality
     // -> (ultra extras) -> resolution -> shadow detail / bloom. Every post pass is a rung of its own.
-    const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
+    const maxPR = Math.min(dpr, quality === 'low' ? 1.0 : quality === 'medium' ? 1.15 : 1.25);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
-    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? (phoneCaps() ? 2048 : 4096) : quality === 'medium' ? 2048 : 0; // ultra: per cascade; phones: 2048 (memory)
+    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' ? 1 : Math.min(maxPR, 1.25));
+    const shadow = quality === 'high' ? 2048 : quality === 'medium' ? 1024 : 0; // optimized: 2048 high/ultra, 1024 medium
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
@@ -2665,7 +2665,7 @@ export class GameRenderer {
       k[7] = c.top;
       k[8] = sh.mapSize.x;
     }
-    const every = this.quality === 'high' ? 1 : 2;
+    const every = this.quality === 'high' ? 2 : 3;
     this.shadowAge++;
     if (moved || !sh.map || (dt > 0 && this.shadowAge >= every) || this.shadowAge > 30) {
       sh.needsUpdate = true;
