@@ -1049,6 +1049,31 @@ export class DroneCam {
     gl.autoClear = auto;
   }
 
+  /**
+   * Pre-warm DroneCam shaders and passes ahead of battle so that
+   * aircraft bombing runs and missile strikes don't trigger synchronous shader compiles.
+   */
+  warmUp() {
+    const gl = this.r.renderer;
+    const prevRT = gl.getRenderTarget();
+    const prevAuto = gl.shadowMap.autoUpdate;
+    try {
+      gl.shadowMap.autoUpdate = false;
+      gl.setRenderTarget(this.rt);
+      gl.render(this.r.scene, this.cam);
+      renderHeatMask(gl, this.r.scene, this.cam, this.heat, true);
+      gl.setRenderTarget(this.proc);
+      this.procQuad.render(gl);
+      gl.setRenderTarget(this.rt);
+      this.quad.render(gl);
+    } catch {
+      /* non-fatal */
+    } finally {
+      gl.shadowMap.autoUpdate = prevAuto;
+      gl.setRenderTarget(prevRT);
+    }
+  }
+
   dispose() {
     this.el.remove();
     this.rt.depthTexture?.dispose();

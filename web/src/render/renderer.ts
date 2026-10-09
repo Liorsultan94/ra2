@@ -893,10 +893,12 @@ export class GameRenderer {
     u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
     this.tilt?.setZoom(this.zoom, this.defaultZoom(), this.renderer.getPixelRatio());
-    if (pc && this.tilt) this.tilt.enabled = false;
+    if ((pc || this.cinematicActive) && this.tilt) this.tilt.enabled = false;
   }
   /** Photo mode free camera (position + look-at point); null = the normal RTS camera. */
   photoCam: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+  /** True when a cinematic slow-motion moment is playing: suppresses heavy zoom blur passes. */
+  cinematicActive = false;
 
   /**
    * Fit the sun's shadow frustum tightly around what the camera sees, snapped

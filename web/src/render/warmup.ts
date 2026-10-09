@@ -257,6 +257,7 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
       r.render(1, 0);
       r.atmos.setNightVision(nv);
       modes.setThermal(false);
+      modes.drone?.warmUp();
       await settlePrograms(gl, slicer);
     }
     onProgress(1);

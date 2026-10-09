@@ -548,6 +548,7 @@ export class Game {
       return;
     }
     if (this.outro && this.outro.update(dt)) this.endOutro();
+    this.renderer.cinematicActive = this.cine.active;
     if (this.cine.active) this.cine.update(dt, this.renderer);
     this.hud.setCinematic(this.cine.active);
     const ts = this.cine.timeScale * (this.outro ? this.outro.timeScale : 1);

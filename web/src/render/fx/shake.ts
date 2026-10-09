@@ -28,9 +28,9 @@ export class CameraShake {
   update(dt: number) {
     this.t += dt;
     this.trauma = Math.max(0, this.trauma - dt * 1.1);
-    const a = Math.pow(this.trauma, 1.5) * 0.32 * this.scale;
+    const a = Math.min(0.18, Math.pow(this.trauma, 1.5) * 0.22) * this.scale;
     const t = this.t;
-    this.offset.x = a ? a * (Math.sin(t * 37.1) * 0.55 + Math.sin(t * 61.3 + 1.7) * 0.3 + Math.sin(t * 13.7 + 0.4) * 0.15) : 0;
-    this.offset.z = a ? a * (Math.sin(t * 41.9 + 2.1) * 0.55 + Math.sin(t * 57.7 + 0.3) * 0.3 + Math.sin(t * 11.3 + 2.9) * 0.15) : 0;
+    this.offset.x = a ? a * (Math.sin(t * 23.1) * 0.6 + Math.sin(t * 35.3 + 1.7) * 0.3 + Math.sin(t * 11.7 + 0.4) * 0.1) : 0;
+    this.offset.z = a ? a * (Math.sin(t * 26.9 + 2.1) * 0.6 + Math.sin(t * 31.7 + 0.3) * 0.3 + Math.sin(t * 9.3 + 2.9) * 0.1) : 0;
   }
 }
