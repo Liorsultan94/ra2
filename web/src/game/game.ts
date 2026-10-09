@@ -1421,8 +1421,11 @@ export class Game {
       if (harvesters.length === units.length && w.map.ore[tile] > 0) {
         return { cursor: 'harvest', run: () => this.order({ type: 'harvest', ids: harvesters.map((u) => u.id), x: g.x, y: g.y }, null, false, g) };
       }
-      const allAir = units.every((u) => unitDef(u.def).air);
-      const passable = allAir || terrainPassable(w.map, Math.floor(g.x), Math.floor(g.y));
+      const allWaterTraversable = units.every((u) => {
+        const d = unitDef(u.def);
+        return d.air || d.amphibious;
+      });
+      const passable = allWaterTraversable || terrainPassable(w.map, Math.floor(g.x), Math.floor(g.y));
       const attackMove = this.mode === 'attackMove' || ctrl;
       if (!passable && this.local >= 0 && w.players[this.local].explored[tile]) return { cursor: 'nomove', run: () => this.sfx('error') };
       return {

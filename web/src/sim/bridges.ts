@@ -411,6 +411,8 @@ export function updateBridges(w: World, ev0: number) {
 export function bridgeTactics(w: World, pid: number, units: Entity[]) {
   if (!w.bridges.length) return;
   const p = w.players[pid];
+  const sx = p.startX + 0.5;
+  const sy = p.startY + 0.5;
   // ---- rebuild
   const down = w.bridges.filter((b) => b.status === 'down');
   if (down.length) {
@@ -429,11 +431,15 @@ export function bridgeTactics(w: World, pid: number, units: Entity[]) {
       busy.add(hut);
     }
     const def = `${p.faction}_engineer`;
-    if (down.length === w.bridges.length && !engs.length && !p.queues.infantry.some((q) => q.def === def) && w.canBuild(pid, def)) w.issue(pid, { type: 'produce', def });
+    const needEng = down.some((b) => {
+      const hut = b.huts[bankOf(b, sx, sy)];
+      return hut !== undefined && hut >= 0 && !busy.has(hut);
+    });
+    if (needEng && !engs.some((u) => u.order.type === 'idle' || u.order.type === 'capture') && !p.queues.infantry.some((q) => q.def === def) && w.canBuild(pid, def)) {
+      w.issue(pid, { type: 'produce', def });
+    }
   }
   // ---- defensive demolition
-  const sx = p.startX + 0.5;
-  const sy = p.startY + 0.5;
   for (const b of w.bridges) {
     if (b.status !== 'intact') continue;
     const myBank = bankOf(b, sx, sy);

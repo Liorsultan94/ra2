@@ -194,7 +194,7 @@ export function buildBriefing(
   const civ = neutral.filter((e) => buildingDef(e.def).garrison);
   const feats = m.bridges.length ? [`${m.bridges.length} contested bridges`] : [];
   if (biome === 'desert') feats.push('mesas and oases');
-  if (biome === 'winter') feats.push('an ice ford');
+  if (biome === 'winter') feats.push('frozen river');
   if (m.structures.length) feats.push(biome === 'urban' ? `${civ.length} buildings to garrison` : biome === 'desert' ? 'oasis villages' : biome === 'winter' ? 'log villages' : 'farming villages');
   feats.push(`${m.oreMines.length} ore fields`);
   if (oils.length) feats.push(`${oils.length} oil derricks`);

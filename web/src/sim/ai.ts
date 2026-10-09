@@ -999,9 +999,10 @@ export class AIController implements Controller {
   private manageChoke(force: Entity[]) {
     if (this.thinks % 3 !== 0 || (this.lastWave === 0 && this.world.tick < TPS * 240)) return;
     const lanes = this.lanes();
-    if (!lanes.length) return;
+    const candidateCrossings = lanes.length ? lanes : this.world.map.bridges.map((b) => ({ x: b.x, y: b.y }));
+    if (!candidateCrossings.length) return;
     const [hx, hy] = this.home();
-    const bridge = lanes.reduce((b, l) => (Math.hypot(l.x - hx, l.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? l : b), lanes[0]);
+    const bridge = candidateCrossings.reduce((b, l) => (Math.hypot(l.x - hx, l.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? l : b), candidateCrossings[0]);
     const [px, py] = this.bank(bridge, 4);
     const picket = force.filter((u) => this.roleOf(u) === 'choke');
     // an outpost, not a last stand: spot the enemy wave, then fall back to the main body
@@ -1054,7 +1055,7 @@ export class AIController implements Controller {
     if (w.tick < this.raidAt || this.peace) return;
     this.raidAt = w.tick + Math.round((TPS * 120) / this.doctrine.harass);
     const [rx, ry] = this.rally();
-    const fast = force.filter((u) => {
+    let fast = force.filter((u) => {
       const d = unitDef(u.def);
       const drones = !!d.weapon && WEAPONS[d.weapon].projectile === 'spawn';
       return this.roleOf(u) === 'army' && u.order.type === 'idle' && Math.hypot(u.x - rx, u.y - ry) < 10 && (d.speed >= 2.3 || drones || (d.air && !d.fixedWing)) && klass(u.def) === 'main';
@@ -1072,6 +1073,17 @@ export class AIController implements Controller {
       }
     }
     if (prey < 0) return;
+    const preyEnt = w.get(prey);
+    const riverSevered = w.map.bridges.length > 0 && this.lanes().length === 0;
+    if (riverSevered && preyEnt) {
+      const [hx, hy] = this.home();
+      const myBank = (hx - w.map.w / 2) - (hy - w.map.h / 2) < 0 ? 0 : 1;
+      const preyBank = (preyEnt.x - w.map.w / 2) - (preyEnt.y - w.map.h / 2) < 0 ? 0 : 1;
+      if (myBank !== preyBank) {
+        fast = fast.filter((u) => unitDef(u.def).air);
+        if (fast.length < 2) return;
+      }
+    }
     fast.sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
     const ids = fast.slice(0, 2 + this.rng.int(3)).map((u) => u.id);
     this.setRole(ids, 'raid');
@@ -1172,11 +1184,29 @@ export class AIController implements Controller {
     // early-game grace (peace.ts): mass at the rally point, launch nothing; afterwards ramp up wave by wave
     const ramp = this.peaceUntil > 0;
     const rampOk = !ramp || (!this.peace && (this.lastWave === 0 || sinceWave >= RAMP_GAP[this.difficulty]));
+    const openLanes = this.lanes();
+    const riverSevered = w.map.bridges.length > 0 && openLanes.length === 0;
     if (rampOk && (fighters.length >= this.waveSize || (fighters.length >= 4 && sinceWave > TPS * 240))) {
       if (ramp && fighters.length > this.waveSize) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, this.waveSize);
       const target = this.pickTarget();
       const tx = target ? target[0] : enemy[0];
       const ty = target ? target[1] : enemy[1];
+      if (riverSevered) {
+        // Every bridge across the river is destroyed: ground forces cannot cross.
+        // Air units fly across to strike the enemy; ground forces secure our bridge approach and defend the engineer.
+        const air = fighters.filter((u) => unitDef(u.def).air);
+        const ground = fighters.filter((u) => !unitDef(u.def).air);
+        if (air.length) {
+          this.cmd({ type: 'move', ids: air.map((u) => u.id), x: tx, y: ty, attackMove: true });
+        }
+        if (ground.length) {
+          const nearestBr = w.map.bridges.reduce((b, br) => (Math.hypot(br.x - hx, br.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? br : b), w.map.bridges[0]);
+          const [bx, by] = this.bank(nearestBr, 6);
+          this.cmd({ type: 'move', ids: ground.map((u) => u.id), x: bx, y: by });
+        }
+        this.lastWave = w.tick;
+        return;
+      }
       const flank = micro > 0 && this.rng.next() < doc.flank * (micro >= 2 ? 1 : 0.6);
       const main = fighters.map((u) => u.id);
       let wing: number[] = [];
@@ -1218,9 +1248,13 @@ export class AIController implements Controller {
       // grace: defenders that chased a raider away come back to the rally point
       this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: rx, y: ry });
     } else if (deep.length) {
-      const target = this.pickTarget(deep[0]);
-      const [tx, ty] = target ?? enemy;
-      this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
+      if (riverSevered) {
+        this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: rx, y: ry });
+      } else {
+        const target = this.pickTarget(deep[0]);
+        const [tx, ty] = target ?? enemy;
+        this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
+      }
     }
   }
 
