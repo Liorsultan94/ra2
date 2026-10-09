@@ -144,7 +144,15 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
   });
   // pooled / hidden objects: visible for the warm-up only (lights keep their state: the light count is part of every program)
   const hidden: THREE.Object3D[] = [];
+  const zeroInstances: THREE.InstancedBufferGeometry[] = [];
   r.scene.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) {
+      const g = (o as THREE.Mesh).geometry as THREE.InstancedBufferGeometry;
+      if (g && (g as unknown as { isInstancedBufferGeometry?: boolean }).isInstancedBufferGeometry && g.instanceCount === 0) {
+        g.instanceCount = 1;
+        zeroInstances.push(g);
+      }
+    }
     if (!o.visible && !(o as THREE.Light).isLight) {
       hidden.push(o);
       o.visible = true;
@@ -158,6 +166,7 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
   });
   const restore = () => {
     for (const o of hidden) o.visible = false;
+    for (const g of zeroInstances) g.instanceCount = 0;
   };
   const prevRT = gl.getRenderTarget();
   // the main pass renders into a (linear) render target when the post chain is on; the drone camera always does
