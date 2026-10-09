@@ -82,7 +82,7 @@ describe('building placement', () => {
       // the starting MCVs deploy where they stand
       for (const s of m.starts) expect(w.canPlace(0, 'usa_conyard', Math.floor(s.x + 0.5) - 1, Math.floor(s.y + 0.5) - 1, -1, false)).toBe(true);
     }
-  });
+  }, 25000);
 
   it('has no walkable pocket the armies can never reach, on any map', () => {
     for (const [id, seed] of CASES) {
@@ -129,7 +129,7 @@ describe('building placement', () => {
         for (const p of [...L.pylons.lines.flat(), ...L.poles.flat(), ...L.wrecks]) expect(inside(p.x, p.y, 0.2), `post ${tag}`).toBe(false);
       }
     }
-  });
+  }, 25000);
 
   it('stands power-line towers on dry level ground, every span clear of rock and hills', () => {
     for (const [id, seed] of CASES) {

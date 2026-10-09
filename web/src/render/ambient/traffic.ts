@@ -15,7 +15,7 @@ import { RoadFurniture } from './roadfurniture';
 import { roadNetFor } from './clearance';
 import { SigMode, nearestArc, pointAt, type RoadNet } from './roadnet';
 import { deckSurface } from '../deckramp';
-import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
+import { AnimInstances, ambientMaterial, groundAt, walkable, type AmbientFrame, type FogProbe, type LightSprites, type Quality } from './shared';
 
 /*
  * Civilian traffic: cars, vans, pickups and tractors driving the paved roads
@@ -443,11 +443,15 @@ export class Traffic {
         if (this.danger.at(c.x, c.y) >= LOW * 0.5) c.calm = 0;
         if (c.calm > 45 && near > 8) {
           // the driver comes back: doors shut, back onto the road
-          c.s = S.Rejoin;
+          c.s = S.Drive;
           c.arc = nearestArc(this.net.lines[c.line], c.x, c.y).arc;
           c.wy = 0;
           c.bail = 0;
           c.vmax = 1e9;
+          c.loop = -1;
+          c.kt = 0;
+          c.planNode = -1;
+          c.passed = -1;
         }
       } else c.door = Math.max(0, c.door - dt * 1.4);
       if (c.s === S.Abandoned) {
@@ -524,49 +528,13 @@ export class Traffic {
     }
   }
 
-  /** Off the road: swerving out to a spot (then abandoned), or getting back onto the lane. */
-  private offroad(c: Car, dt: number) {
-    let cx: number;
-    let cy: number;
-    let stopAt = -1;
-    if (c.s === S.Rejoin) {
-      const Lr = this.net.lines[c.line];
-      const p = pointAt(Lr, c.arc + c.dir * 0.6);
-      cx = p.x - p.ty * c.dir * Lr.lane;
-      cy = p.y + p.tx * c.dir * Lr.lane;
-      if (Math.hypot(cx - c.x, cy - c.y) < 0.35) {
-        c.s = S.Drive;
-        c.loop = -1;
-        c.kt = 0;
-        c.planNode = -1;
-        c.passed = -1;
-      }
-    } else {
-      cx = c.tx;
-      cy = c.ty;
-      const d = Math.hypot(cx - c.x, cy - c.y);
-      stopAt = d;
-      // arrived (or the spot ended up inside the turning circle / it's taking too long): stop here
-      const behind = Math.abs(wrapAngle(Math.atan2(cy - c.y, cx - c.x) - c.yaw)) > 1.3;
-      if (d < 0.12 || (c.v < 0.05 && d < 0.4) || (behind && d < 0.9) || c.calm > 6) {
-        c.s = S.Abandoned;
-        c.calm = 0;
-        c.v = 0;
-        return;
-      }
-    }
-    const want = Math.atan2(cy - c.y, cx - c.x);
-    const dyaw = wrapAngle(want - c.yaw);
-    const maxTurn = (Math.max(0, c.v) / (c.kind === 3 ? 0.3 : 0.36) + 0.25) * dt;
-    c.yaw = wrapAngle(c.yaw + Math.max(-maxTurn, Math.min(maxTurn, dyaw)));
-    const fleeing = c.panic > 0;
-    let vt = c.cruise * (fleeing ? (c.kind === 3 ? 1.5 : 1.9) : 0.8);
-    vt *= 1 - Math.min(0.7, Math.abs(dyaw) * 0.6);
-    if (stopAt >= 0) vt = Math.min(vt, stopAt * 1.6 + 0.05);
-    const acc = fleeing ? 1.6 : 0.7;
-    c.v = vt > c.v ? Math.min(vt, c.v + acc * dt) : Math.max(vt, c.v - 2.4 * dt);
-    c.x += Math.cos(c.yaw) * c.v * dt;
-    c.y += Math.sin(c.yaw) * c.v * dt;
+  /** Off the road fallback: ensure immediate return to road driving. */
+  private offroad(c: Car, _dt: number) {
+    c.s = S.Drive;
+    c.loop = -1;
+    c.kt = 0;
+    c.planNode = -1;
+    c.passed = -1;
   }
 
   private updateWreck(c: Car, dt: number, inView: boolean) {
