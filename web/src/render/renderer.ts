@@ -720,8 +720,8 @@ export class GameRenderer {
     return !!this.post?.dof && this.usePost;
   }
   private photoDof: { focus: number; amount: number } | null = null;
-  /** Bokeh amount of the intro / outro flyovers (free camera without photo mode): a gentle miniature look. */
-  cinematicDof = 0.32;
+  /** Bokeh amount of the intro / outro flyovers (0 = crisp view, bypasses expensive DOF passes). */
+  cinematicDof = 0;
   private gradeIn: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
 
   /** Per-frame post inputs: grade look from the atmosphere, depth of field from the free camera. */
@@ -1344,7 +1344,8 @@ export class GameRenderer {
     const cf = this.camFwd;
     const cp = cam.position;
     const ty0 = groundHeight(w.map, this.target.x, this.target.z);
-    const persp = cam instanceof THREE.PerspectiveCamera && !this.photoCam;
+    const isPhoto = !!(this.photoCam && this.photoDof);
+    const persp = cam instanceof THREE.PerspectiveCamera && !isPhoto;
     const refDepth = persp ? (this.target.x - cp.x) * cf.x + (ty0 - cp.y) * cf.y + (this.target.z - cp.z) * cf.z : 1;
     const lodK = (this.height / (BASE_VIEW / this.zoom)) * refDepth;
     if (this.occlFrame++ % 15 === 0) {
@@ -1514,7 +1515,7 @@ export class GameRenderer {
       // Vehicles / buildings / aircraft off screen (model and shadow) or under the shroud: no pose animation.
       // The time is banked and handed over in one step once the model can be seen again (spinners, blends
       // and timers end up where they would have been); infantry have their own cheap off-screen cycle.
-      if (!nearNow && !v.model.infantry && !this.photoCam && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
+      if (!nearNow && !v.model.infantry && !isPhoto && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
       else {
         const debt = v.animDebt ?? 0;
         if (debt) {
@@ -1536,18 +1537,18 @@ export class GameRenderer {
       if (vis) {
         const rp = root.position;
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
-        applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
+        applyLod(v.lod, isPhoto ? 1e9 : lodK / depth);
         {
           v.near = nearNow;
           if (shadowsOn) setCasting(v.lod, v.near);
           // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
           if (v.model.infantry) {
-            const hpx = this.photoCam ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
+            const hpx = isPhoto ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
             a.lod = !v.near ? 2 : hpx < (this.quality === 'low' ? 40 : 16) ? 1 : 0;
           }
         }
         // (staggered: each unit re-tests every 4th frame)
-        if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
+        if ((this.occlFrame + v.id) % 4 === 0 || isPhoto) v.occl = e.kind !== 'unit' || isPhoto || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
       }
     }
     this.airShadows.end();

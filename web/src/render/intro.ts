@@ -24,7 +24,6 @@ interface Pose {
 }
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
-const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const bez = (a: number, b: number, c: number, u: number) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * b + u * u * c;
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
@@ -55,7 +54,6 @@ function rtsPose(r: GameRenderer, x: number, y: number, zoom: number): Pose {
 
 export class BattleIntro {
   private t = 0;
-  private wall = performance.now();
   done = false;
   private from: Pose;
   private via: Pose;
@@ -73,7 +71,7 @@ export class BattleIntro {
     via: { x: number; y: number },
     private home: { x: number; y: number },
     private endZoom: number,
-    readonly duration = 6.5,
+    readonly duration = 3.8,
   ) {
     this.to = rtsPose(r, home.x, home.y, endZoom);
     // the camera starts on the enemy's side of the map looking back across the river
@@ -99,14 +97,13 @@ export class BattleIntro {
   /** Real seconds; returns true when the flyover has ended and the camera is handed back. */
   update(dt: number): boolean {
     if (this.done) return true;
-    // real time (slow devices drop frames rather than stretching the shot)
-    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
+    this.t += Math.min(dt, 0.1);
     const k = Math.min(1, this.t / this.duration);
     if (k >= 1) {
       this.finish();
       return true;
     }
-    const u = easeInOut(k);
+    const u = smooth(k);
     const a = this.from;
     const b = this.via;
     const c = this.to;
@@ -135,7 +132,6 @@ export class BattleIntro {
 
 export class BattleOutro {
   private t = 0;
-  private wall = performance.now();
   done = false;
   private from: Pose;
   private to: Pose;
@@ -159,13 +155,12 @@ export class BattleOutro {
 
   /** Simulation speed during the outro (slow motion). */
   get timeScale() {
-    return this.done ? 1 : 0.28;
+    return this.done ? 1 : 0.55;
   }
 
   update(dt: number): boolean {
     if (this.done) return true;
-    // real time (slow devices drop frames rather than stretching the shot)
-    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
+    this.t += Math.min(dt, 0.1);
     const k = easeOut(Math.min(1, this.t / 2.6));
     // after the push-in keep a slow orbit going
     const drift = Math.max(0, this.t - 2.6) * 0.07;
