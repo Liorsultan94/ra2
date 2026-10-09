@@ -1649,14 +1649,29 @@ export class Game {
     s.height = `${Math.abs(y1 - y0)}px`;
   }
 
+  private boxCorners = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  private boxProj = { x: 0, y: 0 };
+
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean) {
     const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)];
     const [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)];
+    const [c0, c1, c2, c3] = this.boxCorners;
+    this.renderer.screenToGround(ax, ay, c0);
+    this.renderer.screenToGround(bx, ay, c1);
+    this.renderer.screenToGround(bx, by, c2);
+    this.renderer.screenToGround(ax, by, c3);
+    const pad = 2.0;
+    const gMinX = Math.min(c0.x, c1.x, c2.x, c3.x) - pad;
+    const gMaxX = Math.max(c0.x, c1.x, c2.x, c3.x) + pad;
+    const gMinY = Math.min(c0.y, c1.y, c2.y, c3.y) - pad;
+    const gMaxY = Math.max(c0.y, c1.y, c2.y, c3.y) + pad;
+
     const ids: number[] = [];
     for (const e of this.world.list) {
       if (e.dead || e.owner !== this.local || e.kind !== 'unit' || unitDef(e.def).temp) continue;
+      if (e.x < gMinX || e.x > gMaxX || e.y < gMinY || e.y > gMaxY) continue;
       const p = this.renderer.entityPos(e, 1);
-      const s = this.renderer.project(p.x, p.y + 0.15, p.z);
+      const s = this.renderer.project(p.x, p.y + 0.15, p.z, this.boxProj);
       if (s.x >= ax && s.x <= bx && s.y >= ay && s.y <= by) ids.push(e.id);
     }
     // prefer combat units over harvesters when both are boxed
@@ -1713,7 +1728,7 @@ export class Game {
         .filter((e) => {
           if (e.dead || e.owner !== this.local || e.def !== target.def) return false;
           const p = this.renderer.entityPos(e, 1);
-          const s = this.renderer.project(p.x, p.y, p.z);
+          const s = this.renderer.project(p.x, p.y, p.z, this.boxProj);
           return s.x >= 0 && s.y >= 0 && s.x <= rect.width && s.y <= rect.height;
         })
         .map((e) => e.id);

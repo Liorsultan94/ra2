@@ -167,6 +167,7 @@ export class Hud {
   private orderMode: string | null = null;
   private flashes: { ids: number[]; color: string; t0: number }[] = [];
   private ripples: { x: number; y: number; t0: number }[] = [];
+  private scratchProj = { x: 0, y: 0 };
   private lastOverlayT = 0;
   world!: World;
   renderer!: GameRenderer;
@@ -629,8 +630,12 @@ export class Hud {
   /** Selection details (portrait panel) + context command buttons. */
   private updateSelection() {
     const w = this.world;
-    const sel = [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
-    const key = sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.hflee ? harvestStatus(e) : ''}:${e.treat > 0 ? Math.round(treatProgress(w, e) * 100) : ''}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
+    if (this.renderer.selection.size === 0 && this.lastSelKey === '') {
+      this.updateAim([]);
+      return;
+    }
+    const sel = this.renderer.selection.size === 0 ? [] : [...this.renderer.selection].map((id) => w.get(id)).filter((e): e is Entity => !!e);
+    const key = sel.length === 0 ? '' : sel.map((e) => `${e.id}:${Math.round((e.hp / e.maxHp) * 20)}:${e.passengers.length}:${e.kind === 'unit' && unitDef(e.def).harvester ? Math.round(e.cargo / 90) : 0}:${e.rank}:${Math.floor(e.xp / 25)}:${e.sortie ? `${e.sortie.phase}${Math.round(rearmProgress(e) * 20)}${e.sortie.auto}` : ''}:${e.wound ? Math.ceil(bleedLeft(w, e)) : ''}:${e.heli ? heliStatus(e) : ''}:${e.hflee ? harvestStatus(e) : ''}:${e.treat > 0 ? Math.round(treatProgress(w, e) * 100) : ''}:${e.kind === 'unit' && unitDef(e.def).illum ? Math.ceil(illumWait(w, e)) : ''}`).join(',');
     this.updateAim(sel);
     if (key === this.lastSelKey) return;
     this.lastSelKey = key;
@@ -1245,7 +1250,7 @@ export class Hud {
         const u = w.get(id);
         if (!u || u.dead || !r.isShown(id)) continue;
         const up = r.entityPos(u, alpha);
-        const c = r.project(up.x, up.y + 0.05, up.z);
+        const c = r.project(up.x, up.y + 0.05, up.z, this.scratchProj);
         const rad = 8 + 16 * k;
         ctx.beginPath();
         ctx.ellipse(c.x, c.y, rad, rad * 0.55, 0, 0, Math.PI * 2);

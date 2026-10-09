@@ -1077,8 +1077,13 @@ export class GameRenderer {
   }
 
   private v3 = new THREE.Vector3();
-  project(x: number, y: number, z: number): { x: number; y: number } {
+  project(x: number, y: number, z: number, out?: { x: number; y: number }): { x: number; y: number } {
     this.v3.set(x, y, z).project(this.camera);
+    if (out) {
+      out.x = ((this.v3.x + 1) / 2) * this.width;
+      out.y = ((1 - this.v3.y) / 2) * this.height;
+      return out;
+    }
     return { x: ((this.v3.x + 1) / 2) * this.width, y: ((1 - this.v3.y) / 2) * this.height };
   }
 

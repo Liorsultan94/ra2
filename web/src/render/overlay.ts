@@ -238,6 +238,9 @@ export class CombatOverlay {
   readonly group = new THREE.Group();
   private geo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
   private rings = new Map<number, Ring>();
+  private ringPool: Ring[] = [];
+  private white = new THREE.Color(0xffffff);
+  private tempCol = new THREE.Color();
   private markers: Marker[] = [];
   private n = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
@@ -303,23 +306,40 @@ export class CombatOverlay {
    */
   ring(id: number, x: number, y: number, groundY: number, color: number, selected: boolean, building: { w: number; h: number } | null, radius: number, elite = false) {
     const key = `${color}:${selected ? 1 : 0}:${building ? 'b' : 'u'}:${elite ? 1 : 0}`;
+    const mode = building ? (selected ? 1 : 7) : selected ? 0 : 6;
     let r = this.rings.get(id);
-    if (r && r.key !== key) {
-      this.group.remove(r.mesh);
-      r.mat.dispose();
-      this.rings.delete(id);
-      r = undefined;
-    }
-    if (!r) {
-      const mode = building ? (selected ? 1 : 7) : selected ? 0 : 6;
-      const mat = this.material(color, mode);
-      const mesh = new THREE.Mesh(this.geo, mat);
-      mesh.renderOrder = 2;
-      mesh.frustumCulled = false;
-      this.group.add(mesh);
-      mat.uniforms.elite.value = elite && selected ? 1 : 0;
-      r = { mesh, mat, born: this.now(), seen: true, selected, key };
-      this.rings.set(id, r);
+    if (r) {
+      if (r.key !== key) {
+        r.key = key;
+        r.mat.uniforms.mode.value = mode;
+        r.mat.uniforms.elite.value = elite && selected ? 1 : 0;
+        this.tempCol.setHex(color).lerp(this.white, 0.22);
+        r.mat.uniforms.color.value.copy(this.tempCol);
+        if (!r.selected && selected) r.born = this.now();
+        r.selected = selected;
+      }
+    } else {
+      r = this.ringPool.pop();
+      if (r) {
+        r.key = key;
+        r.selected = selected;
+        r.born = this.now();
+        r.mat.uniforms.mode.value = mode;
+        r.mat.uniforms.elite.value = elite && selected ? 1 : 0;
+        this.tempCol.setHex(color).lerp(this.white, 0.22);
+        r.mat.uniforms.color.value.copy(this.tempCol);
+        this.group.add(r.mesh);
+        this.rings.set(id, r);
+      } else {
+        const mat = this.material(color, mode);
+        const mesh = new THREE.Mesh(this.geo, mat);
+        mesh.renderOrder = 2;
+        mesh.frustumCulled = false;
+        this.group.add(mesh);
+        mat.uniforms.elite.value = elite && selected ? 1 : 0;
+        r = { mesh, mat, born: this.now(), seen: true, selected, key };
+        this.rings.set(id, r);
+      }
     }
     r.seen = true;
     if (building) {
@@ -507,8 +527,12 @@ export class CombatOverlay {
     for (const [id, r] of this.rings) {
       if (!r.seen) {
         this.group.remove(r.mesh);
-        r.mat.dispose();
         this.rings.delete(id);
+        if (this.ringPool.length < 64) {
+          this.ringPool.push(r);
+        } else {
+          r.mat.dispose();
+        }
         continue;
       }
       r.seen = false;
@@ -539,6 +563,8 @@ export class CombatOverlay {
 
   dispose() {
     for (const r of this.rings.values()) r.mat.dispose();
+    for (const r of this.ringPool) r.mat.dispose();
+    this.ringPool.length = 0;
     for (const m of this.markers) m.mat.dispose();
     for (const m of this.pinPool) (m.material as THREE.ShaderMaterial).dispose();
     if (this.routeMesh) (this.routeMesh.material as THREE.ShaderMaterial).dispose();
