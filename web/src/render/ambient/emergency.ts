@@ -47,6 +47,8 @@ interface Unit {
   door: number;
   t: number;
   siren: number;
+  /** Accumulated siren audio time (s): capped at 10 seconds. */
+  sirenT: number;
   segs: RouteSeg[];
   portal: boolean;
   crew: Figure[];
@@ -268,7 +270,7 @@ export class Emergency {
       crew.push(f);
       this.figures.push(f);
     }
-    this.units.push({ kind, s: V.In, poly, cum, arc: 0, v: 0.6, x: poly[0].x, y: poly[0].y, yaw: Math.atan2(poly[1].y - poly[0].y, poly[1].x - poly[0].x), hgt: groundAt(this.map, poly[0].x, poly[0].y), door: 0, t: 0, siren: Math.random() * 2, segs, portal: r.portal, crew, tx: inc.x, ty: inc.y, seen: false, goal: new Float32Array(4).fill(-1) });
+    this.units.push({ kind, s: V.In, poly, cum, arc: 0, v: 0.6, x: poly[0].x, y: poly[0].y, yaw: Math.atan2(poly[1].y - poly[0].y, poly[1].x - poly[0].x), hgt: groundAt(this.map, poly[0].x, poly[0].y), door: 0, t: 0, siren: Math.random() * 2, sirenT: 0, segs, portal: r.portal, crew, tx: inc.x, ty: inc.y, seen: false, goal: new Float32Array(4).fill(-1) });
     this.stat.dispatched++;
     return true;
   }
@@ -342,9 +344,13 @@ export class Emergency {
         u.hgt += (groundAt(this.map, u.x, u.y) - u.hgt) * Math.min(1, dt * 10);
         if (u.s === V.In) {
           u.siren -= dt;
-          if (u.siren <= 0) {
-            u.siren = 2.0;
-            this.sound?.(u.kind ? 'sirenHiLo' : 'siren', 0.6, u.x, u.y);
+          // Sirens sound for at most 10 seconds per response so they don't loop endlessly or annoy the player
+          if (u.sirenT < 10) {
+            u.sirenT += dt;
+            if (u.siren <= 0) {
+              u.siren = 2.0;
+              this.sound?.(u.kind ? 'sirenHiLo' : 'siren', 0.6, u.x, u.y);
+            }
           }
         }
         if (u.arc >= total - 0.02) {
@@ -356,11 +362,16 @@ export class Emergency {
           } else {
             u.s = V.Done;
           }
+        } else if ((u.s === V.In && u.t > 60 && u.v < 0.1) || (u.s === V.Out && u.t > 60)) {
+          // Stuck vehicle watchdog: clear blocked vehicles so roads aren't obstructed forever
+          u.s = V.Done;
         }
       } else if (u.s === V.Parked) {
         u.door = Math.min(1, u.door + dt * 2);
         this.stepCrew(u, dt, u.t < 40 + u.kind * 15);
-        if (u.t > 40 + u.kind * 15 && this.crewBack(u)) {
+        if (u.t > 90) {
+          u.s = V.Done;
+        } else if (u.t > 40 + u.kind * 15 && this.crewBack(u)) {
           u.door = Math.max(0, u.door - dt * 2);
           if (u.door <= 0) {
             for (const c of u.crew) c.show = false;
