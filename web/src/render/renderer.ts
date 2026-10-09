@@ -351,6 +351,7 @@ export class GameRenderer {
   readonly veil = new UnitVeil();
   readonly flareFx: FlareFx;
   private instRoots: THREE.Object3D[] = [];
+  private occlBuildings: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
   private perfHud = new PerfHud();
   selection = new Set<number>();
   /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
@@ -1345,7 +1346,8 @@ export class GameRenderer {
     const refDepth = persp ? (this.target.x - cp.x) * cf.x + (ty0 - cp.y) * cf.y + (this.target.z - cp.z) * cf.z : 1;
     const lodK = (this.height / (BASE_VIEW / this.zoom)) * refDepth;
     if (this.occlFrame++ % 15 === 0) {
-      const bl: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
+      const bl = this.occlBuildings;
+      bl.length = 0;
       for (const v of this.visuals.values()) {
         const be = v.visible ? w.get(v.id) : undefined;
         if (!be || be.kind !== 'building') continue;
@@ -2608,9 +2610,22 @@ export class GameRenderer {
       this.lightScan = 60;
       const list = this.lightList;
       list.length = 0;
-      this.scene.traverse((o) => {
-        if ((o as THREE.Light).isLight) list.push(o as THREE.Light);
-      });
+      if (this.hemi) list.push(this.hemi);
+      if (this.sun) list.push(this.sun);
+      if (this.csm) list.push(this.csm.light);
+      const fl = this.effects?.lights as unknown as { lights?: THREE.PointLight[]; group?: THREE.Group };
+      if (fl?.lights) {
+        for (let i = 0; i < fl.lights.length; i++) list.push(fl.lights[i]);
+      } else if (fl?.group) {
+        for (let i = 0; i < fl.group.children.length; i++) {
+          const c = fl.group.children[i];
+          if ((c as THREE.Light).isLight) list.push(c as THREE.Light);
+        }
+      }
+      const nl = (this.atmos as unknown as { night?: { lights?: THREE.PointLight[] } })?.night?.lights;
+      if (nl) {
+        for (let i = 0; i < nl.length; i++) list.push(nl[i]);
+      }
     }
     for (const l of this.lightList) {
       const e = l.matrixWorld.elements;

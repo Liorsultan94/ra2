@@ -132,6 +132,8 @@ export class AIController implements Controller {
   readonly peaceUntil: number;
   private defensibleCache = { tick: -1, pts: [] as number[] };
   private baseCache = { tick: -1, pts: [] as number[] };
+  private mineUnits: Entity[] = [];
+  private mineBuildings: Entity[] = [];
 
   constructor(
     private world: World,
@@ -180,11 +182,16 @@ export class AIController implements Controller {
     const w = this.world;
     if (this.p.defeated || w.over) return;
     if ((w.tick + this.pid * 3) % this.cfg.think !== 0) return;
-    this.thinks++;
-    const mine = w.list.filter((e) => !e.dead && e.owner === this.pid);
-    const buildings = mine.filter((e) => e.kind === 'building');
-    // (soldiers lying wounded don't count as fighting units, and helicopters on a repair trip are left alone: medic.ts, helipad.ts)
-    const units = mine.filter((e) => e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound && !e.heli);
+    const buildings = this.mineBuildings;
+    const units = this.mineUnits;
+    buildings.length = 0;
+    units.length = 0;
+    for (let i = 0; i < w.list.length; i++) {
+      const e = w.list[i];
+      if (e.dead || e.owner !== this.pid) continue;
+      if (e.kind === 'building') buildings.push(e);
+      else if (e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound && !e.heli) units.push(e);
+    }
 
     const conyard = buildings.find((b) => buildingDef(b.def).role === 'conyard');
     if (!conyard) {

@@ -422,6 +422,7 @@ export class World {
         this.pass[i] = on && !through ? 0 : terrainPassable(this.map, b.tx + x, b.ty + y) ? 1 : 0;
       }
     }
+    this.pf.clearCache();
   }
 
   // ------------------------------------------------------------ helpers
@@ -1045,10 +1046,10 @@ export class World {
     e.path = unitDef(e.def).air ? [] : this.pf.find(sx, sy, gx, gy);
     e.pathIdx = 0;
     e.moving = true;
-    e.repathAt = this.tick + 20;
+    e.repathAt = this.tick + 20 + (e.id % 7);
     e.progX = e.x;
     e.progY = e.y;
-    e.progAt = this.tick;
+    e.progAt = this.tick + (e.id % 5);
     e.progIdx = 0;
     e.progBest = 1e9;
     e.noProg = 0;
@@ -2309,8 +2310,10 @@ export class World {
       e.pz = e.z;
     }
     const cmds = this.pending;
-    this.pending = [];
-    for (const c of cmds) this.applyCommand(c.player, c.cmd);
+    if (cmds.length > 0) {
+      this.pending = [];
+      for (let i = 0; i < cmds.length; i++) this.applyCommand(cmds[i].player, cmds[i].cmd);
+    }
 
     this.rebuildGrid();
     updateBaseDefense(this); // idle units near an attacked base engage on their own (basedefense.ts)
@@ -2339,13 +2342,24 @@ export class World {
     }
     if (this.tick % TPS === 0) this.checkVictory();
     if (this.tick % 50 === 0) {
-      for (const e of this.list) if (e.dead) this.entities.delete(e.id);
-      this.list = this.list.filter((e) => !e.dead);
+      let write = 0;
+      for (let i = 0; i < this.list.length; i++) {
+        const e = this.list[i];
+        if (e.dead) {
+          this.entities.delete(e.id);
+        } else {
+          this.list[write++] = e;
+        }
+      }
+      this.list.length = write;
     }
     for (const c of this.controllers) c.update();
   }
 
+  private static readonly EMPTY_EVENTS: SimEvent[] = [];
+
   drainEvents(): SimEvent[] {
+    if (this.events.length === 0) return World.EMPTY_EVENTS;
     const ev = this.events;
     this.events = [];
     return ev;
