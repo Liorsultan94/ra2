@@ -191,7 +191,7 @@ export class Emergency {
     quality: Quality,
     phone: boolean,
   ) {
-    this.maxUnits = quality === 'low' ? 0 : phone || quality === 'medium' ? 4 : 6;
+    this.maxUnits = quality === 'low' ? 0 : phone || quality === 'medium' ? 2 : 3;
     activeEm = this;
     this.models.forEach((mdl, i) => {
       const mat = ambientMaterial(fog, 'car', mdl.rig, 0.45, 0.15);

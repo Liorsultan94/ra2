@@ -163,10 +163,10 @@ export class Animals {
   ) {
     const m = map;
     const biome = m.biome;
-    const qk = quality === 'high' ? 1.4 : quality === 'medium' ? 1 : 0.6;
+    const qk = quality === 'high' ? 0.7 : quality === 'medium' ? 0.5 : 0.3;
     const k = qk * (phone ? 0.75 : 1);
-    this.cap = quality === 'high' ? 90 : quality === 'medium' ? 40 : 20;
-    if (phone) this.cap = Math.min(this.cap, 40);
+    this.cap = quality === 'high' ? 45 : quality === 'medium' ? 20 : 10;
+    if (phone) this.cap = Math.min(this.cap, 20);
     const far = (x: number, y: number, r = 11) => m.starts.every((s) => Math.hypot(s.x - x, s.y - y) > r);
     const shuffle = <T>(a: T[]) => {
       for (let i = a.length - 1; i > 0; i--) {
@@ -212,7 +212,7 @@ export class Animals {
       let shep = 0;
       for (const f of pastures.slice(0, nHerds)) {
         const sp = biome === 'winter' ? Sp.Sheep : Math.random() < 0.5 ? Sp.Cow : Sp.Sheep;
-        const n = sp === Sp.Cow ? 3 + Math.floor(Math.random() * 4) : 5 + Math.floor(Math.random() * 5);
+        const n = sp === Sp.Cow ? 2 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 3);
         const h = add(sp, H.Graze, f, n);
         if (sp === Sp.Sheep && shep < 2) {
           shep++;
@@ -221,7 +221,7 @@ export class Animals {
       }
       // horses in a paddock
       if (biome === 'temperate')
-        for (const f of pastures.slice(nHerds, nHerds + Math.max(1, Math.round(1.5 * k)))) add(Sp.Horse, H.Graze, f, 2 + Math.floor(Math.random() * 3));
+        for (const f of pastures.slice(nHerds, nHerds + Math.max(1, Math.round(1.5 * k)))) add(Sp.Horse, H.Graze, f, 1 + Math.floor(Math.random() * 2));
     }
     if (biome === 'desert') {
       // goats by the houses / on the irrigated plots
@@ -231,16 +231,16 @@ export class Animals {
         const st = houses[(Math.random() * houses.length) | 0];
         const f = (Math.random() < 0.5 && st ? yard(st, true, 1.2) : null) ?? plots[i];
         if (!f) continue;
-        const h = add(Sp.Goat, H.Graze, f, 4 + Math.floor(Math.random() * 4));
+        const h = add(Sp.Goat, H.Graze, f, 2 + Math.floor(Math.random() * 2));
         if (i === 0) this.shepherd(h, biome);
       }
       // the caravan
-      this.caravan(layout, Math.random() < 0.5 && k > 0.9 ? 6 : 4);
+      this.caravan(layout, Math.random() < 0.5 && k > 0.45 ? 3 : 2);
     }
     if (biome === 'winter') {
       // deer in the forests, hares at the edges
       const woods = this.woods(far);
-      for (const w of woods.slice(0, Math.max(1, Math.round(3 * k)))) add(Sp.Deer, H.Graze, zone(w.x, w.y, 2.2, 1.8), 2 + Math.floor(Math.random() * 3));
+      for (const w of woods.slice(0, Math.max(1, Math.round(3 * k)))) add(Sp.Deer, H.Graze, zone(w.x, w.y, 2.2, 1.8), 1 + Math.floor(Math.random() * 2));
       for (const w of woods.slice(0, Math.round(5 * k))) add(Sp.Hare, H.Loner, zone(w.x + 1.5, w.y, 2, 2), 1);
     }
     if (biome !== 'urban') {
@@ -249,7 +249,7 @@ export class Animals {
       for (const st of shuffle([...houses]).slice(0, nC * 3)) {
         if (this.herds.filter((h) => h.sp === Sp.Chicken).length >= nC) break;
         const f = yard(st, Math.random() < 0.5, 0.7);
-        if (f) add(Sp.Chicken, H.Graze, f, 4 + Math.floor(Math.random() * 4));
+        if (f) add(Sp.Chicken, H.Graze, f, 2 + Math.floor(Math.random() * 2));
       }
       const nD = Math.round(2.5 * k);
       for (const st of shuffle([...houses]).slice(0, nD)) {

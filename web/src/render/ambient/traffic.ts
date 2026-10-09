@@ -176,15 +176,15 @@ export class Traffic {
     }
     this.furniture = new RoadFurniture(map, this.net, fog, probe, lights, quality, nations);
     this.group.add(this.furniture.group);
-    const base = quality === 'high' ? 13 : quality === 'medium' ? 10 : 7;
+    const base = quality === 'high' ? 7 : quality === 'medium' ? 5 : 4;
     // the city's grid carries more traffic
     const city = map.biome === 'urban' ? 1.5 : 1;
-    this.target = this.net.lines.length ? Math.max(4, Math.round(base * city * (phone ? 0.75 : 1))) : 0;
+    this.target = this.net.lines.length ? Math.max(2, Math.round(base * city * (phone ? 0.75 : 1))) : 0;
     for (let k = 0; k < 4; k++) {
       const m = carModel(k);
       this.models.push(m);
       const mat = ambientMaterial(fog, 'car', m.rig, k === 3 ? 0.7 : 0.45, k === 3 ? 0.1 : 0.35);
-      const inst = new AnimInstances(m.geo, mat, 80, `ambient-cars-${k}`, { shadow: quality === 'high', heat: true });
+      const inst = new AnimInstances(m.geo, mat, 40, `ambient-cars-${k}`, { shadow: quality === 'high', heat: true });
       this.inst.push(inst);
       this.group.add(inst.mesh);
     }
@@ -193,7 +193,7 @@ export class Traffic {
     this.net.lots.forEach((lot, li) => {
       if (lot.line < 0) return;
       lot.bays.forEach((_, k) => {
-        if (lot.taken[k] || Math.random() > (lot.city ? 0.6 : 0.45)) return;
+        if (lot.taken[k] || Math.random() > (lot.city ? 0.3 : 0.22)) return;
         const r = Math.random();
         const c = this.makeCar(r < 0.6 ? 0 : r < 0.8 ? 1 : 2, lot.line, this.net.lines[lot.line].len, 1);
         this.driver.parkAt(c, li, k, 10 + Math.random() * 220);
