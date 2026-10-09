@@ -41,8 +41,7 @@ export class CineCard {
       ${t.kicker ? `<div class="cc-kicker">${t.flag ? `<img src="${t.flag}" alt="">` : ''}${esc(t.kicker)}</div>` : ''}
       <div class="cc-title">${esc(t.title)}</div>
       ${t.sub ? `<div class="cc-sub">${esc(t.sub)}</div>` : ''}`;
-    void this.card.offsetWidth;
-    this.card.classList.add('in');
+    requestAnimationFrame(() => this.card.classList.add('in'));
   }
 
   hideCard() {

@@ -241,6 +241,27 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
     r.render(1, 0);
     await settlePrograms(gl, slicer);
     await nextFrame();
+
+    // Pre-warm the wide intro flyover camera view (sky, horizon, outskirts, and far terrain)
+    // so all shader programs and pipeline variants are compiled under the loading overlay
+    const m = world.map;
+    const foe = m.starts[1] ?? { x: m.w / 2, y: m.h / 2 };
+    const home = m.starts[0] ?? { x: m.w / 2, y: m.h / 2 };
+    const back = Math.atan2(foe.y - home.y, foe.x - home.x);
+    const ce = Math.cos(THREE.MathUtils.degToRad(24));
+    const dist = 80;
+    const look = new THREE.Vector3(foe.x, groundHeight(m, foe.x, foe.y), foe.y);
+    const pos = new THREE.Vector3(Math.cos(back) * ce, Math.sin(THREE.MathUtils.degToRad(24)), Math.sin(back) * ce).multiplyScalar(dist).add(look);
+    r.photoCam = { pos, look };
+    r.centerOn(foe.x, foe.y);
+    r.setZoom(0.85);
+    r.render(1, 0);
+    await settlePrograms(gl, slicer);
+    await nextFrame();
+    slicer.reset();
+    r.photoCam = null;
+    r.centerOn(home.x, home.y);
+    r.setZoom(r.defaultZoom());
     for (let i = 0; i < n; i += per) {
       for (let k = 0; k < n; k++) objs[k].visible = k >= i && k < i + per;
       r.render(1, 0);

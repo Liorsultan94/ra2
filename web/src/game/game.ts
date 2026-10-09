@@ -369,9 +369,11 @@ export class Game {
     const hx = mcv ? mcv.x : me.startX + 0.5;
     const hy = mcv ? mcv.y : me.startY + 0.5;
     if (this.opts.briefing === 'quick' || !this.brief) {
+      this.cameos.paused = false;
       this.startBattleClock();
       return;
     }
+    this.cameos.paused = true;
     const m = this.world.map;
     const foe = m.starts[1 - this.local] ?? { x: m.w / 2, y: m.h / 2 };
     const via = m.bridges[0] ?? { x: m.w / 2, y: m.h / 2 };
@@ -400,6 +402,7 @@ export class Game {
     this.card?.close();
     this.card = null;
     this.hud.root.classList.remove('intro-on');
+    this.cameos.paused = false;
     this.startBattleClock();
   }
 
@@ -427,10 +430,12 @@ export class Game {
       .catch((e) => !this.destroyed && console.warn('[warmup] failed', e))
       .finally(() => {
         if (this.destroyed) return;
-        this.cameos.paused = false;
         this.warming = false;
         if (this.briefing) this.briefing.setReady(() => this.deploy());
-        else this.hud.setLoading(null);
+        else {
+          this.cameos.paused = false;
+          this.hud.setLoading(null);
+        }
         this.last = performance.now();
       });
   }

@@ -878,9 +878,11 @@ export class GameRenderer {
     if (pc) {
       if (cam instanceof THREE.PerspectiveCamera) {
         cam.position.copy(pc.pos);
-        cam.near = 0.1;
-        cam.far = 700;
-        cam.updateProjectionMatrix();
+        if (cam.near !== 0.1 || cam.far !== 700) {
+          cam.near = 0.1;
+          cam.far = 700;
+          cam.updateProjectionMatrix();
+        }
       } else cam.position.copy(pc.pos).sub(pc.look).setLength(CAM_DIST).add(pc.look);
       cam.lookAt(pc.look);
       D.copy(cam.position).sub(pc.look).normalize();
