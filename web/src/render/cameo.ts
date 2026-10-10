@@ -40,6 +40,7 @@ export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BA
 /** Custom static cameos (e.g. photorealistic unit images) overriding procedural 3D renders. */
 export const CUSTOM_CAMEOS: Record<string, string> = {
   israel_apc: '/ui/cameos/israel_apc.jpg',
+  israel_rifle: '/ui/cameos/israel_rifle.jpg',
   rifle: '/ui/cameos/infantry_rifle.jpg',
   at: '/ui/cameos/infantry_at.jpg',
   sniper: '/ui/cameos/infantry_sniper.jpg',
