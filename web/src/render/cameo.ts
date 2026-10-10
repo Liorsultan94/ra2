@@ -40,6 +40,11 @@ export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BA
 /** Custom static cameos (e.g. photorealistic unit images) overriding procedural 3D renders. */
 export const CUSTOM_CAMEOS: Record<string, string> = {
   israel_apc: '/ui/cameos/israel_apc.jpg',
+  rifle: '/ui/cameos/infantry_rifle.jpg',
+  at: '/ui/cameos/infantry_at.jpg',
+  sniper: '/ui/cameos/infantry_sniper.jpg',
+  medic: '/ui/cameos/infantry_medic.jpg',
+  engineer: '/ui/cameos/infantry_engineer.jpg',
 };
 
 /** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
@@ -68,6 +73,15 @@ const idle = () =>
  * The canvas has a fixed size: cameos and the live portrait render into a
  * viewport at its top-left corner (resizing a GL canvas stalls on the GPU).
  */
+function customCameo(defId: string): string | undefined {
+  if (CUSTOM_CAMEOS[defId]) return CUSTOM_CAMEOS[defId];
+  const role = defId.replace(/^[a-z]+_/, '');
+  if (CUSTOM_CAMEOS[role]) return CUSTOM_CAMEOS[role];
+  const m = DEFS[defId]?.model;
+  if (m && CUSTOM_CAMEOS[m]) return CUSTOM_CAMEOS[m];
+  return undefined;
+}
+
 export class CameoFactory {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene = new THREE.Scene();
@@ -95,7 +109,7 @@ export class CameoFactory {
       .then((m) => {
         for (const [k, b] of m) {
           const defId = k.split(':')[0];
-          if (CUSTOM_CAMEOS[defId]) continue;
+          if (customCameo(defId)) continue;
           if (this.cache.has(k)) continue;
           const url = URL.createObjectURL(b);
           this.cache.set(k, url);
@@ -141,7 +155,8 @@ export class CameoFactory {
 
   /** Cached PNG of a cameo, or the blank placeholder while it is queued (prefer `img()` / `attr()`, which get patched). */
   get(defId: string, style: ModelStyle): string {
-    if (CUSTOM_CAMEOS[defId]) return CUSTOM_CAMEOS[defId];
+    const custom = customCameo(defId);
+    if (custom) return custom;
     const key = CameoFactory.key(defId, style);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit || CAMEO_BLANK;
@@ -177,7 +192,7 @@ export class CameoFactory {
         }
         const [key, job] = this.queue.entries().next().value as [string, { defId: string; style: ModelStyle }];
         this.queue.delete(key);
-        if (CUSTOM_CAMEOS[job.defId]) continue;
+        if (customCameo(job.defId)) continue;
         if (this.cache.has(key)) continue;
         let url = '';
         try {
