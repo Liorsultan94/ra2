@@ -807,8 +807,12 @@ export class World {
         break;
       }
       case 'airdrop': {
-        // support power: needs a completed airfield (airdropAt >= 0) and a full charge
+        // support power: needs a completed airfield (airdropAt >= 0), a full charge, and an explored drop zone
         if (p.airdropAt < 0 || this.tick < p.airdropAt || !Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) break;
+        const tx = Math.floor(cmd.x);
+        const ty = Math.floor(cmd.y);
+        if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) break;
+        if (!p.explored[ty * this.map.w + tx]) break;
         p.airdropFrom = this.tick;
         p.airdropAt = this.tick + AIRDROP_COOLDOWN;
         this.launchAirdrop(p, cmd.x, cmd.y);

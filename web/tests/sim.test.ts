@@ -383,6 +383,8 @@ describe('airborne drop support power', () => {
     w.spawnBuilding('russia_conyard', 1, 88, 4, true);
     w.spawnBuilding('usa_power', 0, 8, 88, true);
     if (airfield) w.spawnBuilding('usa_airfield', 0, 4, 83, true);
+    w.players[0].explored.fill(1);
+    w.players[1].explored.fill(1);
     return w;
   }
   const charge = (w: World) => {
@@ -535,6 +537,36 @@ describe('airborne drop support power', () => {
       for (const ev of w.drainEvents()) if (ev.t === 'airdrop') drops++;
     }
     expect(drops).toBeGreaterThan(0);
+  });
+
+  it('cannot drop into unexplored territory (human or AI)', () => {
+    const w = new World({
+      seed: 11,
+      players: [
+        { name: 'A', faction: 'usa', color: 0, isAI: false },
+        { name: 'B', faction: 'russia', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    w.spawnBuilding('usa_conyard', 0, 4, 88, true);
+    w.spawnBuilding('usa_airfield', 0, 4, 83, true);
+    w.step();
+    w.players[0].airdropAt = w.tick;
+
+    // Center of the map (48, 48) is unexplored
+    expect(w.players[0].explored[48 * w.map.w + 48]).toBe(0);
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(0);
+    expect(airdropStatus(w, 0).ready).toBe(true); // cooldown not wasted
+
+    // Once explored, the drop succeeds
+    w.players[0].explored[48 * w.map.w + 48] = 1;
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(1);
+    expect(airdropStatus(w, 0).ready).toBe(false);
   });
 });
 

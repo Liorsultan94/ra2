@@ -97,6 +97,12 @@ export class SupportPower {
       if (e.pointerType === 'mouse') {
         this.reticle.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`;
         this.reticle.classList.remove('hidden');
+        const g = this.host.renderer.screenToGround(p.x, p.y);
+        const w = this.host.world;
+        const tx = Math.floor(g.x);
+        const ty = Math.floor(g.y);
+        const valid = tx >= 0 && ty >= 0 && tx < w.map.w && ty < w.map.h && !!w.players[this.host.player]?.explored[ty * w.map.w + tx];
+        this.reticle.classList.toggle('invalid', !valid);
       }
       const pr = this.press;
       if (!pr || pr.id !== e.pointerId) return;
@@ -149,7 +155,7 @@ export class SupportPower {
     this.press = null;
     this.btn.classList.add('active');
     this.host.viewWrap.classList.add('drop-targeting');
-    this.host.showHint('<b>Airborne drop</b>: tap / click the drop zone &middot; Esc or right-click to cancel');
+    this.host.showHint('<b>Airborne drop</b>: tap / click explored drop zone &middot; Esc or right-click to cancel');
   }
 
   private disarm() {
@@ -158,6 +164,7 @@ export class SupportPower {
     this.btn.classList.remove('active');
     this.host.viewWrap.classList.remove('drop-targeting');
     this.reticle.classList.add('hidden');
+    this.reticle.classList.remove('invalid');
     this.host.showHint(null);
   }
 
@@ -166,6 +173,14 @@ export class SupportPower {
     const g = this.host.renderer.screenToGround(sx, sy);
     if (g.x < 0 || g.y < 0 || g.x >= w.map.w || g.y >= w.map.h) {
       this.host.message('Drop zone must be on the map', 'warn');
+      return;
+    }
+    const tx = Math.floor(g.x);
+    const ty = Math.floor(g.y);
+    const ti = ty * w.map.w + tx;
+    const pl = w.players[this.host.player];
+    if (!pl?.explored[ti]) {
+      this.host.message('Cannot drop in unexplored territory (שטח לא גלוי)', 'warn');
       return;
     }
     this.disarm();

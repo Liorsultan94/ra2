@@ -293,6 +293,13 @@ export class AIController implements Controller {
     return threat;
   }
 
+  private isExplored(x: number, y: number): boolean {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    const { w, h } = this.world.map;
+    return tx >= 0 && ty >= 0 && tx < w && ty < h && !!this.p.explored[ty * w + tx];
+  }
+
   private pickDropZone(): [number, number] | null {
     const w = this.world;
     const VALUE: Record<string, number> = { refinery: 9, factory: 8, tech: 8, conyard: 7, power: 7, radar: 6, airfield: 6, barracks: 5, oil: 5 };
@@ -300,6 +307,8 @@ export class AIController implements Controller {
     let bestScore = 0;
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
+      // cannot target units or structures in unexplored shroud
+      if (!this.isExplored(e.x, e.y)) continue;
       // by night only targets we know of: structures we have found, harvesters we see now (night.ts)
       if (w.night && (e.kind === 'building' ? !this.knowsBuilding(e) : !w.sees(this.pid, e))) continue;
       let value: number;
@@ -317,18 +326,22 @@ export class AIController implements Controller {
     }
     const base = [this.p.startX + 0.5, this.p.startY + 0.5];
     if (best) {
-      // land just short of the target, on our side of it
+      // land just short of the target, on our side of it (only if explored)
       const dx = base[0] - best.x;
       const dy = base[1] - best.y;
       const len = Math.hypot(dx, dy) || 1;
-      return [best.x + (dx / len) * 2.5, best.y + (dy / len) * 2.5];
+      const dropX = best.x + (dx / len) * 2.5;
+      const dropY = best.y + (dy / len) * 2.5;
+      if (this.isExplored(dropX, dropY)) return [dropX, dropY];
+      if (this.isExplored(best.x, best.y)) return [best.x, best.y];
     }
-    // nothing soft enough: seize the contested ore field nearest the middle, if it is not a killing ground
+    // nothing soft enough: seize the contested ore field nearest the middle, if explored and not a killing ground
     const enemy = this.enemyBase();
     if (!enemy) return null;
     let mine: [number, number] | null = null;
     let md = Infinity;
     for (const m of w.map.oreMines) {
+      if (!this.isExplored(m.x, m.y)) continue;
       const da = Math.hypot(m.x - base[0], m.y - base[1]);
       const db = Math.hypot(m.x - enemy[0], m.y - enemy[1]);
       const d = Math.abs(da - db) + this.threatAt(m.x, m.y, 7) * 4;
