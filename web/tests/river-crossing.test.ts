@@ -33,7 +33,7 @@ describe('river crossing and bridge repair', () => {
   });
 
   it('all river maps are impassable by land when all bridges are destroyed', () => {
-    for (const mapId of ['frontline', 'winter', 'urban'] as const) {
+    for (const mapId of ['frontline', 'urban'] as const) {
       const w = new World({
         map: mapId,
         seed: 100,

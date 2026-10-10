@@ -644,6 +644,10 @@ export function createWinterMap(seed: number): GameMap {
       for (const s of starts) h = h + (0.5 - h) * (1 - smoothstep(9, 15, Math.hypot(fx - s.x, fy - s.y)));
       const rd = river.dist(fx, fy);
       h = h + (-0.9 - h) * (1 - smoothstep(1.6, 3.6, rd));
+      // the ice ford: a shallow, frozen-over shoal between the bridges
+      const fs = Math.abs((fx + fy) / 2 - fordS);
+      const fk = (1 - smoothstep(1.4, 2.4, fs)) * (1 - smoothstep(3.6, 5.0, rd));
+      h = h + (-0.17 - h) * fk;
       for (const r of ridges) {
         const d = distToSegment(fx, fy, r.x, r.y, r.x2, r.y2);
         h += 1.5 * (1 - smoothstep(0.6, 2.4, d)) * (0.85 + 0.3 * (hash2(vx, vy, 99) + hash2(W - vx, H - vy, 99)) / 2);
@@ -659,6 +663,7 @@ export function createWinterMap(seed: number): GameMap {
       if (rd < 2.3) {
         t = Tile.Water;
         for (const bs of bridgeS) if (Math.abs(s - bs) <= 1.0) t = Tile.Bridge;
+        if (Math.abs(s - fordS) <= 1.0) t = Tile.Sand; // ice
       } else if (rd < 3.4) t = Tile.Sand;
       else if (symNoise(x, y, 0.09, NS + 5) > 0.62) t = Tile.Dirt;
       for (const r of ridges) if (distToSegment(x, y, r.x, r.y, r.x2, r.y2) < 1.15) t = Tile.Rock;
@@ -748,6 +753,7 @@ export function createWinterMap(seed: number): GameMap {
       { def: 'tech_comms', at: [[56, 88], [38, 84], [22, 90], [44, 88], [50, 68]] },
       { def: 'tech_airport', at: [[6, 30], [8, 24], [4, 36], [10, 34], [12, 28]] },
     ],
+    lanes: [river.at(fordS)],
     deco,
   });
 }

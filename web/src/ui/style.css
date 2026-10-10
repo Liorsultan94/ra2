@@ -1107,6 +1107,11 @@ kbd {
   object-fit: contain;
   pointer-events: none;
 }
+.cameo img[src*="/ui/cameos/"],
+.sp-type img[src*="/ui/cameos/"],
+.portrait img[src*="/ui/cameos/"] {
+  object-fit: cover;
+}
 .c-name {
   position: absolute;
   left: 0;

@@ -37,6 +37,11 @@ export function studioRig(scene: THREE.Scene): StudioRig {
 /** Transparent 1x1 placeholder shown until a cameo has been rendered. */
 export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
+/** Custom static cameos (e.g. photorealistic unit images) overriding procedural 3D renders. */
+export const CUSTOM_CAMEOS: Record<string, string> = {
+  israel_apc: '/ui/cameos/israel_apc.jpg',
+};
+
 /** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
 const CANVAS_PX = 512;
 
@@ -89,6 +94,8 @@ export class CameoFactory {
     this.restored = storeLoad()
       .then((m) => {
         for (const [k, b] of m) {
+          const defId = k.split(':')[0];
+          if (CUSTOM_CAMEOS[defId]) continue;
           if (this.cache.has(k)) continue;
           const url = URL.createObjectURL(b);
           this.cache.set(k, url);
@@ -134,6 +141,7 @@ export class CameoFactory {
 
   /** Cached PNG of a cameo, or the blank placeholder while it is queued (prefer `img()` / `attr()`, which get patched). */
   get(defId: string, style: ModelStyle): string {
+    if (CUSTOM_CAMEOS[defId]) return CUSTOM_CAMEOS[defId];
     const key = CameoFactory.key(defId, style);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit || CAMEO_BLANK;
@@ -169,6 +177,7 @@ export class CameoFactory {
         }
         const [key, job] = this.queue.entries().next().value as [string, { defId: string; style: ModelStyle }];
         this.queue.delete(key);
+        if (CUSTOM_CAMEOS[job.defId]) continue;
         if (this.cache.has(key)) continue;
         let url = '';
         try {
