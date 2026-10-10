@@ -43,6 +43,7 @@ export const CUSTOM_CAMEOS: Record<string, string> = {
   israel_rifle: '/ui/cameos/israel_rifle.jpg',
   israel_at: '/ui/cameos/israel_at.jpg',
   israel_sniper: '/ui/cameos/israel_sniper.jpg',
+  israel_medic: '/ui/cameos/israel_medic.jpg',
   rifle: '/ui/cameos/infantry_rifle.jpg',
   at: '/ui/cameos/infantry_at.jpg',
   sniper: '/ui/cameos/infantry_sniper.jpg',
