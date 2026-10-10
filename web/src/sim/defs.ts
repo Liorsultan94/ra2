@@ -250,7 +250,7 @@ const BUILDINGS: Record<string, BldTpl> = {
   // airbase (airbase.ts): runway along the front row, 4 jet stands along the back; each base parks 4 jets (the jet cap)
   airfield: { name: 'Airbase', category: 'building', role: 'airfield', model: 'airfield', cost: 1000, buildTime: 12, hp: 1100, sight: 6, w: 7, h: 4, power: -40, exit: [6, 3], produces: 'air', prereq: ['radar'], desc: 'Runway and 4 jet stands: builds aircraft and drones. Each airbase parks and rearms 4 jets.' },
   tech: { name: 'Battle Lab', category: 'building', role: 'tech', model: 'tech', cost: 2000, buildTime: 20, hp: 1000, sight: 5, w: 3, h: 3, power: -100, prereq: ['factory', 'radar'], desc: 'Unlocks advanced technology.' },
-  def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', prereq: ['barracks'], desc: 'Machine gun nest. Shreds infantry; ground targets only.' },
+  def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', needsPower: true, prereq: ['barracks'], desc: 'Machine gun nest. Shreds infantry; ground targets only. Needs power.' },
   def_aa: { name: 'SAM Battery', category: 'defense', role: 'def_aa', model: 'sam', cost: 900, buildTime: 9, hp: 550, sight: 10, w: 1, h: 1, power: -40, weapon: 'sam', needsPower: true, prereq: ['barracks'], desc: 'Surface-to-air interceptors. Shoots down aircraft, drones, rockets and missiles. Needs power.' },
   def_at: { name: 'ATGM Tower', category: 'defense', role: 'def_at', model: 'atgm', cost: 1200, buildTime: 12, hp: 700, sight: 8, w: 1, h: 1, power: -60, weapon: 'atgm', needsPower: true, prereq: ['radar'], desc: 'Long-range anti-tank missiles. Needs power.' },
 };
@@ -435,7 +435,7 @@ const FACTION_BUILDINGS: Partial<Record<Faction, Record<string, Partial<BldTpl>>
   russia: { def_aa: { name: 'S-400 Battery', weapon: 's400', desc: 'Very long-range area air and missile defence, slow to reload. Needs power.' } },
   germany: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },
   korea: {
-    def_gun: { name: 'SGR-A1 Sentry', model: 'sentry', cost: 400, hp: 650, sight: 9, desc: 'Automated thermal-tracking sentry gun. Shreds infantry; ground targets only.' },
+    def_gun: { name: 'SGR-A1 Sentry', model: 'sentry', cost: 400, hp: 650, sight: 9, needsPower: true, desc: 'Automated thermal-tracking sentry gun. Shreds infantry; ground targets only. Needs power.' },
     def_aa: { name: 'Cheongung II KM-SAM', weapon: 'kmsam', desc: 'Hit-to-kill medium-range SAM, good against ballistic missiles. Needs power.' },
   },
   ukraine: { def_aa: { name: 'IRIS-T SLM Battery', weapon: 'irisT', desc: 'Fast-reacting medium-range SAM: deadly against cruise missiles, rockets and aircraft, weak against ballistic missiles. Needs power.' } },

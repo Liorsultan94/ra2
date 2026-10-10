@@ -393,13 +393,17 @@ export class Hud {
     this.radarOff.textContent = 'RADAR OFFLINE';
     let dragging = false;
     const mm = (ev: PointerEvent, drag: boolean) => {
+      const p = this.world.players[this.player];
+      if (!p || !p.radarOnline || this.world.isLowPower(p)) return;
       const r = this.minimap.getBoundingClientRect();
       const px = ((ev.clientX - r.left) / r.width) * this.minimap.width;
       const py = ((ev.clientY - r.top) / r.height) * this.minimap.height;
-      const p = this.fromMinimap(px, py);
-      this.actions.onMinimap(p.x, p.y, drag);
+      const pt = this.fromMinimap(px, py);
+      this.actions.onMinimap(pt.x, pt.y, drag);
     };
     this.minimap.addEventListener('pointerdown', (ev) => {
+      const p = this.world.players[this.player];
+      if (!p || !p.radarOnline || this.world.isLowPower(p)) return;
       dragging = true;
       this.minimap.setPointerCapture(ev.pointerId);
       mm(ev, false);
@@ -904,12 +908,17 @@ export class Hud {
     this.mmDirty = false;
     const ctx = this.mmStatic.getContext('2d')!;
     const p = w.players[this.player];
-    const radar = p.radarOnline;
+    const lowPower = w.isLowPower(p);
+    const radar = p.radarOnline && !lowPower;
     this.radarOff.classList.toggle('hidden', radar);
+    this.radarOff.textContent = lowPower ? 'LOW POWER' : 'RADAR OFFLINE';
+    this.radarOff.classList.toggle('low-power', lowPower);
     this.minimap.parentElement!.classList.toggle('online', radar);
+    this.minimap.parentElement!.classList.toggle('low-power', lowPower);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#05080a';
     ctx.fillRect(0, 0, this.mmStatic.width, this.mmStatic.height);
+    if (!radar) return;
     const M = this.mmM;
     ctx.setTransform(M.a, M.b, M.c, M.d, M.e, M.f);
     ctx.imageSmoothingEnabled = true;
@@ -973,7 +982,7 @@ export class Hud {
       if (e.dead || e.inside >= 0) continue;
       const own = e.owner === this.player;
       if (!own && !this.renderer.isShown(e.id)) continue;
-      if (!radar && e.kind !== 'building') continue;
+      if (!radar) continue;
       // the bridges and the unclaimed village houses are in the photo itself
       if (e.kind === 'building' && e.owner < 0 && (e.def === BRIDGE_DEF || buildingDef(e.def).garrison)) continue;
       const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
@@ -1016,7 +1025,9 @@ export class Hud {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.mmStatic, 0, 0);
     const M = this.mmM;
-    const radar = this.world.players[this.player].radarOnline;
+    const p = this.world.players[this.player];
+    const lowPower = this.world.isLowPower(p);
+    const radar = p.radarOnline && !lowPower;
     if (radar) {
       // rotating sweep, clipped to the map diamond
       const c = M.transformPoint(new DOMPoint(map.w / 2, map.h / 2));
@@ -1045,24 +1056,24 @@ export class Hud {
       ctx.stroke();
       ctx.restore();
     } else {
-      // offline: faint static over the silhouette, a slow interference band rolling down
+      // offline: dark screen with static interference and scanlines
       const W = this.minimap.width;
       const H = this.minimap.height;
       if (!this.mmNoise) this.mmNoise = noiseFrames(Math.min(200, Math.ceil(W / 2)), Math.min(150, Math.ceil(H / 2)));
       ctx.save();
-      this.mmClip(ctx);
       ctx.imageSmoothingEnabled = false;
-      ctx.globalAlpha = 0.22;
-      ctx.drawImage(this.mmNoise[Math.floor(now * 14) % this.mmNoise.length], 0, 0, W, H);
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(this.mmNoise[Math.floor(now * 18) % this.mmNoise.length], 0, 0, W, H);
       ctx.globalAlpha = 1;
-      const by = ((now * 0.18) % 1.3) * H - 0.15 * H;
-      const band = ctx.createLinearGradient(0, by, 0, by + H * 0.16);
-      band.addColorStop(0, 'rgba(160,190,175,0)');
-      band.addColorStop(0.5, 'rgba(160,190,175,0.08)');
-      band.addColorStop(1, 'rgba(160,190,175,0)');
+      const by = ((now * 0.22) % 1.4) * H - 0.2 * H;
+      const band = ctx.createLinearGradient(0, by, 0, by + H * 0.2);
+      band.addColorStop(0, 'rgba(0,0,0,0)');
+      band.addColorStop(0.5, lowPower ? 'rgba(255,59,48,0.22)' : 'rgba(160,190,175,0.08)');
+      band.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = band;
-      ctx.fillRect(0, by, W, H * 0.16);
+      ctx.fillRect(0, by, W, H * 0.2);
       ctx.restore();
+      return;
     }
     // alerts: rings opening where we are under attack
     this.mmPings.draw(ctx, (x, y) => M.transformPoint(new DOMPoint(x, y)), now, u);

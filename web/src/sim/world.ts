@@ -2026,7 +2026,8 @@ export class World {
     if (b.cooldown > 0) b.cooldown--;
     if (b.owner < 0) return;
     const p = this.players[b.owner];
-    if (d.weapon && b.buildAnim >= 1 && !(d.needsPower && this.isLowPower(p))) {
+    const unpowered = this.isLowPower(p) && (d.category === 'defense' || !!d.needsPower);
+    if (d.weapon && b.buildAnim >= 1 && !unpowered) {
       this.processBurst(b);
       const bw = WEAPONS[d.weapon];
       if (bw.intercept) tryIntercept(this, b, bw);
@@ -2039,6 +2040,8 @@ export class World {
       }
       b.targetId = t ? t.id : -1;
       if (t) this.engage(b, t);
+    } else if (unpowered) {
+      b.targetId = -1;
     }
     if (b.repairing) {
       if (b.hp >= b.maxHp) b.repairing = false;
@@ -2252,8 +2255,12 @@ export class World {
     }
     // illumination flares: their owner sees the lit area as by day
     for (const f of this.flares) if (flareLit(f, this.tick) && this.players[f.owner]) reveal(this.players[f.owner], Math.floor(f.x), Math.floor(f.y), FLARE_RADIUS);
-    // classic (RA2, by day): explored ground stays revealed for good - what is there stays visible and targetable
-    if (this.fog === 'classic') for (const p of this.players) p.visible.set(p.explored);
+    // classic (RA2, by day): explored ground stays revealed for good while powered; on low power vision cuts to direct line-of-sight
+    if (this.fog === 'classic') {
+      for (const p of this.players) {
+        if (!this.isLowPower(p)) p.visible.set(p.explored);
+      }
+    }
   }
 
   // ------------------------------------------------------------ victory

@@ -864,22 +864,40 @@ kbd {
   cursor: crosshair;
   touch-action: none;
 }
+.radar:not(.online) .minimap,
+.radar.low-power .minimap {
+  cursor: not-allowed;
+}
 .radar-off {
   position: absolute;
   left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid var(--line);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(5, 8, 12, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
   font-family: var(--font-d);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
+  font-weight: 700;
+  letter-spacing: 0.18em;
   white-space: nowrap;
   color: var(--muted);
   pointer-events: none;
+  text-transform: uppercase;
+  z-index: 2;
+}
+.radar-off.low-power {
+  color: #ff453a;
+  border-color: rgba(255, 69, 58, 0.6);
+  background: rgba(22, 5, 5, 0.9);
+  box-shadow: 0 0 16px rgba(255, 69, 58, 0.4);
+  animation: low-power-blink 1.2s ease-in-out infinite;
+}
+@keyframes low-power-blink {
+  0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.97); }
 }
 
 /* credits + power */
