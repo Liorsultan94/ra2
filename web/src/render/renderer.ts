@@ -351,6 +351,7 @@ export class GameRenderer {
   readonly veil = new UnitVeil();
   readonly flareFx: FlareFx;
   private instRoots: THREE.Object3D[] = [];
+  private occlBuildings: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
   private perfHud = new PerfHud();
   selection = new Set<number>();
   /** Entity under the cursor (gets a quiet hover ring), -1 = none. */
@@ -460,7 +461,7 @@ export class GameRenderer {
     this.scene.add(this.sun, this.sun.target);
     if (this.ultra) {
       // cascaded sun shadows: the directional light stays the controller (atmos / effects read it) but is hidden
-      this.csm = new CascadeSun(this.scene, this.camera, 4096);
+      this.csm = new CascadeSun(this.scene, this.camera, 2048);
       this.sun.castShadow = false;
       this.sun.visible = false;
     }
@@ -523,10 +524,10 @@ export class GameRenderer {
 
     // ---- quality ladder (index 0 = best). The governor sheds, in order: lens extras -> AO -> bloom quality
     // -> (ultra extras) -> resolution -> shadow detail / bloom. Every post pass is a rung of its own.
-    const maxPR = Math.min(dpr, quality === 'low' ? 1.25 : 2);
+    const maxPR = Math.min(dpr, quality === 'low' ? 1.0 : quality === 'medium' ? 1.15 : 1.25);
     const minPR = Math.min(maxPR, quality === 'low' ? 0.75 : coarse ? 1 : 0.85);
-    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' && coarse ? 1.5 : maxPR);
-    const shadow = quality === 'high' ? (phoneCaps() ? 2048 : 4096) : quality === 'medium' ? 2048 : 0; // ultra: per cascade; phones: 2048 (memory)
+    const startPR = Math.min(maxPR, quality === 'low' ? 1 : quality === 'medium' ? 1 : Math.min(maxPR, 1.25));
+    const shadow = quality === 'high' ? 2048 : quality === 'medium' ? 1024 : 0; // optimized: 2048 high/ultra, 1024 medium
     const prs: number[] = [];
     for (let p = maxPR; p > minPR + 0.01; p -= 0.25) prs.push(Math.round(p * 100) / 100);
     prs.push(minPR);
@@ -719,8 +720,8 @@ export class GameRenderer {
     return !!this.post?.dof && this.usePost;
   }
   private photoDof: { focus: number; amount: number } | null = null;
-  /** Bokeh amount of the intro / outro flyovers (free camera without photo mode): a gentle miniature look. */
-  cinematicDof = 0.32;
+  /** Bokeh amount of the intro / outro flyovers (0 = crisp view, bypasses expensive DOF passes). */
+  cinematicDof = 0;
   private gradeIn: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
 
   /** Per-frame post inputs: grade look from the atmosphere, depth of field from the free camera. */
@@ -877,9 +878,11 @@ export class GameRenderer {
     if (pc) {
       if (cam instanceof THREE.PerspectiveCamera) {
         cam.position.copy(pc.pos);
-        cam.near = 0.1;
-        cam.far = 700;
-        cam.updateProjectionMatrix();
+        if (cam.near !== 0.1 || cam.far !== 700) {
+          cam.near = 0.1;
+          cam.far = 700;
+          cam.updateProjectionMatrix();
+        }
       } else cam.position.copy(pc.pos).sub(pc.look).setLength(CAM_DIST).add(pc.look);
       cam.lookAt(pc.look);
       D.copy(cam.position).sub(pc.look).normalize();
@@ -892,10 +895,12 @@ export class GameRenderer {
     u.fogTime.value = this.time;
     this.effects?.setPointScale((this.height * this.renderer.getPixelRatio()) / vh);
     this.tilt?.setZoom(this.zoom, this.defaultZoom(), this.renderer.getPixelRatio());
-    if (pc && this.tilt) this.tilt.enabled = false;
+    if ((pc || this.cinematicActive) && this.tilt) this.tilt.enabled = false;
   }
   /** Photo mode free camera (position + look-at point); null = the normal RTS camera. */
   photoCam: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+  /** True when a cinematic slow-motion moment is playing: suppresses heavy zoom blur passes. */
+  cinematicActive = false;
 
   /**
    * Fit the sun's shadow frustum tightly around what the camera sees, snapped
@@ -1074,8 +1079,13 @@ export class GameRenderer {
   }
 
   private v3 = new THREE.Vector3();
-  project(x: number, y: number, z: number): { x: number; y: number } {
+  project(x: number, y: number, z: number, out?: { x: number; y: number }): { x: number; y: number } {
     this.v3.set(x, y, z).project(this.camera);
+    if (out) {
+      out.x = ((this.v3.x + 1) / 2) * this.width;
+      out.y = ((1 - this.v3.y) / 2) * this.height;
+      return out;
+    }
     return { x: ((this.v3.x + 1) / 2) * this.width, y: ((1 - this.v3.y) / 2) * this.height };
   }
 
@@ -1341,11 +1351,13 @@ export class GameRenderer {
     const cf = this.camFwd;
     const cp = cam.position;
     const ty0 = groundHeight(w.map, this.target.x, this.target.z);
-    const persp = cam instanceof THREE.PerspectiveCamera && !this.photoCam;
+    const isPhoto = !!(this.photoCam && this.photoDof);
+    const persp = cam instanceof THREE.PerspectiveCamera && !isPhoto;
     const refDepth = persp ? (this.target.x - cp.x) * cf.x + (ty0 - cp.y) * cf.y + (this.target.z - cp.z) * cf.z : 1;
     const lodK = (this.height / (BASE_VIEW / this.zoom)) * refDepth;
     if (this.occlFrame++ % 15 === 0) {
-      const bl: { id: number; tx: number; ty: number; w: number; h: number; height: number }[] = [];
+      const bl = this.occlBuildings;
+      bl.length = 0;
       for (const v of this.visuals.values()) {
         const be = v.visible ? w.get(v.id) : undefined;
         if (!be || be.kind !== 'building') continue;
@@ -1510,7 +1522,7 @@ export class GameRenderer {
       // Vehicles / buildings / aircraft off screen (model and shadow) or under the shroud: no pose animation.
       // The time is banked and handed over in one step once the model can be seen again (spinners, blends
       // and timers end up where they would have been); infantry have their own cheap off-screen cycle.
-      if (!nearNow && !v.model.infantry && !this.photoCam && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
+      if (!nearNow && !v.model.infantry && !isPhoto && this.animSkip) v.animDebt = Math.min(5, (v.animDebt ?? 0) + dt);
       else {
         const debt = v.animDebt ?? 0;
         if (debt) {
@@ -1532,18 +1544,18 @@ export class GameRenderer {
       if (vis) {
         const rp = root.position;
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
-        applyLod(v.lod, this.photoCam ? 1e9 : lodK / depth);
+        applyLod(v.lod, isPhoto ? 1e9 : lodK / depth);
         {
           v.near = nearNow;
           if (shadowsOn) setCasting(v.lod, v.near);
           // infantry animation detail for the next frame: off screen / far zoom (soldier under ~16 px) / low quality -> cheaper cycle
           if (v.model.infantry) {
-            const hpx = this.photoCam ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
+            const hpx = isPhoto ? 1e9 : (lodK / depth) * (v.model.height ?? 0.5);
             a.lod = !v.near ? 2 : hpx < (this.quality === 'low' ? 40 : 16) ? 1 : 0;
           }
         }
         // (staggered: each unit re-tests every 4th frame)
-        if ((this.occlFrame + v.id) % 4 === 0 || this.photoCam) v.occl = e.kind !== 'unit' || !!this.photoCam || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
+        if ((this.occlFrame + v.id) % 4 === 0 || isPhoto) v.occl = e.kind !== 'unit' || isPhoto || this.occluders.mayHide(rp.x, rp.y, rp.z, cd.x, cd.y, cd.z);
       }
     }
     this.airShadows.end();
@@ -2608,9 +2620,22 @@ export class GameRenderer {
       this.lightScan = 60;
       const list = this.lightList;
       list.length = 0;
-      this.scene.traverse((o) => {
-        if ((o as THREE.Light).isLight) list.push(o as THREE.Light);
-      });
+      if (this.hemi) list.push(this.hemi);
+      if (this.sun) list.push(this.sun);
+      if (this.csm) list.push(this.csm.light);
+      const fl = this.effects?.lights as unknown as { lights?: THREE.PointLight[]; group?: THREE.Group };
+      if (fl?.lights) {
+        for (let i = 0; i < fl.lights.length; i++) list.push(fl.lights[i]);
+      } else if (fl?.group) {
+        for (let i = 0; i < fl.group.children.length; i++) {
+          const c = fl.group.children[i];
+          if ((c as THREE.Light).isLight) list.push(c as THREE.Light);
+        }
+      }
+      const nl = (this.atmos as unknown as { night?: { lights?: THREE.PointLight[] } })?.night?.lights;
+      if (nl) {
+        for (let i = 0; i < nl.length; i++) list.push(nl[i]);
+      }
     }
     for (const l of this.lightList) {
       const e = l.matrixWorld.elements;
@@ -2665,7 +2690,7 @@ export class GameRenderer {
       k[7] = c.top;
       k[8] = sh.mapSize.x;
     }
-    const every = this.quality === 'high' ? 1 : 2;
+    const every = this.quality === 'high' ? 2 : 3;
     this.shadowAge++;
     if (moved || !sh.map || (dt > 0 && this.shadowAge >= every) || this.shadowAge > 30) {
       sh.needsUpdate = true;

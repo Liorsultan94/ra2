@@ -124,6 +124,15 @@ export function terrainPassable(m: GameMap, x: number, y: number): boolean {
   return t !== Tile.Water && t !== Tile.Rock && m.trees[i] === 0 && m.blocked[i] === 0;
 }
 
+/** Can a ground unit (or special amphibious unit) traverse this tile? Standard ground units cannot cross water. */
+export function unitPassable(m: GameMap, x: number, y: number, amphibious = false): boolean {
+  if (!inBounds(m, x, y)) return false;
+  const i = y * m.w + x;
+  const t = m.tiles[i];
+  if (t === Tile.Water) return amphibious;
+  return t !== Tile.Rock && m.trees[i] === 0 && m.blocked[i] === 0;
+}
+
 /** Open ground for a single tile: walkable, no bridge deck, no ore (no slope or bridge-head rule: see terrainBuildable). */
 export function tileOpen(m: GameMap, x: number, y: number): boolean {
   if (!terrainPassable(m, x, y)) return false;

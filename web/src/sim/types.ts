@@ -140,6 +140,8 @@ export interface UnitDef extends BaseDef {
   crusher?: boolean;
   /** Can be run over by an enemy crusher (infantry on the ground; crush.ts). */
   crushable?: boolean;
+  /** Special water-traversing capability (for future amphibious transports, hovercraft, naval units). Standard ground units cannot cross water. */
+  amphibious?: boolean;
   /**
    * Stealth aircraft (stealth.ts): while airborne, enemy air-targeting weapons acquire and fire at it only
    * within this fraction of their normal range (the aircraft counterpart of WeaponDef.lowObservable).
@@ -204,7 +206,7 @@ export type Order =
   | { type: 'attackMove'; x: number; y: number }
   | { type: 'attack'; target: number; forced?: boolean }
   | { type: 'harvest' }
-  | { type: 'capture'; target: number }
+  | { type: 'capture'; target: number; repair?: boolean }
   | { type: 'enter'; target: number }
   | { type: 'deploy' }
   /**

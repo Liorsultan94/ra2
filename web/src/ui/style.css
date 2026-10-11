@@ -290,6 +290,87 @@ kbd {
   }
 }
 
+.pause-banner {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 6px 5px 16px;
+  border-radius: 999px;
+  background: rgba(16, 20, 26, 0.9);
+  border: 1px solid rgba(255, 140, 50, 0.75);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7), 0 0 20px rgba(255, 120, 40, 0.25);
+  -webkit-backdrop-filter: var(--hud-blur);
+  backdrop-filter: var(--hud-blur);
+  z-index: 10;
+  color: #fff;
+  animation: pause-pop 0.25s var(--ease) both;
+  pointer-events: auto;
+}
+.pause-banner.hidden {
+  display: none !important;
+}
+@keyframes pause-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+.pb-content {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.pb-tag {
+  font-family: var(--font-d, 'Barlow Condensed', sans-serif);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ff9d42;
+}
+.pb-hint {
+  font-size: 12px;
+  color: rgba(230, 235, 240, 0.8);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.pb-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid #ff7a29;
+  background: linear-gradient(135deg, #d8451c, #ff6c26);
+  color: #fff;
+  font-family: var(--font-d, 'Barlow Condensed', sans-serif);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(216, 69, 28, 0.45);
+  transition: transform 120ms, filter 150ms;
+}
+.pb-resume:hover {
+  filter: brightness(1.15);
+  transform: scale(1.03);
+}
+.pb-resume:active {
+  transform: scale(0.96);
+}
+.pb-ico {
+  font-size: 10px;
+}
+
 .tooltip {
   position: fixed;
   z-index: 40;
@@ -783,22 +864,40 @@ kbd {
   cursor: crosshair;
   touch-action: none;
 }
+.radar:not(.online) .minimap,
+.radar.low-power .minimap {
+  cursor: not-allowed;
+}
 .radar-off {
   position: absolute;
   left: 50%;
-  bottom: 8px;
-  transform: translateX(-50%);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid var(--line);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(5, 8, 12, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
   font-family: var(--font-d);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
+  font-weight: 700;
+  letter-spacing: 0.18em;
   white-space: nowrap;
   color: var(--muted);
   pointer-events: none;
+  text-transform: uppercase;
+  z-index: 2;
+}
+.radar-off.low-power {
+  color: #ff453a;
+  border-color: rgba(255, 69, 58, 0.6);
+  background: rgba(22, 5, 5, 0.9);
+  box-shadow: 0 0 16px rgba(255, 69, 58, 0.4);
+  animation: low-power-blink 1.2s ease-in-out infinite;
+}
+@keyframes low-power-blink {
+  0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.97); }
 }
 
 /* credits + power */
@@ -1025,6 +1124,11 @@ kbd {
   height: 100%;
   object-fit: contain;
   pointer-events: none;
+}
+.cameo img[src*="/ui/cameos/"],
+.sp-type img[src*="/ui/cameos/"],
+.portrait img[src*="/ui/cameos/"] {
+  object-fit: cover;
 }
 .c-name {
   position: absolute;
@@ -1254,6 +1358,12 @@ kbd {
 .vc-btn.vc-pause:hover {
   border-color: rgba(255, 90, 66, 0.75);
   color: #fff;
+}
+.vc-btn.vc-pause.on {
+  background: rgba(220, 70, 30, 0.9);
+  border-color: #ff9142;
+  color: #fff;
+  box-shadow: 0 0 16px rgba(255, 110, 40, 0.6);
 }
 .vc-btn:active {
   transform: scale(0.94);
@@ -1794,6 +1904,13 @@ kbd {
   margin: -3px 0 0 -3px;
   border-radius: 50%;
   background: var(--hi);
+}
+.drop-reticle.invalid {
+  border-color: #ff3b30;
+  box-shadow: 0 0 10px rgba(255, 59, 48, 0.5);
+}
+.drop-reticle.invalid::after {
+  background: #ff3b30;
 }
 .drop-marker i {
   display: block;

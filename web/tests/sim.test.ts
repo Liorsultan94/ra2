@@ -383,6 +383,8 @@ describe('airborne drop support power', () => {
     w.spawnBuilding('russia_conyard', 1, 88, 4, true);
     w.spawnBuilding('usa_power', 0, 8, 88, true);
     if (airfield) w.spawnBuilding('usa_airfield', 0, 4, 83, true);
+    w.players[0].explored.fill(1);
+    w.players[1].explored.fill(1);
     return w;
   }
   const charge = (w: World) => {
@@ -535,6 +537,36 @@ describe('airborne drop support power', () => {
       for (const ev of w.drainEvents()) if (ev.t === 'airdrop') drops++;
     }
     expect(drops).toBeGreaterThan(0);
+  });
+
+  it('cannot drop into unexplored territory (human or AI)', () => {
+    const w = new World({
+      seed: 11,
+      players: [
+        { name: 'A', faction: 'usa', color: 0, isAI: false },
+        { name: 'B', faction: 'russia', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    w.spawnBuilding('usa_conyard', 0, 4, 88, true);
+    w.spawnBuilding('usa_airfield', 0, 4, 83, true);
+    w.step();
+    w.players[0].airdropAt = w.tick;
+
+    // Center of the map (48, 48) is unexplored
+    expect(w.players[0].explored[48 * w.map.w + 48]).toBe(0);
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(0);
+    expect(airdropStatus(w, 0).ready).toBe(true); // cooldown not wasted
+
+    // Once explored, the drop succeeds
+    w.players[0].explored[48 * w.map.w + 48] = 1;
+    w.issue(0, { type: 'airdrop', x: 48, y: 48 });
+    w.step();
+    expect(transports(w).length).toBe(1);
+    expect(airdropStatus(w, 0).ready).toBe(false);
   });
 });
 
@@ -848,5 +880,74 @@ describe('collapsible bridges', () => {
     const b = run();
     expect(a.snap).toBe(b.snap);
     expect(a.w.bridges[1].hp).toBeLessThan(BRIDGE_HP);
+  });
+});
+
+describe('low power consequences', () => {
+  it('disables defense installations, shuts down radar, and hides distant enemies on explored ground', () => {
+    const w = new World({
+      seed: 42,
+      players: [
+        { name: 'A', faction: 'usa', color: 0, isAI: false },
+        { name: 'B', faction: 'russia', color: 0, isAI: false },
+      ],
+    });
+    for (const e of w.list) if (e.owner >= 0) e.dead = true;
+    w.list = w.list.filter((e) => !e.dead);
+    const power = w.spawnBuilding('usa_power', 0, 10, 80, true);
+    w.spawnBuilding('usa_radar', 0, 14, 80, true);
+    const bunker = w.spawnBuilding('usa_def_gun', 0, 18, 80, true);
+    const sam = w.spawnBuilding('usa_def_aa', 0, 20, 80, true);
+    w.spawnBuilding('russia_conyard', 1, 90, 90, true);
+    const foeInf = w.spawnUnit('russia_rifle', 1, 18, 83);
+    foeInf.hp = foeInf.maxHp = 1e6;
+    foeInf.stance = 'holdFire';
+    const foeDistant = w.spawnUnit('russia_rifle', 1, 60, 40);
+    w.players[0].explored.fill(1);
+    for (let i = 0; i < 4; i++) w.step();
+
+    // Powered: radar online, defenses engage and fire, distant foe visible
+    expect(w.isLowPower(w.players[0])).toBe(false);
+    expect(w.players[0].radarOnline).toBe(true);
+    expect(w.sees(0, foeDistant)).toBe(true);
+    let fires = 0;
+    for (let i = 0; i < 20; i++) {
+      w.step();
+      for (const ev of w.drainEvents()) if (ev.t === 'fire' && ev.id === bunker.id) fires++;
+    }
+    expect(fires).toBeGreaterThan(0);
+
+    // Destroy power plant: low power triggered
+    w.kill(power, -1);
+    for (let i = 0; i < 4; i++) w.step();
+    expect(w.isLowPower(w.players[0])).toBe(true);
+    expect(w.players[0].radarOnline).toBe(false);
+
+    // Distant enemy out of direct sight is now hidden
+    expect(w.sees(0, foeDistant)).toBe(false);
+    // Enemy right next to bunker is in direct sight
+    expect(w.sees(0, foeInf)).toBe(true);
+
+    // Defenses do NOT fire while unpowered
+    fires = 0;
+    for (let i = 0; i < 30; i++) {
+      w.step();
+      for (const ev of w.drainEvents()) if (ev.t === 'fire' && (ev.id === bunker.id || ev.id === sam.id)) fires++;
+    }
+    expect(fires).toBe(0);
+    expect(bunker.targetId).toBe(-1);
+
+    // Restore power: radar turns back on, defenses resume firing, distant sight restored
+    w.spawnBuilding('usa_power', 0, 10, 80, true);
+    for (let i = 0; i < 4; i++) w.step();
+    expect(w.isLowPower(w.players[0])).toBe(false);
+    expect(w.players[0].radarOnline).toBe(true);
+    expect(w.sees(0, foeDistant)).toBe(true);
+    fires = 0;
+    for (let i = 0; i < 30; i++) {
+      w.step();
+      for (const ev of w.drainEvents()) if (ev.t === 'fire' && ev.id === bunker.id) fires++;
+    }
+    expect(fires).toBeGreaterThan(0);
   });
 });

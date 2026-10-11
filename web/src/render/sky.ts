@@ -356,6 +356,7 @@ export class Sky {
   private horB = new THREE.Vector3();
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
+  private lerpTmp = new THREE.Vector3();
   private sunXZ = new THREE.Vector2(1, 0);
   private lightN = new THREE.Vector3();
   /** The environment map captured from the sky (high quality); null until the first capture. */
@@ -477,8 +478,10 @@ export class Sky {
     const B = this.tmp2.copy(this.horB);
     for (const v of [A, B]) {
       const l = v.x * 0.2126 + v.y * 0.7152 + v.z * 0.0722;
-      v.lerp(new THREE.Vector3(l * 1.1 * 0.93, l * 1.1 * 0.97, l * 1.1 * 1.02), over * 0.85).multiplyScalar(1 - 0.6 * st.storm);
-      v.lerp(new THREE.Vector3(l * 1.25, l * 0.95, l * 0.62), st.dust * 0.85);
+      this.lerpTmp.set(l * 1.1 * 0.93, l * 1.1 * 0.97, l * 1.1 * 1.02);
+      v.lerp(this.lerpTmp, over * 0.85).multiplyScalar(1 - 0.6 * st.storm);
+      this.lerpTmp.set(l * 1.25, l * 0.95, l * 0.62);
+      v.lerp(this.lerpTmp, st.dust * 0.85);
       // a hazy horizon is a little paler / darker than the clear-sky band right above it
       v.multiplyScalar(0.85);
     }

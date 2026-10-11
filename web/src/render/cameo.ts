@@ -37,6 +37,48 @@ export function studioRig(scene: THREE.Scene): StudioRig {
 /** Transparent 1x1 placeholder shown until a cameo has been rendered. */
 export const CAMEO_BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
+/** Custom static cameos (e.g. photorealistic unit images) overriding procedural 3D renders. */
+export const CUSTOM_CAMEOS: Record<string, string> = {
+  israel_apc: '/ui/cameos/israel_apc.jpg',
+  israel_rifle: '/ui/cameos/israel_rifle.jpg',
+  israel_at: '/ui/cameos/israel_at.jpg',
+  israel_sniper: '/ui/cameos/israel_sniper.jpg',
+  israel_medic: '/ui/cameos/israel_medic.jpg',
+  israel_engineer: '/ui/cameos/israel_engineer.jpg',
+  israel_mortar: '/ui/cameos/israel_mortar.jpg',
+  israel_mbt: '/ui/cameos/israel_mbt.jpg',
+  israel_aa: '/ui/cameos/israel_aa.jpg',
+  israel_arty: '/ui/cameos/israel_arty.jpg',
+  israel_harvester: '/ui/cameos/israel_harvester.jpg',
+  israel_mcv: '/ui/cameos/israel_mcv.jpg',
+  israel_ugv: '/ui/cameos/israel_ugv.jpg',
+  israel_lora: '/ui/cameos/israel_lora.jpg',
+  israel_heli: '/ui/cameos/israel_heli.jpg',
+  israel_fighter: '/ui/cameos/israel_fighter.jpg',
+  israel_uav: '/ui/cameos/israel_uav.jpg',
+  israel_fpv: '/ui/cameos/israel_fpv.jpg',
+  israel_micro: '/ui/cameos/israel_micro.jpg',
+  israel_shahed: '/ui/cameos/israel_shahed.jpg',
+  rifle: '/ui/cameos/infantry_rifle.jpg',
+  at: '/ui/cameos/infantry_at.jpg',
+  sniper: '/ui/cameos/infantry_sniper.jpg',
+  medic: '/ui/cameos/infantry_medic.jpg',
+  engineer: '/ui/cameos/infantry_engineer.jpg',
+  mortar: '/ui/cameos/mortar.jpg',
+  mbt: '/ui/cameos/israel_mbt.jpg',
+  aa: '/ui/cameos/israel_aa.jpg',
+  arty: '/ui/cameos/israel_arty.jpg',
+  harvester: '/ui/cameos/israel_harvester.jpg',
+  mcv: '/ui/cameos/israel_mcv.jpg',
+  robot: '/ui/cameos/israel_ugv.jpg',
+  heli: '/ui/cameos/israel_heli.jpg',
+  fighter: '/ui/cameos/israel_fighter.jpg',
+  uav: '/ui/cameos/israel_uav.jpg',
+  fpv: '/ui/cameos/israel_fpv.jpg',
+  micro: '/ui/cameos/israel_micro.jpg',
+  shahed: '/ui/cameos/israel_shahed.jpg',
+};
+
 /** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
 const CANVAS_PX = 512;
 
@@ -63,6 +105,15 @@ const idle = () =>
  * The canvas has a fixed size: cameos and the live portrait render into a
  * viewport at its top-left corner (resizing a GL canvas stalls on the GPU).
  */
+function customCameo(defId: string): string | undefined {
+  if (CUSTOM_CAMEOS[defId]) return CUSTOM_CAMEOS[defId];
+  const role = defId.replace(/^[a-z]+_/, '');
+  if (CUSTOM_CAMEOS[role]) return CUSTOM_CAMEOS[role];
+  const m = DEFS[defId]?.model;
+  if (m && CUSTOM_CAMEOS[m]) return CUSTOM_CAMEOS[m];
+  return undefined;
+}
+
 export class CameoFactory {
   private renderer: THREE.WebGLRenderer | null = null;
   private scene = new THREE.Scene();
@@ -89,6 +140,8 @@ export class CameoFactory {
     this.restored = storeLoad()
       .then((m) => {
         for (const [k, b] of m) {
+          const defId = k.split(':')[0];
+          if (customCameo(defId)) continue;
           if (this.cache.has(k)) continue;
           const url = URL.createObjectURL(b);
           this.cache.set(k, url);
@@ -134,6 +187,8 @@ export class CameoFactory {
 
   /** Cached PNG of a cameo, or the blank placeholder while it is queued (prefer `img()` / `attr()`, which get patched). */
   get(defId: string, style: ModelStyle): string {
+    const custom = customCameo(defId);
+    if (custom) return custom;
     const key = CameoFactory.key(defId, style);
     const hit = this.cache.get(key);
     if (hit !== undefined) return hit || CAMEO_BLANK;
@@ -169,6 +224,7 @@ export class CameoFactory {
         }
         const [key, job] = this.queue.entries().next().value as [string, { defId: string; style: ModelStyle }];
         this.queue.delete(key);
+        if (customCameo(job.defId)) continue;
         if (this.cache.has(key)) continue;
         let url = '';
         try {

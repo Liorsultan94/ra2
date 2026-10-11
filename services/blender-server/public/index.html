@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blender 5.2.2 LTS Server | 3D Engine Hub</title>
+  <!-- Three.js + OrbitControls + GLTFLoader -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --border: #30363d;
+      --accent: #e53935;
+      --accent-hover: #f44336;
+      --allies-blue: #1976d2;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --success: #238636;
+      --code-bg: #090d13;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding-bottom: 50px; }
+    header {
+      background: #0f141c;
+      border-bottom: 2px solid #21262d;
+      padding: 16px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo-group h1 { font-size: 1.25rem; color: var(--text-bright); font-weight: 700; letter-spacing: 0.5px; }
+    .logo-group p { font-size: 0.85rem; color: #8b949e; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #1f2937;
+      border: 1px solid #374151;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #10b981;
+    }
+    .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; }
+
+    .nav-tabs {
+      display: flex;
+      gap: 10px;
+      padding: 16px 28px 0;
+      border-bottom: 1px solid var(--border);
+      background: #111620;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      padding: 10px 18px;
+      color: #8b949e;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-btn.active { color: #f0f6fc; border-bottom: 2px solid var(--accent); }
+    .tab-btn:hover { color: #c9d1d9; }
+
+    .tab-content { display: none; padding: 24px 28px; }
+    .tab-content.active { display: block; }
+
+    .grid-layout { display: grid; grid-template-columns: 360px 1fr; gap: 24px; align-items: start; }
+    @media (max-width: 900px) { .grid-layout { grid-template-columns: 1fr; } }
+
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .panel h2 { font-size: 1.1rem; color: var(--text-bright); margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 0.85rem; font-weight: 600; color: #8b949e; margin-bottom: 6px; }
+    .form-control, select, input[type="text"], input[type="file"], input[type="number"] {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      color: var(--text-bright);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .form-control:focus, select:focus { outline: none; border-color: #58a6ff; }
+
+    .btn {
+      width: 100%;
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { background: #484f58; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: #21262d;
+      border: 1px solid var(--border);
+      color: var(--text-bright);
+      margin-top: 8px;
+    }
+    .btn-secondary:hover { background: #30363d; }
+
+    .viewport-box {
+      width: 100%;
+      height: 520px;
+      background: radial-gradient(circle at center, #1a222e 0%, #0d1117 100%);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      position: relative;
+      overflow: hidden;
+    }
+    #three-canvas { width: 100%; height: 100%; display: block; }
+    .viewport-overlay {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      pointer-events: none;
+    }
+
+    .stats-card {
+      margin-top: 16px;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+    }
+    .stat-label { color: #8b949e; font-size: 0.75rem; text-transform: uppercase; }
+    .stat-value { font-size: 1.05rem; font-weight: 700; color: #58a6ff; }
+
+    .render-preview-box {
+      width: 100%;
+      min-height: 520px;
+      background: repeating-conic-gradient(#1f242c 0% 25%, #161b22 0% 50%) 50% / 20px 20px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+      position: relative;
+    }
+    .render-preview-box img { max-width: 100%; max-height: 480px; object-fit: contain; border-radius: 4px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+
+    .turntable-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-top: 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 12px;
+      border-radius: 6px;
+    }
+    .turntable-controls input[type="range"] { flex: 1; }
+
+    pre code {
+      display: block;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 14px;
+      border-radius: 6px;
+      color: #79c0ff;
+      font-family: Consolas, monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo-group">
+      <h1>BLENDER 5.2.2 LTS | 3D SERVER</h1>
+      <p>Procedural 3D Generation &bull; Model Optimization &bull; Background Rendering</p>
+    </div>
+    <div class="badge" id="health-badge">
+      <span class="dot"></span>
+      <span id="health-text">Connecting to Blender 5.2.2...</span>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('tab-generate')">Procedural 3D Generator (GLB)</button>
+    <button class="tab-btn" onclick="switchTab('tab-convert')">Model Converter & Optimizer</button>
+    <button class="tab-btn" onclick="switchTab('tab-render')">Studio Image Renderer</button>
+    <button class="tab-btn" onclick="switchTab('tab-turntable')">360 Turntable Animator</button>
+    <button class="tab-btn" onclick="switchTab('tab-api')">REST API & Documentation</button>
+  </nav>
+
+  <!-- TAB 1: PROCEDURAL 3D GENERATOR -->
+  <div id="tab-generate" class="tab-content active">
+    <div class="grid-layout">
+      <div class="panel">
+        <h2>Procedural Generator</h2>
+        
+        <div class="form-group">
+          <label>Unit / Structure Type</label>
+          <select id="gen-type" class="form-control">
+            <option value="tank">Apocalypse / Battle Tank</option>
+            <option value="tesla_coil">Soviet Tesla Coil (Defense)</option>
+            <option value="prism_tower">Allied Prism Tower (Defense)</option>
+            <option value="harvester">Heavy Ore Harvester</option>
+            <option value="drone">Recon Strike Drone</option>
+            <option value="bunker">Pillbox Gun Bunker</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Faction</label>
+          <select id="gen-faction" class="form-control">
+            <option value="soviet">Soviet Union (Red)</option>
+            <option value="allies">Allied Forces (Blue)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Custom Team Color (Optional)</label>
+          <input type="color" id="gen-color" value="#d32f2f" style="height: 40px; padding: 2px; width: 100%;">
+        </div>
+
+        <button class="btn" id="btn-generate" onclick="generateModel()">
+          <span>Generate with Blender 5.2.2</span>
+        </button>
+
+        <a id="btn-download-glb" href="#" download class="btn btn-secondary" style="display: none; text-decoration: none;">
+          Download .GLB File
+        </a>
+
+        <div class="stats-card" id="gen-stats" style="display: none;">
+          <div><div class="stat-label">Polygons</div><div class="stat-value" id="stat-polys">-</div></div>
+          <div><div class="stat-label">Vertices</div><div class="stat-value" id="stat-verts">-</div></div>
+          <div><div class="stat-label">File Size</div><div class="stat-value" id="stat-size">-</div></div>
+          <div><div class="stat-label">Duration</div><div class="stat-value" id="stat-time">-</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="padding: 12px;">
+        <h2>Interactive 3D Viewport (Three.js WebGL)</h2>
+        <div class="viewport-box">
+          <div class="viewport-overlay" id="viewport-info">Drag to rotate &bull; Scroll to zoom</div>
+          <canvas id="three-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: MODEL CONVERTER & OPTIMIZER -->
+  <div id="tab-convert" class="tab-content">
+    <div class="grid-layout">
+      <div class="panel">
+        <h2>Convert & Optimize</h2>
+        
+        <div class="form-group">
+          <label>Upload 3D Mesh (.OBJ, .FBX, .STL, .GLB, .GLTF)</label>
+          <input type="file" id="convert-file" class="form-control" accept=".obj,.fbx,.stl,.glb,.gltf,.dae">
+        </div>
+
+        <div class="form-group">
+          <label>Decimation Ratio (Poly Reduction)</label>
+          <input type="range" id="convert-ratio" min="0.1" max="1.0" step="0.05" value="0.5" style="width: 100%;" oninput="document.getElementById('ratio-val').innerText = Math.round(this.value * 100) + '%'">
+          <div style="font-size: 0.8rem; color: #8b949e; margin-top: 4px;">Target poly count: <span id="ratio-val" style="color: #58a6ff; font-weight: bold;">50%</span></div>
+        </div>
+
+        <div class="form-group">
+          <label><input type="checkbox" id="convert-center" checked> Center Model Pivot to Base</label>
+        </div>
+
+        <button class="btn" id="btn-convert" onclick="convertModel()">
+          <span>Convert with Blender 5.2.2</span>
+        </button>
+
+        <a id="btn-download-converted" href="#" download class="btn btn-secondary" style="display: none; text-decoration: none;">
+          Download Converted .GLB
+        </a>
+
+        <div class="stats-card" id="convert-stats" style="display: none;">
+          <div><div class="stat-label">In Polys</div><div class="stat-value" id="conv-in-polys">-</div></div>
+          <div><div class="stat-label">Out Polys</div><div class="stat-value" id="conv-out-polys">-</div></div>
+          <div><div class="stat-label">Reduction</div><div class="stat-value" id="conv-reduc">-</div></div>
+          <div><div class="stat-label">Duration</div><div class="stat-value" id="conv-time">-</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="padding: 12px;">
+        <h2>Converted 3D Model Inspection</h2>
+        <div class="viewport-box">
+          <canvas id="three-canvas-convert"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: STUDIO IMAGE RENDERER -->
+  <div id="tab-render" class="tab-content">
+    <div class="grid-layout">
+      <div class="panel">
+        <h2>Studio Background Renderer</h2>
+
+        <div class="form-group">
+          <label>Render Engine</label>
+          <select id="render-engine" class="form-control">
+            <option value="BLENDER_EEVEE">Eevee (Fast, High Quality)</option>
+            <option value="CYCLES">Cycles (Path Tracing)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Camera Angle</label>
+          <select id="render-angle" class="form-control">
+            <option value="isometric">Classic RA2 Isometric (45&deg;)</option>
+            <option value="hero">Hero Low-Angle Dramatic</option>
+            <option value="front">Front Orthographic</option>
+            <option value="top">Top-Down Tactical</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Resolution</label>
+          <select id="render-res" class="form-control">
+            <option value="512">512 x 512 (Fast)</option>
+            <option value="800" selected>800 x 800 (Standard)</option>
+            <option value="1024">1024 x 1024 (HD)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Samples</label>
+          <input type="number" id="render-samples" value="32" min="8" max="128" class="form-control">
+        </div>
+
+        <button class="btn" id="btn-render" onclick="renderImage()">
+          <span>Render Image with Blender 5.2.2</span>
+        </button>
+
+        <a id="btn-download-render" href="#" download class="btn btn-secondary" style="display: none; text-decoration: none;">
+          Download Rendered PNG
+        </a>
+
+        <div class="stats-card" id="render-stats" style="display: none;">
+          <div><div class="stat-label">Engine</div><div class="stat-value" id="rnd-engine">-</div></div>
+          <div><div class="stat-label">Resolution</div><div class="stat-value" id="rnd-res">-</div></div>
+          <div><div class="stat-label">Duration</div><div class="stat-value" id="rnd-time">-</div></div>
+        </div>
+      </div>
+
+      <div class="panel" style="padding: 12px;">
+        <h2>Render Output (Alpha Transparent)</h2>
+        <div class="render-preview-box">
+          <img id="render-output-img" src="" alt="Render Preview" style="display: none;">
+          <div id="render-placeholder" style="color: #8b949e; font-size: 0.95rem;">Click 'Render Image' to generate with Blender 5.2.2</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 4: 360 TURNTABLE ANIMATOR -->
+  <div id="tab-turntable" class="tab-content">
+    <div class="grid-layout">
+      <div class="panel">
+        <h2>Turntable Animation</h2>
+        
+        <div class="form-group">
+          <label>Frame Count</label>
+          <select id="tt-frames" class="form-control">
+            <option value="8">8 Frames (Ultra-Fast)</option>
+            <option value="16" selected>16 Frames (Smooth)</option>
+            <option value="24">24 Frames (Fluid)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Engine</label>
+          <select id="tt-engine" class="form-control">
+            <option value="BLENDER_EEVEE">BLENDER_EEVEE</option>
+            <option value="CYCLES">CYCLES</option>
+          </select>
+        </div>
+
+        <button class="btn" id="btn-turntable" onclick="renderTurntable()">
+          <span>Generate Turntable with Blender 5.2.2</span>
+        </button>
+      </div>
+
+      <div class="panel" style="padding: 12px;">
+        <h2>Interactive 360 Player</h2>
+        <div class="render-preview-box">
+          <img id="turntable-frame-img" src="" alt="Turntable Frame" style="display: none;">
+          <div id="tt-placeholder" style="color: #8b949e;">Click 'Generate Turntable' to produce full 360 rotation frames</div>
+        </div>
+        <div class="turntable-controls" id="tt-controls" style="display: none;">
+          <button class="tab-btn" onclick="togglePlayTurntable()" id="tt-play-btn" style="border: 1px solid var(--border); border-radius: 4px; padding: 6px 14px;">Play</button>
+          <input type="range" id="tt-scrubber" min="0" max="0" value="0" oninput="setTurntableFrame(this.value)">
+          <span id="tt-frame-label" style="font-size: 0.85rem; color: #8b949e; width: 60px;">0 / 0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 5: REST API & DOCUMENTATION -->
+  <div id="tab-api" class="tab-content">
+    <div class="panel" style="max-width: 900px; margin: 0 auto;">
+      <h2>REST API Reference & cURL Integration</h2>
+      <p style="margin-bottom: 20px; font-size: 0.9rem; color: #8b949e;">
+        You can trigger Blender 5.2.2 LTS directly from any backend, frontend, build step, or Python/Node script using standard HTTP calls.
+      </p>
+
+      <h3 style="color: #58a6ff; font-size: 1rem; margin-top: 16px;">1. Health Check (Blender 5.2.2 Lock)</h3>
+      <pre><code>curl http://localhost:4000/api/health</code></pre>
+
+      <h3 style="color: #58a6ff; font-size: 1rem; margin-top: 20px;">2. Generate Procedural 3D Model (.GLB)</h3>
+      <pre><code>curl -X POST http://localhost:4000/api/model/generate \
+  -H "Content-Type: application/json" \
+  -d '{"type": "tank", "faction": "soviet", "color": "#d32f2f"}'</code></pre>
+
+      <h3 style="color: #58a6ff; font-size: 1rem; margin-top: 20px;">3. Convert & Decimate 3D Model</h3>
+      <pre><code>curl -X POST http://localhost:4000/api/model/convert \
+  -F "file=@my_mesh.obj" \
+  -F "decimate=0.5" \
+  -F "center=true"</code></pre>
+
+      <h3 style="color: #58a6ff; font-size: 1rem; margin-top: 20px;">4. Background Studio Render (Eevee / Cycles)</h3>
+      <pre><code>curl -X POST http://localhost:4000/api/render/image \
+  -H "Content-Type: application/json" \
+  -d '{"modelUrl": "/output/models/soviet_tank.glb", "engine": "BLENDER_EEVEE", "angle": "isometric", "width": 800, "height": 800}'</code></pre>
+
+      <h3 style="color: #58a6ff; font-size: 1rem; margin-top: 20px;">5. 360 Turntable Animation</h3>
+      <pre><code>curl -X POST http://localhost:4000/api/render/turntable \
+  -H "Content-Type: application/json" \
+  -d '{"modelUrl": "/output/models/soviet_tank.glb", "frames": 16, "engine": "BLENDER_EEVEE"}'</code></pre>
+    </div>
+  </div>
+
+  <script>
+    let activeGlbUrl = '';
+    let turntableFrames = [];
+    let turntablePlayInterval = null;
+
+    // Tab Navigation
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+      window.dispatchEvent(new Event('resize'));
+    }
+
+    // Health Check on load
+    async function checkHealth() {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        if (data.blender.isTargetVersion) {
+          document.getElementById('health-text').innerText = `Locked & Connected: ${data.blender.version}`;
+        } else {
+          document.getElementById('health-text').innerText = `Connected: ${data.blender.version}`;
+        }
+      } catch (e) {
+        document.getElementById('health-text').innerText = 'Offline';
+        document.querySelector('#health-badge .dot').style.background = '#e53935';
+      }
+    }
+    checkHealth();
+
+    // Three.js Viewport Setup
+    let scene, camera, renderer, controls, currentMesh;
+    function initThree() {
+      const canvas = document.getElementById('three-canvas');
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
+      camera.position.set(4, 4, 4);
+
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.5);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+      dirLight.position.set(5, 10, 7);
+      scene.add(dirLight);
+
+      const grid = new THREE.GridHelper(10, 20, 0x555555, 0x222222);
+      scene.add(grid);
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', () => {
+        if (!canvas.clientWidth || !canvas.clientHeight) return;
+        camera.aspect = canvas.clientWidth / canvas.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+      });
+    }
+    window.addEventListener('DOMContentLoaded', initThree);
+
+    function loadModelIntoThree(url) {
+      const loader = new THREE.GLTFLoader();
+      loader.load(url, (gltf) => {
+        if (currentMesh) scene.remove(currentMesh);
+        currentMesh = gltf.scene;
+        scene.add(currentMesh);
+
+        // Center and fit camera
+        const box = new THREE.Box3().setFromObject(currentMesh);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        currentMesh.position.x += (currentMesh.position.x - center.x);
+        currentMesh.position.y += (currentMesh.position.y - center.y);
+        currentMesh.position.z += (currentMesh.position.z - center.z);
+        controls.reset();
+        camera.position.set(size.x * 2, size.y * 2, size.z * 2.5);
+        camera.lookAt(0, 0, 0);
+      });
+    }
+
+    // 1. Generate Model
+    async function generateModel() {
+      const btn = document.getElementById('btn-generate');
+      btn.disabled = true;
+      btn.innerHTML = 'Generating with Blender 5.2.2...';
+
+      const type = document.getElementById('gen-type').value;
+      const faction = document.getElementById('gen-faction').value;
+      const color = document.getElementById('gen-color').value;
+
+      try {
+        const res = await fetch('/api/model/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, faction, color })
+        });
+        const data = await res.json();
+        if (data.success) {
+          activeGlbUrl = data.glbUrl;
+          loadModelIntoThree(data.glbUrl);
+
+          document.getElementById('gen-stats').style.display = 'grid';
+          document.getElementById('stat-polys').innerText = data.polyCount.toLocaleString();
+          document.getElementById('stat-verts').innerText = data.vertexCount.toLocaleString();
+          document.getElementById('stat-size').innerText = `${data.fileSizeKb} KB`;
+          document.getElementById('stat-time').innerText = `${data.durationMs} ms`;
+
+          const dlBtn = document.getElementById('btn-download-glb');
+          dlBtn.href = data.glbUrl;
+          dlBtn.download = `${faction}_${type}.glb`;
+          dlBtn.style.display = 'flex';
+        } else {
+          alert('Generation failed: ' + data.error);
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Generate with Blender 5.2.2';
+      }
+    }
+
+    // 2. Convert Model
+    async function convertModel() {
+      const fileInput = document.getElementById('convert-file');
+      if (!fileInput.files[0]) {
+        alert('Please select a 3D file first.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-convert');
+      btn.disabled = true;
+      btn.innerHTML = 'Converting with Blender 5.2.2...';
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('decimate', document.getElementById('convert-ratio').value);
+      formData.append('center', document.getElementById('convert-center').checked);
+
+      try {
+        const res = await fetch('/api/model/convert', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+          activeGlbUrl = data.glbUrl;
+          loadModelIntoThree(data.glbUrl);
+
+          document.getElementById('convert-stats').style.display = 'grid';
+          document.getElementById('conv-in-polys').innerText = data.stats.inPolys.toLocaleString();
+          document.getElementById('conv-out-polys').innerText = data.stats.outPolys.toLocaleString();
+          const reduc = Math.round((1 - data.stats.outPolys / (data.stats.inPolys || 1)) * 100);
+          document.getElementById('conv-reduc').innerText = `${reduc}%`;
+          document.getElementById('conv-time').innerText = `${data.durationMs} ms`;
+
+          const dlBtn = document.getElementById('btn-download-converted');
+          dlBtn.href = data.glbUrl;
+          dlBtn.download = 'optimized_model.glb';
+          dlBtn.style.display = 'flex';
+        } else {
+          alert('Conversion failed: ' + data.error);
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Convert with Blender 5.2.2';
+      }
+    }
+
+    // 3. Render Image
+    async function renderImage() {
+      const btn = document.getElementById('btn-render');
+      btn.disabled = true;
+      btn.innerHTML = 'Rendering with Blender 5.2.2...';
+
+      const engine = document.getElementById('render-engine').value;
+      const angle = document.getElementById('render-angle').value;
+      const resVal = parseInt(document.getElementById('render-res').value, 10);
+      const samples = parseInt(document.getElementById('render-samples').value, 10);
+
+      try {
+        const res = await fetch('/api/render/image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            modelUrl: activeGlbUrl,
+            engine,
+            angle,
+            width: resVal,
+            height: resVal,
+            samples
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          const img = document.getElementById('render-output-img');
+          img.src = `${data.renderUrl}?t=${Date.now()}`;
+          img.style.display = 'block';
+          document.getElementById('render-placeholder').style.display = 'none';
+
+          document.getElementById('render-stats').style.display = 'grid';
+          document.getElementById('rnd-engine').innerText = data.engine;
+          document.getElementById('rnd-res').innerText = data.resolution;
+          document.getElementById('rnd-time').innerText = `${data.durationMs} ms`;
+
+          const dl = document.getElementById('btn-download-render');
+          dl.href = data.renderUrl;
+          dl.download = `render_${data.engine.toLowerCase()}.png`;
+          dl.style.display = 'flex';
+        } else {
+          alert('Render failed: ' + data.error);
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Render Image with Blender 5.2.2';
+      }
+    }
+
+    // 4. Turntable Animation
+    async function renderTurntable() {
+      const btn = document.getElementById('btn-turntable');
+      btn.disabled = true;
+      btn.innerHTML = 'Rendering Turntable with Blender 5.2.2...';
+
+      const frames = parseInt(document.getElementById('tt-frames').value, 10);
+      const engine = document.getElementById('tt-engine').value;
+
+      try {
+        const res = await fetch('/api/render/turntable', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelUrl: activeGlbUrl, frames, engine })
+        });
+        const data = await res.json();
+        if (data.success && data.frames.length > 0) {
+          turntableFrames = data.frames;
+          document.getElementById('tt-placeholder').style.display = 'none';
+          const img = document.getElementById('turntable-frame-img');
+          img.src = turntableFrames[0];
+          img.style.display = 'block';
+
+          const scrubber = document.getElementById('tt-scrubber');
+          scrubber.max = turntableFrames.length - 1;
+          scrubber.value = 0;
+          document.getElementById('tt-frame-label').innerText = `1 / ${turntableFrames.length}`;
+          document.getElementById('tt-controls').style.display = 'flex';
+        } else {
+          alert('Turntable render failed: ' + (data.error || 'No frames returned'));
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Generate Turntable with Blender 5.2.2';
+      }
+    }
+
+    function setTurntableFrame(index) {
+      if (turntableFrames[index]) {
+        document.getElementById('turntable-frame-img').src = turntableFrames[index];
+        document.getElementById('tt-frame-label').innerText = `${parseInt(index) + 1} / ${turntableFrames.length}`;
+      }
+    }
+
+    function togglePlayTurntable() {
+      const btn = document.getElementById('tt-play-btn');
+      if (turntablePlayInterval) {
+        clearInterval(turntablePlayInterval);
+        turntablePlayInterval = null;
+        btn.innerText = 'Play';
+      } else {
+        btn.innerText = 'Pause';
+        const scrubber = document.getElementById('tt-scrubber');
+        turntablePlayInterval = setInterval(() => {
+          let next = (parseInt(scrubber.value) + 1) % turntableFrames.length;
+          scrubber.value = next;
+          setTurntableFrame(next);
+        }, 120);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -24,10 +24,14 @@ interface Pose {
 }
 
 const smooth = (t: number) => t * t * (3 - 2 * t);
-const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const bez = (a: number, b: number, c: number, u: number) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * b + u * u * c;
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
+
+const SCRATCH_LOOK = new THREE.Vector3();
+const SCRATCH_POS = new THREE.Vector3();
+const SCRATCH_CAM = { pos: SCRATCH_POS, look: SCRATCH_LOOK };
+const SCRATCH_POSE: Pose = { x: 0, y: 0, az: 0, el: 0, zoom: 0 };
 
 /** Put the renderer's camera at a pose (free camera + matching target / zoom). */
 function applyPose(r: GameRenderer, map: GameMap, p: Pose) {
@@ -35,13 +39,13 @@ function applyPose(r: GameRenderer, map: GameMap, p: Pose) {
   r.setZoom(p.zoom);
   const tx = r.target.x;
   const tz = r.target.z;
-  const look = new THREE.Vector3(tx, groundHeight(map, tx, tz), tz);
+  SCRATCH_LOOK.set(tx, groundHeight(map, tx, tz), tz);
   let dist = 80;
   const cam = r.camera;
   if (cam instanceof THREE.PerspectiveCamera) dist = BASE_VIEW / Math.max(0.05, p.zoom) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
   const ce = Math.cos(p.el);
-  const pos = new THREE.Vector3(Math.cos(p.az) * ce, Math.sin(p.el), Math.sin(p.az) * ce).multiplyScalar(dist).add(look);
-  r.photoCam = { pos, look };
+  SCRATCH_POS.set(Math.cos(p.az) * ce, Math.sin(p.el), Math.sin(p.az) * ce).multiplyScalar(dist).add(SCRATCH_LOOK);
+  r.photoCam = SCRATCH_CAM;
 }
 
 /** Normal RTS camera pose for a ground point at a zoom (the current view rotation). */
@@ -55,7 +59,6 @@ function rtsPose(r: GameRenderer, x: number, y: number, zoom: number): Pose {
 
 export class BattleIntro {
   private t = 0;
-  private wall = performance.now();
   done = false;
   private from: Pose;
   private via: Pose;
@@ -73,7 +76,7 @@ export class BattleIntro {
     via: { x: number; y: number },
     private home: { x: number; y: number },
     private endZoom: number,
-    readonly duration = 6.5,
+    readonly duration = 3.8,
   ) {
     this.to = rtsPose(r, home.x, home.y, endZoom);
     // the camera starts on the enemy's side of the map looking back across the river
@@ -99,26 +102,24 @@ export class BattleIntro {
   /** Real seconds; returns true when the flyover has ended and the camera is handed back. */
   update(dt: number): boolean {
     if (this.done) return true;
-    // real time (slow devices drop frames rather than stretching the shot)
-    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
+    this.t += Math.min(dt, 0.1);
     const k = Math.min(1, this.t / this.duration);
     if (k >= 1) {
       this.finish();
       return true;
     }
-    const u = easeInOut(k);
+    const u = smooth(k);
     const a = this.from;
     const b = this.via;
     const c = this.to;
     const turn = smooth(Math.min(1, k * 1.15));
-    applyPose(this.r, this.map, {
-      x: bez(a.x, b.x, c.x, u),
-      y: bez(a.y, b.y, c.y, u),
-      az: lerp(a.az, c.az, turn),
-      // rise high over the river mid-flight, settle into the RTS view at the end
-      el: lerp(a.el, c.el, u) + (b.el - (a.el + c.el) / 2) * Math.sin(Math.PI * u),
-      zoom: Math.exp(lerp(Math.log(a.zoom), Math.log(c.zoom), u)) * (1 - (1 - b.zoom) * Math.sin(Math.PI * u)),
-    });
+    SCRATCH_POSE.x = bez(a.x, b.x, c.x, u);
+    SCRATCH_POSE.y = bez(a.y, b.y, c.y, u);
+    SCRATCH_POSE.az = lerp(a.az, c.az, turn);
+    // rise high over the river mid-flight, settle into the RTS view at the end
+    SCRATCH_POSE.el = lerp(a.el, c.el, u) + (b.el - (a.el + c.el) / 2) * Math.sin(Math.PI * u);
+    SCRATCH_POSE.zoom = Math.exp(lerp(Math.log(a.zoom), Math.log(c.zoom), u)) * (1 - (1 - b.zoom) * Math.sin(Math.PI * u));
+    applyPose(this.r, this.map, SCRATCH_POSE);
     return false;
   }
 
@@ -135,7 +136,6 @@ export class BattleIntro {
 
 export class BattleOutro {
   private t = 0;
-  private wall = performance.now();
   done = false;
   private from: Pose;
   private to: Pose;
@@ -159,19 +159,23 @@ export class BattleOutro {
 
   /** Simulation speed during the outro (slow motion). */
   get timeScale() {
-    return this.done ? 1 : 0.28;
+    return this.done ? 1 : 0.55;
   }
 
   update(dt: number): boolean {
     if (this.done) return true;
-    // real time (slow devices drop frames rather than stretching the shot)
-    this.t = Math.max(this.t + Math.min(dt, 0.25), (performance.now() - this.wall) / 1000 - 1);
+    this.t += Math.min(dt, 0.1);
     const k = easeOut(Math.min(1, this.t / 2.6));
     // after the push-in keep a slow orbit going
     const drift = Math.max(0, this.t - 2.6) * 0.07;
     const a = this.from;
     const b = this.to;
-    applyPose(this.r, this.map, { x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k), az: lerp(a.az, b.az, k) + drift, el: lerp(a.el, b.el, k), zoom: lerp(a.zoom, b.zoom, k) });
+    SCRATCH_POSE.x = lerp(a.x, b.x, k);
+    SCRATCH_POSE.y = lerp(a.y, b.y, k);
+    SCRATCH_POSE.az = lerp(a.az, b.az, k) + drift;
+    SCRATCH_POSE.el = lerp(a.el, b.el, k);
+    SCRATCH_POSE.zoom = lerp(a.zoom, b.zoom, k);
+    applyPose(this.r, this.map, SCRATCH_POSE);
     if (this.t >= this.duration) {
       this.done = true;
       return true;

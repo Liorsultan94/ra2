@@ -185,7 +185,7 @@ export function probeDevice(bench = true): DeviceProbe {
     gpuClass: 'unknown',
     mem: nav.deviceMemory ?? 0,
     cores: nav.hardwareConcurrency || 4,
-    dpr: (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
+    dpr: (typeof window !== 'undefined' && Math.min(window.devicePixelRatio || 1, 1.25)) || 1,
     coarse: typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches,
     bench: -1,
   };

@@ -29,7 +29,7 @@ const FPS = 15;
 /** Largest rendered side (px) of the supersampled frame, and of the displayed canvas. */
 const MAX_PX = 512;
 const MAX_OUT = 384;
-const CACHE = 4;
+const CACHE = 16;
 
 interface Entry {
   key: string;
@@ -55,6 +55,7 @@ export class LivePortrait {
   private readonly floor: THREE.Mesh;
   private readonly cache = new Map<string, Entry>();
   private cur: Entry | null = null;
+  private pendingKey = '';
   private host: HTMLElement | null = null;
   private getEntity: (() => Entity | undefined) | null = null;
   private raf = 0;
@@ -115,11 +116,30 @@ export class LivePortrait {
     const d = DEFS[e.def];
     const key = `${d.model}:${style.team}:${style.faction}`;
     if (this.cur?.key !== key) {
-      this.cur = this.entry(key, d.model, style, d.kind === 'unit' && !!unitDef(e.def).air);
-      this.angle = 0.65;
-      this.dist = 0;
-      this.drawn = false;
-      this.setAccent(style);
+      const hit = this.cache.get(key);
+      if (hit) {
+        this.pendingKey = '';
+        this.cache.delete(key);
+        this.cache.set(key, hit);
+        this.cur = hit;
+        this.show(hit);
+        this.angle = 0.65;
+        this.dist = 0;
+        this.drawn = false;
+        this.setAccent(style);
+      } else {
+        this.pendingKey = key;
+        const air = d.kind === 'unit' && !!unitDef(e.def).air;
+        requestAnimationFrame(() => {
+          if (this.pendingKey !== key || this.disposed) return;
+          this.pendingKey = '';
+          this.cur = this.entry(key, d.model, style, air);
+          this.angle = 0.65;
+          this.dist = 0;
+          this.drawn = false;
+          this.setAccent(style);
+        });
+      }
     }
     if (this.host !== host || this.canvas.parentElement !== host) {
       this.host = host;
@@ -133,6 +153,7 @@ export class LivePortrait {
   }
 
   detach() {
+    this.pendingKey = '';
     this.host?.classList.remove('live');
     this.canvas.remove();
     this.host = null;

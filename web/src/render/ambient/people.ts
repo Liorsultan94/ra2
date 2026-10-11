@@ -351,12 +351,12 @@ export class People {
     this.scanBuildings();
     this.blockedFn = (tx, ty) => this.busy[ty * this.map.w + tx] === 1;
     this.group.name = 'ambient-people';
-    // ---- budgets
+    // ---- budgets (halved to reduce CPU/GPU draw & pathing load)
     const qk = quality === 'high' ? 1.7 : quality === 'medium' ? 1 : 0.22;
     const pk = phone ? 0.8 : 1;
-    let pop = Math.round((urban ? 72 : 40) * qk * pk);
-    this.cap = quality === 'high' ? 140 : quality === 'medium' ? 60 : 16;
-    if (phone) this.cap = Math.min(this.cap, 60);
+    let pop = Math.round((urban ? 36 : 20) * qk * pk);
+    this.cap = quality === 'high' ? 70 : quality === 'medium' ? 30 : 8;
+    if (phone) this.cap = Math.min(this.cap, 30);
     // ---- places
     this.findDoors();
     this.findSpots();

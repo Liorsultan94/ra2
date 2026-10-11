@@ -422,6 +422,7 @@ export class World {
         this.pass[i] = on && !through ? 0 : terrainPassable(this.map, b.tx + x, b.ty + y) ? 1 : 0;
       }
     }
+    this.pf.clearCache();
   }
 
   // ------------------------------------------------------------ helpers
@@ -658,7 +659,7 @@ export class World {
           if (d.engineer && t.kind === 'building') {
             const bd = buildingDef(t.def);
             if (t.owner !== pid || t.hp < t.maxHp) {
-              if (t.owner === pid || bd.capturable || t.owner >= 0) e.order = { type: 'capture', target: t.id };
+              if (t.owner === pid || bd.capturable || t.owner >= 0) e.order = { type: 'capture', target: t.id, repair: t.owner === pid };
             }
             continue;
           }
@@ -674,7 +675,8 @@ export class World {
       case 'capture': {
         const t = this.get(cmd.target);
         if (!t || t.kind !== 'building') break;
-        for (const e of own(cmd.ids)) if (unitDef(e.def).engineer) e.order = { type: 'capture', target: t.id };
+        const isRepair = t.owner === pid;
+        for (const e of own(cmd.ids)) if (unitDef(e.def).engineer) e.order = { type: 'capture', target: t.id, repair: isRepair };
         break;
       }
       case 'stop':
@@ -805,8 +807,12 @@ export class World {
         break;
       }
       case 'airdrop': {
-        // support power: needs a completed airfield (airdropAt >= 0) and a full charge
+        // support power: needs a completed airfield (airdropAt >= 0), a full charge, and an explored drop zone
         if (p.airdropAt < 0 || this.tick < p.airdropAt || !Number.isFinite(cmd.x) || !Number.isFinite(cmd.y)) break;
+        const tx = Math.floor(cmd.x);
+        const ty = Math.floor(cmd.y);
+        if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) break;
+        if (!p.explored[ty * this.map.w + tx]) break;
         p.airdropFrom = this.tick;
         p.airdropAt = this.tick + AIRDROP_COOLDOWN;
         this.launchAirdrop(p, cmd.x, cmd.y);
@@ -1044,10 +1050,10 @@ export class World {
     e.path = unitDef(e.def).air ? [] : this.pf.find(sx, sy, gx, gy);
     e.pathIdx = 0;
     e.moving = true;
-    e.repathAt = this.tick + 20;
+    e.repathAt = this.tick + 20 + (e.id % 7);
     e.progX = e.x;
     e.progY = e.y;
-    e.progAt = this.tick;
+    e.progAt = this.tick + (e.id % 5);
     e.progIdx = 0;
     e.progBest = 1e9;
     e.noProg = 0;
@@ -1711,10 +1717,23 @@ export class World {
         const t = this.get(o.target);
         if (!t || t.kind !== 'building') {
           e.order = { type: 'idle' };
+          e.path = null;
+          break;
+        }
+        // If ordered to capture an enemy/neutral building, stop if it is already ours
+        if (!o.repair && t.owner === e.owner) {
+          e.order = { type: 'idle' };
+          e.path = null;
+          break;
+        }
+        // If ordered to repair our building, stop if it is already at full HP or no longer ours
+        if (o.repair && (t.owner !== e.owner || t.hp >= t.maxHp)) {
+          e.order = { type: 'idle' };
+          e.path = null;
           break;
         }
         if (this.distTo(e, t) < 0.75) {
-          this.engineerEnter(e, t);
+          this.engineerEnter(e, t, o);
           break;
         }
         this.chase(e, t, d);
@@ -1927,19 +1946,38 @@ export class World {
     return [cx, cy];
   }
 
-  private engineerEnter(e: Entity, t: Entity) {
+  private engineerEnter(e: Entity, t: Entity, o?: { repair?: boolean }) {
     if (t.def === 'bridgehut') {
       if (bridgeHutEnter(this, t, e)) this.remove(e);
-      else e.order = { type: 'idle' };
+      else {
+        e.order = { type: 'idle' };
+        e.path = null;
+      }
       return;
     }
     const td = buildingDef(t.def);
     if (td.garrison && t.owner !== e.owner) {
       e.order = { type: 'idle' }; // engineers can't clear or capture civilian buildings (garrison.ts)
+      e.path = null;
       return;
     }
     if (t.owner === e.owner) {
-      t.hp = t.maxHp;
+      // If the engineer was ordered to capture an enemy/neutral building, but it is already ours:
+      // He cannot enter it and stands outside!
+      if (o && !o.repair) {
+        e.order = { type: 'idle' };
+        e.path = null;
+        return;
+      }
+      // If repairing our building, only enter if it's damaged
+      if (t.hp < t.maxHp) {
+        t.hp = t.maxHp;
+        this.remove(e);
+      } else {
+        e.order = { type: 'idle' };
+        e.path = null;
+      }
+      return;
     } else if (t.owner === -1 ? td.capturable : true) {
       const old = t.owner;
       t.owner = e.owner;
@@ -1948,8 +1986,12 @@ export class World {
       t.targetId = -1;
       this.events.push({ t: 'captured', id: t.id, owner: e.owner });
       if (old >= 0) this.players[old].stats.lost++;
-    } else return;
-    this.remove(e);
+      this.remove(e);
+    } else {
+      e.order = { type: 'idle' };
+      e.path = null;
+      return;
+    }
   }
 
   // ------------------------------------------------------------ harvesting
@@ -1984,7 +2026,8 @@ export class World {
     if (b.cooldown > 0) b.cooldown--;
     if (b.owner < 0) return;
     const p = this.players[b.owner];
-    if (d.weapon && b.buildAnim >= 1 && !(d.needsPower && this.isLowPower(p))) {
+    const unpowered = this.isLowPower(p) && (d.category === 'defense' || !!d.needsPower);
+    if (d.weapon && b.buildAnim >= 1 && !unpowered) {
       this.processBurst(b);
       const bw = WEAPONS[d.weapon];
       if (bw.intercept) tryIntercept(this, b, bw);
@@ -1997,6 +2040,8 @@ export class World {
       }
       b.targetId = t ? t.id : -1;
       if (t) this.engage(b, t);
+    } else if (unpowered) {
+      b.targetId = -1;
     }
     if (b.repairing) {
       if (b.hp >= b.maxHp) b.repairing = false;
@@ -2210,8 +2255,12 @@ export class World {
     }
     // illumination flares: their owner sees the lit area as by day
     for (const f of this.flares) if (flareLit(f, this.tick) && this.players[f.owner]) reveal(this.players[f.owner], Math.floor(f.x), Math.floor(f.y), FLARE_RADIUS);
-    // classic (RA2, by day): explored ground stays revealed for good - what is there stays visible and targetable
-    if (this.fog === 'classic') for (const p of this.players) p.visible.set(p.explored);
+    // classic (RA2, by day): explored ground stays revealed for good while powered; on low power vision cuts to direct line-of-sight
+    if (this.fog === 'classic') {
+      for (const p of this.players) {
+        if (!this.isLowPower(p)) p.visible.set(p.explored);
+      }
+    }
   }
 
   // ------------------------------------------------------------ victory
@@ -2272,8 +2321,10 @@ export class World {
       e.pz = e.z;
     }
     const cmds = this.pending;
-    this.pending = [];
-    for (const c of cmds) this.applyCommand(c.player, c.cmd);
+    if (cmds.length > 0) {
+      this.pending = [];
+      for (let i = 0; i < cmds.length; i++) this.applyCommand(cmds[i].player, cmds[i].cmd);
+    }
 
     this.rebuildGrid();
     updateBaseDefense(this); // idle units near an attacked base engage on their own (basedefense.ts)
@@ -2302,13 +2353,24 @@ export class World {
     }
     if (this.tick % TPS === 0) this.checkVictory();
     if (this.tick % 50 === 0) {
-      for (const e of this.list) if (e.dead) this.entities.delete(e.id);
-      this.list = this.list.filter((e) => !e.dead);
+      let write = 0;
+      for (let i = 0; i < this.list.length; i++) {
+        const e = this.list[i];
+        if (e.dead) {
+          this.entities.delete(e.id);
+        } else {
+          this.list[write++] = e;
+        }
+      }
+      this.list.length = write;
     }
     for (const c of this.controllers) c.update();
   }
 
+  private static readonly EMPTY_EVENTS: SimEvent[] = [];
+
   drainEvents(): SimEvent[] {
+    if (this.events.length === 0) return World.EMPTY_EVENTS;
     const ev = this.events;
     this.events = [];
     return ev;

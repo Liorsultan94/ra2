@@ -14,6 +14,7 @@ export class PathFinder {
   private heap: Int32Array;
   private heapF: Float32Array;
   private heapSize = 0;
+  private cache = new Map<number, number[]>();
 
   constructor(
     private w: number,
@@ -27,6 +28,10 @@ export class PathFinder {
     this.closed = new Uint32Array(n);
     this.heap = new Int32Array(n * 2);
     this.heapF = new Float32Array(n * 2);
+  }
+
+  clearCache() {
+    this.cache.clear();
   }
 
   private push(node: number, f: number) {
@@ -74,8 +79,16 @@ export class PathFinder {
    * Returns a list of tile indices from (sx,sy) (exclusive) to the goal or to
    * the closest reachable tile if the goal can't be reached.
    */
-  find(sx: number, sy: number, gx: number, gy: number, maxNodes = 12000): number[] {
+  find(sx: number, sy: number, gx: number, gy: number, maxNodes = 6000): number[] {
     const w = this.w;
+    if (sx === gx && sy === gy) return [];
+    const goal = gy * w + gx;
+    if (Math.abs(gx - sx) <= 12 && Math.abs(gy - sy) <= 12 && this.lineClear(sx, sy, gx, gy)) {
+      return [goal];
+    }
+    const key = ((sx & 0xff) << 24) | ((sy & 0xff) << 16) | ((gx & 0xff) << 8) | (gy & 0xff);
+    const cached = this.cache.get(key);
+    if (cached) return cached.slice();
     this.cur++;
     if (this.cur > 0xfffffff0) {
       this.stamp.fill(0);
@@ -84,7 +97,6 @@ export class PathFinder {
     }
     const cur = this.cur;
     const start = sy * w + sx;
-    const goal = gy * w + gx;
     this.heapSize = 0;
     const heur = (x: number, y: number) => {
       const dx = Math.abs(x - gx);
@@ -138,7 +150,10 @@ export class PathFinder {
       n = this.parent[n];
     }
     path.reverse();
-    return this.smooth(sx, sy, path);
+    const res = this.smooth(sx, sy, path);
+    if (this.cache.size >= 256) this.cache.clear();
+    this.cache.set(key, res);
+    return res.slice();
   }
 
   /** Straight walkable line between tile centers (supercover walk). */

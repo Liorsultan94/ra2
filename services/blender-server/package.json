@@ -1,0 +1,16 @@
+{
+  "name": "blender-ra2-server",
+  "version": "1.0.0",
+  "description": "Blender 5.2.2 LTS Server for Procedural 3D Generation, Conversion and Background Rendering",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

@@ -20,7 +20,7 @@ export function speedFactor(s: GameSpeed | string | undefined): number {
 }
 
 /** Most ticks run in one frame; a longer stall drops the backlog instead of spiralling. */
-export const MAX_STEPS = 6;
+export const MAX_STEPS = 2;
 
 /** Fixed-step accumulator of the game loop. */
 export class TickPacer {

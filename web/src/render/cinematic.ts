@@ -25,7 +25,7 @@ export interface CineShot {
   label: string;
 }
 
-const SLOW = 0.3;
+const SLOW = 0.55;
 const COOLDOWN = 25;
 const EASE_IN = 0.45;
 const EASE_OUT = 0.6;
@@ -52,8 +52,8 @@ export class CinematicDirector {
     const s = this.shot;
     if (!s) return 1;
     const end = this.skipAt >= 0 ? this.skipAt + this.skipDur : s.duration;
-    const fadeIn = smooth(Math.min(1, this.t / 0.25));
-    const fadeOut = smooth(Math.max(0, Math.min(1, (end - this.t) / (this.skipAt >= 0 ? this.skipDur : 0.5))));
+    const fadeIn = smooth(Math.min(1, this.t / EASE_IN));
+    const fadeOut = smooth(Math.max(0, Math.min(1, (end - this.t) / (this.skipAt >= 0 ? this.skipDur : EASE_OUT))));
     return 1 - (1 - SLOW) * Math.min(fadeIn, fadeOut);
   }
 
@@ -92,9 +92,10 @@ export class CinematicDirector {
     this.t += realDt;
     const f = s.focus();
     if (f) {
-      // follow a moving subject softly
-      this.lastFocus.x += (f.x - this.lastFocus.x) * Math.min(1, realDt * 4);
-      this.lastFocus.y += (f.y - this.lastFocus.y) * Math.min(1, realDt * 4);
+      // follow a moving subject softly with framerate-independent exponential damping
+      const followAlpha = 1 - Math.exp(-realDt * 5);
+      this.lastFocus.x += (f.x - this.lastFocus.x) * followAlpha;
+      this.lastFocus.y += (f.y - this.lastFocus.y) * followAlpha;
     }
     let k: number; // 0 = player's view, 1 = full push-in on the event
     if (this.skipAt >= 0) {
@@ -113,7 +114,7 @@ export class CinematicDirector {
       return;
     }
     // the push-in only moves part of the way so the player keeps their bearings
-    const kk = k * 0.85;
+    const kk = k * 0.75;
     cam.centerOn(this.home.x + (this.lastFocus.x - this.home.x) * kk, this.home.y + (this.lastFocus.y - this.home.y) * kk);
     cam.setZoom(this.home.zoom * (1 + (s.push - 1) * k));
   }

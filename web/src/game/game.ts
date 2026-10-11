@@ -92,7 +92,14 @@ export class Game {
   private pacer = new TickPacer();
   private hudTimer = 0;
   private mmTimer = 0;
-  paused = false;
+  private _paused = false;
+  get paused(): boolean {
+    return this._paused;
+  }
+  set paused(v: boolean) {
+    this._paused = v;
+    this.hud?.setPaused(v);
+  }
   /** Tick-rate multiplier (game speed setting, pace.ts): never changes what a tick does, only how often one runs. */
   speed = 1;
   /** Early-game grace: the enemy AI launches no attack before this tick (0 = none; sim/peace.ts). */
@@ -362,17 +369,19 @@ export class Game {
     const hx = mcv ? mcv.x : me.startX + 0.5;
     const hy = mcv ? mcv.y : me.startY + 0.5;
     if (this.opts.briefing === 'quick' || !this.brief) {
+      this.cameos.paused = false;
       this.startBattleClock();
       return;
     }
+    this.cameos.paused = true;
     const m = this.world.map;
     const foe = m.starts[1 - this.local] ?? { x: m.w / 2, y: m.h / 2 };
     const via = m.bridges[0] ?? { x: m.w / 2, y: m.h / 2 };
-    this.intro = new BattleIntro(this.renderer, m, { x: foe.x + 0.5, y: foe.y + 0.5 }, via, { x: hx, y: hy }, this.renderer.zoom, 6.5);
+    this.intro = new BattleIntro(this.renderer, m, { x: foe.x + 0.5, y: foe.y + 0.5 }, via, { x: hx, y: hy }, this.renderer.zoom, 3.8);
     this.card = new CineCard(this.hud.viewWrap, () => this.skipIntro());
     this.hud.root.classList.add('intro-on');
     const you = this.brief.you;
-    this.introCardAt = [0.5, 4.9];
+    this.introCardAt = [0.3, 2.7];
     this.introCardShown = 0;
     this.cardText = { kicker: `${you.name} · Operation`, flag: flagDataUrl(you.faction), title: this.brief.codename, sub: `${this.world.map.name} · ${this.brief.time.split(' · ')[0]}`, tone: 'intro' };
     this.audio.sting('heavy');
@@ -393,6 +402,7 @@ export class Game {
     this.card?.close();
     this.card = null;
     this.hud.root.classList.remove('intro-on');
+    this.cameos.paused = false;
     this.startBattleClock();
   }
 
@@ -420,10 +430,12 @@ export class Game {
       .catch((e) => !this.destroyed && console.warn('[warmup] failed', e))
       .finally(() => {
         if (this.destroyed) return;
-        this.cameos.paused = false;
         this.warming = false;
         if (this.briefing) this.briefing.setReady(() => this.deploy());
-        else this.hud.setLoading(null);
+        else {
+          this.cameos.paused = false;
+          this.hud.setLoading(null);
+        }
         this.last = performance.now();
       });
   }
@@ -541,6 +553,7 @@ export class Game {
       return;
     }
     if (this.outro && this.outro.update(dt)) this.endOutro();
+    this.renderer.cinematicActive = this.cine.active;
     if (this.cine.active) this.cine.update(dt, this.renderer);
     this.hud.setCinematic(this.cine.active);
     const ts = this.cine.timeScale * (this.outro ? this.outro.timeScale : 1);
@@ -599,7 +612,9 @@ export class Game {
     let fps = 0;
     if (this.opts.attract) fps = 30;
     else if (this.photo.active) fps = now - this.lastInput > 1500 && !this.photo.busy() ? 10 : 0;
-    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) fps = 5;
+    else if (this.paused && !this.warming && !this.briefing && !this.intro && !this.outro) {
+      fps = now - this.lastInput > 1500 && !this.keys.size && !this.drag ? 10 : 0;
+    }
     if (!fps) return false;
     if (now - this.gateShown < 1000 / fps - 2) return true;
     this.gateShown = now;
@@ -693,10 +708,11 @@ export class Game {
     const speed = 900 * dt;
     let dx = 0;
     let dy = 0;
-    if (this.keys.has('ArrowLeft')) dx -= speed;
-    if (this.keys.has('ArrowRight')) dx += speed;
-    if (this.keys.has('ArrowUp')) dy -= speed;
-    if (this.keys.has('ArrowDown')) dy += speed;
+    const arrowOrW = (arr: string, w: string) => this.keys.has(arr) || (this.paused && (this.keys.has(w) || this.keys.has(w.toUpperCase())));
+    if (arrowOrW('ArrowLeft', 'a')) dx -= speed;
+    if (arrowOrW('ArrowRight', 'd')) dx += speed;
+    if (arrowOrW('ArrowUp', 'w')) dy -= speed;
+    if (arrowOrW('ArrowDown', 's')) dy += speed;
     if (this.mouse.inside && this.mouse.type === 'mouse' && !this.drag && document.hasFocus()) {
       const rect = this.hud.viewWrap.getBoundingClientRect();
       const m = 8;
@@ -1060,9 +1076,20 @@ export class Game {
     if (this.hintShown && d.kind === 'building') this.hud.showHint(null);
   }
 
-  private onTool(t: 'repair' | 'sell' | 'menu' | 'boxselect') {
+  /** Toggle tactical pause: freezes simulation while allowing free camera exploration and unit inspection. */
+  togglePause(force?: boolean) {
+    this.audio.unlock();
+    this.paused = force !== undefined ? force : !this.paused;
+    this.sfx(this.paused ? 'click' : 'ack');
+  }
+
+  private onTool(t: 'repair' | 'sell' | 'menu' | 'boxselect' | 'pause') {
     this.audio.unlock();
     this.sfx('click');
+    if (t === 'pause') {
+      this.togglePause();
+      return;
+    }
     if (t === 'menu') {
       this.cb.onMenu();
       return;
@@ -1394,8 +1421,11 @@ export class Game {
       if (harvesters.length === units.length && w.map.ore[tile] > 0) {
         return { cursor: 'harvest', run: () => this.order({ type: 'harvest', ids: harvesters.map((u) => u.id), x: g.x, y: g.y }, null, false, g) };
       }
-      const allAir = units.every((u) => unitDef(u.def).air);
-      const passable = allAir || terrainPassable(w.map, Math.floor(g.x), Math.floor(g.y));
+      const allWaterTraversable = units.every((u) => {
+        const d = unitDef(u.def);
+        return d.air || d.amphibious;
+      });
+      const passable = allWaterTraversable || terrainPassable(w.map, Math.floor(g.x), Math.floor(g.y));
       const attackMove = this.mode === 'attackMove' || ctrl;
       if (!passable && this.local >= 0 && w.players[this.local].explored[tile]) return { cursor: 'nomove', run: () => this.sfx('error') };
       return {
@@ -1627,14 +1657,29 @@ export class Game {
     s.height = `${Math.abs(y1 - y0)}px`;
   }
 
+  private boxCorners = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  private boxProj = { x: 0, y: 0 };
+
   private boxSelect(x0: number, y0: number, x1: number, y1: number, add: boolean) {
     const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)];
     const [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)];
+    const [c0, c1, c2, c3] = this.boxCorners;
+    this.renderer.screenToGround(ax, ay, c0);
+    this.renderer.screenToGround(bx, ay, c1);
+    this.renderer.screenToGround(bx, by, c2);
+    this.renderer.screenToGround(ax, by, c3);
+    const pad = 2.0;
+    const gMinX = Math.min(c0.x, c1.x, c2.x, c3.x) - pad;
+    const gMaxX = Math.max(c0.x, c1.x, c2.x, c3.x) + pad;
+    const gMinY = Math.min(c0.y, c1.y, c2.y, c3.y) - pad;
+    const gMaxY = Math.max(c0.y, c1.y, c2.y, c3.y) + pad;
+
     const ids: number[] = [];
     for (const e of this.world.list) {
       if (e.dead || e.owner !== this.local || e.kind !== 'unit' || unitDef(e.def).temp) continue;
+      if (e.x < gMinX || e.x > gMaxX || e.y < gMinY || e.y > gMaxY) continue;
       const p = this.renderer.entityPos(e, 1);
-      const s = this.renderer.project(p.x, p.y + 0.15, p.z);
+      const s = this.renderer.project(p.x, p.y + 0.15, p.z, this.boxProj);
       if (s.x >= ax && s.x <= bx && s.y >= ay && s.y <= by) ids.push(e.id);
     }
     // prefer combat units over harvesters when both are boxed
@@ -1668,6 +1713,22 @@ export class Game {
       return;
     }
     const target = this.pick(x, y);
+    if (this.paused) {
+      if (target) {
+        if (shift) {
+          const sel = this.renderer.selection;
+          if (sel.has(target.id)) sel.delete(target.id);
+          else sel.add(target.id);
+          this.hud.forceSelectionRefresh();
+          this.sfx('select');
+        } else {
+          this.select([target.id]);
+        }
+      } else {
+        if (!shift) this.select([]);
+      }
+      return;
+    }
     // double click selects all of that type on screen
     if (target && target.owner === this.local && target.kind === 'unit' && now - this.lastClick.t < 350 && this.lastClick.id === target.id && this.mode === 'normal') {
       const rect = this.hud.viewWrap.getBoundingClientRect();
@@ -1675,7 +1736,7 @@ export class Game {
         .filter((e) => {
           if (e.dead || e.owner !== this.local || e.def !== target.def) return false;
           const p = this.renderer.entityPos(e, 1);
-          const s = this.renderer.project(p.x, p.y, p.z);
+          const s = this.renderer.project(p.x, p.y, p.z, this.boxProj);
           return s.x >= 0 && s.y >= 0 && s.x <= rect.width && s.y <= rect.height;
         })
         .map((e) => e.id);
@@ -1707,6 +1768,16 @@ export class Game {
     // (escort mode wants a friendly unit under the finger: generous there)
     this.touchPick = units.length && this.mode !== 'guard' ? 'tight' : 'loose';
     try {
+      if (this.paused) {
+        const target = this.pick(x, y);
+        if (target) {
+          this.select([target.id]);
+          navigator.vibrate?.(6);
+        } else {
+          this.select([]);
+        }
+        return;
+      }
       if (this.mode === 'place' && this.placing) {
         this.click(x, y, false, false);
         return;
@@ -1754,18 +1825,42 @@ export class Game {
       if ((e.target as HTMLElement)?.tagName !== 'INPUT') this.enterPhotoMode();
       return;
     }
-    if (this.local < 0 || (this.paused && down)) return;
+    if (this.local < 0) return;
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
+
+    // Tactical pause toggle with Pause key or Space
+    if (down && !e.repeat && (k === 'Pause' || k === ' ' || e.code === 'Space')) {
+      e.preventDefault();
+      this.togglePause();
+      return;
+    }
+
+    // Escape always cancels current mode or opens the main pause menu
+    if (down && !e.repeat && k === 'Escape') {
+      if (this.mode !== 'normal') this.setMode('normal');
+      else this.cb.onMenu();
+      return;
+    }
+
     if (down) this.keys.add(k);
     else {
       this.keys.delete(k);
       return;
     }
+
     if (k.startsWith('Arrow')) {
       e.preventDefault();
       return;
     }
+
+    // While battle is paused, only camera rotation and panning are allowed (no unit orders)
+    if (this.paused) {
+      if (down && (k === 'q' || k === 'Q')) this.rotateView(-1);
+      if (down && (k === 'e' || k === 'E')) this.rotateView(1);
+      return;
+    }
+
     const units = this.selectedOwnUnits();
     // control groups (Ctrl+N assign, Shift+N add, N select, NN centre) and Alt+A/S/D/F stances
     if (this.ctl.onKey(e)) return;
@@ -1776,11 +1871,6 @@ export class Game {
       return;
     }
     switch (k.toLowerCase()) {
-      case 'escape':
-      case 'pause':
-        if (this.mode !== 'normal') this.setMode('normal');
-        else this.cb.onMenu();
-        break;
       case 'p':
         this.toggleOrderMode('patrol');
         break;

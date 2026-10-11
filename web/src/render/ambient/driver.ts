@@ -779,6 +779,33 @@ export class Driver {
     c.brake = c.v < prevV - 0.5 * dt || (c.v < 0.02 && c.waiting) ? 1 : Math.max(0, c.brake - dt * 3);
     c.x += hx * c.v * dt;
     c.y += hy * c.v * dt;
+
+    // Hard boundary constraint: vehicles must strictly stay on the road surface
+    if (c.loop >= 0) {
+      const lp = net.loops[c.loop];
+      const dist = Math.hypot(c.x - lp.x, c.y - lp.y);
+      const minR = lp.ri + c.wid / 2;
+      const maxR = lp.R - c.wid / 2;
+      const clampedDist = Math.max(minR, Math.min(maxR, dist));
+      if (dist > 1e-4 && Math.abs(dist - clampedDist) > 1e-4) {
+        const sc = clampedDist / dist;
+        c.x = lp.x + (c.x - lp.x) * sc;
+        c.y = lp.y + (c.y - lp.y) * sc;
+      }
+    } else if (c.line >= 0 && c.line < net.lines.length && c.pk === 0 && c.planNode < 0 && c.passed < 0 && c.kt === 0) {
+      const L = net.lines[c.line];
+      c.arc = projectNear(L, c.arc, c.x, c.y);
+      const p = pointAt(L, c.arc);
+      const nx = -p.ty * c.dir;
+      const ny = p.tx * c.dir;
+      const lat = (c.x - p.x) * nx + (c.y - p.y) * ny;
+      const maxLat = L.half + 0.06;
+      if (Math.abs(lat) > maxLat) {
+        const clampedLat = Math.max(-maxLat, Math.min(maxLat, lat));
+        c.x += nx * (clampedLat - lat);
+        c.y += ny * (clampedLat - lat);
+      }
+    }
     return out;
   }
 
