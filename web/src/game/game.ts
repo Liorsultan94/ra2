@@ -1,3 +1,4 @@
+import { hitchEventNames, hitches } from './hitches';
 import { AudioSystem, type Sfx } from '../audio/audio';
 import { AudioScene } from '../audio/scene';
 import { AIController, type Difficulty } from '../sim/ai';
@@ -549,7 +550,9 @@ export class Game {
         this.card?.hideCard();
       }
       if (this.intro.update(dt)) this.endIntro();
+      const r0 = hitches.enabled ? performance.now() : 0;
       this.renderer.render(1, dt);
+      if (hitches.enabled) this.reportHitch(now, 0, 0, 0, performance.now() - r0, 0, 'intro');
       return;
     }
     if (this.outro && this.outro.update(dt)) this.endOutro();
@@ -557,19 +560,35 @@ export class Game {
     if (this.cine.active) this.cine.update(dt, this.renderer);
     this.hud.setCinematic(this.cine.active);
     const ts = this.cine.timeScale * (this.outro ? this.outro.timeScale : 1);
+    const rec = hitches.enabled;
+    let simMs = 0;
+    let evMs = 0;
+    let ticks = 0;
+    let evNames = '';
     if (!this.paused) {
       // game speed scales the tick rate only (pace.ts): every tick is the same deterministic step
       const steps = this.pacer.advance(dt, this.speed * ts);
       for (let i = 0; i < steps; i++) {
+        const t0 = rec ? performance.now() : 0;
         this.world.step();
-        for (const ev of this.world.drainEvents()) this.onEvent(ev);
+        const evs = this.world.drainEvents();
+        const t1 = rec ? performance.now() : 0;
+        for (const ev of evs) this.onEvent(ev);
+        if (rec) {
+          simMs += t1 - t0;
+          evMs += performance.now() - t1;
+          ticks++;
+          evNames = hitchEventNames(evNames, evs);
+        }
       }
     }
     const alpha = this.paused ? 1 : this.pacer.alpha;
     this.tracker?.update();
     if (!this.cine.active && !this.photo.active && !this.outro) this.updateCamera(dt);
     if (this.local >= 0 && !this.photo.active) this.updateHover();
+    const r0 = rec ? performance.now() : 0;
     this.renderer.render(alpha, this.paused ? 0 : dt * ts);
+    const r1 = rec ? performance.now() : 0;
     this.hud.drawOverlay(alpha, this.hover, this.ctl.groupOf, now / 1000);
     this.ctlUI?.drawWaypoints(this.selectedOwnUnits(), alpha, now / 1000);
     this.hudTimer -= dt;
@@ -593,7 +612,14 @@ export class Game {
       // sweep + view frustum at ~30 fps
       if (++this.mmFrame % 2 === 0) this.hud.tickMinimap(now / 1000);
     }
+    if (rec) this.reportHitch(now, simMs, ticks, evMs, r1 - r0, performance.now() - r1, evNames);
   };
+
+  /** Hand this frame's measured parts to the hitch recorder (game/hitches.ts; ?hitch=1 or F8). */
+  private reportHitch(now: number, sim: number, ticks: number, events: number, render: number, hud: number, evNames: string) {
+    const info = this.renderer.renderer.info;
+    hitches.frame(now, { sim, ticks, events, render, hud, programs: info.programs?.length ?? 0, textures: info.memory.textures, geometries: info.memory.geometries, evNames });
+  }
 
   /** Last time a frame was drawn through the idle gate, and the last user input (photo mode idle). */
   private gateShown = -1e9;
