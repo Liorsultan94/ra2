@@ -158,6 +158,39 @@ def weave_height(t, vec, scale):
     return t.math('MULTIPLY', s, 0.333)
 
 
+SEAM_W = 0.012
+
+
+def gauss(t, x, c, w):
+    q = t.math('DIVIDE', t.math('SUBTRACT', x, c), w)
+    return t.math('EXPONENT', t.math('MULTIPLY', t.math('MULTIPLY', q, q), -1.0))
+
+
+def seams(t, col, nrm, thread=None, strength=0.5, fade=0.05, rows=(0.0045, 0.0085)):
+    """seam groove + two rows of dashed top-stitching + faded fabric along the 'seam' attribute
+    (closeness 1 on the seam -> 0 at 12 mm; absent attribute = no seam)."""
+    at = t.n('ShaderNodeAttribute', attribute_type='GEOMETRY', attribute_name='seam')
+    d = t.math('MULTIPLY', t.math('SUBTRACT', 1.0, at.outputs['Fac']), SEAM_W)
+    groove = gauss(t, d, 0.0, 0.0017)
+    oc = t.coords('Object')
+    sep = t.n('ShaderNodeSeparateXYZ')
+    t.l(oc, sep.inputs[0])
+    sm = t.math('ADD', t.math('ADD', sep.outputs['X'], sep.outputs['Y']), sep.outputs['Z'])
+    dash = t.maprange(t.math('SINE', t.math('MULTIPLY', sm, 2 * math.pi / 0.0034)), 0.1, 0.5)
+    row = None
+    for r in rows:
+        g = gauss(t, d, r, 0.0007)
+        row = g if row is None else t.math('ADD', row, g)
+    stitch = t.math('MULTIPLY', row, dash)
+    h = t.math('SUBTRACT', t.math('MULTIPLY', stitch, 0.7), groove)
+    nrm = t.bump(h, strength, 0.0015, nrm)
+    col = t.mix(t.math('MULTIPLY', gauss(t, d, 0.0, 0.006), fade), col, (0.62, 0.6, 0.5, 1), 'SCREEN')
+    col = t.mix(t.math('MULTIPLY', groove, 0.35), col, (0, 0, 0, 1))
+    if thread is not None:
+        col = t.mix(t.math('MULTIPLY', stitch, 0.35), col, thread)
+    return col, nrm
+
+
 def fabric(name, base, var, weave=900.0, bump=0.18, dust=0.25, low_dust=0.0, sheen=0.35, rough=0.86,
            ao_dark=0.45, camo=None, stitch=None, wear=0.25, fold_bump=0.0):
     """woven cloth: colour variation, weave bump, AO crease darkening, dust, worn edges.
@@ -205,6 +238,7 @@ def fabric(name, base, var, weave=900.0, bump=0.18, dust=0.25, low_dust=0.0, she
     if fold_bump:
         fb = t.noise(oc, 9.0, 3.0, 0.5, distortion=0.6)
         nrm = t.bump(fb.outputs['Fac'], fold_bump, 0.01, nrm)
+    col, nrm = seams(t, col, nrm, thread=t.mix(0.25, base, (0.6, 0.58, 0.48, 1)))
     t.bsdf(col, rough, normal=nrm, spec=0.3, sheen=sheen)
     return t.m
 
@@ -218,7 +252,8 @@ def webbing(name, base):
     col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7, 0.0, 0.25), base, (0, 0, 0, 1))
     aov = t.ao(0.03)
     col = t.mix(t.maprange(aov, 0.0, 1.0, 0.5, 0.0), col, (0, 0, 0, 1))
-    t.bsdf(col, 0.7, normal=t.bump(rib, 0.25, 0.0005), spec=0.35, sheen=0.2)
+    col, nrm = seams(t, col, t.bump(rib, 0.25, 0.0005), strength=0.4, fade=0.03, rows=(0.0025,))
+    t.bsdf(col, 0.7, normal=nrm, spec=0.35, sheen=0.2)
     return t.m
 
 
@@ -243,33 +278,70 @@ def plastic(name, base, rough=0.5, wear=0.35, bump=0.06, metal=0.0, wear_col=Non
 
 
 def skin(name):
+    """weathered skin of a man in his twenties: tan with blotchy redness, pores (voronoi pits), roughness
+    variation (oilier T-zone), stubble speckle on jaw / upper lip / cheeks, eyebrows, darker eye sockets,
+    short dark hair at the temples and nape under the helmet. Position masks are in world space
+    (the face looks to -Y)."""
     t = T(name)
     pos = t.geo('Position')
     oc = t.coords('Object')
-    base = srgb(178, 128, 98)
-    nz = t.noise(oc, 30.0, 6.0, 0.6)
-    col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7), base, srgb(160, 105, 84))
-    blot = t.noise(oc, 8.0, 3.0, 0.5)
-    col = t.mix(t.maprange(blot.outputs['Fac'], 0.5, 0.7, 0.0, 0.3), col, srgb(170, 92, 80))
-    # eyebrows: two soft arcs above the eyes (world space; the face looks to -Y)
     sep = t.n('ShaderNodeSeparateXYZ')
     t.l(pos, sep.inputs[0])
-    ax = t.math('ABSOLUTE', sep.outputs['X'])
+    X, Y, Z = sep.outputs['X'], sep.outputs['Y'], sep.outputs['Z']
+    ax = t.math('ABSOLUTE', X)
+    base = srgb(168, 118, 88)
+    nz = t.noise(oc, 30.0, 6.0, 0.6)
+    col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7), base, srgb(150, 100, 76))
+    blot = t.noise(oc, 9.0, 4.0, 0.55)
+    col = t.mix(t.maprange(blot.outputs['Fac'], 0.5, 0.72, 0.0, 0.35), col, srgb(165, 88, 72))
+    freck = t.noise(oc, 160.0, 2.0, 0.5)
+    col = t.mix(t.maprange(freck.outputs['Fac'], 0.6, 0.75, 0.0, 0.25), col, srgb(120, 78, 56))
+    # redness on the nose and cheeks (sun)
+    nose = t.math('MULTIPLY', t.maprange(ax, 0.025, 0.0), t.maprange(Y, -0.145, -0.17))
+    cheek = t.math('MULTIPLY', gauss(t, ax, 0.05, 0.018), gauss(t, Z, 1.655, 0.015))
+    cheek = t.math('MULTIPLY', cheek, t.maprange(Y, -0.09, -0.13))
+    col = t.mix(t.math('MINIMUM', t.math('ADD', nose, cheek), 0.5), col, srgb(176, 84, 70))
+    # darker eye sockets
+    eyes = t.math('MULTIPLY', gauss(t, ax, 0.034, 0.016), gauss(t, Z, 1.675, 0.01))
+    col = t.mix(t.math('MULTIPLY', eyes, 0.35), col, srgb(96, 62, 58))
+    # eyebrows: thick, slightly straight
     dx = t.math('SUBTRACT', ax, 0.036)
-    arch = t.math('ADD', 1.7075, t.math('MULTIPLY', t.math('MULTIPLY', dx, dx), -6.0))
-    dz = t.math('ABSOLUTE', t.math('SUBTRACT', sep.outputs['Z'], arch))
-    brow = t.math('MULTIPLY', t.maprange(dz, 0.0045, 0.0015), t.maprange(t.math('ABSOLUTE', dx), 0.03, 0.022))
-    brow = t.math('MULTIPLY', brow, t.maprange(sep.outputs['Y'], -0.10, -0.125))
-    hair = t.noise(oc, 600.0, 2.0)
-    brow = t.math('MULTIPLY', brow, t.maprange(hair.outputs['Fac'], 0.3, 0.6, 0.5, 1.0))
-    col = t.mix(brow, col, srgb(45, 32, 24))
-    # stubble on the jaw (mostly under the gaiter)
-    stub = t.math('MULTIPLY', t.maprange(sep.outputs['Z'], 1.64, 1.62), t.maprange(sep.outputs['Y'], -0.06, -0.10))
-    col = t.mix(t.math('MULTIPLY', stub, 0.35), col, srgb(70, 58, 50))
-    pores = t.noise(oc, 900.0, 2.0)
-    nrm = t.bump(pores.outputs['Fac'], 0.08, 0.0003)
-    t.bsdf(col, t.maprange(nz.outputs['Fac'], 0.2, 0.8, 0.42, 0.58), normal=nrm, spec=0.45,
-           Subsurface_Weight=0.25, Subsurface_Radius=(1.0, 0.35, 0.2), Subsurface_Scale=0.012)
+    arch = t.math('ADD', 1.7065, t.math('MULTIPLY', t.math('MULTIPLY', dx, dx), -4.0))
+    dz = t.math('ABSOLUTE', t.math('SUBTRACT', Z, arch))
+    brow = t.math('MULTIPLY', t.maprange(dz, 0.0055, 0.002), t.maprange(t.math('ABSOLUTE', dx), 0.032, 0.024))
+    brow = t.math('MULTIPLY', brow, t.maprange(Y, -0.10, -0.125))
+    hairn = t.noise(oc, 700.0, 2.0)
+    brow = t.math('MULTIPLY', brow, t.maprange(hairn.outputs['Fac'], 0.3, 0.6, 0.55, 1.0))
+    col = t.mix(brow, col, srgb(34, 25, 20))
+    # stubble: speckled dark beard shadow on jaw, chin, upper lip and lower cheeks
+    beard = t.math('MULTIPLY', t.maprange(Z, 1.665, 1.645), t.maprange(Y, -0.04, -0.07))
+    beard = t.math('MULTIPLY', beard, t.math('MAXIMUM', t.maprange(ax, 0.03, 0.045), t.maprange(Z, 1.632, 1.625)))
+    vor = t.n('ShaderNodeTexVoronoi', feature='F1')
+    t.l(oc, vor.inputs['Vector'])
+    vor.inputs['Scale'].default_value = 2000.0
+    dots = t.maprange(vor.outputs['Distance'], 0.35, 0.15)
+    col = t.mix(t.math('MULTIPLY', beard, 0.45), col, srgb(84, 76, 72))
+    col = t.mix(t.math('MULTIPLY', beard, t.math('MULTIPLY', dots, 0.9)), col, srgb(26, 20, 17))
+    # short hair at the temples / sideburns / nape (under the helmet rim)
+    hair = t.math('MULTIPLY', t.maprange(Z, 1.635, 1.65), t.maprange(Y, -0.085, -0.06))
+    hair = t.math('MAXIMUM', hair, t.math('MULTIPLY', t.maprange(Z, 1.6, 1.625), t.maprange(Y, 0.0, 0.03)))
+    hair = t.math('MULTIPLY', hair, t.maprange(t.noise(oc, 300.0, 3.0).outputs['Fac'], 0.3, 0.55, 0.6, 1.0))
+    col = t.mix(hair, col, srgb(28, 22, 18))
+    # pores (pits) + fine wrinkles
+    pv = t.n('ShaderNodeTexVoronoi', feature='F1')
+    t.l(oc, pv.inputs['Vector'])
+    pv.inputs['Scale'].default_value = 1500.0
+    pores = t.maprange(pv.outputs['Distance'], 0.0, 0.35, -1.0, 0.0)
+    fine = t.noise(oc, 400.0, 4.0, 0.6)
+    h = t.math('ADD', pores, t.math('MULTIPLY', fine.outputs['Fac'], 0.6))
+    h = t.math('ADD', h, t.math('MULTIPLY', t.math('MULTIPLY', beard, dots), 0.6))
+    nrm = t.bump(h, 0.22, 0.0004)
+    # roughness: oilier forehead / nose, drier cheeks
+    tz = t.math('MAXIMUM', nose, t.math('MULTIPLY', t.maprange(Z, 1.69, 1.70), t.maprange(ax, 0.05, 0.03)))
+    rough = t.math('SUBTRACT', t.maprange(t.noise(oc, 60.0, 4.0).outputs['Fac'], 0.3, 0.7, 0.5, 0.66), t.math('MULTIPLY', tz, 0.14))
+    rough = t.math('ADD', rough, t.math('MULTIPLY', t.math('MAXIMUM', beard, hair), 0.2))
+    t.bsdf(col, rough, normal=nrm, spec=0.38,
+           Subsurface_Weight=0.15, Subsurface_Radius=(1.0, 0.35, 0.2), Subsurface_Scale=0.008)
     return t.m
 
 
@@ -314,7 +386,8 @@ def leather_boot(name):
     fib = t.noise(oc, 700.0, 2.0)
     stitch = t.wave(oc, 1.0 / 0.004, 'Z', profile='SAW')
     h = t.math('ADD', fib.outputs['Fac'], t.math('MULTIPLY', t.maprange(stitch, 0.92, 1.0), 0.0))
-    t.bsdf(col, 0.82, normal=t.bump(h, 0.2, 0.0006), spec=0.3, sheen=0.3)
+    col, nrm = seams(t, col, t.bump(h, 0.2, 0.0006), thread=srgb(130, 112, 86), fade=0.04)
+    t.bsdf(col, 0.82, normal=nrm, spec=0.3, sheen=0.3)
     return t.m
 
 
@@ -381,6 +454,8 @@ def build_all():
     M = {}
     olive = srgb(76, 77, 44)
     M['uniform'] = fabric('uniform', olive, srgb(80, 83, 50), weave=1100, bump=0.2, dust=0.12, low_dust=0.4, sheen=0.25)
+    M['uniform_pants'] = fabric('uniform_pants', srgb(80, 78, 47), srgb(88, 85, 54), weave=1100, bump=0.22, dust=0.14, low_dust=0.65, sheen=0.25)
+    M['boot_leather'] = plastic('boot_leather', srgb(66, 48, 34), rough=0.62, wear=0.6, wear_col=srgb(120, 96, 72), bump=0.05, scale=300.0)
     M['uniform_dark'] = fabric('uniform_dark', srgb(62, 66, 44), srgb(68, 70, 48), weave=1100, bump=0.2, dust=0.1, low_dust=0.5)
     M['gear'] = fabric('gear', srgb(62, 67, 45), srgb(70, 73, 49), weave=700, bump=0.3, dust=0.07, sheen=0.25, rough=0.8, ao_dark=0.6, wear=0.45)
     M['gear_pad'] = fabric('gear_pad', srgb(60, 64, 43), srgb(68, 70, 47), weave=700, bump=0.3, dust=0.06, sheen=0.25, rough=0.8, ao_dark=0.6, wear=0.4)

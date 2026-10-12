@@ -2,8 +2,8 @@
 Iron Front - BI2 hero soldier, stage 3: Cycles studio renders (Blender 5.2.2 LTS).
 
   nice /opt/blender/blender -b --factory-startup -P web/tools/blender/hero/stage3_render.py -- \
-      [--blend $HERO_WORK/stage2.blend] [--out /tmp/claude-0/BI2] [--res 1600] [--samples 128] \
-      [--views front,q34,back,bust] [--prefix render-]
+      [--blend $HERO_WORK/stage2_posed.blend] [--out /tmp/claude-0/BI2] [--res 1600] [--samples 128] \
+      [--views front,q34,back,bust] [--prefix render-] [--suffix -v2]
 
 Light grey seamless cyclorama, soft 3-point area lighting (key, fill, rim) + dim ambient, 85 mm lens.
 """
@@ -20,12 +20,13 @@ def arg(k, d):
     return argv[argv.index(k) + 1] if k in argv else d
 
 
-BLEND = arg('--blend', os.path.join(WORK, 'stage2.blend'))
+BLEND = arg('--blend', os.path.join(WORK, 'stage2_posed.blend'))
 OUT = arg('--out', '/tmp/claude-0/BI2')
 RES = int(arg('--res', '1600'))
 SAMPLES = int(arg('--samples', '128'))
 VIEWS = arg('--views', 'front,q34,back,bust').split(',')
 PREFIX = arg('--prefix', 'render-')
+SUFFIX = arg('--suffix', '-v2')
 
 bpy.ops.wm.open_mainfile(filepath=BLEND)
 sc = bpy.context.scene
@@ -139,7 +140,7 @@ def shoot(name, yaw_deg, target, frame_h, height=None):
     cam.rotation_euler = (Vector(target) - pos).to_track_quat('-Z', 'Y').to_euler()
     set_lights(yaw)
     cyc.rotation_euler = (0, 0, yaw)
-    sc.render.filepath = os.path.join(OUT, PREFIX + name + '.png')
+    sc.render.filepath = os.path.join(OUT, PREFIX + name + SUFFIX + '.png')
     t = time.time()
     bpy.ops.render.render(write_still=True)
     print('RENDERED', sc.render.filepath, round(time.time() - t, 1), 's', flush=True)

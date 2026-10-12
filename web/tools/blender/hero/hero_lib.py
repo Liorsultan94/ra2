@@ -40,7 +40,7 @@ def arm_point(t, side):
 
 
 def is_hand(p):
-    return abs(p.x) > 0.25 and p.z < 1.1 and arm_t(p)[0] > WRIST_T
+    return abs(p.x) > 0.25 and 0.6 < p.z < 1.1 and arm_t(p)[0] > WRIST_T
 
 
 def is_arm(p):
@@ -191,18 +191,54 @@ def shade_smooth(o, angle=None):
         add_mod(o, 'WEIGHTED_NORMAL', keep_sharp=True)
 
 
+# ---------------------------------------------------------------- seams
+SEAM_W = 0.012  # metres: seam closeness attribute goes 1 (on the seam) -> 0 (12 mm away)
+
+
+def set_seam(o, dists):
+    """store per-vertex seam closeness (1 - d / SEAM_W) as the 'seam' point attribute; shaders turn it
+    into a seam groove, two rows of top-stitching and seam fading (missing attribute = no seam)."""
+    me = o.data
+    a = me.attributes.get('seam') or me.attributes.new('seam', 'FLOAT', 'POINT')
+    a.data.foreach_set('value', [max(0.0, 1.0 - d / SEAM_W) for d in dists])
+
+
 # ---------------------------------------------------------------- primitive builders
-def rbox(name, size, loc=(0, 0, 0), rot=(0, 0, 0), cname='vest', mat=None, bevel=0.004, segs=3, subd=0):
-    """rounded box (bevel modifier + weighted normals): crisp hard-surface or padded gear."""
+def rbox(name, size, loc=(0, 0, 0), rot=(0, 0, 0), cname='vest', mat=None, bevel=0.004, segs=3, subd=0, cuts=0,
+         bulge=0.0, taper=0.0):
+    """rounded box (bevel modifier + weighted normals): crisp hard-surface or padded gear.
+    cuts > 0 makes a subdivided 'sewn' box: seam attribute along every edge (stitched edges), an
+    optional bulge of the front (-Y) face and a taper towards the top (+Z)."""
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
-    bm.transform(Matrix.Diagonal((size[0], size[1], size[2], 1)))
+    if cuts:
+        bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=cuts, use_grid_fill=True)
+    hx, hy, hz = size[0] / 2, size[1] / 2, size[2] / 2
+    seams = []
+    for v in bm.verts:
+        x, y, z = v.co.x * 2, v.co.y * 2, v.co.z * 2  # -1..1
+        q = Vector((x * hx, y * hy, z * hz))
+        if cuts:
+            r = sorted([(abs(x), hx, 0), (abs(y), hy, 1), (abs(z), hz, 2)], reverse=True)
+            # distance to the nearest edge of the face this vertex lies on
+            seams.append(min(r[1][1] * (1 - r[1][0]), r[2][1] * (1 - r[2][0])))
+            if bulge and y < 0:
+                q.y -= bulge * (1 - x * x) * (1 - z * z) * (-y)
+            if taper:
+                q.x *= 1 - taper * (z + 1) / 2
+                q.y *= 1 - taper * 0.6 * (z + 1) / 2
+        v.co = q
     o = obj_from_bm(name, bm, cname, mat)
     bm.free()
+    if cuts:
+        set_seam(o, seams)
     o.location = loc
     o.rotation_euler = rot
     if bevel > 0:
-        add_mod(o, 'BEVEL', width=bevel, segments=segs, limit_method='NONE', harden_normals=False)
+        if cuts:
+            add_mod(o, 'BEVEL', width=bevel, segments=segs, limit_method='ANGLE', angle_limit=math.radians(40))
+        else:
+            add_mod(o, 'BEVEL', width=bevel, segments=segs, limit_method='NONE', harden_normals=False)
     if subd:
         add_mod(o, 'SUBSURF', levels=subd, render_levels=subd)
     add_mod(o, 'WEIGHTED_NORMAL', keep_sharp=True)
@@ -277,12 +313,14 @@ def strap_along(name, pts, normals, width, thick, cname, mat=None):
         p = Vector(pts[i]); nn = Vector(normals[i]).normalized()
         t = (Vector(pts[min(i + 1, n - 1)]) - Vector(pts[max(i - 1, 0)])).normalized()
         b = t.cross(nn).normalized()
-        rows.append([bm.verts.new(p + b * (width / 2)), bm.verts.new(p - b * (width / 2))])
+        rows.append([bm.verts.new(p + b * (width / 2)), bm.verts.new(p), bm.verts.new(p - b * (width / 2))])
     for i in range(n - 1):
-        bm.faces.new([rows[i][0], rows[i][1], rows[i + 1][1], rows[i + 1][0]])
+        for k in range(2):
+            bm.faces.new([rows[i][k], rows[i][k + 1], rows[i + 1][k + 1], rows[i + 1][k]])
     bm.normal_update()
     o = obj_from_bm(name, bm, cname, mat)
     bm.free()
+    set_seam(o, [(0.0 if i % 3 != 1 else width / 2) for i in range(len(o.data.vertices))])
     add_mod(o, 'SOLIDIFY', thickness=thick, offset=1.0)
     add_mod(o, 'BEVEL', width=min(thick * 0.4, 0.0012), segments=2, limit_method='ANGLE')
     return o
@@ -307,6 +345,7 @@ def project_sheet(bvh, name, center, u_axis, v_axis, ray_dir, half_u, half_v, nu
     bm = bmesh.new()
     grid = []
     uvs = {}
+    sdist = {}
     for j in range(nv + 1):
         row = []
         for i in range(nu + 1):
@@ -323,6 +362,8 @@ def project_sheet(bvh, name, center, u_axis, v_axis, ray_dir, half_u, half_v, nu
             q = hit + (nrm * 0.5 - ray_dir * 0.5).normalized() * off
             nvx = bm.verts.new(q)
             uvs[nvx] = (i / nu, j / nv)
+            s0 = -1 + 2 * i / nu; t0 = -1 + 2 * j / nv
+            sdist[nvx] = min((1 - abs(s0)) * half_u, (1 - abs(t0)) * half_v)
             row.append(nvx)
         grid.append(row)
     for j in range(nv):
@@ -332,6 +373,7 @@ def project_sheet(bvh, name, center, u_axis, v_axis, ray_dir, half_u, half_v, nu
     for f in bm.faces:
         for lp in f.loops:
             lp[uvl].uv = uvs[lp.vert]
+    seam_vals = [sdist[v] for v in bm.verts]
     if smooth_iter:
         # flatten along the projection direction only, so the outline keeps its size
         for _ in range(smooth_iter):
@@ -351,6 +393,7 @@ def project_sheet(bvh, name, center, u_axis, v_axis, ray_dir, half_u, half_v, nu
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
     o = obj_from_bm(name, bm, cname, mat)
     bm.free()
+    set_seam(o, seam_vals)
     if thick:
         add_mod(o, 'SOLIDIFY', thickness=thick, offset=-1.0)
     if bevel:
@@ -430,6 +473,7 @@ def ring_band(bvh, name, c, axis, h0, h1, nu, nv, offset, cname, mat=None, thick
     nU = nu if full else nu + 1
     bm = bmesh.new()
     grid = []
+    rseam = []
     for j in range(nv + 1):
         h = h0 + (h1 - h0) * j / nv
         row = []
@@ -441,6 +485,11 @@ def ring_band(bvh, name, c, axis, h0, h1, nu, nv, offset, cname, mat=None, thick
             if hit is None:
                 hit = p0 + d * 0.05
             row.append(bm.verts.new(hit + d * offset))
+            dd = min(abs(h - h0), abs(h1 - h))
+            if not full:
+                rr = (hit - p0).length
+                dd = min(dd, rr * (a - a0), rr * (a1 - a))
+            rseam.append(dd)
         grid.append(row)
     for j in range(nv):
         for i in range(nu):
@@ -455,6 +504,7 @@ def ring_band(bvh, name, c, axis, h0, h1, nu, nv, offset, cname, mat=None, thick
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
     o = obj_from_bm(name, bm, cname, mat)
     bm.free()
+    set_seam(o, rseam)
     if thick:
         add_mod(o, 'SOLIDIFY', thickness=thick, offset=-1.0)
     if bevel:

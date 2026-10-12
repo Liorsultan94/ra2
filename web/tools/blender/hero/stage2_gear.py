@@ -1,14 +1,23 @@
 """
-Iron Front - BI2 hero soldier, stage 2: kit, gear, rifle and materials (Blender 5.2.2 LTS).
+Iron Front - BI2 hero soldier, stage 2: kit, gear and materials, A-pose (Blender 5.2.2 LTS).
 
   nice /opt/blender/blender -b --factory-startup -P web/tools/blender/hero/stage2_gear.py
 
-Loads $HERO_WORK/stage1.blend (body + simulated uniform) and adds, all ray-projected onto the
-dressed body so everything sits on the cloth: collar, cuffs, IL flag patch, cargo pockets, knee pads,
-gloves, boots (laces, lugged soles), neck gaiter, ballistic glasses, helmet shell + cloth-simulated
-Mitznefet cover, headset, chinstrap, plate carrier (plates, cummerbund, shoulder pads, MOLLE, mag
-pouches with magazines, admin pouch, radio + antenna + PTT cable, IFAK), battle belt + pouches, a
-zip-on back pack and the Tavor-style rifle on a sling. Saves $HERO_WORK/stage2.blend.
+Loads $HERO_WORK/stage1.blend (body + cloth-simulated uniform) and:
+- roughens the face (wider jaw and chin, heavier brow, fuller neck) on the base cage,
+- subdivides the shirt / trousers and sculpts folds where uniforms bunch (above the cuffs, elbow
+  crook, blousing above the belt and above the boots, behind the knees, crotch drag lines), and
+  writes a 'seam' attribute (side / under-arm / arm-hole / yoke / placket / out- and in-seams, fly,
+  knee reinforcement, back pockets) that the shaders turn into stitched, faded seams,
+- adds, ray-projected onto the dressed body: buttoned cuffs with tabs, IL flag patch, sleeve pocket,
+  cargo pockets with flaps, knee pads, gloves, boots (raised toe box, toe / heel caps, tongue,
+  crossed laces, eyelets, lugged outsole + welt with toe spring, pull loop), neck gaiter, glasses,
+  helmet shell + Mitznefet (cloth-simulated low-res proxy, ragged hem, loose flaps), headset,
+  chinstrap, plate carrier (plates, cummerbund, shoulder pads, MOLLE, name-tape hook field, sewn
+  magazine pouches with bungees and pull tabs, admin pouch with flap / hook panel / zip, radio with
+  knobs, display and PTT, IFAK with flap and handle), belt + flapped pouches, and a zip-on pack
+  with zips, pulls, compression straps and buckles.
+The rifle is added in stage 2b (pose). Saves $HERO_WORK/stage2.blend.
 Objects are grouped in collections per body part (head, torso, arms, legs, feet, helmet, vest, rifle).
 """
 import sys, os, math, time
@@ -23,6 +32,8 @@ from hero_rifle import build_rifle, mag_profile
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
 M = hero_mats.build_all()
+for _m in M.values():
+    _m.use_fake_user = True  # keep rifle-only materials for stage 2b
 body = bpy.data.objects['Body']
 shirt = bpy.data.objects['Shirt']
 pants = bpy.data.objects['Pants']
@@ -46,25 +57,175 @@ for n in ('Eye.L', 'Eye.R'):
     e.data.materials.clear()
     e.data.materials.append(em.m)
 
+def smoothstep(a, b, x):
+    t = max(0.0, min(1.0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+
+
+def gaussf(x, w):
+    return math.exp(-(x / w) ** 2)
+
+
+# ---------------------------------------------------------------- a more rugged face (edits the base cage; the
+# multires scan detail rides on top): wider jaw and chin, heavier brow ridge, fuller neck
+bw = body.matrix_world
+for v in body.data.vertices:
+    p = bw @ v.co
+    if p.z < 1.44 or abs(p.x) > 0.13:
+        continue
+    d = Vector((0, 0, 0))
+    front = smoothstep(-0.02, -0.08, p.y)
+    jaw = gaussf(p.z - 1.59, 0.03) * front
+    d.x += p.x * 0.075 * jaw
+    d.y -= 0.004 * gaussf(p.x, 0.03) * gaussf(p.z - 1.565, 0.018) * front
+    brow = gaussf(p.z - 1.705, 0.01) * smoothstep(-0.10, -0.125, p.y) * gaussf(abs(p.x) - 0.035, 0.03)
+    d.y -= 0.003 * brow
+    d.z -= 0.001 * brow
+    cheek = gaussf(p.z - 1.663, 0.015) * gaussf(abs(p.x) - 0.058, 0.015) * front
+    d.x += math.copysign(0.0022, p.x) * cheek
+    neck = gaussf(p.z - 1.51, 0.035)
+    d.x += p.x * 0.05 * neck
+    d.y += (p.y + 0.03) * 0.04 * neck
+    v.co += d / SCALE
+bpy.context.view_layer.update()
+
 skin_bm = evaluated_mesh_world(body)
 skin_bvh = BVHTree.FromBMesh(skin_bm)
 
-# ---------------------------------------------------------------- uniform finishing
-for g, m in ((shirt, M['uniform']), (pants, M['uniform'])):
+# ---------------------------------------------------------------- uniform: sculpted folds + seams
+# The cloth sim gives the drape; on top, sculpt-style fold displacement at the places real uniforms
+# bunch (sleeve above the cuff, elbow crook, blousing above the belt, behind / around the knees,
+# trouser blousing above the boots, crotch drag lines), with irregular, noise-driven phase and
+# amplitude. Garments are subdivided once first so folds have the resolution to be rounded.
+
+
+def ridge(ph):
+    s = math.sin(ph)
+    return s if s > 0 else 0.55 * s  # rounded ridges, shallower valleys
+
+
+def arm_frame(p):
+    side = 1.0 if p.x >= 0 else -1.0
+    t, _ = arm_t(p)
+    a = arm_point(t, side)
+    a.y = -0.005
+    q = p - a
+    ax = Vector((side * ARM_DIR.x, 0, ARM_DIR.y))
+    q -= ax * q.dot(ax)
+    return side, t, q, ax
+
+
+def shirt_fold(p, nrm):
+    n1 = noise.noise(p * 18.0)
+    n2 = noise.noise(p * 7.0 + Vector((5, 1, 3)))
+    amp = 0.0
+    if abs(p.x) > 0.16 and p.z > 0.85 and arm_t(p)[0] > 0.0:
+        side, t, q, ax = arm_frame(p)
+        qn = q.normalized() if q.length > 1e-6 else Vector((0, -1, 0))
+        # bunching above the cuff
+        m = smoothstep(WRIST_T - 0.17, WRIST_T - 0.07, t) * (1 - smoothstep(WRIST_T - 0.045, WRIST_T - 0.03, t))
+        tilt = 0.012 * math.sin(math.atan2(qn.z, qn.y) * 2 + n2 * 2)
+        amp += 0.0055 * m * (0.6 + 0.4 * n2) * ridge(2 * math.pi * (t + tilt) / 0.027 + 2.2 * n1)
+        # elbow crook (front / inner side)
+        inner = Vector((-side * 0.6, -0.8, 0.0))
+        inner -= ax * inner.dot(ax)
+        inner.normalize()
+        m = gaussf(t - 0.27, 0.06) * max(0.0, qn.dot(inner)) ** 0.7
+        amp += 0.006 * m * ridge(2 * math.pi * (t + 0.02 * qn.dot(Vector((0, 0, 1)))) / 0.034 + 2.0 * n1)
+        # soft diagonal drag folds on the upper sleeve
+        m = smoothstep(0.03, 0.08, t) * (1 - smoothstep(0.17, 0.24, t))
+        amp += 0.0025 * m * ridge(2 * math.pi * (t * 0.8 + 0.5 * qn.y) / 0.05 + 1.5 * n1)
+    else:
+        # blousing above the belt
+        m = smoothstep(1.0, 1.045, p.z) * (1 - smoothstep(1.09, 1.14, p.z))
+        ang = math.atan2(p.x, -(p.y + 0.01))
+        amp += 0.006 * m * (0.5 + 0.5 * n2) * ridge(2 * math.pi * ang * 0.16 / 0.033 + 3.0 * n1)
+    return amp
+
+
+def pants_fold(p, nrm):
+    n1 = noise.noise(p * 16.0)
+    n2 = noise.noise(p * 6.0 + Vector((2, 7, 1)))
+    side = 1.0 if p.x >= 0 else -1.0
+    ang = math.atan2(p.x - side * 0.13, -p.y)
+    amp = 0.0
+    # blousing above the boots: a few irregular, partly diagonal bunches (not a regular accordion)
+    n3 = noise.noise(Vector((ang * 1.3, p.z * 4.0, side * 3.0)))
+    m = smoothstep(0.27, 0.29, p.z) * (1 - smoothstep(0.33, 0.39, p.z)) * max(0.0, 0.35 + 0.65 * n3)
+    amp += 0.006 * m * ridge(2 * math.pi * (p.z + 0.02 * math.sin(ang * 2 + n2 * 4)) / 0.03 + 3.5 * n1)
+    # knee: mostly behind the knee (the pad covers the front)
+    back = max(0.0, math.cos(ang - math.pi)) ** 1.5
+    m = gaussf(p.z - 0.5, 0.06) * (0.3 + 0.7 * back) * max(0.0, 0.4 + 0.6 * n2)
+    amp += 0.006 * m * ridge(2 * math.pi * (p.z + 0.03 * math.sin(ang * 1.5 + n2 * 2)) / 0.04 + 2.5 * n1)
+    # drag lines from the crotch down the inner thigh (front)
+    if p.y < 0.0 and 0.6 < p.z < 0.88:
+        m = smoothstep(0.6, 0.7, p.z) * (1 - smoothstep(0.8, 0.88, p.z)) * smoothstep(0.17, 0.08, abs(p.x))
+        amp += 0.004 * m * ridge(2 * math.pi * (p.z * 0.75 - abs(p.x) * 0.66) / 0.045 + 1.5 * n1)
+    # gathering under the belt
+    m = smoothstep(0.94, 0.98, p.z) * (1 - smoothstep(1.0, 1.03, p.z))
+    ang2 = math.atan2(p.x, -p.y)
+    amp += 0.003 * m * ridge(2 * math.pi * ang2 * 0.17 / 0.03 + 2.0 * n1)
+    return amp
+
+
+def shirt_seam(p):
+    d = 1.0
+    if abs(p.x) > 0.16 and p.z > 0.85 and arm_t(p)[0] > -0.03:
+        side, t, q, ax = arm_frame(p)
+        under = Vector((-side * 0.921, 0, -0.389))
+        r = q.length
+        if r > 1e-6:
+            d = min(d, r * math.acos(max(-1.0, min(1.0, q.normalized().dot(under)))))
+        d = min(d, abs(t - 0.015), abs(t - (WRIST_T - 0.06)))
+    else:
+        if abs(p.x) > 0.11:
+            d = min(d, abs(p.y + 0.005))
+        if p.y > 0.04:
+            d = min(d, abs(p.z - 1.37))
+        if p.y < -0.05 and p.z > 1.0:
+            d = min(d, abs(abs(p.x) - 0.017))
+    return d
+
+
+def pants_seam(p):
+    d = 1.0
+    if p.z < 0.78:
+        side = 1.0 if p.x >= 0 else -1.0
+        d = min(d, abs(p.y - 0.005))  # out- and in-seam
+        d = min(d, abs(p.z - 0.62) if p.y < 0 else 1.0)  # top of the knee reinforcement
+        d = min(d, abs(p.z - 0.40) if p.y < 0 else 1.0)
+    else:
+        d = min(d, abs(p.x))  # fly / centre back
+        if abs(p.x) > 0.12:
+            d = min(d, abs(p.y - 0.005))
+    if p.y > 0.03 and 0.86 < p.z < 0.99:  # back pockets
+        d = min(d, abs(max(abs(abs(p.x) - 0.09) - 0.06, abs(p.z - 0.925) - 0.065)))
+    return d
+
+
+for g, mat, fold_fn, seam_fn in ((shirt, M['uniform'], shirt_fold, shirt_seam), (pants, M['uniform_pants'], pants_fold, pants_seam)):
+    bm = bmesh.new()
+    bm.from_mesh(g.data)
+    bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=1, use_grid_fill=True, smooth=0.6)
+    bm.normal_update()
+    disp = [fold_fn(v.co, v.normal) for v in bm.verts]
+    for v, a in zip(bm.verts, disp):
+        v.co += v.normal * a
+    bm.to_mesh(g.data)
+    bm.free()
+    set_seam(g, [seam_fn(v.co) for v in g.data.vertices])
     g.data.materials.clear()
-    g.data.materials.append(m)
-    add_mod(g, 'SMOOTH', factor=0.3, iterations=1)
-    add_mod(g, 'SUBSURF', levels=1, render_levels=2)
-    add_mod(g, 'SOLIDIFY', thickness=0.0025, offset=-1.0, use_even_offset=True)
-shade_smooth(shirt)
-shade_smooth(pants)
+    g.data.materials.append(mat)
+    add_mod(g, 'SUBSURF', levels=1, render_levels=1)
+    add_mod(g, 'SOLIDIFY', thickness=0.0025, offset=-1.0)
+    shade_smooth(g)
 
 dressed = bvh_of([shirt, pants, body])
 SIDES = (1.0, -1.0)  # +X = soldier's left
 
 # ---------------------------------------------------------------- gaiter (neck + lower face)
 def gaiter_pred(p):
-    top = 1.622 if p.y < -0.085 else 1.60 + 0.022 * max(0.0, min(1.0, (-p.y - 0.02) / 0.065))
+    top = 1.572 + 0.03 * max(0.0, min(1.0, (p.y + 0.07) / 0.1))  # below the chin: jaw and stubble show
     return abs(p.x) < 0.13 and 1.455 < p.z < top
 
 
@@ -87,9 +248,25 @@ for sx in SIDES:
     ax = Vector((sx * ARM_DIR.x, 0, ARM_DIR.y))
     c = arm_point(0.0, sx)
     c.y = -0.005
-    ring_band(dressed, 'Cuff_%s' % ('L' if sx > 0 else 'R'), c, ax, WRIST_T - 0.045, WRIST_T - 0.012, 28, 2, 0.003,
-              'arms', M['uniform_dark'], thick=0.003, bevel=0.0008, R=0.12)
-    # sleeve hem roll (thicker seam just above the cuff)
+    s_ = 'L' if sx > 0 else 'R'
+    # buttoned cuff: a doubled band with a tab and a button
+    ring_band(dressed, 'Cuff_' + s_, c, ax, WRIST_T - 0.058, WRIST_T - 0.014, 32, 3, 0.0035,
+              'arms', M['uniform'], thick=0.0045, bevel=0.0012, R=0.12)
+    cuff_bvh = bvh_of([bpy.data.objects['Cuff_' + s_]])
+    tc = arm_point(WRIST_T - 0.036, sx)
+    tc.y = -0.005
+    outc = Vector((sx * 0.25, -0.95, 0.0)).normalized()
+    project_sheet(cuff_bvh, 'Cuff_Tab_' + s_, tc + outc * 0.03, ax.cross(outc).normalized(), ax, -outc, 0.02, 0.011, 8, 4,
+                  0.0012, 'arms', M['uniform'], thick=0.003, round_n=4, bevel=0.0008)
+# sleeve pocket with flap on the right upper sleeve (soldier's right = -X)
+outr = Vector((-0.921 * 0.78, -0.62, 0.389 * 0.78)).normalized()
+pr = arm_point(0.15, -1.0)
+v_r = Vector((ARM_DIR.x, 0, -ARM_DIR.y)).normalized()
+u_r = v_r.cross(outr).normalized()
+project_sheet(dressed, 'Sleeve_Pocket', pr, u_r, v_r, -outr, 0.042, 0.052, 10, 12, 0.003, 'arms', M['uniform'],
+              thick=0.0025, round_n=10, bevel=0.0008, lift=lambda a, b: 0.007 * (1 - a * a) * (1 - b * b) ** 0.5)
+project_sheet(dressed, 'Sleeve_PocketFlap', pr + v_r * 0.047, u_r, v_r, -outr, 0.045, 0.016, 10, 4, 0.008, 'arms',
+              M['uniform'], thick=0.003, round_n=10, bevel=0.0008, lift=lambda a, b: 0.003 * (1 - a * a))
 # IL flag patch on the left upper sleeve (soldier's left = +X)
 outw = Vector((0.921 * 0.78, -0.62, 0.389 * 0.78)).normalized()
 pc = arm_point(0.12, 1.0)
@@ -134,15 +311,26 @@ def boot_pred(p):
 
 bb = extract(skin_bm, boot_pred)
 relax(bb, 0.011, skin_bvh, rounds=4, iters=6, fac=0.6)
+# boot last: a raised, rounded toe box, fuller ball of the foot and a firm heel counter
+for v in bb.verts:
+    p = v.co
+    side = 1.0 if p.x >= 0 else -1.0
+    toe = smoothstep(-0.03, -0.11, p.y)
+    p.z += 0.009 * toe * smoothstep(0.004, 0.03, p.z)
+    p.x += side * 0.003 * gaussf(p.y + 0.06, 0.04) * smoothstep(0.0, 0.03, p.z) * (1 if abs(p.x) > 0.17 else -1)
+    heel = smoothstep(0.03, 0.09, p.y) * smoothstep(0.0, 0.02, p.z)
+    p.y += 0.004 * heel
+bm_seams = []
 boots = obj_from_bm('Boots', bb, 'feet', M['boot'])
 add_mod(boots, 'SUBSURF', levels=1, render_levels=2)
 add_mod(boots, 'SOLIDIFY', thickness=0.004, offset=-1.0)
+foot_bvh = BVHTree.FromBMesh(bb)
 # tall shaft wrapped around the trouser hem (trousers tucked into the boots)
 hem_bvh = bvh_of([pants, body])
 shafts = []
 for sx in SIDES:
     shafts.append(ring_band(hem_bvh, 'BootShaft_%s' % ('L' if sx > 0 else 'R'), (sx * 0.165, 0.012, 0.0), (0, 0, 1), 0.075,
-                            0.255, 40, 12, 0.005, 'feet', M['boot'], thick=0.005, bevel=0.002, R=0.2))
+                            0.255, 48, 14, 0.009, 'feet', M['boot'], thick=0.005, bevel=0.002, R=0.2))
 for o in shafts:
     add_mod(o, 'SUBSURF', levels=1, render_levels=1)
 boot_bvh = bvh_of([boots] + shafts)
@@ -167,26 +355,50 @@ def hull2d(pts):
     return lo[:-1] + up[:-1]
 
 
+def prism(name, outline, z0f, z1f, mat, bevel):
+    sm = bmesh.new()
+    r0 = [sm.verts.new((x, y, z0f(x, y))) for x, y in outline]
+    r1 = [sm.verts.new((x, y, z1f(x, y))) for x, y in outline]
+    sm.faces.new(r0[::-1])
+    sm.faces.new(r1)
+    n = len(r0)
+    for i in range(n):
+        sm.faces.new([r0[i], r0[(i + 1) % n], r1[(i + 1) % n], r1[i]])
+    o = obj_from_bm(name, sm, 'feet', mat)
+    sm.free()
+    add_mod(o, 'BEVEL', width=bevel, segments=3, limit_method='ANGLE', angle_limit=math.radians(35))
+    add_mod(o, 'WEIGHTED_NORMAL', keep_sharp=True)
+    return o
+
+
 for sx in SIDES:
+    s_ = 'L' if sx > 0 else 'R'
     foot = [v.co for v in bb.verts if v.co.z < 0.045 and v.co.x * sx > 0]
     h = hull2d([(round(p.x, 4), round(p.y, 4)) for p in foot])
     cx = sum(p[0] for p in h) / len(h); cy = sum(p[1] for p in h) / len(h)
-    sm = bmesh.new()
-    ring0 = []; ring1 = []
-    for x, y in h:
-        d = Vector((x - cx, y - cy, 0))
-        q = Vector((x, y, 0)) + d.normalized() * 0.008
-        ring0.append(sm.verts.new((q.x, q.y, 0.0)))
-        ring1.append(sm.verts.new((q.x, q.y, 0.034 + 0.008 * max(0.0, (q.y - cy) / 0.12))))
-    sm.faces.new(ring0[::-1])
-    sm.faces.new(ring1)
-    n = len(ring0)
-    for i in range(n):
-        sm.faces.new([ring0[i], ring0[(i + 1) % n], ring1[(i + 1) % n], ring1[i]])
-    sole = obj_from_bm('Sole_%s' % ('L' if sx > 0 else 'R'), sm, 'feet', M['sole'])
-    sm.free()
-    add_mod(sole, 'BEVEL', width=0.004, segments=3, limit_method='ANGLE', angle_limit=math.radians(35))
-    add_mod(sole, 'WEIGHTED_NORMAL', keep_sharp=True)
+    ymin = min(p[1] for p in h)
+
+    def grow(k):
+        out = []
+        for x, y in h:
+            d = Vector((x - cx, y - cy, 0)).normalized()
+            out.append((x + d.x * k, y + d.y * k))
+        return out
+    spring = lambda x, y: 0.012 * smoothstep(ymin + 0.06, ymin, y)          # toe spring
+    heelz = lambda x, y: 0.009 * smoothstep(cy + 0.03, cy + 0.07, y)         # heel block
+    # lugged outsole, stitched welt / midsole on top of it
+    prism('Sole_' + s_, grow(0.009), lambda x, y: spring(x, y), lambda x, y: 0.022 + heelz(x, y), M['sole'], 0.004)
+    prism('Welt_' + s_, grow(0.007), lambda x, y: 0.021 + heelz(x, y) + spring(x, y) * 0.5,
+          lambda x, y: 0.033 + heelz(x, y) + spring(x, y) * 0.3, M['boot_leather'], 0.002)
+    # toe and heel caps (smooth leather overlays) and a tongue under the laces
+    fb = foot_bvh
+    r = Vector((0, 0.55, -0.83)).normalized()
+    project_sheet(fb, 'BootToeCap_' + s_, (cx, ymin + 0.02, 0.05), (1, 0, 0), r.cross(Vector((1, 0, 0))), r, 0.048, 0.04,
+                  12, 10, 0.0015, 'feet', M['boot_leather'], thick=0.002, round_n=2.6, bevel=0.0008)
+    project_sheet(fb, 'BootHeelCap_' + s_, (cx, cy + 0.3, 0.065), (1, 0, 0), (0, 0, 1), (0, -1, 0), 0.042, 0.045, 12, 10,
+                  0.0015, 'feet', M['boot_leather'], thick=0.002, round_n=3, bevel=0.0008)
+    project_sheet(boot_bvh, 'BootTongue_' + s_, (cx + sx * 0.004, -0.35, 0.2), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.021, 0.062,
+                  6, 16, 0.0016, 'feet', M['boot'], thick=0.003, round_n=4, bevel=0.0008)
     # laces: crisscross over the instep between eyelet pairs
     lines = []
     eyes = []
@@ -198,23 +410,34 @@ for sx in SIDES:
         if hit is None:
             continue
         tng = Vector((1, 0, 0))
-        eyes.append((hit + nrm * 0.004 - tng * 0.015, hit + nrm * 0.004 + tng * 0.015, nrm))
+        eyes.append((hit + nrm * 0.005 - tng * 0.016, hit + nrm * 0.005 + tng * 0.016, nrm))
     for k in range(len(eyes) - 1):
         a, b, n0 = eyes[k]
         c2, d2, n1 = eyes[k + 1]
-        lift = (n0 + n1).normalized() * 0.0025
+        if (a - c2).length > 0.045:  # an eyelet ray missed: never lace across the gap
+            continue
+        lift = (n0 + n1).normalized() * 0.003
         lines.append([a, (a + d2) * 0.5 + lift, d2])
-        lines.append([b, (b + c2) * 0.5 + lift * 1.6, c2])
+        lines.append([b, (b + c2) * 0.5 + lift * 1.7, c2])
     a, b, n0 = eyes[-1]
-    lines.append([a, (a + b) * 0.5 + n0 * 0.004, b])
-    lines.append([(a + b) * 0.5 + n0 * 0.004, (a + b) * 0.5 + n0 * 0.006 + Vector((0.01 * sx, -0.012, -0.03)),
-                  (a + b) * 0.5 + n0 * 0.004 + Vector((0.016 * sx, -0.01, -0.055))])
-    tubes('Laces_%s' % ('L' if sx > 0 else 'R'), lines, 0.0018, 'feet', M['lace'])
-    tubes('Eyelets_%s' % ('L' if sx > 0 else 'R'), [[e[0] - e[2] * 0.002, e[0] + e[2] * 0.001] for e in eyes] +
-          [[e[1] - e[2] * 0.002, e[1] + e[2] * 0.001] for e in eyes], 0.0032, 'feet', M['metal'])
-    # padded boot collar
-    ring_band(boot_bvh, 'BootCollar_%s' % ('L' if sx > 0 else 'R'), (sx * 0.165, 0.012, 0.0),
-              (0, 0, 1), 0.24, 0.262, 32, 2, 0.003, 'feet', M['boot'], thick=0.009, bevel=0.003, R=0.12)
+    knot = (a + b) * 0.5 + n0 * 0.005
+    lines.append([a, knot, b])
+    for k2, off in enumerate((Vector((0.014 * sx, -0.012, -0.03)), Vector((-0.004 * sx, -0.014, -0.045)))):
+        lines.append([knot, knot + n0 * 0.004 + off * 0.5, knot + n0 * 0.002 + off])
+    tubes('Laces_' + s_, lines, 0.0022, 'feet', M['lace'])
+    tubes('Eyelets_' + s_, [[e[0] - e[2] * 0.002, e[0] + e[2] * 0.001] for e in eyes] +
+          [[e[1] - e[2] * 0.002, e[1] + e[2] * 0.001] for e in eyes], 0.0034, 'feet', M['metal'])
+    # padded collar and a heel pull loop
+    ring_band(boot_bvh, 'BootCollar_' + s_, (sx * 0.165, 0.012, 0.0),
+              (0, 0, 1), 0.24, 0.262, 32, 2, 0.003, 'feet', M['boot_leather'], thick=0.009, bevel=0.003, R=0.12)
+    hit, nrm, _, _ = boot_bvh.ray_cast(Vector((sx * 0.165, 0.4, 0.25)), Vector((0, -1, 0)), 1.0)
+    if hit is not None:
+        tubes('BootPull_' + s_, [[hit + Vector((-0.008, 0.004, -0.01)), hit + Vector((-0.007, 0.012, 0.022)),
+                                  hit + Vector((0.007, 0.012, 0.022)), hit + Vector((0.008, 0.004, -0.01))]], 0.0035, 'feet',
+              M['webbing'])
+# stitched panels on the lower boot: vamp seam above the welt and the back heel seam
+set_seam(boots, [min(abs(v.co.z - 0.07), abs(v.co.z - 0.045) + 0.002, abs(abs(v.co.x) - 0.18) if v.co.y > 0.07 else 1.0)
+                 for v in boots.data.vertices])
 bb.free()
 
 # ---------------------------------------------------------------- trousers details
@@ -254,19 +477,61 @@ bk2 = rbox('Belt_BuckleFace', (0.04, 0.006, 0.03), cname='vest', mat=M['polymer'
 orient(bk2, hit + n * 0.012, n)
 
 
-def side_item(name, ang, z, size, mat, bvh, lift=0.0, cname='vest', bev=0.008, subd=1, R=0.27):
+# ---------------------------------------------------------------- pouches: sewn boxes (stitched edges, padded bulge,
+# slight taper), flaps with pull tabs and hook panels, bungees, MOLLE straps
+
+
+def flap_on(parent, name, w, d, h, drop, mat, tab=True, hook=False):
+    """flap folded over the top of a pouch (local frame: -Y out, +Z up), hanging `drop` down its front."""
+    top = h / 2 + 0.003
+    pts = [Vector((0, d / 2 - 0.004, top)), Vector((0, 0.0, top + 0.002)), Vector((0, -d / 2 + 0.004, top + 0.001)),
+           Vector((0, -d / 2 - 0.004, top - 0.008)), Vector((0, -d / 2 - 0.0045, top - drop))]
+    pts = smooth_curve(pts, 4)
+    nr = []
+    for i, p in enumerate(pts):
+        q = pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]
+        nr.append(Vector((0, -q.z, q.y)).normalized() * -1 if q.length > 1e-6 else Vector((0, 0, 1)))
+    f = strap_along(name, pts, nr, w + 0.004, 0.004, 'vest', mat)
+    f.parent = parent
+    if tab:
+        t = rbox(name + 'Tab', (0.018, 0.004, 0.022), (0, -d / 2 - 0.007, top - drop - 0.006), cname='vest', mat=M['webbing'],
+                 bevel=0.0012)
+        t.parent = parent
+    if hook:
+        hk = rbox(name + 'Hook', (w * 0.6, 0.002, drop * 0.5), (0, -d / 2 - 0.0075, top - drop * 0.55), cname='vest',
+                  mat=M['velcro'], bevel=0.0008)
+        hk.parent = parent
+    return f
+
+
+def pouch(name, size, hit, nrm, mat=None, flap=0.0, lift=0.0, bulge=0.004, taper=0.05, up=(0, 0, 1), hook=False,
+          straps=True):
+    w, d, h = size
+    o = rbox(name, size, cname='vest', mat=mat or M['gear'], bevel=0.006, segs=3, subd=1, cuts=5, bulge=bulge, taper=taper)
+    orient(o, hit + nrm * (d / 2 + lift), nrm, up)
+    if flap:
+        flap_on(o, name + '_Flap', w * (1 - taper), d * (1 - taper * 0.6), h, flap, mat or M['gear'], hook=hook)
+    if straps:  # MOLLE straps on the back woven into the carrier webbing: their loops show at the sides
+        for sxx in (-1, 1):
+            st = rbox(name + '_Molle%d' % sxx, (0.006, d * 0.7, 0.025), (sxx * (w / 2 + 0.001), 0.004, -h * 0.18), cname='vest',
+                      mat=M['webbing'], bevel=0.001)
+            st.parent = o
+    return o
+
+
+def side_item(name, ang, z, size, mat, bvh, lift=0.0, flap=0.0, R=0.27, hook=False):
     d = Vector((math.sin(ang), -math.cos(ang), 0))
     hit, n, _, _ = bvh.ray_cast(Vector((0, 0.0, z)) + d * R, -d, R)
     if hit is None:
         hit, n = Vector((0, 0, z)) + d * 0.18, d
-    o = rbox(name, size, cname=cname, mat=mat, bevel=bev, segs=3, subd=subd)
-    orient(o, hit + n * (size[1] / 2 + lift), n)
+    n = Vector((n.x, n.y, 0)).normalized()
+    o = pouch(name, size, hit, n, mat=mat, flap=flap, lift=lift, hook=hook)
     return o, hit, n
 
 
-side_item('Belt_PouchUtil', -2.0, 0.955, (0.11, 0.055, 0.12), M['gear'], belt_bvh)
-side_item('Belt_PouchCanteen', 2.15, 0.95, (0.09, 0.07, 0.15), M['gear'], belt_bvh)
-side_item('Belt_PouchSmall', 1.15, 0.965, (0.07, 0.04, 0.09), M['gear'], belt_bvh)
+side_item('Belt_PouchUtil', -2.0, 0.955, (0.11, 0.055, 0.12), M['gear'], belt_bvh, flap=0.045, hook=True)
+side_item('Belt_PouchCanteen', 2.15, 0.95, (0.09, 0.07, 0.15), M['gear'], belt_bvh, flap=0.05)
+side_item('Belt_PouchSmall', 1.15, 0.965, (0.07, 0.04, 0.09), M['gear'], belt_bvh, flap=0.035)
 
 # ---------------------------------------------------------------- plate carrier
 FP = project_sheet(dressed, 'Vest_FrontPlate', (0, -0.3, 1.24), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.132, 0.165, 18, 22,
@@ -298,85 +563,120 @@ for sx in SIDES:
     strap_along('Vest_ShoulderPad_' + s, pts, nrm, 0.068, 0.014, 'vest', M['gear_pad'])
     strap_along('Vest_ShoulderStrap_' + s, [p + n * 0.014 for p, n in zip(pts, nrm)], nrm, 0.03, 0.003, 'vest', M['webbing'])
 vest_bvh = bvh_of([FP, BP, shirt, pants, body] + [o for o in bpy.data.collections['vest'].objects if o.name.startswith('Vest_Shoulder')])
-# MOLLE rows on the back plate
+# MOLLE rows on the back plate and on the lower front plate (behind the magazine pouches)
 for k in range(6):
     zz = 1.13 + k * 0.038
     project_sheet(vest_bvh, 'Vest_MolleB%d' % k, (0, 0.4, zz), (-1, 0, 0), (0, 0, 1), (0, -1, 0), 0.118, 0.0125, 16, 1,
                   0.002, 'vest', M['webbing'], thick=0.0022, round_n=30)
+for k in range(3):
+    zz = 1.095 + k * 0.038
+    project_sheet(vest_bvh, 'Vest_MolleF%d' % k, (0, -0.4, zz), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.118, 0.0125, 16, 1,
+                  0.002, 'vest', M['webbing'], thick=0.0022, round_n=30)
+# hook-and-loop name-tape field on the upper front plate (blank, no insignia)
+project_sheet(vest_bvh, 'Vest_NameTape', (0, -0.4, 1.372), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.06, 0.017, 10, 3, 0.0015, 'vest',
+              M['velcro'], thick=0.0015, round_n=8)
 # drag handle
 hit, n = surface_frame(vest_bvh, (0, 0.4, 1.405), (0, -1, 0))
 tube_along('Vest_DragHandle', [hit + Vector((-0.04, 0, 0)), hit + n * 0.02 + Vector((-0.03, 0, 0.01)),
                                hit + n * 0.025 + Vector((0.03, 0, 0.01)), hit + Vector((0.04, 0, 0))], 0.006, 'vest', M['webbing'])
 
-# front: triple mag pouch with magazines, bungees and pull tabs
+# front: triple open-top magazine pouch, magazines floor-plate up with bungee retention + pull tabs
 for i, x in enumerate((-0.078, 0.0, 0.078)):
     hit, n = surface_frame(vest_bvh, (x, -0.4, 1.135), (0, 1, 0))
-    p = rbox('Vest_MagPouch%d' % i, (0.072, 0.04, 0.15), cname='vest', mat=M['gear'], bevel=0.009, segs=3, subd=1)
-    orient(p, hit + n * 0.022, n)
-    # magazine stored floor-plate up, the top 3 cm showing
+    p = pouch('Vest_MagPouch%d' % i, (0.072, 0.04, 0.15), hit, n, bulge=0.003, taper=0.03, straps=False)
     mg = extrude_profile('Vest_Mag%d' % i, [(0.75 * (x2 + 0.12), -0.8 * z) for x2, z in mag_profile(0.0)], 0.024, 'vest',
                          M['mag'], bevel=0.0025, segs=2)
     mg.parent = p
     mg.location = (0, 0, -0.083)
-    base = rbox('Vest_MagBase%d' % i, (0.058, 0.03, 0.01), (0.0, 0, 0.0), cname='vest', mat=M['mag'], bevel=0.003)
+    base = rbox('Vest_MagBase%d' % i, (0.058, 0.03, 0.01), (0.004, 0, 0.1), cname='vest', mat=M['mag'], bevel=0.003)
     base.parent = p
-    base.location = (0.004, 0, 0.1)
-    bung = tube_along('Vest_Bungee%d' % i, [(-0.03, -0.021, 0.05), (-0.026, -0.019, 0.095), (0.0, -0.006, 0.106),
-                                             (0.026, -0.019, 0.095), (0.03, -0.021, 0.05)], 0.0035, 'vest', M['rubber'])
+    # bungee: from the pouch sides up over the floor plate, knotted to a webbing pull tab
+    bung = tube_along('Vest_Bungee%d' % i, smooth_curve([(-0.034, -0.0, 0.045), (-0.03, -0.012, 0.09), (-0.012, -0.012, 0.108),
+                                                          (0.012, -0.012, 0.108), (0.03, -0.012, 0.09), (0.034, 0.0, 0.045)], 3),
+                      0.0028, 'vest', M['rubber'])
     bung.parent = p
-    tab = rbox('Vest_PullTab%d' % i, (0.016, 0.006, 0.026), (0, -0.004, 0.118), cname='vest', mat=M['webbing'], bevel=0.0015)
+    tab = rbox('Vest_PullTab%d' % i, (0.014, 0.005, 0.03), (0, -0.016, 0.118), (math.radians(-15), 0, 0), cname='vest',
+               mat=M['webbing'], bevel=0.0015)
     tab.parent = p
-    # pouch MOLLE strap
-    st = rbox('Vest_PouchStrap%d' % i, (0.075, 0.004, 0.025), (0, -0.0205, -0.02), cname='vest', mat=M['webbing'], bevel=0.001)
-    st.parent = p
-# admin pouch (velcro ID panel, no insignia) above the mags
+    for zz in (-0.035, 0.003):  # MOLLE straps across the pouch front
+        st = rbox('Vest_PouchStrap%d_%d' % (i, int(zz * 1000)), (0.07, 0.004, 0.025), (0, -0.0215, zz), cname='vest',
+                  mat=M['webbing'], bevel=0.001)
+        st.parent = p
+# admin pouch with a flap, hook panel and a zip, above the magazines
 hit, n = surface_frame(vest_bvh, (0, -0.4, 1.285), (0, 1, 0))
-ad = rbox('Vest_AdminPouch', (0.18, 0.028, 0.105), cname='vest', mat=M['gear'], bevel=0.008, segs=3, subd=1)
-orient(ad, hit + n * 0.016, n)
-for nm, sz, loc, mat in (('Vest_AdminFlap', (0.172, 0.01, 0.04), (0, -0.016, 0.035), M['gear']),
-                         ('Vest_AdminVelcro', (0.11, 0.004, 0.05), (0, -0.016, -0.018), M['velcro'])):
-    o = rbox(nm, sz, loc, cname='vest', mat=mat, bevel=0.003)
-    o.parent = ad
-# radio pouch + radio + antenna on the left side, IFAK on the right
-rp, rhit, rn = side_item('Vest_RadioPouch', 1.62, 1.13, (0.075, 0.045, 0.12), M['gear'], vest_bvh, lift=0.014)
-radio = rbox('Vest_Radio', (0.062, 0.036, 0.13), (0, 0, 0.035), cname='vest', mat=M['polymer'], bevel=0.005)
+ad = pouch('Vest_AdminPouch', (0.18, 0.03, 0.105), hit, n, flap=0.04, bulge=0.004, taper=0.0, hook=True, straps=False)
+o = rbox('Vest_AdminVelcro', (0.11, 0.004, 0.035), (0, -0.017, -0.03), cname='vest', mat=M['velcro'], bevel=0.0015)
+o.parent = ad
+zp = tube_along('Vest_AdminZip', [(-0.082, -0.0155, -0.012), (-0.082, -0.0155, -0.047), (0.082, -0.0155, -0.047),
+                                   (0.082, -0.0155, -0.012)], 0.0016, 'vest', M['polymer'])
+zp.parent = ad
+# radio in an open pouch with a retention strap; detailed radio (knobs, antenna base, display, side PTT)
+rp, rhit, rn = side_item('Vest_RadioPouch', 1.62, 1.13, (0.075, 0.045, 0.11), M['gear'], vest_bvh, lift=0.002)
+radio = rbox('Vest_Radio', (0.062, 0.036, 0.13), (0, 0, 0.03), cname='vest', mat=M['polymer'], bevel=0.005, cuts=3)
 radio.parent = rp
-knob = cyl('Vest_RadioKnob', 0.008, 0.014, (0.015, 0, 0.107), (0, 0, 0), 'vest', M['polymer'], 16, 0.001)
-knob.parent = rp
+for nm, r_, h_, loc in (('Vest_RadioKnobVol', 0.0085, 0.016, (0.016, 0, 0.103)), ('Vest_RadioKnobCh', 0.007, 0.012, (0.0, 0, 0.101)),
+                        ('Vest_RadioAntBase', 0.0075, 0.022, (-0.018, 0, 0.106))):
+    k = cyl(nm, r_, h_, loc, (0, 0, 0), 'vest', M['rubber' if 'Ant' in nm else 'polymer'], 20, 0.0012)
+    k.parent = rp
+for nm, sz, loc, mat in (('Vest_RadioDisplay', (0.034, 0.002, 0.016), (0, -0.0185, 0.075), M['lens']),
+                         ('Vest_RadioPTTBtn', (0.006, 0.014, 0.03), (-0.0325, 0, 0.07), M['rubber']),
+                         ('Vest_RadioStrap', (0.08, 0.05, 0.012), (0, 0, 0.058), M['webbing'])):
+    k = rbox(nm, sz, loc, cname='vest', mat=mat, bevel=0.0015)
+    k.parent = rp
 bpy.context.view_layer.update()
-atop = rp.matrix_world @ Vector((-0.015, 0, 0.105))
+atop = rp.matrix_world @ Vector((-0.018, 0, 0.115))
 tube_along('Vest_Antenna', smooth_curve([atop, atop + Vector((0.005, 0.02, 0.08)), Vector((0.2, 0.09, 1.42)),
                                           Vector((0.205, 0.11, 1.56)), Vector((0.2, 0.125, 1.66))], 4), 0.0035, 'vest', M['rubber'])
-tube_along('Vest_PTTCable', smooth_curve([rp.matrix_world @ Vector((0.0, 0, 0.1)), Vector((0.19, -0.05, 1.33)),
+tube_along('Vest_PTTCable', smooth_curve([rp.matrix_world @ Vector((0.016, 0, 0.11)), Vector((0.19, -0.05, 1.33)),
                                            Vector((0.135, -0.165, 1.39)), Vector((0.12, -0.19, 1.30)),
                                            Vector((0.105, -0.205, 1.33))], 4), 0.0028, 'vest', M['rubber'])
-ptt = rbox('Vest_PTT', (0.04, 0.02, 0.05), cname='vest', mat=M['polymer'], bevel=0.004)
+ptt = rbox('Vest_PTT', (0.04, 0.02, 0.05), cname='vest', mat=M['polymer'], bevel=0.004, cuts=2)
 hit, n = surface_frame(vest_bvh, (0.1, -0.4, 1.33), (0, 1, 0))
 orient(ptt, hit + n * 0.012, n)
-side_item('Vest_IFAK', -1.6, 1.13, (0.11, 0.06, 0.12), M['gear'], vest_bvh, lift=0.014)
+o = cyl('Vest_PTTButton', 0.011, 0.006, (0, -0.012, 0.004), (math.pi / 2, 0, 0), 'vest', M['rubber'], 20, 0.001)
+o.parent = ptt
+ifak, _, _ = side_item('Vest_IFAK', -1.6, 1.13, (0.11, 0.06, 0.12), M['gear'], vest_bvh, lift=0.002, flap=0.05)
+o = tube_along('Vest_IFAKHandle', [(-0.03, -0.031, 0.04), (-0.025, -0.045, 0.075), (0.025, -0.045, 0.075), (0.03, -0.031, 0.04)],
+               0.004, 'vest', M['webbing'])
+o.parent = ifak
 # tourniquet on the right shoulder pad
 hit, n = surface_frame(vest_bvh, (-0.105, -0.4, 1.4), (0, 1, 0))
-tq = rbox('Vest_Tourniquet', (0.03, 0.025, 0.09), cname='vest', mat=M['polymer'], bevel=0.006)
+tq = rbox('Vest_Tourniquet', (0.03, 0.025, 0.09), cname='vest', mat=M['polymer'], bevel=0.006, cuts=2)
 orient(tq, hit + n * 0.014, n)
 
-# zip-on back pack
+# zip-on back pack: padded body, front pocket and top pocket with zips and pulls, compression straps
+# with side-release buckles, MOLLE, grab handle
 hit, n = surface_frame(vest_bvh, (0, 0.5, 1.22), (0, -1, 0))
-pack = rbox('Pack', (0.27, 0.11, 0.36), cname='vest', mat=M['gear'], bevel=0.03, segs=4, subd=1)
+pack = rbox('Pack', (0.27, 0.11, 0.36), cname='vest', mat=M['gear'], bevel=0.025, segs=4, subd=1, cuts=6, bulge=0.012, taper=0.06)
 orient(pack, hit + n * 0.06, n)
-for nm, sz, loc in (('Pack_Pocket', (0.2, 0.05, 0.16), (0, -0.065, -0.07)),
+for nm, sz, loc in (('Pack_Pocket', (0.2, 0.05, 0.16), (0, -0.07, -0.07)),
                     ('Pack_TopPocket', (0.18, 0.04, 0.06), (0, -0.05, 0.13))):
-    o = rbox(nm, sz, loc, cname='vest', mat=M['gear'], bevel=0.015, segs=3, subd=1)
+    o = rbox(nm, sz, loc, cname='vest', mat=M['gear'], bevel=0.012, segs=3, subd=1, cuts=5, bulge=0.008)
     o.parent = pack
+zips = [
+    [(-0.088, -0.097, -0.03), (-0.088, -0.097, 0.0), (0.088, -0.097, 0.0), (0.088, -0.097, -0.03)],   # front pocket top zip
+    [(-0.13, -0.035, 0.0), (-0.12, -0.045, 0.14), (-0.09, -0.05, 0.178), (0.09, -0.05, 0.178), (0.12, -0.045, 0.14),
+     (0.13, -0.035, 0.0)],                                                                             # main zip
+]
+for k, zz in enumerate(zips):
+    o = tube_along('Pack_Zip%d' % k, smooth_curve(zz, 3), 0.002, 'vest', M['polymer'])
+    o.parent = pack
+for k, (x, y, z) in enumerate([(-0.07, -0.1, -0.006), (0.07, -0.1, -0.006), (-0.1, -0.052, 0.168), (0.1, -0.052, 0.168)]):
+    o = rbox('Pack_ZipPull%d' % k, (0.007, 0.003, 0.022), (x, y, z - 0.012), cname='vest', mat=M['metal'], bevel=0.001)
+    o.parent = pack
+    c = tube_along('Pack_ZipCord%d' % k, [(x, y - 0.001, z - 0.022), (x + 0.003, y - 0.004, z - 0.04)], 0.0018, 'vest', M['rubber'])
+    c.parent = pack
 for k in range(3):
-    o = rbox('Pack_Molle%d' % k, (0.18, 0.004, 0.025), (0, -0.091, -0.04 - k * 0.038), cname='vest', mat=M['webbing'], bevel=0.0008)
+    o = rbox('Pack_Molle%d' % k, (0.18, 0.004, 0.025), (0, -0.097, -0.065 - k * 0.038), cname='vest', mat=M['webbing'], bevel=0.0008)
     o.parent = pack
 for sx in SIDES:
-    o = rbox('Pack_Compress_%d' % sx, (0.022, 0.12, 0.004), (sx * 0.136, 0.0, 0.06), cname='vest', mat=M['webbing'], bevel=0.0008)
-    o.rotation_euler = (0, math.pi / 2, 0)
-    o.parent = pack
-    o = rbox('Pack_Compress2_%d' % sx, (0.022, 0.12, 0.004), (sx * 0.136, 0.0, -0.08), cname='vest', mat=M['webbing'], bevel=0.0008)
-    o.rotation_euler = (0, math.pi / 2, 0)
-    o.parent = pack
+    for k, zz in enumerate((0.06, -0.08)):
+        o = rbox('Pack_Compress_%d_%d' % (sx, k), (0.022, 0.12, 0.004), (sx * 0.133, 0.0, zz), (0, math.pi / 2, 0), cname='vest',
+                 mat=M['webbing'], bevel=0.0008)
+        o.parent = pack
+        b = rbox('Pack_Buckle_%d_%d' % (sx, k), (0.012, 0.03, 0.024), (sx * 0.137, -0.035, zz), cname='vest', mat=M['polymer'],
+                 bevel=0.002, cuts=2)
+        b.parent = pack
 o = tube_along('Pack_Handle', [(-0.04, 0.02, 0.18), (-0.03, 0.02, 0.2), (0.03, 0.02, 0.2), (0.04, 0.02, 0.18)], 0.005, 'vest', M['webbing'])
 o.parent = pack
 
@@ -415,27 +715,102 @@ shell = helmet_shell('Helmet_Shell', RX, RY, RZ, 0.0, 'helmet', M['helmet'])
 add_mod(shell, 'SOLIDIFY', thickness=0.008, offset=-1.0)
 add_mod(shell, 'BEVEL', width=0.002, segments=2, limit_method='ANGLE')
 add_mod(shell, 'SUBSURF', levels=1, render_levels=1)
-# cover: bigger, lumpier rest shape, elastic band pinned near the rim, skirt falls over the edge
-cover = helmet_shell('Helmet_Mitznefet', RX + 0.006, RY + 0.006, RZ + 0.006, 0.034, 'helmet', M['camo'], segs=96, rings=48)
-# puffy lumps + creases on the dome, a flared ruffled skirt below the elastic band
-for v in cover.data.vertices:
-    p = v.co.copy()
+# Mitznefet: a low-res cloth proxy with a much bigger rest shape, pinned only along the elastic band and
+# dropped on the helmet (no self-collision: a dense, self-colliding cover blew up). The excess fabric
+# collapses into big irregular folds; then it is subdivided, given lumpy noise and creases, a ragged
+# hem and a few loose flaps.
+
+
+def cover_procedural():
+    c = helmet_shell('Helmet_Mitznefet', RX + 0.006, RY + 0.006, RZ + 0.006, 0.034, 'helmet', M['camo'], segs=96, rings=48)
+    for v in c.data.vertices:
+        p = v.co.copy()
+        d = p - HC
+        h = p.z - rim_z(p)
+        lump = 0.5 + 0.3 * noise.noise(p * 11.0) + 0.25 * noise.noise(p * 24.0 + Vector((7, 2, 5)))
+        out = (0.004 + 0.016 * max(0.0, lump) ** 2) * (min(1.0, max(0.0, (h - 0.012) / 0.03)) * 0.85 + 0.15)
+        v.co = p + d.normalized() * out
+    return c
+
+
+cover = helmet_shell('Helmet_Mitznefet', RX + 0.007, RY + 0.007, RZ + 0.007, 0.045, 'helmet', M['camo'], segs=36, rings=18)
+cover.shape_key_add(name='Basis')
+rest = cover.shape_key_add(name='Rest')
+for i, v in enumerate(cover.data.vertices):
+    p = v.co
     d = p - HC
-    dn = d.normalized()
     h = p.z - rim_z(p)
-    ang = math.atan2(d.x, -d.y)
-    lump = 0.5 + 0.3 * noise.noise(p * 11.0) + 0.25 * noise.noise(p * 24.0 + Vector((7, 2, 5)))
-    crease = (1.0 - abs(noise.noise(p * 30.0 + Vector((3, 1, 2))))) ** 3 + 0.6 * (1.0 - abs(noise.noise(p * 52.0))) ** 3
-    out = 0.004 + 0.016 * max(0.0, lump) ** 2 + 0.007 * crease
-    out *= min(1.0, max(0.0, (h - 0.012) / 0.03)) * 0.85 + 0.15
-    if h < 0.004:  # skirt: flare out and ruffle
-        s = (0.004 - h) / 0.038
-        rad = Vector((d.x, d.y, 0)).normalized()
-        v.co = p + rad * (s * 0.018 + 0.008 * math.sin(ang * 15 + 3 * noise.noise(p * 20)) * s) + Vector((0, 0, -0.008 * s))
-    else:
-        v.co = p + dn * out
-# (a cloth pass over these lumps blew up under self-collision; the displaced shape is kept as is)
-add_mod(cover, 'SUBSURF', levels=1, render_levels=2)
+    nz = noise.noise(p * 9.0 + Vector((1, 2, 3)))
+    k = (1.42 + 0.25 * nz) if h > 0.02 else (1.18 + 0.12 * nz)
+    rest.data[i].co = HC + Vector((d.x * k, d.y * k, d.z * (1.25 + 0.2 * nz if h > 0.02 else 1.0)))
+vg = cover.vertex_groups.new(name='pin')
+for v in cover.data.vertices:
+    rz = rim_z(v.co)
+    if rz + 0.003 < v.co.z < rz + 0.02:
+        vg.add([v.index], 1.0, 'REPLACE')
+add_mod(shell, 'COLLISION')
+shell.collision.thickness_outer = 0.004
+shell.collision.cloth_friction = 6
+hcol = add_mod(body, 'COLLISION')
+body.collision.thickness_outer = 0.004
+cl = add_mod(cover, 'CLOTH')
+st = cl.settings
+st.quality = 10
+st.mass = 0.12
+st.tension_stiffness = 8
+st.compression_stiffness = 8
+st.shear_stiffness = 3
+st.bending_stiffness = 0.4
+st.vertex_group_mass = 'pin'
+st.rest_shape_key = rest
+cl.collision_settings.distance_min = 0.004
+cl.collision_settings.use_self_collision = False
+cl.point_cache.frame_end = 40
+sc = bpy.context.scene
+sc.frame_start = 1
+for f in range(1, 41):
+    sc.frame_set(f)
+cover = freeze(cover)
+body.modifiers.remove(hcol)
+shell.modifiers.remove(shell.modifiers['collision'])
+sc.frame_set(1)
+far = max((v.co - HC).length for v in cover.data.vertices)
+print('mitznefet proxy max radius', round(far, 3))
+if far > 0.24:
+    bpy.data.objects.remove(cover)
+    cover = cover_procedural()
+else:
+    bm = bmesh.new()
+    bm.from_mesh(cover.data)
+    for _ in range(2):
+        bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=1, use_grid_fill=True, smooth=1.0)
+    bm.normal_update()
+    flaps = [(1.3, 0.016), (2.3, 0.022), (3.4, 0.018), (4.4, 0.02), (5.1, 0.014)]
+    for v in bm.verts:
+        p = v.co.copy()
+        d = p - HC
+        ang = math.atan2(d.x, -d.y) % (2 * math.pi)
+        lump = 0.5 + 0.5 * noise.noise(p * 26.0 + Vector((4, 4, 4)))
+        crease = (1.0 - abs(noise.noise(p * 34.0))) ** 3
+        v.co += v.normal * (0.0035 * lump + 0.0025 * crease)
+        if v.is_boundary:  # ragged hem + loose flaps
+            drop = 0.006 * noise.noise(p * 60.0) + 0.004 * noise.noise(p * 140.0)
+            for fa, fd in flaps:
+                da = (ang - fa + math.pi) % (2 * math.pi) - math.pi
+                drop -= fd * math.exp(-(da / 0.18) ** 2)
+            front = (ang + math.pi) % (2 * math.pi) - math.pi
+            drop += 0.014 * math.exp(-(front / 0.7) ** 2)  # keep the brim off the glasses
+            v.co.z += drop
+            v.co += Vector((d.x, d.y, 0)).normalized() * (0.004 * abs(noise.noise(p * 50.0)))
+    # pull the rows next to the hem along so the flaps hang as fabric, not as spikes
+    for _ in range(3):
+        for v in bm.verts:
+            if not v.is_boundary and any(e.other_vert(v).is_boundary for e in v.link_edges):
+                nb = [e.other_vert(v).co for e in v.link_edges]
+                v.co = v.co * 0.6 + (sum(nb, Vector()) / len(nb)) * 0.4
+    bm.to_mesh(cover.data)
+    bm.free()
+add_mod(cover, 'SUBSURF', levels=1, render_levels=1)
 add_mod(cover, 'SOLIDIFY', thickness=0.0025, offset=-1.0)
 shade_smooth(cover)
 helm_bvh = bvh_of([cover, shell])
@@ -495,61 +870,6 @@ frame = project_sheet(face_bvh, 'Glasses_Frame', (0, -0.3, 1.7035), (1, 0, 0), (
 for sx in SIDES:
     tube_along('Glasses_Temple_%d' % sx, [(sx * 0.073, -0.12, 1.69), (sx * 0.095, -0.085, 1.69), (sx * 0.1, -0.06, 1.685)],
                0.0022, 'head', M['polymer'])
-
-# ---------------------------------------------------------------- rifle on a sling (hangs in front of the right thigh)
-rifle = build_rifle(M)
-mz = Vector((0.16, -0.08, -0.98)).normalized()
-yt = Vector((0, -1, 0))
-ry = (yt - mz * yt.dot(mz)).normalized()
-rz = mz.cross(ry)
-m = Matrix((mz, ry, rz)).transposed().to_4x4()
-m.translation = Vector((-0.235, -0.19, 0.87))
-rifle.matrix_world = m
-bpy.context.view_layer.update()
-rear = rifle.matrix_world @ Vector((-0.305, 0.035, 0.025))
-frontp = rifle.matrix_world @ Vector((0.19, 0.035, -0.025))
-sling_bvh = bvh_of([o for o in bpy.data.collections['vest'].objects if o.type == 'MESH'] + [shirt, pants, body])
-# front run: rear sling point -> across the chest -> over the left shoulder; back run: down to the right hip
-path = []
-for k in range(12):
-    t = k / 11
-    q = rear.lerp(Vector((-0.125, -0.2, 1.44)), t)
-    path.append((q, (0, 1, 0)))
-for k in range(9):
-    b = 0.2 + (math.pi - 0.4) * k / 8
-    d = Vector((0, -math.cos(b), math.sin(b)))
-    path.append((Vector((-0.125, -0.01, 1.33)) + d * 0.5, -d))
-for k in range(10):
-    t = (k + 1) / 10
-    q = Vector((-0.125, 0.2, 1.42)).lerp(Vector((-0.2, 0.17, 1.0)), t)
-    path.append((q, (0, -1, 0)))
-for k in range(8):
-    a = -2.4 + (2.4 - 1.25) * (k + 1) / 8
-    d = Vector((math.sin(a), -math.cos(a), 0))
-    path.append((Vector((0, 0, 0.99 - 0.06 * k / 7)) + d * -0.3, -d))
-pts, outs = [], []
-for q, dr in path:
-    dr = Vector(dr).normalized()
-    hit, n = surface_frame(sling_bvh, q, dr)
-    pts.append(hit - dr * 0.01)
-    outs.append(-dr)
-pts[0] = rear
-pts.append(frontp + Vector((-0.02, -0.01, 0.06)))
-outs.append(outs[-1])
-pts.append(frontp)
-outs.append(outs[-1])
-# a taut strap: straighten wherever that lifts it off the gear, never push it into it
-for _ in range(40):
-    for i in range(1, len(pts) - 1):
-        cand = (pts[i - 1] + pts[i + 1]) * 0.5
-        if cand.dot(outs[i]) > pts[i].dot(outs[i]):
-            pts[i] = cand
-pts = smooth_curve(pts, 2)
-nrm2 = []
-for p in pts:
-    hit, n, _, _ = sling_bvh.find_nearest(p)
-    nrm2.append((p - hit).normalized() if hit is not None and (p - hit).length > 1e-4 else Vector((0, -1, 0)))
-strap_along('Rifle_Sling', pts, nrm2, 0.032, 0.0028, 'rifle', M['sling'])
 
 skin_bm.free()
 for o in bpy.data.objects:
