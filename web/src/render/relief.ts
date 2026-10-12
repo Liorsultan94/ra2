@@ -542,6 +542,8 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     const nr = g.attributes.normal as THREE.BufferAttribute;
     keys.forEach((k, vi) => {
       if (!isSk(k)) return;
+      // (the ring beside the real cliff keeps its own normals: the cliff face meets the skirt without a crease)
+      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (rf.d[k + b * rf.NW + a] > 0) return;
       const nx = rf.skn[k * 2];
       const nz = rf.skn[k * 2 + 1];
       const l = Math.hypot(nx, 1, nz);
@@ -828,13 +830,31 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
           // side projections: u runs along the face (mirrored so it reads left to right from outside), v up the wall
           vec2 uvX = vec2( -sx * vRWp.z, -sv ) * ${f(1 / rs.span)};
           vec2 uvZ = vec2( sz * vRWp.x, -sv ) * ${f(1 / rs.span)} + vec2( 0.37, 0.0 );
-          vec4 ax = texture2D( rSideA, uvX );
-          vec4 az = texture2D( rSideA, uvZ );
-          vec4 nxs = texture2D( rSideN, uvX );
-          vec4 nzs = texture2D( rSideN, uvZ );
+          // (a projection that carries none of the weight is not sampled)
+          vec4 ax = vec4( 0.0 );
+          vec4 az = vec4( 0.0 );
+          vec4 nxs = vec4( 0.5 );
+          vec4 nzs = vec4( 0.5 );
+          if ( bw.x > 0.02 ) {
+            ax = texture2D( rSideA, uvX );
+            nxs = texture2D( rSideN, uvX );
+          }
+          if ( bw.z > 0.02 ) {
+            az = texture2D( rSideA, uvZ );
+            nzs = texture2D( rSideN, uvZ );
+          }
+          float skirt = step( vRp, 0.0 );
+          float rpA = abs( vRp );
+          float topW = max( up, bw.y * 0.6 );
+          // the skirt is the sim's own steep ground at the cliff foot: only truly flat parts take the top texture
+          topW = mix( topW, smoothstep( 0.85, 0.97, n.y ), skirt );
           vec2 tq = vRWp.xz * 0.44;
-          vec3 ay = texture2D( rTopA, tq ).rgb;
-          vec3 tny = texture2D( rTopN, tq ).xyz * 2.0 - 1.0;
+          vec3 ay = vec3( 0.5 );
+          vec3 tny = vec3( 0.0, 0.0, 1.0 );
+          if ( topW > 0.01 ) {
+            ay = texture2D( rTopA, tq ).rgb;
+            tny = texture2D( rTopN, tq ).xyz * 2.0 - 1.0;
+          }
           float sideW = max( 1e-3, bw.x + bw.z );
           vec3 side = ( ax.rgb * bw.x + az.rgb * bw.z ) / sideW * rSideGain;
           float ao = ( nxs.b * bw.x + nzs.b * bw.z ) / sideW;
@@ -843,11 +863,6 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
           vec3 nX = normalize( vec3( 0.0, tx.y, -sx * tx.x ) + n );
           vec3 nZ = normalize( vec3( sz * tz.x, tz.y, 0.0 ) + n );
           vec3 nY = normalize( vec3( tny.xy + n.xz, abs( tny.z ) * n.y ).xzy );
-          float skirt = step( vRp, 0.0 );
-          float rpA = abs( vRp );
-          float topW = max( up, bw.y * 0.6 );
-          // the skirt is the sim's own steep ground at the cliff foot: only truly flat parts take the top texture
-          topW = mix( topW, smoothstep( 0.85, 0.97, n.y ), skirt );
           vec3 top = ay * rTopTint * 1.6;
           top = mix( vec3( dot( top, vec3( 0.2126, 0.7152, 0.0722 ) ) ), top, ${lk.sat.toFixed(2)} );
           vec3 wn = normalize( mix( normalize( nX * bw.x + nZ * bw.z + n * 1e-3 ), nY, topW ) );
@@ -856,8 +871,8 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
           #if ${rs.strata ? 1 : 0}
           {
             // talus: the foot of the wall breaks up into scree, the same rock in loose pebbles
-            float peb = texture2D( fogNoise, vRWp.xz * 2.7 + vRWp.y * 0.9 ).g;
             float talus = ( 1.0 - smoothstep( 0.03, 0.22, rpA ) ) * ( 1.0 - topW );
+            float peb = talus > 0.01 ? texture2D( fogNoise, vRWp.xz * 2.7 + vRWp.y * 0.9 ).g : 0.5;
             vec3 scree = vec3( 0.52, 0.36, 0.22 ) * ( 0.72 + 0.56 * peb );
             // (the flat edge of the skirt melts into the sand)
             scree = mix( scree, vec3( 0.66, 0.52, 0.34 ) * ( 0.85 + 0.3 * peb ), skirt * ( 1.0 - smoothstep( 0.0, 0.2, rpA ) ) );
