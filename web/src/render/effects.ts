@@ -1205,14 +1205,14 @@ export class Effects {
    */
   column(x: number, y: number, z: number, size = 1, dark = true) {
     // one in four puffs is a pre-rendered, sun-lit rolling smoke loop instead of a particle (same fill)
-    if (this.flip?.ready && Math.random() < 0.25) {
+    if (this.flip?.ready && Math.random() < 0.18) {
       this.flip.spawn('smokeloop', {
         x: x + this.rand(-0.08, 0.08) * size,
         y: y - 0.1 * size,
         z: z + this.rand(-0.08, 0.08) * size,
         vy: this.rand(0.7, 1.0) * Math.sqrt(size),
-        size: 1.1 * size,
-        sizeEnd: 2.2 * size,
+        size: 0.9 * size,
+        sizeEnd: 1.8 * size,
         life: this.rand(3.2, 4.2),
         ground: true,
         rot: 0.12,
@@ -1254,7 +1254,7 @@ export class Effects {
     if (!fb) return false;
     const S = Math.max(w, d);
     const snow = WX.wxSnow.value > 0.3;
-    const n = Math.max(2, Math.min(5, Math.round(S * (this.quality === 'high' ? 1.4 : 1))));
+    const n = Math.max(2, Math.min(4, Math.round(S * (this.quality === 'high' ? 1.2 : 0.8))));
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + this.rand(-0.4, 0.4);
       const r = this.rand(0.1, 0.35) * S;
@@ -1265,8 +1265,8 @@ export class Effects {
         vx: Math.cos(a) * 0.35 * S,
         vz: Math.sin(a) * 0.35 * S,
         drag: 0.8,
-        size: (1.0 + 0.35 * S) * this.rand(0.9, 1.1),
-        sizeEnd: (1.5 + 0.55 * S) * this.rand(0.9, 1.1),
+        size: (0.8 + 0.3 * S) * this.rand(0.9, 1.1),
+        sizeEnd: (1.2 + 0.45 * S) * this.rand(0.9, 1.1),
         life: this.rand(4.5, 6),
         delay: this.rand(0, 0.5),
         tint: snow ? 0xd4d8dc : 0x9a8f80,
