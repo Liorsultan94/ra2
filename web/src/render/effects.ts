@@ -1249,16 +1249,14 @@ export class Effects {
     this.fire.spawn({ x, y, z, life: 0.12, size: 0.3, color });
   }
 
-  /** Active protection (Trophy) kill: the charge from the launcher at `from` meets the incoming round at p. */
-  intercept(p: THREE.Vector3, from?: THREE.Vector3) {
-    if (from) this.beam(from, p, 0xfff2c8, 0.05, 0.08);
-    // the round blown apart: a hard white flash, a burst of hot fragments and a falling spray of debris
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.14, size: 1.5, color: 0xffffff, colorEnd: 0xffa040 });
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.32, size: 0.8, sizeEnd: 0.2, color: 0xffd080, colorEnd: 0xff5000 });
-    for (let i = 0; i < this.q(22); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-4, 4), vy: this.rand(-0.5, 3.5), vz: this.rand(-4, 4), life: this.rand(0.25, 0.5), size: 0.07, color: 0xfff0c0, colorEnd: 0xff7000, gravity: 7 });
-    for (let i = 0; i < this.q(6); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.9, size: 0.05, color: 0x5a5048, gravity: 6 });
+  /** Active protection (Trophy) kill: the incoming round is blown apart at p (from: the launcher; no beam drawn, it dazzled). */
+  intercept(p: THREE.Vector3, _from?: THREE.Vector3) {
+    // a small, warm pop (no white glare), hot fragments, a little falling debris and a puff of grey smoke
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.12, size: 0.55, color: 0xffc070, colorEnd: 0xff6a10 });
+    for (let i = 0; i < this.q(16); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3.5, 3.5), vy: this.rand(-0.5, 3), vz: this.rand(-3.5, 3.5), life: this.rand(0.2, 0.4), size: 0.06, color: 0xffd090, colorEnd: 0xff6a00, gravity: 7 });
+    for (let i = 0; i < this.q(5); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.9, size: 0.05, color: 0x5a5048, gravity: 6 });
     for (let i = 0; i < this.q(6); i++) this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.6, 0.6), vy: 0.45, vz: this.rand(-0.6, 0.6), life: 1.8, size: 0.25, sizeEnd: 0.95, color: 0x7d7a74, alpha: 0.65, drag: 1.5 });
-    this.flashLight(p.x, p.y, p.z, 5, 0xfff0c0, 0.14);
+    this.flashLight(p.x, p.y, p.z, 1.6, 0xffb060, 0.08);
   }
 
   jamPulse(x: number, y: number, z: number, r: number) {
