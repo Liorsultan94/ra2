@@ -221,6 +221,7 @@ export class Terrain {
 
   /** Per frame. `units` (the world's entity list) lets vehicles flatten the grass blades. */
   update(time: number, units?: readonly Entity[]) {
+    this.ground.tick();
     this.grass?.update(time, this.camera, units ?? null);
     // cull the scatter to last frame's view (the margin covers the lag)
     if (this.camera) this.lod.cull(this.camera);

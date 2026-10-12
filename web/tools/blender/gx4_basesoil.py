@@ -80,14 +80,16 @@ for c in layers.values():
     sc.collection.children.link(c)
 
 
-def mesh_obj(name, bm, layer):
+def mesh_obj(name, bm, layer, wrap=()):
+    # one mesh, linked copies at the wrap offsets (so a map tiles: every feature also appears one period over)
     me = bpy.data.meshes.new(name)
     bm.to_mesh(me)
     bm.free()
-    ob = bpy.data.objects.new(name, me)
-    ob.data.materials.append(mat)
-    layers[layer].objects.link(ob)
-    return ob
+    me.materials.append(mat)
+    for i, (ox, oy) in enumerate(wrap or [(0, 0)]):
+        ob = bpy.data.objects.new(name + str(i), me)
+        ob.location = (ox, oy, 0)
+        layers[layer].objects.link(ob)
 
 
 def ground_plane(w_, h_):
@@ -222,7 +224,7 @@ def build_scuff(P=2.0):
     ground_plane(P, P)
     bmR = bmesh.new()
     bmP = bmesh.new()
-    for ox, oy in wraps(P, P):
+    for ox, oy in [(0, 0)]:
         rr = random.Random(77)
         # tyre / track scuffs where vehicles turned: pairs of parallel arcs
         for i in range(22):
@@ -273,8 +275,8 @@ def build_scuff(P=2.0):
             x, y = rr.uniform(0, P), rr.uniform(0, P)
             r = rr.uniform(0.014, 0.03)
             blob(bmR, x + ox, y + oy, r, -r * 0.2, 2, random.Random(i * 13 + 5), squash=0.3, rough=0.4)
-    mesh_obj('scuff_r', bmR, 'raised')
-    mesh_obj('scuff_p', bmP, 'pressed')
+    mesh_obj('scuff_r', bmR, 'raised', wraps(P, P))
+    mesh_obj('scuff_p', bmP, 'pressed', wraps(P, P))
 
 
 # ------------------------------------------------------------------ track lanes (1 x 2 tiles, tiles along v)
@@ -282,7 +284,7 @@ def build_track(V=2.0):
     ground_plane(1.0, V)
     bmR = bmesh.new()
     bmP = bmesh.new()
-    for ox, oy in wraps(0, V):
+    for ox, oy in [(0, 0)]:
         rr = random.Random(99)
         # a gentle sway that repeats every V tiles (so the strip tiles)
         sway = lambda v, ph, a: a * math.sin(2 * math.pi * v / V + ph)
@@ -319,8 +321,8 @@ def build_track(V=2.0):
                 y = rr.uniform(0, V)
                 r = rr.uniform(0.003, 0.008)
                 blob(bmR, x + ox, y + oy, r, -r * 0.1, 1, random.Random(i * 31 + lane), squash=0.35)
-    mesh_obj('track_r', bmR, 'raised')
-    mesh_obj('track_p', bmP, 'pressed')
+    mesh_obj('track_r', bmR, 'raised', wraps(0, V))
+    mesh_obj('track_p', bmP, 'pressed', wraps(0, V))
 
 
 res = lambda n: max(16, int(n * SCALE))

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { padDelta } from './basesoil';
 import { Tile, standHeight, type Biome, type GameMap } from '../sim/map';
 import type { Effects } from './effects';
 import type { FogOfWar } from './fog';
@@ -120,7 +121,9 @@ export class BattleScars {
 
   private ground(x: number, z: number) {
     const m = this.map;
-    return standHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, z)));
+    const cx = Math.max(0, Math.min(m.w - 0.01, x));
+    const cz = Math.max(0, Math.min(m.h - 0.01, z));
+    return standHeight(m, cx, cz) + padDelta(m, cx, cz);
   }
 
   private tile(x: number, z: number) {

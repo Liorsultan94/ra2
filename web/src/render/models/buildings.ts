@@ -1377,23 +1377,12 @@ function scaleUV<T extends THREE.BufferGeometry>(g: T, su: number, sv: number): 
 const Y0 = 0.04;
 type Face = 'x' | 'z';
 
-function slab(k: Kit, w: number, d: number, h = Y0, notch?: [number, number, number], m?: Mat) {
-  const W = w / 2 - 0.012;
-  const D = d / 2 - 0.012;
-  const pts: P2[] = notch
-    ? [
-        [-W, -D],
-        [W, -D],
-        [W, D],
-        [notch[1], D],
-        [notch[1], notch[2]],
-        [notch[0], notch[2]],
-        [notch[0], D],
-        [-W, D],
-      ]
-    : rect(W * 2, D * 2);
-  k.plan(m ?? k.P.slab, pts, h, 0, 0, 0, 0.008);
-}
+/**
+ * No raised hardstand any more: the ground under the structure is levelled to the old slab's top
+ * (render/basesoil.ts, BASE_LIFT) and blends into the surrounding soil, so a building stands ON the ground
+ * with no slab outline. (The parameters are kept so the call sites read as before.)
+ */
+function slab(_k: Kit, _w: number, _d: number, _h = Y0, _notch?: [number, number, number], _m?: Mat) {}
 
 /** Random window cell(s) of the 8x4 window texture: n columns, rows rows. */
 function cell(k: Kit, n = 1, rows = 1): number[] {
@@ -3142,8 +3131,6 @@ function conyard(k: Kit) {
   const P = k.P;
   const N = P.N;
   slab(k, 3, 3);
-  // cast concrete work pad under the gantry (bare concrete, no markings)
-  k.box(P.concrete, 2.66, 0.006, 1.88, 0.0, Y0, 0.48);
   const roof = N.roofStyle === 'hip' ? 'hip' : N.roofStyle === 'gable' ? 'gable' : 'flat';
 
   // ---------------------------------------------------------- command block (back left)
@@ -3458,17 +3445,6 @@ function factory(k: Kit) {
   const P = k.P;
   const N = P.N;
   slab(k, 3, 3, Y0, [-0.53, 0.53, -0.5]);
-  // vehicle lane through the middle at ground level (cast concrete, no paint)
-  k.box(P.concrete, 1.04, 0.002, 2.0, 0, 0, 0.5);
-  // vehicle lift deck on the exit tile (steel plate flush with the apron, hazard edged, corner lamps)
-  k.box(P.mats.at(Tile.Plate, 0x8a8e90, 2.6), 0.82, 0.012, 0.82, 0, 0.002, 0.0);
-  k.box(P.hazard, 0.84, 0.014, 0.03, 0, 0.002, 0.415);
-  k.box(P.hazard, 0.84, 0.014, 0.03, 0, 0.002, -0.415);
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    k.box(P.yellow, 0.025, 0.05, 0.025, sx * 0.45, 0, sz * 0.45);
-    k.box(P.amber_l, 0.02, 0.008, 0.02, sx * 0.45, 0.05, sz * 0.45);
-  }
-
   // ------------------------------------------------ main assembly hangar (back, full width)
   const z0 = -1.42;
   const z1 = -0.5;
@@ -3638,11 +3614,6 @@ function refinery(k: Kit) {
   const P = k.P;
   const N = P.N;
   slab(k, 3, 3, Y0, [-0.52, 0.52, 0.52]);
-  // ------------------------------------------------ harvester dock (front centre tile, ground level, bare concrete)
-  k.box(P.concrete, 1.02, 0.008, 1.0, 0, 0, 1.0);
-  // flush steel kerb plates (the harvester drives over them)
-  for (const sx of [-1, 1]) k.box(P.hazard, 0.03, 0.006, 0.9, sx * 0.46, 0.008, 1.0);
-  k.box(P.mats.at(Tile.Plate, 0x9a9e9c, 2.4), 0.8, 0.006, 0.5, 0, 0.008, 0.85);
   // ------------------------------------------------ ore intake hopper behind the dock
   const hz = 0.3;
   k.box(P.concrete, 0.94, 0.08, 0.04, 0, Y0, hz - 0.2);

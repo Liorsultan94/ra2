@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { standHeight, type GameMap } from '../sim/map';
+import { padDelta } from './basesoil';
 import type { Effects } from './effects';
 
 /*
@@ -741,7 +742,7 @@ export class FracWreck {
       _v.set(x, 0, z).applyMatrix4(this.group.matrix);
       const gx = Math.max(0, Math.min(map.w - 0.01, _v.x));
       const gz = Math.max(0, Math.min(map.h - 0.01, _v.z));
-      base = standHeight(map, gx, gz) - this.group.position.y;
+      base = standHeight(map, gx, gz) + padDelta(map, gx, gz) - this.group.position.y;
     }
     return base + (cell >= 0 ? this.pile[cell] : 0);
   }

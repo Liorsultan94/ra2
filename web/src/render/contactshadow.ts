@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { standHeight, type GameMap } from '../sim/map';
+import { padDelta } from './basesoil';
 
 /*
  * Contact shadows: a soft darkening right where units and buildings meet the
@@ -93,7 +94,7 @@ export class ContactShadows {
    */
   add(map: GameMap, x: number, z: number, yaw: number, hl: number, hw: number, soft: number, alpha: number, tilt?: THREE.Quaternion) {
     if (this.n >= MAX || alpha <= 0.004) return;
-    const y = standHeight(map, Math.min(map.w - 0.01, Math.max(0, x)), Math.min(map.h - 0.01, Math.max(0, z)));
+    const y = this.h(map, x, z);
     if (tilt) _q.copy(tilt);
     else {
       // slope from four samples across the footprint
@@ -116,7 +117,10 @@ export class ContactShadows {
   }
 
   private h(map: GameMap, x: number, z: number) {
-    return standHeight(map, Math.min(map.w - 0.01, Math.max(0, x)), Math.min(map.h - 0.01, Math.max(0, z)));
+    const cx = Math.min(map.w - 0.01, Math.max(0, x));
+    const cz = Math.min(map.h - 0.01, Math.max(0, z));
+    // (the ground levelled under the structures: basesoil.ts)
+    return standHeight(map, cx, cz) + padDelta(map, cx, cz);
   }
 
   end() {

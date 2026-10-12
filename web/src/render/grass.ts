@@ -58,6 +58,7 @@ uniform sampler2D ctlTex;
 uniform sampler2D tintTex;
 uniform sampler2D gNoise;
 uniform sampler2D trampleTex;
+uniform sampler2D siteTex;
 uniform float gNow8;
 uniform float windTime;
 uniform float wxSnow;
@@ -118,6 +119,9 @@ void grassBlade() {
     H *= 1.0 - 0.45 * f;
     if ( tr.a > 0.99 ) H = 0.0;
   }
+  // disturbed soil round the structures (basesoil.ts): the turf thins out towards the base, scuffed to bare dirt
+  float siteK = texture2D( siteTex, base / terrMapSize ).r;
+  H *= 1.0 - 0.96 * smoothstep( 0.12, 0.62, siteK );
   float bl = length( bend );
   if ( bl > 1.5 ) bend *= 1.5 / bl;
   float b2 = min( 1.0, dot( bend, bend ) * 0.45 );
@@ -226,6 +230,11 @@ export class GrassBlades {
     htex.magFilter = htex.minFilter = THREE.LinearFilter;
     htex.wrapS = htex.wrapT = THREE.ClampToEdgeWrapping;
     htex.needsUpdate = true;
+    // (a structure levelled the ground under it: the blades follow)
+    ground.onHeights.push(() => {
+      for (let k = 0; k < hdata.length; k++) hdata[k] = THREE.DataUtils.toHalfFloat(ground.heights[k]);
+      htex.needsUpdate = true;
+    });
 
     // ---- trample map
     this.tw = map.w * TRES;
@@ -252,6 +261,7 @@ export class GrassBlades {
       gWidth: { value: quality === 'high' ? 1 : 1.25 },
       gHeightTex: { value: htex },
       trampleTex: { value: tt },
+      siteTex: sh.siteTex,
       gNoise: fog.uniforms.fogNoise,
       windTime,
       terrMapSize: sh.terrMapSize,

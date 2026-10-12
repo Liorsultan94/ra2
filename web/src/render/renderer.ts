@@ -17,6 +17,7 @@ import { entityZ } from '../sim/ballistics';
 import type { World } from '../sim/world';
 import { BridgeFx } from './bridgefx';
 import { unitStandHeight } from './deckramp';
+import { padDelta } from './basesoil';
 import { SuperFx } from './fx/superfx';
 import { SniperFx } from './fx/sniperfx';
 import { Debris } from './debris';
@@ -1117,6 +1118,8 @@ export class GameRenderer {
       // under a parachute canopy
       h = Math.max(h, 0) + e.pz + (e.z - e.pz) * alpha;
     }
+    // (the ground levelled under the structures: basesoil.ts)
+    if (e.kind === 'unit' && !e.para && !(e.pz > 0) && !unitDef(e.def).air) h += padDelta(this.world.map, Math.max(0, Math.min(this.world.map.w - 0.01, x)), Math.max(0, Math.min(this.world.map.h - 0.01, y)));
     return out ? out.set(x, h, y) : new THREE.Vector3(x, h, y);
   }
 
@@ -1227,6 +1230,15 @@ export class GameRenderer {
    * Height of a building's ground slab. The airbase (7 x 4) sits level on the highest ground under it,
    * its concrete skirt hiding the slope (a centre sample would let bumps poke through the runway).
    */
+  /** Base height lift per model: what the old hardstand slab stood proud of the ground (the ground is levelled to it now). */
+  private levelGround(e: Entity, bd: ReturnType<typeof buildingDef>) {
+    const key = bd.model;
+    if (key === 'bridge' || key === 'bridgehut') return; // (the deck's own ramps shape the ground there)
+    const lift = key === 'airfield' || key === 'bunker' || key === 'sentry' || key === 'sam' || key === 'atgm' || key === 'bridge' || key === 'bridgehut' ? 0 : key === 'oil' ? 0.03 : 0.04;
+    const lane = key === 'factory' ? 1 : key === 'refinery' ? 2 : 0;
+    this.terrain.ground.pads.add(e.tx, e.ty, e.tx + bd.w, e.ty + bd.h, this.slabHeight(e) + lift, lane);
+  }
+
   slabHeight(b: Entity): number {
     const map = this.world.map;
     const c = Math.max(groundHeight(map, b.x, b.y), -0.1);
@@ -1315,7 +1327,7 @@ export class GameRenderer {
       const bd = buildingDef(e.def);
       const hl = Math.min(bd.w * 0.5, sz ? sz.x * 0.5 : bd.w * 0.45) * 0.96;
       const hw = Math.min(bd.h * 0.5, sz ? sz.z * 0.5 : bd.h * 0.45) * 0.96;
-      c.add(map, root.position.x, root.position.z, root.rotation.y, hl, hw, 0.3, 0.5 * Math.min(1, v.anim.built * 2) * fade);
+      c.add(map, root.position.x, root.position.z, root.rotation.y, hl, hw, 0.18, 0.5 * Math.min(1, v.anim.built * 2) * fade);
       return;
     }
     if (unitDef(e.def).air) return;
@@ -1390,6 +1402,8 @@ export class GameRenderer {
         if (e.kind === 'building') {
           const bd = buildingDef(e.def);
           this.scars.clearArea(e.tx, e.ty, e.tx + bd.w, e.ty + bd.h);
+          // ...and levels the ground under its footprint, blending it back into the slope (basesoil.ts)
+          this.levelGround(e, bd);
         }
       }
       const vis = this.isVisibleToViewer(e);

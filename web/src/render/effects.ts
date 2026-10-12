@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Tile, standHeight } from '../sim/map';
+import { padDelta } from './basesoil';
 import { RingPool } from './perf/ringpool';
 import type { Debris, DebrisKind } from './debris';
 import type { FogOfWar } from './fog';
@@ -364,7 +365,9 @@ export class Effects {
   groundAt(x: number, z: number) {
     const m = this.map;
     if (!m) return 0;
-    return standHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, z)));
+    const cx = Math.max(0, Math.min(m.w - 0.01, x));
+    const cz = Math.max(0, Math.min(m.h - 0.01, z));
+    return standHeight(m, cx, cz) + padDelta(m, cx, cz);
   }
 
   isWater(x: number, z: number) {

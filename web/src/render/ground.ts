@@ -8,6 +8,7 @@ import { FieldType, segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
 import { PhotoGround, photoTier } from './photoground';
 import { WX } from './wxuniforms';
+import { PadSet, SiteMap, bindPads, padSurface } from './basesoil';
 
 /*
  * Ground: a height-blended splat material. Low resolution control maps
@@ -40,7 +41,8 @@ export const SUB = 2; // mesh vertices per tile
 
 /** Height of the rendered ground surface (sim height + visual micro relief). */
 export function surfaceHeight(m: GameMap, x: number, y: number) {
-  return groundHeight(m, x, y) + (valueNoise(x * 1.7, y * 1.7, 5) - 0.5) * 0.06;
+  // (the ground under every structure is levelled and blended back: basesoil.ts)
+  return padSurface(m, x, y, groundHeight(m, x, y) + (valueNoise(x * 1.7, y * 1.7, 5) - 0.5) * 0.06);
 }
 
 export interface TreeShade {
@@ -166,6 +168,14 @@ export class Ground {
   shared!: Record<string, { value: unknown }>;
   /** The map's biome look (palette, blades, snow; render/biome.ts). */
   readonly look: BiomeLook;
+  /** Levelled ground under the structures and the disturbed-soil site map (basesoil.ts). */
+  readonly pads: PadSet;
+  readonly site: SiteMap;
+  /** Called after the ground heights changed under a pad (the 3D grass follows). */
+  readonly onHeights: (() => void)[] = [];
+  private posAll!: Float32Array;
+  private norAll!: Float32Array;
+  private chunkInfo: { ci: number; cj: number; cw: number; ch: number; geo: THREE.BufferGeometry }[] = [];
 
   constructor(
     private map: GameMap,
@@ -177,6 +187,10 @@ export class Ground {
   ) {
     const m = map;
     this.look = biomeLook(m);
+    this.pads = new PadSet(m);
+    bindPads(this.pads);
+    this.site = new SiteMap(this.pads);
+    this.pads.onChange((r) => this.relevel(r));
     this.res = quality === 'low' ? 6 : quality === 'medium' ? 8 : 10;
     const N = m.w * this.res;
     this.splat = new Uint8Array(N * N * 4);
@@ -238,6 +252,9 @@ export class Ground {
       detailTex: { value: detail },
       grassTex: { value: grassTex },
       ctlTex: { value: tex(this.ctl) },
+      siteTex: { value: this.site.tex },
+      siteScuff: this.site.scuff,
+      siteTrack: this.site.track,
       ctl2Tex: { value: tex(this.ctl2) },
       terrMapSize: { value: new THREE.Vector2(m.w, m.h) },
       ...grassUniforms(this.look.grass),
@@ -307,6 +324,7 @@ export class Ground {
       }
     this.hx = nx;
     this.hy = ny;
+    this.posAll = pos;
     this.heights = new Float32Array(nx * ny);
     for (let k = 0; k < nx * ny; k++) this.heights[k] = pos[k * 3 + 1];
     yield;
@@ -319,6 +337,7 @@ export class Ground {
         const l = Math.hypot(dx, 1, dz);
         nor.set([-dx / l, 1 / l, -dz / l], (j * nx + i) * 3);
       }
+    this.norAll = nor;
     yield;
     const CH = 24 * SUB; // chunk size in vertices
     for (let cj = 0; cj < ny - 1; cj += CH)
@@ -351,6 +370,7 @@ export class Ground {
         geo.setAttribute('normal', new THREE.BufferAttribute(cnor, 3));
         geo.setIndex(new THREE.BufferAttribute(idx, 1));
         geo.computeBoundingSphere();
+        this.chunkInfo.push({ ci, cj, cw, ch: chh, geo });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.receiveShadow = true;
         mesh.name = 'ground';
@@ -361,6 +381,61 @@ export class Ground {
   }
 
   private pomSteps = 0;
+
+  /**
+   * A pad was added / replaced: recompute the ground surface (heights, normals) of the vertices it can reach
+   * (tile rectangle r, grown by the blend), in place, and tell the 3D grass.
+   */
+  private relevel(r: [number, number, number, number]) {
+    if (!this.posAll) return; // (the mesh is not built yet: it will include the pads)
+    const m = this.map;
+    const nx = this.hx;
+    const ny = this.hy;
+    const i0 = Math.max(0, Math.floor(r[0] * SUB));
+    const i1 = Math.min(nx - 1, Math.ceil(r[2] * SUB));
+    const j0 = Math.max(0, Math.floor(r[1] * SUB));
+    const j1 = Math.min(ny - 1, Math.ceil(r[3] * SUB));
+    const pos = this.posAll;
+    for (let j = j0; j <= j1; j++)
+      for (let i = i0; i <= i1; i++) {
+        const y = surfaceHeight(m, i / SUB, j / SUB);
+        pos[(j * nx + i) * 3 + 1] = y;
+        this.heights[j * nx + i] = y;
+      }
+    const nor = this.norAll;
+    const h = (ii: number, jj: number) => pos[(Math.max(0, Math.min(ny - 1, jj)) * nx + Math.max(0, Math.min(nx - 1, ii))) * 3 + 1];
+    for (let j = Math.max(0, j0 - 1); j <= Math.min(ny - 1, j1 + 1); j++)
+      for (let i = Math.max(0, i0 - 1); i <= Math.min(nx - 1, i1 + 1); i++) {
+        const dx = (h(i + 1, j) - h(i - 1, j)) * SUB * 0.5;
+        const dz = (h(i, j + 1) - h(i, j - 1)) * SUB * 0.5;
+        const l = Math.hypot(dx, 1, dz);
+        nor.set([-dx / l, 1 / l, -dz / l], (j * nx + i) * 3);
+      }
+    for (const c of this.chunkInfo) {
+      if (c.ci > i1 + 1 || c.ci + c.cw - 1 < i0 - 1 || c.cj > j1 + 1 || c.cj + c.ch - 1 < j0 - 1) continue;
+      const cp = c.geo.attributes.position as THREE.BufferAttribute;
+      const cn = c.geo.attributes.normal as THREE.BufferAttribute;
+      for (let j = 0; j < c.ch; j++)
+        for (let i = 0; i < c.cw; i++) {
+          const gi = c.ci + i;
+          const gj = c.cj + j;
+          if (gi < i0 - 1 || gi > i1 + 1 || gj < j0 - 1 || gj > j1 + 1) continue;
+          const src = (gj * nx + gi) * 3;
+          const k = j * c.cw + i;
+          cp.setY(k, pos[src + 1]);
+          cn.setXYZ(k, nor[src], nor[src + 1], nor[src + 2]);
+        }
+      cp.needsUpdate = true;
+      cn.needsUpdate = true;
+      c.geo.computeBoundingSphere();
+    }
+    for (const f of this.onHeights) f();
+  }
+
+  /** Per frame: repaint the site map when a structure went up. */
+  tick() {
+    this.site.update();
+  }
 
   /**
    * Render hook (the terrain calls it before drawing the ground): streams the
@@ -860,6 +935,13 @@ uniform sampler2D fieldTex;
 uniform sampler2D detailTex;
 uniform sampler2D grassTex;
 uniform sampler2D ctlTex;
+uniform sampler2D siteTex;
+uniform sampler2D siteScuff;
+uniform sampler2D siteTrack;
+// the ground round the structures (SITE_MAP): disturbed-soil weight, snow it tramples off, relief it adds
+float siteK = 0.0;
+float siteSnow = 0.0;
+float siteBump = 0.0;
 uniform vec2 terrMapSize;
 uniform vec3 cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
@@ -878,6 +960,7 @@ float terrPomAO = 0.0;
 float terrB;
 // cavity occlusion of the indirect light (photo layers)
 float terrAO = 1.0;
+float phNxyScale = 1.0;
 vec2 wxHash2(vec2 p) { return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453); }
 #if PHOTO
 uniform highp sampler2DArray phA;
@@ -992,6 +1075,71 @@ float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy)
   return 1.0 - mix(d.x, d.y, rockW);
 }
 #endif
+`;
+
+
+const SITE_MAP = /* glsl */ `
+  if (sit.r > 0.004) {
+    // ---- disturbed soil round the structures (basesoil.ts): compacted, scuffed, rutted, darkest at the base
+    float sNz = texture2D(fogNoise, tw * 0.9 + 0.2).g * 0.6 + texture2D(fogNoise, tw * 3.1 + 0.7).b * 0.4;
+    float kR = smoothstep(0.1, 0.55, sit.r + (sNz - 0.5) * 0.42);
+    float kc = smoothstep(0.5, 0.95, sit.r);
+    float hS = textureGrad(siteScuff, tw * 0.5, siteGx * 0.5, siteGy * 0.5).r;
+    float kL = smoothstep(0.04, 0.4, sit.b);
+    float hT = 0.5;
+    if (sit.b > 0.01) {
+      float lu = 0.25 + (sit.g - 0.5) * 1.2 + 0.5 * step(0.5, sit.a);
+      hT = textureGrad(siteTrack, vec2(lu, tw.y * 0.5), vec2(siteGx.x, siteGx.y * 0.5), vec2(siteGy.x, siteGy.y * 0.5)).r;
+    }
+#if PHOTO
+    vec4 sa;
+    vec3 sn3;
+#if BIOME == 1
+    phSample(PH_SAND, tw, sa, sn3);
+    vec3 soil = sa.rgb * phT[int(PH_SAND)];
+#elif BIOME == 3
+    phSample(PH_GRAVEL, tw, sa, sn3);
+    vec3 soil = sa.rgb * phT[int(PH_GRAVEL)];
+#else
+    phSample(PH_DIRT, tw, sa, sn3);
+    vec3 soil = sa.rgb * phT[int(PH_DIRT)];
+#endif
+#else
+#if BIOME == 1
+    vec3 soil = cSand * 0.95;
+#elif BIOME == 3
+    vec3 soil = cRock * 0.7;
+#else
+    vec3 soil = cDirt;
+#endif
+#endif
+#if BIOME == 1
+    // sand: the band is a lighter drift outside, packed and a shade darker at the base
+    float tone = mix(1.06, 0.84, kc);
+#elif BIOME == 2
+    float tone = mix(0.8, 0.58, kc);
+#elif BIOME == 3
+    float tone = mix(0.92, 0.78, kc);
+#else
+    float tone = mix(0.9, 0.66, kc);
+#endif
+    vec3 soilC = soil * tone * (0.78 + 0.5 * hS);
+    soilC *= mix(1.0, 0.55 + hT * 0.9, kL);
+    float kB = kR * 0.92;
+    col = mix(col, soilC, kB);
+    col *= 1.0 - 0.2 * pow(sit.r, 4.0);
+    terrRough = mix(terrRough, 0.92, kB);
+    terrH = mix(terrH, 0.15 + hS * 0.5, kB);
+    wxPor = mix(wxPor, 0.5, kB);
+    wxPudB += kB * 0.03 + kL * (0.5 - hT) * 0.5;
+    siteBump = (hS - 0.5) * 1.8 * kB + (hT - 0.5) * 2.6 * kL;
+    siteK = kB;
+    siteSnow = clamp(kB * 0.74 + kL * 0.3, 0.0, 0.95);
+#if PHOTO
+    phNxyScale = 1.0 - kB * 0.5;
+    terrAO *= mix(1.0, 0.7 + 0.6 * hS, kB * 0.6) * (1.0 - 0.3 * pow(sit.r, 3.0));
+#endif
+  }
 `;
 
 /*
@@ -1247,19 +1395,20 @@ const PHOTO_MAP = /* glsl */ `
     terrRough = mix(terrRough, fr, fMask);
     terrAO = mix(terrAO, 1.0 - (1.0 - smoothstep(0.0, 0.5, fa.a)) * 0.25, fMask);
   }
+${SITE_MAP}
 #if BIOME == 2
   {
     // winter: painted snow depth (ctl.b), wind drifts eat the thin cover first, the scan's
     // snow settles into the hollows of what it covers before the high points; sparkle up close
     float dn = texture2D(fogNoise, tw * 0.071 + 0.3).r * 0.6 + texture2D(fogNoise, tw * 0.23 + 0.1).g * 0.4;
     float cover = smoothstep(0.22, 0.62, ctl.b + (dn - 0.5) * 0.6);
-    cover *= 1.0 - fMask * 0.2;
+    cover *= (1.0 - fMask * 0.2) * (1.0 - siteSnow);
     if (cover > 0.002) {
       cover = clamp(cover + cover * (1.0 - cover) * (0.5 - terrH) * 2.0, 0.0, 1.0);
       vec4 sa;
       vec3 sn;
       phSample(PH_SNOW, tw, sa, sn);
-      vec3 snowC = sa.rgb * phT[int(PH_SNOW)] * (0.94 + (dn - 0.5) * 0.12);
+      vec3 snowC = sa.rgb * phT[int(PH_SNOW)] * (0.94 + (dn - 0.5) * 0.12) * (1.0 - siteK * 0.3);
       float spark = step(0.985, texture2D(fogNoise, tw * 2.7).a) * gFine;
       snowC += spark * 0.25;
       col = mix(col, snowC, cover);
@@ -1271,7 +1420,8 @@ const PHOTO_MAP = /* glsl */ `
     }
   }
 #endif
-  phNxy = nxy;
+  terrB += siteBump;
+  phNxy = nxy * phNxyScale;
 `;
 
 const TERRAIN_MAP = /* glsl */ `
@@ -1285,6 +1435,9 @@ const TERRAIN_MAP = /* glsl */ `
   vec4 tnt = mix(texture2D(tintTex, mUV), vApT, apIn);
   vec4 fld = texture2D(fieldTex, mUV) * (1.0 - apIn);
   vec4 ctl = mix(texture2D(ctlTex, mUV), vApC, apIn);
+  vec4 sit = texture2D(siteTex, mUV) * (1.0 - apIn);
+  vec2 siteGx = dFdx(tw);
+  vec2 siteGy = dFdy(tw);
 #if PHOTO
 ${PHOTO_MAP}
 #else
@@ -1563,12 +1716,13 @@ ${PHOTO_MAP}
     terrH = mix(terrH, fh, fMask);
     terrRough = mix(terrRough, 0.95, fMask);
   }
+${SITE_MAP}
 #if BIOME == 2
   {
     // winter: painted snow depth (ctl.b), wind drifts eat the thin cover first; sparkle up close
     float dn = texture2D(fogNoise, tw * 0.071 + 0.3).r * 0.6 + texture2D(fogNoise, tw * 0.23 + 0.1).g * 0.4;
     float cover = smoothstep(0.22, 0.62, ctl.b + (dn - 0.5) * 0.6);
-    cover *= 1.0 - fMask * 0.2;
+    cover *= (1.0 - fMask * 0.2) * (1.0 - siteSnow);
     vec3 snowC = vec3(0.84, 0.88, 0.95) * (0.9 + (dn - 0.5) * 0.14 + gH * 0.05);
     float spark = step(0.985, texture2D(fogNoise, tw * 2.7).a) * gFine;
     snowC += spark * 0.25;
@@ -1577,7 +1731,7 @@ ${PHOTO_MAP}
     terrRough = mix(terrRough, 0.6, cover);
   }
 #endif
-  terrB = terrH;
+  terrB = terrH + siteBump;
 #endif
   col *= tnt.rgb * 2.0;
 #if TERR_POM > 0
