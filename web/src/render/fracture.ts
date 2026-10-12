@@ -506,6 +506,8 @@ export class FracWreck {
   t = 0;
   settled = false;
   private surged = false;
+  /** The collapse flipbooks took over the dust surge (fewer particle puffs). */
+  private dusty = false;
   /** Rubble heightfield over the footprint (+ margin), PxP cells. */
   private pile: Float32Array;
   private pw: number;
@@ -921,7 +923,9 @@ export class FracWreck {
     if (!this.surged && t > 0.9) {
       // the upper storeys hit the ground: a rolling dust wave pushes out from the base
       this.surged = true;
-      const n = Math.round(30 * fx.rate);
+      // pre-rendered rolling collapse clouds (when loaded) carry most of the surge
+      this.dusty = fx.collapse(g.x, g.y, g.z, w, d);
+      const n = Math.round(30 * fx.rate * (this.dusty ? 0.35 : 1));
       const R = Math.max(w, d) * 0.5;
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + rnd() * 0.2;
@@ -931,7 +935,7 @@ export class FracWreck {
       fx.addShake(0.12, g.x, g.z);
     }
     if (t < 2.4) {
-      if (rnd() < dt * 18) fx.dust(g.x + (rnd() - 0.5) * w * 1.1, g.y + 0.1, g.z + (rnd() - 0.5) * d * 1.1, 2.6);
+      if (rnd() < dt * (this.dusty ? 6 : 18)) fx.dust(g.x + (rnd() - 0.5) * w * 1.1, g.y + 0.1, g.z + (rnd() - 0.5) * d * 1.1, 2.6);
       if (fx.debris && rnd() < dt * 5) {
         this.randomPiece(_v);
         fx.debris.burst('concrete', _v.x, _v.y, _v.z, 2, 1.8, 0.07);
