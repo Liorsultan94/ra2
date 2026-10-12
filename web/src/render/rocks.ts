@@ -13,6 +13,7 @@ import { rockTexture } from './terraintex';
 import { buildRelief, reliefEnabled, reliefField, reliefHeight } from './relief';
 import { assetBase, fetchBitmap } from './photoground';
 import { landmarkClear } from './landmarks/plan';
+import { inKeepOut, oreKeepOut } from './orefield';
 
 /*
  * Natural rock: displaced, smooth-shaded icospheres with crevice darkening and
@@ -258,6 +259,8 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
   };
   const geos = [pair(2, 11, { strata: 9, cuts: 7 }), pair(2, 23, { strata: 7, cuts: 6 }), pair(1, 41), pair(0, 61, { cuts: 3 })];
   const lists: Inst[][] = [[], [], [], []];
+  // no loose stones in or right next to an ore field (they read as ore lying outside it)
+  const keep = oreKeepOut(m, 1);
   // cliff faces over the rock (relief.ts); off with ?relief=0
   const relief = reliefEnabled() && reliefField(m).count > 0;
   const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[y * m.w + x] === Tile.Rock;
@@ -350,7 +353,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
         const px = x + hash2(x, y, 30 + k);
         const pz = y + hash2(x, y, 40 + k);
         if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_FIELD | OCC_BUILT)) continue;
-        if (m.ore[i]) continue;
+        if (m.ore[i] || inKeepOut(m, keep, px, pz)) continue;
         const s = (near ? 0.06 + hash2(x, y, 50 + k) * 0.1 : 0.05 + hash2(x, y, 50 + k) * 0.07) * (t === Tile.Sand ? 0.9 : 1);
         const wet = t === Tile.Sand ? 0.75 : 1;
         lists[3].push({
