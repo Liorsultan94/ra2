@@ -186,6 +186,25 @@ function boxBlur(a: Float32Array, W: number, H: number, r: number) {
   }
 }
 
+/**
+ * The ground MESH's height at (x, y): the half-tile grid of ground.ts (SUB = 2) triangulated with its alternating
+ * diagonals, which is not quite the smooth bilinear surface on steep, twisted ground. The skirt follows the mesh
+ * exactly (same planes), so the ground can never poke through it.
+ */
+function meshHeight(m: GameMap, x: number, y: number): number {
+  const u = Math.min(m.w * 2 - 1, Math.max(0, Math.floor(x * 2)));
+  const v = Math.min(m.h * 2 - 1, Math.max(0, Math.floor(y * 2)));
+  const fx = x * 2 - u;
+  const fy = y * 2 - v;
+  const h = (a: number, b: number) => surfaceHeight(m, (u + a) / 2, (v + b) / 2);
+  const a = h(0, 0);
+  const b = h(1, 0);
+  const c = h(0, 1);
+  const d = h(1, 1);
+  if ((u + v) & 1) return fx + fy <= 1 ? a + (b - a) * fx + (c - a) * fy : d + (c - d) * (1 - fx) + (b - d) * (1 - fy);
+  return fx >= fy ? a + (b - a) * fx + (d - b) * fy : a + (d - c) * fx + (c - a) * fy;
+}
+
 const fields = new WeakMap<GameMap, ReliefField>();
 
 /** The map's relief field (built once per map, shared by the cliff meshes, rocks.ts and the waterfalls). */
@@ -293,6 +312,8 @@ export function reliefField(m: GameMap): ReliefField {
       const crag = (valueNoise(x * 3.3, y * 3.3, 829) - 0.5) * 0.12 * smooth(0.12, 0.4, dn);
       const rim = st.rim * smooth(0.25, 0.55, dn);
       H[k] = G[k] + (tk + rim + st.wall - G[k]) * pr + crest + crag;
+      // never under the ground mesh near the border (it would show through as a thin seam along the cliff foot)
+      if (dk < 0.9) H[k] = Math.max(H[k], meshHeight(m, x, y) + 0.015);
       p[k] = pr;
       // horizontal jitter off the border (keeps it inside the rock)
       const jk = 0.09 * smooth(0.18, 0.45, dk);
@@ -306,11 +327,11 @@ export function reliefField(m: GameMap): ReliefField {
     const near = (i: number, j: number) => {
       const tx = Math.floor(i / F);
       const ty = Math.floor(j / F);
-      for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) if (rockTile(tx + a, ty + b) || rockTile(Math.floor((i - 1) / F) + a, Math.floor((j - 1) / F) + b)) return true;
+      for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) if (rockTile(tx + a, ty + b) || rockTile(Math.floor((i - 1) / F) + a, Math.floor((j - 1) / F) + b)) return true;
       return false;
     };
     const e = 0.25;
-    const R2 = F; // blur radius (samples): a tile
+    const R2 = Math.max(1, Math.round(F / 2)); // blur radius (samples): half a tile
     const gb = new Float32Array(N);
     for (let j = 0; j < NH; j++)
       for (let i = 0; i < NW; i++) {
@@ -321,16 +342,15 @@ export function reliefField(m: GameMap): ReliefField {
         const gx = (groundHeight(m, x + e, y) - groundHeight(m, x - e, y)) / (2 * e);
         const gy = (groundHeight(m, x, y + e) - groundHeight(m, x, y - e)) / (2 * e);
         const gr = Math.hypot(gx, gy);
-        if (gr > 0.5) {
-          sk[k] = 1;
-          skh[k] = surfaceHeight(m, x, y);
-          skp[k] = 0.55 * smooth(0.5, 1.4, gr);
-        }
+        // every vertex of the apron band carries the skirt (so its cells have no holes); how cliff-like it is follows the slope
+        sk[k] = 1;
+        skh[k] = meshHeight(m, x, y) + 0.012;
+        skp[k] = 0.55 * smooth(0.25, 1.4, gr);
       }
     // smoothed normals over the skirt: a blurred copy of the ground there (tile-wide box, twice)
     for (let j = 0; j < NH; j++) for (let i = 0; i < NW; i++) gb[j * NW + i] = groundHeight(m, Math.min(m.w, i / F), Math.min(m.h, j / F));
     const tmp2 = new Float32Array(Math.max(NW, NH));
-    for (let rep = 0; rep < 2; rep++) {
+    for (let rep = 0; rep < 1; rep++) {
       for (let j = 0; j < NH; j++) {
         for (let i = 0; i < NW; i++) {
           let a = 0;
@@ -471,7 +491,8 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     const c = tone * cav;
     col.push(c, c, c);
     // height up the cliff ramp (0 at the foot): the rock shader puts its talus there
-    rp.push(dk > 0 ? rf.p[k] : isSk(k) ? rf.skp[k] : 0);
+    // (negative: a skirt vertex, the shader reads it as ground that is steep rock, not as a flat top)
+    rp.push(dk > 0 ? rf.p[k] : isSk(k) ? -(rf.skp[k] + 0.001) : 0);
     return v;
   };
   for (let j = j0; j < j1; j += stride)
@@ -482,7 +503,13 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
       let hit = false;
       for (let b = j; b <= je && !hit; b++) for (let a = i; a <= ie && !hit; a++) if (rf.d[b * rf.NW + a] > 0) hit = true;
       // ... or a skirt cell (every corner on the steep ground at the cliff's foot)
-      if (!hit && skirt) hit = isSk(j * rf.NW + i) && isSk(j * rf.NW + ie) && isSk(je * rf.NW + i) && isSk(je * rf.NW + ie);
+      if (!hit && skirt) {
+        const c0 = j * rf.NW + i;
+        const c1 = j * rf.NW + ie;
+        const c2 = je * rf.NW + i;
+        const c3 = je * rf.NW + ie;
+        hit = isSk(c0) && isSk(c1) && isSk(c2) && isSk(c3) && Math.max(rf.skp[c0], rf.skp[c1], rf.skp[c2], rf.skp[c3]) > 0;
+      }
       if (!hit) continue;
       const a = vert(i, j);
       const b = vert(ie, j);
@@ -493,7 +520,14 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
       const hb = rf.H[j * rf.NW + ie];
       const hc = rf.H[je * rf.NW + i];
       const he = rf.H[je * rf.NW + ie];
-      if (Math.abs(ha - he) <= Math.abs(hb - hc)) idx.push(a, c, e, a, e, b);
+      let main = Math.abs(ha - he) <= Math.abs(hb - hc);
+      if (skirt && isSk(j * rf.NW + i) && isSk(j * rf.NW + ie) && isSk(je * rf.NW + i) && isSk(je * rf.NW + ie)) {
+        // a skirt cell lies on the ground mesh: cut it along the ground's own diagonal (alternating per half tile)
+        const ci = Math.floor((i * 2) / F);
+        const cj = Math.floor((j * 2) / F);
+        main = ((ci + cj) & 1) === 0;
+      }
+      if (main) idx.push(a, c, e, a, e, b);
       else idx.push(a, c, b, b, c, e);
     }
   if (!idx.length) return null;
@@ -809,7 +843,11 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
           vec3 nX = normalize( vec3( 0.0, tx.y, -sx * tx.x ) + n );
           vec3 nZ = normalize( vec3( sz * tz.x, tz.y, 0.0 ) + n );
           vec3 nY = normalize( vec3( tny.xy + n.xz, abs( tny.z ) * n.y ).xzy );
+          float skirt = step( vRp, 0.0 );
+          float rpA = abs( vRp );
           float topW = max( up, bw.y * 0.6 );
+          // the skirt is the sim's own steep ground at the cliff foot: only truly flat parts take the top texture
+          topW = mix( topW, smoothstep( 0.85, 0.97, n.y ), skirt );
           vec3 top = ay * rTopTint * 1.6;
           top = mix( vec3( dot( top, vec3( 0.2126, 0.7152, 0.0722 ) ) ), top, ${lk.sat.toFixed(2)} );
           vec3 wn = normalize( mix( normalize( nX * bw.x + nZ * bw.z + n * 1e-3 ), nY, topW ) );
@@ -819,9 +857,11 @@ function rockSurfaceMaterial(biome: Biome, rs: RockSurf, fog: FogOfWar, quality:
           {
             // talus: the foot of the wall breaks up into scree, the same rock in loose pebbles
             float peb = texture2D( fogNoise, vRWp.xz * 2.7 + vRWp.y * 0.9 ).g;
-            float talus = ( 1.0 - smoothstep( 0.03, 0.22, vRp ) ) * ( 1.0 - topW );
+            float talus = ( 1.0 - smoothstep( 0.03, 0.22, rpA ) ) * ( 1.0 - topW );
             vec3 scree = vec3( 0.52, 0.36, 0.22 ) * ( 0.72 + 0.56 * peb );
-            side = mix( side, scree, talus * 0.6 );
+            // (the flat edge of the skirt melts into the sand)
+            scree = mix( scree, vec3( 0.66, 0.52, 0.34 ) * ( 0.85 + 0.3 * peb ), skirt * ( 1.0 - smoothstep( 0.0, 0.2, rpA ) ) );
+            side = mix( side, scree, talus * mix( 0.6, 0.85, skirt ) );
             aoS = mix( aoS, aoS * ( 0.7 + 0.5 * peb ), talus );
           }
           #endif
