@@ -5,11 +5,12 @@ import type { ParticleUniforms } from './gpuparticles';
 /*
  * Pre-rendered volumetric flipbooks (explosions, smoke, fire, dust, sparks).
  *
- * The atlases are baked offline by tools/bake-fx.mjs (a CPU ray-marcher over
- * animated noise volumes) into public/fx/: 8 effects x 64 frames, stored as
- * "6-way lightmaps" (how much light reaches the visible gas from the right /
- * top / left / bottom / camera side / back) plus opacity and blackbody
- * emission. Here every sprite is relit per pixel from the live sun direction
+ * The atlases are authored in Blender 5.2.2 (tools/blender/fx_volumes.py: Mantaflow
+ * fire / smoke / dust simulations rendered in Cycles with multiple scattering and
+ * self-shadowing; tools/blender/fx_pack.py packs them) into public/fx/: 12 effects x
+ * 36 frames, stored as "6-way lightmaps" (how much light reaches the visible gas from
+ * the right / top / left / bottom / camera side / back) plus opacity and the fire's
+ * own emission, and a motion-vector atlas (optical flow frame -> next frame). Here every sprite is relit per pixel from the live sun direction
  * and colour, the sky ambient and the strongest nearby fire lights, so a
  * baked fireball sits in noon, dusk, night or storm lighting and still has a
  * correctly lit / shadowed side when the view rotates. Rotated / mirrored
@@ -17,14 +18,28 @@ import type { ParticleUniforms } from './gpuparticles';
  *
  * Rendering: one instanced draw call of camera-facing quads, sorted back to
  * front on the CPU (a few hundred sprites at most), premultiplied-alpha
- * blending (lit smoke + additive fire in one pass), smooth frame blending,
+ * blending (lit smoke + additive fire in one pass), motion-vector frame
+ * interpolation (each frame is morphed along the baked flow towards the next
+ * instead of a ghosting cross-fade), the emission is HDR so it feeds the bloom,
  * soft contact with the terrain (height texture), near-camera fade and the
  * fog of war. Loading is lazy and never blocks: until the atlases arrive (or
  * on low quality) `ready` is false and the callers keep the procedural path.
  * The shader program is compiled once with a 1x1 placeholder texture.
  */
 
-export type FlipKind = 'fireball' | 'burst' | 'fuel' | 'dust' | 'smoke' | 'flame' | 'sparks' | 'airburst';
+export type FlipKind =
+  | 'fireball'
+  | 'burst'
+  | 'fuel'
+  | 'dust'
+  | 'smoke'
+  | 'flame'
+  | 'sparks'
+  | 'airburst'
+  | 'collapse'
+  | 'smokeloop'
+  | 'puff'
+  | 'debris';
 
 export interface FlipOpts {
   x: number;
@@ -89,6 +104,8 @@ interface Sprite {
   mirror: number;
   warp: number;
   loop: boolean;
+  /** Loop playback rate (frames / s). */
+  rate: number;
   depth: number;
 }
 
@@ -96,10 +113,12 @@ interface Manifest {
   frame: number;
   grid: number;
   blocks: [number, number];
+  /** Motion-vector atlas: flow stored as 0.5 + px / (2 * scale) (frame pixels). */
+  motion?: { scale: number };
   effects: Record<string, { block: number; life: number; loop: boolean; emission: number }>;
 }
 
-const KINDS: FlipKind[] = ['fireball', 'burst', 'fuel', 'dust', 'smoke', 'flame', 'sparks', 'airburst'];
+const KINDS: FlipKind[] = ['fireball', 'burst', 'fuel', 'dust', 'smoke', 'flame', 'sparks', 'airburst', 'collapse', 'smokeloop', 'puff', 'debris'];
 /** Floats per instance. */
 const STRIDE = 16;
 
@@ -184,6 +203,8 @@ const VERT = /* glsl */ `
 const FRAG = /* glsl */ `
   uniform sampler2D tA;
   uniform sampler2D tB;
+  uniform sampler2D tM;
+  uniform float uMotion;
   uniform vec2 uBlocks;
   uniform float uGrid;
   uniform float uTexel;
@@ -213,11 +234,20 @@ const FRAG = /* glsl */ `
     return c;
   }
   void main() {
-    vec2 uv = clamp( vUv, vec2( uTexel ), vec2( 1.0 - uTexel ) ) * vFx.w * vec2( 1.0, uBlocks.x / uBlocks.y );
-    vec4 a0 = texture2D( tA, vCell.xy + uv );
-    vec4 a1 = texture2D( tA, vCell.zw + uv );
-    vec4 b0 = texture2D( tB, vCell.xy + uv );
-    vec4 b1 = texture2D( tB, vCell.zw + uv );
+    vec2 cs = vFx.w * vec2( 1.0, uBlocks.x / uBlocks.y );
+    vec2 lo = vec2( uTexel ), hi = vec2( 1.0 - uTexel );
+    vec2 uv0 = clamp( vUv, lo, hi );
+    vec2 uv1 = uv0;
+    if ( uMotion > 0.0 ) {
+      // morph along the baked optical flow: frame 0 pulled forward, frame 1 pulled back
+      vec2 m = ( texture2D( tM, vCell.xy + uv0 * cs ).rg - 0.5 ) * uMotion;
+      uv0 = clamp( uv0 - m * vBlend, lo, hi );
+      uv1 = clamp( uv1 + m * ( 1.0 - vBlend ), lo, hi );
+    }
+    vec4 a0 = texture2D( tA, vCell.xy + uv0 * cs );
+    vec4 a1 = texture2D( tA, vCell.zw + uv1 * cs );
+    vec4 b0 = texture2D( tB, vCell.xy + uv0 * cs );
+    vec4 b1 = texture2D( tB, vCell.zw + uv1 * cs );
     vec4 A = mix( a0, a1, vBlend );
     vec4 B = mix( b0, b1, vBlend );
     float soft = 1.0;
@@ -289,6 +319,8 @@ export class Flipbooks {
       uniforms: {
         tA: { value: blank },
         tB: { value: blank },
+        tM: { value: blank },
+        uMotion: { value: 0 },
         uBlocks: { value: new THREE.Vector2(4, 2) },
         uGrid: { value: 8 },
         uTexel: { value: 0.5 / 128 },
@@ -319,10 +351,24 @@ export class Flipbooks {
       if (!res.ok) return false;
       const man = (await res.json()) as Manifest;
       const sfx = this.half ? '-half' : '';
-      const [a, b] = await Promise.all([this.image(`${base}fx-a${sfx}.webp`), this.image(`${base}fx-b${sfx}.webp`)]);
+      // split lossy files (tools/blender/fx_pack.py): lightmaps at half resolution (shared by every
+      // tier), coverage and emission at full (phones: half) resolution, motion vectors
+      const [l0, l1, cov, emi, mv] = await Promise.all([
+        this.bitmap(`${base}fx-l0.webp`),
+        this.bitmap(`${base}fx-l1.webp`),
+        this.bitmap(`${base}fx-c${sfx}.webp`),
+        this.bitmap(`${base}fx-e${sfx}.webp`),
+        man.motion ? this.image(`${base}fx-m${sfx}.webp`).catch(() => null) : Promise.resolve(null),
+      ]);
+      const [a, b] = assemble(l0, l1, cov, emi);
       const u = this.mat.uniforms;
       u.tA.value = a;
       u.tB.value = b;
+      if (mv && man.motion) {
+        u.tM.value = mv;
+        // stored 0.5 + px / (2 scale)  ->  cell uv = (v - 0.5) * 2 scale / frame
+        u.uMotion.value = (2 * man.motion.scale) / man.frame;
+      }
       u.uBlocks.value.set(man.blocks[0], man.blocks[1]);
       u.uGrid.value = man.grid;
       u.uTexel.value = 0.5 / (man.frame * (this.half ? 0.5 : 1));
@@ -335,11 +381,14 @@ export class Flipbooks {
     }
   }
 
+  private async bitmap(url: string): Promise<ImageBitmap> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(url);
+    return createImageBitmap(await res.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  }
+
   private async image(url: string): Promise<THREE.Texture> {
-    const blob = await (await fetch(url)).blob();
-    // straight (non-premultiplied) data: the alpha channel of the second atlas is emission, not coverage
-    const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-    const t = new THREE.Texture(bmp);
+    const t = new THREE.Texture(await this.bitmap(url));
     t.flipY = false;
     t.premultiplyAlpha = false;
     t.generateMipmaps = false;
@@ -405,8 +454,13 @@ export class Flipbooks {
       mirror: Math.random() < 0.5 ? -1 : 1,
       warp: o.warp ?? 1,
       loop: m.loop,
+      rate: this.frames() / Math.max(0.1, m.life),
       depth: 0,
     } satisfies Sprite);
+  }
+
+  private frames() {
+    return (this.mat.uniforms.uGrid.value as number) ** 2;
   }
 
   get active() {
@@ -462,7 +516,7 @@ export class Flipbooks {
       let fr: number;
       let a: number;
       if (s.loop) {
-        fr = ((s.age * 26) % frames + frames) % frames;
+        fr = ((s.age * s.rate) % frames + frames) % frames;
         a = Math.min(1, s.age / 0.25, (s.life - s.age) / 0.5);
       } else {
         fr = Math.min(frames - 1.001, Math.pow(t, s.warp) * (frames - 1));
@@ -493,6 +547,39 @@ export class Flipbooks {
   static kinds() {
     return KINDS;
   }
+}
+
+/**
+ * Re-assemble the two RGBA atlases the shader samples from the split files:
+ * A = lightmaps (+x, +y, -x) + coverage, B = lightmaps (-y, front, back) + emission.
+ * The half-resolution lightmaps are upscaled bilinearly by the canvas.
+ */
+function assemble(l0: ImageBitmap, l1: ImageBitmap, cov: ImageBitmap, emi: ImageBitmap): [THREE.DataTexture, THREE.DataTexture] {
+  const W = cov.width;
+  const H = cov.height;
+  const cv: OffscreenCanvas | HTMLCanvasElement = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
+  const ctx = cv.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'low';
+  const read = (bmp: ImageBitmap) => {
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(bmp, 0, 0, W, H);
+    bmp.close();
+    return ctx.getImageData(0, 0, W, H).data;
+  };
+  const make = (lit: ImageBitmap, alpha: ImageBitmap) => {
+    const out = read(lit).slice();
+    const al = read(alpha);
+    for (let i = 3; i < out.length; i += 4) out[i] = al[i - 3];
+    const t = new THREE.DataTexture(new Uint8Array(out.buffer), W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.colorSpace = THREE.NoColorSpace;
+    t.needsUpdate = true;
+    return t;
+  };
+  return [make(l0, cov), make(l1, emi)];
 }
 
 function smooth(a: number, b: number, x: number) {
