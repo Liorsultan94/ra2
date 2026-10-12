@@ -33,8 +33,7 @@ import {
  * instances, culling, envdamage (toppling, charring, fires) and minimap; the hero model
  * and the material change, a second instanced mesh draws the impostors and the instance
  * colours become relative tints (per-tree variation and the climate's season) over the
- * baked leaf colours. ?trees=0 keeps the procedural trees (before / after comparisons);
- * low quality keeps them too.
+ * baked leaf colours. Opt-in with ?trees=blender (default: the procedural trees); low quality keeps them.
  */
 
 interface Manifest {
@@ -57,7 +56,9 @@ export interface TreeAssets {
 
 export function treeAssetsWanted(quality: 'low' | 'medium' | 'high'): boolean {
   if (quality === 'low') return false;
-  if (typeof location !== 'undefined' && /[?&]trees=0\b/.test(location.search)) return false;
+  // opt-in for now (?trees=blender): at the play zoom the baked crowns still read flatter and darker than the
+  // procedural leaf-card trees (see the BV1 report), so the default look is unchanged until that is tuned
+  if (typeof location === 'undefined' || !/[?&]trees=blender\b/.test(location.search)) return false;
   return typeof createImageBitmap !== 'undefined' && typeof fetch !== 'undefined';
 }
 
@@ -148,7 +149,7 @@ export function loadTreeAssets(kinds: string[], quality: 'medium' | 'high'): Pro
       gltf.scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
-        const name = mesh.name.replace(/^hero_/, '');
+        const name = mesh.name.replace(/^hero_/, '').replace(/\.?\d{3}$/, '');
         out.set(name, bakeHero(mesh));
       });
       return out;
