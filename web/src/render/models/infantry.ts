@@ -9,6 +9,7 @@ import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle } from './types';
 import { gearWebbing } from './infbake';
 import { uniformCamo, unitLook } from './unittex';
+import { skinFor, skinTeamPatch, type Skin } from './blenderskin';
 
 /*
  * Procedural, animated infantry.
@@ -124,8 +125,9 @@ function strut(a: V3, b: V3, r: number, seg = 5): G {
 // --------------------------------------------------------------- kits
 
 // ('med' / 'red': the medic's white field and red cross - only medics carry them, so nobody else gets the draw calls)
-type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair' | 'med' | 'red';
-const MK_ORDER: MK[] = ['camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat', 'med', 'red'];
+// ('bl': a Blender-authored skin (models/blenderskin.ts): one baked atlas for every part it replaces)
+type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair' | 'med' | 'red' | 'bl';
+const MK_ORDER: MK[] = ['bl', 'camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat', 'med', 'red'];
 /** Texture repeats per metre (worldUV) for textured materials. */
 const UVS: Partial<Record<MK, number>> = { camo: 2.6, gear: 3.5, dark: 5, gun: 4, tube: 3 };
 
@@ -421,10 +423,32 @@ function uniformMat(faction: string, tint: number, fog: FogOfWar | null) {
   return m;
 }
 
-function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: number): Record<MK, THREE.Material> {
+/**
+ * Blender skin (models/blenderskin.ts): the baked albedo / normal / orm atlas with the player colour on the
+ * orm R mask, and the same fog, rim light and infantry fill as the procedural materials. One program for
+ * every soldier wearing it whatever the team (the team colour is a uniform).
+ */
+function skinMat(skin: Skin, team: number, fog: FogOfWar | null) {
+  const k = `${fogId(fog)}:bl:${skin.def.id}:${team}`;
+  let m = stdCache.get(k);
+  if (!m) {
+    // glTF tangent-space normals with derivative tangents (as GLTFLoader does): green flipped
+    m = new THREE.MeshStandardMaterial({ map: skin.albedo, normalMap: skin.normal, normalScale: new THREE.Vector2(1, -1), roughnessMap: skin.orm, metalnessMap: skin.orm, roughness: 1, metalness: 1, vertexColors: true });
+    if (fog) fog.apply(m);
+    skinTeamPatch(m, team);
+    unitLook(m, { rim: 0.6 });
+    infLook(m);
+    stdCache.set(k, m);
+  }
+  return m;
+}
+
+function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: number, skin: Skin | null): Record<MK, THREE.Material> {
   const fac = KITS[style.faction] ? style.faction : (REGION_FALLBACK[style.region] ?? 'usa');
+  const camo = uniformMat(fac, kit.camoTint ?? 0xffffff, fog);
   return {
-    camo: uniformMat(fac, kit.camoTint ?? 0xffffff, fog),
+    bl: skin ? skinMat(skin, style.team, fog) : camo,
+    camo,
     gear: kit.gearTex === 'camo' ? uniformMat(fac, 0xd6d6d6, fog) : gearMat(kit.gear.color ?? 0x8c7854, fog),
     dark: stdMat('dark', fog, { color: 0x2d2c29, roughness: 0.82, metalness: 0 }, 0.45),
     gun: pbrCopy(`gun:${kit.gun}`, fog, () => pbrMaterial('metalPanel', { color: kit.gun, size: 128, divisions: 1, grime: 0.15, metalness: 0.45, roughness: 0.7 }), 0.45),
@@ -454,6 +478,8 @@ const L_HI = 3;
 
 /** Baked vertex shading: sky occlusion (dark undersides) and a vertical value ramp (light helmet / shoulders, darker legs and boots) that keeps the silhouette readable from the RTS camera. */
 const GRADED: Partial<Record<MK, number>> = { camo: 1, gear: 1, dark: 1, skin: 0.6, tube: 0.4, gun: 0.25 };
+/** Share of the vertical value ramp kept on a Blender skin (its baked AO replaces the normal-based occlusion). */
+const SKIN_RAMP = 1;
 
 /** Cylindrical UVs about the local Y axis (constant texel density on a ~9 cm radius limb). */
 function cylUV(g: G, sc: number) {
@@ -469,7 +495,7 @@ function cylUV(g: G, sc: number) {
 class Rig {
   readonly top = new THREE.Group();
   readonly bones: THREE.Bone[] = [];
-  private parts = new Map<MK, { g: G; mask: number }[]>();
+  private parts = new Map<MK, { g: G; mask: number; bone: number }[]>();
   /** Geometry added to the key bone is modelled in the value's rest frame (the joint sits higher up the same chain). */
   readonly frames = new Map<THREE.Bone, THREE.Object3D>();
   /** Soft skinning: vertices of the key bone blend into `lo` below frame-local height y1 (fully `lo` under y0). */
@@ -527,6 +553,7 @@ class Rig {
       return;
     }
     for (const g of geos) delete g.userData.lo;
+    const baked = mk === 'bl';
     const fr = this.frames.get(b) ?? b;
     fr.updateWorldMatrix(true, false);
     const idx = this.bones.indexOf(b);
@@ -536,10 +563,11 @@ class Rig {
     if (!list) this.parts.set(mk, (list = []));
     const gr = GRADED[mk] ?? 0;
     for (const g of geos) {
-      for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
+      // (a Blender skin part keeps its atlas uv)
+      for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal' && !(baked && name === 'uv')) g.deleteAttribute(name);
       if (!g.attributes.normal) g.computeVertexNormals();
       const n = g.attributes.position.count;
-      const sc = this.uvs[mk] ?? UVS[mk];
+      const sc = baked ? 0 : (this.uvs[mk] ?? UVS[mk]);
       if (sc && this.cyl) cylUV(g, sc);
       if (!g.index) {
         const ix: number[] = [];
@@ -570,12 +598,42 @@ class Rig {
         const ny = nor.getY(i);
         const ramp = 0.68 + 0.32 * sstep(0.02, 1.45, y) + 0.06 * sstep(1.6, 1.85, y);
         const occ = 0.74 + 0.26 * (ny * 0.5 + 0.5);
-        const c = this.shade * mix(1, ramp * occ, gr);
+        // a Blender skin has its occlusion in the albedo already: only (part of) the readability ramp
+        const c = baked ? mix(1, ramp, SKIN_RAMP) : this.shade * mix(1, ramp * occ, gr);
         col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = c;
       }
       g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      list.push({ g, mask: this.mask });
+      list.push({ g, mask: this.mask, bone: idx });
     }
+  }
+  /**
+   * Blender skin (models/blenderskin.ts): replace every part on the bones the skin covers by the skin's
+   * part for that bone (named after the bone, modelled in the bone's frame like Rig.add parts; [LOD0, LOD1,
+   * LOD2]). Bones, frames, soft skinning, points and the parts of uncovered bones are kept. Returns the
+   * names of the bones swapped.
+   */
+  swapSkin(skin: Skin): string[] {
+    const done: string[] = [];
+    const hit = new Set<number>();
+    for (const [name, lods] of skin.parts) {
+      const b = this.bones.find((x) => x.name === name);
+      if (b && lods.length) {
+        hit.add(this.bones.indexOf(b));
+        done.push(name);
+      }
+    }
+    for (const [mk, list] of this.parts) {
+      const keep = list.filter((x) => !hit.has(x.bone));
+      for (const x of list) if (hit.has(x.bone)) x.g.dispose();
+      this.parts.set(mk, keep);
+    }
+    for (const name of done) {
+      const b = this.bones.find((x) => x.name === name)!;
+      const lods = skin.parts.get(name)!;
+      // LOD1 / LOD2 fall back to the next finer level when the asset has none
+      for (let lv = 0; lv < 3; lv++) this.addL(1 << lv, b, 'bl', lods[Math.min(lv, lods.length - 1)].clone());
+    }
+    return done;
   }
   /** World (body-space) position of a bone-local point at rest. */
   rest(b: THREE.Object3D, p: V3): THREE.Vector3 {
@@ -1440,6 +1498,12 @@ interface Tpl {
   tris: number;
   /** Muzzle of the second launcher (Model.altMuzzle). */
   altMuzzle?: string;
+  /** Triangles per geometry LOD. */
+  lodTris: number[];
+  /** Bone name -> the bone its parts are modelled in (Rig.frames; bones not listed: their own frame). */
+  frames: Record<string, string>;
+  /** Blender skin worn (models/blenderskin.ts) and the bones it replaced, or null (procedural). */
+  skin: { id: string; bones: string[] } | null;
 }
 
 const RIFLE_K: V3 = [1, 1.12, 1.3];
@@ -1635,6 +1699,14 @@ function buildMortarTpl(r: Rig, kit: Kit, t: Tpl) {
 }
 
 const tplCache = new Map<string, Tpl>();
+
+/**
+ * Tooling / tests (tools/blender/export-procedural.ts): the rest-pose template behind an infantry model
+ * (merged skinned meshes in body-space metres, skeleton, modelling frames, triangles per LOD, skin worn).
+ */
+export function infantryTemplate(key: string, style: ModelStyle, fog: FogOfWar | null = null): Readonly<Tpl> {
+  return getTpl(key, style, fog);
+}
 // a finished match: drop its fog's templates and materials (fogcache.ts)
 onFogRelease((f) => {
   const id = fogIds.get(f);
@@ -1661,17 +1733,25 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
     size: { x: 0.12, y: 0.36, z: 0.12 },
     key,
     tris: 0,
+    lodTris: [0, 0, 0],
+    frames: {},
+    skin: null,
   };
   const pat = kit.camo.pattern;
   r.uvs = { camo: pat === 'digital' ? 1.5 : pat === 'flecktarn' ? 1.9 : 2.3, gear: kit.gearTex === 'camo' ? (pat === 'digital' ? 1.8 : 2.2) : 3.5 };
   if (key === 'mortar') buildMortarTpl(r, kit, t);
   else if (key === 'sniper') buildSniperTpl(r, kit, style, t);
   else buildSoldierTpl(r, kit, key, t);
+  // Blender skin for this model key + nation (loaded at boot; until then, or without it, procedural)
+  const skin = skinFor(key, style.faction);
+  if (skin) t.skin = { id: skin.def.id, bones: r.swapSkin(skin) };
+  for (const [b, f] of r.frames) t.frames[b.name] = f.name;
   const glowColor = key === 'ewinf' ? 0x5dff7a : 0x63d8ff;
-  const mats = materials(kit, style, fog, glowColor);
+  const mats = materials(kit, style, fog, glowColor, skin);
   const { skel, tris } = r.finish(mats, t.sphere);
   t.skel = skel;
   t.tris = tris;
+  t.lodTris = r.lodTris.slice();
   t.top.traverse((o) => {
     const m = o as THREE.SkinnedMesh;
     if (m.isSkinnedMesh && m.material === mats.glow) t.glowMat = mats.glow;
