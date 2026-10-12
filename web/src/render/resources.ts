@@ -427,10 +427,10 @@ export class Resources {
       const gem = kinds[i] === 2;
       // lie on the slope of the ground
       nrm.set(surfaceHeight(m, x - 0.4, z) - surfaceHeight(m, x + 0.4, z), 0.8, surfaceHeight(m, x, z - 0.4) - surfaceHeight(m, x, z + 0.4)).normalize();
-      const s = gem ? 1.9 : 1.3;
+      const s = gem ? 1.5 : 1.15; // pool radius (tiles): a soft halo, not a dazzling disc
       this.glow.setMatrixAt(k, new THREE.Matrix4().compose(new THREE.Vector3(x, surfaceHeight(m, x, z) + 0.02, z), new THREE.Quaternion().setFromUnitVectors(up, nrm), new THREE.Vector3(s, 1, s)));
       const r = hash2(x | 0, z | 0, 79);
-      this.glowBase.push(gem ? new THREE.Color().setHSL(0.75 + (r - 0.5) * 0.05, 0.85, 0.5).multiplyScalar(0.22) : new THREE.Color(0.5, 0.3, 0.08).multiplyScalar(0.12));
+      this.glowBase.push(gem ? new THREE.Color().setHSL(0.75 + (r - 0.5) * 0.05, 0.85, 0.5).multiplyScalar(0.11) : new THREE.Color(0.5, 0.3, 0.08).multiplyScalar(0.08));
     });
     this.glow.count = tiles.length;
     this.glow.frustumCulled = false;
