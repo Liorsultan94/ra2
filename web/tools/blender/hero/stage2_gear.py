@@ -339,6 +339,24 @@ for sx in SIDES:
     ua = va.cross(out).normalized()
     project_sheet(glove_bvh, 'Glove_Knuckle_%s' % ('L' if sx > 0 else 'R'), kc, ua, va, -out, 0.033, 0.016, 10, 4, 0.004,
                   'arms', M['glove_pad'], thick=0.004, round_n=4, bevel=0.0012)
+    # padded palm (rides rigidly on the hand bone in stage 2b)
+    W, fd, palm, lat = hand_frame(sx)
+    pc = W + fd * 0.058 + lat * 0.005
+    project_sheet(glove_bvh, 'Glove_Palm_%s' % ('L' if sx > 0 else 'R'), pc - palm * 0.0, fd, lat, -palm, 0.03, 0.027, 8, 8,
+                  0.0022, 'arms', M['glove_pad'], thick=0.0025, round_n=3.5, bevel=0.001)
+# finger seams on the gloves: down both sides of every finger and across the knuckles
+seam = []
+for v in gloves.data.vertices:
+    p = v.co
+    sx = 1.0 if p.x >= 0 else -1.0
+    W, fd, palm, lat = hand_frame(sx)
+    a, c = (p - W).dot(fd), (p - W).dot(lat)
+    d = 1.0
+    for fname, ((lo, hi), mcp) in FINGERS.items():
+        if a > mcp - 0.01 and lo - 0.004 <= c < hi + 0.004:
+            d = min(d, abs(c - lo), abs(c - hi), abs(a - mcp) + 0.002)
+    seam.append(d * 1.6)
+set_seam(gloves, seam)
 
 # ---------------------------------------------------------------- boots (built from a boot last, see hero_boots.py)
 build_boots(M, skin_bm, pants, SIDES)

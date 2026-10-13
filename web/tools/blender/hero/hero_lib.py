@@ -59,6 +59,26 @@ def arm_point(t, side):
     return Vector((side * (SHOULDER[0] + ARM_DIR.x * t), 0.0, SHOULDER[1] + ARM_DIR.y * t))
 
 
+# ---------------------------------------------------------------- hand frame (A-pose) and finger layout (r17)
+FINGERS = {  # name: (across range in the hand frame, knuckle (MCP) distance along the hand from the wrist)
+    'index': ((-0.058, -0.034), 0.118),
+    'middle': ((-0.032, -0.004), 0.120),
+    'ring': ((-0.002, 0.030), 0.115),
+    'pinky': ((0.034, 0.070), 0.105),
+}
+FINGER_NAMES = ('index', 'middle', 'ring', 'pinky', 'thumb')
+
+
+def hand_frame(sx):
+    """wrist point, along-the-hand axis, palm normal and across axis (thumb at negative across) for a side."""
+    W = Vector((sx * 0.396, -0.063, 0.958))
+    K = W + Vector((sx * 0.02, -0.035, -0.088))
+    fd = (K - W).normalized()
+    palm = Vector((-sx, 0, 0))
+    lat = fd.cross(palm).normalized() * sx
+    return W, fd, palm, lat
+
+
 def is_hand(p):
     return abs(p.x) > 0.25 and 0.6 < p.z < 1.1 and arm_t(p)[0] > WRIST_T
 

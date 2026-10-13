@@ -4,7 +4,7 @@ Iron Front - BI2 hero soldier, stage 2b: low-ready pose with the rifle in both h
   nice /opt/blender/blender -b --factory-startup -P web/tools/blender/hero/stage2b_pose.py
 
 Loads $HERO_WORK/stage2.blend (A-pose, fully dressed), adds a small arm rig (torso, upper arm,
-forearm, hand, three finger bones and a thumb per side), binds the body with bone-heat weights and
+forearm, hand, and a 3-bone chain for each finger and the thumb), binds the body with bone-heat weights and
 copies those weights to everything that rides on the arms (sleeves, cuffs, patches, gloves).
 The Tavor is placed at low ready (butt at the right shoulder pocket, muzzle down to the front-left);
 IK (with a little stretch) puts the wrists on the grip and the hand guard, the hands are turned to
@@ -24,6 +24,41 @@ bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage2.blend'))
 M = {m.name: m for m in bpy.data.materials}
 body = bpy.data.objects['Body']
 SIDES = (1.0, -1.0)
+
+# ---------------------------------------------------------------- finger chains from the A-pose hand skin
+_bw = body.matrix_world
+_hand_pts = [_bw @ v.co for v in body.data.vertices if is_hand(_bw @ v.co)]
+
+
+def finger_chains(sx):
+    W, fd, palm, lat = hand_frame(sx)
+    pts = [p for p in _hand_pts if p.x * sx > 0]
+
+    def slice_c(a, lo, hi, w=0.006):
+        sel = [p for p in pts if abs((p - W).dot(fd) - a) < w and lo <= (p - W).dot(lat) < hi]
+        if not sel:
+            return W + fd * a + lat * ((lo + hi) / 2)
+        return sum(sel, Vector()) / len(sel)
+    out = {}
+    for fname, ((lo, hi), mcp) in FINGERS.items():
+        sel = [p for p in pts if lo <= (p - W).dot(lat) < hi and (p - W).dot(fd) > mcp]
+        tip = max((p - W).dot(fd) for p in sel) - 0.004
+        L = tip - mcp
+        out[fname] = [slice_c(mcp, lo, hi), slice_c(mcp + 0.45 * L, lo, hi), slice_c(mcp + 0.76 * L, lo, hi),
+                      slice_c(tip, lo, hi, 0.004)]
+    # thumb: from its root at the base of the palm out to the tip
+    th = [p for p in pts if (p - W).dot(lat) < -0.058 and (p - W).dot(fd) > 0.1]
+    tip = max(th, key=lambda p: (p - W).dot(fd))
+    base = W + Vector((0.0, -0.045, -0.03))
+    chain = [base]
+    for f in (0.42, 0.74):
+        q = base.lerp(tip, f)
+        near = [p for p in pts if (p - q).length < 0.013 and (p - W).dot(lat) < -0.04]
+        chain.append(sum(near, Vector()) / len(near) if near else q)
+    chain.append(tip.lerp(chain[-1], 0.08))
+    out['thumb'] = chain
+    return out
+
 
 # ---------------------------------------------------------------- rig (rest = the A-pose of the base mesh)
 arm_data = bpy.data.armatures.new('Rig')
@@ -51,23 +86,18 @@ for sx in SIDES:
     f = eb.new('forearm.' + s); f.head = E; f.tail = W; f.parent = u; f.use_connect = True
     h = eb.new('hand.' + s); h.head = W; h.tail = K; h.parent = f; h.use_connect = True
     h.align_roll(palm)
-    fd = (K - W).normalized()
-    prev = h
-    p0 = K
-    for i, ln in enumerate((0.045, 0.032, 0.026)):
-        b = eb.new('fingers%d.%s' % (i + 1, s))
-        b.head = p0
-        b.tail = p0 + fd * ln
-        b.parent = prev
-        b.use_connect = True
-        b.align_roll(palm)
-        prev = b
-        p0 = b.tail
-    th = eb.new('thumb.' + s)
-    th.head = W + Vector((sx * 0.0, -0.045, -0.03))
-    th.tail = Vector((sx * 0.393, -0.191, 0.863))
-    th.parent = h
-    th.align_roll(palm)
+    # separate fingers (r17): a 3-bone chain per finger and the thumb, joints at the centroids of the finger's
+    # skin slices, so each chain runs down the middle of its finger
+    for fname, chain in finger_chains(sx).items():
+        prev = h
+        for i in range(3):
+            b = eb.new('%s%d.%s' % (fname, i + 1, s))
+            b.head = chain[i]
+            b.tail = chain[i + 1]
+            b.parent = prev
+            b.use_connect = i > 0
+            b.align_roll(palm)
+            prev = b
     for b in (u, f):
         b.align_roll(Vector((0, 1, 0)))
 bpy.ops.object.mode_set(mode='OBJECT')
@@ -182,6 +212,7 @@ for v in body.data.vertices:
             if nm_ != 'visible':
                 vw[v.index][nm_] = g.weight
 riders = ['Shirt', 'Cuff_L', 'Cuff_R', 'Cuff_Tab_L', 'Cuff_Tab_R', 'Patch_Flag_IL', 'Patch_Velcro', 'Gloves', 'Glove_Strap_L', 'Glove_Strap_R',
+          'Glove_Palm_L', 'Glove_Palm_R',
           'Glove_Knuckle_L', 'Glove_Knuckle_R', 'Sleeve_Pocket', 'Sleeve_PocketFlap', 'Sleeve_Roll_L', 'Sleeve_Roll_R']
 for nm in riders:
     o = bpy.data.objects.get(nm)
@@ -203,7 +234,7 @@ for nm in riders:
                 acc[n] = acc.get(n, 0.0) + x * w
         if not nm.startswith('Glove'):  # sleeves and cuffs end at the wrist: hand / finger weights go to the forearm
             for n in list(acc.keys()):
-                if n.startswith(('hand.', 'fingers', 'thumb.')):
+                if n.startswith(('hand.',) + FINGER_NAMES):
                     fa = 'forearm.' + n.split('.')[-1]
                     acc[fa] = acc.get(fa, 0.0) + acc.pop(n)
         if nm.startswith('Glove_'):  # wrist strap / pads: rigid on the hand (a wrist blend crumples the thin band)
@@ -286,9 +317,14 @@ def frame(dir_w, palm_w):
 # trigger guard like a vertical fore grip (palm on its left side, thumb up under the hand guard, fingers round
 # the front). It used to sit inside the guard, on top of the right hand's fingers, bent ~75 degrees at the wrist.
 grips = {
-    'R': dict(kn=(0.02, -0.03, -0.098), dir=(0.95, 0.25, -0.15), palm=(0.0, 1.0, 0.1), curl=(1.25, 1.2, 0.9), thumb=0.5,
+    # per-finger curl (MCP, PIP, DIP) in radians; the right index lies straight along the frame (trigger discipline)
+    'R': dict(kn=(0.02, -0.03, -0.098), dir=(0.95, 0.25, -0.15), palm=(0.0, 1.0, 0.1),
+              curl=dict(index=(0.1, 0.12, 0.08), middle=(1.35, 1.3, 0.95), ring=(1.4, 1.3, 1.0), pinky=(1.45, 1.3, 1.0),
+                        thumb=(0.35, 0.45, 0.35)),
               pole=((-0.45, 0.2, 0.7), 90)),
-    'L': dict(kn=(0.118, 0.035, -0.06), dir=(0.85, -0.45, 0.0), palm=(0.15, -1.0, 0.1), curl=(1.3, 1.25, 0.95), thumb=0.4,
+    'L': dict(kn=(0.118, 0.035, -0.06), dir=(0.85, -0.45, 0.0), palm=(0.15, -1.0, 0.1),
+              curl=dict(index=(1.25, 1.2, 0.9), middle=(1.3, 1.25, 0.95), ring=(1.35, 1.25, 0.95), pinky=(1.4, 1.25, 0.95),
+                        thumb=(0.25, 0.3, 0.25)),
               pole=((0.55, 0.05, 1.0), 0)),
 }
 # poles: elbows down beside the ribs, with the forearm roll matching the grip so the wrist barely twists (the
@@ -320,16 +356,100 @@ for s, g in grips.items():
         pb[bn].ik_stretch = 0.08
     cr = pb['hand.' + s].constraints.new('COPY_ROTATION')
     cr.target = ori
-    for i, a in enumerate(g['curl']):
-        b = pb['fingers%d.%s' % (i + 1, s)]
-        b.rotation_mode = 'XYZ'
-        b.rotation_euler = (a, 0, 0)
-    pb['thumb.' + s].rotation_mode = 'XYZ'
-    pb['thumb.' + s].rotation_euler = (g['thumb'], 0, 0.3 * sx)
+    for fname, curl in g['curl'].items():
+        for i, a in enumerate(curl):
+            b = pb['%s%d.%s' % (fname, i + 1, s)]
+            b.rotation_mode = 'XYZ'
+            b.rotation_euler = (a, 0, (0.3 * sx if (fname == 'thumb' and i == 0) else 0.0))
     print('target', s, tuple(round(c, 3) for c in wrist), 'dist', round((wrist - arm_data.bones['upper_arm.' + s].head_local).length, 3))
 bpy.context.view_layer.update()
 for s in ('L', 'R'):
     print('reached', s, tuple(round(c, 3) for c in (rig.matrix_world @ pb['hand.' + s].head)))
+
+# ---------------------------------------------------------------- finger fit: wrap each finger round the rifle
+# Forward kinematics of the finger chains from the posed hand (no depsgraph per try) and a small grid search
+# per finger: no finger segment inside or within its radius of the rifle, middle / tip close to the surface
+# (wrapped, in contact). The right index is laid straight along the frame above the trigger guard.
+rifle_bvh = bvh_of([o for o in rifle.children_recursive if o.type == 'MESH' and not o.name.startswith('RD_')])
+RW = rig.matrix_world
+FR = 0.0085  # finger radius (glove)
+
+
+def chain_points(s, fname, curls, spread=0.0):
+    hp = pb['hand.' + s].matrix
+    parent_rest = arm_data.bones['hand.' + s].matrix_local
+    m = hp
+    pts = []
+    for i in range(3):
+        bn = arm_data.bones['%s%d.%s' % (fname, i + 1, s)]
+        rel = parent_rest.inverted() @ bn.matrix_local
+        rot = Matrix.Rotation(curls[i], 4, 'X')
+        if i == 0 and spread:
+            rot = Matrix.Rotation(spread, 4, 'Z') @ rot
+        m = m @ rel @ rot
+        L = bn.length
+        for k in range(4):
+            pts.append(RW @ (m @ Vector((0, L * k / 4, 0))))
+        parent_rest = bn.matrix_local
+    pts.append(RW @ (m @ Vector((0, arm_data.bones['%s3.%s' % (fname, s)].length, 0))))
+    return pts
+
+
+def surf_d(p):
+    hit, n, _, d = rifle_bvh.find_nearest(p)
+    if hit is None:
+        return 1.0
+    return d if (p - hit).dot(n) >= 0 else -d
+
+
+def score(pts, target=None, cc=None, c0=None):
+    sc = 0.0
+    for p in pts[2:]:
+        d = surf_d(p)
+        if d < FR:
+            sc += (FR - d) ** 2 * 4e4 + (2.0 if d < 0 else 0.0)
+    if target is not None:
+        sc += (pts[-1] - target).length * 40
+    else:
+        for p in pts[5:]:  # wrapped: the middle and end segments rest on the rifle
+            sc += abs(surf_d(p) - (FR + 0.002)) * 6
+    if cc is not None and c0 is not None:  # stay close to a natural grip (no straight fingers lying on the side)
+        sc += 0.4 * sum((a - b) ** 2 for a, b in zip(cc, c0))
+    return sc
+
+
+R3i = rifle.matrix_world
+for s, g in grips.items():
+    for fname, curl in g['curl'].items():
+        sp0 = (0.3 if s == 'L' else -0.3) if fname == 'thumb' else 0.0
+        best = (score(chain_points(s, fname, curl, sp0)), tuple(curl), sp0)
+        if s == 'R' and fname == 'index':
+            target = R3i @ Vector((0.128, -0.036, -0.046))
+            best = (score(chain_points(s, fname, curl), target), tuple(curl), 0.0)
+            for c1 in (-0.3, -0.15, 0.0, 0.15, 0.3):
+                for sp in (-0.5, -0.35, -0.2, 0.0, 0.2, 0.35, 0.5):
+                    for c2 in (0.0, 0.12, 0.25):
+                        cc = (c1, c2, c2 * 0.6)
+                        sc = score(chain_points(s, fname, cc, sp), target)
+                        if sc < best[0]:
+                            best = (sc, cc, sp)
+        else:
+            best = (score(chain_points(s, fname, curl, sp0), cc=curl, c0=curl), tuple(curl), sp0)
+            c1s = [x * 0.2 for x in range(0, 8)] if fname != 'thumb' else [x * 0.15 - 0.3 for x in range(0, 8)]
+            sps = [sp0] if fname != 'thumb' else [sp0 + d_ for d_ in (-0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6)]
+            for spv in sps:
+                for c1 in c1s:
+                    for c2 in (0.2, 0.5, 0.8, 1.1, 1.4):
+                        for c3 in (0.2, 0.5, 0.8, 1.1):
+                            cc = (c1, c2, c3)
+                            sc = score(chain_points(s, fname, cc, spv), cc=cc, c0=curl)
+                            if sc < best[0]:
+                                best = (sc, cc, spv)
+        for i, a in enumerate(best[1]):
+            b = pb['%s%d.%s' % (fname, i + 1, s)]
+            b.rotation_euler = (a, 0, best[2] if i == 0 else 0.0)
+        print('finger', s, fname, 'curl', tuple(round(c, 2) for c in best[1]), 'spread', round(best[2], 2), 'score', round(best[0], 3))
+bpy.context.view_layer.update()
 
 # ---------------------------------------------------------------- relax the posed shirt with cloth
 # Linear skinning crushes and stretches the sleeves at the shoulders; a short cloth pass that starts
