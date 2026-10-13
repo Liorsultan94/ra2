@@ -22,6 +22,7 @@ import { Slicer } from '../render/slice';
 import { ATMOS_DEFAULTS, atmosConfig, simClockOf } from '../render/atmos';
 import { ViewModes } from '../render/viewmodes';
 import { prefetchModels, warmUp, type WarmupResult } from '../render/warmup';
+import { skinTextures } from '../render/models/blenderskin';
 import { Hud } from '../ui/hud';
 import { ControlsUI, type OrderMode } from '../ui/controls';
 import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
@@ -426,6 +427,8 @@ export class Game {
     void warmUp(this.renderer, factions, this.modes, (k) => !this.destroyed && progress(k), () => !this.destroyed)
       .then((res) => {
         this.warmup = res;
+        // the selection portrait draws with the cameo renderer (its own context): the Blender skins' maps go up there too
+        this.cameos.uploadTextures(skinTextures());
         console.info(`[warmup] ${res.models} models, ${res.programs} programs in ${res.ms} ms (longest slice ${res.worst} ms)`);
       })
       .catch((e) => !this.destroyed && console.warn('[warmup] failed', e))

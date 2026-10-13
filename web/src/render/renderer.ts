@@ -57,7 +57,7 @@ import { loadBuildingPhotos } from './models/bldtex';
 import { releaseBuildFx } from './models/buildfx';
 import { releaseMaterialListeners } from './glrelease';
 import { PerfProbe } from './perf/probe';
-import { applyLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
+import { applyLod, HeroLod, prepareLod, restoreMain, setCasting, type LodInfo } from './perf/lod';
 import { AutoInstancer } from './perf/instancer';
 import { FlareFx, UnitVeil } from './nightops';
 import { setBakeEnabled, setBakeRenderer, setBakeSize } from './models/vehbake';
@@ -319,6 +319,8 @@ export class GameRenderer {
   private wrecks: Wreck[] = [];
   /** Parachute canopies (airborne-drop support power). */
   private chutes: Paradrop;
+  /** Hero tier of the Blender skins: at most 6 soldiers at once (perf/lod.ts). */
+  readonly heroLod = new HeroLod(6);
   /** Crew hatches, transport ramps / walk-in-out, infantry digging in (unitlife.ts). */
   private life: UnitLife;
   /** MCV unfolding into a construction yard (deployfx.ts). */
@@ -1547,6 +1549,8 @@ export class GameRenderer {
         const rp = root.position;
         const depth = persp ? Math.max(0.5, (rp.x - cp.x) * cf.x + (rp.y - cp.y) * cf.y + (rp.z - cp.z) * cf.z) : 1;
         applyLod(v.lod, isPhoto ? 1e9 : lodK / depth);
+        // close-up tier (Blender skins): offered with the on-screen size (photo mode: ranked by distance)
+        if (v.lod.heroable) this.heroLod.offer(v.lod, isPhoto ? 2000 / Math.max(0.1, rp.distanceTo(cp)) : (lodK / depth) * v.lod.radius * 2);
         {
           v.near = nearNow;
           if (shadowsOn) setCasting(v.lod, v.near);
@@ -1563,6 +1567,8 @@ export class GameRenderer {
     this.airShadows.end();
     this.contact?.end();
     this.chutes.end(dt, this.time);
+    this.heroLod.cap = this.quality === 'low' ? 0 : 6;
+    this.heroLod.end();
     // (deleting the current entry while iterating a Map is safe: no per-frame copy of the visual list)
     if (this.visuals.size > seen.size) for (const v of this.visuals.values()) {
       if (seen.has(v.id)) continue;
