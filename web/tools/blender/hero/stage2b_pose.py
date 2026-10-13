@@ -140,10 +140,12 @@ print('unweighted body verts fixed', nfix)
 vis = body.vertex_groups.new(name='visible')
 for v in body.data.vertices:
     p = bw @ v.co
-    if p.z > 1.52 and abs(p.x) < 0.085:
+    # no gaiter (r10): the neck inside the collar band and the small V of skin at the open throat show too
+    throat = (abs(p.x) < 0.075 and neck_cut(p) - 0.012 < p.z < 1.53) or (p.y < -0.03 and abs(p.x) < 0.03 and 1.415 < p.z < 1.53)
+    if (p.z > 1.52 and abs(p.x) < 0.085) or throat:
         # the neck flares into the trapezius right where the shoulder pads meet the collar: keep that
         # skin masked so it can never show between collar and pad
-        if p.z > 1.525 + 0.6 * max(0.0, abs(p.x) - 0.055):
+        if p.z > 1.525 + 0.6 * max(0.0, abs(p.x) - 0.055) or throat:
             vis.add([v.index], 1.0, 'REPLACE')
         for g in armg:  # the visible neck / head never follows the arms
             g.remove([v.index])

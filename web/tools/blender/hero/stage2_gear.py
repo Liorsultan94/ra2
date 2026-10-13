@@ -12,7 +12,7 @@ Loads $HERO_WORK/stage1.blend (body + cloth-simulated uniform) and:
 - adds, ray-projected onto the dressed body: buttoned cuffs with tabs, IL flag patch, sleeve pocket,
   cargo pockets with flaps, knee pads, gloves, boots (hero_boots.py: lofted boot last with a firm toe box,
   heel counter, stitched welt, lugged outsole, eyelets, crossed laces and a bow; trousers bloused over the
-  tops), neck gaiter, glasses,
+  tops), fold-down collar with an open throat (hero_collar.py), neck gaiter (HERO_GAITER=1), glasses,
   helmet shell + Mitznefet (hero_mitz.py: oversized floppy mesh-net cover, drawstring), headset,
   chinstrap, plate carrier (plates, cummerbund, shoulder pads, MOLLE, name-tape hook field, sewn
   magazine pouches with bungees and pull tabs, admin pouch with flap / hook panel / zip, radio with
@@ -32,6 +32,7 @@ from hero_rifle import build_rifle, mag_profile
 from hero_boots import build_boots
 from hero_glasses import build_glasses
 from hero_mitz import build_mitznefet
+from hero_collar import build_collar, open_throat
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -244,27 +245,30 @@ for g, mat, fold_fn, seam_fn in ((shirt, M['uniform'], shirt_fold, shirt_seam), 
 dressed = bvh_of([shirt, pants, body])
 SIDES = (1.0, -1.0)  # +X = soldier's left
 
-# ---------------------------------------------------------------- gaiter (neck + lower face)
-def gaiter_pred(p):
-    top = 1.572 + 0.03 * max(0.0, min(1.0, (p.y + 0.07) / 0.1))  # below the chin: jaw and stubble show
-    return abs(p.x) < 0.13 and 1.455 < p.z < top
+# ---------------------------------------------------------------- gaiter (neck + lower face): off by default (r10, the
+# neck and the open collar show); HERO_GAITER=1 brings it back
+gaiter = None
+if os.environ.get('HERO_GAITER') == '1':
+    def gaiter_pred(p):
+        top = 1.572 + 0.03 * max(0.0, min(1.0, (p.y + 0.07) / 0.1))  # below the chin: jaw and stubble show
+        return abs(p.x) < 0.13 and 1.455 < p.z < top
 
 
-gb = extract(skin_bm, gaiter_pred)
-largest_island(gb)
-relax(gb, 0.006, skin_bvh, rounds=5, iters=8, fac=0.7)
-for v in gb.verts:  # soft horizontal sag folds
-    n = noise.noise(v.co * 40.0)
-    v.co += v.normal * (0.0022 * math.sin(v.co.z * 2 * math.pi / 0.022 + n * 2.5) + 0.0015 * n)
-gaiter = obj_from_bm('Gaiter', gb, 'head', M['gaiter'])
-gb.free()
-add_mod(gaiter, 'SUBSURF', levels=1, render_levels=2)
-add_mod(gaiter, 'SOLIDIFY', thickness=0.003, offset=-1.0)
+    gb = extract(skin_bm, gaiter_pred)
+    largest_island(gb)
+    relax(gb, 0.006, skin_bvh, rounds=5, iters=8, fac=0.7)
+    for v in gb.verts:  # soft horizontal sag folds
+        n = noise.noise(v.co * 40.0)
+        v.co += v.normal * (0.0022 * math.sin(v.co.z * 2 * math.pi / 0.022 + n * 2.5) + 0.0015 * n)
+    gaiter = obj_from_bm('Gaiter', gb, 'head', M['gaiter'])
+    gb.free()
+    add_mod(gaiter, 'SUBSURF', levels=1, render_levels=2)
+    add_mod(gaiter, 'SOLIDIFY', thickness=0.003, offset=-1.0)
 
 # ---------------------------------------------------------------- collar, cuffs, flag patch
-neck_bvh = bvh_of([shirt, gaiter, body])
-ring_band(neck_bvh, 'Collar_Stand', (0, -0.035, 1.47), (0, -0.15, 1), 0.0, 0.05, 40, 3, 0.004, 'torso', M['uniform'],
-          thick=0.0025, bevel=0.0008, a0=0.42, a1=2 * math.pi - 0.42, R=0.1)
+# fold-down shirt collar (band + roll + leaf with pointed tips), throat open below the top button
+collar = build_collar(M, bvh_of([body]), bvh_of([shirt]))
+open_throat(shirt)
 for sx in SIDES:
     ax = Vector((sx * ARM_DIR.x, 0, ARM_DIR.y))
     c = arm_point(0.0, sx)
@@ -434,7 +438,7 @@ for sx in SIDES:
     for k, zz in enumerate((1.072, 1.112, 1.152, 1.19)):
         ring_band(dressed, 'Vest_MolleC_%s%d' % (s, k), (0, -0.01, 0.0), (0, 0, 1), zz - 0.0125, zz + 0.0125, 22, 1,
                   0.018, 'vest', M['webbing'], thick=0.0022, a0=a0, a1=a1, R=0.22)
-vest_bvh = bvh_of([FP, BP, shirt, pants, body])
+vest_bvh = bvh_of([FP, BP, shirt, pants, body, collar])  # the pads pass over the collar
 # shoulder pads: path over each shoulder from the front plate to the back plate
 for sx in SIDES:
     s = 'L' if sx > 0 else 'R'
@@ -634,7 +638,7 @@ if os.environ.get('HERO_HEADSET') == '1':
     mic = cyl('Headset_MicFoam', 0.008, 0.016, (-0.016, -0.168, 1.6), (0, math.pi / 2, 0), 'helmet', M['rubber'], 20, 0.004)
     add_mod(mic, 'SUBSURF', levels=2, render_levels=2)
 # chinstrap (Y-straps in front of / behind the cups, buckle under the chin)
-chin_bvh = bvh_of([gaiter, body])
+chin_bvh = bvh_of([gaiter, body] if gaiter else [body])
 for sx in SIDES:
     s = 'L' if sx > 0 else 'R'
     for nm, path in (('F', [(sx * 0.10, -0.095, 1.69), (sx * 0.095, -0.095, 1.63), (sx * 0.07, -0.1, 1.585), (sx * 0.035, -0.11, 1.56), (0, -0.115, 1.553)]),

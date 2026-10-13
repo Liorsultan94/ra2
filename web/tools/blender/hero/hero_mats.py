@@ -383,7 +383,7 @@ def mesh_net(name):
     t.l(oc, vor.inputs['Vector'])
     vor.inputs['Scale'].default_value = 190.0
     vor.inputs['Randomness'].default_value = 0.2
-    thread = t.maprange(vor.outputs['Distance'], 0.40, 0.45)       # 0 = hole, 1 = netting
+    thread = t.maprange(vor.outputs['Distance'], 0.45, 0.50)       # 0 = hole, 1 = netting
     fib = t.noise(oc, 900.0, 2.0, 0.5)
     col = t.mix(t.maprange(fib.outputs['Fac'], 0.35, 0.65, 0.0, 0.15), col, (0.0, 0.0, 0.0, 1))
     aov = t.ao(0.04)

@@ -42,8 +42,8 @@ def build_mitznefet(M, HC, RX, RY, RZ, rim_z, nvg_at, segs=180, rings=64):
         rmax = rr + 0.042 + 0.012 * n1 + 0.006 * n2 - 0.012 * front
         zw = zr + 0.026 - 0.018 * max(0.0, n2 + 0.2) - 0.012 * (1 - front) * max(0.0, n1)   # sagging edge
         zw = max(zw, zr + 0.006)
-        rg = rr - 0.004                       # drawstring just under the rim
-        zg = zr - 0.006
+        rg = rr - 0.008                       # drawstring tucked just under the rim (hides the shell edge)
+        zg = zr - 0.011
         draw.append(HC + dirv * (rg + 0.001) + Vector((0, 0, zg - HC.z - 0.001)))
         row = []
         for j in range(1, rings + 1):
