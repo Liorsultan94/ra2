@@ -10,8 +10,9 @@ Loads $HERO_WORK/stage1.blend (body + cloth-simulated uniform) and:
   writes a 'seam' attribute (side / under-arm / arm-hole / yoke / placket / out- and in-seams, fly,
   knee reinforcement, back pockets) that the shaders turn into stitched, faded seams,
 - adds, ray-projected onto the dressed body: buttoned cuffs with tabs, IL flag patch, sleeve pocket,
-  cargo pockets with flaps, knee pads, gloves, boots (raised toe box, toe / heel caps, tongue,
-  crossed laces, eyelets, lugged outsole + welt with toe spring, pull loop), neck gaiter, glasses,
+  cargo pockets with flaps, knee pads, gloves, boots (hero_boots.py: lofted boot last with a firm toe box,
+  heel counter, stitched welt, lugged outsole, eyelets, crossed laces and a bow; trousers bloused over the
+  tops), neck gaiter, glasses,
   helmet shell + Mitznefet (cloth-simulated low-res proxy, ragged hem, loose flaps), headset,
   chinstrap, plate carrier (plates, cummerbund, shoulder pads, MOLLE, name-tape hook field, sewn
   magazine pouches with bungees and pull tabs, admin pouch with flap / hook panel / zip, radio with
@@ -28,6 +29,7 @@ from mathutils.bvhtree import BVHTree
 from hero_lib import *
 import hero_mats
 from hero_rifle import build_rifle, mag_profile
+from hero_boots import build_boots
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -304,141 +306,8 @@ for sx in SIDES:
     project_sheet(glove_bvh, 'Glove_Knuckle_%s' % ('L' if sx > 0 else 'R'), kc, ua, va, -out, 0.033, 0.016, 10, 4, 0.004,
                   'arms', M['glove_pad'], thick=0.004, round_n=4, bevel=0.0012)
 
-# ---------------------------------------------------------------- boots
-def boot_pred(p):
-    return p.z < 0.135 and abs(p.x) < 0.32
-
-
-bb = extract(skin_bm, boot_pred)
-relax(bb, 0.011, skin_bvh, rounds=4, iters=6, fac=0.6)
-# boot last: a raised, rounded toe box, fuller ball of the foot and a firm heel counter
-for v in bb.verts:
-    p = v.co
-    side = 1.0 if p.x >= 0 else -1.0
-    toe = smoothstep(-0.03, -0.11, p.y)
-    p.z += 0.009 * toe * smoothstep(0.004, 0.03, p.z)
-    p.x += side * 0.003 * gaussf(p.y + 0.06, 0.04) * smoothstep(0.0, 0.03, p.z) * (1 if abs(p.x) > 0.17 else -1)
-    heel = smoothstep(0.03, 0.09, p.y) * smoothstep(0.0, 0.02, p.z)
-    p.y += 0.004 * heel
-bm_seams = []
-boots = obj_from_bm('Boots', bb, 'feet', M['boot'])
-add_mod(boots, 'SUBSURF', levels=1, render_levels=2)
-add_mod(boots, 'SOLIDIFY', thickness=0.004, offset=-1.0)
-foot_bvh = BVHTree.FromBMesh(bb)
-# tall shaft wrapped around the trouser hem (trousers tucked into the boots)
-hem_bvh = bvh_of([pants, body])
-shafts = []
-for sx in SIDES:
-    shafts.append(ring_band(hem_bvh, 'BootShaft_%s' % ('L' if sx > 0 else 'R'), (sx * 0.165, 0.012, 0.0), (0, 0, 1), 0.075,
-                            0.255, 48, 14, 0.009, 'feet', M['boot'], thick=0.005, bevel=0.002, R=0.2))
-for o in shafts:
-    add_mod(o, 'SUBSURF', levels=1, render_levels=1)
-boot_bvh = bvh_of([boots] + shafts)
-
-
-def hull2d(pts):
-    pts = sorted(set(pts))
-    if len(pts) < 3:
-        return pts
-
-    def cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-    lo, up = [], []
-    for p in pts:
-        while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
-            lo.pop()
-        lo.append(p)
-    for p in reversed(pts):
-        while len(up) >= 2 and cross(up[-2], up[-1], p) <= 0:
-            up.pop()
-        up.append(p)
-    return lo[:-1] + up[:-1]
-
-
-def prism(name, outline, z0f, z1f, mat, bevel):
-    sm = bmesh.new()
-    r0 = [sm.verts.new((x, y, z0f(x, y))) for x, y in outline]
-    r1 = [sm.verts.new((x, y, z1f(x, y))) for x, y in outline]
-    sm.faces.new(r0[::-1])
-    sm.faces.new(r1)
-    n = len(r0)
-    for i in range(n):
-        sm.faces.new([r0[i], r0[(i + 1) % n], r1[(i + 1) % n], r1[i]])
-    o = obj_from_bm(name, sm, 'feet', mat)
-    sm.free()
-    add_mod(o, 'BEVEL', width=bevel, segments=3, limit_method='ANGLE', angle_limit=math.radians(35))
-    add_mod(o, 'WEIGHTED_NORMAL', keep_sharp=True)
-    return o
-
-
-for sx in SIDES:
-    s_ = 'L' if sx > 0 else 'R'
-    foot = [v.co for v in bb.verts if v.co.z < 0.045 and v.co.x * sx > 0]
-    h = hull2d([(round(p.x, 4), round(p.y, 4)) for p in foot])
-    cx = sum(p[0] for p in h) / len(h); cy = sum(p[1] for p in h) / len(h)
-    ymin = min(p[1] for p in h)
-
-    def grow(k):
-        out = []
-        for x, y in h:
-            d = Vector((x - cx, y - cy, 0)).normalized()
-            out.append((x + d.x * k, y + d.y * k))
-        return out
-    spring = lambda x, y: 0.012 * smoothstep(ymin + 0.06, ymin, y)          # toe spring
-    heelz = lambda x, y: 0.009 * smoothstep(cy + 0.03, cy + 0.07, y)         # heel block
-    # lugged outsole, stitched welt / midsole on top of it
-    prism('Sole_' + s_, grow(0.009), lambda x, y: spring(x, y), lambda x, y: 0.022 + heelz(x, y), M['sole'], 0.004)
-    prism('Welt_' + s_, grow(0.007), lambda x, y: 0.021 + heelz(x, y) + spring(x, y) * 0.5,
-          lambda x, y: 0.033 + heelz(x, y) + spring(x, y) * 0.3, M['boot_leather'], 0.002)
-    # toe and heel caps (smooth leather overlays) and a tongue under the laces
-    fb = foot_bvh
-    r = Vector((0, 0.55, -0.83)).normalized()
-    project_sheet(fb, 'BootToeCap_' + s_, (cx, ymin + 0.02, 0.05), (1, 0, 0), r.cross(Vector((1, 0, 0))), r, 0.048, 0.04,
-                  12, 10, 0.0015, 'feet', M['boot_leather'], thick=0.002, round_n=2.6, bevel=0.0008)
-    project_sheet(fb, 'BootHeelCap_' + s_, (cx, cy + 0.3, 0.065), (1, 0, 0), (0, 0, 1), (0, -1, 0), 0.042, 0.045, 12, 10,
-                  0.0015, 'feet', M['boot_leather'], thick=0.002, round_n=3, bevel=0.0008)
-    project_sheet(boot_bvh, 'BootTongue_' + s_, (cx + sx * 0.004, -0.35, 0.2), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.021, 0.062,
-                  6, 16, 0.0016, 'feet', M['boot'], thick=0.003, round_n=4, bevel=0.0008)
-    # laces: crisscross over the instep between eyelet pairs
-    lines = []
-    eyes = []
-    fx = cx
-    for k in range(10):
-        z = 0.08 + k * 0.0175
-        rd = Vector((0, 1, max(0.0, -0.3 + k * 0.05))).normalized()
-        hit, nrm, _, _ = boot_bvh.ray_cast(Vector((fx + sx * 0.004, -0.35, z)) - rd * 0.3, rd, 1.0)
-        if hit is None:
-            continue
-        tng = Vector((1, 0, 0))
-        eyes.append((hit + nrm * 0.005 - tng * 0.016, hit + nrm * 0.005 + tng * 0.016, nrm))
-    for k in range(len(eyes) - 1):
-        a, b, n0 = eyes[k]
-        c2, d2, n1 = eyes[k + 1]
-        if (a - c2).length > 0.045:  # an eyelet ray missed: never lace across the gap
-            continue
-        lift = (n0 + n1).normalized() * 0.003
-        lines.append([a, (a + d2) * 0.5 + lift, d2])
-        lines.append([b, (b + c2) * 0.5 + lift * 1.7, c2])
-    a, b, n0 = eyes[-1]
-    knot = (a + b) * 0.5 + n0 * 0.005
-    lines.append([a, knot, b])
-    for k2, off in enumerate((Vector((0.014 * sx, -0.012, -0.03)), Vector((-0.004 * sx, -0.014, -0.045)))):
-        lines.append([knot, knot + n0 * 0.004 + off * 0.5, knot + n0 * 0.002 + off])
-    tubes('Laces_' + s_, lines, 0.0022, 'feet', M['lace'])
-    tubes('Eyelets_' + s_, [[e[0] - e[2] * 0.002, e[0] + e[2] * 0.001] for e in eyes] +
-          [[e[1] - e[2] * 0.002, e[1] + e[2] * 0.001] for e in eyes], 0.0034, 'feet', M['metal'])
-    # padded collar and a heel pull loop
-    ring_band(boot_bvh, 'BootCollar_' + s_, (sx * 0.165, 0.012, 0.0),
-              (0, 0, 1), 0.24, 0.262, 32, 2, 0.003, 'feet', M['boot_leather'], thick=0.009, bevel=0.003, R=0.12)
-    hit, nrm, _, _ = boot_bvh.ray_cast(Vector((sx * 0.165, 0.4, 0.25)), Vector((0, -1, 0)), 1.0)
-    if hit is not None:
-        tubes('BootPull_' + s_, [[hit + Vector((-0.008, 0.004, -0.01)), hit + Vector((-0.007, 0.012, 0.022)),
-                                  hit + Vector((0.007, 0.012, 0.022)), hit + Vector((0.008, 0.004, -0.01))]], 0.0035, 'feet',
-              M['webbing'])
-# stitched panels on the lower boot: vamp seam above the welt and the back heel seam
-set_seam(boots, [min(abs(v.co.z - 0.07), abs(v.co.z - 0.045) + 0.002, abs(abs(v.co.x) - 0.18) if v.co.y > 0.07 else 1.0)
-                 for v in boots.data.vertices])
-bb.free()
+# ---------------------------------------------------------------- boots (built from a boot last, see hero_boots.py)
+build_boots(M, skin_bm, pants, SIDES)
 
 # ---------------------------------------------------------------- trousers details
 ring_band(dressed, 'Pants_Waistband', (0, 0.0, 0.0), (0, 0, 1), 1.03, 1.066, 64, 2, 0.003, 'legs', M['uniform_dark'],
