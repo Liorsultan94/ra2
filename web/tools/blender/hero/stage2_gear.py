@@ -33,6 +33,7 @@ from hero_boots import build_boots
 from hero_glasses import build_glasses
 from hero_mitz import build_mitznefet
 from hero_collar import build_collar, open_throat
+from hero_chinstrap import build_chinstrap
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -637,22 +638,8 @@ if os.environ.get('HERO_HEADSET') == '1':
                0.0022, 'helmet', M['polymer'])
     mic = cyl('Headset_MicFoam', 0.008, 0.016, (-0.016, -0.168, 1.6), (0, math.pi / 2, 0), 'helmet', M['rubber'], 20, 0.004)
     add_mod(mic, 'SUBSURF', levels=2, render_levels=2)
-# chinstrap (Y-straps in front of / behind the cups, buckle under the chin)
-chin_bvh = bvh_of([gaiter, body] if gaiter else [body])
-for sx in SIDES:
-    s = 'L' if sx > 0 else 'R'
-    for nm, path in (('F', [(sx * 0.10, -0.095, 1.69), (sx * 0.095, -0.095, 1.63), (sx * 0.07, -0.1, 1.585), (sx * 0.035, -0.11, 1.56), (0, -0.115, 1.553)]),
-                     ('B', [(sx * 0.10, 0.01, 1.66), (sx * 0.095, -0.02, 1.61), (sx * 0.075, -0.065, 1.585)])):
-        pts, nrm = [], []
-        for q in smooth_curve(path, 3):
-            hit, n, _, _ = chin_bvh.find_nearest(q)
-            n = n.normalized()
-            pts.append(hit + n * 0.003)
-            nrm.append(n)
-        strap_along('Helmet_Chinstrap%s_%s' % (nm, s), pts, nrm, 0.016, 0.0022, 'helmet', M['webbing'])
-cb = rbox('Helmet_ChinBuckle', (0.03, 0.01, 0.018), cname='helmet', mat=M['polymer'], bevel=0.003)
-hit, n, _, _ = chin_bvh.find_nearest(Vector((0.0, -0.1, 1.54)))
-orient(cb, hit + n * 0.006, n)
+# chinstrap: Y around each ear to a junction buckle, jaw straps to a centred chin cup (hero_chinstrap.py)
+build_chinstrap(M, bvh_of([gaiter, body] if gaiter else [body]), SIDES)
 
 # ballistic glasses: Saber-style wraparound shield (see hero_glasses.py)
 build_glasses(M, bvh_of([body]), SIDES)
