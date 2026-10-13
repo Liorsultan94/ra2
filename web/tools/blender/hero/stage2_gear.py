@@ -427,10 +427,56 @@ side_item('Belt_PouchCanteen', 2.15, 0.95, (0.09, 0.07, 0.15), M['gear'], belt_b
 side_item('Belt_PouchSmall', 1.15, 0.965, (0.07, 0.04, 0.09), M['gear'], belt_bvh, flap=0.035)
 
 # ---------------------------------------------------------------- plate carrier
-FP = project_sheet(dressed, 'Vest_FrontPlate', (0, -0.3, 1.24), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.132, 0.165, 18, 22,
-                   0.056, 'vest', M['gear'], thick=0.042, round_n=5, bevel=0.007, smooth_iter=40)
-BP = project_sheet(dressed, 'Vest_BackPlate', (0, 0.3, 1.25), (-1, 0, 0), (0, 0, 1), (0, -1, 0), 0.138, 0.17, 18, 22,
-                   0.05, 'vest', M['gear'], thick=0.038, round_n=5, bevel=0.007, smooth_iter=40)
+def plate_bag(name, side, zc, hw, hh, thick, cut=(0.055, 0.07), curv=1.4):
+    """flat, stiff plate bag: a single-curve rectangle with shooter's cuts at the top corners, tilted to the
+    torso and held 6 mm off the shirt (side = -1 front, +1 back). Inner face y = a + b v - side c u^2."""
+    samples = []
+    for uu in (-hw * 0.9, -hw * 0.45, 0.0, hw * 0.45, hw * 0.9):
+        for k in range(11):
+            v = -hh + 2 * hh * k / 10
+            hit, n_, _, _ = dressed.ray_cast(Vector((uu, side * 0.5, zc + v)), Vector((0, -side, 0)), 1.0)
+            if hit is not None:
+                samples.append((uu, v, hit.y))
+    mid = [q for q in samples if q[0] == 0.0]
+    top = max(mid, key=lambda q: q[1])
+    bot = min(mid, key=lambda q: q[1])
+    b = 0.7 * (top[2] - bot[2]) / (top[1] - bot[1])
+    vals = [q[2] + side * 0.006 - b * q[1] + side * curv * q[0] ** 2 for q in samples]
+    a = min(vals) if side < 0 else max(vals)
+    cx, cy = cut
+
+    def place(u, v, off):
+        return Vector((u, a + b * v - side * curv * u * u + side * off, zc + v))
+    nu, nv = 24, 30
+    bm = bmesh.new()
+    G = []
+    for off in (0.0, thick):
+        g = []
+        for j in range(nv + 1):
+            v = -hh + 2 * hh * j / nv
+            wv = hw if v <= hh - cy else hw - cx * (v - (hh - cy)) / cy   # shooter's cuts at the top corners
+            g.append([bm.verts.new(place(-wv + 2 * wv * i / nu, v, off)) for i in range(nu + 1)])
+        G.append(g)
+    g0, g1 = G
+    for j in range(nv):
+        for i in range(nu):
+            bm.faces.new([g0[j][i], g0[j + 1][i], g0[j + 1][i + 1], g0[j][i + 1]])
+            bm.faces.new([g1[j][i], g1[j][i + 1], g1[j + 1][i + 1], g1[j + 1][i]])
+    ring0 = g0[0] + [g0[j][nu] for j in range(1, nv + 1)] + g0[nv][::-1][1:] + [g0[j][0] for j in range(nv - 1, 0, -1)]
+    ring1 = g1[0] + [g1[j][nu] for j in range(1, nv + 1)] + g1[nv][::-1][1:] + [g1[j][0] for j in range(nv - 1, 0, -1)]
+    for k in range(len(ring0)):
+        k2 = (k + 1) % len(ring0)
+        bm.faces.new([ring0[k], ring0[k2], ring1[k2], ring1[k]])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    o = obj_from_bm(name, bm, 'vest', M['gear'])
+    bm.free()
+    add_mod(o, 'BEVEL', width=0.006, segments=3, limit_method='ANGLE', angle_limit=math.radians(40))
+    add_mod(o, 'WEIGHTED_NORMAL', keep_sharp=True)
+    return o
+
+
+FP = plate_bag('Vest_FrontPlate', -1.0, 1.245, 0.128, 0.16, 0.028)
+BP = plate_bag('Vest_BackPlate', 1.0, 1.255, 0.134, 0.165, 0.026)
 for sx in SIDES:
     s = 'L' if sx > 0 else 'R'
     a0, a1 = (0.5, math.pi - 0.5) if sx > 0 else (-(math.pi - 0.5), -0.5)
@@ -440,6 +486,8 @@ for sx in SIDES:
         ring_band(dressed, 'Vest_MolleC_%s%d' % (s, k), (0, -0.01, 0.0), (0, 0, 1), zz - 0.0125, zz + 0.0125, 22, 1,
                   0.018, 'vest', M['webbing'], thick=0.0022, a0=a0, a1=a1, R=0.22)
 vest_bvh = bvh_of([FP, BP, shirt, pants, body, collar])  # the pads pass over the collar
+# side gear hangs on the cummerbund (the A-pose arms beside the ribs must not catch the rays)
+cbund_bvh = bvh_of([o for o in bpy.data.objects if o.name.startswith('Vest_Cummerbund')])
 # shoulder pads: path over each shoulder from the front plate to the back plate
 for sx in SIDES:
     s = 'L' if sx > 0 else 'R'
@@ -473,8 +521,11 @@ for k in range(3):
     project_sheet(vest_bvh, 'Vest_MolleF%d' % k, (0, -0.4, zz), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.118, 0.0125, 16, 1,
                   0.002, 'vest', M['webbing'], thick=0.0022, round_n=30)
 # hook-and-loop name-tape field on the upper front plate (blank, no insignia)
-project_sheet(vest_bvh, 'Vest_NameTape', (0, -0.4, 1.372), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.06, 0.017, 10, 3, 0.0015, 'vest',
+project_sheet(vest_bvh, 'Vest_NameTape', (0, -0.4, 1.38), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.075, 0.022, 10, 3, 0.0015, 'vest',
               M['velcro'], thick=0.0015, round_n=8)
+# small Israeli flag patch on the loop panel
+project_sheet(vest_bvh, 'Vest_FlagPatch', (0.038, -0.4, 1.38), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.026, 0.0185, 8, 6, 0.0032,
+              'vest', M['flag'], thick=0.0012, round_n=12, bevel=0.0005)
 # drag handle
 hit, n = surface_frame(vest_bvh, (0, 0.4, 1.405), (0, -1, 0))
 tube_along('Vest_DragHandle', [hit + Vector((-0.04, 0, 0)), hit + n * 0.02 + Vector((-0.03, 0, 0.01)),
@@ -482,20 +533,24 @@ tube_along('Vest_DragHandle', [hit + Vector((-0.04, 0, 0)), hit + n * 0.02 + Vec
 
 # front: triple open-top magazine pouch, magazines floor-plate up with bungee retention + pull tabs
 for i, x in enumerate((-0.078, 0.0, 0.078)):
-    hit, n = surface_frame(vest_bvh, (x, -0.4, 1.135), (0, 1, 0))
+    hit, n = surface_frame(vest_bvh, (x, -0.4, 1.12), (0, 1, 0))
     p = pouch('Vest_MagPouch%d' % i, (0.072, 0.04, 0.15), hit, n, bulge=0.003, taper=0.03, straps=False)
     mg = extrude_profile('Vest_Mag%d' % i, [(0.75 * (x2 + 0.12), -0.8 * z) for x2, z in mag_profile(0.0)], 0.024, 'vest',
                          M['mag'], bevel=0.0025, segs=2)
     mg.parent = p
-    mg.location = (0, 0, -0.083)
-    base = rbox('Vest_MagBase%d' % i, (0.058, 0.03, 0.01), (0.004, 0, 0.1), cname='vest', mat=M['mag'], bevel=0.003)
+    MZ = 0.035  # the magazines stand well proud of the open-top pouches
+    mg.location = (0, 0, -0.083 + MZ)
+    base = rbox('Vest_MagBase%d' % i, (0.058, 0.03, 0.01), (0.004, 0, 0.1 + MZ), cname='vest', mat=M['mag'], bevel=0.003)
     base.parent = p
+    for k, rz in enumerate((0.086, 0.099, 0.112)):  # ribbed polymer magazine body above the pouch
+        rb = rbox('Vest_MagRib%d_%d' % (i, k), (0.05, 0.0275, 0.0028), (0.002, 0, rz), cname='vest', mat=M['mag'], bevel=0.001)
+        rb.parent = p
     # bungee: from the pouch sides up over the floor plate, knotted to a webbing pull tab
-    bung = tube_along('Vest_Bungee%d' % i, smooth_curve([(-0.034, -0.0, 0.045), (-0.03, -0.012, 0.09), (-0.012, -0.012, 0.108),
-                                                          (0.012, -0.012, 0.108), (0.03, -0.012, 0.09), (0.034, 0.0, 0.045)], 3),
+    bung = tube_along('Vest_Bungee%d' % i, smooth_curve([(-0.034, -0.0, 0.05), (-0.03, -0.012, 0.1 + MZ), (-0.012, -0.012, 0.108 + MZ),
+                                                          (0.012, -0.012, 0.108 + MZ), (0.03, -0.012, 0.1 + MZ), (0.034, 0.0, 0.05)], 3),
                       0.0028, 'vest', M['rubber'])
     bung.parent = p
-    tab = rbox('Vest_PullTab%d' % i, (0.014, 0.005, 0.03), (0, -0.016, 0.118), (math.radians(-15), 0, 0), cname='vest',
+    tab = rbox('Vest_PullTab%d' % i, (0.014, 0.005, 0.03), (0, -0.016, 0.118 + MZ), (math.radians(-15), 0, 0), cname='vest',
                mat=M['webbing'], bevel=0.0015)
     tab.parent = p
     for zz in (-0.035, 0.003):  # MOLLE straps across the pouch front
@@ -503,15 +558,15 @@ for i, x in enumerate((-0.078, 0.0, 0.078)):
                   mat=M['webbing'], bevel=0.001)
         st.parent = p
 # admin pouch with a flap, hook panel and a zip, above the magazines
-hit, n = surface_frame(vest_bvh, (0, -0.4, 1.285), (0, 1, 0))
-ad = pouch('Vest_AdminPouch', (0.18, 0.03, 0.105), hit, n, flap=0.04, bulge=0.004, taper=0.0, hook=True, straps=False)
-o = rbox('Vest_AdminVelcro', (0.11, 0.004, 0.035), (0, -0.017, -0.03), cname='vest', mat=M['velcro'], bevel=0.0015)
+hit, n = surface_frame(vest_bvh, (0, -0.4, 1.318), (0, 1, 0))
+ad = pouch('Vest_AdminPouch', (0.17, 0.028, 0.068), hit, n, flap=0.04, bulge=0.004, taper=0.0, hook=True, straps=False)
+o = rbox('Vest_AdminVelcro', (0.1, 0.004, 0.022), (0, -0.016, -0.012), cname='vest', mat=M['velcro'], bevel=0.0015)
 o.parent = ad
-zp = tube_along('Vest_AdminZip', [(-0.082, -0.0155, -0.012), (-0.082, -0.0155, -0.047), (0.082, -0.0155, -0.047),
-                                   (0.082, -0.0155, -0.012)], 0.0016, 'vest', M['polymer'])
+zp = tube_along('Vest_AdminZip', [(-0.078, -0.0145, -0.004), (-0.078, -0.0145, -0.029), (0.078, -0.0145, -0.029),
+                                   (0.078, -0.0145, -0.004)], 0.0016, 'vest', M['polymer'])
 zp.parent = ad
 # radio in an open pouch with a retention strap; detailed radio (knobs, antenna base, display, side PTT)
-rp, rhit, rn = side_item('Vest_RadioPouch', 1.62, 1.13, (0.075, 0.045, 0.11), M['gear'], vest_bvh, lift=0.002)
+rp, rhit, rn = side_item('Vest_RadioPouch', 1.62, 1.13, (0.075, 0.045, 0.11), M['gear'], cbund_bvh, lift=0.002)
 radio = rbox('Vest_Radio', (0.062, 0.036, 0.13), (0, 0, 0.03), cname='vest', mat=M['polymer'], bevel=0.005, cuts=3)
 radio.parent = rp
 for nm, r_, h_, loc in (('Vest_RadioKnobVol', 0.0085, 0.016, (0.016, 0, 0.103)), ('Vest_RadioKnobCh', 0.007, 0.012, (0.0, 0, 0.101)),
@@ -535,7 +590,7 @@ hit, n = surface_frame(vest_bvh, (0.1, -0.4, 1.33), (0, 1, 0))
 orient(ptt, hit + n * 0.012, n)
 o = cyl('Vest_PTTButton', 0.011, 0.006, (0, -0.012, 0.004), (math.pi / 2, 0, 0), 'vest', M['rubber'], 20, 0.001)
 o.parent = ptt
-ifak, _, _ = side_item('Vest_IFAK', -1.6, 1.13, (0.11, 0.06, 0.12), M['gear'], vest_bvh, lift=0.002, flap=0.05)
+ifak, _, _ = side_item('Vest_IFAK', -1.6, 1.13, (0.11, 0.06, 0.12), M['gear'], cbund_bvh, lift=0.002, flap=0.05)
 o = tube_along('Vest_IFAKHandle', [(-0.03, -0.031, 0.04), (-0.025, -0.045, 0.075), (0.025, -0.045, 0.075), (0.03, -0.031, 0.04)],
                0.004, 'vest', M['webbing'])
 o.parent = ifak
@@ -543,6 +598,22 @@ o.parent = ifak
 hit, n = surface_frame(vest_bvh, (-0.105, -0.4, 1.4), (0, 1, 0))
 tq = rbox('Vest_Tourniquet', (0.03, 0.025, 0.09), cname='vest', mat=M['polymer'], bevel=0.006, cuts=2)
 orient(tq, hit + n * 0.014, n)
+# drop (dump) pouch hanging under the front plate, over the belt
+hit, n = surface_frame(vest_bvh, (0, -0.4, 1.035), (0, 1, 0))
+dp = pouch('Vest_DropPouch', (0.17, 0.035, 0.07), hit, n, mat=M['gear'], flap=0.03, bulge=0.006, taper=0.08, lift=0.004,
+           straps=False)
+# side pouches on the cummerbund (small utility / grenade pouches, flapped)
+for sx in SIDES:
+    side_item('Vest_SidePouch_%s' % ('L' if sx > 0 else 'R'), sx * 1.18, 1.125, (0.06, 0.035, 0.085), M['gear'], cbund_bvh,
+              lift=0.002, flap=0.035)
+# cable keepers on the front of the shoulder straps
+for sx in SIDES:
+    sp = bpy.data.objects['Vest_ShoulderStrap_' + ('L' if sx > 0 else 'R')]
+    for zz in (1.37, 1.42):
+        hit, n = surface_frame(vest_bvh, (sx * 0.112, -0.4, zz), (0, 1, 0))
+        ck = rbox('Vest_CableKeeper_%d_%d' % (sx, int(zz * 100)), (0.034, 0.006, 0.013), cname='vest', mat=M['polymer'],
+                  bevel=0.002)
+        orient(ck, hit + n * 0.0185, n)
 
 # zip-on back pack: padded body, front pocket and top pocket with zips and pulls, compression straps
 # with side-release buckles, MOLLE, grab handle
