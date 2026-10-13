@@ -289,9 +289,9 @@ def skin(name):
     t.l(pos, sep.inputs[0])
     X, Y, Z = sep.outputs['X'], sep.outputs['Y'], sep.outputs['Z']
     ax = t.math('ABSOLUTE', X)
-    base = srgb(168, 118, 88)
+    base = srgb(160, 116, 92)
     nz = t.noise(oc, 30.0, 6.0, 0.6)
-    col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7), base, srgb(150, 100, 76))
+    col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7), base, srgb(142, 100, 80))
     blot = t.noise(oc, 9.0, 4.0, 0.55)
     col = t.mix(t.maprange(blot.outputs['Fac'], 0.5, 0.72, 0.0, 0.35), col, srgb(165, 88, 72))
     freck = t.noise(oc, 160.0, 2.0, 0.5)
@@ -300,7 +300,7 @@ def skin(name):
     nose = t.math('MULTIPLY', t.maprange(ax, 0.025, 0.0), t.maprange(Y, -0.145, -0.17))
     cheek = t.math('MULTIPLY', gauss(t, ax, 0.05, 0.018), gauss(t, Z, 1.655, 0.015))
     cheek = t.math('MULTIPLY', cheek, t.maprange(Y, -0.09, -0.13))
-    col = t.mix(t.math('MINIMUM', t.math('ADD', nose, cheek), 0.5), col, srgb(176, 84, 70))
+    col = t.mix(t.math('MINIMUM', t.math('ADD', nose, cheek), 0.3), col, srgb(168, 90, 78))
     # darker eye sockets
     eyes = t.math('MULTIPLY', gauss(t, ax, 0.034, 0.016), gauss(t, Z, 1.675, 0.01))
     col = t.mix(t.math('MULTIPLY', eyes, 0.35), col, srgb(96, 62, 58))
@@ -313,35 +313,57 @@ def skin(name):
     hairn = t.noise(oc, 700.0, 2.0)
     brow = t.math('MULTIPLY', brow, t.maprange(hairn.outputs['Fac'], 0.3, 0.6, 0.55, 1.0))
     col = t.mix(brow, col, srgb(34, 25, 20))
-    # stubble: speckled dark beard shadow on jaw, chin, upper lip and lower cheeks
-    beard = t.math('MULTIPLY', t.maprange(Z, 1.665, 1.645), t.maprange(Y, -0.04, -0.07))
-    beard = t.math('MULTIPLY', beard, t.math('MAXIMUM', t.maprange(ax, 0.03, 0.045), t.maprange(Z, 1.632, 1.625)))
+    # lips: natural, slightly darker / redder, a soft mouth line, drier (rougher) than the skin around
+    lipz = t.math('MULTIPLY', gauss(t, Z, 1.6055, 0.0085), t.maprange(ax, 0.026, 0.017))
+    lipz = t.math('MULTIPLY', lipz, t.maprange(Y, -0.145, -0.155))
+    col = t.mix(t.math('MULTIPLY', lipz, 0.6), col, srgb(150, 82, 74))
+    mline = t.math('MULTIPLY', gauss(t, Z, 1.6045, 0.0012), t.maprange(ax, 0.024, 0.015))
+    col = t.mix(t.math('MULTIPLY', mline, 0.55), col, srgb(70, 40, 36))
+    # stubble (a few days' growth): bluish-grey beard shadow + dark hair dots on jaw, chin, upper lip,
+    # lower cheeks and under the chin; the cheek line rises towards the ears; lips stay clear
+    cheekline = t.math('ADD', 1.622, t.math('MULTIPLY', t.maprange(ax, 0.025, 0.06), 0.03))
+    beard = t.maprange(t.math('SUBTRACT', cheekline, Z), -0.002, 0.006)
+    beard = t.math('MULTIPLY', beard, t.maprange(Y, -0.035, -0.06))
+    beard = t.math('MULTIPLY', beard, t.math('SUBTRACT', 1.0, t.math('MULTIPLY', lipz, 1.4)))
+    beard = t.math('MULTIPLY', beard, t.maprange(Z, 1.52, 1.545))   # fades out down the neck
+    beard = t.math('MAXIMUM', beard, 0.0)
+    bn = t.noise(oc, 25.0, 3.0)
+    beard = t.math('MULTIPLY', beard, t.maprange(bn.outputs['Fac'], 0.3, 0.6, 0.75, 1.0))
     vor = t.n('ShaderNodeTexVoronoi', feature='F1')
     t.l(oc, vor.inputs['Vector'])
-    vor.inputs['Scale'].default_value = 2000.0
-    dots = t.maprange(vor.outputs['Distance'], 0.35, 0.15)
-    col = t.mix(t.math('MULTIPLY', beard, 0.45), col, srgb(84, 76, 72))
-    col = t.mix(t.math('MULTIPLY', beard, t.math('MULTIPLY', dots, 0.9)), col, srgb(26, 20, 17))
+    vor.inputs['Scale'].default_value = 1100.0
+    vor.inputs['Randomness'].default_value = 1.0
+    dots = t.maprange(vor.outputs['Distance'], 0.32, 0.12)
+    col = t.mix(t.math('MULTIPLY', beard, 0.6), col, srgb(88, 82, 82))
+    col = t.mix(t.math('MULTIPLY', beard, t.math('MULTIPLY', dots, 0.95)), col, srgb(22, 18, 16))
     # short hair at the temples / sideburns / nape (under the helmet rim)
     hair = t.math('MULTIPLY', t.maprange(Z, 1.635, 1.65), t.maprange(Y, -0.085, -0.06))
     hair = t.math('MAXIMUM', hair, t.math('MULTIPLY', t.maprange(Z, 1.6, 1.625), t.maprange(Y, 0.0, 0.03)))
     hair = t.math('MULTIPLY', hair, t.maprange(t.noise(oc, 300.0, 3.0).outputs['Fac'], 0.3, 0.55, 0.6, 1.0))
     col = t.mix(hair, col, srgb(28, 22, 18))
-    # pores (pits) + fine wrinkles
+    # mottled redness / sallow variation over the whole face (sun, shaving)
+    mot = t.noise(oc, 45.0, 4.0, 0.6)
+    col = t.mix(t.maprange(mot.outputs['Fac'], 0.45, 0.7, 0.0, 0.3), col, srgb(170, 92, 78))
+    col = t.mix(t.maprange(mot.outputs['Fac'], 0.25, 0.4, 0.2, 0.0), col, srgb(150, 118, 86))
+    # pores (pits), fine wrinkles, crow's feet / forehead lines, stubble bumps
     pv = t.n('ShaderNodeTexVoronoi', feature='F1')
     t.l(oc, pv.inputs['Vector'])
-    pv.inputs['Scale'].default_value = 1500.0
-    pores = t.maprange(pv.outputs['Distance'], 0.0, 0.35, -1.0, 0.0)
+    pv.inputs['Scale'].default_value = 1300.0
+    pores = t.maprange(pv.outputs['Distance'], 0.0, 0.3, -1.0, 0.0)
     fine = t.noise(oc, 400.0, 4.0, 0.6)
-    h = t.math('ADD', pores, t.math('MULTIPLY', fine.outputs['Fac'], 0.6))
-    h = t.math('ADD', h, t.math('MULTIPLY', t.math('MULTIPLY', beard, dots), 0.6))
-    nrm = t.bump(h, 0.22, 0.0004)
-    # roughness: oilier forehead / nose, drier cheeks
+    h = t.math('ADD', pores, t.math('MULTIPLY', fine.outputs['Fac'], 0.7))
+    lines = t.wave(oc, 1.0 / 0.006, 'Z')
+    fore = t.math('MULTIPLY', t.maprange(Z, 1.715, 1.725), t.maprange(Y, -0.11, -0.13))
+    h = t.math('ADD', h, t.math('MULTIPLY', t.math('MULTIPLY', lines, fore), 0.5))
+    h = t.math('ADD', h, t.math('MULTIPLY', t.math('MULTIPLY', beard, dots), 0.9))
+    nrm = t.bump(h, 0.45, 0.0005)
+    # roughness: gentle sweat sheen on forehead / nose / upper lip, drier cheeks, matte stubble
     tz = t.math('MAXIMUM', nose, t.math('MULTIPLY', t.maprange(Z, 1.69, 1.70), t.maprange(ax, 0.05, 0.03)))
-    rough = t.math('SUBTRACT', t.maprange(t.noise(oc, 60.0, 4.0).outputs['Fac'], 0.3, 0.7, 0.5, 0.66), t.math('MULTIPLY', tz, 0.14))
-    rough = t.math('ADD', rough, t.math('MULTIPLY', t.math('MAXIMUM', beard, hair), 0.2))
-    t.bsdf(col, rough, normal=nrm, spec=0.38,
-           Subsurface_Weight=0.15, Subsurface_Radius=(1.0, 0.35, 0.2), Subsurface_Scale=0.008)
+    rough = t.math('SUBTRACT', t.maprange(t.noise(oc, 60.0, 4.0).outputs['Fac'], 0.3, 0.7, 0.46, 0.62), t.math('MULTIPLY', tz, 0.12))
+    rough = t.math('ADD', rough, t.math('MULTIPLY', t.math('MAXIMUM', beard, hair), 0.22))
+    rough = t.math('ADD', rough, t.math('MULTIPLY', lipz, 0.08))
+    t.bsdf(col, rough, normal=nrm, spec=0.42,
+           Subsurface_Weight=0.12, Subsurface_Radius=(1.0, 0.35, 0.2), Subsurface_Scale=0.004)
     return t.m
 
 

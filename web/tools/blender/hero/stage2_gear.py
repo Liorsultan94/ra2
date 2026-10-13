@@ -77,14 +77,31 @@ for v in body.data.vertices:
         continue
     d = Vector((0, 0, 0))
     front = smoothstep(-0.02, -0.08, p.y)
+    ax = abs(p.x)
+    # wide, square jaw with a defined angle below the ears and a squarer, slightly longer chin
     jaw = gaussf(p.z - 1.59, 0.03) * front
-    d.x += p.x * 0.075 * jaw
-    d.y -= 0.004 * gaussf(p.x, 0.03) * gaussf(p.z - 1.565, 0.018) * front
-    brow = gaussf(p.z - 1.705, 0.01) * smoothstep(-0.10, -0.125, p.y) * gaussf(abs(p.x) - 0.035, 0.03)
-    d.y -= 0.003 * brow
-    d.z -= 0.001 * brow
-    cheek = gaussf(p.z - 1.663, 0.015) * gaussf(abs(p.x) - 0.058, 0.015) * front
-    d.x += math.copysign(0.0022, p.x) * cheek
+    d.x += p.x * 0.13 * jaw
+    gon = gaussf(p.z - 1.585, 0.014) * gaussf(ax - 0.06, 0.014) * smoothstep(-0.03, -0.07, p.y)
+    d.x += math.copysign(0.004, p.x) * gon
+    chin = gaussf(p.z - 1.565, 0.016) * front
+    d.y -= 0.006 * gaussf(p.x, 0.028) * chin
+    d.x += p.x * 0.10 * chin * gaussf(p.x, 0.035)
+    d.z -= 0.003 * gaussf(p.x, 0.03) * gaussf(p.z - 1.555, 0.012) * front
+    # heavier brow ridge, slightly hooded eyes (less wide-open, less baby-like)
+    brow = gaussf(p.z - 1.705, 0.01) * smoothstep(-0.10, -0.125, p.y) * gaussf(ax - 0.035, 0.03)
+    d.y -= 0.0055 * brow
+    d.z -= 0.0018 * brow
+    lid = gaussf(p.z - 1.69, 0.006) * gaussf(ax - 0.034, 0.014) * smoothstep(-0.11, -0.135, p.y)
+    d.z -= 0.0015 * lid
+    d.y -= 0.001 * lid
+    # nose bridge
+    d.y -= 0.0018 * gaussf(p.x, 0.008) * gaussf(p.z - 1.672, 0.012) * front
+    # high cheekbones with a slight hollow below them
+    cheek = gaussf(p.z - 1.663, 0.013) * gaussf(ax - 0.058, 0.015) * front
+    d.x += math.copysign(0.0038, p.x) * cheek
+    d.y -= 0.0018 * cheek
+    hollow = gaussf(p.z - 1.625, 0.012) * gaussf(ax - 0.052, 0.012) * front
+    d.x -= math.copysign(0.0016, p.x) * hollow
     neck = gaussf(p.z - 1.51, 0.035)
     d.x += p.x * 0.05 * neck
     d.y += (p.y + 0.03) * 0.04 * neck
