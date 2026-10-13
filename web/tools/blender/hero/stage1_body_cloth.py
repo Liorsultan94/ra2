@@ -172,7 +172,7 @@ def pants_rest(p):
     zr = 1.07 - (1.07 - p.z) * 1.13
     a = leg_axis(p.z, side)
     a.y = 0.0
-    leg = Vector((a.x + (p.x - a.x) * 1.26, p.y * 1.26, zr))  # loose trouser legs
+    leg = Vector((a.x + (p.x - a.x) * 1.2, p.y * 1.2, zr))  # baggy field trousers, not balloons
     hip = Vector((p.x * 1.08, (p.y + 0.01) * 1.1 - 0.01, zr))
     w = smoothstep(0.72, 0.86, p.z)
     return leg.lerp(hip, w)

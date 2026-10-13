@@ -14,7 +14,7 @@ shoulder. Saves $HERO_WORK/stage2_posed.blend.
 import sys, os, math, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bpy, bmesh
-from mathutils import Vector, Matrix
+from mathutils import Vector, Matrix, noise
 from mathutils.kdtree import KDTree
 from hero_lib import *
 from hero_rifle import build_rifle
@@ -358,6 +358,7 @@ for m_ in shirt.modifiers:
     if m_.type in ('SUBSURF', 'SOLIDIFY'):
         m_.show_viewport = False
         hidden.append(m_.type)
+shirt_rest = [shirt.matrix_world @ v.co for v in shirt.data.vertices]  # A-pose, for the compression folds
 cl = shirt.modifiers.new('cloth', 'CLOTH')
 shirt.modifiers.move(shirt.modifiers.find('cloth'), shirt.modifiers.find('Armature') + 1)
 cs = cl.settings
@@ -442,6 +443,55 @@ def tuck_under_pads(obj, margin=0.004):
 
 
 tuck_under_pads(shirt)
+
+
+def compression_folds(obj, rest):
+    """deep, rounded fold rings where the posed sleeve is compressed (inside of the bent elbow, crook of the
+    arm): compression = posed / A-pose edge length; the ring phase runs along the A-pose arm axis."""
+    me = obj.data
+    if len(me.vertices) != len(rest):
+        print('compression folds skipped (topology changed)')
+        return
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+    bm.normal_update()
+    mw = obj.matrix_world
+    moved = 0
+    disp = []
+    for v in bm.verts:
+        r = rest[v.index]
+        if abs(r.x) < 0.17 or r.z < 0.85:
+            disp.append(0.0)
+            continue
+        t, rad = arm_t(r)
+        if not (0.12 < t < WRIST_T - 0.07):
+            disp.append(0.0)
+            continue
+        ratios = []
+        for e in v.link_edges:
+            o = e.other_vert(v)
+            l0 = (rest[o.index] - r).length
+            if l0 > 1e-6:
+                ratios.append((o.co - v.co).length / l0)
+        c = max(0.0, min(1.0, (0.97 - sum(ratios) / len(ratios)) / 0.12)) if ratios else 0.0
+        if c <= 0:
+            disp.append(0.0)
+            continue
+        n1 = noise.noise(r * 22.0)
+        ph = 2 * math.pi * (t + 0.006 * math.sin(r.y * 90 + n1 * 3)) / 0.022 + 2.5 * n1
+        sv = math.sin(ph)
+        disp.append(0.0075 * c * (sv if sv > 0 else 0.5 * sv))
+        moved += 1
+    for v, d in zip(bm.verts, disp):
+        if d:
+            v.co += v.normal * d
+    bm.to_mesh(me)
+    bm.free()
+    print('compression fold verts', moved)
+
+
+compression_folds(shirt, shirt_rest)
 add_mod(shirt, 'SMOOTH', factor=0.5, iterations=4)
 add_mod(shirt, 'SUBSURF', levels=1, render_levels=1)
 add_mod(shirt, 'SOLIDIFY', thickness=0.0025, offset=-1.0)

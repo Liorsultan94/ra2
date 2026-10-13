@@ -3,7 +3,7 @@ Iron Front - BI2 hero soldier, stage 3: Cycles studio renders (Blender 5.2.2 LTS
 
   nice /opt/blender/blender -b --factory-startup -P web/tools/blender/hero/stage3_render.py -- \
       [--blend $HERO_WORK/stage2_posed.blend] [--out /tmp/claude-0/BI2] [--res 1600] [--samples 128] \
-      [--views front,q34,back,bust,hands,boots,face,headside] [--prefix render-] [--suffix -v2]
+      [--views front,q34,back,bust,hands,boots,face,headside,midbody] [--prefix render-] [--suffix -v2]
 
 Light grey seamless cyclorama, soft 3-point area lighting (key, fill, rim) + dim ambient, 85 mm lens.
 """
@@ -155,6 +155,7 @@ shots = {
     'boots': (-38, (0.0, -0.02, 0.15), 0.62, 0.42),  # close-up of both boots (not in the default set)
     'face': (-24, (0.0, -0.07, 1.655), 0.26, 1.67),  # tight face close-up (not in the default set)
     'headside': (-90, (0.0, -0.04, 1.66), 0.42, 1.7),  # head + helmet from the right side (not in the default set)
+    'midbody': (-38, (0.0, -0.05, 0.8), 1.08, 0.9),  # arms (elbows) down to the knees (not in the default set)
 }
 for v in VIEWS:
     yaw, tgt, fh, hz = shots[v]

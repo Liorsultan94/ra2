@@ -153,16 +153,19 @@ def shirt_fold(p, nrm):
         inner = Vector((-side * 0.6, -0.8, 0.0))
         inner -= ax * inner.dot(ax)
         inner.normalize()
-        m = gaussf(t - 0.27, 0.06) * max(0.0, qn.dot(inner)) ** 0.7
-        amp += 0.006 * m * ridge(2 * math.pi * (t + 0.02 * qn.dot(Vector((0, 0, 1)))) / 0.034 + 2.0 * n1)
+        m = gaussf(t - 0.27, 0.05) * max(0.0, qn.dot(inner)) ** 0.7
+        amp += 0.009 * m * ridge(2 * math.pi * (t + 0.02 * qn.dot(Vector((0, 0, 1)))) / 0.032 + 2.0 * n1)
+        # forearm sleeve: a few soft diagonal folds between the elbow and the cuff bunching
+        m = smoothstep(0.29, 0.33, t) * (1 - smoothstep(0.39, 0.43, t))
+        amp += 0.003 * m * (0.5 + 0.5 * n2) * ridge(2 * math.pi * (t + 0.35 * qn.z * 0.1 + 0.012 * qn.y) / 0.03 + 2.0 * n1)
         # soft diagonal drag folds on the upper sleeve
         m = smoothstep(0.03, 0.08, t) * (1 - smoothstep(0.17, 0.24, t))
-        amp += 0.0025 * m * ridge(2 * math.pi * (t * 0.8 + 0.5 * qn.y) / 0.05 + 1.5 * n1)
+        amp += 0.004 * m * ridge(2 * math.pi * (t * 0.8 + 0.5 * qn.y) / 0.05 + 1.5 * n1)
     else:
         # blousing above the belt
         m = smoothstep(1.0, 1.045, p.z) * (1 - smoothstep(1.09, 1.14, p.z))
         ang = math.atan2(p.x, -(p.y + 0.01))
-        amp += 0.006 * m * (0.5 + 0.5 * n2) * ridge(2 * math.pi * ang * 0.16 / 0.033 + 3.0 * n1)
+        amp += 0.008 * m * (0.5 + 0.5 * n2) * ridge(2 * math.pi * ang * 0.16 / 0.033 + 3.0 * n1)
     return amp
 
 
@@ -175,19 +178,26 @@ def pants_fold(p, nrm):
     # blousing above the boots: a few irregular, partly diagonal bunches (not a regular accordion)
     n3 = noise.noise(Vector((ang * 1.3, p.z * 4.0, side * 3.0)))
     m = smoothstep(0.27, 0.29, p.z) * (1 - smoothstep(0.33, 0.39, p.z)) * max(0.0, 0.35 + 0.65 * n3)
-    amp += 0.006 * m * ridge(2 * math.pi * (p.z + 0.02 * math.sin(ang * 2 + n2 * 4)) / 0.03 + 3.5 * n1)
+    amp += 0.008 * m * ridge(2 * math.pi * (p.z + 0.02 * math.sin(ang * 2 + n2 * 4)) / 0.03 + 3.5 * n1)
     # knee: mostly behind the knee (the pad covers the front)
     back = max(0.0, math.cos(ang - math.pi)) ** 1.5
-    m = gaussf(p.z - 0.5, 0.06) * (0.3 + 0.7 * back) * max(0.0, 0.4 + 0.6 * n2)
-    amp += 0.006 * m * ridge(2 * math.pi * (p.z + 0.03 * math.sin(ang * 1.5 + n2 * 2)) / 0.04 + 2.5 * n1)
+    m = gaussf(p.z - 0.5, 0.055) * (0.3 + 0.7 * back) * max(0.0, 0.4 + 0.6 * n2)
+    amp += 0.012 * m * ridge(2 * math.pi * (p.z + 0.03 * math.sin(ang * 1.5 + n2 * 2)) / 0.038 + 2.5 * n1)
+    # above the knee pad: a couple of soft horizontal folds where the fabric bags over the pad
+    front = max(0.0, math.cos(ang)) ** 1.2
+    m = smoothstep(0.575, 0.6, p.z) * (1 - smoothstep(0.65, 0.69, p.z)) * front * max(0.0, 0.45 + 0.55 * n2)
+    amp += 0.009 * m * ridge(2 * math.pi * (p.z + 0.015 * math.sin(ang * 3 + n2 * 3)) / 0.034 + 1.5 * n1)
+    # long, soft vertical drape folds down the thigh and shin (baggy legs hanging from the seat)
+    m = (smoothstep(0.2, 0.3, p.z) * (1 - smoothstep(0.43, 0.47, p.z)) + smoothstep(0.62, 0.7, p.z) * (1 - smoothstep(0.85, 0.92, p.z)))
+    amp += 0.005 * m * max(0.0, 0.3 + 0.7 * n2) * ridge(ang * 5.0 + 0.8 * math.sin(p.z * 9.0) + 2.0 * n1)
     # drag lines from the crotch down the inner thigh (front)
     if p.y < 0.0 and 0.6 < p.z < 0.88:
         m = smoothstep(0.6, 0.7, p.z) * (1 - smoothstep(0.8, 0.88, p.z)) * smoothstep(0.17, 0.08, abs(p.x))
-        amp += 0.004 * m * ridge(2 * math.pi * (p.z * 0.75 - abs(p.x) * 0.66) / 0.045 + 1.5 * n1)
+        amp += 0.006 * m * ridge(2 * math.pi * (p.z * 0.75 - abs(p.x) * 0.66) / 0.045 + 1.5 * n1)
     # gathering under the belt
     m = smoothstep(0.94, 0.98, p.z) * (1 - smoothstep(1.0, 1.03, p.z))
     ang2 = math.atan2(p.x, -p.y)
-    amp += 0.003 * m * ridge(2 * math.pi * ang2 * 0.17 / 0.03 + 2.0 * n1)
+    amp += 0.007 * m * ridge(2 * math.pi * ang2 * 0.17 / 0.03 + 2.0 * n1)
     return amp
 
 
