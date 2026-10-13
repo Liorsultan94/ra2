@@ -135,7 +135,7 @@ describe('Blender skin: IDF rifleman (models/blenderskin.ts + infantry.ts)', () 
     expect(ns).toContain('skin_camo');
   });
 
-  it('falls back to the procedural soldier without the asset (or ?blender=0)', async () => {
+  it('falls back to the procedural soldier without the asset or the ?blender=1 opt-in', async () => {
     // node: no fetch of images -> nothing loads, nothing throws
     expect(await loadSkins('/')).toBe(0);
     const tpl = infantryTemplate('rifle', style('israel', 0x5566cc));

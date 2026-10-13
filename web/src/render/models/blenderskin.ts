@@ -133,7 +133,8 @@ let pending: Promise<number> | null = null;
 export function loadSkins(base: string, small = false): Promise<number> {
   if (pending) return pending;
   if (typeof fetch === 'undefined' || typeof createImageBitmap === 'undefined') return Promise.resolve(0);
-  if (typeof location !== 'undefined' && /[?&]blender=0\b/.test(location.search)) {
+  // opt-in for now (?blender=1): the hero soldier's team colour still reads weaker than the procedural one at play zoom
+  if (typeof location === 'undefined' || !/[?&]blender=1\b/.test(location.search)) {
     disabled = true;
     return Promise.resolve(0);
   }
