@@ -30,6 +30,7 @@ from hero_lib import *
 import hero_mats
 from hero_rifle import build_rifle, mag_profile
 from hero_boots import build_boots
+from hero_glasses import build_glasses
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -754,15 +755,8 @@ cb = rbox('Helmet_ChinBuckle', (0.03, 0.01, 0.018), cname='helmet', mat=M['polym
 hit, n, _, _ = chin_bvh.find_nearest(Vector((0.0, -0.1, 1.54)))
 orient(cb, hit + n * 0.006, n)
 
-# ballistic glasses: smooth wrap lens bridged over the face, frame on top, temples to the cups
-face_bvh = bvh_of([body, gaiter])
-lens = project_sheet(face_bvh, 'Glasses_Lens', (0, -0.3, 1.682), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.072, 0.0215, 24, 6,
-                     0.016, 'head', M['lens'], thick=0.0018, round_n=3.2, smooth_iter=14)
-frame = project_sheet(face_bvh, 'Glasses_Frame', (0, -0.3, 1.7035), (1, 0, 0), (0, 0, 1), (0, 1, 0), 0.074, 0.004, 24, 1,
-                      0.0185, 'head', M['polymer'], thick=0.005, round_n=8, smooth_iter=14)
-for sx in SIDES:
-    tube_along('Glasses_Temple_%d' % sx, [(sx * 0.073, -0.12, 1.69), (sx * 0.095, -0.085, 1.69), (sx * 0.1, -0.06, 1.685)],
-               0.0022, 'head', M['polymer'])
+# ballistic glasses: Saber-style wraparound shield (see hero_glasses.py)
+build_glasses(M, bvh_of([body]), SIDES)
 
 skin_bm.free()
 for o in bpy.data.objects:

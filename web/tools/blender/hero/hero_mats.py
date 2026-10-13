@@ -498,6 +498,7 @@ def build_all():
     M['mag'] = plastic('mag', srgb(28, 28, 27), rough=0.6, wear=0.35, wear_col=srgb(80, 78, 74))
     M['rubber'] = plastic('rubber', srgb(30, 30, 29), rough=0.85, wear=0.1)
     M['lens'] = glass('lens', (0.32, 0.31, 0.27, 1))
+    M['lens_smoke'] = glass('lens_smoke', (0.11, 0.11, 0.115, 1))  # ballistic glasses: dark smoke shield
     M['clear_lens'] = glass('clear_lens', (0.9, 0.9, 0.88, 1))
     M['reddot_lens'] = glass('reddot_lens', (0.8, 0.85, 0.95, 1))
     M['flag'] = flag_patch('flag')
