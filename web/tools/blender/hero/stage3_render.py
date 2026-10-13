@@ -3,7 +3,7 @@ Iron Front - BI2 hero soldier, stage 3: Cycles studio renders (Blender 5.2.2 LTS
 
   nice /opt/blender/blender -b --factory-startup -P web/tools/blender/hero/stage3_render.py -- \
       [--blend $HERO_WORK/stage2_posed.blend] [--out /tmp/claude-0/BI2] [--res 1600] [--samples 128] \
-      [--views front,q34,back,bust,hands,boots,face,headside,midbody] [--prefix render-] [--suffix -v2]
+      [--views front,q34,back,bust,hands,boots,face,headside,midbody,rifle_r,rifle_l] [--only rifle] [--prefix render-] [--suffix -v2]
 
 Light grey seamless cyclorama, soft 3-point area lighting (key, fill, rim) + dim ambient, 85 mm lens.
 """
@@ -25,6 +25,7 @@ OUT = arg('--out', '/tmp/claude-0/BI2')
 RES = int(arg('--res', '1600'))
 SAMPLES = int(arg('--samples', '128'))
 VIEWS = arg('--views', 'front,q34,back,bust').split(',')
+ONLY = arg('--only', '')  # e.g. 'rifle': render only that collection (plus the studio)
 PREFIX = arg('--prefix', 'render-')
 SUFFIX = arg('--suffix', '-v2')
 
@@ -146,6 +147,11 @@ def shoot(name, yaw_deg, target, frame_h, height=None):
     print('RENDERED', sc.render.filepath, round(time.time() - t, 1), 's', flush=True)
 
 
+if ONLY:
+    keep = {o.name for o in bpy.data.collections[ONLY].all_objects}
+    for o in sc.objects:
+        if o.type in ('MESH', 'CURVE') and o.name not in keep and o.name != 'Cyclorama':
+            o.hide_render = True
 shots = {
     'front': (0, (0, 0, 0.93), 2.15, 1.0),
     'q34': (-38, (0, 0, 0.93), 2.15, 1.05),
@@ -156,6 +162,8 @@ shots = {
     'face': (-24, (0.0, -0.07, 1.655), 0.26, 1.67),  # tight face close-up (not in the default set)
     'headside': (-90, (0.0, -0.04, 1.66), 0.42, 1.7),  # head + helmet from the right side (not in the default set)
     'midbody': (-38, (0.0, -0.05, 0.8), 1.08, 0.9),  # arms (elbows) down to the knees (not in the default set)
+    'rifle_r': (-41, (0.0, -0.335, 1.125), 0.55, 1.2),  # rifle right side (use with --only rifle)
+    'rifle_l': (139, (0.0, -0.335, 1.125), 0.55, 1.05),  # rifle left side (use with --only rifle)
 }
 for v in VIEWS:
     yaw, tgt, fh, hz = shots[v]

@@ -533,6 +533,9 @@ def build_all():
     M['metal'] = plastic('metal', srgb(48, 48, 48), rough=0.4, wear=0.6, metal=0.85, wear_col=srgb(150, 148, 142), bump=0.03)
     M['mag'] = plastic('mag', srgb(28, 28, 27), rough=0.6, wear=0.35, wear_col=srgb(80, 78, 74))
     M['rubber'] = plastic('rubber', srgb(30, 30, 29), rough=0.85, wear=0.1)
+    # rifle shells: finer moulded polymer texture and more edge wear; stippled pistol grip
+    M['rifle_poly'] = plastic('rifle_poly', srgb(38, 38, 36), rough=0.58, wear=0.6, bump=0.12, scale=420.0, wear_col=srgb(98, 95, 88))
+    M['grip_tex'] = plastic('grip_tex', srgb(36, 36, 34), rough=0.75, wear=0.4, bump=0.6, scale=1400.0, wear_col=srgb(90, 88, 82))
     M['lens'] = glass('lens', (0.32, 0.31, 0.27, 1))
     M['lens_smoke'] = glass('lens_smoke', (0.11, 0.11, 0.115, 1))  # ballistic glasses: dark smoke shield
     M['clear_lens'] = glass('clear_lens', (0.9, 0.9, 0.88, 1))

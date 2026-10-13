@@ -24,7 +24,7 @@ def build_rifle(M):
             (0.10, 0.050), (0.13, 0.046), (0.215, 0.040), (0.226, 0.030), (0.226, -0.022), (0.215, -0.033),
             (0.11, -0.038), (0.06, -0.044), (0.02, -0.047), (-0.03, -0.049), (-0.08, -0.053), (-0.175, -0.056),
             (-0.20, -0.062), (-0.30, -0.086), (-0.322, -0.092)]
-    parts.append(extrude_profile('Rifle_Body', body, 0.058, C, M['polymer'], bevel=0.006, segs=3))
+    parts.append(extrude_profile('Rifle_Body', body, 0.058, C, M.get('rifle_poly', M['polymer']), bevel=0.006, segs=3))
     # cheek riser / ejection cover panels (both sides)
     for sy in (1, -1):
         parts.append(rbox('Rifle_Cheek_%d' % sy, (0.14, 0.006, 0.05), (-0.20, sy * 0.030, 0.012), cname=C, mat=M['polymer'], bevel=0.0025))
@@ -79,6 +79,53 @@ def build_rifle(M):
     parts.append(cyl('Rifle_Charging', 0.006, 0.026, (0.175, 0.04, 0.026), (math.pi / 2, 0, 0), C, M['polymer'], 16, 0.001))
     parts.append(cyl('Rifle_SlingRear', 0.009, 0.004, (-0.305, 0.031, 0.025), (math.pi / 2, 0, 0), C, M['metal'], 20))
     parts.append(cyl('Rifle_SlingFront', 0.008, 0.004, (0.19, 0.031, -0.025), (math.pi / 2, 0, 0), C, M['metal'], 20))
+    # ---- r16 detail: ports, slots, seams, ribs, swivels, lower rail, textured grip
+    P = M.get('rifle_poly', M['polymer'])
+    DK = M['rubber']
+    # ejection port (right side, behind the grip) with its cover plate, and the moulded port surround
+    parts.append(rbox('Rifle_EjectPort', (0.064, 0.003, 0.022), (-0.15, -0.0295, 0.016), cname=C, mat=DK, bevel=0.0008))
+    parts.append(rbox('Rifle_EjectCover', (0.07, 0.0032, 0.026), (-0.15, -0.0312, 0.016), (math.radians(4), 0, 0), cname=C,
+                      mat=P, bevel=0.0012))
+    parts.append(rbox('Rifle_EjectHinge', (0.07, 0.004, 0.003), (-0.15, -0.0315, 0.0305), cname=C, mat=M['metal'], bevel=0.0006))
+    # ambidextrous charging handle slots along the upper receiver, knob on each side
+    for sy in (1, -1):
+        parts.append(rbox('Rifle_ChargeSlot_%d' % sy, (0.14, 0.0026, 0.0055), (0.13, sy * 0.0292, 0.028), cname=C, mat=DK, bevel=0.0005))
+    parts.append(cyl('Rifle_ChargingR', 0.006, 0.022, (0.175, -0.04, 0.026), (math.pi / 2, 0, 0), C, P, 16, 0.001))
+    # panel lines / moulded seams: thin dark grooves where the shells meet
+    for sy in (1, -1):
+        y = sy * 0.0293
+        for nm, size, loc in (('GripSeamF', (0.0016, 0.0016, 0.085), (0.11, y, 0.004)),    # hand guard / receiver split
+                              ('GripSeamB', (0.0016, 0.0016, 0.07), (-0.03, y, -0.01)),     # receiver / stock split
+                              ('StockSeam', (0.17, 0.0016, 0.0016), (-0.21, y, -0.036)),    # lower stock shell seam
+                              ('UpperSeam', (0.42, 0.0016, 0.0016), (-0.06, y, 0.036))):    # upper shell parting line
+            parts.append(rbox('Rifle_%s_%d' % (nm, sy), size, loc, cname=C, mat=DK, bevel=0.0))
+    # magazine: longitudinal ribs on both sides
+    ax = Vector((0.02, 0, -0.22)).normalized()
+    ang = math.atan2(ax.x, -ax.z)
+    for sy in (1, -1):
+        for k, dx in enumerate((-0.013, 0.006)):
+            parts.append(rbox('Rifle_MagRib_%d_%d' % (sy, k), (0.0045, 0.0028, 0.15), (-0.124 + dx, sy * 0.0125, -0.165),
+                              (0, ang, 0), cname=C, mat=M['mag'], bevel=0.0008))
+    # lower front rail section under the hand guard
+    parts.append(rbox('Rifle_LowerRail', (0.07, 0.02, 0.006), (0.17, 0, -0.037), cname=C, mat=M['metal'], bevel=0.001))
+    lt = rbox('Rifle_LowerRailTeeth', (0.0052, 0.022, 0.004), (0.14, 0, -0.0415), cname=C, mat=M['metal'], bevel=0.0007)
+    arr = lt.modifiers.new('arr', 'ARRAY')
+    arr.count = 7
+    arr.use_relative_offset = False
+    arr.use_constant_offset = True
+    arr.constant_offset_displace = (0.01, 0, 0)
+    lt.modifiers.move(len(lt.modifiers) - 1, 0)
+    parts.append(lt)
+    # QD swivels on the sling points (rings)
+    for nm, (x, z) in (('Rear', (-0.305, 0.025)), ('Front', (0.19, -0.025))):
+        ring = [Vector((x + 0.011 * math.cos(a), 0.036, z - 0.006 + 0.011 * math.sin(a))) for a in
+                [math.pi * (0.15 + 1.7 * i / 12) for i in range(13)]]
+        parts.append(tube_along('Rifle_QD%s' % nm, ring, 0.0016, C, M['metal']))
+    # pistol grip stippling (texture) and front strap
+    grip_obj = [o for o in parts if o.name == 'Rifle_Grip'][0]
+    if 'grip_tex' in M:
+        grip_obj.data.materials.clear()
+        grip_obj.data.materials.append(M['grip_tex'])
     # red-dot: mount, closed tube housing, lenses, turrets, the dot itself
     parts.append(rbox('RD_Mount', (0.05, 0.03, 0.016), (0.02, 0, 0.071), cname=C, mat=M['polymer'], bevel=0.002))
     parts.append(rbox('RD_MountKnob', (0.012, 0.012, 0.012), (0.02, -0.02, 0.07), cname=C, mat=M['metal'], bevel=0.002))
