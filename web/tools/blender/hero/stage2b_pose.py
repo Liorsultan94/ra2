@@ -141,7 +141,10 @@ vis = body.vertex_groups.new(name='visible')
 for v in body.data.vertices:
     p = bw @ v.co
     if p.z > 1.52 and abs(p.x) < 0.085:
-        vis.add([v.index], 1.0, 'REPLACE')
+        # the neck flares into the trapezius right where the shoulder pads meet the collar: keep that
+        # skin masked so it can never show between collar and pad
+        if p.z > 1.525 + 0.6 * max(0.0, abs(p.x) - 0.055):
+            vis.add([v.index], 1.0, 'REPLACE')
         for g in armg:  # the visible neck / head never follows the arms
             g.remove([v.index])
         tg.add([v.index], 1.0, 'REPLACE')
@@ -376,6 +379,67 @@ for f in range(1, 37):
     if f % 8 == 0:
         print('relax frame', f, round(time.time() - t0, 1), 's', flush=True)
 shirt = freeze(shirt)
+
+
+def tuck_under_pads(obj, margin=0.004):
+    """the posed shoulders swell into the (static) plate-carrier shoulder pads: push every shirt vertex that
+    pokes into or through a pad back under its inner face, with a soft ramp beside the pad edges."""
+    dg = bpy.context.evaluated_depsgraph_get()
+    rows = []
+    for s_ in 'LR':
+        pad = bpy.data.objects.get('Vest_ShoulderPad_' + s_)
+        if pad is None:
+            continue
+        pmw = pad.matrix_world
+        vs = [pmw @ v.co for v in pad.data.vertices]
+        n = len(vs) // 3
+        cen = [vs[3 * i + 1] for i in range(n)]
+        c0 = Vector((cen[0].x, -0.01, 1.33))
+        prow = []
+        for i in range(n):
+            t = (cen[min(i + 1, n - 1)] - cen[max(i - 1, 0)]).normalized()
+            b = vs[3 * i] - vs[3 * i + 2]
+            nn = t.cross(b).normalized()
+            if nn.dot(cen[i] - c0) < 0:
+                nn = -nn
+            prow.append([cen[i], t, b.normalized(), nn, b.length / 2, 0.0])
+        ev = pad.evaluated_get(dg)
+        em = ev.to_mesh()
+        kp = KDTree(n)
+        for i, c in enumerate(cen):
+            kp.insert(c, i)
+        kp.balance()
+        hin = min((pmw @ v.co - cen[kp.find(pmw @ v.co)[1]]).dot(prow[kp.find(pmw @ v.co)[1]][3]) for v in em.vertices)
+        ev.to_mesh_clear()
+        for r in prow:
+            r[5] = hin
+        rows += prow
+    kd = KDTree(len(rows))
+    for i, r in enumerate(rows):
+        kd.insert(r[0], i)
+    kd.balance()
+    moved = 0
+    for v in obj.data.vertices:
+        p = obj.matrix_world @ v.co
+        _, i, dist = kd.find(p)
+        if dist > 0.09:
+            continue
+        c, t, b, n, hw, hin = rows[i]
+        q = p - c
+        if abs(q.dot(t)) > 0.02:
+            continue
+        bb = abs(q.dot(b))
+        h = q.dot(n)
+        if bb > hw + 0.04 or h < -0.06 or h > 0.05:
+            continue
+        hmax = hin - margin + max(0.0, bb - hw) * 0.8
+        if h > hmax:
+            v.co = obj.matrix_world.inverted() @ (p + n * (hmax - h))
+            moved += 1
+    print('shirt verts tucked under the shoulder pads', moved)
+
+
+tuck_under_pads(shirt)
 add_mod(shirt, 'SMOOTH', factor=0.5, iterations=4)
 add_mod(shirt, 'SUBSURF', levels=1, render_levels=1)
 add_mod(shirt, 'SOLIDIFY', thickness=0.0025, offset=-1.0)

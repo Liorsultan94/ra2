@@ -419,14 +419,21 @@ vest_bvh = bvh_of([FP, BP, shirt, pants, body])
 # shoulder pads: path over each shoulder from the front plate to the back plate
 for sx in SIDES:
     s = 'L' if sx > 0 else 'R'
-    c = Vector((sx * 0.105, -0.01, 1.33))
+    # the pad lies on the trapezius: it follows the surface normal (tilted down the shoulder slope, so it
+    # does not stand up as a flat ridge) and sits 4 mm off the shirt (compressed padding)
+    c = Vector((sx * 0.112, -0.01, 1.33))
     pts, nrm = [], []
-    for k in range(25):
-        b = -0.05 + (math.pi + 0.1) * k / 24
+    for k in range(29):
+        b = -0.05 + (math.pi + 0.1) * k / 28
         d = Vector((0, -math.cos(b), math.sin(b)))
         hit, n = surface_frame(vest_bvh, c + d * 0.5, -d)
-        pts.append(hit + d * 0.008)
-        nrm.append(d)
+        if n.dot(d) < 0.2:
+            n = d
+        pts.append(hit)
+        nrm.append(n)
+    for _ in range(4):
+        nrm = [nrm[0]] + [(nrm[i - 1] + nrm[i] * 2 + nrm[i + 1]).normalized() for i in range(1, len(nrm) - 1)] + [nrm[-1]]
+    pts = [p + n * 0.004 for p, n in zip(pts, nrm)]
     for _ in range(4):  # relax the path so the pad bridges small bumps instead of following them
         pts = [pts[0]] + [max(((pts[i - 1] + pts[i + 1]) * 0.5, pts[i]), key=lambda q: (q - c).length) for i in range(1, len(pts) - 1)] + [pts[-1]]
     strap_along('Vest_ShoulderPad_' + s, pts, nrm, 0.068, 0.014, 'vest', M['gear_pad'])
