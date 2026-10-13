@@ -3,6 +3,7 @@ import { DEFS, FACTION_INFO, unitDef } from '../sim/defs';
 import type { Entity } from '../sim/types';
 import { frameBox, studioRig, type CameoFactory, type StudioRig } from '../render/cameo';
 import { createModel, type AnimState, type Model, type ModelStyle } from '../render/models';
+import { forceHero } from '../render/perf/lod';
 import './portrait3d.css';
 
 /*
@@ -183,6 +184,8 @@ export class LivePortrait {
       return hit;
     }
     const model = createModel(modelKey, style, null);
+    // Blender skins: the portrait shows the close-up (hero) tier
+    forceHero(model.root);
     // settle the pose once before measuring (buildings fully built, gear down)
     model.anim?.({ ...this.anim, dt: 0 });
     model.root.updateMatrixWorld(true);

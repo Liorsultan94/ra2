@@ -1,5 +1,5 @@
 /*
- * Step 1 of the Blender asset pipeline (see make.sh): dump the game's procedural models as reference
+ * Step 1 of the Blender asset pipeline (see hero-game/make.sh): dump the game's procedural models as reference
  * geometry for Blender, so the Blender versions keep the exact proportions, pivots and attachment points.
  *
  *   npx vitest run --config tools/blender/vitest.config.ts

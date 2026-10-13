@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Blender 5.2.2 asset pipeline, step 3 (see make.sh): pack a Blender export for the game.
+ * Blender 5.2.2 asset pipeline, last step (see hero-game/make.sh): pack a Blender export for the game.
  *
  *   node tools/blender/pack.mjs <asset>        (from web/)
  *
@@ -34,14 +34,27 @@ mkdirSync(OUT, { recursive: true });
  */
 const CFG = {
   'idf-rifleman': {
+    // LOD1 is what battle zoom shows (soldiers ~20-65 px): about the procedural soldier's LOD1 / LOD2 budgets
     lods: [
-      [0.62, 0.15, ['Prune']],
-      [0.32, 0.15, ['Prune', 'Permissive']],
+      [0.42, 0.2, ['Prune', 'Permissive']],
+      [0.21, 0.2, ['Prune', 'Permissive']],
     ],
     keep: 24,
     size: { albedo: 512, normal: 512, orm: 256 },
     small: { albedo: 256, normal: 256, orm: 128 },
-    q: { albedo: 86, normal: 82, orm: 84 },
+    // WebP byte targets (KB): ImageMagick 6's WebP writer ignores -quality, webp:target-size works
+    kb: { albedo: 30, normal: 36, orm: 14 },
+    smallKb: { albedo: 13, normal: 14, orm: 6 },
+  },
+  // hero tier of the IDF rifleman (hero-game/): one close-up mesh per bone, 1024 px maps (512 px phone)
+  'idf-rifleman-hero': {
+    lods: [],
+    keep: 0,
+    size: { albedo: 1024, normal: 1024, orm: 256 },
+    small: { albedo: 512, normal: 512, orm: 256 },
+    smallSfx: '-512',
+    kb: { albedo: 72, normal: 92, orm: 18 },
+    smallKb: { albedo: 34, normal: 40, orm: 18 },
   },
 };
 const cfg = CFG[asset];
@@ -57,6 +70,23 @@ const root = doc.getRoot();
 for (const n of root.listNodes()) if (/_lod\d$/.test(n.getName())) n.dispose();
 await doc.transform(weld(), dedup(), prune());
 const scene = root.listScenes()[0];
+// vertex cache / fetch order of each LOD0 mesh (meshopt compresses far better in this order); the LOD index
+// subsets are built afterwards over the reordered vertices, so they still share them
+for (const node of root.listNodes()) {
+  const prim = node.getMesh()?.listPrimitives()[0];
+  if (!prim) continue;
+  const idx = new Uint32Array(prim.getIndices().getArray());
+  const [remap, unique] = MeshoptEncoder.reorderMesh(idx, true, true);
+  for (const sem of prim.listSemantics()) {
+    const acc = prim.getAttribute(sem);
+    const src = acc.getArray();
+    const n = acc.getElementSize();
+    const dst = new src.constructor(unique * n);
+    for (let i = 0; i < remap.length; i++) if (remap[i] !== 0xffffffff) for (let c = 0; c < n; c++) dst[remap[i] * n + c] = src[i * n + c];
+    acc.setArray(dst);
+  }
+  prim.getIndices().setArray(idx);
+}
 const lodTris = [0, 0, 0];
 for (const node of root.listNodes()) {
   const mesh = node.getMesh();
@@ -88,13 +118,13 @@ await io.write(glb, doc);
 const sizes = { glb: statSync(glb).size };
 const small = { glb: sizes.glb };
 for (const layer of ['albedo', 'normal', 'orm']) {
-  for (const [sfx, sz, out] of [
-    ['', cfg.size[layer], sizes],
-    ['-256', cfg.small[layer], small],
+  for (const [sfx, sz, out, kb] of [
+    ['', cfg.size[layer], sizes, cfg.kb[layer]],
+    [cfg.smallSfx ?? '-256', cfg.small[layer], small, cfg.smallKb[layer]],
   ]) {
     const dst = join(OUT, `${asset}-${layer}${sfx}.webp`);
-    // box-filtered downsample of the 1024 bake (Lanczos rings on the normal map's island edges)
-    execFileSync('convert', [join(BUILD, `${asset}-${layer}.png`), '-filter', 'Triangle', '-resize', `${sz}x${sz}`, '-alpha', 'off', '-define', 'webp:method=6', '-quality', String(cfg.q[layer]), dst]);
+    // box-filtered downsample of the 1024 (hero: 2048) bake (Lanczos rings on the normal map's island edges)
+    execFileSync('convert', [join(BUILD, `${asset}-${layer}.png`), '-filter', 'Triangle', '-resize', `${sz}x${sz}`, '-alpha', 'off', '-define', 'webp:method=6', '-define', `webp:target-size=${kb * 1024}`, dst]);
     out[layer] = statSync(dst).size;
   }
 }

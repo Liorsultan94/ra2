@@ -4,12 +4,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { FogOfWar } from '../fog';
 import { onFogRelease, purgeKeys } from '../fogcache';
 import { pbrMaterial, worldUV, type CamoPattern, type MatOpts } from '../textures';
-import { registerLods } from '../perf/lod';
+import { registerHero, registerLods } from '../perf/lod';
 import type { Builder } from './registry';
 import type { AnimState, Model, ModelStyle } from './types';
 import { gearWebbing } from './infbake';
 import { uniformCamo, unitLook } from './unittex';
-import { skinFor, skinTeamPatch, type Skin } from './blenderskin';
+import { skinFor, skinTeamPatch, type Skin, type SkinTier } from './blenderskin';
 
 /*
  * Procedural, animated infantry.
@@ -125,9 +125,10 @@ function strut(a: V3, b: V3, r: number, seg = 5): G {
 // --------------------------------------------------------------- kits
 
 // ('med' / 'red': the medic's white field and red cross - only medics carry them, so nobody else gets the draw calls)
-// ('bl': a Blender-authored skin (models/blenderskin.ts): one baked atlas for every part it replaces)
-type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair' | 'med' | 'red' | 'bl';
-const MK_ORDER: MK[] = ['bl', 'camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat', 'med', 'red'];
+// ('bl': a Blender-authored skin (models/blenderskin.ts): one baked atlas for every part it replaces;
+//  'bh': its hero tier, never a mesh of its own: Rig.finish registers it as the 'bl' mesh's close-up swap)
+type MK = 'camo' | 'gear' | 'skin' | 'dark' | 'gun' | 'tube' | 'team' | 'glow' | 'hat' | 'hair' | 'med' | 'red' | 'bl' | 'bh';
+const MK_ORDER: MK[] = ['bl', 'bh', 'camo', 'gear', 'skin', 'hair', 'dark', 'gun', 'tube', 'team', 'glow', 'hat', 'med', 'red'];
 /** Texture repeats per metre (worldUV) for textured materials. */
 const UVS: Partial<Record<MK, number>> = { camo: 2.6, gear: 3.5, dark: 5, gun: 4, tube: 3 };
 
@@ -428,12 +429,13 @@ function uniformMat(faction: string, tint: number, fog: FogOfWar | null) {
  * orm R mask, and the same fog, rim light and infantry fill as the procedural materials. One program for
  * every soldier wearing it whatever the team (the team colour is a uniform).
  */
-function skinMat(skin: Skin, team: number, fog: FogOfWar | null) {
-  const k = `${fogId(fog)}:bl:${skin.def.id}:${team}`;
+function skinMat(skin: Skin, tex: Pick<SkinTier, 'albedo' | 'normal' | 'orm'>, tier: string, team: number, fog: FogOfWar | null) {
+  const k = `${fogId(fog)}:${tier}:${skin.def.id}:${team}`;
   let m = stdCache.get(k);
   if (!m) {
     // glTF tangent-space normals with derivative tangents (as GLTFLoader does): green flipped
-    m = new THREE.MeshStandardMaterial({ map: skin.albedo, normalMap: skin.normal, normalScale: new THREE.Vector2(1, -1), roughnessMap: skin.orm, metalnessMap: skin.orm, roughness: 1, metalness: 1, vertexColors: true });
+    // (the hero tier: same program, only the textures differ)
+    m = new THREE.MeshStandardMaterial({ map: tex.albedo, normalMap: tex.normal, normalScale: new THREE.Vector2(1, -1), roughnessMap: tex.orm, metalnessMap: tex.orm, roughness: 1, metalness: 1, vertexColors: true });
     if (fog) fog.apply(m);
     skinTeamPatch(m, team);
     unitLook(m, { rim: 0.6 });
@@ -447,7 +449,8 @@ function materials(kit: Kit, style: ModelStyle, fog: FogOfWar | null, glow: numb
   const fac = KITS[style.faction] ? style.faction : (REGION_FALLBACK[style.region] ?? 'usa');
   const camo = uniformMat(fac, kit.camoTint ?? 0xffffff, fog);
   return {
-    bl: skin ? skinMat(skin, style.team, fog) : camo,
+    bl: skin ? skinMat(skin, skin, 'bl', style.team, fog) : camo,
+    bh: skin?.hero ? skinMat(skin, skin.hero, 'bh', style.team, fog) : camo,
     camo,
     gear: kit.gearTex === 'camo' ? uniformMat(fac, 0xd6d6d6, fog) : gearMat(kit.gear.color ?? 0x8c7854, fog),
     dark: stdMat('dark', fog, { color: 0x2d2c29, roughness: 0.82, metalness: 0 }, 0.45),
@@ -510,6 +513,9 @@ class Rig {
   cyl = false;
   /** Triangles per geometry LOD after finish(). */
   readonly lodTris = [0, 0, 0];
+  /** Blender skin hero tier: cache key of its merged geometry (shared across teams) and its triangles. */
+  heroKey = '';
+  heroTris = 0;
 
   bone(name: string, parent: THREE.Object3D | null, x: number, y: number, z: number): THREE.Bone {
     const b = new THREE.Bone();
@@ -553,7 +559,7 @@ class Rig {
       return;
     }
     for (const g of geos) delete g.userData.lo;
-    const baked = mk === 'bl';
+    const baked = mk === 'bl' || mk === 'bh';
     const fr = this.frames.get(b) ?? b;
     fr.updateWorldMatrix(true, false);
     const idx = this.bones.indexOf(b);
@@ -632,6 +638,9 @@ class Rig {
       const lods = skin.parts.get(name)!;
       // LOD1 / LOD2 fall back to the next finer level when the asset has none
       for (let lv = 0; lv < 3; lv++) this.addL(1 << lv, b, 'bl', lods[Math.min(lv, lods.length - 1)].clone());
+      // hero tier: the bone's close-up mesh (bones without one keep their play mesh in the close-up)
+      const h = skin.hero?.parts.get(name) ?? (skin.hero ? lods[0] : null);
+      if (h) this.addL(L0, b, 'bh', h.clone());
     }
     return done;
   }
@@ -645,6 +654,8 @@ class Rig {
     const skel = new THREE.Skeleton(this.bones);
     const bind = new THREE.Matrix4();
     let tris = 0;
+    let heroGeo: THREE.BufferGeometry | null = null;
+    let blMesh: THREE.SkinnedMesh | null = null;
     for (const mk of MK_ORDER) {
       const list = this.parts.get(mk);
       if (!list || !list.length) continue;
@@ -674,6 +685,16 @@ class Rig {
       };
       g.setIndex(mkIndex(lods[0]));
       g.computeBoundingSphere();
+      if (mk === 'bh') {
+        // the skin's hero tier: shared by every template of this skin + model (team colour is a uniform)
+        const hk = this.heroKey;
+        heroGeo = (hk && heroGeos.get(hk)) || g;
+        if (hk) heroGeos.set(hk, heroGeo);
+        if (heroGeo !== g) g.dispose();
+        heroGeo.boundingSphere = sphere.clone();
+        this.heroTris = heroGeo.index!.count / 3;
+        continue;
+      }
       registerLods(g, [sub(lods[1]), sub(lods[2])]);
       for (let lv = 0; lv < 3; lv++) this.lodTris[lv] += lods[lv].length / 3;
       tris += lods[0].length / 3;
@@ -684,7 +705,9 @@ class Rig {
       m.bind(skel, bind);
       m.boundingSphere = sphere.clone();
       this.top.add(m);
+      if (mk === 'bl') blMesh = m;
     }
+    if (heroGeo && blMesh) registerHero(blMesh.geometry, heroGeo, mats.bl, mats.bh);
     this.parts.clear();
     return { skel, tris };
   }
@@ -1502,8 +1525,8 @@ interface Tpl {
   lodTris: number[];
   /** Bone name -> the bone its parts are modelled in (Rig.frames; bones not listed: their own frame). */
   frames: Record<string, string>;
-  /** Blender skin worn (models/blenderskin.ts) and the bones it replaced, or null (procedural). */
-  skin: { id: string; bones: string[] } | null;
+  /** Blender skin worn (models/blenderskin.ts), the bones it replaced and its hero tier's triangles (0: none), or null (procedural). */
+  skin: { id: string; bones: string[]; heroTris: number } | null;
 }
 
 const RIFLE_K: V3 = [1, 1.12, 1.3];
@@ -1699,6 +1722,8 @@ function buildMortarTpl(r: Rig, kit: Kit, t: Tpl) {
 }
 
 const tplCache = new Map<string, Tpl>();
+/** Merged hero-tier geometry per Blender skin + model key (Rig.finish; the same for every team and match). */
+const heroGeos = new Map<string, THREE.BufferGeometry>();
 
 /**
  * Tooling / tests (tools/blender/export-procedural.ts): the rest-pose template behind an infantry model
@@ -1744,7 +1769,10 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
   else buildSoldierTpl(r, kit, key, t);
   // Blender skin for this model key + nation (loaded at boot; until then, or without it, procedural)
   const skin = skinFor(key, style.faction);
-  if (skin) t.skin = { id: skin.def.id, bones: r.swapSkin(skin) };
+  if (skin) {
+    t.skin = { id: skin.def.id, bones: r.swapSkin(skin), heroTris: 0 };
+    r.heroKey = `${skin.def.id}|${key}`;
+  }
   for (const [b, f] of r.frames) t.frames[b.name] = f.name;
   const glowColor = key === 'ewinf' ? 0x5dff7a : 0x63d8ff;
   const mats = materials(kit, style, fog, glowColor, skin);
@@ -1752,6 +1780,7 @@ function getTpl(key: string, style: ModelStyle, fog: FogOfWar | null): Tpl {
   t.skel = skel;
   t.tris = tris;
   t.lodTris = r.lodTris.slice();
+  if (t.skin) t.skin.heroTris = r.heroTris;
   t.top.traverse((o) => {
     const m = o as THREE.SkinnedMesh;
     if (m.isSkinnedMesh && m.material === mats.glow) t.glowMat = mats.glow;

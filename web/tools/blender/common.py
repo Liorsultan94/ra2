@@ -1,6 +1,6 @@
 # Blender 5.2.2 (LTS) - shared helpers for the Iron Front asset pipeline (web/tools/blender).
 #
-# Imported by the asset scripts (soldier.py; run headless: blender -b --factory-startup -P <script>.py).
+# Imported by the asset scripts (hero-game/hero_game.py; run headless: blender -b --factory-startup -P <script>.py).
 # Conventions: the game is Y-up with forward = +X and right = +Z (1 unit = 1 map tile); Blender is Z-up,
 # the glTF importer / exporter maps game (x, y, z) <-> Blender (x, -z, y).
 #

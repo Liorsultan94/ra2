@@ -14,7 +14,10 @@ import * as THREE from 'three';
  *    "<part>_lod2", positions in the part's local (modelling) frame, meshopt + quantised (decoded to
  *    floats here);
  *  - <id>-albedo.webp (sRGB), <id>-normal.webp (tangent space, glTF convention), <id>-orm.webp
- *    (R = player colour mask, G = roughness, B = metalness); `-256` variants for the phone profile.
+ *    (R = player colour mask, G = roughness, B = metalness); `-256` variants for the phone profile;
+ *  - optional hero tier (SkinDef.hero): <id>-hero.glb (one finer mesh per part, own UV atlas) with
+ *    <id>-hero-{albedo,normal,orm}.webp (1024 px; `-512` on the phone profile), drawn only for the few
+ *    soldiers closest to a close-up camera and in the selection portrait (perf/lod.ts HeroLod).
  *
  * New assets: add a SKINS entry and a builder script; the model builder picks it up by model key + faction.
  */
@@ -26,9 +29,19 @@ export interface SkinDef {
   model: string;
   /** Faction (ModelStyle.faction). */
   faction: string;
+  /** Has a hero tier (<id>-hero.glb + maps). */
+  hero?: boolean;
 }
 
-export const SKINS: SkinDef[] = [{ id: 'idf-rifleman', model: 'rifle', faction: 'israel' }];
+export const SKINS: SkinDef[] = [{ id: 'idf-rifleman', model: 'rifle', faction: 'israel', hero: true }];
+
+/** Hero tier of a skin: one geometry per part (no LODs) and its own maps. */
+export interface SkinTier {
+  parts: Map<string, THREE.BufferGeometry>;
+  albedo: THREE.Texture;
+  normal: THREE.Texture;
+  orm: THREE.Texture;
+}
 
 export interface Skin {
   def: SkinDef;
@@ -37,6 +50,8 @@ export interface Skin {
   albedo: THREE.Texture;
   normal: THREE.Texture;
   orm: THREE.Texture;
+  /** Close-up tier (null / missing: none). */
+  hero?: SkinTier | null;
 }
 
 const skins = new Map<string, Skin>();
@@ -113,7 +128,7 @@ let pending: Promise<number> | null = null;
  * Start loading every skin (boot). Resolves with the number loaded; never rejects. Callers may await it
  * with their own time cap: a skin that arrives later is still registered and used by the models built
  * from then on (cached templates keep the look they were built with, so nothing swaps mid-match).
- * `small`: the phone profile's 256 px maps instead of 512 px.
+ * `small`: the phone profile's 256 px maps instead of 512 px (hero tier: 512 px instead of 1024 px).
  */
 export function loadSkins(base: string, small = false): Promise<number> {
   if (pending) return pending;
@@ -124,17 +139,30 @@ export function loadSkins(base: string, small = false): Promise<number> {
   }
   const dir = `${base}models/blender/`;
   const sfx = small ? '-256' : '';
+  const hsfx = small ? '-512' : '';
   pending = (async () => {
     const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([import('three/addons/loaders/GLTFLoader.js'), import('three/addons/libs/meshopt_decoder.module.js')]);
     const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
     await Promise.all(
       SKINS.map(async (def) => {
         try {
-          const [gltf, albedo, normal, orm] = await Promise.all([loader.loadAsync(`${dir}${def.id}.glb`), texture(`${dir}${def.id}-albedo${sfx}.webp`, true), texture(`${dir}${def.id}-normal${sfx}.webp`, false), texture(`${dir}${def.id}-orm${sfx}.webp`, false)]);
+          // the hero tier loads alongside; without it the skin still registers (play tiers only)
+          const heroP: Promise<SkinTier | null> = def.hero
+            ? Promise.all([loader.loadAsync(`${dir}${def.id}-hero.glb`), texture(`${dir}${def.id}-hero-albedo${hsfx}.webp`, true), texture(`${dir}${def.id}-hero-normal${hsfx}.webp`, false), texture(`${dir}${def.id}-hero-orm${hsfx}.webp`, false)])
+                .then(([g, albedo, normal, orm]) => {
+                  const parts = new Map([...skinParts(g.scene)].map(([k, v]) => [k, v[0]]));
+                  return parts.size ? { parts, albedo, normal, orm } : null;
+                })
+                .catch((e) => {
+                  console.warn(`[glb] hero tier of ${def.id} unavailable`, e);
+                  return null;
+                })
+            : Promise.resolve(null);
+          const [gltf, albedo, normal, orm, hero] = await Promise.all([loader.loadAsync(`${dir}${def.id}.glb`), texture(`${dir}${def.id}-albedo${sfx}.webp`, true), texture(`${dir}${def.id}-normal${sfx}.webp`, false), texture(`${dir}${def.id}-orm${sfx}.webp`, false), heroP]);
           const parts = skinParts(gltf.scene);
           if (!parts.size) throw new Error('no meshes');
-          registerSkin({ def, parts, albedo, normal, orm });
-          console.info(`[glb] skin ${def.id} for ${def.model}|${def.faction}: ${parts.size} parts`);
+          registerSkin({ def, parts, albedo, normal, orm, hero });
+          console.info(`[glb] skin ${def.id} for ${def.model}|${def.faction}: ${parts.size} parts${hero ? `, hero tier ${hero.parts.size} parts` : ''}`);
         } catch (e) {
           console.warn(`[glb] skin ${def.id} unavailable, keeping the procedural model`, e);
         }
@@ -170,6 +198,16 @@ export function skinTeamPatch<T extends THREE.MeshStandardMaterial>(m: T, team: 
   };
   m.customProgramCacheKey = () => key;
   return m;
+}
+
+/** Every texture of the loaded skins (warm-up uploads them before the first battle frame). */
+export function skinTextures(): THREE.Texture[] {
+  const out: THREE.Texture[] = [];
+  for (const s of skins.values()) {
+    out.push(s.albedo, s.normal, s.orm);
+    if (s.hero) out.push(s.hero.albedo, s.hero.normal, s.hero.orm);
+  }
+  return out;
 }
 
 export const triCount = (g: THREE.BufferGeometry) => (g.index ? g.index.count : g.attributes.position.count) / 3;

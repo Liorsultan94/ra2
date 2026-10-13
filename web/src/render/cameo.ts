@@ -171,6 +171,12 @@ export class CameoFactory {
     this.scene.environmentIntensity = 0.55;
   }
 
+  /** Upload textures now (under the loading screen) rather than at their first portrait / cameo frame. */
+  uploadTextures(texs: THREE.Texture[]) {
+    if (!this.renderer) return;
+    for (const t of texs) this.renderer.initTexture(t);
+  }
+
   /** Neutral studio environment (PMREM of three's RoomEnvironment), shared with the live portrait. */
   environment(): THREE.Texture | null {
     if (this.env || !this.renderer) return this.env;

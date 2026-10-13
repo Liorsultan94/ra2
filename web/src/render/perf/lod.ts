@@ -25,11 +25,40 @@ export interface LodInfo {
   /** Casters currently switched on (off while the model and its shadow are off screen). */
   castOn: boolean;
   kind: 'infantry' | 'vehicle' | 'aircraft' | 'building';
-  /** Meshes with geometry LODs: [LOD0, LOD1, LOD2] geometries. */
-  swaps: { m: THREE.Mesh; g: THREE.BufferGeometry[] }[];
+  /** Meshes with geometry LODs: [LOD0, LOD1, LOD2] geometries (+ the hero tier, see registerHero). */
+  swaps: { m: THREE.Mesh; g: THREE.BufferGeometry[]; hero?: HeroTier; mat?: THREE.Material | THREE.Material[] }[];
   /** Current geometry LOD (0 hero .. 2 far). */
   level: number;
+  /** Hero tier shown (HeroLod grants it to a capped number of models). */
+  hero: boolean;
+  /** Has a hero tier at all. */
+  heroable: boolean;
 }
+
+/**
+ * Hero tier (Blender skins, models/blenderskin.ts): a much finer mesh with its own 1024 px maps, drawn only
+ * for the few soldiers closest to a close-up camera (close zoom, photo mode) and in the selection portrait.
+ * It swaps the mesh's geometry AND material (same shader program as the play tier: only the textures
+ * differ), registered here by the play mesh's LOD0 geometry and material.
+ */
+export interface HeroTier {
+  g: THREE.BufferGeometry;
+  /** Play material -> hero material (per team; same program). */
+  mats: WeakMap<THREE.Material, THREE.Material>;
+}
+const HEROES = new WeakMap<THREE.BufferGeometry, HeroTier>();
+export function registerHero(base: THREE.BufferGeometry, hero: THREE.BufferGeometry, play: THREE.Material, mat: THREE.Material) {
+  let h = HEROES.get(base);
+  if (!h || h.g !== hero) HEROES.set(base, (h = { g: hero, mats: new WeakMap() }));
+  h.mats.set(play, mat);
+}
+export const heroOf = (g: THREE.BufferGeometry) => HEROES.get(g) ?? null;
+/**
+ * Infantry: hero tier once a soldier is ~60 px across, back under ~51 px. Battle zoom shows soldiers at
+ * ~20-35 px (LOD1), so in battle only the desktop's closest zoom (~65 px) reaches it; photo mode and the
+ * portrait always do.
+ */
+export const INF_HERO_PX = 60;
 
 /**
  * Vehicle geometry LODs (models/vehicles.ts): a template's merged buffers are sorted coarse-first and
@@ -66,7 +95,8 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
     const m = o as THREE.Mesh;
     if (!m.isMesh || !m.geometry) return;
     const l = LODS.get(m.geometry);
-    if (l) swaps.push({ m, g: [m.geometry, l[0], l[1]] });
+    const h = HEROES.get(m.geometry);
+    if (l) swaps.push({ m, g: [m.geometry, l[0], l[1]], hero: h && !Array.isArray(m.material) && h.mats.has(m.material) ? h : undefined, mat: m.material });
     const g = m.geometry;
     if (!g.boundingSphere) g.computeBoundingSphere();
     m.getWorldScale(_s);
@@ -93,7 +123,7 @@ export function prepareLod(root: THREE.Object3D, kind: 'infantry' | 'vehicle' | 
     detail.push(m);
   }
   const casters = meshes.filter((x) => x.m.castShadow).map((x) => x.m);
-  return { detail, radius: big, hidden: false, casters, castOn: true, kind, swaps, level: 0 };
+  return { detail, radius: big, hidden: false, casters, castOn: true, kind, swaps, level: 0, hero: false, heroable: swaps.some((e) => !!e.hero) };
 }
 
 /**
@@ -116,10 +146,110 @@ export function applyLod(info: LodInfo, pxPerUnit: number) {
   for (const m of info.detail) setHidden(m, HIDE_LOD, hide);
 }
 
-/** Switch a model to geometry LOD lv (0 hero .. 2 far). */
+/** Switch a model to geometry LOD lv (0 hero .. 2 far); while the hero tier is on, only remembered. */
 export function setGeoLod(info: LodInfo, lv: number) {
   info.level = lv;
+  if (info.hero) return;
   for (const e of info.swaps) e.m.geometry = e.g[lv];
+}
+
+/** Hero tier on / off (geometry + material of the meshes that have one; the others keep their LOD). */
+export function setHero(info: LodInfo, on: boolean) {
+  if (info.hero === on) return;
+  info.hero = on;
+  for (const e of info.swaps) {
+    if (!e.hero) continue;
+    if (on) {
+      e.m.geometry = e.hero.g;
+      e.m.material = e.hero.mats.get(e.mat as THREE.Material) ?? (e.mat as THREE.Material);
+    } else {
+      e.m.geometry = e.g[info.level];
+      e.m.material = e.mat!;
+    }
+  }
+}
+
+/**
+ * Show a freshly built model in its hero tier outside the battle LOD system (selection portrait, warm-up):
+ * swaps every mesh that has one. Returns whether anything changed.
+ */
+export function forceHero(root: THREE.Object3D): boolean {
+  let n = 0;
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || Array.isArray(m.material)) return;
+    const h = HEROES.get(m.geometry);
+    const mat = h?.mats.get(m.material);
+    if (!h || !mat) return;
+    m.geometry = h.g;
+    m.material = mat;
+    n++;
+  });
+  return n > 0;
+}
+
+/**
+ * Hard cap on the hero tier in the battle view: every frame the renderer offers the visible models that
+ * have one with their on-screen size; the `cap` largest above INF_HERO_PX get it (with hysteresis for the
+ * ones already showing it), everybody else is switched back. No allocation per frame.
+ */
+export class HeroLod {
+  /** Most models in the hero tier at once (0: off, e.g. low quality). */
+  cap: number;
+  private readonly offers: { info: LodInfo; px: number }[] = [];
+  private n = 0;
+  private readonly on = new Set<LodInfo>();
+  constructor(cap = 6) {
+    this.cap = cap;
+  }
+  /** px: the model's diameter on screen (CSS px; photo mode: any size ranking by closeness, >= INF_HERO_PX to qualify). */
+  offer(info: LodInfo, px: number) {
+    if (this.cap <= 0 || px < INF_HERO_PX * (info.hero ? 0.85 : 1)) return;
+    let o = this.offers[this.n];
+    if (!o) this.offers.push((o = { info, px }));
+    o.info = info;
+    // the ones showing it keep it against a slightly bigger newcomer (no flip-flop between neighbours)
+    o.px = info.hero ? px * 1.15 : px;
+    this.n++;
+  }
+  /** Grant the hero tier to the largest offers, revoke it from the rest (and from models not offered). */
+  end() {
+    const n = this.n;
+    this.n = 0;
+    const offers = this.offers;
+    if (n > this.cap) {
+      // insertion sort by size, descending (n is small: only close-up soldiers are offered)
+      for (let i = 1; i < n; i++) {
+        const x = offers[i];
+        let j = i - 1;
+        while (j >= 0 && offers[j].px < x.px) {
+          offers[j + 1] = offers[j];
+          j--;
+        }
+        offers[j + 1] = x;
+      }
+    }
+    const k = Math.min(n, this.cap);
+    for (const info of this.on) {
+      let keep = false;
+      for (let i = 0; i < k; i++) if (offers[i].info === info) keep = true;
+      if (!keep) {
+        setHero(info, false);
+        this.on.delete(info);
+      }
+    }
+    for (let i = 0; i < k; i++) {
+      const info = offers[i].info;
+      if (!info.hero) {
+        setHero(info, true);
+        this.on.add(info);
+      }
+    }
+  }
+  /** Models currently in the hero tier. */
+  get count() {
+    return this.on.size;
+  }
 }
 
 /** Reasons a mesh is kept off layer 0 (main view + shadow pass); it is drawn again once none is left. */

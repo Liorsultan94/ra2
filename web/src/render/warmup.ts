@@ -6,6 +6,8 @@ import { createModel, createMunition, type AnimState, type MunitionKind } from '
 import { styleFor, type GameRenderer } from './renderer';
 import { Slicer, nextFrame, settlePrograms } from './slice';
 import type { ViewModes } from './viewmodes';
+import { forceHero } from './perf/lod';
+import { SKINS, skinTextures } from './models/blenderskin';
 
 /*
  * Shader / material warm-up before the first battle frame.
@@ -112,8 +114,19 @@ export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewMo
           m.anim?.(anim(b));
           return m.root;
         });
+      // Blender skins with a hero tier: one more soldier shown in it, so its geometry, maps and program
+      // are uploaded / compiled now and not when the camera first closes in (or the portrait opens)
+      if (SKINS.some((sk) => sk.hero && sk.model === d.model && sk.faction === f))
+        builds.push(() => {
+          const m = createModel(d.model, style, r.fog);
+          if (!forceHero(m.root)) return null;
+          m.anim?.(anim(1));
+          return m.root;
+        });
     }
   }
+  // the skins' maps (both tiers) up to the GPU now
+  for (const t of skinTextures()) gl.initTexture(t);
   builds.push(() => createModel('oil', styleFor(world, -1), r.fog).root);
   const kinds = new Set<MunitionKind>();
   for (const w of Object.values(WEAPONS)) {
