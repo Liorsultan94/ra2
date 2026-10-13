@@ -726,18 +726,19 @@ nvg = rbox('Helmet_NVGShroud', (0.055, 0.016, 0.042), cname='helmet', mat=M['met
 orient(nvg, hit + n * 0.004, n)
 mnt = rbox('Helmet_NVGMount', (0.03, 0.022, 0.03), (0, -0.016, -0.004), cname='helmet', mat=M['polymer'], bevel=0.004)
 mnt.parent = nvg
-# headset ear cups + arms + mic boom
-for sx in SIDES:
-    s = 'L' if sx > 0 else 'R'
-    cup = cyl('Headset_Cup_' + s, 0.037, 0.03, (sx * 0.112, -0.045, 1.652), (0, math.pi / 2, 0), 'helmet', M['headset'], 40, 0.006)
-    add_mod(cup, 'SUBSURF', levels=1, render_levels=1)
-    ring = cyl('Headset_Cushion_' + s, 0.035, 0.012, (sx * 0.096, -0.045, 1.652), (0, math.pi / 2, 0), 'helmet', M['rubber'], 40, 0.004)
-    cap = cyl('Headset_Knob_' + s, 0.009, 0.01, (sx * 0.13, -0.035, 1.665), (0, math.pi / 2, 0), 'helmet', M['polymer'], 20, 0.001)
-    arm = rbox('Headset_Arm_' + s, (0.012, 0.02, 0.05), (sx * 0.118, -0.045, 1.695), cname='helmet', mat=M['polymer'], bevel=0.003)
-tube_along('Headset_Mic', smooth_curve([(-0.125, -0.06, 1.64), (-0.105, -0.12, 1.615), (-0.06, -0.165, 1.6), (-0.022, -0.168, 1.6)], 5),
-           0.0022, 'helmet', M['polymer'])
-mic = cyl('Headset_MicFoam', 0.008, 0.016, (-0.016, -0.168, 1.6), (0, math.pi / 2, 0), 'helmet', M['rubber'], 20, 0.004)
-add_mod(mic, 'SUBSURF', levels=2, render_levels=2)
+# headset ear cups + arms + mic boom: off by the owner's request (r8); HERO_HEADSET=1 brings it back
+if os.environ.get('HERO_HEADSET') == '1':
+    for sx in SIDES:
+        s = 'L' if sx > 0 else 'R'
+        cup = cyl('Headset_Cup_' + s, 0.037, 0.03, (sx * 0.112, -0.045, 1.652), (0, math.pi / 2, 0), 'helmet', M['headset'], 40, 0.006)
+        add_mod(cup, 'SUBSURF', levels=1, render_levels=1)
+        ring = cyl('Headset_Cushion_' + s, 0.035, 0.012, (sx * 0.096, -0.045, 1.652), (0, math.pi / 2, 0), 'helmet', M['rubber'], 40, 0.004)
+        cap = cyl('Headset_Knob_' + s, 0.009, 0.01, (sx * 0.13, -0.035, 1.665), (0, math.pi / 2, 0), 'helmet', M['polymer'], 20, 0.001)
+        arm = rbox('Headset_Arm_' + s, (0.012, 0.02, 0.05), (sx * 0.118, -0.045, 1.695), cname='helmet', mat=M['polymer'], bevel=0.003)
+    tube_along('Headset_Mic', smooth_curve([(-0.125, -0.06, 1.64), (-0.105, -0.12, 1.615), (-0.06, -0.165, 1.6), (-0.022, -0.168, 1.6)], 5),
+               0.0022, 'helmet', M['polymer'])
+    mic = cyl('Headset_MicFoam', 0.008, 0.016, (-0.016, -0.168, 1.6), (0, math.pi / 2, 0), 'helmet', M['rubber'], 20, 0.004)
+    add_mod(mic, 'SUBSURF', levels=2, render_levels=2)
 # chinstrap (Y-straps in front of / behind the cups, buckle under the chin)
 chin_bvh = bvh_of([gaiter, body])
 for sx in SIDES:
