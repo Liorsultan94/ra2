@@ -188,7 +188,10 @@ for nm in riders:
         acc = {}
         tot = 0.0
         pw = mw @ v.co
-        for (co, idx, d) in kd_all.find_n(pw, 3):
+        # wrist riders (and the sleeve ends) take their weights from arm skin only: in the A-pose the hanging
+        # wrist touches the hip, and torso weights left those vertices behind when the hand moved to the rifle
+        wrist = nm.startswith(('Cuff', 'Glove')) or (nm == 'Shirt' and limb(pw) and arm_t(pw)[0] > WRIST_T - 0.12)
+        for (co, idx, d) in (kds[0] if wrist else kd_all).find_n(pw, 3):
             w = 1.0 / (d + 1e-4)
             tot += w
             for n, x in vw[idx].items():
@@ -198,6 +201,9 @@ for nm in riders:
                 if n.startswith(('hand.', 'fingers', 'thumb.')):
                     fa = 'forearm.' + n.split('.')[-1]
                     acc[fa] = acc.get(fa, 0.0) + acc.pop(n)
+        if nm.startswith('Glove_'):  # wrist strap / pads: rigid on the hand (a wrist blend crumples the thin band)
+            acc = {'hand.' + nm[-1]: 1.0}
+            tot = 1.0
         for n, x in acc.items():
             if x / tot > 0.002:
                 groups[n].add([v.index], x / tot, 'REPLACE')
@@ -223,6 +229,22 @@ for nm in riders:
                     grp.add([i], x, 'REPLACE')
                 else:
                     grp.remove([i])
+        # the forearm half of the sleeve is a tube on the forearm: fade out the torso weight that reached the
+        # sleeve end (it dragged hem vertices back toward the hip in a long spike beside the support hand)
+        tgo = o.vertex_groups['torso']
+        for v in me.vertices:
+            p = mw @ v.co
+            if not (abs(p.x) > 0.25 and limb(p)):
+                continue
+            k = sstep(WRIST_T - 0.22, WRIST_T - 0.12, arm_t(p)[0])
+            for g in v.groups:
+                if g.group == tgo.index and k > 0:
+                    x = g.weight * (1 - k)
+                    if x > 0.002:
+                        tgo.add([v.index], x, 'REPLACE')
+                    else:
+                        tgo.remove([v.index])
+                    break
     md = o.modifiers.new('Armature', 'ARMATURE')
     md.object = rig
     md.use_deform_preserve_volume = nm.startswith('Glove')
@@ -255,11 +277,18 @@ def frame(dir_w, palm_w):
     return Matrix((x, y, z)).transposed()
 
 
-# hand targets in rifle space: right fist round the pistol grip, left hand under the guard
+# hand targets in rifle space: right fist round the pistol grip; the support hand wraps the front of the big
+# trigger guard like a vertical fore grip (palm on its left side, thumb up under the hand guard, fingers round
+# the front). It used to sit inside the guard, on top of the right hand's fingers, bent ~75 degrees at the wrist.
 grips = {
-    'R': dict(kn=(0.02, -0.03, -0.098), dir=(0.95, 0.25, -0.15), palm=(0.0, 1.0, 0.1), curl=(1.25, 1.2, 0.9), thumb=0.5),
-    'L': dict(kn=(0.075, 0.012, -0.105), dir=(0.3, -0.92, 0.15), palm=(0.0, 0.0, 1.0), curl=(1.0, 1.0, 0.8), thumb=0.3),
+    'R': dict(kn=(0.02, -0.03, -0.098), dir=(0.95, 0.25, -0.15), palm=(0.0, 1.0, 0.1), curl=(1.25, 1.2, 0.9), thumb=0.5,
+              pole=((-0.45, 0.2, 0.7), 90)),
+    'L': dict(kn=(0.118, 0.035, -0.06), dir=(0.85, -0.45, 0.0), palm=(0.15, -1.0, 0.1), curl=(1.3, 1.25, 0.95), thumb=0.4,
+              pole=((0.55, 0.05, 1.0), 0)),
 }
+# poles: elbows down beside the ribs, with the forearm roll matching the grip so the wrist barely twists (the
+# old shared pole flipped the right forearm ~157 degrees against the hand and candy-wrapped glove, strap,
+# cuff and sleeve end)
 pb = rig.pose.bones
 for s, g in grips.items():
     dw = (R3 @ Vector(g['dir'])).normalized()
@@ -275,11 +304,11 @@ for s, g in grips.items():
     pole = bpy.data.objects.new('POLE_' + s, None)
     coll('torso').objects.link(pole)
     sx = 1 if s == 'L' else -1
-    pole.location = (sx * 0.55, 0.25 if s == 'R' else 0.05, 1.0)
+    pole.location = g['pole'][0]
     ik = pb['forearm.' + s].constraints.new('IK')
     ik.target = tgt
     ik.pole_target = pole
-    ik.pole_angle = math.radians(-90)
+    ik.pole_angle = math.radians(g['pole'][1])
     ik.chain_count = 2
     ik.use_stretch = True
     for bn in ('upper_arm.' + s, 'forearm.' + s):
@@ -311,8 +340,10 @@ for v in shirt.data.vertices:
     w = 0.0
     if abs(p.x) < 0.1 and p.z < 1.43:
         w = 1.0
-    elif abs(p.x) > 0.25 and arm_t(p)[0] > WRIST_T - 0.07:
-        w = 1.0
+    elif abs(p.x) > 0.25 and arm_t(p)[0] > WRIST_T - 0.22:
+        # forearm half of the sleeve stays skinned (a rigid tube on the forearm); only the elbow and upper
+        # arm relax. Pinning just the cuff let the sleeve end buckle into a loose flap beside the grip hand.
+        w = sstep(WRIST_T - 0.22, WRIST_T - 0.12, arm_t(p)[0])
     elif p.z > neck_cut(p) - 0.03 and abs(p.x) < 0.12:
         w = 1.0
     if w:
