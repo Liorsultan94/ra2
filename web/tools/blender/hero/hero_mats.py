@@ -367,6 +367,32 @@ def skin(name):
     return t.m
 
 
+def mesh_net(name):
+    """Mitznefet netting: woodland camo (khaki / green / brown / dark green blotches) printed on an open mesh
+    whose round holes are cut with alpha, so the dark helmet shell shows through."""
+    t = T(name)
+    oc = t.coords('Object')
+    nz = t.noise(oc, 9.0, 4.0, 0.6)
+    col = t.mix(t.maprange(nz.outputs['Fac'], 0.3, 0.7), srgb(118, 112, 76), srgb(104, 100, 66))
+    dn = t.noise(oc, 6.0, 3.0, 0.5)
+    for i, (thr, c, sc) in enumerate(((0.5, srgb(70, 84, 46), 16.0), (0.56, srgb(100, 74, 46), 20.0),
+                                      (0.6, srgb(42, 50, 32), 26.0))):
+        n2 = t.noise(dn.outputs['Color'] if i else oc, sc, 3.0, 0.45, distortion=0.5)
+        col = t.mix(t.maprange(n2.outputs['Fac'], thr, thr + 0.02), col, c)
+    vor = t.n('ShaderNodeTexVoronoi', feature='F1')
+    t.l(oc, vor.inputs['Vector'])
+    vor.inputs['Scale'].default_value = 190.0
+    vor.inputs['Randomness'].default_value = 0.2
+    thread = t.maprange(vor.outputs['Distance'], 0.40, 0.45)       # 0 = hole, 1 = netting
+    fib = t.noise(oc, 900.0, 2.0, 0.5)
+    col = t.mix(t.maprange(fib.outputs['Fac'], 0.35, 0.65, 0.0, 0.15), col, (0.0, 0.0, 0.0, 1))
+    aov = t.ao(0.04)
+    col = t.mix(t.maprange(aov, 0.0, 1.0, 0.5, 0.0), col, (0.0, 0.0, 0.0, 1))
+    h = t.math('ADD', thread, t.math('MULTIPLY', fib.outputs['Fac'], 0.3))
+    t.bsdf(col, 0.86, normal=t.bump(h, 0.35, 0.0006), spec=0.3, sheen=0.3, Alpha=thread)
+    return t.m
+
+
 def glass(name, tint=(0.82, 0.84, 0.80, 1)):
     t = T(name)
     t.bsdf(tint, 0.03, spec=0.5, Transmission_Weight=1.0, IOR=1.5)
@@ -485,6 +511,7 @@ def build_all():
     M['sling'] = webbing('sling', srgb(32, 33, 30))
     M['camo'] = fabric('mitznefet', srgb(112, 104, 72), srgb(120, 110, 78), weave=900, bump=0.25, dust=0.15, sheen=0.3,
                        camo=[(0.5, srgb(74, 80, 50), 5.0), (0.55, srgb(92, 72, 48), 6.5), (0.6, srgb(52, 56, 38), 9.0)])
+    M['mitz_net'] = mesh_net('mitz_net')
     M['skin'] = skin('skin')
     M['gaiter'] = fabric('gaiter', srgb(88, 90, 64), srgb(96, 96, 70), weave=1500, bump=0.35, dust=0.1, sheen=0.4)
     M['glove'] = fabric('glove', srgb(46, 47, 40), srgb(52, 52, 44), weave=1400, bump=0.2, dust=0.15, rough=0.75, wear=0.5)

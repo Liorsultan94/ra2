@@ -13,7 +13,7 @@ Loads $HERO_WORK/stage1.blend (body + cloth-simulated uniform) and:
   cargo pockets with flaps, knee pads, gloves, boots (hero_boots.py: lofted boot last with a firm toe box,
   heel counter, stitched welt, lugged outsole, eyelets, crossed laces and a bow; trousers bloused over the
   tops), neck gaiter, glasses,
-  helmet shell + Mitznefet (cloth-simulated low-res proxy, ragged hem, loose flaps), headset,
+  helmet shell + Mitznefet (hero_mitz.py: oversized floppy mesh-net cover, drawstring), headset,
   chinstrap, plate carrier (plates, cummerbund, shoulder pads, MOLLE, name-tape hook field, sewn
   magazine pouches with bungees and pull tabs, admin pouch with flap / hook panel / zip, radio with
   knobs, display and PTT, IFAK with flap and handle), belt + flapped pouches, and a zip-on pack
@@ -31,6 +31,7 @@ import hero_mats
 from hero_rifle import build_rifle, mag_profile
 from hero_boots import build_boots
 from hero_glasses import build_glasses
+from hero_mitz import build_mitznefet
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -609,119 +610,12 @@ shell = helmet_shell('Helmet_Shell', RX, RY, RZ, 0.0, 'helmet', M['helmet'])
 add_mod(shell, 'SOLIDIFY', thickness=0.008, offset=-1.0)
 add_mod(shell, 'BEVEL', width=0.002, segments=2, limit_method='ANGLE')
 add_mod(shell, 'SUBSURF', levels=1, render_levels=1)
-# Mitznefet: a low-res cloth proxy with a much bigger rest shape, pinned only along the elastic band and
-# dropped on the helmet (no self-collision: a dense, self-colliding cover blew up). The excess fabric
-# collapses into big irregular folds; then it is subdivided, given lumpy noise and creases, a ragged
-# hem and a few loose flaps.
-
-
-def cover_procedural():
-    c = helmet_shell('Helmet_Mitznefet', RX + 0.006, RY + 0.006, RZ + 0.006, 0.034, 'helmet', M['camo'], segs=96, rings=48)
-    for v in c.data.vertices:
-        p = v.co.copy()
-        d = p - HC
-        h = p.z - rim_z(p)
-        lump = 0.5 + 0.3 * noise.noise(p * 11.0) + 0.25 * noise.noise(p * 24.0 + Vector((7, 2, 5)))
-        out = (0.004 + 0.016 * max(0.0, lump) ** 2) * (min(1.0, max(0.0, (h - 0.012) / 0.03)) * 0.85 + 0.15)
-        v.co = p + d.normalized() * out
-    return c
-
-
-cover = helmet_shell('Helmet_Mitznefet', RX + 0.007, RY + 0.007, RZ + 0.007, 0.045, 'helmet', M['camo'], segs=36, rings=18)
-cover.shape_key_add(name='Basis')
-rest = cover.shape_key_add(name='Rest')
-for i, v in enumerate(cover.data.vertices):
-    p = v.co
-    d = p - HC
-    h = p.z - rim_z(p)
-    nz = noise.noise(p * 9.0 + Vector((1, 2, 3)))
-    k = (1.42 + 0.25 * nz) if h > 0.02 else (1.18 + 0.12 * nz)
-    rest.data[i].co = HC + Vector((d.x * k, d.y * k, d.z * (1.25 + 0.2 * nz if h > 0.02 else 1.0)))
-vg = cover.vertex_groups.new(name='pin')
-for v in cover.data.vertices:
-    rz = rim_z(v.co)
-    if rz + 0.003 < v.co.z < rz + 0.02:
-        vg.add([v.index], 1.0, 'REPLACE')
-add_mod(shell, 'COLLISION')
-shell.collision.thickness_outer = 0.004
-shell.collision.cloth_friction = 6
-hcol = add_mod(body, 'COLLISION')
-body.collision.thickness_outer = 0.004
-cl = add_mod(cover, 'CLOTH')
-st = cl.settings
-st.quality = 10
-st.mass = 0.12
-st.tension_stiffness = 8
-st.compression_stiffness = 8
-st.shear_stiffness = 3
-st.bending_stiffness = 0.4
-st.vertex_group_mass = 'pin'
-st.rest_shape_key = rest
-cl.collision_settings.distance_min = 0.004
-cl.collision_settings.use_self_collision = False
-cl.point_cache.frame_end = 40
-sc = bpy.context.scene
-sc.frame_start = 1
-for f in range(1, 41):
-    sc.frame_set(f)
-cover = freeze(cover)
-body.modifiers.remove(hcol)
-shell.modifiers.remove(shell.modifiers['collision'])
-sc.frame_set(1)
-far = max((v.co - HC).length for v in cover.data.vertices)
-print('mitznefet proxy max radius', round(far, 3))
-if far > 0.24:
-    bpy.data.objects.remove(cover)
-    cover = cover_procedural()
-else:
-    bm = bmesh.new()
-    bm.from_mesh(cover.data)
-    for _ in range(2):
-        bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=1, use_grid_fill=True, smooth=1.0)
-    bm.normal_update()
-    flaps = [(1.3, 0.016), (2.3, 0.022), (3.4, 0.018), (4.4, 0.02), (5.1, 0.014)]
-    for v in bm.verts:
-        p = v.co.copy()
-        d = p - HC
-        ang = math.atan2(d.x, -d.y) % (2 * math.pi)
-        lump = 0.5 + 0.5 * noise.noise(p * 26.0 + Vector((4, 4, 4)))
-        crease = (1.0 - abs(noise.noise(p * 34.0))) ** 3
-        v.co += v.normal * (0.0035 * lump + 0.0025 * crease)
-        if v.is_boundary:  # ragged hem + loose flaps
-            drop = 0.006 * noise.noise(p * 60.0) + 0.004 * noise.noise(p * 140.0)
-            for fa, fd in flaps:
-                da = (ang - fa + math.pi) % (2 * math.pi) - math.pi
-                drop -= fd * math.exp(-(da / 0.18) ** 2)
-            front = (ang + math.pi) % (2 * math.pi) - math.pi
-            drop += 0.014 * math.exp(-(front / 0.7) ** 2)  # keep the brim off the glasses
-            v.co.z += drop
-            v.co += Vector((d.x, d.y, 0)).normalized() * (0.004 * abs(noise.noise(p * 50.0)))
-    # pull the rows next to the hem along so the flaps hang as fabric, not as spikes
-    for _ in range(3):
-        for v in bm.verts:
-            if not v.is_boundary and any(e.other_vert(v).is_boundary for e in v.link_edges):
-                nb = [e.other_vert(v).co for e in v.link_edges]
-                v.co = v.co * 0.6 + (sum(nb, Vector()) / len(nb)) * 0.4
-    bm.to_mesh(cover.data)
-    bm.free()
-add_mod(cover, 'SUBSURF', levels=1, render_levels=1)
-add_mod(cover, 'SOLIDIFY', thickness=0.0025, offset=-1.0)
-shade_smooth(cover)
-helm_bvh = bvh_of([cover, shell])
-# elastic band around the cover
-band = []
-for k in range(72):
-    a = 2 * math.pi * k / 72
-    dd = Vector((math.sin(a), -math.cos(a), 0))
-    q0 = HC + Vector((RX * dd.x, RY * dd.y, 0))
-    z = rim_z(q0) + 0.009
-    hit, n, _, _ = helm_bvh.ray_cast(Vector((HC.x, HC.y, z)) + dd * 0.3, -dd, 0.3)
-    if hit is not None:
-        band.append(hit + n * 0.0015)
-band.append(band[0])
-tubes('Helmet_Band', [band], 0.0032, 'helmet', M['webbing'])
-# NVG shroud poking through the cover at the front
-hit, n = surface_frame(helm_bvh, (0, -0.4, 1.745), (0, 1, 0))
+# Mitznefet: oversized floppy mesh-net cover gathered under the rim by an elastic drawstring (hero_mitz.py);
+# the NVG shroud sits on the shell and pokes through a cut-out in the netting
+shell_bvh = bvh_of([shell])
+hit, n = surface_frame(shell_bvh, (0, -0.4, 1.745), (0, 1, 0))
+cover, draw = build_mitznefet(M, HC, RX, RY, RZ, rim_z, hit)
+tubes('Helmet_Band', [draw], 0.0028, 'helmet', M['webbing'])
 nvg = rbox('Helmet_NVGShroud', (0.055, 0.016, 0.042), cname='helmet', mat=M['metal'], bevel=0.004)
 orient(nvg, hit + n * 0.004, n)
 mnt = rbox('Helmet_NVGMount', (0.03, 0.022, 0.03), (0, -0.016, -0.004), cname='helmet', mat=M['polymer'], bevel=0.004)
