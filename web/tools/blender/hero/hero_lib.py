@@ -24,6 +24,26 @@ SHOULDER = 0.19, 1.42   # |x|, z of the shoulder joint (A-pose)
 ARM_DIR = Vector((0.389, -0.921)).normalized()  # shoulder -> wrist direction in the xz plane for +x
 WRIST_T = 0.505          # distance along ARM_DIR from SHOULDER to the wrist crease
 HEAD_C = Vector((0.0, -0.055, 1.69))
+# adult head proportion (r13): everything built around the head (skull, face, helmet + cover, glasses,
+# chinstrap, eyes) is made at the base mesh's size, then scaled by HEAD_S about the neck pivot at the end of
+# stage 2 (head_warp); the neck keeps its girth and blends into the scale over the neck height. The skin
+# shader reads its face masks in un-scaled "head space", so tuning HERO_HEAD_SCALE never breaks them.
+HEAD_S = float(os.environ.get('HERO_HEAD_SCALE', '0.91'))
+HEAD_PIVOT = Vector((0.0, -0.005, 1.50))
+HEAD_ZV = (1.49, 1.545)   # vertical blend of the scale (neck)
+HEAD_ZH = (1.52, 1.56)    # horizontal blend (keeps the neck girth, scales from the jaw up)
+
+
+def _sst(a, b, x):
+    t = max(0.0, min(1.0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
+
+
+def head_warp(p):
+    q = HEAD_PIVOT + (p - HEAD_PIVOT) * HEAD_S
+    wv = _sst(HEAD_ZV[0], HEAD_ZV[1], p.z)
+    wh = _sst(HEAD_ZH[0], HEAD_ZH[1], p.z)
+    return Vector((p.x + (q.x - p.x) * wh, p.y + (q.y - p.y) * wh, p.z + (q.z - p.z) * wv))
 
 
 def arm_t(p):

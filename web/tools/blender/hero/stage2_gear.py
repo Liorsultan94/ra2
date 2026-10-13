@@ -644,6 +644,28 @@ build_chinstrap(M, bvh_of([gaiter, body] if gaiter else [body]), SIDES)
 # ballistic glasses: Saber-style wraparound shield (see hero_glasses.py)
 build_glasses(M, bvh_of([body]), SIDES)
 
+# ---------------------------------------------------------------- adult head proportion (r13, HERO_HEAD_SCALE)
+# the head and everything built around it is scaled about the neck pivot (hero_lib.head_warp)
+if abs(HEAD_S - 1.0) > 1e-4:
+    for o in list(bpy.data.objects):
+        if o.name != 'Body' and not ({c.name for c in o.users_collection} & {'head', 'helmet'}):
+            continue
+        mw = o.matrix_world
+        mi = mw.inverted()
+        if o.type == 'MESH':
+            for v in o.data.vertices:
+                p = mw @ v.co
+                if p.z > HEAD_ZV[0]:
+                    v.co = mi @ head_warp(p)
+        elif o.type == 'CURVE':
+            for sp in o.data.splines:
+                for pt in sp.points:
+                    p = mw @ Vector(pt.co[:3])
+                    if p.z > HEAD_ZV[0]:
+                        pt.co = tuple(mi @ head_warp(p)) + (pt.co[3],)
+            o.data.bevel_depth *= HEAD_S
+    print('head scaled', HEAD_S)
+
 skin_bm.free()
 for o in bpy.data.objects:
     if o.type == 'MESH':

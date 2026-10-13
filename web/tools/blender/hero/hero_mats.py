@@ -285,8 +285,17 @@ def skin(name):
     t = T(name)
     pos = t.geo('Position')
     oc = t.coords('Object')
+    # face masks in un-scaled head space (the head is scaled by HEAD_S about HEAD_PIVOT at the end of stage 2)
+    from hero_lib import HEAD_S, HEAD_PIVOT
+    hp = t.n('ShaderNodeVectorMath', operation='SUBTRACT')
+    t.l(pos, hp.inputs[0])
+    hp.inputs[1].default_value = tuple(HEAD_PIVOT)
+    hs = t.n('ShaderNodeVectorMath', operation='MULTIPLY_ADD')
+    t.l(hp.outputs[0], hs.inputs[0])
+    hs.inputs[1].default_value = (1.0 / HEAD_S,) * 3
+    hs.inputs[2].default_value = tuple(HEAD_PIVOT)
     sep = t.n('ShaderNodeSeparateXYZ')
-    t.l(pos, sep.inputs[0])
+    t.l(hs.outputs[0], sep.inputs[0])
     X, Y, Z = sep.outputs['X'], sep.outputs['Y'], sep.outputs['Z']
     ax = t.math('ABSOLUTE', X)
     base = srgb(160, 116, 92)
