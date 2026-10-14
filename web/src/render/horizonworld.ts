@@ -1,4 +1,4 @@
-import { groundHeight, type GameMap, WATER_LEVEL } from '../sim/map';
+import { coastWiggle as simCoastWiggle, groundHeight, type GameMap, WATER_LEVEL } from '../sim/map';
 import { fbm, hash2 } from '../sim/rng';
 import { biomeLook, type BiomeLook } from './biome';
 import { landmarkPlan, type P2 } from './landmarks/plan';
@@ -89,6 +89,18 @@ export interface Sea {
   beach: [number, number];
   /** Breakwater: from (u0, v0) to (u1, v1). */
   mole: [number, number, number, number];
+  /**
+   * The desert's Red Sea: the same coast mirrored through the map centre (both corners), cut into the
+   * map itself (sim/map.ts seaFrame), with a coral reef shelf along the shore before the deep water.
+   */
+  twin?: boolean;
+}
+
+/** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
+export const REEF_W = 3.6;
+export function reefBed(v: number) {
+  const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(v, REEF_W);
+  return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 2.2, v);
 }
 
 export interface Lake {
@@ -141,6 +153,12 @@ export class HorizonWorld {
     this.h = map.h;
     this.cx = map.w / 2;
     this.cy = map.h / 2;
+    const ds = map.deco?.sea;
+    if (this.code === 1 && ds) {
+      // Wadi Al-Rimal: the Red Sea in the north-west and south-east corners (no harbour)
+      const n = Math.SQRT1_2;
+      this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: ds.off, harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], twin: true };
+    }
     this.findRivers();
     if (this.code === 3) {
       // Canal City: the canal's two arms (north and west of the NW corner) run out into a bay
@@ -188,7 +206,12 @@ export class HorizonWorld {
           const wet = dry ? e < -0.03 : e < WATER_LEVEL + 0.02;
           if (wet && run < 0) run = L;
           if (!wet && run >= 0) {
-            if (L - run >= 1.5) this.addChannel(side, run, L - 0.5, dry);
+            // (a run into the sea is the coast, not a channel)
+            const inSea = this.sea?.twin && [run, (run + L) / 2, L - 0.5].some((q) => {
+              const p = this.sidePoint(side, q, 0);
+              return this.seaV(p.x, p.y).v > -6;
+            });
+            if (L - run >= 1.5 && !inSea) this.addChannel(side, run, L - 0.5, dry);
             run = -1;
           }
         }
@@ -358,8 +381,13 @@ export class HorizonWorld {
   /** Signed seaward distance (> 0 = sea) and the along-coast coordinate. */
   seaV(x: number, y: number): { v: number; u: number } {
     const s = this.sea!;
-    const px = x - this.cx;
-    const py = y - this.cy;
+    let px = x - this.cx;
+    let py = y - this.cy;
+    // twin: the corner nearer (x, y)
+    if (s.twin && px * s.nx + py * s.ny < 0) {
+      px = -px;
+      py = -py;
+    }
     const u = px * s.ux + py * s.uy;
     return { v: px * s.nx + py * s.ny - s.off + coastWiggle(u), u };
   }
@@ -476,8 +504,15 @@ export class HorizonWorld {
     // the bay
     if (this.sea) {
       const { v, u } = this.seaV(x, y);
-      if (v > 0) return WATER_LEVEL - 0.3 - Math.min(v * 0.07, 3.5);
       const s = this.sea;
+      if (s.twin) {
+        // the reef shelf and the deep water; the beach rising from the waterline (as in the map)
+        // (as deep as the map's sea at the edge, deepening further out)
+        if (v > 0) return reefBed(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
+        if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v);
+        return hgt;
+      }
+      if (v > 0) return WATER_LEVEL - 0.3 - Math.min(v * 0.07, 3.5);
       const inHarbour = u > s.harbour[0] && u < s.harbour[1];
       if (inHarbour) {
         // the container yard: flat, quay wall at the water
@@ -632,7 +667,7 @@ export class HorizonWorld {
 
 /** Gentle bends of the bay's coast (same formula in the water shader). */
 export function coastWiggle(u: number) {
-  return 4 * Math.sin(u * 0.045) + 2.5 * Math.sin(u * 0.13 + 1.0);
+  return simCoastWiggle(u);
 }
 
 const worlds = new WeakMap<GameMap, HorizonWorld>();

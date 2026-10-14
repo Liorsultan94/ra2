@@ -369,6 +369,8 @@ function desert(m: GameMap): LandmarkPlan {
     }
   }
   const houses: [number, number][] = [[-12.8, 44.2], [-13.4, 55.4], [-12.4, 61.2], [-6.4, 43.2], [-9.6, 66.2], [-14.8, 50.2], [-5.2, 64.6], [-16.2, 58.8], [-8.4, 40.2]];
+  // the coast town has grown round the old one (white, every house different: models/landmarks.ts mudHouse)
+  houses.push([-15.6, 44.6], [-10.6, 42.4], [-16.4, 62.2], [-14.0, 65.8], [-11.0, 58.6], [-17.8, 52.6], [-12.4, 68.8], [-7.8, 69.2], [-13.2, 40.8], [-18.8, 56.6]);
   houses.forEach(([x, y], i) => spots.push(spot('mudhouse', x, y + vy,(Math.round(hh(i, 4, 21) * 4) * Math.PI) / 2, 0.9, hh(i, 5, 21))));
   for (let i = 0; i < 9; i++) spots.push(spot('palm', -3.6 - hh(i, 6, 21) * 13, 38 + vy + i * 3.6 + hh(i, 7, 21), hh(i, 8, 21) * 6, 0.4, hh(i, 9, 21)));
   // the palm grove by a spring, south of the town (camels rest here)

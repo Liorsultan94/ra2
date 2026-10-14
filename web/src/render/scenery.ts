@@ -164,7 +164,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const wood = new GeoBuilder();
   const metal = new GeoBuilder();
   // desert: sun-baked plaster and mudbrick; winter: painted log houses (falu red, ochre, tar brown) with dark roofs
-  const wallColors = bc === 1 ? [0xd8b98c, 0xe2c9a0, 0xc9a378, 0xe8d6b4, 0xcfae84, 0xbf9a70] : bc === 2 ? [0x8a2e22, 0x9a3a28, 0xb08840, 0x5a3e2a, 0x6a7a84, 0x7a2a22] : [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
+  const wallColors = bc === 1 ? [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xe4d2ae, 0xf7f3ea, 0xdcc8a0, 0xeadfd0] : bc === 2 ? [0x8a2e22, 0x9a3a28, 0xb08840, 0x5a3e2a, 0x6a7a84, 0x7a2a22] : [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
   const roofColors = bc === 2 ? [0x3a3a3c, 0x2e3a30, 0x4a3a30, 0x34383e] : [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
   const builders = [walls, roofs, trim, wood, metal];
   const spans: { st: Structure; from: number[]; to: number[] }[] = [];
@@ -254,17 +254,18 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     };
 
     /** Desert flat-roofed house: plaster box, parapet, deep small windows, roof clutter. */
-    const flatHouse = (lx: number, dz: number, hw: number, ox: number, oz: number, door: boolean) => {
+    const flatHouse = (lx: number, dz: number, hw: number, ox: number, oz: number, door: boolean, oy = 0, wc = wallC) => {
+      const L = (lm: THREE.Matrix4) => base.clone().multiply(new THREE.Matrix4().makeTranslation(0, oy, 0)).multiply(lm);
       const w0 = walls.count;
-      boxAt(walls, lx, hw, dz, L(trs(ox, hw / 2, oz)), wallC);
+      boxAt(walls, lx, hw, dz, L(trs(ox, hw / 2, oz)), wc);
       const pt = 0.05;
       const ph = 0.08;
-      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz + dz / 2 - pt / 2)), wallC);
-      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz - dz / 2 + pt / 2)), wallC);
-      boxAt(walls, pt, ph, dz, L(trs(ox + lx / 2 - pt / 2, hw + ph / 2, oz)), wallC);
-      boxAt(walls, pt, ph, dz, L(trs(ox - lx / 2 + pt / 2, hw + ph / 2, oz)), wallC);
+      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz + dz / 2 - pt / 2)), wc);
+      boxAt(walls, lx, ph, pt, L(trs(ox, hw + ph / 2, oz - dz / 2 + pt / 2)), wc);
+      boxAt(walls, pt, ph, dz, L(trs(ox + lx / 2 - pt / 2, hw + ph / 2, oz)), wc);
+      boxAt(walls, pt, ph, dz, L(trs(ox - lx / 2 + pt / 2, hw + ph / 2, oz)), wc);
       boxUV(walls, w0, 1.1);
-      boxAt(trim, lx - 0.1, 0.012, dz - 0.1, L(trs(ox, hw + 0.006, oz)), wallC.clone().multiplyScalar(0.72));
+      boxAt(trim, lx - 0.1, 0.012, dz - 0.1, L(trs(ox, hw + 0.006, oz)), wc.clone().multiplyScalar(0.72));
       const nx = Math.max(1, Math.floor(lx / 0.38));
       const floors = hw > 0.55 ? 2 : 1;
       for (let f = 0; f < floors; f++) {
@@ -290,7 +291,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         metal.add(new THREE.CylinderGeometry(0.07, 0.07, 0.14, 10).toNonIndexed(), L(trs(ox + lx * 0.25, hw + 0.09, oz - dz * 0.2)), null, h(11) < 0.5 ? new THREE.Color(0.85, 0.85, 0.82) : new THREE.Color(0.12, 0.12, 0.13));
       }
       if (h(12) < 0.5) metal.add(new THREE.CylinderGeometry(0.06, 0.02, 0.025, 10).toNonIndexed(), L(trs(ox - lx * 0.3, hw + 0.08, oz + dz * 0.25, 0, 0.6)), null, new THREE.Color(0.86, 0.86, 0.84));
-      if (h(13) < 0.4) boxAt(walls, 0.2, 0.16, 0.2, L(trs(ox - lx * 0.28, hw + 0.08, oz - dz * 0.22)), wallC.clone().multiplyScalar(0.95));
+      if (h(13) < 0.4) boxAt(walls, 0.2, 0.16, 0.2, L(trs(ox - lx * 0.28, hw + 0.08, oz - dz * 0.22)), wc.clone().multiplyScalar(0.95));
       if (lx > 1 && h(16) < 0.65) {
         // solar water heater: tilted collector, white boiler behind it on a frame (faces +z in the world)
         const sm = L(trs(ox + lx * 0.05, hw, oz + dz * 0.12, (-st.rot * Math.PI) / 2));
@@ -308,23 +309,143 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
       }
     };
 
-    if (bc === 1 && (st.kind === StructureKind.House || st.kind === StructureKind.Cottage || st.kind === StructureKind.MudHouse)) {
-      // desert village house: two storeys or one, flat roof
-      const tall = st.kind !== StructureKind.Cottage && h(14) < 0.6;
-      flatHouse(1.35, 1.1, tall ? 0.66 : 0.42, 0, 0, true);
-      if (h(15) < 0.5) flatHouse(0.55, 0.62, 0.28, -0.42, -0.1, false);
-      return;
-    }
-    if (st.kind === StructureKind.Courtyard) {
-      // courtyard house: rooms along the back and one side, a walled yard with a gate in front
-      flatHouse(2.4, 0.62, 0.5, 0, -0.42, false);
-      flatHouse(0.62, 0.75, 0.4, 0.88, 0.3, true);
-      const w0 = walls.count;
-      boxAt(walls, 1.75, 0.22, 0.06, L(trs(-0.32, 0.11, 0.72)), wallC.clone().multiplyScalar(0.94));
-      boxAt(walls, 0.06, 0.22, 0.8, L(trs(-1.17, 0.11, 0.33)), wallC.clone().multiplyScalar(0.94));
-      boxUV(walls, w0, 1.1);
-      boxAt(wood, 0.24, 0.2, 0.03, L(trs(-0.2, 0.1, 0.75)), new THREE.Color(0.3, 0.22, 0.14));
-      boxAt(trim, 1.7, 0.01, 0.75, L(trs(-0.28, 0.005, 0.32)), new THREE.Color(0.62, 0.52, 0.4));
+    /**
+     * South Sinai coast town (desert map): white, cream and pastel flat-roofed buildings, every one
+     * different: cubes with roof terraces and pergolas, domed houses, L-shaped houses with a tall wing,
+     * stepped houses with set-back upper floors, small apartment blocks with balconies, shop-houses with
+     * awnings; courtyard lots hold walled villas, a row of arcaded shops or a small domed mosque with a
+     * slim minaret (generic). Shutters, doors and awnings in Sinai blue, turquoise, green or terracotta.
+     */
+    const sharmBuilding = (st: Structure) => {
+      const accents = [new THREE.Color(0.18, 0.4, 0.66), new THREE.Color(0.16, 0.56, 0.56), new THREE.Color(0.24, 0.46, 0.3), new THREE.Color(0.7, 0.36, 0.22), new THREE.Color(0.85, 0.66, 0.28)];
+      const acc = accents[Math.floor(h(51) * accents.length)];
+      const acc2 = accents[Math.floor(h(52) * accents.length)];
+      const wc2 = new THREE.Color(wallColors[Math.floor(h(53) * wallColors.length)]);
+      const dark = new THREE.Color(0.1, 0.09, 0.085);
+      const white = new THREE.Color(1, 1, 1);
+      const post = new THREE.Color(0.42, 0.3, 0.2);
+      const dome = (r: number, x: number, y: number, z: number, c: THREE.Color, sy = 1) => {
+        const w0 = walls.count;
+        walls.add(new THREE.SphereGeometry(r, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, sy, 1).toNonIndexed(), L(trs(x, y, z)), null, c);
+        boxUV(walls, w0, 1.1);
+      };
+      const halfDisc = (r: number) => new THREE.CylinderGeometry(r, r, 0.02, 10, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).toNonIndexed();
+      /** A row of round arches on the front (+z) face of a box at (ox, oz), its front at oz + dz / 2. */
+      const arcade = (ox: number, oz: number, lx: number, dz: number, y0: number, n: number, ah = 0.22) => {
+        for (let i = 0; i < n; i++) {
+          const x = ox - lx / 2 + (lx * (i + 0.5)) / n;
+          const aw = (lx / n) * 0.62;
+          boxAt(trim, aw, ah, 0.02, L(trs(x, y0 + ah / 2, oz + dz / 2 + 0.003)), dark);
+          trim.add(halfDisc(aw / 2), L(trs(x, y0 + ah, oz + dz / 2 + 0.003)), null, dark);
+        }
+      };
+      const balcony = (ox: number, oz: number, lx: number, y: number) => {
+        boxAt(walls, lx, 0.025, 0.12, L(trs(ox, y, oz + 0.06)), wallC);
+        boxAt(metal, lx, 0.07, 0.01, L(trs(ox, y + 0.045, oz + 0.115)), acc.clone().multiplyScalar(0.8));
+      };
+      const pergola = (ox: number, oz: number, lx: number, dz: number, y: number) => {
+        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) boxAt(wood, 0.025, 0.2, 0.025, L(trs(ox + (sx * lx) / 2, y + 0.1, oz + (sz * dz) / 2)), post);
+        for (let i = 0; i < 6; i++) boxAt(wood, 0.02, 0.015, dz + 0.06, L(trs(ox - lx / 2 + (lx * i) / 5, y + 0.205, oz)), new THREE.Color(0.48, 0.34, 0.22));
+        if (h(54) < 0.5) boxAt(wood, lx + 0.04, 0.008, dz + 0.04, L(trs(ox, y + 0.215, oz)), acc2.clone().lerp(white, 0.35));
+      };
+      const awning = (ox: number, oz: number, w: number, y: number, c: THREE.Color) => {
+        boxAt(wood, w, 0.012, 0.18, L(trs(ox, y, oz + 0.09).multiply(new THREE.Matrix4().makeRotationX(0.32))), c);
+        for (let i = 0; i < 4; i++) boxAt(trim, 0.012, 0.03, 0.005, L(trs(ox - w / 2 + (w * (i + 0.5)) / 4, y - 0.04, oz + 0.175)), c.clone().multiplyScalar(0.8));
+      };
+      const shutters = (ox: number, oz: number, lx: number, y: number, n: number) => {
+        for (let i = 0; i < n; i++) {
+          const x = ox - lx / 2 + (lx * (i + 0.5)) / n;
+          for (const so of [-0.075, 0.075]) boxAt(wood, 0.05, 0.13, 0.012, L(trs(x + so, y, oz + 0.008)), acc);
+        }
+      };
+      if (st.kind === StructureKind.Courtyard) {
+        const t = h(55);
+        if (t < 0.22) {
+          // a small mosque: a prayer hall with a dome, a slim minaret with a balcony and a little dome on top
+          flatHouse(1.7, 1.25, 0.44, -0.2, -0.08, true);
+          dome(0.42, -0.2, 0.52, -0.08, wallC.clone().lerp(new THREE.Color(0.9, 0.92, 0.94), 0.3), 1.05);
+          const mx = 0.92;
+          const mz = 0.28;
+          const w0 = walls.count;
+          walls.add(new THREE.CylinderGeometry(0.1, 0.12, 1.25, 10).toNonIndexed(), L(trs(mx, 0.625, mz)), null, wallC);
+          walls.add(new THREE.CylinderGeometry(0.15, 0.13, 0.05, 10).toNonIndexed(), L(trs(mx, 0.98, mz)), null, wallC);
+          walls.add(new THREE.CylinderGeometry(0.08, 0.09, 0.2, 10).toNonIndexed(), L(trs(mx, 1.35, mz)), null, wallC);
+          boxUV(walls, w0, 1.1);
+          dome(0.09, mx, 1.45, mz, wallC, 1.4);
+          metal.add(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 5).toNonIndexed(), L(trs(mx, 1.6, mz)), null, new THREE.Color(0.75, 0.68, 0.4));
+          arcade(-0.2, -0.08, 1.7, 1.25, 0.0, 4, 0.24);
+          return;
+        }
+        if (t < 0.5) {
+          // a row of arcaded shops under flat roofs of different heights, coloured awnings
+          for (let i = 0; i < 3; i++) {
+            const ox = -0.82 + i * 0.82;
+            const hw = 0.38 + h(60 + i) * 0.36;
+            flatHouse(0.8, 1.2, hw, ox, -0.05, false, 0, i === 1 ? wc2 : wallC);
+            boxAt(trim, 0.5, 0.22, 0.02, L(trs(ox, 0.11, 0.56)), dark);
+            awning(ox, 0.56, 0.62, 0.27, accents[Math.floor(h(63 + i) * accents.length)]);
+          }
+          return;
+        }
+        // a walled villa: two storeys at the back with a balcony and a dome, a garden wall with an arched gate
+        flatHouse(2.2, 0.66, 0.6, 0, -0.4, false);
+        balcony(0, -0.07, 1.6, 0.3);
+        shutters(0, -0.07, 2.0, 0.44, 5);
+        if (h(56) < 0.6) dome(0.2, 0.7, 0.68, -0.45, h(57) < 0.5 ? wallC : acc2.clone().lerp(white, 0.2));
+        else pergola(-0.5, -0.4, 0.7, 0.45, 0.66);
+        flatHouse(0.55, 0.7, 0.36, -0.86, 0.32, true, 0, wc2);
+        const w0 = walls.count;
+        boxAt(walls, 1.65, 0.26, 0.06, L(trs(0.25, 0.13, 0.72)), wallC);
+        boxAt(walls, 0.06, 0.26, 0.8, L(trs(1.1, 0.13, 0.33)), wallC);
+        boxUV(walls, w0, 1.1);
+        boxAt(wood, 0.26, 0.2, 0.03, L(trs(0.35, 0.1, 0.75)), acc);
+        trim.add(new THREE.CylinderGeometry(0.15, 0.15, 0.07, 10, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).toNonIndexed(), L(trs(0.35, 0.25, 0.73)), null, wallC);
+        boxAt(trim, 1.6, 0.01, 0.7, L(trs(0.2, 0.005, 0.32)), new THREE.Color(0.78, 0.72, 0.6));
+        return;
+      }
+      const type = Math.floor(h(58) * 6);
+      if (type === 0) {
+        // a cube on two floors: an arcade below, a roof terrace with a pergola
+        flatHouse(1.3, 1.05, 0.62, 0, 0, false);
+        arcade(0, 0, 1.3, 1.05, 0, 3);
+        pergola(-0.2, -0.1, 0.7, 0.5, 0.62);
+        shutters(0, 0.525, 1.3, 0.47, 3);
+      } else if (type === 1) {
+        // a domed house with a side room
+        flatHouse(1.0, 1.0, 0.42, -0.15, 0, true);
+        dome(0.34, -0.15, 0.42, 0, h(59) < 0.6 ? wallC : acc2.clone().lerp(white, 0.25), 0.9);
+        flatHouse(0.48, 0.62, 0.3, 0.55, 0.2, false, 0, wc2);
+      } else if (type === 2) {
+        // L-shaped: a three-storey wing with balconies and a low wing beside it
+        flatHouse(0.72, 1.15, 0.9, -0.32, 0, true);
+        balcony(-0.32, 0.575, 0.6, 0.3);
+        balcony(-0.32, 0.575, 0.6, 0.6);
+        flatHouse(0.68, 0.72, 0.36, 0.38, 0.22, false, 0, wc2);
+        awning(0.38, 0.58, 0.5, 0.3, acc2);
+      } else if (type === 3) {
+        // stepped: a wide ground floor, the upper floor set back behind a terrace with an awning
+        flatHouse(1.42, 1.15, 0.36, 0, 0, true);
+        flatHouse(0.82, 0.62, 0.3, -0.25, -0.25, false, 0.36, wc2);
+        boxAt(wood, 0.7, 0.012, 0.36, L(trs(-0.25, 0.64, 0.25).multiply(new THREE.Matrix4().makeRotationX(0.12))), acc.clone().lerp(white, 0.3));
+        for (const sx of [-0.55, 0.05]) boxAt(wood, 0.02, 0.26, 0.02, L(trs(sx, 0.49, 0.42)), post);
+      } else if (type === 4) {
+        // a small apartment block: three floors of balconies, a stair head on the roof
+        flatHouse(1.36, 1.0, 0.86, 0, 0, true);
+        for (const y of [0.29, 0.57]) balcony(0, 0.5, 1.2, y);
+        shutters(0, 0.5, 1.36, 0.72, 3);
+        if (h(60) < 0.5) dome(0.14, 0.4, 0.86, -0.25, acc2);
+      } else {
+        // a shop-house: the shop below behind a deep awning, two floors above
+        flatHouse(1.3, 1.08, 0.7, 0, 0, false);
+        boxAt(trim, 1.0, 0.24, 0.02, L(trs(0, 0.12, 0.545)), dark);
+        awning(0, 0.545, 1.14, 0.29, acc);
+        boxAt(trim, 0.9, 0.05, 0.01, L(trs(0, 0.36, 0.55)), acc2);
+        shutters(0, 0.54, 1.3, 0.52, 3);
+      }
+    };
+
+    if (bc === 1 && (st.kind === StructureKind.House || st.kind === StructureKind.Cottage || st.kind === StructureKind.MudHouse || st.kind === StructureKind.Courtyard)) {
+      sharmBuilding(st);
       return;
     }
 

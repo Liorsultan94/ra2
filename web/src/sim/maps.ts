@@ -23,6 +23,10 @@ import {
   distToSegment,
   sealPockets,
   smoothstep,
+  coastV,
+  coastWiggle as coastWiggleOf,
+  seaFrame,
+  type SeaDeco,
   type Biome,
   type GameMap,
   type MapDeco,
@@ -47,7 +51,7 @@ export interface MapInfo {
 
 export const MAPS: MapInfo[] = [
   { id: 'frontline', name: 'Frontline Crossing', biome: 'temperate', blurb: 'River valley, villages, three bridges', region: 'Temperate river valley' },
-  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'Dunes, mesas, a dry wadi and oases', region: 'Arid desert basin' },
+  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'Red Sea coast: granite peaks, a wadi, oases and beaches', region: 'Desert coast on the Red Sea' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
 ];
@@ -398,6 +402,9 @@ function assemble(
  * Sandstone mesas (impassable, high) funnel the approaches into a few passes;
  * there are no bridges - the wadi is crossed anywhere, but its oases and the
  * mesas make the centre ring road and the two outer passes the lanes.
+ * The Red Sea cuts across the two neutral corners (north-west and south-east, as far from either
+ * base): a coral reef shelf, beaches, a cove between granite headlands and a resort compound
+ * (DESERT_SEA); the massifs and mesas are South Sinai granite (render: biome / relief).
  */
 export function createDesertMap(seed: number): GameMap {
   // drawn on 96 x 96 tiles, built on BIG_MAP: the design scales out from the centre (designScale), sizes
@@ -413,6 +420,7 @@ export function createDesertMap(seed: number): GameMap {
   const rng = new Rng((seed ^ 0x51a7d00d) >>> 0);
   const NS = 4000 + rng.int(4000);
   const g = newGrids();
+  const sea = DESERT_SEA;
   const starts: Point[] = [
     { x: 16, y: 111 },
     { x: W - 1 - 16, y: H - 1 - 111 },
@@ -539,6 +547,7 @@ export function createDesertMap(seed: number): GameMap {
         // a flat-topped plateau with steep sandstone cliffs
         h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
       }
+      h = coastHeight(sea, vx, vy, h, NS);
       g.heights[vy * (W + 1) + vx] = h;
     }
   for (let y = 0; y < H; y++)
@@ -552,7 +561,8 @@ export function createDesertMap(seed: number): GameMap {
       if (mt.f > 0.06) {
         // the massif: stony slopes and talus, drift sand in its gullies, bare rock crags on the high ridges
         t = mt.r < 0.3 && mt.f > 0.12 ? Tile.Sand : Tile.Dirt;
-        if (mt.f > 0.6 && mt.r > 0.9 && mt.h > 2.8) t = Tile.Rock;
+        // (granite: jagged crags along the crest, the saddles and flanks stay passable)
+        if (mt.f > 0.55 && mt.r > 0.86 && mt.h > 2.6) t = Tile.Rock;
       }
       const wd = wadi.dist(x, y);
       const bd = branchDist(x, y);
@@ -564,7 +574,7 @@ export function createDesertMap(seed: number): GameMap {
         else if (d < o.r + 2.4 && t !== Tile.Water) t = Tile.Grass;
       }
       for (const m of mesas) if (distToSegment(fx, fy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5) < m.r + 0.1) t = Tile.Rock;
-      g.tiles[i] = t;
+      g.tiles[i] = coastTile(sea, fx, fy, t);
     }
   markRoads(g, roads, roads.map((_, i) => (i % 3 === 2 ? 0.8 : 0.95)), [Tile.Sand, Tile.Dirt, Tile.Grass]);
   paintOre(g, oreFields);
@@ -579,7 +589,7 @@ export function createDesertMap(seed: number): GameMap {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
       const t = g.tiles[i];
-      if ((t !== Tile.Grass && t !== Tile.Dirt && t !== Tile.Sand) || reserved(x, y) || g.ore[i]) continue;
+      if ((t !== Tile.Grass && t !== Tile.Dirt && t !== Tile.Sand) || reserved(x, y) || g.ore[i] || coastBusy(sea, x + 0.5, y + 0.5)) continue;
       // no trees on the waterline: a palm needs a full tile of dry ground between it and the oasis
       let wet = false;
       for (let dy = -1; dy <= 1 && !wet; dy++)
@@ -632,6 +642,8 @@ export function createDesertMap(seed: number): GameMap {
     ...DESERT_EXTRA,
   ];
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
+  // the resort compounds by the sea (impassable; render/seaside.ts draws them)
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inResort(sea, x + 0.5, y + 0.5)) blocked[y * W + x] = 1;
   for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
 
   const deco = emptyDeco();
@@ -661,6 +673,9 @@ export function createDesertMap(seed: number): GameMap {
     deco.trees.push({ x: CX + 0.5 + Math.cos(a) * (ringR + 1.55), y: CY + 0.5 + Math.sin(a) * (ringR + 1.55), kind: 2 });
   }
   const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
+  // palms along the back of the beaches (render only, knocked over by vehicles)
+  deco.trees.push(...beachPalms(sea, g, NS));
+  deco.sea = sea;
 
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
@@ -742,6 +757,122 @@ const DESERT_EXTRA: Structure[] = [
 const DESERT_FIELDS_EXTRA: { x0: number; y0: number; x1: number; y1: number; rows: 0 | 1 }[] = [{ x0: 14, y0: 81.5, x1: 19, y1: 85, rows: 0 }];
 /** A second field hospital on the new ground. */
 const DESERT_TECH_EXTRA: { def: string; at: [number, number][] }[] = [{ def: 'tech_hospital', at: [[42, 64], [26, 72], [48, 104], [10, 100], [30, 58], [60, 100], [36, 60], [20, 64], [56, 92], [4, 106]] }];
+
+/**
+ * The Red Sea in the north-west and south-east corners (player-neutral: both corners are as far from
+ * either base). A coral reef shelf along the coast drops off into deep water; a cove between two granite
+ * headlands; a bathing beach; a resort compound behind it (impassable).
+ */
+const DESERT_SEA: SeaDeco = {
+  off: 66.5,
+  cove: { u: 12.5, w: 4.4, L: 8.5 },
+  heads: [
+    { u0: 6.2, v0: 1.6, u1: 5.4, v1: -6.5, r: 1.9, top: 2.6 },
+    { u0: 18.8, v0: 1.4, u1: 19.6, v1: -6.0, r: 2.0, top: 3.0 },
+  ],
+  resort: { u0: -19.5, u1: -7.5, v0: -11.5, v1: -4.8 },
+  beach: [-24, 2.5],
+};
+/** Reef shelf width (tiles from the waterline) and the open sea's floor. */
+const REEF = 3.6;
+const SEA_FLOOR = -1.46;
+
+const seaF = { u: 0, v: 0, b: 0 };
+/** Distance from a point (u, v) to a headland capsule. */
+function headDist(hd: SeaDeco['heads'][number], u: number, v: number) {
+  return distToSegment(u, v, hd.u0, hd.v0, hd.u1, hd.v1);
+}
+/** Inside the resort compound (continuous point)? */
+function inResort(sea: SeaDeco, x: number, y: number) {
+  const f = seaFrame(W, H, sea.off, x, y, seaF);
+  const r = sea.resort;
+  return f.u > r.u0 && f.u < r.u1 && f.v > r.v0 && f.v < r.v1;
+}
+/** Beach, sea, resort or headland at a point (no trees, no clutter)? */
+function coastBusy(sea: SeaDeco, x: number, y: number) {
+  const f = seaFrame(W, H, sea.off, x, y, seaF);
+  if (coastV(sea, f.u, f.v) > -4.6) return true;
+  const r = sea.resort;
+  return f.u > r.u0 - 1 && f.u < r.u1 + 1 && f.v > r.v0 - 1 && f.v < r.v1 + 1;
+}
+/** Ground height by the sea at vertex (vx, vy): the reef shelf and the deep water, the beach, the headlands, the resort's terrace. */
+function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number) {
+  const f = seaFrame(W, H, sea.off, vx, vy, seaF);
+  const { u, v } = f;
+  const ve = coastV(sea, u, v);
+  if (ve > -10) {
+    if (ve > 0) {
+      // the reef flat, shelving gently, then the drop-off into the deep (open sea only, not the cove)
+      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + (hash2(vx, vy, ns + 61) - 0.5) * 0.03;
+      h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 2.2, v);
+    } else {
+      // the beach rises from the waterline into the dunes
+      const beach = WATER_LEVEL + 0.03 - ve * 0.075;
+      h = h + (beach - h) * smoothstep(-10, -4.2, ve);
+    }
+  }
+  const r = sea.resort;
+  const k = (1 - smoothstep(0.2, 1.2, r.u0 - u)) * (1 - smoothstep(0.2, 1.2, u - r.u1)) * (1 - smoothstep(0.2, 1.2, r.v0 - v)) * (1 - smoothstep(0.2, 1.2, v - r.v1));
+  if (k > 0) h = h + (0.17 - h) * k;
+  for (const hd of sea.heads) {
+    const d = headDist(hd, u, v);
+    if (d > hd.r + 0.8) continue;
+    // rising from the sea point to the inland crest
+    const t = Math.max(0, Math.min(1, (hd.v0 - v) / (hd.v0 - hd.v1)));
+    const top = hd.top * (0.7 + 0.3 * smoothstep(0, 0.6, t)) + ((hash2(vx, vy, ns + 63) + hash2(W - vx, H - vy, ns + 63)) / 2 - 0.5) * 0.15;
+    h = h + (top - h) * (1 - smoothstep(hd.r - 0.45, hd.r + 0.7, d));
+  }
+  return h;
+}
+/** Tile type by the sea at a tile centre. */
+function coastTile(sea: SeaDeco, x: number, y: number, t: Tile): Tile {
+  const f = seaFrame(W, H, sea.off, x, y, seaF);
+  const ve = coastV(sea, f.u, f.v);
+  for (const hd of sea.heads) if (headDist(hd, f.u, f.v) < hd.r + 0.1) return Tile.Rock;
+  if (ve > 0) return Tile.Water;
+  if (inResort(sea, x, y)) return Tile.Dirt;
+  if (ve > -4.4) return Tile.Sand;
+  return t;
+}
+/** Palms along the back of the beach and round the resort (render only; kind 2). */
+function beachPalms(sea: SeaDeco, g: Grids, ns: number): { x: number; y: number; kind: number }[] {
+  const out: { x: number; y: number; kind: number }[] = [];
+  const add = (u: number, v: number) => {
+    for (const b of [0, 1]) {
+      // north-west corner: (u, v) -> point; the south-east corner: its mirror
+      const s = (sea.off - coastWiggleOf(u) + v) / Math.SQRT1_2;
+      const d = u / Math.SQRT1_2;
+      let px = (d - s) / 2;
+      let py = (-s - d) / 2;
+      if (b) {
+        px = -px;
+        py = -py;
+      }
+      const x = W / 2 + px;
+      const y = H / 2 + py;
+      const tx = Math.floor(x);
+      const ty = Math.floor(y);
+      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+      const i = ty * W + tx;
+      if (g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Rock || g.trees[i]) continue;
+      out.push({ x, y, kind: 2 });
+    }
+  };
+  // a ragged row at the back of the bathing beach, thinning out along the open shore
+  for (let u = sea.beach[0] + 0.6; u < sea.cove.u - sea.cove.w - 3; u += 1.15) {
+    const j = hash2(Math.round(u * 10), 3, ns + 71);
+    if (u > sea.beach[1] && j < 0.55) continue;
+    add(u + (j - 0.5) * 0.5, -3.7 - hash2(Math.round(u * 10), 5, ns + 71) * 0.9);
+  }
+  // the resort's palm-lined edges
+  const r = sea.resort;
+  for (let u = r.u0 + 0.4; u < r.u1; u += 1.6) add(u, r.v1 + 0.45);
+  for (let v = r.v0 + 0.5; v < r.v1; v += 1.7) {
+    add(r.u0 - 0.5, v);
+    add(r.u1 + 0.5, v);
+  }
+  return out;
+}
 
 // ================================================================== winter
 

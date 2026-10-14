@@ -14,6 +14,7 @@ import { buildScenery, type SceneryHandles } from './scenery';
 import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHandles } from './vegetation';
 import { RIVER, buildWater, setRapidsRocks, type RiverInfo, type WaterReflection } from './water';
 import { Waterside } from './waterside';
+import { Seaside } from './seaside';
 import { MinimapBake } from './minimap';
 import type { Slicer } from './slice';
 
@@ -38,6 +39,8 @@ export class Terrain {
   /** The river analysis (centreline, flow, feature spots) and its banks, reeds, jetty and weir. */
   river!: RiverInfo;
   waterside: Waterside | null = null;
+  /** The desert's Red Sea beaches, resorts and boats (seaside.ts). */
+  seaside: Seaside | null = null;
   private resources!: Resources;
   /** Flat map colours (the briefing's map print). */
   minimapImage!: HTMLCanvasElement;
@@ -141,6 +144,10 @@ export class Terrain {
     this.group.add(w.mesh);
     this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
     this.group.add(this.waterside.group);
+    if (this.map.deco?.sea) {
+      this.seaside = new Seaside(this.map, this.fog, quality);
+      this.group.add(this.seaside.group);
+    }
     // the whitewater flows around all the rocks breaking the surface, the relief's boulders too
     setRapidsRocks(w.material, this.waterside.rapidsRocks());
   }
@@ -228,6 +235,7 @@ export class Terrain {
     RIVER.time.value = time;
     this.reflection?.tick();
     this.waterside?.update(time);
+    this.seaside?.update(time);
     windTime.value = time;
     this.resources.animate(time);
   }

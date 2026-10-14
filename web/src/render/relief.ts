@@ -66,7 +66,8 @@ interface Style {
 
 const STYLE: Record<Biome, Style> = {
   temperate: { ramp: 0.3, crest: 0.5, rim: 0.05, wall: 0.32, terraces: 0, wiggle: 0.5 },
-  desert: { ramp: 0.34, crest: 0.05, rim: 0.07, wall: 0.08, terraces: 2, wiggle: 0.45 },
+  // South Sinai granite: jagged crests, broken faces
+  desert: { ramp: 0.32, crest: 0.5, rim: 0.04, wall: 0.3, terraces: 1, wiggle: 0.5 },
   winter: { ramp: 0.3, crest: 0.46, rim: 0.05, wall: 0.3, terraces: 1, wiggle: 0.5 },
   urban: { ramp: 0.3, crest: 0.4, rim: 0.05, wall: 0.3, terraces: 0, wiggle: 0.5 },
 };
@@ -437,7 +438,7 @@ interface RockLook {
 
 const LOOK: Record<Biome, RockLook> = {
   temperate: { side: 'greyrock', top: 'mossrock', sideTint: 0x9c968c, topTint: 0xb8b4a6, sat: 0.55, strata: 0.08, snow: 0, moss: 0.55 },
-  desert: { side: 'sandstone', top: 'sandstone', sideTint: 0xf0d8c0, topTint: 0xf4e0c8, sat: 1.0, strata: 0.2, snow: 0, moss: 0 },
+  desert: { side: 'greyrock', top: 'greyrock', sideTint: 0x9a7262, topTint: 0xa88470, sat: 0.75, strata: 0.06, snow: 0, moss: 0 },
   winter: { side: 'greyrock', top: 'snowrock', sideTint: 0x8c9098, topTint: 0xd0d4dc, sat: 0.4, strata: 0.06, snow: 0.85, moss: 0 },
   urban: { side: 'greyrock', top: 'greyrock', sideTint: 0xa09c94, topTint: 0xa8a49c, sat: 0.5, strata: 0.05, snow: 0, moss: 0.2 },
 };

@@ -274,7 +274,8 @@ export class Outskirts {
    */
   private channelWater(mat: THREE.ShaderMaterial, src: THREE.ShaderMaterial) {
     const W = this.world;
-    if (!W.rivers.length && !W.ponds.length) return;
+    const twin = !!W.sea?.twin;
+    if (!W.rivers.length && !W.ponds.length && !twin) return;
     let fs = mat.fragmentShader;
     const gRe = /float ground = texture2D\(heightTex,[^;]*;/;
     const dat2 = 'vec4 dat2 = texture2D(waterData2, tuv);';
@@ -304,7 +305,8 @@ export class Outskirts {
           continue;
         }
         W.channelAt(x, y, ch);
-        if (ch.wet <= 0 && !W.nearPond(x, y)) continue;
+        // (the desert's Red Sea runs on past the edge with its own coast, not the edge's straight strip)
+        if (ch.wet <= 0 && !W.nearPond(x, y) && !(twin && W.seaV(x, y).v > -10)) continue;
         const hh = o < APRON_W ? apronHeight(this.map, W, x, y) : W.height(x, y);
         hgt[k] = hh;
         if (hh < WATER_LEVEL) wet[k] = 1;

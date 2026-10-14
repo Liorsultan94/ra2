@@ -185,7 +185,8 @@ export function runningWater(m: GameMap): Int8Array {
       if (cy > 0) visit(c - m.w);
       if (cy < m.h - 1) visit(c + m.w);
     }
-    if (isRunning(mouths)) for (const c of body) out[c] = 1;
+    // (the desert's Red Sea reaching the edge is a sea, not a river)
+    if (!m.deco?.sea && isRunning(mouths)) for (const c of body) out[c] = 1;
   }
   return out;
 }
@@ -250,7 +251,7 @@ export function findFalls(m: GameMap, layout: Layout): Fall[] {
       }
       if (edge && groundHeight(m, cx + 0.5, cy + 0.5) < WATER_LEVEL - 0.05) shore.push({ x: cx + 0.5, y: cy + 0.5 });
     }
-    bodies.push(isRunning(mouths) ? shore : []);
+    bodies.push(!m.deco?.sea && isRunning(mouths) ? shore : []);
   }
   const falls: Fall[] = [];
   const clear = (x: number, y: number) => {

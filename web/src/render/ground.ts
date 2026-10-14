@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
+import { Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
 import { fbm, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
@@ -641,6 +641,9 @@ export class Ground {
     const hasForest = !!st && st.slot.forest !== st.slot.dirt;
     const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
+    const seaD = m.deco?.sea;
+    const sf = { u: 0, v: 0, b: 0 };
+    const seaNear = (x: number, y: number) => !!seaD && coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v) > -12;
     for (let py = 0; py < N; py++) {
       if ((py & 7) === 7) yield;
       for (let px = 0; px < N; px++) {
@@ -669,11 +672,23 @@ export class Ground {
         const h0 = groundHeight(m, x, y);
         const slope = Math.abs(groundHeight(m, x + 0.3, y) - h0) + Math.abs(groundHeight(m, x, y + 0.3) - h0);
         rock = Math.max(rock, smooth(0.16, 0.34, slope + (pn - 0.5) * 0.12));
+        // desert: the granite massifs show bare rock high up (scree and drift sand in the hollows)
+        if (bc === 1) rock = Math.max(rock, smooth(1.0, 2.3, h0 + (pn - 0.5) * 0.7) * 0.9);
+        // ...and their steep faces are bare granite, no drift sand clinging to them
+        if (bc === 1) {
+          const st = smooth(0.2, 0.42, slope);
+          sand *= 1 - st;
+          dirt *= 1 - st * 0.8;
+        }
         // riverbank: wet sand -> mud at the waterline
         const wl = h0 - WATER_LEVEL;
         if (bc === 3) {
           // the canal's stone quay walls and the wet stone at their foot
           if (wl < 0.5) rock = Math.max(rock, 1 - smooth(0.25, 0.5, wl));
+        } else if (wl < 0.45 && seaNear(x, y)) {
+          // the Red Sea's beach: clean wet sand at the waterline, no mud
+          sand = Math.max(sand, 1 - smooth(0.0, 0.4, wl));
+          mud = 0;
         } else if (wl < 0.45) {
           const wet = 1 - smooth(-0.05, 0.45, wl);
           sand = Math.max(sand, wet * 0.7 * smooth(0.2, 0.55, pn + 0.2));

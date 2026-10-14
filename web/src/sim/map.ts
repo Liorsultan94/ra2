@@ -75,6 +75,71 @@ export interface MapDeco {
   power: Point[][];
   /** Render-only trees (street trees, roadside palms): kind 1 / 2 as `GameMap.trees`. Vehicles knock them over. */
   trees: { x: number; y: number; kind: number }[];
+  /** A sea in two opposite corners (Wadi Al-Rimal's Red Sea coast): see `seaFrame`. */
+  sea?: SeaDeco;
+}
+
+/**
+ * A coast across the north-west corner and, point mirrored, the south-east one. Positions on it are
+ * given in the corner's frame (`seaFrame`): u along the coast (+ towards the north edge), v seaward
+ * (> 0 = sea, tiles), both in continuous map units.
+ */
+export interface SeaDeco {
+  /** Coast distance from the map centre along the corner diagonal (before the wiggle). */
+  off: number;
+  /** A cove cut into the coast: along-coast centre, half width at the mouth, depth inland. */
+  cove: { u: number; w: number; L: number };
+  /** Granite headlands (rock capsules from (u0, v0) to (u1, v1), radius r, crest height). */
+  heads: { u0: number; v0: number; u1: number; v1: number; r: number; top: number }[];
+  /** The resort compound (impassable): along-coast u0..u1, seaward v0..v1 (negative = inland). */
+  resort: { u0: number; u1: number; v0: number; v1: number };
+  /** The bathing beach's along-coast stretch. */
+  beach: [number, number];
+}
+
+/** The coastline's wiggle along u (shared by the map and the world past its edge). */
+export function coastWiggle(u: number) {
+  return 4 * Math.sin(u * 0.045) + 2.5 * Math.sin(u * 0.13 + 1.0);
+}
+
+/**
+ * Frame of the corner sea nearer (x, y) (continuous map coordinates): along-coast u, seaward v (no cove),
+ * b = 0 for the north-west corner, 1 for the south-east one (the point mirror of the first).
+ */
+export function seaFrame(w: number, h: number, off: number, x: number, y: number, out = { u: 0, v: 0, b: 0 }) {
+  const n = Math.SQRT1_2;
+  let px = x - w / 2;
+  let py = y - h / 2;
+  out.b = 0;
+  if (px + py > 0) {
+    px = -px;
+    py = -py;
+    out.b = 1;
+  }
+  out.u = (px - py) * n;
+  out.v = -(px + py) * n - off + coastWiggle(out.u);
+  return out;
+}
+
+/** Seaward distance with the cove cut in (> 0 = water). */
+export function coastV(sea: SeaDeco, u: number, v: number) {
+  const t = (u - sea.cove.u) / sea.cove.w;
+  return Math.abs(t) < 1 ? v + sea.cove.L * Math.pow(1 - t * t, 0.6) : v;
+}
+
+/** Continuous map point of a corner frame position (b = 1: the south-east corner). */
+export function seaPointAt(w: number, h: number, off: number, u: number, v: number, b: number) {
+  const n = Math.SQRT1_2;
+  // v = -(px + py) n - off + wiggle(u), u = (px - py) n
+  const s = (off - coastWiggle(u) + v) / n; // -(px + py)
+  const d = u / n; // px - py
+  let px = (d - s) / 2;
+  let py = (-s - d) / 2;
+  if (b) {
+    px = -px;
+    py = -py;
+  }
+  return { x: w / 2 + px, y: h / 2 + py };
 }
 
 export const enum StructureKind {
