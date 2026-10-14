@@ -354,6 +354,16 @@ def skin(name):
     mot = t.noise(oc, 45.0, 4.0, 0.6)
     col = t.mix(t.maprange(mot.outputs['Fac'], 0.45, 0.7, 0.0, 0.3), col, srgb(170, 92, 78))
     col = t.mix(t.maprange(mot.outputs['Fac'], 0.25, 0.4, 0.2, 0.0), col, srgb(150, 118, 86))
+    # optional camouflage face paint (HERO_FACEPAINT=1): green / brown diagonal streaks over cheeks, nose, brow
+    import os as _os
+    if _os.environ.get('HERO_FACEPAINT') == '1':
+        face = t.math('MULTIPLY', t.maprange(Y, -0.09, -0.12), t.maprange(Z, 1.585, 1.6))
+        streak = t.wave(oc, 1.0 / 0.045, 'X', distortion=4.0)
+        n_p = t.noise(oc, 30.0, 3.0, 0.6)
+        g = t.math('MULTIPLY', face, t.maprange(t.math('ADD', streak, t.math('MULTIPLY', n_p.outputs['Fac'], 0.6)), 0.75, 0.95))
+        b_ = t.math('MULTIPLY', face, t.maprange(t.math('ADD', streak, t.math('MULTIPLY', n_p.outputs['Fac'], 0.6)), 0.35, 0.2))
+        col = t.mix(t.math('MULTIPLY', g, 0.85), col, srgb(52, 66, 36))
+        col = t.mix(t.math('MULTIPLY', b_, 0.75), col, srgb(70, 54, 36))
     # pores (pits), fine wrinkles, crow's feet / forehead lines, stubble bumps
     pv = t.n('ShaderNodeTexVoronoi', feature='F1')
     t.l(oc, pv.inputs['Vector'])
@@ -521,6 +531,9 @@ def build_all():
     M['camo'] = fabric('mitznefet', srgb(112, 104, 72), srgb(120, 110, 78), weave=900, bump=0.25, dust=0.15, sheen=0.3,
                        camo=[(0.5, srgb(74, 80, 50), 5.0), (0.55, srgb(92, 72, 48), 6.5), (0.6, srgb(52, 56, 38), 9.0)])
     M['mitz_net'] = mesh_net('mitz_net')
+    M['earplug'] = plastic('earplug', srgb(232, 196, 40), rough=0.85, wear=0.0, bump=0.4, scale=900.0)
+    M['earplug_dark'] = plastic('bite_valve', srgb(40, 44, 40), rough=0.6, wear=0.1)
+    M['webbing_light'] = webbing('webbing_light', srgb(150, 140, 104))
     M['skin'] = skin('skin')
     M['gaiter'] = fabric('gaiter', srgb(88, 90, 64), srgb(96, 96, 70), weave=1500, bump=0.35, dust=0.1, sheen=0.4)
     M['glove'] = fabric('glove', srgb(46, 47, 40), srgb(52, 52, 44), weave=1400, bump=0.2, dust=0.15, rough=0.75, wear=0.5)

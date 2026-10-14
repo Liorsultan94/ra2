@@ -214,6 +214,7 @@ for v in body.data.vertices:
 riders = ['Shirt', 'Cuff_L', 'Cuff_R', 'Cuff_Tab_L', 'Cuff_Tab_R', 'Patch_Flag_IL', 'Patch_Velcro', 'Gloves', 'Glove_Strap_L', 'Glove_Strap_R',
           'Glove_Palm_L', 'Glove_Palm_R',
           'Glove_Knuckle_L', 'Glove_Knuckle_R', 'Sleeve_Pocket', 'Sleeve_PocketFlap', 'Sleeve_Roll_L', 'Sleeve_Roll_R']
+riders += [o.name for o in bpy.data.objects if o.name.startswith(('Patch_', 'Glove_')) and o.name not in riders]
 for nm in riders:
     o = bpy.data.objects.get(nm)
     if o is None:
@@ -423,7 +424,17 @@ for s, g in grips.items():
     for fname, curl in g['curl'].items():
         sp0 = (0.3 if s == 'L' else -0.3) if fname == 'thumb' else 0.0
         best = (score(chain_points(s, fname, curl, sp0)), tuple(curl), sp0)
-        if s == 'R' and fname == 'index':
+        if s == 'R' and fname == 'thumb':  # thumb along the right side above the grip (not through the receiver)
+            target = R3i @ Vector((-0.012, -0.042, -0.03))
+            best = (score(chain_points(s, fname, curl, sp0), target), tuple(curl), sp0)
+            for c1 in (-0.4, -0.2, 0.0, 0.2, 0.4):
+                for spv in [sp0 + d_ for d_ in (-0.9, -0.6, -0.3, 0.0, 0.3, 0.6, 0.9)]:
+                    for c2 in (0.0, 0.2, 0.4):
+                        cc = (c1, c2, c2 * 0.7)
+                        sc = score(chain_points(s, fname, cc, spv), target)
+                        if sc < best[0]:
+                            best = (sc, cc, spv)
+        elif s == 'R' and fname == 'index':
             target = R3i @ Vector((0.128, -0.036, -0.046))
             best = (score(chain_points(s, fname, curl), target), tuple(curl), 0.0)
             for c1 in (-0.3, -0.15, 0.0, 0.15, 0.3):

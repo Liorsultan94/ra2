@@ -34,6 +34,7 @@ from hero_glasses import build_glasses
 from hero_mitz import build_mitznefet
 from hero_collar import build_collar, open_throat
 from hero_chinstrap import build_chinstrap
+import hero_details
 
 t0 = time.time()
 bpy.ops.wm.open_mainfile(filepath=os.path.join(WORK, 'stage1.blend'))
@@ -280,6 +281,7 @@ if os.environ.get('HERO_GAITER') == '1':
 # fold-down shirt collar (band + roll + leaf with pointed tips), throat open below the top button
 collar = build_collar(M, bvh_of([body]), bvh_of([shirt]))
 open_throat(shirt)
+hero_details.dog_tags(M, bvh_of([body]))
 for sx in SIDES:
     ax = Vector((sx * ARM_DIR.x, 0, ARM_DIR.y))
     c = arm_point(0.0, sx)
@@ -312,6 +314,7 @@ flag = project_sheet(dressed, 'Patch_Flag_IL', pc, -u_ax, v_ax, -outw, 0.040, 0.
                      thick=0.0015, round_n=12, bevel=0.0006)
 flag_bg = project_sheet(dressed, 'Patch_Velcro', pc, -u_ax, v_ax, -outw, 0.046, 0.034, 8, 6, 0.0018, 'arms', M['velcro'],
                         thick=0.0012, round_n=10)
+hero_details.sleeve_patches(M, dressed)
 
 # ---------------------------------------------------------------- gloves
 def glove_pred(p):
@@ -357,6 +360,7 @@ for v in gloves.data.vertices:
             d = min(d, abs(c - lo), abs(c - hi), abs(a - mcp) + 0.002)
     seam.append(d * 1.6)
 set_seam(gloves, seam)
+hero_details.watch(M, glove_bvh)
 
 # ---------------------------------------------------------------- boots (built from a boot last, see hero_boots.py)
 build_boots(M, skin_bm, pants, SIDES)
@@ -539,6 +543,7 @@ for sx in SIDES:
     strap_along('Vest_ShoulderPad_' + s, pts, nrm, 0.068, 0.014, 'vest', M['gear_pad'])
     strap_along('Vest_ShoulderStrap_' + s, [p + n * 0.014 for p, n in zip(pts, nrm)], nrm, 0.03, 0.003, 'vest', M['webbing'])
 vest_bvh = bvh_of([FP, BP, shirt, pants, body] + [o for o in bpy.data.collections['vest'].objects if o.name.startswith('Vest_Shoulder')])
+hero_details.drink_tube(M, vest_bvh)
 # MOLLE rows on the back plate and on the lower front plate (behind the magazine pouches)
 for k in range(6):
     zz = 1.13 + k * 0.038
@@ -739,6 +744,7 @@ if os.environ.get('HERO_HEADSET') == '1':
     add_mod(mic, 'SUBSURF', levels=2, render_levels=2)
 # chinstrap: Y around each ear to a junction buckle, jaw straps to a centred chin cup (hero_chinstrap.py)
 build_chinstrap(M, bvh_of([gaiter, body] if gaiter else [body]), SIDES)
+hero_details.earplugs(M, bpy.data.objects['Helmet_ChinstrapF_R'], bvh_of([body]))
 
 # ballistic glasses: Saber-style wraparound shield (see hero_glasses.py)
 build_glasses(M, bvh_of([body]), SIDES)
