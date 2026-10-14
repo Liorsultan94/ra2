@@ -2,11 +2,12 @@ import { airdropStatus } from './airdrop';
 import { isSortieJet, jetReady } from './airbase';
 import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
-import { DEFS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
+import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
+import { WATER_LEVEL, groundHeight } from './map';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { Rng } from './rng';
-import { FLARE_RADIUS, illumReady, pickIllum } from './night';
+import { FLARE_RADIUS, hasNightVision, illumReady, pickIllum } from './night';
 import { TPS, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
 
@@ -30,6 +31,28 @@ const CFG: Record<Difficulty, DiffCfg> = {
   normal: { think: 20, firstWave: 8, waveGrowth: 2, maxWave: 16, defenses: 3, tech: true, queueDepth: 2, harvesters: 2, micro: 1 },
   hard: { think: 10, firstWave: 9, waveGrowth: 3, maxWave: 24, defenses: 5, tech: true, queueDepth: 3, harvesters: 2, micro: 2 },
 };
+
+/** How strongly production shifts toward counters of what the enemy fields (0 = doctrine mix only). */
+const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
+/** Chance that a main push is preceded by a feint on another lane (micro > 0 only). */
+const FEINT: Record<Difficulty, number> = { easy: 0, normal: 0.25, hard: 0.4 };
+
+/** Per-AI seed: the match seed mixed with the player id (every match differs, a replay / lockstep peer does not). */
+export function aiSeed(seed: number, pid: number): number {
+  let h = Math.imul((seed | 0) ^ 0x5bd1e995, 0x9e3779b1) ^ Math.imul(pid + 1, 0x85ebca77);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+/** What the AI has seen the enemy field, by class (units seen in the last 90 s, structures until destroyed). */
+export interface EnemyMix {
+  armour: number;
+  infantry: number;
+  air: number;
+  arty: number;
+  defence: number;
+}
 
 /** Long-range strike missile launchers (ballistic / hypersonic / cruise): the AI uses them for standoff strikes. */
 function isStrike(def: string) {
@@ -65,8 +88,25 @@ const BUILD_ORDER: [string, number][] = [
   ['power', 6],
 ];
 
+/**
+ * The seeded build order: the economy core always comes first; then barracks / factory and the mid-game
+ * (second refinery, radar, airfield) come in one of a few orders, so no two matches open quite alike.
+ */
+function buildOrderFor(rng: Rng): [string, number][] {
+  const o = BUILD_ORDER.map((s) => [...s] as [string, number]);
+  if (rng.next() < 0.4) [o[2], o[3]] = [o[3], o[2]]; // factory before barracks
+  const v = rng.next();
+  if (v < 0.3) [o[4], o[5]] = [o[5], o[4]]; // greedy: second refinery before more power
+  else if (v < 0.6) {
+    // tech: radar before the second refinery
+    const [r] = o.splice(6, 1);
+    o.splice(5, 0, r);
+  }
+  return o;
+}
+
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush';
 
 interface Intel {
   x: number;
@@ -82,7 +122,26 @@ interface Wave {
   ty: number;
   focus: number; // focus-fire target
   born: number;
+  /** Lane key it went by ('' = none / a feint's own), its value at launch and the enemy value it is seen to kill. */
+  lane: string;
+  value: number;
+  killed: number;
+  feint?: boolean;
 }
+
+/** A main body held at the rally point while its feint draws the defence onto another lane. */
+interface Staged {
+  ids: number[];
+  wing: number[];
+  lane: [number, number] | null;
+  laneKey: string;
+  wingLane: [number, number] | null;
+  tx: number;
+  ty: number;
+  at: number;
+}
+
+const cost = (def: string) => DEFS[def]?.cost ?? 0;
 
 function klass(def: string): Klass {
   const d = unitDef(def);
@@ -134,6 +193,33 @@ export class AIController implements Controller {
   private baseCache = { tick: -1, pts: [] as number[] };
   private mineUnits: Entity[] = [];
   private mineBuildings: Entity[] = [];
+  /** This match's build order (seeded variation of BUILD_ORDER). */
+  readonly buildOrder: [string, number][];
+  /** Seeded style: raid cadence multiplier, the size jitter of the next wave, the earliest tick it may leave. */
+  private raidPace: number;
+  private waveJitter = 0;
+  private waveNotBefore = 0;
+  private waveStale: number;
+  /** What the enemy is seen to field (updateIntel), and a temporary boost to counter it after a bad trade. */
+  readonly mix: EnemyMix = { armour: 0, infantry: 0, air: 0, arty: 0, defence: 0 };
+  private adaptBoost = 0;
+  private adaptBoostUntil = 0;
+  /** Lanes that cost us a wave for little in return (key -> penalty, decays as waves go out). */
+  private lanePenalty = new Map<string, number>();
+  /** Raid targets found well defended: avoided for a while. */
+  private avoid: { x: number; y: number; until: number }[] = [];
+  private raid: { ids: number[]; prey: number; x: number; y: number } | null = null;
+  private staged: Staged | null = null;
+  /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
+  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1 };
+  /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
+  private hMin = 0;
+  private hSpan = 1;
+  private rallyCache: { key: number; pt: [number, number] } | null = null;
+  private chokes: { x: number; y: number }[] | null = null;
+  private chokeScan = 0;
+  private chokeFound: { x: number; y: number; w: number }[] = [];
+  private ambushUntil = 0;
 
   constructor(
     private world: World,
@@ -144,11 +230,26 @@ export class AIController implements Controller {
     this.peaceUntil = Math.max(0, opts.peaceTicks ?? 0);
     this.cfg = CFG[difficulty];
     this.difficulty = difficulty;
-    this.rng = new Rng(9001 + pid * 77);
+    // seeded from the match: every match plays differently, a replay / lockstep peer identically
+    this.rng = new Rng(aiSeed(world.seed, pid));
     this.doctrine = DOCTRINES[world.players[pid].faction];
     this.waveSize = Math.max(4, Math.round(this.cfg.firstWave * this.doctrine.wave));
-    this.raidAt = TPS * 150;
-    this.scoutAt = TPS * 25;
+    this.buildOrder = buildOrderFor(this.rng);
+    this.raidPace = this.rng.range(0.75, 1.35);
+    this.raidAt = Math.round(TPS * this.rng.range(115, 195));
+    this.scoutAt = Math.round(TPS * this.rng.range(18, 40));
+    this.waveStale = Math.round(TPS * this.rng.range(180, 300));
+    this.waveJitter = this.rng.int(3) - 1;
+    const hs = world.map.heights;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < hs.length; i++) {
+      const h = hs[i];
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    this.hMin = Math.max(lo, WATER_LEVEL);
+    this.hSpan = Math.max(0.5, hi - this.hMin);
   }
 
   private get p(): Player {
@@ -237,10 +338,83 @@ export class AIController implements Controller {
     if (this.thinks % 6 === 0) {
       for (const [id, it] of this.intel) {
         const e = w.get(id);
+        // a death we saw near one of our waves counts toward its trade (lane memory)
+        if (!e && w.tick - it.seen <= this.cfg.think * 6 + TPS * 2) this.creditKill(it);
         // dead, captured, or a unit not seen for a long time
         if (!e || !w.isEnemy(this.pid, e.owner) || (!it.building && w.tick - it.seen > TPS * 90)) this.intel.delete(id);
       }
     }
+    if (this.thinks % 4 === 0) this.updateMix();
+  }
+
+  /** Tally what the enemy fields, by class, from what we have seen (fog of war: intel only). */
+  private updateMix() {
+    const m = this.mix;
+    m.armour = m.infantry = m.air = m.arty = m.defence = 0;
+    for (const it of this.intel.values()) {
+      const d = DEFS[it.def];
+      if (!d) continue;
+      if (it.building) {
+        if (d.category === 'defense') m.defence++;
+        continue;
+      }
+      const ud = unitDef(it.def);
+      if (ud.temp || ud.airlift || !ud.weapon) continue;
+      const k = klass(it.def);
+      if (k === 'arty' || k === 'strike') m.arty++;
+      else if (ud.air || WEAPONS[ud.weapon].projectile === 'spawn') m.air++;
+      else if (ud.category === 'infantry') m.infantry++;
+      else if (ud.category === 'vehicle') m.armour += ud.armor === 'heavy' ? 1 : 0.5;
+    }
+  }
+
+  /** An enemy we saw die: credit it to the wave fighting next to it. */
+  private creditKill(it: Intel) {
+    for (const wv of this.waves) {
+      const c = this.centroid(wv);
+      if (c && Math.hypot(c[0] - it.x, c[1] - it.y) < 12) {
+        wv.killed += cost(it.def);
+        return;
+      }
+    }
+  }
+
+  private centroid(wv: Wave): [number, number] | null {
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const id of wv.ids) {
+      const u = this.world.get(id);
+      if (!u) continue;
+      cx += u.x;
+      cy += u.y;
+      n++;
+    }
+    return n ? [cx / n, cy / n] : null;
+  }
+
+  /**
+   * Production multiplier for a unit type from what the enemy fields: anti-armour weapons vs armour, anti-infantry
+   * vs mass infantry, anti-air vs air, artillery / strike missiles vs a turtle (static defences) and vs enemy guns.
+   */
+  private counterWeight(d: ReturnType<typeof unitDef>): number {
+    const m = this.mix;
+    const total = m.armour + m.infantry + m.air + m.arty + m.defence * 1.5;
+    if (total < 3 || !d.weapon) return 1;
+    const gain = ADAPT[this.difficulty] + (this.world.tick < this.adaptBoostUntil ? this.adaptBoost : 0);
+    const vs = (armor: 'heavy' | 'infantry') => {
+      let v = VERSUS[WEAPONS[d.weapon!].warhead][armor];
+      if (d.weapon2) v = Math.max(v, VERSUS[WEAPONS[d.weapon2].warhead][armor]);
+      return v;
+    };
+    const k = klass(d.id);
+    const fit =
+      (m.armour / total) * (vs('heavy') - 0.55) * 1.6 +
+      (m.infantry / total) * (vs('infantry') - 0.6) * 1.6 +
+      (m.air / total) * (hitsAir(d) ? 1 : -0.3) +
+      ((m.defence * 1.5) / total) * (k === 'arty' || k === 'strike' ? 1.4 : 0) +
+      (m.arty / total) * (k === 'arty' || k === 'strike' || (d.speed ?? 0) >= 2.3 ? 0.8 : 0);
+    return Math.max(0.25, 1 + gain * fit * 2);
   }
 
   /** Known enemies matching a filter (fresh units only). */
@@ -298,6 +472,106 @@ export class AIController implements Controller {
     const ty = Math.floor(y);
     const { w, h } = this.world.map;
     return tx >= 0 && ty >= 0 && tx < w && ty < h && !!this.p.explored[ty * w + tx];
+  }
+
+  // ------------------------------------------------------------------ terrain
+
+  /** Ground height at a point: 0 = lowest dry ground of this map .. 1 = its highest. */
+  private hNorm(x: number, y: number): number {
+    return (Math.max(groundHeight(this.world.map, x, y), WATER_LEVEL) - this.hMin) / this.hSpan;
+  }
+
+  /**
+   * The best position within r tiles of (x, y): passable dry ground, as high as it gets without straying far.
+   * Generic (heightmap + passability, any map size), (2r+1)^2 samples: artillery, pickets, rally point.
+   */
+  private highSpot(x: number, y: number, r: number): [number, number] {
+    const w = this.world;
+    const { map } = w;
+    let best: [number, number] = [x, y];
+    let bs = -Infinity;
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        const tx = cx + ox;
+        const ty = cy + oy;
+        if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || !w.pf.passable(tx, ty)) continue;
+        const px = tx + 0.5;
+        const py = ty + 0.5;
+        const d = Math.hypot(px - x, py - y);
+        if (d > r + 0.5) continue;
+        const s = this.hNorm(px, py) * 6 - d * 0.35;
+        if (s > bs) {
+          bs = s;
+          best = [px, py];
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Passable run from (x, y) along (dx, dy), both ways, capped. */
+  private run(x: number, y: number, dx: number, dy: number, cap: number): number {
+    const pf = this.world.pf;
+    let n = 1;
+    for (const s of [1, -1]) {
+      for (let k = 1; k <= cap; k++) {
+        if (!pf.passable(Math.floor(x + dx * k * s), Math.floor(y + dy * k * s))) break;
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * Chokepoints (passes between impassable ground) found from passability alone, for maps that list no bridges
+   * or lanes: the middle band between the bases is sampled a few hundred points per think, and a point that is
+   * narrow one way but runs on the other (a corridor, not a pocket) is a choke. Done once, spread over thinks.
+   */
+  private scanChokes() {
+    if (this.chokes) return;
+    const w = this.world;
+    const { map } = w;
+    const enemy = this.enemyBase();
+    if (!enemy) return;
+    const [hx, hy] = this.home();
+    const ax = enemy[0] - hx;
+    const ay = enemy[1] - hy;
+    const L2 = ax * ax + ay * ay || 1;
+    const S = 3;
+    const cols = Math.ceil(map.w / S);
+    const total = cols * Math.ceil(map.h / S);
+    const end = Math.min(total, this.chokeScan + 240);
+    const D = [
+      [1, 0],
+      [0, 1],
+      [Math.SQRT1_2, Math.SQRT1_2],
+      [Math.SQRT1_2, -Math.SQRT1_2],
+    ];
+    for (let i = this.chokeScan; i < end; i++) {
+      const x = (i % cols) * S + 1.5;
+      const y = Math.floor(i / cols) * S + 1.5;
+      const t = ((x - hx) * ax + (y - hy) * ay) / L2;
+      if (t < 0.2 || t > 0.8 || !w.pf.passable(Math.floor(x), Math.floor(y))) continue;
+      let lo = Infinity;
+      let hi = 0;
+      for (const [dx, dy] of D) {
+        const r = this.run(x, y, dx, dy, 12);
+        if (r < lo) lo = r;
+        if (r > hi) hi = r;
+      }
+      if (lo <= 7 && hi >= 16) this.chokeFound.push({ x, y, w: lo });
+    }
+    this.chokeScan = end;
+    if (end < total) return;
+    const picked: { x: number; y: number }[] = [];
+    for (const c of [...this.chokeFound].sort((a, b) => a.w - b.w || a.y - b.y || a.x - b.x)) {
+      if (picked.every((p) => Math.hypot(p.x - c.x, p.y - c.y) >= 12)) picked.push({ x: c.x, y: c.y });
+      if (picked.length >= 4) break;
+    }
+    this.chokes = picked;
+    this.chokeFound = [];
   }
 
   private pickDropZone(): [number, number] | null {
@@ -404,7 +678,7 @@ export class AIController implements Controller {
     const p = this.p;
     const f = p.faction;
     const powerDef = factionDefByRole(f, 'power');
-    for (const [role, n] of BUILD_ORDER) {
+    for (const [role, n] of this.buildOrder) {
       if (role === 'tech' && !this.cfg.tech) continue;
       if (this.count(buildings, role) >= n) continue;
       const d = factionDefByRole(f, role);
@@ -585,6 +859,7 @@ export class AIController implements Controller {
         if (d.aiTag === 'aa') wgt = wantAA ? 10 : enemyAir > 0 ? 2 : 0.3 * (doc.bias[d.id.slice(prefix)] ?? 1);
         else if (enemyAir > 0 && d.weapon2 && hitsAir(d)) wgt *= wantAA ? 2.5 : 1.5; // Rocket Teams double as AA
         if (d.aiTag === 'arty' && enemyArty > 0) wgt *= 1.8;
+        if (d.aiTag !== 'aa') wgt *= this.counterWeight(d);
         opts.push([d.id, wgt]);
       }
       const pick = this.weighted(opts);
