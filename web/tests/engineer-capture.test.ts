@@ -90,12 +90,12 @@ describe('engineer capture behavior', () => {
       ],
     });
 
-    const bld = w.spawnBuilding('usa_refinery', 0, 25, 25);
+    const bld = w.spawnBuilding('usa_refinery', 0, 52, 100);
     bld.hp = Math.floor(bld.maxHp * 0.4); // heavily damaged
     expect(bld.hp).toBeLessThan(bld.maxHp);
 
-    const eng1 = w.spawnUnit('usa_engineer', 0, 25, 22);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 25, 21);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 52, 97);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 52, 96);
 
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
 

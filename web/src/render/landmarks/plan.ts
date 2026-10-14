@@ -1,4 +1,4 @@
-import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
+import { Tile, WATER_LEVEL, designScale, type GameMap } from '../../sim/map';
 import { roadClear } from '../ambient/clearance';
 import { surfaceHeight } from '../ground';
 
@@ -298,47 +298,40 @@ function frontline(m: GameMap): LandmarkPlan {
   const W = m.w;
   const H = m.h;
   const spots: Spot[] = [];
-  // the highway leaves the map at (0, 71.5) / (96, 24.5): it runs on through a level crossing
-  const hwyY = 71.5;
-  const west = rail(
-    [
-      { x: -40, y: 140 },
-      { x: -16, y: 114 },
-      { x: -3.6, y: 97 },
-      { x: RAIL_X, y: 84 },
-      { x: RAIL_X, y: 14 },
-      // (out of the corner westwards: the river leaves the map north-westwards, horizonworld.ts)
-      { x: -3.8, y: 1 },
-      { x: -16, y: -6 },
-      { x: -38, y: -16 },
-      { x: -60, y: -24 },
-    ],
-    { crossAt: [{ x: RAIL_X, y: hwyY, roadAng: 0, traffic: true }], stationAt: { x: RAIL_X, y0: 52.5, y1: 60.5, side: -1 } },
-  );
+  // the layout is drawn on 96 x 96 tiles (sim/map.ts designScale): along the edges the run of the
+  // map scales, the distance out from the edge stays, and the station village moves as one
+  const D = designScale(W);
+  const dy = D.x;
+  // the highway leaves the map at (0, 71.5) / (96, 24.5) (design): it runs on through a level crossing
+  const hwyY = dy(71.5);
+  const vs = dy(56) - 56;
+  const westVia = [
+    { x: -40, y: 140 },
+    { x: -16, y: 114 },
+    { x: -3.6, y: 97 },
+    { x: RAIL_X, y: 84 },
+    { x: RAIL_X, y: 14 },
+    // (out of the corner westwards: the river leaves the map north-westwards, horizonworld.ts)
+    { x: -3.8, y: 1 },
+    { x: -16, y: -6 },
+    { x: -38, y: -16 },
+    { x: -60, y: -24 },
+  ].map((p) => ({ x: p.x, y: dy(p.y) }));
+  const west = rail(westVia, { crossAt: [{ x: RAIL_X, y: hwyY, roadAng: 0, traffic: true }], stationAt: { x: RAIL_X, y0: 52.5 + vs, y1: 60.5 + vs, side: -1 } });
   const east = rail(
-    [
-      { x: W + 40, y: H - 140 },
-      { x: W + 16, y: H - 114 },
-      { x: W + 3.6, y: H - 97 },
-      { x: W - RAIL_X, y: H - 84 },
-      { x: W - RAIL_X, y: H - 14 },
-      { x: W + 3.8, y: H - 1 },
-      { x: W + 16, y: H + 6 },
-      { x: W + 38, y: H + 16 },
-      { x: W + 60, y: H + 24 },
-    ],
+    westVia.map((p) => ({ x: W - p.x, y: H - p.y })),
     { crossAt: [{ x: W - RAIL_X, y: H - hwyY, roadAng: 0, traffic: true }] },
   );
   const lanes = [
     { pts: smoothPath([{ x: -0.05, y: hwyY }, { x: -9, y: hwyY }, { x: -18, y: hwyY + 2.5 }, { x: -30, y: hwyY + 8 }, { x: -46, y: hwyY + 10 }], 3, 0.5), width: 1.05 },
     { pts: smoothPath([{ x: W + 0.05, y: H - hwyY }, { x: W + 9, y: H - hwyY }, { x: W + 18, y: H - hwyY - 2.5 }, { x: W + 30, y: H - hwyY - 8 }, { x: W + 46, y: H - hwyY - 10 }], 3, 0.5), width: 1.05 },
     // the village street behind the station
-    { pts: smoothPath([{ x: -9, y: hwyY }, { x: -6.4, y: 64 }, { x: -6.0, y: 54 }, { x: -6.8, y: 44 }], 3, 0.5), width: 0.7 },
+    { pts: smoothPath([{ x: -9, y: hwyY }, { x: -6.4, y: 64 + vs }, { x: -6.0, y: 54 + vs }, { x: -6.8, y: 44 + vs }], 3, 0.5), width: 0.7 },
   ];
   // the station village west of the line
-  spots.push(spot('station', -3.75, 56.5, 0, 1.6));
-  spots.push(spot('church', -9.6, 50.2, 0, 2.4));
-  spots.push(spot('watertower', -9.0, 61.5, 0, 1.2));
+  spots.push(spot('station', -3.75, 56.5 + vs, 0, 1.6));
+  spots.push(spot('church', -9.6, 50.2 + vs, 0, 2.4));
+  spots.push(spot('watertower', -9.0, 61.5 + vs, 0, 1.2));
   const houses: [number, number, number][] = [
     [-4.2, 46.5, Math.PI / 2],
     [-4.4, 63.6, Math.PI / 2],
@@ -350,33 +343,37 @@ function frontline(m: GameMap): LandmarkPlan {
     [-13.2, 47.6, 0],
     [-4.4, 41.6, Math.PI / 2],
   ];
-  houses.forEach(([x, y, yaw], i) => spots.push(spot('cottage', x, y, yaw, 1.0, hh(i, 3, 11))));
+  houses.forEach(([x, y, yaw], i) => spots.push(spot('cottage', x, y + vs, yaw, 1.0, hh(i, 3, 11))));
   // the wind farm on the hills north of the map
-  [[14, -10], [26, -13.5], [38, -9.5], [50, -14], [62, -10], [74, -13.5], [86, -9.5]].forEach(([x, y], i) => spots.push(spot('turbine', x, y, Math.PI / 2, 1.2, hh(i, 5, 12))));
+  [[14, -10], [26, -13.5], [38, -9.5], [50, -14], [62, -10], [74, -13.5], [86, -9.5]].forEach(([x, y], i) => spots.push(spot('turbine', D.x(x), y, Math.PI / 2, 1.2, hh(i, 5, 12))));
   // the castle ruin on the rock ridge south-west of the centre bridge (impassable rock)
-  spots.push(spot('castle', 42, 61, Math.atan2(58 - 64, 44 - 40), 0, 0.37, { inMap: true }));
+  const castle = D.pt(42, 61);
+  spots.push(spot('castle', castle.x, castle.y, Math.atan2(58 - 64, 44 - 40), 0, 0.37, { inMap: true }));
   return { spots, rails: [west, east], lanes, camels: [] };
 }
 
 function desert(m: GameMap): LandmarkPlan {
   const spots: Spot[] = [];
+  // drawn on 96 x 96 tiles (sim/map.ts designScale): the old town moves as one along the west edge
+  const D = designScale(m.w);
+  const vy = D.x(52) - 52;
   // the old town west of the map: a mosque, the souk street, houses and palms
-  spots.push(spot('mosque', -9.4, 49.5, 0, 3.2));
+  spots.push(spot('mosque', -9.4, 49.5 + vy, 0, 3.2));
   // the souk street: stalls of all sizes, unevenly spaced and set, an alley here and there
   for (const [sx, yaw, sd] of [[-7.0, 0, 1], [-4.6, Math.PI, 2]] as const) {
-    let y = 54.9 + hh(0, sd, 23) * 0.3;
-    for (let i = 0; i < 7 && y < 59.6; i++) {
+    let y = 54.9 + vy + hh(0, sd, 23) * 0.3;
+    for (let i = 0; i < 7 && y < 59.6 + vy; i++) {
       const v = hh(i, sd, 21);
       if (!(i === 3 && sd === 1) && !(i === 1 && sd === 2)) spots.push(spot('souk', sx + (hh(i, sd + 4, 23) - 0.5) * 0.25, y, yaw + (hh(i, sd + 6, 23) - 0.5) * 0.25, 0.6, v));
       y += 0.56 + hh(i, sd + 8, 23) * 0.3;
     }
   }
   const houses: [number, number][] = [[-12.8, 44.2], [-13.4, 55.4], [-12.4, 61.2], [-6.4, 43.2], [-9.6, 66.2], [-14.8, 50.2], [-5.2, 64.6], [-16.2, 58.8], [-8.4, 40.2]];
-  houses.forEach(([x, y], i) => spots.push(spot('mudhouse', x, y, (Math.round(hh(i, 4, 21) * 4) * Math.PI) / 2, 0.9, hh(i, 5, 21))));
-  for (let i = 0; i < 9; i++) spots.push(spot('palm', -3.6 - hh(i, 6, 21) * 13, 38 + i * 3.6 + hh(i, 7, 21), hh(i, 8, 21) * 6, 0.4, hh(i, 9, 21)));
+  houses.forEach(([x, y], i) => spots.push(spot('mudhouse', x, y + vy,(Math.round(hh(i, 4, 21) * 4) * Math.PI) / 2, 0.9, hh(i, 5, 21))));
+  for (let i = 0; i < 9; i++) spots.push(spot('palm', -3.6 - hh(i, 6, 21) * 13, 38 + vy + i * 3.6 + hh(i, 7, 21), hh(i, 8, 21) * 6, 0.4, hh(i, 9, 21)));
   // the palm grove by a spring, south of the town (camels rest here)
   const gx = -11;
-  const gy = 79;
+  const gy = D.x(79);
   spots.push(spot('pond', gx, gy, 0, 4.2, 0.5, { a: 3.0, b: 2.2 }));
   // a grove, not a ring: clumps of date palms, thickest on the spring's sheltered (west) side, a few strays
   for (let i = 0; i < 18; i++) {
@@ -393,11 +390,14 @@ function desert(m: GameMap): LandmarkPlan {
   }
   camels.push(...oasisRing(m));
   // the ruined fort on the mesa west of the oasis town (impassable rock)
-  spots.push(spot('fort', 30.5, 63, Math.atan2(5, 6), 0, 0.61, { inMap: true }));
+  spots.push(spot('fort', D.x(30.5), D.x(63), Math.atan2(5, 6), 0, 0.61, { inMap: true }));
+  // ...and a second, older one on the butte south-west of it (the bigger map's new mesa, sim/maps.ts), mirrored
+  if (m.w > 96)
+    for (const [x, y, s] of [[23.5, 94.5, 1], [m.w - 23.5, m.h - 94.5, -1]]) spots.push(spot('fort', x, y, Math.atan2(-3 * s, 4 * s), 0, 0.23, { inMap: true }));
   // the refinery skyline north of the map, with its gas flare
-  spots.push(spot('refinery', 68, -11, 0, 6.5));
+  spots.push(spot('refinery', D.x(68), -11, 0, 6.5));
   // the caravan track past the town: from the dunes in the north-west, on south to the horizon (horizonworld.ts continues it)
-  const lane = smoothPath([{ x: -21, y: 8 }, { x: -12, y: 24 }, { x: -5.8, y: 38 }, { x: -5.8, y: 54 }, { x: -5.8, y: 60 }, { x: -5.0, y: 70 }, { x: -4.6, y: 92 }, { x: -7.5, y: 106 }, { x: -12, y: 118 }], 3, 0.5);
+  const lane = smoothPath([{ x: -21, y: D.x(8) }, { x: -12, y: D.x(24) }, { x: -5.8, y: 38 + vy }, { x: -5.8, y: 54 + vy }, { x: -5.8, y: 60 + vy }, { x: -5.0, y: 70 + vy }, { x: -4.6, y: D.x(92) }, { x: -7.5, y: D.x(106) }, { x: -12, y: D.x(118) }], 3, 0.5);
   const offLane = spots.filter((sp) => sp.kind !== 'palm' || lane.every((p) => Math.hypot(p.x - sp.x, p.y - sp.y) > 1.1));
   return { spots: offLane, rails: [], lanes: [{ pts: lane, width: 0.75 }], camels };
 }

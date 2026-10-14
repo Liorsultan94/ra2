@@ -17,7 +17,9 @@ import {
   StructureKind,
   Tile,
   WATER_LEVEL,
+  BIG_MAP,
   createFrontlineMap,
+  designScale,
   distToSegment,
   sealPockets,
   smoothstep,
@@ -70,10 +72,15 @@ export function createMap(id: MapId = 'frontline', seed = 1): GameMap {
 
 // ------------------------------------------------------------------ shared
 
-const W = 96;
-const H = 96;
-const CX = (W - 1) / 2;
-const CY = (H - 1) / 2;
+// The map being built (each generator sets it first: Wadi Al-Rimal is BIG_MAP, the others 96 x 96).
+let W = 96;
+let H = 96;
+let CX = (W - 1) / 2;
+let CY = (H - 1) / 2;
+function mapSize(n: number) {
+  W = H = n;
+  CX = CY = (n - 1) / 2;
+}
 
 const mirror = (p: Point): Point => ({ x: W - 1 - p.x, y: H - 1 - p.y });
 const half = <T extends Point>(arr: T[]): T[] => [...arr, ...arr.map((p) => ({ ...p, ...mirror(p) }))];
@@ -393,37 +400,57 @@ function assemble(
  * mesas make the centre ring road and the two outer passes the lanes.
  */
 export function createDesertMap(seed: number): GameMap {
+  // drawn on 96 x 96 tiles, built on BIG_MAP: the design scales out from the centre (designScale), sizes
+  // stay (dunes, mesas, oases, the wadi bed), the bases stay near the corners, the town and the hamlets
+  // move as a whole, and the ground gained holds more dunes, mesas, oases, a side wadi and ore
+  mapSize(BIG_MAP);
+  const S = designScale(W);
+  const k = S.k;
+  const T = (x: number, y: number) => S.tp(x, y);
+  const Tr = (x: number, y: number) => ({ x: Math.round(S.ti(x)), y: Math.round(S.ti(y)) });
+  /** A cluster drawn around design point (ax, ay): the whole tile shift its anchor takes. */
+  const shift = (ax: number, ay: number) => ({ x: Math.round(S.ti(ax) - ax), y: Math.round(S.ti(ay) - ay) });
   const rng = new Rng((seed ^ 0x51a7d00d) >>> 0);
   const NS = 4000 + rng.int(4000);
   const g = newGrids();
   const starts: Point[] = [
-    { x: 14, y: 81 },
-    { x: W - 1 - 14, y: H - 1 - 81 },
+    { x: 16, y: 111 },
+    { x: W - 1 - 16, y: H - 1 - 111 },
   ];
-  const wadi = riverShape(4.6 + rng.range(-0.8, 0.8), 0.1 + rng.range(-0.012, 0.012), 1.4 + rng.range(-0.4, 0.4), 0.29);
+  const wadi = riverShape(k * (4.6 + rng.range(-0.8, 0.8)), (0.1 + rng.range(-0.012, 0.012)) / k, k * (1.4 + rng.range(-0.4, 0.4)), 0.29 / k);
   // oases: the centre (on the wadi, so on the axis of symmetry) and a mirrored pair up / down the wadi
-  const oS = 24 + rng.int(4);
+  const oS = (24 + rng.int(4)) * k;
   const oasisSide = wadi.at(CX - oS);
-  const oases = [{ x: CX, y: CY, r: 3.1 }, ...half([{ x: oasisSide.x, y: oasisSide.y, r: 2.1 + rng.range(0, 0.3) }])];
+  const oases = [{ x: CX, y: CY, r: 3.1 }, ...half([{ x: oasisSide.x, y: oasisSide.y, r: 2.1 + rng.range(0, 0.3) }, ...DESERT_OASES_EXTRA])];
+  const branches = halfCapsules(DESERT_WADI_BRANCHES);
+  const branchDist = (x: number, y: number) => {
+    let d = 1e9;
+    for (const b of branches) d = Math.min(d, distToSegment(x, y, b.x, b.y, b.x2, b.y2));
+    return d;
+  };
+  // mesas: centres scale, lengths and radii stay
+  const mesa = (x: number, y: number, x2: number, y2: number, r: number): Capsule => {
+    const c = T((x + x2) / 2, (y + y2) / 2);
+    return { x: c.x - (x2 - x) / 2, y: c.y - (y2 - y) / 2, x2: c.x + (x2 - x) / 2, y2: c.y + (y2 - y) / 2, r };
+  };
   const mesas = halfCapsules([
-    { x: 27, y: 60, x2: 33, y2: 65, r: 2.5 + rng.range(-0.2, 0.3) },
-    { x: 43, y: 80, x2: 47, y2: 85, r: 2.3 + rng.range(-0.2, 0.2) },
-    { x: 9, y: 41, x2: 16, y2: 36, r: 2.7 + rng.range(-0.2, 0.3) },
-    { x: 62, y: 90, x2: 68, y2: 89, r: 2.1 },
-    { x: 24, y: 22, x2: 27, y2: 16, r: 2.2 + rng.range(-0.2, 0.2) },
+    mesa(27, 60, 33, 65, 2.5 + rng.range(-0.2, 0.3)),
+    mesa(43, 80, 47, 85, 2.3 + rng.range(-0.2, 0.2)),
+    mesa(9, 41, 16, 36, 2.7 + rng.range(-0.2, 0.3)),
+    mesa(62, 90, 68, 89, 2.1),
+    mesa(24, 22, 27, 16, 2.2 + rng.range(-0.2, 0.2)),
+    ...DESERT_MESAS_EXTRA.map((m) => ({ ...m, r: m.r + rng.range(-0.15, 0.15) })),
   ]);
   const oreFields: Field[] = half([
-    { x: 26, y: 88, r: 3.6, kind: 1 },
-    { x: 6, y: 64, r: 3.2, kind: 1 },
-    { x: 39, y: 71, r: 3.0, kind: 1 },
-    { x: 18, y: 48, r: 2.6, kind: 2 },
-    { x: 55, y: 85, r: 2.5, kind: 2 },
+    // the two by the base keep their distance from it (harvest runs as designed)
+    { x: 28, y: 118, r: 3.6, kind: 1 },
+    { x: 8, y: 94, r: 3.2, kind: 1 },
+    { ...Tr(39, 71), r: 3.0, kind: 1 },
+    { ...Tr(18, 48), r: 2.6, kind: 2 },
+    { ...Tr(55, 85), r: 2.5, kind: 2 },
+    ...DESERT_ORE_EXTRA,
   ]);
-  const oils = halfOils([
-    { x: 35, y: 87 },
-    { x: 4, y: 52 },
-    { x: 30, y: 41 },
-  ]);
+  const oils = halfOils([{ x: 37, y: 117 }, Tr(4, 52), Tr(30, 41)]);
   // roads: highway from each base to the oasis town's ring road, the ring itself, an outer desert road
   const ringR = 7.6;
   const ring = (a0: number, a1: number) => Array.from({ length: 9 }, (_, i) => {
@@ -431,14 +458,15 @@ export function createDesertMap(seed: number): GameMap {
     return { x: CX + Math.cos(a) * ringR, y: CY + Math.sin(a) * ringR };
   });
   const r0 = [
-    [starts[0], { x: 24, y: 77 }, { x: 35, y: 74 }, { x: 40, y: 62 }, ring(135, 135)[0]],
+    [starts[0], T(24, 77), T(35, 74), T(40, 62), ring(135, 135)[0]],
     ring(45, 225),
-    [starts[0], { x: 33, y: 91 }, { x: 50, y: 88 }, { x: 58, y: 81 }, { x: 66, y: 73 }, { x: 72, y: 64 }],
+    [starts[0], T(33, 91), T(50, 88), T(58, 81), T(66, 73), T(72, 64)],
   ];
   const roads = [...r0, ...mirrorLines(r0)];
   const tracks0 = [
-    [starts[0], { x: 9, y: 70 }, { x: 8, y: 57 }, { x: 13, y: 47 }, { x: 22, y: 41 }, { x: 30, y: 40 }],
-    [{ x: 40, y: 62 }, { x: 30, y: 54 }, { x: 25, y: 47 }],
+    [starts[0], T(9, 70), T(8, 57), T(13, 47), T(22, 41), T(30, 40)],
+    [T(40, 62), T(30, 54), T(25, 47)],
+    ...DESERT_TRACKS_EXTRA,
   ];
 
   const lowGround = (x: number, y: number) => {
@@ -448,23 +476,66 @@ export function createDesertMap(seed: number): GameMap {
     const dune = Math.pow(0.5 + 0.5 * Math.cos(u * 2.1 + warp), 1.6);
     return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42;
   };
+  // the Jebel: a mountain massif on each side of the town (player 0's south-west of it, mirrored), mesas
+  // standing on it as its rock-capped summits. A spine of summits and saddles, spurs and gullies cut
+  // into its flanks by ridged noise; every slope but the caps' cliffs and a few crags is passable ground.
+  const massifHalf = (x: number, y: number) => {
+    // the foot wanders; the profile is an even slope (no steeper than 1.21 x crest / foot), rounded off at
+    // the crest and the foot; the highest of the spine segments' profiles wins (continuous everywhere)
+    const foot = MASSIF_FOOT + (fbm(x * 0.08, y * 0.08, NS + 41) - 0.5) * 4;
+    const A = 0.15;
+    const B = 0.2;
+    const K = 1 / (1 - A / 2 - B / 2);
+    const prof = (u: number) => (u >= 1 ? 0 : 1 - K * (u < A ? (u * u) / (2 * A) : u < 1 - B ? A / 2 + u - A : 1 - B - A / 2 + B / 2 - ((1 - u) * (1 - u)) / (2 * B)));
+    let hs = 0;
+    let f = 0;
+    for (const line of DESERT_MASSIF)
+      for (let j = 0; j < line.length - 1; j++) {
+        const a = line[j];
+        const b = line[j + 1];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+        const p = prof(Math.hypot(x - a.x - dx * t, y - a.y - dy * t) / foot);
+        if (p <= 0) continue;
+        hs = Math.max(hs, (a.h + (b.h - a.h) * smoothstep(0, 1, t)) * p);
+        f = Math.max(f, p);
+      }
+    if (f <= 0) return { h: 0, f: 0, r: 0 };
+    // spurs and gullies (ridged noise) run down the flanks
+    const r = 1 - Math.abs(2 * fbm(x * 0.15, y * 0.15, NS + 43) - 1);
+    const gully = Math.max(0, 0.3 - r) * 2.2 * Math.min(1, f * 3);
+    return { h: Math.max(0, hs * (0.8 + 0.34 * r) - gully), f, r };
+  };
+  /** Height the massifs add, how far up one a point is (0 foot .. 1 crest) and its ridge noise; point symmetric. */
+  const massifAt = (x: number, y: number) => {
+    const a = massifHalf(x, y);
+    const b = massifHalf(W - 1 - x, H - 1 - y);
+    return { h: a.h + b.h, f: Math.max(a.f, b.f), r: a.f >= b.f ? a.r : b.r };
+  };
+  // a mesa on the massif stands on it (its cap rock that much higher)
+  const mesaBase = mesas.map((m) => massifAt((m.x + m.x2) / 2, (m.y + m.y2) / 2).h * 0.92);
   for (let vy = 0; vy <= H; vy++)
     for (let vx = 0; vx <= W; vx++) {
       const fx = vx - 0.5;
       const fy = vy - 0.5;
-      let h = lowGround(fx, fy);
+      let h = lowGround(fx, fy) + massifAt(fx, fy).h;
       for (const s of starts) h = h + (0.45 - h) * (1 - smoothstep(9, 15, Math.hypot(fx - s.x, fy - s.y)));
       // roads run on graded ground
       // the wadi: a broad shallow bed with low banks
       const wd = wadi.dist(fx, fy);
       h = h + (-0.06 - h) * (1 - smoothstep(2.2, 5.0, wd));
+      // the side wadis: narrower, shallower beds running down into the main one
+      const bd = branchDist(fx, fy);
+      h = h + (0.02 - h) * (1 - smoothstep(1.3, 3.4, bd)) * 0.85;
       for (const o of oases) {
         const d = Math.hypot(fx - o.x, fy - o.y);
         h = h + (-0.95 - h) * (1 - smoothstep(o.r - 0.6, o.r + 1.6, d));
       }
-      for (const m of mesas) {
+      for (let j = 0; j < mesas.length; j++) {
+        const m = mesas[j];
         const d = distToSegment(vx, vy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
-        const top = 2.25 + ((hash2(vx, vy, NS + 9) + hash2(W - vx, H - vy, NS + 9)) / 2 - 0.5) * 0.12;
+        const top = 2.25 + mesaBase[j] + ((hash2(vx, vy, NS + 9) + hash2(W - vx, H - vy, NS + 9)) / 2 - 0.5) * 0.12;
         // a flat-topped plateau with steep sandstone cliffs
         h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
       }
@@ -477,9 +548,16 @@ export function createDesertMap(seed: number): GameMap {
       const fy = y + 0.5;
       let t: Tile = Tile.Sand;
       if (symNoise(x, y, 0.07, NS + 5) > 0.57) t = Tile.Dirt; // gravel plains
+      const mt = massifAt(x, y);
+      if (mt.f > 0.06) {
+        // the massif: stony slopes and talus, drift sand in its gullies, bare rock crags on the high ridges
+        t = mt.r < 0.3 && mt.f > 0.12 ? Tile.Sand : Tile.Dirt;
+        if (mt.f > 0.6 && mt.r > 0.9 && mt.h > 2.8) t = Tile.Rock;
+      }
       const wd = wadi.dist(x, y);
-      if (wd < 2.4) t = Tile.Dirt; // the wadi floor: gravel and cracked mud
-      else if (wd < 4.6 && symNoise(x, y, 0.2, NS + 6) > 0.48) t = Tile.Grass; // scrub on its banks
+      const bd = branchDist(x, y);
+      if (wd < 2.4 || bd < 1.3) t = Tile.Dirt; // the wadi floor: gravel and cracked mud
+      else if ((wd < 4.6 || bd < 2.9) && symNoise(x, y, 0.2, NS + 6) > 0.48) t = Tile.Grass; // scrub on its banks
       for (const o of oases) {
         const d = Math.hypot(x - o.x, y - o.y);
         if (d < o.r) t = Tile.Water;
@@ -518,29 +596,40 @@ export function createDesertMap(seed: number): GameMap {
       }
       const wd = wadi.dist(x, y);
       if (wd > 2.0 && wd < 4.2) palm = Math.max(palm, 0.07);
+      const bd = branchDist(x, y);
+      if (bd > 1.2 && bd < 3.0) palm = Math.max(palm, 0.05);
       const h = symHash(x, y, NS + 11);
       if (h < palm) g.trees[i] = 2;
       else if ((t === Tile.Grass || t === Tile.Dirt) && h > 0.982) g.trees[i] = 1;
     }
   unblockTrees(g, starts[0]);
 
+  // the clusters move as a whole: the oasis town stays round the centre (the ring road keeps its size)
+  const move = (d: Point, list: Structure[]) => list.map((st) => ({ ...st, x: st.x + d.x, y: st.y + d.y }));
   const layout: Structure[] = [
     // oasis town on player 0's side of the ring road
-    { kind: StructureKind.MudHouse, x: 35, y: 51, w: 2, h: 2, rot: 1 },
-    { kind: StructureKind.Courtyard, x: 36, y: 55, w: 3, h: 2, rot: 1 },
-    { kind: StructureKind.MudHouse, x: 40, y: 58, w: 2, h: 2, rot: 0 },
-    { kind: StructureKind.Courtyard, x: 44, y: 59, w: 3, h: 2, rot: 2 },
-    { kind: StructureKind.MudHouse, x: 49, y: 59, w: 2, h: 2, rot: 2 },
-    { kind: StructureKind.MudHouse, x: 34, y: 46, w: 2, h: 2, rot: 1 },
-    { kind: StructureKind.Tower, x: 39, y: 54, w: 1, h: 1, rot: 0 },
-    { kind: StructureKind.WaterTower, x: 33, y: 50, w: 1, h: 1, rot: 0 },
+    ...move(shift(CX0, CX0), [
+      { kind: StructureKind.MudHouse, x: 35, y: 51, w: 2, h: 2, rot: 1 },
+      { kind: StructureKind.Courtyard, x: 36, y: 55, w: 3, h: 2, rot: 1 },
+      { kind: StructureKind.MudHouse, x: 40, y: 58, w: 2, h: 2, rot: 0 },
+      { kind: StructureKind.Courtyard, x: 44, y: 59, w: 3, h: 2, rot: 2 },
+      { kind: StructureKind.MudHouse, x: 49, y: 59, w: 2, h: 2, rot: 2 },
+      { kind: StructureKind.MudHouse, x: 34, y: 46, w: 2, h: 2, rot: 1 },
+      { kind: StructureKind.Tower, x: 39, y: 54, w: 1, h: 1, rot: 0 },
+      { kind: StructureKind.WaterTower, x: 33, y: 50, w: 1, h: 1, rot: 0 },
+    ]),
     // roadside hamlet in the south
-    { kind: StructureKind.MudHouse, x: 54, y: 76, w: 2, h: 2, rot: 3 },
-    { kind: StructureKind.Courtyard, x: 58, y: 75, w: 3, h: 2, rot: 2 },
-    { kind: StructureKind.MudHouse, x: 61, y: 79, w: 2, h: 2, rot: 3 },
+    ...move(shift(58, 77), [
+      { kind: StructureKind.MudHouse, x: 54, y: 76, w: 2, h: 2, rot: 3 },
+      { kind: StructureKind.Courtyard, x: 58, y: 75, w: 3, h: 2, rot: 2 },
+      { kind: StructureKind.MudHouse, x: 61, y: 79, w: 2, h: 2, rot: 3 },
+    ]),
     // caravan stop on the western track
-    { kind: StructureKind.MudHouse, x: 12, y: 55, w: 2, h: 2, rot: 1 },
-    { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
+    ...move(shift(13, 57), [
+      { kind: StructureKind.MudHouse, x: 12, y: 55, w: 2, h: 2, rot: 1 },
+      { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
+    ]),
+    ...DESERT_EXTRA,
   ];
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
@@ -548,27 +637,30 @@ export function createDesertMap(seed: number): GameMap {
   const deco = emptyDeco();
   deco.roadStyles = roads.map((_, i) => (i % 3 === 0 ? { width: 1.05, variant: 0 as const } : i % 3 === 1 ? { width: 0.95, variant: 1 as const } : { width: 0.8, variant: 1 as const }));
   deco.tracks = [...tracks0, ...mirrorLines(tracks0)];
-  // irrigated plots by the oases
+  // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
+  const ms = shift(30, 62.5);
   deco.fields = mirrorRects([
     { x0: oasisSide.x - 7.5, y0: oasisSide.y + 2.5, x1: oasisSide.x - 2.5, y1: oasisSide.y + 6, rows: 0 },
-    { x0: 26.5, y0: 61.5 - 9, x1: 31.5, y1: 57 - 2, rows: 1 },
+    { x0: 26.5 + ms.x, y0: 61.5 - 9 + ms.y, x1: 31.5 + ms.x, y1: 57 - 2 + ms.y, rows: 1 },
+    ...DESERT_FIELDS_EXTRA,
   ]);
   deco.power = [
     [
-      { x: 2, y: 58 },
-      { x: 30, y: 30 },
+      S.pt(2, 58),
+      S.pt(30, 30),
       // round the north mesa's west end (no wires over the mesa top)
-      { x: 41, y: 14 },
-      { x: 45, y: 4 },
-      { x: 60, y: 2 },
+      S.pt(41, 14),
+      S.pt(45, 4),
+      S.pt(60, 2),
     ],
   ];
   deco.power.push(...mirrorLines(deco.power));
   // palms along the ring road (render only)
-  for (let k = 0; k < 18; k++) {
-    const a = (k / 18) * Math.PI * 2 + 0.17;
+  for (let j = 0; j < 18; j++) {
+    const a = (j / 18) * Math.PI * 2 + 0.17;
     deco.trees.push({ x: CX + 0.5 + Math.cos(a) * (ringR + 1.55), y: CY + 0.5 + Math.sin(a) * (ringR + 1.55), kind: 2 });
   }
+  const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
 
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
@@ -579,14 +671,77 @@ export function createDesertMap(seed: number): GameMap {
     structures,
     blocked,
     techSites: [
-      { def: 'tech_hospital', at: [[30, 50], [22, 58], [18, 62], [26, 52], [16, 34]] },
-      { def: 'tech_comms', at: [[50, 92], [40, 90], [20, 92], [8, 30], [52, 68]] },
-      { def: 'tech_airport', at: [[4, 30], [6, 24], [4, 18], [12, 28], [16, 26]] },
+      { def: 'tech_hospital', at: [...sites([[30, 50], [22, 58], [18, 62], [26, 52], [16, 34]]), [44, 60], [20, 64], [56, 92]] },
+      { def: 'tech_comms', at: sites([[50, 92], [40, 90], [20, 92], [8, 30], [52, 68]]) },
+      { def: 'tech_airport', at: sites([[4, 30], [6, 24], [4, 18], [12, 28], [16, 26]]) },
+      ...DESERT_TECH_EXTRA,
     ],
-    lanes: [ring(225, 225)[0], ring(45, 45)[0], wadi.at(CX - 26), wadi.at(CX + 26)],
+    lanes: [ring(225, 225)[0], ring(45, 45)[0], wadi.at(CX - 26 * k), wadi.at(CX + 26 * k)],
     deco,
   });
 }
+
+/** Design-space centre of the 96 x 96 layouts. */
+const CX0 = 47.5;
+
+// Wadi Al-Rimal on the ground the 128 x 128 map gained (map tile coordinates, player 0's half; mirrored).
+/**
+ * The Jebel's spine (player 0's massif, south-west of the town; mirrored): crest heights at the via points.
+ * From a shoulder under the butte over a low saddle (the pass the track takes) to the main summit under the
+ * fort's mesa, a spur running north-west, and the ridge dying out north-east short of the town.
+ */
+const DESERT_MASSIF: { x: number; y: number; h: number }[][] = [
+  [
+    { x: 21, y: 96, h: 2.6 },
+    { x: 29, y: 89.5, h: 1.5 },
+    { x: 35, y: 86, h: 3.4 },
+    { x: 41, y: 82.5, h: 4.8 },
+    { x: 45.5, y: 78, h: 3.0 },
+    { x: 47, y: 75, h: 0.3 },
+  ],
+  [
+    { x: 41, y: 82.5, h: 4.8 },
+    { x: 37.5, y: 77.5, h: 2.6 },
+  ],
+];
+/** Half width of the massif's foot (tiles; it wanders by +-2). */
+const MASSIF_FOOT = 12.5;
+/** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */
+const DESERT_MESAS_EXTRA: Capsule[] = [
+  { x: 20, y: 96, x2: 26, y2: 92, r: 2.4 },
+  { x: 5, y: 61, x2: 10, y2: 58, r: 2.0 },
+];
+/** More ore: an outlying field on the western flank, gems on the southern sands. */
+const DESERT_ORE_EXTRA: Field[] = [
+  { x: 4, y: 84, r: 2.8, kind: 1 },
+  { x: 60, y: 124, r: 2.2, kind: 2 },
+];
+/** A spring at the north-west foot of the massif. */
+const DESERT_OASES_EXTRA: { x: number; y: number; r: number }[] = [{ x: 21, y: 79, r: 1.9 }];
+/** Side wadis running into the main one (bed centre lines as segments; r unused). */
+const DESERT_WADI_BRANCHES: Capsule[] = [
+  { x: 0, y: 38, x2: 7, y2: 38.5, r: 0 },
+  { x: 7, y: 38.5, x2: 14, y2: 37, r: 0 },
+  { x: 14, y: 37, x2: 21, y2: 35.5, r: 0 },
+  { x: 96, y: 127, x2: 99, y2: 121.5, r: 0 },
+  { x: 99, y: 121.5, x2: 103, y2: 117, r: 0 },
+];
+/** Tracks to the well hamlet and the spring. */
+const DESERT_TRACKS_EXTRA: Point[][] = [
+  [{ x: 31, y: 66 }, { x: 25, y: 68.5 }, { x: 19, y: 72.5 }],
+  // from the spring over the saddle to the highway
+  [{ x: 21.5, y: 82 }, { x: 25.5, y: 86.5 }, { x: 29, y: 89.5 }, { x: 31.5, y: 95 }, { x: 33, y: 100 }],
+];
+/** The well hamlet on the open sands north of the massif. */
+const DESERT_EXTRA: Structure[] = [
+  { kind: StructureKind.MudHouse, x: 32, y: 63, w: 2, h: 2, rot: 1 },
+  { kind: StructureKind.Courtyard, x: 35, y: 65, w: 3, h: 2, rot: 2 },
+  { kind: StructureKind.MudHouse, x: 31, y: 67, w: 2, h: 2, rot: 0 },
+];
+/** An irrigated plot by the spring. */
+const DESERT_FIELDS_EXTRA: { x0: number; y0: number; x1: number; y1: number; rows: 0 | 1 }[] = [{ x0: 14, y0: 81.5, x1: 19, y1: 85, rows: 0 }];
+/** A second field hospital on the new ground. */
+const DESERT_TECH_EXTRA: { def: string; at: [number, number][] }[] = [{ def: 'tech_hospital', at: [[42, 64], [26, 72], [48, 104], [10, 100], [30, 58], [60, 100], [36, 60], [20, 64], [56, 92], [4, 106]] }];
 
 // ================================================================== winter
 
@@ -596,6 +751,7 @@ export function createDesertMap(seed: number): GameMap {
  * cross; log-built villages and farmsteads along snow-dusted roads.
  */
 export function createWinterMap(seed: number): GameMap {
+  mapSize(96);
   const rng = new Rng((seed ^ 0x0ce0ffee) >>> 0);
   const NS = 6000 + rng.int(4000);
   const g = newGrids();
@@ -802,6 +958,7 @@ const BLOCKS: { kind: StructureKind; x: number; y: number; w: number; h: number;
  * be garrisoned; parks, squares and rubble lots break up the blocks.
  */
 export function createUrbanMap(seed: number): GameMap {
+  mapSize(96);
   const rng = new Rng((seed ^ 0x0c17ab1e) >>> 0);
   const NS = 8000 + rng.int(4000);
   const g = newGrids();

@@ -108,8 +108,8 @@ describe('river crossing and bridge repair', () => {
     w.pathTo(heli, s1.x, s1.y);
     w.pathTo(tank, s1.x, s1.y);
 
-    // Step simulation
-    for (let i = 0; i < TPS * 30; i++) w.step();
+    // Step simulation (the starts are ~130 tiles apart on the 128 x 128 map)
+    for (let i = 0; i < TPS * 45; i++) w.step();
 
     // Heli can fly across to s1
     expect(Math.hypot(heli.x - s1.x, heli.y - s1.y)).toBeLessThan(15);

@@ -18,7 +18,8 @@ it('hard AI games on the desert map end', () => {
       ],
     });
     w.controllers.push(new AIController(w, 0, 'hard'), new AIController(w, 1, 'hard'));
-    for (let t = 0; t < TPS * 60 * 30 && !w.over; t++) {
+    // (45 game minutes: the map is 128 x 128 now, the bases a third further apart, a mountain massif in between)
+    for (let t = 0; t < TPS * 60 * 45 && !w.over; t++) {
       w.step();
       w.drainEvents();
     }

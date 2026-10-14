@@ -51,8 +51,8 @@ describe('minimap recon photo', () => {
     expect(b.ready).toBe(true);
     expect(b.W).toBe(map.w * b.S);
     expect(b.H).toBe(map.h * b.S);
-    // 2x the ~2.6 canvas px a tile gets on the minimap
-    expect(b.S).toBeGreaterThanOrEqual(5);
+    // (fewer photo pixels per tile on a bigger map, the minimap shows it smaller: as many per minimap pixel as on 96 x 96 at S 5)
+    expect(b.S * (map.w + map.h)).toBeGreaterThanOrEqual(5 * 192);
     expect(b.bytes()).toBeLessThanOrEqual(MINIMAP_MAX_BYTES);
     expect(b.pixels!.length).toBe(b.W * b.H * 4);
     // a band of rows per yield: many small slices, none a long task
