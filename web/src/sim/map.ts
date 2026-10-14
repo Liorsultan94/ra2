@@ -272,20 +272,64 @@ export function distToSegment(px: number, py: number, ax: number, ay: number, bx
   return Math.hypot(px - cx, py - cy);
 }
 
+/** Frontline Crossing and Wadi Al-Rimal are built this size (their layouts were drawn on 96 x 96 tiles). */
+export const BIG_MAP = 128;
+
+/**
+ * The hand layouts' design space (drawn on 96 x 96 tiles) on a map of w tiles: distances from the centre
+ * grow by w / 96 and the point symmetry is kept, sizes do not (callers keep the radii, widths and
+ * lengths, and move a whole cluster - a village, a mesa - by its anchor). `x` / `pt` take continuous
+ * tile-space coordinates (a tile's centre at +0.5), `ti` / `tp` tile indices.
+ */
+export function designScale(w: number) {
+  const k = w / 96;
+  const x = (v: number) => w / 2 + (v - 48) * k;
+  const ti = (v: number) => x(v + 0.5) - 0.5;
+  return { k, x, ti, pt: (px: number, py: number): Point => ({ x: x(px), y: x(py) }), tp: (px: number, py: number): Point => ({ x: ti(px), y: ti(py) }) };
+}
+
+/**
+ * Frontline Crossing's clusters in design space: points within `r` of an anchor move with it (the
+ * houses, their lanes and yards keep their spacing), everything else scales (render/layout.ts uses the
+ * same table for the tracks through them).
+ */
+export const FRONTLINE_CLUSTERS = [
+  // the village west of the centre bridge
+  { x: 30, y: 52.5, r: 9 },
+  // the farmstead in the southern fields
+  { x: 61, y: 87.5, r: 5 },
+  // the roadside hamlet
+  { x: 50.5, y: 75.5, r: 4.5 },
+];
+
+/** Frontline Crossing design point (continuous coordinates) -> map point, clusters moving rigidly. */
+export function frontlinePoint(w: number, x: number, y: number): Point {
+  const S = designScale(w);
+  for (const c of FRONTLINE_CLUSTERS) if (Math.hypot(x - c.x, y - c.y) <= c.r) return { x: x + S.x(c.x) - c.x, y: y + S.x(c.y) - c.y };
+  return S.pt(x, y);
+}
+
 /**
  * "Frontline Crossing": a hand-designed, point-symmetric two player map.
  * A meandering river runs between the bases and is crossed by three bridges.
+ * Drawn on 96 x 96 tiles and built on BIG_MAP: the design scales out from the centre
+ * (designScale), the bases stay near the corners, and the room it gains holds more
+ * forest, fields, ore and a few more hamlets.
  */
 export function createFrontlineMap(): GameMap {
-  const W = 96;
-  const H = 96;
+  const W = BIG_MAP;
+  const H = BIG_MAP;
   const SEED = 1337;
   const cx = (W - 1) / 2;
   const cy = (H - 1) / 2;
+  const S = designScale(W);
+  const k = S.k;
+  const T = (x: number, y: number) => S.tp(x, y);
+  const Tr = (x: number, y: number) => ({ x: Math.round(S.ti(x)), y: Math.round(S.ti(y)) });
 
   const starts: Point[] = [
-    { x: 15, y: 80 },
-    { x: W - 1 - 15, y: H - 1 - 80 },
+    { x: 17, y: 110 },
+    { x: W - 1 - 17, y: H - 1 - 110 },
   ];
 
   // Features are described for player 0's half and mirrored through the center.
@@ -293,44 +337,48 @@ export function createFrontlineMap(): GameMap {
   const half = <T extends Point>(arr: T[]) => [...arr, ...arr.map((p) => ({ ...p, ...mirror(p) }))];
 
   const oreFields = half([
-    { x: 27, y: 87, r: 3.6, kind: 1 },
-    { x: 8, y: 66, r: 3.2, kind: 1 },
-    { x: 33, y: 62, r: 3.0, kind: 1 },
-    { x: 20, y: 46, r: 2.6, kind: 2 },
-    { x: 46, y: 89, r: 2.6, kind: 2 },
+    // the two by the base keep their distance from it (harvest runs as designed)
+    { x: 29, y: 117, r: 3.6, kind: 1 },
+    { x: 10, y: 96, r: 3.2, kind: 1 },
+    { ...Tr(33, 62), r: 3.0, kind: 1 },
+    { ...Tr(20, 46), r: 2.6, kind: 2 },
+    { ...Tr(46, 89), r: 2.6, kind: 2 },
+    // on the ground the bigger map gained: an outlying field on the western flank, gems by the farmstead
+    { x: 6, y: 76, r: 3.0, kind: 1 },
+    { x: 88, y: 121, r: 2.4, kind: 2 },
   ]);
   const oils = half([
-    { x: 38, y: 74 },
-    { x: 6, y: 50 },
+    { x: 32, y: 104 },
+    Tr(6, 50),
   ]);
-  const ridges = half([
+  // rock ridges: centres scale, lengths stay
+  const ridgeSrc = [
     { x: 24, y: 70, x2: 31, y2: 74 },
     { x: 40, y: 64, x2: 44, y2: 58 },
     { x: 12, y: 56, x2: 18, y2: 58 },
     { x: 54, y: 80, x2: 60, y2: 84 },
-  ] as (Point & { x2: number; y2: number })[]).map((r, i, a) => {
-    // mirror the second endpoint too
-    if (i >= a.length / 2) {
-      const src = a[i - a.length / 2];
-      return { ...r, x2: W - 1 - src.x2, y2: H - 1 - src.y2 };
-    }
-    return r;
+  ].map((r) => {
+    const c = S.tp((r.x + r.x2) / 2, (r.y + r.y2) / 2);
+    const hx = (r.x2 - r.x) / 2;
+    const hy = (r.y2 - r.y) / 2;
+    return { x: c.x - hx, y: c.y - hy, x2: c.x + hx, y2: c.y + hy };
   });
+  const ridges = [...ridgeSrc, ...ridgeSrc.map((r) => ({ x: W - 1 - r.x, y: H - 1 - r.y, x2: W - 1 - r.x2, y2: H - 1 - r.y2 }))];
   const roads: Point[][] = [
-    [starts[0], { x: 30, y: 72 }, { x: 44, y: 60 }, { x: cx, y: cy }],
-    [starts[0], { x: 30, y: 84 }, { x: 52, y: 82 }, { x: 64, y: 76 }],
-    [starts[0], { x: 12, y: 62 }, { x: 18, y: 44 }, { x: 24, y: 30 }],
+    [starts[0], T(30, 72), T(44, 60), { x: cx, y: cy }],
+    [starts[0], T(30, 84), T(52, 82), T(64, 76)],
+    [starts[0], T(12, 62), T(18, 44), T(24, 30)],
   ];
   const allRoads = [...roads, ...roads.map((r) => r.map(mirror))];
 
   // River geometry: centerline x == y, meandering perpendicular to it.
-  const riverOffset = (s: number) => 4.5 * Math.sin((s - cx) * 0.11) + 1.5 * Math.sin((s - cx) * 0.31);
+  const riverOffset = (s: number) => k * (4.5 * Math.sin(((s - cx) * 0.11) / k) + 1.5 * Math.sin(((s - cx) * 0.31) / k));
   const riverDist = (x: number, y: number) => {
     const s = (x + y) / 2;
     const d = (x - y) / Math.SQRT2;
     return Math.abs(d - riverOffset(s));
   };
-  const bridgeS = [cx, cx - 27, cx + 27];
+  const bridgeS = [cx, cx - 27 * k, cx + 27 * k];
 
   const symNoise = (x: number, y: number, scale: number, seed: number) =>
     (fbm(x * scale, y * scale, seed) + fbm((W - x) * scale, (H - y) * scale, seed)) / 2;
@@ -447,7 +495,7 @@ export function createFrontlineMap(): GameMap {
     }
   }
 
-  const { structures, blocked } = placeStructures(W, H, tiles, trees, ore, heights, starts, oils, oreFields, allRoads, mirror);
+  const { structures, blocked } = placeStructures(W, H, tiles, trees, ore, heights, starts, oils, oreFields, allRoads, mirror, frontlineLayout(W));
 
   const bridges = bridgeS.map((s) => {
     // bridge center lies on the river centerline at diagonal coordinate s
@@ -456,6 +504,7 @@ export function createFrontlineMap(): GameMap {
     const y = s - d / Math.SQRT2;
     return { x: x + 0.5, y: y + 0.5, angle: -Math.PI / 4, length: 7.5 };
   });
+  const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
 
   return {
     name: 'Frontline Crossing',
@@ -475,8 +524,62 @@ export function createFrontlineMap(): GameMap {
     roads: allRoads,
     structures,
     blocked,
+    // capturable tech sites (sim/capture.ts): the 96 x 96 candidates scaled out, and a second field hospital on the new ground
+    techSites: [
+      { def: 'tech_hospital', at: sites([[18, 60], [14, 40], [22, 66], [12, 44], [28, 44]]) },
+      { def: 'tech_comms', at: sites([[54, 88], [36, 82], [22, 90], [40, 86], [52, 66]]) },
+      { def: 'tech_airport', at: sites([[6, 30], [8, 24], [4, 36], [10, 34], [12, 28]]) },
+      { def: 'tech_hospital', at: [[44, 100], [36, 98], [52, 104], [24, 94], [60, 96]] },
+    ],
   };
 }
+
+/** Frontline Crossing's villages, farmsteads and hamlets (player 0's half), on a map of w tiles. */
+function frontlineLayout(w: number): Structure[] {
+  // a cluster's houses keep their spacing: they move with its anchor (FRONTLINE_CLUSTERS)
+  const at = (st: Structure): Structure => {
+    const p = frontlinePoint(w, st.x + st.w / 2, st.y + st.h / 2);
+    return { ...st, x: Math.round(p.x - st.w / 2), y: Math.round(p.y - st.h / 2) };
+  };
+  const design: Structure[] = [
+    // village west of the centre bridge, around an east-west lane at y ~ 52.5
+    { kind: StructureKind.House, x: 25, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.Cottage, x: 28, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.House, x: 32, y: 49, w: 2, h: 2, rot: 2 },
+    { kind: StructureKind.House, x: 24, y: 55, w: 2, h: 2, rot: 0 },
+    { kind: StructureKind.Cottage, x: 29, y: 55, w: 2, h: 2, rot: 0 },
+    { kind: StructureKind.Tower, x: 35, y: 54, w: 1, h: 1, rot: 0 },
+    { kind: StructureKind.WaterTower, x: 36, y: 50, w: 1, h: 1, rot: 0 },
+    // farmstead in the southern fields
+    { kind: StructureKind.House, x: 58, y: 88, w: 2, h: 2, rot: 3 },
+    { kind: StructureKind.Barn, x: 61, y: 88, w: 3, h: 2, rot: 0 }, // (x 62 on the 96 map: a tree stands there now)
+    { kind: StructureKind.Silo, x: 62, y: 86, w: 1, h: 1, rot: 0 },
+    // roadside hamlet on the highway to the centre bridge
+    { kind: StructureKind.Cottage, x: 48, y: 73, w: 2, h: 2, rot: 1 },
+    { kind: StructureKind.House, x: 52, y: 73, w: 2, h: 2, rot: 1 },
+    { kind: StructureKind.Cottage, x: 49, y: 77, w: 2, h: 2, rot: 1 },
+  ];
+  return [...design.map(at), ...FRONTLINE_EXTRA];
+}
+
+/** The new ground of the 128 x 128 Frontline Crossing (map tile coordinates, player 0's half). */
+const FRONTLINE_EXTRA: Structure[] = [
+  // a farm hamlet south of the country road, between the base and the farmstead
+  { kind: StructureKind.House, x: 45, y: 120, w: 2, h: 2, rot: 2 },
+  { kind: StructureKind.Cottage, x: 48, y: 121, w: 2, h: 2, rot: 2 },
+  { kind: StructureKind.Barn, x: 51, y: 120, w: 3, h: 2, rot: 2 },
+  { kind: StructureKind.Silo, x: 55, y: 121, w: 1, h: 1, rot: 0 },
+  // a hamlet on the western flank
+  { kind: StructureKind.Cottage, x: 3, y: 53, w: 2, h: 2, rot: 1 },
+  { kind: StructureKind.House, x: 3, y: 57, w: 2, h: 2, rot: 1 },
+  { kind: StructureKind.House, x: 7, y: 56, w: 2, h: 2, rot: 0 },
+  { kind: StructureKind.Tower, x: 7, y: 53, w: 1, h: 1, rot: 0 },
+  // a ferryman's hamlet on the river bank above the southern bridge
+  { kind: StructureKind.House, x: 92, y: 108, w: 2, h: 2, rot: 0 },
+  { kind: StructureKind.Cottage, x: 95, y: 110, w: 2, h: 2, rot: 1 },
+  { kind: StructureKind.Barn, x: 91, y: 112, w: 3, h: 2, rot: 0 },
+  { kind: StructureKind.WaterTower, x: 96, y: 114, w: 1, h: 1, rot: 0 },
+];
 
 /**
  * Villages and farmsteads: a fixed layout for player 0's half, mirrored for
@@ -496,25 +599,8 @@ function placeStructures(
   oreFields: (Point & { r: number })[],
   roads: Point[][],
   mirror: (p: Point) => Point,
+  layout: Structure[],
 ) {
-  const layout: Structure[] = [
-    // village west of the centre bridge, around an east-west lane at y ~ 52.5
-    { kind: StructureKind.House, x: 25, y: 49, w: 2, h: 2, rot: 2 },
-    { kind: StructureKind.Cottage, x: 28, y: 49, w: 2, h: 2, rot: 2 },
-    { kind: StructureKind.House, x: 32, y: 49, w: 2, h: 2, rot: 2 },
-    { kind: StructureKind.House, x: 24, y: 55, w: 2, h: 2, rot: 0 },
-    { kind: StructureKind.Cottage, x: 29, y: 55, w: 2, h: 2, rot: 0 },
-    { kind: StructureKind.Tower, x: 35, y: 54, w: 1, h: 1, rot: 0 },
-    { kind: StructureKind.WaterTower, x: 36, y: 50, w: 1, h: 1, rot: 0 },
-    // farmstead in the southern fields
-    { kind: StructureKind.House, x: 58, y: 88, w: 2, h: 2, rot: 3 },
-    { kind: StructureKind.Barn, x: 62, y: 88, w: 3, h: 2, rot: 0 },
-    { kind: StructureKind.Silo, x: 62, y: 86, w: 1, h: 1, rot: 0 },
-    // roadside hamlet on the highway to the centre bridge
-    { kind: StructureKind.Cottage, x: 48, y: 73, w: 2, h: 2, rot: 1 },
-    { kind: StructureKind.House, x: 52, y: 73, w: 2, h: 2, rot: 1 },
-    { kind: StructureKind.Cottage, x: 49, y: 77, w: 2, h: 2, rot: 1 },
-  ];
   const all = [
     ...layout,
     ...layout.map((st) => {

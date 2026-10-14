@@ -59,14 +59,14 @@ describe('stances', () => {
   it('hold-position units do not move to chase, guard units do', () => {
     const mk = (stance: 'hold' | 'guard') => {
       const w = duel();
-      const a = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+      const a = w.spawnUnit('usa_mbt', 0, 48.5, 104.5);
       a.hp = a.maxHp = 1e6;
       // enemy inside sight but outside cannon range
-      const b = w.spawnUnit('russia_rifle', 1, 46.2, 60.5);
+      const b = w.spawnUnit('russia_rifle', 1, 54.2, 104.5);
       b.hp = b.maxHp = 1e6;
       w.issue(0, { type: 'stance', ids: [a.id], stance });
       run(w, TPS * 15);
-      return Math.hypot(a.x - 40.5, a.y - 60.5);
+      return Math.hypot(a.x - 48.5, a.y - 104.5);
     };
     expect(mk('hold')).toBeLessThan(0.05);
     expect(mk('guard')).toBeGreaterThan(0.5);

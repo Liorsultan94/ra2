@@ -1,5 +1,5 @@
 import { neutralSites } from '../sim/capture';
-import { Tile, groundHeight, type GameMap } from '../sim/map';
+import { Tile, designScale, frontlinePoint, groundHeight, type GameMap } from '../sim/map';
 import { pylonFooting, spanClear } from './pylonsite';
 export { pylonFooting, spanClear } from './pylonsite';
 import { hash2 } from '../sim/rng';
@@ -213,6 +213,23 @@ export function detourSpans(m: GameMap, line: V2[], valid: (x: number, y: number
   return out;
 }
 
+/** Frontline Crossing's farmland on the ground the 128 x 128 map gained (map tiles, player 0's half). */
+const FIELD_ZONES_EXTRA: { x0: number; y0: number; x1: number; y1: number; rows: string }[] = [
+  // round the farm hamlet south of the country road
+  { x0: 38, y0: 116.5, x1: 44.5, y1: 125.5, rows: 'y' },
+  { x0: 57, y0: 122.5, x1: 76, y1: 125.8, rows: 'x' },
+  // the ferryman's hamlet
+  { x0: 92, y0: 116, x1: 100, y1: 125.5, rows: 'y' },
+  // the western hamlet
+  { x0: 1.5, y0: 59.5, x1: 9, y1: 66, rows: 'y' },
+];
+/** ...and the tracks out to its hamlets. */
+const TRACKS_EXTRA: { x: number; y: number }[][] = [
+  [{ x: 47.2, y: 113.3 }, { x: 47.6, y: 116.5 }, { x: 50.5, y: 119.4 }, { x: 56.5, y: 119.6 }],
+  [{ x: 22, y: 57 }, { x: 16, y: 56 }, { x: 10.2, y: 57.6 }, { x: 6.5, y: 60.4 }],
+  [{ x: 93.5, y: 104.5 }, { x: 94, y: 108 }, { x: 97.5, y: 112 }],
+];
+
 const layouts = new WeakMap<GameMap, Layout>();
 
 /** The map's scenery layout (built once per map: deterministic). */
@@ -228,6 +245,9 @@ function buildLayoutOnce(m: GameMap): Layout {
   if (m.id !== 'frontline') return buildBiomeLayout(m);
   const W = m.w;
   const H = m.h;
+  // the hand layout is drawn on 96 x 96 tiles (sim/map.ts designScale: the villages move as clusters)
+  const d = (x: number, y: number) => frontlinePoint(W, x, y);
+  const ds = designScale(W).x;
   const mir = (p: V2) => v(W - p.x, H - p.y);
   const mirAll = (a: V2[]) => a.map(mir);
   const rev = <T>(a: T[]) => [...a].reverse();
@@ -251,9 +271,9 @@ function buildLayoutOnce(m: GameMap): Layout {
   // ---- paved roads and dirt tracks: hand-placed via points, routed around
   // rocks, trees, structures and water so nothing paved disappears under them
   const route = makeRouter(m);
-  const hwy0 = [v(0, 71.5), v(8, 79.6), s0, v(24, 76.5), v(30, 58.5), v(37.5, 56.5), bc.a0, bc.e0];
-  const ctryA0 = [s0, v(30.5, 84.5), v(52.5, 82.5), v(64.5, 76.5), v(70, 77.8), bs.a0, bs.e0];
-  const ctryA1 = [bs.e1, bs.a1, v(80.6, 66), v(80.2, 60), v(81, 52), v(83.5, 33.5), s1];
+  const hwy0 = [d(0, 71.5), d(8, 79.6), s0, d(24, 76.5), d(30, 58.5), d(37.5, 56.5), bc.a0, bc.e0];
+  const ctryA0 = [s0, d(30.5, 84.5), d(52.5, 82.5), d(64.5, 76.5), d(70, 77.8), bs.a0, bs.e0];
+  const ctryA1 = [bs.e1, bs.a1, d(80.6, 66), d(80.2, 60), d(81, 52), d(83.5, 33.5), s1];
   // (the rock ridges are not exactly point symmetric, so mirrored roads are routed on their own)
   const roadSrc: { pts: V2[]; width: number; variant: 0 | 1 }[] = [
     { pts: hwy0, width: 1.05, variant: 0 },
@@ -279,16 +299,16 @@ function buildLayoutOnce(m: GameMap): Layout {
 
   const tr0: V2[][] = [
     // village lane, from the western road through the village to the highway
-    [v(14.5, 52.6), v(20, 53.1), v(27, 52.7), v(33, 53.2), v(37.5, 53.4), v(39.8, 56.6)],
+    [d(14.5, 52.6), d(20, 53.1), d(27, 52.7), d(33, 53.2), d(37.5, 53.4), d(39.8, 56.6)],
     // farm track
-    [v(55.6, 82), v(56.6, 85.8), v(60.6, 87.4), v(65.6, 88.6), v(70.5, 90.2), v(75, 91.5)],
+    [d(55.6, 82), d(56.6, 85.8), d(60.6, 87.4), d(65.6, 88.6), d(70.5, 90.2), d(75, 91.5)],
     // hamlet track
-    [v(50.6, 82.8), v(51.2, 79.4), v(50.8, 75.6), v(50.2, 71.6), v(45, 67.6), v(37.8, 66.4)],
+    [d(50.6, 82.4), d(51.2, 79.4), d(50.8, 75.6), d(50.2, 71.6), d(45, 67.6), d(37.8, 66.4)],
     // field access west
-    [v(12.6, 45.5), v(9, 45.8), v(4, 46.6)],
-    [v(31, 76), v(37, 75.6), v(43.5, 75.8)],
+    [d(12.6, 45.5), d(9, 45.8), d(4, 46.6)],
+    [d(31, 76), d(37, 75.6), d(43.5, 75.8)],
   ];
-  const tracks: Track[] = [...tr0, ...tr0.map(mirAll)].map((pts) => ({ pts: route(pts, 0.5, 0.3), width: 0.5 }));
+  const tracks: Track[] = [...tr0, ...TRACKS_EXTRA, ...tr0.map(mirAll), ...TRACKS_EXTRA.map(mirAll)].map((pts) => ({ pts: route(pts, 0.5, 0.3), width: 0.5 }));
 
   // ---- occupancy grid
   const R = 4;
@@ -377,7 +397,8 @@ function buildLayoutOnce(m: GameMap): Layout {
     { x0: 66.4, y0: 85, x1: 75.5, y1: 92.5, rows: 'x' },
     { x0: 2.5, y0: 84, x1: 9, y1: 92, rows: 'y' },
   ];
-  const zones = [...zones0, ...zones0.map((z) => ({ x0: W - z.x1, y0: H - z.y1, x1: W - z.x0, y1: H - z.y0, rows: z.rows }))];
+  const zonesS = zones0.map((z) => ({ x0: ds(z.x0), y0: ds(z.y0), x1: ds(z.x1), y1: ds(z.y1), rows: z.rows })).concat(FIELD_ZONES_EXTRA);
+  const zones = [...zonesS, ...zonesS.map((z) => ({ x0: W - z.x1, y0: H - z.y1, x1: W - z.x0, y1: H - z.y0, rows: z.rows }))];
   const fields: Field[] = [];
   const edges: Edge[] = [];
   let seed = 0;
@@ -487,7 +508,7 @@ function buildLayoutOnce(m: GameMap): Layout {
     }
     return out;
   };
-  const pl0 = detourSpans(m, line(v(0.6, 62.4), v(62.4, 0.6), 7.6), valid);
+  const pl0 = detourSpans(m, line(d(0.6, 62.4), d(62.4, 0.6), 7.6), valid);
   const pylons = { lines: [...pl0, ...pl0.map((l) => rev(mirAll(l)))] };
 
   // ---- wooden utility poles along the country roads

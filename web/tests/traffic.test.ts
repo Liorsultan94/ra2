@@ -680,6 +680,8 @@ describe('crossings, emergency vehicles and the car scale', () => {
         const p = { ...pointAt(L, a) }; // (pointAt hands back a shared scratch object)
         const q = pointAt(L, a + 8);
         if (Math.hypot(q.x - p.x, q.y - p.y) < 6.5) continue;
+        // (inside the map: at its edge the road runs on into the outskirts, no room to swing out)
+        if (Math.min(p.x, p.y, q.x, q.y) < 4 || Math.max(p.x, q.x) > n.w - 4 || Math.max(p.y, q.y) > n.h - 4) continue;
         return { li, a };
       }
     }

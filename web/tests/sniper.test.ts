@@ -282,9 +282,9 @@ describe('sniper damage', () => {
 describe('sniper in a building', () => {
   it('fires from the window with +20% range and the same 3 s lock', () => {
     const w = cleanWorld();
-    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 25 && e.ty === 49)!;
+    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 35 && e.ty === 67)!;
     expect(house).toBeTruthy();
-    const s = w.spawnUnit('usa_sniper', 0, 25.5, 52.5);
+    const s = w.spawnUnit('usa_sniper', 0, 35.5, 70.5);
     w.issue(0, { type: 'enter', ids: [s.id], target: house.id });
     run(w, TPS * 6);
     expect(s.inside).toBe(house.id);

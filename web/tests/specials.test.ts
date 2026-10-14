@@ -39,9 +39,9 @@ const run = (w: World, ticks: number, onEv?: (e: SimEvent) => void) => {
 
 /** A house of player 0's village (civ_house at 25,49) and riflemen next to it. */
 function garrisonSetup(w: World, n = 6, def = 'usa_rifle') {
-  const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === 25 && h.ty === 49)!;
+  const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === 35 && h.ty === 67)!;
   const units: Entity[] = [];
-  for (let i = 0; i < n; i++) units.push(w.spawnUnit(def, 0, 25.5 + (i % 3) * 0.4, 52.5 + Math.floor(i / 3) * 0.4));
+  for (let i = 0; i < n; i++) units.push(w.spawnUnit(def, 0, 35.5 + (i % 3) * 0.4, 70.5 + Math.floor(i / 3) * 0.4));
   return { house, units };
 }
 
@@ -75,7 +75,7 @@ describe('garrisonable civilian houses', () => {
     const inside = w.get(house.passengers[0])!;
     expect(w.weaponRange(inside, { range: 4.5 } as never)).toBeCloseTo(4.5 + GARRISON_RANGE + 1);
     // an enemy squad walks up: the garrison shoots, the enemy can only hurt the house
-    const foes = [0, 1, 2].map((i) => w.spawnUnit('russia_rifle', 1, 26.5 + i * 0.4, 56.6));
+    const foes = [0, 1, 2].map((i) => w.spawnUnit('russia_rifle', 1, 36.5 + i * 0.4, 74.6));
     const hp0 = units.filter((u) => u.inside === house.id).map((u) => u.hp);
     let fromInside = 0;
     run(w, TPS * 25, (e) => {
@@ -127,8 +127,8 @@ describe('garrisonable civilian houses', () => {
     w.issue(0, { type: 'enter', ids: units.map((u) => u.id), target: house.id });
     run(w, TPS * 8);
     expect(canGarrisonUnit('usa_engineer')).toBe(false);
-    const foe = w.spawnUnit('russia_rifle', 1, 28.5, 52.5);
-    const eng = w.spawnUnit('russia_engineer', 1, 28.5, 52.9);
+    const foe = w.spawnUnit('russia_rifle', 1, 38.5, 70.5);
+    const eng = w.spawnUnit('russia_engineer', 1, 38.5, 70.9);
     w.issue(1, { type: 'enter', ids: [foe.id], target: house.id });
     w.issue(1, { type: 'capture', ids: [eng.id], target: house.id });
     foe.hp = foe.maxHp = 1e6; // survive the garrison's fire

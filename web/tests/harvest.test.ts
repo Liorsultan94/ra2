@@ -9,7 +9,7 @@ import { World } from '../src/sim/world';
 const BEFORE_3 = 13075;
 const BEFORE_6 = 3600;
 /** Player 0's home ore field on Frontline (sim/map.ts). */
-const FIELD = { x: 27.5, y: 87.5 };
+const FIELD = { x: 29.5, y: 117.5 };
 
 /** USA (player 0) vs Russia, starting forces cleared; player 0's refinery by its home ore field. */
 function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
@@ -22,10 +22,10 @@ function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 14, 79, true);
-  w.spawnBuilding('russia_conyard', 1, 80, 14, true);
-  w.spawnBuilding('usa_power', 0, 10, 79, true);
-  const ref = w.spawnBuilding('usa_refinery', 0, 21, 85, true);
+  w.spawnBuilding('usa_conyard', 0, 16, 109, true);
+  w.spawnBuilding('russia_conyard', 1, 110, 16, true);
+  w.spawnBuilding('usa_power', 0, 12, 109, true);
+  const ref = w.spawnBuilding('usa_refinery', 0, 23, 115, true);
   return { w, ref };
 }
 
@@ -197,7 +197,7 @@ describe('harvesters sharing a field and a refinery', () => {
 
   it('a second refinery takes the overflow', () => {
     const { w, ref } = hvWorld();
-    const ref2 = w.spawnBuilding('usa_refinery', 0, 17, 85, true);
+    const ref2 = w.spawnBuilding('usa_refinery', 0, 19, 115, true);
     w.map.ore.fill(0); // one trip each
     w.map.oreMines = [];
     const [dx, dy] = dockXY(ref);
@@ -222,7 +222,7 @@ describe('harvesters under attack', () => {
   it('flee on damage with a partial load: unload it, park off the lane, repair at 3%/s, resume after the field is calm', () => {
     const { w, ref } = hvWorld();
     const h = miner(w, 300);
-    const foe = w.spawnUnit('russia_mbt', 1, 50, 70); // far away: only the shot counts
+    const foe = w.spawnUnit('russia_mbt', 1, 52, 100); // far away: only the shot counts
     foe.stance = 'holdFire';
     run(w, 5);
     expect(h.hflee).toBeNull();
@@ -313,20 +313,20 @@ describe('harvesters under attack', () => {
   it("a player's order overrides the run home", () => {
     const { w } = hvWorld();
     const h = miner(w, 200);
-    const foe = w.spawnUnit('russia_mbt', 1, 50, 70);
+    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
     foe.stance = 'holdFire';
     run(w, 4);
     hit(w, h, foe);
     run(w, 3);
     expect(h.hflee).not.toBeNull();
     // move order: it goes where it is told
-    w.issue(0, { type: 'move', ids: [h.id], x: 30.5, y: 80.5 });
+    w.issue(0, { type: 'move', ids: [h.id], x: 32.5, y: 110.5 });
     run(w, 2);
     expect(h.hflee).toBeNull();
     expect(h.order.type).toBe('move');
     expect(harvestStatus(h)).toBe('');
     run(w, TPS * 20, () => h.order.type !== 'move');
-    expect(Math.hypot(h.x - 30.5, h.y - 80.5)).toBeLessThan(1.5);
+    expect(Math.hypot(h.x - 32.5, h.y - 110.5)).toBeLessThan(1.5);
     // harvest order onto the (hot) field: it goes and works there, and a hit right after does not send it home
     w.issue(0, { type: 'harvest', ids: [h.id], x: FIELD.x, y: FIELD.y });
     run(w, 2);
@@ -346,7 +346,7 @@ describe('harvesters under attack', () => {
     const { w } = hvWorld({ ai: true });
     w.controllers.push(new AIController(w, 0, 'hard'));
     const h = miner(w, 250);
-    const foe = w.spawnUnit('russia_mbt', 1, 50, 70);
+    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
     foe.stance = 'holdFire';
     run(w, 4);
     const income0 = w.players[0].stats.harvested;
@@ -368,7 +368,7 @@ describe('harvesters under attack', () => {
   it('one "harvester under attack" alert per 20 s at most', () => {
     const { w } = hvWorld();
     const hs = [miner(w, 0), harvester(w, FIELD.x + 2, FIELD.y)];
-    const foe = w.spawnUnit('russia_mbt', 1, 50, 70);
+    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
     foe.stance = 'holdFire';
     run(w, 4);
     const alerts: number[] = [];
