@@ -2,11 +2,13 @@ import { airdropStatus } from './airdrop';
 import { isSortieJet, jetReady } from './airbase';
 import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
-import { DEFS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
+import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
+import { WATER_LEVEL, groundHeight } from './map';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
+import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
 import { Rng } from './rng';
-import { FLARE_RADIUS, illumReady, pickIllum } from './night';
+import { FLARE_RADIUS, hasNightVision, illumReady, pickIllum } from './night';
 import { TPS, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
 
@@ -30,6 +32,28 @@ const CFG: Record<Difficulty, DiffCfg> = {
   normal: { think: 20, firstWave: 8, waveGrowth: 2, maxWave: 16, defenses: 3, tech: true, queueDepth: 2, harvesters: 2, micro: 1 },
   hard: { think: 10, firstWave: 9, waveGrowth: 3, maxWave: 24, defenses: 5, tech: true, queueDepth: 3, harvesters: 2, micro: 2 },
 };
+
+/** How strongly production shifts toward counters of what the enemy fields (0 = doctrine mix only). */
+const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
+/** Chance that a main push is preceded by a feint on another lane (micro > 0 only). */
+const FEINT: Record<Difficulty, number> = { easy: 0, normal: 0.25, hard: 0.4 };
+
+/** Per-AI seed: the match seed mixed with the player id (every match differs, a replay / lockstep peer does not). */
+export function aiSeed(seed: number, pid: number): number {
+  let h = Math.imul((seed | 0) ^ 0x5bd1e995, 0x9e3779b1) ^ Math.imul(pid + 1, 0x85ebca77);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+/** What the AI has seen the enemy field, by class (units seen in the last 90 s, structures until destroyed). */
+export interface EnemyMix {
+  armour: number;
+  infantry: number;
+  air: number;
+  arty: number;
+  defence: number;
+}
 
 /** Long-range strike missile launchers (ballistic / hypersonic / cruise): the AI uses them for standoff strikes. */
 function isStrike(def: string) {
@@ -65,8 +89,25 @@ const BUILD_ORDER: [string, number][] = [
   ['power', 6],
 ];
 
+/**
+ * The seeded build order: the economy core always comes first; then barracks / factory and the mid-game
+ * (second refinery, radar, airfield) come in one of a few orders, so no two matches open quite alike.
+ */
+function buildOrderFor(rng: Rng, plan: Plan): [string, number][] {
+  const o = BUILD_ORDER.map((s) => [...s] as [string, number]);
+  if (rng.next() < 0.4) [o[2], o[3]] = [o[3], o[2]]; // factory before barracks
+  const v = rng.next();
+  if (v < 0.3) [o[4], o[5]] = [o[5], o[4]]; // greedy: second refinery before more power
+  else if (v < 0.6) {
+    // tech: radar before the second refinery
+    const [r] = o.splice(6, 1);
+    o.splice(5, 0, r);
+  }
+  return planBuildOrder(o, plan);
+}
+
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush';
 
 interface Intel {
   x: number;
@@ -82,7 +123,26 @@ interface Wave {
   ty: number;
   focus: number; // focus-fire target
   born: number;
+  /** Lane key it went by ('' = none / a feint's own), its value at launch and the enemy value it is seen to kill. */
+  lane: string;
+  value: number;
+  killed: number;
+  feint?: boolean;
 }
+
+/** A main body held at the rally point while its feint draws the defence onto another lane. */
+interface Staged {
+  ids: number[];
+  wing: number[];
+  lane: [number, number] | null;
+  laneKey: string;
+  wingLane: [number, number] | null;
+  tx: number;
+  ty: number;
+  at: number;
+}
+
+const cost = (def: string) => DEFS[def]?.cost ?? 0;
 
 function klass(def: string): Klass {
   const d = unitDef(def);
@@ -134,6 +194,40 @@ export class AIController implements Controller {
   private baseCache = { tick: -1, pts: [] as number[] };
   private mineUnits: Entity[] = [];
   private mineBuildings: Entity[] = [];
+  /** This match's build order (seeded variation of BUILD_ORDER, shaped by the plan). */
+  buildOrder: [string, number][];
+  /** Opening strategy (plans.ts), the plans played so far, when it may next change. */
+  plan: Plan;
+  readonly planLog: Plan[] = [];
+  private planCfg: PlanCfg;
+  private planSince = 0;
+  private planBad = 0;
+  /** Seeded style: raid cadence multiplier, the size jitter of the next wave, the earliest tick it may leave. */
+  private raidPace: number;
+  private waveJitter = 0;
+  private waveNotBefore = 0;
+  private waveStale: number;
+  /** What the enemy is seen to field (updateIntel), and a temporary boost to counter it after a bad trade. */
+  readonly mix: EnemyMix = { armour: 0, infantry: 0, air: 0, arty: 0, defence: 0 };
+  private adaptBoost = 0;
+  private adaptBoostUntil = 0;
+  /** Lanes that cost us a wave for little in return (key -> penalty, decays as waves go out). */
+  private lanePenalty = new Map<string, number>();
+  /** Raid targets found well defended: avoided for a while. */
+  private avoid: { x: number; y: number; until: number }[] = [];
+  private raid: { ids: number[]; prey: number; x: number; y: number } | null = null;
+  private staged: Staged | null = null;
+  /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
+  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1 };
+  /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
+  private hMin = 0;
+  private hSpan = 1;
+  private rallyCache: { key: number; pt: [number, number] } | null = null;
+  private chokes: { x: number; y: number }[] | null = null;
+  private chokeScan = 0;
+  private chokeFound: { x: number; y: number; w: number }[] = [];
+  private ambushUntil = 0;
+  private ambushAt: [number, number] = [0, 0];
 
   constructor(
     private world: World,
@@ -144,11 +238,40 @@ export class AIController implements Controller {
     this.peaceUntil = Math.max(0, opts.peaceTicks ?? 0);
     this.cfg = CFG[difficulty];
     this.difficulty = difficulty;
-    this.rng = new Rng(9001 + pid * 77);
+    // seeded from the match: every match plays differently, a replay / lockstep peer identically
+    this.rng = new Rng(aiSeed(world.seed, pid));
     this.doctrine = DOCTRINES[world.players[pid].faction];
-    this.waveSize = Math.max(4, Math.round(this.cfg.firstWave * this.doctrine.wave));
-    this.raidAt = TPS * 150;
-    this.scoutAt = TPS * 25;
+    // the game plan (opening strategy): seeded, weighted by doctrine and difficulty, within the arsenal
+    this.plan = pickPlan(this.rng, planWeights(world.players[pid].faction, this.doctrine, difficulty));
+    this.planCfg = PLAN_CFG[this.plan];
+    this.planLog.push(this.plan);
+    this.buildOrder = buildOrderFor(this.rng, this.plan);
+    this.waveSize = Math.min(this.cfg.maxWave, Math.max(4, Math.round(this.cfg.firstWave * this.doctrine.wave * this.planCfg.wave)));
+    this.raidPace = this.rng.range(0.75, 1.35);
+    this.raidAt = Math.round(TPS * this.rng.range(115, 195));
+    this.scoutAt = Math.round(TPS * this.rng.range(18, 40));
+    this.waveStale = Math.round(TPS * this.rng.range(180, 300) * this.planCfg.stale);
+    this.waveJitter = this.rng.int(3) - 1;
+    const hs = world.map.heights;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < hs.length; i++) {
+      const h = hs[i];
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    this.hMin = Math.max(lo, WATER_LEVEL);
+    this.hSpan = Math.max(0.5, Math.min(4, hi - this.hMin));
+  }
+
+  /** Play this plan from now on (tests / debug; plans.ts). */
+  setPlan(plan: Plan) {
+    this.plan = plan;
+    this.planCfg = PLAN_CFG[plan];
+    this.planLog.push(plan);
+    this.planSince = this.world.tick;
+    this.buildOrder = buildOrderFor(this.rng, plan);
+    this.waveSize = Math.min(this.cfg.maxWave, Math.max(4, Math.round(this.cfg.firstWave * this.doctrine.wave * this.planCfg.wave)));
   }
 
   private get p(): Player {
@@ -182,6 +305,7 @@ export class AIController implements Controller {
     const w = this.world;
     if (this.p.defeated || w.over) return;
     if ((w.tick + this.pid * 3) % this.cfg.think !== 0) return;
+    this.thinks++;
     const buildings = this.mineBuildings;
     const units = this.mineUnits;
     buildings.length = 0;
@@ -237,10 +361,95 @@ export class AIController implements Controller {
     if (this.thinks % 6 === 0) {
       for (const [id, it] of this.intel) {
         const e = w.get(id);
+        // a death we saw near one of our waves counts toward its trade (lane memory)
+        if (!e && w.tick - it.seen <= this.cfg.think * 6 + TPS * 2) this.creditKill(it);
         // dead, captured, or a unit not seen for a long time
         if (!e || !w.isEnemy(this.pid, e.owner) || (!it.building && w.tick - it.seen > TPS * 90)) this.intel.delete(id);
       }
     }
+    if (this.thinks % 4 === 0) this.updateMix();
+  }
+
+  /** Tally what the enemy fields, by class, from what we have seen (fog of war: intel only). */
+  private updateMix() {
+    const m = this.mix;
+    m.armour = m.infantry = m.air = m.arty = m.defence = 0;
+    for (const it of this.intel.values()) {
+      const d = DEFS[it.def];
+      if (!d) continue;
+      if (it.building) {
+        if (d.category === 'defense') m.defence++;
+        continue;
+      }
+      const ud = unitDef(it.def);
+      if (ud.temp || ud.airlift || !ud.weapon) continue;
+      const k = klass(it.def);
+      if (k === 'arty' || k === 'strike') m.arty++;
+      else if (ud.air || WEAPONS[ud.weapon].projectile === 'spawn') m.air++;
+      else if (ud.category === 'infantry') m.infantry++;
+      else if (ud.category === 'vehicle') m.armour += ud.armor === 'heavy' ? 1 : 0.5;
+    }
+  }
+
+  /** An enemy we saw die: credit it to the wave fighting next to it. */
+  private creditKill(it: Intel) {
+    for (const wv of this.waves) {
+      const c = this.centroid(wv);
+      if (c && Math.hypot(c[0] - it.x, c[1] - it.y) < 12) {
+        wv.killed += cost(it.def);
+        return;
+      }
+    }
+  }
+
+  private centroid(wv: Wave): [number, number] | null {
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const id of wv.ids) {
+      const u = this.world.get(id);
+      if (!u) continue;
+      cx += u.x;
+      cy += u.y;
+      n++;
+    }
+    return n ? [cx / n, cy / n] : null;
+  }
+
+  /** Unit-mix multiplier of the game plan (plans.ts): fast raiders, guns / launchers, aircraft, heavy armour. */
+  private planMix(d: ReturnType<typeof unitDef>): number {
+    const c = this.planCfg;
+    let m = 1;
+    const k = klass(d.id);
+    if (k === 'arty' || k === 'strike') m *= c.arty;
+    else if (d.category === 'air') m *= c.air;
+    else if (isFast(d.id)) m *= c.fast;
+    if (d.category === 'vehicle' && d.armor === 'heavy') m *= c.heavy;
+    return m;
+  }
+
+  /**
+   * Production multiplier for a unit type from what the enemy fields: anti-armour weapons vs armour, anti-infantry
+   * vs mass infantry, anti-air vs air, artillery / strike missiles vs a turtle (static defences) and vs enemy guns.
+   */
+  private counterWeight(d: ReturnType<typeof unitDef>): number {
+    const m = this.mix;
+    const total = m.armour + m.infantry + m.air + m.arty + m.defence * 1.5;
+    if (total < 3 || !d.weapon) return 1;
+    const gain = ADAPT[this.difficulty] + (this.world.tick < this.adaptBoostUntil ? this.adaptBoost : 0);
+    const vs = (armor: 'heavy' | 'infantry') => {
+      let v = VERSUS[WEAPONS[d.weapon!].warhead][armor];
+      if (d.weapon2) v = Math.max(v, VERSUS[WEAPONS[d.weapon2].warhead][armor]);
+      return v;
+    };
+    const k = klass(d.id);
+    const fit =
+      (m.armour / total) * (vs('heavy') - 0.55) * 1.6 +
+      (m.infantry / total) * (vs('infantry') - 0.6) * 1.6 +
+      (m.air / total) * (hitsAir(d) ? 1 : -0.3) +
+      ((m.defence * 1.5) / total) * (k === 'arty' || k === 'strike' ? 1.4 : 0) +
+      (m.arty / total) * (k === 'arty' || k === 'strike' || (d.speed ?? 0) >= 2.3 ? 0.8 : 0);
+    return Math.max(0.25, 1 + gain * fit * 2);
   }
 
   /** Known enemies matching a filter (fresh units only). */
@@ -298,6 +507,107 @@ export class AIController implements Controller {
     const ty = Math.floor(y);
     const { w, h } = this.world.map;
     return tx >= 0 && ty >= 0 && tx < w && ty < h && !!this.p.explored[ty * w + tx];
+  }
+
+  // ------------------------------------------------------------------ terrain
+
+  /** Ground height above the lowest dry ground of this map (world units, capped: a summit is not worth any detour). */
+  private hNorm(x: number, y: number): number {
+    return Math.min(Math.max(groundHeight(this.world.map, x, y), WATER_LEVEL) - this.hMin, this.hSpan);
+  }
+
+  /**
+   * The best position within r tiles of (x, y): passable dry ground, as high as it gets without straying far.
+   * Generic (heightmap + passability, any map size), (2r+1)^2 samples: artillery, pickets, rally point.
+   */
+  private highSpot(x: number, y: number, r: number): [number, number] {
+    const w = this.world;
+    const { map } = w;
+    let best: [number, number] = [x, y];
+    let bs = -Infinity;
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        const tx = cx + ox;
+        const ty = cy + oy;
+        if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || !w.pf.passable(tx, ty)) continue;
+        const px = tx + 0.5;
+        const py = ty + 0.5;
+        const d = Math.hypot(px - x, py - y);
+        if (d > r + 0.5) continue;
+        // a tile of height is worth some six tiles of detour
+        const s = this.hNorm(px, py) * 2 - d * 0.35;
+        if (s > bs) {
+          bs = s;
+          best = [px, py];
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Passable run from (x, y) along (dx, dy), both ways, capped. */
+  private run(x: number, y: number, dx: number, dy: number, cap: number): number {
+    const pf = this.world.pf;
+    let n = 1;
+    for (const s of [1, -1]) {
+      for (let k = 1; k <= cap; k++) {
+        if (!pf.passable(Math.floor(x + dx * k * s), Math.floor(y + dy * k * s))) break;
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * Chokepoints (passes between impassable ground) found from passability alone, for maps that list no bridges
+   * or lanes: the middle band between the bases is sampled a few hundred points per think, and a point that is
+   * narrow one way but runs on the other (a corridor, not a pocket) is a choke. Done once, spread over thinks.
+   */
+  private scanChokes() {
+    if (this.chokes) return;
+    const w = this.world;
+    const { map } = w;
+    const enemy = this.enemyBase();
+    if (!enemy) return;
+    const [hx, hy] = this.home();
+    const ax = enemy[0] - hx;
+    const ay = enemy[1] - hy;
+    const L2 = ax * ax + ay * ay || 1;
+    const S = 3;
+    const cols = Math.ceil(map.w / S);
+    const total = cols * Math.ceil(map.h / S);
+    const end = Math.min(total, this.chokeScan + 240);
+    const D = [
+      [1, 0],
+      [0, 1],
+      [Math.SQRT1_2, Math.SQRT1_2],
+      [Math.SQRT1_2, -Math.SQRT1_2],
+    ];
+    for (let i = this.chokeScan; i < end; i++) {
+      const x = (i % cols) * S + 1.5;
+      const y = Math.floor(i / cols) * S + 1.5;
+      const t = ((x - hx) * ax + (y - hy) * ay) / L2;
+      if (t < 0.2 || t > 0.8 || !w.pf.passable(Math.floor(x), Math.floor(y))) continue;
+      let lo = Infinity;
+      let hi = 0;
+      for (const [dx, dy] of D) {
+        const r = this.run(x, y, dx, dy, 12);
+        if (r < lo) lo = r;
+        if (r > hi) hi = r;
+      }
+      if (lo <= 7 && hi >= 16) this.chokeFound.push({ x, y, w: lo });
+    }
+    this.chokeScan = end;
+    if (end < total) return;
+    const picked: { x: number; y: number }[] = [];
+    for (const c of [...this.chokeFound].sort((a, b) => a.w - b.w || a.y - b.y || a.x - b.x)) {
+      if (picked.every((p) => Math.hypot(p.x - c.x, p.y - c.y) >= 12)) picked.push({ x: c.x, y: c.y });
+      if (picked.length >= 4) break;
+    }
+    this.chokes = picked;
+    this.chokeFound = [];
   }
 
   private pickDropZone(): [number, number] | null {
@@ -381,7 +691,7 @@ export class AIController implements Controller {
       const sams = this.count(buildings, 'def_aa');
       const samWant = Math.max(this.enemyStrikeUnits() > 0 ? MISSILE_DEFENSE[this.difficulty] : 0, this.cfg.micro > 0 ? doc.samFloor : 0);
       const wantSam = sams < samWant && this.count(buildings, 'radar') > 0;
-      const maxDef = Math.round(this.cfg.defenses * doc.defense);
+      const maxDef = Math.round(this.cfg.defenses * doc.defense * this.planCfg.defense);
       if (defenses < maxDef || wantSam) {
         const order = doc.defenseOrder;
         const role = wantSam ? 'def_aa' : order[defenses % order.length];
@@ -404,7 +714,7 @@ export class AIController implements Controller {
     const p = this.p;
     const f = p.faction;
     const powerDef = factionDefByRole(f, 'power');
-    for (const [role, n] of BUILD_ORDER) {
+    for (const [role, n] of this.buildOrder) {
       if (role === 'tech' && !this.cfg.tech) continue;
       if (this.count(buildings, role) >= n) continue;
       const d = factionDefByRole(f, role);
@@ -449,6 +759,7 @@ export class AIController implements Controller {
     }
     let best: [number, number] | null = null;
     let bestScore = Infinity;
+    let foundAt = -1;
     // scan in a canonical frame (the north-east base mirrored onto the south-west one) so rounding and
     // tie-breaks favour neither start position on the point-symmetric map
     const flip = conyard.x > map.w / 2;
@@ -465,6 +776,8 @@ export class AIController implements Controller {
           if (!w.canPlace(this.pid, defId, tx, ty)) continue;
           if (d.category !== 'defense' && !this.hasClearance(tx, ty, d.w, d.h)) continue;
           let score = Math.hypot(tx + d.w / 2 - bx, ty + d.h / 2 - by);
+          // defences prefer the high ground (a commanding position) within a few tiles
+          if (d.category === 'defense') score -= this.hNorm(tx + d.w / 2, ty + d.h / 2) * 2;
           if (oreX >= 0) score = Math.hypot(tx + d.w / 2 - oreX, ty + d.h / 2 - oreY) * 1.5 + score * 0.3;
           if (score < bestScore) {
             bestScore = score;
@@ -472,7 +785,8 @@ export class AIController implements Controller {
           }
         }
       }
-      if (best && (oreX < 0 || r > 10)) break;
+      if (best && foundAt < 0) foundAt = r;
+      if (best && (oreX < 0 || r > 10) && (d.category !== 'defense' || r >= foundAt + 3)) break;
     }
     return best;
   }
@@ -519,7 +833,7 @@ export class AIController implements Controller {
     const vq = p.queues.vehicle;
     const iq = p.queues.infantry;
     const aq = p.queues.air;
-    if (refineries > 0 && harvesters < Math.min(4, refineries * this.cfg.harvesters) && !vq.some((q) => q.def === harvDef) && w.canBuild(this.pid, harvDef)) {
+    if (refineries > 0 && harvesters < Math.min(4 + this.planCfg.harvesters, refineries * (this.cfg.harvesters + this.planCfg.harvesters)) && !vq.some((q) => q.def === harvDef) && w.canBuild(this.pid, harvDef)) {
       w.issue(this.pid, { type: 'produce', def: harvDef });
       return;
     }
@@ -537,7 +851,7 @@ export class AIController implements Controller {
         this.engineerSent.add(e.id);
       }
     }
-    if (this.cfg.tech && engineers.length === 0 && this.engineerSent.size < 2 && w.tick > TPS * 60 && w.canBuild(this.pid, eng) && !iq.some((q) => q.def === eng) && this.nearestOil(null)) {
+    if (this.cfg.tech && engineers.length === 0 && this.engineerSent.size < 2 && w.tick > TPS * this.planCfg.oilAt && w.canBuild(this.pid, eng) && !iq.some((q) => q.def === eng) && this.nearestOil(null)) {
       w.issue(this.pid, { type: 'produce', def: eng });
     }
 
@@ -576,7 +890,7 @@ export class AIController implements Controller {
     ];
     const prefix = f.length + 1;
     for (const [q, cat, min] of queues) {
-      const prio = doc.spend[cat];
+      const prio = doc.spend[cat] * this.planCfg.spend[cat];
       if (q.length >= this.cfg.queueDepth + (prio >= 1.5 ? 1 : 0) || p.credits < min / prio) continue;
       const opts: [string, number][] = [];
       for (const d of defsForFaction(f)) {
@@ -585,6 +899,7 @@ export class AIController implements Controller {
         if (d.aiTag === 'aa') wgt = wantAA ? 10 : enemyAir > 0 ? 2 : 0.3 * (doc.bias[d.id.slice(prefix)] ?? 1);
         else if (enemyAir > 0 && d.weapon2 && hitsAir(d)) wgt *= wantAA ? 2.5 : 1.5; // Rocket Teams double as AA
         if (d.aiTag === 'arty' && enemyArty > 0) wgt *= 1.8;
+        if (d.aiTag !== 'aa') wgt *= this.counterWeight(d) * this.planMix(d);
         opts.push([d.id, wgt]);
       }
       const pick = this.weighted(opts);
@@ -649,7 +964,10 @@ export class AIController implements Controller {
     const dx = enemy[0] - hx;
     const dy = enemy[1] - hy;
     const len = Math.hypot(dx, dy) || 1;
-    return [hx + (dx / len) * 10, hy + (dy / len) * 10];
+    // the best ground near the point 10 tiles out towards the enemy (cached: the base is fixed)
+    const key = Math.round(enemy[0]) * 4096 + Math.round(enemy[1]);
+    if (this.rallyCache?.key !== key) this.rallyCache = { key, pt: this.highSpot(hx + (dx / len) * 10, hy + (dy / len) * 10, 3) };
+    return this.rallyCache.pt;
   }
 
   private manageArmy(buildings: Entity[], units: Entity[]) {
@@ -666,6 +984,8 @@ export class AIController implements Controller {
     this.manageJets(combat.filter((u) => klass(u.def) === 'jet'));
     // (a medic at work on a wounded soldier is left to finish: medic.ts)
     const force = combat.filter((u) => klass(u.def) !== 'strike' && klass(u.def) !== 'jet' && u.order.type !== 'treat');
+    this.retireWaves();
+    if (this.staged && !this.staged.ids.some((id) => w.get(id))) this.staged = null;
     if (force.length === 0) return;
 
     if (micro > 0) this.manageRetreats(force);
@@ -675,6 +995,7 @@ export class AIController implements Controller {
     if (micro > 0 && doc.choke > 0) this.manageChoke(force);
     if (micro > 0 && doc.harass > 0) this.manageRaids(force);
     if (doc.airWing > 0) this.manageAirWing(force);
+    if (micro > 0) this.manageAmbush(force);
     this.manageWaves(force);
     this.manageArtillery(force);
     if (micro > 0) this.manageCrush(force);
@@ -806,8 +1127,13 @@ export class AIController implements Controller {
       if (air && !w.canAttack(u.def, t)) return false;
       // already on its way there: don't re-plan every think
       if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
-      return (r === 'army' || r === 'wing' || r === 'retreat') && Math.hypot(u.x - hx, u.y - hy) < 28;
+      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush') && Math.hypot(u.x - hx, u.y - hy) < 28;
     });
+    const amb = home.filter((u) => this.roleOf(u) === 'ambush').map((u) => u.id);
+    if (amb.length) {
+      this.setRole(amb, 'army');
+      this.stance(amb, 'guard');
+    }
     if (home.length) this.cmd({ type: 'move', ids: home.map((u) => u.id), x: t.x, y: t.y, attackMove: true });
     return home.length > 0;
   }
@@ -993,6 +1319,11 @@ export class AIController implements Controller {
     }
     // fords, passes and avenues of maps with few or no bridges (sim/maps.ts)
     for (const l of w.map.lanes ?? []) if (w.pf.passable(Math.floor(l.x), Math.floor(l.y))) out.push({ x: l.x, y: l.y });
+    // a map that lists neither: the chokepoints found from its passability (scanned over a few thinks)
+    if (!out.length && !w.map.bridges.length && !w.map.lanes?.length) {
+      this.scanChokes();
+      for (const c of this.chokes ?? []) out.push(c);
+    }
     return out;
   }
 
@@ -1016,13 +1347,25 @@ export class AIController implements Controller {
     if (!candidateCrossings.length) return;
     const [hx, hy] = this.home();
     const bridge = candidateCrossings.reduce((b, l) => (Math.hypot(l.x - hx, l.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? l : b), candidateCrossings[0]);
-    const [px, py] = this.bank(bridge, 4);
+    const [bx, by] = this.bank(bridge, 4);
+    const [px, py] = this.highSpot(bx, by, 2);
     const picket = force.filter((u) => this.roleOf(u) === 'choke');
     // an outpost, not a last stand: spot the enemy wave, then fall back to the main body
     let near = 0;
-    for (const [, it] of this.known((it) => !it.building, TPS * 3)) if (Math.hypot(it.x - px, it.y - py) < 10) near++;
+    let close = 0;
+    for (const [, it] of this.known((it) => !it.building, TPS * 3)) {
+      const d = Math.hypot(it.x - px, it.y - py);
+      if (d < 10) near++;
+      if (d < 5.5) close++;
+    }
+    // an ambush: hold fire while scouts and raiders walk in, open up together once they are close (or shoot first)
+    if (picket.length && this.cfg.micro >= 2) {
+      const sprung = close > 0 || picket.some((u) => this.world.tick - u.lastHurt < TPS * 2);
+      this.stance(picket.map((u) => u.id), sprung ? 'guard' : 'holdFire');
+    }
     if (near >= 4 && picket.length) {
       const ids = picket.map((u) => u.id);
+      this.stance(ids, 'guard');
       const [rx, ry] = this.rally();
       this.setRole(ids, 'army');
       this.cmd({ type: 'move', ids, x: rx, y: ry });
@@ -1047,10 +1390,75 @@ export class AIController implements Controller {
     if (away.length) this.cmd({ type: 'move', ids: away, x: px, y: py });
   }
 
+  /**
+   * Hold the chokepoint when defending: a sizeable enemy group seen closing on a crossing (bridge, pass) near home
+   * meets the army at the rally point waiting in ambush on the best ground on our side of it - holding fire until
+   * the enemy is close (or shoots), then all together. Intel only; never during the grace; ends after 45 s.
+   */
+  private manageAmbush(force: Entity[]) {
+    const w = this.world;
+    const amb = force.filter((u) => this.roleOf(u) === 'ambush');
+    if (amb.length) {
+      const ids = amb.map((u) => u.id);
+      if (w.tick > this.ambushUntil) {
+        this.setRole(ids, 'army');
+        this.stance(ids, 'guard');
+        return;
+      }
+      const c = this.ambushAt;
+      let close = false;
+      for (const [, it] of this.known((it) => !it.building, TPS * 2)) if (Math.hypot(it.x - c[0], it.y - c[1]) < 6) close = true;
+      const sprung = close || amb.some((u) => w.tick - u.lastHurt < TPS * 2);
+      this.stance(ids, sprung ? 'guard' : 'holdFire');
+      if (sprung) this.ambushUntil = Math.max(this.ambushUntil, w.tick + TPS * 15);
+      return;
+    }
+    if (this.peace || this.staged || this.thinks % 2 !== 0) return;
+    const [hx, hy] = this.home();
+    const enemies = this.known((it) => !it.building && klass(it.def) === 'main' && !unitDef(it.def).air, TPS * 5);
+    if (enemies.length < 5) return;
+    let best: { x: number; y: number } | null = null;
+    let bn = 0;
+    const enemy = this.enemyBase();
+    if (!enemy) return;
+    // crossings on our half of the way (map-size independent)
+    const reach = Math.hypot(enemy[0] - hx, enemy[1] - hy) * 0.55;
+    for (const l of this.lanes()) {
+      const dl = Math.hypot(l.x - hx, l.y - hy);
+      if (dl > reach) continue;
+      let n = 0;
+      // closing in from the far side
+      for (const [, it] of enemies) if (Math.hypot(it.x - l.x, it.y - l.y) < 16 && Math.hypot(it.x - hx, it.y - hy) > dl) n++;
+      if (n > bn) {
+        bn = n;
+        best = l;
+      }
+    }
+    if (!best || bn < 5) return;
+    const [rx, ry] = this.rally();
+    const cands = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && klass(u.def) === 'main' && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 8);
+    if (cands.length < Math.ceil(bn * 0.8)) return;
+    const [bx, by] = this.bank(best, 5);
+    this.ambushAt = this.highSpot(bx, by, 3);
+    const ids = cands.map((u) => u.id);
+    this.setRole(ids, 'ambush');
+    this.stance(ids, 'holdFire');
+    this.cmd({ type: 'move', ids, x: this.ambushAt[0], y: this.ambushAt[1] });
+    this.ambushUntil = w.tick + TPS * 45;
+    this.stats.ambushes++;
+  }
+
   /** Harvester raids by fast units (and drones), on aggressive stance; they come home when the prey is gone. */
   private manageRaids(force: Entity[]) {
     const w = this.world;
     const raiders = force.filter((u) => this.roleOf(u) === 'raid');
+    if (this.raid && (!raiders.length || raiders.every((u) => u.order.type === 'idle'))) {
+      // raid over: a target that cost us half the raiders and still lives was well defended - look elsewhere
+      const r = this.raid;
+      this.raid = null;
+      const alive = r.ids.filter((id) => w.get(id)).length;
+      if (alive * 2 <= r.ids.length && w.get(r.prey)) this.avoid.push({ x: r.x, y: r.y, until: w.tick + TPS * 300 });
+    }
     if (raiders.length) {
       const idle = raiders.filter((u) => u.order.type === 'idle');
       if (idle.length) {
@@ -1066,7 +1474,7 @@ export class AIController implements Controller {
       return;
     }
     if (w.tick < this.raidAt || this.peace) return;
-    this.raidAt = w.tick + Math.round((TPS * 120) / this.doctrine.harass);
+    this.raidAt = w.tick + Math.round((TPS * 120) / (this.doctrine.harass * this.planCfg.raids * this.raidPace) + this.rng.range(-15, 15) * TPS);
     const [rx, ry] = this.rally();
     let fast = force.filter((u) => {
       const d = unitDef(u.def);
@@ -1080,7 +1488,7 @@ export class AIController implements Controller {
     for (const [id, it] of this.known((it) => !it.building && !!unitDef(it.def)?.harvester, TPS * 240)) {
       const threat = this.threatAt(it.x, it.y, 7);
       const sc = threat + Math.hypot(it.x - rx, it.y - ry) * 0.05;
-      if (threat <= 10 && sc < ps) {
+      if (threat <= 10 && sc < ps && !this.avoid.some((a) => a.until > w.tick && Math.hypot(a.x - it.x, a.y - it.y) < 10)) {
         ps = sc;
         prey = id;
       }
@@ -1102,8 +1510,11 @@ export class AIController implements Controller {
     this.setRole(ids, 'raid');
     this.stance(ids, 'aggressive');
     this.raidStart = w.tick;
+    const pi = this.intel.get(prey)!;
+    this.raid = { ids, prey, x: pi.x, y: pi.y };
+    this.avoid = this.avoid.filter((a) => a.until > w.tick);
     // approach along a flank lane when there is one
-    const lane = this.pickLane(true);
+    const lane = this.pickLane(true)?.pos;
     if (lane) this.cmd({ type: 'move', ids, x: lane[0], y: lane[1] });
     this.cmd({ type: 'attack', ids, target: prey, queue: !!lane });
   }
@@ -1149,33 +1560,64 @@ export class AIController implements Controller {
     this.cmd({ type: 'move', ids, x: rx, y: ry, queue: true });
   }
 
-  /** Lane (bridge) to approach by: the front is where the enemy is strongest; a flank avoids it. */
-  private pickLane(flank: boolean): [number, number] | null {
+  private laneKey(l: { x: number; y: number }) {
+    return `${Math.round(l.x)},${Math.round(l.y)}`;
+  }
+
+  /**
+   * Lane (bridge, pass) to approach by: the front is where the enemy is strongest; a flank avoids it. Lanes where
+   * a wave was lost for little in return weigh against (lane memory); `not` excludes one (a feint's lane).
+   */
+  private pickLane(flank: boolean, not = ''): { pos: [number, number]; far: [number, number]; key: string } | null {
     const lanes = this.lanes();
     if (lanes.length < 2) return null;
-    const presence = lanes.map((l) => {
-      let n = 0;
-      for (const [, it] of this.known((it) => !it.building, TPS * 40)) if (Math.hypot(it.x - l.x, it.y - l.y) < 14) n++;
-      return n;
-    });
+    const known = this.known((it) => !it.building, TPS * 40);
     const [hx, hy] = this.home();
     const enemy = this.enemyBase() ?? [this.world.map.w / 2, this.world.map.h / 2];
-    // route length via each bridge
-    const len = lanes.map((l) => Math.hypot(l.x - hx, l.y - hy) + Math.hypot(enemy[0] - l.x, enemy[1] - l.y));
-    let best = 0;
+    let best = -1;
     let bs = Infinity;
-    lanes.forEach((_, i) => {
-      const s = flank ? presence[i] * 6 + len[i] * 0.2 + (i === this.lastLane ? 8 : 0) + this.rng.next() * 6 : len[i] - presence[i] * 2;
+    lanes.forEach((l, i) => {
+      const key = this.laneKey(l);
+      if (key === not) return;
+      let presence = 0;
+      for (const [, it] of known) if (Math.hypot(it.x - l.x, it.y - l.y) < 14) presence++;
+      // route length via the lane
+      const len = Math.hypot(l.x - hx, l.y - hy) + Math.hypot(enemy[0] - l.x, enemy[1] - l.y);
+      const pen = (this.lanePenalty.get(key) ?? 0) * 10;
+      const s = flank ? presence * 6 + len * 0.2 + (i === this.lastLane ? 8 : 0) + this.rng.next() * 6 + pen : len - presence * 2 + pen + this.rng.next() * 4;
       if (s < bs) {
         bs = s;
         best = i;
       }
     });
+    if (best < 0) return null;
     this.lastLane = best;
-    return this.bank(lanes[best], 3);
+    const l = lanes[best];
+    return { pos: this.bank(l, 3), far: this.bank(l, -7), key: this.laneKey(l) };
   }
 
-  /** Gather at the rally point; launch waves along a lane (sometimes splitting off a flanking wing), with AA / EW escorts. */
+  /** Does what we know say the enemy army is away from its base (out on the map or pressing ours)? Intel only. */
+  private enemyArmyAway(): boolean {
+    const enemy = this.enemyBase();
+    if (!enemy) return false;
+    let home = 0;
+    let away = 0;
+    const t = this.world.tick;
+    for (const it of this.intel.values()) {
+      if (it.building || t - it.seen > TPS * 25) continue;
+      const k = klass(it.def);
+      if (k !== 'main' && k !== 'arty') continue;
+      if (Math.hypot(it.x - enemy[0], it.y - enemy[1]) > 30) away++;
+      else home++;
+    }
+    return away >= 5 && away >= home * 2;
+  }
+
+  /**
+   * Gather at the rally point; launch waves along a lane (sometimes splitting off a flanking wing, sometimes behind
+   * a feint on another lane), with AA / EW escorts. Waves leave at irregular times and sizes; the AI goes early when
+   * the enemy army is seen away from its base, or by night when most of the wave has night vision.
+   */
   private manageWaves(force: Entity[]) {
     const w = this.world;
     const doc = this.doctrine;
@@ -1187,8 +1629,10 @@ export class AIController implements Controller {
     const [rx, ry] = this.rally();
     const [hx, hy] = this.home();
     const enemyAir = this.enemyAirCount();
-    const atRally = idle.filter((u) => Math.hypot(u.x - rx, u.y - ry) < 7);
-    const strays = idle.filter((u) => Math.hypot(u.x - rx, u.y - ry) >= 7 && Math.hypot(u.x - hx, u.y - hy) < 22);
+    // a big army does not fit within 7 tiles of the rally point
+    const rr = Math.max(7, Math.sqrt(army.length) * 1.6);
+    const atRally = idle.filter((u) => Math.hypot(u.x - rx, u.y - ry) < rr);
+    const strays = idle.filter((u) => Math.hypot(u.x - rx, u.y - ry) >= rr && Math.hypot(u.x - hx, u.y - hy) < 22);
     if (strays.length) this.cmd({ type: 'move', ids: strays.map((u) => u.id), x: rx, y: ry });
 
     // AA stays home as air defence unless the enemy flies; artillery and support never count towards the wave size
@@ -1199,61 +1643,69 @@ export class AIController implements Controller {
     const rampOk = !ramp || (!this.peace && (this.lastWave === 0 || sinceWave >= RAMP_GAP[this.difficulty]));
     const openLanes = this.lanes();
     const riverSevered = w.map.bridges.length > 0 && openLanes.length === 0;
-    if (rampOk && (fighters.length >= this.waveSize || (fighters.length >= 4 && sinceWave > TPS * 240))) {
-      if (ramp && fighters.length > this.waveSize) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, this.waveSize);
-      const target = this.pickTarget();
-      const tx = target ? target[0] : enemy[0];
-      const ty = target ? target[1] : enemy[1];
-      if (riverSevered) {
-        // Every bridge across the river is destroyed: ground forces cannot cross.
-        // Air units fly across to strike the enemy; ground forces secure our bridge approach and defend the engineer.
-        const air = fighters.filter((u) => unitDef(u.def).air);
-        const ground = fighters.filter((u) => !unitDef(u.def).air);
-        if (air.length) {
-          this.cmd({ type: 'move', ids: air.map((u) => u.id), x: tx, y: ty, attackMove: true });
+    if (this.staged) {
+      // a feint went in on another lane: the main body follows once the defence has had time to react
+      if (w.tick >= this.staged.at) this.launchStaged(atRally, enemyAir);
+    } else if (rampOk && w.tick >= this.waveNotBefore) {
+      // (the first wave is never smaller than the doctrine's: no token rush with the starting units)
+      let want = Math.max(this.lastWave === 0 ? 6 : 4, this.waveSize + this.waveJitter);
+      const opportunity = micro > 0 && this.lastWave > 0 && fighters.length >= 4 && this.thinks % 3 === 0 && this.enemyArmyAway();
+      const nightEdge = w.night && fighters.length >= 4 && fighters.filter((u) => hasNightVision(u)).length * 2 >= fighters.length;
+      if (opportunity) want = Math.max(4, Math.ceil(want * 0.6));
+      else if (nightEdge) want = Math.max(4, Math.ceil(want * 0.8));
+      if (fighters.length >= want || (fighters.length >= 4 && sinceWave > this.waveStale)) {
+        if (fighters.length >= want) {
+          if (opportunity) this.stats.opportunist++;
+          else if (nightEdge) this.stats.night++;
         }
-        if (ground.length) {
-          const nearestBr = w.map.bridges.reduce((b, br) => (Math.hypot(br.x - hx, br.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? br : b), w.map.bridges[0]);
-          const [bx, by] = this.bank(nearestBr, 6);
-          this.cmd({ type: 'move', ids: ground.map((u) => u.id), x: bx, y: by });
+        if (ramp && fighters.length > want) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, want);
+        const target = this.pickTarget();
+        const tx = target ? target[0] : enemy[0];
+        const ty = target ? target[1] : enemy[1];
+        if (riverSevered) {
+          // Every bridge across the river is destroyed: ground forces cannot cross.
+          // Air units fly across to strike the enemy; ground forces secure our bridge approach and defend the engineer.
+          const air = fighters.filter((u) => unitDef(u.def).air);
+          const ground = fighters.filter((u) => !unitDef(u.def).air);
+          if (air.length) this.cmd({ type: 'move', ids: air.map((u) => u.id), x: tx, y: ty, attackMove: true });
+          if (ground.length) {
+            const nearestBr = w.map.bridges.reduce((b, br) => (Math.hypot(br.x - hx, br.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? br : b), w.map.bridges[0]);
+            const [bx, by] = this.bank(nearestBr, 6);
+            this.cmd({ type: 'move', ids: ground.map((u) => u.id), x: bx, y: by });
+          }
+          this.lastWave = w.tick;
+          return;
         }
-        this.lastWave = w.tick;
-        return;
+        const flank = micro > 0 && this.rng.next() < doc.flank * (micro >= 2 ? 1 : 0.6);
+        let body = fighters.map((u) => u.id);
+        let wing: number[] = [];
+        if (flank && fighters.length >= 8) {
+          // the fastest third swings round a flank while the main body pins the front
+          const sorted = [...fighters].sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
+          wing = sorted.slice(0, Math.floor(sorted.length / 3)).map((u) => u.id);
+          body = body.filter((id) => !wing.includes(id));
+        }
+        const front = micro > 0 ? this.pickLane(flank && !wing.length) : null;
+        const wingLane = wing.length ? this.pickLane(true, front?.key) : null;
+        // feint: a few cheap fighters show themselves on another lane shortly before the main push
+        const feintLane = micro > 0 && openLanes.length >= 2 && body.length >= 6 && this.rng.next() < FEINT[this.difficulty] ? this.pickLane(true, front?.key ?? '') : null;
+        if (feintLane && feintLane.key !== wingLane?.key) {
+          const fe = body
+            .map((id) => w.get(id)!)
+            .sort((a, b) => cost(a.def) - cost(b.def) || unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id)
+            .slice(0, Math.min(3, Math.floor(body.length / 4)))
+            .map((u) => u.id);
+          body = body.filter((id) => !fe.includes(id));
+          this.cmd({ type: 'move', ids: fe, x: feintLane.pos[0], y: feintLane.pos[1], attackMove: true });
+          this.cmd({ type: 'move', ids: fe, x: feintLane.far[0], y: feintLane.far[1], attackMove: true, queue: true });
+          this.cmd({ type: 'move', ids: fe, x: rx, y: ry, queue: true });
+          this.waves.push({ ids: fe, tx: feintLane.far[0], ty: feintLane.far[1], focus: -1, born: w.tick, lane: '', value: 0, killed: 0, feint: true });
+          this.staged = { ids: body, wing, lane: front?.pos ?? null, laneKey: front?.key ?? '', wingLane: wingLane?.pos ?? null, tx, ty, at: w.tick + Math.round(TPS * this.rng.range(10, 22)) };
+          this.setRole([...body, ...wing], 'staged');
+          this.stats.feints++;
+          this.lastWave = w.tick;
+        } else this.launch(body, wing, front?.pos ?? null, front?.key ?? '', wingLane?.pos ?? null, tx, ty, atRally, enemyAir);
       }
-      const flank = micro > 0 && this.rng.next() < doc.flank * (micro >= 2 ? 1 : 0.6);
-      const main = fighters.map((u) => u.id);
-      let wing: number[] = [];
-      if (flank && fighters.length >= 8) {
-        // the fastest third swings round a flank while the main body pins the front
-        const sorted = [...fighters].sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
-        wing = sorted.slice(0, Math.floor(sorted.length / 3)).map((u) => u.id);
-      }
-      const body = main.filter((id) => !wing.includes(id));
-      const frontLane = micro > 0 ? this.pickLane(flank && !wing.length) : null;
-      this.send(body, frontLane, tx, ty);
-      if (wing.length) this.send(wing, this.pickLane(true), tx, ty);
-      // escorts: AA when the enemy flies, EW / recovery vehicles always
-      const leader = body
-        .map((id) => w.get(id)!)
-        .sort((a, b) => b.maxHp - a.maxHp || a.id - b.id)[0];
-      if (leader) {
-        const esc = atRally.filter((u) => {
-          const k = klass(u.def);
-          return k === 'support' || (k === 'aa' && enemyAir > 0);
-        });
-        const nAA = Math.max(1, Math.ceil(body.length / 4));
-        let aa = 0;
-        const ids = esc.filter((u) => klass(u.def) !== 'aa' || aa++ < nAA).map((u) => u.id);
-        if (ids.length) this.cmd({ type: 'guard', ids, target: leader.id });
-      }
-      // artillery follows behind the wave
-      let arty = atRally.filter((u) => klass(u.def) === 'arty').map((u) => u.id);
-      // after a grace the guns massed at home go out a few at a time with the growing waves
-      if (ramp) arty = arty.slice(0, Math.max(1, Math.ceil(body.length / 4)));
-      this.waves.push({ ids: [...body, ...wing, ...arty], tx, ty, focus: -1, born: w.tick });
-      if (this.waves.length > 3) this.waves.shift();
-      this.lastWave = w.tick;
-      this.waveSize = Math.min(this.cfg.maxWave, this.waveSize + this.cfg.waveGrowth);
     }
     // units that finished an attack-move far from home keep pushing toward the next target
     const deep = idle.filter((u) => Math.hypot(u.x - hx, u.y - hy) >= 22 && klass(u.def) !== 'arty');
@@ -1269,6 +1721,105 @@ export class AIController implements Controller {
         this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
       }
     }
+  }
+
+  /** The held main body goes now (those still alive and not pulled into the base's defence). */
+  private launchStaged(atRally: Entity[], enemyAir: number) {
+    const s = this.staged!;
+    this.staged = null;
+    const ok = (id: number) => {
+      const u = this.world.get(id);
+      return !!u && this.roleOf(u) === 'staged';
+    };
+    const body = s.ids.filter(ok);
+    const wing = s.wing.filter(ok);
+    this.setRole([...s.ids, ...s.wing], 'army');
+    if (body.length + wing.length === 0) return;
+    this.launch(body, wing, s.lane, s.laneKey, s.wingLane, s.tx, s.ty, atRally, enemyAir);
+  }
+
+  private launch(body: number[], wing: number[], lane: [number, number] | null, laneKey: string, wingLane: [number, number] | null, tx: number, ty: number, atRally: Entity[], enemyAir: number) {
+    const w = this.world;
+    this.send(body, lane, tx, ty);
+    if (wing.length) this.send(wing, wingLane, tx, ty);
+    // escorts: AA when the enemy flies, EW / recovery vehicles always
+    const leader = [...body, ...wing]
+      .map((id) => w.get(id)!)
+      .sort((a, b) => b.maxHp - a.maxHp || a.id - b.id)[0];
+    if (leader) {
+      const esc = atRally.filter((u) => {
+        const k = klass(u.def);
+        return k === 'support' || (k === 'aa' && enemyAir > 0);
+      });
+      const nAA = Math.max(1, Math.ceil(body.length / 4));
+      let aa = 0;
+      const ids = esc.filter((u) => klass(u.def) !== 'aa' || aa++ < nAA).map((u) => u.id);
+      if (ids.length) this.cmd({ type: 'guard', ids, target: leader.id });
+    }
+    // artillery follows behind the wave
+    let arty = atRally.filter((u) => klass(u.def) === 'arty').map((u) => u.id);
+    // after a grace the guns massed at home go out a few at a time with the growing waves
+    if (this.peaceUntil > 0) arty = arty.slice(0, Math.max(1, Math.ceil(body.length / 4)));
+    const ids = [...body, ...wing, ...arty];
+    let value = 0;
+    for (const id of ids) value += cost(w.get(id)?.def ?? '');
+    this.waves.push({ ids, tx, ty, focus: -1, born: w.tick, lane: laneKey, value, killed: 0 });
+    while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
+    this.lastWave = w.tick;
+    if (this.stats.firstWave < 0) this.stats.firstWave = w.tick;
+    this.stats.waves++;
+    this.stats.lanes.push(laneKey);
+    for (const [k, v] of this.lanePenalty) this.lanePenalty.set(k, v * 0.7);
+    this.waveSize = Math.min(this.cfg.maxWave, this.waveSize + this.cfg.waveGrowth);
+    // irregular timing: no metronome, no fixed size
+    this.waveJitter = this.rng.int(4) - 1;
+    this.waveNotBefore = w.tick + Math.round(TPS * this.rng.range(0, 40));
+    this.waveStale = Math.round(TPS * this.rng.range(180, 300) * this.planCfg.stale);
+  }
+
+  /**
+   * Lane / outcome memory: a wave that lost most of its value for little seen in return marks its lane, makes
+   * the next wave bigger and the production lean harder on counters for a while; repeated bad trades switch plan.
+   */
+  private judgeWave(wv: Wave) {
+    if (wv.feint || wv.value <= 0) return;
+    const w = this.world;
+    let alive = 0;
+    for (const id of wv.ids) alive += cost(w.get(id)?.def ?? '');
+    const lost = wv.value - alive;
+    wv.value = 0; // judged once
+    if (lost > (lost + alive) * 0.6 && wv.killed < lost * 0.6) {
+      this.stats.badTrades++;
+      if (wv.lane) this.lanePenalty.set(wv.lane, (this.lanePenalty.get(wv.lane) ?? 0) + 1);
+      this.waveSize = Math.min(this.cfg.maxWave, this.waveSize + 2);
+      this.adaptBoost = 0.6;
+      this.adaptBoostUntil = w.tick + TPS * 240;
+      this.planBad++;
+      this.maybeSwitchPlan();
+    } else if (wv.killed > lost) this.planBad = Math.max(0, this.planBad - 1);
+  }
+
+  /** Retire waves: judge each once, when it is wiped out or after its fight (150 s); forget the wiped out. */
+  private retireWaves() {
+    const w = this.world;
+    for (const wv of this.waves) if (wv.value > 0 && (w.tick - wv.born > TPS * 150 || !wv.ids.some((id) => w.get(id)))) this.judgeWave(wv);
+    this.waves = this.waves.filter((wv) => wv.ids.some((id) => w.get(id)));
+  }
+
+  /** The plan is failing (waves keep trading badly): pick another one the arsenal supports (not on Easy). */
+  private maybeSwitchPlan() {
+    const w = this.world;
+    if (this.cfg.micro === 0 || this.planBad < 2 || w.tick - this.planSince < TPS * 300) return;
+    const next = pickPlan(this.rng, planWeights(this.p.faction, this.doctrine, this.difficulty), this.plan);
+    if (next === this.plan) return;
+    const old = this.planCfg;
+    this.plan = next;
+    this.planCfg = PLAN_CFG[next];
+    this.planLog.push(next);
+    this.planSince = w.tick;
+    this.planBad = 0;
+    this.buildOrder = buildOrderFor(this.rng, next);
+    this.waveSize = Math.min(this.cfg.maxWave, Math.max(4, Math.round((this.waveSize * this.planCfg.wave) / old.wave)));
   }
 
   /** Send a group by a lane: attack-move to our bank of the bridge, then on to the objective (queued waypoints). */
@@ -1339,10 +1890,12 @@ export class AIController implements Controller {
       const back = Math.min(range * 0.6, 5);
       const sx = fx + (dx / len) * back;
       const sy = fy + (dy / len) * back;
-      if (Math.hypot(u.x - sx, u.y - sy) > 3) this.cmd({ type: 'move', ids: [u.id], x: sx, y: sy });
+      if (Math.hypot(u.x - sx, u.y - sy) > 3) {
+        // the guns take the high ground near their standoff point
+        const [gx, gy] = this.highSpot(sx, sy, 2);
+        this.cmd({ type: 'move', ids: [u.id], x: gx, y: gy });
+      }
     }
-    // waves whose fighters are all gone
-    this.waves = this.waves.filter((wv) => wv.ids.some((id) => w.get(id)));
   }
 
   /**
