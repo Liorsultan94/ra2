@@ -53,6 +53,8 @@ export interface GameMap {
   techSites?: { def: string; at: [number, number][] }[];
   /** Extra AI attack lanes (fords, passes, avenues) besides the bridges (ai.ts). */
   lanes?: Point[];
+  /** 1 on land that no ground unit can reach on purpose (offshore islands): kept open, never sealed with trees. */
+  offshore?: Uint8Array;
   /** Render-only hints of the hand-designed maps (road widths, tracks, plazas, parks, rubble lots). */
   deco?: MapDeco;
 }
@@ -95,7 +97,25 @@ export interface SeaDeco {
   resort: { u0: number; u1: number; v0: number; v1: number };
   /** The bathing beach's along-coast stretch. */
   beach: [number, number];
+  /**
+   * An offshore island (sim land: a sandy rim, a rocky knoll the lighthouse stands on), ringed by a reef flat
+   * and cut off from the mainland by water: centre (u, v) and the radii of its wobbly ellipse along and across
+   * the coast. No ground unit can reach it (GameMap.offshore; World.region).
+   */
+  isle?: { u: number; v: number; ru: number; rv: number };
 }
+
+/** Signed distance (tiles; < 0 on the island) from frame point (u, v) to the offshore island's shore. */
+export function isleDist(isle: NonNullable<SeaDeco['isle']>, u: number, v: number) {
+  const du = (u - isle.u) / isle.ru;
+  const dv = (v - isle.v) / isle.rv;
+  const a = Math.atan2(dv, du);
+  const e = Math.hypot(du, dv) * (1 + 0.1 * Math.sin(3 * a + 1.3) + 0.06 * Math.sin(5 * a + 0.4));
+  return (e - 1) * Math.min(isle.ru, isle.rv);
+}
+
+/** The rocky knoll in the island's middle (impassable rock): isleDist below this. */
+export const ISLE_KNOLL = -1.25;
 
 /** The coastline's wiggle along u (shared by the map and the world past its edge). */
 export function coastWiggle(u: number) {
@@ -286,7 +306,7 @@ export function sealPockets(m: GameMap): number {
   for (let i = 0; i < W * H; i++) {
     const x = i % W;
     const y = (i / W) | 0;
-    if (seen[i] || !terrainPassable(m, x, y) || m.tiles[i] === Tile.Bridge) continue;
+    if (seen[i] || !terrainPassable(m, x, y) || m.tiles[i] === Tile.Bridge || m.offshore?.[i]) continue;
     // (the same kind on both mirrored tiles)
     m.trees[i] = hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y), 6) < 0.5 ? 1 : 2;
     m.ore[i] = 0;

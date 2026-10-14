@@ -84,12 +84,12 @@ describe('building placement', () => {
     }
   }, 25000);
 
-  it('has no walkable pocket the armies can never reach, on any map', () => {
+  it('has no walkable pocket the armies can never reach, on any map (bar the offshore islands, on purpose)', () => {
     for (const [id, seed] of CASES) {
       const m = createMap(id, seed);
       const seen = reach(m);
       let cut = 0;
-      for (let i = 0; i < m.w * m.h; i++) if (!seen[i] && terrainPassable(m, i % m.w, (i / m.w) | 0)) cut++;
+      for (let i = 0; i < m.w * m.h; i++) if (!seen[i] && !m.offshore?.[i] && terrainPassable(m, i % m.w, (i / m.w) | 0)) cut++;
       expect(cut, `${id}#${seed}`).toBe(0);
       expect(seen[m.starts[1].y * m.w + m.starts[1].x]).toBe(1);
     }

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, coastV, seaFrame, seaPointAt, type GameMap, type SeaDeco } from '../sim/map';
+import { ISLE_KNOLL, Tile, WATER_LEVEL, coastV, isleDist, seaFrame, seaPointAt, type GameMap, type SeaDeco } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
@@ -117,6 +117,8 @@ export class Seaside {
   private _s = new THREE.Vector3();
   /** The corals, fish and the wreck's sunken part (reeflife.ts). */
   reef: ReefLife | null = null;
+  /** The lighthouses' lanterns (one per island): the night beam sweeps from here (nightLights). */
+  private lanterns: { x: number; y: number; z: number; ph: number }[] = [];
 
   constructor(
     private map: GameMap,
@@ -137,6 +139,7 @@ export class Seaside {
       const beds: Lounger[] = [];
       this.buildResort(k, F, parasols, loungers, beds);
       this.buildBeach(k, F, parasols, loungers, beds);
+      this.buildIsle(k, F);
       // the wreck on the Blue Hole's rim: the whole hull here (the water hides what is under it; reeflife.ts
       // draws the sunken part again through the water)
       const wr = buildWreck(F.P);
@@ -831,6 +834,98 @@ export class Seaside {
     }
   }
 
+  /**
+   * The offshore island (sim land, sim/maps.ts DESERT_SEA.isle): granite boulders and scrub on its rocky knoll, a
+   * striped lighthouse with a gallery and a glazed lantern room on top (the lantern glows at night), the keeper's
+   * white hut, a small landing stage on the lee side; the night beam goes through the night light pools (nightLights).
+   */
+  private buildIsle(k: Kit, F: Frame) {
+    const isle = this.sea.isle;
+    if (!isle) return;
+    const b = F.b;
+    const h = (i: number, j: number) => hash2(i, j + b * 191, 4471);
+    const yAt = (u: number, v: number) => {
+      const p = F.P(u, v);
+      return this.gh(p.x, p.y);
+    };
+    // the lighthouse on the knoll's crown
+    const lu = isle.u + 0.2;
+    const lv = isle.v - 0.1;
+    const base = yAt(lu, lv) - 0.04;
+    this.at(k, F, lu, lv, base);
+    k.cyl(0.3, 0.3, 0.1, 0, 0, 0, 0xb8b0a0, 10);
+    const bands = 6;
+    const H = 1.75;
+    for (let i = 0; i < bands; i++) {
+      const t0 = i / bands;
+      const t1 = (i + 1) / bands;
+      const r0 = 0.19 - 0.065 * t0;
+      const r1 = 0.19 - 0.065 * t1;
+      k.cyl(r0, r1, H / bands, 0, 0.1 + t0 * H, 0, i % 2 ? 0xc8342a : 0xf2f0ea, 14);
+    }
+    // gallery, railing, the glazed lantern room (glows at night), its dome and vane
+    const top = 0.1 + H;
+    k.cyl(0.2, 0.2, 0.035, 0, top, 0, 0x2c2e30, 14);
+    k.cyl(0.2, 0.2, 0.07, 0, top + 0.035, 0, 0x2c2e30, 14, 0, true);
+    k.cyl(0.1, 0.1, 0.16, 0, top + 0.035, 0, 0xffe6b0, 10, 1);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      k.box(0.012, 0.16, 0.012, Math.cos(a) * 0.1, top + 0.115, Math.sin(a) * 0.1, 0x2c2e30);
+    }
+    k.dome(0.11, 0, top + 0.195, 0, 0xb02a22, 12);
+    k.cyl(0.006, 0.006, 0.12, 0, top + 0.3, 0, 0x2c2e30, 4);
+    // a door and two small windows up the tower
+    k.box(0.08, 0.16, 0.02, 0, 0.18, -0.19, 0x3a2a20);
+    for (const y of [0.7, 1.15]) k.box(0.05, 0.08, 0.02, 0, 0.1 + y, -0.17 + y * 0.04, 0x1c2024);
+    // the keeper's hut beside it
+    const hu = lu - 0.75;
+    const hv = lv + 0.15;
+    this.at(k, F, hu, hv, yAt(hu, hv) - 0.03);
+    k.box(0.5, 0.26, 0.36, 0, 0.13, 0, 0xf2efe6);
+    k.box(0.54, 0.03, 0.4, 0, 0.27, 0, 0xb05a3a);
+    k.box(0.1, 0.16, 0.02, 0.1, 0.08, -0.185, 0x2f5f8f);
+    k.box(0.08, 0.07, 0.02, -0.12, 0.15, -0.185, 0x1c2024);
+    k.cyl(0.05, 0.05, 0.1, 0.18, 0.28, 0.1, 0x1a1a1c, 8);
+    // granite boulders on the knoll and the rim, scrub between
+    for (let i = 0; i < 16; i++) {
+      const a = h(i, 1) * Math.PI * 2;
+      const rr = 0.25 + h(i, 2) * 0.95;
+      const u = isle.u + Math.cos(a) * rr * isle.ru;
+      const v = isle.v + Math.sin(a) * rr * isle.rv;
+      const d = isleDist(isle, u, v);
+      if (d > -0.15 || Math.hypot(u - lu, v - lv) < 0.45 || Math.hypot(u - hu, v - hv) < 0.45) continue;
+      this.at(k, F, u, v, yAt(u, v) - 0.03, h(i, 3) * 6);
+      if (d < ISLE_KNOLL + 0.3 || h(i, 4) < 0.5) {
+        const s = 0.09 + h(i, 5) * 0.14;
+        k.ball(s, 0, s * 0.45, 0, [0x7a6458, 0x8a7062, 0x6a5a52][Math.floor(h(i, 6) * 3)], 0);
+      } else {
+        k.ball(0.07 + h(i, 7) * 0.05, 0, 0.05, 0, 0x6a7a42, 0);
+        k.ball(0.05, 0.06, 0.04, 0.03, 0x7a8a4a, 0);
+      }
+    }
+    // a landing stage on the lee (coast) side: a short concrete jetty with a mooring post and a dinghy
+    const ju = isle.u - 0.4;
+    const jv = isle.v - isle.rv - 0.4;
+    const dj = isleDist(isle, ju, jv + 0.6);
+    if (dj < 0) {
+      for (let s = 0; s < 3; s++) {
+        const v = jv + 0.55 - s * 0.32;
+        this.at(k, F, ju, v, WATER_LEVEL + 0.1);
+        k.box(0.32, 0.06, 0.33, 0, 0, 0, s % 2 ? 0xbcb6aa : 0xc8c2b6);
+        k.box(0.04, 0.4, 0.04, 0.12, -0.2, 0, 0x8a8478);
+        k.box(0.04, 0.4, 0.04, -0.12, -0.2, 0, 0x8a8478);
+      }
+      this.at(k, F, ju + 0.12, jv - 0.06, WATER_LEVEL + 0.13);
+      k.cyl(0.02, 0.02, 0.08, 0, 0, 0, 0x2c2e30, 6);
+      this.at(k, F, ju + 0.4, jv - 0.05, WATER_LEVEL + 0.02, 0.2);
+      k.box(0.36, 0.05, 0.14, 0, 0, 0, 0xf2f0ea);
+      k.box(0.37, 0.02, 0.15, 0, -0.03, 0, 0x2a6fc0);
+    }
+    // the lantern: the night beam sweeps from here (nightLights)
+    const lp = F.P(lu, lv);
+    this.lanterns.push({ x: lp.x, y: base + top + 0.11, z: lp.y, ph: b * Math.PI });
+  }
+
   // ------------------------------------------------------------------ people
 
   private populate(F: Frame, beds: Lounger[]) {
@@ -1066,9 +1161,15 @@ export class Seaside {
 
   /** NightLights hook (renderer.ts): soft warm pools under the promenade's lamps and string lights, tiny flares on the lamps. */
   nightLights(n: NightLights, dark: number, time = 0) {
-    void time;
     if (dark < 0.05 || this.quality === 'low') return;
     const k = Math.min(1, dark * 1.3);
+    // the lighthouses: a soft beam turning once every ~13 s, a faint inner core, a small glow at the lantern
+    for (const L of this.lanterns) {
+      const yaw = time * 0.48 + L.ph;
+      n.cone(L.x, L.y, L.z, yaw, -0.02, 9.5, 0.55, 0.17 * k, 0.15 * k, 0.11 * k);
+      n.cone(L.x, L.y, L.z, yaw, -0.02, 6, 0.22, 0.13 * k, 0.12 * k, 0.08 * k);
+      n.flare(L.x, L.y, L.z, 0.26, 0.75 * k, 0.6 * k, 0.36 * k);
+    }
     for (const s of this.glowSpots) {
       n.pool(s.x, s.y, s.z, 0, s.r * 2, s.r * 2, 0.17 * k, 0.11 * k, 0.05 * k);
       if (s.lamp) n.flare(s.x, s.y + 0.39, s.z, 0.13, 0.7 * k, 0.5 * k, 0.26 * k);

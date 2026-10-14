@@ -91,6 +91,28 @@ export const WEAPON_SWAP = TPS;
 export const MOVE_FIRE_ROF = 1.4;
 
 // Precomputed offsets sorted by distance, used for formations and spiral searches.
+/** Connected regions of passable tiles (4-neighbour flood fills, numbered from 1; 0 = impassable). */
+function groundRegions(w: number, h: number, pass: Uint8Array): Uint16Array {
+  const reg = new Uint16Array(w * h);
+  let n = 0;
+  const q: number[] = [];
+  for (let i0 = 0; i0 < w * h; i0++) {
+    if (!pass[i0] || reg[i0]) continue;
+    reg[i0] = ++n;
+    q.push(i0);
+    while (q.length) {
+      const t = q.pop()!;
+      const x = t % w;
+      for (const j of [x > 0 ? t - 1 : -1, x < w - 1 ? t + 1 : -1, t - w, t + w]) {
+        if (j < 0 || j >= w * h || !pass[j] || reg[j]) continue;
+        reg[j] = n;
+        q.push(j);
+      }
+    }
+  }
+  return reg;
+}
+
 const SPIRAL: [number, number][] = (() => {
   const out: [number, number, number][] = [];
   for (let y = -12; y <= 12; y++) for (let x = -12; x <= 12; x++) out.push([x, y, x * x + y * y + (x + y) * 0.001]);
@@ -135,6 +157,13 @@ export class World {
   tick = 0;
   rng: Rng;
   pass: Uint8Array;
+  /**
+   * Ground region of every tile: terrain-passable land connected by ground (0 = impassable). The bases stand in
+   * `mainland`; an offshore island (Wadi Al-Rimal's lighthouse islands) is a region of its own that no ground
+   * unit can reach, so move orders, spawn spots and the AI's picks keep to the region they start from.
+   */
+  region: Uint16Array;
+  mainland = 0;
   occ: Int32Array;
   pf: PathFinder;
   controllers: Controller[] = [];
@@ -180,6 +209,9 @@ export class World {
     this.pass = new Uint8Array(w * h);
     this.occ = new Int32Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) this.pass[y * w + x] = terrainPassable(this.map, x, y) ? 1 : 0;
+    this.region = groundRegions(w, h, this.pass);
+    const s0 = this.map.starts[0];
+    this.mainland = this.region[s0.y * w + s0.x];
     this.pf = new PathFinder(w, h, this.pass);
     this.gridW = Math.ceil(w / SPATIAL_CELL);
     this.gridH = Math.ceil(h / SPATIAL_CELL);
@@ -547,14 +579,23 @@ export class World {
     return this.players[player].visible[ty * w + tx] > 0;
   }
 
-  nearestPassable(x: number, y: number, maxR = 12): [number, number] | null {
+  /** The nearest passable tile within maxR; with `region`, only tiles of that ground region. */
+  nearestPassable(x: number, y: number, maxR = 12, region = 0): [number, number] | null {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
     for (const [ox, oy] of SPIRAL) {
       if (Math.abs(ox) > maxR || Math.abs(oy) > maxR) continue;
-      if (this.pf.passable(tx + ox, ty + oy)) return [tx + ox, ty + oy];
+      if (this.pf.passable(tx + ox, ty + oy) && (!region || this.region[(ty + oy) * this.map.w + tx + ox] === region)) return [tx + ox, ty + oy];
     }
     return null;
+  }
+
+  /** Ground region a ground unit stands in (the mainland when it stands on no passable tile). */
+  regionOf(x: number, y: number): number {
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) return this.mainland;
+    return this.region[ty * this.map.w + tx] || this.mainland;
   }
 
   queryRadius(x: number, y: number, r: number, cb: (e: Entity) => void) {
@@ -999,10 +1040,12 @@ export class World {
       let ty = gy;
       let slot = 0;
       const air = !!d.air;
+      // (ground units only ever head for land they can reach)
+      const home = air ? 0 : this.regionOf(e.x, e.y);
       for (const [ox, oy] of SPIRAL) {
         const cx = gx + ox;
         const cy = gy + oy;
-        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !this.pf.passable(cx, cy)) continue;
+        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !this.pf.passable(cx, cy) || this.region[cy * w + cx] !== home) continue;
         const i = cy * w + cx + (air ? 1e6 : 0);
         const used = taken.get(i) ?? 0;
         // infantry and vehicles don't share tiles
@@ -2181,7 +2224,7 @@ export class World {
     let sx = factory.tx + ex[0];
     let sy = factory.ty + ex[1];
     if (!d.air && !this.pf.passable(sx, sy)) {
-      const np = this.nearestPassable(sx + 0.5, sy + 0.5);
+      const np = this.nearestPassable(sx + 0.5, sy + 0.5, 12, this.regionOf(factory.x, factory.y));
       if (!np) return;
       [sx, sy] = np;
     }

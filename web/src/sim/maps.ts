@@ -26,6 +26,8 @@ import {
   coastV,
   coastWiggle as coastWiggleOf,
   seaFrame,
+  isleDist,
+  ISLE_KNOLL,
   type SeaDeco,
   type Biome,
   type GameMap,
@@ -389,7 +391,7 @@ const mirrorRects = <T extends { x0: number; y0: number; x1: number; y1: number 
 function assemble(
   base: { name: string; id: MapId; biome: Biome },
   g: Grids,
-  more: Pick<GameMap, 'oreMines' | 'starts' | 'oils' | 'bridges' | 'roads' | 'structures' | 'blocked' | 'techSites' | 'lanes' | 'deco'>,
+  more: Pick<GameMap, 'oreMines' | 'starts' | 'oils' | 'bridges' | 'roads' | 'structures' | 'blocked' | 'techSites' | 'lanes' | 'deco' | 'offshore'>,
 ): GameMap {
   return { ...base, w: W, h: H, tiles: g.tiles, heights: g.heights, trees: g.trees, ore: g.ore, oreKind: g.oreKind, ...more };
 }
@@ -469,7 +471,7 @@ export function createDesertMap(seed: number): GameMap {
     [starts[0], T(24, 77), T(35, 74), T(40, 62), ring(135, 135)[0]],
     ring(45, 225),
     [starts[0], T(33, 91), T(50, 88), T(58, 81), T(66, 73), T(72, 64)],
-    // the town's streets: the high street from the ring's south side, cross streets off the highway
+    // the town's streets: the high street from the ring's south side, a cross street east of it
     [ring(90, 90)[0], { x: 63, y: 73 }, { x: 63, y: 92 }],
     ...DESERT_TOWN_STREETS,
   ];
@@ -478,7 +480,8 @@ export function createDesertMap(seed: number): GameMap {
   const roadKind = (i: number) => Math.min(3, i % r0.length);
   const tracks0 = [
     [starts[0], T(9, 70), T(8, 57), T(13, 47), T(22, 41), T(30, 40)],
-    [T(40, 62), T(30, 54), T(25, 47)],
+    // (it stops short of the highway: a junction on the highway's bend swings the turning cars wide)
+    [{ x: T(40, 62).x - 2.73, y: T(40, 62).y - 2.17 }, T(30, 54), T(25, 47)],
     ...DESERT_TRACKS_EXTRA,
   ];
 
@@ -573,6 +576,7 @@ export function createDesertMap(seed: number): GameMap {
       const wd = wadi.dist(x, y);
       const bd = branchDist(x, y);
       if (wd < 2.4 || bd < 1.3) t = Tile.Dirt; // the wadi floor: gravel and cracked mud
+      else if (townGround(x, y) > 0.5 && wd > 5) t = Tile.Dirt; // the town quarter's packed earth and gravel yards
       else if ((wd < 4.6 || bd < 2.9) && symNoise(x, y, 0.2, NS + 6) > 0.48) t = Tile.Grass; // scrub on its banks
       for (const o of oases) {
         const d = Math.hypot(x - o.x, y - o.y);
@@ -691,7 +695,15 @@ export function createDesertMap(seed: number): GameMap {
   deco.trees.push(...beachPalms(sea, g, NS));
   deco.sea = sea;
 
+  const offshore = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const f = seaFrame(W, H, sea.off, x + 0.5, y + 0.5, seaF);
+      if (sea.isle && isleDist(sea.isle, f.u, f.v) < 0) offshore[y * W + x] = 1;
+    }
+
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
+    offshore,
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
     starts,
     oils,
@@ -768,8 +780,8 @@ function townGround(x: number, y: number) {
 }
 /** Cross streets of the town quarter south of the ring road (tile index space; the high street is built off the ring). */
 const DESERT_TOWN_STREETS: Point[][] = [
-  [{ x: 54.4, y: 80 }, { x: 78, y: 80 }],
-  [{ x: 51.3, y: 88 }, { x: 76, y: 88 }],
+  // (east of the high street only: off the highway it would meet it right by the highway's bend)
+  [{ x: 63, y: 80 }, { x: 78, y: 80 }],
 ];
 /**
  * The town quarter (player 0's half, south of the ring road; mirrored). Blocks two houses deep between the
@@ -868,6 +880,9 @@ const DESERT_SEA: SeaDeco = {
   ],
   resort: { u0: -19.5, u1: -7.5, v0: -11.5, v1: -4.8 },
   beach: [-24, 2.5],
+  // Tiran-like: low and rocky with sandy edges, off the cove's mouth between the headlands, past the reef's
+  // drop-off (some 3 tiles of water from the shore reef and the headland tips; the Blue Hole's lagoon to its west)
+  isle: { u: 11.8, v: 7.0, ru: 2.8, rv: 2.15 },
 };
 /** Reef shelf width (tiles from the waterline) and the open sea's floor. */
 const REEF = 3.6;
@@ -899,7 +914,7 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
   if (ve > -10) {
     if (ve > 0) {
       // the reef flat, shelving gently, then the drop-off into the deep (open sea only, not the cove)
-      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + (hash2(vx, vy, ns + 61) - 0.5) * 0.03;
+      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + ((hash2(vx, vy, ns + 61) + hash2(W - vx, H - vy, ns + 61)) / 2 - 0.5) * 0.03;
       h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 2.2, v);
     } else {
       // the beach rises from the waterline into the dunes
@@ -918,6 +933,18 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
     const top = hd.top * (0.7 + 0.3 * smoothstep(0, 0.6, t)) + ((hash2(vx, vy, ns + 63) + hash2(W - vx, H - vy, ns + 63)) / 2 - 0.5) * 0.15;
     h = h + (top - h) * (1 - smoothstep(hd.r - 0.45, hd.r + 0.7, d));
   }
+  if (sea.isle) {
+    const d = isleDist(sea.isle, u, v);
+    if (d < 4.5) {
+      const n = ((hash2(vx, vy, ns + 65) + hash2(W - vx, H - vy, ns + 65)) / 2 - 0.5) * 0.08;
+      // the island: a low sandy rim rising to the rocky knoll; round it the reef flat, then the drop-off
+      const ih =
+        d < 0
+          ? WATER_LEVEL + 0.06 + Math.min(-d, 1.2) * 0.17 + smoothstep(-ISLE_KNOLL - 0.35, -ISLE_KNOLL + 0.5, -d) * 0.2 + n * smoothstep(0.4, 1.2, -d)
+          : WATER_LEVEL + 0.06 - 0.25 * smoothstep(0, 0.7, d) - 0.05 * Math.min(d, 1.6) + n * 0.2;
+      h = Math.max(h, ih + (SEA_FLOOR - ih) * smoothstep(1.7, 3.8, d));
+    }
+  }
   return h;
 }
 /** Tile type by the sea at a tile centre. */
@@ -925,6 +952,10 @@ function coastTile(sea: SeaDeco, x: number, y: number, t: Tile): Tile {
   const f = seaFrame(W, H, sea.off, x, y, seaF);
   const ve = coastV(sea, f.u, f.v);
   for (const hd of sea.heads) if (headDist(hd, f.u, f.v) < hd.r + 0.1) return Tile.Rock;
+  if (sea.isle) {
+    const d = isleDist(sea.isle, f.u, f.v);
+    if (d < 0) return d < ISLE_KNOLL ? Tile.Rock : d < -0.6 ? Tile.Dirt : Tile.Sand;
+  }
   if (ve > 0) return Tile.Water;
   if (inResort(sea, x, y)) return Tile.Dirt;
   if (ve > -4.4) return Tile.Sand;
