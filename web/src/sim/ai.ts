@@ -4,6 +4,7 @@ import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
+import { inDockApron } from './harvest';
 import { WATER_LEVEL, groundHeight } from './map';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
@@ -775,6 +776,7 @@ export class AIController implements Controller {
           const ty = flip ? map.h - cty - d.h : cty;
           if (!w.canPlace(this.pid, defId, tx, ty)) continue;
           if (d.category !== 'defense' && !this.hasClearance(tx, ty, d.w, d.h)) continue;
+          if (this.blocksDock(defId, tx, ty, d.w, d.h)) continue;
           let score = Math.hypot(tx + d.w / 2 - bx, ty + d.h / 2 - by);
           // defences prefer the high ground (a commanding position) within a few tiles
           if (d.category === 'defense') score -= this.hNorm(tx + d.w / 2, ty + d.h / 2) * 2;
@@ -789,6 +791,33 @@ export class AIController implements Controller {
       if (best && (oreX < 0 || r > 10) && (d.category !== 'defense' || r >= foundAt + 3)) break;
     }
     return best;
+  }
+
+  /**
+   * Never wall in a refinery's dock: no footprint on the lane / apron in front of one of our refineries, and
+   * a new refinery only where its own apron is open ground (else its harvesters queue at a dead end).
+   */
+  private blocksDock(defId: string, tx: number, ty: number, bw: number, bh: number): boolean {
+    const w = this.world;
+    for (const r of w.list) {
+      if (r.dead || r.kind !== 'building' || r.owner !== this.pid || !buildingDef(r.def).dock) continue;
+      const rd = buildingDef(r.def);
+      // only refineries within reach of this footprint
+      if (tx > r.tx + rd.w + 5 || tx + bw < r.tx - 5 || ty > r.ty + rd.h + 5 || ty + bh < r.ty - 5) continue;
+      for (let y = ty; y < ty + bh; y++) for (let x = tx; x < tx + bw; x++) if (inDockApron(r.def, r.tx, r.ty, x, y)) return true;
+    }
+    if (buildingDef(defId).dock) {
+      const { map } = w;
+      const d = buildingDef(defId);
+      for (let y = ty + d.h - 1; y <= ty + d.h + 4; y++)
+        for (let x = tx - 2; x <= tx + d.w + 1; x++) {
+          if (!inDockApron(defId, tx, ty, x, y)) continue;
+          if (x < 0 || y < 0 || x >= map.w || y >= map.h) return true;
+          if (x >= tx && x < tx + d.w && y >= ty && y < ty + d.h) continue;
+          if (!w.pf.passable(x, y) || w.occ[y * map.w + x] !== 0) return true;
+        }
+    }
+    return false;
   }
 
   /** Keep a one-tile walkable ring around new buildings so the base doesn't seal itself in. */

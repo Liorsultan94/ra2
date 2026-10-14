@@ -91,6 +91,19 @@ function laneOf(ref: Entity): { ex: number; ey: number; sx: number; sy: number }
   return { ex: ref.tx + exit[0], ey: ref.ty + exit[1], sx, sy };
 }
 
+/**
+ * Is tile (x, y) on the dock lane or the apron in front of a refinery of type `def` placed at (tx, ty)
+ * (the 3-wide strip four tiles out from the exit, which harvesters need to drive in and out)?
+ */
+export function inDockApron(def: string, tx: number, ty: number, x: number, y: number): boolean {
+  const bd = buildingDef(def);
+  if (!bd.dock) return false;
+  const l = laneOf({ def, tx, ty } as Entity);
+  const a = (x - (l.ex - l.sx)) * l.sx + (y - (l.ey - l.sy)) * l.sy;
+  const across = Math.abs((x - l.ex) * l.sy) + Math.abs((y - l.ey) * l.sx);
+  return a >= 1 && a <= 4 && across <= 1;
+}
+
 /** Where a harvester leaving the dock drives to: two tiles out along the lane past the exit tile (centre). */
 function apronXY(ref: Entity): [number, number] {
   const l = laneOf(ref);

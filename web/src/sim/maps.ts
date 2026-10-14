@@ -99,6 +99,12 @@ interface Capsule extends Point {
   r: number;
 }
 
+/** Ore regrowth centres of fields built by `half` (player 0's first): rounded on player 0's half, then mirrored (x.5 never rounds apart). */
+function mines(fields: Field[]): Point[] {
+  const own = fields.slice(0, fields.length / 2).map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) }));
+  return [...own, ...own.map(mirror)];
+}
+
 /** Oil derricks are 2 x 2 from their top-left tile: the mirrored footprint starts one tile further in. */
 const halfOils = (arr: Point[]): Point[] => [...arr, ...arr.map((p) => ({ x: W - 2 - p.x, y: H - 2 - p.y }))];
 
@@ -678,7 +684,7 @@ export function createDesertMap(seed: number): GameMap {
   deco.sea = sea;
 
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
-    oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
+    oreMines: mines(oreFields),
     starts,
     oils,
     bridges: [],
@@ -1028,7 +1034,7 @@ export function createWinterMap(seed: number): GameMap {
   deco.power.push(...mirrorLines(deco.power));
 
   return assemble({ name: 'Frozen Pass', id: 'winter', biome: 'winter' }, g, {
-    oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
+    oreMines: mines(oreFields),
     starts,
     oils,
     bridges: diagonalBridges(river, bridgeS, 7.5),
@@ -1322,7 +1328,7 @@ export function createUrbanMap(seed: number): GameMap {
   void street;
 
   return assemble({ name: 'Canal City', id: 'urban', biome: 'urban' }, g, {
-    oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
+    oreMines: mines(oreFields),
     starts,
     oils,
     bridges,
