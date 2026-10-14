@@ -8,6 +8,7 @@ import { RIVER } from './water';
 import { HZ_CELL, HZ_MARGIN, HZ_RADIUS, horizonWorld, type HorizonWorld } from './horizonworld';
 import { apronHeight } from './apron';
 import { APRON_W } from './ground';
+import { SEA_SCATTER_GLSL } from './bluehole';
 import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /*
@@ -504,6 +505,7 @@ export class Horizon {
         varying vec3 vWorld;
         ${FOG_GLSL}
         ${HZ_GLSL}
+        ${SEA_SCATTER_GLSL}
         float wig( float u ) { return 4.0 * sin( u * 0.045 ) + 2.5 * sin( u * 0.13 + 1.0 ); }
         void main() {
           vec2 p = vWorld.xz;
@@ -559,7 +561,8 @@ export class Horizon {
           vec3 refl = mix( skyHorizon, skyTop, smoothstep( 0.05, 0.8, R.y ) ) * 0.55;
           if ( hzSky > 0.5 ) refl = mix( refl, hzHorizonCol( vWorld ), ( 1.0 - smoothstep( 0.0, 0.25, R.y ) ) * 0.8 );
           vec3 under = mix( wTurq * 0.8, wDeep, 0.55 + 0.45 * depthK );
-          if ( seaTwin > 0.5 ) under = mix( mix( vec3( 0.02, 0.2, 0.2 ) * 0.8, vec3( 0.003, 0.022, 0.11 ), 0.55 + 0.45 * depthK ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
+          // (the in-map sea's depth ramp, water.ts: blue past the drop-off deepening to navy offshore)
+          if ( seaTwin > 0.5 ) under = mix( seaScatter( mix( 0.3, 1.21, smoothstep( 3.6, 5.8, sv ) ) + smoothstep( 6.0, 14.0, sv ) * 0.7 ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
           vec3 col = mix( under, refl, fres );
           col *= wxLight * ( 1.0 - 0.2 * wState.x );
           float sd = max( dot( R, sunDir ), 0.0 );

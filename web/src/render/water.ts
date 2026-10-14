@@ -3,6 +3,7 @@ import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '..
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
+import { LAGOON, LAGOON_GLSL, SEA_SCATTER_GLSL } from './bluehole';
 
 /*
  * The river: a flat, alpha-blended sheet at WATER_LEVEL covering only the
@@ -942,6 +943,8 @@ export class WaterReflection {
   readonly matrix = new THREE.Matrix4();
   /** Water meshes hidden while the reflection renders. */
   readonly meshes: THREE.Mesh[] = [];
+  /** Other objects never in the mirrored image (under the water: the reef life), hidden while it renders. */
+  readonly hide: THREE.Object3D[] = [];
   /** Cleared by the quality ladder when the GPU struggles. */
   enabled = true;
   /** 1 while the target holds a usable image (shader uniform). */
@@ -1038,6 +1041,8 @@ export class WaterReflection {
     renderer.getClearColor(this.clearC);
     const vis = this.meshes.map((m) => m.visible);
     for (const m of this.meshes) m.visible = false;
+    const hid = this.hide.map((m) => m.visible);
+    for (const m of this.hide) m.visible = false;
     renderer.shadowMap.autoUpdate = false;
     scene.background = null;
     renderer.setClearColor(0x000000, 0);
@@ -1075,6 +1080,7 @@ export class WaterReflection {
       T.scissorTest = false;
     }
     this.meshes.forEach((m, i) => (m.visible = vis[i]));
+    this.hide.forEach((m, i) => (m.visible = hid[i]));
     renderer.setClearColor(this.clearC, prevAlpha);
     scene.background = prevBg;
     renderer.shadowMap.autoUpdate = prevShadow;
@@ -1360,6 +1366,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform float fogEnabled;
       varying vec3 vWorld;
       vec2 waveN(vec2 uv) { return texture2D(waveTex, uv).rg * 2.0 - 1.0; }
+      ${LAGOON_GLSL}
+      ${SEA_SCATTER_GLSL}
       void main() {
         vec2 p = vWorld.xz;
         vec2 tuv = p / mapSize;
@@ -1370,13 +1378,18 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // the Red Sea (desert corners): seaward distance from the coast, as the sim's seaFrame
         float seaK = 0.0;
         float seaV = -1e3;
+        // the Blue Hole's lagoon (bluehole.ts): x platform, y water depth for colour, z awash reef, w signed
+        // distance to the hole's drop-off; dV: the depth the water is coloured by (the real one elsewhere)
+        vec4 lag = vec4(0.0, depthW, 0.0, 1e3);
         if (wSea.y > 0.5) {
           vec2 pc = p - wSea.zw;
           if (pc.x + pc.y > 0.0) pc = -pc;
           float su = (pc.x - pc.y) * 0.70711;
           seaV = -(pc.x + pc.y) * 0.70711 - wSea.x + 4.0 * sin(su * 0.045) + 2.5 * sin(su * 0.13 + 1.0);
           seaK = smoothstep(-15.5, -10.0, seaV);
+          if (abs(su - ${LAGOON.pu.toFixed(2)}) < ${(LAGOON.pru + 1.5).toFixed(2)} && abs(seaV - ${LAGOON.pv.toFixed(2)}) < ${(LAGOON.prv + 1.5).toFixed(2)}) lag = lagoon(su, seaV, depthW);
         }
+        float dV = lag.y;
         float still = wStill * (1.0 - seaK);
         vec4 dat = texture2D(waterData, tuv);
         vec4 dat2 = texture2D(waterData2, tuv);
@@ -1534,16 +1547,25 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float cosT = max(dot(n, viewDir), 0.0);
         float fres = 0.1 + 0.9 * pow(1.0 - cosT, 4.0);
         // ---- the water body: bed through the water, absorbed with depth
-        vec3 deepC = mix(mix(wDeep, vec3(0.003, 0.022, 0.11), seaK), vec3(0.06, 0.05, 0.026), mud);
-        vec3 turq = mix(mix(wTurq, vec3(0.015, 0.24, 0.24), seaK), vec3(0.11, 0.09, 0.045), mud);
-        vec3 absorb = mix(mix(vec3(4.2, 2.7, 3.1), vec3(7.5, 2.3, 2.0), seaK), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
-        vec3 trans = exp(-absorb * depthW);
+        vec3 deepC = mix(wDeep, vec3(0.06, 0.05, 0.026), mud);
+        vec3 turq = mix(wTurq, vec3(0.11, 0.09, 0.045), mud);
+        vec3 absorb = mix(mix(vec3(4.2, 2.7, 3.1), vec3(5.2, 1.9, 1.55), seaK), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
+        vec3 trans = exp(-absorb * dV);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
+        if (seaK > 0.01) {
+          // the Red Sea's depth ramp: clear and light over the sand at the shore, light turquoise over the reef
+          // flat and the lagoon, blue past the drop-off, deepening to the open sea's dark navy offshore (the
+          // horizon's sea beyond the map edge: horizon.ts) and near black-navy down the Blue Hole
+          float dO = dV + smoothstep(6.0, 14.0, seaV) * 0.7 * (1.0 - lag.x) * smoothstep(0.45, 1.0, dV);
+          vec3 sea = seaScatter(dO);
+          scatter = mix(scatter, mix(sea, vec3(0.11, 0.09, 0.045), mud), seaK);
+        }
         #if WATER_Q > 0
-          vec2 bp = p - viewDir.xz / max(viewDir.y, 0.35) * depthW * 0.72 + n.xz * depthW * 0.9;
+          float dP = min(dV, 1.4);
+          vec2 bp = p - viewDir.xz / max(viewDir.y, 0.35) * dP * 0.72 + n.xz * dP * 0.9;
           vec3 bed = texture2D(bedTex, bp * 0.42).rgb;
           // caustics dancing on the sunlit shallows
-          float ck = wState2.w * (1.0 - smoothstep(0.06, 0.48, depthW)) * (1.0 - oil) * (1.0 - mud * 0.8) * (1.0 - ice);
+          float ck = wState2.w * (1.0 - smoothstep(0.06, 0.48, dV)) * (1.0 - oil) * (1.0 - mud * 0.8) * (1.0 - ice);
           if (ck > 0.01) {
             vec2 cq = bp * 0.85;
             float c1 = texture2D(causTex, cq + vec2(time * 0.045, time * 0.03)).r;
@@ -1555,12 +1577,27 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           vec3 bed = wBed;
         #endif
         if (seaK > 0.01) {
-          // coral heads on the reef flat: dark olive-brown clumps thickening towards the drop-off, pale sand between
+          // tropical white sand: paler and cooler than the desert's gold
+          vec3 white = mix(bed, vec3(dot(bed, vec3(0.3, 0.55, 0.15))) * vec3(1.02, 1.03, 1.02), 0.5) * 1.22;
+          bed = mix(bed, white, seaK);
+          // coral heads on the reef flat and the lagoon: patchy clumps thickening towards the drop-off, pale sand
+          // between; olive-brown, plum and dark teal heads
           float cn = texture2D(waveTex, p * 0.083 + 0.17).b * 0.5 + texture2D(waveTex, p * 0.29 + 0.3).a * 0.3 + texture2D(waveTex, p * 0.71).b * 0.2;
-          float coral = smoothstep(0.52, 0.66, cn + smoothstep(0.14, 0.32, depthW) * 0.2 - 0.07) * smoothstep(0.1, 0.22, depthW);
-          bed = mix(bed * vec3(1.12, 1.12, 1.06), vec3(0.16, 0.15, 0.09), coral * 0.55 * seaK);
+          float coral = smoothstep(0.52, 0.66, cn + smoothstep(0.14, 0.32, dV) * 0.2 - 0.07 + lag.x * 0.04) * smoothstep(0.1, 0.22, dV);
+          float hue = texture2D(waveTex, p * 0.19 + 0.61).a;
+          vec3 coralC = mix(mix(vec3(0.16, 0.15, 0.09), vec3(0.15, 0.08, 0.11), smoothstep(0.45, 0.62, hue)), vec3(0.05, 0.12, 0.11), smoothstep(0.62, 0.78, hue) * lag.x);
+          bed = mix(bed, coralC, coral * 0.6 * seaK);
+          // the awash reef flat of the hole's rim and the islets: cream coral rubble mottled with brown
+          if (lag.z > 0.01) {
+            // (smooth domain-warped bands: the noise texture's cells read as tiles this close up)
+            float mot = 0.5 + 0.22 * sin(p.x * 4.3 + 1.7 * sin(p.y * 3.1)) + 0.18 * sin(p.y * 5.7 + 1.3 * sin(p.x * 2.3)) + 0.12 * sin((p.x + p.y) * 9.1 + 2.0 * sin(p.x * 1.7 - p.y * 2.9));
+            vec3 reefC = mix(vec3(0.56, 0.52, 0.42), vec3(0.22, 0.16, 0.08), smoothstep(0.4, 0.7, mot));
+            bed = mix(bed, reefC, lag.z);
+          }
         }
         vec3 under = bed * trans + scatter * (1.0 - trans);
+        // (the white lagoon floor and its turquoise stay dim under the moon)
+        under *= 1.0 - 0.3 * dark * seaK;
         // ---- reflection: sky gradient, then banks / bridges / everything on high
         vec3 R = reflect(-viewDir, n);
         R.y = abs(R.y);
@@ -1682,7 +1719,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         if (seaK > 0.01) {
           float rn = texture2D(waveTex, p * 0.061 + vec2(time * 0.006, 0.0)).b;
           // over the drop-off only (the reef flat is never deeper than ~0.33)
-          float edge = (1.0 - smoothstep(0.015, 0.05, abs(depthW - 0.42 - (rn - 0.5) * 0.08))) * smoothstep(0.34, 0.37, depthW);
+          float edge = (1.0 - smoothstep(0.015, 0.05, abs(dV - 0.42 - (rn - 0.5) * 0.08))) * smoothstep(0.34, 0.37, dV) * smoothstep(0.4, 0.9, lag.w);
           float brk = smoothstep(0.55, 0.95, sin(dot(p, vec2(0.45, 0.45)) * 1.3 + time * 1.2 + rn * 7.0) * 0.5 + 0.5);
           float fz = texture2D(waveTex, p * 0.9 + vec2(time * 0.05, -time * 0.03)).a;
           foam = max(foam, seaK * edge * smoothstep(0.35, 0.8, fz * 0.6 + brk * 0.5) * 0.6 * (1.0 - 0.5 * dark));
