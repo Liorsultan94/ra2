@@ -176,7 +176,7 @@ export function loadSkins(base: string, small = false): Promise<number> {
 
 /**
  * Player colour on the skin's orm R mask: the albedo there is a neutral grey (0.62) that is multiplied by
- * the team colour, with the same faint self-light (0.3) as the procedural team panels. Chain it after the
+ * the team colour, with a self-light (0.8: the panels are smaller and broken up by the folds, so brighter than the procedural 0.3). Chain it after the
  * fog patch (fog.apply replaces the program cache key) so its key is appended, never dropped.
  */
 export function skinTeamPatch<T extends THREE.MeshStandardMaterial>(m: T, team: number): T {
@@ -195,7 +195,7 @@ export function skinTeamPatch<T extends THREE.MeshStandardMaterial>(m: T, team: 
         skinTeamK = texture2D(roughnessMap, vRoughnessMapUv).r;
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uSkinTeam, skinTeamK);`,
       )
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.3 * skinTeamK;');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * 0.8 * skinTeamK;');
   };
   m.customProgramCacheKey = () => key;
   return m;

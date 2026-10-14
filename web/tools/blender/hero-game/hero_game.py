@@ -114,6 +114,32 @@ def is_arm(p):
     return (abs(p.x) > 0.185 or (abs(p.x) > 0.16 and p.z > 1.33)) and p.z > 0.86 and arm_t(p)[0] > -0.02 and arm_t(p)[1] < 0.15
 
 
+# player colour from above and from the sides (the RTS camera): the pack and the plate carrier's shoulder
+# straps / pads carry it (their top and back faces, composite()), as the procedural soldier's pack lid does
+TEAM_OBJS = ('Pack', 'Pack_TopPocket', 'Pack_Pocket', 'Vest_ShoulderPad_L', 'Vest_ShoulderPad_R', 'Vest_ShoulderStrap_L', 'Vest_ShoulderStrap_R')
+
+
+def team_mats(o):
+    """Copies of the object's materials tagged '__team' (same shading; the mask bake marks them)."""
+    out = []
+    for m in o.data.materials:
+        if m is None:
+            out.append(m)
+            continue
+        nm = m.name.split('.')[0] + '__team'
+        t = bpy.data.materials.get(nm)
+        if t is None:
+            t = m.copy()
+            t.name = nm
+        out.append(t)
+    return out
+
+
+def is_hand_bone(n, s):
+    """The hand and every finger / thumb bone of the hero rig on side s (finger chains since r17)."""
+    return n.endswith('.' + s) and not n.startswith(('upper_arm', 'forearm', 'torso'))
+
+
 def body_visible(p):
     # stage2b's mask: only the head and the neck of the body show
     return p.z > 1.525 + 0.6 * max(0.0, abs(p.x) - 0.055) and abs(p.x) < 0.085
@@ -198,13 +224,16 @@ def stage_prep():
         posed[nm] = (ev_bmesh(o, dg), list(o.data.materials))
     # the posed body's fists (masked under the gloves in the hero): volume filler for the remesh only
     body = bpy.data.objects['Body']
+    # the hero's own mask of the body skin that shows (head, neck, open collar): reused on the A-pose body
+    vg = body.vertex_groups.get('visible')
+    vis_idx = [v.index for v in body.data.vertices if vg and any(g.group == vg.index and g.weight > 0.5 for g in v.groups)]
     for md in body.modifiers:
         if md.type == 'MASK':
             md.show_viewport = md.show_render = False
     dg.update()
     bm = ev_bmesh(body, bpy.context.evaluated_depsgraph_get())
     for s in ('L', 'R'):
-        segs = [(rig.matrix_world @ pb.head, rig.matrix_world @ pb.tail) for pb in rig.pose.bones if pb.name.endswith('.' + s) and pb.name.startswith(('hand', 'fingers', 'thumb'))]
+        segs = [(rig.matrix_world @ pb.head, rig.matrix_world @ pb.tail) for pb in rig.pose.bones if is_hand_bone(pb.name, s)]
 
         def near(p):
             for a, b in segs:
@@ -236,7 +265,22 @@ def stage_prep():
         dst.objects = [n for n in src.objects if n.startswith('POSED_')]
     for o in dst.objects:
         bpy.context.scene.collection.objects.link(o)
+    body = bpy.data.objects['Body']
+    vis = body.vertex_groups.new(name='visible')
+    if vis_idx:
+        vis.add(vis_idx, 1.0, 'REPLACE')
     dg = bpy.context.evaluated_depsgraph_get()
+
+    def body_split():
+        """The body's visible skin and the rest (volume filler), evaluated through a mask on the hero's group."""
+        mk = body.modifiers.new('vis', 'MASK')
+        mk.vertex_group = 'visible'
+        out = []
+        for inv in (False, True):
+            mk.invert_vertex_group = inv
+            out.append(ev_bmesh(body, bpy.context.evaluated_depsgraph_get()))
+        body.modifiers.remove(mk)
+        return out
 
     # leg landmarks from the trouser / boot cross-sections (hero world)
     def ring_centre(objs, z, sx, band=0.012):
@@ -373,7 +417,10 @@ def stage_prep():
             continue
         if nm.startswith('POSED_'):
             continue
-        bm = ev_bmesh(o, dg)
+        if nm == 'Body' and vis_idx:
+            bm, bm_hidden = body_split()
+        else:
+            bm, bm_hidden = ev_bmesh(o, dg), None
         groups = {}
         hidden = {}
         for f in bm.faces:
@@ -382,13 +429,27 @@ def stage_prep():
             # layer sleeve alone remeshes into shreds)
             if nm == 'Body' and abs(c.x) > 0.25 and 0.6 < c.z < 1.1 and arm_t(c)[0] > T_WRIST - 0.01:
                 continue  # the A-pose hands (the fists come from the posed hero)
-            dst_ = hidden if nm == 'Body' and not body_visible(c) else groups
+            dst_ = hidden if nm == 'Body' and not vis_idx and not body_visible(c) else groups
             for b in bones_of(c, coll, nm):
                 dst_.setdefault(b, []).append(f)
+        if bm_hidden:
+            hb = {}
+            for f in bm_hidden.faces:
+                c = f.calc_center_median()
+                if abs(c.x) > 0.25 and 0.6 < c.z < 1.1 and arm_t(c)[0] > T_WRIST - 0.01:
+                    continue
+                for b in bones_of(c, coll, nm):
+                    hb.setdefault(b, []).append(f)
+            for b, fs in hb.items():
+                sb = sub_bmesh(bm_hidden, fs)
+                sb.transform(XF[b] @ H2G)
+                vols[b].append((nm, sb, []))
+            bm_hidden.free()
+        mats = team_mats(o) if nm in TEAM_OBJS else list(o.data.materials)
         for b, fs in groups.items():
             sb = sub_bmesh(bm, fs)
             sb.transform(XF[b] @ H2G)
-            pieces[b].append((nm, sb, list(o.data.materials)))
+            pieces[b].append((nm, sb, mats))
         for b, fs in hidden.items():
             sb = sub_bmesh(bm, fs)
             sb.transform(XF[b] @ H2G)
@@ -404,7 +465,7 @@ def stage_prep():
     # posed fists and rifle
     hand_bones = {}
     for s in ('L', 'R'):
-        hs = [pose[n] for n in pose if n.endswith('.' + s) and (n.startswith(('hand', 'fingers', 'thumb')))]
+        hs = [pose[n] for n in pose if is_hand_bone(n, s)]
         hand_bones[s] = hs
 
     def seg_d(p, a, b):
@@ -739,13 +800,16 @@ def stage_lods():
 
 
 # ================================================================== stage: bake
-CLOTH = ('uniform', 'uniform_pants', 'uniform_dark', 'gear', 'gear_pad', 'mitznefet', 'camo', 'gaiter')
+CLOTH = ('uniform', 'uniform_pants', 'uniform_dark', 'gear', 'gear_pad', 'mitznefet', 'mitz_net', 'camo', 'gaiter')
 METAL = {'metal': 0.85}
 
 
 def mat_class(m):
+    """Mask bake emission: (metal, cloth, B) with B = 1 flag, 0.5 skin, 0.25 player-colour object."""
     n = (m.name if m else '').split('.')[0]
-    return (METAL.get(n, 0.0), 1.0 if n in CLOTH else 0.0, 1.0 if n == 'flag' else (0.5 if n in ('skin', 'eye') else 0.0))
+    team = n.endswith('__team')
+    n = n.replace('__team', '')
+    return (METAL.get(n, 0.0), 1.0 if n in CLOTH else 0.0, 1.0 if n == 'flag' else (0.5 if n in ('skin', 'eye') else (0.25 if team else 0.0)))
 
 
 def mask_materials(objs):
@@ -858,19 +922,23 @@ def composite(aid, px, order, tex):
     q = P - (head + np.array([-0.005, 0.12, 0.0]))
     r = np.linalg.norm(q, axis=-1)
     el = np.arcsin(np.clip(q[..., 1] / np.maximum(r, 1e-6), -1, 1))
-    helm = isb('ahead') & clothm & (P[..., 1] > head[1] + 0.06)
-    # (a wide crown patch: the RTS camera looks down on the helmets)
-    t_helmet = helm & ((np.abs(el - 0.30) < 0.07) | (el > 0.85))
+    # the helmet (Mitznefet net or shell, whichever the bake hit): band + a wide crown, the RTS camera looks
+    # down on the helmets
+    helm = isb('ahead') & (P[..., 1] > head[1] + 0.06) & (fs < 0.4)
+    t_helmet = helm & ((np.abs(el - 0.30) < 0.08) | (el > 0.6))
     sp = np.array(REST['aspine'][:])
     c = P - sp
-    t_chest = isb('achest') & clothm & (Ng[..., 0] > 0.55) & (c[..., 0] > 0.08) & (np.abs(c[..., 1] - 0.36) < 0.03) & (np.abs(c[..., 2]) < 0.075)
+    t_chest = isb('achest') & clothm & (Ng[..., 0] > 0.55) & (c[..., 0] > 0.08) & (np.abs(c[..., 1] - 0.36) < 0.05) & (np.abs(c[..., 2]) < 0.085)
     # the pack (top and back): the procedural soldier's big team-coloured pack lid reads from every side
     t_pack = isb('achest') & clothm & (c[..., 0] < -0.13) & (c[..., 1] > 0.02) & ((Ng[..., 1] > 0.3) | (Ng[..., 0] < -0.5))
-    teamm = (arm | t_helmet | t_chest | t_pack).astype(np.float32)
-    teamm = np.clip(C.blur(teamm, 1) * 1.6, 0, 1) * used
+    # tagged objects (TEAM_OBJS): everything but the faces against the body
+    t_obj = (np.abs(fs - 0.25) < 0.1) & ((Ng[..., 1] > -0.3) | (Ng[..., 0] < -0.3))
+    teamm = (arm | t_helmet | t_chest | t_pack | t_obj).astype(np.float32)
+    # hard-edged and slightly grown (no pale halo blending into the camo at 256 px)
+    teamm = (C.blur(teamm, 1) > 0.3).astype(np.float32) * used
     alb = base * ALB_GAIN * (AO_FLOOR + (1 - AO_FLOOR) * ao)[..., None]
     alb = alb * (1 - teamm[..., None]) + TEAM_LIN * teamm[..., None]
-    rough_o = np.where(teamm > 0.5, 0.62, rough)
+    rough_o = np.where(teamm > 0.5, 0.45, rough)
     C.save_rgb(os.path.join(C.BUILD, aid + '-albedo.png'), C.lin2srgb(alb), tex)
     C.save_rgb(os.path.join(C.BUILD, aid + '-orm.png'), np.stack([teamm, rough_o, np.clip(metal, 0, 1)], -1), tex)
     m = C.lin2srgb(alb)[used].mean(0)
