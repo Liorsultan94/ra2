@@ -1300,6 +1300,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       // the river's main axis: a stable frame for the pier wakes (no per-pixel flow direction: it marbles)
       wAxis: { value: new THREE.Vector2(river.ax, river.ay) },
       wStill: { value: m.biome === 'desert' ? 1 : 0 },
+      // the desert's Red Sea corners (sim/map.ts seaFrame): coast offset, on, map centre
+      wSea: { value: new THREE.Vector4(m.deco?.sea?.off ?? 0, m.deco?.sea ? 1 : 0, m.w / 2, m.h / 2) },
       wState3: RIVER.wState3,
       rapH: { value: rap ? (rap.s1 - rap.s0) / 2 : 0 },
       rapRocks: { value: Array.from({ length: MAX_RAPID_ROCKS }, () => new THREE.Vector4()) },
@@ -1349,6 +1351,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform float rapH;
       uniform vec2 wAxis;
       uniform float wStill;
+      uniform vec4 wSea;
       uniform vec4 wState3;
       uniform vec4 rapRocks[${MAX_RAPID_ROCKS}];
       ${WX_PARS}
@@ -1364,6 +1367,17 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float depthW = waterLevel - ground;
         if (depthW <= 0.0) discard;
         float depth = clamp(depthW / 0.7, 0.0, 1.0);
+        // the Red Sea (desert corners): seaward distance from the coast, as the sim's seaFrame
+        float seaK = 0.0;
+        float seaV = -1e3;
+        if (wSea.y > 0.5) {
+          vec2 pc = p - wSea.zw;
+          if (pc.x + pc.y > 0.0) pc = -pc;
+          float su = (pc.x - pc.y) * 0.70711;
+          seaV = -(pc.x + pc.y) * 0.70711 - wSea.x + 4.0 * sin(su * 0.045) + 2.5 * sin(su * 0.13 + 1.0);
+          seaK = smoothstep(-15.5, -10.0, seaV);
+        }
+        float still = wStill * (1.0 - seaK);
         vec4 dat = texture2D(waterData, tuv);
         vec4 dat2 = texture2D(waterData2, tuv);
         float shore = dat.g * SHORE;
@@ -1372,8 +1386,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         vec2 fd = spd > 0.002 ? vel / spd : vec2(0.7071);
         float rapids = dat.b;
         // still water (an oasis) has no fetch: the wind only ruffles it, it never breaks into whitecaps
-        float chop = wState.x * (1.0 - 0.7 * wStill);
-        float calm = max(wState.y, 0.45 * wStill) * (1.0 - rapids);
+        float chop = wState.x * (1.0 - 0.7 * still) + seaK * 0.12;
+        float calm = max(wState.y * (1.0 - 0.5 * seaK), 0.45 * still) * (1.0 - rapids);
         float mud = wState.z;
         float ice = wState.w;
         float dark = wState2.x;
@@ -1520,9 +1534,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float cosT = max(dot(n, viewDir), 0.0);
         float fres = 0.1 + 0.9 * pow(1.0 - cosT, 4.0);
         // ---- the water body: bed through the water, absorbed with depth
-        vec3 deepC = mix(wDeep, vec3(0.06, 0.05, 0.026), mud);
-        vec3 turq = mix(wTurq, vec3(0.11, 0.09, 0.045), mud);
-        vec3 absorb = mix(vec3(4.2, 2.7, 3.1), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
+        vec3 deepC = mix(mix(wDeep, vec3(0.003, 0.022, 0.11), seaK), vec3(0.06, 0.05, 0.026), mud);
+        vec3 turq = mix(mix(wTurq, vec3(0.015, 0.24, 0.24), seaK), vec3(0.11, 0.09, 0.045), mud);
+        vec3 absorb = mix(mix(vec3(4.2, 2.7, 3.1), vec3(7.5, 2.3, 2.0), seaK), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
         vec3 trans = exp(-absorb * depthW);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
         #if WATER_Q > 0
@@ -1540,6 +1554,12 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #else
           vec3 bed = wBed;
         #endif
+        if (seaK > 0.01) {
+          // coral heads on the reef flat: dark olive-brown clumps thickening towards the drop-off, pale sand between
+          float cn = texture2D(waveTex, p * 0.083 + 0.17).b * 0.5 + texture2D(waveTex, p * 0.29 + 0.3).a * 0.3 + texture2D(waveTex, p * 0.71).b * 0.2;
+          float coral = smoothstep(0.52, 0.66, cn + smoothstep(0.14, 0.32, depthW) * 0.2 - 0.07) * smoothstep(0.1, 0.22, depthW);
+          bed = mix(bed * vec3(1.12, 1.12, 1.06), vec3(0.16, 0.15, 0.09), coral * 0.55 * seaK);
+        }
         vec3 under = bed * trans + scatter * (1.0 - trans);
         // ---- reflection: sky gradient, then banks / bridges / everything on high
         vec3 R = reflect(-viewDir, n);
@@ -1657,7 +1677,16 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float foam = band * smoothstep(0.5, 0.85, fB * 0.6 + lap * 0.4 + band * 0.2) * 0.85 * (1.0 - 0.4 * calm);
         foam = max(foam, (1.0 - smoothstep(0.0, 0.05 + fB * 0.05, shore)) * smoothstep(0.35, 0.75, fB) * 0.6);
         // still water laps at its shore without breaking: a faint wet line, no surf
-        foam *= 1.0 - 0.8 * wStill;
+        foam *= 1.0 - 0.8 * still;
+        // the Red Sea: the swell breaks along the reef edge (the drop-off), a ragged white line with gaps
+        if (seaK > 0.01) {
+          float rn = texture2D(waveTex, p * 0.061 + vec2(time * 0.006, 0.0)).b;
+          // over the drop-off only (the reef flat is never deeper than ~0.33)
+          float edge = (1.0 - smoothstep(0.015, 0.05, abs(depthW - 0.42 - (rn - 0.5) * 0.08))) * smoothstep(0.34, 0.37, depthW);
+          float brk = smoothstep(0.55, 0.95, sin(dot(p, vec2(0.45, 0.45)) * 1.3 + time * 1.2 + rn * 7.0) * 0.5 + 0.5);
+          float fz = texture2D(waveTex, p * 0.9 + vec2(time * 0.05, -time * 0.03)).a;
+          foam = max(foam, seaK * edge * smoothstep(0.35, 0.8, fz * 0.6 + brk * 0.5) * 0.6 * (1.0 - 0.5 * dark));
+        }
         // streaks dragged along the flow: pier wakes (the rapids' whitewater is drawn above)
         if (dat.a > 0.003) {
           vec2 ax = vec2(dot(p, wAxis), dot(p, vec2(-wAxis.y, wAxis.x)));

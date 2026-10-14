@@ -207,7 +207,7 @@ function replaceGeometry(dst: THREE.BufferGeometry, src: THREE.BufferGeometry) {
 /** Biome grade of the (warm, sandstone) scans: saturation, colour, moss on top. */
 const ROCK_GRADE: Record<string, { sat: number; color: number; moss: number }> = {
   temperate: { sat: 0.35, color: 0xb4b2aa, moss: 0.7 },
-  desert: { sat: 1.0, color: 0xf2dcc6, moss: 0 },
+  desert: { sat: 0.6, color: 0xb08878, moss: 0 },
   winter: { sat: 0.3, color: 0xb0b6c0, moss: 0.15 },
   urban: { sat: 0.25, color: 0xb2b0aa, moss: 0.2 },
 };
@@ -248,7 +248,7 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
     new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.92, metalness: 0, flatShading: true }),
   );
   // desert sandstone / winter granite (temperate keeps the white base colour)
-  if (biome === 'desert') mat.color.setHex(0xd6aa86);
+  if (biome === 'desert') mat.color.setHex(0xa07a68);
   else if (biome === 'winter') mat.color.setHex(0xc4c8d0);
   const shadows = quality !== 'low';
   // [full, lite] pairs: the lite model is the same rock at a lower subdivision

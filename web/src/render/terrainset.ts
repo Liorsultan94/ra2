@@ -52,7 +52,7 @@ export const PHOTO_MATERIALS: Record<string, PhotoMaterial> = {
 
 export const PHOTO_STACKS: Record<'temperate' | 'desert' | 'winter' | 'urban', PhotoStack> = {
   temperate: { layers: ["meadow","drysoil","mossrock","beach","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1362360,1024: 4955164} },
-  desert: { layers: ["withered","drysoil","sandstone","dunes","cracked","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,gravel: 5,soil: 6,forest: 1,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1112392,1024: 3963898} },
+  desert: { layers: ["withered","drysoil","greyrock","dunes","cracked","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,gravel: 5,soil: 6,forest: 1,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1008792,1024: 3541548} },
   winter: { layers: ["withered","drysoil","snowrock","snow","mud","litter","gravel","farmsoil"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,forest: 5,gravel: 6,soil: 7,snow: 3,asphalt: 2,paving: 1}, bytes: {512: 1334464,1024: 4991908} },
   urban: { layers: ["meadow","pavement","greyrock","rubble","mud","gravel","asphalt","flags"], slot: {grass: 0,dirt: 1,rock: 2,sand: 3,mud: 4,gravel: 5,asphalt: 6,paving: 7,forest: 1,soil: 1,snow: 3}, bytes: {512: 979256,1024: 3707832} },
 };

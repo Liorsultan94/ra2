@@ -103,7 +103,8 @@ const LOOKS: Record<Biome, BiomeLook> = {
     grass: { lush: 0x5e6233, mid: scan('withered', 0x857a48, 0.7), dry: 0xb39b66, fresh: 0x7d8040, clover: 0x5a5c34 },
     ground: {
       dirt: scan('drysoil', 0x9a8160, 0.5),
-      rock: scan('sandstone', 0x9c785c, 0.5),
+      // South Sinai granite: dark red-brown and grey
+      rock: scan('greyrock', 0x6e4c40, 0.62),
       // the dune scan is pale grey: its ripples, the biome's gold
       sand: scan('dunes', 0xdcb478, 0.95),
       mud: scan('cracked', 0x8a7052, 0.45),

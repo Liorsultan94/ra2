@@ -437,14 +437,59 @@ export function soukStall(k: Kit, v: number) {
 }
 
 /** Flat-roofed mud house (desert), ~1.1 x 0.9. */
+/**
+ * A house of the coast town past the map edge (desert): white, cream and pastel flat roofs, no two alike
+ * (a cube with a roof terrace, a domed house, a tall wing with balconies, a stepped house, a shop-house),
+ * shutters and awnings in Sinai blue, turquoise, green or terracotta; ~1.1 x 0.9.
+ */
 export function mudHouse(k: Kit, v: number) {
-  const c = v > 0.5 ? PAL.mud : 0xd4b48a;
-  const h = 0.5 + v * 0.3;
-  k.box(1.1, h, 0.9, 0, h / 2, 0, c);
-  k.box(1.14, 0.06, 0.94, 0, h + 0.03, 0, 0xbfa070);
-  if (v > 0.3) k.box(0.5, 0.3, 0.5, -0.2, h + 0.15, -0.1, c);
-  k.box(0.02, 0.3, 0.2, 0.56, 0.15, 0, 0x5a3a22);
-  k.box(0.02, 0.12, 0.14, 0.56, h * 0.7, 0.28, 0xffcf80, 1);
+  const f = (n: number) => (Math.sin(v * 91.7 + n * 12.9898) * 43758.5453) % 1;
+  const r = (n: number) => Math.abs(f(n));
+  const walls = [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xf7f3ea, 0xe4d2ae][Math.floor(r(1) * 6)];
+  const wall2 = [0xf3efe6, 0xeee2c8, 0xf2e0c8, 0xdcc8a0][Math.floor(r(2) * 4)];
+  const acc = [0x2e66a8, 0x28908f, 0x3d754c, 0xb35c38, 0xd8a840][Math.floor(r(3) * 5)];
+  const dark = 0x2a2724;
+  const type = Math.floor(r(4) * 5);
+  const hw = 0.42 + r(5) * 0.18;
+  const lamp = () => k.box(0.02, 0.1, 0.12, 0.56, hw * 0.55, 0.26, 0xffcf80, 1);
+  if (type === 0) {
+    // a cube with a pergola on the roof terrace
+    k.box(1.1, hw + 0.25, 0.9, 0, (hw + 0.25) / 2, 0, walls);
+    k.box(1.12, 0.05, 0.92, 0, hw + 0.27, 0, 0xfaf8f2);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) k.box(0.02, 0.18, 0.02, -0.15 + sx * 0.28, hw + 0.36, sz * 0.22, 0x6a4a30);
+    k.box(0.62, 0.012, 0.5, -0.15, hw + 0.45, 0, acc);
+  } else if (type === 1) {
+    // a domed house with a side room
+    k.box(0.8, hw, 0.8, -0.12, hw / 2, 0, walls);
+    k.dome(0.3, -0.12, hw, 0, r(6) < 0.5 ? walls : acc, 14);
+    k.box(0.36, 0.3, 0.5, 0.42, 0.15, 0.15, wall2);
+  } else if (type === 2) {
+    // a three-storey wing with balconies beside a low one
+    k.box(0.55, 0.85, 0.85, -0.26, 0.425, 0, walls);
+    for (const y of [0.3, 0.58]) {
+      k.box(0.5, 0.02, 0.1, -0.26, y, 0.47, 0xfaf8f2);
+      k.box(0.5, 0.06, 0.008, -0.26, y + 0.04, 0.52, acc);
+    }
+    k.box(0.52, 0.34, 0.7, 0.3, 0.17, 0.08, wall2);
+  } else if (type === 3) {
+    // stepped: the upper floor set back behind a terrace and its awning
+    k.box(1.1, hw, 0.9, 0, hw / 2, 0, walls);
+    k.box(0.6, 0.28, 0.5, -0.2, hw + 0.14, -0.18, wall2);
+    k.box(0.55, 0.012, 0.3, -0.2, hw + 0.3, 0.2, acc, 0, 0, 0.12);
+  } else {
+    // a shop-house: a dark shop front under an awning, two floors over it
+    k.box(1.1, 0.7, 0.9, 0, 0.35, 0, walls);
+    k.box(0.8, 0.22, 0.02, 0, 0.11, 0.455, dark);
+    k.box(0.92, 0.012, 0.18, 0, 0.27, 0.53, acc, 0, 0, 0.32);
+  }
+  // windows with shutters, a door
+  for (const sx of [-0.3, 0.05]) {
+    k.box(0.1, 0.12, 0.02, sx, Math.min(0.7, hw) * 0.72, 0.455, dark);
+    k.box(0.04, 0.12, 0.02, sx - 0.075, Math.min(0.7, hw) * 0.72, 0.46, acc);
+    k.box(0.04, 0.12, 0.02, sx + 0.075, Math.min(0.7, hw) * 0.72, 0.46, acc);
+  }
+  if (type !== 4) k.box(0.02, 0.26, 0.18, 0.56, 0.13, 0, acc);
+  lamp();
 }
 
 /** Date palm (desert grove), ~1.4 tall. */

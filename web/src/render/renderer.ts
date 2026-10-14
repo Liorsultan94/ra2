@@ -2567,6 +2567,7 @@ export class GameRenderer {
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.ambient?.update(dt);
     this.syncProjectiles(alpha);
+    if (this.terrain.seaside) this.terrain.seaside.zoom = this.zoom;
     this.terrain.update(this.time, this.world.list);
     // crystals glow by night (their inner light and the light pools on the ground)
     this.terrain.setOreNight(this.atmos.night?.darkness ?? 0);

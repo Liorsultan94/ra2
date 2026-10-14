@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from '../sim/rng';
-import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
 import { OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
@@ -552,12 +552,16 @@ export class Waterside implements WatersideHandles {
 
   // --------------------------------------------------------------- reeds
 
+  private sf = { u: 0, v: 0, b: 0 };
   private avoid(x: number, y: number, layout: Layout, rapidsOk = false) {
     const m = this.map;
     const tx = Math.floor(x);
     const ty = Math.floor(y);
     if (tx < 0 || ty < 0 || tx >= m.w || ty >= m.h) return true;
     if (m.tiles[ty * m.w + tx] === Tile.Bridge) return true;
+    // no reeds or pebbles on the Red Sea's beaches and reef (render/seaside.ts dresses them)
+    const sea = m.deco?.sea;
+    if (sea && coastV(sea, seaFrame(m.w, m.h, sea.off, x, y, this.sf).u, this.sf.v) > -14) return true;
     for (const b of m.bridges) if (Math.hypot(x - b.x, y - b.y) < b.length / 2 + 1.2) return true;
     if (occAt(layout, m, x, y) & (OCC_ROAD | OCC_TRACK)) return true;
     const f = this.river.features;

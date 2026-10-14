@@ -214,7 +214,7 @@ export class Horizon {
     yield;
     if (on('forest')) this.buildForest(towns);
     yield;
-    if (this.world.sea && on('harbour')) this.buildHarbour();
+    if (this.world.sea && this.world.sea.harbour[0] < this.world.sea.harbour[1] && on('harbour')) this.buildHarbour();
     yield;
     if (on('lights')) this.buildLights();
   }
@@ -458,6 +458,7 @@ export class Horizon {
       seaOn: { value: sea ? 1 : 0 },
       seaN: { value: new THREE.Vector4(sea?.nx ?? 0, sea?.ny ?? 0, sea?.ux ?? 0, sea?.uy ?? 0) },
       seaOff: { value: sea?.off ?? 0 },
+      seaTwin: { value: sea?.twin ? 1 : 0 },
       seaHarb: { value: new THREE.Vector2(...(sea?.harbour ?? [0, 0])) },
       seaMole: { value: new THREE.Vector4(...(sea ? [W.seaPoint(sea.mole[0], sea.mole[1]), W.seaPoint(sea.mole[2], sea.mole[3])].flatMap((p) => [p.x, p.y]) : [0, 0, 0, 0])) },
       lakeA: { value: new THREE.Vector4(lake?.x ?? 0, lake?.y ?? 0, lake?.rx ?? 1, lake?.ry ?? 1) },
@@ -495,6 +496,7 @@ export class Horizon {
         uniform float seaOn;
         uniform vec4 seaN;
         uniform float seaOff;
+        uniform float seaTwin;
         uniform vec2 seaHarb;
         uniform vec4 seaMole;
         uniform vec4 lakeA;
@@ -509,6 +511,8 @@ export class Horizon {
           float cheb = max( o.x, o.y );
           #if HAS_HT
           // the battlefield's own water sheet still draws the rivers straight out of the edge in the near belt
+          // (the twin sea's near belt: the outskirts' copy of the battlefield water draws it, coast and reef)
+          if ( seaTwin > 0.5 && cheb < hzMargin - 0.5 ) discard;
           if ( cheb < hzMargin ) {
             vec2 q = clamp( p, vec2( 0.0 ), mapSize );
             float g = texture2D( heightTex, ( q + 0.5 ) / ( mapSize + 1.0 ) ).r * 4.5 - 1.5;
@@ -522,6 +526,8 @@ export class Horizon {
           float su = 0.0;
           if ( seaOn > 0.5 ) {
             vec2 pc = p - hzCentre;
+            // twin seas (the desert's Red Sea): the corner nearer p
+            if ( seaTwin > 0.5 && dot( pc, seaN.xy ) < 0.0 ) pc = -pc;
             su = dot( pc, seaN.zw );
             sv = dot( pc, seaN.xy ) - seaOff + wig( su );
           }
@@ -535,6 +541,9 @@ export class Horizon {
           // in the near belt only the bay / lake is ours (the low hollows there are dry ground just above the water line)
           if ( cheb < hzMargin - 2.0 && open < -4.0 ) discard;
           float depthK = open > -100.0 ? smoothstep( 0.0, 40.0, open ) : 0.6;
+          // the Red Sea: deep navy past the reef, the reef flat turquoise
+          float reef = seaTwin > 0.5 ? 1.0 - smoothstep( 3.6, 5.6, sv ) : 0.0;
+          if ( seaTwin > 0.5 ) depthK = max( depthK, smoothstep( 3.6, 7.0, sv ) );
           // ripples (fade with distance so the far sheet never shimmers)
           float fade = 1.0 - smoothstep( 60.0, 260.0, dist );
           vec3 n = vec3( 0.0, 1.0, 0.0 );
@@ -550,6 +559,7 @@ export class Horizon {
           vec3 refl = mix( skyHorizon, skyTop, smoothstep( 0.05, 0.8, R.y ) ) * 0.55;
           if ( hzSky > 0.5 ) refl = mix( refl, hzHorizonCol( vWorld ), ( 1.0 - smoothstep( 0.0, 0.25, R.y ) ) * 0.8 );
           vec3 under = mix( wTurq * 0.8, wDeep, 0.55 + 0.45 * depthK );
+          if ( seaTwin > 0.5 ) under = mix( mix( vec3( 0.02, 0.2, 0.2 ) * 0.8, vec3( 0.003, 0.022, 0.11 ), 0.55 + 0.45 * depthK ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
           vec3 col = mix( under, refl, fres );
           col *= wxLight * ( 1.0 - 0.2 * wState.x );
           float sd = max( dot( R, sunDir ), 0.0 );
@@ -561,6 +571,12 @@ export class Horizon {
             float ph = sv * 0.55 + time * 1.3 + sin( su * 0.08 ) * 1.5;
             float crest = smoothstep( 0.75, 0.98, sin( ph ) * 0.5 + 0.5 );
             float surf = ( 1.0 - smoothstep( 1.0, quay ? 2.0 : 13.0, sv ) ) * crest;
+            if ( seaTwin > 0.5 ) {
+              // the swell breaks on the reef edge, not on the beach: a ragged white line over the drop-off
+              float rn = texture2D( fogNoise, p * 0.09 + time * 0.004 ).r;
+              float edge = 1.0 - smoothstep( 0.25, 0.9, abs( sv - 3.9 - ( rn - 0.5 ) * 0.9 ) );
+              surf = edge * ( 0.45 + 0.55 * smoothstep( 0.3, 0.9, sin( su * 0.7 + time * 1.1 + rn * 6.0 ) * 0.5 + 0.5 ) );
+            }
             float lap = 1.0 - smoothstep( 0.0, quay ? 0.4 : 1.4, sv );
             foam = max( surf * 0.85, lap * ( 0.6 + 0.4 * sin( time * 1.7 + su * 0.6 ) ) );
             // the breakwater
