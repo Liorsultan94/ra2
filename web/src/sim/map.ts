@@ -171,6 +171,8 @@ export interface Structure {
   rot: number;
   /** Look variant 0..1 (render only: floors, facade, colours); seeded by the map generator. */
   variant?: number;
+  /** Render-only role hint (Wadi Al-Rimal's town): the mosque, a shop-house facing a street, a row of shops. */
+  look?: 'mosque' | 'shop' | 'shops';
 }
 
 export const ORE_MAX = 10;

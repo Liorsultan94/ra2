@@ -164,7 +164,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const wood = new GeoBuilder();
   const metal = new GeoBuilder();
   // desert: sun-baked plaster and mudbrick; winter: painted log houses (falu red, ochre, tar brown) with dark roofs
-  const wallColors = bc === 1 ? [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xe4d2ae, 0xf7f3ea, 0xdcc8a0, 0xeadfd0] : bc === 2 ? [0x8a2e22, 0x9a3a28, 0xb08840, 0x5a3e2a, 0x6a7a84, 0x7a2a22] : [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
+  const wallColors = bc === 1 ? [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xe4d2ae, 0xf7f3ea, 0xdcc8a0, 0xeadfd0, 0xdfb57e, 0xe6c28e] : bc === 2 ? [0x8a2e22, 0x9a3a28, 0xb08840, 0x5a3e2a, 0x6a7a84, 0x7a2a22] : [0xe8dcc0, 0xf0ece2, 0xe2c99a, 0xd8d2c4, 0xe6b89a, 0xc9c2a8, 0xf2e2b8];
   const roofColors = bc === 2 ? [0x3a3a3c, 0x2e3a30, 0x4a3a30, 0x34383e] : [0xa04a30, 0x8a3c28, 0xb0603a, 0x5a5652, 0x6e3a2c, 0x8f5a3a];
   const builders = [walls, roofs, trim, wood, metal];
   const spans: { st: Structure; from: number[]; to: number[] }[] = [];
@@ -358,25 +358,76 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
           for (const so of [-0.075, 0.075]) boxAt(wood, 0.05, 0.13, 0.012, L(trs(x + so, y, oz + 0.008)), acc);
         }
       };
+      const railC = new THREE.Color(0.2, 0.21, 0.22);
+      /** A metal railing round a flat roof at height y (top rail, mid rail, corner and middle posts). */
+      const railing = (ox: number, oz: number, lx: number, dz: number, y: number) => {
+        for (const sz of [-1, 1]) for (const ry of [0.1, 0.05]) boxAt(metal, lx, 0.008, 0.008, L(trs(ox, y + ry, oz + (sz * dz) / 2)), railC);
+        for (const sx of [-1, 1]) for (const ry of [0.1, 0.05]) boxAt(metal, 0.008, 0.008, dz, L(trs(ox + (sx * lx) / 2, y + ry, oz)), railC);
+        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1]]) boxAt(metal, 0.012, 0.1, 0.012, L(trs(ox + (sx * lx) / 2, y + 0.05, oz + (sz * dz) / 2)), railC);
+      };
+      /** Black and white plastic water tanks on a roof, on a little steel stand. */
+      const tanks = (ox: number, oz: number, y: number, n: number) => {
+        for (let i = 0; i < n; i++) {
+          const x = ox + (i - (n - 1) / 2) * 0.17;
+          boxAt(metal, 0.13, 0.04, 0.13, L(trs(x, y + 0.02, oz)), new THREE.Color(0.35, 0.36, 0.37));
+          metal.add(new THREE.CylinderGeometry(0.065, 0.065, 0.13, 10).toNonIndexed(), L(trs(x, y + 0.105, oz)), null, h(70 + i) < 0.7 ? new THREE.Color(0.1, 0.1, 0.11) : new THREE.Color(0.86, 0.86, 0.83));
+        }
+      };
+      /** A small cafe table with two chairs under a parasol (generic, no branding). */
+      const cafeTable = (x: number, z: number, c: THREE.Color) => {
+        metal.add(new THREE.CylinderGeometry(0.05, 0.05, 0.01, 10).toNonIndexed(), L(trs(x, 0.11, z)), null, new THREE.Color(0.85, 0.85, 0.82));
+        boxAt(metal, 0.012, 0.11, 0.012, L(trs(x, 0.055, z)), railC);
+        for (const sx of [-0.08, 0.08]) boxAt(wood, 0.045, 0.07, 0.045, L(trs(x + sx, 0.035, z)), new THREE.Color(0.45, 0.32, 0.2));
+        boxAt(metal, 0.008, 0.3, 0.008, L(trs(x, 0.15, z)), railC);
+        trim.add(new THREE.ConeGeometry(0.17, 0.07, 8).toNonIndexed(), L(trs(x, 0.33, z)), null, c);
+      };
       if (st.kind === StructureKind.Courtyard) {
         const t = h(55);
-        if (t < 0.22) {
-          // a small mosque: a prayer hall with a dome, a slim minaret with a balcony and a little dome on top
-          flatHouse(1.7, 1.25, 0.44, -0.2, -0.08, true);
-          dome(0.42, -0.2, 0.52, -0.08, wallC.clone().lerp(new THREE.Color(0.9, 0.92, 0.94), 0.3), 1.05);
-          const mx = 0.92;
-          const mz = 0.28;
+        if (st.look === 'mosque') {
+          // the town mosque (generic): a white prayer hall under a big dome on a drum, an arcaded portico on the
+          // front, a walled forecourt with an arched gate, and a slim octagonal minaret with a balcony
+          const mw = wallC.clone().lerp(white, 0.6);
+          flatHouse(1.85, 1.3, 0.52, -0.42, -0.28, false, 0, mw);
+          const w1 = walls.count;
+          walls.add(new THREE.CylinderGeometry(0.42, 0.44, 0.12, 16).toNonIndexed(), L(trs(-0.42, 0.62, -0.28)), null, mw);
+          boxUV(walls, w1, 1.1);
+          dome(0.42, -0.42, 0.68, -0.28, new THREE.Color(0.93, 0.95, 0.96), 1.08);
+          metal.add(new THREE.CylinderGeometry(0.01, 0.016, 0.16, 6).toNonIndexed(), L(trs(-0.42, 1.18, -0.28)), null, new THREE.Color(0.78, 0.66, 0.34));
+          metal.add(new THREE.SphereGeometry(0.03, 8, 6).toNonIndexed(), L(trs(-0.42, 1.27, -0.28)), null, new THREE.Color(0.8, 0.68, 0.34));
+          for (const sx of [-1, 1]) dome(0.13, -0.42 + sx * 0.72, 0.6, 0.22, mw, 1.1);
+          arcade(-0.42, -0.28, 1.85, 1.3, 0.0, 5, 0.27);
+          // arched windows down the sides
+          for (const sx of [-1, 1])
+            for (const z of [-0.6, -0.15]) {
+              boxAt(trim, 0.02, 0.18, 0.1, L(trs(-0.42 + sx * 0.935, 0.26, z)), dark);
+              trim.add(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 8, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).toNonIndexed(), L(trs(-0.42 + sx * 0.935, 0.35, z)), null, dark);
+            }
+          // the forecourt wall and its gate (the court paved in pale stone)
+          const w2 = walls.count;
+          boxAt(walls, 2.3, 0.2, 0.05, L(trs(-0.15, 0.1, 0.92)), mw);
+          boxAt(walls, 0.05, 0.2, 0.55, L(trs(-1.38, 0.1, 0.66)), mw);
+          boxUV(walls, w2, 1.1);
+          boxAt(wood, 0.26, 0.2, 0.03, L(trs(-0.42, 0.11, 0.95)), new THREE.Color(0.32, 0.22, 0.14));
+          trim.add(halfDisc(0.16), L(trs(-0.42, 0.26, 0.94)), null, mw);
+          boxAt(trim, 1.95, 0.008, 0.55, L(trs(-0.42, 0.004, 0.64)), new THREE.Color(0.86, 0.82, 0.74));
+          // the minaret
+          const mx = 1.08;
+          const mz = 0.42;
           const w0 = walls.count;
-          walls.add(new THREE.CylinderGeometry(0.1, 0.12, 1.25, 10).toNonIndexed(), L(trs(mx, 0.625, mz)), null, wallC);
-          walls.add(new THREE.CylinderGeometry(0.15, 0.13, 0.05, 10).toNonIndexed(), L(trs(mx, 0.98, mz)), null, wallC);
-          walls.add(new THREE.CylinderGeometry(0.08, 0.09, 0.2, 10).toNonIndexed(), L(trs(mx, 1.35, mz)), null, wallC);
+          walls.add(new THREE.CylinderGeometry(0.15, 0.16, 0.3, 8).toNonIndexed(), L(trs(mx, 0.15, mz)), null, mw);
+          walls.add(new THREE.CylinderGeometry(0.1, 0.12, 1.15, 8).toNonIndexed(), L(trs(mx, 0.87, mz)), null, mw);
+          walls.add(new THREE.CylinderGeometry(0.17, 0.12, 0.07, 8).toNonIndexed(), L(trs(mx, 1.46, mz)), null, mw);
+          walls.add(new THREE.CylinderGeometry(0.075, 0.085, 0.26, 8).toNonIndexed(), L(trs(mx, 1.62, mz)), null, mw);
+          walls.add(new THREE.CylinderGeometry(0.11, 0.08, 0.04, 8).toNonIndexed(), L(trs(mx, 1.77, mz)), null, mw);
           boxUV(walls, w0, 1.1);
-          dome(0.09, mx, 1.45, mz, wallC, 1.4);
-          metal.add(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 5).toNonIndexed(), L(trs(mx, 1.6, mz)), null, new THREE.Color(0.75, 0.68, 0.4));
-          arcade(-0.2, -0.08, 1.7, 1.25, 0.0, 4, 0.24);
+          // the balcony's railing and the minaret's windows
+          metal.add(new THREE.CylinderGeometry(0.17, 0.17, 0.06, 8, 1, true).toNonIndexed(), L(trs(mx, 1.53, mz)), null, railC);
+          for (const y of [0.6, 1.0, 1.62]) boxAt(trim, 0.04, 0.1, 0.21, L(trs(mx, y, mz)), dark);
+          dome(0.09, mx, 1.79, mz, mw, 1.6);
+          metal.add(new THREE.CylinderGeometry(0.006, 0.01, 0.14, 5).toNonIndexed(), L(trs(mx, 2.0, mz)), null, new THREE.Color(0.78, 0.66, 0.34));
           return;
         }
-        if (t < 0.5) {
+        if (st.look === 'shops' || t < 0.3) {
           // a row of arcaded shops under flat roofs of different heights, coloured awnings
           for (let i = 0; i < 3; i++) {
             const ox = -0.82 + i * 0.82;
@@ -384,7 +435,32 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
             flatHouse(0.8, 1.2, hw, ox, -0.05, false, 0, i === 1 ? wc2 : wallC);
             boxAt(trim, 0.5, 0.22, 0.02, L(trs(ox, 0.11, 0.56)), dark);
             awning(ox, 0.56, 0.62, 0.27, accents[Math.floor(h(63 + i) * accents.length)]);
+            // goods out front: crates of fruit, or a rack of rugs
+            const g = h(66 + i);
+            if (g < 0.35) for (const sx of [-0.15, 0.05]) boxAt(wood, 0.14, 0.08, 0.1, L(trs(ox + sx, 0.04, 0.68)), new THREE.Color(0.85, 0.5 + g, 0.15));
+            else if (g < 0.7) boxAt(wood, 0.36, 0.16, 0.02, L(trs(ox, 0.1, 0.66)), accents[Math.floor(g * 10) % accents.length].clone().lerp(new THREE.Color(0.7, 0.2, 0.15), 0.4));
+            if (hw > 0.6) railing(ox, -0.05, 0.8, 1.2, hw + 0.08);
           }
+          return;
+        }
+        if (t < 0.65) {
+          // a courtyard house: a two-storey back wing and two low side wings round a shaded court (a pergola
+          // with a shade cloth, a small tree, a bench), a street wall with an arched gate
+          flatHouse(2.6, 0.7, 0.6, 0, -0.62, false);
+          railing(0, -0.62, 2.6, 0.7, 0.68);
+          tanks(0.7, -0.7, 0.68, 2);
+          for (const sx of [-1, 1]) flatHouse(0.62, 0.72, 0.36, sx * 1.0, 0.2, false, 0, sx > 0 ? wc2 : wallC);
+          shutters(0, -0.27, 2.2, 0.44, 4);
+          const w0 = walls.count;
+          boxAt(walls, 1.38, 0.26, 0.06, L(trs(0, 0.13, 0.86)), wallC);
+          boxUV(walls, w0, 1.1);
+          boxAt(wood, 0.26, 0.2, 0.03, L(trs(0.3, 0.1, 0.89)), acc);
+          trim.add(halfDisc(0.15), L(trs(0.3, 0.25, 0.88)), null, wallC);
+          boxAt(trim, 1.36, 0.008, 1.0, L(trs(0, 0.004, 0.3)), new THREE.Color(0.8, 0.74, 0.62));
+          pergola(-0.25, 0.3, 0.9, 0.7, 0.0);
+          boxAt(wood, 0.04, 0.3, 0.04, L(trs(0.42, 0.15, 0.32)), new THREE.Color(0.38, 0.27, 0.18));
+          walls.add(new THREE.SphereGeometry(0.17, 8, 6).toNonIndexed(), L(trs(0.42, 0.38, 0.32)), null, new THREE.Color(0.32, 0.45, 0.22));
+          boxAt(wood, 0.3, 0.05, 0.09, L(trs(-0.3, 0.06, 0.55)), new THREE.Color(0.45, 0.32, 0.2));
           return;
         }
         // a walled villa: two storeys at the back with a balcony and a dome, a garden wall with an arched gate
@@ -403,7 +479,50 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         boxAt(trim, 1.6, 0.01, 0.7, L(trs(0.2, 0.005, 0.32)), new THREE.Color(0.78, 0.72, 0.6));
         return;
       }
-      const type = Math.floor(h(58) * 6);
+      // shop-houses face the streets; elsewhere the houses take any of the other looks
+      const HOUSES = [0, 1, 2, 3, 4, 7, 8, 9];
+      const type = st.look === 'shop' ? (h(58) < 0.55 ? 5 : 6) : HOUSES[Math.floor(h(58) * HOUSES.length)];
+      if (type === 6) {
+        // a corner cafe: a glazed shop front under a wide awning, tables with parasols on the pavement, rooms above
+        flatHouse(1.3, 0.95, 0.66, 0, -0.12, false);
+        boxAt(trim, 1.1, 0.25, 0.02, L(trs(0, 0.13, 0.36)), new THREE.Color(0.14, 0.17, 0.18));
+        awning(0, 0.36, 1.24, 0.3, acc);
+        boxAt(trim, 0.6, 0.06, 0.01, L(trs(0, 0.4, 0.365)), acc2.clone().lerp(white, 0.5));
+        shutters(0, 0.36, 1.3, 0.5, 3);
+        for (const x of [-0.42, 0.0, 0.42]) cafeTable(x, 0.72, accents[Math.floor(h(80 + Math.round(x * 10)) * accents.length)].clone().lerp(white, 0.35));
+        tanks(-0.3, -0.35, 0.66, 2);
+        return;
+      }
+      if (type === 7) {
+        // a narrow three-storey house: balconies on the upper floors, a railed roof terrace with water tanks
+        flatHouse(0.95, 1.0, 0.95, -0.25, -0.05, true);
+        for (const y of [0.34, 0.66]) balcony(-0.25, 0.45, 0.75, y);
+        shutters(-0.25, 0.45, 0.95, 0.5, 2);
+        railing(-0.25, -0.05, 0.95, 1.0, 1.0);
+        tanks(-0.25, -0.3, 1.0, 3);
+        flatHouse(0.55, 0.75, 0.32, 0.55, 0.12, false, 0, wc2);
+        return;
+      }
+      if (type === 8) {
+        // an arched loggia house: an arcade below, an open loggia on the upper floor, a little dome on the roof
+        flatHouse(1.35, 1.05, 0.64, 0, -0.05, false);
+        arcade(0, -0.05, 1.35, 1.05, 0, 3, 0.24);
+        boxAt(trim, 0.9, 0.16, 0.02, L(trs(0, 0.47, 0.48)), dark);
+        for (const x of [-0.3, 0, 0.3]) boxAt(walls, 0.05, 0.18, 0.03, L(trs(x, 0.47, 0.49)), wallC);
+        dome(0.17, 0.42, 0.64, -0.3, h(59) < 0.5 ? wallC : acc2.clone().lerp(white, 0.25));
+        railing(-0.2, -0.05, 0.9, 1.0, 0.72);
+        return;
+      }
+      if (type === 9) {
+        // an ochre two-storey house with an outside stair to the roof and a shade sail over the terrace
+        const oc = new THREE.Color(0.86, 0.68, 0.45);
+        flatHouse(1.2, 1.0, 0.58, -0.1, -0.05, true, 0, oc);
+        for (let i = 0; i < 5; i++) boxAt(walls, 0.18, 0.04, 0.1, L(trs(0.6, 0.06 + i * 0.12, 0.3 - i * 0.12)), oc);
+        boxAt(wood, 0.8, 0.008, 0.6, L(trs(-0.2, 0.86, -0.05).multiply(new THREE.Matrix4().makeRotationX(0.12))), acc2.clone().lerp(white, 0.5));
+        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) boxAt(metal, 0.01, 0.26, 0.01, L(trs(-0.2 + sx * 0.4, 0.71, -0.05 + sz * 0.3)), railC);
+        tanks(0.3, -0.35, 0.58, 2);
+        return;
+      }
       if (type === 0) {
         // a cube on two floors: an arcade below, a roof terrace with a pergola
         flatHouse(1.3, 1.05, 0.62, 0, 0, false);
@@ -422,6 +541,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         balcony(-0.32, 0.575, 0.6, 0.6);
         flatHouse(0.68, 0.72, 0.36, 0.38, 0.22, false, 0, wc2);
         awning(0.38, 0.58, 0.5, 0.3, acc2);
+        if (h(61) < 0.6) railing(-0.32, 0, 0.72, 1.15, 0.98);
       } else if (type === 3) {
         // stepped: a wide ground floor, the upper floor set back behind a terrace with an awning
         flatHouse(1.42, 1.15, 0.36, 0, 0, true);
@@ -434,6 +554,10 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         for (const y of [0.29, 0.57]) balcony(0, 0.5, 1.2, y);
         shutters(0, 0.5, 1.36, 0.72, 3);
         if (h(60) < 0.5) dome(0.14, 0.4, 0.86, -0.25, acc2);
+        else {
+          railing(0, 0, 1.36, 1.0, 0.94);
+          tanks(-0.3, -0.25, 0.94, 3);
+        }
       } else {
         // a shop-house: the shop below behind a deep awning, two floors above
         flatHouse(1.3, 1.08, 0.7, 0, 0, false);

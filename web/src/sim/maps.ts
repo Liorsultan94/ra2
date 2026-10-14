@@ -469,8 +469,13 @@ export function createDesertMap(seed: number): GameMap {
     [starts[0], T(24, 77), T(35, 74), T(40, 62), ring(135, 135)[0]],
     ring(45, 225),
     [starts[0], T(33, 91), T(50, 88), T(58, 81), T(66, 73), T(72, 64)],
+    // the town's streets: the high street from the ring's south side, cross streets off the highway
+    [ring(90, 90)[0], { x: 63, y: 73 }, { x: 63, y: 92 }],
+    ...DESERT_TOWN_STREETS,
   ];
   const roads = [...r0, ...mirrorLines(r0)];
+  /** Road kind by index: 0 highway, 1 ring road, 2 outer road, 3 town street. */
+  const roadKind = (i: number) => Math.min(3, i % r0.length);
   const tracks0 = [
     [starts[0], T(9, 70), T(8, 57), T(13, 47), T(22, 41), T(30, 40)],
     [T(40, 62), T(30, 54), T(25, 47)],
@@ -482,7 +487,8 @@ export function createDesertMap(seed: number): GameMap {
     const u = (x - CX) * 0.29 + (y - CY) * 0.13;
     const warp = (fbm(x * 0.06, y * 0.06, NS + 3) - fbm((W - 1 - x) * 0.06, (H - 1 - y) * 0.06, NS + 3)) * 3.2;
     const dune = Math.pow(0.5 + 0.5 * Math.cos(u * 2.1 + warp), 1.6);
-    return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42;
+    // (the town quarter stands on graded ground: its dunes levelled, the broad swells kept)
+    return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42 * (1 - 0.9 * townGround(x, y));
   };
   // the Jebel: a mountain massif on each side of the town (player 0's south-west of it, mirrored), mesas
   // standing on it as its rock-capped summits. A spine of summits and saddles, spurs and gullies cut
@@ -576,7 +582,7 @@ export function createDesertMap(seed: number): GameMap {
       for (const m of mesas) if (distToSegment(fx, fy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5) < m.r + 0.1) t = Tile.Rock;
       g.tiles[i] = coastTile(sea, fx, fy, t);
     }
-  markRoads(g, roads, roads.map((_, i) => (i % 3 === 2 ? 0.8 : 0.95)), [Tile.Sand, Tile.Dirt, Tile.Grass]);
+  markRoads(g, roads, roads.map((_, i) => [0.95, 0.95, 0.8, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
   paintOre(g, oreFields);
 
   const reserved = (x: number, y: number) =>
@@ -640,14 +646,19 @@ export function createDesertMap(seed: number): GameMap {
       { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
     ]),
     ...DESERT_EXTRA,
+    // the town quarter south of the ring road (off the wadi's banks)
+    ...desertTown().filter((st) => wadi.dist(st.x + st.w / 2 - 0.5, st.y + st.h / 2 - 0.5) > 6.5),
   ];
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   // the resort compounds by the sea (impassable; render/seaside.ts draws them)
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inResort(sea, x + 0.5, y + 0.5)) blocked[y * W + x] = 1;
   for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
+  // (the town's mosque is the first one placed on each side; any later ones become shops)
+  let mosques = 0;
+  for (const st of structures) if (st.look === 'mosque' && ++mosques > 2) st.look = 'shops';
 
   const deco = emptyDeco();
-  deco.roadStyles = roads.map((_, i) => (i % 3 === 0 ? { width: 1.05, variant: 0 as const } : i % 3 === 1 ? { width: 0.95, variant: 1 as const } : { width: 0.8, variant: 1 as const }));
+  deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
   deco.tracks = [...tracks0, ...mirrorLines(tracks0)];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
@@ -672,6 +683,9 @@ export function createDesertMap(seed: number): GameMap {
     const a = (j / 18) * Math.PI * 2 + 0.17;
     deco.trees.push({ x: CX + 0.5 + Math.cos(a) * (ringR + 1.55), y: CY + 0.5 + Math.sin(a) * (ringR + 1.55), kind: 2 });
   }
+  // palms lining the town's streets, on the pavements between the paving and the house fronts
+  deco.trees.push(...townPalms(g, roads.filter((_, i) => roadKind(i) === 3), structures, blocked));
+
   const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
   // palms along the back of the beaches (render only, knocked over by vehicles)
   deco.trees.push(...beachPalms(sea, g, NS));
@@ -747,6 +761,88 @@ const DESERT_TRACKS_EXTRA: Point[][] = [
   // from the spring over the saddle to the highway
   [{ x: 21.5, y: 82 }, { x: 25.5, y: 86.5 }, { x: 29, y: 89.5 }, { x: 31.5, y: 95 }, { x: 33, y: 100 }],
 ];
+/** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
+function townGround(x: number, y: number) {
+  const k = (px: number, py: number) => (1 - smoothstep(0, 2, Math.max(49.5 - px, px - 83.5, 0))) * (1 - smoothstep(0, 2, Math.max(71 - py, py - 96, 0)));
+  return Math.max(k(x, y), k(W - 1 - x, H - 1 - y));
+}
+/** Cross streets of the town quarter south of the ring road (tile index space; the high street is built off the ring). */
+const DESERT_TOWN_STREETS: Point[][] = [
+  [{ x: 54.4, y: 80 }, { x: 78, y: 80 }],
+  [{ x: 51.3, y: 88 }, { x: 76, y: 88 }],
+];
+/**
+ * The town quarter (player 0's half, south of the ring road; mirrored). Blocks two houses deep between the
+ * streets, a tile-wide alley behind every row and between neighbours, the houses facing the nearer
+ * street; shop-houses on the high street and the first cross street, courtyard houses and villas at the
+ * block ends, the mosque on the corner of the high street and the first cross street (the first
+ * candidate placed wins: placeStructures validates every footprint and skips what does not fit).
+ */
+function desertTown(): Structure[] {
+  const M = StructureKind.MudHouse;
+  const Q = StructureKind.Courtyard;
+  const out: Structure[] = [
+    { kind: Q, x: 65, y: 82, w: 2, h: 3, rot: 3, look: 'mosque' },
+    { kind: Q, x: 60, y: 82, w: 2, h: 3, rot: 1, look: 'shops' },
+    { kind: Q, x: 70, y: 74, w: 3, h: 2, rot: 2 },
+    { kind: Q, x: 56, y: 85, w: 3, h: 2, rot: 0 },
+    { kind: Q, x: 72, y: 85, w: 3, h: 2, rot: 0 },
+    { kind: Q, x: 68, y: 90, w: 3, h: 2, rot: 2 },
+    { kind: Q, x: 57, y: 74, w: 2, h: 3, rot: 1 },
+  ];
+  // rows (top tile, facing): north of each cross street the houses face south, south of it north
+  const rows: [number, number][] = [
+    [74, 2],
+    [77, 0],
+    [82, 2],
+    [85, 0],
+    [90, 2],
+    [93, 0],
+  ];
+  for (const [y, face] of rows)
+    for (let x = 51; x <= 78; x += 3) {
+      // the columns either side of the high street (x 63) face it
+      const xx = x >= 63 ? x + 2 : x;
+      const rot = xx === 60 ? 1 : xx === 65 ? 3 : face;
+      const street = rot % 2 === 1 || y === 77 || y === 82;
+      const h = hash2(xx, y, 5151);
+      out.push({ kind: M, x: xx, y, w: 2, h: 2, rot, look: street && h < (rot % 2 ? 0.7 : 0.45) ? 'shop' : undefined });
+    }
+  return out;
+}
+/** Render-only palms along the town streets: both pavements, every ~2.6 tiles, clear of houses and junctions. */
+function townPalms(g: Grids, streets: Point[][], structures: Structure[], blocked: Uint8Array) {
+  const out: { x: number; y: number; kind: number }[] = [];
+  const free = (x: number, y: number) => {
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = Math.floor(x + dx * 0.3);
+        const ty = Math.floor(y + dy * 0.3);
+        if (tx < 0 || ty < 0 || tx >= W || ty >= H) return false;
+        const i = ty * W + tx;
+        if (blocked[i] || g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Rock) return false;
+      }
+    return true;
+  };
+  void structures;
+  for (const st of streets) {
+    for (let k = 0; k < st.length - 1; k++) {
+      const a = st[k];
+      const b = st[k + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const nx = -(b.y - a.y) / len;
+      const ny = (b.x - a.x) / len;
+      for (let t = 1.6; t < len - 1.2; t += 2.6) {
+        for (const side of [-1, 1]) {
+          const x = a.x + 0.5 + ((b.x - a.x) * t) / len + nx * side * 1.05;
+          const y = a.y + 0.5 + ((b.y - a.y) * t) / len + ny * side * 1.05;
+          if (free(x, y)) out.push({ x, y, kind: 2 });
+        }
+      }
+    }
+  }
+  return out;
+}
 /** The well hamlet on the open sands north of the massif. */
 const DESERT_EXTRA: Structure[] = [
   { kind: StructureKind.MudHouse, x: 32, y: 63, w: 2, h: 2, rot: 1 },
