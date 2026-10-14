@@ -749,6 +749,14 @@ export class Ground {
         let r = br * (1 + hue);
         let g = br;
         let b = br * (1 - hue * 0.6);
+        // the Red Sea's bathing beaches: white coral sand, paler and cooler than the desert's gold
+        if (seaD && sand > 0.05) {
+          const ve = coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v);
+          const wk = smooth(-5.6, -3.9, ve) * Math.min(1, sand * 1.4);
+          r *= 1 + 0.08 * wk;
+          g *= 1 + 0.17 * wk;
+          b *= 1 + 0.42 * wk;
+        }
         if (wl < 0.35) {
           const wet = 1 - smooth(-0.1, 0.35, wl);
           r *= 1 - wet * 0.3;

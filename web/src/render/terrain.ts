@@ -145,8 +145,10 @@ export class Terrain {
     this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
     this.group.add(this.waterside.group);
     if (this.map.deco?.sea) {
-      this.seaside = new Seaside(this.map, this.fog, quality);
+      this.seaside = new Seaside(this.map, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 });
       this.group.add(this.seaside.group);
+      // the reef life is all under the water: never in the mirrored image
+      if (w.reflection && this.seaside.reef) w.reflection.hide.push(this.seaside.reef.group);
     }
     // the whitewater flows around all the rocks breaking the surface, the relief's boulders too
     setRapidsRocks(w.material, this.waterside.rapidsRocks());

@@ -6,6 +6,7 @@ import { surfaceHeight } from './ground';
 import { landmarkMaterial } from './landmarks/material';
 import { CIV_SCALE, CivilianInstances, Opt, Pose } from './models/civilians';
 import { Kit, datePalm } from './models/landmarks';
+import { ReefLife, buildWreck, type Wreck } from './reeflife';
 import { RIVER } from './water';
 
 /*
@@ -18,6 +19,9 @@ import { RIVER } from './water';
  *    a lifeguard tower, flags, a beach bar, a jetty out over the reef to a floating pontoon, buoys;
  *  - boats bobbing off the reef (a white yacht, speedboats, a dinghy), one more far out;
  *  - people: sunbathers, swimmers in the shallows and the pool, strollers on the promenade, diners.
+ *  - a rusty cargo ship aground on the Blue Hole's rim (reeflife.ts builds it; its dry part merges in here);
+ *  - leaning coconut palms along the waterline;
+ *  - the life in the clear shallows and the Blue Hole's lagoon (reeflife.ts: corals, fish, starfish, jellyfish).
  * Draw calls: one merged static mesh per corner (the landmarks' shared program: night windows and
  * lamps glow), one instanced mesh each for the parasols, the loungers and the boats, one instanced
  * civilian mesh per corner (the ambient people's program). Nothing new to compile.
@@ -105,11 +109,14 @@ export class Seaside {
   private _e = new THREE.Euler();
   private _v = new THREE.Vector3();
   private _s = new THREE.Vector3();
+  /** The corals, fish and the wreck's sunken part (reeflife.ts). */
+  reef: ReefLife | null = null;
 
   constructor(
     private map: GameMap,
     private fog: FogOfWar,
     private quality: 'low' | 'medium' | 'high',
+    wxLight?: { value: THREE.Vector3 },
   ) {
     this.sea = map.deco!.sea!;
     this.crowd = quality === 'high' ? 1 : 0.55;
@@ -117,12 +124,21 @@ export class Seaside {
     this.group.userData.perfCat = 'seaside';
     const parasols: { m: THREE.Matrix4; c: THREE.Color; k: number }[] = [];
     const loungers: { m: THREE.Matrix4; c: THREE.Color }[] = [];
+    const wrecks: Wreck[] = [];
     for (const b of [0, 1]) {
       const F = this.frame(b);
       const k = new Kit();
       const beds: Lounger[] = [];
       this.buildResort(k, F, parasols, loungers, beds);
       this.buildBeach(k, F, parasols, loungers, beds);
+      // the wreck on the Blue Hole's rim: the whole hull here (the water hides what is under it; reeflife.ts
+      // draws the sunken part again through the water)
+      const wr = buildWreck(F.P);
+      wrecks.push(wr);
+      k.pos.push(...wr.kit.pos);
+      k.nor.push(...wr.kit.nor);
+      k.col.push(...wr.kit.col);
+      k.glow.push(...wr.kit.glow);
       const geo = k.build();
       const mesh = new THREE.Mesh(geo, landmarkMaterial(fog));
       mesh.name = 'seaside-static';
@@ -134,6 +150,10 @@ export class Seaside {
     this.group.add(...this.instanced(parasolGeometry(), parasols, 'seaside-parasols'));
     this.group.add(...this.instanced(loungerGeometry(), loungers, 'seaside-loungers'));
     this.buildBoats();
+    if (wxLight) {
+      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P, this.frame(1).P], wrecks);
+      this.group.add(this.reef.group);
+    }
     if (quality !== 'low') {
       for (const b of [0, 1]) {
         const n = this.statics[b].length + this.walkers.filter((w) => w.b === b).length;
@@ -602,6 +622,21 @@ export class Seaside {
       k.at(p.x, WATER_LEVEL, p.y);
       k.ball(0.04, 0, 0.015, 0, Math.round(u / 0.75) % 2 ? 0xf2f2ee : 0xf2c230, 0);
     }
+    // coconut palms leaning out over the waterline, in twos and threes
+    const keep = [jU, towerU, barU, -20.5, -15.3, -6.2, -1.6];
+    for (let u = bu0 + 0.8; u < bu1 - 0.3; u += 1.35) {
+      const j = h(Math.round(u * 10), 41);
+      if (j < 0.4) continue;
+      const uu = u + (h(Math.round(u * 10), 42) - 0.5) * 0.5;
+      if (keep.some((x) => Math.abs(uu - x) < 0.85)) continue;
+      const v = -1.05 - h(Math.round(u * 10), 43) * 0.45;
+      const p = F.P(uu, v);
+      if (!this.inMap(p.x, p.y, 0.5) || this.tileAt(p.x, p.y) !== Tile.Sand) continue;
+      const y = this.gh(p.x, p.y);
+      if (y < WATER_LEVEL + 0.02) continue;
+      this.at(k, F, uu, v, y, (h(Math.round(u * 10), 44) - 0.5) * 0.9);
+      coconutPalm(k, h(Math.round(u * 10), 45), 0.85 + h(Math.round(u * 10), 46) * 0.25);
+    }
     void r;
     void parasols;
   }
@@ -801,6 +836,10 @@ export class Seaside {
 
   update(time: number) {
     this.frameNo++;
+    if (this.reef) {
+      this.reef.zoom = this.zoom;
+      this.reef.update();
+    }
     this.updateBoats(time);
     // the figures: left out zoomed out; every other frame is plenty (bobbing swimmers, strollers)
     const near = this.zoom >= 1.1;
@@ -817,6 +856,7 @@ export class Seaside {
   }
 
   dispose() {
+    this.reef?.dispose();
     this.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (mesh.isMesh) mesh.geometry.dispose();
@@ -825,6 +865,40 @@ export class Seaside {
 }
 
 // ------------------------------------------------------------------ models
+
+/**
+ * A coconut palm leaning out towards the sea (local -z), its slim ringed trunk curving up, drooping fronds and
+ * a cluster of coconuts. Origin at the foot.
+ */
+function coconutPalm(k: Kit, v: number, s = 1) {
+  const up = new THREE.Vector3(0, 1, 0);
+  const lean = 0.35 + v * 0.3;
+  const P = (t: number) => new THREE.Vector3(0, t * 1.15 * s, -lean * t * t * s);
+  const n = 7;
+  for (let i = 0; i < n; i++) {
+    const a = P(i / n);
+    const b = P((i + 1) / n);
+    const d = b.clone().sub(a);
+    const len = d.length();
+    const g = new THREE.CylinderGeometry(0.045 * s * (1 - i * 0.05), 0.052 * s * (1 - i * 0.05), len + 0.01, 6);
+    const m = new THREE.Matrix4().compose(a.clone().add(b).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(up, d.normalize()), new THREE.Vector3(1, 1, 1));
+    k.add(g, m, i % 2 ? 0x8a7458 : 0x9c8664);
+  }
+  const top = P(1);
+  for (let f = 0; f < 9; f++) {
+    const a = (f / 9) * Math.PI * 2 + v * 4;
+    for (let sg = 0; sg < 3; sg++) {
+      const L = 0.27 * s;
+      const g = new THREE.BoxGeometry(L, 0.01, (0.13 - sg * 0.035) * s);
+      g.translate(L / 2, 0, 0).rotateZ(0.1 - sg * 0.42).translate(sg * L * 0.9, -sg * sg * 0.045 * s, 0).rotateY(a).translate(top.x, top.y, top.z);
+      k.add(g, null, sg === 2 ? 0x5a8a2a : 0x4e8a34);
+    }
+  }
+  for (let c = 0; c < 3; c++) {
+    const a = c * 2.1 + v;
+    k.ball(0.04 * s, top.x + Math.cos(a) * 0.05 * s, top.y - 0.05 * s, top.z + Math.sin(a) * 0.05 * s, 0x5a4a22, 0);
+  }
+}
 
 /** A thatched beach parasol (origin at the foot of the pole). */
 function parasolGeometry(): THREE.BufferGeometry {
