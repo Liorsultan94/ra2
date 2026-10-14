@@ -114,9 +114,8 @@ def is_arm(p):
     return (abs(p.x) > 0.185 or (abs(p.x) > 0.16 and p.z > 1.33)) and p.z > 0.86 and arm_t(p)[0] > -0.02 and arm_t(p)[1] < 0.15
 
 
-# player colour from above and from the sides (the RTS camera): the pack and the plate carrier's shoulder
-# straps / pads carry it (their top and back faces, composite()), as the procedural soldier's pack lid does
-TEAM_OBJS = ('Pack', 'Pack_TopPocket', 'Pack_Pocket', 'Vest_ShoulderPad_L', 'Vest_ShoulderPad_R', 'Vest_ShoulderStrap_L', 'Vest_ShoulderStrap_R')
+# objects whose every outward face takes the player colour (mask bake B = 0.25, composite())
+TEAM_OBJS = ()  # (none since v3: gear keeps its olive; the mechanism tags whole objects for the mask bake)
 
 
 def team_mats(o):
@@ -912,28 +911,21 @@ def composite(aid, px, order, tex):
     Nb = px['nrm'][..., :3] * 2 - 1
     Ng = np.stack([Nb[..., 0], Nb[..., 2], -Nb[..., 1]], -1)
     clothm = cloth > 0.5
-    # player colour (orm R) where the procedural soldier shows it: arm bands, helmet band + crown patch,
-    # chest ID panel, pack lid
+    # player colour (orm R): small, realistic markers only (owner: the plate carrier, its straps and the pack
+    # keep their dark olive): an identification band round the helmet / Mitznefet (like an exercise band)
+    # and a band on both upper sleeves; the selection / team outline does the rest at play zoom
     arm = np.zeros(P.shape[:2], bool)
     for s in ('R', 'L'):
         y0 = REST['aua' + s].y - 0.135
-        arm |= isb('aua' + s) & clothm & (np.abs(P[..., 1] - y0) < 0.055) & ~flag
+        arm |= isb('aua' + s) & clothm & (np.abs(P[..., 1] - y0) < 0.05) & ~flag
     head = np.array(REST['ahead'][:])
     q = P - (head + np.array([-0.005, 0.12, 0.0]))
     r = np.linalg.norm(q, axis=-1)
     el = np.arcsin(np.clip(q[..., 1] / np.maximum(r, 1e-6), -1, 1))
-    # the helmet (Mitznefet net or shell, whichever the bake hit): band + a wide crown, the RTS camera looks
-    # down on the helmets
+    # (whichever helmet surface the bake hit: Mitznefet net or shell)
     helm = isb('ahead') & (P[..., 1] > head[1] + 0.06) & (fs < 0.4)
-    t_helmet = helm & ((np.abs(el - 0.30) < 0.08) | (el > 0.6))
-    sp = np.array(REST['aspine'][:])
-    c = P - sp
-    t_chest = isb('achest') & clothm & (Ng[..., 0] > 0.55) & (c[..., 0] > 0.08) & (np.abs(c[..., 1] - 0.36) < 0.05) & (np.abs(c[..., 2]) < 0.085)
-    # the pack (top and back): the procedural soldier's big team-coloured pack lid reads from every side
-    t_pack = isb('achest') & clothm & (c[..., 0] < -0.13) & (c[..., 1] > 0.02) & ((Ng[..., 1] > 0.3) | (Ng[..., 0] < -0.5))
-    # tagged objects (TEAM_OBJS): everything but the faces against the body
-    t_obj = (np.abs(fs - 0.25) < 0.1) & ((Ng[..., 1] > -0.3) | (Ng[..., 0] < -0.3))
-    teamm = (arm | t_helmet | t_chest | t_pack | t_obj).astype(np.float32)
+    t_helmet = helm & (np.abs(el - 0.32) < 0.09)
+    teamm = (arm | t_helmet).astype(np.float32)
     # hard-edged and slightly grown (no pale halo blending into the camo at 256 px)
     teamm = (C.blur(teamm, 1) > 0.3).astype(np.float32) * used
     alb = base * ALB_GAIN * (AO_FLOOR + (1 - AO_FLOOR) * ao)[..., None]
