@@ -116,16 +116,22 @@ describe('war doctrines (AI2)', () => {
     expect(tank.dead).toBe(false);
   });
 
-  it('USA: air superiority first - its jets hunt the air defences', () => {
+  it('USA: air superiority first - its jets hunt the mobile air defences', () => {
     const w = world('russia', 'usa');
     const ai = new AIController(w, 1, 'hard') as AnyAI;
     w.controllers.push(ai);
     const e = w.players[0];
     const me = w.players[1];
     const jet = w.spawnUnit('usa_fighter', 1, me.startX + 0.5, me.startY + 0.5);
-    const sam = known(w, ai, factionDefByRole('russia', 'def_aa').id, e.startX + 8, e.startY + 8);
     const ref = known(w, ai, factionDefByRole('russia', 'refinery').id, e.startX + 2, e.startY + 12);
-    expect(ai.pickJetTarget(jet)).toBe(sam.id);
+    // a mobile air defence out in the open, seen by one of our soldiers
+    const p = w.nearestPassable(e.startX + 14, e.startY + 14, 8, w.mainland)!;
+    const aa = w.spawnUnit('russia_aa', 0, p[0] + 0.5, p[1] + 0.5);
+    w.spawnUnit('usa_rifle', 1, p[0] + 3.5, p[1] + 0.5);
+    for (let t = 0; t < 12; t++) w.step();
+    ai.intel.set(aa.id, { x: aa.x, y: aa.y, def: aa.def, building: false, seen: w.tick, vx: 0, vy: 0 });
+    expect(w.sees(1, aa)).toBe(true);
+    expect(ai.pickJetTarget(jet)).toBe(aa.id);
     ai.war = NO_WAR;
     expect(ai.pickJetTarget(jet)).toBe(ref.id);
   });

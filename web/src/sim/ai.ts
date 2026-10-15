@@ -37,6 +37,9 @@ const CFG: Record<Difficulty, DiffCfg> = {
   hard: { think: 10, firstWave: 9, waveGrowth: 3, maxWave: 24, defenses: 5, tech: true, queueDepth: 3, harvesters: 2, micro: 2 },
 };
 
+/** AI2 feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
+export const AI2 = { retreat: true, terrain: true, war: true };
+
 /** How strongly production shifts toward counters of what the enemy fields (0 = doctrine mix only). */
 const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
 /** Chance that a main push is preceded by a feint on another lane (micro > 0 only). */
@@ -167,6 +170,8 @@ interface Wave {
   commit?: number;
   retreats?: number;
   fell?: boolean;
+  /** Its value alive and the enemy value it killed over the last seconds (the trade). */
+  hist?: { t: number; alive: number; killed: number }[];
 }
 
 /** A group falling back to a defensive position (AI2 orderly retreat), then regrouping there. */
@@ -326,12 +331,16 @@ export class AIController implements Controller {
   private postBudget = 0;
   /** Artillery-preparation doctrines: since when a ready wave waits for its guns (-1: not waiting). */
   private prepWait = -1;
+  /** Hard: since when a ready wave keeps massing because it would be weaker than the enemy force we know of (-1: not). */
+  private massWait = -1;
+  /** Enemy value seen to die at our base (counter-attacks). */
+  private homeDeaths: { t: number; v: number }[] = [];
   private houseNext = 0;
   private plateauSeen = new Set<number>();
   /** Debug / tests (AI2): houses garrisoned, canyon squads posted, plateau detachments sent and units that got up there, tech sites targeted. */
   readonly terrainStats = { garrisons: 0, canyon: 0, plateau: 0, plateauVisits: 0, techs: 0 };
   /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
-  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, strikes: {} as Record<string, number> };
+  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, counters: 0, finishes: 0, strikes: {} as Record<string, number> };
   /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
   private hMin = 0;
   private hSpan = 1;
@@ -365,7 +374,7 @@ export class AIController implements Controller {
     this.scoutAt = Math.round(TPS * this.rng.range(18, 40));
     this.waveStale = Math.round(TPS * this.rng.range(180, 300) * this.planCfg.stale);
     this.waveJitter = this.rng.int(3) - 1;
-    this.war = this.cfg.micro > 0 ? this.doctrine.war : NO_WAR;
+    this.war = this.cfg.micro > 0 && AI2.war ? this.doctrine.war : NO_WAR;
     this.buildOrder = warOrder(this.buildOrder, this.war);
     this.scoutAt = Math.round(this.scoutAt * this.war.scoutEarly);
     const hs = world.map.heights;
@@ -482,7 +491,12 @@ export class AIController implements Controller {
       for (const [id, it] of this.intel) {
         const e = w.get(id);
         // a death we saw near one of our waves counts toward its trade (lane memory)
-        if (!e && w.tick - it.seen <= this.cfg.think * 6 + TPS * 2) this.creditKill(it);
+        if (!e && w.tick - it.seen <= this.cfg.think * 6 + TPS * 2) {
+          this.creditKill(it);
+          // an attacker that died at our base
+          const [hx, hy] = this.home();
+          if (!it.building && Math.hypot(it.x - hx, it.y - hy) < 28) this.homeDeaths.push({ t: w.tick, v: cost(it.def) });
+        }
         // dead, captured, or a unit not seen for a long time
         if (!e || !w.isEnemy(this.pid, e.owner) || (!it.building && w.tick - it.seen > TPS * 90)) this.intel.delete(id);
       }
@@ -1088,7 +1102,7 @@ export class AIController implements Controller {
     const eng = `${f}_engineer`;
     const engineers = units.filter((u) => u.def === eng);
     // (AI2: Normal / Hard also take the neutral tech sites on our side of the map while they are cheap to hold)
-    const techs = TERRAIN[this.difficulty].techs;
+    const techs = AI2.terrain ? TERRAIN[this.difficulty].techs : 0;
     for (const e of engineers) {
       if (this.engineerSent.has(e.id)) continue;
       const oil = this.nearestOil(e) ?? (techs ? this.nearestTech(e) : null);
@@ -1272,7 +1286,7 @@ export class AIController implements Controller {
 
     if (micro > 0) this.manageRetreats(force);
     // orderly retreat of losing groups to the defences, regrouping and returning (AI2)
-    if (RETREAT[this.difficulty]) {
+    if (RETREAT[this.difficulty] && AI2.retreat) {
       this.manageEngagements(buildings);
       this.manageFallbacks(force);
     }
@@ -1283,7 +1297,7 @@ export class AIController implements Controller {
     if (micro > 0 && doc.harass > 0) this.manageRaids(force);
     if (doc.airWing > 0) this.manageAirWing(force);
     if (micro > 0) this.manageAmbush(force);
-    if (micro > 0 && this.thinks % 3 === 0) this.manageTerrain(force);
+    if (micro > 0 && AI2.terrain && this.thinks % 3 === 0) this.manageTerrain(force);
     this.manageWaves(force);
     this.manageArtillery(force);
     if (micro > 0) this.manageCrush(force);
@@ -1359,7 +1373,7 @@ export class AIController implements Controller {
     let best = -1;
     let bs = -Infinity;
     const hunt = this.huntAA();
-    for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense' || (hunt && buildingDef(it.def).role === 'def_aa'), TPS * 15)) {
+    for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 15)) {
       const e = w.get(id);
       if (!e || (!it.building && !w.sees(this.pid, e))) continue;
       if (this.peace && !this.defensible(it.x, it.y)) continue;
@@ -1377,9 +1391,10 @@ export class AIController implements Controller {
       }
       // the war doctrine: its high-value targets; air superiority first (the air defences, braving their fire)
       value += this.hvtRank(it.def, it.building) * 2;
-      const aaMark = hunt && this.targetKey(it.def, it.building).endsWith('aa');
+      // (mobile air defences seen in the open; the SAM sites are left to the strike missiles: hvt)
+      const aaMark = hunt && !it.building && klass(it.def) === 'aa';
       if (aaMark) value += 8;
-      const s = value * 3 - this.threatAt(it.x, it.y, 7, true) * (aaMark ? 1.2 : 2.5) - Math.hypot(it.x - from.x, it.y - from.y) * 0.04;
+      const s = value * 3 - this.threatAt(it.x, it.y, 7, true) * (aaMark ? 1.8 : 2.5) - Math.hypot(it.x - from.x, it.y - from.y) * 0.04;
       if (s > bs) {
         bs = s;
         best = id;
@@ -1619,8 +1634,18 @@ export class AIController implements Controller {
         wv.low = 0;
         continue;
       }
+      // the trade so far: the value the wave lost against the value it was seen to kill, over the last few seconds
+      let alive = 0;
+      for (const id of wv.ids) alive += cost(w.get(id)?.def ?? '');
+      const hist = (wv.hist ??= []);
+      hist.push({ t: w.tick, alive, killed: wv.killed });
+      while (hist.length > 1 && w.tick - hist[0].t > TPS * 8) hist.shift();
+      const lost = hist[0].alive - alive;
+      const trade = lost > 0 && lost >= (wv.killed - hist[0].killed) * 1.5;
+      const ratio = R.ratio * this.war.pitched;
       const eng = this.engagement(fighters, cx, cy);
-      if (!eng || eng.ratio >= R.ratio * this.war.pitched || w.tick < (wv.commit ?? 0) || (wv.retreats ?? 0) >= R.max) {
+      // clearly losing: well below the ratio, or below it while trading badly
+      if (!eng || eng.ratio >= ratio || (!trade && eng.ratio >= ratio * 0.5) || w.tick < (wv.commit ?? 0) || (wv.retreats ?? 0) >= R.max) {
         wv.low = 0;
         continue;
       }
@@ -2341,8 +2366,9 @@ export class AIController implements Controller {
     const hunt = this.huntAA();
     for (const [id, it] of this.known((it) => !it.building || buildingDef(it.def).category !== 'defense', TPS * 20)) {
       if (this.peace && !this.defensible(it.x, it.y)) continue;
+      // (air superiority: a lone mobile air defence is fair game for the wing)
+      const aaMark = hunt && klass(it.def) === 'aa' && !it.building && this.threatAt(it.x, it.y, 8, true) <= 4;
       const d = DEFS[it.def];
-      const aaMark = hunt && klass(it.def) === 'aa' && !it.building;
       let value = it.building ? 3 : d.kind === 'unit' && d.harvester ? 7 : klass(it.def) === 'arty' || klass(it.def) === 'strike' ? 8 : klass(it.def) === 'aa' ? (aaMark ? 10 : -10) : 4;
       if (it.building && this.doctrine.deep.includes(buildingDef(it.def).role)) value += 3;
       value += this.hvtRank(it.def, it.building) * 1.5;
@@ -2455,22 +2481,48 @@ export class AIController implements Controller {
       // (the first wave is never smaller than the doctrine's: no token rush with the starting units)
       let want = Math.max(this.lastWave === 0 ? 6 : 4, this.waveSize + this.waveJitter);
       const opportunity = micro > 0 && this.lastWave > 0 && fighters.length >= 4 && this.thinks % 3 === 0 && this.enemyArmyAway();
+      // a counter-attack (AI2): an enemy attack was just beaten off at our base - go while it is weak
+      const counter = micro > 0 && AI2.retreat && this.lastWave > 0 && fighters.length >= 5 && this.homeKills(TPS * 30) >= 2500;
       const nightEdge = w.night && fighters.length >= 4 && fighters.filter((u) => hasNightVision(u)).length * 2 >= fighters.length;
-      if (opportunity) want = Math.max(4, Math.ceil(want * 0.6));
+      if (opportunity || counter) want = Math.max(4, Math.ceil(want * 0.6));
       else if (nightEdge) want = Math.max(4, Math.ceil(want * 0.8));
       let go = fighters.length >= want || (fighters.length >= 4 && sinceWave > this.waveStale);
+      // the finishing push (AI2, Hard): far stronger than all the enemy force we know of - go now with everything
+      let crushing = false;
+      if (!go && micro >= 2 && AI2.retreat && this.lastWave > 0 && fighters.length >= 6 && this.thinks % 3 === 0) {
+        const theirs = this.knownForce() as Entity[];
+        crushing = this.strength(fighters, this.armourMix(theirs.length ? theirs : fighters)) >= 2 * this.strength(theirs, this.armourMix(fighters));
+        go = crushing;
+      }
       // artillery-preparation doctrines (Hard) wait up to 90 s for their guns before a wave goes
       if (go && micro >= 2 && this.war.prep > 0 && this.homeGuns().length < 2 && defsForFaction(this.p.faction).some((d) => d.kind === 'unit' && d.aiWeight && klass(d.id) === 'arty' && w.canBuild(this.pid, d.id))) {
         if (this.prepWait < 0) this.prepWait = w.tick;
         if (w.tick - this.prepWait < TPS * 90) go = false;
       }
+      // attack when strong enough (AI2, Hard): a wave that would be weaker than the enemy force we know of keeps
+      // massing at the rally point (two minutes at most), then goes with everything it has gathered
+      let massed = false;
+      if (go && micro >= 2 && AI2.retreat && this.lastWave > 0 && !opportunity && !counter && !crushing) {
+        const theirs = this.knownForce();
+        if (theirs.length) {
+          const mine = this.strength(fighters, this.armourMix(theirs as Entity[]));
+          if (mine < this.strength(theirs as Entity[], this.armourMix(fighters)) * 0.9) {
+            if (this.massWait < 0) this.massWait = w.tick;
+            if (w.tick - this.massWait < TPS * 120) go = false;
+          }
+          massed = this.massWait >= 0;
+        }
+      }
       if (go) {
         this.prepWait = -1;
+        this.massWait = -1;
+        if (crushing) this.stats.finishes++;
         if (fighters.length >= want) {
           if (opportunity) this.stats.opportunist++;
+          else if (counter) this.stats.counters++;
           else if (nightEdge) this.stats.night++;
         }
-        if (ramp && fighters.length > want) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, want);
+        if (ramp && fighters.length > want && !massed && !counter && !crushing) fighters = [...fighters].sort((a, b) => a.id - b.id).slice(0, want);
         const target = this.pickTarget();
         const tx = target ? target[0] : enemy[0];
         const ty = target ? target[1] : enemy[1];
@@ -2546,6 +2598,25 @@ export class AIController implements Controller {
    * the enemy structures we know of around the objective (defences first); the main body is held back for the
    * doctrine's preparation time, then goes (as after a feint). false when there is nothing to prepare with or on.
    */
+  /** Enemy value seen to die at our base in the last `span` ticks (an attack beaten off). */
+  private homeKills(span: number): number {
+    const t = this.world.tick;
+    while (this.homeDeaths.length && t - this.homeDeaths[0].t > TPS * 60) this.homeDeaths.shift();
+    let v = 0;
+    for (const d of this.homeDeaths) if (t - d.t <= span) v += d.v;
+    return v;
+  }
+
+  /**
+   * The enemy force we know of (fog of war): fighting units seen in the last minute, at full health as far as we
+   * know, plus the armed structures we have found. Entity-like records for strength().
+   */
+  private knownForce(): { def: string; hp: number; passengers: number[] }[] {
+    const out: { def: string; hp: number; passengers: number[] }[] = [];
+    for (const [, it] of this.known((it) => (it.building ? !!DEFS[it.def].weapon : klass(it.def) === 'main' || klass(it.def) === 'arty' || klass(it.def) === 'aa'), TPS * 60)) out.push({ def: it.def, hp: DEFS[it.def].hp, passengers: [] });
+    return out;
+  }
+
   /** Our guns at home (artillery of the army, not out with a wave). */
   private homeGuns(): Entity[] {
     const [hx, hy] = this.home();
@@ -2582,8 +2653,8 @@ export class AIController implements Controller {
     this.cmd({ type: 'move', ids: gids, x: gx, y: gy });
     guns.forEach((u, i) => this.cmd({ type: 'attack', ids: [u.id], target: marks[i % Math.min(marks.length, 3)].id, queue: true }));
     this.send([...body, ...wing], front?.pos ?? null, bx, by);
-    // (released by the guns opening fire plus the preparation time, or after two minutes whatever happens)
-    this.staged = { ids: body, wing, lane: null, laneKey: front?.key ?? '', wingLane: null, tx, ty, at: w.tick + TPS * 120, prep: { guns: gids, x: gx, y: gy, fired: -1 } };
+    // (released by the guns opening fire plus the preparation time, or after a minute whatever happens)
+    this.staged = { ids: body, wing, lane: null, laneKey: front?.key ?? '', wingLane: null, tx, ty, at: w.tick + TPS * 60, prep: { guns: gids, x: gx, y: gy, fired: -1 } };
     this.setRole([...body, ...wing], 'staged');
     this.stats.preps++;
     this.lastWave = w.tick;

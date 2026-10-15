@@ -100,7 +100,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     deep: ['radar', 'airfield', 'factory', 'tech'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
     // air superiority first (AA hunting, then strikes), then combined-arms pushes with strong support
-    war: war({ aaHunt: true, hvt: ['aa', 'radar', 'airfield', 'superweapon', 'factory'], mix: { fighter: 1.4, heli: 1.2, himars: 1.3, apc: 1.1 }, flank: 1.1 }),
+    war: war({ aaHunt: true, hvt: ['aa', 'radar', 'airfield', 'superweapon', 'factory'], mix: { fighter: 1.2, heli: 1.2, himars: 1.3, apc: 1.1 }, flank: 1.1 }),
   },
   israel: {
     summary: 'Precision strikes and a layered air-defence umbrella; Merkava/Trophy armour is preserved and pulled back to repair.',
@@ -157,7 +157,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     deep: ['conyard', 'factory', 'refinery'],
     spend: { infantry: 0.9, vehicle: 1.3, air: 0.8 },
     // a heavy artillery and rocket preparation, then a massed armour wave; slower, steadier pacing
-    war: war({ prep: 14, prepMix: 3, wave: 1.15, pace: 1.3, flank: 0.7, pitched: 0.8, hvt: ['def_gun', 'def_at', 'factory', 'conyard'], mix: { tos: 1.3, mbt: 1.2 } }),
+    war: war({ prep: 14, prepMix: 3, wave: 1.15, pace: 1.15, flank: 0.7, pitched: 0.8, hvt: ['def_gun', 'def_at', 'factory', 'conyard'], mix: { tos: 1.3, mbt: 1.2 } }),
   },
   germany: {
     summary: 'Heavy mechanised manoeuvre: early, fast Leopard/Puma thrusts through the flanks with Bergepanzer recovery.',
