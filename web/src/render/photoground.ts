@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { phoneCaps } from './devicecaps';
 import type { Biome } from '../sim/map';
-import { PHOTO_MATERIALS, PHOTO_STACKS, type PhotoSlot, type PhotoStack } from './terrainset';
+import { PHOTO_MATERIALS, PHOTO_STACKS, type PhotoMaterial, type PhotoSlot, type PhotoStack } from './terrainset';
+import { DUNES_BYTES, SAND_BYTES, SAND_MATERIALS } from './sandset';
 
 /*
  * Photoscanned ground materials (CC0 scans baked by tools/bake-terrain.mjs
@@ -38,7 +39,25 @@ export function assetBase(): string {
   }
 }
 
+/** A ground layer's material: the photoscans (terrainset.ts) and the desert's Blender-baked sand (sandset.ts). */
+export function photoMaterial(key: string): PhotoMaterial | undefined {
+  return PHOTO_MATERIALS[key] ?? (SAND_MATERIALS as Record<string, PhotoMaterial>)[key];
+}
+
+/**
+ * The desert (GD1): the Blender-baked sand (sandset.ts) takes the dune scan's layer, and a reg / desert
+ * pavement gravel layer joins as the extra slot `reg` (PH_REG in the ground shader: gravel patches on the sand).
+ */
+const DESERT_STACK: PhotoStack = (() => {
+  const s = PHOTO_STACKS.desert;
+  const layers = [...s.layers.map((k) => (k === 'dunes' ? 'dsand' : k)), 'dreg'];
+  const bytes: Record<number, number> = {};
+  for (const [k, v] of Object.entries(s.bytes)) bytes[+k] = v - (DUNES_BYTES[+k] ?? 0) + (SAND_BYTES[+k] ?? 0);
+  return { layers, slot: { ...s.slot, reg: layers.length - 1 } as PhotoStack['slot'], bytes };
+})();
+
 export function photoStack(biome: Biome | undefined): PhotoStack {
+  if (biome === 'desert') return DESERT_STACK;
   return PHOTO_STACKS[biome ?? 'temperate'] ?? PHOTO_STACKS.temperate;
 }
 
@@ -149,7 +168,7 @@ export class PhotoGround {
     const stack = photoStack(biome);
     this.stack = stack;
     const n = stack.layers.length;
-    const mats = stack.layers.map((k) => PHOTO_MATERIALS[k]);
+    const mats = stack.layers.map((k) => photoMaterial(k)!);
     // placeholders: each layer's mean colour, a flat normal, mid height
     const a = new Uint8Array(n * 4);
     const nn = new Uint8Array(n * 4);

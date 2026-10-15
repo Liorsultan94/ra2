@@ -105,8 +105,9 @@ const LOOKS: Record<Biome, BiomeLook> = {
       dirt: scan('drysoil', 0x9a8160, 0.5),
       // South Sinai granite: dark red-brown and grey
       rock: scan('greyrock', 0x6e4c40, 0.62),
-      // the dune scan is pale grey: its ripples, the biome's gold
-      sand: scan('dunes', 0xdcb478, 0.95),
+      // the desert's gold (the Blender-baked sand layer, GD1, is tinted to it; the same colour the dune scan
+      // was mixed to before, so the minimap, the outskirts and the low quality ground keep their sand)
+      sand: 0xd8b178,
       mud: scan('cracked', 0x8a7052, 0.45),
       soil: scan('farmsoil', 0x7a5a3a, 0.6),
       crop: 0x5c7a2c,
@@ -114,7 +115,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
       hay: 0x9a8c50,
       gravel: scan('gravel', 0xa08a6a, 0.5),
     },
-    // the grey dune scan takes the desert's gold entirely
+    // the sand layer takes the desert's gold entirely
     photoHue: { sand: 1 },
     blades: 0.35,
     clover: 0,

@@ -154,7 +154,7 @@ export class Ground {
   readonly ctl: Uint8Array;
   /** 3D grass blade map: r density, g height (src/render/grass.ts). */
   readonly blades: Uint8Array;
-  /** Second ground control map (photo layers): r forest floor, g gravel, b / a unused. */
+  /** Second ground control map (photo layers): r forest floor, g gravel, b packed sand / a reg gravel (desert), b snow (winter: ctl). */
   readonly ctl2: Uint8Array;
   /** Photoscanned layers (null on low quality). */
   readonly photo: PhotoGround | null;
@@ -486,6 +486,37 @@ export class Ground {
         if (x > 0 && y < m.h - 1) relax(i, i + W - 1, 1.414);
       }
     const waterD = coarseField(W, m.h, 1, (x, y) => wd[Math.max(0, Math.min(m.h - 1, Math.floor(y))) * W + Math.max(0, Math.min(W - 1, Math.floor(x)))]);
+    // desert (GD1): distance to the bare rock (gravel fans round the massifs and mesas), reg and crust patches
+    let rockD: ((x: number, y: number) => number) | null = null;
+    let regN: ((x: number, y: number) => number) | null = null;
+    let crustN: ((x: number, y: number) => number) | null = null;
+    if (bc === 1) {
+      const rdist = new Float32Array(W * m.h).fill(1e3);
+      for (let i = 0; i < W * m.h; i++) if (m.tiles[i] === Tile.Rock) rdist[i] = 0;
+      const rl = (i: number, j: number, c: number) => {
+        if (rdist[j] + c < rdist[i]) rdist[i] = rdist[j] + c;
+      };
+      for (let y = 0; y < m.h; y++)
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          if (x > 0) rl(i, i - 1, 1);
+          if (y > 0) rl(i, i - W, 1);
+          if (x > 0 && y > 0) rl(i, i - W - 1, 1.414);
+          if (x < W - 1 && y > 0) rl(i, i - W + 1, 1.414);
+        }
+      for (let y = m.h - 1; y >= 0; y--)
+        for (let x = W - 1; x >= 0; x--) {
+          const i = y * W + x;
+          if (x < W - 1) rl(i, i + 1, 1);
+          if (y < m.h - 1) rl(i, i + W, 1);
+          if (x < W - 1 && y < m.h - 1) rl(i, i + W + 1, 1.414);
+          if (x > 0 && y < m.h - 1) rl(i, i + W - 1, 1.414);
+        }
+      rockD = coarseField(W, m.h, 1, (x, y) => rdist[Math.max(0, Math.min(m.h - 1, Math.floor(y))) * W + Math.max(0, Math.min(W - 1, Math.floor(x)))]);
+      regN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.16 + 13, y * 0.16, 83, 4));
+      crustN = coarseField(W, m.h, 4, (x, y) => fbm(x * 0.21, y * 0.21 + 29, 89, 3));
+    }
+    yield;
 
     // distance fields to roads and tracks (stamped per segment)
     const roadD = new Float32Array(N * N).fill(99);
@@ -879,6 +910,24 @@ export class Ground {
           if (bc === 3) gv *= 0.4;
           ctl2[o + 1] = Math.min(1, gv) * 255;
         }
+        if (bc === 1 && regN && crustN && rockD) {
+          // desert sand (GD1, photo layers): b = packed / crusted sand (no wind ripples: road and track verges,
+          // the bases and yards, the town, the wadi's silt floor, the wet swash zone of the beaches, crusted
+          // patches on the flats), a = reg gravel patches on the sand (gravel fans round the massifs and mesas,
+          // stony flats; never on the beaches)
+          const seaK = seaD && wl < 2.5 && seaNear(x, y) ? 1 : 0;
+          let pk = Math.max(1 - smooth(0.3, 1.5, rd), 1 - smooth(0.15, 0.9, td), base * 0.35 * smooth(0.45, 0.75, pn), yd < 2 ? 1 - smooth(0.4, 2, yd) : 0, fm);
+          pk = Math.max(pk, (1 - smooth(-0.05, 0.3, h0)) * 0.7 * (1 - seaK));
+          if (seaK) pk = Math.max(pk, 1 - smooth(0.04, 0.42, wl));
+          pk = Math.max(pk, smooth(0.52, 0.72, crustN(x, y)) * 0.55 * (1 - smooth(0.08, 0.24, slope)));
+          ctl2[o + 2] = Math.min(1, pk) * 255;
+          const fan = 1 - smooth(1.2, 7, rockD(x, y));
+          let rg = smooth(0.6, 0.74, regN(x, y) + fan * 0.2 + (pn - 0.5) * 0.12 - slope * 0.4);
+          rg = Math.max(rg, fan * 0.4 * smooth(0.5, 0.7, pn));
+          rg *= 1 - seaK * (1 - smooth(1.2, 2.5, wl));
+          rg *= 1 - (cd < 1.2 ? 1 - smooth(0.2, 1.2, cd) : 0);
+          ctl2[o + 3] = Math.max(0, Math.min(1, rg)) * 255;
+        }
         if (bc === 2) {
           // winter: the blue channel is the snow depth (ploughed off the shoulders, rutted on tracks,
           // trampled in the bases, thin under the trees and on steep or wet ground)
@@ -1072,6 +1121,50 @@ void phSample(float L, vec2 p, out vec4 a, out vec3 n) {
   n = vec3(nA * wv.x + nB * wv.y, a.a);
 #endif
 }
+#ifdef PH_REG
+/*
+ * Desert sand (GD1). Wind ripples are procedural, so their crests keep one wind direction through the
+ * anti-tiling's random rotations of the baked sand: crests across the prevailing wind, an asymmetric profile
+ * (long gentle stoss slope, short steep lee, crisp crest), bent by low-frequency noise, forking where two
+ * slightly different trains cross-fade, crisp in some places and smoothed out in others, and faded to
+ * their mean before a period gets too small on screen. Packed sand (ctl2.b) takes none.
+ */
+// the prevailing wind's crest normal (radians in the x / z plane), ripples per tile, relief amplitude (tiles)
+#define DS_WIND 0.62
+#define DS_RIP_F 5.2
+#define DS_RIP_A 0.022
+// one period (ph 0..1): height, slope; soft = how far it is band-limited towards a sine (small on screen)
+vec2 dsProfile(float ph, float soft) {
+  // a longer stoss slope, a shorter steeper lee
+  const float C = 0.66;
+  float u = ph < C ? ph / C : (1.0 - ph) / (1.0 - C);
+  float du = ph < C ? 1.0 / C : -1.0 / (1.0 - C);
+  vec2 a = vec2(u * u * (3.0 - 2.0 * u), 6.0 * u * (1.0 - u) * du);
+  // the band-limited form: a sine with its crest on the same line
+  float c = 6.2831853 * (ph - C);
+  return mix(a, vec2(0.5 + 0.5 * cos(c), -3.1415927 * sin(c)), soft);
+}
+// ripple height (0..1, x), its world gradient per tile (yz) and the ripple field's strength (w)
+vec4 dsRipple(vec2 p, float aa, float soft) {
+  // broad drift of the wind direction and spacing, a gentle sinuosity of the crests
+  vec4 n0 = textureGrad(fogNoise, p * 0.013 + 0.13, phDx * 0.013, phDy * 0.013);
+  vec4 n1 = textureGrad(fogNoise, p * 0.045 + 0.71, phDx * 0.045, phDy * 0.045);
+  float ang = DS_WIND + (n0.r - 0.5) * 0.6;
+  vec2 d = vec2(cos(ang), sin(ang));
+  float f = DS_RIP_F * (0.9 + n0.g * 0.2);
+  vec4 n3 = textureGrad(fogNoise, p * 0.12 + 0.53, phDx * 0.12, phDy * 0.12);
+  float s = dot(p, d) * f + (n1.r - 0.5) * 1.6 + (n3.g - 0.5) * 0.9;
+  // crest forks: half a period's slip across narrow seams (the crest count changes there: Y junctions)
+  vec4 n2 = textureGrad(fogNoise, p * 0.31 + 0.37, phDx * 0.31, phDy * 0.31);
+  float slip = smoothstep(0.47, 0.53, n2.b) * 0.5;
+  vec2 a = dsProfile(fract(s + slip), soft);
+  float h = a.x;
+  float dh = a.y * f;
+  // crisp ripple fields and smoothed, wind-scoured flats
+  float amp = (0.35 + 0.65 * smoothstep(0.34, 0.6, n0.b)) * aa;
+  return vec4(mix(0.5, h, amp), d * dh * amp, amp * clamp(a.y * 0.5, -1.0, 1.0));
+}
+#endif
 #endif
 #if TERR_POM > 0
 // depth (0 = top) of the soil / rock detail relief at tw, same blend as TERRAIN_MAP
@@ -1113,28 +1206,84 @@ const PHOTO_MAP = /* glsl */ `
   float wS = spl.r + worn;
   float wF = wS * c2.r;
   float wV = (wS - wF) * c2.g;
-  float lw[7] = float[7](wG, wS - wF - wV, wF + wFloor, wV, spl.g, spl.b, spl.a);
-  float ll[7] = float[7](PH_GRASS, PH_DIRT, PH_FOREST, PH_GRAVEL, PH_ROCK, PH_SAND, PH_MUD);
+#ifdef PH_REG
+  // desert (GD1): reg gravel patches split off the sand (ctl2.a); packed sand (ctl2.b) has no ripples
+  float dsReg = c2.a;
+  float dsPack = c2.b;
+  // ripples per pixel along the wind: their anti-aliasing fade (uniform control flow)
+  float dsW = fwidth(dot(tw, vec2(0.81, 0.58))) * DS_RIP_F;
+  float dsAA = 1.0 - smoothstep(0.16, 0.3, dsW);
+  float dsSoft = smoothstep(0.04, 0.12, dsW);
+  // close zoom: the sand's grain sharpens with a finer copy of the layer (texel density)
+  float dsDet = 1.0 - smoothstep(0.0045, 0.0095, max(length(phDx), length(phDy)));
+#define PH_NL 8
+#else
+#define PH_NL 7
+#endif
+  float lw[PH_NL] = float[PH_NL](wG, wS - wF - wV, wF + wFloor, wV, spl.g,
+#ifdef PH_REG
+    spl.b * (1.0 - dsReg), spl.a, spl.b * dsReg);
+  float ll[PH_NL] = float[PH_NL](PH_GRASS, PH_DIRT, PH_FOREST, PH_GRAVEL, PH_ROCK, PH_SAND, PH_MUD, PH_REG);
+#else
+    spl.b, spl.a);
+  float ll[PH_NL] = float[PH_NL](PH_GRASS, PH_DIRT, PH_FOREST, PH_GRAVEL, PH_ROCK, PH_SAND, PH_MUD);
+#endif
   // grass: the scan's detail on the painted palette (lush / dry / drift), as the 3D blades
   vec3 gPal = grassBase(ctl.r, dry, gDrift);
-  vec4 la[7];
-  vec3 ln[7];
-  float ls[7];
+  vec4 la[PH_NL];
+  vec3 ln[PH_NL];
+  float ls[PH_NL];
   float smax = -9.0;
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < PH_NL; i++) {
     la[i] = vec4(0.0);
     ln[i] = vec3(0.0);
     ls[i] = -9.0;
     if (lw[i] > 0.004) {
       phSample(ll[i], tw, la[i], ln[i]);
+#ifdef PH_REG
+      if (i == 5 || i == 7) {
+        // macro colour drift over the dunes (beyond the painted tint): paler / redder sand over hundreds of metres
+        vec4 mz = textureGrad(fogNoise, tw * 0.0057 + 0.43, phDx * 0.0057, phDy * 0.0057);
+        la[i].rgb *= 1.0 + vec3(0.045, 0.012, -0.05) * (mz.r - 0.5) * 2.4 + (mz.a - 0.5) * 0.09;
+      }
+      if (i == 5) {
+        if (dsDet > 0.01) {
+          // the close-up grain: the sand layer again, 4.3x finer and turned, as a detail on top
+          const mat2 rD = mat2(0.8, 0.6, -0.6, 0.8);
+          float fq = 4.3 * phP[int(PH_SAND)].x;
+          vec2 dq = rD * tw * fq + 0.21;
+          vec2 dgx = rD * phDx * fq;
+          vec2 dgy = rD * phDy * fq;
+          vec3 da = textureGrad(phA, vec3(dq, PH_SAND), dgx, dgy).rgb;
+          vec3 dn = textureGrad(phN, vec3(dq, PH_SAND), dgx, dgy).rgb;
+          la[i].rgb *= mix(vec3(1.0), da / max(phM[int(PH_SAND)], vec3(1e-3)), 0.5 * dsDet);
+          ln[i].xy += (dn.xy * 2.0 - 1.0) * 0.55 * dsDet;
+          la[i].a += (dn.z - 0.5) * 0.2 * dsDet;
+        }
+        // wind ripples (soft sand only), their relief on the layer's normal and height
+        float rk = (1.0 - dsPack) * dsAA;
+        if (rk > 0.01) {
+          vec4 rp = dsRipple(tw, rk, dsSoft);
+          ln[i].xy = ln[i].xy * 0.7 + vec2(-rp.y, rp.z) * DS_RIP_A;
+          la[i].a = clamp(la[i].a + (rp.x - 0.5) * 0.5, 0.0, 1.0);
+          // heavy dark minerals settle in the lee laminae, the crests are pale: the ripples read from afar
+          // even under a high sun (w: amplitude, signed by the slope: negative on the lee)
+          float lee = clamp(-rp.w, 0.0, 1.0) * (1.0 - dsSoft * 0.6);
+          la[i].rgb *= (1.0 - 0.22 * lee * smoothstep(0.25, 0.75, 1.0 - rp.x + 0.3)) * (1.0 + 0.05 * clamp(rp.w, 0.0, 1.0) * rp.x);
+        }
+        // packed / crusted sand: a little darker and smoother
+        la[i].rgb *= 1.0 - 0.06 * dsPack;
+        ln[i].xy *= 1.0 - 0.35 * dsPack;
+      }
+#endif
       // height blend: a layer's share plus its own relief, so high points poke through
       ls[i] = lw[i] + la[i].a * 0.5;
       smax = max(smax, ls[i]);
     }
   }
-  float lb[7];
+  float lb[PH_NL];
   float lt = 1e-4;
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < PH_NL; i++) {
     lb[i] = max(ls[i] - smax + 0.15, 0.0);
     lt += lb[i];
   }
@@ -1142,7 +1291,7 @@ const PHOTO_MAP = /* glsl */ `
   vec2 nxy = vec2(0.0);
   terrH = 0.0;
   terrRough = 0.0;
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < PH_NL; i++) {
     float k = lb[i] / lt;
     if (k > 0.0) {
       int L = int(ll[i]);
@@ -1167,7 +1316,11 @@ const PHOTO_MAP = /* glsl */ `
     }
   }
   float bg = lb[0] / lt;
+#ifdef PH_REG
+  vec4 bw = vec4(lb[1] + lb[2] + lb[3], lb[4], lb[5] + lb[7], lb[6]) / lt;
+#else
   vec4 bw = vec4(lb[1] + lb[2] + lb[3], lb[4], lb[5], lb[6]) / lt;
+#endif
   float gH = la[0].a;
   // soaked: bare soil and mud darken most, turf (blades shed the water) and rock least; soil and mud go glossy
   wxPor = 0.26 * bg + 0.42 * bw.x + 0.28 * bw.y + 0.38 * bw.z + 0.4 * bw.w;
