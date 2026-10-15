@@ -110,7 +110,9 @@ export const NSKY_GLSL = /* glsl */ `
     float band = exp( -sb * sb / ( w * w ) );
     float thin = exp( -sb * sb / ( w * w * 0.15 ) );
     float clouds = smoothstep( 0.32, 0.72, n1 * 0.65 + n2 * 0.5 );
-    I = band * ( 0.18 + 0.45 * cl ) * ( 0.55 + 0.8 * clouds ) + thin * clouds * 0.5 * cl + core * band * ( 0.7 + 0.9 * clouds );
+    // the bulge: a brighter oval glow round the centre
+    float bulge = exp( -l * l * 7.0 - sb * sb / 0.016 );
+    I = band * ( 0.18 + 0.45 * cl ) * ( 0.6 + 0.7 * clouds ) + thin * clouds * 0.5 * cl + core * band * ( 0.4 + 0.6 * clouds ) + bulge * ( 0.9 + 0.6 * clouds );
     // dark dust lanes along the plane: the Great Rift from the centre towards l ~ 90 deg, the core's lanes
     float lb = sb - 0.012 - 0.06 * ( n1 - 0.5 );
     float lw = 0.014 + 0.02 * core + 0.016 * n2;

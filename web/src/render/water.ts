@@ -1613,13 +1613,14 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         refl = mix(refl, skyHorizon * 0.9, smoothstep(0.45, 0.75, cl) * 0.6);
         #ifdef NIGHT_SKY
           // the stars and the Milky Way, broken up by the ripples (R) and a little soft: never a sharp mirror
-          float nsPix = 1.6 * length(fwidth(viewDir));
+          float nsPix = 1.25 * length(fwidth(viewDir));
+          vec3 nsR = vec3(0.0);
+          if (nsK.x > 0.003) nsR = nightSky(R, nsPix, 0.0) * (1.0 - smoothstep(0.45, 0.75, cl) * 0.6);
           #if WATER_Q == 2
-          if (reflOn < 0.5 && nsK.x > 0.003)
-          #else
-          if (nsK.x > 0.003)
+          // (high: the planar reflection already holds the sky dome)
+          if (reflOn < 0.5)
           #endif
-            refl += nightSky(R, nsPix, 0.0) * (1.0 - smoothstep(0.45, 0.75, cl) * 0.6) * 0.6;
+            refl += nsR * 0.6;
         #endif
         float bankK = 1.0 - smoothstep(0.0, 1.6, shore);
         #if WATER_Q == 0
@@ -1655,6 +1656,11 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float fr = fres * (0.85 + 0.15 * calm) * (1.0 - 0.5 * rapids);
         vec3 col = mix(under, refl, fr);
         col *= wxLight * (1.0 - 0.22 * chop);
+        #ifdef NIGHT_SKY
+          // the stars glint in the ripples like the moon's path does (point lights seen at the water's low
+          // reflectance would vanish): a soft highlight broken up by the waves, never a mirror
+          col += nsR * 0.5 * (1.0 - 0.6 * chop) * (1.0 - 0.8 * bankK);
+        #endif
         // ---- light on the surface: sun / moon highlight and its glitter path, nearby lamps and fires
         float sd = max(dot(R, sunDir), 0.0);
         // the sun glint: a small, sharp highlight broken up by the ripples. Capped (the HDR chain and bloom
