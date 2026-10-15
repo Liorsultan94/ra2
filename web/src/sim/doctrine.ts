@@ -34,7 +34,51 @@ export interface Doctrine {
   deep: string[];
   /** Spending priority per production line (> 1 = buys from it with less money in the bank). */
   spend: { infantry: number; vehicle: number; air: number };
+  /** The war doctrine (AI2): how the nation fights, layered on top of the seeded opening plan (plans.ts). */
+  war: WarDoctrine;
 }
+
+/**
+ * War doctrine (AI2): each nation's way of fighting, on top of the seeded opening plan, so a match stays
+ * unpredictable while each nation fights in its own character. Normal plays part of it (target priorities,
+ * build mix, pacing), Hard all of it (artillery preparation, broad fronts, fast flanks); Easy none (ai.ts).
+ */
+export interface WarDoctrine {
+  /** Intelligence first: extra scouting tours, how early the first one goes (x the seeded time); drones scout too. */
+  scouts: number;
+  scoutEarly: number;
+  /** Target priority of strike missiles, jets, the air wing and drone launchers (building roles, plus 'arty', 'harvester', 'aa'), most wanted first. */
+  hvt: string[];
+  /** Air superiority: the air arm hunts the enemy's air defences first while it knows of any, then strikes. */
+  aaHunt: boolean;
+  /** Artillery preparation: seconds the guns shell the objective before the main body goes (Hard); the artillery mix before the first big attacks. */
+  prep: number;
+  prepMix: number;
+  /** Lanes a wave spreads over at once (a broad front; Hard). */
+  front: number;
+  /** Flanking appetite multiplier (fast flanking; the flank wing takes the fastest units). */
+  flank: number;
+  /** Retreat ratio multiplier (> 1: avoids pitched battles, hit and run; < 1: stubborn). */
+  pitched: number;
+  /** Wave size and wave patience multipliers (pacing: > 1 slower and steadier). */
+  wave: number;
+  pace: number;
+  /** Raid group size multiplier (small, fast mobile groups). */
+  raid: number;
+  /** Weight of the enemy economy and base (refineries, harvesters, power) for launchers and drones. */
+  econ: number;
+  /** Rapid expansion: refineries earlier, one more harvester each. */
+  expand: number;
+  /** Unit-mix multipliers by roster key (on top of the doctrine's bias). */
+  mix: Record<string, number>;
+  /** Infantry spending multiplier (massed infantry). */
+  infantry: number;
+}
+
+/** No war doctrine layer: the nation fights by its doctrine and plan only. */
+export const NO_WAR: WarDoctrine = { scouts: 0, scoutEarly: 1, hvt: [], aaHunt: false, prep: 0, prepMix: 1, front: 1, flank: 1, pitched: 1, wave: 1, pace: 1, raid: 1, econ: 0, expand: 0, mix: {}, infantry: 1 };
+
+const war = (w: Partial<WarDoctrine>): WarDoctrine => ({ ...NO_WAR, ...w });
 
 const BASE_DEF = ['def_gun', 'def_aa', 'def_at', 'def_gun', 'def_at', 'def_aa'];
 
@@ -55,6 +99,8 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 3,
     deep: ['radar', 'airfield', 'factory', 'tech'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
+    // air superiority first (AA hunting, then strikes), then combined-arms pushes with strong support
+    war: war({ aaHunt: true, hvt: ['aa', 'radar', 'airfield', 'superweapon', 'factory'], mix: { fighter: 1.4, heli: 1.2, himars: 1.3, apc: 1.1 }, flank: 1.1 }),
   },
   israel: {
     summary: 'Precision strikes and a layered air-defence umbrella; Merkava/Trophy armour is preserved and pulled back to repair.',
@@ -72,6 +118,8 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['tech', 'factory', 'radar'],
     spend: { infantry: 1, vehicle: 1.1, air: 1 },
+    // intelligence first (scouts, drones), precise strikes on high-value targets, combined arms, fast flanks
+    war: war({ scouts: 2, scoutEarly: 0.6, hvt: ['superweapon', 'refinery', 'power', 'arty', 'tech', 'radar'], mix: { uav: 1.6, ugv: 1.4, fighter: 1.3, apc: 1.2 }, flank: 1.6, pitched: 1.1 }),
   },
   china: {
     summary: 'A2/AD and drone swarms: swarm carriers lead, DF-17 hypersonic salvos strike the rear, cheap massed aircraft.',
@@ -89,6 +137,8 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'tech', 'conyard'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
+    // mass: a broad front over several lanes at once, rapid expansion
+    war: war({ front: 2, wave: 1.2, pace: 0.85, expand: 1, hvt: ['factory', 'refinery', 'radar'], mix: { rifle: 1.2, apc: 1.2, robot: 1.2 }, infantry: 1.2, pitched: 0.85 }),
   },
   russia: {
     summary: 'Mass artillery attrition: TOS/howitzer fire behind big armour waves, Krasukha EW escorting against drones.',
@@ -106,6 +156,8 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['conyard', 'factory', 'refinery'],
     spend: { infantry: 0.9, vehicle: 1.3, air: 0.8 },
+    // a heavy artillery and rocket preparation, then a massed armour wave; slower, steadier pacing
+    war: war({ prep: 14, prepMix: 3, wave: 1.15, pace: 1.3, flank: 0.7, pitched: 0.8, hvt: ['def_gun', 'def_at', 'factory', 'conyard'], mix: { tos: 1.3, mbt: 1.2 } }),
   },
   germany: {
     summary: 'Heavy mechanised manoeuvre: early, fast Leopard/Puma thrusts through the flanks with Bergepanzer recovery.',
@@ -123,6 +175,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'refinery', 'conyard'],
     spend: { infantry: 0.8, vehicle: 1.4, air: 0.8 },
+    war: NO_WAR,
   },
   korea: {
     summary: 'Fortified defence with K9 counter-battery fire: holds the bridges, out-guns enemy artillery, then counter-attacks in strength.',
@@ -140,6 +193,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['factory', 'conyard'],
     spend: { infantry: 1.1, vehicle: 1.1, air: 0.9 },
+    war: NO_WAR,
   },
   ukraine: {
     summary: 'Asymmetric drone war: FPV teams and EW troopers in small mobile groups that raid harvesters and strike the flanks.',
@@ -157,6 +211,8 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['refinery', 'factory', 'radar'],
     spend: { infantry: 1.5, vehicle: 1, air: 1.1 },
+    // drones and small, fast mobile groups: hit and run, raiding harvesters and supply, no pitched battles
+    war: war({ scouts: 1, pitched: 1.45, raid: 1.6, wave: 0.85, flank: 1.3, econ: 1, hvt: ['refinery', 'harvester', 'power', 'arty'], mix: { fpvteam: 1.3, uav: 1.3, robot: 1.3, apc: 1.2 } }),
   },
   turkey: {
     summary: 'Persistent UAV dominance: TB2 / Akinci wings hunt harvesters, artillery and launchers far ahead of the ground forces.',
@@ -174,6 +230,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 4,
     deep: ['refinery', 'radar', 'factory'],
     spend: { infantry: 1, vehicle: 1, air: 1.3 },
+    war: NO_WAR,
   },
   iran: {
     summary: 'Missile saturation: Fateh / Khorramshahr launchers fire in coordinated volleys while Shahed loitering munitions swarm the defences.',
@@ -191,5 +248,7 @@ export const DOCTRINES: Record<Faction, Doctrine> = {
     airWing: 0,
     deep: ['def_aa', 'factory', 'refinery'],
     spend: { infantry: 1.1, vehicle: 1.2, air: 0.8 },
+    // missile salvoes and drone swarms on the base and economy, massed RPG infantry, harassment (no jets)
+    war: war({ econ: 1.5, raid: 1.2, hvt: ['refinery', 'harvester', 'power', 'conyard', 'factory'], mix: { shahedl: 1.4, fateh: 1.3, khorramshahr: 1.2, rifle: 1.3, at: 1.4 }, infantry: 1.4, pitched: 0.9 }),
   },
 };
