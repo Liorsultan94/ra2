@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
 import { buildingDef } from '../src/sim/defs';
-import { Tile, type GameMap, type MapId } from '../src/sim/map';
+import { ISLE_KNOLL, Tile, isleDist, seaFrame, terrainPassable, type GameMap, type MapId } from '../src/sim/map';
 import { MAP_IDS, createMap } from '../src/sim/maps';
 import { PathFinder } from '../src/sim/path';
 import { TPS } from '../src/sim/types';
@@ -56,6 +56,113 @@ describe('maps', () => {
       for (let i = 0; i < n; i++) if (m.tiles[i] !== m.tiles[n - 1 - i] || !!m.trees[i] !== !!m.trees[n - 1 - i] || m.oreKind[i] !== m.oreKind[n - 1 - i] || m.blocked[i] !== m.blocked[n - 1 - i]) diff++;
       expect(diff).toBe(0);
       expect(m.structures.length % 2).toBe(0);
+    }
+  });
+
+  it('Wadi Al-Rimal: tiles, heights and passability are point mirrored (fair) on every seed tried', () => {
+    for (const seed of [1, 2, 7, 424242]) {
+      const m = createMap('desert', seed);
+      const n = m.w * m.h;
+      let diff = 0;
+      for (let i = 0; i < n; i++) {
+        const x = i % m.w;
+        const y = (i / m.w) | 0;
+        if (m.tiles[i] !== m.tiles[n - 1 - i] || terrainPassable(m, x, y) !== terrainPassable(m, m.w - 1 - x, m.h - 1 - y) || m.blocked[i] !== m.blocked[n - 1 - i]) diff++;
+      }
+      expect(diff, `seed ${seed}: tiles / passability`).toBe(0);
+      const nv = (m.w + 1) * (m.h + 1);
+      let hd = 0;
+      for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
+      expect(hd, `seed ${seed}: heights`).toBeLessThan(1e-4);
+      // the structures mirror too (kind, footprint, facing)
+      const key = (s: { kind: number; x: number; y: number; w: number; h: number }) => `${s.kind}:${s.x},${s.y},${s.w},${s.h}`;
+      const all = new Set(m.structures.map(key));
+      for (const s of m.structures) expect(all.has(key({ ...s, x: m.w - s.x - s.w, y: m.h - s.y - s.h }))).toBe(true);
+    }
+  });
+
+  it('Wadi Al-Rimal: the lighthouse islands are land no ground unit can reach, kept open (no trees), and the AI never picks them', () => {
+    const w = world('desert', 3);
+    const m = w.map;
+    const isle = m.deco!.sea!.isle!;
+    let land = 0;
+    let open = 0;
+    let rock = 0;
+    for (let y = 0; y < m.h; y++)
+      for (let x = 0; x < m.w; x++) {
+        const f = seaFrame(m.w, m.h, m.deco!.sea!.off, x + 0.5, y + 0.5);
+        const d = isleDist(isle, f.u, f.v);
+        const i = y * m.w + x;
+        if (d >= 0) continue;
+        land++;
+        if (d < ISLE_KNOLL) {
+          rock++;
+          continue;
+        }
+        expect(m.offshore![i]).toBe(1);
+        expect(m.trees[i]).toBe(0);
+        if (terrainPassable(m, x, y)) {
+          open++;
+          // its own ground region: never the bases'
+          expect(w.region[i]).not.toBe(0);
+          expect(w.region[i]).not.toBe(w.mainland);
+        }
+      }
+    // a few tiles of usable ground on each (two islands, mirrored), round a rocky knoll
+    expect(open).toBeGreaterThanOrEqual(2 * 10);
+    expect(rock).toBeGreaterThan(0);
+    expect(land).toBeGreaterThan(open);
+    // the starts share one region; a ground order towards an island stops on the mainland
+    expect(w.region[m.starts[1].y * m.w + m.starts[1].x]).toBe(w.mainland);
+    let ix = -1;
+    let iy = -1;
+    for (let i = 0; i < m.w * m.h && ix < 0; i++)
+      if (m.offshore?.[i] && terrainPassable(m, i % m.w, (i / m.w) | 0)) {
+        ix = i % m.w;
+        iy = (i / m.w) | 0;
+      }
+    const near = w.nearestPassable(ix + 0.5, iy + 0.5, 12, w.mainland)!;
+    expect(w.region[near[1] * m.w + near[0]]).toBe(w.mainland);
+  });
+
+  it('Wadi Al-Rimal: each coloured canyon is a passable sandy floor between rock walls, mouth to mouth', () => {
+    for (const seed of [1, 5]) {
+      const w = world('desert', seed);
+      const m = w.map;
+      const pf = new PathFinder(m.w, m.h, w.pass);
+      for (const c of m.deco!.canyons!) {
+        const a = c.pts[0];
+        const b = c.pts[c.pts.length - 1];
+        // the floor along the course is passable sand (no trees), the walls beside it mostly rock
+        let floor = 0;
+        let sand = 0;
+        let wall = 0;
+        let beside = 0;
+        for (let k = 0; k < c.pts.length - 1; k++) {
+          const p = c.pts[k];
+          const q = c.pts[k + 1];
+          const len = Math.hypot(q.x - p.x, q.y - p.y);
+          for (let t = 0; t < len; t += 0.5) {
+            const x = Math.round(p.x + ((q.x - p.x) * t) / len);
+            const y = Math.round(p.y + ((q.y - p.y) * t) / len);
+            floor++;
+            if (m.tiles[y * m.w + x] === Tile.Sand && w.pass[y * m.w + x]) sand++;
+            const nx = -(q.y - p.y) / len;
+            const ny = (q.x - p.x) / len;
+            for (const s of [-1, 1]) {
+              const wx = Math.round(p.x + ((q.x - p.x) * t) / len + nx * s * 1.6);
+              const wy = Math.round(p.y + ((q.y - p.y) * t) / len + ny * s * 1.6);
+              beside++;
+              if (m.tiles[wy * m.w + wx] === Tile.Rock) wall++;
+            }
+          }
+        }
+        expect(sand / floor, `seed ${seed}: canyon floor`).toBeGreaterThan(0.95);
+        expect(wall / beside, `seed ${seed}: canyon walls`).toBeGreaterThan(0.45);
+        // a ground route runs from mouth to mouth (through it or round it) and the canyon floor is its own way through
+        const path = pf.find(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y), 200000);
+        expect(path.length, `seed ${seed}: mouth to mouth`).toBeGreaterThan(0);
+      }
     }
   });
 

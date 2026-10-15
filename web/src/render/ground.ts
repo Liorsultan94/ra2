@@ -644,6 +644,30 @@ export class Ground {
     const seaD = m.deco?.sea;
     const sf = { u: 0, v: 0, b: 0 };
     const seaNear = (x: number, y: number) => !!seaD && coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v) > -12;
+    // Wadi Al-Rimal's coloured canyons: distance from their centre lines (only near their bounding boxes)
+    const canyons = (m.deco?.canyons ?? []).map((c) => {
+      const xs = c.pts.map((p) => p.x + 0.5);
+      const ys = c.pts.map((p) => p.y + 0.5);
+      return { c, x0: Math.min(...xs) - 5, x1: Math.max(...xs) + 5, y0: Math.min(...ys) - 5, y1: Math.max(...ys) + 5 };
+    });
+    const canyonD = (x: number, y: number) => {
+      let best = 99;
+      for (const { c, x0, x1, y0, y1 } of canyons) {
+        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+        for (let i = 0; i < c.pts.length - 1; i++) best = Math.min(best, segDist(x, y, { x: c.pts[i].x + 0.5, y: c.pts[i].y + 0.5 }, { x: c.pts[i + 1].x + 0.5, y: c.pts[i + 1].y + 0.5 }) - c.hw);
+      }
+      return best;
+    };
+    /** The canyon walls' sandstone strata (tint multipliers on the rock layer): red, ochre, yellow, purple, white. */
+    const STRATA = [
+      [1.3, 0.62, 0.46],
+      [1.5, 1.02, 0.56],
+      [1.68, 1.42, 0.82],
+      [1.02, 0.64, 0.9],
+      [1.8, 1.72, 1.52],
+      [1.12, 0.52, 0.42],
+      [1.55, 1.18, 0.7],
+    ];
     for (let py = 0; py < N; py++) {
       if ((py & 7) === 7) yield;
       for (let px = 0; px < N; px++) {
@@ -679,6 +703,18 @@ export class Ground {
           const st = smooth(0.2, 0.42, slope);
           sand *= 1 - st;
           dirt *= 1 - st * 0.8;
+        }
+        // the coloured canyon: its walls bare banded rock, its floor drift sand
+        const cd = canyons.length ? canyonD(x, y) : 99;
+        const ck = cd < 3.2 ? (1 - smooth(1.6, 3.2, cd)) * smooth(0.1, 0.26, slope) : 0;
+        if (cd < 0.4) {
+          sand = Math.max(sand, (1 - smooth(-0.1, 0.4, cd)) * 0.9);
+          rock *= smooth(-0.3, 0.4, cd);
+        }
+        if (ck > 0) {
+          rock = Math.max(rock, ck);
+          sand *= 1 - ck;
+          dirt *= 1 - ck;
         }
         // riverbank: wet sand -> mud at the waterline
         const wl = h0 - WATER_LEVEL;
@@ -749,6 +785,31 @@ export class Ground {
         let r = br * (1 + hue);
         let g = br;
         let b = br * (1 - hue * 0.6);
+        if (ck > 0) {
+          // strata by height, warped a little so the bands wander along the walls; soft edges between them
+          const s = h0 * 3.3 + (pn - 0.5) * 0.9 + (mac - 0.5) * 0.6;
+          const i0 = ((Math.floor(s) % STRATA.length) + STRATA.length) % STRATA.length;
+          const i1 = (i0 + 1) % STRATA.length;
+          const f = smooth(0.7, 1.0, s - Math.floor(s));
+          const k2 = ck * 0.92;
+          r *= 1 + k2 * (STRATA[i0][0] + (STRATA[i1][0] - STRATA[i0][0]) * f - 1);
+          g *= 1 + k2 * (STRATA[i0][1] + (STRATA[i1][1] - STRATA[i0][1]) * f - 1);
+          b *= 1 + k2 * (STRATA[i0][2] + (STRATA[i1][2] - STRATA[i0][2]) * f - 1);
+        } else if (cd < 0.6) {
+          // the floor's sand is the walls' colour washed down: pinkish ochre
+          const fk = 1 - smooth(0.0, 0.6, cd);
+          r *= 1 + 0.12 * fk;
+          g *= 1 - 0.02 * fk;
+          b *= 1 - 0.1 * fk;
+        }
+        // the Red Sea's bathing beaches: white coral sand, paler and cooler than the desert's gold
+        if (seaD && sand > 0.05) {
+          const ve = coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v);
+          const wk = smooth(-5.6, -3.9, ve) * Math.min(1, sand * 1.4);
+          r *= 1 + 0.08 * wk;
+          g *= 1 + 0.17 * wk;
+          b *= 1 + 0.42 * wk;
+        }
         if (wl < 0.35) {
           const wet = 1 - smooth(-0.1, 0.35, wl);
           r *= 1 - wet * 0.3;

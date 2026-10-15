@@ -68,7 +68,7 @@ describe('pedestrian walk grid', () => {
     it(`${id}: routes between nearby spots on the cheap ground`, () => {
       const { grid } = setup(id);
       const pf = new PathFinder(grid, 20000);
-      const pts = cheapPoints(grid, 600, 3);
+      const pts = cheapPoints(grid, 1000, 3);
       const lab = grid.region;
       const cell = (p: { x: number; y: number }) => Math.floor(p.y * RES) * grid.gw + Math.floor(p.x * RES);
       const out = new Float32Array(96);

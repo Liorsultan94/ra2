@@ -92,10 +92,12 @@ export function formationSlots(w: World, units: Entity[], x: number, y: number):
     let tx = gx;
     let ty = gy;
     let slot = 0;
+    // (ground units only ever head for land they can reach)
+    const home = air ? 0 : w.regionOf(e.x, e.y);
     for (const [ox, oy] of SPIRAL) {
       const cx = gx + ox;
       const cy = gy + oy;
-      if (air ? cx < 0 || cy < 0 || cx >= mw || cy >= mh : !w.pf.passable(cx, cy)) continue;
+      if (air ? cx < 0 || cy < 0 || cx >= mw || cy >= mh : !w.pf.passable(cx, cy) || w.region[cy * mw + cx] !== home) continue;
       const i = cy * mw + cx + (air ? 1e6 : 0);
       const used = taken.get(i) ?? 0;
       if (used >= 100 || (used > 0 && cap === 1) || (cap === 3 && used >= 3)) continue;

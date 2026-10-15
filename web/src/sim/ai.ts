@@ -532,7 +532,7 @@ export class AIController implements Controller {
       for (let ox = -r; ox <= r; ox++) {
         const tx = cx + ox;
         const ty = cy + oy;
-        if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || !w.pf.passable(tx, ty)) continue;
+        if (tx < 0 || ty < 0 || tx >= map.w || ty >= map.h || !w.pf.passable(tx, ty) || w.region[ty * map.w + tx] !== w.mainland) continue;
         const px = tx + 0.5;
         const py = ty + 0.5;
         const d = Math.hypot(px - x, py - y);
@@ -590,7 +590,7 @@ export class AIController implements Controller {
       const x = (i % cols) * S + 1.5;
       const y = Math.floor(i / cols) * S + 1.5;
       const t = ((x - hx) * ax + (y - hy) * ay) / L2;
-      if (t < 0.2 || t > 0.8 || !w.pf.passable(Math.floor(x), Math.floor(y))) continue;
+      if (t < 0.2 || t > 0.8 || !w.pf.passable(Math.floor(x), Math.floor(y)) || w.regionOf(x, y) !== w.mainland) continue;
       let lo = Infinity;
       let hi = 0;
       for (const [dx, dy] of D) {
@@ -1241,7 +1241,7 @@ export class AIController implements Controller {
     const keepOut = peace ? SCOUT_PEACE_KEEP_OUT : SCOUT_LOOKOUT_R - 1;
     const pts: [number, number][] = [];
     const add = (x: number, y: number) => {
-      const p = w.nearestPassable(x, y, 4);
+      const p = w.nearestPassable(x, y, 4, w.mainland);
       if (p && !this.nearEnemyBase(p[0] + 0.5, p[1] + 0.5, keepOut)) pts.push([p[0] + 0.5, p[1] + 0.5]);
     };
     const mid = (x: number, y: number) => Math.hypot(x - w.map.w / 2, y - w.map.h / 2);
@@ -1327,7 +1327,7 @@ export class AIController implements Controller {
         const x = t % map.w;
         const y = (t - x) / map.w;
         const d = Math.hypot(x + 0.5 - u.x, y + 0.5 - u.y);
-        if (d >= bd || !w.pf.passable(x, y) || this.nearEnemyBase(x + 0.5, y + 0.5, HARVEST_KEEP_OUT)) continue;
+        if (d >= bd || !w.pf.passable(x, y) || w.region[t] !== w.mainland || this.nearEnemyBase(x + 0.5, y + 0.5, HARVEST_KEEP_OUT)) continue;
         bd = d;
         best = t;
       }
@@ -1364,7 +1364,7 @@ export class AIController implements Controller {
     const len = Math.hypot(dx, dy) || 1;
     const x = l.x + (dx / len) * k;
     const y = l.y + (dy / len) * k;
-    const p = this.world.nearestPassable(x, y, 4);
+    const p = this.world.nearestPassable(x, y, 4, this.world.mainland);
     return p ? [p[0] + 0.5, p[1] + 0.5] : [x, y];
   }
 
