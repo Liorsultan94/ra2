@@ -479,6 +479,22 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         boxAt(trim, 1.6, 0.01, 0.7, L(trs(0.2, 0.005, 0.32)), new THREE.Color(0.78, 0.72, 0.6));
         return;
       }
+      // many town houses stand in a walled yard (the plot's edge, a gate on the street side, a tree inside)
+      if (st.look !== 'shop' && h(90) < 0.6) {
+        const yc = wallC.clone().multiplyScalar(0.96);
+        const yh = 0.16 + h(91) * 0.08;
+        const w0 = walls.count;
+        boxAt(walls, 1.86, yh, 0.05, L(trs(0, yh / 2, -0.93)), yc);
+        for (const sx of [-1, 1]) boxAt(walls, 0.05, yh, 1.86, L(trs(sx * 0.93, yh / 2, 0)), yc);
+        for (const sx of [-1, 1]) boxAt(walls, 0.62, yh, 0.05, L(trs(sx * 0.62, yh / 2, 0.93)), yc);
+        boxUV(walls, w0, 1.1);
+        boxAt(wood, 0.5, yh * 0.9, 0.02, L(trs(0, yh * 0.45, 0.93)), acc);
+        if (h(92) < 0.5) {
+          const tx = h(93) < 0.5 ? -0.68 : 0.68;
+          boxAt(wood, 0.035, 0.26, 0.035, L(trs(tx, 0.13, 0.76)), new THREE.Color(0.38, 0.27, 0.18));
+          walls.add(new THREE.SphereGeometry(0.15, 8, 6).toNonIndexed(), L(trs(tx, 0.34, 0.76)), null, new THREE.Color(0.3, 0.44, 0.2));
+        }
+      }
       // shop-houses face the streets; elsewhere the houses take any of the other looks
       const HOUSES = [0, 1, 2, 3, 4, 7, 8, 9];
       const type = st.look === 'shop' ? (h(58) < 0.55 ? 5 : 6) : HOUSES[Math.floor(h(58) * HOUSES.length)];

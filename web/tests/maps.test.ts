@@ -125,6 +125,47 @@ describe('maps', () => {
     expect(w.region[near[1] * m.w + near[0]]).toBe(w.mainland);
   });
 
+  it('Wadi Al-Rimal: each coloured canyon is a passable sandy floor between rock walls, mouth to mouth', () => {
+    for (const seed of [1, 5]) {
+      const w = world('desert', seed);
+      const m = w.map;
+      const pf = new PathFinder(m.w, m.h, w.pass);
+      for (const c of m.deco!.canyons!) {
+        const a = c.pts[0];
+        const b = c.pts[c.pts.length - 1];
+        // the floor along the course is passable sand (no trees), the walls beside it mostly rock
+        let floor = 0;
+        let sand = 0;
+        let wall = 0;
+        let beside = 0;
+        for (let k = 0; k < c.pts.length - 1; k++) {
+          const p = c.pts[k];
+          const q = c.pts[k + 1];
+          const len = Math.hypot(q.x - p.x, q.y - p.y);
+          for (let t = 0; t < len; t += 0.5) {
+            const x = Math.round(p.x + ((q.x - p.x) * t) / len);
+            const y = Math.round(p.y + ((q.y - p.y) * t) / len);
+            floor++;
+            if (m.tiles[y * m.w + x] === Tile.Sand && w.pass[y * m.w + x]) sand++;
+            const nx = -(q.y - p.y) / len;
+            const ny = (q.x - p.x) / len;
+            for (const s of [-1, 1]) {
+              const wx = Math.round(p.x + ((q.x - p.x) * t) / len + nx * s * 1.6);
+              const wy = Math.round(p.y + ((q.y - p.y) * t) / len + ny * s * 1.6);
+              beside++;
+              if (m.tiles[wy * m.w + wx] === Tile.Rock) wall++;
+            }
+          }
+        }
+        expect(sand / floor, `seed ${seed}: canyon floor`).toBeGreaterThan(0.95);
+        expect(wall / beside, `seed ${seed}: canyon walls`).toBeGreaterThan(0.45);
+        // a ground route runs from mouth to mouth (through it or round it) and the canyon floor is its own way through
+        const path = pf.find(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y), 200000);
+        expect(path.length, `seed ${seed}: mouth to mouth`).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('every start can reach the other start and every ore field, on every map', () => {
     for (const id of MAP_IDS) {
       for (const seed of [3, 99]) {

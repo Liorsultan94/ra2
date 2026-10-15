@@ -532,6 +532,46 @@ export function createDesertMap(seed: number): GameMap {
   };
   // a mesa on the massif stands on it (its cap rock that much higher)
   const mesaBase = mesas.map((m) => massifAt((m.x + m.x2) / 2, (m.y + m.y2) / 2).h * 0.92);
+  // the coloured canyon (player 0's, through the fort's mesa and the massif under it; mirrored): its floor
+  // falls evenly from the ground at its upper mouth to the ground at its lower one
+  const surface = (x: number, y: number) => {
+    let h = lowGround(x, y) + massifAt(x, y).h;
+    for (let j = 0; j < mesas.length; j++) {
+      const m = mesas[j];
+      const d = distToSegment(x + 0.5, y + 0.5, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
+      h = h + (2.25 + mesaBase[j] - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
+    }
+    return h;
+  };
+  const canyons = [DESERT_CANYON, DESERT_CANYON.map(mirror)].map((pts) => {
+    let len = 0;
+    const at = pts.map((p, i) => (i ? (len += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)) : 0));
+    const a = surface(pts[0].x, pts[0].y);
+    const b = surface(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    return { pts, at, len, a, b };
+  });
+  /** Distance (tiles) from the nearer canyon's centre line and the floor height there. */
+  const canyonAt = (x: number, y: number) => {
+    let best = { d: 1e9, floor: 0 };
+    for (const c of canyons)
+      for (let k = 0; k < c.pts.length - 1; k++) {
+        const p = c.pts[k];
+        const q = c.pts[k + 1];
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const l2 = dx * dx + dy * dy;
+        const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / l2));
+        const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
+        if (d < best.d) {
+          const s = (c.at[k] + t * Math.sqrt(l2)) / c.len;
+          // (a shallow dip in the middle: the floor never climbs out at either mouth)
+          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.25 };
+        }
+      }
+    return best;
+  };
+  /** A canyon wall tile: the ground beside the floor stands this far above it. */
+  const canyonWall = (x: number, y: number, floor: number) => surface(x, y) - floor > 0.75;
   for (let vy = 0; vy <= H; vy++)
     for (let vx = 0; vx <= W; vx++) {
       const fx = vx - 0.5;
@@ -556,6 +596,9 @@ export function createDesertMap(seed: number): GameMap {
         // a flat-topped plateau with steep sandstone cliffs
         h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
       }
+      // the coloured canyon: a narrow floor sunk into the mountain, its walls rising steeply to the rims
+      const cy = canyonAt(fx, fy);
+      if (cy.d < CANYON_HW + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW - 0.15, CANYON_HW + 1.25, cy.d) * 6);
       h = coastHeight(sea, vx, vy, h, NS);
       g.heights[vy * (W + 1) + vx] = h;
     }
@@ -584,6 +627,10 @@ export function createDesertMap(seed: number): GameMap {
         else if (d < o.r + 2.4 && t !== Tile.Water) t = Tile.Grass;
       }
       for (const m of mesas) if (distToSegment(fx, fy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5) < m.r + 0.1) t = Tile.Rock;
+      // the canyon: a sandy floor between sheer walls (bare rock wherever they stand well above the floor)
+      const cy = canyonAt(x, y);
+      if (cy.d < CANYON_HW) t = Tile.Sand;
+      else if (cy.d < CANYON_HW + 1.1 && canyonWall(x, y, cy.floor)) t = Tile.Rock;
       g.tiles[i] = coastTile(sea, fx, fy, t);
     }
   markRoads(g, roads, roads.map((_, i) => [0.95, 0.95, 0.8, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
@@ -593,6 +640,7 @@ export function createDesertMap(seed: number): GameMap {
     starts.some((s) => Math.hypot(x - s.x, y - s.y) < 10) ||
     oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) ||
     oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) ||
+    canyonAt(x, y).d < CANYON_HW + 1.2 ||
     roads.some((r) => r.some((p, k) => k > 0 && distToSegment(x + 0.5, y + 0.5, r[k - 1].x + 0.5, r[k - 1].y + 0.5, p.x + 0.5, p.y + 0.5) < 1.8));
   // date palms ring the oases and dot the wadi; acacias stand alone on the scrub and gravel
   for (let y = 0; y < H; y++)
@@ -651,7 +699,7 @@ export function createDesertMap(seed: number): GameMap {
     ]),
     ...DESERT_EXTRA,
     // the town quarter south of the ring road (off the wadi's banks)
-    ...desertTown().filter((st) => wadi.dist(st.x + st.w / 2 - 0.5, st.y + st.h / 2 - 0.5) > 6.5),
+    ...desertTown().filter((st) => wadi.dist(st.x + st.w / 2 - 0.5, st.y + st.h / 2 - 0.5) > 5.2),
   ];
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   // the resort compounds by the sea (impassable; render/seaside.ts draws them)
@@ -694,6 +742,7 @@ export function createDesertMap(seed: number): GameMap {
   // palms along the back of the beaches (render only, knocked over by vehicles)
   deco.trees.push(...beachPalms(sea, g, NS));
   deco.sea = sea;
+  deco.canyons = canyons.map((c) => ({ pts: c.pts, hw: CANYON_HW }));
 
   const offshore = new Uint8Array(W * H);
   for (let y = 0; y < H; y++)
@@ -745,6 +794,25 @@ const DESERT_MASSIF: { x: number; y: number; h: number }[][] = [
     { x: 37.5, y: 77.5, h: 2.6 },
   ],
 ];
+/**
+ * The coloured canyon (player 0's; mirrored): a narrow winding slot cut along the south-west flank of the fort's
+ * sandstone mesa (the fort keeps its rock) into the granite of the main summit, from the massif's north flank
+ * down to the plain by the southern ore field. Its floor is
+ * sand and passable all the way; its walls are rock. Via points in tile index space.
+ */
+const DESERT_CANYON: Point[] = [
+  { x: 33.2, y: 75.6 },
+  { x: 35.0, y: 78.7 },
+  { x: 35.7, y: 82.1 },
+  { x: 38.1, y: 83.5 },
+  { x: 39.3, y: 85.9 },
+  { x: 41.6, y: 87.1 },
+  { x: 43.4, y: 88.9 },
+  { x: 46.4, y: 89.6 },
+  { x: 47.6, y: 92.2 },
+];
+/** Half width of the canyon's floor (tiles). */
+const CANYON_HW = 1.0;
 /** Half width of the massif's foot (tiles; it wanders by +-2). */
 const MASSIF_FOOT = 12.5;
 /** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */

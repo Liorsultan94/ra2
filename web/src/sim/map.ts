@@ -79,6 +79,8 @@ export interface MapDeco {
   trees: { x: number; y: number; kind: number }[];
   /** A sea in two opposite corners (Wadi Al-Rimal's Red Sea coast): see `seaFrame`. */
   sea?: SeaDeco;
+  /** Coloured canyons (Wadi Al-Rimal): floor centre lines (tile index space) and the floor's half width (render/canyon.ts). */
+  canyons?: { pts: Point[]; hw: number }[];
 }
 
 /**
