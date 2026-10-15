@@ -311,23 +311,32 @@ function updateBeam(w: World, p: Player) {
 
 // ------------------------------------------------------------------ AI
 
+/** Aims offensive superweapons (AIController.swAim): where to fire now, or null to hold. */
+export interface SwAimer {
+  swAim(radius: number, readyAt: number): [number, number] | null;
+}
+
 /**
  * Superweapon AI (a separate controller next to the main AIController): builds
  * the structure once a Battle Lab stands and the economy allows, fires offensive
- * powers at the most valuable enemy cluster, and raises the Iron Beam when a
+ * powers at the most valuable enemy cluster (with its main AI: the most valuable
+ * target that AI has seen, ai.ts swAim), and raises the Iron Beam when a
  * strike or a swarm is inbound. Also tucks idle infantry into an empty house
  * next to them. Deterministic (decisions only from world state).
  */
 export class SuperweaponAI implements Controller {
   /** Early-game grace (peace.ts): no offensive strike before this tick (the Iron Beam dome still defends). */
   readonly peaceUntil: number;
+  /** The player's main AI (ai.ts): offensive strikes go where it aims, by what it has seen (fog of war; AI2). */
+  private ai?: SwAimer;
 
   constructor(
     private w: World,
     private pid: number,
-    opts: { peaceTicks?: number } = {},
+    opts: { peaceTicks?: number; ai?: SwAimer } = {},
   ) {
     this.peaceUntil = Math.max(0, opts.peaceTicks ?? 0);
+    this.ai = opts.ai;
   }
 
   update() {
@@ -338,7 +347,7 @@ export class SuperweaponAI implements Controller {
     if ((w.tick + this.pid * 7) % 200 === 0) this.garrison();
     const st = superweaponStatus(w, this.pid);
     if (st.ready && (st.info.defensive || w.tick >= this.peaceUntil)) {
-      const t = st.info.defensive ? this.defensiveSpot() : this.offensiveSpot();
+      const t = st.info.defensive ? this.defensiveSpot() : this.ai ? this.ai.swAim(st.info.radius, p.sw.at) : this.offensiveSpot();
       if (t) w.issue(this.pid, { type: 'superweapon', x: t[0], y: t[1] });
     }
   }

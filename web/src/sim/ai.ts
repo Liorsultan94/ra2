@@ -146,6 +146,9 @@ interface Intel {
   def: string;
   building: boolean;
   seen: number;
+  /** Velocity (tiles per tick) between its last two sightings (0 when not seen moving lately). */
+  vx: number;
+  vy: number;
 }
 
 interface Wave {
@@ -313,6 +316,8 @@ export class AIController implements Controller {
   private staged: Staged | null = null;
   /** Groups falling back / regrouping (AI2 orderly retreat). */
   private fallbacks: Fallback[] = [];
+  /** Superweapon shots aimed (AI2 swAim; debug / tests). */
+  readonly swLog: { tick: number; x: number; y: number; value: number }[] = [];
   /** Terrain posts (AI2): unit id -> post key, the posts (canyon mouths, the summit plateau), reinforcement cooldowns. */
   private posts = new Map<number, string>();
   private postSpots: { key: string; x: number; y: number; ambush: boolean }[] | null = null;
@@ -465,10 +470,13 @@ export class AIController implements Controller {
       if (!w.sees(this.pid, e)) continue;
       const it = this.intel.get(e.id);
       if (it) {
+        const dt = w.tick - it.seen;
+        it.vx = dt > 0 && dt <= TPS * 2 ? (e.x - it.x) / dt : 0;
+        it.vy = dt > 0 && dt <= TPS * 2 ? (e.y - it.y) / dt : 0;
         it.x = e.x;
         it.y = e.y;
         it.seen = w.tick;
-      } else this.intel.set(e.id, { x: e.x, y: e.y, def: e.def, building: e.kind === 'building', seen: w.tick });
+      } else this.intel.set(e.id, { x: e.x, y: e.y, def: e.def, building: e.kind === 'building', seen: w.tick, vx: 0, vy: 0 });
     }
     if (this.thinks % 6 === 0) {
       for (const [id, it] of this.intel) {
@@ -593,6 +601,99 @@ export class AIController implements Controller {
     if (!airdropStatus(w, this.pid).ready) return;
     const z = this.pickDropZone();
     if (z) w.issue(this.pid, { type: 'airdrop', x: z[0], y: z[1] });
+  }
+
+  /**
+   * Superweapon aim (AI2; SuperweaponAI asks while the weapon is charged; the warnings and countdowns are
+   * unchanged): the most valuable target this AI has seen - only what it has seen, structures where it last saw
+   * them, units seen in the last seconds - scored by the value inside the blast radius: units by count x cost,
+   * structures by cost x their importance (the enemy superweapon, refineries, factories, power plants when the
+   * enemy's power looks tight). Never where one of our own units or structures would be caught; a moving cluster
+   * is led a little (Hard). Timing: at once on Easy; Normal and Hard hold it a while for a big enemy attack massing
+   * or for our own attack going in (fired just ahead of it), then take the best target anyway. null = hold.
+   */
+  swAim(radius: number, readyAt: number): [number, number] | null {
+    const w = this.world;
+    const tier = this.cfg.micro;
+    const r = Math.max(3, radius);
+    const fresh = tier >= 2 ? TPS * 6 : TPS * 10;
+    // enemy power looks tight: few power plants seen
+    let plants = 0;
+    for (const it of this.intel.values()) if (it.building && buildingDef(it.def).role === 'power') plants++;
+    const pts: { x: number; y: number; v: number; unit: boolean; vx: number; vy: number }[] = [];
+    for (const it of this.intel.values()) {
+      if (!it.building && (tier === 0 || w.tick - it.seen > fresh)) continue;
+      const d = DEFS[it.def];
+      if (!d) continue;
+      let v: number;
+      if (it.building) {
+        const role = buildingDef(it.def).role;
+        const m: Record<string, number> = { superweapon: 2.2, refinery: 1.6, factory: 1.5, conyard: 1.4, power: plants <= 2 ? 1.8 : 1, tech: 1.2, airfield: 1.2, radar: 1.1 };
+        v = d.cost * (m[role] ?? (d.category === 'defense' ? 0.7 : 1));
+      } else {
+        const ud = unitDef(it.def);
+        if (ud.air || ud.temp) continue;
+        v = d.cost;
+      }
+      pts.push({ x: it.x, y: it.y, v, unit: !it.building, vx: it.vx, vy: it.vy });
+    }
+    if (!pts.length) {
+      // nothing seen yet: only where the enemy base is known to be (its start), once we have waited for better
+      const e = this.enemyBase();
+      if (!e || this.peace || (tier > 0 && w.tick - readyAt < TPS * 90)) return null;
+      pts.push({ x: e[0], y: e[1], v: 1, unit: false, vx: 0, vy: 0 });
+    }
+    const [hx, hy] = this.home();
+    const ours = (x: number, y: number) => {
+      let hit = false;
+      w.queryRadius(x, y, r + 1.5, (o) => {
+        if (o.owner === this.pid && !o.dead && Math.hypot(o.x - x, o.y - y) <= r + 1.5) hit = true;
+      });
+      return hit;
+    };
+    let best: { x: number; y: number; v: number; units: number } | null = null;
+    for (const c of pts) {
+      let v = 0;
+      let units = 0;
+      let mx = 0;
+      let my = 0;
+      let n = 0;
+      for (const q of pts) {
+        if (Math.hypot(q.x - c.x, q.y - c.y) > r) continue;
+        v += q.v;
+        if (q.unit) {
+          units += q.v;
+          mx += q.vx;
+          my += q.vy;
+          n++;
+        }
+      }
+      // (an enemy force at our base is worth more: it is about to do damage)
+      if (units > 0 && Math.hypot(c.x - hx, c.y - hy) < 30) v *= 1.3;
+      let x = c.x;
+      let y = c.y;
+      // lead a moving cluster by about the strike's flight time (Hard)
+      if (tier >= 2 && n > 0 && units * 2 > v) {
+        const lead = Math.min(3, Math.hypot(mx / n, my / n) * TPS * 4);
+        const sp = Math.hypot(mx, my) || 1;
+        x += (mx / sp) * lead;
+        y += (my / sp) * lead;
+      }
+      if (best && v <= best.v) continue;
+      if (ours(x, y)) continue;
+      best = { x, y, v, units };
+    }
+    if (!best) return null;
+    if (tier > 0 && !this.peace) {
+      const held = w.tick - readyAt;
+      const maxHold = TPS * (tier >= 2 ? 60 : 25);
+      // a big enemy attack massing, our own attack going in (or about to), or waited long enough
+      const massing = best.units >= 4000;
+      const ownPush = !!this.staged || (this.lastWave > 0 && w.tick - this.lastWave < TPS * 12);
+      if (!massing && !ownPush && held < maxHold) return null;
+    }
+    this.swLog.push({ tick: w.tick, x: best.x, y: best.y, value: Math.round(best.v) });
+    return [best.x, best.y];
   }
 
   /** Enemy firepower around a point (defences count most; SAMs threaten the transport on its run-in). */
