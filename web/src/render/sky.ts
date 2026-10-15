@@ -296,6 +296,10 @@ const DOME_FRAG = /* glsl */ `
         if ( uEnv < 0.5 ) cc *= 1.0 - uNight * ( 1.0 - nsMoon.w ) * 0.5 * ( 1.0 - over );
         #endif
         float a = dens * smoothstep( 0.0, 0.18, up );
+        #ifdef NIGHT_SKY
+        // a clear desert night's few clouds are thin: they veil the stars and the Milky Way softly, no hard bars
+        if ( uEnv < 0.5 ) a *= 1.0 - 0.45 * uNight * ( 1.0 - over ) * ( 1.0 - 0.5 * dens );
+        #endif
         col = mix( col, cc, a );
       }
     }

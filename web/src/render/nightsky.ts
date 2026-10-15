@@ -97,28 +97,35 @@ export const NSKY_GLSL = /* glsl */ `
     float l = atan( gy, gx );
     float cl = 0.5 + 0.5 * gx / max( 1e-4, length( vec2( gx, gy ) ) );
     float core = exp( -l * l * 3.0 );
-    // star clouds: noise in (l, b), stretched along the plane; the explicit gradients keep the mip level
-    // across the longitude seam (l = +-pi, the anticentre: a jump of 12 in u)
-    vec2 uv = vec2( l * 1.909859, sb * 4.0 );
+    // noise in (l, b) at the same scale on both axes (round clumps, not streaks along the band: near the plane
+    // l and b are both angles); one tap holds four fields (periods 4 / 6 / 8 / 10 per 30 degree tile). The
+    // explicit gradients keep the mip level across the longitude seam (l = +-pi: a jump of 12 per unit scale)
+    vec2 uv = vec2( l, asin( clamp( sb, -1.0, 1.0 ) ) ) * 1.909859;
     vec2 gdx = dFdx( uv );
     vec2 gdy = dFdy( uv );
     gdx.x -= 12.0 * floor( gdx.x / 12.0 + 0.5 );
     gdy.x -= 12.0 * floor( gdy.x / 12.0 + 0.5 );
-    float n1 = textureGrad( nsNoise, uv, gdx, gdy ).b;
-    float n2 = hq > 0.5 ? textureGrad( nsNoise, uv * 2.3 + vec2( 0.37, 0.11 ), gdx * 2.3, gdy * 2.3 ).a : n1;
+    vec4 t1 = textureGrad( nsNoise, uv, gdx, gdy );
+    // high: a finer octave for the star clouds' grain and the dust filaments
+    vec4 t2 = hq > 0.5 ? textureGrad( nsNoise, uv * 2.5 + vec2( 0.37, 0.11 ), gdx * 2.5, gdy * 2.5 ) : t1.argb;
     float w = 0.09 + 0.05 * cl + 0.07 * core;
     float band = exp( -sb * sb / ( w * w ) );
     float thin = exp( -sb * sb / ( w * w * 0.15 ) );
-    float clouds = smoothstep( 0.32, 0.72, n1 * 0.65 + n2 * 0.5 );
+    // clumpy star clouds (Sagittarius / Scutum-like), with a finer grain
+    float clouds = smoothstep( 0.3, 0.64, t1.r * 0.6 + t1.g * 0.4 + ( t2.a - 0.5 ) * 0.25 );
     // the bulge: a brighter oval glow round the centre
     float bulge = exp( -l * l * 7.0 - sb * sb / 0.016 );
-    I = band * ( 0.18 + 0.45 * cl ) * ( 0.6 + 0.7 * clouds ) + thin * clouds * 0.5 * cl + core * band * ( 0.4 + 0.6 * clouds ) + bulge * ( 0.9 + 0.6 * clouds );
-    // dark dust lanes along the plane: the Great Rift from the centre towards l ~ 90 deg, the core's lanes
-    float lb = sb - 0.012 - 0.06 * ( n1 - 0.5 );
-    float lw = 0.014 + 0.02 * core + 0.016 * n2;
-    float lane = exp( -lb * lb / ( lw * lw ) ) * smoothstep( -0.5, 0.05, l ) * ( 1.0 - smoothstep( 1.3, 2.0, l ) );
-    lane = max( lane, exp( -lb * lb / ( lw * lw * 5.0 ) ) * core * 0.7 );
-    I *= 1.0 - 0.85 * lane * smoothstep( 0.25, 0.5, n2 + 0.1 );
+    I = band * ( 0.22 + 0.45 * cl ) * ( 0.55 + 0.75 * clouds ) + thin * clouds * 0.5 * cl + core * band * ( 0.4 + 0.6 * clouds ) + bulge * ( 0.85 + 0.6 * clouds );
+    // dust: branching filaments (the noise's contour lines), the Great Rift splitting the band from the centre
+    // towards l ~ 90 deg with ragged edges, and dark nebula blobs round the core
+    float fn = mix( t1.b, t2.g, 0.6 * hq );
+    // (only in patches: a second field gates them, so they branch and thin out instead of netting the band)
+    float fil = smoothstep( 0.86, 0.97, 1.0 - abs( 2.0 * fn - 1.0 ) ) * smoothstep( 0.5, 0.68, t1.g ) * exp( -sb * sb / 0.016 ) * ( 0.3 + 0.7 * cl );
+    float rb = sb - 0.012 - 0.05 * ( t1.g - 0.5 );
+    float rw = 0.02 + 0.025 * t1.r + 0.012 * core;
+    float rift = exp( -rb * rb / ( rw * rw ) ) * smoothstep( -0.5, 0.05, l ) * ( 1.0 - smoothstep( 1.2, 1.9, l ) ) * smoothstep( 0.3, 0.55, t1.b + 0.15 );
+    float blob = smoothstep( 0.64, 0.78, t1.a ) * band * ( 0.3 + 0.7 * core );
+    I *= 1.0 - 0.85 * max( max( fil * 0.7, rift ), blob * 0.7 );
     vec3 mc = mix( vec3( 0.76, 0.84, 1.0 ), vec3( 1.0, 0.89, 0.72 ), min( 1.0, core * 1.1 + 0.05 ) );
     return mc * I;
   }
