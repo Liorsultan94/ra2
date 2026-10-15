@@ -246,6 +246,9 @@ describe('terrain', () => {
     const lane = ai.lanes().reduce((b: { x: number; y: number }, l: { x: number; y: number }) => (Math.hypot(l.x - hx, l.y - hy) < Math.hypot(b.x - hx, b.y - hy) ? l : b));
     const far = ai.bank(lane, -8);
     for (let k = 0; k < 6; k++) w.spawnUnit('usa_mbt', 0, far[0] + (k % 3) - 1, far[1] + Math.floor(k / 3));
+    // (a lookout of ours on the near bank sees it coming)
+    const look = ai.bank(lane, 1);
+    w.spawnUnit('russia_sniper', 1, look[0], look[1]);
     const [rx, ry] = ai.rally();
     for (let k = 0; k < 8; k++) w.spawnUnit('russia_mbt', 1, rx + (k % 4) - 1.5, ry + Math.floor(k / 4));
     for (let t = 0; t < TPS * 4 && !ai.stats.ambushes; t++) w.step();

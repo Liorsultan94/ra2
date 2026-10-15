@@ -2489,7 +2489,8 @@ export class AIController implements Controller {
       let go = fighters.length >= want || (fighters.length >= 4 && sinceWave > this.waveStale);
       // the finishing push (AI2, Hard): far stronger than all the enemy force we know of - go now with everything
       let crushing = false;
-      if (!go && micro >= 2 && AI2.retreat && this.lastWave > 0 && fighters.length >= 6 && this.thinks % 3 === 0) {
+      // (not while an enemy force is closing on our side of the map: that one is met at home, or in ambush, first)
+      if (!go && micro >= 2 && AI2.retreat && this.lastWave > 0 && fighters.length >= 6 && this.thinks % 3 === 0 && !this.known((it) => !it.building && klass(it.def) === 'main' && Math.hypot(it.x - hx, it.y - hy) < 40, TPS * 10).length) {
         const theirs = this.knownForce() as Entity[];
         crushing = this.strength(fighters, this.armourMix(theirs.length ? theirs : fighters)) >= 2 * this.strength(theirs, this.armourMix(fighters));
         go = crushing;
