@@ -4,6 +4,7 @@ import { bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
+import { canGarrisonUnit, garrisonRoom } from './garrison';
 import { inDockApron } from './harvest';
 import { northStart, turnable } from './turn';
 import { WATER_LEVEL, groundHeight } from './map';
@@ -12,7 +13,7 @@ import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
 import { Rng } from './rng';
 import { FLARE_RADIUS, hasNightVision, illumReady, pickIllum } from './night';
-import { TPS, type Command, type Entity, type Player, type Stance } from './types';
+import { TPS, type ArmorClass, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
@@ -115,7 +116,7 @@ function buildOrderFor(rng: Rng, plan: Plan): [string, number][] {
 }
 
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post';
 
 interface Intel {
   x: number;
@@ -136,7 +137,57 @@ interface Wave {
   value: number;
   killed: number;
   feint?: boolean;
+  /** Orderly retreat (AI2): consecutive losing estimates, committed (no retreat) until this tick, retreats so far, fallen back. */
+  low?: number;
+  commit?: number;
+  retreats?: number;
+  fell?: boolean;
 }
+
+/** A group falling back to a defensive position (AI2 orderly retreat), then regrouping there. */
+interface Fallback {
+  ids: number[];
+  x: number;
+  y: number;
+  since: number;
+  /** When most of it got there (-1: still on the way). */
+  arrived: number;
+  /** The enemy force it broke off from: strength (vs our mix at the time), armour mix, where. */
+  enemy: number;
+  mix: ArmourMix;
+  fx: number;
+  fy: number;
+  /** The objective it returns to. */
+  tx: number;
+  ty: number;
+  retreats: number;
+}
+
+type ArmourMix = Record<ArmorClass, number>;
+const ARMOURS: ArmorClass[] = ['infantry', 'light', 'heavy', 'building', 'aircraft'];
+
+/**
+ * Orderly retreat (AI2) by difficulty: a group whose estimated strength falls below `ratio` of the enemy force
+ * it is in contact with (twice running) falls back to its defences; it holds there at least `hold` s and returns
+ * (`relaunch`) once it is `back` times as strong as what it broke off from, else merges into the army after
+ * `merge` s. At most `max` retreats per wave; a returning group is committed (no retreat) for `commit` s.
+ */
+/**
+ * Terrain use (AI2) by difficulty: town houses held on the enemy's routes, the infantry / AT squad posted at each
+ * mouth of our coloured canyon (ambush), the detachment holding the summit plateau (with AA on Hard), and the tech
+ * sites engineers capture besides the oil.
+ */
+const TERRAIN: Record<Difficulty, { houses: number; canyon: number; plateau: number; plateauAA: boolean; techs: number }> = {
+  easy: { houses: 0, canyon: 0, plateau: 0, plateauAA: false, techs: 0 },
+  normal: { houses: 1, canyon: 0, plateau: 2, plateauAA: false, techs: 1 },
+  hard: { houses: 2, canyon: 2, plateau: 3, plateauAA: true, techs: 2 },
+};
+
+const RETREAT: Record<Difficulty, { ratio: number; every: number; max: number; hold: number; merge: number; relaunch: boolean; back: number; commit: number } | null> = {
+  easy: null,
+  normal: { ratio: 0.45, every: 2, max: 1, hold: 12, merge: 20, relaunch: false, back: 1.3, commit: 40 },
+  hard: { ratio: 0.6, every: 1, max: 2, hold: 8, merge: 45, relaunch: true, back: 1.3, commit: 40 },
+};
 
 /** A main body held at the rally point while its feint draws the defence onto another lane. */
 interface Staged {
@@ -151,6 +202,15 @@ interface Staged {
 }
 
 const cost = (def: string) => DEFS[def]?.cost ?? 0;
+
+/** Distance from (x, y) to the segment (x0, y0)-(x1, y1). */
+function segDist(x: number, y: number, x0: number, y0: number, x1: number, y1: number): number {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / l2)) : 0;
+  return Math.hypot(x - x0 - dx * t, y - y0 - dy * t);
+}
 
 function klass(def: string): Klass {
   const d = unitDef(def);
@@ -225,8 +285,20 @@ export class AIController implements Controller {
   private avoid: { x: number; y: number; until: number }[] = [];
   private raid: { ids: number[]; prey: number; x: number; y: number } | null = null;
   private staged: Staged | null = null;
+  /** Groups falling back / regrouping (AI2 orderly retreat). */
+  private fallbacks: Fallback[] = [];
+  /** Terrain posts (AI2): unit id -> post key, the posts (canyon mouths, the summit plateau), reinforcement cooldowns. */
+  private posts = new Map<number, string>();
+  private postSpots: { key: string; x: number; y: number; ambush: boolean }[] | null = null;
+  private postNext = new Map<string, number>();
+  private postSent = new Map<string, number>();
+  private postBudget = 0;
+  private houseNext = 0;
+  private plateauSeen = new Set<number>();
+  /** Debug / tests (AI2): houses garrisoned, canyon squads posted, plateau detachments sent and units that got up there, tech sites targeted. */
+  readonly terrainStats = { garrisons: 0, canyon: 0, plateau: 0, plateauVisits: 0, techs: 0 };
   /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
-  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1 };
+  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0 };
   /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
   private hMin = 0;
   private hSpan = 1;
@@ -882,15 +954,25 @@ export class AIController implements Controller {
     // capture an oil derrick early with an engineer
     const eng = `${f}_engineer`;
     const engineers = units.filter((u) => u.def === eng);
+    // (AI2: Normal / Hard also take the neutral tech sites on our side of the map while they are cheap to hold)
+    const techs = TERRAIN[this.difficulty].techs;
     for (const e of engineers) {
       if (this.engineerSent.has(e.id)) continue;
-      const oil = this.nearestOil(e);
+      const oil = this.nearestOil(e) ?? (techs ? this.nearestTech(e) : null);
       if (oil) {
         w.issue(this.pid, { type: 'capture', ids: [e.id], target: oil.id });
         this.engineerSent.add(e.id);
+        if (oil.def !== 'oil') this.terrainStats.techs++;
       }
     }
-    if (this.cfg.tech && engineers.length === 0 && this.engineerSent.size < 2 && w.tick > TPS * this.planCfg.oilAt && w.canBuild(this.pid, eng) && !iq.some((q) => q.def === eng) && this.nearestOil(null)) {
+    if (
+      this.cfg.tech &&
+      engineers.length === 0 &&
+      w.tick > TPS * this.planCfg.oilAt &&
+      w.canBuild(this.pid, eng) &&
+      !iq.some((q) => q.def === eng) &&
+      ((this.engineerSent.size < 2 && this.nearestOil(null)) || (techs > 0 && this.engineerSent.size < 2 + techs && p.credits > 1500 && this.count(buildings, 'refinery') >= 2 && this.nearestTech(null)))
+    ) {
       w.issue(this.pid, { type: 'produce', def: eng });
     }
 
@@ -963,6 +1045,32 @@ export class AIController implements Controller {
     return best;
   }
 
+  /**
+   * The nearest neutral tech site (hospital, comms, airport...) on our side of the map that nothing we know of
+   * guards: an engineer takes it while it is cheap to hold (AI2).
+   */
+  private nearestTech(from: Entity | null): Entity | null {
+    const enemy = this.enemyBase();
+    if (!enemy) return null;
+    const [hx, hy] = this.home();
+    const ox = from ? from.x : hx;
+    const oy = from ? from.y : hy;
+    let best: Entity | null = null;
+    let bd = Infinity;
+    for (const e of this.world.list) {
+      if (e.dead || e.kind !== 'building' || e.owner >= 0 || !buildingDef(e.def).techKind) continue;
+      const dh = Math.hypot(e.x - hx, e.y - hy);
+      if (dh > 55 || dh > Math.hypot(e.x - enemy[0], e.y - enemy[1]) * 0.85) continue;
+      if (this.known((it) => !it.building || !!DEFS[it.def].weapon, TPS * 20).some(([, it]) => Math.hypot(it.x - e.x, it.y - e.y) < 9)) continue;
+      const d = Math.hypot(e.x - ox, e.y - oy);
+      if (d < bd) {
+        bd = d;
+        best = e;
+      }
+    }
+    return best;
+  }
+
   private weighted(opts: [string, number][]): string | null {
     const ok = opts.filter(([id]) => this.world.canBuild(this.pid, id));
     const total = ok.reduce((s, [, n]) => s + n, 0);
@@ -1028,6 +1136,11 @@ export class AIController implements Controller {
     if (force.length === 0) return;
 
     if (micro > 0) this.manageRetreats(force);
+    // orderly retreat of losing groups to the defences, regrouping and returning (AI2)
+    if (RETREAT[this.difficulty]) {
+      this.manageEngagements(buildings);
+      this.manageFallbacks(force);
+    }
     // defend the base: respond to buildings or harvesters under attack
     if (this.defendBase(buildings, units, force)) return;
     if (micro > 0 || this.scoutsSent === 0) this.manageScout(force);
@@ -1035,6 +1148,7 @@ export class AIController implements Controller {
     if (micro > 0 && doc.harass > 0) this.manageRaids(force);
     if (doc.airWing > 0) this.manageAirWing(force);
     if (micro > 0) this.manageAmbush(force);
+    if (micro > 0 && this.thinks % 3 === 0) this.manageTerrain(force);
     this.manageWaves(force);
     this.manageArtillery(force);
     if (micro > 0) this.manageCrush(force);
@@ -1166,9 +1280,10 @@ export class AIController implements Controller {
       if (air && !w.canAttack(u.def, t)) return false;
       // already on its way there: don't re-plan every think
       if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
-      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush') && Math.hypot(u.x - hx, u.y - hy) < 28;
+      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush' || r === 'fallback') && Math.hypot(u.x - hx, u.y - hy) < 28;
     });
-    const amb = home.filter((u) => this.roleOf(u) === 'ambush').map((u) => u.id);
+    // a last stand: the base itself is under attack, so groups regrouping near it fight
+    const amb = home.filter((u) => this.roleOf(u) === 'ambush' || this.roleOf(u) === 'fallback').map((u) => u.id);
     if (amb.length) {
       this.setRole(amb, 'army');
       this.stance(amb, 'guard');
@@ -1215,6 +1330,246 @@ export class AIController implements Controller {
       this.retreatUntil.set(u.id, w.tick + TPS * (medic ? 30 : 50));
       this.cmd({ type: 'move', ids: [u.id], x, y });
     }
+  }
+
+  // ------------------------------------------------------------------ orderly retreat (AI2)
+
+  /** Armour mix (hp shares) of a set of entities. */
+  private armourMix(es: Entity[]): ArmourMix {
+    const m: ArmourMix = { infantry: 0, light: 0, heavy: 0, building: 0, aircraft: 0 };
+    let t = 0;
+    for (const e of es) {
+      m[DEFS[e.def].armor] += e.hp;
+      t += e.hp;
+    }
+    if (t > 0) for (const a of ARMOURS) m[a] /= t;
+    return m;
+  }
+
+  /** Damage per second of a unit / structure type against an armour mix (its better weapon for each class). */
+  private firepower(def: string, mix: ArmourMix): number {
+    const d = DEFS[def];
+    if (!d?.weapon) return 0;
+    const ws = [WEAPONS[d.weapon]];
+    if (d.kind === 'unit' && d.weapon2) ws.push(WEAPONS[d.weapon2]);
+    let f = 0;
+    for (const a of ARMOURS) {
+      if (!mix[a]) continue;
+      let best = 0;
+      for (const wp of ws) {
+        if (a === 'aircraft' ? wp.air === 'no' : wp.air === 'only') continue;
+        // (a drone launcher's damage is its drones': about a light rocket each)
+        const dmg = wp.projectile === 'spawn' ? 60 : wp.damage;
+        best = Math.max(best, ((dmg * (wp.burst ?? 1) * TPS) / Math.max(1, wp.rof)) * VERSUS[wp.warhead][a]);
+      }
+      f += mix[a] * best;
+    }
+    return f;
+  }
+
+  /** Combat strength of a force against an armour mix: the sum of hp x dps (unit-type matchups); a held house counts its garrison. */
+  private strength(es: Entity[], vs: ArmourMix): number {
+    let s = 0;
+    for (const e of es) {
+      if (e.passengers.length && buildingDef(e.def)?.garrison) {
+        for (const id of e.passengers) {
+          const p = this.world.get(id);
+          if (p) s += e.hp * this.firepower(p.def, vs) * 1.25;
+        }
+      } else s += e.hp * this.firepower(e.def, vs);
+    }
+    return s;
+  }
+
+  /**
+   * The engagement around a group: its strength against the visible enemy force near it (units we see now, plus the
+   * enemy defences and held houses we know of in range of it). null when no enemy is in contact.
+   */
+  private engagement(mem: Entity[], cx: number, cy: number): { ratio: number; theirs: number; mix: ArmourMix } | null {
+    const w = this.world;
+    const foes: Entity[] = [];
+    w.queryRadius(cx, cy, 11, (o) => {
+      if (o.dead || !w.isEnemy(this.pid, o.owner)) return;
+      if (o.kind === 'unit') {
+        const d = unitDef(o.def);
+        if (d.temp || !d.weapon || o.inside >= 0 || !w.sees(this.pid, o)) return;
+      } else if (!DEFS[o.def].weapon && !o.passengers.length) return;
+      else if (!this.knowsBuilding(o) && !w.sees(this.pid, o)) return;
+      foes.push(o);
+    });
+    if (!foes.length) return null;
+    const theirMix = this.armourMix(foes);
+    const theirs = this.strength(foes, this.armourMix(mem));
+    if (theirs <= 0) return null;
+    return { ratio: this.strength(mem, theirMix) / theirs, theirs, mix: theirMix };
+  }
+
+  /**
+   * Each wave in contact estimates the fight: when it is clearly losing (twice running, below the difficulty's
+   * ratio) it falls back together to the nearest friendly defensive position or the rally point - towards our
+   * defences, so a pursuer runs into them. No retreat while committed (a returning group), after the wave's last
+   * allowed retreat, or near home while the base itself is under attack (a last stand).
+   */
+  private manageEngagements(buildings: Entity[]) {
+    const R = RETREAT[this.difficulty]!;
+    if (this.thinks % R.every !== 0) return;
+    const w = this.world;
+    const [hx, hy] = this.home();
+    const baseHit = buildings.some((b) => w.tick - b.lastHurt < TPS * 5);
+    for (const wv of this.waves) {
+      if (wv.feint || wv.fell) continue;
+      const mem: Entity[] = [];
+      for (const id of wv.ids) {
+        const u = w.get(id);
+        if (u && this.roleOf(u) === 'army') mem.push(u);
+      }
+      const fighters = mem.filter((u) => klass(u.def) !== 'arty');
+      if (fighters.length < 2) continue;
+      let cx = 0;
+      let cy = 0;
+      for (const u of fighters) {
+        cx += u.x;
+        cy += u.y;
+      }
+      cx /= fighters.length;
+      cy /= fighters.length;
+      if (baseHit && Math.hypot(cx - hx, cy - hy) < 30) {
+        wv.low = 0;
+        continue;
+      }
+      const eng = this.engagement(fighters, cx, cy);
+      if (!eng || eng.ratio >= R.ratio || w.tick < (wv.commit ?? 0) || (wv.retreats ?? 0) >= R.max) {
+        wv.low = 0;
+        continue;
+      }
+      wv.low = (wv.low ?? 0) + 1;
+      if (wv.low < 2) continue;
+      const pt = this.fallbackPoint(cx, cy);
+      // already at our defences: stand and fight there
+      if (!pt) {
+        wv.low = 0;
+        continue;
+      }
+      wv.fell = true;
+      wv.retreats = (wv.retreats ?? 0) + 1;
+      const ids = mem.map((u) => u.id);
+      this.setRole(ids, 'fallback');
+      this.stance(ids, 'guard');
+      // (plain moves, not attack-moves: they do not stop to fight on the way)
+      this.cmd({ type: 'move', ids, x: pt[0], y: pt[1] });
+      this.fallbacks.push({ ids, x: pt[0], y: pt[1], since: w.tick, arrived: -1, enemy: eng.theirs, mix: eng.mix, fx: cx, fy: cy, tx: wv.tx, ty: wv.ty, retreats: wv.retreats });
+      this.stats.retreats++;
+    }
+  }
+
+  /**
+   * Where a group at (x, y) falls back to: just behind the nearest of our armed defences on the way home (a pursuer
+   * runs into the guns), else the rally point, else home. null when it is already at the defences.
+   */
+  private fallbackPoint(x: number, y: number): [number, number] | null {
+    const w = this.world;
+    const [hx, hy] = this.home();
+    let best: Entity | null = null;
+    let bs = Infinity;
+    for (const b of this.mineBuildings) {
+      if (b.dead || buildingDef(b.def).category !== 'defense' || !DEFS[b.def].weapon) continue;
+      const s = Math.hypot(b.x - x, b.y - y) + Math.hypot(b.x - hx, b.y - hy) * 0.5;
+      if (s < bs) {
+        bs = s;
+        best = b;
+      }
+    }
+    let px: number;
+    let py: number;
+    if (best) {
+      const dx = hx - best.x;
+      const dy = hy - best.y;
+      const len = Math.hypot(dx, dy) || 1;
+      px = best.x + (dx / len) * 2.5;
+      py = best.y + (dy / len) * 2.5;
+    } else [px, py] = this.rally();
+    if (Math.hypot(px - x, py - y) < 7) {
+      if (best) return null;
+      [px, py] = [hx, hy];
+      if (Math.hypot(px - x, py - y) < 7) return null;
+    }
+    const p = w.nearestPassable(px, py, 4, w.mainland);
+    return p ? [p[0] + 0.5, p[1] + 0.5] : [px, py];
+  }
+
+  /**
+   * Groups falling back: they keep moving (no stopping to fight) unless cornered by a pursuer they cannot outrun;
+   * damaged vehicles go on to repair (manageRetreats). At the defences they regroup with the reinforcements there,
+   * and once strong enough again (Hard) they return to their objective together, committed; else they merge into
+   * the army at the rally point.
+   */
+  private manageFallbacks(force: Entity[]) {
+    const R = RETREAT[this.difficulty]!;
+    const w = this.world;
+    for (const f of this.fallbacks) {
+      const mem: Entity[] = [];
+      for (const id of f.ids) {
+        const u = w.get(id);
+        if (u && this.roleOf(u) === 'fallback') mem.push(u);
+      }
+      if (!mem.length) {
+        f.ids = [];
+        continue;
+      }
+      const near = mem.filter((u) => Math.hypot(u.x - f.x, u.y - f.y) < 5);
+      if (f.arrived < 0) {
+        if (near.length * 5 >= mem.length * 3 || w.tick - f.since > TPS * 30) f.arrived = w.tick;
+        for (const u of mem) {
+          if (near.includes(u)) continue;
+          // cornered: a pursuer at its heels that it cannot outrun - turn and fight it
+          if (w.tick - u.lastHurt < TPS * 1.5) {
+            let foe: Entity | null = null;
+            let fd = 3;
+            w.queryRadius(u.x, u.y, 3, (o) => {
+              if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || !w.sees(this.pid, o) || !w.canAttack(u.def, o)) return;
+              const d = Math.hypot(o.x - u.x, o.y - u.y);
+              if (d < fd && unitDef(o.def).speed >= unitDef(u.def).speed) {
+                fd = d;
+                foe = o;
+              }
+            });
+            if (foe) {
+              this.cmd({ type: 'attack', ids: [u.id], target: (foe as Entity).id });
+              this.cmd({ type: 'move', ids: [u.id], x: f.x, y: f.y, queue: true });
+              continue;
+            }
+          }
+          if (u.order.type === 'idle') this.cmd({ type: 'move', ids: [u.id], x: f.x, y: f.y });
+        }
+        continue;
+      }
+      const held = w.tick - f.arrived;
+      if (held < TPS * R.hold) continue;
+      // regroup: the group and the army reinforcements idle near it or at the rally point
+      const [rx, ry] = this.rally();
+      const reinf = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && klass(u.def) === 'main' && (Math.hypot(u.x - f.x, u.y - f.y) < 10 || Math.hypot(u.x - rx, u.y - ry) < 9));
+      const all = [...mem, ...reinf];
+      if (R.relaunch && this.strength(all, f.mix) >= f.enemy * R.back && !this.peace) {
+        const ids = all.map((u) => u.id);
+        this.setRole(ids, 'army');
+        this.stance(ids, 'guard');
+        this.send(ids, null, f.tx, f.ty);
+        let value = 0;
+        for (const u of all) value += cost(u.def);
+        this.waves.push({ ids, tx: f.tx, ty: f.ty, focus: -1, born: w.tick, lane: '', value, killed: 0, commit: w.tick + TPS * R.commit, retreats: f.retreats });
+        while (this.waves.length > 6) this.judgeWave(this.waves.shift()!);
+        this.stats.returns++;
+        f.ids = [];
+      } else if (held >= TPS * R.merge) {
+        // not strong enough yet: join the army; the next wave takes them along
+        const ids = mem.map((u) => u.id);
+        this.setRole(ids, 'army');
+        this.cmd({ type: 'move', ids, x: rx, y: ry });
+        this.stats.regroups++;
+        f.ids = [];
+      }
+    }
+    this.fallbacks = this.fallbacks.filter((f) => f.ids.length);
   }
 
   /**
@@ -1485,6 +1840,216 @@ export class AIController implements Controller {
     this.cmd({ type: 'move', ids, x: this.ambushAt[0], y: this.ambushAt[1] });
     this.ambushUntil = w.tick + TPS * 45;
     this.stats.ambushes++;
+  }
+
+  // ------------------------------------------------------------------ terrain use (AI2)
+
+  /**
+   * The posts this map offers on our side (found once, from the map alone): the summit plateau - the highest ground
+   * a vehicle can reach on our half, if it stands well above the plain (Wadi Al-Rimal's Jebel, by its summit track) -
+   * and, on maps with a coloured canyon on our half, a spot on the walls above each of its mouths that soldiers can
+   * reach (foot passability and slope rules: sim/slope.ts).
+   */
+  private findPosts(): { key: string; x: number; y: number; ambush: boolean }[] {
+    const w = this.world;
+    const { map } = w;
+    const enemy = this.enemyBase();
+    if (!enemy) return [];
+    const [hx, hy] = this.home();
+    const out: { key: string; x: number; y: number; ambush: boolean }[] = [];
+    // the summit plateau
+    let top = -Infinity;
+    let tx = -1;
+    let ty = -1;
+    for (let y = 0; y < map.h; y++)
+      for (let x = 0; x < map.w; x++) {
+        if (!w.pf.passable(x, y) || w.region[y * map.w + x] !== w.mainland) continue;
+        const dh = Math.hypot(x + 0.5 - hx, y + 0.5 - hy);
+        if (dh < 14 || dh > Math.hypot(x + 0.5 - enemy[0], y + 0.5 - enemy[1]) * 0.85) continue;
+        const h = groundHeight(map, x + 0.5, y + 0.5);
+        if (h > top) {
+          top = h;
+          tx = x;
+          ty = y;
+        }
+      }
+    if (tx >= 0 && top - Math.max(groundHeight(map, hx, hy), WATER_LEVEL) >= 1.2) {
+      // the middle of the level ground up there, not its edge
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (let y = ty - 5; y <= ty + 5; y++)
+        for (let x = tx - 5; x <= tx + 5; x++) {
+          if (x < 0 || y < 0 || x >= map.w || y >= map.h || !w.pf.passable(x, y) || w.region[y * map.w + x] !== w.mainland) continue;
+          if (groundHeight(map, x + 0.5, y + 0.5) < top - 0.35) continue;
+          sx += x + 0.5;
+          sy += y + 0.5;
+          n++;
+        }
+      const p = w.nearestPassable(sx / n, sy / n, 4, w.mainland);
+      if (p) out.push({ key: 'plateau', x: p[0] + 0.5, y: p[1] + 0.5, ambush: false });
+    }
+    // the canyon mouths
+    const foot = w.pfs[Loco.Foot];
+    const fReg = w.regions[Loco.Foot];
+    const fMain = w.mainlands[Loco.Foot];
+    (map.deco?.canyons ?? []).forEach((c, ci) => {
+      if (c.pts.length < 2) return;
+      const mid = c.pts[c.pts.length >> 1];
+      if (Math.hypot(mid.x - hx, mid.y - hy) > Math.hypot(mid.x - enemy[0], mid.y - enemy[1])) return;
+      for (const [k, m] of [c.pts[0], c.pts[c.pts.length - 1]].entries()) {
+        const mx = m.x + 0.5;
+        const my = m.y + 0.5;
+        const floor = groundHeight(map, mx, my);
+        let best: [number, number] | null = null;
+        let bs = -Infinity;
+        for (let oy = -5; oy <= 5; oy++)
+          for (let ox = -5; ox <= 5; ox++) {
+            const x = Math.floor(mx) + ox;
+            const y = Math.floor(my) + oy;
+            if (x < 0 || y < 0 || x >= map.w || y >= map.h || !foot.passable(x, y) || fReg[y * map.w + x] !== fMain) continue;
+            const d = Math.hypot(x + 0.5 - mx, y + 0.5 - my);
+            if (d > 5.5 || d < 1.5) continue;
+            // up on the wall above the mouth, looking down on the floor
+            const s = (groundHeight(map, x + 0.5, y + 0.5) - floor) * 2 - d * 0.3;
+            if (s > bs) {
+              bs = s;
+              best = [x + 0.5, y + 0.5];
+            }
+          }
+        if (best) out.push({ key: `canyon${ci}.${k}`, x: best[0], y: best[1], ambush: true });
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Terrain use on any map with such features (AI2): town houses garrisoned on the enemy's routes, ambush squads on
+   * the walls over our canyon's mouths, a detachment (with AA) holding and contesting the summit plateau. Not before
+   * the first wave has gone (or two minutes after the grace), so the first attack keeps its strength and timing.
+   */
+  private manageTerrain(force: Entity[]) {
+    const w = this.world;
+    const T = TERRAIN[this.difficulty];
+    if (this.stats.firstWave < 0 && w.tick < Math.max(this.peaceUntil + TPS * 120, TPS * 240)) return;
+    this.postSpots ??= this.findPosts();
+    if (this.thinks % 30 === 0) for (const [id] of this.posts) if (!w.get(id)) this.posts.delete(id);
+    // soldiers who found their house taken (or destroyed) rejoin the army
+    const lost = force.filter((u) => this.roleOf(u) === 'post' && this.posts.get(u.id) === 'house' && u.order.type === 'idle').map((u) => u.id);
+    if (lost.length) this.setRole(lost, 'army');
+    // the posts take at most a fifth of the army (held houses count three soldiers each)
+    let posted = 0;
+    for (const u of force) if (this.roleOf(u) === 'post') posted++;
+    for (const e of w.list) if (!e.dead && e.kind === 'building' && e.owner === this.pid && buildingDef(e.def).garrison) posted += 3;
+    this.postBudget = Math.floor(force.length * 0.2) - posted;
+    if (this.postBudget < 2) return;
+    if (T.houses) this.manageHouses(force, T.houses);
+    for (const p of this.postSpots) {
+      if (p.key === 'plateau') {
+        if (T.plateau) this.holdPost(force, p, T.plateau, T.plateauAA);
+      } else if (T.canyon) this.holdPost(force, p, T.canyon, false);
+    }
+  }
+
+  /** Keep a post manned: idle army units from the rally point (infantry / AT for an ambush, AA with the plateau's). */
+  private holdPost(force: Entity[], p: { key: string; x: number; y: number; ambush: boolean }, want: number, aa: boolean) {
+    const w = this.world;
+    const mem = force.filter((u) => this.roleOf(u) === 'post' && this.posts.get(u.id) === p.key);
+    // contested: enemies seen on the post - send more (a few times a game at most, so the posts never bleed the army)
+    let foes = 0;
+    for (const [, it] of this.known((it) => !it.building && klass(it.def) !== 'none', TPS * 4)) if (Math.hypot(it.x - p.x, it.y - p.y) < 7) foes++;
+    const need = Math.min(this.postBudget, Math.max(want, p.ambush ? 0 : Math.min(want + 3, foes + 1)) - mem.length);
+    const sent = this.postSent.get(p.key) ?? 0;
+    if (need > 0 && sent < 4 && w.tick >= (this.postNext.get(p.key) ?? 0)) {
+      const [rx, ry] = this.rally();
+      const pool = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 14);
+      const vsHeavy = (u: Entity) => this.firepower(u.def, { infantry: 0, light: 0, heavy: 1, building: 0, aircraft: 0 });
+      let cands = pool.filter((u) => klass(u.def) === 'main' && (!p.ambush || (DEFS[u.def].category === 'infantry' && canGarrisonUnit(u.def))));
+      // ambushers: anti-tank soldiers first
+      cands.sort((a, b) => (p.ambush ? vsHeavy(b) - vsHeavy(a) : 0) || Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y) || a.id - b.id);
+      cands = cands.slice(0, need);
+      if (aa && !mem.some((u) => klass(u.def) === 'aa' || hitsAir(unitDef(u.def)))) {
+        const g = pool.find((u) => klass(u.def) === 'aa') ?? pool.find((u) => klass(u.def) === 'main' && hitsAir(unitDef(u.def)) && !cands.includes(u));
+        if (g) cands.push(g);
+      }
+      if (cands.length && (mem.length > 0 || cands.length >= Math.min(2, need))) {
+        const ids = cands.map((u) => u.id);
+        this.setRole(ids, 'post');
+        this.postBudget -= ids.length;
+        for (const id of ids) this.posts.set(id, p.key);
+        this.stance(ids, p.ambush ? 'holdFire' : 'guard');
+        this.cmd({ type: 'move', ids, x: p.x, y: p.y, attackMove: !p.ambush });
+        this.postNext.set(p.key, w.tick + TPS * 90);
+        this.postSent.set(p.key, sent + 1);
+        if (p.ambush) this.terrainStats.canyon++;
+        else this.terrainStats.plateau++;
+      }
+    }
+    if (!mem.length) return;
+    if (p.ambush) {
+      // hold fire while the enemy walks in, open up together once it is close (or shoots)
+      let close = false;
+      for (const [, it] of this.known((it) => !it.building, TPS * 2)) if (Math.hypot(it.x - p.x, it.y - p.y) < 6) close = true;
+      const sprung = close || mem.some((u) => w.tick - u.lastHurt < TPS * 2);
+      this.stance(mem.map((u) => u.id), sprung ? 'guard' : 'holdFire');
+    }
+    for (const u of mem) if (Math.hypot(u.x - p.x, u.y - p.y) < 3.5 && !this.plateauSeen.has(u.id) && p.key === 'plateau') {
+      this.plateauSeen.add(u.id);
+      this.terrainStats.plateauVisits++;
+    }
+    const away = mem.filter((u) => u.order.type === 'idle' && u.targetId < 0 && Math.hypot(u.x - p.x, u.y - p.y) > 4).map((u) => u.id);
+    if (away.length) this.cmd({ type: 'move', ids: away, x: p.x, y: p.y });
+  }
+
+  /**
+   * Town houses on the enemy's routes (garrison.ts): soldiers move into the best empty house on our side of the map
+   * close to a route the enemy uses (a lane's approach) - near our base or a contested point - up to the
+   * difficulty's number of held houses.
+   */
+  private manageHouses(force: Entity[], want: number) {
+    const w = this.world;
+    if (w.tick < this.houseNext) return;
+    const enemy = this.enemyBase();
+    if (!enemy) return;
+    const [hx, hy] = this.home();
+    let held = 0;
+    for (const e of w.list) if (!e.dead && e.kind === 'building' && e.owner === this.pid && buildingDef(e.def).garrison) held++;
+    if (held >= want || this.terrainStats.garrisons >= want * 2) return;
+    // routes: home -> lane -> enemy base for every lane, and the straight way
+    const segs: number[][] = [[hx, hy, enemy[0], enemy[1]]];
+    for (const l of this.lanes()) segs.push([hx, hy, l.x, l.y], [l.x, l.y, enemy[0], enemy[1]]);
+    let best: Entity | null = null;
+    let bs = Infinity;
+    for (const h of w.list) {
+      if (h.dead || h.kind !== 'building' || h.owner >= 0 || !buildingDef(h.def).garrison || garrisonRoom(w, h, this.pid) < 2) continue;
+      const dh = Math.hypot(h.x - hx, h.y - hy);
+      if (dh > Math.hypot(enemy[0] - hx, enemy[1] - hy) * 0.4) continue;
+      let r = Infinity;
+      for (const [x0, y0, x1, y1] of segs) r = Math.min(r, segDist(h.x, h.y, x0, y0, x1, y1));
+      if (r > 7) continue;
+      const s = r + dh * 0.08;
+      if (s < bs) {
+        bs = s;
+        best = h;
+      }
+    }
+    if (!best) return;
+    const room = Math.min(garrisonRoom(w, best, this.pid), this.difficulty === 'hard' ? 4 : 3, this.postBudget);
+    const [rx, ry] = this.rally();
+    const vsHeavy = (u: Entity) => this.firepower(u.def, { infantry: 0, light: 0, heavy: 1, building: 0, aircraft: 0 });
+    const b = best;
+    const inf = force
+      .filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && canGarrisonUnit(u.def) && Math.hypot(u.x - rx, u.y - ry) < 14)
+      .sort((p, q) => vsHeavy(q) - vsHeavy(p) || Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y) || p.id - q.id)
+      .slice(0, room);
+    if (inf.length < 2) return;
+    const ids = inf.map((u) => u.id);
+    this.setRole(ids, 'post');
+    this.postBudget -= ids.length;
+    for (const id of ids) this.posts.set(id, 'house');
+    this.cmd({ type: 'enter', ids, target: best.id });
+    this.houseNext = w.tick + TPS * 90;
+    this.terrainStats.garrisons++;
   }
 
   /** Harvester raids by fast units (and drones), on aggressive stance; they come home when the prey is gone. */
@@ -2007,7 +2572,7 @@ export class AIController implements Controller {
     const peace = this.peace;
     for (const u of force) {
       const d = unitDef(u.def);
-      if (!d.crusher || !d.weapon || u.stance === 'hold' || this.roleOf(u) === 'retreat') continue;
+      if (!d.crusher || !d.weapon || u.stance === 'hold' || this.roleOf(u) === 'retreat' || this.roleOf(u) === 'fallback') continue;
       const o = u.order;
       if (o.type !== 'attackMove' && o.type !== 'idle') continue;
       const wpn = WEAPONS[d.weapon];
