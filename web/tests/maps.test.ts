@@ -159,9 +159,12 @@ describe('maps', () => {
       for (const c of m.deco!.canyons!) {
         const a = c.pts[0];
         const b = c.pts[c.pts.length - 1];
-        // the floor along the course is passable sand (no trees), the walls beside it mostly rock
+        // the floor along the course is passable sand (no trees) about four tiles across, the walls beside it mostly rock
+        expect(c.hw, 'floor half width').toBeGreaterThanOrEqual(2);
         let floor = 0;
         let sand = 0;
+        let across = 0;
+        let open = 0;
         let wall = 0;
         let beside = 0;
         for (let k = 0; k < c.pts.length - 1; k++) {
@@ -176,14 +179,22 @@ describe('maps', () => {
             const nx = -(q.y - p.y) / len;
             const ny = (q.x - p.x) / len;
             for (const s of [-1, 1]) {
-              const wx = Math.round(p.x + ((q.x - p.x) * t) / len + nx * s * 1.6);
-              const wy = Math.round(p.y + ((q.y - p.y) * t) / len + ny * s * 1.6);
+              // the floor's width: passable out to 1.6 tiles either side of the centre line (tile centres)
+              for (const r of [0.8, 1.6]) {
+                const fx = Math.round(p.x + ((q.x - p.x) * t) / len + nx * s * r);
+                const fy = Math.round(p.y + ((q.y - p.y) * t) / len + ny * s * r);
+                across++;
+                if (w.pass[fy * m.w + fx]) open++;
+              }
+              const wx = Math.round(p.x + ((q.x - p.x) * t) / len + nx * s * (c.hw + 0.7));
+              const wy = Math.round(p.y + ((q.y - p.y) * t) / len + ny * s * (c.hw + 0.7));
               beside++;
               if (m.tiles[wy * m.w + wx] === Tile.Rock) wall++;
             }
           }
         }
         expect(sand / floor, `seed ${seed}: canyon floor`).toBeGreaterThan(0.95);
+        expect(open / across, `seed ${seed}: canyon floor width`).toBeGreaterThan(0.95);
         expect(wall / beside, `seed ${seed}: canyon walls`).toBeGreaterThan(0.45);
         // a ground route runs from mouth to mouth (through it or round it) and the canyon floor is its own way through
         const path = pf.find(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y), 200000);
