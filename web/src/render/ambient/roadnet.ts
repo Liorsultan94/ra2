@@ -215,7 +215,7 @@ export interface NetInput {
   w: number;
   h: number;
   roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number; closed?: boolean }[];
-  tracks: readonly { pts: V2[]; width: number; ring?: boolean }[];
+  tracks: readonly { pts: V2[]; width: number; ring?: boolean; noCars?: boolean }[];
   bridges: readonly { ends: readonly V2[] }[];
   /** Tile (tx, ty) can't take a turning place (water, rock, trees, structures, ore, base areas, off map). */
   hard: (tx: number, ty: number) => boolean;
@@ -566,7 +566,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
   // the city's "tracks" are park footpaths: no cars there
   if (!inp.urban)
     for (const t of inp.tracks) {
-      if (t.ring) continue;
+      if (t.ring || t.noCars) continue;
       let run: V2[] = [];
       for (const p of t.pts) {
         if (inp.clip?.(p.x, p.y)) {

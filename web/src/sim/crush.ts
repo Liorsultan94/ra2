@@ -111,11 +111,16 @@ function passable(w: World, x: number, y: number) {
   return x > 0 && y > 0 && x < w.map.w && y < w.map.h && w.pass[w.tileOf(x, y)] === 1;
 }
 
+/** Can e move straight to (x, y): passable ground, no step on the way too steep for it (slope.ts)? */
+function canMove(w: World, e: Entity, x: number, y: number) {
+  return passable(w, x, y) && w.lineOk(e.x, e.y, x, y, w.locoOf(e));
+}
+
 /** Move a soldier by (dx, dy) if the ground there is passable. */
 function shove(w: World, e: Entity, dx: number, dy: number) {
   const nx = e.x + dx;
   const ny = e.y + dy;
-  if (passable(w, nx, ny)) {
+  if (canMove(w, e, nx, ny)) {
     e.x = nx;
     e.y = ny;
   }
@@ -264,7 +269,7 @@ function startDodge(w: World, o: Entity, od: UnitDef, v: Entity, vd: UnitDef, hx
   for (const [dx, dy] of tries) {
     const x = o.x + dx;
     const y = o.y + dy;
-    if (passable(w, x, y) && passable(w, o.x + dx * 0.5, o.y + dy * 0.5)) {
+    if (passable(w, x, y) && passable(w, o.x + dx * 0.5, o.y + dy * 0.5) && w.lineOk(o.x, o.y, x, y, w.locoOf(o))) {
       goal = [x, y];
       break;
     }
@@ -296,7 +301,7 @@ export function stepDodge(w: World, e: Entity, d: UnitDef): boolean {
       e.turret = e.facing;
     }
     if (dist <= step) {
-      if (passable(w, g.x, g.y)) {
+      if (canMove(w, e, g.x, g.y)) {
         e.x = g.x;
         e.y = g.y;
       }
@@ -304,7 +309,7 @@ export function stepDodge(w: World, e: Entity, d: UnitDef): boolean {
     } else {
       const nx = e.x + (dx / dist) * step;
       const ny = e.y + (dy / dist) * step;
-      if (passable(w, nx, ny)) {
+      if (canMove(w, e, nx, ny)) {
         e.x = nx;
         e.y = ny;
       } else done = true;

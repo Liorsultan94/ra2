@@ -41,7 +41,13 @@ export function buildBiomeLayout(m: GameMap): Layout {
     }
     flush();
   });
-  const tracks: Track[] = (deco?.tracks ?? []).map((pts) => ({ pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 }));
+  const tracks: Track[] = (deco?.tracks ?? []).map((pts, i) => {
+    const t: Track = { pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 };
+    const bed = deco?.trackBeds?.[i];
+    if (bed) t.bed = bed;
+    if (deco?.trackNoCars?.[i]) t.noCars = true;
+    return t;
+  });
 
   // ---- occupancy grid
   const R = 4;
@@ -58,7 +64,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     }
   };
   for (const r of roads) stampLine(r.pts, r.width / 2 + 0.25, OCC_ROAD);
-  for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
+  for (const t of tracks) stampLine(t.pts, t.width / 2 + (t.bed ?? 0) + 0.2, OCC_TRACK);
   // the civilian lane graph: turning circles / junctions kept clear, roads fitted to them (ambient/clearance.ts)
   prepareRoadNet(m, roads, tracks, occ, R);
   const stampRect = (x0: number, y0: number, x1: number, y1: number, bit: number) => {
@@ -314,7 +320,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     }
   }
   // the park paths count as tracks in the occupancy grid
-  for (const t of tracks) stampLine(t.pts, t.width / 2 + 0.2, OCC_TRACK);
+  for (const t of tracks) stampLine(t.pts, t.width / 2 + (t.bed ?? 0) + 0.2, OCC_TRACK);
   const pivots = biome === 'desert' ? findPivots(m, occ, R, pylons.lines, poles, wrecks) : [];
   // small plots round the villages and farmsteads (render only: greenhouses, orchards, crops)
   if (biome !== 'urban') {

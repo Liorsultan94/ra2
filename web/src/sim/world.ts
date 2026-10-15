@@ -12,6 +12,7 @@ import { createMap } from './maps';
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
+import { LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
 import { fireSuperweapon, newSuperweaponState, updateSuperweapons } from './superweapons';
@@ -92,28 +93,12 @@ export const WEAPON_SWAP = TPS;
 export const MOVE_FIRE_ROF = 1.4;
 
 // Precomputed offsets sorted by distance, used for formations and spiral searches.
-/** Connected regions of passable tiles (4-neighbour flood fills, numbered from 1; 0 = impassable). */
-function groundRegions(w: number, h: number, pass: Uint8Array): Uint16Array {
-  const reg = new Uint16Array(w * h);
-  let n = 0;
-  const q: number[] = [];
-  for (let i0 = 0; i0 < w * h; i0++) {
-    if (!pass[i0] || reg[i0]) continue;
-    reg[i0] = ++n;
-    q.push(i0);
-    while (q.length) {
-      const t = q.pop()!;
-      const x = t % w;
-      for (const j of [x > 0 ? t - 1 : -1, x < w - 1 ? t + 1 : -1, t - w, t + w]) {
-        if (j < 0 || j >= w * h || !pass[j] || reg[j]) continue;
-        reg[j] = n;
-        q.push(j);
-      }
-    }
-  }
-  return reg;
-}
-
+/** Climbing slows a unit: speed / (1 + CLIMB_SLOW x grade); a vehicle at its steepest (0.53) makes some 80%. */
+const CLIMB_SLOW = 0.45;
+/** Ground cut off on every side by steps too steep to climb, smaller than this many tiles, is closed (World constructor). */
+const POCKET = 10;
+const DX8 = [1, -1, 0, 0, 1, 1, -1, -1];
+const DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
 const SPIRAL: [number, number][] = (() => {
   const out: [number, number, number][] = [];
   for (let y = -12; y <= 12; y++) for (let x = -12; x <= 12; x++) out.push([x, y, x * x + y * y + (x + y) * 0.001]);
@@ -165,6 +150,16 @@ export class World {
    */
   region: Uint16Array;
   mainland = 0;
+  /**
+   * Per locomotion class (slope.ts Loco): ground regions over the steps that class can take, the region of
+   * player 0's start, and its path finder. `region`, `mainland` and `pf` are the vehicles' (the strictest):
+   * what vehicles reach, soldiers reach too.
+   */
+  regions: Uint16Array[];
+  mainlands: number[];
+  pfs: PathFinder[];
+  /** Steps too steep per locomotion class, climbing costs (slope.ts; built once per map). */
+  slope: SlopeField;
   occ: Int32Array;
   pf: PathFinder;
   controllers: Controller[] = [];
@@ -210,10 +205,25 @@ export class World {
     this.pass = new Uint8Array(w * h);
     this.occ = new Int32Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) this.pass[y * w + x] = terrainPassable(this.map, x, y) ? 1 : 0;
-    this.region = groundRegions(w, h, this.pass);
+    this.slope = slopeField(this.map);
+    // scraps of level ground walled in by steps too steep even to climb (a ledge on a cliff, the foot of a crag):
+    // nobody can ever reach them, so nothing is sent, dropped or pushed there either
+    const foot = groundRegions(w, h, this.pass, this.slope.block[Loco.Foot]);
+    const size = new Uint32Array(w * h + 1);
+    for (let i = 0; i < w * h; i++) size[foot[i]]++;
+    for (let i = 0; i < w * h; i++) if (foot[i] && size[foot[i]] < POCKET) this.pass[i] = 0;
     const s0 = this.map.starts[0];
-    this.mainland = this.region[s0.y * w + s0.x];
-    this.pf = new PathFinder(w, h, this.pass);
+    this.regions = [];
+    this.mainlands = [];
+    this.pfs = [];
+    for (let c = 0; c < LOCO_COUNT; c++) {
+      this.regions.push(groundRegions(w, h, this.pass, this.slope.block[c]));
+      this.mainlands.push(this.regions[c][s0.y * w + s0.x]);
+      this.pfs.push(new PathFinder(w, h, this.pass, this.slope.block[c], this.slope.climb));
+    }
+    this.region = this.regions[Loco.Vehicle];
+    this.mainland = this.mainlands[Loco.Vehicle];
+    this.pf = this.pfs[Loco.Vehicle];
     this.gridW = Math.ceil(w / SPATIAL_CELL);
     this.gridH = Math.ceil(h / SPATIAL_CELL);
     this.grid = Array.from({ length: this.gridW * this.gridH }, () => []);
@@ -459,7 +469,84 @@ export class World {
         this.pass[i] = on && !through ? 0 : terrainPassable(this.map, b.tx + x, b.ty + y) ? 1 : 0;
       }
     }
-    this.pf.clearCache();
+    this.clearPaths();
+  }
+
+  /** Passability changed (a building, a bridge): drop every class's cached paths. */
+  clearPaths() {
+    for (const pf of this.pfs) pf.clearCache();
+  }
+
+  /** Locomotion class of a unit (slope.ts; -1 for aircraft). */
+  locoOf(e: Entity): number {
+    return locoOf(unitDef(e.def));
+  }
+
+  /**
+   * Can a unit of locomotion class c move from tile a to tile b (the same tile or a neighbour; farther: false)?
+   * Orthogonal: the step within the class's slope limit (slope.ts). Diagonal (passing a corner): by either of the
+   * two tiles beside the corner, passable, both its steps within the limit.
+   */
+  stepOk(a: number, b: number, c: number): boolean {
+    if (a === b || c < 0) return true;
+    const w = this.map.w;
+    const ax = a % w;
+    const dx = (b % w) - ax;
+    const dy = Math.floor(b / w) - Math.floor(a / w);
+    const k = dirOf(dx, dy);
+    if (k < 0) return false;
+    const bl = this.slope.block[c];
+    if (k < 4) return !(bl[a] & (1 << k));
+    // (a diagonal is never off the map's edge here: b is on the map, so both corner tiles are)
+    const kx = dx > 0 ? 0 : 1;
+    const ky = dy > 0 ? 2 : 3;
+    const tx = a + dx;
+    const ty = a + dy * w;
+    return (this.pass[tx] === 1 && !(bl[a] & (1 << kx)) && !(bl[tx] & (1 << ky))) || (this.pass[ty] === 1 && !(bl[a] & (1 << ky)) && !(bl[ty] & (1 << kx)));
+  }
+
+  /**
+   * Is the straight line from (x0, y0) to (x1, y1) open ground for class c: every tile it passes through passable,
+   * every move between them within the class's slope limit (stepOk)? An exact walk over the tile boundaries the line
+   * crosses (a corner crossed exactly is a diagonal move).
+   */
+  lineOk(x0: number, y0: number, x1: number, y1: number, c: number): boolean {
+    const { w, h } = this.map;
+    let tx = Math.floor(x0);
+    let ty = Math.floor(y0);
+    const ex = Math.floor(x1);
+    const ey = Math.floor(y1);
+    if (tx === ex && ty === ey) return true;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const sx = dx > 0 ? 1 : -1;
+    const sy = dy > 0 ? 1 : -1;
+    const ix = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    const iy = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+    // line parameter t (0..1) at the next x / y boundary
+    let nx = dx !== 0 ? (dx > 0 ? tx + 1 - x0 : x0 - tx) * ix : Infinity;
+    let ny = dy !== 0 ? (dy > 0 ? ty + 1 - y0 : y0 - ty) * iy : Infinity;
+    let guard = 4 * (Math.abs(ex - tx) + Math.abs(ey - ty)) + 4;
+    while ((tx !== ex || ty !== ey) && guard-- > 0) {
+      const a = ty * w + tx;
+      if (Math.min(nx, ny) > 1) break;
+      if (nx < ny) {
+        tx += sx;
+        nx += ix;
+      } else if (ny < nx) {
+        ty += sy;
+        ny += iy;
+      } else {
+        tx += sx;
+        ty += sy;
+        nx += ix;
+        ny += iy;
+      }
+      if (tx < 0 || ty < 0 || tx >= w || ty >= h) return false;
+      const b = ty * w + tx;
+      if (!this.pass[b] || !this.stepOk(a, b, c)) return false;
+    }
+    return true;
   }
 
   // ------------------------------------------------------------ helpers
@@ -584,23 +671,36 @@ export class World {
     return this.players[player].visible[ty * w + tx] > 0;
   }
 
-  /** The nearest passable tile within maxR; with `region`, only tiles of that ground region. */
-  nearestPassable(x: number, y: number, maxR = 12, region = 0): [number, number] | null {
+  /** The nearest passable tile within maxR; with `region`, only tiles of that ground region of locomotion class `loco`. */
+  nearestPassable(x: number, y: number, maxR = 12, region = 0, loco: number = Loco.Vehicle): [number, number] | null {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
+    const reg = this.regions[loco < 0 ? Loco.Vehicle : loco];
     for (const [ox, oy] of SPIRAL) {
       if (Math.abs(ox) > maxR || Math.abs(oy) > maxR) continue;
-      if (this.pf.passable(tx + ox, ty + oy) && (!region || this.region[(ty + oy) * this.map.w + tx + ox] === region)) return [tx + ox, ty + oy];
+      if (this.pf.passable(tx + ox, ty + oy) && (!region || reg[(ty + oy) * this.map.w + tx + ox] === region)) return [tx + ox, ty + oy];
     }
     return null;
   }
 
-  /** Ground region a ground unit stands in (the mainland when it stands on no passable tile). */
-  regionOf(x: number, y: number): number {
+  /**
+   * Ground region a ground unit of locomotion class `loco` stands in (default: vehicles). Standing on no
+   * passable tile (pushed onto a building's edge), the region of the nearest passable tile next to it, else the mainland.
+   */
+  regionOf(x: number, y: number, loco: number = Loco.Vehicle): number {
+    const c = loco < 0 ? Loco.Vehicle : loco;
     const tx = Math.floor(x);
     const ty = Math.floor(y);
-    if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) return this.mainland;
-    return this.region[ty * this.map.w + tx] || this.mainland;
+    if (tx < 0 || ty < 0 || tx >= this.map.w || ty >= this.map.h) return this.mainlands[c];
+    const reg = this.regions[c];
+    const r = reg[ty * this.map.w + tx];
+    if (r) return r;
+    for (let k = 0; k < 8; k++) {
+      const nx = tx + DX8[k];
+      const ny = ty + DY8[k];
+      if (nx >= 0 && ny >= 0 && nx < this.map.w && ny < this.map.h && reg[ny * this.map.w + nx]) return reg[ny * this.map.w + nx];
+    }
+    return this.mainlands[c];
   }
 
   queryRadius(x: number, y: number, r: number, cb: (e: Entity) => void) {
@@ -654,7 +754,8 @@ export class World {
       if (e.dead || e.kind !== 'unit' || this.isAir(e)) continue;
       if (e.x >= b.tx && e.x < b.tx + d.w && e.y >= b.ty && e.y < b.ty + d.h) {
         if (this.pass[this.tileOf(e.x, e.y)]) continue;
-        const p = this.nearestPassable(e.x, e.y);
+        const lc = this.locoOf(e);
+        const p = this.nearestPassable(e.x, e.y, 12, this.regionOf(e.x, e.y, lc), lc);
         if (p) {
           e.x = e.px = p[0] + 0.5;
           e.y = e.py = p[1] + 0.5;
@@ -1046,12 +1147,14 @@ export class World {
       let ty = gy;
       let slot = 0;
       const air = !!d.air;
-      // (ground units only ever head for land they can reach)
-      const home = air ? 0 : this.regionOf(e.x, e.y);
+      // (ground units only ever head for land they can reach: islands, and plateaus their slope limit keeps them off)
+      const lc = locoOf(d);
+      const home = air ? 0 : this.regionOf(e.x, e.y, lc);
+      const reg = this.regions[lc < 0 ? Loco.Vehicle : lc];
       for (const [ox, oy] of SPIRAL) {
         const cx = gx + ox;
         const cy = gy + oy;
-        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !this.pf.passable(cx, cy) || this.region[cy * w + cx] !== home) continue;
+        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !this.pf.passable(cx, cy) || reg[cy * w + cx] !== home) continue;
         const i = cy * w + cx + (air ? 1e6 : 0);
         const used = taken.get(i) ?? 0;
         // infantry and vehicles don't share tiles
@@ -1093,10 +1196,26 @@ export class World {
     let gy = Math.floor(y);
     gx = Math.max(0, Math.min(this.map.w - 1, gx));
     gy = Math.max(0, Math.min(this.map.h - 1, gy));
+    const lc = this.locoOf(e);
+    if (lc >= 0) {
+      // a goal this unit can never reach (an island, a plateau too steep for it): the nearest point it can
+      const W = this.map.w;
+      const home = this.regionOf(e.x, e.y, lc);
+      const r = this.regions[lc][gy * W + gx];
+      if (r !== home) {
+        const np = this.nearestPassable(gx + 0.5, gy + 0.5, 12, home, lc);
+        if (np && Math.hypot(np[0] - gx, np[1] - gy) > 0.5) {
+          gx = np[0];
+          gy = np[1];
+          x = gx + 0.5;
+          y = gy + 0.5;
+        }
+      }
+    }
     e.slotX = x;
     e.slotY = y;
     e.moveGoal = gy * this.map.w + gx;
-    e.path = unitDef(e.def).air ? [] : this.pf.find(sx, sy, gx, gy);
+    e.path = lc < 0 ? [] : this.pfs[lc].find(sx, sy, gx, gy);
     e.pathIdx = 0;
     e.moving = true;
     e.repathAt = this.tick + 20 + (e.id % 7);
@@ -1194,7 +1313,12 @@ export class World {
     const dx = wx - e.x;
     const dy = wy - e.y;
     const dist = Math.hypot(dx, dy);
-    const step = d.speed / TPS;
+    // uphill they slow down a little (half a tile ahead along the leg; downhill and on the level full speed)
+    let step = d.speed / TPS;
+    if (dist > 1e-3) {
+      const up = standHeight(this.map, e.x + (dx / dist) * 0.5, e.y + (dy / dist) * 0.5) - standHeight(this.map, e.x, e.y);
+      if (up > 0) step /= 1 + CLIMB_SLOW * up * 2;
+    }
     if (dist < 0.02) {
       if (atEnd) {
         e.path = null;
@@ -1218,14 +1342,31 @@ export class World {
       }
     }
     e.moving = true;
-    if (dist <= step) {
-      e.x = wx;
-      e.y = wy;
-      if (!atEnd) e.pathIdx++;
-    } else {
-      e.x += (dx / dist) * step;
-      e.y += (dy / dist) * step;
+    const nx = dist <= step ? wx : e.x + (dx / dist) * step;
+    const ny = dist <= step ? wy : e.y + (dy / dist) * step;
+    const ct = this.tileOf(e.x, e.y);
+    const nt = this.tileOf(nx, ny);
+    if (nt !== ct && this.pass[ct] && !this.stepOk(ct, nt, this.locoOf(e))) {
+      // the straight leg from where we actually stand (off the tile centres the path was planned through: shoved by
+      // the crowd, a dodge, a start off-centre) crosses a step too steep for us (a ramp's edge, a canyon wall's
+      // foot): first back to our tile's centre, and if the leg is still blocked from there, plan again from it
+      const lc = this.locoOf(e);
+      const cx = ct % w;
+      const cy = Math.floor(ct / w);
+      const wt = e.path[e.pathIdx] === ct ? e.path[e.pathIdx + 1] : atEnd ? e.moveGoal : e.path[e.pathIdx];
+      const fromCentre = wt === undefined || this.pfs[lc].lineClear(cx, cy, wt % w, Math.floor(wt / w));
+      if (Math.hypot(cx + 0.5 - e.x, cy + 0.5 - e.y) > 0.05 && fromCentre) {
+        if (e.path[e.pathIdx] !== ct) e.path.splice(e.pathIdx, 0, ct);
+      } else {
+        const st = e.stuckTicks;
+        this.pathTo(e, e.slotX, e.slotY);
+        e.stuckTicks = st;
+      }
+      return false;
     }
+    e.x = nx;
+    e.y = ny;
+    if (dist <= step && !atEnd) e.pathIdx++;
     return false;
   }
 
@@ -1243,13 +1384,7 @@ export class World {
       tx = (path[k] % w) + 0.5;
       ty = Math.floor(path[k] / w) + 0.5;
     }
-    const L = Math.hypot(tx - e.x, ty - e.y);
-    const n = Math.ceil(L / 0.25);
-    for (let i = 1; i <= n; i++) {
-      const f = i / n;
-      if (!this.pass[this.tileOf(e.x + (tx - e.x) * f, e.y + (ty - e.y) * f)]) return false;
-    }
-    return true;
+    return this.lineOk(e.x, e.y, tx, ty, this.locoOf(e));
   }
 
   /** Aircraft fly straight to their goal, banking round in an arc. */
@@ -1336,7 +1471,8 @@ export class World {
       }
       return;
     }
-    if (this.pass[this.tileOf(nx, ny)] && nx > 0 && ny > 0 && nx < this.map.w && ny < this.map.h) {
+    // (never shoved off the map, onto a blocked tile, or up / down a step too steep for it)
+    if (nx > 0 && ny > 0 && nx < this.map.w && ny < this.map.h && this.pass[this.tileOf(nx, ny)] && this.stepOk(this.tileOf(e.x, e.y), this.tileOf(nx, ny), this.locoOf(e))) {
       e.x = nx;
       e.y = ny;
     }
@@ -1928,7 +2064,7 @@ export class World {
       const p = this.get(pid);
       if (!p) continue;
       p.inside = -1;
-      const spot = this.nearestPassable(apc.x - Math.cos(apc.facing) * 0.8, apc.y - Math.sin(apc.facing) * 0.8, 4);
+      const spot = this.nearestPassable(apc.x - Math.cos(apc.facing) * 0.8, apc.y - Math.sin(apc.facing) * 0.8, 4, this.regionOf(apc.x, apc.y, Loco.Foot), Loco.Foot);
       const [x, y] = spot ? [spot[0] + 0.5, spot[1] + 0.5] : [apc.x, apc.y];
       p.x = p.px = x + this.rng.range(-0.2, 0.2);
       p.y = p.py = y + this.rng.range(-0.2, 0.2);
@@ -2229,7 +2365,8 @@ export class World {
     const ex = fd.exit ?? [Math.floor(fd.w / 2), fd.h];
     let [sx, sy] = layoutTile(factory, ex[0], ex[1]);
     if (!d.air && !this.pf.passable(sx, sy)) {
-      const np = this.nearestPassable(sx + 0.5, sy + 0.5, 12, this.regionOf(factory.x, factory.y));
+      const lc = locoOf(d);
+      const np = this.nearestPassable(sx + 0.5, sy + 0.5, 12, this.regionOf(factory.x, factory.y, lc), lc);
       if (!np) return;
       [sx, sy] = np;
     }

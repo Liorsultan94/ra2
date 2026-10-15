@@ -23,6 +23,7 @@
 //
 // Plain arithmetic on entity state in tick order, no randomness.
 
+import { Loco } from './slope';
 import { buildingDef, unitDef } from './defs';
 import { GEM_VALUE, ORE_VALUE } from './map';
 import { layoutTile } from './turn';
@@ -278,6 +279,7 @@ export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict 
   const taken = claims(w, e);
   const hot = hotList(w, e.owner).map((f) => ({ x: f.x, y: f.y, far: Math.hypot(f.x - e.x, f.y - e.y) > HV_THREAT_R + 1 }));
   const seen = new Uint8Array(W * H);
+  const steep = w.slope.block[Loco.Vehicle];
   const queue = [start];
   const dist = [0];
   seen[start] = 1;
@@ -308,17 +310,19 @@ export function findOre(w: World, e: Entity, start = w.tileOf(e.x, e.y), strict 
     }
     const x = t % W;
     const y = (t - x) / W;
-    const push = (n: number) => {
-      if (!seen[n] && w.pass[n]) {
+    // (only over steps a harvester can drive: slope.ts)
+    const bl = steep[t];
+    const push = (n: number, k: number) => {
+      if (!seen[n] && w.pass[n] && !(bl & (1 << k))) {
         seen[n] = 1;
         queue.push(n);
         dist.push(dd + 1);
       }
     };
-    if (x > 0) push(t - 1);
-    if (x < W - 1) push(t + 1);
-    if (y > 0) push(t - W);
-    if (y < H - 1) push(t + W);
+    if (x > 0) push(t - 1, 1);
+    if (x < W - 1) push(t + 1, 0);
+    if (y > 0) push(t - W, 3);
+    if (y < H - 1) push(t + W, 2);
   }
   return best;
 }

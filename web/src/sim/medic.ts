@@ -455,6 +455,7 @@ function stepTo(w: World, e: Entity, d: UnitDef, gx: number, gy: number, k: numb
   const tx = Math.floor(nx);
   const ty = Math.floor(ny);
   if (tx < 0 || ty < 0 || tx >= w.map.w || ty >= w.map.h || !w.pass[ty * w.map.w + tx]) return false;
+  if (!w.stepOk(w.tileOf(e.x, e.y), ty * w.map.w + tx, w.locoOf(e))) return false;
   e.x = nx;
   e.y = ny;
   e.facing = e.turret = Math.atan2(dy, dx);

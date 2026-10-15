@@ -236,6 +236,10 @@ describe('terrain', () => {
     const { w, ais } = game('usa', 'russia', 2, ['hard', 'hard'], 'desert');
     const ai = ais[1];
     for (let t = 0; t < TPS * 60 * 6; t++) w.step();
+    // (not while a wave gathers at the rally point: the tanks there would join it, not an ambush; and the eight
+    // tanks put there below must not start one either)
+    for (let t = 0; t < TPS * 60 * 3 && ai.staged; t++) w.step();
+    ai.waveSize = 999;
     const p = w.players[1];
     // ambush: an enemy column closing on the crossing nearest us, our army idle at the rally point
     const [hx, hy] = ai.home();

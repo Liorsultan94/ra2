@@ -503,13 +503,12 @@ export function createDesertMap(seed: number): GameMap {
   // standing on it as its rock-capped summits. A spine of summits and saddles, spurs and gullies cut
   // into its flanks by ridged noise; every slope but the caps' cliffs and a few crags is passable ground.
   const massifHalf = (x: number, y: number) => {
-    // the foot wanders; the profile is an even slope (no steeper than 1.21 x crest / foot), rounded off at
-    // the crest and the foot; the highest of the spine segments' profiles wins (continuous everywhere)
+    // the foot wanders; the profile (SL1) is a granite mountain's: a talus apron rising gently from the foot,
+    // a steep rock flank above it (too steep for vehicles, for soldiers too where the mountain is high; the
+    // tracks wind up it, sim/slope.ts) and a rounded crest; the highest of the spine segments' profiles wins
+    // (continuous everywhere)
     const foot = MASSIF_FOOT + (fbm(x * 0.08, y * 0.08, NS + 41) - 0.5) * 4;
-    const A = 0.15;
-    const B = 0.2;
-    const K = 1 / (1 - A / 2 - B / 2);
-    const prof = (u: number) => (u >= 1 ? 0 : 1 - K * (u < A ? (u * u) / (2 * A) : u < 1 - B ? A / 2 + u - A : 1 - B - A / 2 + B / 2 - ((1 - u) * (1 - u)) / (2 * B)));
+    const prof = massifProfile;
     let hs = 0;
     let f = 0;
     for (const line of DESERT_MASSIF)
@@ -521,7 +520,7 @@ export function createDesertMap(seed: number): GameMap {
         const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
         const p = prof(Math.hypot(x - a.x - dx * t, y - a.y - dy * t) / foot);
         if (p <= 0) continue;
-        hs = Math.max(hs, (a.h + (b.h - a.h) * smoothstep(0, 1, t)) * p);
+        hs = Math.max(hs, (a.h + (b.h - a.h) * smoothstep(0, 1, t)) * MASSIF_LIFT * p);
         f = Math.max(f, p);
       }
     if (f <= 0) return { h: 0, f: 0, r: 0 };
@@ -578,10 +577,10 @@ export function createDesertMap(seed: number): GameMap {
   };
   /** A canyon wall tile: the ground beside the floor stands this far above it. */
   const canyonWall = (x: number, y: number, floor: number) => surface(x, y) - floor > 0.75;
-  for (let vy = 0; vy <= H; vy++)
-    for (let vx = 0; vx <= W; vx++) {
-      const fx = vx - 0.5;
-      const fy = vy - 0.5;
+  /** The ground before the tracks are graded into it (vertex at tile-index point fx, fy; vx = fx + 0.5). */
+  const natural = (fx: number, fy: number) => {
+      const vx = fx + 0.5;
+      const vy = fy + 0.5;
       let h = lowGround(fx, fy) + massifAt(fx, fy).h;
       for (const s of starts) h = h + (0.45 - h) * (1 - smoothstep(9, 15, Math.hypot(fx - s.x, fy - s.y)));
       // roads run on graded ground
@@ -604,9 +603,17 @@ export function createDesertMap(seed: number): GameMap {
       }
       // the coloured canyon: a narrow floor sunk into the mountain, its walls rising steeply to the rims
       const cy = canyonAt(fx, fy);
-      if (cy.d < CANYON_HW + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW - 0.15, CANYON_HW + 1.25, cy.d) * 6);
-      h = coastHeight(sea, vx, vy, h, NS);
-      g.heights[vy * (W + 1) + vx] = h;
+      // (SL1: the floor stays level CANYON_FLAT beyond its sand, so the tiles along the walls' feet are level ground a
+      // column of tanks can use, not the first steps of the walls)
+      if (cy.d < CANYON_HW + CANYON_FLAT + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW + CANYON_FLAT, CANYON_HW + CANYON_FLAT + 1.3, cy.d) * 6);
+      return h;
+  };
+  // the mountain tracks and footpaths (SL1): graded into the massifs' flanks, mirrored
+  const ramps = rampSet(W, H, DESERT_RAMPS, natural);
+  for (let vy = 0; vy <= H; vy++)
+    for (let vx = 0; vx <= W; vx++) {
+      const h = ramps.grade(vx - 0.5, vy - 0.5, natural(vx - 0.5, vy - 0.5));
+      g.heights[vy * (W + 1) + vx] = coastHeight(sea, vx, vy, h, NS);
     }
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -637,6 +644,8 @@ export function createDesertMap(seed: number): GameMap {
       const cy = canyonAt(x, y);
       if (cy.d < CANYON_HW) t = Tile.Sand;
       else if (cy.d < CANYON_HW + 1.1 && canyonWall(x, y, cy.floor)) t = Tile.Rock;
+      // the tracks: worn gravel, the crags cut back where they climb past them
+      if (ramps.onTrack(x, y)) t = Tile.Dirt;
       g.tiles[i] = coastTile(sea, fx, fy, t);
     }
   markRoads(g, roads, roads.map((_, i) => [0.95, 0.95, 0.8, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
@@ -646,7 +655,8 @@ export function createDesertMap(seed: number): GameMap {
     starts.some((s) => Math.hypot(x - s.x, y - s.y) < 10) ||
     oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) ||
     oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) ||
-    canyonAt(x, y).d < CANYON_HW + 1.2 ||
+    canyonAt(x, y).d < CANYON_HW + CANYON_FLAT + 1.2 ||
+    ramps.near(x, y, 1.5) ||
     roads.some((r) => r.some((p, k) => k > 0 && distToSegment(x + 0.5, y + 0.5, r[k - 1].x + 0.5, r[k - 1].y + 0.5, p.x + 0.5, p.y + 0.5) < 1.8));
   // date palms ring the oases and dot the wadi; acacias stand alone on the scrub and gravel
   for (let y = 0; y < H; y++)
@@ -717,7 +727,10 @@ export function createDesertMap(seed: number): GameMap {
 
   const deco = emptyDeco();
   deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
-  deco.tracks = [...tracks0, ...mirrorLines(tracks0)];
+  deco.tracks = [...tracks0, ...mirrorLines(tracks0), ...ramps.lines];
+  const bed0 = tracks0.map((t) => (t === DESERT_SADDLE ? 0.95 : 0));
+  deco.trackBeds = [...bed0, ...bed0, ...ramps.beds];
+  deco.trackNoCars = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.noCars];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
   deco.fields = mirrorRects([
@@ -819,10 +832,37 @@ const DESERT_CANYON: Point[] = [
   { x: 45.7, y: 90.5 },
   { x: 46.5, y: 92.7 },
 ];
-/** Half width of the canyon's floor (tiles). */
+/** Half width of the canyon's sand floor (tiles; the renderer's measure of it: MapDeco.canyons). */
 const CANYON_HW = 2.2;
+/**
+ * How far beyond CANYON_HW the floor stays level before the walls rise (SL1): every tile of the sand floor is level
+ * ground (sim/slope.ts: the tiles along the walls' feet were tilted up the walls, too steep to drive), some four tiles
+ * across even in the bends, room for groups to pass each other. The walls' rock tiles stay where they were.
+ */
+const CANYON_FLAT = 0.75;
 /** Half width of the massif's foot (tiles; it wanders by +-2). */
 const MASSIF_FOOT = 12.5;
+/** The massif's cross profile (SL1): the flank's foot (MASSIF_U2) and top (MASSIF_U1) as fractions of the foot distance, the profile's height there. */
+const MASSIF_U1 = 0.3;
+const MASSIF_U2 = 0.46;
+const MASSIF_P1 = 0.88;
+const MASSIF_P2 = 0.26;
+/** The spine's crest heights (DESERT_MASSIF) are lifted this much (SL1: a higher mountain, steep flanks). */
+const MASSIF_LIFT = 1.25;
+/**
+ * Height fraction of the massif at u = distance from the spine / foot distance (1 at the spine, 0 from the foot
+ * out): a talus apron easing up from the foot to MASSIF_P2, a steep, even flank to MASSIF_P1, a rounded crest.
+ */
+function massifProfile(u: number): number {
+  if (u >= 1) return 0;
+  if (u > MASSIF_U2) {
+    const t = (1 - u) / (1 - MASSIF_U2);
+    return MASSIF_P2 * t * t * (2 - t);
+  }
+  if (u > MASSIF_U1) return MASSIF_P2 + ((MASSIF_P1 - MASSIF_P2) * (MASSIF_U2 - u)) / (MASSIF_U2 - MASSIF_U1);
+  const t = u / MASSIF_U1;
+  return MASSIF_P1 + (1 - MASSIF_P1) * (1 - t * t);
+}
 /** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */
 const DESERT_MESAS_EXTRA: Capsule[] = [
   { x: 20, y: 96, x2: 26, y2: 92, r: 2.4 },
@@ -843,11 +883,170 @@ const DESERT_WADI_BRANCHES: Capsule[] = [
   { x: 96, y: 127, x2: 99, y2: 121.5, r: 0 },
   { x: 99, y: 121.5, x2: 103, y2: 117, r: 0 },
 ];
+/** The track from the spring over the Jebel's saddle to the highway (player 0's; mirrored). */
+const DESERT_SADDLE: (Point & { nat?: boolean })[] = [
+  { x: 21.5, y: 82 },
+  { x: 25.5, y: 86.5 },
+  { x: 29, y: 89.5, nat: true },
+  { x: 31.5, y: 95 },
+  { x: 33, y: 100 },
+];
+/**
+ * A track or footpath graded into a mountainside (SL1, sim/slope.ts): via points in tile index space (player 0's
+ * half; mirrored), the ground along it evened out to a steady grade between the points whose height is known (the
+ * ends and any marked `nat`: the natural ground there) and level across, cut into the slope on the uphill side and
+ * built up on the other, easing back into the natural ground over SHOULDER tiles either side. Vehicle tracks keep a
+ * gentle grade (well under slope.ts's vehicle limit); footpaths are narrow and steeper than vehicles take.
+ */
+interface Ramp {
+  /** nat: the natural ground's height here is kept; f: the fraction of the whole rise reached here (a footpath's steep pitch). */
+  pts: (Point & { nat?: boolean; f?: number })[];
+  /** Half width of the level bed (tiles). */
+  hw: number;
+  /** Drawn as a worn track (render/biomelayout.ts). */
+  track?: boolean;
+  /** Only the ground is graded: the tiles keep their kind (no gravel bed, crags kept). */
+  gradeOnly?: boolean;
+  /** No civilian traffic on it (a footpath, a dead end up a mountain: MapDeco.trackNoCars). */
+  noCars?: boolean;
+}
+/** Width (tiles) over which a graded track's bed eases back into the natural slope beside it. */
+const RAMP_SHOULDER = 1.4;
+
+/** The graded tracks of a map (both halves): heights along them, the tiles they cover, their centre lines. */
+function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: number) => number) {
+  type Line = { pts: Point[]; at: number[]; hs: number[]; hw: number; bed: boolean };
+  const lines: Line[] = [];
+  for (const r of src) {
+    let len = 0;
+    const at = r.pts.map((p, i) => (i ? (len += Math.hypot(p.x - r.pts[i - 1].x, p.y - r.pts[i - 1].y)) : 0));
+    // known heights: the ends and the marked points; the rest on a steady grade between them (by arc length)
+    const h0 = natural(r.pts[0].x, r.pts[0].y);
+    const h1 = natural(r.pts[r.pts.length - 1].x, r.pts[r.pts.length - 1].y);
+    const known = r.pts.map((p, i) => (i === 0 ? h0 : i === r.pts.length - 1 ? h1 : p.f !== undefined ? h0 + (h1 - h0) * p.f : p.nat ? natural(p.x, p.y) : NaN));
+    const hs = known.map((h, i) => {
+      if (!Number.isNaN(h)) return h;
+      let a = i - 1;
+      while (Number.isNaN(known[a])) a--;
+      let b = i + 1;
+      while (Number.isNaN(known[b])) b++;
+      return known[a] + ((known[b] - known[a]) * (at[i] - at[a])) / (at[b] - at[a]);
+    });
+    const bed = !r.gradeOnly;
+    lines.push({ pts: r.pts, at, hs, hw: r.hw, bed });
+    // the mirror image takes the same heights (the halves stay exact twins)
+    lines.push({ pts: r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })), at, hs, hw: r.hw, bed });
+  }
+  /** Nearest line within reach: distance from its centre line and its grade height there. */
+  const nearest = (x: number, y: number, reach: number, beds = false) => {
+    let best: { d: number; h: number; hw: number } | null = null;
+    for (const l of lines) {
+      if (beds && !l.bed) continue;
+      for (let k = 0; k < l.pts.length - 1; k++) {
+        const p = l.pts[k];
+        const q = l.pts[k + 1];
+        if (Math.min(p.x, q.x) - reach > x || Math.max(p.x, q.x) + reach < x || Math.min(p.y, q.y) - reach > y || Math.max(p.y, q.y) + reach < y) continue;
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const l2 = dx * dx + dy * dy;
+        const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / l2));
+        const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
+        if (d > reach || (best && d >= best.d)) continue;
+        best = { d, h: l.hs[k] + (l.hs[k + 1] - l.hs[k]) * t, hw: l.hw };
+      }
+    }
+    return best;
+  };
+  return {
+    /** Height of vertex (fx, fy) (tile index space) with the tracks graded in, given the natural height there. */
+    grade(fx: number, fy: number, h: number): number {
+      const n = nearest(fx, fy, 4);
+      if (!n || n.d >= n.hw + RAMP_SHOULDER) return h;
+      return h + (n.h - h) * (1 - smoothstep(n.hw, n.hw + RAMP_SHOULDER, n.d));
+    },
+    /** Does a track's bed cover tile (x, y)? (Tile index space, as the via points: a tile's centre is at (x, y).) */
+    onTrack(x: number, y: number): boolean {
+      const n = nearest(x, y, 4, true);
+      return !!n && n.d < n.hw;
+    },
+    /** Is tile (x, y) within r tiles of a track's bed? */
+    near(x: number, y: number, r: number): boolean {
+      const n = nearest(x, y, 4 + r);
+      return !!n && n.d < n.hw + r;
+    },
+    /** Centre lines of the drawn tracks (both halves)... */
+    lines: src.flatMap((r) => (!r.track ? [] : [r.pts.map((p) => ({ x: p.x, y: p.y })), r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })).reverse()])),
+    /** ...and how much wider than a plain dirt track each one's worn band is drawn (MapDeco.trackBeds). */
+    beds: src.flatMap((r) => (!r.track ? [] : [Math.max(0, r.hw - 0.45), Math.max(0, r.hw - 0.45)])),
+    noCars: src.flatMap((r) => (!r.track ? [] : [!!r.noCars, !!r.noCars])),
+  };
+}
+
+/**
+ * Wadi Al-Rimal's mountain tracks (SL1; player 0's massif, mirrored). The massif's upper flanks are too steep to
+ * drive (and in most places to climb):
+ * - the summit track winds up the east flank above the canyon's lower walls onto the summit plateau under the fort's
+ *   mesa (the canyon's north-east rim);
+ * - a footpath climbs straight up the north face, too steep for vehicles, and a trail runs on along the crest
+ *   through the crags to the same plateau;
+ * - the saddle track (the spring to the highway) is graded over the saddle, by the canyon's south-west rim.
+ */
+const DESERT_RAMPS: Ramp[] = [
+  {
+    // the canyon's upper mouth: a level, wide way in off the steep north flank
+    pts: [
+      { x: 30.0, y: 71.8 },
+      { x: 32.2, y: 76.2, nat: true },
+      { x: 34.0, y: 79.4 },
+    ],
+    hw: 2.1,
+    gradeOnly: true,
+  },
+  {
+    pts: [
+      { x: 51.2, y: 90.2 },
+      { x: 49.8, y: 87.2 },
+      { x: 48.4, y: 84.2 },
+      { x: 48.5, y: 81.6 },
+      { x: 48.7, y: 79.6 },
+      { x: 47.6, y: 78.1 },
+      { x: 45.4, y: 77.6 },
+    ],
+    hw: 1.5,
+    track: true,
+    noCars: true,
+  },
+  {
+    // (a steep pitch through the crags, some 35 degrees: soldiers only)
+    pts: [
+      { x: 38.5, y: 71.0 },
+      { x: 38.55, y: 73.4, f: 0.3 },
+      { x: 38.62, y: 75.6, f: 0.82 },
+      { x: 38.7, y: 77.6 },
+    ],
+    hw: 0.6,
+    track: true,
+    noCars: true,
+  },
+  {
+    // the trail along the crest from the footpath's head to the plateau (through the crags)
+    pts: [
+      { x: 38.7, y: 77.6 },
+      { x: 41.5, y: 77.9, nat: true },
+      { x: 44.6, y: 78.2 },
+    ],
+    hw: 0.9,
+    track: true,
+    noCars: true,
+  },
+  // (drawn as the old track it is: DESERT_TRACKS_EXTRA, its bed widened in deco.trackBeds)
+  { pts: DESERT_SADDLE, hw: 1.4 },
+];
 /** Tracks to the well hamlet and the spring. */
 const DESERT_TRACKS_EXTRA: Point[][] = [
   [{ x: 31, y: 66 }, { x: 25, y: 68.5 }, { x: 19, y: 72.5 }],
-  // from the spring over the saddle to the highway
-  [{ x: 21.5, y: 82 }, { x: 25.5, y: 86.5 }, { x: 29, y: 89.5 }, { x: 31.5, y: 95 }, { x: 33, y: 100 }],
+  // from the spring over the saddle to the highway (graded: DESERT_RAMPS)
+  DESERT_SADDLE,
 ];
 /** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
 function townGround(x: number, y: number) {
