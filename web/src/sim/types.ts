@@ -426,6 +426,8 @@ export interface Entity {
   tx: number;
   ty: number;
   buildAnim: number; // 0..1 construction rise animation
+  /** Building turned half a circle (exit / dock / drive-through tiles mirrored): the north base's, for fair starts (sim/turn.ts). */
+  flip?: boolean;
   rallyX: number;
   rallyY: number;
   repairing: boolean;

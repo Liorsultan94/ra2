@@ -25,6 +25,7 @@
 
 import { buildingDef, unitDef } from './defs';
 import { GEM_VALUE, ORE_VALUE } from './map';
+import { layoutTile } from './turn';
 import { TPS, type Entity, type HarvestFlee, type UnitDef } from './types';
 import type { World } from './world';
 
@@ -78,27 +79,28 @@ function tileCenter(w: World, t: number): [number, number] {
 /** Centre of the dock tile (world tiles). */
 export function dockXY(ref: Entity): [number, number] {
   const dock = buildingDef(ref.def).dock!;
-  return [ref.tx + dock[0] + 0.5, ref.ty + dock[1] + 0.5];
+  const [x, y] = layoutTile(ref, dock[0], dock[1]);
+  return [x + 0.5, y + 0.5];
 }
 
 /** The dock lane's direction out of the refinery (unit grid step) and the exit tile (tile coords). */
-function laneOf(ref: Entity): { ex: number; ey: number; sx: number; sy: number } {
+function laneOf(ref: { def: string; tx: number; ty: number; flip?: boolean }): { ex: number; ey: number; sx: number; sy: number } {
   const bd = buildingDef(ref.def);
-  const dock = bd.dock!;
-  const exit = bd.exit ?? [dock[0], dock[1] + 1];
-  const sx = Math.sign(exit[0] - dock[0]);
-  const sy = Math.sign(exit[1] - dock[1]) || (sx === 0 ? 1 : 0);
-  return { ex: ref.tx + exit[0], ey: ref.ty + exit[1], sx, sy };
+  const [dx, dy] = layoutTile(ref, bd.dock![0], bd.dock![1]);
+  const [ex, ey] = layoutTile(ref, ...(bd.exit ?? [bd.dock![0], bd.dock![1] + 1]));
+  const sx = Math.sign(ex - dx);
+  const sy = Math.sign(ey - dy) || (sx === 0 ? (ref.flip ? -1 : 1) : 0);
+  return { ex, ey, sx, sy };
 }
 
 /**
  * Is tile (x, y) on the dock lane or the apron in front of a refinery of type `def` placed at (tx, ty)
  * (the 3-wide strip four tiles out from the exit, which harvesters need to drive in and out)?
  */
-export function inDockApron(def: string, tx: number, ty: number, x: number, y: number): boolean {
+export function inDockApron(def: string, tx: number, ty: number, x: number, y: number, flip = false): boolean {
   const bd = buildingDef(def);
   if (!bd.dock) return false;
-  const l = laneOf({ def, tx, ty } as Entity);
+  const l = laneOf({ def, tx, ty, flip });
   const a = (x - (l.ex - l.sx)) * l.sx + (y - (l.ey - l.sy)) * l.sy;
   const across = Math.abs((x - l.ex) * l.sy) + Math.abs((y - l.ey) * l.sx);
   return a >= 1 && a <= 4 && across <= 1;
@@ -134,6 +136,8 @@ function computeSpots(w: World, ref: Entity): Spots {
   const { w: W, h: H } = w.map;
   const l = laneOf(ref);
   const [ax, ay] = apronXY(ref);
+  // tie-breaks run the other way round a turned refinery (its spots mirror an unturned one's)
+  const tb = ref.flip ? -1 : 1;
   const cx = ref.tx + bd.w / 2;
   const cy = ref.ty + bd.h / 2;
   // along = how far out of the front (lane side) of the building a tile is; across = sideways from the lane
@@ -161,7 +165,7 @@ function computeSpots(w: World, ref: Entity): Spots {
   const side = cands.filter((c) => c.ring <= 2 && c.a <= 0);
   // beside the middle of the building first (in view, and clear of the queue by the lane), then behind it
   const mid = -Math.floor((l.sy !== 0 ? bd.h : bd.w) / 2);
-  side.sort((p, q) => p.ring - q.ring || Math.abs(p.a - mid) - Math.abs(q.a - mid) || Math.hypot(p.x + 0.5 - cx, p.y + 0.5 - cy) - Math.hypot(q.x + 0.5 - cx, q.y + 0.5 - cy) || p.y - q.y || p.x - q.x);
+  side.sort((p, q) => p.ring - q.ring || Math.abs(p.a - mid) - Math.abs(q.a - mid) || Math.hypot(p.x + 0.5 - cx, p.y + 0.5 - cy) - Math.hypot(q.x + 0.5 - cx, q.y + 0.5 - cy) || (p.y - q.y || p.x - q.x) * tb);
   for (const c of side) {
     if (repair.length >= 4) break;
     if (!spaced(c.x, c.y)) continue;
@@ -169,7 +173,7 @@ function computeSpots(w: World, ref: Entity): Spots {
     chosen.push([c.x + 0.5, c.y + 0.5]);
   }
   const queue: [number, number][] = [];
-  const front = cands.slice().sort((p, q) => Math.hypot(p.x + 0.5 - ax, p.y + 0.5 - ay) - Math.hypot(q.x + 0.5 - ax, q.y + 0.5 - ay) || p.y - q.y || p.x - q.x);
+  const front = cands.slice().sort((p, q) => Math.hypot(p.x + 0.5 - ax, p.y + 0.5 - ay) - Math.hypot(q.x + 0.5 - ax, q.y + 0.5 - ay) || (p.y - q.y || p.x - q.x) * tb);
   for (const c of front) {
     if (queue.length >= 10) break;
     if (!spaced(c.x, c.y)) continue;
@@ -625,7 +629,7 @@ export function updateHarvester(w: World, e: Entity, d: UnitDef) {
         e.targetId = -1;
         break;
       }
-      e.facing = turnToward(e.facing, -Math.PI / 2, d.turnRate);
+      e.facing = turnToward(e.facing, ref.flip ? Math.PI / 2 : -Math.PI / 2, d.turnRate);
       e.moving = false;
       const amt = Math.min(e.cargo, UNLOAD_RATE);
       e.cargo -= amt;

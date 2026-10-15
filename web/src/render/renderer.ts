@@ -1444,6 +1444,8 @@ export class GameRenderer {
         const bd = buildingDef(e.def);
         const h = this.slabHeight(e);
         root.position.set(e.tx + bd.w / 2, h, e.ty + bd.h / 2);
+        // the north base's exit / dock buildings are turned half a circle (sim/turn.ts)
+        root.rotation.y = e.flip ? Math.PI : 0;
         const k = e.buildAnim;
         a.built = k;
         if (this.deployFx.active) {

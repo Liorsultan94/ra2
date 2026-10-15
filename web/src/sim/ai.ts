@@ -5,6 +5,7 @@ import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, type Doctrine } from './doctrine';
 import { inDockApron } from './harvest';
+import { northStart, turnable } from './turn';
 import { WATER_LEVEL, groundHeight } from './map';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
@@ -39,9 +40,14 @@ const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
 /** Chance that a main push is preceded by a feint on another lane (micro > 0 only). */
 const FEINT: Record<Difficulty, number> = { easy: 0, normal: 0.25, hard: 0.4 };
 
-/** Per-AI seed: the match seed mixed with the player id (every match differs, a replay / lockstep peer does not). */
-export function aiSeed(seed: number, pid: number): number {
-  let h = Math.imul((seed | 0) ^ 0x5bd1e995, 0x9e3779b1) ^ Math.imul(pid + 1, 0x85ebca77);
+/**
+ * Per-AI seed: the match seed mixed with the player id and the nation (every match differs, a replay /
+ * lockstep peer does not; one seed does not hand the same opening plan to a slot whichever nations play).
+ */
+export function aiSeed(seed: number, pid: number, faction = ''): number {
+  let f = 0;
+  for (let i = 0; i < faction.length; i++) f = Math.imul(f ^ faction.charCodeAt(i), 0x01000193);
+  let h = Math.imul((seed | 0) ^ 0x5bd1e995 ^ f, 0x9e3779b1) ^ Math.imul(pid + 1, 0x85ebca77);
   h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
   h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
   return (h ^ (h >>> 15)) >>> 0;
@@ -240,7 +246,7 @@ export class AIController implements Controller {
     this.cfg = CFG[difficulty];
     this.difficulty = difficulty;
     // seeded from the match: every match plays differently, a replay / lockstep peer identically
-    this.rng = new Rng(aiSeed(world.seed, pid));
+    this.rng = new Rng(aiSeed(world.seed, pid, world.players[pid].faction));
     this.doctrine = DOCTRINES[world.players[pid].faction];
     // the game plan (opening strategy): seeded, weighted by doctrine and difficulty, within the arsenal
     this.plan = pickPlan(this.rng, planWeights(world.players[pid].faction, this.doctrine, difficulty));
@@ -804,14 +810,15 @@ export class AIController implements Controller {
       const rd = buildingDef(r.def);
       // only refineries within reach of this footprint
       if (tx > r.tx + rd.w + 5 || tx + bw < r.tx - 5 || ty > r.ty + rd.h + 5 || ty + bh < r.ty - 5) continue;
-      for (let y = ty; y < ty + bh; y++) for (let x = tx; x < tx + bw; x++) if (inDockApron(r.def, r.tx, r.ty, x, y)) return true;
+      for (let y = ty; y < ty + bh; y++) for (let x = tx; x < tx + bw; x++) if (inDockApron(r.def, r.tx, r.ty, x, y, r.flip)) return true;
     }
     if (buildingDef(defId).dock) {
       const { map } = w;
       const d = buildingDef(defId);
-      for (let y = ty + d.h - 1; y <= ty + d.h + 4; y++)
+      const flip = turnable(defId) && northStart(this.p.startY, map.h);
+      for (let y = ty - 5; y <= ty + d.h + 4; y++)
         for (let x = tx - 2; x <= tx + d.w + 1; x++) {
-          if (!inDockApron(defId, tx, ty, x, y)) continue;
+          if (!inDockApron(defId, tx, ty, x, y, flip)) continue;
           if (x < 0 || y < 0 || x >= map.w || y >= map.h) return true;
           if (x >= tx && x < tx + d.w && y >= ty && y < ty + d.h) continue;
           if (!w.pf.passable(x, y) || w.occ[y * map.w + x] !== 0) return true;

@@ -1,48 +1,73 @@
-# BAL1 start-position balance (WIP, paused)
+# BAL1 start-position balance
 
-Bench: `bench/bal-bench.test.ts`, AI vs AI Hard, 30 min cap. `run.sh <tag> [maps] [srcdir]` runs one niced vitest
-per map; `an.py <tag> [-v]` summarises; `econ.py <tag> [min]` does paired economy by slot.
-FULL=1 swaps the whole AI personality (seeded plan, build order, rng) with the nation, so only the start slot
-changes between orientations A and B. Without FULL the plan is seeded by (seed, pid), so it is tied to the slot.
-Per map and grace setting: 3 nation pairs x 3 seeds x 2 orientations + usa/russia mirrors x 2 seeds x 2 = 26 games.
-Raw rows in `bench/results/` (base = plain swap, fullbase = FULL on master 1cb6e32, fix1 = FULL on this branch).
+## Bench
+- `bench/bal-bench.test.ts`: AI vs AI Hard, 30 min cap, grace on (3 min, as in real games) or off.
+- `bench/run.sh <tag> [maps] [srcdir]` runs one niced vitest per map (BENCH=1; bench/ is left out of the normal
+  `vitest run`). `an.py <tag> [-v]` summarises slot wins, `plans.py <tag>...` win rates by opening plan,
+  `econ.py <tag> [min]` compares harvest by slot. Raw rows are in `bench/results/`.
+- FULL=1 swaps the whole AI personality (seeded plan, build order, rng stream) together with the nation, so the
+  two orientations of a pairing differ only in the start slot. Each map and grace setting gets 26 games:
+  3 nation pairs (israel-iran, usa-russia, china-ukraine) x 3 seeds x 2 orientations, plus usa-usa and
+  russia-russia x 2 seeds x 2.
+- Checks: `sym.test.ts` (tiles, heights, trees, ore, passability, neutral entities), `pathsym.test.ts` (A* lengths
+  from both starts, 300 mirrored random pairs), `dock.test.ts` (one refinery per side at mirrored spots, harvest
+  over 8 min), `he16.test.ts` (hard vs easy on the desert, 16 games, both slot orders).
 
-## Slot wins (slot0 / slot1, decided games; capped games ignored)
+## Results: slot 0 / slot 1 wins (decided games; capped games left out)
 
-| map | fullbase grace on | fullbase grace off | fix1 grace on | fix1 grace off |
+| map | grace on, before (master ca8fd51) | grace on, after | grace off, before | grace off, after |
 |---|---|---|---|---|
-| frontline | 6 / 18 | 6 / 17 | 6 / 16 | 7 / 14 |
-| desert | 10 / 11 | 9 / 14 | 7 / 14 | 9 / 11 |
-| winter | 8 / 16 | 7 / 18 | 11 / 10 | 10 / 13 |
-| urban | 12 / 10 | 16 / 10 | 14 / 10 | 9 / 15 |
+| frontline | 6 / 18 | 11 / 9 | 6 / 17 * | 12 / 8 |
+| desert (seeds 1-3) | 5 / 13 | 14 / 7 | 4 / 12 | 10 / 10 |
+| desert (seeds 4-6) | 11 / 11 | 11 / 11 | | |
+| winter | 8 / 16 | 11 / 11 | 7 / 18 * | 13 / 13 |
+| urban | 12 / 10 | 13 / 11 | 16 / 10 * | 12 / 9 |
+| all | 42 / 68 (slot 1 62%) | 60 / 49 (slot 1 45%) | 33 / 57 (63%) | 47 / 40 (46%) |
 
-Plain swap (base, 20 games each, plan tied to slot): frontline 5/14, desert 5/14, winter 5/11, urban 9/9 (grace on).
-The "boom" plan wins most AI-vs-AI games whatever the slot or nation (seed 1 gives slot 1 boom for every nation),
-which explains much of the AI1 observation; that is an AI plan balance issue, not a map one.
+\* grace-off "before" for frontline, winter and urban is master 1cb6e32 (`fullbase-*`); only the desert changed in
+between (DS2/DS3). Rows: `m53*`, `fullbase*` (before), `fix2*` (after).
 
-## Found and fixed on this branch (uncommitted before this WIP)
-- Frontline (map.ts) was not point-symmetric: tile noise used the vertex mirror (W - x), ridges mirrored with
-  W - 1 - x while being tested at tile centres / vertices, ridge roughness and edge-forest hashes unmirrored,
-  tree kind hash asymmetric, oil derricks (2x2) mirrored as 1x1. Fixed so player 0's half is unchanged and player
-  1's half is its exact mirror (483 tiles, 876 trees, 259 height vertices, 4 oil footprints differed before).
-- Bridge repair huts (bridges.ts) were placed per end by a scan with tie-breaks, not mirrored (winter, urban,
-  frontline): now a twin bridge takes the mirror of the first one's huts.
-- Urban ore regrowth centres (maps.ts) rounded x.5 apart on the two halves: now rounded on player 0's half, mirrored.
-- AI bug: findSpot could wall in a refinery's dock lane (e.g. frontline seed 3 slot 0: airfield on the apron, two
-  full harvesters stuck for minutes, harvest 9.9k vs 22.5k at 6 min). AI now keeps refinery aprons clear
-  (harvest.ts inDockApron, ai.ts blocksDock).
-- Symmetry checks: `bench/sym.test.ts` (tiles, heights, trees, ore, pass, neutral entities), `bench/pathsym.test.ts`
-  (A* path lengths from both starts, 300 mirrored random pairs): all symmetric now except tiny (< 0.03) sea-floor
-  height noise on the desert coast.
+Hard vs easy on the desert (16 games, seeds 1-4 x usa / russia mirrors x both slot orders):
+- master: hard in slot 1 won 7 (1 draw); hard in slot 0 won 4, easy 3, 1 draw;
+- after: hard in slot 1 won 7 (1 draw); hard in slot 0 won 5 (3 draws); easy won none.
 
-## Still open
-- Frontline still ~70% slot 1 after the fixes (fix1), desert grace-on 2:1; winter now even.
-- Suspected sim-level asymmetry: every building's exit / dock is on its south side. For slot 1 (north base) units
-  leave towards the enemy and the dock of a refinery by its north-west field faces the ore; for slot 0 the
-  north field's refinery docks away from it. Economy-only runs (econbase, no fighting) give slot 1 +9% harvest on
-  frontline and +3% on desert at 12 min (slot 0 better in 5/28 and 7/28 pairs). A controlled dock test
-  (`bench/dock.test.ts`) shows about +-10% per field depending on dock direction. Candidate fix: turn the north
-  base's buildings half a circle (sim layout + renderer), or ore layouts whose fields lie east / west of the base.
-- tests/ai-smart.test.ts "hard beats easy" (desert seed 1) now fails: hard 'air' loses to easy 'boom' after the
-  AI / hut changes shifted the game (it was a close game on master too); not resolved yet.
-- Not yet run: tsc / full vitest / vite build / V11-diag smoke on the final state.
+Opening plan win rates (all games of the runs): before boom 66%, rush 40%, balanced 35%, harass 30%, air 27%,
+siege 12%; after boom 63%, balanced 45%, siege 44%, harass 40%, air 38%, rush 30%.
+
+## Causes found and fixed
+1. **Exits and docks all faced south (the main cause, all maps).** Every building's exit, refinery dock and
+   drive-through tiles were on its south side. For the north base (slot 1) units rolled out towards the enemy,
+   and its second refinery, by the field south of it, docked facing the ore. The south base's refinery by the
+   field north of it docked facing away. In economy-only runs slot 1 harvested 9% more on Frontline and 3% more on
+   the desert by minute 12. In the controlled dock test, a field's dock direction alone was worth about 10%.
+   Fix (sim/turn.ts): a refinery, war factory or barracks built by a player whose start is in the north half is
+   turned half a circle (`Entity.flip`, set at spawn and kept on capture). Its drive-through tiles, dock, exit,
+   default rally and harvester unloading heading mirror in the sim (world.ts occupy / spawn, harvest.ts lane,
+   dock and queue spots, ai.ts dock-lane rule). The renderer turns the model (root.rotation.y = PI). The airbase
+   (runway / pads) and the buildings without an exit keep their facing. The human is always slot 0 (south), so
+   their base looks the same as before.
+2. **Frontline Crossing was not point-symmetric** (map.ts). Tile noise used the vertex mirror, ridges were
+   mirrored as tile indices but tested at tile centres and vertices, the ridge relief, edge forest and tree kinds
+   were hashed per tile, and the oil derricks (2 x 2) were mirrored as 1 x 1. 483 tiles, 876 trees, 259 height
+   vertices and 4 derrick footprints differed. Player 0's half is unchanged; player 1's half is now its exact
+   mirror (a one-tile shift of the smooth noise fields there).
+3. **Bridge repair huts** (bridges.ts) were placed per end by a scan with tie-breaks (Winter, Urban, Frontline):
+   a point-mirrored twin bridge now takes the mirror image of the first one's huts.
+4. **Urban ore regrowth centres** (maps.ts) rounded x.5 apart on the two halves: they are now rounded on player
+   0's half and mirrored.
+5. **AI walled in its own refinery dock** (ai.ts findSpot): e.g. Frontline seed 3, an airbase on a refinery's
+   apron left two full harvesters stuck for minutes (9.9k vs 22.5k harvested by 6 min). The AI now keeps every
+   refinery apron clear, and builds a refinery only where its own apron is open.
+6. **Plan per slot** (ai.ts aiSeed): the AI's random stream was seeded from (match seed, slot) only, so one seed
+   handed the same opening plan to a slot whatever the nations (seed 1: boom for slot 1 every time). The nation
+   is now mixed in.
+7. **Boom** won ~70% of AI-vs-AI games. Modest trim (plans.ts): its third refinery comes after the radar instead
+   of straight after the second, and defences x1.4 instead of x1.6. It still wins ~63%.
+
+## Left / gaps
+- Frontline and desert still show a slight slot-0 lean in single 26-game batches (11/9, 14/7). The extra desert
+  seeds came out 11/11, and over all maps it is 60 / 49, within noise for this sample size.
+- The controlled dock test still varies by +-1 load (5%) per field either way: ore regrowth draws from the shared
+  rng, and harvest trips are counted in whole loads.
+- Boom is still the strongest plan. Air and rush are weakest.
+- The desert's sea floor carries < 0.03 of height noise that is not mirrored (render only, under water).

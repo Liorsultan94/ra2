@@ -1,6 +1,7 @@
 import sys, re, glob, collections
 # usage: an.py <tag> [-v]
-D = '/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/bal/'
+import os
+D = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results') + '/'
 tag = sys.argv[1]
 verbose = '-v' in sys.argv
 rows = []

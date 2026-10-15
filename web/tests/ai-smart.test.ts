@@ -260,12 +260,11 @@ describe('difficulty still matters', () => {
    * Mirror matches (same nation both sides) on the desert, hard vs easy, each played with hard in either slot
    * (the original two match-ups: usa on seed 1, russia on seed 2; 25 game minutes at most each).
    *
-   * Thresholds from a 16 game sample (seeds 1-4 x usa / russia x both slot orders, Wadi Al-Rimal after DS3):
-   * hard won 11, easy 3, 2 ran out the clock - the same totals as before DS3. The AI has a known slot-1 bias
-   * (BAL1 will balance it): with hard in slot 1 hard won 7 of 8 (one draw, no easy win); with hard in slot 0 only
-   * 4 of 8 (3 easy wins, one draw). So the claim tested is the aggregate one: of these 4 games at least 3 are
-   * decisive, hard wins at least 3 of the decisive ones, and easy never wins from slot 0 (i.e. with hard in the
-   * favoured slot 1). An easy win with hard in slot 0 is tolerated once, until the slot bias is fixed.
+   * Thresholds from a 16 game sample (seeds 1-4 x usa / russia x both slot orders, Wadi Al-Rimal): before BAL1
+   * the north start was favoured (hard won 7 of 8 from slot 1 but only 4 of 8 from slot 0, with 3 easy wins).
+   * BAL1 made the two bases exact mirrors (sim/turn.ts): hard 12, easy 0, 4 ran out the clock (5 + 3 draws with
+   * hard in slot 0, 7 + 1 draw in slot 1). So: of these 4 games at least 3 are decisive, hard wins at least 3 of
+   * them, and easy wins none, whichever slot hard starts in.
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
     const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number }[] = [];
@@ -287,7 +286,7 @@ describe('difficulty still matters', () => {
     const decisive = results.filter((r) => r.winner !== 'none');
     expect(decisive.length, msg).toBeGreaterThanOrEqual(3);
     expect(decisive.filter((r) => r.winner === 'hard').length, msg).toBeGreaterThanOrEqual(3);
-    // easy never wins with hard in the favoured slot 1
-    expect(results.filter((r) => r.winner === 'easy' && r.hardSlot === 1).length, msg).toBe(0);
+    // easy never wins, whichever slot hard starts in (fair starts: the north base is the south one's mirror, sim/turn.ts)
+    expect(results.filter((r) => r.winner === 'easy').length, msg).toBe(0);
   }, 600000);
 });

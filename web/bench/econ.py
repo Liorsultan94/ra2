@@ -1,6 +1,7 @@
 import sys, re, glob
 # paired economy: same AI personality in slot 0 vs slot 1 (FULL-swap rows A/B); usage: econ.py <tag> [minute]
-D = '/tmp/claude-0/-home-user-ra2/44ece053-d4d3-5128-ba4e-051cd1175fe3/scratchpad/bal/'
+import os
+D = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results') + '/'
 tag = sys.argv[1]
 mn = sys.argv[2] if len(sys.argv) > 2 else '12'
 for f in sorted(glob.glob(D + tag + '-*.txt')):

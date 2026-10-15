@@ -27,6 +27,7 @@ import { evades, lowObsFactor, rangeVs } from './stealth';
 import { bigBlast, canWound, forgetWounded, orderTreat, releasePatient, treatable, updateMedic, updateWounded, woundUnit } from './medic';
 import { heliGrounded, isHeli, orderLand, updateHeli } from './helipad';
 import { harvesterHit, hvPriority, orderHarvest, updateHarvester } from './harvest';
+import { layoutTile, northStart, turnable } from './turn';
 import { DAY_CLOCK, isNight, nightLevel, nightSight, simHours, type SimClock } from './clock';
 import { FLARE_RADIUS, FLOOD_RADIUS, flareLit, flashLit, floodCentre, floodlit, hasNightVision, muzzleFlash, orderIllum, pickIllum, stepIllum, updateFlares } from './night';
 import {
@@ -433,6 +434,8 @@ export class World {
     e.turret = Math.PI * 0.75;
     e.pturret = e.turret;
     e.buildAnim = instant ? 1 : 0;
+    // the north base's exits / docks face north, the mirror of the south base's (turn.ts)
+    if (owner >= 0 && this.players[owner] && turnable(defId) && northStart(this.players[owner].startY, this.map.h)) e.flip = true;
     this.add(e);
     this.occupy(e, true);
     return e;
@@ -449,7 +452,9 @@ export class World {
     for (let y = 0; y < d.h; y++) {
       for (let x = 0; x < d.w; x++) {
         const i = (b.ty + y) * w + b.tx + x;
-        const through = d.passable?.some(([px, py]) => px === x && py === y);
+        const lx = b.flip ? d.w - 1 - x : x;
+        const ly = b.flip ? d.h - 1 - y : y;
+        const through = d.passable?.some(([px, py]) => px === lx && py === ly);
         this.occ[i] = on ? b.id : 0;
         this.pass[i] = on && !through ? 0 : terrainPassable(this.map, b.tx + x, b.ty + y) ? 1 : 0;
       }
@@ -792,8 +797,9 @@ export class World {
         this.events.push({ t: 'placed', id: b.id, owner: pid });
         if (d.role === 'refinery') {
           const ex = d.exit ?? [1, d.h];
-          const hv = this.spawnUnit(factionUnit(p.faction, (u) => !!u.harvester).id, pid, b.tx + ex[0] + 0.5, b.ty + ex[1] + 0.5);
-          hv.facing = hv.pfacing = Math.PI / 2;
+          const [hx, hy] = layoutTile(b, ex[0], ex[1]);
+          const hv = this.spawnUnit(factionUnit(p.faction, (u) => !!u.harvester).id, pid, hx + 0.5, hy + 0.5);
+          hv.facing = hv.pfacing = b.flip ? -Math.PI / 2 : Math.PI / 2;
         }
         break;
       }
@@ -2221,19 +2227,19 @@ export class World {
     }
     const fd = buildingDef(factory.def);
     const ex = fd.exit ?? [Math.floor(fd.w / 2), fd.h];
-    let sx = factory.tx + ex[0];
-    let sy = factory.ty + ex[1];
+    let [sx, sy] = layoutTile(factory, ex[0], ex[1]);
     if (!d.air && !this.pf.passable(sx, sy)) {
       const np = this.nearestPassable(sx + 0.5, sy + 0.5, 12, this.regionOf(factory.x, factory.y));
       if (!np) return;
       [sx, sy] = np;
     }
     const u = this.spawnUnit(d.id, p.id, sx + 0.5, sy + 0.5);
-    u.facing = u.pfacing = u.turret = u.pturret = Math.PI / 2;
+    u.facing = u.pfacing = u.turret = u.pturret = factory.flip ? -Math.PI / 2 : Math.PI / 2;
     this.events.push({ t: 'unitReady', owner: p.id, def: d.id });
     if (d.harvester) return;
-    const rx = factory.rallyX >= 0 ? factory.rallyX : factory.tx + fd.w / 2 + this.rng.range(-1.5, 1.5);
-    const ry = factory.rallyY >= 0 ? factory.rallyY : factory.ty + fd.h + 2 + this.rng.range(0, 1.5);
+    // default rally: just out of the exit side (south, or north for a turned building, turn.ts)
+    const rx = factory.rallyX >= 0 ? factory.rallyX : factory.tx + fd.w / 2 + this.rng.range(-1.5, 1.5) * (factory.flip ? -1 : 1);
+    const ry = factory.rallyY >= 0 ? factory.rallyY : factory.flip ? factory.ty - 2 - this.rng.range(0, 1.5) : factory.ty + fd.h + 2 + this.rng.range(0, 1.5);
     this.formationMove([u], rx, ry, false);
     u.guardX = rx;
     u.guardY = ry;

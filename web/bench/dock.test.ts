@@ -28,7 +28,7 @@ it('dock', () => {
     const hv = factionUnit('usa', (u) => !!u.harvester).id;
     for (let k = 0; k < 2; k++) {
       w.spawnUnit(hv, 0, r0.tx + 1.5, r0.ty + 3.5 + k);
-      w.spawnUnit(hv, 1, r1.tx + 1.5, r1.ty + 3.5 + k);
+      w.spawnUnit(hv, 1, r1.tx + 1.5, r1.flip ? r1.ty - 0.5 - k : r1.ty + 3.5 + k);
     }
     while (w.tick < TPS * 60 * 8) w.step();
     const h = w.players.map((p) => p.stats.harvested);
