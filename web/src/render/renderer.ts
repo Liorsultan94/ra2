@@ -43,6 +43,7 @@ import type { BloomPass } from './post/bloom';
 import { Terrain } from './terrain';
 import { Atmosphere } from './atmos';
 import { Sky } from './sky';
+import { NightSkyDriver } from './nightsky';
 import { updateCloudShadows } from './cloudshadow';
 import { AmbientLife, ambientEnabled } from './ambient';
 import { WaterFx } from './fx/waterfx';
@@ -599,7 +600,9 @@ export class GameRenderer {
     }
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
-      this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
+      // the desert's night sky: stars, the Milky Way, the moon's phase (nightsky.ts); the oasis town at the centre
+      const ns = world.map.biome === 'desert' ? new NightSkyDriver(world.seed, { x: world.map.w / 2, z: world.map.h / 2 }) : null;
+      this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high', ns);
       this.scene.add(this.sky.mesh);
     }
     this.superFx = new SuperFx({ world, effects: this.effects, scene: this.scene, env: this.atmos.env, visibleAt: (x, y) => this.visibleAt(x, y), shake: (a, x, y) => this.shake(a, x, y) });
@@ -2589,7 +2592,7 @@ export class GameRenderer {
     this.effects.update(dt);
     this.river.update(dt);
     this.updateCamera();
-    if (this.sky) this.atmos.driveSky(this.sky, dt, this.sunDir, !!this.photoCam);
+    if (this.sky) this.atmos.driveSky(this.sky, dt, this.sunDir, !!this.photoCam, this.yaw);
     // cloud shadows drifting with the wind, god-ray shafts through the gaps (cloudshadow.ts)
     updateCloudShadows(dt, this.atmos, this.fog.uniforms.cloudAmount.value, this.sunDir, this.fog.uniforms.fogTarget.value.y, this.world.map, this.quality);
     this.scheduleShadow(dt);

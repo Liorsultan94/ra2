@@ -3,6 +3,7 @@ import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '..
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
+import { NSKY, NSKY_GLSL } from './nightsky';
 import { LAGOON, LAGOON_GLSL, SEA_SCATTER_GLSL } from './bluehole';
 
 /*
@@ -1271,7 +1272,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    defines: { WATER_Q: Q },
+    // the desert's starry sky in the medium reflection (high reflects the sky dome itself: nightsky.ts)
+    defines: { WATER_Q: Q, ...(m.biome === 'desert' && Q > 0 ? { NIGHT_SKY: 1 } : {}) },
     uniforms: {
       time: RIVER.time,
       heightTex: { value: htex },
@@ -1313,6 +1315,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       rapRocks: { value: Array.from({ length: MAX_RAPID_ROCKS }, () => new THREE.Vector4()) },
       ...fog.uniforms,
       ...WX,
+      ...NSKY,
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -1324,6 +1327,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
     fragmentShader: /* glsl */ `
       #define SHORE ${SHORE_MAX.toFixed(1)}
       #define VMAX ${VMAX.toFixed(2)}
+      #ifdef NIGHT_SKY
+      ${NSKY_GLSL}
+      #endif
       uniform float time;
       uniform sampler2D heightTex;
       uniform sampler2D waterData;
@@ -1605,6 +1611,16 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // drifting clouds in the reflected sky
         float cl = texture2D(waveTex, R.xz / (R.y + 0.25) * 0.12 + vec2(time * 0.004, time * 0.002)).a;
         refl = mix(refl, skyHorizon * 0.9, smoothstep(0.45, 0.75, cl) * 0.6);
+        #ifdef NIGHT_SKY
+          // the stars and the Milky Way, broken up by the ripples (R) and a little soft: never a sharp mirror
+          float nsPix = 1.6 * length(fwidth(viewDir));
+          #if WATER_Q == 2
+          if (reflOn < 0.5 && nsK.x > 0.003)
+          #else
+          if (nsK.x > 0.003)
+          #endif
+            refl += nightSky(R, nsPix, 0.0) * (1.0 - smoothstep(0.45, 0.75, cl) * 0.6) * 0.6;
+        #endif
         float bankK = 1.0 - smoothstep(0.0, 1.6, shore);
         #if WATER_Q == 0
           refl *= 1.0 - bankK * 0.55;
