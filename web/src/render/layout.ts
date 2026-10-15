@@ -39,6 +39,10 @@ export interface Road {
 export interface Track {
   pts: V2[];
   width: number;
+  /** Extra half width of the worn band (tiles; a graded mountain track: MapDeco.trackBeds). */
+  bed?: number;
+  /** A footpath: no civilian vehicles on it (MapDeco.trackFoot). */
+  foot?: boolean;
   /** Turning loop / link of a dirt track (see Road.ring). */
   ring?: boolean;
 }

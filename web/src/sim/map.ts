@@ -65,6 +65,13 @@ export interface MapDeco {
   roadStyles: { width: number; variant: 0 | 1; straight?: boolean }[];
   /** Dirt tracks (via points; routed). */
   tracks: Point[][];
+  /**
+   * Per entry of `tracks` (absent: 0): how much wider (tiles, either side) its worn band is drawn - the tracks graded
+   * up the mountains (sim/maps.ts rampSet) are cut wide enough for a column of tanks.
+   */
+  trackBeds?: number[];
+  /** Per entry of `tracks`: a footpath (soldiers only: no civilian traffic on it). */
+  trackFoot?: boolean[];
   /** Paved plazas / squares (axis-aligned rectangles, tile space). */
   plazas: { x0: number; y0: number; x1: number; y1: number }[];
   /** Park lawns (rectangles) with hedges and paths. */

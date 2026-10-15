@@ -728,6 +728,8 @@ export function createDesertMap(seed: number): GameMap {
   const deco = emptyDeco();
   deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
   deco.tracks = [...tracks0, ...mirrorLines(tracks0), ...ramps.lines];
+  deco.trackBeds = [...tracks0.map(() => 0), ...tracks0.map(() => 0), ...ramps.beds];
+  deco.trackFoot = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.foot];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
   deco.fields = mirrorRects([
@@ -896,6 +898,8 @@ interface Ramp {
   track?: boolean;
   /** Only the ground is graded: the tiles keep their kind (no gravel bed, crags kept). */
   gradeOnly?: boolean;
+  /** A footpath (no civilian traffic on it: MapDeco.trackFoot). */
+  foot?: boolean;
 }
 /** Width (tiles) over which a graded track's bed eases back into the natural slope beside it. */
 const RAMP_SHOULDER = 1.4;
@@ -961,8 +965,11 @@ function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: numb
       const n = nearest(x, y, 4 + r);
       return !!n && n.d < n.hw + r;
     },
-    /** Centre lines of the drawn tracks (both halves). */
+    /** Centre lines of the drawn tracks (both halves)... */
     lines: src.flatMap((r) => (!r.track ? [] : [r.pts.map((p) => ({ x: p.x, y: p.y })), r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })).reverse()])),
+    /** ...and how much wider than a plain dirt track each one's worn band is drawn (MapDeco.trackBeds). */
+    beds: src.flatMap((r) => (!r.track ? [] : [Math.max(0, r.hw - 0.45), Math.max(0, r.hw - 0.45)])),
+    foot: src.flatMap((r) => (!r.track ? [] : [!!r.foot, !!r.foot])),
   };
 }
 
@@ -1009,6 +1016,7 @@ const DESERT_RAMPS: Ramp[] = [
     ],
     hw: 0.6,
     track: true,
+    foot: true,
   },
   {
     // the trail along the crest from the footpath's head to the plateau (through the crags)
@@ -1019,6 +1027,7 @@ const DESERT_RAMPS: Ramp[] = [
     ],
     hw: 0.9,
     track: true,
+    foot: true,
   },
   {
     pts: [
@@ -1029,14 +1038,13 @@ const DESERT_RAMPS: Ramp[] = [
       { x: 33, y: 100 },
     ],
     hw: 1.4,
-    track: false,
+    track: true,
   },
 ];
-/** Tracks to the well hamlet and the spring. */
+/** The track to the well hamlet. */
 const DESERT_TRACKS_EXTRA: Point[][] = [
   [{ x: 31, y: 66 }, { x: 25, y: 68.5 }, { x: 19, y: 72.5 }],
-  // from the spring over the saddle to the highway
-  [{ x: 21.5, y: 82 }, { x: 25.5, y: 86.5 }, { x: 29, y: 89.5 }, { x: 31.5, y: 95 }, { x: 33, y: 100 }],
+  // (the one from the spring over the saddle to the highway is graded: DESERT_RAMPS)
 ];
 /** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
 function townGround(x: number, y: number) {

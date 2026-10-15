@@ -491,7 +491,9 @@ export class Ground {
     const roadD = new Float32Array(N * N).fill(99);
     const roadW = new Float32Array(N * N);
     const trackD = new Float32Array(N * N).fill(99);
-    const stamp = (pts: { x: number; y: number }[], reach: number, dist: Float32Array, width: number, wout: Float32Array | null) => {
+    // (the graded mountain tracks again, on their own: their worn bed shows through the bare rock of the slopes)
+    const bedD = new Float32Array(N * N).fill(99);
+    const stamp = (pts: { x: number; y: number }[], reach: number, dist: Float32Array, width: number, wout: Float32Array | null, inset = 0) => {
       for (let i = 0; i < pts.length - 1; i++) {
         const a = pts[i];
         const b = pts[i + 1];
@@ -501,7 +503,7 @@ export class Ground {
         const y1 = Math.min(N - 1, Math.ceil((Math.max(a.y, b.y) + reach) * P));
         for (let y = y0; y <= y1; y++)
           for (let x = x0; x <= x1; x++) {
-            const d = segDist((x + 0.5) / P, (y + 0.5) / P, a, b);
+            const d = segDist((x + 0.5) / P, (y + 0.5) / P, a, b) - inset;
             const k = y * N + x;
             if (d - width / 2 < dist[k] - (wout ? wout[k] / 2 : 0)) {
               dist[k] = d;
@@ -515,7 +517,9 @@ export class Ground {
       yield;
     }
     for (const t of L.tracks) {
-      stamp(t.pts, 1, trackD, t.width, null);
+      // (a graded mountain track: a wider worn band, its ruts out by its edges)
+      stamp(t.pts, 1 + (t.bed ?? 0), trackD, t.width, null, t.bed ?? 0);
+      if (t.bed) stamp(t.pts, 1 + t.bed, bedD, t.width, null, t.bed);
       yield;
     }
     // trodden footpaths: village houses to the nearest road, and between neighbouring houses
@@ -746,6 +750,14 @@ export class Ground {
         dirt = Math.max(dirt, trk);
         const rut = trk * Math.exp(-Math.pow((td - 0.13) / 0.05, 2));
         mud = Math.max(mud, rut * 0.55);
+        const bdd = bedD[k];
+        if (bdd < 1) {
+          // a graded track up a mountain: trodden gravel, not the bare rock or drift sand of the slope round it
+          const bt = 1 - smooth(0.1, 0.55, bdd + (pn - 0.5) * 0.15);
+          rock *= 1 - bt * 0.85;
+          sand *= 1 - bt * 0.6;
+          dirt = Math.max(dirt, bt);
+        }
         const rd = roadD[k] - roadW[k] / 2;
         const shoulder = 1 - smooth(0.0, 0.45, rd + (pn - 0.5) * 0.25);
         dirt = Math.max(dirt, shoulder * 0.85);
