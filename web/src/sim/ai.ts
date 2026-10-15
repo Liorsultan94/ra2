@@ -7,6 +7,7 @@ import { DOCTRINES, type Doctrine } from './doctrine';
 import { inDockApron } from './harvest';
 import { northStart, turnable } from './turn';
 import { WATER_LEVEL, groundHeight } from './map';
+import { Loco } from './slope';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
 import { Rng } from './rng';
@@ -543,6 +544,8 @@ export class AIController implements Controller {
         const py = ty + 0.5;
         const d = Math.hypot(px - x, py - y);
         if (d > r + 0.5) continue;
+        // (straight up there: a ledge above a cliff is no position for a gun that has to drive round to it)
+        if (!w.lineOk(x, y, px, py, Loco.Vehicle)) continue;
         // a tile of height is worth some six tiles of detour
         const s = this.hNorm(px, py) * 2 - d * 0.35;
         if (s > bs) {

@@ -324,7 +324,7 @@ export function collapseBridge(w: World, b: BridgeState) {
     m.tiles[t] = Tile.Water;
     w.pass[t] = 0;
   }
-  w.pf.clearCache();
+  w.clearPaths();
   for (const u of w.list) {
     if (u.dead || u.kind !== 'unit' || u.inside >= 0 || u.para || w.isAir(u)) continue;
     const t = w.tileOf(u.x, u.y);
@@ -361,7 +361,7 @@ export function restoreBridge(w: World, b: BridgeState) {
     m.tiles[t] = Tile.Bridge;
     w.pass[t] = w.occ[t] === 0 && terrainPassable(m, t % m.w, Math.floor(t / m.w)) ? 1 : 0;
   }
-  w.pf.clearCache();
+  w.clearPaths();
   let c = b.tiles[0];
   let cd = Infinity;
   for (const t of b.tiles) {

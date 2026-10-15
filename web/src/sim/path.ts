@@ -1,9 +1,11 @@
 // Grid A* with octile movement (no corner cutting), partial paths to the
-// closest reachable tile, and line-of-sight smoothing.
+// closest reachable tile, and line-of-sight smoothing. With a slope field
+// (slope.ts) steps steeper than the locomotion class takes are closed and
+// climbing costs a little extra, so units wind up the gentle tracks.
+
+import { DX, DY, dirOf } from './slope';
 
 const SQRT2 = Math.SQRT2;
-const DX = [1, -1, 0, 0, 1, 1, -1, -1];
-const DY = [0, 0, 1, -1, 1, -1, 1, -1];
 
 export class PathFinder {
   private g: Float32Array;
@@ -20,6 +22,10 @@ export class PathFinder {
     private w: number,
     private h: number,
     private pass: Uint8Array,
+    /** Per tile: bit k set = the step towards neighbour k is too steep for this class (slope.ts). */
+    private block: Uint8Array | null = null,
+    /** Per tile and neighbour: extra cost of the step (climbing; slope.ts). */
+    private climb: Float32Array | null = null,
   ) {
     const n = w * h;
     this.g = new Float32Array(n);
@@ -75,6 +81,13 @@ export class PathFinder {
     return x >= 0 && y >= 0 && x < this.w && y < this.h && this.pass[y * this.w + x] === 1;
   }
 
+  /** Is the step from tile (x, y) to its neighbour (x + dx, y + dy) within this class's slope limit? */
+  stepOk(x: number, y: number, dx: number, dy: number): boolean {
+    if (!this.block) return true;
+    const k = dirOf(dx, dy);
+    return k < 0 || !(this.block[y * this.w + x] & (1 << k));
+  }
+
   /**
    * Returns a list of tile indices from (sx,sy) (exclusive) to the goal or to
    * the closest reachable tile if the goal can't be reached.
@@ -127,14 +140,16 @@ export class PathFinder {
       }
       if (++expanded > maxNodes) break;
       const gNode = this.g[node];
+      const bl = this.block ? this.block[node] : 0;
       for (let k = 0; k < 8; k++) {
+        if (bl & (1 << k)) continue;
         const nx = x + DX[k];
         const ny = y + DY[k];
         if (!this.passable(nx, ny)) continue;
         if (k >= 4 && (!this.passable(x + DX[k], y) || !this.passable(x, y + DY[k]))) continue;
         const ni = ny * w + nx;
         if (this.closed[ni] === cur) continue;
-        const ng = gNode + (k >= 4 ? SQRT2 : 1);
+        const ng = gNode + (k >= 4 ? SQRT2 : 1) + (this.climb ? this.climb[node * 8 + k] : 0);
         if (this.stamp[ni] !== cur || ng < this.g[ni]) {
           this.stamp[ni] = cur;
           this.g[ni] = ng;
@@ -168,17 +183,28 @@ export class PathFinder {
     dx *= 2;
     dy *= 2;
     let n = 1 + Math.abs(x1 - x0) + Math.abs(y1 - y0);
+    const bl = this.block;
+    const w = this.w;
+    // (bits of the steps: +x 0 / -x 1, +y 2 / -y 3, diagonals 4..7 as in slope.ts)
+    const kx = sx > 0 ? 0 : 1;
+    const ky = sy > 0 ? 2 : 3;
+    const kd = sx > 0 ? (sy > 0 ? 4 : 5) : sy > 0 ? 6 : 7;
     while (n-- > 0) {
       if (!this.passable(x, y)) return false;
+      if (n === 0) break;
+      const b = bl ? bl[y * w + x] : 0;
       if (err > 0) {
+        if (b & (1 << kx)) return false;
         x += sx;
         err -= dy;
       } else if (err < 0) {
+        if (b & (1 << ky)) return false;
         y += sy;
         err += dx;
       } else {
         // passes exactly through a corner: both neighbours must be free
         if (!this.passable(x + sx, y) || !this.passable(x, y + sy)) return false;
+        if (b & (1 << kd)) return false;
         x += sx;
         y += sy;
         err += dx - dy;
