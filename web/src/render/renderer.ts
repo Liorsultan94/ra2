@@ -498,7 +498,7 @@ export class GameRenderer {
     this.debris = new Debris(map, this.effects, this.fog);
     this.fracture = new Fracture(quality);
     this.secondaries = new Secondaries(this.effects);
-    this.marks = new GroundMarks(map, this.fog);
+    this.marks = new GroundMarks(map, this.fog, this.quality);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
     this.effects.setView(this.target, this.camera);
@@ -1609,8 +1609,8 @@ export class GameRenderer {
         const px = -fz;
         const pz = fx;
         const g = m.trackGauge;
-        this.marks.print(p.x + px * g, p.z + pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled);
-        this.marks.print(p.x - px * g, p.z - pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled);
+        this.marks.print(p.x + px * g, p.z + pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled, e.id * 2);
+        this.marks.print(p.x - px * g, p.z - pz * g, facing, seg * 1.25, m.trackWidth ?? 0.12, !!m.wheeled, e.id * 2 + 1);
         this.effects.trackDust(p.x, p.z, fx, fz, v.speed, g, !!m.wheeled, m.size?.x, m.size?.z);
       }
     } else if (m.infantry && !e.para && moved > 0) {

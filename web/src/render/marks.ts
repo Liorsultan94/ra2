@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Tile, standHeight, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX } from './wxuniforms';
+import { SandMarks } from './sandmarks';
 
 /*
  * Ground decals drawn as instanced quads that fade with age: tank tread
@@ -411,11 +412,14 @@ export class GroundMarks {
   /** Tiles under paved roads (the sim marks roads as dirt): no ruts there. */
   private paved: Uint8Array;
   private layers: DecalLayer[];
+  /** The desert's persistent sand tracks and boot trails (sandmarks.ts); null on the other maps. */
+  readonly sand: SandMarks | null;
   time = 0;
 
   constructor(
     private map: GameMap,
     fog: FogOfWar,
+    quality: 'low' | 'medium' | 'high' = 'high',
   ) {
     this.tread = new DecalLayer(TEX.tread(), 5000, 10, 0.55, fog, 0, null, false, 1);
     this.tire = new DecalLayer(TEX.tire(), 3000, 10, 0.45, fog, 0, null, false, 1);
@@ -433,6 +437,8 @@ export class GroundMarks {
     this.blown = new DecalLayer(TEX.blastFan(false), 160, 100, 0.75, fog, 0);
     this.layers = [this.tread, this.tire, this.rut, this.snowRut, this.footSnow, this.footSoft, this.flat, this.blown, this.scorch, this.crater];
     for (const l of this.layers) this.group.add(l.mesh);
+    this.sand = map.biome === 'desert' ? new SandMarks(map, fog, quality === 'low' ? 6000 : quality === 'medium' ? 10000 : 14000, SUN, SUN_K) : null;
+    if (this.sand) this.group.add(this.sand.mesh);
     this.paved = new Uint8Array(map.w * map.h);
     for (const r of map.roads ?? [])
       for (let k = 0; k < r.length - 1; k++) {
@@ -480,8 +486,17 @@ export class GroundMarks {
     return m.tiles[tz * m.w + tx];
   }
 
-  /** Track or tyre print segment under one track (a deep rut on soft ground, a packed trench in snow). */
-  print(x: number, z: number, angle: number, len: number, width: number, wheeled: boolean) {
+  /**
+   * Track or tyre print segment under one track (a deep rut on soft ground, a packed trench in snow;
+   * in the desert's sand a persistent track, laid per `key` = unit id x 2 + side).
+   */
+  print(x: number, z: number, angle: number, len: number, width: number, wheeled: boolean, key = -1) {
+    if (this.sand && key >= 0 && WX.wxSnow.value <= 0.3 && this.soft(x, z)) {
+      // (the town's packed earth and the tracks take shallower prints than the loose sand)
+      const packed = this.tileAt(x, z) === Tile.Dirt ? 0.6 : 1;
+      this.sand.track(key, x, z, angle, width * 2, wheeled, Math.max(0.8, Math.min(1.5, width / 0.11)) * packed);
+      return;
+    }
     if (WX.wxSnow.value > 0.3) {
       const t = this.tileAt(x, z);
       if (t !== Tile.Water && t !== Tile.Bridge) {
@@ -507,6 +522,10 @@ export class GroundMarks {
       return;
     }
     if (t === Tile.Rock || this.isPaved(x, z)) return;
+    if (this.sand && (t === Tile.Sand || t === Tile.Dirt)) {
+      this.sand.boot(x + ox, z + oz, angle, t === Tile.Dirt ? 0.6 : 1);
+      return;
+    }
     if (t === Tile.Grass && !(WX.wxWet.value > 0.3)) return;
     this.footSoft.add(this.map, x + ox, z + oz, angle, 0.07, 0.036, this.time, 0.015);
   }
@@ -536,5 +555,6 @@ export class GroundMarks {
   update(dt: number) {
     this.time += dt;
     for (const l of this.layers) l.uniforms.time.value = this.time;
+    this.sand?.update(dt);
   }
 }
