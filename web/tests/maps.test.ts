@@ -59,6 +59,32 @@ describe('maps', () => {
     }
   });
 
+  it('every map (Frontline Crossing too) is point mirrored down to trees, heights, ore, oil, ore mines and bridge huts (BAL1)', () => {
+    for (const id of MAP_IDS) {
+      const w = world(id, 3);
+      const m = w.map;
+      const n = m.w * m.h;
+      let diff = 0;
+      for (let i = 0; i < n; i++) if (m.tiles[i] !== m.tiles[n - 1 - i] || m.trees[i] !== m.trees[n - 1 - i] || m.ore[i] !== m.ore[n - 1 - i] || w.pass[i] !== w.pass[n - 1 - i]) diff++;
+      expect(diff, `${id}: tiles / trees / ore / passability`).toBe(0);
+      const nv = (m.w + 1) * (m.h + 1);
+      let hd = 0;
+      for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
+      expect(hd, `${id}: heights`).toBeLessThan(0.05); // (the desert's sea floor carries a few hundredths of noise)
+      const pts = (a: { x: number; y: number }[], off: number) => {
+        const k = new Set(a.map((p) => `${p.x},${p.y}`));
+        return a.filter((p) => !k.has(`${m.w - off - p.x},${m.h - off - p.y}`)).length;
+      };
+      expect(pts(m.oils, 2), `${id}: oil derricks (2 x 2)`).toBe(0);
+      expect(pts(m.oreMines, 1), `${id}: ore mines`).toBe(0);
+      // neutral entities (derricks, tech sites, bridge huts, garrisons): each has its mirror twin
+      const ents = w.list.filter((e) => e.owner < 0 && e.def !== 'bridge');
+      const ek = new Set(ents.map((e) => `${e.def}@${e.x},${e.y}`));
+      const lone = ents.filter((e) => !ek.has(`${e.def}@${m.w - e.x},${m.h - e.y}`)).map((e) => `${e.def}@${e.x},${e.y}`);
+      expect(lone, `${id}: neutral structures`).toEqual([]);
+    }
+  });
+
   it('Wadi Al-Rimal: tiles, heights and passability are point mirrored (fair) on every seed tried', () => {
     for (const seed of [1, 2, 7, 424242]) {
       const m = createMap('desert', seed);

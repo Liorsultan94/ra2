@@ -436,10 +436,9 @@ export function createFrontlineMap(): GameMap {
     { x: 6, y: 76, r: 3.0, kind: 1 },
     { x: 88, y: 121, r: 2.4, kind: 2 },
   ]);
-  const oils = half([
-    { x: 32, y: 104 },
-    Tr(6, 50),
-  ]);
+  // derricks are 2 x 2 from their top-left tile: the mirrored footprint starts one tile further in
+  const oils0 = [{ x: 32, y: 104 }, Tr(6, 50)];
+  const oils = [...oils0, ...oils0.map((o) => ({ x: W - 2 - o.x, y: H - 2 - o.y }))];
   // rock ridges: centres scale, lengths stay
   const ridgeSrc = [
     { x: 24, y: 70, x2: 31, y2: 74 },
@@ -452,7 +451,8 @@ export function createFrontlineMap(): GameMap {
     const hy = (r.y2 - r.y) / 2;
     return { x: c.x - hx, y: c.y - hy, x2: c.x + hx, y2: c.y + hy };
   });
-  const ridges = [...ridgeSrc, ...ridgeSrc.map((r) => ({ x: W - 1 - r.x, y: H - 1 - r.y, x2: W - 1 - r.x2, y2: H - 1 - r.y2 }))];
+  // (ridge ends are continuous positions - the relief tests vertices, the rock tiles their centres - so they mirror through W, H)
+  const ridges = [...ridgeSrc, ...ridgeSrc.map((r) => ({ x: W - r.x, y: H - r.y, x2: W - r.x2, y2: H - r.y2 }))];
   const roads: Point[][] = [
     [starts[0], T(30, 72), T(44, 60), { x: cx, y: cy }],
     [starts[0], T(30, 84), T(52, 82), T(64, 76)],
@@ -469,8 +469,16 @@ export function createFrontlineMap(): GameMap {
   };
   const bridgeS = [cx, cx - 27 * k, cx + 27 * k];
 
+  // point-symmetric noise on vertices (vx -> W - vx)
   const symNoise = (x: number, y: number, scale: number, seed: number) =>
     (fbm(x * scale, y * scale, seed) + fbm((W - x) * scale, (H - y) * scale, seed)) / 2;
+  // tiles mirror through x -> W - 1 - x: player 0's half (the larger tile indices) is the original field and
+  // player 1's half repeats it mirrored (fair starts; the seam is a one-tile shift of a smooth field)
+  const p0Tile = (x: number, y: number) => y * W + x >= (H - 1 - y) * W + (W - 1 - x);
+  const symNoiseT = (x: number, y: number, scale: number, seed: number) => (p0Tile(x, y) ? symNoise(x, y, scale, seed) : symNoise(W - 1 - x, H - 1 - y, scale, seed));
+  const canonT = (x: number, y: number, seed: number) => (p0Tile(x, y) ? hash2(x, y, seed) : hash2(W - 1 - x, H - 1 - y, seed));
+  const canonV = (vx: number, vy: number, seed: number) => (vy * (W + 1) + vx >= (H - vy) * (W + 1) + (W - vx) ? hash2(vx, vy, seed) : hash2(W - vx, H - vy, seed));
+  const kindHash = (x: number, y: number) => hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y) + (x < W - 1 - x ? 0 : 1000), 11);
 
   const heights = new Float32Array((W + 1) * (H + 1));
   for (let vy = 0; vy <= H; vy++) {
@@ -487,7 +495,7 @@ export function createFrontlineMap(): GameMap {
       // ridges
       for (const r of ridges) {
         const d = distToSegment(vx, vy, r.x, r.y, r.x2, r.y2);
-        h += 1.6 * (1 - smoothstep(0.6, 2.4, d)) * (0.85 + 0.3 * hash2(vx, vy, 99));
+        h += 1.6 * (1 - smoothstep(0.6, 2.4, d)) * (0.85 + 0.3 * canonV(vx, vy, 99));
       }
       heights[vy * (W + 1) + vx] = h;
     }
@@ -514,7 +522,7 @@ export function createFrontlineMap(): GameMap {
       } else if (rd < 3.4) {
         t = Tile.Sand;
       } else {
-        const n = symNoise(x, y, 0.09, SEED + 5);
+        const n = symNoiseT(x, y, 0.09, SEED + 5);
         if (n > 0.6) t = Tile.Dirt;
       }
       for (const r of ridges) {
@@ -569,9 +577,9 @@ export function createFrontlineMap(): GameMap {
       const i = y * W + x;
       if (tiles[i] !== Tile.Grass || reserved(x, y)) continue;
       if (riverDist(x, y) < 4.5) continue;
-      const n = symNoise(x, y, 0.07, SEED + 31);
+      const n = symNoiseT(x, y, 0.07, SEED + 31);
       const single = (hash2(x, y, 3) + hash2(W - 1 - x, H - 1 - y, 3)) / 2;
-      const kindSel = hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y) + (x < W - 1 - x ? 0 : 1000), 11);
+      const kindSel = p0Tile(x, y) ? kindHash(x, y) : kindHash(W - 1 - x, H - 1 - y);
       if (n > 0.64 || single > 0.93) trees[i] = kindSel < 0.6 ? 1 : 2;
     }
   }
@@ -580,7 +588,7 @@ export function createFrontlineMap(): GameMap {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
       const e = Math.min(x, y, W - 1 - x, H - 1 - y);
-      if (e < 2 && tiles[i] === Tile.Grass && !reserved(x, y) && hash2(x, y, 5) < 0.55) trees[i] = 1 + (hash2(x, y, 6) < 0.5 ? 0 : 1);
+      if (e < 2 && tiles[i] === Tile.Grass && !reserved(x, y) && canonT(x, y, 5) < 0.55) trees[i] = 1 + (canonT(x, y, 6) < 0.5 ? 0 : 1);
     }
   }
 

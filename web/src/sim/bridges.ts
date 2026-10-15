@@ -172,6 +172,21 @@ function hutTile(w: World, ex: number, ey: number, out: number, reach: number): 
   return best;
 }
 
+/** The point mirror of a placed hut's tile, if it is free and cuts nothing off (else -1). */
+function mirrorHutTile(w: World, hut: Entity | undefined, reach: number): number {
+  if (!hut || hut.tx === undefined || hut.ty === undefined) return -1;
+  const m = w.map;
+  const tx = m.w - 1 - hut.tx;
+  const ty = m.h - 1 - hut.ty;
+  if (!tileOpen(m, tx, ty)) return -1;
+  const i = ty * m.w + tx;
+  if (w.occ[i] !== 0 || !w.pass[i]) return -1;
+  w.pass[i] = 0;
+  const ok = reachCount(w) === reach - 1;
+  w.pass[i] = 1;
+  return ok ? i : -1;
+}
+
 /** Build the bridge table and spawn the bridge / repair hut entities (World constructor). */
 export function initBridges(w: World): BridgeState[] {
   const m = w.map;
@@ -233,9 +248,15 @@ export function initBridges(w: World): BridgeState[] {
     e.hp = e.maxHp = BRIDGE_HP;
     b.entity = e.id;
     // repair huts, one on each bank
+    // the point-mirrored twin of this bridge (the other half of a symmetric map, or this very bridge
+    // when it sits on the centre) already has its huts: take their mirror images, so neither start
+    // gets a hut in its approach the other does not have (fair starts)
+    const twin = out.find((o) => o.idx <= b.idx && Math.abs(o.x - (m.w - b.x)) < 0.01 && Math.abs(o.y - (m.h - b.y)) < 0.01);
     for (let k = 0; k < 2; k++) {
       const end = b.ends[k];
-      const t = hutTile(w, end.x, end.y, k === 0 ? -1 : 1, reach);
+      const tk = twin === b ? (k === 1 ? b.huts[0] : undefined) : twin?.huts[1 - k];
+      let t = tk !== undefined && tk >= 0 ? mirrorHutTile(w, w.entities.get(tk), reach) : -1;
+      if (t < 0) t = hutTile(w, end.x, end.y, k === 0 ? -1 : 1, reach);
       if (t < 0) {
         b.huts.push(-1);
         continue;
