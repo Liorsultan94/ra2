@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { FogOfWar } from './fog';
 import { HDRI_APPLY, HDRI_PARS, SkyHdri } from './skyhdri';
 import { HORIZON } from './horizon';
+import { NSKY, NSKY_GLSL, type NightSkyDriver } from './nightsky';
 
 /*
  * Physical sky (seen in photo mode, the intro flyover, cinematic and low
@@ -42,6 +43,10 @@ export interface SkyState {
   storm: number;
   /** Dust in the air (sandstorm) 0..1. */
   dust: number;
+  /** Clock hour of the sky (absolute: days included), for the stars' sidereal motion and the moon's phase. */
+  hours: number;
+  /** View rotation (radians): the sky turns with it, like the sun. */
+  yaw: number;
 }
 
 const ATMO_GLSL = /* glsl */ `
@@ -171,6 +176,11 @@ const DOME_FRAG = /* glsl */ `
   uniform vec4 uMeteorA;
   uniform vec4 uMeteorB;
   varying vec3 vDir;
+  #ifdef NIGHT_SKY
+  ${NSKY_GLSL}
+  uniform vec3 uMoonSun;
+  uniform float uNs;
+  #endif
   #ifdef HDRI
   ${HDRI_PARS}
   #endif
@@ -199,8 +209,21 @@ const DOME_FRAG = /* glsl */ `
     sky = mix( sky, vec3( l * 1.1 ) * vec3( 0.93, 0.97, 1.02 ), over * 0.85 );
     sky *= 1.0 - 0.6 * uStorm;
     sky = mix( sky, vec3( l ) * vec3( 1.25, 0.95, 0.62 ), uDust * 0.85 );
+    #ifdef NIGHT_SKY
+    // no light pollution out here: without a bright moon the night sky is darker (the horizon band stays)
+    if ( uEnv < 0.5 ) sky *= 1.0 - uNight * ( 1.0 - nsMoon.w ) * 0.5 * ( 1.0 - over );
+    #endif
     vec3 col = sky;
     float up = d.y;
+    #ifdef NIGHT_SKY
+    // the desert's star field and Milky Way (nightsky.ts)
+    float pix = 0.7 * length( fwidth( d ) );
+    #ifdef HQ
+    if ( nsK.x * uNs > 0.003 && uEnv < 0.5 ) col += nightSky( d, pix, 1.0 );
+    #else
+    if ( nsK.x * uNs > 0.003 && uEnv < 0.5 ) col += nightSky( d, pix, 0.0 );
+    #endif
+    #else
     // stars
     if ( uNight > 0.01 && up > 0.0 ) {
       vec3 sp = d * 220.0;
@@ -214,6 +237,7 @@ const DOME_FRAG = /* glsl */ `
         col += vec3( 0.85, 0.9, 1.0 ) * b * 0.5 * uNight * ( 1.0 - over ) * smoothstep( 0.0, 0.25, up );
       }
     }
+    #endif
     // shooting star: a short bright streak whose head runs from uMeteorA.xyz to uMeteorB.xyz (w: brightness, progress)
     if ( uMeteorA.w > 0.001 && up > 0.0 && uEnv < 0.5 ) {
       vec3 mh = normalize( mix( uMeteorA.xyz, uMeteorB.xyz, uMeteorB.w ) );
@@ -232,8 +256,18 @@ const DOME_FRAG = /* glsl */ `
       col += uSunCol * disc * limb * 40.0 * ( 1.0 - over ) * smoothstep( -0.02, 0.02, uSun.y );
       if ( uMoonOn > 0.5 ) {
         float cm = dot( d, uMoon );
+        #ifdef NIGHT_SKY
+        // tonight's phase: the sphere lit from the sun's side, the dark limb faintly earthlit (hides the stars)
+        float md = smoothstep( 0.99975, 0.99982, cm ) * ( 1.0 - over );
+        vec3 mo = ( d - uMoon * cm ) / 0.0207;
+        vec3 mn = mo - uMoon * sqrt( max( 0.0, 1.0 - dot( mo, mo ) ) );
+        float lit = smoothstep( -0.06, 0.1, dot( mn, uMoonSun ) );
+        col = mix( col, vec3( 0.75, 0.8, 0.9 ) * ( 0.02 + 2.2 * lit ), md );
+        col += vec3( 0.06, 0.08, 0.12 ) * pow( max( cm, 0.0 ), 400.0 ) * ( 1.0 - over ) * sqrt( nsMoon.w );
+        #else
         col += vec3( 0.75, 0.8, 0.9 ) * smoothstep( 0.99975, 0.99982, cm ) * 2.2 * ( 1.0 - over );
         col += vec3( 0.06, 0.08, 0.12 ) * pow( max( cm, 0.0 ), 400.0 ) * ( 1.0 - over );
+        #endif
       }
     }
     // clouds: a deck projected over the sky, drifting with the wind
@@ -257,7 +291,15 @@ const DOME_FRAG = /* glsl */ `
         cc = mix( cc, vec3( l * 0.9 + 0.003 ), over * 0.6 );
         cc *= 1.0 - 0.7 * uStorm * ( 0.4 + 0.6 * dens );
         cc = mix( cc, cc * vec3( 1.2, 0.95, 0.65 ), uDust );
+        #ifdef NIGHT_SKY
+        // (no moonlight on them on a dark night either)
+        if ( uEnv < 0.5 ) cc *= 1.0 - uNight * ( 1.0 - nsMoon.w ) * 0.5 * ( 1.0 - over );
+        #endif
         float a = dens * smoothstep( 0.0, 0.18, up );
+        #ifdef NIGHT_SKY
+        // a clear desert night's few clouds are thin: they veil the stars and the Milky Way softly, no hard bars
+        if ( uEnv < 0.5 ) a *= 1.0 - 0.45 * uNight * ( 1.0 - over ) * ( 1.0 - 0.5 * dens );
+        #endif
         col = mix( col, cc, a );
       }
     }
@@ -266,6 +308,10 @@ const DOME_FRAG = /* glsl */ `
     vec3 hz = mix( uHorB, uHorA, dot( vd, uSunXZ ) * 0.5 + 0.5 );
     col = mix( col, hz, 1.0 - smoothstep( -0.02, 0.09, up ) );
     if ( uEnv > 0.5 && up < 0.0 ) col = mix( hz, vec3( uGray ), ( 1.0 - smoothstep( -0.4, 0.0, up ) ) );
+    #ifdef NIGHT_SKY
+    // airglow and a slightly lighter horizon (warmer over the town)
+    if ( nsK.x * uNs > 0.003 && uEnv < 0.5 ) col += nightGlow( d );
+    #endif
     #ifdef HDRI
     ${HDRI_APPLY}
     #endif
@@ -369,7 +415,10 @@ export class Sky {
     private fog: FogOfWar,
     private quality: 'medium' | 'high',
     readonly envCapture: boolean,
+    /** The desert's night sky (stars, Milky Way, moon phase: nightsky.ts); null elsewhere. */
+    readonly nightSky: NightSkyDriver | null = null,
   ) {
+    this.rand = 0x2545f491;
     const half = renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float');
     this.lut = new THREE.WebGLRenderTarget(128, 64, { type: half ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: false, generateMipmaps: false });
     this.lut.texture.wrapS = THREE.RepeatWrapping;
@@ -395,6 +444,7 @@ export class Sky {
       const far = (cam as THREE.PerspectiveCamera).far ?? 400;
       this.mesh.scale.setScalar(far * 0.5);
       this.mesh.updateMatrixWorld();
+      this.nightSky?.camera(cam.position);
     };
   }
 
@@ -402,7 +452,7 @@ export class Sky {
     const fu = this.fog.uniforms;
     const hd = env ? this.hdri : null;
     return new THREE.ShaderMaterial({
-      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}) },
+      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}), ...(this.nightSky ? { NIGHT_SKY: 1 } : {}) },
       uniforms: {
         uLut: { value: this.lut.texture },
         uNoise: fu.fogNoise,
@@ -424,6 +474,7 @@ export class Sky {
         uMeteorA: { value: new THREE.Vector4() },
         uMeteorB: { value: new THREE.Vector4() },
         ...(hd ? hd.uniforms : {}),
+        ...(this.nightSky ? { ...NSKY, uMoonSun: { value: this.nightSky.moonSun }, uNs: { value: 0 } } : {}),
       },
       vertexShader: DOME_VERT,
       fragmentShader: DOME_FRAG,
@@ -447,6 +498,13 @@ export class Sky {
   update(dt: number, st: SkyState, sunCol: THREE.Color, ground: THREE.Color) {
     this.time += dt;
     this.meteors(dt, st.night * (1 - smooth(0.45, 1, st.cover)));
+    if (this.nightSky) {
+      const vis = st.night * (1 - smooth(0.45, 1, st.cover)) * (1 - st.dust) * (1 - st.dust) * (1 - 0.8 * st.storm);
+      this.nightSky.update(st.hours, st.yaw, vis, st.dust, this.time, st.moon, st.sun);
+      // the classic camera never sees the dome itself (it looks down at 24+ degrees): only the free cameras
+      // and, on high, the planar water reflection need the stars on it (medium's water draws its own)
+      this.mat.uniforms.uNs.value = this.quality === 'high' || this.horizon > 0 ? 1 : 0;
+    }
     const night = st.night;
     // by night the moon lights the (much fainter) sky: same scattering model, different source
     const src = st.moon && night > 0.5 ? st.moon : st.sun;
@@ -512,6 +570,14 @@ export class Sky {
     if (this.envCapture) this.captureEnv(light, st);
   }
 
+  /** Seeded generator for the shooting stars (purely visual; no Math.random). */
+  private rand: number;
+  private rnd() {
+    let t = (this.rand = (this.rand + 0x6d2b79f5) | 0);
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
   private meteorT = 0;
   private meteorNext = 4;
   private meteorDur = 0;
@@ -526,7 +592,8 @@ export class Sky {
       if (k >= 1) {
         this.meteorDur = 0;
         a.w = 0;
-        this.meteorNext = 2.5 + Math.random() * 9;
+        // (the desert's clear, dark sky shows a few more)
+        this.meteorNext = this.nightSky ? 1.6 + this.rnd() * 6 : 2.5 + this.rnd() * 9;
         return;
       }
       b.w = k;
@@ -537,15 +604,15 @@ export class Sky {
     if (clear < 0.4) return;
     this.meteorNext -= dt;
     if (this.meteorNext > 0) return;
-    const az = Math.random() * Math.PI * 2;
-    const el = 0.45 + Math.random() * 0.7;
+    const az = this.rnd() * Math.PI * 2;
+    const el = 0.45 + this.rnd() * 0.7;
     a.set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az), 0);
     // a 15-30 degree run across the sky, mostly sideways and a little down
-    const side = Math.random() < 0.5 ? 1 : -1;
-    const run = 0.26 + Math.random() * 0.26;
+    const side = this.rnd() < 0.5 ? 1 : -1;
+    const run = 0.26 + this.rnd() * 0.26;
     const tx = -Math.sin(az) * side;
     const tz = Math.cos(az) * side;
-    const dn = 0.3 + Math.random() * 0.5;
+    const dn = 0.3 + this.rnd() * 0.5;
     const ty = -dn * Math.cos(el);
     b.set(a.x + (tx - dn * Math.sin(el) * Math.cos(az)) * run, a.y + ty * run, a.z + (tz - dn * Math.sin(el) * Math.sin(az)) * run, 0);
     const L = Math.hypot(b.x, b.y, b.z) || 1;
@@ -553,7 +620,7 @@ export class Sky {
     b.y /= L;
     b.z /= L;
     this.meteorT = 0;
-    this.meteorDur = 0.45 + Math.random() * 0.5;
+    this.meteorDur = 0.45 + this.rnd() * 0.5;
   }
 
   /** The GPU contents are gone (WebGL context restored): re-render the scattering LUT and the environment. */

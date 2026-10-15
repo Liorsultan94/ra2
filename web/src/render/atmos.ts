@@ -1325,15 +1325,24 @@ export class Atmosphere {
     this.night?.update(dt, time, visuals.values(), target, h.world);
   }
 
-  private skySt: SkyState = { sun: new THREE.Vector3(0, 1, 0), moon: null, night: 0, cover: 0.3, storm: 0, dust: 0 };
+  private skySt: SkyState = { sun: new THREE.Vector3(0, 1, 0), moon: null, night: 0, cover: 0.3, storm: 0, dust: 0, hours: 12, yaw: 0 };
   private skyMoon = new THREE.Vector3();
 
   /**
    * Drive the physical sky (sky.ts) from the time of day and the weather. keyDir = the renderer's
    * key light direction this frame (sun by day, moon by night; it turns with the view).
    */
-  driveSky(sky: Sky, dt: number, keyDir: THREE.Vector3, freeView: boolean) {
+  driveSky(sky: Sky, dt: number, keyDir: THREE.Vector3, freeView: boolean, yaw = 0) {
     const st = this.skySt;
+    st.yaw = yaw;
+    // the sky's clock, days included (the live day; photo mode's preview hour on the current day)
+    const live = this.cfg.tod === 'cycle' ? clockHours(this.host.world.tick, this.startHour) : FIXED_HOUR[this.cfg.tod as Exclude<TimeOfDay, 'cycle'>] ?? 12;
+    if (this.phase >= 0) {
+      // (a preview of the small hours belongs to the night that started the evening before)
+      const h = uToHour(this.phase);
+      const eve = Math.floor((live - 12) / 24) * 24 + 12;
+      st.hours = eve + ((h - 12 + 24) % 24);
+    } else st.hours = live;
     const p = this.active ? this.preset : null;
     const light = this.keys ? this.light : p ? this.baseLight : 1;
     const moonUp = this.keys ? this.phase > MOON_RISE && this.phase < MOON_SET : this.cfg.tod === 'night' && !!p;
