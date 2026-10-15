@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
-import { fbm, valueNoise } from '../sim/rng';
+import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
 import { biomeLook, type BiomeLook } from './biome';
@@ -8,6 +8,7 @@ import { FieldType, segDist, smoothLine, type Layout } from './layout';
 import { groundDetailTexture } from './terraintex';
 import { PhotoGround, photoTier } from './photoground';
 import { WX } from './wxuniforms';
+import { strataLinear, strataMean } from './strata';
 
 /*
  * Ground: a height-blended splat material. Low resolution control maps
@@ -658,16 +659,10 @@ export class Ground {
       }
       return best;
     };
-    /** The canyon walls' sandstone strata (tint multipliers on the rock layer): red, ochre, yellow, purple, white. */
-    const STRATA = [
-      [1.3, 0.62, 0.46],
-      [1.5, 1.02, 0.56],
-      [1.68, 1.42, 0.82],
-      [1.02, 0.64, 0.9],
-      [1.8, 1.72, 1.52],
-      [1.12, 0.52, 0.42],
-      [1.55, 1.18, 0.7],
-    ];
+    /** The canyon's sandstone (strata.ts) as tint multipliers on the ground: each layer against the palette's mean. */
+    const sMean = strataMean();
+    const STRATA = strataLinear().map((c) => [c.r / sMean.r, c.g / sMean.g, c.b / sMean.b]);
+    const layer = (i: number) => STRATA[Math.min(STRATA.length - 1, Math.floor(hash2(i, 0, 977) * STRATA.length))];
     for (let py = 0; py < N; py++) {
       if ((py & 7) === 7) yield;
       for (let px = 0; px < N; px++) {
@@ -704,9 +699,11 @@ export class Ground {
           sand *= 1 - st;
           dirt *= 1 - st * 0.8;
         }
-        // the coloured canyon: its walls bare banded rock, its floor drift sand
+        // the coloured canyon: its walls bare sandstone, its floor drift sand; the tint fades out gradually
+        // over the slopes below into the desert round it (ckt)
         const cd = canyons.length ? canyonD(x, y) : 99;
-        const ck = cd < 3.2 ? (1 - smooth(1.6, 3.2, cd)) * smooth(0.1, 0.26, slope) : 0;
+        const ck = cd < 3.6 ? (1 - smooth(1.2, 3.6, cd)) * smooth(0.08, 0.32, slope) : 0;
+        const ckt = cd < 5.2 ? (1 - smooth(0.4, 5.2, cd)) * (0.12 + 0.88 * smooth(0.05, 0.4, slope)) : 0;
         if (cd < 0.4) {
           sand = Math.max(sand, (1 - smooth(-0.1, 0.4, cd)) * 0.9);
           rock *= smooth(-0.3, 0.4, cd);
@@ -785,22 +782,28 @@ export class Ground {
         let r = br * (1 + hue);
         let g = br;
         let b = br * (1 - hue * 0.6);
-        if (ck > 0) {
-          // strata by height, warped a little so the bands wander along the walls; soft edges between them
-          const s = h0 * 3.3 + (pn - 0.5) * 0.9 + (mac - 0.5) * 0.6;
-          const i0 = ((Math.floor(s) % STRATA.length) + STRATA.length) % STRATA.length;
-          const i1 = (i0 + 1) % STRATA.length;
-          const f = smooth(0.7, 1.0, s - Math.floor(s));
-          const k2 = ck * 0.92;
-          r *= 1 + k2 * (STRATA[i0][0] + (STRATA[i1][0] - STRATA[i0][0]) * f - 1);
-          g *= 1 + k2 * (STRATA[i0][1] + (STRATA[i1][1] - STRATA[i0][1]) * f - 1);
-          b *= 1 + k2 * (STRATA[i0][2] + (STRATA[i1][2] - STRATA[i0][2]) * f - 1);
-        } else if (cd < 0.6) {
-          // the floor's sand is the walls' colour washed down: pinkish ochre
-          const fk = 1 - smooth(0.0, 0.6, cd);
-          r *= 1 + 0.12 * fk;
-          g *= 1 - 0.02 * fk;
-          b *= 1 - 0.1 * fk;
+        if (ckt > 0.002) {
+          // on the steep walls layers by height that wander, swell and pinch; on the talus below a mottle of
+          // the same colours (fallen rock and the sand washed off it); soft edges everywhere
+          const steepB = smooth(0.24, 0.6, slope);
+          const sw = h0 * 2.3 + (pn - 0.5) * 1.6 + (mac - 0.5) * 1.4 + (bl - 0.5) * 0.9;
+          const sm = bl * 6 + pn * 4;
+          const sv = sw * steepB + sm * (1 - steepB);
+          const i0 = Math.floor(sv);
+          const f = smooth(0.62, 1.0, sv - i0);
+          const a0 = layer(i0);
+          const a1 = layer(i0 + 1);
+          const k2 = ckt * 0.62;
+          r *= 1 + k2 * (a0[0] + (a1[0] - a0[0]) * f - 1);
+          g *= 1 + k2 * (a0[1] + (a1[1] - a0[1]) * f - 1);
+          b *= 1 + k2 * (a0[2] + (a1[2] - a0[2]) * f - 1);
+        }
+        if (cd < 0.6) {
+          // the floor's sand is the walls' colour washed down: a warm honey tan
+          const fk = 1 - smooth(-0.6, 0.6, cd);
+          r *= 1 + 0.06 * fk;
+          g *= 1 + 0.01 * fk;
+          b *= 1 - 0.06 * fk;
         }
         // the Red Sea's bathing beaches: white coral sand, paler and cooler than the desert's gold
         if (seaD && sand > 0.05) {

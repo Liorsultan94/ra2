@@ -570,8 +570,8 @@ export function createDesertMap(seed: number): GameMap {
         const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
         if (d < best.d) {
           const s = (c.at[k] + t * Math.sqrt(l2)) / c.len;
-          // (a shallow dip in the middle: the floor never climbs out at either mouth)
-          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.25 };
+          // (a dip in the middle, deepening the gorge between its walls; the floor never climbs out at either mouth)
+          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.55 };
         }
       }
     return best;
@@ -801,24 +801,26 @@ const DESERT_MASSIF: { x: number; y: number; h: number }[][] = [
   ],
 ];
 /**
- * The coloured canyon (player 0's; mirrored): a narrow winding slot cut along the south-west flank of the fort's
+ * The coloured canyon (player 0's; mirrored): a winding gorge cut along the south-west flank of the fort's
  * sandstone mesa (the fort keeps its rock) into the granite of the main summit, from the massif's north flank
- * down to the plain by the southern ore field. Its floor is
- * sand and passable all the way; its walls are rock. Via points in tile index space.
+ * down to the plain by the southern ore field. Its floor is sand, about four and a half tiles wide (room for a
+ * column of tanks) and passable all the way; its walls are rock. The course keeps its north-east wall where the
+ * old two-tile slot had it (off the fort) and widened into the massif to the south-west. Via points in tile
+ * index space.
  */
 const DESERT_CANYON: Point[] = [
-  { x: 33.2, y: 75.6 },
-  { x: 35.0, y: 78.7 },
-  { x: 35.7, y: 82.1 },
-  { x: 38.1, y: 83.5 },
-  { x: 39.3, y: 85.9 },
-  { x: 41.6, y: 87.1 },
-  { x: 43.4, y: 88.9 },
-  { x: 46.4, y: 89.6 },
-  { x: 47.6, y: 92.2 },
+  { x: 32.2, y: 76.2 },
+  { x: 33.9, y: 79.1 },
+  { x: 34.7, y: 82.8 },
+  { x: 37.2, y: 84.3 },
+  { x: 38.4, y: 86.7 },
+  { x: 40.9, y: 88.1 },
+  { x: 42.8, y: 90.0 },
+  { x: 45.7, y: 90.5 },
+  { x: 46.5, y: 92.7 },
 ];
 /** Half width of the canyon's floor (tiles). */
-const CANYON_HW = 1.0;
+const CANYON_HW = 2.2;
 /** Half width of the massif's foot (tiles; it wanders by +-2). */
 const MASSIF_FOOT = 12.5;
 /** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */

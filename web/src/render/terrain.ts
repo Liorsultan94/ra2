@@ -145,8 +145,8 @@ export class Terrain {
     this.group.add(w.mesh);
     this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
     this.group.add(this.waterside.group);
-    // the coloured canyons' strata ledges, fallen blocks and pillars (canyon.ts)
-    const canyons = buildCanyons(this.map, this.fog);
+    // the coloured canyons' ledges, fallen boulders and hoodoos (canyon.ts)
+    const canyons = buildCanyons(this.map, this.fog, quality);
     if (canyons) this.group.add(canyons);
     if (this.map.deco?.sea) {
       this.seaside = new Seaside(this.map, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 });

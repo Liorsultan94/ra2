@@ -6,6 +6,7 @@ import type { SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { assetBase, fetchBitmap } from './photoground';
 import { rockTexture } from './terraintex';
+import { strataGlsl } from './strata';
 
 /*
  * Relief (render only): real rock faces on the map's impassable rock.
@@ -234,6 +235,8 @@ export function reliefField(m: GameMap): ReliefField {
       if (cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
     }
   const st = STYLE[m.biome] ?? STYLE.temperate;
+  // the coloured canyons' sandstone walls: rougher, more broken faces and ragged rims
+  const canyonAt = canyonMask(m);
   // local top: the highest rock ground nearby (the sim's crest / mesa top), a separable max filter
   const R = Math.round(1.5 * F);
   const top = new Float32Array(N).fill(-1e9);
@@ -266,6 +269,7 @@ export function reliefField(m: GameMap): ReliefField {
       }
       const tk = Math.max(G[k], top[k]);
       const dk = d[k];
+      const cm = canyonAt ? canyonAt(x, y) : 0;
       const n1 = fbm(x * 0.9, y * 0.9, 811, 3);
       const dn = dk + (n1 - 0.5) * st.wiggle * smooth(0.04, 0.5, dk);
       let pr = smooth(0.1, 0.1 + st.ramp, dn);
@@ -275,13 +279,18 @@ export function reliefField(m: GameMap): ReliefField {
         pr = Math.min(1, (fl + smooth(0.3, 0.7, t - fl)) / (st.terraces + 1));
       }
       const rn = 1 - Math.abs(fbm(x * 0.75 + 3.1, y * 0.75, 823, 4) * 2 - 1);
-      const crest = st.crest * (0.3 + 0.7 * rn * rn) * smooth(0.2, 0.95, dn);
-      const crag = (valueNoise(x * 3.3, y * 3.3, 829) - 0.5) * 0.12 * smooth(0.12, 0.4, dn);
+      let crest = st.crest * (0.3 + 0.7 * rn * rn) * smooth(0.2, 0.95, dn);
+      let crag = (valueNoise(x * 3.3, y * 3.3, 829) - 0.5) * 0.12 * smooth(0.12, 0.4, dn);
+      if (cm > 0) {
+        // jagged teeth along the canyon rims, knobs and hollows on its faces
+        crest += cm * (valueNoise(x * 2.7, y * 2.7, 831) - 0.3) * 0.32 * smooth(0.2, 0.9, dn);
+        crag += cm * ((valueNoise(x * 3.3, y * 3.3, 833) - 0.5) * 0.16 + (valueNoise(x * 7.1, y * 7.1, 835) - 0.5) * 0.08) * smooth(0.08, 0.35, dn);
+      }
       const rim = st.rim * smooth(0.25, 0.55, dn);
       H[k] = G[k] + (tk + rim + st.wall - G[k]) * pr + crest + crag;
       p[k] = pr;
       // horizontal jitter off the border (keeps it inside the rock)
-      const jk = 0.09 * smooth(0.18, 0.45, dk);
+      const jk = (0.09 + 0.03 * cm) * smooth(0.18, 0.45, dk);
       if (jk > 0) {
         jx[k] = (valueNoise(x * 2.1, y * 2.1, 841) - 0.5) * 2 * jk;
         jz[k] = (valueNoise(x * 2.1, y * 2.1, 843) - 0.5) * 2 * jk;
@@ -386,7 +395,7 @@ function canyonMask(m: GameMap): ((x: number, y: number) => number) | null {
         best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t) - c.hw);
       }
     }
-    return 1 - smooth(2.2, 3.6, best);
+    return 1 - smooth(2.4, 4.4, best);
   };
 }
 
@@ -535,18 +544,11 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
         uniform vec3 rSideTint;
         uniform vec3 rTopTint;
         vec3 rTriW;
-        vec3 rTriN;${canyon ? `
+        vec3 rTriN;
+        float rRough = 0.0;${canyon ? `
         varying float vCanyon;
-        // the coloured canyon's sandstone strata from the floor up (render/canyon.ts STRATA_RGB, ground.ts)
-        vec3 cStrata( float i ) {
-          if ( i < 0.5 ) return vec3( 0.66, 0.31, 0.23 );
-          if ( i < 1.5 ) return vec3( 0.75, 0.53, 0.29 );
-          if ( i < 2.5 ) return vec3( 0.85, 0.72, 0.47 );
-          if ( i < 3.5 ) return vec3( 0.58, 0.34, 0.42 );
-          if ( i < 4.5 ) return vec3( 0.9, 0.85, 0.74 );
-          if ( i < 5.5 ) return vec3( 0.56, 0.24, 0.19 );
-          return vec3( 0.78, 0.6, 0.38 );
-        }` : ''}`,
+        // the coloured canyon's sandstone (render/strata.ts)
+        ${strataGlsl()}` : ''}`,
       )
       .replace(
         '#include <map_fragment>',
@@ -571,13 +573,19 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
           alb *= 1.0 + strata * ${lk.strata.toFixed(2)} * steep;
           #if ${canyon ? 1 : 0}
           if ( vCanyon > 0.01 ) {
-            // banded red, ochre, yellow, purple and white layers by height (the bands wander a little), the scan's
-            // light and shade kept through its luminance; the tops stay the plain sandstone
-            float sh = vRWp.y * 3.3 + ( sn - 0.5 ) * 1.3 + sin( vRWp.x * 0.9 + vRWp.z * 0.7 ) * 0.35;
-            float i0 = mod( floor( sh ), 7.0 );
-            vec3 band = mix( cStrata( i0 ), cStrata( mod( i0 + 1.0, 7.0 ) ), smoothstep( 0.72, 1.0, fract( sh ) ) );
-            float lum = dot( alb, vec3( 0.2126, 0.7152, 0.0722 ) );
-            alb = mix( alb, band * ( 0.42 + lum * 1.25 ), vCanyon * ( 0.35 + 0.6 * steep ) );
+            // muted sandstone layers that follow the rock (strata.ts), the scan's grain and relief kept through
+            // its luminance; ledges and tops carry drift sand over the paler rock
+            float cShade;
+            float cRough;
+            vec3 band = cyStrata( vRWp, n, cShade, cRough );
+            float grain = clamp( dot( side, vec3( 0.2126, 0.7152, 0.0722 ) ) * 1.65, 0.6, 1.4 );
+            vec3 cAlb = band * mix( 1.0, grain, 0.5 ) * cShade * 0.78;
+            vec3 sand = vec3( 0.5, 0.36, 0.22 ) * mix( 1.0, grain, 0.3 ) * 0.78;
+            cAlb = mix( cAlb, sand, smoothstep( 0.62, 0.9, n.y ) * 0.7 );
+            // (canyon.ts' ledges and boulders carry 2: sandstone all over)
+            float ck = min( 1.0, vCanyon * ( 0.5 + 0.5 * steep ) );
+            alb = mix( alb, cAlb, ck );
+            rRough = cRough * ck;
           }
           #endif
           #if ${lk.moss > 0 ? 1 : 0}
@@ -598,6 +606,7 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
           rTriN = n;
         }`,
       )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n        roughnessFactor = clamp( roughnessFactor + rRough, 0.6, 1.0 );')
       .replace(
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
@@ -631,6 +640,20 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
   return mat;
 }
 
+const mats = new WeakMap<FogOfWar, Map<string, THREE.MeshStandardMaterial>>();
+
+/** The map's cliff material (one per fog, biome and quality; canyon.ts puts its ledges and boulders on it too). */
+export function reliefMaterial(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.MeshStandardMaterial {
+  const canyon = !!m.deco?.canyons?.length;
+  const biome = m.biome ?? 'temperate';
+  const key = `${biome}-${quality}-${canyon}`;
+  let per = mats.get(fog);
+  if (!per) mats.set(fog, (per = new Map()));
+  let mat = per.get(key);
+  if (!mat) per.set(key, (mat = cliffMaterial(biome, fog, quality, canyon)));
+  return mat;
+}
+
 /**
  * The cliff meshes over the map's rock (one per sector with rock in it),
  * registered with the scenery LOD (half resolution when zoomed out).
@@ -639,7 +662,7 @@ export function buildRelief(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium'
   const rf = reliefField(m);
   if (!rf.count) return [];
   const t0 = performance.now();
-  const mat = cliffMaterial(m.biome ?? 'temperate', fog, quality, !!m.deco?.canyons?.length);
+  const mat = reliefMaterial(m, fog, quality);
   const out: THREE.Object3D[] = [];
   const low = quality === 'low';
   let tris = 0;

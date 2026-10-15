@@ -71,3 +71,17 @@ siege 12%; after boom 63%, balanced 45%, siege 44%, harass 40%, air 38%, rush 30
   rng, and harvest trips are counted in whole loads.
 - Boom is still the strongest plan. Air and rush are weakest.
 - The desert's sea floor carries < 0.03 of height noise that is not mirrored (render only, under water).
+
+## CY1: the wider coloured canyon (desert, grace on)
+The canyon floor went from 2 to about 4.5 tiles and its middle sank 0.3 deeper. Same bench (FULL=1, 26 games
+per seed set), master bd1d84c re-run against the change. Rows: `cy1c` (seeds 1-3), `cy1d` (seeds 4-6).
+
+| seeds | master bd1d84c | CY1 |
+|---|---|---|
+| 1-3 (MSEEDS 1,2) | 14 / 7 | 9 / 11 |
+| 4-6 (MSEEDS 3,4) | 11 / 11 | 9 / 12 |
+| both | 25 / 18 (slot 0 58%) | 18 / 23 (slot 0 44%) |
+
+The games are chaotic: any change to the map reshuffles every outcome. One 26-game set on an intermediate
+version (the wide floor without the deeper middle) gave 6 / 17 for seeds 1-3 and 13 / 9 for seeds 4-6.
+No consistent lean either way; both totals are within noise (about 8% for ~40 decided games).
