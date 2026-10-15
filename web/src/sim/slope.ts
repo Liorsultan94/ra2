@@ -16,7 +16,7 @@
 // mountain flanks do not:
 // - vehicles (tracked and wheeled alike: the sim has no wheeled class) 0.53, about 28 degrees: about what a
 //   tank or a truck crawls up on loose ground;
-// - infantry 0.84, about 40 degrees: soldiers scramble up scree and rock steps a vehicle cannot take;
+// - infantry 0.83, about 40 degrees: soldiers scramble up scree and rock steps a vehicle cannot take;
 // - aircraft (and boats, should there ever be any) ignore slopes.
 // Bridge decks and their head ramps are exempt: the deck's own ramps grade the approach (render/deckramp.ts).
 
@@ -30,7 +30,7 @@ export const enum Loco {
 export const LOCO_COUNT = 2;
 
 /** Steepest grade (rise / run of a half step) each locomotion class takes. */
-export const MAX_GRADE: readonly number[] = [0.84, 0.53];
+export const MAX_GRADE: readonly number[] = [0.83, 0.53];
 
 /**
  * Extra path cost per height unit climbed (tile units): a climb of h costs as much as h * CLIMB_COST tiles more
@@ -115,8 +115,10 @@ export function slopeField(m: GameMap): SlopeField {
     }
   const ch = new Float32Array(n);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) ch[y * W + x] = tileCentreHeight(m, x, y);
-  // orthogonal steps first (diagonals look at them)
-  for (let pass = 0; pass < 2; pass++)
+  // orthogonal steps first (diagonals look at them); after each pass the steps of the half with the lower tile
+  // indices are made the exact mirror of the other half's (the maps are point symmetric, their heights to within
+  // float noise: a step right at a limit must not open on one side and close on the other)
+  for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const i = y * W + x;
@@ -148,6 +150,16 @@ export function slopeField(m: GameMap): SlopeField {
           }
         }
       }
+    for (let i = 0; i < n - 1 - i; i++) {
+      const im = n - 1 - i;
+      for (let k = pass * 4; k < pass * 4 + 4; k++) {
+        const km = OPP[k];
+        grade[i * 8 + k] = grade[im * 8 + km];
+        climb[i * 8 + k] = climb[im * 8 + km];
+        for (let c = 0; c < LOCO_COUNT; c++) block[c][i] = (block[c][i] & ~(1 << k)) | (((block[c][im] >> km) & 1) << k);
+      }
+    }
+  }
   return { block, climb, grade };
 }
 

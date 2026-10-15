@@ -93,6 +93,10 @@ export const WEAPON_SWAP = TPS;
 export const MOVE_FIRE_ROF = 1.4;
 
 // Precomputed offsets sorted by distance, used for formations and spiral searches.
+/** Climbing slows a unit: speed / (1 + CLIMB_SLOW x grade); a vehicle at its steepest (0.53) makes some 80%. */
+const CLIMB_SLOW = 0.45;
+/** Ground cut off on every side by steps too steep to climb, smaller than this many tiles, is closed (World constructor). */
+const POCKET = 10;
 const DX8 = [1, -1, 0, 0, 1, 1, -1, -1];
 const DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
 const SPIRAL: [number, number][] = (() => {
@@ -202,6 +206,12 @@ export class World {
     this.occ = new Int32Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) this.pass[y * w + x] = terrainPassable(this.map, x, y) ? 1 : 0;
     this.slope = slopeField(this.map);
+    // scraps of level ground walled in by steps too steep even to climb (a ledge on a cliff, the foot of a crag):
+    // nobody can ever reach them, so nothing is sent, dropped or pushed there either
+    const foot = groundRegions(w, h, this.pass, this.slope.block[Loco.Foot]);
+    const size = new Uint32Array(w * h + 1);
+    for (let i = 0; i < w * h; i++) size[foot[i]]++;
+    for (let i = 0; i < w * h; i++) if (foot[i] && size[foot[i]] < POCKET) this.pass[i] = 0;
     const s0 = this.map.starts[0];
     this.regions = [];
     this.mainlands = [];
@@ -472,27 +482,69 @@ export class World {
     return locoOf(unitDef(e.def));
   }
 
-  /** Can a unit of locomotion class c step from tile a to tile b (the same tile or a neighbour; farther: false)? */
+  /**
+   * Can a unit of locomotion class c move from tile a to tile b (the same tile or a neighbour; farther: false)?
+   * Orthogonal: the step within the class's slope limit (slope.ts). Diagonal (passing a corner): by either of the
+   * two tiles beside the corner, passable, both its steps within the limit.
+   */
   stepOk(a: number, b: number, c: number): boolean {
     if (a === b || c < 0) return true;
     const w = this.map.w;
-    const dx = (b % w) - (a % w);
+    const ax = a % w;
+    const dx = (b % w) - ax;
     const dy = Math.floor(b / w) - Math.floor(a / w);
     const k = dirOf(dx, dy);
-    return k >= 0 && !(this.slope.block[c][a] & (1 << k));
+    if (k < 0) return false;
+    const bl = this.slope.block[c];
+    if (k < 4) return !(bl[a] & (1 << k));
+    // (a diagonal is never off the map's edge here: b is on the map, so both corner tiles are)
+    const kx = dx > 0 ? 0 : 1;
+    const ky = dy > 0 ? 2 : 3;
+    const tx = a + dx;
+    const ty = a + dy * w;
+    return (this.pass[tx] === 1 && !(bl[a] & (1 << kx)) && !(bl[tx] & (1 << ky))) || (this.pass[ty] === 1 && !(bl[a] & (1 << ky)) && !(bl[ty] & (1 << kx)));
   }
 
-  /** Is the straight line from (x0, y0) to (x1, y1) open ground for class c: passable tiles, steps within its slope limit? */
+  /**
+   * Is the straight line from (x0, y0) to (x1, y1) open ground for class c: every tile it passes through passable,
+   * every move between them within the class's slope limit (stepOk)? An exact walk over the tile boundaries the line
+   * crosses (a corner crossed exactly is a diagonal move).
+   */
   lineOk(x0: number, y0: number, x1: number, y1: number, c: number): boolean {
-    const L = Math.hypot(x1 - x0, y1 - y0);
-    const n = Math.max(1, Math.ceil(L / 0.25));
-    let prev = this.tileOf(x0, y0);
-    for (let i = 1; i <= n; i++) {
-      const f = i / n;
-      const t = this.tileOf(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
-      if (t === prev) continue;
-      if (!this.pass[t] || !this.stepOk(prev, t, c)) return false;
-      prev = t;
+    const { w, h } = this.map;
+    let tx = Math.floor(x0);
+    let ty = Math.floor(y0);
+    const ex = Math.floor(x1);
+    const ey = Math.floor(y1);
+    if (tx === ex && ty === ey) return true;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const sx = dx > 0 ? 1 : -1;
+    const sy = dy > 0 ? 1 : -1;
+    const ix = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    const iy = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+    // line parameter t (0..1) at the next x / y boundary
+    let nx = dx !== 0 ? (dx > 0 ? tx + 1 - x0 : x0 - tx) * ix : Infinity;
+    let ny = dy !== 0 ? (dy > 0 ? ty + 1 - y0 : y0 - ty) * iy : Infinity;
+    let guard = 4 * (Math.abs(ex - tx) + Math.abs(ey - ty)) + 4;
+    while ((tx !== ex || ty !== ey) && guard-- > 0) {
+      const a = ty * w + tx;
+      if (Math.min(nx, ny) > 1) break;
+      if (nx < ny) {
+        tx += sx;
+        nx += ix;
+      } else if (ny < nx) {
+        ty += sy;
+        ny += iy;
+      } else {
+        tx += sx;
+        ty += sy;
+        nx += ix;
+        ny += iy;
+      }
+      if (tx < 0 || ty < 0 || tx >= w || ty >= h) return false;
+      const b = ty * w + tx;
+      if (!this.pass[b] || !this.stepOk(a, b, c)) return false;
     }
     return true;
   }
@@ -702,7 +754,8 @@ export class World {
       if (e.dead || e.kind !== 'unit' || this.isAir(e)) continue;
       if (e.x >= b.tx && e.x < b.tx + d.w && e.y >= b.ty && e.y < b.ty + d.h) {
         if (this.pass[this.tileOf(e.x, e.y)]) continue;
-        const p = this.nearestPassable(e.x, e.y);
+        const lc = this.locoOf(e);
+        const p = this.nearestPassable(e.x, e.y, 12, this.regionOf(e.x, e.y, lc), lc);
         if (p) {
           e.x = e.px = p[0] + 0.5;
           e.y = e.py = p[1] + 0.5;
@@ -1260,7 +1313,12 @@ export class World {
     const dx = wx - e.x;
     const dy = wy - e.y;
     const dist = Math.hypot(dx, dy);
-    const step = d.speed / TPS;
+    // uphill they slow down a little (half a tile ahead along the leg; downhill and on the level full speed)
+    let step = d.speed / TPS;
+    if (dist > 1e-3) {
+      const up = standHeight(this.map, e.x + (dx / dist) * 0.5, e.y + (dy / dist) * 0.5) - standHeight(this.map, e.x, e.y);
+      if (up > 0) step /= 1 + CLIMB_SLOW * up * 2;
+    }
     if (dist < 0.02) {
       if (atEnd) {
         e.path = null;
@@ -1289,15 +1347,16 @@ export class World {
     const ct = this.tileOf(e.x, e.y);
     const nt = this.tileOf(nx, ny);
     if (nt !== ct && this.pass[ct] && !this.stepOk(ct, nt, this.locoOf(e))) {
-      // shoved off the planned line (the crowd, a dodge), the straight leg now crosses a step too steep for
-      // us (a ramp's edge, a switchback's inner bend): back to our tile's centre and plan from there
-      const cx = (ct % w) + 0.5;
-      const cy = Math.floor(ct / w) + 0.5;
-      const dc = Math.hypot(cx - e.x, cy - e.y);
-      if (dc > 0.05) {
-        const s = Math.min(dc, step);
-        e.x += ((cx - e.x) / dc) * s;
-        e.y += ((cy - e.y) / dc) * s;
+      // the straight leg from where we actually stand (off the tile centres the path was planned through: shoved by
+      // the crowd, a dodge, a start off-centre) crosses a step too steep for us (a ramp's edge, a canyon wall's
+      // foot): first back to our tile's centre, and if the leg is still blocked from there, plan again from it
+      const lc = this.locoOf(e);
+      const cx = ct % w;
+      const cy = Math.floor(ct / w);
+      const wt = e.path[e.pathIdx] === ct ? e.path[e.pathIdx + 1] : atEnd ? e.moveGoal : e.path[e.pathIdx];
+      const fromCentre = wt === undefined || this.pfs[lc].lineClear(cx, cy, wt % w, Math.floor(wt / w));
+      if (Math.hypot(cx + 0.5 - e.x, cy + 0.5 - e.y) > 0.05 && fromCentre) {
+        if (e.path[e.pathIdx] !== ct) e.path.splice(e.pathIdx, 0, ct);
       } else {
         const st = e.stuckTicks;
         this.pathTo(e, e.slotX, e.slotY);
