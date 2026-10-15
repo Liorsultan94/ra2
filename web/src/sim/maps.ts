@@ -728,8 +728,9 @@ export function createDesertMap(seed: number): GameMap {
   const deco = emptyDeco();
   deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
   deco.tracks = [...tracks0, ...mirrorLines(tracks0), ...ramps.lines];
-  deco.trackBeds = [...tracks0.map(() => 0), ...tracks0.map(() => 0), ...ramps.beds];
-  deco.trackFoot = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.foot];
+  const bed0 = tracks0.map((t) => (t === DESERT_SADDLE ? 0.95 : 0));
+  deco.trackBeds = [...bed0, ...bed0, ...ramps.beds];
+  deco.trackNoCars = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.noCars];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
   deco.fields = mirrorRects([
@@ -882,6 +883,14 @@ const DESERT_WADI_BRANCHES: Capsule[] = [
   { x: 96, y: 127, x2: 99, y2: 121.5, r: 0 },
   { x: 99, y: 121.5, x2: 103, y2: 117, r: 0 },
 ];
+/** The track from the spring over the Jebel's saddle to the highway (player 0's; mirrored). */
+const DESERT_SADDLE: (Point & { nat?: boolean })[] = [
+  { x: 21.5, y: 82 },
+  { x: 25.5, y: 86.5 },
+  { x: 29, y: 89.5, nat: true },
+  { x: 31.5, y: 95 },
+  { x: 33, y: 100 },
+];
 /**
  * A track or footpath graded into a mountainside (SL1, sim/slope.ts): via points in tile index space (player 0's
  * half; mirrored), the ground along it evened out to a steady grade between the points whose height is known (the
@@ -898,8 +907,8 @@ interface Ramp {
   track?: boolean;
   /** Only the ground is graded: the tiles keep their kind (no gravel bed, crags kept). */
   gradeOnly?: boolean;
-  /** A footpath (no civilian traffic on it: MapDeco.trackFoot). */
-  foot?: boolean;
+  /** No civilian traffic on it (a footpath, a dead end up a mountain: MapDeco.trackNoCars). */
+  noCars?: boolean;
 }
 /** Width (tiles) over which a graded track's bed eases back into the natural slope beside it. */
 const RAMP_SHOULDER = 1.4;
@@ -969,7 +978,7 @@ function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: numb
     lines: src.flatMap((r) => (!r.track ? [] : [r.pts.map((p) => ({ x: p.x, y: p.y })), r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })).reverse()])),
     /** ...and how much wider than a plain dirt track each one's worn band is drawn (MapDeco.trackBeds). */
     beds: src.flatMap((r) => (!r.track ? [] : [Math.max(0, r.hw - 0.45), Math.max(0, r.hw - 0.45)])),
-    foot: src.flatMap((r) => (!r.track ? [] : [!!r.foot, !!r.foot])),
+    noCars: src.flatMap((r) => (!r.track ? [] : [!!r.noCars, !!r.noCars])),
   };
 }
 
@@ -1005,6 +1014,7 @@ const DESERT_RAMPS: Ramp[] = [
     ],
     hw: 1.5,
     track: true,
+    noCars: true,
   },
   {
     // (a steep pitch through the crags, some 35 degrees: soldiers only)
@@ -1016,7 +1026,7 @@ const DESERT_RAMPS: Ramp[] = [
     ],
     hw: 0.6,
     track: true,
-    foot: true,
+    noCars: true,
   },
   {
     // the trail along the crest from the footpath's head to the plateau (through the crags)
@@ -1027,24 +1037,16 @@ const DESERT_RAMPS: Ramp[] = [
     ],
     hw: 0.9,
     track: true,
-    foot: true,
+    noCars: true,
   },
-  {
-    pts: [
-      { x: 21.5, y: 82 },
-      { x: 25.5, y: 86.5 },
-      { x: 29, y: 89.5, nat: true },
-      { x: 31.5, y: 95 },
-      { x: 33, y: 100 },
-    ],
-    hw: 1.4,
-    track: true,
-  },
+  // (drawn as the old track it is: DESERT_TRACKS_EXTRA, its bed widened in deco.trackBeds)
+  { pts: DESERT_SADDLE, hw: 1.4 },
 ];
-/** The track to the well hamlet. */
+/** Tracks to the well hamlet and the spring. */
 const DESERT_TRACKS_EXTRA: Point[][] = [
   [{ x: 31, y: 66 }, { x: 25, y: 68.5 }, { x: 19, y: 72.5 }],
-  // (the one from the spring over the saddle to the highway is graded: DESERT_RAMPS)
+  // from the spring over the saddle to the highway (graded: DESERT_RAMPS)
+  DESERT_SADDLE,
 ];
 /** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
 function townGround(x: number, y: number) {

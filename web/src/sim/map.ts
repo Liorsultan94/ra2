@@ -70,8 +70,8 @@ export interface MapDeco {
    * up the mountains (sim/maps.ts rampSet) are cut wide enough for a column of tanks.
    */
   trackBeds?: number[];
-  /** Per entry of `tracks`: a footpath (soldiers only: no civilian traffic on it). */
-  trackFoot?: boolean[];
+  /** Per entry of `tracks`: no civilian traffic on it (a footpath, a dead-end mountain track). */
+  trackNoCars?: boolean[];
   /** Paved plazas / squares (axis-aligned rectangles, tile space). */
   plazas: { x0: number; y0: number; x1: number; y1: number }[];
   /** Park lawns (rectangles) with hedges and paths. */

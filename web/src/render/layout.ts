@@ -41,8 +41,8 @@ export interface Track {
   width: number;
   /** Extra half width of the worn band (tiles; a graded mountain track: MapDeco.trackBeds). */
   bed?: number;
-  /** A footpath: no civilian vehicles on it (MapDeco.trackFoot). */
-  foot?: boolean;
+  /** No civilian vehicles on it: a footpath, a dead-end mountain track (MapDeco.trackNoCars). */
+  noCars?: boolean;
   /** Turning loop / link of a dirt track (see Road.ring). */
   ring?: boolean;
 }

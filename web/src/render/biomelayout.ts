@@ -45,7 +45,7 @@ export function buildBiomeLayout(m: GameMap): Layout {
     const t: Track = { pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 };
     const bed = deco?.trackBeds?.[i];
     if (bed) t.bed = bed;
-    if (deco?.trackFoot?.[i]) t.foot = true;
+    if (deco?.trackNoCars?.[i]) t.noCars = true;
     return t;
   });
 

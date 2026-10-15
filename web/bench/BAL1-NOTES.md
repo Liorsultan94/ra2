@@ -85,3 +85,28 @@ per seed set), master bd1d84c re-run against the change. Rows: `cy1c` (seeds 1-3
 The games are chaotic: any change to the map reshuffles every outcome. One 26-game set on an intermediate
 version (the wide floor without the deeper middle) gave 6 / 17 for seeds 1-3 and 13 / 9 for seeds 4-6.
 No consistent lean either way; both totals are within noise (about 8% for ~40 decided games).
+
+## SL1: slopes (steps too steep per locomotion class, graded mountain tracks)
+Limits (sim/slope.ts, rise / run of the steeper half of a step, 1 height unit = 1 tile): vehicles 0.53 (28 deg),
+infantry 0.83 (39.7 deg), aircraft none. Climbing costs CLIMB_COST 1.25 tiles per height unit in A*; units slow
+to 1 / (1 + 0.45 x 2 x rise per half tile) uphill. Desert: the Jebel's flanks steepened (talus apron, rock band,
+crest, lifted 25%) with graded tracks (sim/maps.ts DESERT_RAMPS); the canyon floor kept level to the walls' feet.
+
+Same bench (FULL=1, grace on, seeds 1-3, MSEEDS 1,2; 26 games per map). Rows `sl1` (seeds 1-3), `sl1b` / `sl1c`
+(Frontline seeds 4-6 / 7-9, MSEEDS 3,4 / 5,6); master re-run on Frontline: `sl1base` (= fix2, 11 / 9) and
+`sl1baseb` (seeds 4-6).
+
+| map | before | SL1 |
+|---|---|---|
+| frontline seeds 1-3 | 11 / 9 (fix2 = master re-run) | 7 / 13 |
+| frontline seeds 4-6 | 10 / 12 (master re-run) | 9 / 10 |
+| frontline seeds 7-9 | | 11 / 10 |
+| desert | 9 / 11 (cy1c, master) | 11 / 10 |
+| winter | 11 / 11 (fix2) | 14 / 10 |
+| urban | 13 / 11 (fix2) | 13 / 10 |
+| all, seeds 1-3 | 44 / 42 | 45 / 43 (slot 0 51%) |
+
+Frontline over 9 seeds: 27 / 33 (slot 0 45%; master over 6 seeds 21 / 21); within noise (~6% for 60 games).
+Path lengths (vehicles, seed 1, master -> SL1): start to start frontline 134.5 -> 133.9, desert 141.7 -> 143.4,
+winter 94.6 -> 93.8, urban 102.6 -> 101.4; start 0 to its own ore fields (sum) frontline 277.9 -> 276.0, desert
+262.2 -> 259.2, winter 139.6 -> 138.8, urban 146.0 -> 144.1. Pathsym: 0 of 300 mirrored pairs differ on any map.
