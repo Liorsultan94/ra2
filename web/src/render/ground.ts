@@ -363,6 +363,18 @@ export class Ground {
 
   private pomSteps = 0;
 
+  /** The painted tint at (x, z) as RGB multipliers around 1 (dust in the ground's colour: fx/groundfx.ts). */
+  dustTint(x: number, z: number, out: number[]): boolean {
+    const N = this.map.w * this.res;
+    const px = Math.max(0, Math.min(N - 1, Math.floor(x * this.res)));
+    const pz = Math.max(0, Math.min(N - 1, Math.floor(z * this.res)));
+    const o = (pz * N + px) * 4;
+    out[0] = this.tint[o] / 127.5;
+    out[1] = this.tint[o + 1] / 127.5;
+    out[2] = this.tint[o + 2] / 127.5;
+    return true;
+  }
+
   /**
    * Render hook (the terrain calls it before drawing the ground): streams the
    * decoded photoscans into their texture arrays; if they could not be loaded,

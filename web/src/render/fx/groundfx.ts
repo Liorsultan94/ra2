@@ -48,6 +48,11 @@ export interface GroundFxSink {
   groundAt(x: number, z: number): number;
   /** Quality x adaptive budget (0.25 .. 1). */
   rate(): number;
+  /**
+   * The desert's painted ground tint at (x, z) as RGB multipliers around 1 (render/ground.ts: the beaches'
+   * white coral sand, wet sand, the canyon's honey floor...), written into `out`; false = no tint (other maps).
+   */
+  tint?(x: number, z: number, out: number[]): boolean;
 }
 
 export class GroundFx {
@@ -85,6 +90,47 @@ export class GroundFx {
     if (m.ore[i] > 0) return wet ? Surf.Mud : Surf.Ore;
     if (t === Tile.Dirt || t === Tile.Sand) return wet ? Surf.Mud : t === Tile.Sand ? Surf.Sand : Surf.Dirt;
     return Surf.Grass;
+  }
+
+  /** Ground tint scratch (sink.tint). */
+  private tc = [1, 1, 1];
+
+  /**
+   * Desert sand plume behind a vehicle (GD1): fewer, bigger, thinner puffs than the generic dust, low
+   * over the ground (they spread sideways and drift downwind rather than tower), long-lived and slowly
+   * fading, so the trail reads as a soft lit haze, never a bright opaque wall; tinted to the sand
+   * underneath (the beaches' white coral sand throws pale dust). The smoke shader lights them (sun side,
+   * shadow side, sky ambient), and their low alpha keeps the sun-side highlight from blooming.
+   */
+  private sandPlume(rx: number, rz: number, g: number, fx: number, fz: number, px: number, pz: number, sp: number, gauge: number, weight: number, k: number, rate: number, earth: boolean) {
+    const rnd = Math.random;
+    const t = this.tc;
+    const col = (hex: number, f: number) => {
+      const r = Math.min(255, ((hex >> 16) & 255) * Math.min(1.25, t[0]) * f);
+      const gg = Math.min(255, ((hex >> 8) & 255) * Math.min(1.25, t[1]) * f);
+      const b = Math.min(255, (hex & 255) * Math.min(1.35, t[2]) * f);
+      return (r << 16) | (gg << 8) | b;
+    };
+    // (packed earth: a browner dust)
+    const c0 = col(earth ? 0xa8906c : 0xc8ac7e, 0.94);
+    const c1 = col(earth ? 0xc6b496 : 0xdccaa6, 0.96);
+    // churned sand off both tracks: a few soft puffs low over the ruts
+    const n = this.take(Math.floor((0.25 + 0.6 * sp) * weight * k * rate + rnd()));
+    for (let i = 0; i < n; i++) {
+      const side = i % 2 ? 1 : -1;
+      const big = (0.7 + 0.45 * sp) * weight * k;
+      this.emit(rx + px * gauge * side + (rnd() - 0.5) * 0.1, g + 0.08, rz + pz * gauge * side + (rnd() - 0.5) * 0.1, -fx * sp * 0.45 + px * side * 0.38 + (rnd() - 0.5) * 0.3, 0.18 + rnd() * 0.3 * (0.5 + sp), -fz * sp * 0.45 + pz * side * 0.38 + (rnd() - 0.5) * 0.3, 3 + rnd() * 2.2 * big, 0.24 * big, (1.25 + rnd() * 0.7) * big, c0, c1, 0.26 + 0.07 * Math.min(1, sp), 1.25, -0.025, 0.9);
+    }
+    // at speed, a broad thin wake that hangs and drifts behind
+    if (sp > 0.35 && rnd() < 0.55 * rate && this.take(1)) {
+      const big = (0.9 + 0.5 * sp) * weight * k;
+      this.emit(rx - fx * 0.2, g + 0.14, rz - fz * 0.2, -fx * sp * 0.3 + (rnd() - 0.5) * 0.2, 0.12 + rnd() * 0.12, -fz * sp * 0.3 + (rnd() - 0.5) * 0.2, 4.5 + rnd() * 2.5, 0.45 * big, (2.1 + rnd() * 0.8) * big, c0, c1, 0.13, 0.9, -0.012, 1.1);
+    }
+    // a few sand grains flicked up off the tracks (dark specks that fall back)
+    if (sp > 0.25 && this.take(1)) {
+      const side = rnd() < 0.5 ? 1 : -1;
+      this.emit(rx + px * gauge * side, g + 0.08, rz + pz * gauge * side, -fx * (0.5 + rnd() * 0.6) + (rnd() - 0.5) * 0.4, 1 + rnd() * 1.2, -fz * (0.5 + rnd() * 0.6) + (rnd() - 0.5) * 0.4, 0.45 + rnd() * 0.3, 0.025 + rnd() * 0.015, 0.02, col(0x9a7e58, 1), col(0xa88c64, 1), 0.85, 0.6, 6, 0);
+    }
   }
 
   private take(n: number) {
@@ -134,6 +180,11 @@ export class GroundFx {
     const g = this.sink.groundAt(rx, rz);
     const rnd = Math.random;
     const dusty = WX.wxDust.value > 0.3 ? 1.35 : 1;
+    // the desert's sand and packed earth (GD1): a soft, low plume in the ground's own colour
+    if ((s === Surf.Sand || s === Surf.Dirt) && this.sink.tint?.(rx, rz, this.tc)) {
+      this.sandPlume(rx, rz, g, fx, fz, px, pz, sp, gauge, weight, (wheeled ? 1.3 : 1) * dusty, rate, s === Surf.Dirt);
+      return;
+    }
     switch (s) {
       case Surf.Dirt:
       case Surf.Sand:

@@ -501,6 +501,7 @@ export class GameRenderer {
     this.marks = new GroundMarks(map, this.fog, this.quality);
     this.effects.debris = this.debris;
     this.effects.marks = this.marks;
+    if (map.biome === 'desert') this.effects.groundTint = (x, z, out) => this.terrain.ground.dustTint(x, z, out);
     this.effects.setView(this.target, this.camera);
     this.effects.setLights(this.sun, this.hemi);
     this.scene.add(this.debris.group, this.marks.group);

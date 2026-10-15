@@ -179,6 +179,8 @@ export class Effects {
   private domeGeo = new THREE.SphereGeometry(1, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2);
   debris: Debris | null = null;
   marks: GroundMarks | null = null;
+  /** The desert ground's painted tint at (x, z) (renderer: Ground.dustTint), for dust in the sand's own colour. */
+  groundTint: ((x: number, z: number, out: number[]) => boolean) | null = null;
   /** Persistent battle scars (render/scars.ts): when set, blast craters and burnt ground go there instead of the fading marks. */
   scars: Pick<GroundMarks, 'craterAt' | 'scorchAt'> | null = null;
   /** Water hook (fx/waterfx.ts): ring waves and floating bits where something hits the river. */
@@ -235,6 +237,7 @@ export class Effects {
         paved: (x, z) => this.marks?.isPaved(x, z) ?? false,
         groundAt: (x, z) => this.groundAt(x, z),
         rate: () => this.rate,
+        tint: (x, z, out) => this.groundTint?.(x, z, out) ?? false,
       },
       quality,
     );
