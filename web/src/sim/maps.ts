@@ -570,8 +570,8 @@ export function createDesertMap(seed: number): GameMap {
         const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
         if (d < best.d) {
           const s = (c.at[k] + t * Math.sqrt(l2)) / c.len;
-          // (a shallow dip in the middle: the floor never climbs out at either mouth)
-          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.25 };
+          // (a dip in the middle, deepening the gorge between its walls; the floor never climbs out at either mouth)
+          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.55 };
         }
       }
     return best;
