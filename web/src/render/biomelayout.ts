@@ -418,8 +418,11 @@ export function villagePlots(m: GameMap, fieldOk: (f: Field) => boolean, mark: (
     [1, -1],
     [-1, -1],
   ];
+  // (not inside a town: the desert's town quarters keep their yards and lanes)
+  const crowded = (st: (typeof houses)[number]) => m.biome === 'desert' && houses.filter((o) => o !== st && Math.hypot(o.x + o.w / 2 - st.x - st.w / 2, o.y + o.h / 2 - st.y - st.h / 2) < 4.6).length >= 4;
   houses.forEach((st, si) => {
     let n = 0;
+    if (crowded(st)) return;
     for (let k = 0; k < dirs.length && out.length < max && n < 2; k++) {
       const [dx, dy] = dirs[(k + si) % dirs.length];
       const along = hash2(si, k, 616) < 0.5;

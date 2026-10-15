@@ -364,8 +364,36 @@ export function reliefDepth(m: GameMap, x: number, y: number): number {
 // ------------------------------------------------------------------ meshes
 
 /** One sector's merged cliff geometry at a sample stride (1 = full, 2 = far LOD). */
+/** Wadi Al-Rimal's coloured canyons: how much a point (tile space) belongs to a canyon's walls (0..1). */
+function canyonMask(m: GameMap): ((x: number, y: number) => number) | null {
+  const list = m.deco?.canyons;
+  if (!list?.length) return null;
+  const cs = list.map((c) => {
+    const xs = c.pts.map((p) => p.x + 0.5);
+    const ys = c.pts.map((p) => p.y + 0.5);
+    return { c, x0: Math.min(...xs) - 4.5, x1: Math.max(...xs) + 4.5, y0: Math.min(...ys) - 4.5, y1: Math.max(...ys) + 4.5 };
+  });
+  return (x, y) => {
+    let best = 99;
+    for (const { c, x0, x1, y0, y1 } of cs) {
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      for (let i = 0; i < c.pts.length - 1; i++) {
+        const ax = c.pts[i].x + 0.5;
+        const ay = c.pts[i].y + 0.5;
+        const dx = c.pts[i + 1].x + 0.5 - ax;
+        const dy = c.pts[i + 1].y + 0.5 - ay;
+        const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+        best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t) - c.hw);
+      }
+    }
+    return 1 - smooth(2.2, 3.6, best);
+  };
+}
+
 function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, stride: number): THREE.BufferGeometry | null {
   const F = rf.F;
+  const canyon = canyonMask(m);
+  const can: number[] = [];
   const i0 = sx * SECTOR * F;
   const j0 = sy * SECTOR * F;
   const i1 = Math.min(rf.NW - 1, i0 + SECTOR * F);
@@ -389,6 +417,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     const cav = 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
     const c = tone * cav;
     col.push(c, c, c);
+    if (canyon) can.push(canyon(x, y));
     return v;
   };
   for (let j = j0; j < j1; j += stride)
@@ -415,6 +444,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  if (canyon) g.setAttribute('aCanyon', new THREE.Float32BufferAttribute(can, 1));
   g.setIndex(pos.length / 3 > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
   g.computeVertexNormals();
   g.computeBoundingSphere();
@@ -475,7 +505,7 @@ function loadTile(name: string, kind: 'a' | 'n', size: number): Promise<THREE.Te
   return p;
 }
 
-function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 'high'): THREE.MeshStandardMaterial {
+function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 'high', canyon = false): THREE.MeshStandardMaterial {
   const lk = LOOK[biome] ?? LOOK.temperate;
   const flatN = placeholder(128, 128, 255);
   const u = {
@@ -490,8 +520,8 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vRWp;\nvarying vec3 vRWn;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRWp = position;\nvRWn = normal;');
+      .replace('#include <common>', `#include <common>\nvarying vec3 vRWp;\nvarying vec3 vRWn;${canyon ? '\nattribute float aCanyon;\nvarying float vCanyon;' : ''}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\nvRWp = position;\nvRWn = normal;${canyon ? '\nvCanyon = aCanyon;' : ''}`);
     sh.fragmentShader = sh.fragmentShader
       .replace(
         '#include <common>',
@@ -505,7 +535,18 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
         uniform vec3 rSideTint;
         uniform vec3 rTopTint;
         vec3 rTriW;
-        vec3 rTriN;`,
+        vec3 rTriN;${canyon ? `
+        varying float vCanyon;
+        // the coloured canyon's sandstone strata from the floor up (render/canyon.ts STRATA_RGB, ground.ts)
+        vec3 cStrata( float i ) {
+          if ( i < 0.5 ) return vec3( 0.66, 0.31, 0.23 );
+          if ( i < 1.5 ) return vec3( 0.75, 0.53, 0.29 );
+          if ( i < 2.5 ) return vec3( 0.85, 0.72, 0.47 );
+          if ( i < 3.5 ) return vec3( 0.58, 0.34, 0.42 );
+          if ( i < 4.5 ) return vec3( 0.9, 0.85, 0.74 );
+          if ( i < 5.5 ) return vec3( 0.56, 0.24, 0.19 );
+          return vec3( 0.78, 0.6, 0.38 );
+        }` : ''}`,
       )
       .replace(
         '#include <map_fragment>',
@@ -528,6 +569,17 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
           float sn = texture2D( fogNoise, vRWp.xz * 0.07 ).r;
           float strata = sin( vRWp.y * 15.0 + sn * 6.0 ) * 0.5 + sin( vRWp.y * 37.0 + sn * 3.0 ) * 0.25;
           alb *= 1.0 + strata * ${lk.strata.toFixed(2)} * steep;
+          #if ${canyon ? 1 : 0}
+          if ( vCanyon > 0.01 ) {
+            // banded red, ochre, yellow, purple and white layers by height (the bands wander a little), the scan's
+            // light and shade kept through its luminance; the tops stay the plain sandstone
+            float sh = vRWp.y * 3.3 + ( sn - 0.5 ) * 1.3 + sin( vRWp.x * 0.9 + vRWp.z * 0.7 ) * 0.35;
+            float i0 = mod( floor( sh ), 7.0 );
+            vec3 band = mix( cStrata( i0 ), cStrata( mod( i0 + 1.0, 7.0 ) ), smoothstep( 0.72, 1.0, fract( sh ) ) );
+            float lum = dot( alb, vec3( 0.2126, 0.7152, 0.0722 ) );
+            alb = mix( alb, band * ( 0.42 + lum * 1.25 ), vCanyon * ( 0.35 + 0.6 * steep ) );
+          }
+          #endif
           #if ${lk.moss > 0 ? 1 : 0}
           {
             float mn = texture2D( fogNoise, vRWp.xz * 0.6 ).g;
@@ -566,7 +618,7 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
       );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'relief-cliff-' + biome;
+  mat.customProgramCacheKey = () => 'relief-cliff-' + biome + (canyon ? '-canyon' : '');
   if (quality !== 'low') {
     const size = quality === 'high' ? 1024 : 512;
     void Promise.all([loadTile(lk.side, 'a', size), loadTile(lk.top, 'a', size), loadTile(lk.side, 'n', size), loadTile(lk.top, 'n', size)]).then(([sa, ta, sn, tn]) => {
@@ -587,7 +639,7 @@ export function buildRelief(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium'
   const rf = reliefField(m);
   if (!rf.count) return [];
   const t0 = performance.now();
-  const mat = cliffMaterial(m.biome ?? 'temperate', fog, quality);
+  const mat = cliffMaterial(m.biome ?? 'temperate', fog, quality, !!m.deco?.canyons?.length);
   const out: THREE.Object3D[] = [];
   const low = quality === 'low';
   let tris = 0;

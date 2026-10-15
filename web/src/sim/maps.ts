@@ -26,6 +26,8 @@ import {
   coastV,
   coastWiggle as coastWiggleOf,
   seaFrame,
+  isleDist,
+  ISLE_KNOLL,
   type SeaDeco,
   type Biome,
   type GameMap,
@@ -389,7 +391,7 @@ const mirrorRects = <T extends { x0: number; y0: number; x1: number; y1: number 
 function assemble(
   base: { name: string; id: MapId; biome: Biome },
   g: Grids,
-  more: Pick<GameMap, 'oreMines' | 'starts' | 'oils' | 'bridges' | 'roads' | 'structures' | 'blocked' | 'techSites' | 'lanes' | 'deco'>,
+  more: Pick<GameMap, 'oreMines' | 'starts' | 'oils' | 'bridges' | 'roads' | 'structures' | 'blocked' | 'techSites' | 'lanes' | 'deco' | 'offshore'>,
 ): GameMap {
   return { ...base, w: W, h: H, tiles: g.tiles, heights: g.heights, trees: g.trees, ore: g.ore, oreKind: g.oreKind, ...more };
 }
@@ -469,11 +471,17 @@ export function createDesertMap(seed: number): GameMap {
     [starts[0], T(24, 77), T(35, 74), T(40, 62), ring(135, 135)[0]],
     ring(45, 225),
     [starts[0], T(33, 91), T(50, 88), T(58, 81), T(66, 73), T(72, 64)],
+    // the town's streets: the high street from the ring's south side, a cross street east of it
+    [ring(90, 90)[0], { x: 63, y: 73 }, { x: 63, y: 92 }],
+    ...DESERT_TOWN_STREETS,
   ];
   const roads = [...r0, ...mirrorLines(r0)];
+  /** Road kind by index: 0 highway, 1 ring road, 2 outer road, 3 town street. */
+  const roadKind = (i: number) => Math.min(3, i % r0.length);
   const tracks0 = [
     [starts[0], T(9, 70), T(8, 57), T(13, 47), T(22, 41), T(30, 40)],
-    [T(40, 62), T(30, 54), T(25, 47)],
+    // (it stops short of the highway: a junction on the highway's bend swings the turning cars wide)
+    [{ x: T(40, 62).x - 2.73, y: T(40, 62).y - 2.17 }, T(30, 54), T(25, 47)],
     ...DESERT_TRACKS_EXTRA,
   ];
 
@@ -482,7 +490,8 @@ export function createDesertMap(seed: number): GameMap {
     const u = (x - CX) * 0.29 + (y - CY) * 0.13;
     const warp = (fbm(x * 0.06, y * 0.06, NS + 3) - fbm((W - 1 - x) * 0.06, (H - 1 - y) * 0.06, NS + 3)) * 3.2;
     const dune = Math.pow(0.5 + 0.5 * Math.cos(u * 2.1 + warp), 1.6);
-    return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42;
+    // (the town quarter stands on graded ground: its dunes levelled, the broad swells kept)
+    return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42 * (1 - 0.9 * townGround(x, y));
   };
   // the Jebel: a mountain massif on each side of the town (player 0's south-west of it, mirrored), mesas
   // standing on it as its rock-capped summits. A spine of summits and saddles, spurs and gullies cut
@@ -523,6 +532,46 @@ export function createDesertMap(seed: number): GameMap {
   };
   // a mesa on the massif stands on it (its cap rock that much higher)
   const mesaBase = mesas.map((m) => massifAt((m.x + m.x2) / 2, (m.y + m.y2) / 2).h * 0.92);
+  // the coloured canyon (player 0's, through the fort's mesa and the massif under it; mirrored): its floor
+  // falls evenly from the ground at its upper mouth to the ground at its lower one
+  const surface = (x: number, y: number) => {
+    let h = lowGround(x, y) + massifAt(x, y).h;
+    for (let j = 0; j < mesas.length; j++) {
+      const m = mesas[j];
+      const d = distToSegment(x + 0.5, y + 0.5, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
+      h = h + (2.25 + mesaBase[j] - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
+    }
+    return h;
+  };
+  const canyons = [DESERT_CANYON, DESERT_CANYON.map(mirror)].map((pts) => {
+    let len = 0;
+    const at = pts.map((p, i) => (i ? (len += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)) : 0));
+    const a = surface(pts[0].x, pts[0].y);
+    const b = surface(pts[pts.length - 1].x, pts[pts.length - 1].y);
+    return { pts, at, len, a, b };
+  });
+  /** Distance (tiles) from the nearer canyon's centre line and the floor height there. */
+  const canyonAt = (x: number, y: number) => {
+    let best = { d: 1e9, floor: 0 };
+    for (const c of canyons)
+      for (let k = 0; k < c.pts.length - 1; k++) {
+        const p = c.pts[k];
+        const q = c.pts[k + 1];
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const l2 = dx * dx + dy * dy;
+        const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / l2));
+        const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
+        if (d < best.d) {
+          const s = (c.at[k] + t * Math.sqrt(l2)) / c.len;
+          // (a shallow dip in the middle: the floor never climbs out at either mouth)
+          best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.25 };
+        }
+      }
+    return best;
+  };
+  /** A canyon wall tile: the ground beside the floor stands this far above it. */
+  const canyonWall = (x: number, y: number, floor: number) => surface(x, y) - floor > 0.75;
   for (let vy = 0; vy <= H; vy++)
     for (let vx = 0; vx <= W; vx++) {
       const fx = vx - 0.5;
@@ -547,6 +596,9 @@ export function createDesertMap(seed: number): GameMap {
         // a flat-topped plateau with steep sandstone cliffs
         h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
       }
+      // the coloured canyon: a narrow floor sunk into the mountain, its walls rising steeply to the rims
+      const cy = canyonAt(fx, fy);
+      if (cy.d < CANYON_HW + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW - 0.15, CANYON_HW + 1.25, cy.d) * 6);
       h = coastHeight(sea, vx, vy, h, NS);
       g.heights[vy * (W + 1) + vx] = h;
     }
@@ -567,6 +619,7 @@ export function createDesertMap(seed: number): GameMap {
       const wd = wadi.dist(x, y);
       const bd = branchDist(x, y);
       if (wd < 2.4 || bd < 1.3) t = Tile.Dirt; // the wadi floor: gravel and cracked mud
+      else if (townGround(x, y) > 0.5 && wd > 5) t = Tile.Dirt; // the town quarter's packed earth and gravel yards
       else if ((wd < 4.6 || bd < 2.9) && symNoise(x, y, 0.2, NS + 6) > 0.48) t = Tile.Grass; // scrub on its banks
       for (const o of oases) {
         const d = Math.hypot(x - o.x, y - o.y);
@@ -574,15 +627,20 @@ export function createDesertMap(seed: number): GameMap {
         else if (d < o.r + 2.4 && t !== Tile.Water) t = Tile.Grass;
       }
       for (const m of mesas) if (distToSegment(fx, fy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5) < m.r + 0.1) t = Tile.Rock;
+      // the canyon: a sandy floor between sheer walls (bare rock wherever they stand well above the floor)
+      const cy = canyonAt(x, y);
+      if (cy.d < CANYON_HW) t = Tile.Sand;
+      else if (cy.d < CANYON_HW + 1.1 && canyonWall(x, y, cy.floor)) t = Tile.Rock;
       g.tiles[i] = coastTile(sea, fx, fy, t);
     }
-  markRoads(g, roads, roads.map((_, i) => (i % 3 === 2 ? 0.8 : 0.95)), [Tile.Sand, Tile.Dirt, Tile.Grass]);
+  markRoads(g, roads, roads.map((_, i) => [0.95, 0.95, 0.8, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
   paintOre(g, oreFields);
 
   const reserved = (x: number, y: number) =>
     starts.some((s) => Math.hypot(x - s.x, y - s.y) < 10) ||
     oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) ||
     oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) ||
+    canyonAt(x, y).d < CANYON_HW + 1.2 ||
     roads.some((r) => r.some((p, k) => k > 0 && distToSegment(x + 0.5, y + 0.5, r[k - 1].x + 0.5, r[k - 1].y + 0.5, p.x + 0.5, p.y + 0.5) < 1.8));
   // date palms ring the oases and dot the wadi; acacias stand alone on the scrub and gravel
   for (let y = 0; y < H; y++)
@@ -640,14 +698,19 @@ export function createDesertMap(seed: number): GameMap {
       { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
     ]),
     ...DESERT_EXTRA,
+    // the town quarter south of the ring road (off the wadi's banks)
+    ...desertTown().filter((st) => wadi.dist(st.x + st.w / 2 - 0.5, st.y + st.h / 2 - 0.5) > 5.2),
   ];
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   // the resort compounds by the sea (impassable; render/seaside.ts draws them)
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inResort(sea, x + 0.5, y + 0.5)) blocked[y * W + x] = 1;
   for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
+  // (the town's mosque is the first one placed on each side; any later ones become shops)
+  let mosques = 0;
+  for (const st of structures) if (st.look === 'mosque' && ++mosques > 2) st.look = 'shops';
 
   const deco = emptyDeco();
-  deco.roadStyles = roads.map((_, i) => (i % 3 === 0 ? { width: 1.05, variant: 0 as const } : i % 3 === 1 ? { width: 0.95, variant: 1 as const } : { width: 0.8, variant: 1 as const }));
+  deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
   deco.tracks = [...tracks0, ...mirrorLines(tracks0)];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
@@ -672,12 +735,24 @@ export function createDesertMap(seed: number): GameMap {
     const a = (j / 18) * Math.PI * 2 + 0.17;
     deco.trees.push({ x: CX + 0.5 + Math.cos(a) * (ringR + 1.55), y: CY + 0.5 + Math.sin(a) * (ringR + 1.55), kind: 2 });
   }
+  // palms lining the town's streets, on the pavements between the paving and the house fronts
+  deco.trees.push(...townPalms(g, roads.filter((_, i) => roadKind(i) === 3), structures, blocked));
+
   const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
   // palms along the back of the beaches (render only, knocked over by vehicles)
   deco.trees.push(...beachPalms(sea, g, NS));
   deco.sea = sea;
+  deco.canyons = canyons.map((c) => ({ pts: c.pts, hw: CANYON_HW }));
+
+  const offshore = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const f = seaFrame(W, H, sea.off, x + 0.5, y + 0.5, seaF);
+      if (sea.isle && isleDist(sea.isle, f.u, f.v) < 0) offshore[y * W + x] = 1;
+    }
 
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
+    offshore,
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
     starts,
     oils,
@@ -719,6 +794,25 @@ const DESERT_MASSIF: { x: number; y: number; h: number }[][] = [
     { x: 37.5, y: 77.5, h: 2.6 },
   ],
 ];
+/**
+ * The coloured canyon (player 0's; mirrored): a narrow winding slot cut along the south-west flank of the fort's
+ * sandstone mesa (the fort keeps its rock) into the granite of the main summit, from the massif's north flank
+ * down to the plain by the southern ore field. Its floor is
+ * sand and passable all the way; its walls are rock. Via points in tile index space.
+ */
+const DESERT_CANYON: Point[] = [
+  { x: 33.2, y: 75.6 },
+  { x: 35.0, y: 78.7 },
+  { x: 35.7, y: 82.1 },
+  { x: 38.1, y: 83.5 },
+  { x: 39.3, y: 85.9 },
+  { x: 41.6, y: 87.1 },
+  { x: 43.4, y: 88.9 },
+  { x: 46.4, y: 89.6 },
+  { x: 47.6, y: 92.2 },
+];
+/** Half width of the canyon's floor (tiles). */
+const CANYON_HW = 1.0;
 /** Half width of the massif's foot (tiles; it wanders by +-2). */
 const MASSIF_FOOT = 12.5;
 /** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */
@@ -747,6 +841,88 @@ const DESERT_TRACKS_EXTRA: Point[][] = [
   // from the spring over the saddle to the highway
   [{ x: 21.5, y: 82 }, { x: 25.5, y: 86.5 }, { x: 29, y: 89.5 }, { x: 31.5, y: 95 }, { x: 33, y: 100 }],
 ];
+/** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
+function townGround(x: number, y: number) {
+  const k = (px: number, py: number) => (1 - smoothstep(0, 2, Math.max(49.5 - px, px - 83.5, 0))) * (1 - smoothstep(0, 2, Math.max(71 - py, py - 96, 0)));
+  return Math.max(k(x, y), k(W - 1 - x, H - 1 - y));
+}
+/** Cross streets of the town quarter south of the ring road (tile index space; the high street is built off the ring). */
+const DESERT_TOWN_STREETS: Point[][] = [
+  // (east of the high street only: off the highway it would meet it right by the highway's bend)
+  [{ x: 63, y: 80 }, { x: 78, y: 80 }],
+];
+/**
+ * The town quarter (player 0's half, south of the ring road; mirrored). Blocks two houses deep between the
+ * streets, a tile-wide alley behind every row and between neighbours, the houses facing the nearer
+ * street; shop-houses on the high street and the first cross street, courtyard houses and villas at the
+ * block ends, the mosque on the corner of the high street and the first cross street (the first
+ * candidate placed wins: placeStructures validates every footprint and skips what does not fit).
+ */
+function desertTown(): Structure[] {
+  const M = StructureKind.MudHouse;
+  const Q = StructureKind.Courtyard;
+  const out: Structure[] = [
+    { kind: Q, x: 65, y: 82, w: 2, h: 3, rot: 3, look: 'mosque' },
+    { kind: Q, x: 60, y: 82, w: 2, h: 3, rot: 1, look: 'shops' },
+    { kind: Q, x: 70, y: 74, w: 3, h: 2, rot: 2 },
+    { kind: Q, x: 56, y: 85, w: 3, h: 2, rot: 0 },
+    { kind: Q, x: 72, y: 85, w: 3, h: 2, rot: 0 },
+    { kind: Q, x: 68, y: 90, w: 3, h: 2, rot: 2 },
+    { kind: Q, x: 57, y: 74, w: 2, h: 3, rot: 1 },
+  ];
+  // rows (top tile, facing): north of each cross street the houses face south, south of it north
+  const rows: [number, number][] = [
+    [74, 2],
+    [77, 0],
+    [82, 2],
+    [85, 0],
+    [90, 2],
+    [93, 0],
+  ];
+  for (const [y, face] of rows)
+    for (let x = 51; x <= 78; x += 3) {
+      // the columns either side of the high street (x 63) face it
+      const xx = x >= 63 ? x + 2 : x;
+      const rot = xx === 60 ? 1 : xx === 65 ? 3 : face;
+      const street = rot % 2 === 1 || y === 77 || y === 82;
+      const h = hash2(xx, y, 5151);
+      out.push({ kind: M, x: xx, y, w: 2, h: 2, rot, look: street && h < (rot % 2 ? 0.7 : 0.45) ? 'shop' : undefined });
+    }
+  return out;
+}
+/** Render-only palms along the town streets: both pavements, every ~2.6 tiles, clear of houses and junctions. */
+function townPalms(g: Grids, streets: Point[][], structures: Structure[], blocked: Uint8Array) {
+  const out: { x: number; y: number; kind: number }[] = [];
+  const free = (x: number, y: number) => {
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = Math.floor(x + dx * 0.3);
+        const ty = Math.floor(y + dy * 0.3);
+        if (tx < 0 || ty < 0 || tx >= W || ty >= H) return false;
+        const i = ty * W + tx;
+        if (blocked[i] || g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Rock) return false;
+      }
+    return true;
+  };
+  void structures;
+  for (const st of streets) {
+    for (let k = 0; k < st.length - 1; k++) {
+      const a = st[k];
+      const b = st[k + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const nx = -(b.y - a.y) / len;
+      const ny = (b.x - a.x) / len;
+      for (let t = 1.6; t < len - 1.2; t += 2.6) {
+        for (const side of [-1, 1]) {
+          const x = a.x + 0.5 + ((b.x - a.x) * t) / len + nx * side * 1.05;
+          const y = a.y + 0.5 + ((b.y - a.y) * t) / len + ny * side * 1.05;
+          if (free(x, y)) out.push({ x, y, kind: 2 });
+        }
+      }
+    }
+  }
+  return out;
+}
 /** The well hamlet on the open sands north of the massif. */
 const DESERT_EXTRA: Structure[] = [
   { kind: StructureKind.MudHouse, x: 32, y: 63, w: 2, h: 2, rot: 1 },
@@ -772,6 +948,9 @@ const DESERT_SEA: SeaDeco = {
   ],
   resort: { u0: -19.5, u1: -7.5, v0: -11.5, v1: -4.8 },
   beach: [-24, 2.5],
+  // Tiran-like: low and rocky with sandy edges, off the cove's mouth between the headlands, past the reef's
+  // drop-off (some 3 tiles of water from the shore reef and the headland tips; the Blue Hole's lagoon to its west)
+  isle: { u: 11.8, v: 7.0, ru: 2.8, rv: 2.15 },
 };
 /** Reef shelf width (tiles from the waterline) and the open sea's floor. */
 const REEF = 3.6;
@@ -803,7 +982,7 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
   if (ve > -10) {
     if (ve > 0) {
       // the reef flat, shelving gently, then the drop-off into the deep (open sea only, not the cove)
-      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + (hash2(vx, vy, ns + 61) - 0.5) * 0.03;
+      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + ((hash2(vx, vy, ns + 61) + hash2(W - vx, H - vy, ns + 61)) / 2 - 0.5) * 0.03;
       h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 2.2, v);
     } else {
       // the beach rises from the waterline into the dunes
@@ -822,6 +1001,18 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
     const top = hd.top * (0.7 + 0.3 * smoothstep(0, 0.6, t)) + ((hash2(vx, vy, ns + 63) + hash2(W - vx, H - vy, ns + 63)) / 2 - 0.5) * 0.15;
     h = h + (top - h) * (1 - smoothstep(hd.r - 0.45, hd.r + 0.7, d));
   }
+  if (sea.isle) {
+    const d = isleDist(sea.isle, u, v);
+    if (d < 4.5) {
+      const n = ((hash2(vx, vy, ns + 65) + hash2(W - vx, H - vy, ns + 65)) / 2 - 0.5) * 0.08;
+      // the island: a low sandy rim rising to the rocky knoll; round it the reef flat, then the drop-off
+      const ih =
+        d < 0
+          ? WATER_LEVEL + 0.06 + Math.min(-d, 1.2) * 0.17 + smoothstep(-ISLE_KNOLL - 0.35, -ISLE_KNOLL + 0.5, -d) * 0.2 + n * smoothstep(0.4, 1.2, -d)
+          : WATER_LEVEL + 0.06 - 0.25 * smoothstep(0, 0.7, d) - 0.05 * Math.min(d, 1.6) + n * 0.2;
+      h = Math.max(h, ih + (SEA_FLOOR - ih) * smoothstep(1.7, 3.8, d));
+    }
+  }
   return h;
 }
 /** Tile type by the sea at a tile centre. */
@@ -829,6 +1020,10 @@ function coastTile(sea: SeaDeco, x: number, y: number, t: Tile): Tile {
   const f = seaFrame(W, H, sea.off, x, y, seaF);
   const ve = coastV(sea, f.u, f.v);
   for (const hd of sea.heads) if (headDist(hd, f.u, f.v) < hd.r + 0.1) return Tile.Rock;
+  if (sea.isle) {
+    const d = isleDist(sea.isle, f.u, f.v);
+    if (d < 0) return d < ISLE_KNOLL ? Tile.Rock : d < -0.6 ? Tile.Dirt : Tile.Sand;
+  }
   if (ve > 0) return Tile.Water;
   if (inResort(sea, x, y)) return Tile.Dirt;
   if (ve > -4.4) return Tile.Sand;

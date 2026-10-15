@@ -15,6 +15,7 @@ import { buildVegetation, canopyRadius, treeSpots, windTime, type VegetationHand
 import { RIVER, buildWater, setRapidsRocks, type RiverInfo, type WaterReflection } from './water';
 import { Waterside } from './waterside';
 import { Seaside } from './seaside';
+import { buildCanyons } from './canyon';
 import { MinimapBake } from './minimap';
 import type { Slicer } from './slice';
 
@@ -144,6 +145,9 @@ export class Terrain {
     this.group.add(w.mesh);
     this.waterside = new Waterside(this.map, w.river, this.layout, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 }, w.material.uniforms.waveTex.value as THREE.Texture);
     this.group.add(this.waterside.group);
+    // the coloured canyons' strata ledges, fallen blocks and pillars (canyon.ts)
+    const canyons = buildCanyons(this.map, this.fog);
+    if (canyons) this.group.add(canyons);
     if (this.map.deco?.sea) {
       this.seaside = new Seaside(this.map, this.fog, quality, w.material.uniforms.wxLight as { value: THREE.Vector3 });
       this.group.add(this.seaside.group);

@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, coastV, seaFrame, seaPointAt, type GameMap, type SeaDeco } from '../sim/map';
+import { ISLE_KNOLL, Tile, WATER_LEVEL, coastV, isleDist, seaFrame, seaPointAt, type GameMap, type SeaDeco } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
 import { landmarkMaterial } from './landmarks/material';
 import { CIV_SCALE, CivilianInstances, Opt, Pose } from './models/civilians';
 import { Kit, datePalm } from './models/landmarks';
+import type { NightLights } from './night';
 import { ReefLife, buildWreck, type Wreck } from './reeflife';
 import { RIVER } from './water';
 
@@ -98,6 +99,11 @@ export class Seaside {
   private people: CivilianInstances[] = [];
   private statics: Static[][] = [[], []];
   private walkers: Walker[] = [];
+  /** Cafe chairs on the promenade (diners) and the stalls' counters (vendors), per corner. */
+  private seats: Lounger[][] = [[], []];
+  private vendors: Lounger[][] = [[], []];
+  /** Warm light at night (NightLights pools): the promenade's lamps (lamp = true: a small flare at the head too) and terraces. */
+  private glowSpots: { x: number; y: number; z: number; r: number; lamp: boolean }[] = [];
   private boatList: Boat[] = [];
   private frameNo = 0;
   /** The view's zoom (renderer.ts): zoomed out, the figures are left out (sub-pixel crowds cost triangles). */
@@ -111,6 +117,8 @@ export class Seaside {
   private _s = new THREE.Vector3();
   /** The corals, fish and the wreck's sunken part (reeflife.ts). */
   reef: ReefLife | null = null;
+  /** The lighthouses' lanterns (one per island): the night beam sweeps from here (nightLights). */
+  private lanterns: { x: number; y: number; z: number; ph: number }[] = [];
 
   constructor(
     private map: GameMap,
@@ -131,6 +139,7 @@ export class Seaside {
       const beds: Lounger[] = [];
       this.buildResort(k, F, parasols, loungers, beds);
       this.buildBeach(k, F, parasols, loungers, beds);
+      this.buildIsle(k, F);
       // the wreck on the Blue Hole's rim: the whole hull here (the water hides what is under it; reeflife.ts
       // draws the sunken part again through the water)
       const wr = buildWreck(F.P);
@@ -491,8 +500,13 @@ export class Seaside {
         s0 = NaN;
       }
     }
+    // the walk widens into a seafront promenade wherever the resort's deck is not right behind it
+    const byResort = (u: number) => u > r.u0 - 0.3 && u < r.u1 + 0.3;
+    const inner = (u: number) => (byResort(u) ? pv(u) - 0.24 : pv(u) - 0.72);
     for (const [a, c] of runs) {
-      this.strip(k, F, a, c, (u) => pv(u) - 0.24, (u) => pv(u) + 0.24, (x, z) => this.gh(x, z) + 0.03, (_u, i) => (i % 2 ? 0xd6c9aa : 0xcbbd9c), 0.3);
+      this.strip(k, F, a, c, inner, (u) => pv(u) + 0.24, (x, z) => this.gh(x, z) + 0.03, (u, i) => (byResort(u) ? (i % 2 ? 0xd6c9aa : 0xcbbd9c) : i % 4 === 0 ? 0xbfa98a : i % 2 ? 0xdcd0b4 : 0xd2c4a6), 0.3);
+      // a kerb of darker stone along the inland edge of the wide parts
+      for (const [s0, s1] of this.spans(a, c, (u) => !byResort(u))) this.strip(k, F, s0, s1, (u) => inner(u) - 0.06, inner, (x, z) => this.gh(x, z) + 0.045, () => 0x9c8a70, 0.3);
       for (let u = a + 0.1; u < c; u += 0.45) {
         const p = F.P(u, pv(u) + 0.24);
         const y = this.gh(p.x, p.y) + 0.03;
@@ -507,13 +521,17 @@ export class Seaside {
           k.beam(p.x, y + 0.09, p.y, q.x, yq + 0.09, q.y, 0.012, WOOD);
         }
       }
-      // lamps along the promenade
+      // lamps along the promenade: lanterns on slim posts at its inland edge (a warm, low glow at night)
       for (let u = a + 0.8; u < c; u += 3.1) {
-        const p = F.P(u, pv(u) - 0.26);
-        k.at(p.x, this.gh(p.x, p.y), p.y);
+        const p = F.P(u, inner(u) - 0.02);
+        k.at(p.x, this.gh(p.x, p.y), p.y, F.yaw(u, pv(u)));
         k.cyl(0.012, 0.012, 0.36, 0, 0, 0, 0x34363a, 5);
-        k.ball(0.032, 0, 0.38, 0, 0xffe2a8, 0, 1);
+        k.box(0.05, 0.012, 0.05, 0, 0.36, 0, 0x34363a);
+        k.box(0.036, 0.05, 0.036, 0, 0.39, 0, 0xffd9a0, 1);
+        k.cone(0.035, 0.03, 0, 0.415, 0, 0x34363a, 4);
+        this.glowSpots.push({ x: p.x, y: this.gh(p.x, p.y), z: p.y, r: 1.2, lamp: true });
       }
+      this.buildPromenade(k, F, a, c, pv, inner, byResort, [jU, towerU, barU]);
     }
     // the parasols: rows of thatched shades on the sand, two loungers under each
     const rows = [-3.55, -2.7, -1.85];
@@ -641,6 +659,273 @@ export class Seaside {
     void parasols;
   }
 
+  /** Sub-runs of [a, c] (0.3 steps) where ok(u) holds. */
+  private spans(a: number, c: number, ok: (u: number) => boolean): [number, number][] {
+    const out: [number, number][] = [];
+    let s0 = NaN;
+    for (let u = a; u <= c + 0.001; u += 0.3) {
+      const good = ok(u) && u + 0.3 <= c + 0.001;
+      if (good && Number.isNaN(s0)) s0 = u;
+      if (!good && !Number.isNaN(s0)) {
+        if (u - s0 > 0.5) out.push([s0, u]);
+        s0 = NaN;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The seafront promenade's furniture along a run of the walk (u from a to c): along its wide stretches cafe
+   * terraces (a kiosk with an awning, tables under small parasols with a lantern on each, string lights over
+   * them), market stalls under striped canopies, small shops with awnings and racks of goods (no names or
+   * logos), date palms in round planters; benches facing the sea all along the railing. Everything merges
+   * into the corner's static mesh; the bulbs and lanterns glow softly at night (glow code 1).
+   */
+  private buildPromenade(k: Kit, F: Frame, a: number, c: number, pv: (u: number) => number, inner: (u: number) => number, byResort: (u: number) => boolean, keep: number[]) {
+    const b = F.b;
+    const h = (i: number, j: number) => hash2(i, j + b * 173, 4451);
+    const sea = this.sea;
+    const r = sea.resort;
+    const DARK = 0x34363a;
+    const BULB = 0xffc27a;
+    const CANVAS = [0xd8452e, 0x2f6fb0, 0x2a9a8a, 0xe0a630, 0x8a4a7a, 0xf2efe6];
+    const free = (u: number, v: number) => {
+      const p = F.P(u, v);
+      if (!this.inMap(p.x, p.y, 0.3)) return false;
+      const t = this.tileAt(p.x, p.y);
+      if (t === Tile.Water || t === Tile.Rock) return false;
+      const tx = Math.floor(p.x);
+      const ty = Math.floor(p.y);
+      if (this.map.trees[ty * this.map.w + tx] || this.map.blocked[ty * this.map.w + tx]) return false;
+      // (clear of the resort compound)
+      return !(u > r.u0 - 0.6 && u < r.u1 + 0.6 && v > r.v0 - 0.6 && v < r.v1 + 0.6);
+    };
+    const y0 = (u: number, v: number) => {
+      const p = F.P(u, v);
+      return this.gh(p.x, p.y) + 0.03;
+    };
+    /** A short catenary of bulbs between two frame points at height hy (absolute ends). */
+    const string = (u0: number, v0: number, ya: number, u1: number, v1: number, yb: number) => {
+      const n = 7;
+      const A = F.P(u0, v0);
+      const B = F.P(u1, v1);
+      let prev: THREE.Vector3 | null = null;
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const x = A.x + (B.x - A.x) * t;
+        const z = A.y + (B.y - A.y) * t;
+        const yy = ya + (yb - ya) * t - Math.sin(t * Math.PI) * 0.06;
+        const q = new THREE.Vector3(x, yy, z);
+        if (prev) {
+          k.at(0, 0, 0);
+          k.beam(prev.x, prev.y, prev.z, q.x, q.y, q.z, 0.004, 0x2a2a2a);
+        }
+        if (i > 0 && i < n) {
+          k.at(x, yy - 0.012, z);
+          k.ball(0.011, 0, 0, 0, i % 3 === 0 ? 0xffa95a : BULB, 0, 1);
+        }
+        prev = q;
+      }
+    };
+    // benches facing the sea along the railing, between its posts
+    for (let u = a + 0.55; u < c - 0.3; u += 1.35) {
+      if (keep.some((x) => Math.abs(u - x) < 0.5)) continue;
+      const v = pv(u) + 0.1;
+      const y = y0(u, v);
+      this.at(k, F, u, v, y, Math.PI);
+      k.box(0.3, 0.015, 0.08, 0, 0.075, 0, WOOD);
+      k.box(0.3, 0.06, 0.012, 0, 0.12, 0.045, WOOD, 0, 0, -0.15);
+      for (const sx of [-0.12, 0.12]) k.box(0.015, 0.075, 0.07, sx, 0.037, 0, DARK);
+    }
+    // the bays along the wide stretches
+    const runs = this.spans(a, c, (u) => !byResort(u));
+    let bay = 0;
+    for (const [s0, s1] of runs) {
+      let lastCafe: { u: number; v: number; y: number } | null = null;
+      for (let u = s0 + 0.55; u < s1 - 0.45; u += 1.15, bay++) {
+        const j = h(bay, 1);
+        const vi = inner(u);
+        const vk = vi - 0.38; // the kiosks / shops just inland of the paving
+        const vt = vi + 0.3; // tables and stalls on the paving's inland half
+        const canvas = CANVAS[Math.floor(h(bay, 2) * CANVAS.length)];
+        const yaw = F.yaw(u, pv(u));
+        if (j < 0.32 && free(u, vk) && free(u, vt)) {
+          // a cafe terrace: the kiosk, three tables, string lights from the kiosk's awning to a post
+          this.at(k, F, u, vk, y0(u, vk) - 0.02);
+          k.box(0.5, 0.3, 0.34, 0, 0.15, 0, h(bay, 3) < 0.5 ? WHITE : CREAM);
+          k.box(0.54, 0.03, 0.38, 0, 0.31, 0, 0xc9b48a);
+          k.box(0.38, 0.13, 0.01, 0, 0.13, -0.175, 0x1c2226);
+          k.box(0.5, 0.1, 0.03, 0, 0.09, -0.2, 0xb08a5a);
+          k.box(0.56, 0.012, 0.2, 0, 0.29, -0.27, canvas, 0, 0, -0.35);
+          k.box(0.3, 0.06, 0.01, 0, 0.36, -0.18, CANVAS[(Math.floor(h(bay, 4) * 6) + 2) % 6]);
+          for (let t = -1; t <= 1; t++) {
+            const ut = u + t * 0.3;
+            const vv = vt + (t === 0 ? 0.12 : 0);
+            const yt = y0(ut, vv);
+            this.at(k, F, ut, vv, yt);
+            k.cyl(0.055, 0.055, 0.012, 0, 0.1, 0, 0xf0ede4, 10);
+            k.cyl(0.008, 0.008, 0.1, 0, 0, 0, DARK, 4);
+            k.cyl(0.006, 0.006, 0.3, 0, 0.11, 0, DARK, 4);
+            k.cone(0.15, 0.06, 0, 0.36, 0, CANVAS[(Math.floor(h(bay, 5 + t) * 6) + t + 6) % 6], 8);
+            // a lantern on the table
+            k.box(0.016, 0.022, 0.016, 0.02, 0.122, 0.0, 0xffc070, 1);
+            for (const s of [-1, 1]) {
+              k.box(0.05, 0.012, 0.05, s * 0.09, 0.065, 0, WOOD);
+              k.box(0.05, 0.05, 0.008, s * 0.09, 0.095, s * 0.025, WOOD, 0, Math.PI / 2);
+              const q = F.P(ut + s * 0.09 * Math.cos(0), vv);
+              this.seats[b].push({ x: q.x, z: q.y, y: yt + 0.035, yaw: yaw + (s > 0 ? Math.PI : 0) });
+            }
+          }
+          // a post at the terrace's seaward corner and the string lights to it, and on to the last cafe
+          const up = u + 0.42;
+          const vp = vt + 0.32;
+          this.at(k, F, up, vp, y0(up, vp));
+          k.cyl(0.008, 0.008, 0.48, 0, 0, 0, DARK, 4);
+          const yk = y0(u, vk) + 0.36;
+          string(u - 0.24, vk - 0.1, yk, up, vp, y0(up, vp) + 0.48);
+          string(u + 0.24, vk - 0.1, yk, up, vp, y0(up, vp) + 0.48);
+          if (lastCafe && u - lastCafe.u < 2.3) string(lastCafe.u, lastCafe.v, lastCafe.y, up, vp, y0(up, vp) + 0.48);
+          lastCafe = { u: up, v: vp, y: y0(up, vp) + 0.48 };
+          const tp = F.P(u, vt);
+          this.glowSpots.push({ x: tp.x, y: y0(u, vt), z: tp.y, r: 0.9, lamp: false });
+          continue;
+        }
+        if (j < 0.58 && free(u, vt)) {
+          // a market stall: a trestle of goods under a striped canopy on four poles, the stallholder behind it
+          this.at(k, F, u, vt, y0(u, vt));
+          k.box(0.42, 0.012, 0.22, 0, 0.12, 0, WOOD);
+          for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) k.box(0.012, 0.12, 0.012, sx * 0.19, 0.06, sz * 0.09, DARK);
+          const goods = [0xe0802a, 0xd83a2a, 0xe8d24a, 0x6a9a3a, 0xc8a070, 0x8a5a9a];
+          for (let i = 0; i < 4; i++) k.box(0.08, 0.035 + h(bay, 10 + i) * 0.03, 0.12, -0.15 + i * 0.1, 0.14, 0, goods[Math.floor(h(bay, 20 + i) * goods.length)]);
+          for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) k.box(0.01, 0.4, 0.01, sx * 0.22, 0.2, sz * 0.13, DARK);
+          for (let i = 0; i < 4; i++) k.box(0.115, 0.012, 0.3, -0.172 + i * 0.115, 0.41, 0, i % 2 ? WHITE : canvas, 0, 0, 0.1);
+          const q = F.P(u, vt - 0.2);
+          this.vendors[b].push({ x: q.x, z: q.y, y: y0(u, vt - 0.2), yaw: yaw + Math.PI / 2 });
+          // a string of bulbs along the canopy's front
+          string(u - 0.22, vt + 0.14, y0(u, vt) + 0.39, u + 0.22, vt + 0.14, y0(u, vt) + 0.39);
+          const sp = F.P(u, vt + 0.1);
+          this.glowSpots.push({ x: sp.x, y: y0(u, vt), z: sp.y, r: 0.6, lamp: false });
+          continue;
+        }
+        if (j < 0.82 && free(u, vk)) {
+          // a small shop: a white kiosk with a shutter-up front, an awning, a rack of goods and a plain sign
+          this.at(k, F, u, vk, y0(u, vk) - 0.02);
+          k.box(0.44, 0.34, 0.32, 0, 0.17, 0, h(bay, 30) < 0.5 ? WHITE : 0xf0e2c4);
+          k.box(0.48, 0.03, 0.36, 0, 0.355, 0, 0xd9cfbc);
+          k.box(0.34, 0.2, 0.01, 0, 0.15, -0.165, 0x252a2c);
+          k.box(0.5, 0.012, 0.18, 0, 0.3, -0.25, canvas, 0, 0, -0.4);
+          k.box(0.26, 0.07, 0.01, 0, 0.4, -0.16, CANVAS[(Math.floor(h(bay, 31) * 6) + 3) % 6]);
+          // the rack: hats, beach toys, towels in bright colours
+          k.box(0.012, 0.22, 0.012, 0.3, 0.11, -0.2, DARK);
+          for (let i = 0; i < 3; i++) k.box(0.1, 0.05, 0.02, 0.3, 0.06 + i * 0.065, -0.2, CANVAS[(i + Math.floor(h(bay, 32) * 6)) % 6]);
+          k.ball(0.012, 0, 0.33, -0.26, BULB, 0, 1);
+          continue;
+        }
+        if (free(u, vi - 0.18)) {
+          // a date palm in a round planter, a bench in its shade
+          this.at(k, F, u, vi - 0.18, y0(u, vi - 0.18));
+          k.cyl(0.11, 0.1, 0.07, 0, 0, 0, 0xc8b898, 8);
+          datePalm(k, h(bay, 40), 0.6 + h(bay, 41) * 0.2);
+          this.at(k, F, u + 0.3, vt, y0(u + 0.3, vt));
+          k.box(0.3, 0.015, 0.08, 0, 0.075, 0, WOOD);
+          for (const sx of [-0.12, 0.12]) k.box(0.015, 0.075, 0.07, sx, 0.037, 0, DARK);
+        }
+      }
+    }
+  }
+
+  /**
+   * The offshore island (sim land, sim/maps.ts DESERT_SEA.isle): granite boulders and scrub on its rocky knoll, a
+   * striped lighthouse with a gallery and a glazed lantern room on top (the lantern glows at night), the keeper's
+   * white hut, a small landing stage on the lee side; the night beam goes through the night light pools (nightLights).
+   */
+  private buildIsle(k: Kit, F: Frame) {
+    const isle = this.sea.isle;
+    if (!isle) return;
+    const b = F.b;
+    const h = (i: number, j: number) => hash2(i, j + b * 191, 4471);
+    const yAt = (u: number, v: number) => {
+      const p = F.P(u, v);
+      return this.gh(p.x, p.y);
+    };
+    // the lighthouse on the knoll's crown
+    const lu = isle.u + 0.2;
+    const lv = isle.v - 0.1;
+    const base = yAt(lu, lv) - 0.04;
+    this.at(k, F, lu, lv, base);
+    k.cyl(0.3, 0.3, 0.1, 0, 0, 0, 0xb8b0a0, 10);
+    const bands = 6;
+    const H = 1.75;
+    for (let i = 0; i < bands; i++) {
+      const t0 = i / bands;
+      const t1 = (i + 1) / bands;
+      const r0 = 0.19 - 0.065 * t0;
+      const r1 = 0.19 - 0.065 * t1;
+      k.cyl(r0, r1, H / bands, 0, 0.1 + t0 * H, 0, i % 2 ? 0xc8342a : 0xf2f0ea, 14);
+    }
+    // gallery, railing, the glazed lantern room (glows at night), its dome and vane
+    const top = 0.1 + H;
+    k.cyl(0.2, 0.2, 0.035, 0, top, 0, 0x2c2e30, 14);
+    k.cyl(0.2, 0.2, 0.07, 0, top + 0.035, 0, 0x2c2e30, 14, 0, true);
+    k.cyl(0.1, 0.1, 0.16, 0, top + 0.035, 0, 0xffe6b0, 10, 1);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      k.box(0.012, 0.16, 0.012, Math.cos(a) * 0.1, top + 0.115, Math.sin(a) * 0.1, 0x2c2e30);
+    }
+    k.dome(0.11, 0, top + 0.195, 0, 0xb02a22, 12);
+    k.cyl(0.006, 0.006, 0.12, 0, top + 0.3, 0, 0x2c2e30, 4);
+    // a door and two small windows up the tower
+    k.box(0.08, 0.16, 0.02, 0, 0.18, -0.19, 0x3a2a20);
+    for (const y of [0.7, 1.15]) k.box(0.05, 0.08, 0.02, 0, 0.1 + y, -0.17 + y * 0.04, 0x1c2024);
+    // the keeper's hut beside it
+    const hu = lu - 0.75;
+    const hv = lv + 0.15;
+    this.at(k, F, hu, hv, yAt(hu, hv) - 0.03);
+    k.box(0.5, 0.26, 0.36, 0, 0.13, 0, 0xf2efe6);
+    k.box(0.54, 0.03, 0.4, 0, 0.27, 0, 0xb05a3a);
+    k.box(0.1, 0.16, 0.02, 0.1, 0.08, -0.185, 0x2f5f8f);
+    k.box(0.08, 0.07, 0.02, -0.12, 0.15, -0.185, 0x1c2024);
+    k.cyl(0.05, 0.05, 0.1, 0.18, 0.28, 0.1, 0x1a1a1c, 8);
+    // granite boulders on the knoll and the rim, scrub between
+    for (let i = 0; i < 16; i++) {
+      const a = h(i, 1) * Math.PI * 2;
+      const rr = 0.25 + h(i, 2) * 0.95;
+      const u = isle.u + Math.cos(a) * rr * isle.ru;
+      const v = isle.v + Math.sin(a) * rr * isle.rv;
+      const d = isleDist(isle, u, v);
+      if (d > -0.15 || Math.hypot(u - lu, v - lv) < 0.45 || Math.hypot(u - hu, v - hv) < 0.45) continue;
+      this.at(k, F, u, v, yAt(u, v) - 0.03, h(i, 3) * 6);
+      if (d < ISLE_KNOLL + 0.3 || h(i, 4) < 0.5) {
+        const s = 0.09 + h(i, 5) * 0.14;
+        k.ball(s, 0, s * 0.45, 0, [0x7a6458, 0x8a7062, 0x6a5a52][Math.floor(h(i, 6) * 3)], 0);
+      } else {
+        k.ball(0.07 + h(i, 7) * 0.05, 0, 0.05, 0, 0x6a7a42, 0);
+        k.ball(0.05, 0.06, 0.04, 0.03, 0x7a8a4a, 0);
+      }
+    }
+    // a landing stage on the lee (coast) side: a short concrete jetty with a mooring post and a dinghy
+    const ju = isle.u - 0.4;
+    const jv = isle.v - isle.rv - 0.4;
+    const dj = isleDist(isle, ju, jv + 0.6);
+    if (dj < 0) {
+      for (let s = 0; s < 3; s++) {
+        const v = jv + 0.55 - s * 0.32;
+        this.at(k, F, ju, v, WATER_LEVEL + 0.1);
+        k.box(0.32, 0.06, 0.33, 0, 0, 0, s % 2 ? 0xbcb6aa : 0xc8c2b6);
+        k.box(0.04, 0.4, 0.04, 0.12, -0.2, 0, 0x8a8478);
+        k.box(0.04, 0.4, 0.04, -0.12, -0.2, 0, 0x8a8478);
+      }
+      this.at(k, F, ju + 0.12, jv - 0.06, WATER_LEVEL + 0.13);
+      k.cyl(0.02, 0.02, 0.08, 0, 0, 0, 0x2c2e30, 6);
+      this.at(k, F, ju + 0.4, jv - 0.05, WATER_LEVEL + 0.02, 0.2);
+      k.box(0.36, 0.05, 0.14, 0, 0, 0, 0xf2f0ea);
+      k.box(0.37, 0.02, 0.15, 0, -0.03, 0, 0x2a6fc0);
+    }
+    // the lantern: the night beam sweeps from here (nightLights)
+    const lp = F.P(lu, lv);
+    this.lanterns.push({ x: lp.x, y: base + top + 0.11, z: lp.y, ph: b * Math.PI });
+  }
+
   // ------------------------------------------------------------------ people
 
   private populate(F: Frame, beds: Lounger[]) {
@@ -707,11 +992,30 @@ export class Seaside {
       m.compose(new THREE.Vector3(p.x, y, p.y), q, new THREE.Vector3(kk, kk, kk));
       out.push({ m: m.clone(), pose: h(i, 54) < 0.3 ? Pose.Wave : Pose.Chat, mask: L.mask, skin: L.skin, top: L.top, bot: L.bot, hat: L.hat, phase: h(i, 55) * 6, lean: 0, swim: y });
     }
-    // strollers on the promenade
-    for (let i = 0; i < Math.round(9 * this.crowd); i++) {
+    // strollers on the promenade (dressed: shirts and dresses, not swimwear)
+    const DRESS = [0xf0ece4, 0x3a6aa8, 0xd8c8a0, 0xb04a3a, 0x5a7a5a, 0xe8d8b0, 0x2a2a30, 0xc87a9a].map(C);
+    for (let i = 0; i < Math.round(14 * this.crowd); i++) {
       const L = look(i, 70);
-      this.walkers.push({ b, u: sea.beach[0] + 1 + h(i, 71) * (sea.beach[1] - sea.beach[0] - 2), v: -4.55 + (h(i, 72) - 0.5) * 0.25, dir: h(i, 73) < 0.5 ? 1 : -1, speed: 0.22 + h(i, 74) * 0.12, ph: h(i, 75) * 6, skin: L.skin, top: h(i, 76) < 0.5 ? C(0xf0ece4) : L.top, bot: L.bot, hat: L.hat, mask: L.mask, size: 0.85 + h(i, 77) * 0.15 });
+      this.walkers.push({ b, u: sea.beach[0] + 1 + h(i, 71) * (sea.beach[1] - sea.beach[0] - 2), v: -4.65 + (h(i, 72) - 0.5) * 0.5, dir: h(i, 73) < 0.5 ? 1 : -1, speed: 0.22 + h(i, 74) * 0.12, ph: h(i, 75) * 6, skin: L.skin, top: pick(DRESS, h(i, 76)), bot: pick(DRESS, h(i, 78)), hat: L.hat, mask: L.mask, size: 0.85 + h(i, 77) * 0.15 });
     }
+    // diners at the cafe tables, stallholders behind their stalls
+    this.seats[b].forEach((st, i) => {
+      if (h(i, 81) > 0.55 * this.crowd + 0.1) return;
+      const L = look(i, 82);
+      const kk = CIV_SCALE * (0.85 + h(i, 83) * 0.12);
+      e.set(0, -st.yaw, 0, 'YXZ');
+      q.setFromEuler(e);
+      m.compose(new THREE.Vector3(st.x, st.y + 0.08 - 0.9 * kk, st.z), q, new THREE.Vector3(kk, kk, kk));
+      out.push({ m: m.clone(), pose: Pose.Sit, mask: L.mask, skin: L.skin, top: pick(DRESS, h(i, 84)), bot: pick(DRESS, h(i, 85)), hat: L.hat, phase: h(i, 86) * 6, lean: 0 });
+    });
+    this.vendors[b].forEach((st, i) => {
+      const L = look(i, 90);
+      const kk = CIV_SCALE * 0.92;
+      e.set(0, -st.yaw, 0, 'YXZ');
+      q.setFromEuler(e);
+      m.compose(new THREE.Vector3(st.x, st.y, st.z), q, new THREE.Vector3(kk, kk, kk));
+      out.push({ m: m.clone(), pose: Pose.Vendor, mask: L.mask, skin: L.skin, top: pick(DRESS, h(i, 91)), bot: pick(DRESS, h(i, 92)), hat: L.hat, phase: h(i, 93) * 6, lean: 0 });
+    });
   }
 
   private drawPeople(time: number) {
@@ -852,6 +1156,23 @@ export class Seaside {
         if (w.u > this.sea.beach[1] - 0.5 || w.u < this.sea.beach[0] + 0.5) w.dir *= -1;
       }
       this.drawPeople(time);
+    }
+  }
+
+  /** NightLights hook (renderer.ts): soft warm pools under the promenade's lamps and string lights, tiny flares on the lamps. */
+  nightLights(n: NightLights, dark: number, time = 0) {
+    if (dark < 0.05 || this.quality === 'low') return;
+    const k = Math.min(1, dark * 1.3);
+    // the lighthouses: a soft beam turning once every ~13 s, a faint inner core, a small glow at the lantern
+    for (const L of this.lanterns) {
+      const yaw = time * 0.48 + L.ph;
+      n.cone(L.x, L.y, L.z, yaw, -0.02, 9.5, 0.55, 0.17 * k, 0.15 * k, 0.11 * k);
+      n.cone(L.x, L.y, L.z, yaw, -0.02, 6, 0.22, 0.13 * k, 0.12 * k, 0.08 * k);
+      n.flare(L.x, L.y, L.z, 0.26, 0.75 * k, 0.6 * k, 0.36 * k);
+    }
+    for (const s of this.glowSpots) {
+      n.pool(s.x, s.y, s.z, 0, s.r * 2, s.r * 2, 0.17 * k, 0.11 * k, 0.05 * k);
+      if (s.lamp) n.flare(s.x, s.y + 0.39, s.z, 0.13, 0.7 * k, 0.5 * k, 0.26 * k);
     }
   }
 

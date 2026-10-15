@@ -589,7 +589,14 @@ export class GameRenderer {
     if (this.scarsOn) this.atmos.env.scars = this.scars;
     // illumination flares: their light on the ground goes through the night's light pools (nightops.ts)
     this.flareFx = new FlareFx(this.scene, quality, this.camera);
-    if (this.atmos.night) this.atmos.night.opsHook = this.flareFx.nightHook;
+    // (the desert's seafront lamps and the lighthouse beams join the same pools: seaside.ts)
+    if (this.atmos.night) {
+      const ops = this.flareFx.nightHook;
+      this.atmos.night.opsHook = (n, dark, time) => {
+        ops(n, dark);
+        this.terrain.seaside?.nightLights(n, dark, time);
+      };
+    }
     // physical sky dome + clouds (photo mode, intro, low angles, water reflections); low keeps the flat background
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high');
