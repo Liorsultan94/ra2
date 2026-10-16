@@ -200,13 +200,13 @@ def frond_card(rng, kind):
     tube(hp, pts, rad, rcol, 7)
     if coco:
         lo, hi_, step, Lmax = 0.17, 0.985, 0.0105, 0.165
-        base = lin(0x6a8c3c)
+        base = lin(0x86a446)
     elif dry:
         lo, hi_, step, Lmax = 0.27, 0.975, 0.0125, 0.125
         base = lin(0xa0805a)
     else:
         lo, hi_, step, Lmax = 0.25, 0.985, 0.011, 0.158
-        base = lin(0x6a8a5c) if kind == 'date' else lin(0x7f8d5c)
+        base = lin(0x86a272) if kind == 'date' else lin(0x97a46e)
     # spines on the date petiole
     if not coco:
         t = 0.11
@@ -298,7 +298,7 @@ def spray_card(rng, kind):
                 ang2 = math.atan2(dd.y, dd.x) + (rng.random() - 0.5) * 2.2
                 dpin = Vector((math.cos(ang2), math.sin(ang2), 0))
                 Lp = 0.032 + rng.random() * 0.026
-                c = jit(lin(0x6f7d40), rng, 0.16)
+                c = jit(lin(0x7f8c4a), rng, 0.16)
                 if rng.random() < 0.12:
                     c = mixc(c, lin(0xa09a50), 0.6)
                 npair = 9 + int(rng.random() * 5)
@@ -319,7 +319,7 @@ def spray_card(rng, kind):
                 ang += (rng.random() - 0.5) * 0.6
                 p = p + Vector((math.cos(ang), math.sin(ang), 0.012 - k * 0.002)) * (L / 5)
             tube(hp, pts, [0.003 * (1 - k / 7) + 0.0008 for k in range(6)], lin(0x7a6a58), 5)
-            base = jit(lin(0x8a9670), rng, 0.1)
+            base = jit(lin(0x9eaa82), rng, 0.1)
             for k in range(42):
                 f = 0.25 + 0.75 * rng.random()
                 idx = min(4, int(f * 5))
@@ -335,7 +335,7 @@ def spray_card(rng, kind):
                 return
             L = 0.03 + rng.random() * 0.025
             q = p + Vector((math.cos(ang), math.sin(ang), 0.003)) * L
-            tube(hp, [p, q], [r, r * 0.85], jit(lin(0x8e7c66), rng, 0.15), 4)
+            tube(hp, [p, q], [r, r * 0.85], jit(lin(0xa8957a), rng, 0.15), 4)
             dd = (q - p).normalized()
             sd = Vector((-dd.y, dd.x, 0))
             for sg in (-1, 1):
@@ -417,7 +417,7 @@ def bark_card(rng, kind):
     hp = HP()
     if kind == 'bark_date':
         # dark fibrous core, a weave of fibres, and the cut leaf bases in a diamond lattice
-        grid_mesh(hp, W, H, 32, 64, np.zeros((64, 32)), np.tile(np.array(lin(0x3c2c1e))[None, None, :], (64, 32, 1)))
+        grid_mesh(hp, W, H, 32, 64, np.zeros((64, 32)), np.tile(np.array(lin(0x4a3828))[None, None, :], (64, 32, 1)))
         fibres = []
         for i in range(260):
             p = Vector((rng.random() * W, rng.random() * H, 0.006 + rng.random() * 0.02))
@@ -430,7 +430,7 @@ def bark_card(rng, kind):
             for j in range(NR):
                 cx = (k + 0.5) / NC * W + (rng.random() - 0.5) * 0.015
                 cy = (j + 0.5 * (k % 2)) / NR * H + (rng.random() - 0.5) * 0.02
-                stubs.append((cx, cy, jit(lin(0x8a7660), rng, 0.15), rng.random()))
+                stubs.append((cx, cy, jit(lin(0xa28e74), rng, 0.15), rng.random()))
         for ox in (-W, 0, W):
             for oy in (-H, 0, H):
                 for p, d, c in fibres:
@@ -644,7 +644,7 @@ def compose_card(px, frame_px, alb, nrm, ao, cov, tile=False):
         n = nrm * inv[..., None]
         k = ao * inv[..., None]
     k = np.clip(k[..., 0], 0, 1)
-    a = a * (0.55 + 0.45 * k[..., None])
+    a = a * (0.68 + 0.32 * k[..., None])
     n = n * 2 - 1
     n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-6)
     a = dilate(a, c)
@@ -889,7 +889,7 @@ def frond(lp, card, base, dirh, elev, L, droop, segs, center, flex0, fK, leaf=1.
         left = p + side * (hw * math.cos(f)) + up * (hw * math.sin(f))
         right = p - side * (hw * math.cos(f)) + up * (hw * math.sin(f))
         cn = (p - center).normalized() * 0.55 + up * 0.45 + Z * 0.35
-        ao = (0.62 + 0.38 * sst(0.0, 0.55, s)) * aoK
+        ao = (0.72 + 0.28 * sst(0.0, 0.5, s)) * aoK
         fl = flex0 + fK * s ** 1.5 * L
         lf = leaf * (0.7 + 0.3 * s)
         ids = [lp.v(left, cn + side * 0.15, uv_of(card, s, E(s)), fl, lf, ao),
@@ -929,7 +929,7 @@ def date_palm(lp, rng, base, H, lean, crown, nF, nDry, nDates, lod, r0=0.055):
     nseg = max(4, int(H / (0.11 if lod == 0 else 0.3)))
     wob = (rng.random() - 0.5) * 0.04
     pts = [base + Vector((lean[0] * t ** 1.6 + wob * math.sin(t * 5), lean[1] * t ** 1.6, H * t)) for t in (i / nseg for i in range(nseg + 1))]
-    radii = [r0 * (1.28 - 0.28 * sst(0, 0.1, t)) * (1 - 0.1 * t) + 0.012 * sst(0.85, 1, t) for t in (i / nseg for i in range(nseg + 1))]
+    radii = [r0 * 1.12 * (1.28 - 0.28 * sst(0, 0.1, t)) * (1 - 0.1 * t) + 0.012 * sst(0.85, 1, t) for t in (i / nseg for i in range(nseg + 1))]
     top = pts[-1]
     Ht = top.z + 0.001
     fK0 = 0.05 * (Ht / 1.3)

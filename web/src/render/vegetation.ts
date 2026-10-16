@@ -12,6 +12,7 @@ import { biomeLook } from './biome';
 import { Species, windTime, type TreeSpot } from './treekinds';
 import { roadClear } from './ambient/clearance';
 import { inKeepOut, oreKeepOut } from './orefield';
+import { VEG_SCALE, buildVegInstances, dateKind, desertVeg, vegTint, type VegKind } from './desertveg';
 
 /*
  * Trees, bushes, grass and reeds. All plants share one alpha-tested foliage
@@ -344,6 +345,32 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   // view span (world units) beyond which the lighter models / no clutter are used
   const treeLo = quality === 'high' ? 19 : 14.5;
   const grassHide = quality === 'high' ? 24 : quality === 'medium' ? 17 : 13.5;
+  // the desert's palms and acacias come from the Blender vegetation kit when it loaded (desertveg.ts)
+  const kit = m.biome === 'desert' ? desertVeg() : null;
+  const kitLists = new Map<VegKind, Inst[]>();
+  const put = (kind: VegKind, it: Inst) => {
+    let l = kitLists.get(kind);
+    if (!l) kitLists.set(kind, (l = []));
+    l.push(it);
+  };
+  if (kit) {
+    const rest: TreeSpot[] = [];
+    for (const t of trees) {
+      if (t.species !== Species.Palm && t.species !== Species.Acacia && t.species !== Species.Young) {
+        rest.push(t);
+        continue;
+      }
+      const kx = Math.floor(t.x * 7);
+      const ky = Math.floor(t.y * 7);
+      const r1 = hash2(kx, ky, 3);
+      const r2 = hash2(kx, ky, 4);
+      const r3 = hash2(kx, ky, 5);
+      const kind: VegKind = t.species === Species.Palm ? dateKind(hash2(kx, ky, 11)) : t.species === Species.Acacia ? 'acacia' : 'acacia_b';
+      const s = t.s * VEG_SCALE[kind];
+      put(kind, { x: t.x, y: surfaceHeight(m, t.x, t.y) - 0.02, z: t.y, rotY: t.rot, sx: s * (0.92 + r1 * 0.16), sy: s * (0.9 + r2 * 0.2), sz: s * (0.92 + r3 * 0.16), color: vegTint(kind, r1, r2, r3), tiltX: (r1 - 0.5) * 0.05, tiltZ: (r2 - 0.5) * 0.05 });
+    }
+    trees = rest;
+  }
   // trees: species models, materials and instancing live in trees.ts
   out.push(...buildTrees(m, trees, fog, quality, lod, sink?.trees));
 
@@ -364,6 +391,22 @@ export function buildVegetation(m: GameMap, layout: Layout, trees: TreeSpot[], f
   }
   // shrubs and hedgerows: built like the trees (leaf-card crowns, wrap lighting, translucency, wind)
   const tm = treeMaterials(fog, quality);
+  // (the desert's scrub: the kit's shrubs and thorn bushes when it loaded)
+  if (kit)
+    for (const b of bushes.splice(0)) {
+      const kx = Math.floor(b.x * 13);
+      const kz = Math.floor(b.z * 13);
+      const kind: VegKind = hash2(kx, kz, 7) < 0.5 ? 'thorn' : 'shrub';
+      const k = VEG_SCALE[kind];
+      put(kind, { ...b, sx: b.sx * k, sy: b.sy * k, sz: b.sz * k, color: vegTint(kind, hash2(kx, kz, 3), hash2(kx, kz, 4), hash2(kx, kz, 5)), tiltX: (hash2(kx, kz, 6) - 0.5) * 0.12 });
+    }
+  if (kit)
+    for (const [kind, list] of kitLists) {
+      const big = kind !== 'shrub' && kind !== 'thorn';
+      const ci = buildVegInstances(kit, kind, list, fog, quality, lod, m.w, m.h, { castShadow: big ? shadows : shadows && quality === 'high', name: big ? 'trees' : 'plants' });
+      out.push(ci.mesh);
+      (big ? sink?.trees : sink?.bushes)?.push(ci);
+    }
   const shrubSets: [Shrub, Inst[]][] = [
     [biome === 'desert' ? Shrub.Scrub : Shrub.Bush, bushes],
     [Shrub.Hedge, hedges],

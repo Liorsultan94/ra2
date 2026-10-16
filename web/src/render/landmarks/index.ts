@@ -49,6 +49,7 @@ import { groundRange, groundY } from './ground';
 import { landmarkPlan, type Spot } from './plan';
 import { civSound } from './sound';
 import { LM_NIGHT, landmarkMaterial } from './material';
+import { desertVeg, vegInstancedMesh, type DesertVeg, type VegKind } from '../desertveg';
 
 /*
  * The maps' unique set pieces (plan.ts says where): a wind farm, a castle
@@ -134,6 +135,9 @@ export class MapLandmarks {
   private toll = { n: 0, t: 0 };
   private time = 0;
   private animate: boolean;
+  /** The desert vegetation kit (GD3) when it loaded: the palms (grove, old town) are its instances. */
+  private veg: DesertVeg | null = null;
+  private vegSpots = new Map<VegKind, THREE.Matrix4[]>();
 
   constructor(
     private map: GameMap,
@@ -148,8 +152,11 @@ export class MapLandmarks {
     this.animate = quality !== 'low';
     const plan = landmarkPlan(map);
     if (!plan.spots.length && !plan.lanes.length) return;
+    this.veg = map.biome === 'desert' ? desertVeg() : null;
     const k = new Kit();
     for (const s of plan.spots) this.place(k, s);
+    if (this.veg) for (const [kind, list] of this.vegSpots) this.group.add(vegInstancedMesh(this.veg, kind, list, fog, quality, 'landmarks-palms'));
+    this.vegSpots.clear();
     for (const l of plan.lanes) this.lane(k, l.pts, l.width);
     if (!k.count) return;
     const geo = k.build();
@@ -330,7 +337,14 @@ export class MapLandmarks {
       }
       case 'palm': {
         k.at(x, groundY(m, x, y) - 0.03, y, yaw);
-        datePalm(k, s.v, 1.15 + s.v * 0.35);
+        // the Blender date palms when the vegetation kit loaded (desertveg.ts; instanced after the merge)
+        const sc = 1.15 + s.v * 0.35;
+        if (this.veg) {
+          const kind: VegKind = s.v < 0.12 ? 'date_clump' : s.v < 0.55 ? 'date_tall' : s.v < 0.8 ? 'date_lean' : 'date_short';
+          let l = this.vegSpots.get(kind);
+          if (!l) this.vegSpots.set(kind, (l = []));
+          l.push(k.base.clone().multiply(new THREE.Matrix4().makeScale(sc * 0.78, sc * 0.78, sc * 0.78)));
+        } else datePalm(k, s.v, sc);
         break;
       }
       case 'pond': {

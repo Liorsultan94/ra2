@@ -6,6 +6,8 @@ import type { SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import type { HouseHandle } from './scenery';
 import { SinaiBuilder, scaleM, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type Lod, type SinaiKit } from './sinaikit';
+import { buildVegInstances, desertVeg, vegTint, type VegKind } from './desertveg';
+import type { Inst } from './geo';
 
 /*
  * Wadi Al-Rimal's town (desert map) built from the Sinai building kit (sinaikit.ts, GD2): the same houses as
@@ -20,6 +22,7 @@ import { SinaiBuilder, scaleM, sinaiKitMaterial, sinaiPlasterMaterial, type KitO
  * pieces + small clutter) and the kit zoomed out (LOD1: cards + light pieces, no clutter); SceneryLod swaps the
  * two kit meshes on the view span. Each house hands its vertex ranges in all three to envdamage.ts (scorch,
  * cave in, collapse), as the procedural houses did.
+ * The yard trees are the desert vegetation kit's young palms and acacias (desertveg.ts, GD3) when it loaded.
  */
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -70,6 +73,9 @@ interface Chunk {
  */
 export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: { houses: HouseHandle[] }, lod?: SceneryLod): THREE.Object3D[] {
   const chunks = new Map<string, Chunk>();
+  // the yard trees: kit plants (instanced, zoom LOD) when the vegetation kit loaded
+  const veg = lod ? desertVeg() : null;
+  const plants = veg ? new Map<VegKind, Inst[]>() : null;
   for (const st of m.structures) {
     if (!isSinaiKind(st.kind)) continue;
     const cx = st.x + st.w / 2;
@@ -87,7 +93,7 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
     ])
       gy = Math.min(gy, surfaceHeight(m, x, z));
     const from = ch.b.counts();
-    buildHouse(ch.b, st, gy);
+    buildHouse(ch.b, st, gy, plants);
     ch.spans.push({ st, gy, from, to: ch.b.counts() });
   }
   const out: THREE.Object3D[] = [];
@@ -127,12 +133,14 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
         sink.houses.push({ st, cx: st.x + st.w / 2, cz: st.y + st.h / 2, gy: sp.gy, ranges });
       }
   }
+  if (veg && plants && lod)
+    for (const [kind, list] of plants) out.push(buildVegInstances(veg, kind, list, fog, quality, lod, m.w, m.h, { castShadow: shadows, name: 'trees' }).mesh);
   return out;
 }
 
 // ------------------------------------------------------------------ one structure
 
-function buildHouse(B: SinaiBuilder, st: Structure, gy: number) {
+function buildHouse(B: SinaiBuilder, st: Structure, gy: number, plants: Map<VegKind, Inst[]> | null) {
   const cx = st.x + st.w / 2;
   const cz = st.y + st.h / 2;
   const base = new THREE.Matrix4().compose(V(cx, gy, cz), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), (st.rot * Math.PI) / 2), V(1, 1, 1));
@@ -311,6 +319,18 @@ function buildHouse(B: SinaiBuilder, st: Structure, gy: number) {
   };
   const cafeTable = (x: number, z: number, c: THREE.Color) => piece('table', trs(x, 0, z, h(240 + Math.round(x * 10)) * 6), { accent: c });
   const tree = (x: number, z: number, r: number, hgt: number) => {
+    if (plants) {
+      // a young date palm or a small acacia in the yard (about the old tree's size)
+      const p = V(x, 0, z).applyMatrix4(base);
+      const r1 = hash2(Math.floor(p.x * 7), Math.floor(p.z * 7), 3);
+      const r2 = hash2(Math.floor(p.x * 7), Math.floor(p.z * 7), 4);
+      const kind: VegKind = r1 < 0.6 ? 'date_short' : 'acacia_b';
+      const k = (kind === 'date_short' ? 0.52 : 0.62) * (r / 0.16) * (0.9 + r2 * 0.2);
+      let l = plants.get(kind);
+      if (!l) plants.set(kind, (l = []));
+      l.push({ x: p.x, y: gy - 0.01, z: p.z, rotY: r2 * Math.PI * 2, sx: k, sy: k * (0.92 + r1 * 0.16), sz: k, color: vegTint(kind, r1, r2, hash2(Math.floor(p.x * 7), Math.floor(p.z * 7), 5)) });
+      return;
+    }
     sw(trs(x, hgt / 2, z), 0.035, hgt, 0.035, 'wood', {});
     const g = new THREE.IcosahedronGeometry(r, 1);
     B.swatchGeo(g, L(trs(x, hgt + r * 0.6, z).multiply(scaleM(1, 0.85, 1))), 'paint', { accent: C(0.24, 0.36, 0.16) });

@@ -48,7 +48,7 @@ let wK = 0.32;
  * foliage clock (windTime) faster than the scene clock (fogTime) in strong
  * wind (rate = 1.8 * (wind - 0.2)), so the gap's growth rate gives the wind.
  */
-function updateWind(fogTime: number) {
+export function updateWind(fogTime: number) {
   if (fogTime === wLast) return;
   const extra = windTime.value - fogTime;
   if (wLast >= 0) {
@@ -65,7 +65,7 @@ function updateWind(fogTime: number) {
   treeWind.value.set(Math.cos(a), Math.sin(a), wK);
 }
 
-const WIND_VERT = /* glsl */ `
+export const WIND_VERT = /* glsl */ `
 {
   #ifdef USE_INSTANCING
     vec3 wo = instanceMatrix[3].xyz;
@@ -96,8 +96,13 @@ const WIND_VERT = /* glsl */ `
 }
 `;
 
+/** The wind block with extra terms inside its scope (they see tst, gust, tld, wo). */
+function windVert(extra: string) {
+  return extra ? WIND_VERT.replace(/\}\s*$/, `${extra}\n}\n`) : WIND_VERT;
+}
+
 /** Keep alpha-tested leaves from thinning out in the smaller mipmaps (far trees stay dense). */
-const ALPHA_MIP = (px: number) => /* glsl */ `
+export const ALPHA_MIP = (px: number) => /* glsl */ `
 #ifdef USE_MAP
 {
   vec2 tdx = dFdx( vMapUv * ${px.toFixed(1)} );
@@ -123,6 +128,56 @@ void RE_Direct_Foliage( const in IncidentLight directLight, const in vec3 geomet
 #define RE_Direct RE_Direct_Foliage
 `;
 
+/**
+ * The tree material's shader patch (wind, leaf tint, alpha mips, foliage lighting): shared with the desert
+ * vegetation kit (desertveg.ts), which adds its own wind terms (`extraWind`, after the bend).
+ */
+export function treeShader(shader: THREE.WebGLProgramParametersWithUniforms, px: number, extraWind = '') {
+  shader.uniforms.windTime = windTime;
+  shader.uniforms.treeWind = treeWind;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float windTime;\nuniform vec3 treeWind;\nattribute float flex;\nattribute float leaf;\nvarying float vLeaf;')
+    .replace(
+      '#include <color_vertex>',
+      `vColor = vec4( 1.0 );
+      #ifdef USE_COLOR
+        vColor.rgb *= color.rgb;
+      #endif
+      #ifdef USE_INSTANCING_COLOR
+        // the instance colour is the leaf tint (stored at half strength); bark only takes its brightness (charring)
+        float tlum = dot( instanceColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+        vColor.rgb *= mix( vec3( clamp( tlum * 6.5, 0.0, 1.0 ) ), instanceColor.rgb * 2.0, clamp( leaf, 0.0, 1.0 ) );
+      #endif
+      vLeaf = leaf;`,
+    )
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${windVert(extraWind)}`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying float vLeaf;\nfloat fTransl = 0.0;\nfloat fLeafAmt = 0.0;')
+    .replace('#include <map_fragment>', `#include <map_fragment>\n${ALPHA_MIP(px)}`)
+    .replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>\n${FOLIAGE_LIGHT}`)
+    // keep the authored (canopy-shaped) normals on both faces of the cards
+    .replace(
+      '#include <normal_fragment_begin>',
+      `#include <normal_fragment_begin>
+      #ifndef FLAT_SHADED
+        normal = normalize( vNormal );
+      #endif
+      fLeafAmt = clamp( vLeaf, 0.0, 1.0 );
+      // thin outer leaves pass more light than the dark inside of the crown
+      fTransl = fLeafAmt * smoothstep( 0.25, 0.9, dot( vColor.rgb, vec3( 0.33 ) ) );`,
+    );
+}
+
+/** The shadow depth material's patch (the same wind, alpha mips). */
+export function treeDepthShader(shader: THREE.WebGLProgramParametersWithUniforms, px: number, extraWind = '') {
+  shader.uniforms.windTime = windTime;
+  shader.uniforms.treeWind = treeWind;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float windTime;\nuniform vec3 treeWind;\nattribute float flex;\nattribute float leaf;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${windVert(extraWind)}`);
+  shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>\n${ALPHA_MIP(px)}`);
+}
+
 export interface TreeMaterials {
   mat: THREE.MeshStandardMaterial;
   depth: THREE.MeshDepthMaterial;
@@ -146,52 +201,11 @@ export function treeMaterials(fog: FogOfWar, quality: 'low' | 'medium' | 'high')
     metalness: 0,
     alphaToCoverage: quality !== 'low',
   });
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.windTime = windTime;
-    shader.uniforms.treeWind = treeWind;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float windTime;\nuniform vec3 treeWind;\nattribute float flex;\nattribute float leaf;\nvarying float vLeaf;')
-      .replace(
-        '#include <color_vertex>',
-        `vColor = vec4( 1.0 );
-        #ifdef USE_COLOR
-          vColor.rgb *= color.rgb;
-        #endif
-        #ifdef USE_INSTANCING_COLOR
-          // the instance colour is the leaf tint (stored at half strength); bark only takes its brightness (charring)
-          float tlum = dot( instanceColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-          vColor.rgb *= mix( vec3( clamp( tlum * 6.5, 0.0, 1.0 ) ), instanceColor.rgb * 2.0, clamp( leaf, 0.0, 1.0 ) );
-        #endif
-        vLeaf = leaf;`,
-      )
-      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND_VERT}`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vLeaf;\nfloat fTransl = 0.0;\nfloat fLeafAmt = 0.0;')
-      .replace('#include <map_fragment>', `#include <map_fragment>\n${ALPHA_MIP(px)}`)
-      .replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>\n${FOLIAGE_LIGHT}`)
-      // keep the authored (canopy-shaped) normals on both faces of the cards
-      .replace(
-        '#include <normal_fragment_begin>',
-        `#include <normal_fragment_begin>
-        #ifndef FLAT_SHADED
-          normal = normalize( vNormal );
-        #endif
-        fLeafAmt = clamp( vLeaf, 0.0, 1.0 );
-        // thin outer leaves pass more light than the dark inside of the crown
-        fTransl = fLeafAmt * smoothstep( 0.25, 0.9, dot( vColor.rgb, vec3( 0.33 ) ) );`,
-      );
-  };
+  mat.onBeforeCompile = (shader) => treeShader(shader, px);
   fog.apply(mat);
   mat.customProgramCacheKey = () => 'trees-v1';
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: atlas, alphaTest: 0.42, side: THREE.DoubleSide });
-  depth.onBeforeCompile = (shader) => {
-    shader.uniforms.windTime = windTime;
-    shader.uniforms.treeWind = treeWind;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float windTime;\nuniform vec3 treeWind;\nattribute float flex;\nattribute float leaf;')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${WIND_VERT}`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>\n${ALPHA_MIP(px)}`);
-  };
+  depth.onBeforeCompile = (shader) => treeDepthShader(shader, px);
   depth.customProgramCacheKey = () => 'trees-depth-v1';
   const out = { mat, depth };
   matCache.set(fog, out);
