@@ -119,12 +119,12 @@ export class GroundFx {
     for (let i = 0; i < n; i++) {
       const side = i % 2 ? 1 : -1;
       const big = (0.7 + 0.45 * sp) * weight * k;
-      this.emit(rx + px * gauge * side + (rnd() - 0.5) * 0.1, g + 0.08, rz + pz * gauge * side + (rnd() - 0.5) * 0.1, -fx * sp * 0.45 + px * side * 0.38 + (rnd() - 0.5) * 0.3, 0.18 + rnd() * 0.3 * (0.5 + sp), -fz * sp * 0.45 + pz * side * 0.38 + (rnd() - 0.5) * 0.3, 3 + rnd() * 2.2 * big, 0.24 * big, (1.25 + rnd() * 0.7) * big, c0, c1, 0.26 + 0.07 * Math.min(1, sp), 1.25, -0.025, 0.9);
+      this.emit(rx + px * gauge * side + (rnd() - 0.5) * 0.1, g + 0.08, rz + pz * gauge * side + (rnd() - 0.5) * 0.1, -fx * sp * 0.45 + px * side * 0.38 + (rnd() - 0.5) * 0.3, 0.18 + rnd() * 0.3 * (0.5 + sp), -fz * sp * 0.45 + pz * side * 0.38 + (rnd() - 0.5) * 0.3, 2.6 + rnd() * 1.6 * big, 0.22 * big, (1.1 + rnd() * 0.5) * big, c0, c1, 0.26 + 0.07 * Math.min(1, sp), 1.25, -0.025, 0.9);
     }
     // at speed, a broad thin wake that hangs and drifts behind
     if (sp > 0.35 && rnd() < 0.55 * rate && this.take(1)) {
       const big = (0.9 + 0.5 * sp) * weight * k;
-      this.emit(rx - fx * 0.2, g + 0.14, rz - fz * 0.2, -fx * sp * 0.3 + (rnd() - 0.5) * 0.2, 0.12 + rnd() * 0.12, -fz * sp * 0.3 + (rnd() - 0.5) * 0.2, 4.5 + rnd() * 2.5, 0.45 * big, (2.1 + rnd() * 0.8) * big, c0, c1, 0.13, 0.9, -0.012, 1.1);
+      this.emit(rx - fx * 0.2, g + 0.14, rz - fz * 0.2, -fx * sp * 0.3 + (rnd() - 0.5) * 0.2, 0.12 + rnd() * 0.12, -fz * sp * 0.3 + (rnd() - 0.5) * 0.2, 3.8 + rnd() * 1.8, 0.4 * big, (1.8 + rnd() * 0.6) * big, c0, c1, 0.13, 0.9, -0.012, 1.1);
     }
     // a few sand grains flicked up off the tracks (dark specks that fall back)
     if (sp > 0.25 && this.take(1)) {
