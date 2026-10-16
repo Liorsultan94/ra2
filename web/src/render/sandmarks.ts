@@ -95,7 +95,8 @@ const FRAG = /* glsl */ `
   // relief height (tiles, negative = pressed in) at along a / across c (tiles from the centre line);
   // det = how much of the tread pattern is left, k = depth
   float hTrack( float a, float c, float wid, float det, float k, float tyre ) {
-    float hw = wid * 0.5;
+    // (a tyre's groove is narrower than a track's)
+    float hw = wid * ( tyre > 0.5 ? 0.36 : 0.5 );
     float x = abs( c ) / hw;
     // groove: flat bottom, soft walls; berms of pushed-up sand either side
     float groove = 1.0 - smoothstep( 0.55, 0.95, x );
@@ -146,6 +147,7 @@ const FRAG = /* glsl */ `
     const float D = 0.004;
     float h0, ha, hc, w;
     float dark;
+    float bermK = 0.0;
     if ( kind < 1.5 ) {
       // track piece: world phase along the heading so consecutive pieces line up
       float al = dot( vW, vT.xz );
@@ -158,26 +160,35 @@ const FRAG = /* glsl */ `
       float o = min( ${OVL.toFixed(3)}, vSize.x * 0.5 );
       w = clamp( s / o, 0.0, 1.0 ) * clamp( ( vSize.x - s ) / o, 0.0, 1.0 );
       w *= 1.0 - smoothstep( 0.4, 0.5, abs( vUv.y - 0.5 ) );
-      dark = smoothstep( 0.95, 0.5, abs( c ) / ( wid * 0.5 ) );
+      float xg = abs( c ) / ( wid * ( kind > 0.5 ? 0.36 : 0.5 ) );
+      dark = smoothstep( 0.95, 0.55, xg );
+      // loose sand pushed up on the edges
+      bermK = gs( xg - 1.15, 0.3 ) * k;
     } else {
       vec2 p = vec2( a, c );
       h0 = hBoot( p, det, k );
       ha = hBoot( p + vec2( D, 0.0 ), det, k );
       hc = hBoot( p + vec2( 0.0, D ), det, k );
       w = 1.0 - smoothstep( 0.42, 0.5, max( abs( vUv.x - 0.5 ), abs( vUv.y - 0.5 ) ) );
-      dark = clamp( -h0 / max( k, 1e-4 ), 0.0, 1.0 );
+      // (boot prints stay subtler than the tracks)
+      dark = clamp( -h0 / max( k, 1e-4 ), 0.0, 1.0 ) * 0.55;
     }
     // relief depth in tiles per unit of h: a tank groove ~1.3 cm of a 5.5 m tile... drawn deeper for the RTS view
-    const float DEPTH = 0.014;
+    const float DEPTH = 0.018;
     vec3 n = normalize( vN - vT * ( ( ha - h0 ) / D ) * DEPTH - vB * ( ( hc - h0 ) / D ) * DEPTH );
-    float lit = ( dot( n, uSun ) - dot( vN, uSun ) ) * 2.8;
-    // gentle highlights, firmer shade; the moon / night light keeps only a hint of the relief
-    lit = clamp( lit, -0.5, 0.22 ) * ( 0.25 + 0.75 * uSunK );
-    // fresh churned sand: darker until it dries; the pressed bed stays a shade darker while it lasts
-    float shade = ( 1.0 + lit ) * ( 1.0 - 0.14 * dark * ( 1.0 - dry ) - 0.06 * dark );
-    shade = mix( 1.0, shade, keep * w * vis );
-    if ( abs( shade - 1.0 ) < 0.003 ) discard;
-    gl_FragColor = vec4( vec3( 0.5 * shade ), 1.0 );
+    float lit = ( dot( n, uSun ) - dot( vN, uSun ) ) * 3.4;
+    // gentle highlights, firmer shade (the wall facing away from the sun); the moon keeps only a hint of the relief
+    lit = clamp( lit, -0.55, 0.25 ) * ( 0.25 + 0.75 * uSunK );
+    // freshly turned sand in the groove: darker and a touch cooler until it dries; the pressed bed stays a
+    // shade darker while it lasts; the loose berms a little paler
+    float fresh = 1.0 - dry;
+    // (and the groove's floor sits in its own shade: occlusion by its walls, as deep as the print)
+    float ao = clamp( -h0 / max( k, 1e-4 ), 0.0, 1.0 ) * keep;
+    vec3 shade = vec3( ( 1.0 + lit ) * ( 1.0 - 0.26 * dark * fresh - 0.14 * dark ) * ( 1.0 - 0.1 * ao ) * ( 1.0 + 0.07 * bermK * det ) );
+    shade *= mix( vec3( 1.0 ), vec3( 0.95, 0.975, 1.02 ), dark * ( 0.4 + 0.6 * fresh ) );
+    shade = mix( vec3( 1.0 ), max( shade, vec3( 0.42 ) ), keep * w * vis );
+    if ( abs( shade.g - 1.0 ) < 0.003 ) discard;
+    gl_FragColor = vec4( 0.5 * shade, 1.0 );
   }
 `;
 

@@ -494,7 +494,7 @@ export class GroundMarks {
     if (this.sand && key >= 0 && WX.wxSnow.value <= 0.3 && this.soft(x, z)) {
       // (the town's packed earth and the tracks take shallower prints than the loose sand)
       const packed = this.tileAt(x, z) === Tile.Dirt ? 0.6 : 1;
-      this.sand.track(key, x, z, angle, width * 2, wheeled, Math.max(0.8, Math.min(1.5, width / 0.11)) * packed);
+      this.sand.track(key, x, z, angle, width * 2.6, wheeled, Math.max(0.8, Math.min(1.5, width / 0.11)) * packed);
       return;
     }
     if (WX.wxSnow.value > 0.3) {
