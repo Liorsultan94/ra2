@@ -233,9 +233,13 @@ export function vegGeometry(kit: DesertVeg, kind: VegKind, lod: 0 | 1 | 2): THRE
   return kit.geo.get(name) ?? kit.geo.get(kind + '_l1')!;
 }
 
-/** View spans (world units) of the level switches: LOD1 beyond `l1`, the impostors beyond `far`. */
+/**
+ * View spans (world units) of the level switches: LOD1 beyond `l1`, the impostors beyond `far`. The phone (medium)
+ * draws LOD1 from its play zoom out (a third of the triangles, still far richer than the old procedural palms) and
+ * LOD0 once zoomed in.
+ */
 export function vegSpans(quality: 'low' | 'medium' | 'high') {
-  return quality === 'high' ? { l1: 19, far: 30 } : quality === 'medium' ? { l1: 14.5, far: 24 } : { l1: 0, far: 19 };
+  return quality === 'high' ? { l1: 19, far: 30 } : quality === 'medium' ? { l1: 8, far: 24 } : { l1: 0, far: 19 };
 }
 
 /** Per draw (onBeforeRender): the wind; on medium no plant shadows from the far zoom-out (as the trees). */
@@ -282,8 +286,8 @@ export const VEG_SCALE: Record<VegKind, number> = {
   coco: 0.9,
   acacia: 0.95,
   acacia_b: 0.95,
-  shrub: 1,
-  thorn: 1,
+  shrub: 1.3,
+  thorn: 1.25,
 };
 
 /** A date palm variant for a map tree (deterministic per spot): mostly tall, then leaning, short, now and then a clump. */

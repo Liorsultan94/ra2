@@ -1193,7 +1193,7 @@ def date_variant(name, lod):
     """(trunk list) per variant: each trunk (base xy, H, lean xy, crown, fronds, dry, dates)."""
     rng = np.random.default_rng({'date_tall': 101, 'date_short': 102, 'date_lean': 103, 'date_clump': 104}[name])
     lp = LP()
-    q = 1.0 if lod == 0 else 0.55
+    q = 1.0 if lod == 0 else 0.65
     if name == 'date_tall':
         trunks = [((0, 0), 1.42, (0.05, 0.02), 1.0, 30, 7, 4)]
     elif name == 'date_short':
