@@ -51,6 +51,7 @@ import type { TiltShiftPass } from './tiltshift';
 import { AirShadows, bumpVehicle, poseGroundVehicle, poseInfantry } from './unitpose';
 import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
+import { installShadowFilter } from './shadowfilter';
 import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
@@ -399,6 +400,8 @@ export class GameRenderer {
     const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
+    // sun shadow filtering: world-anchored PCF rotation (no crawl while panning), 12 taps on high (shadowfilter.ts)
+    if (!/[?&]sfilt=0\b/.test(location.search)) installShadowFilter(quality);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
     // production: no per-program info-log queries on first use (each one is a synchronous GPU round trip)
     this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
@@ -746,6 +749,8 @@ export class GameRenderer {
     const a = this.atmos;
     g.daylight = a.daylight;
     g.sunY = this.sunDir.y;
+    // the desert's own day looks: crisp noon, warm golden hour, cool blue hour (post/grade.ts)
+    g.desert = this.world.map.biome === 'desert' ? 1 : 0;
     const c = this.sun.color;
     g.warmth = (c.r - c.b) / Math.max(1e-3, c.r);
     const wx = a.wx;
@@ -2597,6 +2602,8 @@ export class GameRenderer {
     // cloud shadows drifting with the wind, god-ray shafts through the gaps (cloudshadow.ts)
     updateCloudShadows(dt, this.atmos, this.fog.uniforms.cloudAmount.value, this.sunDir, this.fog.uniforms.fogTarget.value.y, this.world.map, this.quality);
     this.scheduleShadow(dt);
+    // the desert's baked ground AO, once, from the third frame (the scenery's LOD has seen the view by then)
+    if (this.groundAOFrames < 3 && ++this.groundAOFrames === 3 && this.terrain.bakeGroundAO(this.renderer)) this.shadowCache?.invalidate();
     this.updateReadability(dt);
     const vh = this.viewHook;
     vh?.before(dt);
@@ -2630,6 +2637,7 @@ export class GameRenderer {
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
   }
 
+  private groundAOFrames = 0;
   private onContextLost: (e: Event) => void;
   private onContextRestored: () => void;
   private lightList: THREE.Light[] = [];

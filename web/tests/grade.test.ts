@@ -100,3 +100,42 @@ describe('grade LUT survives a lost GPU context (the black screen)', () => {
     expect(g.bakes).toBe(n + 1);
   });
 });
+
+describe('post grade: the desert looks (GD5)', () => {
+  const sum = (w: Readonly<Record<string, number>>) => Object.values(w).reduce((a, b) => a + b, 0);
+  it('crisp noon and afternoon, warm golden hour, cool blue hour, the shared night', () => {
+    const g = new GradeLut();
+    g.blend(base({ sunY: 0.85, warmth: 0.28, desert: 1 }));
+    expect(g.weights().dNoon).toBeGreaterThan(0.95);
+    expect(g.weights().noon).toBe(0);
+    g.blend(base({ desert: 1 }));
+    expect(g.weights().dDay).toBeGreaterThan(0.95);
+    // (higher contrast than the shared day look)
+    const crisp = g.blend(base({ desert: 1 }))[13];
+    expect(crisp).toBeGreaterThan(g.blend(base())[13]);
+    g.blend(base({ sunY: 0.37, warmth: 0.9, daylight: 0.85, desert: 1 }));
+    expect(g.weights().dGolden).toBeGreaterThan(0.7);
+    expect(g.temperature).toBeGreaterThan(0.04);
+    // dusk .. twilight (19:30): the blue hour
+    g.blend(base({ sunY: 0.15, warmth: 0.8, daylight: 0.46, desert: 1 }));
+    expect(g.weights().dBlue).toBeGreaterThan(0.5);
+    expect(g.temperature).toBeLessThan(-0.04);
+    // the night look is untouched (gameplay darkness)
+    g.blend(base({ daylight: 0.12, sunY: 0.5, warmth: -0.5, desert: 1 }));
+    expect(g.weights().night).toBeGreaterThan(0.95);
+    // (daylight, key light elevation) along the live day: the weights stay a partition
+    for (const [d, y] of [[1, 0.85], [1, 0.62], [0.85, 0.37], [0.65, 0.22], [0.6, 0.16], [0.46, 0.14], [0.28, 0.12], [0.12, 0.5], [0.6, 0.21], [0.95, 0.5]]) {
+      g.blend(base({ daylight: d, sunY: y, desert: 1 }));
+      expect(sum(g.weights())).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('other maps keep the shared looks', () => {
+    const g = new GradeLut();
+    for (const o of [{}, { sunY: 0.85, warmth: 0.28 }, { sunY: 0.15, warmth: 0.8, daylight: 0.46 }]) {
+      g.blend(base(o));
+      const w = g.weights();
+      expect(w.dNoon + w.dDay + w.dGolden + w.dBlue).toBe(0);
+    }
+  });
+});

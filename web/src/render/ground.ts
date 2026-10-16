@@ -9,6 +9,7 @@ import { groundDetailTexture } from './terraintex';
 import { PhotoGround, photoTier } from './photoground';
 import { WX } from './wxuniforms';
 import { strataLinear, strataMean } from './strata';
+import { GroundAO } from './groundao';
 
 /*
  * Ground: a height-blended splat material. Low resolution control maps
@@ -167,6 +168,8 @@ export class Ground {
   shared!: Record<string, { value: unknown }>;
   /** The map's biome look (palette, blades, snow; render/biome.ts). */
   readonly look: BiomeLook;
+  /** Baked ground AO (the desert, every quality; groundao.ts): Terrain.bakeGroundAO fills it on the first frames. */
+  readonly ao: GroundAO | null;
 
   constructor(
     private map: GameMap,
@@ -192,6 +195,7 @@ export class Ground {
         ? // colour factors per slot (a layer shared by two slots takes the first one's: snow before the winter ice)
           new PhotoGround(m.biome, tier, { grass: this.look.grass.mid, dirt: g.dirt, rock: g.rock, snow: g.snow, sand: g.sand, mud: g.mud, forest: g.forest, gravel: g.gravel, soil: g.soil, asphalt: g.asphalt, paving: g.paving }, quality === 'high' ? 8 : 2, this.look.photoSat, this.look.photoHue)
         : null;
+    this.ao = m.biome === 'desert' ? new GroundAO(m.w, m.h, quality === 'high' ? 6 : quality === 'medium' ? 5 : 4) : null;
     this.pending = { trees, fog, quality };
     if (!deferred) for (const _ of this.steps()) void _;
   }
@@ -250,6 +254,7 @@ export class Ground {
       cCrop: { value: col(this.look.ground.crop) },
       cWheat: { value: col(this.look.ground.wheat) },
       cHay: { value: col(this.look.ground.hay) },
+      ...(this.ao ? { gAOTex: { value: this.ao.texture } } : {}),
       ...(this.photo ? { phA: this.photo.albedo, phN: this.photo.normal, phP: this.photo.params, phM: this.photo.means, phT: this.photo.tints } : {}),
     };
     this.shared = { ...uniforms, bladeTex: { value: tex(this.blades) } };
@@ -280,6 +285,7 @@ export class Ground {
     // biome branches of the splat shader (0 = the original temperate look, untouched)
     const bc = this.look.code;
     mat.defines.BIOME = bc;
+    if (this.ao) mat.defines.GROUND_AO = 1;
     mat.defines.FIELD_STEP = bc === 3 ? '30.0' : '60.0';
     mat.defines.TERR_DIRT_RELIEF = bc === 3 ? '0.0' : bc === 1 ? '0.06' : '0.1';
     // the winter ground paints its own snow (deeper, drifted, kept off roads and ruts)
@@ -1013,6 +1019,9 @@ uniform sampler2D detailTex;
 uniform sampler2D grassTex;
 uniform sampler2D ctlTex;
 uniform vec2 terrMapSize;
+#ifdef GROUND_AO
+uniform sampler2D gAOTex;
+#endif
 uniform vec3 cDirt, cRock, cSand, cMud, cSoil, cCrop, cWheat, cHay;
 float terrH;
 float terrRough;
@@ -1898,6 +1907,18 @@ const TERRAIN_AO = /* glsl */ `
 #if PHOTO
   reflectedLight.indirectDiffuse *= terrAO;
   reflectedLight.indirectSpecular *= terrAO;
+#endif
+#ifdef GROUND_AO
+  {
+    // baked ground AO (groundao.ts): sky visibility on the indirect light (folds, canyon floors, the foot of
+    // cliffs, rocks and buildings), a soft contact darkening on the direct light too
+    vec2 gao = texture2D(gAOTex, vTerrW.xz / terrMapSize).rg;
+    float gk = gao.r * gao.r * (3.0 - 2.0 * gao.r);
+    gk = mix(1.0, mix(gao.r, gk, 0.5), 0.85);
+    reflectedLight.indirectDiffuse *= gk;
+    reflectedLight.indirectSpecular *= gk;
+    reflectedLight.directDiffuse *= mix(1.0, gao.g, 0.45);
+  }
 #endif
 #include <aomap_fragment>
   if (wxPud > 0.01) {
