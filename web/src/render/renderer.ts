@@ -51,6 +51,7 @@ import type { TiltShiftPass } from './tiltshift';
 import { AirShadows, bumpVehicle, poseGroundVehicle, poseInfantry } from './unitpose';
 import { AutoQualityMonitor } from './autoquality';
 import { CONTACT_LAYER, ContactShadows } from './contactshadow';
+import { installShadowFilter } from './shadowfilter';
 import { CascadeSun } from './ultra/cascades';
 import type { TemporalPass } from './ultra/temporal';
 import { PerfHud, perfPrefs } from './perf/hud';
@@ -399,6 +400,8 @@ export class GameRenderer {
     const coarse = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const dpr = window.devicePixelRatio || 1;
     // low renders straight to the (multisampled) canvas; medium/high go through the post chain
+    // sun shadow filtering: world-anchored PCF rotation (no crawl while panning), 12 taps on high (shadowfilter.ts)
+    if (!/[?&]sfilt=0\b/.test(location.search)) installShadowFilter(quality);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality === 'low', powerPreference: 'high-performance' });
     // production: no per-program info-log queries on first use (each one is a synchronous GPU round trip)
     this.renderer.debug.checkShaderErrors = !!import.meta.env?.DEV;
