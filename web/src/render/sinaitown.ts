@@ -16,7 +16,7 @@ import { SinaiBuilder, scaleM, sinaiKitMaterial, sinaiPlasterMaterial, type KitO
  * coping on the parapets; the mosque gets its ribbed dome on a windowed drum, a corbelled minaret with a
  * balustrade and a crescent, lattice windows and stepped merlons.
  *
- * Merged per 32-tile chunk into three meshes: the walls (plaster), the kit at play zoom (LOD0: cards + full
+ * Merged per 48-tile chunk into three meshes: the walls (plaster), the kit at play zoom (LOD0: cards + full
  * pieces + small clutter) and the kit zoomed out (LOD1: cards + light pieces, no clutter); SceneryLod swaps the
  * two kit meshes on the view span. Each house hands its vertex ranges in all three to envdamage.ts (scorch,
  * cave in, collapse), as the procedural houses did.
@@ -35,6 +35,11 @@ const ACCENTS = [C(0.18, 0.4, 0.66), C(0.16, 0.56, 0.56), C(0.24, 0.46, 0.3), C(
 const WHITE = C(1, 1, 1);
 /** The baked plaster (mean ~0.78 linear) is lighter than the old canvas plaster (0.64): scale the wall colours to keep the town's brightness. */
 const WALL_LIFT = 0.92;
+
+/** Chunk size (tiles) of the merged town meshes: the quarters on each side fall into a few chunks. */
+const CHUNK = 48;
+/** Below high quality the play-zoom mesh takes these pieces' LOD1 (railings: most of the kit's triangles). */
+const LITE = new Set(['rail']);
 
 export function isSinaiKind(k: StructureKind) {
   return k === StructureKind.House || k === StructureKind.Cottage || k === StructureKind.MudHouse || k === StructureKind.Courtyard;
@@ -69,9 +74,9 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
     if (!isSinaiKind(st.kind)) continue;
     const cx = st.x + st.w / 2;
     const cz = st.y + st.h / 2;
-    const key = `${Math.floor(cx / 32)},${Math.floor(cz / 32)}`;
+    const key = `${Math.floor(cx / CHUNK)},${Math.floor(cz / CHUNK)}`;
     let ch = chunks.get(key);
-    if (!ch) chunks.set(key, (ch = { b: new SinaiBuilder(kit), spans: [] }));
+    if (!ch) chunks.set(key, (ch = { b: new SinaiBuilder(kit, quality === 'high' ? undefined : LITE), spans: [] }));
     let gy = 99;
     for (const [x, z] of [
       [st.x, st.y],
@@ -97,7 +102,8 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
     const mk = (g: THREE.BufferGeometry | null, mat: THREE.Material, name: string) => {
       if (!g) return null;
       const mesh = new THREE.Mesh(g, mat);
-      mesh.castShadow = shadows;
+      // phone / medium: the walls cast the shadows, the kit's small parts only receive (draw calls, triangles)
+      mesh.castShadow = shadows && (quality === 'high' || mat === plMat);
       mesh.receiveShadow = true;
       mesh.name = name;
       mesh.userData.perfCat = 'scenery';

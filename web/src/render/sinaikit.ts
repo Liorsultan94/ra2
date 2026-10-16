@@ -427,7 +427,11 @@ export class SinaiBuilder {
   readonly pl: PlasterGeo;
   readonly k0 = new KitGeo();
   readonly k1 = new KitGeo();
-  constructor(readonly kit: SinaiKit) {
+  /** lite: pieces whose LOD1 stands in for their LOD0 too (phone / medium budget). */
+  constructor(
+    readonly kit: SinaiKit,
+    private lite?: Set<string>,
+  ) {
     this.pl = new PlasterGeo(1 / kit.man.plasterTile);
   }
 
@@ -461,8 +465,8 @@ export class SinaiBuilder {
 
   /** A 3D piece: its LOD0 into the close mesh, its LOD1 (when it has one) into the far mesh. */
   piece(name: string, m: THREE.Matrix4, o: KitOpts = {}, lod: Lod = 'both') {
-    const g0 = this.kit.geo.get(name);
     const g1 = this.kit.geo.get(name + '_l1');
+    const g0 = (this.lite?.has(name) && g1) || this.kit.geo.get(name);
     if (g0 && lod !== 1) this.k0.add(g0, m, o);
     if (g1 && lod !== 0) this.k1.add(g1, m, o);
   }
