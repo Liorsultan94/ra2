@@ -353,7 +353,7 @@ export class CulledInstances {
  * `Terrain` feeds the camera in, so the renderer needs no changes.
  */
 export class SceneryLod {
-  private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number; showSpan: number }[] = [];
+  private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number; showSpan: number; far?: { geo: THREE.BufferGeometry; span: number } }[] = [];
   private culled: CulledInstances[] = [];
   private versions = 0;
   private state = -1;
@@ -366,15 +366,15 @@ export class SceneryLod {
    * world units and are hidden beyond `hideSpan` (and up to `showSpan`: a
    * far-only LOD mesh).
    */
-  add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity, showSpan = 0) {
-    this.entries.push({ meshes, hi, lo, loSpan, hideSpan, showSpan });
+  add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity, showSpan = 0, far?: { geo: THREE.BufferGeometry; span: number }) {
+    this.entries.push({ meshes, hi, lo, loSpan, hideSpan, showSpan, far });
     this.state = -1;
   }
 
-  /** Map-wide instanced scatter, culled to the view by `cull()`. */
-  addCulled(ci: CulledInstances, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity) {
+  /** Map-wide instanced scatter, culled to the view by `cull()` (`far`: a third, lightest level beyond its span). */
+  addCulled(ci: CulledInstances, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity, far?: { geo: THREE.BufferGeometry; span: number }) {
     this.culled.push(ci);
-    this.add([ci.mesh], ci.mesh.geometry, lo, loSpan, hideSpan);
+    this.add([ci.mesh], ci.mesh.geometry, lo, loSpan, hideSpan, 0, far);
     this.camKey.fill(-0x7fffffff);
   }
 
@@ -385,7 +385,7 @@ export class SceneryLod {
     this.last = span;
     this.state = 1;
     for (const e of this.entries) {
-      const geo = e.lo && span > e.loSpan ? e.lo : e.hi;
+      const geo = e.far && span > e.far.span ? e.far.geo : e.lo && span > e.loSpan ? e.lo : e.hi;
       const vis = span <= e.hideSpan && span > e.showSpan;
       for (const m of e.meshes) {
         if (m.geometry !== geo) m.geometry = geo;

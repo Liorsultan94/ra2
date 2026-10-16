@@ -4,6 +4,7 @@ import { type GameMap, WATER_LEVEL, groundHeight as groundHeightAt } from '../si
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { treeGeometry, treeMaterials, treeTint } from './trees';
+import { desertVeg, vegGeometry, vegMaterials, vegTint } from './desertveg';
 import { Species } from './treekinds';
 import { grassRGB } from './grasstex';
 import { biomeLook, hexRGB, type BiomeLook } from './biome';
@@ -763,8 +764,10 @@ export class Outskirts {
     const bk = this.look.code;
     const spA = bk === 1 ? Species.Acacia : bk === 3 ? Species.Young : Species.Spruce;
     const spB = bk === 1 ? Species.Palm : bk === 2 ? Species.Birch : Species.Oak;
-    const pineGeo = treeGeometry(spA, true);
-    const leafyGeo = treeGeometry(spB, true);
+    // the desert's acacias: the Blender vegetation kit's (LOD1: big and young umbrella thorns) when it loaded
+    const veg = bk === 1 ? desertVeg() : null;
+    const pineGeo = veg ? vegGeometry(veg, 'acacia', 1) : treeGeometry(spA, true);
+    const leafyGeo = veg ? vegGeometry(veg, 'acacia_b', 1) : treeGeometry(spB, true);
     const pines: THREE.Matrix4[] = [];
     const leafy: THREE.Matrix4[] = [];
     const pc: THREE.Color[] = [];
@@ -803,8 +806,11 @@ export class Outskirts {
         q.setFromAxisAngle(up, hash2(k, 6, 5) * 6.28);
         const m = new THREE.Matrix4().compose(new THREE.Vector3(ox, hy - 0.05, oy), q, new THREE.Vector3(s, s * (0.9 + hash2(k, 7, 5) * 0.35), s));
         // the map's leaf tints, a little deeper (haze lifts them with distance)
-        const pine = bk === 1 || hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5) - riv * 0.3;
-        const c = treeTint(pine ? spA : spB, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
+        const pine = veg ? hash2(k, 10, 5) < 0.65 : bk === 1 || hash2(k, 10, 5) < 0.45 + (fbm(ox * 0.02, oy * 0.02, 66, 2) - 0.5) - riv * 0.3;
+        const c = veg
+          ? vegTint(pine ? 'acacia' : 'acacia_b', hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.9)
+          : treeTint(pine ? spA : spB, hash2(k, 8, 5), hash2(k, 9, 5), hash2(k, 11, 5)).multiplyScalar(0.85);
+        if (veg) m.scale(new THREE.Vector3(0.95, 0.95, 0.95));
         if (pine) {
           pines.push(m);
           pc.push(c);
@@ -815,10 +821,10 @@ export class Outskirts {
         if (pines.length + leafy.length >= budget) break;
       }
     }
-    const tm = treeMaterials(fog, quality);
+    const tm = veg ? vegMaterials(fog, veg, quality) : treeMaterials(fog, quality);
     const depth = tm.depth;
     // the battlefield's tree material with the horizon's aerial perspective instead of the dark surround
-    const mat = hzClone(tm.mat, 'osk-trees');
+    const mat = hzClone(tm.mat, veg ? 'osk-veg' : 'osk-trees');
     // one instanced mesh per type and sector so off-screen sectors are frustum culled
     const G = 5;
     const cell = (Math.max(w, h) + MARGIN * 2) / G;

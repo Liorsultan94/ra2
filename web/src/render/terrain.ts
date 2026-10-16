@@ -18,6 +18,7 @@ import { Seaside } from './seaside';
 import { buildCanyons } from './canyon';
 import { MinimapBake } from './minimap';
 import { loadSinaiKit } from './sinaikit';
+import { loadDesertVeg } from './desertveg';
 import type { Slicer } from './slice';
 
 /*
@@ -82,6 +83,8 @@ export class Terrain {
     // the desert town and resort are built from the Blender building kit (sinaikit.ts): fetch it while the ground
     // paints, wait for it before the water (the resort) and the scenery (the town); without it they stay procedural
     const kit = map.biome === 'desert' ? loadSinaiKit(quality) : null;
+    // and the Blender desert vegetation (desertveg.ts: palms, acacias, shrubs), for the plants and the resort
+    const vegKit = map.biome === 'desert' ? loadDesertVeg(quality) : null;
     this.layout = buildLayout(map);
     yield;
     const trees = treeSpots(map, quality);
@@ -118,6 +121,7 @@ export class Terrain {
     skirt.name = 'skirt';
     this.group.add(skirt);
     if (kit) yield kit;
+    if (vegKit) yield vegKit;
     this.buildWater(quality);
     yield;
     // names double as draw call breakdown categories (src/render/perf/probe.ts)

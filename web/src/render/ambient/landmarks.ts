@@ -7,6 +7,7 @@ import { surfaceHeight } from '../ground';
 import { adAtlas, LANGS } from './ads';
 import type { RoadNet } from './roadnet';
 import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
+import { desertVeg, vegInstancedMesh } from '../desertveg';
 
 /*
  * Roadside life around the traffic network:
@@ -382,7 +383,13 @@ export class Landmarks {
       add(flagCloth(), flagItems, 'lm-flag', false, this.flagMaterial(fog, nations[0] ?? 'usa'));
     }
     add(flowers(), lists.flowers, 'lm-flowers', false);
-    add(palm(), lists.palms, 'lm-palms', shadow);
+    // desert: the Blender date palms when the vegetation kit loaded (desertveg.ts)
+    const veg = m.biome === 'desert' ? desertVeg() : null;
+    if (veg && lists.palms.length) {
+      const q = new THREE.Quaternion();
+      const mats = lists.palms.map((it) => new THREE.Matrix4().compose(new THREE.Vector3(it.x, it.h - 0.02, it.y), q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), it.yaw), new THREE.Vector3(1, 1, 1).multiplyScalar(it.s * 0.52)));
+      this.group.add(vegInstancedMesh(veg, 'date_tall', mats, fog, quality, 'lm-palms', shadow));
+    } else add(palm(), lists.palms, 'lm-palms', shadow);
     add(spruce(), lists.spruce, 'lm-spruce', shadow);
     this.spruces = lists.spruce;
 
