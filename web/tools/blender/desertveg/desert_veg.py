@@ -298,7 +298,7 @@ def spray_card(rng, kind):
                 ang2 = math.atan2(dd.y, dd.x) + (rng.random() - 0.5) * 2.2
                 dpin = Vector((math.cos(ang2), math.sin(ang2), 0))
                 Lp = 0.032 + rng.random() * 0.026
-                c = jit(lin(0x7f8c4a), rng, 0.16)
+                c = jit(lin(0x77824c), rng, 0.16)
                 if rng.random() < 0.12:
                     c = mixc(c, lin(0xa09a50), 0.6)
                 npair = 9 + int(rng.random() * 5)
@@ -1053,33 +1053,33 @@ def acacia(lp, rng, H, R, lod, young=False):
     def nrm(p):
         return (p - center).normalized() + Z * 0.6
 
-    # flat crown: clumps of horizontal sprays at the branch tips, a ring of tilted sprays round the rim, a few under
-    per = 3 if lod == 0 else 1
-    for tp in tips:
-        for k in range(per):
-            ang = rng.random() * math.tau
-            c = tp + Vector((math.cos(ang), math.sin(ang), 0)) * (0.05 + rng.random() * 0.08) + Z * (0.045 + rng.random() * 0.02)
-            sz = R * (0.62 + rng.random() * 0.22) * (1.15 if lod else 1.0)
-            rr = rng.random() * math.tau
-            right = Vector((math.cos(rr), math.sin(rr), (rng.random() - 0.5) * 0.15)).normalized()
-            up = Z.cross(right).normalized()
-            card_quad(lp, 'acacia' if (k + int(rng.random() * 2)) % 2 == 0 else 'acacia2', c, right, up, sz, sz, nrm, flex(c) + 0.012, 1.0, 1.0 if k else 0.92)
-    nrim = (12 if not young else 8) if lod == 0 else 6
+    # the flat crown: a thin layer of horizontal sprays spread evenly over the disc (golden spiral), the rim a
+    # little lower, a ring of slightly tilted sprays round the edge and a few darker ones under the layer
+    n = (24 if not young else 12) if lod == 0 else (10 if not young else 6)
+    for i in range(n):
+        f = math.sqrt((i + 0.5) / n)
+        a = i * GOLD + rng.random() * 0.4
+        c = Vector((math.cos(a), math.sin(a), 0)) * (R * 0.82 * f) + Z * (ztop - 0.045 * f * f + (rng.random() - 0.5) * 0.025)
+        sz = R * (0.5 + rng.random() * 0.14) * (1.35 if lod else 1.0)
+        rr = rng.random() * math.tau
+        right = Vector((math.cos(rr), math.sin(rr), (rng.random() - 0.5) * 0.2)).normalized()
+        up = Z.cross(right).normalized()
+        card_quad(lp, 'acacia' if rng.random() < 0.65 else 'acacia2', c, right, up, sz, sz, nrm, flex(c) + 0.012, 1.0, 0.92 + 0.08 * (1 - f))
+    nrim = (10 if not young else 7) if lod == 0 else 5
     for i in range(nrim):
         a = i / nrim * math.tau + rng.random() * 0.3
         d = Vector((math.cos(a), math.sin(a), 0))
-        c = d * (R * (0.85 + rng.random() * 0.15)) + Z * (ztop - 0.02 + (rng.random() - 0.5) * 0.04)
+        c = d * (R * (0.88 + rng.random() * 0.1)) + Z * (ztop - 0.06 + (rng.random() - 0.5) * 0.03)
         side = Vector((-d.y, d.x, 0))
-        up = (d * math.cos(0.38) + Z * math.sin(0.38)).normalized()
-        sz = R * 0.48
-        card_quad(lp, 'acacia2', c, side, up, sz, sz * 0.8, nrm, flex(c) + 0.015, 1.0, 0.9)
+        up = (d * math.cos(0.3) + Z * math.sin(0.3)).normalized()
+        card_quad(lp, 'acacia2', c, side, up, R * 0.42, R * 0.36, nrm, flex(c) + 0.015, 1.0, 0.85)
     if lod == 0:
         for i in range(5 if not young else 3):
             a = rng.random() * math.tau
-            c = Vector((math.cos(a), math.sin(a), 0)) * (R * rng.random() * 0.6) + Z * (ztop - 0.07)
+            c = Vector((math.cos(a), math.sin(a), 0)) * (R * rng.random() * 0.6) + Z * (ztop - 0.085)
             rr = rng.random() * math.tau
             right = Vector((math.cos(rr), math.sin(rr), 0))
-            card_quad(lp, 'acacia', c, right, Z.cross(right), R * 0.7, R * 0.7, nrm, flex(c) + 0.01, 1.0, 0.6)
+            card_quad(lp, 'acacia', c, right, Z.cross(right), R * 0.6, R * 0.6, nrm, flex(c) + 0.01, 1.0, 0.6)
 
 
 def bush(lp, rng, card, R, Hb, lod):
