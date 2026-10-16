@@ -5,6 +5,7 @@ import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
 import { NSKY, NSKY_GLSL } from './nightsky';
 import { LAGOON, LAGOON_GLSL, SEA_SCATTER_GLSL } from './bluehole';
+import { SUB, surfaceHeight } from './ground';
 
 /*
  * The river: a flat, alpha-blended sheet at WATER_LEVEL covering only the
@@ -85,7 +86,18 @@ export const RIVER = {
   wState3: { value: new THREE.Vector4(1, 0, 0, 0) },
   /** Water clock (seconds; Terrain.update). */
   time: { value: 0 },
+  /**
+   * The resort jetties' piles over the Red Sea (seaside.ts, DP1): per jetty the first pile pair's centre (xy,
+   * world x / z) and the step to the next pair (zw); the pairs sit JETTY_HALF either side of the line. All zero
+   * when there is none.
+   */
+  wJetty: { value: [new THREE.Vector4(), new THREE.Vector4()] },
+  /** Pile pairs per jetty (0 = none). */
+  wJettyN: { value: new THREE.Vector2() },
 };
+
+/** Half the distance between a jetty's two pile rows (tiles; seaside.ts builds them there). */
+export const JETTY_HALF = 0.19;
 
 /** Ring waves on the surface (impacts, fish, ducks, boats). Analytic rings in the shader. */
 export const waterRings = {
@@ -1311,6 +1323,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       // the desert's Red Sea corners (sim/map.ts seaFrame): coast offset, on, map centre
       wSea: { value: new THREE.Vector4(m.deco?.sea?.off ?? 0, m.deco?.sea ? 1 : 0, m.w / 2, m.h / 2) },
       wState3: RIVER.wState3,
+      wJetty: RIVER.wJetty,
+      wJettyN: RIVER.wJettyN,
       rapH: { value: rap ? (rap.s1 - rap.s0) / 2 : 0 },
       rapRocks: { value: Array.from({ length: MAX_RAPID_ROCKS }, () => new THREE.Vector4()) },
       ...fog.uniforms,
@@ -1318,10 +1332,13 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       ...NSKY,
     },
     vertexShader: /* glsl */ `
+      attribute float aH;
       varying vec3 vWorld;
+      varying float vH;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vWorld = wp.xyz;
+        vH = aH;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: /* glsl */ `
@@ -1365,12 +1382,15 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform float wStill;
       uniform vec4 wSea;
       uniform vec4 wState3;
+      uniform vec4 wJetty[2];
+      uniform vec2 wJettyN;
       uniform vec4 rapRocks[${MAX_RAPID_ROCKS}];
       ${WX_PARS}
       uniform sampler2D fogTex;
       uniform vec2 fogSize;
       uniform float fogEnabled;
       varying vec3 vWorld;
+      varying float vH;
       vec2 waveN(vec2 uv) { return texture2D(waveTex, uv).rg * 2.0 - 1.0; }
       ${LAGOON_GLSL}
       ${SEA_SCATTER_GLSL}
@@ -1379,22 +1399,59 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         vec2 tuv = p / mapSize;
         float ground = texture2D(heightTex, (p + 0.5) / (mapSize + 1.0)).r * 4.5 - 1.5;
         float depthW = waterLevel - ground;
-        if (depthW <= 0.0) discard;
-        float depth = clamp(depthW / 0.7, 0.0, 1.0);
+        // (the Red Sea's swash zone runs up the beach above the still waterline: a sheet draped on the sand, vH)
+        if (vH <= 0.0 && depthW <= 0.0) discard;
         // the Red Sea (desert corners): seaward distance from the coast, as the sim's seaFrame
         float seaK = 0.0;
         float seaV = -1e3;
-        // the Blue Hole's lagoon (bluehole.ts): x platform, y water depth for colour, z awash reef, w signed
-        // distance to the hole's drop-off; dV: the depth the water is coloured by (the real one elsewhere)
-        vec4 lag = vec4(0.0, depthW, 0.0, 1e3);
+        float su = 0.0;
         if (wSea.y > 0.5) {
           vec2 pc = p - wSea.zw;
           if (pc.x + pc.y > 0.0) pc = -pc;
-          float su = (pc.x - pc.y) * 0.70711;
+          su = (pc.x - pc.y) * 0.70711;
           seaV = -(pc.x + pc.y) * 0.70711 - wSea.x + 4.0 * sin(su * 0.045) + 2.5 * sin(su * 0.13 + 1.0);
           seaK = smoothstep(-15.5, -10.0, seaV);
-          if (abs(su - ${LAGOON.pu.toFixed(2)}) < ${(LAGOON.pru + 1.5).toFixed(2)} && abs(seaV - ${LAGOON.pv.toFixed(2)}) < ${(LAGOON.prv + 1.5).toFixed(2)}) lag = lagoon(su, seaV, depthW);
         }
+        // the swash on the beaches (DP1): every wave runs up the sand and back, a thin sheet with a soft foam
+        // edge, and leaves the band of wet, darker sand at the waterline that shifts a little with it
+        float swPh = time * 0.62 + su * 0.11 + texture2D(waveTex, p * 0.045 + 0.31).b * 4.0;
+        float swS = 0.5 + 0.5 * sin(swPh);
+        float runup = 0.006 + 0.03 * swS * swS;
+        if (vH > 0.0) {
+          if (seaK < 0.01) discard;
+          float hgt = vH;
+          float bn = texture2D(waveTex, p * 0.37 + vec2(0.0, time * 0.01)).a;
+          // the wet band: darkest at the water, drying up the beach; its top creeps with the waves' reach
+          float wetTop = 0.042 + 0.012 * sin(swPh - 1.2) + (bn - 0.5) * 0.012;
+          float wet = 1.0 - smoothstep(wetTop * 0.35, wetTop, hgt);
+          float bA = wet * (0.15 + 0.17 * (1.0 - smoothstep(0.0, wetTop * 0.6, hgt)));
+          vec3 bC = vec3(0.0);
+          // the running sheet of water, a lace of foam on it and a frothy, broken foam edge where it stops
+          // (gentle: a soft off-white, no sparkle)
+          float bn2 = texture2D(waveTex, p * 1.3 + vec2(time * 0.05, -time * 0.03)).a;
+          float sheet = 1.0 - smoothstep(runup - 0.006, runup + 0.002, hgt);
+          float edgeW = 0.004 + 0.006 * bn;
+          float edge = (1.0 - smoothstep(edgeW * 0.3, edgeW, abs(hgt - runup + 0.002))) * smoothstep(0.32, 0.62, bn2 * 0.7 + bn * 0.3 + swS * 0.2);
+          float lace = sheet * smoothstep(0.55, 0.8, bn2) * smoothstep(0.0, 0.012, runup - hgt) * 0.5;
+          vec3 sheetC = vec3(0.36, 0.46, 0.44) * wxLight;
+          bC = mix(bC, sheetC, sheet * 0.6);
+          bA = max(bA, sheet * 0.34);
+          vec3 foamE = vec3(0.74, 0.78, 0.76) * wxLight;
+          float fe = max(edge * 0.85, lace);
+          bC = mix(bC, foamE, fe);
+          bA = mix(bA, 0.66, fe * (0.45 + 0.55 * swS));
+          float bV = texture2D(fogTex, p / fogSize).r;
+          bA *= seaK * mix(1.0, smoothstep(0.1, 0.5, bV), fogEnabled);
+          gl_FragColor = vec4(bC * (1.0 - 0.6 * wState2.x), clamp(bA, 0.0, 1.0));
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          return;
+        }
+        float depth = clamp(depthW / 0.7, 0.0, 1.0);
+        // the Blue Hole's lagoon (bluehole.ts): x platform, y water depth for colour, z awash reef, w signed
+        // distance to the hole's drop-off; dV: the depth the water is coloured by (the real one elsewhere)
+        vec4 lag = vec4(0.0, depthW, 0.0, 1e3);
+        if (wSea.y > 0.5 && abs(su - ${LAGOON.pu.toFixed(2)}) < ${(LAGOON.pru + 1.5).toFixed(2)} && abs(seaV - ${LAGOON.pv.toFixed(2)}) < ${(LAGOON.prv + 1.5).toFixed(2)}) lag = lagoon(su, seaV, depthW);
         float dV = lag.y;
         float still = wStill * (1.0 - seaK);
         vec4 dat = texture2D(waterData, tuv);
@@ -1745,6 +1802,43 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float brk = smoothstep(0.55, 0.95, sin(dot(p, vec2(0.45, 0.45)) * 1.3 + time * 1.2 + rn * 7.0) * 0.5 + 0.5);
           float fz = texture2D(waveTex, p * 0.9 + vec2(time * 0.05, -time * 0.03)).a;
           foam = max(foam, seaK * edge * smoothstep(0.35, 0.8, fz * 0.6 + brk * 0.5) * 0.6 * (1.0 - 0.5 * dark));
+          // DP1: the waves breaking on the beach: foam lines running in with the swell (each reaches the sand as
+          // its swash runs up it: the same phase), a thinner aerated wash trailing behind each
+          float bk = (1.0 - smoothstep(0.35, 1.6, shore)) * seaK * (1.0 - 0.25 * lag.x);
+          if (bk > 0.001) {
+            float wph = swPh + shore * 1.9;
+            float line = smoothstep(0.62, 0.95, sin(wph));
+            float wash = smoothstep(0.1, 0.85, sin(wph - 0.9)) * 0.4;
+            float bz = texture2D(waveTex, p * 0.55 + vec2(time * 0.04, -time * 0.025)).a;
+            float bz2 = texture2D(waveTex, p * 1.6 + vec2(-time * 0.03, time * 0.05)).a;
+            foam = max(foam, bk * max(line * smoothstep(0.2, 0.6, bz * 0.6 + bz2 * 0.4 + 0.12), wash * smoothstep(0.42, 0.78, bz2)) * 0.72 * (1.0 - 0.5 * dark));
+          }
+          // the surf on the Blue Hole's awash rim and the reef islets: a ragged collar round the coral, pulsing
+          if (lag.z > 0.02) {
+            float rr = smoothstep(0.04, 0.3, lag.z) * (1.0 - smoothstep(0.5, 0.92, lag.z));
+            float rz = texture2D(waveTex, p * 0.8 + vec2(-time * 0.04, time * 0.03)).a;
+            float pul = 0.6 + 0.4 * sin(time * 1.1 + su * 0.7 + seaV * 0.5);
+            foam = max(foam, rr * smoothstep(0.3, 0.75, rz * 0.7 + pul * 0.35) * 0.55 * (1.0 - 0.5 * dark));
+          }
+          // the jetty's piles: a small foam collar round each pile, a wake streak on its lee
+          for (int j = 0; j < 2; j++) {
+            float nP = j == 0 ? wJettyN.x : wJettyN.y;
+            if (nP < 0.5) continue;
+            vec4 J = wJetty[j];
+            float sl = dot(J.zw, J.zw);
+            vec2 q = p - J.xy;
+            float t = dot(q, J.zw) / sl;
+            if (t < -0.6 || t > nP - 0.4) continue;
+            float len = sqrt(sl);
+            vec2 nr = vec2(-J.w, J.z) / len;
+            float c = abs(dot(q, nr)) - ${JETTY_HALF.toFixed(3)};
+            float a = (t - floor(t + 0.5)) * len;
+            float d = length(vec2(a, c));
+            float pz = texture2D(waveTex, p * 2.3 + vec2(time * 0.07, 0.0)).a;
+            // (a soft blob a little wider than the deck, so it shows past its edges; streaked shoreward)
+            float collar = 1.0 - smoothstep(0.05, 0.13 + pz * 0.06, length(vec2(a, c * 0.8)));
+            foam = max(foam, collar * smoothstep(0.15, 0.55, pz + 0.2) * 0.62 * seaK);
+          }
         }
         // streaks dragged along the flow: pier wakes (the rapids' whitewater is drawn above)
         if (dat.a > 0.003) {
@@ -1827,18 +1921,39 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   return { mesh, material, reflection, river };
 }
 
-/** Quads over the tiles that are (partly) under water, plus a margin, instead of a map-wide sheet. */
+/**
+ * Quads over the tiles that are (partly) under water, plus a margin, instead of a map-wide sheet. By the Red Sea
+ * (DP1) the tiles along the waterline are a sheet draped on the beach instead (the ground mesh's own grid and
+ * diagonals, a hair above it): its aH (height above the still water, > 0 on the sand) carries the swash and the
+ * wet sand; below the waterline it lies flat on the water as before.
+ */
 function waterGeometry(m: GameMap): THREE.BufferGeometry {
   const pos: number[] = [];
+  const hAt: number[] = [];
   const idx: number[] = [];
   const W = m.w;
   const H = m.h;
   const vh = (x: number, y: number) => m.heights[Math.max(0, Math.min(H, y)) * (W + 1) + Math.max(0, Math.min(W, x))];
+  const sea = m.deco?.sea ?? null;
+  // the sea's seaward distance (water shader: wSea), so the band stays off the oases
+  const seaV = (x: number, y: number) => {
+    let px = x - W / 2;
+    let py = y - H / 2;
+    if (px + py > 0) {
+      px = -px;
+      py = -py;
+    }
+    const su = (px - py) * 0.70711;
+    return -(px + py) * 0.70711 - (sea?.off ?? 0) + 4 * Math.sin(su * 0.045) + 2.5 * Math.sin(su * 0.13 + 1);
+  };
   const wet = new Uint8Array(W * H);
+  const band = new Uint8Array(W * H);
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const lo = Math.min(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1));
-      if (lo < WATER_LEVEL + 0.02) wet[y * W + x] = 1;
+      const hi = Math.max(vh(x, y), vh(x + 1, y), vh(x, y + 1), vh(x + 1, y + 1));
+      if (sea && lo < WATER_LEVEL + 0.12 && hi > WATER_LEVEL - 0.05 && seaV(x + 0.5, y + 0.5) > -15) band[y * W + x] = 1;
+      else if (lo < WATER_LEVEL + 0.02) wet[y * W + x] = 1;
     }
   // merge runs of wet tiles per row into one quad
   for (let y = 0; y < H; y++) {
@@ -1855,13 +1970,39 @@ function waterGeometry(m: GameMap): THREE.BufferGeometry {
       const x0 = x === 0 ? -0.001 : x;
       const x1 = e === W ? W + 0.001 : e;
       pos.push(x0, 0, y, x1, 0, y, x1, 0, y + 1, x0, 0, y + 1);
+      hAt.push(-1, -1, -1, -1);
       idx.push(b, b + 2, b + 1, b, b + 3, b + 2);
       x = e;
     }
   }
+  // the beach band: the ground mesh's SUB grid and diagonal parity (ground.ts), 0.012 over the sand
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (!band[y * W + x]) continue;
+      const b = pos.length / 3;
+      for (let j = 0; j <= SUB; j++)
+        for (let i = 0; i <= SUB; i++) {
+          const fx = x + i / SUB;
+          const fy = y + j / SUB;
+          const h = surfaceHeight(m, fx, fy) - WATER_LEVEL;
+          pos.push(fx, Math.max(h, 0) + 0.012, fy);
+          hAt.push(h);
+        }
+      const R = SUB + 1;
+      for (let j = 0; j < SUB; j++)
+        for (let i = 0; i < SUB; i++) {
+          const a = b + j * R + i;
+          const bb = a + 1;
+          const c = a + R;
+          const d = c + 1;
+          if ((x * SUB + i + y * SUB + j) & 1) idx.push(a, c, bb, bb, c, d);
+          else idx.push(a, c, d, a, d, bb);
+        }
+    }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length).fill(0).map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute('aH', new THREE.Float32BufferAttribute(hAt, 1));
   g.setIndex(idx);
   g.computeBoundingSphere();
   return g;

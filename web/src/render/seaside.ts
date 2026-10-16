@@ -775,6 +775,11 @@ export class Seaside {
       const deck = WATER_LEVEL + 0.17;
       const p0 = F.P(jU, v0);
       if (this.inMap(p0.x, p0.y, 0.5)) {
+        // the piles' foam collars in the water shader (water.ts wJetty): the first pair and the step to the next
+        const pa = F.P(jU, v0 + 0.2);
+        const pb = F.P(jU, v0 + 0.6);
+        RIVER.wJetty.value[b & 1].set(pa.x, pa.y, pb.x - pa.x, pb.y - pa.y);
+        RIVER.wJettyN.value.setComponent(b & 1, Math.ceil((v1 - v0) / 0.4 - 1e-6));
         for (let v = v0; v < v1; v += 0.4) {
           const v2 = Math.min(v1, v + 0.4);
           const a = F.P(jU, v);
@@ -1386,6 +1391,8 @@ export class Seaside {
   }
 
   dispose() {
+    for (const v of RIVER.wJetty.value) v.set(0, 0, 0, 0);
+    RIVER.wJettyN.value.set(0, 0);
     this.reef?.dispose();
     this.group.traverse((o) => {
       const mesh = o as THREE.Mesh;
