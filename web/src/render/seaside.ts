@@ -532,7 +532,7 @@ export class Seaside {
     const tall = 3 + Math.floor(h(1) * 1.99);
     const tiers = [tall, Math.max(2, tall - 1 - Math.floor(h(2) * 1.5)), Math.max(1, tall - 2 - Math.floor(h(3) * 1.5))];
     const depths = [0.78 + h(6) * 0.15, 0.62, 0.55];
-    const wallsC = C([WHITE, CREAM, 0xf6efe2, 0xeadfc8][Math.floor(h(4) * 4)]).multiplyScalar(1.12);
+    const wallsC = C([WHITE, CREAM, 0xf6efe2, 0xeadfc8][Math.floor(h(4) * 4)]).multiplyScalar(1.2);
     const accent = C([0xb5603a, 0x3a6fa8, 0x2f8f8a, 0xc89a3a, 0x8a4a6a][Math.floor(h(5) * 5)]);
     const frameC = C(0xfaf8f2).multiplyScalar(1.05);
     this.at(k, F, u, v, deckY);
