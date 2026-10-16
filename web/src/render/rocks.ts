@@ -423,7 +423,8 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       for (const im of meshes) im.material = gmat;
       for (const t of kitMeshes) {
         const g = kit.geos[t.key];
-        replaceGeometry(t.hi, g.hi);
+        // (medium / phones: the far model near too, as for the rocks above)
+        replaceGeometry(t.hi, quality === 'high' ? g.hi : g.lo);
         if (t.lo) replaceGeometry(t.lo, g.lo);
         t.im.material = t.sand ? smat : gmat;
       }
