@@ -19,9 +19,10 @@
 #          -> build/sinai/sinai-kit-raw.glb + atlas-{albedo,normal,orm}.png + sinai-kit.json (card rects / sizes)
 # Then tools/blender/sinai/pack.mjs compresses everything into public/models/sinai/.
 #
+# The glass is the only material with a roughness under 0.15: the game lights it at night from the ORM's G.
 # Conventions: Blender Z up, a piece's front faces -Y (glTF / game +Z), 1 unit = 1 map tile, origin at the
 # piece's foot (cards: the card's centre). Atlas ORM: R = AO, G = roughness, B = tint class (0 untinted,
-# 0.5 wall plaster - the game samples its world-mapped plaster there, 1 accent paint), A = glass (night glow).
+# 0.5 wall plaster - the game samples its world-mapped plaster there, 1 accent paint).
 import bpy
 import bmesh
 import json
@@ -153,7 +154,7 @@ def build_plaster():
     cav = np.clip(1 + (hgt - hb) * 0.18, 0.55, 1.0)
     ao = np.clip(cav * (1 - crack * 0.5), 0, 1)
     rough = np.clip(0.9 + 0.04 * grain - 0.08 * patch + 0.04 * stain, 0.6, 1.0)
-    nrm = normal_from_height(hgt, 0.09 * px_per_tile / 400)
+    nrm = normal_from_height(hgt, 0.5)
     C.save_rgb(os.path.join(OUT, 'plaster-albedo.png'), C.lin2srgb(alb), n)
     C.save_rgb(os.path.join(OUT, 'plaster-normal.png'), nrm, n)
     C.save_rgb(os.path.join(OUT, 'plaster-orm.png'), np.stack([ao, rough, np.zeros_like(ao)], -1), n)
@@ -1172,17 +1173,6 @@ def bake_all(rects):
     return {k: C.pixels(v)[..., :4] for k, v in imgs.items()}
 
 
-def save_rgba(path, rgba, size):
-    img = C.new_image('save_rgba', size, data=True, float_buf=False)
-    img.alpha_mode = 'STRAIGHT'
-    a = np.clip(rgba, 0, 1).astype(np.float32)
-    img.pixels.foreach_set(a.ravel())
-    img.filepath_raw = path
-    img.file_format = 'PNG'
-    img.save()
-    bpy.data.images.remove(img)
-
-
 def compose(px, rects):
     nrm = px['normal'][..., :3]
     ao = np.clip(px['ao'][..., 0], 0, 1)
@@ -1200,7 +1190,7 @@ def compose(px, rects):
     orm = np.stack([ao_s, msk[..., 0], msk[..., 1], msk[..., 2]], -1)
     C.save_rgb(os.path.join(OUT, 'atlas-albedo.png'), C.lin2srgb(alb_ao), ATLAS)
     C.save_rgb(os.path.join(OUT, 'atlas-normal.png'), nrm, ATLAS)
-    save_rgba(os.path.join(OUT, 'atlas-orm.png'), orm, ATLAS)
+    C.save_rgb(os.path.join(OUT, 'atlas-orm.png'), orm[..., :3], ATLAS)
 
 
 def export(rects):
@@ -1254,7 +1244,14 @@ def build_kit():
                 unwrap_into(o, rects[n + ('' if lod == 0 else '_l1')])
     if os.environ.get('SINAI_NOBAKE'):
         return
-    px = bake_all(rects)
+    # the raw passes are kept (build/sinai/raw-*.npy): SINAI_REUSE=1 composes again without baking
+    raw = {k: os.path.join(OUT, f'raw-{k}.npy') for k in ('normal', 'ao', 'albedo', 'mask')}
+    if os.environ.get('SINAI_REUSE') and all(os.path.exists(f) for f in raw.values()):
+        px = {k: np.load(f) for k, f in raw.items()}
+    else:
+        px = bake_all(rects)
+        for k, f in raw.items():
+            np.save(f, px[k].astype(np.float32))
     compose(px, rects)
     export(rects)
 

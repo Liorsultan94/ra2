@@ -9,7 +9,7 @@
  * build/sinai/sinai-kit.json    -> public/models/sinai/sinai-kit.json (card rects, swatches, piece triangles)
  * build/sinai/atlas-{albedo,normal,orm}.png -> sinai-atlas-*.webp (1024, desktop) + -512 (phone / low)
  * build/sinai/plaster-{albedo,normal,orm}.png -> sinai-plaster-*.webp (512) + -256
- * The ORM keeps its alpha (glass mask). Prints the download per profile.
+ * Prints the download per profile.
  */
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, statSync } from 'node:fs';
@@ -39,23 +39,23 @@ for (const m of doc.getRoot().listMeshes()) for (const p of m.listPrimitives()) 
 
 const desk = { glb: statSync(glb).size };
 const phone = { glb: desk.glb };
-// [source, out name, desktop size, phone size, desktop KB, phone KB]
+// [source, out name, desktop size, phone size, WebP quality] (ImageMagick 6's webp:target-size misfires on some maps)
 const MAPS = [
-  ['atlas-albedo', 'sinai-atlas-albedo', 1024, 512, 120, 40],
-  ['atlas-normal', 'sinai-atlas-normal', 1024, 512, 120, 40],
-  ['atlas-orm', 'sinai-atlas-orm', 1024, 512, 70, 26],
-  ['plaster-albedo', 'sinai-plaster-albedo', 512, 256, 34, 12],
-  ['plaster-normal', 'sinai-plaster-normal', 512, 256, 60, 20],
-  ['plaster-orm', 'sinai-plaster-orm', 512, 256, 24, 9],
+  ['atlas-albedo', 'sinai-atlas-albedo', 1024, 512, 84],
+  ['atlas-normal', 'sinai-atlas-normal', 1024, 512, 86],
+  ['atlas-orm', 'sinai-atlas-orm', 1024, 512, 80],
+  ['plaster-albedo', 'sinai-plaster-albedo', 512, 256, 80],
+  ['plaster-normal', 'sinai-plaster-normal', 512, 256, 84],
+  ['plaster-orm', 'sinai-plaster-orm', 512, 256, 60],
 ];
-for (const [src, name, big, small, kb, skb] of MAPS) {
-  for (const [sz, sfx, target, out] of [
-    [big, '', kb, desk],
-    [small, `-${small}`, skb, phone],
+for (const [src, name, big, small, q] of MAPS) {
+  for (const [sz, sfx, out] of [
+    [big, '', desk],
+    [small, `-${small}`, phone],
   ]) {
     const dst = join(OUT, `${name}${sfx}.webp`);
-    const alpha = src.endsWith('orm') && src.startsWith('atlas') ? ['-alpha', 'on'] : ['-alpha', 'off'];
-    execFileSync('convert', [join(BUILD, `${src}.png`), '-filter', 'Triangle', '-resize', `${sz}x${sz}`, ...alpha, '-define', 'webp:method=6', '-define', 'webp:use-sharp-yuv=true', '-define', 'webp:alpha-quality=100', '-define', `webp:target-size=${target * 1024}`, dst]);
+    const input = [join(BUILD, `${src}.png`), '-alpha', 'off'];
+    execFileSync('convert', [...input, '-filter', 'Triangle', '-resize', `${sz}x${sz}`, '-define', 'webp:method=6', '-define', 'webp:use-sharp-yuv=true', '-quality', String(q), dst]);
     out[name] = statSync(dst).size;
   }
 }
