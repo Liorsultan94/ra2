@@ -34,7 +34,7 @@ const WALLS = [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xe4d2ae, 0xf7f3ea, 0xdcc
 const ACCENTS = [C(0.18, 0.4, 0.66), C(0.16, 0.56, 0.56), C(0.24, 0.46, 0.3), C(0.7, 0.36, 0.22), C(0.85, 0.66, 0.28)];
 const WHITE = C(1, 1, 1);
 /** The baked plaster (mean ~0.78 linear) is lighter than the old canvas plaster (0.64): scale the wall colours to keep the town's brightness. */
-const WALL_LIFT = 0.86;
+const WALL_LIFT = 0.92;
 
 export function isSinaiKind(k: StructureKind) {
   return k === StructureKind.House || k === StructureKind.Cottage || k === StructureKind.MudHouse || k === StructureKind.Courtyard;
@@ -202,10 +202,19 @@ function buildHouse(B: SinaiBuilder, st: Structure, gy: number) {
         }
       }
     }
-    // a small window or vent on deep side walls
-    if (dz > 0.85 && h(202) < 0.6) {
-      const sx = h(203) < 0.5 ? -1 : 1;
-      card(h(204) < 0.5 ? 'vent' : 'win', Lo(trs(ox + sx * (lx / 2 + 0.003), floors === 2 ? hw * 0.72 : hw * 0.6, oz + (h(205) - 0.5) * dz * 0.3, (sx * Math.PI) / 2)), { tint: wc, accent: acc }, 1);
+    // the side walls: a window per bay and floor, a small vent now and then
+    for (const sx of [-1, 1]) {
+      const nz = Math.max(1, Math.floor(dz / 0.42));
+      for (let f = 0; f < floors; f++) {
+        const wy = floors === 1 ? hw * 0.6 : hw * (0.3 + f * 0.42);
+        for (let i = 0; i < nz; i++) {
+          const r = h(260 + i * 3 + f * 7 + (sx > 0 ? 40 : 0));
+          if (r < 0.3) continue;
+          const z = oz - dz / 2 + (dz / nz) * (i + 0.5);
+          const name = r < 0.45 ? 'vent' : style === 'win_arch' && wy + 0.12 > hw + 0.02 ? 'win' : r < 0.75 ? style : 'win_grille';
+          card(name, Lo(trs(ox + sx * (lx / 2 + 0.003), name === 'vent' ? wy + 0.04 : wy, z, (sx * Math.PI) / 2)), { tint: wc, accent: acc }, 1);
+        }
+      }
     }
     if (door) {
       const dc = [C(0.24, 0.36, 0.5), C(0.42, 0.28, 0.16), C(0.2, 0.42, 0.36)][Math.floor(h(7) * 3)];

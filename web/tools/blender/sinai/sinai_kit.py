@@ -142,13 +142,13 @@ def build_plaster():
     stain = np.clip(0.5 * C.sstep(0.4, 1.8, streak) * C.sstep(-0.2, 0.8, blotch) + 0.35 * C.sstep(0.6, 1.8, blotch), 0, 1)
     # albedo: off-white render (the game tints it with the wall colour), low-saturation variation
     base = np.array([0.80, 0.785, 0.755], np.float32)
-    lum = 1 + 0.035 * grain + 0.03 * trowel + 0.02 * coat
+    lum = 1 + 0.02 * grain + 0.014 * trowel + 0.012 * coat
     alb = base[None, None, :] * lum[..., None]
     alb = alb * (1 - patch[..., None] * 0.0) + patch[..., None] * (np.array([0.84, 0.82, 0.775]) - base) * 0.6
     dirt = np.array([0.56, 0.5, 0.42], np.float32)
-    alb = alb * (1 - stain[..., None] * 0.13) + dirt * stain[..., None] * 0.13
+    alb = alb * (1 - stain[..., None] * 0.07) + dirt * stain[..., None] * 0.07
     alb = alb * (1 - np.clip(tide, 0, 1)[..., None] * 0.05)
-    alb = alb * (1 - crack[..., None] * 0.35)
+    alb = alb * (1 - crack[..., None] * 0.28)
     # cavity AO from the height field
     hb = C.blur(hgt, 3)
     cav = np.clip(1 + (hgt - hb) * 0.18, 0.55, 1.0)

@@ -13,7 +13,7 @@ import { assetBase } from './photoground';
  *    awnings, domes, the mosque's drum and dome, the minaret, merlons, cafe tables, the promenade kiosk;
  *  - swatches: flat atlas patches for code-built trim (paint, wood, steel, stone, glass...);
  *  - a tileable rendered-plaster texture (cracks, stains, streaks) mapped in world space on every wall.
- * One shared atlas (albedo, normal, ORM: AO / roughness / tint class / glass), two materials: the walls
+ * One shared atlas (albedo, normal, ORM: AO / roughness / tint class; glass is the only roughness under 0.15), two materials: the walls
  * (plaster) and the kit. The kit's tint class picks per texel between its own colour, the wall's plaster
  * (sampled in world space with the wall colour, so a card's surround is seamless with its wall) and an
  * accent paint colour (shutters, doors, awnings, tanks); glass glows at night where a window is lit.
@@ -150,10 +150,10 @@ export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshSt
   const mat = new THREE.MeshStandardMaterial({
     map: kit.plaster.albedo,
     normalMap: kit.plaster.normal,
-    normalScale: new THREE.Vector2(0.9, 0.9),
+    normalScale: new THREE.Vector2(0.6, 0.6),
     roughnessMap: kit.plaster.orm,
     aoMap: kit.plaster.orm,
-    aoMapIntensity: 0.9,
+    aoMapIntensity: 0.45,
     roughness: 1,
     metalness: 0,
     vertexColors: true,
@@ -183,7 +183,7 @@ export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshSt
 
 /**
  * The kit: atlas albedo / normal / ORM. ORM.b is the tint class (0 own colour, 0.5 wall plaster: the world-mapped
- * plaster texture times aTint, 1 accent: albedo times aAccent), ORM.a the glass (lit at night where aGlow).
+ * plaster texture times aTint, 1 accent: albedo times aAccent); the glass (roughness 0.1) is lit at night where aGlow.
  */
 export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStandardMaterial {
   const c = KIT_MATS.get(fog);
@@ -231,7 +231,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += skOrm.a * vSkGlow * lmNight * vec3( 1.0, 0.78, 0.48 ) * 1.1;`,
+        totalEmissiveRadiance += ( 1.0 - smoothstep( 0.12, 0.16, skOrm.g ) ) * vSkGlow * lmNight * vec3( 1.0, 0.78, 0.48 ) * 1.1;`,
       );
   };
   fog.apply(mat);

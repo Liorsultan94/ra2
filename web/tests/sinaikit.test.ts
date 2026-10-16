@@ -1,4 +1,3 @@
-import { statSync } from 'node:fs';
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { FogOfWar } from '../src/render/fog';
@@ -13,7 +12,12 @@ import manRaw from '../public/models/sinai/sinai-kit.json?raw';
 
 const man = JSON.parse(manRaw) as KitManifest;
 const DIR = new URL('../public/models/sinai/', import.meta.url);
-const size = (f: string) => statSync(new URL(f, DIR)).size;
+/** File sizes through node's fs (no node typings in this project). */
+async function sizer() {
+  const mod = 'node:fs';
+  const fs = (await import(/* @vite-ignore */ mod)) as { statSync(p: URL): { size: number } };
+  return (f: string) => fs.statSync(new URL(f, DIR)).size;
+}
 
 /** The kit with stand-in piece geometry (the GLB needs the meshopt decoder and fetch): same names, uvs, normals. */
 function fakeKit(): SinaiKit {
@@ -44,13 +48,14 @@ describe('Sinai building kit (GD2)', () => {
     }
   });
 
-  it('download stays in the asset family budget (desktop <= 560 KB, phone <= 200 KB)', () => {
+  it('download stays in the asset family budget (desktop <= 512 KB, phone <= 200 KB)', async () => {
+    const size = await sizer();
     const maps = ['atlas-albedo', 'atlas-normal', 'atlas-orm'];
     const plaster = ['plaster-albedo', 'plaster-normal', 'plaster-orm'];
     const glb = size('sinai-kit.glb') + size('sinai-kit.json');
     const desk = glb + maps.reduce((a, m) => a + size(`sinai-${m}.webp`), 0) + plaster.reduce((a, m) => a + size(`sinai-${m}.webp`), 0);
     const phone = glb + maps.reduce((a, m) => a + size(`sinai-${m}-512.webp`), 0) + plaster.reduce((a, m) => a + size(`sinai-${m}-256.webp`), 0);
-    expect(desk).toBeLessThanOrEqual(560 * 1024);
+    expect(desk).toBeLessThanOrEqual(512 * 1024);
     expect(phone).toBeLessThanOrEqual(200 * 1024);
   });
 

@@ -44,7 +44,7 @@ const MAPS = [
   ['atlas-albedo', 'sinai-atlas-albedo', 1024, 512, 84],
   ['atlas-normal', 'sinai-atlas-normal', 1024, 512, 86],
   ['atlas-orm', 'sinai-atlas-orm', 1024, 512, 80],
-  ['plaster-albedo', 'sinai-plaster-albedo', 512, 256, 80],
+  ['plaster-albedo', 'sinai-plaster-albedo', 512, 256, 92],
   ['plaster-normal', 'sinai-plaster-normal', 512, 256, 84],
   ['plaster-orm', 'sinai-plaster-orm', 512, 256, 60],
 ];
