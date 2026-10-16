@@ -14,6 +14,8 @@ import { appendLoopRibbons } from './ambient/roadfurniture';
 import { snowLine } from './props';
 import { buildFarm } from './farm';
 import { buildStreetLife } from './streetlife';
+import { sinaiKit } from './sinaikit';
+import { buildSinaiTown, isSinaiKind } from './sinaitown';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -173,8 +175,11 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     const p = V(x, y, z).applyMatrix4(base);
     chims.push({ x: p.x, y: p.y, z: p.z, st });
   };
+  // the desert town in the Blender building kit when it loaded (render/sinaitown.ts), else the procedural houses below
+  const sinai = bc === 1 ? sinaiKit() : null;
   for (const st of m.structures) {
     if (isCityKind(st.kind)) continue; // city blocks: models/citybldgs.ts
+    if (sinai && isSinaiKind(st.kind)) continue;
     const from = builders.map((b) => b.count);
     buildStructure(st);
     spans.push({ st, from, to: builders.map((b) => b.count) });
@@ -751,6 +756,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   spans.length = 0;
   built.clear();
 
+  if (sinai) out.push(...buildSinaiTown(m, sinai, fog, quality, sink, lod));
   // city blocks, street lamps, fountains and ruins (urban maps)
   out.push(...buildCity(m, fog, quality, sink, lod, sink ? (sink.chimneys ??= []) : undefined));
   // kerbs, the street market and cafes on the squares (render/streetlife.ts)
