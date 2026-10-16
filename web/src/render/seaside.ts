@@ -9,6 +9,7 @@ import { Kit, datePalm } from './models/landmarks';
 import type { NightLights } from './night';
 import { ReefLife, buildWreck, type Wreck } from './reeflife';
 import { RIVER } from './water';
+import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type SinaiKit } from './sinaikit';
 
 /*
  * The Red Sea coast of Wadi Al-Rimal (render only; the sim's coast is sim/maps.ts DESERT_SEA, mirrored
@@ -117,6 +118,11 @@ export class Seaside {
   private _s = new THREE.Vector3();
   /** The corals, fish and the wreck's sunken part (reeflife.ts). */
   reef: ReefLife | null = null;
+  /** The corner being built in the Sinai building kit (GD2: hotel blocks, kiosks, cafe tables), when it loaded. */
+  private sb: SinaiBuilder | null = null;
+  /** Kit meshes per corner: play zoom (LOD0) and zoomed out (LOD1), swapped on the view span in update(). */
+  private kitLods: { k0: THREE.Mesh | null; k1: THREE.Mesh | null }[] = [];
+  private kitLoSpan = 24;
   /** The lighthouses' lanterns (one per island): the night beam sweeps from here (nightLights). */
   private lanterns: { x: number; y: number; z: number; ph: number }[] = [];
 
@@ -133,9 +139,12 @@ export class Seaside {
     const parasols: { m: THREE.Matrix4; c: THREE.Color; k: number }[] = [];
     const loungers: { m: THREE.Matrix4; c: THREE.Color }[] = [];
     const wrecks: Wreck[] = [];
+    const kit = sinaiKit();
+    this.kitLoSpan = quality === 'high' ? 30 : 24;
     for (const b of [0, 1]) {
       const F = this.frame(b);
       const k = new Kit();
+      this.sb = kit ? new SinaiBuilder(kit) : null;
       const beds: Lounger[] = [];
       this.buildResort(k, F, parasols, loungers, beds);
       this.buildBeach(k, F, parasols, loungers, beds);
@@ -154,6 +163,8 @@ export class Seaside {
       mesh.castShadow = quality === 'high';
       mesh.receiveShadow = quality !== 'low';
       this.group.add(mesh);
+      if (this.sb && kit) this.addKitMeshes(this.sb, kit, fog, quality);
+      this.sb = null;
       if (quality !== 'low') this.populate(F, beds);
     }
     this.group.add(...this.instanced(parasolGeometry(), parasols, 'seaside-parasols'));
@@ -289,6 +300,22 @@ export class Seaside {
       this.strip(k, F, pu0, pu1, (u) => vC(u) + s * (hw(u) - 0.16), (u) => vC(u) + s * hw(u), () => poolY + 0.003, () => POOL_LT, 0.25);
       this.strip(k, F, pu0, pu1, (u) => vC(u) + s * hw(u), (u) => vC(u) + s * (hw(u) + 0.09), () => deckY + 0.016, () => WHITE, 0.25);
     }
+    if (this.sb) {
+      // GD2: a band of blue mosaic tiles at the waterline under the coping, chrome ladders down into the water
+      for (const s of [-1, 1]) this.strip(k, F, pu0 + 0.05, pu1 - 0.05, (u) => vC(u) + s * (hw(u) - 0.035), (u) => vC(u) + s * (hw(u) - 0.002), () => poolY + 0.004, (_u, i) => (i % 2 ? 0x1b6a96 : 0x22789f), 0.12);
+      for (let u = pu0 + 1.1; u < pu1 - 0.6; u += 3.1)
+        for (const s of [-1, 1]) {
+          if (Math.abs(u - ((pu0 + pu1) / 2 + (b ? 1.5 : -1.2))) < 0.7) continue;
+          const v = vC(u) + s * hw(u);
+          this.at(k, F, u, v, deckY, s > 0 ? 0 : Math.PI);
+          for (const x of [-0.035, 0.035]) {
+            k.beam(x, -0.04, -0.03, x, 0.07, -0.03, 0.007, 0xd8dcdc);
+            k.beam(x, 0.07, -0.03, x, 0.07, 0.03, 0.007, 0xd8dcdc);
+            k.beam(x, 0.07, 0.03, x, 0.0, 0.05, 0.007, 0xd8dcdc);
+          }
+          for (const y of [-0.02, 0.02]) k.box(0.07, 0.006, 0.02, 0, y, -0.035, 0xc8cccc);
+        }
+    }
     // pool lights along the coping (a soft glow at night)
     for (let u = pu0 + 0.6; u < pu1 - 0.3; u += 1.7)
       for (const s of [-1, 1]) {
@@ -336,7 +363,7 @@ export class Seaside {
     }
     // hotel blocks along the back, stepping down towards the sea; no two alike
     const blocks = b ? [[r.u0 + 0.2, 3.0], [r.u0 + 3.6, 2.6], [r.u0 + 6.6, 2.4], [r.u0 + 9.4, 2.6]] : [[r.u0 + 0.3, 2.6], [r.u0 + 3.3, 3.2], [r.u0 + 7.0, 2.2], [r.u0 + 9.6, 2.4]];
-    blocks.forEach(([u0, len], i) => this.hotelBlock(k, F, u0 + len / 2, r.v0 + 1.45, len, deckY, i));
+    blocks.forEach(([u0, len], i) => (this.sb ? this.hotelBlockKit(this.sb, k, F, u0 + len / 2, r.v0 + 1.45, len, deckY, i) : this.hotelBlock(k, F, u0 + len / 2, r.v0 + 1.45, len, deckY, i)));
     // loungers and parasols on the deck (both sides of the pool)
     for (let u = pu0 + 0.3; u < pu1 - 0.2; u += 0.62) {
       if (Math.abs(u - ub) < 0.6) continue;
@@ -468,6 +495,141 @@ export class Seaside {
         }
         // a coloured band under the roof line (no names, no logos)
         k.box(lenT * 0.45, 0.04, 0.01, xo, hgt - 0.055, zc - d / 2 - 0.007, accent);
+      }
+      z -= d;
+    }
+  }
+
+  /** The corner's kit meshes: the plaster walls, the kit at play zoom and zoomed out. */
+  private addKitMeshes(sb: SinaiBuilder, kit: SinaiKit, fog: FogOfWar, quality: 'low' | 'medium' | 'high') {
+    const mk = (g: THREE.BufferGeometry | null, mat: THREE.Material, name: string) => {
+      if (!g) return null;
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.name = name;
+      mesh.castShadow = quality === 'high';
+      mesh.receiveShadow = quality !== 'low';
+      this.group.add(mesh);
+      return mesh;
+    };
+    mk(sb.pl.build(), sinaiPlasterMaterial(fog, kit), 'seaside-walls');
+    const kmat = sinaiKitMaterial(fog, kit);
+    const k0 = mk(sb.k0.build(), kmat, 'seaside-kit');
+    const k1 = mk(sb.k1.build(), kmat, 'seaside-kit-far');
+    if (k1) k1.visible = false;
+    this.kitLods.push({ k0, k1 });
+  }
+
+  /**
+   * A hotel block in the Sinai building kit (GD2): the same massing as hotelBlock() (tiers, heights, colours,
+   * roofs from the same numbers) in rendered plaster with real detail: glazed balcony doors (lit at night) behind
+   * balconies with glass and aluminium railings and striped shades, an arcade on the deck, shuttered windows
+   * at the back, a cornice and a coping, AC units and tanks on the plant roofs, pergolas on the terraces.
+   */
+  private hotelBlockKit(sb: SinaiBuilder, k: Kit, F: Frame, u: number, v: number, len: number, deckY: number, i: number) {
+    const b = F.b;
+    const h = (j: number) => hash2(i * 13 + j, b * 7 + 3, 4411);
+    const S = 0.25; // storey height
+    const tall = 3 + Math.floor(h(1) * 1.99);
+    const tiers = [tall, Math.max(2, tall - 1 - Math.floor(h(2) * 1.5)), Math.max(1, tall - 2 - Math.floor(h(3) * 1.5))];
+    const depths = [0.78 + h(6) * 0.15, 0.62, 0.55];
+    const wallsC = C([WHITE, CREAM, 0xf6efe2, 0xeadfc8][Math.floor(h(4) * 4)]).multiplyScalar(1.2);
+    const accent = C([0xb5603a, 0x3a6fa8, 0x2f8f8a, 0xc89a3a, 0x8a4a6a][Math.floor(h(5) * 5)]);
+    const frameC = C(0xfaf8f2).multiplyScalar(1.05);
+    this.at(k, F, u, v, deckY);
+    const base = k.base.clone();
+    const gy = deckY;
+    const T = (x: number, y: number, z: number, ry = 0, rx = 0) => base.clone().multiply(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, 'YXZ')), new THREE.Vector3(1, 1, 1)));
+    const box = (m: THREE.Matrix4, w: number, hh: number, d: number, c: THREE.Color, bottom = false) => sb.box(m, w, hh, d, c, gy, bottom);
+    const wo: KitOpts = { tint: wallsC, accent };
+    const lit = (j: number): KitOpts => ({ tint: wallsC, accent, glow: hash2(i * 31 + j, b * 17 + 5, 4419) < 0.5 ? 1 : 0 });
+    let z = 1.0;
+    for (let t = 0; t < 3; t++) {
+      const n = tiers[t];
+      const d = depths[t];
+      const hgt = n * S;
+      const zc = z - d / 2;
+      const xo = t === 0 ? 0 : (h(10 + t) - 0.5) * 0.3;
+      const lenT = len - t * (0.15 + h(20 + t) * 0.3);
+      box(T(xo, hgt / 2, zc), lenT, hgt, d, wallsC);
+      // cornice, parapet with a coping, the roof slab
+      box(T(xo, hgt - 0.01, zc), lenT + 0.03, 0.025, d + 0.03, frameC, true);
+      for (const s of [-1, 1]) {
+        box(T(xo, hgt + 0.025, zc + s * (d / 2 - 0.018)), lenT + 0.02, 0.05, 0.035, wallsC);
+        box(T(xo, hgt + 0.054, zc + s * (d / 2 - 0.018)), lenT + 0.03, 0.008, 0.045, frameC);
+      }
+      box(T(xo, hgt + 0.004, zc), lenT - 0.04, 0.008, d - 0.06, wallsC.clone().multiplyScalar(0.78));
+      const bays = Math.max(2, Math.round(lenT / 0.36));
+      const bx = (a: number) => xo - lenT / 2 + (lenT * (a + 0.5)) / bays;
+      const front = zc - d / 2;
+      for (let f = 0; f < n; f++) {
+        const y = f * S;
+        if (f === 0 && t === 2) {
+          // the ground floor on the deck: an arcade of round arches
+          const [cw, chh] = sb.cardSize('arch');
+          for (let a = 0; a < bays; a++) {
+            const sx = 0.2 / (cw * 0.72);
+            const sy = 0.23 / (chh * 0.86);
+            sb.card('arch', T(bx(a), (chh * sy) / 2, front - 0.004, Math.PI), wo, sx, sy);
+          }
+        } else if (f > 0 || t < 2) {
+          // the sea front: balconies (slab, glass railing on an aluminium frame), a shade over some
+          if (f > 0) {
+            box(T(xo, y, front - 0.055), lenT - 0.04, 0.022, 0.11, frameC, true);
+            sb.swatch(T(xo, y + 0.044, front - 0.106), lenT - 0.05, 0.06, 0.006, 'paint', { accent: C(0x9ec4cc) });
+            sb.swatch(T(xo, y + 0.078, front - 0.106), lenT - 0.04, 0.01, 0.014, 'aluminium', {});
+            for (let a = 0; a <= bays; a++) box(T(xo - lenT / 2 + (lenT * a) / bays + (a === 0 ? 0.01 : a === bays ? -0.01 : 0), y + S * 0.42, front - 0.055), 0.014, S * 0.85, 0.11, wallsC);
+          }
+          for (let a = 0; a < bays; a++) {
+            const x = bx(a);
+            sb.card('door_hotel', T(x, y + 0.122, front - 0.003, Math.PI), lit(a + f * 7 + t * 31), 0.85, 0.85);
+            if (f > 0 && h(30 + a + f * 7 + t * 31) < 0.22) sb.piece('awning', T(x, y + 0.235, front - 0.004, Math.PI).multiply(scaleM(0.22 / 0.6, 0.8, 0.7)), { accent });
+          }
+        }
+        // the back (inland: only the top tier's) and the ends: windows, shutters on some
+        if (t === 0) {
+          for (let a = 0; a < bays; a++) sb.card(h(60 + a + f * 5) < 0.55 ? 'win_shut' : 'win_hotel', T(bx(a), y + 0.12, zc + d / 2 + 0.003), lit(100 + a + f * 5), 0.72, 0.72);
+          if (f === 0 && h(70) < 0.7) sb.piece('ac', T(xo + lenT * 0.3, 0.05, zc + d / 2 + 0.03));
+        }
+        for (const sx of [-1, 1]) {
+          const cols = Math.max(1, Math.round(d / 0.36));
+          for (let a = 0; a < cols; a++) sb.card('win_hotel', T(xo + sx * (lenT / 2 + 0.003), y + 0.12, zc - d / 2 + (d * (a + 0.5)) / cols, (sx * Math.PI) / 2), lit(200 + a + f * 3 + (sx > 0 ? 50 : 0)), 0.72, 0.72);
+        }
+      }
+      // roofs: terraces with pergolas or loungers on the lower tiers; the top: a dome, a round tower or plant
+      if (t > 0) {
+        if (h(40 + t) < 0.55) {
+          for (let p = 0; p < 4; p++) sb.swatch(T(xo - lenT / 2 + 0.2 + p * ((lenT - 0.4) / 3), hgt + 0.085, zc), 0.018, 0.17, 0.018, 'wood', {});
+          for (const s of [-1, 1]) sb.swatch(T(xo, hgt + 0.168, zc + s * 0.15), lenT - 0.36, 0.014, 0.02, 'wood', {});
+          for (let sl = 0; sl < 7; sl++) sb.swatch(T(xo - lenT / 2 + 0.2 + (sl * (lenT - 0.4)) / 6, hgt + 0.18, zc), 0.025, 0.015, 0.34, 'wood_lt', {}, 0);
+        } else {
+          for (let p = 0; p < 3; p++) {
+            const lc = { accent: p % 2 ? C(0x2f6fc0) : C(WHITE) };
+            sb.swatch(T(xo - lenT / 3 + p * (lenT / 3), hgt + 0.03, zc), 0.1, 0.022, 0.2, 'fabric_acc', lc);
+            sb.swatch(T(xo - lenT / 3 + p * (lenT / 3), hgt + 0.05, zc - 0.085, 0, -0.6), 0.1, 0.006, 0.06, 'fabric_acc', lc, 0);
+          }
+        }
+      } else {
+        const kind = (i + b * 2 + Math.floor(h(44) * 1.6)) % 3;
+        if (kind === 0) {
+          sb.plaster(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 20).translate(0, 0.04, 0), T(xo + lenT * 0.22, hgt, zc + 0.05), wallsC, gy);
+          sb.piece('dome', T(xo + lenT * 0.22, hgt + 0.08, zc + 0.05).multiply(scaleM(0.22 / 0.25)), { tint: h(45) < 0.5 ? wallsC : C(0x4c86b8).multiplyScalar(1.3) });
+        } else if (kind === 1) {
+          // a round stair tower at one end, taller than the block, with a little cupola
+          const ex = xo + (h(46) < 0.5 ? -1 : 1) * (lenT / 2 - 0.05);
+          sb.plaster(new THREE.CylinderGeometry(0.24, 0.24, hgt + S, 20).translate(0, (hgt + S) / 2, 0), T(ex, 0, zc), wallsC, gy);
+          for (let f = 1; f <= n; f++) sb.card('win_hotel', T(ex, f * S - 0.1, zc - 0.243, Math.PI), lit(300 + f), 0.6, 0.75);
+          sb.plaster(new THREE.CylinderGeometry(0.26, 0.26, 0.03, 20).translate(0, 0.015, 0), T(ex, hgt + S, zc), frameC, gy);
+          sb.piece('dome', T(ex, hgt + S + 0.03, zc).multiply(scaleM(0.16 / 0.25)), { tint: accent.clone().multiplyScalar(1.4) });
+        } else {
+          // plant: a plant room with a louvred vent, AC units, two water tanks
+          box(T(xo - lenT * 0.25, hgt + 0.09, zc + 0.12), 0.42, 0.18, 0.34, wallsC);
+          sb.card('vent', T(xo - lenT * 0.25, hgt + 0.1, zc + 0.12 - 0.173, Math.PI), wo, 1.2, 1.2);
+          for (const xx of [0.28, 0.18]) sb.piece('tank', T(xo + lenT * xx, hgt, zc + 0.18), { accent: C(0xd8d8d4) });
+          sb.piece('ac', T(xo + lenT * 0.05, hgt, zc - 0.12, Math.PI));
+          sb.piece('ac', T(xo + lenT * 0.05 + 0.16, hgt, zc - 0.12, Math.PI), {}, 0);
+        }
+        // a coloured band under the roof line (no names, no logos)
+        sb.swatch(T(xo, hgt - 0.055, front - 0.007), lenT * 0.45, 0.04, 0.01, 'paint', { accent });
       }
       z -= d;
     }
@@ -752,26 +914,36 @@ export class Seaside {
         if (j < 0.32 && free(u, vk) && free(u, vt)) {
           // a cafe terrace: the kiosk, three tables, string lights from the kiosk's awning to a post
           this.at(k, F, u, vk, y0(u, vk) - 0.02);
-          k.box(0.5, 0.3, 0.34, 0, 0.15, 0, h(bay, 3) < 0.5 ? WHITE : CREAM);
-          k.box(0.54, 0.03, 0.38, 0, 0.31, 0, 0xc9b48a);
-          k.box(0.38, 0.13, 0.01, 0, 0.13, -0.175, 0x1c2226);
-          k.box(0.5, 0.1, 0.03, 0, 0.09, -0.2, 0xb08a5a);
-          k.box(0.56, 0.012, 0.2, 0, 0.29, -0.27, canvas, 0, 0, -0.35);
+          if (this.sb) {
+            // the kit's kiosk (GD2): booth, serving hatch with a half-rolled shutter, a striped awning
+            this.sb.piece('kiosk', k.base.clone().multiply(new THREE.Matrix4().makeRotationY(Math.PI)).multiply(scaleM(1, 0.94, 0.94)), { color: C(h(bay, 3) < 0.5 ? WHITE : CREAM), accent: C(canvas) });
+          } else {
+            k.box(0.5, 0.3, 0.34, 0, 0.15, 0, h(bay, 3) < 0.5 ? WHITE : CREAM);
+            k.box(0.54, 0.03, 0.38, 0, 0.31, 0, 0xc9b48a);
+            k.box(0.38, 0.13, 0.01, 0, 0.13, -0.175, 0x1c2226);
+            k.box(0.5, 0.1, 0.03, 0, 0.09, -0.2, 0xb08a5a);
+            k.box(0.56, 0.012, 0.2, 0, 0.29, -0.27, canvas, 0, 0, -0.35);
+          }
           k.box(0.3, 0.06, 0.01, 0, 0.36, -0.18, CANVAS[(Math.floor(h(bay, 4) * 6) + 2) % 6]);
           for (let t = -1; t <= 1; t++) {
             const ut = u + t * 0.3;
             const vv = vt + (t === 0 ? 0.12 : 0);
             const yt = y0(ut, vv);
             this.at(k, F, ut, vv, yt);
-            k.cyl(0.055, 0.055, 0.012, 0, 0.1, 0, 0xf0ede4, 10);
-            k.cyl(0.008, 0.008, 0.1, 0, 0, 0, DARK, 4);
-            k.cyl(0.006, 0.006, 0.3, 0, 0.11, 0, DARK, 4);
-            k.cone(0.15, 0.06, 0, 0.36, 0, CANVAS[(Math.floor(h(bay, 5 + t) * 6) + t + 6) % 6], 8);
+            if (this.sb) this.sb.piece('table', k.base.clone(), { accent: C(CANVAS[(Math.floor(h(bay, 5 + t) * 6) + t + 6) % 6]) });
+            else {
+              k.cyl(0.055, 0.055, 0.012, 0, 0.1, 0, 0xf0ede4, 10);
+              k.cyl(0.008, 0.008, 0.1, 0, 0, 0, DARK, 4);
+              k.cyl(0.006, 0.006, 0.3, 0, 0.11, 0, DARK, 4);
+              k.cone(0.15, 0.06, 0, 0.36, 0, CANVAS[(Math.floor(h(bay, 5 + t) * 6) + t + 6) % 6], 8);
+            }
             // a lantern on the table
             k.box(0.016, 0.022, 0.016, 0.02, 0.122, 0.0, 0xffc070, 1);
             for (const s of [-1, 1]) {
-              k.box(0.05, 0.012, 0.05, s * 0.09, 0.065, 0, WOOD);
-              k.box(0.05, 0.05, 0.008, s * 0.09, 0.095, s * 0.025, WOOD, 0, Math.PI / 2);
+              if (!this.sb) {
+                k.box(0.05, 0.012, 0.05, s * 0.09, 0.065, 0, WOOD);
+                k.box(0.05, 0.05, 0.008, s * 0.09, 0.095, s * 0.025, WOOD, 0, Math.PI / 2);
+              }
               const q = F.P(ut + s * 0.09 * Math.cos(0), vv);
               this.seats[b].push({ x: q.x, z: q.y, y: yt + 0.035, yaw: yaw + (s > 0 ? Math.PI : 0) });
             }
@@ -810,10 +982,13 @@ export class Seaside {
         if (j < 0.82 && free(u, vk)) {
           // a small shop: a white kiosk with a shutter-up front, an awning, a rack of goods and a plain sign
           this.at(k, F, u, vk, y0(u, vk) - 0.02);
-          k.box(0.44, 0.34, 0.32, 0, 0.17, 0, h(bay, 30) < 0.5 ? WHITE : 0xf0e2c4);
-          k.box(0.48, 0.03, 0.36, 0, 0.355, 0, 0xd9cfbc);
-          k.box(0.34, 0.2, 0.01, 0, 0.15, -0.165, 0x252a2c);
-          k.box(0.5, 0.012, 0.18, 0, 0.3, -0.25, canvas, 0, 0, -0.4);
+          if (this.sb) this.sb.piece('kiosk', k.base.clone().multiply(new THREE.Matrix4().makeRotationY(Math.PI)).multiply(scaleM(0.88, 1.06, 0.89)), { color: C(h(bay, 30) < 0.5 ? WHITE : 0xf0e2c4), accent: C(canvas) });
+          else {
+            k.box(0.44, 0.34, 0.32, 0, 0.17, 0, h(bay, 30) < 0.5 ? WHITE : 0xf0e2c4);
+            k.box(0.48, 0.03, 0.36, 0, 0.355, 0, 0xd9cfbc);
+            k.box(0.34, 0.2, 0.01, 0, 0.15, -0.165, 0x252a2c);
+            k.box(0.5, 0.012, 0.18, 0, 0.3, -0.25, canvas, 0, 0, -0.4);
+          }
           k.box(0.26, 0.07, 0.01, 0, 0.4, -0.16, CANVAS[(Math.floor(h(bay, 31) * 6) + 3) % 6]);
           // the rack: hats, beach toys, towels in bright colours
           k.box(0.012, 0.22, 0.012, 0.3, 0.11, -0.2, DARK);
@@ -1140,15 +1315,21 @@ export class Seaside {
 
   update(time: number) {
     this.frameNo++;
+    // the kit's LOD meshes swap on the view span (orthographic BASE_VIEW 22 / zoom), like the town's SceneryLod
+    const near = 22 / Math.max(0.05, this.zoom) <= this.kitLoSpan;
+    for (const l of this.kitLods) {
+      if (l.k0) l.k0.visible = near;
+      if (l.k1) l.k1.visible = !near;
+    }
     if (this.reef) {
       this.reef.zoom = this.zoom;
       this.reef.update();
     }
     this.updateBoats(time);
     // the figures: left out zoomed out; every other frame is plenty (bobbing swimmers, strollers)
-    const near = this.zoom >= 1.1;
-    for (const ci of this.people) ci.mesh.visible = near && ci.n > 0;
-    if (near && this.people.length && this.frameNo % 2 === 0) {
+    const close = this.zoom >= 1.1;
+    for (const ci of this.people) ci.mesh.visible = close && ci.n > 0;
+    if (close && this.people.length && this.frameNo % 2 === 0) {
       const dt = 1 / 30;
       for (const w of this.walkers) {
         w.u += w.dir * w.speed * dt * 2;
