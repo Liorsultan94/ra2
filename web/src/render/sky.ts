@@ -303,6 +303,27 @@ const DOME_FRAG = /* glsl */ `
         col = mix( col, cc, a );
       }
     }
+    #ifdef GLOW
+    // the desert's sunset (DP1): a warm amber glow along the horizon under a low sun (deep orange as it sets,
+    // fading out in the dusk), scaled by the scattered sky's own brightness there; opposite the sun a faint
+    // rosy band (the belt of Venus) over the earth's blue shadow at dusk
+    {
+      float sl = uSun.y;
+      float low = ( 1.0 - smoothstep( 0.1, 0.42, sl ) ) * smoothstep( -0.16, -0.01, sl ) * ( 1.0 - over ) * ( 1.0 - uDust );
+      if ( low > 0.001 ) {
+        vec2 dh = normalize( d.xz + 1e-5 );
+        float tow = dot( dh, uSunXZ ) * 0.5 + 0.5;
+        vec3 hs = texture2D( uLut, skyUv( normalize( vec3( uSunXZ.x, 0.04, uSunXZ.y ) ) ) ).rgb;
+        float hl = dot( hs, vec3( 0.2126, 0.7152, 0.0722 ) );
+        vec3 amber = mix( vec3( 1.0, 0.58, 0.26 ), vec3( 1.0, 0.4, 0.2 ), 1.0 - smoothstep( -0.04, 0.16, sl ) );
+        float band = exp( -max( up, 0.0 ) * 7.0 ) * smoothstep( -0.03, 0.02, up );
+        col += amber * hl * band * ( 0.25 + 0.75 * tow * tow * tow ) * low * 0.9;
+        float belt = smoothstep( 0.015, 0.06, up ) * ( 1.0 - smoothstep( 0.08, 0.22, up ) );
+        float dusk = ( 1.0 - smoothstep( -0.02, 0.12, sl ) );
+        col += vec3( 0.42, 0.26, 0.32 ) * hl * belt * pow( 1.0 - tow, 2.0 ) * dusk * low * 0.6;
+      }
+    }
+    #endif
     // horizon: fade into the far haze colour of the outskirts (no seam with the ground)
     vec2 vd = normalize( d.xz + 1e-5 );
     vec3 hz = mix( uHorB, uHorA, dot( vd, uSunXZ ) * 0.5 + 0.5 );
@@ -452,7 +473,7 @@ export class Sky {
     const fu = this.fog.uniforms;
     const hd = env ? this.hdri : null;
     return new THREE.ShaderMaterial({
-      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}), ...(this.nightSky ? { NIGHT_SKY: 1 } : {}) },
+      defines: { ...(this.quality === 'high' ? { HQ: 1 } : {}), ...(hd ? { HDRI: 1 } : {}), ...(this.nightSky ? { NIGHT_SKY: 1, GLOW: 1 } : {}) },
       uniforms: {
         uLut: { value: this.lut.texture },
         uNoise: fu.fogNoise,
@@ -542,6 +563,17 @@ export class Sky {
       v.lerp(this.lerpTmp, st.dust * 0.85);
       // a hazy horizon is a little paler / darker than the clear-sky band right above it
       v.multiplyScalar(0.85);
+    }
+    if (this.nightSky) {
+      // the desert's sunset glow (DP1, as the dome's GLOW): the horizon towards a low sun warms to amber
+      const sl = st.sun.y;
+      const low = (1 - smooth(0.1, 0.42, sl)) * smooth(-0.16, -0.01, sl) * (1 - over) * (1 - st.dust);
+      if (low > 0.001) {
+        const l = A.x * 0.2126 + A.y * 0.7152 + A.z * 0.0722;
+        const set = 1 - smooth(-0.04, 0.16, sl);
+        this.lerpTmp.set(l * 1.5, l * (0.95 - 0.2 * set), l * (0.5 - 0.12 * set));
+        A.lerp(this.lerpTmp, 0.45 * low);
+      }
     }
     for (const m of this.envMat ? [this.mat, this.envMat] : [this.mat]) {
       const u = m.uniforms;
