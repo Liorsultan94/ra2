@@ -211,10 +211,11 @@ export class Game {
     // early-game grace (peace.ts): the enemy builds up and defends, but sends nothing at the player until it ends
     const peace = attract ? 0 : peaceTicks(opts.difficulty, opts.peace ?? 'off');
     this.peaceUntil = peace;
-    if (attract) this.world.controllers.push(new AIController(this.world, 0, 'hard'));
-    this.world.controllers.push(new AIController(this.world, 1, attract ? 'hard' : opts.difficulty, { peaceTicks: peace }));
-    // superweapon builder / user (superweapons.ts)
-    for (const p of this.world.players) if (p.isAI) this.world.controllers.push(new SuperweaponAI(this.world, p.id, { peaceTicks: peace }));
+    const ais: (AIController | undefined)[] = [];
+    if (attract) this.world.controllers.push((ais[0] = new AIController(this.world, 0, 'hard')));
+    this.world.controllers.push((ais[1] = new AIController(this.world, 1, attract ? 'hard' : opts.difficulty, { peaceTicks: peace })));
+    // superweapon builder / user (superweapons.ts), aiming by what its AI has seen (fog of war)
+    for (const p of this.world.players) if (p.isAI) this.world.controllers.push(new SuperweaponAI(this.world, p.id, { peaceTicks: peace, ai: ais[p.id] }));
 
     this.hud = new Hud(container, this.cameos, {
       onCameo: (id, cat, shift) => this.onCameo(id, cat, shift),
