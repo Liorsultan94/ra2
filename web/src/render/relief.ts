@@ -7,6 +7,8 @@ import { surfaceHeight } from './ground';
 import { assetBase, fetchBitmap } from './photoground';
 import { rockTexture } from './terraintex';
 import { strataGlsl } from './strata';
+import { PHOTO_MATERIALS } from './terrainset';
+import { ROCK_DETAIL_GLSL, rockDetail, rockMean } from './rockdetail';
 
 /*
  * Relief (render only): real rock faces on the map's impassable rock.
@@ -374,7 +376,7 @@ export function reliefDepth(m: GameMap, x: number, y: number): number {
 
 /** One sector's merged cliff geometry at a sample stride (1 = full, 2 = far LOD). */
 /** Wadi Al-Rimal's coloured canyons: how much a point (tile space) belongs to a canyon's walls (0..1). */
-function canyonMask(m: GameMap): ((x: number, y: number) => number) | null {
+export function canyonMask(m: GameMap): ((x: number, y: number) => number) | null {
   const list = m.deco?.canyons;
   if (!list?.length) return null;
   const cs = list.map((c) => {
@@ -517,13 +519,28 @@ function loadTile(name: string, kind: 'a' | 'n', size: number): Promise<THREE.Te
 function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 'high', canyon = false): THREE.MeshStandardMaterial {
   const lk = LOOK[biome] ?? LOOK.temperate;
   const flatN = placeholder(128, 128, 255);
+  const size = quality === 'high' ? 1024 : 512;
+  // the desert (GD4): Blender-baked South Sinai granite on the faces and tops, the canyon's sandstone (rockdetail.ts)
+  const granite = biome === 'desert' && quality !== 'low' ? rockDetail('granite', size) : null;
+  const sand = canyon && quality !== 'low' ? rockDetail('sandstone', size) : null;
+  // (the granite keeps the cliffs' colour: the tints carry over from the scan it replaces, scaled by the means)
+  const reTint = (hex: number) => {
+    const c = new THREE.Color(hex);
+    if (!granite) return c;
+    const a = PHOTO_MATERIALS[lk.side].mean;
+    const b = rockMean('granite');
+    return c.multiply(new THREE.Color(a[0] / b.x, a[1] / b.y, a[2] / b.z));
+  };
   const u = {
-    rSideA: { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
-    rTopA: { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
-    rSideN: { value: flatN as THREE.Texture },
-    rTopN: { value: flatN as THREE.Texture },
-    rSideTint: { value: new THREE.Color(lk.sideTint) },
-    rTopTint: { value: new THREE.Color(lk.topTint) },
+    rSideA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
+    rTopA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
+    rSideN: granite ? granite.n : { value: flatN as THREE.Texture },
+    rTopN: granite ? granite.n : { value: flatN as THREE.Texture },
+    rCanA: sand ? sand.a : { value: placeholder(150, 144, 136) as THREE.Texture },
+    rCanN: sand ? sand.n : { value: flatN as THREE.Texture },
+    rCanMean: { value: rockMean('sandstone') },
+    rSideTint: { value: reTint(lk.sideTint) },
+    rTopTint: { value: reTint(lk.topTint) },
   };
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   mat.onBeforeCompile = (sh) => {
@@ -543,10 +560,13 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
         uniform sampler2D rTopN;
         uniform vec3 rSideTint;
         uniform vec3 rTopTint;
-        vec3 rTriW;
         vec3 rTriN;
-        float rRough = 0.0;${canyon ? `
+        float rRough = 0.0;
+        ${ROCK_DETAIL_GLSL}${canyon ? `
         varying float vCanyon;
+        uniform sampler2D rCanA;
+        uniform sampler2D rCanN;
+        uniform vec3 rCanMean;
         // the coloured canyon's sandstone (render/strata.ts)
         ${strataGlsl()}` : ''}`,
       )
@@ -555,17 +575,17 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
         `#include <map_fragment>
         {
           vec3 n = normalize( vRWn );
-          vec3 bw = pow( abs( n ), vec3( 4.0 ) );
-          bw /= dot( bw, vec3( 1.0 ) );
-          rTriW = bw;
-          vec3 p = vRWp * 0.55;
-          vec3 ax = texture2D( rSideA, p.zy ).rgb;
-          vec3 az = texture2D( rSideA, p.xy + 0.37 ).rgb;
-          vec3 ay = texture2D( rTopA, p.xz * 0.8 ).rgb;
-          float up = smoothstep( 0.45, 0.85, n.y );
-          vec3 side = ( ax * bw.x + az * bw.z ) / max( 1e-3, bw.x + bw.z );
-          vec3 alb = mix( side * rSideTint, ay * rTopTint, max( up, bw.y * 0.6 ) );
+          vec3 dpx = dFdx( vRWp );
+          vec3 dpy = dFdy( vRWp );
+          // triplanar rock (rockdetail.ts: height-blended, no mirrored or ghosted projections), the faces' and the
+          // tops' maps and tints
+          vec3 alb;
+          vec3 wn;
+          float rh;
+          vec3 tw;
+          rdTri3( rSideA, rSideN, rTopA, rTopN, vRWp, n, ${granite ? '0.42, 0.34' : '0.55, 0.44'}, rSideTint, rTopTint, dpx, dpy, alb, wn, rh, tw );
           alb = mix( vec3( dot( alb, vec3( 0.2126, 0.7152, 0.0722 ) ) ), alb, ${lk.sat.toFixed(2)} );
+          float up = smoothstep( 0.45, 0.85, n.y );
           float steep = 1.0 - up;
           // sediment strata on the faces
           float sn = texture2D( fogNoise, vRWp.xz * 0.07 ).r;
@@ -573,18 +593,23 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
           alb *= 1.0 + strata * ${lk.strata.toFixed(2)} * steep;
           #if ${canyon ? 1 : 0}
           if ( vCanyon > 0.01 ) {
-            // muted sandstone layers that follow the rock (strata.ts), the scan's grain and relief kept through
-            // its luminance; ledges and tops carry drift sand over the paler rock
+            // muted sandstone layers that follow the rock (strata.ts) over the sandstone's own grain, beds, honeycomb
+            // and joints (rockdetail.ts); ledges and tops carry drift sand over the paler rock
             float cShade;
             float cRough;
             vec3 band = cyStrata( vRWp, n, cShade, cRough );
-            float grain = clamp( dot( side, vec3( 0.2126, 0.7152, 0.0722 ) ) * 1.65, 0.6, 1.4 );
-            vec3 cAlb = band * mix( 1.0, grain, 0.5 ) * cShade * 0.78;
-            vec3 sand = vec3( 0.5, 0.36, 0.22 ) * mix( 1.0, grain, 0.3 ) * 0.78;
-            cAlb = mix( cAlb, sand, smoothstep( 0.62, 0.9, n.y ) * 0.7 );
+            vec3 sAlb;
+            vec3 sN;
+            float sH;
+            rdTriGrad( rCanA, rCanN, vRWp, n, 0.36, dpx, dpy, sAlb, sN, sH );
+            float grain = clamp( dot( sAlb / rCanMean, vec3( 0.2126, 0.7152, 0.0722 ) ), 0.45, 1.6 );
+            vec3 cAlb = band * mix( 1.0, grain, 0.6 ) * cShade * 0.57;
+            vec3 dune = vec3( 0.5, 0.36, 0.22 ) * mix( 1.0, grain, 0.35 ) * 0.6;
+            cAlb = mix( cAlb, dune, smoothstep( 0.62, 0.9, n.y ) * 0.7 );
             // (canyon.ts' ledges and boulders carry 2: sandstone all over)
             float ck = min( 1.0, vCanyon * ( 0.5 + 0.5 * steep ) );
             alb = mix( alb, cAlb, ck );
+            wn = normalize( mix( wn, sN, ck ) );
             rRough = cRough * ck;
           }
           #endif
@@ -600,36 +625,23 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
             float sn2 = texture2D( fogNoise, vRWp.xz * 0.45 ).b;
             float snow = smoothstep( 0.5, 0.78, n.y + ( sn2 - 0.5 ) * 0.35 ) * ${lk.snow.toFixed(2)};
             alb = mix( alb, vec3( 0.78, 0.82, 0.88 ), snow );
+            wn = normalize( mix( wn, n, snow * 0.7 ) );
           }
           #endif
           diffuseColor.rgb *= alb * 1.6;
-          rTriN = n;
+          rTriN = wn;
         }`,
       )
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n        roughnessFactor = clamp( roughnessFactor + rRough, 0.6, 1.0 );')
       .replace(
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
-        {
-          vec3 n = rTriN;
-          vec3 bw = rTriW;
-          vec3 p = vRWp * 0.55;
-          vec3 tx = texture2D( rSideN, p.zy ).xyz * 2.0 - 1.0;
-          vec3 tz = texture2D( rSideN, p.xy + 0.37 ).xyz * 2.0 - 1.0;
-          vec3 ty = texture2D( rTopN, p.xz * 0.8 ).xyz * 2.0 - 1.0;
-          // whiteout blend (Golus)
-          vec3 nX = vec3( tx.xy + n.zy, abs( tx.z ) * n.x );
-          vec3 nY = vec3( ty.xy + n.xz, abs( ty.z ) * n.y );
-          vec3 nZ = vec3( tz.xy + n.xy, abs( tz.z ) * n.z );
-          vec3 wn = normalize( nX.zyx * bw.x + nY.xzy * bw.y + nZ.xyz * bw.z );
-          normal = normalize( ( viewMatrix * vec4( wn, 0.0 ) ).xyz );
-        }`,
+        normal = normalize( ( viewMatrix * vec4( rTriN, 0.0 ) ).xyz );`,
       );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'relief-cliff-' + biome + (canyon ? '-canyon' : '');
-  if (quality !== 'low') {
-    const size = quality === 'high' ? 1024 : 512;
+  mat.customProgramCacheKey = () => 'relief-cliff2-' + biome + (canyon ? '-canyon' : '');
+  if (quality !== 'low' && !granite) {
     void Promise.all([loadTile(lk.side, 'a', size), loadTile(lk.top, 'a', size), loadTile(lk.side, 'n', size), loadTile(lk.top, 'n', size)]).then(([sa, ta, sn, tn]) => {
       if (sa) u.rSideA.value = sa;
       if (ta) u.rTopA.value = ta;

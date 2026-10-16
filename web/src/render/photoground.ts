@@ -3,6 +3,7 @@ import { phoneCaps } from './devicecaps';
 import type { Biome } from '../sim/map';
 import { PHOTO_MATERIALS, PHOTO_STACKS, type PhotoMaterial, type PhotoSlot, type PhotoStack } from './terrainset';
 import { DUNES_BYTES, SAND_BYTES, SAND_MATERIALS } from './sandset';
+import { GRANITE_BYTES, ROCK_FACES } from './rockset';
 
 /*
  * Photoscanned ground materials (CC0 scans baked by tools/bake-terrain.mjs
@@ -39,20 +40,25 @@ export function assetBase(): string {
   }
 }
 
-/** A ground layer's material: the photoscans (terrainset.ts) and the desert's Blender-baked sand (sandset.ts). */
+/** A ground layer's material: the photoscans (terrainset.ts), the desert's Blender-baked sand (sandset.ts) and granite (rockset.ts). */
 export function photoMaterial(key: string): PhotoMaterial | undefined {
-  return PHOTO_MATERIALS[key] ?? (SAND_MATERIALS as Record<string, PhotoMaterial>)[key];
+  return PHOTO_MATERIALS[key] ?? (SAND_MATERIALS as Record<string, PhotoMaterial>)[key] ?? (ROCK_FACES as Record<string, PhotoMaterial>)[key];
 }
 
 /**
  * The desert (GD1): the Blender-baked sand (sandset.ts) takes the dune scan's layer, and a reg / desert
  * pavement gravel layer joins as the extra slot `reg` (PH_REG in the ground shader: gravel patches on the sand).
+ * GD4: the Blender-baked South Sinai granite (rockset.ts, the cliffs' own rock) takes the grey rock scan's layer: the
+ * massifs' bare slopes.
  */
+/** Download of the grey rock scan (terrain.json) the granite replaces in the desert stack. */
+const GREYROCK_BYTES: Record<number, number> = { 512: 46012, 1024: 137702 };
 const DESERT_STACK: PhotoStack = (() => {
   const s = PHOTO_STACKS.desert;
-  const layers = [...s.layers.map((k) => (k === 'dunes' ? 'dsand' : k)), 'dreg'];
+  const layers = [...s.layers.map((k) => (k === 'dunes' ? 'dsand' : k === 'greyrock' ? 'dgranite' : k)), 'dreg'];
   const bytes: Record<number, number> = {};
-  for (const [k, v] of Object.entries(s.bytes)) bytes[+k] = v - (DUNES_BYTES[+k] ?? 0) + (SAND_BYTES[+k] ?? 0);
+  for (const [k, v] of Object.entries(s.bytes))
+    bytes[+k] = v - (DUNES_BYTES[+k] ?? 0) + (SAND_BYTES[+k] ?? 0) - (GREYROCK_BYTES[+k] ?? 0) + (GRANITE_BYTES[+k] ?? 0);
   return { layers, slot: { ...s.slot, reg: layers.length - 1 } as PhotoStack['slot'], bytes };
 })();
 

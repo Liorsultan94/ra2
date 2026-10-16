@@ -119,8 +119,8 @@ def granite(n, rng):
     X, Y = grid_xy(n)
     # two joint sets: near-vertical joints between columns (wavy, a little tilted) and sheeting joints across each
     # column at its own levels (they stop at the vertical joints, as in a jointed granite face)
-    NC = 6
-    cx = np.sort((np.arange(NC) + 0.5 + (rng.random(NC) - 0.5) * 0.7) / NC)
+    NC = 5
+    cx = np.sort((np.arange(NC) + 0.5 + (rng.random(NC) - 0.5) * 0.9) / NC)
     xw = X + field(n, 2, 7, 101) * 0.012 + field(n, 8, 20, 102) * 0.0025 + (Y - 0.5) * 0.04
     dcol = np.full((n, n), 9.0)
     for k in range(NC):
@@ -129,8 +129,8 @@ def granite(n, rng):
     rel = (xw[..., None] - cx[None, None, :]) % 1.0
     col = np.argmin(rel, axis=2).astype(np.int32)
     relc = np.min(rel, axis=2)
-    NR = 4
-    rows = np.sort((np.arange(NR)[None, :] + 0.5 + (rng.random((NC, NR)) - 0.5) * 0.8) / NR, axis=1)
+    NR = 3
+    rows = np.sort((np.arange(NR)[None, :] + 0.5 + (rng.random((NC, NR)) - 0.5) * 0.9) / NR, axis=1)
     yw = Y + field(n, 2, 6, 103) * 0.01 + (X - 0.5) * 0.03
     relr = (yw[..., None] - rows[col]) % 1.0
     row = np.argmin(relr, axis=2).astype(np.int32)
@@ -141,9 +141,11 @@ def granite(n, rng):
     tilt = rng.normal(0, 0.045, (nb, 2))
     lift = rng.normal(0, 0.008, nb)
     H = lift[blk] + tilt[blk, 0] * (relc - 0.08) + tilt[blk, 1] * (np.min(relr, axis=2) - 0.12)
-    # block edges rounded back by weathering, the joints open
-    H -= 0.028 * np.power(1 - sstep(0.0, 0.05, edge), 1.7)
-    H -= 0.008 * np.exp(-np.square(edge / 0.0035))
+    # block edges rounded back by weathering, the joints open - here and there a joint dies out (the blocks
+    # still welded together), so the face never reads as a grid
+    jmask = sstep(-0.7, 0.4, field(n, 2, 6, 113))
+    H -= 0.022 * np.power(1 - sstep(0.0, 0.05, edge), 1.7) * (0.3 + 0.7 * jmask)
+    H -= 0.007 * np.exp(-np.square(edge / 0.0035)) * jmask
     # broad lumps
     H += 0.007 * field(n, 2, 5, 104)
     # exfoliation: a sheet or two peeling off each block parallel to the face; one side stands proud of the

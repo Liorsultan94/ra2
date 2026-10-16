@@ -24,7 +24,7 @@ if (!BAKE) throw new Error('usage: rocks-pack.mjs <bake_dir>');
 const SIZES = [512, 1024];
 /** Map tiles per texture repeat (the game's triplanar scale; also the ground layer's repeat for the granite). */
 const MATS = [
-  { key: 'dgranite', tiles: 2.6, note: 'South Sinai granite: joint blocks, exfoliation sheets, cracks, varnish (Blender, tools/blender/rockface.py)' },
+  { key: 'dgranite', tiles: 4.2, note: 'South Sinai granite: joint blocks, exfoliation sheets, cracks, varnish (Blender, tools/blender/rockface.py)' },
   { key: 'dsandst', tiles: 2.2, note: 'canyon sandstone: beds, cross-bedding, honeycomb, joints (Blender, tools/blender/rockface.py)' },
 ];
 

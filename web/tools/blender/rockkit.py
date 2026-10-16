@@ -217,10 +217,10 @@ def rock_tor(rng):
 
 
 def rock_corestone(rng):
-    o = superellipsoid('core', (1.0, 0.82, 0.72), 2.3, 0.3, (0, 0, 0), 6)
+    o = superellipsoid('core', (1.0, 0.8, 0.6), 2.9, 0.3, (0, 0, 0), 6)
     co = get_co(o)
     nrm = co / np.linalg.norm(co, axis=1, keepdims=True)
-    co = co + nrm * (0.09 * fbm(co * 1.3, 3, 21))[:, None]
+    co = co + nrm * (0.14 * fbm(co * 1.3, 3, 21))[:, None]
     # an exfoliation flake spalled off one shoulder: a shallow step where the outer sheet broke away
     n1 = np.array([0.55, -0.45, 0.7])
     n1 /= np.linalg.norm(n1)
@@ -239,10 +239,10 @@ def rock_corestone(rng):
 
 
 def rock_boulder(rng):
-    o = superellipsoid('bld', (1.0, 0.9, 0.78), 2.1, 0.0, (0, 0, 0), 6)
+    o = superellipsoid('bld', (1.0, 0.86, 0.62), 2.7, 0.0, (0, 0, 0), 6)
     co = get_co(o)
     nrm = co / np.linalg.norm(co, axis=1, keepdims=True)
-    co = co + nrm * (0.11 * fbm(co * 1.1, 3, 31))[:, None]
+    co = co + nrm * (0.16 * fbm(co * 1.1, 3, 31))[:, None]
     # a sheet-joint bench on one side
     z = co[:, 2] - 0.18 + 0.05 * fbm(co * 3.0, 2, 32)
     side = sstep(-0.2, 0.3, co[:, 0])

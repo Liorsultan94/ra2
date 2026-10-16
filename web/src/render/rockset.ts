@@ -6,17 +6,17 @@ import type { PhotoMaterial } from './terrainset';
 
 export const ROCK_FACES: Record<'dgranite' | 'dsandst', PhotoMaterial> = {
   // South Sinai granite: joint blocks, exfoliation sheets, cracks, varnish (Blender, tools/blender/rockface.py)
-  dgranite: { tiles: 2.6, regular: false, mean: [0.3129, 0.1717, 0.1228], hex: 0x987362, rough: 0.84 },
+  dgranite: { tiles: 4.2, regular: false, mean: [0.3266, 0.1793, 0.1283], hex: 0x9b7564, rough: 0.84 },
   // canyon sandstone: beds, cross-bedding, honeycomb, joints (Blender, tools/blender/rockface.py)
   dsandst: { tiles: 2.2, regular: false, mean: [0.4437, 0.2836, 0.1637], hex: 0xb29171, rough: 0.9 },
 };
 
 /** Download of the granite's two WebPs per texture size (the desert ground's rock layer). */
-export const GRANITE_BYTES: Record<number, number> = { 512: 158094, 1024: 456568 };
+export const GRANITE_BYTES: Record<number, number> = { 512: 162636, 1024: 476372 };
 /** Download of both rocks' WebPs per texture size. */
-export const ROCK_FACE_BYTES: Record<number, number> = { 512: 303190, 1024: 736748 };
+export const ROCK_FACE_BYTES: Record<number, number> = { 512: 307732, 1024: 756552 };
 /** The rock kit: meshes <key>_hi / <key>_lo, triangles per level of detail, download size. */
 export const ROCK_KIT: { bytes: number; tris: Record<string, { hi: number; lo: number }> } = {
-  bytes: 82176,
+  bytes: 82056,
   tris: { tor: { hi: 1400, lo: 300 }, corestone: { hi: 1100, lo: 240 }, boulder: { hi: 900, lo: 200 }, slab: { hi: 320, lo: 80 }, talus1: { hi: 560, lo: 130 }, talus2: { hi: 560, lo: 130 }, chip: { hi: 140, lo: 44 } },
 };
