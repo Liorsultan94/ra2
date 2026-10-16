@@ -360,6 +360,51 @@ export class Effects {
     return a + Math.random() * (b - a);
   }
 
+  private tcs = [1, 1, 1];
+  private dk = [1, 1, 1];
+  /**
+   * Dust colour multipliers for the ground at (x, z), relative to the generic brown blast dust (1 = unchanged):
+   * the desert's sand in its own painted colour (golden dunes, white coral beach, the canyon's honey floor),
+   * grey rock, the city's grey grit. Snow is handled by the callers.
+   */
+  dustK(x: number, z: number): number[] {
+    const k = this.dk;
+    k[0] = k[1] = k[2] = 1;
+    const m = this.map;
+    if (!m) return k;
+    const tx = Math.max(0, Math.min(m.w - 1, Math.floor(x)));
+    const tz = Math.max(0, Math.min(m.h - 1, Math.floor(z)));
+    const t = m.tiles[tz * m.w + tx];
+    if (m.biome === 'desert' && (t === Tile.Sand || t === Tile.Dirt || t === Tile.Grass)) {
+      const c = this.groundTint?.(x, z, this.tcs) ? this.tcs : null;
+      const sand = t === Tile.Sand;
+      k[0] = (sand ? 1.42 : 1.24) * Math.min(1.25, c ? c[0] : 1);
+      k[1] = (sand ? 1.36 : 1.17) * Math.min(1.25, c ? c[1] : 1);
+      k[2] = (sand ? 1.22 : 1.06) * Math.min(1.35, c ? c[2] : 1);
+    } else if (t === Tile.Rock) {
+      k[0] = 1.0;
+      k[1] = 1.02;
+      k[2] = 1.1;
+    } else if (t === Tile.Sand) {
+      k[0] = 1.3;
+      k[1] = 1.24;
+      k[2] = 1.1;
+    } else if (m.biome === 'urban') {
+      k[0] = 0.98;
+      k[1] = 1.0;
+      k[2] = 1.06;
+    }
+    return k;
+  }
+
+  /** hex x dust multipliers (dustK). */
+  private dusty(hex: number, k: number[]): number {
+    const r = Math.min(255, Math.round(((hex >> 16) & 255) * k[0]));
+    const g = Math.min(255, Math.round(((hex >> 8) & 255) * k[1]));
+    const b = Math.min(255, Math.round((hex & 255) * k[2]));
+    return (r << 16) | (g << 8) | b;
+  }
+
   private get map() {
     return this.debris?.map ?? null;
   }
@@ -442,7 +487,8 @@ export class Effects {
       this.fire.spawn({ x, y: y + 0.15 * S, z, life: 0.08 + 0.03 * S, size: 1.0 * S, sizeEnd: 1.6 * S, color: 0xfff2d8, colorEnd: pal.hot, alpha: 0.55 });
       this.fire.spawn({ x, y: y + 0.2 * S, z, life: 0.18 + 0.05 * S, size: 2.2 * S, sizeEnd: 2.6 * S, color: pal.mid, colorEnd: pal.end, alpha: 0.2 });
       if (ball && S >= 0.9) {
-        this.fire.spawn({ x, y: y + 0.35 * S, z, life: 0.07 + 0.02 * S, size: 2.4 * S, sizeEnd: 3.4 * S, color: 0xffffff, colorEnd: 0xffe2b0, alpha: 0.9 });
+        // (a warm, half-strength flash: the owner finds a white glare over a big blast dazzling)
+        this.fire.spawn({ x, y: y + 0.35 * S, z, life: 0.07 + 0.02 * S, size: 2.4 * S, sizeEnd: 3.4 * S, color: 0xfff0dc, colorEnd: 0xffd8a0, alpha: 0.5 });
         this.fire.spawn({ x, y: y + 0.4 * S, z, life: 0.16 + 0.04 * S, size: 4.2 * S, sizeEnd: 5 * S, color: 0xffe8c8, colorEnd: 0xff9040, alpha: 0.28 });
       }
     }
@@ -492,22 +538,23 @@ export class Effects {
         this.flyers.add('spark', x, y + 0.15 * S, z, Math.cos(a) * Math.cos(el) * sp, Math.sin(el) * sp, Math.sin(a) * Math.cos(el) * sp, this.rand(0.5, 1.1), this.rand(0.7, 1.2));
       }
     }
-    // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white)
+    // 4. dirt column / spray (ground bursts only; half of it snow when the ground is white), in the ground's colour
     const snow = WX.wxSnow.value > 0.3;
+    const dk = this.dustK(x, z);
     // small ground hits: a pre-rendered impact puff instead of the dirt particles
     const puff = !!fb && !airborne && p.dirt > 0 && S < 0.45;
-    if (puff) fb.spawn('puff', { x, y: ground, z, size: 1.2 * Math.max(0.3, S * 2.2), sizeEnd: 1.5 * Math.max(0.3, S * 2.2), tint: snow ? 0xdde4ec : 0x8a7a62, ground: true, rot: 0.3, alpha: 0.9, emissive: 0, wind: 0.3 });
+    if (puff) fb.spawn('puff', { x, y: ground, z, size: 1.2 * Math.max(0.3, S * 2.2), sizeEnd: 1.5 * Math.max(0.3, S * 2.2), tint: snow ? 0xdde4ec : this.dusty(0x8a7a62, dk), ground: true, rot: 0.3, alpha: 0.9, emissive: 0, wind: 0.3 });
     if (!airborne && p.dirt > 0 && !puff) {
       // ground hits that throw earth: tumbling clods with dust trails (flipbook) take over a share of the spray
       const clods = !!fb && p.dirt >= 0.8 && !!p.debris?.some((d) => d.kind === 'dirt');
-      if (clods) fb.spawn('debris', { x, y: ground, z, size: 1.6 * S * Math.sqrt(p.dirt), sizeEnd: 1.8 * S * Math.sqrt(p.dirt), tint: snow ? 0xd8dee6 : 0x6e604c, ground: true, rot: 0.25, alpha: 1, emissive: 0, wind: 0.2 });
+      if (clods) fb.spawn('debris', { x, y: ground, z, size: 1.6 * S * Math.sqrt(p.dirt), sizeEnd: 1.8 * S * Math.sqrt(p.dirt), tint: snow ? 0xd8dee6 : this.dusty(0x6e604c, dk), ground: true, rot: 0.25, alpha: 1, emissive: 0, wind: 0.2 });
       const n = this.q(Math.round(10 * p.dirt * (fb ? (clods ? 0.3 : 0.5) : 1)));
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const r = this.rand(0, 0.25) * S;
         const up = this.rand(2.5, 6) * Math.sqrt(p.dirt);
         const sn = snow && i % 2 === 0;
-        this.smokeSys.spawn({ x: x + Math.cos(a) * r, y: ground + 0.05, z: z + Math.sin(a) * r, vx: Math.cos(a) * this.rand(0.3, 1.4), vy: up, vz: Math.sin(a) * this.rand(0.3, 1.4), life: this.rand(0.8, 1.6), size: this.rand(0.15, 0.3) * S, sizeEnd: this.rand(0.5, 0.9) * S, color: sn ? 0xe6ecf4 : 0x4a3a28, colorEnd: sn ? 0xf4f7fa : 0x7a6a52, alpha: 0.85, gravity: 6, drag: 0.8 });
+        this.smokeSys.spawn({ x: x + Math.cos(a) * r, y: ground + 0.05, z: z + Math.sin(a) * r, vx: Math.cos(a) * this.rand(0.3, 1.4), vy: up, vz: Math.sin(a) * this.rand(0.3, 1.4), life: this.rand(0.8, 1.6), size: this.rand(0.15, 0.3) * S, sizeEnd: this.rand(0.5, 0.9) * S, color: sn ? 0xe6ecf4 : this.dusty(0x4a3a28, dk), colorEnd: sn ? 0xf4f7fa : this.dusty(0x7a6a52, dk), alpha: 0.85, gravity: 6, drag: 0.8 });
       }
     }
     // 5. smoke: billowing cloud + optional column (drifts with the wind)
@@ -545,11 +592,36 @@ export class Effects {
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
         const sp = p.ring * this.rand(2.2, 3.2);
-        this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: snow ? 0xe8eef4 : 0x9a8a6c, colorEnd: snow ? 0xf6f8fa : 0xb4a688, alpha: 0.55, drag: 2.8 });
+        this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: snow ? 0xe8eef4 : this.dusty(0x9a8a6c, dk), colorEnd: snow ? 0xf6f8fa : this.dusty(0xb4a688, dk), alpha: 0.55, drag: 2.8 });
       }
       this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.3, 0xffd8a0, true, 0.14);
       // refraction shockwave racing over the ground
       if (this.haze && S >= 0.9) this.haze.ring(x, ground + 0.1, z, p.ring * 1.6, 0.35 + 0.08 * S, 0.008 + 0.003 * S, true);
+    }
+    // 6b. the dust the blast raised hangs over the site, low and in the ground's colour, and drifts off downwind
+    if (!airborne && p.dirt >= 1 && S >= 0.9) {
+      const n = this.q(Math.round(2 + 1.4 * S));
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + this.rand(-0.4, 0.4);
+        const r = this.rand(0.2, 0.7) * S;
+        this.smokeSys.spawn({
+          x: x + Math.cos(a) * r,
+          y: ground + this.rand(0.1, 0.3) * S,
+          z: z + Math.sin(a) * r,
+          vx: Math.cos(a) * this.rand(0.3, 0.6) * S,
+          vy: this.rand(0.05, 0.18),
+          vz: Math.sin(a) * this.rand(0.3, 0.6) * S,
+          life: this.rand(7, 10) * Math.sqrt(S),
+          size: this.rand(0.7, 1.0) * S,
+          sizeEnd: this.rand(2.4, 3.2) * S,
+          color: snow ? 0xe2e8ee : this.dusty(0x8e7e64, dk),
+          colorEnd: snow ? 0xf0f3f6 : this.dusty(0xa89a80, dk),
+          alpha: 0.3,
+          drag: 1.1,
+          gravity: -0.02,
+          wind: 0.75,
+        });
+      }
     }
     if (airborne && S >= 1) {
       // spherical pressure flash in the air
@@ -607,6 +679,7 @@ export class Effects {
     const thermo = p.fireColor === 'thermo';
     const heat = p.fireColor === 'white' ? 0.45 : thermo ? 0.12 : 0;
     const snow = WX.wxSnow.value > 0.3;
+    const dk = this.dustK(x, z);
     const gy = airborne ? y : ground;
     if (ball) {
       // the 3D cluster is the fireball; a quick baked burst gives it torn, flame-licked edges for the first instant
@@ -617,7 +690,7 @@ export class Effects {
         for (let i = 0; i < n; i++) {
           const a = (i / n) * Math.PI * 2 + this.rand(-0.3, 0.3);
           const sp = this.rand(1.6, 2.4) * S;
-          fb.spawn('dust', { x: x + Math.cos(a) * 0.4 * S, y: ground, z: z + Math.sin(a) * 0.4 * S, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, drag: 1.6, size: 1.1 * S, sizeEnd: 2.4 * S, life: this.rand(2.6, 3.6), delay: 0.04, tint: snow ? 0xdde4ec : 0x8a7a62, ground: true, rot: 0.25, alpha: 0.7, emissive: 0, wind: 0.4 });
+          fb.spawn('dust', { x: x + Math.cos(a) * 0.4 * S, y: ground, z: z + Math.sin(a) * 0.4 * S, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, drag: 1.6, size: 1.1 * S, sizeEnd: 2.4 * S, life: this.rand(2.6, 3.6), delay: 0.04, tint: snow ? 0xdde4ec : this.dusty(0x8a7a62, dk), ground: true, rot: 0.25, alpha: 0.7, emissive: 0, wind: 0.4 });
         }
       }
     } else if (airborne) {
@@ -639,7 +712,7 @@ export class Effects {
     if (S >= 0.6 && p.sparks >= 8) fb.spawn('sparks', { x, y: y + 0.1 * S, z, size: 2.2 * Math.sqrt(S) * (airborne ? 1.3 : 1), sizeEnd: 2.6 * Math.sqrt(S), rot: airborne ? Math.PI : 0.3, emissive: 1.2, heat: 0.3, tint: 0x201810 });
     if (!airborne && p.dirt >= 0.8) {
       const d = Math.sqrt(p.dirt);
-      fb.spawn('dust', { x, y: ground, z, size: 1.5 * S * d, sizeEnd: 2.1 * S * d, tint: snow ? 0xdde4ec : 0x7a6a54, ground: true, rot: 0.2, alpha: 0.95, emissive: 0, wind: 0.3 });
+      fb.spawn('dust', { x, y: ground, z, size: 1.5 * S * d, sizeEnd: 2.1 * S * d, tint: snow ? 0xdde4ec : this.dusty(0x7a6a54, dk), ground: true, rot: 0.2, alpha: 0.95, emissive: 0, wind: 0.3 });
     }
     // lingering, lit smoke where the fireball was (the GPU smoke column keeps rising out of it)
     if (p.smoke >= 0.6) {
@@ -1257,6 +1330,7 @@ export class Effects {
     if (!fb) return false;
     const S = Math.max(w, d);
     const snow = WX.wxSnow.value > 0.3;
+    const dk = this.dustK(x, z);
     const n = Math.max(2, Math.min(5, Math.round(S * (this.quality === 'high' ? 1.4 : 1))));
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + this.rand(-0.4, 0.4);
@@ -1272,7 +1346,7 @@ export class Effects {
         sizeEnd: (1.5 + 0.55 * S) * this.rand(0.9, 1.1),
         life: this.rand(4.5, 6),
         delay: this.rand(0, 0.5),
-        tint: snow ? 0xd4d8dc : 0x9a8f80,
+        tint: snow ? 0xd4d8dc : this.dusty(0x9a8f80, dk),
         ground: true,
         rot: 0.18,
         alpha: 0.9,
@@ -1294,7 +1368,8 @@ export class Effects {
   }
 
   dust(x: number, y: number, z: number, size = 1) {
-    this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15), y: y + 0.03, z: z + this.rand(-0.15, 0.15), vx: this.rand(-0.2, 0.2), vy: this.rand(0.1, 0.3), vz: this.rand(-0.2, 0.2), life: this.rand(0.8, 1.4), size: 0.12 * size, sizeEnd: 0.5 * size, color: 0x9a8a6c, colorEnd: 0xb4a688, alpha: 0.35, drag: 1.5, wind: 0.3 });
+    const dk = this.dustK(x, z);
+    this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15), y: y + 0.03, z: z + this.rand(-0.15, 0.15), vx: this.rand(-0.2, 0.2), vy: this.rand(0.1, 0.3), vz: this.rand(-0.2, 0.2), life: this.rand(0.8, 1.4), size: 0.12 * size, sizeEnd: 0.5 * size, color: this.dusty(0x9a8a6c, dk), colorEnd: this.dusty(0xb4a688, dk), alpha: 0.35, drag: 1.5, wind: 0.3 });
   }
 
   /** A sandstorm's grains striking something: a small, fast puff of sand blown downwind (sandstorm.ts). */
@@ -1305,8 +1380,10 @@ export class Effects {
 
   flame(x: number, y: number, z: number, size = 1) {
     // sustained fires call this many times a second: now and then lay a looping flame flipbook under the particles
-    if (this.flip?.ready && Math.random() < 0.07 * this.budget) this.flip.spawn('flame', { x, y: y - 0.05 * size, z, size: this.rand(0.75, 1.0) * size, ground: true, rot: 0.15, life: this.rand(1.4, 2.2), emissive: 0.9, alpha: 0.85, tint: 0x302c28, wind: 0.2 });
-    this.fire.spawn({ x: x + this.rand(-0.15, 0.15) * size, y, z: z + this.rand(-0.15, 0.15) * size, vx: this.rand(-0.1, 0.1), vy: this.rand(0.6, 1.3), vz: this.rand(-0.1, 0.1), life: this.rand(0.3, 0.7), size: 0.35 * size, sizeEnd: 0.1, color: 0xffc050, colorEnd: 0x901800, gravity: -0.5, wind: 0.4 });
+    if (this.flip?.ready && Math.random() < 0.12 * this.budget) this.flip.spawn('flame', { x, y: y - 0.05 * size, z, size: this.rand(0.75, 1.0) * size, ground: true, rot: 0.15, life: this.rand(1.4, 2.2), emissive: 0.8, heat: -0.2, alpha: 0.85, tint: 0x302c28, wind: 0.2 });
+    // (a flame tongue rising off the surface: lifted clear of it and translucent, so a roof / hull / the ground does
+    // not cut the round sprite into a flat-bottomed disc and a dozen overlapping tongues stay orange, not white)
+    this.fire.spawn({ x: x + this.rand(-0.15, 0.15) * size, y: y + 0.12 * size, z: z + this.rand(-0.15, 0.15) * size, vx: this.rand(-0.1, 0.1), vy: this.rand(0.7, 1.4), vz: this.rand(-0.1, 0.1), life: this.rand(0.3, 0.65), size: 0.3 * size, sizeEnd: 0.08, color: 0xffb444, colorEnd: 0x8a1600, alpha: 0.75, gravity: -0.5, wind: 0.4 });
     if (Math.random() < 0.3) this.fire.spawn({ x, y: y + 0.1, z, vx: this.rand(-0.3, 0.3), vy: this.rand(1, 2), vz: this.rand(-0.3, 0.3), life: this.rand(0.8, 1.5), size: 0.03, color: 0xffb060, colorEnd: 0xff3000, drag: 0.5, gravity: -0.2, wind: 0.6 });
   }
 
@@ -1329,8 +1406,18 @@ export class Effects {
     this.ring(x, y + 0.1, z, 0.2, r, 1.1, 0x50a0ff, true, 0.5);
   }
 
+  private dustSet = false;
+
   update(dt: number) {
     this.time += dt;
+    if (!this.dustSet && this.map) {
+      // the dust low in a cooled blast cloud takes the ground's colour (fireball.ts uDust)
+      this.dustSet = true;
+      const b = this.map.biome;
+      if (b === 'desert') this.fireballs.dust.value.set(1.9, 1.58, 1.18);
+      else if (b === 'temperate') this.fireballs.dust.value.set(1.12, 1.02, 0.9);
+      else if (b === 'urban') this.fireballs.dust.value.set(1.06, 1.04, 1.02);
+    }
     this.fire.clock(this.time);
     this.smokeSys.clock(this.time);
     if (!this.heightTex) this.buildHeightTex();
@@ -1350,7 +1437,7 @@ export class Effects {
       const b = this.burns[i];
       b.t -= dt;
       if (Math.random() < dt * 30) this.flame(b.x + this.rand(-0.6, 0.6) * b.size, b.y + 0.05, b.z + this.rand(-0.6, 0.6) * b.size, 1.2);
-      if (this.flip?.ready && Math.random() < dt * 3) this.flip.spawn('flame', { x: b.x + this.rand(-0.5, 0.5) * b.size, y: b.y, z: b.z + this.rand(-0.5, 0.5) * b.size, size: this.rand(0.9, 1.3) * b.size, ground: true, rot: 0.15, life: Math.min(1.6, b.t + 0.4), emissive: 1.1, alpha: 0.9, tint: 0x302c28 });
+      if (this.flip?.ready && Math.random() < dt * 3) this.flip.spawn('flame', { x: b.x + this.rand(-0.5, 0.5) * b.size, y: b.y, z: b.z + this.rand(-0.5, 0.5) * b.size, size: this.rand(0.9, 1.3) * b.size, ground: true, rot: 0.15, life: Math.min(1.6, b.t + 0.4), emissive: 1.0, heat: -0.15, alpha: 0.9, tint: 0x302c28 });
       this.lights.sustain(b.x, b.y + 0.3, b.z, 3 * b.size * Math.min(1, b.t), 0xff8a30, 0.5);
       if (b.t <= 0) this.burns.splice(i, 1);
     }

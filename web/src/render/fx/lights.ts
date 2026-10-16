@@ -69,6 +69,13 @@ export class FxLights {
   /** View centre (the camera target); sources far from it lose priority. */
   view: THREE.Vector3 | null = null;
   heightAt: (x: number, z: number) => number = () => 0;
+  /**
+   * How dark it is, 0 (day) .. 1 (night) (renderer: atmos.night.darkness). By day the sun drowns a fire's light:
+   * its ground glow is kept faint, so a burning wreck on sunlit sand never paints a blown-out white disc.
+   */
+  dark = 0;
+  /** Pools placed this frame: x, z, radius (scratch). */
+  private px = new Float32Array(64 * 3);
 
   constructor(quality: 'low' | 'medium' | 'high', fog: FogOfWar) {
     const n = quality === 'high' ? 6 : quality === 'medium' ? 3 : 0;
@@ -220,16 +227,31 @@ export class FxLights {
       l.distance = 4 + s.i * 0.8;
       l.intensity = s.i * 1.6;
     }
-    // ground light pools for everything
+    // ground light pools for everything (faint by day: additive light on bright sand blows out)
+    const dayK = 0.18 + 0.82 * Math.min(1, Math.max(0, this.dark));
     let n = 0;
+    const px = this.px;
     for (let i = 0; i < order.length && n < this.maxGlow; i++) {
       const s = order[i];
       const g = this.heightAt(s.x, s.z);
       const hk = Math.max(0, 1 - (s.y - g) / 6);
       if (hk <= 0.02) continue;
-      const k = Math.min(1.2, s.i * 0.09) * hk;
+      let k = Math.min(1.2, s.i * 0.09) * hk * dayK;
       if (k < 0.02) continue;
       const r = (0.5 + Math.sqrt(s.power) * 0.75) * (0.85 + 0.15 * hk);
+      // many fire points close together (a building ablaze, a wreck's flames): their pools overlap, and summed
+      // additively they burned a hot spot into the ground at night. Each one inside a brighter pool adds only
+      // part of its light: one broad, warm glow instead of a flash.
+      let inside = 0;
+      for (let j = 0; j < n; j++) {
+        const dx = px[j * 3] - s.x;
+        const dz = px[j * 3 + 1] - s.z;
+        if (dx * dx + dz * dz < px[j * 3 + 2] * px[j * 3 + 2] * 0.36) inside++;
+      }
+      if (inside) k /= 1 + inside;
+      px[n * 3] = s.x;
+      px[n * 3 + 1] = s.z;
+      px[n * 3 + 2] = r;
       this.m4.makeScale(r, 1, r);
       this.m4.setPosition(s.x, g + 0.06, s.z);
       this.glow.setMatrixAt(n, this.m4);

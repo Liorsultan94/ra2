@@ -149,10 +149,19 @@ const SURFACE = /* glsl */ `
   vec4 scTy = texture2D( scTex, vScUv + scDy );
   vec2 scDH = vec2( scTx.a * 0.55 - scTx.b - scH, scTy.a * 0.55 - scTy.b - scH ) * vScInfo.y;
   float scAge = vScInfo.x;
+  #ifdef SC_SAND
+  // loose sand (CF1): a deeper bowl and a taller rim of thrown sand, lighter (fresh, dry) where it piled up on
+  // the rim, a little darker down in the bowl; the scorch is a smoky grey-brown on sand, not soot black
+  scDH *= 2.4;
+  vec3 scSoilC = scSoil * ( 1.0 - 0.35 * scT.b ) * ( 1.0 + 0.8 * scT.a );
+  vec3 scChar = vec3( 0.03, 0.024, 0.019 );
+  float scCw = 0.82 * scT.r / max( scT.r + scT.g * ( 1.0 - scT.r ), 1e-3 );
+  #else
   // soil darker and moister down in the bowl, a little lighter on the rim
   vec3 scSoilC = scSoil * ( 1.0 - 0.5 * scT.b ) * ( 1.0 + 0.35 * scT.a );
   vec3 scChar = vec3( 0.0075, 0.0063, 0.0055 );
   float scCw = scT.r / max( scT.r + scT.g * ( 1.0 - scT.r ), 1e-3 );
+  #endif
   diffuseColor.rgb = mix( scSoilC, scChar, scCw );
   float scA = clamp( max( max( scT.r * 0.93, scT.g * 0.95 ), max( scT.b * 1.6, scT.a * 1.4 ) ), 0.0, 1.0 );
   diffuseColor.a *= scA;
@@ -190,13 +199,20 @@ const WET = /* glsl */ `
       totalEmissiveRadiance += scSky * scPud * ( 0.04 + 0.75 * scFr );
     }
   }
-  // embers glow in a fresh crater for a few seconds
-  totalEmissiveRadiance += vec3( 1.0, 0.32, 0.06 ) * scT.r * vScInfo.z * ( 1.0 - smoothstep( 0.0, 7.0, scAge ) ) * ( 0.4 + 0.6 * fract( sin( dot( floor( vScUv * 512.0 ), vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ) ) * 1.5;
+  // embers glow in a fresh crater for a few seconds: in clumps down in the burnt bowl (a soft glow, no glitter)
+  {
+    float scEm = scT.r * smoothstep( 0.2, 0.65, scT.b ) * vScInfo.z * ( 1.0 - smoothstep( 0.0, 6.0, scAge ) );
+    if ( scEm > 0.001 ) {
+      // (two noise scales multiplied: irregular clumps, no visible repeat of the tiled noise)
+      float scCl = texture2D( fogNoise, vFogP.xz * 3.1 ).b * texture2D( fogNoise, vFogP.xz * 7.7 + 0.37 ).g;
+      totalEmissiveRadiance += vec3( 1.0, 0.3, 0.05 ) * scEm * smoothstep( 0.22, 0.45, scCl ) * 1.2;
+    }
+  }
 `;
 
-function scarMaterial(fog: FogOfWar, tex: THREE.Texture, soil: [number, number, number], vertex: string, key: string, order: number) {
+function scarMaterial(fog: FogOfWar, tex: THREE.Texture, soil: [number, number, number], vertex: string, key: string, order: number, sand = false) {
   const mat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 - order, polygonOffsetUnits: -4 - order * 2 });
-  mat.defines = { WX_SNOW_K: 'scSnowK', WX_OWN_WET: 1 };
+  mat.defines = { WX_SNOW_K: 'scSnowK', WX_OWN_WET: 1, ...(sand ? { SC_SAND: 1 } : {}) };
   const uniforms = { scTex: { value: tex }, scSoil: { value: new THREE.Vector3(...soil) }, scTime: { value: 0 } };
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, uniforms);
@@ -209,7 +225,7 @@ function scarMaterial(fog: FogOfWar, tex: THREE.Texture, soil: [number, number, 
   };
   fog.apply(mat);
   // fog.apply sets a shared cache key: ours patches more, keep the programs apart
-  mat.customProgramCacheKey = () => 'scars-' + key;
+  mat.customProgramCacheKey = () => 'scars-' + key + (sand ? '-sand' : '');
   (mat as unknown as { scUniforms: typeof uniforms }).scUniforms = uniforms;
   return mat;
 }
@@ -310,7 +326,8 @@ export class ScarDecals {
         vScUv = ( vec2( position.x + 0.5, 0.5 - position.z ) + cell ) / vec2( ${COLS}.0, ${ROWS}.0 );
         vScInfo = vec4( scTime - aScInfo.x, aScInfo.y, aScInfo.z, tile );
       }`;
-    this.liveMat = scarMaterial(fog, this.atlas, soil, liveVert, 'live', 1);
+    const sand = map.biome === 'desert';
+    this.liveMat = scarMaterial(fog, this.atlas, soil, liveVert, 'live', 1, sand);
     this.live = new THREE.InstancedMesh(geo, this.liveMat, this.liveMax);
     this.live.count = 0;
     this.live.visible = false;
@@ -394,7 +411,7 @@ export class ScarDecals {
       //MAIN
       vScUv = vec2( position.x / ${W.toFixed(1)}, 1.0 - position.z / ${H.toFixed(1)} );
       vScInfo = vec4( 1e5, ${BAKED_RELIEF}, 0.0, -1.0 );`;
-    this.drapeMat = scarMaterial(fog, this.rt.texture, soil, drapeVert, 'drape', 0);
+    this.drapeMat = scarMaterial(fog, this.rt.texture, soil, drapeVert, 'drape', 0, map.biome === 'desert');
     this.drape = new THREE.Mesh(dgeo, this.drapeMat);
     this.drape.frustumCulled = false;
     this.drape.receiveShadow = true;
