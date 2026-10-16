@@ -353,7 +353,7 @@ export class CulledInstances {
  * `Terrain` feeds the camera in, so the renderer needs no changes.
  */
 export class SceneryLod {
-  private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number }[] = [];
+  private entries: { meshes: THREE.Mesh[]; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; loSpan: number; hideSpan: number; showSpan: number }[] = [];
   private culled: CulledInstances[] = [];
   private versions = 0;
   private state = -1;
@@ -363,10 +363,11 @@ export class SceneryLod {
 
   /**
    * Register meshes: they use `lo` once the view spans more than `loSpan`
-   * world units and are hidden beyond `hideSpan`.
+   * world units and are hidden beyond `hideSpan` (and up to `showSpan`: a
+   * far-only LOD mesh).
    */
-  add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity) {
-    this.entries.push({ meshes, hi, lo, loSpan, hideSpan });
+  add(meshes: THREE.Mesh[], hi: THREE.BufferGeometry, lo: THREE.BufferGeometry | null, loSpan: number, hideSpan = Infinity, showSpan = 0) {
+    this.entries.push({ meshes, hi, lo, loSpan, hideSpan, showSpan });
     this.state = -1;
   }
 
@@ -385,7 +386,7 @@ export class SceneryLod {
     this.state = 1;
     for (const e of this.entries) {
       const geo = e.lo && span > e.loSpan ? e.lo : e.hi;
-      const vis = span <= e.hideSpan;
+      const vis = span <= e.hideSpan && span > e.showSpan;
       for (const m of e.meshes) {
         if (m.geometry !== geo) m.geometry = geo;
         m.visible = vis;
