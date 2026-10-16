@@ -37,8 +37,15 @@ interface Emitter {
   dur: number;
   rate: number;
   size: number;
-  /** 0 smoke wisps, 1 dark wreck smoke, 2 small lingering fire. */
+  /** 0 smoke wisps, 1 dark wreck smoke, 2 small lingering fire, 3 a burnt-out hulk's thick black column. */
   kind: number;
+}
+
+/** A Blender hulk (hulkkit.ts) handed over still smouldering: ember heat now, seconds left to cool, flame points (world). */
+export interface HulkHeat {
+  heat: number;
+  cool: number;
+  fires: THREE.Vector3[];
 }
 
 export interface RuinOpts {
@@ -59,6 +66,8 @@ const CLOD: Record<Biome, number[]> = {
   winter: [0x3e352c, 0x4a4036, 0x2e2822, 0x6a6a6a],
   urban: [0x5a5048, 0x6a6258, 0x46403a, 0x7a766e],
 };
+/** Stone chipped off bare rock by a blast (granite / sandstone greys and pinks). */
+const ROCK_CHIPS = [0x8a8078, 0x9a8c80, 0x6e6660, 0xa89a8c];
 const CONCRETE = [0x8e8a82, 0x7a766e, 0x67635c, 0x9a958a];
 const BRICK = [0x8a5a44, 0x7a4c3a, 0x9a6a50];
 const BURNT = [0x2a2522, 0x1e1a17, 0x3a332c];
@@ -178,6 +187,14 @@ export class BattleScars {
         this.decals.add(ScarKind.Patch, x + Math.cos(a) * s * 0.45, z + Math.sin(a) * s * 0.45, ang + rnd(-0.3, 0.3), s * rnd(0.7, 1.1), s * rnd(0.5, 0.8), 0.03);
       }
       this.throwClods(x, z, r * 0.7, Math.round(2 + r * 5), [0x3a3a3a, 0x2c2c2c, 0x6a665e]);
+      return;
+    }
+    if (t === Tile.Rock) {
+      // bare rock does not crater: a blackened scorch and a spray of chipped stone
+      const s = this.fit(x, z, r * 2.3 + 0.2);
+      if (!s) return;
+      this.decals.add(Math.random() < 0.5 ? ScarKind.ScorchA : ScarKind.ScorchB, x, z, ang, s, s * rnd(0.85, 1.1), 0, 0.6);
+      this.throwClods(x, z, r * 0.8, Math.min(16, Math.round(4 + r * 12)), ROCK_CHIPS);
       return;
     }
     const s = this.fit(x, z, r * 3.2 + 0.2);
@@ -378,9 +395,18 @@ export class BattleScars {
    * Keep a burnt-out vehicle (its model root plus a turret blown off it) as a permanent hulk.
    * Returns false when it does not fit the budget: the caller lets it sink away as before.
    */
-  adoptHulk(roots: THREE.Object3D[], x: number, y: number, z: number, size: number, heavy: boolean): boolean {
-    const h = this.hulks.adopt(roots, x, y, z, size, this.time, (o) => this.hulkGone(o));
+  adoptHulk(roots: THREE.Object3D[], x: number, y: number, z: number, size: number, heavy: boolean, hot?: HulkHeat): boolean {
+    const h = this.hulks.adopt(roots, x, y, z, size, this.time, (o) => this.hulkGone(o), hot?.heat ?? 0, hot?.cool ?? 1);
     if (!h) return false;
+    if (hot && hot.fires.length) {
+      // a Blender hulk keeps burning: a thick black column leaning downwind that thins out over a minute or two,
+      // flames still licking out of a hatch / the engine deck for a while (bright, never glaring, at night)
+      const f0 = hot.fires[0];
+      this.emit({ x: f0.x, y: f0.y + 0.1, z: f0.z, t: 0, dur: rnd(80, 130), rate: 5, size: 0.95 * size, kind: 3 });
+      const fire = hot.fires[1 + Math.floor(Math.random() * (hot.fires.length - 1))] ?? f0;
+      if (Math.random() < (heavy ? 0.85 : 0.6)) this.emit({ x: fire.x, y: fire.y, z: fire.z, t: 0, dur: rnd(35, 70), rate: 1, size: 0.55 * size, kind: 2 });
+      return true;
+    }
     this.emit({ x, y: y + 0.3 * size, z, t: 0, dur: rnd(60, 110), rate: 1.6, size: 0.65 * size, kind: 1 });
     if (heavy && Math.random() < 0.45) this.emit({ x, y: y + 0.25, z, t: 0, dur: rnd(25, 60), rate: 1, size: 0.45 * size, kind: 2 });
     return true;
@@ -439,6 +465,10 @@ export class BattleScars {
         if (Math.random() < dt * E.rate * k * rate) fx.smoke(E.x + j(), E.y, E.z + j(), E.size * (0.35 + 0.35 * k), Math.random() < 0.35);
       } else if (E.kind === 1) {
         if (Math.random() < dt * E.rate * (0.3 + 0.7 * k) * rate) fx.smoke(E.x + j(), E.y, E.z + j(), E.size * (0.5 + 0.5 * k), true);
+      } else if (E.kind === 3) {
+        // thick black column: dense while the fuel and rubber burn, then thinner and greyer as it dies down
+        if (Math.random() < dt * E.rate * (0.25 + 0.75 * k) * rate) fx.column(E.x + j(), E.y, E.z + j(), E.size * (0.45 + 0.55 * k), k > 0.25);
+        else if (k < 0.5 && Math.random() < dt * 1.2 * rate) fx.smoke(E.x + j(), E.y, E.z + j(), E.size * 0.6, true);
       } else {
         // small lingering fire: flickering flames, a little smoke, a warm light (bright at night)
         const kk = Math.min(1, k * 4);

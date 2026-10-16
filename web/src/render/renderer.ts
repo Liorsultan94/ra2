@@ -22,6 +22,7 @@ import { SniperFx } from './fx/sniperfx';
 import { Debris } from './debris';
 import { Fracture, type FracWreck } from './fracture';
 import { BattleScars } from './scars';
+import { HULK_FIRES, hulkClass, hulkKit, hulkMaterial, hulkMesh, loadHulkKit, type HulkClass } from './hulkkit';
 import { prefetchScarAtlas, scarAtlasTile } from './scarsdecal';
 import { Secondaries } from './fx/secondary';
 import { BLASTS, Effects, type BlastProfile } from './effects';
@@ -200,7 +201,13 @@ interface Wreck {
   /** The collapse dust clouds (pre-rendered flipbooks) were spawned: fewer particle dust puffs. */
   dusty?: boolean;
   kept?: boolean;
+  /** A ground vehicle's Blender hulk (hulkkit.ts) in place of its burnt model: class, material (heat), flame points (world). */
+  hulk?: { cls: HulkClass; mat: THREE.Material & { userData: { heat: { value: number } } }; fires: THREE.Vector3[] };
 }
+
+/** Seconds for a dead vehicle's embers to cool down completely (render only). */
+const HULK_COOL = 150;
+const hulkHeat = (t: number) => Math.pow(Math.max(0, 1 - t / HULK_COOL), 1.6);
 
 interface ProjVisual {
   obj: THREE.Object3D;
@@ -530,6 +537,19 @@ export class GameRenderer {
     }
     this.chutes = new Paradrop(this.scene);
     this.burnt = this.fog.apply(new THREE.MeshStandardMaterial({ color: 0x1c1916, roughness: 0.95, metalness: 0.15 }));
+    // the Blender hulks (dead vehicles) arrive in the background; a hidden stand-in has the warm-up compile their program
+    void loadHulkKit();
+    {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0]), 3));
+      g.setAttribute('aHulk', new THREE.BufferAttribute(new Float32Array(9), 3));
+      const warm = new THREE.Mesh(g, hulkMaterial(this.fog));
+      warm.visible = false;
+      warm.frustumCulled = false;
+      warm.name = 'hulk-warmup';
+      this.scene.add(warm);
+    }
 
     // ---- quality ladder (index 0 = best). The governor sheds, in order: lens extras -> AO -> bloom quality
     // -> (ultra extras) -> resolution -> shadow detail / bloom. Every post pass is a rung of its own.
@@ -1767,6 +1787,11 @@ export class GameRenderer {
     // crew ducks inside / hatch slammed shut on the burning hull
     v.model.anim?.({ ...v.anim, dt: 0, dead: 1 });
     const wr: Wreck = { ...base, kind: 'vehicle', size: ud.harvester || ud.mcv ? 1.4 : 1 };
+    // the Blender hulk of its class takes the burnt model's place under the fireball (hulkkit.ts)
+    if (this.toHulk(v, ud, wr)) {
+      this.wrecks.push(wr);
+      return;
+    }
     if (v.model.turret && Math.random() < 0.6) {
       // turret tossed off by the ammunition cook-off
       const t = v.model.turret;
@@ -1774,6 +1799,50 @@ export class GameRenderer {
       wr.turret = { obj: t, vx: (Math.random() - 0.5) * 1.5, vy: 4 + Math.random() * 2, vz: (Math.random() - 0.5) * 1.5, wx: (Math.random() - 0.5) * 8, wz: (Math.random() - 0.5) * 8, landed: false };
     }
     this.wrecks.push(wr);
+  }
+
+  /**
+   * Swap a dead ground vehicle's model for the twisted Blender hulk of its class, fitted to its footprint: the
+   * turret knocked askew, or (60% of turreted ones) blown off and thrown by the cook-off. False: no kit / class.
+   */
+  private toHulk(v: Visual, ud: ReturnType<typeof unitDef>, wr: Wreck): boolean {
+    const kit = hulkKit();
+    const m = v.model;
+    if (!kit || !m.size) return false;
+    const cls = hulkClass({ harvester: ud.harvester, mcv: ud.mcv, turret: !!ud.turret, armor: ud.armor, wheeled: m.wheeled, size: m.size });
+    if (!cls) return false;
+    const toss = !!m.turret && (cls === 'mbt' || cls === 'ifv') && Math.random() < 0.6;
+    const mat = hulkMaterial(this.fog);
+    const mirror = Math.random() < 0.5;
+    const hm = hulkMesh(kit, cls, toss ? '_open' : '', m.size, mat, mirror);
+    if (!hm) {
+      mat.dispose();
+      return false;
+    }
+    const root = m.root;
+    root.updateMatrixWorld(true);
+    let tp: THREE.Vector3 | null = null;
+    let tq: THREE.Quaternion | null = null;
+    if (toss && m.turret) {
+      tp = m.turret.getWorldPosition(new THREE.Vector3());
+      tq = m.turret.getWorldQuaternion(new THREE.Quaternion());
+    }
+    for (const c of root.children) c.visible = false;
+    root.add(hm);
+    root.updateMatrixWorld(true);
+    const fires = HULK_FIRES[cls].map(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(hm.matrixWorld));
+    wr.hulk = { cls, mat, fires };
+    if (tp && tq) {
+      const tm = hulkMesh(kit, cls, '_turret', m.size, mat, mirror);
+      if (tm) {
+        tm.scale.multiply(root.scale);
+        tm.position.copy(tp);
+        tm.quaternion.copy(tq);
+        this.scene.add(tm);
+        wr.turret = { obj: tm, vx: (Math.random() - 0.5) * 1.5, vy: 4 + Math.random() * 2, vz: (Math.random() - 0.5) * 1.5, wx: (Math.random() - 0.5) * 8, wz: (Math.random() - 0.5) * 8, landed: false };
+      }
+    }
+    return true;
   }
 
   /** Type-specific secondary explosions of a destroyed ground vehicle (visual only). */
@@ -1832,9 +1901,11 @@ export class GameRenderer {
       if (this.scarsOn && (w.kind === 'vehicle' || (w.kind === 'air' && w.landed)) && !w.kept && w.t > w.max - 2.5) {
         w.kept = true;
         const tt = w.turret;
-        if (this.scars.adoptHulk(tt ? [r, tt.obj] : [r], w.x, w.y, w.z, w.size, w.kind === 'vehicle')) {
+        const hk = w.hulk;
+        if (this.scars.adoptHulk(tt ? [r, tt.obj] : [r], w.x, w.y, w.z, w.size, w.kind === 'vehicle', hk ? { heat: hulkHeat(w.t), cool: Math.max(1, HULK_COOL - w.t), fires: hk.fires } : undefined)) {
           this.scene.remove(r);
           if (tt) this.scene.remove(tt.obj);
+          hk?.mat.dispose();
           this.wrecks.splice(i, 1);
           continue;
         }
@@ -1896,9 +1967,20 @@ export class GameRenderer {
         if (Math.random() < dt * 20) this.effects.dust(w.x + (Math.random() - 0.5) * w.w, w.y + 0.05, w.z + (Math.random() - 0.5) * w.d, 1.5);
       } else {
         // burning vehicle wreck
-        if (w.t < 9 && Math.random() < dt * 14) this.effects.flame(w.x + (Math.random() - 0.5) * 0.4 * w.size, w.y + 0.3, w.z + (Math.random() - 0.5) * 0.4 * w.size, 0.9 * w.size);
-        if (w.t < 22 && Math.random() < dt * 7) this.effects.column(w.x, w.y + 0.4, w.z, (w.t < 9 ? 1.1 : 0.8) * w.size);
-        if (w.t < 9) this.effects.burnGlow(w.x, w.y + 0.3, w.z, 2.6 * w.size * Math.min(1, (9 - w.t) / 3));
+        const hk = w.hulk;
+        if (hk) {
+          // the Blender hulk: flames licking out of its hatches / engine deck / turret ring, a thick black column, embers cooling
+          hk.mat.userData.heat.value = hulkHeat(w.t);
+          const f = hk.fires[Math.floor(Math.random() * hk.fires.length)];
+          const j = 0.12 * w.size;
+          if (Math.random() < dt * (w.t < 9 ? 16 : 6)) this.effects.flame(f.x + (Math.random() - 0.5) * j, f.y, f.z + (Math.random() - 0.5) * j, (w.t < 9 ? 0.85 : 0.6) * w.size);
+          if (Math.random() < dt * (w.t < 9 ? 8 : 6)) this.effects.column(hk.fires[0].x, hk.fires[0].y + 0.1, hk.fires[0].z, (w.t < 9 ? 1.15 : 1.0) * w.size);
+          this.effects.burnGlow(f.x, f.y, f.z, (w.t < 9 ? 2.6 * Math.min(1, (9 - w.t) / 3) + 1.2 : 1.2) * w.size);
+        } else {
+          if (w.t < 9 && Math.random() < dt * 14) this.effects.flame(w.x + (Math.random() - 0.5) * 0.4 * w.size, w.y + 0.3, w.z + (Math.random() - 0.5) * 0.4 * w.size, 0.9 * w.size);
+          if (w.t < 22 && Math.random() < dt * 7) this.effects.column(w.x, w.y + 0.4, w.z, (w.t < 9 ? 1.1 : 0.8) * w.size);
+          if (w.t < 9) this.effects.burnGlow(w.x, w.y + 0.3, w.z, 2.6 * w.size * Math.min(1, (9 - w.t) / 3));
+        }
         if (w.t > w.max - 2.5) r.position.y = w.y - (w.t - (w.max - 2.5)) * 0.25;
       }
       const tt = w.turret;
@@ -1915,6 +1997,12 @@ export class GameRenderer {
         if (tt.vy < 0 && tt.obj.position.y <= standHeight(map, gx, gz) + 0.08) {
           tt.landed = true;
           tt.obj.position.y = standHeight(map, gx, gz) + 0.08;
+          if (w.hulk) {
+            // the Blender turret comes to rest: upright, on its side or upside down on its roof
+            const up = Math.random() < 0.65;
+            tt.obj.rotation.set(up ? (Math.random() - 0.5) * 0.3 : Math.PI + (Math.random() - 0.5) * 0.3, tt.obj.rotation.y, (Math.random() - 0.5) * 0.4);
+            tt.obj.position.y = standHeight(map, gx, gz) + (up ? 0.0 : 0.11 * tt.obj.scale.y);
+          }
           this.effects.dust(tt.obj.position.x, tt.obj.position.y, tt.obj.position.z, 2);
         }
       }
@@ -1923,6 +2011,7 @@ export class GameRenderer {
         this.scene.remove(r);
         if (w.frac) this.fracture.release(w.frac);
         if (tt) this.scene.remove(tt.obj);
+        w.hulk?.mat.dispose();
         this.wrecks.splice(i, 1);
       }
     }
@@ -2589,6 +2678,7 @@ export class GameRenderer {
     this.terrain.update(this.time, this.world.list);
     // crystals glow by night (their inner light and the light pools on the ground)
     this.terrain.setOreNight(this.atmos.night?.darkness ?? 0);
+    this.effects.lights.dark = this.atmos.night?.darkness ?? 0;
     // far world night lights / lighthouse beam switch (its ring, which also calls it, is culled in sectors now)
     this.outskirts.horizon?.update();
     if (Math.floor(this.time * 4) !== Math.floor((this.time - dt) * 4)) this.terrain.updateOre();
