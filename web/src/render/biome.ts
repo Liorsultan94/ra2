@@ -116,8 +116,7 @@ const LOOKS: Record<Biome, BiomeLook> = {
       gravel: scan('gravel', 0xa08a6a, 0.5),
     },
     // the sand layer takes the desert's gold entirely
-    // (GD4: the Blender granite takes the rock colour's hue too, so the massifs keep their tone)
-    photoHue: { sand: 1, rock: 1 },
+    photoHue: { sand: 1 },
     blades: 0.35,
     clover: 0,
     flowers: 0.15,

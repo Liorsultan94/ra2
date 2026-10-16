@@ -51,6 +51,8 @@ export function photoMaterial(key: string): PhotoMaterial | undefined {
  * GD4: the Blender-baked South Sinai granite (rockset.ts, the cliffs' own rock) takes the grey rock scan's layer: the
  * massifs' bare slopes.
  */
+/** Baked layers that stand in for a scan: they are tinted to the colour the scan had (PhotoGround). */
+const STAND_IN: Record<string, string> = { dgranite: 'greyrock' };
 /** Download of the grey rock scan (terrain.json) the granite replaces in the desert stack. */
 const GREYROCK_BYTES: Record<number, number> = { 512: 46012, 1024: 137702 };
 const DESERT_STACK: PhotoStack = (() => {
@@ -199,7 +201,10 @@ export class PhotoGround {
       // the first slot that names a layer decides its tint
       if (tint[li].x !== 1 || tint[li].y !== 1 || tint[li].z !== 1) continue;
       c.setHex(hex); // linear (ColorManagement)
-      const m = mats[li].mean;
+      // (a layer standing in for a scan - the desert's granite for the grey rock, GD4 - takes the colour the scan
+      // would have had: the scan's tint, rescaled by the two means)
+      const stand = STAND_IN[stack.layers[li]];
+      const m = stand ? PHOTO_MATERIALS[stand].mean : mats[li].mean;
       // brightness follows the look colour fully, the hue only part of the way (a per-channel ratio
       // on a dark channel - the blue of brown soil - would otherwise tint the scan's highlights)
       const lum = (r: number, g: number, b: number) => r * 0.2126 + g * 0.7152 + b * 0.0722;
@@ -207,6 +212,7 @@ export class PhotoGround {
       const hk = hues[slot] ?? 0.4;
       const ch = (a: number, b: number) => L * (1 + (a / Math.max(1e-3, b) / L - 1) * hk);
       tint[li].set(ch(c.r, m[0]), ch(c.g, m[1]), ch(c.b, m[2]));
+      if (stand) tint[li].multiply(new THREE.Vector3(m[0] / mats[li].mean[0], m[1] / mats[li].mean[1], m[2] / mats[li].mean[2]));
     }
     this.tints = { value: tint };
     this.biome = biome;
