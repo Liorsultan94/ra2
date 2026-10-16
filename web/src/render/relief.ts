@@ -579,18 +579,23 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
           vec3 dpy = dFdy( vRWp );
           // triplanar rock (rockdetail.ts: height-blended, no mirrored or ghosted projections), the faces' and the
           // tops' maps and tints
-          vec3 alb;
-          vec3 wn;
+          vec3 alb = vec3( 0.0 );
+          vec3 wn = n;
           float rh;
           vec3 tw;
-          rdTri3( rSideA, rSideN, rTopA, rTopN, vRWp, n, ${granite ? '0.42, 0.34' : '0.55, 0.44'}, rSideTint, rTopTint, dpx, dpy, alb, wn, rh, tw );
-          alb = mix( vec3( dot( alb, vec3( 0.2126, 0.7152, 0.0722 ) ) ), alb, ${lk.sat.toFixed(2)} );
           float up = smoothstep( 0.45, 0.85, n.y );
           float steep = 1.0 - up;
-          // sediment strata on the faces
-          float sn = texture2D( fogNoise, vRWp.xz * 0.07 ).r;
-          float strata = sin( vRWp.y * 15.0 + sn * 6.0 ) * 0.5 + sin( vRWp.y * 37.0 + sn * 3.0 ) * 0.25;
-          alb *= 1.0 + strata * ${lk.strata.toFixed(2)} * steep;
+          // how much of the coloured canyon's sandstone (canyon.ts' ledges and boulders carry 2: sandstone all over)
+          float ck = ${canyon ? 'min( 1.0, vCanyon * ( 0.5 + 0.5 * steep ) )' : '0.0'};
+          // (where the sandstone covers it all, the rock under it is never seen: not sampled)
+          if ( ck < 1.0 ) {
+            rdTri3( rSideA, rSideN, rTopA, rTopN, vRWp, n, ${granite ? '0.42, 0.34' : '0.55, 0.44'}, rSideTint, rTopTint, dpx, dpy, alb, wn, rh, tw );
+            alb = mix( vec3( dot( alb, vec3( 0.2126, 0.7152, 0.0722 ) ) ), alb, ${lk.sat.toFixed(2)} );
+            // sediment strata on the faces
+            float sn = texture2D( fogNoise, vRWp.xz * 0.07 ).r;
+            float strata = sin( vRWp.y * 15.0 + sn * 6.0 ) * 0.5 + sin( vRWp.y * 37.0 + sn * 3.0 ) * 0.25;
+            alb *= 1.0 + strata * ${lk.strata.toFixed(2)} * steep;
+          }
           #if ${canyon ? 1 : 0}
           if ( vCanyon > 0.01 ) {
             // muted sandstone layers that follow the rock (strata.ts) over the sandstone's own grain, beds, honeycomb
@@ -606,8 +611,6 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
             vec3 cAlb = band * mix( 1.0, grain, 0.6 ) * cShade * 0.57;
             vec3 dune = vec3( 0.5, 0.36, 0.22 ) * mix( 1.0, grain, 0.35 ) * 0.6;
             cAlb = mix( cAlb, dune, smoothstep( 0.62, 0.9, n.y ) * 0.7 );
-            // (canyon.ts' ledges and boulders carry 2: sandstone all over)
-            float ck = min( 1.0, vCanyon * ( 0.5 + 0.5 * steep ) );
             alb = mix( alb, cAlb, ck );
             wn = normalize( mix( wn, sN, ck ) );
             rRough = cRough * ck;
