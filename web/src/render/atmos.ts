@@ -222,6 +222,53 @@ function applyBiome(p: Preset, light: number, key: Key) {
   }
   // snow fields bounce a lot of light back up
   if (BIOME?.biome === 'winter') p.hemiI *= 1 + 0.15 * light;
+  if (BIOME?.biome === 'desert') desertLowSun(p, key);
+}
+
+/**
+ * The desert's golden hour and blue hour (DP1). Its climate grade above pales a low sun towards its noon
+ * white: on the low-sun stops the key turns a clear warm amber again (deep orange at sunset), the warm sand
+ * bounces it back into the shadows' underside, the distance glows warm towards the horizon, and the
+ * highlights warm; the shadows keep a cool sky fill so the light reads long and golden, not as an orange
+ * wash. Dusk, twilight and predawn take a clear, cool blue: a lavender key, a deeper blue sky fill and blue
+ * haze. Intensities are untouched (the exposure, the night and the noon stops stay as they were).
+ */
+const DESERT_GOLD: Partial<Record<Key, { k: number; sun: number; haze: [number, number, number]; bg: number }>> = {
+  golden: { k: 1, sun: 0xffb366, haze: [0.86, 0.6, 0.38], bg: 0x3a2818 },
+  sunset: { k: 1, sun: 0xff9a52, haze: [0.86, 0.5, 0.36], bg: 0x3a2018 },
+  dawn: { k: 1, sun: 0xffa862, haze: [0.8, 0.55, 0.4], bg: 0x34221a },
+  morning: { k: 0.4, sun: 0xffd29a, haze: [0.7, 0.56, 0.42], bg: 0x2c261e },
+};
+const DESERT_BLUE: Partial<Record<Key, number>> = { dusk: 0.75, twilight: 1, predawn: 0.8 };
+
+function desertLowSun(p: Preset, key: Key) {
+  const g = DESERT_GOLD[key];
+  if (g) {
+    const k = g.k;
+    p.sunC.lerp(C(g.sun), 0.85 * k);
+    // the sunlit sand throws the warm light back up (shadow undersides, walls in shade)
+    p.gnd.lerp(C(0xb07444), 0.55 * k);
+    // the shadows stay cool: a clear blue sky fill (the complementary of the amber key)
+    p.sky.lerp(C(0x7e96d2), 0.35 * k);
+    const hz = new THREE.Color(...g.haze).multiplyScalar(0.75 + 0.25 * k);
+    p.haze.lerp(hz, 0.6 * k);
+    p.bg.lerp(C(g.bg), 0.6 * k);
+    p.highTint.lerp(new THREE.Vector3(0.06, 0.024, -0.042), k);
+    p.shadowTint.lerp(new THREE.Vector3(-0.018, 0.0, 0.036), 0.7 * k);
+    p.sat *= 1 + 0.03 * k;
+    p.water.lerp(new THREE.Vector3(1.0, 0.84, 0.72), 0.5 * k);
+  }
+  const b = DESERT_BLUE[key] ?? 0;
+  if (b > 0) {
+    p.sunC.lerp(C(0xb4a8dc), 0.5 * b);
+    p.sky.lerp(C(0x5670c4), 0.55 * b);
+    p.gnd.lerp(C(0x2a2c3c), 0.4 * b);
+    p.haze.lerp(new THREE.Color(0.16, 0.2, 0.34).multiplyScalar(key === 'dusk' ? 1.4 : 1), 0.6 * b);
+    p.bg.lerp(C(0x101628), 0.5 * b);
+    p.highTint.lerp(new THREE.Vector3(0.0, 0.006, 0.02), 0.6 * b);
+    p.shadowTint.lerp(new THREE.Vector3(-0.012, 0.0, 0.042), 0.6 * b);
+    p.water.lerp(new THREE.Vector3(0.5, 0.56, 0.78), 0.5 * b);
+  }
 }
 
 /** Lighting keys: the three static times of day plus the extra stops of the dynamic cycle. */
@@ -863,6 +910,7 @@ export class Atmosphere {
           },
           groundAt: (x, z) => host.effects.groundAt(x, z),
           puff: (x, y, z, vx, vz) => host.effects.sandPuff(x, y, z, vx, vz),
+          light: { sun: host.sun, hemi: host.hemi },
         },
         host.fog,
         host.quality,

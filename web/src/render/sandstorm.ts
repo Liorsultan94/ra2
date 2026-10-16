@@ -4,6 +4,7 @@ import { FOG_GLSL, type FogOfWar } from './fog';
 import { reliefHeight } from './relief';
 import { SAND_FRONT_GLSL, WXS } from './wxuniforms';
 import type { WxEvent } from './weathercycle';
+import { Haboob } from './haboob';
 
 /*
  * The sandstorm you can see at play zoom (render only). On top of the warm grade, the sandy sky and haze
@@ -36,46 +37,34 @@ export function sandHeightTexture(m: GameMap): THREE.DataTexture {
 }
 
 const VERT = /* glsl */ `
-attribute vec4 aA; // wrap phase x / z (0..1; wall: position along the front, depth behind it), width, height
-attribute vec4 aB; // drift speed factor, lift above the ground, opacity, kind (0 billow, 1 wall)
+attribute vec4 aA; // wrap phase x / z (0..1), width, height
+attribute vec4 aB; // drift speed factor, lift above the ground, opacity, spare
 uniform vec3 uCenter;
 uniform float uBox;
 uniform float uDrift;
-uniform float uWall;
-uniform float uWallLen;
 uniform sampler2D uHeight;
 uniform vec2 uHSize;
 ${SAND_FRONT_GLSL}
 varying vec2 vUv;
 varying vec3 vW;
 varying float vA;
-varying float vKind;
 float gnd( vec2 xz ) { return texture2D( uHeight, ( xz + 0.5 ) / uHSize ).r * 8.0 - 1.5; }
 void main() {
   vec2 d = sandWind.xy;
   vec2 sd = vec2( -d.y, d.x );
-  vec2 xz;
   float a = aB.z;
-  if ( aB.w < 0.5 ) {
-    vec2 p = aA.xy * uBox + d * uDrift * aB.x;
-    vec2 rel = mod( p - uCenter.xz + 0.5 * uBox, uBox ) - 0.5 * uBox;
-    vec2 e = abs( rel ) / ( 0.5 * uBox );
-    a *= ( 1.0 - smoothstep( 0.6, 1.0, e.x ) ) * ( 1.0 - smoothstep( 0.6, 1.0, e.y ) ) * sandAmt;
-    xz = uCenter.xz + rel;
-  } else {
-    // the wall: cards strung along the leading edge, across the wind, centred on the view
-    float c0 = dot( uCenter.xz, sd );
-    xz = d * ( sandFront.x - aA.y * 9.0 + 2.0 ) + sd * ( c0 + ( aA.x - 0.5 ) * uWallLen );
-    a *= uWall;
-  }
+  vec2 p = aA.xy * uBox + d * uDrift * aB.x;
+  vec2 rel = mod( p - uCenter.xz + 0.5 * uBox, uBox ) - 0.5 * uBox;
+  vec2 e = abs( rel ) / ( 0.5 * uBox );
+  a *= ( 1.0 - smoothstep( 0.6, 1.0, e.x ) ) * ( 1.0 - smoothstep( 0.6, 1.0, e.y ) ) * sandAmt;
+  vec2 xz = uCenter.xz + rel;
   float g = gnd( xz );
   vec3 right = normalize( vec3( viewMatrix[0][0], 0.0, viewMatrix[2][0] ) + 1e-4 );
   vec3 base = vec3( xz.x, g + aB.y, xz.y );
   vec3 wp = base + right * position.x * aA.z + vec3( 0.0, ( position.y + 0.5 ) * aA.w, 0.0 );
-  // billows only inside the storm (the wall is the storm's edge itself)
-  if ( aB.w < 0.5 ) a *= sandK( base );
+  // billows only inside the storm (the haboob is the storm's edge itself)
+  a *= sandK( base );
   vA = a;
-  vKind = aB.w;
   vUv = position.xy + 0.5;
   vW = wp;
   gl_Position = projectionMatrix * viewMatrix * vec4( wp, 1.0 );
@@ -86,33 +75,21 @@ uniform float uFocus;
 varying vec2 vUv;
 varying vec3 vW;
 varying float vA;
-varying float vKind;
 ${FOG_GLSL}
 void main() {
   if ( vA < 0.003 ) discard;
   vec2 d = sandWind.xy;
-  float al = dot( vW.xz, d ) - sandWind.z * ( vKind > 0.5 ? 0.25 : 1.0 );
+  float al = dot( vW.xz, d ) - sandWind.z;
   float ac = dot( vW.xz, vec2( -d.y, d.x ) );
-  // streaky sand racing downwind, rolling billows on the wall
+  // streaky sand racing downwind
   float n = texture2D( fogNoise, vec2( al * 0.05, ac * 0.05 + vW.y * 0.07 ) ).g * 0.6 + texture2D( fogNoise, vec2( al * 0.13 + 0.3, ac * 0.11 + vW.y * 0.2 ) ).r * 0.4;
   vec2 q = vUv - 0.5;
-  float a;
-  vec3 col;
-  if ( vKind < 0.5 ) {
-    // a soft lens, densest low down, frayed by the noise
-    float r = length( vec2( q.x * 1.9, q.y * 1.3 ) );
-    a = ( 1.0 - smoothstep( 0.15, 0.62, r + ( n - 0.5 ) * 0.5 ) ) * ( 1.0 - 0.45 * vUv.y );
-    col = sandCol * ( 0.82 + 0.3 * n + 0.15 * vUv.y );
-    // readability: thinner round the view centre (the player's units) and near the camera
-    a *= mix( 0.45, 1.0, smoothstep( uFocus * 0.35, uFocus * 1.3, length( vW.xz - fogTarget.xz ) ) );
-  } else {
-    // the wall: dense and dark at the foot, rolling billows eroding its top, soft ends (never a card edge)
-    float n3 = texture2D( fogNoise, vec2( ac * 0.09 + 0.17, vW.y * 0.12 - sandWind.z * 0.01 ) ).b;
-    float top = 0.5 + ( n - 0.5 ) * 0.55 + ( n3 - 0.5 ) * 0.3;
-    a = ( 1.0 - smoothstep( top - 0.3, top + 0.08, vUv.y ) ) * ( 1.0 - smoothstep( 0.22, 0.5, abs( q.x ) + ( n3 - 0.5 ) * 0.12 ) );
-    a *= ( 1.0 - smoothstep( 0.8, 0.98, vUv.y ) ) * smoothstep( 0.0, 0.2 + 0.15 * n3, vUv.y ) * ( 0.55 + 0.45 * smoothstep( 0.25, 0.75, n * 0.6 + n3 * 0.4 ) );
-    col = sandCol * ( 0.5 + 0.45 * vUv.y + 0.3 * n ) * vec3( 1.0, 0.96, 0.9 );
-  }
+  // a soft lens, densest low down, frayed by the noise
+  float r = length( vec2( q.x * 1.9, q.y * 1.3 ) );
+  float a = ( 1.0 - smoothstep( 0.15, 0.62, r + ( n - 0.5 ) * 0.5 ) ) * ( 1.0 - 0.45 * vUv.y );
+  vec3 col = sandCol * ( 0.82 + 0.3 * n + 0.15 * vUv.y );
+  // readability: thinner round the view centre (the player's units) and near the camera
+  a *= mix( 0.45, 1.0, smoothstep( uFocus * 0.35, uFocus * 1.3, length( vW.xz - fogTarget.xz ) ) );
   a *= vA * smoothstep( 3.0, 9.0, distance( cameraPosition, vW ) );
   if ( fogEnabled > 0.5 ) a *= 0.35 + 0.65 * smoothstep( 0.1, 0.45, fogSample( vW ) );
   if ( a < 0.004 ) discard;
@@ -130,7 +107,12 @@ export interface SandHost {
   list: Iterable<{ x: number; y: number; dead: boolean; kind: string }>;
   groundAt(x: number, z: number): number;
   puff(x: number, y: number, z: number, vx: number, vz: number): void;
+  /** The scene's key light and sky fill (the haboob is lit by them). */
+  light?: { sun: THREE.DirectionalLight; hemi: THREE.HemisphereLight };
 }
+
+const WHITE = new THREE.Color(1, 1, 1);
+const GREY = new THREE.Color(0.6, 0.6, 0.6);
 
 export class SandStorm {
   readonly mesh: THREE.Mesh;
@@ -139,8 +121,11 @@ export class SandStorm {
   private drift = 0;
   private cardDrift = 0;
   private puffAcc = 0;
-  /** Wall cards drawn last frame (stats / tests). */
+  /** The dust wall at the head of the storm drawn last frame (stats / tests). */
   wall = 0;
+  /** The haboob: the dust wall at the head of an arriving storm (a child of mesh). */
+  readonly haboob: Haboob;
+  private sunDir = new THREE.Vector3();
 
   constructor(
     private host: SandHost,
@@ -149,10 +134,9 @@ export class SandStorm {
   ) {
     const m = host.map;
     this.heightTex = sandHeightTexture(m);
-    // billows and wall cards (phones: fewer, same look)
+    // billows (phones: fewer, same look); the dust wall at the front is the haboob (haboob.ts)
     const nB = quality === 'high' ? 64 : quality === 'medium' ? 36 : 16;
-    const nW = quality === 'high' ? 30 : quality === 'medium' ? 20 : 12;
-    const n = nB + nW;
+    const n = nB;
     let s = 0x5a17d0 >>> 0;
     const rnd = () => {
       s ^= s << 13;
@@ -163,14 +147,8 @@ export class SandStorm {
     const a1 = new Float32Array(n * 4);
     const a2 = new Float32Array(n * 4);
     for (let i = 0; i < n; i++) {
-      if (i < nB) {
-        a1.set([rnd(), rnd(), 2.6 + rnd() * 3.8, 0.7 + rnd() * 1.4], i * 4);
-        a2.set([0.7 + rnd() * 0.6, -0.15 + rnd() * 0.35, 0.3 + rnd() * 0.3, 0], i * 4);
-      } else {
-        const k = (i - nB + rnd() * 0.8) / nW;
-        a1.set([k, rnd(), 9 + rnd() * 7, 6 + rnd() * 6], i * 4);
-        a2.set([1, -0.4, 0.6 + rnd() * 0.2, 1], i * 4);
-      }
+      a1.set([rnd(), rnd(), 2.6 + rnd() * 3.8, 0.7 + rnd() * 1.4], i * 4);
+      a2.set([0.7 + rnd() * 0.6, -0.15 + rnd() * 0.35, 0.3 + rnd() * 0.3, 0], i * 4);
     }
     const base = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
@@ -184,8 +162,6 @@ export class SandStorm {
       uCenter: { value: new THREE.Vector3() },
       uBox: { value: 40 },
       uDrift: { value: 0 },
-      uWall: { value: 0 },
-      uWallLen: { value: 120 },
       uHeight: { value: this.heightTex },
       uHSize: { value: new THREE.Vector2(m.w + 1, m.h + 1) },
       uFocus: { value: 8 },
@@ -197,6 +173,8 @@ export class SandStorm {
     this.mesh.renderOrder = 5;
     this.mesh.name = 'sandstorm';
     this.mesh.visible = false;
+    this.haboob = new Haboob(fog, this.heightTex, m.w, m.h, quality);
+    this.mesh.add(this.haboob.mesh);
   }
 
   /**
@@ -239,8 +217,13 @@ export class SandStorm {
     u.uBox.value = Math.min(90, Math.max(24, vh * 1.6));
     u.uDrift.value = this.cardDrift;
     u.uFocus.value = vh * 0.42;
-    u.uWall.value = wall;
-    u.uWallLen.value = Math.max(60, vh * 3);
+    // the haboob: the dust wall rolling in at the storm's head
+    const L = this.host.light;
+    if (L) {
+      this.sunDir.copy(L.sun.position).sub(L.sun.target.position);
+      if (this.sunDir.lengthSq() < 1e-8) this.sunDir.set(0.5, 0.7, 0.3);
+      this.haboob.update(dt, wall, target, vh * 1.8, this.sunDir, L.sun.color, L.sun.intensity, L.hemi.color, L.hemi.intensity);
+    } else this.haboob.update(dt, wall, target, vh * 1.8, this.sunDir.set(0.5, 0.7, 0.3), WHITE, 2.8, GREY, 1);
     (u.uCenter.value as THREE.Vector3).copy(target);
     this.wall = wall > 0.01 ? 1 : 0;
     this.mesh.visible = amount > 0.004 || wall > 0.004;
@@ -267,6 +250,7 @@ export class SandStorm {
   }
 
   dispose() {
+    this.haboob.dispose();
     this.mesh.geometry.dispose();
     (this.mesh.material as THREE.Material).dispose();
     this.heightTex.dispose();

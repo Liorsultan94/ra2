@@ -196,17 +196,20 @@ def frond_card(rng, kind):
     n = 24
     pts = [Vector((t, 0, 0)) for t in (i / n for i in range(n + 1))]
     rad = [(0.011 if coco else 0.009) * (1 - 0.75 * t) + 0.0015 for t in (i / n for i in range(n + 1))]
-    rcol = lin(0xb8b070) if coco else lin(0xa8a070) if not dry else lin(0x9a7a50)
+    # (DP1: the coconut's rachis a sunny straw yellow, the date's a grey-green)
+    rcol = lin(0xcac060) if coco else lin(0x98a07c) if not dry else lin(0x9a7a50)
     tube(hp, pts, rad, rcol, 7)
     if coco:
         lo, hi_, step, Lmax = 0.17, 0.985, 0.0105, 0.165
-        base = lin(0x86a446)
+        # bright yellow-green, soft (DP1)
+        base = lin(0x9fbc3a)
     elif dry:
         lo, hi_, step, Lmax = 0.27, 0.975, 0.0125, 0.125
         base = lin(0xa0805a)
     else:
         lo, hi_, step, Lmax = 0.25, 0.985, 0.011, 0.158
-        base = lin(0x86a272) if kind == 'date' else lin(0x97a46e)
+        # the date's stiff glaucous blue-green (DP1)
+        base = lin(0x6c9a8c) if kind == 'date' else lin(0x80a088)
     # spines on the date petiole
     if not coco:
         t = 0.11
@@ -255,7 +258,7 @@ def frond_card(rng, kind):
             if coco and rng.random() < 0.15:
                 tip = lin(0xa89a50)
             if kind == 'date2' and rng.random() < 0.3:
-                c = mixc(c, lin(0xa0a060), 0.5)
+                c = mixc(c, lin(0x98a070), 0.4)
             w = (0.0115 if coco else 0.0085) * (0.85 + rng.random() * 0.3)
             blade(hp, Vector((t, side * 0.003, 0.003)), d, sd, up, l, w, c, segs=7 if coco else 6, fold=0.2 if coco else 0.45, droop=droop, tipcol=tip)
             side = -side
@@ -357,14 +360,15 @@ def dates_card(rng):
     """A bunch of dates hanging from its stalk (side view: +y up), frame 0.25 x 0.5."""
     hp = HP()
     stalk = [Vector((0.0, 0.24, 0)), Vector((0.012, 0.2, 0)), Vector((0.016, 0.16, 0)), Vector((0.012, 0.12, 0))]
-    tube(hp, stalk, [0.009, 0.008, 0.0075, 0.007], lin(0xd0a040), 6)
-    cols = [lin(0xb8641e), lin(0xa04818), lin(0xd08a2a), lin(0x7a3a18), lin(0xc87a24), lin(0xd8a83a)]
+    tube(hp, stalk, [0.009, 0.008, 0.0075, 0.007], lin(0xe8b040), 6)
+    # ripening dates: bright orange to amber (DP1: they read at play zoom)
+    cols = [lin(0xe8761a), lin(0xd85e14), lin(0xf2962a), lin(0xc8561a), lin(0xee8424), lin(0xf4a834)]
     for i in range(22):
         x1 = (rng.random() - 0.5) * 0.2
         y1 = -0.2 + rng.random() * 0.14
         p0 = Vector((0.012 + (rng.random() - 0.5) * 0.01, 0.12, 0))
         pts = [p0.lerp(Vector((x1, y1, 0)), s) + Vector((0, 0.02 * math.sin(math.pi * s), 0)) for s in (0, 0.33, 0.66, 1.0)]
-        tube(hp, pts, [0.0022, 0.002, 0.0018, 0.0016], lin(0xc89a50), 4)
+        tube(hp, pts, [0.0022, 0.002, 0.0018, 0.0016], lin(0xe0a848), 4)
         cb = cols[int(rng.random() * len(cols))]
         for k in range(6):
             s = 0.3 + 0.7 * k / 5
@@ -417,20 +421,21 @@ def bark_card(rng, kind):
     hp = HP()
     if kind == 'bark_date':
         # dark fibrous core, a weave of fibres, and the cut leaf bases in a diamond lattice
-        grid_mesh(hp, W, H, 32, 64, np.zeros((64, 32)), np.tile(np.array(lin(0x4a3828))[None, None, :], (64, 32, 1)))
+        grid_mesh(hp, W, H, 32, 64, np.zeros((64, 32)), np.tile(np.array(lin(0x4e3420))[None, None, :], (64, 32, 1)))
         fibres = []
         for i in range(260):
             p = Vector((rng.random() * W, rng.random() * H, 0.006 + rng.random() * 0.02))
             a = (0.6 if rng.random() < 0.5 else -0.6) + (rng.random() - 0.5) * 0.5 + math.pi / 2
             L = 0.08 + rng.random() * 0.1
-            fibres.append((p, Vector((math.cos(a), math.sin(a), 0)) * L, jit(lin(0x5e4630), rng, 0.25)))
+            fibres.append((p, Vector((math.cos(a), math.sin(a), 0)) * L, jit(lin(0x6a4428), rng, 0.25)))
         NC, NR = 6, 7
         stubs = []
         for k in range(NC):
             for j in range(NR):
                 cx = (k + 0.5) / NC * W + (rng.random() - 0.5) * 0.015
                 cy = (j + 0.5 * (k % 2)) / NR * H + (rng.random() - 0.5) * 0.02
-                stubs.append((cx, cy, jit(lin(0xa28e74), rng, 0.15), rng.random()))
+                # (DP1: a warm brown, the coconut's trunk is the grey one)
+                stubs.append((cx, cy, jit(lin(0x9c7048), rng, 0.15), rng.random()))
         for ox in (-W, 0, W):
             for oy in (-H, 0, H):
                 for p, d, c in fibres:
@@ -446,7 +451,7 @@ def bark_card(rng, kind):
                     zt = 0.055 + r * 0.02
                     v = [Vector((bx - hw0, by - hh, 0.0)), Vector((bx + hw0, by - hh, 0.0)), Vector((bx + hw1, by + hh * 0.7, zt * 0.75)), Vector((bx - hw1, by + hh * 0.7, zt * 0.75)),
                          Vector((bx - hw1 * 0.92, by + hh * 0.95, zt)), Vector((bx + hw1 * 0.92, by + hh * 0.95, zt)), Vector((bx + hw1 * 0.8, by + hh * 0.8, 0.0)), Vector((bx - hw1 * 0.8, by + hh * 0.8, 0.0))]
-                    top = mixc(c, lin(0xb8a688), 0.55)
+                    top = mixc(c, lin(0xb89470), 0.55)
                     hp.add(v, [[0, 1, 2, 3], [3, 2, 5, 4], [4, 5, 6, 7], [0, 3, 7], [1, 6, 2]], [c, c, c, c, top, top, c, c])
                     # weathered vertical grain on the boot's face
                     for g in range(3):
@@ -462,9 +467,9 @@ def bark_card(rng, kind):
         wav = 0.012 * np.sin(np.arange(nx)[None, :] / nx * math.tau * 2 + yy * 3)
         ring = np.exp(-(((ph + wav) - 0.5) / 0.045) ** 2)
         hgt = ring * 0.016 - np.maximum(0, crack) ** 2 * 0.012 + fine * 0.002
-        base = np.array(lin(0x857a6a))
+        base = np.array(lin(0x948f86))
         col = base[None, None, :] * (0.92 + 0.1 * fine[..., None]) * (1 - 0.35 * np.maximum(0, crack[..., None]) ** 2)
-        col = col * (1 - 0.32 * ring[..., None]) + np.array(lin(0x6e6050))[None, None, :] * 0.32 * ring[..., None]
+        col = col * (1 - 0.32 * ring[..., None]) + np.array(lin(0x6c6a64))[None, None, :] * 0.32 * ring[..., None]
         grid_mesh(hp, W, H, nx, ny, hgt, col)
     else:  # bark_acacia: deep vertical furrows, reddish in the cracks
         nx, ny = 56, 120
@@ -927,7 +932,7 @@ def date_palm(lp, rng, base, H, lean, crown, nF, nDry, nDates, lod, r0=0.055):
     """A date palm: diamond-patterned trunk, crown base, nF green fronds in a spiral, dry fronds hanging, dates."""
     sides = 8 if lod == 0 else 5
     nseg = max(4, int(H / (0.11 if lod == 0 else 0.3)))
-    wob = (rng.random() - 0.5) * 0.04
+    wob = (rng.random() - 0.5) * 0.02
     pts = [base + Vector((lean[0] * t ** 1.6 + wob * math.sin(t * 5), lean[1] * t ** 1.6, H * t)) for t in (i / nseg for i in range(nseg + 1))]
     radii = [r0 * 1.12 * (1.28 - 0.28 * sst(0, 0.1, t)) * (1 - 0.1 * t) + 0.012 * sst(0.85, 1, t) for t in (i / nseg for i in range(nseg + 1))]
     top = pts[-1]
@@ -951,9 +956,10 @@ def date_palm(lp, rng, base, H, lean, crown, nF, nDry, nDates, lod, r0=0.055):
         k = i / max(1, nF - 1)
         a = a0 + i * GOLD + (rng.random() - 0.5) * 0.2
         dirh = Vector((math.cos(a), math.sin(a), 0))
-        elev = math.radians(74 - 100 * k ** 0.75 + (rng.random() - 0.5) * 12)
+        # (DP1: stiff and upright, a fan / shuttlecock of fronds; only the oldest bend down)
+        elev = math.radians(80 - 78 * k ** 0.9 + (rng.random() - 0.5) * 10)
         L = crown * (0.6 + 0.22 * math.sin(math.pi * min(1, 0.25 + k * 0.8))) * (0.9 + rng.random() * 0.2)
-        droop = 0.1 + 0.5 * k
+        droop = 0.04 + 0.24 * k
         b = top + dirh * (0.02 + 0.02 * k) + Vector((0, 0, 0.09 - 0.08 * k))
         card = 'frond_date' if (k < 0.55 or rng.random() < 0.3) else 'frond_date2'
         frond(lp, card, b, dirh, elev, L, droop, 5 if lod == 0 else 3, center, tf, 0.075, fold=0.42, twist=(rng.random() - 0.5) * 0.3)
@@ -971,15 +977,16 @@ def date_palm(lp, rng, base, H, lean, crown, nF, nDry, nDates, lod, r0=0.055):
         down = (Vector((0, 0, 1)) + d * 0.35).normalized()
         for rr in (0.0, math.pi / 2):
             right = Vector((math.cos(a + rr + 0.6), math.sin(a + rr + 0.6), 0))
-            card_quad(lp, 'dates', c, right, down, 0.11 * s, 0.22 * s, lambda p: (p - center).normalized() + Z * 0.2, tf, 0.12, 0.8)
+            card_quad(lp, 'dates', c, right, down, 0.13 * s, 0.26 * s, lambda p: (p - center).normalized() + Z * 0.2, tf, 0.12, 0.85)
     return top
 
 
-def coconut_palm(lp, rng, base, H, lean, crown, nF, lod, r0=0.042):
+def coconut_palm(lp, rng, base, H, lean, crown, nF, lod, r0=0.032):
     sides = 7 if lod == 0 else 5
     nseg = max(4, int(H / (0.1 if lod == 0 else 0.28)))
-    pts = [base + Vector((0.02 * math.sin(t * 4), lean * H * (0.95 * t - 0.4 * t * t), H * t)) for t in (i / nseg for i in range(nseg + 1))]
-    radii = [r0 * (1.5 - 0.5 * sst(0, 0.12, t)) * (1 - 0.18 * t) for t in (i / nseg for i in range(nseg + 1))]
+    # (DP1: slender, a long banana curve: leaning out, then turning up under the crown)
+    pts = [base + Vector((0.02 * math.sin(t * 4), lean * H * (1.15 * t - 0.55 * t * t), H * t)) for t in (i / nseg for i in range(nseg + 1))]
+    radii = [r0 * (1.55 - 0.55 * sst(0, 0.1, t)) * (1 - 0.12 * t) for t in (i / nseg for i in range(nseg + 1))]
     top = pts[-1]
     fK0 = 0.06 * (H / 1.3)
 
@@ -997,9 +1004,10 @@ def coconut_palm(lp, rng, base, H, lean, crown, nF, lod, r0=0.042):
         k = i / max(1, nF - 1)
         a = a0 + i * GOLD + (rng.random() - 0.5) * 0.25
         dirh = Vector((math.cos(a), math.sin(a), 0))
-        elev = math.radians(62 - 85 * k ** 0.8 + (rng.random() - 0.5) * 12)
-        L = crown * (0.68 + 0.14 * math.sin(math.pi * k)) * (0.9 + rng.random() * 0.2)
-        droop = 0.35 + 0.5 * k
+        # (DP1: a round, drooping crown: the fronds arch out and hang down all round, near equal lengths)
+        elev = math.radians(48 - 92 * k ** 0.75 + (rng.random() - 0.5) * 10)
+        L = crown * (0.72 + 0.06 * math.sin(math.pi * k)) * (0.92 + rng.random() * 0.16)
+        droop = 0.55 + 0.45 * k
         b = top + dirh * 0.02 + Vector((0, 0, 0.06 - 0.06 * k))
         frond(lp, 'frond_coco', b, dirh, elev, L, droop, 6 if lod == 0 else 3, center, tf, 0.1, fold=-0.3, twist=(rng.random() - 0.5) * 0.25)
     for i in range(2 if lod == 0 else 1):
@@ -1195,11 +1203,12 @@ def date_variant(name, lod):
     lp = LP()
     q = 1.0 if lod == 0 else 0.65
     if name == 'date_tall':
-        trunks = [((0, 0), 1.42, (0.05, 0.02), 1.0, 30, 7, 4)]
+        trunks = [((0, 0), 1.42, (0.03, 0.01), 1.0, 30, 7, 5)]
     elif name == 'date_short':
         trunks = [((0, 0), 0.5, (0.02, 0.0), 0.92, 28, 5, 3)]
     elif name == 'date_lean':
-        trunks = [((0, 0), 1.12, (0.34, 0.08), 0.95, 28, 6, 3)]
+        # (DP1: a gentler lean: date trunks stand straight, the coconut is the curved one)
+        trunks = [((0, 0), 1.12, (0.2, 0.05), 0.95, 28, 6, 4)]
     else:
         trunks = [((0.0, 0.0), 1.05, (0.1, 0.04), 0.9, 22, 5, 3), ((-0.17, 0.12), 0.72, (-0.22, 0.1), 0.82, 18, 4, 2), ((0.12, -0.16), 0.38, (0.12, -0.18), 0.75, 16, 3, 1),
                   ((-0.08, -0.12), 0.0, (0, 0), 0.5, 10, 0, 0)]
@@ -1225,7 +1234,7 @@ def build_models():
     for lod in (0, 1):
         rng = np.random.default_rng(201)
         lp = LP()
-        coconut_palm(lp, rng, Vector((0, 0, -0.02)), 1.28, 0.38, 1.0, 22 if lod == 0 else 12, lod)
+        coconut_palm(lp, rng, Vector((0, 0, -0.02)), 1.3, 0.46, 1.0, 26 if lod == 0 else 14, lod)
         models['coco' + ('' if lod == 0 else '_l1')] = lp
         for young in (False, True):
             rng = np.random.default_rng(301 + young)

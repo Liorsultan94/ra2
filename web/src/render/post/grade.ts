@@ -78,13 +78,16 @@ const LOOKS = {
   dNoon: L({ temp: -0.012, tint: -0.03, sat: 0.97, contrast: 1.09, gain: [1.03, 1.03, 1.03], lift: [0.006, 0.006, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.006, 0.004, -0.004] }),
   /** Desert afternoon (the classic day sun): crisp like noon, a touch warmer. */
   dDay: L({ temp: 0.012, tint: -0.035, sat: 0.97, contrast: 1.08, gain: [1.03, 1.025, 1.015], lift: [0.006, 0.006, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.014, 0.006, -0.01] }),
-  /** Desert golden hour (morning and evening): warm amber highlights, warmer midtones, cool complementary shadows. */
-  dGolden: L({ temp: 0.065, tint: 0.006, sat: 1.04, contrast: 1.06, gain: [1.04, 1.015, 0.96], lift: [0.008, 0.006, 0.012], shadowTint: [-0.014, 0.0, 0.03], highTint: [0.04, 0.017, -0.03] }),
+  /**
+   * Desert golden hour (morning and evening): clearly warm amber light on the sand and granite (a warm white
+   * balance and amber highlights), cool complementary shadows; the gain stays near 1 so the lit sand never clips.
+   */
+  dGolden: L({ temp: 0.11, tint: 0.012, sat: 1.07, contrast: 1.07, gain: [1.035, 1.0, 0.93], lift: [0.008, 0.005, 0.012], shadowTint: [-0.016, 0.0, 0.034], highTint: [0.055, 0.022, -0.042] }),
   /**
    * Blue hour (dusk, before dawn): a cool blue cast with the brightness kept (the night's darkness is its own
    * look); saturated lights (lamps, team colours) are spared, so they glow warm against it.
    */
-  dBlue: L({ temp: -0.09, tint: 0.02, sat: 0.95, protect: 0.92, contrast: 1.0, lift: [0.012, 0.018, 0.034], gain: [1.0, 1.01, 1.06], shadowTint: [-0.008, 0.002, 0.03], highTint: [0.0, 0.004, 0.02] }),
+  dBlue: L({ temp: -0.15, tint: 0.03, sat: 0.94, protect: 0.92, contrast: 1.0, lift: [0.01, 0.018, 0.04], gain: [0.98, 1.01, 1.08], shadowTint: [-0.01, 0.002, 0.038], highTint: [-0.004, 0.006, 0.026] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };
