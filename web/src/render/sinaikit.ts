@@ -231,7 +231,8 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += ( 1.0 - smoothstep( 0.12, 0.16, skOrm.g ) ) * vSkGlow * lmNight * vec3( 1.0, 0.78, 0.48 ) * 1.1;`,
+        // (a soft ramp, not a threshold: at play zoom the mips blend the glass with its frame)
+        totalEmissiveRadiance += ( 1.0 - smoothstep( 0.08, 0.62, skOrm.g ) ) * vSkGlow * lmNight * vec3( 1.0, 0.78, 0.48 ) * 1.7;`,
       );
   };
   fog.apply(mat);
