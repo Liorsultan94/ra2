@@ -10,6 +10,7 @@ import type { NightLights } from './night';
 import { ReefLife, buildWreck, type Wreck } from './reeflife';
 import { RIVER } from './water';
 import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type SinaiKit } from './sinaikit';
+import { desertVeg, vegInstancedMesh, type DesertVeg, type VegKind } from './desertveg';
 
 /*
  * The Red Sea coast of Wadi Al-Rimal (render only; the sim's coast is sim/maps.ts DESERT_SEA, mirrored
@@ -23,6 +24,8 @@ import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial,
  *  - people: sunbathers, swimmers in the shallows and the pool, strollers on the promenade, diners.
  *  - a rusty cargo ship aground on the Blue Hole's rim (reeflife.ts builds it; its dry part merges in here);
  *  - leaning coconut palms along the waterline;
+ *  - (the date and coconut palms come from the Blender vegetation kit when it loaded: desertveg.ts, instanced
+ *    per kind with three zoom levels; otherwise the merged low-poly models below);
  *  - the life in the clear shallows and the Blue Hole's lagoon (reeflife.ts: corals, fish, starfish, jellyfish).
  * Draw calls: one merged static mesh per corner (the landmarks' shared program: night windows and
  * lamps glow), one instanced mesh each for the parasols, the loungers and the boats, one instanced
@@ -123,6 +126,9 @@ export class Seaside {
   /** Kit meshes per corner: play zoom (LOD0) and zoomed out (LOD1), swapped on the view span in update(). */
   private kitLods: { k0: THREE.Mesh | null; k1: THREE.Mesh | null }[] = [];
   private kitLoSpan = 24;
+  /** The desert vegetation kit (GD3), when it loaded: the palms are its instances (vegSpots -> vegMeshes). */
+  private veg: DesertVeg | null = null;
+  private vegSpots = new Map<VegKind, THREE.Matrix4[]>();
   /** The lighthouses' lanterns (one per island): the night beam sweeps from here (nightLights). */
   private lanterns: { x: number; y: number; z: number; ph: number }[] = [];
 
@@ -140,6 +146,7 @@ export class Seaside {
     const loungers: { m: THREE.Matrix4; c: THREE.Color }[] = [];
     const wrecks: Wreck[] = [];
     const kit = sinaiKit();
+    this.veg = desertVeg();
     this.kitLoSpan = quality === 'high' ? 30 : 24;
     for (const b of [0, 1]) {
       const F = this.frame(b);
@@ -167,6 +174,7 @@ export class Seaside {
       this.sb = null;
       if (quality !== 'low') this.populate(F, beds);
     }
+    this.buildPlants();
     this.group.add(...this.instanced(parasolGeometry(), parasols, 'seaside-parasols'));
     this.group.add(...this.instanced(loungerGeometry(), loungers, 'seaside-loungers'));
     this.buildBoats();
@@ -389,7 +397,8 @@ export class Seaside {
         if (v < r.v0 + 2.95) continue;
         this.at(k, F, u + (h(Math.round(u * 10), Math.round(v)) - 0.5) * 0.4, v, deckY, h(Math.round(u), 9) * 6);
         k.cyl(0.11, 0.1, 0.06, 0, 0, 0, 0xc8b898, 8);
-        datePalm(k, h(Math.round(u * 10), 11), 0.62 + h(Math.round(u * 10), 12) * 0.2);
+        const ps = 0.62 + h(Math.round(u * 10), 12) * 0.2;
+        if (!this.plant(k, h(Math.round(u * 10), 13) < 0.7 ? 'date_tall' : 'date_lean', ps * 0.8)) datePalm(k, h(Math.round(u * 10), 11), ps);
       }
     }
     // lamp posts along the deck (gentle glow at night)
@@ -815,7 +824,8 @@ export class Seaside {
       const y = this.gh(p.x, p.y);
       if (y < WATER_LEVEL + 0.02) continue;
       this.at(k, F, uu, v, y, (h(Math.round(u * 10), 44) - 0.5) * 0.9);
-      coconutPalm(k, h(Math.round(u * 10), 45), 0.85 + h(Math.round(u * 10), 46) * 0.25);
+      const cs = 0.85 + h(Math.round(u * 10), 46) * 0.25;
+      if (!this.plant(k, 'coco', cs * 0.82)) coconutPalm(k, h(Math.round(u * 10), 45), cs);
     }
     void r;
     void parasols;
@@ -1000,7 +1010,8 @@ export class Seaside {
           // a date palm in a round planter, a bench in its shade
           this.at(k, F, u, vi - 0.18, y0(u, vi - 0.18));
           k.cyl(0.11, 0.1, 0.07, 0, 0, 0, 0xc8b898, 8);
-          datePalm(k, h(bay, 40), 0.6 + h(bay, 41) * 0.2);
+          const ps = 0.6 + h(bay, 41) * 0.2;
+          if (!this.plant(k, h(bay, 42) < 0.75 ? 'date_tall' : 'date_lean', ps * 0.8)) datePalm(k, h(bay, 40), ps);
           this.at(k, F, u + 0.3, vt, y0(u + 0.3, vt));
           k.box(0.3, 0.015, 0.08, 0, 0.075, 0, WOOD);
           for (const sx of [-0.12, 0.12]) k.box(0.015, 0.075, 0.07, sx, 0.037, 0, DARK);
@@ -1311,6 +1322,23 @@ export class Seaside {
       out.push(im);
     }
     return out;
+  }
+
+  /** A plant of the vegetation kit at the Kit's current placement (k.base) scaled by s; false without the kit. */
+  private plant(k: Kit, kind: VegKind, s: number): boolean {
+    if (!this.veg) return false;
+    let l = this.vegSpots.get(kind);
+    if (!l) this.vegSpots.set(kind, (l = []));
+    l.push(k.base.clone().multiply(new THREE.Matrix4().makeScale(s, s, s)));
+    return true;
+  }
+
+  /** The kit's palms: one instanced mesh per kind (both corners; zoom levels per draw: desertveg.ts). */
+  private buildPlants() {
+    const veg = this.veg;
+    if (!veg) return;
+    for (const [kind, list] of this.vegSpots) this.group.add(vegInstancedMesh(veg, kind, list, this.fog, this.quality, 'seaside-palms'));
+    this.vegSpots.clear();
   }
 
   update(time: number) {
