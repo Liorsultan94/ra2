@@ -138,46 +138,69 @@ export function loadSinaiKit(quality: 'low' | 'medium' | 'high'): Promise<SinaiK
 
 const PLASTER_MATS = new WeakMap<FogOfWar, THREE.MeshStandardMaterial>();
 const KIT_MATS = new WeakMap<FogOfWar, THREE.MeshStandardMaterial>();
+/** The resort's clean variants (same programs: a uniform switches them). */
+const PLASTER_CLEAN = new WeakMap<FogOfWar, THREE.MeshStandardMaterial>();
+const KIT_CLEAN = new WeakMap<FogOfWar, THREE.MeshStandardMaterial>();
+
+/**
+ * Clean plaster (DP1: the Red Sea resort): a bright, freshly painted white; the plaster texture only as a subtle
+ * relief of its own brightness round its mean (no stains, no grey weathering), a hint of grime at the foot.
+ * The town's houses keep the weathered plaster. `clean` 1 = the resort's material.
+ */
+const CLEAN_GLSL = /* glsl */ `
+vec3 skCleanPlaster( sampler2D tex, vec2 uv ) {
+  vec3 tx = texture2D( tex, uv ).rgb;
+  // (the texture's mean: its smallest mips)
+  vec3 tm = texture2D( tex, uv, 8.0 ).rgb;
+  float r = dot( tx, vec3( 0.2126, 0.7152, 0.0722 ) ) / max( dot( tm, vec3( 0.2126, 0.7152, 0.0722 ) ), 1e-3 );
+  return vec3( 0.89, 0.885, 0.865 ) * clamp( 1.0 + ( r - 1.0 ) * 0.3, 0.8, 1.12 );
+}
+`;
 
 /**
  * The walls: the tileable plaster (world-space box mapping, PLASTER_TILE tiles per repeat) tinted by the vertex
  * colour (the wall colour; envdamage.ts darkens it), grime along the foot of the walls (aBase: the ground
  * height under the building) and darker sun-faded streaks under the parapets.
  */
-export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStandardMaterial {
-  const c = PLASTER_MATS.get(fog);
+export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): THREE.MeshStandardMaterial {
+  const cache = clean ? PLASTER_CLEAN : PLASTER_MATS;
+  const c = cache.get(fog);
   if (c) return c;
   const mat = new THREE.MeshStandardMaterial({
     map: kit.plaster.albedo,
     normalMap: kit.plaster.normal,
-    normalScale: new THREE.Vector2(0.6, 0.6),
+    normalScale: clean ? new THREE.Vector2(0.32, 0.32) : new THREE.Vector2(0.6, 0.6),
     roughnessMap: kit.plaster.orm,
     aoMap: kit.plaster.orm,
-    aoMapIntensity: 0.45,
+    aoMapIntensity: clean ? 0.2 : 0.45,
     roughness: 1,
     metalness: 0,
     vertexColors: true,
-    envMapIntensity: 0.6,
+    envMapIntensity: clean ? 0.7 : 0.6,
   });
+  const skClean = { value: clean ? 1 : 0 };
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.skClean = skClean;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float aBase;\nvarying float vSkBase;\nvarying float vSkUp;')
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkBase = aBase;\nvSkUp = normalize( mat3( modelMatrix ) * objectNormal ).y;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vSkBase;\nvarying float vSkUp;').replace(
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying float vSkBase;\nvarying float vSkUp;\nuniform float skClean;\n${CLEAN_GLSL}`).replace(
       '#include <color_fragment>',
       `#include <color_fragment>
       {
+        // the resort's clean white (DP1): the plaster's detail only as a soft relief of brightness
+        if ( skClean > 0.5 ) diffuseColor.rgb = vColor.rgb * skCleanPlaster( map, vMapUv );
         // dust and splash grime along the foot of the walls (not on roofs), a little uneven
         float hgt = vFogP.y - vSkBase;
         float gn = texture2D( map, vMapUv * 0.37 + 0.21 ).g;
         float grime = ( 1.0 - smoothstep( 0.0, 0.16 + gn * 0.06, hgt ) ) * ( 1.0 - step( 0.6, abs( vSkUp ) ) );
-        diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.74, 0.68, 0.6 ), grime * 0.55 );
+        diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.74, 0.68, 0.6 ), grime * ( skClean > 0.5 ? 0.18 : 0.55 ) );
       }`,
     );
   };
   fog.apply(mat);
   mat.customProgramCacheKey = () => 'fog2-sinai-plaster';
-  PLASTER_MATS.set(fog, mat);
+  cache.set(fog, mat);
   return mat;
 }
 
@@ -185,8 +208,9 @@ export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshSt
  * The kit: atlas albedo / normal / ORM. ORM.b is the tint class (0 own colour, 0.5 wall plaster: the world-mapped
  * plaster texture times aTint, 1 accent: albedo times aAccent); the glass (roughness 0.1) is lit at night where aGlow.
  */
-export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStandardMaterial {
-  const c = KIT_MATS.get(fog);
+export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): THREE.MeshStandardMaterial {
+  const cache = clean ? KIT_CLEAN : KIT_MATS;
+  const c = cache.get(fog);
   if (c) return c;
   const mat = new THREE.MeshStandardMaterial({
     map: kit.atlas.albedo,
@@ -203,7 +227,9 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
   });
   const plaster = { value: kit.plaster.albedo };
   const tile = { value: 1 / kit.man.plasterTile };
+  const skClean = { value: clean ? 1 : 0 };
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.skClean = skClean;
     sh.uniforms.skPlaster = plaster;
     sh.uniforms.skTile = tile;
     sh.uniforms.lmNight = LM_NIGHT;
@@ -211,7 +237,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
       .replace('#include <common>', '#include <common>\nattribute vec3 aTint;\nattribute vec3 aAccent;\nattribute float aGlow;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;')
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkTint = aTint * 2.0;\nvSkAcc = aAccent * 2.0;\nvSkGlow = aGlow;\nvSkN = normalize( mat3( modelMatrix ) * objectNormal );');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform sampler2D skPlaster;\nuniform float skTile;\nuniform float lmNight;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;')
+      .replace('#include <common>', `#include <common>\nuniform sampler2D skPlaster;\nuniform float skTile;\nuniform float lmNight;\nuniform float skClean;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;\n${CLEAN_GLSL}`)
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
@@ -223,7 +249,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
           // the wall plaster, mapped in world space exactly like the walls (sinaitown.ts boxUV)
           vec3 an = abs( vSkN );
           vec2 puv = an.y >= an.x && an.y >= an.z ? vFogP.xz : an.x >= an.z ? vFogP.zy : vFogP.xy;
-          vec3 pl = texture2D( skPlaster, puv * skTile ).rgb * vSkTint * ( 0.45 + 0.55 * skOrm.r );
+          vec3 pl = skClean > 0.5 ? skCleanPlaster( skPlaster, puv * skTile ) * vSkTint * ( 0.78 + 0.22 * skOrm.r ) : texture2D( skPlaster, puv * skTile ).rgb * vSkTint * ( 0.45 + 0.55 * skOrm.r );
           vec3 own = diffuseColor.rgb;
           diffuseColor.rgb = own * ( 1.0 - wallW - accW ) + pl * wallW + own * vSkAcc * ( accW * 1.3 );
         }`,
@@ -237,7 +263,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit): THREE.MeshStanda
   };
   fog.apply(mat);
   mat.customProgramCacheKey = () => 'fog2-sinai-kit';
-  KIT_MATS.set(fog, mat);
+  cache.set(fog, mat);
   return mat;
 }
 

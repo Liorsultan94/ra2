@@ -520,8 +520,9 @@ export class Seaside {
       this.group.add(mesh);
       return mesh;
     };
-    mk(sb.pl.build(), sinaiPlasterMaterial(fog, kit), 'seaside-walls');
-    const kmat = sinaiKitMaterial(fog, kit);
+    // the resort's clean, bright white plaster (DP1; the town keeps its weathered walls)
+    mk(sb.pl.build(), sinaiPlasterMaterial(fog, kit, true), 'seaside-walls');
+    const kmat = sinaiKitMaterial(fog, kit, true);
     const k0 = mk(sb.k0.build(), kmat, 'seaside-kit');
     const k1 = mk(sb.k1.build(), kmat, 'seaside-kit-far');
     if (k1) k1.visible = false;
