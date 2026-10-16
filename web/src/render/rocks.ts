@@ -10,7 +10,10 @@ import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
 import { rockTexture } from './terraintex';
-import { buildRelief, reliefEnabled, reliefField, reliefHeight } from './relief';
+import { buildRelief, canyonMask, reliefEnabled, reliefField, reliefHeight } from './relief';
+import { loadRockKit, rockKitMaterial, type KitKey } from './rockkit';
+import { strataMean } from './strata';
+import { PHOTO_MATERIALS } from './terrainset';
 import { assetBase, fetchBitmap } from './photoground';
 import { landmarkClear } from './landmarks/plan';
 import { inKeepOut, oreKeepOut } from './orefield';
@@ -381,10 +384,58 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
     // scree is hidden when zoomed far out
     lod.addCulled(ci, lo, loSpan, k === 3 ? loSpan + 6 : Infinity);
   });
-  // photoscanned rocks (medium: the far model near too, it is as light as the procedural rock; ?photo=0 keeps these)
   const photoOff = typeof location !== 'undefined' && /[?&]photo=0\b/.test(location.search);
-  if (!low && !photoOff && typeof createImageBitmap !== 'undefined')
-    void loadPhotoRocks(quality === 'high' && !phoneCaps() ? 1024 : 512).then((pr) => {
+  const streams = !low && !photoOff && typeof createImageBitmap !== 'undefined';
+  // the desert (GD4): the Blender rock kit - granite tors, corestones, boulders and scree slabs in place of the
+  // scans, and rockfall talus at the cliff feet (granite; sandstone in the coloured canyon)
+  if (biome === 'desert' && streams && relief) {
+    const kq = quality === 'high' ? 'high' : 'medium';
+    const talus = buildTalus(m, layout, keep, quality);
+    const kitMeshes: { im: THREE.InstancedMesh; hi: THREE.BufferGeometry; lo: THREE.BufferGeometry | null; key: KitKey; sand: boolean }[] = [];
+    for (const t of talus) {
+      if (!t.list.length) continue;
+      // (placeholders until the kit streams in: the procedural block and chip)
+      const hi = rockGeo(t.key === 'chip' ? 0 : 1, t.key === 'chip' ? 67 : 53, { cuts: 6 });
+      const lo = t.key === 'chip' ? null : rockGeo(0, 53, { cuts: 6 });
+      const ci = new CulledInstances(hi, mat, t.list, m.w, m.h, 4, { castShadow: shadows && t.key !== 'chip', receiveShadow: true, name: 'talus' });
+      ci.mesh.userData.perfCat = 'rocks';
+      out.push(ci.mesh);
+      kitMeshes.push({ im: ci.mesh, hi, lo, key: t.key, sand: t.sand });
+      // the chips go when zoomed far out
+      lod.addCulled(ci, lo, loSpan, t.key === 'chip' ? loSpan + 6 : Infinity);
+    }
+    console.info(`[talus] ${talus.map((t) => `${t.key}${t.sand ? '(sandstone)' : ''} ${t.list.length}`).join(', ')}`);
+    void loadRockKit().then((kit) => {
+      if (!kit) {
+        // no kit: the scans as before
+        void swapToScans();
+        return;
+      }
+      const gmat = rockKitMaterial(fog, 'granite', kq, kitColour('granite'));
+      const smat = rockKitMaterial(fog, 'sandstone', kq, kitColour('sandstone'));
+      const legacy: KitKey[] = ['tor', 'corestone', 'boulder', 'slab'];
+      geos.forEach(([hi, lo], k) => {
+        const g = kit.geos[legacy[k]];
+        // (medium: the far model near too, as the scans were)
+        replaceGeometry(hi, quality === 'high' ? g.hi : g.lo);
+        if (lo) replaceGeometry(lo, g.lo);
+      });
+      for (const im of meshes) im.material = gmat;
+      for (const t of kitMeshes) {
+        const g = kit.geos[t.key];
+        // (medium / phones: the far model near too, as for the rocks above)
+        replaceGeometry(t.hi, quality === 'high' ? g.hi : g.lo);
+        if (t.lo) replaceGeometry(t.lo, g.lo);
+        t.im.material = t.sand ? smat : gmat;
+      }
+      mat.dispose();
+      console.info('[rockkit] desert rock kit in place');
+    });
+    return out;
+  }
+  // photoscanned rocks (medium: the far model near too, it is as light as the procedural rock; ?photo=0 keeps these)
+  function swapToScans() {
+    return loadPhotoRocks(quality === 'high' && !phoneCaps() ? 1024 : 512).then((pr) => {
       if (!pr) return;
       const pmat = photoRockMaterial(pr, biome ?? 'temperate', fog);
       geos.forEach(([hi, lo], k) => {
@@ -396,5 +447,147 @@ export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: '
       mat.dispose();
       console.info('[photo] rock scans in place');
     });
+  }
+  if (streams) void swapToScans();
   return out;
+}
+
+/** The kit's base colours (linear): the desert cliffs' granite (relief.ts) and the canyon's sandstone (strata.ts). */
+function kitColour(kind: 'granite' | 'sandstone'): THREE.Color {
+  if (kind === 'sandstone') return strataMean().multiplyScalar(0.57 * 1.6);
+  // the cliff faces' average: the grey rock scan's mean under the desert side tint, 75 % saturation, x1.6
+  const g = PHOTO_MATERIALS.greyrock.mean;
+  const t = new THREE.Color(0x9a7262);
+  const c = new THREE.Color(g[0] * t.r, g[1] * t.g, g[2] * t.b);
+  const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+  return new THREE.Color(l + (c.r - l) * 0.7, l + (c.g - l) * 0.7, l + (c.b - l) * 0.7).multiplyScalar(1.6 * 1.3);
+}
+
+/**
+ * Rockfall at the cliff feet (desert relief, GD4): talus blocks leaning on the foot of the cliffs, inside the rock
+ * (never over passable ground), in clusters with gaps, and chips spilling a little way out onto the ground below.
+ * In the coloured canyon the blocks are sandstone.
+ */
+export function buildTalus(m: GameMap, layout: Layout, keep: ReturnType<typeof oreKeepOut>, quality: 'low' | 'medium' | 'high'): { key: KitKey; sand: boolean; list: Inst[] }[] {
+  const rf = reliefField(m);
+  const F = rf.F;
+  const can = canyonMask(m);
+  const t1: Inst[] = [];
+  const t2: Inst[] = [];
+  const ts: Inst[] = [];
+  const chips: Inst[] = [];
+  const isRock = (x: number, y: number) => x >= 0 && y >= 0 && x < m.w && y < m.h && m.tiles[Math.floor(y) * m.w + Math.floor(x)] === Tile.Rock;
+  const dAt = (i: number, j: number) => (i < 0 || j < 0 || i >= rf.NW || j >= rf.NH ? 0 : rf.d[j * rf.NW + i]);
+  const density = quality === 'high' ? 1 : 0.8;
+  for (let j = 1; j < rf.NH - 1; j++)
+    for (let i = 1; i < rf.NW - 1; i++) {
+      const d = rf.d[j * rf.NW + i];
+      if (d < 0.14 || d > 0.42) continue;
+      // clusters along the feet with gaps between them
+      const cl = valueNoise(i * 0.21, j * 0.21, 4601);
+      if (hash2(i, j, 4603) > (cl - 0.32) * 0.9 * density) continue;
+      // outward: down the distance field, towards the open ground
+      let ox = dAt(i - 1, j) - dAt(i + 1, j);
+      let oz = dAt(i, j - 1) - dAt(i, j + 1);
+      const ol = Math.hypot(ox, oz);
+      if (ol < 1e-4) continue;
+      ox /= ol;
+      oz /= ol;
+      const big = hash2(i, j, 4605);
+      const s = 0.07 + Math.pow(big, 1.8) * 0.19;
+      // the block's centre stays inside the rock by its own radius
+      const back = Math.max(0, s * 0.85 - d) + (hash2(i, j, 4607) - 0.5) * 0.06;
+      const x = i / F + rf.jx[j * rf.NW + i] - ox * back;
+      const z = j / F + rf.jz[j * rf.NW + i] - oz * back;
+      if (!isRock(x, z) || landmarkClear(m, x, z, 0.4)) continue;
+      // seat it on the lowest ground under it (leaning on the cliff, sunk at the foot)
+      let lo = reliefHeight(m, x, z);
+      for (let k = 0; k < 8; k++) lo = Math.min(lo, reliefHeight(m, x + Math.cos(k * 0.785) * s, z + Math.sin(k * 0.785) * s));
+      const sand = !!can && can(x, z) > 0.5;
+      const sy = s * (0.62 + hash2(i, j, 4609) * 0.4);
+      const inst: Inst = {
+        x,
+        y: lo + sy * 0.28,
+        z,
+        rotY: hash2(i, j, 4611) * 6.283,
+        sx: s * (0.9 + hash2(i, j, 4613) * 0.35),
+        sy,
+        sz: s * (0.75 + hash2(i, j, 4615) * 0.3),
+        tiltX: (hash2(i, j, 4617) - 0.5) * 0.5,
+        tiltZ: (hash2(i, j, 4619) - 0.5) * 0.5,
+      };
+      (sand ? ts : hash2(i, j, 4621) < 0.5 ? t1 : t2).push(inst);
+      // chips spilling out onto the ground below (granite: the canyon has its own, canyon.ts)
+      const nc = sand ? 0 : Math.floor(hash2(i, j, 4623) * (2 + s * 10) * density);
+      for (let c = 0; c < nc; c++) {
+        const r = s + 0.06 + hash2(i, j, 4630 + c) * 0.45;
+        const a = (hash2(i, j, 4640 + c) - 0.5) * 1.6;
+        const px = x + (ox * Math.cos(a) - oz * Math.sin(a)) * r;
+        const pz = z + (ox * Math.sin(a) + oz * Math.cos(a)) * r;
+        const tx = Math.floor(px);
+        const tz = Math.floor(pz);
+        if (tx < 0 || tz < 0 || tx >= m.w || tz >= m.h) continue;
+        const ti = tz * m.w + tx;
+        const onRock = m.tiles[ti] === Tile.Rock;
+        if (!onRock && (m.tiles[ti] === Tile.Water || m.ore[ti] || inKeepOut(m, keep, px, pz) || occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_FIELD | OCC_BUILT))) continue;
+        const cs = 0.025 + hash2(i, j, 4650 + c) * 0.045;
+        chips.push({
+          x: px,
+          y: (onRock ? reliefHeight(m, px, pz) : surfaceHeight(m, px, pz)) - cs * 0.1,
+          z: pz,
+          rotY: hash2(i, j, 4660 + c) * 6.283,
+          sx: cs * 1.2,
+          sy: cs * 0.8,
+          sz: cs,
+          tiltX: (hash2(i, j, 4670 + c) - 0.5) * 0.6,
+        });
+      }
+    }
+  // the graded mountain tracks (SL1): the rubble pushed aside when they were cut lies along both verges, so the
+  // trodden bed reads as a way cut through the rock
+  for (const [ti, tr] of layout.tracks.entries()) {
+    if (!tr.bed) continue;
+    const half = tr.width / 2 + tr.bed;
+    let along = 0;
+    for (let k = 0; k < tr.pts.length - 1; k++) {
+      const a = tr.pts[k];
+      const b = tr.pts[k + 1];
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      if (L < 1e-4) continue;
+      const tx = (b.x - a.x) / L;
+      const tz = (b.y - a.y) / L;
+      for (let s = 0; s < L; s += 0.22, along += 0.22) {
+        const q = Math.round(along / 0.22);
+        for (const side of [-1, 1]) {
+          if (hash2(q, ti * 2 + (side > 0 ? 1 : 0), 4701) > 0.62 * density) continue;
+          const off = half + 0.08 + Math.pow(hash2(q, ti, 4703 + side), 1.5) * 0.5;
+          const px = a.x + tx * s - tz * off * side + (hash2(q, ti, 4705) - 0.5) * 0.15;
+          const pz = a.y + tz * s + tx * off * side + (hash2(q, ti, 4707) - 0.5) * 0.15;
+          const ix = Math.floor(px);
+          const iz = Math.floor(pz);
+          if (ix < 0 || iz < 0 || ix >= m.w || iz >= m.h) continue;
+          const ii = iz * m.w + ix;
+          if (m.tiles[ii] === Tile.Water || m.ore[ii] || inKeepOut(m, keep, px, pz) || occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT)) continue;
+          const cs = 0.03 + Math.pow(hash2(q, ti, 4709 + side), 1.4) * 0.045;
+          const onRock = m.tiles[ii] === Tile.Rock;
+          chips.push({
+            x: px,
+            y: (onRock ? reliefHeight(m, px, pz) : surfaceHeight(m, px, pz)) - cs * 0.12,
+            z: pz,
+            rotY: hash2(q, ti, 4711 + side) * 6.283,
+            sx: cs * 1.25,
+            sy: cs * 0.75,
+            sz: cs,
+            tiltX: (hash2(q, ti, 4713 + side) - 0.5) * 0.5,
+          });
+        }
+      }
+    }
+  }
+  return [
+    { key: 'talus1', sand: false, list: t1 },
+    { key: 'talus2', sand: false, list: t2 },
+    { key: 'talus1', sand: true, list: ts },
+    { key: 'chip', sand: false, list: chips },
+  ];
 }
