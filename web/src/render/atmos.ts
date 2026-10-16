@@ -910,6 +910,7 @@ export class Atmosphere {
           },
           groundAt: (x, z) => host.effects.groundAt(x, z),
           puff: (x, y, z, vx, vz) => host.effects.sandPuff(x, y, z, vx, vz),
+          light: { sun: host.sun, hemi: host.hemi },
         },
         host.fog,
         host.quality,
