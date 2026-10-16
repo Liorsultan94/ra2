@@ -3,6 +3,7 @@ import { phoneCaps } from './devicecaps';
 import type { Biome } from '../sim/map';
 import { PHOTO_MATERIALS, PHOTO_STACKS, type PhotoMaterial, type PhotoSlot, type PhotoStack } from './terrainset';
 import { DUNES_BYTES, SAND_BYTES, SAND_MATERIALS } from './sandset';
+import { GRANITE_BYTES, ROCK_FACES } from './rockset';
 
 /*
  * Photoscanned ground materials (CC0 scans baked by tools/bake-terrain.mjs
@@ -39,20 +40,27 @@ export function assetBase(): string {
   }
 }
 
-/** A ground layer's material: the photoscans (terrainset.ts) and the desert's Blender-baked sand (sandset.ts). */
+/** A ground layer's material: the photoscans (terrainset.ts), the desert's Blender-baked sand (sandset.ts) and granite (rockset.ts). */
 export function photoMaterial(key: string): PhotoMaterial | undefined {
-  return PHOTO_MATERIALS[key] ?? (SAND_MATERIALS as Record<string, PhotoMaterial>)[key];
+  return PHOTO_MATERIALS[key] ?? (SAND_MATERIALS as Record<string, PhotoMaterial>)[key] ?? (ROCK_FACES as Record<string, PhotoMaterial>)[key];
 }
 
 /**
  * The desert (GD1): the Blender-baked sand (sandset.ts) takes the dune scan's layer, and a reg / desert
  * pavement gravel layer joins as the extra slot `reg` (PH_REG in the ground shader: gravel patches on the sand).
+ * GD4: the Blender-baked South Sinai granite (rockset.ts, the cliffs' own rock) takes the grey rock scan's layer: the
+ * massifs' bare slopes.
  */
+/** Baked layers that stand in for a scan: they are tinted to the colour the scan had (PhotoGround). */
+const STAND_IN: Record<string, string> = { dgranite: 'greyrock' };
+/** Download of the grey rock scan (terrain.json) the granite replaces in the desert stack. */
+const GREYROCK_BYTES: Record<number, number> = { 512: 46012, 1024: 137702 };
 const DESERT_STACK: PhotoStack = (() => {
   const s = PHOTO_STACKS.desert;
-  const layers = [...s.layers.map((k) => (k === 'dunes' ? 'dsand' : k)), 'dreg'];
+  const layers = [...s.layers.map((k) => (k === 'dunes' ? 'dsand' : k === 'greyrock' ? 'dgranite' : k)), 'dreg'];
   const bytes: Record<number, number> = {};
-  for (const [k, v] of Object.entries(s.bytes)) bytes[+k] = v - (DUNES_BYTES[+k] ?? 0) + (SAND_BYTES[+k] ?? 0);
+  for (const [k, v] of Object.entries(s.bytes))
+    bytes[+k] = v - (DUNES_BYTES[+k] ?? 0) + (SAND_BYTES[+k] ?? 0) - (GREYROCK_BYTES[+k] ?? 0) + (GRANITE_BYTES[+k] ?? 0);
   return { layers, slot: { ...s.slot, reg: layers.length - 1 } as PhotoStack['slot'], bytes };
 })();
 
@@ -193,7 +201,10 @@ export class PhotoGround {
       // the first slot that names a layer decides its tint
       if (tint[li].x !== 1 || tint[li].y !== 1 || tint[li].z !== 1) continue;
       c.setHex(hex); // linear (ColorManagement)
-      const m = mats[li].mean;
+      // (a layer standing in for a scan - the desert's granite for the grey rock, GD4 - takes the colour the scan
+      // would have had: the scan's tint, rescaled by the two means)
+      const stand = STAND_IN[stack.layers[li]];
+      const m = stand ? PHOTO_MATERIALS[stand].mean : mats[li].mean;
       // brightness follows the look colour fully, the hue only part of the way (a per-channel ratio
       // on a dark channel - the blue of brown soil - would otherwise tint the scan's highlights)
       const lum = (r: number, g: number, b: number) => r * 0.2126 + g * 0.7152 + b * 0.0722;
@@ -201,6 +212,7 @@ export class PhotoGround {
       const hk = hues[slot] ?? 0.4;
       const ch = (a: number, b: number) => L * (1 + (a / Math.max(1e-3, b) / L - 1) * hk);
       tint[li].set(ch(c.r, m[0]), ch(c.g, m[1]), ch(c.b, m[2]));
+      if (stand) tint[li].multiply(new THREE.Vector3(m[0] / mats[li].mean[0], m[1] / mats[li].mean[1], m[2] / mats[li].mean[2]));
     }
     this.tints = { value: tint };
     this.biome = biome;
