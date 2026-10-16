@@ -117,6 +117,7 @@ export class Terrain {
     skirt.position.set(map.w / 2, -2, map.h / 2);
     skirt.name = 'skirt';
     this.group.add(skirt);
+    this.skirt = skirt;
     if (kit) yield kit;
     this.buildWater(quality);
     yield;
@@ -240,6 +241,26 @@ export class Terrain {
 
   /** Instanced grass blades (null on low quality). */
   grass: GrassBlades | null = null;
+  private skirt: THREE.Object3D | null = null;
+
+  /**
+   * Bake the desert's ground AO (groundao.ts) once, from the ground and everything static on it: call
+   * before a frame (the renderer does, from its second frame, when the scenery's LOD has seen the view).
+   * The scattered instances are uncull'd for the capture (the next frame culls them to the view again).
+   */
+  bakeGroundAO(r: THREE.WebGLRenderer): boolean {
+    const ao = this.ground.ao;
+    if (!ao || ao.baked) return false;
+    this.lod.uncull(this.map.w, this.map.h);
+    const skip = new Set<THREE.Object3D>([this.water, this.resources.group]);
+    if (this.skirt) skip.add(this.skirt);
+    if (this.grass) skip.add(this.grass.mesh);
+    if (this.seaside?.reef) skip.add(this.seaside.reef.group);
+    ao.bake(r, [this.group], skip);
+    if (this.camera) this.lod.cull(this.camera);
+    console.info(`[groundao] ${ao.size}x${ao.size} baked in ${Math.round(ao.ms)} ms (mean sky visibility ${ao.mean.toFixed(3)})`);
+    return true;
+  }
 
   /** Per frame. `units` (the world's entity list) lets vehicles flatten the grass blades. */
   update(time: number, units?: readonly Entity[]) {

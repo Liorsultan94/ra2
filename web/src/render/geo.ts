@@ -412,6 +412,16 @@ export class SceneryLod {
     for (const ci of this.culled) ci.cull(poly, 4);
   }
   private poly = new Float64Array(8);
+
+  /**
+   * Every scattered instance in its buffers (a one-off top-down capture of the whole map: groundao.ts); the
+   * next cull() goes back to the view.
+   */
+  uncull(w: number, h: number) {
+    const p = new Float64Array([-8, -8, w + 8, -8, w + 8, h + 8, -8, h + 8]);
+    for (const ci of this.culled) ci.cull(p, 4);
+    this.camKey.fill(-0x7fffffff);
+  }
 }
 
 const _fv0 = new THREE.Vector3();

@@ -2599,6 +2599,8 @@ export class GameRenderer {
     // cloud shadows drifting with the wind, god-ray shafts through the gaps (cloudshadow.ts)
     updateCloudShadows(dt, this.atmos, this.fog.uniforms.cloudAmount.value, this.sunDir, this.fog.uniforms.fogTarget.value.y, this.world.map, this.quality);
     this.scheduleShadow(dt);
+    // the desert's baked ground AO, once, from the third frame (the scenery's LOD has seen the view by then)
+    if (this.groundAOFrames < 3 && ++this.groundAOFrames === 3 && this.terrain.bakeGroundAO(this.renderer)) this.shadowCache?.invalidate();
     this.updateReadability(dt);
     const vh = this.viewHook;
     vh?.before(dt);
@@ -2632,6 +2634,7 @@ export class GameRenderer {
     this.perfHud.frame({ gl: this.renderer, level: this.level, levels: this.ladder.length, pr: st?.pr ?? 1, extra: this.instancer.enabled ? `inst-${this.instancer.saved}` : '' });
   }
 
+  private groundAOFrames = 0;
   private onContextLost: (e: Event) => void;
   private onContextRestored: () => void;
   private lightList: THREE.Light[] = [];

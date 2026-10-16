@@ -75,16 +75,16 @@ const LOOKS = {
   // ---- the desert's own day looks (GradeInput.desert; gentle: the S-curve keeps 0 and 1 fixed, so no crushed
   // blacks and no clipped sand; the light itself is atmos.ts's)
   /** Desert noon: crisp and bright, high contrast, neutral white sand, sky-blue shadows. */
-  dNoon: L({ temp: -0.012, tint: -0.03, sat: 0.97, contrast: 1.13, gain: [1.01, 1.01, 1.01], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.006, 0.004, -0.004] }),
+  dNoon: L({ temp: -0.012, tint: -0.03, sat: 0.97, contrast: 1.09, gain: [1.03, 1.03, 1.03], lift: [0.006, 0.006, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.006, 0.004, -0.004] }),
   /** Desert afternoon (the classic day sun): crisp like noon, a touch warmer. */
-  dDay: L({ temp: 0.012, tint: -0.035, sat: 0.97, contrast: 1.12, gain: [1.01, 1.005, 0.995], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.014, 0.006, -0.01] }),
+  dDay: L({ temp: 0.012, tint: -0.035, sat: 0.97, contrast: 1.08, gain: [1.03, 1.025, 1.015], lift: [0.006, 0.006, 0.008], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.014, 0.006, -0.01] }),
   /** Desert golden hour (morning and evening): warm amber highlights, warmer midtones, cool complementary shadows. */
-  dGolden: L({ temp: 0.065, tint: 0.006, sat: 1.04, contrast: 1.08, gain: [1.025, 1.0, 0.95], lift: [0.004, 0.002, 0.008], shadowTint: [-0.014, 0.0, 0.03], highTint: [0.04, 0.017, -0.03] }),
+  dGolden: L({ temp: 0.065, tint: 0.006, sat: 1.04, contrast: 1.06, gain: [1.04, 1.015, 0.96], lift: [0.008, 0.006, 0.012], shadowTint: [-0.014, 0.0, 0.03], highTint: [0.04, 0.017, -0.03] }),
   /**
    * Blue hour (dusk, before dawn): a cool blue cast with the brightness kept (the night's darkness is its own
    * look); saturated lights (lamps, team colours) are spared, so they glow warm against it.
    */
-  dBlue: L({ temp: -0.1, tint: 0.025, sat: 0.9, protect: 0.92, contrast: 1.04, lift: [0.004, 0.008, 0.02], gain: [0.985, 0.995, 1.03], shadowTint: [-0.01, 0.0, 0.034], highTint: [-0.004, 0.004, 0.016] }),
+  dBlue: L({ temp: -0.09, tint: 0.02, sat: 0.95, protect: 0.92, contrast: 1.0, lift: [0.012, 0.018, 0.034], gain: [1.0, 1.01, 1.06], shadowTint: [-0.008, 0.002, 0.03], highTint: [0.0, 0.004, 0.02] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };
