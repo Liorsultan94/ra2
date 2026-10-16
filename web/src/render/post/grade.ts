@@ -10,7 +10,10 @@ import { Blitter, fsMaterial } from './util';
  * snow) are parameter sets: white balance (temperature / tint), lift / gamma /
  * gain, an S-curve contrast, split toning and a saturation that spares
  * already-saturated colours (team colours, selection rings, muzzle flashes stay
- * vivid when a look desaturates the landscape). Every frame the CPU blends the
+ * vivid when a look desaturates the landscape). The desert (Wadi Al-Rimal) has
+ * its own day looks (GradeInput.desert): a crisp, bright, high-contrast noon and
+ * afternoon, a warm golden hour morning and evening, and a cool blue hour around
+ * dusk and before dawn; the night look is the shared one. Every frame the CPU blends the
  * looks by weights read from the atmosphere (daylight, sun height and colour,
  * rain / storm / dust / snow) into one parameter vector (no allocations);
  * only when that vector moved does a tiny GPU pass re-bake the LUT (32k
@@ -69,6 +72,19 @@ const LOOKS = {
    * softer contrast); bright, never dark.
    */
   sand: L({ temp: 0.075, tint: 0.008, sat: 0.9, protect: 0.85, contrast: 0.97, lift: [0.034, 0.025, 0.01], gain: [1.03, 1.0, 0.92], shadowTint: [0.012, 0.006, -0.01], highTint: [0.028, 0.014, -0.028] }),
+  // ---- the desert's own day looks (GradeInput.desert; gentle: the S-curve keeps 0 and 1 fixed, so no crushed
+  // blacks and no clipped sand; the light itself is atmos.ts's)
+  /** Desert noon: crisp and bright, high contrast, neutral white sand, sky-blue shadows. */
+  dNoon: L({ temp: -0.012, tint: -0.03, sat: 0.97, contrast: 1.13, gain: [1.01, 1.01, 1.01], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.006, 0.004, -0.004] }),
+  /** Desert afternoon (the classic day sun): crisp like noon, a touch warmer. */
+  dDay: L({ temp: 0.012, tint: -0.035, sat: 0.97, contrast: 1.12, gain: [1.01, 1.005, 0.995], shadowTint: [-0.012, 0.0, 0.022], highTint: [0.014, 0.006, -0.01] }),
+  /** Desert golden hour (morning and evening): warm amber highlights, warmer midtones, cool complementary shadows. */
+  dGolden: L({ temp: 0.065, tint: 0.006, sat: 1.04, contrast: 1.08, gain: [1.025, 1.0, 0.95], lift: [0.004, 0.002, 0.008], shadowTint: [-0.014, 0.0, 0.03], highTint: [0.04, 0.017, -0.03] }),
+  /**
+   * Blue hour (dusk, before dawn): a cool blue cast with the brightness kept (the night's darkness is its own
+   * look); saturated lights (lamps, team colours) are spared, so they glow warm against it.
+   */
+  dBlue: L({ temp: -0.1, tint: 0.025, sat: 0.9, protect: 0.92, contrast: 1.04, lift: [0.004, 0.008, 0.02], gain: [0.985, 0.995, 1.03], shadowTint: [-0.01, 0.0, 0.034], highTint: [-0.004, 0.004, 0.016] }),
   /** Snow: clean, cold and bright. */
   snow: L({ temp: -0.07, sat: 0.92, contrast: 1.04, lift: [0.0, 0.004, 0.012], shadowTint: [-0.01, 0.0, 0.026], highTint: [-0.006, 0.0, 0.01] }),
 };
@@ -117,6 +133,8 @@ export interface GradeInput {
   storm: number;
   sand: number;
   snow: number;
+  /** 1 = the desert's own day looks (dNoon, dDay, dGolden, dBlue); 0 / absent = the shared ones. */
+  desert?: number;
 }
 
 const GRADE_SAFE: GradeInput = { daylight: 1, sunY: 0.6, warmth: 0.7, rain: 0, storm: 0, sand: 0, snow: 0 };
@@ -131,6 +149,7 @@ export function sanitizeGrade(g: GradeInput): GradeInput {
   g.storm = f(g.storm, 0, 1, 0);
   g.sand = f(g.sand, 0, 1, 0);
   g.snow = f(g.snow, 0, 1, 0);
+  if (g.desert !== undefined) g.desert = f(g.desert, 0, 1, 0);
   return g;
 }
 
@@ -268,12 +287,24 @@ export class GradeLut {
     else {
       // time of day: night by daylight, golden hour by a low or very warm sun, noon by a high sun
       const night = 1 - sstep(0.15, 0.6, g.daylight);
-      const golden = Math.max(1 - sstep(0.28, 0.6, g.sunY), sstep(0.8, 0.92, g.warmth)) * (1 - night);
-      const noon = sstep(0.62, 0.85, g.sunY) * (1 - golden) * (1 - night);
+      // desert: the blue hour takes over from the golden hour as the light goes (dusk .. twilight, predawn)
+      const ds = g.desert ?? 0;
+      const b0 = ds * (1 - sstep(0.38, 0.66, g.daylight)) * (1 - sstep(0.25, 0.45, g.sunY));
+      const blue = b0 * (1 - night);
+      const g0 = Math.max(1 - sstep(0.28, 0.6, g.sunY), sstep(0.8, 0.92, g.warmth));
+      const golden = g0 * (1 - night) * (1 - b0);
+      // (the desert's weights are an exact partition; the shared formula is kept as it was)
+      const noon = sstep(0.62, 0.85, g.sunY) * (1 - (ds > 0 ? g0 : golden)) * (1 - night) * (1 - b0);
+      const day = Math.max(0, 1 - night - blue - golden - noon);
       w.night = night;
-      w.golden = golden;
-      w.noon = noon;
-      w.day = Math.max(0, 1 - night - golden - noon);
+      w.dBlue = blue;
+      // (the shared looks and the desert's own, by the desert share)
+      w.golden = golden * (1 - ds);
+      w.dGolden = golden * ds;
+      w.noon = noon * (1 - ds);
+      w.dNoon = noon * ds;
+      w.day = day * (1 - ds);
+      w.dDay = day * ds;
     }
     const v = this.cur;
     v.fill(0);

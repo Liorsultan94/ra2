@@ -746,6 +746,8 @@ export class GameRenderer {
     const a = this.atmos;
     g.daylight = a.daylight;
     g.sunY = this.sunDir.y;
+    // the desert's own day looks: crisp noon, warm golden hour, cool blue hour (post/grade.ts)
+    g.desert = this.world.map.biome === 'desert' ? 1 : 0;
     const c = this.sun.color;
     g.warmth = (c.r - c.b) / Math.max(1e-3, c.r);
     const wx = a.wx;
