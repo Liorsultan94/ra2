@@ -143,6 +143,39 @@ describe('airbase sortie cycle', () => {
       }
     }
   });
+
+  it('breaks out of a turning-circle orbit when given an off-axis target inside its turn radius, and bombs on move near enemy', () => {
+    const { w, af } = airWorld(3, 10, 60);
+    const tgt1 = w.spawnBuilding('russia_factory', 1, 40, 20, true);
+    const j = jetAt(w, af);
+    // Place the jet airborne right next to tgt1 at 90 degrees off-axis (inside its 2.5-tile minimum turn circle)
+    j.x = 40;
+    j.y = 22.2;
+    j.z = 2.6;
+    j.facing = 0; // facing East, target is 2.2 tiles North (90 deg to the left)
+    j.sortie!.phase = 'sortie';
+    j.sortie!.v = unitDef(j.def).speed / TPS;
+    w.issue(0, { type: 'attack', ids: [j.id], target: tgt1.id });
+    let releases = 0;
+    for (let i = 0; i < TPS * 15; i++) {
+      w.step();
+      releases += sorties(w.drainEvents(), 'release').length;
+      if (releases > 0) break;
+    }
+    expect(releases).toBe(1);
+    expect(j.sortie!.ammo).toBe(0);
+
+    // Also test an armed jet given a 'move' order right next to an enemy target (e.g. slightly missed click)
+    const j2 = jetAt(w, af);
+    w.issue(0, { type: 'move', ids: [j2.id], x: tgt1.x + 1.5, y: tgt1.y + 1.0 });
+    let releases2 = 0;
+    for (let i = 0; i < TPS * 40; i++) {
+      w.step();
+      releases2 += sorties(w.drainEvents(), 'release').length;
+      if (releases2 > 0) break;
+    }
+    expect(releases2).toBe(1);
+  });
 });
 
 describe('jet cap', () => {
