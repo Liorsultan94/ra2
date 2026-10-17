@@ -86,6 +86,25 @@ describe('garrisonable civilian houses', () => {
     expect(units.filter((u) => u.inside === house.id).map((u) => u.hp)).toEqual(hp0);
   });
 
+  it('excess infantry ordered into a house from afar stay stationed beside the house instead of returning to their old position', () => {
+    const w = cleanWorld();
+    const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === 35 && h.ty === 67)!;
+    const cap = buildingDef(house.def).garrison!;
+    const units: Entity[] = [];
+    for (let i = 0; i < cap + 4; i++) {
+      units.push(w.spawnUnit('usa_rifle', 0, 26.5 + (i % 4) * 0.4, 72.5 + Math.floor(i / 4) * 0.4));
+    }
+    w.issue(0, { type: 'enter', ids: units.map((u) => u.id), target: house.id });
+    run(w, TPS * 18);
+    expect(house.passengers.length).toBe(cap);
+    const outside = units.filter((u) => u.inside < 0);
+    expect(outside.length).toBe(4);
+    for (const u of outside) {
+      expect(Math.hypot(u.x - house.x, u.y - house.y)).toBeLessThan(3.5);
+      expect(Math.hypot(u.guardX - house.x, u.guardY - house.y)).toBeLessThan(3.5);
+    }
+  });
+
   it('a destroyed house ejects its survivors (hurt) deterministically; an evacuated one turns neutral', () => {
     const play = () => {
       const w = cleanWorld();
