@@ -132,19 +132,14 @@ export function coastWiggle(u: number) {
 }
 
 /**
- * Frame of the corner sea nearer (x, y) (continuous map coordinates): along-coast u, seaward v (no cove),
- * b = 0 for the north-west corner, 1 for the south-east one (the point mirror of the first).
+ * Frame of the north-west Red Sea corner (continuous map coordinates): along-coast u, seaward v (no cove),
+ * b = 0 (single Red Sea coast in the north-west corner; south-east corner remains inland desert).
  */
 export function seaFrame(w: number, h: number, off: number, x: number, y: number, out = { u: 0, v: 0, b: 0 }) {
   const n = Math.SQRT1_2;
-  let px = x - w / 2;
-  let py = y - h / 2;
+  const px = x - w / 2;
+  const py = y - h / 2;
   out.b = 0;
-  if (px + py > 0) {
-    px = -px;
-    py = -py;
-    out.b = 1;
-  }
   out.u = (px - py) * n;
   out.v = -(px + py) * n - off + coastWiggle(out.u);
   return out;

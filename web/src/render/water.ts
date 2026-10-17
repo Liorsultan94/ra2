@@ -1401,13 +1401,12 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float depthW = waterLevel - ground;
         // (the Red Sea's swash zone runs up the beach above the still waterline: a sheet draped on the sand, vH)
         if (vH <= 0.0 && depthW <= 0.0) discard;
-        // the Red Sea (desert corners): seaward distance from the coast, as the sim's seaFrame
+        // the Red Sea (north-west desert corner): seaward distance from the coast, as the sim's seaFrame
         float seaK = 0.0;
         float seaV = -1e3;
         float su = 0.0;
         if (wSea.y > 0.5) {
           vec2 pc = p - wSea.zw;
-          if (pc.x + pc.y > 0.0) pc = -pc;
           su = (pc.x - pc.y) * 0.70711;
           seaV = -(pc.x + pc.y) * 0.70711 - wSea.x + 4.0 * sin(su * 0.045) + 2.5 * sin(su * 0.13 + 1.0);
           seaK = smoothstep(-15.5, -10.0, seaV);

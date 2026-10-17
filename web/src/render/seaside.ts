@@ -148,7 +148,7 @@ export class Seaside {
     const kit = sinaiKit();
     this.veg = desertVeg();
     this.kitLoSpan = quality === 'high' ? 30 : 24;
-    for (const b of [0, 1]) {
+    for (const b of [0]) {
       const F = this.frame(b);
       const k = new Kit();
       this.sb = kit ? new SinaiBuilder(kit) : null;
@@ -179,11 +179,11 @@ export class Seaside {
     this.group.add(...this.instanced(loungerGeometry(), loungers, 'seaside-loungers'));
     this.buildBoats();
     if (wxLight) {
-      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P, this.frame(1).P], wrecks);
+      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P], wrecks);
       this.group.add(this.reef.group);
     }
     if (quality !== 'low') {
-      for (const b of [0, 1]) {
+      for (const b of [0]) {
         const n = this.statics[b].length + this.walkers.filter((w) => w.b === b).length;
         const ci = new CivilianInstances(fog, Math.max(1, n));
         ci.mesh.name = 'seaside-people';
@@ -1250,7 +1250,7 @@ export class Seaside {
       [-16, 14, 0],
       [8, 22, 0],
     ];
-    for (const b of [0, 1])
+    for (const b of [0])
       kinds.forEach(([u, v, kind], i) => {
         const F = this.frame(b);
         const p = F.P(u + b * 1.5, v);
@@ -1260,7 +1260,7 @@ export class Seaside {
       });
     // one instanced mesh per hull kind and corner (each corner culls on its own)
     const out: THREE.InstancedMesh[] = [];
-    for (const corner of [0, 1]) {
+    for (const corner of [0]) {
       geos.forEach((g, kind) => {
         const list = this.boatList.filter((bt) => bt.kind === kind && (bt.x + bt.z > this.map.w ? 1 : 0) === corner);
         if (!list.length) return;
@@ -1305,7 +1305,7 @@ export class Seaside {
     if (!list.length) return [];
     // two variants share a mesh when the geometry has them (parasols: thatch on the beach, white on the deck)
     const out: THREE.Object3D[] = [];
-    for (const b of [0, 1]) {
+    for (const b of [0]) {
       const sub = list.filter((it) => {
         const x = it.m.elements[12];
         const z = it.m.elements[14];

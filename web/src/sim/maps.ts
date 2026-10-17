@@ -434,29 +434,51 @@ export function createDesertMap(seed: number): GameMap {
     { x: W - 1 - 16, y: H - 1 - 111 },
   ];
   const wadi = riverShape(k * (4.6 + rng.range(-0.8, 0.8)), (0.1 + rng.range(-0.012, 0.012)) / k, k * (1.4 + rng.range(-0.4, 0.4)), 0.29 / k);
-  // oases: the centre (on the wadi, so on the axis of symmetry) and a mirrored pair up / down the wadi
+  // oases: the centre ring lake, distinct wadi & flank oases on each side, and the Southern Oasis Gorge in the SE corner
   const oS = (24 + rng.int(4)) * k;
-  const oasisSide = wadi.at(CX - oS);
-  const oases = [{ x: CX, y: CY, r: 3.1 }, ...half([{ x: oasisSide.x, y: oasisSide.y, r: 2.1 + rng.range(0, 0.3) }, ...DESERT_OASES_EXTRA])];
+  const oasisSide0 = wadi.at(CX - oS);
+  const oasisSide1 = wadi.at(CX + oS);
+  const oases = [
+    { x: CX, y: CY, r: 3.1 },
+    // South-West side: wadi oasis + mountain foot spring
+    { x: oasisSide0.x, y: oasisSide0.y, r: 2.1 + rng.range(0, 0.25) },
+    ...DESERT_OASES_EXTRA,
+    // North-East side: wider wadi lagoon + twin palm pools
+    { x: oasisSide1.x, y: oasisSide1.y, r: 2.45 + rng.range(0, 0.25) },
+    { x: W - 1 - 21, y: H - 1 - 79, r: 2.1 },
+    { x: 96, y: 39, r: 1.55 },
+    // South-East inland corner (replaces the duplicated sea with a lush desert canyon oasis equidistant from both bases)
+    { x: 113, y: 113, r: 3.3 },
+    { x: 105, y: 119, r: 1.8 },
+    { x: 119, y: 105, r: 1.8 },
+  ];
   const branches = halfCapsules(DESERT_WADI_BRANCHES);
   const branchDist = (x: number, y: number) => {
     let d = 1e9;
     for (const b of branches) d = Math.min(d, distToSegment(x, y, b.x, b.y, b.x2, b.y2));
     return d;
   };
-  // mesas: centres scale, lengths and radii stay
+  // mesas: core tactical canyon/fort mesas on both sides + distinct outer flank formations and SE gorge escarpments
   const mesa = (x: number, y: number, x2: number, y2: number, r: number): Capsule => {
     const c = T((x + x2) / 2, (y + y2) / 2);
     return { x: c.x - (x2 - x) / 2, y: c.y - (y2 - y) / 2, x2: c.x + (x2 - x) / 2, y2: c.y + (y2 - y) / 2, r };
   };
-  const mesas = halfCapsules([
-    mesa(27, 60, 33, 65, 2.5 + rng.range(-0.2, 0.3)),
-    mesa(43, 80, 47, 85, 2.3 + rng.range(-0.2, 0.2)),
+  const mesas: Capsule[] = [
+    ...halfCapsules([
+      mesa(27, 60, 33, 65, 2.5 + rng.range(-0.2, 0.3)),
+      mesa(43, 80, 47, 85, 2.3 + rng.range(-0.2, 0.2)),
+      mesa(62, 90, 68, 89, 2.1),
+      ...DESERT_MESAS_EXTRA.map((m) => ({ ...m, r: m.r + rng.range(-0.15, 0.15) })),
+    ]),
+    // West / North-West outer mesas
     mesa(9, 41, 16, 36, 2.7 + rng.range(-0.2, 0.3)),
-    mesa(62, 90, 68, 89, 2.1),
     mesa(24, 22, 27, 16, 2.2 + rng.range(-0.2, 0.2)),
-    ...DESERT_MESAS_EXTRA.map((m) => ({ ...m, r: m.r + rng.range(-0.15, 0.15) })),
-  ]);
+    // East / South-East distinct outer mesas + SE oasis gorge sandstone ridges
+    mesa(79, 55, 86, 59, 2.6 + rng.range(-0.2, 0.2)),
+    mesa(69, 73, 73, 79, 2.2 + rng.range(-0.2, 0.2)),
+    { x: 99, y: 116, x2: 106, y2: 122, r: 2.3 },
+    { x: 116, y: 99, x2: 122, y2: 106, r: 2.3 },
+  ];
   const oreFields: Field[] = half([
     // the two by the base keep their distance from it (harvest runs as designed)
     { x: 28, y: 118, r: 3.6, kind: 1 },
@@ -720,7 +742,7 @@ export function createDesertMap(seed: number): GameMap {
   const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
   // the resort compounds by the sea (impassable; render/seaside.ts draws them)
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inResort(sea, x + 0.5, y + 0.5)) blocked[y * W + x] = 1;
-  for (const st of structures) st.variant = symHash(Math.min(st.x, W - 1 - st.x), Math.min(st.y, H - 1 - st.y), NS + 21);
+  for (const st of structures) st.variant = hash2(st.x, st.y, NS + 21);
   // (the town's mosque is the first one placed on each side; any later ones become shops)
   let mosques = 0;
   for (const st of structures) if (st.look === 'mosque' && ++mosques > 2) st.look = 'shops';
@@ -733,11 +755,15 @@ export function createDesertMap(seed: number): GameMap {
   deco.trackNoCars = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.noCars];
   // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
   const ms = shift(30, 62.5);
-  deco.fields = mirrorRects([
-    { x0: oasisSide.x - 7.5, y0: oasisSide.y + 2.5, x1: oasisSide.x - 2.5, y1: oasisSide.y + 6, rows: 0 },
-    { x0: 26.5 + ms.x, y0: 61.5 - 9 + ms.y, x1: 31.5 + ms.x, y1: 57 - 2 + ms.y, rows: 1 },
-    ...DESERT_FIELDS_EXTRA,
-  ]);
+  deco.fields = [
+    ...mirrorRects([
+      { x0: oasisSide0.x - 7.5, y0: oasisSide0.y + 2.5, x1: oasisSide0.x - 2.5, y1: oasisSide0.y + 6, rows: 0 as const },
+      { x0: 26.5 + ms.x, y0: 61.5 - 9 + ms.y, x1: 31.5 + ms.x, y1: 57 - 2 + ms.y, rows: 1 as const },
+      ...DESERT_FIELDS_EXTRA,
+    ]),
+    { x0: 105.5, y0: 107.5, x1: 110.5, y1: 111.5, rows: 0 as const },
+    { x0: 107.5, y0: 105.5, x1: 111.5, y1: 110.5, rows: 1 as const },
+  ];
   deco.power = [
     [
       S.pt(2, 58),
@@ -1240,7 +1266,7 @@ function coastTile(sea: SeaDeco, x: number, y: number, t: Tile): Tile {
 function beachPalms(sea: SeaDeco, g: Grids, ns: number): { x: number; y: number; kind: number }[] {
   const out: { x: number; y: number; kind: number }[] = [];
   const add = (u: number, v: number) => {
-    for (const b of [0, 1]) {
+    for (const b of [0]) {
       // north-west corner: (u, v) -> point; the south-east corner: its mirror
       const s = (sea.off - coastWiggleOf(u) + v) / Math.SQRT1_2;
       const d = u / Math.SQRT1_2;

@@ -48,8 +48,8 @@ describe('maps', () => {
     expect(digest(createMap('frontline', 1))).toEqual(digest(createMap('frontline', 2)));
   });
 
-  it('is point symmetric (fair) for both players', () => {
-    for (const id of NEW_MAPS) {
+  it('is point symmetric (fair) for winter and urban, while desert has distinct non-cloned sides with balanced structures', () => {
+    for (const id of ['winter', 'urban'] as MapId[]) {
       const m = createMap(id, 5);
       const n = m.w * m.h;
       let diff = 0;
@@ -57,20 +57,24 @@ describe('maps', () => {
       expect(diff).toBe(0);
       expect(m.structures.length % 2).toBe(0);
     }
+    const dm = createMap('desert', 5);
+    expect(dm.structures.length % 2).toBe(0);
   });
 
-  it('every map (Frontline Crossing too) is point mirrored down to trees, heights, ore, oil, ore mines and bridge huts (BAL1)', () => {
+  it('every map has balanced ore, oil, ore mines and neutral structures (BAL1)', () => {
     for (const id of MAP_IDS) {
       const w = world(id, 3);
       const m = w.map;
       const n = m.w * m.h;
-      let diff = 0;
-      for (let i = 0; i < n; i++) if (m.tiles[i] !== m.tiles[n - 1 - i] || m.trees[i] !== m.trees[n - 1 - i] || m.ore[i] !== m.ore[n - 1 - i] || w.pass[i] !== w.pass[n - 1 - i]) diff++;
-      expect(diff, `${id}: tiles / trees / ore / passability`).toBe(0);
-      const nv = (m.w + 1) * (m.h + 1);
-      let hd = 0;
-      for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
-      expect(hd, `${id}: heights`).toBeLessThan(0.05); // (the desert's sea floor carries a few hundredths of noise)
+      if (id !== 'desert') {
+        let diff = 0;
+        for (let i = 0; i < n; i++) if (m.tiles[i] !== m.tiles[n - 1 - i] || m.trees[i] !== m.trees[n - 1 - i] || m.ore[i] !== m.ore[n - 1 - i] || w.pass[i] !== w.pass[n - 1 - i]) diff++;
+        expect(diff, `${id}: tiles / trees / ore / passability`).toBe(0);
+        const nv = (m.w + 1) * (m.h + 1);
+        let hd = 0;
+        for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
+        expect(hd, `${id}: heights`).toBeLessThan(0.05);
+      }
       const pts = (a: { x: number; y: number }[], off: number) => {
         const k = new Set(a.map((p) => `${p.x},${p.y}`));
         return a.filter((p) => !k.has(`${m.w - off - p.x},${m.h - off - p.y}`)).length;
@@ -85,29 +89,28 @@ describe('maps', () => {
     }
   });
 
-  it('Wadi Al-Rimal: tiles, heights and passability are point mirrored (fair) on every seed tried', () => {
+  it('Wadi Al-Rimal: has distinct non-identical sides (Red Sea only in NW corner, Oasis Gorge in SE) while keeping fair starts and resources on every seed tried', () => {
     for (const seed of [1, 2, 7, 424242]) {
       const m = createMap('desert', seed);
       const n = m.w * m.h;
       let diff = 0;
       for (let i = 0; i < n; i++) {
-        const x = i % m.w;
-        const y = (i / m.w) | 0;
-        if (m.tiles[i] !== m.tiles[n - 1 - i] || terrainPassable(m, x, y) !== terrainPassable(m, m.w - 1 - x, m.h - 1 - y) || m.blocked[i] !== m.blocked[n - 1 - i]) diff++;
+        if (m.tiles[i] !== m.tiles[n - 1 - i]) diff++;
       }
-      expect(diff, `seed ${seed}: tiles / passability`).toBe(0);
-      const nv = (m.w + 1) * (m.h + 1);
-      let hd = 0;
-      for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
-      expect(hd, `seed ${seed}: heights`).toBeLessThan(1e-4);
-      // the structures mirror too (kind, footprint, facing)
+      // the two halves are visually and geographically distinct (not an identical 180-degree clone)
+      expect(diff, `seed ${seed}: distinct terrain between the two sides`).toBeGreaterThan(200);
+      // Red Sea water in NW corner (2, 2), dry land in SE corner (125, 125) with the inland oasis at (113, 113)
+      expect(m.tiles[2 * m.w + 2]).toBe(Tile.Water);
+      expect(m.tiles[125 * m.w + 125]).not.toBe(Tile.Water);
+      expect(m.tiles[113 * m.w + 113]).toBe(Tile.Water);
+      // the garrisonable structures remain 100% balanced between both players
       const key = (s: { kind: number; x: number; y: number; w: number; h: number }) => `${s.kind}:${s.x},${s.y},${s.w},${s.h}`;
       const all = new Set(m.structures.map(key));
       for (const s of m.structures) expect(all.has(key({ ...s, x: m.w - s.x - s.w, y: m.h - s.y - s.h }))).toBe(true);
     }
   });
 
-  it('Wadi Al-Rimal: the lighthouse islands are land no ground unit can reach, kept open (no trees), and the AI never picks them', () => {
+  it('Wadi Al-Rimal: the lighthouse island in the NW Red Sea is land no ground unit can reach, kept open (no trees), and the AI never picks it', () => {
     const w = world('desert', 3);
     const m = w.map;
     const isle = m.deco!.sea!.isle!;
@@ -134,8 +137,8 @@ describe('maps', () => {
           expect(w.region[i]).not.toBe(w.mainland);
         }
       }
-    // a few tiles of usable ground on each (two islands, mirrored), round a rocky knoll
-    expect(open).toBeGreaterThanOrEqual(2 * 10);
+    // usable ground on the single NW offshore island, round a rocky knoll
+    expect(open).toBeGreaterThanOrEqual(10);
     expect(rock).toBeGreaterThan(0);
     expect(land).toBeGreaterThan(open);
     // the starts share one region; a ground order towards an island stops on the mainland
