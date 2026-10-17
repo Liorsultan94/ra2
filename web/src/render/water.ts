@@ -1626,13 +1626,16 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float dP = min(dV, 1.4);
           vec2 bp = p - viewDir.xz / max(viewDir.y, 0.35) * dP * 0.72 + n.xz * dP * 0.9;
           vec3 bed = texture2D(bedTex, bp * 0.42).rgb;
-          // caustics dancing on the sunlit shallows
-          float ck = wState2.w * (1.0 - smoothstep(0.06, 0.48, dV)) * (1.0 - oil) * (1.0 - mud * 0.8) * (1.0 - ice);
+          // caustics dancing on the sunlit shallows (with subtle chromatic dispersion on clear reef & oasis beds)
+          float ck = wState2.w * (1.0 - smoothstep(0.05, 0.58, dV)) * (1.0 - oil) * (1.0 - mud * 0.8) * (1.0 - ice) * (1.0 + 0.35 * seaK);
           if (ck > 0.01) {
             vec2 cq = bp * 0.85;
-            float c1 = texture2D(causTex, cq + vec2(time * 0.045, time * 0.03)).r;
-            float c2 = texture2D(causTex, cq * 1.19 + vec2(-time * 0.037, time * 0.041) + 0.5).r;
-            bed *= 1.0 + min(c1, c2) * 2.6 * ck;
+            vec2 ca = cq + vec2(time * 0.045, time * 0.03);
+            vec2 cb = cq * 1.19 + vec2(-time * 0.037, time * 0.041) + 0.5;
+            float cR = min(texture2D(causTex, ca + vec2(0.006, 0.0)).r, texture2D(causTex, cb + vec2(0.005, 0.0)).r);
+            float cG = min(texture2D(causTex, ca).r, texture2D(causTex, cb).r);
+            float cB = min(texture2D(causTex, ca - vec2(0.006, 0.004)).r, texture2D(causTex, cb - vec2(0.005, 0.003)).r);
+            bed *= 1.0 + vec3(cR * 0.92, cG * 1.05, cB * 1.12) * 2.85 * ck;
           }
           bed *= 0.62 * wBed / vec3(0.24, 0.2, 0.13);
         #else
@@ -1818,6 +1821,16 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             float rz = texture2D(waveTex, p * 0.8 + vec2(-time * 0.04, time * 0.03)).a;
             float pul = 0.6 + 0.4 * sin(time * 1.1 + su * 0.7 + seaV * 0.5);
             foam = max(foam, rr * smoothstep(0.3, 0.75, rz * 0.7 + pul * 0.35) * 0.55 * (1.0 - 0.5 * dark));
+          }
+          // dynamic surf breaking around the offshore lighthouse island's shallow reef rim
+          float idu = (su - 11.8) / 2.8;
+          float idv = (seaV - 7.0) / 2.15;
+          float ir = length(vec2(idu, idv));
+          if (ir > 0.85 && ir < 1.65) {
+            float ipul = 0.5 + 0.5 * sin(ir * 14.0 - time * 1.65 + atan(idv, idu) * 3.0);
+            float irz = texture2D(waveTex, p * 0.95 + vec2(time * 0.035, -time * 0.03)).a;
+            float iband = (1.0 - smoothstep(0.95, 1.55, ir)) * smoothstep(0.86, 1.02, ir);
+            foam = max(foam, iband * smoothstep(0.32, 0.74, irz * 0.65 + ipul * 0.45) * 0.78 * (1.0 - 0.5 * dark));
           }
           // the jetty's piles: a small foam collar round each pile, a wake streak on its lee
           for (int j = 0; j < 2; j++) {

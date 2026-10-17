@@ -582,6 +582,30 @@ export class Waterside implements WatersideHandles {
     const mt = new THREE.Matrix4();
     const tries = cap * 14;
     let seed = 7;
+    if (m.id === 'desert') {
+      const pools = [
+        { x: 113, y: 113, r: 3.3, n: 26 },
+        { x: 105, y: 119, r: 1.8, n: 16 },
+        { x: 119, y: 105, r: 1.8, n: 16 },
+        { x: m.w / 2 - 0.5, y: m.h / 2 - 0.5, r: 3.1, n: 20 },
+      ];
+      for (const p of pools) {
+        for (let i = 0; i < p.n && list.length < cap; i++) {
+          seed++;
+          const a = (i / p.n) * Math.PI * 2 + (hash2(seed, 1, 809) - 0.5) * 0.25;
+          if (hash2(seed, 2, 809) < 0.28) continue;
+          const rr = p.r + (hash2(seed, 3, 809) - 0.45) * 0.55;
+          const x = p.x + Math.cos(a) * rr;
+          const y = p.y + Math.sin(a) * rr;
+          if (this.avoid(x, y, layout)) continue;
+          const s = 0.48 + hash2(seed, 4, 809) * 0.36;
+          this.q.setFromEuler(this.e.set((hash2(seed, 5, 809) - 0.5) * 0.15, hash2(seed, 6, 809) * 6.28, (hash2(seed, 7, 809) - 0.5) * 0.15));
+          mt.compose(this.v.set(x, Math.max(WATER_LEVEL - 0.08, surfaceHeight(m, x, y)) - 0.02, y), this.q, this.s.set(s, s * (0.9 + hash2(seed, 8, 809) * 0.4), s));
+          const tint = 0.85 + hash2(seed, 9, 809) * 0.3;
+          list.push({ m: mt.clone(), c: new THREE.Color(tint * 0.92, tint * (1.02 + hash2(seed, 10, 809) * 0.1), tint * 0.85) });
+        }
+      }
+    }
     for (let t = 0; t < tries && list.length < cap; t++) {
       seed++;
       const x = 0.5 + hash2(seed, 1, 801) * (m.w - 1);
