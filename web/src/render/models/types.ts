@@ -34,6 +34,8 @@ export interface ModelStyle {
   flag: number[]; // 3 horizontal flag stripe colours
   faction: Faction | 'neutral';
   region: Region;
+  /** True when this entity belongs to an enemy of the local viewer (used for garrison fortifications & IFF beacons). */
+  hostile?: boolean;
 }
 
 /** Per-frame animation input, provided by the renderer. */
