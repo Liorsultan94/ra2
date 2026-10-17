@@ -219,6 +219,8 @@ export class MinimapBake {
   totalMs = 0;
   /** Partial re-bakes done (tests / stats). */
   rebakes = 0;
+  /** Optional photorealistic satellite base pixels (W x H x 4) loaded from public/ui/maps/sat_<id>.jpg in the browser. */
+  private satPixels: Uint8ClampedArray | null = null;
 
   private readonly m: GameMap;
   private readonly look: BiomeLook;
@@ -262,6 +264,7 @@ export class MinimapBake {
     this.LH = m.h * this.LS;
     this.ruined = new Uint8Array(m.structures.length);
     this.bridgeDown = new Uint8Array(m.bridges.length);
+    this.loadSatellitePhoto();
     const lk = inp.look.ground;
     const gp = inp.look.grass;
     this.grassPal = [...rgb(gp.lush), ...rgb(gp.mid), ...rgb(gp.dry)].map((v) => v / 255);
@@ -412,6 +415,34 @@ export class MinimapBake {
     }
   }
 
+  /** Load the photorealistic satellite map texture (public/ui/maps/sat_<id>.jpg) in browser environments. */
+  private loadSatellitePhoto() {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return;
+    const id = this.m.id;
+    if (!id) return;
+    const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = this.W;
+      c.height = this.H;
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, this.W, this.H);
+      this.satPixels = ctx.getImageData(0, 0, this.W, this.H).data;
+      if (this.ready && this.canvas) {
+        put(this.canvas, null, this.W, { x: 0, y: 0, width: this.W, height: this.H, data: this.satPixels });
+        for (const br of this.bridges) if (this.bridgeDown[br.idx]) this.rebake(br);
+        for (const r of this.ruins) this.rebake({ x0: r.x0 - 1, y0: r.y0 - 1, x1: r.x1 + 2.5, y1: r.y1 + 2.5 });
+        this.version++;
+      }
+    };
+    img.src = `${base}ui/maps/sat_${id}.jpg`;
+  }
+
   // ---------------------------------------------------------------- bake
 
   /** The full bake, one band of rows per yield (Terrain.steps runs it in time slices). */
@@ -433,7 +464,7 @@ export class MinimapBake {
     this.worstSliceMs = Math.max(this.worstSliceMs, now() - s0);
     yield;
     const s1 = now();
-    this.canvas = toCanvas(photo, this.W, this.H);
+    this.canvas = toCanvas(this.satPixels ?? photo, this.W, this.H);
     this.lights = toCanvas(light, this.LW, this.LH);
     // the canvases hold the pixels from here on (node / tests: keep the arrays)
     this.pixels = this.canvas ? null : photo;
@@ -441,6 +472,10 @@ export class MinimapBake {
     this.worstSliceMs = Math.max(this.worstSliceMs, now() - s1);
     this.totalMs = now() - t0;
     this.ready = true;
+    if (this.satPixels && this.canvas) {
+      for (const br of this.bridges) if (this.bridgeDown[br.idx]) this.rebake(br);
+      for (const r of this.ruins) this.rebake({ x0: r.x0 - 1, y0: r.y0 - 1, x1: r.x1 + 2.5, y1: r.y1 + 2.5 });
+    }
     this.version++;
   }
 
@@ -488,7 +523,42 @@ export class MinimapBake {
     const px1 = Math.min(this.W, Math.ceil(b.x1 * S));
     const py1 = Math.min(this.H, Math.ceil(b.y1 * S));
     if (px1 <= px0 || py1 <= py0) return;
-    const r = this.renderPhoto(px0, py0, px1 - px0, py1 - py0);
+    const pw = px1 - px0;
+    const ph = py1 - py0;
+    let r: PixelRect;
+    if (this.satPixels) {
+      const box: Box = { x0: px0 / S, y0: py0 / S, x1: px1 / S, y1: py1 / S };
+      const hasDownBridge = this.bridges.some((br) => this.bridgeDown[br.idx] && hit(br, box));
+      if (hasDownBridge) {
+        r = this.renderPhoto(px0, py0, pw, ph);
+      } else {
+        const col = this.f32(0, pw * ph * 3);
+        for (let j = 0; j < ph; j++) {
+          for (let i = 0; i < pw; i++) {
+            const si = ((py0 + j) * this.W + (px0 + i)) * 4;
+            const di = (j * pw + i) * 3;
+            col[di] = this.satPixels[si];
+            col[di + 1] = this.satPixels[si + 1];
+            col[di + 2] = this.satPixels[si + 2];
+          }
+        }
+        for (const ru of this.ruins) {
+          if (hit({ x0: ru.x0 - 0.6, y0: ru.y0 - 0.6, x1: ru.x1 + 0.6, y1: ru.y1 + 0.6 }, box)) {
+            this.drawRuin(ru, px0, py0, pw, ph, col);
+          }
+        }
+        const out = new Uint8ClampedArray(pw * ph * 4);
+        for (let p = 0, q = 0; p < pw * ph; p++, q += 3) {
+          out[p * 4] = col[q];
+          out[p * 4 + 1] = col[q + 1];
+          out[p * 4 + 2] = col[q + 2];
+          out[p * 4 + 3] = 255;
+        }
+        r = { x: px0, y: py0, width: pw, height: ph, data: out };
+      }
+    } else {
+      r = this.renderPhoto(px0, py0, pw, ph);
+    }
     const LS = this.LS;
     const lx0 = Math.max(0, Math.floor(b.x0 * LS));
     const ly0 = Math.max(0, Math.floor(b.y0 * LS));

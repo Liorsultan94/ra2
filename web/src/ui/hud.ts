@@ -135,6 +135,7 @@ export class Hud {
   private mmInv = new DOMMatrix();
   private mmYaw = NaN;
   private mmDirty = true;
+  private mmBakeVer = -1;
   /** Minimap overlays (minimapfx.ts): ore highlight, offline static frames, alert pings. */
   private mmOre: OreLayer | null = null;
   private mmNoise: HTMLCanvasElement[] | null = null;
@@ -1112,6 +1113,11 @@ export class Hud {
   tickMinimap(now: number) {
     if (!this.world) return;
     this.mmTransform();
+    const bakeVer = this.renderer.terrain.minimap?.version ?? -1;
+    if (bakeVer !== this.mmBakeVer) {
+      this.mmBakeVer = bakeVer;
+      this.mmDirty = true;
+    }
     if (this.mmDirty) this.drawMinimap();
     const ctx = this.minimap.getContext('2d')!;
     const { map } = this.world;
