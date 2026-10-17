@@ -863,8 +863,8 @@ export class Hud {
   }
 
   /**
-   * Match the minimap's backing store to its size on screen (device pixels, so it stays crisp on a phone's
-   * high-dpi screen; capped). Checked at the static layer's cadence; a resize redraws everything.
+   * Match the minimap's backing store to its size on screen (high-DPI supersampled so the recon photo and
+   * tactical markers stay razor-sharp). Checked at the static layer's cadence; a resize redraws everything.
    */
   private mmResize() {
     const c = this.minimap;
@@ -874,8 +874,8 @@ export class Hud {
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     let w = Math.round(cw * dpr);
     let h = Math.round(ch * dpr);
-    // between the old fixed 400 x 300 and 600 px wide (the baked photo has ~5 px per tile)
-    const k = Math.max(400 / w, Math.min(1, 600 / w));
+    // supersample between 680 px and 960 px wide so the 768x768 recon photo renders at full crispness
+    const k = Math.max(680 / w, Math.min(1.6, 960 / w));
     w = Math.round(w * k);
     h = Math.round(h * k);
     if (Math.abs(w - c.width) < 8 && Math.abs(h - c.height) < 8) return;
@@ -895,6 +895,29 @@ export class Hud {
     this.mmPings.add(x, y, kind, performance.now() / 1000);
   }
 
+  /** Smooth 1-tile stair-steps in the fog alpha channel so sight circles render smoothly on the high-DPI minimap. */
+  private smoothFogAlpha(data: Uint8ClampedArray, w: number, h: number) {
+    const n = w * h;
+    const tmp = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const a0 = data[(row + (x > 0 ? x - 1 : x)) * 4 + 3];
+        const a1 = data[(row + x) * 4 + 3];
+        const a2 = data[(row + (x + 1 < w ? x + 1 : x)) * 4 + 3];
+        tmp[row + x] = (a0 + (a1 << 1) + a2 + 2) >> 2;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const r0 = (y > 0 ? y - 1 : y) * w;
+      const r1 = y * w;
+      const r2 = (y + 1 < h ? y + 1 : y) * w;
+      for (let x = 0; x < w; x++) {
+        data[(r1 + x) * 4 + 3] = (tmp[r0 + x] + (tmp[r1 + x] << 1) + tmp[r2 + x] + 2) >> 2;
+      }
+    }
+  }
+
   /**
    * Static radar layer, redrawn a few times per second: the baked recon photo of the battlefield
    * (render/minimap.ts; a dim grey silhouette while the radar is offline), the ore fields, night and its
@@ -907,6 +930,9 @@ export class Hud {
     this.mmTransform();
     this.mmDirty = false;
     const ctx = this.mmStatic.getContext('2d')!;
+    const W = this.mmStatic.width;
+    const H = this.mmStatic.height;
+    const u = this.mmU;
     const p = w.players[this.player];
     const lowPower = w.isLowPower(p);
     const radar = p.radarOnline && !lowPower;
@@ -916,10 +942,27 @@ export class Hud {
     this.minimap.parentElement!.classList.toggle('online', radar);
     this.minimap.parentElement!.classList.toggle('low-power', lowPower);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#05080a';
-    ctx.fillRect(0, 0, this.mmStatic.width, this.mmStatic.height);
+    ctx.fillStyle = '#04070a';
+    ctx.fillRect(0, 0, W, H);
     if (!radar) return;
+    // subtle tactical background telemetry grid in the corners outside the map diamond
+    ctx.strokeStyle = 'rgba(110, 175, 210, 0.055)';
+    ctx.lineWidth = Math.max(1, 0.75 * u);
+    const step = Math.round(28 * u);
+    ctx.beginPath();
+    for (let gx = step; gx < W; gx += step) {
+      ctx.moveTo(gx + 0.5, 0);
+      ctx.lineTo(gx + 0.5, H);
+    }
+    for (let gy = step; gy < H; gy += step) {
+      ctx.moveTo(0, gy + 0.5);
+      ctx.lineTo(W, gy + 0.5);
+    }
+    ctx.stroke();
+
     const M = this.mmM;
+    ctx.save();
+    this.mmClip(ctx);
     ctx.setTransform(M.a, M.b, M.c, M.d, M.e, M.f);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -929,26 +972,14 @@ export class Hud {
       for (const b of w.bridges) bake.setBridgeDown(b.idx, b.status !== 'intact');
       ctx.drawImage(bake.canvas, 0, 0, map.w, map.h);
     } else ctx.drawImage(this.renderer.terrain.minimapImage, 0, 0, map.w, map.h);
-    if (!radar) {
-      // offline: the photo drained of colour and dimmed to a silhouette (the static goes on per frame)
-      ctx.globalCompositeOperation = 'saturation';
-      ctx.fillStyle = '#808080';
-      ctx.fillRect(0, 0, map.w, map.h);
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = 'rgb(112,128,122)';
-      ctx.fillRect(0, 0, map.w, map.h);
-      ctx.globalCompositeOperation = 'source-over';
-    }
-    // ore and gem fields, highlighted
+
+    // ore and gem fields: high-res mineral cluster layer
     if (!this.mmOre) this.mmOre = new OreLayer(map);
     this.mmOre.update(p.explored);
-    ctx.globalAlpha = radar ? 0.6 : 0.4;
-    ctx.drawImage(this.mmOre.canvas, 0, 0);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = radar ? 0.32 : 0.15;
-    ctx.drawImage(this.mmOre.canvas, -0.35, -0.35, map.w + 0.7, map.h + 0.7);
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.88;
+    ctx.drawImage(this.mmOre.canvas, 0, 0, map.w, map.h);
     ctx.globalAlpha = 1;
+
     // night: the land darkens; lit windows, street lamps and the bases' floodlights glow
     const nl = w.nightLevel;
     if (nl > 0.01) {
@@ -971,34 +1002,97 @@ export class Hud {
       }
       ctx.globalCompositeOperation = 'source-over';
     }
-    // fog: unexplored dark, explored but out of sight dimmed (the night fog; by day classic fog keeps it clear)
+    // fog: unexplored dark, explored but out of sight dimmed, smoothed across tile diagonals
     fillFog(this.fogImg.data, p.visible, p.explored);
+    this.smoothFogAlpha(this.fogImg.data, map.w, map.h);
     this.fogCanvas.getContext('2d')!.putImageData(this.fogImg, 0, 0);
-    ctx.drawImage(this.fogCanvas, 0, 0);
-    // entities (only what the player can see; units need the radar). Structures on explored ground are map
-    // knowledge and stay on the map even without a radar, by day and by night (last known; sim/night.ts).
-    // Units follow the renderer: by night only those in sight, under a flare or given away by a muzzle flash.
+    ctx.drawImage(this.fogCanvas, 0, 0, map.w, map.h);
+
+    // structures in tile space (aligned with the isometric ground grid, with crisp dark outline & bevel highlight)
     for (const e of w.list) {
-      if (e.dead || e.inside >= 0) continue;
+      if (e.dead || e.inside >= 0 || e.kind !== 'building') continue;
       const own = e.owner === this.player;
       if (!own && !this.renderer.isShown(e.id)) continue;
-      if (!radar) continue;
-      // the bridges and the unclaimed village houses are in the photo itself
-      if (e.kind === 'building' && e.owner < 0 && (e.def === BRIDGE_DEF || buildingDef(e.def).garrison)) continue;
+      if (e.owner < 0 && (e.def === BRIDGE_DEF || buildingDef(e.def).garrison)) continue;
       const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
-      if (e.kind === 'building') {
-        const d = buildingDef(e.def);
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(e.tx - 0.3, e.ty - 0.3, d.w + 0.6, d.h + 0.6);
+      const d = buildingDef(e.def);
+      ctx.fillStyle = 'rgba(0,0,0,0.78)';
+      ctx.fillRect(e.tx - 0.35, e.ty - 0.35, d.w + 0.7, d.h + 0.7);
+      ctx.fillStyle = col;
+      ctx.fillRect(e.tx, e.ty, d.w, d.h);
+      ctx.fillStyle = 'rgba(255,255,255,0.32)';
+      ctx.fillRect(e.tx, e.ty, d.w, Math.min(0.45, d.h * 0.3));
+    }
+
+    // units in screen space so blips are crisp, unskewed tactical icons (dots for infantry, squares for armour, diamonds for air)
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (const e of w.list) {
+      if (e.dead || e.inside >= 0 || e.kind !== 'unit') continue;
+      const ud = unitDef(e.def);
+      if (ud.temp) continue;
+      const own = e.owner === this.player;
+      if (!own && !this.renderer.isShown(e.id)) continue;
+      const col = e.owner < 0 ? '#d8d8c8' : '#' + w.players[e.owner].color.toString(16).padStart(6, '0');
+      const q = M.transformPoint(new DOMPoint(e.x, e.y));
+      const px = q.x;
+      const py = q.y;
+      if (ud.category === 'air') {
+        const r = 3.1 * u;
+        ctx.fillStyle = 'rgba(0,0,0,0.82)';
+        ctx.beginPath();
+        ctx.moveTo(px, py - r - 1.1 * u);
+        ctx.lineTo(px + r + 1.1 * u, py);
+        ctx.lineTo(px, py + r + 1.1 * u);
+        ctx.lineTo(px - r - 1.1 * u, py);
+        ctx.closePath();
+        ctx.fill();
         ctx.fillStyle = col;
-        ctx.fillRect(e.tx, e.ty, d.w, d.h);
-      } else if (!unitDef(e.def).temp) {
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(e.x - 1.2, e.y - 1.2, 2.4, 2.4);
+        ctx.beginPath();
+        ctx.moveTo(px, py - r);
+        ctx.lineTo(px + r, py);
+        ctx.lineTo(px, py + r);
+        ctx.lineTo(px - r, py);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fillRect(px - 0.6 * u, py - 0.6 * u, 1.2 * u, 1.2 * u);
+      } else if (ud.category === 'infantry') {
+        const r = 2.0 * u;
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.beginPath();
+        ctx.arc(px, py, r + 1.0 * u, 0, Math.PI * 2);
+        ctx.fill();
         ctx.fillStyle = col;
-        ctx.fillRect(e.x - 0.85, e.y - 0.85, 1.7, 1.7);
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        const hs = Math.round(2.3 * u);
+        const pad = Math.max(1, Math.round(1.0 * u));
+        const rx = Math.round(px) - hs;
+        const ry = Math.round(py) - hs;
+        const sz = hs * 2;
+        ctx.fillStyle = 'rgba(0,0,0,0.82)';
+        ctx.fillRect(rx - pad, ry - pad, sz + pad * 2, sz + pad * 2);
+        ctx.fillStyle = col;
+        ctx.fillRect(rx, ry, sz, sz);
+        ctx.fillStyle = 'rgba(255,255,255,0.38)';
+        ctx.fillRect(rx, ry, sz, Math.max(1, Math.round(0.8 * u)));
       }
     }
+    ctx.restore();
+
+    // crisp tactical border around the isometric battlefield diamond
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.strokeStyle = 'rgba(130, 195, 225, 0.32)';
+    ctx.lineWidth = Math.max(1, 1.15 * u);
+    ctx.beginPath();
+    for (const [x, y] of [[0, 0], [map.w, 0], [map.w, map.h], [0, map.h]]) {
+      const q = M.transformPoint(new DOMPoint(x, y));
+      ctx.lineTo(q.x, q.y);
+    }
+    ctx.closePath();
+    ctx.stroke();
   }
 
   /** The map diamond as a clip path (canvas pixels). */
@@ -1029,27 +1123,27 @@ export class Hud {
     const lowPower = this.world.isLowPower(p);
     const radar = p.radarOnline && !lowPower;
     if (radar) {
-      // rotating sweep, clipped to the map diamond
+      // rotating sweep, clipped to the map diamond (subtle so it doesn't wash out the satellite terrain)
       const c = M.transformPoint(new DOMPoint(map.w / 2, map.h / 2));
       const R = Math.hypot(this.minimap.width, this.minimap.height) * 0.6;
       const ang = (now * 1.3) % (Math.PI * 2);
       ctx.save();
       this.mmClip(ctx);
-      const g = (ctx as CanvasRenderingContext2D & { createConicGradient?: (a: number, x: number, y: number) => CanvasGradient }).createConicGradient?.(ang - 1.1, c.x, c.y);
+      const g = (ctx as CanvasRenderingContext2D & { createConicGradient?: (a: number, x: number, y: number) => CanvasGradient }).createConicGradient?.(ang - 1.0, c.x, c.y);
       if (g) {
-        g.addColorStop(0, 'rgba(90,255,160,0)');
-        g.addColorStop(0.175, 'rgba(90,255,160,0.26)');
-        g.addColorStop(0.176, 'rgba(90,255,160,0)');
-        g.addColorStop(1, 'rgba(90,255,160,0)');
+        g.addColorStop(0, 'rgba(90,245,175,0)');
+        g.addColorStop(0.158, 'rgba(90,245,175,0.14)');
+        g.addColorStop(0.16, 'rgba(90,245,175,0)');
+        g.addColorStop(1, 'rgba(90,245,175,0)');
         ctx.fillStyle = g;
         ctx.beginPath();
         ctx.moveTo(c.x, c.y);
-        ctx.arc(c.x, c.y, R, ang - 1.1, ang);
+        ctx.arc(c.x, c.y, R, ang - 1.0, ang);
         ctx.closePath();
         ctx.fill();
       }
-      ctx.strokeStyle = 'rgba(150,255,190,0.85)';
-      ctx.lineWidth = 1.5 * u;
+      ctx.strokeStyle = 'rgba(155,255,205,0.65)';
+      ctx.lineWidth = 1.15 * u;
       ctx.beginPath();
       ctx.moveTo(c.x, c.y);
       ctx.lineTo(c.x + Math.cos(ang) * R, c.y + Math.sin(ang) * R);
@@ -1089,21 +1183,18 @@ export class Hud {
       ctx.fillRect(Math.round(q.x) - s(1), Math.round(q.y) - s(3), s(3), s(7));
       ctx.fillRect(Math.round(q.x) - s(3), Math.round(q.y) - s(1), s(7), s(3));
     }
-    // camera view: the frustum footprint (a trapezoid with the perspective camera)
+    // camera view: crisp frustum footprint with dark outline + bright white inner frame
     const corners = this.renderer.viewCorners();
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 1.6 * u;
-    ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 3 * u;
+    const pts = corners.map((pt) => M.transformPoint(new DOMPoint(pt.x, pt.y)));
     ctx.beginPath();
-    corners.forEach((pt, i) => {
-      const q = M.transformPoint(new DOMPoint(pt.x, pt.y));
-      if (i) ctx.lineTo(q.x, q.y);
-      else ctx.moveTo(q.x, q.y);
-    });
+    pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
     ctx.closePath();
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.lineWidth = 2.8 * u;
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
+    ctx.lineWidth = 1.35 * u;
+    ctx.stroke();
   }
 
   // --------------------------------------------------------------- overlay

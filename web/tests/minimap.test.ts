@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import { Tile, type GameMap, type MapId } from '../src/sim/map';
+import { Tile, seaPointAt, type GameMap, type MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { Ground } from '../src/render/ground';
 import { biomeLook } from '../src/render/biome';
+import { LAGOON } from '../src/render/bluehole';
 import { canopyRadius, treeSpots } from '../src/render/vegetation';
 import { FOG_DIM, MINIMAP_MAX_BYTES, MinimapBake, fillFog, fogAlpha } from '../src/render/minimap';
 import { reliefHeight } from '../src/render/relief';
@@ -203,7 +204,17 @@ describe('minimap biomes', () => {
       bl += p[i + 2];
     }
     if (id === 'winter') expect(bl).toBeGreaterThan(r);
-    if (id === 'desert') expect(r).toBeGreaterThan(bl * 1.2);
+    if (id === 'desert') {
+      expect(r).toBeGreaterThan(bl * 1.2);
+      // Red Sea corner: the Blue Hole's deep abyssal centre is much darker than its turquoise coral rim
+      const sea = map.deco!.sea!;
+      const holePt = seaPointAt(map.w, map.h, sea.off, LAGOON.hu, LAGOON.hv, 0);
+      const rimPt = seaPointAt(map.w, map.h, sea.off, LAGOON.hu + LAGOON.R + 0.4, LAGOON.hv, 0);
+      const holePx = px(b, holePt.x, holePt.y);
+      const rimPx = px(b, rimPt.x, rimPt.y);
+      expect(holePx[2]).toBeGreaterThan(holePx[0]);
+      expect(rimPx[1] + rimPx[2]).toBeGreaterThan((holePx[1] + holePx[2]) * 2);
+    }
     if (id === 'urban') expect(Math.abs(r - bl)).toBeLessThan(r * 0.25);
     expect(biomeLook(map).biome).toBe(map.biome);
     // night lights: lit windows and street lamps glow (the city most of all)

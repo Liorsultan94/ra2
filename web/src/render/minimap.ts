@@ -1,6 +1,7 @@
-import { StructureKind, Tile, WATER_LEVEL, groundHeight, type GameMap, type Structure } from '../sim/map';
+import { StructureKind, Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap, type Structure } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { BiomeLook } from './biome';
+import { lagoonAt } from './bluehole';
 import { FieldType, type Layout } from './layout';
 import { cityHeight, isCityKind } from './models/citybldgs';
 import { reliefHeight } from './relief';
@@ -16,7 +17,7 @@ import { Species, type TreeSpot } from './treekinds';
  *  - hillshade from the relief (relief.ts: the sim's heights plus the real
  *    cliffs on the rock), sun from the north-west;
  *  - water by depth below the water line (shallows -> deep), shore foam, the
- *    winter's ice rims;
+ *    winter's ice rims, and on desert coasts the Red Sea coral lagoon & Blue Hole;
  *  - farm fields with their rows, city squares and streets (layout fields),
  *    hedges, roads with their markings, bridges with their shadow on the water;
  *  - village houses (the 3D roof colours, gabled roofs lit / shaded), city
@@ -30,16 +31,15 @@ import { Species, type TreeSpot } from './treekinds';
  * that collapses (or is rebuilt) and the ruins of destroyed buildings.
  * Everything is a pure function of the map (plus those changes), with no
  * DOM needed (tests run it in node); the canvases are made at the end when a
- * document exists. Memory: the photo canvas (S = 5 px per tile: 480 x 480
- * on a 96 x 96 map, 0.9 MB) and the lights (240 x 240, 0.23 MB).
+ * document exists.
  */
 
-/** Photo pixels per tile (the minimap shows ~2.6 canvas px per tile: 2x supersampled). */
-export const MINIMAP_S = 5;
+/** Photo pixels per tile (high-DPI satellite recon clarity: 768x768 on a 128x128 map). */
+export const MINIMAP_S = 6;
 /** Night light pixels per tile (soft glows: half resolution is plenty). */
 export const MINIMAP_LS = 3;
 /** Size cap of the baked layers (bytes, RGBA): the S above shrinks on a huge map rather than exceed it. */
-export const MINIMAP_MAX_BYTES = 1.5 * 1024 * 1024;
+export const MINIMAP_MAX_BYTES = 3.2 * 1024 * 1024;
 
 /** The ground's painted control maps (ground.ts). */
 export interface GroundMaps {
@@ -118,10 +118,10 @@ const SHADOW_K = 0.42;
 const DECK_W = 2.1;
 /** Daylight grade per biome code (r, g, b multipliers, saturation). */
 const GRADE: [number, number, number, number][] = [
-  [1.05, 0.97, 0.84, 0.9],
-  [1.02, 0.96, 0.86, 0.95],
-  [0.94, 0.97, 1.04, 0.9],
-  [1.0, 0.99, 0.97, 0.9],
+  [1.04, 0.98, 0.85, 1.02],
+  [1.03, 0.96, 0.85, 1.04],
+  [0.94, 0.97, 1.04, 0.96],
+  [1.0, 0.99, 0.97, 0.96],
 ];
 /** Grass tone per biome code: the photoscanned meadow reads olive in the summer sun (the art palette is greener). */
 const GRASS_TONE: [number, number, number][] = [
@@ -599,30 +599,88 @@ export class MinimapBake {
     this.drawLines(box, px0, py0, pw, ph, col, water);
     // ---- hillshade + grain (ground level), then the water over it
     const wc = C.water;
-    const shallow = [wc[0] * 1.35 + 18, wc[1] * 1.3 + 14, wc[2] * 1.18 + 8];
-    const deep = [wc[0] * 0.55, wc[1] * 0.62, wc[2] * 0.7];
+    const shallow = [wc[0] * 1.38 + 20, wc[1] * 1.34 + 16, wc[2] * 1.22 + 10];
+    const deep = [wc[0] * 0.5, wc[1] * 0.58, wc[2] * 0.68];
     const iceK = look.iceK;
-    for (let j = 0; j < ph; j++)
+    const sea = m.deco?.sea;
+    const sf = { u: 0, v: 0, b: 0 };
+    for (let j = 0; j < ph; j++) {
+      const y = (py0 + j + 0.5) / S;
       for (let i = 0; i < pw; i++) {
+        const x = (px0 + i + 0.5) / S;
         const o = (j * pw + i) * 3;
         const hi = (j + 1) * HW + i + 1;
         const dhx = ((hb[hi + 1] - hb[hi - 1]) * S) / 2;
         const dhy = ((hb[hi + HW] - hb[hi - HW]) * S) / 2;
-        const ex = 1.6; // relief exaggeration: the map is mostly gentle
+        const slope = Math.hypot(dhx, dhy);
+        const ex = 2.2; // crisp satellite relief exaggeration
         const nx = -dhx * ex;
         const ny = -dhy * ex;
         const nl = Math.hypot(nx, ny, 1);
         const lam = (nx * SUN[0] + ny * SUN[1] + SUN[2]) / nl / SUN[2];
-        const shade = 0.42 + 0.58 * Math.max(0.25, Math.min(1.45, lam));
-        const n = (hash2(px0 + i, py0 + j, 71) - 0.5) * 0.07 + (hash2((px0 + i) >> 1, (py0 + j) >> 1, 73) - 0.5) * 0.05;
+        const cliffAo = 1 - smooth(0.45, 1.35, slope) * 0.14;
+        const shade = (0.38 + 0.62 * Math.max(0.22, Math.min(1.48, lam))) * cliffAo;
+        const n = (hash2(px0 + i, py0 + j, 71) - 0.5) * 0.065 + (hash2((px0 + i) >> 1, (py0 + j) >> 1, 73) - 0.5) * 0.045;
         const d = water[j * pw + i];
         if (d > 0) {
-          // water: shallows over the bed to deep, foam on the shore, the winter's ice rims
-          const t = smooth(0.0, 0.55, d);
-          let r = shallow[0] + (deep[0] - shallow[0]) * t;
-          let gg = shallow[1] + (deep[1] - shallow[1]) * t;
-          let b = shallow[2] + (deep[2] - shallow[2]) * t;
-          const ripple = 1 + (hash2((px0 + i) >> 1, py0 + j, 79) - 0.5) * 0.06;
+          const ripple = 1 + (hash2((px0 + i) >> 1, py0 + j, 79) - 0.5) * 0.055;
+          let r: number;
+          let gg: number;
+          let b: number;
+          let surfFoam = 0;
+          if (sea) {
+            seaFrame(m.w, m.h, sea.off, x, y, sf);
+            const cv = coastV(sea, sf.u, sf.v);
+            if (cv > -2) {
+              // Red Sea corner: coral reef lagoon, turquoise drop-off and the deep Blue Hole
+              const lag = lagoonAt(sf.u, sf.v);
+              const dO = d + (Math.max(Math.min(d, lag.virt), lag.wall) - d) * lag.plat;
+              const tMid = smooth(0.08, 0.62, dO);
+              const tDeep = smooth(0.95, 1.85, dO);
+              const tHole = smooth(1.9, 3.8, dO);
+              // sunlit turquoise reef flat -> cobalt shelf -> deep navy -> abyssal Blue Hole
+              r = 44 + (14 - 44) * tMid;
+              gg = 176 + (96 - 176) * tMid;
+              b = 186 + (152 - 186) * tMid;
+              r += (8 - r) * tDeep;
+              gg += (42 - gg) * tDeep;
+              b += (98 - b) * tDeep;
+              r += (3 - r) * tHole;
+              gg += (12 - gg) * tHole;
+              b += (40 - b) * tHole;
+              // coral heads & awash reef flat mottling
+              const coral = lag.reef * lag.plat;
+              if (coral > 0.02) {
+                const ch = hash2(Math.floor(x * 3.5), Math.floor(y * 3.5), 91);
+                const cr = ch < 0.45 ? 118 : 74;
+                const cg = ch < 0.45 ? 156 : 168;
+                const cb = ch < 0.45 ? 128 : 162;
+                const ck = coral * 0.68;
+                r += (cr - r) * ck;
+                gg += (cg - gg) * ck;
+                b += (cb - b) * ck;
+                surfFoam = smooth(0.45, 0.88, coral) * (0.35 + 0.35 * hash2(px0 + i, py0 + j, 93));
+              }
+              // luminous cyan halo along the Blue Hole's drop-off lip
+              const lip = (1 - smooth(0.0, 0.55, Math.abs(lag.t))) * lag.plat * (1 - coral * 0.5);
+              if (lip > 0.01) {
+                r += (58 - r) * lip * 0.55;
+                gg += (204 - gg) * lip * 0.55;
+                b += (214 - b) * lip * 0.55;
+              }
+            } else {
+              const t = smooth(0.0, 0.55, d);
+              r = shallow[0] + (deep[0] - shallow[0]) * t;
+              gg = shallow[1] + (deep[1] - shallow[1]) * t;
+              b = shallow[2] + (deep[2] - shallow[2]) * t;
+            }
+          } else {
+            // river / lake / canal: shallows over the bed to deep channel
+            const t = smooth(0.0, 0.55, d);
+            r = shallow[0] + (deep[0] - shallow[0]) * t;
+            gg = shallow[1] + (deep[1] - shallow[1]) * t;
+            b = shallow[2] + (deep[2] - shallow[2]) * t;
+          }
           r *= ripple;
           gg *= ripple;
           b *= ripple;
@@ -633,23 +691,27 @@ export class MinimapBake {
             gg += (212 * crack - gg) * ice;
             b += (226 * crack - b) * ice;
           }
-          const foam = (1 - smooth(0.0, 0.06, d)) * (0.3 + hash2((px0 + i) >> 1, (py0 + j) >> 1, 97) * 0.25) * (iceK > 1 ? 0.4 : 1);
-          col[o] = r + (205 - r) * foam;
-          col[o + 1] = gg + (212 - gg) * foam;
-          col[o + 2] = b + (206 - b) * foam;
+          const foam = Math.max(
+            surfFoam,
+            (1 - smooth(0.0, 0.065, d)) * (0.34 + hash2((px0 + i) >> 1, (py0 + j) >> 1, 97) * 0.28) * (iceK > 1 ? 0.4 : 1),
+          );
+          col[o] = r + (214 - r) * foam;
+          col[o + 1] = gg + (220 - gg) * foam;
+          col[o + 2] = b + (216 - b) * foam;
           continue;
         }
         // damp dark band just above the water line
-        const damp = d > -0.1 ? (1 - smooth(0, 0.1, -d)) * 0.2 : 0;
+        const damp = d > -0.12 ? (1 - smooth(0, 0.12, -d)) * 0.22 : 0;
         const k = shade * (1 + n) * (1 - damp);
         col[o] *= k;
         col[o + 1] *= k;
         col[o + 2] *= k;
       }
+    }
     // ---- bridges (deck and its shadow on the water; stubs and debris once down)
     for (const b of this.bridges) if (hit(b, box)) this.drawBridge(b, px0, py0, pw, ph, col);
     // ---- structures: shadows, then roofs; ruins
-    for (const s of this.structs) if (hit(s, box) && !this.ruined[s.idx]) this.drawShadowBox(s.fx0, s.fy0, s.fx1, s.fy1, s.h * SHADOW_K, px0, py0, pw, ph, col, 0.55);
+    for (const s of this.structs) if (hit(s, box) && !this.ruined[s.idx]) this.drawShadowBox(s.fx0, s.fy0, s.fx1, s.fy1, s.h * SHADOW_K, px0, py0, pw, ph, col, 0.58);
     for (const s of this.structs) if (hit(s, box) && !this.ruined[s.idx]) this.drawRoof(s, px0, py0, pw, ph, col);
     for (const r of this.ruins) if (hit({ x0: r.x0 - 0.6, y0: r.y0 - 0.6, x1: r.x1 + 0.6, y1: r.y1 + 0.6 }, box)) this.drawRuin(r, px0, py0, pw, ph, col);
     // ---- trees: all shadows first, then the crowns
@@ -657,8 +719,7 @@ export class MinimapBake {
     for (const t of this.trees) if (hit(t, box)) tl.push(t);
     for (const t of tl) this.drawTreeShadow(t, px0, py0, pw, ph, col);
     for (const t of tl) this.drawCanopy(t, px0, py0, pw, ph, col);
-    // ---- grade: the biome's daylight (the 3D ground reads olive in the summer sun, cool blue-grey in the
-    // snow), a little haze lifting the blacks, like a recon photo
+    // ---- grade: crisp optical satellite daylight without milky black-lift haze
     const gr = GRADE[look.code] ?? GRADE[0];
     for (let p = 0, q = 0; p < pw * ph; p++, q += 3) {
       const r = col[q] * gr[0];
@@ -666,9 +727,9 @@ export class MinimapBake {
       const b = col[q + 2] * gr[2];
       const l = r * 0.3 + gg * 0.59 + b * 0.11;
       const sat = gr[3];
-      out[p * 4] = (l + (r - l) * sat) * 0.97 + 6;
-      out[p * 4 + 1] = (l + (gg - l) * sat) * 0.97 + 7;
-      out[p * 4 + 2] = (l + (b - l) * sat) * 0.97 + 9;
+      out[p * 4] = (l + (r - l) * sat) * 1.01;
+      out[p * 4 + 1] = (l + (gg - l) * sat) * 1.01;
+      out[p * 4 + 2] = (l + (b - l) * sat) * 1.01;
       out[p * 4 + 3] = 255;
     }
     return { x: px0, y: py0, width: pw, height: ph, data: out };
