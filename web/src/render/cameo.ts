@@ -80,6 +80,12 @@ export const CUSTOM_CAMEOS: Record<string, string> = {
   fpv: `${CAMEO_BASE}ui/cameos/israel_fpv.jpg`,
   micro: `${CAMEO_BASE}ui/cameos/israel_micro.jpg`,
   shahed: `${CAMEO_BASE}ui/cameos/israel_shahed.jpg`,
+  israel_power: `${CAMEO_BASE}ui/cameos/israel_power.jpg`,
+  israel_airfield: `${CAMEO_BASE}ui/cameos/israel_airfield.jpg`,
+  israel_radar: `${CAMEO_BASE}ui/cameos/israel_radar.jpg`,
+  power: `${CAMEO_BASE}ui/cameos/power.jpg`,
+  airfield: `${CAMEO_BASE}ui/cameos/airfield.jpg`,
+  radar: `${CAMEO_BASE}ui/cameos/radar.jpg`,
 };
 
 /** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
