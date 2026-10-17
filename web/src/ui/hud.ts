@@ -1083,17 +1083,33 @@ export class Hud {
     }
     ctx.restore();
 
-    // crisp tactical border around the isometric battlefield diamond
+    // crisp glowing cyan tactical border around the isometric battlefield diamond + corner satellite telemetry
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.strokeStyle = 'rgba(130, 195, 225, 0.32)';
-    ctx.lineWidth = Math.max(1, 1.15 * u);
+    ctx.save();
     ctx.beginPath();
     for (const [x, y] of [[0, 0], [map.w, 0], [map.w, map.h], [0, map.h]]) {
       const q = M.transformPoint(new DOMPoint(x, y));
       ctx.lineTo(q.x, q.y);
     }
     ctx.closePath();
+    ctx.shadowColor = 'rgba(45, 225, 255, 0.65)';
+    ctx.shadowBlur = 5 * u;
+    ctx.strokeStyle = 'rgba(72, 232, 255, 0.78)';
+    ctx.lineWidth = Math.max(1.2, 1.35 * u);
     ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // subtle C4ISR satellite telemetry text in the dark corners
+    const fs = Math.max(7, Math.round(7.5 * u));
+    ctx.font = `600 ${fs}px 'Barlow Condensed', monospace`;
+    ctx.fillStyle = 'rgba(110, 195, 225, 0.42)';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.fillText('SAT-FEED // KH-11', Math.round(8 * u), Math.round(6 * u));
+    ctx.fillText(`GRID ${map.w}x${map.h}`, Math.round(8 * u), Math.round(16 * u));
+    ctx.textAlign = 'right';
+    ctx.fillText('OPTICAL · LIVE', W - Math.round(8 * u), Math.round(6 * u));
+    ctx.restore();
   }
 
   /** The map diamond as a clip path (canvas pixels). */
