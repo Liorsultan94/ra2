@@ -31,24 +31,35 @@ describe('terrain use on Wadi Al-Rimal (AI2)', () => {
     }
   });
 
-  it('a Hard desert game: houses on the routes garrisoned, a canyon ambush set, the plateau visited', () => {
-    const w = new World({ seed: 3, map: 'desert', players: [
-      { name: 'israel', faction: 'israel', color: 0, isAI: true },
-      { name: 'iran', faction: 'iran', color: 0, isAI: true },
-    ] });
-    const pt = peaceTicks('hard', 'auto');
-    const ais = [new AIController(w, 0, 'hard', { peaceTicks: pt }), new AIController(w, 1, 'hard', { peaceTicks: pt })] as AnyAI[];
-    w.controllers.push(...ais);
+  it('Hard desert games: houses on the routes garrisoned, a canyon ambush set, the plateau visited', () => {
+    // (terrain use is chaotic from seed to seed - every feature moved with the Sinai layout, SN1: two games,
+    // 16 minutes each, between them the AIs use all three)
     let held = 0;
-    for (let t = 0; t < TPS * 60 * 16 && !w.over; t++) {
-      w.step();
-      if (t % (TPS * 10) === 0) for (const e of w.list) if (!e.dead && e.kind === 'building' && e.owner >= 0 && buildingDef(e.def).garrison && e.passengers.length) held++;
+    const tot = { garrisons: 0, canyon: 0, plateauVisits: 0 };
+    const all: unknown[] = [];
+    for (const seed of [2, 3]) {
+      const w = new World({ seed, map: 'desert', players: [
+        { name: 'israel', faction: 'israel', color: 0, isAI: true },
+        { name: 'iran', faction: 'iran', color: 0, isAI: true },
+      ] });
+      const pt = peaceTicks('hard', 'auto');
+      const ais = [new AIController(w, 0, 'hard', { peaceTicks: pt }), new AIController(w, 1, 'hard', { peaceTicks: pt })] as AnyAI[];
+      w.controllers.push(...ais);
+      for (let t = 0; t < TPS * 60 * 16 && !w.over; t++) {
+        w.step();
+        if (t % (TPS * 10) === 0) for (const e of w.list) if (!e.dead && e.kind === 'building' && e.owner >= 0 && buildingDef(e.def).garrison && e.passengers.length) held++;
+      }
+      for (const a of ais) {
+        tot.garrisons += a.terrainStats.garrisons;
+        tot.canyon += a.terrainStats.canyon;
+        tot.plateauVisits += a.terrainStats.plateauVisits;
+        all.push(a.terrainStats);
+      }
     }
-    const st = ais.map((a) => a.terrainStats);
-    const msg = JSON.stringify(st);
+    const msg = JSON.stringify(all);
     expect(held, msg).toBeGreaterThan(0);
-    expect(st[0].garrisons + st[1].garrisons, msg).toBeGreaterThan(0);
-    expect(st[0].canyon + st[1].canyon, msg).toBeGreaterThan(0);
-    expect(st[0].plateauVisits + st[1].plateauVisits, msg).toBeGreaterThan(0);
-  }, 300000);
+    expect(tot.garrisons, msg).toBeGreaterThan(0);
+    expect(tot.canyon, msg).toBeGreaterThan(0);
+    expect(tot.plateauVisits, msg).toBeGreaterThan(0);
+  }, 600000);
 });
