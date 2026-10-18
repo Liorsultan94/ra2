@@ -460,6 +460,8 @@ export class Horizon {
       seaN: { value: new THREE.Vector4(sea?.nx ?? 0, sea?.ny ?? 0, sea?.ux ?? 0, sea?.uy ?? 0) },
       seaOff: { value: sea?.off ?? 0 },
       seaTwin: { value: sea?.twin ? 1 : 0 },
+      seaOff2: { value: sea?.off2 ?? sea?.off ?? 0 },
+      seaEven: { value: sea?.even ? 1 : 0 },
       seaHarb: { value: new THREE.Vector2(...(sea?.harbour ?? [0, 0])) },
       seaMole: { value: new THREE.Vector4(...(sea ? [W.seaPoint(sea.mole[0], sea.mole[1]), W.seaPoint(sea.mole[2], sea.mole[3])].flatMap((p) => [p.x, p.y]) : [0, 0, 0, 0])) },
       lakeA: { value: new THREE.Vector4(lake?.x ?? 0, lake?.y ?? 0, lake?.rx ?? 1, lake?.ry ?? 1) },
@@ -498,6 +500,8 @@ export class Horizon {
         uniform vec4 seaN;
         uniform float seaOff;
         uniform float seaTwin;
+        uniform float seaOff2;
+        uniform float seaEven;
         uniform vec2 seaHarb;
         uniform vec4 seaMole;
         uniform vec4 lakeA;
@@ -528,8 +532,14 @@ export class Horizon {
           float su = 0.0;
           if ( seaOn > 0.5 ) {
             vec2 pc = p - hzCentre;
+            float off = seaOff;
+            // twin seas (the Sinai's Mediterranean and Red Sea): the corner nearer p
+            if ( seaTwin > 0.5 && dot( pc, seaN.xy ) < 0.0 ) {
+              pc = -pc;
+              off = seaOff2;
+            }
             su = dot( pc, seaN.zw );
-            sv = dot( pc, seaN.xy ) - seaOff + wig( su );
+            sv = dot( pc, seaN.xy ) - off + ( seaEven > 0.5 ? 2.6 * cos( su * 0.047 ) + 1.5 * cos( su * 0.131 ) : wig( su ) );
           }
           float lv = -1e3;
           if ( lakeB.z > 0.5 ) {
@@ -560,7 +570,7 @@ export class Horizon {
           if ( hzSky > 0.5 ) refl = mix( refl, hzHorizonCol( vWorld ), ( 1.0 - smoothstep( 0.0, 0.25, R.y ) ) * 0.8 );
           vec3 under = mix( wTurq * 0.8, wDeep, 0.55 + 0.45 * depthK );
           // (the in-map sea's depth ramp, water.ts: blue past the drop-off deepening to navy offshore)
-          if ( seaTwin > 0.5 ) under = mix( seaScatter( mix( 0.3, 1.21, smoothstep( 3.6, 5.8, sv ) ) + smoothstep( 6.0, 14.0, sv ) * 0.7 ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
+          if ( seaTwin > 0.5 ) under = mix( seaScatter( mix( 0.3, 1.21, smoothstep( 3.6, 5.8, sv ) ) + smoothstep( 4.5, 11.0, sv ) * 0.7 ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
           vec3 col = mix( under, refl, fres );
           col *= wxLight * ( 1.0 - 0.2 * wState.x );
           float sd = max( dot( R, sunDir ), 0.0 );

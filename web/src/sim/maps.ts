@@ -1,10 +1,10 @@
 // Skirmish maps. Frontline Crossing (map.ts) is the temperate original; this
 // module adds three hand-designed, point-symmetric two player maps with their
-// own climates - a desert wadi with mesas and oases, a frozen river valley and
-// a canal city - and the `createMap` dispatcher the world uses.
+// own climates - the Sinai Peninsula, a frozen river valley and a canal city -
+// and the `createMap` dispatcher the world uses.
 //
-// Every layout is fixed in code for player 0's half and mirrored through the
-// map centre (fair starts). The seed only varies the details (dune and hill
+// Every layout is fixed in code for player 0's half and mirrored (fair starts):
+// through the map centre, or across the diagonal for the Sinai (GameMap.mirror). The seed only varies the details (dune and hill
 // noise, forest patches, river meanders, which building stands on which city
 // lot, palms, ...) through its own Rng, never the world's, so two clients with
 // the same seed build bit-identical maps. Generators validate as they go:
@@ -54,7 +54,7 @@ export interface MapInfo {
 
 export const MAPS: MapInfo[] = [
   { id: 'frontline', name: 'Frontline Crossing', biome: 'temperate', blurb: 'River valley, villages, three bridges', region: 'Temperate river valley' },
-  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'Red Sea coast: granite peaks, a wadi, oases and beaches', region: 'Desert coast on the Red Sea' },
+  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'The Sinai: two gulfs, crossings at their heads, Sharm and the high massif', region: 'The Sinai Peninsula between the Gulfs of Suez and Aqaba' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
 ];

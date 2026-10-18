@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from '../sim/rng';
-import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
+import { GORGE } from '../sim/maps';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
 import { OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
@@ -552,7 +553,6 @@ export class Waterside implements WatersideHandles {
 
   // --------------------------------------------------------------- reeds
 
-  private sf = { u: 0, v: 0, b: 0 };
   private avoid(x: number, y: number, layout: Layout, rapidsOk = false) {
     const m = this.map;
     const tx = Math.floor(x);
@@ -561,7 +561,7 @@ export class Waterside implements WatersideHandles {
     if (m.tiles[ty * m.w + tx] === Tile.Bridge) return true;
     // no reeds or pebbles on the Red Sea's beaches and reef (render/seaside.ts dresses them)
     const sea = m.deco?.sea;
-    if (sea && coastV(sea, seaFrame(m.w, m.h, sea.off, x, y, this.sf).u, this.sf.v) > -14) return true;
+    if (sea && seaDist(sea, x, y) > -14) return true;
     for (const b of m.bridges) if (Math.hypot(x - b.x, y - b.y) < b.length / 2 + 1.2) return true;
     if (occAt(layout, m, x, y) & (OCC_ROAD | OCC_TRACK)) return true;
     const f = this.river.features;
@@ -583,11 +583,12 @@ export class Waterside implements WatersideHandles {
     const tries = cap * 14;
     let seed = 7;
     if (m.id === 'desert') {
+      // the oasis gorge's lake and spring pools (sim/maps.ts GORGE: laid out round tile (113, 113) of the old map)
+      const G = GORGE - 113;
       const pools = [
-        { x: 113, y: 113, r: 3.3, n: 26 },
-        { x: 105, y: 119, r: 1.8, n: 16 },
-        { x: 119, y: 105, r: 1.8, n: 16 },
-        { x: m.w / 2 - 0.5, y: m.h / 2 - 0.5, r: 3.1, n: 20 },
+        { x: 113 + G, y: 113 + G, r: 3.3, n: 26 },
+        { x: 105 + G, y: 119 + G, r: 1.8, n: 16 },
+        { x: 119 + G, y: 105 + G, r: 1.8, n: 16 },
       ];
       for (const p of pools) {
         for (let i = 0; i < p.n && list.length < cap; i++) {

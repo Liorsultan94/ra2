@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
+import { Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
@@ -696,8 +696,7 @@ export class Ground {
     const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
     const seaD = m.deco?.sea;
-    const sf = { u: 0, v: 0, b: 0 };
-    const seaNear = (x: number, y: number) => !!seaD && coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v) > -12;
+    const seaNear = (x: number, y: number) => !!seaD && seaDist(seaD, x, y) > -12;
     // Wadi Al-Rimal's coloured canyons: distance from their centre lines (only near their bounding boxes)
     const canyons = (m.deco?.canyons ?? []).map((c) => {
       const xs = c.pts.map((p) => p.x + 0.5);
@@ -868,7 +867,7 @@ export class Ground {
         }
         // the Red Sea's bathing beaches: white coral sand, paler and cooler than the desert's gold
         if (seaD && sand > 0.05) {
-          const ve = coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v);
+          const ve = seaDist(seaD, x, y);
           const wk = smooth(-5.6, -3.9, ve) * Math.min(1, sand * 1.4);
           r *= 1 + 0.08 * wk;
           g *= 1 + 0.17 * wk;
