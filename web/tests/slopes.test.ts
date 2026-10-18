@@ -67,11 +67,11 @@ describe('slopes (SL1)', () => {
     expect(Math.atan(MAX_GRADE[Loco.Foot]) * (180 / Math.PI)).toBeLessThanOrEqual(40);
   });
 
-  it('a tank cannot drive straight up the Jebel\'s north face: it winds round to the gentle way up, every step under its limit', () => {
+  it('a tank cannot drive straight up the Sinai massif\'s north face: it winds round to the gentle way up, every step under its limit', () => {
     for (const seed of [1, 2, 3]) {
       const w = world('desert', seed);
-      // the north foot of player 0's massif, and the summit plateau above it
-      const [sx, sy, gx, gy] = [38, 68, 44, 78];
+      // the north foot of the massif on player 0's side (St Catherine), and the summit plateau above it
+      const [sx, sy, gx, gy] = [85, 105, 93, 112];
       const veh = w.pfs[Loco.Vehicle].find(sx, sy, gx, gy, 100000);
       expect(veh[veh.length - 1], `seed ${seed}: the plateau is reachable by vehicles`).toBe(gy * w.map.w + gx);
       const v = walk(w, sx, sy, veh);
@@ -164,12 +164,13 @@ describe('slopes (SL1)', () => {
     for (; t < T * TPS && left().length; t++) w.step();
     return { secs: t / TPS, left: left().map(({ e }) => `${e.def}@${e.x.toFixed(1)},${e.y.toFixed(1)}`) };
   }
-  const M = (p: { x: number; y: number }) => ({ x: 128 - p.x, y: 128 - p.y });
+  // (the Sinai mirrors across its diagonal)
+  const M = (p: { x: number; y: number }) => ({ x: p.y, y: p.x });
   // the coloured canyon's upper and lower mouths (player 0's), the summit track's foot and the plateau it leads to
-  const UP = { x: 30.6, y: 73.4 };
-  const DOWN = { x: 47.6, y: 95.6 };
-  const FOOT = { x: 55, y: 89 };
-  const TOP = { x: 43.5, y: 78.5 };
+  const UP = { x: 69.2, y: 87.8 };
+  const DOWN = { x: 76.7, y: 108.6 };
+  const FOOT = { x: 75.3, y: 110 };
+  const TOP = { x: 93.9, y: 112.9 };
 
   it('groups of tanks and soldiers flow through the coloured canyon both ways, on both sides, and past each other head-on', () => {
     const cases: [string, Parameters<typeof flow>[1]][] = [

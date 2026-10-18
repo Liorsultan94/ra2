@@ -55,6 +55,12 @@ export interface GameMap {
   lanes?: Point[];
   /** 1 on land that no ground unit can reach on purpose (offshore islands): kept open, never sealed with trees. */
   offshore?: Uint8Array;
+  /**
+   * How the two halves mirror each other (fair starts): 'point' (absent) through the map centre, x -> w - 1 - x and
+   * y -> h - 1 - y; 'transpose' across the x == y diagonal, (x, y) -> (y, x) (the screen's left-right mirror: the
+   * Sinai map, whose gulfs both open to the south).
+   */
+  mirror?: 'point' | 'transpose';
   /** Render-only hints of the hand-designed maps (road widths, tracks, plazas, parks, rubble lots). */
   deco?: MapDeco;
 }
@@ -84,86 +90,140 @@ export interface MapDeco {
   power: Point[][];
   /** Render-only trees (street trees, roadside palms): kind 1 / 2 as `GameMap.trees`. Vehicles knock them over. */
   trees: { x: number; y: number; kind: number }[];
-  /** A sea in two opposite corners (Wadi Al-Rimal's Red Sea coast): see `seaFrame`. */
+  /** The seas of the Sinai (Wadi Al-Rimal): see `seaDist`. */
   sea?: SeaDeco;
   /** Coloured canyons (Wadi Al-Rimal): floor centre lines (tile index space) and the floor's half width (render/canyon.ts). */
   canyons?: { pts: Point[]; hw: number }[];
 }
 
 /**
- * A coast across the north-west corner and, point mirrored, the south-east one. Positions on it are
- * given in the corner's frame (`seaFrame`): u along the coast (+ towards the north edge), v seaward
- * (> 0 = sea, tiles), both in continuous map units.
+ * The seas of the Sinai map (Wadi Al-Rimal): the Mediterranean across the top corner of the screen (the map's
+ * north-west tile corner), the Red Sea across the bottom one (south-east) and the two gulfs between them, the
+ * Gulf of Suez on the west and the Gulf of Aqaba on the east (`seaDist`). Map north is the top of the screen:
+ * screen east E = (x - y) / sqrt 2, screen south S = (x + y) / sqrt 2 (continuous map coordinates).
+ * Seaside places (resort beaches, the lighthouse island, the Blue Hole's lagoon) each have a straight local
+ * frame (`SeaFrame`): u along the coast, v seaward (> 0 = sea), in tiles.
  */
-export interface SeaDeco {
-  /** Coast distance from the map centre along the corner diagonal (before the wiggle). */
-  off: number;
-  /** A cove cut into the coast: along-coast centre, half width at the mouth, depth inland. */
-  cove: { u: number; w: number; L: number };
-  /** Granite headlands (rock capsules from (u0, v0) to (u1, v1), radius r, crest height). */
-  heads: { u0: number; v0: number; u1: number; v1: number; r: number; top: number }[];
-  /** The resort compound (impassable): along-coast u0..u1, seaward v0..v1 (negative = inland). */
+export interface SeaFrame {
+  /** Origin (continuous map coordinates) and the tile-space heading of +u; +v (seaward) is (sin ang, -cos ang). */
+  x: number;
+  y: number;
+  ang: number;
+}
+
+/** A resort beach on the coast (render/seaside.ts; the compound is impassable). */
+export interface SeaSite extends SeaFrame {
+  /** The resort compound: along-coast u0..u1, seaward v0..v1 (negative = inland). */
   resort: { u0: number; u1: number; v0: number; v1: number };
   /** The bathing beach's along-coast stretch. */
   beach: [number, number];
-  /**
-   * An offshore island (sim land: a sandy rim, a rocky knoll the lighthouse stands on), ringed by a reef flat
-   * and cut off from the mainland by water: centre (u, v) and the radii of its wobbly ellipse along and across
-   * the coast. No ground unit can reach it (GameMap.offshore; World.region).
-   */
-  isle?: { u: number; v: number; ru: number; rv: number };
+  /** Look of the place: 0 the big resort (Sharm: jetty, boats, the most people), 1 and 2 the smaller gulf resorts. */
+  look: number;
 }
 
-/** Signed distance (tiles; < 0 on the island) from frame point (u, v) to the offshore island's shore. */
-export function isleDist(isle: NonNullable<SeaDeco['isle']>, u: number, v: number) {
-  const du = (u - isle.u) / isle.ru;
-  const dv = (v - isle.v) / isle.rv;
+export interface SeaDeco {
+  /** Map centre (continuous coordinates; the map is square). */
+  c: number;
+  /** Coast distance from the map centre along the diagonal: the Mediterranean (top corner) and the Red Sea (bottom). */
+  top: number;
+  bottom: number;
+  /** The gulfs: centre lines (continuous coordinates, from the head to the open sea) with half widths. */
+  gulfs: { x: number; y: number; hw: number }[][];
+  /** Resort beaches. */
+  sites: SeaSite[];
+  /**
+   * An offshore island (sim land: a sandy rim, a rocky knoll the lighthouse stands on), ringed by a reef flat
+   * and cut off from the mainland by water: centre and heading of its frame, the radii of its wobbly ellipse along
+   * (ru) and across (rv). No ground unit can reach it (GameMap.offshore; World.region).
+   */
+  isle?: SeaFrame & { ru: number; rv: number };
+  /** The Blue Hole's reef lagoon (render only): its frame's origin on the waterline (render/bluehole.ts LAGOON). */
+  hole?: SeaFrame;
+}
+
+/** Frame coordinates (u along, v seaward) of map point (x, y). */
+export function frameUV(f: SeaFrame, x: number, y: number, out = { u: 0, v: 0 }) {
+  const c = Math.cos(f.ang);
+  const s = Math.sin(f.ang);
+  const dx = x - f.x;
+  const dy = y - f.y;
+  out.u = dx * c + dy * s;
+  out.v = dx * s - dy * c;
+  return out;
+}
+
+/** Map point of frame position (u, v). */
+export function framePoint(f: SeaFrame, u: number, v: number): Point {
+  const c = Math.cos(f.ang);
+  const s = Math.sin(f.ang);
+  return { x: f.x + u * c + v * s, y: f.y + u * s - v * c };
+}
+
+/** Signed distance (tiles; < 0 on the island) from island-frame point (u, v) (centre at 0, 0) to its shore. */
+export function isleDist(isle: { ru: number; rv: number }, u: number, v: number) {
+  const du = u / isle.ru;
+  const dv = v / isle.rv;
   const a = Math.atan2(dv, du);
   const e = Math.hypot(du, dv) * (1 + 0.1 * Math.sin(3 * a + 1.3) + 0.06 * Math.sin(5 * a + 0.4));
   return (e - 1) * Math.min(isle.ru, isle.rv);
 }
 
+/** isleDist at map point (x, y). */
+export function isleAt(isle: SeaFrame & { ru: number; rv: number }, x: number, y: number) {
+  const f = frameUV(isle, x, y);
+  return isleDist(isle, f.u, f.v);
+}
+
 /** The rocky knoll in the island's middle (impassable rock): isleDist below this. */
 export const ISLE_KNOLL = -1.25;
 
-/** The coastline's wiggle along u (shared by the map and the world past its edge). */
+/** The coastline's wiggle along u (shared by the map and the world past its edge: Canal City's bay). */
 export function coastWiggle(u: number) {
   return 4 * Math.sin(u * 0.045) + 2.5 * Math.sin(u * 0.13 + 1.0);
 }
 
+/** The Sinai's open-sea coasts' wiggle along screen east (even: the same on both halves of the mirrored map). */
+export function seaWiggle(u: number) {
+  return 2.6 * Math.cos(u * 0.047) + 1.5 * Math.cos(u * 0.131);
+}
+
+/** A gulf shore's wiggle by the distance s (tiles) from the gulf's head (the same on both gulfs). */
+export function gulfWiggle(s: number) {
+  return 0.55 * Math.sin(s * 0.21 + 0.7) + 0.35 * Math.sin(s * 0.57);
+}
+
+/** Seaward distance (tiles; > 0 = water) of the open seas only (the twin coasts past the map's top and bottom corners). */
+export function openSeaDist(sea: SeaDeco, x: number, y: number) {
+  const n = Math.SQRT1_2;
+  const e = (x - y) * n;
+  const s = (x + y - 2 * sea.c) * n;
+  const w = seaWiggle(e);
+  return Math.max(-s - sea.top + w, s - sea.bottom + w);
+}
+
 /**
- * Frame of the north-west Red Sea corner (continuous map coordinates): along-coast u, seaward v (no cove),
- * b = 0 (single Red Sea coast in the north-west corner; south-east corner remains inland desert).
+ * Seaward distance (tiles; > 0 = water, < 0 = inland) at continuous map point (x, y): the open seas and the
+ * gulfs (the island is land in the water: isleAt). Exactly symmetric under x <-> y on the mirrored map.
  */
-export function seaFrame(w: number, h: number, off: number, x: number, y: number, out = { u: 0, v: 0, b: 0 }) {
-  const n = Math.SQRT1_2;
-  const px = x - w / 2;
-  const py = y - h / 2;
-  out.b = 0;
-  out.u = (px - py) * n;
-  out.v = -(px + py) * n - off + coastWiggle(out.u);
-  return out;
-}
-
-/** Seaward distance with the cove cut in (> 0 = water). */
-export function coastV(sea: SeaDeco, u: number, v: number) {
-  const t = (u - sea.cove.u) / sea.cove.w;
-  return Math.abs(t) < 1 ? v + sea.cove.L * Math.pow(1 - t * t, 0.6) : v;
-}
-
-/** Continuous map point of a corner frame position (b = 1: the south-east corner). */
-export function seaPointAt(w: number, h: number, off: number, u: number, v: number, b: number) {
-  const n = Math.SQRT1_2;
-  // v = -(px + py) n - off + wiggle(u), u = (px - py) n
-  const s = (off - coastWiggle(u) + v) / n; // -(px + py)
-  const d = u / n; // px - py
-  let px = (d - s) / 2;
-  let py = (-s - d) / 2;
-  if (b) {
-    px = -px;
-    py = -py;
+export function seaDist(sea: SeaDeco, x: number, y: number): number {
+  let best = openSeaDist(sea, x, y);
+  for (const g of sea.gulfs) {
+    let s0 = 0;
+    for (let k = 0; k < g.length - 1; k++) {
+      const a = g[k];
+      const b = g[k + 1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l2 = dx * dx + dy * dy;
+      const len = Math.sqrt(l2);
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2));
+      const d = Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
+      const v = a.hw + (b.hw - a.hw) * t - d + gulfWiggle(s0 + t * len);
+      if (v > best) best = v;
+      s0 += len;
+    }
   }
-  return { x: w / 2 + px, y: h / 2 + py };
+  return best;
 }
 
 export const enum StructureKind {
@@ -202,6 +262,21 @@ export interface Structure {
 export const ORE_MAX = 10;
 export const ORE_VALUE = 25;
 export const GEM_VALUE = 50;
+
+/** The mirror image of tile (x, y) on the other player's half (GameMap.mirror). */
+export function mirrorTile(m: GameMap, x: number, y: number): Point {
+  return m.mirror === 'transpose' ? { x: y, y: x } : { x: m.w - 1 - x, y: m.h - 1 - y };
+}
+
+/** The mirror image of a w x h footprint with its top-left tile at (x, y): top-left tile and size. */
+export function mirrorRect(m: GameMap, x: number, y: number, w: number, h: number) {
+  return m.mirror === 'transpose' ? { x: y, y: x, w: h, h: w } : { x: m.w - x - w, y: m.h - y - h, w, h };
+}
+
+/** The mirror image of a continuous map point (tile centres at + 0.5). */
+export function mirrorPoint(m: GameMap, x: number, y: number): Point {
+  return m.mirror === 'transpose' ? { x: y, y: x } : { x: m.w - x, y: m.h - y };
+}
 
 export function inBounds(m: GameMap, x: number, y: number) {
   return x >= 0 && y >= 0 && x < m.w && y < m.h;
@@ -312,7 +387,7 @@ export function sealPockets(m: GameMap): number {
     const y = (i / W) | 0;
     if (seen[i] || !terrainPassable(m, x, y) || m.tiles[i] === Tile.Bridge || m.offshore?.[i]) continue;
     // (the same kind on both mirrored tiles)
-    m.trees[i] = hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y), 6) < 0.5 ? 1 : 2;
+    m.trees[i] = (m.mirror === 'transpose' ? hash2(Math.min(x, y), Math.max(x, y), 6) : hash2(Math.min(x, W - 1 - x), Math.min(y, H - 1 - y), 6)) < 0.5 ? 1 : 2;
     m.ore[i] = 0;
     m.oreKind[i] = 0;
     n++;

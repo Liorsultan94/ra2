@@ -11,7 +11,7 @@
 // randomness at all.
 
 import { buildingDef, unitDef } from './defs';
-import { distToSegment, terrainBuildable, terrainPassable, type GameMap } from './map';
+import { distToSegment, mirrorRect, terrainBuildable, terrainPassable, type GameMap } from './map';
 import { HOSPITAL_HEAL, HOSPITAL_RADIUS } from './specialdefs';
 import { TPS } from './types';
 import type { World } from './world';
@@ -106,9 +106,9 @@ export function neutralSites(m: GameMap): NeutralSite[] {
     let done = false;
     for (const offRoad of [true, false]) {
       for (const [x, y] of site.at) {
-        // mirror the footprint through the centre
+        // mirror the footprint onto the other half (GameMap.mirror)
         const a = { def: site.def, x, y, w: d.w, h: d.h };
-        const b = { def: site.def, x: W - x - d.w, y: H - y - d.h, w: d.w, h: d.h };
+        const b = { def: site.def, ...mirrorRect(m, x, y, d.w, d.h) };
         if (!siteOk(a.x, a.y, d.w, d.h, offRoad) || !siteOk(b.x, b.y, d.w, d.h, offRoad)) continue;
         put(a, 1);
         put(b, 1);
