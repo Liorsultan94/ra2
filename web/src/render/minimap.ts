@@ -1,4 +1,4 @@
-import { StructureKind, Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap, type Structure } from '../sim/map';
+import { StructureKind, Tile, WATER_LEVEL, frameUV, groundHeight, seaDist, type GameMap, type Structure } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import type { BiomeLook } from './biome';
 import { lagoonAt } from './bluehole';
@@ -419,7 +419,8 @@ export class MinimapBake {
   private loadSatellitePhoto() {
     if (typeof Image === 'undefined' || typeof document === 'undefined') return;
     const id = this.m.id;
-    if (!id) return;
+    // (the desert's photo showed the old Wadi Al-Rimal; the Sinai (SN1) is baked from the map itself)
+    if (!id || id === 'desert') return;
     const base = (import.meta as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/';
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -673,7 +674,7 @@ export class MinimapBake {
     const deep = [wc[0] * 0.5, wc[1] * 0.58, wc[2] * 0.68];
     const iceK = look.iceK;
     const sea = m.deco?.sea;
-    const sf = { u: 0, v: 0, b: 0 };
+    const sf = { u: 0, v: 0 };
     for (let j = 0; j < ph; j++) {
       const y = (py0 + j + 0.5) / S;
       for (let i = 0; i < pw; i++) {
@@ -699,11 +700,11 @@ export class MinimapBake {
           let b: number;
           let surfFoam = 0;
           if (sea) {
-            seaFrame(m.w, m.h, sea.off, x, y, sf);
-            const cv = coastV(sea, sf.u, sf.v);
+            const cv = seaDist(sea, x, y);
             if (cv > -2) {
-              // Red Sea corner: coral reef lagoon, turquoise drop-off and the deep Blue Hole
-              const lag = lagoonAt(sf.u, sf.v);
+              // the Sinai's seas: coral reef shelves, turquoise drop-offs and the deep Blue Hole's lagoon
+              const hq = sea.hole ? frameUV(sea.hole, x, y, sf) : null;
+              const lag = hq ? lagoonAt(hq.u, hq.v) : { plat: 0, virt: 0, wall: 0, reef: 0, t: 1e3 };
               const dO = d + (Math.max(Math.min(d, lag.virt), lag.wall) - d) * lag.plat;
               const tMid = smooth(0.08, 0.62, dO);
               const tDeep = smooth(0.95, 1.85, dO);

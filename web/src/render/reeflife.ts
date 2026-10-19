@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, groundHeight, seaFrame, type GameMap, type SeaDeco } from '../sim/map';
+import { Tile, WATER_LEVEL, frameUV, groundHeight, type GameMap, type SeaDeco } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import { LAGOON, lagoonAt, lagoonDepth } from './bluehole';
 import type { FogOfWar } from './fog';
@@ -25,8 +25,26 @@ const ss = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-/** Corner frame point (continuous map coordinates). */
+/** Frame point (continuous map coordinates) of a reef area's (u along the shore, v seaward). */
 type FrameP = (u: number, v: number) => THREE.Vector2;
+
+/**
+ * A stretch of reef to fill (SN1: the resort beaches and the Blue Hole's lagoon each have their own straight
+ * frame): its frame, its along-shore range, how far out the reef goes, the bathing beach kept clear of corals,
+ * and the Blue Hole with the wreck on its rim.
+ */
+export interface ReefArea {
+  P: FrameP;
+  u0: number;
+  u1: number;
+  v1: number;
+  beach?: [number, number];
+  lagoon?: boolean;
+  wreck?: Wreck;
+}
+
+/** lagoonAt away from the Blue Hole. */
+const NO_LAGOON = { plat: 0, virt: 0, wall: 0, reef: 0, t: 1e3 };
 
 const enum K {
   Fish = 0,
@@ -455,15 +473,14 @@ export class ReefLife {
   /** The view's zoom (renderer.ts via the seaside): far out the fish are left out. */
   zoom = 2;
   private sea: SeaDeco;
-  private f = { u: 0, v: 0, b: 0 };
+  private f = { u: 0, v: 0 };
 
   constructor(
     private map: GameMap,
     fog: FogOfWar,
     quality: 'low' | 'medium' | 'high',
     wxLight: { value: THREE.Vector3 },
-    frames: FrameP[],
-    wrecks: Wreck[],
+    areas: ReefArea[],
   ) {
     this.sea = map.deco!.sea!;
     this.group.name = 'reeflife';
@@ -471,14 +488,15 @@ export class ReefLife {
     const reefMat = reefMaterial(fog, wxLight, VERT_REEF);
     const faunaMat = reefMaterial(fog, wxLight, VERT_FAUNA);
     const lib = quality === 'low' ? null : faunaLibrary();
-    frames.forEach((P, b) => {
-      const reef = this.buildReef(P, b, wrecks[b]);
+    areas.forEach((area, b) => {
+      void area.P;
+      const reef = this.buildReef(area, b);
       const mesh = new THREE.Mesh(reef, reefMat);
       mesh.name = 'reef-corals';
       mesh.renderOrder = 2;
       this.group.add(mesh);
       if (!lib) return;
-      const list = this.placeFauna(P, b, wrecks[b]);
+      const list = this.placeFauna(area, b);
       if (!list.length) return;
       const g = new THREE.InstancedBufferGeometry();
       for (const name of ['position', 'normal', 'color', 'aux']) g.setAttribute(name, lib.getAttribute(name));
@@ -516,13 +534,16 @@ export class ReefLife {
     if (m.tiles[Math.floor(z) * m.w + Math.floor(x)] !== Tile.Water) return -1;
     const real = WATER_LEVEL - groundHeight(m, x, z);
     if (real < 0.03) return -1;
-    const f = seaFrame(m.w, m.h, this.sea.off, x, z, this.f);
+    if (!this.sea.hole) return real;
+    const f = frameUV(this.sea.hole, x, z, this.f);
     return lagoonDepth(f.u, f.v, real);
   }
 
   // ---------------------------------------------------------------- corals
 
-  private buildReef(P: FrameP, b: number, wreck: Wreck | undefined): THREE.BufferGeometry {
+  private buildReef(area: ReefArea, b: number): THREE.BufferGeometry {
+    const { P, wreck } = area;
+    const la0 = (u: number, v: number) => (area.lagoon ? lagoonAt(u, v) : NO_LAGOON);
     const k = new Kit();
     const aux: number[] = [];
     const mark = (alpha: number, sway: number, ph: number, alg = 0) => {
@@ -569,18 +590,18 @@ export class ReefLife {
     const L = LAGOON;
     // coral gardens: patchy clumps on the reef flat and the lagoon, crowding round the rim and the islets and
     // along the shore reef's crest
-    for (let u = -27; u < 8; u += 0.42)
-      for (let v = 0.3; v < 17; v += 0.42) {
+    for (let u = area.u0; u < area.u1; u += 0.42)
+      for (let v = 0.3; v < area.v1; v += 0.42) {
         const i = Math.round(u * 10) * 1000 + Math.round(v * 10);
         const uu = u + (h(i, 1) - 0.5) * 0.4;
         const vv = v + (h(i, 2) - 0.5) * 0.4;
         const p = P(uu, vv);
         const d = this.depthAt(p.x, p.y);
         if (d < 0.02 || d > 0.36) continue;
-        const la = lagoonAt(uu, vv);
+        const la = la0(uu, vv);
         const garden = hash2(Math.floor(uu / 1.7), Math.floor(vv / 1.7), 5107 + b * 11);
         const crest = (1 - la.plat) * ss(1.6, 2.6, vv) * (1 - ss(3.4, 4.2, vv));
-        const swim = uu > this.sea.beach[0] && uu < -5 && vv < 3.2 ? 0.35 : 1;
+        const swim = area.beach && uu > area.beach[0] && uu < area.beach[1] && vv < 3.2 ? 0.35 : 1;
         let pr = (garden > 0.55 ? 0.22 : 0.03) * la.plat + la.reef * 0.55 + crest * 0.32 + (1 - ss(0.2, 1.2, Math.abs(la.t - 0.2))) * 0.25;
         pr *= swim;
         if (h(i, 3) > pr) continue;
@@ -615,7 +636,9 @@ export class ReefLife {
 
   // ---------------------------------------------------------------- fauna
 
-  private placeFauna(P: FrameP, b: number, wreck: Wreck | undefined): Inst[] {
+  private placeFauna(area: ReefArea, b: number): Inst[] {
+    const { P, wreck } = area;
+    const la0 = (u: number, v: number) => (area.lagoon ? lagoonAt(u, v) : NO_LAGOON);
     const out: Inst[] = [];
     const h = (i: number, j: number) => hash2(i, j + b * 191, 5201);
     const L = LAGOON;
@@ -633,20 +656,28 @@ export class ReefLife {
       return true;
     };
     // fish schools: round the hole's rim and islets, over the lagoon, in the shallows off the beach, at the wreck
-    const schools: [number, number][] = [
-      [L.hu - 3.7, L.hv - 0.5],
-      [L.hu + 1.0, L.hv + 3.9],
-      [L.hu - 2.0, L.hv - 3.6],
-      [-6.2, 8.3],
-      [-4.0, 11.4],
-      [3.5, 10.0],
-      [-7.5, 4.0],
-      [-12.5, 1.9],
-      [-17.5, 2.2],
-      [-21.5, 1.6],
-      [-1.8, 2.4],
-      [2.5, 3.0],
-    ];
+    const um = (area.u0 + area.u1) / 2;
+    const uw = (area.u1 - area.u0) / 2;
+    const schools: [number, number][] = area.lagoon
+      ? [
+          [L.hu - 2.6, L.hv - 0.4],
+          [L.hu + 0.7, L.hv + 2.6],
+          [L.hu - 1.4, L.hv - 2.5],
+          [-3.4, 4.6],
+          [-2.2, 6.3],
+          [1.9, 5.5],
+          [-4.1, 2.2],
+          [-1.0, 1.4],
+          [1.4, 1.7],
+        ]
+      : [
+          [um - uw * 0.8, 2.0],
+          [um - uw * 0.45, 1.7],
+          [um - uw * 0.1, 2.3],
+          [um + uw * 0.3, 1.9],
+          [um + uw * 0.7, 2.6],
+          [um + uw * 0.15, 3.4],
+        ];
     const school = (cx: number, cz: number, idx: number, fixedR?: number) => {
       const rot = h(idx, 2) * 6.28;
       let R = fixedR ?? 0.6 + h(idx, 3) * 0.6;
@@ -678,9 +709,9 @@ export class ReefLife {
       school(wreckAt.x, wreckAt.z, 51, 1.35);
     }
     // larger fish cruising alone over the lagoon and along the drop-offs
-    for (let i = 0; i < 9; i++) {
-      const u = L.pu + (h(100 + i, 0) - 0.5) * L.pru * 1.5;
-      const v = L.pv + (h(100 + i, 1) - 0.5) * L.prv * 1.5;
+    for (let i = 0; i < (area.lagoon ? 9 : 4); i++) {
+      const u = area.lagoon ? L.pu + (h(100 + i, 0) - 0.5) * L.pru * 1.5 : um + (h(100 + i, 0) - 0.5) * uw * 1.6;
+      const v = area.lagoon ? L.pv + (h(100 + i, 1) - 0.5) * L.prv * 1.5 : 1.5 + h(100 + i, 1) * 3.5;
       const p = P(u, v);
       const rot = h(100 + i, 2) * 6.28;
       let R = 1.0 + h(100 + i, 3) * 1.2;
@@ -693,12 +724,12 @@ export class ReefLife {
     // starfish on the sand in the shallows
     let stars = 0;
     for (let i = 0; i < 400 && stars < 30; i++) {
-      const u = -24 + h(200 + i, 0) * 30;
-      const v = 0.4 + h(200 + i, 1) * 14;
+      const u = area.u0 + h(200 + i, 0) * (area.u1 - area.u0);
+      const v = 0.4 + h(200 + i, 1) * (area.v1 - 0.4);
       const p = P(u, v);
       const d = this.depthAt(p.x, p.y);
       if (d < 0.04 || d > 0.26) continue;
-      const la = lagoonAt(u, v);
+      const la = la0(u, v);
       if (la.reef > 0.15 || (la.plat < 0.5 && v > 3.4)) continue;
       const c = STARS[Math.floor(h(200 + i, 2) * STARS.length)];
       out.push({ a: [p.x, p.y, WATER_LEVEL - d + 0.004, 0.18 + h(200 + i, 3) * 0.08], b: [K.Star, 0, 0, 0], c: [c.r, c.g, c.b, h(200 + i, 4) * 6.28], d: [0, 0, 0, 0] });
@@ -706,8 +737,8 @@ export class ReefLife {
     }
     // jellyfish drifting over the lagoon and out over the drop-off and the hole (fading with the depth)
     for (let i = 0; i < 12; i++) {
-      const u = L.pu + (h(300 + i, 0) - 0.5) * L.pru * 1.8;
-      const v = 1.5 + h(300 + i, 1) * 15;
+      const u = area.lagoon ? L.pu + (h(300 + i, 0) - 0.5) * L.pru * 1.8 : um + (h(300 + i, 0) - 0.5) * uw * 1.8;
+      const v = 1.5 + h(300 + i, 1) * (area.v1 - 1.5);
       const p = P(u, v);
       const d = this.depthAt(p.x, p.y);
       if (d < 0.12) continue;
@@ -722,9 +753,10 @@ export class ReefLife {
       if (R <= 0.6) return;
       out.push({ a: [p.x, p.y, y, s], b: [kind, R, sp / R, h(idx, 2) * 6.28], c: [col.r, col.g, col.b, rot], d: [0, 0, 0, 0] });
     };
-    big(K.Turtle, L.hu - 4.5, L.hv + 1.5, 2.2, 0.2, 0.55, WATER_LEVEL - 0.1, C(0xffffff), 400);
-    big(K.Ray, L.hu + 3.5, L.hv + 1.0, 2.0, -0.24, 0.62, WATER_LEVEL - 0.17, C(0x4a4c50), 401);
-    big(K.Ray, -9.0, 3.0, 1.6, 0.24, 0.55, WATER_LEVEL - 0.16, C(0x6a6458), 402);
+    if (area.lagoon) {
+      big(K.Turtle, L.hu - 3.2, L.hv + 1.0, 1.6, 0.2, 0.55, WATER_LEVEL - 0.1, C(0xffffff), 400);
+      big(K.Ray, L.hu + 2.6, L.hv + 0.7, 1.5, -0.24, 0.62, WATER_LEVEL - 0.17, C(0x4a4c50), 401);
+    } else big(K.Ray, um + uw * 0.4, 3.0, 1.6, 0.24, 0.55, WATER_LEVEL - 0.16, C(0x6a6458), 402 + b);
     return out;
   }
 

@@ -1,9 +1,10 @@
 /*
- * The Blue Hole off Wadi Al-Rimal's beach (render only; the sim's sea there is plain deep water, so nothing
- * here touches pathing or the start areas). In each corner's sea frame (sim/map.ts seaFrame: u along the
- * coast, v seaward) a shallow reef lagoon bulges out from the shore reef; in it a near-circular, deep
- * hole ringed by an awash reef-flat rim with gaps (a C / horseshoe open to the sea), a bright turquoise
- * halo at its drop-off, small reef islets and patchy coral heads round it.
+ * The Blue Hole off Dahab, on the Sinai's Gulf of Aqaba shore north of Sharm (render only; the sim's sea there
+ * is plain gulf water, so nothing here touches pathing or the start areas). In its own frame (sim/map.ts
+ * SeaDeco.hole, frameUV: u along the shore, v seaward) a shallow reef lagoon bulges out from the shore reef
+ * into the narrow gulf; in it a near-circular, deep hole ringed by an awash reef-flat rim with gaps (a C /
+ * horseshoe open to the sea), a bright turquoise halo at its drop-off, small reef islets and patchy coral
+ * heads round it.
  *
  * The same analytic shape is used by the water shader (water.ts: the virtual depth that colours the water)
  * and on the CPU (reeflife.ts / seaside.ts: where corals, fish, starfish and the wreck go). Keep the two
@@ -12,32 +13,32 @@
 
 export const LAGOON = {
   /** The hole: centre (u, v) and the radius of its drop-off. */
-  hu: -0.5,
-  hv: 8.8,
-  R: 2.3,
+  hu: -0.3,
+  hv: 4.7,
+  R: 1.55,
   /** Width of the reef-flat rim round it. */
-  rimW: 1.15,
+  rimW: 0.85,
   /** The wide gap in the rim (direction in the frame, radians from +u towards +v) and its half width. */
   gapA: 1.95,
   gapW: 0.42,
-  /** The lagoon platform: an ellipse (centre, radii) joining the shore reef. */
-  pu: -1.2,
-  pv: 7.6,
-  pru: 8.6,
-  prv: 7.2,
+  /** The lagoon platform: an ellipse (centre, radii) joining the shore reef (most of the gulf's width). */
+  pu: -0.7,
+  pv: 4.1,
+  pru: 5.0,
+  prv: 4.0,
   /** Reef islets: (u, v, radius). */
   islets: [
-    [-6.2, 9.8, 0.75],
-    [4.6, 11.6, 0.55],
-    [-4.0, 13.0, 0.6],
-    [-8.2, 6.4, 0.5],
-    [2.8, 4.6, 0.45],
-    [-2.2, 13.2, 0.42],
+    [-3.5, 5.4, 0.55],
+    [2.6, 6.3, 0.42],
+    [-2.3, 7.2, 0.45],
+    [-4.6, 3.4, 0.38],
+    [1.6, 2.5, 0.34],
+    [-1.2, 7.4, 0.32],
   ] as [number, number, number][],
   /** The wreck on the rim: direction from the hole centre (radians), bow / stern offsets from the drop-off. */
   wreckA: -0.3,
   wreckBow: 0.85,
-  wreckStern: -1.45,
+  wreckStern: -1.2,
 };
 
 const ss = (a: number, b: number, x: number) => {
@@ -83,7 +84,7 @@ export function lagoonAt(u: number, v: number): LagoonAt {
   }
   const reef = Math.max(rim, isl);
   const virt = pdp + (0.025 - pdp) * reef;
-  const wall = 4.5 * Math.pow(ss(0.1, -1.6, t), 1.8);
+  const wall = 4.5 * Math.pow(ss(0.1, -1.1, t), 1.8);
   return { plat, virt, wall, reef, t };
 }
 
@@ -122,7 +123,7 @@ export const LAGOON_GLSL = /* glsl */ `
       .join('\n    ')}
     float reef = max( rim, isl );
     float virt = mix( pdp, 0.025, reef );
-    float wall = 4.5 * pow( 1.0 - smoothstep( -1.6, 0.1, t ), 1.8 );
+    float wall = 4.5 * pow( 1.0 - smoothstep( -1.1, 0.1, t ), 1.8 );
     return vec4( plat, mix( real, max( min( real, virt ), wall ), plat ), reef * plat, t );
   }
 `;

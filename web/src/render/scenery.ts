@@ -16,6 +16,7 @@ import { buildFarm } from './farm';
 import { buildStreetLife } from './streetlife';
 import { sinaiKit } from './sinaikit';
 import { buildSinaiTown, isSinaiKind } from './sinaitown';
+import { TOWN_ACCENTS, TOWN_WALLS, townStyle } from './townstyle';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -200,7 +201,10 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
     const base = new THREE.Matrix4().compose(V(cx, gmin, cz), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), (st.rot * Math.PI) / 2), V(1, 1, 1));
     const L = (lm: THREE.Matrix4) => base.clone().multiply(lm);
     const h = (k: number) => hash2(st.x * 7 + k, st.y * 13, 911);
-    const wallC = new THREE.Color(wallColors[Math.floor(h(1) * wallColors.length)]);
+    // (the Sinai's towns each in their own palette: townstyle.ts)
+    const town = bc === 1 ? townStyle(m, st) : 2;
+    const wallsOf = town === 2 ? wallColors : TOWN_WALLS[town];
+    const wallC = new THREE.Color(wallsOf[Math.floor(h(1) * wallsOf.length)]);
     const roofC = new THREE.Color(roofColors[Math.floor(h(2) * roofColors.length)]);
     const glass = new THREE.Color(0.12, 0.15, 0.18);
     const frame = new THREE.Color(0.9, 0.9, 0.86);
@@ -322,10 +326,10 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
      * slim minaret (generic). Shutters, doors and awnings in Sinai blue, turquoise, green or terracotta.
      */
     const sharmBuilding = (st: Structure) => {
-      const accents = [new THREE.Color(0.18, 0.4, 0.66), new THREE.Color(0.16, 0.56, 0.56), new THREE.Color(0.24, 0.46, 0.3), new THREE.Color(0.7, 0.36, 0.22), new THREE.Color(0.85, 0.66, 0.28)];
+      const accents = TOWN_ACCENTS[town].map(([r, g, b]) => new THREE.Color(r, g, b));
       const acc = accents[Math.floor(h(51) * accents.length)];
       const acc2 = accents[Math.floor(h(52) * accents.length)];
-      const wc2 = new THREE.Color(wallColors[Math.floor(h(53) * wallColors.length)]);
+      const wc2 = new THREE.Color(wallsOf[Math.floor(h(53) * wallsOf.length)]);
       const dark = new THREE.Color(0.1, 0.09, 0.085);
       const white = new THREE.Color(1, 1, 1);
       const post = new THREE.Color(0.42, 0.3, 0.2);

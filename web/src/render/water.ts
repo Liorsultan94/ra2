@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
@@ -1281,6 +1281,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   const rap = river.features.rapids;
   const rapC = rap ? river.sample((rap.s0 + rap.s1) / 2) : null;
   const rapF = rapC ? new THREE.Vector4(rapC.x, rapC.y, rapC.tx, rapC.ty) : new THREE.Vector4(0, 0, 1, 0);
+  const sea = m.deco?.sea;
+  const frameU = (f?: { x: number; y: number; ang: number }) => new THREE.Vector4(f?.x ?? -1e4, f?.y ?? -1e4, Math.cos(f?.ang ?? 0), Math.sin(f?.ang ?? 0));
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -1320,8 +1322,13 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       // the river's main axis: a stable frame for the pier wakes (no per-pixel flow direction: it marbles)
       wAxis: { value: new THREE.Vector2(river.ax, river.ay) },
       wStill: { value: m.biome === 'desert' ? 1 : 0 },
-      // the desert's Red Sea corners (sim/map.ts seaFrame): coast offset, on, map centre
-      wSea: { value: new THREE.Vector4(m.deco?.sea?.off ?? 0, m.deco?.sea ? 1 : 0, m.w / 2, m.h / 2) },
+      // the Sinai's seas (sim/map.ts seaDist): on, the map centre, the open seas' coast offsets (past the map edge);
+      // their seaward distance baked over the map (seaTexture); the Blue Hole's and Tiran's frames
+      wSea: { value: new THREE.Vector4(sea ? 1 : 0, sea?.c ?? 0, sea?.top ?? 0, sea?.bottom ?? 0) },
+      seaTex: { value: sea ? seaTexture(m) : null },
+      wHole: { value: frameU(sea?.hole) },
+      wIsle: { value: frameU(sea?.isle) },
+      wIsleR: { value: new THREE.Vector2(sea?.isle?.ru ?? 1, sea?.isle?.rv ?? 1) },
       wState3: RIVER.wState3,
       wJetty: RIVER.wJetty,
       wJettyN: RIVER.wJettyN,
@@ -1381,6 +1388,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform vec2 wAxis;
       uniform float wStill;
       uniform vec4 wSea;
+      uniform sampler2D seaTex;
+      uniform vec4 wHole;
+      uniform vec4 wIsle;
+      uniform vec2 wIsleR;
       uniform vec4 wState3;
       uniform vec4 wJetty[2];
       uniform vec2 wJettyN;
@@ -1394,6 +1405,21 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       vec2 waveN(vec2 uv) { return texture2D(waveTex, uv).rg * 2.0 - 1.0; }
       ${LAGOON_GLSL}
       ${SEA_SCATTER_GLSL}
+      // seaward distance from the coast (> 0 sea): baked over the map (the gulfs, the open seas); past its edge (the
+      // outskirts' belt) the open seas' twin coasts, as horizonworld.ts
+      float seaAt( vec2 p ) {
+        vec2 q = p / mapSize;
+        if ( q.x > 0.0 && q.y > 0.0 && q.x < 1.0 && q.y < 1.0 ) return texture2D( seaTex, q ).r;
+        float e = ( p.x - p.y ) * 0.70711;
+        float s = ( p.x + p.y - 2.0 * wSea.y ) * 0.70711;
+        float wg = 2.6 * cos( e * 0.047 ) + 1.5 * cos( e * 0.131 );
+        return max( -s - wSea.z + wg, s - wSea.w + wg );
+      }
+      // map point p in a seaside frame (sim/map.ts frameUV): u along the shore, v seaward
+      vec2 frameUV( vec4 f, vec2 p ) {
+        vec2 d = p - f.xy;
+        return vec2( d.x * f.z + d.y * f.w, d.x * f.w - d.y * f.z );
+      }
       void main() {
         vec2 p = vWorld.xz;
         vec2 tuv = p / mapSize;
@@ -1401,14 +1427,13 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         float depthW = waterLevel - ground;
         // (the Red Sea's swash zone runs up the beach above the still waterline: a sheet draped on the sand, vH)
         if (vH <= 0.0 && depthW <= 0.0) discard;
-        // the Red Sea (north-west desert corner): seaward distance from the coast, as the sim's seaFrame
+        // the Sinai's seas: seaward distance from the coast (sim/map.ts seaDist; the canal and the oases are still water)
         float seaK = 0.0;
         float seaV = -1e3;
         float su = 0.0;
-        if (wSea.y > 0.5) {
-          vec2 pc = p - wSea.zw;
-          su = (pc.x - pc.y) * 0.70711;
-          seaV = -(pc.x + pc.y) * 0.70711 - wSea.x + 4.0 * sin(su * 0.045) + 2.5 * sin(su * 0.13 + 1.0);
+        if (wSea.x > 0.5) {
+          su = (p.x - p.y) * 0.70711;
+          seaV = seaAt(p);
           seaK = smoothstep(-15.5, -10.0, seaV);
         }
         // the swash on the beaches (DP1): every wave runs up the sand and back, a thin sheet with a soft foam
@@ -1450,7 +1475,8 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // the Blue Hole's lagoon (bluehole.ts): x platform, y water depth for colour, z awash reef, w signed
         // distance to the hole's drop-off; dV: the depth the water is coloured by (the real one elsewhere)
         vec4 lag = vec4(0.0, depthW, 0.0, 1e3);
-        if (wSea.y > 0.5 && abs(su - ${LAGOON.pu.toFixed(2)}) < ${(LAGOON.pru + 1.5).toFixed(2)} && abs(seaV - ${LAGOON.pv.toFixed(2)}) < ${(LAGOON.prv + 1.5).toFixed(2)}) lag = lagoon(su, seaV, depthW);
+        vec2 lq = frameUV(wHole, p);
+        if (wSea.x > 0.5 && abs(lq.x - ${LAGOON.pu.toFixed(2)}) < ${(LAGOON.pru + 1.5).toFixed(2)} && abs(lq.y - ${LAGOON.pv.toFixed(2)}) < ${(LAGOON.prv + 1.5).toFixed(2)}) lag = lagoon(lq.x, lq.y, depthW);
         float dV = lag.y;
         float still = wStill * (1.0 - seaK);
         vec4 dat = texture2D(waterData, tuv);
@@ -1618,7 +1644,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           // the Red Sea's depth ramp: clear and light over the sand at the shore, light turquoise over the reef
           // flat and the lagoon, blue past the drop-off, deepening to the open sea's dark navy offshore (the
           // horizon's sea beyond the map edge: horizon.ts) and near black-navy down the Blue Hole
-          float dO = dV + smoothstep(6.0, 14.0, seaV) * 0.7 * (1.0 - lag.x) * smoothstep(0.45, 1.0, dV);
+          float dO = dV + smoothstep(4.5, 11.0, seaV) * 0.7 * (1.0 - lag.x) * smoothstep(0.45, 1.0, dV);
           vec3 sea = seaScatter(dO);
           scatter = mix(scatter, mix(sea, vec3(0.11, 0.09, 0.045), mud), seaK);
         }
@@ -1823,8 +1849,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
             foam = max(foam, rr * smoothstep(0.3, 0.75, rz * 0.7 + pul * 0.35) * 0.55 * (1.0 - 0.5 * dark));
           }
           // dynamic surf breaking around the offshore lighthouse island's shallow reef rim
-          float idu = (su - 11.8) / 2.8;
-          float idv = (seaV - 7.0) / 2.15;
+          vec2 iq = frameUV(wIsle, p);
+          float idu = iq.x / wIsleR.x;
+          float idv = iq.y / wIsleR.y;
           float ir = length(vec2(idu, idv));
           if (ir > 0.85 && ir < 1.65) {
             float ipul = 0.5 + 0.5 * sin(ir * 14.0 - time * 1.65 + atan(idv, idu) * 3.0);
@@ -1934,6 +1961,32 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
 }
 
 /**
+ * The Sinai's seaward distance (sim/map.ts seaDist) baked over the map, 2 texels per tile (half floats, linear):
+ * the water shader's seaV. Water the sea does not reach - the Suez Canal and its lakes, the oases - reads far
+ * inland (still water).
+ */
+function seaTexture(m: GameMap): THREE.DataTexture {
+  const sea = m.deco!.sea!;
+  const R = 2;
+  const w = m.w * R;
+  const h = m.h * R;
+  const data = new Uint16Array(w * h);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const x = (i + 0.5) / R;
+      const y = (j + 0.5) / R;
+      let v = seaDist(sea, x, y);
+      if (v < -0.8 && m.tiles[Math.floor(y) * m.w + Math.floor(x)] === Tile.Water) v = -40;
+      data[j * w + i] = THREE.DataUtils.toHalfFloat(Math.max(-40, Math.min(40, v)));
+    }
+  const t = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.HalfFloatType);
+  t.magFilter = t.minFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
  * Quads over the tiles that are (partly) under water, plus a margin, instead of a map-wide sheet. By the Red Sea
  * (DP1) the tiles along the waterline are a sheet draped on the beach instead (the ground mesh's own grid and
  * diagonals, a hair above it): its aH (height above the still water, > 0 on the sand) carries the swash and the
@@ -1947,17 +2000,8 @@ function waterGeometry(m: GameMap): THREE.BufferGeometry {
   const H = m.h;
   const vh = (x: number, y: number) => m.heights[Math.max(0, Math.min(H, y)) * (W + 1) + Math.max(0, Math.min(W, x))];
   const sea = m.deco?.sea ?? null;
-  // the sea's seaward distance (water shader: wSea), so the band stays off the oases
-  const seaV = (x: number, y: number) => {
-    let px = x - W / 2;
-    let py = y - H / 2;
-    if (px + py > 0) {
-      px = -px;
-      py = -py;
-    }
-    const su = (px - py) * 0.70711;
-    return -(px + py) * 0.70711 - (sea?.off ?? 0) + 4 * Math.sin(su * 0.045) + 2.5 * Math.sin(su * 0.13 + 1);
-  };
+  // the sea's seaward distance (water shader: seaAt), so the band stays off the oases and the canal
+  const seaV = (x: number, y: number) => (sea ? seaDist(sea, x, y) : -1e3);
   const wet = new Uint8Array(W * H);
   const band = new Uint8Array(W * H);
   for (let y = 0; y < H; y++)

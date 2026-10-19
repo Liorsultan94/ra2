@@ -1,10 +1,10 @@
 // Skirmish maps. Frontline Crossing (map.ts) is the temperate original; this
 // module adds three hand-designed, point-symmetric two player maps with their
-// own climates - a desert wadi with mesas and oases, a frozen river valley and
-// a canal city - and the `createMap` dispatcher the world uses.
+// own climates - the Sinai Peninsula, a frozen river valley and a canal city -
+// and the `createMap` dispatcher the world uses.
 //
-// Every layout is fixed in code for player 0's half and mirrored through the
-// map centre (fair starts). The seed only varies the details (dune and hill
+// Every layout is fixed in code for player 0's half and mirrored (fair starts):
+// through the map centre, or across the diagonal for the Sinai (GameMap.mirror). The seed only varies the details (dune and hill
 // noise, forest patches, river meanders, which building stands on which city
 // lot, palms, ...) through its own Rng, never the world's, so two clients with
 // the same seed build bit-identical maps. Generators validate as they go:
@@ -17,18 +17,19 @@ import {
   StructureKind,
   Tile,
   WATER_LEVEL,
-  BIG_MAP,
   createFrontlineMap,
-  designScale,
   distToSegment,
   sealPockets,
   smoothstep,
-  coastV,
-  coastWiggle as coastWiggleOf,
-  seaFrame,
-  isleDist,
+  frameUV,
+  framePoint,
+  isleAt,
+  seaDist,
   ISLE_KNOLL,
   type SeaDeco,
+  type SeaFrame,
+  type SeaGrid,
+  SEA_GRID_Q,
   type Biome,
   type GameMap,
   type MapDeco,
@@ -37,6 +38,7 @@ import {
   type Structure,
 } from './map';
 import { Rng, fbm, hash2 } from './rng';
+import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from './sinaimask';
 
 void BRIDGE_HEIGHT;
 
@@ -53,7 +55,7 @@ export interface MapInfo {
 
 export const MAPS: MapInfo[] = [
   { id: 'frontline', name: 'Frontline Crossing', biome: 'temperate', blurb: 'River valley, villages, three bridges', region: 'Temperate river valley' },
-  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'Red Sea coast: granite peaks, a wadi, oases and beaches', region: 'Desert coast on the Red Sea' },
+  { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'The Sinai: two gulfs, crossings at their heads, Sharm and the high massif', region: 'The Sinai Peninsula between the Gulfs of Suez and Aqaba' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
 ];
@@ -78,17 +80,23 @@ export function createMap(id: MapId = 'frontline', seed = 1): GameMap {
 
 // ------------------------------------------------------------------ shared
 
-// The map being built (each generator sets it first: Wadi Al-Rimal is BIG_MAP, the others 96 x 96).
+// The map being built (each generator sets it first: Wadi Al-Rimal is SINAI_N, the others 96 x 96).
 let W = 96;
 let H = 96;
 let CX = (W - 1) / 2;
-let CY = (H - 1) / 2;
-function mapSize(n: number) {
+/** The halves mirror across the x == y diagonal, not through the centre (GameMap.mirror). */
+let TRANS = false;
+/** No mirror at all (the Sinai traced from the owner's picture: GameMap.mirror 'none'). */
+let NOMIRROR = false;
+function mapSize(n: number, trans = false, none = false) {
   W = H = n;
-  CX = CY = (n - 1) / 2;
+  CX = (n - 1) / 2;
+  TRANS = trans;
+  NOMIRROR = none;
 }
 
-const mirror = (p: Point): Point => ({ x: W - 1 - p.x, y: H - 1 - p.y });
+/** Mirror of a tile-index point (tile centres at integers) onto the other player's half. */
+const mirror = (p: Point): Point => (TRANS ? { x: p.y, y: p.x } : { x: W - 1 - p.x, y: H - 1 - p.y });
 const half = <T extends Point>(arr: T[]): T[] => [...arr, ...arr.map((p) => ({ ...p, ...mirror(p) }))];
 
 interface Field extends Point {
@@ -108,11 +116,11 @@ function mines(fields: Field[]): Point[] {
 }
 
 /** Oil derricks are 2 x 2 from their top-left tile: the mirrored footprint starts one tile further in. */
-const halfOils = (arr: Point[]): Point[] => [...arr, ...arr.map((p) => ({ x: W - 2 - p.x, y: H - 2 - p.y }))];
+const halfOils = (arr: Point[]): Point[] => [...arr, ...arr.map((p) => (TRANS ? { x: p.y, y: p.x } : { x: W - 2 - p.x, y: H - 2 - p.y }))];
 
 /** Mirror capsules (both end points). */
 function halfCapsules(arr: Capsule[]): Capsule[] {
-  return [...arr, ...arr.map((c) => ({ x: W - 1 - c.x, y: H - 1 - c.y, x2: W - 1 - c.x2, y2: H - 1 - c.y2, r: c.r }))];
+  return [...arr, ...arr.map((c) => (TRANS ? { x: c.y, y: c.x, x2: c.y2, y2: c.x2, r: c.r } : { x: W - 1 - c.x, y: H - 1 - c.y, x2: W - 1 - c.x2, y2: H - 1 - c.y2, r: c.r }))];
 }
 
 /*
@@ -120,10 +128,10 @@ function halfCapsules(arr: Capsule[]): Capsule[] {
  * (vx, vy) at (vx - 0.5, vy - 0.5)), where the mirror is p -> 95 - p, so every test below is
  * exactly point symmetric.
  */
-/** Point-symmetric fbm (average of the field and its mirror). */
-const symNoise = (x: number, y: number, scale: number, seed: number) => (fbm(x * scale, y * scale, seed) + fbm((W - 1 - x) * scale, (H - 1 - y) * scale, seed)) / 2;
-/** Point-symmetric tile hash. */
-const symHash = (x: number, y: number, seed: number) => (hash2(x, y, seed) + hash2(W - 1 - x, H - 1 - y, seed)) / 2;
+/** Symmetric fbm (average of the field and its mirror; tile-index space). */
+const symNoise = (x: number, y: number, scale: number, seed: number) => (fbm(x * scale, y * scale, seed) + (TRANS ? fbm(y * scale, x * scale, seed) : fbm((W - 1 - x) * scale, (H - 1 - y) * scale, seed))) / 2;
+/** Symmetric tile hash. */
+const symHash = (x: number, y: number, seed: number) => (hash2(x, y, seed) + (TRANS ? hash2(y, x, seed) : hash2(W - 1 - x, H - 1 - y, seed))) / 2;
 
 /** River / wadi along the x == y diagonal: offset across it at diagonal coordinate s (odd around the centre: symmetric). */
 function riverShape(a1: number, k1: number, a2: number, k2: number) {
@@ -172,8 +180,11 @@ function markRoads(g: Grids, roads: Point[][], halfW: number[], over: Tile[]) {
   });
 }
 
-/** Ore / gem fields (same shape rules as Frontline Crossing, symmetric jitter). */
-function paintOre(g: Grids, fields: Field[], sandTo: Tile = Tile.Dirt) {
+/**
+ * Ore / gem fields (same shape rules as Frontline Crossing, symmetric jitter). `local`: the jitter follows each
+ * field's own offsets (integer centres), so fields of the same size paint alike wherever they lie (an unmirrored map).
+ */
+function paintOre(g: Grids, fields: Field[], sandTo: Tile = Tile.Dirt, local = false) {
   for (const f of fields) {
     for (let y = Math.floor(f.y - f.r - 1); y <= f.y + f.r + 1; y++) {
       for (let x = Math.floor(f.x - f.r - 1); x <= f.x + f.r + 1; x++) {
@@ -182,7 +193,7 @@ function paintOre(g: Grids, fields: Field[], sandTo: Tile = Tile.Dirt) {
         const t = g.tiles[i];
         if (t === Tile.Water || t === Tile.Rock || t === Tile.Bridge) continue;
         const d = Math.hypot(x - f.x, y - f.y);
-        if (d < f.r + symHash(x, y, 7) * 1.2 - 0.6) {
+        if (d < f.r + (local ? hash2(x - f.x, y - f.y, 7) : symHash(x, y, 7)) * 1.2 - 0.6) {
           g.oreKind[i] = f.kind;
           g.ore[i] = Math.min(ORE_MAX, Math.max(2, Math.round(ORE_MAX * (1 - d / (f.r + 1.5)) + 2)));
           if (t === Tile.Sand) g.tiles[i] = sandTo;
@@ -256,7 +267,7 @@ function unblockTrees(g: Grids, start: Point) {
     if (!clear.length) return;
     for (const i of clear) {
       g.trees[i] = 0;
-      g.trees[W * H - 1 - i] = 0; // mirror tile
+      g.trees[TRANS ? (i % W) * W + ((i / W) | 0) : W * H - 1 - i] = 0; // mirror tile
     }
   }
 }
@@ -275,6 +286,8 @@ interface PlaceOpts {
   /** Max height difference over the whole footprint: a pair on steeper ground moves up to a tile to a gentler spot, else is skipped. */
   footFlat?: number;
   tilesOk: Tile[];
+  /** An unmirrored map: each structure's twin (the same length as the layout; placed both or neither). */
+  pairs?: Structure[];
 }
 
 /**
@@ -283,13 +296,19 @@ interface PlaceOpts {
  * flood fill makes sure it cuts nothing off; failures are skipped.
  */
 function placeStructures(g: Grids, layout: Structure[], o: PlaceOpts) {
-  const all = [
+  // (a transposed footprint swaps its sides; rot r faces (0,-1), (1,0), (0,1), (-1,0) for r = 0..3: mirrored 3 - r)
+  // (an unmirrored map without twins: each structure stands on its own)
+  const single = NOMIRROR && !o.pairs;
+  const all = single ? layout : o.pairs ? [...layout, ...o.pairs] : [
     ...layout,
     ...layout.map((st) => {
+      if (TRANS) return { ...st, x: st.y, y: st.x, w: st.h, h: st.w, rot: (3 - st.rot) & 3 };
       const p = mirror({ x: st.x + st.w - 1, y: st.y + st.h - 1 });
       return { ...st, x: p.x, y: p.y, rot: (st.rot + 2) % 4 };
     }),
   ];
+  /** A structure that is its own mirror image (on the mirror axis): it stands once. */
+  const self = (a: Structure, b: Structure) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
   const blocked = new Uint8Array(W * H);
   const structures: Structure[] = [];
   const vh = (vx: number, vy: number) => g.heights[vy * (W + 1) + vx];
@@ -344,17 +363,17 @@ function placeStructures(g: Grids, layout: Structure[], o: PlaceOpts) {
     [-1, 1],
   ];
   for (let k = 0; k < n; k++) {
-    let pair = [all[k], all[k + n]];
+    let pair = single || self(all[k], all[k + n]) ? [all[k]] : [all[k], all[k + n]];
     if (!fits(pair)) continue;
     if (!gentle(pair)) {
       // too steep where it was drawn: the nearest gentle spot a tile away (mirrored), if any
       const base = pair;
       pair = [];
       for (const [dx, dy] of nudges) {
-        const q = [
-          { ...base[0], x: base[0].x + dx, y: base[0].y + dy },
-          { ...base[1], x: base[1].x - dx, y: base[1].y - dy },
-        ];
+        const q = [{ ...base[0], x: base[0].x + dx, y: base[0].y + dy }];
+        if (base.length > 1) q.push(TRANS ? { ...base[1], x: base[1].x + dy, y: base[1].y + dx } : { ...base[1], x: base[1].x - dx, y: base[1].y - dy });
+        // (a structure on the axis only moves along it)
+        else if (TRANS && dx !== dy) continue;
         if (fits(q) && gentle(q)) {
           pair = q;
           break;
@@ -392,192 +411,540 @@ function emptyDeco(): MapDeco {
 
 /** Mirror a list of polylines (each reversed so it reads from the other base). */
 const mirrorLines = (lines: Point[][]) => lines.map((l) => [...l].reverse().map(mirror));
-const mirrorRects = <T extends { x0: number; y0: number; x1: number; y1: number }>(rs: T[]) => [...rs, ...rs.map((r) => ({ ...r, x0: W - r.x1, y0: H - r.y1, x1: W - r.x0, y1: H - r.y0 }))];
+const mirrorRects = <T extends { x0: number; y0: number; x1: number; y1: number; rows?: 0 | 1 }>(rs: T[]) => [
+  ...rs,
+  ...rs.map((r) => (TRANS ? { ...r, x0: r.y0, y0: r.x0, x1: r.y1, y1: r.x1, ...(r.rows !== undefined ? { rows: (1 - r.rows) as 0 | 1 } : {}) } : { ...r, x0: W - r.x1, y0: H - r.y1, x1: W - r.x0, y1: H - r.y0 })),
+];
 
 function assemble(
   base: { name: string; id: MapId; biome: Biome },
   g: Grids,
   more: Pick<GameMap, 'oreMines' | 'starts' | 'oils' | 'bridges' | 'roads' | 'structures' | 'blocked' | 'techSites' | 'lanes' | 'deco' | 'offshore'>,
 ): GameMap {
-  return { ...base, w: W, h: H, tiles: g.tiles, heights: g.heights, trees: g.trees, ore: g.ore, oreKind: g.oreKind, ...more };
+  return { ...base, w: W, h: H, tiles: g.tiles, heights: g.heights, trees: g.trees, ore: g.ore, oreKind: g.oreKind, ...(TRANS ? { mirror: 'transpose' as const } : NOMIRROR ? { mirror: 'none' as const } : {}), ...more };
 }
 
 // ================================================================== desert
 
-/**
- * "Wadi Al-Rimal": open dune country split by a dry wadi that runs corner to
- * corner, with palm-ringed oases on it and a walled oasis town at the centre.
- * Sandstone mesas (impassable, high) funnel the approaches into a few passes;
- * there are no bridges - the wadi is crossed anywhere, but its oases and the
- * mesas make the centre ring road and the two outer passes the lanes.
- * The Red Sea cuts across the two neutral corners (north-west and south-east, as far from either
- * base): a coral reef shelf, beaches, a cove between granite headlands and a resort compound
- * (DESERT_SEA); the massifs and mesas are South Sinai granite (render: biome / relief).
+/*
+ * "Wadi Al-Rimal": the Sinai Peninsula (SN1), its coasts traced from the owner's picture of it (sim/sinaimask.ts, a
+ * satellite view, north up): the Mediterranean along the top, the long Gulf of Suez slanting down the west and the
+ * narrower Gulf of Aqaba slanting down the east, both opening into the Red Sea round the southern tip (Sharm
+ * el-Sheikh). Map north is the top of the screen (the tile map's north-west corner). Player 0 (blue) starts on the
+ * Egyptian mainland west of the gulf of Suez's head, player 1 (red) on the Arabian mainland east of the lower Gulf of
+ * Aqaba, both where the owner marked them. There are no bridges: armies cross over land at the head of each gulf -
+ * on the west the isthmus between the Mediterranean and the Gulf of Suez, on the east between the Gulf of Aqaba and
+ * the granite ridge running north from it to the sea - each with its village on the Sinai side.
+ *
+ * Fairness: the sides are not mirror images (the real coasts are not). What each player holds is kept equal by hand:
+ * the ground round each base is laid out once in the base's own frame and turned half round for the other (buildings
+ * turn half round too: turn.ts), and everything else comes in pairs - one nearer each base by road (ore fields of the
+ * same size, oil, tech sites, villages and towns of the same houses placed both or neither). bench/sinai-fair.test.ts
+ * prints the numbers. Positions below are pixels of the picture (u east, v south; 250 x 270) unless stated.
  */
+
+/** The Sinai map's size (tiles). */
+export const SINAI_N = 176;
+const R2 = Math.SQRT2;
+/** Tiles per pixel of the owner's picture, and the picture pixel at the map's centre. */
+const PK = 0.48;
+const PU = 125;
+const PV = 135;
+/** Screen south (tiles from the top corner) of the map's centre. */
+const SC = (SINAI_N / 2) * R2;
+/** Continuous map point of screen position (e east, s south of the map's top corner; tiles). */
+const scr = (e: number, s: number): Point => ({ x: (s + e) / R2, y: (s - e) / R2 });
+/** Continuous map point of picture pixel (u, v). */
+const pp = (u: number, v: number): Point => scr((u - PU) * PK, SC + (v - PV) * PK);
+/** Continuous map point of a pixel of the owner's picture (the render's landmarks use it). */
+export const sinaiPoint = (u: number, v: number): Point => pp(u, v);
+/** Tile-index point (a tile's centre at its index) of a continuous point. */
+const ti = (p: Point): Point => ({ x: p.x - 0.5, y: p.y - 0.5 });
+/** Tile-index point of picture pixel (u, v). */
+const pi = (u: number, v: number): Point => ti(pp(u, v));
+/** Screen east / south of continuous map point (x, y). */
+const scrE = (x: number, y: number) => (x - y) / R2;
+const scrS = (x: number, y: number) => (x + y) / R2;
+/** Picture pixel of continuous map point (x, y). */
+const toPx = (x: number, y: number) => ({ u: PU + scrE(x, y) / PK, v: PV + (scrS(x, y) - SC) / PK });
+/** The point de east, ds south (screen tiles) of continuous point p. */
+const offs = (p: Point, de: number, ds: number): Point => ({ x: p.x + (ds + de) / R2, y: p.y + (ds - de) / R2 });
+
+/** The owner's marks: blue on the Egyptian mainland, red on the Arabian. */
+const START_PX: [number, number][] = [
+  [11, 67],
+  [214, 183],
+];
+const BASES = START_PX.map(([u, v]) => pp(u, v));
+/**
+ * The ground round a base in that base's frame (screen tiles from it; player 0's, turned half round for player 1:
+ * the Mediterranean north of blue's base is the Red Sea south of red's, the Gulf of Suez east of it the Gulf of
+ * Aqaba west of red's).
+ */
+const own = (side: number, de: number, ds: number): Point => (side === 0 ? offs(BASES[0], de, ds) : offs(BASES[1], -de, -ds));
+
+/**
+ * The old 160 x 160 layout's interior of the Sinai (the St Catherine massif, its graded tracks, the coloured canyon
+ * and its highland, the oasis gorge) keeps its shape: screen positions of that layout (e, s), moved OLD_UP tiles up
+ * the diagonal into the traced peninsula.
+ */
+export const SINAI_OLD_UP = 10;
+const OLD_UP = SINAI_OLD_UP;
+const oldAt = (e: number, s: number): Point => scr(e, s - OLD_UP * R2);
+
+/** The open seas past the picture (sim/map.ts openSeaDist): the coasts at its left and right edges. */
+const MED_OFF = (PV - 50) * PK;
+const RED_OFF = (200 - PV) * PK;
+
+/** The granite ridge from the Mediterranean down to the head of the Gulf of Aqaba (east; impassable): capsule. */
+const RIDGE_PX: [number, number, number, number] = [234, 6, 241, 68];
+const RIDGE_HW = 3.2;
+/** The AI's crossings: the isthmus at the head of the Gulf of Suez, the gap between the ridge and the Gulf of Aqaba. */
+const CROSS_PX: [number, number][] = [
+  [42, 61],
+  [240, 79],
+];
+
+/** Ore fields (u, v, radius, kind 1 ore / 2 gems): pairs, the first nearer blue by road, the second nearer red. */
+const SINAI_ORE_PAIRS: [[number, number, number, number], [number, number, number, number]][] = [
+  // (the fields in the Sinai nearest blue's crossing; red's twins in the north-east corner and on its mainland)
+  [
+    [76, 80, 3.0, 1],
+    [268, 124, 3.0, 1],
+  ],
+  [
+    [70, 146, 3.0, 1],
+    [268, 100, 3.0, 1],
+  ],
+  [
+    [112, 108, 2.4, 2],
+    [300, 140, 2.4, 2],
+  ],
+];
+/** Each base's own fields (screen tiles in its frame: own()). */
+const BASE_ORE: [number, number, number, number][] = [
+  // (the home fields due west and south of blue's base, due east and north of red's: the refinery docks face +y for
+  // blue and -y for red, turn.ts, so they relate to them alike)
+  [-17, 0, 3.6, 1],
+  [-6, 15, 3.2, 1],
+  [-34, 10, 3.0, 1],
+  [-30, 22, 2.4, 2],
+];
+/** Oil derricks (centres): each base's own (screen tiles in its frame) and pairs in the Sinai. */
+const BASE_OIL: [number, number][] = [
+  [-9, 9],
+  [-22, 4],
+];
+const SINAI_OIL_PAIRS: [[number, number], [number, number]][] = [
+  [
+    [84, 86],
+    [262, 82],
+  ],
+  [
+    [92, 98],
+    [240, 148],
+  ],
+];
+/** Tech sites: candidate spots for blue and, candidate for candidate, red's (base frame, or Sinai pixel pairs). */
+const BASE_TECH: { def: string; at: [number, number][] }[] = [
+  { def: 'tech_hospital', at: [[-8, 18], [-10, 20], [-6, 20], [-12, 16]] },
+  { def: 'tech_airport', at: [[-36, 30], [-38, 30], [-34, 32], [-38, 28]] },
+];
+const SINAI_TECH: { def: string; at: [number, number][]; at2: [number, number][] }[] = [
+  { def: 'tech_comms', at: [[92, 74], [96, 76], [88, 72], [98, 72], [94, 80], [90, 68]], at2: [[248, 142], [246, 146], [250, 138], [244, 140], [252, 146], [242, 136]] },
+  { def: 'tech_hospital', at: [[104, 86], [108, 88], [100, 84], [110, 84], [106, 92], [102, 80]], at2: [[190, 70], [184, 74], [196, 64], [178, 80], [200, 58], [172, 70]] },
+];
+
+/** The massif of south Sinai (St Catherine): crest spines of the old layout (e, s, height), each with its mirror. */
+const SINAI_MASSIF: { e: number; s: number; h: number }[][] = [
+  [
+    { e: -19.5, s: 139, h: 2.0 },
+    { e: -17, s: 142, h: 3.4 },
+    { e: -13, s: 147, h: 4.6 },
+    { e: -7, s: 151, h: 3.8 },
+    { e: 0, s: 153, h: 3.4 },
+  ],
+  [
+    { e: -13, s: 147, h: 4.6 },
+    { e: -12.5, s: 155, h: 3.0 },
+  ],
+];
+/** The mountains along the gulfs' outer coasts: Egypt's Galala (south-west) and Arabia's Midian (east; pixels). */
+const SINAI_COAST_MTS: { u: number; v: number; h: number }[][] = [
+  [
+    { u: -12, v: 150, h: 1.2 },
+    { u: -20, v: 175, h: 3.1 },
+    { u: -14, v: 200, h: 2.6 },
+    { u: -4, v: 225, h: 1.0 },
+  ],
+  [
+    { u: 318, v: 92, h: 1.0 },
+    { u: 328, v: 116, h: 2.8 },
+    { u: 326, v: 142, h: 3.1 },
+  ],
+];
+/** The sandstone highland the coloured canyon cuts through (old layout: the eastern one). */
+const SINAI_HIGHLAND: { e: number; s: number; h: number }[][] = [
+  [
+    { e: 16.6, s: 119, h: 3.1 },
+    { e: 19.6, s: 124.6, h: 3.4 },
+  ],
+];
+/** The coloured canyon's floor centre line (old layout, the eastern one: inland of Nuweiba). */
+const SINAI_CANYON: [number, number][] = [
+  [13.2, 111],
+  [15.2, 115],
+  [16, 118.8],
+  [18.2, 121.4],
+  [19, 124.6],
+  [21.3, 127],
+  [22.6, 131],
+];
+/** Sandstone mesas and buttes of El Tih (impassable, flat-topped): capsule ends and radius (pixels; radius tiles). */
+const SINAI_MESAS: [number, number, number, number, number][] = [
+  [108, 74, 111, 82, 2.0],
+  [139, 74, 142, 82, 2.0],
+];
+/**
+ * A rocky headland on the Mediterranean shore north-west of blue's base (base frame: capsule ends, radius): the Red
+ * Sea and the Gulf of Aqaba come closer round red's base than the Mediterranean and the Gulf of Suez round blue's, so
+ * this keeps the open ground round the two bases alike (bench/sinai-fair.test.ts: build space).
+ */
+const BLUE_HEADLAND: [number, number, number, number, number] = [-12, -3.5, -1, -5, 2.6];
+/** Oases and springs (pixels, radius tiles) in the Sinai; each base has its own (base frame). */
+const SINAI_OASES: [number, number, number][] = [
+  [82, 100, 1.9],
+  [186, 96, 1.9],
+];
+const BASE_OASIS: [number, number, number] = [-14, 26, 1.8];
+/**
+ * The oasis gorge in the El Tih plateau (Ain Khudra; render/seaside.ts buildOasisGorge): a lake under two sandstone
+ * escarpments with a spring pool below each, irrigated plots and a side wadi; tile-index offsets from GORGE (the
+ * lake's tile on the map's diagonal; the pools and ridges mirror each other across it).
+ */
+export const GORGE = 92 - OLD_UP;
+const GORGE_LAKE = 3.3;
+const GORGE_POOL: [number, number, number] = [-8, 6, 1.8];
+const GORGE_RIDGE: [number, number, number, number, number] = [-14, 3, -7, 9, 2.3];
+const GORGE_WADI: [number, number][] = [
+  [-17, 14],
+  [-14, 8.5],
+  [-10, 4],
+];
+/** Wadi el-Arish from the gorge north to the Mediterranean, and its tributaries (pixels). */
+const SINAI_WADIS: [number, number][][] = [
+  [
+    [125, 106],
+    [123, 92],
+    [126, 72],
+    [124, 50],
+    [125, 30],
+  ],
+  [
+    [100, 104],
+    [112, 97],
+    [122, 92],
+  ],
+  [
+    [150, 104],
+    [138, 97],
+    [127, 92],
+  ],
+];
+/** Sharm el-Sheikh (Naama Bay) on the south-east coast of the tip, Nuweiba's town on the Aqaba coast (pixels). */
+const SHARM_SITE_PX: [number, number] = [141, 214];
+const SHARM_TOWN_PX: [number, number] = [124, 200];
+const NUWEIBA_TOWN_PX: [number, number] = [186, 128];
+
+/** The gulfs and seas (render and sim share it: sim/map.ts seaDist): the traced coasts and the places by the sea. */
+function sinaiSea(): SeaDeco {
+  const c = SINAI_N / 2;
+  const sea: SeaDeco = { c, top: MED_OFF, bottom: RED_OFF, gulfs: [], sites: [], grid: sinaiGrid() };
+  /** A frame on the coast nearest pixel (u, v): origin on the waterline, +v seaward; `back` tiles inland of it. */
+  const shoreAt = (u: number, v: number, back = 0): SeaFrame => {
+    const p = pp(u, v);
+    let nx = 1;
+    let ny = 0;
+    for (let k = 0; k < 40; k++) {
+      const d = seaDist(sea, p.x, p.y);
+      const gx = seaDist(sea, p.x + 0.25, p.y) - seaDist(sea, p.x - 0.25, p.y);
+      const gy = seaDist(sea, p.x, p.y + 0.25) - seaDist(sea, p.x, p.y - 0.25);
+      const gl = Math.hypot(gx, gy) || 1;
+      nx = gx / gl;
+      ny = gy / gl;
+      p.x -= nx * d * 0.8;
+      p.y -= ny * d * 0.8;
+      if (Math.abs(d) < 0.01) break;
+    }
+    return { x: p.x - nx * back, y: p.y - ny * back, ang: Math.atan2(nx, -ny) };
+  };
+  // a resort on the Sinai's Gulf of Suez coast (Ras Sudr) and one on its Gulf of Aqaba coast (north of Nuweiba,
+  // clear of the massif's flank)
+  sea.sites.push({ ...shoreAt(47, 104, 0.3), resort: { u0: -6, u1: 5, v0: -11, v1: -4.8 }, beach: [-11, 9], look: 1 });
+  sea.sites.push({ ...shoreAt(212, 104, 0.3), resort: { u0: -5, u1: 6, v0: -11, v1: -4.8 }, beach: [-9, 11], look: 2 });
+  // Sharm el-Sheikh / Naama Bay on the tip, facing the Strait of Tiran
+  sea.sites.push({ ...shoreAt(...SHARM_SITE_PX), resort: { u0: -6, u1: 6, v0: -11.2, v1: -4.8 }, beach: [-10, 10], look: 0 });
+  // Tiran with its lighthouse in the strait at the mouth of the Gulf of Aqaba (u along the strait)
+  const ti0 = pp(170, 210);
+  const a = pp(238, 90);
+  const b = pp(165, 205);
+  sea.isle = { x: ti0.x, y: ti0.y, ang: Math.atan2(b.y - a.y, b.x - a.x), ru: 2.7, rv: 2.05 };
+  // the Blue Hole off the Sinai's Aqaba coast north of Dahab
+  sea.hole = shoreAt(184, 150, -0.2);
+  return sea;
+}
+
+/** The picture's water mask (sim/sinaimask.ts) decoded: 1 = water, row-major. */
+function sinaiMask(): Uint8Array {
+  const m = new Uint8Array(SINAI_MASK_W * SINAI_MASK_H);
+  SINAI_MASK.split(';').forEach((row, y) => {
+    if (!row) return;
+    const nums = row.split(',').map(Number);
+    for (let k = 0; k + 1 < nums.length; k += 2) m.fill(1, y * SINAI_MASK_W + nums[k], y * SINAI_MASK_W + nums[k] + nums[k + 1]);
+  });
+  return m;
+}
+
+/** Squared Euclidean distance transform along one line (Felzenszwalb & Huttenlocher), in place. */
+function edt1(f: Float32Array, n: number, d: Float32Array, v: Int32Array, z: Float32Array) {
+  let k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (let q = 1; q < n; q++) {
+    let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) {
+      k--;
+      s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    }
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+  }
+}
+/** Squared distance from every cell to the nearest cell where `on` is set (cols x rows). */
+function edt2(on: Uint8Array, cols: number, rows: number): Float32Array {
+  const INF = 1e12;
+  const g = new Float32Array(cols * rows);
+  for (let i = 0; i < g.length; i++) g[i] = on[i] ? 0 : INF;
+  const n = Math.max(cols, rows);
+  const f = new Float32Array(n);
+  const d = new Float32Array(n);
+  const v = new Int32Array(n);
+  const z = new Float32Array(n + 1);
+  for (let x = 0; x < cols; x++) {
+    for (let y = 0; y < rows; y++) f[y] = g[y * cols + x];
+    edt1(f, rows, d, v, z);
+    for (let y = 0; y < rows; y++) g[y * cols + x] = d[y];
+  }
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) f[x] = g[y * cols + x];
+    edt1(f, cols, d, v, z);
+    for (let x = 0; x < cols; x++) g[y * cols + x] = d[x];
+  }
+  return g;
+}
+
+let sinaiGridCache: SeaGrid | null = null;
+/**
+ * The traced coasts as a seaward-distance grid (sim/map.ts SeaGrid), two samples per picture pixel: the mask
+ * smoothed (so the coast runs between the pixels, not along their steps), carried on past the picture's edges (its
+ * edge rows and columns repeated out to the map's corners), then the exact distance to the other side. The same for
+ * every seed (built once).
+ */
+function sinaiGrid(): SeaGrid {
+  if (sinaiGridCache) return sinaiGridCache;
+  const MW = SINAI_MASK_W;
+  const MH = SINAI_MASK_H;
+  const mask = sinaiMask();
+  // smoothed mask (two passes of a 3 x 3 blur)
+  let f = Float32Array.from(mask);
+  for (let pass = 0; pass < 2; pass++) {
+    const o = new Float32Array(MW * MH);
+    const at = (x: number, y: number) => f[Math.max(0, Math.min(MH - 1, y)) * MW + Math.max(0, Math.min(MW - 1, x))];
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) o[y * MW + x] = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1) + 4 * at(x, y) + at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 12;
+    f = o;
+  }
+  // the grid reaches past the picture to the map's corners (pixels of padding on every side)
+  const reach = (SINAI_N / 2) * R2 / PK;
+  const padU = Math.ceil(reach - PU) + 2;
+  const padV = Math.ceil(reach - PV) + 2;
+  const S = 2;
+  const cols = (MW + 2 * padU) * S;
+  const rows = (MH + 2 * padV) * S;
+  const water = new Uint8Array(cols * rows);
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      // sample (i, j) at picture pixel ((i + 0.5) / S - padU, ...); pixel centres at x + 0.5; past the edges the edge
+      // pixels carry on
+      const u = Math.max(0, Math.min(MW - 1.0001, (i + 0.5) / S - padU - 0.5));
+      const v = Math.max(0, Math.min(MH - 1.0001, (j + 0.5) / S - padV - 0.5));
+      const x = Math.floor(u);
+      const y = Math.floor(v);
+      const tx = u - x;
+      const ty = v - y;
+      const val = (f[y * MW + x] * (1 - tx) + f[y * MW + x + 1] * tx) * (1 - ty) + (f[(y + 1) * MW + x] * (1 - tx) + f[(y + 1) * MW + x + 1] * tx) * ty;
+      water[j * cols + i] = val > 0.5 ? 1 : 0;
+    }
+  const land = water.map((w) => 1 - w);
+  const toLand = edt2(land, cols, rows);
+  const toWater = edt2(water, cols, rows);
+  const step = PK / S;
+  const d = new Int16Array(cols * rows);
+  for (let k = 0; k < d.length; k++) d[k] = Math.max(-32767, Math.min(32767, Math.round((water[k] ? Math.sqrt(toLand[k]) - 0.5 : 0.5 - Math.sqrt(toWater[k])) * step * SEA_GRID_Q)));
+  sinaiGridCache = { cols, rows, e0: (0.5 / S - padU - PU) * PK, s0: SC + (0.5 / S - padV - PV) * PK, step, d, band: 10 };
+  return sinaiGridCache;
+}
+
+/** Is continuous point (x, y) on the granite ridge's footprint (east)? */
+function ridgeFoot(x: number, y: number) {
+  const [u0, v0, u1, v1] = RIDGE_PX;
+  const a = pp(u0, v0);
+  const b = pp(u1, v1);
+  return distToSegment(x, y, a.x, a.y, b.x, b.y) < RIDGE_HW;
+}
+
+/** A mountain range given as spine polylines (continuous points, crest heights): its height at a point, how far up (0 foot .. 1 crest), ridge noise. */
+function ridgeAt(lines: { x: number; y: number; h: number }[][], foot: number, lift: number, x: number, y: number, ns: number) {
+  const ft = foot + (fbm(x * 0.08, y * 0.08, ns + 41) - 0.5) * (foot * 0.32);
+  let hs = 0;
+  let f = 0;
+  for (const line of lines)
+    for (let j = 0; j < line.length - 1; j++) {
+      const a = line[j];
+      const b = line[j + 1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+      const p = massifProfile(Math.hypot(x - a.x - dx * t, y - a.y - dy * t) / ft);
+      if (p <= 0) continue;
+      hs = Math.max(hs, (a.h + (b.h - a.h) * smoothstep(0, 1, t)) * lift * p);
+      f = Math.max(f, p);
+    }
+  if (f <= 0) return { h: 0, f: 0, r: 0 };
+  const r = 1 - Math.abs(2 * fbm(x * 0.15, y * 0.15, ns + 43) - 1);
+  const gully = Math.max(0, 0.3 - r) * 2.2 * Math.min(1, f * 3);
+  return { h: Math.max(0, hs * (0.8 + 0.34 * r) - gully), f, r };
+}
+/** The old layout's spines, each with its mirror across that layout's axis. */
+const oldSpines = (src: { e: number; s: number; h: number }[][], both = true) =>
+  src.flatMap((l) => {
+    const a = l.map((p) => ({ ...oldAt(p.e, p.s), h: p.h }));
+    return both ? [a, l.map((p) => ({ ...oldAt(-p.e, p.s), h: p.h }))] : [a];
+  });
+
 export function createDesertMap(seed: number): GameMap {
-  // drawn on 96 x 96 tiles, built on BIG_MAP: the design scales out from the centre (designScale), sizes
-  // stay (dunes, mesas, oases, the wadi bed), the bases stay near the corners, the town and the hamlets
-  // move as a whole, and the ground gained holds more dunes, mesas, oases, a side wadi and ore
-  mapSize(BIG_MAP);
-  const S = designScale(W);
-  const k = S.k;
-  const T = (x: number, y: number) => S.tp(x, y);
-  const Tr = (x: number, y: number) => ({ x: Math.round(S.ti(x)), y: Math.round(S.ti(y)) });
-  /** A cluster drawn around design point (ax, ay): the whole tile shift its anchor takes. */
-  const shift = (ax: number, ay: number) => ({ x: Math.round(S.ti(ax) - ax), y: Math.round(S.ti(ay) - ay) });
+  mapSize(SINAI_N, false, true);
   const rng = new Rng((seed ^ 0x51a7d00d) >>> 0);
   const NS = 4000 + rng.int(4000);
   const g = newGrids();
-  const sea = DESERT_SEA;
-  const starts: Point[] = [
-    { x: 16, y: 111 },
-    { x: W - 1 - 16, y: H - 1 - 111 },
-  ];
-  const wadi = riverShape(k * (4.6 + rng.range(-0.8, 0.8)), (0.1 + rng.range(-0.012, 0.012)) / k, k * (1.4 + rng.range(-0.4, 0.4)), 0.29 / k);
-  // oases: the centre ring lake, distinct wadi & flank oases on each side, and the Southern Oasis Gorge in the SE corner
-  const oS = (24 + rng.int(4)) * k;
-  const oasisSide0 = wadi.at(CX - oS);
-  const oasisSide1 = wadi.at(CX + oS);
-  const oases = [
-    { x: CX, y: CY, r: 3.1 },
-    // South-West side: wadi oasis + mountain foot spring
-    { x: oasisSide0.x, y: oasisSide0.y, r: 2.1 + rng.range(0, 0.25) },
-    ...DESERT_OASES_EXTRA,
-    // North-East side: wider wadi lagoon + twin palm pools
-    { x: oasisSide1.x, y: oasisSide1.y, r: 2.45 + rng.range(0, 0.25) },
-    { x: W - 1 - 21, y: H - 1 - 79, r: 2.1 },
-    { x: 96, y: 39, r: 1.55 },
-    // South-East inland corner (replaces the duplicated sea with a lush desert canyon oasis equidistant from both bases)
-    { x: 113, y: 113, r: 3.3 },
-    { x: 105, y: 119, r: 1.8 },
-    { x: 119, y: 105, r: 1.8 },
-  ];
-  const branches = halfCapsules(DESERT_WADI_BRANCHES);
-  const branchDist = (x: number, y: number) => {
+  const sea = sinaiSea();
+  const starts: Point[] = BASES.map((p) => ({ x: Math.round(p.x - 0.5), y: Math.round(p.y - 0.5) }));
+  const startsC = starts.map((p) => ({ x: p.x + 0.5, y: p.y + 0.5 }));
+  // ore: each base's own fields (its frame) and the Sinai pairs; integer centres, so a pair's fields paint alike
+  const field = (p: Point, r: number, kind: number): Field => ({ x: Math.round(p.x - 0.5), y: Math.round(p.y - 0.5), r, kind });
+  const oreFields: Field[] = [];
+  for (let side = 0; side < 2; side++) for (const [de, ds, r, kind] of BASE_ORE) oreFields.push(field(own(side, de, ds), r, kind));
+  for (const pair of SINAI_ORE_PAIRS) for (const [u, v, r, kind] of pair) oreFields.push(field(pp(u, v), r, kind));
+  const oilAt = (p: Point) => ({ x: Math.round(p.x - 1), y: Math.round(p.y - 1) });
+  const oils: Point[] = [];
+  for (let side = 0; side < 2; side++) for (const [de, ds] of BASE_OIL) oils.push(oilAt(own(side, de, ds)));
+  for (const pair of SINAI_OIL_PAIRS) for (const [u, v] of pair) oils.push(oilAt(pp(u, v)));
+
+  const massifL = oldSpines(SINAI_MASSIF);
+  const highL = oldSpines(SINAI_HIGHLAND, false);
+  const coastL = SINAI_COAST_MTS.map((l) => l.map((p) => ({ ...pp(p.u, p.v), h: p.h })));
+  const lift = MASSIF_LIFT * (1 + rng.range(-0.03, 0.03));
+  const mesas: Capsule[] = SINAI_MESAS.map(([u0, v0, u1, v1, r]) => {
+    const a = pp(u0, v0);
+    const b = pp(u1, v1);
+    return { x: a.x, y: a.y, x2: b.x, y2: b.y, r: r + rng.range(-0.15, 0.15) };
+  });
+  {
+    const [e0, s0, e1, s1, r] = BLUE_HEADLAND;
+    const a = own(0, e0, s0);
+    const b = own(0, e1, s1);
+    mesas.push({ x: a.x, y: a.y, x2: b.x, y2: b.y, r });
+  }
+  const oases = SINAI_OASES.map(([u, v, r]) => ({ ...pp(u, v), r }));
+  for (let side = 0; side < 2; side++) oases.push({ ...own(side, BASE_OASIS[0], BASE_OASIS[1]), r: BASE_OASIS[2] });
+  // the oasis gorge (tile-index offsets -> continuous points)
+  const gz = (dx: number, dy: number) => ({ x: GORGE + dx + 0.5, y: GORGE + dy + 0.5 });
+  oases.push({ ...gz(0, 0), r: GORGE_LAKE }, { ...gz(GORGE_POOL[0], GORGE_POOL[1]), r: GORGE_POOL[2] }, { ...gz(GORGE_POOL[1], GORGE_POOL[0]), r: GORGE_POOL[2] });
+  {
+    const [x0, y0, x1, y1, r] = GORGE_RIDGE;
+    const a = gz(x0, y0);
+    const b = gz(x1, y1);
+    mesas.push({ x: a.x, y: a.y, x2: b.x, y2: b.y, r }, { x: a.y, y: a.x, x2: b.y, y2: b.x, r });
+  }
+  const wadis = SINAI_WADIS.map((l) => l.map(([u, v]) => pp(u, v)));
+  {
+    const pts = GORGE_WADI.map(([dx, dy]) => gz(dx, dy));
+    wadis.push(pts, pts.map((p) => ({ x: p.y, y: p.x })));
+  }
+  const wadiDist = (x: number, y: number) => {
     let d = 1e9;
-    for (const b of branches) d = Math.min(d, distToSegment(x, y, b.x, b.y, b.x2, b.y2));
+    for (const l of wadis) for (let k = 0; k < l.length - 1; k++) d = Math.min(d, distToSegment(x, y, l[k].x, l[k].y, l[k + 1].x, l[k + 1].y));
     return d;
   };
-  // mesas: core tactical canyon/fort mesas on both sides + distinct outer flank formations and SE gorge escarpments
-  const mesa = (x: number, y: number, x2: number, y2: number, r: number): Capsule => {
-    const c = T((x + x2) / 2, (y + y2) / 2);
-    return { x: c.x - (x2 - x) / 2, y: c.y - (y2 - y) / 2, x2: c.x + (x2 - x) / 2, y2: c.y + (y2 - y) / 2, r };
+  // the villages at the two crossings and the towns (Sharm, Nuweiba) stand on graded ground
+  const townAt = [
+    { ...pp(...VILLAGE_PX[0]), r: 11 },
+    { ...pp(...VILLAGE_PX[1]), r: 11 },
+    { ...pp(...SHARM_TOWN_PX), r: 7 },
+    { ...pp(...NUWEIBA_TOWN_PX), r: 7 },
+  ];
+  const townK = (x: number, y: number) => {
+    let k = 0;
+    for (const t of townAt) k = Math.max(k, 1 - smoothstep(t.r, t.r + 3, Math.hypot(x - t.x, y - t.y)));
+    return k;
   };
-  const mesas: Capsule[] = [
-    ...halfCapsules([
-      mesa(27, 60, 33, 65, 2.5 + rng.range(-0.2, 0.3)),
-      mesa(43, 80, 47, 85, 2.3 + rng.range(-0.2, 0.2)),
-      mesa(62, 90, 68, 89, 2.1),
-      ...DESERT_MESAS_EXTRA.map((m) => ({ ...m, r: m.r + rng.range(-0.15, 0.15) })),
-    ]),
-    // West / North-West outer mesas
-    mesa(9, 41, 16, 36, 2.7 + rng.range(-0.2, 0.3)),
-    mesa(24, 22, 27, 16, 2.2 + rng.range(-0.2, 0.2)),
-    // East / South-East distinct outer mesas + SE oasis gorge sandstone ridges
-    mesa(79, 55, 86, 59, 2.6 + rng.range(-0.2, 0.2)),
-    mesa(69, 73, 73, 79, 2.2 + rng.range(-0.2, 0.2)),
-    { x: 99, y: 116, x2: 106, y2: 122, r: 2.3 },
-    { x: 116, y: 99, x2: 122, y2: 106, r: 2.3 },
-  ];
-  const oreFields: Field[] = half([
-    // the two by the base keep their distance from it (harvest runs as designed)
-    { x: 28, y: 118, r: 3.6, kind: 1 },
-    { x: 8, y: 94, r: 3.2, kind: 1 },
-    { ...Tr(39, 71), r: 3.0, kind: 1 },
-    { ...Tr(18, 48), r: 2.6, kind: 2 },
-    { ...Tr(55, 85), r: 2.5, kind: 2 },
-    ...DESERT_ORE_EXTRA,
-  ]);
-  const oils = halfOils([{ x: 37, y: 117 }, Tr(4, 52), Tr(30, 41)]);
-  // roads: highway from each base to the oasis town's ring road, the ring itself, an outer desert road
-  const ringR = 7.6;
-  const ring = (a0: number, a1: number) => Array.from({ length: 9 }, (_, i) => {
-    const a = ((a0 + ((a1 - a0) * i) / 8) * Math.PI) / 180;
-    return { x: CX + Math.cos(a) * ringR, y: CY + Math.sin(a) * ringR };
-  });
-  const r0 = [
-    [starts[0], T(24, 77), T(35, 74), T(40, 62), ring(135, 135)[0]],
-    ring(45, 225),
-    [starts[0], T(33, 91), T(50, 88), T(58, 81), T(66, 73), T(72, 64)],
-    // the town's streets: the high street from the ring's south side, a cross street east of it
-    [ring(90, 90)[0], { x: 63, y: 73 }, { x: 63, y: 92 }],
-    ...DESERT_TOWN_STREETS,
-  ];
-  const roads = [...r0, ...mirrorLines(r0)];
-  /** Road kind by index: 0 highway, 1 ring road, 2 outer road, 3 town street. */
-  const roadKind = (i: number) => Math.min(3, i % r0.length);
-  const tracks0 = [
-    [starts[0], T(9, 70), T(8, 57), T(13, 47), T(22, 41), T(30, 40)],
-    // (it stops short of the highway: a junction on the highway's bend swings the turning cars wide)
-    [{ x: T(40, 62).x - 2.73, y: T(40, 62).y - 2.17 }, T(30, 54), T(25, 47)],
-    ...DESERT_TRACKS_EXTRA,
-  ];
-
   const lowGround = (x: number, y: number) => {
-    // long transverse dunes: an even function of the offset from the centre (point symmetric) with a symmetric warp
-    const u = (x - CX) * 0.29 + (y - CY) * 0.13;
-    const warp = (fbm(x * 0.06, y * 0.06, NS + 3) - fbm((W - 1 - x) * 0.06, (H - 1 - y) * 0.06, NS + 3)) * 3.2;
-    const dune = Math.pow(0.5 + 0.5 * Math.cos(u * 2.1 + warp), 1.6);
-    // (the town quarter stands on graded ground: its dunes levelled, the broad swells kept)
-    return 0.42 + (symNoise(x, y, 0.045, NS) - 0.5) * 1.5 + dune * 0.42 * (1 - 0.9 * townGround(x, y));
+    const { v } = toPx(x, y);
+    let h = 0.42 + (fbm(x * 0.045, y * 0.045, NS) - 0.5) * 1.3;
+    // the north: long east-west dunes, higher towards the Mediterranean (the sand sea); villages on levelled ground
+    const warp = (fbm(x * 0.06, y * 0.06, NS + 3) - 0.5) * 9;
+    const s = scrS(x, y);
+    const dune = Math.pow(0.5 + 0.5 * Math.cos((s + warp) * 0.56), 1.6);
+    h += dune * 0.5 * smoothstep(96, 56, v) * (1 - 0.9 * townK(x, y));
+    // El Tih: the limestone plateau of central Sinai, a gentle rise
+    h += 0.3 * smoothstep(84, 104, v) * (1 - smoothstep(170, 200, v));
+    return h;
   };
-  // the Jebel: a mountain massif on each side of the town (player 0's south-west of it, mirrored), mesas
-  // standing on it as its rock-capped summits. A spine of summits and saddles, spurs and gullies cut
-  // into its flanks by ridged noise; every slope but the caps' cliffs and a few crags is passable ground.
-  const massifHalf = (x: number, y: number) => {
-    // the foot wanders; the profile (SL1) is a granite mountain's: a talus apron rising gently from the foot,
-    // a steep rock flank above it (too steep for vehicles, for soldiers too where the mountain is high; the
-    // tracks wind up it, sim/slope.ts) and a rounded crest; the highest of the spine segments' profiles wins
-    // (continuous everywhere)
-    const foot = MASSIF_FOOT + (fbm(x * 0.08, y * 0.08, NS + 41) - 0.5) * 4;
-    const prof = massifProfile;
-    let hs = 0;
-    let f = 0;
-    for (const line of DESERT_MASSIF)
-      for (let j = 0; j < line.length - 1; j++) {
-        const a = line[j];
-        const b = line[j + 1];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
-        const p = prof(Math.hypot(x - a.x - dx * t, y - a.y - dy * t) / foot);
-        if (p <= 0) continue;
-        hs = Math.max(hs, (a.h + (b.h - a.h) * smoothstep(0, 1, t)) * MASSIF_LIFT * p);
-        f = Math.max(f, p);
-      }
-    if (f <= 0) return { h: 0, f: 0, r: 0 };
-    // spurs and gullies (ridged noise) run down the flanks
-    const r = 1 - Math.abs(2 * fbm(x * 0.15, y * 0.15, NS + 43) - 1);
-    const gully = Math.max(0, 0.3 - r) * 2.2 * Math.min(1, f * 3);
-    return { h: Math.max(0, hs * (0.8 + 0.34 * r) - gully), f, r };
+  const massifAt = (x: number, y: number) => ridgeAt(massifL, MASSIF_FOOT, lift, x, y, NS);
+  const coastMtAt = (x: number, y: number) => ridgeAt(coastL, 8.5, 1.1, x, y, NS + 100);
+  const highAt = (x: number, y: number) => ridgeAt(highL, 12, 1, x, y, NS + 200);
+  const mountAt = (x: number, y: number) => {
+    const a = massifAt(x, y);
+    const b = coastMtAt(x, y);
+    const c = highAt(x, y);
+    return { h: a.h + b.h + c.h, f: Math.max(a.f, b.f, c.f), r: a.f >= b.f && a.f >= c.f ? a.r : b.f >= c.f ? b.r : c.r, massif: a.f };
   };
-  /** Height the massifs add, how far up one a point is (0 foot .. 1 crest) and its ridge noise; point symmetric. */
-  const massifAt = (x: number, y: number) => {
-    const a = massifHalf(x, y);
-    const b = massifHalf(W - 1 - x, H - 1 - y);
-    return { h: a.h + b.h, f: Math.max(a.f, b.f), r: a.f >= b.f ? a.r : b.r };
-  };
-  // a mesa on the massif stands on it (its cap rock that much higher)
-  const mesaBase = mesas.map((m) => massifAt((m.x + m.x2) / 2, (m.y + m.y2) / 2).h * 0.92);
-  // the coloured canyon (player 0's, through the fort's mesa and the massif under it; mirrored): its floor
-  // falls evenly from the ground at its upper mouth to the ground at its lower one
+  const mesaBase = mesas.map((m) => mountAt((m.x + m.x2) / 2, (m.y + m.y2) / 2).h * 0.92);
   const surface = (x: number, y: number) => {
-    let h = lowGround(x, y) + massifAt(x, y).h;
+    let h = lowGround(x, y) + mountAt(x, y).h;
     for (let j = 0; j < mesas.length; j++) {
       const m = mesas[j];
-      const d = distToSegment(x + 0.5, y + 0.5, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
+      const d = distToSegment(x, y, m.x, m.y, m.x2, m.y2);
       h = h + (2.25 + mesaBase[j] - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
     }
     return h;
   };
-  const canyons = [DESERT_CANYON, DESERT_CANYON.map(mirror)].map((pts) => {
+  // the coloured canyon (continuous points): the floor falls evenly from the ground at one mouth to the other
+  const canyonPts = SINAI_CANYON.map(([e, s]) => oldAt(e, s));
+  const canyons = [canyonPts].map((pts) => {
     let len = 0;
     const at = pts.map((p, i) => (i ? (len += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)) : 0));
     const a = surface(pts[0].x, pts[0].y);
     const b = surface(pts[pts.length - 1].x, pts[pts.length - 1].y);
     return { pts, at, len, a, b };
   });
-  /** Distance (tiles) from the nearer canyon's centre line and the floor height there. */
   const canyonAt = (x: number, y: number) => {
     let best = { d: 1e9, floor: 0 };
     for (const c of canyons)
@@ -591,51 +958,49 @@ export function createDesertMap(seed: number): GameMap {
         const d = Math.hypot(x - p.x - dx * t, y - p.y - dy * t);
         if (d < best.d) {
           const s = (c.at[k] + t * Math.sqrt(l2)) / c.len;
-          // (a dip in the middle, deepening the gorge between its walls; the floor never climbs out at either mouth)
           best = { d, floor: c.a + (c.b - c.a) * s - Math.sin(s * Math.PI) * 0.55 };
         }
       }
     return best;
   };
-  /** A canyon wall tile: the ground beside the floor stands this far above it. */
   const canyonWall = (x: number, y: number, floor: number) => surface(x, y) - floor > 0.75;
-  /** The ground before the tracks are graded into it (vertex at tile-index point fx, fy; vx = fx + 0.5). */
-  const natural = (fx: number, fy: number) => {
-      const vx = fx + 0.5;
-      const vy = fy + 0.5;
-      let h = lowGround(fx, fy) + massifAt(fx, fy).h;
-      for (const s of starts) h = h + (0.45 - h) * (1 - smoothstep(9, 15, Math.hypot(fx - s.x, fy - s.y)));
-      // roads run on graded ground
-      // the wadi: a broad shallow bed with low banks
-      const wd = wadi.dist(fx, fy);
-      h = h + (-0.06 - h) * (1 - smoothstep(2.2, 5.0, wd));
-      // the side wadis: narrower, shallower beds running down into the main one
-      const bd = branchDist(fx, fy);
-      h = h + (0.02 - h) * (1 - smoothstep(1.3, 3.4, bd)) * 0.85;
-      for (const o of oases) {
-        const d = Math.hypot(fx - o.x, fy - o.y);
-        h = h + (-0.95 - h) * (1 - smoothstep(o.r - 0.6, o.r + 1.6, d));
-      }
-      for (let j = 0; j < mesas.length; j++) {
-        const m = mesas[j];
-        const d = distToSegment(vx, vy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5);
-        const top = 2.25 + mesaBase[j] + ((hash2(vx, vy, NS + 9) + hash2(W - vx, H - vy, NS + 9)) / 2 - 0.5) * 0.12;
-        // a flat-topped plateau with steep sandstone cliffs
-        h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
-      }
-      // the coloured canyon: a narrow floor sunk into the mountain, its walls rising steeply to the rims
-      const cy = canyonAt(fx, fy);
-      // (SL1: the floor stays level CANYON_FLAT beyond its sand, so the tiles along the walls' feet are level ground a
-      // column of tanks can use, not the first steps of the walls)
-      if (cy.d < CANYON_HW + CANYON_FLAT + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW + CANYON_FLAT, CANYON_HW + CANYON_FLAT + 1.3, cy.d) * 6);
-      return h;
+  /** The ground before the tracks are graded into it (continuous vertex point). */
+  const naturalC = (x: number, y: number) => {
+    let h = lowGround(x, y) + mountAt(x, y).h;
+    for (const s of startsC) h = h + (0.45 - h) * (1 - smoothstep(9, 15, Math.hypot(x - s.x, y - s.y)));
+    h = h + (0.4 - h) * townK(x, y) * 0.85;
+    // Wadi el-Arish and its tributaries: broad shallow beds
+    const wd = wadiDist(x, y);
+    h = h + (-0.02 - h) * (1 - smoothstep(1.6, 4.2, wd)) * 0.9;
+    for (const o of oases) {
+      const d = Math.hypot(x - o.x, y - o.y);
+      h = h + (-0.95 - h) * (1 - smoothstep(o.r - 0.6, o.r + 1.6, d));
+    }
+    for (let j = 0; j < mesas.length; j++) {
+      const m = mesas[j];
+      const d = distToSegment(x, y, m.x, m.y, m.x2, m.y2);
+      const top = 2.25 + mesaBase[j] + (hash2(x, y, NS + 9) - 0.5) * 0.12;
+      h = h + (top - h) * (1 - smoothstep(m.r - 0.45, m.r + 0.65, d));
+    }
+    const cy = canyonAt(x, y);
+    if (cy.d < CANYON_HW + CANYON_FLAT + 2.4) h = Math.min(h, cy.floor + smoothstep(CANYON_HW + CANYON_FLAT, CANYON_HW + CANYON_FLAT + 1.3, cy.d) * 6);
+    return h;
   };
-  // the mountain tracks and footpaths (SL1): graded into the massifs' flanks, mirrored
-  const ramps = rampSet(W, H, DESERT_RAMPS, natural);
-  for (let vy = 0; vy <= H; vy++)
-    for (let vx = 0; vx <= W; vx++) {
-      const h = ramps.grade(vx - 0.5, vy - 0.5, natural(vx - 0.5, vy - 0.5));
-      g.heights[vy * (W + 1) + vx] = coastHeight(sea, vx, vy, h, NS);
+  // the ground by the sea (beaches, reefs, the resorts' terraces), then the tracks graded into it (rampSet works
+  // in tile-index space)
+  const groundC = (x: number, y: number) => coastHeight(sea, x, y, naturalC(x, y), NS);
+  const natural = (fx: number, fy: number) => groundC(fx + 0.5, fy + 0.5);
+  const rampsSrc = SINAI_RAMPS.flatMap((r) => [r, { ...r, pts: r.pts.map((p) => ({ ...p, x: -p.x })) }]).map((r) => ({ ...r, pts: r.pts.map((p) => ({ ...p, ...ti(oldAt(p.x, p.y)) })) }));
+  const ramps = rampSet(W, H, rampsSrc, natural);
+  for (let vy = 0; vy <= H; vy++) for (let vx = 0; vx <= W; vx++) g.heights[vy * (W + 1) + vx] = ramps.grade(vx - 0.5, vy - 0.5, groundC(vx, vy));
+  // the granite ridge: its banks keep the ground's height; only vertices with ridge on all four sides rise into crags
+  const barrier = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (ridgeFoot(x + 0.5, y + 0.5) && seaDist(sea, x + 0.5, y + 0.5) < 0.3) barrier[y * W + x] = 1;
+  for (let vy = 1; vy < H; vy++)
+    for (let vx = 1; vx < W; vx++) {
+      const i = (vy - 1) * W + vx - 1;
+      if (!barrier[i] || !barrier[i + 1] || !barrier[i + W] || !barrier[i + W + 1]) continue;
+      g.heights[vy * (W + 1) + vx] += 1.2 + fbm(vx * 0.11, vy * 0.11, NS + 76) * 2.8 + fbm(vx * 0.4, vy * 0.4, NS + 77) * 1.1;
     }
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -643,50 +1008,49 @@ export function createDesertMap(seed: number): GameMap {
       const fx = x + 0.5;
       const fy = y + 0.5;
       let t: Tile = Tile.Sand;
-      if (symNoise(x, y, 0.07, NS + 5) > 0.57) t = Tile.Dirt; // gravel plains
-      const mt = massifAt(x, y);
+      if (fbm(fx * 0.07, fy * 0.07, NS + 5) > 0.57) t = Tile.Dirt; // gravel plains
+      const mt = mountAt(fx, fy);
       if (mt.f > 0.06) {
-        // the massif: stony slopes and talus, drift sand in its gullies, bare rock crags on the high ridges
+        // stony slopes and talus, drift sand in the gullies, bare granite crags on the high ridges
         t = mt.r < 0.3 && mt.f > 0.12 ? Tile.Sand : Tile.Dirt;
-        // (granite: jagged crags along the crest, the saddles and flanks stay passable)
-        if (mt.f > 0.55 && mt.r > 0.86 && mt.h > 2.6) t = Tile.Rock;
+        if (mt.f > 0.55 && mt.r > 0.86 && mt.h > 2.4) t = Tile.Rock;
       }
-      const wd = wadi.dist(x, y);
-      const bd = branchDist(x, y);
-      if (wd < 2.4 || bd < 1.3) t = Tile.Dirt; // the wadi floor: gravel and cracked mud
-      else if (townGround(x, y) > 0.5 && wd > 5) t = Tile.Dirt; // the town quarter's packed earth and gravel yards
-      else if ((wd < 4.6 || bd < 2.9) && symNoise(x, y, 0.2, NS + 6) > 0.48) t = Tile.Grass; // scrub on its banks
+      const wd = wadiDist(fx, fy);
+      if (wd < 1.8) t = Tile.Dirt;
+      else if (townK(fx, fy) > 0.5) t = Tile.Dirt;
+      else if (wd < 3.6 && fbm(fx * 0.2, fy * 0.2, NS + 6) > 0.48) t = Tile.Grass;
       for (const o of oases) {
-        const d = Math.hypot(x - o.x, y - o.y);
+        const d = Math.hypot(fx - o.x, fy - o.y);
         if (d < o.r) t = Tile.Water;
         else if (d < o.r + 2.4 && t !== Tile.Water) t = Tile.Grass;
       }
-      for (const m of mesas) if (distToSegment(fx, fy, m.x + 0.5, m.y + 0.5, m.x2 + 0.5, m.y2 + 0.5) < m.r + 0.1) t = Tile.Rock;
-      // the canyon: a sandy floor between sheer walls (bare rock wherever they stand well above the floor)
-      const cy = canyonAt(x, y);
+      for (const m of mesas) if (distToSegment(fx, fy, m.x, m.y, m.x2, m.y2) < m.r + 0.1) t = Tile.Rock;
+      const cy = canyonAt(fx, fy);
       if (cy.d < CANYON_HW) t = Tile.Sand;
-      else if (cy.d < CANYON_HW + 1.1 && canyonWall(x, y, cy.floor)) t = Tile.Rock;
-      // the tracks: worn gravel, the crags cut back where they climb past them
+      else if (cy.d < CANYON_HW + 1.1 && canyonWall(fx, fy, cy.floor)) t = Tile.Rock;
       if (ramps.onTrack(x, y)) t = Tile.Dirt;
-      g.tiles[i] = coastTile(sea, fx, fy, t);
+      t = coastTile(sea, fx, fy, t);
+      if (barrier[i]) t = Tile.Rock;
+      g.tiles[i] = t;
     }
-  markRoads(g, roads, roads.map((_, i) => [0.95, 0.95, 0.8, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
-  paintOre(g, oreFields);
+  const roads = SINAI_ROADS.map((l) => l.map(([u, v]) => pi(u, v)));
+  markRoads(g, roads, roads.map((_, i) => [0.95, 0.85, 0.85, 0.7][Math.min(i, 3)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
+  paintOre(g, oreFields, Tile.Dirt, true);
 
   const reserved = (x: number, y: number) =>
     starts.some((s) => Math.hypot(x - s.x, y - s.y) < 10) ||
     oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) ||
     oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) ||
-    canyonAt(x, y).d < CANYON_HW + CANYON_FLAT + 1.2 ||
+    canyonAt(x + 0.5, y + 0.5).d < CANYON_HW + CANYON_FLAT + 1.2 ||
     ramps.near(x, y, 1.5) ||
+    townK(x + 0.5, y + 0.5) > 0.3 ||
     roads.some((r) => r.some((p, k) => k > 0 && distToSegment(x + 0.5, y + 0.5, r[k - 1].x + 0.5, r[k - 1].y + 0.5, p.x + 0.5, p.y + 0.5) < 1.8));
-  // date palms ring the oases and dot the wadi; acacias stand alone on the scrub and gravel
+  // date palms ring the oases and dot the wadis; acacias stand alone on the scrub and gravel
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
       const t = g.tiles[i];
-      if ((t !== Tile.Grass && t !== Tile.Dirt && t !== Tile.Sand) || reserved(x, y) || g.ore[i] || coastBusy(sea, x + 0.5, y + 0.5)) continue;
-      // no trees on the waterline: a palm needs a full tile of dry ground between it and the oasis
+      if ((t !== Tile.Grass && t !== Tile.Dirt && t !== Tile.Sand) || reserved(x, y) || g.ore[i] || coastBusy(sea, x + 0.5, y + 0.5) || barrierNear(x, y)) continue;
       let wet = false;
       for (let dy = -1; dy <= 1 && !wet; dy++)
         for (let dx = -1; dx <= 1 && !wet; dx++) {
@@ -697,186 +1061,392 @@ export function createDesertMap(seed: number): GameMap {
       if (wet) continue;
       let palm = 0;
       for (const o of oases) {
-        const d = Math.hypot(x - o.x, y - o.y);
+        const d = Math.hypot(x + 0.5 - o.x, y + 0.5 - o.y);
         if (d > o.r + 0.4 && d < o.r + 3.2) palm = Math.max(palm, 0.55 - (d - o.r) * 0.1);
       }
-      const wd = wadi.dist(x, y);
-      if (wd > 2.0 && wd < 4.2) palm = Math.max(palm, 0.07);
-      const bd = branchDist(x, y);
-      if (bd > 1.2 && bd < 3.0) palm = Math.max(palm, 0.05);
-      const h = symHash(x, y, NS + 11);
+      const wd = wadiDist(x + 0.5, y + 0.5);
+      if (wd > 1.8 && wd < 3.8) palm = Math.max(palm, 0.06);
+      const h = hash2(x, y, NS + 11);
       if (h < palm) g.trees[i] = 2;
       else if ((t === Tile.Grass || t === Tile.Dirt) && h > 0.982) g.trees[i] = 1;
     }
+  /** Next to the ridge (no trees on its banks). */
+  function barrierNear(x: number, y: number) {
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const xx = x + dx;
+        const yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < W && yy < H && barrier[yy * W + xx]) return true;
+      }
+    return false;
+  }
   unblockTrees(g, starts[0]);
 
-  // the clusters move as a whole: the oasis town stays round the centre (the ring road keeps its size)
-  const move = (d: Point, list: Structure[]) => list.map((st) => ({ ...st, x: st.x + d.x, y: st.y + d.y }));
-  const layout: Structure[] = [
-    // oasis town on player 0's side of the ring road
-    ...move(shift(CX0, CX0), [
-      { kind: StructureKind.MudHouse, x: 35, y: 51, w: 2, h: 2, rot: 1 },
-      { kind: StructureKind.Courtyard, x: 36, y: 55, w: 3, h: 2, rot: 1 },
-      { kind: StructureKind.MudHouse, x: 40, y: 58, w: 2, h: 2, rot: 0 },
-      { kind: StructureKind.Courtyard, x: 44, y: 59, w: 3, h: 2, rot: 2 },
-      { kind: StructureKind.MudHouse, x: 49, y: 59, w: 2, h: 2, rot: 2 },
-      { kind: StructureKind.MudHouse, x: 34, y: 46, w: 2, h: 2, rot: 1 },
-      { kind: StructureKind.Tower, x: 39, y: 54, w: 1, h: 1, rot: 0 },
-      { kind: StructureKind.WaterTower, x: 33, y: 50, w: 1, h: 1, rot: 0 },
-    ]),
-    // roadside hamlet in the south
-    ...move(shift(58, 77), [
-      { kind: StructureKind.MudHouse, x: 54, y: 76, w: 2, h: 2, rot: 3 },
-      { kind: StructureKind.Courtyard, x: 58, y: 75, w: 3, h: 2, rot: 2 },
-      { kind: StructureKind.MudHouse, x: 61, y: 79, w: 2, h: 2, rot: 3 },
-    ]),
-    // caravan stop on the western track
-    ...move(shift(13, 57), [
-      { kind: StructureKind.MudHouse, x: 12, y: 55, w: 2, h: 2, rot: 1 },
-      { kind: StructureKind.Courtyard, x: 13, y: 59, w: 3, h: 2, rot: 1 },
-    ]),
-    ...DESERT_EXTRA,
-    // the town quarter south of the ring road (off the wadi's banks)
-    ...desertTown().filter((st) => wadi.dist(st.x + st.w / 2 - 0.5, st.y + st.h / 2 - 0.5) > 5.2),
-  ];
-  const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.7, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] });
+  // houses: the two villages, Sharm's town and Nuweiba's, the hamlets; each pair of places ends with as many
+  // garrisonable houses as the other (the extra ones of the bigger come down, the farthest from its centre first)
+  const groups = sinaiHouses(roads);
+  const placeOpts = { starts, oils, ore: oreFields, roads, roadClear: 1.6, startClear: 15, flat: 0.45, footFlat: 0.4, tilesOk: [Tile.Grass, Tile.Dirt, Tile.Sand] };
+  // each place's mosque first: the candidate spot nearest its centre that takes it (the places lie far apart)
+  for (const gr of groups) {
+    const cands = gr.houses.filter((st) => st.look === 'mosque');
+    const rest = gr.houses.filter((st) => st.look !== 'mosque');
+    const pick = cands.find((st) => placeStructures(g, [st], placeOpts).structures.length === 1);
+    gr.houses = pick ? [pick, ...rest] : rest;
+  }
+  // (each house carries its group's index through placement, which may copy it a tile over)
+  groups.forEach((gr, k) => gr.houses.forEach((st) => ((st as Structure & { grp?: number }).grp = k)));
+  const { structures: placed, blocked } = placeStructures(g, groups.flatMap((gr) => gr.houses), placeOpts);
+  const structures = balanceHouses(placed, groups, blocked);
   // the resort compounds by the sea (impassable; render/seaside.ts draws them)
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inResort(sea, x + 0.5, y + 0.5)) blocked[y * W + x] = 1;
   for (const st of structures) st.variant = hash2(st.x, st.y, NS + 21);
-  // (the town's mosque is the first one placed on each side; any later ones become shops)
-  let mosques = 0;
-  for (const st of structures) if (st.look === 'mosque' && ++mosques > 2) st.look = 'shops';
 
   const deco = emptyDeco();
-  deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.95, variant: 1 as const }, { width: 0.8, variant: 1 as const }, { width: 0.8, variant: 1 as const, straight: true }][roadKind(i)]);
-  deco.tracks = [...tracks0, ...mirrorLines(tracks0), ...ramps.lines];
-  const bed0 = tracks0.map((t) => (t === DESERT_SADDLE ? 0.95 : 0));
-  deco.trackBeds = [...bed0, ...bed0, ...ramps.beds];
-  deco.trackNoCars = [...tracks0.map(() => false), ...tracks0.map(() => false), ...ramps.noCars];
-  // irrigated plots by the oases (the second by the mesa west of the town, moving with it)
-  const ms = shift(30, 62.5);
+  deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.9, variant: 1 as const }, { width: 0.9, variant: 1 as const }, { width: 0.75, variant: 1 as const }][Math.min(i, 3)]);
+  const tracks0 = SINAI_TRACKS.map((l) => l.map(([u, v]) => pi(u, v)));
+  const baseTracks = [0, 1].map((side) => BASE_TRACK.map(([de, ds]) => ti(own(side, de, ds))));
+  deco.tracks = [...tracks0, ...baseTracks, ...ramps.lines];
+  deco.trackBeds = [...tracks0.map(() => 0), ...baseTracks.map(() => 0), ...ramps.beds];
+  deco.trackNoCars = [...tracks0.map(() => false), ...baseTracks.map(() => false), ...ramps.noCars];
+  // irrigated plots by the oases, the villages and in the gorge
+  const plot = (p: Point, w: number, h: number, rows: 0 | 1) => ({ x0: p.x - w / 2, y0: p.y - h / 2, x1: p.x + w / 2, y1: p.y + h / 2, rows });
   deco.fields = [
-    ...mirrorRects([
-      { x0: oasisSide0.x - 7.5, y0: oasisSide0.y + 2.5, x1: oasisSide0.x - 2.5, y1: oasisSide0.y + 6, rows: 0 as const },
-      { x0: 26.5 + ms.x, y0: 61.5 - 9 + ms.y, x1: 31.5 + ms.x, y1: 57 - 2 + ms.y, rows: 1 as const },
-      ...DESERT_FIELDS_EXTRA,
-    ]),
-    { x0: 105.5, y0: 107.5, x1: 110.5, y1: 111.5, rows: 0 as const },
-    { x0: 107.5, y0: 105.5, x1: 111.5, y1: 110.5, rows: 1 as const },
+    ...SINAI_FIELDS.map(([u, v, w, h, rows]) => plot(pp(u, v), w, h, rows as 0 | 1)),
+    ...[0, 1].map((side) => plot(own(side, BASE_OASIS[0] + 3.5, BASE_OASIS[1] - 3), 4, 3, side as 0 | 1)),
+    { x0: GORGE - 7.5, y0: GORGE - 5.5, x1: GORGE - 2.5, y1: GORGE - 1.5, rows: 0 },
+    { x0: GORGE - 5.5, y0: GORGE - 7.5, x1: GORGE - 1.5, y1: GORGE - 2.5, rows: 1 },
   ];
-  deco.power = [
-    [
-      S.pt(2, 58),
-      S.pt(30, 30),
-      // round the north mesa's west end (no wires over the mesa top)
-      S.pt(41, 14),
-      S.pt(45, 4),
-      S.pt(60, 2),
-    ],
-  ];
-  deco.power.push(...mirrorLines(deco.power));
-  // palms along the ring road (render only)
-  for (let j = 0; j < 18; j++) {
-    const a = (j / 18) * Math.PI * 2 + 0.17;
-    deco.trees.push({ x: CX + 0.5 + Math.cos(a) * (ringR + 1.55), y: CY + 0.5 + Math.sin(a) * (ringR + 1.55), kind: 2 });
-  }
-  // palms lining the town's streets, on the pavements between the paving and the house fronts
-  deco.trees.push(...townPalms(g, roads.filter((_, i) => roadKind(i) === 3), structures, blocked));
-
-  const sites = (at: [number, number][]) => at.map(([x, y]) => [Math.round(S.ti(x)), Math.round(S.ti(y))] as [number, number]);
-  // palms along the back of the beaches (render only, knocked over by vehicles)
+  deco.power = SINAI_POWER.map((l) => l.map(([u, v]) => pp(u, v)));
+  // palms lining the village streets and at the back of the beaches
+  deco.trees.push(...townPalms(g, [roads[0]], structures, blocked).filter((p) => townK(p.x, p.y) > 0.3));
   deco.trees.push(...beachPalms(sea, g, NS));
   deco.sea = sea;
-  deco.canyons = canyons.map((c) => ({ pts: c.pts, hw: CANYON_HW }));
+  deco.canyons = canyons.map((c) => ({ pts: c.pts.map((p) => ({ x: p.x - 0.5, y: p.y - 0.5 })), hw: CANYON_HW }));
 
   const offshore = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const f = seaFrame(W, H, sea.off, x + 0.5, y + 0.5, seaF);
-      if (sea.isle && isleDist(sea.isle, f.u, f.v) < 0) offshore[y * W + x] = 1;
-    }
+  if (sea.isle) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (isleAt(sea.isle, x + 0.5, y + 0.5) < 0) offshore[y * W + x] = 1;
 
+  const techAt = (p: Point): [number, number] => [Math.round(p.x - 1), Math.round(p.y - 1)];
+  const techSites = [
+    ...BASE_TECH.map((t) => ({ def: t.def, at: t.at.map(([de, ds]) => techAt(own(0, de, ds))), at2: t.at.map(([de, ds]) => techAt(own(1, de, ds))) })),
+    ...SINAI_TECH.map((t) => ({ def: t.def, at: t.at.map(([u, v]) => techAt(pp(u, v))), at2: t.at2.map(([u, v]) => techAt(pp(u, v))) })),
+  ];
   return assemble({ name: 'Wadi Al-Rimal', id: 'desert', biome: 'desert' }, g, {
     offshore,
-    oreMines: mines(oreFields),
+    oreMines: oreFields.map((f) => ({ x: f.x, y: f.y })),
     starts,
     oils,
     bridges: [],
     roads,
     structures,
     blocked,
-    techSites: [
-      { def: 'tech_hospital', at: [...sites([[30, 50], [22, 58], [18, 62], [26, 52], [16, 34]]), [44, 60], [20, 64], [56, 92]] },
-      { def: 'tech_comms', at: sites([[50, 92], [40, 90], [20, 92], [8, 30], [52, 68]]) },
-      { def: 'tech_airport', at: sites([[4, 30], [6, 24], [4, 18], [12, 28], [16, 26]]) },
-      ...DESERT_TECH_EXTRA,
-    ],
-    lanes: [ring(225, 225)[0], ring(45, 45)[0], wadi.at(CX - 26 * k), wadi.at(CX + 26 * k)],
+    techSites,
+    // the AI's crossings: the land at the gulfs' heads (every ground route takes both; a picket and the ambushes
+    // hold the own one, ai.ts manageChoke)
+    lanes: CROSS_PX.map(([u, v]) => pi(u, v)),
     deco,
   });
 }
 
-/** Design-space centre of the 96 x 96 layouts. */
-const CX0 = 47.5;
-
-// Wadi Al-Rimal on the ground the 128 x 128 map gained (map tile coordinates, player 0's half; mirrored).
-/**
- * The Jebel's spine (player 0's massif, south-west of the town; mirrored): crest heights at the via points.
- * From a shoulder under the butte over a low saddle (the pass the track takes) to the main summit under the
- * fort's mesa, a spur running north-west, and the ridge dying out north-east short of the town.
- */
-const DESERT_MASSIF: { x: number; y: number; h: number }[][] = [
-  [
-    { x: 21, y: 96, h: 2.6 },
-    { x: 29, y: 89.5, h: 1.5 },
-    { x: 35, y: 86, h: 3.4 },
-    { x: 41, y: 82.5, h: 4.8 },
-    { x: 45.5, y: 78, h: 3.0 },
-    { x: 47, y: 75, h: 0.3 },
-  ],
-  [
-    { x: 41, y: 82.5, h: 4.8 },
-    { x: 37.5, y: 77.5, h: 2.6 },
-  ],
-];
-/**
- * The coloured canyon (player 0's; mirrored): a winding gorge cut along the south-west flank of the fort's
- * sandstone mesa (the fort keeps its rock) into the granite of the main summit, from the massif's north flank
- * down to the plain by the southern ore field. Its floor is sand, about four and a half tiles wide (room for a
- * column of tanks) and passable all the way; its walls are rock. The course keeps its north-east wall where the
- * old two-tile slot had it (off the fort) and widened into the massif to the south-west. Via points in tile
- * index space.
- */
-const DESERT_CANYON: Point[] = [
-  { x: 32.2, y: 76.2 },
-  { x: 33.9, y: 79.1 },
-  { x: 34.7, y: 82.8 },
-  { x: 37.2, y: 84.3 },
-  { x: 38.4, y: 86.7 },
-  { x: 40.9, y: 88.1 },
-  { x: 42.8, y: 90.0 },
-  { x: 45.7, y: 90.5 },
-  { x: 46.5, y: 92.7 },
-];
 /** Half width of the canyon's sand floor (tiles; the renderer's measure of it: MapDeco.canyons). */
 const CANYON_HW = 2.2;
 /**
  * How far beyond CANYON_HW the floor stays level before the walls rise (SL1): every tile of the sand floor is level
- * ground (sim/slope.ts: the tiles along the walls' feet were tilted up the walls, too steep to drive), some four tiles
- * across even in the bends, room for groups to pass each other. The walls' rock tiles stay where they were.
+ * ground (sim/slope.ts), some four tiles across even in the bends, room for groups to pass each other.
  */
 const CANYON_FLAT = 0.75;
-/** Half width of the massif's foot (tiles; it wanders by +-2). */
+/** Half width of the massif's foot (tiles; it wanders by +-16%). */
 const MASSIF_FOOT = 12.5;
 /** The massif's cross profile (SL1): the flank's foot (MASSIF_U2) and top (MASSIF_U1) as fractions of the foot distance, the profile's height there. */
 const MASSIF_U1 = 0.3;
 const MASSIF_U2 = 0.46;
 const MASSIF_P1 = 0.88;
 const MASSIF_P2 = 0.26;
-/** The spine's crest heights (DESERT_MASSIF) are lifted this much (SL1: a higher mountain, steep flanks). */
+/** The spine's crest heights are lifted this much (SL1: a higher mountain, steep flanks). */
 const MASSIF_LIFT = 1.25;
+
+/** Roads (pixel polylines): the highway base to base over both crossings, the Sinai's coast roads. */
+const SINAI_ROADS: [number, number][][] = [
+  // the highway: from blue's base over the isthmus, through the west village, across north Sinai, through the east
+  // village and the gap by the ridge, down the Arabian coast inland of Midian's mountains to red's base
+  [
+    [11, 67],
+    [24, 62],
+    [42, 61],
+    [62, 62],
+    [88, 58],
+    [125, 53],
+    [160, 56],
+    [196, 67],
+    [222, 76],
+    [240, 79],
+    [250, 92],
+    [254, 115],
+    [262, 140],
+    [250, 170],
+    [214, 183],
+  ],
+  // the coast road from the west village down the Sinai's Gulf of Suez coast to Sharm
+  [
+    [62, 62],
+    [60, 80],
+    [64, 96],
+    [72, 110],
+    [70, 126],
+    [64, 142],
+    [70, 158],
+    [78, 172],
+    [86, 186],
+    [98, 196],
+    [112, 200],
+    [124, 200],
+  ],
+  // from the east village down the Gulf of Aqaba coast to Nuweiba
+  [
+    [222, 76],
+    [212, 90],
+    [200, 104],
+    [192, 116],
+    [186, 128],
+  ],
+];
+/** Dirt tracks (pixel polylines). */
+const SINAI_TRACKS: [number, number][][] = [
+  // from the highway south over El Tih down the coloured canyon to Nuweiba's road
+  [
+    [158, 56],
+    [154, 68],
+    [152.5, 77],
+  ],
+  [
+    [172, 120],
+    [182, 124],
+    [190, 118],
+  ],
+  // from the highway down Wadi el-Arish to the gorge
+  [
+    [125, 53],
+    [124, 76],
+    [125, 100],
+  ],
+  // from the coast road to the massif's summit track
+  [
+    [70, 126],
+    [76.7, 125.3],
+  ],
+];
+/** Each base's track to its hamlet (base frame). */
+const BASE_TRACK: [number, number][] = [
+  [-6, 6],
+  [-14, 14],
+  [-21, 22],
+  [-24, 26],
+];
+/** Irrigated plots (centre u, v, size w x h tiles, row direction). */
+const SINAI_FIELDS: [number, number, number, number, number][] = [
+  [74, 70, 5, 3.5, 0],
+  [210, 84, 5, 3.5, 1],
+  [86, 106, 4, 3, 0],
+  [182, 102, 4, 3, 1],
+];
+/** Power lines (pixel polylines): each base to its crossing's village. */
+const SINAI_POWER: [number, number][][] = [
+  [
+    [8, 74],
+    [26, 66],
+    [44, 64],
+    [62, 66],
+    [90, 62],
+  ],
+  [
+    [218, 176],
+    [244, 160],
+    [256, 120],
+    [246, 90],
+    [228, 80],
+    [200, 72],
+  ],
+];
+
 /**
- * Height fraction of the massif at u = distance from the spine / foot distance (1 at the spine, 0 from the foot
+ * Mountain tracks graded into the massif (SL1; via points in the old layout's screen positions, the west one;
+ * mirrored across the massif): the summit track up the north-west flank to the plateau under the summit, a steep
+ * footpath (soldiers only).
+ */
+const SINAI_RAMPS: Ramp[] = [
+  {
+    pts: [
+      { x: -23.2, y: 133.6 },
+      { x: -22.2, y: 136.4 },
+      { x: -20.5, y: 139.6 },
+      { x: -17.6, y: 140.6 },
+      { x: -19.0, y: 143.4 },
+      { x: -16.2, y: 145.6 },
+      { x: -13.6, y: 146.4 },
+    ],
+    hw: 1.5,
+    track: true,
+    noCars: true,
+  },
+  {
+    // (a steep pitch up the north face: soldiers only)
+    pts: [
+      { x: -14, y: 135.5 },
+      { x: -13.9, y: 139, f: 0.28 },
+      { x: -13.8, y: 142.5, f: 0.82 },
+      { x: -13.6, y: 145.8 },
+    ],
+    hw: 0.6,
+    track: true,
+    noCars: true,
+  },
+];
+
+/** The villages at the crossings (pixel centres): the Egyptian one east of the isthmus, the Arabian one west of the gap. */
+const VILLAGE_PX: [number, number][] = [
+  [64, 62],
+  [222, 76],
+];
+/** The Sinai's hamlets: pairs (pixel anchors). */
+const HAMLET_PX: [number, number][][] = [
+  [
+    [96, 112],
+    [205, 118],
+  ],
+];
+
+/** A house at continuous point p (kind, facing, look); a 3 x 2 courtyard turned a quarter becomes 2 x 3. */
+function houseAt(p: Point, kind: StructureKind, rot: number, look?: Structure['look'], town?: 0 | 1 | 2): Structure {
+  const w = kind === StructureKind.Courtyard ? (rot % 2 ? 2 : 3) : 2;
+  const h = kind === StructureKind.Courtyard ? (rot % 2 ? 3 : 2) : 2;
+  return { kind, x: Math.round(p.x - w / 2), y: Math.round(p.y - h / 2), w, h, rot, ...(look ? { look } : {}), ...(town !== undefined ? { town } : {}) };
+}
+/** The facing (rot 0..3: (0,-1), (1,0), (0,1), (-1,0) in tile space) nearest to direction (dx, dy). */
+const facing = (dx: number, dy: number) => (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
+/** A group of candidate houses: one place (a village, a town, a hamlet) and the other side's twin place it is held level with. */
+interface HouseGroup {
+  /** Places of the same pair share it; side 0 nearer blue, 1 nearer red. */
+  pair: number;
+  side: number;
+  centre: Point;
+  houses: Structure[];
+}
+/**
+ * Candidate houses lining the roads through a place: both sides of every road within `r` tiles of its centre, every
+ * 3.3 tiles, in two rows (the first facing the road), shop-houses on the street, the mosque the first house north of
+ * the road nearest the centre.
+ */
+function roadHouses(c: Point, r: number, roads: Point[][], town: 0 | 1 | 2, rows = 2): Structure[] {
+  const out: Structure[] = [];
+  const M = StructureKind.MudHouse;
+  // (the houses nearest the centre, the back row's first, are the mosque's candidate spots)
+  const back: Structure[] = [];
+  const front: Structure[] = [];
+  let k = 0;
+  for (const road of roads)
+    for (let j = 0; j < road.length - 1; j++) {
+      const a = { x: road[j].x + 0.5, y: road[j].y + 0.5 };
+      const b = { x: road[j + 1].x + 0.5, y: road[j + 1].y + 0.5 };
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      const nx = -(b.y - a.y) / L;
+      const ny = (b.x - a.x) / L;
+      for (let t = 1.6; t < L; t += 3.3) {
+        const px = a.x + ((b.x - a.x) * t) / L;
+        const py = a.y + ((b.y - a.y) * t) / L;
+        if (Math.hypot(px - c.x, py - c.y) > r) continue;
+        for (const side of [-1, 1])
+          for (let row = 0; row < rows; row++) {
+            const off = 3.4 + row * 3.2;
+            const hx = px + nx * side * off;
+            const hy = py + ny * side * off;
+            const rot = facing(px - hx, py - hy);
+            const shop = row === 0 && k++ % 3 === 0;
+            const st = houseAt({ x: hx, y: hy }, M, rot, shop ? 'shop' : undefined, town);
+            out.push(st);
+            (row === rows - 1 ? back : front).push(st);
+          }
+      }
+    }
+  const byDist = (p: Structure, q: Structure) => Math.hypot(p.x - c.x, p.y - c.y) - Math.hypot(q.x - c.x, q.y - c.y);
+  back.sort(byDist);
+  front.sort(byDist);
+  // the mosque: a courtyard (createDesertMap keeps the first candidate that fits)
+  const mosques = [...back, ...front].map((h) => houseAt({ x: h.x + 1, y: h.y + 1 }, StructureKind.Courtyard, h.rot & 2, 'mosque', town));
+  return [...mosques, ...out];
+}
+/**
+ * Every house of the map, by place: the villages at the crossings (houses along the roads through them), Sharm's
+ * and Nuweiba's towns, the Sinai's hamlets and each base's own; places of one pair are held level by balanceHouses.
+ */
+export function sinaiHouses(roads: Point[][]): HouseGroup[] {
+  const M = StructureKind.MudHouse;
+  const hamlet: [number, number, number][] = [
+    [0, 0, 1],
+    [3.4, 2.4, 2],
+    [-3, 3, 0],
+  ];
+  const cluster = (c: Point, turned: boolean, town: 0 | 1 | 2) => hamlet.map(([de, ds, rot]) => houseAt(turned ? offs(c, -de, -ds) : offs(c, de, ds), M, turned ? (rot + 2) % 4 : rot, undefined, town));
+  const groups: HouseGroup[] = [];
+  VILLAGE_PX.forEach(([u, v], side) => {
+    const c = pp(u, v);
+    groups.push({ pair: 0, side, centre: c, houses: roadHouses(c, 13, roads, side ? 1 : 0) });
+  });
+  const sharm = pp(...SHARM_TOWN_PX);
+  const nuweiba = pp(...NUWEIBA_TOWN_PX);
+  groups.push({ pair: 1, side: 0, centre: sharm, houses: roadHouses(sharm, 8, roads, 2) });
+  groups.push({ pair: 1, side: 1, centre: nuweiba, houses: roadHouses(nuweiba, 8, roads, 1) });
+  HAMLET_PX.forEach(([h0, h1], k) => {
+    groups.push({ pair: 2 + k, side: 0, centre: pp(...h0), houses: cluster(pp(...h0), false, 0) });
+    groups.push({ pair: 2 + k, side: 1, centre: pp(...h1), houses: cluster(pp(...h1), true, 1) });
+  });
+  const P = 2 + HAMLET_PX.length;
+  for (let side = 0; side < 2; side++) {
+    const c = own(side, BASE_HAMLET[0], BASE_HAMLET[1]);
+    groups.push({ pair: P, side, centre: c, houses: cluster(c, side === 1, side ? 1 : 0) });
+  }
+  return groups;
+}
+/** Does a house take a garrison (sim/garrison.ts: the defined footprints only)? */
+const garrisons = (st: Structure) => st.kind === StructureKind.MudHouse || (st.kind === StructureKind.Courtyard && st.w === 3);
+/**
+ * Hold each pair of places level: the same number of garrisonable houses (the bigger place's farthest from its
+ * centre come down; their footprints open again).
+ */
+function balanceHouses(placed: Structure[], groups: HouseGroup[], blocked: Uint8Array): Structure[] {
+  const groupOf = new Map<Structure, HouseGroup>();
+  for (const st of placed) {
+    const k = (st as Structure & { grp?: number }).grp;
+    if (k !== undefined) groupOf.set(st, groups[k]);
+    delete (st as Structure & { grp?: number }).grp;
+  }
+  const drop = new Set<Structure>();
+  const pairs = new Set(groups.map((gr) => gr.pair));
+  for (const p of pairs) {
+    const sides = [0, 1].map((side) => placed.filter((st) => garrisons(st) && groupOf.get(st)?.pair === p && groupOf.get(st)?.side === side));
+    const n = Math.min(sides[0].length, sides[1].length);
+    for (const list of sides) {
+      const c = groupOf.get(list[0])?.centre;
+      if (!c) continue;
+      list.sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y));
+      for (const st of list.slice(n)) drop.add(st);
+    }
+  }
+  for (const st of drop) for (let y = st.y; y < st.y + st.h; y++) for (let x = st.x; x < st.x + st.w; x++) blocked[y * W + x] = 0;
+  // one mosque a place: any further one that found room becomes a row of shops
+  const hasMosque = new Set<HouseGroup>();
+  for (const st of placed) {
+    if (st.look !== 'mosque') continue;
+    const gr = groupOf.get(st)!;
+    if (hasMosque.has(gr)) st.look = 'shops';
+    hasMosque.add(gr);
+  }
+  return placed.filter((st) => !drop.has(st));
+}
+/** Each base's hamlet (base frame). */
+const BASE_HAMLET: [number, number] = [-24, 26];
+
+/**
+ * Height fraction of a mountain at u = distance from the spine / foot distance (1 at the spine, 0 from the foot
  * out): a talus apron easing up from the foot to MASSIF_P2, a steep, even flank to MASSIF_P1, a rounded crest.
  */
 function massifProfile(u: number): number {
@@ -889,37 +1459,9 @@ function massifProfile(u: number): number {
   const t = u / MASSIF_U1;
   return MASSIF_P1 + (1 - MASSIF_P1) * (1 - t * t);
 }
-/** More sandstone mesas: a butte south-west of the town (a ruined fort on it, landmarks/plan.ts) and one on the western flank. */
-const DESERT_MESAS_EXTRA: Capsule[] = [
-  { x: 20, y: 96, x2: 26, y2: 92, r: 2.4 },
-  { x: 5, y: 61, x2: 10, y2: 58, r: 2.0 },
-];
-/** More ore: an outlying field on the western flank, gems on the southern sands. */
-const DESERT_ORE_EXTRA: Field[] = [
-  { x: 4, y: 84, r: 2.8, kind: 1 },
-  { x: 60, y: 124, r: 2.2, kind: 2 },
-];
-/** A spring at the north-west foot of the massif. */
-const DESERT_OASES_EXTRA: { x: number; y: number; r: number }[] = [{ x: 21, y: 79, r: 1.9 }];
-/** Side wadis running into the main one (bed centre lines as segments; r unused). */
-const DESERT_WADI_BRANCHES: Capsule[] = [
-  { x: 0, y: 38, x2: 7, y2: 38.5, r: 0 },
-  { x: 7, y: 38.5, x2: 14, y2: 37, r: 0 },
-  { x: 14, y: 37, x2: 21, y2: 35.5, r: 0 },
-  { x: 96, y: 127, x2: 99, y2: 121.5, r: 0 },
-  { x: 99, y: 121.5, x2: 103, y2: 117, r: 0 },
-];
-/** The track from the spring over the Jebel's saddle to the highway (player 0's; mirrored). */
-const DESERT_SADDLE: (Point & { nat?: boolean })[] = [
-  { x: 21.5, y: 82 },
-  { x: 25.5, y: 86.5 },
-  { x: 29, y: 89.5, nat: true },
-  { x: 31.5, y: 95 },
-  { x: 33, y: 100 },
-];
+
 /**
- * A track or footpath graded into a mountainside (SL1, sim/slope.ts): via points in tile index space (player 0's
- * half; mirrored), the ground along it evened out to a steady grade between the points whose height is known (the
+ * A track or footpath graded into a mountainside (SL1, sim/slope.ts): via points in tile index space, the ground along it evened out to a steady grade between the points whose height is known (the
  * ends and any marked `nat`: the natural ground there) and level across, cut into the slope on the uphill side and
  * built up on the other, easing back into the natural ground over SHOULDER tiles either side. Vehicle tracks keep a
  * gentle grade (well under slope.ts's vehicle limit); footpaths are narrow and steeper than vehicles take.
@@ -943,6 +1485,8 @@ const RAMP_SHOULDER = 1.4;
 function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: number) => number) {
   type Line = { pts: Point[]; at: number[]; hs: number[]; hw: number; bed: boolean };
   const lines: Line[] = [];
+  void W;
+  void H;
   for (const r of src) {
     let len = 0;
     const at = r.pts.map((p, i) => (i ? (len += Math.hypot(p.x - r.pts[i - 1].x, p.y - r.pts[i - 1].y)) : 0));
@@ -960,8 +1504,6 @@ function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: numb
     });
     const bed = !r.gradeOnly;
     lines.push({ pts: r.pts, at, hs, hw: r.hw, bed });
-    // the mirror image takes the same heights (the halves stay exact twins)
-    lines.push({ pts: r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })), at, hs, hw: r.hw, bed });
   }
   /** Nearest line within reach: distance from its centre line and its grade height there. */
   const nearest = (x: number, y: number, reach: number, beds = false) => {
@@ -1000,129 +1542,14 @@ function rampSet(W: number, H: number, src: Ramp[], natural: (x: number, y: numb
       const n = nearest(x, y, 4 + r);
       return !!n && n.d < n.hw + r;
     },
-    /** Centre lines of the drawn tracks (both halves)... */
-    lines: src.flatMap((r) => (!r.track ? [] : [r.pts.map((p) => ({ x: p.x, y: p.y })), r.pts.map((p) => ({ x: W - 1 - p.x, y: H - 1 - p.y })).reverse()])),
+    /** Centre lines of the drawn tracks... */
+    lines: src.flatMap((r) => (!r.track ? [] : [r.pts.map((p) => ({ x: p.x, y: p.y }))])),
     /** ...and how much wider than a plain dirt track each one's worn band is drawn (MapDeco.trackBeds). */
-    beds: src.flatMap((r) => (!r.track ? [] : [Math.max(0, r.hw - 0.45), Math.max(0, r.hw - 0.45)])),
-    noCars: src.flatMap((r) => (!r.track ? [] : [!!r.noCars, !!r.noCars])),
+    beds: src.flatMap((r) => (!r.track ? [] : [Math.max(0, r.hw - 0.45)])),
+    noCars: src.flatMap((r) => (!r.track ? [] : [!!r.noCars])),
   };
 }
 
-/**
- * Wadi Al-Rimal's mountain tracks (SL1; player 0's massif, mirrored). The massif's upper flanks are too steep to
- * drive (and in most places to climb):
- * - the summit track winds up the east flank above the canyon's lower walls onto the summit plateau under the fort's
- *   mesa (the canyon's north-east rim);
- * - a footpath climbs straight up the north face, too steep for vehicles, and a trail runs on along the crest
- *   through the crags to the same plateau;
- * - the saddle track (the spring to the highway) is graded over the saddle, by the canyon's south-west rim.
- */
-const DESERT_RAMPS: Ramp[] = [
-  {
-    // the canyon's upper mouth: a level, wide way in off the steep north flank
-    pts: [
-      { x: 30.0, y: 71.8 },
-      { x: 32.2, y: 76.2, nat: true },
-      { x: 34.0, y: 79.4 },
-    ],
-    hw: 2.1,
-    gradeOnly: true,
-  },
-  {
-    pts: [
-      { x: 51.2, y: 90.2 },
-      { x: 49.8, y: 87.2 },
-      { x: 48.4, y: 84.2 },
-      { x: 48.5, y: 81.6 },
-      { x: 48.7, y: 79.6 },
-      { x: 47.6, y: 78.1 },
-      { x: 45.4, y: 77.6 },
-    ],
-    hw: 1.5,
-    track: true,
-    noCars: true,
-  },
-  {
-    // (a steep pitch through the crags, some 35 degrees: soldiers only)
-    pts: [
-      { x: 38.5, y: 71.0 },
-      { x: 38.55, y: 73.4, f: 0.3 },
-      { x: 38.62, y: 75.6, f: 0.82 },
-      { x: 38.7, y: 77.6 },
-    ],
-    hw: 0.6,
-    track: true,
-    noCars: true,
-  },
-  {
-    // the trail along the crest from the footpath's head to the plateau (through the crags)
-    pts: [
-      { x: 38.7, y: 77.6 },
-      { x: 41.5, y: 77.9, nat: true },
-      { x: 44.6, y: 78.2 },
-    ],
-    hw: 0.9,
-    track: true,
-    noCars: true,
-  },
-  // (drawn as the old track it is: DESERT_TRACKS_EXTRA, its bed widened in deco.trackBeds)
-  { pts: DESERT_SADDLE, hw: 1.4 },
-];
-/** Tracks to the well hamlet and the spring. */
-const DESERT_TRACKS_EXTRA: Point[][] = [
-  [{ x: 31, y: 66 }, { x: 25, y: 68.5 }, { x: 19, y: 72.5 }],
-  // from the spring over the saddle to the highway (graded: DESERT_RAMPS)
-  DESERT_SADDLE,
-];
-/** The town quarter's graded ground (player 0's, mirrored): 1 inside, easing out over two tiles. */
-function townGround(x: number, y: number) {
-  const k = (px: number, py: number) => (1 - smoothstep(0, 2, Math.max(49.5 - px, px - 83.5, 0))) * (1 - smoothstep(0, 2, Math.max(71 - py, py - 96, 0)));
-  return Math.max(k(x, y), k(W - 1 - x, H - 1 - y));
-}
-/** Cross streets of the town quarter south of the ring road (tile index space; the high street is built off the ring). */
-const DESERT_TOWN_STREETS: Point[][] = [
-  // (east of the high street only: off the highway it would meet it right by the highway's bend)
-  [{ x: 63, y: 80 }, { x: 78, y: 80 }],
-];
-/**
- * The town quarter (player 0's half, south of the ring road; mirrored). Blocks two houses deep between the
- * streets, a tile-wide alley behind every row and between neighbours, the houses facing the nearer
- * street; shop-houses on the high street and the first cross street, courtyard houses and villas at the
- * block ends, the mosque on the corner of the high street and the first cross street (the first
- * candidate placed wins: placeStructures validates every footprint and skips what does not fit).
- */
-function desertTown(): Structure[] {
-  const M = StructureKind.MudHouse;
-  const Q = StructureKind.Courtyard;
-  const out: Structure[] = [
-    { kind: Q, x: 65, y: 82, w: 2, h: 3, rot: 3, look: 'mosque' },
-    { kind: Q, x: 60, y: 82, w: 2, h: 3, rot: 1, look: 'shops' },
-    { kind: Q, x: 70, y: 74, w: 3, h: 2, rot: 2 },
-    { kind: Q, x: 56, y: 85, w: 3, h: 2, rot: 0 },
-    { kind: Q, x: 72, y: 85, w: 3, h: 2, rot: 0 },
-    { kind: Q, x: 68, y: 90, w: 3, h: 2, rot: 2 },
-    { kind: Q, x: 57, y: 74, w: 2, h: 3, rot: 1 },
-  ];
-  // rows (top tile, facing): north of each cross street the houses face south, south of it north
-  const rows: [number, number][] = [
-    [74, 2],
-    [77, 0],
-    [82, 2],
-    [85, 0],
-    [90, 2],
-    [93, 0],
-  ];
-  for (const [y, face] of rows)
-    for (let x = 51; x <= 78; x += 3) {
-      // the columns either side of the high street (x 63) face it
-      const xx = x >= 63 ? x + 2 : x;
-      const rot = xx === 60 ? 1 : xx === 65 ? 3 : face;
-      const street = rot % 2 === 1 || y === 77 || y === 82;
-      const h = hash2(xx, y, 5151);
-      out.push({ kind: M, x: xx, y, w: 2, h: 2, rot, look: street && h < (rot % 2 ? 0.7 : 0.45) ? 'shop' : undefined });
-    }
-  return out;
-}
 /** Render-only palms along the town streets: both pavements, every ~2.6 tiles, clear of houses and junctions. */
 function townPalms(g: Grids, streets: Point[][], structures: Structure[], blocked: Uint8Array) {
   const out: { x: number; y: number; kind: number }[] = [];
@@ -1156,88 +1583,56 @@ function townPalms(g: Grids, streets: Point[][], structures: Structure[], blocke
   }
   return out;
 }
-/** The well hamlet on the open sands north of the massif. */
-const DESERT_EXTRA: Structure[] = [
-  { kind: StructureKind.MudHouse, x: 32, y: 63, w: 2, h: 2, rot: 1 },
-  { kind: StructureKind.Courtyard, x: 35, y: 65, w: 3, h: 2, rot: 2 },
-  { kind: StructureKind.MudHouse, x: 31, y: 67, w: 2, h: 2, rot: 0 },
-];
-/** An irrigated plot by the spring. */
-const DESERT_FIELDS_EXTRA: { x0: number; y0: number; x1: number; y1: number; rows: 0 | 1 }[] = [{ x0: 14, y0: 81.5, x1: 19, y1: 85, rows: 0 }];
-/** A second field hospital on the new ground. */
-const DESERT_TECH_EXTRA: { def: string; at: [number, number][] }[] = [{ def: 'tech_hospital', at: [[42, 64], [26, 72], [48, 104], [10, 100], [30, 58], [60, 100], [36, 60], [20, 64], [56, 92], [4, 106]] }];
 
-/**
- * The Red Sea in the north-west and south-east corners (player-neutral: both corners are as far from
- * either base). A coral reef shelf along the coast drops off into deep water; a cove between two granite
- * headlands; a bathing beach; a resort compound behind it (impassable).
- */
-const DESERT_SEA: SeaDeco = {
-  off: 66.5,
-  cove: { u: 12.5, w: 4.4, L: 8.5 },
-  heads: [
-    { u0: 6.2, v0: 1.6, u1: 5.4, v1: -6.5, r: 1.9, top: 2.6 },
-    { u0: 18.8, v0: 1.4, u1: 19.6, v1: -6.0, r: 2.0, top: 3.0 },
-  ],
-  resort: { u0: -19.5, u1: -7.5, v0: -11.5, v1: -4.8 },
-  beach: [-24, 2.5],
-  // Tiran-like: low and rocky with sandy edges, off the cove's mouth between the headlands, past the reef's
-  // drop-off (some 3 tiles of water from the shore reef and the headland tips; the Blue Hole's lagoon to its west)
-  isle: { u: 11.8, v: 7.0, ru: 2.8, rv: 2.15 },
-};
+
 /** Reef shelf width (tiles from the waterline) and the open sea's floor. */
-const REEF = 3.6;
+const REEF = 2.4;
 const SEA_FLOOR = -1.46;
 
-const seaF = { u: 0, v: 0, b: 0 };
-/** Distance from a point (u, v) to a headland capsule. */
-function headDist(hd: SeaDeco['heads'][number], u: number, v: number) {
-  return distToSegment(u, v, hd.u0, hd.v0, hd.u1, hd.v1);
-}
-/** Inside the resort compound (continuous point)? */
+const seaF = { u: 0, v: 0 };
+/** Inside a resort compound (continuous point)? */
 function inResort(sea: SeaDeco, x: number, y: number) {
-  const f = seaFrame(W, H, sea.off, x, y, seaF);
-  const r = sea.resort;
-  return f.u > r.u0 && f.u < r.u1 && f.v > r.v0 && f.v < r.v1;
+  for (const st of sea.sites) {
+    const f = frameUV(st, x, y, seaF);
+    const r = st.resort;
+    if (f.u > r.u0 && f.u < r.u1 && f.v > r.v0 && f.v < r.v1) return true;
+  }
+  return false;
 }
-/** Beach, sea, resort or headland at a point (no trees, no clutter)? */
+/** Beach, sea or resort at a point (no trees, no clutter)? */
 function coastBusy(sea: SeaDeco, x: number, y: number) {
-  const f = seaFrame(W, H, sea.off, x, y, seaF);
-  if (coastV(sea, f.u, f.v) > -4.6) return true;
-  const r = sea.resort;
-  return f.u > r.u0 - 1 && f.u < r.u1 + 1 && f.v > r.v0 - 1 && f.v < r.v1 + 1;
+  if (seaDist(sea, x, y) > -4.6) return true;
+  for (const st of sea.sites) {
+    const f = frameUV(st, x, y, seaF);
+    const r = st.resort;
+    if (f.u > r.u0 - 1 && f.u < r.u1 + 1 && f.v > r.v0 - 1 && f.v < r.v1 + 1) return true;
+  }
+  return false;
 }
-/** Ground height by the sea at vertex (vx, vy): the reef shelf and the deep water, the beach, the headlands, the resort's terrace. */
+/** Ground height by the sea at vertex (vx, vy): the reef shelf and the deep water, the beach, the resorts' terraces, the island. */
 function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number) {
-  const f = seaFrame(W, H, sea.off, vx, vy, seaF);
-  const { u, v } = f;
-  const ve = coastV(sea, u, v);
+  const ve = seaDist(sea, vx, vy);
   if (ve > -10) {
     if (ve > 0) {
-      // the reef flat, shelving gently, then the drop-off into the deep (open sea only, not the cove)
-      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + ((hash2(vx, vy, ns + 61) + hash2(W - vx, H - vy, ns + 61)) / 2 - 0.5) * 0.03;
-      h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 2.2, v);
+      // the reef flat, shelving gently, then the drop-off into the deep
+      const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + ((hash2(vx, vy, ns + 61) + hash2(vy, vx, ns + 61)) / 2 - 0.5) * 0.03;
+      h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 1.8, ve);
     } else {
       // the beach rises from the waterline into the dunes
       const beach = WATER_LEVEL + 0.03 - ve * 0.075;
-      h = h + (beach - h) * smoothstep(-10, -4.2, ve);
+      h = h + (beach - h) * smoothstep(-7.5, -4.2, ve);
     }
   }
-  const r = sea.resort;
-  const k = (1 - smoothstep(0.2, 1.2, r.u0 - u)) * (1 - smoothstep(0.2, 1.2, u - r.u1)) * (1 - smoothstep(0.2, 1.2, r.v0 - v)) * (1 - smoothstep(0.2, 1.2, v - r.v1));
-  if (k > 0) h = h + (0.17 - h) * k;
-  for (const hd of sea.heads) {
-    const d = headDist(hd, u, v);
-    if (d > hd.r + 0.8) continue;
-    // rising from the sea point to the inland crest
-    const t = Math.max(0, Math.min(1, (hd.v0 - v) / (hd.v0 - hd.v1)));
-    const top = hd.top * (0.7 + 0.3 * smoothstep(0, 0.6, t)) + ((hash2(vx, vy, ns + 63) + hash2(W - vx, H - vy, ns + 63)) / 2 - 0.5) * 0.15;
-    h = h + (top - h) * (1 - smoothstep(hd.r - 0.45, hd.r + 0.7, d));
+  for (const st of sea.sites) {
+    const f = frameUV(st, vx, vy, seaF);
+    const r = st.resort;
+    const k = (1 - smoothstep(0.2, 1.2, r.u0 - f.u)) * (1 - smoothstep(0.2, 1.2, f.u - r.u1)) * (1 - smoothstep(0.2, 1.2, r.v0 - f.v)) * (1 - smoothstep(0.2, 1.2, f.v - r.v1));
+    if (k > 0) h = h + (0.17 - h) * k;
   }
   if (sea.isle) {
-    const d = isleDist(sea.isle, u, v);
+    const d = isleAt(sea.isle, vx, vy);
     if (d < 4.5) {
-      const n = ((hash2(vx, vy, ns + 65) + hash2(W - vx, H - vy, ns + 65)) / 2 - 0.5) * 0.08;
+      const n = (hash2(vx, vy, ns + 65) - 0.5) * 0.08;
       // the island: a low sandy rim rising to the rocky knoll; round it the reef flat, then the drop-off
       const ih =
         d < 0
@@ -1250,57 +1645,46 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
 }
 /** Tile type by the sea at a tile centre. */
 function coastTile(sea: SeaDeco, x: number, y: number, t: Tile): Tile {
-  const f = seaFrame(W, H, sea.off, x, y, seaF);
-  const ve = coastV(sea, f.u, f.v);
-  for (const hd of sea.heads) if (headDist(hd, f.u, f.v) < hd.r + 0.1) return Tile.Rock;
   if (sea.isle) {
-    const d = isleDist(sea.isle, f.u, f.v);
+    const d = isleAt(sea.isle, x, y);
     if (d < 0) return d < ISLE_KNOLL ? Tile.Rock : d < -0.6 ? Tile.Dirt : Tile.Sand;
   }
+  const ve = seaDist(sea, x, y);
   if (ve > 0) return Tile.Water;
   if (inResort(sea, x, y)) return Tile.Dirt;
   if (ve > -4.4) return Tile.Sand;
   return t;
 }
-/** Palms along the back of the beach and round the resort (render only; kind 2). */
+/** Palms along the back of the resort beaches and round the compounds (render only; kind 2). */
 function beachPalms(sea: SeaDeco, g: Grids, ns: number): { x: number; y: number; kind: number }[] {
   const out: { x: number; y: number; kind: number }[] = [];
-  const add = (u: number, v: number) => {
-    for (const b of [0]) {
-      // north-west corner: (u, v) -> point; the south-east corner: its mirror
-      const s = (sea.off - coastWiggleOf(u) + v) / Math.SQRT1_2;
-      const d = u / Math.SQRT1_2;
-      let px = (d - s) / 2;
-      let py = (-s - d) / 2;
-      if (b) {
-        px = -px;
-        py = -py;
-      }
-      const x = W / 2 + px;
-      const y = H / 2 + py;
-      const tx = Math.floor(x);
-      const ty = Math.floor(y);
-      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+  sea.sites.forEach((st, b) => {
+    const add = (u: number, v: number) => {
+      const p = framePoint(st, u, v);
+      const tx = Math.floor(p.x);
+      const ty = Math.floor(p.y);
+      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) return;
       const i = ty * W + tx;
-      if (g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Rock || g.trees[i]) continue;
-      out.push({ x, y, kind: 2 });
+      if (g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Rock || g.trees[i]) return;
+      out.push({ x: p.x, y: p.y, kind: 2 });
+    };
+    // a ragged row at the back of the bathing beach
+    for (let u = st.beach[0] + 0.6; u < st.beach[1] - 0.3; u += 1.15) {
+      const j = hash2(Math.round(u * 10), 3 + b, ns + 71);
+      if (j < 0.3) continue;
+      add(u + (j - 0.5) * 0.5, -3.7 - hash2(Math.round(u * 10), 5 + b, ns + 71) * 0.9);
     }
-  };
-  // a ragged row at the back of the bathing beach, thinning out along the open shore
-  for (let u = sea.beach[0] + 0.6; u < sea.cove.u - sea.cove.w - 3; u += 1.15) {
-    const j = hash2(Math.round(u * 10), 3, ns + 71);
-    if (u > sea.beach[1] && j < 0.55) continue;
-    add(u + (j - 0.5) * 0.5, -3.7 - hash2(Math.round(u * 10), 5, ns + 71) * 0.9);
-  }
-  // the resort's palm-lined edges
-  const r = sea.resort;
-  for (let u = r.u0 + 0.4; u < r.u1; u += 1.6) add(u, r.v1 + 0.45);
-  for (let v = r.v0 + 0.5; v < r.v1; v += 1.7) {
-    add(r.u0 - 0.5, v);
-    add(r.u1 + 0.5, v);
-  }
+    // the resort's palm-lined edges
+    const r = st.resort;
+    for (let u = r.u0 + 0.4; u < r.u1; u += 1.6) add(u, r.v1 + 0.45);
+    for (let v = r.v0 + 0.5; v < r.v1; v += 1.7) {
+      add(r.u0 - 0.5, v);
+      add(r.u1 + 0.5, v);
+    }
+  });
   return out;
 }
+
 
 // ================================================================== winter
 

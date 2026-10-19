@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { ISLE_KNOLL, Tile, WATER_LEVEL, coastV, isleDist, seaFrame, seaPointAt, type GameMap, type SeaDeco } from '../sim/map';
+import { ISLE_KNOLL, Tile, WATER_LEVEL, framePoint, isleDist, seaDist, type GameMap, type SeaDeco, type SeaFrame, type SeaSite } from '../sim/map';
+import { GORGE } from '../sim/maps';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { surfaceHeight } from './ground';
@@ -7,15 +8,17 @@ import { landmarkMaterial } from './landmarks/material';
 import { CIV_SCALE, CivilianInstances, Opt, Pose } from './models/civilians';
 import { Kit, datePalm } from './models/landmarks';
 import type { NightLights } from './night';
-import { ReefLife, buildWreck, type Wreck } from './reeflife';
+import { ReefLife, buildWreck, type ReefArea } from './reeflife';
 import { RIVER } from './water';
 import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type SinaiKit } from './sinaikit';
 import { desertVeg, vegInstancedMesh, type DesertVeg, type VegKind } from './desertveg';
 import { buildSpray, type SprayEmitter } from './relieffx';
 
 /*
- * The Red Sea coast of Wadi Al-Rimal (render only; the sim's coast is sim/maps.ts DESERT_SEA, mirrored
- * into the north-west and south-east corners). In each corner:
+ * The Sinai's seaside (render only; the sim's seas are sim/map.ts SeaDeco): the resort beaches - Sharm el-Sheikh
+ * on the southern tip (with the jetty and the boats) and one on each gulf's Sinai shore - Tiran with its
+ * lighthouse in the mouth of the Gulf of Aqaba, the Blue Hole and its wreck off Dahab, the oasis gorge on the
+ * massif's north foot. At each resort, in its own straight frame (u along the shore, v seaward):
  *  - a seaside resort on its impassable compound: white hotel blocks stepping down towards the beach,
  *    balconies, roof terraces and awnings, a long curved free-form pool with a bridge across it, the
  *    pool deck with loungers and parasols, a restaurant terrace round a thatched gazebo, palms;
@@ -33,7 +36,7 @@ import { buildSpray, type SprayEmitter } from './relieffx';
  * civilian mesh per corner (the ambient people's program). Nothing new to compile.
  */
 
-/** Corner frame: continuous map point of (u, v) and the coast's heading there. */
+/** A seaside frame: continuous map point of (u, v) and the coast's heading there. */
 interface Frame {
   b: number;
   P(u: number, v: number): THREE.Vector2;
@@ -93,6 +96,8 @@ interface Boat {
   yaw: number;
   ph: number;
   kind: number;
+  /** The resort it belongs to. */
+  site: number;
 }
 
 const SKINS = [0xe8c4a0, 0xd9a77e, 0xc08a62, 0x9a6844, 0xf0d2b8, 0x7a4e30].map(C);
@@ -102,11 +107,16 @@ export class Seaside {
   readonly group = new THREE.Group();
   private sea: SeaDeco;
   private people: CivilianInstances[] = [];
-  private statics: Static[][] = [[], []];
+  /** Per resort (and one more for the oasis gorge's camp): the standing / sitting figures. */
+  private statics: Static[][] = [];
   private walkers: Walker[] = [];
-  /** Cafe chairs on the promenade (diners) and the stalls' counters (vendors), per corner. */
-  private seats: Lounger[][] = [[], []];
-  private vendors: Lounger[][] = [[], []];
+  /** Cafe chairs on the promenade (diners) and the stalls' counters (vendors), per resort. */
+  private seats: Lounger[][] = [];
+  private vendors: Lounger[][] = [];
+  /** The resort beaches (SeaDeco.sites), the one being built and every place's frame (by index b). */
+  private sites: SeaSite[];
+  private site!: SeaSite;
+  private frames: Frame[] = [];
   /** Warm light at night (NightLights pools): the promenade's lamps (lamp = true: a small flare at the head too) and terraces. */
   private glowSpots: { x: number; y: number; z: number; r: number; lamp: boolean }[] = [];
   private boatList: Boat[] = [];
@@ -145,35 +155,54 @@ export class Seaside {
     this.group.userData.perfCat = 'seaside';
     const parasols: { m: THREE.Matrix4; c: THREE.Color; k: number }[] = [];
     const loungers: { m: THREE.Matrix4; c: THREE.Color }[] = [];
-    const wrecks: Wreck[] = [];
     const kit = sinaiKit();
     this.veg = desertVeg();
     this.kitLoSpan = quality === 'high' ? 30 : 24;
-    for (const b of [0]) {
-      const F = this.frame(b);
-      const k = new Kit();
-      this.sb = kit ? new SinaiBuilder(kit) : null;
-      const beds: Lounger[] = [];
-      this.buildResort(k, F, parasols, loungers, beds);
-      this.buildBeach(k, F, parasols, loungers, beds);
-      this.buildIsle(k, F);
-      // the wreck on the Blue Hole's rim: the whole hull here (the water hides what is under it; reeflife.ts
-      // draws the sunken part again through the water)
-      const wr = buildWreck(F.P);
-      wrecks.push(wr);
-      k.pos.push(...wr.kit.pos);
-      k.nor.push(...wr.kit.nor);
-      k.col.push(...wr.kit.col);
-      k.glow.push(...wr.kit.glow);
+    this.sites = this.sea.sites;
+    for (let b = 0; b <= this.sites.length; b++) {
+      this.statics.push([]);
+      this.seats.push([]);
+      this.vendors.push([]);
+    }
+    const areas: ReefArea[] = [];
+    const staticMesh = (k: Kit) => {
       const geo = k.build();
       const mesh = new THREE.Mesh(geo, landmarkMaterial(fog));
       mesh.name = 'seaside-static';
       mesh.castShadow = quality === 'high';
       mesh.receiveShadow = quality !== 'low';
       this.group.add(mesh);
+    };
+    this.sites.forEach((site, b) => {
+      this.site = site;
+      const F = this.frameOf(site, b);
+      this.frames[b] = F;
+      const k = new Kit();
+      this.sb = kit ? new SinaiBuilder(kit) : null;
+      const beds: Lounger[] = [];
+      this.buildResort(k, F, parasols, loungers, beds);
+      this.buildBeach(k, F, parasols, loungers, beds);
+      staticMesh(k);
       if (this.sb && kit) this.addKitMeshes(this.sb, kit, fog, quality);
       this.sb = null;
       if (quality !== 'low') this.populate(F, beds);
+      areas.push({ P: F.P, u0: site.beach[0] - 4, u1: site.beach[1] + 4, v1: site.look === 0 ? 9 : 5.5, beach: site.beach });
+    });
+    // Tiran's lighthouse, and the wreck on the Blue Hole's rim: the whole hull here (the water hides what is under
+    // it; reeflife.ts draws the sunken part again through the water)
+    {
+      const k = new Kit();
+      if (this.sea.isle) this.buildIsle(k, this.frameOf(this.sea.isle, this.sites.length + 1));
+      if (this.sea.hole) {
+        const F = this.frameOf(this.sea.hole, this.sites.length + 2);
+        const wr = buildWreck(F.P);
+        k.pos.push(...wr.kit.pos);
+        k.nor.push(...wr.kit.nor);
+        k.col.push(...wr.kit.col);
+        k.glow.push(...wr.kit.glow);
+        areas.push({ P: F.P, u0: -8, u1: 7, v1: 9.5, lagoon: true, wreck: wr });
+      }
+      staticMesh(k);
     }
     this.buildOasisGorge(kit, wxLight);
     this.buildPlants();
@@ -181,11 +210,11 @@ export class Seaside {
     this.group.add(...this.instanced(loungerGeometry(), loungers, 'seaside-loungers'));
     this.buildBoats();
     if (wxLight) {
-      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P], wrecks);
+      this.reef = new ReefLife(map, fog, quality, wxLight, areas);
       this.group.add(this.reef.group);
     }
     if (quality !== 'low') {
-      for (const b of [0]) {
+      for (let b = 0; b < this.statics.length; b++) {
         const n = this.statics[b].length + this.walkers.filter((w) => w.b === b).length;
         const ci = new CivilianInstances(fog, Math.max(1, n));
         ci.mesh.name = 'seaside-people';
@@ -203,11 +232,9 @@ export class Seaside {
 
   // ------------------------------------------------------------------ frame
 
-  private frame(b: number): Frame {
-    const { w, h } = this.map;
-    const off = this.sea.off;
+  private frameOf(f: SeaFrame, b: number): Frame {
     const P = (u: number, v: number) => {
-      const p = seaPointAt(w, h, off, u, v, b);
+      const p = framePoint(f, u, v);
       return new THREE.Vector2(p.x, p.y);
     };
     return {
@@ -283,7 +310,7 @@ export class Seaside {
   // ------------------------------------------------------------------ the resort
 
   private buildResort(k: Kit, F: Frame, parasols: { m: THREE.Matrix4; c: THREE.Color; k: number }[], loungers: { m: THREE.Matrix4; c: THREE.Color }[], beds: Lounger[]) {
-    const r = this.sea.resort;
+    const r = this.site.resort;
     const b = F.b;
     const h = (i: number, j: number) => hash2(i, j + b * 97, 4401);
     // the terrace: the compound's ground is flat (sim), the deck sits a hair above its highest point
@@ -651,13 +678,16 @@ export class Seaside {
 
   private buildBeach(k: Kit, F: Frame, parasols: { m: THREE.Matrix4; c: THREE.Color; k: number }[], loungers: { m: THREE.Matrix4; c: THREE.Color }[], beds: Lounger[]) {
     const sea = this.sea;
+    const site = this.site;
     const b = F.b;
-    const [bu0, bu1] = sea.beach;
+    const [bu0, bu1] = site.beach;
     const h = (i: number, j: number) => hash2(i, j + b * 131, 4421);
-    const jU = -4.6 + b * 1.2;
-    const towerU = -11.2 + b * 2.5;
-    const barU = 0.6;
-    const r = sea.resort;
+    // (places along the beach as fractions of it: Sharm has the jetty out to the pontoon)
+    const at = (f: number) => bu0 + (bu1 - bu0) * f;
+    const jU = site.look === 0 ? at(0.73) : NaN;
+    const towerU = at(0.48);
+    const barU = at(0.93);
+    const r = site.resort;
     // the promenade: a paved path with a wooden railing between the beach and the resort / dunes
     const pv = (u: number) => -4.55 + 0.15 * Math.sin(u * 0.35 + b);
     const ok = (u: number, v: number) => {
@@ -717,8 +747,7 @@ export class Seaside {
         if (Math.abs(u - jU) < 0.9 || Math.abs(u - towerU) < 0.8 || Math.abs(u - barU) < 1.1) continue;
         const p = F.P(u, v);
         if (!this.inMap(p.x, p.y, 0.4) || this.tileAt(p.x, p.y) !== Tile.Sand) continue;
-        const f = seaFrame(this.map.w, this.map.h, sea.off, p.x, p.y);
-        if (coastV(sea, f.u, f.v) > -0.55) continue;
+        if (seaDist(sea, p.x, p.y) > -0.55) continue;
         const y = this.gh(p.x, p.y);
         parasols.push({ m: new THREE.Matrix4().makeTranslation(p.x, y, p.y).multiply(new THREE.Matrix4().makeRotationY(j * 6)), c: C(0xffffff).multiplyScalar(0.85 + j * 0.25), k: 0 });
         const yaw = F.yaw(u, v) + Math.PI / 2 + (j - 0.5) * 0.3;
@@ -747,7 +776,7 @@ export class Seaside {
       }
     }
     // flags on the beach (bathing flags: yellow and red)
-    for (const [fu, col] of [[-20.5, 0xf2c52a], [-15.3, 0xd8302a], [-6.2, 0xf2c52a], [-1.6, 0xd8302a]] as const) {
+    for (const [fu, col] of [[at(0.13), 0xf2c52a], [at(0.33), 0xd8302a], [at(0.67), 0xf2c52a], [at(0.85), 0xd8302a]] as const) {
       const p = F.P(fu, -0.9);
       if (!this.inMap(p.x, p.y, 0.5) || this.tileAt(p.x, p.y) !== Tile.Sand) continue;
       this.at(k, F, fu, -0.9, this.gh(p.x, p.y), 0.4);
@@ -777,7 +806,7 @@ export class Seaside {
       const v1 = 4.5;
       const deck = WATER_LEVEL + 0.17;
       const p0 = F.P(jU, v0);
-      if (this.inMap(p0.x, p0.y, 0.5)) {
+      if (!Number.isNaN(jU) && this.inMap(p0.x, p0.y, 0.5)) {
         // the piles' foam collars in the water shader (water.ts wJetty): the first pair and the step to the next
         const pa = F.P(jU, v0 + 0.2);
         const pb = F.P(jU, v0 + 0.6);
@@ -813,14 +842,14 @@ export class Seaside {
       }
     }
     // a line of buoys round the swimming area
-    for (let u = bu0 + 1.5; u < jU - 1.2; u += 0.75) {
+    for (let u = bu0 + 1.5; u < (Number.isNaN(jU) ? at(0.7) : jU - 1.2); u += 0.75) {
       const p = F.P(u, 3.1);
       if (!this.inMap(p.x, p.y, 0.2)) continue;
       k.at(p.x, WATER_LEVEL, p.y);
       k.ball(0.04, 0, 0.015, 0, Math.round(u / 0.75) % 2 ? 0xf2f2ee : 0xf2c230, 0);
     }
     // coconut palms leaning out over the waterline, in twos and threes
-    const keep = [jU, towerU, barU, -20.5, -15.3, -6.2, -1.6];
+    const keep = [jU, towerU, barU, at(0.13), at(0.33), at(0.67), at(0.85)];
     for (let u = bu0 + 0.8; u < bu1 - 0.3; u += 1.35) {
       const j = h(Math.round(u * 10), 41);
       if (j < 0.4) continue;
@@ -864,8 +893,7 @@ export class Seaside {
   private buildPromenade(k: Kit, F: Frame, a: number, c: number, pv: (u: number) => number, inner: (u: number) => number, byResort: (u: number) => boolean, keep: number[]) {
     const b = F.b;
     const h = (i: number, j: number) => hash2(i, j + b * 173, 4451);
-    const sea = this.sea;
-    const r = sea.resort;
+    const r = this.site.resort;
     const DARK = 0x34363a;
     const BULB = 0xffc27a;
     const CANVAS = [0xd8452e, 0x2f6fb0, 0x2a9a8a, 0xe0a630, 0x8a4a7a, 0xf2efe6];
@@ -1043,8 +1071,8 @@ export class Seaside {
       return this.gh(p.x, p.y);
     };
     // the lighthouse on the knoll's crown
-    const lu = isle.u + 0.2;
-    const lv = isle.v - 0.1;
+    const lu = 0.2;
+    const lv = -0.1;
     const base = yAt(lu, lv) - 0.04;
     this.at(k, F, lu, lv, base);
     k.cyl(0.3, 0.3, 0.1, 0, 0, 0, 0xb8b0a0, 10);
@@ -1084,8 +1112,8 @@ export class Seaside {
     for (let i = 0; i < 16; i++) {
       const a = h(i, 1) * Math.PI * 2;
       const rr = 0.25 + h(i, 2) * 0.95;
-      const u = isle.u + Math.cos(a) * rr * isle.ru;
-      const v = isle.v + Math.sin(a) * rr * isle.rv;
+      const u = Math.cos(a) * rr * isle.ru;
+      const v = Math.sin(a) * rr * isle.rv;
       const d = isleDist(isle, u, v);
       if (d > -0.15 || Math.hypot(u - lu, v - lv) < 0.45 || Math.hypot(u - hu, v - hv) < 0.45) continue;
       this.at(k, F, u, v, yAt(u, v) - 0.03, h(i, 3) * 6);
@@ -1098,8 +1126,8 @@ export class Seaside {
       }
     }
     // a landing stage on the lee (coast) side: a short concrete jetty with a mooring post and a dinghy
-    const ju = isle.u - 0.4;
-    const jv = isle.v - isle.rv - 0.4;
+    const ju = -0.4;
+    const jv = -isle.rv - 0.4;
     const dj = isleDist(isle, ju, jv + 0.6);
     if (dj < 0) {
       for (let s = 0; s < 3; s++) {
@@ -1121,7 +1149,8 @@ export class Seaside {
   }
 
   /**
-   * The Southern Oasis Gorge in the South-East corner (x ~ 100..124, y ~ 100..124):
+   * The oasis gorge at the massif's north foot, on the axis (sim/maps.ts GORGE; laid out round tile (113, 113) of the
+   * old map and moved there as a whole):
    * - a whitewashed Sinai domed spring shrine (marabout) and stone water basin overlooking the main emerald lake (113, 113),
    * - a Bedouin caravan encampment (striped tents, woven rugs, glowing campfires, spice stalls) on the gorge banks,
    * - spring cascades tumbling off the sandstone escarpments into the upper pools (105, 119) and (119, 105) with mist spray,
@@ -1142,8 +1171,10 @@ export class Seaside {
     };
 
     // 1. Domed Oasis Spring Shrine & Stone Basin at (116.8, 116.8) overlooking the main lake (113, 113)
-    const sx = 116.8;
-    const sz = 116.8;
+    // (the gorge's set pieces were laid out round its lake at tile (113, 113) of the old map: G moves them)
+    const G = GORGE - 113;
+    const sx = 116.8 + G;
+    const sz = 116.8 + G;
     if (free(sx, sz)) {
       const sy = this.gh(sx, sz) - 0.02;
       const yaw = -Math.PI * 0.75;
@@ -1176,9 +1207,9 @@ export class Seaside {
 
     // 2. Bedouin Caravan Encampment & Market Stalls on the oasis gorge banks
     const camps = [
-      { x: 109.2, z: 116.2, yaw: 0.55, col: 0x3a2e26, stripe: 0xc84a32 },
-      { x: 116.2, z: 109.2, yaw: 1.02, col: 0x42352c, stripe: 0xd49a36 },
-      { x: 118.4, z: 112.4, yaw: -2.2, col: 0x362b22, stripe: 0x2f7a78 },
+      { x: 109.2 + G, z: 116.2 + G, yaw: 0.55, col: 0x3a2e26, stripe: 0xc84a32 },
+      { x: 116.2 + G, z: 109.2 + G, yaw: 1.02, col: 0x42352c, stripe: 0xd49a36 },
+      { x: 118.4 + G, z: 112.4 + G, yaw: -2.2, col: 0x362b22, stripe: 0x2f7a78 },
     ];
     const DRESS = [0xf0ece4, 0x3a6aa8, 0xd8c8a0, 0xb04a3a, 0x5a7a5a, 0xe8d8b0, 0x2a2a30].map(C);
     camps.forEach((cp, ci) => {
@@ -1218,7 +1249,7 @@ export class Seaside {
             new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0, 'YXZ')),
             new THREE.Vector3(kk, kk, kk),
           );
-          this.statics[0].push({
+          this.statics[this.sites.length].push({
             m,
             pose: Pose.Chat,
             mask: Opt.Cap,
@@ -1235,8 +1266,8 @@ export class Seaside {
 
     // 3. Spring Rock Cascades & Mist Spray where the sandstone ridges meet the upper pools (105, 119) & (119, 105)
     const cascades = [
-      { x0: 103.3, z0: 118.4, x1: 104.5, z1: 118.8 },
-      { x0: 118.4, z0: 103.3, x1: 118.8, z1: 104.5 },
+      { x0: 103.3 + G, z0: 118.4 + G, x1: 104.5 + G, z1: 118.8 + G },
+      { x0: 118.4 + G, z0: 103.3 + G, x1: 118.8 + G, z1: 104.5 + G },
     ];
     const sprayList: SprayEmitter[] = [];
     for (const cs of cascades) {
@@ -1263,9 +1294,9 @@ export class Seaside {
 
     // 4. Blender-baked Date Palms, Clumps, Acacias & Sandstone Boulders ringing the three Gorge Oasis Pools
     const pools = [
-      { x: 113, z: 113, r: 3.3, n: 18 },
-      { x: 105, z: 119, r: 1.8, n: 10 },
-      { x: 119, z: 105, r: 1.8, n: 10 },
+      { x: 113 + G, z: 113 + G, r: 3.3, n: 18 },
+      { x: 105 + G, z: 119 + G, r: 1.8, n: 10 },
+      { x: 119 + G, z: 105 + G, r: 1.8, n: 10 },
     ];
     pools.forEach((pl, pi) => {
       for (let i = 0; i < pl.n; i++) {
@@ -1311,7 +1342,7 @@ export class Seaside {
 
   private populate(F: Frame, beds: Lounger[]) {
     const b = F.b;
-    const sea = this.sea;
+    const sea = this.site;
     const out = this.statics[b];
     const h = (i: number, j: number) => hash2(i, j + b * 151, 4431);
     const m = new THREE.Matrix4();
@@ -1411,9 +1442,9 @@ export class Seaside {
           ci.push(m, s.phase + time * 1.5, 0, s.pose, s.mask, s.skin, s.lean, s.top, s.bot, s.hat);
         } else ci.push(s.m, s.phase + (s.pose === Pose.Chat || s.pose === Pose.Wave ? time : 0), 0, s.pose, s.mask, s.skin, s.lean, s.top, s.bot, s.hat);
       }
-      const F = this.frame(b);
+      const F = this.frames[b];
       for (const w of this.walkers) {
-        if (w.b !== b) continue;
+        if (w.b !== b || !F) continue;
         const p = F.P(w.u, w.v);
         const yaw = F.yaw(w.u, w.v) + (w.dir < 0 ? Math.PI : 0);
         const kk = CIV_SCALE * w.size;
@@ -1430,28 +1461,37 @@ export class Seaside {
 
   private buildBoats() {
     const geos = [yachtGeometry(), speedboatGeometry(), dinghyGeometry()];
-    const kinds: [number, number, number][] = [
-      // (u, v, kind): the yacht off the reef, speedboats by the pontoon, a dinghy, a yacht far out
-      [-9.5, 9.5, 0],
-      [-3.2, 5.6, 1],
-      [-6.4, 6.1, 1],
-      [3.5, 6.8, 2],
-      [-16, 14, 0],
-      [8, 22, 0],
+    // (u, v, kind) per resort: Sharm's yacht off the reef, speedboats by the pontoon, a dinghy, yachts further
+    // out in the Red Sea; a speedboat and a dinghy or two in the narrow gulfs
+    const fleets: [number, number, number][][] = [
+      [
+        [-5.5, 9.5, 0],
+        [3.4, 5.6, 1],
+        [6.0, 6.1, 1],
+        [-2.5, 6.8, 2],
+        [-9, 13, 0],
+        [7, 16, 0],
+      ],
+      [
+        [-3, 3.4, 1],
+        [3.5, 3.8, 2],
+        [7.5, 4.0, 1],
+      ],
     ];
-    for (const b of [0])
-      kinds.forEach(([u, v, kind], i) => {
-        const F = this.frame(b);
-        const p = F.P(u + b * 1.5, v);
-        const f = seaFrame(this.map.w, this.map.h, this.sea.off, p.x, p.y);
-        if (coastV(this.sea, f.u, f.v) < 3) return;
-        this.boatList.push({ x: p.x, z: p.y, yaw: F.yaw(u, v) + (i % 2 ? 0.5 : -0.4) + b * 0.3, ph: i * 1.7 + b, kind });
+    this.sites.forEach((site, b) => {
+      const F = this.frames[b];
+      (site.look === 0 ? fleets[0] : fleets[1]).forEach(([u, v, kind], i) => {
+        const uu = site.look === 0 ? u : u * (b % 2 ? -1 : 1);
+        const p = F.P(uu, v);
+        if (seaDist(this.sea, p.x, p.y) < (site.look === 0 ? 3 : 2.2)) return;
+        this.boatList.push({ x: p.x, z: p.y, yaw: F.yaw(uu, v) + (i % 2 ? 0.5 : -0.4) + b * 0.3, ph: i * 1.7 + b, kind, site: b });
       });
-    // one instanced mesh per hull kind and corner (each corner culls on its own)
+    });
+    // one instanced mesh per hull kind and resort (each culls on its own)
     const out: THREE.InstancedMesh[] = [];
-    for (const corner of [0]) {
+    for (let site = 0; site < this.sites.length; site++) {
       geos.forEach((g, kind) => {
-        const list = this.boatList.filter((bt) => bt.kind === kind && (bt.x + bt.z > this.map.w ? 1 : 0) === corner);
+        const list = this.boatList.filter((bt) => bt.kind === kind && bt.site === site);
         if (!list.length) return;
         const im = new THREE.InstancedMesh(g, landmarkMaterial(this.fog), list.length);
         // (instance colours: the same program as the parasols and loungers)
@@ -1494,12 +1534,21 @@ export class Seaside {
     if (!list.length) return [];
     // two variants share a mesh when the geometry has them (parasols: thatch on the beach, white on the deck)
     const out: THREE.Object3D[] = [];
-    for (const b of [0]) {
-      const sub = list.filter((it) => {
-        const x = it.m.elements[12];
-        const z = it.m.elements[14];
-        return (x + z > this.map.w ? 1 : 0) === b;
+    // (one instanced mesh per resort, each culls on its own: an instance goes to the nearest resort)
+    const near = (x: number, z: number) => {
+      let best = 0;
+      let bd = Infinity;
+      this.sites.forEach((st, i) => {
+        const d = Math.hypot(st.x - x, st.y - z);
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
       });
+      return best;
+    };
+    for (let b = 0; b < this.sites.length; b++) {
+      const sub = list.filter((it) => near(it.m.elements[12], it.m.elements[14]) === b);
       if (!sub.length) continue;
       const im = new THREE.InstancedMesh(geo, landmarkMaterial(this.fog), sub.length);
       sub.forEach((it, i) => {
@@ -1557,7 +1606,8 @@ export class Seaside {
       for (const w of this.walkers) {
         w.u += w.dir * w.speed * dt * 2;
         w.ph += dt * 2 * 6.5 * w.speed;
-        if (w.u > this.sea.beach[1] - 0.5 || w.u < this.sea.beach[0] + 0.5) w.dir *= -1;
+        const bch = this.sites[w.b].beach;
+        if (w.u > bch[1] - 0.5 || w.u < bch[0] + 0.5) w.dir *= -1;
       }
       this.drawPeople(time);
     }

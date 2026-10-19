@@ -48,6 +48,9 @@ export function spawnGarrisons(w: World) {
     if (!id) continue;
     const d = buildingDef(id);
     if (d.w !== st.w || d.h !== st.h) continue;
+    // (a map mirrored across its diagonal turns a 3 x 2 house into a 2 x 3 one, which is no garrison: only square
+    // houses take soldiers there, so both sides hold the same)
+    if (w.map.mirror === 'transpose' && d.w !== d.h) continue;
     w.spawnBuilding(id, -1, st.x, st.y, true);
   }
 }

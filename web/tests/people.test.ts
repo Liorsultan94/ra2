@@ -66,9 +66,10 @@ describe('pedestrian walk grid', () => {
     });
 
     it(`${id}: routes between nearby spots on the cheap ground`, () => {
-      const { grid } = setup(id);
+      const { m, grid } = setup(id);
       const pf = new PathFinder(grid, 20000);
-      const pts = cheapPoints(grid, 1000, 3);
+      // (as many points per tile as on a 128 x 128 map, so a bigger map gets as many close pairs)
+      const pts = cheapPoints(grid, Math.max(1000, Math.round((1000 * m.w * m.h) / (128 * 128))), 3);
       const lab = grid.region;
       const cell = (p: { x: number; y: number }) => Math.floor(p.y * RES) * grid.gw + Math.floor(p.x * RES);
       const out = new Float32Array(96);
@@ -89,7 +90,8 @@ describe('pedestrian walk grid', () => {
         if (!n) continue;
         ok++;
         // ends on the goal, never through closed cells
-        expect(out[(n - 1) * 2]).toBeCloseTo(b.x, 5);
+        // (float32 path points: some 1e-5 off on a map over 128 tiles)
+        expect(out[(n - 1) * 2]).toBeCloseTo(b.x, 4);
         let px = a.x;
         let py = a.y;
         for (let j = 0; j < n; j++) {
