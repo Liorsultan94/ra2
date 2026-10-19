@@ -15,7 +15,7 @@ import { waterRings } from '../water';
  */
 
 const MAX = 720;
-const LIFE = 4.2;
+const LIFE = 3.4;
 
 function foamTexture(): THREE.Texture {
   const N = 64;
@@ -101,11 +101,11 @@ export class NavalFx {
       // two foam patches either side of the stern, and the churned centre (the screws / waterjets)
       const sx = x - fx * len * 0.48;
       const sz = z - fz * len * 0.48;
-      this.add(sx, sz, yaw, beam * (hover ? 1.1 : 0.75), len * 0.28, 0.55 + 0.35 * v);
+      this.add(sx, sz, yaw, beam * (hover ? 1.1 : 0.75), len * 0.28, 0.4 + 0.3 * v);
       if (!hover) {
         const px = -fz;
         const pz = fx;
-        for (const s of [-1, 1]) this.add(sx + px * s * beam * 0.45, sz + pz * s * beam * 0.45, yaw + s * 0.35, beam * 0.45, len * 0.22, 0.35 + 0.3 * v);
+        for (const s of [-1, 1]) this.add(sx + px * s * beam * 0.45, sz + pz * s * beam * 0.45, yaw + s * 0.35, beam * 0.45, len * 0.22, 0.26 + 0.24 * v);
       }
     }
     // spray off the bow at speed, bow / stern waves as rings through the water

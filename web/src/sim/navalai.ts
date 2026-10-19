@@ -39,10 +39,13 @@ interface NavCfg {
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 11, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400 },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 6, patrol: 2, corvette: 1, lander: 1, sortie: 2, landEvery: TPS * 60 * 4, reserve: 900 },
-  hard: { chance: 1, yardAt: TPS * 60 * 4, patrol: 3, corvette: 2, lander: 1, sortie: 2, landEvery: TPS * 60 * 3, reserve: 600 },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 14, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400 },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 9, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000 },
+  hard: { chance: 1, yardAt: TPS * 60 * 7, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800 },
 };
+
+/** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
+export const NAVY_AI = { on: true, landings: true, raids: true };
 
 /** What the land AI lends the navy (AIController). */
 export interface NavalHooks {
@@ -82,6 +85,8 @@ export class NavalAI {
   private landing: Landing | null = null;
   private nextLanding = 0;
   private yardsSeen = new Set<number>();
+  /** Tick the last yard was lost (-1: standing / none yet). */
+  private yardLost = -1;
   /** Debug / tests: yards placed, raids sailed, landings made, units put ashore. */
   readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0 };
 
@@ -94,7 +99,7 @@ export class NavalAI {
   ) {
     this.rng = new Rng(seed);
     this.cfg = NAV[difficulty];
-    this.active = w.hasSea && this.rng.next() < this.cfg.chance;
+    this.active = w.hasSea && this.rng.next() < this.cfg.chance && NAVY_AI.on;
     this.nextLanding = Math.round(this.cfg.landEvery * this.rng.range(0.6, 1));
     if (!this.active) return;
     // the water within reach of the enemy's base (its ground region's shore)
@@ -130,7 +135,10 @@ export class NavalAI {
 
   /** The Shipyard to build now, or null (the land AI checks the power and queues it). */
   wantYard(buildings: Entity[]): string | null {
-    if (!this.active || this.w.tick < this.cfg.yardAt) return null;
+    // (the land war comes first: the yard follows the first wave, or comes a few minutes late without one)
+    if (!this.active || this.w.tick < this.cfg.yardAt || (this.hooks.waves() === 0 && this.w.tick < this.cfg.yardAt + TPS * 240)) return null;
+    // a lost yard is not rebuilt at once (and only once): the money goes back into the land war
+    if (this.stats.yards >= 2 || (this.stats.yards === 1 && this.w.tick < this.yardLost + TPS * 60 * 10)) return null;
     let factory = false;
     let radar = false;
     for (const b of buildings) {
@@ -194,6 +202,8 @@ export class NavalAI {
       this.yardsSeen.add(yard.id);
       this.stats.yards++;
     }
+    if (!yard && this.stats.yards > 0 && this.yardLost < 0) this.yardLost = this.w.tick;
+    if (yard) this.yardLost = -1;
     if (yard && yard.buildAnim >= 1) this.produce(navy);
     this.stats.boats = Math.max(this.stats.boats, navy.length);
     const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots);
@@ -221,7 +231,7 @@ export class NavalAI {
   }
 
   private landingsOn() {
-    return this.cfg.landEvery > 0 && this.enemyWater.size > 0;
+    return NAVY_AI.landings && this.cfg.landEvery > 0 && this.enemyWater.size > 0;
   }
 
   // ---------------------------------------------------------------- the fleet
@@ -254,7 +264,8 @@ export class NavalAI {
         if (!me.explored[t]) continue;
         const bd = buildingDef(e.def);
         if (bd.faction === 'neutral') continue;
-        pri = bd.shipyard ? 4 : bd.role === 'refinery' ? 10 : bd.weapon ? 26 : 18;
+        // (from the sea the missile boats bombard the base itself: the construction yard and the factories first)
+        pri = bd.role === 'conyard' ? 3 : bd.shipyard ? 4 : bd.role === 'factory' || bd.role === 'barracks' ? 8 : bd.role === 'refinery' ? 9 : bd.weapon ? 26 : 14;
       }
       // the water to shoot from
       const spot = w.nearestPassable(e.x, e.y, reach, region, Loco.Boat);
@@ -316,7 +327,7 @@ export class NavalAI {
       const strays = idle.filter((b) => Math.hypot(b.x - home[0], b.y - home[1]) > 7);
       if (strays.length) this.cmd({ type: 'move', ids: strays.map((b) => b.id), x: home[0], y: home[1] });
     }
-    if (!this.offensive() || idle.length < this.cfg.sortie || w.tick < this.raidAt) return;
+    if (!NAVY_AI.raids || !this.offensive() || idle.length < this.cfg.sortie || w.tick < this.raidAt) return;
     const t = this.pickTarget(idle, w.regionOf(idle[0].x, idle[0].y, Loco.Boat));
     this.raidAt = w.tick + TPS * 20;
     if (!t) return;
@@ -508,7 +519,7 @@ export class NavalAI {
         if (!this.p.explored[Math.floor(e.y) * w.map.w + Math.floor(e.x)] && Math.hypot(e.x - w.players[e.owner].startX, e.y - w.players[e.owner].startY) > 10) continue;
         const bd = buildingDef(e.def);
         if (bd.faction === 'neutral') continue;
-        pri = bd.role === 'refinery' ? 4 : bd.weapon ? 18 : 10;
+        pri = bd.role === 'refinery' ? 4 : bd.role === 'conyard' ? 6 : bd.role === 'factory' ? 8 : bd.weapon ? 18 : 10;
       }
       const s = pri + Math.hypot(e.x - x, e.y - y);
       if (s < bs) {

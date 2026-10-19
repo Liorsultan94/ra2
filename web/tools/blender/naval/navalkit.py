@@ -849,8 +849,8 @@ def split_parts(o, groups):
 def build_shipyard(info, objs):
     """The Shipyard (4 x 4 tiles, water side +X)."""
     RUST = 0xffffff
-    CONC = 0xa9a49a
-    CONC_D = 0x8a857c
+    CONC = 0xbab5aa
+    CONC_D = 0xa39e93
     YEL = 0xd8a520
     STEEL = 0x6c7074
     DARK = 0x3a3c3e
@@ -1020,9 +1020,9 @@ def tex_rust(N=256):
     v = np.arange(N)[:, None] / N
     # corrugation: vertical ribs (16 per repeat)
     rib = 0.5 + 0.5 * np.cos(u * 2 * np.pi * 16)
-    base = np.array(srgb(0x8c3a1c))
-    dark = np.array(srgb(0x4a1d0e))
-    light = np.array(srgb(0xb4673a))
+    base = np.array(srgb(0xb04a22))
+    dark = np.array(srgb(0x5e2612))
+    light = np.array(srgb(0xd0804a))
 
     def tile_noise(cells, seed):
         g = np.random.default_rng(seed).random((cells, cells))

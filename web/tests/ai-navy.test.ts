@@ -30,12 +30,13 @@ describe('AI navy', () => {
       for (const e of w.list) if (!e.dead && e.kind === 'unit' && unitDef(e.def).naval === 'boat' && w.map.tiles[w.tileOf(e.x, e.y)] !== Tile.Water) boatOnLand = true;
     }
     const yards = w.list.filter((e) => e.kind === 'building' && buildingDef(e.def).shipyard);
-    expect(yards.length).toBeGreaterThanOrEqual(1);
     const st = ais.map((a) => a.navy!.stats);
-    expect(st.some((s) => s.yards > 0)).toBe(true);
-    expect(st.reduce((n, s) => n + s.boats, 0)).toBeGreaterThanOrEqual(2);
-    expect(st.reduce((n, s) => n + s.raids, 0)).toBeGreaterThanOrEqual(1);
-    expect(st.reduce((n, s) => n + s.landings, 0)).toBeGreaterThanOrEqual(1);
+    const msg = JSON.stringify({ st, min: +(w.tick / TPS / 60).toFixed(1), over: w.over });
+    expect(yards.length, msg).toBeGreaterThanOrEqual(1);
+    expect(st.some((s) => s.yards > 0), msg).toBe(true);
+    expect(st.reduce((n, s) => n + s.boats, 0), msg).toBeGreaterThanOrEqual(2);
+    expect(st.reduce((n, s) => n + s.raids, 0), msg).toBeGreaterThanOrEqual(1);
+    expect(st.reduce((n, s) => n + s.landings, 0), msg).toBeGreaterThanOrEqual(1);
     expect(raidInPeace).toBe(false);
     expect(boatOnLand).toBe(false);
   });

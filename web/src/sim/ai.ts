@@ -498,7 +498,8 @@ export class AIController implements Controller {
     const w = this.world;
     for (const e of w.list) {
       if (e.dead || !w.isEnemy(this.pid, e.owner)) continue;
-      if (e.kind === 'unit' && (unitDef(e.def).temp || e.inside >= 0 || e.wound)) continue;
+      // (enemy boats are the navy's business, navalai.ts: the land army never marches to the shore after one)
+      if (e.kind === 'unit' && (unitDef(e.def).temp || e.inside >= 0 || e.wound || unitDef(e.def).naval)) continue;
       if (!w.sees(this.pid, e)) continue;
       const it = this.intel.get(e.id);
       if (it) {
@@ -1498,7 +1499,7 @@ export class AIController implements Controller {
     let threat: Entity | null = null;
     let airThreat: Entity | null = null;
     w.queryRadius(threatened.x, threatened.y, 10, (o) => {
-      if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp) return;
+      if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp || unitDef(o.def).naval) return;
       // by night only threats we can see, or the one that just fired at us (it gave itself away: night.ts)
       if (w.night && o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
       if (w.isAir(o)) airThreat ??= o;

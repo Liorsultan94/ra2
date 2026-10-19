@@ -9,8 +9,8 @@
 // Slopes do not apply to them. Boats and land units do not shove each other (World.separate): a boat by the
 // shore and a tank on the beach are on different layers.
 //
-// The Shipyard (SHIP_W x SHIP_H) straddles the coast: at least SHIP_MIN_WATER of its tiles water and
-// SHIP_MIN_LAND buildable land, each part in one piece (the shoreline runs across the footprint), the land part
+// The Shipyard (SHIP_W x SHIP_H) straddles the coast: at least SHIP_MIN_WATER of its tiles water (deep enough to
+// float a hull, past the surf) and SHIP_MIN_LAND buildable land, each part in one piece (the shoreline runs across the footprint), the land part
 // gentle enough to build on, and boat-deep water of the open sea (a water body of at least SEA_MIN boat tiles:
 // narrow rivers do not qualify) in front of its slipway. Its slipway faces the water (Entity.slip); boats roll
 // out of it into the sea. Every check is deterministic (the heights are the map's own floats, read the same way
@@ -31,8 +31,13 @@ export const HOVER_REACH = 2;
 /** Shipyard footprint (tiles) and the share of it that must be sea / land. */
 export const SHIP_W = 4;
 export const SHIP_H = 4;
-export const SHIP_MIN_WATER = 0.4;
-export const SHIP_MIN_LAND = 0.4;
+export const SHIP_MIN_WATER = 0.375;
+export const SHIP_MIN_LAND = 0.375;
+/**
+ * A footprint tile counts as the yard's water part only this deep (height units): the surf at the waterline (the
+ * reef flat's first tile, drawn as wet beach and foam) counts as neither water nor land.
+ */
+export const SHIP_WATER_DEPTH = 0.1;
 /** The open sea must start within this many tiles of the slipway's mouth. */
 export const SHIP_MOUTH_REACH = 4;
 /**
@@ -141,7 +146,7 @@ export function shipSite(m: GameMap, sea: Uint8Array, tx: number, ty: number, fr
     out.reason = 'Off the map';
     return out;
   }
-  const kind = new Int8Array(w * h); // 1 water, 2 land
+  const kind = new Int8Array(w * h); // 1 water, 2 land, 3 surf (neither)
   let wx = 0;
   let wy = 0;
   let lx = 0;
@@ -156,7 +161,9 @@ export function shipSite(m: GameMap, sea: Uint8Array, tx: number, ty: number, fr
         return out;
       }
       const t = m.tiles[i];
-      if (t === Tile.Water) {
+      if (t === Tile.Water && tileDepth(m, gx, gy) < SHIP_WATER_DEPTH) {
+        kind[y * w + x] = 3;
+      } else if (t === Tile.Water) {
         kind[y * w + x] = 1;
         out.water++;
         wx += x;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AIController, type Difficulty } from '../src/sim/ai';
+import { NAVY_AI } from '../src/sim/navalai';
 import { DOCTRINES } from '../src/sim/doctrine';
 import { DEFS, FACTIONS, VERSUS, WEAPONS, defsForFaction, hitsAir, unitDef } from '../src/sim/defs';
 import { groundHeight } from '../src/sim/map';
@@ -282,6 +283,8 @@ describe('difficulty still matters', () => {
    * ends with hard at least 1.25 times as strong.
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
+    // (the land war: the navy - NV1, navalai.ts - is switched off here; tests/ai-navy.test.ts covers it)
+    NAVY_AI.on = false;
     const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number; lead: number }[] = [];
     for (const [seed, f] of [
       [1, 'usa'],
@@ -308,5 +311,6 @@ describe('difficulty still matters', () => {
     for (const r of results) if (r.winner === 'none') expect(r.lead, msg).toBeGreaterThanOrEqual(1.25);
     // easy never wins, whichever slot hard starts in (fair starts: the north base is the south one's mirror, sim/turn.ts)
     expect(results.filter((r) => r.winner === 'easy').length, msg).toBe(0);
+    NAVY_AI.on = true;
   }, 600000);
 });

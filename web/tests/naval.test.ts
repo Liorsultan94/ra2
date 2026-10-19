@@ -71,33 +71,30 @@ describe('shipyard placement', () => {
   it('maps: both sides get Shipyard coast on the same sea at a fair distance; the river maps get none', () => {
     for (const id of ['frontline', 'winter', 'urban'] as const) expect(mk(id as never).shipSpots.length).toBe(0);
     const W = w.map.w;
-    const near = w.map.starts.map((s) => {
-      let best = Infinity;
-      let reg = 0;
-      for (const i of w.shipSpots) {
-        const tx = i % W;
-        const ty = Math.floor(i / W);
-        const d = Math.hypot(tx + SHIP_W / 2 - s.x - 0.5, ty + SHIP_H / 2 - s.y - 0.5);
-        if (d >= best) continue;
-        const site = shipSite(w.map, w.naval.sea, tx, ty);
-        const [mx, my] = mouthTile(tx, ty, SHIP_W, SHIP_H, site.dir);
-        best = d;
-        reg = w.regionOf(mx + 0.5, my + 0.5, Loco.Landing);
-      }
-      return { best, reg };
-    });
+    // per body of water: the yard spot nearest each start; the sea both sides share, at the fairest distances
+    const dist = new Map<number, [number, number]>();
+    for (const i of w.shipSpots) {
+      const tx = i % W;
+      const ty = Math.floor(i / W);
+      const site = shipSite(w.map, w.naval.sea, tx, ty);
+      const [mx, my] = mouthTile(tx, ty, SHIP_W, SHIP_H, site.dir);
+      const reg = w.regionOf(mx + 0.5, my + 0.5, Loco.Landing);
+      const d = dist.get(reg) ?? [Infinity, Infinity];
+      w.map.starts.forEach((s, k) => (d[k] = Math.min(d[k], Math.hypot(tx + SHIP_W / 2 - s.x - 0.5, ty + SHIP_H / 2 - s.y - 0.5))));
+      dist.set(reg, d);
+    }
+    const shared = [...dist.values()].sort((a, b) => Math.max(...a) - Math.max(...b))[0];
     // (a yard reaches out SHIP_BUILD_RADIUS from the base's structures)
-    for (const n of near) expect(n.best).toBeLessThan(16);
-    expect(near[0].reg).toBe(near[1].reg);
-    expect(Math.abs(near[0].best - near[1].best)).toBeLessThan(Math.max(near[0].best, near[1].best) * 0.25);
+    for (const d of shared) expect(d).toBeLessThan(16);
+    expect(Math.abs(shared[0] - shared[1])).toBeLessThan(Math.max(...shared) * 0.25);
   });
 
   it('accepts a coast footprint and rejects all-land and all-water ones', () => {
     const [x, y] = spotNear(w, 0);
     const s = shipSite(w.map, w.naval.sea, x, y);
     expect(s.ok).toBe(true);
-    expect(s.water).toBeGreaterThanOrEqual(7);
-    expect(s.land).toBeGreaterThanOrEqual(7);
+    expect(s.water).toBeGreaterThanOrEqual(6);
+    expect(s.land).toBeGreaterThanOrEqual(6);
     // all land: the start area
     const st = w.map.starts[0];
     const land = shipSite(w.map, w.naval.sea, st.x + 3, st.y + 3);
