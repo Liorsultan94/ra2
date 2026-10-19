@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Tile, WATER_LEVEL, coastV, groundHeight, seaFrame, type GameMap } from '../sim/map';
+import { Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
 import { fbm, hash2, valueNoise } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import { GRASS_GLSL, GRASS_TEX_TILES, grassTexture, grassUniforms } from './grasstex';
@@ -41,6 +41,8 @@ import { GroundAO } from './groundao';
 export const SUB = 2; // mesh vertices per tile
 
 /** Height of the rendered ground surface (sim height + visual micro relief). */
+/** The open sea's floor (sim/maps.ts SEA_FLOOR): no micro relief down there (render/ground.ts flat sea chunks). */
+const DEEP_FLOOR = -1.455;
 export function surfaceHeight(m: GameMap, x: number, y: number) {
   return groundHeight(m, x, y) + (valueNoise(x * 1.7, y * 1.7, 5) - 0.5) * 0.06;
 }
@@ -305,11 +307,14 @@ export class Ground {
     const nx = m.w * SUB + 1;
     const ny = m.h * SUB + 1;
     const pos = new Float32Array(nx * ny * 3);
+    // (the open sea's floor, out of sight under the deep water, lies flat: those chunks shrink to one quad)
+    const seaFloor = m.deco?.sea ? DEEP_FLOOR : -Infinity;
     for (let j = 0; j < ny; j++)
       for (let i = 0; i < nx; i++) {
         const k = (j * nx + i) * 3;
         pos[k] = i / SUB;
-        pos[k + 1] = surfaceHeight(m, i / SUB, j / SUB);
+        const g = groundHeight(m, i / SUB, j / SUB);
+        pos[k + 1] = g <= seaFloor ? g : surfaceHeight(m, i / SUB, j / SUB);
         pos[k + 2] = j / SUB;
       }
     this.hx = nx;
@@ -332,6 +337,30 @@ export class Ground {
       for (let ci = 0; ci < nx - 1; ci += CH) {
         const cw = Math.min(CH, nx - 1 - ci) + 1;
         const chh = Math.min(CH, ny - 1 - cj) + 1;
+        // a chunk of flat open-sea floor: one quad (its edges meet the neighbours' vertices at the same height)
+        const y0 = pos[(cj * nx + ci) * 3 + 1];
+        let flat = y0 <= seaFloor;
+        for (let j = 0; j < chh && flat; j++) for (let i = 0; i < cw; i++) if (pos[((cj + j) * nx + ci + i) * 3 + 1] !== y0) {
+          flat = false;
+          break;
+        }
+        if (flat) {
+          const x0 = ci / SUB;
+          const z0 = cj / SUB;
+          const x1 = (ci + cw - 1) / SUB;
+          const z1 = (cj + chh - 1) / SUB;
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([x0, y0, z0, x1, y0, z0, x0, y0, z1, x1, y0, z1]), 3));
+          geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]), 3));
+          geo.setIndex(new THREE.BufferAttribute(new Uint16Array([0, 2, 3, 0, 3, 1]), 1));
+          geo.computeBoundingSphere();
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.receiveShadow = true;
+          mesh.name = 'ground';
+          this.chunks.push(mesh);
+          this.mesh.add(mesh);
+          continue;
+        }
         const cpos = new Float32Array(cw * chh * 3);
         const cnor = new Float32Array(cw * chh * 3);
         for (let j = 0; j < chh; j++)
@@ -696,8 +725,7 @@ export class Ground {
     const hasGravel = !!st && st.slot.gravel !== st.slot.dirt;
     const bladeMap = this.blades;
     const seaD = m.deco?.sea;
-    const sf = { u: 0, v: 0, b: 0 };
-    const seaNear = (x: number, y: number) => !!seaD && coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v) > -12;
+    const seaNear = (x: number, y: number) => !!seaD && seaDist(seaD, x, y) > -12;
     // Wadi Al-Rimal's coloured canyons: distance from their centre lines (only near their bounding boxes)
     const canyons = (m.deco?.canyons ?? []).map((c) => {
       const xs = c.pts.map((p) => p.x + 0.5);
@@ -868,7 +896,7 @@ export class Ground {
         }
         // the Red Sea's bathing beaches: white coral sand, paler and cooler than the desert's gold
         if (seaD && sand > 0.05) {
-          const ve = coastV(seaD, seaFrame(m.w, m.h, seaD.off, x, y, sf).u, sf.v);
+          const ve = seaDist(seaD, x, y);
           const wk = smooth(-5.6, -3.9, ve) * Math.min(1, sand * 1.4);
           r *= 1 + 0.08 * wk;
           g *= 1 + 0.17 * wk;

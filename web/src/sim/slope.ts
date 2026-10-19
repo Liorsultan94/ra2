@@ -43,6 +43,8 @@ export const DX = [1, -1, 0, 0, 1, 1, -1, -1];
 export const DY = [0, 0, 1, -1, 1, -1, 1, -1];
 /** The opposite direction of each neighbour. */
 export const OPP = [1, 0, 3, 2, 7, 6, 5, 4];
+/** Each neighbour's direction mirrored across the x == y diagonal ((dx, dy) -> (dy, dx)). */
+export const TRANS_DIR = [2, 3, 0, 1, 4, 6, 5, 7];
 
 /** Index of the neighbour (dx, dy) in DX / DY (-1: not a neighbour). */
 export function dirOf(dx: number, dy: number): number {
@@ -150,10 +152,14 @@ export function slopeField(m: GameMap): SlopeField {
           }
         }
       }
-    for (let i = 0; i < n - 1 - i; i++) {
-      const im = n - 1 - i;
+    const trans = m.mirror === 'transpose';
+    // (a map with no mirror keeps its grades as they are)
+    for (let i = 0; m.mirror !== 'none' && i < n; i++) {
+      // (transposed halves: tile (x, y) mirrors (y, x) and a step's direction swaps its axes, TRANS_DIR)
+      const im = trans ? (i % W) * W + ((i / W) | 0) : n - 1 - i;
+      if (im <= i) continue;
       for (let k = pass * 4; k < pass * 4 + 4; k++) {
-        const km = OPP[k];
+        const km = trans ? TRANS_DIR[k] : OPP[k];
         if (Math.abs(grade[i * 8 + k] - grade[im * 8 + km]) > 1e-3) continue;
         grade[i * 8 + k] = grade[im * 8 + km];
         climb[i * 8 + k] = climb[im * 8 + km];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import { Tile, seaPointAt, type GameMap, type MapId } from '../src/sim/map';
+import { Tile, framePoint, type GameMap, type MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { Ground } from '../src/render/ground';
 import { biomeLook } from '../src/render/biome';
@@ -205,11 +205,21 @@ describe('minimap biomes', () => {
     }
     if (id === 'winter') expect(bl).toBeGreaterThan(r);
     if (id === 'desert') {
-      expect(r).toBeGreaterThan(bl * 1.2);
-      // Red Sea corner: the Blue Hole's deep abyssal centre is much darker than its turquoise coral rim
+      // (the Sinai is half sea: its land reads as warm sand)
+      let lr = 0;
+      let lb = 0;
+      for (let y = 1; y < map.h; y += 3)
+        for (let x = 1; x < map.w; x += 3) {
+          if (map.tiles[y * map.w + x] === Tile.Water) continue;
+          const q = px(b, x + 0.5, y + 0.5);
+          lr += q[0];
+          lb += q[2];
+        }
+      expect(lr).toBeGreaterThan(lb * 1.2);
+      // the Blue Hole off Dahab: its deep abyssal centre is much darker than its turquoise coral rim
       const sea = map.deco!.sea!;
-      const holePt = seaPointAt(map.w, map.h, sea.off, LAGOON.hu, LAGOON.hv, 0);
-      const rimPt = seaPointAt(map.w, map.h, sea.off, LAGOON.hu + LAGOON.R + 0.4, LAGOON.hv, 0);
+      const holePt = framePoint(sea.hole!, LAGOON.hu, LAGOON.hv);
+      const rimPt = framePoint(sea.hole!, LAGOON.hu + LAGOON.R + 0.4, LAGOON.hv);
       const holePx = px(b, holePt.x, holePt.y);
       const rimPx = px(b, rimPt.x, rimPt.y);
       expect(holePx[2]).toBeGreaterThan(holePx[0]);

@@ -8,6 +8,7 @@ import type { HouseHandle } from './scenery';
 import { SinaiBuilder, scaleM, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type Lod, type SinaiKit } from './sinaikit';
 import { buildVegInstances, desertVeg, vegTint, type VegKind } from './desertveg';
 import type { Inst } from './geo';
+import { TOWN_ACCENTS, TOWN_WALLS, townStyle } from './townstyle';
 
 /*
  * Wadi Al-Rimal's town (desert map) built from the Sinai building kit (sinaikit.ts, GD2): the same houses as
@@ -34,7 +35,7 @@ function trs(x: number, y: number, z: number, ry = 0, rx = 0, rz = 0) {
 
 /** The desert wall colours (scenery.ts, same order: the hash picks the same one). */
 const WALLS = [0xf3efe6, 0xeee2c8, 0xe9d4ac, 0xf2e0c8, 0xe4d2ae, 0xf7f3ea, 0xdcc8a0, 0xeadfd0, 0xdfb57e, 0xe6c28e];
-const ACCENTS = [C(0.18, 0.4, 0.66), C(0.16, 0.56, 0.56), C(0.24, 0.46, 0.3), C(0.7, 0.36, 0.22), C(0.85, 0.66, 0.28)];
+const ACCENTS_ALL = [C(0.18, 0.4, 0.66), C(0.16, 0.56, 0.56), C(0.24, 0.46, 0.3), C(0.7, 0.36, 0.22), C(0.85, 0.66, 0.28)];
 const WHITE = C(1, 1, 1);
 /** The baked plaster (mean ~0.78 linear) is lighter than the old canvas plaster (0.64): scale the wall colours to keep the town's brightness. */
 const WALL_LIFT = 0.92;
@@ -93,7 +94,7 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
     ])
       gy = Math.min(gy, surfaceHeight(m, x, z));
     const from = ch.b.counts();
-    buildHouse(ch.b, st, gy, plants);
+    buildHouse(ch.b, st, gy, plants, townStyle(m, st));
     ch.spans.push({ st, gy, from, to: ch.b.counts() });
   }
   const out: THREE.Object3D[] = [];
@@ -140,17 +141,20 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
 
 // ------------------------------------------------------------------ one structure
 
-function buildHouse(B: SinaiBuilder, st: Structure, gy: number, plants: Map<VegKind, Inst[]> | null) {
+function buildHouse(B: SinaiBuilder, st: Structure, gy: number, plants: Map<VegKind, Inst[]> | null, town: 0 | 1 | 2 = 2) {
   const cx = st.x + st.w / 2;
   const cz = st.y + st.h / 2;
   const base = new THREE.Matrix4().compose(V(cx, gy, cz), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), (st.rot * Math.PI) / 2), V(1, 1, 1));
   const L = (lm: THREE.Matrix4) => base.clone().multiply(lm);
   const h = (k: number) => hash2(st.x * 7 + k, st.y * 13, 911);
   const lift = (c: THREE.Color) => c.clone().multiplyScalar(WALL_LIFT);
-  const wallC = lift(new THREE.Color(WALLS[Math.floor(h(1) * WALLS.length)]));
+  // (the Sinai's towns each in their own palette: townstyle.ts; style 2 keeps the old picks)
+  const walls = town === 2 ? WALLS : TOWN_WALLS[town];
+  const ACCENTS = town === 2 ? ACCENTS_ALL : TOWN_ACCENTS[town].map(([r, g, b]) => C(r, g, b));
+  const wallC = lift(new THREE.Color(walls[Math.floor(h(1) * walls.length)]));
   const acc = ACCENTS[Math.floor(h(51) * ACCENTS.length)];
   const acc2 = ACCENTS[Math.floor(h(52) * ACCENTS.length)];
-  const wc2 = lift(new THREE.Color(WALLS[Math.floor(h(53) * WALLS.length)]));
+  const wc2 = lift(new THREE.Color(walls[Math.floor(h(53) * walls.length)]));
   const ironC = C(0.2, 0.21, 0.22);
   const cards: CardReq[] = [];
   // window style of this house (new hashes: the old choices above are untouched)

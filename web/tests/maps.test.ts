@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
 import { buildingDef } from '../src/sim/defs';
-import { ISLE_KNOLL, Tile, isleDist, seaFrame, terrainPassable, type GameMap, type MapId } from '../src/sim/map';
+import { Tile, mirrorPoint, mirrorRect, type GameMap, type MapId } from '../src/sim/map';
 import { MAP_IDS, createMap } from '../src/sim/maps';
 import { PathFinder } from '../src/sim/path';
 import { TPS } from '../src/sim/types';
@@ -48,7 +48,7 @@ describe('maps', () => {
     expect(digest(createMap('frontline', 1))).toEqual(digest(createMap('frontline', 2)));
   });
 
-  it('is point symmetric (fair) for winter and urban, while desert has distinct non-cloned sides with balanced structures', () => {
+  it('is point symmetric (fair) for winter and urban (the Sinai mirrors across its diagonal: tests/sinai.test.ts)', () => {
     for (const id of ['winter', 'urban'] as MapId[]) {
       const m = createMap(id, 5);
       const n = m.w * m.h;
@@ -57,14 +57,14 @@ describe('maps', () => {
       expect(diff).toBe(0);
       expect(m.structures.length % 2).toBe(0);
     }
-    const dm = createMap('desert', 5);
-    expect(dm.structures.length % 2).toBe(0);
   });
 
   it('every map has balanced ore, oil, ore mines and neutral structures (BAL1)', () => {
     for (const id of MAP_IDS) {
       const w = world(id, 3);
       const m = w.map;
+      // (the Sinai is traced from a picture, no mirror: tests/sinai.test.ts counts what each side holds)
+      if (m.mirror === 'none') continue;
       const n = m.w * m.h;
       if (id !== 'desert') {
         let diff = 0;
@@ -75,83 +75,25 @@ describe('maps', () => {
         for (let i = 0; i < nv; i++) hd = Math.max(hd, Math.abs(m.heights[i] - m.heights[nv - 1 - i]));
         expect(hd, `${id}: heights`).toBeLessThan(0.05);
       }
-      const pts = (a: { x: number; y: number }[], off: number) => {
+      // (each map's own mirror: through the centre, or the Sinai's across its diagonal)
+      const pts = (a: { x: number; y: number }[], size: number) => {
         const k = new Set(a.map((p) => `${p.x},${p.y}`));
-        return a.filter((p) => !k.has(`${m.w - off - p.x},${m.h - off - p.y}`)).length;
+        return a.filter((p) => {
+          const q = mirrorRect(m, p.x, p.y, size, size);
+          return !k.has(`${q.x},${q.y}`);
+        }).length;
       };
       expect(pts(m.oils, 2), `${id}: oil derricks (2 x 2)`).toBe(0);
       expect(pts(m.oreMines, 1), `${id}: ore mines`).toBe(0);
       // neutral entities (derricks, tech sites, bridge huts, garrisons): each has its mirror twin
       const ents = w.list.filter((e) => e.owner < 0 && e.def !== 'bridge');
       const ek = new Set(ents.map((e) => `${e.def}@${e.x},${e.y}`));
-      const lone = ents.filter((e) => !ek.has(`${e.def}@${m.w - e.x},${m.h - e.y}`)).map((e) => `${e.def}@${e.x},${e.y}`);
+      const lone = ents.filter((e) => {
+        const q = mirrorPoint(m, e.x, e.y);
+        return !ek.has(`${e.def}@${q.x},${q.y}`);
+      }).map((e) => `${e.def}@${e.x},${e.y}`);
       expect(lone, `${id}: neutral structures`).toEqual([]);
     }
-  });
-
-  it('Wadi Al-Rimal: has distinct non-identical sides (Red Sea only in NW corner, Oasis Gorge in SE) while keeping fair starts and resources on every seed tried', () => {
-    for (const seed of [1, 2, 7, 424242]) {
-      const m = createMap('desert', seed);
-      const n = m.w * m.h;
-      let diff = 0;
-      for (let i = 0; i < n; i++) {
-        if (m.tiles[i] !== m.tiles[n - 1 - i]) diff++;
-      }
-      // the two halves are visually and geographically distinct (not an identical 180-degree clone)
-      expect(diff, `seed ${seed}: distinct terrain between the two sides`).toBeGreaterThan(200);
-      // Red Sea water in NW corner (2, 2), dry land in SE corner (125, 125) with the inland oasis at (113, 113)
-      expect(m.tiles[2 * m.w + 2]).toBe(Tile.Water);
-      expect(m.tiles[125 * m.w + 125]).not.toBe(Tile.Water);
-      expect(m.tiles[113 * m.w + 113]).toBe(Tile.Water);
-      // the garrisonable structures remain 100% balanced between both players
-      const key = (s: { kind: number; x: number; y: number; w: number; h: number }) => `${s.kind}:${s.x},${s.y},${s.w},${s.h}`;
-      const all = new Set(m.structures.map(key));
-      for (const s of m.structures) expect(all.has(key({ ...s, x: m.w - s.x - s.w, y: m.h - s.y - s.h }))).toBe(true);
-    }
-  });
-
-  it('Wadi Al-Rimal: the lighthouse island in the NW Red Sea is land no ground unit can reach, kept open (no trees), and the AI never picks it', () => {
-    const w = world('desert', 3);
-    const m = w.map;
-    const isle = m.deco!.sea!.isle!;
-    let land = 0;
-    let open = 0;
-    let rock = 0;
-    for (let y = 0; y < m.h; y++)
-      for (let x = 0; x < m.w; x++) {
-        const f = seaFrame(m.w, m.h, m.deco!.sea!.off, x + 0.5, y + 0.5);
-        const d = isleDist(isle, f.u, f.v);
-        const i = y * m.w + x;
-        if (d >= 0) continue;
-        land++;
-        if (d < ISLE_KNOLL) {
-          rock++;
-          continue;
-        }
-        expect(m.offshore![i]).toBe(1);
-        expect(m.trees[i]).toBe(0);
-        if (terrainPassable(m, x, y)) {
-          open++;
-          // its own ground region: never the bases'
-          expect(w.region[i]).not.toBe(0);
-          expect(w.region[i]).not.toBe(w.mainland);
-        }
-      }
-    // usable ground on the single NW offshore island, round a rocky knoll
-    expect(open).toBeGreaterThanOrEqual(10);
-    expect(rock).toBeGreaterThan(0);
-    expect(land).toBeGreaterThan(open);
-    // the starts share one region; a ground order towards an island stops on the mainland
-    expect(w.region[m.starts[1].y * m.w + m.starts[1].x]).toBe(w.mainland);
-    let ix = -1;
-    let iy = -1;
-    for (let i = 0; i < m.w * m.h && ix < 0; i++)
-      if (m.offshore?.[i] && terrainPassable(m, i % m.w, (i / m.w) | 0)) {
-        ix = i % m.w;
-        iy = (i / m.w) | 0;
-      }
-    const near = w.nearestPassable(ix + 0.5, iy + 0.5, 12, w.mainland)!;
-    expect(w.region[near[1] * m.w + near[0]]).toBe(w.mainland);
   });
 
   it('Wadi Al-Rimal: each coloured canyon is a passable sandy floor between rock walls, mouth to mouth', () => {

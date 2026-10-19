@@ -1,4 +1,4 @@
-import { coastWiggle as simCoastWiggle, groundHeight, type GameMap, WATER_LEVEL } from '../sim/map';
+import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, type GameMap, WATER_LEVEL } from '../sim/map';
 import { fbm, hash2 } from '../sim/rng';
 import { biomeLook, type BiomeLook } from './biome';
 import { landmarkPlan, type P2 } from './landmarks/plan';
@@ -90,17 +90,20 @@ export interface Sea {
   /** Breakwater: from (u0, v0) to (u1, v1). */
   mole: [number, number, number, number];
   /**
-   * The desert's Red Sea: the same coast mirrored through the map centre (both corners), cut into the
-   * map itself (sim/map.ts seaFrame), with a coral reef shelf along the shore before the deep water.
+   * The Sinai's open seas: the Mediterranean past the top corner and, mirrored through the map centre, the Red Sea
+   * past the bottom one (off2 its coast offset), both cut into the map itself (sim/map.ts openSeaDist), with a
+   * coral reef shelf along the shore before the deep water; `even`: the Sinai's coast wiggle (seaWiggle).
    */
   twin?: boolean;
+  off2?: number;
+  even?: boolean;
 }
 
 /** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
-export const REEF_W = 3.6;
+export const REEF_W = 2.4;
 export function reefBed(v: number) {
   const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(v, REEF_W);
-  return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 2.2, v);
+  return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 1.8, v);
 }
 
 export interface Lake {
@@ -155,9 +158,10 @@ export class HorizonWorld {
     this.cy = map.h / 2;
     const ds = map.deco?.sea;
     if (this.code === 1 && ds) {
-      // Wadi Al-Rimal: the Red Sea in the north-west and south-east corners (no harbour)
+      // the Sinai: the Mediterranean past the north-west tile corner (the top of the screen), the Red Sea past the
+      // south-east one (no harbour)
       const n = Math.SQRT1_2;
-      this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: ds.off, harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], twin: true };
+      this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: ds.top, off2: ds.bottom, even: true, harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], twin: true };
     }
     this.findRivers();
     if (this.code === 3) {
@@ -381,16 +385,23 @@ export class HorizonWorld {
   /** Signed seaward distance (> 0 = sea) and the along-coast coordinate. */
   seaV(x: number, y: number): { v: number; u: number } {
     const s = this.sea!;
-    const px = x - this.cx;
-    const py = y - this.cy;
+    let px = x - this.cx;
+    let py = y - this.cy;
+    let off = s.off;
+    // twin: the corner nearer (x, y)
+    if (s.twin && px * s.nx + py * s.ny < 0) {
+      px = -px;
+      py = -py;
+      off = s.off2 ?? s.off;
+    }
     const u = px * s.ux + py * s.uy;
-    return { v: px * s.nx + py * s.ny - s.off + coastWiggle(u), u };
+    return { v: px * s.nx + py * s.ny - off + (s.even ? seaWiggle(u) : coastWiggle(u)), u };
   }
 
   /** World position of along-coast u, seaward v. */
   seaPoint(u: number, v: number): P2 {
     const s = this.sea!;
-    const n = v + s.off - coastWiggle(u);
+    const n = v + s.off - (s.even ? seaWiggle(u) : coastWiggle(u));
     return { x: this.cx + s.ux * u + s.nx * n, y: this.cy + s.uy * u + s.ny * n };
   }
 

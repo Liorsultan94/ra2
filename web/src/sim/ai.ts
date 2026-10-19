@@ -991,17 +991,20 @@ export class AIController implements Controller {
     let foundAt = -1;
     // scan in a canonical frame (the north-east base mirrored onto the south-west one) so rounding and
     // tie-breaks favour neither start position on the point-symmetric map
-    const flip = conyard.x > map.w / 2;
-    const cbx = flip ? map.w - bx : bx;
-    const cby = flip ? map.h - by : by;
+    // (the Sinai map mirrors across the x == y diagonal instead: the base with x > y is transposed onto the other)
+    const trans = map.mirror === 'transpose';
+    const flip = trans ? conyard.x > conyard.y : conyard.x > map.w / 2;
+    const cbx = flip ? (trans ? by : map.w - bx) : bx;
+    const cby = flip ? (trans ? bx : map.h - by) : by;
     for (let r = 0; r <= 14; r++) {
       for (let oy = -r; oy <= r; oy++) {
         for (let ox = -r; ox <= r; ox++) {
           if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue;
-          const ctx = Math.round(cbx + ox - d.w / 2);
-          const cty = Math.round(cby + oy - d.h / 2);
-          const tx = flip ? map.w - ctx - d.w : ctx;
-          const ty = flip ? map.h - cty - d.h : cty;
+          // (transposed: the canonical footprint is d.h x d.w, the actual one d.w x d.h)
+          const ctx = Math.round(cbx + ox - (flip && trans ? d.h : d.w) / 2);
+          const cty = Math.round(cby + oy - (flip && trans ? d.w : d.h) / 2);
+          const tx = flip ? (trans ? cty : map.w - ctx - d.w) : ctx;
+          const ty = flip ? (trans ? ctx : map.h - cty - d.h) : cty;
           if (!w.canPlace(this.pid, defId, tx, ty)) continue;
           if (d.category !== 'defense' && !this.hasClearance(tx, ty, d.w, d.h)) continue;
           if (this.blocksDock(defId, tx, ty, d.w, d.h)) continue;
@@ -2170,7 +2173,9 @@ export class AIController implements Controller {
     const sent = this.postSent.get(p.key) ?? 0;
     if (need > 0 && sent < 4 && w.tick >= (this.postNext.get(p.key) ?? 0)) {
       const [rx, ry] = this.rally();
-      const pool = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 14);
+      // (an ambush also takes soldiers still walking up to the rally point: they are seldom idle before a wave takes them)
+      const gathering = (u: Entity) => p.ambush && (u.order.type === 'move' || u.order.type === 'attackMove') && Math.hypot(u.order.x - rx, u.order.y - ry) < 6;
+      const pool = force.filter((u) => this.roleOf(u) === 'army' && (u.order.type === 'idle' || gathering(u)) && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 14);
       const vsHeavy = (u: Entity) => this.firepower(u.def, { infantry: 0, light: 0, heavy: 1, building: 0, aircraft: 0 });
       let cands = pool.filter((u) => klass(u.def) === 'main' && (!p.ambush || (DEFS[u.def].category === 'infantry' && canGarrisonUnit(u.def))));
       // ambushers: anti-tank soldiers first
