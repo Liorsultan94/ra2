@@ -12,6 +12,7 @@ import { Loco } from './slope';
 import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
 import { Rng } from './rng';
+import { NavalAI } from './navalai';
 import { FLARE_RADIUS, hasNightVision, illumReady, pickIllum } from './night';
 import { TPS, type ArmorClass, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
@@ -141,7 +142,7 @@ function warOrder(o: [string, number][], war: WarDoctrine): [string, number][] {
 }
 
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'navy';
 
 interface Intel {
   x: number;
@@ -350,6 +351,9 @@ export class AIController implements Controller {
   private chokeFound: { x: number; y: number; w: number }[] = [];
   private ambushUntil = 0;
   private ambushAt: [number, number] = [0, 0];
+  /** The navy (navalai.ts) on maps with open sea, else null; it keeps its own seeded RNG. */
+  readonly navy: NavalAI | null;
+  private navalUnits: Entity[] = [];
 
   constructor(
     private world: World,
@@ -387,6 +391,21 @@ export class AIController implements Controller {
     }
     this.hMin = Math.max(lo, WATER_LEVEL);
     this.hSpan = Math.max(0.5, Math.min(4, hi - this.hMin));
+    this.navy = world.hasSea
+      ? new NavalAI(
+          world,
+          pid,
+          difficulty,
+          {
+            peace: () => this.peace,
+            waves: () => this.stats.waves,
+            peaceUntil: () => this.peaceUntil,
+            free: (u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && u.guardId < 0,
+            claim: (ids, on) => this.setRole(ids, on ? 'navy' : 'army'),
+          },
+          aiSeed(world.seed, pid, world.players[pid].faction + '/navy'),
+        )
+      : null;
   }
 
   /** Play this plan from now on (tests / debug; plans.ts). */
@@ -434,13 +453,16 @@ export class AIController implements Controller {
     this.thinks++;
     const buildings = this.mineBuildings;
     const units = this.mineUnits;
+    const naval = this.navalUnits;
     buildings.length = 0;
     units.length = 0;
+    naval.length = 0;
     for (let i = 0; i < w.list.length; i++) {
       const e = w.list[i];
       if (e.dead || e.owner !== this.pid) continue;
       if (e.kind === 'building') buildings.push(e);
-      else if (e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound && !e.heli) units.push(e);
+      // (the navy is navalai.ts's business: the land AI never sends a boat with a wave)
+      else if (e.kind === 'unit' && e.inside < 0 && !e.para && !e.drop && !e.wound && !e.heli) (unitDef(e.def).naval ? naval : units).push(e);
     }
 
     const conyard = buildings.find((b) => buildingDef(b.def).role === 'conyard');
@@ -462,6 +484,7 @@ export class AIController implements Controller {
     this.manageProduction(buildings, units);
     this.manageHarvesters(units);
     this.manageArmy(buildings, units);
+    this.navy?.update(naval, units);
     this.manageRepairs(buildings);
     this.manageIllum(buildings, units);
     this.manageSupport();
@@ -905,13 +928,14 @@ export class AIController implements Controller {
     for (const cat of ['building', 'defense'] as const) {
       const ready = p.ready[cat];
       if (ready) {
-        const spot = this.findSpot(ready, conyard);
+        // (the Shipyard goes on the coast that leads to the enemy: navalai.ts)
+        const spot = buildingDef(ready).shipyard ? (this.navy?.yardSpot(ready) ?? null) : this.findSpot(ready, conyard);
         if (spot) w.issue(this.pid, { type: 'place', def: ready, tx: spot[0], ty: spot[1] });
         else w.issue(this.pid, { type: 'cancel', def: ready });
       }
     }
     if (p.queues.building.length === 0 && !p.ready.building) {
-      const next = this.nextBuilding(buildings);
+      const next = this.navalYard(buildings) ?? this.nextBuilding(buildings);
       if (next) w.issue(this.pid, { type: 'produce', def: next });
     }
     if (p.queues.defense.length === 0 && !p.ready.defense && this.count(buildings, 'factory') > 0 && p.credits > 1200) {
@@ -936,6 +960,16 @@ export class AIController implements Controller {
     let n = 0;
     for (const e of this.world.list) if (!e.dead && e.kind === 'unit' && this.world.isEnemy(this.pid, e.owner) && isStrike(e.def)) n++;
     return n;
+  }
+
+  /** The Shipyard when the navy wants one (navalai.ts), or a power plant first if it would leave the base short. */
+  private navalYard(buildings: Entity[]): string | null {
+    const id = this.navy?.wantYard(buildings);
+    if (!id) return null;
+    const p = this.p;
+    const powerDef = factionDefByRole(p.faction, 'power');
+    if (p.powerOut - p.powerUse + buildingDef(id).power < 0) return this.world.canBuild(this.pid, powerDef.id) ? powerDef.id : null;
+    return id;
   }
 
   private nextBuilding(buildings: Entity[]): string | null {
