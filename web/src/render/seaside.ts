@@ -1171,10 +1171,11 @@ export class Seaside {
     };
 
     // 1. Domed Oasis Spring Shrine & Stone Basin at (116.8, 116.8) overlooking the main lake (113, 113)
-    // (the gorge's set pieces were laid out round its lake at tile (113, 113) of the old map: G moves them)
-    const G = GORGE - 113;
-    const sx = 116.8 + G;
-    const sz = 116.8 + G;
+    // (the gorge's set pieces were laid out round its lake at tile (113, 113) of the old map: GX, GZ move them)
+    const GX = GORGE.x - 113;
+    const GZ = GORGE.y - 113;
+    const sx = 116.8 + GX;
+    const sz = 116.8 + GZ;
     if (free(sx, sz)) {
       const sy = this.gh(sx, sz) - 0.02;
       const yaw = -Math.PI * 0.75;
@@ -1207,9 +1208,9 @@ export class Seaside {
 
     // 2. Bedouin Caravan Encampment & Market Stalls on the oasis gorge banks
     const camps = [
-      { x: 109.2 + G, z: 116.2 + G, yaw: 0.55, col: 0x3a2e26, stripe: 0xc84a32 },
-      { x: 116.2 + G, z: 109.2 + G, yaw: 1.02, col: 0x42352c, stripe: 0xd49a36 },
-      { x: 118.4 + G, z: 112.4 + G, yaw: -2.2, col: 0x362b22, stripe: 0x2f7a78 },
+      { x: 109.2 + GX, z: 116.2 + GZ, yaw: 0.55, col: 0x3a2e26, stripe: 0xc84a32 },
+      { x: 116.2 + GX, z: 109.2 + GZ, yaw: 1.02, col: 0x42352c, stripe: 0xd49a36 },
+      { x: 118.4 + GX, z: 112.4 + GZ, yaw: -2.2, col: 0x362b22, stripe: 0x2f7a78 },
     ];
     const DRESS = [0xf0ece4, 0x3a6aa8, 0xd8c8a0, 0xb04a3a, 0x5a7a5a, 0xe8d8b0, 0x2a2a30].map(C);
     camps.forEach((cp, ci) => {
@@ -1266,8 +1267,8 @@ export class Seaside {
 
     // 3. Spring Rock Cascades & Mist Spray where the sandstone ridges meet the upper pools (105, 119) & (119, 105)
     const cascades = [
-      { x0: 103.3 + G, z0: 118.4 + G, x1: 104.5 + G, z1: 118.8 + G },
-      { x0: 118.4 + G, z0: 103.3 + G, x1: 118.8 + G, z1: 104.5 + G },
+      { x0: 103.3 + GX, z0: 118.4 + GZ, x1: 104.5 + GX, z1: 118.8 + GZ },
+      { x0: 118.4 + GX, z0: 103.3 + GZ, x1: 118.8 + GX, z1: 104.5 + GZ },
     ];
     const sprayList: SprayEmitter[] = [];
     for (const cs of cascades) {
@@ -1294,9 +1295,9 @@ export class Seaside {
 
     // 4. Blender-baked Date Palms, Clumps, Acacias & Sandstone Boulders ringing the three Gorge Oasis Pools
     const pools = [
-      { x: 113 + G, z: 113 + G, r: 3.3, n: 18 },
-      { x: 105 + G, z: 119 + G, r: 1.8, n: 10 },
-      { x: 119 + G, z: 105 + G, r: 1.8, n: 10 },
+      { x: 113 + GX, z: 113 + GZ, r: 3.3, n: 18 },
+      { x: 105 + GX, z: 119 + GZ, r: 1.8, n: 10 },
+      { x: 119 + GX, z: 105 + GZ, r: 1.8, n: 10 },
     ];
     pools.forEach((pl, pi) => {
       for (let i = 0; i < pl.n; i++) {

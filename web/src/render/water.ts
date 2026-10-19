@@ -6,6 +6,7 @@ import { biomeLook } from './biome';
 import { NSKY, NSKY_GLSL } from './nightsky';
 import { LAGOON, LAGOON_GLSL, SEA_SCATTER_GLSL } from './bluehole';
 import { SUB, surfaceHeight } from './ground';
+import { NORTH_GLSL, northUniforms } from './northcoast';
 
 /*
  * The river: a flat, alpha-blended sheet at WATER_LEVEL covering only the
@@ -1325,6 +1326,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       // the Sinai's seas (sim/map.ts seaDist): on, the map centre, the open seas' coast offsets (past the map edge);
       // their seaward distance baked over the map (seaTexture); the Blue Hole's and Tiran's frames
       wSea: { value: new THREE.Vector4(sea ? 1 : 0, sea?.c ?? 0, sea?.top ?? 0, sea?.bottom ?? 0) },
+      ...northUniforms(sea?.north),
       seaTex: { value: sea ? seaTexture(m) : null },
       wHole: { value: frameU(sea?.hole) },
       wIsle: { value: frameU(sea?.isle) },
@@ -1407,13 +1409,14 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       ${SEA_SCATTER_GLSL}
       // seaward distance from the coast (> 0 sea): baked over the map (the gulfs, the open seas); past its edge (the
       // outskirts' belt) the open seas' twin coasts, as horizonworld.ts
+      ${NORTH_GLSL}
       float seaAt( vec2 p ) {
         vec2 q = p / mapSize;
         if ( q.x > 0.0 && q.y > 0.0 && q.x < 1.0 && q.y < 1.0 ) return texture2D( seaTex, q ).r;
         float e = ( p.x - p.y ) * 0.70711;
         float s = ( p.x + p.y - 2.0 * wSea.y ) * 0.70711;
         float wg = 2.6 * cos( e * 0.047 ) + 1.5 * cos( e * 0.131 );
-        return max( -s - wSea.z + wg, s - wSea.w + wg );
+        return max( seaNorthOn > 0.5 ? -s - northAt( e ) : -s - wSea.z + wg, s - wSea.w + wg );
       }
       // map point p in a seaside frame (sim/map.ts frameUV): u along the shore, v seaward
       vec2 frameUV( vec4 f, vec2 p ) {

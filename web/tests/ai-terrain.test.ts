@@ -32,7 +32,9 @@ describe('terrain use on Wadi Al-Rimal (AI2)', () => {
       const canyon = posts.filter((q: { ambush: boolean }) => q.ambush);
       expect(canyon.length).toBe(pid === owner ? 2 : 0);
       const o = w.players[1 - pid];
-      for (const c of [plateau, ...canyon]) expect(Math.hypot(c.x - p.startX, c.y - p.startY)).toBeLessThan(Math.hypot(c.x - o.startX, c.y - o.startY));
+      // (the canyon lies by the line halfway between the two bases since they moved apart, SN2: a wall spot over a
+      // mouth may sit on that line)
+      for (const c of [plateau, ...canyon]) expect(Math.hypot(c.x - p.startX, c.y - p.startY)).toBeLessThanOrEqual(Math.hypot(c.x - o.startX, c.y - o.startY));
     }
   });
 

@@ -160,3 +160,36 @@ games are chaotic, the red lean in the leads is about two standard deviations.
 Hard vs hard (usa-russia, 60 min cap, seeds 1-20): 16 end in 19-58 min, 4 hold out. Widening both crossings (the
 head of the Gulf of Suez 6 px south, the ridge 6 px shorter) did not help: 8 of 20 held out. (On the mirrored
 layout a modest corridor widening, 15.5 to 17 tiles, had not helped either: 4 of 6 held out against 2.)
+
+### SN2: bases far west and far east, the north coast where the owner drew it (208 x 208)
+The owner moved the bases (refs/owner-bases-arrows.jpg): blue far west on the Egyptian mainland, red far east on
+the Arabian, level with each other; and drew the Mediterranean's coast further north (refs/owner-north-land-green.jpg,
+unprojected from the overview's camera onto the picture: sim/maps.ts MED_COAST_PX). The map grew from 176 to 208
+tiles and its centre moved to the picture's (145.6, 152.7), so the two bases are each other's mirror across the
+map's diagonal (red's tile is blue's transposed): everything round each base and on its mainland up to its crossing
+is laid out once and mirrored (own()). The west crossing stays a narrow isthmus (lagoons from the new coast down to
+the old one), the east one the gap by the granite ridge (now running up to the new coast). The north has dunes, an
+oasis on each side, a coast road between the crossing villages with a village on each half, two tracks across the
+dunes and a gem field on each half; each mainland a highway village and a well.
+
+Fairness (`bench/sinai-fair.test.ts`, seed 1; before = the traced 176 map, SN1):
+
+| | before | after |
+|---|---|---|
+| start to enemy (tiles, both ways) | 161.8 / 162.1 | 249.5 / 250.4 |
+| start to own crossing | 14.4 / 53.0 | 75.9 / 76.8 |
+| start to far crossing | 111.5 / 147.1 | 172.9 / 174.4 |
+| ore fields, value | 7 / 7, 1662 / 1662 | 8 / 8, 1797 / 1797 |
+| roads to the fields (sum) | 253.8 / 245.7 | 371.8 / 377.8 |
+| oil (road sum) | 4 / 4 (118 / 107) | 4 / 4 (112 / 112) |
+| build space (open 2 x 2 within 20) | 553 / 541 | 1131 / 1134 |
+| garrisonable houses (road sum) | 22 / 22 (882 / 1475) | 32 / 32 (2719 / 2523) |
+| tech sites (road sum) | 4 / 4 (155 / 166) | 4 / 4 (215 / 215) |
+
+Bench (FULL=1, grace on, 3 x 26 games, rows `sn2A`, `sn2B`, `sn2C`): wins 5 / 2, ahead at the end (lead, capped
+games included) 29 / 28 (blue 51%; before 27 / 44, red 62%), 71 of 78 capped at 30 min (before 48), mean 29.7 min
+(26.7). Harvest by slot, all games: within 1.2% at every snapshot from 4 to 28 min (before red 3-9% ahead).
+
+Hard vs hard (usa-russia, 75 min cap, seeds 1-10): 4 end in 21-54 min (seeds 3, 4, 5, 9), 6 hold out to the cap
+(before: 16 of 20 ended inside 60 min). The bases 250 tiles apart by road make every attack a long march; the games
+are much longer.

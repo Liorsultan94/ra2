@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { buildingDef } from '../src/sim/defs';
-import { Tile, groundHeight, isleAt, terrainBuildable } from '../src/sim/map';
-import { createMap, sinaiPoint } from '../src/sim/maps';
+import { Tile, groundHeight, isleAt, terrainBuildable, topCoast } from '../src/sim/map';
+import { createMap, sinaiPixel, sinaiPoint } from '../src/sim/maps';
 import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from '../src/sim/sinaimask';
 import { Loco } from '../src/sim/slope';
 import type { Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
-// SN1: Wadi Al-Rimal is the Sinai Peninsula, its coasts traced from the owner's picture (sim/sinaimask.ts). The
-// bases sit where the owner marked them, on the Egyptian (west) and Arabian (east) mainlands, the Sinai between them;
-// ground forces go round the heads of the two gulfs over land (no bridges), aircraft fly over. The sides are not
-// mirror images; what each holds is kept equal by hand (counted for the base nearer by road).
+// SN1: Wadi Al-Rimal is the Sinai Peninsula, its coasts traced from the owner's picture (sim/sinaimask.ts), the
+// Mediterranean's coast where the owner drew it further north. The bases sit where the owner marked them, far west on
+// the Egyptian mainland and far east on the Arabian, level; the Sinai lies between them; ground forces go round the
+// heads of the two gulfs over land (no bridges), aircraft fly over. The coasts are not mirror images; the grounds
+// round the two bases are (across the map's diagonal), and the rest each holds is kept equal by hand (counted for the
+// base nearer by road).
 
 function world(seed = 1) {
   return new World({
@@ -40,7 +42,7 @@ function pathLen(w: World, sx: number, sy: number, p: number[]) {
 }
 function route(w: World, sx: number, sy: number, gx: number, gy: number) {
   w.pfs[Loco.Vehicle].clearCache?.();
-  const p = w.pfs[Loco.Vehicle].find(sx, sy, gx, gy, 400000);
+  const p = w.pfs[Loco.Vehicle].find(sx, sy, gx, gy, 2000000);
   return { ok: p.length > 0 && p[p.length - 1] === gy * w.map.w + gx, len: pathLen(w, sx, sy, p) };
 }
 /** The picture's water mask (1 = water). */
@@ -81,11 +83,20 @@ describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
           same++;
           continue;
         }
+        // (the Mediterranean is the owner's later line, not the picture's; the isthmus's lagoons are not in it either)
+        if (-(S(p.x, p.y) - (m.w / 2) * Math.SQRT2) - topCoast(sea, E(p.x, p.y)) > -4 || (u < 56 && v < 56)) {
+          n--;
+          continue;
+        }
         if (water(u + 0.5, v + 0.5) === !!wv) same++;
       }
     expect(same / n).toBeGreaterThan(0.99);
-    // the Mediterranean on top, the Red Sea round the tip, the peninsula's middle land
-    expect(water(125, 8)).toBe(true);
+    // the Mediterranean on top, past the owner's line north of the picture's coast (land now), the Red Sea round the
+    // tip, the peninsula's middle land
+    expect(water(125, -40)).toBe(true);
+    expect(water(125, 8)).toBe(false);
+    expect(water(60, 30)).toBe(false);
+    expect(water(200, 4)).toBe(false);
     expect(water(125, 255)).toBe(true);
     expect(water(125, 130)).toBe(false);
     // the Gulf of Suez long and wide down the west, the Gulf of Aqaba narrower down the east
@@ -103,16 +114,20 @@ describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
       expect(run(v, 180, 245), `the Gulf of Aqaba at v ${v}`).toBeGreaterThan(8);
       expect(run(v, 180, 245)).toBeLessThan(run(v, 0, 60));
     }
-    // blue on the Egyptian mainland west of the upper Gulf of Suez, red on the Arabian mainland east of the lower Gulf
-    // of Aqaba, where the owner marked them
+    // blue far west on the Egyptian mainland, red far east on the Arabian, level with each other where the owner put
+    // them (refs/owner-bases-arrows.jpg), the one's tile the other's transposed
     const [s0, s1] = m.starts;
-    const b = sinaiPoint(11, 67);
-    const r = sinaiPoint(214, 183);
-    expect(Math.hypot(s0.x + 0.5 - b.x, s0.y + 0.5 - b.y)).toBeLessThan(1);
-    expect(Math.hypot(s1.x + 0.5 - r.x, s1.y + 0.5 - r.y)).toBeLessThan(1);
+    const b = sinaiPixel(s0.x + 0.5, s0.y + 0.5);
+    const r = sinaiPixel(s1.x + 0.5, s1.y + 0.5);
+    expect(Math.abs(b.u + 86)).toBeLessThan(2);
+    expect(Math.abs(r.u - 377)).toBeLessThan(2);
+    expect(Math.abs(b.v - r.v)).toBeLessThan(1);
+    expect(b.v).toBeGreaterThan(140);
+    expect(b.v).toBeLessThan(165);
+    expect(s1).toEqual({ x: s0.y, y: s0.x });
     expect(m.bridges).toEqual([]);
     // Tiran in the mouth of the Gulf of Aqaba, the Blue Hole off the Sinai's Aqaba coast
-    const px = (x: number, y: number) => 125 + E(x, y) / 0.48;
+    const px = (x: number, y: number) => sinaiPixel(x, y).u;
     expect(px(sea.isle!.x, sea.isle!.y)).toBeGreaterThan(150);
     expect(px(sea.hole!.x, sea.hole!.y)).toBeGreaterThan(160);
   });
@@ -215,17 +230,19 @@ describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
       for (let y = Math.floor(l.y) - 7; y <= l.y + 7; y++) for (let x = Math.floor(l.x) - 7; x <= l.x + 7; x++) if (Math.hypot(x - l.x, y - l.y) <= 7 && w.pass[y * N + x]) open++;
       expect(open, `crossing at ${l.x},${l.y}`).toBeGreaterThan(80);
     }
-    // a village by each crossing, as many garrisonable houses in each
-    const houses = (c: { x: number; y: number }) => w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building' && buildingDef(e.def).garrison && Math.hypot(e.x - c.x, e.y - c.y) < 22).length;
-    expect(houses(lanes[0])).toBeGreaterThanOrEqual(6);
-    expect(houses(lanes[1])).toBe(houses(lanes[0]));
+    // a village by each crossing (on the Sinai side, within a dozen tiles of it), as many garrisonable houses in each
+    const houses = (c: { x: number; y: number }) => w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building' && buildingDef(e.def).garrison && Math.hypot(e.x - c.x, e.y - c.y) < 16).length;
+    const villages = [sinaiPoint(64, 62), sinaiPoint(222, 76)];
+    for (const [k, v] of villages.entries()) expect(Math.hypot(v.x - lanes[k].x, v.y - lanes[k].y)).toBeLessThan(12);
+    expect(houses(villages[0])).toBeGreaterThanOrEqual(6);
+    expect(houses(villages[1])).toBe(houses(villages[0]));
   });
 
   it('keeps the Sinai places: Sharm on the tip, resorts on both gulf coasts, the Blue Hole by Dahab, Tiran offshore, the canyon by Nuweiba and the massif', () => {
     const w = world(3);
     const m = w.map;
     const sea = m.deco!.sea!;
-    const px = (x: number, y: number) => ({ u: 125 + E(x, y) / 0.48, v: 135 + (S(x, y) - (m.w / 2) * Math.SQRT2) / 0.48 });
+    const px = (x: number, y: number) => sinaiPixel(x, y);
     // three resorts: Sharm (look 0) on the tip, one on each gulf's Sinai coast
     expect(sea.sites.length).toBe(3);
     const site = (look: number) => sea.sites.find((s) => s.look === look)!;
