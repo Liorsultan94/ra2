@@ -1142,6 +1142,54 @@ void phSample(float L, vec2 p, out vec4 a, out vec3 n) {
   n = vec3(nA * wv.x + nB * wv.y, a.a);
 #endif
 }
+#if BIOME == 1
+/*
+ * Steep ground (DP1: the granite massifs' flanks): the top-down projection stretches the rock there into streaks.
+ * The rock layer is projected onto the slope instead: side projections (world z / x across, height up) blended by
+ * the surface normal (biplanar over x and z), cross-faded in with the steepness; their normals are turned into the
+ * top-down layer's tangent frame (TERRAIN_NORMAL), so the lighting stays consistent. Only on steep rock pixels.
+ */
+vec3 phNw = vec3(0.0, 1.0, 0.0);
+vec3 phWx = vec3(0.0);
+vec3 phWy = vec3(0.0);
+float phSteep = 0.0;
+void phSteepRock(float L, inout vec4 a, inout vec3 n) {
+  vec2 dx0 = phDx;
+  vec2 dy0 = phDy;
+  vec3 T = normalize(vec3(1.0, 0.0, 0.0) - phNw * phNw.x);
+  vec3 B = cross(phNw, T);
+  vec2 w = pow(abs(phNw.xz) + 1e-3, vec2(4.0));
+  w /= w.x + w.y;
+  vec4 sa = vec4(0.0);
+  vec2 sn = vec2(0.0);
+  if (w.x > 0.02) {
+    // facing +-x: u along world z, image up = world up
+    vec4 a1;
+    vec3 n1;
+    phDx = vec2(phWx.z, -phWx.y);
+    phDy = vec2(phWy.z, -phWy.y);
+    phSample(L, vec2(vTerrW.z, -vTerrW.y) + 17.3, a1, n1);
+    vec3 P = vec3(0.0, n1.y, n1.x);
+    sa += a1 * w.x;
+    sn += vec2(dot(P, T), dot(P, B)) * w.x;
+  }
+  if (w.y > 0.02) {
+    // facing +-z: u along world x
+    vec4 a2;
+    vec3 n2;
+    phDx = vec2(phWx.x, -phWx.y);
+    phDy = vec2(phWy.x, -phWy.y);
+    phSample(L, vec2(vTerrW.x, -vTerrW.y) + 5.9, a2, n2);
+    vec3 P = vec3(n2.x, n2.y, 0.0);
+    sa += a2 * w.y;
+    sn += vec2(dot(P, T), dot(P, B)) * w.y;
+  }
+  phDx = dx0;
+  phDy = dy0;
+  a = mix(a, sa, phSteep);
+  n = vec3(mix(n.xy, sn, phSteep), a.a);
+}
+#endif
 #ifdef PH_REG
 /*
  * Desert sand (GD1). Wind ripples are procedural, so their crests keep one wind direction through the
@@ -1207,6 +1255,13 @@ float terrPomDepth(vec2 tw, float rockW, vec2 gAx, vec2 gAy, vec2 gBx, vec2 gBy)
 const PHOTO_MAP = /* glsl */ `
   phDx = dFdx(tw);
   phDy = dFdy(tw);
+#if BIOME == 1
+  // steep slopes: the rock is projected onto them (phSteepRock); from ~38 degrees, fully past ~58
+  phNw = normalize(inverseTransformDirection(vNormal, viewMatrix));
+  phSteep = 1.0 - smoothstep(0.53, 0.79, phNw.y);
+  phWx = dFdx(vTerrW);
+  phWy = dFdy(vTerrW);
+#endif
   // (the procedural detail map is only fetched where the fields need it, below)
   vec4 gnz = texture2D(fogNoise, tw * 0.043);
   float gDrift = (gnz.b - 0.5) * 1.6;
@@ -1261,6 +1316,9 @@ const PHOTO_MAP = /* glsl */ `
     ls[i] = -9.0;
     if (lw[i] > 0.004) {
       phSample(ll[i], tw, la[i], ln[i]);
+#if BIOME == 1
+      if (i == 4 && phSteep > 0.01) phSteepRock(ll[i], la[i], ln[i]);
+#endif
 #ifdef PH_REG
       if (i == 5 || i == 7) {
         // macro colour drift over the dunes (beyond the painted tint): paler / redder sand over hundreds of metres

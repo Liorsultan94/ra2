@@ -381,13 +381,8 @@ export class HorizonWorld {
   /** Signed seaward distance (> 0 = sea) and the along-coast coordinate. */
   seaV(x: number, y: number): { v: number; u: number } {
     const s = this.sea!;
-    let px = x - this.cx;
-    let py = y - this.cy;
-    // twin: the corner nearer (x, y)
-    if (s.twin && px * s.nx + py * s.ny < 0) {
-      px = -px;
-      py = -py;
-    }
+    const px = x - this.cx;
+    const py = y - this.cy;
     const u = px * s.ux + py * s.uy;
     return { v: px * s.nx + py * s.ny - s.off + coastWiggle(u), u };
   }

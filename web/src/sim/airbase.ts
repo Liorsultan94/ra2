@@ -376,7 +376,7 @@ function strikeTarget(w: World, e: Entity, s: Sortie): Entity | null {
     return null;
   }
   if (s.tx >= 0) {
-    const n = targetNear(w, e, s.tx, s.ty, 2.5);
+    const n = targetNear(w, e, s.tx, s.ty, 4.0);
     if (n) {
       e.order = { type: 'attack', target: n.id, forced: true };
       return n;
@@ -609,17 +609,39 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
         const dx = t.x - e.x;
         const dy = t.y - e.y;
         const dc = Math.hypot(dx, dy);
-        // overshoot after a missed run instead of pivoting over the target
-        fly(w, e, d, s, t.x, t.y, vCruise, cruise, turnMul, dc > 1.6);
+        const offBefore = Math.abs(angleDiff(e.facing, Math.atan2(dy, dx)));
+        const turnR = vCruise / d.turnRate;
+        // Break turning-circle orbit trap: if too close and off-axis to roll out onto the target,
+        // extend straight (or toward map center near a border) until far enough for a clean attack run.
+        const canLineUp =
+          dc > 1.6 &&
+          (offBefore < 0.35 ||
+            (offBefore <= Math.PI * 0.5
+              ? dc * dc - 2 * dc * turnR * Math.sin(offBefore) >= 1.5 * 1.5
+              : dc >= turnR * 2.2 + 1.2));
+        let gx = t.x;
+        let gy = t.y;
+        let steer = canLineUp;
+        if (!steer) {
+          const nx = e.x + Math.cos(e.facing) * 3;
+          const ny = e.y + Math.sin(e.facing) * 3;
+          if (nx < 2.5 || ny < 2.5 || nx > w.map.w - 2.5 || ny > w.map.h - 2.5) {
+            gx = w.map.w * 0.5;
+            gy = w.map.h * 0.5;
+            steer = true;
+          }
+        }
+        fly(w, e, d, s, gx, gy, vCruise, cruise, turnMul, steer);
         const off = Math.abs(angleDiff(e.facing, Math.atan2(dy, dx)));
-        if (dc <= RELEASE_DIST && dc >= 1.2 && off < 0.3 && e.z > 1.0 && e.jammedUntil <= w.tick) release(w, e, d, s, t);
+        if (dc <= RELEASE_DIST && dc >= 0.8 && off < 0.35 && e.z > 0.7 && e.jammedUntil <= w.tick) release(w, e, d, s, t);
         break;
       }
       if (o.type === 'attackMove' || o.type === 'move') {
-        const dc = Math.hypot(o.x - e.x, o.y - e.y);
-        fly(w, e, d, s, o.x, o.y, vCruise, cruise, turnMul, dc > 1.2);
-        if (o.type === 'attackMove' && dc < 4.5) {
-          const t = targetNear(w, e, o.x, o.y, 4);
+        const dx = o.x - e.x;
+        const dy = o.y - e.y;
+        const dc = Math.hypot(dx, dy);
+        if (s.ammo > 0 && dc < 5.0) {
+          const t = targetNear(w, e, o.x, o.y, 4.5);
           if (t) {
             e.order = { type: 'attack', target: t.id, forced: true };
             s.tx = t.x;
@@ -627,7 +649,11 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
             break;
           }
         }
-        if (dc < 1.4) {
+        const offBefore = Math.abs(angleDiff(e.facing, Math.atan2(dy, dx)));
+        const turnR = vCruise / d.turnRate;
+        const canLineUp = dc > 1.2 && (offBefore < 0.4 || dc >= turnR * 2.1);
+        fly(w, e, d, s, o.x, o.y, vCruise, cruise, turnMul, canLineUp);
+        if (dc < 1.8) {
           e.order = { type: 'idle' };
           s.phase = base ? 'return' : 'orbit';
         }
@@ -721,6 +747,10 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
       break;
     }
     case 'orbit': {
+      if (s.ammo > 0 && e.order.type !== 'idle' && hasMission(w, e, s)) {
+        s.phase = 'sortie';
+        break;
+      }
       if (base) {
         s.phase = 'return';
         break;

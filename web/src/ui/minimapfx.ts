@@ -10,7 +10,10 @@ import { hash2 } from '../sim/rng';
  *  - alert pings (a base / unit under attack): rings opening at the spot.
  */
 
-/** Ore / gem fields: one pixel per tile, alpha by the amount left; explored tiles only. */
+/** Sub-tile resolution of the ore overlay canvas (pixels per tile). */
+const ORE_S = 3;
+
+/** Ore / gem fields: crisp multi-sample mineral cluster overlay on explored tiles. */
 export class OreLayer {
   readonly canvas: HTMLCanvasElement;
   private img: ImageData;
@@ -18,9 +21,9 @@ export class OreLayer {
 
   constructor(private map: GameMap) {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = map.w;
-    this.canvas.height = map.h;
-    this.img = new ImageData(map.w, map.h);
+    this.canvas.width = map.w * ORE_S;
+    this.canvas.height = map.h * ORE_S;
+    this.img = new ImageData(map.w * ORE_S, map.h * ORE_S);
   }
 
   /** Bring the layer up to date (cheap when nothing changed). Returns whether it was redrawn. */
@@ -30,7 +33,41 @@ export class OreLayer {
     for (let i = 0; i < m.ore.length; i++) if (m.ore[i] && explored[i]) key = (key * 31 + i * 17 + m.ore[i] * (m.oreKind[i] === 2 ? 7 : 3)) | 0;
     if (key === this.key) return false;
     this.key = key;
-    oreImage(m, explored, this.img.data);
+    const d = this.img.data;
+    d.fill(0);
+    const W = m.w;
+    const H = m.h;
+    const PW = W * ORE_S;
+    for (let ty = 0; ty < H; ty++) {
+      for (let tx = 0; tx < W; tx++) {
+        const idx = ty * W + tx;
+        const n = explored[idx] ? m.ore[idx] : 0;
+        if (!n) continue;
+        const gem = m.oreKind[idx] === 2;
+        const richness = Math.min(1, n / ORE_MAX);
+        for (let sy = 0; sy < ORE_S; sy++) {
+          for (let sx = 0; sx < ORE_S; sx++) {
+            const px = tx * ORE_S + sx;
+            const py = ty * ORE_S + sy;
+            const o = (py * PW + px) * 4;
+            const h = hash2(px, py, 311);
+            const center = sx === 1 && sy === 1;
+            if (!center && h > 0.38 + richness * 0.55) continue;
+            const glint = h < 0.25 ? 1.18 : h > 0.72 ? 0.78 : 1.0;
+            if (gem) {
+              d[o] = Math.min(255, Math.round(212 * glint));
+              d[o + 1] = Math.min(255, Math.round(96 * glint));
+              d[o + 2] = 255;
+            } else {
+              d[o] = 255;
+              d[o + 1] = Math.min(255, Math.round(196 * glint));
+              d[o + 2] = Math.min(255, Math.round(54 * glint));
+            }
+            d[o + 3] = Math.round(255 * (center ? 0.72 + 0.28 * richness : 0.45 + 0.45 * richness));
+          }
+        }
+      }
+    }
     this.canvas.getContext('2d')!.putImageData(this.img, 0, 0);
     return true;
   }

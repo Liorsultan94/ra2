@@ -11,6 +11,7 @@ import { ReefLife, buildWreck, type Wreck } from './reeflife';
 import { RIVER } from './water';
 import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type SinaiKit } from './sinaikit';
 import { desertVeg, vegInstancedMesh, type DesertVeg, type VegKind } from './desertveg';
+import { buildSpray, type SprayEmitter } from './relieffx';
 
 /*
  * The Red Sea coast of Wadi Al-Rimal (render only; the sim's coast is sim/maps.ts DESERT_SEA, mirrored
@@ -148,7 +149,7 @@ export class Seaside {
     const kit = sinaiKit();
     this.veg = desertVeg();
     this.kitLoSpan = quality === 'high' ? 30 : 24;
-    for (const b of [0, 1]) {
+    for (const b of [0]) {
       const F = this.frame(b);
       const k = new Kit();
       this.sb = kit ? new SinaiBuilder(kit) : null;
@@ -174,16 +175,17 @@ export class Seaside {
       this.sb = null;
       if (quality !== 'low') this.populate(F, beds);
     }
+    this.buildOasisGorge(kit, wxLight);
     this.buildPlants();
     this.group.add(...this.instanced(parasolGeometry(), parasols, 'seaside-parasols'));
     this.group.add(...this.instanced(loungerGeometry(), loungers, 'seaside-loungers'));
     this.buildBoats();
     if (wxLight) {
-      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P, this.frame(1).P], wrecks);
+      this.reef = new ReefLife(map, fog, quality, wxLight, [this.frame(0).P], wrecks);
       this.group.add(this.reef.group);
     }
     if (quality !== 'low') {
-      for (const b of [0, 1]) {
+      for (const b of [0]) {
         const n = this.statics[b].length + this.walkers.filter((w) => w.b === b).length;
         const ci = new CivilianInstances(fog, Math.max(1, n));
         ci.mesh.name = 'seaside-people';
@@ -520,8 +522,9 @@ export class Seaside {
       this.group.add(mesh);
       return mesh;
     };
-    mk(sb.pl.build(), sinaiPlasterMaterial(fog, kit), 'seaside-walls');
-    const kmat = sinaiKitMaterial(fog, kit);
+    // the resort's clean, bright white plaster (DP1; the town keeps its weathered walls)
+    mk(sb.pl.build(), sinaiPlasterMaterial(fog, kit, true), 'seaside-walls');
+    const kmat = sinaiKitMaterial(fog, kit, true);
     const k0 = mk(sb.k0.build(), kmat, 'seaside-kit');
     const k1 = mk(sb.k1.build(), kmat, 'seaside-kit-far');
     if (k1) k1.visible = false;
@@ -775,6 +778,11 @@ export class Seaside {
       const deck = WATER_LEVEL + 0.17;
       const p0 = F.P(jU, v0);
       if (this.inMap(p0.x, p0.y, 0.5)) {
+        // the piles' foam collars in the water shader (water.ts wJetty): the first pair and the step to the next
+        const pa = F.P(jU, v0 + 0.2);
+        const pb = F.P(jU, v0 + 0.6);
+        RIVER.wJetty.value[b & 1].set(pa.x, pa.y, pb.x - pa.x, pb.y - pa.y);
+        RIVER.wJettyN.value.setComponent(b & 1, Math.ceil((v1 - v0) / 0.4 - 1e-6));
         for (let v = v0; v < v1; v += 0.4) {
           const v2 = Math.min(v1, v + 0.4);
           const a = F.P(jU, v);
@@ -1112,6 +1120,193 @@ export class Seaside {
     this.lanterns.push({ x: lp.x, y: base + top + 0.11, z: lp.y, ph: b * Math.PI });
   }
 
+  /**
+   * The Southern Oasis Gorge in the South-East corner (x ~ 100..124, y ~ 100..124):
+   * - a whitewashed Sinai domed spring shrine (marabout) and stone water basin overlooking the main emerald lake (113, 113),
+   * - a Bedouin caravan encampment (striped tents, woven rugs, glowing campfires, spice stalls) on the gorge banks,
+   * - spring cascades tumbling off the sandstone escarpments into the upper pools (105, 119) and (119, 105) with mist spray,
+   * - Blender-baked date palm clumps, tall/leaning palms, acacias, shrubs, and sandstone boulders around the pools.
+   */
+  private buildOasisGorge(kit: SinaiKit | null, wxLight?: { value: THREE.Vector3 }) {
+    const k = new Kit();
+    const sb = kit ? new SinaiBuilder(kit) : null;
+    this.sb = sb;
+    const h = (i: number, j: number) => hash2(i, j, 4493);
+    const free = (x: number, z: number) => {
+      if (!this.inMap(x, z, 0.8)) return false;
+      const t = this.tileAt(x, z);
+      if (t === Tile.Water || t === Tile.Rock) return false;
+      const tx = Math.floor(x);
+      const tz = Math.floor(z);
+      return !this.map.trees[tz * this.map.w + tx] && !this.map.blocked[tz * this.map.w + tx];
+    };
+
+    // 1. Domed Oasis Spring Shrine & Stone Basin at (116.8, 116.8) overlooking the main lake (113, 113)
+    const sx = 116.8;
+    const sz = 116.8;
+    if (free(sx, sz)) {
+      const sy = this.gh(sx, sz) - 0.02;
+      const yaw = -Math.PI * 0.75;
+      k.at(sx, sy, sz, yaw);
+      // stepped stone terrace & water basin
+      k.box(1.15, 0.06, 1.15, 0, 0.03, 0, STONE);
+      k.box(0.52, 0.14, 0.36, 0, 0.1, -0.36, 0x9c8e78);
+      k.box(0.44, 0.12, 0.28, 0, 0.12, -0.36, POOL);
+      if (sb) {
+        const base = k.base.clone();
+        const T = (x: number, y: number, z: number, ry = 0) =>
+          base.clone().multiply(new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ry), new THREE.Vector3(1, 1, 1)));
+        const wallsC = C(CREAM).multiplyScalar(1.15);
+        const accent = C(0x2a8f8a);
+        sb.box(T(0, 0.26, 0.12), 0.68, 0.44, 0.68, wallsC, sy);
+        sb.box(T(0, 0.49, 0.12), 0.72, 0.03, 0.72, C(WHITE), sy, true);
+        sb.plaster(new THREE.CylinderGeometry(0.24, 0.24, 0.09, 18).translate(0, 0.045, 0), T(0, 0.5, 0.12), wallsC, sy);
+        sb.piece('dome', T(0, 0.59, 0.12).multiply(scaleM(0.24 / 0.25)), { tint: accent.clone().multiplyScalar(1.25) });
+        const [cw, chh] = sb.cardSize('arch');
+        sb.card('arch', T(0, 0.04 + (chh * 0.85) / 2, -0.224, Math.PI), { tint: wallsC, accent }, 0.24 / (cw * 0.72), 0.85);
+      } else {
+        k.box(0.68, 0.44, 0.68, 0, 0.26, 0.12, CREAM);
+        k.cyl(0.24, 0.24, 0.09, 0, 0.5, 0.12, WHITE, 14);
+        k.dome(0.24, 0, 0.59, 0.12, 0x2a8f8a, 14);
+      }
+      // warm lantern by the shrine arch
+      k.ball(0.025, 0, 0.38, -0.24, 0xffd28a, 0, 1);
+      this.glowSpots.push({ x: sx, y: sy, z: sz, r: 1.5, lamp: true });
+    }
+
+    // 2. Bedouin Caravan Encampment & Market Stalls on the oasis gorge banks
+    const camps = [
+      { x: 109.2, z: 116.2, yaw: 0.55, col: 0x3a2e26, stripe: 0xc84a32 },
+      { x: 116.2, z: 109.2, yaw: 1.02, col: 0x42352c, stripe: 0xd49a36 },
+      { x: 118.4, z: 112.4, yaw: -2.2, col: 0x362b22, stripe: 0x2f7a78 },
+    ];
+    const DRESS = [0xf0ece4, 0x3a6aa8, 0xd8c8a0, 0xb04a3a, 0x5a7a5a, 0xe8d8b0, 0x2a2a30].map(C);
+    camps.forEach((cp, ci) => {
+      if (!free(cp.x, cp.z)) return;
+      const cy = this.gh(cp.x, cp.z);
+      k.at(cp.x, cy, cp.z, cp.yaw);
+      // woven desert carpet on the sand
+      k.box(0.76, 0.012, 0.52, 0, 0.008, 0.12, cp.stripe);
+      k.box(0.66, 0.014, 0.42, 0, 0.01, 0.12, 0xead8b8);
+      // pitched Bedouin goat-hair tent canopy + ridge poles
+      k.box(0.84, 0.02, 0.54, 0, 0.28, -0.05, cp.col, 0, 0, 0.18);
+      k.box(0.86, 0.022, 0.14, 0, 0.29, -0.05, cp.stripe, 0, 0, 0.18);
+      k.box(0.84, 0.22, 0.02, 0, 0.12, -0.3, cp.col);
+      for (const px of [-0.36, 0, 0.36]) {
+        k.cyl(0.012, 0.012, 0.32, px, 0, -0.05, WOOD, 5);
+        k.cyl(0.01, 0.01, 0.24, px, 0, 0.2, WOOD, 5);
+      }
+      // glowing campfire ring in front of the tent
+      const fx = cp.x + Math.sin(cp.yaw) * 0.45;
+      const fz = cp.z + Math.cos(cp.yaw) * 0.45;
+      const fy = this.gh(fx, fz);
+      k.at(fx, fy, fz, 0);
+      for (let s = 0; s < 7; s++) {
+        const a = (s / 7) * Math.PI * 2;
+        k.ball(0.032, Math.cos(a) * 0.1, 0.015, Math.sin(a) * 0.1, 0x6e6256, 0);
+      }
+      k.cone(0.065, 0.08, 0, 0.01, 0, 0xff9a38, 6, 1);
+      this.glowSpots.push({ x: fx, y: fy, z: fz, r: 1.35, lamp: false });
+      if (this.quality !== 'low') {
+        const kk = CIV_SCALE * 0.9;
+        for (let p = 0; p < 2; p++) {
+          const a = cp.yaw + (p === 0 ? -0.4 : 0.4);
+          const px = fx - Math.sin(a) * 0.26;
+          const pz = fz - Math.cos(a) * 0.26;
+          const m = new THREE.Matrix4().compose(
+            new THREE.Vector3(px, this.gh(px, pz), pz),
+            new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, 0, 'YXZ')),
+            new THREE.Vector3(kk, kk, kk),
+          );
+          this.statics[0].push({
+            m,
+            pose: Pose.Chat,
+            mask: Opt.Cap,
+            skin: SKINS[(ci + p) % SKINS.length],
+            top: DRESS[(ci * 2 + p) % DRESS.length],
+            bot: DRESS[(ci * 2 + p + 2) % DRESS.length],
+            hat: C(0xf2efe6),
+            phase: ci * 2 + p,
+            lean: 0,
+          });
+        }
+      }
+    });
+
+    // 3. Spring Rock Cascades & Mist Spray where the sandstone ridges meet the upper pools (105, 119) & (119, 105)
+    const cascades = [
+      { x0: 103.3, z0: 118.4, x1: 104.5, z1: 118.8 },
+      { x0: 118.4, z0: 103.3, x1: 118.8, z1: 104.5 },
+    ];
+    const sprayList: SprayEmitter[] = [];
+    for (const cs of cascades) {
+      const steps = 6;
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const x = cs.x0 + (cs.x1 - cs.x0) * t;
+        const z = cs.z0 + (cs.z1 - cs.z0) * t;
+        const y = Math.max(WATER_LEVEL + 0.02, this.gh(x, z));
+        k.at(x, y, z, Math.atan2(cs.x1 - cs.x0, cs.z1 - cs.z0));
+        // stepped sandstone ledges & white tumbling water foam
+        k.box(0.36, 0.06, 0.24, 0, -0.01, 0, 0x8a6d52);
+        k.box(0.22 * (1 + t * 0.3), 0.025, 0.22, 0, 0.028, 0, s === steps ? 0xeaf6f8 : 0x7fd4e6);
+      }
+      sprayList.push({ x: cs.x1, y: WATER_LEVEL + 0.05, z: cs.z1, r: 0.45, h: 0.28, size: 0.28, n: this.quality === 'low' ? 4 : 9, dx: (cs.x1 - cs.x0) * 0.25, dz: (cs.z1 - cs.z0) * 0.25 });
+    }
+    if (wxLight && sprayList.length && this.reef) {
+      // reuse a subtle noise texture or create a small procedural wave texture for the spring mist
+      const dummyWave = new THREE.DataTexture(new Uint8Array([180, 180, 180, 200]), 1, 1, THREE.RGBAFormat);
+      dummyWave.needsUpdate = true;
+      const sp = buildSpray(sprayList, this.fog, wxLight, dummyWave, 0.75);
+      if (sp) this.group.add(sp);
+    }
+
+    // 4. Blender-baked Date Palms, Clumps, Acacias & Sandstone Boulders ringing the three Gorge Oasis Pools
+    const pools = [
+      { x: 113, z: 113, r: 3.3, n: 18 },
+      { x: 105, z: 119, r: 1.8, n: 10 },
+      { x: 119, z: 105, r: 1.8, n: 10 },
+    ];
+    pools.forEach((pl, pi) => {
+      for (let i = 0; i < pl.n; i++) {
+        const a = (i / pl.n) * Math.PI * 2 + (h(i, pi * 10 + 1) - 0.5) * 0.22;
+        const rr = pl.r + 0.55 + h(i, pi * 10 + 2) * 1.4;
+        const x = pl.x + Math.cos(a) * rr;
+        const z = pl.z + Math.sin(a) * rr;
+        if (!free(x, z)) continue;
+        const y = this.gh(x, z);
+        k.at(x, y, z, h(i, pi * 10 + 3) * 6.28);
+        const roll = h(i, pi * 10 + 4);
+        const sc = 0.78 + h(i, pi * 10 + 5) * 0.32;
+        const kind: VegKind = roll < 0.32 ? 'date_clump' : roll < 0.62 ? 'date_tall' : roll < 0.8 ? 'date_lean' : roll < 0.92 ? 'acacia' : 'shrub';
+        if (!this.plant(k, kind, sc * 0.85)) datePalm(k, h(i, pi * 10 + 6), sc);
+      }
+      // shoreline sandstone boulders
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 2 + h(i, pi * 20 + 7) * 0.4;
+        const rr = pl.r - 0.1 + h(i, pi * 20 + 8) * 0.45;
+        const x = pl.x + Math.cos(a) * rr;
+        const z = pl.z + Math.sin(a) * rr;
+        if (!this.inMap(x, z, 0.5)) continue;
+        const y = Math.max(WATER_LEVEL - 0.04, this.gh(x, z) - 0.02);
+        const bs = 0.09 + h(i, pi * 20 + 9) * 0.13;
+        k.at(x, y, z, h(i, pi * 20 + 10) * 6.28);
+        k.ball(bs, 0, bs * 0.45, 0, [0x8a6e54, 0x9c7e62, 0x765c46][i % 3], 0);
+      }
+    });
+
+    const geo = k.build();
+    if (geo.getAttribute('position')?.count) {
+      const mesh = new THREE.Mesh(geo, landmarkMaterial(this.fog));
+      mesh.name = 'oasis-gorge-static';
+      mesh.castShadow = this.quality === 'high';
+      mesh.receiveShadow = this.quality !== 'low';
+      this.group.add(mesh);
+    }
+    if (sb && kit) this.addKitMeshes(sb, kit, this.fog, this.quality);
+    this.sb = null;
+  }
+
   // ------------------------------------------------------------------ people
 
   private populate(F: Frame, beds: Lounger[]) {
@@ -1244,7 +1439,7 @@ export class Seaside {
       [-16, 14, 0],
       [8, 22, 0],
     ];
-    for (const b of [0, 1])
+    for (const b of [0])
       kinds.forEach(([u, v, kind], i) => {
         const F = this.frame(b);
         const p = F.P(u + b * 1.5, v);
@@ -1254,7 +1449,7 @@ export class Seaside {
       });
     // one instanced mesh per hull kind and corner (each corner culls on its own)
     const out: THREE.InstancedMesh[] = [];
-    for (const corner of [0, 1]) {
+    for (const corner of [0]) {
       geos.forEach((g, kind) => {
         const list = this.boatList.filter((bt) => bt.kind === kind && (bt.x + bt.z > this.map.w ? 1 : 0) === corner);
         if (!list.length) return;
@@ -1299,7 +1494,7 @@ export class Seaside {
     if (!list.length) return [];
     // two variants share a mesh when the geometry has them (parasols: thatch on the beach, white on the deck)
     const out: THREE.Object3D[] = [];
-    for (const b of [0, 1]) {
+    for (const b of [0]) {
       const sub = list.filter((it) => {
         const x = it.m.elements[12];
         const z = it.m.elements[14];
@@ -1386,6 +1581,8 @@ export class Seaside {
   }
 
   dispose() {
+    for (const v of RIVER.wJetty.value) v.set(0, 0, 0, 0);
+    RIVER.wJettyN.value.set(0, 0);
     this.reef?.dispose();
     this.group.traverse((o) => {
       const mesh = o as THREE.Mesh;

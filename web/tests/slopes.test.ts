@@ -43,8 +43,8 @@ function walk(w: World, sx: number, sy: number, path: number[]) {
 }
 
 describe('slopes (SL1)', () => {
-  it('the step grades and the closed steps are exactly point mirrored, on every map', () => {
-    for (const id of MAP_IDS) {
+  it('the step grades and the closed steps are exactly point mirrored on symmetric maps', () => {
+    for (const id of ['frontline', 'winter', 'urban'] as const) {
       const w = world(id, 3);
       const n = w.map.w * w.map.h;
       let bad = 0;

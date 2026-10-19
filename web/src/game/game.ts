@@ -1309,7 +1309,7 @@ export class Game {
   }
 
   /** Decide the context action for the cursor position. */
-  private contextAction(sx: number, sy: number, ctrl: boolean): { cursor: string; run: () => void } {
+  private contextAction(sx: number, sy: number, ctrl: boolean, noReselect = false): { cursor: string; run: () => void } {
     const w = this.world;
     const units = this.selectedOwnUnits();
     const picked = this.pick(sx, sy);
@@ -1404,7 +1404,7 @@ export class Game {
       if (target.kind === 'building' && eng.length && target.hp < target.maxHp) {
         return { cursor: 'enter', run: () => this.order({ type: 'capture', ids: eng.map((u) => u.id), target: target.id }, target, false) };
       }
-      if (units.length === 1 && units[0].id === target.id && unitDef(target.def).mcv) {
+      if (!noReselect && units.length === 1 && units[0].id === target.id && unitDef(target.def).mcv) {
         return { cursor: 'deploy', run: () => this.issue({ type: 'deploy', ids: [target.id] }) };
       }
       const cap = target.kind === 'unit' ? (unitDef(target.def).transport ?? 0) : 0;
@@ -1416,7 +1416,9 @@ export class Game {
       if (target.kind === 'building' && garrison.length && garrisonRoom(w, target, this.local) > 0) {
         return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: garrison.map((u) => u.id), target: target.id }, target, false) };
       }
-      return { cursor: 'select', run: () => this.select([target.id], this.keys.has('Shift')) };
+      if (!noReselect || !ownSel) {
+        return { cursor: 'select', run: () => this.select([target.id], this.keys.has('Shift')) };
+      }
     }
     if (ownSel) {
       if (target && target.owner !== this.local) {
@@ -1440,7 +1442,7 @@ export class Game {
           // bridges: Ctrl force-fires heavy ordnance at the deck; otherwise the deck is just ground to move onto
           const heavy = attackers.filter((u) => canHurtBridge(unitDef(u.def).weapon));
           if (ctrl && heavy.length) return { cursor: 'attack', run: () => this.order({ type: 'attack', ids: heavy.map((u) => u.id), target: target.id }, target, true) };
-        } else if (target.owner < 0) return { cursor: 'select', run: () => this.select([target.id]) };
+        } else if (target.owner < 0 && !noReselect) return { cursor: 'select', run: () => this.select([target.id]) };
       }
       if (ctrl && target && target.owner === this.local) {
         const attackers = units.filter((u) => unitDef(u.def).weapon);
@@ -1597,8 +1599,8 @@ export class Game {
       if (!d || d.id !== e.pointerId) return;
       const dist = Math.hypot(p.x - d.sx, p.y - d.sy);
       const touch = e.pointerType === 'touch';
-      // simple scheme: finger jitter up to ~18 px is still a tap; only a real drag pans
-      if (dist > (touch && this.simple ? this.tapSlop() : 7)) d.moved = true;
+      // touch: finger jitter up to ~18 px is still a tap; only a real drag pans
+      if (dist > (touch ? this.tapSlop() : 7)) d.moved = true;
       if (!d.moved) return;
       if ((touch && !d.box) || d.button === 2 || d.button === 1) {
         if (!d.panning) {
@@ -1642,8 +1644,6 @@ export class Game {
         }
         return;
       }
-      // simple scheme: a tap in box mode is still a tap (never swallowed)
-      if (d.box && !d.moved && e.pointerType === 'touch' && !this.simple) return;
       if (d.button === 2) {
         // right click: cancel mode, else deselect
         if (this.mode !== 'normal') this.setMode('normal');
@@ -1651,8 +1651,8 @@ export class Game {
         return;
       }
       if (d.button !== 0) return;
-      // simple scheme: resolve the tap where the finger went down (jitter while lifting is noise)
-      if (e.pointerType === 'touch' && this.simple) this.tapSimple(d.sx, d.sy);
+      // touch: resolve the tap where the finger went down (jitter while lifting is noise)
+      if (e.pointerType === 'touch') this.tapSimple(d.sx, d.sy);
       else this.click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     };
     on(view, 'pointerup', end);
@@ -1787,16 +1787,17 @@ export class Game {
   }
 
   /**
-   * Simple touch scheme: tap an own unit = select it; with units selected, a tap anywhere else
-   * (ground, enemy, a building to enter / repair / garrison) is an order. Own units only take
-   * the tap on a direct hit while something is selected, so tapping next to a unit in a crowd
-   * moves the selection instead of re-selecting. Double-tap a unit = all of its type on screen.
+   * Touch scheme on mobile:
+   * - With no units selected, a single tap on a unit or building selects it.
+   * - Once units are selected, a single tap anywhere (even on another unit or building) moves/acts
+   *   with all selected units instead of switching selection.
+   * - Double-tapping an object switches selection to that object (or deploys an already-selected MCV /
+   *   selects all units of that type on screen when tapping the sole selected unit twice).
    */
   private tapSimple(x: number, y: number) {
     const units = this.selectedOwnUnits();
     const hadSel = this.renderer.selection.size > 0;
-    // (escort mode wants a friendly unit under the finger: generous there)
-    this.touchPick = units.length && this.mode !== 'guard' ? 'tight' : 'loose';
+    this.touchPick = 'loose';
     try {
       if (this.paused) {
         const target = this.pick(x, y);
@@ -1812,19 +1813,38 @@ export class Game {
         this.click(x, y, false, false);
         return;
       }
-      const target = this.pick(x, y);
+      const looseTarget = this.pick(x, y);
       const now = performance.now();
-      if (target && target.owner === this.local && target.kind === 'unit' && this.mode === 'normal' && now - this.lastClick.t < 450 && this.lastClick.id === target.id) {
-        // double tap: every unit of that type on screen
-        const ids = this.world.list.filter((e) => !e.dead && e.owner === this.local && e.def === target.def && e.inside < 0 && this.onScreen(e)).map((e) => e.id);
-        this.select(ids);
-        this.hud.flashUnits(ids, 'select');
-        navigator.vibrate?.(8);
+      const isDoubleTap = !!looseTarget && this.mode === 'normal' && now - this.lastClick.t < 500 && this.lastClick.id === looseTarget.id;
+      if (isDoubleTap && looseTarget) {
         this.lastClick = { t: 0, id: -1 };
+        if (units.length === 1 && units[0].id === looseTarget.id) {
+          if (unitDef(looseTarget.def).mcv) {
+            this.issue({ type: 'deploy', ids: [looseTarget.id] });
+            navigator.vibrate?.(8);
+            return;
+          }
+          if (looseTarget.owner === this.local && looseTarget.kind === 'unit') {
+            const ids = this.world.list.filter((e) => !e.dead && e.owner === this.local && e.def === looseTarget.def && e.inside < 0 && this.onScreen(e)).map((e) => e.id);
+            this.select(ids);
+            this.hud.flashUnits(ids, 'select');
+            navigator.vibrate?.(8);
+            return;
+          }
+        }
+        // Double-tap on another unit or building: switch selection to that object
+        this.select([looseTarget.id]);
+        if (looseTarget.owner === this.local && looseTarget.kind === 'unit') {
+          this.hud.flashUnits([looseTarget.id], 'select');
+        }
+        navigator.vibrate?.(8);
         return;
       }
-      this.lastClick = { t: now, id: target?.id ?? -1 };
-      const a = this.contextAction(x, y, false);
+      this.lastClick = { t: now, id: looseTarget?.id ?? -1 };
+      this.touchPick = units.length && this.mode !== 'guard' ? 'tight' : 'loose';
+      const target = this.pick(x, y);
+      // Single tap while units are selected: never switch selection to another object (move/act there instead)
+      const a = this.contextAction(x, y, false, units.length > 0);
       a.run();
       if (a.cursor === 'select' && target) {
         navigator.vibrate?.(6);

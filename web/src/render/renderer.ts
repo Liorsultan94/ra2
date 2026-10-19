@@ -216,11 +216,19 @@ interface ProjVisual {
   first: boolean;
 }
 
-export function styleFor(world: World, owner: number): ModelStyle {
+export function styleFor(world: World, owner: number, viewer = -1): ModelStyle {
   if (owner < 0) return { team: 0x9a9a9a, hull: 0x8a8070, accent: 0x6a6a6a, flag: [0x888888, 0xaaaaaa, 0x888888], faction: 'neutral', region: 'west' };
   const p = world.players[owner];
   const f = FACTION_INFO[p.faction];
-  return { team: p.color, hull: f.hull, accent: f.accent, flag: f.flag, faction: p.faction, region: FACTION_REGION[p.faction] };
+  return {
+    team: p.color,
+    hull: f.hull,
+    accent: f.accent,
+    flag: f.flag,
+    faction: p.faction,
+    region: FACTION_REGION[p.faction],
+    hostile: viewer >= 0 && owner !== viewer,
+  };
 }
 
 function newAnim(): AnimState {
@@ -1177,7 +1185,7 @@ export class GameRenderer {
 
   private makeVisual(e: Entity): Visual {
     const d = DEFS[e.def];
-    const model = createModel(d.model, styleFor(this.world, e.owner), this.fog);
+    const model = createModel(d.model, styleFor(this.world, e.owner, this.viewer), this.fog);
     const cat = e.kind === 'building' ? 'building' : d.category === 'infantry' ? 'infantry' : d.category === 'air' ? 'aircraft' : 'vehicle';
     model.root.userData.perfCat = cat;
     if (e.kind === 'unit') enlargeUnit(model, d.category === 'infantry' ? INFANTRY_SCALE : d.category === 'air' ? AIR_SCALE : VEHICLE_SCALE);
@@ -1735,15 +1743,24 @@ export class GameRenderer {
   /** Selection / hover rings live in the combat overlay (src/render/overlay.ts). */
   private updateRing(e: Entity, v: Visual, d: (typeof DEFS)[string]) {
     const sel = this.selection.has(e.id);
-    if (!v.visible || (!sel && this.hover !== e.id)) return;
+    const bd = e.kind === 'building' ? buildingDef(e.def) : null;
+    const garrisoned = !!bd?.garrison && e.owner >= 0 && e.passengers.length > 0;
+    if (!v.visible || (!sel && this.hover !== e.id && !garrisoned)) return;
     const rp = v.model.root.position;
     const air = e.kind === 'unit' && unitDef(e.def).air;
     // a jet on its wheels: the ring goes on the airbase slab under it
     const onPad = !!e.sortie && e.z < 0.3 && e.sortie.base >= 0 ? this.world.get(e.sortie.base) : undefined;
     const gy = onPad ? this.slabHeight(onPad) + 0.05 : air ? standHeight(this.world.map, rp.x, rp.z) : rp.y;
-    const color = e.owner < 0 ? 0xffd860 : this.world.players[e.owner].color;
-    const bd = e.kind === 'building' ? buildingDef(e.def) : null;
-    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel, bd, (d as { radius?: number }).radius ?? 0.4, e.rank >= 2);
+    const hostileGarrison = garrisoned && this.viewer >= 0 && e.owner !== this.viewer;
+    const color =
+      e.owner < 0
+        ? 0xffd860
+        : hostileGarrison
+          ? 0xff281e
+          : garrisoned && !sel
+            ? 0x38e8ff
+            : this.world.players[e.owner].color;
+    this.overlay.ring(e.id, rp.x, rp.z, gy, color, sel || garrisoned, bd, (d as { radius?: number }).radius ?? 0.4, e.rank >= 2);
   }
 
   // ------------------------------------------------------------------ wrecks

@@ -154,6 +154,7 @@ export function slopeField(m: GameMap): SlopeField {
       const im = n - 1 - i;
       for (let k = pass * 4; k < pass * 4 + 4; k++) {
         const km = OPP[k];
+        if (Math.abs(grade[i * 8 + k] - grade[im * 8 + km]) > 1e-3) continue;
         grade[i * 8 + k] = grade[im * 8 + km];
         climb[i * 8 + k] = climb[im * 8 + km];
         for (let c = 0; c < LOCO_COUNT; c++) block[c][i] = (block[c][i] & ~(1 << k)) | (((block[c][im] >> km) & 1) << k);

@@ -1903,18 +1903,24 @@ export class World {
         if (!t || t.kind !== 'building') {
           e.order = { type: 'idle' };
           e.path = null;
+          e.guardX = e.x;
+          e.guardY = e.y;
           break;
         }
         // If ordered to capture an enemy/neutral building, stop if it is already ours
         if (!o.repair && t.owner === e.owner) {
           e.order = { type: 'idle' };
           e.path = null;
+          e.guardX = e.x;
+          e.guardY = e.y;
           break;
         }
         // If ordered to repair our building, stop if it is already at full HP or no longer ours
         if (o.repair && (t.owner !== e.owner || t.hp >= t.maxHp)) {
           e.order = { type: 'idle' };
           e.path = null;
+          e.guardX = e.x;
+          e.guardY = e.y;
           break;
         }
         if (this.distTo(e, t) < 0.75) {
@@ -1934,14 +1940,41 @@ export class World {
         const t = this.get(o.target);
         const cap = t && t.kind === 'unit' ? (unitDef(t.def).transport ?? 0) : 0;
         const house = !!t && t.kind === 'building'; // garrisoning a civilian building (garrison.ts)
-        if (!t || (house ? garrisonRoom(this, t, e.owner) <= 0 : t.owner !== e.owner || t.passengers.length >= cap)) {
+        if (!t || t.dead || (house ? !isGarrison(t) || (t.owner >= 0 && t.owner !== e.owner) : t.owner !== e.owner || cap <= 0)) {
           e.order = { type: 'idle' };
           e.path = null;
+          e.guardX = e.x;
+          e.guardY = e.y;
           break;
         }
-        if (house ? this.distTo(e, t) < 0.75 : Math.hypot(t.x - e.x, t.y - e.y) < 0.8) {
+        const full = house ? garrisonRoom(this, t, e.owner) <= 0 : t.passengers.length >= cap;
+        const dist = house ? this.distTo(e, t) : Math.hypot(t.x - e.x, t.y - e.y);
+        if (full) {
+          // Building / transport is full: walk up beside it and stay stationed next to it
+          if (dist < 1.35) {
+            e.order = { type: 'idle' };
+            e.path = null;
+            e.guardX = e.x;
+            e.guardY = e.y;
+            break;
+          }
+          this.chase(e, t, d);
+          if (!e.path || (house ? this.distTo(e, t) : Math.hypot(t.x - e.x, t.y - e.y)) < 1.35) {
+            e.order = { type: 'idle' };
+            e.path = null;
+            e.guardX = e.x;
+            e.guardY = e.y;
+          }
+          break;
+        }
+        if (dist < (house ? 0.75 : 0.8)) {
           if (house) {
-            if (!enterGarrison(this, e, t)) e.order = { type: 'idle' };
+            if (!enterGarrison(this, e, t)) {
+              e.order = { type: 'idle' };
+              e.path = null;
+              e.guardX = e.x;
+              e.guardY = e.y;
+            }
           } else this.board(e, t);
           break;
         }

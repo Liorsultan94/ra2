@@ -528,8 +528,6 @@ export class Horizon {
           float su = 0.0;
           if ( seaOn > 0.5 ) {
             vec2 pc = p - hzCentre;
-            // twin seas (the desert's Red Sea): the corner nearer p
-            if ( seaTwin > 0.5 && dot( pc, seaN.xy ) < 0.0 ) pc = -pc;
             su = dot( pc, seaN.zw );
             sv = dot( pc, seaN.xy ) - seaOff + wig( su );
           }

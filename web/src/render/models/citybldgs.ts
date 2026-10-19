@@ -1453,9 +1453,18 @@ function cityModel(kind: StructureKind): Builder {
         emitters: [],
         ...extra,
       };
-    // owner flag on the roof
+    // Garrisoned city building: roof flag, street-level sandbag bunkers, armored firing slits & friendly/enemy IFF beacons
+    const hostile = !!style.hostile;
+    const bagA = hostile ? 0x625a4c : 0x9e9068;
+    const bagB = hostile ? 0x524b3f : 0xada076;
+    const steel = 0x2b3036;
+    const gunMetal = 0x1e2226;
+    const trimCol = hostile ? 0xd82218 : style.team;
+    const beaconCol = hostile ? 0xff2418 : 0x38f0ff;
+    const slitCol = hostile ? 0xff3c18 : 0x58e8ff;
+
     const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.012, 0.6, 6),
+      new THREE.CylinderGeometry(0.012, 0.012, 0.65, 6),
       new THREE.MeshStandardMaterial({
         color: 0x9a9ea2,
         roughness: 0.5,
@@ -1463,10 +1472,10 @@ function cityModel(kind: StructureKind): Builder {
       }),
     );
     if (fog) fog.apply(pole.material as THREE.Material);
-    pole.position.set(0, H + 0.3, 0);
+    pole.position.set(0, H + 0.32, 0);
     pole.castShadow = true;
     root.add(pole);
-    const cloth = new THREE.PlaneGeometry(0.4, 0.24, 6, 1).translate(0.2, 0, 0);
+    const cloth = new THREE.PlaneGeometry(0.42, 0.25, 6, 1).translate(0.21, 0, 0);
     const cols: number[] = [];
     const pos = cloth.attributes.position;
     for (let i = 0; i < pos.count; i++) {
@@ -1487,42 +1496,142 @@ function cityModel(kind: StructureKind): Builder {
       flagMat.set(key, fm);
     }
     const flag = new THREE.Mesh(cloth, fm);
-    flag.position.set(0.012, H + 0.48, 0);
+    flag.position.set(0.012, H + 0.5, 0);
     flag.castShadow = true;
     const base = Float32Array.from(pos.array as Float32Array);
     root.add(flag);
-    // team-coloured band around the roof edge marks who holds it
-    // a team-coloured ring along the roof edge (four thin rails)
-    const bw = fw - spec.inset * 2 + 0.07;
-    const bd = fd - spec.inset * 2 + 0.07;
-    const by = (kind === StructureKind.Townhouse ? H - 0.3 : H) + 0.03;
-    const bandMat = new THREE.MeshStandardMaterial({
-      color: style.team,
-      emissive: style.team,
-      emissiveIntensity: 0.3,
-      roughness: 0.6,
-    });
-    if (fog) fog.apply(bandMat);
-    for (const [w, d, x, zz] of [
-      [bw, 0.035, 0, bd / 2],
-      [bw, 0.035, 0, -bd / 2],
-      [0.035, bd, bw / 2, 0],
-      [0.035, bd, -bw / 2, 0],
-    ]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, d), bandMat);
-      rail.position.set(x, by, zz);
-      root.add(rail);
+
+    // Merged vertex-coloured fortification mesh + emissive slit/beacon mesh
+    const fb = new GeoBuilder();
+    const fg = new GeoBuilder();
+    const m4 = new THREE.Matrix4();
+    const q4 = new THREE.Quaternion();
+    const put = (geo: THREE.BufferGeometry, x: number, y: number, z: number, col: number, rotY = 0, glow = false, rotX = 0, rotZ = 0) => {
+      q4.setFromEuler(new THREE.Euler(rotX, rotY, rotZ, 'YXZ'));
+      m4.compose(V(x, y, z), q4, V(1, 1, 1));
+      (glow ? fg : fb).add(geo, m4, null, C(col));
+    };
+    const fbox = (w: number, h: number, d: number, x: number, y: number, z: number, col: number, rotY = 0, glow = false) =>
+      put(new THREE.BoxGeometry(w, h, d).translate(0, h / 2, 0), x, y, z, col, rotY, glow);
+    const ftube = (r: number, len: number, x: number, y: number, z: number, col: number, rotY: number, rotZ: number) =>
+      put(new THREE.CylinderGeometry(r, r, len, 6), x, y, z, col, rotY, false, 0, rotZ);
+
+    const hw = fw / 2 - spec.inset + 0.04;
+    const hd = fd / 2 - spec.inset + 0.04;
+
+    // Street-level sandbag emplacements around the entrance and corners
+    const bagWall = (cx: number, cz: number, count: number, rotY: number) => {
+      const cos = Math.cos(rotY);
+      const sin = Math.sin(rotY);
+      const span = count * 0.145;
+      for (let row = 0; row < 3; row++) {
+        const n = row === 2 ? Math.max(1, count - 1) : count;
+        const y = row * 0.056;
+        const col = row % 2 === 0 ? bagA : bagB;
+        for (let i = 0; i < n; i++) {
+          const lx = -span * 0.5 + (i + 0.5) * (span / n);
+          const wx = cx + lx * cos;
+          const wz = cz - lx * sin;
+          fbox(0.135, 0.055, 0.088, wx, y, wz, col, rotY + ((i % 2) - 0.5) * 0.1);
+        }
+      }
+    };
+    bagWall(-hw * 0.55, hd + 0.06, 3, 0);
+    bagWall(hw * 0.55, hd + 0.06, 3, 0);
+    bagWall(-hw * 0.55, -hd - 0.06, 3, 0);
+    bagWall(hw * 0.55, -hd - 0.06, 3, 0);
+    bagWall(-hw - 0.06, 0, 3, Math.PI / 2);
+    bagWall(hw + 0.06, 0, 3, Math.PI / 2);
+
+    // Armored window shutters + glowing firing slits + protruding rifle barrels on lower floors
+    const wy1 = spec.groundH + spec.floorH * 0.35;
+    for (const x of fw >= 3 ? [-0.55, 0, 0.55] : [-0.34, 0.34]) {
+      for (const sz of [-1, 1]) {
+        const z = sz * hd;
+        fbox(0.24, 0.18, 0.03, x, wy1, z, steel);
+        fbox(0.25, 0.03, 0.036, x, wy1 + 0.15, z, trimCol);
+        fbox(0.18, 0.028, 0.038, x, wy1 + 0.07, z, slitCol, 0, true);
+        ftube(0.012, 0.22, x, wy1 + 0.07, z + sz * 0.09, gunMetal, Math.PI / 2, Math.PI / 2);
+      }
     }
+
+    // Roof edge armor band + glowing IFF / Hostile strip + 4 corner beacons
+    const bw = fw - spec.inset * 2 + 0.08;
+    const bd = fd - spec.inset * 2 + 0.08;
+    const by = (kind === StructureKind.Townhouse ? H - 0.3 : H) + 0.02;
+    fbox(bw, 0.055, 0.045, 0, by, bd / 2, trimCol);
+    fbox(bw, 0.055, 0.045, 0, by, -bd / 2, trimCol);
+    fbox(0.045, 0.055, bd, bw / 2, by, 0, trimCol);
+    fbox(0.045, 0.055, bd, -bw / 2, by, 0, trimCol);
+    fbox(bw + 0.01, 0.02, 0.05, 0, by + 0.055, bd / 2, beaconCol, 0, true);
+    fbox(bw + 0.01, 0.02, 0.05, 0, by + 0.055, -bd / 2, beaconCol, 0, true);
+    fbox(0.05, 0.02, bd + 0.01, bw / 2, by + 0.055, 0, beaconCol, 0, true);
+    fbox(0.05, 0.02, bd + 0.01, -bw / 2, by + 0.055, 0, beaconCol, 0, true);
+
+    for (const [sx, sz] of [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ]) {
+      const bx = sx * (bw / 2 - 0.04);
+      const bz = sz * (bd / 2 - 0.04);
+      fbox(0.03, 0.2, 0.03, bx, by + 0.05, bz, steel);
+      fbox(0.065, 0.065, 0.065, bx, by + 0.25, bz, beaconCol, 0, true);
+    }
+
+    if (!hostile) {
+      // Friendly force: entrance camo awning + blue/white supply crates
+      fbox(0.58, 0.025, 0.28, 0, 0.38, hd + 0.08, style.hull);
+      fbox(0.54, 0.025, 0.04, 0, 0.36, hd + 0.21, style.team);
+      fbox(0.14, 0.032, 0.04, 0, 0.34, hd + 0.2, 0x38f0ff, 0, true);
+      fbox(0.16, 0.11, 0.12, -hw + 0.15, 0, hd + 0.08, 0x2878c8, 0.2);
+      fbox(0.12, 0.02, 0.08, -hw + 0.15, 0.11, hd + 0.08, 0xf0f6ff, 0.2);
+    } else {
+      // Enemy force: steel Czech hedgehogs + red/black hazard barricades at street corners
+      for (const [sx, sz] of [
+        [-1, 1],
+        [1, 1],
+        [-1, -1],
+        [1, -1],
+      ]) {
+        const hx = sx * (hw + 0.08);
+        const hz = sz * (hd + 0.08);
+        put(new THREE.BoxGeometry(0.026, 0.28, 0.026), hx, 0.11, hz, gunMetal, 0.3, false, 0.65, 0);
+        put(new THREE.BoxGeometry(0.026, 0.28, 0.026), hx, 0.11, hz, gunMetal, 1.35, false, -0.65, 0);
+        put(new THREE.BoxGeometry(0.026, 0.28, 0.026), hx, 0.11, hz, gunMetal, 2.4, false, 0, 0.65);
+        fbox(0.28, 0.045, 0.022, sx * hw * 0.55, 0.12, sz * (hd + 0.09), 0xd82218);
+      }
+    }
+
+    if (fb.count) {
+      const m = new THREE.Mesh(fb.build(), fm);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      root.add(m);
+    }
+    if (fg.count) {
+      const gm = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        emissive: 0xffffff,
+        emissiveIntensity: 1.5,
+        roughness: 0.4,
+        toneMapped: false,
+      });
+      if (fog) fog.apply(gm);
+      root.add(new THREE.Mesh(fg.build(), gm));
+    }
+
     const anim = (s: { time: number }) => {
       const a = cloth.attributes.position.array as Float32Array;
-      for (let i = 0; i < pos.count; i++) a[i * 3 + 2] = Math.sin(s.time * 5 - base[i * 3] * 14) * 0.03 * (base[i * 3] / 0.4);
+      for (let i = 0; i < pos.count; i++) a[i * 3 + 2] = Math.sin(s.time * 5 - base[i * 3] * 14) * 0.03 * (base[i * 3] / 0.42);
       cloth.attributes.position.needsUpdate = true;
     };
     return {
       root,
       muzzles: [],
-      height: H + 0.15,
-      size: { x: 0.01, y: H, z: 0.01 },
+      height: H + 0.2,
+      size: { x: fw, y: H, z: fd },
       glow: [],
       emitters: [],
       anim,

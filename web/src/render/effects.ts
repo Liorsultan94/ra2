@@ -113,8 +113,8 @@ export const BLASTS: Record<string, BlastProfile> = {
   bullet: { size: 0.15, fire: 0, sparks: 3, smoke: 0, dirt: 0.3, ring: 0, crater: 0, scorch: 0, light: 0, shake: 0 },
   flak: { size: 0.3, fire: 0.4, sparks: 6, smoke: 0.3, dirt: 0, ring: 0, crater: 0, scorch: 0, light: 0.6, shake: 0 },
   airSmall: { size: 0.5, fire: 0.6, sparks: 8, smoke: 0.6, dirt: 0, ring: 0, crater: 0, scorch: 0, light: 1.5, shake: 0 },
-  shell: { size: 0.75, fire: 0.8, sparks: 10, smoke: 0.8, dirt: 1, ring: 0, debris: [{ kind: 'dirt', n: 6, power: 3, size: 0.06 }], crater: 0.35, scorch: 0, light: 3, shake: 0.03 },
-  heat: { size: 0.7, fire: 0.7, sparks: 22, smoke: 0.7, dirt: 0.5, ring: 0, crater: 0.25, scorch: 0.35, light: 3, shake: 0.02 },
+  shell: { size: 0.75, fire: 0.8, sparks: 10, smoke: 0.8, dirt: 1, ring: 0.55, debris: [{ kind: 'dirt', n: 6, power: 3, size: 0.06 }], crater: 0.35, scorch: 0, light: 3, shake: 0.03 },
+  heat: { size: 0.7, fire: 0.7, sparks: 22, smoke: 0.7, dirt: 0.5, ring: 0.5, crater: 0.25, scorch: 0.35, light: 3, shake: 0.02 },
   artillery: { size: 1.3, fire: 1, sparks: 12, smoke: 1.2, column: true, dirt: 2.4, ring: 1.6, debris: [{ kind: 'dirt', n: 14, power: 5, size: 0.08 }], crater: 0.75, scorch: 0.6, light: 6, shake: 0.12 },
   mortar: { size: 1.0, fire: 0.8, sparks: 10, smoke: 1, dirt: 1.8, ring: 1.0, debris: [{ kind: 'dirt', n: 8, power: 4, size: 0.07 }], crater: 0.55, scorch: 0.4, light: 4, shake: 0.06 },
   rocket: { size: 1.0, fire: 1, sparks: 10, smoke: 1, dirt: 1.4, ring: 1.0, debris: [{ kind: 'dirt', n: 8, power: 4, size: 0.07 }], crater: 0.5, scorch: 0.5, light: 4, shake: 0.06 },
@@ -124,8 +124,8 @@ export const BLASTS: Record<string, BlastProfile> = {
   drone: { size: 0.75, fire: 0.9, sparks: 14, smoke: 0.8, dirt: 0.8, ring: 0.6, debris: [{ kind: 'metal', n: 5, power: 3, size: 0.04 }], crater: 0.3, scorch: 0.45, light: 3.5, shake: 0.04 },
   shahed: { size: 1.6, fire: 1.8, sparks: 20, smoke: 1.6, column: true, dirt: 2, ring: 2.2, debris: [{ kind: 'dirt', n: 14, power: 6, size: 0.09 }, { kind: 'metal', n: 6, power: 5, size: 0.05 }], crater: 0.9, scorch: 1.1, light: 9, shake: 0.2 },
   laser: { size: 0.4, fire: 0.5, fireColor: 'laser', sparks: 14, smoke: 0.3, dirt: 0, ring: 0, crater: 0, scorch: 0.2, light: 2, shake: 0 },
-  vehicle: { size: 1.4, fire: 1.6, sparks: 26, smoke: 1.6, column: true, dirt: 0.8, ring: 1.4, debris: [{ kind: 'metal', n: 14, power: 6, size: 0.07 }, { kind: 'burnt', n: 8, power: 4, size: 0.09 }], crater: 0.5, scorch: 0.9, light: 9, shake: 0.18 },
-  bigVehicle: { size: 2.0, fire: 2.2, sparks: 34, smoke: 2.2, column: true, dirt: 1, ring: 2.2, debris: [{ kind: 'metal', n: 22, power: 7, size: 0.08 }, { kind: 'burnt', n: 12, power: 5, size: 0.1 }], crater: 0.7, scorch: 1.3, light: 12, shake: 0.3 },
+  vehicle: { size: 1.4, fire: 1.6, sparks: 26, smoke: 1.6, column: true, dirt: 0.8, ring: 1.4, debris: [{ kind: 'metal', n: 14, power: 6, size: 0.07 }, { kind: 'burnt', n: 8, power: 4, size: 0.09 }], crater: 0.5, scorch: 0.9, light: 9, shake: 0.18, afterburn: 2.2 },
+  bigVehicle: { size: 2.0, fire: 2.2, sparks: 34, smoke: 2.2, column: true, dirt: 1, ring: 2.2, debris: [{ kind: 'metal', n: 22, power: 7, size: 0.08 }, { kind: 'burnt', n: 12, power: 5, size: 0.1 }], crater: 0.7, scorch: 1.3, light: 12, shake: 0.3, afterburn: 3.2 },
   aircraft: { size: 1.3, fire: 1.6, sparks: 24, smoke: 1.3, dirt: 0, ring: 0, debris: [{ kind: 'metal', n: 12, power: 4, size: 0.05 }], crater: 0, scorch: 0, light: 7, shake: 0.08 },
   /** Heavy cruise missile: a clear step up from the small air-launched missile. */
   heavyMissile: { size: 1.95, fire: 1.9, sparks: 22, smoke: 2, column: true, dirt: 2.6, ring: 2.6, debris: [{ kind: 'dirt', n: 18, power: 6, size: 0.09 }, { kind: 'concrete', n: 5, power: 5, size: 0.07 }], crater: 1.1, scorch: 1.3, light: 11, shake: 0.24 },
@@ -586,7 +586,7 @@ export class Effects {
       for (let i = 0; i < n; i++)
         this.smokeSys.spawn({ x: x + this.rand(-0.15, 0.15) * S, y: y + 0.3 * S + i * 0.18 * S, z: z + this.rand(-0.15, 0.15) * S, vx: 0.05, vy: this.rand(1.2, 2.2) * S * 0.6, vz: -0.03, life: this.rand(4, 7), size: 0.5 * S, sizeEnd: 2.4 * S, color: 0x221e1b, colorEnd: 0x5e5852, alpha: 0.55, drag: 0.6, gravity: -0.05, wind: 0.9, glow: i < 2 ? 0.5 : 0.2 });
     }
-    // 6. ground shockwave: fast radial dust ring + visible ring
+    // 6. ground shockwave: fast radial dust ring + double visible shock rings + heat-haze refraction wave
     if (!airborne && p.ring > 0) {
       const n = this.q(Math.round(26 * Math.sqrt(p.ring)));
       for (let i = 0; i < n; i++) {
@@ -594,9 +594,12 @@ export class Effects {
         const sp = p.ring * this.rand(2.2, 3.2);
         this.smokeSys.spawn({ x: x + Math.cos(a) * 0.2, y: ground + 0.08, z: z + Math.sin(a) * 0.2, vx: Math.cos(a) * sp, vy: 0.15, vz: Math.sin(a) * sp, life: this.rand(0.9, 1.6), size: 0.2 * S, sizeEnd: 0.8 * S, color: snow ? 0xe8eef4 : this.dusty(0x9a8a6c, dk), colorEnd: snow ? 0xf6f8fa : this.dusty(0xb4a688, dk), alpha: 0.55, drag: 2.8 });
       }
-      this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.3, 0.3, 0xffd8a0, true, 0.14);
+      this.ring(x, ground + 0.06, z, 0.2 * S, p.ring * 1.35, 0.32, 0xffd8a0, true, 0.16);
+      if (S >= 1.2) {
+        this.ring(x, ground + 0.08, z, 0.12 * S, p.ring * 0.85, 0.22, 0xfff0d0, true, 0.22);
+      }
       // refraction shockwave racing over the ground
-      if (this.haze && S >= 0.9) this.haze.ring(x, ground + 0.1, z, p.ring * 1.6, 0.35 + 0.08 * S, 0.008 + 0.003 * S, true);
+      if (this.haze && S >= 0.7) this.haze.ring(x, ground + 0.1, z, p.ring * 1.65, 0.34 + 0.08 * S, 0.008 + 0.003 * S, true);
     }
     // 6b. the dust the blast raised hangs over the site, low and in the ground's colour, and drifts off downwind
     if (!airborne && p.dirt >= 1 && S >= 0.9) {
@@ -648,7 +651,7 @@ export class Effects {
     }
     // big blasts throw burning embers on arcs
     if (S >= 1.3 && p.fire >= 1) {
-      const n = this.q(Math.round(3 * S));
+      const n = this.q(Math.round(4 * S));
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
         const sp = this.rand(1.5, 3.5) * Math.sqrt(S);
@@ -660,10 +663,27 @@ export class Effects {
       // white-hot pulse (lights the ground and the units around it), then the burning cluster keeps a warm glow
       this.flashLight(x, y + 0.3 * S, z, p.light * (ball ? 1.5 : 1), p.fireColor === 'laser' ? 0xff5030 : thermo ? 0xff8a30 : ball ? 0xffd2a0 : 0xffa04a, (ball ? 0.16 : 0.25) + 0.05 * S);
     }
-    // big ground blasts: the pressure wave shows as a brief condensation dome
-    if (!airborne && S >= 2.2 && !thermo) this.pressureDome(x, ground, z, 1.9 * S, 0.3, 0.07);
+    // big ground blasts: the pressure wave shows as a brief Mach condensation dome
+    if (!airborne && S >= 1.6 && !thermo) this.pressureDome(x, ground, z, 1.8 * S, 0.28, 0.065);
     this.addShake(p.shake, x, z);
-    if (p.afterburn) this.burns.push({ x, y: ground, z, t: p.afterburn, size: S });
+    if (p.afterburn) {
+      this.burns.push({ x, y: ground, z, t: p.afterburn, size: S });
+      if (!thermo && S >= 1.3) {
+        // secondary ammunition cook-off pop from the burning wreck
+        this.after(this.rand(0.45, 0.95), () => {
+          const cx = x + this.rand(-0.25, 0.25) * S;
+          const cz = z + this.rand(-0.25, 0.25) * S;
+          this.fire.spawn({ x: cx, y: ground + 0.2, z: cz, life: 0.18, size: 0.55 * S, sizeEnd: 0.9 * S, color: 0xffe4a0, colorEnd: 0xff4800 });
+          const sc = this.q(Math.round(8 * S));
+          for (let i = 0; i < sc; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const sp = this.rand(2.2, 5.5);
+            this.flyers.add('spark', cx, ground + 0.22, cz, Math.cos(a) * sp, this.rand(2.5, 6.0), Math.sin(a) * sp, this.rand(0.25, 0.55), 0);
+          }
+          this.flashLight(cx, ground + 0.3, cz, 4 * S, 0xffa848, 0.14);
+        });
+      }
+    }
     if (thermo) this.thermobaric(x, y, z, ground, S, airborne);
     // big ground blasts on grass may start a creeping grass fire
     if (!airborne && S >= 1.2 && p.fire >= 1 && Math.random() < (thermo ? 0.85 : 0.35)) this.fires()?.ignite(x + this.rand(-0.4, 0.4), z + this.rand(-0.4, 0.4), S);
@@ -1025,17 +1045,54 @@ export class Effects {
     const roll = kind === 'manpads';
     if (boost) {
       const fl = cfg.flame * (sam ? 1.35 : 1);
-      this.fire.spawn({ x: b.x - dir.x * 0.05, y: b.y - dir.y * 0.05, z: b.z - dir.z * 0.05, life: 0.05, size: fl * 1.4, color: 0xffffff, colorEnd: 0xffb050 });
+      // white-hot nozzle core + first Mach shock diamond
+      this.fire.spawn({ x: b.x - dir.x * 0.05, y: b.y - dir.y * 0.05, z: b.z - dir.z * 0.05, life: 0.05, size: fl * 1.45, color: 0xffffff, colorEnd: 0xffb860 });
       this.fire.spawn({ x: b.x - dir.x * 0.15, y: b.y - dir.y * 0.15, z: b.z - dir.z * 0.15, life: 0.08, size: fl, color: 0xffd080, colorEnd: 0xff4000 });
       if (sam || kind === 'ballistic' || kind === 'hypersonic') {
-        // long bright motor plume
-        this.fire.spawn({ x: b.x - dir.x * 0.3, y: b.y - dir.y * 0.3, z: b.z - dir.z * 0.3, life: 0.1, size: fl * 0.8, sizeEnd: fl * 0.3, color: 0xffc070, colorEnd: 0xff3000, alpha: 0.7 });
-        this.lights.sustain(b.x, b.y, b.z, kind === 'ballistic' || kind === 'hypersonic' ? 5 : 2.6, 0xffb060, 0.3);
+        // long incandescent motor plume with secondary Mach shock diamond + hot propellant sparks
+        this.fire.spawn({ x: b.x - dir.x * 0.24, y: b.y - dir.y * 0.24, z: b.z - dir.z * 0.24, life: 0.06, size: fl * 0.72, color: 0xe8f4ff, colorEnd: 0xff9030, alpha: 0.85 });
+        this.fire.spawn({ x: b.x - dir.x * 0.36, y: b.y - dir.y * 0.36, z: b.z - dir.z * 0.36, life: 0.1, size: fl * 0.82, sizeEnd: fl * 0.3, color: 0xffc070, colorEnd: 0xff3000, alpha: 0.72 });
+        if (Math.random() < 0.55) {
+          this.fire.spawn({
+            x: b.x - dir.x * 0.28 + this.rand(-0.04, 0.04),
+            y: b.y - dir.y * 0.28 + this.rand(-0.04, 0.04),
+            z: b.z - dir.z * 0.28 + this.rand(-0.04, 0.04),
+            vx: -dir.x * 1.6 + this.rand(-0.6, 0.6),
+            vy: -dir.y * 1.6 + this.rand(-0.4, 0.6),
+            vz: -dir.z * 1.6 + this.rand(-0.6, 0.6),
+            life: this.rand(0.14, 0.26),
+            size: 0.045,
+            color: 0xffe6a8,
+            colorEnd: 0xff5000,
+            gravity: 3.5,
+          });
+        }
+        if (this.haze && Math.random() < 0.45) {
+          this.haze.heat(b.x - dir.x * 0.45, b.y - dir.y * 0.45, b.z - dir.z * 0.45, 0.65 + cfg.flame, 0.38, 0.0045, 0);
+        }
+        this.lights.sustain(b.x, b.y, b.z, kind === 'ballistic' || kind === 'hypersonic' ? 5.2 : 2.8, 0xffb468, 0.3);
       } else if (roll) {
         this.fire.spawn({ x: b.x - dir.x * 0.22, y: b.y - dir.y * 0.22, z: b.z - dir.z * 0.22, life: 0.08, size: fl * 0.7, sizeEnd: fl * 0.25, color: 0xffd090, colorEnd: 0xff3000, alpha: 0.7 });
         this.lights.sustain(b.x, b.y, b.z, 1.6, 0xffb060, 0.25);
         if (this.haze && Math.random() < 0.35) this.haze.heat(b.x - dir.x * 0.4, b.y - dir.y * 0.4, b.z - dir.z * 0.4, 0.5 + cfg.flame, 0.35, 0.004, 0);
-      } else if (kind !== 'cruise') this.lights.sustain(b.x, b.y, b.z, 1.1, 0xffb060, 0.3);
+      } else if (kind !== 'cruise') {
+        if (Math.random() < 0.35) {
+          this.fire.spawn({
+            x: b.x - dir.x * 0.2,
+            y: b.y - dir.y * 0.2,
+            z: b.z - dir.z * 0.2,
+            vx: -dir.x * 1.2 + this.rand(-0.4, 0.4),
+            vy: -dir.y * 1.2 + this.rand(-0.3, 0.4),
+            vz: -dir.z * 1.2 + this.rand(-0.4, 0.4),
+            life: 0.16,
+            size: 0.035,
+            color: 0xffdf98,
+            colorEnd: 0xff4800,
+            gravity: 3,
+          });
+        }
+        this.lights.sustain(b.x, b.y, b.z, 1.2, 0xffb060, 0.3);
+      }
     } else if (kind === 'hypersonic' || kind === 'ballistic') {
       // re-entry: plasma glow around the warhead, faint trail
       this.fire.spawn({ x: b.x, y: b.y, z: b.z, life: 0.06, size: 0.5, color: kind === 'hypersonic' ? 0xffb0ff : 0xffc080, colorEnd: 0xff5020 });
@@ -1394,12 +1451,20 @@ export class Effects {
 
   /** Active protection (Trophy) kill: the incoming round is blown apart at p (from: the launcher; no beam drawn, it dazzled). */
   intercept(p: THREE.Vector3, _from?: THREE.Vector3) {
-    // a small, warm pop (no white glare), hot fragments, a little falling debris and a puff of grey smoke
-    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.12, size: 0.55, color: 0xffc070, colorEnd: 0xff6a10 });
-    for (let i = 0; i < this.q(16); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3.5, 3.5), vy: this.rand(-0.5, 3), vz: this.rand(-3.5, 3.5), life: this.rand(0.2, 0.4), size: 0.06, color: 0xffd090, colorEnd: 0xff6a00, gravity: 7 });
+    // a small, warm pop (no white glare), expanding shock ring, hot fragments, falling debris and a puff of grey smoke
+    this.fire.spawn({ x: p.x, y: p.y, z: p.z, life: 0.12, size: 0.62, color: 0xffe098, colorEnd: 0xff6a10 });
+    this.ring(p.x, p.y, p.z, 0.08, 0.95, 0.18, 0xffd890, false, 0.22);
+    if (this.haze) this.haze.ring(p.x, p.y, p.z, 1.15, 0.22, 0.007, false);
+    for (let i = 0; i < this.q(18); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-3.8, 3.8), vy: this.rand(-0.5, 3.2), vz: this.rand(-3.8, 3.8), life: this.rand(0.2, 0.42), size: 0.06, color: 0xffd090, colorEnd: 0xff6a00, gravity: 7 });
+    const sc = this.q(10);
+    for (let i = 0; i < sc; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = this.rand(2.5, 5.5);
+      this.flyers.add('spark', p.x, p.y, p.z, Math.cos(a) * sp, this.rand(1.0, 4.2), Math.sin(a) * sp, this.rand(0.18, 0.36), 0);
+    }
     for (let i = 0; i < this.q(5); i++) this.fire.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-1.5, 1.5), vy: this.rand(0.5, 2), vz: this.rand(-1.5, 1.5), life: 0.9, size: 0.05, color: 0x5a5048, gravity: 6 });
     for (let i = 0; i < this.q(6); i++) this.smokeSys.spawn({ x: p.x, y: p.y, z: p.z, vx: this.rand(-0.6, 0.6), vy: 0.45, vz: this.rand(-0.6, 0.6), life: 1.8, size: 0.25, sizeEnd: 0.95, color: 0x7d7a74, alpha: 0.65, drag: 1.5 });
-    this.flashLight(p.x, p.y, p.z, 1.6, 0xffb060, 0.08);
+    this.flashLight(p.x, p.y, p.z, 2.1, 0xffb868, 0.09);
   }
 
   jamPulse(x: number, y: number, z: number, r: number) {
@@ -1437,6 +1502,25 @@ export class Effects {
       const b = this.burns[i];
       b.t -= dt;
       if (Math.random() < dt * 30) this.flame(b.x + this.rand(-0.6, 0.6) * b.size, b.y + 0.05, b.z + this.rand(-0.6, 0.6) * b.size, 1.2);
+      if (Math.random() < dt * 12) {
+        this.smokeSys.spawn({
+          x: b.x + this.rand(-0.35, 0.35) * b.size,
+          y: b.y + 0.25,
+          z: b.z + this.rand(-0.35, 0.35) * b.size,
+          vx: this.rand(-0.08, 0.08),
+          vy: this.rand(0.75, 1.35),
+          vz: this.rand(-0.08, 0.08),
+          life: this.rand(2.4, 4.2),
+          size: 0.28 * b.size,
+          sizeEnd: 1.15 * b.size,
+          color: 0x201c19,
+          colorEnd: 0x544e48,
+          alpha: 0.55,
+          drag: 0.5,
+          wind: 0.75,
+          glow: 0.25,
+        });
+      }
       if (this.flip?.ready && Math.random() < dt * 3) this.flip.spawn('flame', { x: b.x + this.rand(-0.5, 0.5) * b.size, y: b.y, z: b.z + this.rand(-0.5, 0.5) * b.size, size: this.rand(0.9, 1.3) * b.size, ground: true, rot: 0.15, life: Math.min(1.6, b.t + 0.4), emissive: 1.0, heat: -0.15, alpha: 0.9, tint: 0x302c28 });
       this.lights.sustain(b.x, b.y + 0.3, b.z, 3 * b.size * Math.min(1, b.t), 0xff8a30, 0.5);
       if (b.t <= 0) this.burns.splice(i, 1);
