@@ -381,7 +381,7 @@ export class Game {
     const m = this.world.map;
     const foe = m.starts[1 - this.local] ?? { x: m.w / 2, y: m.h / 2 };
     const via = m.bridges[0] ?? { x: m.w / 2, y: m.h / 2 };
-    this.intro = new BattleIntro(this.renderer, m, { x: foe.x + 0.5, y: foe.y + 0.5 }, via, { x: hx, y: hy }, this.renderer.zoom, 3.8);
+    this.intro = new BattleIntro(this.renderer, m, { x: foe.x + 0.5, y: foe.y + 0.5 }, via, { x: hx, y: hy }, this.renderer.zoom);
     this.card = new CineCard(this.hud.viewWrap, () => this.skipIntro());
     this.hud.root.classList.add('intro-on');
     const you = this.brief.you;
