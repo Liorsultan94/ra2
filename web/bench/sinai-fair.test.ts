@@ -1,7 +1,9 @@
-// SN1: the Sinai's fairness numbers (report): paths, ore, build space, houses, tech sites, corridors.
+// SN1: the Sinai's fairness numbers (report). The map is not mirrored (its coasts are traced from the owner's
+// picture): everything neutral is counted for the base nearer to it by road (vehicle path).
+// BENCH=1 npx vitest run bench/sinai-fair.test.ts --silent=false
 import { it } from 'vitest';
 import { buildingDef } from '../src/sim/defs';
-import { terrainBuildable } from '../src/sim/map';
+import { Tile, terrainBuildable } from '../src/sim/map';
 import { Loco } from '../src/sim/slope';
 import { World } from '../src/sim/world';
 
@@ -22,47 +24,73 @@ it('sinai fair numbers', () => {
     }
     return L;
   };
-  const [s0, s1] = m.starts;
+  const S = m.starts;
+  const dists = (x: number, y: number) => S.map((s) => len(s.x, s.y, Math.floor(x), Math.floor(y)));
+  const sideOf = (d: number[]) => (d[0] <= d[1] ? 0 : 1);
   const out: string[] = [];
-  out.push(`start->enemy: P0 ${len(s0.x, s0.y, s1.x, s1.y).toFixed(1)} P1 ${len(s1.x, s1.y, s0.x, s0.y).toFixed(1)}`);
-  const own = [0, 0];
-  const each: string[] = [];
-  for (const p of m.oreMines) {
-    if (p.x >= p.y) continue;
-    const a = len(s0.x, s0.y, p.x, p.y);
-    const b = len(s1.x, s1.y, p.y, p.x);
-    each.push(`${a.toFixed(1)}/${b.toFixed(1)}`);
-    own[0] += a;
-    own[1] += b;
-  }
-  out.push(`start->ore (each field, P0 / P1 to its mirror): ${each.join(' ')}; sum ${own[0].toFixed(1)} / ${own[1].toFixed(1)}`);
-  let o0 = 0;
-  let o1 = 0;
+  out.push(`start->enemy: ${len(S[0].x, S[0].y, S[1].x, S[1].y).toFixed(1)} / ${len(S[1].x, S[1].y, S[0].x, S[0].y).toFixed(1)}`);
+  // the crossings: each start to both (its own first)
+  const lanes = m.lanes ?? [];
+  out.push(`start->crossings (own, far): P0 ${lanes.map((l) => len(S[0].x, S[0].y, Math.round(l.x), Math.round(l.y)).toFixed(1)).join(', ')} | P1 ${[...lanes].reverse().map((l) => len(S[1].x, S[1].y, Math.round(l.x), Math.round(l.y)).toFixed(1)).join(', ')}`);
+  // ore: each field to the nearer base by road; its value (ore tiles nearest to it)
+  const fields = m.oreMines.map((f) => ({ ...f, d: dists(f.x, f.y), value: 0 }));
   for (let i = 0; i < m.w * m.h; i++) {
-    const v = m.ore[i] * (m.oreKind[i] === 2 ? 2 : 1);
-    if (i % m.w < Math.floor(i / m.w)) o0 += v;
-    else if (i % m.w > Math.floor(i / m.w)) o1 += v;
+    if (!m.ore[i]) continue;
+    const x = i % m.w;
+    const y = Math.floor(i / m.w);
+    let best = fields[0];
+    for (const f of fields) if (Math.hypot(f.x - x, f.y - y) < Math.hypot(best.x - x, best.y - y)) best = f;
+    best.value += m.ore[i] * (m.oreKind[i] === 2 ? 2 : 1);
   }
-  out.push(`ore value by half ${o0} / ${o1}; oil ${m.oils.filter((o) => o.x < o.y).length} / ${m.oils.filter((o) => o.x > o.y).length}`);
+  const per = [0, 1].map((side) => fields.filter((f) => sideOf(f.d) === side));
+  out.push(`ore fields ${per[0].length} / ${per[1].length}; value ${per[0].reduce((a, f) => a + f.value, 0)} / ${per[1].reduce((a, f) => a + f.value, 0)}; road to them (sum) ${per[0].reduce((a, f) => a + f.d[0], 0).toFixed(1)} / ${per[1].reduce((a, f) => a + f.d[1], 0).toFixed(1)}`);
+  // (picture pixel of a tile, for the layout tables in sim/maps.ts)
+  const px = (x: number, y: number) => `(${(125 + (x - y) / Math.SQRT2 / 0.48).toFixed(0)},${(135 + ((x + y + 1) / Math.SQRT2 - (m.w / 2) * Math.SQRT2) / 0.48).toFixed(0)})`;
+  out.push(`  P0 fields (value@road px): ${per[0].map((f) => `${f.value}@${f.d[0].toFixed(0)}${px(f.x, f.y)}`).join(' ')}`);
+  out.push(`  P1 fields (value@road px): ${per[1].map((f) => `${f.value}@${f.d[1].toFixed(0)}${px(f.x, f.y)}`).join(' ')}`);
+  const oil = [0, 0];
+  const oilD = [0, 0];
+  for (const o of m.oils) {
+    const d = dists(o.x + 1, o.y + 1);
+    oil[sideOf(d)]++;
+    oilD[sideOf(d)] += d[sideOf(d)];
+  }
+  out.push(`oil ${oil[0]} / ${oil[1]} (road sum ${oilD[0].toFixed(0)} / ${oilD[1].toFixed(0)})`);
   const room = (s: { x: number; y: number }) => {
     let n = 0;
     for (let y = s.y - 20; y <= s.y + 20; y++) for (let x = s.x - 20; x <= s.x + 20; x++) if (Math.hypot(x - s.x, y - s.y) <= 20 && x >= 0 && y >= 0 && x < m.w - 1 && y < m.h - 1 && terrainBuildable(m, x, y, 2, 2)) n++;
     return n;
   };
-  out.push(`build space (open gentle 2x2 spots within 20): ${room(s0)} / ${room(s1)}`);
+  const around = (s: { x: number; y: number }) => {
+    const c = [0, 0, 0];
+    for (let y = s.y - 20; y <= s.y + 20; y++)
+      for (let x = s.x - 20; x <= s.x + 20; x++) {
+        if (Math.hypot(x - s.x, y - s.y) > 20 || x < 0 || y < 0 || x >= m.w || y >= m.h) continue;
+        const t = m.tiles[y * m.w + x];
+        c[t === Tile.Water ? 0 : terrainBuildable(m, x, y, 1, 1) ? 2 : 1]++;
+      }
+    return `water ${c[0]} land unbuildable ${c[1]} buildable ${c[2]}`;
+  };
+  out.push(`build space (open gentle 2x2 spots within 20): ${room(S[0])} / ${room(S[1])} (${around(S[0])} | ${around(S[1])})`);
   const side = (pick: (d: ReturnType<typeof buildingDef>) => boolean) => {
-    const r = [0, 0, 0];
+    const r = [0, 0];
+    const rd = [0, 0];
     for (const e of w.list) {
       if (e.owner >= 0 || e.kind !== 'building' || !pick(buildingDef(e.def))) continue;
-      const da = Math.hypot(e.x - s0.x, e.y - s0.y);
-      const db = Math.hypot(e.x - s1.x, e.y - s1.y);
-      r[Math.abs(da - db) < 1e-6 ? 2 : da < db ? 0 : 1]++;
+      const d = dists(e.x, e.y);
+      r[sideOf(d)]++;
+      rd[sideOf(d)] += d[sideOf(d)];
     }
-    return r;
+    return `${r[0]} / ${r[1]} (road sum ${rd[0].toFixed(0)} / ${rd[1].toFixed(0)})`;
   };
-  const h = side((d) => !!d.garrison);
-  const t = side((d) => !!d.techKind);
-  out.push(`garrisonable houses P0 side ${h[0]} / P1 side ${h[1]} (on the axis ${h[2]}); tech sites ${t[0]} / ${t[1]}`);
-  out.push(`map ${m.w}x${m.h}, structures ${m.structures.length}, bridges ${m.bridges.length}`);
+  out.push(`garrisonable houses ${side((d) => !!d.garrison)}; tech sites ${side((d) => !!d.techKind)}`);
+  // the crossings' width: open ground across each, at right angles to the road through it
+  let land = 0;
+  let water = 0;
+  for (let i = 0; i < m.w * m.h; i++) {
+    if (m.tiles[i] === Tile.Water) water++;
+    else if (pf.passable(i % m.w, Math.floor(i / m.w))) land++;
+  }
+  out.push(`map ${m.w}x${m.h}, vehicle-passable land ${land} tiles, water ${water}, structures ${m.structures.length}, bridges ${m.bridges.length}`);
   console.log(out.join('\n'));
 });

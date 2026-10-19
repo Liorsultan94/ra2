@@ -153,7 +153,8 @@ export function slopeField(m: GameMap): SlopeField {
         }
       }
     const trans = m.mirror === 'transpose';
-    for (let i = 0; i < n; i++) {
+    // (a map with no mirror keeps its grades as they are)
+    for (let i = 0; m.mirror !== 'none' && i < n; i++) {
       // (transposed halves: tile (x, y) mirrors (y, x) and a step's direction swaps its axes, TRANS_DIR)
       const im = trans ? (i % W) * W + ((i / W) | 0) : n - 1 - i;
       if (im <= i) continue;

@@ -15,6 +15,11 @@ describe('terrain use on Wadi Al-Rimal (AI2)', () => {
       { name: 'usa', faction: 'usa', color: 0, isAI: true },
       { name: 'russia', faction: 'russia', color: 0, isAI: true },
     ] });
+    // (the one coloured canyon lies inland of Nuweiba, nearer red's base: SN1 traced the real Sinai)
+    const cy = w.map.deco!.canyons![0].pts;
+    const mid = cy[cy.length >> 1];
+    const near = w.players.map((p) => Math.hypot(mid.x - p.startX, mid.y - p.startY));
+    const owner = near[0] < near[1] ? 0 : 1;
     for (const pid of [0, 1]) {
       const ai = new AIController(w, pid, 'hard') as AnyAI;
       const posts = ai.findPosts();
@@ -25,7 +30,7 @@ describe('terrain use on Wadi Al-Rimal (AI2)', () => {
       expect(groundHeight(w.map, plateau.x, plateau.y) - groundHeight(w.map, p.startX + 0.5, p.startY + 0.5)).toBeGreaterThan(2);
       expect(w.regionOf(plateau.x, plateau.y)).toBe(w.mainland);
       const canyon = posts.filter((q: { ambush: boolean }) => q.ambush);
-      expect(canyon.length).toBe(2);
+      expect(canyon.length).toBe(pid === owner ? 2 : 0);
       const o = w.players[1 - pid];
       for (const c of [plateau, ...canyon]) expect(Math.hypot(c.x - p.startX, c.y - p.startY)).toBeLessThan(Math.hypot(c.x - o.startX, c.y - o.startY));
     }

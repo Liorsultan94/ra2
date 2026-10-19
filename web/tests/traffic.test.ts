@@ -308,7 +308,9 @@ describe('driving by the rules (headless)', () => {
 
   it('a car at a dead end turns round on the turning circle, not on the sand', () => {
     const n = net('desert');
-    const lp = n.loops.find((l) => l.dead && l.paved)!;
+    // (the paved dead end farthest from any other junction: the car starts 6 tiles up its road)
+    const lonely = (l: (typeof n.loops)[number]) => Math.min(...n.nodes.filter((_, k) => k !== l.node).map((nd) => Math.hypot(nd.x - l.x, nd.y - l.y)));
+    const lp = n.loops.filter((l) => l.dead && l.paved).sort((a, b) => lonely(b) - lonely(a))[0];
     const nd = n.nodes[lp.node];
     const arm = nd.arms[0];
     const L = n.lines[arm.line];

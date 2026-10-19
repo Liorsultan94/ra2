@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { buildingDef } from '../src/sim/defs';
-import { Tile, groundHeight, isleAt, seaDist, terrainBuildable, type GameMap } from '../src/sim/map';
-import { createMap } from '../src/sim/maps';
+import { Tile, groundHeight, isleAt, terrainBuildable } from '../src/sim/map';
+import { createMap, sinaiPoint } from '../src/sim/maps';
+import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from '../src/sim/sinaimask';
 import { Loco } from '../src/sim/slope';
 import type { Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
-// SN1: Wadi Al-Rimal is the Sinai Peninsula. The bases sit on the Egyptian (west) and Arabian (east) mainlands,
-// the Sinai between them; ground forces go round the heads of the two gulfs over land (no bridges), aircraft
-// fly over. The halves mirror across the x == y diagonal (the screen's left-right mirror) for everything that
-// affects play; the canal (west) and the granite ridge (east) north of the corridors differ only in look.
+// SN1: Wadi Al-Rimal is the Sinai Peninsula, its coasts traced from the owner's picture (sim/sinaimask.ts). The
+// bases sit where the owner marked them, on the Egyptian (west) and Arabian (east) mainlands, the Sinai between them;
+// ground forces go round the heads of the two gulfs over land (no bridges), aircraft fly over. The sides are not
+// mirror images; what each holds is kept equal by hand (counted for the base nearer by road).
 
 function world(seed = 1) {
   return new World({
@@ -42,223 +43,150 @@ function route(w: World, sx: number, sy: number, gx: number, gy: number) {
   const p = w.pfs[Loco.Vehicle].find(sx, sy, gx, gy, 400000);
   return { ok: p.length > 0 && p[p.length - 1] === gy * w.map.w + gx, len: pathLen(w, sx, sy, p) };
 }
-/** The canal's and the ridge's tiles: impassable on both halves, water on one, rock on the other. */
-function barrier(m: GameMap, i: number) {
-  const x = i % m.w;
-  const y = Math.floor(i / m.w);
-  const j = x * m.w + y;
-  return (m.tiles[i] === Tile.Water && m.tiles[j] === Tile.Rock) || (m.tiles[i] === Tile.Rock && m.tiles[j] === Tile.Water);
+/** The picture's water mask (1 = water). */
+function mask() {
+  const m = new Uint8Array(SINAI_MASK_W * SINAI_MASK_H);
+  SINAI_MASK.split(';').forEach((row, y) => {
+    const n = row.split(',').map(Number);
+    for (let k = 0; k + 1 < n.length; k += 2) m.fill(1, y * SINAI_MASK_W + n[k], y * SINAI_MASK_W + n[k] + n[k + 1]);
+  });
+  return m;
 }
 
 describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
-  it('reads as the Sinai: the Mediterranean on top, the gulfs down both sides meeting the Red Sea at the tip, the bases on the two mainlands', () => {
+  it("is traced from the owner's picture: its seas and gulfs, the bases at the owner's marks, no bridges", () => {
     const m = createMap('desert', 1);
     const sea = m.deco!.sea!;
-    const c = m.w / 2;
-    const at = (e: number, s: number) => ({ x: (s + e) / Math.SQRT2, y: (s - e) / Math.SQRT2 });
-    const water = (e: number, s: number) => {
-      const p = at(e, s);
+    expect(m.mirror).toBe('none');
+    expect(sea.grid).toBeTruthy();
+    const water = (u: number, v: number) => {
+      const p = sinaiPoint(u, v);
       return m.tiles[Math.floor(p.y) * m.w + Math.floor(p.x)] === Tile.Water;
     };
-    const top = c * Math.SQRT2;
-    // the Mediterranean across the top corner, the Red Sea across the bottom one
-    expect(water(0, 20)).toBe(true);
-    expect(water(0, 2 * top - 12)).toBe(true);
-    // north Sinai is land between them; the gulfs are water down both sides of the peninsula, land beyond them
-    expect(water(0, top - 30)).toBe(false);
-    expect(water(0, top + 40)).toBe(false);
-    for (const s of [top - 5, top + 20, top + 50]) {
-      // the widest run of water west of the axis (an oasis is no gulf)
-      let lo = 1;
-      let hi = 1;
-      let run = -1;
-      for (let e = 0; e > -top; e -= 0.5) {
-        if (water(e, s)) {
-          if (run > 0) run = e;
-          if (run - e > hi - lo || hi > 0) {
-            hi = run;
-            lo = e;
-          }
-        } else run = 1;
-      }
-      expect(hi, `the Gulf of Suez at S ${s}`).toBeLessThan(0);
-      expect(hi - lo, `the Gulf of Suez's width at S ${s}`).toBeGreaterThan(5);
-      // the Gulf of Aqaba is its mirror
-      expect(water(-hi + 0.6, s)).toBe(true);
-    }
-    expect(sea.gulfs.length).toBe(2);
-    // blue (player 0) on the Egyptian mainland west of the upper Gulf of Suez, red on the Arabian mainland east of
-    // the Gulf of Aqaba (its mirror)
-    const [s0, s1] = m.starts;
-    const head = sea.gulfs[0][0];
-    expect(E(s0.x + 0.5, s0.y + 0.5)).toBeLessThan(E(head.x, head.y) - 20);
-    expect(Math.abs(S(s0.x + 0.5, s0.y + 0.5) - S(head.x, head.y))).toBeLessThan(15);
-    expect([s1.x, s1.y]).toEqual([s0.y, s0.x]);
-    // no bridges anywhere
-    expect(m.bridges).toEqual([]);
-    // Tiran: real land in the mouth of the Gulf of Aqaba that no ground unit reaches; the Blue Hole off the Aqaba shore
-    expect(sea.isle).toBeTruthy();
-    expect(E(sea.isle!.x, sea.isle!.y)).toBeGreaterThan(5);
-    expect(S(sea.isle!.x, sea.isle!.y)).toBeGreaterThan(top + 50);
-    expect(E(sea.hole!.x, sea.hole!.y)).toBeGreaterThan(5);
-  });
-
-  it('is fair: everything that affects play mirrors across the diagonal (seeds 1, 2, 7)', () => {
-    for (const seed of [1, 2, 7]) {
-      const w = world(seed);
-      const m = w.map;
-      const N = m.w;
-      expect(m.mirror).toBe('transpose');
-      let diff = 0;
-      let hd = 0;
-      let bar = 0;
-      for (let y = 0; y < N; y++)
-        for (let x = 0; x < N; x++) {
-          const i = y * N + x;
-          const j = x * N + y;
-          if (m.offshore?.[i] || m.offshore?.[j]) continue;
-          if (barrier(m, i)) {
-            bar++;
-            expect(w.pass[i] + w.pass[j]).toBe(0);
-            continue;
-          }
-          if (m.tiles[i] !== m.tiles[j] || m.ore[i] !== m.ore[j] || m.oreKind[i] !== m.oreKind[j] || !!m.trees[i] !== !!m.trees[j] || m.blocked[i] !== m.blocked[j] || w.pass[i] !== w.pass[j]) diff++;
-          for (let c = 0; c < 2; c++) if (w.regions[c][i] === w.mainlands[c] && !(w.regions[c][j] === w.mainlands[c])) diff++;
-          // the slope rules: the same steps blocked for vehicles and soldiers
-          if (w.pass[i]) {
-            for (let k = 0; k < 4; k++) {
-              const km = [2, 3, 0, 1][k];
-              // (steps onto ground nobody stands on do not count)
-              const nx = x + [1, -1, 0, 0][k];
-              const ny = y + [0, 0, 1, -1][k];
-              if (nx < 0 || ny < 0 || nx >= N || ny >= N || !w.pass[ny * N + nx]) continue;
-              for (let c = 0; c < 2; c++) if (((w.slope.block[c][i] >> k) & 1) !== ((w.slope.block[c][j] >> km) & 1)) diff++;
-            }
-            for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) hd = Math.max(hd, Math.abs(m.heights[vy * (N + 1) + vx] - m.heights[vx * (N + 1) + vy]));
-          }
+    // the map's water where the picture's is, away from the coasts (the coast runs between the pixels)
+    const pic = mask();
+    const at = (u: number, v: number) => pic[Math.max(0, Math.min(SINAI_MASK_H - 1, v)) * SINAI_MASK_W + Math.max(0, Math.min(SINAI_MASK_W - 1, u))];
+    let n = 0;
+    let same = 0;
+    for (let v = 3; v < SINAI_MASK_H - 3; v += 3)
+      for (let u = 3; u < SINAI_MASK_W - 3; u += 3) {
+        const wv = at(u, v);
+        let edge = false;
+        for (let dv = -3; dv <= 3 && !edge; dv++) for (let du = -3; du <= 3; du++) if (at(u + du, v + dv) !== wv) edge = true;
+        if (edge) continue;
+        n++;
+        // (Tiran is land in the strait where the picture has sea)
+        const p = sinaiPoint(u + 0.5, v + 0.5);
+        if (sea.isle && isleAt(sea.isle, p.x, p.y) < 1.5) {
+          same++;
+          continue;
         }
-      expect(diff, `seed ${seed}: tiles / ore / trees / passability / regions / slopes`).toBe(0);
-      expect(hd, `seed ${seed}: heights of the ground units stand on`).toBeLessThan(1e-4);
-      expect(bar, `seed ${seed}: the canal and the ridge`).toBeGreaterThan(100);
-      // ore mines, oil, structures and neutral buildings: each has its mirror twin
-      const key = (a: { x: number; y: number }[]) => new Set(a.map((p) => `${p.x},${p.y}`));
-      const mines = key(m.oreMines);
-      for (const p of m.oreMines) expect(mines.has(`${p.y},${p.x}`)).toBe(true);
-      const oils = key(m.oils);
-      for (const p of m.oils) expect(oils.has(`${p.y},${p.x}`)).toBe(true);
-      const sk = new Set(m.structures.map((s) => `${s.kind}:${s.x},${s.y},${s.w},${s.h}`));
-      for (const s of m.structures) expect(sk.has(`${s.kind}:${s.y},${s.x},${s.h},${s.w}`), `structure ${s.x},${s.y}`).toBe(true);
-      const ents = w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building');
-      const ek = new Set(ents.map((e) => `${e.def}@${e.tx},${e.ty}`));
-      for (const e of ents) {
-        const d = buildingDef(e.def);
-        expect(ek.has(`${e.def}@${e.ty},${e.tx}`) || d.w !== d.h, `${e.def}@${e.tx},${e.ty}`).toBe(true);
+        if (water(u + 0.5, v + 0.5) === !!wv) same++;
       }
-      expect(ents.some((e) => e.def === 'bridge' || e.def === 'bridgehut')).toBe(false);
+    expect(same / n).toBeGreaterThan(0.99);
+    // the Mediterranean on top, the Red Sea round the tip, the peninsula's middle land
+    expect(water(125, 8)).toBe(true);
+    expect(water(125, 255)).toBe(true);
+    expect(water(125, 130)).toBe(false);
+    // the Gulf of Suez long and wide down the west, the Gulf of Aqaba narrower down the east
+    const run = (v: number, u0: number, u1: number) => {
+      let best = 0;
+      let cur = 0;
+      for (let u = u0; u <= u1; u += 0.5) {
+        cur = water(u, v) ? cur + 0.5 : 0;
+        best = Math.max(best, cur);
+      }
+      return best;
+    };
+    for (const v of [100, 130, 160]) expect(run(v, 0, 60), `the Gulf of Suez at v ${v}`).toBeGreaterThan(14);
+    for (const v of [110, 140]) {
+      expect(run(v, 180, 245), `the Gulf of Aqaba at v ${v}`).toBeGreaterThan(8);
+      expect(run(v, 180, 245)).toBeLessThan(run(v, 0, 60));
     }
+    // blue on the Egyptian mainland west of the upper Gulf of Suez, red on the Arabian mainland east of the lower Gulf
+    // of Aqaba, where the owner marked them
+    const [s0, s1] = m.starts;
+    const b = sinaiPoint(11, 67);
+    const r = sinaiPoint(214, 183);
+    expect(Math.hypot(s0.x + 0.5 - b.x, s0.y + 0.5 - b.y)).toBeLessThan(1);
+    expect(Math.hypot(s1.x + 0.5 - r.x, s1.y + 0.5 - r.y)).toBeLessThan(1);
+    expect(m.bridges).toEqual([]);
+    // Tiran in the mouth of the Gulf of Aqaba, the Blue Hole off the Sinai's Aqaba coast
+    const px = (x: number, y: number) => 125 + E(x, y) / 0.48;
+    expect(px(sea.isle!.x, sea.isle!.y)).toBeGreaterThan(150);
+    expect(px(sea.hole!.x, sea.hole!.y)).toBeGreaterThan(160);
   });
 
-  it('is fair in numbers: paths to the enemy and to the ore within 3%, build space within 5%, the same houses and tech sites', () => {
+  it('is fair in what each side holds: ore, oil, build space, houses and tech sites equal; roads to them close', () => {
     const w = world(1);
     const m = w.map;
-    const [s0, s1] = m.starts;
-    const a = route(w, s0.x, s0.y, s1.x, s1.y);
-    const b = route(w, s1.x, s1.y, s0.x, s0.y);
+    const st = m.starts;
+    const a = route(w, st[0].x, st[0].y, st[1].x, st[1].y);
+    const b = route(w, st[1].x, st[1].y, st[0].x, st[0].y);
     expect(a.ok && b.ok).toBe(true);
     expect(Math.abs(a.len - b.len) / a.len).toBeLessThan(0.03);
-    // each start to every ore field (its own and the far ones): the same as the mirrored route
-    let own0 = 0;
-    let own1 = 0;
-    for (const p of m.oreMines) {
-      const r0 = route(w, s0.x, s0.y, p.x, p.y);
-      const r1 = route(w, s1.x, s1.y, p.y, p.x);
-      expect(r0.ok && r1.ok, `ore at ${p.x},${p.y}`).toBe(true);
-      expect(Math.abs(r0.len - r1.len) / Math.max(10, r0.len), `ore at ${p.x},${p.y}: ${r0.len.toFixed(1)} / ${r1.len.toFixed(1)}`).toBeLessThan(0.03);
-      if (Math.hypot(p.x - s0.x, p.y - s0.y) < Math.hypot(p.x - s1.x, p.y - s1.y)) own0 += r0.len;
-      else own1 += route(w, s1.x, s1.y, p.x, p.y).len;
-    }
-    expect(Math.abs(own0 - own1) / own0).toBeLessThan(0.03);
-    // ore and oil amounts
-    let ore0 = 0;
-    let ore1 = 0;
+    // everything neutral counts for the base nearer to it by road
+    const near = (x: number, y: number) => st.map((s) => route(w, s.x, s.y, Math.floor(x), Math.floor(y)));
+    const sideOf = (r: { len: number; ok: boolean }[]) => (r[0].len <= r[1].len ? 0 : 1);
+    // ore: each field's value (the ore tiles nearest it) and the road to it
+    const fields = m.oreMines.map((f) => ({ ...f, r: near(f.x, f.y), value: 0 }));
     for (let i = 0; i < m.w * m.h; i++) {
+      if (!m.ore[i]) continue;
       const x = i % m.w;
       const y = Math.floor(i / m.w);
-      const v = m.ore[i] * (m.oreKind[i] === 2 ? 2 : 1);
-      if (x < y) ore0 += v;
-      else if (x > y) ore1 += v;
+      let best = fields[0];
+      for (const f of fields) if (Math.hypot(f.x - x, f.y - y) < Math.hypot(best.x - x, best.y - y)) best = f;
+      best.value += m.ore[i] * (m.oreKind[i] === 2 ? 2 : 1);
     }
-    expect(ore0).toBe(ore1);
-    expect(m.oils.filter((o) => o.x < o.y).length).toBe(m.oils.filter((o) => o.x > o.y).length);
-    // build space: open, gentle 2 x 2 spots within 20 tiles of each start
+    const value = [0, 0];
+    const road = [0, 0];
+    const count = [0, 0];
+    for (const f of fields) {
+      expect(f.r[0].ok && f.r[1].ok, `ore at ${f.x},${f.y}`).toBe(true);
+      const s = sideOf(f.r);
+      value[s] += f.value;
+      road[s] += f.r[s].len;
+      count[s]++;
+    }
+    expect(count[0]).toBe(count[1]);
+    expect(value[0]).toBe(value[1]);
+    // (the roads to each side's fields: within 5%)
+    expect(Math.abs(road[0] - road[1]) / road[0]).toBeLessThan(0.05);
+    const oil = [0, 0];
+    for (const o of m.oils) oil[sideOf(near(o.x + 1, o.y + 1))]++;
+    expect(oil[0]).toBe(oil[1]);
+    // build space: open, gentle 2 x 2 spots within 20 tiles of each start (within 5%)
     const room = (s: { x: number; y: number }) => {
-      let n = 0;
+      let k = 0;
       for (let y = s.y - 20; y <= s.y + 20; y++)
-        for (let x = s.x - 20; x <= s.x + 20; x++) if (Math.hypot(x - s.x, y - s.y) <= 20 && x >= 0 && y >= 0 && x < m.w - 1 && y < m.h - 1 && terrainBuildable(m, x, y, 2, 2)) n++;
-      return n;
+        for (let x = s.x - 20; x <= s.x + 20; x++) if (Math.hypot(x - s.x, y - s.y) <= 20 && x >= 0 && y >= 0 && x < m.w - 1 && y < m.h - 1 && terrainBuildable(m, x, y, 2, 2)) k++;
+      return k;
     };
-    const r0 = room(s0);
-    const r1 = room(s1);
-    expect(r0).toBeGreaterThan(600);
+    const r0 = room(st[0]);
+    const r1 = room(st[1]);
+    expect(r1).toBeGreaterThan(450);
     expect(Math.abs(r0 - r1) / r0).toBeLessThan(0.05);
-    // garrisonable houses and tech sites: as many on each side, at the same distances
-    const side = (pick: (e: Entity) => boolean) => {
-      const d0: number[] = [];
-      const d1: number[] = [];
-      for (const e of w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building' && pick(e))) {
-        const da = Math.hypot(e.x - s0.x - 0.5, e.y - s0.y - 0.5);
-        const db = Math.hypot(e.x - s1.x - 0.5, e.y - s1.y - 0.5);
-        if (da < db) d0.push(da);
-        else if (db < da) d1.push(db);
-      }
-      d0.sort((p, q) => p - q);
-      d1.sort((p, q) => p - q);
-      return [d0, d1];
-    };
-    for (const [name, pick] of [
-      ['houses', (e: Entity) => !!buildingDef(e.def).garrison],
-      ['tech', (e: Entity) => !!buildingDef(e.def).techKind],
-    ] as [string, (e: Entity) => boolean][]) {
-      const [d0, d1] = side(pick);
-      expect(d0.length, name).toBe(d1.length);
-      expect(d0.length, name).toBeGreaterThan(name === 'houses' ? 12 : 3);
-      d0.forEach((d, k) => expect(Math.abs(d - d1[k]), `${name} ${k}`).toBeLessThan(0.75));
+    // garrisonable houses and tech sites: as many on each side
+    for (const [name, pick, min] of [
+      ['houses', (e: Entity) => !!buildingDef(e.def).garrison, 12],
+      ['tech', (e: Entity) => !!buildingDef(e.def).techKind, 3],
+    ] as [string, (e: Entity) => boolean, number][]) {
+      const k = [0, 0];
+      for (const e of w.list) if (e.owner < 0 && e.kind === 'building' && pick(e)) k[sideOf(near(e.x, e.y))]++;
+      expect(k[0], name).toBe(k[1]);
+      expect(k[0], name).toBeGreaterThan(min);
     }
+    expect(w.list.some((e: Entity) => e.def === 'bridge' || e.def === 'bridgehut')).toBe(false);
   });
 
-  it('the two crossings are the only ground links: land corridors of the same width at the heads of the gulfs, each with its village', () => {
+  it('the two crossings are the only ground links: land at the heads of the gulfs, each with its village', () => {
     const w = world(1);
     const m = w.map;
     const N = m.w;
-    const sea = m.deco!.sea!;
-    const head = sea.gulfs[0][0];
-    // the corridor: open ground between the gulf's head and the canal (west) / the ridge (east), measured across
-    const across = (gx: number, gy: number) => {
-      // walk north (screen up: -x, -y) from the gulf's head until the barrier
-      let open = 0;
-      for (let t = 0; t < 30; t += 0.5) {
-        const x = gx - t / Math.SQRT2;
-        const y = gy - t / Math.SQRT2;
-        const i = Math.floor(y) * N + Math.floor(x);
-        if (seaDist(sea, x, y) > 0) continue;
-        if (m.tiles[i] === Tile.Water || m.tiles[i] === Tile.Rock) {
-          if (open > 0) break;
-          continue;
-        }
-        open += 0.5;
-      }
-      return open;
-    };
-    const wW = across(head.x, head.y);
-    const wE = across(head.y, head.x);
-    expect(wW).toBeGreaterThan(9);
-    expect(wW).toBeLessThan(20);
-    expect(wE).toBe(wW);
-    // cut both corridors: the starts fall apart; cut one: still apart (every route takes both)
     const [s0, s1] = m.starts;
     const cutAt = (cx: number, cy: number) => {
       const pass = w.pass.slice();
-      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) < 11) pass[y * N + x] = 0;
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) < 12) pass[y * N + x] = 0;
       return pass;
     };
     const reach = (pass: Uint8Array) => {
@@ -277,28 +205,36 @@ describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
       return !!seen[s1.y * N + s1.x];
     };
     expect(reach(w.pass)).toBe(true);
-    // (the corridor's middle: between the gulf's head and the lake's south shore)
-    const cw = { x: head.x - 4.5 / Math.SQRT2 * 1.4, y: head.y - 4.5 / Math.SQRT2 * 1.4 };
-    expect(reach(cutAt(cw.x, cw.y))).toBe(false);
-    expect(reach(cutAt(cw.y, cw.x))).toBe(false);
-    // a village at each crossing: the same number of garrisonable houses within 16 tiles of each corridor
-    const houses = (cx: number, cy: number) => w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building' && buildingDef(e.def).garrison && Math.hypot(e.x - cx, e.y - cy) < 16).length;
-    expect(houses(cw.x, cw.y)).toBeGreaterThanOrEqual(8);
-    expect(houses(cw.y, cw.x)).toBe(houses(cw.x, cw.y));
+    // (the AI's crossings, ai.ts: one at each gulf's head; cut either and the starts fall apart)
+    const lanes = m.lanes!;
+    expect(lanes.length).toBe(2);
+    for (const l of lanes) expect(reach(cutAt(l.x + 0.5, l.y + 0.5))).toBe(false);
+    // the crossings are open ground some ten tiles across
+    for (const l of lanes) {
+      let open = 0;
+      for (let y = Math.floor(l.y) - 7; y <= l.y + 7; y++) for (let x = Math.floor(l.x) - 7; x <= l.x + 7; x++) if (Math.hypot(x - l.x, y - l.y) <= 7 && w.pass[y * N + x]) open++;
+      expect(open, `crossing at ${l.x},${l.y}`).toBeGreaterThan(80);
+    }
+    // a village by each crossing, as many garrisonable houses in each
+    const houses = (c: { x: number; y: number }) => w.list.filter((e: Entity) => e.owner < 0 && e.kind === 'building' && buildingDef(e.def).garrison && Math.hypot(e.x - c.x, e.y - c.y) < 22).length;
+    expect(houses(lanes[0])).toBeGreaterThanOrEqual(6);
+    expect(houses(lanes[1])).toBe(houses(lanes[0]));
   });
 
-  it('keeps the Sinai places: Sharm with its resort and town on the tip, resorts on both gulf shores, Tiran offshore, the canyons and the massif', () => {
+  it('keeps the Sinai places: Sharm on the tip, resorts on both gulf coasts, the Blue Hole by Dahab, Tiran offshore, the canyon by Nuweiba and the massif', () => {
     const w = world(3);
     const m = w.map;
     const sea = m.deco!.sea!;
-    const top = (m.w / 2) * Math.SQRT2;
-    // three resorts: Sharm (look 0) on the tip, one on each gulf's Sinai shore, mirrored compounds
+    const px = (x: number, y: number) => ({ u: 125 + E(x, y) / 0.48, v: 135 + (S(x, y) - (m.w / 2) * Math.SQRT2) / 0.48 });
+    // three resorts: Sharm (look 0) on the tip, one on each gulf's Sinai coast
     expect(sea.sites.length).toBe(3);
-    const sharm = sea.sites.find((s) => s.look === 0)!;
-    expect(Math.abs(E(sharm.x, sharm.y))).toBeLessThan(0.01);
-    expect(S(sharm.x, sharm.y)).toBeGreaterThan(top + 70);
-    const gulf = sea.sites.filter((s) => s.look !== 0);
-    expect(Math.sign(E(gulf[0].x, gulf[0].y))).toBe(-Math.sign(E(gulf[1].x, gulf[1].y)));
+    const site = (look: number) => sea.sites.find((s) => s.look === look)!;
+    expect(px(site(0).x, site(0).y).v).toBeGreaterThan(200);
+    expect(px(site(1).x, site(1).y).u).toBeLessThan(70);
+    expect(px(site(2).x, site(2).y).u).toBeGreaterThan(150);
+    const hole = px(sea.hole!.x, sea.hole!.y);
+    expect(hole.u).toBeGreaterThan(170);
+    expect(hole.v).toBeGreaterThan(130);
     // Tiran: open ground on it, all of it cut off from the mainland
     let open = 0;
     for (let i = 0; i < m.w * m.h; i++) {
@@ -312,13 +248,16 @@ describe('Wadi Al-Rimal: the Sinai (SN1)', () => {
       }
     }
     expect(open).toBeGreaterThan(6);
-    // the coloured canyons: two, mirrored, on each player's own half; the massif high in the south between them
+    // the coloured canyon inland of the Aqaba coast; the massif high in the south of the peninsula
     const cs = m.deco!.canyons!;
-    expect(cs.length).toBe(2);
-    expect(E(cs[0].pts[0].x, cs[0].pts[0].y)).toBeLessThan(0);
-    expect(E(cs[1].pts[0].x, cs[1].pts[0].y)).toBeGreaterThan(0);
+    expect(cs.length).toBe(1);
+    expect(px(cs[0].pts[0].x + 0.5, cs[0].pts[0].y + 0.5).u).toBeGreaterThan(140);
     let peak = 0;
-    for (let s = top + 20; s < top + 50; s += 1) for (let e = -20; e <= 20; e += 1) peak = Math.max(peak, groundHeight(m, (s + e) / Math.SQRT2, (s - e) / Math.SQRT2));
+    for (let v = 140; v < 190; v += 1)
+      for (let u = 90; u <= 160; u += 1) {
+        const p = sinaiPoint(u, v);
+        peak = Math.max(peak, groundHeight(m, p.x, p.y));
+      }
     expect(peak).toBeGreaterThan(4.5);
   });
 });

@@ -47,10 +47,11 @@ export interface GameMap {
   /** 1 where a civilian structure stands. */
   blocked: Uint8Array;
   /**
-   * Capturable tech sites: candidate top-left corners for player 0's half (mirrored for player 1),
-   * the first valid one is used (capture.ts). Absent: the Frontline Crossing defaults.
+   * Capturable tech sites: candidate top-left corners for player 0's half (mirrored for player 1, or on a map with
+   * no mirror player 1's own candidates `at2`), the first valid one is used (capture.ts). Absent: the Frontline
+   * Crossing defaults.
    */
-  techSites?: { def: string; at: [number, number][] }[];
+  techSites?: { def: string; at: [number, number][]; at2?: [number, number][] }[];
   /** Extra AI attack lanes (fords, passes, avenues) besides the bridges (ai.ts). */
   lanes?: Point[];
   /** 1 on land that no ground unit can reach on purpose (offshore islands): kept open, never sealed with trees. */
@@ -58,9 +59,10 @@ export interface GameMap {
   /**
    * How the two halves mirror each other (fair starts): 'point' (absent) through the map centre, x -> w - 1 - x and
    * y -> h - 1 - y; 'transpose' across the x == y diagonal, (x, y) -> (y, x) (the screen's left-right mirror: the
-   * Sinai map, whose gulfs both open to the south).
+   * Sinai map, whose gulfs both open to the south); 'none': no mirror (the Sinai traced from the owner's picture:
+   * the sides differ, the resources each holds are kept equal by hand).
    */
-  mirror?: 'point' | 'transpose';
+  mirror?: 'point' | 'transpose' | 'none';
   /** Render-only hints of the hand-designed maps (road widths, tracks, plazas, parks, rubble lots). */
   deco?: MapDeco;
 }
@@ -129,6 +131,12 @@ export interface SeaDeco {
   bottom: number;
   /** The gulfs: centre lines (continuous coordinates, from the head to the open sea) with half widths. */
   gulfs: { x: number; y: number; hw: number }[][];
+  /**
+   * The coasts traced from a picture (SeaGrid): the seaward distance comes from the grid (past its rectangle its edge
+   * rows and columns carry on), turning into the open seas above (top / bottom) over the last `band` tiles before the
+   * map's edge, where the world past the map takes over (render/horizonworld.ts).
+   */
+  grid?: SeaGrid;
   /** Resort beaches. */
   sites: SeaSite[];
   /**
@@ -139,6 +147,36 @@ export interface SeaDeco {
   isle?: SeaFrame & { ru: number; rv: number };
   /** The Blue Hole's reef lagoon (render only): its frame's origin on the waterline (render/bluehole.ts LAGOON). */
   hole?: SeaFrame;
+}
+
+/**
+ * Seaward distance sampled over a rectangle of screen positions (E east, S south of the map's top corner; tiles):
+ * sample (i, j) at E = e0 + i * step, S = s0 + j * step, row-major, `d` in tiles (> 0 = water).
+ */
+export interface SeaGrid {
+  cols: number;
+  rows: number;
+  e0: number;
+  s0: number;
+  step: number;
+  d: Float32Array;
+  /** Width (tiles) of the band along the map's edge over which the grid turns into the open seas. */
+  band: number;
+}
+
+/** The grid's seaward distance at screen position (e, s) (past the grid, its nearest edge sample's). */
+export function gridSea(g: SeaGrid, e: number, s: number): number {
+  const fx = (e - g.e0) / g.step;
+  const fy = (s - g.s0) / g.step;
+  const cx = Math.max(0, Math.min(g.cols - 1.0001, fx));
+  const cy = Math.max(0, Math.min(g.rows - 1.0001, fy));
+  const i = Math.floor(cx);
+  const j = Math.floor(cy);
+  const tx = cx - i;
+  const ty = cy - j;
+  const k = j * g.cols + i;
+  const d = g.d;
+  return (d[k] * (1 - tx) + d[k + 1] * tx) * (1 - ty) + (d[k + g.cols] * (1 - tx) + d[k + g.cols + 1] * tx) * ty;
 }
 
 /** Frame coordinates (u along, v seaward) of map point (x, y). */
@@ -207,6 +245,14 @@ export function openSeaDist(sea: SeaDeco, x: number, y: number) {
  */
 export function seaDist(sea: SeaDeco, x: number, y: number): number {
   let best = openSeaDist(sea, x, y);
+  if (sea.grid) {
+    const n = Math.SQRT1_2;
+    const d = gridSea(sea.grid, (x - y) * n, (x + y) * n);
+    // (the open seas take over towards the map's edge)
+    const edge = Math.min(x, y, 2 * sea.c - x, 2 * sea.c - y);
+    const t = Math.max(0, Math.min(1, 1 - edge / sea.grid.band));
+    best = d + (best - d) * t * t * (3 - 2 * t);
+  }
   for (const g of sea.gulfs) {
     let s0 = 0;
     for (let k = 0; k < g.length - 1; k++) {
@@ -257,6 +303,8 @@ export interface Structure {
   variant?: number;
   /** Render-only role hint (Wadi Al-Rimal's town): the mosque, a shop-house facing a street, a row of shops. */
   look?: 'mosque' | 'shop' | 'shops';
+  /** Render-only: the town it belongs to (render/townstyle.ts: 0 Egyptian, 1 Arabian, 2 Sharm / any other). */
+  town?: 0 | 1 | 2;
 }
 
 export const ORE_MAX = 10;

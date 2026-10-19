@@ -90,7 +90,8 @@ describe('pedestrian walk grid', () => {
         if (!n) continue;
         ok++;
         // ends on the goal, never through closed cells
-        expect(out[(n - 1) * 2]).toBeCloseTo(b.x, 5);
+        // (float32 path points: some 1e-5 off on a map over 128 tiles)
+        expect(out[(n - 1) * 2]).toBeCloseTo(b.x, 4);
         let px = a.x;
         let py = a.y;
         for (let j = 0; j < n; j++) {

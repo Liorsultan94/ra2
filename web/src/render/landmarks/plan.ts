@@ -1,4 +1,5 @@
 import { Tile, WATER_LEVEL, designScale, type GameMap } from '../../sim/map';
+import { sinaiPoint } from '../../sim/maps';
 import { roadClear } from '../ambient/clearance';
 import { surfaceHeight } from '../ground';
 
@@ -354,10 +355,9 @@ function frontline(m: GameMap): LandmarkPlan {
 
 function desert(m: GameMap): LandmarkPlan {
   const spots: Spot[] = [];
-  // the Sinai (SN1): the old town stands on the Egyptian mainland past the map's west edge, beside player 0's base
-  // (the old layout's numbers, x < 0, moved down the edge: the Mediterranean fills its old place)
-  const D = designScale(m.w);
-  const vy = 66 * (m.w / 160);
+  // the Sinai (SN1): the old town stands on the Egyptian mainland past the map's west edge, south-west of player 0's
+  // base (the old layout's numbers, x < 0, moved down the edge, clear of the Mediterranean past the map)
+  const vy = 100 * (m.w / 176);
   // the old town west of the map: a mosque, the souk street, houses and palms
   spots.push(spot('mosque', -9.4, 49.5 + vy, 0, 3.2));
   // the souk street: stalls of all sizes, unevenly spaced and set, an alley here and there
@@ -376,7 +376,7 @@ function desert(m: GameMap): LandmarkPlan {
   for (let i = 0; i < 9; i++) spots.push(spot('palm', -3.6 - hh(i, 6, 21) * 13, 38 + vy + i * 3.6 + hh(i, 7, 21), hh(i, 8, 21) * 6, 0.4, hh(i, 9, 21)));
   // the palm grove by a spring, south of the town (camels rest here)
   const gx = -11;
-  const gy = 150 * (m.w / 160);
+  const gy = 190 * (m.w / 176);
   spots.push(spot('pond', gx, gy, 0, 4.2, 0.5, { a: 3.0, b: 2.2 }));
   // a grove, not a ring: clumps of date palms, thickest on the spring's sheltered (west) side, a few strays
   for (let i = 0; i < 18; i++) {
@@ -392,12 +392,13 @@ function desert(m: GameMap): LandmarkPlan {
     camels.push({ x: gx + Math.cos(a) * 6.8, y: gy + Math.sin(a) * 5.4 });
   }
   camels.push(...oasisRing(m));
-  // ruined forts on the El Tih buttes (sim/maps.ts SINAI_MESAS: screen east -7, south 111 and its mirror; impassable rock)
-  const bx = (111 - 7) / Math.SQRT2;
-  const by = (111 + 7) / Math.SQRT2;
-  for (const [x, y, s] of [[bx, by, 1], [by, bx, -1]]) spots.push(spot('fort', x, y, Math.atan2(-3 * s, 4 * s), 0, 0.4, { inMap: true }));
-  // the refinery skyline north of the map (the Negev side), with its gas flare
-  spots.push(spot('refinery', D.x(68), -11, 0, 6.5));
+  // ruined forts on the El Tih buttes (sim/maps.ts SINAI_MESAS; impassable rock)
+  for (const [u, v, s] of [[109.5, 78, 1], [140.5, 78, -1]]) {
+    const p = sinaiPoint(u, v);
+    spots.push(spot('fort', p.x, p.y, Math.atan2(-3 * s, 4 * s), 0, 0.4, { inMap: true }));
+  }
+  // the refinery skyline past the map's north-east edge (the Negev side), with its gas flare
+  spots.push(spot('refinery', m.w * 0.85, -11, 0, 6.5));
   // the caravan track past the town: from the Mediterranean dunes in the north-west, on south to the horizon
   // (horizonworld.ts continues it)
   const lane = smoothPath([{ x: -24, y: 92 + vy - 66 }, { x: -12, y: 26 + vy }, { x: -5.8, y: 38 + vy }, { x: -5.8, y: 54 + vy }, { x: -5.8, y: 60 + vy }, { x: -5.0, y: 70 + vy }, { x: -4.6, y: 82 + vy }, { x: -7.5, y: 94 + vy }, { x: -12, y: 106 + vy }], 3, 0.5);

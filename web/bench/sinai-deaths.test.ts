@@ -8,8 +8,9 @@ import { World } from '../src/sim/world';
 it('sinai deaths', () => {
   const seed = Number(process.env.SEED ?? 1);
   const hard = Number(process.env.HARD ?? 0);
-  const w = new World({ seed, map: 'desert', players: [{ name: 'a', faction: 'usa', color: 0, isAI: true }, { name: 'b', faction: 'usa', color: 0, isAI: true }] });
-  const diff = (k: number) => (hard === k ? 'hard' : 'easy');
+  const [fa, fb] = (process.env.FACS ?? 'usa,usa').split(',') as any[];
+  const w = new World({ seed, map: 'desert', players: [{ name: 'a', faction: fa, color: 0, isAI: true }, { name: 'b', faction: fb, color: 0, isAI: true }] });
+  const diff = (k: number) => (hard === k || process.env.BOTH ? 'hard' : 'easy');
   const ais = [new AIController(w, 0, diff(0)), new AIController(w, 1, diff(1))];
   // SWAP=1: each AI keeps the personality (plan, build order, rng) it has in the game with the slots swapped
   if (process.env.SWAP) {
@@ -56,7 +57,8 @@ it('sinai deaths', () => {
       bins.set(k, (bins.get(k) ?? 0) + 1);
       for (const e of w.list) {
         if (e.dead || e.owner !== 1 - hard || Math.hypot(e.x - p.x, e.y - p.y) > 9) continue;
-        const d = e.def.replace(/^[a-z]+_/, '');
+        const inside = e.kind === 'building' && e.passengers.length ? '(garrisoned)' : '';
+        const d = e.def.replace(/^[a-z]+_/, '') + inside;
         killers.set(d, (killers.get(d) ?? 0) + 1);
       }
     }

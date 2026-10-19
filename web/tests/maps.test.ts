@@ -63,6 +63,8 @@ describe('maps', () => {
     for (const id of MAP_IDS) {
       const w = world(id, 3);
       const m = w.map;
+      // (the Sinai is traced from a picture, no mirror: tests/sinai.test.ts counts what each side holds)
+      if (m.mirror === 'none') continue;
       const n = m.w * m.h;
       if (id !== 'desert') {
         let diff = 0;

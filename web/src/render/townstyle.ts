@@ -38,6 +38,7 @@ export const TOWN_ACCENTS: [number, number, number][][] = [
 
 /** Style of a structure's town: 0 the Egyptian (west) one, 1 the Arabian (east) one, 2 Sharm and every other map's. */
 export function townStyle(m: GameMap, st: Structure): 0 | 1 | 2 {
+  if (st.town !== undefined) return st.town;
   if (m.mirror !== 'transpose') return 2;
   const cx = st.x + st.w / 2;
   const cy = st.y + st.h / 2;

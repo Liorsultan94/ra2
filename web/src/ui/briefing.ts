@@ -193,7 +193,7 @@ export function buildBriefing(
   const biome = m.biome;
   const civ = neutral.filter((e) => buildingDef(e.def).garrison);
   const feats = m.bridges.length ? [`${m.bridges.length} contested bridges`] : [];
-  if (biome === 'desert') feats.push(m.deco?.sea ? 'two gulfs crossed only at their heads, the Suez Canal, granite peaks and the Red Sea coast' : 'mesas and oases');
+  if (biome === 'desert') feats.push(m.deco?.sea ? 'two gulfs crossed only at their heads, granite peaks and the Red Sea coast' : 'mesas and oases');
   if (biome === 'winter') feats.push('frozen river');
   if (m.structures.length) feats.push(biome === 'urban' ? `${civ.length} buildings to garrison` : biome === 'desert' ? (m.deco?.sea ? 'villages at the crossings' : 'oasis villages') : biome === 'winter' ? 'log villages' : 'farming villages');
   feats.push(`${m.oreMines.length} ore fields`);

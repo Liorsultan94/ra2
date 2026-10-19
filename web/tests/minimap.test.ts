@@ -205,7 +205,17 @@ describe('minimap biomes', () => {
     }
     if (id === 'winter') expect(bl).toBeGreaterThan(r);
     if (id === 'desert') {
-      expect(r).toBeGreaterThan(bl * 1.2);
+      // (the Sinai is half sea: its land reads as warm sand)
+      let lr = 0;
+      let lb = 0;
+      for (let y = 1; y < map.h; y += 3)
+        for (let x = 1; x < map.w; x += 3) {
+          if (map.tiles[y * map.w + x] === Tile.Water) continue;
+          const q = px(b, x + 0.5, y + 0.5);
+          lr += q[0];
+          lb += q[2];
+        }
+      expect(lr).toBeGreaterThan(lb * 1.2);
       // the Blue Hole off Dahab: its deep abyssal centre is much darker than its turquoise coral rim
       const sea = map.deco!.sea!;
       const holePt = framePoint(sea.hole!, LAGOON.hu, LAGOON.hv);

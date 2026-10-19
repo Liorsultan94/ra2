@@ -17,7 +17,7 @@ import { TPS } from './types';
 import type { World } from './world';
 
 /** Candidate top-left corners for player 0's half (mirrored for player 1); the first valid one is used. */
-const SITES: { def: string; at: [number, number][] }[] = [
+const SITES: { def: string; at: [number, number][]; at2?: [number, number][] }[] = [
   { def: 'tech_hospital', at: [[18, 60], [14, 40], [22, 66], [12, 44], [28, 44]] },
   { def: 'tech_comms', at: [[54, 88], [36, 82], [22, 90], [40, 86], [52, 66]] },
   { def: 'tech_airport', at: [[6, 30], [8, 24], [4, 36], [10, 34], [12, 28]] },
@@ -105,10 +105,17 @@ export function neutralSites(m: GameMap): NeutralSite[] {
     const d = buildingDef(site.def);
     let done = false;
     for (const offRoad of [true, false]) {
-      for (const [x, y] of site.at) {
-        // mirror the footprint onto the other half (GameMap.mirror)
+      // candidate pairs: the mirrored spot (GameMap.mirror), or on a map with no mirror the other side's own list
+      // (at2), every pairing, earliest candidates first
+      const pairs: [number, number][] = [];
+      if (site.at2) {
+        for (let i = 0; i < site.at.length; i++) for (let j = 0; j < site.at2.length; j++) pairs.push([i, j]);
+        pairs.sort((p, q) => p[0] + p[1] - (q[0] + q[1]) || p[0] - q[0]);
+      } else for (let i = 0; i < site.at.length; i++) pairs.push([i, i]);
+      for (const [k, k2] of pairs) {
+        const [x, y] = site.at[k];
         const a = { def: site.def, x, y, w: d.w, h: d.h };
-        const b = { def: site.def, ...mirrorRect(m, x, y, d.w, d.h) };
+        const b = site.at2 ? { def: site.def, x: site.at2[k2][0], y: site.at2[k2][1], w: d.w, h: d.h } : { def: site.def, ...mirrorRect(m, x, y, d.w, d.h) };
         if (!siteOk(a.x, a.y, d.w, d.h, offRoad) || !siteOk(b.x, b.y, d.w, d.h, offRoad)) continue;
         put(a, 1);
         put(b, 1);

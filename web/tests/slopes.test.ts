@@ -2,7 +2,7 @@
 // (sim/maps.ts DESERT_RAMPS) lead up the mountains; groups flow through the canyon and over the tracks.
 import { describe, expect, it } from 'vitest';
 import { buildingDef } from '../src/sim/defs';
-import { MAP_IDS } from '../src/sim/maps';
+import { MAP_IDS, SINAI_OLD_UP } from '../src/sim/maps';
 import { LOCO_COUNT, Loco, MAX_GRADE, OPP } from '../src/sim/slope';
 import { TPS, type Entity } from '../src/sim/types';
 import { World } from '../src/sim/world';
@@ -71,7 +71,8 @@ describe('slopes (SL1)', () => {
     for (const seed of [1, 2, 3]) {
       const w = world('desert', seed);
       // the north foot of the massif on player 0's side (St Catherine), and the summit plateau above it
-      const [sx, sy, gx, gy] = [85, 105, 93, 112];
+      const O = SINAI_OLD_UP;
+      const [sx, sy, gx, gy] = [85 - O, 105 - O, 93 - O, 112 - O];
       const veh = w.pfs[Loco.Vehicle].find(sx, sy, gx, gy, 100000);
       expect(veh[veh.length - 1], `seed ${seed}: the plateau is reachable by vehicles`).toBe(gy * w.map.w + gx);
       const v = walk(w, sx, sy, veh);
@@ -166,18 +167,20 @@ describe('slopes (SL1)', () => {
   }
   // (the Sinai mirrors across its diagonal)
   const M = (p: { x: number; y: number }) => ({ x: p.y, y: p.x });
-  // the coloured canyon's upper and lower mouths (player 0's), the summit track's foot and the plateau it leads to
-  const UP = { x: 69.2, y: 87.8 };
-  const DOWN = { x: 76.7, y: 108.6 };
-  const FOOT = { x: 75.3, y: 110 };
-  const TOP = { x: 93.9, y: 112.9 };
+  // the coloured canyon's upper and lower mouths (on the Aqaba side: the old layout's mirrored one), the summit
+  // track's foot and the plateau it leads to (the old 160 x 160 layout's tiles, SINAI_OLD_UP up the diagonal)
+  const O = SINAI_OLD_UP;
+  const UP = M({ x: 69.2 - O, y: 87.8 - O });
+  const DOWN = M({ x: 76.7 - O, y: 108.6 - O });
+  const FOOT = { x: 75.3 - O, y: 110 - O };
+  const TOP = { x: 93.9 - O, y: 112.9 - O };
 
-  it('groups of tanks and soldiers flow through the coloured canyon both ways, on both sides, and past each other head-on', () => {
+  it('groups of tanks and soldiers flow through the coloured canyon both ways, either side\'s, and past each other head-on', () => {
     const cases: [string, Parameters<typeof flow>[1]][] = [
       ['down', [{ owner: 0, from: UP, to: DOWN, tanks: 8, inf: 8 }]],
       ['up', [{ owner: 0, from: DOWN, to: UP, tanks: 8, inf: 8 }]],
-      ['mirrored down', [{ owner: 1, from: M(UP), to: M(DOWN), tanks: 8, inf: 8 }]],
-      ['mirrored up', [{ owner: 1, from: M(DOWN), to: M(UP), tanks: 8, inf: 8 }]],
+      ['red down', [{ owner: 1, from: UP, to: DOWN, tanks: 8, inf: 8 }]],
+      ['red up', [{ owner: 1, from: DOWN, to: UP, tanks: 8, inf: 8 }]],
       ['head-on', [
         { owner: 0, from: UP, to: DOWN, tanks: 6, inf: 6 },
         { owner: 0, from: DOWN, to: UP, tanks: 6, inf: 6 },
