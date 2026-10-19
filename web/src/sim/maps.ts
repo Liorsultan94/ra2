@@ -489,7 +489,7 @@ const SINAI_ORE: [number, number, number, number][] = [
 ];
 /** Oil derricks (centres, E, S). */
 const SINAI_OIL: [number, number][] = [
-  [-53, 93],
+  [-57, 106],
   [-57, 78],
   [-27, 118],
   [-11, 96],
@@ -1095,7 +1095,7 @@ const SINAI_TRACKS: [number, number][][] = [
   ],
   // to the Egyptian oasis and the hamlet in the south
   [
-    [-58, 95],
+    [-52, 90.5],
     [-64, 110],
     [-68, 124],
     [-62, 134],

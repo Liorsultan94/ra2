@@ -88,7 +88,8 @@ describe('Sinai building kit (GD2)', () => {
       for (const att of ['normal', 'uv', 'color']) expect(g.getAttribute(att), att).toBeDefined();
     }
     // the mosque is there, with its minaret's piece in the play-zoom mesh
-    expect(m.structures.filter((s) => s.look === 'mosque').length).toBe(2);
+    // (one in each crossing's village and Sharm's on the axis: SN1)
+    expect(m.structures.filter((s) => s.look === 'mosque').length).toBe(3);
     // LOD swap: the far kit shows only zoomed out
     const k0 = a.out.filter((o) => o.name === 'sinai-kit');
     const k1 = a.out.filter((o) => o.name === 'sinai-kit-far');

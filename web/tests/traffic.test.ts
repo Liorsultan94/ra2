@@ -593,7 +593,8 @@ describe('road clearance', () => {
           expect(step).toBeLessThan(0.6);
         }
       }
-      if (id === 'desert' || id === 'frontline') expect(roads.filter((r) => r.taper).length).toBeGreaterThanOrEqual(2);
+      // (the Sinai's roads meet at T-junctions only: SN1)
+      if (id === 'frontline') expect(roads.filter((r) => r.taper).length).toBeGreaterThanOrEqual(2);
     });
 
   it('is deterministic and every map gets parking lots, the city several', () => {
