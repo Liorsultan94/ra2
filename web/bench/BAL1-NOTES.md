@@ -146,11 +146,17 @@ The coasts follow the reference picture's water mask (sim/sinaimask.ts) and the 
 the sides differ: blue's crossing (the isthmus at the head of the Gulf of Suez) is 14 tiles from its base, red's
 (between the Gulf of Aqaba's head and the granite ridge) 53. What each holds is kept equal by hand, counted for the
 base nearer by road (`bench/sinai-fair.test.ts`, seed 1): start to enemy 161.8 / 162.1; ore 7 / 7 fields, value
-1662 / 1662, roads to them 253.6 / 245.7; oil 4 / 4 (roads 118 / 107); build space 562 / 541 (a rocky headland by
+1662 / 1662, roads to them 253.8 / 245.7; oil 4 / 4 (roads 118 / 107); build space 553 / 541 (a rocky headland by
 blue's base makes up for the seas closer round red's); garrisonable houses 22 / 22 (roads 882 / 1475: red's are
-farther); tech sites 4 / 4 (roads 155 / 166). Corridors about 10 tiles across at both heads.
+farther); tech sites 4 / 4 (roads 155 / 166). The crossings about 10 tiles across at both heads.
 
-Bench (FULL=1, grace on, 26 games per row; rows `geo*`): seeds 1-3 7 / 4 (lead 12 / 11), seeds 4-6 6 / 6 (lead
-12 / 12); both 13 / 10 (lead 24 / 23), 29 of 52 capped, mean 26.3 min. Hard vs hard (usa-russia, 60 min cap):
-seeds 1 / 4 / 6 end in 17-25 min, 2 and 5 at 54-59 min, 3 not by 60. (On the mirrored layout a modest corridor
-widening, 15.5 to 17 tiles, had not helped: 4 of 6 held out past 60 min against 2 without it.)
+Bench (FULL=1, grace on, 26 games per row; rows `geoF*`, the final map): seeds 1-3 1 / 5 (lead 5 / 19), seeds 4-6
+4 / 5 (lead 9 / 14), seeds 7-9 11 / 4 (lead 13 / 11); all 78: wins 16 / 14, lead 27 / 44 (red 62%), 48 capped,
+mean 26.7 min. Harvest by slot, all games: red 3% ahead at 4 min, 1-4% at 8 to 20 min, 9% at 28 (the front is at
+blue's door: its crossing is 14 tiles from its base, red's 53). A slightly earlier version of the same layout
+(before the distance grid went 16-bit and the headland grew) gave 13 / 10 wins, lead 24 / 23 over seeds 1-6: the
+games are chaotic, the red lean in the leads is about two standard deviations.
+
+Hard vs hard (usa-russia, 60 min cap, seeds 1-20): 16 end in 19-58 min, 4 hold out. Widening both crossings (the
+head of the Gulf of Suez 6 px south, the ridge 6 px shorter) did not help: 8 of 20 held out. (On the mirrored
+layout a modest corridor widening, 15.5 to 17 tiles, had not helped either: 4 of 6 held out against 2.)
