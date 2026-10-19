@@ -151,7 +151,7 @@ export interface SeaDeco {
 
 /**
  * Seaward distance sampled over a rectangle of screen positions (E east, S south of the map's top corner; tiles):
- * sample (i, j) at E = e0 + i * step, S = s0 + j * step, row-major, `d` in tiles (> 0 = water).
+ * sample (i, j) at E = e0 + i * step, S = s0 + j * step, row-major, `d` in 1 / SEA_GRID_Q tiles (> 0 = water).
  */
 export interface SeaGrid {
   cols: number;
@@ -159,7 +159,7 @@ export interface SeaGrid {
   e0: number;
   s0: number;
   step: number;
-  d: Float32Array;
+  d: Int16Array;
   /** Width (tiles) of the band along the map's edge over which the grid turns into the open seas. */
   band: number;
 }
@@ -176,8 +176,10 @@ export function gridSea(g: SeaGrid, e: number, s: number): number {
   const ty = cy - j;
   const k = j * g.cols + i;
   const d = g.d;
-  return (d[k] * (1 - tx) + d[k + 1] * tx) * (1 - ty) + (d[k + g.cols] * (1 - tx) + d[k + g.cols + 1] * tx) * ty;
+  return ((d[k] * (1 - tx) + d[k + 1] * tx) * (1 - ty) + (d[k + g.cols] * (1 - tx) + d[k + g.cols + 1] * tx) * ty) / SEA_GRID_Q;
 }
+/** SeaGrid's fixed point: steps per tile (to +-256 tiles). */
+export const SEA_GRID_Q = 128;
 
 /** Frame coordinates (u along, v seaward) of map point (x, y). */
 export function frameUV(f: SeaFrame, x: number, y: number, out = { u: 0, v: 0 }) {

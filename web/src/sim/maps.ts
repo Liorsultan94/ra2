@@ -29,6 +29,7 @@ import {
   type SeaDeco,
   type SeaFrame,
   type SeaGrid,
+  SEA_GRID_Q,
   type Biome,
   type GameMap,
   type MapDeco,
@@ -705,7 +706,7 @@ function sinaiMask(): Uint8Array {
 }
 
 /** Squared Euclidean distance transform along one line (Felzenszwalb & Huttenlocher), in place. */
-function edt1(f: Float64Array, n: number, d: Float64Array, v: Int32Array, z: Float64Array) {
+function edt1(f: Float32Array, n: number, d: Float32Array, v: Int32Array, z: Float32Array) {
   let k = 0;
   v[0] = 0;
   z[0] = -Infinity;
@@ -728,15 +729,15 @@ function edt1(f: Float64Array, n: number, d: Float64Array, v: Int32Array, z: Flo
   }
 }
 /** Squared distance from every cell to the nearest cell where `on` is set (cols x rows). */
-function edt2(on: Uint8Array, cols: number, rows: number): Float64Array {
+function edt2(on: Uint8Array, cols: number, rows: number): Float32Array {
   const INF = 1e12;
-  const g = new Float64Array(cols * rows);
+  const g = new Float32Array(cols * rows);
   for (let i = 0; i < g.length; i++) g[i] = on[i] ? 0 : INF;
   const n = Math.max(cols, rows);
-  const f = new Float64Array(n);
-  const d = new Float64Array(n);
+  const f = new Float32Array(n);
+  const d = new Float32Array(n);
   const v = new Int32Array(n);
-  const z = new Float64Array(n + 1);
+  const z = new Float32Array(n + 1);
   for (let x = 0; x < cols; x++) {
     for (let y = 0; y < rows; y++) f[y] = g[y * cols + x];
     edt1(f, rows, d, v, z);
@@ -795,8 +796,8 @@ function sinaiGrid(): SeaGrid {
   const toLand = edt2(land, cols, rows);
   const toWater = edt2(water, cols, rows);
   const step = PK / S;
-  const d = new Float32Array(cols * rows);
-  for (let k = 0; k < d.length; k++) d[k] = (water[k] ? Math.sqrt(toLand[k]) - 0.5 : 0.5 - Math.sqrt(toWater[k])) * step;
+  const d = new Int16Array(cols * rows);
+  for (let k = 0; k < d.length; k++) d[k] = Math.max(-32767, Math.min(32767, Math.round((water[k] ? Math.sqrt(toLand[k]) - 0.5 : 0.5 - Math.sqrt(toWater[k])) * step * SEA_GRID_Q)));
   sinaiGridCache = { cols, rows, e0: (0.5 / S - padU - PU) * PK, s0: SC + (0.5 / S - padV - PV) * PK, step, d, band: 10 };
   return sinaiGridCache;
 }
