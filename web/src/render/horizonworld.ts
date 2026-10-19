@@ -100,10 +100,10 @@ export interface Sea {
 }
 
 /** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
-export const REEF_W = 3.6;
+export const REEF_W = 2.4;
 export function reefBed(v: number) {
   const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(v, REEF_W);
-  return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 2.2, v);
+  return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 1.8, v);
 }
 
 export interface Lake {

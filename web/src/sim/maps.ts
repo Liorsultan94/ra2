@@ -862,7 +862,7 @@ export function createDesertMap(seed: number): GameMap {
         const e = -scrE(vx, vy);
         const s = scrS(vx, vy);
         const knot = CANAL_LAKES.some(([le, ls, re, rs]) => ((e - le) / re) ** 2 + ((s - ls) / rs) ** 2 < 0.8);
-        g.heights[k] += 1.5 + (knot ? 1.4 : 0) + fbm(vx * 0.3, vy * 0.3, NS + 77) * 1.6;
+        g.heights[k] += 0.8 + (knot ? 1.6 : 0) + fbm(vx * 0.11, vy * 0.11, NS + 76) * 2.6 + fbm(vx * 0.4, vy * 0.4, NS + 77) * 1.1;
       }
     }
   for (let y = 0; y < H; y++)
@@ -1379,7 +1379,7 @@ function canalPalms(g: Grids, barrier: Uint8Array, ns: number) {
 }
 
 /** Reef shelf width (tiles from the waterline) and the open sea's floor. */
-const REEF = 3.6;
+const REEF = 2.4;
 const SEA_FLOOR = -1.46;
 
 const seaF = { u: 0, v: 0 };
@@ -1409,7 +1409,7 @@ function coastHeight(sea: SeaDeco, vx: number, vy: number, h: number, ns: number
     if (ve > 0) {
       // the reef flat, shelving gently, then the drop-off into the deep
       const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(ve, REEF) + ((hash2(vx, vy, ns + 61) + hash2(vy, vx, ns + 61)) / 2 - 0.5) * 0.03;
-      h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 2.2, ve);
+      h = shelf + (SEA_FLOOR - shelf) * smoothstep(REEF, REEF + 1.8, ve);
     } else {
       // the beach rises from the waterline into the dunes
       const beach = WATER_LEVEL + 0.03 - ve * 0.075;

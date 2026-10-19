@@ -552,8 +552,8 @@ export class Horizon {
           if ( cheb < hzMargin - 2.0 && open < -4.0 ) discard;
           float depthK = open > -100.0 ? smoothstep( 0.0, 40.0, open ) : 0.6;
           // the Red Sea: deep navy past the reef, the reef flat turquoise
-          float reef = seaTwin > 0.5 ? 1.0 - smoothstep( 3.6, 5.6, sv ) : 0.0;
-          if ( seaTwin > 0.5 ) depthK = max( depthK, smoothstep( 3.6, 7.0, sv ) );
+          float reef = seaTwin > 0.5 ? 1.0 - smoothstep( 2.4, 4.2, sv ) : 0.0;
+          if ( seaTwin > 0.5 ) depthK = max( depthK, smoothstep( 2.4, 5.6, sv ) );
           // ripples (fade with distance so the far sheet never shimmers)
           float fade = 1.0 - smoothstep( 60.0, 260.0, dist );
           vec3 n = vec3( 0.0, 1.0, 0.0 );
@@ -570,7 +570,7 @@ export class Horizon {
           if ( hzSky > 0.5 ) refl = mix( refl, hzHorizonCol( vWorld ), ( 1.0 - smoothstep( 0.0, 0.25, R.y ) ) * 0.8 );
           vec3 under = mix( wTurq * 0.8, wDeep, 0.55 + 0.45 * depthK );
           // (the in-map sea's depth ramp, water.ts: blue past the drop-off deepening to navy offshore)
-          if ( seaTwin > 0.5 ) under = mix( seaScatter( mix( 0.3, 1.21, smoothstep( 3.6, 5.8, sv ) ) + smoothstep( 4.5, 11.0, sv ) * 0.7 ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
+          if ( seaTwin > 0.5 ) under = mix( seaScatter( mix( 0.3, 1.21, smoothstep( 2.4, 4.2, sv ) ) + smoothstep( 4.5, 11.0, sv ) * 0.7 ), vec3( 0.06, 0.32, 0.3 ), reef * 0.8 );
           vec3 col = mix( under, refl, fres );
           col *= wxLight * ( 1.0 - 0.2 * wState.x );
           float sd = max( dot( R, sunDir ), 0.0 );
@@ -585,7 +585,7 @@ export class Horizon {
             if ( seaTwin > 0.5 ) {
               // the swell breaks on the reef edge, not on the beach: a ragged white line over the drop-off
               float rn = texture2D( fogNoise, p * 0.09 + time * 0.004 ).r;
-              float edge = 1.0 - smoothstep( 0.25, 0.9, abs( sv - 3.9 - ( rn - 0.5 ) * 0.9 ) );
+              float edge = 1.0 - smoothstep( 0.25, 0.9, abs( sv - 2.7 - ( rn - 0.5 ) * 0.9 ) );
               surf = edge * ( 0.45 + 0.55 * smoothstep( 0.3, 0.9, sin( su * 0.7 + time * 1.1 + rn * 6.0 ) * 0.5 + 0.5 ) );
             }
             float lap = 1.0 - smoothstep( 0.0, quay ? 0.4 : 1.4, sv );
