@@ -2173,7 +2173,9 @@ export class AIController implements Controller {
     const sent = this.postSent.get(p.key) ?? 0;
     if (need > 0 && sent < 4 && w.tick >= (this.postNext.get(p.key) ?? 0)) {
       const [rx, ry] = this.rally();
-      const pool = force.filter((u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 14);
+      // (an ambush also takes soldiers still walking up to the rally point: they are seldom idle before a wave takes them)
+      const gathering = (u: Entity) => p.ambush && (u.order.type === 'move' || u.order.type === 'attackMove') && Math.hypot(u.order.x - rx, u.order.y - ry) < 6;
+      const pool = force.filter((u) => this.roleOf(u) === 'army' && (u.order.type === 'idle' || gathering(u)) && !unitDef(u.def).air && Math.hypot(u.x - rx, u.y - ry) < 14);
       const vsHeavy = (u: Entity) => this.firepower(u.def, { infantry: 0, light: 0, heavy: 1, building: 0, aircraft: 0 });
       let cands = pool.filter((u) => klass(u.def) === 'main' && (!p.ambush || (DEFS[u.def].category === 'infantry' && canGarrisonUnit(u.def))));
       // ambushers: anti-tank soldiers first

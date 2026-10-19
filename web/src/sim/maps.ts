@@ -490,7 +490,7 @@ const SINAI_ORE: [number, number, number, number][] = [
 /** Oil derricks (centres, E, S). */
 const SINAI_OIL: [number, number][] = [
   [-53, 93],
-  [-46, 76],
+  [-57, 78],
   [-27, 118],
   [-11, 96],
 ];
@@ -897,9 +897,11 @@ export function createDesertMap(seed: number): GameMap {
       g.tiles[i] = t;
     }
   const roads0 = SINAI_ROADS.map((l) => l.map(([e, s]) => si(e, s)));
-  // the ring of the Sharm road on the tip and the highway across the north meet their mirrors on the axis
-  const roads = [...roads0, ...mirrorLines(roads0)];
-  const roadKind = (i: number) => SINAI_ROAD_KIND[i % roads0.length];
+  // the highway across the north and the coast road round the tip meet their mirrors on the axis: one road each,
+  // base to base and gulf to gulf (each is its own mirror image); the Egyptian road has its Arabian twin
+  const whole = (l: Point[]) => [...l, ...[...l].reverse().map(mirror).slice(1)];
+  const roads = [whole(roads0[0]), whole(roads0[1]), roads0[2], ...mirrorLines([roads0[2]])];
+  const roadKind = (i: number) => SINAI_ROAD_KIND[Math.min(i, 2)];
   markRoads(g, roads, roads.map((_, i) => [0.95, 0.85, 0.7][roadKind(i)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
   paintOre(g, oreFields);
 
@@ -974,7 +976,7 @@ export function createDesertMap(seed: number): GameMap {
   deco.power = [SINAI_POWER.map(([e, s]) => sp(e, s))];
   deco.power.push(...deco.power.map((l) => [...l].reverse().map(mirrorSP)));
   // palms lining the village streets, along the canal's west bank (render only) and at the back of the beaches
-  deco.trees.push(...townPalms(g, roads.filter((_, i) => roadKind(i) === 0 && i % roads0.length === 0), structures, blocked).filter((p) => townK(p.x, p.y) > 0.3));
+  deco.trees.push(...townPalms(g, [roads[0]], structures, blocked).filter((p) => townK(p.x, p.y) > 0.3));
   deco.trees.push(...canalPalms(g, barrier, NS));
   deco.trees.push(...beachPalms(sea, g, NS));
   deco.sea = sea;
@@ -1003,8 +1005,9 @@ export function createDesertMap(seed: number): GameMap {
       { def: 'tech_airport', at: tech([[-74, 124], [-78, 118], [-70, 130], [-82, 112]]) },
       { def: 'tech_hospital', at: tech([[-16, 158], [-20, 154], [-12, 160], [-18, 162]]) },
     ],
-    // the AI's approaches across the Sinai: the coastal dunes, the highway, El Tih
-    lanes: [si(0, 62), si(0, 86), si(0, 112)],
+    // the AI's crossings: the two corridors at the gulfs' heads (every ground route takes both; a picket and the
+    // ambushes hold the own one, ai.ts manageChoke)
+    lanes: [si(-37.5, 84), si(37.5, 84)],
     deco,
   });
 }
@@ -1171,7 +1174,7 @@ export function sinaiVillage(): Structure[] {
   const Q = StructureKind.Courtyard;
   // (candidates in rows along the highway: placeStructures keeps those on open, gentle ground off the roads, the
   // lake and the gulf, the first one wins where they would overlap)
-  const village: HouseSpec[] = [[-44.5, 91.5, Q, 0, 'mosque']];
+  const village: HouseSpec[] = [[-42.5, 79.2, Q, 2, 'mosque']];
   const rows: [number, number, number][] = [
     // screen south, facing (north of the highway the houses face it: rot 1 / 2 alternate; south of it 0 / 3)
     [80.4, 1, 1],
