@@ -90,6 +90,14 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'fpvLaunch', damage: 0, range: 9, rof: 110, warhead: 'rocket', projectile: 'spawn', spawn: 'fpv', air: 'no' },
   { id: 'swarmLaunch', damage: 0, range: 10, rof: 170, burst: 3, burstDelay: 5, warhead: 'rocket', projectile: 'spawn', spawn: 'micro', air: 'no' },
   { id: 'shahedLaunch', damage: 0, range: 15, rof: 220, burst: 2, burstDelay: 12, warhead: 'missile', projectile: 'spawn', spawn: 'shahed', air: 'no' },
+  // ---- naval (naval.ts). Boat gun: a stabilised 25-30 mm autocannon with a coaxial MG - shreds soldiers and boats,
+  // scratches tanks, and reaches the shore.
+  { id: 'boatGun', damage: 15, range: 6, rof: 6, warhead: 'flak', projectile: 'instant', air: 'no' },
+  // anti-ship missile (Harpoon / NSM / Gabriel / Uran / YJ class, scaled): sea-skimming, guided onto ships, also used
+  // on targets ashore. Two per salvo.
+  { id: 'asm', damage: 115, range: 10.5, minRange: 2, rof: 110, burst: 2, burstDelay: 12, warhead: 'missile', projectile: 'rocket', speed: 0.45, air: 'no', flight: 'atgm', munition: 'asm' },
+  // point air defence on the missile boats / corvettes (CIWS / RAM / 30 mm): aircraft and drones only
+  { id: 'ciws', damage: 16, range: 6.5, rof: 5, warhead: 'flak', projectile: 'instant', air: 'only' },
   // kamikaze warheads (range = contact distance)
   { id: 'fpvWarhead', damage: 150, range: 0.5, rof: 1, warhead: 'rocket', projectile: 'instant', air: 'no' },
   { id: 'microWarhead', damage: 85, range: 0.5, rof: 1, warhead: 'rocket', projectile: 'instant', air: 'no', splash: 0.8 },
@@ -249,6 +257,8 @@ const BUILDINGS: Record<string, BldTpl> = {
   radar: { name: 'Radar Center', category: 'building', role: 'radar', model: 'radar', cost: 1000, buildTime: 12, hp: 1000, sight: 9, w: 2, h: 2, power: -50, prereq: ['refinery'], desc: 'Enables the radar minimap.' },
   // airbase (airbase.ts): runway along the front row, 4 jet stands along the back; each base parks 4 jets (the jet cap)
   airfield: { name: 'Airbase', category: 'building', role: 'airfield', model: 'airfield', cost: 1000, buildTime: 12, hp: 1100, sight: 6, w: 7, h: 4, power: -40, exit: [6, 3], produces: 'air', prereq: ['radar'], desc: 'Runway and 4 jet stands: builds aircraft and drones. Each airbase parks and rearms 4 jets.' },
+  // naval.ts: straddles the coast (at least 40% sea, 40% land); boats leave by its slipway. Repairs naval units alongside.
+  shipyard: { name: 'Shipyard', category: 'building', role: 'shipyard', model: 'shipyard', cost: 1600, buildTime: 16, hp: 1400, sight: 7, w: 4, h: 4, power: -40, produces: 'naval', shipyard: true, prereq: ['factory'], desc: 'Must stand half in the sea, half on the shore. Builds patrol boats, missile boats and landing craft, and repairs naval units alongside.' },
   tech: { name: 'Battle Lab', category: 'building', role: 'tech', model: 'tech', cost: 2000, buildTime: 20, hp: 1000, sight: 5, w: 3, h: 3, power: -100, prereq: ['factory', 'radar'], desc: 'Unlocks advanced technology.' },
   def_gun: { name: 'MG Bunker', category: 'defense', role: 'def_gun', model: 'bunker', cost: 450, buildTime: 6, hp: 500, sight: 6, w: 1, h: 1, power: 0, weapon: 'mgHeavy', needsPower: true, prereq: ['barracks'], desc: 'Machine gun nest. Shreds infantry; ground targets only. Needs power.' },
   def_aa: { name: 'SAM Battery', category: 'defense', role: 'def_aa', model: 'sam', cost: 900, buildTime: 9, hp: 550, sight: 10, w: 1, h: 1, power: -40, weapon: 'sam', needsPower: true, prereq: ['barracks'], desc: 'Surface-to-air interceptors. Shoots down aircraft, drones, rockets and missiles. Needs power.' },
@@ -272,6 +282,10 @@ const UNITS: Record<string, UnitTpl> = {
   robot: { name: 'Combat Robot', category: 'vehicle', model: 'ugv', cost: 450, buildTime: 6, hp: 200, armor: 'light', sight: 7, speed: 2.8, turnRate: 0.2, turret: true, radius: 0.3, weapon: 'mgHeavy', prereq: ['factory'], desc: 'Unmanned armed ground robot.', aiWeight: 2, aiTag: 'scout' },
   heli: { name: 'Attack Helicopter', category: 'air', model: 'heli', cost: 1500, buildTime: 14, hp: 420, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, rotary: true, cruiseAlt: 1.15, weapon: 'heliMissile', prereq: ['airfield'], desc: 'Attack helicopter with anti-tank missiles. Badly damaged, it flies back to its airbase to land and be repaired.', aiWeight: 3, aiTag: 'main' },
   fighter: { name: 'Fighter Jet', category: 'air', model: 'fighter', cost: 2000, buildTime: 18, hp: 380, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.55, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['airfield', 'tech'], desc: 'Strike jet. Takes off from its airbase, drops one heavy bomb on the target, lands, repairs and rearms (10 s), then strikes again until the target is destroyed. 4 jets per airbase.', aiWeight: 2, aiTag: 'main' },
+  // ---- navy (naval.ts): built at the Shipyard, sail the sea; per-nation names and models below
+  patrol: { name: 'Patrol Boat', category: 'naval', model: 'nv_patrol', cost: 700, buildTime: 9, hp: 360, armor: 'light', sight: 8, speed: 3.4, turnRate: 0.1, turret: true, radius: 0.45, naval: 'boat', weapon: 'boatGun', prereq: ['shipyard'], desc: 'Fast patrol boat: autocannon and machine guns. Shreds infantry and boats, hits the shore; weak against armour.', aiWeight: 3, aiTag: 'main' },
+  corvette: { name: 'Missile Corvette', category: 'naval', model: 'nv_corvette', cost: 1800, buildTime: 18, hp: 950, armor: 'heavy', sight: 10, speed: 2.6, turnRate: 0.07, turret: true, radius: 0.7, naval: 'boat', weapon: 'asm', weapon2: 'ciws', prereq: ['shipyard', 'radar'], desc: 'Long-range anti-ship missiles, also against targets ashore; point air defence against aircraft and drones.', aiWeight: 2, aiTag: 'main' },
+  lander: { name: 'Landing Craft', category: 'naval', model: 'nv_lander', cost: 900, buildTime: 10, hp: 620, armor: 'light', sight: 6, speed: 2.8, turnRate: 0.08, turret: false, radius: 0.65, naval: 'landing', cargoSlots: 11, prereq: ['shipyard'], desc: 'Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1) across the sea. Loads at a beach or the Shipyard, beaches to put them ashore. Unarmed.', aiWeight: 0, aiTag: 'support' },
   uav: { name: 'Strike UAV', category: 'air', model: 'uav', cost: 900, buildTime: 10, hp: 180, armor: 'aircraft', sight: 8, speed: 3.0, turnRate: 0.15, turret: false, radius: 0.4, air: true, weapon: 'uavMissile', prereq: ['airfield'], desc: 'Armed drone. Attacks ground targets.', aiWeight: 3, aiTag: 'main' },
 };
 
@@ -314,6 +328,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     robot: { name: 'Vision 60 Robot Dog', model: 'robodog' },
     uav: { name: 'MQ-9 Reaper' },
     himars: { name: 'M142 HIMARS (PrSM)', model: 'tel_himars', category: 'vehicle', cost: 1500, buildTime: 15, hp: 220, armor: 'light', sight: 6, speed: 2.2, turnRate: 0.1, weapon: 'prsm', prereq: ['factory', 'tech'], desc: 'Precision Strike Missile: fast, flat quasi-ballistic shot. 1 intercept kills it.', aiWeight: 1, aiTag: 'arty' },
+    patrol: { name: 'Mk VI Patrol Boat', model: 'nv_usa_patrol' },
+    corvette: { name: 'Littoral Combat Ship (NSM)', model: 'nv_usa_corvette', hp: 1050, speed: 2.9, desc: 'Fast littoral combat ship: Naval Strike Missiles against ships and targets ashore, a 30 mm and RAM point defence against aircraft and drones.' },
+    lander: { name: 'LCAC Hovercraft', model: 'nv_usa_lander', naval: 'hover', speed: 3.6, hp: 560, weapon: 'mgHeavy', desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Two .50 cal guns.' },
     typhon: { name: 'Typhon MRC (Tomahawk)', model: 'tel_typhon', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
@@ -328,6 +345,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'AH-64D Saraf' },
     fighter: { name: 'F-35I Adir', speed: 6.0, lowObservable: 0.6, evasion: 0.3, desc: 'Israeli stealth strike jet, 20% faster: one heavy bomb per sortie, then back to its airbase to repair, rearm and strike again. Stealth: enemy air defences only lock on at 60% of their range. Evasion: decoy flares and jinking make 30% of anti-air shots and missiles miss. 4 jets per airbase.' },
     uav: { name: 'Hermes 450' },
+    patrol: { name: 'Shaldag Mk V Patrol Boat', model: 'nv_israel_patrol', speed: 3.8, hp: 340 },
+    corvette: { name: "Sa'ar 6 Corvette", model: 'nv_israel_corvette', hp: 1050, desc: 'Missile corvette: Gabriel anti-ship missiles against ships and the shore, a 76 mm gun and close-in defence against aircraft and drones.' },
+    lander: { name: 'LCT Landing Craft', model: 'nv_israel_lander' },
     lora: { name: 'LORA Launcher', model: 'tel_lora', category: 'vehicle', cost: 1900, buildTime: 18, hp: 210, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'lora', prereq: ['factory', 'tech'], desc: 'Long-range precision ballistic missile with a manoeuvring warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   china: {
@@ -339,6 +359,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     arty: { name: 'PLZ-05' },
     swarm: { name: 'Swarm Drone Carrier', model: 'swarm', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 8, speed: 2.0, turnRate: 0.1, turret: false, weapon: 'swarmLaunch', prereq: ['factory', 'airfield'], desc: 'Launches coordinated kamikaze drone swarms.', aiWeight: 3, aiTag: 'main' },
     df: { name: 'DF-17 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, turret: false, weapon: 'dfMissile', prereq: ['factory', 'tech'], desc: 'Hypersonic glide vehicle on a ballistic booster. Very hard to intercept - takes 2 hits.', aiWeight: 1, aiTag: 'arty' },
+    patrol: { name: 'Type 037 Patrol Boat', model: 'nv_china_patrol' },
+    corvette: { name: 'Type 022 Houbei Missile Boat', model: 'nv_china_corvette', cost: 1600, hp: 760, speed: 3.2, turnRate: 0.09, desc: 'Wave-piercing catamaran missile boat: fast, YJ-83 anti-ship missiles against ships and the shore, a 30 mm gun against aircraft and drones.' },
+    lander: { name: 'Type 726 LCAC', model: 'nv_china_lander', naval: 'hover', speed: 3.6, hp: 560, weapon: 'mgHeavy', desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Light guns.' },
     heli: { name: 'Z-10' },
     fighter: { name: 'J-20' },
     robot: { name: 'Armed Robot Dog', model: 'robodog' },
@@ -356,6 +379,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Su-35' },
     robot: { name: 'Uran-9 UGV', model: 'ugv', hp: 260, weapon: 'autocannon', speed: 2.3 },
     uav: { name: 'Orion' },
+    patrol: { name: 'Raptor Patrol Boat', model: 'nv_russia_patrol' },
+    corvette: { name: 'Karakurt Missile Corvette', model: 'nv_russia_corvette', hp: 1100, speed: 2.4, desc: 'Missile corvette: Kalibr / Oniks anti-ship missiles against ships and the shore, Pantsir-M close-in defence against aircraft and drones.' },
+    lander: { name: 'Serna Landing Craft', model: 'nv_russia_lander', weapon: 'mgHeavy', speed: 3.0, desc: 'Air-lubricated hull landing craft. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Two heavy machine guns.' },
     iskander: { name: '9K720 Iskander-M', model: 'tel_iskander', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   germany: {
@@ -369,6 +395,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'Eurofighter Typhoon' },
     robot: { name: 'Mission Master UGV', model: 'ugv' },
     uav: { name: 'Heron TP' },
+    patrol: { name: 'Fast Patrol Boat', model: 'nv_germany_patrol' },
+    corvette: { name: 'K130 Braunschweig Corvette', model: 'nv_germany_corvette', desc: 'Missile corvette: RBS-15 anti-ship missiles against ships and the shore, RAM close-in defence against aircraft and drones.' },
+    lander: { name: 'LCM Landing Craft', model: 'nv_germany_lander' },
     taurus: { name: 'Taurus KEPD 350 Launcher', model: 'tel_taurus', category: 'vehicle', cost: 1900, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'taurus', prereq: ['factory', 'tech'], desc: 'Stealthy bunker-busting cruise missile. Terrain-following; defences spot it only at a third of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   korea: {
@@ -381,6 +410,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-15K Slam Eagle' },
     robot: { name: 'Robot Dog', model: 'robodog' },
     uav: { name: 'KUS-FS' },
+    patrol: { name: 'Chamsuri Patrol Boat', model: 'nv_korea_patrol' },
+    corvette: { name: 'Yoon Youngha Missile Boat', model: 'nv_korea_corvette', cost: 1700, hp: 880, speed: 3.0, desc: 'Fast missile boat: SSM-700K anti-ship missiles against ships and the shore, a 40 mm gun against aircraft and drones.' },
+    lander: { name: 'Solgae Hovercraft', model: 'nv_korea_lander', naval: 'hover', speed: 3.6, hp: 560, desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Unarmed.' },
     hyunmoo: { name: 'Hyunmoo-2 TEL', model: 'tel_hyunmoo', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'hyunmoo', prereq: ['factory', 'tech'], desc: 'Precision ballistic missile with a heavy warhead. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   ukraine: {
@@ -395,6 +427,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'THeMIS UGV', model: 'ugv' },
     uav: { name: 'Bayraktar TB2' },
+    patrol: { name: 'Magura Drone Boat', model: 'nv_ukraine_patrol', cost: 450, buildTime: 6, hp: 220, speed: 4.2, radius: 0.35, weapon: 'mgHeavy', desc: 'Unmanned surface vessel: cheap, fast and low in the water, armed with a remote machine gun. Swarm enemy boats and raid the coast.', aiWeight: 4 },
+    corvette: { name: 'Hetman Ivan Mazepa Corvette', model: 'nv_ukraine_corvette', desc: 'Missile corvette: Neptune and Harpoon anti-ship missiles against ships and the shore, a 35 mm close-in gun against aircraft and drones.' },
+    lander: { name: 'Centaur Assault Boat', model: 'nv_ukraine_lander', speed: 3.2, hp: 540, weapon: 'mgHeavy', desc: 'Fast assault landing boat. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). A heavy machine gun.' },
     neptune: { name: 'R-360 Neptune Launcher', model: 'tel_neptune', category: 'vehicle', cost: 1600, buildTime: 16, hp: 200, armor: 'light', sight: 6, speed: 1.8, turnRate: 0.08, weapon: 'neptune', prereq: ['factory', 'tech'], desc: 'Sea-skimming cruise missile. Hugs the ground; defences spot it only at half range.', aiWeight: 1, aiTag: 'arty' },
   },
   turkey: {
@@ -408,6 +443,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     heli: { name: 'T129 ATAK' },
     fighter: { name: 'F-16 Fighting Falcon' },
     robot: { name: 'Barkan UGV', model: 'ugv' },
+    patrol: { name: 'ULAQ Armed USV', model: 'nv_turkey_patrol', cost: 550, hp: 280, speed: 3.9, radius: 0.38, desc: 'Armed unmanned surface vessel: fast, a remote autocannon. Strong against infantry and boats, weak against armour.' },
+    corvette: { name: 'Kilic Fast Attack Craft', model: 'nv_turkey_corvette', hp: 900, speed: 2.9, desc: 'Fast missile craft: Atmaca anti-ship missiles against ships and the shore, a 40 mm gun against aircraft and drones.' },
+    lander: { name: 'C-151 Landing Craft', model: 'nv_turkey_lander' },
     tayfun: { name: 'Tayfun TEL', model: 'tel_tayfun', category: 'vehicle', cost: 1900, buildTime: 18, hp: 220, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'tayfun', prereq: ['factory', 'tech'], desc: 'Fast quasi-ballistic missile. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   iran: {
@@ -421,6 +459,9 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     shahedl: { name: 'Shahed-136 Launcher', model: 'container', category: 'vehicle', cost: 1100, buildTime: 12, hp: 220, armor: 'light', sight: 6, speed: 1.9, turnRate: 0.1, turret: false, weapon: 'shahedLaunch', prereq: ['factory', 'airfield'], desc: 'Container launcher for long-range loitering munitions.', aiWeight: 3, aiTag: 'arty' },
     fateh: { name: 'Fateh-110 Launcher', model: 'missile_truck', category: 'vehicle', cost: 1300, buildTime: 15, hp: 200, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, turret: false, weapon: 'fateh', prereq: ['factory', 'tech'], desc: 'Road-mobile ballistic missile.', aiWeight: 1, aiTag: 'arty' },
     khorramshahr: { name: 'Khorramshahr-4 TEL', model: 'tel_khorramshahr', category: 'vehicle', cost: 2600, buildTime: 26, hp: 260, armor: 'light', sight: 6, speed: 1.4, turnRate: 0.07, turret: false, weapon: 'khorramshahr', prereq: ['factory', 'tech'], desc: 'Heavy MRBM with a huge warhead. Slow to reload; it takes 3 successful intercepts to bring one down.', aiWeight: 1, aiTag: 'arty' },
+    patrol: { name: 'Zolfaghar Fast Attack Boat', model: 'nv_iran_patrol', cost: 450, buildTime: 6, hp: 230, speed: 4.2, radius: 0.38, desc: 'Swarm fast attack boat: cheap and very fast, a 23 mm gun and machine guns. Strong in numbers against infantry and boats; weak against armour.', aiWeight: 5 },
+    corvette: { name: 'Sina Missile Boat', model: 'nv_iran_corvette', hp: 820, speed: 2.8, desc: 'Fast missile boat: Noor anti-ship missiles against ships and the shore, a 40 mm gun against aircraft and drones.' },
+    lander: { name: 'Tondar Hovercraft', model: 'nv_iran_lander', naval: 'hover', speed: 3.5, hp: 520, weapon: 'mgHeavy', desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). A machine gun.' },
     heli: { name: 'AH-1J Cobra', hp: 360 },
     fighter: { remove: true },
     robot: { name: 'Armed UGV', model: 'ugv' },

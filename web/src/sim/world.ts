@@ -1,6 +1,7 @@
 import { DEFS, FACTION_INFO, VERSUS, WEAPONS, buildingDef, factionDefByRole, factionUnit, munitionDef, unitDef } from './defs';
 import {
   ORE_MAX,
+  Tile,
   standHeight,
   terrainBuildable,
   tileOpen,
@@ -12,7 +13,8 @@ import { createMap } from './maps';
 import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
-import { LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
+import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
+import { SHIP_BUILD_RADIUS, arriveLanding, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
 import { fireSuperweapon, newSuperweaponState, updateSuperweapons } from './superweapons';
@@ -160,6 +162,15 @@ export class World {
   pfs: PathFinder[];
   /** Steps too steep per locomotion class, climbing costs (slope.ts; built once per map). */
   slope: SlopeField;
+  /**
+   * Passability per locomotion class (slope.ts Loco): the two ground classes share `pass`; the water classes
+   * (naval.ts) have their own, built from the map's water and kept up to date as structures come and go.
+   */
+  passes: Uint8Array[];
+  /** The map's water: per water class the tiles it may use with no structure on them, the open sea (naval.ts). */
+  naval: NavalTerrain;
+  /** Footprints (top-left tile indices) where a Shipyard could stand terrain-wise; empty on a map with no sea coast. */
+  shipSpots: number[];
   occ: Int32Array;
   pf: PathFinder;
   controllers: Controller[] = [];
@@ -221,6 +232,26 @@ export class World {
       this.mainlands.push(this.regions[c][s0.y * w + s0.x]);
       this.pfs.push(new PathFinder(w, h, this.pass, this.slope.block[c], this.slope.climb));
     }
+    // the water classes (naval.ts): no slope rule; their "mainland" is their largest body of water
+    this.naval = navalTerrain(this.map);
+    this.passes = [this.pass, this.pass];
+    for (let c = LOCO_COUNT; c < LOCO_ALL; c++) {
+      const pass = this.naval.base[c - LOCO_COUNT].slice();
+      this.passes.push(pass);
+      const reg = groundRegions(w, h, pass);
+      this.regions.push(reg);
+      const size = new Map<number, number>();
+      let big = 0;
+      for (let i = 0; i < w * h; i++) {
+        if (!reg[i]) continue;
+        const n = (size.get(reg[i]) ?? 0) + 1;
+        size.set(reg[i], n);
+        if (n > (size.get(big) ?? 0)) big = reg[i];
+      }
+      this.mainlands.push(big);
+      this.pfs.push(new PathFinder(w, h, pass, null, null, 24000));
+    }
+    this.shipSpots = this.naval.seaTiles ? shipSpots(this.map, this.naval.sea) : [];
     this.region = this.regions[Loco.Vehicle];
     this.mainland = this.mainlands[Loco.Vehicle];
     this.pf = this.pfs[Loco.Vehicle];
@@ -239,8 +270,8 @@ export class World {
         credits: opts.credits ?? 10000,
         powerOut: 0,
         powerUse: 0,
-        queues: { building: [], defense: [], infantry: [], vehicle: [], air: [] },
-        ready: { building: null, defense: null, infantry: null, vehicle: null, air: null },
+        queues: { building: [], defense: [], infantry: [], vehicle: [], air: [], naval: [] },
+        ready: { building: null, defense: null, infantry: null, vehicle: null, air: null, naval: null },
         explored: new Uint8Array(w * h),
         visible: new Uint8Array(w * h),
         airVisible: new Uint8Array(w * h),
@@ -315,6 +346,8 @@ export class World {
     const p = this.players[player];
     const d = DEFS[defId];
     if (!d || !d.buildable || d.faction !== p.faction) return false;
+    // the navy only where there is sea to sail (naval.ts)
+    if ((d.category === 'naval' || (d.kind === 'building' && d.shipyard)) && !this.hasSea) return false;
     if (d.category === 'building' || d.category === 'defense') {
       if (!this.hasRole(player, 'conyard')) return false;
     }
@@ -444,6 +477,8 @@ export class World {
     e.turret = Math.PI * 0.75;
     e.pturret = e.turret;
     e.buildAnim = instant ? 1 : 0;
+    // a Shipyard's slipway faces the water (naval.ts)
+    if (d.shipyard) e.slip = this.shipSite(defId, tx, ty).dir;
     // the north base's exits / docks face north, the mirror of the south base's (turn.ts)
     if (owner >= 0 && this.players[owner] && turnable(defId) && northStart(this.players[owner].startY, this.map.h)) e.flip = true;
     this.add(e);
@@ -467,6 +502,8 @@ export class World {
         const through = d.passable?.some(([px, py]) => px === lx && py === ly);
         this.occ[i] = on ? b.id : 0;
         this.pass[i] = on && !through ? 0 : terrainPassable(this.map, b.tx + x, b.ty + y) ? 1 : 0;
+        // (the water classes: a structure on the shore or in the sea - the Shipyard - blocks them too)
+        for (let c = LOCO_COUNT; c < LOCO_ALL; c++) this.passes[c][i] = on && !through ? 0 : this.naval.base[c - LOCO_COUNT][i];
       }
     }
     this.clearPaths();
@@ -477,9 +514,19 @@ export class World {
     for (const pf of this.pfs) pf.clearCache();
   }
 
-  /** Locomotion class of a unit (slope.ts; -1 for aircraft). */
+  /** Locomotion class of a unit (slope.ts; -1 for aircraft, the water classes for naval units). */
   locoOf(e: Entity): number {
     return locoOf(unitDef(e.def));
+  }
+
+  /** Locomotion class of a unit type. */
+  locoOfDef(d: UnitDef): number {
+    return locoOf(d);
+  }
+
+  /** Does this map have open sea a Shipyard can stand by (naval.ts)? Without it the navy is not on offer. */
+  get hasSea(): boolean {
+    return this.shipSpots.length > 0;
   }
 
   /**
@@ -495,6 +542,12 @@ export class World {
     const dy = Math.floor(b / w) - Math.floor(a / w);
     const k = dirOf(dx, dy);
     if (k < 0) return false;
+    if (c >= LOCO_COUNT) {
+      // water classes: no slopes; a diagonal passes a corner only past one open tile beside it
+      if (k < 4) return true;
+      const pc = this.passes[c];
+      return pc[a + dx] === 1 || pc[a + dy * w] === 1;
+    }
     const bl = this.slope.block[c];
     if (k < 4) return !(bl[a] & (1 << k));
     // (a diagonal is never off the map's edge here: b is on the map, so both corner tiles are)
@@ -544,7 +597,7 @@ export class World {
       }
       if (tx < 0 || ty < 0 || tx >= w || ty >= h) return false;
       const b = ty * w + tx;
-      if (!this.pass[b] || !this.stepOk(a, b, c)) return false;
+      if (!this.passes[c < 0 ? Loco.Vehicle : c][b] || !this.stepOk(a, b, c)) return false;
     }
     return true;
   }
@@ -676,9 +729,10 @@ export class World {
     const tx = Math.floor(x);
     const ty = Math.floor(y);
     const reg = this.regions[loco < 0 ? Loco.Vehicle : loco];
+    const pf = this.pfs[loco < 0 ? Loco.Vehicle : loco];
     for (const [ox, oy] of SPIRAL) {
       if (Math.abs(ox) > maxR || Math.abs(oy) > maxR) continue;
-      if (this.pf.passable(tx + ox, ty + oy) && (!region || reg[(ty + oy) * this.map.w + tx + ox] === region)) return [tx + ox, ty + oy];
+      if (pf.passable(tx + ox, ty + oy) && (!region || reg[(ty + oy) * this.map.w + tx + ox] === region)) return [tx + ox, ty + oy];
     }
     return null;
   }
@@ -722,12 +776,35 @@ export class World {
     }
   }
 
+  /** The coast rule of a Shipyard footprint here, with the structures standing now (naval.ts). */
+  shipSite(defId: string, tx: number, ty: number): ShipSite {
+    const d = buildingDef(defId);
+    return shipSite(this.map, this.naval.sea, tx, ty, (i) => this.occ[i] === 0, d.w, d.h);
+  }
+
+  /** Why a structure can't go here (the HUD's placement tooltip), '' when it can or there is nothing to explain. */
+  placeWhy(player: number, defId: string, tx: number, ty: number): string {
+    if (this.canPlace(player, defId, tx, ty)) return '';
+    const d = buildingDef(defId);
+    if (d.shipyard) {
+      const s = this.shipSite(defId, tx, ty);
+      if (!s.ok) return s.reason;
+      if (this.canPlace(player, defId, tx, ty, -1, false)) return `Too far from your base (within ${SHIP_BUILD_RADIUS} tiles)`;
+      return 'Enemy units in the way';
+    }
+    return '';
+  }
+
   canPlace(player: number, defId: string, tx: number, ty: number, ignoreId = -1, checkRadius = true): boolean {
     const d = buildingDef(defId);
     const { w, h } = this.map;
     if (tx < 0 || ty < 0 || tx + d.w > w || ty + d.h > h) return false;
+    if (d.shipyard) {
+      // half in the sea, half on the shore (naval.ts)
+      if (!this.shipSite(defId, tx, ty).ok) return false;
+    }
     // open, gentle ground off the bridge heads (map.ts), not taken by another building
-    if (!terrainBuildable(this.map, tx, ty, d.w, d.h)) return false;
+    else if (!terrainBuildable(this.map, tx, ty, d.w, d.h)) return false;
     for (let y = ty; y < ty + d.h; y++) for (let x = tx; x < tx + d.w; x++) if (this.occ[y * w + x] !== 0) return false;
     // enemy units block placement
     let blocked = false;
@@ -742,7 +819,7 @@ export class World {
       const bd = buildingDef(b.def);
       const gx = Math.max(0, tx - (b.tx + bd.w), b.tx - (tx + d.w));
       const gy = Math.max(0, ty - (b.ty + bd.h), b.ty - (ty + d.h));
-      if (Math.max(gx, gy) <= BUILD_RADIUS) return true;
+      if (Math.max(gx, gy) <= (d.shipyard ? SHIP_BUILD_RADIUS : BUILD_RADIUS)) return true;
     }
     return false;
   }
@@ -753,8 +830,8 @@ export class World {
     for (const e of this.list) {
       if (e.dead || e.kind !== 'unit' || this.isAir(e)) continue;
       if (e.x >= b.tx && e.x < b.tx + d.w && e.y >= b.ty && e.y < b.ty + d.h) {
-        if (this.pass[this.tileOf(e.x, e.y)]) continue;
         const lc = this.locoOf(e);
+        if (this.passes[lc < 0 ? Loco.Vehicle : lc][this.tileOf(e.x, e.y)]) continue;
         const p = this.nearestPassable(e.x, e.y, 12, this.regionOf(e.x, e.y, lc), lc);
         if (p) {
           e.x = e.px = p[0] + 0.5;
@@ -796,6 +873,11 @@ export class World {
       case 'move': {
         const units = own(cmd.ids);
         this.formationMove(units, cmd.x, cmd.y, !!cmd.attackMove);
+        // a loaded landing craft sent onto land: it beaches as near as it can and puts its cargo ashore (naval.ts)
+        const tx = Math.floor(cmd.x);
+        const ty = Math.floor(cmd.y);
+        const onLand = tx >= 0 && ty >= 0 && tx < this.map.w && ty < this.map.h && this.map.tiles[ty * this.map.w + tx] !== Tile.Water;
+        for (const e of units) if (isCarrier(e)) e.landing = onLand && e.passengers.length ? { x: cmd.x, y: cmd.y } : null;
         break;
       }
       case 'attack': {
@@ -838,6 +920,7 @@ export class World {
       case 'deploy':
         for (const e of own(cmd.ids)) {
           if (unitDef(e.def).mcv) this.tryDeploy(e);
+          else if (isCarrier(e)) orderUnload(this, e); // landing craft: put ashore (naval.ts)
           else if (e.passengers.length) this.unload(e);
         }
         break;
@@ -846,6 +929,16 @@ export class World {
         if (t && t.kind === 'building') {
           // garrison a civilian building (garrison.ts)
           if (garrisonRoom(this, t, pid) > 0) for (const e of own(cmd.ids)) if (canGarrisonUnit(e.def)) e.order = { type: 'enter', target: t.id };
+          break;
+        }
+        if (t && t.owner === pid && isCarrier(t)) {
+          // board a landing craft (naval.ts): soldiers and vehicles; an idle craft comes to the beach nearest them
+          const boarders = own(cmd.ids).filter((e) => cargoSize(e.def) > 0);
+          for (const e of boarders) {
+            e.order = { type: 'enter', target: t.id };
+            e.path = null;
+          }
+          callCraft(this, t, boarders);
           break;
         }
         if (!t || t.owner !== pid || !unitDef(t.def).transport) break;
@@ -1151,10 +1244,11 @@ export class World {
       const lc = locoOf(d);
       const home = air ? 0 : this.regionOf(e.x, e.y, lc);
       const reg = this.regions[lc < 0 ? Loco.Vehicle : lc];
+      const pf = this.pfs[lc < 0 ? Loco.Vehicle : lc];
       for (const [ox, oy] of SPIRAL) {
         const cx = gx + ox;
         const cy = gy + oy;
-        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !this.pf.passable(cx, cy) || reg[cy * w + cx] !== home) continue;
+        if (air ? cx < 0 || cy < 0 || cx >= w || cy >= this.map.h : !pf.passable(cx, cy) || reg[cy * w + cx] !== home) continue;
         const i = cy * w + cx + (air ? 1e6 : 0);
         const used = taken.get(i) ?? 0;
         // infantry and vehicles don't share tiles
@@ -1304,7 +1398,7 @@ export class World {
       const t = e.path[e.pathIdx];
       wx = (t % w) + 0.5;
       wy = Math.floor(t / w) + 0.5;
-      if (!this.pass[t]) {
+      if (!this.passes[this.locoOf(e)][t]) {
         // something was built on our path
         this.pathTo(e, e.slotX, e.slotY);
         return false;
@@ -1346,7 +1440,10 @@ export class World {
     const ny = dist <= step ? wy : e.y + (dy / dist) * step;
     const ct = this.tileOf(e.x, e.y);
     const nt = this.tileOf(nx, ny);
-    if (nt !== ct && this.pass[ct] && !this.stepOk(ct, nt, this.locoOf(e))) {
+    const lc0 = this.locoOf(e);
+    // (a naval unit never leaves its water: a leg off the planned tiles that would cut over a reef or a spit of land
+    // is blocked like a step too steep; naval.ts)
+    if (nt !== ct && this.passes[lc0][ct] && (!this.stepOk(ct, nt, lc0) || (lc0 >= LOCO_COUNT && !this.passes[lc0][nt]))) {
       // the straight leg from where we actually stand (off the tile centres the path was planned through: shoved by
       // the crowd, a dodge, a start off-centre) crosses a step too steep for us (a ramp's edge, a canyon wall's
       // foot): first back to our tile's centre, and if the leg is still blocked from there, plan again from it
@@ -1421,7 +1518,8 @@ export class World {
       this.queryRadius(e.x, e.y, 1.2, (o) => {
         if (o === e || o.kind !== 'unit' || o.id < e.id || o.para || (o.sortie && o.z < 1) || (o.heli && o.z < 1)) return;
         const od = unitDef(o.def);
-        if (!!od.air !== !!d.air || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
+        // (boats and land units are on different layers: a boat by the shore, a tank on the beach, naval.ts)
+        if (!!od.air !== !!d.air || !!od.naval !== !!d.naval || od.kamikaze || d.kamikaze || od.supply || od.airlift) return;
         // heavy vehicles and infantry: enemies go under the tracks, the rest are shoved aside (crush.ts)
         if ((d.crusher && od.crushable) || (od.crusher && d.crushable)) {
           if (crushContact(this, e, d, o, od)) return;
@@ -1471,8 +1569,9 @@ export class World {
       }
       return;
     }
-    // (never shoved off the map, onto a blocked tile, or up / down a step too steep for it)
-    if (nx > 0 && ny > 0 && nx < this.map.w && ny < this.map.h && this.pass[this.tileOf(nx, ny)] && this.stepOk(this.tileOf(e.x, e.y), this.tileOf(nx, ny), this.locoOf(e))) {
+    // (never shoved off the map, onto a blocked tile - a boat onto land -, or up / down a step too steep for it)
+    const lc = this.locoOf(e);
+    if (nx > 0 && ny > 0 && nx < this.map.w && ny < this.map.h && this.passes[lc < 0 ? Loco.Vehicle : lc][this.tileOf(nx, ny)] && this.stepOk(this.tileOf(e.x, e.y), this.tileOf(nx, ny), lc)) {
       e.x = nx;
       e.y = ny;
     }
@@ -1842,6 +1941,7 @@ export class World {
           e.order = { type: 'idle' };
           e.guardX = e.x;
           e.guardY = e.y;
+          if (e.landing) arriveLanding(this, e); // a landing craft at the beach (naval.ts)
         }
         // soldiers on the march shoot at what comes into range without stopping
         else if (d.category === 'infantry' && d.weapon && !jammed && autoFire(e)) this.fireOnTheMove(e, d);
@@ -1938,6 +2038,17 @@ export class World {
         break;
       case 'enter': {
         const t = this.get(o.target);
+        if (t && isCarrier(t)) {
+          // boarding a landing craft (naval.ts)
+          if (!stepEmbark(this, e, t)) {
+            e.order = { type: 'idle' };
+            e.path = null;
+            e.moving = false;
+            e.guardX = e.x;
+            e.guardY = e.y;
+          }
+          break;
+        }
         const cap = t && t.kind === 'unit' ? (unitDef(t.def).transport ?? 0) : 0;
         const house = !!t && t.kind === 'building'; // garrisoning a civilian building (garrison.ts)
         if (!t || t.dead || (house ? !isGarrison(t) || (t.owner >= 0 && t.owner !== e.owner) : t.owner !== e.owner || cap <= 0)) {
@@ -2070,7 +2181,8 @@ export class World {
     if (e.cooldown2 > 0) e.cooldown2--;
     this.processBurst(e);
     aimUpkeep(this, e); // sniper lock-on (sniper.ts)
-    if (!d.weapon || d.engineer) return;
+    // (aboard a landing craft nobody fires: the cargo rides below the bulwarks, naval.ts)
+    if (!d.weapon || d.engineer || isCarrier(apc)) return;
     let t = this.airPreempt(e, this.foe(e.targetId));
     const tw = t ? this.weaponVs(e.def, t) : null;
     if (t && (!tw || !this.isEnemy(e.owner, t.owner) || this.distTo(e, t) > rangeVs(this, e, tw, t))) t = undefined;
@@ -2369,6 +2481,10 @@ export class World {
   }
 
   private deliverUnit(p: Player, d: UnitDef) {
+    if (d.naval) {
+      deliverNaval(this, p.id, d); // out of the Shipyard's slipway (naval.ts)
+      return;
+    }
     let factory: Entity | null = null;
     for (const e of this.list) {
       if (e.dead || e.owner !== p.id || e.kind !== 'building') continue;
@@ -2558,6 +2674,7 @@ export class World {
       else this.updateBuilding(e);
     }
     stepProjectiles(this);
+    updateNaval(this); // dockside repair (naval.ts)
     updateGarrisons(this); // garrison.ts
     updateBridges(this, ev0);
     this.updateAuras();

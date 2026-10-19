@@ -101,7 +101,7 @@ export function formationSlots(w: World, units: Entity[], x: number, y: number):
     for (const [ox, oy] of SPIRAL) {
       const cx = gx + ox;
       const cy = gy + oy;
-      if (air ? cx < 0 || cy < 0 || cx >= mw || cy >= mh : !w.pf.passable(cx, cy) || reg[cy * mw + cx] !== home) continue;
+      if (air ? cx < 0 || cy < 0 || cx >= mw || cy >= mh : !w.pfs[lc].passable(cx, cy) || reg[cy * mw + cx] !== home) continue;
       const i = cy * mw + cx + (air ? 1e6 : 0);
       const used = taken.get(i) ?? 0;
       if (used >= 100 || (used > 0 && cap === 1) || (cap === 3 && used >= 3)) continue;
@@ -196,7 +196,7 @@ export function applyOrderCommand(w: World, pid: number, cmd: Command, own: (ids
     }
     case 'repeat': {
       const p = w.players[pid];
-      if (cmd.cat !== 'infantry' && cmd.cat !== 'vehicle' && cmd.cat !== 'air') return true;
+      if (cmd.cat !== 'infantry' && cmd.cat !== 'vehicle' && cmd.cat !== 'air' && cmd.cat !== 'naval') return true;
       p.repeat = { ...p.repeat, [cmd.cat]: !!cmd.on };
       return true;
     }
