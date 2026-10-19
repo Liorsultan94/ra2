@@ -479,8 +479,10 @@ const CANAL_LAKES: [number, number, number, number][] = [
 const START0: [number, number] = [-68, 100];
 /** Ore fields (E, S, radius, kind 1 ore / 2 gems), player 0's half. */
 const SINAI_ORE: [number, number, number, number][] = [
-  [-55, 113, 3.6, 1],
-  [-63, 82, 3.2, 1],
+  // (the home fields lie due east and due west of the base on screen: a refinery's dock faces +y on player 0's side and
+  // -y on player 1's, turn.ts, which mirror each other across the diagonal only for fields in these two directions)
+  [-51, 100.5, 3.6, 1],
+  [-86, 103, 3.2, 1],
   [-62, 141, 3.0, 1],
   [-45, 62, 2.8, 1],
   [-20, 69, 2.5, 2],
@@ -1000,7 +1002,7 @@ export function createDesertMap(seed: number): GameMap {
     structures,
     blocked,
     techSites: [
-      { def: 'tech_hospital', at: tech([[-48, 97], [-52, 101], [-44, 101], [-54, 89]]) },
+      { def: 'tech_hospital', at: tech([[-56, 89], [-44, 104], [-60, 112], [-52, 84]]) },
       { def: 'tech_comms', at: tech([[-22, 80], [-26, 76], [-18, 92], [-28, 90]]) },
       { def: 'tech_airport', at: tech([[-74, 124], [-78, 118], [-70, 130], [-82, 112]]) },
       { def: 'tech_hospital', at: tech([[-16, 158], [-20, 154], [-12, 160], [-18, 162]]) },
