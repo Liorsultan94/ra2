@@ -156,6 +156,7 @@ const FRAG = /* glsl */ `
   uniform sampler2D heightTex;
   uniform vec2 heightSize;
   uniform float heightOn;
+  uniform vec3 uDust;
   varying vec3 vN;
   varying vec3 vObj;
   varying vec3 vWorld;
@@ -163,13 +164,14 @@ const FRAG = /* glsl */ `
   varying vec4 vC;
   varying float vLump;
   varying vec3 vSph;
-  // white-hot -> yellow -> peach -> orange -> deep red (linear HDR, blooms)
+  // yellow-hot -> orange -> deep red (linear HDR, blooms softly): a saturated orange fireball, only its very
+  // core near white for an instant (the owner finds white glare dazzling)
   vec3 ramp( float t ) {
     vec3 c = vec3( 0.3, 0.03, 0.005 ) * smoothstep( 0.08, 0.3, t );
-    c = mix( c, vec3( 1.0, 0.26, 0.04 ) * 1.5, smoothstep( 0.25, 0.5, t ) );
-    c = mix( c, vec3( 1.0, 0.46, 0.26 ) * 2.1, smoothstep( 0.45, 0.72, t ) );
-    c = mix( c, vec3( 1.0, 0.72, 0.36 ) * 2.9, smoothstep( 0.7, 0.95, t ) );
-    c = mix( c, vec3( 1.0, 0.93, 0.8 ) * 4.5, smoothstep( 0.98, 1.35, t ) );
+    c = mix( c, vec3( 1.0, 0.24, 0.035 ) * 1.5, smoothstep( 0.25, 0.5, t ) );
+    c = mix( c, vec3( 1.0, 0.38, 0.1 ) * 1.85, smoothstep( 0.45, 0.72, t ) );
+    c = mix( c, vec3( 1.0, 0.54, 0.16 ) * 2.2, smoothstep( 0.7, 0.95, t ) );
+    c = mix( c, vec3( 1.0, 0.72, 0.38 ) * 2.7, smoothstep( 0.98, 1.35, t ) );
     return c;
   }
   void main() {
@@ -178,7 +180,9 @@ const FRAG = /* glsl */ `
     // fine per-pixel lumps on top of the vertex billows
     float fine = fbNoise( vObj * 5.3 + vec3( vB.y, -vC.x * 1.4, vB.y ) );
     float fine2 = fbNoise( vObj * 11.0 + vec3( vB.y * 1.3, -vC.x * 2.0, 0.0 ) );
-    N = normalize( N + ( vObj * ( fine - 0.5 ) + vec3( fine2 - 0.5, 0.0, 0.5 - fine2 ) ) * 0.35 );
+    // (cooled smoke is soft: fewer fine lumps and a gentler terminator than the boiling fireball, or it reads as rock)
+    float coldN = smoothstep( 0.3, 0.0, vB.x );
+    N = normalize( N + ( vObj * ( fine - 0.5 ) + vec3( fine2 - 0.5, 0.0, 0.5 - fine2 ) ) * mix( 0.35, 0.14, coldN ) );
     // silhouette / optical depth from the smooth puff shape, lighting from the lumpy one
     float facing = clamp( dot( normalize( vSph ), V ), 0.0, 1.0 );
     float temp0 = vB.x;
@@ -191,7 +195,7 @@ const FRAG = /* glsl */ `
     // smoke: dark sooty albedo lit by sun (wrapped), sky and the fire still glowing inside / below
     float wrap = clamp( dot( N, uSunDir ) * 0.5 + 0.5, 0.0, 1.0 );
     float ambL = dot( uAmbCol, vec3( 0.3, 0.59, 0.11 ) );
-    vec3 light = uSunCol * wrap * wrap * 1.25 + mix( vec3( ambL ), uAmbCol, 0.35 ) * ( 0.6 + 0.35 * N.y );
+    vec3 light = uSunCol * mix( wrap * wrap, wrap * 0.8 + 0.08, coldN ) * 1.25 + mix( vec3( ambL ), uAmbCol, 0.35 ) * ( 0.6 + 0.35 * N.y );
     vec3 warm = vec3( 0.0 );
     for ( int i = 0; i < 4; i++ ) {
       vec3 d = vWorld - uFireP[i].xyz;
@@ -202,15 +206,15 @@ const FRAG = /* glsl */ `
     // inner glow bleeding through thin smoke (peach-lit billows)
     vec3 inner = ramp( temp0 * 0.62 ) * 0.22 * ( 1.0 - facing * 0.5 );
     vec3 albedo = vec3( vC.y ) * mix( 0.7, 1.2, fine ) * vec3( 1.0, 0.9, 0.8 );
+    float gh = heightOn > 0.5 ? texture2D( heightTex, ( vWorld.xz + 0.5 ) / heightSize ).r : -1e3;
+    // low down the cooled cloud is mostly the dust the blast threw up: in the ground's colour (sand in the desert)
+    albedo *= mix( vec3( 1.0 ), uDust, smoothstep( 2.4, 0.2, vWorld.y - gh ) );
     vec3 col = mix( albedo * light + inner, emit, hotMask );
-    float a = smoothstep( 0.0, 0.32, facing ) * vB.z;
-    // cool smoke thins out unevenly
+    // cool smoke thins out unevenly, with a soft, ragged edge instead of a hard rim
     float cold = smoothstep( 0.3, 0.0, temp0 );
+    float a = smoothstep( 0.0, mix( 0.32, 0.62, cold ), facing ) * vB.z;
     a *= mix( 1.0, smoothstep( 0.15, 0.75, fine + facing * 0.35 ), cold * 0.85 );
-    if ( heightOn > 0.5 ) {
-      float gh = texture2D( heightTex, ( vWorld.xz + 0.5 ) / heightSize ).r;
-      a *= smoothstep( -0.05, 0.25, vWorld.y - gh );
-    }
+    if ( heightOn > 0.5 ) a *= smoothstep( -0.05, 0.25, vWorld.y - gh );
     if ( a < 0.004 ) discard;
     gl_FragColor = vec4( col * a, a );
   }
@@ -271,6 +275,8 @@ export class Fireballs {
   /** Global wind (tiles / s), shared with the particles. */
   wind = { x: 0, z: 0 };
   lights: FxLights | null = null;
+  /** Albedo multipliers of the dust low in a cooled cloud (1 = grey smoke; the desert's sand: effects.ts). */
+  readonly dust = { value: new THREE.Vector3(1, 1, 1) };
 
   constructor(
     group: THREE.Group,
@@ -312,6 +318,7 @@ export class Fireballs {
         heightTex: p?.heightTex ?? { value: null },
         heightSize: p?.heightSize ?? { value: new THREE.Vector2(1, 1) },
         heightOn: p?.heightOn ?? { value: 0 },
+        uDust: this.dust,
         ...fog.uniforms,
       },
       vertexShader: VERT,

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FogOfWar } from './fog';
+import { HULK_ALBEDO_GLSL, HULK_EMBER_GLSL } from './hulkkit';
 
 /*
  * Battle-scar meshes (render only), each kind ONE BatchedMesh draw call:
@@ -252,19 +253,23 @@ export interface Hulk {
   sink: number;
   /** Rust level 0..1 written to the instance colour (updated in steps). */
   rust: number;
+  /** Ember heat 0..1 (instance colour b, updated in steps): the smouldering Blender hulks cool down. */
+  heat: number;
+  /** Heat at `born` and the seconds it takes to cool off completely. */
+  heat0: number;
+  cool: number;
 }
 
-/** Charred steel turning to rust (vertex colour r = rust mask x instance level, g = shade). */
+/**
+ * Charred steel turning to rust (vertex colour r = rust mask x instance level, g = shade) and the embers of a
+ * smouldering Blender hulk (b = ember mask x instance heat): hulkkit.ts HULK_ALBEDO_GLSL / HULK_EMBER_GLSL.
+ */
 const HULK_COLOR = /* glsl */ `
   #if defined( USE_COLOR ) || defined( USE_COLOR_ALPHA )
-  {
-    float scN = texture2D( fogNoise, vFogP.xz * 1.9 + vFogP.y * 0.8 ).r;
-    float scN2 = texture2D( fogNoise, vFogP.xz * 6.3 - vFogP.y * 2.1 ).g;
-    float scRust = smoothstep( 0.32, 0.72, vColor.r + ( scN - 0.5 ) * 0.7 + ( scN2 - 0.5 ) * 0.25 );
-    vec3 scChar = vec3( 0.03, 0.027, 0.024 ) * ( 0.75 + 0.6 * scN2 );
-    vec3 scRustC = mix( vec3( 0.13, 0.042, 0.014 ), vec3( 0.075, 0.03, 0.012 ), scN );
-    diffuseColor.rgb = mix( scChar, scRustC, scRust ) * vColor.g;
-  }
+  vec3 hv = vColor.rgb;
+  ${HULK_ALBEDO_GLSL}
+  #else
+  vec3 hv = vec3( 0.0, 1.0, 0.0 );
   #endif
 `;
 
@@ -281,7 +286,9 @@ export class ScarHulks {
   constructor(fog: FogOfWar, quality: 'low' | 'medium' | 'high') {
     this.maxHulks = quality === 'low' ? 6 : quality === 'medium' ? 14 : 28;
     this.maxVerts = quality === 'low' ? 40000 : quality === 'medium' ? 110000 : 240000;
-    const mat = batchFog(fog, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.2 }), 'hulks', (s) => s.replace('#include <color_fragment>', HULK_COLOR));
+    const mat = batchFog(fog, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.2 }), 'hulks', (s) =>
+      s.replace('#include <color_fragment>', HULK_COLOR).replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${HULK_EMBER_GLSL}`),
+    );
     // still warm from the fire: only a dusting of the winter's snow settles on them (wxuniforms.ts WX_SNOW_K)
     mat.defines = { ...(mat.defines ?? {}), WX_SNOW_K: '0.3' };
     this.mesh = new THREE.BatchedMesh(this.maxHulks, this.maxVerts, this.maxVerts * 2, mat);
@@ -303,7 +310,7 @@ export class ScarHulks {
    * Merge the visible meshes under root (world space) into one hulk. Returns null when the model
    * is too big for the budget (the caller keeps the old sink-away behaviour).
    */
-  adopt(roots: THREE.Object3D[], x: number, y: number, z: number, size: number, time: number, onEvict: (h: Hulk) => void): Hulk | null {
+  adopt(roots: THREE.Object3D[], x: number, y: number, z: number, size: number, time: number, onEvict: (h: Hulk) => void, heat = 0, cool = 1): Hulk | null {
     const parts: { g: THREE.BufferGeometry; m: THREE.Matrix4 }[] = [];
     let nv = 0;
     let ni = 0;
@@ -341,6 +348,8 @@ export class ScarHulks {
       _nm.getNormalMatrix(m);
       const shade = 0.75 + Math.random() * 0.35;
       const rustBias = Math.random() * 0.35;
+      // a Blender hulk (hulkkit.ts) brings its baked occlusion, rust / ash and ember masks
+      const hk = g.getAttribute('aHulk');
       for (let i = 0; i < pos.count; i++) {
         _v.fromBufferAttribute(pos, i).applyMatrix4(m);
         P[(vo + i) * 3] = _v.x;
@@ -353,17 +362,25 @@ export class ScarHulks {
         N[(vo + i) * 3 + 1] = _v.y;
         N[(vo + i) * 3 + 2] = _v.z;
         // rust gathers on top surfaces and low down where water stands; soot stays under overhangs
-        const mask = 0.35 + rustBias + Math.max(0, _v.y) * 0.25 + (up < 0.12 ? 0.15 : 0);
-        C[(vo + i) * 3] = Math.min(1, mask);
-        C[(vo + i) * 3 + 1] = shade * (0.85 + 0.15 * Math.max(0, _v.y));
-        C[(vo + i) * 3 + 2] = 1;
+        if (hk) {
+          C[(vo + i) * 3] = Math.min(1, 0.2 + hk.getY(i) * 0.75 + rustBias * 0.4 + (up < 0.12 ? 0.12 : 0));
+          C[(vo + i) * 3 + 1] = (0.35 + 0.75 * hk.getX(i)) * (0.9 + 0.2 * (shade - 0.75));
+          C[(vo + i) * 3 + 2] = hk.getZ(i);
+        } else {
+          const mask = 0.35 + rustBias + Math.max(0, _v.y) * 0.25 + (up < 0.12 ? 0.15 : 0);
+          C[(vo + i) * 3] = Math.min(1, mask);
+          C[(vo + i) * 3 + 1] = shade * (0.85 + 0.15 * Math.max(0, _v.y));
+          C[(vo + i) * 3 + 2] = 0;
+        }
       }
+      // a mirrored part (negative scale) is baked into world space: keep its triangles facing out
+      const flip = m.determinant() < 0;
       if (g.index) {
         const ix = g.index;
-        for (let k = 0; k < ix.count; k++) I[io + k] = ix.getX(k) + vo;
+        for (let k = 0; k < ix.count; k++) I[io + k] = ix.getX(flip ? k - (k % 3) + 2 - (k % 3) : k) + vo;
         io += ix.count;
       } else {
-        for (let k = 0; k < pos.count; k++) I[io + k] = vo + k;
+        for (let k = 0; k < pos.count; k++) I[io + k] = vo + (flip ? k - (k % 3) + 2 - (k % 3) : k);
         io += pos.count;
       }
       vo += pos.count;
@@ -387,9 +404,9 @@ export class ScarHulks {
     }
     const instId = this.mesh.addInstance(geoId);
     this.mesh.setMatrixAt(instId, _m.identity());
-    this.mesh.setColorAt(instId, new THREE.Color(0, 1, 1));
+    this.mesh.setColorAt(instId, new THREE.Color(0.15, 1, heat));
     this.mesh.visible = true;
-    const h: Hulk = { geoId, instId, verts: nv, x, y, z, size, born: time, sink: -1, rust: 0 };
+    const h: Hulk = { geoId, instId, verts: nv, x, y, z, size, born: time, sink: -1, rust: 0, heat, heat0: heat, cool: Math.max(1, cool) };
     this.hulks.push(h);
     this.usedVerts += nv;
     return h;
@@ -423,9 +440,12 @@ export class ScarHulks {
         continue;
       }
       const r = Math.min(1, (time - h.born) / rustTime);
-      if (Math.abs(r - h.rust) > 0.02) {
+      // embers fade as the hulk cools (eased: a long dull glow before they go out)
+      const hk = h.heat0 * Math.pow(Math.max(0, 1 - (time - h.born) / h.cool), 1.6);
+      if (Math.abs(r - h.rust) > 0.02 || Math.abs(hk - h.heat) > 0.015 || (hk === 0 && h.heat > 0)) {
         h.rust = r;
-        this.mesh.setColorAt(h.instId, _c.setRGB(0.15 + r * 1.1, 1, 1));
+        h.heat = hk;
+        this.mesh.setColorAt(h.instId, _c.setRGB(0.15 + r * 1.1, 1, hk));
       }
     }
   }

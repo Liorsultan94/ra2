@@ -2035,6 +2035,29 @@ export class BuildFx {
     }
     // synchronised obstruction lights (models/buildings.ts blink material): keep flashing while lit
     const blinkOn = s.time % 1.5 < 0.55 ? 1 : 0;
-    for (const g of this.glowClones) g.emissiveIntensity = g.userData.blinkEI ? (g.userData.blinkEI as number) * (dim > 0 ? fl * blinkOn : 0) : (g.userData.baseEI as number) * dim * fl;
+    // the spreading fire (burn) shows through the windows: they glow a warm, flickering orange from inside as
+    // more of the structure burns (soft: a fire behind the glass, never brighter than the lit windows at night)
+    const burnK = this.fires && this.lit ? Math.min(1, this.lit / Math.max(3, this.fires.length * 0.6)) : 0;
+    const t = s.time;
+    const ff = 0.72 + 0.28 * Math.sin(t * 9.3 + this.seed) * Math.sin(t * 4.1 + this.seed * 0.7);
+    for (const g of this.glowClones) {
+      if (g.userData.blinkEI) {
+        g.emissiveIntensity = (g.userData.blinkEI as number) * (dim > 0 ? fl * blinkOn : 0);
+        continue;
+      }
+      const base = g.userData.baseEI as number;
+      const lit = base * dim * fl;
+      if (burnK > 0) {
+        g.emissive.setRGB(1, 0.5 - 0.16 * burnK, 0.2 - 0.14 * burnK);
+        g.emissiveIntensity = Math.max(lit, base * 0.95 * burnK * ff);
+        g.userData.fireTint = true;
+      } else {
+        if (g.userData.fireTint) {
+          g.emissive.setRGB(1, 1, 1);
+          g.userData.fireTint = false;
+        }
+        g.emissiveIntensity = lit;
+      }
+    }
   }
 }

@@ -135,7 +135,9 @@ const VERT = /* glsl */ `
   uniform sampler2D fogTex;
   uniform vec2 fogSize;
   uniform float fogEnabled;
+  uniform vec2 uBurner;
   varying vec2 vUv;
+  varying float vFlame;
   varying vec4 vCell;     // atlas cell origin of frame 0 / frame 1 (uv units)
   varying float vBlend;
   varying vec4 vCol;      // albedo, alpha
@@ -178,6 +180,8 @@ const VERT = /* glsl */ `
     float f1 = iD.w > 0.5 ? mod( f0 + 1.0, uGrid * uGrid ) : min( f0 + 1.0, uGrid * uGrid - 1.0 );
     vCell = vec4( cellOf( f0, iB.z ), cellOf( f1, iB.z ) );
     vBlend = iB.y - f0;
+    // the two looping fire effects baked over a flat burner: 1 flame, 2 smoke loop
+    vFlame = abs( iB.z - uBurner.x ) < 0.5 ? 1.0 : abs( iB.z - uBurner.y ) < 0.5 ? 2.0 : 0.0;
     float fogV = texture2D( fogTex, iA.xz / fogSize ).r;
     float a = iB.w * mix( 1.0, smoothstep( 0.55, 0.85, fogV ), fogEnabled );
     vCol = vec4( iC.rgb, a );
@@ -215,6 +219,7 @@ const FRAG = /* glsl */ `
   uniform float heightOn;
   uniform float uEmis;
   varying vec2 vUv;
+  varying float vFlame;
   varying vec4 vCell;
   varying float vBlend;
   varying vec4 vCol;
@@ -259,6 +264,20 @@ const FRAG = /* glsl */ `
     vec3 la = A.rgb * A.rgb;
     vec3 lb = B.rgb * B.rgb;
     float e = B.a * B.a * uEmis;
+    if ( vFlame > 0.5 ) {
+      // the baked burner (CF1): its flat, wide base band glowed far brighter than the tongues above it and read
+      // as a white disc (on roofs, hulks, under every smoke column). Round and dim the band, then saturate
+      // softly: the licking tongues show, nothing blows out.
+      float fx = vUv.x - 0.5;
+      float band = smoothstep( 0.74, 0.88, vUv.y );
+      // (the faint, compression-noisy glow filling the rest of the frame is cut, and the frame edges fade, so
+      // the soft saturation below never lights up the sprite's square)
+      e = max( 0.0, e - 0.05 ) * smoothstep( 0.0, 0.18, vUv.x ) * smoothstep( 1.0, 0.82, vUv.x ) * smoothstep( 0.0, 0.2, vUv.y );
+      e *= mix( 1.0, 0.12 * exp( -fx * fx * 22.0 ), band );
+      e = ( 1.0 - exp( -4.5 * e ) ) * 0.8;
+      // a smoke loop is smoke: the fire under it comes from the flames themselves
+      if ( vFlame > 1.5 ) e = 0.0;
+    }
     if ( alpha < 0.002 && e * vFx.x < 0.002 ) discard;
     float sun = dot( la, vSunA ) + dot( lb, vSunB );
     float sky = dot( la, vAmbA ) + dot( lb, vAmbB );
@@ -325,6 +344,7 @@ export class Flipbooks {
         uGrid: { value: 8 },
         uTexel: { value: 0.5 / 128 },
         uEmis: { value: 1 },
+        uBurner: { value: new THREE.Vector2(-10, -10) },
         uSunDir: pu.uSunDir,
         uSunCol: pu.uSunCol,
         uAmbCol: pu.uAmbCol,
@@ -373,6 +393,7 @@ export class Flipbooks {
       u.uGrid.value = man.grid;
       u.uTexel.value = 0.5 / (man.frame * (this.half ? 0.5 : 1));
       this.meta = man.effects;
+      u.uBurner.value.set(man.effects.flame?.block ?? -10, man.effects.smokeloop?.block ?? -10);
       this.ready = true;
       return true;
     } catch (e) {
