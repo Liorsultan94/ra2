@@ -28,18 +28,25 @@ const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const bez = (a: number, b: number, c: number, u: number) => (1 - u) * (1 - u) * a + 2 * (1 - u) * u * b + u * u * c;
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
 
+const clampX = (map: GameMap, x: number) => Math.max(0, Math.min(map.w - 0.01, x));
+const clampY = (map: GameMap, y: number) => Math.max(0, Math.min(map.h - 0.01, y));
+
 const SCRATCH_LOOK = new THREE.Vector3();
 const SCRATCH_POS = new THREE.Vector3();
 const SCRATCH_CAM = { pos: SCRATCH_POS, look: SCRATCH_LOOK };
 const SCRATCH_POSE: Pose = { x: 0, y: 0, az: 0, el: 0, zoom: 0 };
 
-/** Put the renderer's camera at a pose (free camera + matching target / zoom). */
-function applyPose(r: GameRenderer, map: GameMap, p: Pose) {
+/**
+ * Put the renderer's camera at a pose (free camera + matching target / zoom). The look point is the pose's own
+ * ground point (not the renderer's clamped target, which snaps at the map edge), at `lookY` when given (a
+ * smoothed height, so the camera doesn't bob over every hill and shore it crosses) or the ground height there.
+ */
+function applyPose(r: GameRenderer, map: GameMap, p: Pose, lookY?: number) {
   r.centerOn(p.x, p.y);
   r.setZoom(p.zoom);
-  const tx = r.target.x;
-  const tz = r.target.z;
-  SCRATCH_LOOK.set(tx, groundHeight(map, tx, tz), tz);
+  const tx = p.x;
+  const tz = p.y;
+  SCRATCH_LOOK.set(tx, lookY ?? groundHeight(map, clampX(map, tx), clampY(map, tz)), tz);
   let dist = 80;
   const cam = r.camera;
   if (cam instanceof THREE.PerspectiveCamera) dist = BASE_VIEW / Math.max(0.05, p.zoom) / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)));
@@ -59,6 +66,10 @@ function rtsPose(r: GameRenderer, x: number, y: number, zoom: number): Pose {
 
 export class BattleIntro {
   private t = 0;
+  /** Frame time, low-passed: start-up frames hitch (shader compiles, streaming) and a raw dt makes the sweep stutter. */
+  private sdt = 1 / 60;
+  /** Look-at height, low-passed over the terrain the sweep crosses; eased onto the exact ground height at the end. */
+  private lookY: number;
   done = false;
   private from: Pose;
   private via: Pose;
@@ -76,7 +87,7 @@ export class BattleIntro {
     via: { x: number; y: number },
     private home: { x: number; y: number },
     private endZoom: number,
-    readonly duration = 3.8,
+    readonly duration = 5.3,
   ) {
     this.to = rtsPose(r, home.x, home.y, endZoom);
     // the camera starts on the enemy's side of the map looking back across the river
@@ -88,7 +99,8 @@ export class BattleIntro {
     this.from = { x: enemy.x, y: enemy.y, az: az0, el: THREE.MathUtils.degToRad(24), zoom: 0.85 };
     // via.zoom: how far the mid-flight pull-back goes (fraction of the straight zoom path)
     this.via = { x: via.x, y: via.y, az: (az0 + this.to.az) / 2, el: THREE.MathUtils.degToRad(56), zoom: 0.35 };
-    applyPose(r, map, this.from);
+    this.lookY = groundHeight(map, clampX(map, enemy.x), clampY(map, enemy.y));
+    applyPose(r, map, this.from, this.lookY);
     // the briefing already showed the whole map: no shroud during the flyover (the fog eases back afterwards)
     r.fog.revealAll();
     (r.fog as unknown as { update: () => void }).update = () => {};
@@ -102,7 +114,9 @@ export class BattleIntro {
   /** Real seconds; returns true when the flyover has ended and the camera is handed back. */
   update(dt: number): boolean {
     if (this.done) return true;
-    this.t += Math.min(dt, 0.1);
+    // even steps: clamp hitches, then low-pass so one slow frame doesn't jerk the camera forward
+    this.sdt += (Math.min(Math.max(dt, 0), 1 / 20) - this.sdt) * 0.2;
+    this.t += this.sdt;
     const k = Math.min(1, this.t / this.duration);
     if (k >= 1) {
       this.finish();
@@ -119,7 +133,11 @@ export class BattleIntro {
     // rise high over the river mid-flight, settle into the RTS view at the end
     SCRATCH_POSE.el = lerp(a.el, c.el, u) + (b.el - (a.el + c.el) / 2) * Math.sin(Math.PI * u);
     SCRATCH_POSE.zoom = Math.exp(lerp(Math.log(a.zoom), Math.log(c.zoom), u)) * (1 - (1 - b.zoom) * Math.sin(Math.PI * u));
-    applyPose(this.r, this.map, SCRATCH_POSE);
+    // follow the ground under the look point slowly (~0.7 s), then settle exactly on it for the hand-back
+    const ground = groundHeight(this.map, clampX(this.map, SCRATCH_POSE.x), clampY(this.map, SCRATCH_POSE.y));
+    this.lookY += (ground - this.lookY) * Math.min(1, this.sdt * 1.4);
+    const settle = smooth(Math.max(0, (k - 0.8) / 0.2));
+    applyPose(this.r, this.map, SCRATCH_POSE, lerp(this.lookY, ground, settle));
     return false;
   }
 
