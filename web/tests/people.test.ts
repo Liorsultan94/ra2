@@ -66,9 +66,10 @@ describe('pedestrian walk grid', () => {
     });
 
     it(`${id}: routes between nearby spots on the cheap ground`, () => {
-      const { grid } = setup(id);
+      const { m, grid } = setup(id);
       const pf = new PathFinder(grid, 20000);
-      const pts = cheapPoints(grid, 1000, 3);
+      // (as many points per tile as on a 128 x 128 map, so a bigger map gets as many close pairs)
+      const pts = cheapPoints(grid, Math.max(1000, Math.round((1000 * m.w * m.h) / (128 * 128))), 3);
       const lab = grid.region;
       const cell = (p: { x: number; y: number }) => Math.floor(p.y * RES) * grid.gw + Math.floor(p.x * RES);
       const out = new Float32Array(96);

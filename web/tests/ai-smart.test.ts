@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AIController, type Difficulty } from '../src/sim/ai';
 import { DOCTRINES } from '../src/sim/doctrine';
-import { FACTIONS, VERSUS, WEAPONS, defsForFaction, hitsAir, unitDef } from '../src/sim/defs';
+import { DEFS, FACTIONS, VERSUS, WEAPONS, defsForFaction, hitsAir, unitDef } from '../src/sim/defs';
 import { groundHeight } from '../src/sim/map';
 import { PLANS, PLAN_CFG, arsenal, pickPlan, planWeights, type Plan } from '../src/sim/plans';
 import { Rng } from '../src/sim/rng';
@@ -272,9 +272,15 @@ describe('difficulty still matters', () => {
    * BAL1 made the two bases exact mirrors (sim/turn.ts): hard 12, easy 0, 4 ran out the clock (5 + 3 draws with
    * hard in slot 0, 7 + 1 draw in slot 1). So: of these 4 games at least 3 are decisive, hard wins at least 3 of
    * them, and easy wins none, whichever slot hard starts in.
+   *
+   * The Sinai (SN1: the bases 140 tiles apart, every attack through one of two land corridors) runs longer: of the
+   * 19 hard-vs-easy usa mirror games of its sample (seeds 1-8, both slots) 11 ended inside 25 minutes (hard won 4 of
+   * 10 from slot 0, 7 of 9 from slot 1), easy won none. Here hard in slot 1 wins both, hard in slot 0 runs out the
+   * clock 6.4 and 1.8 times as strong (value of everything on the field). So: at least 2 decisive, hard wins them,
+   * easy wins none, and a game that runs out the clock ends with hard at least 1.5 times as strong.
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
-    const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number }[] = [];
+    const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number; lead: number }[] = [];
     for (const [seed, f] of [
       [1, 'usa'],
       [2, 'russia'],
@@ -286,13 +292,18 @@ describe('difficulty still matters', () => {
         const lost = (pid: number) => w.players[pid].defeated;
         const winnerSlot = lost(0) === lost(1) ? -1 : lost(0) ? 1 : 0;
         const winner = winnerSlot < 0 ? 'none' : winnerSlot === hardSlot ? 'hard' : 'easy';
-        results.push({ seed, f, hardSlot, winner, min: +(t / TPS / 60).toFixed(1) });
+        // value on the field (hard / easy) at the end
+        const val = [0, 0];
+        for (const e of w.list) if (!e.dead && (e.owner === 0 || e.owner === 1)) val[e.owner] += DEFS[e.def]?.cost ?? 0;
+        const lead = +(val[hardSlot] / Math.max(1, val[1 - hardSlot])).toFixed(2);
+        results.push({ seed, f, hardSlot, winner, min: +(t / TPS / 60).toFixed(1), lead });
       }
     }
     const msg = JSON.stringify(results);
     const decisive = results.filter((r) => r.winner !== 'none');
-    expect(decisive.length, msg).toBeGreaterThanOrEqual(3);
-    expect(decisive.filter((r) => r.winner === 'hard').length, msg).toBeGreaterThanOrEqual(3);
+    expect(decisive.length, msg).toBeGreaterThanOrEqual(2);
+    expect(decisive.filter((r) => r.winner === 'hard').length, msg).toBe(decisive.length);
+    for (const r of results) if (r.winner === 'none') expect(r.lead, msg).toBeGreaterThanOrEqual(1.5);
     // easy never wins, whichever slot hard starts in (fair starts: the north base is the south one's mirror, sim/turn.ts)
     expect(results.filter((r) => r.winner === 'easy').length, msg).toBe(0);
   }, 600000);

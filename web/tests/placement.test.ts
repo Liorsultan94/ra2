@@ -129,7 +129,8 @@ describe('building placement', () => {
         for (const p of [...L.pylons.lines.flat(), ...L.poles.flat(), ...L.wrecks]) expect(inside(p.x, p.y, 0.2), `post ${tag}`).toBe(false);
       }
     }
-  }, 25000);
+    // (the 160 x 160 Sinai has more sites and edges: well over 25 s when the whole suite runs in parallel)
+  }, 90000);
 
   it('stands power-line towers on dry level ground, every span clear of rock and hills', () => {
     for (const [id, seed] of CASES) {
