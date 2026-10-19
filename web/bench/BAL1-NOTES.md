@@ -140,3 +140,17 @@ seeds 1-4 partly with the personalities swapped, SWAP=1): hard won 4 of 10 from 
 that ran out the clock ended with hard well ahead. The per-seed results flip with the personalities (seeds 5 and
 8 favour slot 0, 6 and 7 slot 1), so the lean is not clearly the map's: p ~ 0.17. `bench/sinai-econ.test.ts`
 (easy vs easy, swapped personalities) shows the same economy from either base.
+
+### SN1, owner update: the Sinai traced from the owner's picture (176 x 176, no mirror)
+The coasts follow the reference picture's water mask (sim/sinaimask.ts) and the bases sit at the owner's marks, so
+the sides differ: blue's crossing (the isthmus at the head of the Gulf of Suez) is 14 tiles from its base, red's
+(between the Gulf of Aqaba's head and the granite ridge) 53. What each holds is kept equal by hand, counted for the
+base nearer by road (`bench/sinai-fair.test.ts`, seed 1): start to enemy 161.8 / 162.1; ore 7 / 7 fields, value
+1662 / 1662, roads to them 253.6 / 245.7; oil 4 / 4 (roads 118 / 107); build space 562 / 541 (a rocky headland by
+blue's base makes up for the seas closer round red's); garrisonable houses 22 / 22 (roads 882 / 1475: red's are
+farther); tech sites 4 / 4 (roads 155 / 166). Corridors about 10 tiles across at both heads.
+
+Bench (FULL=1, grace on, 26 games per row; rows `geo*`): seeds 1-3 7 / 4 (lead 12 / 11), seeds 4-6 6 / 6 (lead
+12 / 12); both 13 / 10 (lead 24 / 23), 29 of 52 capped, mean 26.3 min. Hard vs hard (usa-russia, 60 min cap):
+seeds 1 / 4 / 6 end in 17-25 min, 2 and 5 at 54-59 min, 3 not by 60. (On the mirrored layout a modest corridor
+widening, 15.5 to 17 tiles, had not helped: 4 of 6 held out past 60 min against 2 without it.)

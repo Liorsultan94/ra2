@@ -610,7 +610,7 @@ const SINAI_MESAS: [number, number, number, number, number][] = [
  * Sea and the Gulf of Aqaba come closer round red's base than the Mediterranean and the Gulf of Suez round blue's, so
  * this keeps the open ground round the two bases alike (bench/sinai-fair.test.ts: build space).
  */
-const BLUE_HEADLAND: [number, number, number, number, number] = [-11, -3.5, -2, -5, 2.4];
+const BLUE_HEADLAND: [number, number, number, number, number] = [-12, -3.5, -1, -5, 2.6];
 /** Oases and springs (pixels, radius tiles) in the Sinai; each base has its own (base frame). */
 const SINAI_OASES: [number, number, number][] = [
   [82, 100, 1.9],
