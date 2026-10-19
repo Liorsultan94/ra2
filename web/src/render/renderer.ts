@@ -8,7 +8,7 @@ import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { treatPoseOf } from '../sim/medic';
-import { groundHeight, standHeight } from '../sim/map';
+import { Tile, groundHeight, standHeight } from '../sim/map';
 import { BRIDGE_DEF } from '../sim/bridges';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import { heliRepairing } from '../sim/helipad';
@@ -23,6 +23,8 @@ import { Debris } from './debris';
 import { Fracture, type FracWreck } from './fracture';
 import { BattleScars } from './scars';
 import { HULK_FIRES, hulkClass, hulkKit, hulkMaterial, hulkMesh, loadHulkKit, type HulkClass } from './hulkkit';
+import { NavalFx } from './naval/navalfx';
+import { loadNavalKit, shipyardDeck } from './naval/navalkit';
 import { prefetchScarAtlas, scarAtlasTile } from './scarsdecal';
 import { Secondaries } from './fx/secondary';
 import { BLASTS, Effects, type BlastProfile } from './effects';
@@ -173,7 +175,7 @@ export interface Visual {
 }
 
 interface Wreck {
-  kind: 'infantry' | 'vehicle' | 'air' | 'building' | 'sold';
+  kind: 'infantry' | 'vehicle' | 'air' | 'building' | 'sold' | 'ship';
   root: THREE.Object3D;
   model: Model;
   t: number;
@@ -303,6 +305,8 @@ export class GameRenderer {
   readonly ambient: AmbientLife | null = null;
   /** River weather, ring waves, fuel slicks, floating debris (fx/waterfx.ts, visual only). */
   readonly river: WaterFx;
+  /** Wakes, bow spray and sinking boats (naval/navalfx.ts); null on maps without open sea. */
+  navalFx: NavalFx | null = null;
   /** Selection rings, hover highlight and order markers (src/render/overlay.ts). */
   readonly overlay: CombatOverlay;
   /** Phone readability: strategic icons, unit outlines, move-route arrows (src/render/readability.ts). */
@@ -658,6 +662,13 @@ export class GameRenderer {
     });
     this.river = new WaterFx({ world, terrain: this.terrain, effects: this.effects, atmos: this.atmos, fog: this.fog, scene: this.scene, quality, target: this.target, visibleAt: (x, y) => this.visibleAt(x, y) });
     this.life = new UnitLife(this.scene, this.effects, world, (x, z) => standHeight(world.map, x, z), (id) => this.visuals.get(id)?.model);
+    // wakes, bow spray and sinking boats (naval/navalfx.ts): only on maps with open sea
+    if (world.hasSea) {
+      this.navalFx = new NavalFx(this.effects, this.fog, quality);
+      this.scene.add(this.navalFx.group);
+      // the Blender kit: the Shipyard and the boats of the nations in this match (naval/navalkit.ts)
+      void loadNavalKit(world.players.map((p) => p.faction));
+    }
     this.deployFx = new DeployFx(this.scene, this.effects, (id) => !!world.get(id));
     if (ambientEnabled()) {
       this.ambient = new AmbientLife(this);
@@ -1252,6 +1263,7 @@ export class GameRenderer {
   }
 
   private removeVisual(v: Visual) {
+    this.navalFx?.forget(v.id);
     if (v.fade !== undefined) this.veil.set(v.id, v.model.root, 1);
     this.scene.remove(v.model.root);
     if (v.ring) this.scene.remove(v.ring);
@@ -1277,8 +1289,10 @@ export class GameRenderer {
    */
   slabHeight(b: Entity): number {
     const map = this.world.map;
-    const c = Math.max(groundHeight(map, b.x, b.y), -0.1);
     const bd = buildingDef(b.def);
+    // the Shipyard: its quay deck level with the shore it stands on, above the water (naval/navalkit.ts)
+    if (bd.shipyard) return shipyardDeck(map, b.tx, b.ty, bd.w, bd.h);
+    const c = Math.max(groundHeight(map, b.x, b.y), -0.1);
     if (bd.role !== 'airfield') return c;
     let top = c;
     for (let y = b.ty; y <= b.ty + bd.h; y++) for (let x = b.tx; x <= b.tx + bd.w; x++) top = Math.max(top, groundHeight(map, x, y));
@@ -1481,8 +1495,9 @@ export class GameRenderer {
         const bd = buildingDef(e.def);
         const h = this.slabHeight(e);
         root.position.set(e.tx + bd.w / 2, h, e.ty + bd.h / 2);
-        // the north base's exit / dock buildings are turned half a circle (sim/turn.ts)
-        root.rotation.y = e.flip ? Math.PI : 0;
+        // the north base's exit / dock buildings are turned half a circle (sim/turn.ts); a Shipyard faces its
+        // slipway to the water (sim/naval.ts)
+        root.rotation.y = e.slip !== undefined ? (-e.slip * Math.PI) / 2 : e.flip ? Math.PI : 0;
         const k = e.buildAnim;
         a.built = k;
         if (this.deployFx.active) {
@@ -1495,6 +1510,8 @@ export class GameRenderer {
         }
         a.powered = e.owner < 0 || !w.isLowPower(w.players[e.owner]);
         a.produced = v.prodAt !== undefined ? this.time - v.prodAt : Infinity;
+        // a Shipyard with a boat on its slipway (its owner's naval production under way)
+        if (bd.shipyard) a.busy = e.owner >= 0 && w.players[e.owner].queues.naval.length > 0 && !w.isLowPower(w.players[e.owner]) ? 1 : 0;
         a.moving = false;
         if (k < 1 && vis && Math.random() < dt * 20) this.effects.dust(root.position.x + (Math.random() - 0.5) * bd.w, h + 0.05, root.position.z + (Math.random() - 0.5) * bd.h, 1.5);
         if (v.model.turret) v.model.turret.rotation.y = -lerpAngle(e.pturret, e.turret, alpha);
@@ -1655,6 +1672,14 @@ export class GameRenderer {
         this.marks.footstep(p.x, p.z, -yaw, Math.floor(v.dist / 0.15) & 1 ? 1 : -1);
       }
     }
+    // boats: the wake, bow spray and waves (naval/navalfx.ts)
+    if (ud.naval && this.navalFx) {
+      const map = this.world.map;
+      const tx = Math.floor(p.x);
+      const tz = Math.floor(p.z);
+      const wet = tx >= 0 && tz >= 0 && tx < map.w && tz < map.h && map.tiles[tz * map.w + tx] === Tile.Water;
+      this.navalFx.boat(e.id, p.x, p.z, yaw, v.speed, moved, m.size?.x ?? 1, m.size?.z ?? 0.3, dt, ud.naval === 'hover', wet);
+    }
     // exhaust while driving
     if (v.anim.moving && !ud.air && m.emitters.length) {
       v.exhaustTimer -= dt;
@@ -1784,6 +1809,17 @@ export class GameRenderer {
       return;
     }
     const ud = unitDef(e.def);
+    // a boat goes down burning (naval/navalfx.ts): no hulk on the sea
+    if (ud.naval) {
+      root.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && (m.material as THREE.Material).name !== 'lamp') m.material = this.burnt;
+        else if (m.isMesh) m.visible = false;
+      });
+      this.wrecks.push({ ...base, kind: 'ship', max: 11, size: Math.max(0.6, v.model.size?.x ?? 1), anim: { ...v.anim, dead: 0.001 } });
+      this.navalFx?.sunk(pos.x, pos.z, v.model.size?.x ?? 1);
+      return;
+    }
     // killed under the canopy: the parachute carries the body down
     if (ud.category === 'infantry' && this.chutes.takeBody(v.id, v.model, v.anim)) return;
     if (ud.category === 'infantry') {
@@ -1978,6 +2014,18 @@ export class GameRenderer {
           if (w.t < 14 && Math.random() < 0.6) this.effects.flame(w.x + (Math.random() - 0.5) * w.w * 0.7, w.y + 0.1, w.z + (Math.random() - 0.5) * w.d * 0.7, 1.3);
         }
         if (w.t > w.max - 3) r.position.y -= dt * 0.15;
+      } else if (w.kind === 'ship') {
+        // sinking: the model settles and slips under (its anim), burning and smoking until the water closes over it
+        if (w.anim && w.model.anim) {
+          w.anim.dead = w.t;
+          w.anim.dt = dt;
+          w.model.anim(w.anim);
+        }
+        const under = w.t / 9;
+        if (under < 0.85 && Math.random() < dt * 12) this.effects.flame(w.x + (Math.random() - 0.5) * 0.4 * w.size, w.y + 0.12 * (1 - under), w.z + (Math.random() - 0.5) * 0.3 * w.size, 0.75 * w.size);
+        if (w.t < 10 && Math.random() < dt * 6) this.effects.column(w.x, w.y + 0.15, w.z, 0.9 * w.size);
+        if (under < 0.8) this.effects.burnGlow(w.x, w.y + 0.1, w.z, 1.8 * w.size * (1 - under));
+        if (w.t > 9.5) r.visible = false;
       } else if (w.kind === 'sold') {
         const k = Math.min(1, w.t / w.max);
         r.scale.y = Math.max(0.01, 1 - k);
@@ -2559,15 +2607,24 @@ export class GameRenderer {
     });
     const cx = tx + d.w / 2;
     const cy = ty + d.h / 2;
-    g.position.set(cx, groundHeight(this.world.map, cx, cy), cy);
+    const map = this.world.map;
+    const inMap = tx >= 0 && ty >= 0 && tx + d.w <= map.w && ty + d.h <= map.h;
+    if (d.shipyard && inMap) {
+      // the Shipyard (sim/naval.ts): its slipway turned to the water, the quay level with the shore
+      const site = this.world.shipSite(defId, tx, ty);
+      if (site.water && site.land) g.rotation.y = (-site.dir * Math.PI) / 2;
+      g.position.set(cx, shipyardDeck(map, tx, ty, d.w, d.h), cy);
+    } else g.position.set(cx, groundHeight(map, cx, cy), cy);
     let i = 0;
     for (let y = 0; y < d.h; y++)
       for (let x = 0; x < d.w; x++) {
         const m = this.ghostTiles[i++];
         const px = tx + x + 0.5;
         const pz = ty + y + 0.5;
-        m.position.set(px, standHeight(this.world.map, px, pz) + 0.05, pz);
-        (m.material as THREE.MeshBasicMaterial).color.setHex(valid ? 0x40ff60 : 0xff3030);
+        m.position.set(px, standHeight(map, px, pz) + 0.05, pz);
+        // (a Shipyard's water tiles show blue, its shore tiles green: the half-and-half rule at a glance)
+        const wet = d.shipyard && inMap && map.tiles[(ty + y) * map.w + tx + x] === Tile.Water;
+        (m.material as THREE.MeshBasicMaterial).color.setHex(valid ? (wet ? 0x40b8ff : 0x40ff60) : wet ? 0xff6050 : 0xff3030);
       }
   }
 
@@ -2687,6 +2744,7 @@ export class GameRenderer {
     this.deployFx.update(dt, this.time);
     this.overlay.endFrame();
     this.updateWrecks(dt);
+    this.navalFx?.update(dt, this.atmos.night?.darkness ?? 0);
     this.scars.update(dt, this.renderer);
     this.atmos.update(dt, this.time, this.visuals, this.target, this.zoom, this.camera);
     this.ambient?.update(dt);

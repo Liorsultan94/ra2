@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DEF_LIST, buildingDef, unitDef } from '../src/sim/defs';
 import { Tile } from '../src/sim/map';
-import { SHIP_H, SHIP_W, beachSpot, cargoRoom, shipSite } from '../src/sim/naval';
+import { SHIP_H, SHIP_W, beachSpot, cargoRoom, mouthTile, shipSite } from '../src/sim/naval';
 import { Loco } from '../src/sim/slope';
 import { FACTIONS } from '../src/sim/defs';
 import { TPS, type Entity, type Faction } from '../src/sim/types';
@@ -66,6 +66,30 @@ describe('shipyard placement', () => {
     const f = mk('frontline');
     expect(f.hasSea).toBe(false);
     expect(f.canBuild(0, 'usa_shipyard')).toBe(false);
+  });
+
+  it('maps: both sides get Shipyard coast on the same sea at a fair distance; the river maps get none', () => {
+    for (const id of ['frontline', 'winter', 'urban'] as const) expect(mk(id as never).shipSpots.length).toBe(0);
+    const W = w.map.w;
+    const near = w.map.starts.map((s) => {
+      let best = Infinity;
+      let reg = 0;
+      for (const i of w.shipSpots) {
+        const tx = i % W;
+        const ty = Math.floor(i / W);
+        const d = Math.hypot(tx + SHIP_W / 2 - s.x - 0.5, ty + SHIP_H / 2 - s.y - 0.5);
+        if (d >= best) continue;
+        const site = shipSite(w.map, w.naval.sea, tx, ty);
+        const [mx, my] = mouthTile(tx, ty, SHIP_W, SHIP_H, site.dir);
+        best = d;
+        reg = w.regionOf(mx + 0.5, my + 0.5, Loco.Landing);
+      }
+      return { best, reg };
+    });
+    // (a yard reaches out SHIP_BUILD_RADIUS from the base's structures)
+    for (const n of near) expect(n.best).toBeLessThan(16);
+    expect(near[0].reg).toBe(near[1].reg);
+    expect(Math.abs(near[0].best - near[1].best)).toBeLessThan(Math.max(near[0].best, near[1].best) * 0.25);
   });
 
   it('accepts a coast footprint and rejects all-land and all-water ones', () => {
@@ -200,6 +224,28 @@ describe('naval units', () => {
       expect(w.pass[w.tileOf(u.x, u.y)]).toBe(1);
       expect(Math.hypot(u.x - b1[0], u.y - b1[1])).toBeLessThan(8);
     }
+  });
+
+  it('shore troops, defences and helicopters fight boats; boats shoot at the shore', () => {
+    const w = mk();
+    base(w, 0);
+    const s = w.map.starts[0];
+    const lc = Loco.Boat;
+    // a boat off the beach nearest the enemy (player 1) ...
+    const sp = beachSpot(w, s.x, s.y, 0, Loco.Landing, 30)!;
+    const deep = w.nearestPassable(sp[0] + 0.5, sp[1] + 0.5, 8, 0, lc)!;
+    const boat = w.spawnUnit('russia_patrol', 1, deep[0] + 0.5, deep[1] + 0.5);
+    // ... and a rocket team, a tank and an attack helicopter of player 0 on the shore
+    const shore = w.nearestPassable(deep[0] + 0.5, deep[1] + 0.5, 8, 0, Loco.Foot)!;
+    const rpg = w.spawnUnit('usa_at', 0, shore[0] + 0.5, shore[1] + 0.5);
+    const heli = w.spawnUnit('usa_heli', 0, shore[0] + 0.5, shore[1] + 0.5);
+    heli.z = heli.pz = 1.1;
+    const hp0 = boat.hp;
+    const rpgHp = rpg.hp;
+    for (let t = 0; t < TPS * 20 && !boat.dead; t++) w.step();
+    expect(boat.dead || boat.hp < hp0).toBe(true);
+    // the boat fired back at the shore party
+    expect(rpg.hp < rpgHp || rpg.dead || boat.dead).toBe(true);
   });
 
   it('naval pathing is deterministic', () => {

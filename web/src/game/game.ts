@@ -12,6 +12,7 @@ import { canHurtBridge, isBridge } from '../sim/bridges';
 import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { treatable } from '../sim/medic';
 import { standHeight, terrainPassable } from '../sim/map';
+import { cargoRoom, cargoSize } from '../sim/naval';
 import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
@@ -1015,6 +1016,10 @@ export class Game {
     if (m !== 'place') {
       this.placing = null;
       this.renderer.setGhost(null, 0, 0, false, 0);
+      if (this.shipHint) {
+        this.shipHint = '';
+        this.hud.showHint(null);
+      }
     }
     this.hud.setToolActive(m === 'sell' ? 'sell' : m === 'repair' ? 'repair' : this.boxSelectMode ? 'boxselect' : null);
     this.hud.setOrderMode(m === 'normal' ? null : m);
@@ -1323,6 +1328,7 @@ export class Game {
       const ty = Math.round(g.y - d.h / 2);
       const ok = w.canPlace(this.local, this.placing, tx, ty);
       this.renderer.setGhost(this.placing, tx, ty, ok, this.local);
+      this.shipyardHint(this.placing, tx, ty, ok);
       return {
         cursor: ok ? 'place' : 'nope',
         run: () => {
@@ -1406,6 +1412,11 @@ export class Game {
       }
       if (!noReselect && units.length === 1 && units[0].id === target.id && unitDef(target.def).mcv) {
         return { cursor: 'deploy', run: () => this.issue({ type: 'deploy', ids: [target.id] }) };
+      }
+      // a landing craft (sim/naval.ts): soldiers and vehicles board it at a beach or the Shipyard
+      if (target.kind === 'unit' && unitDef(target.def).cargoSlots) {
+        const boarders = units.filter((u) => cargoSize(u.def) > 0);
+        if (boarders.length && cargoRoom(w, target) > 0) return { cursor: 'enter', run: () => this.order({ type: 'enter', ids: boarders.map((u) => u.id), target: target.id }, target, false) };
       }
       const cap = target.kind === 'unit' ? (unitDef(target.def).transport ?? 0) : 0;
       const riders = units.filter((u) => unitDef(u.def).category === 'infantry');
@@ -1718,6 +1729,26 @@ export class Game {
   }
 
   private touchPlace: { tx: number; ty: number } | null = null;
+  /** The Shipyard placement tooltip shown last (naval.ts placeWhy): updated only when it changes. */
+  private shipHint = '';
+
+  /**
+   * Placing a Shipyard: the tooltip says why a spot will not do (it must straddle the coast, sim/naval.ts), or how
+   * to place it. Returns false for other buildings (no tooltip).
+   */
+  private shipyardHint(defId: string, tx: number, ty: number, ok: boolean): boolean {
+    if (!buildingDef(defId).shipyard) return false;
+    const why = ok ? '' : this.world.placeWhy(this.local, defId, tx, ty) || 'Cannot build here';
+    const touch = this.mouse.type === 'touch';
+    const html = ok
+      ? `<b>Shipyard</b>: half in the sea, half on the shore. ${touch ? 'Tap it again to build.' : 'Click to build.'}`
+      : `<b>Shipyard</b>: ${why}. It must stand half in the sea, half on buildable shore, by open sea.`;
+    if (html !== this.shipHint) {
+      this.shipHint = html;
+      this.hud.showHint(html);
+    }
+    return true;
+  }
 
   private click(x: number, y: number, ctrl: boolean, shift: boolean) {
     const now = performance.now();
@@ -1738,8 +1769,10 @@ export class Game {
       const tx = Math.round(g.x - d.w / 2);
       const ty = Math.round(g.y - d.h / 2);
       this.touchPlace = { tx, ty };
-      this.renderer.setGhost(this.placing, tx, ty, this.world.canPlace(this.local, this.placing, tx, ty), this.local);
-      this.hud.showHint('Tap the highlighted building again to place it, or tap elsewhere to move it.');
+      const ok = this.world.canPlace(this.local, this.placing, tx, ty);
+      this.renderer.setGhost(this.placing, tx, ty, ok, this.local);
+      this.shipHint = '';
+      if (!this.shipyardHint(this.placing, tx, ty, ok)) this.hud.showHint('Tap the highlighted building again to place it, or tap elsewhere to move it.');
       return;
     }
     const target = this.pick(x, y);
@@ -1983,7 +2016,7 @@ export class Game {
         break;
       case 'tab': {
         e.preventDefault();
-        const order: Category[] = ['building', 'defense', 'infantry', 'vehicle', 'air'];
+        const order: Category[] = this.world.hasSea ? ['building', 'defense', 'infantry', 'vehicle', 'air', 'naval'] : ['building', 'defense', 'infantry', 'vehicle', 'air'];
         this.hud.setTab(order[(order.indexOf(this.hud.tab) + 1) % order.length]);
         break;
       }

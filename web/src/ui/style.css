@@ -1014,6 +1014,12 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+.sb-tabs.has-navy {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.tab.no-sea {
+  display: none;
+}
 .tab {
   position: relative;
   display: flex;
