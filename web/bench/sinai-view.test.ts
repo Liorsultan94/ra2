@@ -144,8 +144,8 @@ it('sinai view', () => {
   };
   const s0 = m.starts[0];
   const s1 = m.starts[1];
-  const p01 = w.pf.find(s0.x, s0.y, s1.x, s1.y, 400000);
-  const p10 = w.pf.find(s1.x, s1.y, s0.x, s0.y, 400000);
+  const p01 = w.pf.find(s0.x, s0.y, s1.x, s1.y, 2000000);
+  const p10 = w.pf.find(s1.x, s1.y, s0.x, s0.y, 2000000);
   console.log(`start->start ${len(p01, s0.x, s0.y).toFixed(1)} (${p01[p01.length - 1] === s1.y * N + s1.x}) / ${len(p10, s1.x, s1.y).toFixed(1)} (${p10[p10.length - 1] === s0.y * N + s0.x})`);
   console.log(`structures ${m.structures.length}, sites ${sites.map((s) => s.def + '@' + s.x + ',' + s.y).join(' ')}`);
 });

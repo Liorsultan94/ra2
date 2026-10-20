@@ -316,6 +316,9 @@ describe('traffic under fire', () => {
           if (n.nodes.some((nd) => nd.arms.length > 1 && Math.hypot(nd.x - c.x, nd.y - c.y) < 2.5)) continue;
           if (cars.some((o) => Math.hypot(o.x - c.x, o.y - c.y) < 1.2)) continue;
           if (t < 60 && tanks.some((tk) => Math.hypot(tk.x - c.x, tk.y - c.y) < 7)) continue;
+          // (the Sinai's roads run hundreds of tiles: there the cars keep to the tanks' part of the map, within 30
+          // tiles of one, as all of them are on the smaller maps)
+          if (m.w > 176 && !tanks.some((tk) => Math.hypot(tk.x - c.x, tk.y - c.y) < 30)) continue;
           cars.push(c);
           return;
         }

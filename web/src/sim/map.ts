@@ -137,6 +137,12 @@ export interface SeaDeco {
    * map's edge, where the world past the map takes over (render/horizonworld.ts).
    */
   grid?: SeaGrid;
+  /**
+   * The Mediterranean's coast as drawn by the map's owner (in place of `top`, wiggle included): its distance from the
+   * map centre (as `top`) sampled every `step` tiles of screen east from `e0` (linear between; past the ends, the end
+   * value). It runs on past the map (render/horizonworld.ts).
+   */
+  north?: { e0: number; step: number; off: number[] };
   /** Resort beaches. */
   sites: SeaSite[];
   /**
@@ -232,13 +238,26 @@ export function gulfWiggle(s: number) {
   return 0.55 * Math.sin(s * 0.21 + 0.7) + 0.35 * Math.sin(s * 0.57);
 }
 
+/**
+ * The top sea's coast at screen east e (tiles from the map's centre line): its distance from the centre, the wiggle
+ * taken off (the coast is at s = -topCoast).
+ */
+export function topCoast(sea: SeaDeco, e: number): number {
+  const nc = sea.north;
+  if (!nc) return sea.top - seaWiggle(e);
+  const f = Math.max(0, Math.min(nc.off.length - 1.0001, (e - nc.e0) / nc.step));
+  const i = Math.floor(f);
+  const t = f - i;
+  // (a ragged edge on the owner's line: dunes, spits and small bays)
+  return nc.off[i] * (1 - t) + nc.off[i + 1] * t - (0.9 * Math.sin(e * 0.23 + 0.4) + 0.55 * Math.sin(e * 0.57 + 1.9) + 0.3 * Math.sin(e * 1.31));
+}
+
 /** Seaward distance (tiles; > 0 = water) of the open seas only (the twin coasts past the map's top and bottom corners). */
 export function openSeaDist(sea: SeaDeco, x: number, y: number) {
   const n = Math.SQRT1_2;
   const e = (x - y) * n;
   const s = (x + y - 2 * sea.c) * n;
-  const w = seaWiggle(e);
-  return Math.max(-s - sea.top + w, s - sea.bottom + w);
+  return Math.max(-s - topCoast(sea, e), s - sea.bottom + seaWiggle(e));
 }
 
 /**
@@ -249,7 +268,9 @@ export function seaDist(sea: SeaDeco, x: number, y: number): number {
   let best = openSeaDist(sea, x, y);
   if (sea.grid) {
     const n = Math.SQRT1_2;
-    const d = gridSea(sea.grid, (x - y) * n, (x + y) * n);
+    let d = gridSea(sea.grid, (x - y) * n, (x + y) * n);
+    // (the owner's Mediterranean coast is not in the grid)
+    if (sea.north) d = Math.max(d, -(x + y - 2 * sea.c) * n - topCoast(sea, (x - y) * n));
     // (the open seas take over towards the map's edge)
     const edge = Math.min(x, y, 2 * sea.c - x, 2 * sea.c - y);
     const t = Math.max(0, Math.min(1, 1 - edge / sea.grid.band));

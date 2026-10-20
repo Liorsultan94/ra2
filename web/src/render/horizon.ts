@@ -9,6 +9,7 @@ import { HZ_CELL, HZ_MARGIN, HZ_RADIUS, horizonWorld, type HorizonWorld } from '
 import { apronHeight } from './apron';
 import { APRON_W } from './ground';
 import { SEA_SCATTER_GLSL } from './bluehole';
+import { NORTH_GLSL, northUniforms } from './northcoast';
 import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
 /*
@@ -462,6 +463,8 @@ export class Horizon {
       seaTwin: { value: sea?.twin ? 1 : 0 },
       seaOff2: { value: sea?.off2 ?? sea?.off ?? 0 },
       seaEven: { value: sea?.even ? 1 : 0 },
+      // the Mediterranean's coast as the owner drew it (sim/map.ts topCoast; NORTH_K samples)
+      ...northUniforms(sea?.north),
       seaHarb: { value: new THREE.Vector2(...(sea?.harbour ?? [0, 0])) },
       seaMole: { value: new THREE.Vector4(...(sea ? [W.seaPoint(sea.mole[0], sea.mole[1]), W.seaPoint(sea.mole[2], sea.mole[3])].flatMap((p) => [p.x, p.y]) : [0, 0, 0, 0])) },
       lakeA: { value: new THREE.Vector4(lake?.x ?? 0, lake?.y ?? 0, lake?.rx ?? 1, lake?.ry ?? 1) },
@@ -502,6 +505,7 @@ export class Horizon {
         uniform float seaTwin;
         uniform float seaOff2;
         uniform float seaEven;
+        ${NORTH_GLSL}
         uniform vec2 seaHarb;
         uniform vec4 seaMole;
         uniform vec4 lakeA;
@@ -533,13 +537,16 @@ export class Horizon {
           if ( seaOn > 0.5 ) {
             vec2 pc = p - hzCentre;
             float off = seaOff;
+            bool top = true;
             // twin seas (the Sinai's Mediterranean and Red Sea): the corner nearer p
             if ( seaTwin > 0.5 && dot( pc, seaN.xy ) < 0.0 ) {
               pc = -pc;
               off = seaOff2;
+              top = false;
             }
             su = dot( pc, seaN.zw );
             sv = dot( pc, seaN.xy ) - off + ( seaEven > 0.5 ? 2.6 * cos( su * 0.047 ) + 1.5 * cos( su * 0.131 ) : wig( su ) );
+            if ( top && seaNorthOn > 0.5 ) sv = dot( pc, seaN.xy ) - northAt( su );
           }
           float lv = -1e3;
           if ( lakeB.z > 0.5 ) {

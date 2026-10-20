@@ -6,6 +6,7 @@ import { buildingDef } from '../src/sim/defs';
 import { Tile, terrainBuildable } from '../src/sim/map';
 import { Loco } from '../src/sim/slope';
 import { World } from '../src/sim/world';
+import { sinaiPixel } from '../src/sim/maps';
 
 it('sinai fair numbers', () => {
   const w = new World({ seed: Number(process.env.SEED ?? 1), map: 'desert', players: [{ name: 'a', faction: 'usa', color: 0, isAI: true }, { name: 'b', faction: 'russia', color: 0, isAI: true }] });
@@ -13,7 +14,7 @@ it('sinai fair numbers', () => {
   const pf = w.pfs[Loco.Vehicle];
   const len = (sx: number, sy: number, gx: number, gy: number) => {
     pf.clearCache();
-    const p = pf.find(sx, sy, gx, gy, 400000);
+    const p = pf.find(sx, sy, gx, gy, 2000000);
     let L = 0;
     let x = sx;
     let y = sy;
@@ -45,7 +46,10 @@ it('sinai fair numbers', () => {
   const per = [0, 1].map((side) => fields.filter((f) => sideOf(f.d) === side));
   out.push(`ore fields ${per[0].length} / ${per[1].length}; value ${per[0].reduce((a, f) => a + f.value, 0)} / ${per[1].reduce((a, f) => a + f.value, 0)}; road to them (sum) ${per[0].reduce((a, f) => a + f.d[0], 0).toFixed(1)} / ${per[1].reduce((a, f) => a + f.d[1], 0).toFixed(1)}`);
   // (picture pixel of a tile, for the layout tables in sim/maps.ts)
-  const px = (x: number, y: number) => `(${(125 + (x - y) / Math.SQRT2 / 0.48).toFixed(0)},${(135 + ((x + y + 1) / Math.SQRT2 - (m.w / 2) * Math.SQRT2) / 0.48).toFixed(0)})`;
+  const px = (x: number, y: number) => {
+    const p = sinaiPixel(x + 0.5, y + 0.5);
+    return `(${p.u.toFixed(0)},${p.v.toFixed(0)})`;
+  };
   out.push(`  P0 fields (value@road px): ${per[0].map((f) => `${f.value}@${f.d[0].toFixed(0)}${px(f.x, f.y)}`).join(' ')}`);
   out.push(`  P1 fields (value@road px): ${per[1].map((f) => `${f.value}@${f.d[1].toFixed(0)}${px(f.x, f.y)}`).join(' ')}`);
   const oil = [0, 0];
