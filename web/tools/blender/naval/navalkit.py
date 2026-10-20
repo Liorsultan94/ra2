@@ -408,15 +408,15 @@ def running_lights(L, B, D, h):
 # Per nation: (paint, deck, superstructure, accent) colours and a design per type. Navy greys differ by nation.
 
 NATIONS = {
-    'usa': dict(hull=0x7f878e, deck=0x5c6166, sup=0x8e969c, dark=0x3b4045),
-    'israel': dict(hull=0x8d9396, deck=0x5f6264, sup=0x9aa0a3, dark=0x3e4244),
-    'china': dict(hull=0x7a868f, deck=0x5a6066, sup=0x88939b, dark=0x3a4046),
-    'russia': dict(hull=0x6f7b84, deck=0x55504a, sup=0x7d8891, dark=0x353b40),
-    'germany': dict(hull=0x858b8f, deck=0x5d6063, sup=0x93999d, dark=0x3d4043),
-    'korea': dict(hull=0x8a9196, deck=0x5c6165, sup=0x979ea2, dark=0x3d4245),
-    'ukraine': dict(hull=0x6e767b, deck=0x4f5457, sup=0x7d858a, dark=0x34383b),
-    'turkey': dict(hull=0x80888d, deck=0x5b5f62, sup=0x8f969b, dark=0x3b3f42),
-    'iran': dict(hull=0x87897f, deck=0x5c5d56, sup=0x95978c, dark=0x3d3e38),
+    'usa': dict(hull=0x9aa3ab, deck=0x5c6166, sup=0x8e969c, dark=0x3b4045),
+    'israel': dict(hull=0xaab1b4, deck=0x5f6264, sup=0x9aa0a3, dark=0x3e4244),
+    'china': dict(hull=0x94a2ac, deck=0x5a6066, sup=0x88939b, dark=0x3a4046),
+    'russia': dict(hull=0x87959f, deck=0x55504a, sup=0x7d8891, dark=0x353b40),
+    'germany': dict(hull=0xa0a7ac, deck=0x5d6063, sup=0x93999d, dark=0x3d4043),
+    'korea': dict(hull=0xa6aeb4, deck=0x5c6165, sup=0x979ea2, dark=0x3d4245),
+    'ukraine': dict(hull=0x868f95, deck=0x4f5457, sup=0x7d858a, dark=0x34383b),
+    'turkey': dict(hull=0x9ba4aa, deck=0x5b5f62, sup=0x8f969b, dark=0x3b3f42),
+    'iran': dict(hull=0xa3a59a, deck=0x5c5d56, sup=0x95978c, dark=0x3d3e38),
 }
 BOOT = 0x2a2c2e
 RED_BOTTOM = 0x6a2a24
@@ -773,6 +773,17 @@ def build_boat(nation, kind, info, objs):
         for o in fp:
             o.data.transform(Matrix.Translation(c))
         groups.append((f'_fan{i}', fp, tuple(c), 160, 50))
+    # (RTS proportions: a touch broader and taller than the real thing, so the type reads from the game camera;
+    # the pivots move with the scale)
+    S = Matrix.Diagonal((1.0, 1.12, 1.3, 1.0))
+    for g in groups:
+        for o in g[1]:
+            o.data.transform(S)
+    groups = [(n, lst, None if pv is None else tuple((S @ Vector(pv)).to_tuple()), g0, g1) for (n, lst, pv, g0, g1) in groups]
+    d['muzzle'] = tuple((S @ Vector(d['muzzle'])).to_tuple())
+    d['tpos'] = tuple((S @ Vector(d['tpos'])).to_tuple())
+    d['h'] = d['h'] * 1.3
+    d['beam'] = d['beam'] * 1.12
     PARTS.clear()
     body = assemble(key + '_src', [o for g in groups for o in g[1]])
     bake_ao(body, ground=-0.04, samples=24)

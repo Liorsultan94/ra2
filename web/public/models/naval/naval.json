@@ -32,8 +32,8 @@
  "nv_usa_patrol": {
   "tris": 1233,
   "len": 0.95,
-  "beam": 0.2,
-  "h": 0.16,
+  "beam": 0.22400000000000003,
+  "h": 0.20800000000000002,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -41,8 +41,8 @@
  "nv_usa_corvette": {
   "tris": 2295,
   "len": 1.6,
-  "beam": 0.3,
-  "h": 0.45000000000000007,
+  "beam": 0.336,
+  "h": 0.5850000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -50,8 +50,8 @@
  "nv_usa_lander": {
   "tris": 1864,
   "len": 1.15,
-  "beam": 0.52,
-  "h": 0.31,
+  "beam": 0.5824,
+  "h": 0.403,
   "turret": true,
   "fans": 2,
   "spin": true
@@ -59,8 +59,8 @@
  "nv_israel_patrol": {
   "tris": 1077,
   "len": 0.85,
-  "beam": 0.19,
-  "h": 0.15000000000000002,
+  "beam": 0.21280000000000002,
+  "h": 0.19500000000000003,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -68,8 +68,8 @@
  "nv_israel_corvette": {
   "tris": 2295,
   "len": 1.45,
-  "beam": 0.29,
-  "h": 0.4600000000000001,
+  "beam": 0.32480000000000003,
+  "h": 0.5980000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -77,8 +77,8 @@
  "nv_israel_lander": {
   "tris": 1520,
   "len": 1.12,
-  "beam": 0.36,
-  "h": 0.36000000000000004,
+  "beam": 0.4032,
+  "h": 0.4680000000000001,
   "turret": false,
   "fans": 0,
   "spin": true
@@ -86,8 +86,8 @@
  "nv_china_patrol": {
   "tris": 1265,
   "len": 0.98,
-  "beam": 0.21,
-  "h": 0.17,
+  "beam": 0.23520000000000002,
+  "h": 0.22100000000000003,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -95,8 +95,8 @@
  "nv_china_corvette": {
   "tris": 2272,
   "len": 1.2,
-  "beam": 0.31,
-  "h": 0.34,
+  "beam": 0.3472,
+  "h": 0.44200000000000006,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -104,8 +104,8 @@
  "nv_china_lander": {
   "tris": 1864,
   "len": 1.1,
-  "beam": 0.5,
-  "h": 0.31,
+  "beam": 0.56,
+  "h": 0.403,
   "turret": true,
   "fans": 2,
   "spin": true
@@ -113,8 +113,8 @@
  "nv_russia_patrol": {
   "tris": 1117,
   "len": 0.88,
-  "beam": 0.2,
-  "h": 0.15500000000000003,
+  "beam": 0.22400000000000003,
+  "h": 0.20150000000000004,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -122,8 +122,8 @@
  "nv_russia_corvette": {
   "tris": 2375,
   "len": 1.5,
-  "beam": 0.3,
-  "h": 0.47,
+  "beam": 0.336,
+  "h": 0.611,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -131,8 +131,8 @@
  "nv_russia_lander": {
   "tris": 1612,
   "len": 1.05,
-  "beam": 0.34,
-  "h": 0.36000000000000004,
+  "beam": 0.3808000000000001,
+  "h": 0.4680000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -140,8 +140,8 @@
  "nv_germany_patrol": {
   "tris": 1201,
   "len": 0.92,
-  "beam": 0.21,
-  "h": 0.16,
+  "beam": 0.23520000000000002,
+  "h": 0.20800000000000002,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -149,8 +149,8 @@
  "nv_germany_corvette": {
   "tris": 2295,
   "len": 1.55,
-  "beam": 0.29,
-  "h": 0.45000000000000007,
+  "beam": 0.32480000000000003,
+  "h": 0.5850000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -158,8 +158,8 @@
  "nv_germany_lander": {
   "tris": 1520,
   "len": 1.08,
-  "beam": 0.35,
-  "h": 0.36000000000000004,
+  "beam": 0.392,
+  "h": 0.4680000000000001,
   "turret": false,
   "fans": 0,
   "spin": true
@@ -167,8 +167,8 @@
  "nv_korea_patrol": {
   "tris": 1233,
   "len": 0.9,
-  "beam": 0.2,
-  "h": 0.17,
+  "beam": 0.22400000000000003,
+  "h": 0.22100000000000003,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -176,8 +176,8 @@
  "nv_korea_corvette": {
   "tris": 1989,
   "len": 1.3,
-  "beam": 0.26,
-  "h": 0.41000000000000003,
+  "beam": 0.2912,
+  "h": 0.533,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -185,8 +185,8 @@
  "nv_korea_lander": {
   "tris": 1792,
   "len": 1.12,
-  "beam": 0.5,
-  "h": 0.39,
+  "beam": 0.56,
+  "h": 0.507,
   "turret": false,
   "fans": 2,
   "spin": true
@@ -194,8 +194,8 @@
  "nv_ukraine_patrol": {
   "tris": 809,
   "len": 0.6,
-  "beam": 0.15,
-  "h": 0.16,
+  "beam": 0.168,
+  "h": 0.20800000000000002,
   "turret": true,
   "fans": 0,
   "spin": false
@@ -203,8 +203,8 @@
  "nv_ukraine_corvette": {
   "tris": 2295,
   "len": 1.5,
-  "beam": 0.3,
-  "h": 0.44000000000000006,
+  "beam": 0.336,
+  "h": 0.5720000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -212,8 +212,8 @@
  "nv_ukraine_lander": {
   "tris": 1612,
   "len": 0.98,
-  "beam": 0.3,
-  "h": 0.36000000000000004,
+  "beam": 0.336,
+  "h": 0.4680000000000001,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -221,8 +221,8 @@
  "nv_turkey_patrol": {
   "tris": 1201,
   "len": 0.74,
-  "beam": 0.18,
-  "h": 0.16999999999999998,
+  "beam": 0.2016,
+  "h": 0.22099999999999997,
   "turret": true,
   "fans": 0,
   "spin": false
@@ -230,8 +230,8 @@
  "nv_turkey_corvette": {
   "tris": 1729,
   "len": 1.25,
-  "beam": 0.25,
-  "h": 0.41000000000000003,
+  "beam": 0.28,
+  "h": 0.533,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -239,8 +239,8 @@
  "nv_turkey_lander": {
   "tris": 1520,
   "len": 1.1,
-  "beam": 0.36,
-  "h": 0.36000000000000004,
+  "beam": 0.4032,
+  "h": 0.4680000000000001,
   "turret": false,
   "fans": 0,
   "spin": true
@@ -248,8 +248,8 @@
  "nv_iran_patrol": {
   "tris": 945,
   "len": 0.62,
-  "beam": 0.17,
-  "h": 0.15000000000000002,
+  "beam": 0.19040000000000004,
+  "h": 0.19500000000000003,
   "turret": true,
   "fans": 0,
   "spin": false
@@ -257,8 +257,8 @@
  "nv_iran_corvette": {
   "tris": 1809,
   "len": 1.25,
-  "beam": 0.25,
-  "h": 0.39,
+  "beam": 0.28,
+  "h": 0.507,
   "turret": true,
   "fans": 0,
   "spin": true
@@ -266,8 +266,8 @@
  "nv_iran_lander": {
   "tris": 1716,
   "len": 1.1,
-  "beam": 0.48,
-  "h": 0.39,
+  "beam": 0.5376000000000001,
+  "h": 0.507,
   "turret": true,
   "fans": 1,
   "spin": true

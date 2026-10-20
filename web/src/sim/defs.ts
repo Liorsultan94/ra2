@@ -95,7 +95,7 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'boatGun', damage: 15, range: 6, rof: 6, warhead: 'flak', projectile: 'instant', air: 'no' },
   // anti-ship missile (Harpoon / NSM / Gabriel / Uran / YJ class, scaled): sea-skimming, guided onto ships, also used
   // on targets ashore. Two per salvo.
-  { id: 'asm', damage: 115, range: 10.5, minRange: 2, rof: 110, burst: 2, burstDelay: 12, warhead: 'missile', projectile: 'rocket', speed: 0.45, air: 'no', flight: 'atgm', munition: 'asm' },
+  { id: 'asm', damage: 115, range: 10.5, minRange: 2, rof: 110, burst: 2, burstDelay: 12, warhead: 'missile', projectile: 'rocket', speed: 0.45, air: 'no', flight: 'atgm', munition: 'cruiseMissile' },
   // point air defence on the missile boats / corvettes (CIWS / RAM / 30 mm): aircraft and drones only
   { id: 'ciws', damage: 16, range: 6.5, rof: 5, warhead: 'flak', projectile: 'instant', air: 'only' },
   // kamikaze warheads (range = contact distance)
