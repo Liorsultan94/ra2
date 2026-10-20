@@ -12,7 +12,7 @@
 // Everything is a command, decided every `think` ticks, with its own seeded RNG (the land AI's stream is
 // untouched, so maps without sea play exactly as before).
 
-import { buildingDef, defsForFaction, unitDef } from './defs';
+import { DEFS, buildingDef, defsForFaction, unitDef } from './defs';
 import { SHIP_H, SHIP_W, SHIP_YARD_REACH, beachSpot, cargoSize, launchSpot, mouthTile } from './naval';
 import { Rng } from './rng';
 import { Loco } from './slope';
@@ -42,12 +42,18 @@ interface NavCfg {
    * against Easy on the Sinai: none of 4 games decided in 25 minutes, against 3 of 4 without the navy.)
    */
   share: number;
+  /**
+   * NV2, the aircraft carrier (USA, Russia, China on maps with deep sea): the chance per match it builds one, the
+   * earliest tick, the land army it must have first (a superweapon-tier buy comes out of a winning war chest, not
+   * the army's), and the deck jets it keeps.
+   */
+  carrier: { chance: number; at: number; army: number; wing: number };
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15 },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2 },
-  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2 },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 26, army: 16000, wing: 2 } },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 20, army: 14000, wing: 3 } },
+  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 16, army: 12000, wing: 4 } },
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
@@ -93,8 +99,14 @@ export class NavalAI {
   private yardsSeen = new Set<number>();
   /** Tick the last yard was lost (-1: standing / none yet). */
   private yardLost = -1;
-  /** Debug / tests: yards placed, raids sailed, landings made, units put ashore. */
-  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0 };
+  /** This match it builds a carrier (its own seeded roll: the rest of the navy's choices are as they were). */
+  private carrierPlan = false;
+  /** The carrier's station: deep water on our side of the sea (tile index, -1 = not worked out yet / none). */
+  private station = -1;
+  /** The boat that sails with the carrier as its escort (-1 = none). */
+  private escort = -1;
+  /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered. */
+  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0 };
 
   constructor(
     private w: World,
@@ -108,6 +120,7 @@ export class NavalAI {
     this.active = w.hasSea && this.rng.next() < this.cfg.chance && NAVY_AI.on;
     this.nextLanding = Math.round(this.cfg.landEvery * this.rng.range(0.6, 1));
     if (!this.active) return;
+    this.carrierPlan = !!DEFS[`${w.players[pid].faction}_carrier`] && new Rng(seed ^ 0x5eed0c).next() < this.cfg.carrier.chance;
     // the water within reach of the enemy's base (its ground region's shore)
     const W = w.map.w;
     const veh = w.regions[Loco.Vehicle];
@@ -219,7 +232,8 @@ export class NavalAI {
       if (d.weapon && !d.harvester && !d.mcv) this.army += d.cost;
     }
     this.navyValue = 0;
-    for (const u of navy) this.navyValue += unitDef(u.def).cost;
+    // (the carrier is bought on its own terms: carrier())
+    for (const u of navy) if (!unitDef(u.def).deck) this.navyValue += unitDef(u.def).cost;
     const yard = this.yard();
     if (yard && !this.yardsSeen.has(yard.id)) {
       this.yardsSeen.add(yard.id);
@@ -230,9 +244,106 @@ export class NavalAI {
     if (yard) this.navyValue += buildingDef(yard.def).cost;
     if (yard && yard.buildAnim >= 1) this.produce(navy);
     this.stats.boats = Math.max(this.stats.boats, navy.length);
-    const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots);
+    // (the carrier is not a raider: it keeps its own station with its escort, see carrier())
+    const cv = this.carrier(navy, yard);
+    const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots && !unitDef(u.def).deck && !(cv && u.id === this.escort));
     this.fleet(yard, combat);
     this.manageLanding(yard, navy, land);
+  }
+
+  /**
+   * NV2, the aircraft carrier: built once, late in the war, out of a winning army's war chest (not when it would
+   * starve the land war); it then holds a station on our own side of the deep sea with an escort, out of the
+   * enemy's coastal guns, never closing the coast. Its deck jets join the land AI's air strikes (ai.ts manageJets:
+   * every armed jet on its pad is sent against the best target known).
+   */
+  private carrier(navy: Entity[], yard: Entity | null): Entity | null {
+    if (!this.carrierPlan) return null;
+    const w = this.w;
+    const p = this.p;
+    const cv = navy.find((u) => !!unitDef(u.def).deck) ?? null;
+    const cfg = this.cfg.carrier;
+    if (!cv) {
+      const id = `${p.faction}_carrier`;
+      if (!yard || yard.buildAnim < 1 || w.tick < cfg.at || this.army < cfg.army || p.queues.naval.length > 0 || !w.canBuild(this.pid, id)) return null;
+      if (this.stats.carriers >= 2) return null; // (a lost carrier is replaced once)
+      this.cmd({ type: 'produce', def: id });
+      this.stats.carriers++;
+      return null;
+    }
+    // its station: deep open water on our side of the sea, nearest our base
+    if (this.station < 0) this.station = this.carrierStation(cv);
+    if (this.station >= 0 && cv.order.type === 'idle') {
+      const sx = (this.station % w.map.w) + 0.5;
+      const sy = Math.floor(this.station / w.map.w) + 0.5;
+      if (Math.hypot(cv.x - sx, cv.y - sy) > 3) this.cmd({ type: 'move', ids: [cv.id], x: sx, y: sy });
+    }
+    // its air wing
+    const jet = `${p.faction}_cvjet`;
+    let wing = 0;
+    for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === jet) wing++;
+    for (const q of p.queues.air) if (q.def === jet) wing++;
+    if (wing < cfg.wing && p.credits >= this.cfg.reserve && w.canBuild(this.pid, jet)) {
+      this.cmd({ type: 'produce', def: jet });
+      this.stats.wing++;
+    }
+    // its escort: a combat boat that keeps close; enemy boats closing on the carrier are engaged
+    let esc = this.escort >= 0 ? w.get(this.escort) : undefined;
+    if (!esc || esc.dead || esc.owner !== this.pid) {
+      esc = undefined;
+      this.escort = -1;
+      let bd = Infinity;
+      for (const u of navy) {
+        const d = unitDef(u.def);
+        if (!d.weapon || d.cargoSlots || d.deck || this.raidIds.includes(u.id)) continue;
+        const dd = Math.hypot(u.x - cv.x, u.y - cv.y);
+        if (dd < bd) (bd = dd), (esc = u);
+      }
+      if (esc) this.escort = esc.id;
+    }
+    let threat: Entity | null = null;
+    w.queryRadius(cv.x, cv.y, 11, (o) => {
+      if (!threat && o.kind === 'unit' && w.isEnemy(this.pid, o.owner) && unitDef(o.def).naval && w.sees(this.pid, o)) threat = o;
+    });
+    if (esc) {
+      const t = threat as Entity | null;
+      if (t && esc.order.type !== 'attack') this.cmd({ type: 'attack', ids: [esc.id], target: t.id });
+      else if (!t && esc.order.type === 'idle' && Math.hypot(esc.x - cv.x, esc.y - cv.y) > 3.5) {
+        // (station on the carrier's quarter)
+        const a = cv.facing + 2.3;
+        this.cmd({ type: 'move', ids: [esc.id], x: cv.x + Math.cos(a) * 2.2, y: cv.y + Math.sin(a) * 2.2 });
+      }
+    }
+    return cv;
+  }
+
+  /** Deep open water (two tiles of it all round) in the carrier's sea, nearest our base. */
+  private carrierStation(cv: Entity): number {
+    const w = this.w;
+    const W = w.map.w;
+    const pass = w.passes[Loco.Deep];
+    const reg = w.regions[Loco.Deep];
+    const r0 = reg[w.tileOf(cv.x, cv.y)];
+    const hx = this.p.startX;
+    const hy = this.p.startY;
+    let best = -1;
+    let bd = Infinity;
+    for (let i = 0; i < pass.length; i++) {
+      if (!pass[i] || reg[i] !== r0) continue;
+      const x = i % W;
+      const y = Math.floor(i / W);
+      const d = Math.hypot(x - hx, y - hy);
+      if (d >= bd) continue;
+      let open = true;
+      for (let oy = -2; oy <= 2 && open; oy++)
+        for (let ox = -2; ox <= 2; ox++)
+          if (!pass[(y + oy) * W + x + ox]) {
+            open = false;
+            break;
+          }
+      if (open) (bd = d), (best = i);
+    }
+    return best;
   }
 
   private produce(navy: Entity[]) {
@@ -488,7 +599,8 @@ export class NavalAI {
             l.since = w.tick;
             this.cmd({ type: 'move', ids: [craft.id], x: site.lx, y: site.ly });
             // an escort: the idle boats sail along
-            const esc = navy.filter((b) => b.order.type === 'idle' && !!unitDef(b.def).weapon && !unitDef(b.def).cargoSlots && !this.raidIds.includes(b.id));
+            // (never the carrier, nor the carrier's escort: they keep their station)
+            const esc = navy.filter((b) => b.order.type === 'idle' && !!unitDef(b.def).weapon && !unitDef(b.def).cargoSlots && !unitDef(b.def).deck && b.id !== this.escort && !this.raidIds.includes(b.id));
             if (esc.length) this.cmd({ type: 'move', ids: esc.map((b) => b.id), x: site.lx, y: site.ly, attackMove: true });
           }
           break;

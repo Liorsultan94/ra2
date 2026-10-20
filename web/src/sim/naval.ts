@@ -24,6 +24,14 @@ import type { World } from './world';
 
 /** Depth below the waterline (height units, one = a tile's width) a boat needs. The reef flats are 0.07..0.25. */
 export const BOAT_DEPTH = 0.4;
+/**
+ * Depth an aircraft carrier needs (height units), with this much room (tiles, Chebyshev) of it all round its hull:
+ * the open ocean of the Sinai's Red Sea, Mediterranean and gulfs is about 1.2 deep, the reefs and shelves shallower.
+ */
+export const DEEP_DEPTH = 1.0;
+export const DEEP_ROOM = 1;
+/** A carrier is launched into deep water this far (tiles) from the Shipyard's slipway at most. */
+export const DEEP_LAUNCH_REACH = 16;
 /** Smallest body of boat water (tiles) that counts as sea: the rivers of Frontline, Winter and Urban are smaller. */
 export const SEA_MIN = 1200;
 /** How far up the beach (tiles from the nearest water tile, Chebyshev) a hovercraft rides. */
@@ -88,7 +96,7 @@ export function tileDepth(m: GameMap, x: number, y: number): number {
   return WATER_LEVEL - (H[i] + H[i + 1] + H[i + W1] + H[i + W1 + 1]) * 0.25;
 }
 
-/** Naval terrain of a map: per water class, the tiles it may use before any structure stands (Boat, Landing, Hover). */
+/** Naval terrain of a map: per water class, the tiles it may use before any structure stands (Boat, Landing, Hover, Deep). */
 export interface NavalTerrain {
   base: Uint8Array[];
   /** Per tile: 1 = boat water of a body of at least SEA_MIN tiles (the open sea). */
@@ -138,7 +146,22 @@ export function navalTerrain(m: GameMap): NavalTerrain {
       sea[i] = 1;
       seaTiles++;
     }
-  return { base: [boat, water, hover], sea, seaTiles };
+  // the carrier's deep water: the open sea, this deep with room all round (no reefs, shelves or narrow channels)
+  const deep = new Uint8Array(n);
+  for (let y = DEEP_ROOM; y < H - DEEP_ROOM; y++)
+    for (let x = DEEP_ROOM; x < W - DEEP_ROOM; x++) {
+      const i = y * W + x;
+      if (!sea[i]) continue;
+      let ok = true;
+      for (let oy = -DEEP_ROOM; oy <= DEEP_ROOM && ok; oy++)
+        for (let ox = -DEEP_ROOM; ox <= DEEP_ROOM; ox++)
+          if (m.tiles[(y + oy) * W + x + ox] !== Tile.Water || tileDepth(m, x + ox, y + oy) < DEEP_DEPTH) {
+            ok = false;
+            break;
+          }
+      if (ok) deep[i] = 1;
+    }
+  return { base: [boat, water, hover, deep], sea, seaTiles };
 }
 
 /**
@@ -340,7 +363,9 @@ export function launchSpot(w: World, yard: Entity, lc: number): [number, number]
   const pass = w.passes[lc];
   const { w: W, h: H } = w.map;
   const sea = w.naval.sea;
-  for (let r = 0; r <= 8; r++)
+  // (a carrier: the nearest deep water, further out)
+  const R = lc === Loco.Deep ? DEEP_LAUNCH_REACH : 8;
+  for (let r = 0; r <= R; r++)
     for (let oy = -r; oy <= r; oy++)
       for (let ox = -r; ox <= r; ox++) {
         if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue;
@@ -354,9 +379,19 @@ export function launchSpot(w: World, yard: Entity, lc: number): [number, number]
   return null;
 }
 
+/** A Shipyard of this player's with deep water (an aircraft carrier's) within reach of its slipway, or null. */
+export function deepYard(w: World, owner: number): Entity | null {
+  for (const e of w.list) {
+    if (e.dead || e.owner !== owner || e.kind !== 'building' || !buildingDef(e.def).shipyard || e.buildAnim < 1) continue;
+    if (launchSpot(w, e, Loco.Deep)) return e;
+  }
+  return null;
+}
+
 /** Roll a finished naval unit out of the yard's slipway and send it to the rally point (on the water). */
 export function deliverNaval(w: World, owner: number, d: UnitDef): Entity | null {
-  const yard = shipyardFor(w, owner);
+  // (an aircraft carrier: from a yard with deep water in reach)
+  const yard = d.naval === 'deep' ? deepYard(w, owner) : shipyardFor(w, owner);
   if (!yard) return null;
   const lc = w.locoOfDef(d);
   const spot = launchSpot(w, yard, lc);

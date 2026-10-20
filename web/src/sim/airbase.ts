@@ -15,10 +15,16 @@
 // Losing the airbase: jets on the ground die with it; airborne jets divert to another
 // airbase with a free pad, or circle (with no time limit) until one is built or frees up.
 //
+// Aircraft carriers (NV2) are airbases at sea: their deck jets park on the deck pads, launch off the bow (a
+// catapult, or a ski-jump run), land back on the moving deck from the stern and are arrested on the angled deck.
+// On deck a jet's position is kept in the ship's frame (Sortie.lx / ly / lf) and follows the ship as it sails;
+// the final approach is flown in that frame too, so the touchdown keeps up with the deck smoothly. A sunk
+// carrier takes the jets on its deck down with it; the airborne divert to another carrier or an airbase.
+//
 // Everything here is plain arithmetic on entity state in tick order, no randomness,
 // so every client computes the same thing.
 
-import { WEAPONS, buildingDef, unitDef } from './defs';
+import { DEFS, WEAPONS, buildingDef, unitDef } from './defs';
 import { launch } from './ballistics';
 import { TPS, type Entity, type Sortie, type SortiePhase, type UnitDef } from './types';
 import type { World } from './world';
@@ -119,16 +125,29 @@ export function baseGeo(w: World, b: Entity): BaseGeo {
   };
 }
 
-function isBase(b: Entity | undefined, owner: number): b is Entity {
-  return !!b && !b.dead && b.kind === 'building' && b.owner === owner && buildingDef(b.def).role === 'airfield' && b.buildAnim >= 1;
+/** An aircraft carrier (a unit with deck pads), alive. */
+export function isAircraftCarrier(b: Entity | undefined): b is Entity {
+  return !!b && !b.dead && b.kind === 'unit' && !!unitDef(b.def).deck;
 }
 
-/** Pads 0..3 of an airbase taken by jets assigned to it (the pad is theirs while they are out on a sortie, too). */
+function isBase(b: Entity | undefined, owner: number): b is Entity {
+  if (!b || b.dead || b.owner !== owner) return false;
+  if (b.kind === 'unit') return !!unitDef(b.def).deck;
+  return buildingDef(b.def).role === 'airfield' && b.buildAnim >= 1;
+}
+
+/** Parking pads of an airbase or a carrier's deck. */
+function padCount(b: Entity): number {
+  return b.kind === 'unit' ? (unitDef(b.def).deck ?? 0) : PADS_PER_BASE;
+}
+
+/** Pads of an airbase (or a deck) taken by jets assigned to it (the pad is theirs while they are out on a sortie, too). */
 function padsTaken(w: World, b: Entity): boolean[] {
-  const taken: boolean[] = new Array(PADS_PER_BASE).fill(false);
+  const n = padCount(b);
+  const taken: boolean[] = new Array(n).fill(false);
   for (const e of w.list) {
     if (e.dead || !e.sortie || e.sortie.base !== b.id) continue;
-    if (e.sortie.pad >= 0 && e.sortie.pad < PADS_PER_BASE) taken[e.sortie.pad] = true;
+    if (e.sortie.pad >= 0 && e.sortie.pad < n) taken[e.sortie.pad] = true;
   }
   return taken;
 }
@@ -137,13 +156,18 @@ export function freePad(w: World, b: Entity): number {
   return padsTaken(w, b).indexOf(false);
 }
 
-/** Nearest completed airbase of the jet's owner with a free pad. */
+/**
+ * Nearest base of the jet's owner with a free pad: a deck jet makes for a carrier first, then an airbase; the
+ * airbase jets use airbases only (a carrier's deck is for its own air wing).
+ */
 function findBase(w: World, e: Entity): Entity | null {
+  const deckJet = !!unitDef(e.def).deckJet;
   let best: Entity | null = null;
   let bd = Infinity;
   for (const b of w.list) {
-    if (!isBase(b, e.owner) || freePad(w, b) < 0) continue;
-    const dd = Math.hypot(b.x - e.x, b.y - e.y);
+    if (!isBase(b, e.owner) || (b.kind === 'unit' && !deckJet) || freePad(w, b) < 0) continue;
+    // (a carrier's deck before any airbase, for its own jets)
+    const dd = Math.hypot(b.x - e.x, b.y - e.y) + (deckJet && b.kind !== 'unit' ? 1e4 : 0);
     if (dd < bd) {
       bd = dd;
       best = b;
@@ -152,25 +176,45 @@ function findBase(w: World, e: Entity): Entity | null {
   return best;
 }
 
-/** Jet cap: 4 jets per completed airbase. */
+/** Jet cap: 4 jets per completed airbase (the airbase jets; a carrier's air wing has its own cap: deckCap). */
 export function padCap(w: World, pid: number): number {
   let n = 0;
-  for (const b of w.list) if (isBase(b, pid)) n++;
+  for (const b of w.list) if (b.kind === 'building' && isBase(b, pid)) n++;
   return n * PADS_PER_BASE;
 }
 
-/** Combat jets a player owns (on the ground and in the air). */
-export function jetCount(w: World, pid: number): number {
+/** Deck jet cap: the deck pads of the player's carriers. */
+export function deckCap(w: World, pid: number): number {
   let n = 0;
-  for (const e of w.list) if (!e.dead && e.owner === pid && e.kind === 'unit' && isSortieJet(unitDef(e.def))) n++;
+  for (const b of w.list) if (b.kind === 'unit' && isBase(b, pid)) n += padCount(b);
   return n;
 }
 
-/** Jets waiting in a player's air production queue. */
-export function jetsQueued(w: World, pid: number): number {
+/** Combat jets a player owns (on the ground and in the air): the airbase jets, or (deck) the carrier air wing. */
+export function jetCount(w: World, pid: number, deck = false): number {
   let n = 0;
-  for (const q of w.players[pid].queues.air) if (isSortieJet(unitDef(q.def))) n++;
+  for (const e of w.list) {
+    if (e.dead || e.owner !== pid || e.kind !== 'unit') continue;
+    const d = unitDef(e.def);
+    if (isSortieJet(d) && !!d.deckJet === deck) n++;
+  }
   return n;
+}
+
+/** Jets waiting in a player's air production queue (the airbase jets, or the deck jets). */
+export function jetsQueued(w: World, pid: number, deck = false): number {
+  let n = 0;
+  for (const q of w.players[pid].queues.air) {
+    const d = DEFS[q.def];
+    if (d && d.kind === 'unit' && isSortieJet(d) && !!d.deckJet === deck) n++;
+  }
+  return n;
+}
+
+/** The player's carrier with a free deck pad (where a new deck jet is put), or null. */
+export function carrierWithPad(w: World, pid: number): Entity | null {
+  for (const b of w.list) if (b.kind === 'unit' && isBase(b, pid) && freePad(w, b) >= 0) return b;
+  return null;
 }
 
 function newSortie(e: Entity, d: UnitDef): Sortie {
@@ -184,7 +228,6 @@ export function parkJet(w: World, e: Entity, b: Entity): boolean {
   const d = unitDef(e.def);
   const s = e.sortie ?? newSortie(e, d);
   e.sortie = s;
-  const g = baseGeo(w, b);
   s.base = b.id;
   s.pad = pad;
   s.phase = 'parked';
@@ -194,12 +237,25 @@ export function parkJet(w: World, e: Entity, b: Entity): boolean {
   s.path = [];
   s.wp = 0;
   s.auto = -1;
-  e.x = e.px = g.pads[pad];
-  e.y = e.py = g.padY;
   e.z = e.pz = 0;
-  e.facing = e.pfacing = e.turret = e.pturret = PARK_FACING;
   e.moving = false;
   e.order = { type: 'idle' };
+  if (b.kind === 'unit') {
+    // on a carrier's deck pad, nose in from the deck edge
+    const [px, py] = DECK.pads[pad];
+    s.lx = px;
+    s.ly = py;
+    s.lf = DECK.park;
+    deckPose(e, b, s);
+    e.px = e.x;
+    e.py = e.y;
+    e.pfacing = e.pturret = e.facing;
+    return true;
+  }
+  const g = baseGeo(w, b);
+  e.x = e.px = g.pads[pad];
+  e.y = e.py = g.padY;
+  e.facing = e.pfacing = e.turret = e.pturret = PARK_FACING;
   return true;
 }
 
@@ -442,6 +498,304 @@ function crash(w: World, e: Entity) {
   w.kill(e, -1);
 }
 
+// ------------------------------------------------------------------ the carrier's deck
+
+/**
+ * Flight deck layout of a carrier, in the ship's frame (tiles; x towards the bow, y to starboard). The models
+ * (render/naval, tools/blender/naval) are built to it: the island aft of amidships to starboard, two deck pads
+ * forward of it and two aft, the launch run along the port side of the bow (catapult track, or the run-up to the
+ * ski-jump), the landing area on the deck angled off to port aft (touchdown, arresting wires).
+ */
+export const DECK = {
+  bow: 2.6,
+  stern: -2.6,
+  /** Deck pads (x, y) and the parking heading on them (nose towards the port side, a little forward). */
+  pads: [
+    [1.75, 0.42],
+    [1.05, 0.44],
+    [-1.45, 0.44],
+    [-2.12, 0.42],
+  ] as [number, number][],
+  park: -1.25,
+  /** Launch: the run starts here and leaves the deck at the bow (heading straight ahead). */
+  launchX: -0.15,
+  launchY: -0.22,
+  /** Ski-jump: the ramp over the last stretch of the bow lifts the jet this high. */
+  rampLen: 0.75,
+  rampZ: 0.12,
+  /** Landing: touchdown point and the angled deck's heading (to port of the ship's axis), arrested within stopLen. */
+  tdX: -2.05,
+  tdY: -0.12,
+  angle: -0.16,
+  stopLen: 1.15,
+  /** Taxi lane down the middle of the deck. */
+  laneY: 0.08,
+};
+
+const DECK_FINAL = 5.5; // final approach fix: tiles astern of the touchdown along the angled deck
+const CAT_ACC = 9.0 / TPS / TPS; // catapult stroke
+const JUMP_ACC = 3.4 / TPS / TPS; // full-power run to the ski-jump
+const ARREST_DEC = 5.0 / TPS / TPS; // arresting wire
+
+/** Ship frame -> world for a carrier. */
+export function deckToWorld(c: Entity, lx: number, ly: number): [number, number] {
+  const co = Math.cos(c.facing);
+  const si = Math.sin(c.facing);
+  return [c.x + lx * co - ly * si, c.y + lx * si + ly * co];
+}
+
+/** World -> ship frame for a carrier. */
+function worldToDeck(c: Entity, x: number, y: number): [number, number] {
+  const co = Math.cos(c.facing);
+  const si = Math.sin(c.facing);
+  const dx = x - c.x;
+  const dy = y - c.y;
+  return [dx * co + dy * si, -dx * si + dy * co];
+}
+
+/** Put the jet where its deck position says (it rides along with the ship). */
+function deckPose(e: Entity, c: Entity, s: Sortie) {
+  const [x, y] = deckToWorld(c, s.lx ?? 0, s.ly ?? 0);
+  e.x = x;
+  e.y = y;
+  e.facing = e.turret = c.facing + (s.lf ?? 0);
+}
+
+/** Deck taxi along the waypoints in the ship's frame. Returns true once the last one is reached. */
+function deckTaxi(e: Entity, c: Entity, s: Sortie): boolean {
+  e.z = 0;
+  let lx = s.lx ?? 0;
+  let ly = s.ly ?? 0;
+  let lf = s.lf ?? 0;
+  let done = false;
+  if (s.wp * 2 >= s.path.length) done = true;
+  else {
+    const wx = s.path[s.wp * 2];
+    const wy = s.path[s.wp * 2 + 1];
+    const dx = wx - lx;
+    const dy = wy - ly;
+    const dist = Math.hypot(dx, dy);
+    const last = (s.wp + 1) * 2 >= s.path.length;
+    if (dist < (last ? 0.03 : 0.12)) {
+      s.wp++;
+      if (last) {
+        lx = wx;
+        ly = wy;
+        done = true;
+      }
+    } else {
+      const want = Math.atan2(dy, dx);
+      lf = turnToward(lf, want, TAXI_TURN);
+      const off = Math.abs(angleDiff(lf, want));
+      let target = TAXI_V * 0.8 * clamp(1 - off / 1.1, 0, 1);
+      if (last) target = Math.min(target, Math.max(0.006, dist * 0.15));
+      s.v += clamp(target - s.v, -TAXI_ACC * 3, TAXI_ACC);
+      if (s.v < 0) s.v = 0;
+      const step = Math.min(s.v, dist);
+      lx += Math.cos(lf) * step;
+      ly += Math.sin(lf) * step;
+    }
+  }
+  if (done) s.v = 0;
+  s.lx = lx;
+  s.ly = ly;
+  s.lf = lf;
+  e.moving = s.v > 0.002;
+  deckPose(e, c, s);
+  return done;
+}
+
+/** Taxi from where the jet stands on deck back to its pad. */
+function deckTaxiHome(s: Sortie) {
+  const [px, py] = DECK.pads[s.pad] ?? DECK.pads[0];
+  setPath(s, [s.lx ?? 0, DECK.laneY, px, DECK.laneY, px, py]);
+  s.phase = 'taxiIn';
+}
+
+/**
+ * One tick of a deck jet in the phases its carrier's deck handles (on deck, the return and the final approach).
+ * Returns false when the phase is not a deck phase (the shared airborne cycle runs it).
+ */
+function deckSortie(w: World, e: Entity, d: UnitDef, s: Sortie, c: Entity): boolean {
+  const cruise = d.cruiseAlt ?? 2.6;
+  const vCruise = d.speed / TPS;
+  const vRef = Math.min(vCruise, REF_V);
+  const shipV = Math.hypot(c.x - c.px, c.y - c.py);
+  const axis = c.facing + DECK.angle; // the angled deck's heading in the world
+  switch (s.phase) {
+    case 'parked': {
+      e.z = 0;
+      s.v = 0;
+      e.moving = false;
+      const [px, py] = DECK.pads[s.pad] ?? DECK.pads[0];
+      s.lx = (s.lx ?? px) + (px - (s.lx ?? px)) * 0.2;
+      s.ly = (s.ly ?? py) + (py - (s.ly ?? py)) * 0.2;
+      s.lf = turnToward(s.lf ?? DECK.park, DECK.park, 0.05);
+      deckPose(e, c, s);
+      if (s.rearm > 0 && --s.rearm === 0) s.ammo = 1;
+      if (s.rearm <= 0 && s.ammo <= 0) s.ammo = 1;
+      if (e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + (e.maxHp * REPAIR_RATE) / TPS);
+      if (s.rearm <= 0 && hasMission(w, e, s) && (e.hp >= e.maxHp || !autoStrike(e))) {
+        setPath(s, [px, DECK.laneY, DECK.launchX, DECK.laneY, DECK.launchX, DECK.launchY]);
+        s.phase = 'taxiOut';
+      }
+      return true;
+    }
+    case 'taxiOut': {
+      if (!hasMission(w, e, s)) {
+        deckTaxiHome(s);
+        return true;
+      }
+      if (deckTaxi(e, c, s)) s.phase = 'hold';
+      return true;
+    }
+    case 'hold':
+    case 'lineup': {
+      e.z = 0;
+      s.v = 0;
+      e.moving = false;
+      if (!hasMission(w, e, s)) {
+        freeRunway(c, e);
+        deckTaxiHome(s);
+        return true;
+      }
+      // on the catapult (or at the start of the run), nose to the bow, once the deck is clear
+      s.lf = turnToward(s.lf ?? 0, 0, TAXI_TURN);
+      deckPose(e, c, s);
+      if (s.phase === 'hold') {
+        if (takeRunway(c, e)) s.phase = 'lineup';
+      } else if (Math.abs(angleDiff(s.lf ?? 0, 0)) < 1e-3) {
+        s.phase = 'takeoff';
+        s.v = 0;
+        w.events.push({ t: 'sortie', id: e.id, owner: e.owner, what: 'takeoff', x: e.x, y: e.y });
+      }
+      return true;
+    }
+    case 'takeoff': {
+      if ((s.lx ?? 0) >= DECK.bow) return false; // off the deck: the shared climb-out
+      // the catapult throws it off the bow; a ski-jump launch is a full-power run up the ramp
+      s.v = Math.min(vRef * ROTATE_K * 1.05, s.v + (d.deckJet === 'catapult' ? CAT_ACC : JUMP_ACC));
+      s.lf = 0;
+      const lx = (s.lx ?? 0) + s.v;
+      s.lx = lx;
+      s.ly = (s.ly ?? 0) + (DECK.launchY - (s.ly ?? 0)) * 0.3;
+      const ramp = (lx - (DECK.bow - DECK.rampLen)) / DECK.rampLen;
+      e.z = d.deckJet === 'skijump' && ramp > 0 ? DECK.rampZ * Math.min(1, ramp) ** 2 : 0;
+      deckPose(e, c, s);
+      e.moving = true;
+      if (lx >= DECK.bow) {
+        // airborne off the bow: from here on it flies in the world, with the ship's way on it
+        s.v += shipV;
+        e.z = Math.max(e.z, GROUND_Z + 0.06);
+        freeRunway(c, e);
+        s.phase = 'sortie';
+      }
+      return true;
+    }
+    case 'return': {
+      // a fresh strike order for an armed jet on its way home
+      if (s.ammo > 0 && e.order.type !== 'idle' && hasMission(w, e, s)) {
+        s.phase = 'sortie';
+        return true;
+      }
+      // the final approach fix astern of the angled deck, sailing with the ship
+      const [tdx, tdy] = deckToWorld(c, DECK.tdX, DECK.tdY);
+      const ax = Math.cos(axis);
+      const ay = Math.sin(axis);
+      const fx = tdx - ax * DECK_FINAL;
+      const fy = tdy - ay * DECK_FINAL;
+      const along = (e.x - fx) * ax + (e.y - fy) * ay; // > 0: past the fix, towards the deck
+      const lat = -(e.x - fx) * ay + (e.y - fy) * ax;
+      const near = Math.hypot(e.x - fx, e.y - fy) < 9;
+      let gx: number;
+      let gy: number;
+      if (along < -0.6 && Math.abs(lat) < 1 + -along * 0.9) {
+        gx = fx + ax * 1.2;
+        gy = fy + ay * 1.2;
+      } else {
+        // join astern: a point behind the fix, off to the side it is on
+        const side = lat >= 0 ? 1 : -1;
+        gx = clamp(fx - ax * 3.6 - ay * side * 2.8, 1, w.map.w - 1);
+        gy = clamp(fy - ay * 3.6 + ax * side * 2.8, 1, w.map.h - 1);
+      }
+      fly(w, e, d, s, gx, gy, near ? APPROACH_V + shipV : vCruise, near ? GLIDE_ALT : cruise);
+      if (along > -0.8 && along < 1.2 && Math.abs(lat) < 1 && Math.abs(angleDiff(e.facing, axis)) < 0.8 && e.z < GLIDE_ALT + 0.6 && takeRunway(c, e)) {
+        const [lx, ly] = worldToDeck(c, e.x, e.y);
+        s.lx = lx;
+        s.ly = ly;
+        s.lf = angleDiff(c.facing, e.facing);
+        s.v = Math.max(TOUCH_V, s.v - shipV); // closing speed on the deck
+        s.phase = 'final';
+      }
+      return true;
+    }
+    case 'final': {
+      // flown in the ship's frame: down the angled deck's centreline onto the touchdown point, which keeps pace
+      const ax = Math.cos(DECK.angle);
+      const ay = Math.sin(DECK.angle);
+      let lx = s.lx ?? 0;
+      let ly = s.ly ?? 0;
+      const dTd = (DECK.tdX - lx) * ax + (DECK.tdY - ly) * ay;
+      const lat = -(lx - DECK.tdX) * ay + (ly - DECK.tdY) * ax;
+      let lf = turnToward(s.lf ?? DECK.angle, DECK.angle - clamp(lat * 0.5, -0.4, 0.4), d.turnRate);
+      if (dTd < 2) lf = turnToward(lf, DECK.angle, 0.08);
+      s.lf = lf;
+      s.v += clamp(TOUCH_V - s.v, -0.005, 0.002);
+      lx += Math.cos(lf) * s.v;
+      ly += Math.sin(lf) * s.v;
+      // (onto the centreline)
+      const k = dTd < 2.5 ? 0.2 : 0.07;
+      lx += ay * lat * k;
+      ly -= ax * lat * k;
+      s.lx = lx;
+      s.ly = ly;
+      const zt = dTd > 0.7 ? GLIDE_ALT * clamp((dTd - 0.7) / (DECK_FINAL - 0.7), 0, 1) + 0.07 : 0.1 * Math.max(0, dTd / 0.7);
+      e.z += clamp(zt - e.z, -0.06, 0.03);
+      deckPose(e, c, s);
+      e.moving = true;
+      if (dTd <= 0 || (e.z <= 0.02 && dTd < 0.7)) {
+        e.z = 0;
+        s.lf = DECK.angle;
+        s.phase = 'rollout';
+        w.events.push({ t: 'sortie', id: e.id, owner: e.owner, what: 'touchdown', x: e.x, y: e.y });
+      } else if (Math.abs(lat) > 1.3 || dTd < -1) {
+        // wave-off: go round again
+        freeRunway(c, e);
+        s.v += shipV;
+        s.phase = 'return';
+      }
+      return true;
+    }
+    case 'rollout': {
+      // caught by the wire: pulled up within the landing area
+      e.z = 0;
+      s.v = Math.max(0, s.v - ARREST_DEC);
+      s.lf = DECK.angle;
+      const lx = (s.lx ?? 0) + Math.cos(DECK.angle) * s.v;
+      const ly = (s.ly ?? 0) + Math.sin(DECK.angle) * s.v;
+      s.lx = lx;
+      s.ly = ly;
+      deckPose(e, c, s);
+      e.moving = s.v > 0.002;
+      const run = (lx - DECK.tdX) * Math.cos(DECK.angle) + (ly - DECK.tdY) * Math.sin(DECK.angle);
+      if (s.v <= 1e-4 || run >= DECK.stopLen) {
+        s.v = 0;
+        freeRunway(c, e);
+        deckTaxiHome(s);
+      }
+      return true;
+    }
+    case 'taxiIn': {
+      if (deckTaxi(e, c, s)) {
+        s.phase = 'parked';
+        if (s.ammo <= 0) s.rearm = REARM_TICKS;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 /** One tick of a combat jet (World.updateUnit hands fixed-wing combat jets here). */
 export function updateSortie(w: World, e: Entity, d: UnitDef) {
   if (!e.sortie) {
@@ -501,7 +855,9 @@ export function updateSortie(w: World, e: Entity, d: UnitDef) {
       }
     }
   }
-  const g = base ? baseGeo(w, base) : null;
+  // a carrier's deck (and its approach) runs in the ship's frame
+  if (base && base.kind === 'unit' && deckSortie(w, e, d, s, base)) return;
+  const g = base && base.kind === 'building' ? baseGeo(w, base) : null;
   const cruise = d.cruiseAlt ?? 2.6;
   const vCruise = d.speed / TPS;
   const vRef = Math.min(vCruise, REF_V);
