@@ -1742,7 +1742,7 @@ export class Game {
     const touch = this.mouse.type === 'touch';
     const html = ok
       ? `<b>Shipyard</b>: half in the sea, half on the shore. ${touch ? 'Tap it again to build.' : 'Click to build.'}`
-      : `<b>Shipyard</b>: ${why}.${/^(Too far|Enemy)/.test(why) ? '' : ' Place it across the shoreline, by open sea.'}`;
+      : `<b>Shipyard</b>: ${why}.${/^(Too far|Enemy|Blocked)/.test(why) ? '' : ' Place it across the shoreline, by open sea.'}`;
     if (html !== this.shipHint) {
       this.shipHint = html;
       this.hud.showHint(html);
