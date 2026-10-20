@@ -82,7 +82,8 @@ describe('building placement', () => {
       // the starting MCVs deploy where they stand
       for (const s of m.starts) expect(w.canPlace(0, 'usa_conyard', Math.floor(s.x + 0.5) - 1, Math.floor(s.y + 0.5) - 1, -1, false)).toBe(true);
     }
-  }, 25000);
+    // (every footprint of every map: the Sinai alone is 208 x 208 since SN2)
+  }, 60000);
 
   it('has no walkable pocket the armies can never reach, on any map (bar the offshore islands, on purpose)', () => {
     for (const [id, seed] of CASES) {

@@ -584,11 +584,12 @@ export class Waterside implements WatersideHandles {
     let seed = 7;
     if (m.id === 'desert') {
       // the oasis gorge's lake and spring pools (sim/maps.ts GORGE: laid out round tile (113, 113) of the old map)
-      const G = GORGE - 113;
+      const GX = GORGE.x - 113;
+      const GY = GORGE.y - 113;
       const pools = [
-        { x: 113 + G, y: 113 + G, r: 3.3, n: 26 },
-        { x: 105 + G, y: 119 + G, r: 1.8, n: 16 },
-        { x: 119 + G, y: 105 + G, r: 1.8, n: 16 },
+        { x: 113 + GX, y: 113 + GY, r: 3.3, n: 26 },
+        { x: 105 + GX, y: 119 + GY, r: 1.8, n: 16 },
+        { x: 119 + GX, y: 105 + GY, r: 1.8, n: 16 },
       ];
       for (const p of pools) {
         for (let i = 0; i < p.n && list.length < cap; i++) {
