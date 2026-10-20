@@ -193,3 +193,25 @@ games included) 29 / 28 (blue 51%; before 27 / 44, red 62%), 71 of 78 capped at 
 Hard vs hard (usa-russia, 75 min cap, seeds 1-10): 4 end in 21-54 min (seeds 3, 4, 5, 9), 6 hold out to the cap
 (before: 16 of 20 ended inside 60 min). The bases 250 tiles apart by road make every attack a long march; the games
 are much longer.
+
+### SN3: the AI on the long map (marching, then going in together)
+On the 208 map Hard fell behind Easy (`tests/ai-smart.test.ts`: seed 1, hard in slot 0, 0.79 of easy's value at 25
+min). Diagnosis (hard vs easy, seed 1): hard harvested more (90k against 64k) but lost 173 units for 112, 125 of them
+in the last two fifths of the way to easy's base: waves strung out over the 250-tile march, and the survivors of
+each push went on to the next objective one by one (the "deep" idle rule), so the attacks reached easy's defences
+piecemeal. Fix (Hard, long maps only: the vehicle way rally to enemy base over 170 tiles, so only Wadi Al-Rimal):
+- a wave for a far objective marches to a staging point 40 tiles of path short of it first, and goes in when most of
+  it is there and it is 1.2 times what we know of the enemy round the objective (units seen in the last 3 minutes,
+  its armed structures), or after 150 s there;
+- survivors far out with a far next objective gather at the staging point too, joining the wave gathering there
+  (one forward rally point per objective), instead of going on one by one.
+
+| | before | after |
+|---|---|---|
+| hard vs easy (25 min, 4 games) | 2 hard wins; capped 2.35x and 0.79x | 3 hard wins (14-23 min); capped 4.0x |
+| hard vs hard ends (seeds 1-10, 75 min cap) | 4 (21-54 min) | 8 (23-59 min) |
+| slot bench wins blue / red | 5 / 2 | 7 / 7 |
+| ahead at the end blue / red | 29 / 28 | 35 / 29 (blue 55%) |
+| capped at 30 min / mean length | 71 / 29.7 min | 64 / 28.9 min |
+
+Harvest by slot within 1% at every snapshot (4-28 min). The fairness numbers of the map are unchanged.

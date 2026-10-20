@@ -44,6 +44,16 @@ export const AI2 = { retreat: true, terrain: true, war: true };
 const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
 /** Chance that a main push is preceded by a feint on another lane (micro > 0 only). */
 const FEINT: Record<Difficulty, number> = { easy: 0, normal: 0.25, hard: 0.4 };
+/**
+ * Long marches (Hard, SN3: marchPoint): on a map where the way from the rally point to the enemy base is longer than
+ * MARCH_MIN tiles (Wadi Al-Rimal; the 128-tile maps never march that far), a group for a far objective gathers
+ * MARCH_SHORT tiles of path short of it first.
+ */
+const MARCH_MIN = 170;
+const MARCH_SHORT = 40;
+/** Gathered there, it goes in when this much stronger than the enemy known round the objective, or after MARCH_WAIT s. */
+const MARCH_EDGE = 1.2;
+const MARCH_WAIT = 150;
 
 /**
  * Per-AI seed: the match seed mixed with the player id and the nation (every match differs, a replay /
@@ -141,7 +151,7 @@ function warOrder(o: [string, number][], war: WarDoctrine): [string, number][] {
 }
 
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'march';
 
 interface Intel {
   x: number;
@@ -172,6 +182,11 @@ interface Wave {
   fell?: boolean;
   /** Its value alive and the enemy value it killed over the last seconds (the trade). */
   hist?: { t: number; alive: number; killed: number }[];
+  /**
+   * A long march (SN3): the wave first gathers at a forward staging point short of the objective, then goes in
+   * together (manageMarches; `at`: when it had gathered).
+   */
+  march?: { x: number; y: number; until: number; done: boolean; at?: number };
 }
 
 /** A group falling back to a defensive position (AI2 orderly retreat), then regrouping there. */
@@ -272,6 +287,8 @@ export class AIController implements Controller {
   war: WarDoctrine;
   private rng: Rng;
   private waveSize: number;
+  /** Is this a long map (longMap; undefined until found)? */
+  private longWay: boolean | undefined;
   private lastWave = 0;
   private engineerSent = new Set<number>();
   private intel = new Map<number, Intel>();
@@ -340,7 +357,7 @@ export class AIController implements Controller {
   /** Debug / tests (AI2): houses garrisoned, canyon squads posted, plateau detachments sent and units that got up there, tech sites targeted. */
   readonly terrainStats = { garrisons: 0, canyon: 0, plateau: 0, plateauVisits: 0, techs: 0 };
   /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
-  readonly stats = { waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, counters: 0, finishes: 0, strikes: {} as Record<string, number> };
+  readonly stats = { marches: 0, waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, counters: 0, finishes: 0, strikes: {} as Record<string, number> };
   /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
   private hMin = 0;
   private hSpan = 1;
@@ -1294,6 +1311,8 @@ export class AIController implements Controller {
       this.manageEngagements(buildings);
       this.manageFallbacks(force);
     }
+    // waves on a long march: gather at the forward staging point, then go in together
+    this.manageMarches();
     // defend the base: respond to buildings or harvesters under attack
     if (this.defendBase(buildings, units, force)) return;
     if (micro > 0 || this.scoutsSent === 0) this.manageScout(force);
@@ -1481,7 +1500,7 @@ export class AIController implements Controller {
       if (air && !w.canAttack(u.def, t)) return false;
       // already on its way there: don't re-plan every think
       if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
-      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush' || r === 'fallback') && Math.hypot(u.x - hx, u.y - hy) < 28;
+      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush' || r === 'fallback' || r === 'march') && Math.hypot(u.x - hx, u.y - hy) < 28;
     });
     // a last stand: the base itself is under attack, so groups regrouping near it fight
     const amb = home.filter((u) => this.roleOf(u) === 'ambush' || this.roleOf(u) === 'fallback').map((u) => u.id);
@@ -2595,8 +2614,48 @@ export class AIController implements Controller {
       } else {
         const target = this.pickTarget(deep[0]);
         const [tx, ty] = target ?? enemy;
-        this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
+        // (on a long map they gather short of a far objective first, with the next wave: marchPoint)
+        if (!this.gather(deep, tx, ty)) this.cmd({ type: 'move', ids: deep.map((u) => u.id), x: tx, y: ty, attackMove: true });
       }
+    }
+  }
+
+  /**
+   * A group far out with a far objective on a long map (Hard): to the staging point short of it, as a marching wave
+   * (joining one gathering there), so the survivors of one push and the next wave go in together. false when the
+   * objective is near, or the map is not a long one.
+   */
+  private gather(group: Entity[], tx: number, ty: number): boolean {
+    if (!group.length) return false;
+    let cx = 0;
+    let cy = 0;
+    for (const u of group) {
+      cx += u.x;
+      cy += u.y;
+    }
+    const ids = group.map((u) => u.id);
+    const march = this.marchPoint(ids, tx, ty, [cx / group.length, cy / group.length]);
+    if (!march) return false;
+    this.marchWave(ids, march, tx, ty, march.x, march.y, ids);
+    return true;
+  }
+
+  /** Send a marching group to its staging point and file it with the wave gathering there (or as a new one). */
+  private marchWave(ids: number[], march: { x: number; y: number; until: number; done: boolean }, tx: number, ty: number, gx: number, gy: number, all: number[]) {
+    const w = this.world;
+    const host = this.waves.find((wv) => wv.march && !wv.march.done && Math.hypot(wv.march.x - march.x, wv.march.y - march.y) < 20);
+    const [sx, sy] = host?.march ? [host.march.x, host.march.y] : [gx, gy];
+    this.cmd({ type: 'move', ids, x: sx, y: sy, attackMove: true });
+    this.setRole(ids, 'march');
+    let value = 0;
+    for (const id of all) value += cost(w.get(id)?.def ?? '');
+    if (host?.march) {
+      for (const id of all) if (!host.ids.includes(id)) host.ids.push(id);
+      host.value += value;
+      host.march.until = Math.max(host.march.until, march.until);
+    } else {
+      this.waves.push({ ids: [...all], tx, ty, focus: -1, born: w.tick, lane: '', value, killed: 0, march });
+      while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
     }
   }
 
@@ -2686,8 +2745,14 @@ export class AIController implements Controller {
 
   private launch(body: number[], wing: number[], lane: [number, number] | null, laneKey: string, wingLane: [number, number] | null, tx: number, ty: number, atRally: Entity[], enemyAir: number) {
     const w = this.world;
-    this.send(body, lane, tx, ty);
-    if (wing.length) this.send(wing, wingLane, tx, ty);
+    // a long march (Hard): to a staging point short of the objective first, together from there
+    const march = this.marchPoint([...body, ...wing], tx, ty, this.rally());
+    // (a wave still gathering at a staging point near this one: the new one joins it there)
+    const host = march ? this.waves.find((wv) => wv.march && !wv.march.done && Math.hypot(wv.march.x - march.x, wv.march.y - march.y) < 20) : undefined;
+    const [gx, gy] = host?.march ? [host.march.x, host.march.y] : march ? [march.x, march.y] : [tx, ty];
+    this.send(body, lane, gx, gy);
+    if (wing.length) this.send(wing, wingLane, gx, gy);
+    if (march) this.setRole([...body, ...wing], 'march');
     // escorts: AA when the enemy flies, EW / recovery vehicles always
     const leader = [...body, ...wing]
       .map((id) => w.get(id)!)
@@ -2709,9 +2774,16 @@ export class AIController implements Controller {
     const ids = [...body, ...wing, ...arty];
     let value = 0;
     for (const id of ids) value += cost(w.get(id)?.def ?? '');
-    this.waves.push({ ids, tx, ty, focus: -1, born: w.tick, lane: laneKey, value, killed: 0 });
-    while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
+    if (host?.march && march) {
+      host.ids.push(...ids);
+      host.value += value;
+      host.march.until = Math.max(host.march.until, march.until);
+    } else {
+      this.waves.push({ ids, tx, ty, focus: -1, born: w.tick, lane: laneKey, value, killed: 0, ...(march ? { march } : {}) });
+      while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
+    }
     this.lastWave = w.tick;
+    if (march) this.stats.marches++;
     if (this.stats.firstWave < 0) this.stats.firstWave = w.tick;
     this.stats.waves++;
     this.stats.lanes.push(laneKey);
@@ -2723,6 +2795,124 @@ export class AIController implements Controller {
     this.waveJitter = this.rng.int(4) - 1;
     this.waveNotBefore = w.tick + Math.round(TPS * this.rng.range(0, 40));
     this.waveStale = Math.round(TPS * this.rng.range(180, 300) * this.planCfg.stale * this.war.pace);
+  }
+
+  /**
+   * The forward staging point of a long march (Hard, SN3, long maps: longMap): on the way (the vehicle path from
+   * `from`), MARCH_SHORT tiles of path short of the objective, when the objective is further off than that. With
+   * Wadi Al-Rimal's bases 250 tiles apart a wave sent straight in strung out over the march and the survivors of each
+   * push went on one by one - they reached the enemy's defences piecemeal; gathered first, they go in as one.
+   * `until`: when its slowest member should be there (the path at its speed, plus half again).
+   */
+  private marchPoint(ids: number[], tx: number, ty: number, from: [number, number]): { x: number; y: number; until: number; done: boolean } | null {
+    if (this.cfg.micro < 2 || !ids.length || !this.longMap()) return null;
+    const w = this.world;
+    const [rx, ry] = from;
+    if (Math.hypot(tx - rx, ty - ry) < MARCH_SHORT + 15) return null;
+    const pf = w.pfs[Loco.Vehicle];
+    const start = w.nearestPassable(rx, ry, 4, w.mainland);
+    if (!start) return null;
+    const goal = w.nearestPassable(tx, ty, 6, w.mainland);
+    if (!goal) return null;
+    const path = pf.find(start[0], start[1], goal[0], goal[1], 2000000);
+    if (path.length < 2) return null;
+    const pts = [[start[0] + 0.5, start[1] + 0.5], ...path.map((t) => [(t % w.map.w) + 0.5, Math.floor(t / w.map.w) + 0.5])];
+    // (the way to the structure's door: the path ends next to it)
+    const end = pts[pts.length - 1];
+    if (Math.hypot(end[0] - tx, end[1] - ty) > 12) return null;
+    let len = 0;
+    for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+    if (len < MARCH_SHORT + 25) return null;
+    // back from the objective along the path
+    let back = 0;
+    let k = pts.length - 1;
+    while (k > 0 && back < MARCH_SHORT) {
+      back += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+      k--;
+    }
+    let vmin = Infinity;
+    for (const id of ids) {
+      const u = w.get(id);
+      if (u) vmin = Math.min(vmin, unitDef(u.def).speed);
+    }
+    if (!Number.isFinite(vmin) || vmin <= 0) return null;
+    return { x: pts[k][0], y: pts[k][1], until: w.tick + Math.round(TPS * (((len - back) / vmin) * 1.5 + 20)), done: false };
+  }
+
+  /**
+   * The enemy force we know of round (x, y): fighting units seen there in the last `span` ticks (a long march: the
+   * enemy army at home is out of sight for minutes), and the armed structures we know of.
+   */
+  private knownNear(x: number, y: number, r: number, span: number): { def: string; hp: number; passengers: number[] }[] {
+    const out: { def: string; hp: number; passengers: number[] }[] = [];
+    for (const [, it] of this.known((it) => Math.hypot(it.x - x, it.y - y) < r && (it.building ? !!DEFS[it.def].weapon : klass(it.def) === 'main' || klass(it.def) === 'arty' || klass(it.def) === 'aa'), span)) out.push({ def: it.def, hp: DEFS[it.def].hp, passengers: [] });
+    return out;
+  }
+
+  /**
+   * A long map (marchPoint): the vehicle way from our rally point to the enemy base is longer than MARCH_MIN (found
+   * once). Wadi Al-Rimal since its bases moved apart (SN2), not the 128-tile maps.
+   */
+  private longMap(): boolean {
+    if (this.longWay !== undefined) return this.longWay;
+    const w = this.world;
+    const enemy = this.enemyBase();
+    if (!enemy) return false;
+    const [rx, ry] = this.rally();
+    const a = w.nearestPassable(rx, ry, 4, w.mainland);
+    const b = w.nearestPassable(enemy[0], enemy[1], 8, w.mainland);
+    if (!a || !b) return (this.longWay = false);
+    const path = w.pfs[Loco.Vehicle].find(a[0], a[1], b[0], b[1], 2000000);
+    let len = 0;
+    let [x, y] = a;
+    for (const t of path) {
+      const nx = t % w.map.w;
+      const ny = Math.floor(t / w.map.w);
+      len += Math.hypot(nx - x, ny - y);
+      x = nx;
+      y = ny;
+    }
+    return (this.longWay = len > MARCH_MIN);
+  }
+
+  /** Waves on a long march: released together from their staging point (marchPoint); stragglers sent on there. */
+  private manageMarches() {
+    const w = this.world;
+    for (const wv of this.waves) {
+      const m = wv.march;
+      if (!m || m.done) continue;
+      const mem: Entity[] = [];
+      for (const id of wv.ids) {
+        const u = w.get(id);
+        if (u && this.roleOf(u) === 'march') mem.push(u);
+      }
+      if (!mem.length) {
+        m.done = true;
+        continue;
+      }
+      const r = Math.max(8, Math.sqrt(mem.length) * 1.8);
+      const there = mem.filter((u) => Math.hypot(u.x - m.x, u.y - m.y) < r);
+      // gathered (or as gathered as it will get) - then in when strong enough for what we know of the enemy round
+      // the objective, or after MARCH_WAIT whatever happens
+      if (m.at === undefined && (there.length * 4 >= mem.length * 3 || w.tick >= m.until)) m.at = w.tick;
+      let go = false;
+      if (m.at !== undefined) {
+        const theirs = this.knownNear(wv.tx, wv.ty, 40, TPS * 180);
+        go = !theirs.length || this.strength(there, this.armourMix(theirs as Entity[])) >= this.strength(theirs as Entity[], this.armourMix(there)) * MARCH_EDGE || w.tick - m.at >= TPS * MARCH_WAIT;
+      }
+      if (go) {
+        m.done = true;
+        const ids = mem.map((u) => u.id);
+        this.setRole(ids, 'army');
+        this.send(ids, null, wv.tx, wv.ty);
+        // (judged on the fight, not the march)
+        wv.born = w.tick;
+        continue;
+      }
+      // (one that stopped short - a skirmish on the way, a blocked path - goes on to the staging point)
+      const lost = mem.filter((u) => u.order.type === 'idle' && Math.hypot(u.x - m.x, u.y - m.y) >= r).map((u) => u.id);
+      if (lost.length && this.thinks % 4 === 0) this.cmd({ type: 'move', ids: lost, x: m.x, y: m.y, attackMove: true });
+    }
   }
 
   /**
