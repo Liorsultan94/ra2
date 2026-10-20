@@ -26,7 +26,8 @@ describe('AI aircraft carrier', () => {
     let releases = 0;
     let landings = 0;
     let sortieInPeace = false;
-    while (!w.over && w.tick < TPS * 60 * 34) {
+    // (a late-game asset: the game runs 46 minutes)
+    while (!w.over && w.tick < TPS * 60 * 46) {
       w.step();
       for (const ev of w.drainEvents()) {
         if (ev.t !== 'sortie') continue;

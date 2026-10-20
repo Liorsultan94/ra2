@@ -1415,7 +1415,9 @@ export class AIController implements Controller {
    * together strike together.
    */
   private manageJets(jets: Entity[]) {
-    const ready = jets.filter((u) => jetReady(u) && u.order.type === 'idle');
+    let ready = jets.filter((u) => jetReady(u) && u.order.type === 'idle');
+    // (a carrier's jets go in pairs at least: one at a time, each was shot down on its way in; NV2)
+    if (ready.filter((u) => unitDef(u.def).deckJet).length < 2) ready = ready.filter((u) => !unitDef(u.def).deckJet);
     if (!ready.length) return;
     const t = this.pickJetTarget(ready[0]);
     if (t >= 0) {

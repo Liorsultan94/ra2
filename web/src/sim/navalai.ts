@@ -14,6 +14,7 @@
 
 import { DEFS, buildingDef, defsForFaction, unitDef } from './defs';
 import { SHIP_H, SHIP_W, SHIP_YARD_REACH, beachSpot, cargoSize, launchSpot, mouthTile } from './naval';
+import { jetReady } from './airbase';
 import { Rng } from './rng';
 import { Loco } from './slope';
 import { TPS, type Entity, type UnitDef } from './types';
@@ -51,9 +52,9 @@ interface NavCfg {
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 26, army: 16000, wing: 2 } },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 20, army: 14000, wing: 3 } },
-  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 16, army: 12000, wing: 4 } },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 30, army: 24000, wing: 2 } },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 26, army: 22000, wing: 3 } },
+  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 } },
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
@@ -247,7 +248,7 @@ export class NavalAI {
     // (the carrier is not a raider: it keeps its own station with its escort, see carrier())
     const cv = this.carrier(navy, yard);
     const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots && !unitDef(u.def).deck && !(cv && u.id === this.escort));
-    this.fleet(yard, combat);
+    this.fleet(yard, combat, cv);
     this.manageLanding(yard, navy, land);
   }
 
@@ -283,12 +284,14 @@ export class NavalAI {
     let wing = 0;
     for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === jet) wing++;
     for (const q of p.queues.air) if (q.def === jet) wing++;
-    // (replacements for jets lost over the enemy only up to twice the wing per match, and out of money to spare:
-    // re-buying every jet lost over the enemy's air defences left the carrier nations behind in the bench)
-    if (wing < cfg.wing && this.stats.wing < cfg.wing * 2 && p.credits >= this.cfg.reserve + unitDef(jet).cost && w.canBuild(this.pid, jet)) {
-      this.cmd({ type: 'produce', def: jet });
-      this.stats.wing++;
-    }
+    // (replacements for jets lost over the enemy only up to twice the wing per match: re-buying every jet lost
+    // over the enemy's air defences left the carrier nations behind in the bench)
+    // (the missing jets ordered together: production pays for them as the money comes in)
+    if (wing < cfg.wing && p.credits >= this.cfg.reserve)
+      for (let k = wing; k < cfg.wing && this.stats.wing < cfg.wing * 2 && w.canBuild(this.pid, jet); k++) {
+        this.cmd({ type: 'produce', def: jet });
+        this.stats.wing++;
+      }
     // its escort: a combat boat that keeps close; enemy boats closing on the carrier are engaged
     let esc = this.escort >= 0 ? w.get(this.escort) : undefined;
     if (!esc || esc.dead || esc.owner !== this.pid) {
@@ -307,8 +310,16 @@ export class NavalAI {
     w.queryRadius(cv.x, cv.y, 11, (o) => {
       if (!threat && o.kind === 'unit' && w.isEnemy(this.pid, o.owner) && unitDef(o.def).naval && w.sees(this.pid, o)) threat = o;
     });
+    const t = threat as Entity | null;
+    if (t) {
+      // the whole battle group turns on it, and the carrier's ready jets strike it
+      const ids = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots && !unitDef(u.def).deck && u.order.type !== 'attack' && !this.raidIds.includes(u.id)).map((u) => u.id);
+      if (ids.length) this.cmd({ type: 'attack', ids, target: t.id });
+      const jets: number[] = [];
+      for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === jet && jetReady(e) && e.order.type === 'idle') jets.push(e.id);
+      if (jets.length) this.cmd({ type: 'attack', ids: jets, target: t.id });
+    }
     if (esc) {
-      const t = threat as Entity | null;
       if (t && esc.order.type !== 'attack') this.cmd({ type: 'attack', ids: [esc.id], target: t.id });
       else if (!t && esc.order.type === 'idle' && Math.hypot(esc.x - cv.x, esc.y - cv.y) > 3.5) {
         // (station on the carrier's quarter)
@@ -445,13 +456,15 @@ export class NavalAI {
     return { id: -1, x, y };
   }
 
-  private fleet(yard: Entity | null, boats: Entity[]) {
+  private fleet(yard: Entity | null, boats: Entity[], cv: Entity | null = null) {
     const w = this.w;
     if (!boats.length) {
       this.raidIds = [];
       return;
     }
     const home = yard ? this.anchorage(yard) : null;
+    // (with a carrier at sea the fleet is its battle group: it gathers round the carrier, astern)
+    const gather: [number, number] | null = cv ? [cv.x - Math.cos(cv.facing) * 3.2, cv.y - Math.sin(cv.facing) * 3.2] : home;
     // the badly hurt come home to the yard for repair
     for (const b of boats) {
       if (home && b.hp < b.maxHp * 0.35 && Math.hypot(b.x - home[0], b.y - home[1]) > 4 && b.order.type !== 'move') {
@@ -487,13 +500,14 @@ export class NavalAI {
       }
       return;
     }
-    // gather at the anchorage, then sail out once there are enough and the war is on
+    // gather at the anchorage (or round the carrier), then sail out once there are enough and the war is on
     const idle = boats.filter((b) => b.order.type === 'idle' && b.hp >= b.maxHp * 0.7);
-    if (home) {
-      const strays = idle.filter((b) => Math.hypot(b.x - home[0], b.y - home[1]) > 7);
-      if (strays.length) this.cmd({ type: 'move', ids: strays.map((b) => b.id), x: home[0], y: home[1] });
+    if (gather) {
+      const strays = idle.filter((b) => Math.hypot(b.x - gather[0], b.y - gather[1]) > (cv ? 5 : 7));
+      if (strays.length) this.cmd({ type: 'move', ids: strays.map((b) => b.id), x: gather[0], y: gather[1] });
     }
-    if (!NAVY_AI.raids || !this.offensive() || idle.length < this.cfg.sortie || w.tick < this.raidAt) return;
+    // (no raids while there is a carrier to guard: left alone at its station it was sunk by the enemy's boats)
+    if (cv || !NAVY_AI.raids || !this.offensive() || idle.length < this.cfg.sortie || w.tick < this.raidAt) return;
     const region = w.regionOf(idle[0].x, idle[0].y, Loco.Boat);
     // (nothing known within reach of the water: sweep the enemy's coast, finding targets on the way. Without it a
     // side whose scouts never saw the far shore kept its boats at home while the other side's raids came to it)
