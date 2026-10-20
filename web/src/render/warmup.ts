@@ -8,6 +8,7 @@ import { Slicer, nextFrame, settlePrograms } from './slice';
 import type { ViewModes } from './viewmodes';
 import { forceHero } from './perf/lod';
 import { SKINS, skinTextures } from './models/blenderskin';
+import { loadNavalKit } from './naval/navalkit';
 
 /*
  * Shader / material warm-up before the first battle frame.
@@ -91,6 +92,9 @@ function passMaterials(root: object): THREE.Material[] {
 
 export async function warmUp(r: GameRenderer, factions: Faction[], modes: ViewModes | null, onProgress: (k: number) => void, alive: () => boolean = () => true): Promise<WarmupResult> {
   const t0 = performance.now();
+  // the naval kit on maps with open sea (naval/navalkit.ts): the Shipyard and boats built below are then the real
+  // models, not their plain stand-ins, and their programs compile here instead of in the first sea battle
+  if (r.world.hasSea) await Promise.race([loadNavalKit(r.world.players.map((p) => p.faction)), new Promise((res) => setTimeout(res, 20000))]);
   const slicer = new Slicer(35, () => !alive());
   r.governorHold = true;
   const gl = r.renderer;
