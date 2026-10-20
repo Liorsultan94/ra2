@@ -428,28 +428,33 @@ function assemble(
 
 /*
  * "Wadi Al-Rimal": the Sinai Peninsula (SN1), its coasts traced from the owner's picture of it (sim/sinaimask.ts, a
- * satellite view, north up): the Mediterranean along the top, the long Gulf of Suez slanting down the west and the
- * narrower Gulf of Aqaba slanting down the east, both opening into the Red Sea round the southern tip (Sharm
- * el-Sheikh). Map north is the top of the screen (the tile map's north-west corner). Player 0 (blue) starts on the
- * Egyptian mainland west of the gulf of Suez's head, player 1 (red) on the Arabian mainland east of the lower Gulf of
- * Aqaba, both where the owner marked them. There are no bridges: armies cross over land at the head of each gulf -
- * on the west the isthmus between the Mediterranean and the Gulf of Suez, on the east between the Gulf of Aqaba and
- * the granite ridge running north from it to the sea - each with its village on the Sinai side.
+ * satellite view, north up): the long Gulf of Suez slanting down the west and the narrower Gulf of Aqaba slanting
+ * down the east, both opening into the Red Sea round the southern tip (Sharm el-Sheikh); the Mediterranean along the
+ * top where the owner drew its coast later, well north of the picture's, more land all along the north (SN2:
+ * MED_COAST_PX). Map north is the top of the screen (the tile map's north-west corner). Player 0 (blue) starts far
+ * west on the Egyptian mainland, player 1 (red) far east on the Arabian, level, where the owner put them (SN2). There
+ * are no bridges: armies cross over land at the head of each gulf - on the west the isthmus between the Gulf of
+ * Suez's head and the isthmus's lagoons, on the east between the Gulf of Aqaba's head and the granite ridge running
+ * north from it to the sea - each with its village on the Sinai side.
  *
- * Fairness: the sides are not mirror images (the real coasts are not). What each player holds is kept equal by hand:
- * the ground round each base is laid out once in the base's own frame and turned half round for the other (buildings
- * turn half round too: turn.ts), and everything else comes in pairs - one nearer each base by road (ore fields of the
- * same size, oil, tech sites, villages and towns of the same houses placed both or neither). bench/sinai-fair.test.ts
+ * Fairness: the coasts are not mirror images, but the two bases are: red's tile is blue's transposed, and the ground
+ * round each base and on its mainland on the way to its crossing is laid out once in blue's frame and mirrored left
+ * to right for red (own(); the map's x <-> y). Everything else comes in pairs - one nearer each base by road (ore
+ * fields of the same size, tech sites, villages and towns of the same houses held level). bench/sinai-fair.test.ts
  * prints the numbers. Positions below are pixels of the picture (u east, v south; 250 x 270) unless stated.
  */
 
 /** The Sinai map's size (tiles). */
-export const SINAI_N = 176;
+export const SINAI_N = 208;
 const R2 = Math.SQRT2;
-/** Tiles per pixel of the owner's picture, and the picture pixel at the map's centre. */
+/**
+ * Tiles per pixel of the owner's picture, and the picture pixel at the map's centre: east of the picture's middle
+ * and lower, so the two bases (far west and far east, level) mirror each other across the map's diagonal, and moved
+ * from the 176-tile map's (125, 135) by whole tiles (the old layout's interior keeps its tiles: OLD).
+ */
 const PK = 0.48;
-const PU = 125;
-const PV = 135;
+const PU = 125 + (14 * R2) / (2 * PK);
+const PV = 135 + (6 * R2) / PK;
 /** Screen south (tiles from the top corner) of the map's centre. */
 const SC = (SINAI_N / 2) * R2;
 /** Continuous map point of screen position (e east, s south of the map's top corner; tiles). */
@@ -467,37 +472,70 @@ const scrE = (x: number, y: number) => (x - y) / R2;
 const scrS = (x: number, y: number) => (x + y) / R2;
 /** Picture pixel of continuous map point (x, y). */
 const toPx = (x: number, y: number) => ({ u: PU + scrE(x, y) / PK, v: PV + (scrS(x, y) - SC) / PK });
+/** Picture pixel of continuous map point (x, y) (sinaiPoint's inverse; the benches print positions with it). */
+export const sinaiPixel = toPx;
 /** The point de east, ds south (screen tiles) of continuous point p. */
 const offs = (p: Point, de: number, ds: number): Point => ({ x: p.x + (ds + de) / R2, y: p.y + (ds - de) / R2 });
 
-/** The owner's marks: blue on the Egyptian mainland, red on the Arabian. */
+/**
+ * The owner's marks (refs/owner-bases-arrows.jpg): blue far west on the Egyptian mainland, red far east on the
+ * Arabian, level with each other and mirror images across the map's diagonal (red's tile is blue's transposed).
+ */
 const START_PX: [number, number][] = [
-  [11, 67],
-  [214, 183],
+  [-86, PV],
+  [2 * PU + 86, PV],
 ];
 const BASES = START_PX.map(([u, v]) => pp(u, v));
 /**
- * The ground round a base in that base's frame (screen tiles from it; player 0's, turned half round for player 1:
- * the Mediterranean north of blue's base is the Red Sea south of red's, the Gulf of Suez east of it the Gulf of
- * Aqaba west of red's).
+ * The ground round a base in that base's frame (screen tiles from it, de east and ds south: player 0's, mirrored
+ * left to right for player 1, which is the map transposed: the Gulf of Suez east of blue's base is the Gulf of Aqaba
+ * west of red's, its crossing north-east of it the other's north-west).
  */
-const own = (side: number, de: number, ds: number): Point => (side === 0 ? offs(BASES[0], de, ds) : offs(BASES[1], -de, -ds));
+const own = (side: number, de: number, ds: number): Point => (side === 0 ? offs(BASES[0], de, ds) : offs(BASES[1], -de, ds));
 
 /**
  * The old 160 x 160 layout's interior of the Sinai (the St Catherine massif, its graded tracks, the coloured canyon
- * and its highland, the oasis gorge) keeps its shape: screen positions of that layout (e, s), moved OLD_UP tiles up
- * the diagonal into the traced peninsula.
+ * and its highland, the oasis gorge) keeps its shape: screen positions of that layout (e, s), moved by whole tiles
+ * (OLD) into the traced peninsula.
  */
-export const SINAI_OLD_UP = 10;
-const OLD_UP = SINAI_OLD_UP;
-const oldAt = (e: number, s: number): Point => scr(e, s - OLD_UP * R2);
+export const SINAI_OLD = { dx: -7, dy: 7 };
+const oldAt = (e: number, s: number): Point => {
+  const p = scr(e, s);
+  return { x: p.x + SINAI_OLD.dx, y: p.y + SINAI_OLD.dy };
+};
 
 /** The open seas past the picture (sim/map.ts openSeaDist): the coasts at its left and right edges. */
-const MED_OFF = (PV - 50) * PK;
+const MED_OFF = (PV - 20) * PK;
 const RED_OFF = (200 - PV) * PK;
+/**
+ * The Mediterranean's coast as the owner drew it on the overview (refs/owner-north-land-green.jpg; pixels, every 10
+ * along u, past the map at both ends): well north of the picture's coast, more land along the whole north.
+ */
+const MED_COAST_PX: [number, number][] = [
+  [-190, 37], [-180, 33], [-170, 9], [-160, 5], [-150, 5], [-140, 5], [-130, 9], [-120, 9], [-110, 7], [-100, 7], [-90, 8], [-80, 6],
+  [-70, 8], [-60, 15], [-50, 21], [-40, 28], [-30, 29], [-20, 23], [-10, -9], [0, -4], [10, 13], [20, 22], [30, 20], [40, 17], [50, 14],
+  [60, 16], [70, 14], [80, 10], [90, 7], [100, 5], [110, 5], [120, -5], [130, -22], [140, -19], [150, -16], [160, -24], [170, -9],
+  [180, -9], [190, -12], [200, -16], [210, -19], [220, -21], [230, -22], [240, -21], [250, -16], [260, -7], [270, 3], [280, 13],
+  [290, 17], [300, 22], [310, 24], [320, 24], [330, 27], [340, 30], [350, 33], [360, 31], [370, 26], [380, 21], [390, 12], [400, -1],
+  [410, -14], [420, -22], [430, -28], [440, -33], [450, -38], [460, -40],
+];
+/**
+ * The lagoons and salt marsh of the isthmus (Lake Manzala, the lakes along the old canal line) from the Mediterranean
+ * down to the old coast north of the Gulf of Suez's head: the west crossing stays the isthmus it was (pixels, half
+ * width in pixels), as the granite ridge keeps the east one.
+ */
+const LAGOON_PX: [number, number, number][] = [
+  [37, 4, 7],
+  [40, 16, 5.5],
+  [38, 28, 4.6],
+  [43, 38, 4.2],
+  [45, 47, 3.4],
+];
+/** Past the picture's east edge the Arabian coast runs on south-east from the Red Sea's (pixels; v at u = 250, rise per pixel). */
+const RED_EAST: [number, number] = [206, 0.55];
 
 /** The granite ridge from the Mediterranean down to the head of the Gulf of Aqaba (east; impassable): capsule. */
-const RIDGE_PX: [number, number, number, number] = [234, 6, 241, 68];
+const RIDGE_PX: [number, number, number, number] = [233, -32, 241, 68];
 const RIDGE_HW = 3.2;
 /** The AI's crossings: the isthmus at the head of the Gulf of Suez, the gap between the ridge and the Gulf of Aqaba. */
 const CROSS_PX: [number, number][] = [
@@ -507,51 +545,43 @@ const CROSS_PX: [number, number][] = [
 
 /** Ore fields (u, v, radius, kind 1 ore / 2 gems): pairs, the first nearer blue by road, the second nearer red. */
 const SINAI_ORE_PAIRS: [[number, number, number, number], [number, number, number, number]][] = [
-  // (the fields in the Sinai nearest blue's crossing; red's twins in the north-east corner and on its mainland)
+  // (past each crossing, and in the dunes of the north by the coast road)
   [
     [76, 80, 3.0, 1],
-    [268, 124, 3.0, 1],
+    [196, 80, 3.0, 1],
   ],
   [
-    [70, 146, 3.0, 1],
-    [268, 100, 3.0, 1],
-  ],
-  [
-    [112, 108, 2.4, 2],
-    [300, 140, 2.4, 2],
+    [116, 36, 2.4, 2],
+    [188, 30, 2.4, 2],
   ],
 ];
-/** Each base's own fields (screen tiles in its frame: own()). */
+/**
+ * Each base's own fields and those on its mainland on the way to its crossing (screen tiles in its frame: own()).
+ * The refinery docks face +y for blue and -y for red (turn.ts), so only fields due east or west of a base, or a
+ * north one with a south one, sit alike to them on both sides.
+ */
 const BASE_ORE: [number, number, number, number][] = [
-  // (the home fields due west and south of blue's base, due east and north of red's: the refinery docks face +y for
-  // blue and -y for red, turn.ts, so they relate to them alike)
-  [-17, 0, 3.6, 1],
-  [-6, 15, 3.2, 1],
-  [-34, 10, 3.0, 1],
-  [-30, 22, 2.4, 2],
+  [-15, 0, 3.6, 1],
+  [6, -18, 3.0, 1],
+  [6, 18, 3.0, 1],
+  [24, 0, 2.4, 2],
+  [34, -14, 3.0, 1],
+  [44, -22, 3.0, 1],
 ];
-/** Oil derricks (centres): each base's own (screen tiles in its frame) and pairs in the Sinai. */
+/** Oil derricks (centres; screen tiles in each base's frame): by the base and on the way to the crossing. */
 const BASE_OIL: [number, number][] = [
-  [-9, 9],
-  [-22, 4],
-];
-const SINAI_OIL_PAIRS: [[number, number], [number, number]][] = [
-  [
-    [84, 86],
-    [262, 82],
-  ],
-  [
-    [92, 98],
-    [240, 148],
-  ],
+  [-8, -9],
+  [-8, 9],
+  [46, -12],
+  [22, -36],
 ];
 /** Tech sites: candidate spots for blue and, candidate for candidate, red's (base frame, or Sinai pixel pairs). */
 const BASE_TECH: { def: string; at: [number, number][] }[] = [
-  { def: 'tech_hospital', at: [[-8, 18], [-10, 20], [-6, 20], [-12, 16]] },
-  { def: 'tech_airport', at: [[-36, 30], [-38, 30], [-34, 32], [-38, 28]] },
+  { def: 'tech_hospital', at: [[16, 14], [18, 16], [14, 16], [18, 12], [20, 10], [12, 20], [22, 14], [16, 20], [20, 18]] },
+  { def: 'tech_airport', at: [[10, -32], [12, -34], [8, -34], [14, -32], [16, -30], [6, -36], [12, -38], [16, -36]] },
+  { def: 'tech_comms', at: [[40, -44], [42, -46], [38, -46], [42, -42], [44, -40], [36, -48], [46, -44], [40, -50], [34, -44]] },
 ];
 const SINAI_TECH: { def: string; at: [number, number][]; at2: [number, number][] }[] = [
-  { def: 'tech_comms', at: [[92, 74], [96, 76], [88, 72], [98, 72], [94, 80], [90, 68]], at2: [[248, 142], [246, 146], [250, 138], [244, 140], [252, 146], [242, 136]] },
   { def: 'tech_hospital', at: [[104, 86], [108, 88], [100, 84], [110, 84], [106, 92], [102, 80]], at2: [[190, 70], [184, 74], [196, 64], [178, 80], [200, 58], [172, 70]] },
 ];
 
@@ -569,19 +599,13 @@ const SINAI_MASSIF: { e: number; s: number; h: number }[][] = [
     { e: -12.5, s: 155, h: 3.0 },
   ],
 ];
-/** The mountains along the gulfs' outer coasts: Egypt's Galala (south-west) and Arabia's Midian (east; pixels). */
-const SINAI_COAST_MTS: { u: number; v: number; h: number }[][] = [
-  [
-    { u: -12, v: 150, h: 1.2 },
-    { u: -20, v: 175, h: 3.1 },
-    { u: -14, v: 200, h: 2.6 },
-    { u: -4, v: 225, h: 1.0 },
-  ],
-  [
-    { u: 318, v: 92, h: 1.0 },
-    { u: 328, v: 116, h: 2.8 },
-    { u: 326, v: 142, h: 3.1 },
-  ],
+/** The mountains along the gulfs' outer coasts: Egypt's Galala and Arabia's Midian. */
+const BASE_COAST_MTS: { de: number; ds: number; h: number }[] = [
+  // (base frame: south-east of each base, inland of its gulf; clear of the way to the crossing)
+  { de: 43.4, ds: -1.3, h: 1.2 },
+  { de: 39.6, ds: 10.7, h: 3.1 },
+  { de: 42.5, ds: 22.7, h: 2.6 },
+  { de: 47.3, ds: 34.7, h: 1.0 },
 ];
 /** The sandstone highland the coloured canyon cuts through (old layout: the eastern one). */
 const SINAI_HIGHLAND: { e: number; s: number; h: number }[][] = [
@@ -605,24 +629,23 @@ const SINAI_MESAS: [number, number, number, number, number][] = [
   [108, 74, 111, 82, 2.0],
   [139, 74, 142, 82, 2.0],
 ];
-/**
- * A rocky headland on the Mediterranean shore north-west of blue's base (base frame: capsule ends, radius): the Red
- * Sea and the Gulf of Aqaba come closer round red's base than the Mediterranean and the Gulf of Suez round blue's, so
- * this keeps the open ground round the two bases alike (bench/sinai-fair.test.ts: build space).
- */
-const BLUE_HEADLAND: [number, number, number, number, number] = [-12, -3.5, -1, -5, 2.6];
-/** Oases and springs (pixels, radius tiles) in the Sinai; each base has its own (base frame). */
+/** Oases and springs (pixels, radius tiles) in the Sinai (in the north, among the dunes, too); each base has its own (base frame). */
 const SINAI_OASES: [number, number, number][] = [
   [82, 100, 1.9],
   [186, 96, 1.9],
+  [84, 24, 1.7],
+  [206, 4, 1.7],
 ];
-const BASE_OASIS: [number, number, number] = [-14, 26, 1.8];
+const BASE_OASIS: [number, number, number] = [-4, -22, 1.8];
+/** Each base's mainland: a well in the dunes towards the Mediterranean (base frame). */
+const BASE_OASIS2: [number, number, number] = [26, -50, 1.6];
 /**
  * The oasis gorge in the El Tih plateau (Ain Khudra; render/seaside.ts buildOasisGorge): a lake under two sandstone
  * escarpments with a spring pool below each, irrigated plots and a side wadi; tile-index offsets from GORGE (the
- * lake's tile on the map's diagonal; the pools and ridges mirror each other across it).
+ * lake's tile: the old layout's (92, 92) on its diagonal; the pools and ridges mirror each other across the line
+ * through it parallel to the map's diagonal).
  */
-export const GORGE = 92 - OLD_UP;
+export const GORGE = { x: 92 + SINAI_OLD.dx, y: 92 + SINAI_OLD.dy };
 const GORGE_LAKE = 3.3;
 const GORGE_POOL: [number, number, number] = [-8, 6, 1.8];
 const GORGE_RIDGE: [number, number, number, number, number] = [-14, 3, -7, 9, 2.3];
@@ -639,6 +662,8 @@ const SINAI_WADIS: [number, number][][] = [
     [126, 72],
     [124, 50],
     [125, 30],
+    [123, 10],
+    [124, -10],
   ],
   [
     [100, 104],
@@ -659,7 +684,7 @@ const NUWEIBA_TOWN_PX: [number, number] = [186, 128];
 /** The gulfs and seas (render and sim share it: sim/map.ts seaDist): the traced coasts and the places by the sea. */
 function sinaiSea(): SeaDeco {
   const c = SINAI_N / 2;
-  const sea: SeaDeco = { c, top: MED_OFF, bottom: RED_OFF, gulfs: [], sites: [], grid: sinaiGrid() };
+  const sea: SeaDeco = { c, top: MED_OFF, bottom: RED_OFF, gulfs: [], sites: [], grid: sinaiGrid(), north: medCoast() };
   /** A frame on the coast nearest pixel (u, v): origin on the waterline, +v seaward; `back` tiles inland of it. */
   const shoreAt = (u: number, v: number, back = 0): SeaFrame => {
     const p = pp(u, v);
@@ -692,6 +717,24 @@ function sinaiSea(): SeaDeco {
   // the Blue Hole off the Sinai's Aqaba coast north of Dahab
   sea.hole = shoreAt(184, 150, -0.2);
   return sea;
+}
+
+/** The owner's Mediterranean coast (MED_COAST_PX) as SeaDeco.north: its offset from the map centre every 8 tiles east. */
+function medCoast(): NonNullable<SeaDeco['north']> {
+  const step = 8;
+  const e0 = (MED_COAST_PX[0][0] - PU) * PK;
+  const e1 = (MED_COAST_PX[MED_COAST_PX.length - 1][0] - PU) * PK;
+  const off: number[] = [];
+  for (let e = e0; e <= e1 + 1e-6; e += step) {
+    const u = PU + e / PK;
+    let k = 0;
+    while (k < MED_COAST_PX.length - 2 && MED_COAST_PX[k + 1][0] < u) k++;
+    const [u0, v0] = MED_COAST_PX[k];
+    const [u1, v1] = MED_COAST_PX[k + 1];
+    const v = v0 + ((v1 - v0) * Math.max(0, Math.min(1, (u - u0) / (u1 - u0))));
+    off.push(Math.round((PV - v) * PK * 100) / 100);
+  }
+  return { e0, step, off };
 }
 
 /** The picture's water mask (sim/sinaimask.ts) decoded: 1 = water, row-major. */
@@ -772,24 +815,41 @@ function sinaiGrid(): SeaGrid {
     f = o;
   }
   // the grid reaches past the picture to the map's corners (pixels of padding on every side)
-  const reach = (SINAI_N / 2) * R2 / PK;
-  const padU = Math.ceil(reach - PU) + 2;
-  const padV = Math.ceil(reach - PV) + 2;
+  const reach = ((SINAI_N / 2) * R2) / PK;
+  const padL = Math.ceil(reach - PU) + 2;
+  const padR = Math.ceil(reach - (MW - PU)) + 2;
+  const padT = Math.ceil(reach - PV) + 2;
+  const padB = Math.ceil(reach - (MH - PV)) + 2;
   const S = 2;
-  const cols = (MW + 2 * padU) * S;
-  const rows = (MH + 2 * padV) * S;
+  const cols = (MW + padL + padR) * S;
+  const rows = (MH + padT + padB) * S;
   const water = new Uint8Array(cols * rows);
   for (let j = 0; j < rows; j++)
     for (let i = 0; i < cols; i++) {
-      // sample (i, j) at picture pixel ((i + 0.5) / S - padU, ...); pixel centres at x + 0.5; past the edges the edge
-      // pixels carry on
-      const u = Math.max(0, Math.min(MW - 1.0001, (i + 0.5) / S - padU - 0.5));
-      const v = Math.max(0, Math.min(MH - 1.0001, (j + 0.5) / S - padV - 0.5));
-      const x = Math.floor(u);
-      const y = Math.floor(v);
-      const tx = u - x;
-      const ty = v - y;
-      const val = (f[y * MW + x] * (1 - tx) + f[y * MW + x + 1] * tx) * (1 - ty) + (f[(y + 1) * MW + x] * (1 - tx) + f[(y + 1) * MW + x + 1] * tx) * ty;
+      // sample (i, j) at picture position (pu, pv) = ((i + 0.5) / S - padL, ...); pixel centres at x + 0.5; past the
+      // edges the edge pixels carry on, but for the Arabian coast past the east edge
+      const pu = (i + 0.5) / S - padL;
+      const pv = (j + 0.5) / S - padT;
+      let val: number;
+      if (pu > MW) val = pv > RED_EAST[0] + (pu - MW) * RED_EAST[1] ? 1 : 0;
+      else {
+        const u = Math.max(0, Math.min(MW - 1.0001, pu - 0.5));
+        const v = Math.max(0, Math.min(MH - 1.0001, pv - 0.5));
+        const x = Math.floor(u);
+        const y = Math.floor(v);
+        const tx = u - x;
+        const ty = v - y;
+        val = (f[y * MW + x] * (1 - tx) + f[y * MW + x + 1] * tx) * (1 - ty) + (f[(y + 1) * MW + x] * (1 - tx) + f[(y + 1) * MW + x + 1] * tx) * ty;
+      }
+      // the isthmus's lagoons
+      for (let k = 0; k < LAGOON_PX.length - 1 && val <= 0.5; k++) {
+        const [u0, v0, w0] = LAGOON_PX[k];
+        const [u1, v1, w1] = LAGOON_PX[k + 1];
+        const du = u1 - u0;
+        const dv = v1 - v0;
+        const t = Math.max(0, Math.min(1, ((pu - u0) * du + (pv - v0) * dv) / (du * du + dv * dv)));
+        if (Math.hypot(pu - u0 - du * t, pv - v0 - dv * t) < w0 + (w1 - w0) * t) val = 1;
+      }
       water[j * cols + i] = val > 0.5 ? 1 : 0;
     }
   const land = water.map((w) => 1 - w);
@@ -798,7 +858,7 @@ function sinaiGrid(): SeaGrid {
   const step = PK / S;
   const d = new Int16Array(cols * rows);
   for (let k = 0; k < d.length; k++) d[k] = Math.max(-32767, Math.min(32767, Math.round((water[k] ? Math.sqrt(toLand[k]) - 0.5 : 0.5 - Math.sqrt(toWater[k])) * step * SEA_GRID_Q)));
-  sinaiGridCache = { cols, rows, e0: (0.5 / S - padU - PU) * PK, s0: SC + (0.5 / S - padV - PV) * PK, step, d, band: 10 };
+  sinaiGridCache = { cols, rows, e0: (0.5 / S - padL - PU) * PK, s0: SC + (0.5 / S - padT - PV) * PK, step, d, band: 10 };
   return sinaiGridCache;
 }
 
@@ -855,38 +915,35 @@ export function createDesertMap(seed: number): GameMap {
   const oilAt = (p: Point) => ({ x: Math.round(p.x - 1), y: Math.round(p.y - 1) });
   const oils: Point[] = [];
   for (let side = 0; side < 2; side++) for (const [de, ds] of BASE_OIL) oils.push(oilAt(own(side, de, ds)));
-  for (const pair of SINAI_OIL_PAIRS) for (const [u, v] of pair) oils.push(oilAt(pp(u, v)));
 
   const massifL = oldSpines(SINAI_MASSIF);
   const highL = oldSpines(SINAI_HIGHLAND, false);
-  const coastL = SINAI_COAST_MTS.map((l) => l.map((p) => ({ ...pp(p.u, p.v), h: p.h })));
+  const coastL = [0, 1].map((side) => BASE_COAST_MTS.map((p) => ({ ...own(side, p.de, p.ds), h: p.h })));
   const lift = MASSIF_LIFT * (1 + rng.range(-0.03, 0.03));
   const mesas: Capsule[] = SINAI_MESAS.map(([u0, v0, u1, v1, r]) => {
     const a = pp(u0, v0);
     const b = pp(u1, v1);
     return { x: a.x, y: a.y, x2: b.x, y2: b.y, r: r + rng.range(-0.15, 0.15) };
   });
-  {
-    const [e0, s0, e1, s1, r] = BLUE_HEADLAND;
-    const a = own(0, e0, s0);
-    const b = own(0, e1, s1);
-    mesas.push({ x: a.x, y: a.y, x2: b.x, y2: b.y, r });
-  }
   const oases = SINAI_OASES.map(([u, v, r]) => ({ ...pp(u, v), r }));
-  for (let side = 0; side < 2; side++) oases.push({ ...own(side, BASE_OASIS[0], BASE_OASIS[1]), r: BASE_OASIS[2] });
+  for (let side = 0; side < 2; side++) for (const [de, ds, r] of [BASE_OASIS, BASE_OASIS2]) oases.push({ ...own(side, de, ds), r });
   // the oasis gorge (tile-index offsets -> continuous points)
-  const gz = (dx: number, dy: number) => ({ x: GORGE + dx + 0.5, y: GORGE + dy + 0.5 });
+  const gz = (dx: number, dy: number) => ({ x: GORGE.x + dx + 0.5, y: GORGE.y + dy + 0.5 });
   oases.push({ ...gz(0, 0), r: GORGE_LAKE }, { ...gz(GORGE_POOL[0], GORGE_POOL[1]), r: GORGE_POOL[2] }, { ...gz(GORGE_POOL[1], GORGE_POOL[0]), r: GORGE_POOL[2] });
   {
     const [x0, y0, x1, y1, r] = GORGE_RIDGE;
     const a = gz(x0, y0);
     const b = gz(x1, y1);
-    mesas.push({ x: a.x, y: a.y, x2: b.x, y2: b.y, r }, { x: a.y, y: a.x, x2: b.y, y2: b.x, r });
+    const a2 = gz(y0, x0);
+    const b2 = gz(y1, x1);
+    mesas.push({ x: a.x, y: a.y, x2: b.x, y2: b.y, r }, { x: a2.x, y: a2.y, x2: b2.x, y2: b2.y, r });
   }
   const wadis = SINAI_WADIS.map((l) => l.map(([u, v]) => pp(u, v)));
   {
-    const pts = GORGE_WADI.map(([dx, dy]) => gz(dx, dy));
-    wadis.push(pts, pts.map((p) => ({ x: p.y, y: p.x })));
+    wadis.push(
+      GORGE_WADI.map(([dx, dy]) => gz(dx, dy)),
+      GORGE_WADI.map(([dx, dy]) => gz(dy, dx)),
+    );
   }
   const wadiDist = (x: number, y: number) => {
     let d = 1e9;
@@ -897,6 +954,8 @@ export function createDesertMap(seed: number): GameMap {
   const townAt = [
     { ...pp(...VILLAGE_PX[0]), r: 11 },
     { ...pp(...VILLAGE_PX[1]), r: 11 },
+    ...NORTH_VILLAGE_PX.map(([u, v]) => ({ ...pp(u, v), r: 8 })),
+    ...[0, 1].map((side) => ({ ...own(side, ...BASE_VILLAGE), r: 8 })),
     { ...pp(...SHARM_TOWN_PX), r: 7 },
     { ...pp(...NUWEIBA_TOWN_PX), r: 7 },
   ];
@@ -1034,7 +1093,8 @@ export function createDesertMap(seed: number): GameMap {
       g.tiles[i] = t;
     }
   const roads = SINAI_ROADS.map((l) => l.map(([u, v]) => pi(u, v)));
-  markRoads(g, roads, roads.map((_, i) => [0.95, 0.85, 0.85, 0.7][Math.min(i, 3)]), [Tile.Sand, Tile.Dirt, Tile.Grass]);
+  // (the highway; the coast roads, the north's too: they meet end to end at the villages, one width)
+  markRoads(g, roads, roads.map((_, i) => (i ? 0.85 : 0.95)), [Tile.Sand, Tile.Dirt, Tile.Grass]);
   paintOre(g, oreFields, Tile.Dirt, true);
 
   const reserved = (x: number, y: number) =>
@@ -1102,21 +1162,24 @@ export function createDesertMap(seed: number): GameMap {
   for (const st of structures) st.variant = hash2(st.x, st.y, NS + 21);
 
   const deco = emptyDeco();
-  deco.roadStyles = roads.map((_, i) => [{ width: 1.05, variant: 0 as const }, { width: 0.9, variant: 1 as const }, { width: 0.9, variant: 1 as const }, { width: 0.75, variant: 1 as const }][Math.min(i, 3)]);
+  deco.roadStyles = roads.map((_, i) => (i ? { width: 0.9, variant: 1 as const } : { width: 1.05, variant: 0 as const }));
   const tracks0 = SINAI_TRACKS.map((l) => l.map(([u, v]) => pi(u, v)));
-  const baseTracks = [0, 1].map((side) => BASE_TRACK.map(([de, ds]) => ti(own(side, de, ds))));
+  const baseTracks = [0, 1].flatMap((side) => [BASE_TRACK, BASE_TRACK2].map((l) => l.map(([de, ds]) => ti(own(side, de, ds)))));
   deco.tracks = [...tracks0, ...baseTracks, ...ramps.lines];
   deco.trackBeds = [...tracks0.map(() => 0), ...baseTracks.map(() => 0), ...ramps.beds];
-  deco.trackNoCars = [...tracks0.map(() => false), ...baseTracks.map(() => false), ...ramps.noCars];
+  // (the spur from the coast road to the summit track's foot leads only to the footpath and the mountain track: no
+  // cars, so no stub of a dead end for them there)
+  deco.trackNoCars = [...tracks0.map((_, i) => i === SUMMIT_SPUR), ...baseTracks.map(() => false), ...ramps.noCars];
   // irrigated plots by the oases, the villages and in the gorge
   const plot = (p: Point, w: number, h: number, rows: 0 | 1) => ({ x0: p.x - w / 2, y0: p.y - h / 2, x1: p.x + w / 2, y1: p.y + h / 2, rows });
   deco.fields = [
     ...SINAI_FIELDS.map(([u, v, w, h, rows]) => plot(pp(u, v), w, h, rows as 0 | 1)),
     ...[0, 1].map((side) => plot(own(side, BASE_OASIS[0] + 3.5, BASE_OASIS[1] - 3), 4, 3, side as 0 | 1)),
-    { x0: GORGE - 7.5, y0: GORGE - 5.5, x1: GORGE - 2.5, y1: GORGE - 1.5, rows: 0 },
-    { x0: GORGE - 5.5, y0: GORGE - 7.5, x1: GORGE - 1.5, y1: GORGE - 2.5, rows: 1 },
+    { x0: GORGE.x - 7.5, y0: GORGE.y - 5.5, x1: GORGE.x - 2.5, y1: GORGE.y - 1.5, rows: 0 },
+    { x0: GORGE.x - 5.5, y0: GORGE.y - 7.5, x1: GORGE.x - 1.5, y1: GORGE.y - 2.5, rows: 1 },
   ];
-  deco.power = SINAI_POWER.map((l) => l.map(([u, v]) => pp(u, v)));
+  deco.power = [];
+  for (let side = 0; side < 2; side++) deco.power.push([...BASE_POWER.map(([de, ds]) => own(side, de, ds)), ...POWER_TO_VILLAGE[side].map(([u, v]) => pp(u, v))]);
   // palms lining the village streets and at the back of the beaches
   deco.trees.push(...townPalms(g, [roads[0]], structures, blocked).filter((p) => townK(p.x, p.y) > 0.3));
   deco.trees.push(...beachPalms(sea, g, NS));
@@ -1165,13 +1228,28 @@ const MASSIF_P2 = 0.26;
 /** The spine's crest heights are lifted this much (SL1: a higher mountain, steep flanks). */
 const MASSIF_LIFT = 1.25;
 
-/** Roads (pixel polylines): the highway base to base over both crossings, the Sinai's coast roads. */
+/** Picture pixel of a point in a base's frame (own()). */
+const ownPx = (side: number, de: number, ds: number): [number, number] => [START_PX[side][0] + (side ? -de : de) / PK, PV + ds / PK];
+/** The highway on each mainland, from the base towards its crossing (base frame). */
+const BASE_HWY: [number, number][] = [
+  [0, 0],
+  [14.4, -11.8],
+  [28.8, -22.9],
+  [43.2, -32],
+  [52.8, -38.7],
+];
+/** Each mainland's village on the highway (base frame). */
+const BASE_VILLAGE: [number, number] = [36, -28];
+/**
+ * Roads (pixel polylines): the highway base to base over both crossings, the Sinai's coast roads and the north's
+ * coast road.
+ */
 const SINAI_ROADS: [number, number][][] = [
-  // the highway: from blue's base over the isthmus, through the west village, across north Sinai, through the east
-  // village and the gap by the ridge, down the Arabian coast inland of Midian's mountains to red's base
+  // the highway: from blue's base north-east over the Egyptian mainland, over the isthmus, through the west village,
+  // across north Sinai, through the east village and the gap by the ridge, south-east over the Arabian mainland to
+  // red's base
   [
-    [11, 67],
-    [24, 62],
+    ...BASE_HWY.map(([de, ds]) => ownPx(0, de, ds)),
     [42, 61],
     [62, 62],
     [88, 58],
@@ -1180,11 +1258,7 @@ const SINAI_ROADS: [number, number][][] = [
     [196, 67],
     [222, 76],
     [240, 79],
-    [250, 92],
-    [254, 115],
-    [262, 140],
-    [250, 170],
-    [214, 183],
+    ...[...BASE_HWY].reverse().map(([de, ds]) => ownPx(1, de, ds)),
   ],
   // the coast road from the west village down the Sinai's Gulf of Suez coast to Sharm
   [
@@ -1201,8 +1275,21 @@ const SINAI_ROADS: [number, number][][] = [
     [112, 200],
     [124, 200],
   ],
-  // from the east village down the Gulf of Aqaba coast to Nuweiba
+  // the north's coast road from the west village through the dunes by the two north villages to the east village,
+  // and on down the Gulf of Aqaba coast to Nuweiba
   [
+    [62, 62],
+    [74, 46],
+    [90, 34],
+    [100, 30],
+    [120, 22],
+    [140, 16],
+    [160, 12],
+    [178, 12],
+    [194, 18],
+    [205, 30],
+    [212, 42],
+    [218, 58],
     [222, 76],
     [212, 90],
     [200, 104],
@@ -1234,13 +1321,31 @@ const SINAI_TRACKS: [number, number][][] = [
     [70, 126],
     [76.7, 125.3],
   ],
+  // over the northern dunes from the highway to the coast road: down Wadi el-Arish, and in the east
+  [
+    [125, 53],
+    [126, 36],
+    [128, 19.6],
+  ],
+  [
+    [196, 67],
+    [190, 44],
+    [186, 15],
+  ],
 ];
-/** Each base's track to its hamlet (base frame). */
+/** SINAI_TRACKS index of the spur up to the massif's summit track (no cars). */
+const SUMMIT_SPUR = 3;
+/** Each base's tracks: to its hamlet, and from its mainland's village north to the well in the dunes (base frame). */
 const BASE_TRACK: [number, number][] = [
-  [-6, 6],
-  [-14, 14],
-  [-21, 22],
-  [-24, 26],
+  [-3, 7],
+  [-4, 16],
+  [0, 24],
+  [8, 30],
+];
+const BASE_TRACK2: [number, number][] = [
+  [36, -28],
+  [31, -39],
+  [27, -47],
 ];
 /** Irrigated plots (centre u, v, size w x h tiles, row direction). */
 const SINAI_FIELDS: [number, number, number, number, number][] = [
@@ -1249,20 +1354,22 @@ const SINAI_FIELDS: [number, number, number, number, number][] = [
   [86, 106, 4, 3, 0],
   [182, 102, 4, 3, 1],
 ];
-/** Power lines (pixel polylines): each base to its crossing's village. */
-const SINAI_POWER: [number, number][][] = [
+/** Power lines: each base along the highway (base frame), on over its crossing to its village (pixels). */
+const BASE_POWER: [number, number][] = [
+  [-3, -4],
+  [12, -15],
+  [27, -26],
+  [42, -35],
+  [53, -42],
+];
+const POWER_TO_VILLAGE: [number, number][][] = [
   [
-    [8, 74],
-    [26, 66],
     [44, 64],
     [62, 66],
     [90, 62],
   ],
   [
-    [218, 176],
-    [244, 160],
-    [256, 120],
-    [246, 90],
+    [250, 84],
     [228, 80],
     [200, 72],
   ],
@@ -1302,6 +1409,11 @@ const SINAI_RAMPS: Ramp[] = [
   },
 ];
 
+/** The north Sinai's villages on its coast road (pixel centres; a pair, the first nearer blue). */
+const NORTH_VILLAGE_PX: [number, number][] = [
+  [100, 30],
+  [205, 30],
+];
 /** The villages at the crossings (pixel centres): the Egyptian one east of the isthmus, the Arabian one west of the gap. */
 const VILLAGE_PX: [number, number][] = [
   [64, 62],
@@ -1404,6 +1516,15 @@ export function sinaiHouses(roads: Point[][]): HouseGroup[] {
     const c = own(side, BASE_HAMLET[0], BASE_HAMLET[1]);
     groups.push({ pair: P, side, centre: c, houses: cluster(c, side === 1, side ? 1 : 0) });
   }
+  // the north's villages and the mainlands' ones
+  NORTH_VILLAGE_PX.forEach(([u, v], side) => {
+    const c = pp(u, v);
+    groups.push({ pair: P + 1, side, centre: c, houses: roadHouses(c, 8, roads, side ? 1 : 0, 1) });
+  });
+  for (let side = 0; side < 2; side++) {
+    const c = own(side, ...BASE_VILLAGE);
+    groups.push({ pair: P + 2, side, centre: c, houses: roadHouses(c, 8, roads, side ? 1 : 0, 1) });
+  }
   return groups;
 }
 /** Does a house take a garrison (sim/garrison.ts: the defined footprints only)? */
@@ -1443,7 +1564,7 @@ function balanceHouses(placed: Structure[], groups: HouseGroup[], blocked: Uint8
   return placed.filter((st) => !drop.has(st));
 }
 /** Each base's hamlet (base frame). */
-const BASE_HAMLET: [number, number] = [-24, 26];
+const BASE_HAMLET: [number, number] = [8, 30];
 
 /**
  * Height fraction of a mountain at u = distance from the spine / foot distance (1 at the spine, 0 from the foot

@@ -773,7 +773,8 @@ export class AIController implements Controller {
     // scan in a canonical frame (the north-east base mirrored onto the south-west one) so rounding and
     // tie-breaks favour neither start position on the point-symmetric map
     // (SN1: the map's own mirror, as src/sim/ai.ts - the Sinai mirrors across its diagonal; map symmetry, not AI2)
-    const trans = map.mirror === 'transpose';
+    // (SN2: the traced Sinai, mirror 'none', has its two bases' grounds mirrored that way too)
+    const trans = map.mirror === 'transpose' || map.mirror === 'none';
     const flip = trans ? conyard.x > conyard.y : conyard.x > map.w / 2;
     const cbx = flip ? (trans ? by : map.w - bx) : bx;
     const cby = flip ? (trans ? bx : map.h - by) : by;

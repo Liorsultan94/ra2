@@ -1,4 +1,4 @@
-import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, type GameMap, WATER_LEVEL } from '../sim/map';
+import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, topCoast, type GameMap, WATER_LEVEL } from '../sim/map';
 import { fbm, hash2 } from '../sim/rng';
 import { biomeLook, type BiomeLook } from './biome';
 import { landmarkPlan, type P2 } from './landmarks/plan';
@@ -97,6 +97,10 @@ export interface Sea {
   twin?: boolean;
   off2?: number;
   even?: boolean;
+  /** The top twin's coast drawn by the owner (sim/map.ts SeaDeco.north, topCoast): its offset at along-coast u. */
+  northAt?: (u: number) => number;
+  /** ...its samples for the shader. */
+  north?: { e0: number; step: number; off: number[] };
 }
 
 /** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
@@ -162,6 +166,10 @@ export class HorizonWorld {
       // south-east one (no harbour)
       const n = Math.SQRT1_2;
       this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: ds.top, off2: ds.bottom, even: true, harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], twin: true };
+      if (ds.north) {
+        this.sea.northAt = (u: number) => topCoast(ds, u);
+        this.sea.north = ds.north;
+      }
     }
     this.findRivers();
     if (this.code === 3) {
@@ -388,20 +396,23 @@ export class HorizonWorld {
     let px = x - this.cx;
     let py = y - this.cy;
     let off = s.off;
+    let top = true;
     // twin: the corner nearer (x, y)
     if (s.twin && px * s.nx + py * s.ny < 0) {
       px = -px;
       py = -py;
       off = s.off2 ?? s.off;
+      top = false;
     }
     const u = px * s.ux + py * s.uy;
+    if (top && s.northAt) return { v: px * s.nx + py * s.ny - s.northAt(u), u };
     return { v: px * s.nx + py * s.ny - off + (s.even ? seaWiggle(u) : coastWiggle(u)), u };
   }
 
   /** World position of along-coast u, seaward v. */
   seaPoint(u: number, v: number): P2 {
     const s = this.sea!;
-    const n = v + s.off - (s.even ? seaWiggle(u) : coastWiggle(u));
+    const n = s.northAt ? v + s.northAt(u) : v + s.off - (s.even ? seaWiggle(u) : coastWiggle(u));
     return { x: this.cx + s.ux * u + s.nx * n, y: this.cy + s.uy * u + s.ny * n };
   }
 
