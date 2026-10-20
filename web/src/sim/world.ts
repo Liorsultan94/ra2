@@ -789,7 +789,7 @@ export class World {
     if (d.shipyard) {
       const s = this.shipSite(defId, tx, ty);
       if (!s.ok) return s.reason;
-      if (this.canPlace(player, defId, tx, ty, -1, false)) return `Too far from your base (within ${SHIP_YARD_REACH} tiles of a Construction Yard, or ${SHIP_BUILD_RADIUS} of another structure)`;
+      if (this.canPlace(player, defId, tx, ty, -1, false)) return `Too far from your base: within ${SHIP_YARD_REACH} tiles of your Construction Yard`;
       return 'Enemy units in the way';
     }
     return '';
