@@ -283,7 +283,9 @@ export class NavalAI {
     let wing = 0;
     for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === jet) wing++;
     for (const q of p.queues.air) if (q.def === jet) wing++;
-    if (wing < cfg.wing && p.credits >= this.cfg.reserve && w.canBuild(this.pid, jet)) {
+    // (replacements for jets lost over the enemy only up to twice the wing per match, and out of money to spare:
+    // re-buying every jet lost over the enemy's air defences left the carrier nations behind in the bench)
+    if (wing < cfg.wing && this.stats.wing < cfg.wing * 2 && p.credits >= this.cfg.reserve + unitDef(jet).cost && w.canBuild(this.pid, jet)) {
       this.cmd({ type: 'produce', def: jet });
       this.stats.wing++;
     }
