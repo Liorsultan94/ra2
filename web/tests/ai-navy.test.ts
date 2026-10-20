@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
-import { buildingDef, unitDef } from '../src/sim/defs';
+import { unitDef } from '../src/sim/defs';
 import { Tile } from '../src/sim/map';
 import { peaceTicks } from '../src/sim/peace';
 import { TPS } from '../src/sim/types';
@@ -9,7 +9,8 @@ import { World } from '../src/sim/world';
 /*
  * NV1: the computer player goes to sea on the desert map (Hard): it builds a Shipyard on the coast that leads to the
  * enemy, fields boats, raids with them once the war is on (never in the peace grace) and makes flanking landings.
- * Maps without sea are untouched (no navy at all).
+ * Maps without sea are untouched (no navy at all). The navy comes late (the land war first: navalai.ts NavCfg.yardAt,
+ * share), so the game runs 34 minutes.
  */
 
 describe('AI navy', () => {
@@ -23,16 +24,15 @@ describe('AI navy', () => {
     w.controllers.push(...ais);
     let raidInPeace = false;
     let boatOnLand = false;
-    while (!w.over && w.tick < TPS * 60 * 24) {
+    while (!w.over && w.tick < TPS * 60 * 34) {
       w.step();
       if (w.tick % 20 !== 0) continue;
       if (w.tick < pt && ais.some((a) => (a.navy?.stats.raids ?? 0) + (a.navy?.stats.landings ?? 0) > 0)) raidInPeace = true;
       for (const e of w.list) if (!e.dead && e.kind === 'unit' && unitDef(e.def).naval === 'boat' && w.map.tiles[w.tileOf(e.x, e.y)] !== Tile.Water) boatOnLand = true;
     }
-    const yards = w.list.filter((e) => e.kind === 'building' && buildingDef(e.def).shipyard);
     const st = ais.map((a) => a.navy!.stats);
     const msg = JSON.stringify({ st, min: +(w.tick / TPS / 60).toFixed(1), over: w.over });
-    expect(yards.length, msg).toBeGreaterThanOrEqual(1);
+    // (built: by the end of a long game a yard may well have been sunk by the other side's boats or a landing)
     expect(st.some((s) => s.yards > 0), msg).toBe(true);
     expect(st.reduce((n, s) => n + s.boats, 0), msg).toBeGreaterThanOrEqual(2);
     expect(st.reduce((n, s) => n + s.raids, 0), msg).toBeGreaterThanOrEqual(1);

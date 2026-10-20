@@ -292,7 +292,9 @@ describe('difficulty still matters', () => {
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
     // (the land war: the navy - NV1, navalai.ts - is switched off here; tests/ai-navy.test.ts covers it)
-    NAVY_AI.on = false;
+    NAVY_AI.on = !!process.env.NAVY_ON;
+    NAVY_AI.landings = !process.env.NOLAND;
+    NAVY_AI.raids = !process.env.NORAID;
     const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number; lead: number }[] = [];
     for (const [seed, f] of [
       [1, 'usa'],
@@ -309,10 +311,11 @@ describe('difficulty still matters', () => {
         const val = [0, 0];
         for (const e of w.list) if (!e.dead && (e.owner === 0 || e.owner === 1)) val[e.owner] += DEFS[e.def]?.cost ?? 0;
         const lead = +(val[hardSlot] / Math.max(1, val[1 - hardSlot])).toFixed(2);
-        results.push({ seed, f, hardSlot, winner, min: +(t / TPS / 60).toFixed(1), lead });
+        results.push({ seed, f, hardSlot, winner, min: +(t / TPS / 60).toFixed(1), lead, nav: (w.controllers as any[]).map((c) => c.navy?.stats ?? null), act: (w.controllers as any[]).map((c) => c.navy?.active ?? null) } as any);
       }
     }
     const msg = JSON.stringify(results);
+    console.log("HVE", NAVY_AI.on, msg);
     const decisive = results.filter((r) => r.winner !== 'none');
     expect(decisive.length, msg).toBeGreaterThanOrEqual(2);
     expect(decisive.filter((r) => r.winner === 'hard').length, msg).toBe(decisive.length);
