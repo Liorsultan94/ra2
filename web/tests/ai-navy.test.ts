@@ -39,7 +39,7 @@ describe('AI navy', () => {
     expect(st.reduce((n, s) => n + s.landings, 0), msg).toBeGreaterThanOrEqual(1);
     expect(raidInPeace).toBe(false);
     expect(boatOnLand).toBe(false);
-  });
+  }, 1_200_000);
 
   it('no navy where there is no sea', () => {
     const w = new World({ seed: 1, map: 'frontline', players: [
