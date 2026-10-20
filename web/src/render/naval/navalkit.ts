@@ -412,7 +412,12 @@ function fallbackYard(style: ModelStyle, fog: FogOfWar | null): Model {
 /** Builders by model key: 'shipyard' and every 'nv_*' boat. */
 export function navalModel(key: string, style: ModelStyle, fog: FogOfWar | null): Model | null {
   if (key === 'shipyard') return navalShipyard(style, fog);
-  if (key.startsWith('nv_')) return navalBoat(key, style, fog);
+  if (key.startsWith('nv_')) {
+    // (a match loads its players' nations; a boat of another nation, say one spawned in by a script, fetches its
+    // file now: this one is the plain boat, the next ones the real model. Cached, so a no-op once loaded)
+    if (common) void loadNavalKit([key.split('_')[1]]);
+    return navalBoat(key, style, fog);
+  }
   return null;
 }
 
