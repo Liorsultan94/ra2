@@ -357,7 +357,14 @@ export function navalShipyard(style: ModelStyle, fog: FogOfWar | null): Model {
   const bfx = new BuildFx(tpl, root);
   let busyK = 0;
   const t0 = trolley ? trolley.position.z : 0;
-  if (hull) hull.visible = false;
+  if (hull) {
+    hull.visible = false;
+    // (the kit puts the hull mostly inside the hall, under its roof: slide it down the slipway, out under the gantry
+    // where it can be seen, lying along the ramp on its cradle, its far end just in the water)
+    hull.position.x += 0.72;
+    hull.position.y -= 0.2;
+    hull.rotation.z -= 0.19;
+  }
   const anim = (s: AnimState) => {
     bfx.update(s);
     if (s.built < 1) {
