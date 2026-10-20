@@ -288,6 +288,9 @@ describe('difficulty still matters', () => {
    * staging point short of the objective and going in together when strong enough (SN3, ai.ts marchPoint) it wins 3
    * of the 4 in 14-23 minutes and runs out the clock 4 times as strong in the fourth. So: at least 2 decisive, hard
    * wins them, easy wins none, and a game that runs out the clock ends with hard at least 1.25 times as strong.
+   * With the navy (NV1, navalai.ts; on here, as in the game): a Shipyard from 7 minutes cost hard every decision
+   * (none of the 4 decided, hard 1.6-2.6 times as strong at the clock); from 14 minutes and within its share of the
+   * army, hard wins 3 in 14-24 minutes and runs out the clock 2.4 times as strong in the fourth.
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
     const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number; lead: number }[] = [];

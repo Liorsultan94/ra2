@@ -12,6 +12,8 @@ import { World } from '../src/sim/world';
 // of seeds 1-10 only 4 ended inside 75 minutes. Marching to a staging point and going in together (SN3, ai.ts
 // marchPoint) 8 of them end in 23-59 minutes; seeds 2-5 in 50, 23, 50 and 37, seed 1 holds out. So: 3 of seeds 1-5
 // end inside an hour.
+// With the navy (NV1, navalai.ts; on here, as in the game: its Shipyard after 14 minutes, within a share of the
+// army) seeds 2, 3 and 5 end in 32, 27 and 24 minutes; 1 and 4 hold out.
 it('hard AI games on the desert map end', () => {
   let ended = 0;
   for (const seed of [1, 2, 3, 4, 5]) {

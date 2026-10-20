@@ -22,12 +22,21 @@
 
 import { Tile, onBridgeHead, type GameMap } from './map';
 
-/** Ways of moving on the ground that slopes limit. */
+/**
+ * Ways of moving. Slopes limit the ground classes (Foot, Vehicle: the first LOCO_COUNT); the water classes
+ * (naval.ts: Boat deep water, Landing also the shallows, Hover also the beach) ignore slopes.
+ */
 export const enum Loco {
   Foot = 0,
   Vehicle = 1,
+  Boat = 2,
+  Landing = 3,
+  Hover = 4,
 }
+/** Ground classes (slope rule). */
 export const LOCO_COUNT = 2;
+/** Every class, ground and water (World.passes / regions / pfs). */
+export const LOCO_ALL = 5;
 
 /** Steepest grade (rise / run of a half step) each locomotion class takes. */
 export const MAX_GRADE: readonly number[] = [0.83, 0.53];
@@ -170,9 +179,10 @@ export function slopeField(m: GameMap): SlopeField {
   return { block, climb, grade };
 }
 
-/** Locomotion class of a ground unit (aircraft: -1, no slope rule). */
-export function locoOf(d: { category: string; air?: boolean }): number {
+/** Locomotion class of a unit (aircraft: -1, no slope rule; naval units: their water class). */
+export function locoOf(d: { category: string; air?: boolean; naval?: 'boat' | 'landing' | 'hover' }): number {
   if (d.air) return -1;
+  if (d.naval) return d.naval === 'boat' ? Loco.Boat : d.naval === 'landing' ? Loco.Landing : Loco.Hover;
   return d.category === 'infantry' ? Loco.Foot : Loco.Vehicle;
 }
 

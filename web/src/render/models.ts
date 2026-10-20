@@ -13,6 +13,7 @@ import type { Model, ModelStyle, MunitionKind, MunitionModel } from './models/ty
 import { VEHICLES } from './models/vehicles';
 import { TECH_MODELS } from './models/techbldgs';
 import { CITY_MODELS } from './models/citybldgs';
+import { navalModel } from './naval/navalkit';
 
 export type { AnimState, Model, ModelStyle, MunitionKind, MunitionModel, Region } from './models/types';
 export { FACTION_REGION } from './models/types';
@@ -34,6 +35,9 @@ export function createModel(key: string, style: ModelStyle, fog: FogOfWar | null
   const fp = footprintOf(key);
   const o = overrideModel(key, style, fog, fp);
   if (o) return o;
+  // the Shipyard and the boats (Blender kit, naval/navalkit.ts)
+  const nv = navalModel(key, style, fog);
+  if (nv) return nv;
   for (const reg of ALL) {
     const b = reg[key];
     if (!b) continue;

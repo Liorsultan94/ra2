@@ -79,6 +79,8 @@ export interface AnimState {
   pitch?: number;
   /** Jets: 1 while rolling on the ground (no bank, no bob). */
   ground?: number;
+  /** Shipyard (naval/navalkit.ts): 1 while it builds a boat (a hull on its slipway), 0 idle. */
+  busy?: number;
   /** Production buildings: seconds since this building last rolled out a unit (undefined / Infinity = never); drives doors / lifts / beacons. */
   produced?: number;
   /** Stable per-unit seed (the entity id): de-synchronises idle motion, gestures and death variants. Render only. */

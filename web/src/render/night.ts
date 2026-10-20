@@ -468,6 +468,19 @@ export class NightLights {
       }
       if (d.kind !== 'unit') continue;
       const ud = unitDef(v.def);
+      if (ud.naval) {
+        // boats: gentle navigation lights (port red, starboard green, a white masthead: naval/navalkit.ts), no beams
+        const rl = root.userData.runLights as { pos: THREE.Vector3; color: number }[] | undefined;
+        if (!rl) continue;
+        root.updateMatrixWorld();
+        for (const L of rl) {
+          _p.copy(L.pos).applyMatrix4(root.matrixWorld);
+          _c.setHex(L.color);
+          const k = 0.55 * dk;
+          this.flare(_p.x, _p.y, _p.z, 0.09, _c.r * k, _c.g * k, _c.b * k);
+        }
+        continue;
+      }
       if (ud.air || ud.category !== 'vehicle') continue;
       const sz = m.size;
       const sx = sz ? sz.x : 0.8;

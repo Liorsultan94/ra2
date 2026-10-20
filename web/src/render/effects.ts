@@ -887,6 +887,14 @@ export class Effects {
     this.ring(x, wy + 0.01, z, 0.1 * S, 0.8 * S, 0.6, 0xffffff, false, 0.4);
   }
 
+  /** Spray thrown off a boat's bow (naval/navalfx.ts): a short fan of white mist and droplets at the waterline. */
+  spray(x: number, y: number, z: number, vx: number, vz: number, size = 0.5) {
+    const n = this.q(2);
+    for (let i = 0; i < n; i++) {
+      this.smokeSys.spawn({ x, y, z, vx: vx * this.rand(0.6, 1.2), vy: this.rand(0.6, 1.4) * size * 2, vz: vz * this.rand(0.6, 1.2), life: this.rand(0.35, 0.7), size: 0.08 * size, sizeEnd: 0.32 * size, color: 0xf4f8fa, colorEnd: 0xe8eef2, alpha: 0.5, gravity: 4, drag: 1.4 });
+    }
+  }
+
   /** Back-compat helper used by older call sites. */
   explosion(x: number, y: number, z: number, size: 'tiny' | 'small' | 'medium' | 'large' | 'huge', kind: 'fire' | 'thermo' | 'dust' | 'laser' | 'air' = 'fire') {
     if (kind === 'dust') {

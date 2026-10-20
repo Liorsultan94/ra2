@@ -47,7 +47,7 @@ const WP_COLOR: Record<WaypointPt['kind'], string> = {
 };
 const WP_HEX: Record<WaypointPt['kind'], number> = { move: 0x6effaa, attackMove: 0xff9646, attack: 0xff463c, patrol: 0x78c8ff, guard: 0xc8aaff };
 
-const UNIT_CATS: Category[] = ['infantry', 'vehicle', 'air'];
+const UNIT_CATS: Category[] = ['infantry', 'vehicle', 'air', 'naval'];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?: HTMLElement): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);

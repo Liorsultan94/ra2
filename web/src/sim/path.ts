@@ -26,6 +26,8 @@ export class PathFinder {
     private block: Uint8Array | null = null,
     /** Per tile and neighbour: extra cost of the step (climbing; slope.ts). */
     private climb: Float32Array | null = null,
+    /** Search budget of a find() call (expanded nodes): the naval classes route round whole peninsulas. */
+    private budget = 6000,
   ) {
     const n = w * h;
     this.g = new Float32Array(n);
@@ -92,7 +94,7 @@ export class PathFinder {
    * Returns a list of tile indices from (sx,sy) (exclusive) to the goal or to
    * the closest reachable tile if the goal can't be reached.
    */
-  find(sx: number, sy: number, gx: number, gy: number, maxNodes = 6000): number[] {
+  find(sx: number, sy: number, gx: number, gy: number, maxNodes = this.budget): number[] {
     const w = this.w;
     if (sx === gx && sy === gy) return [];
     const goal = gy * w + gx;

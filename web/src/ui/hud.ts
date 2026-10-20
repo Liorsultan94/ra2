@@ -5,6 +5,7 @@ import { fillFog } from '../render/minimap';
 import { MinimapPings, OreLayer, noiseFrames, type PingKind } from './minimapfx';
 import { standHeight } from '../sim/map';
 import { TPS, type Category, type Def, type Entity } from '../sim/types';
+import { cargoRoom } from '../sim/naval';
 import type { World } from '../sim/world';
 import type { CameoFactory } from '../render/cameo';
 import { styleFor, type GameRenderer } from '../render/renderer';
@@ -45,6 +46,8 @@ const TABS: { cat: Category; label: string; icon: string }[] = [
   { cat: 'infantry', label: 'Infantry', icon: 'infantry' },
   { cat: 'vehicle', label: 'Vehicles', icon: 'vehicle' },
   { cat: 'air', label: 'Air', icon: 'air' },
+  // (shown only on maps with open sea: the Shipyard's boats, sim/naval.ts)
+  { cat: 'naval', label: 'Navy', icon: 'naval' },
 ];
 
 const svg = (inner: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${inner}</svg>`;
@@ -95,7 +98,7 @@ function airLabel(air: 'no' | 'yes' | 'only', long: boolean): string {
 
 function roleLabel(d: Def): string {
   if (d.kind === 'building') return d.category === 'defense' ? 'Defense' : 'Structure';
-  return d.category === 'infantry' ? 'Infantry' : d.category === 'air' ? 'Aircraft' : 'Vehicle';
+  return d.category === 'infantry' ? 'Infantry' : d.category === 'air' ? 'Aircraft' : d.category === 'naval' ? 'Naval' : 'Vehicle';
 }
 
 export class Hud {
@@ -364,6 +367,10 @@ export class Hud {
     this.mmStatic.width = this.minimap.width;
     this.mmStatic.height = this.minimap.height;
     if (sidebar) this.buildCameos();
+    // the Navy tab and the Shipyard only where the map has open sea (sim/naval.ts)
+    const sea = world.hasSea;
+    this.tabEls.get('naval')?.classList.toggle('no-sea', !sea);
+    this.root.querySelector('.sb-tabs')?.classList.toggle('has-navy', sea);
     this.setTab('building');
     this.live?.dispose();
     this.live = new LivePortrait(this.cameos, sidebar && renderer.quality !== 'low' && player >= 0);
@@ -484,7 +491,11 @@ export class Hud {
   setTab(cat: Category) {
     this.tab = cat;
     for (const [c, b] of this.tabEls) b.classList.toggle('active', c === cat);
-    for (const [id, b] of this.cameoEls) b.style.display = DEFS[id].category === cat ? '' : 'none';
+    const sea = this.world?.hasSea;
+    for (const [id, b] of this.cameoEls) {
+      const d = DEFS[id];
+      b.style.display = d.category === cat && (sea || (d.kind === 'building' ? !d.shipyard : d.category !== 'naval')) ? '' : 'none';
+    }
     this.fitNames();
   }
 
@@ -662,6 +673,8 @@ export class Hud {
         const stats: string[] = [];
         if (d.kind === 'unit' && d.harvester) stats.push(`Cargo $${e.cargo}`);
         if (d.kind === 'unit' && d.transport) stats.push(`Passengers ${e.passengers.length}/${d.transport}`);
+        // landing craft (sim/naval.ts): places taken (a vehicle 3, a soldier 1)
+        if (d.kind === 'unit' && d.cargoSlots) stats.push(`Cargo ${d.cargoSlots - cargoRoom(w, e)}/${d.cargoSlots}`);
         if (d.kind === 'building' && d.garrison) stats.push(`Garrison ${e.owner >= 0 ? e.passengers.length : 0}/${d.garrison}`);
         if (d.kind === 'building' && d.power) stats.push(`Power ${d.power > 0 ? '+' : ''}${d.power}`);
         if (e.sortie) stats.push('1 heavy bomb per sortie', 'Ground only');

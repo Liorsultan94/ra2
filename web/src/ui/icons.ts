@@ -11,6 +11,8 @@ const P: Record<string, string> = {
   infantry: '<circle cx="12" cy="6" r="2.6"/><path d="M7 21v-5.5a5 5 0 0 1 10 0V21"/><path d="M10 21v-4M14 21v-4"/>',
   vehicle: '<path d="M2.5 16.5h19"/><path d="M4 16.5l1.5-4h13l1.5 4"/><path d="M8.5 12.5V10h6.5v2.5"/><path d="M15 11h6.5"/><circle cx="6.5" cy="19" r="1.2"/><circle cx="12" cy="19" r="1.2"/><circle cx="17.5" cy="19" r="1.2"/>',
   air: '<path d="M12 2.5c1 0 1.6 1.2 1.6 3v4.2l7.4 4.3v2l-7.4-2.2v4l2.4 2v1.7L12 20.4l-4 1.1v-1.7l2.4-2v-4L3 16v-2l7.4-4.3V5.5c0-1.8.6-3 1.6-3z"/>',
+  // a boat on the waves (the Navy tab)
+  naval: '<path d="M3 15.5h18l-2.5 3.5H6z"/><path d="M7 15.5v-3h6.5l2 3"/><path d="M10 12.5V9h2.5"/><path d="M11 9V5.5"/><path d="M2.5 21.5c1.5-1 3-1 4.5 0s3 1 4.5 0 3-1 4.5 0 3 1 4.5 0"/>',
   // orders
   stop: '<rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/>',
   // illumination round: a flare under its little parachute, shining

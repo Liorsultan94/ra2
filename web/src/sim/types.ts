@@ -27,8 +27,8 @@ export type Flight =
 
 /** Flights that air defences can shoot down. */
 export const INTERCEPTABLE: Flight[] = ['artillery', 'mortar', 'rocketSalvo', 'ballistic', 'hypersonic', 'cruise'];
-export type Category = 'building' | 'defense' | 'infantry' | 'vehicle' | 'air';
-export const CATEGORIES: Category[] = ['building', 'defense', 'infantry', 'vehicle', 'air'];
+export type Category = 'building' | 'defense' | 'infantry' | 'vehicle' | 'air' | 'naval';
+export const CATEGORIES: Category[] = ['building', 'defense', 'infantry', 'vehicle', 'air', 'naval'];
 
 export interface WeaponDef {
   id: string;
@@ -111,7 +111,7 @@ export interface BaseDef {
 
 export interface UnitDef extends BaseDef {
   kind: 'unit';
-  category: 'infantry' | 'vehicle' | 'air';
+  category: 'infantry' | 'vehicle' | 'air' | 'naval';
   speed: number; // tiles per second
   turnRate: number; // radians per tick
   turret: boolean;
@@ -142,6 +142,16 @@ export interface UnitDef extends BaseDef {
   crushable?: boolean;
   /** Special water-traversing capability (for future amphibious transports, hovercraft, naval units). Standard ground units cannot cross water. */
   amphibious?: boolean;
+  /**
+   * Naval unit (naval.ts): its water locomotion class. 'boat' sails deep water only; 'landing' (landing craft) also
+   * the shallows (reefs, beaches' surf) to beach and load / unload; 'hover' (hovercraft) also rides up onto the beach.
+   */
+  naval?: 'boat' | 'landing' | 'hover';
+  /**
+   * Naval transport (landing craft / hovercraft; naval.ts): cargo room in slots, a soldier takes 1, a vehicle
+   * NAVAL_VEHICLE_SLOTS. Loads at a beach or the Shipyard, unloads on a beach.
+   */
+  cargoSlots?: number;
   /**
    * Stealth aircraft (stealth.ts): while airborne, enemy air-targeting weapons acquire and fire at it only
    * within this fraction of their normal range (the aircraft counterpart of WeaponDef.lowObservable).
@@ -176,7 +186,7 @@ export interface BuildingDef extends BaseDef {
   exit?: [number, number]; // local spawn tile for produced units
   dock?: [number, number]; // local tile a harvester unloads on
   needsPower?: boolean;
-  produces?: 'infantry' | 'vehicle' | 'air';
+  produces?: 'infantry' | 'vehicle' | 'air' | 'naval';
   income?: number; // credits per income interval (oil derricks)
   capturable?: boolean;
   /** Civilian house: infantry capacity (garrison.ts). */
@@ -185,6 +195,8 @@ export interface BuildingDef extends BaseDef {
   techKind?: 'hospital' | 'airport' | 'comms';
   /** Superweapon structure (superweapons.ts). */
   superweapon?: string;
+  /** Shipyard (naval.ts): stands half on the coast, half in the sea; builds naval units from its slipway. */
+  shipyard?: boolean;
 }
 
 /** Superweapon state of a player (superweapons.ts). at: tick it is ready (-1 = no superweapon structure). */
@@ -485,6 +497,12 @@ export interface Entity {
   // night combat (night.ts)
   flashAt: number; // tick of its last shot (a container: of its occupants' last shot): the muzzle flash gives it away by night
   illumAt: number; // artillery / mortar: tick its next illumination round is ready
+
+  // naval (naval.ts)
+  /** Landing craft / hovercraft ordered onto land: unload on the beach once there, towards (x, y). */
+  landing?: { x: number; y: number; last?: boolean } | null;
+  /** Shipyard: which side its slipway faces (0 +x, 1 +y, 2 -x, 3 -y), fixed at placement. */
+  slip?: number;
 }
 
 /**
@@ -699,4 +717,6 @@ export type SimEvent =
   | { t: 'sortie'; id: number; owner: number; what: 'takeoff' | 'touchdown' | 'release' | 'divert' | 'orbit' | 'crash'; x: number; y: number }
   /** Lock-on weapons (sniper.ts): aim taken on a new target ('start') and steady for the final shot ('lock'). */
   | { t: 'aim'; id: number; owner: number; target: number; phase: 'start' | 'lock'; x: number; y: number }
+  /** A landing craft (id) put n units ashore at (x, y) (naval.ts). */
+  | { t: 'unloaded'; id: number; owner: number; x: number; y: number; n: number }
   | { t: 'gameOver'; winner: number };
