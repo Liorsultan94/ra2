@@ -144,9 +144,19 @@ export interface UnitDef extends BaseDef {
   amphibious?: boolean;
   /**
    * Naval unit (naval.ts): its water locomotion class. 'boat' sails deep water only; 'landing' (landing craft) also
-   * the shallows (reefs, beaches' surf) to beach and load / unload; 'hover' (hovercraft) also rides up onto the beach.
+   * the shallows (reefs, beaches' surf) to beach and load / unload; 'hover' (hovercraft) also rides up onto the beach;
+   * 'deep' (the aircraft carrier) only the open ocean (naval.ts DEEP_DEPTH, with room round its hull).
    */
-  naval?: 'boat' | 'landing' | 'hover';
+  naval?: 'boat' | 'landing' | 'hover' | 'deep';
+  /**
+   * Aircraft carrier (airbase.ts, deck pads): parking pads on its flight deck. Its deck jets (deckJet) park, launch,
+   * land and rearm there as on an airbase, the deck moving with the ship.
+   */
+  deck?: number;
+  /** A jet of the carrier's air wing (airbase.ts): built onto a carrier's deck; 'catapult' or 'skijump' launch. */
+  deckJet?: 'catapult' | 'skijump';
+  /** At most this many per player (built and in production): the carrier is one. */
+  limit?: number;
   /**
    * Naval transport (landing craft / hovercraft; naval.ts): cargo room in slots, a soldier takes 1, a vehicle
    * NAVAL_VEHICLE_SLOTS. Loads at a beach or the Shipyard, unloads on a beach.
@@ -297,7 +307,7 @@ export type SortiePhase = 'parked' | 'taxiOut' | 'hold' | 'lineup' | 'takeoff' |
 
 export interface Sortie {
   phase: SortiePhase;
-  base: number; // airbase (airfield building) id, -1 = none
+  base: number; // airbase (airfield building) or aircraft carrier (unit) id, -1 = none
   pad: number; // parking pad index 0..3 on that base, -1 = none
   ammo: number; // strikes aboard (0 or 1)
   rearm: number; // ticks of rearming left on the pad (0 = done)
@@ -312,6 +322,10 @@ export interface Sortie {
   /** Automatic re-strike: the target kept after a bomb release (-1 = none), while the attack order is the one given at tick autoAt. */
   auto: number;
   autoAt: number;
+  /** On a carrier's deck (airbase.ts): position and heading in the ship's frame (x towards the bow, y to starboard). */
+  lx?: number;
+  ly?: number;
+  lf?: number;
 }
 
 /**

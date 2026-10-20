@@ -8,7 +8,8 @@ import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.
 import type { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { DEFS, FACTION_INFO, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { treatPoseOf } from '../sim/medic';
-import { Tile, groundHeight, standHeight } from '../sim/map';
+import { Tile, WATER_LEVEL, groundHeight, standHeight } from '../sim/map';
+import { DECK_Z } from './naval/carriers';
 import { BRIDGE_DEF } from '../sim/bridges';
 import { TPS, type Entity, type Projectile, type SimEvent } from '../sim/types';
 import { heliRepairing } from '../sim/helipad';
@@ -1289,6 +1290,8 @@ export class GameRenderer {
    */
   slabHeight(b: Entity): number {
     const map = this.world.map;
+    // an aircraft carrier: its flight deck (the jets' "slab"; naval/carriers.ts DECK_Z, less the jets' 0.05 lift)
+    if (b.kind === 'unit') return WATER_LEVEL + DECK_Z - 0.05;
     const bd = buildingDef(b.def);
     // the Shipyard: its quay deck level with the shore it stands on, above the water (naval/navalkit.ts)
     if (bd.shipyard) return shipyardDeck(map, b.tx, b.ty, bd.w, bd.h);
@@ -1538,6 +1541,12 @@ export class GameRenderer {
         a.speed = v.speed;
         a.dist = v.dist;
         a.turn = v.turn;
+        // an aircraft carrier: its jet blast deflector up while one of its jets lines up and launches (carriers.ts)
+        if (ud.deck) {
+          let launching = 0;
+          for (const j of w.list) if (j.sortie && j.sortie.base === e.id && (j.sortie.phase === 'lineup' || (j.sortie.phase === 'takeoff' && j.z < 0.3))) launching = 1;
+          a.busy = launching;
+        }
         if (ud.air) {
           // bank into turns, pitch nose-down with speed (helicopters)
           v.bank += (Math.max(-0.6, Math.min(0.6, -v.turn * (ud.fixedWing ? 0.45 : 0.18))) - v.bank) * Math.min(1, dt * 4);

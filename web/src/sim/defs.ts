@@ -98,6 +98,8 @@ const BASE_WEAPONS: WeaponDef[] = [
   { id: 'asm', damage: 115, range: 10.5, minRange: 2, rof: 110, burst: 2, burstDelay: 12, warhead: 'missile', projectile: 'rocket', speed: 0.45, air: 'no', flight: 'atgm', munition: 'cruiseMissile' },
   // point air defence on the missile boats / corvettes (CIWS / RAM / 30 mm): aircraft and drones only
   { id: 'ciws', damage: 16, range: 6.5, rof: 5, warhead: 'flak', projectile: 'instant', air: 'only' },
+  // the carrier's short-range SAMs (NV2): with its close-in guns, its only weapons
+  { id: 'carrierSam', damage: 75, range: 8, rof: 36, warhead: 'missile', projectile: 'rocket', speed: 0.7, air: 'only', flight: 'sam', munition: 'sam' },
   // kamikaze warheads (range = contact distance)
   { id: 'fpvWarhead', damage: 150, range: 0.5, rof: 1, warhead: 'rocket', projectile: 'instant', air: 'no' },
   { id: 'microWarhead', damage: 85, range: 0.5, rof: 1, warhead: 'rocket', projectile: 'instant', air: 'no', splash: 0.8 },
@@ -314,6 +316,17 @@ export const TRANSPORTS: Record<Faction, { name: string; model: string }> = {
 
 const TRANSPORT_TPL: UnitTpl = { name: 'Transport', category: 'air', model: 'tr_c130j', cost: 0, buildTime: 1, hp: 900, armor: 'aircraft', sight: 6, speed: 3.6, turnRate: 0.05, turret: false, radius: 0.9, air: true, fixedWing: true, airlift: true, cruiseAlt: 3.2, prereq: [], buildable: false, desc: 'Airborne-drop transport.' };
 
+/**
+ * NV2: the aircraft carrier of the three nations whose navies have them (USA, Russia, China), and its deck jets.
+ * Generic names: no real ship names, hull numbers or aircraft designations. A superweapon-tier asset: expensive,
+ * slow to build, late tech, one per player, deep water only (naval.ts DEEP_DEPTH). No main gun: close-in guns and
+ * short-range SAMs, so it needs escorts against boats, anti-ship missiles and jets.
+ */
+const CARRIER: UnitOverride = { category: 'naval', cost: 4000, buildTime: 45, hp: 4200, armor: 'heavy', sight: 10, speed: 1.5, turnRate: 0.03, turret: false, radius: 1.3, naval: 'deep', deck: 4, limit: 1, weapon: 'ciws', weapon2: 'carrierSam', prereq: ['shipyard', 'airfield', 'tech'], aiWeight: 0, aiTag: 'support' };
+/** Its air wing: strike jets built straight onto the carrier's deck (4 deck pads), the airbase sortie cycle at sea. */
+const DECK_JET: UnitOverride = { category: 'air', cost: 1800, buildTime: 16, hp: 360, armor: 'aircraft', sight: 10, speed: 5.0, turnRate: 0.12, turret: false, radius: 0.5, air: true, fixedWing: true, cruiseAlt: 2.6, weapon: 'jetBomb', prereq: ['shipyard'], aiWeight: 0, aiTag: 'main' };
+const DECK_DESC = 'Lands back on the moving deck (from the stern), rearms and repairs there (10 s), then strikes again until the target is destroyed. 4 per carrier; if the carrier is lost it diverts to an airbase.';
+
 /** Per-faction overrides of the shared roster and signature additions. Real-world equipment names. */
 type UnitOverride = Partial<UnitTpl> & { replaces?: string; remove?: boolean };
 const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
@@ -331,6 +344,8 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     patrol: { name: 'Mk VI Patrol Boat', model: 'nv_usa_patrol' },
     corvette: { name: 'Littoral Combat Ship (NSM)', model: 'nv_usa_corvette', hp: 1050, speed: 2.9, desc: 'Fast littoral combat ship: Naval Strike Missiles against ships and targets ashore, a 30 mm and RAM point defence against aircraft and drones.' },
     lander: { name: 'LCAC Hovercraft', model: 'nv_usa_lander', naval: 'hover', speed: 3.6, hp: 560, weapon: 'mgHeavy', desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Two .50 cal guns.' },
+    carrier: { ...CARRIER, name: 'Supercarrier', model: 'cv_usa', desc: 'Nuclear supercarrier: an angled flight deck and four catapults, the island aft to starboard. A mobile airbase at sea for 4 catapult-launched strike fighters. Close-in guns and short-range SAMs, no main gun: keep escorts close.' },
+    cvjet: { ...DECK_JET, name: 'Carrier Strike Fighter', model: 'cv_usa_jet', deckJet: 'catapult', desc: 'Catapult-launched carrier strike fighter: one heavy bomb per sortie. ' + DECK_DESC },
     typhon: { name: 'Typhon MRC (Tomahawk)', model: 'tel_typhon', category: 'vehicle', cost: 1800, buildTime: 18, hp: 200, armor: 'light', sight: 6, speed: 1.6, turnRate: 0.08, weapon: 'tomahawk', prereq: ['factory', 'tech'], desc: 'Tomahawk cruise missile: very long range, hugs the terrain - defences spot it only at 40% of their range.', aiWeight: 1, aiTag: 'arty' },
   },
   israel: {
@@ -362,6 +377,8 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     patrol: { name: 'Type 037 Patrol Boat', model: 'nv_china_patrol' },
     corvette: { name: 'Type 022 Houbei Missile Boat', model: 'nv_china_corvette', cost: 1600, hp: 760, speed: 3.2, turnRate: 0.09, desc: 'Wave-piercing catamaran missile boat: fast, YJ-83 anti-ship missiles against ships and the shore, a 30 mm gun against aircraft and drones.' },
     lander: { name: 'Type 726 LCAC', model: 'nv_china_lander', naval: 'hover', speed: 3.6, hp: 560, weapon: 'mgHeavy', desc: 'Air-cushion landing craft: rides over reefs and up the beach. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Light guns.' },
+    carrier: { ...CARRIER, name: 'Fleet Carrier', model: 'cv_china', desc: 'Fleet carrier with a ski-jump bow and a compact island. A mobile airbase at sea for 4 ski-jump-launched strike fighters. Close-in guns and short-range SAMs, no main gun: keep escorts close.' },
+    cvjet: { ...DECK_JET, name: 'Carrier Multirole Fighter', model: 'cv_china_jet', deckJet: 'skijump', desc: 'Ski-jump-launched carrier multirole fighter: one heavy bomb per sortie. ' + DECK_DESC },
     heli: { name: 'Z-10' },
     fighter: { name: 'J-20' },
     robot: { name: 'Armed Robot Dog', model: 'robodog' },
@@ -382,6 +399,8 @@ const FACTION_UNITS: Record<Faction, Record<string, UnitOverride>> = {
     patrol: { name: 'Raptor Patrol Boat', model: 'nv_russia_patrol' },
     corvette: { name: 'Karakurt Missile Corvette', model: 'nv_russia_corvette', hp: 1100, speed: 2.4, desc: 'Missile corvette: Kalibr / Oniks anti-ship missiles against ships and the shore, Pantsir-M close-in defence against aircraft and drones.' },
     lander: { name: 'Serna Landing Craft', model: 'nv_russia_lander', weapon: 'mgHeavy', speed: 3.0, desc: 'Air-lubricated hull landing craft. Carries 2 vehicles and 5 soldiers (a vehicle takes 3 places, a soldier 1). Two heavy machine guns.' },
+    carrier: { ...CARRIER, name: 'Heavy Aviation Cruiser', model: 'cv_russia', desc: 'Heavy carrier with a ski-jump bow and a big island. A mobile airbase at sea for 4 ski-jump-launched strike fighters. Close-in guns and short-range SAMs, no main gun: keep escorts close.' },
+    cvjet: { ...DECK_JET, name: 'Carrier Fighter', model: 'cv_russia_jet', deckJet: 'skijump', desc: 'Ski-jump-launched carrier fighter: one heavy bomb per sortie. ' + DECK_DESC },
     iskander: { name: '9K720 Iskander-M', model: 'tel_iskander', category: 'vehicle', cost: 2000, buildTime: 20, hp: 240, armor: 'light', sight: 6, speed: 1.7, turnRate: 0.08, weapon: 'iskander', prereq: ['factory', 'tech'], desc: 'Quasi-ballistic missile: low trajectory, weaving terminal dive. Takes 2 intercepts.', aiWeight: 1, aiTag: 'arty' },
   },
   germany: {

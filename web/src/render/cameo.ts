@@ -90,7 +90,7 @@ export const CUSTOM_CAMEOS: Record<string, string> = {
 
 // NV1: the Shipyard and every nation's boats, rendered in Blender on the water (tools/blender/naval/navalkit.py cameos)
 CUSTOM_CAMEOS.shipyard = `${CAMEO_BASE}ui/cameos/shipyard.jpg`;
-for (const d of Object.values(DEFS)) if (d.kind === 'unit' && d.category === 'naval' && d.buildable) CUSTOM_CAMEOS[d.id] = `${CAMEO_BASE}ui/cameos/${d.id}.jpg`;
+for (const d of Object.values(DEFS)) if (d.kind === 'unit' && (d.category === 'naval' || d.deckJet) && d.buildable) CUSTOM_CAMEOS[d.id] = `${CAMEO_BASE}ui/cameos/${d.id}.jpg`;
 
 /** Offscreen canvas edge (px): big enough for a supersampled cameo and the largest live portrait frame. */
 const CANVAS_PX = 512;

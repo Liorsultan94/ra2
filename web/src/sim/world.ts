@@ -14,7 +14,7 @@ import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
 import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
-import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
+import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, deepYard, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
 import { fireSuperweapon, newSuperweaponState, updateSuperweapons } from './superweapons';
@@ -22,7 +22,7 @@ import { bridgeHutEnter, bridgeProof, canHurtBridge, initBridges, isBridge, upda
 import { DEFAULT_STANCE, applyOrderCommand, autoFire, idleReturn, leashRange, ordersIdle, queueCap, scanRange } from './orders';
 import { ELITE, ELITE_HEAL, RANK_ARMOR, RANK_FIREPOWER, RANK_ROF, canRank, rankFor, xpValue } from './veterancy';
 import { Rng } from './rng';
-import { isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, updateSortie, freePad } from './airbase';
+import { carrierWithPad, deckCap, isSortieJet, jetCount, jetGrounded, jetsQueued, padCap, parkJet, updateSortie, freePad } from './airbase';
 import { crushContact, stepDodge, updateCrush, wantsCrush } from './crush';
 import { releaseDefender, setAutoDefend, updateBaseDefense } from './basedefense';
 import { aimOrder, aimSees, aimStep, aimTargetScore, aimUpkeep, cancelAim } from './sniper';
@@ -352,9 +352,26 @@ export class World {
       if (!this.hasRole(player, 'conyard')) return false;
     }
     if (!d.prereq.every((r) => this.hasRole(player, r))) return false;
-    // jet cap: one parking pad per jet, 4 per airbase (airbase.ts)
-    if (d.kind === 'unit' && isSortieJet(d)) return jetCount(this, player) + jetsQueued(this, player) - (inQueue ? 1 : 0) < padCap(this, player);
+    if (d.kind === 'unit') {
+      // one of a kind (the aircraft carrier): built or in production
+      if (d.limit && this.ownedOrQueued(player, d) - (inQueue ? 1 : 0) >= d.limit) return false;
+      // a carrier needs deep water by one of its owner's Shipyards (naval.ts)
+      if (d.naval === 'deep' && !deepYard(this, player)) return false;
+      // jet cap: one parking pad per jet, 4 per airbase (airbase.ts); a carrier's air wing: its deck pads
+      if (isSortieJet(d)) {
+        const deck = !!d.deckJet;
+        return jetCount(this, player, deck) + jetsQueued(this, player, deck) - (inQueue ? 1 : 0) < (deck ? deckCap(this, player) : padCap(this, player));
+      }
+    }
     return true;
+  }
+
+  /** Units of this kind the player has, built and in its production queue. */
+  ownedOrQueued(player: number, d: UnitDef): number {
+    let n = 0;
+    for (const e of this.list) if (!e.dead && e.owner === player && e.def === d.id) n++;
+    for (const q of this.players[player].queues[d.category]) if (q.def === d.id) n++;
+    return n;
   }
 
   // ------------------------------------------------------------ entities
@@ -2455,7 +2472,8 @@ export class World {
       q.shift();
       return;
     }
-    const n = this.producerCount(p, cat);
+    // (a carrier's air wing is built for its deck: the carrier is its producer)
+    const n = d.kind === 'unit' && d.deckJet ? 1 : this.producerCount(p, cat);
     if (n === 0) return;
     const speed = (1 + 0.5 * Math.min(3, n - 1)) * (low ? 0.4 : 1);
     const delta = Math.min(1 - item.progress, speed / (d.buildTime * TPS));
@@ -2485,6 +2503,15 @@ export class World {
   private deliverUnit(p: Player, d: UnitDef) {
     if (d.naval) {
       deliverNaval(this, p.id, d); // out of the Shipyard's slipway (naval.ts)
+      return;
+    }
+    if (d.deckJet) {
+      // a carrier's jet: onto a free deck pad (airbase.ts)
+      const c = carrierWithPad(this, p.id);
+      if (!c) return;
+      const u = this.spawnUnit(d.id, p.id, c.x, c.y);
+      parkJet(this, u, c);
+      this.events.push({ t: 'unitReady', owner: p.id, def: d.id });
       return;
     }
     let factory: Entity | null = null;

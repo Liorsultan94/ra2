@@ -7,6 +7,7 @@ import type { AnimState, Model, ModelStyle } from '../models/types';
 import { registerLods } from '../perf/lod';
 import { assetBase } from '../photoground';
 import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
+import { carrierJet, carrierShip, type CarrierKit } from './carriers';
 
 /*
  * NV1 naval kit (render only): the Shipyard and every nation's boats, built in Blender (tools/blender/naval/navalkit.py
@@ -153,7 +154,9 @@ export function loadNavalKit(nations: string[] = []): Promise<boolean> {
     }
     return p;
   };
-  return Promise.all(['shipyard', ...new Set(nations)].map(one)).then((r) => r.every(Boolean));
+  // (and the aircraft carrier and its deck jet of the nations that have one: naval-cv<nation>.glb, carriers.ts)
+  const cv = [...new Set(nations)].filter((n) => CARRIER_NATIONS.has(n)).map((n) => `cv${n}`);
+  return Promise.all(['shipyard', ...new Set(nations), ...cv].map(one)).then((r) => r.every(Boolean));
 }
 
 function findTemplate(name: string): THREE.Object3D | null {
@@ -167,6 +170,15 @@ function findTemplate(name: string): THREE.Object3D | null {
 export function navalKitReady(): boolean {
   return !!kit;
 }
+
+/** The nations with an aircraft carrier (NV2). */
+const CARRIER_NATIONS = new Set(['usa', 'russia', 'china']);
+
+/** The kit as carriers.ts uses it. */
+const carrierKit: CarrierKit = {
+  instance: (name, style, fog) => instance(name, style, fog),
+  info: (name) => (kit?.info as Record<string, Record<string, unknown>> | undefined)?.[name],
+};
 
 // ------------------------------------------------------------------ materials
 
@@ -412,6 +424,11 @@ function fallbackYard(style: ModelStyle, fog: FogOfWar | null): Model {
 /** Builders by model key: 'shipyard' and every 'nv_*' boat. */
 export function navalModel(key: string, style: ModelStyle, fog: FogOfWar | null): Model | null {
   if (key === 'shipyard') return navalShipyard(style, fog);
+  if (key.startsWith('cv_')) {
+    // an aircraft carrier or its deck jet (carriers.ts); its file on demand as for the boats
+    if (common) void loadNavalKit([key.split('_')[1]]);
+    return key.endsWith('_jet') ? carrierJet(key, style, fog, kit ? carrierKit : null) : carrierShip(key, style, fog, kit ? carrierKit : null);
+  }
   if (key.startsWith('nv_')) {
     // (a match loads its players' nations; a boat of another nation, say one spawned in by a script, fetches its
     // file now: this one is the plain boat, the next ones the real model. Cached, so a no-op once loaded)

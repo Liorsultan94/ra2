@@ -219,7 +219,7 @@ def hull(L, B, D, T, col, deck_col, bow=0.3, transom=0.82, deadrise=0.35, sheer=
         f = 1.0
         if t > 1 - bow:
             u = (t - (1 - bow)) / bow
-            f = math.cos(u * math.pi / 2) ** 1.15
+            f = max(0.0, math.cos(u * math.pi / 2)) ** 1.15
         f = max(f, 0.0) * (transom + (1 - transom) * min(1, t * 6))
         b = B / 2 * f
         dz = D + sheer * max(0, (t - 0.5) * 2) ** 2
