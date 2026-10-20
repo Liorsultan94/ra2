@@ -57,7 +57,7 @@ const NAV: Record<NavalDifficulty, NavCfg> = {
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
-export const NAVY_AI = { on: true, landings: true, raids: true };
+export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true };
 
 /** What the land AI lends the navy (AIController). */
 export interface NavalHooks {
@@ -120,7 +120,7 @@ export class NavalAI {
     this.active = w.hasSea && this.rng.next() < this.cfg.chance && NAVY_AI.on;
     this.nextLanding = Math.round(this.cfg.landEvery * this.rng.range(0.6, 1));
     if (!this.active) return;
-    this.carrierPlan = !!DEFS[`${w.players[pid].faction}_carrier`] && new Rng(seed ^ 0x5eed0c).next() < this.cfg.carrier.chance;
+    this.carrierPlan = NAVY_AI.carriers && !!DEFS[`${w.players[pid].faction}_carrier`] && new Rng(seed ^ 0x5eed0c).next() < this.cfg.carrier.chance;
     // the water within reach of the enemy's base (its ground region's shore)
     const W = w.map.w;
     const veh = w.regions[Loco.Vehicle];
