@@ -54,9 +54,9 @@ def B(x, y):
 WHITE, YELLOW, RED, DARK, GLASS = 0xe6e6de, 0xd8b83c, 0xb83226, 0x26282a, 0x5a7890
 
 NATIONS = {
-    'usa': dict(hull=0x8a9298, deck=0x3b3e41, isl=0x949ca2, side=0x7c848a, ski=False, number='77'),
-    'russia': dict(hull=0x6c757d, deck=0x4a4741, isl=0x7a838b, side=0x626a71, ski=True, number='63'),
-    'china': dict(hull=0x929ea8, deck=0x4d5257, isl=0x9ea9b2, side=0x86919a, ski=True, number='19'),
+    'usa': dict(hull=0x8a9298, deck=0x35393d, isl=0x949ca2, side=0x7c848a, ski=False, number='77'),
+    'russia': dict(hull=0x6c757d, deck=0x43423f, isl=0x7a838b, side=0x626a71, ski=True, number='63'),
+    'china': dict(hull=0x929ea8, deck=0x474c51, isl=0x9ea9b2, side=0x86919a, ski=True, number='19'),
 }
 
 # flight deck outlines (Blender XY, counter-clockwise: the starboard edge (-Y) first, stern to bow)
@@ -109,8 +109,8 @@ def digit(ch, x, y, z, h, col, face='side'):
     out = []
     for s in seg:
         u0, u1, v0, v1 = S[s]
-        # on the starboard face of the island (normal -Y): u runs towards -X (read from outside)
-        out.append(box(x - u1, x - u0, y - 0.004, y, z + v0, z + v1, col, cell=0.0))
+        # on the starboard face of the island (normal -Y): read from outside, u runs towards +X (the bow)
+        out.append(box(x + u0, x + u1, y - 0.004, y, z + v0, z + v1, col, cell=0.0))
     return out
 
 
@@ -207,7 +207,7 @@ def build_carrier(nation, info, objs):
         isl += [bar((mx, (yi0 + yi1) / 2, DECK_Z + 0.42), (mx, (yi0 + yi1) / 2, DECK_Z + 0.72), 0.018, P['isl'])]
         isl.append(box(mx - 0.06, mx + 0.06, yi0 + 0.04, yi1 - 0.04, DECK_Z + 0.58, DECK_Z + 0.6, P['isl'], cell=0.0))
         spin_z = DECK_Z + 0.74
-        isl += digit(P['number'][0], xi1 - 0.08, yi0, DECK_Z + 0.08, 0.12, WHITE) + digit(P['number'][1], xi1 - 0.18, yi0, DECK_Z + 0.08, 0.12, WHITE)
+        isl += digit(P['number'][1], xi1 - 0.08, yi0, DECK_Z + 0.08, 0.12, WHITE) + digit(P['number'][0], xi1 - 0.18, yi0, DECK_Z + 0.08, 0.12, WHITE)
     elif nation == 'russia':
         top = box(xi0 + 0.15, xi1 - 0.25, yi0 + 0.015, yi1 - 0.015, DECK_Z + 0.24, DECK_Z + 0.52, P['isl'], cell=0.08)
         nk.taper_top(top, 0.9, 0.85)
@@ -223,7 +223,7 @@ def build_carrier(nation, info, objs):
         mx = xi1 - 0.35
         isl += [bar((mx, (yi0 + yi1) / 2, DECK_Z + 0.82), (mx, (yi0 + yi1) / 2, DECK_Z + 1.02), 0.014, P['isl'])]
         spin_z = DECK_Z + 1.04
-        isl += digit(P['number'][0], xi1 - 0.55, yi0, DECK_Z + 0.08, 0.12, WHITE) + digit(P['number'][1], xi1 - 0.65, yi0, DECK_Z + 0.08, 0.12, WHITE)
+        isl += digit(P['number'][1], xi1 - 0.55, yi0, DECK_Z + 0.08, 0.12, WHITE) + digit(P['number'][0], xi1 - 0.65, yi0, DECK_Z + 0.08, 0.12, WHITE)
     else:
         # one tall tapered tower: the mast and island in one, faceted, with its flat array faces
         twr = prism([(xi0 + 0.02, yi0 + 0.02), (xi1 - 0.02, yi0 + 0.02), (xi1 - 0.02, yi1 - 0.02), (xi0 + 0.02, yi1 - 0.02)], DECK_Z + 0.24, DECK_Z + 0.78, P['isl'], cell=0.0, name='tower', top_scale=0.55)
@@ -233,7 +233,7 @@ def build_carrier(nation, info, objs):
             isl.append(box(xi0 + 0.06, xi1 - 0.06, yi0 + 0.012, yi0 + 0.016, DECK_Z + zz, DECK_Z + zz + 0.1, 0x2c3134, cell=0.0))
         isl.append(box(xi1 - 0.025, xi1 - 0.02, yi0 + 0.04, yi1 - 0.04, DECK_Z + 0.28, DECK_Z + 0.33, GLASS, 'glass', cell=0.0))
         spin_z = DECK_Z + 0.86
-        isl += digit(P['number'][0], xi1 - 0.06, yi0, DECK_Z + 0.06, 0.12, WHITE) + digit(P['number'][1], xi1 - 0.16, yi0, DECK_Z + 0.06, 0.12, WHITE)
+        isl += digit(P['number'][1], xi1 - 0.1, yi0, DECK_Z + 0.06, 0.12, WHITE) + digit(P['number'][0], xi1 - 0.2, yi0, DECK_Z + 0.06, 0.12, WHITE)
     body += isl
     # flood lamps on the island, the deck-edge lights, the landing centreline lights (gentle at night)
     lamps = []
