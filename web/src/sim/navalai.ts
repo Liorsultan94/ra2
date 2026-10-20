@@ -279,6 +279,35 @@ export class NavalAI {
     return best;
   }
 
+  /** Per boat region: the open water nearest the enemy's start (the coast a sweep makes for), -1 when none. */
+  private sweepAt = new Map<number, number>();
+
+  /** A sweep along the enemy's coast: the water nearest its start, unless the boats are already there. */
+  private sweep(region: number, boats: Entity[]): { id: number; x: number; y: number } | null {
+    const w = this.w;
+    const foe = w.players.find((q) => !q.defeated && w.isEnemy(this.pid, q.id));
+    if (!foe) return null;
+    let at = this.sweepAt.get(region);
+    if (at === undefined) {
+      at = -1;
+      const W = w.map.w;
+      const pass = w.passes[Loco.Boat];
+      const reg = w.regions[Loco.Boat];
+      let bd = Infinity;
+      for (let i = 0; i < pass.length; i++) {
+        if (!pass[i] || reg[i] !== region || !this.w.naval.sea[i]) continue;
+        const d = Math.hypot((i % W) - foe.startX, Math.floor(i / W) - foe.startY);
+        if (d < bd) (bd = d), (at = i);
+      }
+      this.sweepAt.set(region, at);
+    }
+    if (at < 0) return null;
+    const x = (at % w.map.w) + 0.5;
+    const y = Math.floor(at / w.map.w) + 0.5;
+    if (boats.some((b) => Math.hypot(b.x - x, b.y - y) < 10)) return null;
+    return { id: -1, x, y };
+  }
+
   private fleet(yard: Entity | null, boats: Entity[]) {
     const w = this.w;
     if (!boats.length) {
@@ -328,7 +357,10 @@ export class NavalAI {
       if (strays.length) this.cmd({ type: 'move', ids: strays.map((b) => b.id), x: home[0], y: home[1] });
     }
     if (!NAVY_AI.raids || !this.offensive() || idle.length < this.cfg.sortie || w.tick < this.raidAt) return;
-    const t = this.pickTarget(idle, w.regionOf(idle[0].x, idle[0].y, Loco.Boat));
+    const region = w.regionOf(idle[0].x, idle[0].y, Loco.Boat);
+    // (nothing known within reach of the water: sweep the enemy's coast, finding targets on the way. Without it a
+    // side whose scouts never saw the far shore kept its boats at home while the other side's raids came to it)
+    const t = this.pickTarget(idle, region) ?? this.sweep(region, idle);
     this.raidAt = w.tick + TPS * 20;
     if (!t) return;
     this.raidIds = idle.map((b) => b.id);
