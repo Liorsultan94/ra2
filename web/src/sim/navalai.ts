@@ -13,7 +13,7 @@
 // untouched, so maps without sea play exactly as before).
 
 import { buildingDef, defsForFaction, unitDef } from './defs';
-import { SHIP_H, SHIP_W, beachSpot, cargoSize, launchSpot, mouthTile } from './naval';
+import { SHIP_H, SHIP_W, SHIP_YARD_REACH, beachSpot, cargoSize, launchSpot, mouthTile } from './naval';
 import { Rng } from './rng';
 import { Loco } from './slope';
 import { TPS, type Entity, type UnitDef } from './types';
@@ -166,7 +166,7 @@ export class NavalAI {
       const tx = i % W;
       const ty = Math.floor(i / W);
       const d = Math.hypot(tx + SHIP_W / 2 - hx, ty + SHIP_H / 2 - hy);
-      if (d >= bd || d > 40) continue;
+      if (d >= bd || d > SHIP_YARD_REACH + 4) continue;
       const site = w.shipSite(defId, tx, ty);
       if (!site.ok) continue;
       const [mx, my] = mouthTile(tx, ty, SHIP_W, SHIP_H, site.dir);

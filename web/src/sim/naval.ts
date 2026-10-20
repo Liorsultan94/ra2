@@ -45,6 +45,12 @@ export const SHIP_MOUTH_REACH = 4;
  * run right past a base, so a yard may reach out to the shore (the other structures keep World BUILD_RADIUS).
  */
 export const SHIP_BUILD_RADIUS = 9;
+/**
+ * ...or anywhere on suitable coast this far (tiles, centre to centre) from one of its owner's Construction Yards:
+ * on the Sinai (SN2) both bases stand inland, the nearest Shipyard coast 41 tiles from the west base and 48 from the
+ * east one, too far to creep out to with structures, so the Construction Yard can put a yard down on the shore.
+ */
+export const SHIP_YARD_REACH = 56;
 /** Cargo slots a vehicle takes in a landing craft (a soldier takes 1). */
 export const NAVAL_VEHICLE_SLOTS = 3;
 /** Landing craft: a unit boards when this close to it (tiles, centre to centre)... */

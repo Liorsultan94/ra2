@@ -14,7 +14,7 @@ import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
 import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
-import { SHIP_BUILD_RADIUS, arriveLanding, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
+import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
 import { fireSuperweapon, newSuperweaponState, updateSuperweapons } from './superweapons';
@@ -789,7 +789,7 @@ export class World {
     if (d.shipyard) {
       const s = this.shipSite(defId, tx, ty);
       if (!s.ok) return s.reason;
-      if (this.canPlace(player, defId, tx, ty, -1, false)) return `Too far from your base (within ${SHIP_BUILD_RADIUS} tiles)`;
+      if (this.canPlace(player, defId, tx, ty, -1, false)) return `Too far from your base (within ${SHIP_YARD_REACH} tiles of a Construction Yard, or ${SHIP_BUILD_RADIUS} of another structure)`;
       return 'Enemy units in the way';
     }
     return '';
@@ -820,6 +820,8 @@ export class World {
       const gx = Math.max(0, tx - (b.tx + bd.w), b.tx - (tx + d.w));
       const gy = Math.max(0, ty - (b.ty + bd.h), b.ty - (ty + d.h));
       if (Math.max(gx, gy) <= (d.shipyard ? SHIP_BUILD_RADIUS : BUILD_RADIUS)) return true;
+      // (a Shipyard: also on any suitable coast within reach of a Construction Yard, naval.ts SHIP_YARD_REACH)
+      if (d.shipyard && bd.role === 'conyard' && Math.hypot(tx + d.w / 2 - b.tx - bd.w / 2, ty + d.h / 2 - b.ty - bd.h / 2) <= SHIP_YARD_REACH) return true;
     }
     return false;
   }

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DEF_LIST, buildingDef, unitDef } from '../src/sim/defs';
 import { Tile } from '../src/sim/map';
-import { SHIP_H, SHIP_W, beachSpot, cargoRoom, mouthTile, shipSite } from '../src/sim/naval';
+import { SHIP_H, SHIP_W, SHIP_YARD_REACH, beachSpot, cargoRoom, mouthTile, shipSite } from '../src/sim/naval';
 import { Loco } from '../src/sim/slope';
 import { FACTIONS } from '../src/sim/defs';
 import { TPS, type Entity, type Faction } from '../src/sim/types';
@@ -25,7 +25,8 @@ function spotNear(w: World, pid: number): [number, number] {
   let at = -1;
   for (const i of w.shipSpots) {
     const d = Math.hypot((i % w.map.w) + SHIP_W / 2 - s.x, Math.floor(i / w.map.w) + SHIP_H / 2 - s.y);
-    if (d < best) (best = d), (at = i);
+    // (free of the map's own structures)
+    if (d < best && w.canPlace(pid, 'usa_shipyard', i % w.map.w, Math.floor(i / w.map.w), -1, false)) (best = d), (at = i);
   }
   return [at % w.map.w, Math.floor(at / w.map.w)];
 }
@@ -84,8 +85,8 @@ describe('shipyard placement', () => {
       dist.set(reg, d);
     }
     const shared = [...dist.values()].sort((a, b) => Math.max(...a) - Math.max(...b))[0];
-    // (a yard reaches out SHIP_BUILD_RADIUS from the base's structures)
-    for (const d of shared) expect(d).toBeLessThan(16);
+    // (SN2: both bases stand inland, the nearest coast 41 and 48 tiles off; a Construction Yard reaches SHIP_YARD_REACH)
+    for (const d of shared) expect(d).toBeLessThan(SHIP_YARD_REACH - 2);
     expect(Math.abs(shared[0] - shared[1])).toBeLessThan(Math.max(...shared) * 0.25);
   });
 
@@ -124,6 +125,9 @@ describe('shipyard placement', () => {
     const [x, y] = spotNear(w2, 0);
     expect(w2.canPlace(0, `${f}_shipyard`, x, y)).toBe(true);
     expect(w2.placeWhy(0, `${f}_shipyard`, s.x + 3, s.y + 3)).toMatch(/sea/);
+    // good coast out of the Construction Yard's reach: refused, and why
+    const far = w2.shipSpots.find((i) => Math.hypot((i % w2.map.w) + 2 - s.x, Math.floor(i / w2.map.w) + 2 - s.y) > SHIP_YARD_REACH + 4)!;
+    expect(w2.placeWhy(0, `${f}_shipyard`, far % w2.map.w, Math.floor(far / w2.map.w))).toMatch(/Too far/);
     const b = w2.spawnBuilding(`${f}_shipyard`, 0, x, y, true);
     // the slipway faces the water
     const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]];
@@ -196,9 +200,12 @@ describe('naval units', () => {
     const lc = Loco.Landing;
     // a beach near the base, on the water that reaches the enemy's coast
     const s1 = w.map.starts[1];
-    const e1 = beachSpot(w, s1.x, s1.y, 0, lc, 30)!;
+    // (the sea off the enemy's nearest Shipyard coast: SN2 put both bases inland, a pond nearer the east one)
+    const [ex, ey] = spotNear(w, 1);
+    const [mx, my] = mouthTile(ex, ey, SHIP_W, SHIP_H, shipSite(w.map, w.naval.sea, ex, ey).dir);
+    const e1 = w.nearestPassable(mx + 0.5, my + 0.5, 4, 0, lc)!;
     const R = w.regions[lc][e1[1] * w.map.w + e1[0]];
-    const b0 = beachSpot(w, s.x, s.y, R, lc, 30)!;
+    const b0 = beachSpot(w, s.x, s.y, R, lc, 60)!;
     expect(b0).not.toBeNull();
     const craft = w.spawnUnit('usa_lander', 0, b0[0] + 0.5, b0[1] + 0.5);
     const land = (cls: number) => w.nearestPassable(b0[0] + 0.5, b0[1] + 0.5, 6, 0, cls)!;
