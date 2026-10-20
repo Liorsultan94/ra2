@@ -48,6 +48,9 @@ interface Patch {
   w0: number;
   len: number;
   a: number;
+  /** Drift (tiles / s): the side patches spread outward, so the wake opens into a V. */
+  vx: number;
+  vz: number;
 }
 
 export class NavalFx {
@@ -101,11 +104,13 @@ export class NavalFx {
       // two foam patches either side of the stern, and the churned centre (the screws / waterjets)
       const sx = x - fx * len * 0.48;
       const sz = z - fz * len * 0.48;
-      this.add(sx, sz, yaw, beam * (hover ? 1.1 : 0.75), len * 0.28, 0.4 + 0.3 * v);
+      // (additive patches overlap two or three deep along the trail: each stays faint, so the wake reads as foam, not paint)
+      this.add(sx, sz, yaw, beam * (hover ? 1.1 : 0.6), len * 0.28, 0.2 + 0.18 * v);
       if (!hover) {
         const px = -fz;
         const pz = fx;
-        for (const s of [-1, 1]) this.add(sx + px * s * beam * 0.45, sz + pz * s * beam * 0.45, yaw + s * 0.35, beam * 0.45, len * 0.22, 0.26 + 0.24 * v);
+        const out = 0.18 + 0.3 * v;
+        for (const s of [-1, 1]) this.add(sx + px * s * beam * 0.45, sz + pz * s * beam * 0.45, yaw + s * 0.35, beam * 0.4, len * 0.22, 0.15 + 0.15 * v, px * s * out, pz * s * out);
       }
     }
     // spray off the bow at speed, bow / stern waves as rings through the water
@@ -140,9 +145,9 @@ export class NavalFx {
     this.acc.delete(id);
   }
 
-  private add(x: number, z: number, yaw: number, w: number, len: number, a: number) {
+  private add(x: number, z: number, yaw: number, w: number, len: number, a: number, vx = 0, vz = 0) {
     const cap = this.mesh.instanceMatrix.count;
-    const p = { x, z, yaw, t: 0, w0: w, len, a };
+    const p = { x, z, yaw, t: 0, w0: w, len, a, vx, vz };
     if (this.patches.length < cap) this.patches.push(p);
     else {
       this.patches[this.next] = p;
@@ -160,7 +165,9 @@ export class NavalFx {
       p.t += dt;
       const k = p.t / LIFE;
       if (k >= 1) continue;
-      const grow = 1 + k * 2.2;
+      const grow = 1 + k * 1.6;
+      p.x += p.vx * dt;
+      p.z += p.vz * dt;
       this.q.setFromAxisAngle(this.up, p.yaw);
       this.s.set(p.len * (1 + k * 0.8), 1, p.w0 * grow);
       this.p.set(p.x, WATER_LEVEL + 0.012, p.z);
