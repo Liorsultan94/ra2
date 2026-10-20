@@ -1,6 +1,5 @@
 import { expect, it } from 'vitest';
 import { AIController } from '../src/sim/ai';
-import { NAVY_AI } from '../src/sim/navalai';
 import { TPS } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
@@ -13,10 +12,9 @@ import { World } from '../src/sim/world';
 // of seeds 1-10 only 4 ended inside 75 minutes. Marching to a staging point and going in together (SN3, ai.ts
 // marchPoint) 8 of them end in 23-59 minutes; seeds 2-5 in 50, 23, 50 and 37, seed 1 holds out. So: 3 of seeds 1-5
 // end inside an hour.
-// The land war only: the navy (NV1, navalai.ts) is switched off here: with it Hard also spends on a Shipyard,
-// boats and landings, and fewer no-grace games end inside the hour. tests/ai-navy.test.ts covers the navy.
+// With the navy (NV1, navalai.ts; on here, as in the game: its Shipyard after 14 minutes, within a share of the
+// army) seeds 2, 3 and 5 end in 32, 27 and 24 minutes; 1 and 4 hold out.
 it('hard AI games on the desert map end', () => {
-  NAVY_AI.on = false;
   let ended = 0;
   for (const seed of [1, 2, 3, 4, 5]) {
     const w = new World({
@@ -35,6 +33,5 @@ it('hard AI games on the desert map end', () => {
     }
     if (w.over) ended++;
   }
-  NAVY_AI.on = true;
   expect(ended).toBeGreaterThanOrEqual(3);
 }, 1_800_000);

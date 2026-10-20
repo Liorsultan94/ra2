@@ -24,7 +24,7 @@ export type NavalDifficulty = 'easy' | 'normal' | 'hard';
 interface NavCfg {
   /** Chance per match that this AI goes to sea at all. */
   chance: number;
-  /** Earliest tick for the Shipyard. */
+  /** Earliest tick for the Shipyard: late, the land war first (a yard from 7 minutes cost Hard its wins over Easy). */
   yardAt: number;
   /** Fleet it keeps: patrol boats, missile boats, landing craft. */
   patrol: number;
@@ -36,12 +36,18 @@ interface NavCfg {
   landEvery: number;
   /** Credits it keeps in hand before spending on the navy. */
   reserve: number;
+  /**
+   * The navy's share of the land army: the Shipyard and the boats (and a landing party) are bought only while the
+   * navy is worth at most this much of the land army. (A navy bought at the army's expense cost Hard its wins
+   * against Easy on the Sinai: none of 4 games decided in 25 minutes, against 3 of 4 without the navy.)
+   */
+  share: number;
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 14, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400 },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 9, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000 },
-  hard: { chance: 1, yardAt: TPS * 60 * 7, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800 },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15 },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2 },
+  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2 },
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
@@ -135,8 +141,8 @@ export class NavalAI {
 
   /** The Shipyard to build now, or null (the land AI checks the power and queues it). */
   wantYard(buildings: Entity[]): string | null {
-    // (the land war comes first: the yard follows the first wave, or comes a few minutes late without one)
-    if (!this.active || this.w.tick < this.cfg.yardAt || (this.hooks.waves() === 0 && this.w.tick < this.cfg.yardAt + TPS * 240)) return null;
+    // (the land war comes first: the yard follows the second land wave, or comes late without them)
+    if (!this.active || this.w.tick < this.cfg.yardAt || (this.hooks.waves() < 2 && this.w.tick < this.cfg.yardAt + TPS * 300)) return null;
     // a lost yard is not rebuilt at once (and only once): the money goes back into the land war
     if (this.stats.yards >= 2 || (this.stats.yards === 1 && this.w.tick < this.yardLost + TPS * 60 * 10)) return null;
     let factory = false;
@@ -150,7 +156,7 @@ export class NavalAI {
     // (after the core base: the War Factory, and the radar unless it is long overdue)
     if (!factory || (!radar && this.w.tick < this.cfg.yardAt + TPS * 180)) return null;
     const id = `${this.p.faction}_shipyard`;
-    if (!this.w.canBuild(this.pid, id)) return null;
+    if (!this.w.canBuild(this.pid, id) || !this.affords(buildingDef(id).cost)) return null;
     return this.yardSpot(id) ? id : null;
   }
 
@@ -179,6 +185,15 @@ export class NavalAI {
     return best;
   }
 
+  /** Land army value and navy value (yard included), refreshed each update. */
+  private army = 0;
+  private navyValue = 0;
+
+  /** May the navy spend this much more and stay within its share of the land army? */
+  private affords(cost: number): boolean {
+    return this.navyValue + cost <= this.army * this.cfg.share;
+  }
+
   private yard(): Entity | null {
     for (const e of this.w.list) if (!e.dead && e.owner === this.pid && e.kind === 'building' && buildingDef(e.def).shipyard) return e;
     return null;
@@ -197,6 +212,14 @@ export class NavalAI {
 
   update(navy: Entity[], land: Entity[]) {
     if (!this.active) return;
+    // what the land army and the navy are worth (the navy lives on a share of the army: NavCfg.share)
+    this.army = 0;
+    for (const u of land) {
+      const d = unitDef(u.def);
+      if (d.weapon && !d.harvester && !d.mcv) this.army += d.cost;
+    }
+    this.navyValue = 0;
+    for (const u of navy) this.navyValue += unitDef(u.def).cost;
     const yard = this.yard();
     if (yard && !this.yardsSeen.has(yard.id)) {
       this.yardsSeen.add(yard.id);
@@ -204,6 +227,7 @@ export class NavalAI {
     }
     if (!yard && this.stats.yards > 0 && this.yardLost < 0) this.yardLost = this.w.tick;
     if (yard) this.yardLost = -1;
+    if (yard) this.navyValue += buildingDef(yard.def).cost;
     if (yard && yard.buildAnim >= 1) this.produce(navy);
     this.stats.boats = Math.max(this.stats.boats, navy.length);
     const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots);
@@ -227,7 +251,7 @@ export class NavalAI {
     // a patrol boat first, then whatever is short, picked by the seeded roll
     const k = have.patrol === 0 && want.includes('patrol') ? 'patrol' : want[this.rng.int(want.length)];
     const id = `${p.faction}_${k}`;
-    if (this.w.canBuild(this.pid, id)) this.cmd({ type: 'produce', def: id });
+    if (this.w.canBuild(this.pid, id) && this.affords(unitDef(id).cost)) this.cmd({ type: 'produce', def: id });
   }
 
   private landingsOn() {
@@ -522,6 +546,10 @@ export class NavalAI {
     const veh = pool.filter((u) => unitDef(u.def).category === 'vehicle').sort((a, b) => a.id - b.id).slice(0, 2);
     const inf = pool.filter((u) => unitDef(u.def).category === 'infantry').sort((a, b) => a.id - b.id).slice(0, 5);
     if (veh.length + inf.length < 4) return;
+    // (the party, too, only out of an army big enough to spare it)
+    let party = 0;
+    for (const u of [...veh, ...inf]) party += unitDef(u.def).cost;
+    if (party > this.army * this.cfg.share) return;
     const lc = w.locoOf(craft);
     const spot = beachSpot(w, hx, hy, w.regionOf(craft.x, craft.y, lc), lc, 30);
     if (!spot) return;

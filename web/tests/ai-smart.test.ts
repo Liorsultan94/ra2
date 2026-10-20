@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { AIController, type Difficulty } from '../src/sim/ai';
-import { NAVY_AI } from '../src/sim/navalai';
 import { DOCTRINES } from '../src/sim/doctrine';
 import { DEFS, FACTIONS, VERSUS, WEAPONS, defsForFaction, hitsAir, unitDef } from '../src/sim/defs';
 import { groundHeight } from '../src/sim/map';
@@ -289,10 +288,11 @@ describe('difficulty still matters', () => {
    * staging point short of the objective and going in together when strong enough (SN3, ai.ts marchPoint) it wins 3
    * of the 4 in 14-23 minutes and runs out the clock 4 times as strong in the fourth. So: at least 2 decisive, hard
    * wins them, easy wins none, and a game that runs out the clock ends with hard at least 1.25 times as strong.
+   * With the navy (NV1, navalai.ts; on here, as in the game): a Shipyard from 7 minutes cost hard every decision
+   * (none of the 4 decided, hard 1.6-2.6 times as strong at the clock); from 14 minutes and within its share of the
+   * army, hard wins 3 in 14-24 minutes and runs out the clock 2.4 times as strong in the fourth.
    */
   it('hard beats easy in AI-vs-AI games (both slot orders)', () => {
-    // (the land war: the navy - NV1, navalai.ts - is switched off here; tests/ai-navy.test.ts covers it)
-    NAVY_AI.on = false;
     const results: { seed: number; f: Faction; hardSlot: number; winner: 'hard' | 'easy' | 'none'; min: number; lead: number }[] = [];
     for (const [seed, f] of [
       [1, 'usa'],
@@ -319,6 +319,5 @@ describe('difficulty still matters', () => {
     for (const r of results) if (r.winner === 'none') expect(r.lead, msg).toBeGreaterThanOrEqual(1.25);
     // easy never wins, whichever slot hard starts in (fair starts: the north base is the south one's mirror, sim/turn.ts)
     expect(results.filter((r) => r.winner === 'easy').length, msg).toBe(0);
-    NAVY_AI.on = true;
   }, 600000);
 });
