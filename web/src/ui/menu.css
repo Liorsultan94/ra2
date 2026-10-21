@@ -1780,6 +1780,8 @@
 }
 .mm-bg-slide.on {
   opacity: 1;
+}
+.mm-bg-slide.go {
   animation: mm-bg-drift var(--hold, 12s) ease-in-out forwards;
 }
 @keyframes mm-bg-drift {
@@ -1796,7 +1798,7 @@
   pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .mm-bg-slide.on {
+  .mm-bg-slide.go {
     animation: none;
     transform: none;
   }

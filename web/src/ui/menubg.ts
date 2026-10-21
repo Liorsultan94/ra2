@@ -81,14 +81,17 @@ export class MenuBackdrop {
       slide.style.setProperty('--y1', `${d[3]}%`);
       slide.style.setProperty('--hold', `${HOLD + FADE * 2}s`);
       slide.style.setProperty('--fade', `${FADE}s`);
+      const old = [...this.el.children] as HTMLElement[];
       this.el.appendChild(slide);
-      // two frames so the new slide is laid out before it fades in
-      requestAnimationFrame(() => requestAnimationFrame(() => slide.classList.add('on')));
-      const old = [...this.el.children].filter((c) => c !== slide) as HTMLElement[];
-      for (const o of old) {
-        o.classList.remove('on');
-        setTimeout(() => o.remove(), FADE * 1000 + 200);
-      }
+      // two frames so the new slide is laid out before it fades in; the new one fades in over the old
+      // one, which keeps drifting underneath
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          slide.classList.add('go', 'on');
+          // (the old picture stays fully up underneath until the new one is all the way in: no dip to black)
+          for (const o of old) setTimeout(() => o.remove(), FADE * 1000 + 300);
+        }),
+      );
       this.timer = window.setTimeout(() => this.next(), HOLD * 1000);
     };
     // decoded before it is shown: no popping in, and a failed load just moves on to the next picture
