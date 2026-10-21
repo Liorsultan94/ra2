@@ -743,6 +743,11 @@ export class NavalAI {
     // the boats and the first landing come first: the divers follow once it has gone, or 8 minutes after the yard is up
     if (this.yardUpAt < 0) this.yardUpAt = w.tick;
     if (this.stats.landings === 0 && this.landingsOn() && w.tick < this.yardUpAt + TPS * 60 * 8) return;
+    // the carrier is bought first (its own terms, carrier()): no diver money while one is about to be bought or is building
+    if (this.carrierPlan && this.stats.carriers < 2) {
+      const have = [...w.list].some((u) => !u.dead && u.owner === this.pid && u.kind === 'unit' && !!unitDef(u.def).deck);
+      if (!have && (this.stats.carriers > 0 || (w.tick > this.cfg.carrier.at - TPS * 60 * 3 && this.army > this.cfg.carrier.army * 0.7))) return;
+    }
     // training: the squad, out of the navy's share
     let queued = 0;
     for (const q of p.queues.infantry) if (q.def === id) queued++;
