@@ -14,7 +14,8 @@ import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
 import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
-import { canHurtSubmerged, diverSpeed, sonarSees, swimBlock, updateDive } from './diver';
+import { diverSpeed, swimBlock } from './diver';
+import { canFireNow, canHurtSubmerged, spottedWhenSubmerged, updateSubmerged } from './submerge';
 import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, deepYard, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
@@ -729,8 +730,8 @@ export class World {
    */
   sees(player: number, e: Entity): boolean {
     if (e.owner === player) return true;
-    // a submerged diver is out of sight, but for the sonar of the viewer's ships and boats (diver.ts)
-    if (e.dive && this.isEnemy(player, e.owner)) return sonarSees(this, player, e);
+    // a submerged unit is out of sight, but for what its rule spots it with (a diver: the sonar of the viewer's ships and boats; submerge.ts)
+    if (e.dive && this.isEnemy(player, e.owner)) return spottedWhenSubmerged(this, player, e);
     return this.visibleTo(player, e.x, e.y) || flashLit(this, e) || (this.nightLevel > 0 && this.airSeen(player, e));
   }
 
@@ -1713,7 +1714,7 @@ export class World {
     const d = DEFS[e.def];
     const wpn = this.weaponVs(e.def, t);
     if (!wpn) return 'out';
-    if (e.dive) return 'out'; // submerged: it cannot fire, it swims in to the shallows (diver.ts)
+    if (!canFireNow(e)) return 'out'; // submerged and it cannot fire: it swims in closer (submerge.ts)
     const dist = this.distTo(e, t);
     // the secondary weapon (UnitDef.weapon2) reloads on its own clock
     const alt = wpn.id !== d.weapon;
@@ -1837,7 +1838,7 @@ export class World {
   damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity, raw = false, big = false) {
     if (!raw && t.inside >= 0) t = garrisonOf(this, t) ?? t; // garrisoned infantry: the house takes the hit (garrison.ts)
     if (t.dead || t.wound || bridgeProof(t)) return; // bridges take damage from impacts (bridges.ts); the wounded lie out of the fight (medic.ts)
-    if (t.dive && !canHurtSubmerged(src)) return; // a diver under the water: only ships and boats reach it (diver.ts)
+    if (t.dive && !canHurtSubmerged(src, t)) return; // submerged: only what its rule lets (submerge.ts)
     const d = DEFS[t.def];
     // veterancy: the shooter's firepower and the target's armour
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
@@ -1917,7 +1918,7 @@ export class World {
 
   private updateUnit(e: Entity) {
     const d = unitDef(e.def);
-    if (d.swim) updateDive(this, e); // submerged in deep water (diver.ts)
+    if (d.submerge) updateSubmerged(this, e); // submerged or not, by its rule (submerge.ts)
     if (e.inside >= 0) {
       this.updatePassenger(e, d);
       return;

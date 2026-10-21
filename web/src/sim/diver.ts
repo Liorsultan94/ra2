@@ -2,6 +2,7 @@ import { Tile, type GameMap } from './map';
 import { tileDepth } from './naval';
 import { DX, DY } from './slope';
 import { unitDef } from './defs';
+import type { SubmergeRule } from './submerge';
 import type { Entity } from './types';
 import type { World } from './world';
 
@@ -55,15 +56,12 @@ export function isDiver(e: Entity): boolean {
   return e.kind === 'unit' && !!unitDef(e.def).swim;
 }
 
-/** Update the submerged flag of a diver (every tick: it is a function of its tile). */
-export function updateDive(w: World, e: Entity) {
-  let dive = false;
-  if (e.inside < 0) {
-    const tx = Math.floor(e.x);
-    const ty = Math.floor(e.y);
-    if (tx >= 0 && ty >= 0 && tx < w.map.w && ty < w.map.h && w.map.tiles[ty * w.map.w + tx] === Tile.Water) dive = tileDepth(w.map, tx, ty) >= DIVE_DEPTH;
-  }
-  e.dive = dive;
+/** Is the diver submerged (a function of its tile only: in water at least DIVE_DEPTH deep, not inside a transport)? */
+function submerged(w: World, e: Entity): boolean {
+  if (e.inside >= 0) return false;
+  const tx = Math.floor(e.x);
+  const ty = Math.floor(e.y);
+  return tx >= 0 && ty >= 0 && tx < w.map.w && ty < w.map.h && w.map.tiles[ty * w.map.w + tx] === Tile.Water && tileDepth(w.map, tx, ty) >= DIVE_DEPTH;
 }
 
 /** Is the diver in water at all (submerged or wading)? */
@@ -80,7 +78,7 @@ export function diverSpeed(w: World, e: Entity): number {
 }
 
 /** Is a submerged diver picked up by the sonar of `viewer`'s ships and boats (allies' too)? */
-export function sonarSees(w: World, viewer: number, e: Entity): boolean {
+function sonarSees(w: World, viewer: number, e: Entity): boolean {
   let seen = false;
   w.queryRadius(e.x, e.y, SONAR_RANGE, (o) => {
     if (seen || o.dead || o.kind !== 'unit' || o.owner < 0 || w.isEnemy(viewer, o.owner)) return;
@@ -89,7 +87,11 @@ export function sonarSees(w: World, viewer: number, e: Entity): boolean {
   return seen;
 }
 
-/** Can this attacker hurt a submerged diver? Only ships and boats (their guns and missiles), nothing on land or in the air. */
-export function canHurtSubmerged(src: Entity): boolean {
-  return src.kind === 'unit' && unitDef(src.def).category === 'naval';
-}
+/** The diver's rule for the submerged-unit layer (submerge.ts): the depth rule, ships' sonar, ships' guns, no fire. */
+export const DIVER_RULE: SubmergeRule = {
+  update: submerged,
+  spotted: sonarSees,
+  // (only ships and boats: their guns and missiles; nothing on land or in the air)
+  hurtBy: (src) => src.kind === 'unit' && unitDef(src.def).category === 'naval',
+  fires: false,
+};

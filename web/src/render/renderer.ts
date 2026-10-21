@@ -1568,6 +1568,17 @@ export class GameRenderer {
         } else if (v.model.infantry) {
           poseInfantry(v.model, a, w.map, p, yaw, dt);
           this.life.infantry(e, v.model, a, vis, dt);
+        } else if (ud.swim) {
+          // NV3 Combat Diver: wades the shallows, swims submerged just under the surface (naval/diver.ts)
+          const tx = Math.floor(p.x);
+          const tz = Math.floor(p.z);
+          const wet = tx >= 0 && tz >= 0 && tx < w.map.w && tz < w.map.h && w.map.tiles[tz * w.map.w + tx] === Tile.Water;
+          a.swim = e.dive ? 1 : 0;
+          a.wade = wet && !e.dive ? 1 : 0;
+          // (on the seabed in the shallows, never above the waist; submerged: the body lies just below the waterline,
+          // where the water's own shading darkens it to a shape)
+          if (wet) root.position.y = Math.max(groundHeight(w.map, p.x, p.z), WATER_LEVEL - 0.12);
+          root.rotation.set(0, yaw, 0);
         } else {
           root.rotation.set(0, yaw, 0);
         }
@@ -1689,6 +1700,8 @@ export class GameRenderer {
       const wet = tx >= 0 && tz >= 0 && tx < map.w && tz < map.h && map.tiles[tz * map.w + tx] === Tile.Water;
       this.navalFx.boat(e.id, p.x, p.z, yaw, v.speed, moved, m.size?.x ?? 1, m.size?.z ?? 0.3, dt, ud.naval === 'hover', wet);
     }
+    // divers: a bubble trail (submerged) or a small wake (wading) on the water (naval/navalfx.ts)
+    if (ud.swim && this.navalFx) this.navalFx.diver(e.id, p.x, p.z, yaw, v.speed, moved, !!e.dive, !!v.anim.wade, dt);
     // exhaust while driving
     if (v.anim.moving && !ud.air && m.emitters.length) {
       v.exhaustTimer -= dt;
@@ -1832,7 +1845,12 @@ export class GameRenderer {
     // killed under the canopy: the parachute carries the body down
     if (ud.category === 'infantry' && this.chutes.takeBody(v.id, v.model, v.anim)) return;
     if (ud.category === 'infantry') {
-      if (v.model.infantry && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false, crushed: e.cause === 'crushed' ? 1 : 0, look: undefined, dive: 0 } });
+      // a diver killed in the water: the splash, and it goes limp and slips under (naval/diver.ts)
+      if (ud.swim && (v.anim.swim || v.anim.wade)) {
+        this.effects.splash(pos.x, WATER_LEVEL, pos.z, 0.35);
+        this.navalFx?.sunk(pos.x, pos.z, 0.25);
+      }
+      if ((v.model.infantry || ud.swim) && v.model.anim) this.wrecks.push({ ...base, kind: 'infantry', max: 3, anim: { ...v.anim, dead: 0.001, moving: false, crushed: e.cause === 'crushed' ? 1 : 0, look: undefined, dive: 0 } });
       else this.wrecks.push({ ...base, kind: 'infantry', max: 2.2 });
       return;
     }

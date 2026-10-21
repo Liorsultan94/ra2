@@ -214,6 +214,8 @@ export class NavalAI {
   /** Land army value and navy value (yard included), refreshed each update. */
   private army = 0;
   private navyValue = 0;
+  /** What the divers are worth: a budget of their own, half the navy's share of the army, so they never starve the boats. */
+  private diverValue = 0;
 
   /** May the navy spend this much more and stay within its share of the land army? */
   private affords(cost: number): boolean {
@@ -236,16 +238,20 @@ export class NavalAI {
     return p ? [p[0] + 0.5, p[1] + 0.5] : [s[0] + 0.5, s[1] + 0.5];
   }
 
-  update(navy: Entity[], land: Entity[]) {
+  update(navyAll: Entity[], land: Entity[]) {
     if (!this.active) return;
+    // (the divers are the navy's units but not its boats: their own squad, their own budget, see divers())
+    const navy = navyAll.filter((u) => !unitDef(u.def).swim);
     // what the land army and the navy are worth (the navy lives on a share of the army: NavCfg.share)
     this.army = 0;
     this.navyValue = 0;
+    this.diverValue = 0;
     for (const u of land) {
       const d = unitDef(u.def);
-      if (d.swim) this.navyValue += d.cost; // (the divers are the navy's)
+      if (d.swim) this.diverValue += d.cost;
       else if (d.weapon && !d.harvester && !d.mcv) this.army += d.cost;
     }
+    for (const u of navyAll) if (unitDef(u.def).swim) this.diverValue += unitDef(u.def).cost;
     // (the carrier is bought on its own terms: carrier())
     for (const u of navy) if (!unitDef(u.def).deck) this.navyValue += unitDef(u.def).cost;
     const yard = this.yard();
@@ -736,7 +742,7 @@ export class NavalAI {
     let queued = 0;
     for (const q of p.queues.infantry) if (q.def === id) queued++;
     const have = this.diverIds.length + queued;
-    if (have < cfg.squad && this.stats.divers < cfg.squad * 3 && p.credits >= this.cfg.reserve && this.affords(unitDef(id).cost) && w.canBuild(this.pid, id)) {
+    if (have < cfg.squad && this.stats.divers < cfg.squad * 3 && p.credits >= this.cfg.reserve && this.diverValue + unitDef(id).cost <= this.army * this.cfg.share * 0.5 && w.canBuild(this.pid, id)) {
       this.cmd({ type: 'produce', def: id });
       this.stats.divers++;
     }

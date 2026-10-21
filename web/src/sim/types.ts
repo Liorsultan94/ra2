@@ -154,6 +154,8 @@ export interface UnitDef extends BaseDef {
    * on land it fights like a rifleman.
    */
   swim?: boolean;
+  /** Hides under the water by a rule (submerge.ts): 'diver'. The rule decides when it is submerged, who spots it, what can hurt it, whether it fires. */
+  submerge?: string;
   /**
    * Aircraft carrier (airbase.ts, deck pads): parking pads on its flight deck. Its deck jets (deckJet) park, launch,
    * land and rearm there as on an airbase, the deck moving with the ship.
@@ -523,7 +525,7 @@ export interface Entity {
   landing?: { x: number; y: number; last?: boolean } | null;
   /** Shipyard: which side its slipway faces (0 +x, 1 +y, 2 -x, 3 -y), fixed at placement. */
   slip?: number;
-  /** Combat Diver (diver.ts): swimming submerged (in water deeper than DIVE_DEPTH): hidden, untouchable, cannot fire. */
+  /** Submerged (submerge.ts): hidden from enemies but for what its rule spots it with, hurt only by what its rule allows; a diver (diver.ts): in water deeper than DIVE_DEPTH, cannot fire. */
   dive?: boolean;
 }
 
