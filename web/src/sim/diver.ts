@@ -93,5 +93,7 @@ export const DIVER_RULE: SubmergeRule = {
   spotted: sonarSees,
   // (only ships and boats: their guns and missiles; nothing on land or in the air)
   hurtBy: (src) => src.kind === 'unit' && unitDef(src.def).category === 'naval',
-  fires: false,
+  canFire: (e) => !e.dive,
+  holds: false,
+  scans: false,
 };
