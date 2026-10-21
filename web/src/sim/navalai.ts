@@ -167,8 +167,8 @@ export class NavalAI {
       if (d.role === 'factory') factory = true;
       if (d.role === 'radar') radar = true;
     }
-    // (after the core base: the War Factory, and the radar unless it is long overdue)
-    if (!factory || (!radar && this.w.tick < this.cfg.yardAt + TPS * 180)) return null;
+    // (after the core base: the War Factory and the Radar Center, which the Shipyard needs, like the Airbase)
+    if (!factory || !radar) return null;
     const id = `${this.p.faction}_shipyard`;
     if (!this.w.canBuild(this.pid, id) || !this.affords(buildingDef(id).cost)) return null;
     return this.yardSpot(id) ? id : null;

@@ -69,6 +69,21 @@ describe('shipyard placement', () => {
     expect(f.canBuild(0, 'usa_shipyard')).toBe(false);
   });
 
+  it('the Shipyard needs the Radar Center (like the Airbase), not just the War Factory', () => {
+    const v = mk();
+    const f = v.players[0].faction;
+    for (const e of v.list) if (e.owner === 0 && e.kind === 'unit' && unitDef(e.def).mcv) v.remove(e);
+    const s = v.map.starts[0];
+    v.spawnBuilding(`${f}_conyard`, 0, s.x - 1, s.y - 1, true);
+    let k = 0;
+    for (const r of ['power', 'barracks', 'refinery', 'factory']) v.spawnBuilding(buildingDef(`${f}_${r}`).id, 0, 2 + k++ * 4, v.map.h - 6, true);
+    expect(v.canBuild(0, `${f}_shipyard`)).toBe(false);
+    expect(v.canBuild(0, `${f}_airfield`)).toBe(false);
+    v.spawnBuilding(buildingDef(`${f}_radar`).id, 0, 2 + k * 4, v.map.h - 6, true);
+    expect(v.canBuild(0, `${f}_shipyard`)).toBe(true);
+    expect(v.canBuild(0, `${f}_airfield`)).toBe(true);
+  });
+
   it('maps: both sides get Shipyard coast on the same sea at a fair distance; the river maps get none', () => {
     for (const id of ['frontline', 'winter', 'urban'] as const) expect(mk(id as never).shipSpots.length).toBe(0);
     const W = w.map.w;
