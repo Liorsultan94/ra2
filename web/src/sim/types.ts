@@ -149,6 +149,14 @@ export interface UnitDef extends BaseDef {
    */
   naval?: 'boat' | 'landing' | 'hover' | 'deep';
   /**
+   * Combat Diver (NV3, diver.ts): a soldier that also swims. It crosses any water (shallows, reef, deep sea) and walks
+   * ashore; submerged in deep water (DIVE_DEPTH) it is hidden and untouchable and cannot fire, in the shallows and
+   * on land it fights like a rifleman.
+   */
+  swim?: boolean;
+  /** Hides under the water by a rule (submerge.ts): 'diver'. The rule decides when it is submerged, who spots it, what can hurt it, whether it fires. */
+  submerge?: string;
+  /**
    * Aircraft carrier (airbase.ts, deck pads): parking pads on its flight deck. Its deck jets (deckJet) park, launch,
    * land and rearm there as on an airbase, the deck moving with the ship.
    */
@@ -517,6 +525,8 @@ export interface Entity {
   landing?: { x: number; y: number; last?: boolean } | null;
   /** Shipyard: which side its slipway faces (0 +x, 1 +y, 2 -x, 3 -y), fixed at placement. */
   slip?: number;
+  /** Submerged (submerge.ts): hidden from enemies but for what its rule spots it with, hurt only by what its rule allows; a diver (diver.ts): in water deeper than DIVE_DEPTH, cannot fire. */
+  dive?: boolean;
 }
 
 /**

@@ -161,7 +161,10 @@ export function navalTerrain(m: GameMap): NavalTerrain {
           }
       if (ok) deep[i] = 1;
     }
-  return { base: [boat, water, hover, deep], sea, seaTiles };
+  // the Combat Diver's swim (NV3): every water tile, and the land a soldier can stand on
+  const swim = water.slice();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (!swim[y * W + x] && terrainPassable(m, x, y)) swim[y * W + x] = 1;
+  return { base: [boat, water, hover, deep, swim], sea, seaTiles };
 }
 
 /**

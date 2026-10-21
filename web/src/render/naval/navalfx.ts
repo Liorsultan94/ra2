@@ -134,6 +134,48 @@ export class NavalFx {
     }
   }
 
+  /**
+   * A Combat Diver this frame (visible): submerged it leaves a trail of bubbles breaking the surface behind it (a few
+   * small pale discs, gentle) and, moving, a faint fading wisp of foam; wading in the shallows it leaves a small
+   * ripple and a short wake. On land: nothing.
+   */
+  diver(id: number, x: number, z: number, yaw: number, speed: number, moved: number, dive: boolean, wade: boolean, dt: number) {
+    if (!dive && !wade) return;
+    let a = this.acc.get(id);
+    if (!a) this.acc.set(id, (a = { d: 0, spray: 0, ring: 0 }));
+    const fx = Math.cos(-yaw);
+    const fz = Math.sin(-yaw);
+    const moving = speed > 0.15;
+    a.spray -= dt;
+    if (dive) {
+      // (bubbles rise from the tank behind it: more while it kicks along, a few while it hangs still)
+      if (a.spray <= 0) {
+        a.spray = moving ? 0.1 : 0.45;
+        const j = (Math.random() - 0.5) * 0.06;
+        this.effects.bubble(x - fx * 0.12 - fz * j, WATER_LEVEL + 0.005, z - fz * 0.12 + fx * j);
+      }
+      if (moving) {
+        a.d += moved;
+        if (a.d >= 0.16) {
+          a.d = 0;
+          this.add(x - fx * 0.1, z - fz * 0.1, yaw, 0.1, 0.22, 0.13);
+        }
+      }
+    } else if (moving) {
+      // wading: a short wake round the knees and a small ring now and then
+      a.d += moved;
+      if (a.d >= 0.14) {
+        a.d = 0;
+        this.add(x - fx * 0.06, z - fz * 0.06, yaw, 0.12, 0.2, 0.2);
+      }
+      a.ring -= dt;
+      if (a.ring <= 0) {
+        a.ring = 0.7;
+        waterRings.add(x, z, 0.1);
+      }
+    }
+  }
+
   /** A boat went down at (x, z): the water closes over it in a ring and a spreading boil of foam. */
   sunk(x: number, z: number, len: number) {
     waterRings.add(x, z, Math.min(2, 0.6 + len * 0.6));

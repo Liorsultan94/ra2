@@ -895,6 +895,11 @@ export class Effects {
     }
   }
 
+  /** A bubble breaking the surface over a submerged diver (naval/navalfx.ts): one small pale disc that swells and fades. */
+  bubble(x: number, y: number, z: number) {
+    this.smokeSys.spawn({ x, y, z, vx: this.rand(-0.03, 0.03), vy: this.rand(0.02, 0.08), vz: this.rand(-0.03, 0.03), life: this.rand(0.8, 1.4), size: this.rand(0.03, 0.05), sizeEnd: this.rand(0.06, 0.09), color: 0xeaf6fa, colorEnd: 0xd4e8ee, alpha: 0.45, gravity: 0, drag: 1.2 });
+  }
+
   /** Back-compat helper used by older call sites. */
   explosion(x: number, y: number, z: number, size: 'tiny' | 'small' | 'medium' | 'large' | 'huge', kind: 'fire' | 'thermo' | 'dust' | 'laser' | 'air' = 'fire') {
     if (kind === 'dust') {

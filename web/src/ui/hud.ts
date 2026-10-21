@@ -494,7 +494,7 @@ export class Hud {
     const sea = this.world?.hasSea;
     for (const [id, b] of this.cameoEls) {
       const d = DEFS[id];
-      b.style.display = d.category === cat && (sea || (d.kind === 'building' ? !d.shipyard : d.category !== 'naval')) ? '' : 'none';
+      b.style.display = d.category === cat && (sea || (d.kind === 'building' ? !d.shipyard : d.category !== 'naval' && !d.swim)) ? '' : 'none';
     }
     this.fitNames();
   }

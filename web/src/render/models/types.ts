@@ -79,6 +79,10 @@ export interface AnimState {
   pitch?: number;
   /** Jets: 1 while rolling on the ground (no bank, no bob). */
   ground?: number;
+  /** Combat Diver (naval/diver.ts): 1 while submerged and swimming (the sim's Entity.dive), 0 on land and in the shallows. */
+  swim?: number;
+  /** Combat Diver: 1 while standing in water (the shallows): the legs wade, the stance drops a touch. */
+  wade?: number;
   /** Shipyard (naval/navalkit.ts): 1 while it builds a boat (a hull on its slipway), 0 idle. */
   busy?: number;
   /** Production buildings: seconds since this building last rolled out a unit (undefined / Infinity = never); drives doors / lifts / beacons. */

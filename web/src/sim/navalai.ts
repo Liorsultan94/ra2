@@ -49,16 +49,22 @@ interface NavCfg {
    * the army's), and the deck jets it keeps.
    */
   carrier: { chance: number; at: number; army: number; wing: number };
+  /**
+   * NV3, the Combat Divers (every nation): the chance per match it trains a diver squad (its own seeded roll), the squad
+   * it keeps, and the time between its raids. They swim from the home coast to a beach by the enemy's base, then fight
+   * their way in; never before the peace grace is over and the first land wave has gone (offensive()).
+   */
+  divers: { chance: number; squad: number; every: number };
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 30, army: 24000, wing: 2 } },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 26, army: 22000, wing: 3 } },
-  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 } },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 30, army: 24000, wing: 2 }, divers: { chance: 0.2, squad: 2, every: TPS * 60 * 5 } },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 26, army: 22000, wing: 3 }, divers: { chance: 0.7, squad: 3, every: TPS * 60 * 4 } },
+  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 }, divers: { chance: 1, squad: 4, every: TPS * 60 * 3 } },
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
-export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true };
+export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true, divers: true };
 
 /** What the land AI lends the navy (AIController). */
 export interface NavalHooks {
@@ -106,8 +112,15 @@ export class NavalAI {
   private station = -1;
   /** The boat that sails with the carrier as its escort (-1 = none). */
   private escort = -1;
-  /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered. */
-  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0 };
+  /** This match it trains a diver squad (its own seeded roll too). */
+  private diverPlan = false;
+  /** Its divers (claimed from the land army the tick they are trained) and when they may raid next. */
+  private diverIds: number[] = [];
+  private diverAt = 0;
+  /** When its Shipyard first stood complete (the divers wait for the boats and the first landing). */
+  private yardUpAt = -1;
+  /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered, divers trained, diver raids. */
+  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0, divers: 0, dives: 0 };
 
   constructor(
     private w: World,
@@ -121,6 +134,7 @@ export class NavalAI {
     this.active = w.hasSea && this.rng.next() < this.cfg.chance && NAVY_AI.on;
     this.nextLanding = Math.round(this.cfg.landEvery * this.rng.range(0.6, 1));
     if (!this.active) return;
+    this.diverPlan = NAVY_AI.divers && !!DEFS[`${w.players[pid].faction}_diver`] && new Rng(seed ^ 0xd17e5).next() < this.cfg.divers.chance;
     this.carrierPlan = NAVY_AI.carriers && !!DEFS[`${w.players[pid].faction}_carrier`] && new Rng(seed ^ 0x5eed0c).next() < this.cfg.carrier.chance;
     // the water within reach of the enemy's base (its ground region's shore)
     const W = w.map.w;
@@ -202,6 +216,8 @@ export class NavalAI {
   /** Land army value and navy value (yard included), refreshed each update. */
   private army = 0;
   private navyValue = 0;
+  /** What the divers are worth: a budget of their own, half the navy's share of the army, so they never starve the boats. */
+  private diverValue = 0;
 
   /** May the navy spend this much more and stay within its share of the land army? */
   private affords(cost: number): boolean {
@@ -224,15 +240,20 @@ export class NavalAI {
     return p ? [p[0] + 0.5, p[1] + 0.5] : [s[0] + 0.5, s[1] + 0.5];
   }
 
-  update(navy: Entity[], land: Entity[]) {
+  update(navyAll: Entity[], land: Entity[]) {
     if (!this.active) return;
+    // (the divers are the navy's units but not its boats: their own squad, their own budget, see divers())
+    const navy = navyAll.filter((u) => !unitDef(u.def).swim);
     // what the land army and the navy are worth (the navy lives on a share of the army: NavCfg.share)
     this.army = 0;
+    this.navyValue = 0;
+    this.diverValue = 0;
     for (const u of land) {
       const d = unitDef(u.def);
-      if (d.weapon && !d.harvester && !d.mcv) this.army += d.cost;
+      if (d.swim) this.diverValue += d.cost;
+      else if (d.weapon && !d.harvester && !d.mcv) this.army += d.cost;
     }
-    this.navyValue = 0;
+    for (const u of navyAll) if (unitDef(u.def).swim) this.diverValue += unitDef(u.def).cost;
     // (the carrier is bought on its own terms: carrier())
     for (const u of navy) if (!unitDef(u.def).deck) this.navyValue += unitDef(u.def).cost;
     const yard = this.yard();
@@ -250,6 +271,7 @@ export class NavalAI {
     const combat = navy.filter((u) => !!unitDef(u.def).weapon && !unitDef(u.def).cargoSlots && !unitDef(u.def).deck && !(cv && u.id === this.escort));
     this.fleet(yard, combat, cv);
     this.manageLanding(yard, navy, land);
+    this.divers(yard, land);
   }
 
   /**
@@ -523,9 +545,12 @@ export class NavalAI {
 
   /** A beach on the enemy's side, away from its defences, near something worth hitting. */
   private landingSite(craft: Entity): { bx: number; by: number; lx: number; ly: number } | null {
+    return this.beachFor(this.w.regionOf(craft.x, craft.y, this.w.locoOf(craft)), this.w.locoOf(craft));
+  }
+
+  private beachFor(region: number, lc: number): { bx: number; by: number; lx: number; ly: number } | null {
     const w = this.w;
     const W = w.map.w;
-    const region = w.regionOf(craft.x, craft.y, w.locoOf(craft));
     const veh = w.regions[Loco.Vehicle];
     const me = this.p;
     let best: { bx: number; by: number; lx: number; ly: number } | null = null;
@@ -540,7 +565,7 @@ export class NavalAI {
         if (me.explored[Math.floor(e.y) * W + Math.floor(e.x)]) aims.push([e.x, e.y]);
       }
       for (const [ax, ay] of aims) {
-        const b = beachSpot(w, ax, ay, region, w.locoOf(craft), 26);
+        const b = beachSpot(w, ax, ay, region, lc, 26);
         if (!b) continue;
         const ash = w.nearestPassable(b[0] + 0.5, b[1] + 0.5, 4, er, Loco.Vehicle);
         if (!ash) continue;
@@ -689,6 +714,63 @@ export class NavalAI {
     // the party walks to the shore by the beach meanwhile
     const shore = w.nearestPassable(spot[0] + 0.5, spot[1] + 0.5, 5, w.regionOf(hx, hy, Loco.Vehicle), Loco.Vehicle);
     if (shore) this.cmd({ type: 'move', ids, x: shore[0] + 0.5, y: shore[1] + 0.5 });
+  }
+
+  /**
+   * NV3, the Combat Divers: a small squad trained once the war is on (never in the peace grace: offensive()) out of
+   * the navy's share of the army, claimed from the land AI the tick it is trained, then sent as an amphibious raid: it
+   * swims (submerged, unseen) from the home coast to a beach by the enemy's base, comes ashore, and fights on at the
+   * nearest harvester, refinery or structure (attack-move: it surfaces to fight in the shallows). It raids again when it
+   * has rested (and been topped up to the squad); a lost squad is replaced up to twice.
+   */
+  private divers(yard: Entity | null, land: Entity[]) {
+    if (!this.diverPlan || !NAVY_AI.divers) return;
+    const w = this.w;
+    const cfg = this.cfg.divers;
+    const p = this.p;
+    const id = `${p.faction}_diver`;
+    // the new ones are the navy's from the tick they are trained
+    this.diverIds = this.diverIds.filter((i) => {
+      const u = w.get(i);
+      return !!u && !u.dead && u.owner === this.pid;
+    });
+    const fresh = land.filter((u) => unitDef(u.def).swim && !this.diverIds.includes(u.id));
+    if (fresh.length) {
+      this.hooks.claim(fresh.map((u) => u.id), true);
+      for (const u of fresh) this.diverIds.push(u.id);
+    }
+    if (!yard || yard.buildAnim < 1 || !this.offensive()) return;
+    // the boats and the first landing come first: the divers follow once it has gone, or 8 minutes after the yard is up
+    if (this.yardUpAt < 0) this.yardUpAt = w.tick;
+    if (this.stats.landings === 0 && this.landingsOn() && w.tick < this.yardUpAt + TPS * 60 * 8) return;
+    // the carrier is bought first (its own terms, carrier()): no diver money while one is about to be bought or is building
+    if (this.carrierPlan && this.stats.carriers < 2) {
+      const have = [...w.list].some((u) => !u.dead && u.owner === this.pid && u.kind === 'unit' && !!unitDef(u.def).deck);
+      if (!have && (this.stats.carriers > 0 || (w.tick > this.cfg.carrier.at - TPS * 60 * 3 && this.army > this.cfg.carrier.army * 0.7))) return;
+    }
+    // training: the squad, out of the navy's share
+    let queued = 0;
+    for (const q of p.queues.infantry) if (q.def === id) queued++;
+    const have = this.diverIds.length + queued;
+    if (have < cfg.squad && this.stats.divers < cfg.squad * 2 && p.credits >= this.cfg.reserve && this.diverValue + unitDef(id).cost <= this.army * this.cfg.share * 0.5 && w.canBuild(this.pid, id)) {
+      this.cmd({ type: 'produce', def: id });
+      this.stats.divers++;
+    }
+    // the raid
+    const squad = this.diverIds.map((i) => w.get(i)!).filter((u) => !u.inside || u.inside < 0);
+    const ready = squad.filter((u) => u.order.type === 'idle' && u.hp >= u.maxHp * 0.6);
+    if (!NAVY_AI.raids || ready.length < Math.max(2, cfg.squad - 1) || w.tick < this.diverAt) return;
+    const home = this.anchorage(yard);
+    const region = home ? w.regionOf(home[0], home[1], Loco.Landing) : 0;
+    const site = region ? this.beachFor(region, Loco.Landing) : null;
+    this.diverAt = w.tick + cfg.every;
+    if (!site) return;
+    const ids = ready.map((u) => u.id);
+    this.stats.dives++;
+    this.cmd({ type: 'move', ids, x: site.bx, y: site.by });
+    this.cmd({ type: 'move', ids, x: site.lx, y: site.ly, attackMove: true, queue: true });
+    const tgt = this.ashoreTarget(site.lx, site.ly);
+    if (tgt) this.cmd({ type: 'move', ids, x: tgt[0], y: tgt[1], attackMove: true, queue: true });
   }
 
   /** What the landing party attacks from (x, y): the nearest enemy harvester, refinery or structure it knows of. */

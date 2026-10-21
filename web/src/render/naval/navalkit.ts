@@ -8,6 +8,7 @@ import { registerLods } from '../perf/lod';
 import { assetBase } from '../photoground';
 import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
 import { carrierJet, carrierShip, type CarrierKit } from './carriers';
+import { diverModel } from './diver';
 
 /*
  * NV1 naval kit (render only): the Shipyard and every nation's boats, built in Blender (tools/blender/naval/navalkit.py
@@ -156,7 +157,7 @@ export function loadNavalKit(nations: string[] = []): Promise<boolean> {
   };
   // (and the aircraft carrier and its deck jet of the nations that have one: naval-cv<nation>.glb, carriers.ts)
   const cv = [...new Set(nations)].filter((n) => CARRIER_NATIONS.has(n)).map((n) => `cv${n}`);
-  return Promise.all(['shipyard', ...new Set(nations), ...cv].map(one)).then((r) => r.every(Boolean));
+  return Promise.all(['shipyard', 'diver', ...new Set(nations), ...cv].map(one)).then((r) => r.every(Boolean));
 }
 
 function findTemplate(name: string): THREE.Object3D | null {
@@ -428,6 +429,11 @@ export function navalModel(key: string, style: ModelStyle, fog: FogOfWar | null)
     // an aircraft carrier or its deck jet (carriers.ts); its file on demand as for the boats
     if (common) void loadNavalKit([key.split('_')[1]]);
     return key.endsWith('_jet') ? carrierJet(key, style, fog, kit ? carrierKit : null) : carrierShip(key, style, fog, kit ? carrierKit : null);
+  }
+  if (key === 'dv_diver') {
+    // the Combat Diver (NV3, diver.ts); its file loads with the Shipyard's
+    if (common) void loadNavalKit();
+    return diverModel(style, fog, kit ? carrierKit : null);
   }
   if (key.startsWith('nv_')) {
     // (a match loads its players' nations; a boat of another nation, say one spawned in by a script, fetches its
