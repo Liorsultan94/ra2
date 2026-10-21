@@ -883,6 +883,14 @@ export class Game {
         else if (mine && ev.what === 'divert') this.say('Jets diverting to another airbase', 'warn');
         else if (mine && ev.what === 'crash') this.say('Jet lost with its airbase', 'warn');
         break;
+      case 'subUp':
+        // NV4: an enemy submarine coming up to attack (not its dive): a ping on the minimap and a cue, so we can react in the 5 s
+        if (ev.up && this.local >= 0 && this.world.isEnemy(this.local, ev.owner)) {
+          this.say('Enemy submarine surfacing', 'warn');
+          this.hud.minimapPing(ev.x, ev.y, 'attack');
+          this.sfx('sonar', ev.x, ev.y, 0.7);
+        }
+        break;
       case 'lowPower':
         if (mine) this.say('Low power', 'warn');
         break;

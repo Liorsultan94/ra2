@@ -55,16 +55,18 @@ interface NavCfg {
    * their way in; never before the peace grace is over and the first land wave has gone (offensive()).
    */
   divers: { chance: number; squad: number; every: number };
+  /** NV4, the submarines (nations that have them): the chance per match it buys them (its own seeded roll) and how many it keeps. */
+  subs: { chance: number; count: number };
 }
 
 const NAV: Record<NavalDifficulty, NavCfg> = {
-  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 30, army: 24000, wing: 2 }, divers: { chance: 0.2, squad: 2, every: TPS * 60 * 5 } },
-  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 26, army: 22000, wing: 3 }, divers: { chance: 0.7, squad: 3, every: TPS * 60 * 4 } },
-  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 }, divers: { chance: 1, squad: 4, every: TPS * 60 * 3 } },
+  easy: { chance: 0.3, yardAt: TPS * 60 * 18, patrol: 1, corvette: 0, lander: 0, sortie: 1, landEvery: 0, reserve: 1400, share: 0.15, carrier: { chance: 0.15, at: TPS * 60 * 30, army: 24000, wing: 2 }, divers: { chance: 0.2, squad: 2, every: TPS * 60 * 5 }, subs: { chance: 0.15, count: 1 } },
+  normal: { chance: 0.75, yardAt: TPS * 60 * 16, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 4, reserve: 1000, share: 0.2, carrier: { chance: 0.5, at: TPS * 60 * 26, army: 22000, wing: 3 }, divers: { chance: 0.7, squad: 3, every: TPS * 60 * 4 }, subs: { chance: 0.6, count: 2 } },
+  hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 }, divers: { chance: 1, squad: 4, every: TPS * 60 * 3 }, subs: { chance: 1, count: 3 } },
 };
 
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
-export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true, divers: true };
+export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true, divers: true, subs: true };
 
 /** What the land AI lends the navy (AIController). */
 export interface NavalHooks {
@@ -114,13 +116,15 @@ export class NavalAI {
   private escort = -1;
   /** This match it trains a diver squad (its own seeded roll too). */
   private diverPlan = false;
+  /** This match it buys submarines (its own seeded roll), and its yard's first standing tick (they wait for the boats). */
+  private subPlan = false;
   /** Its divers (claimed from the land army the tick they are trained) and when they may raid next. */
   private diverIds: number[] = [];
   private diverAt = 0;
   /** When its Shipyard first stood complete (the divers wait for the boats and the first landing). */
   private yardUpAt = -1;
   /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered, divers trained, diver raids. */
-  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0, divers: 0, dives: 0 };
+  readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0, divers: 0, dives: 0, subs: 0 };
 
   constructor(
     private w: World,
@@ -135,6 +139,7 @@ export class NavalAI {
     this.nextLanding = Math.round(this.cfg.landEvery * this.rng.range(0.6, 1));
     if (!this.active) return;
     this.diverPlan = NAVY_AI.divers && !!DEFS[`${w.players[pid].faction}_diver`] && new Rng(seed ^ 0xd17e5).next() < this.cfg.divers.chance;
+    this.subPlan = NAVY_AI.subs && !!DEFS[`${w.players[pid].faction}_sub`] && new Rng(seed ^ 0x5ab5).next() < this.cfg.subs.chance;
     this.carrierPlan = NAVY_AI.carriers && !!DEFS[`${w.players[pid].faction}_carrier`] && new Rng(seed ^ 0x5eed0c).next() < this.cfg.carrier.chance;
     // the water within reach of the enemy's base (its ground region's shore)
     const W = w.map.w;
@@ -218,6 +223,8 @@ export class NavalAI {
   private navyValue = 0;
   /** What the divers are worth: a budget of their own, half the navy's share of the army, so they never starve the boats. */
   private diverValue = 0;
+  /** What its submarines are worth: their own budget too (a quarter of the army), so they never starve the boats. */
+  private subValue = 0;
 
   /** May the navy spend this much more and stay within its share of the land army? */
   private affords(cost: number): boolean {
@@ -255,7 +262,12 @@ export class NavalAI {
     }
     for (const u of navyAll) if (unitDef(u.def).swim) this.diverValue += unitDef(u.def).cost;
     // (the carrier is bought on its own terms: carrier())
-    for (const u of navy) if (!unitDef(u.def).deck) this.navyValue += unitDef(u.def).cost;
+    this.subValue = 0;
+    for (const u of navy) {
+      const d = unitDef(u.def);
+      if (d.submerge === 'sub') this.subValue += d.cost;
+      else if (!d.deck) this.navyValue += d.cost;
+    }
     const yard = this.yard();
     if (yard && !this.yardsSeen.has(yard.id)) {
       this.yardsSeen.add(yard.id);
@@ -272,6 +284,7 @@ export class NavalAI {
     this.fleet(yard, combat, cv);
     this.manageLanding(yard, navy, land);
     this.divers(yard, land);
+    this.subs(yard, navy);
   }
 
   /**
@@ -714,6 +727,41 @@ export class NavalAI {
     // the party walks to the shore by the beach meanwhile
     const shore = w.nearestPassable(spot[0] + 0.5, spot[1] + 0.5, 5, w.regionOf(hx, hy, Loco.Vehicle), Loco.Vehicle);
     if (shore) this.cmd({ type: 'move', ids, x: shore[0] + 0.5, y: shore[1] + 0.5 });
+  }
+
+  /**
+   * NV4, the submarines: bought once the war is on, after the boats and the first landing (as the divers), out of a
+   * budget of their own (a quarter of the army's value), a few at a time, and never while the carrier is being bought.
+   * They are boats to the fleet (fleet() sends every armed boat on its raids: attack-move on the enemy's shore and
+   * ships), so they sit submerged at the anchorage until a raid takes them out; they surface by themselves to fight
+   * (sub.ts), and dive again afterwards. No cap in the rules; the AI keeps `count` of them at a time and replaces
+   * losses up to twice over.
+   */
+  private subs(yard: Entity | null, navy: Entity[]) {
+    if (!this.subPlan || !NAVY_AI.subs || !yard || yard.buildAnim < 1 || !this.offensive()) return;
+    const w = this.w;
+    const p = this.p;
+    const id = `${p.faction}_sub`;
+    if (this.yardUpAt < 0) this.yardUpAt = w.tick;
+    if (this.stats.landings === 0 && this.landingsOn() && w.tick < this.yardUpAt + TPS * 60 * 4) return;
+    if (this.carrierBusy()) return;
+    // (no cash gate: production pays for it as the money comes in, as the carrier's wing; the share below is the limit)
+    if (p.queues.naval.length > 0) return;
+    const have = navy.filter((u) => unitDef(u.def).submerge === 'sub').length;
+    const cfg = this.cfg.subs;
+    if (have >= cfg.count || this.stats.subs >= cfg.count * 3) return;
+    const cost = unitDef(id).cost;
+    if (this.subValue + cost > this.army * 0.25 || !w.canBuild(this.pid, id)) return;
+    this.cmd({ type: 'produce', def: id });
+    this.stats.subs++;
+  }
+
+  /** The carrier is about to be bought or is being built: nothing else spends the war chest (divers, submarines). */
+  private carrierBusy(): boolean {
+    if (!this.carrierPlan || this.stats.carriers >= 2) return false;
+    const w = this.w;
+    const have = [...w.list].some((u) => !u.dead && u.owner === this.pid && u.kind === 'unit' && !!unitDef(u.def).deck);
+    return !have && (this.stats.carriers > 0 || (w.tick > this.cfg.carrier.at - TPS * 60 * 3 && this.army > this.cfg.carrier.army * 0.7));
   }
 
   /**
