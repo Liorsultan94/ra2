@@ -117,6 +117,8 @@ export class NavalAI {
   /** Its divers (claimed from the land army the tick they are trained) and when they may raid next. */
   private diverIds: number[] = [];
   private diverAt = 0;
+  /** When its Shipyard first stood complete (the divers wait for the boats and the first landing). */
+  private yardUpAt = -1;
   /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered, divers trained, diver raids. */
   readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0, divers: 0, dives: 0 };
 
@@ -738,11 +740,14 @@ export class NavalAI {
       for (const u of fresh) this.diverIds.push(u.id);
     }
     if (!yard || yard.buildAnim < 1 || !this.offensive()) return;
+    // the boats and the first landing come first: the divers follow once it has gone, or 8 minutes after the yard is up
+    if (this.yardUpAt < 0) this.yardUpAt = w.tick;
+    if (this.stats.landings === 0 && this.landingsOn() && w.tick < this.yardUpAt + TPS * 60 * 8) return;
     // training: the squad, out of the navy's share
     let queued = 0;
     for (const q of p.queues.infantry) if (q.def === id) queued++;
     const have = this.diverIds.length + queued;
-    if (have < cfg.squad && this.stats.divers < cfg.squad * 3 && p.credits >= this.cfg.reserve && this.diverValue + unitDef(id).cost <= this.army * this.cfg.share * 0.5 && w.canBuild(this.pid, id)) {
+    if (have < cfg.squad && this.stats.divers < cfg.squad * 2 && p.credits >= this.cfg.reserve && this.diverValue + unitDef(id).cost <= this.army * this.cfg.share * 0.5 && w.canBuild(this.pid, id)) {
       this.cmd({ type: 'produce', def: id });
       this.stats.divers++;
     }
