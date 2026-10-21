@@ -25,7 +25,8 @@ import { Tile, onBridgeHead, type GameMap } from './map';
 /**
  * Ways of moving. Slopes limit the ground classes (Foot, Vehicle: the first LOCO_COUNT); the water classes
  * (naval.ts: Boat deep water, Landing also the shallows, Hover also the beach, Deep the open ocean an aircraft
- * carrier needs) ignore slopes.
+ * carrier needs) ignore slopes. Swim (NV3, the Combat Diver) is a soldier's way: land by the infantry slope rule, and
+ * every water tile (shallows, reef and deep sea) with no slope rule at all.
  */
 export const enum Loco {
   Foot = 0,
@@ -34,11 +35,12 @@ export const enum Loco {
   Landing = 3,
   Hover = 4,
   Deep = 5,
+  Swim = 6,
 }
 /** Ground classes (slope rule). */
 export const LOCO_COUNT = 2;
 /** Every class, ground and water (World.passes / regions / pfs). */
-export const LOCO_ALL = 6;
+export const LOCO_ALL = 7;
 
 /** Steepest grade (rise / run of a half step) each locomotion class takes. */
 export const MAX_GRADE: readonly number[] = [0.83, 0.53];
@@ -182,8 +184,9 @@ export function slopeField(m: GameMap): SlopeField {
 }
 
 /** Locomotion class of a unit (aircraft: -1, no slope rule; naval units: their water class). */
-export function locoOf(d: { category: string; air?: boolean; naval?: 'boat' | 'landing' | 'hover' | 'deep' }): number {
+export function locoOf(d: { category: string; air?: boolean; swim?: boolean; naval?: 'boat' | 'landing' | 'hover' | 'deep' }): number {
   if (d.air) return -1;
+  if (d.swim) return Loco.Swim;
   if (d.naval) return d.naval === 'boat' ? Loco.Boat : d.naval === 'landing' ? Loco.Landing : d.naval === 'deep' ? Loco.Deep : Loco.Hover;
   return d.category === 'infantry' ? Loco.Foot : Loco.Vehicle;
 }

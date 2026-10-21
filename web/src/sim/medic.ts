@@ -27,6 +27,7 @@
 // per second, one at a time.
 // The player can also send a medic to a particular wounded or hurt soldier (Command 'treat'), fire or not.
 
+import { Tile } from './map';
 import { DEFS, unitDef } from './defs';
 import { hash2 } from './rng';
 import { cancelAim } from './sniper';
@@ -109,6 +110,8 @@ export function canWound(w: World, t: Entity, warhead: Warhead, big: boolean): b
   if (warhead === 'sniper' || big) return false;
   if (t.inside >= 0 || t.para || t.z > 0.05) return false;
   const d = DEFS[t.def];
+  // (a diver brought down in the water drowns: no medic reaches it there)
+  if (d.kind === 'unit' && d.swim && w.map.tiles[w.tileOf(t.x, t.y)] === Tile.Water) return false;
   if (d.kind !== 'unit' || d.category !== 'infantry' || d.temp) return false;
   if (w.players[t.owner]?.defeated) return false;
   return woundRoll(w, t);

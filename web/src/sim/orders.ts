@@ -43,7 +43,7 @@ export function leashRange(e: Entity, d: UnitDef): number {
 
 /** May the unit pick targets on its own (idle scan, attack-move, retaliation, interception)? */
 export function autoFire(e: Entity) {
-  return e.stance !== 'holdFire';
+  return e.stance !== 'holdFire' && !e.dive; // (a submerged diver picks no fights: diver.ts)
 }
 
 /** Classic fog: how far beyond its own sight a long-range unit picks targets on revealed ground by itself. */

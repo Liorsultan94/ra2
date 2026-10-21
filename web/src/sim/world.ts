@@ -14,6 +14,7 @@ import { entityZ, launch, stepProjectiles, tryIntercept } from './ballistics';
 import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICKS, CRATE_CHUTE_TICKS, CRATE_HEAL, CRATE_LIFE, CRATE_RADIUS, descentHeight } from './airdrop';
 import { PathFinder } from './path';
 import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
+import { canHurtSubmerged, diverSpeed, sonarSees, swimBlock, updateDive } from './diver';
 import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, deepYard, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
@@ -152,6 +153,8 @@ export class World {
    */
   region: Uint16Array;
   mainland = 0;
+  /** The Combat Diver's slope blocks (diver.ts swimBlock): the infantry's on land, none where water is involved. */
+  swimBlock: Uint8Array;
   /**
    * Per locomotion class (slope.ts Loco): ground regions over the steps that class can take, the region of
    * player 0's start, and its path finder. `region`, `mainland` and `pf` are the vehicles' (the strictest):
@@ -234,11 +237,13 @@ export class World {
     }
     // the water classes (naval.ts): no slope rule; their "mainland" is their largest body of water
     this.naval = navalTerrain(this.map);
+    this.swimBlock = swimBlock(this.map, this.slope.block[Loco.Foot]);
     this.passes = [this.pass, this.pass];
     for (let c = LOCO_COUNT; c < LOCO_ALL; c++) {
       const pass = this.naval.base[c - LOCO_COUNT].slice();
       this.passes.push(pass);
-      const reg = groundRegions(w, h, pass);
+      const swim = c === Loco.Swim;
+      const reg = groundRegions(w, h, pass, swim ? this.swimBlock : undefined);
       this.regions.push(reg);
       const size = new Map<number, number>();
       let big = 0;
@@ -249,7 +254,7 @@ export class World {
         if (n > (size.get(big) ?? 0)) big = reg[i];
       }
       this.mainlands.push(big);
-      this.pfs.push(new PathFinder(w, h, pass, null, null, 24000));
+      this.pfs.push(swim ? new PathFinder(w, h, pass, this.swimBlock, this.slope.climb, 24000) : new PathFinder(w, h, pass, null, null, 24000));
     }
     this.shipSpots = this.naval.seaTiles ? shipSpots(this.map, this.naval.sea) : [];
     this.region = this.regions[Loco.Vehicle];
@@ -559,20 +564,22 @@ export class World {
     const dy = Math.floor(b / w) - Math.floor(a / w);
     const k = dirOf(dx, dy);
     if (k < 0) return false;
-    if (c >= LOCO_COUNT) {
+    if (c >= LOCO_COUNT && c !== Loco.Swim) {
       // water classes: no slopes; a diagonal passes a corner only past one open tile beside it
       if (k < 4) return true;
       const pc = this.passes[c];
       return pc[a + dx] === 1 || pc[a + dy * w] === 1;
     }
-    const bl = this.slope.block[c];
+    // (the diver: the infantry's slope rule over land, none in or into the water: swimBlock)
+    const bl = c === Loco.Swim ? this.swimBlock : this.slope.block[c];
+    const pc = c === Loco.Swim ? this.passes[c] : this.pass;
     if (k < 4) return !(bl[a] & (1 << k));
     // (a diagonal is never off the map's edge here: b is on the map, so both corner tiles are)
     const kx = dx > 0 ? 0 : 1;
     const ky = dy > 0 ? 2 : 3;
     const tx = a + dx;
     const ty = a + dy * w;
-    return (this.pass[tx] === 1 && !(bl[a] & (1 << kx)) && !(bl[tx] & (1 << ky))) || (this.pass[ty] === 1 && !(bl[a] & (1 << ky)) && !(bl[ty] & (1 << kx)));
+    return (pc[tx] === 1 && !(bl[a] & (1 << kx)) && !(bl[tx] & (1 << ky))) || (pc[ty] === 1 && !(bl[a] & (1 << ky)) && !(bl[ty] & (1 << kx)));
   }
 
   /**
@@ -722,6 +729,8 @@ export class World {
    */
   sees(player: number, e: Entity): boolean {
     if (e.owner === player) return true;
+    // a submerged diver is out of sight, but for the sonar of the viewer's ships and boats (diver.ts)
+    if (e.dive && this.isEnemy(player, e.owner)) return sonarSees(this, player, e);
     return this.visibleTo(player, e.x, e.y) || flashLit(this, e) || (this.nightLevel > 0 && this.airSeen(player, e));
   }
 
@@ -952,7 +961,7 @@ export class World {
         }
         if (t && t.owner === pid && isCarrier(t)) {
           // board a landing craft (naval.ts): soldiers and vehicles; an idle craft comes to the beach nearest them
-          const boarders = own(cmd.ids).filter((e) => cargoSize(e.def) > 0);
+          const boarders = own(cmd.ids).filter((e) => cargoSize(e.def) > 0 && !e.dive);
           for (const e of boarders) {
             e.order = { type: 'enter', target: t.id };
             e.path = null;
@@ -961,7 +970,7 @@ export class World {
           break;
         }
         if (!t || t.owner !== pid || !unitDef(t.def).transport) break;
-        for (const e of own(cmd.ids)) if (unitDef(e.def).category === 'infantry') e.order = { type: 'enter', target: t.id };
+        for (const e of own(cmd.ids)) if (unitDef(e.def).category === 'infantry' && !e.dive) e.order = { type: 'enter', target: t.id };
         break;
       }
       case 'harvest':
@@ -1428,6 +1437,7 @@ export class World {
     const dist = Math.hypot(dx, dy);
     // uphill they slow down a little (half a tile ahead along the leg; downhill and on the level full speed)
     let step = d.speed / TPS;
+    if (d.swim) step *= diverSpeed(this, e); // fins under water, wading in the shallows (diver.ts)
     if (dist > 1e-3) {
       const up = standHeight(this.map, e.x + (dx / dist) * 0.5, e.y + (dy / dist) * 0.5) - standHeight(this.map, e.x, e.y);
       if (up > 0) step /= 1 + CLIMB_SLOW * up * 2;
@@ -1703,6 +1713,7 @@ export class World {
     const d = DEFS[e.def];
     const wpn = this.weaponVs(e.def, t);
     if (!wpn) return 'out';
+    if (e.dive) return 'out'; // submerged: it cannot fire, it swims in to the shallows (diver.ts)
     const dist = this.distTo(e, t);
     // the secondary weapon (UnitDef.weapon2) reloads on its own clock
     const alt = wpn.id !== d.weapon;
@@ -1826,6 +1837,7 @@ export class World {
   damage(t: Entity, amount: number, warhead: keyof typeof VERSUS, src: Entity, raw = false, big = false) {
     if (!raw && t.inside >= 0) t = garrisonOf(this, t) ?? t; // garrisoned infantry: the house takes the hit (garrison.ts)
     if (t.dead || t.wound || bridgeProof(t)) return; // bridges take damage from impacts (bridges.ts); the wounded lie out of the fight (medic.ts)
+    if (t.dive && !canHurtSubmerged(src)) return; // a diver under the water: only ships and boats reach it (diver.ts)
     const d = DEFS[t.def];
     // veterancy: the shooter's firepower and the target's armour
     amount *= RANK_FIREPOWER[src.rank ?? 0] * RANK_ARMOR[t.rank];
@@ -1905,6 +1917,7 @@ export class World {
 
   private updateUnit(e: Entity) {
     const d = unitDef(e.def);
+    if (d.swim) updateDive(this, e); // submerged in deep water (diver.ts)
     if (e.inside >= 0) {
       this.updatePassenger(e, d);
       return;
