@@ -42,7 +42,7 @@ function play(fs: [Faction, Faction], minutes: number, seed = 2) {
 
 describe('AI submarines', () => {
   it('Hard buys submarines after the grace, keeps them down when idle and uses them', () => {
-    const r = play(['israel', 'germany'], 36);
+    const r = play(['korea', 'turkey'], 36);
     const st = r.ais.map((a) => a.navy?.stats);
     const msg = JSON.stringify({ st, built: r.built, first: +(r.first / TPS / 60).toFixed(1), surfaced: r.surfaced, hidden: r.hiddenSamples, fired: r.fired });
     expect(r.built, msg).toBeGreaterThanOrEqual(1);

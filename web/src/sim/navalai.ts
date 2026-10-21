@@ -743,7 +743,8 @@ export class NavalAI {
     const p = this.p;
     const id = `${p.faction}_sub`;
     if (this.yardUpAt < 0) this.yardUpAt = w.tick;
-    if (this.stats.landings === 0 && this.landingsOn() && w.tick < this.yardUpAt + TPS * 60 * 4) return;
+    // (the boats come first, the landing craft above all: it shares the Shipyard's queue; the first landing, or a craft built, or 10 minutes)
+    if (this.stats.landings === 0 && this.landingsOn() && !navy.some((u) => !!unitDef(u.def).cargoSlots) && w.tick < this.yardUpAt + TPS * 60 * 10) return;
     if (this.carrierBusy()) return;
     // (no cash gate: production pays for it as the money comes in, as the carrier's wing; the share below is the limit)
     if (p.queues.naval.length > 0) return;
@@ -756,12 +757,17 @@ export class NavalAI {
     this.stats.subs++;
   }
 
-  /** The carrier is about to be bought or is being built: nothing else spends the war chest (divers, submarines). */
+  /** A carrier is planned and not yet complete with its wing: nothing else spends the war chest or the Shipyard's queue (divers, submarines). */
   private carrierBusy(): boolean {
-    if (!this.carrierPlan || this.stats.carriers >= 2) return false;
+    if (!this.carrierPlan) return false;
     const w = this.w;
     const have = [...w.list].some((u) => !u.dead && u.owner === this.pid && u.kind === 'unit' && !!unitDef(u.def).deck);
-    return !have && (this.stats.carriers > 0 || (w.tick > this.cfg.carrier.at - TPS * 60 * 3 && this.army > this.cfg.carrier.army * 0.7));
+    if (!have) return true;
+    const jet = `${this.p.faction}_cvjet`;
+    let wing = 0;
+    for (const e of w.list) if (!e.dead && e.owner === this.pid && e.def === jet) wing++;
+    for (const q of this.p.queues.air) if (q.def === jet) wing++;
+    return wing < this.cfg.carrier.wing && this.stats.wing < this.cfg.carrier.wing * 2;
   }
 
   /**
