@@ -1542,6 +1542,12 @@ export class GameRenderer {
         a.dist = v.dist;
         a.turn = v.turn;
         // an aircraft carrier: its jet blast deflector up while one of its jets lines up and launches (carriers.ts)
+        // a submarine: how far up it is (the sim's phase: 5 s coming up, 5 s diving; naval/subs.ts)
+        if (ud.submerge === 'sub') {
+          const ph = e.subPhase ?? 0;
+          const k = Math.min(1, (w.tick - (e.subAt ?? 0)) / (5 * TPS));
+          a.surf = ph === 0 ? 0 : ph === 1 ? k : ph === 2 ? 1 : 1 - k;
+        }
         if (ud.deck) {
           let launching = 0;
           for (const j of w.list) if (j.sortie && j.sortie.base === e.id && (j.sortie.phase === 'lineup' || (j.sortie.phase === 'takeoff' && j.z < 0.3))) launching = 1;
@@ -1693,7 +1699,10 @@ export class GameRenderer {
       }
     }
     // boats: the wake, bow spray and waves (naval/navalfx.ts)
-    if (ud.naval && this.navalFx) {
+    if (ud.naval && this.navalFx && ud.submerge === 'sub' && (v.anim.surf ?? 0) < 0.6) {
+      // a submarine under the water: a thin bubble trail, no wake
+      this.navalFx.diver(e.id, p.x, p.z, yaw, v.speed, moved, true, false, dt);
+    } else if (ud.naval && this.navalFx) {
       const map = this.world.map;
       const tx = Math.floor(p.x);
       const tz = Math.floor(p.z);
@@ -2330,6 +2339,15 @@ export class GameRenderer {
           break;
         }
         const tp = this.targetPoint(ev.targetId, ev.tx, ev.ty);
+        // submarines (NV4): a torpedo leaves a bubbling track and nothing else; a cruise missile pops its hatch with a plume
+        if (wpn.vs === 'naval') {
+          this.navalFx?.torpedo(src.x, src.y, ev.tx, ev.ty);
+          break;
+        }
+        if (ev.weapon.startsWith('subMissile')) {
+          fx.splash(pos.x, WATER_LEVEL, pos.z, 0.45);
+          fx.smoke(pos.x, WATER_LEVEL + 0.15, pos.z, 0.8);
+        }
         switch (wpn.projectile) {
           case 'instant': {
             const t = this.world.get(ev.targetId);

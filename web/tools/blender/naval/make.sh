@@ -9,6 +9,7 @@
 #   carrier NV2: carrierkit.py, the aircraft carriers and their deck jets (kit, contact sheet, cameos; after `kit`:
 #           it adds to naval.json)                     -> naval-cv<nation>-raw.glb, carrier-sheet.png, cameo-*.png
 #   diver   NV3: diverkit.py, the Combat Diver (kit, contact sheet, cameo; after `kit`) -> naval-diver-raw.glb, diver-sheet.png, cameo-diver.png
+#   sub     NV4: subkit.py, the submarines (kit, contact sheet, cameos; after `kit`) -> naval-sub-raw.glb, sub-sheet.png, cameo-sub_*.png
 #   pack    pack.mjs: meshopt GLB, WebP maps and cameos      -> public/models/naval/, public/ui/cameos/
 #
 # Blender runs niced, one process at a time (the kit takes a few minutes on 3 shared CPU cores).
@@ -45,6 +46,15 @@ if [ "$step" = all ] || [ "$step" = diver ]; then
       exit 1
     }
     grep "^\[diver\]" "$OUT/diver-$s.log" | tail -20
+  done
+fi
+if [ "$step" = all ] || [ "$step" = sub ]; then
+  for s in kit sheet cameos; do
+    nice -n 15 "$BLENDER" -b --factory-startup -P tools/blender/naval/subkit.py -- "$OUT" "$s" > "$OUT/sub-$s.log" 2>&1 || {
+      tail -30 "$OUT/sub-$s.log"
+      exit 1
+    }
+    grep "^\[sub\]" "$OUT/sub-$s.log" | tail -20
   done
 fi
 if [ "$step" = all ] || [ "$step" = pack ]; then node tools/blender/naval/pack.mjs; fi

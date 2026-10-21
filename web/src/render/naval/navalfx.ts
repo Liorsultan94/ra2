@@ -176,6 +176,19 @@ export class NavalFx {
     }
   }
 
+  /** A torpedo run from (x, z) to (tx, tz): a bubbling track of foam patches along the line, fading over a few seconds. */
+  torpedo(x: number, z: number, tx: number, tz: number) {
+    const len = Math.hypot(tx - x, tz - z);
+    if (len < 0.5) return;
+    const yaw = Math.atan2(-(tz - z), tx - x);
+    const n = Math.min(40, Math.ceil(len / 0.25));
+    for (let i = 1; i <= n; i++) {
+      const k = i / n;
+      this.add(x + (tx - x) * k, z + (tz - z) * k, yaw, 0.07, 0.3, 0.45 * (1 - k * 0.3));
+    }
+    waterRings.add(tx, tz, 0.35);
+  }
+
   /** A boat went down at (x, z): the water closes over it in a ring and a spreading boil of foam. */
   sunk(x: number, z: number, len: number) {
     waterRings.add(x, z, Math.min(2, 0.6 + len * 0.6));

@@ -91,6 +91,8 @@ export const CUSTOM_CAMEOS: Record<string, string> = {
 // NV1: the Shipyard and every nation's boats, rendered in Blender on the water (tools/blender/naval/navalkit.py cameos)
 CUSTOM_CAMEOS.shipyard = `${CAMEO_BASE}ui/cameos/shipyard.jpg`;
 for (const d of Object.values(DEFS)) if (d.kind === 'unit' && (d.category === 'naval' || d.deckJet) && d.buildable) CUSTOM_CAMEOS[d.id] = `${CAMEO_BASE}ui/cameos/${d.id}.jpg`;
+// NV4: the submarines, two pictures (nuclear / conventional)
+for (const d of Object.values(DEFS)) if (d.kind === 'unit' && d.submerge === 'sub' && d.buildable) CUSTOM_CAMEOS[d.id] = `${CAMEO_BASE}ui/cameos/${d.prereq.includes('tech') ? 'sub_nuc' : 'sub_con'}.jpg`;
 // NV3: the Combat Diver (every nation's one picture: black wetsuit, the team colour is only a small patch)
 for (const d of Object.values(DEFS)) if (d.kind === 'unit' && d.swim && d.buildable) CUSTOM_CAMEOS[d.id] = `${CAMEO_BASE}ui/cameos/diver.jpg`;
 
