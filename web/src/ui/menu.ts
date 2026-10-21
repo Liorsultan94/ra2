@@ -12,6 +12,7 @@ import type { GameSpeed } from '../game/pace';
 import type { Game } from '../game/game';
 import { MenuHero, heroDef } from './menuhero';
 import { startMenuCamera } from './menucam';
+import { MenuBackdrop } from './menubg';
 import './maps.css';
 import './menu.css';
 
@@ -135,6 +136,7 @@ export class MainMenu {
   private stage: HTMLElement;
   private tab: Tab = 'nation';
   private hero: MenuHero;
+  private bg: MenuBackdrop;
   private stopCam: () => void;
   private onKey = (e: KeyboardEvent) => this.key(e);
   private back: (() => void) | null = null;
@@ -154,6 +156,7 @@ export class MainMenu {
       </div>`);
     this.stage = this.el.querySelector('.mm-stage')!;
     parent.appendChild(this.el);
+    this.bg = new MenuBackdrop(this.el);
     this.hero = new MenuHero(!lite);
     this.stopCam = handlers.demo ? startMenuCamera(handlers.demo) : () => {};
     this.el.addEventListener('pointerdown', () => handlers.onUnlockAudio());
@@ -464,6 +467,7 @@ export class MainMenu {
   }
 
   destroy() {
+    this.bg.destroy();
     this.stopCam();
     this.hero.hide();
     window.removeEventListener('keydown', this.onKey);

@@ -1759,3 +1759,47 @@
     transition: none !important;
   }
 }
+
+/* ------------------------------------------------------------ picture backdrop (menubg.ts) */
+.mm-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #05070a;
+  transition: opacity 0.5s ease;
+}
+.mm-bg-slide {
+  position: absolute;
+  inset: -4%;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity var(--fade, 1.8s) ease;
+  will-change: transform, opacity;
+  transform: translate3d(var(--x0), var(--y0), 0) scale(1);
+}
+.mm-bg-slide.on {
+  opacity: 1;
+}
+.mm-bg-slide.go {
+  animation: mm-bg-drift var(--hold, 12s) ease-in-out forwards;
+}
+@keyframes mm-bg-drift {
+  from {
+    transform: translate3d(var(--x0), var(--y0), 0) scale(1);
+  }
+  to {
+    transform: translate3d(var(--x1), var(--y1), 0) scale(1.1);
+  }
+}
+/* watch mode shows the real demo battle again: the pictures step aside */
+.mm.mm-watch .mm-bg {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-bg-slide.go {
+    animation: none;
+    transform: none;
+  }
+}
