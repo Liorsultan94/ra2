@@ -79,6 +79,8 @@ export interface AnimState {
   pitch?: number;
   /** Jets: 1 while rolling on the ground (no bank, no bob). */
   ground?: number;
+  /** Submarine (naval/subs.ts): 0 submerged .. 1 surfaced (the renderer's ease from the sim's phase and its tick: 5 s up, 5 s down). */
+  surf?: number;
   /** Combat Diver (naval/diver.ts): 1 while submerged and swimming (the sim's Entity.dive), 0 on land and in the shallows. */
   swim?: number;
   /** Combat Diver: 1 while standing in water (the shallows): the legs wade, the stance drops a touch. */

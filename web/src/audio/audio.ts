@@ -37,7 +37,7 @@ import { type RadioProfile, radioAck, radioClose, radioFor, radioOpen, radioStat
 
 export type Sfx =
   | LiveName
-  | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder'
+  | 'sonar' | 'autocannon' | 'interceptorLaunch' | 'mortar' | 'bridgeCollapse' | 'jetFlyby' | 'thunder'
   /** A vehicle ran a soldier over (crunch + thud); a short alarmed radio squelch (soldiers dodging a vehicle). */
   | 'crush' | 'squelch'
   /** Civilian ambience of the render-only set pieces (render/landmarks/sound.ts): played only once baked. */
@@ -137,6 +137,8 @@ const META: Record<Sfx, Meta> = {
   select: ui('select'),
   ack: ui('ack'),
   alarm: ui('alarm'),
+  // NV4: an enemy submarine begins to surface (the counterplay window): the alarm's tone, spaced out
+  sonar: { ...ui('alarm'), gap: 3 },
   money: ui('money'),
   deploy: ui('deploy'),
   repair: ui('repair'),

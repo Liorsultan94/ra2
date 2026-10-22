@@ -162,8 +162,8 @@ describe('naval units', () => {
     const p = w.players[0];
     for (const f of FACTIONS.map((x) => x.id)) {
       p.faction = f;
-      // (the boats: the carriers of USA, Russia and China are covered by tests/carrier.test.ts)
-      const navy = DEF_LIST.filter((d) => d.kind === 'unit' && d.faction === f && d.category === 'naval' && d.buildable && !d.deck);
+      // (the boats: the carriers of USA, Russia and China are covered by tests/carrier.test.ts, the submarines by tests/sub.test.ts)
+      const navy = DEF_LIST.filter((d) => d.kind === 'unit' && d.faction === f && d.category === 'naval' && d.buildable && !d.deck && !d.submerge);
       expect(navy.length).toBe(3);
       expect(new Set(navy.map((d) => d.model)).size).toBe(3);
       for (const d of navy) {

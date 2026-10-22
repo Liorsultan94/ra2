@@ -68,6 +68,8 @@ export interface WeaponDef {
   flightTime?: number;
   /** Ballistic: amplitude (tiles) of evasive weaving in the terminal phase; interceptors lose pk against it. */
   maneuver?: number;
+  /** 'naval': hits only ships and submarines (a torpedo); 'surface': never a submerged boat (a submarine's land-attack missile). */
+  vs?: 'naval' | 'surface';
   spawn?: string; // unit launched by a 'spawn' weapon (drones)
   precise?: boolean; // artillery without scatter
   /**
@@ -527,6 +529,10 @@ export interface Entity {
   slip?: number;
   /** Submerged (submerge.ts): hidden from enemies but for what its rule spots it with, hurt only by what its rule allows; a diver (diver.ts): in water deeper than DIVE_DEPTH, cannot fire. */
   dive?: boolean;
+  /** Submarine (sub.ts): 0 submerged, 1 coming up, 2 surfaced, 3 diving; and the tick the phase began / the tick it last had a target. */
+  subPhase?: number;
+  subAt?: number;
+  subSeen?: number;
 }
 
 /**
@@ -715,6 +721,8 @@ export type SimEvent =
   | { t: 'crushed'; id: number; def: string; owner: number; by: number; byDef: string; byOwner: number; x: number; y: number }
   /** Infantry (id) saw a vehicle (by) coming and jumps out of its way; dive = close call. yield = a friendly vehicle. */
   | { t: 'dodge'; id: number; owner: number; by: number; x: number; y: number; dive: boolean; yield: boolean }
+  /** A submarine begins to come up (up) / has dived out of sight (sub.ts): the enemy's ping and sound. */
+  | { t: 'subUp'; id: number; owner: number; x: number; y: number; up: boolean }
   | { t: 'placed'; id: number; owner: number }
   | { t: 'unitReady'; owner: number; def: string }
   | { t: 'buildingReady'; owner: number; def: string }

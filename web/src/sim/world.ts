@@ -15,7 +15,7 @@ import { AIRDROP_COOLDOWN, AIRDROP_FIRST, AIRDROP_GAP, AIRDROP_STICK, CHUTE_TICK
 import { PathFinder } from './path';
 import { LOCO_ALL, LOCO_COUNT, Loco, dirOf, groundRegions, locoOf, slopeField, type SlopeField } from './slope';
 import { diverSpeed, swimBlock } from './diver';
-import { canFireNow, canHurtSubmerged, spottedWhenSubmerged, updateSubmerged } from './submerge';
+import { canFireNow, canHurtSubmerged, holdsWhenBlocked, spottedWhenSubmerged, updateSubmerged } from './submerge';
 import { SHIP_BUILD_RADIUS, SHIP_YARD_REACH, arriveLanding, deepYard, callCraft, cargoSize, deliverNaval, isCarrier, navalTerrain, orderUnload, shipSite, shipSpots, stepEmbark, updateNaval, type NavalTerrain, type ShipSite } from './naval';
 import { canGarrisonUnit, ejectAll, enterGarrison, garrisonHit, garrisonOf, garrisonRangeBonus, garrisonRoom, isGarrison, spawnGarrisons, updateGarrisons, GARRISON_FIREPOWER } from './garrison';
 import { spawnTechSites, updateTechs } from './capture';
@@ -650,6 +650,9 @@ export class World {
 
   canHit(wpn: WeaponDef, t: Entity) {
     const air = this.isAir(t);
+    // submarines' weapons (defs.ts): a torpedo only at ships and submarines; a missile never at a submerged boat
+    if (wpn.vs === 'naval' && !(t.kind === 'unit' && unitDef(t.def).category === 'naval')) return false;
+    if (wpn.vs === 'surface' && t.dive) return false;
     if (wpn.air === 'only') return air;
     if (wpn.air === 'no') return !air;
     return true;
@@ -1714,7 +1717,9 @@ export class World {
     const d = DEFS[e.def];
     const wpn = this.weaponVs(e.def, t);
     if (!wpn) return 'out';
-    if (!canFireNow(e)) return 'out'; // submerged and it cannot fire: it swims in closer (submerge.ts)
+    // (cannot fire yet: a diver swims in closer, a submarine coming up waits for its target to be in range: submerge.ts)
+    const blocked = !canFireNow(e);
+    if (blocked && !holdsWhenBlocked(e)) return 'out';
     const dist = this.distTo(e, t);
     // the secondary weapon (UnitDef.weapon2) reloads on its own clock
     const alt = wpn.id !== d.weapon;
@@ -1722,6 +1727,7 @@ export class World {
       if (wpn.aim) cancelAim(e); // target left range / sight: the lock is lost (sniper.ts)
       return 'out';
     }
+    if (blocked) return 'aiming';
     const want = Math.atan2(t.y - e.y, t.x - e.x);
     let aligned: boolean;
     if (d.kind === 'building') {

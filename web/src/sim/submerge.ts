@@ -1,5 +1,6 @@
 import { unitDef } from './defs';
 import { DIVER_RULE } from './diver';
+import { SUB_RULE } from './sub';
 import type { Entity } from './types';
 import type { World } from './world';
 
@@ -28,13 +29,18 @@ export interface SubmergeRule {
   spotted(w: World, viewer: number, e: Entity): boolean;
   /** May the attacker `src` hurt the submerged unit? */
   hurtBy(src: Entity, e: Entity): boolean;
-  /** Can the unit fire while submerged? */
-  fires: boolean;
+  /** Can the unit fire right now? (a diver: not while submerged; a submarine: only fully surfaced) */
+  canFire(e: Entity): boolean;
+  /** While it cannot fire yet but the target is in range, does it wait for it (a submarine coming up) rather than move closer (a diver)? */
+  holds: boolean;
+  /** May it pick targets on its own while submerged (idle scan, attack-move)? A diver no (it swims on), a submarine yes (that is how it surfaces). */
+  scans: boolean;
 }
 
 /** The rules by def.submerge. NV4 adds 'sub' (and its nuclear / conventional variants) here. */
 const RULES: Record<string, SubmergeRule> = {
   diver: DIVER_RULE,
+  sub: SUB_RULE,
 };
 
 export function submergeRule(e: Entity): SubmergeRule | undefined {
@@ -62,9 +68,20 @@ export function canHurtSubmerged(src: Entity, e: Entity): boolean {
   return r ? r.hurtBy(src, e) : true;
 }
 
-/** Can this unit fire right now (false only while submerged under a rule that forbids it)? */
+/** Can this unit fire right now (false only while its rule forbids it: submerged, or still coming up)? */
 export function canFireNow(e: Entity): boolean {
-  if (!e.dive) return true;
   const r = submergeRule(e);
-  return r ? r.fires : true;
+  return r ? r.canFire(e) : true;
+}
+
+/** May it pick its own targets (the scan that starts an auto engagement)? */
+export function mayScan(e: Entity): boolean {
+  const r = submergeRule(e);
+  return r ? r.scans || canFireNow(e) : true;
+}
+
+/** Blocked from firing but with the target in range: wait (true) or move closer (false)? */
+export function holdsWhenBlocked(e: Entity): boolean {
+  const r = submergeRule(e);
+  return !!r?.holds;
 }

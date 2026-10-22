@@ -4,7 +4,7 @@
 
 import { Loco, locoOf } from './slope';
 import { unitDef } from './defs';
-import { canFireNow } from './submerge';
+import { mayScan } from './submerge';
 import type { Category, Command, Entity, QueuedOrder, Stance, UnitDef } from './types';
 import type { World } from './world';
 
@@ -44,7 +44,7 @@ export function leashRange(e: Entity, d: UnitDef): number {
 
 /** May the unit pick targets on its own (idle scan, attack-move, retaliation, interception)? */
 export function autoFire(e: Entity) {
-  return e.stance !== 'holdFire' && canFireNow(e); // (a unit that cannot fire submerged picks no fights: submerge.ts)
+  return e.stance !== 'holdFire' && mayScan(e); // (a unit that cannot fire submerged picks no fights: submerge.ts)
 }
 
 /** Classic fog: how far beyond its own sight a long-range unit picks targets on revealed ground by itself. */
