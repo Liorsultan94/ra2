@@ -466,7 +466,7 @@
 }
 .mm-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 .mm .mm-tile {
@@ -525,47 +525,6 @@
   opacity: 0;
 }
 
-/* watch mode: the menu steps aside for the demo battle */
-.mm-watch-exit {
-  position: absolute;
-  left: var(--mm-pad-l);
-  bottom: var(--mm-pad-b);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0 16px 0 10px;
-  border-radius: 999px;
-  background: rgba(8, 10, 14, 0.62);
-  border: 1px solid var(--mm-line-2);
-  font-family: var(--font-d);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(10px);
-  transition:
-    opacity 0.3s,
-    transform 0.3s var(--mm-ease);
-}
-.mm.mm-watch .mm-watch-exit {
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
-}
-.mm .title-screen > :not(.mm-watch-exit) {
-  transition: opacity 0.35s ease;
-}
-.mm.mm-watch .title-screen > :not(.mm-watch-exit) {
-  opacity: 0;
-  pointer-events: none;
-}
-.mm.mm-watch .mm-shade {
-  opacity: 0.35;
-}
 .mm-shade {
   transition: opacity 0.4s ease;
 }
@@ -1791,11 +1750,6 @@
   to {
     transform: translate3d(var(--x1), var(--y1), 0) scale(1.1);
   }
-}
-/* watch mode shows the real demo battle again: the pictures step aside */
-.mm.mm-watch .mm-bg {
-  opacity: 0;
-  pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .mm-bg-slide.go {

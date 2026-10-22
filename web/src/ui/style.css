@@ -543,6 +543,10 @@ kbd {
   margin-top: 2px;
   color: #9ccdf0;
 }
+/* garrison / passengers / cargo count: only the phone panel needs it (the advanced one has the stat line) */
+.sp-count {
+  display: none;
+}
 /* strike jet: sortie status + rearm bar (sim/airbase.ts) */
 .sp-jet {
   margin-top: 3px;
