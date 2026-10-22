@@ -1,4 +1,5 @@
 import { hitchEventNames, hitches } from './hitches';
+import { convexHull, hullCentre, hullHit, touchScore, type Pt } from './pickshape';
 import { AudioSystem, type Sfx } from '../audio/audio';
 import { AudioScene } from '../audio/scene';
 import { AIController, type Difficulty } from '../sim/ai';
@@ -1264,7 +1265,8 @@ export class Game {
     // the body: the model's half width on screen (at least a fingertip); loose: a generous halo
     const body = Math.max(7, half * scale * 0.85);
     const rad = tight ? body : Math.max(24, half * scale * 1.5);
-    return dist < rad ? dist : Infinity;
+    // (a big vehicle's wide halo must not swallow a tap meant for the soldier beside it: pickshape.ts)
+    return dist < rad ? touchScore(dist, body) : Infinity;
   }
 
   private pick(sx: number, sy: number): Entity | null {
@@ -1306,18 +1308,31 @@ export class Game {
       const b = id ? w.get(id) : undefined;
       if (b && r.isShown(b.id)) return b;
     }
-    // tall buildings: test their projected box too
+    // tall buildings: the shape the player sees (the projected box), not only the tile under the finger - a tap on
+    // the roof lands on the ground behind the footprint (pickshape.ts)
+    let hit: Entity | null = null;
+    let hd = Infinity;
     for (const e of w.list) {
       if (e.dead || e.kind !== 'building' || !r.isShown(e.id)) continue;
-      // simple scheme with units selected: own buildings only by their footprint (the ground behind them moves)
-      if (tp === 'tight' && e.owner === this.local) continue;
       const d = buildingDef(e.def);
       const p = r.entityPos(e, 1);
-      const scale = r.pixelsPerUnit(p);
-      const c = r.project(p.x, p.y + r.visualHeight(e.id) * 0.5, p.z);
-      const span = (d.w + d.h) / 2;
-      if (Math.abs(c.x - sx) < span * scale * 0.55 && Math.abs(c.y - sy) < span * scale * 0.45) return e;
+      // (own buildings: a lower box, so the ground behind your own base stays a place to send units to)
+      const h = r.visualHeight(e.id) * (e.owner === this.local ? 0.55 : 1);
+      const pts: Pt[] = [];
+      for (const cx of [e.tx, e.tx + d.w]) for (const cy of [e.ty, e.ty + d.h]) for (const hh of [0, h]) {
+        const s2 = r.project(cx, p.y + hh, cy);
+        pts.push([s2.x, s2.y]);
+      }
+      const hull = convexHull(pts);
+      if (!hullHit(hull, [sx, sy], tp ? 10 : 4)) continue;
+      const c = hullCentre(hull);
+      const dd = Math.hypot(c[0] - sx, c[1] - sy);
+      if (dd < hd) {
+        hd = dd;
+        hit = e;
+      }
     }
+    if (hit) return hit;
     return null;
   }
 

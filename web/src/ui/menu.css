@@ -466,7 +466,7 @@
 }
 .mm-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 .mm .mm-tile {
@@ -525,47 +525,6 @@
   opacity: 0;
 }
 
-/* watch mode: the menu steps aside for the demo battle */
-.mm-watch-exit {
-  position: absolute;
-  left: var(--mm-pad-l);
-  bottom: var(--mm-pad-b);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0 16px 0 10px;
-  border-radius: 999px;
-  background: rgba(8, 10, 14, 0.62);
-  border: 1px solid var(--mm-line-2);
-  font-family: var(--font-d);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(10px);
-  transition:
-    opacity 0.3s,
-    transform 0.3s var(--mm-ease);
-}
-.mm.mm-watch .mm-watch-exit {
-  opacity: 1;
-  pointer-events: auto;
-  transform: none;
-}
-.mm .title-screen > :not(.mm-watch-exit) {
-  transition: opacity 0.35s ease;
-}
-.mm.mm-watch .title-screen > :not(.mm-watch-exit) {
-  opacity: 0;
-  pointer-events: none;
-}
-.mm.mm-watch .mm-shade {
-  opacity: 0.35;
-}
 .mm-shade {
   transition: opacity 0.4s ease;
 }
@@ -1757,5 +1716,44 @@
   .mm *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ------------------------------------------------------------ picture backdrop (menubg.ts) */
+.mm-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #05070a;
+  transition: opacity 0.5s ease;
+}
+.mm-bg-slide {
+  position: absolute;
+  inset: -4%;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity var(--fade, 1.8s) ease;
+  will-change: transform, opacity;
+  transform: translate3d(var(--x0), var(--y0), 0) scale(1);
+}
+.mm-bg-slide.on {
+  opacity: 1;
+}
+.mm-bg-slide.go {
+  animation: mm-bg-drift var(--hold, 12s) ease-in-out forwards;
+}
+@keyframes mm-bg-drift {
+  from {
+    transform: translate3d(var(--x0), var(--y0), 0) scale(1);
+  }
+  to {
+    transform: translate3d(var(--x1), var(--y1), 0) scale(1.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-bg-slide.go {
+    animation: none;
+    transform: none;
   }
 }

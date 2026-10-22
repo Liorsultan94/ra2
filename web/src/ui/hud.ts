@@ -300,6 +300,9 @@ export class Hud {
     else this.viewWrap.appendChild(this.viewCtrl);
     if (on) this.viewWrap.appendChild(this.clock.el);
     else this.viewCtrl.prepend(this.clock.el);
+    // pause / resume stays one tap away on the phone: a round button in the top corner beside the clock
+    if (on) this.viewWrap.appendChild(this.pauseBtn);
+    else this.viewCtrl.appendChild(this.pauseBtn);
     for (const b of [...this.toolsRow.querySelectorAll<HTMLElement>('.support-btn'), ...this.qbPowers.querySelectorAll<HTMLElement>('.support-btn')]) {
       (on ? this.qbPowers : this.toolsRow).appendChild(b);
     }
@@ -694,6 +697,15 @@ export class Hud {
         if (d.kind === 'unit' && d.illum) stats.push(e.owner === this.player && illumWait(w, e) > 0 ? `Illumination ${Math.ceil(illumWait(w, e))}s` : 'Illumination');
         // jets: sortie status and rearm progress, shown in the simple (phone) UI too
         // repair is the dominant line (and bar) while both run
+        // who is inside (a garrisoned building, an APC, a landing craft): the phone panel hides the grey stat line,
+        // so this one stays on screen there
+        let inside = '';
+        if (e.owner === this.player || e.owner < 0) {
+          if (d.kind === 'building' && d.garrison) inside = `Garrison ${e.owner >= 0 ? e.passengers.length : 0} / ${d.garrison}`;
+          else if (d.kind === 'unit' && d.transport) inside = `Inside ${e.passengers.length} / ${d.transport}`;
+          else if (d.kind === 'unit' && d.cargoSlots) inside = `Cargo ${d.cargoSlots - cargoRoom(w, e)} / ${d.cargoSlots}`;
+        }
+        const insideHtml = inside ? `<div class="sp-count">${inside}</div>` : '';
         const jfix = !!e.sortie && jetRepairing(e);
         const jet = e.sortie && e.owner === this.player ? `<div class="sp-jet${jfix ? ' repair' : e.sortie.rearm > 0 ? ' rearm' : ''}"><span>${sortieLabel(e)}</span>${e.sortie.phase === 'parked' ? `<i style="--k:${(jfix ? repairProgress(e) : rearmProgress(e)).toFixed(3)}"></i>` : ''}</div>` : '';
         const segs = 12;
@@ -712,7 +724,7 @@ export class Hud {
         // a harvester's run home after an attack (sim/harvest.ts): returning, then repairing beside the refinery
         const hvs = e.owner === this.player ? harvestStatus(e) : '';
         const hvfix = hvs ? `<div class="sp-jet${e.hflee?.parked ? ' repair' : ' rearm'}"><span>${hvs}</span>${e.hflee?.parked ? `<i style="--k:${Math.min(1, e.hp / e.maxHp).toFixed(3)}"></i>` : ''}</div>` : '';
-        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${jet}${hfix}${hvfix}${tend}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
+        this.setSelHtml(`<div class="portrait ${rel}${e.rank >= 2 ? ' vet-elite' : ''}"><img ${img} alt=""><span class="pt-scan"></span>${rankBadgeSvg(e.rank)}</div><div class="sp-info"><b>${d.name}</b><div class="sp-owner">${owner} · ${roleLabel(d)}</div><div class="sp-hp" style="--hpc:${hpColor(hp)}">${bar}</div><div class="sp-hpt">${Math.ceil(e.hp)} / ${e.maxHp}</div>${insideHtml}${jet}${hfix}${hvfix}${tend}${hurt}${aim}${vet}${stats.length ? `<div class="sp-extra">${stats.join(' · ')}</div>` : ''}</div>`);
         this.aimText = '';
         const id = e.id;
         this.live?.attach(this.selPanel.querySelector<HTMLElement>('.portrait'), () => w.get(id), styleFor(w, e.owner));

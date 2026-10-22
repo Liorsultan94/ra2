@@ -287,6 +287,14 @@
 .simple-ui .sp-hpt {
   font-size: 10.5px;
 }
+.simple-ui .sp-count {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9ccdf0;
+  font-variant-numeric: tabular-nums;
+}
 .simple-ui .sp-multi {
   flex-wrap: nowrap;
   overflow-x: auto;
@@ -453,5 +461,30 @@
 .game-root.attract .quickbar,
 .game-root.attract .more-panel,
 .view-wrap.cine-on .more-panel {
+  display: none !important;
+}
+
+
+/* ------------------------------------------------------------------ pause button in the top corner */
+
+.simple-ui .view-wrap > .vc-pause {
+  position: absolute;
+  z-index: 3;
+  top: max(6px, env(safe-area-inset-top));
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+.simple-ui .view-wrap > .vc-pause svg {
+  width: 16px;
+  height: 16px;
+}
+/* the clock steps left to make room */
+.simple-ui .view-wrap > .hud-clock {
+  right: 42px;
+}
+.game-root.attract .view-wrap > .vc-pause,
+.view-wrap.cine-on > .vc-pause {
   display: none !important;
 }
