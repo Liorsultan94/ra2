@@ -160,10 +160,6 @@ export class MainMenu {
     this.hero = new MenuHero(!lite);
     this.stopCam = handlers.demo ? startMenuCamera(handlers.demo) : () => {};
     this.el.addEventListener('pointerdown', () => handlers.onUnlockAudio());
-    // watch mode: any tap brings the menu back
-    this.el.addEventListener('click', (e) => {
-      if (this.el.classList.contains('mm-watch') && !(e.target as Element).closest?.('[data-a=watch]')) this.el.classList.remove('mm-watch');
-    });
     window.addEventListener('keydown', this.onKey);
     this.showTitle();
   }
@@ -173,9 +169,6 @@ export class MainMenu {
     if (e.key === 'Escape' && this.back) {
       e.preventDefault();
       this.back();
-    } else if (this.el.classList.contains('mm-watch') && (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ')) {
-      e.preventDefault();
-      this.el.classList.remove('mm-watch');
     }
   }
 
@@ -198,7 +191,6 @@ export class MainMenu {
     const s = h(html);
     s.classList.add('mm-page');
     this.el.dataset.page = s.classList.contains('title-screen') ? 'title' : 'sub';
-    this.el.classList.remove('mm-watch');
     this.stage.appendChild(s);
     return s;
   }
@@ -239,21 +231,17 @@ export class MainMenu {
             <div class="mm-row">
               <button class="mbtn mm-tile mm-rise" style="--i:3" data-a="howto">${mi('book')}<span>How to play</span></button>
               <button class="mbtn mm-tile mm-rise" style="--i:4" data-a="settings">${mi('gear')}<span>Settings</span></button>
-              <button class="mbtn mm-tile mm-rise" style="--i:5" data-a="watch" title="Hide the menu and watch the demo battle">${mi('eye')}<span>Watch</span></button>
               <button class="mbtn mm-tile mm-rise" style="--i:6" disabled title="Coming in the next update">${mi('globe')}<span>Online <small>soon</small></span></button>
             </div>
           </nav>
         </div>
         <footer class="menu-foot mm-rise" style="--i:7">Original fan project inspired by classic RTS games. All art and sound are procedurally generated.</footer>
-        <button class="mm-watch-exit" data-a="unwatch" aria-label="Back to the menu">${mi('back')}<span>Menu</span></button>
       </div>`);
     // one tap into a battle with the last skirmish settings
     s.querySelector('[data-a=quick]')!.addEventListener('click', () => this.handlers.onStart(this.settings));
     s.querySelector('[data-a=skirmish]')!.addEventListener('click', () => this.showSkirmish());
     s.querySelector('[data-a=howto]')!.addEventListener('click', () => this.showHowTo(() => this.showTitle()));
     s.querySelector('[data-a=settings]')!.addEventListener('click', () => this.showSettings(() => this.showTitle()));
-    s.querySelector('[data-a=watch]')!.addEventListener('click', () => this.el.classList.add('mm-watch'));
-    s.querySelector('[data-a=unwatch]')!.addEventListener('click', () => this.el.classList.remove('mm-watch'));
   }
 
   showSkirmish() {
