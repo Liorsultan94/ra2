@@ -224,7 +224,7 @@ export class Hud {
     const pb = (this.pauseBanner = el('div', 'pause-banner hidden', this.viewWrap));
     pb.innerHTML = `
       <div class="pb-content">
-        <span class="pb-tag">⏸ BATTLE PAUSED</span>
+        <span class="pb-tag">⏸ PAUSED</span>
         <span class="pb-hint">Explore map · Inspect units</span>
       </div>
       <button class="pb-resume" title="Resume battle (Space / Pause)">RESUME <span class="pb-ico">▶</span></button>
