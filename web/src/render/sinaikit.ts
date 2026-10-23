@@ -23,6 +23,8 @@ import { assetBase } from './photoground';
 export interface KitManifest {
   atlas: number;
   plasterTile: number;
+  /** BD1: v (from the top) where the atlas's strip of shop signs starts (painted by the game at load); absent in old kits. */
+  signV?: number;
   cards: Record<string, { uv: [number, number, number, number]; size: [number, number] }>;
   swatches: Record<string, [number, number]>;
   pieces: Record<string, number[]>;
@@ -33,6 +35,8 @@ export interface SinaiKit {
   /** Piece geometries by glTF node name ('tank', 'tank_l1', ...): float copies (position, normal, uv), indexed. */
   geo: Map<string, THREE.BufferGeometry>;
   atlas: { albedo: THREE.Texture; normal: THREE.Texture; orm: THREE.Texture };
+  /** The painted shop signs (BD1): a small canvas texture for the atlas's sign strip (null: none, no canvas). */
+  signs: THREE.Texture | null;
   plaster: { albedo: THREE.Texture; normal: THREE.Texture; orm: THREE.Texture };
   /** Download (bytes) and decode time, for the log. */
   bytes: number;
@@ -61,6 +65,65 @@ async function tex(url: string, srgb: boolean, repeat: boolean, counter: { bytes
   t.anisotropy = 4;
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.needsUpdate = true;
+  return t;
+}
+
+/** The shop signs painted into the atlas's sign strip (BD1): fictional names, no brands; 4 x 2 cells. */
+export const SIGNS: [string, string, string][] = [
+  ['AL NOUR MARKET', '#1f5c8a', '#fff6dc'],
+  ['SINAI SWEETS', '#a83a3a', '#ffe9c0'],
+  ['BLUE SAND CAFE', '#f1ead8', '#1f5c8a'],
+  ['WADI PHARMACY', '#2e7d4f', '#ffffff'],
+  ['NEFERTARI BAKERY', '#d9a441', '#3a2412'],
+  ['DUNE TRAVEL', '#2f3e57', '#f2c14e'],
+  ['OASIS GROCERY', '#e8dcc0', '#8a2a2a'],
+  ['PALM TAILOR', '#1c7c7d', '#fff3d6'],
+];
+
+/**
+ * The shop signs as their own small texture (the sign strip of the atlas is sampled from it by the kit material):
+ * a board colour, a border, the name in bold capitals. null when there is no canvas (tests).
+ */
+function paintSigns(width: number): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
+  const cols = 4;
+  const rows = 2;
+  const W = width;
+  const H = Math.round(W / 8);
+  const cv = Object.assign(document.createElement('canvas'), { width: W, height: H });
+  const ctx = cv.getContext('2d');
+  if (!ctx) return null;
+  const cw = W / cols;
+  const ch = H / rows;
+  SIGNS.forEach(([name, bg, fg], i) => {
+    const x = (i % cols) * cw;
+    const y = Math.floor(i / cols) * ch;
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, cw, ch);
+    ctx.strokeStyle = fg;
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = Math.max(1, ch * 0.06);
+    ctx.strokeRect(x + ch * 0.1, y + ch * 0.1, cw - ch * 0.2, ch - ch * 0.2);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let px = ch * 0.5;
+    ctx.font = `bold ${px}px "Trebuchet MS", "DejaVu Sans", Verdana, Arial, sans-serif`;
+    const mw = ctx.measureText(name).width;
+    if (mw > cw * 0.86) {
+      px *= (cw * 0.86) / mw;
+      ctx.font = `bold ${px}px "Trebuchet MS", "DejaVu Sans", Verdana, Arial, sans-serif`;
+    }
+    ctx.fillText(name, x + cw / 2, y + ch * 0.53);
+  });
+  const t = new THREE.CanvasTexture(cv);
+  t.flipY = false;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = 4;
   return t;
 }
 
@@ -123,7 +186,7 @@ export function loadSinaiKit(quality: 'low' | 'medium' | 'high'): Promise<SinaiK
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) geo.set(mesh.name, dequantize(mesh.geometry, mesh.matrixWorld));
       });
-      ready = { man, geo, atlas: { albedo, normal, orm }, plaster: { albedo: palb, normal: pnor, orm: porm }, bytes: counter.bytes };
+      ready = { man, geo, atlas: { albedo, normal, orm }, signs: man.signV !== undefined ? paintSigns(big ? 1024 : 512) : null, plaster: { albedo: palb, normal: pnor, orm: porm }, bytes: counter.bytes };
       console.info(`[sinai] building kit: ${geo.size} meshes, ${Object.keys(man.cards).length} cards, ${(counter.bytes / 1024).toFixed(0)} KB in ${Math.round(performance.now() - t0)} ms`);
       return ready;
     } catch (e) {
@@ -158,6 +221,74 @@ vec3 skCleanPlaster( sampler2D tex, vec2 uv ) {
 `;
 
 /**
+ * BD1's weathering of the town's walls, per vertex (wear, material, seed): raw brick with mortar courses, raw
+ * concrete with board marks, and on plaster vertical rain streaks high on the wall, patches of exposed mud-brick
+ * and of fresh lighter render, and damp rising from the foot. `uv` is the world box mapping (plaster units, 1 =
+ * 1.25 tiles); `hgt` the height above the building's ground.
+ */
+const WEAR_GLSL = /* glsl */ `
+float skH( vec2 p ) {
+  p = fract( p * vec2( 0.1031, 0.1030 ) );
+  p += dot( p, p.yx + 33.33 );
+  return fract( ( p.x + p.y ) * p.x );
+}
+float skN( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( skH( i ), skH( i + vec2( 1.0, 0.0 ) ), f.x ), mix( skH( i + vec2( 0.0, 1.0 ) ), skH( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+}
+vec3 skWear( vec3 col, vec3 tint, vec2 uv, float hgt, vec3 w, float up ) {
+  float wr = w.x;
+  float mt = w.y;
+  float sd = w.z;
+  float side = 1.0 - step( 0.6, abs( up ) );
+  vec2 qt = uv * 1.25;
+  float lum = dot( col, vec3( 0.3333 ) );
+  if ( mt > 0.5 && mt < 1.5 ) {
+    // raw brick: staggered courses of 0.07 x 0.024 tiles, each its own shade, mortar between
+    vec2 b = qt / vec2( 0.07, 0.024 );
+    b.x += 0.5 * mod( floor( b.y ), 2.0 );
+    vec2 id = floor( b );
+    vec2 fb = fract( b );
+    float mortar = max( step( fb.x, 0.08 ), step( fb.y, 0.16 ) );
+    vec3 bc = tint * ( 0.78 + 0.44 * skH( id + sd * 31.0 ) ) * ( 0.55 + 0.6 * lum );
+    vec3 mc = vec3( 0.56, 0.52, 0.46 ) * ( 0.6 + 0.6 * lum );
+    return mix( col, mix( bc, mc, mortar ), side );
+  }
+  if ( mt > 1.5 && mt < 2.5 ) {
+    // raw concrete: board marks, a darker run of water stains
+    float row = floor( qt.y / 0.045 );
+    float line = step( fract( qt.y / 0.045 ), 0.05 );
+    col *= ( 0.9 + 0.18 * skH( vec2( row, sd * 13.0 ) ) ) * ( 1.0 - 0.2 * line * side );
+    col *= 1.0 - 0.28 * smoothstep( 0.55, 0.9, skN( vec2( qt.x * 9.0 + sd * 20.0, qt.y * 0.8 ) ) ) * smoothstep( 0.2, 0.8, hgt );
+    return col;
+  }
+  if ( mt > 2.5 ) return col;
+  // plaster: rain streaks (high on the wall), patches, damp at the foot
+  float st = skN( vec2( qt.x * 16.0 + sd * 23.0, qt.y * 0.9 ) );
+  col *= 1.0 - 0.45 * smoothstep( 0.6, 0.92, st ) * smoothstep( 0.18, 0.6, hgt ) * wr * side;
+  vec2 pq = qt / 0.5 + sd * 11.0;
+  vec2 cl = floor( pq );
+  vec2 fp = fract( pq );
+  float on = step( skH( cl + 3.1 ), wr * 0.34 ) * side;
+  vec2 ctr = 0.3 + 0.4 * vec2( skH( cl + 1.7 ), skH( cl + 4.3 ) );
+  vec2 hs = 0.14 + 0.14 * vec2( skH( cl + 8.1 ), skH( cl + 2.9 ) );
+  vec2 dd = abs( fp - ctr ) - hs;
+  float ins = 1.0 - smoothstep( -0.02, 0.025, max( dd.x, dd.y ) );
+  float rim = smoothstep( -0.05, 0.0, max( dd.x, dd.y ) ) * ins;
+  vec3 expo = vec3( 0.47, 0.32, 0.21 ) * ( 0.7 + 0.5 * skH( floor( qt * vec2( 18.0, 52.0 ) ) ) ) * ( 0.65 + 0.7 * lum );
+  vec3 fresh = col * 1.13 + 0.02;
+  vec3 pc = skH( cl + 11.0 ) > 0.5 ? expo : fresh;
+  col = mix( col, pc, ins * on );
+  col *= 1.0 - 0.18 * rim * on;
+  float damp = ( 1.0 - smoothstep( 0.04, 0.26 + 0.12 * skN( qt * 6.0 + sd * 5.0 ), hgt ) ) * wr * side;
+  col = mix( col, col * vec3( 0.84, 0.78, 0.68 ), damp * 0.55 );
+  return col;
+}
+`;
+
+/**
  * The walls: the tileable plaster (world-space box mapping, PLASTER_TILE tiles per repeat) tinted by the vertex
  * colour (the wall colour; envdamage.ts darkens it), grime along the foot of the walls (aBase: the ground
  * height under the building) and darker sun-faded streaks under the parapets.
@@ -182,9 +313,9 @@ export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit, clean = false
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.skClean = skClean;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBase;\nvarying float vSkBase;\nvarying float vSkUp;')
-      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkBase = aBase;\nvSkUp = normalize( mat3( modelMatrix ) * objectNormal ).y;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying float vSkBase;\nvarying float vSkUp;\nuniform float skClean;\n${CLEAN_GLSL}`).replace(
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute vec3 aWear;\nvarying float vSkBase;\nvarying float vSkUp;\nvarying vec3 vSkW;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkBase = aBase;\nvSkW = aWear;\nvSkUp = normalize( mat3( modelMatrix ) * objectNormal ).y;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>\nvarying float vSkBase;\nvarying float vSkUp;\nvarying vec3 vSkW;\nuniform float skClean;\n${CLEAN_GLSL}${WEAR_GLSL}`).replace(
       '#include <color_fragment>',
       `#include <color_fragment>
       {
@@ -195,11 +326,13 @@ export function sinaiPlasterMaterial(fog: FogOfWar, kit: SinaiKit, clean = false
         float gn = texture2D( map, vMapUv * 0.37 + 0.21 ).g;
         float grime = ( 1.0 - smoothstep( 0.0, 0.16 + gn * 0.06, hgt ) ) * ( 1.0 - step( 0.6, abs( vSkUp ) ) );
         diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.74, 0.68, 0.6 ), grime * ( skClean > 0.5 ? 0.18 : 0.55 ) );
+        // BD1: raw brick / concrete, rain streaks, exposed mud-brick and fresh render patches, damp at the foot
+        if ( skClean < 0.5 ) diffuseColor.rgb = skWear( diffuseColor.rgb, vColor.rgb, vMapUv, hgt, vSkW, vSkUp );
       }`,
     );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'fog2-sinai-plaster';
+  mat.customProgramCacheKey = () => 'fog2-sinai-plaster-bd1';
   cache.set(fog, mat);
   return mat;
 }
@@ -226,21 +359,27 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): T
     envMapIntensity: 0.7,
   });
   const plaster = { value: kit.plaster.albedo };
+  const signsTex = { value: kit.signs ?? kit.plaster.albedo };
+  const signV = { value: kit.signs ? (kit.man.signV ?? 2) : 2 };
   const tile = { value: 1 / kit.man.plasterTile };
   const skClean = { value: clean ? 1 : 0 };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.skClean = skClean;
     sh.uniforms.skPlaster = plaster;
+    sh.uniforms.skSigns = signsTex;
+    sh.uniforms.skSignV = signV;
     sh.uniforms.skTile = tile;
     sh.uniforms.lmNight = LM_NIGHT;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec3 aTint;\nattribute vec3 aAccent;\nattribute float aGlow;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;')
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkTint = aTint * 2.0;\nvSkAcc = aAccent * 2.0;\nvSkGlow = aGlow;\nvSkN = normalize( mat3( modelMatrix ) * objectNormal );');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>\nuniform sampler2D skPlaster;\nuniform float skTile;\nuniform float lmNight;\nuniform float skClean;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;\n${CLEAN_GLSL}`)
+      .replace('#include <common>', `#include <common>\nuniform sampler2D skPlaster;\nuniform sampler2D skSigns;\nuniform float skSignV;\nuniform float skTile;\nuniform float lmNight;\nuniform float skClean;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;\n${CLEAN_GLSL}`)
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
+        // BD1: the sign strip of the atlas comes from the painted signs texture
+        if ( vMapUv.y >= skSignV ) diffuseColor.rgb = vColor.rgb * texture2D( skSigns, vec2( vMapUv.x, ( vMapUv.y - skSignV ) / ( 1.0 - skSignV ) ) ).rgb;
         vec4 skOrm = texture2D( aoMap, vAoMapUv );
         {
           float cls = skOrm.b;
@@ -262,7 +401,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): T
       );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'fog2-sinai-kit';
+  mat.customProgramCacheKey = () => 'fog2-sinai-kit-bd1';
   cache.set(fog, mat);
   return mat;
 }
@@ -281,6 +420,10 @@ export class PlasterGeo {
   uv: number[] = [];
   col: number[] = [];
   base: number[] = [];
+  /** Per vertex (wear 0..1, material 0 plaster / 1 brick / 2 raw concrete / 3 sand, seed 0..1): BD1's weathering. */
+  wearA: number[] = [];
+  /** The wear values given to the vertices of the next add(). */
+  wear: [number, number, number] = [0, 0, 0];
   idx: number[] = [];
   constructor(private tile: number) {}
   get count() {
@@ -310,6 +453,7 @@ export class PlasterGeo {
       this.uv.push(u * this.tile, v * this.tile);
       this.col.push(color.r, color.g, color.b);
       this.base.push(base);
+      this.wearA.push(this.wear[0], this.wear[1], this.wear[2]);
     }
     const ix = g.index;
     const n = ix ? ix.count : P.count;
@@ -330,6 +474,7 @@ export class PlasterGeo {
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('aBase', new THREE.Float32BufferAttribute(this.base, 1));
+    g.setAttribute('aWear', new THREE.Float32BufferAttribute(this.wearA, 3));
     g.setIndex(this.count > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1));
     g.computeBoundingSphere();
     g.computeBoundingBox();
@@ -495,6 +640,20 @@ export class SinaiBuilder {
     const g0 = (this.lite?.has(name) && g1) || this.kit.geo.get(name);
     if (g0 && lod !== 1) this.k0.add(g0, m, o);
     if (g1 && lod !== 0) this.k1.add(g1, m, o);
+  }
+
+  /** A shop sign board (BD1): a quad (facing local +z) showing sign number i of the atlas's sign strip; no-op in a kit without one. */
+  sign(m: THREE.Matrix4, w: number, h: number, i: number, o: KitOpts = {}) {
+    const v0 = this.kit.man.signV;
+    if (v0 === undefined) return;
+    const cols = 4;
+    const rows = 2;
+    const col = i % cols;
+    const row = Math.floor(i / cols) % rows;
+    const dv = (1 - v0) / rows;
+    const e = 0.0015;
+    const uv: [number, number, number, number] = [col / cols + e, v0 + row * dv + e, (col + 1) / cols - e, v0 + (row + 1) * dv - e];
+    this.each('both', (k) => k.quad(m, w, h, uv, o));
   }
 
   /** A box in a flat atlas swatch (paint, wood, steel, stone, glass, iron...). */

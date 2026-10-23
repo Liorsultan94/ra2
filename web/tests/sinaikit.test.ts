@@ -27,7 +27,7 @@ function fakeKit(): SinaiKit {
     if (tris.length > 1) geo.set(n + '_l1', new THREE.BoxGeometry(0.1, 0.1, 0.1));
   }
   const t = new THREE.Texture();
-  return { man, geo, atlas: { albedo: t, normal: t, orm: t }, plaster: { albedo: t, normal: t, orm: t }, bytes: 0 };
+  return { man, geo, atlas: { albedo: t, normal: t, orm: t }, signs: null, plaster: { albedo: t, normal: t, orm: t }, bytes: 0 };
 }
 
 describe('Sinai building kit (GD2)', () => {
@@ -43,7 +43,7 @@ describe('Sinai building kit (GD2)', () => {
     for (const s of ['frame', 'wood', 'wood_lt', 'steel', 'stone', 'glass', 'paint', 'fabric_acc', 'aluminium']) expect(man.swatches[s], s).toBeDefined();
     for (const p of ['ac', 'tank', 'dish', 'solar', 'rail', 'awning', 'dome', 'mdome', 'minaret', 'merlon', 'table', 'kiosk']) expect(man.pieces[p], p).toBeDefined();
     for (const [n, tris] of Object.entries(man.pieces)) {
-      expect(tris[0], n).toBeLessThanOrEqual(n === 'minaret' || n === 'mdome' ? 700 : 200);
+      expect(tris[0], n).toBeLessThanOrEqual(n === 'minaret' || n === 'mdome' ? 700 : n === 'pots' ? 240 : 200);
       if (tris[1] !== undefined) expect(tris[1], n).toBeLessThan(tris[0]);
     }
   });

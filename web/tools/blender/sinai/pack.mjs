@@ -12,7 +12,7 @@
  * Prints the download per profile.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NodeIO } from '@gltf-transform/core';
@@ -49,6 +49,8 @@ const MAPS = [
   ['plaster-orm', 'sinai-plaster-orm', 512, 256, 60],
 ];
 for (const [src, name, big, small, q] of MAPS) {
+  // (a kit-only rebuild has no fresh plaster maps: the ones in public/ stay)
+  if (!existsSync(join(BUILD, `${src}.png`))) continue;
   for (const [sz, sfx, out] of [
     [big, '', desk],
     [small, `-${small}`, phone],
