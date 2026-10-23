@@ -144,7 +144,7 @@ export function planOil(oils: readonly { x: number; y: number }[], groundAt: (x:
     const fz = cz + oz;
     const gy = groundAt(fx, fz);
     stacks.push({ x: fx, y: gy, z: fz, h: 0.95 });
-    lamps.push({ x: fx, y: gy + 0.99, z: fz, size: 0.2, r: 1.0, g: 0.52, b: 0.16, mode: Mode.Fire, phase: (i * 0.37) % 1, pool: 1.5, kind: 'flare', house: -1 });
+    lamps.push({ x: fx, y: gy + 1.0, z: fz, size: 0.3, r: 1.0, g: 0.5, b: 0.14, mode: Mode.Fire, phase: (i * 0.37) % 1, pool: 1.5, kind: 'flare', house: -1 });
     // the pumpjack's post carries a red mast light (the post stands at the pad's middle, 0.15 off centre)
     const py = groundAt(cx, cz);
     lamps.push({ x: cx, y: py + 0.8, z: cz + 0.15, size: 0.07, r: 1.0, g: 0.1, b: 0.06, mode: Mode.Pulse, phase: (i * 0.23) % 1, pool: 0, kind: 'derrick', house: -1 });

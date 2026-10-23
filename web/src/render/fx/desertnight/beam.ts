@@ -76,7 +76,7 @@ export class LighthouseBeams {
       const lamp = new THREE.Vector3(L.x, L.y, L.z);
       const mats: THREE.ShaderMaterial[] = [];
       // (length, end radius, strength): the wide veil, the beam, its bright core
-      for (const [len, rad, k] of [[17, 1.3, 0.1], [15, 0.55, 0.16], [10, 0.2, 0.2]] as const) {
+      for (const [len, rad, k] of [[17, 1.3, 0.08], [15, 0.55, 0.13], [10, 0.2, 0.17]] as const) {
         const mat = new THREE.ShaderMaterial({
           uniforms: { ...fu, uNight: uniforms.uNight, uStrength: { value: k }, uColor: { value: new THREE.Color(1.0, 0.9, 0.66) }, uLamp: { value: lamp }, uDir: { value: new THREE.Vector3(1, 0, 0) } },
           vertexShader: VERT,

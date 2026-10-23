@@ -163,13 +163,13 @@ export class DesertNight {
 /** Lights close to the sea that it reflects: boats, buoys, jetty and pontoon lamps, the bar, the promenade's lamps, the lantern. */
 export function reflectables(lamps: readonly NightLamp[], promenade: readonly { x: number; y: number; z: number }[], lanterns: readonly { x: number; y: number; z: number }[]) {
   const out: { x: number; y: number; z: number; i: number; r: number; g: number; b: number }[] = [];
-  const KIND: Record<string, number> = { harbour: 0.5, boat: 0.7, buoy: 0.5, jetty: 0.5, pontoon: 0.7, bar: 0.9, restaurant: 0.7, string: 0.35, palm: 0 };
+  const KIND: Record<string, number> = { harbour: 0.3, boat: 0.34, buoy: 0.3, jetty: 0.3, pontoon: 0.4, bar: 0.5, restaurant: 0.4, string: 0.2, palm: 0 };
   for (const l of lamps) {
     const k = KIND[l.kind];
     if (!k) continue;
     out.push({ x: l.x, y: l.y, z: l.z, i: k, r: l.r * 0.55, g: l.g * 0.55, b: l.b * 0.55 });
   }
-  for (const p of promenade) out.push({ x: p.x, y: p.y, z: p.z, i: 0.8, r: 0.55, g: 0.38, b: 0.18 });
-  for (const p of lanterns) out.push({ x: p.x, y: p.y, z: p.z, i: 1.2, r: 0.6, g: 0.52, b: 0.36 });
+  for (const p of promenade) out.push({ x: p.x, y: p.y, z: p.z, i: 0.5, r: 0.55, g: 0.38, b: 0.18 });
+  for (const p of lanterns) out.push({ x: p.x, y: p.y, z: p.z, i: 0.9, r: 0.6, g: 0.52, b: 0.36 });
   return out;
 }

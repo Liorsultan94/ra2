@@ -64,73 +64,41 @@ export interface BuildingSlots {
   yardFire: { x: number; y: number; z: number } | null;
 }
 
-/** The part of render/buildingslots.ts used here (structural: the file may not be on this branch yet). */
-interface SharedSlot {
-  kind: 'window' | 'door' | 'shop' | 'balcony' | 'sign' | 'lamp' | 'roof';
-  x: number;
-  y: number;
-  z: number;
-  ry: number;
-  w: number;
-  h: number;
-  floor: number;
-  lit: boolean;
-  flicker: number;
-}
-interface SharedInfo {
+/** The part of render/buildingslots.ts used here (structural: the file may not be on this branch yet): its buildingSlots(). */
+interface NightSlotsLike {
+  windows: { x: number; y: number; z: number; nx: number; nz: number; w: number; h: number; shop?: boolean; lit: boolean; flicker: number; floor: number }[];
+  doors: { x: number; y: number; z: number; nx: number; nz: number }[];
+  mosque: SlotLamp[];
+  yardFire: { x: number; y: number; z: number } | null;
+  porch: { x: number; y: number; z: number; nx: number; nz: number; lit: boolean }[];
+  signs: { x: number; y: number; z: number; nx: number; nz: number; w: number; h: number; lit: boolean }[];
   awake: boolean;
-  slots: SharedSlot[];
 }
 interface SharedModule {
-  buildingInfo?: (m: GameMap, st: Structure) => SharedInfo;
-  slotWorld?: (st: Structure, s: SharedSlot) => { x: number; y: number; z: number; nx: number; nz: number };
+  buildingSlots?: (st: Structure, groundY: number) => NightSlotsLike | null;
 }
 const shared = import.meta.glob('../../buildingslots.ts', { eager: true }) as Record<string, SharedModule>;
-const sharedMod = Object.values(shared)[0];
+const sharedFn = Object.values(shared)[0]?.buildingSlots;
 
 /** True when the shared slots file is in use (tests / debug). */
-export const usesSharedSlots = !!(sharedMod?.buildingInfo && sharedMod.slotWorld);
+export const usesSharedSlots = !!sharedFn;
 
-export function buildingSlotsFor(m: GameMap, st: Structure, gy: number): BuildingSlots {
-  if (sharedMod?.buildingInfo && sharedMod.slotWorld) return fromShared(sharedMod.buildingInfo(m, st), sharedMod.slotWorld, st, gy);
-  return placeholderSlots(st, gy);
+export function buildingSlotsFor(_m: GameMap, st: Structure, gy: number): BuildingSlots {
+  const sh = sharedFn?.(st, gy);
+  return sh ? fromShared(sh, st) : placeholderSlots(st, gy);
 }
 
-/** The shared file's plan as this module's slots (positions above the ground gy). */
-function fromShared(info: SharedInfo, slotWorld: NonNullable<SharedModule['slotWorld']>, st: Structure, gy: number): BuildingSlots {
-  const out: BuildingSlots = { awake: info.awake, windows: [], doors: [], mosque: [], lamps: [], yardFire: null };
+/** The shared file's slots as this module's (a mosque's windows glow all night; its lamps are the file's). */
+function fromShared(sh: NightSlotsLike, st: Structure): BuildingSlots {
   const mosque = st.look === 'mosque';
-  for (const s of info.slots) {
-    const w = slotWorld(st, s);
-    const y = gy + w.y;
-    if (s.kind === 'window' || s.kind === 'balcony' || s.kind === 'shop') {
-      // a mosque's lattice windows glow all night; a window faces its normal, a hair out of the wall
-      out.windows.push({ x: w.x + w.nx * 0.006, y, z: w.z + w.nz * 0.006, nx: w.nx, nz: w.nz, w: Math.max(0.05, s.w * 0.92), h: Math.max(0.06, s.h * 0.92), shop: s.kind === 'shop', lit: mosque ? true : s.lit, tv: s.kind === 'window' && s.flicker > 0.9 && !mosque });
-    } else if (s.kind === 'door') {
-      out.doors.push({ x: w.x, y, z: w.z, nx: w.nx, nz: w.nz });
-    } else if (s.kind === 'lamp') {
-      out.lamps!.push({ x: w.x + w.nx * 0.03, y, z: w.z + w.nz * 0.03, size: 0.1, r: 1.0, g: 0.66, b: 0.32, mode: 0, phase: s.flicker, pool: 0.45, kind: 'porch', lit: s.lit });
-    } else if (s.kind === 'roof') {
-      // a roof light: a lit dome / a terrace lamp (the mosque's dome glows pale, the others warm)
-      out.lamps!.push(
-        mosque
-          ? { x: w.x, y, z: w.z, size: 0.16, r: 0.9, g: 0.95, b: 1.0, mode: 0, phase: 0, pool: 0, kind: 'dome', lit: true }
-          : { x: w.x, y, z: w.z, size: 0.07, r: 1.0, g: 0.74, b: 0.4, mode: 4, phase: s.flicker, pool: 0, kind: 'string', lit: s.lit },
-      );
-    } else if (s.kind === 'sign') {
-      // a fictional shop sign board: a small warm glow in front of it
-      out.lamps!.push({ x: w.x + w.nx * 0.05, y, z: w.z + w.nz * 0.05, size: 0.12, r: 1.0, g: 0.62 + 0.3 * s.flicker, b: 0.35 + 0.5 * s.flicker, mode: 4, phase: s.flicker, pool: 0, kind: 'sign', lit: s.lit });
-    }
+  const out: BuildingSlots = { awake: mosque || sh.awake, windows: [], doors: sh.doors, mosque: sh.mosque, lamps: [], yardFire: sh.yardFire };
+  for (const w of sh.windows) {
+    // (a hair out of the wall, so the light quad never sinks into the plaster)
+    out.windows.push({ x: w.x + w.nx * 0.004, y: w.y, z: w.z + w.nz * 0.004, nx: w.nx, nz: w.nz, w: Math.max(0.05, w.w * 0.92), h: Math.max(0.06, w.h * 0.92), shop: !!w.shop, lit: mosque ? true : w.lit, tv: !mosque && !w.shop && w.flicker > 0.9 });
   }
-  if (mosque) {
-    // the minaret (1.08, 0, 0.42 in the mosque's frame: 2.08 tiles tall): a green crown light and a warm balcony ring, a gate lamp
-    const cx = st.x + st.w / 2;
-    const cz = st.y + st.h / 2;
-    const th = (st.rot * Math.PI) / 2;
-    const P = (lx: number, ly: number, lz: number) => ({ x: cx + lx * Math.cos(th) + lz * Math.sin(th), y: gy + ly, z: cz - lx * Math.sin(th) + lz * Math.cos(th) });
-    const mq = (lx: number, ly: number, lz: number, size: number, r: number, g: number, b: number, pool: number, kind: string): SlotLamp => ({ ...P(lx, ly, lz), size, r, g, b, mode: 0, phase: 0, pool, kind });
-    out.mosque.push(mq(1.08, 1.98, 0.42, 0.22, 0.3, 1.0, 0.45, 0, 'minaret'), mq(1.08, 1.45, 0.42, 0.13, 1.0, 0.82, 0.5, 0, 'minaret'), mq(-0.42, 0.3, 1.0, 0.1, 1.0, 0.72, 0.38, 1.4, 'gate'));
-  }
+  for (const p of sh.porch) out.lamps!.push({ x: p.x + p.nx * 0.03, y: p.y, z: p.z + p.nz * 0.03, size: 0.1, r: 1.0, g: 0.66, b: 0.32, mode: 0, phase: (p.x * 7.3 + p.z * 3.1) % 1, pool: 0.45, kind: 'porch', lit: p.lit });
+  // a fictional shop sign board: a small warm glow in front of it when its lamp is on
+  for (const g of sh.signs) out.lamps!.push({ x: g.x + g.nx * 0.05, y: g.y, z: g.z + g.nz * 0.05, size: 0.12, r: 1.0, g: 0.74, b: 0.5, mode: 4, phase: (g.x * 5.1 + g.z * 2.3) % 1, pool: 0, kind: 'sign', lit: g.lit });
   return out;
 }
 

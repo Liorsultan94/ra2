@@ -1810,7 +1810,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float hL = max(SL.y - ${WATER_LEVEL.toFixed(3)}, 0.02);
           float s0 = D * hC / (hC + hL);
           // from the light's own foot towards the camera: as long as the mirror ray's reach plus what the waves add
-          float len = (D - s0) + 0.35 + 0.05 * D;
+          float len = (D - s0) + 0.2 + 0.03 * D;
           float tt = clamp((D + 0.08 - along) / len, 0.0, 1.0);
           float inside = step(-0.08, D - along) * step(along, D + 0.1);
           float wd = 0.045 + 0.035 * tt + 0.012 * D * tt;
