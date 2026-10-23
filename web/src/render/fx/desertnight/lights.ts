@@ -198,7 +198,7 @@ void main() {
   float r = length( vUv );
   if ( r > 1.0 ) discard;
   float a = 1.0 - smoothstep( 0.0, 1.0, r );
-  a *= a;
+  a = a * a * sqrt( a );
   float mode = vCol.a;
   float lvl = 1.0;
   if ( mode > 0.5 && mode < 1.5 ) lvl = 0.72 + 0.18 * sin( uTime * 11.0 + vPh.x * 40.0 ) + 0.1 * sin( uTime * 27.0 + vPh.x * 90.0 + sin( uTime * 5.0 ) );
@@ -209,6 +209,9 @@ void main() {
   if ( k < 0.002 ) discard;
   gl_FragColor = vec4( vCol.rgb * k, 1.0 );
 }`;
+
+/** Brightness of the soft pool each kind of lamp throws on the ground (gentle: no flat glows). */
+const POOL_K: Record<string, number> = { fire: 0.24, flare: 0.2, street: 0.1, harbour: 0.1, porch: 0.1, pool: 0.06, restaurant: 0.13, bar: 0.13, palm: 0.1, gate: 0.1, jetty: 0.1 };
 
 function additive(vert: string, frag: string, u: Record<string, THREE.IUniform>, poly = false) {
   const m = new THREE.ShaderMaterial({ uniforms: u, vertexShader: vert, fragmentShader: frag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
@@ -282,7 +285,7 @@ export class DesertLights {
     const p = new THREE.Vector3();
     const s = new THREE.Vector3();
     const SPILL = 1.9;
-    const mat = additive(WIN_VERT, WIN_FRAG, U);
+    const mat = additive(WIN_VERT, WIN_FRAG, U, true);
     const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, n);
     list.forEach((w: NightWindow, i) => {
       // the quad faces its normal (local +z), upright
@@ -341,7 +344,7 @@ export class DesertLights {
     const pc = new Float32Array(pn * 4);
     const pph = new Float32Array(pn * 4);
     pools.forEach((l, i) => {
-      const k = l.kind === 'fire' ? 0.3 : l.kind === 'street' ? 0.2 : 0.16;
+      const k = POOL_K[l.kind] ?? 0.12;
       pp.set([l.x, l.y - (l.kind === 'street' ? 0.54 : l.kind === 'porch' ? 0.2 : 0.05) + 0.045, l.z, l.pool], i * 4);
       pc.set([l.r * k, l.g * k * 0.92, l.b * k * 0.8, l.mode], i * 4);
       const idx = list.indexOf(l);

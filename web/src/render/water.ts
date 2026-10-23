@@ -82,6 +82,8 @@ export const RIVER = {
   /** Light streaks: x, y, z, intensity (0 = unused) and colour (the lights are reflected as soft vertical smears). */
   wStreakP: { value: Array.from({ length: MAX_STREAKS }, () => new THREE.Vector4()) },
   wStreakC: { value: Array.from({ length: MAX_STREAKS }, () => new THREE.Vector3()) },
+  /** How many streak entries are in use (0 by day: the shader skips the whole loop). */
+  wStreakN: { value: 0 },
   /** Key light (sun / moon) direction (world, towards the light) and colour. */
   sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
   sunCol: { value: new THREE.Vector3(1, 0.97, 0.9) },
@@ -1326,6 +1328,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       wLightC: RIVER.wLightC,
       wStreakP: RIVER.wStreakP,
       wStreakC: RIVER.wStreakC,
+      wStreakN: RIVER.wStreakN,
       rapF: { value: rapF },
       // the river's main axis: a stable frame for the pier wakes (no per-pixel flow direction: it marbles)
       wAxis: { value: new THREE.Vector2(river.ax, river.ay) },
@@ -1395,6 +1398,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       #ifdef NIGHT_STREAKS
       uniform vec4 wStreakP[${MAX_STREAKS}];
       uniform vec3 wStreakC[${MAX_STREAKS}];
+      uniform float wStreakN;
       #endif
       uniform vec4 rapF;
       uniform float rapH;
@@ -1793,6 +1797,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         // the coast's warm lights reflected as soft vertical smears (a light's mirror image stretched towards the
         // viewer by the ripples), broken into glimmering dashes by the waves: never a mirror, never a glare
         for (int i = 0; i < ${MAX_STREAKS}; i++) {
+          if (float(i) >= wStreakN) break;
           vec4 SL = wStreakP[i];
           if (SL.w <= 0.0) continue;
           vec2 toL = SL.xz - cameraPosition.xz;
@@ -1809,12 +1814,13 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float tt = clamp((D + 0.08 - along) / len, 0.0, 1.0);
           float inside = step(-0.08, D - along) * step(along, D + 0.1);
           float wd = 0.045 + 0.035 * tt + 0.012 * D * tt;
+          if (inside < 0.5 || abs(lat) > wd * 3.0) continue;
           float across = exp(-lat * lat / (wd * wd));
           float down = pow(1.0 - tt, 1.6) * smoothstep(0.0, 0.05, 1.0 - tt + 0.02);
           // dashes: the ripple field stretched along the streak
           float rp = texture2D(waveTex, vec2(lat * 2.6, along * 0.55) + vec2(time * 0.035, time * 0.05)).a;
           float dash = 0.35 + 1.1 * smoothstep(0.35, 0.8, rp);
-          col += wStreakC[i] * across * down * dash * inside * SL.w * (1.0 - 0.6 * chop);
+          col += wStreakC[i] * across * down * dash * SL.w * (1.0 - 0.6 * chop);
         }
         #endif
         #endif

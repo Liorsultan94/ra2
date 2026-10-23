@@ -54,7 +54,7 @@ export function planResorts(spots: readonly SeaNightSpot[]): NightLamp[] {
     switch (s.kind) {
       case 'pool':
         // the lit pool: an aqua glow over the basin (a flat soft pool; no sprite)
-        out.push(lamp(s.x, s.y, s.z, 0.01, AQUA, 'pool', s.r * 1.5, Mode.Steady, 0));
+        out.push(lamp(s.x, s.y, s.z, 0.01, AQUA, 'pool', s.r * 1.25, Mode.Steady, 0));
         out[out.length - 1].size = 0;
         break;
       case 'restaurant':
@@ -130,16 +130,18 @@ export function planBoats(boats: readonly BoatSpot[]): NightLamp[] {
  * stack just outside the fence and a red mast light pulsing on the pumpjack's post. The stack's flame is a
  * flickering warm point (no particles), the pool it throws is soft.
  */
-export function planOil(oils: readonly { x: number; y: number }[], groundAt: (x: number, z: number) => number): { lamps: NightLamp[]; stacks: { x: number; y: number; z: number; h: number }[] } {
+export function planOil(oils: readonly { x: number; y: number }[], groundAt: (x: number, z: number) => number, landAt: (x: number, z: number) => boolean = () => true): { lamps: NightLamp[]; stacks: { x: number; y: number; z: number; h: number }[] } {
   const lamps: NightLamp[] = [];
   const stacks: { x: number; y: number; z: number; h: number }[] = [];
   oils.forEach((o, i) => {
     const cx = o.x + 1;
     const cz = o.y + 1;
-    // the flare stack: at the corner of the pad, alternating sides by site
-    const sx = i % 2 === 0 ? 1.18 : -1.18;
-    const fx = cx + sx;
-    const fz = cz - 1.05;
+    // the flare stack: at a corner of the pad, on the first side that is dry land (alternating by site)
+    const s0 = i % 2 === 0 ? 1.18 : -1.18;
+    const spots: [number, number][] = [[s0, -1.05], [-s0, -1.05], [s0, 1.05], [-s0, 1.05], [0, -1.5], [0, 1.5]];
+    const [ox, oz] = spots.find(([x, z]) => landAt(cx + x, cz + z) && landAt(cx + x * 1.2, cz + z * 1.2)) ?? spots[0];
+    const fx = cx + ox;
+    const fz = cz + oz;
     const gy = groundAt(fx, fz);
     stacks.push({ x: fx, y: gy, z: fz, h: 0.95 });
     lamps.push({ x: fx, y: gy + 0.99, z: fz, size: 0.2, r: 1.0, g: 0.52, b: 0.16, mode: Mode.Fire, phase: (i * 0.37) % 1, pool: 1.5, kind: 'flare', house: -1 });

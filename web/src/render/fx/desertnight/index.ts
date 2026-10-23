@@ -1,3 +1,4 @@
+import { Tile, WATER_LEVEL } from '../../../sim/map';
 import { hash2 } from '../../../sim/rng';
 import { MAX_STREAKS, RIVER } from '../../water';
 import type { AtmosHost, Atmosphere } from '../../atmos';
@@ -55,7 +56,7 @@ export class DesertNight {
     const harbour = planHarbours(map, (x, z) => standY(map, x, z));
     this.plan.lamps.push(...harbour.lamps);
     this.plan.posts.push(...harbour.posts);
-    const oil = planOil(map.oils, (x, z) => standY(map, x, z));
+    const oil = planOil(map.oils, (x, z) => standY(map, x, z), (x, z) => standY(map, x, z) > WATER_LEVEL + 0.06 && map.tiles[Math.floor(z) * map.w + Math.floor(x)] !== Tile.Water);
     this.plan.lamps.push(...oil.lamps);
     this.plan.stacks.push(...oil.stacks);
     this.reflect = reflectables(this.plan.lamps, sea?.lampSpots() ?? [], sea?.lanternSpots() ?? []);
@@ -118,6 +119,7 @@ export class DesertNight {
         C[k].set(l.r, l.g, l.b);
       } else P[k].w = 0;
     }
+    RIVER.wStreakN.value = used.length;
   }
 
   /** A house whose roof is damaged loses its lights (envdamage.ts house stages, read-only). */
@@ -147,6 +149,7 @@ export class DesertNight {
 
   dispose() {
     for (const p of RIVER.wStreakP.value) p.w = 0;
+    RIVER.wStreakN.value = 0;
     this.lights?.dispose();
     this.lights = null;
     this.signs?.dispose();

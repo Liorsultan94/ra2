@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DesertLights } from '../src/render/fx/desertnight/lights';
 import { SignBoards } from '../src/render/fx/desertnight/signs';
 import type { FogOfWar } from '../src/render/fog';
+import { desertNightHaze } from '../src/render/fx/atmosrules';
 import { createMap } from '../src/sim/maps';
 import { CAPS, houseAwake, isDesertLayout, planTown } from '../src/render/fx/desertnight/places';
 import { placeholderSlots } from '../src/render/fx/desertnight/slots';
@@ -149,6 +150,15 @@ describe('desert night lights (render/fx/desertnight)', () => {
     expect(refl.length).toBeGreaterThan(8);
     expect(lamps.filter((l) => l.kind === 'palm').length).toBe(1);
     expect(refl.length).toBe(lamps.filter((l) => ['buoy', 'jetty', 'pontoon', 'bar', 'restaurant', 'string'].includes(l.kind)).length + boat.length + 2);
+  });
+
+  it('the night haze is the desert only: none by day, a touch from the evening, gone with the dawn banks', () => {
+    expect(desertNightHaze(12, 'desert')).toBe(0);
+    expect(desertNightHaze(23, 'desert')).toBeGreaterThan(0.1);
+    expect(desertNightHaze(23, 'desert')).toBeLessThan(0.2);
+    expect(desertNightHaze(2, 'desert')).toBeGreaterThan(0.1);
+    expect(desertNightHaze(7, 'desert')).toBe(0);
+    for (const b of ['temperate', 'winter', 'urban']) expect(desertNightHaze(23, b)).toBe(0);
   });
 
   it('the gulfs have harbour lights at their heads', () => {

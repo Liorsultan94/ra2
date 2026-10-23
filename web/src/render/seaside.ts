@@ -375,7 +375,7 @@ export class Seaside {
         k.ball(0.025, 0, 0, 0, 0xbfe8ff, 0, 1);
       }
     // (night: the lit pool, fx/desertnight)
-    for (let u = pu0 + 0.5; u < pu1 - 0.2; u += 1.4) {
+    for (let u = pu0 + 0.5; u < pu1 - 0.2; u += 0.8) {
       const pp = F.P(u, vC(u));
       this.nightSpots.push({ kind: 'pool', x: pp.x, y: poolY + 0.01, z: pp.y, r: hw(u) + 0.3, yaw: 0, site: b });
     }

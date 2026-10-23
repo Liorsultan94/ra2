@@ -19,7 +19,9 @@ varying float vFwd;
 varying vec3 vW;
 void main() {
   vec4 wp = modelMatrix * vec4( position, 1.0 );
-  vec3 n = normalize( mat3( modelMatrix ) * normal );
+  // the cone's surface faces outwards from its axis (local x): its radial direction, turned by the mesh's rotation only
+  mat3 R = mat3( normalize( modelMatrix[0].xyz ), normalize( modelMatrix[1].xyz ), normalize( modelMatrix[2].xyz ) );
+  vec3 n = normalize( R * vec3( 0.0, position.y, position.z ) );
   vec3 v = normalize( cameraPosition - wp.xyz );
   vFace = abs( dot( n, v ) );
   vT = position.x;
@@ -39,7 +41,7 @@ varying float vFwd;
 varying vec3 vW;
 ${FOG_GLSL}
 void main() {
-  float a = pow( 1.0 - clamp( vT, 0.0, 1.0 ), 1.5 ) * smoothstep( 0.0, 0.05, vT ) * pow( vFace, 1.4 );
+  float a = pow( 1.0 - clamp( vT, 0.0, 1.0 ), 1.5 ) * smoothstep( 0.0, 0.05, vT ) * pow( vFace, 2.2 );
   a *= 0.55 + 1.1 * pow( vFwd, 3.0 );
   float vis = 1.0;
   if ( fogEnabled > 0.5 ) vis = smoothstep( 0.1, 0.45, fogSample( vW ) );

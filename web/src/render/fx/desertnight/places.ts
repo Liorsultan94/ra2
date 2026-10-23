@@ -222,7 +222,7 @@ function streetLamps(m: GameMap, plan: DesertPlan, seed: number) {
         const gy = surfaceHeight(m, x, z);
         const ph = hash2(Math.floor(x * 4), Math.floor(z * 4), 71);
         plan.posts.push({ x, y: gy, z, h: 0.52 });
-        if (plan.lamps.length < CAPS.lamps) plan.lamps.push({ x, y: gy + 0.54, z, size: 0.14, r: 1.0, g: 0.68, b: 0.34, mode: Mode.Steady, phase: ph, pool: 1.6, kind: 'street', house: -1 });
+        if (plan.lamps.length < CAPS.lamps) plan.lamps.push({ x, y: gy + 0.54, z, size: 0.14, r: 1.0, g: 0.68, b: 0.34, mode: Mode.Steady, phase: ph, pool: 1.05, kind: 'street', house: -1 });
       }
       done += len;
     }
@@ -274,7 +274,7 @@ function highwayMarkers(m: GameMap, plan: DesertPlan) {
         if (tx < 1 || tz < 1 || tx >= m.w - 1 || tz >= m.h - 1 || m.tiles[tz * m.w + tx] === Tile.Water || inTown(x, z) || plan.markers.length >= CAPS.markers) continue;
         const gy = surfaceHeight(m, x, z);
         plan.markers.push({ x, y: gy, z, h: 0.11 });
-        if (plan.lamps.length < CAPS.lampsTotal) plan.lamps.push({ x, y: gy + 0.105, z, size: 0.05, r: 0.8, g: 0.92, b: 1.0, mode: Mode.Steady, phase: 0, pool: 0, kind: 'marker', house: -1 });
+        if (plan.lamps.length < CAPS.lampsTotal) plan.lamps.push({ x, y: gy + 0.105, z, size: 0.07, r: 0.9, g: 0.95, b: 1.0, mode: Mode.Steady, phase: 0, pool: 0, kind: 'marker', house: -1 });
       }
       done += len;
     }
