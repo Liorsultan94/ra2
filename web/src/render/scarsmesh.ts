@@ -241,6 +241,9 @@ export class ScarPieces {
 
 // --------------------------------------------------------------------- hulks
 
+/** Seconds a burnt-out vehicle stays on the map before it sinks away and frees its memory. */
+export const HULK_LIFE = 60;
+
 export interface Hulk {
   geoId: number;
   instId: number;
@@ -437,6 +440,12 @@ export class ScarHulks {
         h.sink += dt;
         this.mesh.setMatrixAt(h.instId, _m.makeTranslation(0, -h.sink * 0.22, 0));
         if (h.sink > 3) this.remove(h, onEvict);
+        continue;
+      }
+      // a burnt-out vehicle is only there for a minute: then it sinks away and its space (instance, vertices) is freed;
+      // the ground keeps the burnt patch (the owner asked: performance on the phone)
+      if (time - h.born > HULK_LIFE) {
+        h.sink = 0;
         continue;
       }
       const r = Math.min(1, (time - h.born) / rustTime);
