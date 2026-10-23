@@ -6,7 +6,7 @@ import type { FogOfWar } from '../src/render/fog';
 import { desertNightHaze } from '../src/render/fx/atmosrules';
 import { createMap } from '../src/sim/maps';
 import { CAPS, houseAwake, isDesertLayout, planTown } from '../src/render/fx/desertnight/places';
-import { placeholderSlots } from '../src/render/fx/desertnight/slots';
+import { placeholderSlots, usesSharedSlots } from '../src/render/fx/desertnight/slots';
 import { gulfHeads, planBoats, planHarbours, planOil, planResorts } from '../src/render/fx/desertnight/sea';
 import { planSigns, RESORT_NAMES } from '../src/render/fx/desertnight/signs';
 import { reflectables } from '../src/render/fx/desertnight';
@@ -32,7 +32,8 @@ describe('desert night lights (render/fx/desertnight)', () => {
     expect(JSON.stringify(a.lamps)).toBe(JSON.stringify(b.lamps));
     expect(a.houses.map((h) => h.awake)).toEqual(b.houses.map((h) => h.awake));
     const c = planTown(desert, 8);
-    expect(c.houses.map((h) => h.awake)).not.toEqual(a.houses.map((h) => h.awake));
+    // (BD1's slots file decides by tile position alone: the placeholder also mixes in the match seed)
+    if (!usesSharedSlots) expect(c.houses.map((h) => h.awake)).not.toEqual(a.houses.map((h) => h.awake));
     // chosen by tile position: the same structure decides the same way each call
     const st = desert.structures[3];
     expect(houseAwake(st, 5)).toBe(houseAwake(st, 5));
