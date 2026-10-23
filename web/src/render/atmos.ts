@@ -18,7 +18,7 @@ import { WeatherFx } from './weather';
 import { WeatherCycle, type WxEventKind, type WxKind, type WxState } from './weathercycle';
 import { WX, WXM, WXS } from './wxuniforms';
 import { LivingWorld } from './fx/nature';
-import { dawnMistAt, mistClimateK } from './fx/atmosrules';
+import { dawnMistAt, desertNightHaze, mistClimateK } from './fx/atmosrules';
 import { biomeLook, type BiomeLook } from './biome';
 import { CITY_NIGHT } from './models/citybldgs';
 import { TPS } from '../sim/types';
@@ -121,6 +121,8 @@ export interface VisualLike {
   visible: boolean;
   speed: number;
   anim: AnimState;
+  /** Night: an enemy unit fading in / out of the dark (0 hidden .. 1 seen); absent: fully seen or by day. */
+  fade?: number;
 }
 
 /** Anything with a re-iterable `values()` (the renderer's visual map). */
@@ -759,6 +761,8 @@ function morningMist(t: number) {
 
 /** Calm-weather breeze (world x / z direction, matches the effects' default drift). */
 const BREEZE_DIR = -0.55;
+/** The desert night's shadow tint: a little cooler than the other maps' (NT1). */
+const DESERT_NIGHT_SHADOW = new THREE.Vector3(-0.026, 0.004, 0.054);
 
 export class Atmosphere {
   readonly cfg: AtmosConfig;
@@ -1290,6 +1294,11 @@ export class Atmosphere {
       if (this.cfg.tod === 'mist') mist = morningMist(gt);
       // (with dynamic weather the dawn mist is lighter after a dry night, thick after a rainy one)
       if (this.keys) mist = Math.max(mist, dawnMist(this.phase, this.look.biome) * (st ? 0.7 + 0.3 * sstep(0.08, 0.45, st.wet) : 1));
+      // the desert night: a touch of cool low haze over the wadis and the gulf, the shadows a little cooler
+      if (this.keys && this.look.biome === 'desert') {
+        mist = Math.max(mist, desertNightHaze(uToHour(this.phase), 'desert'));
+        p.shadowTint.lerp(DESERT_NIGHT_SHADOW, 0.55 * sstep(0.3, 0.8, p.dark));
+      }
       if (st) mist = Math.max(mist, st.mist) * (1 - 0.65 * sstep(0.35, 0.9, st.wind));
       if (this.mistOverride !== null) mist = this.mistOverride;
       this.mist = mist;

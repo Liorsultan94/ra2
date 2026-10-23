@@ -91,6 +91,19 @@ interface Static {
   swim?: number;
 }
 
+/** A place for a night light recorded while the resorts are built (fx/desertnight/sea.ts turns them into lights). */
+export interface SeaNightSpot {
+  kind: 'pool' | 'restaurant' | 'bar' | 'palm' | 'jetty' | 'pontoon' | 'buoy' | 'sign' | 'tower';
+  x: number;
+  y: number;
+  z: number;
+  /** Size (a pool's radius, ...) and a heading / variant. */
+  r: number;
+  yaw: number;
+  /** The resort (site index) it belongs to. */
+  site: number;
+}
+
 interface Boat {
   x: number;
   z: number;
@@ -143,6 +156,8 @@ export class Seaside {
   private vegSpots = new Map<VegKind, THREE.Matrix4[]>();
   /** The lighthouses' lanterns (one per island): the night beam sweeps from here (nightLights). */
   private lanterns: { x: number; y: number; z: number; ph: number }[] = [];
+  /** Where the night lights of the desert go (fx/desertnight/sea.ts reads these; positions only, render only). */
+  readonly nightSpots: SeaNightSpot[] = [];
 
   constructor(
     private map: GameMap,
@@ -360,6 +375,11 @@ export class Seaside {
         this.at(k, F, u, vC(u) + s * (hw(u) + 0.05), deckY + 0.02);
         k.ball(0.025, 0, 0, 0, 0xbfe8ff, 0, 1);
       }
+    // (night: the lit pool, fx/desertnight)
+    for (let u = pu0 + 0.5; u < pu1 - 0.2; u += 0.8) {
+      const pp = F.P(u, vC(u));
+      this.nightSpots.push({ kind: 'pool', x: pp.x, y: poolY + 0.01, z: pp.y, r: hw(u) + 0.3, yaw: 0, site: b });
+    }
     // the bridge across the pool
     const ub = (pu0 + pu1) / 2 + (b ? 1.5 : -1.2);
     const span = hw(ub) * 2 + 0.4;
@@ -387,6 +407,13 @@ export class Seaside {
     k.ball(0.04, 0, 0.84, 0, THATCH_DK, 0);
     // a warm lamp under the roof
     k.ball(0.04, 0, 0.36, 0, 0xffd590, 0, 1);
+    {
+      const rp = F.P(rU, rV);
+      this.nightSpots.push({ kind: 'restaurant', x: rp.x, y: deckY, z: rp.y, r: 1.3, yaw: 0, site: b });
+      // the resort's name board stands by the deck's seaward edge, facing the sea
+      const sp = F.P(r.u0 + 1.75, r.v1 - 0.22);
+      this.nightSpots.push({ kind: 'sign', x: sp.x, y: deckY, z: sp.y, r: 0, yaw: F.yaw(r.u0 + 1.75, r.v1 - 0.22), site: b });
+    }
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + 0.5;
       const rr = i % 3 === 0 ? 0.32 : 0.98;
@@ -427,6 +454,7 @@ export class Seaside {
         if (v < r.v0 + 2.95) continue;
         this.at(k, F, u + (h(Math.round(u * 10), Math.round(v)) - 0.5) * 0.4, v, deckY, h(Math.round(u), 9) * 6);
         k.cyl(0.11, 0.1, 0.06, 0, 0, 0, 0xc8b898, 8);
+        this.nightSpots.push({ kind: 'palm', x: k.base.elements[12], y: deckY, z: k.base.elements[14], r: 0.5, yaw: 0, site: b });
         const ps = 0.62 + h(Math.round(u * 10), 12) * 0.2;
         if (!this.plant(k, h(Math.round(u * 10), 13) < 0.7 ? 'date_tall' : 'date_lean', ps * 0.8)) datePalm(k, h(Math.round(u * 10), 11), ps);
       }
@@ -799,6 +827,7 @@ export class Seaside {
         }
         k.cone(0.66, 0.36, 0, 0.48, 0, THATCH, 14);
         k.ball(0.04, 0, 0.42, 0, 0xffd590, 0, 1);
+        this.nightSpots.push({ kind: 'bar', x: p.x, y: this.gh(p.x, p.y), z: p.y, r: 0.5, yaw: F.yaw(barU, -3.3), site: b });
       }
     }
     // the jetty: out from the beach over the reef flat to a floating pontoon at the drop-off
@@ -829,6 +858,13 @@ export class Seaside {
             k.box(0.02, 0.17, 0.02, -0.2, 0.085, s, WHITE);
           }
         }
+        // (night: the jetty's lamps and the pontoon's, fx/desertnight)
+        for (let v = v0 + 0.6; v < v1; v += 0.8) {
+          const lp = F.P(jU, v);
+          this.nightSpots.push({ kind: 'jetty', x: lp.x, y: Math.max(deck, this.gh(lp.x, lp.y) + 0.06) + 0.17, z: lp.y, r: v >= v1 - 0.7 ? 1 : 0, yaw: F.yaw(jU, v), site: b });
+        }
+        const pn = F.P(jU, v1 + 0.45);
+        this.nightSpots.push({ kind: 'pontoon', x: pn.x, y: WATER_LEVEL + 0.12, z: pn.y, r: 0.8, yaw: F.yaw(jU, v1 + 0.45), site: b });
         // the pontoon (white floats with blue edges), a ladder, kayaks and a pedalo moored to it
         const pp = F.P(jU, v1 + 0.45);
         this.at(k, F, jU, v1 + 0.45, WATER_LEVEL + 0.05);
@@ -841,6 +877,11 @@ export class Seaside {
         k.box(0.1, 0.12, 0.1, 0.62, 0.09, -0.44, 0x2a6fc0);
         void pp;
       }
+    }
+    // (night: a slow-blinking buoy at each end of the swimming area, fx/desertnight)
+    for (const [bf, bc] of [[0.12, 0], [0.88, 1]] as const) {
+      const bp = F.P(at(bf), 3.9);
+      if (this.inMap(bp.x, bp.y, 0.2)) this.nightSpots.push({ kind: 'buoy', x: bp.x, y: WATER_LEVEL + 0.06, z: bp.y, r: bc, yaw: 0, site: b });
     }
     // a line of buoys round the swimming area
     for (let u = bu0 + 1.5; u < (Number.isNaN(jU) ? at(0.7) : jU - 1.2); u += 0.75) {
@@ -1615,17 +1656,26 @@ export class Seaside {
     }
   }
 
+  /** The moored boats' positions (static): x, z, yaw (bow along +x of the hull), kind 0 yacht / 1 speedboat / 2 dinghy. */
+  boatSpots(): { x: number; z: number; yaw: number; kind: number }[] {
+    return this.boatList.map((o) => ({ x: o.x, z: o.z, yaw: o.yaw, kind: o.kind }));
+  }
+
+  /** The promenade's lamp heads (x, y, z): warm lights close to the water, reflected in the sea at night. */
+  lampSpots(): { x: number; y: number; z: number }[] {
+    return this.glowSpots.filter((g) => g.lamp).map((g) => ({ x: g.x, y: g.y + 0.39, z: g.z }));
+  }
+
+  /** The lighthouses' lanterns (x, y, z, beam phase). */
+  lanternSpots(): { x: number; y: number; z: number; ph: number }[] {
+    return this.lanterns.map((l) => ({ ...l }));
+  }
+
   /** NightLights hook (renderer.ts): soft warm pools under the promenade's lamps and string lights, tiny flares on the lamps. */
-  nightLights(n: NightLights, dark: number, time = 0) {
+  nightLights(n: NightLights, dark: number, _time = 0) {
     if (dark < 0.05 || this.quality === 'low') return;
     const k = Math.min(1, dark * 1.3);
-    // the lighthouses: a soft beam turning once every ~13 s, a faint inner core, a small glow at the lantern
-    for (const L of this.lanterns) {
-      const yaw = time * 0.48 + L.ph;
-      n.cone(L.x, L.y, L.z, yaw, -0.02, 9.5, 0.55, 0.17 * k, 0.15 * k, 0.11 * k);
-      n.cone(L.x, L.y, L.z, yaw, -0.02, 6, 0.22, 0.13 * k, 0.12 * k, 0.08 * k);
-      n.flare(L.x, L.y, L.z, 0.26, 0.75 * k, 0.6 * k, 0.36 * k);
-    }
+    // (the lighthouses' beams and lamps are drawn by fx/desertnight now: beam.ts, lights.ts)
     for (const s of this.glowSpots) {
       n.pool(s.x, s.y, s.z, 0, s.r * 2, s.r * 2, 0.17 * k, 0.11 * k, 0.05 * k);
       if (s.lamp) n.flare(s.x, s.y + 0.39, s.z, 0.13, 0.7 * k, 0.5 * k, 0.26 * k);

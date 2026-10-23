@@ -639,6 +639,8 @@ export class GameRenderer {
     if (quality !== 'low' && !/[?&]sky=0\b/.test(location.search)) {
       // the desert's night sky: stars, the Milky Way, the moon's phase (nightsky.ts); the oasis town at the centre
       const ns = world.map.biome === 'desert' ? new NightSkyDriver(world.seed, { x: world.map.w / 2, z: world.map.h / 2 }) : null;
+      // (the villages' and resorts' gentle lights glow on the horizon too: fx/desertnight)
+      if (ns) ns.places = (this.atmos.living.desertNight?.glowPlaces() ?? []).map((p) => new THREE.Vector2(p.x, p.y));
       this.sky = new Sky(this.renderer, this.fog, quality, quality === 'high', ns);
       this.scene.add(this.sky.mesh);
     }

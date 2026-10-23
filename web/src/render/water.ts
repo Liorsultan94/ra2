@@ -48,6 +48,8 @@ const BASE_SPEED = 0.42;
 export const MAX_RINGS = 8;
 export const MAX_SLICKS = 4;
 export const MAX_WLIGHTS = 4;
+/** Light streaks on the desert's sea at night (fx/desertnight: warm lights of the coast and the boats, smeared towards the camera). */
+export const MAX_STREAKS = 10;
 /** Rocks breaking the surface of the rapids that the whitewater flows around (features.rocks + riverbed boulders). */
 export const MAX_RAPID_ROCKS = 18;
 
@@ -77,6 +79,11 @@ export const RIVER = {
   /** Lights reflected on the water: x, y, z, intensity (0 = unused) and colour. */
   wLightP: { value: Array.from({ length: MAX_WLIGHTS }, () => new THREE.Vector4()) },
   wLightC: { value: Array.from({ length: MAX_WLIGHTS }, () => new THREE.Vector3()) },
+  /** Light streaks: x, y, z, intensity (0 = unused) and colour (the lights are reflected as soft vertical smears). */
+  wStreakP: { value: Array.from({ length: MAX_STREAKS }, () => new THREE.Vector4()) },
+  wStreakC: { value: Array.from({ length: MAX_STREAKS }, () => new THREE.Vector3()) },
+  /** How many streak entries are in use (0 by day: the shader skips the whole loop). */
+  wStreakN: { value: 0 },
   /** Key light (sun / moon) direction (world, towards the light) and colour. */
   sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
   sunCol: { value: new THREE.Vector3(1, 0.97, 0.9) },
@@ -1288,7 +1295,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
     transparent: true,
     depthWrite: false,
     // the desert's starry sky in the medium reflection (high reflects the sky dome itself: nightsky.ts)
-    defines: { WATER_Q: Q, ...(m.biome === 'desert' && Q > 0 ? { NIGHT_SKY: 1 } : {}) },
+    defines: { WATER_Q: Q, ...(m.biome === 'desert' && Q > 0 ? { NIGHT_SKY: 1, NIGHT_STREAKS: 1 } : {}) },
     uniforms: {
       time: RIVER.time,
       heightTex: { value: htex },
@@ -1319,6 +1326,9 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       wSlicks: RIVER.wSlicks,
       wLightP: RIVER.wLightP,
       wLightC: RIVER.wLightC,
+      wStreakP: RIVER.wStreakP,
+      wStreakC: RIVER.wStreakC,
+      wStreakN: RIVER.wStreakN,
       rapF: { value: rapF },
       // the river's main axis: a stable frame for the pier wakes (no per-pixel flow direction: it marbles)
       wAxis: { value: new THREE.Vector2(river.ax, river.ay) },
@@ -1385,6 +1395,11 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform vec4 wSlicks[${MAX_SLICKS}];
       uniform vec4 wLightP[${MAX_WLIGHTS}];
       uniform vec3 wLightC[${MAX_WLIGHTS}];
+      #ifdef NIGHT_STREAKS
+      uniform vec4 wStreakP[${MAX_STREAKS}];
+      uniform vec3 wStreakC[${MAX_STREAKS}];
+      uniform float wStreakN;
+      #endif
       uniform vec4 rapF;
       uniform float rapH;
       uniform vec2 wAxis;
@@ -1778,6 +1793,36 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           float ls = pow(max(dot(R, tl / dl), 0.0), 22.0);
           col += wLightC[i] * ls * L.w / (1.0 + dl * dl * 0.06);
         }
+        #ifdef NIGHT_STREAKS
+        // the coast's warm lights reflected as soft vertical smears (a light's mirror image stretched towards the
+        // viewer by the ripples), broken into glimmering dashes by the waves: never a mirror, never a glare
+        for (int i = 0; i < ${MAX_STREAKS}; i++) {
+          if (float(i) >= wStreakN) break;
+          vec4 SL = wStreakP[i];
+          if (SL.w <= 0.0) continue;
+          vec2 toL = SL.xz - cameraPosition.xz;
+          float D = max(length(toL), 0.05);
+          vec2 sdir = toL / D;
+          vec2 toP = vWorld.xz - cameraPosition.xz;
+          float along = dot(toP, sdir);
+          float lat = toP.x * sdir.y - toP.y * sdir.x;
+          float hC = max(cameraPosition.y - ${WATER_LEVEL.toFixed(3)}, 0.2);
+          float hL = max(SL.y - ${WATER_LEVEL.toFixed(3)}, 0.02);
+          float s0 = D * hC / (hC + hL);
+          // from the light's own foot towards the camera: as long as the mirror ray's reach plus what the waves add
+          float len = (D - s0) + 0.2 + 0.03 * D;
+          float tt = clamp((D + 0.08 - along) / len, 0.0, 1.0);
+          float inside = step(-0.08, D - along) * step(along, D + 0.1);
+          float wd = 0.045 + 0.035 * tt + 0.012 * D * tt;
+          if (inside < 0.5 || abs(lat) > wd * 3.0) continue;
+          float across = exp(-lat * lat / (wd * wd));
+          float down = pow(1.0 - tt, 1.6) * smoothstep(0.0, 0.05, 1.0 - tt + 0.02);
+          // dashes: the ripple field stretched along the streak
+          float rp = texture2D(waveTex, vec2(lat * 2.6, along * 0.55) + vec2(time * 0.035, time * 0.05)).a;
+          float dash = 0.35 + 1.1 * smoothstep(0.35, 0.8, rp);
+          col += wStreakC[i] * across * down * dash * SL.w * (1.0 - 0.6 * chop);
+        }
+        #endif
         #endif
         // ---- foam (advected noise never stretches: same two phases as the ripples)
         float fA = texture2D(waveTex, q0 * 0.55).a * w0 + texture2D(waveTex, q1 * 0.55 + 0.4).a * w1;

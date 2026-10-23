@@ -399,15 +399,15 @@ export class BattleScars {
     const h = this.hulks.adopt(roots, x, y, z, size, this.time, (o) => this.hulkGone(o), hot?.heat ?? 0, hot?.cool ?? 1);
     if (!h) return false;
     if (hot && hot.fires.length) {
-      // a Blender hulk keeps burning: a thick black column leaning downwind that thins out over a minute or two,
+      // a Blender hulk keeps burning: a thick black column leaning downwind that thins out over the minute the hulk is there,
       // flames still licking out of a hatch / the engine deck for a while (bright, never glaring, at night)
       const f0 = hot.fires[0];
-      this.emit({ x: f0.x, y: f0.y + 0.1, z: f0.z, t: 0, dur: rnd(80, 130), rate: 5, size: 0.95 * size, kind: 3 });
+      this.emit({ x: f0.x, y: f0.y + 0.1, z: f0.z, t: 0, dur: rnd(48, 58), rate: 5, size: 0.95 * size, kind: 3 });
       const fire = hot.fires[1 + Math.floor(Math.random() * (hot.fires.length - 1))] ?? f0;
-      if (Math.random() < (heavy ? 0.85 : 0.6)) this.emit({ x: fire.x, y: fire.y, z: fire.z, t: 0, dur: rnd(35, 70), rate: 1, size: 0.55 * size, kind: 2 });
+      if (Math.random() < (heavy ? 0.85 : 0.6)) this.emit({ x: fire.x, y: fire.y, z: fire.z, t: 0, dur: rnd(30, 52), rate: 1, size: 0.55 * size, kind: 2 });
       return true;
     }
-    this.emit({ x, y: y + 0.3 * size, z, t: 0, dur: rnd(60, 110), rate: 1.6, size: 0.65 * size, kind: 1 });
+    this.emit({ x, y: y + 0.3 * size, z, t: 0, dur: rnd(45, 56), rate: 1.6, size: 0.65 * size, kind: 1 });
     if (heavy && Math.random() < 0.45) this.emit({ x, y: y + 0.25, z, t: 0, dur: rnd(25, 60), rate: 1, size: 0.45 * size, kind: 2 });
     return true;
   }
