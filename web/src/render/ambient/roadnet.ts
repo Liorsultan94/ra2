@@ -1,6 +1,7 @@
 import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, V2 } from '../layout';
 import type { Board, Lot } from './sites';
+import { sinaiRoundabouts } from './sinairoads';
 
 /*
  * The civilian road network as a lane graph (pure logic, no three.js): the
@@ -128,6 +129,8 @@ export interface Loop {
   node: number;
   /** Turning place at a dead end (vs a roundabout joining roads). */
   dead: boolean;
+  /** The square of a village / town (the map's chosen roundabouts, NetInput.round): gets a centrepiece. */
+  town: boolean;
 }
 
 export const enum SigMode {
@@ -225,6 +228,12 @@ export interface NetInput {
   clip?: (x: number, y: number) => boolean;
   /** Collects why dead ends got no turning place (tests / debugging). */
   debug?: string[];
+  /**
+   * The map's chosen roundabouts (the Sinai): a junction of three or more paved roads within `r` of one of these
+   * becomes a roundabout (a larger one, village or not, never traffic lights), and no other junction does.
+   * Unset: roundabouts wherever paved roads meet in the open countryside, traffic lights at the big village crossings.
+   */
+  round?: readonly { x: number; y: number; r: number }[];
 }
 
 // ------------------------------------------------------------------ geometry
@@ -451,6 +460,7 @@ export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetIn
     bridges,
     structures: m.structures,
     urban,
+    round: sinaiRoundabouts(m).length ? sinaiRoundabouts(m) : undefined,
     clip: urban ? undefined : (x, y) => m.starts.some((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5) < 8.5),
     hard: (tx, ty) => {
       if (tx < 0 || ty < 0 || tx >= W || ty >= H) return true;
@@ -864,7 +874,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     const ri = paved ? R * 0.42 : 0;
     const rl = paved ? (ri + R) / 2 + 0.02 : R * 0.55;
     const li = loops.length;
-    loops.push({ x: cx, y: cy, R, ri, rl, paved, node: ni, dead });
+    loops.push({ x: cx, y: cy, R, ri, rl, paved, node: ni, dead, town: !dead && !!inp.round });
     n.ctl = Ctl.Loop;
     n.loop = li;
     n.arms.forEach((a, k) => {
@@ -933,9 +943,11 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     if (arms.length === 2) return; // continuation
     const paved = arms.filter((a) => lines[a.line].paved).length;
     const painted = arms.some((a) => lines[a.line].painted);
+    // (the maps with chosen roundabouts: those squares only, and no traffic lights)
+    const chosen = inp.round?.some((c) => Math.hypot(c.x - n.x, c.y - n.y) < c.r) ?? false;
     // countryside: a roundabout where paved roads meet
-    if (!painted && !n.village && paved >= 3 && paved === arms.length) {
-      for (const R of arms.length > 4 ? [2.4, 2.1, 1.9] : [1.9, 1.7]) if (makeLoop(ni, n.x, n.y, R, true, false)) return;
+    if (!painted && (inp.round ? chosen : !n.village) && paved >= 3 && paved === arms.length) {
+      for (const R of inp.round ? (arms.length > 3 ? [2.7, 2.4, 2.1, 1.9, 1.7, 1.55] : [2.5, 2.2, 2.0, 1.8, 1.65]) : arms.length > 4 ? [2.4, 2.1, 1.9] : [1.9, 1.7]) if (makeLoop(ni, n.x, n.y, R, true, false)) return;
     }
     // priority: the straightest pair of the best ranked arms
     const rank = (a: Arm) => {
@@ -963,7 +975,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
       for (const b of arms) if (b.line !== a.line) m = Math.max(m, lines[b.line].half);
       return m;
     };
-    const signalled = (painted && arms.length >= 4) || (!painted && n.village && paved >= 3);
+    const signalled = (painted && arms.length >= 4) || (!painted && n.village && paved >= 3 && !inp.round);
     if (signalled) {
       const si = signals.length;
       // green waves don't matter here: hashed cycle offsets

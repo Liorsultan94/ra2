@@ -350,9 +350,12 @@ export class Landmarks {
     const mat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.1 }));
     const gh = (x: number, y: number) => surfaceHeight(m, x, y);
     const lists: Record<string, Item[]> = { fountain: [], statue: [], flag: [], flowers: [], palms: [], spruce: [] };
+    // the squares of the villages and towns (the map's chosen roundabouts) always get one: a fountain, palms, a statue, a flag
+    const SQUARE: ('fountain' | 'palms' | 'statue' | 'flag')[] = ['fountain', 'palms', 'statue', 'flag'];
+    let squares = 0;
     net.loops.forEach((lp, i) => {
       if (!lp.paved || lp.ri < 0.4) return;
-      const kind = centrepiece(m.biome, i, lp.ri, lp.dead);
+      const kind = lp.town ? SQUARE[squares++ % SQUARE.length] : centrepiece(m.biome, i, lp.ri, lp.dead);
       if (!kind) return;
       this.decorated.add(i);
       const sc = Math.min(1.25, lp.ri / 0.7);

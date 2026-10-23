@@ -2277,3 +2277,21 @@ export function createUrbanMap(seed: number): GameMap {
 export function dryAt(m: GameMap, x: number, y: number) {
   return m.heights[y * (m.w + 1) + x] > WATER_LEVEL;
 }
+
+/**
+ * The Sinai's places as continuous map points (render only: the civilian road network links them, ambient/sinairoads.ts).
+ * Pure constants of the layout: nothing in the sim reads them.
+ */
+export function sinaiPlaces() {
+  const p = (a: [number, number]) => pp(a[0], a[1]);
+  return {
+    villages: VILLAGE_PX.map(p),
+    northVillages: NORTH_VILLAGE_PX.map(p),
+    sharm: p(SHARM_TOWN_PX),
+    nuweiba: p(NUWEIBA_TOWN_PX),
+    hamlets: HAMLET_PX.map((h) => h.map(p)),
+    baseVillages: [0, 1].map((side) => own(side, BASE_VILLAGE[0], BASE_VILLAGE[1])),
+    oases: SINAI_OASES.map(([u, v, r]) => ({ ...pp(u, v), r })),
+    crossings: CROSS_PX.map(p),
+  };
+}
