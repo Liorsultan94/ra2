@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { FogOfWar } from '../../fog';
 import { FOG_GLSL } from '../../fog';
 import type { SeaNightSpot } from '../../seaside';
-import type { LightUniforms } from './lights';
+import { lightBlend, type LightUniforms } from './lights';
 
 /*
  * The resorts' lit name boards (NT1). Fictional names only (no real brands, no real hotel chains): one board on
@@ -177,7 +177,7 @@ export class SignBoards {
     const tex = (this.atlas = atlasTexture());
     if (!tex) return;
     this.u.uAtlas.value = tex;
-    const mat = new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+    const mat = lightBlend(new THREE.ShaderMaterial({ uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
     mat.polygonOffset = true;
     mat.polygonOffsetFactor = -2;
     mat.polygonOffsetUnits = -2;

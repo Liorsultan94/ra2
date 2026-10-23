@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { FogOfWar } from '../../fog';
 import { FOG_GLSL } from '../../fog';
-import type { LightUniforms } from './lights';
+import { lightBlend, type LightUniforms } from './lights';
 
 /*
  * The lighthouse beam (NT1): a long soft cone turning round the lantern once every ~13 s, visible in the night's
@@ -77,16 +77,15 @@ export class LighthouseBeams {
       const mats: THREE.ShaderMaterial[] = [];
       // (length, end radius, strength): the wide veil, the beam, its bright core
       for (const [len, rad, k] of [[17, 1.3, 0.08], [15, 0.55, 0.13], [10, 0.2, 0.17]] as const) {
-        const mat = new THREE.ShaderMaterial({
+        const mat = lightBlend(new THREE.ShaderMaterial({
           uniforms: { ...fu, uNight: uniforms.uNight, uStrength: { value: k }, uColor: { value: new THREE.Color(1.0, 0.9, 0.66) }, uLamp: { value: lamp }, uDir: { value: new THREE.Vector3(1, 0, 0) } },
           vertexShader: VERT,
           fragmentShader: FRAG,
           transparent: true,
           depthWrite: false,
-          blending: THREE.AdditiveBlending,
           side: THREE.DoubleSide,
           toneMapped: false,
-        });
+        }));
         mats.push(mat);
         const mesh = new THREE.Mesh(geo, mat);
         mesh.scale.set(len, rad, rad);

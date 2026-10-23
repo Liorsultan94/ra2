@@ -14,8 +14,15 @@ import { SignBoards, planSigns } from './signs';
  * The desert's living night (NT1, render only; sim/night.ts and the night-combat reveal rules are untouched).
  *
  *  - villages and towns: lit windows (about half the houses asleep, one window in ten a TV), porch lamps, street
- *    lamps along the roads, the mosque's lights, cooking fires in some yards (places.ts / lights.ts);
- *  - ... (more parts are added below as they land)
+ *    lamps along the roads, the mosque's lights, cooking fires in some yards, marker posts on the highway
+ *    (places.ts, slots.ts: BD1's render/buildingslots.ts supplies the openings once it is on the branch);
+ *  - the resorts: a lit pool, string lights, name boards (fictional names), the beach bar, palm uplights, the
+ *    jetty and its pontoon (sea.ts, signs.ts); navigation lights on the moored boats and the buoys' slow blink;
+ *  - the sea: the lighthouse's turning beam and lamp (beam.ts), harbour lights at the gulf heads, flare stacks and
+ *    mast lights at the oil sites, and the warm lights near the water reflected as soft streaks by the water
+ *    shader (water.ts NIGHT_STREAKS: the ten strongest near the view, picked here);
+ *  - the sky: the horizon glows over the villages and resorts too (glowPlaces -> nightsky.ts).
+ * (atmos.ts adds the night haze and the cooler shadows; night.ts the surfaced submarine's lamp.)
  *
  * Everything here is decoration: it is drawn as additive sprites and quads that nothing in the game reads, never
  * feeds the real point-light pool (so no unit is lit up by a lamp), and is hidden under the fog of war's shroud.
@@ -163,7 +170,7 @@ export class DesertNight {
 /** Lights close to the sea that it reflects: boats, buoys, jetty and pontoon lamps, the bar, the promenade's lamps, the lantern. */
 export function reflectables(lamps: readonly NightLamp[], promenade: readonly { x: number; y: number; z: number }[], lanterns: readonly { x: number; y: number; z: number }[]) {
   const out: { x: number; y: number; z: number; i: number; r: number; g: number; b: number }[] = [];
-  const KIND: Record<string, number> = { harbour: 0.3, boat: 0.34, buoy: 0.3, jetty: 0.3, pontoon: 0.4, bar: 0.5, restaurant: 0.4, string: 0.2, palm: 0 };
+  const KIND: Record<string, number> = { harbour: 0.3, boat: 0.26, buoy: 0.26, jetty: 0.24, pontoon: 0.3, bar: 0.5, restaurant: 0.4, string: 0.2, palm: 0 };
   for (const l of lamps) {
     const k = KIND[l.kind];
     if (!k) continue;

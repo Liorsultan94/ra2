@@ -14,6 +14,17 @@ import type { DesertPlan, NightLamp, NightPost, NightWindow } from './places';
  * All of it is additive, depth-tested, hidden under the fog of war's shroud and gone by day.
  */
 
+/** Additive light that leaves the destination alpha alone (see the water reflection: alpha marks what was mirrored). */
+export function lightBlend<T extends THREE.Material>(m: T): T {
+  m.blending = THREE.CustomBlending;
+  m.blendEquation = THREE.AddEquation;
+  m.blendSrc = THREE.OneFactor;
+  m.blendDst = THREE.OneFactor;
+  m.blendSrcAlpha = THREE.ZeroFactor;
+  m.blendDstAlpha = THREE.OneFactor;
+  return m;
+}
+
 export interface LightUniforms {
   uNight: { value: number };
   uTime: { value: number };
@@ -214,7 +225,7 @@ void main() {
 const POOL_K: Record<string, number> = { fire: 0.24, flare: 0.2, street: 0.1, harbour: 0.1, porch: 0.1, pool: 0.06, restaurant: 0.13, bar: 0.13, palm: 0.1, gate: 0.1, jetty: 0.1 };
 
 function additive(vert: string, frag: string, u: Record<string, THREE.IUniform>, poly = false) {
-  const m = new THREE.ShaderMaterial({ uniforms: u, vertexShader: vert, fragmentShader: frag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+  const m = lightBlend(new THREE.ShaderMaterial({ uniforms: u, vertexShader: vert, fragmentShader: frag, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
   if (poly) {
     m.polygonOffset = true;
     m.polygonOffsetFactor = -2;
