@@ -2,6 +2,7 @@ import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, Road, Track, V2 } from '../layout';
 import { bridgeEnds, buildRoadNet, netInputFrom, pointAt, unspike, type RoadNet } from './roadnet';
 import { placeBoards, placeLots } from './sites';
+import { planSigns } from './signplan';
 import { pylonFooting } from '../pylonsite';
 
 /*
@@ -545,6 +546,18 @@ export function prepareRoadNet(m: GameMap, roads: Road[], tracks: Track[], occ: 
   }
   // billboards by the roundabouts and crossings (after the circles are known)
   net.boards = placeBoards(m, net, occ, R);
+  // the Sinai's signs: billboards of every size and shape and the road signs (stamped as built ground like the boards)
+  net.signs = planSigns(m, net, occ, R);
+  for (const sg of net.signs) {
+    const rr = sg.kind === 1 ? 0.9 : sg.kind === 5 ? 0.7 : 0.35;
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const r = k === 8 ? 0 : rr;
+      const ix = Math.floor((sg.x + Math.cos(a) * r) * R);
+      const iy = Math.floor((sg.y + Math.sin(a) * r) * R);
+      if (ix >= 0 && iy >= 0 && ix < m.w * R && iy < m.h * R) occ[iy * m.w * R + ix] |= 8 | 16;
+    }
+  }
   return net;
 }
 

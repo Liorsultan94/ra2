@@ -6,6 +6,7 @@ import type { FogOfWar } from '../fog';
 import { surfaceHeight } from '../ground';
 import { adAtlas, LANGS } from './ads';
 import type { RoadNet } from './roadnet';
+import { Signs } from './signs';
 import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
 import { desertVeg, vegInstancedMesh } from '../desertveg';
 
@@ -331,6 +332,8 @@ export class Landmarks {
   private visBoards: number[] = [];
   private visSpruce: number[] = [];
   private visLamps: number[] = [];
+  /** The Sinai's roadside signs (signs.ts). */
+  private signs: Signs | null = null;
   /** Islands with a centrepiece (the island shrubs keep off them). */
   readonly decorated = new Set<number>();
 
@@ -396,6 +399,11 @@ export class Landmarks {
     add(spruce(), lists.spruce, 'lm-spruce', shadow);
     this.spruces = lists.spruce;
 
+    // the Sinai's signs: billboards of every size and shape, road signs
+    if (net.signs.length) {
+      this.signs = new Signs(m, net, fog, probe, lights, quality);
+      this.group.add(this.signs.group);
+    }
     // billboards: the local language mostly, the other side's here and there
     const langs = [...new Set(nations.filter((n) => LANGS[n]))];
     if (!langs.length) langs.push('usa');
@@ -571,6 +579,7 @@ export class Landmarks {
   }
 
   draw(f: AmbientFrame, time: number) {
+    this.signs?.draw(f);
     if (!this.banks.length) return;
     this.time.value = time;
     if (f.vx1 - f.vx0 > FAR) {

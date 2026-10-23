@@ -1,6 +1,7 @@
 import { Tile, type GameMap } from '../../sim/map';
 import type { Layout, V2 } from '../layout';
 import type { Board, Lot } from './sites';
+import type { Sign } from './signplan';
 import { sinaiRoundabouts } from './sinairoads';
 
 /*
@@ -206,6 +207,8 @@ export interface RoadNet {
   /** Parking lots (sites.ts) and billboard spots, filled in by clearance.ts. */
   lots: Lot[];
   boards: Board[];
+  /** The Sinai's roadside signs (signplan.ts): billboards of every size and shape, road signs. */
+  signs: Sign[];
   /** Short links from a road / track end that stops short of the road it joins (drawn as road / track pieces). */
   links: { x0: number; y0: number; x1: number; y1: number; half: number; paved: boolean; variant: number; joinHalf: number }[];
   props: Prop[];
@@ -1138,7 +1141,7 @@ export function buildRoadNet(inp: NetInput): RoadNet {
   for (const lp of loops) disc(lp.x, lp.y, lp.R, 1);
   for (const lp of loops) if (lp.ri > 0) disc(lp.x, lp.y, lp.ri, 0);
 
-  return { w: W, h: H, lines, nodes, loops, signals, marks, links, props, surface, res, lots: [], boards: [] };
+  return { w: W, h: H, lines, nodes, loops, signals, marks, links, props, surface, res, lots: [], boards: [], signs: [] };
 }
 
 /** Is (x, y) on the drivable surface (road, track, turning place, junction)? */

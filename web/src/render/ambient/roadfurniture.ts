@@ -574,7 +574,7 @@ export class RoadFurniture {
         kerbs.push({ x: p.x, y: p.y, yaw: 0, s: p.size, h: surfaceHeight(m, p.x, p.y) + LIFT - 0.02 });
         // a few shrubs on the island (deterministic per island), unless it has a centrepiece
         const lp = net.loops[p.ref];
-        const n = centrepiece(map.biome, p.ref, lp.ri, lp.dead) && lp.ri >= 0.4 ? 0 : map.biome === 'desert' ? 3 : 5;
+        const n = (lp.town || centrepiece(map.biome, p.ref, lp.ri, lp.dead)) && lp.ri >= 0.4 ? 0 : map.biome === 'desert' ? 3 : 5;
         for (let k = 0; k < n; k++) {
           const a = (k / n) * Math.PI * 2 + hash(k, p.ref, 31) * 0.8;
           const r = k === 0 ? 0 : p.size * (0.45 + hash(k, p.ref, 32) * 0.2);

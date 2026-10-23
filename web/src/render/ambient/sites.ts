@@ -2,6 +2,7 @@ import { Tile, type GameMap } from '../../sim/map';
 import { hash2 } from '../../sim/rng';
 import type { Road, V2 } from '../layout';
 import { Ctl, type RoadNet } from './roadnet';
+import { isSinai } from './sinairoads';
 
 /*
  * Sites for the roadside life (pure, deterministic per map):
@@ -66,7 +67,7 @@ export const BAY_D = 1.0;
 export const AISLE = 1.0;
 
 /** Is the ground free for a site footprint point? */
-function siteFree(m: GameMap, occ: Uint8Array, R: number, x: number, y: number): boolean {
+export function siteFree(m: GameMap, occ: Uint8Array, R: number, x: number, y: number): boolean {
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   if (tx < 1 || ty < 1 || tx >= m.w - 1 || ty >= m.h - 1) return false;
@@ -79,7 +80,7 @@ function siteFree(m: GameMap, occ: Uint8Array, R: number, x: number, y: number):
   return true;
 }
 
-function nearForbidden(m: GameMap, x: number, y: number, extra: number): boolean {
+export function nearForbidden(m: GameMap, x: number, y: number, extra: number): boolean {
   for (const s of m.starts) if (Math.hypot(x - s.x - 0.5, y - s.y - 0.5) < 13 + extra) return true;
   for (const o of m.oils) if (Math.hypot(x - o.x - 0.5, y - o.y - 0.5) < 3 + extra) return true;
   for (const mm of m.oreMines) if (Math.hypot(x - mm.x - 0.5, y - mm.y - 0.5) < 7 + extra) return true;
@@ -98,7 +99,8 @@ function nearForbidden(m: GameMap, x: number, y: number, extra: number): boolean
 /** Parking lots beside the paved roads (the access lanes are appended to `roads`). */
 export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number): Lot[] {
   const city = m.biome === 'urban';
-  const want = city ? 5 : 2;
+  // (the Sinai: one by each town square and the resorts' drives as well as the villages')
+  const want = city ? 5 : isSinai(m) ? 5 : 2;
   const L = city ? 4.2 : 3.4;
   const D = BAY_D * 2 + AISLE;
   const cands: { lot: Lot; score: number }[] = [];
@@ -171,7 +173,7 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
   const lots: Lot[] = [];
   for (const c of cands) {
     if (lots.length >= want) break;
-    if (lots.some((o) => Math.hypot(o.x - c.lot.x, o.y - c.lot.y) < (city ? 14 : 16))) continue;
+    if (lots.some((o) => Math.hypot(o.x - c.lot.x, o.y - c.lot.y) < (city ? 14 : isSinai(m) ? 11 : 16))) continue;
     // and not mirrored onto another lot's spot (the maps are point symmetric: keep it fair, one per half is fine)
     lots.push(c.lot);
   }
@@ -194,6 +196,7 @@ export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number)
 /** Billboard spots by the roundabouts and the city's signalled crossings (stamped as built ground). */
 export function placeBoards(m: GameMap, net: RoadNet, occ: Uint8Array, R: number): Board[] {
   const out: Board[] = [];
+  if (isSinai(m)) return out; // (the Sinai's signs are planned by signplan.ts)
   const free = (x: number, y: number) => {
     if (nearForbidden(m, x, y, 0.2)) return false;
     for (let k = 0; k < 9; k++) {
