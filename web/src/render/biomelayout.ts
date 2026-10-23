@@ -1,6 +1,7 @@
 import { StructureKind, Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
 import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
+import { sinaiExtraRoads, sinaiTrimRoads } from './ambient/sinairoads';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, SITE_CLEAR, detourSpans, edgesOffSites, makeRouter, nearSite, pylonFooting, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
 
 /*
@@ -41,6 +42,12 @@ export function buildBiomeLayout(m: GameMap): Layout {
     }
     flush();
   });
+  // the Sinai's extra paved links (the towns' squares, the resort drive): render only, routed round everything that blocks
+  sinaiTrimRoads(m, roads);
+  for (const e of sinaiExtraRoads(m, route, roads)) {
+    const pts = e.pts.filter((p) => !nearStart(p.x, p.y, baseR));
+    if (pts.length === e.pts.length) roads.push({ pts, width: e.width, variant: e.variant });
+  }
   const tracks: Track[] = (deco?.tracks ?? []).map((pts, i) => {
     const t: Track = { pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 };
     const bed = deco?.trackBeds?.[i];

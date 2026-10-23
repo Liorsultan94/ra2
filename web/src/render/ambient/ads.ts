@@ -109,6 +109,18 @@ export const LANGS: Record<string, Lang> = {
       bank: { brand: 'بانک ساحل', slogan: 'وام مسکن آسان', price: '۱۸٪', phone: '۰۲۱-۵۵۵۰۱۷۷' },
     },
   },
+  egypt: {
+    rtl: true,
+    font: SANS,
+    ads: {
+      drink: { brand: 'واحة كولا', slogan: 'طعم الانتعاش', price: '٦ جنيه', phone: '٠٢-٥٥٥-٠١٤٢' },
+      phone: { brand: 'نجمة X٩', slogan: 'عالمك أسرع', price: '٨٬٩٩٩ جنيه', phone: '٠٢-٥٥٥-٢٢٣٣' },
+      coffee: { brand: 'قهوة الصباح', slogan: 'طازجة كل يوم', price: '١٥ جنيه', phone: '٠٦٩-٥٥٥-٧٧٨١' },
+      car: { brand: 'سيارات الدلتا', slogan: 'تقسيط بدون فوائد', price: 'من ٣٩٩٬٩٠٠ جنيه', phone: '٠٢-٥٥٥-٤٤١٠' },
+      burger: { brand: 'برجر الصحراء', slogan: 'مشوي مش مقلي', price: '٨٥ جنيه', phone: '٠٦٩-٥٥٥-٠٩٠٩' },
+      bank: { brand: 'بنك الميناء', slogan: 'تمويل عقاري سهل', price: '١١٪', phone: '٠٢-٥٥٥-٠١٧٧' },
+    },
+  },
   china: {
     rtl: false,
     font: '"Noto Sans CJK SC", "WenQuanYi Zen Hei", "Microsoft YaHei", "PingFang SC", ' + SANS,
