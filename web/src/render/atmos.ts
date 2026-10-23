@@ -121,6 +121,8 @@ export interface VisualLike {
   visible: boolean;
   speed: number;
   anim: AnimState;
+  /** Night: an enemy unit fading in / out of the dark (0 hidden .. 1 seen); absent: fully seen or by day. */
+  fade?: number;
 }
 
 /** Anything with a re-iterable `values()` (the renderer's visual map). */

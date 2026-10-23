@@ -1,3 +1,4 @@
+import { Tile, type GameMap } from '../../../sim/map';
 import type { SeaNightSpot } from '../../seaside';
 import { Mode, type NightLamp } from './places';
 
@@ -147,4 +148,107 @@ export function planOil(oils: readonly { x: number; y: number }[], groundAt: (x:
     lamps.push({ x: cx, y: py + 0.8, z: cz + 0.15, size: 0.07, r: 1.0, g: 0.1, b: 0.06, mode: Mode.Pulse, phase: (i * 0.23) % 1, pool: 0, kind: 'derrick', house: -1 });
   });
   return { lamps, stacks };
+}
+
+/**
+ * The heads of the gulfs (the water that lies farthest from the open sea, by flood fill through the water tiles
+ * from the map's edge): where the harbours are. A pure function of the tiles.
+ */
+export function gulfHeads(m: GameMap): { x: number; y: number; d: number }[] {
+  const W = m.w;
+  const H = m.h;
+  const water = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && m.tiles[y * W + x] === Tile.Water;
+  const dist = new Int32Array(W * H).fill(-1);
+  const q: number[] = [];
+  for (let i = 0; i < W * H; i++) {
+    const x = i % W;
+    const y = (i / W) | 0;
+    if (water(x, y) && (x === 0 || y === 0 || x === W - 1 || y === H - 1)) {
+      dist[i] = 0;
+      q.push(i);
+    }
+  }
+  for (let h = 0; h < q.length; h++) {
+    const i = q[h];
+    const x = i % W;
+    const y = (i / W) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!water(nx, ny) || dist[ny * W + nx] >= 0) continue;
+      dist[ny * W + nx] = dist[i] + 1;
+      q.push(ny * W + nx);
+    }
+  }
+  let best = 0;
+  for (let i = 0; i < W * H; i++) if (dist[i] > best) best = dist[i];
+  const out: { x: number; y: number; d: number }[] = [];
+  for (let i = 0; i < W * H; i++) {
+    if (best < 40 || dist[i] < best * 0.55) continue;
+    const x = i % W;
+    const y = (i / W) | 0;
+    let peak = true;
+    for (let dy = -7; dy <= 7 && peak; dy++)
+      for (let dx = -7; dx <= 7; dx++) {
+        const nx = Math.min(W - 1, Math.max(0, x + dx));
+        const ny = Math.min(H - 1, Math.max(0, y + dy));
+        const d = dist[ny * W + nx];
+        if (d > dist[i] || (d === dist[i] && (dy < 0 || (dy === 0 && dx < 0)))) {
+          peak = false;
+          break;
+        }
+      }
+    if (peak) out.push({ x: x + 0.5, y: y + 0.5, d: dist[i] });
+  }
+  return out.sort((a, b) => b.d - a.d).slice(0, 4);
+}
+
+/**
+ * Harbour lights at the gulfs' heads: on the shore nearest each head, a quay line of five amber lamps on poles, a
+ * green and a red light marking the harbour mouth either side, and a white mast light in the middle (gentle small
+ * points: nothing flares). The poles are returned to be drawn with the street lamps'.
+ */
+export function planHarbours(m: GameMap, groundAt: (x: number, z: number) => number): { lamps: NightLamp[]; posts: { x: number; y: number; z: number; h: number }[] } {
+  const lamps: NightLamp[] = [];
+  const posts: { x: number; y: number; z: number; h: number }[] = [];
+  const W = m.w;
+  const land = (x: number, z: number) => {
+    const tx = Math.floor(x);
+    const tz = Math.floor(z);
+    if (tx < 2 || tz < 2 || tx >= m.w - 2 || tz >= m.h - 2) return false;
+    const i = tz * W + tx;
+    return m.tiles[i] !== Tile.Water && m.tiles[i] !== Tile.Rock && m.blocked[i] !== 1;
+  };
+  for (const head of gulfHeads(m)) {
+    // which way the gulf runs from its head: towards the middle of the water tiles around it
+    let wx = 0;
+    let wz = 0;
+    for (let dz = -9; dz <= 9; dz++)
+      for (let dx = -9; dx <= 9; dx++) {
+        const tx = Math.floor(head.x) + dx;
+        const tz = Math.floor(head.y) + dz;
+        if (tx >= 0 && tz >= 0 && tx < m.w && tz < m.h && m.tiles[tz * W + tx] === Tile.Water) {
+          wx += tx + 0.5 - head.x;
+          wz += tz + 0.5 - head.y;
+        }
+      }
+    const wl = Math.hypot(wx, wz) || 1;
+    const ax = wx / wl;
+    const az = wz / wl;
+    // across it
+    const px = -az;
+    const pz = ax;
+    const place = (x: number, z: number, size: number, c: readonly [number, number, number], pool: number) => {
+      if (!land(x, z)) return;
+      const g = groundAt(x, z);
+      posts.push({ x, y: g, z, h: 0.52 });
+      lamps.push({ x, y: g + 0.54, z, size, r: c[0], g: c[1], b: c[2], mode: Mode.Steady, phase: 0, pool, kind: 'harbour', house: -1 });
+    };
+    // the quay: five amber lamps along the land end of the gulf's head (the middle one a white mast light)
+    for (let i = -2; i <= 2; i++) place(head.x - ax * 2.6 + px * i * 1.15, head.y - az * 2.6 + pz * i * 1.15, i === 0 ? 0.12 : 0.1, i === 0 ? WHITE : AMBER, i === 0 ? 0 : 1.3);
+    // the harbour mouth: red to port, green to starboard, on the banks a little way down the water
+    place(head.x + ax * 5 - px * 3.1, head.y + az * 5 - pz * 3.1, 0.1, RED, 0);
+    place(head.x + ax * 5 + px * 3.1, head.y + az * 5 + pz * 3.1, 0.1, GREEN, 0);
+  }
+  return { lamps, posts };
 }

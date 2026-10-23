@@ -1671,16 +1671,10 @@ export class Seaside {
   }
 
   /** NightLights hook (renderer.ts): soft warm pools under the promenade's lamps and string lights, tiny flares on the lamps. */
-  nightLights(n: NightLights, dark: number, time = 0) {
+  nightLights(n: NightLights, dark: number, _time = 0) {
     if (dark < 0.05 || this.quality === 'low') return;
     const k = Math.min(1, dark * 1.3);
-    // the lighthouses: a soft beam turning once every ~13 s, a faint inner core, a small glow at the lantern
-    for (const L of this.lanterns) {
-      const yaw = time * 0.48 + L.ph;
-      n.cone(L.x, L.y, L.z, yaw, -0.02, 9.5, 0.55, 0.17 * k, 0.15 * k, 0.11 * k);
-      n.cone(L.x, L.y, L.z, yaw, -0.02, 6, 0.22, 0.13 * k, 0.12 * k, 0.08 * k);
-      n.flare(L.x, L.y, L.z, 0.26, 0.75 * k, 0.6 * k, 0.36 * k);
-    }
+    // (the lighthouses' beams and lamps are drawn by fx/desertnight now: beam.ts, lights.ts)
     for (const s of this.glowSpots) {
       n.pool(s.x, s.y, s.z, 0, s.r * 2, s.r * 2, 0.17 * k, 0.11 * k, 0.05 * k);
       if (s.lamp) n.flare(s.x, s.y + 0.39, s.z, 0.13, 0.7 * k, 0.5 * k, 0.26 * k);

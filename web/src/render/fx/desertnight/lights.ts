@@ -85,7 +85,8 @@ void main() {
     float fl = 0.55 + 0.45 * sin( uTime * 9.0 + id * 3.0 ) * sin( uTime * 3.1 + id );
     col = mix( vec3( 0.34, 0.52, 1.0 ), vec3( 0.95, 0.9, 0.8 ), step( 0.7, cut ) * 0.7 );
     level = 0.45 + 0.55 * fl;
-    up = 1.0;
+    // (the TV goes off when the house goes to bed)
+    up = 1.0 - step( 0.8, uLate );
   }
   float a = ( pane * ( 1.0 - bar ) * ( 1.0 - 0.35 * rim ) + spill ) * level;
   float vis = 1.0;
@@ -248,6 +249,7 @@ export class DesertLights {
   private poolAlive: THREE.InstancedBufferAttribute | null = null;
   private postMesh: THREE.InstancedMesh | null = null;
   private stackMesh: THREE.InstancedMesh | null = null;
+  private markerMesh: THREE.InstancedMesh | null = null;
   /** Instance ranges per house (windows, sprites, pools): to switch a damaged house's lights off. */
   private winOf: number[] = [];
   private sprOf: number[] = [];
@@ -266,6 +268,7 @@ export class DesertLights {
     this.buildLamps(plan, U, hash);
     this.buildPosts(plan.posts);
     this.buildStacks(plan.stacks);
+    this.buildMarkers(plan.markers);
   }
 
   private buildWindows(plan: DesertPlan, U: Record<string, THREE.IUniform>, hash: (a: number) => number) {
@@ -384,6 +387,21 @@ export class DesertLights {
     this.group.add(mesh);
   }
 
+  private buildMarkers(markers: NightPost[]) {
+    if (!markers.length) return;
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd8d8d0, roughness: 0.6, metalness: 0.1 });
+    this.fog.apply(mat);
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.022, 0.11, 0.022).translate(0, 0.055, 0), mat, markers.length);
+    const m = new THREE.Matrix4();
+    markers.forEach((p, i) => mesh.setMatrixAt(i, m.makeTranslation(p.x, p.y, p.z)));
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.name = 'desert-road-markers';
+    mesh.castShadow = false;
+    mesh.userData.perfCat = 'scenery';
+    this.group.add(mesh);
+    this.markerMesh = mesh;
+  }
+
   private buildStacks(stacks: NightPost[]) {
     if (!stacks.length) return;
     const parts: THREE.BufferGeometry[] = [];
@@ -443,7 +461,8 @@ export class DesertLights {
       pools: this.poolMesh ? (this.poolMesh.geometry as THREE.InstancedBufferGeometry).instanceCount : 0,
       posts: this.postMesh ? this.postMesh.count : 0,
       stacks: this.stackMesh ? this.stackMesh.count : 0,
-      draws: [this.windows, this.sprites, this.poolMesh, this.postMesh, this.stackMesh].filter(Boolean).length,
+      markers: this.markerMesh ? this.markerMesh.count : 0,
+      draws: [this.windows, this.sprites, this.poolMesh, this.postMesh, this.stackMesh, this.markerMesh].filter(Boolean).length,
     };
   }
 

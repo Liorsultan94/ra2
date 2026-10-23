@@ -6,7 +6,7 @@ import { CITY_LATE } from '../nightlife';
 import { LighthouseBeams } from './beam';
 import { DesertLights } from './lights';
 import { emptyPlan, isDesertLayout, planTown, standY, type DesertPlan, type NightLamp } from './places';
-import { planBoats, planOil, planResorts } from './sea';
+import { planBoats, planHarbours, planOil, planResorts } from './sea';
 import { SignBoards, planSigns } from './signs';
 
 /*
@@ -49,6 +49,12 @@ export class DesertNight {
     if (sea) {
       this.plan.lamps.push(...planResorts(sea.nightSpots), ...planBoats(sea.boatSpots()));
     }
+    // the lighthouses' lamps: a small bright point (the beam is beam.ts)
+    for (const L of sea?.lanternSpots() ?? []) this.plan.lamps.push({ x: L.x, y: L.y, z: L.z, size: 0.13, r: 1.0, g: 0.9, b: 0.66, mode: 0, phase: 0, pool: 0, kind: 'lighthouse', house: -1 });
+    // harbour lights at the heads of the gulfs
+    const harbour = planHarbours(map, (x, z) => standY(map, x, z));
+    this.plan.lamps.push(...harbour.lamps);
+    this.plan.posts.push(...harbour.posts);
     const oil = planOil(map.oils, (x, z) => standY(map, x, z));
     this.plan.lamps.push(...oil.lamps);
     this.plan.stacks.push(...oil.stacks);
@@ -127,8 +133,16 @@ export class DesertNight {
     }
   }
 
+  /** The lit places the horizon glows over (a mosque marks each village / town; the resorts): tile coordinates. */
+  glowPlaces(): { x: number; y: number }[] {
+    if (!this.active) return [];
+    const out: { x: number; y: number }[] = this.plan.houses.filter((h) => h.st.look === 'mosque' && h.awake).map((h) => ({ x: h.cx, y: h.cz }));
+    for (const l of this.plan.lamps) if (l.kind === 'bar' || l.kind === 'restaurant') out.push({ x: l.x, y: l.z });
+    return out;
+  }
+
   stats() {
-    return { active: this.active, ...(this.lights?.stats() ?? { windows: 0, lamps: 0, pools: 0, posts: 0, draws: 0 }), ...(this.signs?.stats() ?? { signs: 0 }), asleep: this.plan.houses.filter((h) => !h.awake).length, houses: this.plan.houses.length };
+    return { active: this.active, ...(this.lights?.stats() ?? { windows: 0, lamps: 0, pools: 0, posts: 0, stacks: 0, markers: 0, draws: 0 }), ...(this.signs?.stats() ?? { signs: 0 }), asleep: this.plan.houses.filter((h) => !h.awake).length, houses: this.plan.houses.length };
   }
 
   dispose() {
@@ -146,7 +160,7 @@ export class DesertNight {
 /** Lights close to the sea that it reflects: boats, buoys, jetty and pontoon lamps, the bar, the promenade's lamps, the lantern. */
 export function reflectables(lamps: readonly NightLamp[], promenade: readonly { x: number; y: number; z: number }[], lanterns: readonly { x: number; y: number; z: number }[]) {
   const out: { x: number; y: number; z: number; i: number; r: number; g: number; b: number }[] = [];
-  const KIND: Record<string, number> = { boat: 0.7, buoy: 0.5, jetty: 0.5, pontoon: 0.7, bar: 0.9, restaurant: 0.7, string: 0.35, palm: 0 };
+  const KIND: Record<string, number> = { harbour: 0.5, boat: 0.7, buoy: 0.5, jetty: 0.5, pontoon: 0.7, bar: 0.9, restaurant: 0.7, string: 0.35, palm: 0 };
   for (const l of lamps) {
     const k = KIND[l.kind];
     if (!k) continue;

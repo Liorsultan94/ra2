@@ -1,20 +1,22 @@
-import { StructureKind, type Structure } from '../../../sim/map';
+import { StructureKind, type GameMap, type Structure } from '../../../sim/map';
 import { hash2 } from '../../../sim/rng';
 
 /*
  * Window, door and roof-lamp slots of the desert town's buildings, in world space, for the night lights.
  *
- * The shared file is render/buildingslots.ts (BD1 owns it: the building models' window and door positions and a
- * 'lit at night' flag per variant). Until it lands this module derives the slots itself from the footprint and the
- * model's height, repeating the numbers of sinaitown.ts buildHouse (the same hashes: which type a house is, how
- * many windows a bay gets), and the shared file takes over as soon as it exports `buildingSlots`:
- *
- *   export function buildingSlots(st: Structure, groundY: number): BuildingSlots | null
- *
- * (import.meta.glob keeps this file building while buildingslots.ts does not exist yet.)
+ * The shared file is render/buildingslots.ts (BD1 owns it: each building variant's windows, doors, shop fronts,
+ * porch and roof lamps and a 'lit tonight' flag per slot, as plain data). Until it is on this branch, this module
+ * derives the slots itself from the footprint and the model's height, repeating the numbers of the old
+ * sinaitown.ts buildHouse (the same hashes: which type a house is, how many windows a bay gets); as soon as
+ * render/buildingslots.ts exists its `buildingInfo` / `slotWorld` are used instead (import.meta.glob keeps this
+ * file building while it does not exist), awake flag and lit windows included.
  */
 
 export interface SlotWindow {
+  /** The slots file says a lamp is on behind it tonight (absent: this module decides). */
+  lit?: boolean;
+  /** A TV's flicker (absent: this module decides). */
+  tv?: boolean;
   x: number;
   y: number;
   z: number;
@@ -50,7 +52,11 @@ export interface SlotLamp {
 }
 
 export interface BuildingSlots {
+  /** The building's lights are on tonight (absent: this module decides). */
+  awake?: boolean;
   windows: SlotWindow[];
+  /** Extra small lamps of the shared slots (porch / wall lamps, roof lights, sign boards). */
+  lamps?: (SlotLamp & { lit: boolean })[];
   doors: SlotDoor[];
   /** The mosque's lights (minaret, dome, gate). */
   mosque: SlotLamp[];
@@ -58,18 +64,74 @@ export interface BuildingSlots {
   yardFire: { x: number; y: number; z: number } | null;
 }
 
-const shared = import.meta.glob('../../buildingslots.ts', { eager: true }) as Record<string, { buildingSlots?: (st: Structure, groundY: number) => BuildingSlots | null }>;
-const sharedFn = Object.values(shared)[0]?.buildingSlots;
+/** The part of render/buildingslots.ts used here (structural: the file may not be on this branch yet). */
+interface SharedSlot {
+  kind: 'window' | 'door' | 'shop' | 'balcony' | 'sign' | 'lamp' | 'roof';
+  x: number;
+  y: number;
+  z: number;
+  ry: number;
+  w: number;
+  h: number;
+  floor: number;
+  lit: boolean;
+  flicker: number;
+}
+interface SharedInfo {
+  awake: boolean;
+  slots: SharedSlot[];
+}
+interface SharedModule {
+  buildingInfo?: (m: GameMap, st: Structure) => SharedInfo;
+  slotWorld?: (st: Structure, s: SharedSlot) => { x: number; y: number; z: number; nx: number; nz: number };
+}
+const shared = import.meta.glob('../../buildingslots.ts', { eager: true }) as Record<string, SharedModule>;
+const sharedMod = Object.values(shared)[0];
 
 /** True when the shared slots file is in use (tests / debug). */
-export const usesSharedSlots = !!sharedFn;
+export const usesSharedSlots = !!(sharedMod?.buildingInfo && sharedMod.slotWorld);
 
-export function buildingSlotsFor(st: Structure, gy: number): BuildingSlots {
-  if (sharedFn) {
-    const s = sharedFn(st, gy);
-    if (s) return s;
-  }
+export function buildingSlotsFor(m: GameMap, st: Structure, gy: number): BuildingSlots {
+  if (sharedMod?.buildingInfo && sharedMod.slotWorld) return fromShared(sharedMod.buildingInfo(m, st), sharedMod.slotWorld, st, gy);
   return placeholderSlots(st, gy);
+}
+
+/** The shared file's plan as this module's slots (positions above the ground gy). */
+function fromShared(info: SharedInfo, slotWorld: NonNullable<SharedModule['slotWorld']>, st: Structure, gy: number): BuildingSlots {
+  const out: BuildingSlots = { awake: info.awake, windows: [], doors: [], mosque: [], lamps: [], yardFire: null };
+  const mosque = st.look === 'mosque';
+  for (const s of info.slots) {
+    const w = slotWorld(st, s);
+    const y = gy + w.y;
+    if (s.kind === 'window' || s.kind === 'balcony' || s.kind === 'shop') {
+      // a mosque's lattice windows glow all night; a window faces its normal, a hair out of the wall
+      out.windows.push({ x: w.x + w.nx * 0.006, y, z: w.z + w.nz * 0.006, nx: w.nx, nz: w.nz, w: Math.max(0.05, s.w * 0.92), h: Math.max(0.06, s.h * 0.92), shop: s.kind === 'shop', lit: mosque ? true : s.lit, tv: s.kind === 'window' && s.flicker > 0.9 && !mosque });
+    } else if (s.kind === 'door') {
+      out.doors.push({ x: w.x, y, z: w.z, nx: w.nx, nz: w.nz });
+    } else if (s.kind === 'lamp') {
+      out.lamps!.push({ x: w.x + w.nx * 0.03, y, z: w.z + w.nz * 0.03, size: 0.1, r: 1.0, g: 0.66, b: 0.32, mode: 0, phase: s.flicker, pool: 0.45, kind: 'porch', lit: s.lit });
+    } else if (s.kind === 'roof') {
+      // a roof light: a lit dome / a terrace lamp (the mosque's dome glows pale, the others warm)
+      out.lamps!.push(
+        mosque
+          ? { x: w.x, y, z: w.z, size: 0.16, r: 0.9, g: 0.95, b: 1.0, mode: 0, phase: 0, pool: 0, kind: 'dome', lit: true }
+          : { x: w.x, y, z: w.z, size: 0.07, r: 1.0, g: 0.74, b: 0.4, mode: 4, phase: s.flicker, pool: 0, kind: 'string', lit: s.lit },
+      );
+    } else if (s.kind === 'sign') {
+      // a fictional shop sign board: a small warm glow in front of it
+      out.lamps!.push({ x: w.x + w.nx * 0.05, y, z: w.z + w.nz * 0.05, size: 0.12, r: 1.0, g: 0.62 + 0.3 * s.flicker, b: 0.35 + 0.5 * s.flicker, mode: 4, phase: s.flicker, pool: 0, kind: 'sign', lit: s.lit });
+    }
+  }
+  if (mosque) {
+    // the minaret (1.08, 0, 0.42 in the mosque's frame: 2.08 tiles tall): a green crown light and a warm balcony ring, a gate lamp
+    const cx = st.x + st.w / 2;
+    const cz = st.y + st.h / 2;
+    const th = (st.rot * Math.PI) / 2;
+    const P = (lx: number, ly: number, lz: number) => ({ x: cx + lx * Math.cos(th) + lz * Math.sin(th), y: gy + ly, z: cz - lx * Math.sin(th) + lz * Math.cos(th) });
+    const mq = (lx: number, ly: number, lz: number, size: number, r: number, g: number, b: number, pool: number, kind: string): SlotLamp => ({ ...P(lx, ly, lz), size, r, g, b, mode: 0, phase: 0, pool, kind });
+    out.mosque.push(mq(1.08, 1.98, 0.42, 0.22, 0.3, 1.0, 0.45, 0, 'minaret'), mq(1.08, 1.45, 0.42, 0.13, 1.0, 0.82, 0.5, 0, 'minaret'), mq(-0.42, 0.3, 1.0, 0.1, 1.0, 0.72, 0.38, 1.4, 'gate'));
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ the placeholder

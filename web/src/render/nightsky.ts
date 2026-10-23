@@ -273,15 +273,30 @@ export class NightSkyDriver {
     NSKY.nsK.value.set(vis, dust, time, 0.026);
   }
 
-  /** Per camera (the main view and the water reflection): the direction to the town's gentle lights. */
+  /** More places whose gentle lights glow on the horizon (villages, resorts: fx/desertnight). */
+  places: THREE.Vector2[] = [];
+
+  /** Per camera (the main view and the water reflection): the direction to the nearest town's gentle lights. */
   camera(pos: THREE.Vector3) {
     const t = NSKY.nsTown.value;
     if (!this.town) {
       t.z = 0;
       return;
     }
-    const dx = this.town.x - pos.x;
-    const dz = this.town.y - pos.z;
+    // (the nearest of the lit places: the oasis town and the villages / resorts the desert night lights name)
+    let tx = this.town.x;
+    let tz = this.town.y;
+    let best = Math.hypot(tx - pos.x, tz - pos.z);
+    for (const p of this.places) {
+      const dd = Math.hypot(p.x - pos.x, p.y - pos.z);
+      if (dd < best) {
+        best = dd;
+        tx = p.x;
+        tz = p.y;
+      }
+    }
+    const dx = tx - pos.x;
+    const dz = tz - pos.z;
     const d = Math.hypot(dx, dz);
     // inside the town its lights are all round (a weaker glow), from afar a warm patch over it
     const k = Math.min(1, d / 14) / Math.max(1e-3, d);

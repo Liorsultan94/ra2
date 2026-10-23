@@ -1,8 +1,12 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { DesertLights } from '../src/render/fx/desertnight/lights';
+import { SignBoards } from '../src/render/fx/desertnight/signs';
+import type { FogOfWar } from '../src/render/fog';
 import { createMap } from '../src/sim/maps';
 import { CAPS, houseAwake, isDesertLayout, planTown } from '../src/render/fx/desertnight/places';
 import { placeholderSlots } from '../src/render/fx/desertnight/slots';
-import { planBoats, planOil, planResorts } from '../src/render/fx/desertnight/sea';
+import { gulfHeads, planBoats, planHarbours, planOil, planResorts } from '../src/render/fx/desertnight/sea';
 import { planSigns, RESORT_NAMES } from '../src/render/fx/desertnight/signs';
 import { reflectables } from '../src/render/fx/desertnight';
 import type { SeaNightSpot } from '../src/render/seaside';
@@ -68,6 +72,20 @@ describe('desert night lights (render/fx/desertnight)', () => {
     expect(p.lamps.filter((l) => l.kind === 'street').length).toBe(p.posts.length);
   });
 
+  it('highway markers stand along the wide road outside the villages, under the cap', () => {
+    const p = planTown(desert, 1);
+    expect(p.markers.length).toBeGreaterThan(10);
+    expect(p.markers.length).toBeLessThanOrEqual(CAPS.markers);
+    for (const q of p.markers) expect(p.houses.some((h) => Math.hypot(h.cx - q.x, h.cz - q.z) < 8)).toBe(false);
+  });
+
+  it('planning never touches the map (the sim state is read only)', () => {
+    const m = createMap('desert', 1);
+    const before = JSON.stringify([m.structures, m.tiles.slice(0, 5000), m.roads, m.oils, m.blocked.slice(0, 5000)]);
+    planTown(m, 3);
+    expect(JSON.stringify([m.structures, m.tiles.slice(0, 5000), m.roads, m.oils, m.blocked.slice(0, 5000)])).toBe(before);
+  });
+
   it('the mosque has its minaret, dome and gate lights', () => {
     const p = planTown(desert, 1);
     const kinds = new Set(p.lamps.map((l) => l.kind));
@@ -131,5 +149,55 @@ describe('desert night lights (render/fx/desertnight)', () => {
     expect(refl.length).toBeGreaterThan(8);
     expect(lamps.filter((l) => l.kind === 'palm').length).toBe(1);
     expect(refl.length).toBe(lamps.filter((l) => ['buoy', 'jetty', 'pontoon', 'bar', 'restaurant', 'string'].includes(l.kind)).length + boat.length + 2);
+  });
+
+  it('the gulfs have harbour lights at their heads', () => {
+    const heads = gulfHeads(desert);
+    expect(heads.length).toBeGreaterThanOrEqual(2);
+    // the two gulfs of the Sinai end near (41, 112) and (113, 51)
+    expect(heads.some((h) => Math.hypot(h.x - 41, h.y - 112) < 8)).toBe(true);
+    expect(heads.some((h) => Math.hypot(h.x - 113, h.y - 51) < 8)).toBe(true);
+    const hb = planHarbours(desert, () => 0);
+    expect(hb.lamps.length).toBeGreaterThanOrEqual(8);
+    expect(hb.posts.length).toBe(hb.lamps.length);
+    // red and green mouth lights
+    expect(hb.lamps.some((l) => l.r > 0.9 && l.g < 0.3)).toBe(true);
+    expect(hb.lamps.some((l) => l.g > 0.9 && l.r < 0.3)).toBe(true);
+  });
+
+  it('the light meshes: a handful of draw calls, instance counts from the plan, a ruined house goes dark', () => {
+    const fog = { uniforms: {}, apply: (m: THREE.Material) => m } as unknown as FogOfWar;
+    const plan = planTown(desert, 1);
+    const oil = planOil(desert.oils, () => 0);
+    plan.lamps.push(...oil.lamps);
+    plan.stacks.push(...oil.stacks);
+    const L = new DesertLights(fog, plan, (a) => ((a * 2654435761) % 1000) / 1000);
+    const st = L.stats();
+    expect(st.windows).toBe(plan.windows.length);
+    expect(st.lamps).toBe(plan.lamps.length);
+    expect(st.posts).toBe(plan.posts.length);
+    expect(st.stacks).toBe(oil.stacks.length);
+    // windows, sprites, pools, posts, stacks, markers: six draw calls at most
+    expect(st.draws).toBeLessThanOrEqual(6);
+    const win = L.group.getObjectByName('desert-windows') as THREE.InstancedMesh;
+    const alive = win.geometry.getAttribute('aAlive') as THREE.InstancedBufferAttribute;
+    const house = plan.windows[0].house;
+    const mine = plan.windows.map((w, i) => (w.house === house ? i : -1)).filter((i) => i >= 0);
+    expect(mine.every((i) => alive.getX(i) === 1)).toBe(true);
+    L.setHouseAlive(house, false);
+    expect(mine.every((i) => alive.getX(i) === 0)).toBe(true);
+    expect(plan.windows.every((w, i) => w.house === house || alive.getX(i) === 1)).toBe(true);
+    L.setHouseAlive(house, true);
+    expect(mine.every((i) => alive.getX(i) === 1)).toBe(true);
+    // by day nothing of the night meshes is drawn; at night they are
+    L.update(0, 1, 0);
+    expect(win.visible).toBe(false);
+    L.update(1, 1, 0);
+    expect(win.visible).toBe(true);
+    L.dispose();
+    const spots: SeaNightSpot[] = [{ kind: 'sign', x: 1, y: 0, z: 1, r: 0, yaw: 0, site: 0 }, { kind: 'bar', x: 3, y: 0, z: 3, r: 0, yaw: 0.2, site: 1 }];
+    const boards = new SignBoards(fog, planSigns(spots), { uNight: { value: 0 }, uTime: { value: 0 }, uLate: { value: 0 } });
+    expect(boards.group.getObjectByName('desert-sign-boards')).toBeTruthy();
+    boards.dispose();
   });
 });
