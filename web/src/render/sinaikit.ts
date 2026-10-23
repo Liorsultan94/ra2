@@ -35,6 +35,8 @@ export interface SinaiKit {
   /** Piece geometries by glTF node name ('tank', 'tank_l1', ...): float copies (position, normal, uv), indexed. */
   geo: Map<string, THREE.BufferGeometry>;
   atlas: { albedo: THREE.Texture; normal: THREE.Texture; orm: THREE.Texture };
+  /** The painted shop signs (BD1): a small canvas texture for the atlas's sign strip (null: none, no canvas). */
+  signs: THREE.Texture | null;
   plaster: { albedo: THREE.Texture; normal: THREE.Texture; orm: THREE.Texture };
   /** Download (bytes) and decode time, for the log. */
   bytes: number;
@@ -79,24 +81,23 @@ export const SIGNS: [string, string, string][] = [
 ];
 
 /**
- * The albedo atlas with the shop signs painted into its reserved strip (the bottom 1/8): a board colour, a border,
- * the name in bold capitals. Returns the canvas, or null when there is no canvas (tests).
+ * The shop signs as their own small texture (the sign strip of the atlas is sampled from it by the kit material):
+ * a board colour, a border, the name in bold capitals. null when there is no canvas (tests).
  */
-function paintSigns(bmp: ImageBitmap, signV: number): HTMLCanvasElement | OffscreenCanvas | null {
-  const W = bmp.width;
-  const H = bmp.height;
-  const cv: HTMLCanvasElement | OffscreenCanvas | null = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : typeof document !== 'undefined' ? Object.assign(document.createElement('canvas'), { width: W, height: H }) : null;
-  const ctx = cv?.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null | undefined;
-  if (!cv || !ctx) return null;
-  ctx.drawImage(bmp, 0, 0);
+function paintSigns(width: number): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
   const cols = 4;
   const rows = 2;
-  const y0 = Math.round(signV * H);
+  const W = width;
+  const H = Math.round(W / 8);
+  const cv = Object.assign(document.createElement('canvas'), { width: W, height: H });
+  const ctx = cv.getContext('2d');
+  if (!ctx) return null;
   const cw = W / cols;
-  const ch = (H - y0) / rows;
+  const ch = H / rows;
   SIGNS.forEach(([name, bg, fg], i) => {
     const x = (i % cols) * cw;
-    const y = y0 + Math.floor(i / cols) * ch;
+    const y = Math.floor(i / cols) * ch;
     ctx.fillStyle = bg;
     ctx.fillRect(x, y, cw, ch);
     ctx.strokeStyle = fg;
@@ -116,31 +117,17 @@ function paintSigns(bmp: ImageBitmap, signV: number): HTMLCanvasElement | Offscr
     }
     ctx.fillText(name, x + cw / 2, y + ch * 0.53);
   });
-  return cv;
-}
-
-const _v = new THREE.Vector3();
-
-/** The atlas albedo, with the sign strip painted when the kit has one (otherwise as tex()). */
-async function albedoTex(url: string, signV: number | undefined, counter: { bytes: number }): Promise<THREE.Texture> {
-  if (signV === undefined) return tex(url, true, false, counter);
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const blob = await res.blob();
-  counter.bytes += blob.size;
-  const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-  const cv = paintSigns(bmp, signV);
-  const t = cv ? new THREE.Texture(cv as HTMLCanvasElement) : new THREE.Texture(bmp);
-  if (cv) bmp.close();
+  const t = new THREE.CanvasTexture(cv);
   t.flipY = false;
   t.colorSpace = THREE.SRGBColorSpace;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.magFilter = THREE.LinearFilter;
   t.anisotropy = 4;
-  t.needsUpdate = true;
   return t;
 }
+
+const _v = new THREE.Vector3();
 
 /** Float copy of a (quantised) glTF geometry with its node transform baked in. */
 function dequantize(src: THREE.BufferGeometry, world: THREE.Matrix4): THREE.BufferGeometry {
@@ -186,7 +173,7 @@ export function loadSinaiKit(quality: 'low' | 'medium' | 'high'): Promise<SinaiK
       counter.bytes += buf.byteLength;
       const [gltf, albedo, normal, orm, palb, pnor, porm] = await Promise.all([
         loader.parseAsync(buf, dir),
-        albedoTex(`${dir}sinai-atlas-albedo${a}.webp`, man.signV, counter),
+        tex(`${dir}sinai-atlas-albedo${a}.webp`, true, false, counter),
         tex(`${dir}sinai-atlas-normal${a}.webp`, false, false, counter),
         tex(`${dir}sinai-atlas-orm${a}.webp`, false, false, counter),
         tex(`${dir}sinai-plaster-albedo${p}.webp`, true, true, counter),
@@ -199,7 +186,7 @@ export function loadSinaiKit(quality: 'low' | 'medium' | 'high'): Promise<SinaiK
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) geo.set(mesh.name, dequantize(mesh.geometry, mesh.matrixWorld));
       });
-      ready = { man, geo, atlas: { albedo, normal, orm }, plaster: { albedo: palb, normal: pnor, orm: porm }, bytes: counter.bytes };
+      ready = { man, geo, atlas: { albedo, normal, orm }, signs: man.signV !== undefined ? paintSigns(big ? 1024 : 512) : null, plaster: { albedo: palb, normal: pnor, orm: porm }, bytes: counter.bytes };
       console.info(`[sinai] building kit: ${geo.size} meshes, ${Object.keys(man.cards).length} cards, ${(counter.bytes / 1024).toFixed(0)} KB in ${Math.round(performance.now() - t0)} ms`);
       return ready;
     } catch (e) {
@@ -372,21 +359,27 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): T
     envMapIntensity: 0.7,
   });
   const plaster = { value: kit.plaster.albedo };
+  const signsTex = { value: kit.signs ?? kit.plaster.albedo };
+  const signV = { value: kit.signs ? (kit.man.signV ?? 2) : 2 };
   const tile = { value: 1 / kit.man.plasterTile };
   const skClean = { value: clean ? 1 : 0 };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.skClean = skClean;
     sh.uniforms.skPlaster = plaster;
+    sh.uniforms.skSigns = signsTex;
+    sh.uniforms.skSignV = signV;
     sh.uniforms.skTile = tile;
     sh.uniforms.lmNight = LM_NIGHT;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec3 aTint;\nattribute vec3 aAccent;\nattribute float aGlow;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;')
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvSkTint = aTint * 2.0;\nvSkAcc = aAccent * 2.0;\nvSkGlow = aGlow;\nvSkN = normalize( mat3( modelMatrix ) * objectNormal );');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>\nuniform sampler2D skPlaster;\nuniform float skTile;\nuniform float lmNight;\nuniform float skClean;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;\n${CLEAN_GLSL}`)
+      .replace('#include <common>', `#include <common>\nuniform sampler2D skPlaster;\nuniform sampler2D skSigns;\nuniform float skSignV;\nuniform float skTile;\nuniform float lmNight;\nuniform float skClean;\nvarying vec3 vSkTint;\nvarying vec3 vSkAcc;\nvarying float vSkGlow;\nvarying vec3 vSkN;\n${CLEAN_GLSL}`)
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
+        // BD1: the sign strip of the atlas comes from the painted signs texture
+        if ( vMapUv.y >= skSignV ) diffuseColor.rgb = vColor.rgb * texture2D( skSigns, vec2( vMapUv.x, ( vMapUv.y - skSignV ) / ( 1.0 - skSignV ) ) ).rgb;
         vec4 skOrm = texture2D( aoMap, vAoMapUv );
         {
           float cls = skOrm.b;
@@ -408,7 +401,7 @@ export function sinaiKitMaterial(fog: FogOfWar, kit: SinaiKit, clean = false): T
       );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'fog2-sinai-kit';
+  mat.customProgramCacheKey = () => 'fog2-sinai-kit-bd1';
   cache.set(fog, mat);
   return mat;
 }
