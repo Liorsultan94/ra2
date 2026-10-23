@@ -43,6 +43,7 @@ os.makedirs(OUT, exist_ok=True)
 ARGS = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 STAGE = ARGS[0] if ARGS else 'all'
 ATLAS = 1024
+SIGN_H = 128  # BD1: the bottom strip of the atlas is left for the shop signs the game paints at load (fictional names)
 PLASTER = 512
 PLASTER_TILE = 1.25  # tiles per plaster texture repeat (the game's world-space mapping uses the same)
 
@@ -188,6 +189,11 @@ MATS = {
     'tile_g': (0x2f7a68, 0.4, 0, 0),
     'aluminium': (0xd6d8d8, 0.4, 0, 0),
     'thatch': (0xa98454, 0.95, 0, 0),
+    'brick': (0xa65a3a, 0.92, 0, 0),
+    'tile_t': (0xb9603a, 0.7, 0, 0),
+    'concrete': (0x9d9b94, 0.95, 0, 0),
+    'earth': (0x9a7a56, 0.97, 0, 0),
+    'rust': (0x7a4a34, 0.8, 0, 0),
 }
 
 
@@ -467,9 +473,14 @@ def card_window(name, w, h, ow, oh, oz, arch=False, kind='plain', depth=0.032):
     glass_pane(ow - 0.01, oh - 0.01, oz + 0.005, arch, fy + 0.004)
     rect_h = oh - (ow / 2 if arch else 0)
     # glazing bars: a mullion and a transom
-    if kind in ('plain', 'shutter', 'grille', 'hotel'):
+    if kind in ('plain', 'shutter', 'grille', 'hotel', 'wide'):
         box(0.006, 0.008, rect_h - 0.01, (0, fy - 0.001, oz + rect_h / 2), 'frame')
+    if kind in ('plain', 'shutter', 'grille', 'hotel'):
         box(ow - 0.01, 0.008, 0.006, (0, fy - 0.001, oz + rect_h * 0.68), 'frame')
+    if kind == 'wide':
+        # a sliding aluminium window: a second mullion, a safety rail across the lower third
+        box(0.006, 0.008, rect_h - 0.01, (ow / 4, fy - 0.001, oz + rect_h / 2), 'frame')
+        box(ow - 0.01, 0.006, 0.004, (0, fy + 0.002, oz + rect_h * 0.3), 'iron')
     sill(ow, oz)
     # lintel band (a slightly proud plaster moulding)
     if not arch:
@@ -519,6 +530,20 @@ def card_door(name, w, h, ow, oh, arch=False, kind='panel'):
     rect_h = oh - (ow / 2 if arch else 0)
     leaves = 2 if kind in ('double', 'gate') else 1
     lw = (ow - 0.016) / leaves
+    if kind == 'plank':
+        # a plank door (mud-brick houses): vertical boards, two iron strap hinges, a ring pull, a timber lintel
+        n = 6
+        for i in range(n):
+            x = -ow / 2 + 0.008 + (ow - 0.016) * (i + 0.5) / n
+            box((ow - 0.016) / n - 0.002, 0.012, rect_h - 0.006 - (i % 2) * 0.004, (x, fy + 0.006, oz + rect_h / 2 - (i % 2) * 0.002), 'paint', bv=0.0012)
+        for zz in (0.22, 0.78):
+            box(ow - 0.02, 0.005, 0.014, (0, fy - 0.001, oz + rect_h * zz), 'iron', bv=0.001)
+            for sx in (-1, 1):
+                sphere(0.0035, (sx * (ow / 2 - 0.016), fy - 0.004, oz + rect_h * zz), 'iron', seg=8, rings=5)
+        torus(0.009, 0.0016, (ow * 0.2, fy - 0.004, oz + rect_h * 0.48), 'iron', seg=14, cseg=4, rot=(math.pi / 2, 0, 0))
+        box(ow + 0.05, 0.03, 0.022, (0, -0.004, oz + oh + 0.012), 'wood', bv=0.002)
+        box(ow + 0.05, 0.03, 0.012, (0, -0.01, oz - 0.006), 'stone', bv=0.002)
+        return
     for i in range(leaves):
         x = -ow / 2 + 0.008 + lw * (i + 0.5)
         box(lw - 0.002, 0.012, rect_h - 0.006, (x, fy + 0.006, oz + rect_h / 2), 'paint', bv=0.001)
@@ -596,6 +621,54 @@ def card_arch_open(name, w, h, depth=0.12):
         box(0.03, 0.006, 0.01, (s * ow / 2, -0.003, oz + oh - ow / 2 - 0.005), 'plaster', bv=0.002)
 
 
+def card_round(name, w):
+    """A round window (oculus): a circular opening, a stone ring, a frame, glass and an iron spoke grille."""
+    card(name, w, w)
+    r = w * 0.32
+    wall = box(w, WALL_D, w, (0, WALL_D / 2, 0), 'plaster')
+    cut(wall, cyl(r, r, WALL_D + 0.04, (0, -0.02, 0), 'plaster', seg=32, rot=(-math.pi / 2, 0, 0), hi=False))
+    fy = 0.03
+    torus(r - 0.004, 0.0055, (0, fy, 0), 'frame', seg=32, cseg=6, rot=(math.pi / 2, 0, 0))
+    cyl(r - 0.006, r - 0.006, 0.004, (0, fy + 0.004, 0), 'glass', seg=32, rot=(-math.pi / 2, 0, 0))
+    torus(r + 0.007, 0.0065, (0, -0.002, 0), 'stone', seg=32, cseg=6, rot=(math.pi / 2, 0, 0))
+    for k in range(4):
+        box(2 * (r - 0.008), 0.004, 0.0035, (0, fy - 0.006, 0), 'iron', rot=(0, k * math.pi / 4, 0))
+    torus(r * 0.5, 0.0022, (0, fy - 0.006, 0), 'iron', seg=20, cseg=4, rot=(math.pi / 2, 0, 0))
+
+
+def shifted(dx, f):
+    """Run f() (it builds high poly parts) and move everything it made by dx along x."""
+    n = len(HIGHS)
+    f()
+    for o in HIGHS[n:]:
+        o.location.x += dx
+
+
+def card_bifora(name, w, h):
+    """A coupled arched window: two round-headed openings on a stone colonnette, a moulded arch band over both."""
+    card(name, w, h)
+    ow, oh, oz = 0.092, 0.2, -0.105
+    dxs = (-0.058, 0.058)
+    wall = box(w, WALL_D, h, (0, WALL_D / 2, 0), 'plaster')
+    for dx in dxs:
+        for c in opening_cutters(ow, oh, oz, True):
+            c.location.x += dx
+            cut(wall, c)
+    fy = 0.03
+    for dx in dxs:
+        shifted(dx, lambda: (frame_ring(ow, oh, oz, True, fy, 0.01, 0.012, 'frame'), glass_pane(ow - 0.01, oh - 0.01, oz + 0.005, True, fy + 0.004), box(0.005, 0.008, oh - ow / 2 - 0.01, (0, fy - 0.001, oz + (oh - ow / 2) / 2), 'frame')))
+    # the colonnette between the openings: shaft, capital, base
+    box(0.012, 0.03, oh - ow / 2 + 0.01, (0, 0.0, oz + (oh - ow / 2) / 2), 'stone', bv=0.002)
+    box(0.026, 0.034, 0.008, (0, -0.002, oz + oh - ow / 2 + 0.004), 'stone', bv=0.002)
+    box(0.024, 0.032, 0.008, (0, -0.002, oz + 0.004), 'stone', bv=0.002)
+    sill(0.25, oz)
+    # the moulding over both arches
+    for dx in dxs:
+        pts = outline(ow + 0.024, oh + 0.012, oz, True)
+        for a, b in zip(pts[1:-2], pts[2:-1]):
+            bar((a[0] + dx, a[1]), (b[0] + dx, b[1]), -0.003, 0.011, 0.006, 'plaster')
+
+
 def card_vent(name, w):
     card(name, w, w)
     ow = w * 0.6
@@ -620,6 +693,13 @@ def build_cards():
     card_door('gate', 0.32, 0.26, 0.27, 0.235, kind='gate')
     card_shop('shop', 0.5, 0.3)
     card_arch_open('arch', 0.3, 0.3)
+    # BD1: more window and door layouts for the town
+    card_window('win_small', 0.12, 0.16, 0.075, 0.1, -0.05, kind='single', depth=0.03)
+    card_window('win_wide', 0.3, 0.2, 0.23, 0.12, -0.06, kind='wide', depth=0.03)
+    card_round('win_round', 0.14)
+    card_bifora('win_bifora', 0.27, 0.3)
+    card_window('door_balc', 0.3, 0.38, 0.13, 0.31, -0.18, kind='shutter')
+    card_door('door_plank', 0.2, 0.32, 0.14, 0.27, kind='plank')
 
 
 # ====================================================================== kit: 3D pieces
@@ -1010,7 +1090,107 @@ def p_kiosk():
     lowpoly('kiosk', 1, [lo_box(W, D, H, (0, 0, H / 2)), lo_box(W, 0.14, 0.004, (0, -D / 2 - 0.065, 0.3), rot=(math.radians(18), 0, 0))])
 
 
-SWATCHES = ['frame', 'wood', 'wood_lt', 'metal', 'steel', 'iron', 'stone', 'glass', 'paint', 'plaster', 'dark', 'fabric', 'fabric_acc', 'aluminium', 'thatch', 'gold']
+SWATCHES = ['frame', 'wood', 'wood_lt', 'metal', 'steel', 'iron', 'stone', 'glass', 'paint', 'plaster', 'dark', 'fabric', 'fabric_acc', 'aluminium', 'thatch', 'gold', 'brick', 'tile_t', 'concrete', 'earth', 'rust']
+
+
+def p_viga():
+    piece('viga')
+    # the ends of the roof beams (vigas) poking out of a mud-brick wall under the parapet: round logs of uneven
+    # length, a pale cut end with annual rings; the wall plane is y = 0, the beams stand out towards -y
+    n = 5
+    for i in range(n):
+        x = (i - (n - 1) / 2) * 0.07
+        ln = 0.05 + ((i * 37) % 5) * 0.006
+        z = ((i * 53) % 3) * 0.003 - 0.003
+        cyl(0.0125, 0.0125, ln + 0.02, (x, 0.02, z), 'wood', seg=12, rot=(math.pi / 2, 0, 0), bv=0.0012)
+        cyl(0.0105, 0.0105, 0.002, (x, -ln + 0.0005, z), 'wood_lt', seg=12, rot=(math.pi / 2, 0, 0))
+        torus(0.006, 0.0007, (x, -ln - 0.0003, z), 'wood', seg=12, cseg=4, rot=(math.pi / 2, 0, 0))
+    lowpoly('viga', 0, [cyl(0.0125, 0.0125, 0.06 + ((i * 37) % 5) * 0.006, ((i - 2) * 0.07, 0.02, 0), 'wood', seg=6, rot=(math.pi / 2, 0, 0), hi=False) for i in range(n)])
+
+
+def p_pipe():
+    piece('pipe')
+    # a rainwater down pipe on a wall: hopper head, brackets, a bend and a spout at the foot (0.5 tall, the game stretches it)
+    H = 0.5
+    y = -0.012
+    cyl(0.0065, 0.0065, H - 0.04, (0, y, 0.03), 'metal', seg=12)
+    for z in (0.1, 0.25, 0.4):
+        torus(0.0075, 0.0018, (0, y, z), 'steel', seg=12, cseg=4)
+        box(0.004, 0.012, 0.007, (0, y / 2, z), 'steel')
+    cyl(0.017, 0.007, 0.03, (0, y, H - 0.03), 'metal', seg=12, bv=0.0015)
+    box(0.034, 0.003, 0.004, (0, y, H), 'steel')
+    cyl(0.0065, 0.0065, 0.034, (0, y, 0.03), 'metal', seg=12, rot=(math.pi / 2, 0, 0))
+    lowpoly('pipe', 0, [cyl(0.0065, 0.0065, H - 0.04, (0, y, 0.03), 'metal', seg=6, hi=False), cyl(0.017, 0.007, 0.03, (0, y, H - 0.03), 'metal', seg=6, hi=False), cyl(0.0065, 0.0065, 0.034, (0, y, 0.03), 'metal', seg=6, rot=(math.pi / 2, 0, 0), hi=False)])
+
+
+def p_bay():
+    piece('bay')
+    # a timber oriel (mashrabiya) window on corbels: lattice front over glass, slatted sides, a flat cap; faces -y,
+    # its back on the wall plane y = 0, origin at the bottom centre
+    W, D, H = 0.24, 0.1, 0.3
+    wd = 'wood'
+    for sx in (-1, 1):
+        box(0.014, 0.014, H - 0.03, (sx * (W / 2 - 0.007), -D + 0.007, 0.03 + (H - 0.03) / 2), wd, bv=0.002)
+        box(0.014, 0.014, H - 0.03, (sx * (W / 2 - 0.007), -0.007, 0.03 + (H - 0.03) / 2), wd, bv=0.002)
+    box(W, D, 0.012, (0, -D / 2, 0.036), wd, bv=0.002)
+    box(W, 0.014, 0.014, (0, -D + 0.007, H - 0.008), wd, bv=0.002)
+    box(0.012, D, 0.014, (-W / 2 + 0.006, -D / 2, H - 0.008), wd, bv=0.002)
+    box(0.012, D, 0.014, (W / 2 - 0.006, -D / 2, H - 0.008), wd, bv=0.002)
+    box(W - 0.028, 0.004, H - 0.07, (0, -D + 0.012, 0.045 + (H - 0.07) / 2), 'glass')
+    step = 0.018
+    zlo, zhi = 0.045, H - 0.025
+    xlo, xhi = -W / 2 + 0.014, W / 2 - 0.014
+
+    def lattice_bar(x0, z0, slope):
+        """A diagonal bar from (x0, z0) across the panel with the given slope, clipped to the panel (Liang-Barsky)."""
+        dx = xhi - xlo
+        dz = slope * dx
+        t0, t1 = 0.0, 1.0
+        for p_, q_ in ((-dx, x0 - xlo), (dx, xhi - x0), (-dz, z0 - zlo), (dz, zhi - z0)):
+            if abs(p_) < 1e-9:
+                if q_ < 0:
+                    return
+                continue
+            r_ = q_ / p_
+            if p_ < 0:
+                t0 = max(t0, r_)
+            else:
+                t1 = min(t1, r_)
+        if t1 - t0 < 0.04:
+            return
+        bar((x0 + dx * t0, z0 + dz * t0), (x0 + dx * t1, z0 + dz * t1), -D + 0.004, 0.003, 0.004, 'wood_lt')
+
+    for i in range(-10, 11):
+        c = (zlo + zhi) / 2 + i * step
+        lattice_bar(xlo, c - W / 2, 1.0)
+        lattice_bar(xlo, c + W / 2, -1.0)
+    for sx in (-1, 1):
+        for k in range(5):
+            box(0.004, D - 0.02, 0.008, (sx * (W / 2 - 0.004), -D / 2, 0.06 + k * 0.045), wd, bv=0.001)
+    box(W + 0.03, D + 0.03, 0.012, (0, -D / 2, H + 0.002), 'paint', bv=0.002)
+    box(W - 0.04, D - 0.04, 0.016, (0, -D / 2, H + 0.014), 'paint', bv=0.003)
+    # the corbels under it
+    for sx in (-1, 1):
+        box(0.016, D * 0.8, 0.012, (sx * (W / 2 - 0.02), -D * 0.4, 0.024), 'stone', bv=0.002)
+        box(0.016, D * 0.55, 0.012, (sx * (W / 2 - 0.02), -D * 0.275, 0.012), 'stone', bv=0.002)
+    lowpoly('bay', 0, [lo_box(W, D, H - 0.04, (0, -D / 2, 0.04 + (H - 0.04) / 2)), lo_box(W + 0.03, D + 0.03, 0.026, (0, -D / 2, H + 0.008)), lo_box(0.016, D * 0.8, 0.02, (-W / 2 + 0.02, -D * 0.4, 0.016)), lo_box(0.016, D * 0.8, 0.02, (W / 2 - 0.02, -D * 0.4, 0.016))])
+    lowpoly('bay', 1, [lo_box(W, D, H, (0, -D / 2, H / 2))])
+
+
+def p_pots():
+    piece('pots')
+    # three clay jars of different size and a woven basket: door-side clutter (0.2 wide)
+    def jar(x, y, r, h, m='tile_t'):
+        sphere(r, (x, y, r * 0.85), m, seg=16, rings=10, scale=(1, 1, 0.95))
+        cyl(r * 0.55, r * 0.5, h * 0.3, (x, y, r * 1.6), m, seg=14)
+        torus(r * 0.55, r * 0.09, (x, y, r * 1.6 + h * 0.3), m, seg=14, cseg=5)
+        cyl(r * 0.5, r * 0.5, r * 0.2, (x, y, r * 1.6 + h * 0.3 - 0.002), 'earth', seg=12)
+    jar(-0.05, 0.0, 0.034, 0.1)
+    jar(0.012, 0.018, 0.026, 0.08)
+    jar(0.06, -0.008, 0.02, 0.06, 'earth')
+    cyl(0.03, 0.036, 0.04, (0.015, -0.05, 0), 'thatch', seg=14)
+    sphere(0.028, (0.015, -0.05, 0.04), 'earth', seg=12, rings=6, scale=(1, 1, 0.5), hemi=True)
+    lowpoly('pots', 0, [sphere(0.034, (-0.05, 0.0, 0.029), 'tile_t', seg=8, rings=5, hi=False), sphere(0.026, (0.012, 0.018, 0.022), 'tile_t', seg=8, rings=5, hi=False), sphere(0.02, (0.06, -0.008, 0.017), 'earth', seg=8, rings=5, hi=False), lo_cyl(0.03, 0.036, 0.04, (0.015, -0.05, 0), 8)])
 
 
 def build_swatches():
@@ -1020,7 +1200,7 @@ def build_swatches():
 
 
 def build_pieces():
-    for f in (p_ac, p_tank, p_dish, p_solar, p_rail, p_awning, p_dome, p_mosque_dome, p_minaret, p_merlon, p_table, p_kiosk):
+    for f in (p_ac, p_tank, p_dish, p_solar, p_rail, p_awning, p_dome, p_mosque_dome, p_minaret, p_merlon, p_table, p_kiosk, p_viga, p_pipe, p_bay, p_pots):
         f()
 
 
@@ -1064,7 +1244,7 @@ def layout_atlas():
                 x = 0
                 y += row + PAD
                 row = 0
-            if y + h + PAD > ATLAS:
+            if y + h + PAD > ATLAS - SIGN_H:
                 ok = False
                 break
             rects[n] = (x + PAD // 2, y + PAD // 2, w, h)
@@ -1188,6 +1368,10 @@ def compose(px, rects):
     ao_s = 0.12 + 0.88 * ao_s
     alb_ao = alb * (0.45 + 0.55 * ao_s[..., None])
     orm = np.stack([ao_s, msk[..., 0], msk[..., 1], msk[..., 2]], -1)
+    # the sign strip (painted by the game): a plain pale board, flat normal, full AO, matt, own colour
+    nrm[:SIGN_H, :] = np.array([0.5, 0.5, 1.0])
+    alb_ao[:SIGN_H, :] = 0.6
+    orm[:SIGN_H, :] = np.array([1.0, 0.85, 0.0, 0.0])
     C.save_rgb(os.path.join(OUT, 'atlas-albedo.png'), C.lin2srgb(alb_ao), ATLAS)
     C.save_rgb(os.path.join(OUT, 'atlas-normal.png'), nrm, ATLAS)
     C.save_rgb(os.path.join(OUT, 'atlas-orm.png'), orm[..., :3], ATLAS)
@@ -1205,7 +1389,7 @@ def export(rects):
     C.select(lows)
     bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, 'sinai-kit-raw.glb'), export_format='GLB', use_selection=True, export_materials='NONE', export_vertex_color='NONE', export_normals=True,
                               export_texcoords=True, export_apply=True, export_yup=True)
-    man = {'atlas': ATLAS, 'plasterTile': PLASTER_TILE, 'cards': {}, 'swatches': {}, 'pieces': {}}
+    man = {'atlas': ATLAS, 'plasterTile': PLASTER_TILE, 'signV': round((ATLAS - SIGN_H) / ATLAS, 5), 'cards': {}, 'swatches': {}, 'pieces': {}}
     for n, c in CARDS.items():
         x, y, w, h = rects[n]
         r = [round(x / ATLAS, 5), round(y / ATLAS, 5), round((x + w) / ATLAS, 5), round((y + h) / ATLAS, 5)]  # glTF uv: v down from the top
