@@ -2952,7 +2952,23 @@ export class GameRenderer {
   }
 
   visualHeight(id: number): number {
+    // the desert town's houses (sinaitown.ts): the height of the house that is drawn (1, 2 or 3 storeys), not one number
+    const hh = this.townHouseHeight(id);
+    if (hh !== null) return hh;
     return this.visuals.get(id)?.model.height ?? 0.5;
+  }
+
+  private houseByPos: Map<number, number> | null = null;
+
+  /** Visual height of the town house standing on the footprint of building entity `id`, or null (not one of them). */
+  private townHouseHeight(id: number): number | null {
+    const e = this.world.get(id);
+    if (!e || e.kind !== 'building') return null;
+    if (!this.houseByPos) {
+      this.houseByPos = new Map();
+      for (const h of this.terrain.scenery.houses) if (h.info) this.houseByPos.set(h.st.y * 4096 + h.st.x, h.info.height + 0.06);
+    }
+    return this.houseByPos.get(e.ty * 4096 + e.tx) ?? null;
   }
 
   isShown(id: number) {

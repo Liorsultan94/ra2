@@ -10,6 +10,7 @@ import { Kit, datePalm } from './models/landmarks';
 import type { NightLights } from './night';
 import { ReefLife, buildWreck, type ReefArea } from './reeflife';
 import { RIVER } from './water';
+import { FLOOR } from './buildingplan';
 import { SinaiBuilder, scaleM, sinaiKit, sinaiKitMaterial, sinaiPlasterMaterial, type KitOpts, type SinaiKit } from './sinaikit';
 import { desertVeg, vegInstancedMesh, type DesertVeg, type VegKind } from './desertveg';
 import { buildSpray, type SprayEmitter } from './relieffx';
@@ -446,7 +447,7 @@ export class Seaside {
   private hotelBlock(k: Kit, F: Frame, u: number, v: number, len: number, deckY: number, i: number) {
     const b = F.b;
     const h = (j: number) => hash2(i * 13 + j, b * 7 + 3, 4411);
-    const S = 0.25; // storey height
+    const S = FLOOR; // storey height (BD1: a real storey, about 3 m, like the town's houses; it was 0.25 tile, shorter than a soldier)
     const tall = 3 + Math.floor(h(1) * 1.99);
     const tiers = [tall, Math.max(2, tall - 1 - Math.floor(h(2) * 1.5)), Math.max(1, tall - 2 - Math.floor(h(3) * 1.5))];
     const depths = [0.78 + h(6) * 0.15, 0.62, 0.55];
@@ -567,7 +568,7 @@ export class Seaside {
   private hotelBlockKit(sb: SinaiBuilder, k: Kit, F: Frame, u: number, v: number, len: number, deckY: number, i: number) {
     const b = F.b;
     const h = (j: number) => hash2(i * 13 + j, b * 7 + 3, 4411);
-    const S = 0.25; // storey height
+    const S = FLOOR; // storey height (BD1: a real storey, about 3 m, like the town's houses; it was 0.25 tile, shorter than a soldier)
     const tall = 3 + Math.floor(h(1) * 1.99);
     const tiers = [tall, Math.max(2, tall - 1 - Math.floor(h(2) * 1.5)), Math.max(1, tall - 2 - Math.floor(h(3) * 1.5))];
     const depths = [0.78 + h(6) * 0.15, 0.62, 0.55];
@@ -606,32 +607,32 @@ export class Seaside {
           // the ground floor on the deck: an arcade of round arches
           const [cw, chh] = sb.cardSize('arch');
           for (let a = 0; a < bays; a++) {
-            const sx = 0.2 / (cw * 0.72);
-            const sy = 0.23 / (chh * 0.86);
+            const sx = 0.26 / (cw * 0.72);
+            const sy = 0.38 / (chh * 0.86);
             sb.card('arch', T(bx(a), (chh * sy) / 2, front - 0.004, Math.PI), wo, sx, sy);
           }
         } else if (f > 0 || t < 2) {
           // the sea front: balconies (slab, glass railing on an aluminium frame), a shade over some
           if (f > 0) {
             box(T(xo, y, front - 0.055), lenT - 0.04, 0.022, 0.11, frameC, true);
-            sb.swatch(T(xo, y + 0.044, front - 0.106), lenT - 0.05, 0.06, 0.006, 'paint', { accent: C(0x9ec4cc) });
-            sb.swatch(T(xo, y + 0.078, front - 0.106), lenT - 0.04, 0.01, 0.014, 'aluminium', {});
+            sb.swatch(T(xo, y + 0.066, front - 0.106), lenT - 0.05, 0.1, 0.006, 'paint', { accent: C(0x9ec4cc) });
+            sb.swatch(T(xo, y + 0.12, front - 0.106), lenT - 0.04, 0.012, 0.016, 'aluminium', {});
             for (let a = 0; a <= bays; a++) box(T(xo - lenT / 2 + (lenT * a) / bays + (a === 0 ? 0.01 : a === bays ? -0.01 : 0), y + S * 0.42, front - 0.055), 0.014, S * 0.85, 0.11, wallsC);
           }
           for (let a = 0; a < bays; a++) {
             const x = bx(a);
-            sb.card('door_hotel', T(x, y + 0.122, front - 0.003, Math.PI), lit(a + f * 7 + t * 31), 0.85, 0.85);
-            if (f > 0 && h(30 + a + f * 7 + t * 31) < 0.22) sb.piece('awning', T(x, y + 0.235, front - 0.004, Math.PI).multiply(scaleM(0.22 / 0.6, 0.8, 0.7)), { accent });
+            sb.card('door_hotel', T(x, y + 0.2, front - 0.003, Math.PI), lit(a + f * 7 + t * 31), 1.15, 1.3);
+            if (f > 0 && h(30 + a + f * 7 + t * 31) < 0.22) sb.piece('awning', T(x, y + 0.4, front - 0.004, Math.PI).multiply(scaleM(0.28 / 0.6, 0.8, 0.7)), { accent });
           }
         }
         // the back (inland: only the top tier's) and the ends: windows, shutters on some
         if (t === 0) {
-          for (let a = 0; a < bays; a++) sb.card(h(60 + a + f * 5) < 0.55 ? 'win_shut' : 'win_hotel', T(bx(a), y + 0.12, zc + d / 2 + 0.003), lit(100 + a + f * 5), 0.72, 0.72);
+          for (let a = 0; a < bays; a++) sb.card(h(60 + a + f * 5) < 0.55 ? 'win_shut' : 'win_hotel', T(bx(a), y + 0.26, zc + d / 2 + 0.003), lit(100 + a + f * 5), 1.0, 1.0);
           if (f === 0 && h(70) < 0.7) sb.piece('ac', T(xo + lenT * 0.3, 0.05, zc + d / 2 + 0.03));
         }
         for (const sx of [-1, 1]) {
           const cols = Math.max(1, Math.round(d / 0.36));
-          for (let a = 0; a < cols; a++) sb.card('win_hotel', T(xo + sx * (lenT / 2 + 0.003), y + 0.12, zc - d / 2 + (d * (a + 0.5)) / cols, (sx * Math.PI) / 2), lit(200 + a + f * 3 + (sx > 0 ? 50 : 0)), 0.72, 0.72);
+          for (let a = 0; a < cols; a++) sb.card('win_hotel', T(xo + sx * (lenT / 2 + 0.003), y + 0.26, zc - d / 2 + (d * (a + 0.5)) / cols, (sx * Math.PI) / 2), lit(200 + a + f * 3 + (sx > 0 ? 50 : 0)), 1.0, 1.0);
         }
       }
       // roofs: terraces with pergolas or loungers on the lower tiers; the top: a dome, a round tower or plant
@@ -656,7 +657,7 @@ export class Seaside {
           // a round stair tower at one end, taller than the block, with a little cupola
           const ex = xo + (h(46) < 0.5 ? -1 : 1) * (lenT / 2 - 0.05);
           sb.plaster(new THREE.CylinderGeometry(0.24, 0.24, hgt + S, 20).translate(0, (hgt + S) / 2, 0), T(ex, 0, zc), wallsC, gy);
-          for (let f = 1; f <= n; f++) sb.card('win_hotel', T(ex, f * S - 0.1, zc - 0.243, Math.PI), lit(300 + f), 0.6, 0.75);
+          for (let f = 1; f <= n; f++) sb.card('win_hotel', T(ex, f * S - 0.2, zc - 0.243, Math.PI), lit(300 + f), 0.85, 1.05);
           sb.plaster(new THREE.CylinderGeometry(0.26, 0.26, 0.03, 20).translate(0, 0.015, 0), T(ex, hgt + S, zc), frameC, gy);
           sb.piece('dome', T(ex, hgt + S + 0.03, zc).multiply(scaleM(0.16 / 0.25)), { tint: accent.clone().multiplyScalar(1.4) });
         } else {

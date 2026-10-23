@@ -69,6 +69,8 @@ export interface HouseHandle {
   ranges: { mesh: THREE.Mesh; start: number; end: number }[];
   /** Damage stage (envdamage.ts): 0 / undefined intact, 1 damaged, 2 collapsed (the chimney stops smoking). */
   stage?: number;
+  /** The desert town's building variant of this house (sinaitown.ts, buildingplan.ts): for the debug views and the tests. */
+  info?: { variant: string; storeys: number; height: number };
 }
 
 /** The top of a house chimney (world), for the chimney smoke (fx/chimneys.ts). */
