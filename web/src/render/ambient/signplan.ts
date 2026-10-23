@@ -1,4 +1,4 @@
-import type { GameMap } from '../../sim/map';
+import { frameUV, seaDist, type GameMap } from '../../sim/map';
 import { sinaiPlaces } from '../../sim/maps';
 import { hash2 } from '../../sim/rng';
 import { isSinai } from './sinairoads';
@@ -136,8 +136,18 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
   const places = sinaiPlaces();
   const centres = [...places.villages, ...places.northVillages, places.sharm, places.nuweiba, ...places.baseVillages];
 
+  const sea = m.deco?.sea;
   const free = (x: number, y: number, r: number) => {
     if (nearForbidden(m, x, y, r * 0.6)) return false;
+    // not on the beaches (the resorts' sunbeds, the people): inland of the sea's busy strip, as the trees are
+    if (sea && seaDist(sea, x, y) > -4.6) return false;
+    // nor in a resort or on its beach front (the sunbeds, the terrace, the bars)
+    if (sea)
+      for (const st of sea.sites) {
+        const f = frameUV(st, x, y);
+        const r = st.resort;
+        if (f.u > Math.min(r.u0, st.beach[0]) - 3 && f.u < Math.max(r.u1, st.beach[1]) + 3 && f.v > r.v0 - 3 && f.v < 5) return false;
+      }
     for (let k = 0; k < 9; k++) {
       const a = (k / 8) * Math.PI * 2;
       const rr = k === 8 ? 0 : r;
@@ -158,7 +168,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
     for (const s of m.structures) if (Math.hypot(s.x + s.w / 2 - x, s.y + s.h / 2 - y) < r) n++;
     return n;
   };
-  /** A spot on the right of a car travelling `dir` along `L` at arc `s`, `off` beyond the edge, the face turned to the oncoming traffic. */
+  /** A spot on the right of a car travelling `dir` along `L` at arc `s`, `off` beyond the edge, the face turned mostly to the road and a little to the oncoming traffic (so it reads from the road and from above). */
   const spot = (L: NetLine, li: number, s: number, dir: number, off: number): Spot => {
     const p = pointAt(L, s);
     const tx = p.tx * dir;
@@ -170,7 +180,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
     const x = p.x + rx * d;
     const y = p.y + ry * d;
     // towards the road and back against the traffic
-    return { x, y, nx: -rx * 0.55 - tx * 0.83, ny: -ry * 0.55 - ty * 0.83, line: li, arc: s };
+    return { x, y, nx: -rx * 0.86 - tx * 0.5, ny: -ry * 0.86 - ty * 0.5, line: li, arc: s };
   };
   const mk = (sp: Spot, kind: SignKind, seed: number, over: Partial<Sign> = {}): Sign => {
     const h = (k: number) => hash2(seed, k, 8810);
@@ -225,7 +235,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
       x: sp.x,
       y: sp.y,
       yaw,
-      scale: kind >= SignKind.Round ? 1 : size === 3 ? 0.9 + h(7) * 0.3 : 0.8 + h(7) * 0.5,
+      scale: kind >= SignKind.Round ? 1.25 : size === 3 ? 0.9 + h(7) * 0.3 : 0.8 + h(7) * 0.5,
       lift: kind >= SignKind.Round || kind === SignKind.Wall ? 0 : h(8) * (size >= 2 ? 0.25 : 0.12),
       roll: leaning ? (h(9) < 0.5 ? -1 : 1) * (0.1 + h(10) * 0.2) : (h(10) - 0.5) * 0.05,
       pitch: leaning ? (h(11) - 0.3) * 0.18 : (h(11) - 0.5) * 0.04,
@@ -253,7 +263,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
     [SignKind.Pole]: 0.4,
     [SignKind.Square]: 0.35,
     [SignKind.Stack]: 0.6,
-    [SignKind.Wall]: 0.9,
+    [SignKind.Wall]: 0.7,
     [SignKind.Shop]: 0.35,
     [SignKind.Round]: 0.2,
     [SignKind.Tri]: 0.2,
@@ -303,7 +313,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
         }
         if (!prev || prev.kind !== kind) break;
       }
-      const off = kind === SignKind.Big ? 1.5 + hash2(fx, fy, 8804) * 1.0 : kind === SignKind.Wall ? 1.3 : 0.7 + hash2(fx, fy, 8804) * 0.8;
+      const off = kind === SignKind.Big ? 1.5 + hash2(fx, fy, 8804) * 1.0 : kind === SignKind.Wall ? 1.1 : 0.7 + hash2(fx, fy, 8804) * 0.8;
       const sg = mk(spot(L, li, s, dir, off), kind, fx * 7919 + fy * 104729 + li);
       // not the same design as the one before either
       if (prev && (prev.front === sg.front || prev.kind === sg.kind)) continue;
@@ -375,6 +385,18 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
       const s1 = a.edge + a.dir * 3.6;
       if (s1 > L.a0 + 0.5 && s1 < L.a1 - 0.5) accept(mk(spot(L, a.line, s1, dir, 0.7), SignKind.Arrow, i * 71 + k * 5, { front: CELLS.arrow[0] + ((i * 3 + k) % 6), flip: k % 4 === 2 }), RAD[SignKind.Arrow], 3);
     });
+  });
+  // ---- and a board by each square, turned to it (a pole sign, a board, a stack or a small square one)
+  net.loops.forEach((lp, i) => {
+    if (!lp.town) return;
+    const kinds = [SignKind.Pole, SignKind.Board, SignKind.Stack, SignKind.Square];
+    for (let k = 0; k < 20; k++) {
+      const a = (hash2(i, k, 8840) + k / 20) * Math.PI * 2;
+      const r = lp.R + 2.4 + hash2(i, k, 8841) * 1.4;
+      const sp: Spot = { x: lp.x + Math.cos(a) * r, y: lp.y + Math.sin(a) * r, nx: -Math.cos(a), ny: -Math.sin(a), line: 1000 + i, arc: 0 };
+      const kind = kinds[(i + k) % 4];
+      if (accept(mk(sp, kind, i * 131 + k), RAD[kind], 4)) break;
+    }
   });
   return out;
 }

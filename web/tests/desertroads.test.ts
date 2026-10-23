@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMap } from '../src/sim/maps';
-import { Tile } from '../src/sim/map';
+import { Tile, frameUV } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar } from '../src/render/ambient/driver';
@@ -102,6 +102,11 @@ describe('roads, roundabouts and signs of the Sinai', () => {
       for (const st of m.starts) expect(Math.hypot(s.x - st.x - 0.5, s.y - st.y - 0.5)).toBeGreaterThan(13);
       for (const lp of n.loops) expect(Math.hypot(s.x - lp.x, s.y - lp.y)).toBeGreaterThan(lp.R + 0.5);
       for (const o of m.oils) expect(Math.hypot(s.x - o.x - 1, s.y - o.y - 1)).toBeGreaterThan(2);
+      // not in a resort or on its beach front, nor on the sea's busy strip
+      for (const st of m.deco!.sea!.sites) {
+        const f = frameUV(st, s.x, s.y);
+        expect(f.u > st.resort.u0 - 1 && f.u < st.resort.u1 + 1 && f.v > st.resort.v0 - 1 && f.v < 1, `sign ${s.x.toFixed(1)},${s.y.toFixed(1)} in a resort`).toBe(false);
+      }
       // not on a house
       for (const h of m.structures) expect(s.x > h.x - 0.1 && s.x < h.x + h.w + 0.1 && s.y > h.y - 0.1 && s.y < h.y + h.h + 0.1).toBe(false);
     }
@@ -166,7 +171,7 @@ describe('traffic on the new roads', () => {
     const drv = new Driver(n, () => true, rand);
     type C = ReturnType<typeof newDriveCar> & { driving: boolean };
     const cars: C[] = [];
-    const lines = n.lines.map((L, i) => i).filter((i) => n.lines[i].paved && n.lines[i].lot < 0 && n.lines[i].a1 - n.lines[i].a0 > 3);
+    const lines = n.lines.map((_, i) => i).filter((i) => n.lines[i].paved && n.lines[i].lot < 0 && n.lines[i].a1 - n.lines[i].a0 > 3);
     // cars start near each roundabout, on each road leading to it
     for (const lp of n.loops.filter((l) => !l.dead)) {
       for (const a of n.nodes[lp.node].arms) {
