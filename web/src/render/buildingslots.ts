@@ -1,6 +1,6 @@
 import { townStyle } from './townstyle';
 import { planBuilding, type BuildingPlan } from './buildingplan';
-import type { GameMap, Structure } from '../sim/map';
+import { StructureKind, type GameMap, type Structure } from '../sim/map';
 
 /*
  * The openings and lamps of the desert town's buildings (BD1), as plain data, for the night lights (NT1: lit
@@ -112,4 +112,112 @@ export function slotWorld(st: Structure, s: BuildingSlot): SlotWorld {
     nx: Math.sin(s.ry + th),
     nz: Math.cos(s.ry + th),
   };
+}
+
+// ------------------------------------------------------------------ the night lights' view (NT1: fx/desertnight/slots.ts)
+
+/** A lit glass: world position (y above sea level), outward normal on the ground plane, size in tiles. */
+export interface NightWindow {
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  nz: number;
+  w: number;
+  h: number;
+  /** A shop front (a wide lit window). */
+  shop?: boolean;
+  /** This window is lit tonight (the house is awake and a lamp is on behind it). */
+  lit: boolean;
+  /** A stable 0..1 number per window (> 0.9: a flickering TV). */
+  flicker: number;
+  /** Storey (0 = ground). */
+  floor: number;
+}
+
+export interface NightDoor {
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  nz: number;
+}
+
+/** A small lamp (a porch lamp, a sign light) or a mosque light (minaret, dome, gate). */
+export interface NightLamp {
+  x: number;
+  y: number;
+  z: number;
+  size: number;
+  r: number;
+  g: number;
+  b: number;
+  mode: number;
+  phase: number;
+  pool: number;
+  kind: string;
+}
+
+export interface NightSign {
+  x: number;
+  y: number;
+  z: number;
+  nx: number;
+  nz: number;
+  w: number;
+  h: number;
+  lit: boolean;
+}
+
+export interface NightSlots {
+  windows: NightWindow[];
+  doors: NightDoor[];
+  /** The mosque's lights (minaret, dome, gate). */
+  mosque: NightLamp[];
+  /** A spot inside the yard for a cooking fire, when the building has a yard (world). */
+  yardFire: { x: number; y: number; z: number } | null;
+  /** Wall lamps by the doors (world): lit when the house is awake. */
+  porch: NightSign[];
+  /** The fictional shop signs (world). */
+  signs: NightSign[];
+  /** The house is awake after dark. */
+  awake: boolean;
+}
+
+/** The mosque's minaret (piece 'minaret' at local (1.08, 0.42), 2.08 tiles tall) and dome. */
+const MINARET = { x: 1.08, z: 0.42, h: 2.08 };
+
+/**
+ * Windows, doors, lamps and signs of the building on `st`, in world space (`groundY` = the ground height under the
+ * footprint, as sinaitown.ts uses it), for fx/desertnight (NT1). Pure and deterministic.
+ */
+export function buildingSlots(st: Structure, groundY: number): NightSlots | null {
+  let pl = CACHE.get(st);
+  if (!pl) CACHE.set(st, (pl = planBuilding(st, st.town ?? 2)));
+  const out: NightSlots = { windows: [], doors: [], mosque: [], yardFire: null, porch: [], signs: [], awake: pl.awake };
+  const th = (st.rot * Math.PI) / 2;
+  const c = Math.cos(th);
+  const sn = Math.sin(th);
+  const cx = st.x + st.w / 2;
+  const cz = st.y + st.h / 2;
+  const W = (lx: number, ly: number, lz: number) => ({ x: cx + lx * c + lz * sn, y: groundY + ly, z: cz - lx * sn + lz * c });
+  for (const s of pl.slots) {
+    const w = slotWorld(st, s);
+    const p = { x: w.x, y: groundY + s.y, z: w.z, nx: w.nx, nz: w.nz };
+    if (s.kind === 'window' || s.kind === 'balcony' || s.kind === 'shop') out.windows.push({ ...p, w: s.w, h: s.h, shop: s.kind === 'shop', lit: s.lit, flicker: s.flicker, floor: s.floor });
+    else if (s.kind === 'door') out.doors.push({ x: p.x, y: p.y, z: p.z, nx: p.nx, nz: p.nz });
+    else if (s.kind === 'lamp') out.porch.push({ ...p, w: 0.03, h: 0.04, lit: s.lit });
+    else if (s.kind === 'sign') out.signs.push({ ...p, w: s.w, h: s.h, lit: s.lit });
+  }
+  if (st.kind === StructureKind.Courtyard && st.look === 'mosque') {
+    const mq = (lx: number, ly: number, lz: number, size: number, r: number, g: number, b: number, pool: number, kind: string): NightLamp => ({ ...W(lx, ly, lz), size, r, g, b, mode: 0, phase: 0, pool, kind });
+    const hx = pl.mirror ? 0.42 : -0.42;
+    const mxx = pl.mirror ? -MINARET.x : MINARET.x;
+    out.mosque.push(mq(mxx, MINARET.h - 0.1, MINARET.z, 0.22, 0.3, 1.0, 0.45, 0, 'minaret'));
+    out.mosque.push(mq(mxx, MINARET.h * 0.7, MINARET.z, 0.13, 1.0, 0.82, 0.5, 0, 'minaret'));
+    out.mosque.push(mq(hx, pl.height + 0.45, -0.28, 0.16, 0.9, 0.95, 1.0, 0, 'dome'));
+    out.mosque.push(mq(hx, 0.3, 1.0, 0.1, 1.0, 0.72, 0.38, 1.4, 'gate'));
+  }
+  if (pl.yardFire) out.yardFire = W(pl.yardFire[0], 0, pl.yardFire[1]);
+  return out;
 }

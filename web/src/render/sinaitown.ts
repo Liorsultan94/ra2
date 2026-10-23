@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { StructureKind, type GameMap, type Structure } from '../sim/map';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
 import type { SceneryLod } from './geo';
@@ -127,10 +128,44 @@ export function buildSinaiTown(m: GameMap, kit: SinaiKit, fog: FogOfWar, quality
 const CYL: Record<number, THREE.BufferGeometry> = {};
 let PYR: THREE.BufferGeometry | null = null;
 let WEDGE: THREE.BufferGeometry | null = null;
+let VAULT: THREE.BufferGeometry | null = null;
+let PRISM: THREE.BufferGeometry | null = null;
+
+function flat(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const n = g.index ? g.toNonIndexed() : g;
+  n.deleteAttribute('uv');
+  n.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(n.attributes.position.count * 2).fill(0), 2));
+  return n;
+}
 
 /** Unit solids for the plan's 'geo' ops: a cylinder (diameter 1, height 1, centred), a square pyramid (base 1, height 1, centred), a wedge (x -0.5..0.5, tall edge at z 0 (y 1), falling to y 0 at z 1). */
 function solid(g: 'cyl' | 'pyramid' | 'wedge' | 'cone' | 'vault' | 'prism', seg = 16): THREE.BufferGeometry {
   if (g === 'pyramid') return (PYR ??= new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4));
+  if (g === 'vault') {
+    if (!VAULT) {
+      // a barrel vault: a half-cylinder along z (x -0.5..0.5, y 0..1, z -0.5..0.5) closed by two half-discs
+      const body = flat(new THREE.CylinderGeometry(0.5, 0.5, 1, 18, 1, true, Math.PI / 2, Math.PI).rotateX(Math.PI / 2));
+      const cap = new THREE.CircleGeometry(0.5, 18, 0, Math.PI);
+      const front = flat(cap.clone().translate(0, 0, 0.5));
+      const back = flat(cap.clone().rotateY(Math.PI).translate(0, 0, -0.5));
+      VAULT = mergeGeometries([body, front, back])!.scale(1, 2, 1);
+    }
+    return VAULT;
+  }
+  if (g === 'prism') {
+    if (!PRISM) {
+      // a gable: ridge along x at z 0, eaves at z +-0.5, y 0..1; no bottom
+      const pos = [-0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 1, 0, -0.5, 1, 0, -0.5, 0, 0.5, 0.5, 0, 0.5];
+      const tris = [[0, 2, 1], [0, 3, 2], [3, 4, 5], [3, 5, 2], [0, 4, 3], [1, 2, 5]];
+      const verts: number[] = [];
+      for (const t of tris) for (const i of t) verts.push(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+      const g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g2.computeVertexNormals();
+      PRISM = flat(g2);
+    }
+    return PRISM;
+  }
   if (g === 'wedge') {
     if (!WEDGE) {
       const pos = [-0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0, -0.5, 0, 1, 0.5, 0, 1];
@@ -202,8 +237,12 @@ function buildHouse(B: SinaiBuilder, st: Structure, gy: number, plants: Map<VegK
         B.swatch(L(trs(o.x, o.y, o.z, o.ry ?? 0, o.rx ?? 0, o.rz ?? 0)), o.w, o.h, o.d, o.s, { accent: accOf(o.a), color: o.col ? C(o.col[0], o.col[1], o.col[2]) : undefined }, o.lod ?? 'both');
         break;
       case 'geo': {
-        B.pl.wear = [plan.wear, o.mat ?? 0, seed];
-        B.plaster(solid(o.g, o.seg), L(trs(o.x, o.y, o.z, o.ry ?? 0).multiply(scaleM(o.w, o.h, o.d))), plaster(o.c, o.m ?? 1), gy);
+        const m = L(trs(o.x, o.y, o.z, o.ry ?? 0).multiply(scaleM(o.w, o.h, o.d)));
+        if (o.sw) B.swatchGeo(solid(o.g, o.seg), m, o.sw, { accent: accOf(o.a) });
+        else {
+          B.pl.wear = [plan.wear, o.mat ?? 0, seed];
+          B.plaster(solid(o.g, o.seg), m, plaster(o.c, o.m ?? 1), gy);
+        }
         break;
       }
       case 'sign':

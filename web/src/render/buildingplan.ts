@@ -15,10 +15,10 @@ import type { BuildingInfo, BuildingSlot, SlotKind } from './buildingslots';
  * and 3-storey house are 0.5, 0.95 and 1.4 tiles tall with a belt course at every floor line, a window row per
  * floor and a balcony / a different roof on the upper floors.
  *
- * 16 silhouettes on a 2 x 2 footprint (flat cube, shop-house, apartment block, tower house, stepped terrace,
+ * 17 silhouettes on a 2 x 2 footprint (flat cube, shop-house, apartment block, tower house, stepped terrace,
  * arcaded loggia, L-house, domed shrine, mud-brick house, cafe, hipped-roof villa, terrace of two, outer-stair
- * house, unfinished concrete frame, guest house with a thatch terrace, bakery), the 3 x 2 courtyard houses and the
- * mosque; 9 palettes; mirror, wear, window family, roof clutter and trims from the seed.
+ * house, unfinished concrete frame, guest house with a thatch terrace, bakery, vaulted house), the 3 x 2 courtyard
+ * houses and the mosque; 9 palettes; mirror, wear, window family, roof clutter and trims from the seed.
  */
 
 export const FLOOR = 0.44;
@@ -38,7 +38,7 @@ export type Op =
   | { t: 'card'; n: string; x: number; y: number; z: number; ry: number; sx: number; sy: number; tint: ColKey; a: Acc }
   | { t: 'piece'; n: string; x: number; y: number; z: number; ry?: number; rx?: number; rz?: number; s?: [number, number, number]; tint?: ColKey; a?: Acc; col?: [number, number, number]; lod?: LodSel }
   | { t: 'sw'; s: string; x: number; y: number; z: number; w: number; h: number; d: number; ry?: number; rx?: number; rz?: number; a?: Acc; col?: [number, number, number]; lod?: LodSel }
-  | { t: 'geo'; g: 'cyl' | 'pyramid' | 'vault' | 'prism' | 'wedge' | 'cone'; x: number; y: number; z: number; w: number; h: number; d: number; ry?: number; seg?: number; c: ColKey; m?: number; mat?: Mat; sw?: string }
+  | { t: 'geo'; g: 'cyl' | 'pyramid' | 'vault' | 'prism' | 'wedge' | 'cone'; x: number; y: number; z: number; w: number; h: number; d: number; ry?: number; seg?: number; c: ColKey; m?: number; mat?: Mat; sw?: string; a?: Acc }
   | { t: 'tree'; x: number; z: number; r: number; hgt: number }
   | { t: 'sign'; i: number; x: number; y: number; z: number; ry: number; w: number; h: number };
 
@@ -50,6 +50,8 @@ export interface BuildingPlan extends BuildingInfo {
   /** Feature tags (for tests and the report): 'balcony', 'tank', 'dish', 'laundry', 'viga', 'dome', ... */
   features: string[];
   kind: StructureKind;
+  /** A spot in the yard (local x, z) for a cooking fire at night, when the house has a walled yard. */
+  yardFire: [number, number] | null;
 }
 
 // ------------------------------------------------------------------ palettes
@@ -261,9 +263,10 @@ class P {
     this.ops.push({ t: 'sw', s, x, y, z, w, h, d, ...o });
   }
 
-  geo(g: Extract<Op, { t: 'geo' }>['g'], x: number, y: number, z: number, w: number, h: number, d: number, c: ColKey, o: { ry?: number; seg?: number; m?: number; mat?: Mat; sw?: string } = {}) {
+  /** A plaster (or, with `sw`, swatch) solid; a cylinder / cone / pyramid is centred at y, a wedge / vault / prism stands on y. */
+  geo(g: Extract<Op, { t: 'geo' }>['g'], x: number, y: number, z: number, w: number, h: number, d: number, c: ColKey, o: { ry?: number; seg?: number; m?: number; mat?: Mat; sw?: string; a?: Acc } = {}) {
     this.ops.push({ t: 'geo', g, x, y, z, w, h, d, c, ...o });
-    this.top = Math.max(this.top, y + h / 2);
+    this.top = Math.max(this.top, g === 'wedge' || g === 'vault' || g === 'prism' ? y + h : y + h / 2);
   }
 
   card(n: string, x: number, y: number, z: number, ry: number, o: { sx?: number; sy?: number; p?: number; tint?: ColKey; a?: Acc; fl?: number } = {}) {
@@ -558,6 +561,18 @@ class P {
       const p = take();
       if (p) this.pergola(p[0], p[1], 0.55, 0.42, T);
     }
+    if (!small && (o.shed ?? (hp(9, 0.14) ? 1 : 0))) {
+      // a little roof room with a pitched sheet-metal roof
+      const p = take();
+      if (p) {
+        const [x, z] = p;
+        this.box(x, T + 0.09, z, 0.36, 0.18, 0.3, v.c === 'wall' ? 'wall2' : 'wall');
+        this.geo('prism', x, T + 0.18, z, 0.42, 0.1, 0.36, 'dark', { sw: 'metal' });
+        this.card('win_small', x, T + 0.09, z + 0.154, 0, { sx: 0.8, sy: 0.8, p: 2, tint: v.c === 'wall' ? 'wall2' : 'wall' });
+        this.top = Math.max(this.top, T + 0.28);
+        this.note('roof room');
+      }
+    }
   }
 
   laundry(x: number, y: number, z: number) {
@@ -744,6 +759,7 @@ class P {
       acc: this.acc,
       features: [...this.features],
       kind: this.st.kind,
+      yardFire: this.features.has('yard') ? [(this.mirror ? -1 : 1) * (this.h(94) < 0.5 ? -1 : 1) * 0.68, 0.72] : null,
     };
   }
 }
@@ -1035,6 +1051,25 @@ const V_MUD: Builder = (p) => {
   extras(p, v, { pipes: false, ac: false, patch: 2 + Math.floor(p.wear * 3) });
 };
 
+const V_VAULT: Builder = (p) => {
+  // a vaulted one-storey house (Nubian style): three barrel vaults over a low earth-coloured body, a plank door under an arch
+  const lx = 1.4 + p.h(440) * 0.1;
+  const v = p.body({ x: 0, z: 0, lx, dz: 1.05, floors: 1, fh: 0.36, c: p.h(441) < 0.5 ? 'earth' : 'wall', parapet: 'none', belt: false, plinth: false });
+  const n = 3;
+  for (let i = 0; i < n; i++) p.geo('vault', -lx / 2 + (lx * (i + 0.5)) / n, v.top, 0, lx / n - 0.012, 0.2 + (i === 1 ? 0.06 : 0), v.dz + 0.06, v.c);
+  p.wallTop = Math.max(p.wallTop, v.top + 0.26);
+  p.note('vault roof');
+  p.door(v, 'f', -lx / n, 'door_plank', { lamp: true });
+  p.put(v, 'f', 0, 0.22, 'win_small', { fl: 0 });
+  p.put(v, 'f', lx / n, 0.22, 'win_small', { fl: 0 });
+  for (const s of ['l', 'r'] as Side[]) p.put(v, s, 0, 0.22, 'win_small', { fl: 0 });
+  p.put(v, 'b', -0.35, 0.22, 'win_small', { fl: 0 });
+  p.put(v, 'b', 0.35, 0.22, 'win_round', { fl: 0 });
+  p.piece('pots', 0.4, 0, 0.62, { ry: p.h(442) * 6, lod: 0 });
+  if (p.h(443) < 0.6) p.piece('viga', -lx / 2 + 0.2, v.top - 0.04, v.z + v.dz / 2, { ry: 0, lod: 0 });
+  extras(p, v, { pipes: false, ac: false, patch: 2 + Math.floor(p.wear * 3) });
+};
+
 const V_CAFE: Builder = (p) => {
   const v = p.body({ x: 0, z: -0.15, lx: 1.4, dz: 0.95, floors: 2, parapet: 'plain' });
   for (const u of [-0.37, 0.37]) p.put(v, 'f', u, 0.135, 'shop', { sx: 0.95, sy: 1, p: 3, a: 'acc2' });
@@ -1214,6 +1249,7 @@ export const VARIANTS: Variant[] = [
   { id: 'frame', fn: V_FRAME, w: 0.5, shop: 0, mud: 0.1, floors: 3 },
   { id: 'pension', fn: V_PENSION, w: 0.5, shop: 0.3, mud: 0.05, floors: 2 },
   { id: 'bakery', fn: V_BAKERY, w: 0.2, shop: 0.7, mud: 0.2, floors: 1 },
+  { id: 'vault', fn: V_VAULT, w: 0.55, shop: 0, mud: 1.3, floors: 1 },
 ];
 
 // ------------------------------------------------------------------ 3 x 2 courtyard houses and the mosque
@@ -1282,8 +1318,8 @@ function buildMosque(p: P) {
   const HW = FLOOR * 1.4;
   const v = p.body({ x: hx, z: hz, lx: LX, dz: DZ, floors: 1, fh: HW, c: 'white', parapet: 'merlon', belt: false });
   p.box(hx, HW - 0.02, hz, LX + 0.02, 0.018, DZ + 0.02, 'trim');
-  p.piece('mdome', hx, HW + 0.012 + 0.06, hz, { s: [0.46 / 0.44, 0.46 / 0.44, 0.46 / 0.44], tint: 'white' });
-  p.top = Math.max(p.top, HW + 0.012 + 0.06 + 0.75);
+  p.piece('mdome', hx, HW + 0.012, hz, { s: [0.42 / 0.44, 0.42 / 0.44, 0.42 / 0.44], tint: 'white' });
+  p.top = Math.max(p.top, HW + 0.5);
   p.note('dome');
   for (const sx of [-1, 1]) {
     p.box(hx + sx * 0.72, HW + 0.09, 0.22, 0.3, 0.06, 0.3, 'white');
@@ -1303,7 +1339,7 @@ function buildMosque(p: P) {
   p.geo('cyl', hx + 0.5, 0.03, 0.64, 0.26, 0.06, 0.26, 'white', { seg: 8 });
   p.sw('glass', hx + 0.5, 0.055, 0.64, 0.2, 0.004, 0.2, { col: [0.5, 0.75, 0.85], lod: 0 });
   p.piece('minaret', 1.08, 0, 0.42, { tint: 'white' });
-  p.top = Math.max(p.top, 1.45);
+  p.top = Math.max(p.top, 2.1);
   p.note('minaret');
   p.storeys = 1;
 }

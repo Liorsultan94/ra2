@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { StructureKind, type Structure } from '../src/sim/map';
 import { createMap } from '../src/sim/maps';
 import { CARDS, FLOOR, PALETTES, VARIANTS, planBuilding, type BuildingPlan, type Op } from '../src/render/buildingplan';
-import { buildingInfo, slotWorld } from '../src/render/buildingslots';
+import { buildingInfo, buildingSlots, slotWorld } from '../src/render/buildingslots';
 
 /** BD1: the desert town's building plans: 16 + 3 silhouettes, 9 palettes, deterministic, same footprints, storeys that read as storeys, openings for the night lights. */
 
@@ -46,7 +46,7 @@ describe('building plans (BD1)', () => {
     for (const st of grid((x, y) => mud(x, y, 'shop'))) ids.add(planBuilding(st, 1).variant);
     for (const st of grid((x, y) => court(x, y))) ids.add(planBuilding(st, 2).variant);
     ids.add(planBuilding(court(3, 3, 'mosque'), 2).variant);
-    expect(ids.size).toBeGreaterThanOrEqual(19);
+    expect(ids.size).toBeGreaterThanOrEqual(20);
     for (const v of VARIANTS) expect(ids.has(v.id)).toBe(true);
   });
 
@@ -69,7 +69,7 @@ describe('building plans (BD1)', () => {
         expect(e[3]).toBeLessThan(lz);
       }
     }
-    expect(seen.size).toBeGreaterThanOrEqual(19);
+    expect(seen.size).toBeGreaterThanOrEqual(20);
   });
 
   it('chooses variant, mirror, palette, wear and height from the seed (deterministic) and never from Math.random', () => {
@@ -152,7 +152,7 @@ describe('building plans (BD1)', () => {
         expect(s.y).toBeLessThan(p.top + 0.2);
       }
     }
-    expect(pls.size).toBeGreaterThanOrEqual(19);
+    expect(pls.size).toBeGreaterThanOrEqual(20);
   });
 
   it('about half of the houses are awake after dark, lit slots only on awake houses', () => {
@@ -206,5 +206,19 @@ describe('building plans (BD1)', () => {
     expect(ids.size).toBeGreaterThanOrEqual(8);
     // every structure of the map has a plan with the footprint's openings
     for (const st of m.structures) expect(buildingInfo(m, st).slots.length).toBeGreaterThan(3);
+  });
+
+  it('buildingSlots gives the night lights world windows, doors, porch lamps and the mosque lamps', () => {
+    const st = mud(40, 60);
+    const a = buildingSlots(st, 1.5)!;
+    expect(a.windows.length).toBeGreaterThan(5);
+    expect(a.doors.length).toBeGreaterThanOrEqual(1);
+    for (const w of a.windows) {
+      expect(w.y).toBeGreaterThan(1.5);
+      expect(Math.hypot(w.nx, w.nz)).toBeCloseTo(1, 5);
+      expect(Math.abs(w.x - 41)).toBeLessThan(1.5);
+    }
+    const mq = buildingSlots(court(10, 10, 'mosque'), 0)!;
+    expect(mq.mosque.map((l) => l.kind).sort()).toEqual(['dome', 'gate', 'minaret', 'minaret']);
   });
 });
