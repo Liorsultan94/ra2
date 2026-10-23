@@ -488,3 +488,23 @@
 .view-wrap.cine-on > .vc-pause {
   display: none !important;
 }
+
+/* phone: only a small blinking PAUSED tag (the round button at the top right resumes) */
+.simple-ui .pause-banner {
+  top: max(10px, env(safe-area-inset-top));
+  padding: 4px 14px;
+  gap: 0;
+  pointer-events: none;
+  animation: pause-blink 1.1s ease-in-out infinite;
+}
+.simple-ui .pause-banner .pb-hint,
+.simple-ui .pause-banner .pb-resume {
+  display: none;
+}
+.simple-ui .pause-banner .pb-tag {
+  font-size: 13px;
+}
+@keyframes pause-blink {
+  0%, 100% { opacity: 1; transform: translate(-50%, 0); }
+  50% { opacity: 0.35; transform: translate(-50%, 0); }
+}
