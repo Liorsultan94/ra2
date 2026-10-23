@@ -470,8 +470,19 @@ export class NightLights {
       const ud = unitDef(v.def);
       if (ud.naval) {
         // boats: gentle navigation lights (port red, starboard green, a white masthead: naval/navalkit.ts), no beams
+        // (an enemy still fading in out of the dark shows no lamp: a light never gives a unit away)
+        if (v.fade !== undefined && v.fade < 0.6) continue;
         const rl = root.userData.runLights as { pos: THREE.Vector3; color: number }[] | undefined;
-        if (!rl) continue;
+        if (!rl) {
+          // a surfaced submarine: one small masthead lamp on its sail (nothing when it is under)
+          if (ud.submerge === 'sub' && (v.anim.surf ?? 0) > 0.85) {
+            root.updateMatrixWorld();
+            _p.set(0, (m.height ?? 0.4) * 0.95, 0).applyMatrix4(root.matrixWorld);
+            const k = 0.4 * dk;
+            this.flare(_p.x, _p.y, _p.z, 0.07, 1.0 * k, 0.95 * k, 0.85 * k);
+          }
+          continue;
+        }
         root.updateMatrixWorld();
         for (const L of rl) {
           _p.copy(L.pos).applyMatrix4(root.matrixWorld);

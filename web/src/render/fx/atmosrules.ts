@@ -56,6 +56,17 @@ export function mistClimateK(biome: string): number {
   return biome === 'winter' ? 1 : biome === 'desert' ? 0.22 : biome === 'urban' ? 0.75 : 1;
 }
 
+/**
+ * The desert's night haze (NT1): a touch of cool, low haze over the wadis and the gulf from the evening to the
+ * small hours (the cold ground and the sea breathe moisture out): 0 by day, ~0.13 at night, gone with the dawn
+ * banks. Desert only (the other climates keep their own).
+ */
+export function desertNightHaze(hours: number, biome: string): number {
+  if (biome !== 'desert') return 0;
+  const x = hour24(hours);
+  return 0.13 * (x >= 12 ? sstep(19.25, 21.5, x) : 1 - sstep(4.5, 6.0, x));
+}
+
 // ------------------------------------------------------------ dust devils
 
 export interface DevilWeather {

@@ -10,6 +10,7 @@ import { chimneyAmount, dawnBanksAt, dawnGlowAt, devilCap, devilLife, devilMaySp
 import { ChimneySmoke } from './chimneys';
 import { Fireworks, type FireworkSound } from './fireworks';
 import { NightLife } from './nightlife';
+import { DesertNight } from './desertnight';
 
 /*
  * Living nature (purely visual; never touches the simulation).
@@ -686,6 +687,8 @@ export class LivingWorld {
   readonly nature: NatureFx | null = null;
   readonly rainbow: Rainbow | null = null;
   readonly nightlife: NightLife;
+  /** The desert's lit villages, resorts and sea lights (desertnight/; desert layout only). */
+  readonly desertNight: DesertNight | null = null;
   fireworks: Fireworks | null = null;
   /** Snow lying on things (WX.wxSnow is driven from this while snow can fall). */
   snow = 0;
@@ -767,6 +770,7 @@ export class LivingWorld {
       }
     }
     this.nightlife = new NightLife(host, atmos.look.biome, q, this.probe, this.nature, this.enabled);
+    if (atmos.look.biome === 'desert') this.desertNight = new DesertNight(host, q, this.enabled && this.params.get('nightlights') !== '0');
   }
 
   /** Firefly haunts: open ground by the water and along the forest edges. */
@@ -904,6 +908,7 @@ export class LivingWorld {
     this.z1 = target.z + Rz;
     const gt = this.host.world.tick / TPS;
     this.nightlife.update(dt, time, gt, dark, a, this.x0, this.z0, this.x1, this.z1);
+    this.desertNight?.update(dt, time, a, target);
     if (this.fireworks) {
       const tg = groundHeight(this.map, Math.max(0, Math.min(this.map.w - 0.01, target.x)), Math.max(0, Math.min(this.map.h - 0.01, target.z)));
       this.fireworks.update(camera.position.y - tg);
@@ -1181,6 +1186,7 @@ export class LivingWorld {
     this.chimneys?.mesh.removeFromParent();
     this.chimneys?.dispose();
     this.nightlife.dispose();
+    this.desertNight?.dispose();
     this.fireworks?.dispose();
     if (this.atmos.night) this.atmos.night.hook = null;
   }
