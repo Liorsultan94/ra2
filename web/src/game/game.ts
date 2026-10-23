@@ -1251,6 +1251,7 @@ export class Game {
     const r = this.renderer;
     const d = unitDef(e.def);
     const p = r.entityPos(e, 1);
+    if (!r.inFront(p)) return Infinity; // behind the camera: the projection is mirrored (it could land under the finger)
     const scale = r.pixelsPerUnit(p);
     const m = r.visuals.get(e.id)?.model;
     const half = m?.size ? Math.max(m.size.x, m.size.z) / 2 : d.radius * 1.3;
@@ -1290,6 +1291,7 @@ export class Game {
         continue;
       }
       const p = r.entityPos(e, 1);
+      if (!r.inFront(p)) continue;
       const scale = r.pixelsPerUnit(p);
       const s = r.project(p.x, p.y + r.visualHeight(e.id) * 0.45, p.z);
       const rad = Math.max(13, d.radius * scale * 1.5);
@@ -1316,6 +1318,7 @@ export class Game {
       if (e.dead || e.kind !== 'building' || !r.isShown(e.id)) continue;
       const d = buildingDef(e.def);
       const p = r.entityPos(e, 1);
+      if (!r.inFront(p)) continue;
       // (own buildings: a lower box, so the ground behind your own base stays a place to send units to)
       const h = r.visualHeight(e.id) * (e.owner === this.local ? 0.55 : 1);
       const pts: Pt[] = [];

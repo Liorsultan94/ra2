@@ -1091,6 +1091,16 @@ export class GameRenderer {
     return (base * ref) / Math.max(0.5, depth);
   }
 
+  /**
+   * Whether a world point can be under a fingertip: in front of the camera and not far outside the view. Near the camera's
+   * plane the projection flies off to huge coordinates and the perspective "scale" explodes, so a unit that is off-screen
+   * (even 70 tiles away) could win a tap.
+   */
+  inFront(p: { x: number; y: number; z: number }): boolean {
+    this.v3.set(p.x, p.y, p.z).project(this.camera);
+    return this.v3.z < 1 && Math.abs(this.v3.x) < 2.5 && Math.abs(this.v3.y) < 2.5;
+  }
+
   /** Intersection of the view ray through a screen point with the horizontal plane at height h. */
   screenToPlane(sx: number, sy: number, h: number): { x: number; y: number } {
     this.ndc.set((sx / this.width) * 2 - 1, -(sy / this.height) * 2 + 1);
