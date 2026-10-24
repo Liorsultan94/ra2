@@ -185,7 +185,19 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
   const mk = (sp: Spot, kind: SignKind, seed: number, over: Partial<Sign> = {}): Sign => {
     const h = (k: number) => hash2(seed, k, 8810);
     const size = SIGN_SIZE[kind];
-    const yaw = Math.atan2(sp.ny, sp.nx) + (h(1) - 0.5) * 0.5;
+    // the adverts read from the game camera (it looks north-west, from the south-east): the face that turns to the road is
+    // turned half towards the viewer, and a board that would show its edge or its back to the camera is flipped (the back
+    // has its own design); the road signs and the village walls keep to the road
+    let yaw = Math.atan2(sp.ny, sp.nx) + (h(1) - 0.5) * 0.5;
+    if (kind < SignKind.Round && kind !== SignKind.Wall) {
+      let nx = Math.cos(yaw) + 0.8;
+      let ny = Math.sin(yaw) + 0.8;
+      if (nx + ny < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      yaw = Math.atan2(ny, nx);
+    }
     // wear: the road signs a little, adverts anything from new to wrecked
     const wear = kind >= SignKind.Round ? h(2) * 0.55 : h(2) < 0.22 ? 0.75 + h(3) * 0.25 : h(2) * 0.7;
     const leaning = h(4) < 0.2;
@@ -235,7 +247,7 @@ export function planSigns(m: GameMap, net: RoadNet, occ: Uint8Array, R: number):
       x: sp.x,
       y: sp.y,
       yaw,
-      scale: kind >= SignKind.Round ? 1.25 : size === 3 ? 0.9 + h(7) * 0.3 : 0.8 + h(7) * 0.5,
+      scale: kind >= SignKind.Round ? 1.25 : size === 3 ? 1.05 + h(7) * 0.3 : 1.05 + h(7) * 0.5,
       lift: kind >= SignKind.Round || kind === SignKind.Wall ? 0 : h(8) * (size >= 2 ? 0.25 : 0.12),
       roll: leaning ? (h(9) < 0.5 ? -1 : 1) * (0.1 + h(10) * 0.2) : (h(10) - 0.5) * 0.05,
       pitch: leaning ? (h(11) - 0.3) * 0.18 : (h(11) - 0.5) * 0.04,
