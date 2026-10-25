@@ -10,8 +10,8 @@ import { windTime } from './treekinds';
 /*
  * Countryside crops on the farm fields (render only; the sim never sees
  * them): standing wheat in rows that sway in the wind, orchards, vineyards,
- * plastic greenhouse tunnels, desert centre-pivot circles with a slowly
- * turning sprinkler arm, and a tractor or two working a field.
+ * plastic greenhouse tunnels, desert farm estates (long fields, vineyards,
+ * groves and a windbreak), and a tractor or two working a field.
  *
  * The ground shader already paints every field (soil, rows, tramlines);
  * this adds the third dimension on top. Cost: crops are merged per 32-tile
@@ -347,141 +347,326 @@ function tractorRoute(f: Field): TractorRoute {
   return { pts, cum, len: cum[cum.length - 1] };
 }
 
-// ------------------------------------------------------------------ centre pivots
+// ------------------------------------------------------------------ desert estates
 
-/** Desert centre-pivot circles (layout.pivots): a green disc with wheel rings, a turning truss arm. */
-function buildPivots(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', crops: (x: number, z: number) => GeoBuilder, out: THREE.Object3D[]) {
+/** Vine rows on trellis posts (a vineyard field). */
+function vineyard(b: GeoBuilder, m: GameMap, f: Field, k: number, desert: boolean) {
+  const leaf = C(desert ? 0x6a8434 : 0x587a2a);
+  ridges(b, m, f, 0.34, 0.07, 0.035, leaf.clone().multiplyScalar(0.55), leaf, k * 31, 0.05, true);
+  // trellis posts every ~1 tile
+  const P = frame(f);
+  const nRows = Math.max(1, Math.floor((f.hw * 2 - 0.2) / 0.34));
+  const b0 = -((nRows - 1) * 0.34) / 2;
+  const len = f.hl * 2 - 0.24;
+  const nP = Math.max(1, Math.ceil(len / 1.0));
+  for (let r = 0; r < nRows; r++)
+    for (let i = 0; i <= nP; i++) {
+      const c = P(-len / 2 + (i / nP) * len, b0 + r * 0.34);
+      if (!plantable(m, c.x, c.z)) continue;
+      b.add(new THREE.BoxGeometry(0.012, 0.14, 0.012), new THREE.Matrix4().makeTranslation(c.x, surfaceHeight(m, c.x, c.z) + 0.06, c.z), null, C(0x6a5a46));
+    }
+}
+
+/** Orchard trees on a grid over the field. */
+function orchard(m: GameMap, f: Field, k: number, kind: TreeKind, trees: Record<TreeKind, Inst[]>) {
+  const P = frame(f);
+  const sp = kind === 'olive' ? 0.62 : 0.52;
+  const nA = Math.max(1, Math.floor((f.hl * 2 - 0.3) / sp) + 1);
+  const nB = Math.max(1, Math.floor((f.hw * 2 - 0.3) / sp) + 1);
+  for (let i = 0; i < nA; i++)
+    for (let j = 0; j < nB; j++) {
+      const c = P(-((nA - 1) * sp) / 2 + i * sp, -((nB - 1) * sp) / 2 + j * sp);
+      if (!plantable(m, c.x, c.z) || hash2(k * 97 + i, j, 4442) < 0.04) continue;
+      const s = 0.85 + hash2(k * 97 + i, j, 4443) * 0.3;
+      const tone = 0.88 + hash2(k * 97 + i, j, 4444) * 0.24;
+      trees[kind].push({ x: c.x, y: surfaceHeight(m, c.x, c.z) - 0.01, z: c.z, rotY: hash2(i, j, 4445 + k) * 6.28, sx: s, sy: s * (0.9 + hash2(i, j, 4446) * 0.2), sz: s, color: new THREE.Color(tone, tone, tone) });
+    }
+}
+
+/** A flat bed of soil under a field (the open desert ground is not painted as farmland), following the ground. */
+function soilBed(b: GeoBuilder, m: GameMap, f: Field, col: THREE.Color, seed: number) {
+  const P = frame(f);
+  const nA = Math.max(1, Math.ceil((f.hl * 2) / 0.5));
+  const nB = Math.max(1, Math.ceil((f.hw * 2) / 0.5));
+  const ids: number[][] = [];
+  for (let i = 0; i <= nA; i++) {
+    const row: number[] = [];
+    for (let j = 0; j <= nB; j++) {
+      const c = P(-f.hl + (i / nA) * f.hl * 2, -f.hw + (j / nB) * f.hw * 2);
+      const tone = 0.9 + hash2(seed + i, j, 4451) * 0.18;
+      row.push(b.vert(V(c.x, surfaceHeight(m, c.x, c.z) + 0.012, c.z), V(0, 1, 0), 0, 0, col.clone().multiplyScalar(tone), 0));
+    }
+    ids.push(row);
+  }
+  for (let i = 0; i < nA; i++) for (let j = 0; j < nB; j++) b.quad(ids[i + 1][j + 1], ids[i][j + 1], ids[i + 1][j], ids[i][j]);
+}
+
+/** Low-frequency 0..1 noise over the map (ripeness patches, soil moisture). */
+function patchNoise(x: number, z: number, seed: number) {
+  const fx = Math.floor(x * 0.8);
+  const fz = Math.floor(z * 0.8);
+  const tx = x * 0.8 - fx;
+  const tz = z * 0.8 - fz;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sz = tz * tz * (3 - 2 * tz);
+  const a = hash2(fx, fz, seed);
+  const b = hash2(fx + 1, fz, seed);
+  const c = hash2(fx, fz + 1, seed);
+  const d = hash2(fx + 1, fz + 1, seed);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+
+/**
+ * Crop rows with the look of a real field: the colour drifts in patches (ripeness, moisture), a pair of tractor
+ * tramlines left bare every few rows, row ends ragged at the headlands, plants of different heights.
+ */
+function cropRows(b: GeoBuilder, m: GameMap, f: Field, o: { gap: number; h: number; w: number; lo: THREE.Color; hi: THREE.Color; alt: THREE.Color; sway: number; tram: number; seed: number }) {
+  const P = frame(f);
+  const ca = Math.cos(f.angle);
+  const sa = Math.sin(f.angle);
+  const nx = -sa;
+  const nz = ca;
+  const nRows = Math.max(1, Math.floor((f.hw * 2 - 0.12) / o.gap));
+  const b0 = -((nRows - 1) * o.gap) / 2;
+  const tmp = new THREE.Color();
+  for (let r = 0; r < nRows; r++) {
+    if (o.tram && r % o.tram === Math.floor(o.tram / 2)) continue;
+    const bb = b0 + r * o.gap;
+    // ragged headlands: each row stops a little short at either end
+    const e0 = -f.hl + 0.08 + hash2(o.seed + r, 1, 4471) * 0.14;
+    const e1 = f.hl - 0.08 - hash2(o.seed + r, 2, 4471) * 0.14;
+    const nSeg = Math.max(1, Math.ceil((e1 - e0) / 0.22));
+    let prev: number[] | null = null;
+    for (let s = 0; s <= nSeg; s++) {
+      const a = e0 + (s / nSeg) * (e1 - e0);
+      const c = P(a, bb);
+      if (!plantable(m, c.x, c.z)) {
+        prev = null;
+        continue;
+      }
+      const g = surfaceHeight(m, c.x, c.z) + 0.012;
+      const pn = patchNoise(c.x, c.z, o.seed);
+      const fine = hash2(o.seed + r, s, 4472);
+      // the odd gap in a row (a missed seed, a trodden patch)
+      const hv = o.h * (0.7 + pn * 0.45) * (0.8 + fine * 0.4) * (fine < 0.025 ? 0.25 : 1);
+      tmp.copy(o.hi).lerp(o.alt, Math.max(0, Math.min(1, pn * 1.4 - 0.25))).multiplyScalar(0.9 + hash2(o.seed + r, s, 4473) * 0.2);
+      const ids = [
+        b.vert(V(c.x - nx * o.w, g, c.z - nz * o.w), V(-nx * 0.45, 0.9, -nz * 0.45), 0, 0, o.lo, 0),
+        b.vert(V(c.x, g + hv, c.z), V(0, 1, 0), 0, 1, tmp.clone(), o.sway),
+        b.vert(V(c.x + nx * o.w, g, c.z + nz * o.w), V(nx * 0.45, 0.9, nz * 0.45), 0, 0, o.lo, 0),
+      ];
+      if (prev) for (let q = 0; q < 2; q++) b.quad(prev[q], ids[q], prev[q + 1], ids[q + 1]);
+      prev = ids;
+    }
+  }
+}
+
+const _bm = new THREE.Matrix4();
+const _bq = new THREE.Quaternion();
+const _by = new THREE.Vector3(0, 1, 0);
+/** A box standing on the ground at (x, z): `w` along the heading `ang`, `d` across, `h` tall, its foot at `y0`. */
+function box(b: GeoBuilder, x: number, y0: number, z: number, w: number, d: number, h: number, ang: number, col: number | THREE.Color) {
+  _bq.setFromAxisAngle(_by, -ang);
+  _bm.compose(V(x, y0 + h / 2, z), _bq, V(1, 1, 1));
+  b.add(new THREE.BoxGeometry(w, h, d), _bm, null, typeof col === 'number' ? C(col) : col);
+}
+
+/** A farmstead: whitewashed farmhouse with a tiled hip roof, a tin shed, a water tank on legs, stacked hay bales. */
+function farmstead(b: GeoBuilder, m: GameMap, at: (u: number, v: number) => { x: number; y: number }, u0: number, ang: number, k: number, sideW: number) {
+  const h = (q: number) => hash2(k, q, 4481);
+  const gy = (p: { x: number; y: number }) => surfaceHeight(m, p.x, p.y);
+  // the yard: packed earth
+  const yard: Field = { ...(() => { const c = at(u0, 0); return { cx: c.x, cy: c.y }; })(), hl: 0.5, hw: sideW, angle: ang, type: FieldType.Plowed };
+  soilBed(b, m, yard, C(0xc4ac80), k * 7 + 3);
+  // the house: walls, a darker plinth, windows and a door, the hip roof
+  const hv = h(1) < 0.5 ? 1 : -1;
+  const hp = at(u0, hv * sideW * 0.45);
+  const y = gy(hp) + 0.005;
+  const HW = 0.5;
+  const HD = 0.36;
+  const HH = 0.24;
+  box(b, hp.x, y, hp.y, HW + 0.02, HD + 0.02, 0.035, ang, 0xa89a84);
+  box(b, hp.x, y, hp.y, HW, HD, HH, ang, 0xeee6d6);
+  const roof = new THREE.ConeGeometry(Math.hypot(HW, HD) * 0.56, 0.16, 4, 1);
+  roof.rotateY(Math.PI / 4);
+  roof.scale(HW / HD, 1, 1);
+  _bq.setFromAxisAngle(_by, -ang);
+  _bm.compose(V(hp.x, y + HH + 0.08, hp.y), _bq, V(1, 1, 1));
+  b.add(roof, _bm, null, C(0xb4583a));
+  // windows and a door on the long sides
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  for (const side of [-1, 1])
+    for (const wx of [-0.15, 0, 0.15]) {
+      const door = side === 1 && wx === 0;
+      const px = hp.x + ca * wx - sa * side * (HD / 2 + 0.004);
+      const pz = hp.y + sa * wx + ca * side * (HD / 2 + 0.004);
+      box(b, px, y + (door ? 0.01 : 0.1), pz, door ? 0.07 : 0.06, 0.01, door ? 0.15 : 0.07, ang, door ? 0x5a3a22 : 0x2a3036);
+    }
+  // the tin shed (open-sided: posts under a sloping roof), a tractor-trailer's worth of bales under it
+  const sp = at(u0 + (h(2) - 0.5) * 0.2, -hv * sideW * 0.5);
+  const sy = gy(sp);
+  const SW = 0.62;
+  const SD = 0.34;
+  for (const cx of [-1, 1]) for (const cz of [-1, 1]) box(b, sp.x + ca * cx * SW * 0.45 - sa * cz * SD * 0.45, sy, sp.y + sa * cx * SW * 0.45 + ca * cz * SD * 0.45, 0.025, 0.025, 0.2, ang, 0x6a6a68);
+  _bq.setFromAxisAngle(_by, -ang).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), 0.12));
+  _bm.compose(V(sp.x, sy + 0.215, sp.y), _bq, V(1, 1, 1));
+  b.add(new THREE.BoxGeometry(SW + 0.06, 0.012, SD + 0.08), _bm, null, C(0x9aa0a6));
+  for (let i = 0; i < 6; i++) {
+    const bx = (i % 3) * 0.13 - 0.13;
+    const by = Math.floor(i / 3) * 0.07;
+    box(b, sp.x + ca * bx, sy + by, sp.y + sa * bx, 0.12, 0.09, 0.065, ang, i % 2 ? 0xd8bc72 : 0xc8ac64);
+  }
+  // the water tank on four legs, by the house
+  const tp = at(u0 + 0.3 * (h(3) < 0.5 ? 1 : -1), hv * sideW * 0.05);
+  const ty = gy(tp);
+  for (const cx of [-1, 1]) for (const cz of [-1, 1]) box(b, tp.x + cx * 0.06, ty, tp.y + cz * 0.06, 0.016, 0.016, 0.24, 0, 0x707274);
+  _bm.makeTranslation(tp.x, ty + 0.24 + 0.08, tp.y);
+  b.add(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 12), _bm, null, C(0xd8dcdc));
+}
+
+/**
+ * Desert farm estates (layout.pivots: flat open ground set aside for one): a block of long rectangular fields
+ * side by side - golden wheat with tramlines and ripeness patches, vineyards on trellises, olive / citrus groves,
+ * green fodder with sprinklers - each on its own soil bed inside a low earth bank with weeds on the margins,
+ * dirt tracks with wheel ruts between them, an irrigation main along the headland, a farmstead at one end and a
+ * windbreak of tall narrow trees along one long edge.
+ */
+function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) => GeoBuilder, trees: Record<TreeKind, Inst[]>) {
   const pivots = layout.pivots ?? [];
-  if (!pivots.length) return;
-  const armMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.7 }));
   pivots.forEach((pv, k) => {
     const b = crops(pv.x, pv.y);
-    const g0 = surfaceHeight(m, pv.x, pv.y);
-    const segs = quality === 'low' ? 36 : 56;
-    const TAU = Math.PI * 2;
-    // the field's edge is never a perfect circle: the planted radius wanders with the angle
-    const rim = (th: number) => pv.r * (0.93 + 0.07 * Math.sin(th * 3 + k) + 0.045 * Math.sin(th * 7 + k * 2.3) + (hash2(Math.floor(th * 9), k, 4433) - 0.5) * 0.05);
-    // soil under the crops: the whole disc, a little darker towards the rim
-    const soil = C(0xb89868);
-    const rings = Math.max(3, Math.round(pv.r / 0.6));
-    const ids: number[][] = [];
-    for (let i = 0; i <= rings; i++) {
-      const row: number[] = [];
-      for (let s = 0; s <= segs; s++) {
-        const th = (s / segs) * TAU;
-        const rr = (i / rings) * (rim(th) + 0.1);
-        const x = pv.x + Math.cos(th) * rr;
-        const z = pv.y + Math.sin(th) * rr;
-        const tone = 0.88 + hash2(i, s, 4432 + k) * 0.24;
-        row.push(b.vert(V(x, surfaceHeight(m, x, z) + 0.015, z), V(0, 1, 0), 0, 0, soil.clone().multiplyScalar(tone * (1 - (i / rings) * 0.1)), 0));
-      }
-      ids.push(row);
-    }
-    for (let i = 0; i < rings; i++) for (let s = 0; s < segs; s++) b.quad(ids[i + 1][s], ids[i + 1][s + 1], ids[i][s], ids[i][s + 1]);
-    // pie wedges, each a different crop in circular rows: tall wheat, dark maize, low alfalfa, young sprouts, stubble, bare furrows
-    type Wedge = { h: number; gap: number; lo: THREE.Color; hi: THREE.Color; sway: number; w: number };
-    const kinds: Wedge[] = [
-      { h: 0.1, gap: 0.17, lo: C(0xb09050), hi: C(0xf0d490), sway: 1, w: 0.05 }, // wheat
-      { h: 0.14, gap: 0.24, lo: C(0x3e6e24), hi: C(0x62a034), sway: 0.8, w: 0.07 }, // maize
-      { h: 0.045, gap: 0.12, lo: C(0x4c8028), hi: C(0x78bc3c), sway: 0.5, w: 0.045 }, // alfalfa
-      { h: 0.025, gap: 0.2, lo: C(0x907a4a), hi: C(0xa8c860), sway: 0.3, w: 0.04 }, // young sprouts
-      { h: 0.018, gap: 0.14, lo: C(0xb09c68), hi: C(0xe0cc94), sway: 0.2, w: 0.04 }, // stubble
-      { h: 0.012, gap: 0.16, lo: C(0x907050), hi: C(0xc0a078), sway: 0, w: 0.05 }, // bare furrows
-    ];
-    // (the greens twice: most of a circle is in leaf)
-    const mix = [kinds[0], kinds[1], kinds[2], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]];
-    const nW = 4 + Math.floor(hash2(k, 5, 4431) * 3);
-    const widths = Array.from({ length: nW }, (_, q) => 0.6 + hash2(k, 10 + q, 4431));
-    const wsum = widths.reduce((p, q) => p + q, 0);
-    let acc = hash2(k, 1, 4431) * TAU;
-    const wedges: { a0: number; a1: number; kind: Wedge }[] = [];
-    let prevKind = -1;
-    for (let q = 0; q < nW; q++) {
-      let ki = Math.floor(hash2(k, 20 + q, 4431) * mix.length);
-      if (ki === prevKind) ki = (ki + 1) % mix.length;
-      prevKind = ki;
-      const span = (widths[q] / wsum) * TAU;
-      wedges.push({ a0: acc, a1: acc + span, kind: mix[ki] });
-      acc += span;
-    }
-    const towers = Math.max(2, Math.round(pv.r / 1.1));
-    const tmp = new THREE.Color();
-    for (const wg of wedges) {
-      const K = wg.kind;
-      let row = 0;
-      for (let rho = pv.r * 0.1; rho < pv.r; rho += K.gap, row++) {
-        // the towers' wheel tracks stay bare
-        const tpos = (rho / pv.r) * towers;
-        if (Math.round(tpos) >= 1 && Math.abs(tpos - Math.round(tpos)) * (pv.r / towers) < 0.05) continue;
-        const arc = (wg.a1 - wg.a0) * rho;
-        const nS = Math.max(2, Math.ceil(arc / 0.3));
-        let prev: number[] | null = null;
-        for (let s = 0; s <= nS; s++) {
-          const th = wg.a0 + 0.015 + (s / nS) * (wg.a1 - wg.a0 - 0.03);
-          const edge = rim(th) - 0.04;
-          const cx = pv.x + Math.cos(th) * rho;
-          const cz = pv.y + Math.sin(th) * rho;
-          if (rho > edge || !plantable(m, cx, cz)) {
-            prev = null;
-            continue;
-          }
-          const gy = surfaceHeight(m, cx, cz) + 0.015;
-          // plants differ in size: per patch, per row and per plant; lower towards the rim
-          const patch = 0.75 + 0.5 * hash2(Math.floor(th * 6), Math.floor(rho * 2.2), 4436 + k);
-          const taper = Math.min(1, (edge - rho) / 0.5 + 0.35);
-          const hv = K.h * patch * taper * (0.78 + hash2(k * 17 + row, s, 4434) * 0.44);
-          tmp.copy(K.hi).multiplyScalar(0.88 + hash2(k * 17 + row, s, 4435) * 0.24);
-          const rx = Math.cos(th);
-          const rz = Math.sin(th);
-          const ids2 = [
-            b.vert(V(cx - rx * K.w, gy, cz - rz * K.w), V(-rx * 0.45, 0.9, -rz * 0.45), 0, 0, K.lo, 0),
-            b.vert(V(cx, gy + hv, cz), V(0, 1, 0), 0, 1, tmp.clone(), K.sway),
-            b.vert(V(cx + rx * K.w, gy, cz + rz * K.w), V(rx * 0.45, 0.9, rz * 0.45), 0, 0, K.lo, 0),
-          ];
-          if (prev) for (let q = 0; q < 2; q++) b.quad(ids2[q], prev[q], ids2[q + 1], prev[q + 1]);
-          prev = ids2;
+    const h = (q: number) => hash2(k, q, 4461);
+    // the block: its rows along one side (a little off the grid), fitting the cleared disc (clear to r + 0.4)
+    const ang = (h(1) < 0.5 ? 0 : Math.PI / 2) + (h(2) - 0.5) * 0.3;
+    const ca = Math.cos(ang);
+    const sa = Math.sin(ang);
+    const Rc = pv.r + 0.35;
+    const L = Rc * 0.8;
+    const W = Math.sqrt(Rc * Rc - L * L) - 0.38;
+    const at = (u: number, v: number) => ({ x: pv.x + ca * u - sa * v, y: pv.y + sa * u + ca * v });
+    // the farmstead takes one end, the fields the rest
+    const fe = h(4) < 0.5 ? 1 : -1;
+    const FS = 1.15;
+    const uc = -fe * (FS / 2);
+    const Lf = L - FS / 2;
+    farmstead(b, m, at, fe * (L - FS / 2 + 0.08), ang, k, W);
+    // 3-4 long fields across the block, dirt tracks between
+    const n = 3 + Math.floor(h(3) * 2);
+    const track = 0.26;
+    const ws = Array.from({ length: n }, (_, q) => 0.7 + h(10 + q) * 0.6);
+    const sum = ws.reduce((p, q) => p + q, 0);
+    const usable = W * 2 - track * (n - 1);
+    let v0 = -W;
+    let prev = '';
+    for (let q = 0; q < n; q++) {
+      const w = (ws[q] / sum) * usable;
+      const vc = v0 + w / 2;
+      v0 += w + track;
+      const c = at(uc, vc);
+      const f: Field = { cx: c.x, cy: c.y, hl: Lf - 0.06, hw: w / 2 - 0.05, angle: ang, type: FieldType.Wheat };
+      const r = h(50 + q);
+      let crop = r < 0.42 ? 'wheat' : r < 0.6 ? 'vineyard' : r < 0.76 ? 'grove' : r < 0.9 ? 'fodder' : 'stubble';
+      if (crop === prev) crop = crop === 'wheat' ? 'fodder' : 'wheat';
+      // (vines and groves need a few rows' width)
+      if (w < 1.05 && (crop === 'vineyard' || crop === 'grove')) crop = prev === 'wheat' ? 'fodder' : 'wheat';
+      prev = crop;
+      const seed = k * 131 + q * 17;
+      if (crop === 'wheat') {
+        const young = h(60 + q) < 0.2;
+        soilBed(b, m, f, C(0x9c7e52), seed);
+        cropRows(b, m, f, { gap: 0.1, h: 0.09, w: 0.06, lo: C(young ? 0x6e7a3a : 0x9a7c44), hi: C(young ? 0xb8c068 : 0xeac87a), alt: C(young ? 0x8ea04c : 0xc8a456), sway: 1, tram: 9, seed });
+      } else if (crop === 'stubble') {
+        // harvested: short pale stubble, round bales left lying in lines
+        soilBed(b, m, f, C(0xb09468), seed);
+        cropRows(b, m, f, { gap: 0.1, h: 0.018, w: 0.05, lo: C(0xa08a5c), hi: C(0xe0cc94), alt: C(0xc8b07a), sway: 0, tram: 0, seed });
+        const P = frame(f);
+        for (let i = 0; i < 9; i++) {
+          const p = P((hash2(seed, i, 4474) - 0.5) * f.hl * 1.7, (hash2(seed, i, 4475) - 0.5) * f.hw * 1.6);
+          if (!plantable(m, p.x, p.z)) continue;
+          _bm.makeRotationZ(Math.PI / 2).premultiply(new THREE.Matrix4().makeRotationY(hash2(seed, i, 4476) * 3)).setPosition(p.x, surfaceHeight(m, p.x, p.z) + 0.045, p.z);
+          b.add(new THREE.CylinderGeometry(0.045, 0.045, 0.07, 10), _bm, null, C(0xd0b46c));
         }
+      } else if (crop === 'vineyard') {
+        soilBed(b, m, f, C(0x94744c), seed);
+        vineyard(b, m, f, seed, true);
+      } else if (crop === 'grove') {
+        soilBed(b, m, f, C(0xa08660), seed);
+        // the grass between the trees
+        cropRows(b, m, f, { gap: 0.31, h: 0.02, w: 0.08, lo: C(0x8a8a50), hi: C(0x9aa858), alt: C(0xb0a868), sway: 0.2, tram: 0, seed });
+        orchard(m, f, seed, h(80 + q) < 0.6 ? 'olive' : 'citrus', trees);
+      } else {
+        // green fodder (alfalfa): low, dense, bright, the sprinkler risers standing in it
+        soilBed(b, m, f, C(0x7a6a46), seed);
+        cropRows(b, m, f, { gap: 0.08, h: 0.045, w: 0.05, lo: C(0x3e6e24), hi: C(0x7cbc40), alt: C(0x5a9a30), sway: 0.5, tram: 0, seed });
+        const P = frame(f);
+        for (let i = -2; i <= 2; i++)
+          for (const j of [-0.5, 0.5]) {
+            const p = P(i * f.hl * 0.4, j * f.hw);
+            box(b, p.x, surfaceHeight(m, p.x, p.z), p.z, 0.008, 0.008, 0.11, 0, 0x5a5e62);
+          }
+      }
+      // the earth bank round the field, weeds along it
+      const P = frame(f);
+      const bank = C(0x8a6e48);
+      for (const sv of [-1, 1]) {
+        const e = P(0, sv * (f.hw + 0.03));
+        box(b, e.x, surfaceHeight(m, e.x, e.z), e.z, f.hl * 2 + 0.06, 0.05, 0.022, ang, bank);
+        const e2 = P(sv * (f.hl + 0.03), 0);
+        box(b, e2.x, surfaceHeight(m, e2.x, e2.z), e2.z, 0.05, f.hw * 2 + 0.06, 0.022, ang, bank);
+      }
+      const per = (f.hl + f.hw) * 4;
+      const nWeed = Math.floor(per / 0.16);
+      for (let i = 0; i < nWeed; i++) {
+        if (hash2(seed, i, 4477) < 0.35) continue;
+        let t = (i / nWeed) * per;
+        let p: { x: number; z: number };
+        const out = 0.07 + hash2(seed, i, 4478) * 0.05;
+        if (t < f.hl * 2) p = P(-f.hl + t, -(f.hw + out));
+        else if ((t -= f.hl * 2) < f.hw * 2) p = P(f.hl + out, -f.hw + t);
+        else if ((t -= f.hw * 2) < f.hl * 2) p = P(f.hl - t, f.hw + out);
+        else p = P(-(f.hl + out), f.hw - (t - f.hl * 2));
+        if (!plantable(m, p.x, p.z)) continue;
+        const sz = 0.6 + hash2(seed, i, 4479) * 0.8;
+        _bm.compose(V(p.x, surfaceHeight(m, p.x, p.z) + 0.02 * sz, p.z), _bq.setFromAxisAngle(_by, i), V(sz, sz, sz));
+        b.add(new THREE.ConeGeometry(0.035, 0.05, 5), _bm, null, C(hash2(seed, i, 4480) < 0.5 ? 0x6a7a3a : 0x8a8448));
       }
     }
-    // the arm: centre tower, a pipe out to the rim on A-frame towers with wheels
-    const ab = new GeoBuilder();
-    const steel = C(0xb8bcc0);
-    const dark = C(0x2a2a2a);
-    const H = 0.17;
-    const add = (geo: THREE.BufferGeometry, x: number, y: number, z: number, c: THREE.Color, rx = 0, rz = 0) =>
-      ab.add(geo, new THREE.Matrix4().compose(V(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, 0, rz)), V(1, 1, 1)), null, c);
-    add(new THREE.CylinderGeometry(0.03, 0.05, H + 0.06, 6), 0, (H + 0.06) / 2, 0, steel);
-    add(new THREE.BoxGeometry(0.08, 0.06, 0.08), 0, 0.03, 0, C(0x8a8a84));
-    add(new THREE.BoxGeometry(pv.r, 0.014, 0.014), pv.r / 2, H, 0, steel);
-    const nT = Math.max(2, Math.round(pv.r / 1.1));
-    for (let t = 1; t <= nT; t++) {
-      const x = (t / nT) * pv.r - 0.04;
-      for (const s of [-1, 1]) {
-        add(new THREE.BoxGeometry(0.01, H + 0.02, 0.01), x, H / 2, s * 0.035, steel, s * 0.25);
-        add(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 8).rotateX(Math.PI / 2), x, 0.03, s * 0.07, dark);
+    // the dirt tracks: packed earth, two darker wheel ruts
+    v0 = -W;
+    for (let q = 0; q < n - 1; q++) {
+      v0 += (ws[q] / sum) * usable;
+      const c = at(uc, v0 + track / 2);
+      soilBed(b, m, { cx: c.x, cy: c.y, hl: Lf, hw: track / 2 - 0.02, angle: ang, type: FieldType.Plowed }, C(0xc8b08a), k * 53 + q);
+      for (const rv of [-0.055, 0.055]) {
+        const rp = at(uc, v0 + track / 2 + rv);
+        box(b, rp.x, surfaceHeight(m, rp.x, rp.y) + 0.013, rp.y, Lf * 2, 0.03, 0.002, ang, 0x9a8462);
       }
-      // the truss under the pipe: lower chord and diagonals
-      const x0 = ((t - 1) / nT) * pv.r;
-      const mid = (x0 + x) / 2;
-      add(new THREE.BoxGeometry(x - x0, 0.006, 0.006), mid, H - 0.06, 0, steel);
-      for (const dx of [-0.25, 0.25]) add(new THREE.BoxGeometry(0.006, 0.075, 0.006), mid + dx * (x - x0), H - 0.03, 0, steel, 0, dx * 2.2);
-      // sprinkler drops
-      for (let q = 1; q < 4; q++) add(new THREE.BoxGeometry(0.004, 0.08, 0.004), x0 + ((x - x0) * q) / 4, H - 0.04, 0, dark);
+      v0 += track;
     }
-    add(new THREE.BoxGeometry(0.22, 0.008, 0.008), pv.r + 0.08, H - 0.01, 0, steel); // end gun
-    const arm = new THREE.Mesh(ab.build(), armMat);
-    arm.position.set(pv.x, g0 + 0.01, pv.y);
-    arm.castShadow = quality === 'high';
-    arm.receiveShadow = true;
-    arm.name = 'farm-pivot';
-    const phase = hash2(k, 4, 4431) * Math.PI * 2;
-    // one turn every 6 minutes; the culling sphere covers the whole circle
-    arm.geometry.boundingSphere = new THREE.Sphere(V(0, 0.1, 0), pv.r + 0.4);
-    arm.onBeforeRender = () => {
-      arm.rotation.y = phase + (performance.now() / 1000) * ((Math.PI * 2) / 360);
-      arm.updateMatrixWorld();
-    };
-    out.push(arm);
+    // the irrigation main along the headland by the farmstead, a riser into each field
+    const hu = uc + fe * (Lf + 0.02);
+    const mp = at(hu, 0);
+    _bq.setFromAxisAngle(V(-sa, 0, ca).normalize(), Math.PI / 2);
+    _bm.compose(V(mp.x, surfaceHeight(m, mp.x, mp.y) + 0.03, mp.y), new THREE.Quaternion().setFromAxisAngle(_by, -ang).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), Math.PI / 2)), V(1, 1, 1));
+    b.add(new THREE.CylinderGeometry(0.014, 0.014, W * 2, 6), _bm, null, C(0x2a2e30));
+    // the windbreak: a row of tall narrow trees along one long edge (cypress-like), staggered
+    const side = h(5) < 0.5 ? -1 : 1;
+    const nT = Math.max(6, Math.floor((L * 2) / 0.26));
+    for (let i = 0; i <= nT; i++) {
+      const p = at(-L + (i / nT) * L * 2, side * (W + 0.2 + (i % 2) * 0.08));
+      if (!plantable(m, p.x, p.y) || hash2(k, i, 4462) < 0.06) continue;
+      const s = 0.75 + hash2(k, i, 4463) * 0.35;
+      const tone = 0.62 + hash2(k, i, 4464) * 0.2;
+      trees.olive.push({ x: p.x, y: surfaceHeight(m, p.x, p.y) - 0.01, z: p.y, rotY: hash2(i, k, 4465) * 6.28, sx: s * 0.7, sy: s * (2.3 + hash2(i, k, 4466) * 0.7), sz: s * 0.7, color: new THREE.Color(tone * 0.78, tone, tone * 0.76) });
+    }
+    // shade trees round the farmstead
+    for (let i = 0; i < 3; i++) {
+      const p = at(fe * (L - 0.15 - hash2(k, i, 4467) * 0.8), (hash2(k, i, 4468) - 0.5) * W * 1.9);
+      if (!plantable(m, p.x, p.y)) continue;
+      const s = 1.1 + hash2(k, i, 4469) * 0.3;
+      trees.olive.push({ x: p.x, y: surfaceHeight(m, p.x, p.y) - 0.01, z: p.y, rotY: i * 2.1, sx: s, sy: s, sz: s, color: new THREE.Color(0.9, 0.95, 0.88) });
+    }
   });
 }
 
@@ -518,44 +703,18 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
     } else if (crop === 'stubble') {
       if (biome !== 'winter') ridges(crops(f.cx, f.cy), m, f, gap * 1.4, 0.016, gap * 0.5, C(0x8a7448), C(0xc8b078), k * 31);
     } else if (crop === 'vineyard') {
-      const leaf = C(biome === 'desert' ? 0x6a8434 : 0x587a2a);
-      ridges(crops(f.cx, f.cy), m, f, 0.34, 0.07, 0.035, leaf.clone().multiplyScalar(0.55), leaf, k * 31, 0.05, true);
-      // trellis posts every ~1 tile
-      const P = frame(f);
-      const nRows = Math.max(1, Math.floor((f.hw * 2 - 0.2) / 0.34));
-      const b0 = -((nRows - 1) * 0.34) / 2;
-      const len = f.hl * 2 - 0.24;
-      const nP = Math.max(1, Math.ceil(len / 1.0));
-      const pb = crops(f.cx, f.cy);
-      for (let r = 0; r < nRows; r++)
-        for (let i = 0; i <= nP; i++) {
-          const c = P(-len / 2 + (i / nP) * len, b0 + r * 0.34);
-          if (!plantable(m, c.x, c.z)) continue;
-          pb.add(new THREE.BoxGeometry(0.012, 0.14, 0.012), new THREE.Matrix4().makeTranslation(c.x, surfaceHeight(m, c.x, c.z) + 0.06, c.z), null, C(0x6a5a46));
-        }
+      vineyard(crops(f.cx, f.cy), m, f, k, biome === 'desert');
     } else if (crop === 'greenhouse') {
       tunnels(houses(f.cx, f.cy), m, f, k);
     } else if (crop === 'orchard') {
-      const kind: TreeKind = biome === 'desert' ? (hash2(k, 8, 4441) < 0.5 ? 'olive' : 'citrus') : 'apple';
-      const P = frame(f);
-      const sp = kind === 'olive' ? 0.62 : 0.52;
-      const nA = Math.max(1, Math.floor((f.hl * 2 - 0.3) / sp) + 1);
-      const nB = Math.max(1, Math.floor((f.hw * 2 - 0.3) / sp) + 1);
-      for (let i = 0; i < nA; i++)
-        for (let j = 0; j < nB; j++) {
-          const c = P(-((nA - 1) * sp) / 2 + i * sp, -((nB - 1) * sp) / 2 + j * sp);
-          if (!plantable(m, c.x, c.z) || hash2(k * 97 + i, j, 4442) < 0.04) continue;
-          const s = 0.85 + hash2(k * 97 + i, j, 4443) * 0.3;
-          const tone = 0.88 + hash2(k * 97 + i, j, 4444) * 0.24;
-          trees[kind].push({ x: c.x, y: surfaceHeight(m, c.x, c.z) - 0.01, z: c.z, rotY: hash2(i, j, 4445 + k) * 6.28, sx: s, sy: s * (0.9 + hash2(i, j, 4446) * 0.2), sz: s, color: new THREE.Color(tone, tone, tone) });
-        }
+      orchard(m, f, k, biome === 'desert' ? (hash2(k, 8, 4441) < 0.5 ? 'olive' : 'citrus') : 'apple', trees);
     } else if (crop === 'plain' && (f.type === FieldType.Plowed || f.type === FieldType.Fallow) && biome !== 'winter' && f.hl > 2.2 && f.hw > 0.9 && far(f.cx, f.cy, 14)) {
       tractorFields.push({ f, k });
     }
   });
 
-  // the pivots draw their discs into the crop builders, the arms are their own meshes
-  buildPivots(m, layout, fog, quality, crops, out);
+  // the desert estates draw into the crop builders and the orchard trees
+  buildEstates(m, layout, crops, trees);
 
   const cropMat = cropMaterial(fog, quality === 'low' ? 0 : 0.022);
   for (const b of cropB.values()) {
