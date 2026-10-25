@@ -356,35 +356,93 @@ function buildPivots(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' |
   const armMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.7 }));
   pivots.forEach((pv, k) => {
     const b = crops(pv.x, pv.y);
-    const rings = Math.max(4, Math.round(pv.r / 0.35));
-    const segs = quality === 'low' ? 28 : 40;
     const g0 = surfaceHeight(m, pv.x, pv.y);
-    // a pie slice is harvested / freshly sown (bare soil)
-    const cut0 = hash2(k, 1, 4431) * Math.PI * 2;
-    const cutW = 0.6 + hash2(k, 2, 4431) * 1.2;
-    const green = C(hash2(k, 3, 4431) < 0.5 ? 0x5a8a2a : 0x6a9a34);
-    const soil = C(0x9a7a50);
+    const segs = quality === 'low' ? 36 : 56;
+    const TAU = Math.PI * 2;
+    // the field's edge is never a perfect circle: the planted radius wanders with the angle
+    const rim = (th: number) => pv.r * (0.93 + 0.07 * Math.sin(th * 3 + k) + 0.045 * Math.sin(th * 7 + k * 2.3) + (hash2(Math.floor(th * 9), k, 4433) - 0.5) * 0.05);
+    // soil under the crops: the whole disc, a little darker towards the rim
+    const soil = C(0xb89868);
+    const rings = Math.max(3, Math.round(pv.r / 0.6));
     const ids: number[][] = [];
     for (let i = 0; i <= rings; i++) {
-      const rr = (i / rings) * pv.r;
       const row: number[] = [];
       for (let s = 0; s <= segs; s++) {
-        const th = (s / segs) * Math.PI * 2;
+        const th = (s / segs) * TAU;
+        const rr = (i / rings) * (rim(th) + 0.1);
         const x = pv.x + Math.cos(th) * rr;
         const z = pv.y + Math.sin(th) * rr;
-        const y = surfaceHeight(m, x, z) + 0.02;
-        let d = th - cut0;
-        d -= Math.floor(d / (Math.PI * 2)) * Math.PI * 2;
-        const bare = d < cutW;
-        // the towers' wheel tracks: darker rings
-        const track = i > 0 && i % 3 === 0;
-        const tone = 0.86 + hash2(i, s, 4432 + k) * 0.22;
-        const c = (bare ? soil : green).clone().multiplyScalar(tone * (track ? 0.72 : 1) * (1 - (i / rings) * 0.08));
-        row.push(b.vert(V(x, y, z), V(0, 1, 0), 0, 0, c, bare ? 0 : 0.15));
+        const tone = 0.88 + hash2(i, s, 4432 + k) * 0.24;
+        row.push(b.vert(V(x, surfaceHeight(m, x, z) + 0.015, z), V(0, 1, 0), 0, 0, soil.clone().multiplyScalar(tone * (1 - (i / rings) * 0.1)), 0));
       }
       ids.push(row);
     }
     for (let i = 0; i < rings; i++) for (let s = 0; s < segs; s++) b.quad(ids[i + 1][s], ids[i + 1][s + 1], ids[i][s], ids[i][s + 1]);
+    // pie wedges, each a different crop in circular rows: tall wheat, dark maize, low alfalfa, young sprouts, stubble, bare furrows
+    type Wedge = { h: number; gap: number; lo: THREE.Color; hi: THREE.Color; sway: number; w: number };
+    const kinds: Wedge[] = [
+      { h: 0.1, gap: 0.17, lo: C(0xb09050), hi: C(0xf0d490), sway: 1, w: 0.05 }, // wheat
+      { h: 0.14, gap: 0.24, lo: C(0x3e6e24), hi: C(0x62a034), sway: 0.8, w: 0.07 }, // maize
+      { h: 0.045, gap: 0.12, lo: C(0x4c8028), hi: C(0x78bc3c), sway: 0.5, w: 0.045 }, // alfalfa
+      { h: 0.025, gap: 0.2, lo: C(0x907a4a), hi: C(0xa8c860), sway: 0.3, w: 0.04 }, // young sprouts
+      { h: 0.018, gap: 0.14, lo: C(0xb09c68), hi: C(0xe0cc94), sway: 0.2, w: 0.04 }, // stubble
+      { h: 0.012, gap: 0.16, lo: C(0x907050), hi: C(0xc0a078), sway: 0, w: 0.05 }, // bare furrows
+    ];
+    // (the greens twice: most of a circle is in leaf)
+    const mix = [kinds[0], kinds[1], kinds[2], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]];
+    const nW = 4 + Math.floor(hash2(k, 5, 4431) * 3);
+    const widths = Array.from({ length: nW }, (_, q) => 0.6 + hash2(k, 10 + q, 4431));
+    const wsum = widths.reduce((p, q) => p + q, 0);
+    let acc = hash2(k, 1, 4431) * TAU;
+    const wedges: { a0: number; a1: number; kind: Wedge }[] = [];
+    let prevKind = -1;
+    for (let q = 0; q < nW; q++) {
+      let ki = Math.floor(hash2(k, 20 + q, 4431) * mix.length);
+      if (ki === prevKind) ki = (ki + 1) % mix.length;
+      prevKind = ki;
+      const span = (widths[q] / wsum) * TAU;
+      wedges.push({ a0: acc, a1: acc + span, kind: mix[ki] });
+      acc += span;
+    }
+    const towers = Math.max(2, Math.round(pv.r / 1.1));
+    const tmp = new THREE.Color();
+    for (const wg of wedges) {
+      const K = wg.kind;
+      let row = 0;
+      for (let rho = pv.r * 0.1; rho < pv.r; rho += K.gap, row++) {
+        // the towers' wheel tracks stay bare
+        const tpos = (rho / pv.r) * towers;
+        if (Math.round(tpos) >= 1 && Math.abs(tpos - Math.round(tpos)) * (pv.r / towers) < 0.05) continue;
+        const arc = (wg.a1 - wg.a0) * rho;
+        const nS = Math.max(2, Math.ceil(arc / 0.3));
+        let prev: number[] | null = null;
+        for (let s = 0; s <= nS; s++) {
+          const th = wg.a0 + 0.015 + (s / nS) * (wg.a1 - wg.a0 - 0.03);
+          const edge = rim(th) - 0.04;
+          const cx = pv.x + Math.cos(th) * rho;
+          const cz = pv.y + Math.sin(th) * rho;
+          if (rho > edge || !plantable(m, cx, cz)) {
+            prev = null;
+            continue;
+          }
+          const gy = surfaceHeight(m, cx, cz) + 0.015;
+          // plants differ in size: per patch, per row and per plant; lower towards the rim
+          const patch = 0.75 + 0.5 * hash2(Math.floor(th * 6), Math.floor(rho * 2.2), 4436 + k);
+          const taper = Math.min(1, (edge - rho) / 0.5 + 0.35);
+          const hv = K.h * patch * taper * (0.78 + hash2(k * 17 + row, s, 4434) * 0.44);
+          tmp.copy(K.hi).multiplyScalar(0.88 + hash2(k * 17 + row, s, 4435) * 0.24);
+          const rx = Math.cos(th);
+          const rz = Math.sin(th);
+          const ids2 = [
+            b.vert(V(cx - rx * K.w, gy, cz - rz * K.w), V(-rx * 0.45, 0.9, -rz * 0.45), 0, 0, K.lo, 0),
+            b.vert(V(cx, gy + hv, cz), V(0, 1, 0), 0, 1, tmp.clone(), K.sway),
+            b.vert(V(cx + rx * K.w, gy, cz + rz * K.w), V(rx * 0.45, 0.9, rz * 0.45), 0, 0, K.lo, 0),
+          ];
+          if (prev) for (let q = 0; q < 2; q++) b.quad(ids2[q], prev[q], ids2[q + 1], prev[q + 1]);
+          prev = ids2;
+        }
+      }
+    }
     // the arm: centre tower, a pipe out to the rim on A-frame towers with wheels
     const ab = new GeoBuilder();
     const steel = C(0xb8bcc0);
