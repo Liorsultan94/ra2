@@ -471,58 +471,162 @@ function box(b: GeoBuilder, x: number, y0: number, z: number, w: number, d: numb
   b.add(new THREE.BoxGeometry(w, h, d), _bm, null, typeof col === 'number' ? C(col) : col);
 }
 
-/** A farmstead: whitewashed farmhouse with a tiled hip roof, a tin shed, a water tank on legs, stacked hay bales. */
-function farmstead(b: GeoBuilder, m: GameMap, at: (u: number, v: number) => { x: number; y: number }, u0: number, ang: number, k: number, sideW: number) {
+/** A box rotated about all three axes (roof sheets, solar panels). */
+function tbox(b: GeoBuilder, x: number, y: number, z: number, w: number, h: number, d: number, yaw: number, pitch: number, col: number) {
+  _bq.setFromAxisAngle(_by, -yaw).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), pitch));
+  _bm.compose(V(x, y, z), _bq, V(1, 1, 1));
+  b.add(new THREE.BoxGeometry(w, h, d), _bm, null, C(col));
+}
+
+/**
+ * A farmstead in the local frame of the estate (`at(u, v)` to tile space, rows along u): a whitewashed farmhouse
+ * (stone plinth, deep eaves under a tiled hip roof, chimney, a solar water heater on the roof, framed windows with
+ * shutters, a door under a vine pergola), a courtyard wall with a gate, an open tin barn with a ribbed roof and bales,
+ * a water tower, a pickup by the gate. `y`: ground height (the plot is flat).
+ */
+function farmstead(b: GeoBuilder, yard: GeoBuilder, m: GameMap, at: (u: number, v: number) => { x: number; y: number }, u0: number, ang: number, k: number, sideW: number, fe: number) {
   const h = (q: number) => hash2(k, q, 4481);
   const gy = (p: { x: number; y: number }) => surfaceHeight(m, p.x, p.y);
-  // the yard: packed earth
-  const yard: Field = { ...(() => { const c = at(u0, 0); return { cx: c.x, cy: c.y }; })(), hl: 0.5, hw: sideW, angle: ang, type: FieldType.Plowed };
-  soilBed(b, m, yard, C(0xc4ac80), k * 7 + 3);
-  // the house: walls, a darker plinth, windows and a door, the hip roof
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  // local (u along the rows, v across, out of the fields towards the block's end = +fe) to world
+  const L2W = (u: number, v: number) => at(u0 + u * fe, v);
+  // the yard: packed earth, a paler gravel apron by the house
+  const c0 = at(u0, 0);
+  soilBed(yard, m, { cx: c0.x, cy: c0.y, hl: 0.52, hw: sideW, angle: ang, type: FieldType.Plowed }, C(0xc4ac80), k * 7 + 3);
   const hv = h(1) < 0.5 ? 1 : -1;
-  const hp = at(u0, hv * sideW * 0.45);
-  const y = gy(hp) + 0.005;
-  const HW = 0.5;
-  const HD = 0.36;
-  const HH = 0.24;
-  box(b, hp.x, y, hp.y, HW + 0.02, HD + 0.02, 0.035, ang, 0xa89a84);
-  box(b, hp.x, y, hp.y, HW, HD, HH, ang, 0xeee6d6);
-  const roof = new THREE.ConeGeometry(Math.hypot(HW, HD) * 0.56, 0.16, 4, 1);
+  // ---- the house
+  const HW = 0.54;
+  const HD = 0.38;
+  const HH = 0.25;
+  const hp = L2W(0.04, hv * sideW * 0.42);
+  const y = gy(hp) + 0.004;
+  const wall = [0xf0e8d8, 0xece2cc, 0xf4eee2][Math.floor(h(9) * 3)];
+  box(b, hp.x, y, hp.y, HW + 0.03, HD + 0.03, 0.045, ang, 0x9a8a72); // stone plinth
+  box(b, hp.x, y + 0.04, hp.y, HW, HD, HH - 0.04, ang, wall);
+  box(b, hp.x, y + HH - 0.012, hp.y, HW + 0.012, HD + 0.012, 0.018, ang, 0xd8ccb4); // cornice
+  // the hip roof with deep eaves, ridge tiles a shade darker
+  const roof = new THREE.ConeGeometry(Math.hypot(HW, HD) * 0.62, 0.17, 4, 1);
   roof.rotateY(Math.PI / 4);
   roof.scale(HW / HD, 1, 1);
   _bq.setFromAxisAngle(_by, -ang);
-  _bm.compose(V(hp.x, y + HH + 0.08, hp.y), _bq, V(1, 1, 1));
-  b.add(roof, _bm, null, C(0xb4583a));
-  // windows and a door on the long sides
-  const ca = Math.cos(ang);
-  const sa = Math.sin(ang);
-  for (const side of [-1, 1])
-    for (const wx of [-0.15, 0, 0.15]) {
-      const door = side === 1 && wx === 0;
-      const px = hp.x + ca * wx - sa * side * (HD / 2 + 0.004);
-      const pz = hp.y + sa * wx + ca * side * (HD / 2 + 0.004);
-      box(b, px, y + (door ? 0.01 : 0.1), pz, door ? 0.07 : 0.06, 0.01, door ? 0.15 : 0.07, ang, door ? 0x5a3a22 : 0x2a3036);
-    }
-  // the tin shed (open-sided: posts under a sloping roof), a tractor-trailer's worth of bales under it
-  const sp = at(u0 + (h(2) - 0.5) * 0.2, -hv * sideW * 0.5);
-  const sy = gy(sp);
-  const SW = 0.62;
-  const SD = 0.34;
-  for (const cx of [-1, 1]) for (const cz of [-1, 1]) box(b, sp.x + ca * cx * SW * 0.45 - sa * cz * SD * 0.45, sy, sp.y + sa * cx * SW * 0.45 + ca * cz * SD * 0.45, 0.025, 0.025, 0.2, ang, 0x6a6a68);
-  _bq.setFromAxisAngle(_by, -ang).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), 0.12));
-  _bm.compose(V(sp.x, sy + 0.215, sp.y), _bq, V(1, 1, 1));
-  b.add(new THREE.BoxGeometry(SW + 0.06, 0.012, SD + 0.08), _bm, null, C(0x9aa0a6));
-  for (let i = 0; i < 6; i++) {
-    const bx = (i % 3) * 0.13 - 0.13;
-    const by = Math.floor(i / 3) * 0.07;
-    box(b, sp.x + ca * bx, sy + by, sp.y + sa * bx, 0.12, 0.09, 0.065, ang, i % 2 ? 0xd8bc72 : 0xc8ac64);
+  _bm.compose(V(hp.x, y + HH + 0.085, hp.y), _bq, V(1, 1, 1));
+  b.add(roof, _bm, null, C([0xb4583a, 0xa84e34, 0xc0643e][Math.floor(h(10) * 3)]));
+  box(b, hp.x, y + HH + 0.16, hp.y, HW * 0.32, 0.018, 0.018, ang, 0x8a3e2a);
+  // chimney
+  const ch = { x: hp.x + ca * HW * 0.28 - sa * HD * 0.12, y: hp.y + sa * HW * 0.28 + ca * HD * 0.12 };
+  box(b, ch.x, y + HH, ch.y, 0.045, 0.045, 0.17, ang, 0xe0d6c2);
+  box(b, ch.x, y + HH + 0.17, ch.y, 0.06, 0.06, 0.014, ang, 0x8a7a66);
+  // the solar water heater on the roof's sunny side: two tilted panels and the white tank above them
+  const sx = hp.x - ca * HW * 0.18 + sa * HD * 0.18;
+  const sz = hp.y - sa * HW * 0.18 - ca * HD * 0.18;
+  for (const o of [-0.07, 0.07]) tbox(b, sx + ca * o, y + HH + 0.07, sz + sa * o, 0.12, 0.008, 0.1, ang, -0.5, 0x1e2a3a);
+  _bq.setFromAxisAngle(_by, -ang).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 0, 1), Math.PI / 2));
+  _bm.compose(V(sx - sa * 0.05, y + HH + 0.12, sz + ca * 0.05), _bq, V(1, 1, 1));
+  b.add(new THREE.CylinderGeometry(0.03, 0.03, 0.2, 10), _bm, null, C(0xe8eaea));
+  // windows (frame, dark glass, green shutters) on all four sides, the door on the yard side
+  const win = (lu: number, lv: number, side: 'u' | 'v', dir: number, door: boolean) => {
+    const px = hp.x + ca * lu - sa * lv;
+    const pz = hp.y + sa * lu + ca * lv;
+    const yaw = side === 'v' ? ang : ang + Math.PI / 2;
+    const w = door ? 0.075 : 0.065;
+    const hh = door ? 0.15 : 0.075;
+    const y0 = y + (door ? 0.045 : 0.12);
+    box(b, px, y0 - 0.006, pz, w + 0.018, 0.008, hh + 0.012, yaw, 0xfaf6ee);
+    box(b, px, y0, pz, w, 0.012, hh, yaw, door ? 0x5a3a22 : 0x26303a);
+    if (!door)
+      for (const sdir of [-1, 1]) {
+        const off = (w / 2 + 0.022) * sdir;
+        const ox = side === 'v' ? ca * off : -sa * off;
+        const oz = side === 'v' ? sa * off : ca * off;
+        box(b, px + ox, y0, pz + oz, 0.036, 0.01, hh, yaw, 0x3e6a4a);
+      }
+    void dir;
+  };
+  for (const sv of [-1, 1]) for (const wu of [-0.17, 0, 0.17]) win(wu, sv * (HD / 2 + 0.006), 'v', sv, sv === -hv && wu === 0);
+  for (const su of [-1, 1]) win(su * (HW / 2 + 0.006), 0, 'u', su, false);
+  // the pergola by the door: four posts, beams, a vine canopy
+  const pg = { x: hp.x + sa * hv * (HD / 2 + 0.11), y: hp.y - ca * hv * (HD / 2 + 0.11) };
+  for (const pu of [-0.16, 0.16]) for (const pv2 of [-0.08, 0.08]) box(b, pg.x + ca * pu - sa * pv2, y, pg.y + sa * pu + ca * pv2, 0.016, 0.016, 0.17, ang, 0x6a4a30);
+  box(b, pg.x, y + 0.17, pg.y, 0.38, 0.2, 0.012, ang, 0x5e7e2e);
+  for (let i = 0; i < 4; i++) {
+    const o = -0.13 + i * 0.087;
+    box(b, pg.x + ca * o, y + 0.16, pg.y + sa * o, 0.014, 0.22, 0.012, ang, 0x6a4a30);
   }
-  // the water tank on four legs, by the house
-  const tp = at(u0 + 0.3 * (h(3) < 0.5 ? 1 : -1), hv * sideW * 0.05);
+  // ---- the courtyard wall round the yard's outer end, a gate gap facing the track
+  const wallC = 0xdcccae;
+  const wu1 = 0.5;
+  for (const sv of [-1, 1]) {
+    const a0 = L2W(wu1 * 0.5 - 0.02, sv * sideW);
+    box(b, a0.x, gy(a0), a0.y, wu1 + 0.04, 0.03, 0.07, ang, wallC);
+  }
+  const gate = 0.2 + h(11) * 0.2;
+  for (const seg of [
+    [-sideW, -gate / 2],
+    [gate / 2, sideW],
+  ]) {
+    const mid = (seg[0] + seg[1]) / 2;
+    const p = L2W(wu1, mid);
+    box(b, p.x, gy(p), p.y, 0.03, seg[1] - seg[0], 0.07, ang, wallC);
+  }
+  for (const gv of [-gate / 2, gate / 2]) {
+    const p = L2W(wu1, gv);
+    box(b, p.x, gy(p), p.y, 0.045, 0.045, 0.1, ang, 0xc8b89a);
+  }
+  // ---- the open barn: steel columns, a ribbed tin roof, a back wall, bales inside
+  const bp = L2W(0.06, -hv * sideW * 0.45);
+  const by = gy(bp);
+  const BW = 0.7;
+  const BD = 0.4;
+  const BH = 0.23;
+  for (const cu of [-1, 0, 1]) for (const cv of [-1, 1]) box(b, bp.x + ca * cu * BW * 0.46 - sa * cv * BD * 0.46, by, bp.y + sa * cu * BW * 0.46 + ca * cv * BD * 0.46, 0.022, 0.022, BH, ang, 0x6a6c6e);
+  const bw = { x: bp.x + sa * hv * BD * 0.48, y: bp.y - ca * hv * BD * 0.48 };
+  box(b, bw.x, by, bw.y, BW, 0.015, BH * 0.8, ang, 0x9aa2a6);
+  const tilt = 0.14 * -hv;
+  for (let i = 0; i < 14; i++) {
+    const o = -BW / 2 - 0.03 + ((i + 0.5) / 14) * (BW + 0.06);
+    tbox(b, bp.x + ca * o, by + BH + 0.012, bp.y + sa * o, (BW + 0.06) / 14 - 0.006, 0.01, BD + 0.1, ang, tilt, i % 2 ? 0xa8b0b4 : 0x949ca2);
+  }
+  for (let i = 0; i < 9; i++) {
+    const bx = (i % 3) * 0.14 - 0.14;
+    const bl = Math.floor(i / 3);
+    if (bl === 2 && i % 3 === 2) continue;
+    const p = { x: bp.x + ca * bx + sa * hv * 0.06, y: bp.y + sa * bx - ca * hv * 0.06 };
+    box(b, p.x, by + bl * 0.068, p.y, 0.13, 0.095, 0.066, ang, [0xd8bc72, 0xccb068, 0xe0c47c][(i + k) % 3]);
+  }
+  // ---- the water tower: lattice legs with cross braces, a tank with a conical lid and a ladder
+  const tp = L2W(0.34, hv * sideW * 0.05 - hv * 0.12);
   const ty = gy(tp);
-  for (const cx of [-1, 1]) for (const cz of [-1, 1]) box(b, tp.x + cx * 0.06, ty, tp.y + cz * 0.06, 0.016, 0.016, 0.24, 0, 0x707274);
-  _bm.makeTranslation(tp.x, ty + 0.24 + 0.08, tp.y);
-  b.add(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 12), _bm, null, C(0xd8dcdc));
+  const TH = 0.3;
+  for (const cx of [-1, 1]) for (const cz of [-1, 1]) box(b, tp.x + cx * 0.065, ty, tp.y + cz * 0.065, 0.014, 0.014, TH, 0, 0x686a6c);
+  for (const lv of [0.1, 0.2]) {
+    box(b, tp.x, ty + lv, tp.y + 0.065, 0.13, 0.008, 0.008, 0, 0x686a6c);
+    box(b, tp.x, ty + lv, tp.y - 0.065, 0.13, 0.008, 0.008, 0, 0x686a6c);
+    box(b, tp.x + 0.065, ty + lv, tp.y, 0.008, 0.008, 0.13, 0, 0x686a6c);
+    box(b, tp.x - 0.065, ty + lv, tp.y, 0.008, 0.008, 0.13, 0, 0x686a6c);
+  }
+  _bm.makeTranslation(tp.x, ty + TH + 0.08, tp.y);
+  b.add(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 16), _bm, null, C(0xd4d8d8));
+  _bm.makeTranslation(tp.x, ty + TH + 0.19, tp.y);
+  b.add(new THREE.ConeGeometry(0.105, 0.06, 16), _bm, null, C(0xb8bcbc));
+  box(b, tp.x + 0.1, ty, tp.y, 0.012, 0.03, TH + 0.16, 0, 0x585a5c);
+  // ---- the pickup by the gate
+  const pk = L2W(wu1 - 0.18, gate / 2 + 0.16);
+  const py = gy(pk) + 0.028;
+  const paint = [0xe8e8e4, 0x8a2a22, 0x3a4a5a, 0xc8b890][Math.floor(h(12) * 4)];
+  const pyaw = ang + Math.PI / 2 + (h(13) - 0.5) * 0.5;
+  const pc = Math.cos(pyaw);
+  const ps = Math.sin(pyaw);
+  box(b, pk.x, py, pk.y, 0.3, 0.13, 0.05, pyaw, paint);
+  box(b, pk.x + pc * 0.04, py + 0.05, pk.y + ps * 0.04, 0.11, 0.12, 0.05, pyaw, paint);
+  box(b, pk.x + pc * 0.04, py + 0.055, pk.y + ps * 0.04, 0.112, 0.122, 0.035, pyaw, 0x2a3440);
+  box(b, pk.x - pc * 0.09, py + 0.05, pk.y - ps * 0.09, 0.12, 0.12, 0.012, pyaw, 0x3a3a38);
+  for (const wu of [-0.1, 0.1])
+    for (const wv of [-0.065, 0.065]) {
+      _bq.setFromAxisAngle(_by, -pyaw).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), Math.PI / 2));
+      _bm.compose(V(pk.x + pc * wu - ps * wv, py, pk.y + ps * wu + pc * wv), _bq, V(1, 1, 1));
+      b.add(new THREE.CylinderGeometry(0.028, 0.028, 0.022, 10), _bm, null, C(0x1e1e1e));
+    }
 }
 
 /**
@@ -532,7 +636,7 @@ function farmstead(b: GeoBuilder, m: GameMap, at: (u: number, v: number) => { x:
  * dirt tracks with wheel ruts between them, an irrigation main along the headland, a farmstead at one end and a
  * windbreak of tall narrow trees along one long edge.
  */
-function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) => GeoBuilder, trees: Record<TreeKind, Inst[]>) {
+function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) => GeoBuilder, trees: Record<TreeKind, Inst[]>, built: (x: number, z: number) => GeoBuilder) {
   const pivots = layout.pivots ?? [];
   pivots.forEach((pv, k) => {
     const b = crops(pv.x, pv.y);
@@ -550,7 +654,7 @@ function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) 
     const FS = 1.15;
     const uc = -fe * (FS / 2);
     const Lf = L - FS / 2;
-    farmstead(b, m, at, fe * (L - FS / 2 + 0.08), ang, k, W);
+    farmstead(built(pv.x, pv.y), b, m, at, fe * (L - FS / 2 + 0.08), ang, k, W, fe);
     // 3-4 long fields across the block, dirt tracks between
     const n = 3 + Math.floor(h(3) * 2);
     const track = 0.26;
@@ -714,13 +818,26 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
   });
 
   // the desert estates draw into the crop builders and the orchard trees
-  buildEstates(m, layout, crops, trees);
+  const builtB = new Map<string, GeoBuilder>();
+  buildEstates(m, layout, crops, trees, get(builtB));
+  // the farmsteads: matte, casting shadows
+  const builtMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 }));
+  for (const b of builtB.values()) {
+    if (!b.count) continue;
+    const mesh = new THREE.Mesh(b.build(), builtMat);
+    mesh.castShadow = quality !== 'low';
+    mesh.receiveShadow = true;
+    mesh.name = 'farm-steads';
+    out.push(mesh);
+  }
 
   const cropMat = cropMaterial(fog, quality === 'low' ? 0 : 0.022);
   for (const b of cropB.values()) {
     if (!b.count) continue;
     const mesh = new THREE.Mesh(b.build(true), cropMat);
     mesh.receiveShadow = true;
+    // (the rows' own shadows give the fields their depth; high quality only)
+    mesh.castShadow = quality === 'high';
     mesh.name = 'farm-crops';
     out.push(mesh);
     // far zoom: the painted fields carry it
