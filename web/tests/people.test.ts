@@ -215,3 +215,122 @@ describe('emergency vehicle routes', () => {
     });
   }
 });
+
+/*
+ * Fear ahead of the troops (danger.ts wary layer): walkers ~30 tiles (~170 m) from a force on the
+ * move go indoors or walk away; a herd walks off (bolts when it is ~15 tiles off), the shepherd leading.
+ */
+describe('fear: civilians and herds', () => {
+  async function civ(id: MapId) {
+    const { World } = await import('../src/sim/world');
+    const { People } = await import('../src/render/ambient/people');
+    const { Animals } = await import('../src/render/ambient/animals');
+    const { FogProbe } = await import('../src/render/ambient/shared');
+    const { DangerField } = await import('../src/render/ambient/danger');
+    const w = new World({ seed: 1, map: id, players: [{ name: 'a', faction: 'usa', color: 0, isAI: true }, { name: 'b', faction: 'russia', color: 0, isAI: true }] } as never);
+    const m = w.map;
+    const layout = buildLayout(m);
+    const net = roadNetFor(m, layout);
+    const fog = { apply: (x: unknown) => x, uniforms: { fogEnabled: { value: 0 } }, texture: { image: { data: new Uint8Array(m.w * m.h) } } } as never;
+    const probe = new FogProbe(fog, m.w, m.h);
+    const people = new People(m, layout, w, net, fog, probe, 'high', false);
+    const animals = new Animals(m, layout, fog, probe, 'high', false, people.figures, (tx, ty) => people.builtAt(tx, ty));
+    const field = new DangerField(m.w, m.h);
+    people.field = field;
+    animals.field = field;
+    const frame = { dt: 0.1, time: 0, dangers: [], units: new Float32Array(2), nUnits: 0, air: new Float32Array(2), nAir: 0, dark: 0, foul: false, vx0: -1e9, vy0: -1e9, vx1: 1e9, vy1: 1e9 };
+    let ft = 0;
+    /** Run `sec` seconds with (or without) a moving force at `at` (re-stamped 4 times a second, as AmbientLife does). */
+    const run = (sec: number, at: { x: number; y: number } | null, each?: () => void) => {
+      for (let t = 0; t < sec; t += 0.1) {
+        frame.time += 0.1;
+        ft += 0.1;
+        if (ft >= 0.25) {
+          field.begin();
+          if (at) field.threat(at.x, at.y, 36);
+          field.commit(ft);
+          ft = 0;
+        }
+        people.update(frame as never);
+        animals.update(frame as never);
+        each?.();
+      }
+    };
+    return { m, people, animals, field, run };
+  }
+
+  type P = { x: number; y: number; s: number; goal: number; show: boolean };
+  const INSIDE = 4;
+  const FLEE = 9;
+  const GONE = 11;
+
+  it('urban: walkers ~30 tiles from a moving column go indoors or walk away; with it parked they carry on', async () => {
+    for (const moving of [false, true]) {
+      const { m, people, run } = await civ('urban');
+      run(5, null);
+      const peds = (people as unknown as { peds: P[] }).peds;
+      // the column 30 tiles from the middle of the walkers
+      let cx = 0;
+      let cy = 0;
+      for (const p of peds) {
+        cx += p.x;
+        cy += p.y;
+      }
+      cx /= peds.length;
+      cy /= peds.length;
+      const ang = Math.atan2(m.h / 2 - cy, m.w / 2 - cx) + Math.PI;
+      const col = { x: cx + Math.cos(ang) * 30, y: cy + Math.sin(ang) * 30 };
+      const ring = peds.filter((p) => p.show && p.s !== INSIDE && Math.hypot(p.x - col.x, p.y - col.y) > 22 && Math.hypot(p.x - col.x, p.y - col.y) < 33);
+      const d0 = new Map(ring.map((p) => [p, Math.hypot(p.x - col.x, p.y - col.y)]));
+      const before = { ...people.stat };
+      run(40, moving ? col : null);
+      // indoors, gone, or further off than they were
+      const away = ring.filter((p) => p.s === INSIDE || p.s === GONE || Math.hypot(p.x - col.x, p.y - col.y) > d0.get(p)! + 2);
+      if (moving) {
+        expect(ring.length).toBeGreaterThan(4);
+        expect(people.stat.wary - before.wary).toBeGreaterThan(ring.length * 0.5);
+        expect(away.length).toBeGreaterThan(ring.length * 0.7);
+        // nobody left lingering out there within ~100 m of it
+        const near = peds.filter((p) => p.show && p.s !== INSIDE && p.s !== GONE && p.s !== FLEE && Math.hypot(p.x - col.x, p.y - col.y) < 16);
+        expect(near.length).toBeLessThanOrEqual(1);
+      } else expect(people.stat.wary).toBe(0);
+    }
+  });
+
+  for (const dist of [15, 26]) {
+    it(`frontline: a herd ${dist} tiles from a moving force moves off away from it${dist > 18 ? ' at a walk, the shepherd leading' : ''}`, async () => {
+      const { m, animals, run } = await civ('frontline');
+      type An = { x: number; y: number; s: number };
+      type Hd = { sp: number; kind: number; animals: An[]; man: { x: number; y: number } | null };
+      const herds = (animals as unknown as { herds: Hd[] }).herds.filter((h) => h.animals.length >= 3 && (dist < 18 || h.man));
+      expect(herds.length).toBeGreaterThan(0);
+      const h = herds[0];
+      const centre = () => {
+        let x = 0;
+        let y = 0;
+        for (const a of h.animals) {
+          x += a.x;
+          y += a.y;
+        }
+        return { x: x / h.animals.length, y: y / h.animals.length };
+      };
+      const c0 = centre();
+      // the force on the map-edge side: the way away is open country
+      const ang = Math.atan2(c0.y - m.h / 2, c0.x - m.w / 2);
+      const src = { x: c0.x + Math.cos(ang) * dist, y: c0.y + Math.sin(ang) * dist };
+      const man0 = h.man ? Math.hypot(h.man.x - src.x, h.man.y - src.y) : 0;
+      let panic = 0;
+      run(30, src, () => {
+        for (const a of h.animals) if (a.s === 2) panic++;
+      });
+      const c1 = centre();
+      const moved = Math.hypot(c1.x - src.x, c1.y - src.y) - dist;
+      expect(moved).toBeGreaterThan(3);
+      if (dist < 18) expect(panic).toBeGreaterThan(0);
+      else {
+        expect(panic).toBe(0);
+        expect(Math.hypot(h.man!.x - src.x, h.man!.y - src.y)).toBeGreaterThan(man0 + 2);
+      }
+    });
+  }
+});

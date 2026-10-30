@@ -10,7 +10,7 @@ import { planProps, type PropsManifest } from '../props';
 import { roadClear } from './clearance';
 import type { RoadNet } from './roadnet';
 import { groundAt, wrapAngle, type AmbientFrame, type Danger, type FogProbe, type Quality } from './shared';
-import { LOW, type DangerField } from './danger';
+import { FLEE, LOW, WARY, type DangerField } from './danger';
 import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion, zebraBands, type WalkGrid } from './walkgrid';
 
 /*
@@ -33,6 +33,12 @@ import { PathFinder, RES, WF, buildWalkGrid, cellOf, costAt, flagAt, sameRegion,
  * fighting and burning wrecks (no more crossing there); drivers who leave
  * their car run too (bolt). The streets empty. After a long calm they slowly
  * come back out.
+ *
+ * Fear runs ahead of the troops (the wary layer, danger.ts): within ~200 m
+ * of a force on the move or fighting they drop what they are doing (bench,
+ * market, chat, play) and walk indoors or away from it; within ~100 m they
+ * run for shelter. Indoors they stay until it has been quiet there for a
+ * minute or two. Each walker has their own nerve (no crisp edge to the zone).
  *
  * Purely visual. One instanced draw call for every figure (models/civilians.ts:
  * vertex-animated), one for the blob shadows, one for the market stalls, one
@@ -328,7 +334,7 @@ export class People {
   field: DangerField | null = null;
   private pk = { x: 0, y: 0, v: 0 };
   /** Debug / tests: counters. */
-  readonly stat = { paths: 0, failed: 0, fled: 0, returned: 0 };
+  readonly stat = { paths: 0, failed: 0, fled: 0, returned: 0, wary: 0 };
 
   constructor(
     private map: GameMap,
@@ -935,9 +941,19 @@ export class People {
     return true;
   }
 
+  /** Seconds since p's place was last in a wary zone (0 while it is: the fear lingers a minute or two after). */
+  private waryCalm(p: Ped): number {
+    const fd = this.field;
+    if (!fd) return 1e9;
+    if (fd.wary(p.x, p.y) >= WARY * 0.7) return 0;
+    return fd.waryCalm(p.x, p.y);
+  }
+
   /** Pick something to do next. */
   private plan(p: Ped) {
     if (p.kind === K.Kid && p.parent) return;
+    // trouble about: no strolling, home
+    if (this.fear(p) && this.evacuate(p)) return;
     const night = this.dark > 0.6;
     const r = Math.random();
     // an unstaffed stall (the vendor ran off): someone takes it over in daylight
@@ -1280,6 +1296,77 @@ export class People {
     }
   }
 
+  /**
+   * The wary layer (danger.ts) at p: 0 calm, 1 wary (a force on the move / fighting within ~200 m),
+   * 2 flee (~100 m); p.fx / fy set to where the fear comes from. Everyone has their own nerve.
+   */
+  private fear(p: Ped): number {
+    const fd = this.field;
+    if (!fd) return 0;
+    const nerve = 0.7 + ((p.id * 37) % 10) * 0.06;
+    if (fd.wary(p.x, p.y) < WARY * nerve) return 0;
+    const o = fd.waryFrom(p.x, p.y, this.pk);
+    p.fx = o.x;
+    p.fy = o.y;
+    return o.v >= FLEE * nerve ? 2 : 1;
+  }
+
+  /** Out and about for pleasure (or on the way to it): what the wary drop. */
+  private leisure(p: Ped): boolean {
+    switch (p.s) {
+      case S.Idle:
+      case S.Chat:
+      case S.Sit:
+      case S.Shop:
+      case S.Vendor:
+      case S.Play:
+        return true;
+      case S.Walk:
+        return p.goal !== Goal.Shelter && p.goal !== Goal.Away && p.goal !== Goal.Door;
+    }
+    return false;
+  }
+
+  /** Wary: walk (not run) indoors, to a house not towards the trouble, or else away from it. False: try again later. */
+  private evacuate(p: Ped): boolean {
+    if (this.pathBudget <= 0) return false;
+    this.leaveGroups(p);
+    if (p.vendor) p.vendor = false;
+    if (p.s === S.Play) p.play = -1;
+    const sx = p.fx;
+    const sy = p.fy;
+    let dx = p.x - sx;
+    let dy = p.y - sy;
+    const L = Math.hypot(dx, dy) || 1;
+    dx /= L;
+    dy /= L;
+    // home first, else the nearest standing house that is not towards it
+    let best = -1;
+    let bd = 12;
+    for (let i = 0; i < this.doors.length; i++) {
+      const d = this.doors[i];
+      if (!d.alive) continue;
+      const ex = d.x - p.x;
+      const ey = d.y - p.y;
+      const dd = Math.hypot(ex, ey) * (Math.hypot(d.x - p.hx, d.y - p.hy) < 1.5 ? 0.5 : 1);
+      if (dd > bd) continue;
+      if (dd > 1.5 && (ex * dx + ey * dy) / Math.hypot(ex, ey) < -0.3) continue;
+      bd = dd;
+      best = i;
+    }
+    this.stat.wary++;
+    if (best >= 0 && this.walkTo(p, this.doors[best].x, this.doors[best].y, Goal.Shelter, best)) return true;
+    for (let k = 0; k < 3 && this.pathBudget > 0; k++) {
+      const a = Math.atan2(dy, dx) + (k === 0 ? 0 : (Math.random() - 0.5) * 1.6);
+      const run = 9 + Math.random() * 4;
+      const s = this.snap(p.x + Math.cos(a) * run, p.y + Math.sin(a) * run, 1.2, 6);
+      if (s && this.walkTo(p, s.x, s.y, Goal.Away)) return true;
+    }
+    // no calm way out (across a road without a zebra...): hurry
+    this.flee(p, sx, sy, 0.3, false);
+    return true;
+  }
+
   /** The danger field says it is dangerous here (troops, fighting, fire): p.fx / fy set to where it comes from. */
   private fieldDanger(p: Ped): boolean {
     const fd = this.field;
@@ -1464,9 +1551,18 @@ export class People {
     p.unitT -= dt;
     if (p.unitT <= 0) {
       p.unitT = 0.4 + Math.random() * 0.3;
-      if (p.s !== S.Inside && p.s !== S.Gone && p.s !== S.Flee && p.s !== S.Down && p.s !== S.Follow && p.s !== S.Fetch && p.s !== S.Alarm && (this.unitsNear(p, f) || this.fieldDanger(p))) {
-        this.stat.fled++;
-        this.flee(p, p.fx, p.fy, 0.3, Math.random() < 0.3);
+      if (p.s !== S.Inside && p.s !== S.Gone && p.s !== S.Flee && p.s !== S.Down && p.s !== S.Follow && p.s !== S.Fetch && p.s !== S.Alarm) {
+        if (this.unitsNear(p, f) || this.fieldDanger(p)) {
+          this.stat.fled++;
+          this.flee(p, p.fx, p.fy, 0.3, Math.random() < 0.3);
+        } else {
+          // fear ahead of the troops: ~100 m off, run for shelter; ~200 m, leave off and walk indoors / away
+          const fr = p.kind === K.Kid && p.parent ? 0 : this.fear(p);
+          if (fr === 2) {
+            this.stat.fled++;
+            this.flee(p, p.fx, p.fy, 0.5, false);
+          } else if (fr === 1 && this.leisure(p) && !this.evacuate(p)) p.unitT = 0.1;
+        }
       }
     }
     switch (p.s) {
@@ -1474,7 +1570,7 @@ export class People {
         p.show = false;
         if (p.t <= 0) {
           // come out when it has been quiet here for a while
-          const calm = this.time - this.heatAt(p.x, p.y);
+          const calm = Math.min(this.time - this.heatAt(p.x, p.y), this.waryCalm(p));
           if (calm < 70 + (p.id % 7) * 9) {
             p.t = 5 + Math.random() * 10;
             return;
@@ -1505,7 +1601,7 @@ export class People {
       case S.Gone:
         p.show = false;
         if (p.t <= 0) {
-          if (this.time - this.heatAt(p.x, p.y) < 110 || this.time - this.heatAt(p.hx, p.hy) < 110) {
+          if (this.time - this.heatAt(p.x, p.y) < 110 || this.time - this.heatAt(p.hx, p.hy) < 110 || this.waryCalm(p) < 90) {
             p.t = 10 + Math.random() * 20;
             return;
           }

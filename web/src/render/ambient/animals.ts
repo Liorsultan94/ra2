@@ -7,6 +7,7 @@ import { camelModel, catModel, chickenModel, deerModel, dogModel, goatModel, har
 import { Opt, Pose } from '../models/civilians';
 import { estatePlans } from '../farm';
 import { cowModel, sheepModel, type AnimalModel } from './models';
+import { FLEE, WARY, type DangerField } from './danger';
 import type { Figure } from './people';
 import { dryAt } from './walkgrid';
 import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type AmbientFrame, type FogProbe, type Quality } from './shared';
@@ -29,6 +30,11 @@ import { AnimInstances, ambientMaterial, groundAt, walkable, wrapAngle, type Amb
  * whole herd running away (each species its own gait: cows lumber, horses
  * and deer gallop, hares zig-zag); after a while they calm down and amble
  * back. Animals caught in a blast fall over dead (render only, no gore).
+ *
+ * Fear runs ahead of the troops (the wary layer, danger.ts): within ~200 m of
+ * a force on the move or fighting the herd walks off, away from it, the
+ * shepherd leading the flock; within ~100 m it bolts. They stay off their
+ * pasture until it has been quiet there for a minute or two (a caravan halts).
  *
  * Legs, head and body bob are animated in the vertex shader: one instanced
  * draw call per species present; shepherds and the caravan leader are drawn
@@ -133,6 +139,12 @@ interface Herd {
   mx: number;
   my: number;
   mv: number;
+  /** Fear (wary layer): next check, seconds left walking away, the way away, home pasture uneasy. */
+  wT: number;
+  away: number;
+  ax: number;
+  ay: number;
+  uneasy: boolean;
 }
 
 const _m = new THREE.Matrix4();
@@ -154,6 +166,9 @@ export class Animals {
   private inst: (AnimInstances | null)[] = [];
   private cap: number;
   private time = 0;
+  /** The danger field (danger.ts; AmbientLife sets it): its wary layer moves the herds off ahead of the troops. */
+  field: DangerField | null = null;
+  private wo = { x: 0, y: 0, v: 0 };
 
   constructor(
     private map: GameMap,
@@ -200,7 +215,7 @@ export class Animals {
     };
     const add = (sp: Sp, kind: H, f: Field, n: number, base?: THREE.Color) => {
       const def = SPECIES[sp];
-      const herd: Herd = { sp, kind, f, animals: [], man: null, dog: null, dogA: 0, route: null, cum: null, arc: 0, pause: 0, scattered: 0, mx: f.cx, my: f.cy, mv: 0 };
+      const herd: Herd = { sp, kind, f, animals: [], man: null, dog: null, dogA: 0, route: null, cum: null, arc: 0, pause: 0, scattered: 0, mx: f.cx, my: f.cy, mv: 0, wT: Math.random() * 0.5, away: 0, ax: 0, ay: 0, uneasy: false };
       const coats = def.coats;
       const b0 = base ?? new THREE.Color(coats[(Math.random() * coats.length) | 0]);
       for (let i = 0; i < n; i++) {
@@ -430,7 +445,7 @@ export class Animals {
     for (let i = 1; i <= route.length; i++) cum[i] = cum[i - 1] + Math.hypot(route[i % route.length].x - route[i - 1].x, route[i % route.length].y - route[i - 1].y);
     const coats = SPECIES[Sp.Camel].coats;
     const f = zone(pts[0].x, pts[0].y, 3, 3);
-    const h: Herd = { sp: Sp.Camel, kind: H.Caravan, f, animals: [], man: this.man('desert'), dog: null, dogA: 0, route, cum, arc: Math.random() * cum[route.length], pause: 0, scattered: 0, mx: 0, my: 0, mv: 0 };
+    const h: Herd = { sp: Sp.Camel, kind: H.Caravan, f, animals: [], man: this.man('desert'), dog: null, dogA: 0, route, cum, arc: Math.random() * cum[route.length], pause: 0, scattered: 0, mx: 0, my: 0, mv: 0, wT: Math.random() * 0.5, away: 0, ax: 0, ay: 0, uneasy: false };
     h.man!.mask = Opt.Robe | Opt.Keffiyeh;
     for (let i = 0; i < n; i++) {
       this.routeAt(h, h.arc - 0.5 - i * 0.75);
@@ -564,10 +579,64 @@ export class Animals {
           break;
         }
       }
+      this.fear(h, dt, hx, hy);
       if (h.kind === H.Caravan) this.march(h, dt);
       for (const a of h.animals) this.step(h, a, dt, hx, hy);
       if (h.dog) this.stepDog(h, h.dog, dt, hx, hy);
       if (h.man && h.kind === H.Shepherded) this.stepShepherd(h, h.man, dt, hx, hy);
+    }
+  }
+
+  /**
+   * Fear ahead of the troops (danger.ts wary layer), twice a second: ~100 m from a force on the move /
+   * fighting the herd bolts; ~200 m, it walks off away from it (the shepherd leading); a caravan halts.
+   */
+  private fear(h: Herd, dt: number, hx: number, hy: number) {
+    const fd = this.field;
+    if (!fd) return;
+    if (h.away > 0) h.away -= dt;
+    h.wT -= dt;
+    if (h.wT > 0) return;
+    h.wT = 0.4 + Math.random() * 0.2;
+    h.uneasy = fd.wary(h.f.cx, h.f.cy) >= WARY * 0.7 || fd.waryCalm(h.f.cx, h.f.cy) < 60 + (h.f.cx % 7) * 6;
+    // (wildlife and cats are shyer)
+    const shy = h.sp === Sp.Deer || h.sp === Sp.Hare || h.sp === Sp.Cat ? 0.75 : 1;
+    const o = fd.waryFrom(hx, hy, this.wo);
+    if (o.v < WARY * shy) return;
+    if (o.v >= FLEE * shy) {
+      this.bolt(h, o.x, o.y, 0.4);
+      return;
+    }
+    let ux = hx - o.x;
+    let uy = hy - o.y;
+    const l = Math.hypot(ux, uy);
+    if (l < 1e-3) return;
+    ux /= l;
+    uy /= l;
+    h.ax = ux;
+    h.ay = uy;
+    h.away = 3;
+    if (h.kind === H.Caravan) {
+      // the caravan stops, the leader looks round
+      h.pause = Math.max(h.pause, 1.5);
+      h.mv = Math.max(h.mv, 1);
+      return;
+    }
+    // walk off together, steadily away from it (each keeps its place in the herd)
+    for (const a of h.animals) {
+      if (a.s === A.Dead || a.s === A.Panic || a.s === A.Alert) continue;
+      let tx = a.x + ux * 2.5 + (hx - a.x) * 0.25;
+      let ty = a.y + uy * 2.5 + (hy - a.y) * 0.25;
+      if (!this.ok(tx, ty)) {
+        // (blocked: veer)
+        tx = a.x + (ux - uy) * 1.8;
+        ty = a.y + (uy + ux) * 1.8;
+        if (!this.ok(tx, ty)) continue;
+      }
+      a.s = A.Return;
+      a.t = 0;
+      a.tx = tx;
+      a.ty = ty;
     }
   }
 
@@ -654,6 +723,13 @@ export class Animals {
     let ty = hy + 0.4;
     let sp = 0;
     let run = false;
+    let lead = false;
+    if (h.away > 0 && h.mv <= 0) {
+      // leading the flock off, away from the trouble
+      tx = hx + h.ax * 1.8;
+      ty = hy + h.ay * 1.8;
+      lead = true;
+    }
     if (h.mv > 0) {
       h.mv -= dt;
       const dx = f.x - h.mx;
@@ -667,7 +743,7 @@ export class Animals {
     const dx = tx - f.x;
     const dy = ty - f.y;
     const d = Math.hypot(dx, dy);
-    if (!run) sp = d > 1.2 ? 0.3 : d > 0.4 ? 0.12 : 0;
+    if (!run) sp = lead ? (d > 0.3 ? 0.3 : 0.15) : d > 1.2 ? 0.3 : d > 0.4 ? 0.12 : 0;
     if (sp > 0) {
       f.yaw = wrapAngle(f.yaw + Math.max(-dt * 4, Math.min(dt * 4, wrapAngle(Math.atan2(dy, dx) - f.yaw))));
       const nx = f.x + Math.cos(f.yaw) * sp * dt;
@@ -730,6 +806,16 @@ export class Animals {
         want = a.yaw + (cat ? 0 : Math.sin(a.t * 0.3 + a.phase) * 0.4);
         if (a.t > def.rest + (a.phase % 1) * def.rest * 1.5) {
           // wander a few steps, keeping near the herd and in its ground
+          if (h.uneasy && h.kind !== H.Caravan) {
+            // away from home (trouble there lately): a few steps about the herd, not back yet
+            a.tx = hx + (a.x - hx) * 0.5 + (Math.random() - 0.5) * 1.6;
+            a.ty = hy + (a.y - hy) * 0.5 + (Math.random() - 0.5) * 1.6;
+            if (this.ok(a.tx, a.ty)) {
+              a.s = A.Walk;
+              a.t = 0;
+            } else a.t = 0;
+            break;
+          }
           const p = this.fieldPoint(h.f, 1);
           const pull = h.animals.length > 1 ? 0.35 : 1;
           a.tx = hx + (p.x - hx) * pull + (Math.random() - 0.5) * 0.8 * pull;
@@ -778,8 +864,13 @@ export class Animals {
         headT = 0;
         vt = 0;
         if (a.t >= 0) {
-          a.s = A.Return;
           a.t = 0;
+          // (not back to a pasture that was in the trouble a minute ago: graze where it is)
+          if (h.uneasy && h.kind !== H.Caravan) {
+            a.s = A.Graze;
+            break;
+          }
+          a.s = A.Return;
           const p = this.fieldPoint(h.f, 0.7);
           a.tx = p.x;
           a.ty = p.y;
