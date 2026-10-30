@@ -320,13 +320,17 @@ describe('base defence and AI against aircraft', () => {
   });
 
   it('the AI builds more Rocket Teams (and AA) when the enemy flies, and counts them as anti-air', () => {
-    const picks = (enemyAir: number) => {
+    const picks = (enemyAir: number, seen = true) => {
       const w = arena(37, 'germany', 'turkey');
       const ai = new AIController(w, 0, 'hard');
       w.spawnBuilding('germany_power', 0, 10, 80, true);
       w.spawnBuilding('germany_barracks', 0, 14, 80, true);
       w.spawnBuilding('germany_factory', 0, 10, 74, true);
       for (let i = 0; i < enemyAir; i++) aircraft(w, 'turkey_uav', 1, 80, 10 + i);
+      // (only aircraft the AI has seen count: a lookout under them, fog of war)
+      if (seen) w.spawnUnit('germany_rifle', 0, 80, 11);
+      w.updateVisibility();
+      (ai as unknown as { updateIntel(): void }).updateIntel();
       const counts = new Map<string, number>();
       const orig = w.issue.bind(w);
       w.issue = (pid: number, c: Command) => {
@@ -350,5 +354,8 @@ describe('base defence and AI against aircraft', () => {
     const air = picks(4);
     expect(air.at).toBeGreaterThan(calm.at * 1.3);
     expect(air.aa).toBeGreaterThan(calm.aa * 3);
+    // aircraft out of its sight do not count
+    const unseen = picks(4, false);
+    expect(unseen.aa).toBeLessThan(air.aa / 3);
   });
 });

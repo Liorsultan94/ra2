@@ -7,6 +7,7 @@ import { appendFileSync } from 'fs';
 import { TPS, type Faction } from '../src/sim/types';
 import { World } from '../src/sim/world';
 import { AI2, AIController } from '../src/sim/ai';
+import { REACT_ON } from '../src/sim/aireact';
 import { SuperweaponAI } from '../src/sim/superweapons';
 import { peaceTicks } from '../src/sim/peace';
 import { DEFS } from '../src/sim/defs';
@@ -22,6 +23,9 @@ const PAIRS = (process.env.PAIRS ?? 'israel-iran,usa-russia,china-ukraine').spli
 
 // OFF=retreat,terrain,war: play the new AI without those AI2 parts (ablation)
 for (const k of (process.env.OFF ?? '').split(',').filter(Boolean)) (AI2 as Record<string, boolean>)[k] = false;
+
+// OFFR=snipers,sniperCap,aa,at,raid,hunt (or on): play the new AI without those reactions (aireact.ts; ablation)
+for (const k of (process.env.OFFR ?? '').split(',').filter(Boolean)) (REACT_ON as Record<string, boolean>)[k] = false;
 
 // EXPAND=1: every nation's war doctrine expands (experiment)
 if (process.env.EXPAND) for (const d of Object.values(DOCTRINES)) d.war = { ...d.war, expand: 1 };
