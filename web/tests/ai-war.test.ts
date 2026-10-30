@@ -136,6 +136,26 @@ describe('war doctrines (AI2)', () => {
     expect(ai.pickJetTarget(jet)).toBe(ref.id);
   });
 
+  it('jets and missiles do not hit enemy structures on ground they have not explored (fog of war)', () => {
+    const w = world('russia', 'usa');
+    const ai = new AIController(w, 1, 'hard') as AnyAI;
+    w.controllers.push(ai);
+    const e = w.players[0];
+    const me = w.players[1];
+    ai.peaceUntil = 0;
+    const jet = w.spawnUnit('usa_fighter', 1, me.startX + 0.5, me.startY + 0.5);
+    // a real enemy structure in its base, on ground we never explored
+    const p = w.nearestPassable(e.startX + 2, e.startY + 4, 8, w.mainland)!;
+    const ref = w.spawnBuilding(factionDefByRole('russia', 'refinery').id, 0, p[0], p[1], true);
+    expect(ai.pickJetTarget(jet)).toBe(-1);
+    expect(ai.pickStrikeTarget(jet)).toBe(-1);
+    // once its ground has been explored it is a target (shown on the map as to the player: classic fog)
+    const m = w.map;
+    for (let y = Math.floor(ref.y) - 2; y <= Math.floor(ref.y) + 2; y++) for (let x = Math.floor(ref.x) - 2; x <= Math.floor(ref.x) + 2; x++) me.explored[y * m.w + x] = 1;
+    expect(ai.pickJetTarget(jet)).toBe(ref.id);
+    expect(ai.pickStrikeTarget(jet)).toBe(ref.id);
+  });
+
   it('China attacks on a broad front; Ukraine avoids pitched battles', () => {
     const w = world('china', 'ukraine', 2);
     const ais = [new AIController(w, 0, 'hard'), new AIController(w, 1, 'hard')] as AnyAI[];
