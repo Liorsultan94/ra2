@@ -13,7 +13,8 @@ import { World } from '../src/sim/world';
 describe('AI divers', () => {
   it('Hard trains a squad after the grace and raids by sea', () => {
     const fs: Faction[] = ['usa', 'russia'];
-    const w = new World({ seed: 2, map: 'desert', players: fs.map((f, i) => ({ name: `P${i}`, faction: f, color: 0, isAI: true })) });
+    // (seed 3: with the AI's reactions, aireact.ts, seed 2's game is over before the divers sail)
+    const w = new World({ seed: 3, map: 'desert', players: fs.map((f, i) => ({ name: `P${i}`, faction: f, color: 0, isAI: true })) });
     const pt = peaceTicks('hard', 'auto');
     const ais = [new AIController(w, 0, 'hard', { peaceTicks: pt }), new AIController(w, 1, 'hard', { peaceTicks: pt })];
     w.controllers.push(...ais);

@@ -13,6 +13,7 @@ import { PEACE_BUILDING_R, PEACE_HOME_R, RAMP_GAP } from './peace';
 import { PLAN_CFG, isFast, pickPlan, planBuildOrder, planWeights, type Plan, type PlanCfg } from './plans';
 import { Rng } from './rng';
 import { NavalAI } from './navalai';
+import { AIReact, REACT_ON, seenAir } from './aireact';
 import { FLARE_RADIUS, hasNightVision, illumReady, pickIllum } from './night';
 import { TPS, type ArmorClass, type Command, type Entity, type Player, type Stance } from './types';
 import type { Controller, World } from './world';
@@ -152,7 +153,7 @@ function warOrder(o: [string, number][], war: WarDoctrine): [string, number][] {
 }
 
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'march' | 'navy';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'march' | 'navy' | 'react';
 
 interface Intel {
   x: number;
@@ -371,6 +372,10 @@ export class AIController implements Controller {
   /** The navy (navalai.ts) on maps with open sea, else null; it keeps its own seeded RNG. */
   readonly navy: NavalAI | null;
   private navalUnits: Entity[] = [];
+  /** Reactions to what it sees (aireact.ts): snipers, AA escorts, anti-tank ambush, base raid, artillery hunt; Normal / Hard. */
+  readonly react: AIReact | null;
+  /** When enemy aircraft were last seen (enemyAirCount on Easy; aireact.ts keeps its own). */
+  private airSeenAt = -1;
 
   constructor(
     private world: World,
@@ -423,6 +428,28 @@ export class AIController implements Controller {
           aiSeed(world.seed, pid, world.players[pid].faction + '/navy'),
         )
       : null;
+    // (aireact.ts: intel-driven reactions, through these accessors; Easy plays without them)
+    this.react =
+      difficulty === 'easy' || !REACT_ON.on
+        ? null
+        : new AIReact(world, pid, difficulty, {
+            peace: () => this.peace,
+            attacked: () => this.stats.firstWave >= 0,
+            known: (pred, fresh) => this.known(pred, fresh),
+            home: () => this.home(),
+            rally: () => this.rally(),
+            enemyBase: () => this.enemyBase(),
+            lanes: () => this.lanes(),
+            bank: (l, k) => this.bank(l, k),
+            highSpot: (x, y, r) => this.highSpot(x, y, r),
+            threatAt: (x, y, r) => this.threatAt(x, y, r),
+            armyAway: () => this.enemyArmyAway(),
+            klass: (def) => klass(def),
+            role: (u) => this.roleOf(u),
+            claim: (ids, on) => this.setRole(ids, on ? 'react' : 'army'),
+            stance: (ids, s) => this.stance(ids, s),
+            waves: () => this.waves,
+          });
   }
 
   /** Play this plan from now on (tests / debug; plans.ts). */
@@ -500,6 +527,7 @@ export class AIController implements Controller {
     this.updateIntel();
     this.manageProduction(buildings, units);
     this.manageHarvesters(units);
+    this.react?.update(units);
     this.manageArmy(buildings, units);
     this.navy?.update(naval, units);
     this.manageRepairs(buildings);
@@ -635,15 +663,12 @@ export class AIController implements Controller {
     return out;
   }
 
+  /** Enemy air power (drone launchers half) - as far as we have SEEN it (fog of war: aireact.ts seenAir). */
   private enemyAirCount() {
-    let n = 0;
-    for (const e of this.world.list) {
-      if (e.dead || e.kind !== 'unit' || !this.world.isEnemy(this.pid, e.owner)) continue;
-      const d = unitDef(e.def);
-      if (d.air && !d.temp && !d.airlift) n++;
-      else if (d.weapon && WEAPONS[d.weapon].projectile === 'spawn') n += 0.5; // drone launchers
-    }
-    return n;
+    if (this.react) return this.react.enemyAir();
+    const known = this.known(() => true, TPS * 90);
+    if (known.some(([, it]) => !it.building && !!unitDef(it.def).air && this.world.tick - it.seen <= TPS * 3)) this.airSeenAt = this.world.tick;
+    return seenAir(known, this.airSeenAt, this.world.tick);
   }
 
   // ------------------------------------------------------------------ support power
@@ -757,8 +782,8 @@ export class AIController implements Controller {
     let threat = 0;
     w.queryRadius(x, y, r, (o) => {
       if (!w.isEnemy(this.pid, o.owner)) return;
-      // by night only what we know of: structures we have found, units we see now (night.ts)
-      if (w.night && (o.kind === 'building' ? !this.knowsBuilding(o) : !w.sees(this.pid, o))) return;
+      // only what we know of: structures we have found, units we see now (by day: on revealed ground; by night: night.ts)
+      if (o.kind === 'building' ? !this.knowsBuilding(o) : !w.sees(this.pid, o)) return;
       const od = DEFS[o.def];
       if (!od.weapon || Math.hypot(o.x - x, o.y - y) > r) return;
       const air = airReach(od); // main + secondary weapon (an RPG + MANPADS team counts as 'yes')
@@ -974,10 +999,9 @@ export class AIController implements Controller {
     }
   }
 
+  /** Enemy missile launchers we have seen (fog of war: intel only). */
   private enemyStrikeUnits() {
-    let n = 0;
-    for (const e of this.world.list) if (!e.dead && e.kind === 'unit' && this.world.isEnemy(this.pid, e.owner) && isStrike(e.def)) n++;
-    return n;
+    return this.known((it) => !it.building && isStrike(it.def), TPS * 90).length;
   }
 
   /** The Shipyard when the navy wants one (navalai.ts), or a power plant first if it would leave the base short. */
@@ -1226,6 +1250,7 @@ export class AIController implements Controller {
         else if (enemyAir > 0 && d.weapon2 && hitsAir(d)) wgt *= wantAA ? 2.5 : 1.5; // Rocket Teams double as AA
         if (d.aiTag === 'arty' && enemyArty > 0) wgt *= 1.8;
         if (d.aiTag !== 'aa') wgt *= this.counterWeight(d) * this.planMix(d);
+        if (this.react) wgt *= this.react.prodWeight(d); // snipers capped, anti-tank vs massing armour (aireact.ts)
         opts.push([d.id, wgt]);
       }
       const pick = this.weighted(opts);
@@ -1522,8 +1547,8 @@ export class AIController implements Controller {
     let airThreat: Entity | null = null;
     w.queryRadius(threatened.x, threatened.y, 10, (o) => {
       if (o.kind !== 'unit' || !w.isEnemy(this.pid, o.owner) || unitDef(o.def).temp || unitDef(o.def).naval) return;
-      // by night only threats we can see, or the one that just fired at us (it gave itself away: night.ts)
-      if (w.night && o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
+      // only threats we can see (by night: night.ts), or the one that just fired at us (it gave itself away)
+      if (o.id !== threatened.hurtBy && !w.sees(this.pid, o)) return;
       if (w.isAir(o)) airThreat ??= o;
       else threat ??= o;
     });

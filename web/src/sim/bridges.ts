@@ -469,7 +469,7 @@ export function bridgeTactics(w: World, pid: number, units: Entity[]) {
     const far = b.ends[1 - myBank];
     let massing = 0;
     w.queryRadius(far.x, far.y, 6, (o) => {
-      if (o.kind === 'unit' && w.isEnemy(pid, o.owner) && !w.isAir(o) && !unitDef(o.def).temp && Math.hypot(o.x - far.x, o.y - far.y) < 6) massing++;
+      if (o.kind === 'unit' && w.isEnemy(pid, o.owner) && !w.isAir(o) && !unitDef(o.def).temp && Math.hypot(o.x - far.x, o.y - far.y) < 6 && w.sees(pid, o)) massing++;
     });
     if (massing < 6) continue;
     const already = units.some((u) => u.order.type === 'attack' && u.order.target === b.entity);
