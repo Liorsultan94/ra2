@@ -6,8 +6,9 @@ import { FogProbe } from '../ambient/shared';
 import type { NightLights } from '../night';
 import { Species, treeSpots, type TreeSpot } from '../vegetation';
 import { WX } from '../wxuniforms';
-import { chimneyAmount, dawnBanksAt, dawnGlowAt, devilCap, devilLife, devilMaySpawn, mistClimateK, steamAmount } from './atmosrules';
+import { chimneyAmount, farmSmokeAmount, dawnBanksAt, dawnGlowAt, devilCap, devilLife, devilMaySpawn, mistClimateK, steamAmount } from './atmosrules';
 import { ChimneySmoke } from './chimneys';
+import { estateChimneys } from '../farm';
 import { Fireworks, type FireworkSound } from './fireworks';
 import { NightLife } from './nightlife';
 import { DesertNight } from './desertnight';
@@ -708,6 +709,8 @@ export class LivingWorld {
   private devilRule = { biome: '', day: 0, precip: 0, wet: 0, forced: false };
   /** Smoke from the village chimneys (medium and high; ?chimneys=0 off). */
   readonly chimneys: ChimneySmoke | null = null;
+  /** The chimneys are the desert estates' farmhouses (their own hours: atmosrules.ts farmSmokeAmount). */
+  private farmSmoke = false;
   /** Ground shadows of the dust columns (desert / ?devil=1, medium and high). */
   readonly devilShadows: DevilShadows | null = null;
   private acc = { leaf: 0, seed: 0, snow: 0, fly: 0, heat: 0, steam: 0 };
@@ -766,6 +769,13 @@ export class LivingWorld {
       const tops = host.terrain.scenery.chimneys;
       if (tops?.length && this.biome !== 'desert' && this.params.get('chimneys') !== '0') {
         this.chimneys = new ChimneySmoke(tops, host.terrain.scenery.houses, host.fog, q);
+        host.scene.add(this.chimneys.mesh);
+      }
+      // the desert: no stoves in the town, but the farm estates' hearths smoke in the evening (farmSmokeAmount)
+      const farms = this.biome === 'desert' && this.params.get('chimneys') !== '0' ? estateChimneys(map, host.terrain.layout) : [];
+      if (farms.length) {
+        this.chimneys = new ChimneySmoke(farms, [], host.fog, q, true);
+        this.farmSmoke = true;
         host.scene.add(this.chimneys.mesh);
       }
     }
@@ -933,7 +943,7 @@ export class LivingWorld {
     // ---- chimney smoke: breakfast and evening fires, more in the cold, the windows' glow at night
     const ch = this.chimneys;
     if (ch) {
-      const amt = chimneyAmount(a.hour, this.biome, WX.wxSnow.value);
+      const amt = this.farmSmoke ? farmSmokeAmount(a.hour) : chimneyAmount(a.hour, this.biome, WX.wxSnow.value);
       ch.update(dt, time, amt, w.x * 1.5, w.z * 1.5, _c, sstep(0.3, 0.8, dark), target.x, target.z, Math.max(R, Rz) + 3, WX.wxSnow.value);
     }
     // ---- leaves (temperate / city parks; not under snow)

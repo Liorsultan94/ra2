@@ -124,6 +124,17 @@ export function chimneyAmount(hours: number, biome: string, snow = 0): number {
 }
 
 /**
+ * How much the desert farmhouses' chimneys smoke 0..1 at a clock hour (the hearth lit for supper): none through
+ * the day, rising from 17:00 to the full evening plume by 19:00, dying down a little towards midnight, embers
+ * through the small hours and a small breakfast fire at dawn, out again by 09:30.
+ */
+export function farmSmokeAmount(hours: number): number {
+  const x = hour24(hours);
+  if (x >= 12) return sstep(17, 19, x) * (1 - 0.35 * sstep(22.5, 24, x));
+  return Math.max(0.65 * (1 - sstep(4.5, 6, x)), 0.45 * sstep(5, 6, x) * (1 - sstep(8, 9.5, x)));
+}
+
+/**
  * Chimney smoke shading against the ground under it: `alpha` scales the puff opacity, `tint`
  * multiplies its (scene-lit) grey. The smoke's lit grey is about as bright as sunlit snow, so on a
  * snow map a plain grey plume vanishes (it only shows over dark grass). Sunlit snow is also bright

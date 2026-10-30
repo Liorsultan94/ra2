@@ -78,7 +78,8 @@ export interface ChimneyTop {
   x: number;
   y: number;
   z: number;
-  st: Structure;
+  /** The house it stands on (none: the desert estates' farmhouses, render/farm.ts). */
+  st?: Structure;
 }
 
 /** Handles for render-side environment damage (src/render/envdamage.ts). */

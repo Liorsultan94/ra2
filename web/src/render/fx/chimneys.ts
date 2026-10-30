@@ -25,6 +25,7 @@ attribute vec4 aSrc;   // chimney top x, y, z, seed 0..1
 attribute float aPuff; // phase of this puff along the plume 0..1
 uniform float uTime;
 uniform float uAmount;
+uniform float uAll;
 uniform vec2 uWind;
 varying vec2 vUv;
 varying float vA;
@@ -34,7 +35,7 @@ varying vec3 vW;
 void main() {
   float sd = aSrc.w;
   // the share of chimneys smoking grows with the amount (always a few)
-  float on = step( fract( sd * 7.31 ), 0.12 + 0.95 * uAmount );
+  float on = max( uAll, step( fract( sd * 7.31 ), 0.12 + 0.95 * uAmount ) );
   float rate = 0.12 + 0.05 * fract( sd * 3.7 );
   float age = fract( uTime * rate + aPuff + sd );
   float wl = length( uWind );
@@ -110,10 +111,11 @@ export class ChimneySmoke {
   private lastZ = -1e9;
   private wait = 0;
 
-  constructor(tops: ChimneyTop[], houses: HouseHandle[], fog: FogOfWar, q: Tier) {
+  /** `all`: every chimney smokes whenever the amount is up (a farmhouse hearth), not a share growing with it. */
+  constructor(tops: ChimneyTop[], houses: HouseHandle[], fog: FogOfWar, q: Tier, all = false) {
     this.tops = tops;
     const byStruct = new Map(houses.map((h) => [h.st, h]));
-    this.houses = tops.map((t) => byStruct.get(t.st) ?? null);
+    this.houses = tops.map((t) => (t.st ? (byStruct.get(t.st) ?? null) : null));
     this.seeds = Float32Array.from(tops, (t) => {
       // stable per chimney: a hash of its position
       const v = Math.sin(t.x * 12.9898 + t.z * 78.233 + t.y * 37.719) * 43758.5453;
@@ -140,6 +142,7 @@ export class ChimneySmoke {
       ...fog.uniforms,
       uTime: { value: 0 },
       uAmount: { value: 0 },
+      uAll: { value: all ? 1 : 0 },
       uWind: { value: new THREE.Vector2() },
       uLight: { value: new THREE.Color(1, 1, 1) },
       uWarm: { value: new THREE.Color(0.75, 0.38, 0.12) },

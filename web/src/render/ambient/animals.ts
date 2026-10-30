@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { StructureKind, Tile, type GameMap } from '../../sim/map';
+import { hash2 } from '../../sim/rng';
 import type { FogOfWar } from '../fog';
 import { FieldType, type Field, type Layout, type V2 } from '../layout';
 import { camelModel, catModel, chickenModel, deerModel, dogModel, goatModel, hareModel, horseModel } from '../models/animals';
 import { Opt, Pose } from '../models/civilians';
+import { estatePlans } from '../farm';
 import { cowModel, sheepModel, type AnimalModel } from './models';
 import type { Figure } from './people';
 import { dryAt } from './walkgrid';
@@ -141,6 +143,9 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _pt = { x: 0, y: 0, tx: 1, ty: 0 };
 
+/** Livestock on the desert estates, to the estate's scale (render/farm.ts draws its farmstead small). */
+const ESTATE_SCALE = 0.45;
+
 const zone = (cx: number, cy: number, hl: number, hw: number, angle = 0): Field => ({ cx, cy, hl, hw, angle, type: FieldType.Fallow });
 
 export class Animals {
@@ -233,6 +238,22 @@ export class Animals {
         if (!f) continue;
         const h = add(Sp.Goat, H.Graze, f, 2 + Math.floor(Math.random() * 2));
         if (i === 0) this.shepherd(h, biome);
+      }
+      // the farm estates' livestock: a small flock of sheep or a few cows on the stubble / under the olives / on
+      // the fodder, the end of the field by the farmstead (render/farm.ts estatePlans; low: every other estate)
+      for (const p of estatePlans(m, layout)) {
+        if (p.graze < 0 || (quality === 'low' && p.k % 2)) continue;
+        const g = p.fields[p.graze].f;
+        const ca = Math.cos(g.angle);
+        const sa = Math.sin(g.angle);
+        const off = p.fe * g.hl * 0.45;
+        const z = zone(g.cx + ca * off, g.cy + sa * off, g.hl * 0.5, Math.max(0.3, g.hw - 0.06), g.angle);
+        if (!this.clear(z)) continue;
+        // (sheep and cows on alternate estates: a mix on the map)
+        const sheep = p.k % 2 === 1;
+        const herd = add(sheep ? Sp.Sheep : Sp.Cow, H.Graze, z, sheep ? 3 + Math.floor(hash2(p.k, 4, 4501) * 3) : 2 + Math.floor(hash2(p.k, 4, 4501) * 2));
+        // (to the estate's scale: its farmhouse, tractor and bales are drawn smaller than the town's)
+        for (const a of herd.animals) a.size *= ESTATE_SCALE;
       }
       // the caravan
       this.caravan(layout, Math.random() < 0.5 && k > 0.45 ? 3 : 2);

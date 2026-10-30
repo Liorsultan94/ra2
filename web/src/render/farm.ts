@@ -6,6 +6,7 @@ import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo'
 import { surfaceHeight } from './ground';
 import { FieldType, type Field, type Layout } from './layout';
 import { windTime } from './treekinds';
+import { treeWind } from './trees';
 
 /*
  * Countryside crops on the farm fields (render only; the sim never sees
@@ -62,7 +63,8 @@ const SWAY_VERT = /* glsl */ `
   float gust = sin( windTime * 0.9 - along * 0.55 ) * 0.5 + 0.5;
   gust *= gust;
   float flutter = sin( windTime * 3.1 + position.x * 4.7 + position.z * 3.9 ) * 0.25;
-  float sw = flex * ( 0.25 + gust * 0.9 + flutter ) * cropSway;
+  // (the weather's wind: calm 0.32 .. a storm ~1.25 bends the crop further; trees.ts treeWind)
+  float sw = flex * ( 0.25 + gust * 0.9 + flutter ) * cropSway * ( 1.0 + max( 0.0, treeWind.z - 0.32 ) * 1.1 );
   transformed.xz += wdir * sw;
   transformed.y -= abs( sw ) * 0.35;
   vSway = flex * gust;
@@ -76,8 +78,9 @@ function cropMaterial(fog: FogOfWar, sway: number, rough = 0.92): THREE.MeshStan
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.windTime = windTime;
     sh.uniforms.cropSway = swayU;
+    sh.uniforms.treeWind = treeWind;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float flex;\nuniform float windTime;\nuniform float cropSway;\nvarying float vSway;')
+      .replace('#include <common>', '#include <common>\nattribute float flex;\nuniform float windTime;\nuniform float cropSway;\nuniform vec3 treeWind;\nvarying float vSway;')
       .replace('#include <begin_vertex>', SWAY_VERT);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vSway;')
@@ -89,7 +92,7 @@ function cropMaterial(fog: FogOfWar, sway: number, rough = 0.92): THREE.MeshStan
       );
   };
   fog.apply(mat);
-  mat.customProgramCacheKey = () => 'fog2-cropsway2';
+  mat.customProgramCacheKey = () => 'fog2-cropsway3';
   return mat;
 }
 
@@ -281,7 +284,11 @@ function orchardTree(kind: TreeKind): THREE.BufferGeometry {
 
 // ------------------------------------------------------------------ tractors
 
-function tractorGeometry(paint: THREE.Color): THREE.BufferGeometry {
+/**
+ * A small farm tractor (front = +x, origin on the ground between the wheels) with its implement on the
+ * three-point hitch: a harrow (stubble, fodder) or a mist-blower sprayer (a tank and a fan: vineyards, groves).
+ */
+export function tractorGeometry(paint: THREE.Color, tool: 'harrow' | 'sprayer' = 'harrow'): THREE.BufferGeometry {
   const g = new GeoBuilder();
   const box = (w: number, h: number, d: number, x: number, y: number, z: number, c: THREE.Color) => g.add(new THREE.BoxGeometry(w, h, d), new THREE.Matrix4().makeTranslation(x, y, z), null, c);
   const dark = C(0x26262a);
@@ -311,40 +318,83 @@ function tractorGeometry(paint: THREE.Color): THREE.BufferGeometry {
     wheel(0.072, 0.04, -0.075, s * 0.075);
     wheel(0.042, 0.026, 0.1, s * 0.058);
   }
-  // implement on the three-point hitch: a harrow
   box(0.03, 0.02, 0.03, -0.16, 0.07, 0, dark);
-  box(0.06, 0.03, 0.28, -0.2, 0.04, 0, C(0xc86a20));
-  for (let i = -3; i <= 3; i++) box(0.012, 0.04, 0.012, -0.21, 0.02, i * 0.04, dark);
+  if (tool === 'harrow') {
+    // implement on the three-point hitch: a harrow
+    box(0.06, 0.03, 0.28, -0.2, 0.04, 0, C(0xc86a20));
+    for (let i = -3; i <= 3; i++) box(0.012, 0.04, 0.012, -0.21, 0.02, i * 0.04, dark);
+  } else {
+    // a mist-blower sprayer: a white tank on a frame, the round fan housing behind it (narrow: fits between vine rows)
+    box(0.1, 0.02, 0.07, -0.22, 0.045, 0, dark);
+    g.add(new THREE.CylinderGeometry(0.042, 0.042, 0.1, 12).rotateZ(Math.PI / 2), new THREE.Matrix4().makeTranslation(-0.22, 0.1, 0), null, C(0xe4e6e2));
+    g.add(new THREE.CylinderGeometry(0.046, 0.046, 0.03, 14).rotateZ(Math.PI / 2), new THREE.Matrix4().makeTranslation(-0.285, 0.095, 0), null, C(0xc86a20));
+    g.add(new THREE.CylinderGeometry(0.03, 0.03, 0.032, 10).rotateZ(Math.PI / 2), new THREE.Matrix4().makeTranslation(-0.29, 0.095, 0), null, dark);
+    for (const s of [-1, 1]) g.add(new THREE.CylinderGeometry(0.02, 0.02, 0.05, 6), new THREE.Matrix4().makeTranslation(-0.235, 0.045, s * 0.045), null, tyre);
+  }
   return g.build();
 }
 
-interface TractorRoute {
+export interface TractorRoute {
   pts: { x: number; z: number }[];
   cum: number[];
   len: number;
 }
 
-/** Back-and-forth passes along the field rows with U-turns on the headlands. */
-function tractorRoute(f: Field): TractorRoute {
+/**
+ * Back-and-forth passes along the field rows with U-turns on the headlands. `passes`: the passes' offsets
+ * across the field (default: every 0.4 tile), `reach`: how far the straight runs go from the middle (default
+ * well inside the ends; the turns swing out by half the gap to the next pass).
+ */
+export function tractorRoute(f: Field, passes?: number[], reach?: number): TractorRoute {
   const P = frame(f);
   const pts: { x: number; z: number }[] = [];
-  const passGap = 0.4;
-  const hl = f.hl - 0.45;
-  const n = Math.max(2, Math.floor((f.hw * 2 - 0.5) / passGap) + 1);
-  const b0 = -((n - 1) * passGap) / 2;
+  const hl = reach ?? f.hl - 0.45;
+  let bs = passes;
+  if (!bs) {
+    const passGap = 0.4;
+    const n = Math.max(2, Math.floor((f.hw * 2 - 0.5) / passGap) + 1);
+    const b0 = -((n - 1) * passGap) / 2;
+    bs = Array.from({ length: n }, (_, i) => b0 + i * passGap);
+  }
+  const n = bs.length;
   for (let i = 0; i < n; i++) {
     const dir = i % 2 === 0 ? 1 : -1;
-    const bb = b0 + i * passGap;
+    const bb = bs[i];
     for (let s = 0; s <= 8; s++) pts.push(P(dir * (-hl + (s / 8) * hl * 2), bb));
-    if (i < n - 1)
+    if (i < n - 1) {
+      const gap = bs[i + 1] - bb;
       for (let k = 1; k < 6; k++) {
         const th = (k / 6) * Math.PI;
-        pts.push(P(dir * (hl + Math.sin(th) * passGap * 0.5), bb + (1 - Math.cos(th)) * passGap * 0.5));
+        pts.push(P(dir * (hl + Math.sin(th) * Math.abs(gap) * 0.5), bb + (1 - Math.cos(th)) * gap * 0.5));
       }
+    }
   }
   const cum = [0];
   for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
   return { pts, cum, len: cum[cum.length - 1] };
+}
+
+/**
+ * Where a tractor is at arc `s` of its route, driven there and back (0 .. 2 len, forwards both ways): into `out`
+ * (x, z, heading yaw = atan2(dz, dx)). `seg` is a search hint (returned).
+ */
+export function tractorAt(route: TractorRoute, s: number, seg: number, out: { x: number; z: number; yaw: number }): number {
+  const L = route.len;
+  s %= L * 2;
+  if (s < 0) s += L * 2;
+  const back = s > L;
+  if (back) s = L * 2 - s;
+  if (seg < 0 || seg > route.cum.length - 2 || s < route.cum[seg] || s > route.cum[seg + 1]) {
+    seg = 0;
+    while (seg < route.cum.length - 2 && route.cum[seg + 1] < s) seg++;
+  }
+  const a = route.pts[seg];
+  const b = route.pts[seg + 1];
+  const u = (s - route.cum[seg]) / Math.max(1e-6, route.cum[seg + 1] - route.cum[seg]);
+  out.x = a.x + (b.x - a.x) * u;
+  out.z = a.z + (b.z - a.z) * u;
+  out.yaw = Math.atan2((b.z - a.z) * (back ? -1 : 1), (b.x - a.x) * (back ? -1 : 1));
+  return seg;
 }
 
 // ------------------------------------------------------------------ desert estates
@@ -420,7 +470,7 @@ function patchNoise(x: number, z: number, seed: number) {
  * Crop rows with the look of a real field: the colour drifts in patches (ripeness, moisture), a pair of tractor
  * tramlines left bare every few rows, row ends ragged at the headlands, plants of different heights.
  */
-function cropRows(b: GeoBuilder, m: GameMap, f: Field, o: { gap: number; h: number; w: number; lo: THREE.Color; hi: THREE.Color; alt: THREE.Color; sway: number; tram: number; seed: number }) {
+function cropRows(b: GeoBuilder, m: GameMap, f: Field, o: { gap: number; h: number; w: number; lo: THREE.Color; hi: THREE.Color; alt: THREE.Color; sway: number; tram: number; seed: number; ears?: EarOpts }) {
   const P = frame(f);
   const ca = Math.cos(f.angle);
   const sa = Math.sin(f.angle);
@@ -437,6 +487,9 @@ function cropRows(b: GeoBuilder, m: GameMap, f: Field, o: { gap: number; h: numb
     const e1 = f.hl - 0.08 - hash2(o.seed + r, 2, 4471) * 0.14;
     const nSeg = Math.max(1, Math.ceil((e1 - e0) / 0.22));
     let prev: number[] | null = null;
+    let pg = 0;
+    let ph = 0;
+    let pa = 0;
     for (let s = 0; s <= nSeg; s++) {
       const a = e0 + (s / nSeg) * (e1 - e0);
       const c = P(a, bb);
@@ -455,8 +508,74 @@ function cropRows(b: GeoBuilder, m: GameMap, f: Field, o: { gap: number; h: numb
         b.vert(V(c.x, g + hv, c.z), V(0, 1, 0), 0, 1, tmp.clone(), o.sway),
         b.vert(V(c.x + nx * o.w, g, c.z + nz * o.w), V(nx * 0.45, 0.9, nz * 0.45), 0, 0, o.lo, 0),
       ];
-      if (prev) for (let q = 0; q < 2; q++) b.quad(prev[q], ids[q], prev[q + 1], ids[q + 1]);
+      if (prev) {
+        for (let q = 0; q < 2; q++) b.quad(prev[q], ids[q], prev[q + 1], ids[q + 1]);
+        if (o.ears) ears(b, P, bb, pa, a, pg, g, ph, hv, o.w, o.h, o.sway, o.ears, o.seed + r * 7919 + s);
+      }
       prev = ids;
+      pg = g;
+      ph = hv;
+      pa = a;
+    }
+  }
+}
+
+interface EarOpts {
+  /** Spacing of the ears along the row (tile). */
+  step: number;
+  base: THREE.Color;
+  tip: THREE.Color;
+}
+
+const _ec = new THREE.Color();
+const _en = new THREE.Vector3();
+/**
+ * Ripe ears along the crest of one crop-row segment (a0 .. a1 along the row at `bb` across it; ground g0 .. g1,
+ * crest heights h0 .. h1): each a slim three-sided spindle on the crest, nodding a little to one side, its flex
+ * above the crest's so it rides the gust waves further than the stalks (cropMaterial's sway). Ears skip the gaps
+ * in a row (a missed seed, a trodden patch).
+ */
+function ears(b: GeoBuilder, P: (a: number, b: number) => { x: number; z: number }, bb: number, a0: number, a1: number, g0: number, g1: number, h0: number, h1: number, w: number, hMax: number, sway: number, e: EarOpts, seed: number) {
+  const n = Math.max(1, Math.round(Math.abs(a1 - a0) / e.step));
+  for (let j = 0; j < n; j++) {
+    const r1 = hash2(seed, j, 4491);
+    const r2 = hash2(seed, j, 4492);
+    const r3 = hash2(seed, j, 4493);
+    const t = (j + 0.2 + r1 * 0.6) / n;
+    const crest = h0 + (h1 - h0) * t;
+    if (crest < hMax * 0.45) continue;
+    const d = (r2 - 0.5) * w * 0.9;
+    const c = P(a0 + (a1 - a0) * t, bb + d);
+    const y0 = g0 + (g1 - g0) * t + crest * (1 - Math.abs(d) / w) - 0.006;
+    const len = 0.04 + r3 * 0.014;
+    const rad = 0.0085 + r1 * 0.002;
+    // nodding: the head leans off the vertical (ripe ears hang a little)
+    const lean = 0.3 + r2 * 0.35;
+    const la = r3 * Math.PI * 2;
+    const lx = Math.cos(la) * lean * len;
+    const lz = Math.sin(la) * lean * len;
+    const tone = 0.88 + hash2(seed, j, 4494) * 0.24;
+    _ec.copy(e.base).multiplyScalar(tone);
+    const B = b.vert(V(c.x, y0, c.z), V(0, 1, 0), 0, 0, _ec, sway * 0.9);
+    _ec.copy(e.tip).multiplyScalar(tone);
+    const T = b.vert(V(c.x + lx, y0 + len, c.z + lz), V(0, 1, 0), 0, 1, _ec, sway * 1.3);
+    _ec.lerp(e.base, 0.35);
+    const mx = c.x + lx * 0.5;
+    const mz = c.z + lz * 0.5;
+    const my = y0 + len * 0.5;
+    const th = r1 * Math.PI * 2;
+    const E: number[] = [];
+    for (let q = 0; q < 3; q++) {
+      const ang = th + (q * Math.PI * 2) / 3;
+      const ox = Math.cos(ang);
+      const oz = Math.sin(ang);
+      _en.set(ox, 0.9, oz).normalize();
+      E.push(b.vert(V(mx + ox * rad, my, mz + oz * rad), _en, 0, 0.5, _ec, sway * 1.1));
+    }
+    for (let q = 0; q < 3; q++) {
+      const q1 = (q + 1) % 3;
+      b.tri(T, E[q1], E[q]);
+      b.tri(B, E[q], E[q1]);
     }
   }
 }
@@ -478,6 +597,22 @@ function tbox(b: GeoBuilder, x: number, y: number, z: number, w: number, h: numb
   b.add(new THREE.BoxGeometry(w, h, d), _bm, null, C(col));
 }
 
+const HOUSE = { HW: 0.54, HD: 0.38, HH: 0.25, CHIMNEY: 0.184 };
+
+/** The farmhouse of estate #k: which side of the yard it stands on (hv), its centre and floor height. */
+function houseSpot(m: GameMap, at: (u: number, v: number) => { x: number; y: number }, u0: number, fe: number, sideW: number, k: number) {
+  const hv = hash2(k, 1, 4481) < 0.5 ? 1 : -1;
+  const hp = at(u0 + 0.04 * fe, hv * sideW * 0.42);
+  return { hv, hp, y: surfaceHeight(m, hp.x, hp.y) + 0.004 };
+}
+
+/** The farmhouse chimney (tile x, y) on its roof. */
+function chimneySpot(hp: { x: number; y: number }, ang: number) {
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  return { x: hp.x + ca * HOUSE.HW * 0.28 - sa * HOUSE.HD * 0.12, y: hp.y + sa * HOUSE.HW * 0.28 + ca * HOUSE.HD * 0.12 };
+}
+
 /**
  * A farmstead in the local frame of the estate (`at(u, v)` to tile space, rows along u): a whitewashed farmhouse
  * (stone plinth, deep eaves under a tiled hip roof, chimney, a solar water heater on the roof, framed windows with
@@ -494,13 +629,9 @@ function farmstead(b: GeoBuilder, yard: GeoBuilder, m: GameMap, at: (u: number, 
   // the yard: packed earth, a paler gravel apron by the house
   const c0 = at(u0, 0);
   soilBed(yard, m, { cx: c0.x, cy: c0.y, hl: 0.52, hw: sideW, angle: ang, type: FieldType.Plowed }, C(0xc4ac80), k * 7 + 3);
-  const hv = h(1) < 0.5 ? 1 : -1;
   // ---- the house
-  const HW = 0.54;
-  const HD = 0.38;
-  const HH = 0.25;
-  const hp = L2W(0.04, hv * sideW * 0.42);
-  const y = gy(hp) + 0.004;
+  const { hv, hp, y } = houseSpot(m, at, u0, fe, sideW, k);
+  const { HW, HD, HH } = HOUSE;
   const wall = [0xf0e8d8, 0xece2cc, 0xf4eee2][Math.floor(h(9) * 3)];
   box(b, hp.x, y, hp.y, HW + 0.03, HD + 0.03, 0.045, ang, 0x9a8a72); // stone plinth
   box(b, hp.x, y + 0.04, hp.y, HW, HD, HH - 0.04, ang, wall);
@@ -513,8 +644,8 @@ function farmstead(b: GeoBuilder, yard: GeoBuilder, m: GameMap, at: (u: number, 
   _bm.compose(V(hp.x, y + HH + 0.085, hp.y), _bq, V(1, 1, 1));
   b.add(roof, _bm, null, C([0xb4583a, 0xa84e34, 0xc0643e][Math.floor(h(10) * 3)]));
   box(b, hp.x, y + HH + 0.16, hp.y, HW * 0.32, 0.018, 0.018, ang, 0x8a3e2a);
-  // chimney
-  const ch = { x: hp.x + ca * HW * 0.28 - sa * HD * 0.12, y: hp.y + sa * HW * 0.28 + ca * HD * 0.12 };
+  // chimney (its smoke: fx/chimneys.ts via estateChimneys)
+  const ch = chimneySpot(hp, ang);
   box(b, ch.x, y + HH, ch.y, 0.045, 0.045, 0.17, ang, 0xe0d6c2);
   box(b, ch.x, y + HH + 0.17, ch.y, 0.06, 0.06, 0.014, ang, 0x8a7a66);
   // the solar water heater on the roof's sunny side: two tilted panels and the white tank above them
@@ -629,65 +760,215 @@ function farmstead(b: GeoBuilder, yard: GeoBuilder, m: GameMap, at: (u: number, 
     }
 }
 
+export type EstateCrop = 'wheat' | 'vineyard' | 'grove' | 'fodder' | 'stubble';
+
+export interface EstateField {
+  f: Field;
+  crop: EstateCrop;
+  seed: number;
+  /** Still green-gold (wheat). */
+  young: boolean;
+}
+
+export interface EstatePlan {
+  k: number;
+  /** Heading of the rows, and the local frame (u along the rows, v across) to tile space. */
+  ang: number;
+  at: (u: number, v: number) => { x: number; y: number };
+  /** The farmstead's end of the block (+1 / -1 along u), the block's half length / width. */
+  fe: number;
+  L: number;
+  W: number;
+  fields: EstateField[];
+  /** Top of the farmhouse chimney (tile x, height, tile y as z). */
+  chimney: { x: number; y: number; z: number };
+  /** The tractor at work (render/ambient/estates.ts): its field, passes across it, straight-run reach and tool. */
+  tractor: { field: number; passes: number[]; reach: number; tool: 'harrow' | 'sprayer'; paint: number } | null;
+  /** The field the estate's sheep / cows graze (render/ambient/animals.ts), -1 none. */
+  graze: number;
+}
+
+const PLANS = new WeakMap<Layout, EstatePlan[]>();
+
+/**
+ * The desert farm estates of this layout (deterministic: hashes of the estate index): the block, its fields and
+ * crops, the farmhouse chimney, where the tractor works and where the livestock grazes. Shared by the static
+ * build (buildEstates), the ambient life (tractors, herds) and the chimney smoke.
+ */
+export function estatePlans(m: GameMap, layout: Layout): EstatePlan[] {
+  const hit = PLANS.get(layout);
+  if (hit) return hit;
+  const out = (layout.pivots ?? []).map((pv, k) => estatePlan(m, pv, k));
+  PLANS.set(layout, out);
+  return out;
+}
+
+function estatePlan(m: GameMap, pv: { x: number; y: number; r: number }, k: number): EstatePlan {
+  const h = (q: number) => hash2(k, q, 4461);
+  // the block: its rows along one side (a little off the grid), fitting the cleared disc (clear to r + 0.4)
+  const ang = (h(1) < 0.5 ? 0 : Math.PI / 2) + (h(2) - 0.5) * 0.3;
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  const Rc = pv.r + 0.35;
+  const L = Rc * 0.8;
+  const W = Math.sqrt(Rc * Rc - L * L) - 0.38;
+  const at = (u: number, v: number) => ({ x: pv.x + ca * u - sa * v, y: pv.y + sa * u + ca * v });
+  // the farmstead takes one end, the fields the rest
+  const fe = h(4) < 0.5 ? 1 : -1;
+  const FS = 1.15;
+  const uc = -fe * (FS / 2);
+  const Lf = L - FS / 2;
+  // 3-4 long fields across the block, dirt tracks between
+  const n = 3 + Math.floor(h(3) * 2);
+  const ws = Array.from({ length: n }, (_, q) => 0.7 + h(10 + q) * 0.6);
+  const sum = ws.reduce((p, q) => p + q, 0);
+  const usable = W * 2 - ESTATE_TRACK * (n - 1);
+  let v0 = -W;
+  let prev = '';
+  const fields: EstateField[] = [];
+  for (let q = 0; q < n; q++) {
+    const w = (ws[q] / sum) * usable;
+    const vc = v0 + w / 2;
+    v0 += w + ESTATE_TRACK;
+    const c = at(uc, vc);
+    const f: Field = { cx: c.x, cy: c.y, hl: Lf - 0.06, hw: w / 2 - 0.05, angle: ang, type: FieldType.Wheat };
+    const r = h(50 + q);
+    let crop: EstateCrop = r < 0.42 ? 'wheat' : r < 0.6 ? 'vineyard' : r < 0.76 ? 'grove' : r < 0.9 ? 'fodder' : 'stubble';
+    if (crop === prev) crop = crop === 'wheat' ? 'fodder' : 'wheat';
+    // (vines and groves need a few rows' width)
+    if (w < 1.05 && (crop === 'vineyard' || crop === 'grove')) crop = prev === 'wheat' ? 'fodder' : 'wheat';
+    prev = crop;
+    fields.push({ f, crop, seed: k * 131 + q * 17, young: h(60 + q) < 0.2 });
+  }
+  const { hp, y } = houseSpot(m, at, fe * (L - FS / 2 + 0.08), fe, W, k);
+  const ch = chimneySpot(hp, ang);
+  // the herd on the stubble, under the olives or on the fodder; the tractor on another field
+  const pick = (order: EstateCrop[], skip: number) => {
+    for (const c of order) {
+      const i = fields.findIndex((e, j) => j !== skip && e.crop === c);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const graze = pick(['stubble', 'grove', 'fodder'], -1);
+  let tractor: EstatePlan['tractor'] = null;
+  for (const c of ['fodder', 'vineyard', 'stubble', 'grove', 'wheat'] as EstateCrop[]) {
+    const i = fields.findIndex((e, j) => j !== graze && e.crop === c);
+    if (i < 0) continue;
+    const plan = tractorPlan(fields[i]);
+    if (!plan) continue;
+    tractor = { field: i, ...plan, paint: TRACTOR_PAINTS[Math.floor(h(90) * TRACTOR_PAINTS.length)] };
+    break;
+  }
+  return { k, ang, at, fe, L, W, fields, chimney: { x: ch.x, y: y + HOUSE.HH + HOUSE.CHIMNEY, z: ch.y }, tractor, graze };
+}
+
+const ESTATE_TRACK = 0.26;
+const TRACTOR_PAINTS = [0xb8281e, 0x2f6b2a, 0x2a5aa8, 0xd87a1a];
+/** Wheat rows (gap) and the bare tramline every `tram` rows. */
+const WHEAT_GAP = 0.1;
+const WHEAT_TRAM = 9;
+
+/** The tractor's passes over an estate field: along the gaps between the vine rows / tree lines, the tramlines in wheat. */
+function tractorPlan(e: EstateField): { passes: number[]; reach: number; tool: 'harrow' | 'sprayer' } | null {
+  const f = e.f;
+  const gaps = (gap: number, nRows: number) => {
+    const b0 = -((nRows - 1) * gap) / 2;
+    const mids = Array.from({ length: Math.max(0, nRows - 1) }, (_, r) => b0 + (r + 0.5) * gap);
+    // every other gap when there are enough (a wider turn on the headland)
+    return mids.length >= 4 ? mids.filter((_, i) => i % 2 === 0) : mids;
+  };
+  if (e.crop === 'fodder' || e.crop === 'stubble') {
+    const passGap = 0.4;
+    const n = Math.max(2, Math.floor((f.hw * 2 - 0.5) / passGap) + 1);
+    const b0 = -((n - 1) * passGap) / 2;
+    return { passes: Array.from({ length: n }, (_, i) => b0 + i * passGap), reach: f.hl - 0.3, tool: 'harrow' };
+  }
+  if (e.crop === 'vineyard') {
+    const passes = gaps(0.34, Math.max(1, Math.floor((f.hw * 2 - 0.2) / 0.34)));
+    // the turns out on the headland, past the row ends
+    return passes.length >= 2 ? { passes, reach: f.hl - 0.06, tool: 'sprayer' } : null;
+  }
+  if (e.crop === 'grove') {
+    const sp = 0.62; // (olive spacing; citrus are closer, the passes still clear the trunks)
+    const nB = Math.max(1, Math.floor((f.hw * 2 - 0.3) / sp) + 1);
+    const passes = gaps(sp, nB);
+    return passes.length >= 2 ? { passes, reach: f.hl - 0.1, tool: 'sprayer' } : null;
+  }
+  if (e.crop === 'wheat') {
+    const nRows = Math.max(1, Math.floor((f.hw * 2 - 0.12) / WHEAT_GAP));
+    const b0 = -((nRows - 1) * WHEAT_GAP) / 2;
+    const passes: number[] = [];
+    for (let r = 0; r < nRows; r++) if (r % WHEAT_TRAM === Math.floor(WHEAT_TRAM / 2)) passes.push(b0 + r * WHEAT_GAP);
+    // a narrow field with one tramline: up the tramline, back down the dirt track along its nearer side
+    if (passes.length === 1) passes.push((passes[0] < 0 ? -1 : 1) * (f.hw + 0.05 + ESTATE_TRACK / 2));
+    return passes.length >= 2 ? { passes, reach: f.hl - 0.3, tool: 'sprayer' } : null;
+  }
+  return null;
+}
+
+/** The farmhouse chimney tops of the desert estates (their evening smoke: fx/nature.ts, fx/chimneys.ts). */
+export function estateChimneys(m: GameMap, layout: Layout): { x: number; y: number; z: number }[] {
+  return estatePlans(m, layout).map((p) => p.chimney);
+}
+
 /**
  * Desert farm estates (layout.pivots: flat open ground set aside for one): a block of long rectangular fields
  * side by side - golden wheat with tramlines and ripeness patches, vineyards on trellises, olive / citrus groves,
  * green fodder with sprinklers - each on its own soil bed inside a low earth bank with weeds on the margins,
  * dirt tracks with wheel ruts between them, an irrigation main along the headland, a farmstead at one end and a
- * windbreak of tall narrow trees along one long edge.
+ * windbreak of tall narrow trees along one long edge. The ripe wheat carries ears that nod in the wind
+ * (`earStep`: spacing of the ears along a row, by quality).
  */
-function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) => GeoBuilder, trees: Record<TreeKind, Inst[]>, built: (x: number, z: number) => GeoBuilder) {
+function buildEstates(m: GameMap, layout: Layout, crops: (x: number, z: number) => GeoBuilder, trees: Record<TreeKind, Inst[]>, built: (x: number, z: number) => GeoBuilder, earStep: number) {
   const pivots = layout.pivots ?? [];
+  const plans = estatePlans(m, layout);
   pivots.forEach((pv, k) => {
+    const plan = plans[k];
     const b = crops(pv.x, pv.y);
     const h = (q: number) => hash2(k, q, 4461);
-    // the block: its rows along one side (a little off the grid), fitting the cleared disc (clear to r + 0.4)
-    const ang = (h(1) < 0.5 ? 0 : Math.PI / 2) + (h(2) - 0.5) * 0.3;
+    const { ang, at, fe, L, W } = plan;
     const ca = Math.cos(ang);
     const sa = Math.sin(ang);
-    const Rc = pv.r + 0.35;
-    const L = Rc * 0.8;
-    const W = Math.sqrt(Rc * Rc - L * L) - 0.38;
-    const at = (u: number, v: number) => ({ x: pv.x + ca * u - sa * v, y: pv.y + sa * u + ca * v });
-    // the farmstead takes one end, the fields the rest
-    const fe = h(4) < 0.5 ? 1 : -1;
     const FS = 1.15;
     const uc = -fe * (FS / 2);
     const Lf = L - FS / 2;
     farmstead(built(pv.x, pv.y), b, m, at, fe * (L - FS / 2 + 0.08), ang, k, W, fe);
-    // 3-4 long fields across the block, dirt tracks between
-    const n = 3 + Math.floor(h(3) * 2);
-    const track = 0.26;
+    const n = plan.fields.length;
+    const track = ESTATE_TRACK;
     const ws = Array.from({ length: n }, (_, q) => 0.7 + h(10 + q) * 0.6);
     const sum = ws.reduce((p, q) => p + q, 0);
     const usable = W * 2 - track * (n - 1);
     let v0 = -W;
-    let prev = '';
+    const tr = plan.tractor;
     for (let q = 0; q < n; q++) {
-      const w = (ws[q] / sum) * usable;
-      const vc = v0 + w / 2;
-      v0 += w + track;
-      const c = at(uc, vc);
-      const f: Field = { cx: c.x, cy: c.y, hl: Lf - 0.06, hw: w / 2 - 0.05, angle: ang, type: FieldType.Wheat };
-      const r = h(50 + q);
-      let crop = r < 0.42 ? 'wheat' : r < 0.6 ? 'vineyard' : r < 0.76 ? 'grove' : r < 0.9 ? 'fodder' : 'stubble';
-      if (crop === prev) crop = crop === 'wheat' ? 'fodder' : 'wheat';
-      // (vines and groves need a few rows' width)
-      if (w < 1.05 && (crop === 'vineyard' || crop === 'grove')) crop = prev === 'wheat' ? 'fodder' : 'wheat';
-      prev = crop;
-      const seed = k * 131 + q * 17;
+      const { f, crop, seed, young } = plan.fields[q];
       if (crop === 'wheat') {
-        const young = h(60 + q) < 0.2;
         soilBed(b, m, f, C(0x9c7e52), seed);
-        cropRows(b, m, f, { gap: 0.1, h: 0.09, w: 0.06, lo: C(young ? 0x6e7a3a : 0x9a7c44), hi: C(young ? 0xb8c068 : 0xeac87a), alt: C(young ? 0x8ea04c : 0xc8a456), sway: 1, tram: 9, seed });
+        cropRows(b, m, f, {
+          gap: WHEAT_GAP,
+          h: 0.09,
+          w: 0.06,
+          lo: C(young ? 0x6e7a3a : 0x9a7c44),
+          hi: C(young ? 0xb8c068 : 0xeac87a),
+          alt: C(young ? 0x8ea04c : 0xc8a456),
+          sway: 1,
+          tram: WHEAT_TRAM,
+          seed,
+          ears: earStep > 0 ? { step: earStep, base: C(young ? 0x8a9a46 : 0xa88236), tip: C(young ? 0xdadc8c : 0xfbe8aa) } : undefined,
+        });
       } else if (crop === 'stubble') {
         // harvested: short pale stubble, round bales left lying in lines
         soilBed(b, m, f, C(0xb09468), seed);
         cropRows(b, m, f, { gap: 0.1, h: 0.018, w: 0.05, lo: C(0xa08a5c), hi: C(0xe0cc94), alt: C(0xc8b07a), sway: 0, tram: 0, seed });
         const P = frame(f);
+        // (not in the tractor's way when it works this field)
+        const lanes = tr && tr.field === q ? tr.passes : [];
         for (let i = 0; i < 9; i++) {
-          const p = P((hash2(seed, i, 4474) - 0.5) * f.hl * 1.7, (hash2(seed, i, 4475) - 0.5) * f.hw * 1.6);
-          if (!plantable(m, p.x, p.z)) continue;
+          const ba = (hash2(seed, i, 4474) - 0.5) * f.hl * 1.7;
+          const bb = (hash2(seed, i, 4475) - 0.5) * f.hw * 1.6;
+          const p = P(ba, bb);
+          if (!plantable(m, p.x, p.z) || lanes.some((l) => Math.abs(l - bb) < 0.17)) continue;
           _bm.makeRotationZ(Math.PI / 2).premultiply(new THREE.Matrix4().makeRotationY(hash2(seed, i, 4476) * 3)).setPosition(p.x, surfaceHeight(m, p.x, p.z) + 0.045, p.z);
           b.add(new THREE.CylinderGeometry(0.045, 0.045, 0.07, 10), _bm, null, C(0xd0b46c));
         }
@@ -819,7 +1100,8 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
 
   // the desert estates draw into the crop builders and the orchard trees
   const builtB = new Map<string, GeoBuilder>();
-  buildEstates(m, layout, crops, trees, get(builtB));
+  // (the wheat ears: denser on the better tiers; low keeps a sparser set)
+  buildEstates(m, layout, crops, trees, get(builtB), quality === 'high' ? 0.032 : quality === 'medium' ? 0.045 : 0.07);
   // the farmsteads: matte, casting shadows
   const builtMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.04 }));
   for (const b of builtB.values()) {
@@ -868,7 +1150,7 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
   // a tractor or two harrowing a field (render-only ambient: not in the sim)
   const nTr = quality === 'low' ? 0 : biome === 'desert' ? 1 : 2;
   tractorFields.sort((a, b) => b.f.hl * b.f.hw - a.f.hl * a.f.hw);
-  const paints = [0xb8281e, 0x2f6b2a, 0x2a5aa8, 0xd87a1a];
+  const paints = TRACTOR_PAINTS;
   const trMat = fog.apply(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.25 }));
   for (let i = 0; i < Math.min(nTr, tractorFields.length); i++) {
     const { f, k } = tractorFields[i * 2 < tractorFields.length ? i * 2 : i];
@@ -882,24 +1164,12 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
     const speed = 0.11;
     const t0 = hash2(k, 9, 4441) * route.len;
     let seg = 0;
+    const at = { x: 0, z: 0, yaw: 0 };
     mesh.onBeforeRender = () => {
       const t = performance.now() / 1000;
-      let s = (t0 + t * speed) % (route.len * 2);
-      const back = s > route.len;
-      if (back) s = route.len * 2 - s;
-      if (s < route.cum[seg] || s > route.cum[seg + 1]) {
-        seg = 0;
-        while (seg < route.cum.length - 2 && route.cum[seg + 1] < s) seg++;
-      }
-      const a = route.pts[seg];
-      const b = route.pts[seg + 1];
-      const u = (s - route.cum[seg]) / Math.max(1e-6, route.cum[seg + 1] - route.cum[seg]);
-      const x = a.x + (b.x - a.x) * u;
-      const z = a.z + (b.z - a.z) * u;
-      const dx = (b.x - a.x) * (back ? -1 : 1);
-      const dz = (b.z - a.z) * (back ? -1 : 1);
-      mesh.position.set(x, surfaceHeight(m, x, z) - 0.005, z);
-      mesh.rotation.y = -Math.atan2(dz, dx);
+      seg = tractorAt(route, t0 + t * speed, seg, at);
+      mesh.position.set(at.x, surfaceHeight(m, at.x, at.z) - 0.005, at.z);
+      mesh.rotation.y = -at.yaw;
       mesh.rotation.z = Math.sin(t * 23) * 0.006; // engine judder
       mesh.updateMatrixWorld();
     };
