@@ -240,7 +240,9 @@ describe('terrain', () => {
     // (not while a wave gathers at the rally point: the tanks there would join it, not an ambush; and the eight
     // tanks put there below must not start one either)
     for (let t = 0; t < TPS * 60 * 3 && ai.staged; t++) w.step();
+    // (no wave at all from here: not even an opportunity, counter or finishing push - they ignore the wave size)
     ai.waveSize = 999;
+    ai.waveNotBefore = Infinity;
     // (an ambush the game itself brought on by now is over first: this one is counted on its own)
     const ambushing = () => w.list.some((e) => !e.dead && e.owner === 1 && ai.roleOf(e) === 'ambush');
     for (let t = 0; t < TPS * 60 && ambushing(); t++) w.step();
