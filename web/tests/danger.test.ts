@@ -4,7 +4,7 @@ import type { GameMap, MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
 import { roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
-import { DangerField, HIGH, W, Wary } from '../src/render/ambient/danger';
+import { DangerField, FLEE, HIGH, WARY, WARY_R, W, Wary, threatReach } from '../src/render/ambient/danger';
 import { CAR_SCALE } from '../src/render/ambient/models';
 import { onSurface, pointAt as pointAtShared, type RoadNet } from '../src/render/ambient/roadnet';
 
@@ -385,4 +385,165 @@ describe('traffic under fire', () => {
       expect(moving).toBeGreaterThan(cars.length * 0.5);
     });
   }
+});
+
+/*
+ * Fear ahead of the troops (the wary layer): ~200 m (36 tiles) round armed forces on the move or
+ * fighting, ~100 m to flee; a parked base projects nothing wide.
+ */
+describe('fear: the wary layer', () => {
+  const idle = { moving: false, firedAt: -9999, hitAt: -9999 };
+  const moving = { moving: true, firedAt: -9999, hitAt: -9999 };
+  const fighting = { moving: false, firedAt: 990, hitAt: -9999 };
+
+  it('moving / fighting armed forces project ~36 tiles, idle or unarmed ones nothing', () => {
+    expect(threatReach(moving, true, false, 1000)).toBe(WARY_R);
+    expect(threatReach(fighting, true, false, 1000)).toBe(WARY_R);
+    expect(threatReach({ ...idle, hitAt: 950 }, true, false, 1000)).toBe(WARY_R);
+    expect(threatReach(idle, true, false, 1000)).toBe(0);
+    // (fired a while ago: calm again)
+    expect(threatReach(fighting, true, false, 1400)).toBe(0);
+    expect(threatReach(moving, false, false, 1000)).toBe(0);
+    const inf = threatReach(moving, true, true, 1000);
+    expect(inf).toBeGreaterThan(18);
+    expect(inf).toBeLessThan(WARY_R);
+  });
+
+  it('levels: wary at 30 tiles, flee within ~18, nothing past 36; lingers on a calm clock', () => {
+    const f = new DangerField(128, 128);
+    f.begin();
+    f.threat(64, 64, threatReach(moving, true, false, 0));
+    f.commit(0.25);
+    expect(f.wary(64 + 30, 64)).toBeGreaterThan(WARY);
+    expect(f.wary(64 + 30, 64)).toBeLessThan(FLEE);
+    expect(f.wary(64, 64 - 15)).toBeGreaterThan(FLEE);
+    expect(f.wary(64 - 22, 64)).toBeLessThan(FLEE);
+    expect(f.wary(64 + 40, 64)).toBe(0);
+    // (the small layer doesn't see it: no panic that far off)
+    expect(f.at(64 + 30, 64)).toBe(0);
+    // where it comes from: roughly towards it
+    const o = f.waryFrom(64 + 25, 64 + 5, { x: 0, y: 0, v: 0 });
+    expect(o.x).toBeLessThan(64 + 25 - 5);
+    // the same armour parked: nothing
+    f.begin();
+    f.threat(64, 64, threatReach(idle, true, false, 0));
+    f.commit(0.25);
+    expect(f.wary(64 + 30, 64)).toBe(0);
+    expect(f.wary(64, 64)).toBe(0);
+    expect(f.waryCalm(64 + 30, 64)).toBeLessThan(1);
+    expect(f.waryCalm(5, 125)).toBeGreaterThan(1e6);
+    // a heavy blast is felt far off for a while, then fades
+    f.waryEvent(20, 20, 36, 1);
+    expect(f.wary(20 + 28, 20)).toBeGreaterThan(WARY);
+    for (let t = 0; t < 90; t += 0.25) {
+      f.begin();
+      f.commit(0.25);
+    }
+    expect(f.wary(20 + 28, 20)).toBe(0);
+    expect(f.wary(20, 20)).toBeLessThan(WARY);
+  });
+
+  it('a car heading for moving armour 30 tiles on re-routes or turns back, well short of it; parked armour: drives on', () => {
+    for (const id of ['frontline', 'urban'] as MapId[]) {
+      const { m, n } = world(id);
+      // a long road: the car on it, the armour 30 tiles further along
+      const lines = n.lines.map((L, li) => ({ L, li })).filter(({ L }) => L.bridge < 0 && L.lot < 0 && L.paved && L.len > 40);
+      expect(lines.length).toBeGreaterThan(0);
+      let checked = 0;
+      for (const { L, li } of lines.slice(0, 4)) {
+        for (const parked of [false, true]) {
+          const drv = new Driver(n, () => true, rng(11 + li));
+          const field = new DangerField(m.w, m.h);
+          const wary = new Wary(n, drv, field, rng(12 + li));
+          const c = makeCar(n, li, 4, 1);
+          const tank = pointAt(L, 4 + 30);
+          // (straight-ish: really ~30 tiles off)
+          if (Math.hypot(tank.x - c.x, tank.y - c.y) < 24) continue;
+          const reach = threatReach(parked ? idle : moving, true, false, 0);
+          let minD = 1e9;
+          let reacted = false;
+          let farHalt = false;
+          let tf = 0;
+          for (let t = 0; t < 45; t += 0.05) {
+            tf += 0.05;
+            if (tf >= 0.25) {
+              field.begin();
+              field.unit(tank.x, tank.y, 5.5, 1.05);
+              field.threat(tank.x, tank.y, reach);
+              field.commit(tf);
+              tf = 0;
+            }
+            wary.drive(c, [c], t, 0.05, Math.hypot(c.x - tank.x, c.y - tank.y));
+            // (out of the map at an edge entry: gone)
+            const Lc = n.lines[c.line];
+            if (c.loop < 0 && !c.kt && ((c.dir > 0 && Lc.portal[1] && c.arc > Lc.len - 0.3) || (c.dir < 0 && Lc.portal[0] && c.arc < 0.3))) break;
+            minD = Math.min(minD, Math.hypot(c.x - tank.x, c.y - tank.y));
+            if (c.kt || c.line !== li || c.wy === W.Halt || c.wy === W.Turn || c.wy === W.Flee) reacted = true;
+            if ((c.kt || c.wy === W.Halt || c.wy === W.Turn || c.wy === W.Flee) && minD > 12) farHalt = true;
+            if (!onRoad(n, c.x, c.y)) throw new Error(`${id} line ${li} parked ${parked} t=${t.toFixed(2)} ${c.x.toFixed(2)},${c.y.toFixed(2)} line ${c.line} arc ${c.arc.toFixed(2)} len ${n.lines[c.line].len.toFixed(1)} kt ${c.kt} wy ${c.wy} portal ${n.lines[c.line].portal}`);
+          }
+          if (parked) {
+            // (only the small, close-up layer: no stopping or turning far off)
+            expect(farHalt).toBe(false);
+          } else {
+            expect(reacted).toBe(true);
+            // never into the flee zone proper (~100 m)
+            expect(minD).toBeGreaterThan(17);
+          }
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(1);
+    }
+  });
+
+  it('no new cars come in on a road into the wary zone; parked armour there keeps no one out', () => {
+    const { m, n } = world('frontline');
+    const entries: { li: number; arc: number; dir: number; x: number; y: number }[] = [];
+    n.lines.forEach((L, li) => {
+      if (L.bridge >= 0) return;
+      for (let e = 0; e < 2; e++) {
+        if (!L.portal[e]) continue;
+        const arc = e ? L.len - 0.3 : 0.3;
+        const p = pointAt(L, arc);
+        entries.push({ li, arc, dir: e ? -1 : 1, x: p.x, y: p.y });
+      }
+    });
+    const hot = entries[0];
+    // the armour 28 tiles in from the entry, towards the middle of the map
+    const cx = m.w / 2 - hot.x;
+    const cy = m.h / 2 - hot.y;
+    const l = Math.hypot(cx, cy);
+    const tank = { x: hot.x + (cx / l) * 28, y: hot.y + (cy / l) * 28 };
+    for (const parked of [true, false]) {
+      const field = new DangerField(m.w, m.h);
+      const wary = new Wary(n, new Driver(n), field, rng(5));
+      for (let t = 0; t < 5; t += 0.25) {
+        field.begin();
+        field.unit(tank.x, tank.y, 5.5, 1.05);
+        field.threat(tank.x, tank.y, threatReach(parked ? idle : moving, true, false, 0));
+        field.commit(0.25);
+        wary.tick(0.25);
+      }
+      if (parked) {
+        expect(field.wary(hot.x, hot.y)).toBe(0);
+        expect(wary.entryOk(hot.li, hot.arc, hot.dir)).toBe(true);
+      } else {
+        expect(field.wary(hot.x, hot.y)).toBeGreaterThan(WARY);
+        expect(wary.entryOk(hot.li, hot.arc, hot.dir)).toBe(false);
+        // the column moves on: still nobody for a minute, back within ~2
+        let early = 0;
+        let late = 0;
+        for (let t = 0; t < 150; t += 0.25) {
+          field.begin();
+          field.commit(0.25);
+          const ok = wary.entryOk(hot.li, hot.arc, hot.dir);
+          if (t < 55 && ok) early++;
+          if (t > 125 && ok) late++;
+        }
+        expect(early).toBe(0);
+        expect(late).toBeGreaterThan(0);
+      }
+    }
+  });
 });

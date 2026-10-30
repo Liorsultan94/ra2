@@ -16,7 +16,7 @@ import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
 import { FogProbe, LightSprites, setBusy, type AmbientFrame, type Danger, type Quality } from './shared';
 import { Traffic } from './traffic';
-import type { DangerField } from './danger';
+import { threatReach, type DangerField } from './danger';
 import { MapLandmarks } from '../landmarks';
 import { Railway } from './rail';
 import { WaterTransport } from './ferry';
@@ -114,6 +114,7 @@ export class AmbientLife {
     this.traffic.onBail = (x, y, sx, sy) => this.people.bolt(x, y, sx, sy);
     this.traffic.onWreck = (x, y) => this.emergency.incident(x, y);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
+    this.animals.field = this.field;
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
     this.tractors = new EstateTractors(map, terrain.layout, fog, probe, effects, quality);
     this.group.name = 'ambient-life';
@@ -133,6 +134,9 @@ export class AmbientLife {
     if (this.dangers.length < 64) this.dangers.push({ x, y, r, kill, power });
     // (lingers in the danger field: ~40 s for a heavy blast)
     this.field.event(x, y, r * 0.8, Math.min(1.1, power + kill * 0.2));
+    // ... and is heard far off: a wide wary zone (gunfire ~20 tiles, shells / heavy blasts ~36: ~200 m), for a minute or so
+    const p = Math.min(1, power + kill * 0.15);
+    this.field.waryEvent(x, y, 14 + p * 22, 0.45 + p * 0.55);
   }
 
   /** Sim events: blasts, gunfire and deaths frighten (and sometimes kill) the locals. */
@@ -203,6 +207,7 @@ export class AmbientLife {
   private scanUnits() {
     let n = 0;
     let na = 0;
+    const tick = this.host.world.tick;
     for (const e of this.host.world.entities.values()) {
       if (e.kind !== 'unit' || e.dead || e.owner < 0 || e.inside >= 0) continue;
       const u = unitDef(e.def);
@@ -223,6 +228,8 @@ export class AmbientLife {
       }
       // troops near the road: tanks and artillery frighten more (and further) than infantry; trucks hardly
       const wpn = u.weapon ? WEAPONS[u.weapon] : undefined;
+      // fear runs ahead of armed forces on the move or in a fight (~200 m); a parked base projects none
+      this.field.threat(e.x, e.y, threatReach(e, !!wpn, u.category === 'infantry', tick));
       if (u.category === 'infantry') this.field.unit(e.x, e.y, 4, 0.6);
       else if (!wpn) this.field.unit(e.x, e.y, 3, 0.3);
       else if (wpn.projectile === 'artillery') this.field.unit(e.x, e.y, 6.5, 1.15);
