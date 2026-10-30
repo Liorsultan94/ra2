@@ -1573,11 +1573,12 @@ export class AIController implements Controller {
       }
     }
     if (best < 0 && !this.peace) {
-      // nothing scouted yet: the enemy base location is common knowledge
+      // nothing in our intel: a structure of the enemy base on ground we have explored (shown to us as to the
+      // player: classic fog) - never one on ground we have not looked at (fog of war)
       const enemy = this.enemyBase();
       if (enemy)
         for (const e of w.list)
-          if (!e.dead && e.kind === 'building' && w.isEnemy(this.pid, e.owner) && buildingDef(e.def).category !== 'defense' && Math.hypot(e.x - enemy[0], e.y - enemy[1]) < 10) return e.id;
+          if (!e.dead && e.kind === 'building' && w.isEnemy(this.pid, e.owner) && buildingDef(e.def).category !== 'defense' && Math.hypot(e.x - enemy[0], e.y - enemy[1]) < 10 && this.isExplored(e.x, e.y)) return e.id;
     }
     return best;
   }
@@ -1616,10 +1617,11 @@ export class AIController implements Controller {
       return best;
     }
     if (best < 0) {
-      // nothing scouted yet: the enemy base location is common knowledge
+      // nothing in our intel: a structure of the enemy base on ground we have explored (shown to us as to the
+      // player: classic fog) - never one on ground we have not looked at (fog of war)
       const enemy = this.enemyBase();
       if (enemy)
-        for (const e of w.list) if (!e.dead && e.kind === 'building' && w.isEnemy(this.pid, e.owner) && Math.hypot(e.x - enemy[0], e.y - enemy[1]) < 10) consider(e.id, e.x, e.y, 0);
+        for (const e of w.list) if (!e.dead && e.kind === 'building' && w.isEnemy(this.pid, e.owner) && Math.hypot(e.x - enemy[0], e.y - enemy[1]) < 10 && this.isExplored(e.x, e.y)) consider(e.id, e.x, e.y, 0);
     }
     return best;
   }
