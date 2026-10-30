@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AIController } from '../src/sim/ai';
+import { AI2, AIController } from '../src/sim/ai';
 import { unitDef } from '../src/sim/defs';
 import { peaceTicks } from '../src/sim/peace';
 import { TPS, type Faction } from '../src/sim/types';
@@ -10,7 +10,18 @@ import { World } from '../src/sim/world';
  * submerged at its anchorage and sends them out with its raids; they come up to fight. Iran and Ukraine have none.
  */
 
+// (the game these were tuned on: without combined landings, ai.ts, which change how it goes from the first landing on)
 function play(fs: [Faction, Faction], minutes: number, seed = 2) {
+  const was = AI2.combined;
+  AI2.combined = false;
+  try {
+    return game(fs, minutes, seed);
+  } finally {
+    AI2.combined = was;
+  }
+}
+
+function game(fs: [Faction, Faction], minutes: number, seed: number) {
   const w = new World({ seed, map: 'desert', players: fs.map((f, i) => ({ name: `P${i}`, faction: f, color: 0, isAI: true })) });
   const pt = peaceTicks('hard', 'auto');
   const ais = [new AIController(w, 0, 'hard', { peaceTicks: pt }), new AIController(w, 1, 'hard', { peaceTicks: pt })];

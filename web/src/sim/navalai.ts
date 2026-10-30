@@ -8,7 +8,9 @@
 // - Landing craft (Normal, Hard): flanking landings. A craft beaches near the base, a few tanks and soldiers
 //   board, it crosses to a beach on the enemy's side away from its defences, puts them ashore, and they attack
 //   whatever they find there (harvesters, the refinery, the base). That way round, the long land corridors are
-//   not the only way in (the Sinai's gulfs).
+//   not the only way in (the Sinai's gulfs). A combined landing (Hard, the land AI decides: NavalHooks.combine)
+//   waits loaded at its beach for a land wave going in, and sails when the land AI says (sailAt), so the party
+//   comes ashore as the wave reaches its objective (ai.ts manageMarches / launch).
 // Everything is a command, decided every `think` ticks, with its own seeded RNG (the land AI's stream is
 // untouched, so maps without sea play exactly as before).
 
@@ -65,6 +67,11 @@ const NAV: Record<NavalDifficulty, NavCfg> = {
   hard: { chance: 1, yardAt: TPS * 60 * 14, patrol: 2, corvette: 1, lander: 1, sortie: 1, landEvery: TPS * 60 * 2.5, reserve: 800, share: 0.2, carrier: { chance: 1, at: TPS * 60 * 22, army: 20000, wing: 4 }, divers: { chance: 1, squad: 4, every: TPS * 60 * 3 }, subs: { chance: 1, count: 3 } },
 };
 
+/** A loaded craft waits this long (s) at most for a marching land wave to be ready to go in, then sails alone. */
+const COMBINED_WAIT = 150;
+/** Beaching and putting the party ashore after the sea leg (s; sea ETA). */
+const UNLOAD_S = 3;
+
 /** Feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
 export const NAVY_AI = { on: true, landings: true, raids: true, carriers: true, divers: true, subs: true };
 
@@ -80,13 +87,21 @@ export interface NavalHooks {
   free(u: Entity): boolean;
   /** Hand units to the navy ('navy' role) or back to the army. */
   claim(ids: number[], on: boolean): void;
+  /** Time this landing with a land wave (asked once per landing, as it starts: a wave on the march to meet)? */
+  combine(): boolean;
+  /** Is a land wave on its way to (or gathered at) a staging point - one to time a waiting landing with? */
+  marching(): boolean;
 }
 
 interface Landing {
   craft: number;
   ids: number[];
-  phase: 'toBeach' | 'boarding' | 'sailing' | 'ashore';
+  phase: 'toBeach' | 'boarding' | 'waiting' | 'sailing' | 'ashore';
   since: number;
+  /** Timed with a land wave: waits loaded ('waiting') until `sailAt` (-1: not yet set); the sea leg's ETA (ticks). */
+  combined: boolean;
+  sailAt: number;
+  eta: number;
   /** Beach to load at (water tile) and the landing point ashore on the enemy's side. */
   ex: number;
   ey: number;
@@ -125,6 +140,9 @@ export class NavalAI {
   private yardUpAt = -1;
   /** Debug / tests: yards placed, raids sailed, landings made, units put ashore, carriers, deck jets ordered, divers trained, diver raids. */
   readonly stats = { yards: 0, raids: 0, landings: 0, ashore: 0, boats: 0, carriers: 0, wing: 0, divers: 0, dives: 0, subs: 0 };
+  /** When the last landing put its party ashore (-1: none yet), when the last one set out. */
+  landedAt = -1;
+  private landedFrom = -Infinity;
 
   constructor(
     private w: World,
@@ -598,6 +616,61 @@ export class NavalAI {
     return best;
   }
 
+  /** Sail for the landing point (l.lx, l.ly) with the party aboard, the idle boats along as escort. */
+  private sail(l: Landing, craft: Entity, navy: Entity[]) {
+    l.phase = 'sailing';
+    l.since = this.w.tick;
+    this.cmd({ type: 'move', ids: [craft.id], x: l.lx, y: l.ly });
+    // an escort: the idle boats sail along
+    // (never the carrier, nor the carrier's escort: they keep their station)
+    const esc = navy.filter((b) => b.order.type === 'idle' && !!unitDef(b.def).weapon && !unitDef(b.def).cargoSlots && !unitDef(b.def).deck && b.id !== this.escort && !this.raidIds.includes(b.id));
+    if (esc.length) this.cmd({ type: 'move', ids: esc.map((b) => b.id), x: l.lx, y: l.ly, attackMove: true });
+  }
+
+  /** Ticks from the craft's berth to the party ashore at the beach (bx, by): the way by sea at its speed, then beaching. */
+  private seaEta(craft: Entity, bx: number, by: number): number {
+    const w = this.w;
+    const W = w.map.w;
+    const path = w.pfs[w.locoOf(craft)].find(Math.floor(craft.x), Math.floor(craft.y), Math.floor(bx), Math.floor(by));
+    let len = 0;
+    let [x, y] = [Math.floor(craft.x), Math.floor(craft.y)];
+    for (const t of path) {
+      len += Math.hypot((t % W) - x, Math.floor(t / W) - y);
+      x = t % W;
+      y = Math.floor(t / W);
+    }
+    if (!path.length) len = Math.hypot(bx - craft.x, by - craft.y) * 1.3;
+    return Math.round(TPS * (len / unitDef(craft.def).speed + UNLOAD_S));
+  }
+
+  /**
+   * A combined landing not yet under way (the land AI's view): still loading (`waiting` false), or loaded and waiting
+   * at its beach with the sea leg's ETA (ticks); null when there is none.
+   */
+  combinedLanding(): { waiting: boolean; eta: number } | null {
+    const l = this.landing;
+    if (!l || !l.combined || (l.phase !== 'toBeach' && l.phase !== 'boarding' && l.phase !== 'waiting')) return null;
+    return { waiting: l.phase === 'waiting', eta: l.eta };
+  }
+
+  /** The waiting combined landing sails at tick t. */
+  sailAt(t: number) {
+    if (this.landing?.phase === 'waiting') this.landing.sailAt = t;
+  }
+
+  /**
+   * A land wave sets out on a long march to be met by a landing (Hard): the next landing starts now, if none is under
+   * way. (Brought forward, never more often: not within landEvery of the last one's start.)
+   */
+  soon() {
+    if (this.canLand()) this.nextLanding = Math.min(this.nextLanding, this.w.tick);
+  }
+
+  /** Could a landing start now (landings on, none under way, the last one landEvery ago)? */
+  canLand(): boolean {
+    return this.active && !this.landing && this.landingsOn() && this.w.tick - this.landedFrom >= this.cfg.landEvery;
+  }
+
   private release(l: Landing) {
     const ids = l.ids.filter((id) => this.w.get(id));
     if (ids.length) this.hooks.claim(ids, false);
@@ -649,21 +722,25 @@ export class NavalAI {
             }
             l.lx = site.lx;
             l.ly = site.ly;
-            l.phase = 'sailing';
-            l.since = w.tick;
-            this.cmd({ type: 'move', ids: [craft.id], x: site.lx, y: site.ly });
-            // an escort: the idle boats sail along
-            // (never the carrier, nor the carrier's escort: they keep their station)
-            const esc = navy.filter((b) => b.order.type === 'idle' && !!unitDef(b.def).weapon && !unitDef(b.def).cargoSlots && !unitDef(b.def).deck && b.id !== this.escort && !this.raidIds.includes(b.id));
-            if (esc.length) this.cmd({ type: 'move', ids: esc.map((b) => b.id), x: site.lx, y: site.ly, attackMove: true });
+            if (l.combined) {
+              // loaded: hold at the beach until the land wave it is timed with is ready to go in
+              l.phase = 'waiting';
+              l.since = w.tick;
+              l.eta = this.seaEta(craft, site.bx, site.by);
+            } else this.sail(l, craft, navy);
           }
           break;
         }
+        case 'waiting':
+          // (the land AI says when - sailAt; with no wave on the march, or none ready after COMBINED_WAIT, it sails alone)
+          if (l.sailAt >= 0 ? w.tick >= l.sailAt : age > TPS * COMBINED_WAIT || !this.hooks.marching()) this.sail(l, craft, navy);
+          break;
         case 'sailing':
           if (!craft.passengers.length) {
             l.phase = 'ashore';
             l.since = w.tick;
             this.stats.landings++;
+            this.landedAt = w.tick;
             const ashore = l.ids.filter((id) => w.get(id) && w.get(id)!.inside < 0);
             this.stats.ashore += ashore.length;
             const tgt = this.ashoreTarget(l.lx, l.ly);
@@ -720,9 +797,10 @@ export class NavalAI {
     const spot = beachSpot(w, hx, hy, w.regionOf(craft.x, craft.y, lc), lc, 30);
     if (!spot) return;
     this.nextLanding = w.tick + Math.round(this.cfg.landEvery * this.rng.range(0.8, 1.25));
+    this.landedFrom = w.tick;
     const ids = [...veh, ...inf].map((u) => u.id);
     this.hooks.claim(ids, true);
-    this.landing = { craft: craft.id, ids, phase: 'toBeach', since: w.tick, ex: spot[0] + 0.5, ey: spot[1] + 0.5, lx: 0, ly: 0 };
+    this.landing = { craft: craft.id, ids, phase: 'toBeach', since: w.tick, ex: spot[0] + 0.5, ey: spot[1] + 0.5, lx: 0, ly: 0, combined: this.hooks.combine(), sailAt: -1, eta: 0 };
     this.cmd({ type: 'move', ids: [craft.id], x: spot[0] + 0.5, y: spot[1] + 0.5 });
     // the party walks to the shore by the beach meanwhile
     const shore = w.nearestPassable(spot[0] + 0.5, spot[1] + 0.5, 5, w.regionOf(hx, hy, Loco.Vehicle), Loco.Vehicle);

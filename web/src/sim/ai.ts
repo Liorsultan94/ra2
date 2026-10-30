@@ -40,7 +40,7 @@ const CFG: Record<Difficulty, DiffCfg> = {
 };
 
 /** AI2 feature switches (all on in the game; benches and tests turn one off to measure what it is worth). */
-export const AI2 = { retreat: true, terrain: true, war: true };
+export const AI2 = { retreat: true, terrain: true, war: true, pincer: true, combined: true };
 
 /** How strongly production shifts toward counters of what the enemy fields (0 = doctrine mix only). */
 const ADAPT: Record<Difficulty, number> = { easy: 0.4, normal: 0.8, hard: 1.1 };
@@ -56,6 +56,38 @@ const MARCH_SHORT = 40;
 /** Gathered there, it goes in when this much stronger than the enemy known round the objective, or after MARCH_WAIT s. */
 const MARCH_EDGE = 1.2;
 const MARCH_WAIT = 150;
+/**
+ * Pincers (AI2): the chance that a wave splits in two and goes in by two lanes, the two halves timed to reach the
+ * objective together (by doctrine: x (0.7 + flank) x the war doctrine's flank appetite; a broad front always does).
+ * Each half gathers at a staging point PINCER_D tiles of path short of the objective on its own approach (nearer,
+ * PINCER_NEAR, where the two approaches only part there), both wait until both are there (or PINCER_WAIT s past
+ * the slower half's march), then they go, the one with further to go first, so they arrive at the same moment.
+ */
+const PINCER: Record<Difficulty, number> = { easy: 0, normal: 0.25, hard: 0.45 };
+const PINCER_D = 20;
+const PINCER_NEAR = 14;
+const PINCER_WAIT = 20;
+/** On the way in a half more than PINCER_SLACK s ahead of the other halts for it (PINCER_PACE s at most). */
+const PINCER_SLACK = 3;
+const PINCER_PACE = 40;
+/** The two approaches must come in at least this far apart (radians) round the objective, staging points this far apart (tiles). */
+const PINCER_ANGLE = 0.7;
+const PINCER_GAP = 10;
+/**
+ * Combined landings (AI2, Hard, maps with sea and long marches): the chance (x (0.8 + flank)) that a wave setting out
+ * on a long march calls a landing to go with it. A landing that starts while a wave marches is timed with it: the
+ * loaded craft waits at its beach until the wave has gathered at its staging point (navalai.ts: only while one is on
+ * the march, COMBINED_WAIT at most), then the craft or the wave is held back so the party comes ashore as the wave
+ * reaches its objective. A sea leg more than COMBINED_LEAD s longer than the wave's last leg is not waited for; a
+ * gathered wave waits at most COMBINED_HOLD s for a craft still loading.
+ */
+const COMBINED: Record<Difficulty, number> = { easy: 0, normal: 0, hard: 0.75 };
+const COMBINED_LEAD = 120;
+const COMBINED_HOLD = 60;
+/** A group has arrived (arrival log) when half of it is this close to its objective. */
+const ARRIVE_R = 16;
+/** The speed a group is timed at: its median member's (the arrival rule above). */
+const ARRIVE_Q = 0.5;
 
 /**
  * Per-AI seed: the match seed mixed with the player id and the nation (every match differs, a replay /
@@ -153,7 +185,7 @@ function warOrder(o: [string, number][], war: WarDoctrine): [string, number][] {
 }
 
 type Klass = 'main' | 'arty' | 'strike' | 'jet' | 'aa' | 'support' | 'none';
-type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'march' | 'navy' | 'react';
+type Role = 'army' | 'scout' | 'raid' | 'choke' | 'retreat' | 'wing' | 'staged' | 'ambush' | 'fallback' | 'post' | 'march' | 'navy' | 'react' | 'pincer';
 
 interface Intel {
   x: number;
@@ -188,7 +220,49 @@ interface Wave {
    * A long march (SN3): the wave first gathers at a forward staging point short of the objective, then goes in
    * together (manageMarches; `at`: when it had gathered).
    */
-  march?: { x: number; y: number; until: number; done: boolean; at?: number };
+  march?: March;
+}
+
+/** A long march's staging point (marchPoint): `d` tiles of path short of the objective; `ready`: since when it would go. */
+interface March {
+  x: number;
+  y: number;
+  d: number;
+  until: number;
+  done: boolean;
+  at?: number;
+  ready?: number;
+}
+
+/**
+ * A pincer (AI2): two halves of a wave (each its own Wave, by its own lane), each gathering at its staging point `d`
+ * tiles of path short of the objective; `at`: when both were there (or the wait ran out), `go`: when each is let go.
+ */
+interface Pincer {
+  waves: [Wave, Wave];
+  prongs: { x: number; y: number; d: number; lane: string; value: number }[];
+  tx: number;
+  ty: number;
+  until: number;
+  at: number;
+  go: number[];
+  /** Both on their way in: pacing them until this tick (pacePincer; 0: over), which half is halted. */
+  pace: number;
+  held: boolean[];
+}
+
+/** A pincer being launched: each half's lane (our bank, the far bank) and staging point, the most it waits. */
+interface PincerPlan {
+  ways: { pos: [number, number]; far: [number, number]; key: string }[];
+  stage: { x: number; y: number; d: number }[];
+  until: number;
+}
+
+/** Arrival log (debug / tests): when each group of a split attack reached its objective (-1: not / never). */
+export interface Arrival {
+  kind: 'pincer' | 'wing' | 'combined';
+  born: number;
+  at: number[];
 }
 
 /** A group falling back to a defensive position (AI2 orderly retreat), then regrouping there. */
@@ -359,7 +433,7 @@ export class AIController implements Controller {
   /** Debug / tests (AI2): houses garrisoned, canyon squads posted, plateau detachments sent and units that got up there, tech sites targeted. */
   readonly terrainStats = { garrisons: 0, canyon: 0, plateau: 0, plateauVisits: 0, techs: 0 };
   /** Debug / tests: feints made, opportunity attacks (enemy army away), bad trades remembered. */
-  readonly stats = { marches: 0, waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, counters: 0, finishes: 0, strikes: {} as Record<string, number> };
+  readonly stats = { pincers: 0, combined: 0, marches: 0, waves: 0, feints: 0, opportunist: 0, night: 0, badTrades: 0, ambushes: 0, lanes: [] as string[], firstWave: -1, retreats: 0, returns: 0, regroups: 0, preps: 0, broad: 0, counters: 0, finishes: 0, strikes: {} as Record<string, number> };
   /** Terrain (heightmap) normalisation and lazily found chokepoints for maps without bridges / lanes. */
   private hMin = 0;
   private hSpan = 1;
@@ -376,6 +450,12 @@ export class AIController implements Controller {
   readonly react: AIReact | null;
   /** When enemy aircraft were last seen (enemyAirCount on Easy; aireact.ts keeps its own). */
   private airSeenAt = -1;
+  /** Pincers under way (AI2), and a land wave timed with a landing (the wave, when it goes, when the craft sails). */
+  private pincers: Pincer[] = [];
+  private combo: { wave: Wave; goAt: number; entry: Arrival } | null = null;
+  /** Split attacks being timed (arrival log: the groups, the objective), and the log itself (debug / tests). */
+  private arriving: { entry: Arrival; groups: number[][]; tx: number; ty: number }[] = [];
+  readonly arrivals: Arrival[] = [];
 
   constructor(
     private world: World,
@@ -424,6 +504,9 @@ export class AIController implements Controller {
             peaceUntil: () => this.peaceUntil,
             free: (u) => this.roleOf(u) === 'army' && u.order.type === 'idle' && u.guardId < 0,
             claim: (ids, on) => this.setRole(ids, on ? 'navy' : 'army'),
+            // a combined landing (Hard): one that starts while a wave is on a long march is timed with it (manageMarches)
+            marching: () => this.marching(),
+            combine: () => this.cfg.micro >= 2 && AI2.combined && this.marching(),
           },
           aiSeed(world.seed, pid, world.players[pid].faction + '/navy'),
         )
@@ -1373,6 +1456,10 @@ export class AIController implements Controller {
     }
     // waves on a long march: gather at the forward staging point, then go in together
     this.manageMarches();
+    // pincers: both halves gathered on their approaches, then let go to arrive together
+    this.managePincers();
+    this.manageCombo();
+    this.trackArrivals();
     // defend the base: respond to buildings or harvesters under attack
     if (this.defendBase(buildings, units, force)) return;
     if (micro > 0 || this.scoutsSent === 0) this.manageScout(force);
@@ -1562,7 +1649,7 @@ export class AIController implements Controller {
       if (air && !w.canAttack(u.def, t)) return false;
       // already on its way there: don't re-plan every think
       if (u.order.type === 'attackMove' && Math.hypot(u.order.x - t.x, u.order.y - t.y) < 5) return false;
-      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush' || r === 'fallback' || r === 'march') && Math.hypot(u.x - hx, u.y - hy) < 28;
+      return (r === 'army' || r === 'wing' || r === 'retreat' || r === 'staged' || r === 'ambush' || r === 'fallback' || r === 'march' || r === 'pincer') && Math.hypot(u.x - hx, u.y - hy) < 28;
     });
     // a last stand: the base itself is under attack, so groups regrouping near it fight
     const amb = home.filter((u) => this.roleOf(u) === 'ambush' || this.roleOf(u) === 'fallback').map((u) => u.id);
@@ -2630,39 +2717,46 @@ export class AIController implements Controller {
         }
         // a broad front (war doctrine, Hard): the wave goes in on two lanes at once, half and half
         const broad = micro >= 2 && this.war.front >= 2 && openLanes.length >= 2 && fighters.length >= 8;
-        const flank = broad || (micro > 0 && this.rng.next() < doc.flank * this.war.flank * (micro >= 2 ? 1 : 0.6));
-        let body = fighters.map((u) => u.id);
-        let wing: number[] = [];
-        if (broad) {
-          wing = [...fighters].sort((a, b) => a.id - b.id).filter((_, i) => i % 2 === 1).map((u) => u.id);
-          body = body.filter((id) => !wing.includes(id));
-          this.stats.broad++;
-        } else if (flank && fighters.length >= 8) {
-          // the fastest third (fast-flanking doctrines: two fifths) swings round a flank while the main body pins the front
-          const sorted = [...fighters].sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
-          wing = sorted.slice(0, this.war.flank >= 1.3 ? Math.floor((sorted.length * 2) / 5) : Math.floor(sorted.length / 3)).map((u) => u.id);
-          body = body.filter((id) => !wing.includes(id));
+        // a pincer (AI2): two halves by two lanes, timed to reach the objective together (a broad front is one too;
+        // not on a long map: there the wave marches to its staging point and goes in as one - with a landing, maybe)
+        const pincer = micro > 0 && AI2.pincer && openLanes.length >= 2 && fighters.length >= 8 && !this.longMap() && (broad || this.rng.next() < PINCER[this.difficulty] * (0.7 + doc.flank) * this.war.flank) && this.pincer(fighters, tx, ty, atRally, enemyAir);
+        if (pincer) {
+          if (broad) this.stats.broad++;
+        } else {
+          const flank = broad || (micro > 0 && this.rng.next() < doc.flank * this.war.flank * (micro >= 2 ? 1 : 0.6));
+          let body = fighters.map((u) => u.id);
+          let wing: number[] = [];
+          if (broad) {
+            wing = [...fighters].sort((a, b) => a.id - b.id).filter((_, i) => i % 2 === 1).map((u) => u.id);
+            body = body.filter((id) => !wing.includes(id));
+            this.stats.broad++;
+          } else if (flank && fighters.length >= 8) {
+            // the fastest third (fast-flanking doctrines: two fifths) swings round a flank while the main body pins the front
+            const sorted = [...fighters].sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
+            wing = sorted.slice(0, this.war.flank >= 1.3 ? Math.floor((sorted.length * 2) / 5) : Math.floor(sorted.length / 3)).map((u) => u.id);
+            body = body.filter((id) => !wing.includes(id));
+          }
+          const front = micro > 0 ? this.pickLane(flank && !wing.length) : null;
+          const wingLane = wing.length ? this.pickLane(true, front?.key) : null;
+          // feint: a few cheap fighters show themselves on another lane shortly before the main push
+          const feintLane = micro > 0 && openLanes.length >= 2 && body.length >= 6 && this.rng.next() < FEINT[this.difficulty] ? this.pickLane(true, front?.key ?? '') : null;
+          if (feintLane && feintLane.key !== wingLane?.key) {
+            const fe = body
+              .map((id) => w.get(id)!)
+              .sort((a, b) => cost(a.def) - cost(b.def) || unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id)
+              .slice(0, Math.min(3, Math.floor(body.length / 4)))
+              .map((u) => u.id);
+            body = body.filter((id) => !fe.includes(id));
+            this.cmd({ type: 'move', ids: fe, x: feintLane.pos[0], y: feintLane.pos[1], attackMove: true });
+            this.cmd({ type: 'move', ids: fe, x: feintLane.far[0], y: feintLane.far[1], attackMove: true, queue: true });
+            this.cmd({ type: 'move', ids: fe, x: rx, y: ry, queue: true });
+            this.waves.push({ ids: fe, tx: feintLane.far[0], ty: feintLane.far[1], focus: -1, born: w.tick, lane: '', value: 0, killed: 0, feint: true });
+            this.staged = { ids: body, wing, lane: front?.pos ?? null, laneKey: front?.key ?? '', wingLane: wingLane?.pos ?? null, tx, ty, at: w.tick + Math.round(TPS * this.rng.range(10, 22)) };
+            this.setRole([...body, ...wing], 'staged');
+            this.stats.feints++;
+            this.lastWave = w.tick;
+          } else if (!this.prepare(tx, ty, body, wing, front)) this.launch(body, wing, front?.pos ?? null, front?.key ?? '', wingLane?.pos ?? null, tx, ty, atRally, enemyAir);
         }
-        const front = micro > 0 ? this.pickLane(flank && !wing.length) : null;
-        const wingLane = wing.length ? this.pickLane(true, front?.key) : null;
-        // feint: a few cheap fighters show themselves on another lane shortly before the main push
-        const feintLane = micro > 0 && openLanes.length >= 2 && body.length >= 6 && this.rng.next() < FEINT[this.difficulty] ? this.pickLane(true, front?.key ?? '') : null;
-        if (feintLane && feintLane.key !== wingLane?.key) {
-          const fe = body
-            .map((id) => w.get(id)!)
-            .sort((a, b) => cost(a.def) - cost(b.def) || unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id)
-            .slice(0, Math.min(3, Math.floor(body.length / 4)))
-            .map((u) => u.id);
-          body = body.filter((id) => !fe.includes(id));
-          this.cmd({ type: 'move', ids: fe, x: feintLane.pos[0], y: feintLane.pos[1], attackMove: true });
-          this.cmd({ type: 'move', ids: fe, x: feintLane.far[0], y: feintLane.far[1], attackMove: true, queue: true });
-          this.cmd({ type: 'move', ids: fe, x: rx, y: ry, queue: true });
-          this.waves.push({ ids: fe, tx: feintLane.far[0], ty: feintLane.far[1], focus: -1, born: w.tick, lane: '', value: 0, killed: 0, feint: true });
-          this.staged = { ids: body, wing, lane: front?.pos ?? null, laneKey: front?.key ?? '', wingLane: wingLane?.pos ?? null, tx, ty, at: w.tick + Math.round(TPS * this.rng.range(10, 22)) };
-          this.setRole([...body, ...wing], 'staged');
-          this.stats.feints++;
-          this.lastWave = w.tick;
-        } else if (!this.prepare(tx, ty, body, wing, front)) this.launch(body, wing, front?.pos ?? null, front?.key ?? '', wingLane?.pos ?? null, tx, ty, atRally, enemyAir);
       }
     }
     // units that finished an attack-move far from home keep pushing toward the next target
@@ -2703,7 +2797,7 @@ export class AIController implements Controller {
   }
 
   /** Send a marching group to its staging point and file it with the wave gathering there (or as a new one). */
-  private marchWave(ids: number[], march: { x: number; y: number; until: number; done: boolean }, tx: number, ty: number, gx: number, gy: number, all: number[]) {
+  private marchWave(ids: number[], march: March, tx: number, ty: number, gx: number, gy: number, all: number[]) {
     const w = this.world;
     const host = this.waves.find((wv) => wv.march && !wv.march.done && Math.hypot(wv.march.x - march.x, wv.march.y - march.y) < 20);
     const [sx, sy] = host?.march ? [host.march.x, host.march.y] : [gx, gy];
@@ -2805,15 +2899,226 @@ export class AIController implements Controller {
     this.launch(body, wing, s.prep ? null : s.lane, s.laneKey, s.prep ? null : s.wingLane, s.tx, s.ty, atRally, enemyAir);
   }
 
-  private launch(body: number[], wing: number[], lane: [number, number] | null, laneKey: string, wingLane: [number, number] | null, tx: number, ty: number, atRally: Entity[], enemyAir: number) {
+  /**
+   * A pincer (AI2): the wave splits into two halves of like speed, one by the front lane and one by a flank, each to
+   * a staging point on its own approach to the objective, PINCER_D tiles of path short of it (managePincers then lets
+   * them go so they arrive together). false, with nothing sent, when the map gives no two approaches that come in
+   * from different sides.
+   */
+  private pincer(fighters: Entity[], tx: number, ty: number, atRally: Entity[], enemyAir: number): boolean {
+    const front = this.pickLane(false);
+    const side = front ? this.pickLane(true, front.key) : null;
+    if (!front || !side) return false;
+    const ways = [front, side].map((l) => this.wayPts(l.far[0], l.far[1], tx, ty));
+    const [w0, w1] = ways;
+    if (!w0 || !w1) return false;
+    let stage: { x: number; y: number; d: number }[] | null = null;
+    for (const d of [PINCER_D, PINCER_NEAR]) {
+      const st = [this.backAlong(w0, d), this.backAlong(w1, d)];
+      let da = Math.abs(Math.atan2(st[0].y - ty, st[0].x - tx) - Math.atan2(st[1].y - ty, st[1].x - tx));
+      if (da > Math.PI) da = 2 * Math.PI - da;
+      if (da >= PINCER_ANGLE && Math.hypot(st[0].x - st[1].x, st[0].y - st[1].y) >= PINCER_GAP) {
+        stage = st;
+        break;
+      }
+    }
+    if (!stage) return false;
+    // halves of like speed (by speed, dealt alternately), so neither is a fast wing that runs ahead
+    const sorted = [...fighters].sort((a, b) => unitDef(b.def).speed - unitDef(a.def).speed || a.id - b.id);
+    const body = sorted.filter((_, i) => i % 2 === 0).map((u) => u.id);
+    const wing = sorted.filter((_, i) => i % 2 === 1).map((u) => u.id);
+    // the most the halves wait for each other: the slower one's march to its staging point, half again, plus PINCER_WAIT
+    const [rx, ry] = this.rally();
+    let slow = 0;
+    [front, side].forEach((l, i) => {
+      const len = Math.hypot(l.pos[0] - rx, l.pos[1] - ry) + Math.hypot(l.far[0] - l.pos[0], l.far[1] - l.pos[1]) + ways[i]!.len - stage![i].d;
+      slow = Math.max(slow, len / this.speedOf(i ? wing : body, 0));
+    });
+    const until = this.world.tick + Math.round(TPS * (slow * 1.5 + PINCER_WAIT));
+    this.launch(body, wing, front.pos, front.key, side.pos, tx, ty, atRally, enemyAir, { ways: [front, side], stage, until });
+    return true;
+  }
+
+  /** The vehicle way from (fx, fy) to the objective (tx, ty) as points, and its length; null when there is none to it. */
+  private wayPts(fx: number, fy: number, tx: number, ty: number): { pts: [number, number][]; len: number } | null {
+    const w = this.world;
+    const a = w.nearestPassable(fx, fy, 4, w.mainland);
+    const b = w.nearestPassable(tx, ty, 6, w.mainland);
+    if (!a || !b) return null;
+    const path = w.pfs[Loco.Vehicle].find(a[0], a[1], b[0], b[1], 2000000);
+    const pts: [number, number][] = [[a[0] + 0.5, a[1] + 0.5], ...path.map((t): [number, number] => [(t % w.map.w) + 0.5, Math.floor(t / w.map.w) + 0.5])];
+    // (the way to a structure's door: the path ends next to it)
+    const end = pts[pts.length - 1];
+    if (Math.hypot(end[0] - tx, end[1] - ty) > 12) return null;
+    let len = 0;
+    for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+    return { pts, len };
+  }
+
+  /** The point `d` tiles of path back from the end of a way (its start when it is shorter), and its distance from the end. */
+  private backAlong(way: { pts: [number, number][] }, d: number): { x: number; y: number; d: number } {
+    const p = way.pts;
+    let back = 0;
+    let k = p.length - 1;
+    while (k > 0 && back < d) {
+      back += Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
+      k--;
+    }
+    return { x: p[k][0], y: p[k][1], d: back };
+  }
+
+  /** A group's speed (tiles / s): the quantile q of its members' alive (0: the slowest, 1: the fastest). */
+  private speedOf(ids: number[], q: number): number {
+    const v: number[] = [];
+    for (const id of ids) {
+      const u = this.world.get(id);
+      if (u) v.push(unitDef(u.def).speed);
+    }
+    if (!v.length) return 1;
+    v.sort((a, b) => a - b);
+    return Math.max(0.3, v[Math.floor((v.length - 1) * q)]);
+  }
+
+  /**
+   * Pincers under way: each half gathers at its staging point; once both are there (or the wait ran out, a half was
+   * wiped out or badly mauled, or its lane closed: a bridge down) they are let go, the half with further to go first,
+   * so both reach the objective at the same moment (then paced: pacePincer). Stragglers are sent on to their point.
+   */
+  private managePincers() {
+    const w = this.world;
+    for (const p of this.pincers) {
+      const mem = p.waves.map((wv, i) => (p.go[i] === -2 ? [] : wv.ids.map((id) => w.get(id)).filter((u): u is Entity => !!u && this.roleOf(u) === 'pincer')));
+      if (p.at < 0) {
+        const open = new Set(this.lanes().map((l) => this.laneKey(l)));
+        // (a half wiped out, mauled on the way or cut off: the other does not wait for it)
+        const broken = mem.some((m, i) => !m.length || !open.has(p.prongs[i].lane) || m.reduce((v, u) => v + cost(u.def), 0) < p.prongs[i].value * 0.5);
+        const there = mem.map((m, i) => {
+          const r = Math.max(6, Math.sqrt(m.length) * 1.8);
+          return m.filter((u) => Math.hypot(u.x - p.prongs[i].x, u.y - p.prongs[i].y) < r).length;
+        });
+        if (broken || w.tick >= p.until || mem.every((m, i) => there[i] * 4 >= m.length * 3)) {
+          // the time each half needs from where it is now: to its staging point, then the way in
+          const eta = mem.map((m, i) => {
+            if (!m.length) return 0;
+            const ds = m.map((u) => Math.hypot(u.x - p.prongs[i].x, u.y - p.prongs[i].y)).sort((a, b) => a - b);
+            return (p.prongs[i].d + ds[Math.floor((ds.length - 1) / 2)]) / this.speedOf(m.map((u) => u.id), ARRIVE_Q);
+          });
+          const top = Math.max(...eta);
+          p.at = w.tick;
+          p.go = eta.map((e) => (broken ? w.tick : w.tick + Math.round(TPS * (top - e))));
+        } else if (this.thinks % 4 === 0) {
+          // (one that stopped short - a skirmish on the way, a blocked path - goes on to its staging point)
+          mem.forEach((m, i) => {
+            const lost = m.filter((u) => u.order.type === 'idle' && Math.hypot(u.x - p.prongs[i].x, u.y - p.prongs[i].y) >= 6).map((u) => u.id);
+            if (lost.length) this.cmd({ type: 'move', ids: lost, x: p.prongs[i].x, y: p.prongs[i].y, attackMove: true });
+          });
+        }
+      }
+      if (p.at < 0) continue;
+      p.go.forEach((g, i) => {
+        if (g < 0 || w.tick < g) return;
+        p.go[i] = -2;
+        const ids = mem[i].map((u) => u.id);
+        this.setRole(ids, 'army');
+        this.send(ids, null, p.tx, p.ty);
+        // (judged on the fight, not the approach)
+        p.waves[i].born = w.tick;
+      });
+      if (p.go.every((g) => g === -2)) {
+        p.pace ||= w.tick + TPS * PINCER_PACE;
+        this.pacePincer(p);
+      }
+    }
+    this.pincers = this.pincers.filter((p) => p.go.some((g) => g !== -2) || p.pace > 0);
+  }
+
+  /**
+   * A pincer's halves on their way in (PINCER_PACE s at most): the timing at release is an estimate (slopes, a
+   * skirmish on the way), so a half that is getting ahead of the other - more than PINCER_SLACK s nearer, as the crow
+   * flies at its median speed - halts until the other has caught up. Never one in a fight: once either is in one, or
+   * either is in, both go on.
+   */
+  private pacePincer(p: Pincer) {
+    const w = this.world;
+    const live = p.waves.map((wv) => wv.ids.map((id) => w.get(id)).filter((u): u is Entity => !!u && (this.roleOf(u) === 'army' || this.roleOf(u) === 'pincer') && klass(u.def) !== 'arty'));
+    const rem = live.map((m) => {
+      if (!m.length) return 0;
+      const ds = m.map((u) => Math.max(0, Math.hypot(u.x - p.tx, u.y - p.ty) - ARRIVE_R)).sort((a, b) => a - b);
+      return ds[Math.floor((ds.length - 1) / 2)] / this.speedOf(m.map((u) => u.id), ARRIVE_Q);
+    });
+    const fighting = live.some((m) => m.some((u) => w.tick - u.lastHurt < TPS * 3));
+    const done = w.tick >= p.pace || fighting || rem.some((r) => r <= 0);
+    live.forEach((m, i) => {
+      const ids = m.map((u) => u.id);
+      if (p.held[i]) {
+        if (!done && rem[i] < rem[1 - i] - 1) return;
+        p.held[i] = false;
+        this.setRole(ids, 'army');
+        this.send(ids, null, p.tx, p.ty);
+      } else if (!done && rem[i] < rem[1 - i] - PINCER_SLACK) {
+        p.held[i] = true;
+        // (held as a pincer: no other order picks them up meanwhile)
+        this.setRole(ids, 'pincer');
+        this.cmd({ type: 'stop', ids });
+      }
+    });
+    if (done) p.pace = 0;
+  }
+
+  /**
+   * Arrival log (debug / tests): when each group of a split attack (a pincer's halves, an untimed flank wing and its
+   * main body, a combined landing's land wave) has half its members alive within ARRIVE_R of its objective, once
+   * let go from its staging point.
+   * Logged when all are in, or after four minutes (those not in: -1).
+   */
+  private trackArrivals() {
+    const w = this.world;
+    for (const a of this.arriving) {
+      a.groups.forEach((g, i) => {
+        if (a.entry.at[i] >= 0 || !g.length) return;
+        let alive = 0;
+        let near = 0;
+        let held = false;
+        for (const id of g) {
+          const u = w.get(id);
+          if (!u) continue;
+          // (still held at a staging point: a skirmish there is not the attack)
+          const r = this.roleOf(u);
+          if (r === 'pincer' || r === 'march') held = true;
+          alive++;
+          if (Math.hypot(u.x - a.tx, u.y - a.ty) < ARRIVE_R) near++;
+        }
+        if (alive && !held && near * 2 >= alive) a.entry.at[i] = w.tick;
+      });
+    }
+    this.arriving = this.arriving.filter((a) => {
+      const done = a.entry.at.every((t) => t >= 0) || w.tick - a.entry.born > TPS * 240;
+      if (done) this.arrivals.push(a.entry);
+      return !done;
+    });
+  }
+
+  private launch(body: number[], wing: number[], lane: [number, number] | null, laneKey: string, wingLane: [number, number] | null, tx: number, ty: number, atRally: Entity[], enemyAir: number, pin?: PincerPlan) {
     const w = this.world;
     // a long march (Hard): to a staging point short of the objective first, together from there
-    const march = this.marchPoint([...body, ...wing], tx, ty, this.rally());
+    // (a pincer's halves have staging points of their own)
+    const march = pin ? null : this.marchPoint([...body, ...wing], tx, ty, this.rally());
     // (a wave still gathering at a staging point near this one: the new one joins it there)
     const host = march ? this.waves.find((wv) => wv.march && !wv.march.done && Math.hypot(wv.march.x - march.x, wv.march.y - march.y) < 20) : undefined;
     const [gx, gy] = host?.march ? [host.march.x, host.march.y] : march ? [march.x, march.y] : [tx, ty];
-    this.send(body, lane, gx, gy);
-    if (wing.length) this.send(wing, wingLane, gx, gy);
+    if (pin) {
+      // each half by its lane - our bank, the far bank - to its staging point
+      pin.ways.forEach((wy, i) => {
+        const ids = i ? wing : body;
+        this.cmd({ type: 'move', ids, x: wy.pos[0], y: wy.pos[1], attackMove: true });
+        this.cmd({ type: 'move', ids, x: wy.far[0], y: wy.far[1], attackMove: true, queue: true });
+        this.cmd({ type: 'move', ids, x: pin.stage[i].x, y: pin.stage[i].y, attackMove: true, queue: true });
+      });
+      this.setRole([...body, ...wing], 'pincer');
+    } else {
+      this.send(body, lane, gx, gy);
+      if (wing.length) this.send(wing, wingLane, gx, gy);
+    }
     if (march) this.setRole([...body, ...wing], 'march');
     // escorts: AA when the enemy flies, EW / recovery vehicles always
     const leader = [...body, ...wing]
@@ -2836,7 +3141,28 @@ export class AIController implements Controller {
     const ids = [...body, ...wing, ...arty];
     let value = 0;
     for (const id of ids) value += cost(w.get(id)?.def ?? '');
-    if (host?.march && march) {
+    if (pin) {
+      // a wave per half, each with its own lane (lane memory); the guns go with the main half (filed last: they
+      // keep behind the latest wave)
+      const val = (g: number[]) => g.reduce((v, id) => v + cost(w.get(id)?.def ?? ''), 0);
+      const side: Wave = { ids: [...wing], tx, ty, focus: -1, born: w.tick, lane: pin.ways[1].key, value: val(wing), killed: 0 };
+      const main: Wave = { ids: [...body, ...arty], tx, ty, focus: -1, born: w.tick, lane: laneKey, value: val([...body, ...arty]), killed: 0 };
+      this.waves.push(side, main);
+      while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
+      this.pincers.push({
+        waves: [main, side],
+        prongs: pin.stage.map((st, i) => ({ ...st, lane: pin.ways[i].key, value: val(i ? wing : body) })),
+        tx,
+        ty,
+        until: pin.until,
+        at: -1,
+        go: [-1, -1],
+        pace: 0,
+        held: [false, false],
+      });
+      this.stats.pincers++;
+      this.arriving.push({ entry: { kind: 'pincer', born: w.tick, at: [-1, -1] }, groups: [body, wing], tx, ty });
+    } else if (host?.march && march) {
       host.ids.push(...ids);
       host.value += value;
       host.march.until = Math.max(host.march.until, march.until);
@@ -2844,8 +3170,13 @@ export class AIController implements Controller {
       this.waves.push({ ids, tx, ty, focus: -1, born: w.tick, lane: laneKey, value, killed: 0, ...(march ? { march } : {}) });
       while (this.waves.length > 4) this.judgeWave(this.waves.shift()!);
     }
+    // (a flank wing or broad front sent straight in, untimed: logged for comparison with the pincers)
+    if (!pin && !march && wing.length) this.arriving.push({ entry: { kind: 'wing', born: w.tick, at: [-1, -1] }, groups: [body, wing], tx, ty });
     this.lastWave = w.tick;
     if (march) this.stats.marches++;
+    // (a long march, sometimes: a landing sets out now, to be timed with it; the roll is a hash of the match seed and
+    // the march, not a draw from the AI's stream, so a game with no landing to call plays exactly as without them)
+    if (march && this.navy?.canLand() && this.cfg.micro >= 2 && AI2.combined && aiSeed(this.world.seed + this.stats.marches, this.pid, 'combined') / 2 ** 32 < COMBINED[this.difficulty] * (0.8 + this.doctrine.flank)) this.navy.soon();
     if (this.stats.firstWave < 0) this.stats.firstWave = w.tick;
     this.stats.waves++;
     this.stats.lanes.push(laneKey);
@@ -2866,7 +3197,7 @@ export class AIController implements Controller {
    * push went on one by one - they reached the enemy's defences piecemeal; gathered first, they go in as one.
    * `until`: when its slowest member should be there (the path at its speed, plus half again).
    */
-  private marchPoint(ids: number[], tx: number, ty: number, from: [number, number]): { x: number; y: number; until: number; done: boolean } | null {
+  private marchPoint(ids: number[], tx: number, ty: number, from: [number, number]): March | null {
     if (this.cfg.micro < 2 || !ids.length || !this.longMap()) return null;
     const w = this.world;
     const [rx, ry] = from;
@@ -2898,7 +3229,7 @@ export class AIController implements Controller {
       if (u) vmin = Math.min(vmin, unitDef(u.def).speed);
     }
     if (!Number.isFinite(vmin) || vmin <= 0) return null;
-    return { x: pts[k][0], y: pts[k][1], until: w.tick + Math.round(TPS * (((len - back) / vmin) * 1.5 + 20)), done: false };
+    return { x: pts[k][0], y: pts[k][1], d: back, until: w.tick + Math.round(TPS * (((len - back) / vmin) * 1.5 + 20)), done: false };
   }
 
   /**
@@ -2962,6 +3293,8 @@ export class AIController implements Controller {
         const theirs = this.knownNear(wv.tx, wv.ty, 40, TPS * 180);
         go = !theirs.length || this.strength(there, this.armourMix(theirs as Entity[])) >= this.strength(theirs as Entity[], this.armourMix(there)) * MARCH_EDGE || w.tick - m.at >= TPS * MARCH_WAIT;
       }
+      // (a combined landing: timed so the party lands as the wave goes in)
+      if (go && this.navy && AI2.combined) go = this.combined(wv, mem, m);
       if (go) {
         m.done = true;
         const ids = mem.map((u) => u.id);
@@ -2975,6 +3308,57 @@ export class AIController implements Controller {
       const lost = mem.filter((u) => u.order.type === 'idle' && Math.hypot(u.x - m.x, u.y - m.y) >= r).map((u) => u.id);
       if (lost.length && this.thinks % 4 === 0) this.cmd({ type: 'move', ids: lost, x: m.x, y: m.y, attackMove: true });
     }
+  }
+
+  /**
+   * A marching wave ready to go in from its staging point, and a combined landing (navalai.ts) on hand: the craft
+   * still loading, the wave waits for it (COMBINED_HOLD s at most); loaded, the one with the shorter way is held back
+   * - the craft at its beach or the wave at its staging point - so the party comes ashore as the wave reaches its
+   * objective. true: the wave goes now.
+   */
+  private combined(wv: Wave, mem: Entity[], m: March): boolean {
+    const w = this.world;
+    const c = this.combo;
+    if (c) return c.wave !== wv || w.tick >= c.goAt;
+    const nl = this.navy!.combinedLanding();
+    if (!nl) return true;
+    m.ready ??= w.tick;
+    if (!nl.waiting) return w.tick - m.ready >= TPS * COMBINED_HOLD;
+    const ids = mem.map((u) => u.id);
+    // (a few stragglers marching up are no assault to time a landing with)
+    if (ids.length < 6) return true;
+    const lead = nl.eta / TPS - m.d / this.speedOf(ids, ARRIVE_Q);
+    if (lead > COMBINED_LEAD) return true;
+    const goAt = w.tick + Math.round(TPS * Math.max(0, lead));
+    this.navy!.sailAt(w.tick + Math.round(TPS * Math.max(0, -lead)));
+    const entry: Arrival = { kind: 'combined', born: w.tick, at: [-1, -1] };
+    this.combo = { wave: wv, goAt, entry };
+    // (the land wave's arrival is timed with the rest; the landing's from navalai.ts landedAt: manageCombo)
+    this.arriving.push({ entry, groups: [ids], tx: wv.tx, ty: wv.ty });
+    this.stats.combined++;
+    return w.tick >= goAt;
+  }
+
+  /** A wave of six or more on a long march, not yet let go from its staging point (to time a landing with). */
+  private marching(): boolean {
+    return this.waves.some((wv) => {
+      if (!wv.march || wv.march.done) return false;
+      let n = 0;
+      for (const id of wv.ids) {
+        const u = this.world.get(id);
+        if (u && this.roleOf(u) === 'march') n++;
+      }
+      return n >= 6;
+    });
+  }
+
+  /** A combined attack under way: note when its party comes ashore; over once both are logged (trackArrivals). */
+  private manageCombo() {
+    const c = this.combo;
+    if (!c) return;
+    const landed = this.navy?.landedAt ?? -1;
+    if (c.entry.at[1] < 0 && landed >= c.entry.born) c.entry.at[1] = landed;
+    if (!this.arriving.some((a) => a.entry === c.entry)) this.combo = null;
   }
 
   /**

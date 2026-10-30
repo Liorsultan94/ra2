@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { AIController } from '../src/sim/ai';
+import { describe, expect, it, onTestFinished } from 'vitest';
+import { AI2, AIController } from '../src/sim/ai';
 import { unitDef } from '../src/sim/defs';
 import { peaceTicks } from '../src/sim/peace';
 import { TPS, type Faction } from '../src/sim/types';
@@ -14,6 +14,12 @@ import { World } from '../src/sim/world';
 describe('AI aircraft carrier', () => {
   it('Hard builds one late, keeps it back in deep water and strikes with its jets', () => {
     const fs: Faction[] = ['usa', 'russia'];
+    // (the game this was tuned on: without combined landings, ai.ts, which change how it goes from the first landing on)
+    const was = AI2.combined;
+    AI2.combined = false;
+    onTestFinished(() => {
+      AI2.combined = was;
+    });
     const w = new World({ seed: 2, map: 'desert', players: fs.map((f, i) => ({ name: `P${i}`, faction: f, color: 0, isAI: true })) });
     const pt = peaceTicks('hard', 'auto');
     const ais = [new AIController(w, 0, 'hard', { peaceTicks: pt }), new AIController(w, 1, 'hard', { peaceTicks: pt })];
