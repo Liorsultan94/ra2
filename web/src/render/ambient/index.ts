@@ -10,6 +10,7 @@ import { Animals } from './animals';
 import { Birds } from './birds';
 import { roadNetFor } from './clearance';
 import { Emergency } from './emergency';
+import { EstateTractors } from './estates';
 import { People } from './people';
 import { RiverLife } from './river';
 import { WX } from '../wxuniforms';
@@ -59,6 +60,8 @@ export class AmbientLife {
   readonly traffic: Traffic;
   readonly animals: Animals;
   readonly birds: Birds;
+  /** The tractors at work on the desert farm estates (estates.ts). */
+  readonly tractors: EstateTractors;
   /** Ducks, jumping fish, dragonflies and fishing boats (river.ts). */
   readonly river: RiverLife;
   /** The map's set pieces (landmarks/), railways (rail.ts), ferry / canal boats (ferry.ts), civilian aircraft (air.ts). */
@@ -112,13 +115,14 @@ export class AmbientLife {
     this.traffic.onWreck = (x, y) => this.emergency.incident(x, y);
     this.animals = new Animals(map, terrain.layout, fog, probe, quality, phone, this.people.figures, (tx, ty) => this.people.builtAt(tx, ty));
     this.birds = new Birds(map, terrain.layout, fog, probe, quality, phone, foul);
+    this.tractors = new EstateTractors(map, terrain.layout, fog, probe, effects, quality);
     this.group.name = 'ambient-life';
     this.river = new RiverLife(map, terrain.river, fog, probe, this.lights, quality, phone);
     this.landmarks = new MapLandmarks(map, fog, probe, this.lights, effects, quality, world.bridges);
     this.rail = new Railway(map, fog, probe, this.lights, effects, quality);
     this.water = new WaterTransport(map, terrain.river ?? null, fog, probe, this.lights, quality);
     this.airTraffic = new AirTraffic(map, fog, probe, this.lights, quality, this.landmarks.helipad, () => (host as unknown as { camera?: THREE.Camera }).camera);
-    this.group.add(this.traffic.group, this.people.group, this.emergency.group, this.animals.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
+    this.group.add(this.traffic.group, this.people.group, this.emergency.group, this.animals.group, this.tractors.group, this.birds.group, this.river.group, this.landmarks.group, this.rail.group, this.water.group, this.airTraffic.group, this.lights.group);
     this.frame = { dt: 0, time: 0, dangers: this.dangers, units: this.units, nUnits: 0, air: this.air, nAir: 0, dark: 0, foul, vx0: 0, vy0: 0, vx1: map.w, vy1: map.h };
   }
 
@@ -281,6 +285,7 @@ export class AmbientLife {
     this.people.update(f);
     this.emergency.update(f);
     this.animals.update(f);
+    this.tractors.update(f);
     this.birds.update(f);
     this.river.update(f);
     this.dangers.length = 0;
@@ -332,9 +337,10 @@ export class AmbientLife {
     this.people.dispose();
     this.emergency.dispose();
     this.rail.dispose();
+    this.tractors.dispose();
   }
 
   stats() {
-    return { people: this.people.debug(), emergency: this.emergency.debug(), animalKinds: this.animals.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, river: this.river.count, traffic: this.traffic.debug() };
+    return { people: this.people.debug(), emergency: this.emergency.debug(), animalKinds: this.animals.debug(), cars: this.traffic.count, animals: this.animals.count, birds: this.birds.count, tractors: this.tractors.debug(), river: this.river.count, traffic: this.traffic.debug() };
   }
 }
