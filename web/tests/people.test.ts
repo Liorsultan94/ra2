@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createMap } from '../src/sim/maps';
 import type { MapId } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
@@ -222,6 +222,16 @@ describe('emergency vehicle routes', () => {
  */
 describe('fear: civilians and herds', () => {
   async function civ(id: MapId) {
+    // (the ambient life rolls Math.random: seeded here so the herds and walkers are the same every run;
+    // some rolls give frontline no shepherded flock to test, this one does)
+    let seed = 7;
+    const rnd = vi.spyOn(Math, 'random').mockImplementation(() => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    });
+    onTestFinished(() => rnd.mockRestore());
     const { World } = await import('../src/sim/world');
     const { People } = await import('../src/render/ambient/people');
     const { Animals } = await import('../src/render/ambient/animals');
