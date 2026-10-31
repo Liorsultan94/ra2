@@ -8,6 +8,9 @@ import { defineConfig, type Plugin } from 'vite';
  *  - the build injects the list of game chunks (with their sizes) so the tiny
  *    entry can stream them with a real byte-progress bar before importing them.
  */
+/** Packages loaded on demand only (never streamed by the boot splash). */
+const LAZY_ONLY = /\/node_modules\/posthog-js\//;
+
 function splashPlugin(): Plugin[] {
   return [
     {
@@ -36,6 +39,8 @@ function splashPlugin(): Plugin[] {
             if (files.has(name) || entry.has(name)) return;
             const c = bundle[name];
             if (!c) return;
+            // chunks only fetched on demand later (analytics, after consent: src/telemetry/client.ts) are not boot downloads
+            if (c.type === 'chunk' && c.moduleIds.some((id) => LAZY_ONLY.test(id.replace(/\\/g, '/')))) return;
             if (c.type === 'asset') {
               files.set(name, typeof c.source === 'string' ? Buffer.byteLength(c.source) : c.source.byteLength);
               return;

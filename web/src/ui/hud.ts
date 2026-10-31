@@ -24,6 +24,7 @@ import { hasIcon, icon } from './icons';
 import './simple.css';
 import { HudClock } from './clock';
 import { PeaceChip } from './peace';
+import { hintText, trackTutorialStep, trackUiAction } from '../telemetry/events';
 
 export interface HudActions {
   onCameo(defId: string, cat: Category, shift: boolean): void;
@@ -451,6 +452,7 @@ export class Hud {
       b.innerHTML = icon(t.icon) + `<span>${t.label}</span><i class="tab-badge"></i>`;
       b.title = t.label;
       b.onclick = () => {
+        if (this.tab !== t.cat) trackUiAction('build_tab', t.cat);
         this.setTab(t.cat);
         // simple scheme: a tab in the folded strip opens the build menu on that tab
         if (this.simple) this.setCollapsed(false);
@@ -1621,6 +1623,7 @@ export class Hud {
       this.hint.classList.add('hidden');
       return;
     }
+    if (html !== this.hint.innerHTML) trackTutorialStep('hint', { hint: hintText(html) });
     this.hint.innerHTML = html;
     this.hint.classList.remove('hidden');
   }

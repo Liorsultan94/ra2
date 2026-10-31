@@ -753,6 +753,11 @@ export class GameRenderer {
     this.effects.addShake(amount, x, y);
   }
 
+  /** The quality governor's current rung (0 = best; telemetry). */
+  get governorLevel(): number {
+    return this.level;
+  }
+
   /** Current governor state, for debugging / screenshots. */
   perfStats() {
     const s = this.ladder[this.level];

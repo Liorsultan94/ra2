@@ -17,6 +17,8 @@ import './maps.css';
 import './menu.css';
 
 import { loadSettings, saveSettings, type Settings } from './settings';
+import { showConsentNotice } from '../telemetry/consentui';
+import { getConsent, setConsent, telemetryAvailable } from '../telemetry/client';
 
 export { defaultControls, loadSettings, saveSettings, type Settings } from './settings';
 
@@ -140,6 +142,7 @@ export class MainMenu {
   private stopCam: () => void;
   private onKey = (e: KeyboardEvent) => this.key(e);
   private back: (() => void) | null = null;
+  private closeConsent: (() => void) | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -162,6 +165,8 @@ export class MainMenu {
     this.el.addEventListener('pointerdown', () => handlers.onUnlockAudio());
     window.addEventListener('keydown', this.onKey);
     this.showTitle();
+    // first launch: the developer-analytics notice (telemetry/consentui.ts; only when a PostHog key is configured)
+    this.closeConsent = showConsentNotice(this.el);
   }
 
   private key(e: KeyboardEvent) {
@@ -455,6 +460,7 @@ export class MainMenu {
   }
 
   destroy() {
+    this.closeConsent?.();
     this.bg.destroy();
     this.stopCam();
     this.hero.hide();
@@ -543,8 +549,22 @@ function settingsHtml(st: Settings, page = false) {
         ${chk('showFps', !!st.showFps, 'Show FPS')}
         <p class="note">Graphics changes apply to the next battle.</p>
       </div>
+      ${privacyHtml(chk)}
       <div class="row"><button class="mbtn primary" data-a="back">Done</button></div>
     </div>`;
+}
+
+/** Settings → Privacy: the developer-analytics switch (telemetry/client.ts); hidden when no PostHog key is configured. */
+function privacyHtml(chk: (k: string, on: boolean, label: string, sub?: string) => string) {
+  const av = telemetryAvailable();
+  if (!av.key) return '';
+  const note = av.dnt ? 'Your browser asks sites not to track you (Do Not Track): nothing is sent.' : 'Anonymous gameplay &amp; performance stats for the developer only. No account, no personal info.';
+  return `
+      <div class="set-group">
+        <div class="mm-kicker">Privacy</div>
+        ${chk('analytics', getConsent() === 'granted' && !av.dnt, 'Share anonymous usage data', 'Helps improve balance and performance')}
+        <p class="note">${note}</p>
+      </div>`;
 }
 
 function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) => void) {
@@ -552,6 +572,11 @@ function bindSettings(root: HTMLElement, st: Settings, changed: (s: Settings) =>
     inp.addEventListener('input', () => {
       if (inp.type === 'radio' && !inp.checked) return;
       const k = inp.dataset.s!;
+      if (k === 'analytics') {
+        // (its own storage: not part of the game settings)
+        setConsent(inp.checked ? 'granted' : 'denied');
+        return;
+      }
       if (k === 'voice') st.voice = inp.checked;
       else if (k === 'cinematic') st.cinematic = inp.checked;
       else if (k === 'droneCam') st.droneCam = inp.value === 'off' ? 'off' : 'auto';
