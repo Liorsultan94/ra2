@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@pmndrs/assets": "^1.7.0",
+    "posthog-js": "1.444.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@ import { unitDef } from '../sim/defs';
 import { STANCES } from '../sim/orders';
 import type { Command, Entity, Stance } from '../sim/types';
 import type { World } from '../sim/world';
+import { trackUiAction } from '../telemetry/events';
 
 export const GROUPS = 9;
 
@@ -73,6 +74,7 @@ export class ControlGroups {
     }
     this.groups.set(g, ids);
     this.host.ack(ids.length ? 'ack' : 'click');
+    if (ids.length) trackUiAction('control_group_set');
     if (ids.length) this.host.message(`Group ${g} assigned (${ids.length})`);
   }
 

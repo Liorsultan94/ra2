@@ -14,7 +14,7 @@ import { DEFS, FACTIONS, WEAPONS, buildingDef, unitDef } from '../sim/defs';
 import { treatable } from '../sim/medic';
 import { standHeight, terrainPassable } from '../sim/map';
 import { cargoRoom, cargoSize } from '../sim/naval';
-import { TICK_MS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
+import { TICK_MS, TPS, type Category, type Command, type Entity, type Faction, type SimEvent, type Stance } from '../sim/types';
 import { World } from '../sim/world';
 import { skipFrame } from '../render/perf/hud';
 import { sharedCameos } from '../render/cameo';
@@ -30,6 +30,9 @@ import { ControlsUI, type OrderMode } from '../ui/controls';
 import { ControlGroups, STANCE_LABEL, nextStance, orderable, stanceForKey, type ControlsHost } from './controls';
 import { PhotoMode } from './photomode';
 import { MatchTracker, type MatchReport } from './matchstats';
+import { MatchTelemetry } from '../telemetry/match';
+import { trackUiAction } from '../telemetry/events';
+import { deviceClass } from '../telemetry/device';
 import { Briefing, buildBriefing, type BriefingInfo } from '../ui/briefing';
 import { CineCard } from '../ui/cinecard';
 import { BattleIntro, BattleOutro } from '../render/intro';
@@ -144,6 +147,8 @@ export class Game {
   readonly seed: number;
   /** After-action report statistics (observes events only). */
   readonly tracker: MatchTracker | null = null;
+  /** Developer analytics for this battle (telemetry/match.ts; observes only, no-op without consent). */
+  readonly telemetry: MatchTelemetry | null = null;
   /** Mission briefing data (null in attract mode / with briefing 'off'). */
   readonly brief: BriefingInfo | null = null;
   /** Briefing overlay while loading / waiting for "Deploy" (the battle holds still). */
@@ -277,7 +282,10 @@ export class Game {
       this.thermalBtn = this.hud.addViewButton(
         'Thermal view (T)',
         '<path d="M12 2a3 3 0 0 0-3 3v8.1a5 5 0 1 0 6 0V5a3 3 0 0 0-3-3zm0 2a1 1 0 0 1 1 1v9.1l.4.3a3 3 0 1 1-2.8 0l.4-.3V5a1 1 0 0 1 1-1zm-1 6v5.3a2 2 0 1 0 2 0V10z"/>',
-        () => this.modes.cycleThermal(),
+        () => {
+          this.modes.cycleThermal();
+          trackUiAction('thermal_view');
+        },
       );
       this.thermalBtn.classList.add('vc-thermal');
       this.modes.onChange = () => {
@@ -346,6 +354,29 @@ export class Game {
     this.raf = requestAnimationFrame(this.frame);
     if (!attract) {
       this.tracker = new MatchTracker(this.world, this.local);
+      const controls = opts.controls ?? (window.matchMedia?.('(pointer: coarse)').matches ? 'simple' : 'advanced');
+      this.telemetry = new MatchTelemetry({
+        world: this.world,
+        local: this.local,
+        device: deviceClass(),
+        ai: ais[1] ?? null,
+        qualityLevel: () => this.renderer.governorLevel,
+        info: {
+          map: this.world.map.id,
+          faction: opts.faction,
+          enemy: [opts.enemy],
+          difficulty: opts.difficulty,
+          game_speed: opts.gameSpeed ?? 'normal',
+          grace: opts.peace ?? 'off',
+          grace_min: Math.round((peace / TPS / 60) * 10) / 10,
+          ai_count: 1,
+          quality: opts.quality,
+          controls,
+          credits: opts.credits,
+          auto_defend: opts.autoDefend !== false,
+        },
+      });
+      this.telemetry.watchCanvas(this.hud.canvas);
       if ((opts.briefing ?? 'full') !== 'off') this.openBriefing(container);
     }
     if (!attract && !/[?&]warm=0\b/.test(location.search)) this.startWarmup();
@@ -532,6 +563,7 @@ export class Game {
     this.audio.unlock();
     this.sfx('click');
     this.photo.enter(resume);
+    if (!resume) trackUiAction('photo_mode');
   }
 
   // ------------------------------------------------------------------- loop
@@ -590,6 +622,7 @@ export class Game {
     }
     const alpha = this.paused ? 1 : this.pacer.alpha;
     this.tracker?.update();
+    this.telemetry?.frame(this.paused);
     if (!this.cine.active && !this.photo.active && !this.outro) this.updateCamera(dt);
     if (this.local >= 0 && !this.photo.active) this.updateHover();
     const r0 = rec ? performance.now() : 0;
@@ -773,6 +806,7 @@ export class Game {
 
   private onEvent(ev: SimEvent) {
     this.tracker?.onEvent(ev);
+    this.telemetry?.onEvent(ev);
     if (ev.t === 'death' && ev.kind === 'building' && ev.owner >= 0) this.lastFall = { x: ev.x, y: ev.y, owner: ev.owner };
     this.renderer.handleEvent(ev);
     this.modes.onEvent(ev);
@@ -954,6 +988,7 @@ export class Game {
   private finish(win: boolean) {
     if (this.ended) return;
     this.ended = true;
+    this.telemetry?.finish(win ? 'win' : 'loss');
     this.cine.cancel(this.renderer);
     if (this.local < 0) {
       // restart the attract demo
@@ -1125,6 +1160,7 @@ export class Game {
     this.audio.unlock();
     this.paused = force !== undefined ? force : !this.paused;
     this.sfx(this.paused ? 'click' : 'ack');
+    trackUiAction(this.paused ? 'pause' : 'resume');
   }
 
   private onTool(t: 'repair' | 'sell' | 'menu' | 'boxselect' | 'pause') {
@@ -2014,6 +2050,7 @@ export class Game {
         break;
       case 't':
         this.modes.cycleThermal();
+        trackUiAction('thermal_view');
         break;
       case 'n':
         // atmos toggles night vision on N; thermal and night vision are exclusive
@@ -2062,6 +2099,8 @@ export class Game {
 
   destroy() {
     this.destroyed = true;
+    // left mid-battle (quit / restart from the pause menu): a no-op once the match has ended
+    this.telemetry?.finish('quit');
     cancelAnimationFrame(this.raf);
     this.briefing?.destroy();
     this.briefing = null;

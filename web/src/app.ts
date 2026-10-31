@@ -2,7 +2,7 @@ import './ui/style.css';
 import { installCursors } from './ui/cursors';
 import { AudioSystem } from './audio/audio';
 import { FACTIONS } from './sim/defs';
-import type { Faction } from './sim/types';
+import { TPS, type Faction } from './sim/types';
 import { Game, type GameOptions } from './game/game';
 import { loadModelOverrides } from './render/models';
 import { loadSkins } from './render/models/blenderskin';
@@ -15,6 +15,9 @@ import { speedFactor } from './game/pace';
 import { Aborted } from './render/slice';
 import { showLoading } from './ui/loading';
 import type { MapId } from './sim/map';
+import { installErrorHandlers, setErrorContext, trackAppLoaded, trackUiAction } from './telemetry/events';
+import { registerSuper, startTelemetry } from './telemetry/client';
+import { deviceClass, gpuName } from './telemetry/device';
 
 /** The demo battle behind the menu never needs more than medium: it only has to look alive, not burn the battery. */
 function demoQuality(q: ReturnType<typeof resolveQuality>): ReturnType<typeof resolveQuality> {
@@ -47,6 +50,9 @@ function applyAudio(s: Settings) {
 }
 applyAudio(settings);
 installCursors();
+// developer analytics (src/telemetry; no-op without consent + a PostHog key): uncaught errors with where they happened
+installErrorHandlers(() => game?.telemetry?.suspectCrash('an uncaught error'));
+setErrorContext(() => (game && !game.opts.attract ? { map: game.world.map.id, match_min: Math.round((game.world.tick / TPS / 60) * 10) / 10, quality: game.opts.quality } : { quality: resolveQuality(settings.quality) }));
 
 function randomFaction(except?: Faction): Faction {
   const pool = FACTIONS.filter((f) => f.id !== except);
@@ -155,6 +161,7 @@ function startBattle(opts: GameOptions): Promise<Game | null> {
             showMainMenu();
           },
           settings: (s) => {
+            if (s.gameSpeed !== settings.gameSpeed) trackUiAction('speed_change', s.gameSpeed ?? 'normal');
             settings = s;
             applyAudio(s);
             game?.setCinematic(s.cinematic);
@@ -260,5 +267,33 @@ export async function boot(splash: Splash) {
     await splash.finish(m.el);
     // the demo AI's unit / building models: built and compiled in the background now that the menu is up
     g?.prefetch();
+    reportAppLoaded(g);
   }
+}
+
+/** app_loaded (telemetry/events.ts): time to the main menu and the device; sent only once analytics is allowed. */
+function reportAppLoaded(g: Game | null) {
+  const load = Math.round(performance.now());
+  // (after the menu is up, off the critical path; a returning player's "Allow" loads posthog here)
+  setTimeout(() => {
+    const nav = navigator as Navigator & { deviceMemory?: number };
+    // on every event: slice anything by device class / control scheme
+    registerSuper({ device: deviceClass(), controls: settings.controls });
+    trackAppLoaded({
+      load_ms: load,
+      device: deviceClass(),
+      screen_w: screen.width,
+      screen_h: screen.height,
+      viewport_w: innerWidth,
+      viewport_h: innerHeight,
+      dpr: Math.round((devicePixelRatio || 1) * 100) / 100,
+      quality_setting: settings.quality,
+      quality: resolveQuality(settings.quality),
+      controls: settings.controls,
+      gpu: gpuName(g?.renderer.renderer.getContext()),
+      mem_gb: nav.deviceMemory,
+      cores: nav.hardwareConcurrency,
+    });
+    void startTelemetry();
+  }, 1500);
 }

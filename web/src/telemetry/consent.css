@@ -1,0 +1,145 @@
+/* Analytics consent notice (consentui.ts): main menu style (glass, hairline, Barlow buttons). */
+.ph-consent {
+  position: absolute;
+  z-index: 30;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 470px;
+  padding: 10px 12px 10px 14px;
+  color: var(--text);
+  background: rgba(11, 14, 19, 0.86);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  font-family: var(--font);
+  animation: ph-in 0.4s cubic-bezier(0.2, 0.75, 0.2, 1) 0.6s backwards;
+}
+.ph-consent::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--brand);
+}
+.ph-consent.ph-out {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s, transform 0.2s;
+}
+@keyframes ph-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.ph-ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--brand);
+}
+.ph-txt {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.ph-more {
+  font-style: normal;
+}
+.ph-txt b {
+  font-family: var(--font-d);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.ph-btns {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+.ph-btn {
+  min-height: 38px;
+  padding: 6px 14px;
+  font-family: var(--font-d);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ph-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.ph-btn.ph-yes {
+  color: #fff;
+  background: linear-gradient(180deg, #f0533e, #d83c2c);
+  border-color: rgba(255, 160, 140, 0.55);
+}
+.ph-btn.ph-yes:hover {
+  background: linear-gradient(180deg, #f6654f, #e2473a);
+}
+@media (pointer: coarse) {
+  .ph-consent {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(11, 14, 19, 0.9);
+  }
+  .ph-btn {
+    min-height: 44px;
+  }
+}
+/* phones in landscape (740 x 360 .. 860 x 400): a compact strip */
+@media (max-height: 560px) {
+  .ph-consent {
+    max-width: 370px;
+    gap: 10px;
+    padding: 7px 8px 7px 12px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    right: max(12px, env(safe-area-inset-right));
+  }
+  .ph-ico,
+  .ph-more {
+    display: none;
+  }
+  .ph-txt {
+    font-size: 11px;
+  }
+  .ph-txt b {
+    font-size: 13px;
+  }
+  .ph-btn {
+    padding: 4px 11px;
+    font-size: 13px;
+  }
+}
+@media (orientation: portrait) and (max-width: 700px) {
+  .ph-consent {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ph-consent {
+    animation: none;
+  }
+}
