@@ -1,6 +1,6 @@
 /*
- * The player's analytics choice (main menu notice, Settings → Privacy), kept in its own
- * localStorage key. null = not asked yet. Nothing at all is sent unless it is 'granted'.
+ * The player's analytics switch (Settings → Privacy; on by default), kept in its own
+ * localStorage key. null = never changed (treated as on, telemetry/client.ts); 'denied' = switched off.
  */
 
 export type Consent = 'granted' | 'denied' | null;

@@ -1,7 +1,7 @@
 # Developer analytics (PostHog)
 
 Anonymous gameplay and performance data for the developer only. Players never see it.
-Code: `src/telemetry/`. Without a project key, or until the player taps **Allow**, it does
+Code: `src/telemetry/`. Without a project key (or with it switched off in Settings), it does
 nothing at all: posthog-js is not downloaded and no request is made.
 
 ## Setup (one time)
@@ -25,11 +25,11 @@ nothing at all: posthog-js is not downloaded and no request is made.
 
 ## Player consent and privacy
 
-- On first launch, a small notice in the main menu asks: *Help improve Iron Front* with
-  **Allow** / **No thanks**. Settings → Privacy changes the choice later. The choice is
-  stored in localStorage (`ironfront.analytics.v1`).
-- Nothing is loaded or sent before Allow. Do Not Track / Global Privacy Control means no,
-  and the notice is not shown.
+- Collection is on by default, with no prompt (the owner's decision). A player can switch it
+  off in Settings → Privacy ("Share anonymous usage data"); the choice is stored in
+  localStorage (`ironfront.analytics.v1`). Do Not Track / Global Privacy Control means off.
+- Note: EU (GDPR / ePrivacy) and Israeli privacy rules may expect consent before an
+  identifier is stored on the device. Restoring a first-launch notice is a small change.
 - The id is anonymous and random (`person_profiles: 'never'`, never `identify()`), with no
   name or email. persistence: localStorage only, no cookies.
 - Autocapture records clicks on buttons, links and labels, never text inputs.
@@ -42,7 +42,7 @@ nothing at all: posthog-js is not downloaded and no request is made.
 
 | Event | When | Fields |
 |---|---|---|
-| `app_loaded` | main menu up (once per page load; sent after Allow if given later) | `load_ms`, `device` (phone/tablet/desktop), `screen_w/h`, `viewport_w/h`, `dpr`, `quality_setting`, `quality`, `controls`, `gpu`, `mem_gb`, `cores` (+ PostHog's `$os`, `$browser`, `$device_type`) |
+| `app_loaded` | main menu up (once per page load; ) | `load_ms`, `device` (phone/tablet/desktop), `screen_w/h`, `viewport_w/h`, `dpr`, `quality_setting`, `quality`, `controls`, `gpu`, `mem_gb`, `cores` (+ PostHog's `$os`, `$browser`, `$device_type`) |
 | `match_started` | first simulation tick of a battle | `map`, `faction`, `enemy[]`, `difficulty`, `game_speed`, `grace`, `grace_min`, `ai_count`, `quality`, `controls`, `credits`, `auto_defend` |
 | `match_ended` | victory / defeat, quit (pause menu, restart, tab closed via sendBeacon), crash | the match_started fields, plus `result` (win/loss/quit/crash), `game_min`, `real_min`, `first_attack_min`, `units_built{infantry,vehicle,air,naval}`, `units_lost{...}`, `units_built_total`, `units_lost_total`, `units_killed`, `buildings_built/lost/destroyed`, `credits_earned/spent`, `top_units[]` + `top_units_n[]`, `enemy_top_units[]` + `enemy_top_units_n[]`, `enemy_units_built`, `superweapons_used`, `ai{waves,pincers,combined,marches,feints,retreats,counters,first_wave_min,react_*}` |
 | `perf_sample` | 3 match minutes in, and at match end | `at` (mid/end), `match_min`, `avg_fps`, `min_fps`, `p5_fps`, `frame_ms_p95`, `frames`, `quality`, `quality_level`, `quality_changes`, `heap_mb`, `device` |
