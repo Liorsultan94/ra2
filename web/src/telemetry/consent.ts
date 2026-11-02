@@ -1,5 +1,5 @@
 /*
- * The player's analytics switch (Settings → Privacy; on by default), kept in its own
+ * The analytics on/off state (always on in the game; tests switch it), kept in its own
  * localStorage key. null = never changed (treated as on, telemetry/client.ts); 'denied' = switched off.
  */
 

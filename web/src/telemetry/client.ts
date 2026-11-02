@@ -41,14 +41,14 @@ let superProps: Record<string, unknown> = {};
 
 function currentConsent(): Consent {
   if (!consentRead) {
-    // on by default (the owner's call: no prompt); a player can switch it off in Settings → Privacy
+    // always on (the owner's call: no prompt, no in-game switch)
     consent = loadConsent() ?? 'granted';
     consentRead = true;
   }
   return consent;
 }
 
-/** True when events may be sent at all: not switched off in Settings, a key exists, no Do Not Track. */
+/** True when events may be sent at all: a key exists, no Do Not Track. */
 export function telemetryActive(): boolean {
   return currentConsent() === 'granted' && !!posthogKey() && !doNotTrack() && !failed;
 }
@@ -72,7 +72,7 @@ export function onConsentChange(fn: (c: Consent) => void): () => void {
   };
 }
 
-/** The player's choice (Settings → Privacy). On loads posthog; off stops all capture at once. */
+/** Switch capture on / off (tests; no in-game switch). On loads posthog; off stops all capture at once. */
 export function setConsent(c: 'granted' | 'denied') {
   currentConsent();
   const changed = consent !== c;

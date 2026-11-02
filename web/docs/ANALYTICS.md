@@ -1,7 +1,7 @@
 # Developer analytics (PostHog)
 
 Anonymous gameplay and performance data for the developer only. Players never see it.
-Code: `src/telemetry/`. Without a project key (or with it switched off in Settings), it does
+Code: `src/telemetry/`. Without a project key it does
 nothing at all: posthog-js is not downloaded and no request is made.
 
 ## Setup (one time)
@@ -25,11 +25,8 @@ nothing at all: posthog-js is not downloaded and no request is made.
 
 ## Player consent and privacy
 
-- Collection is on by default, with no prompt (the owner's decision). A player can switch it
-  off in Settings → Privacy ("Share anonymous usage data"); the choice is stored in
-  localStorage (`ironfront.analytics.v1`). Do Not Track / Global Privacy Control means off.
-- Note: EU (GDPR / ePrivacy) and Israeli privacy rules may expect consent before an
-  identifier is stored on the device. Restoring a first-launch notice is a small change.
+- Collection is always on once a key is configured: no prompt and no in-game switch.
+  Do Not Track / Global Privacy Control means off.
 - The id is anonymous and random (`person_profiles: 'never'`, never `identify()`), with no
   name or email. persistence: localStorage only, no cookies.
 - Autocapture records clicks on buttons, links and labels, never text inputs.
