@@ -17,7 +17,6 @@ import './maps.css';
 import './menu.css';
 
 import { loadSettings, saveSettings, type Settings } from './settings';
-import { showConsentNotice } from '../telemetry/consentui';
 import { getConsent, setConsent, telemetryAvailable } from '../telemetry/client';
 
 export { defaultControls, loadSettings, saveSettings, type Settings } from './settings';
@@ -142,7 +141,6 @@ export class MainMenu {
   private stopCam: () => void;
   private onKey = (e: KeyboardEvent) => this.key(e);
   private back: (() => void) | null = null;
-  private closeConsent: (() => void) | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -165,8 +163,6 @@ export class MainMenu {
     this.el.addEventListener('pointerdown', () => handlers.onUnlockAudio());
     window.addEventListener('keydown', this.onKey);
     this.showTitle();
-    // first launch: the developer-analytics notice (telemetry/consentui.ts; only when a PostHog key is configured)
-    this.closeConsent = showConsentNotice(this.el);
   }
 
   private key(e: KeyboardEvent) {
@@ -460,7 +456,6 @@ export class MainMenu {
   }
 
   destroy() {
-    this.closeConsent?.();
     this.bg.destroy();
     this.stopCam();
     this.hero.hide();

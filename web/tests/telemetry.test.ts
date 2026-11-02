@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { __resetTelemetryForTests, capture, posthogConfig, setConsent, shouldAskConsent, startTelemetry, telemetryActive, type PostHogLike } from '../src/telemetry/client';
+import { __resetTelemetryForTests, capture, posthogConfig, setConsent, startTelemetry, telemetryActive, type PostHogLike } from '../src/telemetry/client';
 import { __resetEventsForTests, setErrorContext, trackAppLoaded, trackError, trackMatchStarted, trackTutorialStep, trackUiAction, type AppLoadedProps, type MatchStartedProps } from '../src/telemetry/events';
 import { CONSENT_KEY } from '../src/telemetry/consent';
 import { posthogKey, posthogHost } from '../src/telemetry/config';
@@ -98,9 +98,8 @@ describe('telemetry config', () => {
 });
 
 describe('telemetry consent gating', () => {
-  it('no key: a complete no-op (never loads posthog), no consent notice', async () => {
+  it('no key: a complete no-op (never loads posthog)', async () => {
     vi.stubEnv('VITE_POSTHOG_KEY', '');
-    expect(shouldAskConsent()).toBe(false);
     setConsent('granted');
     capture('x');
     trackMatchStarted(INFO);
@@ -111,17 +110,16 @@ describe('telemetry consent gating', () => {
     expect(mock.calls).toEqual([]);
   });
 
-  it('nothing before Allow: no init, no events, no loading', async () => {
-    expect(shouldAskConsent()).toBe(true);
+  it('on by default (no prompt): loads at start-up and sends what was captured before', async () => {
     trackAppLoaded(APP);
     trackMatchStarted(INFO);
-    trackUiAction('pause');
-    trackError('error', 'early error');
+    expect(telemetryActive()).toBe(true);
     await startTelemetry();
     await flush();
-    expect(mock.loader).not.toHaveBeenCalled();
-    expect(mock.calls).toEqual([]);
-    expect(telemetryActive()).toBe(false);
+    expect(mock.loader).toHaveBeenCalledTimes(1);
+    expect(mock.events().map((e) => e.name)).toEqual(['app_loaded', 'match_started']);
+    // nothing is written to storage until the player changes the switch
+    expect(store.get(CONSENT_KEY)).toBeUndefined();
   });
 
   it('Allow: loads + inits posthog, then sends app_loaded (kept from before) and later events', async () => {
@@ -154,7 +152,6 @@ describe('telemetry consent gating', () => {
     store.set(CONSENT_KEY, 'granted');
     __resetTelemetryForTests(mock.loader);
     __resetEventsForTests();
-    expect(shouldAskConsent()).toBe(false);
     await startTelemetry();
     capture('one');
     expect(mock.events().length).toBe(1);
@@ -170,17 +167,18 @@ describe('telemetry consent gating', () => {
     expect(mock.events().map((e) => e.name)).toEqual(['one', 'three']);
   });
 
-  it('No thanks: posthog is never loaded', async () => {
-    setConsent('denied');
+  it('switched off in Settings (saved): posthog is never loaded', async () => {
+    store.set(CONSENT_KEY, 'denied');
+    __resetTelemetryForTests(mock.loader);
+    __resetEventsForTests();
     capture('x');
+    await startTelemetry();
     await flush();
     expect(mock.loader).not.toHaveBeenCalled();
-    expect(shouldAskConsent()).toBe(false);
   });
 
-  it('Do Not Track: never loads, never asks', async () => {
+  it('Do Not Track: never loads', async () => {
     vi.stubGlobal('navigator', { doNotTrack: '1' });
-    expect(shouldAskConsent()).toBe(false);
     setConsent('granted');
     capture('x');
     await flush();
