@@ -3,6 +3,8 @@ import { Tile, terrainBuildable, unitPassable, type GameMap } from '../src/sim/m
 import { createMap, litaniRiver, litaniSea, mapInfo } from '../src/sim/maps';
 import { LITANI_N, LITANI_WINDOW } from '../src/sim/litanidata';
 import { SEA_MIN, SHIP_YARD_REACH, navalTerrain, shipSite } from '../src/sim/naval';
+import { Loco } from '../src/sim/slope';
+import { World } from '../src/sim/world';
 
 /*
  * The Litani river mouth (map id 'frontline'): real terrain baked by tools/litani-terrain.mjs. The map must come out
@@ -116,6 +118,21 @@ describe('Litani mouth (map frontline)', () => {
     // and not without them
     const noBridge = (i: number) => m.tiles[i] !== Tile.Bridge && unitPassable(m, i % m.w, (i / m.w) | 0);
     expect(flood(m, s0, noBridge)[s1]).toBe(0);
+  });
+
+  it('lets vehicles drive the exaggerated relief: base to base, and from every deck end to its own base', () => {
+    const w = new World({ seed: 1, players: [{ name: 'A', faction: 'usa', color: 0, isAI: false }, { name: 'B', faction: 'russia', color: 0, isAI: false }] });
+    const pf = w.pfs[Loco.Vehicle];
+    const reaches = (fx: number, fy: number, t: { x: number; y: number }) => {
+      const p = pf.find(Math.floor(fx), Math.floor(fy), t.x, t.y, 2000000);
+      return p.length > 0 && p[p.length - 1] === t.y * w.map.w + t.x;
+    };
+    expect(reaches(w.map.starts[0].x, w.map.starts[0].y, w.map.starts[1])).toBe(true);
+    for (const b of w.bridges)
+      for (const k of [0, 1] as const) {
+        const e = b.ends[k];
+        expect(reaches(e.x - b.ux * (k ? -1 : 1), e.y - b.uy * (k ? -1 : 1), w.map.starts[k]), `bridge ${b.idx} end ${k}`).toBe(true);
+      }
   });
 
   it('gives both bases room to build, and a coast for a shipyard', () => {

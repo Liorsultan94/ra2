@@ -2388,6 +2388,33 @@ export function createLitaniMap(): GameMap {
       else if (r > -1.8) h = Math.min(h, h + (WATER_LEVEL + 0.04 - h) * smoothstep(-1.8, 0, r));
       g.heights[i] = h;
     }
+  // the exaggerated slopes eased where they would be too steep to drive (vehicles take a step of about 0.53 a tile):
+  // steps over LT_GRADE between neighbouring vertices relaxed a few times, the highest ground and every ridge, valley
+  // and the river's gorge staying where they are (the land only; the sea and the river beds keep their own profiles)
+  {
+    const land = new Uint8Array(W1 * (H + 1));
+    for (let i = 0; i < land.length; i++) land[i] = D.sea[i] / 4 < -2.5 && D.river[i] / 10 + LT_WIDEN < -1.8 ? 1 : 0;
+    const hs = g.heights;
+    for (let it = 0; it < 40; it++) {
+      let moved = 0;
+      for (let vy = 0; vy <= H; vy++)
+        for (let vx = 0; vx <= W; vx++) {
+          const i = vy * W1 + vx;
+          if (!land[i]) continue;
+          for (const j of [vx < W ? i + 1 : -1, vy < H ? i + W1 : -1]) {
+            if (j < 0 || !land[j]) continue;
+            const d = hs[j] - hs[i];
+            const ex = Math.abs(d) - LT_GRADE;
+            if (ex <= 0) continue;
+            const k = Math.sign(d) * ex * 0.5;
+            hs[i] += k;
+            hs[j] -= k;
+            moved++;
+          }
+        }
+      if (!moved) break;
+    }
+  }
   const sea = (x: number, y: number) => litaniSea(x, y);
   const riv = (x: number, y: number) => litaniRiver(x, y);
   const cls = (x: number, y: number) => D.cover[y * W + x] & 7;
@@ -2896,7 +2923,45 @@ export function createLitaniMap(): GameMap {
   }
   deco.plots = litaniPlots(g, cls, built);
   deco.river = LITANI_COURSE.map(([x, y]) => ({ x, y }));
-  deco.power = LITANI_POWER.map((l) => l.map(([x, y]) => ({ x: x - 0.5, y: y - 0.5 })));
+  // the high-voltage line (OSM), broken where it tops a crest of the exaggerated hills: the game's wires hang ~1.5
+  // units above the ground, so a span is never strung over a hilltop (render/pylonsite.ts spanClear)
+  deco.power = [];
+  {
+    const gh = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      const hs = g.heights;
+      return (hs[i] * (1 - tx) + hs[i + 1] * tx) * (1 - ty) + (hs[i + W1] * (1 - tx) + hs[i + W1 + 1] * tx) * ty;
+    };
+    for (const l of LITANI_POWER) {
+      const pts: Point[] = [];
+      for (let k = 1; k < l.length; k++) {
+        const [ax, ay] = l[k - 1];
+        const [bx, by] = l[k];
+        const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+        for (let j = 0; j < n; j++) pts.push({ x: ax + ((bx - ax) * j) / n, y: ay + ((by - ay) * j) / n });
+      }
+      const crest = pts.map((p, i) => {
+        const a = pts[Math.max(0, i - 4)];
+        const b = pts[Math.min(pts.length - 1, i + 4)];
+        return gh(p.x, p.y) > (gh(a.x, a.y) + gh(b.x, b.y)) / 2 + 0.45;
+      });
+      let run: Point[] = [];
+      pts.forEach((p, i) => {
+        const bad = crest.slice(Math.max(0, i - 3), i + 4).some(Boolean);
+        if (bad) {
+          if (run.length > 8) deco.power.push(run);
+          run = [];
+        } else run.push({ x: p.x - 0.5, y: p.y - 0.5 });
+      });
+      if (run.length > 8) deco.power.push(run);
+    }
+  }
 
   return assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
@@ -2911,6 +2976,8 @@ export function createLitaniMap(): GameMap {
   });
 }
 
+/** The steepest step (height units) between neighbouring vertices of the exaggerated land, after easing. */
+const LT_GRADE = 0.42;
 /** Ground steeper than this (height rise over a tile, after the vertical exaggeration) is bare rock. */
 const LT_ROCK = 1.25;
 /**
