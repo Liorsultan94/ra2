@@ -7,7 +7,7 @@ import { BLASTS, type Effects } from './effects';
 import type { FogOfWar } from './fog';
 import { GeoBuilder } from './geo';
 import { roadNetFor } from './ambient/clearance';
-import { deckLift, deckRamps, rampHeight } from './deckramp';
+import { deckLift, deckRamps, deckYaw, rampHeight } from './deckramp';
 import { surfaceHeight } from './ground';
 import { buildLayout } from './layout';
 import { sharedRoadMaterial } from './scenery';
@@ -37,7 +37,6 @@ import { buildingTextures, roadTexture } from './terraintex';
  * Math.random is fine here.
  */
 
-const D = Math.SQRT1_2;
 const W = 2.1; // deck width
 const STUB = 0.34; // deck stub left on each bank
 const DECK_Y = BRIDGE_HEIGHT - 0.1; // slab centre
@@ -380,7 +379,7 @@ export class BridgeFx {
       const L = br.length;
       const root = new THREE.Group();
       root.position.set(br.x, 0, br.y);
-      root.rotation.y = Math.PI / 4;
+      root.rotation.y = deckYaw(br);
       this.group.add(root);
       root.updateMatrixWorld(true);
       const seed = b.idx * 97 + 13;
@@ -889,8 +888,9 @@ export class BridgeFx {
       v.lastHitAt = b.hitAt;
       const dx = b.hitX - v.root.position.x;
       const dz = b.hitY - v.root.position.z;
-      const lx = dx * D - dz * D;
-      const lz = dx * D + dz * D;
+      // (bridge-local: along the deck, across it; dx * D - dz * D, dx * D + dz * D on the diagonal decks)
+      const lx = dx * b.ux + dz * b.uy;
+      const lz = dz * b.ux - dx * b.uy;
       if (Math.abs(lz) < W / 2 + 0.3) {
         const s = v.spans.find((sp) => lx >= sp.cx - sp.len / 2 && lx <= sp.cx + sp.len / 2);
         if (s && Math.abs(lz) < W / 2 - 0.1) {

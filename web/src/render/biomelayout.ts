@@ -157,6 +157,21 @@ export function buildBiomeLayout(m: GameMap): Layout {
       s += wdt + 0.6;
     }
   }
+  // farm plots at any angle (the Litani's orchards, greenhouses and fields): each shrinks until it fits
+  for (const z of deco?.plots ?? []) {
+    seed++;
+    const r = hash2(seed, 2, 625);
+    const type = z.crop === 'orchard' ? FieldType.Green : z.crop === 'greenhouse' ? FieldType.Plowed : r < 0.35 ? FieldType.Green : r < 0.6 ? FieldType.Plowed : r < 0.85 ? FieldType.Fallow : FieldType.Wheat;
+    let g: Field | null = null;
+    for (let cut = 0; cut <= 2.4 && !g; cut += 0.4) {
+      const t: Field = { cx: z.cx, cy: z.cy, hl: z.hl - cut, hw: z.hw - cut * 0.5, angle: z.ang, type };
+      if (t.hl >= 1.1 && t.hw >= 0.7 && fieldOk(t)) g = t;
+    }
+    if (!g) continue;
+    if (z.crop) g.crop = z.crop;
+    fields.push(g);
+    markField(g);
+  }
   // city streets: asphalt strips with markings, and the crossings (zebras) where they meet
   if (biome === 'urban') {
     const ends: V2[] = [];

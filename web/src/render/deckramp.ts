@@ -1,4 +1,4 @@
-import { BRIDGE_HEIGHT, Tile, standHeight, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, deckAxis, standHeight, type GameMap } from '../sim/map';
 import { surfaceHeight } from './ground';
 
 /**
@@ -10,10 +10,54 @@ import { surfaceHeight } from './ground';
  * the cars (ambient/traffic.ts), so they all agree.
  *
  * Bridge-local frame (as bridgefx.ts builds it): x along the deck from ends[0] (x = -L/2) to
- * ends[1] (x = +L/2), z across; world = (br.x + (x + z)·√½, br.y + (z − x)·√½).
+ * ends[1] (x = +L/2), z across; world = br + x·u + z·(−u.y, u.x), u the deck's axis (sim/map.ts
+ * deckAxis): (br.x + (x + z)·√½, br.y + (z − x)·√½) on the hand-drawn maps' diagonal decks.
  */
 
 export const DECK_W = 2.1;
+
+/** A bridge's local frame (see above): centre, deck axis, and whether it is the classic diagonal deck. */
+export interface DeckFrame {
+  x: number;
+  y: number;
+  ux: number;
+  uy: number;
+  diag: boolean;
+}
+
+export function deckFrame(br: { x: number; y: number; angle: number }): DeckFrame {
+  const u = deckAxis(br);
+  return { x: br.x, y: br.y, ux: u.x, uy: u.y, diag: br.angle === -Math.PI / 4 };
+}
+
+/** Bridge-local (along, across) of a tile-space offset (dx, dy) from the deck centre (the diagonal decks: exactly as before). */
+export function deckLocal(f: DeckFrame, dx: number, dy: number, out = { x: 0, z: 0 }) {
+  if (f.diag) {
+    out.x = (dx - dy) * D;
+    out.z = (dx + dy) * D;
+  } else {
+    out.x = dx * f.ux + dy * f.uy;
+    out.z = dy * f.ux - dx * f.uy;
+  }
+  return out;
+}
+
+/** Tile-space point of bridge-local (along x, across z). */
+export function deckWorld(f: DeckFrame, x: number, z: number, out = { x: 0, y: 0 }) {
+  if (f.diag) {
+    out.x = f.x + (x + z) * D;
+    out.y = f.y + (z - x) * D;
+  } else {
+    out.x = f.x + x * f.ux - z * f.uy;
+    out.y = f.y + x * f.uy + z * f.ux;
+  }
+  return out;
+}
+
+/** The bridge root's yaw (three.js rotation.y) that turns its local +x along the deck. */
+export function deckYaw(br: { angle: number }) {
+  return br.angle === -Math.PI / 4 ? Math.PI / 4 : -br.angle;
+}
 /** Approach roads ramp onto the deck over this many tiles. */
 export const RAMP_RUN = 2.2;
 const STEP = 0.05;
@@ -23,11 +67,14 @@ export interface DeckRamp {
   x: number;
   y: number;
   L: number;
+  /** The bridge's local frame. */
+  f: DeckFrame;
   /** extra deck height (above BRIDGE_HEIGHT) every STEP from x = -L/2 */
   lift: Float32Array;
 }
 
 const cache = new WeakMap<GameMap, DeckRamp[]>();
+const _l = { x: 0, z: 0 };
 
 const smooth = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
@@ -37,6 +84,8 @@ export function deckRamps(m: GameMap): DeckRamp[] {
   if (r) return r;
   r = m.bridges.map((br) => {
     const L = br.length;
+    const f = deckFrame(br);
+    const p = { x: 0, y: 0 };
     const n = Math.round(L / STEP) + 1;
     // how far the ground (plus a road's thickness) reaches above the deck top across its width
     const need = new Float32Array(n);
@@ -44,7 +93,8 @@ export function deckRamps(m: GameMap): DeckRamp[] {
       const x = -L / 2 + i * STEP;
       let h = 0;
       for (let z = -DECK_W / 2 - 0.05; z <= DECK_W / 2 + 0.051; z += 0.1) {
-        const g = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, br.x + (x + z) * D)), Math.max(0, Math.min(m.h - 0.01, br.y + (z - x) * D)));
+        deckWorld(f, x, z, p);
+        const g = surfaceHeight(m, Math.max(0, Math.min(m.w - 0.01, p.x)), Math.max(0, Math.min(m.h - 0.01, p.y)));
         h = Math.max(h, g + 0.035 - BRIDGE_HEIGHT);
       }
       need[i] = h > 0.01 ? h : 0;
@@ -73,7 +123,7 @@ export function deckRamps(m: GameMap): DeckRamp[] {
       const k1 = Math.min(n - 1, Math.ceil(j + R / STEP));
       for (let k = k0; k <= k1; k++) lift[k] = Math.max(lift[k], h * smooth(1 - (Math.abs(k - j) * STEP) / R));
     }
-    return { x: br.x, y: br.y, L, lift };
+    return { x: br.x, y: br.y, L, f, lift };
   });
   cache.set(m, r);
   return r;
@@ -98,8 +148,7 @@ export function rampHeight(m: GameMap, x: number, y: number, g: number, base: nu
     const dx = x - d.x;
     const dz = y - d.y;
     if (Math.abs(dx) > d.L / 2 + RAMP_RUN + 2 || Math.abs(dz) > d.L / 2 + RAMP_RUN + 2) continue;
-    const lx = (dx - dz) * D;
-    const lz = (dx + dz) * D;
+    const { x: lx, z: lz } = deckLocal(d.f, dx, dz, _l);
     const out = Math.max(0, Math.abs(lx) - d.L / 2);
     const side = Math.max(0, Math.abs(lz) - DECK_W / 2 + 0.15);
     const dist = Math.hypot(out, side);
@@ -122,8 +171,7 @@ export function deckSurface(m: GameMap, x: number, y: number, down?: (i: number)
     const dx = x - d.x;
     const dz = y - d.y;
     if (Math.abs(dx) > d.L / 2 + RAMP_RUN + 1 || Math.abs(dz) > d.L / 2 + RAMP_RUN + 1) continue;
-    const lx = (dx - dz) * D;
-    const lz = (dx + dz) * D;
+    const { x: lx, z: lz } = deckLocal(d.f, dx, dz, _l);
     if (Math.abs(lz) > DECK_W / 2 + side) continue;
     if (Math.abs(lx) <= d.L / 2) return down?.(i) ? null : BRIDGE_HEIGHT + deckLift(d, lx);
     if (Math.abs(lx) < d.L / 2 + RAMP_RUN) {

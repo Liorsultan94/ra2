@@ -1,5 +1,5 @@
 import { WEAPONS, unitDef } from './defs';
-import { Tile, terrainPassable, tileOpen } from './map';
+import { Tile, deckAxis, terrainPassable, tileOpen } from './map';
 import { TPS, type Entity, type Warhead } from './types';
 import type { World } from './world';
 
@@ -54,8 +54,11 @@ export interface BridgeState {
   x: number;
   y: number;
   length: number;
-  /** Deck ends: [0] on player 0's bank (y > x), [1] on the other bank. */
+  /** Deck ends: [0] on player 0's bank, [1] on the other bank. */
   ends: [{ x: number; y: number }, { x: number; y: number }];
+  /** Unit vector along the deck, ends[0] -> ends[1] (sim/map.ts deckAxis). */
+  ux: number;
+  uy: number;
   /** Deck tile indices (Tile.Bridge while standing, Tile.Water while down). */
   tiles: number[];
   hp: number;
@@ -76,8 +79,6 @@ export interface BridgeState {
   hitY: number;
   hitAt: number;
 }
-
-const D = Math.SQRT1_2;
 
 /** Can this weapon hurt a bridge at all? */
 export function canHurtBridge(weaponId: string | undefined): boolean {
@@ -104,7 +105,7 @@ export function deckDist(b: BridgeState, x: number, y: number) {
 
 /** Which bank of bridge `b` a point lies on (0 = ends[0] side). */
 export function bankOf(b: BridgeState, x: number, y: number): 0 | 1 {
-  return (x - b.x) * D - (y - b.y) * D < 0 ? 0 : 1;
+  return (x - b.x) * b.ux + (y - b.y) * b.uy < 0 ? 0 : 1;
 }
 
 /** Flood-fill count of walkable tiles reachable from player 0's start (terrain and structures, World.pass). */
@@ -132,16 +133,16 @@ function reachCount(w: World): number {
 }
 
 /** Find a tile for a repair hut near a deck end: open, off the approach road, never cutting the map. */
-function hutTile(w: World, ex: number, ey: number, out: number, reach: number): number {
+function hutTile(w: World, ex: number, ey: number, out: number, reach: number, ux: number, uy: number): number {
   const m = w.map;
   // outward direction along the deck (away from the river), and across it
-  const ox = D * out;
-  const oy = -D * out;
+  const ox = ux * out;
+  const oy = uy * out;
   let best = -1;
   let bestScore = Infinity;
   for (const side of [1, -1]) {
-    const cx = ex + ox * 1.2 + D * 1.7 * side;
-    const cy = ey + oy * 1.2 + D * 1.7 * side;
+    const cx = ex + ox * 1.2 - uy * 1.7 * side;
+    const cy = ey + oy * 1.2 + ux * 1.7 * side;
     for (let dy = -3; dy <= 3; dy++)
       for (let dx = -3; dx <= 3; dx++) {
         const tx = Math.floor(cx) + dx;
@@ -192,15 +193,18 @@ export function initBridges(w: World): BridgeState[] {
   const m = w.map;
   const out: BridgeState[] = m.bridges.map((br, idx) => {
     const h = br.length / 2;
+    const u = deckAxis(br);
     return {
       idx,
       x: br.x,
       y: br.y,
       length: br.length,
       ends: [
-        { x: br.x - h * D, y: br.y + h * D },
-        { x: br.x + h * D, y: br.y - h * D },
+        { x: br.x - h * u.x, y: br.y - h * u.y },
+        { x: br.x + h * u.x, y: br.y + h * u.y },
       ],
+      ux: u.x,
+      uy: u.y,
       tiles: [],
       hp: BRIDGE_HP,
       maxHp: BRIDGE_HP,
@@ -256,7 +260,7 @@ export function initBridges(w: World): BridgeState[] {
       const end = b.ends[k];
       const tk = twin === b ? (k === 1 ? b.huts[0] : undefined) : twin?.huts[1 - k];
       let t = tk !== undefined && tk >= 0 ? mirrorHutTile(w, w.entities.get(tk), reach) : -1;
-      if (t < 0) t = hutTile(w, end.x, end.y, k === 0 ? -1 : 1, reach);
+      if (t < 0) t = hutTile(w, end.x, end.y, k === 0 ? -1 : 1, reach, b.ux, b.uy);
       if (t < 0) {
         b.huts.push(-1);
         continue;

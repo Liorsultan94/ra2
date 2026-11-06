@@ -11,10 +11,9 @@
 //    OpenStreetMap (API 0.6 map calls), (c) OpenStreetMap contributors, ODbL.
 //
 // The map window: a square of N x N tiles at M metres per tile (the game's scale, render/podmath.ts M_PER_TILE),
-// centred on CENTER and turned so the decks of the two real highway bridges over the Litani (the coastal road's
-// Qasmiyeh bridge and the motorway's) run along the engine's bridge direction, tile (1, -1) (screen east): tile +x
-// points to bearing DECK + 45, tile +y to bearing DECK + 135. That puts the sea at the top of the screen and the
-// river running up the screen into it.
+// centred on CENTER, with real north at the top of the screen as the game camera sees it: the screen's up is the
+// map's (-x, -y) diagonal, so screen east, tile (1, -1), points to bearing EAST = 90, tile +x to bearing 135 and
+// tile +y to bearing 225. The sea lies on the left (west), the Litani runs in from the right (east) to its mouth.
 //
 // Output (all deterministic from the downloaded data; the game never touches the network):
 //  - elev: vertex heights (N + 1)^2, Int16 decimetres above sea level (area-averaged over each vertex's cell);
@@ -28,11 +27,11 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 // ------------------------------------------------------------------ window
-const CENTER = { lat: +(process.env.LAT ?? 33.3281), lon: +(process.env.LON ?? 35.2511) };
+const CENTER = { lat: +(process.env.LAT ?? 33.33), lon: +(process.env.LON ?? 35.2522) };
 const N = +(process.env.N ?? 104);
 const M = 35;
-/** Bearing (degrees) of the engine's bridge deck direction, tile (1, -1): the real decks run N 17-19 E. */
-const DECK = 18;
+/** Bearing (degrees) of screen east, the map's tile (1, -1) diagonal: 90, real north up. */
+const EAST = +(process.env.EAST ?? 90);
 const Z = 15;
 
 const args = process.argv.slice(2);
@@ -49,8 +48,8 @@ const rad = (d) => (d * Math.PI) / 180;
 const phi = rad(CENTER.lat);
 const M_LAT = 111132.92 - 559.82 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
 const M_LON = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
-const BX = rad(DECK + 45);
-const BY = rad(DECK + 135);
+const BX = rad(EAST + 45);
+const BY = rad(EAST + 135);
 /** Map point (continuous tile coordinates, 0..N) -> lat / lon. */
 function geo(x, y) {
   const u = (x - N / 2) * M;
@@ -328,6 +327,7 @@ function cross(a, b, c, d) {
 }
 
 // ------------------------------------------------------------------ main
+const r2 = (v) => Math.round(v * 100) / 100;
 await loadDem();
 await loadOsm();
 console.log(`window centre ${CENTER.lat}, ${CENTER.lon}; corners (x,y)=(0,0) ${fmt(corners[0])} (N,0) ${fmt(corners[1])} (N,N) ${fmt(corners[2])} (0,N) ${fmt(corners[3])}`);
@@ -362,9 +362,11 @@ const bankRel = [...rels.values()].find((r) => r.tags.natural === 'water' && r.t
 const bankOuter = bankRel ? mergeWays(bankRel.members.filter((m) => m.type === 'way' && m.role === 'outer').map((m) => ways.get(m.ref)).filter(Boolean)) : [];
 const bankInner = bankRel ? mergeWays(bankRel.members.filter((m) => m.type === 'way' && m.role === 'inner').map((m) => ways.get(m.ref)).filter(Boolean)) : [];
 const inBank = (x, y) => bankOuter.some((r) => inRing(r, x, y)) && !bankInner.some((r) => inRing(r, x, y));
+// (the banks as mapped, joined by the centreline wherever the bank polygon leaves gaps: the river runs unbroken)
+const RIVER_HW = 0.45;
 const riverSD = (x, y) => {
   const d = ringDist([...bankOuter, ...bankInner], x, y);
-  return inBank(x, y) ? d : -d;
+  return Math.max(inBank(x, y) ? d : -d, RIVER_HW - ringDist([river], x, y));
 };
 // the centreline: longest merged line, downstream (ending at the coast)
 riverLines.sort((a, b) => b.length - a.length);
@@ -496,7 +498,7 @@ for (const w of roadWays) {
       const g0 = nodes.get(w.nds[i]);
       const g1 = nodes.get(w.nds[i + 1]);
       const brg = (Math.atan2((g1.lon - g0.lon) * M_LON, (g1.lat - g0.lat) * M_LAT) * 180) / Math.PI;
-      bridges.push({ x: c.x, y: c.y, cls: RC[w.tags.highway], name: w.tags['name:en'] ?? w.tags.name ?? '', ref: w.tags.ref ?? '', bearing: (brg + 360) % 180, osm: w.id });
+      bridges.push({ x: c.x, y: c.y, cls: RC[w.tags.highway], name: w.tags['name:en'] ?? w.tags.name ?? '', ref: w.tags.ref ?? '', bearing: (brg + 360) % 180, angle: Math.atan2(p[i + 1].y - p[i].y, p[i + 1].x - p[i].x), osm: w.id });
     }
 }
 // places in the window (OSM place nodes)
@@ -506,12 +508,88 @@ for (const n of nodes.values()) {
   const p = toMap(n.lat, n.lon);
   places.push({ name: n.tags['name:en'] ?? n.tags.name, ar: n.tags.name, kind: n.tags.place, x: p.x, y: p.y, inside: p.x >= 0 && p.y >= 0 && p.x <= N && p.y <= N });
 }
+// the farm plots (each OSM orchard / greenhouse / farmland area inside the window): its minimum-area oriented
+// rectangle (centre, half length along `ang`, half width), what grows there (0 orchard, 1 greenhouses, 2 field)
+const hull = (pts) => {
+  const p = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  const up = [];
+  for (const q of [...p].reverse()) {
+    while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return [...lo.slice(0, -1), ...up.slice(0, -1)];
+};
+const plots = [];
+const plotSkip = { multi: 0, out: 0, thin: 0 };
+for (const a of areas) {
+  const kind = a.cls === 1 ? 0 : a.cls === 2 ? 1 : a.cls === 6 ? 2 : -1;
+  if (kind < 0) continue;
+  if (a.rings.length !== 1) {
+    plotSkip.multi++;
+    continue;
+  }
+  const h = hull(a.rings[0]);
+  if (h.length < 3) continue;
+  let best = null;
+  for (let i = 0; i < h.length; i++) {
+    const p0 = h[i];
+    const p1 = h[(i + 1) % h.length];
+    const ang = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    const c = Math.cos(ang);
+    const sn = Math.sin(ang);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const q of h) {
+      const u = q.x * c + q.y * sn;
+      const v = -q.x * sn + q.y * c;
+      u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+    }
+    const ar = (u1 - u0) * (v1 - v0);
+    if (!best || ar < best.ar) best = { ar, ang, u: (u0 + u1) / 2, v: (v0 + v1) / 2, hl: (u1 - u0) / 2, hw: (v1 - v0) / 2 };
+  }
+  const cx = best.u * Math.cos(best.ang) - best.v * Math.sin(best.ang);
+  const cy = best.u * Math.sin(best.ang) + best.v * Math.cos(best.ang);
+  if (cx < 0 || cy < 0 || cx > N || cy > N || best.hw < 0.5) {
+    plotSkip[best.hw < 0.5 ? 'thin' : 'out']++;
+    continue;
+  }
+  let ang = best.ang;
+  let hl = best.hl;
+  let hw = best.hw;
+  if (hw > hl) [hl, hw, ang] = [hw, hl, ang + Math.PI / 2];
+  ang = ((ang % Math.PI) + Math.PI) % Math.PI;
+  plots.push([r2(cx), r2(cy), r2(hl), r2(hw), Math.round(ang * 1000) / 1000, kind]);
+}
+// points of interest: mosques (places of worship), water towers, fuel stations
+const pois = [];
+const poiKind = (t) => (t.amenity === 'place_of_worship' ? 'mosque' : t.man_made === 'water_tower' ? 'water_tower' : t.amenity === 'fuel' ? 'fuel' : null);
+for (const n of nodes.values()) {
+  const k = poiKind(n.tags);
+  if (!k) continue;
+  const p = toMap(n.lat, n.lon);
+  if (p.x >= 0 && p.y >= 0 && p.x <= N && p.y <= N) pois.push({ kind: k, x: r2(p.x), y: r2(p.y) });
+}
+for (const w of ways.values()) {
+  const k = poiKind(w.tags);
+  if (!k) continue;
+  const p = wayPts(w);
+  if (!p.length) continue;
+  const c = { x: p.reduce((s, q) => s + q.x, 0) / p.length, y: p.reduce((s, q) => s + q.y, 0) / p.length };
+  if (c.x >= 0 && c.y >= 0 && c.x <= N && c.y <= N) pois.push({ kind: k, x: r2(c.x), y: r2(c.y) });
+}
+// power lines (OSM power=line)
+const power = [];
+for (const w of ways.values()) if (w.tags.power === 'line') for (const part of clipLine(wayPts(w), 1)) power.push(simplify(part, 0.4));
 const riverIn = clipLine(river, 3).flat();
 const riverOut = simplify(riverIn, 0.15);
 
 // ------------------------------------------------------------------ write
 const b64 = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString('base64');
-const r2 = (v) => Math.round(v * 100) / 100;
 const pts = (l) => l.map((p) => [r2(p.x), r2(p.y)]);
 let elevMin = Infinity;
 let elevMax = -Infinity;
@@ -522,7 +600,7 @@ const ts = `// GENERATED by tools/litani-terrain.mjs (${today}) - do not edit by
 // The Litani river mouth, south Lebanon: real terrain for map id 'frontline' (src/sim/litani.ts).
 // Elevation: AWS Terrain Tiles (terrarium, zoom ${Z}; SRTM-based, attribution recommended: Mapzen / AWS Open Data / NASA SRTM).
 // Coastline, river, roads, bridges, buildings, land use and names: (c) OpenStreetMap contributors, ODbL 1.0.
-// Window: ${N} x ${N} tiles of ${M} m, centre ${CENTER.lat} N ${CENTER.lon} E, tile (1, -1) at bearing ${DECK} deg.
+// Window: ${N} x ${N} tiles of ${M} m, centre ${CENTER.lat} N ${CENTER.lon} E, tile (1, -1) (screen east) at bearing ${EAST} deg: north up.
 //   (0, 0) ${fmt(corners[0])}; (${N}, 0) ${fmt(corners[1])}; (${N}, ${N}) ${fmt(corners[2])}; (0, ${N}) ${fmt(corners[3])}.
 // Elevation range ${(elevMin / 10).toFixed(1)} .. ${(elevMax / 10).toFixed(1)} m.
 
@@ -536,17 +614,24 @@ export const LITANI_RIVER = '${b64(rivQ)}';
 export const LITANI_COVER = '${b64(cover)}';
 export const LITANI_N = ${N};
 /** The window: centre, metres per tile, bearing of tile (1, -1), corners (lat, lon) of (0,0), (N,0), (N,N), (0,N). */
-export const LITANI_WINDOW = ${JSON.stringify({ lat: CENTER.lat, lon: CENTER.lon, m: M, deck: DECK, corners: corners.map((c) => [+c.lat.toFixed(6), +c.lon.toFixed(6)]) })};
+export const LITANI_WINDOW = ${JSON.stringify({ lat: CENTER.lat, lon: CENTER.lon, m: M, east: EAST, corners: corners.map((c) => [+c.lat.toFixed(6), +c.lon.toFixed(6)]) })};
 /** The Litani's centreline (map coordinates, downstream: from the east edge to the mouth). */
 export const LITANI_COURSE: [number, number][] = ${JSON.stringify(pts(riverOut))};
 /** Roads (map coordinates): class 0 motorway, 1 trunk / primary, 2 secondary / tertiary, 3 local, 4 track / service. */
 export const LITANI_ROADS: { cls: number; name: string; ref: string; pts: [number, number][] }[] = ${JSON.stringify(roads.map((r) => ({ cls: r.cls, name: r.name, ref: r.ref, pts: pts(r.pts) })))};
-/** OSM bridges over the Litani (map coordinates; bearing of the deck, degrees 0..180). */
-export const LITANI_BRIDGES: { x: number; y: number; cls: number; name: string; ref: string; bearing: number }[] = ${JSON.stringify(bridges.map((b) => ({ x: r2(b.x), y: r2(b.y), cls: b.cls, name: b.name, ref: b.ref, bearing: Math.round(b.bearing) })))};
+/** OSM bridges over the Litani (map coordinates; the deck's real bearing, degrees 0..180, and its angle in map space, radians). */
+export const LITANI_BRIDGES: { x: number; y: number; cls: number; name: string; ref: string; bearing: number; angle: number }[] = ${JSON.stringify(bridges.map((b) => ({ x: r2(b.x), y: r2(b.y), cls: b.cls, name: b.name, ref: b.ref, bearing: Math.round(b.bearing), angle: Math.round(b.angle * 1000) / 1000 })))};
+/** OSM farm plots: [cx, cy, half length, half width, angle of the length (radians), kind 0 orchard / 1 greenhouses / 2 field]. */
+export const LITANI_PLOTS: [number, number, number, number, number, number][] = ${JSON.stringify(plots)};
+/** OSM points of interest in the window (map coordinates; no names: no brands): mosques, water towers, fuel stations. */
+export const LITANI_POIS: { kind: string; x: number; y: number }[] = ${JSON.stringify(pois)};
+/** OSM power lines (map coordinates). */
+export const LITANI_POWER: [number, number][][] = ${JSON.stringify(power.map(pts))};
 /** OSM places (map coordinates; outside the window too, for reference). */
 export const LITANI_PLACES: { name: string; kind: string; x: number; y: number }[] = ${JSON.stringify(places.filter((p) => p.x > -40 && p.y > -40 && p.x < N + 40 && p.y < N + 40).map((p) => ({ name: p.name, kind: p.kind, x: r2(p.x), y: r2(p.y) })))};
 `;
 fs.writeFileSync(OUT, ts);
+console.log('plots', plots.length, plotSkip);
 console.log(`wrote ${OUT} (${(ts.length / 1024).toFixed(1)} KB); elevation ${elevMin / 10}..${elevMax / 10} m; buildings ${nBuild}; land use tiles`, hist, `; roads ${roads.length}; bridges`, bridges, '; places', places.filter((p) => p.inside));
 
 {

@@ -91,6 +91,11 @@ export interface MapDeco {
    * when the map knows (the Litani's real orchards and greenhouses), else the renderer picks.
    */
   fields: { x0: number; y0: number; x1: number; y1: number; rows: 0 | 1; crop?: 'orchard' | 'greenhouse' }[];
+  /**
+   * Farm plots at any angle (centre, half length along `ang` (radians, tile space), half width; tiles): the Litani's
+   * orchards, greenhouses and fields. The renderer shrinks each to fit between the roads, tracks and houses.
+   */
+  plots?: { cx: number; cy: number; hl: number; hw: number; ang: number; crop?: 'orchard' | 'greenhouse' }[];
   /** Power line runs (via points). */
   power: Point[][];
   /** Render-only trees (street trees, roadside palms): kind 1 / 2 as `GameMap.trees`. Vehicles knock them over. */
@@ -402,6 +407,15 @@ export function footprintRise(m: GameMap, tx: number, ty: number, w: number, h: 
       if (v > hi) hi = v;
     }
   return hi - lo;
+}
+
+/**
+ * Unit vector along a bridge deck (its `angle`, tile space), from ends[0] to ends[1]. Exactly (sqrt 1/2, -sqrt 1/2)
+ * for the diagonal decks of the hand-drawn maps (angle -pi / 4), so their numbers stay bit for bit what they were.
+ */
+export function deckAxis(b: { angle: number }): { x: number; y: number } {
+  if (b.angle === -Math.PI / 4) return { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
+  return { x: Math.cos(b.angle), y: Math.sin(b.angle) };
 }
 
 /** Does tile (x, y) belong to a bridge's deck or head ramps (the deck rectangle stretched along its axis)? */

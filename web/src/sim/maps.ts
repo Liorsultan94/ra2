@@ -36,7 +36,7 @@ import {
 } from './map';
 import { Rng, fbm, hash2 } from './rng';
 import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from './sinaimask';
-import { LITANI_BRIDGES, LITANI_COVER, LITANI_ELEV, LITANI_N, LITANI_RIVER, LITANI_ROADS, LITANI_SEA } from './litanidata';
+import { LITANI_BRIDGES, LITANI_COVER, LITANI_ELEV, LITANI_N, LITANI_PLOTS, LITANI_POIS, LITANI_POWER, LITANI_RIVER, LITANI_ROADS, LITANI_SEA } from './litanidata';
 
 void BRIDGE_HEIGHT;
 
@@ -52,7 +52,7 @@ export interface MapInfo {
 }
 
 export const MAPS: MapInfo[] = [
-  { id: 'frontline', name: 'Litani Mouth', biome: 'temperate', blurb: 'The Litani river mouth: the coastal plain, orchards, Qasmiyeh and its bridges', region: 'The Litani river mouth, south Lebanon' },
+  { id: 'frontline', name: 'Litani Mouth', biome: 'temperate', blurb: 'The Litani meets the sea: Qasmiyeh, Bourghliye, orchards and three bridges', region: 'The Litani river mouth, south Lebanon' },
   { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'The Sinai: two gulfs, crossings at their heads, Sharm and the high massif', region: 'The Sinai Peninsula between the Gulfs of Suez and Aqaba' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
@@ -2406,48 +2406,58 @@ export function createLitaniMap(): GameMap {
       const r = riv(x + 0.5, y + 0.5);
       let t: Tile = Tile.Grass;
       if (s > 0 || r > 0) t = Tile.Water;
-      else if (s > -1.7) t = Tile.Sand;
+      else if (s > -1.7 || (cls(x, y) === 5 && s > -5)) t = Tile.Sand;
       else if (r > -1.1) t = Tile.Dirt;
       else if (rise(x, y) > LT_ROCK) t = Tile.Rock;
       else if (cls(x, y) === 7) t = Tile.Dirt;
       g.tiles[i] = t;
     }
 
-  // ---- bridges over the Litani at the real crossings, decks along (1, -1)
-  const DD = Math.SQRT1_2;
+  // ---- bridges over the Litani at the real crossings, their decks at the real angles (ends[0] on player 0's bank)
   const bridges: GameMap['bridges'] = [];
   for (const ref of LT_BRIDGE_REFS) {
     const hits = LITANI_BRIDGES.filter((b) => b.ref === ref && (ref || b.cls === 2));
     if (!hits.length) continue;
     const c = { x: hits.reduce((a, b) => a + b.x, 0) / hits.length, y: hits.reduce((a, b) => a + b.y, 0) / hits.length };
+    let angle = hits[0].angle;
+    if ((LT_STARTS[0].x + 0.5 - c.x) * Math.cos(angle) + (LT_STARTS[0].y + 0.5 - c.y) * Math.sin(angle) > 0) angle += angle > 0 ? -Math.PI : Math.PI;
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
     // the deck reaches from bank to bank, a bit over 1 tile onto each
     let reach = 0;
     for (const sd of [-1, 1])
       for (let t = 0; t < 8; t += 0.1) {
-        const px = c.x + sd * t * DD;
-        const py = c.y - sd * t * DD;
+        const px = c.x + sd * t * ux;
+        const py = c.y + sd * t * uy;
         if (riv(px, py) < -0.35 && sea(px, py) < -0.35) {
           reach = Math.max(reach, t);
           break;
         }
       }
-    bridges.push({ x: c.x, y: c.y, angle: -Math.PI / 4, length: Math.max(4.6, 2 * reach + 2.2) });
+    bridges.push({ x: c.x, y: c.y, angle, length: Math.max(4.6, 2 * reach + 2.2) });
   }
-  for (const b of bridges)
+  for (const b of bridges) {
+    const ux = Math.cos(b.angle);
+    const uy = Math.sin(b.angle);
+    // (wide enough that the deck's water tiles join bank to bank 4-connected at any angle)
+    const half = 0.75 * (Math.abs(ux) + Math.abs(uy)) + 0.25;
     for (let y = Math.floor(b.y - b.length); y <= b.y + b.length; y++)
       for (let x = Math.floor(b.x - b.length); x <= b.x + b.length; x++) {
         if (x < 0 || y < 0 || x >= W || y >= H || g.tiles[y * W + x] !== Tile.Water) continue;
         const dx = x + 0.5 - b.x;
         const dy = y + 0.5 - b.y;
-        const along = (dx - dy) * DD;
-        const across = (dx + dy) * DD;
-        if (Math.abs(across) <= Math.SQRT2 && Math.abs(along) <= b.length / 2) g.tiles[y * W + x] = Tile.Bridge;
+        const along = dx * ux + dy * uy;
+        const across = dy * ux - dx * uy;
+        if (Math.abs(across) <= half && Math.abs(along) <= b.length / 2) g.tiles[y * W + x] = Tile.Bridge;
       }
+  }
   const deckEnds = (b: GameMap['bridges'][number]) => {
     const h = b.length / 2;
+    const ux = Math.cos(b.angle);
+    const uy = Math.sin(b.angle);
     return [
-      { x: b.x - h * DD, y: b.y + h * DD },
-      { x: b.x + h * DD, y: b.y - h * DD },
+      { x: b.x - h * ux, y: b.y - h * uy },
+      { x: b.x + h * ux, y: b.y + h * uy },
     ];
   };
 
@@ -2512,7 +2522,20 @@ export function createLitaniMap(): GameMap {
   const oils = LT_OILS.map(([x, y]) => ({ x, y }));
 
   const nearStart = (x: number, y: number, r: number) => starts.some((s) => Math.hypot(x - s.x, y - s.y) < r);
-  const roadNear = (x: number, y: number, r: number) => roads.some((l) => l.some((p, k) => k > 0 && distToSegment(x, y, l[k - 1].x, l[k - 1].y, p.x, p.y) < r));
+  // distance (tiles) from each tile centre to the nearest road centreline (tile-index space), out to 5 tiles
+  const roadD = new Float32Array(W * H).fill(9);
+  for (const l of roads)
+    for (let k = 1; k < l.length; k++) {
+      const a = l[k - 1];
+      const b = l[k];
+      for (let y = Math.max(0, Math.floor(Math.min(a.y, b.y) - 5)); y <= Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + 5)); y++)
+        for (let x = Math.max(0, Math.floor(Math.min(a.x, b.x) - 5)); x <= Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + 5)); x++) {
+          const d = distToSegment(x, y, a.x, a.y, b.x, b.y);
+          if (d < roadD[y * W + x]) roadD[y * W + x] = d;
+        }
+    }
+  /** Is tile-index point (x, y) within r of a road (r <= 5; between tile centres the nearest centre's value)? */
+  const roadNear = (x: number, y: number, r: number) => roadD[Math.max(0, Math.min(H - 1, Math.round(y))) * W + Math.max(0, Math.min(W - 1, Math.round(x)))] < r;
   const reserved = (x: number, y: number) =>
     nearStart(x, y, 10) || oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) || oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) || bridges.some((b) => Math.hypot(x + 0.5 - b.x, y + 0.5 - b.y) < b.length / 2 + 3);
 
@@ -2524,7 +2547,7 @@ export function createLitaniMap(): GameMap {
       const r = riv(x + 0.5, y + 0.5);
       const hsh = hash2(x, y, 4711);
       const c = cls(x, y);
-      if (r > -2.6 && built(x, y) < 2 && hsh < 0.42) g.trees[i] = 2;
+      if (r > -2.6 && built(x, y) < 2 && hsh < 0.5) g.trees[i] = 2;
       else if (c === 4 && hsh < 0.3) g.trees[i] = hash2(x, y, 4712) < 0.55 ? 1 : 2;
       else if (c === 0 && built(x, y) === 0 && hsh < 0.025) g.trees[i] = 2;
     }
@@ -2532,25 +2555,57 @@ export function createLitaniMap(): GameMap {
 
   // ---- houses where the villages stand (the OSM buildings' ground cover)
   const layout: Structure[] = [];
-  const taken = new Uint8Array(W * H);
   const cand: { x: number; y: number; d: number }[] = [];
   for (let y = 2; y < H - 3; y++)
     for (let x = 2; x < W - 3; x++) {
       const d = built(x, y) + built(x + 1, y) + built(x, y + 1) + built(x + 1, y + 1);
       if (d >= LT_HOUSE_MIN) cand.push({ x, y, d });
     }
+  // densest ground first (placeStructures keeps a walkable tile between houses and drops the ones that collide)
   cand.sort((a, b) => b.d - a.d || a.y - b.y || a.x - b.x);
+  const seenAt = new Set<number>();
   for (const c of cand) {
-    let free = true;
-    for (let y = c.y - 1; y <= c.y + 2 && free; y++) for (let x = c.x - 1; x <= c.x + 2 && free; x++) if (taken[y * W + x]) free = false;
-    if (!free) continue;
-    for (let y = c.y; y < c.y + 2; y++) for (let x = c.x; x < c.x + 2; x++) taken[y * W + x] = 1;
-    const main = roadNear(c.x + 1, c.y + 1, 3.5);
-    const hh = hash2(c.x, c.y, 4713);
+    // houses line the main roads: one standing on the road's line steps back off it (up to two tiles)
+    let { x, y } = c;
+    for (let k = 0; k < 4 && roadNear(x + 1, y + 1, 2.4); k++) {
+      let best = { d: Infinity, nx: 0, ny: 0 };
+      for (const l of roads)
+        for (let j = 1; j < l.length; j++) {
+          const ax = l[j - 1].x + 0.5;
+          const ay = l[j - 1].y + 0.5;
+          const dx = l[j].x + 0.5 - ax;
+          const dy = l[j].y + 0.5 - ay;
+          const t = Math.max(0, Math.min(1, ((x + 1 - ax) * dx + (y + 1 - ay) * dy) / (dx * dx + dy * dy || 1)));
+          const px = x + 1 - ax - dx * t;
+          const py = y + 1 - ay - dy * t;
+          const d = Math.hypot(px, py);
+          if (d < best.d) best = { d, nx: px / (d || 1), ny: py / (d || 1) };
+        }
+      x = Math.round(x + best.nx * 0.75);
+      y = Math.round(y + best.ny * 0.75);
+    }
+    if (x < 2 || y < 2 || x > W - 4 || y > H - 4 || seenAt.has(y * W + x)) continue;
+    seenAt.add(y * W + x);
+    const main = roadNear(x + 1, y + 1, 3.8);
+    const hh = hash2(x, y, 4713);
     // the old stone houses keep red tiled roofs; the newer ones are flat-roofed concrete, shops along the main roads
     const kind = main ? (hh < 0.45 ? StructureKind.Shop : StructureKind.Townhouse) : hh < 0.45 ? StructureKind.House : hh < 0.75 ? StructureKind.Townhouse : StructureKind.Cottage;
-    layout.push({ kind, x: c.x, y: c.y, w: 2, h: 2, rot: Math.floor(hash2(c.x, c.y, 4714) * 4) });
+    layout.push({ kind, x, y, w: 2, h: 2, rot: 0 });
   }
+  // the villages' mosques and water towers where OSM has them (first: they take their spot before the houses)
+  // (each on the nearest spot to the real one that takes it)
+  const placeOpts: PlaceOpts = { starts, oils, ore: oreFields, roads, roadClear: 1.3, startClear: 15, flat: 0.4, footFlat: 0.5, tilesOk: [Tile.Grass, Tile.Dirt] };
+  const pois: Structure[] = [];
+  for (const q of LITANI_POIS) {
+    const st: Structure | null = q.kind === 'mosque' ? { kind: StructureKind.Courtyard, look: 'mosque', x: 0, y: 0, w: 3, h: 2, rot: 0 } : q.kind === 'water_tower' ? { kind: StructureKind.WaterTower, x: 0, y: 0, w: 1, h: 1, rot: 0 } : null;
+    if (!st) continue;
+    const spots: Point[] = [];
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) spots.push({ x: Math.round(q.x - st.w / 2) + dx, y: Math.round(q.y - st.h / 2) + dy });
+    spots.sort((a, b) => Math.hypot(a.x + st.w / 2 - q.x, a.y + st.h / 2 - q.y) - Math.hypot(b.x + st.w / 2 - q.x, b.y + st.h / 2 - q.y));
+    const at = spots.find((p) => placeStructures(g, [...pois, { ...st, ...p }], placeOpts).structures.length === pois.length + 1);
+    if (at) pois.push({ ...st, ...at });
+  }
+  layout.unshift(...pois);
   // (facing the nearest road)
   for (const st of layout) {
     let best = Infinity;
@@ -2570,30 +2625,15 @@ export function createLitaniMap(): GameMap {
         }
       }
   }
-  const { structures, blocked } = placeStructures(g, layout, { starts, oils, ore: oreFields, roads, roadClear: 1.3, startClear: 15, flat: 0.4, footFlat: 0.5, tilesOk: [Tile.Grass, Tile.Dirt] });
+  const { structures, blocked } = placeStructures(g, layout, placeOpts);
   for (const st of structures) st.variant = hash2(st.x, st.y, 4715);
 
   // ---- render hints: road looks, local roads, the orchards / greenhouses / fields, the power line along the motorway
   const deco = emptyDeco();
   deco.roadStyles = roadLines.map((r) => (r.cls === 0 ? { width: 1.3, variant: 0 as const } : r.cls === 1 ? { width: 1.05, variant: 0 as const } : { width: 0.9, variant: 1 as const }));
   deco.tracks = trackLines.map((l) => ti(l));
-  const FB = 6;
-  for (let by = 0; by + FB <= H; by += FB)
-    for (let bx = 0; bx + FB <= W; bx += FB) {
-      const n = [0, 0, 0, 0, 0, 0, 0, 0];
-      let open = 0;
-      for (let y = by; y < by + FB; y++)
-        for (let x = bx; x < bx + FB; x++) {
-          n[cls(x, y)]++;
-          const i = y * W + x;
-          if ((g.tiles[i] === Tile.Grass || g.tiles[i] === Tile.Dirt) && !g.trees[i] && built(x, y) < 3) open++;
-        }
-      if (open < FB * FB * 0.7) continue;
-      const k = n[1] >= 20 ? 1 : n[2] >= 14 ? 2 : n[6] >= 20 ? 6 : 0;
-      if (!k) continue;
-      const rows = (hash2(bx, by, 4716) < 0.5 ? 0 : 1) as 0 | 1;
-      deco.fields.push({ x0: bx + 0.3, y0: by + 0.3, x1: bx + FB - 0.3, y1: by + FB - 0.3, rows, crop: k === 1 ? 'orchard' : k === 2 ? 'greenhouse' : undefined });
-    }
+  deco.plots = litaniPlots(g, cls, built);
+  deco.power = LITANI_POWER.map((l) => l.map(([x, y]) => ({ x: x - 0.5, y: y - 0.5 })));
 
   return assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
@@ -2614,42 +2654,42 @@ const LT_ROCK = 0.8;
 const LT_APPROACH = 1.2;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
 const LT_HOUSE_MIN = 18;
-/** Player 0 on the south bank (Qasmiyeh's side), player 1 on the north bank. */
+/** Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen), player 1 on the north bank (the top). */
 const LT_STARTS: Point[] = [
-  { x: 34, y: 84 },
-  { x: 90, y: 10 },
+  { x: 74, y: 78 },
+  { x: 22, y: 16 },
 ];
 /** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
 const LT_ORE: [number, number, number, number][] = [
-  // south bank (player 0): two by the base, gems towards Qasmiyeh, one out on the coastal plain
-  [46, 80, 3.4, 1],
-  [23, 93, 3.2, 1],
-  [44, 64, 2.6, 2],
-  [12, 58, 3.0, 1],
-  // north bank (player 1): two by the base, gems on the plain by the river, one under the hills
-  [96, 23, 3.4, 1],
-  [79, 21, 3.2, 1],
-  [83, 35, 2.6, 2],
-  [93, 46, 3.0, 1],
+  // south bank (player 0): two by the base, gems towards Qasmiyeh, one out towards Ain Abou Abdallah
+  [86, 68, 3.4, 1],
+  [62, 88, 3.2, 1],
+  [56, 66, 2.6, 2],
+  [94, 92, 3.0, 1],
+  // north bank (player 1): two by the base, gems on the plain by the river, one out on the plain to the east
+  [34, 10, 3.4, 1],
+  [12, 28, 3.2, 1],
+  [40, 26, 2.6, 2],
+  [56, 8, 3.0, 1],
 ];
 /** Oil derricks (top-left tiles), two a side. */
 const LT_OILS: [number, number][] = [
-  [42, 92],
-  [17, 66],
-  [98, 3],
-  [73, 6],
+  [64, 70],
+  [84, 86],
+  [12, 6],
+  [30, 26],
 ];
 /** Capturable tech sites: one of each on either bank (at: the south bank's candidates, at2: the north bank's). */
 const LT_TECH: NonNullable<GameMap['techSites']> = [
   {
     def: 'tech_hospital',
-    at: [[32, 60], [28, 56], [36, 66], [24, 62]],
-    at2: [[80, 46], [84, 52], [78, 40], [88, 40]],
+    at: [[48, 68], [44, 72], [52, 74], [40, 66]],
+    at2: [[44, 14], [48, 18], [40, 10], [50, 12]],
   },
   {
     def: 'tech_comms',
-    at: [[12, 46], [16, 50], [8, 52], [20, 44]],
-    at2: [[86, 64], [90, 60], [82, 68], [94, 56]],
+    at: [[92, 72], [96, 76], [88, 78], [94, 66]],
+    at2: [[8, 36], [12, 38], [6, 32], [16, 34]],
   },
 ];
 
@@ -2665,3 +2705,55 @@ function simplifyLine(pts: Point[], eps: number): Point[] {
   if (best <= eps) return [pts[0], pts[pts.length - 1]];
   return [...simplifyLine(pts.slice(0, k + 1), eps).slice(0, -1), ...simplifyLine(pts.slice(k), eps)];
 }
+
+/**
+ * The Litani's farm plots (render hints, MapDeco.plots). OSM maps what grows (orchards, greenhouses, fields) in a
+ * few large areas, not the parcels: its small areas go in as they are, and the rest of the cultivated plain is cut
+ * into parcels of the real ones' size (60 - 150 m) on a grid turned to the local roads' main direction (the farm
+ * tracks run along it), each growing what the land use says there.
+ */
+function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x: number, y: number) => number): NonNullable<MapDeco['plots']> {
+  const out: NonNullable<MapDeco['plots']> = [];
+  const crop = (k: number) => (k === 0 ? ('orchard' as const) : k === 1 ? ('greenhouse' as const) : undefined);
+  for (const [cx, cy, hl, hw, ang, k] of LITANI_PLOTS) if (hl <= 7 && hw <= 5) out.push({ cx, cy, hl, hw, ang, crop: crop(k) });
+  // the tracks' main direction (length-weighted, folded to a quarter turn)
+  let sx = 0;
+  let sy = 0;
+  for (const r of LITANI_ROADS)
+    if (r.cls >= 2)
+      for (let k = 1; k < r.pts.length; k++) {
+        const dx = r.pts[k][0] - r.pts[k - 1][0];
+        const dy = r.pts[k][1] - r.pts[k - 1][1];
+        const a = Math.atan2(dy, dx) * 4;
+        const l = Math.hypot(dx, dy);
+        sx += Math.cos(a) * l;
+        sy += Math.sin(a) * l;
+      }
+  const ang = Math.atan2(sy, sx) / 4;
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  const c = W / 2;
+  const R = W * 0.75;
+  for (let v = -R, row = 0; v < R; row++) {
+    const hw = 1.1 + hash2(row, 1, 4721) * 0.9;
+    for (let u = -R + hash2(row, 2, 4721) * 3, col = 0; u < R; col++) {
+      const hl = 1.6 + hash2(row, col, 4722) * 1.6;
+      const px = c + (u + hl) * ca - (v + hw) * sa;
+      const py = c + (u + hl) * sa + (v + hw) * ca;
+      u += hl * 2 + 0.35;
+      const tx = Math.floor(px);
+      const ty = Math.floor(py);
+      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+      const t = g.tiles[ty * W + tx];
+      if ((t !== Tile.Grass && t !== Tile.Dirt) || built(tx, ty) > 2) continue;
+      const k = cls(tx, ty);
+      // the cultivated plain: orchards (citrus and bananas), greenhouses, and the open fields between
+      if (k !== 0 && k !== 1 && k !== 2 && k !== 6) continue;
+      const h = hash2(row, col, 4723);
+      out.push({ cx: px, cy: py, hl, hw, ang, crop: k === 1 ? (h < 0.85 ? 'orchard' : undefined) : k === 2 ? 'greenhouse' : k === 0 && h < 0.3 ? 'orchard' : undefined });
+    }
+    v += hw * 2 + 0.35;
+  }
+  return out;
+}
+

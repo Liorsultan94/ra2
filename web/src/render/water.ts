@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, deckAxis, groundHeight, seaDist, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
@@ -703,12 +703,12 @@ export class RiverInfo {
 }
 
 function bridgePiers(m: GameMap): Pier[] {
-  const D = Math.SQRT1_2;
   const out: Pier[] = [];
-  // same layout as scenery.ts: three piers along the deck, which runs along (1, -1)
+  // same layout as bridgefx.ts: three piers along the deck (its axis: sim/map.ts deckAxis)
   for (const br of m.bridges) {
     const L = br.length;
-    for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) out.push({ x: br.x + k * D, y: br.y - k * D, hw: 0.2, hl: 2.1 * 0.35 });
+    const u = deckAxis(br);
+    for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) out.push({ x: br.x + k * u.x, y: br.y + k * u.y, hw: 0.2, hl: 2.1 * 0.35 });
   }
   return out;
 }
