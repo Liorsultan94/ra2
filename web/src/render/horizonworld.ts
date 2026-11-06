@@ -1,5 +1,5 @@
 import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, topCoast, type GameMap, type SeaDeco, WATER_LEVEL } from '../sim/map';
-import { litaniSea } from '../sim/maps';
+import { litaniSea, litaniSeabed } from '../sim/maps';
 import { fbm, hash2 } from '../sim/rng';
 import { biomeLook, type BiomeLook } from './biome';
 import { landmarkPlan, type P2 } from './landmarks/plan';
@@ -102,6 +102,8 @@ export interface Sea {
   northAt?: (u: number) => number;
   /** ...its samples for the shader. */
   north?: { e0: number; step: number; off: number[] };
+  /** The sea floor v units out from the waterline, as the map's own (the Litani: sim/maps.ts litaniSeabed). */
+  bed?: (v: number) => number;
 }
 
 /** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
@@ -112,9 +114,9 @@ export function reefBed(v: number) {
 }
 
 /**
- * The Litani mouth's coast in the Sea frame (seaward n = (-1, -1) / sqrt 2, along u = screen east): its distance from the
- * map centre every 4 tiles of u where it crosses the map (litaniSea's zero), the end values carried on past it; the
- * small ragged wiggle topCoast adds is taken back out so the in-map line is the real one.
+ * The Litani mouth's coast in the Sea frame (seaward n = (-1, 1) / sqrt 2, real west; along u = (1, 1) / sqrt 2, real
+ * south): its distance from the map centre every 4 tiles of u where it crosses the map (litaniSea's zero), the end
+ * values carried on past it; the small ragged wiggle topCoast adds is taken back out so the in-map line is the real one.
  */
 function litaniCoast(m: GameMap): NonNullable<SeaDeco['north']> {
   const n = Math.SQRT1_2;
@@ -128,7 +130,7 @@ function litaniCoast(m: GameMap): NonNullable<SeaDeco['north']> {
     // walk seaward from the centre along -n until the sea starts
     for (let v = 0; v < m.w * 0.75; v += 0.25) {
       const x = cx + n * e - n * v;
-      const y = cy - n * e - n * v;
+      const y = cy + n * e + n * v;
       if (x < 0 || y < 0 || x > m.w || y > m.h) break;
       if (litaniSea(x, y) > 0) {
         hit = v;
@@ -206,11 +208,11 @@ export class HorizonWorld {
       }
     }
     if (this.code === 0 && map.id === 'frontline') {
-      // the Litani mouth: the real Mediterranean coast runs across the map's top corner (sim/maps.ts litaniSea);
-      // past the map it carries on along the coast's end directions (the coast runs straight on, north and south)
+      // the Litani mouth: the real Mediterranean coast runs past the map's left (west) corner, tile (0, h)
+      // (sim/maps.ts litaniSea); past the map it runs straight on, north and south, the sea floor as in the map
       const n = Math.SQRT1_2;
       const north = litaniCoast(map);
-      this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: north.off[0], harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], north };
+      this.sea = { nx: -n, ny: n, ux: n, uy: n, off: north.off[0], harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], north, bed: litaniSeabed };
       const ds = { top: 0, north } as unknown as SeaDeco;
       this.sea.northAt = (u: number) => topCoast(ds, u);
     }
@@ -552,10 +554,10 @@ export class HorizonWorld {
     if (this.sea) {
       const { v, u } = this.seaV(x, y);
       const s = this.sea;
-      if (s.twin) {
+      if (s.twin || s.bed) {
         // the reef shelf and the deep water; the beach rising from the waterline (as in the map)
         // (as deep as the map's sea at the edge, deepening further out)
-        if (v > 0) return reefBed(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
+        if (v > 0) return (s.bed ?? reefBed)(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
         if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v);
         return hgt;
       }

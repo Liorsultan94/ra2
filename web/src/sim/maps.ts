@@ -36,7 +36,7 @@ import {
 } from './map';
 import { Rng, fbm, hash2 } from './rng';
 import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from './sinaimask';
-import { LITANI_BRIDGES, LITANI_COVER, LITANI_ELEV, LITANI_N, LITANI_PLOTS, LITANI_POIS, LITANI_POWER, LITANI_RIVER, LITANI_ROADS, LITANI_SEA } from './litanidata';
+import { LITANI_BRIDGES, LITANI_COURSE, LITANI_COVER, LITANI_ELEV, LITANI_N, LITANI_PLOTS, LITANI_POIS, LITANI_POWER, LITANI_RIVER, LITANI_ROADS, LITANI_SEA } from './litanidata';
 
 void BRIDGE_HEIGHT;
 
@@ -2314,8 +2314,8 @@ export function sinaiPlaces() {
 const LT_LAND0 = WATER_LEVEL + 0.12;
 /** Vertical scale: metres per height unit (one height unit is a tile's width, as on every map: 1:1). */
 const LT_M = 35;
-/** The river is drawn this much wider each side than its OSM banks (tiles: ~35 m becomes ~2.1 tiles, ~75 m). */
-const LT_WIDEN = 0.55;
+/** The river is drawn this much wider each side than its OSM banks (tiles: its ~35-45 m become ~1.7-2.2 tiles, 60-75 m). */
+const LT_WIDEN = 0.4;
 /** Bridges over the Litani: the OSM crossings used (the A3 coastal road, the M51 motorway, the secondary road in the meander). */
 const LT_BRIDGE_REFS = ['A3', 'M51', ''];
 
@@ -2363,8 +2363,8 @@ export function litaniRiver(x: number, y: number) {
   return ltField(litaniData().river, LITANI_N, x, y, 10) + LT_WIDEN;
 }
 
-/** The sea floor `s` tiles out from the waterline: a short shelf, then the drop to boat depth. */
-function ltSeabed(s: number) {
+/** The sea floor `s` tiles out from the waterline: a short shelf, then the drop to boat depth (the world past the map too). */
+export function litaniSeabed(s: number) {
   const shelf = WATER_LEVEL - 0.06 - 0.07 * Math.min(s, 2.2);
   return shelf + (-1.35 - shelf) * smoothstep(2.2, 5, s);
 }
@@ -2381,7 +2381,7 @@ export function createLitaniMap(): GameMap {
       let h = LT_LAND0 + Math.max(0, D.elev[i] / 10) / LT_M;
       const s = D.sea[i] / 4;
       const r = D.river[i] / 10 + LT_WIDEN;
-      if (s > 0) h = ltSeabed(s);
+      if (s > 0) h = litaniSeabed(s);
       else if (s > -2.2) h = h + (WATER_LEVEL + 0.03 - h) * smoothstep(-2.2, 0, s);
       if (r > 0) h = Math.min(h, WATER_LEVEL - 0.06 - 0.28 * smoothstep(0, 0.9, r));
       else if (r > -1.8) h = Math.min(h, h + (WATER_LEVEL + 0.04 - h) * smoothstep(-1.8, 0, r));
@@ -2633,6 +2633,7 @@ export function createLitaniMap(): GameMap {
   deco.roadStyles = roadLines.map((r) => (r.cls === 0 ? { width: 1.3, variant: 0 as const } : r.cls === 1 ? { width: 1.05, variant: 0 as const } : { width: 0.9, variant: 1 as const }));
   deco.tracks = trackLines.map((l) => ti(l));
   deco.plots = litaniPlots(g, cls, built);
+  deco.river = LITANI_COURSE.map(([x, y]) => ({ x, y }));
   deco.power = LITANI_POWER.map((l) => l.map(([x, y]) => ({ x: x - 0.5, y: y - 0.5 })));
 
   return assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {

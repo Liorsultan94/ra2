@@ -461,6 +461,8 @@ export class Horizon {
       seaN: { value: new THREE.Vector4(sea?.nx ?? 0, sea?.ny ?? 0, sea?.ux ?? 0, sea?.uy ?? 0) },
       seaOff: { value: sea?.off ?? 0 },
       seaTwin: { value: sea?.twin ? 1 : 0 },
+      // a sea that runs into the map itself (twin, or the Litani's): the outskirts draw its near belt
+      seaBelt: { value: sea?.twin || sea?.bed ? 1 : 0 },
       seaOff2: { value: sea?.off2 ?? sea?.off ?? 0 },
       seaEven: { value: sea?.even ? 1 : 0 },
       // the Mediterranean's coast as the owner drew it (sim/map.ts topCoast; NORTH_K samples)
@@ -503,6 +505,7 @@ export class Horizon {
         uniform vec4 seaN;
         uniform float seaOff;
         uniform float seaTwin;
+        uniform float seaBelt;
         uniform float seaOff2;
         uniform float seaEven;
         ${NORTH_GLSL}
@@ -522,7 +525,7 @@ export class Horizon {
           #if HAS_HT
           // the battlefield's own water sheet still draws the rivers straight out of the edge in the near belt
           // (the twin sea's near belt: the outskirts' copy of the battlefield water draws it, coast and reef)
-          if ( seaTwin > 0.5 && cheb < hzMargin - 0.5 ) discard;
+          if ( seaBelt > 0.5 && cheb < hzMargin - 0.5 ) discard;
           if ( cheb < hzMargin ) {
             vec2 q = clamp( p, vec2( 0.0 ), mapSize );
             float g = texture2D( heightTex, ( q + 0.5 ) / ( mapSize + 1.0 ) ).r * 4.5 - 1.5;

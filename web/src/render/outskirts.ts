@@ -275,7 +275,8 @@ export class Outskirts {
    */
   private channelWater(mat: THREE.ShaderMaterial, src: THREE.ShaderMaterial) {
     const W = this.world;
-    const twin = !!W.sea?.twin;
+    // (the seas cut into the map itself: the Sinai's twin seas, the Litani mouth's Mediterranean)
+    const twin = !!(W.sea?.twin || W.sea?.bed);
     if (!W.rivers.length && !W.ponds.length && !twin) return;
     let fs = mat.fragmentShader;
     const gRe = /float ground = texture2D\(heightTex,[^;]*;/;

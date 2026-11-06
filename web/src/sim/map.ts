@@ -96,6 +96,11 @@ export interface MapDeco {
    * orchards, greenhouses and fields. The renderer shrinks each to fit between the roads, tracks and houses.
    */
   plots?: { cx: number; cy: number; hl: number; hw: number; ang: number; crop?: 'orchard' | 'greenhouse' }[];
+  /**
+   * The river's course downstream (continuous map coordinates), when the map knows it (the Litani's real course,
+   * meanders and all): the water renderer follows it instead of guessing a straight axis (render/water.ts RiverInfo).
+   */
+  river?: Point[];
   /** Power line runs (via points). */
   power: Point[][];
   /** Render-only trees (street trees, roadside palms): kind 1 / 2 as `GameMap.trees`. Vehicles knock them over. */
