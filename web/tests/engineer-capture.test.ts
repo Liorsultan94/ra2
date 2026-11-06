@@ -55,11 +55,12 @@ describe('engineer capture behavior', () => {
     });
 
     // Find a neutral oil derrick or spawn a capturable tech building
-    const bld = w.spawnBuilding('tech_hospital', -1, 40, 40);
+    // (on open ground of the Litani's south bank: the old map's 40, 40 lies by the river now)
+    const bld = w.spawnBuilding('tech_hospital', -1, 72, 84);
     expect(bld.owner).toBe(-1);
 
-    const eng1 = w.spawnUnit('usa_engineer', 0, 40, 37);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 40, 36);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 72, 81);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 72, 80);
 
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
 

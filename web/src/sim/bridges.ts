@@ -59,6 +59,13 @@ export interface BridgeState {
   /** Unit vector along the deck, ends[0] -> ends[1] (sim/map.ts deckAxis). */
   ux: number;
   uy: number;
+  /**
+   * Decks at any other angle than the hand-drawn maps' diagonal (the Litani's, over a meandering river): per tile, the
+   * bank it lies on - 0 / 1 = the land each deck end stands on, reached without crossing the river; -1 neither.
+   */
+  bankAt?: Int8Array;
+  /** ...the map's width (tiles) for bankAt. */
+  bankW?: number;
   /** Deck tile indices (Tile.Bridge while standing, Tile.Water while down). */
   tiles: number[];
   hp: number;
@@ -105,6 +112,13 @@ export function deckDist(b: BridgeState, x: number, y: number) {
 
 /** Which bank of bridge `b` a point lies on (0 = ends[0] side). */
 export function bankOf(b: BridgeState, x: number, y: number): 0 | 1 {
+  if (b.bankAt) {
+    const n = b.bankW!;
+    const tx = Math.floor(x);
+    const ty = Math.floor(y);
+    const v = tx >= 0 && ty >= 0 && tx < n && ty * n + tx < b.bankAt.length ? b.bankAt[ty * n + tx] : -1;
+    if (v === 0 || v === 1) return v;
+  }
   return (x - b.x) * b.ux + (y - b.y) * b.uy < 0 ? 0 : 1;
 }
 
@@ -138,6 +152,32 @@ function hutTile(w: World, ex: number, ey: number, out: number, reach: number, u
   // outward direction along the deck (away from the river), and across it
   const ox = ux * out;
   const oy = uy * out;
+  // the land this deck end stands on, reached without crossing water (a river bend may lie a few tiles off)
+  const bank = new Set<number>();
+  {
+    const sx = Math.floor(ex + ox * 0.6);
+    const sy = Math.floor(ey + oy * 0.6);
+    const q: number[] = [];
+    if (sx >= 0 && sy >= 0 && sx < m.w && sy < m.h && w.pass[sy * m.w + sx] && m.tiles[sy * m.w + sx] !== Tile.Bridge) q.push(sy * m.w + sx);
+    for (const t of q) bank.add(t);
+    while (q.length) {
+      const t = q.pop()!;
+      const x = t % m.w;
+      const y = (t / m.w) | 0;
+      for (const [nx, ny] of [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ]) {
+        if (nx < 0 || ny < 0 || nx >= m.w || ny >= m.h || Math.hypot(nx + 0.5 - ex, ny + 0.5 - ey) > 9) continue;
+        const u = ny * m.w + nx;
+        if (bank.has(u) || !w.pass[u] || m.tiles[u] === Tile.Bridge) continue;
+        bank.add(u);
+        q.push(u);
+      }
+    }
+  }
   let best = -1;
   let bestScore = Infinity;
   for (const side of [1, -1]) {
@@ -148,6 +188,7 @@ function hutTile(w: World, ex: number, ey: number, out: number, reach: number, u
         const tx = Math.floor(cx) + dx;
         const ty = Math.floor(cy) + dy;
         if (!tileOpen(m, tx, ty) || w.occ[ty * m.w + tx] !== 0) continue; // (the hut belongs on the bridge head)
+        if (bank.size && !bank.has(ty * m.w + tx)) continue; // (on the deck end's own bank)
         const px = tx + 0.5;
         const py = ty + 0.5;
         // keep the approach road (deck end and 4 tiles beyond) and the bank next to the deck clear
@@ -235,6 +276,36 @@ export function initBridges(w: World): BridgeState[] {
       }
     }
     out[bi].tiles.push(i);
+  }
+  // the banks of the decks at other angles (a meander may bring the river back past either end: by land, not geometry)
+  for (const b of out) {
+    if (m.bridges[b.idx].angle === -Math.PI / 4) continue;
+    const lab = new Int8Array(m.w * m.h).fill(-1);
+    for (let k = 0; k < 2; k++) {
+      const e = b.ends[k];
+      const o = k ? 1 : -1;
+      const sx = Math.floor(e.x + b.ux * o * 0.8);
+      const sy = Math.floor(e.y + b.uy * o * 0.8);
+      const land = (i: number) => m.tiles[i] !== Tile.Bridge && terrainPassable(m, i % m.w, (i / m.w) | 0);
+      if (sx < 0 || sy < 0 || sx >= m.w || sy >= m.h || !land(sy * m.w + sx)) continue;
+      const seen = new Uint8Array(m.w * m.h);
+      const q = [sy * m.w + sx];
+      seen[q[0]] = 1;
+      while (q.length) {
+        const t = q.pop()!;
+        lab[t] = lab[t] === -1 || lab[t] === k ? k : -2;
+        const x = t % m.w;
+        const y = (t / m.w) | 0;
+        for (const u of [x > 0 ? t - 1 : -1, x < m.w - 1 ? t + 1 : -1, y > 0 ? t - m.w : -1, y < m.h - 1 ? t + m.w : -1]) {
+          if (u < 0 || seen[u] || !land(u)) continue;
+          seen[u] = 1;
+          q.push(u);
+        }
+      }
+    }
+    for (let i = 0; i < lab.length; i++) if (lab[i] < 0) lab[i] = -1;
+    b.bankAt = lab;
+    b.bankW = m.w;
   }
   let reach = reachCount(w);
   for (const b of out) {

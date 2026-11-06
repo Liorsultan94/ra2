@@ -18,8 +18,9 @@ function medWorld(seed = 7, ai = false) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 4, 88, true);
-  w.spawnBuilding('russia_conyard', 1, 88, 4, true);
+  // (by the Litani mouth's bases: the south and the north bank)
+  w.spawnBuilding('usa_conyard', 0, 70, 80, true);
+  w.spawnBuilding('russia_conyard', 1, 21, 12, true);
   return w;
 }
 
@@ -273,9 +274,9 @@ describe('wounded soldiers', () => {
   it('the AI builds a couple of medics once it fields infantry, and they treat its wounded', () => {
     const w = medWorld(7, true);
     w.players[0].credits = 20000;
-    w.spawnBuilding('usa_power', 0, 10, 84, true);
-    w.spawnBuilding('usa_barracks', 0, 13, 84, true);
-    for (let i = 0; i < 5; i++) w.spawnUnit('usa_rifle', 0, 14 + i * 0.4, 80);
+    w.spawnBuilding('usa_power', 0, 76, 80, true);
+    w.spawnBuilding('usa_barracks', 0, 79, 80, true);
+    for (let i = 0; i < 5; i++) w.spawnUnit('usa_rifle', 0, 80 + i * 0.4, 76);
     w.controllers.push(new AIController(w, 0, 'normal'));
     runUntil(w, () => w.list.filter((e) => !e.dead && e.def === 'usa_medic').length >= 2, TPS * 90);
     const medics = w.list.filter((e) => !e.dead && e.def === 'usa_medic');

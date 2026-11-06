@@ -16,11 +16,12 @@ function cleanWorld(a: Faction = 'usa', b: Faction = 'russia', seed = 21) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding(`${a}_conyard`, 0, 4, 88, true);
-  w.spawnBuilding(`${b}_conyard`, 1, 88, 4, true);
+  // (by the Litani mouth's bases: the south and the north bank)
+  w.spawnBuilding(`${a}_conyard`, 0, 70, 80, true);
+  w.spawnBuilding(`${b}_conyard`, 1, 21, 12, true);
   for (let i = 0; i < 3; i++) {
-    w.spawnBuilding(`${a}_power`, 0, 8 + i * 3, 88, true);
-    w.spawnBuilding(`${b}_power`, 1, 80 - i * 3, 4, true);
+    w.spawnBuilding(`${a}_power`, 0, 74 + i * 3, 80, true);
+    w.spawnBuilding(`${b}_power`, 1, 25 + i * 3, 12, true);
   }
   return w;
 }
@@ -282,9 +283,10 @@ describe('sniper damage', () => {
 describe('sniper in a building', () => {
   it('fires from the window with +20% range and the same 3 s lock', () => {
     const w = cleanWorld();
-    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 35 && e.ty === 67)!;
+    // (a house in Qasmiyeh, on the Litani's south bank; the old map's was at 35, 67)
+    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 60 && e.ty === 62)!;
     expect(house).toBeTruthy();
-    const s = w.spawnUnit('usa_sniper', 0, 35.5, 70.5);
+    const s = w.spawnUnit('usa_sniper', 0, 60.5, 65.5);
     w.issue(0, { type: 'enter', ids: [s.id], target: house.id });
     run(w, TPS * 6);
     expect(s.inside).toBe(house.id);

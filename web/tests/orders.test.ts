@@ -13,8 +13,10 @@ function duel(seed = 5) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 4, 88, true);
-  w.spawnBuilding('russia_conyard', 1, 88, 4, true);
+  // (the Litani mouth, map id 'frontline': the scenes below play on the south bank's open plain, the old map's
+  // spots moved by (+38, +14); the bases out of their way)
+  w.spawnBuilding('usa_conyard', 0, 40, 97, true);
+  w.spawnBuilding('russia_conyard', 1, 21, 12, true);
   return w;
 }
 
@@ -28,7 +30,7 @@ function run(w: World, ticks: number, onEvent?: (e: ReturnType<World['drainEvent
 describe('stances', () => {
   it('units default to guard stance; the stance command changes it', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_mbt', 0, 30.5, 60.5);
+    const a = w.spawnUnit('usa_mbt', 0, 68.5, 74.5);
     expect(a.stance).toBe('guard');
     w.issue(0, { type: 'stance', ids: [a.id], stance: 'aggressive' });
     w.step();
@@ -41,9 +43,9 @@ describe('stances', () => {
 
   it('hold-fire units never shoot on their own, even when attacked', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+    const a = w.spawnUnit('usa_mbt', 0, 78.5, 74.5);
     a.hp = a.maxHp = 1e6;
-    const b = w.spawnUnit('russia_rifle', 1, 43.5, 60.5);
+    const b = w.spawnUnit('russia_rifle', 1, 81.5, 74.5);
     b.hp = b.maxHp = 1e6;
     w.issue(0, { type: 'stance', ids: [a.id], stance: 'holdFire' });
     let fired = 0;
@@ -59,14 +61,14 @@ describe('stances', () => {
   it('hold-position units do not move to chase, guard units do', () => {
     const mk = (stance: 'hold' | 'guard') => {
       const w = duel();
-      const a = w.spawnUnit('usa_mbt', 0, 48.5, 104.5);
+      const a = w.spawnUnit('usa_mbt', 0, 70.5, 88.5);
       a.hp = a.maxHp = 1e6;
-      // enemy inside sight but outside cannon range
-      const b = w.spawnUnit('russia_rifle', 1, 54.2, 104.5);
+      // enemy inside sight but outside cannon range (6.1 tiles: this ground rises a little towards it)
+      const b = w.spawnUnit('russia_rifle', 1, 76.6, 88.5);
       b.hp = b.maxHp = 1e6;
       w.issue(0, { type: 'stance', ids: [a.id], stance });
       run(w, TPS * 15);
-      return Math.hypot(a.x - 48.5, a.y - 104.5);
+      return Math.hypot(a.x - 70.5, a.y - 88.5);
     };
     expect(mk('hold')).toBeLessThan(0.05);
     expect(mk('guard')).toBeGreaterThan(0.5);
@@ -74,28 +76,28 @@ describe('stances', () => {
 
   it('hold-position units still fire at enemies in range', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
-    w.spawnUnit('russia_rifle', 1, 43.5, 60.5);
+    const a = w.spawnUnit('usa_mbt', 0, 78.5, 74.5);
+    w.spawnUnit('russia_rifle', 1, 81.5, 74.5);
     w.issue(0, { type: 'stance', ids: [a.id], stance: 'hold' });
     let fired = 0;
     run(w, TPS * 6, (ev) => ev.t === 'fire' && ev.owner === 0 && fired++);
     expect(fired).toBeGreaterThan(0);
-    expect(Math.hypot(a.x - 40.5, a.y - 60.5)).toBeLessThan(0.05);
+    expect(Math.hypot(a.x - 78.5, a.y - 74.5)).toBeLessThan(0.05);
   });
 
   it('aggressive units chase further than guard units and stay where the fight ended', () => {
     const chase = (stance: 'aggressive' | 'guard') => {
       const w = duel();
-      const a = w.spawnUnit('usa_mbt', 0, 40.5, 60.5);
+      const a = w.spawnUnit('usa_mbt', 0, 78.5, 74.5);
       a.hp = a.maxHp = 1e6;
-      const b = w.spawnUnit('russia_rifle', 1, 45.5, 60.5);
+      const b = w.spawnUnit('russia_rifle', 1, 83.5, 74.5);
       b.hp = b.maxHp = 1e6;
       w.issue(0, { type: 'stance', ids: [a.id], stance });
       run(w, TPS * 2);
       // the enemy runs away down the road
-      w.issue(1, { type: 'move', ids: [b.id], x: 40.5, y: 76.5 });
+      w.issue(1, { type: 'move', ids: [b.id], x: 78.5, y: 90.5 });
       run(w, TPS * 25);
-      return Math.hypot(a.x - 40.5, a.y - 60.5);
+      return Math.hypot(a.x - 78.5, a.y - 74.5);
     };
     expect(chase('aggressive')).toBeGreaterThan(chase('guard') + 2);
   });
@@ -104,44 +106,44 @@ describe('stances', () => {
 describe('patrol, guard and waypoint queues', () => {
   it('patrol walks back and forth and engages on the way', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_rifle', 0, 30.5, 64.5);
-    w.issue(0, { type: 'patrol', ids: [a.id], x: 36.5, y: 64.5 });
+    const a = w.spawnUnit('usa_rifle', 0, 68.5, 78.5);
+    w.issue(0, { type: 'patrol', ids: [a.id], x: 74.5, y: 78.5 });
     let maxX = 0;
     let minXAfter = 99;
     for (let t = 0; t < TPS * 30; t++) {
       w.step();
       maxX = Math.max(maxX, a.x);
-      if (maxX > 36) minXAfter = Math.min(minXAfter, a.x);
+      if (maxX > 36 + 38) minXAfter = Math.min(minXAfter, a.x);
     }
-    expect(maxX).toBeGreaterThan(36);
-    expect(minXAfter).toBeLessThan(31.5);
+    expect(maxX).toBeGreaterThan(36 + 38);
+    expect(minXAfter).toBeLessThan(31.5 + 38);
     expect(a.patrol).not.toBeNull();
     // an enemy wanders onto the patrol route and gets shot
-    const b = w.spawnUnit('russia_rifle', 1, 33.5, 65.5);
+    const b = w.spawnUnit('russia_rifle', 1, 71.5, 79.5);
     let fired = 0;
     run(w, TPS * 10, (ev) => ev.t === 'fire' && ev.owner === 0 && fired++);
     expect(fired).toBeGreaterThan(0);
     expect(b.hp).toBeLessThan(b.maxHp);
     // a plain move cancels the patrol
-    w.issue(0, { type: 'move', ids: [a.id], x: 30.5, y: 62.5 });
+    w.issue(0, { type: 'move', ids: [a.id], x: 68.5, y: 76.5 });
     w.step();
     expect(a.patrol).toBeNull();
   });
 
   it('queued waypoints are followed in order', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_mbt', 0, 30.5, 64.5);
-    w.issue(0, { type: 'move', ids: [a.id], x: 34.5, y: 64.5 });
-    w.issue(0, { type: 'move', ids: [a.id], x: 34.5, y: 69.5, queue: true });
-    w.issue(0, { type: 'move', ids: [a.id], x: 30.5, y: 69.5, queue: true });
+    const a = w.spawnUnit('usa_mbt', 0, 68.5, 78.5);
+    w.issue(0, { type: 'move', ids: [a.id], x: 72.5, y: 78.5 });
+    w.issue(0, { type: 'move', ids: [a.id], x: 72.5, y: 83.5, queue: true });
+    w.issue(0, { type: 'move', ids: [a.id], x: 68.5, y: 83.5, queue: true });
     w.step();
     expect(a.queue.length).toBe(2);
     expect(waypointChain(w, a).length).toBe(3);
     const visits: number[] = [];
     const pts = [
-      [34.5, 64.5],
-      [34.5, 69.5],
-      [30.5, 69.5],
+      [72.5, 78.5],
+      [72.5, 83.5],
+      [68.5, 83.5],
     ];
     for (let t = 0; t < TPS * 30; t++) {
       w.step();
@@ -156,11 +158,11 @@ describe('patrol, guard and waypoint queues', () => {
 
   it('a queued order on an idle unit starts at once; a new plain order clears the queue', () => {
     const w = duel();
-    const a = w.spawnUnit('usa_mbt', 0, 30.5, 64.5);
-    w.issue(0, { type: 'move', ids: [a.id], x: 34.5, y: 64.5, queue: true });
+    const a = w.spawnUnit('usa_mbt', 0, 68.5, 78.5);
+    w.issue(0, { type: 'move', ids: [a.id], x: 72.5, y: 78.5, queue: true });
     w.step();
     expect(a.order.type).toBe('move');
-    w.issue(0, { type: 'move', ids: [a.id], x: 34.5, y: 69.5, queue: true });
+    w.issue(0, { type: 'move', ids: [a.id], x: 72.5, y: 83.5, queue: true });
     w.step();
     expect(a.queue.length).toBe(1);
     w.issue(0, { type: 'stop', ids: [a.id] });
@@ -170,11 +172,11 @@ describe('patrol, guard and waypoint queues', () => {
 
   it('guards follow and protect the escorted unit', () => {
     const w = duel();
-    const vip = w.spawnUnit('usa_mbt', 0, 30.5, 64.5);
+    const vip = w.spawnUnit('usa_mbt', 0, 68.5, 78.5);
     vip.hp = vip.maxHp = 1e6;
-    const g = w.spawnUnit('usa_apc', 0, 28.5, 66.5);
+    const g = w.spawnUnit('usa_apc', 0, 66.5, 80.5);
     w.issue(0, { type: 'guard', ids: [g.id], target: vip.id });
-    w.issue(0, { type: 'move', ids: [vip.id], x: 40.5, y: 62.5 });
+    w.issue(0, { type: 'move', ids: [vip.id], x: 78.5, y: 76.5 });
     run(w, TPS * 15);
     expect(g.guardId).toBe(vip.id);
     expect(Math.hypot(g.x - vip.x, g.y - vip.y)).toBeLessThan(3.5);
@@ -188,8 +190,8 @@ describe('patrol, guard and waypoint queues', () => {
 
   it('production queues hold 9 per factory and repeat-build re-queues finished units', () => {
     const w = duel();
-    w.spawnBuilding('usa_power', 0, 10, 88, true);
-    w.spawnBuilding('usa_barracks', 0, 13, 88, true);
+    w.spawnBuilding('usa_power', 0, 44, 97, true);
+    w.spawnBuilding('usa_barracks', 0, 47, 97, true);
     w.players[0].credits = 100000;
     w.issue(0, { type: 'produce', def: 'usa_rifle', count: 10 });
     w.issue(0, { type: 'produce', def: 'usa_rifle', count: 5 });
@@ -219,17 +221,17 @@ describe('patrol, guard and waypoint queues', () => {
     const play = () => {
       const w = duel(9);
       const ids: number[] = [];
-      for (let i = 0; i < 6; i++) ids.push(w.spawnUnit(i % 2 ? 'usa_rifle' : 'usa_mbt', 0, 28.5 + i, 64.5).id);
+      for (let i = 0; i < 6; i++) ids.push(w.spawnUnit(i % 2 ? 'usa_rifle' : 'usa_mbt', 0, 66.5 + i, 78.5).id);
       const foes: number[] = [];
-      for (let i = 0; i < 6; i++) foes.push(w.spawnUnit(i % 2 ? 'russia_rifle' : 'russia_mbt', 1, 44.5 + (i % 3), 56.5 + i).id);
+      for (let i = 0; i < 6; i++) foes.push(w.spawnUnit(i % 2 ? 'russia_rifle' : 'russia_mbt', 1, 82.5 + (i % 3), 70.5 + i).id);
       const script: [number, number, Command][] = [
         [1, 0, { type: 'stance', ids: ids.slice(0, 2), stance: 'aggressive' }],
-        [1, 0, { type: 'patrol', ids: ids.slice(2, 4), x: 38.5, y: 60.5 }],
+        [1, 0, { type: 'patrol', ids: ids.slice(2, 4), x: 76.5, y: 74.5 }],
         [1, 0, { type: 'guard', ids: [ids[4]], target: ids[0] }],
-        [2, 0, { type: 'move', ids: ids.slice(0, 2), x: 36.5, y: 62.5 }],
-        [2, 0, { type: 'move', ids: ids.slice(0, 2), x: 42.5, y: 58.5, attackMove: true, queue: true }],
+        [2, 0, { type: 'move', ids: ids.slice(0, 2), x: 74.5, y: 76.5 }],
+        [2, 0, { type: 'move', ids: ids.slice(0, 2), x: 80.5, y: 72.5, attackMove: true, queue: true }],
         [3, 1, { type: 'stance', ids: foes.slice(0, 3), stance: 'hold' }],
-        [3, 1, { type: 'move', ids: foes.slice(3), x: 34.5, y: 62.5, attackMove: true }],
+        [3, 1, { type: 'move', ids: foes.slice(3), x: 72.5, y: 76.5, attackMove: true }],
         [200, 0, { type: 'stance', ids: [ids[5]], stance: 'holdFire' }],
       ];
       for (let t = 0; t < TPS * 60; t++) {

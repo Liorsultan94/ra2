@@ -6,7 +6,7 @@ import { HELI_ORDER_GRACE, HELI_RETURN_HP, heliGrounded, heliRepairing, heliStat
 import { TPS, type Entity, type SimEvent } from '../src/sim/types';
 import { World } from '../src/sim/world';
 
-/** USA (player 0) vs Russia, starting forces cleared; an airbase for player 0 at (10, 60). */
+/** USA (player 0) vs Russia, starting forces cleared; an airbase for player 0 at (66, 88), on the Litani's south bank (the old map: 10, 60). */
 function heliWorld(base = true, ai = false) {
   const w = new World({
     seed: 5,
@@ -17,9 +17,9 @@ function heliWorld(base = true, ai = false) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 4, 88, true);
-  w.spawnBuilding('russia_conyard', 1, 88, 4, true);
-  const af = base ? w.spawnBuilding('usa_airfield', 0, 10, 60, true) : (null as unknown as Entity);
+  w.spawnBuilding('usa_conyard', 0, 40, 97, true);
+  w.spawnBuilding('russia_conyard', 1, 21, 12, true);
+  const af = base ? w.spawnBuilding('usa_airfield', 0, 66, 88, true) : (null as unknown as Entity);
   return { w, af };
 }
 
@@ -41,10 +41,10 @@ function runUntil(w: World, cond: () => boolean, ticks: number): SimEvent[] {
 describe('attack helicopter repair at the airbase', () => {
   it('breaks off below 40% HP, lands beside the airbase, repairs at 4%/s and resumes its attack', () => {
     const { w, af } = heliWorld();
-    const tank = w.spawnUnit('russia_mbt', 1, 40, 40);
+    const tank = w.spawnUnit('russia_mbt', 1, 82, 58);
     tank.hp = tank.maxHp * 50; // a tough target so the attack order outlives the trip
     tank.maxHp = tank.hp;
-    const h = heliAt(w, 30, 40);
+    const h = heliAt(w, 72, 58);
     w.issue(0, { type: 'attack', ids: [h.id], target: tank.id });
     w.step();
     expect(h.order).toMatchObject({ type: 'attack', target: tank.id });
@@ -124,7 +124,7 @@ describe('attack helicopter repair at the airbase', () => {
     w.issue(0, { type: 'land', ids: [h.id], target: af.id });
     runUntil(w, () => false, 10);
     expect(h.heli).not.toBeNull();
-    w.issue(0, { type: 'move', ids: [h.id], x: 50, y: 30 });
+    w.issue(0, { type: 'move', ids: [h.id], x: 92, y: 48 });
     runUntil(w, () => false, 2);
     expect(h.heli).toBeNull();
     expect(h.order.type).toBe('move');
@@ -151,7 +151,7 @@ describe('attack helicopter repair at the airbase', () => {
 
   it('with no airbase it fights on', () => {
     const { w } = heliWorld(false);
-    const tank = w.spawnUnit('russia_mbt', 1, 40, 40);
+    const tank = w.spawnUnit('russia_mbt', 1, 82, 58);
     tank.hp = tank.maxHp = 50000;
     const h = heliAt(w, 34, 40);
     h.hp = h.maxHp * 0.2;
@@ -169,7 +169,7 @@ describe('attack helicopter repair at the airbase', () => {
     const h = heliAt(w, 30, 30);
     w.issue(0, { type: 'land', ids: [h.id], target: af.id });
     runUntil(w, () => h.heli?.phase === 'landed', TPS * 40);
-    const tgt = w.spawnBuilding('russia_factory', 1, 40, 20, true);
+    const tgt = w.spawnBuilding('russia_factory', 1, 86, 30, true);
     w.issue(0, { type: 'attack', ids: [j.id], target: tgt.id });
     const evs = runUntil(w, () => j.sortie!.phase === 'sortie', TPS * 60);
     expect(evs.some((e) => e.t === 'sortie' && e.what === 'takeoff')).toBe(true);

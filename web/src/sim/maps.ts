@@ -2419,8 +2419,7 @@ export function createLitaniMap(): GameMap {
     const hits = LITANI_BRIDGES.filter((b) => b.ref === ref && (ref || b.cls === 2));
     if (!hits.length) continue;
     const c = { x: hits.reduce((a, b) => a + b.x, 0) / hits.length, y: hits.reduce((a, b) => a + b.y, 0) / hits.length };
-    let angle = hits[0].angle;
-    if ((LT_STARTS[0].x + 0.5 - c.x) * Math.cos(angle) + (LT_STARTS[0].y + 0.5 - c.y) * Math.sin(angle) > 0) angle += angle > 0 ? -Math.PI : Math.PI;
+    const angle = hits[0].angle;
     const ux = Math.cos(angle);
     const uy = Math.sin(angle);
     // the deck reaches from bank to bank, a bit over 1 tile onto each
@@ -2450,6 +2449,29 @@ export function createLitaniMap(): GameMap {
         const across = dy * ux - dx * uy;
         if (Math.abs(across) <= half && Math.abs(along) <= b.length / 2) g.tiles[y * W + x] = Tile.Bridge;
       }
+  }
+  // ends[0] on player 0's bank: the end its base reaches by land without crossing (the river meanders, so a direction
+  // test would not do)
+  {
+    // (a flood that does not cross the decks)
+    const saved = g.tiles.slice();
+    for (let i = 0; i < W * H; i++) if (g.tiles[i] === Tile.Bridge) g.tiles[i] = Tile.Water;
+    const home = flood(g, null, LT_STARTS[0]).seen;
+    g.tiles.set(saved);
+    const landNear = (x: number, y: number) => {
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const tx = Math.floor(x) + dx;
+          const ty = Math.floor(y) + dy;
+          if (tx >= 0 && ty >= 0 && tx < W && ty < H && home[ty * W + tx]) return true;
+        }
+      return false;
+    };
+    for (const b of bridges) {
+      const h = b.length / 2 + 0.6;
+      const e1 = { x: b.x + h * Math.cos(b.angle), y: b.y + h * Math.sin(b.angle) };
+      if (landNear(e1.x, e1.y)) b.angle += b.angle > 0 ? -Math.PI : Math.PI;
+    }
   }
   const deckEnds = (b: GameMap['bridges'][number]) => {
     const h = b.length / 2;

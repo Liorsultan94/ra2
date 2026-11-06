@@ -108,13 +108,31 @@ describe('river crossing and bridge repair', () => {
     w.pathTo(heli, s1.x, s1.y);
     w.pathTo(tank, s1.x, s1.y);
 
-    // Step simulation (the starts are ~130 tiles apart on the 128 x 128 map)
-    for (let i = 0; i < TPS * 45; i++) w.step();
+    // Step simulation (the starts are ~80 tiles apart across the Litani); the helicopter's nearest approach to s1
+    // (it arrives in about 25 s, then keeps clear of the enemy base's guns)
+    let heliBest = Infinity;
+    for (let i = 0; i < TPS * 45; i++) {
+      w.step();
+      heliBest = Math.min(heliBest, Math.hypot(heli.x - s1.x, heli.y - s1.y));
+    }
 
     // Heli can fly across to s1
-    expect(Math.hypot(heli.x - s1.x, heli.y - s1.y)).toBeLessThan(15);
-    // Tank cannot cross river to s1 (stays on bank s0 side: y > x)
-    expect(tank.y).toBeGreaterThan(tank.x);
-    expect(Math.hypot(tank.x - s1.x, tank.y - s1.y)).toBeGreaterThan(40);
+    expect(heliBest).toBeLessThan(15);
+    // Tank cannot cross the river to s1: it is still on s0's bank (the land s0 reaches without a bridge)
+    const W = w.map.w;
+    const bank = new Uint8Array(W * w.map.h);
+    const q = [s0.y * W + s0.x];
+    bank[q[0]] = 1;
+    while (q.length) {
+      const t = q.pop()!;
+      for (const u of [t - 1, t + 1, t - W, t + W]) {
+        if (u < 0 || u >= bank.length || bank[u] || !w.pass[u] || Math.abs((u % W) - (t % W)) > 1) continue;
+        bank[u] = 1;
+        q.push(u);
+      }
+    }
+    expect(bank[Math.floor(tank.y) * W + Math.floor(tank.x)]).toBe(1);
+    expect(bank[s1.y * W + s1.x]).toBe(0);
+    expect(Math.hypot(tank.x - s1.x, tank.y - s1.y)).toBeGreaterThan(15);
   });
 });

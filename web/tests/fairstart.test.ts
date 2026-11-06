@@ -7,7 +7,8 @@ import { World } from '../src/sim/world';
 // BAL1: the north base's exit / dock buildings are turned half a circle (sim/turn.ts), so the two bases of a
 // point-symmetric map are exact mirrors: units leave, and harvesters dock, on mirrored sides.
 
-function world(map: 'frontline' | 'desert' | 'winter' | 'urban' = 'frontline') {
+// (on a point-symmetric map: Frozen Pass, 96 x 96; the Litani mouth, map id 'frontline', is real ground, not mirrored)
+function world(map: 'frontline' | 'desert' | 'winter' | 'urban' = 'winter') {
   const w = new World({ seed: 1, map, players: [{ name: 'A', faction: 'usa', color: 0, isAI: false }, { name: 'B', faction: 'usa', color: 0, isAI: false }] });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
@@ -19,10 +20,10 @@ describe('fair starts: the north base mirrors the south one', () => {
     const w = world();
     const { w: W, h: H } = w.map;
     const pairs: [string, number, number, number, number][] = [
-      ['usa_refinery', 24, 112, 3, 3],
-      ['usa_factory', 30, 112, 3, 3],
-      ['usa_barracks', 36, 112, 2, 2],
-      ['usa_power', 40, 112, 2, 2],
+      ['usa_refinery', 24, 82, 3, 3],
+      ['usa_factory', 30, 82, 3, 3],
+      ['usa_barracks', 36, 82, 2, 2],
+      ['usa_power', 40, 82, 2, 2],
     ];
     for (const [def, x, y, bw, bh] of pairs) {
       const s = w.spawnBuilding(def, 0, x, y, true);
@@ -47,10 +48,10 @@ describe('fair starts: the north base mirrors the south one', () => {
     const w = world();
     const { w: W, h: H } = w.map;
     w.players[0].credits = w.players[1].credits = 99999;
-    const f0 = w.spawnBuilding('usa_factory', 0, 30, 112, true);
-    const f1 = w.spawnBuilding('usa_factory', 1, W - 33, H - 115, true);
-    w.spawnBuilding('usa_power', 0, 20, 112, true);
-    w.spawnBuilding('usa_power', 1, W - 22, H - 114, true);
+    const f0 = w.spawnBuilding('usa_factory', 0, 30, 82, true);
+    const f1 = w.spawnBuilding('usa_factory', 1, W - 33, H - 85, true);
+    w.spawnBuilding('usa_power', 0, 20, 82, true);
+    w.spawnBuilding('usa_power', 1, W - 22, H - 84, true);
     const tank = factionUnit('usa', (u) => u.id === 'usa_mbt').id;
     w.issue(0, { type: 'produce', def: tank });
     w.issue(1, { type: 'produce', def: tank });

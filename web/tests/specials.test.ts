@@ -9,9 +9,10 @@ import { TPS, type Entity, type Faction, type SimEvent } from '../src/sim/types'
 import { World } from '../src/sim/world';
 
 /** Two players, starting forces cleared, a conyard + power each so nobody is defeated. */
-function cleanWorld(a: Faction = 'usa', b: Faction = 'russia', seed = 21) {
+function cleanWorld(a: Faction = 'usa', b: Faction = 'russia', seed = 21, map?: 'winter') {
   const w = new World({
     seed,
+    map,
     players: [
       { name: 'A', faction: a, color: 0, isAI: false },
       { name: 'B', faction: b, color: 0, isAI: false },
@@ -19,11 +20,13 @@ function cleanWorld(a: Faction = 'usa', b: Faction = 'russia', seed = 21) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding(`${a}_conyard`, 0, 4, 88, true);
-  w.spawnBuilding(`${b}_conyard`, 1, 88, 4, true);
+  // (by the bases: the Litani mouth's south and north banks; Frozen Pass's corners)
+  const [ax, ay, bx, by] = map ? [4, 88, 88, 4] : [70, 80, 21, 12];
+  w.spawnBuilding(`${a}_conyard`, 0, ax, ay, true);
+  w.spawnBuilding(`${b}_conyard`, 1, bx, by, true);
   for (let i = 0; i < 3; i++) {
-    w.spawnBuilding(`${a}_power`, 0, 8 + i * 3, 88, true);
-    w.spawnBuilding(`${b}_power`, 1, 80 - i * 3, 4, true);
+    w.spawnBuilding(`${a}_power`, 0, ax + 4 + i * 3, ay, true);
+    w.spawnBuilding(`${b}_power`, 1, map ? bx - 8 - i * 3 : bx + 4 + i * 3, by, true);
   }
   return w;
 }
@@ -37,11 +40,13 @@ const run = (w: World, ticks: number, onEv?: (e: SimEvent) => void) => {
   }
 };
 
-/** A house of player 0's village (civ_house at 25,49) and riflemen next to it. */
+/** A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 60,62; on the old map 35,67) and riflemen next to it. */
+const HX = 60;
+const HY = 62;
 function garrisonSetup(w: World, n = 6, def = 'usa_rifle') {
-  const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === 35 && h.ty === 67)!;
+  const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === HX && h.ty === HY)!;
   const units: Entity[] = [];
-  for (let i = 0; i < n; i++) units.push(w.spawnUnit(def, 0, 35.5 + (i % 3) * 0.4, 70.5 + Math.floor(i / 3) * 0.4));
+  for (let i = 0; i < n; i++) units.push(w.spawnUnit(def, 0, HX + 0.5 + (i % 3) * 0.4, HY + 3.5 + Math.floor(i / 3) * 0.4));
   return { house, units };
 }
 
@@ -75,7 +80,7 @@ describe('garrisonable civilian houses', () => {
     const inside = w.get(house.passengers[0])!;
     expect(w.weaponRange(inside, { range: 4.5 } as never)).toBeCloseTo(4.5 + GARRISON_RANGE + 1);
     // an enemy squad walks up: the garrison shoots, the enemy can only hurt the house
-    const foes = [0, 1, 2].map((i) => w.spawnUnit('russia_rifle', 1, 36.5 + i * 0.4, 74.6));
+    const foes = [0, 1, 2].map((i) => w.spawnUnit('russia_rifle', 1, HX + 1.5 + i * 0.4, HY + 7.6));
     const hp0 = units.filter((u) => u.inside === house.id).map((u) => u.hp);
     let fromInside = 0;
     run(w, TPS * 25, (e) => {
@@ -88,11 +93,11 @@ describe('garrisonable civilian houses', () => {
 
   it('excess infantry ordered into a house from afar stay stationed beside the house instead of returning to their old position', () => {
     const w = cleanWorld();
-    const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === 35 && h.ty === 67)!;
+    const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === HX && h.ty === HY)!;
     const cap = buildingDef(house.def).garrison!;
     const units: Entity[] = [];
     for (let i = 0; i < cap + 4; i++) {
-      units.push(w.spawnUnit('usa_rifle', 0, 26.5 + (i % 4) * 0.4, 72.5 + Math.floor(i / 4) * 0.4));
+      units.push(w.spawnUnit('usa_rifle', 0, HX - 8.5 + (i % 4) * 0.4, HY + 5.5 + Math.floor(i / 4) * 0.4));
     }
     w.issue(0, { type: 'enter', ids: units.map((u) => u.id), target: house.id });
     run(w, TPS * 18);
@@ -146,8 +151,8 @@ describe('garrisonable civilian houses', () => {
     w.issue(0, { type: 'enter', ids: units.map((u) => u.id), target: house.id });
     run(w, TPS * 8);
     expect(canGarrisonUnit('usa_engineer')).toBe(false);
-    const foe = w.spawnUnit('russia_rifle', 1, 38.5, 70.5);
-    const eng = w.spawnUnit('russia_engineer', 1, 38.5, 70.9);
+    const foe = w.spawnUnit('russia_rifle', 1, HX + 3.5, HY + 3.5);
+    const eng = w.spawnUnit('russia_engineer', 1, HX + 3.5, HY + 3.9);
     w.issue(1, { type: 'enter', ids: [foe.id], target: house.id });
     w.issue(1, { type: 'capture', ids: [eng.id], target: house.id });
     foe.hp = foe.maxHp = 1e6; // survive the garrison's fire
@@ -174,7 +179,8 @@ describe('capturable tech structures', () => {
   const tech = (w: World, def: string) => w.list.filter((e) => !e.dead && e.def === def).sort((a, b) => a.id - b.id);
 
   it('mirrored pairs of hospital, comms tower and airport stand on the map, neutral', () => {
-    const w = cleanWorld();
+    // (a point-mirrored map with all three: Frozen Pass; the Litani mouth is real ground, not mirrored, below)
+    const w = cleanWorld('usa', 'russia', 21, 'winter');
     for (const id of ['tech_hospital', 'tech_comms', 'tech_airport']) {
       const [a, b] = tech(w, id);
       expect(a && b).toBeTruthy();
@@ -183,10 +189,21 @@ describe('capturable tech structures', () => {
       expect(b.tx).toBe(w.map.w - a.tx - d.w);
       expect(b.ty).toBe(w.map.h - a.ty - d.h);
     }
+    // the Litani mouth: a hospital and a comms tower on either bank (no airport in the window), neutral, one nearer
+    // each base
+    const l = cleanWorld();
+    for (const id of ['tech_hospital', 'tech_comms']) {
+      const pair = tech(l, id);
+      expect(pair.length).toBe(2);
+      for (const t of pair) expect(t.owner).toBe(-1);
+      const near = pair.map((t) => (Math.hypot(t.x - l.map.starts[0].x, t.y - l.map.starts[0].y) < Math.hypot(t.x - l.map.starts[1].x, t.y - l.map.starts[1].y) ? 0 : 1));
+      expect(near.sort()).toEqual([0, 1]);
+    }
   });
 
   it('an engineer captures (and is consumed); hospital heals, comms gives radar, airport speeds up the drop', () => {
-    const w = cleanWorld();
+    // (Frozen Pass: it has all three; the Litani mouth has no airport)
+    const w = cleanWorld('usa', 'russia', 21, 'winter');
     const [hosp] = tech(w, 'tech_hospital');
     const [comms] = tech(w, 'tech_comms');
     const [port] = tech(w, 'tech_airport');

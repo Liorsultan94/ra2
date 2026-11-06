@@ -8,8 +8,11 @@ import { World } from '../src/sim/world';
 // three harvesters made $13,075; six jammed at the refinery for good after the first trip and made $3,600.
 const BEFORE_3 = 13075;
 const BEFORE_6 = 3600;
-/** Player 0's home ore field on Frontline (sim/map.ts). */
-const FIELD = { x: 29.5, y: 117.5 };
+/**
+ * Player 0's home ore field on the Litani mouth (map id 'frontline', sim/maps.ts LT_ORE: 15 tiles north-east of the
+ * south base; on the old Frontline Crossing it lay 15 tiles south-east of its base, at (29.5, 117.5)).
+ */
+const FIELD = { x: 86.5, y: 68.5 };
 
 /** USA (player 0) vs Russia, starting forces cleared; player 0's refinery by its home ore field. */
 function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
@@ -22,10 +25,11 @@ function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 16, 109, true);
-  w.spawnBuilding('russia_conyard', 1, 110, 16, true);
-  w.spawnBuilding('usa_power', 0, 12, 109, true);
-  const ref = w.spawnBuilding('usa_refinery', 0, 23, 115, true);
+  // (the bases and the refinery between player 0's base and its home field, as before on Frontline Crossing)
+  w.spawnBuilding('usa_conyard', 0, 73, 77, true);
+  w.spawnBuilding('russia_conyard', 1, 21, 15, true);
+  w.spawnBuilding('usa_power', 0, 69, 77, true);
+  const ref = w.spawnBuilding('usa_refinery', 0, 79, 70, true);
   return { w, ref };
 }
 
@@ -197,7 +201,7 @@ describe('harvesters sharing a field and a refinery', () => {
 
   it('a second refinery takes the overflow', () => {
     const { w, ref } = hvWorld();
-    const ref2 = w.spawnBuilding('usa_refinery', 0, 19, 115, true);
+    const ref2 = w.spawnBuilding('usa_refinery', 0, 75, 70, true);
     w.map.ore.fill(0); // one trip each
     w.map.oreMines = [];
     const [dx, dy] = dockXY(ref);
@@ -222,7 +226,7 @@ describe('harvesters under attack', () => {
   it('flee on damage with a partial load: unload it, park off the lane, repair at 3%/s, resume after the field is calm', () => {
     const { w, ref } = hvWorld();
     const h = miner(w, 300);
-    const foe = w.spawnUnit('russia_mbt', 1, 52, 100); // far away: only the shot counts
+    const foe = w.spawnUnit('russia_mbt', 1, 60, 98); // far away: only the shot counts
     foe.stance = 'holdFire';
     run(w, 5);
     expect(h.hflee).toBeNull();
@@ -298,35 +302,40 @@ describe('harvesters under attack', () => {
     run(w, 20);
     expect(h.hflee).not.toBeNull();
     const income0 = w.players[0].stats.harvested;
+    // (what it carries home: the 450 plus whatever it had dug in its last ticks at work - one load here)
+    const load = h.cargo;
+    expect(load).toBeGreaterThanOrEqual(450);
     run(w, TPS * 60, () => !h.hflee);
     expect(h.hflee).toBeNull();
-    expect(w.players[0].stats.harvested - income0).toBe(450);
+    expect(w.players[0].stats.harvested - income0).toBe(load);
     const ox = (h.oreTile % w.map.w) + 0.5;
     const oy = Math.floor(h.oreTile / w.map.w) + 0.5;
     expect(Math.hypot(ox - FIELD.x, oy - FIELD.y)).toBeGreaterThan(HV_FIELD_R + 2);
     // and it gets on with the work there
     run(w, TPS * 60);
     expect(h.hflee).toBeNull();
-    expect(w.players[0].stats.harvested - income0).toBeGreaterThan(450);
+    expect(w.players[0].stats.harvested - income0).toBeGreaterThan(load);
   });
 
   it("a player's order overrides the run home", () => {
     const { w } = hvWorld();
     const h = miner(w, 200);
-    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
+    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
     foe.stance = 'holdFire';
     run(w, 4);
     hit(w, h, foe);
     run(w, 3);
     expect(h.hflee).not.toBeNull();
     // move order: it goes where it is told
-    w.issue(0, { type: 'move', ids: [h.id], x: 32.5, y: 110.5 });
+    // (a spot by the base, off the refinery lane, as on the old map)
+    const to = { x: FIELD.x - 6, y: FIELD.y + 12 };
+    w.issue(0, { type: 'move', ids: [h.id], x: to.x, y: to.y });
     run(w, 2);
     expect(h.hflee).toBeNull();
     expect(h.order.type).toBe('move');
     expect(harvestStatus(h)).toBe('');
     run(w, TPS * 20, () => h.order.type !== 'move');
-    expect(Math.hypot(h.x - 32.5, h.y - 110.5)).toBeLessThan(1.5);
+    expect(Math.hypot(h.x - to.x, h.y - to.y)).toBeLessThan(1.5);
     // harvest order onto the (hot) field: it goes and works there, and a hit right after does not send it home
     w.issue(0, { type: 'harvest', ids: [h.id], x: FIELD.x, y: FIELD.y });
     run(w, 2);
@@ -346,7 +355,7 @@ describe('harvesters under attack', () => {
     const { w } = hvWorld({ ai: true });
     w.controllers.push(new AIController(w, 0, 'hard'));
     const h = miner(w, 250);
-    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
+    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
     foe.stance = 'holdFire';
     run(w, 4);
     const income0 = w.players[0].stats.harvested;
@@ -368,7 +377,7 @@ describe('harvesters under attack', () => {
   it('one "harvester under attack" alert per 20 s at most', () => {
     const { w } = hvWorld();
     const hs = [miner(w, 0), harvester(w, FIELD.x + 2, FIELD.y)];
-    const foe = w.spawnUnit('russia_mbt', 1, 52, 100);
+    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
     foe.stance = 'holdFire';
     run(w, 4);
     const alerts: number[] = [];
@@ -476,8 +485,15 @@ describe('ordered ore field', () => {
     const off: string[] = [];
     let loads = 0;
     const prev = hs.map(() => 0);
-    // (until the field is about worked out, some 4 minutes in)
-    for (let i = 0; i < TPS * 200; i++) {
+    // (until the field is about worked out: some 4 minutes in on the old map's far fields; the Litani's far field is
+    // smaller and runs low after about 2 minutes, when the crew may rightly move on)
+    const oreLeft = () => {
+      let n = 0;
+      for (let j = 0; j < w.map.ore.length; j++) if (onField(j)) n += w.map.ore[j];
+      return n;
+    };
+    const ore0 = oreLeft();
+    for (let i = 0; i < TPS * 200 && oreLeft() > ore0 * 0.15; i++) {
       w.step();
       w.drainEvents();
       hs.forEach((h, k) => {

@@ -749,7 +749,8 @@ describe('collapsible bridges', () => {
     const w = oneSide();
     expect(w.bridges.length).toBe(3);
     for (const b of w.bridges) {
-      expect(b.tiles.length).toBeGreaterThan(5);
+      // (the Litani is about two tiles wide at its bridges: 4 - 6 deck tiles; the old map's river took over 5)
+      expect(b.tiles.length).toBeGreaterThanOrEqual(4);
       expect(b.status).toBe('intact');
       const e = w.get(b.entity)!;
       expect(e.def).toBe(BRIDGE_DEF);
@@ -837,7 +838,7 @@ describe('collapsible bridges', () => {
         const last = path[path.length - 1];
         expect(Math.hypot((last % w.map.w) - hut.tx, Math.floor(last / w.map.w) - hut.ty)).toBeLessThan(1.5);
       });
-    // player 0 rebuilds the centre bridge from its bank, player 1 the west one from the other bank
+    // player 0 rebuilds the first bridge (Qasmiyeh) from its bank, player 1 the second (the motorway) from the other bank
     const [b0, b1] = w.bridges;
     const h0 = w.get(b0.huts[0])!;
     const h1 = w.get(b1.huts[1])!;

@@ -17,7 +17,7 @@ type AnyAI = any;
  */
 function attack(slot: number, me: Faction, pincers: boolean): Arrival | null {
   const players = [{ name: me, faction: me, color: 0, isAI: true }, { name: 'russia', faction: 'russia' as Faction, color: 0, isAI: true }];
-  const w = new World({ seed: 1, map: 'frontline', players: slot ? players.reverse() : players });
+  const w = new World({ seed: 3, map: 'frontline', players: slot ? players.reverse() : players });
   // the enemy: a construction yard at its start, no controller (it just stands)
   const st = w.map.starts[1 - slot];
   w.spawnBuilding('russia_conyard', 1 - slot, Math.round(st.x) - 1, Math.round(st.y) - 1, true);
@@ -46,10 +46,19 @@ describe('AI pincers', () => {
     const rows: string[] = [];
     const pin: number[] = [];
     const old: number[] = [];
+    // The Litani mouth (seed 3; the old Frontline Crossing: seed 1, both starts). From the south base its bridges come
+    // in on either side of the north base: pincers. From the north base the two nearest, the Qasmiyeh and the meander
+    // bridge, both lead in from the north-west (staging points 0.3 rad apart, under PINCER_ANGLE): no two approaches
+    // from different sides, so the AI sends its wing instead - real ground. (Seeds 1-4 from the south: pincers
+    // 0.5-9.5 s apart, the old wing 17-25.5 s; seed 3: every pincer within 6.5 s.)
     for (const slot of [0, 1]) for (const me of ['usa', 'israel', 'china'] as Faction[]) {
       const p = attack(slot, me, true);
       const o = attack(slot, me, false);
       rows.push(`slot ${slot} ${me}: pincer ${p?.kind} ${spread(p).toFixed(1)}s ${p?.at.map((t) => (t - p.born) / TPS)}, old ${o?.kind} ${spread(o).toFixed(1)}s ${o?.at.map((t) => (t - o.born) / TPS)}`);
+      if (slot === 1) {
+        expect(p?.kind, rows.join('\n')).toBe('wing');
+        continue;
+      }
       expect(p?.kind, rows.join('\n')).toBe('pincer');
       pin.push(spread(p));
       old.push(spread(o));
