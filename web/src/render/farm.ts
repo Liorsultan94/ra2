@@ -36,6 +36,8 @@ const C = (h: number) => new THREE.Color(h);
  */
 export function cropOf(m: GameMap, f: Field, k: number): Crop {
   if (f.type >= FieldType.Plaza) return 'plain';
+  // the map knows (the Litani's orchards and greenhouses)
+  if (f.crop) return f.crop;
   const biome = m.biome;
   const r = hash2(k, Math.floor(f.cx * 4), 4401);
   if (biome === 'winter') {

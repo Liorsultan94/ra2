@@ -66,7 +66,7 @@ export interface WorldOptions {
   players: PlayerSetup[];
   seed?: number;
   credits?: number;
-  /** Which map (default Frontline Crossing); the seed varies its details (sim/maps.ts). */
+  /** Which map (default the Litani mouth, id 'frontline'); the seed varies the hand-designed maps' details (sim/maps.ts). */
   map?: MapId;
   /**
    * The match's day clock (sim/clock.ts; the game passes the one the sky shows: render/atmos.ts simClockOf).

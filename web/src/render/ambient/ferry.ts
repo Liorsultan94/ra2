@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
 import type { FogOfWar } from '../fog';
 import { groundY } from '../landmarks/ground';
-import { roadClear } from './clearance';
 import { landmarkMaterial } from '../landmarks/material';
 import { civSound } from '../landmarks/sound';
 import { Kit } from '../models/landmarks';
@@ -14,9 +13,6 @@ import type { AmbientFrame, FogProbe, LightSprites, Quality } from './shared';
  * Water transport (render only, next to ambient/river.ts's ducks and fishing
  * boats, which it leaves alone):
  *
- *  - Frontline Crossing: a double-ended car ferry shuttling across the river
- *    between two concrete slipways, far from the bridges; it waits at each
- *    landing, then crosses (horn on departure, lit at night);
  *  - Canal City: barges and tour boats working up and down the canal (they
  *    keep right and pass under the bridges), and a marina where the canal
  *    runs out of town: pontoons with moored motor boats and yachts (the
@@ -68,7 +64,6 @@ export class WaterTransport {
     this.animate = quality !== 'low';
     const mat = landmarkMaterial(fog);
     const k = new Kit();
-    if (map.id === 'frontline' && river) this.planFerry(k);
     if (map.id === 'urban') {
       this.marina(k);
       if (river) this.planCanal();
@@ -112,78 +107,6 @@ export class WaterTransport {
   /** Dry land (above the waterline, not a water tile). */
   private dry(x: number, y: number) {
     return !this.wet(x, y) && groundY(this.map, x, y) > WATER_LEVEL + 0.08;
-  }
-
-  /** The ferry: a straight crossing well away from the bridges, the jetty and the weir, near the south-east corner. */
-  private planFerry(k: Kit) {
-    const R = this.river!;
-    const S = R.samples;
-    if (S.length < 10) return;
-    const avoid = [...R.bridgeS, R.features.jetty?.s ?? -1e9, R.features.weir?.s ?? -1e9, R.features.rapids ? (R.features.rapids.s0 + R.features.rapids.s1) / 2 : -1e9];
-    let best = -1;
-    let bestScore = -1e9;
-    for (let i = 4; i < S.length - 4; i++) {
-      const sp = S[i];
-      const d = Math.min(...avoid.map((a) => Math.abs(a - sp.s)));
-      if (d < 9) continue;
-      // inside the map, not too close to its edge, towards the south-east (player 0's flank)
-      if (sp.x < 6 || sp.y < 6 || sp.x > this.map.w - 6 || sp.y > this.map.h - 6) continue;
-      const score = sp.x + sp.y - Math.abs(sp.width - 4.4) * 4;
-      if (score > bestScore) {
-        bestScore = score;
-        best = i;
-      }
-    }
-    if (best < 0) return;
-    const sp = S[best];
-    const nx = -sp.ty;
-    const ny = sp.tx;
-    // walk out to the banks
-    const bank = (sg: number) => {
-      let t = 0;
-      while (t < 6 && this.wet(sp.x + nx * sg * t, sp.y + ny * sg * t)) t += 0.1;
-      return t;
-    };
-    const ta = bank(-1);
-    const tb = bank(1);
-    if (ta < 0.8 || tb < 0.8) return;
-    const ax = sp.x - nx * (ta - 0.75);
-    const ay = sp.y - ny * (ta - 0.75);
-    const bx = sp.x + nx * (tb - 0.75);
-    const by = sp.y + ny * (tb - 0.75);
-    this.ferryRun = { ax, ay, bx, by, t: 0, state: 0, wait: 6, x: ax, y: ay, yaw: Math.atan2(by - ay, bx - ax) };
-    // slipways: a concrete ramp from the bank down into the water, bollards, a waiting lane
-    for (const [sx, sy, dx, dy, edge] of [
-      [sp.x - nx * ta, sp.y - ny * ta, -nx, -ny, ta],
-      [sp.x + nx * tb, sp.y + ny * tb, nx, ny, tb],
-    ] as const) {
-      void edge;
-      const yaw = Math.atan2(dy, dx);
-      const top = Math.max(groundY(this.map, sx + dx * 1.4, sy + dy * 1.4), WATER_LEVEL + 0.1);
-      // ramp: from 1.6 inland down to 0.7 into the water, in two pieces following the bank
-      const pts = [1.6, 0.35, -0.7].map((t) => ({ t, h: t > 0 ? Math.max(groundY(this.map, sx + dx * t, sy + dy * t), WATER_LEVEL) + 0.03 : WATER_LEVEL - 0.08 }));
-      for (let i = 0; i < 2; i++) {
-        const a = pts[i];
-        const b = pts[i + 1];
-        const len = a.t - b.t;
-        const mx = sx + dx * (a.t + b.t) / 2;
-        const my = sy + dy * (a.t + b.t) / 2;
-        const tilt = Math.atan2(a.h - b.h, len);
-        k.at(mx, (a.h + b.h) / 2, my, yaw).box(len + 0.04, 0.08, 0.86, 0, 0, 0, 0x9a968e, 0, 0, 0, tilt);
-        k.at(mx, (a.h + b.h) / 2 - 0.3, my, yaw).box(len + 0.04, 0.5, 0.8, 0, 0, 0, 0x7a766e, 0, 0, 0, tilt);
-      }
-      void top;
-      for (const sg of [-1, 1]) {
-        const px = sx + dx * 0.7 - dy * sg * 0.58;
-        const py = sy + dy * 0.7 + dx * sg * 0.58;
-        if (!this.dry(px, py)) continue;
-        k.at(px, groundY(this.map, px, py) - 0.02, py, yaw).cyl(0.05, 0.045, 0.16, 0, 0, 0, 0x2a2a2a, 6).box(0.04, 0.3, 0.04, 0.3, 0.15, 0, 0xe8e8e8);
-      }
-      // a ticket hut and a sign
-      const hx = sx + dx * 1.9 - dy * 0.75;
-      const hy = sy + dy * 1.9 + dx * 0.75;
-      if (this.dry(hx, hy) && roadClear(this.map, hx, hy, 0.3)) k.at(hx, groundY(this.map, hx, hy) - 0.02, hy, yaw).box(0.36, 0.3, 0.3, 0, 0.15, 0, 0xe8e0d0).box(0.42, 0.04, 0.36, 0, 0.32, 0, 0x2a5ab0).box(0.02, 0.12, 0.2, -0.19, 0.16, 0, 0xffd590, 1);
-    }
   }
 
   /** Canal boats: barges and tour boats spread along the canal, keeping right. */

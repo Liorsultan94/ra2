@@ -195,11 +195,12 @@ export function buildBriefing(
   const feats = m.bridges.length ? [`${m.bridges.length} contested bridges`] : [];
   if (biome === 'desert') feats.push(m.deco?.sea ? 'two gulfs crossed only at their heads, granite peaks and the Red Sea coast' : 'mesas and oases');
   if (biome === 'winter') feats.push('frozen river');
-  if (m.structures.length) feats.push(biome === 'urban' ? `${civ.length} buildings to garrison` : biome === 'desert' ? (m.deco?.sea ? 'villages at the crossings' : 'oasis villages') : biome === 'winter' ? 'log villages' : 'farming villages');
+  if (m.id === 'frontline') feats.push('the Litani and the Mediterranean coast');
+  if (m.structures.length) feats.push(biome === 'urban' ? `${civ.length} buildings to garrison` : biome === 'desert' ? (m.deco?.sea ? 'villages at the crossings' : 'oasis villages') : biome === 'winter' ? 'log villages' : 'villages among the orchards');
   feats.push(`${m.oreMines.length} ore fields`);
   if (oils.length) feats.push(`${oils.length} oil derricks`);
   if (techs.length) feats.push(`${techs.length} tech sites`);
-  const region = `${m.id === 'frontline' ? 'Temperate river valley' : (mapInfo(m.id).region ?? 'Contested border region')} · ${feats.join(' · ')}`;
+  const region = `${mapInfo(m.id).region ?? 'Contested border region'} · ${feats.join(' · ')}`;
 
   // secondary objectives from the map features
   const secondary: string[] = [];

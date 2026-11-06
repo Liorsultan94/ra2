@@ -24,7 +24,7 @@ import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, spli
  *    `hzShade` - the map edge keeps the fog of war (fading out over ~16 units), further out the
  *    ground melts by distance into the sky's horizon colour (sky.ts), thicker in bad weather, so the
  *    far ring ends seamlessly in the sky dome;
- *  - far water: one opaque sheet (meandering rivers, Canal City's bay, Frontline's lake) with a
+ *  - far water: one opaque sheet (meandering rivers, Canal City's bay, the Litani mouth's sea) with a
  *    cheap version of the river shader (same tints, sky / sun / ice), breaking waves on the beach
  *    and around the breakwater;
  *  - forests as billboard cards (one instanced draw), towns and villages as instanced houses /

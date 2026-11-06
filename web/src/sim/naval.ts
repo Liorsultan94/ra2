@@ -32,7 +32,7 @@ export const DEEP_DEPTH = 1.0;
 export const DEEP_ROOM = 1;
 /** A carrier is launched into deep water this far (tiles) from the Shipyard's slipway at most. */
 export const DEEP_LAUNCH_REACH = 16;
-/** Smallest body of boat water (tiles) that counts as sea: the rivers of Frontline, Winter and Urban are smaller. */
+/** Smallest body of boat water (tiles) that counts as sea: the rivers of the Litani mouth, Winter and Urban are smaller. */
 export const SEA_MIN = 1200;
 /** How far up the beach (tiles from the nearest water tile, Chebyshev) a hovercraft rides. */
 export const HOVER_REACH = 2;
