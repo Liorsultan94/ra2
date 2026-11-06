@@ -189,15 +189,15 @@ describe('capturable tech structures', () => {
       expect(b.tx).toBe(w.map.w - a.tx - d.w);
       expect(b.ty).toBe(w.map.h - a.ty - d.h);
     }
-    // the Litani mouth: a hospital and a comms tower on either bank (no airport in the window), neutral, one nearer
-    // each base
+    // the Litani mouth: two field hospitals and a comms tower on either bank (no airport in the window), neutral, as
+    // many nearer each base
     const l = cleanWorld();
-    for (const id of ['tech_hospital', 'tech_comms']) {
+    for (const [id, n] of [['tech_hospital', 4], ['tech_comms', 2]] as const) {
       const pair = tech(l, id);
-      expect(pair.length).toBe(2);
+      expect(pair.length).toBe(n);
       for (const t of pair) expect(t.owner).toBe(-1);
       const near = pair.map((t) => (Math.hypot(t.x - l.map.starts[0].x, t.y - l.map.starts[0].y) < Math.hypot(t.x - l.map.starts[1].x, t.y - l.map.starts[1].y) ? 0 : 1));
-      expect(near.sort()).toEqual([0, 1]);
+      expect(near.sort()).toEqual(n === 4 ? [0, 0, 1, 1] : [0, 1]);
     }
   });
 

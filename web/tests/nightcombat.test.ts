@@ -350,13 +350,14 @@ describe('night combat: illumination rounds', () => {
     const w = duel(NIGHT, 11, true);
     const ai = new AIController(w, 1, 'normal');
     w.controllers.push(ai);
-    w.spawnBuilding('russia_power', 1, 80, 14, true);
-    const fac = w.spawnBuilding('russia_factory', 1, 74, 10, true);
+    // (on the open plain of the Litani's north bank: the old map's spots moved by (-48, +4); there now stands scrub)
+    w.spawnBuilding('russia_power', 1, 32, 18, true);
+    const fac = w.spawnBuilding('russia_factory', 1, 26, 14, true);
     fac.hp = fac.maxHp = 1e6;
-    const guns = [at(w, 'russia_tos', 1, 77, 18), at(w, 'russia_tos', 1, 79, 19)];
+    const guns = [at(w, 'russia_tos', 1, 29, 22), at(w, 'russia_tos', 1, 31, 23)];
     for (const g of guns) g.stance = 'hold';
     // our tank shells the factory from the dark
-    const tank = at(w, 'usa_mbt', 0, 66, 11);
+    const tank = at(w, 'usa_mbt', 0, 18, 15);
     w.issue(0, { type: 'attack', ids: [tank.id], target: fac.id });
     let flare = false;
     run(w, TPS * 40, (ev) => ev.t === 'illum' && ev.owner === 1 && (flare = true));
@@ -400,7 +401,9 @@ describe('night combat: AI fairness', () => {
     const ai = new AIController(w, 1, 'hard');
     w.controllers.push(ai);
     const home = [w.players[1].startX + 0.5, w.players[1].startY + 0.5];
-    const r = [at(w, 'russia_rifle', 1, home[0] - 8, home[1] + 10), at(w, 'russia_rifle', 1, home[0] - 8, home[1] + 10)];
+    // (on level ground by the north base of the Litani mouth: west of it the plain falls to the beach, and a spy
+    // 4.6 tiles off down the slope is out of the rifles' reach)
+    const r = [at(w, 'russia_rifle', 1, home[0] + 4, home[1] + 10), at(w, 'russia_rifle', 1, home[0] + 4, home[1] + 10)];
     for (const u of r) u.stance = 'hold';
     const spy = at(w, 'usa_apc', 0, r[0].x, r[0].y);
     spy.stance = 'holdFire';

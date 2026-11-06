@@ -520,7 +520,8 @@ export class HorizonWorld {
     const base = this.edgeHeight(x, y);
     if (d <= 0) return base - (drop ? 0.14 : 0);
     // near belt: flatten towards a gentle plain, then rolling hills
-    const plain = Math.max(base, 0) * (1 - ss(0, 10, d));
+    // (the Litani's sea carries on its edge's depth too: the coast past the map is only approximately the map's)
+    const plain = (this.sea?.bed ? base : Math.max(base, 0)) * (1 - ss(0, 10, d));
     const hills = (fbm(x * 0.035, y * 0.035, 909, 3) - 0.38) * 5.5;
     const ch = this.ch;
     this.channelAt(x, y, ch);
@@ -557,8 +558,12 @@ export class HorizonWorld {
       if (s.twin || s.bed) {
         // the reef shelf and the deep water; the beach rising from the waterline (as in the map)
         // (as deep as the map's sea at the edge, deepening further out)
-        if (v > 0) return (s.bed ?? reefBed)(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
-        if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v);
+        if (v > 0) {
+          const b = (s.bed ?? reefBed)(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
+          // (the Litani's sea floor: carried on from the map's own edge, the real coast's shelf taking over within 6 units)
+          return s.twin ? b : b + (base - 0.14 - b) * (1 - ss(0, 6, d));
+        }
+        if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v) * (s.twin ? 1 : ss(0, 6, d));
         return hgt;
       }
       if (v > 0) return WATER_LEVEL - 0.3 - Math.min(v * 0.07, 3.5);

@@ -16,7 +16,9 @@ describe('landmark plan', () => {
       const a = landmarkPlan(createMap(id, 7));
       const b = landmarkPlan(createMap(id, 7));
       expect(JSON.stringify(a)).toBe(JSON.stringify(b));
-      expect(a.spots.length).toBeGreaterThan(3);
+      // (the Litani mouth, id 'frontline', is real ground: no invented set pieces past its edge)
+      if (id === 'frontline') expect(a.spots.length + a.rails.length).toBe(0);
+      else expect(a.spots.length).toBeGreaterThan(3);
     }
   });
 
@@ -70,10 +72,12 @@ describe('landmark plan', () => {
     expect(camelSpots(createMap('winter', 4)).length).toBe(0);
   });
 
-  it('crosses the highway at the map edge on Frontline Crossing, where the cars drive', () => {
-    const m = createMap('frontline', 1);
+  it('crosses the road at the map edge where the cars drive (Frozen Pass; the Litani mouth has no railway)', () => {
+    // (the old Frontline Crossing's two level crossings went with its invented railway)
+    expect(levelCrossings(createMap('frontline', 1)).length).toBe(0);
+    const m = createMap('winter', 1);
     const xs = levelCrossings(m);
-    expect(xs.length).toBe(2);
+    expect(xs.length).toBe(1);
     const net = roadNetFor(m, buildLayout(m));
     for (const c of xs.filter((c) => c.traffic)) {
       // a traffic portal (a lane leaving the map) within 2.5 tiles of the crossing

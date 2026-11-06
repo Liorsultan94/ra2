@@ -35,7 +35,7 @@ describe('mission briefing', () => {
     expect(b.secondary[0]).toMatch(/bridges/);
     expect(b.time).toMatch(/NIGHT/);
     expect(b.weather).toMatch(/RAIN/);
-    expect(b.mapName).toBe('Frontline Crossing');
+    expect(b.mapName).toBe('Litani Mouth');
   });
 
   it('tactical map transform puts the two bases on opposite sides', () => {

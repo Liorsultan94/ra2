@@ -642,12 +642,12 @@ describe('bridge deck ends', () => {
   it('the deck clears the banks and the approach roads meet its end flush, across the width', async () => {
     const { BRIDGE_HEIGHT } = await import('../src/sim/map');
     const { surfaceHeight } = await import('../src/render/ground');
-    const { deckRamps, deckLift, rampHeight, DECK_W } = await import('../src/render/deckramp');
-    const D = Math.SQRT1_2;
+    const { deckRamps, deckLift, deckWorld, rampHeight, DECK_W } = await import('../src/render/deckramp');
     for (const id of MAPS) {
       const m = createMap(id, 1);
       deckRamps(m).forEach((d, bi) => {
-        const w = (x: number, z: number) => ({ x: d.x + (x + z) * D, y: d.y + (z - x) * D });
+        // (the bridge's own frame: decks at any angle; the diagonal ones' (x + z)·√½, (z − x)·√½ as before)
+        const w = (x: number, z: number) => deckWorld(d.f, x, z);
         for (let x = -d.L / 2; x <= d.L / 2; x += 0.1) {
           const top = BRIDGE_HEIGHT + deckLift(d, x);
           for (let z = -DECK_W / 2; z <= DECK_W / 2; z += 0.15) {
@@ -677,7 +677,8 @@ describe('crossings, emergency vehicles and the car scale', () => {
   function stretch(n: RoadNet) {
     for (let li = 0; li < n.lines.length; li++) {
       const L = n.lines[li];
-      if (!L.paved || L.bridge >= 0 || L.lot >= 0 || L.len < 11) continue;
+      // (a country road: on the Litani mouth the first long line is the motorway, where cars outpace an ambulance)
+      if (!L.paved || L.bridge >= 0 || L.lot >= 0 || L.len < 11 || L.half > 0.6) continue;
       for (let a = 2; a + 8 < L.len - 2; a += 1) {
         if (L.stops.some((s) => s.arc > a - 1 && s.arc < a + 9.5)) continue;
         const p = { ...pointAt(L, a) }; // (pointAt hands back a shared scratch object)

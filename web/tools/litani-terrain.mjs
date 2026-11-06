@@ -472,7 +472,8 @@ for (const cls of [0, 1, 2, 3]) {
   const groups = new Map();
   for (const w of roadWays) {
     if (RC[w.tags.highway] !== cls) continue;
-    const key = (w.tags.ref ?? '') + '|' + (w.tags['name:en'] ?? w.tags.name ?? (cls >= 3 ? 'x' : w.id));
+    // (unnamed ways of a class merge where they share an end node: a road's pieces and its bridge are one line)
+    const key = (w.tags.ref ?? '') + '|' + (w.tags['name:en'] ?? w.tags.name ?? '');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(w);
   }

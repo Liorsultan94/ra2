@@ -103,8 +103,9 @@ describe('building placement', () => {
       const w = mkWorld(id, seed);
       const spawned = w.list.filter((e) => e.kind === 'building' && e.owner < 0 && (e.def === 'oil' || e.def.startsWith('tech_'))).map((e) => ({ def: e.def, x: e.tx, y: e.ty, w: buildingDef(e.def).w, h: buildingDef(e.def).h }));
       expect(spawned).toEqual(neutralSites(w.map));
-      // three tech site pairs on every map, a fourth (a second field hospital) on the 128 x 128 ones
-      expect(a.filter((s) => s.def !== 'oil').length, `${id} ${seed}`).toBe(w.map.w > 96 ? 8 : 6);
+      // three tech site pairs on every map, a fourth (a second field hospital) on the big ones (the Sinai's 208 x 208;
+      // the Litani mouth, 104 x 104, has three: two field hospitals and a comms tower a side, no airport in its window)
+      expect(a.filter((s) => s.def !== 'oil').length, `${id} ${seed}`).toBe(w.map.w >= 128 ? 8 : 6);
     }
   });
 

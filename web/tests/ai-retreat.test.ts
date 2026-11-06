@@ -26,8 +26,11 @@ function setup(diff: Difficulty) {
   const p = w.players[1];
   const e = w.players[0];
   const [hx, hy] = [p.startX + 0.5, p.startY + 0.5];
-  const dx = e.startX - p.startX;
-  const dy = e.startY - p.startY;
+  // (out across the open plain of its own bank, towards the motorway bridge: on the Litani the straight line to
+  // the enemy base crosses the river 20 tiles out; on the old Frontline Crossing it ran to the enemy base)
+  const via = w.map.bridges[1];
+  const dx = via.x - hx;
+  const dy = via.y - hy;
   const len = Math.hypot(dx, dy);
   const at = (k: number): [number, number] => {
     const q = w.nearestPassable(hx + (dx / len) * k, hy + (dy / len) * k, 6, w.mainland)!;
