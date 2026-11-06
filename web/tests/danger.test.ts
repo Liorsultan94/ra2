@@ -65,7 +65,9 @@ function openRoad(n: RoadNet, len: number): { li: number; a: number; len: number
     const arcs = [L.a0, ...L.stops.map((s) => s.arc), L.a1].sort((a, b) => a - b);
     for (let k = 0; k + 1 < arcs.length; k++) {
       const gap = arcs[k + 1] - arcs[k] - 4;
-      if (gap >= len && (!best || gap > best.len)) best = { li, a: arcs[k] + 2, len: gap };
+      // (a stretch that starts where the road leaves the map: room behind the car to drive away into, as on the old map)
+      const back = k === 0 && L.portal[0] ? Math.min(28, Math.max(0, gap - len - 15)) : 0;
+      if (gap >= len && (!best || gap > best.len)) best = { li, a: arcs[k] + 2 + back, len: gap - back };
     }
   });
   if (!best) throw new Error('no open road');

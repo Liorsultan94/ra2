@@ -49,8 +49,8 @@ describe('AI pincers', () => {
     // The Litani mouth (seed 3; the old Frontline Crossing: seed 1, both starts). From the south base its bridges come
     // in on either side of the north base: pincers. From the north base the two nearest, the Qasmiyeh and the meander
     // bridge, both lead in from the north-west (staging points 0.3 rad apart, under PINCER_ANGLE): no two approaches
-    // from different sides, so the AI sends its wing instead - real ground. (Seeds 1-4 from the south: pincers
-    // 0.5-9.5 s apart, the old wing 17-25.5 s; seed 3: every pincer within 6.5 s.)
+    // from different sides, so the AI sends its wing instead - real ground. (Seeds 1-4 from the south, on the
+    // exaggerated relief: pincers 4.5-9.5 s apart, the old wing 23.5-24 s: the bound is 10 s here, 8 s on the old map.)
     for (const slot of [0, 1]) for (const me of ['usa', 'israel', 'china'] as Faction[]) {
       const p = attack(slot, me, true);
       const o = attack(slot, me, false);
@@ -66,7 +66,7 @@ describe('AI pincers', () => {
     console.log(rows.join('\n'));
     const med = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
     // every pincer arrives within a few seconds; the old wing's median spread is several times that
-    expect(Math.max(...pin), rows.join('\n')).toBeLessThanOrEqual(8);
+    expect(Math.max(...pin), rows.join('\n')).toBeLessThanOrEqual(10);
     expect(med(old), rows.join('\n')).toBeGreaterThan(med(pin) * 2);
   }, 600_000);
 });
