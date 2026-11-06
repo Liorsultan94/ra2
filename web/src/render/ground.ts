@@ -463,6 +463,8 @@ export class Ground {
       return n / 9;
     };
     const bc = this.look.code;
+    /** The Litani mouth (the temperate map): its height bands (below). */
+    const litani = m.id === 'frontline';
     for (let i = 0; i < W * m.h; i++) {
       const t = m.tiles[i];
       const o = i * TW;
@@ -923,6 +925,31 @@ export class Ground {
           r *= 1 + gem * 0.05;
           g *= 1 + gem * 0.12;
           b *= 1 + gem * 0.3;
+        }
+        if (litani) {
+          // the Litani mouth's height bands (the owner's design guide, table 4): the low plain and the river banks rich
+          // green, dark alluvial soil by the river; on the mid slopes the steep parts bare white-yellow limestone; the
+          // highest ground grey rock with darker grass between (soft blends by height and steepness)
+          const mid = smooth(0.5, 1.4, h0) * (1 - smooth(3.6, 4.8, h0));
+          const high = smooth(3.8, 5.2, h0);
+          // (steep: the bare rock layer, or a hillside steeper than about one in six)
+          const steep = Math.max(rock, smooth(0.04, 0.12, slope) * 0.85);
+          const lime = steep * mid;
+          r *= 1 + lime * 0.3;
+          g *= 1 + lime * 0.27;
+          b *= 1 + lime * 0.14;
+          const grey = steep * high;
+          r *= 1 - grey * 0.06;
+          g *= 1 - grey * 0.02;
+          b *= 1 + grey * 0.06;
+          const dark = (1 - steep) * high * 0.5;
+          r *= 1 - dark * 0.22;
+          g *= 1 - dark * 0.1;
+          b *= 1 - dark * 0.2;
+          const alluv = dirt * (1 - smooth(0.6, 3, waterD(x, y))) * (1 - smooth(0.4, 1.4, h0));
+          r *= 1 - alluv * 0.28;
+          g *= 1 - alluv * 0.25;
+          b *= 1 - alluv * 0.2;
         }
         tint[o] = Math.min(255, r * 127.5);
         tint[o + 1] = Math.min(255, g * 127.5);

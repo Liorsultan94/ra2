@@ -2378,7 +2378,7 @@ export function createLitaniMap(): GameMap {
   for (let vy = 0; vy <= H; vy++)
     for (let vx = 0; vx <= W; vx++) {
       const i = vy * W1 + vx;
-      let h = LT_LAND0 + Math.max(0, D.elev[i] / 10) / LT_M;
+      let h = LT_LAND0 + litaniLift(Math.max(0, D.elev[i] / 10));
       const s = D.sea[i] / 4;
       const r = D.river[i] / 10 + LT_WIDEN;
       if (s > 0) h = litaniSeabed(s);
@@ -2409,7 +2409,6 @@ export function createLitaniMap(): GameMap {
       if (s > 0 || r > 0) t = Tile.Water;
       else if (s > -1.7 || (cls(x, y) === 5 && s > -5)) t = Tile.Sand;
       else if (r > -1.1) t = Tile.Dirt;
-      else if (rise(x, y) > LT_ROCK) t = Tile.Rock;
       else if (cls(x, y) === 7) t = Tile.Dirt;
       g.tiles[i] = t;
     }
@@ -2692,6 +2691,8 @@ export function createLitaniMap(): GameMap {
   const roads = roadLines.map((r) => ti(r.pts));
   markRoads(g, roads, roadLines.map((r) => (r.cls === 0 ? 1.1 : 0.9)), [Tile.Grass, Tile.Dirt, Tile.Sand]);
 
+
+
   // ---- the game's pieces (hand placed, as many on either bank)
   const starts = LT_STARTS.map((p) => ({ ...p }));
   const oreFields: Field[] = LT_ORE.map(([x, y, r, kind]) => ({ x, y, r, kind }));
@@ -2713,6 +2714,79 @@ export function createLitaniMap(): GameMap {
     }
   /** Is tile-index point (x, y) within r of a road (r <= 5; between tile centres the nearest centre's value)? */
   const roadNear = (x: number, y: number, r: number) => roadD[Math.max(0, Math.min(H - 1, Math.round(y))) * W + Math.max(0, Math.min(W - 1, Math.round(x)))] < r;
+
+  // ---- the exaggerated relief made playable, as the other maps do: the base pads levelled, the roads cut level across
+  // (their grade along the way kept), and only the steepest real slopes left as bare limestone crags (rock)
+  {
+    const H0 = g.heights.slice();
+    const hAt = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      return (H0[i] * (1 - tx) + H0[i + 1] * tx) * (1 - ty) + (H0[i + W1] * (1 - tx) + H0[i + W1 + 1] * tx) * ty;
+    };
+    for (const st of LT_STARTS) {
+      let sum = 0;
+      let n = 0;
+      for (let vy = st.y - 6; vy <= st.y + 7; vy++)
+        for (let vx = st.x - 6; vx <= st.x + 7; vx++)
+          if (Math.hypot(vx - st.x - 0.5, vy - st.y - 0.5) <= 6.5) (sum += H0[vy * W1 + vx]), n++;
+      const pad = sum / n;
+      for (let vy = Math.max(0, st.y - 16); vy <= Math.min(H, st.y + 17); vy++)
+        for (let vx = Math.max(0, st.x - 16); vx <= Math.min(W, st.x + 17); vx++) {
+          const k = 1 - smoothstep(9, 15, Math.hypot(vx - st.x - 0.5, vy - st.y - 0.5));
+          if (k > 0 && litaniSea(vx, vy) < -1.5 && litaniRiver(vx, vy) < -1.5) g.heights[vy * W1 + vx] += (pad - g.heights[vy * W1 + vx]) * k;
+        }
+    }
+    // roads: each vertex near a road takes the road's own height there (smoothed along it), so the carriageway lies
+    // level across on the hillsides
+    const H1 = g.heights.slice();
+    const h1 = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      return (H1[i] * (1 - tx) + H1[i + 1] * tx) * (1 - ty) + (H1[i + W1] * (1 - tx) + H1[i + W1 + 1] * tx) * ty;
+    };
+    void hAt;
+    const best = new Float32Array(W1 * (H + 1));
+    for (const l of roads.map((r) => r.map((p) => ({ x: p.x + 0.5, y: p.y + 0.5 }))))
+      for (let k = 1; k < l.length; k++) {
+        const a = l[k - 1];
+        const b = l[k];
+        const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const tx = (b.x - a.x) / L;
+        const ty = (b.y - a.y) / L;
+        for (let vy = Math.max(0, Math.floor(Math.min(a.y, b.y) - 2)); vy <= Math.min(H, Math.ceil(Math.max(a.y, b.y) + 2)); vy++)
+          for (let vx = Math.max(0, Math.floor(Math.min(a.x, b.x) - 2)); vx <= Math.min(W, Math.ceil(Math.max(a.x, b.x) + 2)); vx++) {
+            const t = Math.max(0, Math.min(L, (vx - a.x) * tx + (vy - a.y) * ty));
+            const px = a.x + tx * t;
+            const py = a.y + ty * t;
+            const d = Math.hypot(vx - px, vy - py);
+            const w = 1 - smoothstep(0.9, 1.9, d);
+            if (w <= 0 || litaniSea(vx, vy) > -1 || litaniRiver(vx, vy) > -0.6) continue;
+            // (the road's height there: its centre line's, averaged over three tiles along it)
+            const c = (h1(px - tx * 1.5, py - ty * 1.5) + h1(px, py) + h1(px + tx * 1.5, py + ty * 1.5)) / 3;
+            const i = vy * W1 + vx;
+            if (w > best[i]) {
+              best[i] = w;
+              g.heights[i] = H1[i] + (c - H1[i]) * w;
+            }
+          }
+      }
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if ((g.tiles[i] === Tile.Grass || g.tiles[i] === Tile.Dirt) && rise(x, y) > LT_ROCK && !roadNear(x, y, 2) && !LT_STARTS.some((st) => Math.hypot(x - st.x, y - st.y) < 14)) g.tiles[i] = Tile.Rock;
+      }
+  }
   const reserved = (x: number, y: number) =>
     nearStart(x, y, 10) || oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) || oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) || bridges.some((b) => Math.hypot(x + 0.5 - b.x, y + 0.5 - b.y) < b.length / 2 + 3);
 
@@ -2771,7 +2845,8 @@ export function createLitaniMap(): GameMap {
   }
   // the villages' mosques and water towers where OSM has them (first: they take their spot before the houses)
   // (each on the nearest spot to the real one that takes it)
-  const placeOpts: PlaceOpts = { starts, oils, ore: oreFields, roads, roadClear: 1.3, startClear: 15, flat: 0.4, footFlat: 0.5, tilesOk: [Tile.Grass, Tile.Dirt] };
+  // (the villages stand on the hillsides too: a little more slope than on the old maps, the houses' terraces take it)
+  const placeOpts: PlaceOpts = { starts, oils, ore: oreFields, roads, roadClear: 1.3, startClear: 15, flat: 0.55, footFlat: 0.7, tilesOk: [Tile.Grass, Tile.Dirt] };
   const pois: Structure[] = [];
   for (const q of LITANI_POIS) {
     const st: Structure | null = q.kind === 'mosque' ? { kind: StructureKind.Courtyard, look: 'mosque', x: 0, y: 0, w: 3, h: 2, rot: 0 } : q.kind === 'water_tower' ? { kind: StructureKind.WaterTower, x: 0, y: 0, w: 1, h: 1, rot: 0 } : null;
@@ -2836,8 +2911,18 @@ export function createLitaniMap(): GameMap {
   });
 }
 
-/** Ground steeper than this (height rise over a tile) is bare rock. */
-const LT_ROCK = 0.8;
+/** Ground steeper than this (height rise over a tile, after the vertical exaggeration) is bare rock. */
+const LT_ROCK = 1.25;
+/**
+ * The relief's vertical scale (the owner's design guide: the heights levelled to the full range "so there are sharp,
+ * clear height differences"): metres above sea level -> height units over the coastline. 1:1 (LT_M metres a unit) on
+ * the coastal plain, steepening smoothly to 1.75 : 1 from 8 m up to 45 m and above, so the real 142 m hills east of
+ * the motorway stand about 7 units high, as the Sinai's massif does; monotonic, so every ridge, valley and the
+ * river's gorge keep their real shape and order.
+ */
+export function litaniLift(m: number) {
+  return (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
+}
 /** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
 const LT_APPROACH = 1.2;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
@@ -2845,7 +2930,7 @@ const LT_HOUSE_MIN = 18;
 /** Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen), player 1 on the north bank (the top). */
 const LT_STARTS: Point[] = [
   { x: 74, y: 78 },
-  { x: 36, y: 9 },
+  { x: 32, y: 13 },
 ];
 /** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
 const LT_ORE: [number, number, number, number][] = [
@@ -2856,16 +2941,16 @@ const LT_ORE: [number, number, number, number][] = [
   [94, 92, 3.0, 1],
   // north bank (player 1): two by the base, gems on the plain by the river, one out on the coastal plain to the west
   [55, 6, 3.4, 1],
-  [31, 19, 3.2, 1],
-  [40, 26, 2.6, 2],
+  [20, 22, 3.2, 1],
+  [52, 26, 2.6, 2],
   [12, 28, 3.0, 1],
 ];
 /** Oil derricks (top-left tiles), two a side. */
 const LT_OILS: [number, number][] = [
   [64, 70],
   [84, 86],
-  [24, 2],
-  [52, 20],
+  [24, 3],
+  [50, 18],
 ];
 /** Capturable tech sites: one of each on either bank (at: the south bank's candidates, at2: the north bank's). */
 const LT_TECH: NonNullable<GameMap['techSites']> = [
@@ -2904,7 +2989,8 @@ function simplifyLine(pts: Point[], eps: number): Point[] {
  * The Litani's farm plots (render hints, MapDeco.plots). OSM maps what grows (orchards, greenhouses, fields) in a
  * few large areas, not the parcels: its small areas go in as they are, and the rest of the cultivated plain is cut
  * into parcels of the real ones' size (60 - 150 m) on a grid turned to the local roads' main direction (the farm
- * tracks run along it), each growing what the land use says there.
+ * tracks run along it), each growing what the land use says there, with a track's or windbreak's width (~30 m)
+ * between them.
  */
 function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x: number, y: number) => number): NonNullable<MapDeco['plots']> {
   const out: NonNullable<MapDeco['plots']> = [];
@@ -2934,7 +3020,7 @@ function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x:
       const hl = 1.6 + hash2(row, col, 4722) * 1.6;
       const px = c + (u + hl) * ca - (v + hw) * sa;
       const py = c + (u + hl) * sa + (v + hw) * ca;
-      u += hl * 2 + 0.35;
+      u += hl * 2 + 0.9;
       const tx = Math.floor(px);
       const ty = Math.floor(py);
       if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
@@ -2946,7 +3032,7 @@ function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x:
       const h = hash2(row, col, 4723);
       out.push({ cx: px, cy: py, hl, hw, ang, crop: k === 1 ? (h < 0.85 ? 'orchard' : undefined) : k === 2 ? 'greenhouse' : k === 0 && h < 0.3 ? 'orchard' : undefined });
     }
-    v += hw * 2 + 0.35;
+    v += hw * 2 + 0.9;
   }
   return out;
 }
