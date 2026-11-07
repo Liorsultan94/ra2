@@ -42,11 +42,11 @@ const run = (w: World, ticks: number, onEv?: (e: SimEvent) => void) => {
 };
 
 /**
- * A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 56,66, since the window moved east; before
- * at 60,62; on the old map 35,67) and riflemen next to it.
+ * A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 62,112 on the 152-tile window; at 56,66
+ * on the 104 window; on the old map 35,67) and riflemen next to it.
  */
-const HX = 56;
-const HY = 66;
+const HX = 62;
+const HY = 112;
 function garrisonSetup(w: World, n = 6, def = 'usa_rifle') {
   const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === HX && h.ty === HY)!;
   const units: Entity[] = [];
@@ -193,15 +193,15 @@ describe('capturable tech structures', () => {
       expect(b.tx).toBe(w.map.w - a.tx - d.w);
       expect(b.ty).toBe(w.map.h - a.ty - d.h);
     }
-    // the Litani mouth: two field hospitals and a comms tower on either bank (no airport in the window), neutral, as
-    // many nearer each base
+    // the Litani mouth: two field hospitals and two comms towers on either bank (no airport in the window; the 152-tile
+    // window's fourth pair is the hills' comms tower), neutral, as many nearer each base
     const l = cleanWorld();
-    for (const [id, n] of [['tech_hospital', 4], ['tech_comms', 2]] as const) {
+    for (const [id, n] of [['tech_hospital', 4], ['tech_comms', 4]] as const) {
       const pair = tech(l, id);
       expect(pair.length).toBe(n);
       for (const t of pair) expect(t.owner).toBe(-1);
       const near = pair.map((t) => (Math.hypot(t.x - l.map.starts[0].x, t.y - l.map.starts[0].y) < Math.hypot(t.x - l.map.starts[1].x, t.y - l.map.starts[1].y) ? 0 : 1));
-      expect(near.sort()).toEqual(n === 4 ? [0, 0, 1, 1] : [0, 1]);
+      expect(near.sort()).toEqual([0, 0, 1, 1]);
     }
   });
 

@@ -52,7 +52,7 @@ export interface MapInfo {
 }
 
 export const MAPS: MapInfo[] = [
-  { id: 'frontline', name: 'Litani Mouth', biome: 'temperate', blurb: 'The Litani meets the sea: Qasmiyeh, Ain Abou Abdallah, orchards and three bridges', region: 'The Litani river mouth, south Lebanon' },
+  { id: 'frontline', name: 'Litani Mouth', biome: 'temperate', blurb: 'The Litani meets the sea: Qasmiyeh, Ain Abou Abdallah, the hills and the gorge, three bridges', region: 'The Litani river mouth, south Lebanon' },
   { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'The Sinai: two gulfs, crossings at their heads, Sharm and the high massif', region: 'The Sinai Peninsula between the Gulfs of Suez and Aqaba' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
@@ -2297,13 +2297,14 @@ export function sinaiPlaces() {
 // ================================================================== Litani mouth (map id 'frontline')
 
 /*
- * "Litani Mouth": the Litani river's last 3.5 km to the Mediterranean north of Tyre, south Lebanon, at the game's
+ * "Litani Mouth": the Litani river's last kilometres to the Mediterranean north of Tyre, south Lebanon, at the game's
  * real scale (35 m a tile: render/podmath.ts M_PER_TILE). Every height, the coastline, the river's course and banks,
  * the roads, the bridges, the villages' built-up ground and the orchards and greenhouses come from real data baked by
  * tools/litani-terrain.mjs into sim/litanidata.ts (AWS Terrain Tiles / SRTM elevation; OpenStreetMap). Real north is
  * up: the sea lies in the left corner, the river runs in from the right to its mouth, the north bank at the top, the
- * south bank (Qasmiyeh) at the bottom. The window sits as far east (into the hills and up the river) as the coast
- * still leaves the navy its open sea (sim/naval.ts SEA_MIN).
+ * south bank (Qasmiyeh) at the bottom. The window is 152 tiles (5.3 km) a side: from the coast it reaches east over the
+ * motorway into the real hills (to 257 m) and up the Litani's gorge; its west corner lies out at sea, the navy's open
+ * sea (sim/naval.ts SEA_MIN) inside the map.
  *
  * Nothing is mirrored (GameMap.mirror 'none'): the banks differ as they do on the ground. The game's own pieces -
  * the bases, ore and gem fields, oil derricks, tech sites - are laid out by hand, as many of each on either bank at
@@ -2326,16 +2327,50 @@ function b64bytes(s: string): Uint8Array {
   return out;
 }
 
+/**
+ * A packed grid of the baked data (tools/litani-terrain.mjs pack): w columns, each value predicted from its
+ * neighbours (planar: left + up - up-left; `left`: the left one only) plus a zigzag varint residual, a 0 starting a
+ * run of zero residuals (the varint after it: the run's length - 1).
+ */
+function ltUnpack(s: string, n: number, w: number, left: boolean): Int32Array {
+  const b = b64bytes(s);
+  const out = new Int32Array(n);
+  let p = 0;
+  const varint = () => {
+    let v = 0;
+    let m = 1;
+    let c: number;
+    do {
+      c = b[p++];
+      v += (c & 127) * m;
+      m *= 128;
+    } while (c & 128);
+    return v;
+  };
+  const put = (i: number, d: number) => {
+    const x = i % w;
+    const y = (i / w) | 0;
+    const l = x ? out[i - 1] : y ? out[i - w] : 0;
+    out[i] = (left || !x || !y ? l : out[i - 1] + out[i - w] - out[i - w - 1]) + d;
+  };
+  for (let i = 0; i < n; ) {
+    const v = varint();
+    if (v === 0) for (let r = varint() + 1; r > 0 && i < n; r--) put(i++, 0);
+    else put(i++, v & 1 ? (v + 1) / 2 : -v / 2);
+  }
+  return out;
+}
+
 let litaniCache: { elev: Int16Array; sea: Int8Array; river: Int8Array; cover: Uint8Array } | null = null;
 /** The baked data, decoded once. */
 export function litaniData() {
   if (!litaniCache) {
-    const e = b64bytes(LITANI_ELEV);
+    const n1 = (LITANI_N + 1) * (LITANI_N + 1);
     litaniCache = {
-      elev: new Int16Array(e.buffer, e.byteOffset, e.byteLength >> 1),
-      sea: new Int8Array(b64bytes(LITANI_SEA).buffer),
-      river: new Int8Array(b64bytes(LITANI_RIVER).buffer),
-      cover: b64bytes(LITANI_COVER),
+      elev: Int16Array.from(ltUnpack(LITANI_ELEV, n1, LITANI_N + 1, false)),
+      sea: Int8Array.from(ltUnpack(LITANI_SEA, n1, LITANI_N + 1, false)),
+      river: Int8Array.from(ltUnpack(LITANI_RIVER, n1, LITANI_N + 1, false)),
+      cover: Uint8Array.from(ltUnpack(LITANI_COVER, LITANI_N * LITANI_N, LITANI_N, true)),
     };
   }
   return litaniCache;
@@ -2665,7 +2700,17 @@ export function createLitaniMap(): GameMap {
           const p2 = tail[Math.min(tail.length - 1, 1)];
           const d1 = Math.hypot(ea.x - p0.x, ea.y - p0.y) || 1;
           const d2 = Math.hypot(p2.x - ea.x, p2.y - ea.y) || 1;
-          if (((ea.x - p0.x) * (p2.x - ea.x) + (ea.y - p0.y) * (p2.y - ea.y)) / (d1 * d2) < 0.5) continue;
+          const cos = ((ea.x - p0.x) * (p2.x - ea.x) + (ea.y - p0.y) * (p2.y - ea.y)) / (d1 * d2);
+          // (...or a bend where only these two meet, no third road there: one road turning a corner, its OSM ends
+          // overshooting each other by a tile cut off)
+          const alone = !roadLines.some((o, k) => k !== i && k !== j && o.pts.some((q, m) => m > 0 && distToSegment(ea.x, ea.y, o.pts[m - 1].x, o.pts[m - 1].y, q.x, q.y) < 1.5));
+          if (cos < 0.5 && !alone) continue;
+          if (cos < 0 && a.length > 2 && tail.length > 2) {
+            roadLines[i].pts = [...a.slice(0, -1), ...tail.slice(1)];
+            roadLines.splice(j, 1);
+            merged = true;
+            break;
+          }
           roadLines[i].pts = [...a, ...tail.slice(1)];
           roadLines.splice(j, 1);
           merged = true;
@@ -2991,56 +3036,68 @@ export function litaniLift(m: number) {
   return LT_LIFT_K * (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
 }
 /**
- * Scale of the relief curve: the first window's top (142.5 m) stood 7.1 units high; the window moved east (more hills,
- * its top 149.4 m: LITANI_ELEV), the curve scaled down so the top still stands 7.1 units high.
+ * Scale of the relief curve: the first window's top (142.5 m) stood 7.1 units high; the window grown east to 152
+ * tiles takes in the real hills to 257.3 m (LITANI_ELEV), the curve scaled so the top still stands 7.1 units high.
  */
-const LT_LIFT_K = 142.5 / 149.4;
+const LT_LIFT_K = 142.5 / 257.3;
 /** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
 const LT_APPROACH = 1.2;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
 const LT_HOUSE_MIN = 18;
 /** Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen), player 1 on the north bank (the top). */
 const LT_STARTS: Point[] = [
-  { x: 71, y: 85 },
-  { x: 29, y: 20 },
+  { x: 82, y: 132 },
+  { x: 28, y: 38 },
 ];
 /** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
 const LT_ORE: [number, number, number, number][] = [
-  // south bank (player 0): two by the base, gems towards Qasmiyeh, one out to the south-east
-  [83, 75, 3.4, 1],
-  [59, 95, 3.2, 1],
-  [53, 73, 2.6, 2],
-  [91, 99, 3.0, 1],
-  // north bank (player 1): two by the base, gems on the plain by the river, one out on the coastal plain to the west
-  [52, 13, 3.4, 1],
-  [17, 29, 3.2, 1],
-  [49, 33, 2.6, 2],
-  [9, 35, 3.0, 1],
+  // south bank (player 0): two by the base, gems towards Qasmiyeh, one out past Ain Abou Abdallah, one up in the
+  // south-eastern hills
+  [66, 120, 3.4, 1],
+  [92, 140, 3.2, 1],
+  [58, 106, 2.6, 2],
+  [112, 132, 3.0, 1],
+  [134, 94, 3.0, 1],
+  // north bank (player 1): two by the base, gems on the plain by the river, one out on the coastal plain, one up in
+  // the north-eastern hills
+  [38, 18, 3.4, 1],
+  [12, 42, 3.2, 1],
+  [46, 62, 2.6, 2],
+  [60, 30, 3.0, 1],
+  [88, 34, 3.0, 1],
 ];
-/** Oil derricks (top-left tiles), two a side. */
+/** Oil derricks (top-left tiles), three a side: two near the base, one in the hills. */
 const LT_OILS: [number, number][] = [
-  [61, 77],
-  [81, 93],
-  [21, 10],
-  [47, 25],
+  [70, 140],
+  [104, 110],
+  [132, 78],
+  [12, 16],
+  [48, 38],
+  [86, 50],
 ];
-/** Capturable tech sites: one of each on either bank (at: the south bank's candidates, at2: the north bank's). */
+/** Capturable tech sites: as many of each on either bank (at: the south bank's candidates, at2: the north bank's). */
 const LT_TECH: NonNullable<GameMap['techSites']> = [
   {
     def: 'tech_hospital',
-    at: [[45, 75], [41, 79], [49, 81], [37, 73]],
-    at2: [[15, 11], [11, 15], [17, 9], [9, 13]],
+    at: [[66, 142], [58, 140], [62, 144], [56, 144]],
+    at2: [[8, 22], [10, 26], [6, 18], [12, 30]],
   },
   {
     def: 'tech_comms',
-    at: [[89, 79], [93, 83], [85, 85], [91, 73]],
-    at2: [[5, 43], [9, 45], [3, 39], [13, 41]],
+    at: [[124, 126], [122, 128], [126, 132], [120, 134]],
+    at2: [[66, 30], [56, 22], [62, 32], [68, 26]],
   },
-  // a second field hospital a side: on the coastal plain of the south bank, on the plain east of the north base
+  // a second field hospital a side: on the coastal plain of the south bank, on the plain by the river on the north
   {
     def: 'tech_hospital',
-    at: [[37, 91], [39, 97], [41, 85], [35, 99]],
-    at2: [[57, 31], [61, 27], [55, 35], [63, 33]],
+    at: [[44, 146], [48, 142], [40, 140], [52, 146]],
+    at2: [[22, 66], [26, 70], [18, 62], [30, 72]],
+  },
+  // the bigger window's fourth pair (as the Sinai's 208 x 208 has): a second comms tower a side, up in the hills
+  {
+    def: 'tech_comms',
+    at: [[138, 106], [136, 110], [142, 108], [134, 112]],
+    at2: [[94, 42], [96, 40], [92, 44], [90, 46]],
   },
 ];
 

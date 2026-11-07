@@ -284,11 +284,11 @@ describe('sniper damage', () => {
 describe('sniper in a building', () => {
   it('fires from the window with +20% range and the same 3 s lock', () => {
     const w = cleanWorld();
-    // (a house in Qasmiyeh, on the Litani's south bank: at 56, 66 since the window moved east; before at 60, 62; the
-    // old map's was at 35, 67)
-    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 56 && e.ty === 66)!;
+    // (a house in Qasmiyeh, on the Litani's south bank: at 62, 112 on the 152-tile window; at 56, 66 on the 104 window;
+    // the old map's was at 35, 67)
+    const house = w.list.find((e) => e.kind === 'building' && e.def === 'civ_house' && e.tx === 62 && e.ty === 112)!;
     expect(house).toBeTruthy();
-    const s = w.spawnUnit('usa_sniper', 0, 56.5, 69.5);
+    const s = w.spawnUnit('usa_sniper', 0, 62.5, 115.5);
     w.issue(0, { type: 'enter', ids: [s.id], target: house.id });
     run(w, TPS * 6);
     expect(s.inside).toBe(house.id);

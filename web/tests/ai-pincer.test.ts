@@ -46,25 +46,22 @@ describe('AI pincers', () => {
     const rows: string[] = [];
     const pin: number[] = [];
     const old: number[] = [];
-    // The Litani mouth (seed 3; the old Frontline Crossing: seed 1, both starts). From the south base its bridges come
-    // in on either side of the north base: pincers. From the north base the two nearest, the Qasmiyeh and the meander
-    // bridge, both lead in from the north-west (staging points 0.3 rad apart, under PINCER_ANGLE): no two approaches
-    // from different sides, so the AI sends its wing instead - real ground. (Seeds 1-4 from the south, on the
-    // exaggerated relief: pincers 4.5-9.5 s apart, the old wing 23.5-24 s: the bound is 10 s here, 8 s on the old map.)
+    // The Litani mouth (seed 3; the old Frontline Crossing: seed 1, both starts). On the 152-tile window (grown east
+    // into the hills) the north base stands well north of all three bridges and the south base south-west of them, so
+    // from either start the approaches mostly come in on one side and the AI sends its wing; where it does split (from
+    // the north base: usa), the two halves arrive together. (Seed 3, both starts, usa / israel / china: one pincer,
+    // 3.5 s apart; the old untimed wing 8.5-35.5 s, median 35 s.) So: every pincer arrives within 10 s, at least one
+    // is made, and the old wing's median spread is several times the pincers'.
     for (const slot of [0, 1]) for (const me of ['usa', 'israel', 'china'] as Faction[]) {
       const p = attack(slot, me, true);
       const o = attack(slot, me, false);
       rows.push(`slot ${slot} ${me}: pincer ${p?.kind} ${spread(p).toFixed(1)}s ${p?.at.map((t) => (t - p.born) / TPS)}, old ${o?.kind} ${spread(o).toFixed(1)}s ${o?.at.map((t) => (t - o.born) / TPS)}`);
-      if (slot === 1) {
-        expect(p?.kind, rows.join('\n')).toBe('wing');
-        continue;
-      }
-      expect(p?.kind, rows.join('\n')).toBe('pincer');
-      pin.push(spread(p));
-      old.push(spread(o));
+      if (p?.kind === 'pincer') pin.push(spread(p));
+      if (o) old.push(spread(o));
     }
     console.log(rows.join('\n'));
     const med = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
+    expect(pin.length, rows.join('\n')).toBeGreaterThan(0);
     // every pincer arrives within a few seconds; the old wing's median spread is several times that
     expect(Math.max(...pin), rows.join('\n')).toBeLessThanOrEqual(10);
     expect(med(old), rows.join('\n')).toBeGreaterThan(med(pin) * 2);

@@ -434,8 +434,10 @@ describe('airborne drop support power', () => {
     let paradrop = 0;
     let sawAirborne = false;
     let hurt: Entity | null = null;
-    for (let i = 0; i < TPS * 60; i++) {
-      if (i === TPS * 32) {
+    // (75 s: the bigger map's longer flight, in and out again)
+    for (let i = 0; i < TPS * 75; i++) {
+      // (36 s: on the Litani's 152-tile window the transport flies in from further off, the pallet down at ~34 s)
+      if (i === TPS * 36) {
         // supply pallet on the ground: it patches up wounded units nearby
         const crate = w.list.find((e) => !e.dead && e.def === 'supply_crate' && !e.para);
         expect(crate).toBeTruthy();

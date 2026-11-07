@@ -54,9 +54,9 @@ describe('Litani mouth (map frontline)', () => {
     expect(mapInfo('frontline').region).toMatch(/Litani/);
     expect(m.w).toBe(LITANI_N);
     expect(m.h).toBe(LITANI_N);
-    // 35 m a tile: about 3.5 km a side
-    expect(m.w * LITANI_WINDOW.m).toBeGreaterThan(3300);
-    expect(m.w * LITANI_WINDOW.m).toBeLessThan(3700);
+    // 35 m a tile: about 5.3 km a side (the window grown from 104 to 152 tiles, east into the hills and the gorge)
+    expect(m.w * LITANI_WINDOW.m).toBeGreaterThan(5100);
+    expect(m.w * LITANI_WINDOW.m).toBeLessThan(5500);
     expect(m.mirror).toBe('none');
   });
 

@@ -12,8 +12,9 @@ const BEFORE_6 = 3600;
  * Player 0's home ore field on the Litani mouth (map id 'frontline', sim/maps.ts LT_ORE: 15 tiles north-east of the
  * south base; on the old Frontline Crossing it lay 15 tiles south-east of its base, at (29.5, 117.5)).
  */
-// (the window moved 250 m east and 100 m north: the field's ground lies 3 tiles lower in x and 7 higher in y than before)
-const FIELD = { x: 83.5, y: 75.5 };
+// (the window grown to 152 tiles, the pieces placed anew: the south base's first field lies 15 tiles west-north-west of
+// it, and the whole scene below - refinery, bases, the far foe - moved with it, by (-17, +45), as laid out before)
+const FIELD = { x: 66.5, y: 120.5 };
 
 /** USA (player 0) vs Russia, starting forces cleared; player 0's refinery by its home ore field. */
 function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
@@ -27,11 +28,11 @@ function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
   // (the bases and the refinery between player 0's base and its home field, as before on Frontline Crossing)
-  // (on the same ground as before the window moved: 3 tiles lower in x, 7 higher in y)
-  w.spawnBuilding('usa_conyard', 0, 70, 84, true);
-  w.spawnBuilding('russia_conyard', 1, 18, 22, true);
-  w.spawnBuilding('usa_power', 0, 66, 84, true);
-  const ref = w.spawnBuilding('usa_refinery', 0, 76, 77, true);
+  // (moved with the field, by (-17, +45); the enemy's by its own base on the north bank)
+  w.spawnBuilding('usa_conyard', 0, 53, 129, true);
+  w.spawnBuilding('russia_conyard', 1, 23, 29, true);
+  w.spawnBuilding('usa_power', 0, 49, 129, true);
+  const ref = w.spawnBuilding('usa_refinery', 0, 59, 122, true);
   return { w, ref };
 }
 
@@ -203,7 +204,7 @@ describe('harvesters sharing a field and a refinery', () => {
 
   it('a second refinery takes the overflow', () => {
     const { w, ref } = hvWorld();
-    const ref2 = w.spawnBuilding('usa_refinery', 0, 72, 77, true); // (moved with the window, as above)
+    const ref2 = w.spawnBuilding('usa_refinery', 0, 55, 122, true); // (moved with the field, as above)
     w.map.ore.fill(0); // one trip each
     w.map.oreMines = [];
     const [dx, dy] = dockXY(ref);
@@ -228,7 +229,7 @@ describe('harvesters under attack', () => {
   it('flee on damage with a partial load: unload it, park off the lane, repair at 3%/s, resume after the field is calm', () => {
     const { w, ref } = hvWorld();
     const h = miner(w, 300);
-    const foe = w.spawnUnit('russia_mbt', 1, 60, 98); // far away: only the shot counts
+    const foe = w.spawnUnit('russia_mbt', 1, 43, 143); // far away: only the shot counts
     foe.stance = 'holdFire';
     run(w, 5);
     expect(h.hflee).toBeNull();
@@ -322,7 +323,7 @@ describe('harvesters under attack', () => {
   it("a player's order overrides the run home", () => {
     const { w } = hvWorld();
     const h = miner(w, 200);
-    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
+    const foe = w.spawnUnit('russia_mbt', 1, 43, 143);
     foe.stance = 'holdFire';
     run(w, 4);
     hit(w, h, foe);
@@ -357,7 +358,7 @@ describe('harvesters under attack', () => {
     const { w } = hvWorld({ ai: true });
     w.controllers.push(new AIController(w, 0, 'hard'));
     const h = miner(w, 250);
-    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
+    const foe = w.spawnUnit('russia_mbt', 1, 43, 143);
     foe.stance = 'holdFire';
     run(w, 4);
     const income0 = w.players[0].stats.harvested;
@@ -379,7 +380,7 @@ describe('harvesters under attack', () => {
   it('one "harvester under attack" alert per 20 s at most', () => {
     const { w } = hvWorld();
     const hs = [miner(w, 0), harvester(w, FIELD.x + 2, FIELD.y)];
-    const foe = w.spawnUnit('russia_mbt', 1, 60, 98);
+    const foe = w.spawnUnit('russia_mbt', 1, 43, 143);
     foe.stance = 'holdFire';
     run(w, 4);
     const alerts: number[] = [];

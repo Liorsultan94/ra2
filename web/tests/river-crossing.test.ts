@@ -75,8 +75,10 @@ describe('river crossing and bridge repair', () => {
     expect(b0.status).toBe('down');
 
     // Run AI steps: AI should train engineer and repair b0
+    // (300 s: on the Litani's 152-tile window the north base stands about 50 tiles by road from the Qasmiyeh bridge,
+    // twice as far as before; seed 42 repairs it at 234 s)
     let repaired = false;
-    for (let i = 0; i < TPS * 200; i++) {
+    for (let i = 0; i < TPS * 300; i++) {
       w.step();
       if (b0.status === 'intact') {
         repaired = true;
