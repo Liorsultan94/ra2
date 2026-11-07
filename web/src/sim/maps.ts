@@ -3223,7 +3223,8 @@ export function createLitaniMap(): GameMap {
     }
   }
 
-  return assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {
+  const vehicleHills = litaniVehicleHills(g);
+  const ltMap = assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {
     oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
     starts,
     oils,
@@ -3234,7 +3235,53 @@ export function createLitaniMap(): GameMap {
     techSites: LT_TECH,
     deco,
   });
+  ltMap.vehicleHills = vehicleHills;
+  ltMap.vehicleHillGrade = LT_VEH_HILL_GRADE;
+  return ltMap;
 }
+
+/**
+ * The vehicles' hill ground (GameMap.vehicleHills): every tile whose four corners stand over LT_VEH_HILL_M real metres,
+ * bar a lane along every road and track (the vehicles drive on, tile to tile), the bridges and their approaches, the
+ * bases' pads and build room, the ore and gem fields, the oil derricks and the tech sites' candidate spots. Vehicles
+ * take only LT_VEH_HILL_GRADE there (the valley floors, near level, stay theirs where a road leads in); the infantry
+ * the hills' full slopes.
+ */
+function litaniVehicleHills(g: Grids): Uint8Array {
+  const D = litaniData();
+  const W1 = W + 1;
+  const out = new Uint8Array(W * H);
+  const keep = new Uint8Array(W * H);
+  const disc = (cx: number, cy: number, r: number) => {
+    for (let y = Math.max(0, Math.floor(cy - r - 1)); y <= Math.min(H - 1, Math.ceil(cy + r)); y++)
+      for (let x = Math.max(0, Math.floor(cx - r - 1)); x <= Math.min(W - 1, Math.ceil(cx + r)); x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) keep[y * W + x] = 1;
+  };
+  for (const r of D.roads)
+    for (let k = 1; k < r.pts.length; k++) {
+      const [ax, ay] = r.pts[k - 1];
+      const [bx, by] = r.pts[k];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.25));
+      // (the main roads a lane wider: their carriageway and verges)
+      for (let j = 0; j <= n; j++) disc(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n, r.cls >= 3 ? 0.75 : 1.6);
+    }
+  for (const b of LITANI_BRIDGES) disc(b.x, b.y, 8);
+  for (const st of LT_STARTS) disc(st.x + 0.5, st.y + 0.5, 13);
+  for (const [x, y, r] of LT_ORE) disc(x + 0.5, y + 0.5, r + 3);
+  for (const [x, y] of LT_OILS) disc(x + 1, y + 1, 4);
+  for (const t of LT_TECH) for (const [x, y] of [...t.at, ...(t.at2 ?? [])]) disc(x + 1, y + 1, 4);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (keep[i] || g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Bridge) continue;
+      if ([y * W1 + x, y * W1 + x + 1, (y + 1) * W1 + x, (y + 1) * W1 + x + 1].every((v) => D.elev[v] / 10 > LT_VEH_HILL_M)) out[i] = 1;
+    }
+  return out;
+}
+
+/** The real hills above this (metres) off the roads are the infantry's: vehicles take only LT_VEH_HILL_GRADE there. */
+const LT_VEH_HILL_M = 40;
+/** The vehicles' grade limit on the hill ground (sim/slope.ts MAX_GRADE elsewhere: 0.53). */
+const LT_VEH_HILL_GRADE = 0.03;
 
 /** The steepest step (height units) between neighbouring vertices of the exaggerated land, after easing. */
 const LT_GRADE = 0.42;

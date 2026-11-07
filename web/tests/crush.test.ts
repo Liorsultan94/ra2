@@ -28,7 +28,8 @@ function lane(w: World, len = 12): { x0: number; y: number } {
   for (let y = 40; y < w.map.h - 10; y++) {
     for (let x0 = 20; x0 < w.map.w - len - 10; x0++) {
       let ok = true;
-      for (let x = x0; x <= x0 + len && ok; x++) for (let dy = -2; dy <= 2 && ok; dy++) if (!w.pf.passable(x, y + dy)) ok = false;
+      // (and off the Litani mouth's hill ground, where a vehicle keeps to the roads: GameMap.vehicleHills)
+      for (let x = x0; x <= x0 + len && ok; x++) for (let dy = -2; dy <= 2 && ok; dy++) if (!w.pf.passable(x, y + dy) || w.map.vehicleHills?.[(y + dy) * w.map.w + x]) ok = false;
       if (ok) return { x0, y };
     }
   }

@@ -141,6 +141,12 @@ describe('slopes (SL1)', () => {
           let ok = false;
           for (let y = b.ty - 1; y <= b.ty + d.h && !ok; y++)
             for (let x = b.tx - 1; x <= b.tx + d.w && !ok; x++) if (x >= 0 && y >= 0 && x < W && y < w.map.h && R[y * W + x] === w.mainland) ok = true;
+          // (the Litani mouth's garrison houses in the hill villages: the hills are the infantry's there, and the houses
+          // are theirs to hold - in the infantry's reach)
+          if (!ok && id === 'frontline' && buildingDef(b.def).garrison) {
+            const RF = w.regions[Loco.Foot];
+            for (let y = b.ty - 1; y <= b.ty + d.h && !ok; y++) for (let x = b.tx - 1; x <= b.tx + d.w && !ok; x++) if (x >= 0 && y >= 0 && x < W && y < w.map.h && RF[y * W + x] > 0 && RF[y * W + x] === RF[s[0].y * W + s[0].x]) ok = true;
+          }
           expect(ok, `${id}/${seed}: ${b.def} at ${b.tx},${b.ty}`).toBe(true);
         }
       }

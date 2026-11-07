@@ -136,7 +136,7 @@ describe('Litani mouth (map frontline)', () => {
       }
   });
 
-  it('closes the steep hills and the gorge to vehicles but not to infantry; every field, derrick, site and bridge in reach', () => {
+  it('closes the hills and the gorge to vehicles but not to infantry; every field, derrick, site and bridge in reach', () => {
     const w = new World({ seed: 1, players: [{ name: 'A', faction: 'usa', color: 0, isAI: false }, { name: 'B', faction: 'russia', color: 0, isAI: false }] });
     const mm = w.map;
     const sf = slopeField(mm);
@@ -167,10 +167,16 @@ describe('Litani mouth (map frontline)', () => {
       if (foot[i] && !veh[i]) footOnly++;
       if (!foot[i]) cut++;
     }
-    // the real steep ground (the gorge's walls, the scarps): the infantry's, not the vehicles' (with the 9-unit relief
-    // only some 6% of the real ground above the plain is that steep: 1.8% of the open land); none cut off for all
-    expect(footOnly / land).toBeGreaterThan(0.012);
+    // the hills (the real ground over 40 m off the roads and tracks: GameMap.vehicleHills) and the gorge: the
+    // infantry's, not the vehicles' - about a third of the open land; none cut off for all
+    expect(footOnly / land).toBeGreaterThan(0.28);
     expect(cut / land).toBeLessThan(0.005);
+    // the hill ground itself: hardly any of it in the vehicles' reach (only near-level ground where a road leads in)
+    let hill = 0;
+    let hillVeh = 0;
+    for (let i = 0; i < n; i++) if (mm.vehicleHills?.[i] && w.passes[Loco.Foot][i]) (hill++, veh[i] && hillVeh++);
+    expect(hill).toBeGreaterThan(5000);
+    expect(hillVeh / hill).toBeLessThan(0.1);
     // every ore field, oil derrick, tech site and both bases in the vehicles' reach (both banks: over the bridges)
     const near = (x: number, y: number, r: number) => {
       for (let yy = Math.floor(y - r); yy <= y + r; yy++) for (let xx = Math.floor(x - r); xx <= x + r; xx++) if (xx >= 0 && yy >= 0 && xx < mm.w && yy < mm.h && veh[yy * mm.w + xx]) return true;

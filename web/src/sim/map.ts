@@ -47,6 +47,12 @@ export interface GameMap {
   /** 1 where a civilian structure stands. */
   blocked: Uint8Array;
   /**
+   * The vehicles' hill ground (the Litani mouth): per tile 1 = a step from or onto it is too steep for a vehicle
+   * over `vehicleHillGrade` (sim/slope.ts slopeField; the infantry's limit unchanged). Absent on the other maps.
+   */
+  vehicleHills?: Uint8Array;
+  vehicleHillGrade?: number;
+  /**
    * Capturable tech sites: candidate top-left corners for player 0's half (mirrored for player 1, or on a map with
    * no mirror player 1's own candidates `at2`), the first valid one is used (capture.ts). Absent: capture.ts's
    * defaults.
