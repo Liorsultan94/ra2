@@ -3,7 +3,8 @@ import { Tile, terrainBuildable, unitPassable, type GameMap } from '../src/sim/m
 import { createMap, litaniRiver, litaniSea, mapInfo } from '../src/sim/maps';
 import { LITANI_N, LITANI_WINDOW } from '../src/sim/litanidata';
 import { SEA_MIN, SHIP_YARD_REACH, navalTerrain, shipSite } from '../src/sim/naval';
-import { Loco } from '../src/sim/slope';
+import { DX, DY, Loco, slopeField } from '../src/sim/slope';
+import { neutralSites } from '../src/sim/capture';
 import { World } from '../src/sim/world';
 
 /*
@@ -135,6 +136,51 @@ describe('Litani mouth (map frontline)', () => {
       }
   });
 
+  it('closes the steep hills and the gorge to vehicles but not to infantry; every field, derrick, site and bridge in reach', () => {
+    const w = new World({ seed: 1, players: [{ name: 'A', faction: 'usa', color: 0, isAI: false }, { name: 'B', faction: 'russia', color: 0, isAI: false }] });
+    const mm = w.map;
+    const sf = slopeField(mm);
+    const n = mm.w * mm.h;
+    // the ground each class reaches from the south base (4-connected over steps within its grade limit)
+    const reach = (c: number) => {
+      const seen = new Uint8Array(n);
+      const q = [mm.starts[0].y * mm.w + mm.starts[0].x];
+      seen[q[0]] = 1;
+      while (q.length) {
+        const t = q.pop()!;
+        for (let k = 0; k < 4; k++) {
+          if ((sf.block[c][t] >> k) & 1) continue;
+          const j = t + DY[k] * mm.w + DX[k];
+          if (!seen[j] && w.passes[c][j]) (seen[j] = 1), q.push(j);
+        }
+      }
+      return seen;
+    };
+    const veh = reach(Loco.Vehicle);
+    const foot = reach(Loco.Foot);
+    let land = 0;
+    let footOnly = 0;
+    let cut = 0;
+    for (let i = 0; i < n; i++) {
+      if (mm.tiles[i] === Tile.Water || mm.tiles[i] === Tile.Rock || mm.trees[i] || mm.blocked[i]) continue;
+      land++;
+      if (foot[i] && !veh[i]) footOnly++;
+      if (!foot[i]) cut++;
+    }
+    // the real steep ground (the gorge's walls, the scarps): the infantry's, not the vehicles' (with the 9-unit relief
+    // only some 6% of the real ground above the plain is that steep: 1.8% of the open land); none cut off for all
+    expect(footOnly / land).toBeGreaterThan(0.012);
+    expect(cut / land).toBeLessThan(0.005);
+    // every ore field, oil derrick, tech site and both bases in the vehicles' reach (both banks: over the bridges)
+    const near = (x: number, y: number, r: number) => {
+      for (let yy = Math.floor(y - r); yy <= y + r; yy++) for (let xx = Math.floor(x - r); xx <= x + r; xx++) if (xx >= 0 && yy >= 0 && xx < mm.w && yy < mm.h && veh[yy * mm.w + xx]) return true;
+      return false;
+    };
+    expect(veh[mm.starts[1].y * mm.w + mm.starts[1].x]).toBe(1);
+    for (const f of mm.oreMines) expect(near(f.x, f.y, 2), `ore ${f.x},${f.y}`).toBe(true);
+    for (const s of neutralSites(mm)) expect(near(s.x + s.w / 2 - 0.5, s.y + s.h / 2 - 0.5, Math.max(s.w, s.h) / 2 + 1), `${s.def} ${s.x},${s.y}`).toBe(true);
+  });
+
   it('builds the villages where the real buildings stand, the streets left open', () => {
     // every OSM building of the window bar greenhouses, sheds by the bases and the game's pieces: some 2000 of 3300
     const v = m.deco?.village ?? [];
@@ -172,7 +218,9 @@ describe('Litani mouth (map frontline)', () => {
       let yard = false;
       for (let y = 0; y < m.h - 4 && !yard; y++)
         for (let x = 0; x < m.w - 4 && !yard; x++) {
-          if (Math.hypot(x + 2 - s.x, y + 2 - s.y) > SHIP_YARD_REACH) continue;
+          // (the north base on its plateau inland: its coast within twice the reach, on its own bank - a second
+          // Construction Yard on the plain below puts the yard down)
+          if (Math.hypot(x + 2 - s.x, y + 2 - s.y) > SHIP_YARD_REACH * (s === m.starts[1] ? 2 : 1)) continue;
           if (!shipSite(m, nav.sea, x, y).ok) continue;
           for (let yy = y; yy < y + 4 && !yard; yy++) for (let xx = x; xx < x + 4; xx++) if (own[yy * m.w + xx]) yard = true;
         }

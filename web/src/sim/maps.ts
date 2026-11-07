@@ -2498,6 +2498,11 @@ export function createLitaniMap(): GameMap {
   // the exaggerated slopes eased where they would be too steep to drive (vehicles take a step of about 0.53 a tile):
   // steps over LT_GRADE between neighbouring vertices relaxed a few times, the highest ground and every ridge, valley
   // and the river's gorge staying where they are (the land only; the sea and the river beds keep their own profiles)
+  // ... except in the hills and the gorge off the roads and tracks: there the real steep ground is eased only to
+  // LT_GRADE_HILL, over the vehicles' limit and under the infantry's (sim/slope.ts MAX_GRADE), so tanks go round by
+  // road while soldiers climb; the roads, tracks, bridges, bases, ore, oil and tech sites and the coastal plain and
+  // valley floors (below LT_HILL_M) keep the vehicles' easing
+  const hill = litaniHills(g);
   {
     const land = new Uint8Array(W1 * (H + 1));
     for (let i = 0; i < land.length; i++) land[i] = D.sea[i] / 4 < -2.5 && D.river[i] / 10 + LT_WIDEN < -1.8 ? 1 : 0;
@@ -2511,7 +2516,7 @@ export function createLitaniMap(): GameMap {
           for (const j of [vx < W ? i + 1 : -1, vy < H ? i + W1 : -1]) {
             if (j < 0 || !land[j]) continue;
             const d = hs[j] - hs[i];
-            const ex = Math.abs(d) - LT_GRADE;
+            const ex = Math.abs(d) - (hill[i] && hill[j] ? LT_GRADE_HILL : LT_GRADE);
             if (ex <= 0) continue;
             const k = Math.sign(d) * ex * 0.5;
             hs[i] += k;
@@ -2928,7 +2933,9 @@ export function createLitaniMap(): GameMap {
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const i = y * W + x;
-        if ((g.tiles[i] === Tile.Grass || g.tiles[i] === Tile.Dirt) && rise(x, y) > LT_ROCK && !roadNear(x, y, 2) && !LT_STARTS.some((st) => Math.hypot(x - st.x, y - st.y) < 14)) g.tiles[i] = Tile.Rock;
+        // (in the hills only ground too steep for the infantry too is bare rock: LT_ROCK_HILL)
+        const hillTile = hill[y * W1 + x] && hill[y * W1 + x + 1] && hill[(y + 1) * W1 + x] && hill[(y + 1) * W1 + x + 1];
+        if ((g.tiles[i] === Tile.Grass || g.tiles[i] === Tile.Dirt) && rise(x, y) > (hillTile ? LT_ROCK_HILL : LT_ROCK) && !roadNear(x, y, 2) && !LT_STARTS.some((st) => Math.hypot(x - st.x, y - st.y) < 14)) g.tiles[i] = Tile.Rock;
       }
   }
   const reserved = (x: number, y: number) =>
@@ -3231,6 +3238,43 @@ export function createLitaniMap(): GameMap {
 
 /** The steepest step (height units) between neighbouring vertices of the exaggerated land, after easing. */
 const LT_GRADE = 0.42;
+/** ... in the hills and the gorge off the roads (litaniHills): over the vehicles' limit, under the infantry's (sim/slope.ts MAX_GRADE 0.53 / 0.83). */
+const LT_GRADE_HILL = 0.72;
+/** Ground below this (metres, real) is the coastal plain and the valley floors: eased for the vehicles everywhere. */
+const LT_HILL_M = 12;
+/** In the hills a tile is bare rock only this steep (rise over the tile): about where the infantry stop too. */
+const LT_ROCK_HILL = 1.6;
+
+/**
+ * The hills and the gorge left steep (per vertex, 1 = keep the real slope up to LT_GRADE_HILL): land above LT_HILL_M
+ * metres, clear of every road and track (OSM, 2.5 tiles), the bridges and their approaches, the bases' pads and
+ * build room, the ore and gem fields, the oil derricks and the tech sites' candidate spots.
+ */
+function litaniHills(g: Grids): Uint8Array {
+  const D = litaniData();
+  const W1 = W + 1;
+  const out = new Uint8Array(W1 * (H + 1));
+  const keep = new Uint8Array(W1 * (H + 1));
+  const disc = (cx: number, cy: number, r: number) => {
+    for (let vy = Math.max(0, Math.floor(cy - r)); vy <= Math.min(H, Math.ceil(cy + r)); vy++)
+      for (let vx = Math.max(0, Math.floor(cx - r)); vx <= Math.min(W, Math.ceil(cx + r)); vx++) if (Math.hypot(vx - cx, vy - cy) <= r) keep[vy * W1 + vx] = 1;
+  };
+  for (const r of D.roads)
+    for (let k = 1; k < r.pts.length; k++) {
+      const [ax, ay] = r.pts[k - 1];
+      const [bx, by] = r.pts[k];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.5));
+      for (let j = 0; j <= n; j++) disc(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n, 2.5);
+    }
+  for (const b of LITANI_BRIDGES) disc(b.x, b.y, 8);
+  for (const st of LT_STARTS) disc(st.x + 0.5, st.y + 0.5, 17);
+  for (const [x, y, r] of LT_ORE) disc(x + 0.5, y + 0.5, r + 3);
+  for (const [x, y] of LT_OILS) disc(x + 1, y + 1, 4);
+  for (const t of LT_TECH) for (const [x, y] of [...t.at, ...(t.at2 ?? [])]) disc(x + 1, y + 1, 4);
+  for (let i = 0; i < out.length; i++) out[i] = !keep[i] && D.elev[i] / 10 > LT_HILL_M ? 1 : 0;
+  void g;
+  return out;
+}
 /** Ground steeper than this (height rise over a tile, after the vertical exaggeration) is bare rock. */
 const LT_ROCK = 1.25;
 /**
@@ -3258,10 +3302,14 @@ const ltRound = (h: { x: number; y: number; hl: number; hw: number; ang: number 
 const LT_HOUSE_K = 1.3;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
 const LT_HOUSE_MIN = 18;
-/** Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen), player 1 on the north bank (the top). */
+/**
+ * Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen); player 1, the defender, on the north
+ * bank's plateau at the top (the real hilltop, 4.7 units up, 1.5 over the ground round it): its attackers come over
+ * the river's bridges and up the few roads, the slopes off them the infantry's (litaniHills).
+ */
 const LT_STARTS: Point[] = [
   { x: 82, y: 132 },
-  { x: 28, y: 38 },
+  { x: 48, y: 10 },
 ];
 /** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
 const LT_ORE: [number, number, number, number][] = [
@@ -3272,11 +3320,11 @@ const LT_ORE: [number, number, number, number][] = [
   [58, 106, 2.6, 2],
   [112, 132, 3.0, 1],
   [134, 94, 3.0, 1],
-  // north bank (player 1): two by the base, gems on the plain by the river, one out on the coastal plain, one up in
-  // the north-eastern hills
+  // north bank (player 1): two by the plateau base, gems and one more on the slopes and the plain below it to the
+  // south-west, one up in the north-eastern hills
   [38, 18, 3.4, 1],
-  [12, 42, 3.2, 1],
-  [46, 62, 2.6, 2],
+  [22, 38, 3.2, 1],
+  [28, 26, 2.6, 2],
   [60, 30, 3.0, 1],
   [88, 34, 3.0, 1],
 ];
@@ -3285,8 +3333,8 @@ const LT_OILS: [number, number][] = [
   [70, 140],
   [104, 110],
   [132, 78],
-  [12, 16],
-  [48, 38],
+  [40, 2],
+  [27, 15],
   [86, 50],
 ];
 /** Capturable tech sites: as many of each on either bank (at: the south bank's candidates, at2: the north bank's). */
@@ -3294,18 +3342,18 @@ const LT_TECH: NonNullable<GameMap['techSites']> = [
   {
     def: 'tech_hospital',
     at: [[66, 142], [58, 140], [62, 144], [56, 144]],
-    at2: [[8, 22], [10, 26], [6, 18], [12, 30]],
+    at2: [[23, 7], [20, 8], [22, 12], [27, 9]],
   },
   {
     def: 'tech_comms',
     at: [[124, 126], [122, 128], [126, 132], [120, 134]],
     at2: [[66, 30], [56, 22], [62, 32], [68, 26]],
   },
-  // a second field hospital a side: on the coastal plain of the south bank, on the plain by the river on the north
+  // a second field hospital a side: on the coastal plain of the south bank, below the plateau on the north
   {
     def: 'tech_hospital',
     at: [[44, 146], [48, 142], [40, 140], [52, 146]],
-    at2: [[22, 66], [26, 70], [18, 62], [30, 72]],
+    at2: [[33, 26], [32, 28], [30, 23], [33, 33]],
   },
   // the bigger window's fourth pair (as the Sinai's 208 x 208 has): a second comms tower a side, up in the hills
   {

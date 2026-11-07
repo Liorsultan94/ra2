@@ -302,13 +302,13 @@ describe('airbase determinism', () => {
     });
     w.controllers.push(new AIController(w, 0, 'hard'), new AIController(w, 1, 'hard'));
     // both sides start with a full airbase so the AI flies sorties from the first minute
-    // (on the 152 window, by each side's own base: the old 104 window's spots moved onto the same ground, far from the
-    // bigger map's bases, gave only 2 releases in the three minutes)
+    // (on the 152 window, by each side's own base - the north one on its plateau: the old 104 window's spots moved
+    // onto the same ground, far from the bigger map's bases, gave only 2 releases in the three minutes)
     const a0 = w.spawnBuilding('usa_airfield', 0, 68, 122, true);
-    const a1 = w.spawnBuilding('israel_airfield', 1, 36, 40, true);
+    const a1 = w.spawnBuilding('israel_airfield', 1, 50, 18, true);
     // a spare airbase each: the AI goes for the enemy airbase first, its jets divert to the spare
     w.spawnBuilding('usa_airfield', 0, 74, 114, true);
-    w.spawnBuilding('israel_airfield', 1, 42, 46, true);
+    w.spawnBuilding('israel_airfield', 1, 40, 22, true);
     for (const [af, def] of [
       [a0, 'usa_fighter'],
       [a1, 'israel_fighter'],
