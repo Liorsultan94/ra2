@@ -11,6 +11,14 @@ import { WX } from './wxuniforms';
 import { strataLinear, strataMean } from './strata';
 import { GroundAO } from './groundao';
 
+/** The Litani mouth's baked relief shading: the sun's direction (towards it: map -x, the north-west on screen, 40 degrees up). */
+const HS_LX = -Math.cos((40 * Math.PI) / 180);
+const HS_LY = 0;
+const HS_LZ = Math.sin((40 * Math.PI) / 180);
+/** ...and the ring of points round each ground point its hollow / crest is measured against (2.5 tiles). */
+const HS_RX = Array.from({ length: 8 }, (_, q) => Math.cos((q * Math.PI) / 4) * 2.5);
+const HS_RY = Array.from({ length: 8 }, (_, q) => Math.sin((q * Math.PI) / 4) * 2.5);
+
 /*
  * Ground: a height-blended splat material. Low resolution control maps
  * (painted on the CPU from the map + scenery layout) choose between five
@@ -930,8 +938,9 @@ export class Ground {
           // the Litani mouth's height bands (the owner's design guide, table 4): the low plain and the river banks rich
           // green, dark alluvial soil by the river; on the mid slopes the steep parts bare white-yellow limestone; the
           // highest ground grey rock with darker grass between (soft blends by height and steepness)
-          const mid = smooth(0.5, 1.4, h0) * (1 - smooth(3.6, 4.8, h0));
-          const high = smooth(3.8, 5.2, h0);
+          // (the bands' heights in units of the 14-unit relief: sim/maps.ts LT_TOP)
+          const mid = smooth(0.8, 2.2, h0) * (1 - smooth(5.6, 7.5, h0));
+          const high = smooth(5.9, 8.1, h0);
           // (steep: the bare rock layer, or a hillside steeper than about one in six)
           const steep = Math.max(rock, smooth(0.04, 0.12, slope) * 0.85);
           const lime = steep * mid;
@@ -950,6 +959,33 @@ export class Ground {
           r *= 1 - alluv * 0.28;
           g *= 1 - alluv * 0.25;
           b *= 1 - alluv * 0.2;
+          // the elevation tint, soft-blended: the lush green plain, drier olive and khaki on the mid hills, pale
+          // limestone and grey on the highest ground
+          const olive = smooth(1.2, 4.2, h0) * (1 - smooth(7.5, 10.5, h0));
+          r *= 1 + olive * 0.12;
+          g *= 1 + olive * 0.03;
+          b *= 1 - olive * 0.14;
+          const pale = smooth(7, 11.5, h0);
+          r += (1.08 - r) * pale * 0.45;
+          g += (1.04 - g) * pale * 0.45;
+          b += (0.94 - b) * pale * 0.45;
+          // the relief shaded in, as a relief map is: the sun from the north-west (screen up-left: map -x), 40 degrees
+          // up; slopes away from it darker, slopes towards it brighter; hollows, valleys and the gorge a little darker,
+          // ridges and crests a little lighter (the ground beside them, 2.5 tiles round)
+          const e = 0.35;
+          const gx = (groundHeight(m, x + e, y) - groundHeight(m, x - e, y)) / (2 * e);
+          const gy = (groundHeight(m, x, y + e) - groundHeight(m, x, y - e)) / (2 * e);
+          const nl = Math.hypot(gx, gy, 1);
+          const lam = (-gx * HS_LX - gy * HS_LY + HS_LZ) / nl;
+          const hs = Math.max(-0.55, Math.min(0.35, (lam - HS_LZ) * 1.9));
+          let around = 0;
+          for (let q = 0; q < 8; q++) around += groundHeight(m, x + HS_RX[q], y + HS_RY[q]);
+          const rel = h0 - around / 8;
+          const ao = rel < 0 ? -Math.min(0.28, -rel * 0.22) : Math.min(0.14, rel * 0.1);
+          const kk = 1 + hs + ao;
+          r *= kk;
+          g *= kk;
+          b *= kk * (hs < 0 ? 1.04 : 1);
         }
         tint[o] = Math.min(255, r * 127.5);
         tint[o + 1] = Math.min(255, g * 127.5);
