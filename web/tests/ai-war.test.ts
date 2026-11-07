@@ -44,9 +44,9 @@ describe('war doctrines (AI2)', () => {
       let arty = 0;
       let all = 0;
       let preps = 0;
-      // (seeds 4, 6, 7: on the Litani's 152-tile window the guns' preparation is not drawn in every game - seeds 6 and 7
-      // of 1-9 prepare one of the first two attacks; seeds 5 and 9 end before the second)
-      for (const seed of [4, 6, 7]) {
+      // (seeds 5, 7, 10: on the Litani's 152-tile window, with its villages, the guns' preparation is not drawn in
+      // every game - seeds 4, 5, 7, 9, 10 and 11 of 1-12 prepare one of the first two attacks)
+      for (const seed of [5, 7, 10]) {
         const w = world('usa', 'russia', seed);
         const pt = peaceTicks('hard', 'auto');
         const ai = new AIController(w, 1, 'hard', { peaceTicks: pt }) as AnyAI;

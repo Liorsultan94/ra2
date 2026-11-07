@@ -135,6 +135,24 @@ describe('Litani mouth (map frontline)', () => {
       }
   });
 
+  it('builds the villages where the real buildings stand, the streets left open', () => {
+    // every OSM building of the window bar greenhouses, sheds by the bases and the game's pieces: some 2000 of 3300
+    const v = m.deco?.village ?? [];
+    expect(v.length).toBeGreaterThan(1800);
+    for (const h of v) {
+      expect(h.x > 0 && h.y > 0 && h.x < m.w && h.y < m.h).toBe(true);
+      expect(h.hl).toBeGreaterThanOrEqual(h.hw);
+    }
+    // no road is built over: every point along the paved roads stays passable
+    for (const r of m.roads)
+      for (let k = 1; k < r.length; k++)
+        for (let t = 0; t <= 1; t += 0.1) {
+          const x = Math.floor(r[k - 1].x + (r[k].x - r[k - 1].x) * t + 0.5);
+          const y = Math.floor(r[k - 1].y + (r[k].y - r[k - 1].y) * t + 0.5);
+          if (x >= 0 && y >= 0 && x < m.w && y < m.h) expect(m.blocked[y * m.w + x], `road at ${x},${y}`).toBe(0);
+        }
+  });
+
   it('gives both bases room to build, and a coast for a shipyard', () => {
     for (const s of m.starts) {
       let ok = 0;

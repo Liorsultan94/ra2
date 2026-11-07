@@ -93,12 +93,13 @@ describe('engineer capture behavior', () => {
       ],
     });
 
-    const bld = w.spawnBuilding('usa_refinery', 0, 52, 100);
+    // (on the open plain by the south base: the old spot, 52, 100, lies in Qasmiyeh now that its houses stand there)
+    const bld = w.spawnBuilding('usa_refinery', 0, 74, 128);
     bld.hp = Math.floor(bld.maxHp * 0.4); // heavily damaged
     expect(bld.hp).toBeLessThan(bld.maxHp);
 
-    const eng1 = w.spawnUnit('usa_engineer', 0, 52, 97);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 52, 96);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 74, 125);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 74, 124);
 
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
 

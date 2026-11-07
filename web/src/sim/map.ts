@@ -97,6 +97,12 @@ export interface MapDeco {
    */
   plots?: { cx: number; cy: number; hl: number; hw: number; ang: number; crop?: 'orchard' | 'greenhouse' }[];
   /**
+   * The villages' buildings where real ones stand (the Litani mouth: every OSM building, render/village.ts): centre
+   * (continuous map coordinates), half length along `ang` and half width (tiles, at game scale), heading (radians).
+   * Their ground is impassable (`blocked`) bar the streets; render hints otherwise (no entities).
+   */
+  village?: { x: number; y: number; hl: number; hw: number; ang: number }[];
+  /**
    * The river's course downstream (continuous map coordinates), when the map knows it (the Litani's real course,
    * meanders and all): the water renderer follows it instead of guessing a straight axis (render/water.ts RiverInfo).
    */

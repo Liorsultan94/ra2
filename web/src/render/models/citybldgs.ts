@@ -6,6 +6,7 @@ import { onFogRelease } from '../fogcache';
 import { GeoBuilder, type SceneryLod } from '../geo';
 import { surfaceHeight } from '../ground';
 import type { ChimneyTop, HouseHandle } from '../scenery';
+import { isVillageStructure } from '../village';
 import { onBuildingPhotos, photoTileCanvas, Tile as BTile } from './bldtex';
 import type { Builder } from './registry';
 import type { Model, ModelStyle } from './types';
@@ -1121,7 +1122,8 @@ function ruinWall(c: Chunk, P: Place, len: number, hgt: number, seed: number) {
  */
 export function buildCity(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium' | 'high', sink?: { houses: HouseHandle[] }, lod?: SceneryLod, chimneys?: ChimneyTop[]): THREE.Object3D[] {
   const out: THREE.Object3D[] = [];
-  const city = m.structures.filter((st) => isCityKind(st.kind));
+  // (the Litani mouth's garrison houses are its real buildings: render/village.ts)
+  const city = m.structures.filter((st) => isCityKind(st.kind) && !isVillageStructure(m, st));
   const deco = m.deco;
   if (!city.length && !deco?.lots.length) return out;
   const mats = cityMaterials(fog, quality);

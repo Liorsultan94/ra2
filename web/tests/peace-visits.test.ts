@@ -60,14 +60,19 @@ describe('enemy visits to the player base', () => {
           w.drainEvents();
           if (w.tick % 10) continue;
           const [px, py] = centre(w);
+          // (during the grace, the base's own structures: a village house or mosque its infantry hold is out in the
+          // village, not the base - on the Litani mouth player 0's garrison in Qasmiyeh's mosque, 28 tiles off, stands by
+          // the road the scouts take)
           const mine = w.list.filter((e) => !e.dead && e.owner === 0 && e.kind === 'building');
+          const home = mine.filter((e) => !buildingDef(e.def).garrison);
           for (const e of w.list) {
             if (e.dead || e.owner !== 1 || e.kind !== 'unit' || e.inside >= 0 || unitDef(e.def).temp) continue;
             const d = Math.hypot(e.x - px, e.y - py);
             const near = d <= BASE_R || mine.some((m) => Math.hypot(m.x - e.x, m.y - e.y) <= BUILDING_R);
+            const nearHome = d <= BASE_R || home.some((m) => Math.hypot(m.x - e.x, m.y - e.y) <= BUILDING_R);
             const tag = `${(w.tick / TPS).toFixed(0)}s ${e.def} (${role.get(e.id) ?? 'army'}, ${e.order.type}) ${d.toFixed(1)} tiles`;
             if (w.tick < peace) {
-              if (near) inPeace.push(tag);
+              if (nearHome) inPeace.push(tag);
             } else if (role.get(e.id) === 'scout') {
               if (d <= SCOUT_R) scoutsDeep.push(tag);
             } else if (near && attack < 0) attack = w.tick;

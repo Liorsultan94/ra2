@@ -226,8 +226,9 @@ describe('emergency vehicle routes', () => {
 describe('fear: civilians and herds', () => {
   async function civ(id: MapId) {
     // (the ambient life rolls Math.random: seeded here so the herds and walkers are the same every run;
-    // some rolls give frontline no shepherded flock to test, this one does)
-    let seed = 7;
+    // some rolls give frontline no shepherded flock to test, this one does - seed 3 since the Litani's villages
+    // stand where the real buildings do: seed 7's flock is gone)
+    let seed = 3;
     const rnd = vi.spyOn(Math, 'random').mockImplementation(() => {
       seed = (seed + 0x6d2b79f5) | 0;
       let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
