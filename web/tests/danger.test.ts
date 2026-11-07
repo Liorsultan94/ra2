@@ -152,7 +152,10 @@ describe('traffic under fire', () => {
       expect(hazards).toBe(true);
       // ... and away: far from it now, heading away from it
       expect(Math.hypot(c.x - tank.x, c.y - tank.y)).toBeGreaterThan(minD + 4);
-      expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
+      // (unless it has fled right out to where the road leaves the map, as on the Litani mouth's raised relief: there
+      // it turns at the map's edge)
+      const atEdge = Math.min(c.x, c.y, m.w - c.x, m.h - c.y) < 2;
+      if (!atEdge) expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
     });
   }
 

@@ -3238,16 +3238,16 @@ const LT_ROCK = 1.25;
  * clear height differences"): metres above sea level -> height units over the coastline. About 1:1 (LT_M metres a
  * unit) on the coastal plain, steepening smoothly to 1.75 : 1 from 8 m up to 45 m and above; monotonic, so every
  * ridge, valley and the river's gorge keep their real shape and order. The whole curve is scaled by LT_LIFT_K so the
- * window's top (the hills east of the motorway) stands about 7 units high, as the Sinai's massif does.
+ * window's top (the hills east of the gorge) stands about 9 units high.
  */
 export function litaniLift(m: number) {
   return LT_LIFT_K * (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
 }
 /**
- * Scale of the relief curve: the first window's top (142.5 m) stood 7.1 units high; the window grown east to 152
- * tiles takes in the real hills to 257.3 m (the baked heights), the curve scaled so the top still stands 7.1 units high.
+ * Scale of the relief curve: the window grown east to 152 tiles takes in the real hills to 257.3 m (the baked
+ * heights); the top stands 9 units high (it stood 7.1 on the 104 window), so the low hills keep their contrast.
  */
-const LT_LIFT_K = 142.5 / 257.3;
+const LT_LIFT_K = 9 / ((257.3 / LT_M) * 1.75);
 /** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
 const LT_APPROACH = 1.2;
 /** The garrison houses' kinds on the Litani mouth (their footprints made of the real buildings there: render/village.ts). */

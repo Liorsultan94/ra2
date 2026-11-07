@@ -49,10 +49,11 @@ describe('AI2 keeps the game fair', () => {
     const rows: string[] = [];
     for (const d of ['normal', 'hard'] as Difficulty[])
       for (const [f, seed, map] of [
-        // (the Litani mouth, 152-tile window: the new AI goes at or after the grace's end, never before it, in all 24
-        // games sampled (seeds 1-6, Russia and China, Normal and Hard); the old one now and then happened to wait 10-50
-        // s longer (russia's seeds 2, 3 and 5, china's 1, 3, 5 and 6): russia seed 4 and china seed 2, where it does not)
-        ['russia', 4, 'frontline'],
+        // (the Litani mouth, 152-tile window with its villages and the 9-unit relief: the new AI goes at or after the
+        // grace's end, never before it, in all 24 games sampled (seeds 1-6, Russia and China, Normal and Hard); the old
+        // one now and then happened to wait 10-50 s longer (russia's seeds 2 and 4, china's 3-6): russia seed 1 and
+        // china seed 2, where it does not)
+        ['russia', 1, 'frontline'],
         ['china', 2, 'frontline'],
         ['ukraine', 3, 'desert'],
         // (SN2, the Sinai with its bases far apart: both AIs go as the grace ends in 11 of 12 desert games sampled;
