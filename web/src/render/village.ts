@@ -17,7 +17,7 @@ import type { HouseHandle } from './scenery';
  * rebar waiting on the roof.
  *
  * Cheap enough for the phone: each house is a handful of boxes (walls with a window texture, a roof slab or a tile
- * roof; ~30 triangles), its roof clutter and balconies a few more (~80) in a detail mesh hidden at far zoom
+ * roof; ~30 triangles), its roof clutter and balconies more (~150) in a detail mesh hidden at far zoom
  * (SceneryLod). Merged per CHUNK-tile square into three meshes each (walls, tile roofs, detail), frustum-culled per
  * chunk: a dozen draw calls on screen for some 3000 houses.
  */
@@ -25,9 +25,9 @@ import type { HouseHandle } from './scenery';
 /** Chunk size (tiles) of the merged village meshes. */
 const CHUNK = 32;
 /** Storey height (height units; a tile's width is one). */
-const STOREY = 0.12;
+const STOREY = 0.19;
 /** A window bay's width along a wall (world units). */
-const BAY = 0.085;
+const BAY = 0.11;
 /** The roof clutter and balconies are hidden once the view spans more than this (world units), as the desert town's kit. */
 const DETAIL_SPAN = 30;
 
@@ -35,7 +35,7 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 const C = (hex: number) => new THREE.Color(hex);
 
 /** Render plaster: cream, off-white, beige, sand, pale yellow, pale pink, light grey; the last, grey block, unpainted. */
-const WALLS = [0xecdcbc, 0xf2ede2, 0xdcc49a, 0xe4c99a, 0xf0dca6, 0xeac2b0, 0xd2cbbd, 0xe8d3b0, 0xf3e6cf, 0xa9a59b];
+const WALLS = [0xecdcbc, 0xf2ede2, 0xdcc49a, 0xe4c99a, 0xf0dca6, 0xeac2b0, 0xe9b9a8, 0xd2cbbd, 0xe8d3b0, 0xf3e6cf, 0xf0cfc0, 0xa9a59b];
 const TILES = [0xb5532e, 0xc0663a, 0xa84a2a, 0xc8703f];
 const TANKS = [0x2a2a2a, 0xe6e6e2, 0x3a6ea8, 0xd8cdb0, 0x2a2a2a];
 
@@ -56,18 +56,18 @@ function facadeTexture(px: number): THREE.Texture {
       const v = 1 - y / px;
       const g = 0.86 + (hash2(x, y, 77) - 0.5) * 0.06;
       let rgb = [g, g, g];
-      const win = u > 0.24 && u < 0.76 && v > 0.26 && v < 0.82;
-      const glass = u > 0.28 && u < 0.72 && v > 0.3 && v < 0.78;
+      const win = u > 0.17 && u < 0.83 && v > 0.26 && v < 0.82;
+      const glass = u > 0.21 && u < 0.79 && v > 0.3 && v < 0.78;
       if (win) rgb = [0.96, 0.96, 0.95];
       if (glass) {
         const gl = 0.13 + v * 0.1 + (u > 0.49 && u < 0.51 ? 0.4 : 0);
         rgb = [gl, gl * 1.05, gl * 1.12];
         // (the second bay: louvred shutters drawn halfway across)
-        if (bay && (u < 0.4 || u > 0.6)) {
+        if (bay && (u < 0.37 || u > 0.63)) {
           const slat = Math.floor(v * 40) % 2 ? 0.9 : 0.75;
           rgb = (x >> 4) % 3 ? [0.36 * slat, 0.44 * slat, 0.34 * slat] : [0.46 * slat, 0.34 * slat, 0.24 * slat];
         }
-      } else if (u > 0.21 && u < 0.79 && v > 0.22 && v <= 0.26) rgb = [0.97, 0.97, 0.96];
+      } else if (u > 0.14 && u < 0.86 && v > 0.22 && v <= 0.26) rgb = [0.97, 0.97, 0.96];
       // (the floor slab's line)
       if (v < 0.04) rgb = rgb.map((q) => q * 0.84);
       const o = (y * px * 2 + x) * 4;
@@ -231,9 +231,9 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const area = 4 * h.hl * h.hw;
   // two to four storeys mostly; the small ones (sheds, a single room) one or two
   const rs = r(1);
-  let storeys = rs < 0.12 ? 1 : rs < 0.45 ? 2 : rs < 0.86 ? 3 : 4;
-  if (area < 0.08) storeys = Math.min(storeys, 2);
-  if (area > 0.5 && storeys < 3) storeys++;
+  let storeys = rs < 0.06 ? 1 : rs < 0.36 ? 2 : rs < 0.8 ? 3 : 4;
+  if (area < 0.05) storeys = Math.min(storeys, 2);
+  if (area > 0.4 && storeys < 3) storeys++;
   storeys = Math.max(storeys, minStoreys);
   const H = storeys * STOREY;
   const L = 2 * h.hl;
@@ -253,8 +253,8 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const top = H;
   if (roof < 0.32) {
     // a low hipped roof of clay tiles over the top floor, a little overhang
-    const ov = 0.025;
-    const rise = Math.min(0.09, D * 0.35);
+    const ov = 0.03;
+    const rise = Math.min(0.13, D * 0.4);
     const x0 = -L / 2 - ov;
     const x1 = L / 2 + ov;
     const z0 = -D / 2 - ov;
@@ -286,45 +286,66 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
     // a flat concrete roof, its slab edge standing proud of the walls
     box(ch.walls, f, 0, top + 0.012, 0, L + 0.02, 0.024, D + 0.02, C(0xcbc6bb).multiplyScalar(0.92 + r(8) * 0.1));
     const ry = top + 0.024;
-    // water tanks (one to three: black plastic, white, blue, beige), a solar water heater (a tilted panel and its
-    // tank) on half of them, a stair head on some
+    // water tanks on low stands (one to three: black plastic, white, blue, beige), a solar water heater (a tilted
+    // panel and its tank) on most, the stair or lift head on most
     const nt = 1 + Math.floor(r(9) * 3);
     for (let k = 0; k < nt; k++) {
-      const tx = (r(10 + k) - 0.5) * Math.max(0, L - 0.08);
-      const tz = (r(13 + k) - 0.5) * Math.max(0, D - 0.08);
-      drum(ch.detail, f, tx, ry, tz, 0.022, 0.04, C(TANKS[Math.floor(r(16 + k) * TANKS.length)]));
+      const tx = (r(10 + k) - 0.5) * Math.max(0, L - 0.1);
+      const tz = (r(13 + k) - 0.5) * Math.max(0, D - 0.1);
+      box(ch.detail, f, tx, ry + 0.008, tz, 0.06, 0.016, 0.06, C(0x8a857c));
+      drum(ch.detail, f, tx, ry + 0.016, tz, 0.028, 0.055, C(TANKS[Math.floor(r(16 + k) * TANKS.length)]));
     }
-    if (r(20) < 0.5 && L > 0.14) {
+    if (r(20) < 0.62 && L > 0.14) {
       const sx = (r(21) - 0.5) * (L - 0.12);
-      const sz = -D / 2 + 0.05;
-      const pm = f.clone().multiply(new THREE.Matrix4().compose(V(sx, ry + 0.025, sz), new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -0.7), V(1, 1, 1)));
-      box(ch.detail, pm, 0, 0, 0, 0.07, 0.004, 0.05, C(0x23314a));
-      box(ch.detail, f, sx, ry + 0.045, sz + 0.03, 0.08, 0.018, 0.018, C(0xdedbd2));
+      const sz = -D / 2 + 0.06;
+      const pm = f.clone().multiply(new THREE.Matrix4().compose(V(sx, ry + 0.035, sz), new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), -0.7), V(1, 1, 1)));
+      box(ch.detail, pm, 0, 0, 0, 0.09, 0.005, 0.065, C(0x23314a));
+      box(ch.detail, f, sx, ry + 0.065, sz + 0.04, 0.1, 0.024, 0.024, C(0xdedbd2));
+      for (const ex of [-0.04, 0.04]) box(ch.detail, f, sx + ex, ry + 0.03, sz + 0.035, 0.006, 0.06, 0.006, C(0x707070));
     }
-    if (r(22) < 0.4 && L > 0.16 && D > 0.12) box(ch.walls, f, L / 2 - 0.045, ry + 0.035, D / 2 - 0.045, 0.07, 0.07, 0.07, wallC, () => [0.04, 0.1]);
-    // the next storey still to come: its columns, rebar sticking out of them
-    if (roof > 0.86 && L > 0.16) {
+    // (the stair or lift head: a small room on the roof with its door)
+    if (r(22) < 0.75 && L > 0.14 && D > 0.11) {
+      const hx = (r(23) < 0.5 ? -1 : 1) * (L / 2 - 0.055);
+      const hz = D / 2 - 0.05;
+      box(ch.walls, f, hx, ry + 0.065, hz, 0.1, 0.13, 0.09, wallC, () => [0.04, 0.1]);
+      box(ch.detail, f, hx, ry + 0.045, hz + 0.0455, 0.035, 0.08, 0.003, C(0x4a4038));
+      box(ch.detail, f, hx, ry + 0.133, hz, 0.11, 0.008, 0.1, C(0xcbc6bb));
+    }
+    // a low parapet round the roof's edge on some
+    if (r(24) < 0.45) {
+      const pc = wallC.clone().multiplyScalar(0.97);
+      box(ch.detail, f, 0, ry + 0.018, D / 2 + 0.004, L + 0.02, 0.036, 0.012, pc);
+      box(ch.detail, f, 0, ry + 0.018, -D / 2 - 0.004, L + 0.02, 0.036, 0.012, pc);
+      box(ch.detail, f, L / 2 + 0.004, ry + 0.018, 0, 0.012, 0.036, D, pc);
+      box(ch.detail, f, -L / 2 - 0.004, ry + 0.018, 0, 0.012, 0.036, D, pc);
+    }
+    // the next storey still to come: its columns a storey high, the rebar sticking out of them
+    if (roof > 0.84 && L > 0.16) {
       const rebar = C(0x5a4a3c);
       const col = C(0xb3ada2);
-      for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-        const px = cx * (L / 2 - 0.015);
-        const pz = cz * (D / 2 - 0.015);
-        box(ch.detail, f, px, ry + 0.03, pz, 0.022, 0.06, 0.022, col);
-        box(ch.detail, f, px, ry + 0.075, pz, 0.004, 0.03, 0.004, rebar);
-      }
+      const nx = L > 0.4 ? 3 : 2;
+      for (let i = 0; i < nx; i++)
+        for (const cz of [-1, 1]) {
+          const px = -L / 2 + 0.018 + (i * (L - 0.036)) / (nx - 1);
+          const pz = cz * (D / 2 - 0.018);
+          box(ch.detail, f, px, ry + STOREY * 0.35, pz, 0.026, STOREY * 0.7, 0.026, col);
+          for (const o of [-0.007, 0.007]) box(ch.detail, f, px + o, ry + STOREY * 0.7 + 0.025, pz, 0.004, 0.05, 0.004, rebar);
+        }
     }
   }
-  // balconies along the long side on the upper floors: a slab and an iron railing
-  if (storeys >= 2 && r(25) < 0.65 && L > 0.14) {
-    const bw = L * (0.55 + r(26) * 0.35);
+  // long balconies along the long side on the upper floors: a slab and an iron or concrete railing
+  if (storeys >= 2 && r(25) < 0.8 && L > 0.14) {
+    const bw = L * (0.7 + r(26) * 0.28);
     const bx = (r(27) - 0.5) * (L - bw);
-    const sides = r(28) < 0.35 ? [-1, 1] : [r(29) < 0.5 ? -1 : 1];
-    const rail = C(r(30) < 0.5 ? 0x2e2e30 : 0xd8d6d0);
+    const sides = r(28) < 0.4 ? [-1, 1] : [r(29) < 0.5 ? -1 : 1];
+    const solid = r(30) < 0.35;
+    const rail = solid ? wallC.clone().multiplyScalar(0.95) : C(r(31) < 0.6 ? 0x2e2e30 : 0xd8d6d0);
     for (const s of sides)
       for (let k = 1; k < storeys; k++) {
         const y = k * STOREY;
-        box(ch.detail, f, bx, y + 0.006, s * (D / 2 + 0.018), bw, 0.012, 0.036, C(0xd5d0c6));
-        box(ch.detail, f, bx, y + 0.028, s * (D / 2 + 0.035), bw, 0.032, 0.003, rail);
+        box(ch.detail, f, bx, y + 0.008, s * (D / 2 + 0.025), bw, 0.016, 0.05, C(0xd5d0c6));
+        box(ch.detail, f, bx, y + 0.042, s * (D / 2 + 0.048), bw, 0.052, solid ? 0.008 : 0.004, rail);
+        if (!solid) for (const e of [-1, 1]) box(ch.detail, f, bx + (e * bw) / 2, y + 0.042, s * (D / 2 + 0.025), 0.004, 0.052, 0.05, rail);
       }
   }
   return gy;
