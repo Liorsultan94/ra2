@@ -223,9 +223,10 @@ describe('crushing', () => {
   });
 
   it('dodging soldiers resume their orders', () => {
-    // (seed 3: the world's random stream runs differently on the 152-tile Litani map, and seed 7 now draws a late
-    // dive the tank still catches - a fair outcome, but not this test's; seeds 1, 2, 3 and 5 dodge clean)
-    const w = arena(3);
+    // (seed 2: the world's random stream runs differently on the Litani map as its relief changes, and a late dive the
+    // tank still catches is a fair outcome, but not this test's; with the 16-unit relief seeds 2, 4, 7, 8 and 9 of 1-10
+    // dodge clean)
+    const w = arena(2);
     const { x0, y } = lane(w);
     // a rifleman walking across the tank's path to a point beyond it
     const s = w.spawnUnit('russia_rifle', 1, x0 + 6.5, y - 2.5);

@@ -42,11 +42,11 @@ const run = (w: World, ticks: number, onEv?: (e: SimEvent) => void) => {
 };
 
 /**
- * A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 62,112 on the 152-tile window; at 56,66
- * on the 104 window; on the old map 35,67) and riflemen next to it.
+ * A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 62,113 with the 16-unit relief; 62,112
+ * before; at 56,66 on the 104 window; on the old map 35,67) and riflemen next to it.
  */
 const HX = 62;
-const HY = 112;
+const HY = 113;
 function garrisonSetup(w: World, n = 6, def = 'usa_rifle') {
   const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === HX && h.ty === HY)!;
   const units: Entity[] = [];

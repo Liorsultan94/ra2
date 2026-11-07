@@ -2507,7 +2507,7 @@ export function createLitaniMap(): GameMap {
     const land = new Uint8Array(W1 * (H + 1));
     for (let i = 0; i < land.length; i++) land[i] = D.sea[i] / 4 < -2.5 && D.river[i] / 10 + LT_WIDEN < -1.8 ? 1 : 0;
     const hs = g.heights;
-    for (let it = 0; it < 40; it++) {
+    for (let it = 0; it < 160; it++) {
       let moved = 0;
       for (let vy = 0; vy <= H; vy++)
         for (let vx = 0; vx <= W; vx++) {
@@ -3334,11 +3334,13 @@ const LT_ROCK = 1.25;
 export function litaniLift(m: number) {
   return LT_LIFT_K * (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
 }
+/** The relief's top (height units): the real top, 257.3 m, stands this high (9 before, 7.1 on the 104 window). */
+const LT_TOP = 16;
 /**
  * Scale of the relief curve: the window grown east to 152 tiles takes in the real hills to 257.3 m (the baked
- * heights); the top stands 9 units high (it stood 7.1 on the 104 window), so the low hills keep their contrast.
+ * heights); the top stands LT_TOP units high, so the hills and the gorge stand out in 3D from the game's camera.
  */
-const LT_LIFT_K = 9 / ((257.3 / LT_M) * 1.75);
+const LT_LIFT_K = LT_TOP / ((257.3 / LT_M) * 1.75);
 /** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
 const LT_APPROACH = 1.2;
 /** The garrison houses' kinds on the Litani mouth (their footprints made of the real buildings there: render/village.ts). */
@@ -3393,8 +3395,8 @@ const LT_TECH: NonNullable<GameMap['techSites']> = [
   },
   {
     def: 'tech_comms',
-    at: [[124, 126], [122, 128], [126, 132], [120, 134]],
-    at2: [[66, 30], [56, 22], [62, 32], [68, 26]],
+    at: [[122, 136], [120, 139], [116, 135], [119, 139]],
+    at2: [[65, 29], [65, 30], [53, 25], [53, 22]],
   },
   // a second field hospital a side: on the coastal plain of the south bank, below the plateau on the north
   {
@@ -3406,7 +3408,7 @@ const LT_TECH: NonNullable<GameMap['techSites']> = [
   {
     def: 'tech_comms',
     at: [[138, 106], [136, 110], [142, 108], [134, 112]],
-    at2: [[94, 42], [96, 40], [92, 44], [90, 46]],
+    at2: [[91, 42], [92, 40], [90, 44], [93, 38]],
   },
 ];
 

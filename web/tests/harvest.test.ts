@@ -162,8 +162,9 @@ describe('harvesters sharing a field and a refinery', () => {
     const [dx, dy] = dockXY(ref);
     const hs: Entity[] = [];
     // four full harvesters coming home from the field, one behind the other
+    // (from the west: east of the dock the Litani's hill ground, closed to vehicles, comes within 7 tiles)
     for (let i = 0; i < 4; i++) {
-      const h = harvester(w, dx + 7 + i * 1.6, dy + 1.5 + (i % 2) * 1.2);
+      const h = harvester(w, dx - 7 - i * 1.6, dy + 1.5 + (i % 2) * 1.2);
       h.cargo = 900;
       h.hstate = 'toRefinery';
       hs.push(h);
@@ -210,7 +211,8 @@ describe('harvesters sharing a field and a refinery', () => {
     const [dx, dy] = dockXY(ref);
     const hs: Entity[] = [];
     for (let i = 0; i < 4; i++) {
-      const h = harvester(w, dx + 6 + i * 1.6, dy + 1.5 + (i % 2) * 1.2);
+      // (from the west, as above)
+      const h = harvester(w, dx - 6 - i * 1.6, dy + 1.5 + (i % 2) * 1.2);
       h.cargo = 900;
       h.hstate = 'toRefinery';
       hs.push(h);

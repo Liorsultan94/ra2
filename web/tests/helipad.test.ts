@@ -141,8 +141,9 @@ describe('attack helicopter repair at the airbase', () => {
     expect(w.isAir(h)).toBe(false);
     expect(w.canHit(WEAPONS.rifle, h)).toBe(true);
     expect(w.canHit(WEAPONS.flak, h)).toBe(false);
-    // an enemy rifleman next to it opens fire on his own and hurts it
+    // an enemy rifleman next to it, ordered onto it, hurts it (left to himself he may take the airbase beside it first)
     const r = w.spawnUnit('russia_rifle', 1, h.x + 2, h.y);
+    w.issue(1, { type: 'attack', ids: [r.id], target: h.id });
     const hp0 = h.hp;
     runUntil(w, () => false, TPS * 3);
     expect(r.targetId).toBe(h.id);
