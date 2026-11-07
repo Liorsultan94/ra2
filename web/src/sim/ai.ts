@@ -1,6 +1,6 @@
 import { airdropStatus } from './airdrop';
 import { isSortieJet, jetReady } from './airbase';
-import { bridgeTactics } from './bridges';
+import { bankOf, bridgeTactics } from './bridges';
 import { CRUSH_CHASE, isCrushable } from './crush';
 import { DEFS, VERSUS, WEAPONS, airReach, buildingDef, defsForFaction, factionDefByRole, hitsAir, unitDef } from './defs';
 import { DOCTRINES, NO_WAR, type Doctrine, type WarDoctrine } from './doctrine';
@@ -2106,8 +2106,16 @@ export class AIController implements Controller {
   /** Point `k` tiles from a bridge towards our (k > 0) or the enemy's (k < 0) side. */
   private bank(l: { x: number; y: number }, k: number): [number, number] {
     const [hx, hy] = this.home();
-    const dx = hx - l.x;
-    const dy = hy - l.y;
+    let dx = hx - l.x;
+    let dy = hy - l.y;
+    // a deck at another angle than the diagonal (the Litani's, over a meandering river): along the deck, out of the
+    // end on our bank (by land: sim/bridges.ts bankOf), not straight towards home
+    const b = this.world.bridges.find((q) => q.bankAt && Math.abs(q.x - l.x) < 0.01 && Math.abs(q.y - l.y) < 0.01);
+    if (b) {
+      const e = b.ends[bankOf(b, hx, hy)];
+      dx = e.x - b.x;
+      dy = e.y - b.y;
+    }
     const len = Math.hypot(dx, dy) || 1;
     const x = l.x + (dx / len) * k;
     const y = l.y + (dy / len) * k;

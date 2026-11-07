@@ -1,4 +1,4 @@
-import { Tile, WATER_LEVEL, designScale, type GameMap } from '../../sim/map';
+import { Tile, WATER_LEVEL, type GameMap } from '../../sim/map';
 import { sinaiPoint } from '../../sim/maps';
 import { roadClear } from '../ambient/clearance';
 import { surfaceHeight } from '../ground';
@@ -280,7 +280,7 @@ function hh(a: number, b: number, c = 0): number {
 function buildPlan(m: GameMap): LandmarkPlan {
   switch (m.id) {
     case 'frontline':
-      return frontline(m);
+      return litani();
     case 'desert':
       return desert(m);
     case 'winter':
@@ -295,62 +295,12 @@ function buildPlan(m: GameMap): LandmarkPlan {
 /** Rail x just past the west edge (and its mirror past the east edge). */
 const RAIL_X = -1.7;
 
-function frontline(m: GameMap): LandmarkPlan {
-  const W = m.w;
-  const H = m.h;
-  const spots: Spot[] = [];
-  // the layout is drawn on 96 x 96 tiles (sim/map.ts designScale): along the edges the run of the
-  // map scales, the distance out from the edge stays, and the station village moves as one
-  const D = designScale(W);
-  const dy = D.x;
-  // the highway leaves the map at (0, 71.5) / (96, 24.5) (design): it runs on through a level crossing
-  const hwyY = dy(71.5);
-  const vs = dy(56) - 56;
-  const westVia = [
-    { x: -40, y: 140 },
-    { x: -16, y: 114 },
-    { x: -3.6, y: 97 },
-    { x: RAIL_X, y: 84 },
-    { x: RAIL_X, y: 14 },
-    // (out of the corner westwards: the river leaves the map north-westwards, horizonworld.ts)
-    { x: -3.8, y: 1 },
-    { x: -16, y: -6 },
-    { x: -38, y: -16 },
-    { x: -60, y: -24 },
-  ].map((p) => ({ x: p.x, y: dy(p.y) }));
-  const west = rail(westVia, { crossAt: [{ x: RAIL_X, y: hwyY, roadAng: 0, traffic: true }], stationAt: { x: RAIL_X, y0: 52.5 + vs, y1: 60.5 + vs, side: -1 } });
-  const east = rail(
-    westVia.map((p) => ({ x: W - p.x, y: H - p.y })),
-    { crossAt: [{ x: W - RAIL_X, y: H - hwyY, roadAng: 0, traffic: true }] },
-  );
-  const lanes = [
-    { pts: smoothPath([{ x: -0.05, y: hwyY }, { x: -9, y: hwyY }, { x: -18, y: hwyY + 2.5 }, { x: -30, y: hwyY + 8 }, { x: -46, y: hwyY + 10 }], 3, 0.5), width: 1.05 },
-    { pts: smoothPath([{ x: W + 0.05, y: H - hwyY }, { x: W + 9, y: H - hwyY }, { x: W + 18, y: H - hwyY - 2.5 }, { x: W + 30, y: H - hwyY - 8 }, { x: W + 46, y: H - hwyY - 10 }], 3, 0.5), width: 1.05 },
-    // the village street behind the station
-    { pts: smoothPath([{ x: -9, y: hwyY }, { x: -6.4, y: 64 + vs }, { x: -6.0, y: 54 + vs }, { x: -6.8, y: 44 + vs }], 3, 0.5), width: 0.7 },
-  ];
-  // the station village west of the line
-  spots.push(spot('station', -3.75, 56.5 + vs, 0, 1.6));
-  spots.push(spot('church', -9.6, 50.2 + vs, 0, 2.4));
-  spots.push(spot('watertower', -9.0, 61.5 + vs, 0, 1.2));
-  const houses: [number, number, number][] = [
-    [-4.2, 46.5, Math.PI / 2],
-    [-4.4, 63.6, Math.PI / 2],
-    [-8.6, 66.8, 0],
-    [-4.6, 67.8, Math.PI / 2],
-    [-9.4, 45.0, Math.PI],
-    [-12.6, 56.4, Math.PI / 2],
-    [-12.0, 62.4, -Math.PI / 2],
-    [-13.2, 47.6, 0],
-    [-4.4, 41.6, Math.PI / 2],
-  ];
-  houses.forEach(([x, y, yaw], i) => spots.push(spot('cottage', x, y + vs, yaw, 1.0, hh(i, 3, 11))));
-  // the wind farm on the hills north of the map
-  [[14, -10], [26, -13.5], [38, -9.5], [50, -14], [62, -10], [74, -13.5], [86, -9.5]].forEach(([x, y], i) => spots.push(spot('turbine', D.x(x), y, Math.PI / 2, 1.2, hh(i, 5, 12))));
-  // the castle ruin on the rock ridge south-west of the centre bridge (impassable rock)
-  const castle = D.pt(42, 61);
-  spots.push(spot('castle', castle.x, castle.y, Math.atan2(58 - 64, 44 - 40), 0, 0.37, { inMap: true }));
-  return { spots, rails: [west, east], lanes, camels: [] };
+/**
+ * The Litani mouth (map id 'frontline'): real ground, so no invented set pieces past the edge; its roads run on
+ * out of the map by themselves (horizonworld.ts paths), the river and the sea too.
+ */
+function litani(): LandmarkPlan {
+  return { spots: [], rails: [], lanes: [], camels: [] };
 }
 
 function desert(m: GameMap): LandmarkPlan {

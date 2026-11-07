@@ -17,6 +17,7 @@ import { buildStreetLife } from './streetlife';
 import { sinaiKit } from './sinaikit';
 import { buildSinaiTown, isSinaiKind } from './sinaitown';
 import { TOWN_ACCENTS, TOWN_WALLS, townStyle } from './townstyle';
+import { buildVillage, isVillageStructure } from './village';
 
 /*
  * Man-made scenery: paved roads (terrain-hugging ribbons), bridges, village
@@ -182,6 +183,7 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   // the desert town in the Blender building kit when it loaded (render/sinaitown.ts), else the procedural houses below
   const sinai = bc === 1 ? sinaiKit() : null;
   for (const st of m.structures) {
+    if (isVillageStructure(m, st)) continue; // the Litani's garrison houses: its real buildings there (render/village.ts)
     if (isCityKind(st.kind)) continue; // city blocks: models/citybldgs.ts
     if (sinai && isSinaiKind(st.kind)) continue;
     const from = builders.map((b) => b.count);
@@ -764,6 +766,8 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   built.clear();
 
   if (sinai) out.push(...buildSinaiTown(m, sinai, fog, quality, sink, lod));
+  // the Litani mouth's villages: every real building where it stands (render/village.ts)
+  out.push(...buildVillage(m, fog, quality, tex.roof, lod, sink));
   // city blocks, street lamps, fountains and ruins (urban maps)
   out.push(...buildCity(m, fog, quality, sink, lod, sink ? (sink.chimneys ??= []) : undefined));
   // kerbs, the street market and cafes on the squares (render/streetlife.ts)

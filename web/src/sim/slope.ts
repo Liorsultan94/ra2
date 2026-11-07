@@ -130,6 +130,8 @@ export function slopeField(m: GameMap): SlopeField {
     }
   const ch = new Float32Array(n);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) ch[y * W + x] = tileCentreHeight(m, x, y);
+  const vh = m.vehicleHills ?? null;
+  const vhGrade = m.vehicleHillGrade ?? MAX_GRADE[Loco.Vehicle];
   // orthogonal steps first (diagonals look at them); after each pass the steps of the half with the lower tile
   // indices are made the exact mirror of the other half's (the maps are point symmetric, their heights to within
   // float noise: a step right at a limit must not open on one side and close on the other)
@@ -149,8 +151,10 @@ export function slopeField(m: GameMap): SlopeField {
           const g = head[i] && head[j] ? 0 : stepGrade(m, x, y, k);
           grade[i * 8 + k] = g;
           climb[i * 8 + k] = Math.max(0, ch[j] - ch[i]) * CLIMB_COST;
+          // (a map's hill ground: the vehicles' own, lower limit there - the Litani mouth's hills, GameMap.vehicleHills)
+          const hillV = vh !== null && (vh[i] | vh[j]) !== 0;
           for (let c = 0; c < LOCO_COUNT; c++) {
-            let bad = g > MAX_GRADE[c];
+            let bad = g > (hillV && c === Loco.Vehicle ? vhGrade : MAX_GRADE[c]);
             if (k >= 4 && !bad) {
               // the corner tiles: (x + dx, y) and (x, y + dy), each reached from here and left towards j
               const kx = DX[k] > 0 ? 0 : 1;

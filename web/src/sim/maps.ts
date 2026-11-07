@@ -1,9 +1,7 @@
-// Skirmish maps. Frontline Crossing (map.ts) is the temperate original; this
-// module adds three hand-designed, point-symmetric two player maps with their
-// own climates - the Sinai Peninsula, a frozen river valley and a canal city -
-// and the `createMap` dispatcher the world uses.
+// Skirmish maps: the Litani river mouth in south Lebanon (map id 'frontline': real terrain, sim/litanidata.ts), the
+// Sinai Peninsula, a frozen river valley and a canal city, and the `createMap` dispatcher the world uses.
 //
-// Every layout is fixed in code for player 0's half and mirrored (fair starts):
+// The hand-designed layouts are fixed in code for player 0's half and mirrored (fair starts):
 // through the map centre, or across the diagonal for the Sinai (GameMap.mirror). The seed only varies the details (dune and hill
 // noise, forest patches, river meanders, which building stands on which city
 // lot, palms, ...) through its own Rng, never the world's, so two clients with
@@ -17,7 +15,6 @@ import {
   StructureKind,
   Tile,
   WATER_LEVEL,
-  createFrontlineMap,
   distToSegment,
   sealPockets,
   smoothstep,
@@ -39,6 +36,8 @@ import {
 } from './map';
 import { Rng, fbm, hash2 } from './rng';
 import { SINAI_MASK, SINAI_MASK_H, SINAI_MASK_W } from './sinaimask';
+import { LITANI_BRIDGES, LITANI_N, LITANI_PACK, LITANI_POIS, LITANI_POWER } from './litanidata';
+import { inflateSync } from 'three/addons/libs/fflate.module.js';
 
 void BRIDGE_HEIGHT;
 
@@ -54,7 +53,7 @@ export interface MapInfo {
 }
 
 export const MAPS: MapInfo[] = [
-  { id: 'frontline', name: 'Frontline Crossing', biome: 'temperate', blurb: 'River valley, villages, three bridges', region: 'Temperate river valley' },
+  { id: 'frontline', name: 'Litani Mouth', biome: 'temperate', blurb: 'The Litani meets the sea: Qasmiyeh, Ain Abou Abdallah, the hills and the gorge, three bridges', region: 'The Litani river mouth, south Lebanon' },
   { id: 'desert', name: 'Wadi Al-Rimal', biome: 'desert', blurb: 'The Sinai: two gulfs, crossings at their heads, Sharm and the high massif', region: 'The Sinai Peninsula between the Gulfs of Suez and Aqaba' },
   { id: 'winter', name: 'Frozen Pass', biome: 'winter', blurb: 'Snowfields, pine forest, an icy river', region: 'Sub-arctic river valley' },
   { id: 'urban', name: 'Canal City', biome: 'urban', blurb: 'Street fighting across a canal city', region: 'Dense urban centre' },
@@ -70,9 +69,9 @@ export function mapInfo(id: MapId): MapInfo {
   return MAPS.find((m) => m.id === id) ?? MAPS[0];
 }
 
-/** Build a map. Frontline Crossing ignores the seed (it is the fixed original). */
+/** Build a map. The Litani mouth (id 'frontline') ignores the seed (it is real terrain). */
 export function createMap(id: MapId = 'frontline', seed = 1): GameMap {
-  const m = id === 'desert' ? createDesertMap(seed) : id === 'winter' ? createWinterMap(seed) : id === 'urban' ? createUrbanMap(seed) : createFrontlineMap();
+  const m = id === 'desert' ? createDesertMap(seed) : id === 'winter' ? createWinterMap(seed) : id === 'urban' ? createUrbanMap(seed) : createLitaniMap();
   // no walkable pockets nobody can ever reach (map.ts)
   sealPockets(m);
   return m;
@@ -181,7 +180,7 @@ function markRoads(g: Grids, roads: Point[][], halfW: number[], over: Tile[]) {
 }
 
 /**
- * Ore / gem fields (same shape rules as Frontline Crossing, symmetric jitter). `local`: the jitter follows each
+ * Ore / gem fields (symmetric jitter). `local`: the jitter follows each
  * field's own offsets (integer centres), so fields of the same size paint alike wherever they lie (an unmirrored map).
  */
 function paintOre(g: Grids, fields: Field[], sandTo: Tile = Tile.Dirt, local = false) {
@@ -397,7 +396,7 @@ function placeStructures(g: Grids, layout: Structure[], o: PlaceOpts) {
   return { structures, blocked };
 }
 
-/** Bridge records on a diagonal river (decks run along (1, -1), as in Frontline Crossing). */
+/** Bridge records on a diagonal river (decks run along (1, -1), as on every map). */
 function diagonalBridges(river: ReturnType<typeof riverShape>, at: number[], length: number) {
   return at.map((s) => {
     const p = river.at(s);
@@ -2295,3 +2294,1186 @@ export function sinaiPlaces() {
     crossings: CROSS_PX.map(p),
   };
 }
+
+// ================================================================== Litani mouth (map id 'frontline')
+
+/*
+ * "Litani Mouth": the Litani river's last kilometres to the Mediterranean north of Tyre, south Lebanon, at the game's
+ * real scale (35 m a tile: render/podmath.ts M_PER_TILE). Every height, the coastline, the river's course and banks,
+ * the roads, the bridges, the villages' built-up ground and the orchards and greenhouses come from real data baked by
+ * tools/litani-terrain.mjs into sim/litanidata.ts (AWS Terrain Tiles / SRTM elevation; OpenStreetMap). Real north is
+ * up: the sea lies in the left corner, the river runs in from the right to its mouth, the north bank at the top, the
+ * south bank (Qasmiyeh) at the bottom. The window is 152 tiles (5.3 km) a side: from the coast it reaches east over the
+ * motorway into the real hills (to 257 m) and up the Litani's gorge; its west corner lies out at sea, the navy's open
+ * sea (sim/naval.ts SEA_MIN) inside the map.
+ *
+ * Nothing is mirrored (GameMap.mirror 'none'): the banks differ as they do on the ground. The game's own pieces -
+ * the bases, ore and gem fields, oil derricks, tech sites - are laid out by hand, as many of each on either bank at
+ * about the same road distance from its base. The generator ignores the seed (the place is the place).
+ */
+
+/** Height of the coastline (sea level) above the water plane: the shore stands a little proud of the water. */
+const LT_LAND0 = WATER_LEVEL + 0.12;
+/** Vertical scale: metres per height unit (one height unit is a tile's width, as on every map: 1:1). */
+const LT_M = 35;
+/** The river is drawn this much wider each side than its OSM banks (tiles: its ~35-45 m become ~1.7-2.2 tiles, 60-75 m). */
+const LT_WIDEN = 0.4;
+/** Bridges over the Litani: the OSM crossings used (the A3 coastal road, the M51 motorway, the secondary road in the meander). */
+const LT_BRIDGE_REFS = ['A3', 'M51', ''];
+
+function b64bytes(s: string): Uint8Array {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * A packed grid of the baked data (tools/litani-terrain.mjs pack): w columns, each value predicted from its
+ * neighbours (planar: left + up - up-left; `left`: the left one only) plus a zigzag varint residual, a 0 starting a
+ * run of zero residuals (the varint after it: the run's length - 1).
+ */
+function ltUnpack(b: Uint8Array, n: number, w: number, left: boolean): Int32Array {
+  const out = new Int32Array(n);
+  let p = 0;
+  const varint = () => {
+    let v = 0;
+    let m = 1;
+    let c: number;
+    do {
+      c = b[p++];
+      v += (c & 127) * m;
+      m *= 128;
+    } while (c & 128);
+    return v;
+  };
+  const put = (i: number, d: number) => {
+    const x = i % w;
+    const y = (i / w) | 0;
+    const l = x ? out[i - 1] : y ? out[i - w] : 0;
+    out[i] = (left || !x || !y ? l : out[i - 1] + out[i - w] - out[i - w - 1]) + d;
+  };
+  for (let i = 0; i < n; ) {
+    const v = varint();
+    if (v === 0) for (let r = varint() + 1; r > 0 && i < n; r--) put(i++, 0);
+    else put(i++, v & 1 ? (v + 1) / 2 : -v / 2);
+  }
+  return out;
+}
+
+/** An OSM building of the window: centre (map coordinates), half length along `ang` and half width (tiles), heading (radians, 0..pi). */
+export interface LitaniBuilding {
+  x: number;
+  y: number;
+  hl: number;
+  hw: number;
+  ang: number;
+}
+
+/** The buildings section (tools/litani-terrain.mjs packHouses): zigzag varint steps in eighths of a tile, size in metres, heading in 128ths of a half turn. */
+function ltHouses(b: Uint8Array): LitaniBuilding[] {
+  let p = 0;
+  const varint = () => {
+    let v = 0;
+    let m = 1;
+    let c: number;
+    do {
+      c = b[p++];
+      v += (c & 127) * m;
+      m *= 128;
+    } while (c & 128);
+    return v;
+  };
+  const unzz = (v: number) => (v & 1 ? -(v + 1) / 2 : v / 2);
+  const n = varint();
+  const out: LitaniBuilding[] = [];
+  let qx = 0;
+  let qy = 0;
+  for (let k = 0; k < n; k++) {
+    qy += unzz(varint());
+    qx += unzz(varint());
+    const L = b[p++];
+    const W = b[p++];
+    const a = b[p++];
+    out.push({ x: qx / 8, y: qy / 8, hl: L / LT_M / 2, hw: W / LT_M / 2, ang: (a / 128) * Math.PI });
+  }
+  return out;
+}
+
+interface LitaniData {
+  elev: Int16Array;
+  sea: Int8Array;
+  river: Int8Array;
+  cover: Uint8Array;
+  /** The Litani's centreline (map coordinates, downstream). */
+  course: [number, number][];
+  /** Roads (map coordinates): class 0 motorway, 1 trunk / primary, 2 secondary / tertiary, 3 local. */
+  roads: { cls: number; name: string; ref: string; pts: [number, number][] }[];
+  /** OSM farm plots: [cx, cy, half length, half width, angle of the length (radians), kind 0 orchard / 1 greenhouses / 2 field]. */
+  plots: [number, number, number, number, number, number][];
+  /** The OSM buildings. */
+  houses: LitaniBuilding[];
+}
+let litaniCache: LitaniData | null = null;
+/** The baked data (sim/litanidata.ts LITANI_PACK), inflated and decoded once. */
+export function litaniData(): LitaniData {
+  if (!litaniCache) {
+    const blob = inflateSync(b64bytes(LITANI_PACK));
+    const parts: Uint8Array[] = [];
+    for (let p = 0; p < blob.length; ) {
+      let len = 0;
+      let m = 1;
+      let c: number;
+      do {
+        c = blob[p++];
+        len += (c & 127) * m;
+        m *= 128;
+      } while (c & 128);
+      parts.push(blob.subarray(p, p + len));
+      p += len;
+    }
+    const n1 = (LITANI_N + 1) * (LITANI_N + 1);
+    const json = JSON.parse(new TextDecoder().decode(parts[4]));
+    litaniCache = {
+      elev: Int16Array.from(ltUnpack(parts[0], n1, LITANI_N + 1, false)),
+      sea: Int8Array.from(ltUnpack(parts[1], n1, LITANI_N + 1, false)),
+      river: Int8Array.from(ltUnpack(parts[2], n1, LITANI_N + 1, false)),
+      cover: Uint8Array.from(ltUnpack(parts[3], LITANI_N * LITANI_N, LITANI_N, true)),
+      course: json.course,
+      roads: json.roads,
+      plots: json.plots,
+      houses: ltHouses(parts[5]),
+    };
+  }
+  return litaniCache;
+}
+
+/** Bilinear vertex field at continuous point (x, y). */
+function ltField(f: ArrayLike<number>, n: number, x: number, y: number, k: number) {
+  const cx = Math.max(0, Math.min(n - 0.0001, x));
+  const cy = Math.max(0, Math.min(n - 0.0001, y));
+  const x0 = Math.floor(cx);
+  const y0 = Math.floor(cy);
+  const tx = cx - x0;
+  const ty = cy - y0;
+  const n1 = n + 1;
+  const i = y0 * n1 + x0;
+  return ((f[i] * (1 - tx) + f[i + 1] * tx) * (1 - ty) + (f[i + n1] * (1 - tx) + f[i + n1 + 1] * tx) * ty) / k;
+}
+
+/** Seaward distance (tiles, > 0 = sea) at continuous map point (x, y): the real coastline. */
+export function litaniSea(x: number, y: number) {
+  return ltField(litaniData().sea, LITANI_N, x, y, 4);
+}
+/** Distance into the river (tiles, > 0 = water, the river as drawn: LT_WIDEN wider than its banks). */
+export function litaniRiver(x: number, y: number) {
+  return ltField(litaniData().river, LITANI_N, x, y, 10) + LT_WIDEN;
+}
+
+/** The sea floor `s` tiles out from the waterline: a short shelf, then the drop to boat depth (the world past the map too). */
+export function litaniSeabed(s: number) {
+  const shelf = WATER_LEVEL - 0.06 - 0.07 * Math.min(s, 2.2);
+  return shelf + (-1.35 - shelf) * smoothstep(2.2, 5, s);
+}
+
+export function createLitaniMap(): GameMap {
+  mapSize(LITANI_N, false, true);
+  const D = litaniData();
+  const g = newGrids();
+  const W1 = W + 1;
+  // ---- heights: the real ground (1:1), the beach running down into the sea, the river's banks down to the water
+  for (let vy = 0; vy <= H; vy++)
+    for (let vx = 0; vx <= W; vx++) {
+      const i = vy * W1 + vx;
+      let h = LT_LAND0 + litaniLift(Math.max(0, D.elev[i] / 10));
+      const s = D.sea[i] / 4;
+      const r = D.river[i] / 10 + LT_WIDEN;
+      if (s > 0) h = litaniSeabed(s);
+      else if (s > -2.2) h = h + (WATER_LEVEL + 0.03 - h) * smoothstep(-2.2, 0, s);
+      // (the river bed down to just short of boat depth, BOAT_DEPTH 0.4: the boats keep to the sea)
+      if (r > 0) h = Math.min(h, WATER_LEVEL - 0.06 - 0.31 * smoothstep(0, 0.9, r));
+      else if (r > -1.8) h = Math.min(h, h + (WATER_LEVEL + 0.04 - h) * smoothstep(-1.8, 0, r));
+      g.heights[i] = h;
+    }
+  // the exaggerated slopes eased where they would be too steep to drive (vehicles take a step of about 0.53 a tile):
+  // steps over LT_GRADE between neighbouring vertices relaxed a few times, the highest ground and every ridge, valley
+  // and the river's gorge staying where they are (the land only; the sea and the river beds keep their own profiles)
+  // ... except in the hills and the gorge off the roads and tracks: there the real steep ground is eased only to
+  // LT_GRADE_HILL, over the vehicles' limit and under the infantry's (sim/slope.ts MAX_GRADE), so tanks go round by
+  // road while soldiers climb; the roads, tracks, bridges, bases, ore, oil and tech sites and the coastal plain and
+  // valley floors (below LT_HILL_M) keep the vehicles' easing
+  const hill = litaniHills(g);
+  {
+    const land = new Uint8Array(W1 * (H + 1));
+    for (let i = 0; i < land.length; i++) land[i] = D.sea[i] / 4 < -2.5 && D.river[i] / 10 + LT_WIDEN < -1.8 ? 1 : 0;
+    const hs = g.heights;
+    for (let it = 0; it < 160; it++) {
+      let moved = 0;
+      for (let vy = 0; vy <= H; vy++)
+        for (let vx = 0; vx <= W; vx++) {
+          const i = vy * W1 + vx;
+          if (!land[i]) continue;
+          for (const j of [vx < W ? i + 1 : -1, vy < H ? i + W1 : -1]) {
+            if (j < 0 || !land[j]) continue;
+            const d = hs[j] - hs[i];
+            const ex = Math.abs(d) - (hill[i] && hill[j] ? LT_GRADE_HILL : LT_GRADE);
+            if (ex <= 0) continue;
+            const k = Math.sign(d) * ex * 0.5;
+            hs[i] += k;
+            hs[j] -= k;
+            moved++;
+          }
+        }
+      if (!moved) break;
+    }
+  }
+  const sea = (x: number, y: number) => litaniSea(x, y);
+  const riv = (x: number, y: number) => litaniRiver(x, y);
+  const cls = (x: number, y: number) => D.cover[y * W + x] & 7;
+  const built = (x: number, y: number) => D.cover[y * W + x] >> 3;
+  const rise = (x: number, y: number) => {
+    const a = g.heights[y * W1 + x];
+    const b = g.heights[y * W1 + x + 1];
+    const c = g.heights[(y + 1) * W1 + x];
+    const d = g.heights[(y + 1) * W1 + x + 1];
+    return Math.max(a, b, c, d) - Math.min(a, b, c, d);
+  };
+  // ---- tiles: sea and river, the beach, the river's dark alluvial banks, bare rock only on the steepest ground
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      const s = sea(x + 0.5, y + 0.5);
+      const r = riv(x + 0.5, y + 0.5);
+      let t: Tile = Tile.Grass;
+      if (s > 0 || r > 0) t = Tile.Water;
+      else if (s > -1.7 || (cls(x, y) === 5 && s > -5)) t = Tile.Sand;
+      else if (r > -1.1) t = Tile.Dirt;
+      else if (cls(x, y) === 7) t = Tile.Dirt;
+      g.tiles[i] = t;
+    }
+
+  // ---- bridges over the Litani at the real crossings, their decks at the real angles (ends[0] on player 0's bank)
+  const bridges: GameMap['bridges'] = [];
+  for (const ref of LT_BRIDGE_REFS) {
+    const hits = LITANI_BRIDGES.filter((b) => b.ref === ref && (ref || b.cls === 2));
+    if (!hits.length) continue;
+    const c = { x: hits.reduce((a, b) => a + b.x, 0) / hits.length, y: hits.reduce((a, b) => a + b.y, 0) / hits.length };
+    const angle = hits[0].angle;
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
+    // the deck reaches from bank to bank, a bit over 1 tile onto each
+    let reach = 0;
+    for (const sd of [-1, 1])
+      for (let t = 0; t < 8; t += 0.1) {
+        const px = c.x + sd * t * ux;
+        const py = c.y + sd * t * uy;
+        if (riv(px, py) < -0.35 && sea(px, py) < -0.35) {
+          reach = Math.max(reach, t);
+          break;
+        }
+      }
+    bridges.push({ x: c.x, y: c.y, angle, length: Math.max(4.6, 2 * reach + 2.2) });
+  }
+  for (const b of bridges) {
+    const ux = Math.cos(b.angle);
+    const uy = Math.sin(b.angle);
+    // (wide enough that the deck's water tiles join bank to bank 4-connected at any angle)
+    const half = 0.75 * (Math.abs(ux) + Math.abs(uy)) + 0.25;
+    for (let y = Math.floor(b.y - b.length); y <= b.y + b.length; y++)
+      for (let x = Math.floor(b.x - b.length); x <= b.x + b.length; x++) {
+        if (x < 0 || y < 0 || x >= W || y >= H || g.tiles[y * W + x] !== Tile.Water) continue;
+        const dx = x + 0.5 - b.x;
+        const dy = y + 0.5 - b.y;
+        const along = dx * ux + dy * uy;
+        const across = dy * ux - dx * uy;
+        if (Math.abs(across) <= half && Math.abs(along) <= b.length / 2) g.tiles[y * W + x] = Tile.Bridge;
+      }
+  }
+  // ends[0] on player 0's bank: the end its base reaches by land without crossing (the river meanders, so a direction
+  // test would not do)
+  {
+    // (a flood that does not cross the decks)
+    const saved = g.tiles.slice();
+    for (let i = 0; i < W * H; i++) if (g.tiles[i] === Tile.Bridge) g.tiles[i] = Tile.Water;
+    const home = flood(g, null, LT_STARTS[0]).seen;
+    g.tiles.set(saved);
+    const landNear = (x: number, y: number) => {
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const tx = Math.floor(x) + dx;
+          const ty = Math.floor(y) + dy;
+          if (tx >= 0 && ty >= 0 && tx < W && ty < H && home[ty * W + tx]) return true;
+        }
+      return false;
+    };
+    for (const b of bridges) {
+      const h = b.length / 2 + 0.6;
+      const e1 = { x: b.x + h * Math.cos(b.angle), y: b.y + h * Math.sin(b.angle) };
+      if (landNear(e1.x, e1.y)) b.angle += b.angle > 0 ? -Math.PI : Math.PI;
+    }
+  }
+  const deckEnds = (b: GameMap['bridges'][number]) => {
+    const h = b.length / 2;
+    const ux = Math.cos(b.angle);
+    const uy = Math.sin(b.angle);
+    return [
+      { x: b.x - h * ux, y: b.y - h * uy },
+      { x: b.x + h * ux, y: b.y + h * uy },
+    ];
+  };
+
+  // ---- roads (OSM): the motorway, the coastal road, the main roads; local roads as tracks. Each crossing of the
+  // river goes over a bridge deck (the approach snapped onto the deck's axis); a road that meets the water anywhere
+  // else stops at the bank.
+  const wet = (x: number, y: number) => sea(x, y) > -0.2 || riv(x, y) > -0.2;
+  const prep = (pts: [number, number][]) => {
+    // densify
+    const out: Point[] = [];
+    for (let k = 0; k < pts.length - 1; k++) {
+      const [ax, ay] = pts[k];
+      const [bx, by] = pts[k + 1];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.5));
+      for (let j = 0; j < n; j++) out.push({ x: ax + ((bx - ax) * j) / n, y: ay + ((by - ay) * j) / n });
+    }
+    out.push({ x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] });
+    // over the bridges
+    for (const b of bridges) {
+      const r = b.length / 2 + 2;
+      const near = out.map((p) => Math.hypot(p.x - b.x, p.y - b.y) < r);
+      const k0 = near.indexOf(true);
+      const k1 = near.lastIndexOf(true);
+      // (only a road that crosses the river here, from one end of the deck to the other: one passing by keeps its way)
+      if (k0 < 0) continue;
+      const ux = Math.cos(b.angle);
+      const uy = Math.sin(b.angle);
+      const pa = out[Math.max(0, k0 - 1)];
+      const pb = out[Math.min(out.length - 1, k1 + 1)];
+      const sa = (pa.x - b.x) * ux + (pa.y - b.y) * uy;
+      const sb = (pb.x - b.x) * ux + (pb.y - b.y) * uy;
+      if (!(sa * sb < 0 && Math.abs(sa) > b.length / 2 && Math.abs(sb) > b.length / 2)) continue;
+      // (the road stops a little short of each deck end, on the deck's axis: the deck carries it over, bridgefx.ts)
+      const [e0, e1] = deckEnds(b).map((e) => ({ x: e.x + (e.x - b.x) * (LT_APPROACH / (b.length / 2)), y: e.y + (e.y - b.y) * (LT_APPROACH / (b.length / 2)) }));
+      const a = out[Math.max(0, k0 - 1)];
+      const first = Math.hypot(a.x - e0.x, a.y - e0.y) < Math.hypot(a.x - e1.x, a.y - e1.y) ? [e0, e1] : [e1, e0];
+      out.splice(k0, k1 - k0 + 1, first[0], { x: NaN, y: NaN }, first[1]);
+    }
+    // cut where it meets water and at the decks
+    const runs: Point[][] = [];
+    let run: Point[] = [];
+    for (const p of out) {
+      const inMap = p.x > 0.3 && p.y > 0.3 && p.x < W - 0.3 && p.y < H - 0.3;
+      if (Number.isNaN(p.x) || wet(p.x, p.y)) {
+        if (run.length > 1) runs.push(run);
+        run = [];
+      } else if (inMap || run.length) run.push({ x: Math.max(0.3, Math.min(W - 0.3, p.x)), y: Math.max(0.3, Math.min(H - 0.3, p.y)) });
+    }
+    if (run.length > 1) runs.push(run);
+    const len = (l: Point[]) => l.reduce((s, p, k) => (k ? s + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
+    return runs.filter((l) => len(l) > 3).map((l) => simplifyLine(l, 0.2));
+  };
+  // (one line per road: the motorway's second carriageway runs a tile beside the first)
+  const major = litaniData().roads.filter((r) => r.cls <= 2);
+  const motor = major.filter((r) => r.cls === 0).sort((a, b) => b.pts.length - a.pts.length)[0];
+  const roadSrc = major.filter((r) => r.cls !== 0 || r === motor);
+  const roadLines: { pts: Point[]; cls: number }[] = [];
+  for (const r of roadSrc) for (const l of prep(r.pts)) roadLines.push({ pts: l, cls: r.cls });
+  const trackLines: Point[][] = [];
+  for (const r of litaniData().roads.filter((q) => q.cls === 3)) for (const l of prep(r.pts)) trackLines.push(l);
+  // the road net's joints (render/ambient: the traffic): a deck end carries one road, so a road meeting the river at
+  // a bridge head it does not cross joins the crossing road a little way off the deck instead (a T junction)
+  const approaches = bridges.flatMap((b) => deckEnds(b).map((e) => ({ x: e.x + (e.x - b.x) * (LT_APPROACH / (b.length / 2)), y: e.y + (e.y - b.y) * (LT_APPROACH / (b.length / 2)) })));
+  const atApproach = (p: Point) => approaches.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 0.05);
+  const lenOf = (l: Point[]) => l.reduce((a, p, k) => (k ? a + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
+  const lineNear = (p: Point, self: Point[]) => roadLines.some((o) => o.pts !== self && o.pts.some((q, k) => k > 0 && distToSegment(p.x, p.y, o.pts[k - 1].x, o.pts[k - 1].y, q.x, q.y) < 0.8));
+  for (const r of roadLines)
+    for (const end of [0, 1]) {
+      const p = end ? r.pts[r.pts.length - 1] : r.pts[0];
+      if (atApproach(p)) continue;
+      const q = approaches.find((a) => Math.hypot(p.x - a.x, p.y - a.y) < 3);
+      if (!q) continue;
+      const host = roadLines.find((o) => o !== r && (atApproach(o.pts[0]) || atApproach(o.pts[o.pts.length - 1])) && o.pts.some((a) => Math.hypot(a.x - q.x, a.y - q.y) < 0.05));
+      if (!host) continue;
+      // the host's point 7 - 10 tiles from the deck end nearest to this road's end
+      let best: Point | null = null;
+      let bd = Infinity;
+      for (let k = 0; k < host.pts.length - 1; k++)
+        for (let t = 0; t <= 1; t += 0.1) {
+          const c = { x: host.pts[k].x + (host.pts[k + 1].x - host.pts[k].x) * t, y: host.pts[k].y + (host.pts[k + 1].y - host.pts[k].y) * t };
+          const dq = Math.hypot(c.x - q.x, c.y - q.y);
+          if (dq < 7 || dq > 10) continue;
+          const d = Math.hypot(c.x - p.x, c.y - p.y);
+          if (d < bd) (bd = d), (best = c);
+        }
+      if (best) r.pts[end ? r.pts.length - 1 : 0] = best;
+    }
+  // the game has no flyovers: where two roads cross on the map (the motorway over the old roads, the roads past the
+  // north base), the lesser road meets the greater in a T and its piece beyond carries on as a farm track (no cars)
+  const segX = (a: Point, b: Point, c: Point, d: Point) => {
+    const rx = b.x - a.x;
+    const ry = b.y - a.y;
+    const sx = d.x - c.x;
+    const sy = d.y - c.y;
+    const den = rx * sy - ry * sx;
+    if (Math.abs(den) < 1e-9) return -1;
+    const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den;
+    const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den;
+    return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98 ? t : -1;
+  };
+  /** Does a point lie on a road line (a T junction's foot: no crossing)? */
+  const onLine = (p: Point, l: Point[]) => l.some((q, k) => k > 0 && distToSegment(p.x, p.y, l[k - 1].x, l[k - 1].y, q.x, q.y) < 0.6);
+  for (let changed = true; changed; ) {
+    changed = false;
+    outer: for (const big of [...roadLines].sort((p, q) => p.cls - q.cls))
+      for (const small of roadLines) {
+        if (small === big || small.cls < big.cls) continue;
+        const A = small.pts;
+        for (let k = 1; k < A.length; k++)
+          for (let j = 1; j < big.pts.length; j++) {
+            const t = segX(A[k - 1], A[k], big.pts[j - 1], big.pts[j]);
+            if (t < 0) continue;
+            // (a road starting or ending on the other meets it in a T already)
+            const at0 = { x: A[k - 1].x + (A[k].x - A[k - 1].x) * t, y: A[k - 1].y + (A[k].y - A[k - 1].y) * t };
+            if (Math.hypot(at0.x - A[0].x, at0.y - A[0].y) < 1 || Math.hypot(at0.x - A[A.length - 1].x, at0.y - A[A.length - 1].y) < 1) continue;
+            if (onLine(A[0], big.pts) && onLine(A[A.length - 1], big.pts)) continue;
+            const at = { x: A[k - 1].x + (A[k].x - A[k - 1].x) * t, y: A[k - 1].y + (A[k].y - A[k - 1].y) * t };
+            const head = [...A.slice(0, k), at];
+            const tail = [at, ...A.slice(k)];
+            const keepHead = atApproach(A[0]) || (!atApproach(A[A.length - 1]) && lenOf(head) >= lenOf(tail));
+            // (the T meets the greater road square on: its last 2.5 tiles come in along the greater road's normal)
+            const bx = big.pts[j].x - big.pts[j - 1].x;
+            const by = big.pts[j].y - big.pts[j - 1].y;
+            const bl = Math.hypot(bx, by) || 1;
+            const kept = keepHead ? head : [...tail].reverse();
+            const from = kept[Math.max(0, kept.length - 3)];
+            let nx = -by / bl;
+            let ny = bx / bl;
+            if ((from.x - at.x) * nx + (from.y - at.y) * ny < 0) (nx = -nx), (ny = -ny);
+            // (only where it comes in at a slant: a road already square on keeps its line)
+            const cosA = Math.abs(((at.x - from.x) * bx + (at.y - from.y) * by) / (bl * (Math.hypot(at.x - from.x, at.y - from.y) || 1)));
+            const body = kept.filter((p, i) => i < kept.length - 1 && Math.hypot(p.x - at.x, p.y - at.y) > 3.2);
+            const sq = cosA < 0.7 ? kept : [...body, { x: at.x + nx * 2.5, y: at.y + ny * 2.5 }, at];
+            small.pts = keepHead ? sq : sq.reverse();
+            trackLines.push(keepHead ? tail : head);
+            changed = true;
+            break outer;
+          }
+      }
+  }
+  // roads of a kind meeting end to end are one road (one ribbon): joined, the straightest pair first where more meet
+  for (let merged = true; merged; ) {
+    merged = false;
+    for (let i = 0; i < roadLines.length && !merged; i++)
+      for (let j = 0; j < roadLines.length && !merged; j++) {
+        if (i === j || roadLines[i].cls !== roadLines[j].cls) continue;
+        const a = roadLines[i].pts;
+        const b = roadLines[j].pts;
+        const ea = a[a.length - 1];
+        for (const eb of [0, 1]) {
+          const pb = eb ? b[b.length - 1] : b[0];
+          if (Math.hypot(ea.x - pb.x, ea.y - pb.y) > 0.6 || atApproach(ea)) continue;
+          const tail = eb ? [...b].reverse() : b;
+          // (straight on only: two roads meeting at a corner are a junction, not one road)
+          const p0 = a[Math.max(0, a.length - 2)];
+          const p2 = tail[Math.min(tail.length - 1, 1)];
+          const d1 = Math.hypot(ea.x - p0.x, ea.y - p0.y) || 1;
+          const d2 = Math.hypot(p2.x - ea.x, p2.y - ea.y) || 1;
+          const cos = ((ea.x - p0.x) * (p2.x - ea.x) + (ea.y - p0.y) * (p2.y - ea.y)) / (d1 * d2);
+          // (...or a bend where only these two meet, no third road there: one road turning a corner, its OSM ends
+          // overshooting each other by a tile cut off)
+          const alone = !roadLines.some((o, k) => k !== i && k !== j && o.pts.some((q, m) => m > 0 && distToSegment(ea.x, ea.y, o.pts[m - 1].x, o.pts[m - 1].y, q.x, q.y) < 1.5));
+          if (cos < 0.5 && !alone) continue;
+          if (cos < 0 && a.length > 2 && tail.length > 2) {
+            roadLines[i].pts = [...a.slice(0, -1), ...tail.slice(1)];
+            roadLines.splice(j, 1);
+            merged = true;
+            break;
+          }
+          roadLines[i].pts = [...a, ...tail.slice(1)];
+          roadLines.splice(j, 1);
+          merged = true;
+          break;
+        }
+      }
+  }
+  // a road that stops just short of another (the motorway's end by the coastal plain's main road) meets it in a T
+  for (const r of roadLines)
+    for (const end of [0, 1]) {
+      const p = end ? r.pts[r.pts.length - 1] : r.pts[0];
+      if (atApproach(p) || p.x < 1.6 || p.y < 1.6 || p.x > W - 1.6 || p.y > H - 1.6 || lineNear(p, r.pts)) continue;
+      let best: Point | null = null;
+      let bd = 2.5;
+      for (const o of roadLines) {
+        if (o === r) continue;
+        for (let k = 1; k < o.pts.length; k++) {
+          const a = o.pts[k - 1];
+          const b = o.pts[k];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+          const c = { x: a.x + dx * t, y: a.y + dy * t };
+          const d = Math.hypot(c.x - p.x, c.y - p.y);
+          if (d < bd) (bd = d), (best = c);
+        }
+      }
+      if (best) {
+        if (end) r.pts.push(best);
+        else r.pts.unshift(best);
+      }
+    }
+  // a minor road through a base (the bases stand on real ground: the road there is under the base) is a track
+  for (let k = roadLines.length - 1; k >= 0; k--)
+    if (roadLines[k].cls >= 2 && roadLines[k].pts.some((p) => LT_STARTS.some((st) => Math.hypot(p.x - st.x - 0.5, p.y - st.y - 0.5) < 9.5))) {
+      trackLines.push(roadLines[k].pts);
+      roadLines.splice(k, 1);
+    }
+  // short pieces of road left with a dead end (cut by the river, the edge of a village): farm tracks, no cars
+  const openEnd = (p: Point, self: Point[]) => !(p.x < 1.6 || p.y < 1.6 || p.x > W - 1.6 || p.y > H - 1.6 || atApproach(p) || lineNear(p, self));
+  for (let k = roadLines.length - 1; k >= 0; k--) {
+    const l = roadLines[k].pts;
+    if (lenOf(l) < 12 && (openEnd(l[0], l) || openEnd(l[l.length - 1], l))) {
+      trackLines.push(l);
+      roadLines.splice(k, 1);
+    }
+  }
+  // sim roads are in tile-index space
+  const ti = (l: Point[]) => l.map((p) => ({ x: p.x - 0.5, y: p.y - 0.5 }));
+  const roads = roadLines.map((r) => ti(r.pts));
+  markRoads(g, roads, roadLines.map((r) => (r.cls === 0 ? 1.1 : 0.9)), [Tile.Grass, Tile.Dirt, Tile.Sand]);
+
+
+
+  // ---- the game's pieces (hand placed, as many on either bank)
+  const starts = LT_STARTS.map((p) => ({ ...p }));
+  const oreFields: Field[] = LT_ORE.map(([x, y, r, kind]) => ({ x, y, r, kind }));
+  paintOre(g, oreFields, Tile.Dirt, true);
+  const oils = LT_OILS.map(([x, y]) => ({ x, y }));
+
+  const nearStart = (x: number, y: number, r: number) => starts.some((s) => Math.hypot(x - s.x, y - s.y) < r);
+  // distance (tiles) from each tile centre to the nearest road centreline (tile-index space), out to 5 tiles
+  const roadD = new Float32Array(W * H).fill(9);
+  for (const l of roads)
+    for (let k = 1; k < l.length; k++) {
+      const a = l[k - 1];
+      const b = l[k];
+      for (let y = Math.max(0, Math.floor(Math.min(a.y, b.y) - 5)); y <= Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + 5)); y++)
+        for (let x = Math.max(0, Math.floor(Math.min(a.x, b.x) - 5)); x <= Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + 5)); x++) {
+          const d = distToSegment(x, y, a.x, a.y, b.x, b.y);
+          if (d < roadD[y * W + x]) roadD[y * W + x] = d;
+        }
+    }
+  /** Is tile-index point (x, y) within r of a road (r <= 5; between tile centres the nearest centre's value)? */
+  const roadNear = (x: number, y: number, r: number) => roadD[Math.max(0, Math.min(H - 1, Math.round(y))) * W + Math.max(0, Math.min(W - 1, Math.round(x)))] < r;
+
+  // ---- the exaggerated relief made playable, as the other maps do: the base pads levelled, the roads cut level across
+  // (their grade along the way kept), and only the steepest real slopes left as bare limestone crags (rock)
+  {
+    const H0 = g.heights.slice();
+    const hAt = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      return (H0[i] * (1 - tx) + H0[i + 1] * tx) * (1 - ty) + (H0[i + W1] * (1 - tx) + H0[i + W1 + 1] * tx) * ty;
+    };
+    for (const st of LT_STARTS) {
+      let sum = 0;
+      let n = 0;
+      for (let vy = st.y - 6; vy <= st.y + 7; vy++)
+        for (let vx = st.x - 6; vx <= st.x + 7; vx++)
+          if (Math.hypot(vx - st.x - 0.5, vy - st.y - 0.5) <= 6.5) (sum += H0[vy * W1 + vx]), n++;
+      const pad = sum / n;
+      for (let vy = Math.max(0, st.y - 16); vy <= Math.min(H, st.y + 17); vy++)
+        for (let vx = Math.max(0, st.x - 16); vx <= Math.min(W, st.x + 17); vx++) {
+          const k = 1 - smoothstep(9, 15, Math.hypot(vx - st.x - 0.5, vy - st.y - 0.5));
+          if (k > 0 && litaniSea(vx, vy) < -1.5 && litaniRiver(vx, vy) < -1.5) g.heights[vy * W1 + vx] += (pad - g.heights[vy * W1 + vx]) * k;
+        }
+    }
+    // roads: each vertex near a road takes the road's own height there (smoothed along it), so the carriageway lies
+    // level across on the hillsides
+    const H1 = g.heights.slice();
+    const h1 = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      return (H1[i] * (1 - tx) + H1[i + 1] * tx) * (1 - ty) + (H1[i + W1] * (1 - tx) + H1[i + W1 + 1] * tx) * ty;
+    };
+    void hAt;
+    const best = new Float32Array(W1 * (H + 1));
+    for (const l of roads.map((r) => r.map((p) => ({ x: p.x + 0.5, y: p.y + 0.5 }))))
+      for (let k = 1; k < l.length; k++) {
+        const a = l[k - 1];
+        const b = l[k];
+        const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const tx = (b.x - a.x) / L;
+        const ty = (b.y - a.y) / L;
+        for (let vy = Math.max(0, Math.floor(Math.min(a.y, b.y) - 2)); vy <= Math.min(H, Math.ceil(Math.max(a.y, b.y) + 2)); vy++)
+          for (let vx = Math.max(0, Math.floor(Math.min(a.x, b.x) - 2)); vx <= Math.min(W, Math.ceil(Math.max(a.x, b.x) + 2)); vx++) {
+            const t = Math.max(0, Math.min(L, (vx - a.x) * tx + (vy - a.y) * ty));
+            const px = a.x + tx * t;
+            const py = a.y + ty * t;
+            const d = Math.hypot(vx - px, vy - py);
+            const w = 1 - smoothstep(0.9, 1.9, d);
+            if (w <= 0 || litaniSea(vx, vy) > -1 || litaniRiver(vx, vy) > -0.6) continue;
+            // (the road's height there: its centre line's, averaged over three tiles along it)
+            const c = (h1(px - tx * 1.5, py - ty * 1.5) + h1(px, py) + h1(px + tx * 1.5, py + ty * 1.5)) / 3;
+            const i = vy * W1 + vx;
+            if (w > best[i]) {
+              best[i] = w;
+              g.heights[i] = H1[i] + (c - H1[i]) * w;
+            }
+          }
+      }
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        // (in the hills only ground too steep for the infantry too is bare rock: LT_ROCK_HILL)
+        const hillTile = hill[y * W1 + x] && hill[y * W1 + x + 1] && hill[(y + 1) * W1 + x] && hill[(y + 1) * W1 + x + 1];
+        if ((g.tiles[i] === Tile.Grass || g.tiles[i] === Tile.Dirt) && rise(x, y) > (hillTile ? LT_ROCK_HILL : LT_ROCK) && !roadNear(x, y, 2) && !LT_STARTS.some((st) => Math.hypot(x - st.x, y - st.y) < 14)) g.tiles[i] = Tile.Rock;
+      }
+  }
+  const reserved = (x: number, y: number) =>
+    nearStart(x, y, 10) || oils.some((o) => Math.abs(x - o.x - 0.5) < 3 && Math.abs(y - o.y - 0.5) < 3) || oreFields.some((f) => Math.hypot(x - f.x, y - f.y) < f.r + 2.5) || bridges.some((b) => Math.hypot(x + 0.5 - b.x, y + 0.5 - b.y) < b.length / 2 + 3);
+
+  // ---- trees (the sim's: impassable): pine and olive on the scrub of the hills, the riverside trees along the banks
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (g.tiles[i] !== Tile.Grass || g.ore[i] || reserved(x, y) || roadNear(x, y, 2.6)) continue;
+      const r = riv(x + 0.5, y + 0.5);
+      const hsh = hash2(x, y, 4711);
+      const c = cls(x, y);
+      if (r > -2.6 && built(x, y) < 2 && hsh < 0.5) g.trees[i] = 2;
+      else if (c === 4 && hsh < 0.3) g.trees[i] = hash2(x, y, 4712) < 0.55 ? 1 : 2;
+      else if (c === 0 && built(x, y) === 0 && hsh < 0.025) g.trees[i] = 2;
+    }
+  unblockTrees(g, starts[0]);
+
+  // ---- houses where the villages stand (the OSM buildings' ground cover)
+  const layout: Structure[] = [];
+  const cand: { x: number; y: number; d: number }[] = [];
+  for (let y = 2; y < H - 3; y++)
+    for (let x = 2; x < W - 3; x++) {
+      const d = built(x, y) + built(x + 1, y) + built(x, y + 1) + built(x + 1, y + 1);
+      if (d >= LT_HOUSE_MIN) cand.push({ x, y, d });
+    }
+  // densest ground first (placeStructures keeps a walkable tile between houses and drops the ones that collide)
+  cand.sort((a, b) => b.d - a.d || a.y - b.y || a.x - b.x);
+  const seenAt = new Set<number>();
+  for (const c of cand) {
+    // houses line the main roads: one standing on the road's line steps back off it (up to two tiles)
+    let { x, y } = c;
+    for (let k = 0; k < 4 && roadNear(x + 1, y + 1, 2.4); k++) {
+      let best = { d: Infinity, nx: 0, ny: 0 };
+      for (const l of roads)
+        for (let j = 1; j < l.length; j++) {
+          const ax = l[j - 1].x + 0.5;
+          const ay = l[j - 1].y + 0.5;
+          const dx = l[j].x + 0.5 - ax;
+          const dy = l[j].y + 0.5 - ay;
+          const t = Math.max(0, Math.min(1, ((x + 1 - ax) * dx + (y + 1 - ay) * dy) / (dx * dx + dy * dy || 1)));
+          const px = x + 1 - ax - dx * t;
+          const py = y + 1 - ay - dy * t;
+          const d = Math.hypot(px, py);
+          if (d < best.d) best = { d, nx: px / (d || 1), ny: py / (d || 1) };
+        }
+      x = Math.round(x + best.nx * 0.75);
+      y = Math.round(y + best.ny * 0.75);
+    }
+    if (x < 2 || y < 2 || x > W - 4 || y > H - 4 || seenAt.has(y * W + x)) continue;
+    seenAt.add(y * W + x);
+    const main = roadNear(x + 1, y + 1, 3.8);
+    const hh = hash2(x, y, 4713);
+    // the old stone houses keep red tiled roofs; the newer ones are flat-roofed concrete, shops along the main roads
+    const kind = main ? (hh < 0.45 ? StructureKind.Shop : StructureKind.Townhouse) : hh < 0.45 ? StructureKind.House : hh < 0.75 ? StructureKind.Townhouse : StructureKind.Cottage;
+    layout.push({ kind, x, y, w: 2, h: 2, rot: 0 });
+  }
+  // the villages' mosques and water towers where OSM has them (first: they take their spot before the houses)
+  // (each on the nearest spot to the real one that takes it)
+  // (the villages stand on the hillsides too: a little more slope than on the old maps, the houses' terraces take it)
+  const placeOpts: PlaceOpts = { starts, oils, ore: oreFields, roads, roadClear: 1.3, startClear: 15, flat: 0.55, footFlat: 0.7, tilesOk: [Tile.Grass, Tile.Dirt] };
+  const pois: Structure[] = [];
+  for (const q of LITANI_POIS) {
+    const st: Structure | null = q.kind === 'mosque' ? { kind: StructureKind.Courtyard, look: 'mosque', x: 0, y: 0, w: 3, h: 2, rot: 0 } : q.kind === 'water_tower' ? { kind: StructureKind.WaterTower, x: 0, y: 0, w: 1, h: 1, rot: 0 } : null;
+    if (!st) continue;
+    const spots: Point[] = [];
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) spots.push({ x: Math.round(q.x - st.w / 2) + dx, y: Math.round(q.y - st.h / 2) + dy });
+    spots.sort((a, b) => Math.hypot(a.x + st.w / 2 - q.x, a.y + st.h / 2 - q.y) - Math.hypot(b.x + st.w / 2 - q.x, b.y + st.h / 2 - q.y));
+    const at = spots.find((p) => placeStructures(g, [...pois, { ...st, ...p }], placeOpts).structures.length === pois.length + 1);
+    if (at) pois.push({ ...st, ...at });
+  }
+  layout.unshift(...pois);
+  // (facing the nearest road)
+  for (const st of layout) {
+    let best = Infinity;
+    for (const l of roads)
+      for (let k = 1; k < l.length; k++) {
+        const ax = l[k - 1].x;
+        const ay = l[k - 1].y;
+        const dx = l[k].x - ax;
+        const dy = l[k].y - ay;
+        const t = Math.max(0, Math.min(1, ((st.x + 0.5 - ax) * dx + (st.y + 0.5 - ay) * dy) / (dx * dx + dy * dy || 1)));
+        const px = ax + dx * t - st.x - 0.5;
+        const py = ay + dy * t - st.y - 0.5;
+        const d = Math.hypot(px, py);
+        if (d < best) {
+          best = d;
+          st.rot = Math.abs(px) > Math.abs(py) ? (px > 0 ? 1 : 3) : py > 0 ? 2 : 0;
+        }
+      }
+  }
+  const { structures, blocked } = placeStructures(g, layout, placeOpts);
+  for (const st of structures) st.variant = hash2(st.x, st.y, 4715);
+
+  // ---- the villages: every OSM building at its real place, size and heading, a little larger (game scale:
+  // LT_HOUSE_K; back at its real size where that would put it on a street), on ground made impassable; the streets
+  // (every road and track), the game's pieces and the garrison houses kept clear, and no ground cut off (a house that
+  // would close the only way through is left out)
+  const village: NonNullable<MapDeco['village']> = [];
+  {
+    // the streets: points every quarter tile along each road and track (with its half width), binned per tile
+    const SB = new Map<number, { x: number; y: number; r: number }[]>();
+    const street = new Uint8Array(W * H);
+    const addLine = (l: Point[], hw: number) => {
+      for (let k = 1; k < l.length; k++) {
+        const a = l[k - 1];
+        const b = l[k];
+        const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.25));
+        for (let j = 0; j <= n; j++) {
+          const x = a.x + ((b.x - a.x) * j) / n;
+          const y = a.y + ((b.y - a.y) * j) / n;
+          const tx = Math.floor(x);
+          const ty = Math.floor(y);
+          if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+          const key = ty * W + tx;
+          let list = SB.get(key);
+          if (!list) SB.set(key, (list = []));
+          list.push({ x, y, r: hw });
+          // (a street tile: any the carriageway touches, never built on)
+          for (let yy = ty - 2; yy <= ty + 2; yy++)
+            for (let xx = tx - 2; xx <= tx + 2; xx++)
+              if (xx >= 0 && yy >= 0 && xx < W && yy < H && Math.hypot(xx + 0.5 - x, yy + 0.5 - y) < hw + 0.72) street[yy * W + xx] = 1;
+        }
+      }
+    };
+    for (const r of roadLines) addLine(r.pts, r.cls === 0 ? 0.65 : r.cls === 1 ? 0.53 : 0.45);
+    for (const l of trackLines) addLine(l, 0.3);
+    /** Does a street run through the rectangle (centre, half sizes, heading)? */
+    const onStreet = (x: number, y: number, hl: number, hw: number, ca: number, sa: number) => {
+      const R = Math.ceil(hl) + 1;
+      for (let ty = Math.floor(y) - R; ty <= Math.floor(y) + R; ty++)
+        for (let tx = Math.floor(x) - R; tx <= Math.floor(x) + R; tx++)
+          for (const p of SB.get(ty * W + tx) ?? []) {
+            const dx = p.x - x;
+            const dy = p.y - y;
+            if (Math.abs(dx * ca + dy * sa) < hl + p.r && Math.abs(-dx * sa + dy * ca) < hw + p.r) return true;
+          }
+      return false;
+    };
+    // (each tech site's first two candidate spots a side: sim/capture.ts takes the first that is free)
+    const techAt = LT_TECH.flatMap((t) => [...t.at.slice(0, 2), ...(t.at2 ?? []).slice(0, 2)]);
+    const keepOut = (x: number, y: number) =>
+      starts.some((st) => Math.hypot(x - st.x - 0.5, y - st.y - 0.5) < 11) ||
+      oils.some((o) => Math.abs(x - o.x - 1) < 2.6 && Math.abs(y - o.y - 1) < 2.6) ||
+      oreFields.some((f) => Math.hypot(x - f.x - 0.5, y - f.y - 0.5) < f.r + 1) ||
+      bridges.some((b) => Math.hypot(x - b.x, y - b.y) < b.length / 2 + 2) ||
+      techAt.some(([tx, ty]) => Math.abs(x - tx - 1) < 2.6 && Math.abs(y - ty - 1) < 2.6) ||
+      structures.some((st) => x > st.x - 0.4 && y > st.y - 0.4 && x < st.x + st.w + 0.4 && y < st.y + st.h + 0.4);
+    // the garrison houses (sim/garrison.ts): the real buildings on their footprint are drawn as they stand and make
+    // the house (render/village.ts), the footprint impassable as before
+    const yard = (x: number, y: number) => structures.some((st) => LT_GARRISON_KINDS.has(st.kind) && x > st.x && y > st.y && x < st.x + st.w && y < st.y + st.h);
+    const reach0 = flood(g, blocked, starts[0]).seen;
+    const owner = new Int32Array(W * H).fill(-1);
+    const cand: { h: NonNullable<MapDeco['village']>[number]; tiles: number[]; ok: boolean }[] = [];
+    for (const b of D.houses) {
+      const tx = Math.floor(b.x);
+      const ty = Math.floor(b.y);
+      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+      if (yard(b.x, b.y)) {
+        village.push(ltRound({ x: b.x, y: b.y, hl: b.hl, hw: b.hw, ang: b.ang }));
+        continue;
+      }
+      const t0 = g.tiles[ty * W + tx];
+      if ((t0 !== Tile.Grass && t0 !== Tile.Dirt && t0 !== Tile.Sand) || blocked[ty * W + tx] || sea(b.x, b.y) > -1 || riv(b.x, b.y) > -0.8 || keepOut(b.x, b.y)) continue;
+      const ca = Math.cos(b.ang);
+      const sa = Math.sin(b.ang);
+      // game scale; else its real size; else its real size stepped back off the street (the game's roads are drawn
+      // wider than the real ones: up to two thirds of a tile)
+      let k = LT_HOUSE_K;
+      let hx = b.x;
+      let hy = b.y;
+      if (onStreet(hx, hy, b.hl * k, b.hw * k, ca, sa)) k = 1;
+      if (onStreet(hx, hy, b.hl * k, b.hw * k, ca, sa)) {
+        // (the smallest step that clears it, the nearest first)
+        let found = false;
+        for (const d of [0.15, 0.3, 0.45, 0.6])
+          for (let j = 0; j < 16 && !found; j++) {
+            const px = b.x + Math.cos((j * Math.PI) / 8) * d;
+            const py = b.y + Math.sin((j * Math.PI) / 8) * d;
+            if (!found && !onStreet(px, py, b.hl, b.hw, ca, sa)) {
+              hx = px;
+              hy = py;
+              found = true;
+            }
+          }
+        if (!found) continue;
+      }
+      const h = { x: hx, y: hy, hl: b.hl * k, hw: b.hw * k, ang: b.ang };
+      // its ground: the tiles whose centre it covers, else the one under its centre (bar the streets and pockets)
+      const tiles: number[] = [];
+      const r = Math.ceil(h.hl + 1);
+      for (let y = ty - r; y <= ty + r; y++)
+        for (let x = tx - r; x <= tx + r; x++) {
+          if (x < 0 || y < 0 || x >= W || y >= H) continue;
+          const dx = x + 0.5 - h.x;
+          const dy = y + 0.5 - h.y;
+          if (Math.abs(dx * ca + dy * sa) < h.hl && Math.abs(-dx * sa + dy * ca) < h.hw) tiles.push(y * W + x);
+        }
+      if (!tiles.length) tiles.push(ty * W + tx);
+      cand.push({ h, tiles: tiles.filter((i) => !street[i] && !blocked[i] && reach0[i] && g.tiles[i] !== Tile.Water && g.tiles[i] !== Tile.Bridge), ok: true });
+    }
+    for (let k = 0; k < cand.length; k++) for (const i of cand[k].tiles) if (owner[i] < 0) owner[i] = k;
+    const vb = blocked.slice();
+    for (let i = 0; i < W * H; i++) if (owner[i] >= 0) vb[i] = 1;
+    // no ground cut off: a pocket of walkable ground no longer reached opens the houses round it, until none is left
+    for (let pass = 0; pass < 50; pass++) {
+      const seen = flood(g, vb, starts[0]).seen;
+      let opened = 0;
+      for (let i = 0; i < W * H; i++) {
+        if (!reach0[i] || seen[i] || vb[i] !== blocked[i]) continue;
+        const x = i % W;
+        const y = (i / W) | 0;
+        for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) {
+          if (j < 0 || owner[j] < 0 || !cand[owner[j]].ok) continue;
+          cand[owner[j]].ok = false;
+          for (const t of cand[owner[j]].tiles) if (owner[t] === owner[j]) vb[t] = blocked[t];
+          opened++;
+        }
+      }
+      if (!opened) break;
+    }
+    for (let i = 0; i < W * H; i++)
+      if (vb[i] && !blocked[i]) {
+        blocked[i] = 1;
+        g.trees[i] = 0;
+      }
+    for (const c of cand) if (c.ok) village.push(ltRound(c.h));
+  }
+
+  // ---- render hints: road looks, local roads, the orchards / greenhouses / fields, the power line along the motorway
+  const deco = emptyDeco();
+  // (the real roads run where OSM has them: drawn along their own lines, not re-routed round the hills)
+  deco.roadStyles = roadLines.map((r) => (r.cls === 0 ? { width: 1.3, variant: 0 as const, straight: true } : r.cls === 1 ? { width: 1.05, variant: 0 as const, straight: true } : { width: 0.9, variant: 1 as const, straight: true }));
+  deco.tracks = trackLines.map((l) => ti(l));
+  // the farm tracks that lead nowhere (a dead end in the orchards, at the river bank): footpaths, no cars on them
+  {
+    const lines = [...roads, ...deco.tracks];
+    const joined = (p: Point, self: Point[]) =>
+      p.x < 1.2 || p.y < 1.2 || p.x > W - 2.2 || p.y > H - 2.2 || lines.some((l) => l !== self && l.some((q, k) => k > 0 && distToSegment(p.x, p.y, l[k - 1].x, l[k - 1].y, q.x, q.y) < 0.8));
+    void joined;
+    // (the civilian traffic keeps to the paved roads: the orchards' tracks are tractor and footpath country)
+    deco.trackNoCars = deco.tracks.map(() => true);
+  }
+  deco.plots = litaniPlots(g, cls, built);
+  deco.village = village;
+  deco.river = litaniData().course.map(([x, y]) => ({ x, y }));
+  // the high-voltage line (OSM), broken where it tops a crest of the exaggerated hills: the game's wires hang ~1.5
+  // units above the ground, so a span is never strung over a hilltop (render/pylonsite.ts spanClear)
+  deco.power = [];
+  {
+    const gh = (x: number, y: number) => {
+      const cx = Math.max(0, Math.min(W - 0.001, x));
+      const cy = Math.max(0, Math.min(H - 0.001, y));
+      const x0 = Math.floor(cx);
+      const y0 = Math.floor(cy);
+      const tx = cx - x0;
+      const ty = cy - y0;
+      const i = y0 * W1 + x0;
+      const hs = g.heights;
+      return (hs[i] * (1 - tx) + hs[i + 1] * tx) * (1 - ty) + (hs[i + W1] * (1 - tx) + hs[i + W1 + 1] * tx) * ty;
+    };
+    for (const l of LITANI_POWER) {
+      const pts: Point[] = [];
+      for (let k = 1; k < l.length; k++) {
+        const [ax, ay] = l[k - 1];
+        const [bx, by] = l[k];
+        const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+        for (let j = 0; j < n; j++) pts.push({ x: ax + ((bx - ax) * j) / n, y: ay + ((by - ay) * j) / n });
+      }
+      const crest = pts.map((p, i) => {
+        const a = pts[Math.max(0, i - 4)];
+        const b = pts[Math.min(pts.length - 1, i + 4)];
+        return gh(p.x, p.y) > (gh(a.x, a.y) + gh(b.x, b.y)) / 2 + 0.45;
+      });
+      let run: Point[] = [];
+      pts.forEach((p, i) => {
+        const bad = crest.slice(Math.max(0, i - 3), i + 4).some(Boolean);
+        if (bad) {
+          if (run.length > 8) deco.power.push(run);
+          run = [];
+        } else run.push({ x: p.x - 0.5, y: p.y - 0.5 });
+      });
+      if (run.length > 8) deco.power.push(run);
+    }
+  }
+
+  const vehicleHills = litaniVehicleHills(g);
+  const ltMap = assemble({ name: 'Litani Mouth', id: 'frontline', biome: 'temperate' }, g, {
+    oreMines: oreFields.map((f) => ({ x: Math.round(f.x), y: Math.round(f.y) })),
+    starts,
+    oils,
+    bridges,
+    roads,
+    structures,
+    blocked,
+    techSites: LT_TECH,
+    deco,
+  });
+  ltMap.vehicleHills = vehicleHills;
+  ltMap.vehicleHillGrade = LT_VEH_HILL_GRADE;
+  return ltMap;
+}
+
+/**
+ * The vehicles' hill ground (GameMap.vehicleHills): every tile whose four corners stand over LT_VEH_HILL_M real metres,
+ * bar a lane along every road and track (the vehicles drive on, tile to tile), the bridges and their approaches, the
+ * bases' pads and build room, the ore and gem fields, the oil derricks and the tech sites' candidate spots. Vehicles
+ * take only LT_VEH_HILL_GRADE there (the valley floors, near level, stay theirs where a road leads in); the infantry
+ * the hills' full slopes.
+ */
+function litaniVehicleHills(g: Grids): Uint8Array {
+  const D = litaniData();
+  const W1 = W + 1;
+  const out = new Uint8Array(W * H);
+  const keep = new Uint8Array(W * H);
+  const disc = (cx: number, cy: number, r: number) => {
+    for (let y = Math.max(0, Math.floor(cy - r - 1)); y <= Math.min(H - 1, Math.ceil(cy + r)); y++)
+      for (let x = Math.max(0, Math.floor(cx - r - 1)); x <= Math.min(W - 1, Math.ceil(cx + r)); x++) if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r) keep[y * W + x] = 1;
+  };
+  for (const r of D.roads)
+    for (let k = 1; k < r.pts.length; k++) {
+      const [ax, ay] = r.pts[k - 1];
+      const [bx, by] = r.pts[k];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.25));
+      // (the main roads a lane wider: their carriageway and verges)
+      for (let j = 0; j <= n; j++) disc(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n, r.cls >= 3 ? 0.75 : 1.6);
+    }
+  for (const b of LITANI_BRIDGES) disc(b.x, b.y, 8);
+  for (const st of LT_STARTS) disc(st.x + 0.5, st.y + 0.5, 13);
+  for (const [x, y, r] of LT_ORE) disc(x + 0.5, y + 0.5, r + 3);
+  for (const [x, y] of LT_OILS) disc(x + 1, y + 1, 4);
+  for (const t of LT_TECH) for (const [x, y] of [...t.at, ...(t.at2 ?? [])]) disc(x + 1, y + 1, 4);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (keep[i] || g.tiles[i] === Tile.Water || g.tiles[i] === Tile.Bridge) continue;
+      if ([y * W1 + x, y * W1 + x + 1, (y + 1) * W1 + x, (y + 1) * W1 + x + 1].every((v) => D.elev[v] / 10 > LT_VEH_HILL_M)) out[i] = 1;
+    }
+  return out;
+}
+
+/** The real hills above this (metres) off the roads are the infantry's: vehicles take only LT_VEH_HILL_GRADE there. */
+const LT_VEH_HILL_M = 40;
+/** The vehicles' grade limit on the hill ground (sim/slope.ts MAX_GRADE elsewhere: 0.53). */
+const LT_VEH_HILL_GRADE = 0.03;
+
+/** The steepest step (height units) between neighbouring vertices of the exaggerated land, after easing. */
+const LT_GRADE = 0.42;
+/** ... in the hills and the gorge off the roads (litaniHills): over the vehicles' limit, under the infantry's (sim/slope.ts MAX_GRADE 0.53 / 0.83). */
+const LT_GRADE_HILL = 0.72;
+/** Ground below this (metres, real) is the coastal plain and the valley floors: eased for the vehicles everywhere. */
+const LT_HILL_M = 12;
+/** In the hills a tile is bare rock only this steep (rise over the tile): about where the infantry stop too. */
+const LT_ROCK_HILL = 1.6;
+
+/**
+ * The hills and the gorge left steep (per vertex, 1 = keep the real slope up to LT_GRADE_HILL): land above LT_HILL_M
+ * metres, clear of every road and track (OSM, 2.5 tiles), the bridges and their approaches, the bases' pads and
+ * build room, the ore and gem fields, the oil derricks and the tech sites' candidate spots.
+ */
+function litaniHills(g: Grids): Uint8Array {
+  const D = litaniData();
+  const W1 = W + 1;
+  const out = new Uint8Array(W1 * (H + 1));
+  const keep = new Uint8Array(W1 * (H + 1));
+  const disc = (cx: number, cy: number, r: number) => {
+    for (let vy = Math.max(0, Math.floor(cy - r)); vy <= Math.min(H, Math.ceil(cy + r)); vy++)
+      for (let vx = Math.max(0, Math.floor(cx - r)); vx <= Math.min(W, Math.ceil(cx + r)); vx++) if (Math.hypot(vx - cx, vy - cy) <= r) keep[vy * W1 + vx] = 1;
+  };
+  for (const r of D.roads)
+    for (let k = 1; k < r.pts.length; k++) {
+      const [ax, ay] = r.pts[k - 1];
+      const [bx, by] = r.pts[k];
+      const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / 0.5));
+      for (let j = 0; j <= n; j++) disc(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n, 2.5);
+    }
+  for (const b of LITANI_BRIDGES) disc(b.x, b.y, 8);
+  for (const st of LT_STARTS) disc(st.x + 0.5, st.y + 0.5, 17);
+  for (const [x, y, r] of LT_ORE) disc(x + 0.5, y + 0.5, r + 3);
+  for (const [x, y] of LT_OILS) disc(x + 1, y + 1, 4);
+  for (const t of LT_TECH) for (const [x, y] of [...t.at, ...(t.at2 ?? [])]) disc(x + 1, y + 1, 4);
+  for (let i = 0; i < out.length; i++) out[i] = !keep[i] && D.elev[i] / 10 > LT_HILL_M ? 1 : 0;
+  void g;
+  return out;
+}
+/** Ground steeper than this (height rise over a tile, after the vertical exaggeration) is bare rock. */
+const LT_ROCK = 1.25;
+/**
+ * The relief's vertical scale (the owner's design guide: the heights levelled to the full range "so there are sharp,
+ * clear height differences"): metres above sea level -> height units over the coastline. About 1:1 (LT_M metres a
+ * unit) on the coastal plain, steepening smoothly to 1.75 : 1 from 8 m up to 45 m and above; monotonic, so every
+ * ridge, valley and the river's gorge keep their real shape and order. The whole curve is scaled by LT_LIFT_K so the
+ * window's top (the hills east of the gorge) stands about 9 units high.
+ */
+export function litaniLift(m: number) {
+  return LT_LIFT_K * (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
+}
+/** The relief's top (height units): the real top, 257.3 m, stands this high (9 before, 7.1 on the 104 window). */
+const LT_TOP = 16;
+/**
+ * Scale of the relief curve: the window grown east to 152 tiles takes in the real hills to 257.3 m (the baked
+ * heights); the top stands LT_TOP units high, so the hills and the gorge stand out in 3D from the game's camera.
+ */
+const LT_LIFT_K = LT_TOP / ((257.3 / LT_M) * 1.75);
+/** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
+const LT_APPROACH = 1.2;
+/** The garrison houses' kinds on the Litani mouth (their footprints made of the real buildings there: render/village.ts). */
+export const LT_GARRISON_KINDS = new Set<StructureKind>([StructureKind.House, StructureKind.Cottage, StructureKind.Townhouse, StructureKind.Shop]);
+/** A village building rounded for the map (MapDeco.village). */
+const ltRound = (h: { x: number; y: number; hl: number; hw: number; ang: number }) => ({ x: Math.round(h.x * 1000) / 1000, y: Math.round(h.y * 1000) / 1000, hl: Math.round(h.hl * 1000) / 1000, hw: Math.round(h.hw * 1000) / 1000, ang: Math.round(h.ang * 1000) / 1000 });
+/** The real buildings are drawn this much larger than they stand (game scale: the units and the garrison houses are too). */
+const LT_HOUSE_K = 1.3;
+/** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
+const LT_HOUSE_MIN = 18;
+/**
+ * Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen); player 1, the defender, on the north
+ * bank's plateau at the top (the real hilltop, 4.7 units up, 1.5 over the ground round it): its attackers come over
+ * the river's bridges and up the few roads, the slopes off them the infantry's (litaniHills).
+ */
+const LT_STARTS: Point[] = [
+  { x: 82, y: 132 },
+  { x: 48, y: 10 },
+];
+/** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
+const LT_ORE: [number, number, number, number][] = [
+  // south bank (player 0): two by the base, gems towards Qasmiyeh, one out past Ain Abou Abdallah, one up in the
+  // south-eastern hills
+  [66, 120, 3.4, 1],
+  [92, 140, 3.2, 1],
+  [58, 106, 2.6, 2],
+  [112, 132, 3.0, 1],
+  [134, 94, 3.0, 1],
+  // north bank (player 1): two by the plateau base, gems and one more on the slopes and the plain below it to the
+  // south-west, one up in the north-eastern hills
+  [38, 18, 3.4, 1],
+  [22, 38, 3.2, 1],
+  [28, 26, 2.6, 2],
+  [60, 30, 3.0, 1],
+  [88, 34, 3.0, 1],
+];
+/** Oil derricks (top-left tiles), three a side: two near the base, one in the hills. */
+const LT_OILS: [number, number][] = [
+  [70, 140],
+  [104, 110],
+  [132, 78],
+  [40, 2],
+  [27, 15],
+  [86, 50],
+];
+/** Capturable tech sites: as many of each on either bank (at: the south bank's candidates, at2: the north bank's). */
+const LT_TECH: NonNullable<GameMap['techSites']> = [
+  {
+    def: 'tech_hospital',
+    at: [[66, 142], [58, 140], [62, 144], [56, 144]],
+    at2: [[23, 7], [20, 8], [22, 12], [27, 9]],
+  },
+  {
+    def: 'tech_comms',
+    at: [[122, 136], [120, 139], [116, 135], [119, 139]],
+    at2: [[65, 29], [65, 30], [53, 25], [53, 22]],
+  },
+  // a second field hospital a side: on the coastal plain of the south bank, below the plateau on the north
+  {
+    def: 'tech_hospital',
+    at: [[44, 146], [48, 142], [40, 140], [52, 146]],
+    at2: [[33, 26], [32, 28], [30, 23], [33, 33]],
+  },
+  // the bigger window's fourth pair (as the Sinai's 208 x 208 has): a second comms tower a side, up in the hills
+  {
+    def: 'tech_comms',
+    at: [[138, 106], [136, 110], [142, 108], [134, 112]],
+    at2: [[91, 42], [92, 40], [90, 44], [93, 38]],
+  },
+];
+
+/** Douglas-Peucker on a polyline. */
+function simplifyLine(pts: Point[], eps: number): Point[] {
+  if (pts.length < 3) return pts;
+  let best = 0;
+  let k = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = distToSegment(pts[i].x, pts[i].y, pts[0].x, pts[0].y, pts[pts.length - 1].x, pts[pts.length - 1].y);
+    if (d > best) (best = d), (k = i);
+  }
+  if (best <= eps) return [pts[0], pts[pts.length - 1]];
+  return [...simplifyLine(pts.slice(0, k + 1), eps).slice(0, -1), ...simplifyLine(pts.slice(k), eps)];
+}
+
+/**
+ * The Litani's farm plots (render hints, MapDeco.plots). OSM maps what grows (orchards, greenhouses, fields) in a
+ * few large areas, not the parcels: its small areas go in as they are, and the rest of the cultivated plain is cut
+ * into parcels of the real ones' size (60 - 150 m) on a grid turned to the local roads' main direction (the farm
+ * tracks run along it), each growing what the land use says there, with a track's or windbreak's width (~30 m)
+ * between them.
+ */
+function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x: number, y: number) => number): NonNullable<MapDeco['plots']> {
+  const out: NonNullable<MapDeco['plots']> = [];
+  const crop = (k: number) => (k === 0 ? ('orchard' as const) : k === 1 ? ('greenhouse' as const) : undefined);
+  for (const [cx, cy, hl, hw, ang, k] of litaniData().plots) if (hl <= 7 && hw <= 5) out.push({ cx, cy, hl, hw, ang, crop: crop(k) });
+  // the tracks' main direction (length-weighted, folded to a quarter turn)
+  let sx = 0;
+  let sy = 0;
+  for (const r of litaniData().roads)
+    if (r.cls >= 2)
+      for (let k = 1; k < r.pts.length; k++) {
+        const dx = r.pts[k][0] - r.pts[k - 1][0];
+        const dy = r.pts[k][1] - r.pts[k - 1][1];
+        const a = Math.atan2(dy, dx) * 4;
+        const l = Math.hypot(dx, dy);
+        sx += Math.cos(a) * l;
+        sy += Math.sin(a) * l;
+      }
+  const ang = Math.atan2(sy, sx) / 4;
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  const c = W / 2;
+  const R = W * 0.75;
+  for (let v = -R, row = 0; v < R; row++) {
+    const hw = 1.1 + hash2(row, 1, 4721) * 0.9;
+    for (let u = -R + hash2(row, 2, 4721) * 3, col = 0; u < R; col++) {
+      const hl = 1.6 + hash2(row, col, 4722) * 1.6;
+      const px = c + (u + hl) * ca - (v + hw) * sa;
+      const py = c + (u + hl) * sa + (v + hw) * ca;
+      u += hl * 2 + 0.9;
+      const tx = Math.floor(px);
+      const ty = Math.floor(py);
+      if (tx < 1 || ty < 1 || tx >= W - 1 || ty >= H - 1) continue;
+      const t = g.tiles[ty * W + tx];
+      if ((t !== Tile.Grass && t !== Tile.Dirt) || built(tx, ty) > 2) continue;
+      const k = cls(tx, ty);
+      // the cultivated plain: orchards (citrus and bananas), greenhouses, and the open fields between
+      if (k !== 0 && k !== 1 && k !== 2 && k !== 6) continue;
+      const h = hash2(row, col, 4723);
+      out.push({ cx: px, cy: py, hl, hw, ang, crop: k === 1 ? (h < 0.85 ? 'orchard' : undefined) : k === 2 ? 'greenhouse' : k === 0 && h < 0.3 ? 'orchard' : undefined });
+    }
+    v += hw * 2 + 0.9;
+  }
+  return out;
+}
+

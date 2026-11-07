@@ -64,9 +64,13 @@ describe('shipyard placement', () => {
   it('only maps with open sea offer the navy (the river maps do not)', () => {
     expect(w.hasSea).toBe(true);
     expect(w.shipSpots.length).toBeGreaterThan(40);
-    const f = mk('frontline');
+    // (the river map: Frozen Pass; the Litani mouth, id 'frontline', has the Mediterranean on its west)
+    const f = mk('winter' as never);
     expect(f.hasSea).toBe(false);
     expect(f.canBuild(0, 'usa_shipyard')).toBe(false);
+    const lit = mk('frontline');
+    expect(lit.hasSea).toBe(true);
+    expect(lit.shipSpots.length).toBeGreaterThan(20);
   });
 
   it('the Shipyard needs the Radar Center (like the Airbase), not just the War Factory', () => {
@@ -85,7 +89,18 @@ describe('shipyard placement', () => {
   });
 
   it('maps: both sides get Shipyard coast on the same sea at a fair distance; the river maps get none', () => {
-    for (const id of ['frontline', 'winter', 'urban'] as const) expect(mk(id as never).shipSpots.length).toBe(0);
+    for (const id of ['winter', 'urban'] as const) expect(mk(id as never).shipSpots.length).toBe(0);
+    // the Litani mouth (real coast, not mirrored): the south side has Shipyard coast within its Construction Yard's
+    // reach; the north base stands on the plateau inland (the defender's hill: sim/maps.ts LT_STARTS), its coast
+    // further off - some of it, on its own bank, within reach of a Construction Yard on the coastal plain below
+    {
+      const lit = mk('frontline');
+      lit.map.starts.forEach((s, k) => {
+        let best = Infinity;
+        for (const i of lit.shipSpots) best = Math.min(best, Math.hypot((i % lit.map.w) + SHIP_W / 2 - s.x - 0.5, Math.floor(i / lit.map.w) + SHIP_H / 2 - s.y - 0.5));
+        expect(best).toBeLessThan(k ? 2 * SHIP_YARD_REACH : SHIP_YARD_REACH - 2);
+      });
+    }
     const W = w.map.w;
     // per body of water: the yard spot nearest each start; the sea both sides share, at the fairest distances
     const dist = new Map<number, [number, number]>();

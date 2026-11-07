@@ -1,4 +1,5 @@
-import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, topCoast, type GameMap, WATER_LEVEL } from '../sim/map';
+import { coastWiggle as simCoastWiggle, groundHeight, seaWiggle, topCoast, type GameMap, type SeaDeco, WATER_LEVEL } from '../sim/map';
+import { litaniSea, litaniSeabed } from '../sim/maps';
 import { fbm, hash2 } from '../sim/rng';
 import { biomeLook, type BiomeLook } from './biome';
 import { landmarkPlan, type P2 } from './landmarks/plan';
@@ -12,8 +13,8 @@ import { landmarkPlan, type P2 } from './landmarks/plan';
  *    out, and every river / canal that touches the edge runs straight on at the edge's depth;
  *  - the far ring (horizon.ts, out to HZ_RADIUS from the map centre): the biome's relief rises
  *    with distance (rolling hills and ridgelines, dunes and mesas, snow-capped mountains), the
- *    rivers meander on in widening valleys, and the water bodies (Canal City's bay, Frontline's
- *    lake) cut in.
+ *    rivers meander on in widening valleys, and the water bodies (Canal City's bay, the Litani
+ *    mouth's Mediterranean) cut in.
  *
  * Meeting this terrain (relief agents: cliffs / ridges at the map edge, rocks.ts / waterside.ts / relief*):
  *  - `edgeHeightAt(map, x, y)` is the outskirts / horizon ground height at any (x, y) outside the map
@@ -32,6 +33,18 @@ export const HZ_MARGIN = 84;
 export const HZ_CELL = 2;
 /** Outer radius of the far ring (from the map centre). */
 export const HZ_RADIUS = 560;
+
+/**
+ * The Litani mouth's hills past the map (its relief tops at 16 units, sim/maps.ts LT_TOP): rolling hills and ridges
+ * of the map's own scale rising from the edge (to ~14 units within 30), the hinterland's higher ridges further out
+ * (the real ground keeps rising inland: ~30 units by 300) - no towering grey ranges.
+ */
+function litaniRelief(x: number, y: number, d: number) {
+  const hills = Math.pow(ridgedL(x * 0.016, y * 0.016, 331), 1.5) * 11 + Math.max(0, fbm(x * 0.035, y * 0.035, 333, 3) - 0.32) * 7;
+  const inland = Math.pow(ridgedL(x * 0.0055, y * 0.0055, 337), 1.8) * 22;
+  return hills * ss(2, 34, d) + inland * ss(60, 300, d);
+}
+const ridgedL = (x: number, y: number, seed: number) => 1 - Math.abs(fbm(x, y, seed, 4) * 2 - 1);
 
 /** Hook for the relief agent (see the header). */
 export const HORIZON_EDGE: { lift: ((x: number, y: number, d: number) => number) | null } = { lift: null };
@@ -101,6 +114,8 @@ export interface Sea {
   northAt?: (u: number) => number;
   /** ...its samples for the shader. */
   north?: { e0: number; step: number; off: number[] };
+  /** The sea floor v units out from the waterline, as the map's own (the Litani: sim/maps.ts litaniSeabed). */
+  bed?: (v: number) => number;
 }
 
 /** Reef shelf width and its depth profile (as the sim's coast, sim/maps.ts). */
@@ -108,6 +123,39 @@ export const REEF_W = 2.4;
 export function reefBed(v: number) {
   const shelf = WATER_LEVEL - 0.07 - 0.065 * Math.min(v, REEF_W);
   return shelf + (-1.46 - shelf) * ss(REEF_W, REEF_W + 1.8, v);
+}
+
+/**
+ * The Litani mouth's coast in the Sea frame (seaward n = (-1, 1) / sqrt 2, real west; along u = (1, 1) / sqrt 2, real
+ * south): its distance from the map centre every 4 tiles of u where it crosses the map (litaniSea's zero), the end
+ * values carried on past it; the small ragged wiggle topCoast adds is taken back out so the in-map line is the real one.
+ */
+function litaniCoast(m: GameMap): NonNullable<SeaDeco['north']> {
+  const n = Math.SQRT1_2;
+  const cx = m.w / 2;
+  const cy = m.h / 2;
+  const step = 4;
+  const e0 = -Math.ceil((m.w * n) / step) * step;
+  const got: (number | null)[] = [];
+  for (let e = e0; e <= -e0; e += step) {
+    let hit: number | null = null;
+    // walk seaward from the centre along -n until the sea starts
+    for (let v = 0; v < m.w * 0.75; v += 0.25) {
+      const x = cx + n * e - n * v;
+      const y = cy + n * e + n * v;
+      if (x < 0 || y < 0 || x > m.w || y > m.h) break;
+      if (litaniSea(x, y) > 0) {
+        hit = v;
+        break;
+      }
+    }
+    got.push(hit === null ? null : hit + (0.9 * Math.sin(e * 0.23 + 0.4) + 0.55 * Math.sin(e * 0.57 + 1.9) + 0.3 * Math.sin(e * 1.31)));
+  }
+  const first = got.findIndex((v) => v !== null);
+  let last = got.length - 1;
+  while (last > 0 && got[last] === null) last--;
+  const off = got.map((v, i) => v ?? (i < first ? got[first]! : i > last ? got[last]! : got[Math.max(first, i - 1)]!));
+  return { e0, step, off: off.slice(0, 48) };
 }
 
 export interface Lake {
@@ -128,6 +176,8 @@ export interface FarPath {
 export class HorizonWorld {
   readonly look: BiomeLook;
   readonly code: 0 | 1 | 2 | 3;
+  /** The Litani mouth: its hills carry on past the map's edge (litaniRelief), not the default far ridges. */
+  readonly litani: boolean;
   readonly w: number;
   readonly h: number;
   readonly cx: number;
@@ -171,20 +221,21 @@ export class HorizonWorld {
         this.sea.north = ds.north;
       }
     }
+    this.litani = this.code === 0 && map.id === 'frontline';
+    if (this.code === 0 && map.id === 'frontline') {
+      // the Litani mouth: the real Mediterranean coast runs past the map's left (west) corner, tile (0, h)
+      // (sim/maps.ts litaniSea); past the map it runs straight on, north and south, the sea floor as in the map
+      const n = Math.SQRT1_2;
+      const north = litaniCoast(map);
+      this.sea = { nx: -n, ny: n, ux: n, uy: n, off: north.off[0], harbour: [1e9, 1e9], beach: [-1e9, 1e9], mole: [0, -5000, 0.1, -5000], north, bed: litaniSeabed };
+      const ds = { top: 0, north } as unknown as SeaDeco;
+      this.sea.northAt = (u: number) => topCoast(ds, u);
+    }
     this.findRivers();
     if (this.code === 3) {
       // Canal City: the canal's two arms (north and west of the NW corner) run out into a bay
       const n = Math.SQRT1_2;
       this.sea = { nx: -n, ny: -n, ux: n, uy: -n, off: 68 + 34, harbour: [44, 150], beach: [-190, -46], mole: [158, -1, 118, 58] };
-    }
-    if (this.code === 0 && this.rivers.length) {
-      // Frontline: the river widens into a lake in the valley downstream
-      const r = this.rivers[this.rivers.length - 1];
-      const d = 250;
-      const p = this.riverPoint(r, d);
-      const [ox, oy] = this.sideNormal(r.side);
-      const ang = Math.atan2(oy, ox);
-      this.lakes.push({ x: p.x + ox * 60, y: p.y + oy * 60, rx: 120, ry: 62, c: Math.cos(ang), s: Math.sin(ang) });
     }
   }
 
@@ -198,10 +249,6 @@ export class HorizonWorld {
 
   edgeHeight(x: number, y: number) {
     return groundHeight(this.map, Math.max(0, Math.min(this.w - 0.001, x)), Math.max(0, Math.min(this.h - 0.001, y)));
-  }
-
-  private sideNormal(side: number): [number, number] {
-    return side === 0 ? [-1, 0] : side === 1 ? [1, 0] : side === 2 ? [0, -1] : [0, 1];
   }
 
   private findRivers() {
@@ -219,7 +266,7 @@ export class HorizonWorld {
           if (wet && run < 0) run = L;
           if (!wet && run >= 0) {
             // (a run into the sea is the coast, not a channel)
-            const inSea = this.sea?.twin && [run, (run + L) / 2, L - 0.5].some((q) => {
+            const inSea = (this.sea?.twin || this.sea?.north) && [run, (run + L) / 2, L - 0.5].some((q) => {
               const p = this.sidePoint(side, q, 0);
               return this.seaV(p.x, p.y).v > -6;
             });
@@ -432,6 +479,7 @@ export class HorizonWorld {
 
   /** The biome's far relief above the plain at (x, y), d units past the edge. */
   relief(x: number, y: number, d: number) {
+    if (this.litani) return litaniRelief(x, y, d);
     switch (this.code) {
       case 1: {
         const u = x * 0.82 + y * 0.57;
@@ -488,7 +536,9 @@ export class HorizonWorld {
     const base = this.edgeHeight(x, y);
     if (d <= 0) return base - (drop ? 0.14 : 0);
     // near belt: flatten towards a gentle plain, then rolling hills
-    const plain = Math.max(base, 0) * (1 - ss(0, 10, d));
+    // (the Litani's sea carries on its edge's depth too: the coast past the map is only approximately the map's)
+    // (the Litani mouth: its 16-unit hills sink away over ~45 units, not 10, while its own far hills rise: litaniRelief)
+    const plain = (this.sea?.bed ? base : Math.max(base, 0)) * (1 - ss(0, this.litani ? 45 : 10, d));
     const hills = (fbm(x * 0.035, y * 0.035, 909, 3) - 0.38) * 5.5;
     const ch = this.ch;
     this.channelAt(x, y, ch);
@@ -500,7 +550,7 @@ export class HorizonWorld {
     const rv = this.rv;
     this.riverAt(x, y, rv);
     // far relief, kept off the river valleys and the wadi
-    const relief = d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near)) : 0;
+    const relief = this.litani ? this.relief(x, y, d) * (1 - Math.max(rv.valley, near)) : d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near)) : 0;
     // channel beds (rivers, the wadi) carry on in their own direction with the edge's cross-section
     let hgt = Math.min(dry + relief, bed);
     if (d > HZ_MARGIN - 14) {
@@ -522,11 +572,15 @@ export class HorizonWorld {
     if (this.sea) {
       const { v, u } = this.seaV(x, y);
       const s = this.sea;
-      if (s.twin) {
+      if (s.twin || s.bed) {
         // the reef shelf and the deep water; the beach rising from the waterline (as in the map)
         // (as deep as the map's sea at the edge, deepening further out)
-        if (v > 0) return reefBed(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
-        if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v);
+        if (v > 0) {
+          const b = (s.bed ?? reefBed)(v) - ss(4, 60, d) * Math.min(2, v * 0.04);
+          // (the Litani's sea floor: carried on from the map's own edge, the real coast's shelf taking over within 6 units)
+          return s.twin ? b : b + (base - 0.14 - b) * (1 - ss(0, 6, d));
+        }
+        if (v > -10) hgt += (WATER_LEVEL + 0.03 - v * 0.075 - hgt) * ss(-10, -4.2, v) * (s.twin ? 1 : ss(0, 6, d));
         return hgt;
       }
       if (v > 0) return WATER_LEVEL - 0.3 - Math.min(v * 0.07, 3.5);

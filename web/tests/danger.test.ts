@@ -65,7 +65,10 @@ function openRoad(n: RoadNet, len: number): { li: number; a: number; len: number
     const arcs = [L.a0, ...L.stops.map((s) => s.arc), L.a1].sort((a, b) => a - b);
     for (let k = 0; k + 1 < arcs.length; k++) {
       const gap = arcs[k + 1] - arcs[k] - 4;
-      if (gap >= len && (!best || gap > best.len)) best = { li, a: arcs[k] + 2, len: gap };
+      // (room behind the car to drive away into: on the old map the stretch started where the road leaves the map; on the
+      // Litani's 152-tile window the longest open stretch starts at a road's dead end, so the car starts well along any)
+      const back = Math.min(28, Math.max(0, gap - len - 15));
+      if (gap >= len && (!best || gap > best.len)) best = { li, a: arcs[k] + 2 + back, len: gap - back };
     }
   });
   if (!best) throw new Error('no open road');
@@ -149,7 +152,10 @@ describe('traffic under fire', () => {
       expect(hazards).toBe(true);
       // ... and away: far from it now, heading away from it
       expect(Math.hypot(c.x - tank.x, c.y - tank.y)).toBeGreaterThan(minD + 4);
-      expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
+      // (unless it has fled right out to where the road leaves the map, as on the Litani mouth's raised relief: there
+      // it turns at the map's edge)
+      const atEdge = Math.min(c.x, c.y, m.w - c.x, m.h - c.y) < 2;
+      if (!atEdge) expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
     });
   }
 

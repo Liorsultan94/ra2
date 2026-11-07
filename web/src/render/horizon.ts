@@ -12,6 +12,9 @@ import { SEA_SCATTER_GLSL } from './bluehole';
 import { NORTH_GLSL, northUniforms } from './northcoast';
 import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
+/** The Litani mouth's relief shading past the map (as render/ground.ts in it): towards the sun, from the north-west (map -x), 40 degrees up; (-gx, -gy, 1) is the ground's normal. */
+const LT_SUN = [Math.cos((40 * Math.PI) / 180), 0, Math.sin((40 * Math.PI) / 180)];
+
 /*
  * The world past the map edge, out to the horizon (render only; see horizonworld.ts for the
  * terrain itself). Everything here is a handful of merged / instanced draws:
@@ -24,7 +27,7 @@ import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, spli
  *    `hzShade` - the map edge keeps the fog of war (fading out over ~16 units), further out the
  *    ground melts by distance into the sky's horizon colour (sky.ts), thicker in bad weather, so the
  *    far ring ends seamlessly in the sky dome;
- *  - far water: one opaque sheet (meandering rivers, Canal City's bay, Frontline's lake) with a
+ *  - far water: one opaque sheet (meandering rivers, Canal City's bay, the Litani mouth's sea) with a
  *    cheap version of the river shader (same tints, sky / sun / ice), breaking waves on the beach
  *    and around the breakwater;
  *  - forests as billboard cards (one instanced draw), towns and villages as instanced houses /
@@ -258,6 +261,24 @@ export class Horizon {
       mix([0.2, 0.27, 0.15], forest * (1 - sub) * 0.85);
       mix([0.45, 0.43, 0.4], ss(0.6, 1.0, sl));
       fk = sub * (1 - ss(150, 190, d));
+    } else if (W.litani) {
+      // the Litani mouth's hills past the map, in the map's own colours (render/ground.ts: its height bands and
+      // relief shading): the green plain, olive and khaki hills, pale limestone up high; the slopes shaded from the
+      // north-west as the map is
+      set([0.4, 0.44, 0.23]);
+      const woods = Math.max(forest * 0.8, ss(0.25, 0.55, sl) * 0.5) * (1 - ss(14, 26, h));
+      mix([0.5, 0.47, 0.29], ss(2.5, 9, h) * 0.75);
+      mix([0.2, 0.27, 0.14], woods * 0.75);
+      mix([0.66, 0.63, 0.55], ss(14, 30, h) * 0.6);
+      const e = 1.5;
+      const gx = (W.height(x + e, y) - W.height(x - e, y)) / (2 * e);
+      const gy = (W.height(x, y + e) - W.height(x, y - e)) / (2 * e);
+      const lam = (gx * LT_SUN[0] + gy * LT_SUN[1] + LT_SUN[2]) / Math.hypot(gx, gy, 1);
+      const hs = 1 + Math.max(-0.5, Math.min(0.3, (lam - LT_SUN[2]) * 1.6));
+      r *= hs;
+      g *= hs;
+      b *= hs;
+      fk = (1 - woods) * (1 - ss(0.15, 0.35, sl)) * (1 - ss(3, 8, h));
     } else {
       set([0.41, 0.42, 0.24]);
       const woods = Math.max(forest, ss(0.22, 0.5, sl) * 0.7);
@@ -461,6 +482,8 @@ export class Horizon {
       seaN: { value: new THREE.Vector4(sea?.nx ?? 0, sea?.ny ?? 0, sea?.ux ?? 0, sea?.uy ?? 0) },
       seaOff: { value: sea?.off ?? 0 },
       seaTwin: { value: sea?.twin ? 1 : 0 },
+      // a sea that runs into the map itself (twin, or the Litani's): the outskirts draw its near belt
+      seaBelt: { value: sea?.twin || sea?.bed ? 1 : 0 },
       seaOff2: { value: sea?.off2 ?? sea?.off ?? 0 },
       seaEven: { value: sea?.even ? 1 : 0 },
       // the Mediterranean's coast as the owner drew it (sim/map.ts topCoast; NORTH_K samples)
@@ -503,6 +526,7 @@ export class Horizon {
         uniform vec4 seaN;
         uniform float seaOff;
         uniform float seaTwin;
+        uniform float seaBelt;
         uniform float seaOff2;
         uniform float seaEven;
         ${NORTH_GLSL}
@@ -522,7 +546,7 @@ export class Horizon {
           #if HAS_HT
           // the battlefield's own water sheet still draws the rivers straight out of the edge in the near belt
           // (the twin sea's near belt: the outskirts' copy of the battlefield water draws it, coast and reef)
-          if ( seaTwin > 0.5 && cheb < hzMargin - 0.5 ) discard;
+          if ( seaBelt > 0.5 && cheb < hzMargin - 0.5 ) discard;
           if ( cheb < hzMargin ) {
             vec2 q = clamp( p, vec2( 0.0 ), mapSize );
             float g = texture2D( heightTex, ( q + 0.5 ) / ( mapSize + 1.0 ) ).r * 4.5 - 1.5;

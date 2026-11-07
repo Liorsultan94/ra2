@@ -14,15 +14,21 @@ function base(opts: { autoDefend?: boolean; seed?: number; fog?: FogMode } = {})
   });
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
-  w.spawnBuilding('usa_conyard', 0, 4, 88, true);
-  w.spawnBuilding('russia_conyard', 1, 88, 4, true);
-  const plant = w.spawnBuilding('usa_power', 0, 20, 80, true);
+  // (the scene stands on the open plain of the Litani's south bank: the old map's spots moved by OX, OY)
+  w.spawnBuilding('usa_conyard', 0, 4 + OX, 88 + OY, true);
+  w.spawnBuilding('russia_conyard', 1, 21, 15, true);
+  const plant = w.spawnBuilding('usa_power', 0, 20 + OX, 80 + OY, true);
   plant.hp = plant.maxHp = 1e6; // survives the test
   return { w, plant };
 }
 
-function unitAt(w: World, def: string, owner: number, x: number, y: number) {
-  const p = w.nearestPassable(x, y)!;
+/** The old map's spots of this scene, moved onto the Litani's south bank (map id 'frontline'). */
+const OX = 52;
+const OY = -2;
+
+/** A unit near (x, y) of the scene (moved by OX, OY; `abs`: a map position as it is). */
+function unitAt(w: World, def: string, owner: number, x: number, y: number, abs = false) {
+  const p = w.nearestPassable(abs ? x : x + OX, abs ? y : y + OY)!;
   return w.spawnUnit(def, owner, p[0] + 0.5, p[1] + 0.5);
 }
 
@@ -53,7 +59,7 @@ describe('automatic base defence', () => {
     const b = unitAt(w, 'usa_mbt', 0, 12, 82);
     const post = [a.x, a.y, b.x, b.y];
     // too far away to be pulled in
-    const far = unitAt(w, 'usa_mbt', 0, 60, 40);
+    const far = unitAt(w, 'usa_mbt', 0, 40, 98, true);
     const r = raider(w, plant);
     r.hp = r.maxHp = 3000;
     untilHit(w, plant);
@@ -93,7 +99,7 @@ describe('automatic base defence', () => {
     const hold = unitAt(w, 'usa_mbt', 0, 14, 74);
     w.issue(0, { type: 'stance', ids: [hold.id], stance: 'hold' });
     const ordered = unitAt(w, 'usa_mbt', 0, 12, 82);
-    w.issue(0, { type: 'move', ids: [ordered.id], x: 10.5, y: 84.5 });
+    w.issue(0, { type: 'move', ids: [ordered.id], x: 10.5 + OX, y: 84.5 + OY });
     const harv = unitAt(w, 'usa_harvester', 0, 16, 84);
     harv.order = { type: 'idle' };
     const arty = unitAt(w, 'usa_arty', 0, 13, 78);
@@ -124,7 +130,7 @@ describe('automatic base defence', () => {
     r.hp = r.maxHp = 1e5;
     untilHit(w, plant);
     expect(a.defend).not.toBeNull();
-    w.issue(0, { type: 'move', ids: [a.id], x: 6.5, y: 70.5 });
+    w.issue(0, { type: 'move', ids: [a.id], x: 6.5 + OX, y: 70.5 + OY });
     run(w, 1);
     expect(a.defend).toBeNull();
     expect(a.order).toMatchObject({ type: 'move' });

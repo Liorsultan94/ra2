@@ -23,8 +23,9 @@ describe('relief', () => {
           else if (lift > 0.3) lifted++;
         }
       expect(above).toBe(0);
-      // every map with rock gets real cliffs (the city has none)
+      // every map with rock gets real cliffs (the city has none; the Litani mouth's coastal plain only a few, on the
+      // steepest slopes of its hills)
       if (id === 'urban') expect(rf.count).toBe(0);
-      else expect(lifted).toBeGreaterThan(150);
+      else expect(lifted).toBeGreaterThan(id === 'frontline' ? 20 : 150);
     });
 });

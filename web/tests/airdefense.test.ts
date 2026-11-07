@@ -299,11 +299,12 @@ describe('Rocket Team (AT/AA): RPG for the ground, shoulder-fired missile for th
 describe('base defence and AI against aircraft', () => {
   it('auto base defence never sends ground-only units at a helicopter; Rocket Teams answer it', () => {
     const w = arena(31, 'usa', 'russia', true);
-    const plant = w.spawnBuilding('usa_power', 0, 20, 80, true);
+    // (the scene on the Litani's south bank, as in basedefense.test.ts: the old map's spots moved by (+52, -2))
+    const plant = w.spawnBuilding('usa_power', 0, 72, 78, true);
     plant.hp = plant.maxHp = 1e6;
-    const rifles = [at(w, 'usa_rifle', 0, 15, 75), at(w, 'usa_rifle', 0, 16, 75), at(w, 'usa_mbt', 0, 14, 77)];
-    const team = at(w, 'usa_at', 0, 15, 82);
-    const heli = w.spawnUnit('russia_heli', 1, 26, 81);
+    const rifles = [at(w, 'usa_rifle', 0, 67, 73), at(w, 'usa_rifle', 0, 68, 73), at(w, 'usa_mbt', 0, 66, 75)];
+    const team = at(w, 'usa_at', 0, 67, 80);
+    const heli = w.spawnUnit('russia_heli', 1, 78, 79);
     heli.hp = heli.maxHp = 1e5;
     w.issue(1, { type: 'attack', ids: [heli.id], target: plant.id });
     let aaShots = 0;

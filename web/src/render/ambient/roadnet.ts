@@ -1,4 +1,4 @@
-import { Tile, type GameMap } from '../../sim/map';
+import { Tile, deckAxis, type GameMap } from '../../sim/map';
 import type { Layout, V2 } from '../layout';
 import type { Board, Lot } from './sites';
 import type { Sign } from './signplan';
@@ -441,13 +441,15 @@ export function netInput(m: GameMap, layout: Layout, bridges: readonly { ends: r
 
 /** Deck ends of the map's bridges (as the sim computes them). */
 export function bridgeEnds(m: GameMap): { ends: V2[] }[] {
-  const D = Math.SQRT1_2;
-  return m.bridges.map((b) => ({
-    ends: [
-      { x: b.x - (b.length / 2) * D, y: b.y + (b.length / 2) * D },
-      { x: b.x + (b.length / 2) * D, y: b.y - (b.length / 2) * D },
-    ],
-  }));
+  return m.bridges.map((b) => {
+    const u = deckAxis(b);
+    return {
+      ends: [
+        { x: b.x - (b.length / 2) * u.x, y: b.y - (b.length / 2) * u.y },
+        { x: b.x + (b.length / 2) * u.x, y: b.y + (b.length / 2) * u.y },
+      ],
+    };
+  });
 }
 
 export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetInput['tracks'], bridges: readonly { ends: readonly V2[] }[]): NetInput {

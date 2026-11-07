@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, groundHeight, seaDist, type GameMap } from '../sim/map';
+import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, deckAxis, groundHeight, seaDist, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
 import { biomeLook } from './biome';
@@ -466,8 +466,79 @@ export class RiverInfo {
   /** Bridge positions along the axis. */
   readonly bridgeS: number[];
 
+  /** The map's own river course (MapDeco.river): samples along it, nearest sample per tile (sAt). */
+  private readonly courseAt: Int32Array | null = null;
+
   constructor(readonly map: GameMap) {
     const m = map;
+    const course = m.deco?.river;
+    if (course && course.length > 1) {
+      // the real course (the Litani): samples every half tile along it, widths measured across it
+      const pts: { x: number; y: number }[] = [];
+      for (let k = 0; k < course.length - 1; k++) {
+        const a = course[k];
+        const b = course[k + 1];
+        const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.5));
+        for (let j = 0; j < n; j++) pts.push({ x: a.x + ((b.x - a.x) * j) / n, y: a.y + ((b.y - a.y) * j) / n });
+      }
+      pts.push(course[course.length - 1]);
+      const wetAt = (x: number, y: number) => x >= 0 && y >= 0 && x <= m.w && y <= m.h && groundHeight(m, x, y) < WATER_LEVEL;
+      let s = 0;
+      let wsum = 0;
+      for (let i = 0; i < pts.length; i++) {
+        if (i) s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        const a = pts[Math.max(0, i - 2)];
+        const b = pts[Math.min(pts.length - 1, i + 2)];
+        const tl = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const tx = (b.x - a.x) / tl;
+        const ty = (b.y - a.y) / tl;
+        // the wet run across, out to 3 tiles each side (the mouth opens into the sea)
+        let lo = 0;
+        let hi = 0;
+        while (lo < 3 && wetAt(pts[i].x + ty * (lo + 0.1), pts[i].y - tx * (lo + 0.1))) lo += 0.1;
+        while (hi < 3 && wetAt(pts[i].x - ty * (hi + 0.1), pts[i].y + tx * (hi + 0.1))) hi += 0.1;
+        const width = Math.max(0.6, lo + hi);
+        this.samples.push({ s, x: pts[i].x, y: pts[i].y, tx, ty, width });
+        wsum += width;
+      }
+      // (the samples are 0.5 apart on average: re-space s so sample(s) indexes them exactly)
+      this.samples.forEach((c, i) => (c.s = i * 0.5));
+      const f = pts[0];
+      const l = pts[pts.length - 1];
+      const L = Math.hypot(l.x - f.x, l.y - f.y) || 1;
+      this.ax = (l.x - f.x) / L;
+      this.ay = (l.y - f.y) / L;
+      this.ox = (f.x + l.x) / 2;
+      this.oy = (f.y + l.y) / 2;
+      this.s0 = 0;
+      this.meanWidth = wsum / this.samples.length;
+      // nearest sample per tile
+      const at = new Int32Array(m.w * m.h);
+      for (let ty = 0; ty < m.h; ty++)
+        for (let tx = 0; tx < m.w; tx++) {
+          let best = 0;
+          let bd = Infinity;
+          for (let i = 0; i < this.samples.length; i++) {
+            const c = this.samples[i];
+            const d = (c.x - tx - 0.5) ** 2 + (c.y - ty - 0.5) ** 2;
+            if (d < bd) {
+              bd = d;
+              best = i;
+            }
+          }
+          at[ty * m.w + tx] = best;
+        }
+      this.courseAt = at;
+      this.bridgeS = m.bridges.map((b) => this.sAt(b.x, b.y)).sort((a, b) => a - b);
+      const N = (this.N = m.w * RES);
+      const NH = (this.NH = m.h * RES);
+      this.shore = new Float32Array(N * NH);
+      this.vx = new Float32Array(N * NH);
+      this.vy = new Float32Array(N * NH);
+      this.wetMask = new Uint8Array(N * NH);
+      // (no rapids, weir or jetty on a real river that has none)
+      return;
+    }
     // main axis: principal direction of the water tiles
     let n = 0;
     let mx = 0;
@@ -580,9 +651,21 @@ export class RiverInfo {
     this.pickFeatures();
   }
 
-  /** Position along the main axis. */
+  /** Position along the main axis (the map's own course: the nearest sample's). */
   sAt(x: number, y: number) {
+    if (this.courseAt) {
+      const tx = Math.max(0, Math.min(this.map.w - 1, Math.floor(x)));
+      const ty = Math.max(0, Math.min(this.map.h - 1, Math.floor(y)));
+      return this.samples[this.courseAt[ty * this.map.w + tx]].s;
+    }
     return (x - this.ox) * this.ax + (y - this.oy) * this.ay;
+  }
+
+  /** On the map's own course, how far (x, y) lies from the river (tiles past its half width; 0 inside it). */
+  offCourse(x: number, y: number) {
+    if (!this.courseAt) return 0;
+    const c = this.sample(this.sAt(x, y))!;
+    return Math.max(0, Math.hypot(x - c.x, y - c.y) - c.width / 2);
   }
 
   /** Nearest centreline sample to axis position s (null without a river). */
@@ -703,12 +786,12 @@ export class RiverInfo {
 }
 
 function bridgePiers(m: GameMap): Pier[] {
-  const D = Math.SQRT1_2;
   const out: Pier[] = [];
-  // same layout as scenery.ts: three piers along the deck, which runs along (1, -1)
+  // same layout as bridgefx.ts: three piers along the deck (its axis: sim/map.ts deckAxis)
   for (const br of m.bridges) {
     const L = br.length;
-    for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) out.push({ x: br.x + k * D, y: br.y - k * D, hw: 0.2, hl: 2.1 * 0.35 });
+    const u = deckAxis(br);
+    for (const k of [-L / 2 + 1.5, 0, L / 2 - 1.5]) out.push({ x: br.x + k * u.x, y: br.y + k * u.y, hw: 0.2, hl: 2.1 * 0.35 });
   }
   return out;
 }
@@ -804,7 +887,8 @@ function buildWaterData(m: GameMap, info: RiverInfo): { data: THREE.DataTexture;
       // spirals within one 3 s cycle; the eddy zones show as soft foam and calmer water instead.
       let ax = 0;
       let ay = 0;
-      if (c && !dry[k] && !still) {
+      // (the sea past a real river's mouth lies still: no current away from the course)
+      if (c && !dry[k] && !still && info.offCourse(x, y) < 1.5) {
         const half = c.width / 2;
         const off = -(x - c.x) * c.ty + (y - c.y) * c.tx;
         const prof = Math.max(0.12, 1 - (off / Math.max(0.5, half)) ** 2);

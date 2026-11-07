@@ -5,10 +5,9 @@ import { sinaiExtraRoads, sinaiTrimRoads } from './ambient/sinairoads';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, SITE_CLEAR, detourSpans, edgesOffSites, makeRouter, nearSite, pylonFooting, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
 
 /*
- * Scenery layout of the hand-designed biome maps (desert, winter, city):
- * the same Layout the Frontline Crossing builder produces, but driven by the
- * render hints the map generator left in GameMap.deco (road widths, tracks,
- * plots, plazas, parks, power lines) instead of hard-coded via points.
+ * Scenery layout of every map (the Litani mouth, desert, winter, city), driven
+ * by the render hints the map generator left in GameMap.deco (road widths,
+ * tracks, plots and what grows on them, plazas, parks, power lines).
  * Deterministic: a pure function of the map.
  */
 
@@ -130,11 +129,12 @@ export function buildBiomeLayout(m: GameMap): Layout {
       if (wdt < 1.6) break;
       const mid = s + wdt / 2;
       const r = hash2(seed, 2, 615);
-      const type = biome === 'desert' ? (r < 0.6 ? FieldType.Green : r < 0.85 ? FieldType.Wheat : FieldType.Plowed) : r < 0.5 ? FieldType.Plowed : r < 0.8 ? FieldType.Fallow : FieldType.Wheat;
+      const type = z.crop === 'orchard' ? FieldType.Green : z.crop === 'greenhouse' ? FieldType.Plowed : biome === 'desert' ? (r < 0.6 ? FieldType.Green : r < 0.85 ? FieldType.Wheat : FieldType.Plowed) : r < 0.5 ? FieldType.Plowed : r < 0.8 ? FieldType.Fallow : FieldType.Wheat;
       const tilt = (hash2(seed, 3, 615) - 0.5) * 0.06;
       const f: Field = along
         ? { cx: (z.x0 + z.x1) / 2, cy: z.y0 + mid, hl: len / 2 - 0.3, hw: wdt / 2 - 0.3, angle: tilt, type }
         : { cx: z.x0 + mid, cy: (z.y0 + z.y1) / 2, hl: len / 2 - 0.3, hw: wdt / 2 - 0.3, angle: Math.PI / 2 + tilt, type };
+      if (z.crop) f.crop = z.crop;
       // shrink until it fits
       let g: Field | null = null;
       for (let cut = 0; cut <= f.hl * 0.9 && !g; cut += 0.5) {
@@ -156,6 +156,21 @@ export function buildBiomeLayout(m: GameMap): Layout {
       }
       s += wdt + 0.6;
     }
+  }
+  // farm plots at any angle (the Litani's orchards, greenhouses and fields): each shrinks until it fits
+  for (const z of deco?.plots ?? []) {
+    seed++;
+    const r = hash2(seed, 2, 625);
+    const type = z.crop === 'orchard' ? FieldType.Green : z.crop === 'greenhouse' ? FieldType.Plowed : r < 0.35 ? FieldType.Green : r < 0.6 ? FieldType.Plowed : r < 0.85 ? FieldType.Fallow : FieldType.Wheat;
+    let g: Field | null = null;
+    for (let cut = 0; cut <= 2.4 && !g; cut += 0.4) {
+      const t: Field = { cx: z.cx, cy: z.cy, hl: z.hl - cut, hw: z.hw - cut * 0.5, angle: z.ang, type };
+      if (t.hl >= 1.1 && t.hw >= 0.7 && fieldOk(t)) g = t;
+    }
+    if (!g) continue;
+    if (z.crop) g.crop = z.crop;
+    fields.push(g);
+    markField(g);
   }
   // city streets: asphalt strips with markings, and the crossings (zebras) where they meet
   if (biome === 'urban') {

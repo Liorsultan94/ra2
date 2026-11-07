@@ -35,7 +35,7 @@ describe('mission briefing', () => {
     expect(b.secondary[0]).toMatch(/bridges/);
     expect(b.time).toMatch(/NIGHT/);
     expect(b.weather).toMatch(/RAIN/);
-    expect(b.mapName).toBe('Frontline Crossing');
+    expect(b.mapName).toBe('Litani Mouth');
   });
 
   it('tactical map transform puts the two bases on opposite sides', () => {
@@ -43,8 +43,11 @@ describe('mission briefing', () => {
     const [a, c] = w.map.starts;
     const ua = mapUV(w.map.w, w.map.h, a.x, a.y);
     const uc = mapUV(w.map.w, w.map.h, c.x, c.y);
-    expect(ua.u).toBeLessThan(0.5);
-    expect(uc.u).toBeGreaterThan(0.5);
+    // (the Litani mouth, real north up, grown to 152 tiles: player 0 on the south bank at the bottom, player 1 on the
+    // north bank at the top, both on the western half by the coast - their navies need it - the south one further left)
+    expect(ua.v).toBeGreaterThan(0.5);
+    expect(uc.v).toBeLessThan(0.5);
+    expect(ua.u).toBeLessThan(uc.u);
   });
 });
 

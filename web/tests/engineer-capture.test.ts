@@ -13,12 +13,14 @@ describe('engineer capture behavior', () => {
     });
 
     // Spawn an enemy building
-    const bld = w.spawnBuilding('russia_power', 1, 30, 30);
+    // (on open ground of the Litani's north bank: since the window moved east, 30, 30 lies by the Qasmiyeh bridge's
+    // repair huts, which the second engineer would go on to)
+    const bld = w.spawnBuilding('russia_power', 1, 40, 15);
     expect(bld.owner).toBe(1);
 
     // Spawn 2 engineers close to the building
-    const eng1 = w.spawnUnit('usa_engineer', 0, 30, 27);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 30, 26);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 40, 12);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 40, 11);
 
     // Issue capture command with both engineers
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
@@ -55,11 +57,12 @@ describe('engineer capture behavior', () => {
     });
 
     // Find a neutral oil derrick or spawn a capturable tech building
-    const bld = w.spawnBuilding('tech_hospital', -1, 40, 40);
+    // (on open ground of the Litani's south bank: the old map's 40, 40 lies by the river now)
+    const bld = w.spawnBuilding('tech_hospital', -1, 72, 84);
     expect(bld.owner).toBe(-1);
 
-    const eng1 = w.spawnUnit('usa_engineer', 0, 40, 37);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 40, 36);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 72, 81);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 72, 80);
 
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
 
@@ -90,12 +93,13 @@ describe('engineer capture behavior', () => {
       ],
     });
 
-    const bld = w.spawnBuilding('usa_refinery', 0, 52, 100);
+    // (on the open plain by the south base: the old spot, 52, 100, lies in Qasmiyeh now that its houses stand there)
+    const bld = w.spawnBuilding('usa_refinery', 0, 74, 128);
     bld.hp = Math.floor(bld.maxHp * 0.4); // heavily damaged
     expect(bld.hp).toBeLessThan(bld.maxHp);
 
-    const eng1 = w.spawnUnit('usa_engineer', 0, 52, 97);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 52, 96);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 74, 125);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 74, 124);
 
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
 

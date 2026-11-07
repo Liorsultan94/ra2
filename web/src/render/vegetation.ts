@@ -84,9 +84,9 @@ export function canopyRadius(t: TreeSpot) {
 }
 
 /**
- * Species of a tree on tile (x, y) (`t`: 1 conifer tile, 2 broadleaf tile):
- * willows and birches along the water, fruit trees by the farmsteads, poplar
- * rows along the roads, Scots pine on the higher ground, oak-birch woods elsewhere.
+ * Species of a tree on tile (x, y) (`t`: 1 conifer tile, 2 broadleaf tile). The Litani mouth (temperate):
+ * willows and poplars along the river, citrus / olive and palms by the houses, poplars and palms along the
+ * roads, stone pines on the hills, oaks, olives and young trees elsewhere.
  */
 function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r: number, ctx: { roads: GameMap['roads']; structures: GameMap['structures'] }): Species {
   // the other climates: date palms by the water and umbrella acacias (desert); spruce / pine forest and
@@ -98,10 +98,8 @@ function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r:
     return r < 0.66 - Math.max(0, Math.min(0.3, h * 0.12)) ? Species.Spruce : Species.Pine;
   }
   if (m.biome === 'urban') return t === 1 ? (r < 0.7 ? Species.Young : Species.Fruit) : r < 0.45 ? Species.Oak : r < 0.7 ? Species.Birch : r < 0.85 ? Species.Young : Species.Willow;
-  if (t === 1) {
-    const h = m.heights[y * (m.w + 1) + x] ?? 0;
-    return r < 0.66 - Math.max(0, Math.min(0.3, h * 0.12)) ? Species.Spruce : Species.Pine;
-  }
+  // the Litani mouth (the temperate map): Mediterranean - stone pines on the hills, no spruce or birch
+  if (t === 1) return Species.Pine;
   let water = false;
   for (let dy = -2; dy <= 2 && !water; dy++)
     for (let dx = -2; dx <= 2; dx++) {
@@ -112,13 +110,15 @@ function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r:
         break;
       }
     }
-  if (water) return r < 0.42 ? Species.Willow : r < 0.76 ? Species.Birch : r < 0.9 ? Species.Oak : Species.Young;
+  // the river's banks: willows and tall poplars / eucalyptus rows, a few young trees
+  if (water) return r < 0.45 ? Species.Willow : r < 0.85 ? Species.Poplar : Species.Young;
   const cx = x + 0.5;
   const cy = y + 0.5;
   if (n4 <= 2) {
     let house = Infinity;
     for (const st of ctx.structures) house = Math.min(house, Math.hypot(Math.max(st.x - cx, 0, cx - (st.x + st.w)), Math.max(st.y - cy, 0, cy - (st.y + st.h))));
-    if (house < 4.5) return r < 0.62 ? Species.Fruit : r < 0.85 ? Species.Oak : Species.Young;
+    // by the houses: citrus and olive trees, a palm in the yard
+    if (house < 4.5) return r < 0.6 ? Species.Fruit : r < 0.8 ? Species.Palm : Species.Young;
     let road = Infinity;
     for (const pts of ctx.roads)
       for (let i = 1; i < pts.length; i++) {
@@ -130,9 +130,10 @@ function treeSpecies(m: GameMap, x: number, y: number, t: number, n4: number, r:
         const k = Math.max(0, Math.min(1, ((cx - a.x) * ex + (cy - a.y) * ey) / l2));
         road = Math.min(road, Math.hypot(a.x + ex * k - cx, a.y + ey * k - cy));
       }
-    if (road < 2.6) return r < 0.62 ? Species.Poplar : r < 0.85 ? Species.Oak : Species.Birch;
+    if (road < 2.6) return r < 0.55 ? Species.Poplar : r < 0.8 ? Species.Palm : Species.Fruit;
   }
-  return r < 0.52 ? Species.Oak : r < 0.74 ? Species.Birch : Species.Young;
+  // the scrub and the field edges: oaks and carobs, olives, young trees
+  return r < 0.45 ? Species.Oak : r < 0.75 ? Species.Fruit : Species.Young;
 }
 
 // ------------------------------------------------------------- material

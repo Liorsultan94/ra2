@@ -48,7 +48,7 @@ export interface GameOptions {
   attract?: boolean; // AI vs AI demo behind the main menu
   cinematic?: boolean; // slow-motion camera moments on big events (default on)
   seed?: number;
-  /** Map (default Frontline Crossing; sim/maps.ts). */
+  /** Map (default the Litani mouth, id 'frontline'; sim/maps.ts). */
   map?: MapId;
   /** Drone camera picture-in-picture (default auto). */
   droneCam?: 'auto' | 'off';

@@ -137,7 +137,9 @@ describe('peace time (early-game grace)', () => {
     const w = skirmish('hard', 0);
     const log = play(w, 0, TPS * 60 * 6, true);
     expect(log.firstWave).toBeGreaterThan(0);
-    expect(log.firstWave).toBeLessThan(TPS * 60 * 4);
+    // (within 5.5 min: on the Litani mouth the AI's base stands on the north plateau, 138 tiles by road from the
+    // south one, and seed 21's first offensive goes at 5.2 min; it went within 4 min from the old north base)
+    expect(log.firstWave).toBeLessThan(TPS * 60 * 5.5);
   }, 240000);
 
   it('the AI still defends its base during the grace', () => {

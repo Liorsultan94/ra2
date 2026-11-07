@@ -43,11 +43,17 @@ describe('AI navy', () => {
   }, 1_200_000);
 
   it('no navy where there is no sea', () => {
-    const w = new World({ seed: 1, map: 'frontline', players: [
+    // (the river maps: Frozen Pass; the Litani mouth, id 'frontline', has the Mediterranean)
+    const w = new World({ seed: 1, map: 'winter', players: [
       { name: 'A', faction: 'usa', color: 0, isAI: true },
       { name: 'B', faction: 'russia', color: 0, isAI: true },
     ] });
     const ai = new AIController(w, 0, 'hard');
     expect(ai.navy).toBeNull();
+    const lit = new World({ seed: 1, map: 'frontline', players: [
+      { name: 'A', faction: 'usa', color: 0, isAI: true },
+      { name: 'B', faction: 'russia', color: 0, isAI: true },
+    ] });
+    expect(new AIController(lit, 0, 'hard').navy).not.toBeNull();
   });
 });

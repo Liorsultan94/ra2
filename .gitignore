@@ -45,3 +45,6 @@ _ReSharper.*/
 
 # IntelliJ files
 .idea
+
+# the Litani terrain tool's download cache (web/tools/litani-terrain.mjs)
+.litani-cache/
