@@ -34,6 +34,18 @@ export const HZ_CELL = 2;
 /** Outer radius of the far ring (from the map centre). */
 export const HZ_RADIUS = 560;
 
+/**
+ * The Litani mouth's hills past the map (its relief tops at 16 units, sim/maps.ts LT_TOP): rolling hills and ridges
+ * of the map's own scale rising from the edge (to ~14 units within 30), the hinterland's higher ridges further out
+ * (the real ground keeps rising inland: ~30 units by 300) - no towering grey ranges.
+ */
+function litaniRelief(x: number, y: number, d: number) {
+  const hills = Math.pow(ridgedL(x * 0.016, y * 0.016, 331), 1.5) * 11 + Math.max(0, fbm(x * 0.035, y * 0.035, 333, 3) - 0.32) * 7;
+  const inland = Math.pow(ridgedL(x * 0.0055, y * 0.0055, 337), 1.8) * 22;
+  return hills * ss(2, 34, d) + inland * ss(60, 300, d);
+}
+const ridgedL = (x: number, y: number, seed: number) => 1 - Math.abs(fbm(x, y, seed, 4) * 2 - 1);
+
 /** Hook for the relief agent (see the header). */
 export const HORIZON_EDGE: { lift: ((x: number, y: number, d: number) => number) | null } = { lift: null };
 
@@ -164,6 +176,8 @@ export interface FarPath {
 export class HorizonWorld {
   readonly look: BiomeLook;
   readonly code: 0 | 1 | 2 | 3;
+  /** The Litani mouth: its hills carry on past the map's edge (litaniRelief), not the default far ridges. */
+  readonly litani: boolean;
   readonly w: number;
   readonly h: number;
   readonly cx: number;
@@ -207,6 +221,7 @@ export class HorizonWorld {
         this.sea.north = ds.north;
       }
     }
+    this.litani = this.code === 0 && map.id === 'frontline';
     if (this.code === 0 && map.id === 'frontline') {
       // the Litani mouth: the real Mediterranean coast runs past the map's left (west) corner, tile (0, h)
       // (sim/maps.ts litaniSea); past the map it runs straight on, north and south, the sea floor as in the map
@@ -464,6 +479,7 @@ export class HorizonWorld {
 
   /** The biome's far relief above the plain at (x, y), d units past the edge. */
   relief(x: number, y: number, d: number) {
+    if (this.litani) return litaniRelief(x, y, d);
     switch (this.code) {
       case 1: {
         const u = x * 0.82 + y * 0.57;
@@ -521,7 +537,8 @@ export class HorizonWorld {
     if (d <= 0) return base - (drop ? 0.14 : 0);
     // near belt: flatten towards a gentle plain, then rolling hills
     // (the Litani's sea carries on its edge's depth too: the coast past the map is only approximately the map's)
-    const plain = (this.sea?.bed ? base : Math.max(base, 0)) * (1 - ss(0, 10, d));
+    // (the Litani mouth: its 16-unit hills sink away over ~45 units, not 10, while its own far hills rise: litaniRelief)
+    const plain = (this.sea?.bed ? base : Math.max(base, 0)) * (1 - ss(0, this.litani ? 45 : 10, d));
     const hills = (fbm(x * 0.035, y * 0.035, 909, 3) - 0.38) * 5.5;
     const ch = this.ch;
     this.channelAt(x, y, ch);
@@ -533,7 +550,7 @@ export class HorizonWorld {
     const rv = this.rv;
     this.riverAt(x, y, rv);
     // far relief, kept off the river valleys and the wadi
-    const relief = d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near)) : 0;
+    const relief = this.litani ? this.relief(x, y, d) * (1 - Math.max(rv.valley, near)) : d > 16 ? this.relief(x, y, d) * ss(16, 110, d) * (1 - Math.max(rv.valley, near)) : 0;
     // channel beds (rivers, the wadi) carry on in their own direction with the edge's cross-section
     let hgt = Math.min(dry + relief, bed);
     if (d > HZ_MARGIN - 14) {

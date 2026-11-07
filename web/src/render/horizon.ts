@@ -12,6 +12,9 @@ import { SEA_SCATTER_GLSL } from './bluehole';
 import { NORTH_GLSL, northUniforms } from './northcoast';
 import { gridSectors, hybridSectors, radialSectors, splitInstancesBySector, splitMeshBySector, type SectorOf } from './sectors';
 
+/** The Litani mouth's relief shading past the map (as render/ground.ts in it): towards the sun, from the north-west (map -x), 40 degrees up; (-gx, -gy, 1) is the ground's normal. */
+const LT_SUN = [Math.cos((40 * Math.PI) / 180), 0, Math.sin((40 * Math.PI) / 180)];
+
 /*
  * The world past the map edge, out to the horizon (render only; see horizonworld.ts for the
  * terrain itself). Everything here is a handful of merged / instanced draws:
@@ -258,6 +261,24 @@ export class Horizon {
       mix([0.2, 0.27, 0.15], forest * (1 - sub) * 0.85);
       mix([0.45, 0.43, 0.4], ss(0.6, 1.0, sl));
       fk = sub * (1 - ss(150, 190, d));
+    } else if (W.litani) {
+      // the Litani mouth's hills past the map, in the map's own colours (render/ground.ts: its height bands and
+      // relief shading): the green plain, olive and khaki hills, pale limestone up high; the slopes shaded from the
+      // north-west as the map is
+      set([0.4, 0.44, 0.23]);
+      const woods = Math.max(forest * 0.8, ss(0.25, 0.55, sl) * 0.5) * (1 - ss(14, 26, h));
+      mix([0.5, 0.47, 0.29], ss(2.5, 9, h) * 0.75);
+      mix([0.2, 0.27, 0.14], woods * 0.75);
+      mix([0.66, 0.63, 0.55], ss(14, 30, h) * 0.6);
+      const e = 1.5;
+      const gx = (W.height(x + e, y) - W.height(x - e, y)) / (2 * e);
+      const gy = (W.height(x, y + e) - W.height(x, y - e)) / (2 * e);
+      const lam = (gx * LT_SUN[0] + gy * LT_SUN[1] + LT_SUN[2]) / Math.hypot(gx, gy, 1);
+      const hs = 1 + Math.max(-0.5, Math.min(0.3, (lam - LT_SUN[2]) * 1.6));
+      r *= hs;
+      g *= hs;
+      b *= hs;
+      fk = (1 - woods) * (1 - ss(0.15, 0.35, sl)) * (1 - ss(3, 8, h));
     } else {
       set([0.41, 0.42, 0.24]);
       const woods = Math.max(forest, ss(0.22, 0.5, sl) * 0.7);
