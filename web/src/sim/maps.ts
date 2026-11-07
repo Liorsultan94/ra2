@@ -2300,10 +2300,10 @@ export function sinaiPlaces() {
  * "Litani Mouth": the Litani river's last 3.5 km to the Mediterranean north of Tyre, south Lebanon, at the game's
  * real scale (35 m a tile: render/podmath.ts M_PER_TILE). Every height, the coastline, the river's course and banks,
  * the roads, the bridges, the villages' built-up ground and the orchards and greenhouses come from real data baked by
- * tools/litani-terrain.mjs into sim/litanidata.ts (AWS Terrain Tiles / SRTM elevation; OpenStreetMap). The window is
- * turned so the decks of the two highway bridges (the coastal road's Qasmiyeh bridge and the motorway's) run along
- * the engine's bridge direction, tile (1, -1): the sea lies at the top of the screen, the river runs up the screen
- * into it, the north bank on the right, the south bank (Qasmiyeh) on the left.
+ * tools/litani-terrain.mjs into sim/litanidata.ts (AWS Terrain Tiles / SRTM elevation; OpenStreetMap). Real north is
+ * up: the sea lies in the left corner, the river runs in from the right to its mouth, the north bank at the top, the
+ * south bank (Qasmiyeh) at the bottom. The window sits as far east (into the hills and up the river) as the coast
+ * still leaves the navy its open sea (sim/naval.ts SEA_MIN).
  *
  * Nothing is mirrored (GameMap.mirror 'none'): the banks differ as they do on the ground. The game's own pieces -
  * the bases, ore and gem fields, oil derricks, tech sites - are laid out by hand, as many of each on either bank at
@@ -2982,60 +2982,65 @@ const LT_GRADE = 0.42;
 const LT_ROCK = 1.25;
 /**
  * The relief's vertical scale (the owner's design guide: the heights levelled to the full range "so there are sharp,
- * clear height differences"): metres above sea level -> height units over the coastline. 1:1 (LT_M metres a unit) on
- * the coastal plain, steepening smoothly to 1.75 : 1 from 8 m up to 45 m and above, so the real 142 m hills east of
- * the motorway stand about 7 units high, as the Sinai's massif does; monotonic, so every ridge, valley and the
- * river's gorge keep their real shape and order.
+ * clear height differences"): metres above sea level -> height units over the coastline. About 1:1 (LT_M metres a
+ * unit) on the coastal plain, steepening smoothly to 1.75 : 1 from 8 m up to 45 m and above; monotonic, so every
+ * ridge, valley and the river's gorge keep their real shape and order. The whole curve is scaled by LT_LIFT_K so the
+ * window's top (the hills east of the motorway) stands about 7 units high, as the Sinai's massif does.
  */
 export function litaniLift(m: number) {
-  return (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
+  return LT_LIFT_K * (m / LT_M) * (1 + 0.75 * smoothstep(8, 45, m));
 }
+/**
+ * Scale of the relief curve: the first window's top (142.5 m) stood 7.1 units high; the window moved east (more hills,
+ * its top 149.4 m: LITANI_ELEV), the curve scaled down so the top still stands 7.1 units high.
+ */
+const LT_LIFT_K = 142.5 / 149.4;
 /** Roads end this far past a bridge deck's end (tiles, on its axis): the approach ramp (as on the other maps). */
 const LT_APPROACH = 1.2;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
 const LT_HOUSE_MIN = 18;
 /** Player 0 on the south bank (Qasmiyeh's side, the bottom of the screen), player 1 on the north bank (the top). */
 const LT_STARTS: Point[] = [
-  { x: 74, y: 78 },
-  { x: 32, y: 13 },
+  { x: 71, y: 85 },
+  { x: 29, y: 20 },
 ];
 /** Ore and gem fields: x, y, radius, kind (1 ore, 2 gems). */
 const LT_ORE: [number, number, number, number][] = [
   // south bank (player 0): two by the base, gems towards Qasmiyeh, one out to the south-east
-  [86, 68, 3.4, 1],
-  [62, 88, 3.2, 1],
-  [56, 66, 2.6, 2],
-  [94, 92, 3.0, 1],
+  [83, 75, 3.4, 1],
+  [59, 95, 3.2, 1],
+  [53, 73, 2.6, 2],
+  [91, 99, 3.0, 1],
   // north bank (player 1): two by the base, gems on the plain by the river, one out on the coastal plain to the west
-  [55, 6, 3.4, 1],
-  [20, 22, 3.2, 1],
-  [52, 26, 2.6, 2],
-  [12, 28, 3.0, 1],
+  [52, 13, 3.4, 1],
+  [17, 29, 3.2, 1],
+  [49, 33, 2.6, 2],
+  [9, 35, 3.0, 1],
 ];
 /** Oil derricks (top-left tiles), two a side. */
 const LT_OILS: [number, number][] = [
-  [64, 70],
-  [84, 86],
-  [24, 3],
-  [50, 18],
+  [61, 77],
+  [81, 93],
+  [21, 10],
+  [47, 25],
 ];
 /** Capturable tech sites: one of each on either bank (at: the south bank's candidates, at2: the north bank's). */
 const LT_TECH: NonNullable<GameMap['techSites']> = [
   {
     def: 'tech_hospital',
-    at: [[48, 68], [44, 72], [52, 74], [40, 66]],
-    at2: [[18, 4], [14, 8], [20, 2], [12, 6]],
+    at: [[45, 75], [41, 79], [49, 81], [37, 73]],
+    at2: [[15, 11], [11, 15], [17, 9], [9, 13]],
   },
   {
     def: 'tech_comms',
-    at: [[92, 72], [96, 76], [88, 78], [94, 66]],
-    at2: [[8, 36], [12, 38], [6, 32], [16, 34]],
+    at: [[89, 79], [93, 83], [85, 85], [91, 73]],
+    at2: [[5, 43], [9, 45], [3, 39], [13, 41]],
   },
   // a second field hospital a side: on the coastal plain of the south bank, on the plain east of the north base
   {
     def: 'tech_hospital',
-    at: [[40, 84], [42, 90], [44, 78], [38, 92]],
-    at2: [[60, 24], [64, 20], [58, 28], [66, 26]],
+    at: [[37, 91], [39, 97], [41, 85], [35, 99]],
+    at2: [[57, 31], [61, 27], [55, 35], [63, 33]],
   },
 ];
 

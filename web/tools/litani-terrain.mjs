@@ -27,7 +27,9 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 // ------------------------------------------------------------------ window
-const CENTER = { lat: +(process.env.LAT ?? 33.33), lon: +(process.env.LON ?? 35.2522) };
+// (the window shifted 250 m east and 100 m north of the first one, 33.33 N 35.2522 E, for more of the hills and the river
+// upstream: as far as the Mediterranean still leaves a navy its open sea, sim/naval.ts SEA_MIN boat tiles)
+const CENTER = { lat: +(process.env.LAT ?? 33.3309), lon: +(process.env.LON ?? 35.2549) };
 const N = +(process.env.N ?? 104);
 const M = 35;
 /** Bearing (degrees) of screen east, the map's tile (1, -1) diagonal: 90, real north up. */

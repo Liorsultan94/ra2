@@ -12,7 +12,8 @@ const BEFORE_6 = 3600;
  * Player 0's home ore field on the Litani mouth (map id 'frontline', sim/maps.ts LT_ORE: 15 tiles north-east of the
  * south base; on the old Frontline Crossing it lay 15 tiles south-east of its base, at (29.5, 117.5)).
  */
-const FIELD = { x: 86.5, y: 68.5 };
+// (the window moved 250 m east and 100 m north: the field's ground lies 3 tiles lower in x and 7 higher in y than before)
+const FIELD = { x: 83.5, y: 75.5 };
 
 /** USA (player 0) vs Russia, starting forces cleared; player 0's refinery by its home ore field. */
 function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
@@ -26,10 +27,11 @@ function hvWorld(opts: { ai?: boolean; seed?: number } = {}) {
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
   // (the bases and the refinery between player 0's base and its home field, as before on Frontline Crossing)
-  w.spawnBuilding('usa_conyard', 0, 73, 77, true);
-  w.spawnBuilding('russia_conyard', 1, 21, 15, true);
-  w.spawnBuilding('usa_power', 0, 69, 77, true);
-  const ref = w.spawnBuilding('usa_refinery', 0, 79, 70, true);
+  // (on the same ground as before the window moved: 3 tiles lower in x, 7 higher in y)
+  w.spawnBuilding('usa_conyard', 0, 70, 84, true);
+  w.spawnBuilding('russia_conyard', 1, 18, 22, true);
+  w.spawnBuilding('usa_power', 0, 66, 84, true);
+  const ref = w.spawnBuilding('usa_refinery', 0, 76, 77, true);
   return { w, ref };
 }
 
@@ -201,7 +203,7 @@ describe('harvesters sharing a field and a refinery', () => {
 
   it('a second refinery takes the overflow', () => {
     const { w, ref } = hvWorld();
-    const ref2 = w.spawnBuilding('usa_refinery', 0, 75, 70, true);
+    const ref2 = w.spawnBuilding('usa_refinery', 0, 72, 77, true); // (moved with the window, as above)
     w.map.ore.fill(0); // one trip each
     w.map.oreMines = [];
     const [dx, dy] = dockXY(ref);

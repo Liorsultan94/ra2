@@ -21,7 +21,8 @@ function cleanWorld(a: Faction = 'usa', b: Faction = 'russia', seed = 21, map?: 
   for (const e of w.list) if (e.owner >= 0) e.dead = true;
   w.list = w.list.filter((e) => !e.dead);
   // (by the bases: the Litani mouth's south and north banks; Frozen Pass's corners)
-  const [ax, ay, bx, by] = map ? [4, 88, 88, 4] : [70, 80, 21, 12];
+  // (the Litani window moved 250 m east, 100 m north: the same ground as before lies 3 tiles lower in x, 7 higher in y)
+  const [ax, ay, bx, by] = map ? [4, 88, 88, 4] : [67, 87, 18, 19];
   w.spawnBuilding(`${a}_conyard`, 0, ax, ay, true);
   w.spawnBuilding(`${b}_conyard`, 1, bx, by, true);
   for (let i = 0; i < 3; i++) {
@@ -40,9 +41,12 @@ const run = (w: World, ticks: number, onEv?: (e: SimEvent) => void) => {
   }
 };
 
-/** A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 60,62; on the old map 35,67) and riflemen next to it. */
-const HX = 60;
-const HY = 62;
+/**
+ * A house of player 0's village (the Litani mouth: a civ_house in Qasmiyeh at 56,66, since the window moved east; before
+ * at 60,62; on the old map 35,67) and riflemen next to it.
+ */
+const HX = 56;
+const HY = 66;
 function garrisonSetup(w: World, n = 6, def = 'usa_rifle') {
   const house = houses(w).find((h) => h.def === 'civ_house' && h.tx === HX && h.ty === HY)!;
   const units: Entity[] = [];

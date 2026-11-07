@@ -13,12 +13,14 @@ describe('engineer capture behavior', () => {
     });
 
     // Spawn an enemy building
-    const bld = w.spawnBuilding('russia_power', 1, 30, 30);
+    // (on open ground of the Litani's north bank: since the window moved east, 30, 30 lies by the Qasmiyeh bridge's
+    // repair huts, which the second engineer would go on to)
+    const bld = w.spawnBuilding('russia_power', 1, 40, 15);
     expect(bld.owner).toBe(1);
 
     // Spawn 2 engineers close to the building
-    const eng1 = w.spawnUnit('usa_engineer', 0, 30, 27);
-    const eng2 = w.spawnUnit('usa_engineer', 0, 30, 26);
+    const eng1 = w.spawnUnit('usa_engineer', 0, 40, 12);
+    const eng2 = w.spawnUnit('usa_engineer', 0, 40, 11);
 
     // Issue capture command with both engineers
     w.issue(0, { type: 'capture', ids: [eng1.id, eng2.id], target: bld.id });
