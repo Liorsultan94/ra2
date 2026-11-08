@@ -1,0 +1,11 @@
+anthropic>=2.6
+pyremoteplay==0.7.6
+# pyremoteplay 0.7.6 needs these pins/extras to import on current Python
+pyee<9
+async_timeout
+fastapi
+uvicorn
+pyyaml
+# Optional: lets the AI see the screen
+av
+pillow

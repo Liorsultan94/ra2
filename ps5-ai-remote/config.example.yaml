@@ -1,0 +1,20 @@
+# Copy this file to config.yaml and fill it in.
+
+# IP address of the PS5 on your home network
+# (PS5: Settings > Network > Connection Status > View Connection Status).
+ps5_host: 192.168.1.50
+
+# The PSN user name you registered with `python -m pyremoteplay <ip> --register`.
+psn_user: MyPsnName
+
+# Let the AI see the screen (needs the `av` and `pillow` packages). Makes navigation much smarter.
+screenshots: true
+
+# Optional password. When set, the phone page asks for it once and remembers it.
+access_token: ""
+
+# Optional saved button sequences. The AI uses them when a request matches the name.
+# Example: on the Home screen, the 2nd tile from the left is EA FC.
+shortcuts:
+  # ea fc: [PS, PS, LEFT, LEFT, LEFT, LEFT, LEFT, RIGHT, CROSS]
+  # netflix: [PS, PS, R1, RIGHT, CROSS]
