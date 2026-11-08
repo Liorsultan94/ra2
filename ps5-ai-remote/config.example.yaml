@@ -4,7 +4,7 @@
 # (PS5: Settings > Network > Connection Status > View Connection Status).
 ps5_host: 192.168.1.50
 
-# The PSN user name you registered with `python -m pyremoteplay <ip> --register`.
+# The PSN user name you registered with windows\register.bat (or `python -m pyremoteplay <ip> --register`).
 psn_user: MyPsnName
 
 # Let the AI see the screen (needs the `av` and `pillow` packages). Makes navigation much smarter.
@@ -14,7 +14,7 @@ screenshots: true
 access_token: ""
 
 # Optional saved button sequences. The AI uses them when a request matches the name.
-# Example: on the Home screen, the 2nd tile from the left is EA FC.
+# Example: on the Home screen, the 2nd tile from the left is NBA 2K24.
 shortcuts:
-  # ea fc: [PS, PS, LEFT, LEFT, LEFT, LEFT, LEFT, RIGHT, CROSS]
+  # 2k24: [PS, PS, LEFT, LEFT, LEFT, LEFT, LEFT, RIGHT, CROSS]
   # netflix: [PS, PS, R1, RIGHT, CROSS]

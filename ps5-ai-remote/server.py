@@ -7,9 +7,11 @@ then open http://<computer-ip>:8000 on your phone.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import secrets
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -66,6 +68,26 @@ async def command(cmd: Command) -> dict:
     return await agent.handle(text)
 
 
+class Decision(BaseModel):
+    id: str
+
+
+@app.post("/api/approve", dependencies=[Depends(check_token)])
+async def approve(d: Decision) -> dict:
+    try:
+        return await agent.approve(d.id)
+    except PS5Error as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/reject", dependencies=[Depends(check_token)])
+async def reject(d: Decision) -> dict:
+    try:
+        return await agent.reject(d.id)
+    except PS5Error as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/press", dependencies=[Depends(check_token)])
 async def press(req: Press) -> dict:
     """Direct button presses from the on-screen remote, no AI involved."""
@@ -93,9 +115,15 @@ def shutdown() -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="0.0.0.0", help="use 127.0.0.1 when serving through `tailscale serve`")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--cert", help="TLS certificate (enables HTTPS, needed for the browser microphone)")
     parser.add_argument("--key", help="TLS private key")
     args = parser.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=args.cert, ssl_keyfile=args.key)
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=args.host, port=args.port, ssl_certfile=args.cert, ssl_keyfile=args.key)
+    )
+    # Remote Play's UDP sockets need the selector loop on Windows (the default Proactor loop breaks them).
+    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+    with asyncio.Runner(loop_factory=loop_factory) as runner:
+        runner.run(server.serve())

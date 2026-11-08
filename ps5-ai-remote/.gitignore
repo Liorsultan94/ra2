@@ -1,4 +1,5 @@
 config.yaml
+anthropic_key.txt
 venv/
 __pycache__/
 *.pem
