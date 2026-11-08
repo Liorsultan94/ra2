@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Tile, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
+import { litaniSea } from '../sim/maps';
 import type { FogOfWar } from './fog';
 import { GeoBuilder, chunkedInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
@@ -256,10 +257,34 @@ function tunnels(b: GeoBuilder, m: GameMap, f: Field, seed: number) {
 
 // ------------------------------------------------------------------ orchard trees
 
-type TreeKind = 'apple' | 'olive' | 'citrus';
+/** The Litani's banana belt: plantations within this of the sea (tiles, ~1 km), its citrus groves behind. */
+const LT_BANANA_BELT = 30;
+
+type TreeKind = 'apple' | 'olive' | 'citrus' | 'banana';
 
 function orchardTree(kind: TreeKind): THREE.BufferGeometry {
   const g = new GeoBuilder();
+  if (kind === 'banana') {
+    // a banana plant (the Litani coast's plantations): a pale green pseudo-stem, a crown of long paddle leaves arching
+    // out and down, bright yellow-green, one or two dry and brown; a suckers' stem beside it
+    const stem = C(0x7a8a4a);
+    g.add(new THREE.CylinderGeometry(0.011, 0.016, 0.13, 6).translate(0, 0.065, 0), new THREE.Matrix4(), null, stem);
+    g.add(new THREE.CylinderGeometry(0.006, 0.009, 0.06, 5).translate(0.03, 0.03, 0.01), new THREE.Matrix4(), null, stem);
+    const leaf = C(0x74a23e);
+    const dry = C(0x8e7a42);
+    for (let i = 0; i < 8; i++) {
+      const a = i * 0.785 + (i % 2) * 0.3;
+      const tilt = i % 3 === 0 ? 0.25 : 0.55;
+      const col = i === 5 ? dry : leaf.clone().multiplyScalar(0.85 + (i % 3) * 0.08);
+      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, -tilt, 'YXZ'));
+      const c = V(Math.cos(a) * 0.075, 0.14 - tilt * 0.05, Math.sin(a) * 0.075);
+      g.add(new THREE.IcosahedronGeometry(1, 1), new THREE.Matrix4().compose(c, q, V(0.095, 0.007, 0.036)), null, (p) => col.clone().multiplyScalar(0.85 + Math.max(0, p.y - 0.12) * 4), {
+        normalFn: () => V(0, 1, 0),
+        flexFn: (p) => Math.max(0, (p.y - 0.06) * 4),
+      });
+    }
+    return g.build(true);
+  }
   const trunk = C(kind === 'olive' ? 0x5a5048 : 0x4a3a2c);
   g.add(new THREE.CylinderGeometry(0.012, 0.018, 0.12, 5).translate(0, 0.06, 0), new THREE.Matrix4(), null, trunk);
   const leaf = C(kind === 'olive' ? 0x8c9a78 : kind === 'citrus' ? 0x4a7a3a : 0x6a9a48);
@@ -422,7 +447,8 @@ function vineyard(b: GeoBuilder, m: GameMap, f: Field, k: number, desert: boolea
 /** Orchard trees on a grid over the field. */
 function orchard(m: GameMap, f: Field, k: number, kind: TreeKind, trees: Record<TreeKind, Inst[]>) {
   const P = frame(f);
-  const sp = kind === 'olive' ? 0.62 : 0.52;
+  // (the Litani's: bananas planted close, a dense green canopy; citrus in tighter rows than the apples)
+  const sp = kind === 'olive' ? 0.62 : kind === 'banana' ? 0.3 : kind === 'citrus' && m.id === 'frontline' ? 0.42 : 0.52;
   const nA = Math.max(1, Math.floor((f.hl * 2 - 0.3) / sp) + 1);
   const nB = Math.max(1, Math.floor((f.hw * 2 - 0.3) / sp) + 1);
   for (let i = 0; i < nA; i++)
@@ -1075,7 +1101,7 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
   const crops = get(cropB);
   const houses = get(houseB);
   const gap = quality === 'high' ? 0.15 : quality === 'medium' ? 0.19 : 0.28;
-  const trees: Record<TreeKind, Inst[]> = { apple: [], olive: [], citrus: [] };
+  const trees: Record<TreeKind, Inst[]> = { apple: [], olive: [], citrus: [], banana: [] };
   const tractorFields: { f: Field; k: number }[] = [];
   const far = (x: number, z: number, r: number) => m.starts.every((s) => Math.hypot(s.x + 0.5 - x, s.y + 0.5 - z) > r);
 
@@ -1094,7 +1120,9 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
     } else if (crop === 'greenhouse') {
       tunnels(houses(f.cx, f.cy), m, f, k);
     } else if (crop === 'orchard') {
-      orchard(m, f, k, biome === 'desert' ? (hash2(k, 8, 4441) < 0.5 ? 'olive' : 'citrus') : 'apple', trees);
+      // (the Litani's coastal plain: bananas within LT_BANANA_BELT of the sea, citrus behind them - no apples)
+      const kind: TreeKind = m.id === 'frontline' ? (litaniSea(f.cx, f.cy) > -LT_BANANA_BELT ? 'banana' : 'citrus') : biome === 'desert' ? (hash2(k, 8, 4441) < 0.5 ? 'olive' : 'citrus') : 'apple';
+      orchard(m, f, k, kind, trees);
     } else if (crop === 'plain' && (f.type === FieldType.Plowed || f.type === FieldType.Fallow) && biome !== 'winter' && f.hl > 2.2 && f.hw > 0.9 && far(f.cx, f.cy, 14)) {
       tractorFields.push({ f, k });
     }
@@ -1142,7 +1170,7 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
   // orchard trees (instanced, one draw per chunk and kind)
   const treeMat = cropMaterial(fog, quality === 'low' ? 0 : 0.008, 0.85);
   treeMat.side = THREE.FrontSide;
-  for (const kind of ['apple', 'olive', 'citrus'] as const) {
+  for (const kind of ['apple', 'olive', 'citrus', 'banana'] as const) {
     if (!trees[kind].length) continue;
     const ims = chunkedInstances(orchardTree(kind), treeMat, trees[kind], CH, { castShadow: quality !== 'low', name: 'farm-orchard' });
     out.push(...ims);
