@@ -60,8 +60,8 @@
     <button data-cmd="מה רץ עכשיו על הפלייסטיישן?">מה פתוח?</button>
     <button data-cmd="תחזיר אותי למסך הבית">מסך הבית</button>
     <button data-cmd="תכבה את הפלייסטיישן">כבה</button>
-    <button data-cmd="תכניס אותי ל-NBA 2K24 ל-MyTeam">2K24 MyTeam</button>
-    <button data-cmd="תיכנס לחנות של MyTeam ב-2K24 ותגיד לי מה יש ומה המחירים">חנות MyTeam</button>
+    <button data-cmd="תכניס אותי ל-NBA 2K27 ל-MyTeam">2K27 MyTeam</button>
+    <button data-cmd="תיכנס ל-Auction House ב-MyTeam של 2K27 ותגיד לי מה יש ומה המחירים ב-MT">שוק MyTeam</button>
     <button id="reset">שיחה חדשה</button>
   </div>
 
@@ -163,7 +163,8 @@ async function send(text) {
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
-    $('#status').textContent = !s.reachable ? 'לא נמצא ברשת' : !s.on ? 'במצב מנוחה' : (s.running_app ? '▶ ' + s.running_app : 'דלוק');
+    const state = !s.reachable ? 'לא נמצא ברשת' : !s.on ? 'במצב מנוחה' : (s.running_app ? '▶ ' + s.running_app : 'דלוק');
+    $('#status').textContent = state + (s.budget_usd ? ' · $' + s.spent_usd + '/' + s.budget_usd : '');
   } catch { $('#status').textContent = 'אין חיבור לשרת'; }
 }
 

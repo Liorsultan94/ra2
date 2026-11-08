@@ -15,6 +15,7 @@ import uuid
 
 import anthropic
 
+from budget import Budget
 from ps5 import BUTTONS, PS5, PS5Error
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ HISTORY_MAX_MSGS = 80
 
 SYSTEM_PROMPT = """You control the user's PlayStation 5 over the local network using the tools provided.
 The user speaks Hebrew or English. Always answer in the user's language, briefly (one to three sentences).
+The console's system language is English, so menus in screenshots are in English.
 
 How the PS5 UI works:
 - PS button opens the control center. From inside a game, press PS, then use the "Home" icon, or press PS
@@ -48,16 +50,20 @@ How to work:
 Money, trades and purchases (very important):
 - Never press the button that confirms a purchase, bid, buy-now, listing, sale, pack opening, or anything that
   spends or commits VC, MT, PlayStation Store money, or cards. Navigating to those screens and reading them is fine.
-- For such a step, use propose_action with a clear Hebrew summary (what item, what price, buy or sell) and the
-  exact buttons that would commit it, then end your turn and wait. The user approves or rejects on the phone.
+- The only transactions you may ever propose are Auction House trades paid in MT: buy-now, bid, or listing a
+  card for sale. For such a step, use propose_action with a clear Hebrew summary (which card, price in MT, buy or
+  sell) and the exact buttons that would commit it, then end your turn and wait for approval on the phone.
+- Never propose or perform anything with VC, packs, boxes, or real money, even if the user asks. Say that this
+  remote is limited to MT trades in the Auction House. If a screen asks to pay in VC, back out with CIRCLE.
 - One proposal at a time. Never run repeated or automated trading loops (refresh-and-snipe, mass listing,
   auto-bidding): this breaks the game's rules and can get the user's account banned. If asked, explain that
   briefly and offer to show prices and propose single actions instead.
 - Never buy anything on the PlayStation Store, change system settings, or delete data.
 
-NBA 2K24 MyTeam:
-- Launch NBA 2K24 from Home. After the intro/press-start screens, the main menu has a MyTeam option;
-  inside MyTeam, the store/packs and the Auction House (market) are separate menu sections.
+NBA 2K27 MyTeam:
+- NBA 2K27 is installed digitally. Launch it from the Home row, or from the Game Library if it isn't there.
+  After the intro/press-start screens, the main menu has a MyTeam option; inside MyTeam, the Auction House
+  (the MT market) is the place for trades. The pack store is off limits for purchases.
 - Menus vary with updates, so rely on screenshots rather than memorized paths.
 - When the user asks what is in the store or market, navigate there and describe what you see (items, prices,
   the user's VC/MT balance if visible). Do not buy anything without propose_action."""
@@ -81,8 +87,9 @@ BUTTON_LIST_SCHEMA = {"type": "array", "items": {"type": "string", "enum": BUTTO
 
 
 class PS5Agent:
-    def __init__(self, ps5: PS5, shortcuts: dict[str, list[str]] | None = None):
+    def __init__(self, ps5: PS5, budget: Budget, shortcuts: dict[str, list[str]] | None = None):
         self.ps5 = ps5
+        self.budget = budget
         self.shortcuts = {k.lower(): v for k, v in (shortcuts or {}).items()}
         self.client = anthropic.AsyncAnthropic()  # async: a blocking call would stall the Remote Play loop
         self.messages: list = []
@@ -118,8 +125,8 @@ class PS5Agent:
             ),
             _tool(
                 "propose_action",
-                "Ask the user to approve a step that spends currency or commits a trade (buy, bid, sell, list, "
-                "open pack). Shows the summary and current screen on the phone. After calling this, end your turn.",
+                "Ask the user to approve an MT Auction House trade (buy-now, bid, or list for sale). Never for VC "
+                "or packs. Shows the summary and current screen on the phone. After calling this, end your turn.",
                 {
                     "summary": {
                         "type": "string",
@@ -232,6 +239,13 @@ class PS5Agent:
             return {"reply": reply, "actions": actions, "pending": pending, "screenshot": self.last_screenshot}
 
         for _ in range(MAX_STEPS):
+            if self.budget.exceeded():
+                self.messages = []
+                self.pending = None
+                return result(
+                    f"הגעתי לתקרת ההוצאה החודשית (${self.budget.limit:.0f}). השלט יחזור לעבוד בתחילת החודש הבא, "
+                    "או שאפשר להעלות את monthly_budget_usd ב-config.yaml."
+                )
             response = await self.client.beta.messages.create(
                 model=MODEL,
                 max_tokens=16000,
@@ -243,6 +257,7 @@ class PS5Agent:
                 tools=self.tools,
                 messages=self.messages,
             )
+            self.budget.record(response.usage)
             # Append the full content (thinking blocks included) so the conversation stays valid.
             self.messages.append({"role": "assistant", "content": response.content})
 

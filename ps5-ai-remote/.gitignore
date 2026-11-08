@@ -3,3 +3,4 @@ anthropic_key.txt
 venv/
 __pycache__/
 *.pem
+usage.json

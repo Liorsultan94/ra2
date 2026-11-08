@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from agent import PS5Agent
+from budget import Budget
 from ps5 import PS5, PS5Error
 
 HERE = Path(__file__).resolve().parent
@@ -36,7 +37,8 @@ def load_config() -> dict:
 
 config = load_config()
 ps5 = PS5(config["ps5_host"], config["psn_user"], enable_video=config.get("screenshots", True))
-agent = PS5Agent(ps5, shortcuts=config.get("shortcuts") or {})
+budget = Budget(HERE / "usage.json", config.get("monthly_budget_usd", 15))
+agent = PS5Agent(ps5, budget, shortcuts=config.get("shortcuts") or {})
 ACCESS_TOKEN = str(config.get("access_token") or "")
 
 app = FastAPI(title="PS5 AI Remote")
@@ -99,7 +101,7 @@ async def press(req: Press) -> dict:
 
 @app.get("/api/status", dependencies=[Depends(check_token)])
 async def status() -> dict:
-    return await ps5.status()
+    return {**await ps5.status(), "spent_usd": round(budget.spent(), 2), "budget_usd": budget.limit}
 
 
 @app.post("/api/reset", dependencies=[Depends(check_token)])
