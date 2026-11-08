@@ -220,7 +220,7 @@ export interface RoadNet {
 export interface NetInput {
   w: number;
   h: number;
-  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number; closed?: boolean }[];
+  roads: readonly { pts: V2[]; width: number; variant: 0 | 1; painted?: boolean; ring?: boolean; lot?: number; closed?: boolean; lane?: boolean }[];
   tracks: readonly { pts: V2[]; width: number; ring?: boolean; noCars?: boolean }[];
   bridges: readonly { ends: readonly V2[] }[];
   /** Tile (tx, ty) can't take a turning place (water, rock, trees, structures, ore, base areas, off map). */
@@ -237,8 +237,12 @@ export interface NetInput {
    * Unset: roundabouts wherever paved roads meet in the open countryside, traffic lights at the big village crossings.
    */
   round?: readonly { x: number; y: number; r: number }[];
-  /** A parking lot's drive meets its road in a plain T, never a roundabout (the Litani's; the other maps' stay). */
-  lotT?: boolean;
+  /**
+   * The real roundabouts (the Litani's: from OSM, junction=roundabout). Set: a roundabout only there, where three or
+   * more roads join, and no turning circle at a dead end (the road just stops, as a rural road does). Unset: the
+   * countryside rules above (the other maps').
+   */
+  rings?: readonly { x: number; y: number; r: number }[];
 }
 
 // ------------------------------------------------------------------ geometry
@@ -454,6 +458,9 @@ export function bridgeEnds(m: GameMap): { ends: V2[] }[] {
   });
 }
 
+/** The Litani window's roundabouts (OSM junction=roundabout, map coordinates): none. */
+const LITANI_RINGS: readonly { x: number; y: number; r: number }[] = [];
+
 export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetInput['tracks'], bridges: readonly { ends: readonly V2[] }[]): NetInput {
   const W = m.w;
   const H = m.h;
@@ -462,13 +469,15 @@ export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetIn
   return {
     w: W,
     h: H,
-    roads,
+    // (the Litani's paved lanes, last in the list, carry no traffic)
+    roads: roads.some((r) => r.lane) ? roads.filter((r) => !r.lane) : roads,
     tracks,
     bridges,
     structures: m.structures,
     urban,
     round: sinaiRoundabouts(m).length ? sinaiRoundabouts(m) : undefined,
-    lotT: m.id === 'frontline',
+    // (the Litani window: OSM maps no roundabout in it, its one nearby a mini-roundabout south of the map's edge)
+    rings: m.id === 'frontline' ? LITANI_RINGS : undefined,
     clip: urban ? undefined : (x, y) => m.starts.some((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5) < 8.5),
     hard: (tx, ty) => {
       if (tx < 0 || ty < 0 || tx >= W || ty >= H) return true;
@@ -921,6 +930,11 @@ export function buildRoadNet(inp: NetInput): RoadNet {
         n.lot = L.lot;
         return;
       }
+      // (a real dead end: the road just stops, the cars turn in the road)
+      if (inp.rings) {
+        n.ctl = Ctl.Turn;
+        return;
+      }
       const paved = L.paved;
       const R0 = paved ? (L.painted ? 1.42 : 1.55) : 0.95;
       // don't slide past another junction on this line
@@ -954,9 +968,9 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     // (the maps with chosen roundabouts: those squares only, and no traffic lights)
     const chosen = inp.round?.some((c) => Math.hypot(c.x - n.x, c.y - n.y) < c.r) ?? false;
     // countryside: a roundabout where paved roads meet
-    // (never at a parking lot's drive, where the map says so: that meets the road in a plain T)
-    const lotDrive = !!inp.lotT && arms.some((a) => lines[a.line].lot >= 0);
-    if (!painted && !lotDrive && (inp.round ? chosen : !n.village) && paved >= 3 && paved === arms.length) {
+    // (a map with its real roundabouts: only there, three roads or more, never at a parking lot's drive)
+    const real = inp.rings ? arms.length >= 3 && !arms.some((a) => lines[a.line].lot >= 0) && inp.rings.some((c) => Math.hypot(c.x - n.x, c.y - n.y) < c.r) : true;
+    if (!painted && real && (inp.rings ? true : inp.round ? chosen : !n.village) && paved >= 3 && paved === arms.length) {
       for (const R of inp.round ? (arms.length > 3 ? [2.7, 2.4, 2.1, 1.9, 1.7, 1.55] : [2.5, 2.2, 2.0, 1.8, 1.65]) : arms.length > 4 ? [2.4, 2.1, 1.9] : [1.9, 1.7]) if (makeLoop(ni, n.x, n.y, R, true, false)) return;
     }
     // priority: the straightest pair of the best ranked arms

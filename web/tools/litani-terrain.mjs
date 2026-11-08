@@ -469,11 +469,12 @@ for (let ty = 0; ty < N; ty++)
     hist[cls]++;
   }
 
-// roads by class (0 motorway, 1 trunk / primary, 2 secondary / tertiary, 3 unclassified / residential, 4 track)
-const RC = { motorway: 0, motorway_link: 0, trunk: 1, trunk_link: 1, primary: 1, primary_link: 1, secondary: 2, tertiary: 2, secondary_link: 2, tertiary_link: 2, unclassified: 3, residential: 3, living_street: 3, service: 4, track: 4 };
+// roads by class (0 motorway, 1 trunk / primary, 2 secondary / tertiary, 3 unclassified / residential, 4 service,
+// 5 track / path / a road under construction, 6 the motorway's and the trunk road's slip roads): every road and track OSM maps in the window
+const RC = { motorway: 0, motorway_link: 6, trunk: 1, trunk_link: 6, primary: 1, primary_link: 6, secondary: 2, tertiary: 2, secondary_link: 2, tertiary_link: 2, unclassified: 3, residential: 3, living_street: 3, service: 4, track: 5, path: 5, construction: 5 };
 const roadWays = [...ways.values()].filter((w) => RC[w.tags.highway] !== undefined);
 const roads = [];
-for (const cls of [0, 1, 2, 3]) {
+for (const cls of [0, 1, 2, 3, 4, 5, 6]) {
   // merge each class's ways with the same name / ref into long lines (bridges are separate ways in OSM)
   const groups = new Map();
   for (const w of roadWays) {
@@ -486,10 +487,11 @@ for (const cls of [0, 1, 2, 3]) {
   for (const [key, list] of groups)
     for (const line of mergeWays(list))
       for (const part of clipLine(line)) {
-        const s = simplify(part, cls >= 3 ? 0.35 : 0.25);
+        // (to a twelfth of a tile, 3 m: the real alignment, every bend kept)
+        const s = simplify(part, 0.08);
         let len = 0;
         for (let i = 0; i < s.length - 1; i++) len += Math.hypot(s[i + 1].x - s[i].x, s[i + 1].y - s[i].y);
-        if (len < (cls >= 3 ? 4 : 2)) continue;
+        if (len < 0.6) continue;
         roads.push({ cls, name: key.split('|')[1].length > 1 && !/^\d+$/.test(key.split('|')[1]) ? key.split('|')[1] : '', ref: key.split('|')[0], pts: s });
       }
 }
@@ -711,8 +713,8 @@ function pack(a, w, left = false) {
   return b;
 }
 const pts = (l) => l.map((p) => [r2(p.x), r2(p.y)]);
-// (the roads to a tenth of a tile, 3.5 m: they are simplified to a quarter tile already, and the module stays small)
-const r1 = (v) => Math.round(v * 10) / 10;
+// (the roads to a twentieth of a tile, 1.75 m: simplified to a twelfth already, and the module stays small)
+const r1 = (v) => Math.round(v * 20) / 20;
 const pts1 = (l) => l.map((p) => [r1(p.x), r1(p.y)]);
 let elevMin = Infinity;
 let elevMax = -Infinity;

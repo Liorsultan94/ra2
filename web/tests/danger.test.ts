@@ -6,7 +6,7 @@ import { roadNetFor } from '../src/render/ambient/clearance';
 import { Driver, newDriveCar, type DriveCar } from '../src/render/ambient/driver';
 import { DangerField, FLEE, HIGH, WARY, WARY_R, W, Wary, threatReach } from '../src/render/ambient/danger';
 import { CAR_SCALE } from '../src/render/ambient/models';
-import { onSurface, pointAt as pointAtShared, type RoadNet } from '../src/render/ambient/roadnet';
+import { Ctl, onSurface, pointAt as pointAtShared, type RoadNet } from '../src/render/ambient/roadnet';
 
 /** (pointAt returns a shared scratch point: copied here) */
 const pointAt = (L: Parameters<typeof pointAtShared>[0], a: number) => ({ ...pointAtShared(L, a) });
@@ -124,6 +124,9 @@ describe('traffic under fire', () => {
       let turned = false;
       let fled = false;
       let hazards = false;
+      // (the Litani's real dead ends have no turning circle: a car that fled into one turns there and comes back)
+      const dead = n.nodes.filter((nd) => nd.arms.length === 1 && nd.ctl === Ctl.Turn);
+      let deadTurn = false;
       const off: string[] = [];
       let tf = 0;
       for (let t = 0; t < 40; t += 0.05) {
@@ -141,6 +144,7 @@ describe('traffic under fire', () => {
         if (c.kt) turned = true;
         if (c.wy === W.Flee) fled = true;
         if (c.haz > 0) hazards = true;
+        if (dead.some((nd) => Math.hypot(nd.x - c.x, nd.y - c.y) < 3)) deadTurn = true;
         if (!onRoad(n, c.x, c.y) && off.length < 5) off.push(`t=${t.toFixed(1)} ${c.x.toFixed(2)},${c.y.toFixed(2)} kt ${c.kt}`);
       }
       expect(off).toEqual([]);
@@ -155,7 +159,7 @@ describe('traffic under fire', () => {
       // (unless it has fled right out to where the road leaves the map, as on the Litani mouth's raised relief: there
       // it turns at the map's edge)
       const atEdge = Math.min(c.x, c.y, m.w - c.x, m.h - c.y) < 2;
-      if (!atEdge) expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
+      if (!atEdge && !deadTurn) expect((tank.x - c.x) * Math.cos(c.yaw) + (tank.y - c.y) * Math.sin(c.yaw)).toBeLessThan(0);
     });
   }
 
@@ -485,7 +489,9 @@ describe('fear: the wary layer', () => {
             if (c.loop < 0 && !c.kt && ((c.dir > 0 && Lc.portal[1] && c.arc > Lc.len - 0.3) || (c.dir < 0 && Lc.portal[0] && c.arc < 0.3))) break;
             minD = Math.min(minD, Math.hypot(c.x - tank.x, c.y - tank.y));
             if (c.kt || c.line !== li || c.wy === W.Halt || c.wy === W.Turn || c.wy === W.Flee) reacted = true;
-            if ((c.kt || c.wy === W.Halt || c.wy === W.Turn || c.wy === W.Flee) && minD > 12) farHalt = true;
+            // (a 3-point turn at a dead end, the Litani's, is no halt for the armour)
+            const deadEnd = n.nodes.some((nd) => nd.arms.length === 1 && nd.ctl === Ctl.Turn && Math.hypot(nd.x - c.x, nd.y - c.y) < 3);
+            if (((c.kt && !deadEnd) || c.wy === W.Halt || c.wy === W.Turn || c.wy === W.Flee) && minD > 12) farHalt = true;
             if (!onRoad(n, c.x, c.y)) throw new Error(`${id} line ${li} parked ${parked} t=${t.toFixed(2)} ${c.x.toFixed(2)},${c.y.toFixed(2)} line ${c.line} arc ${c.arc.toFixed(2)} len ${n.lines[c.line].len.toFixed(1)} kt ${c.kt} wy ${c.wy} portal ${n.lines[c.line].portal}`);
           }
           if (parked) {

@@ -1,5 +1,6 @@
 import { StructureKind, Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
+import { neutralSites } from '../sim/capture';
 import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
 import { sinaiExtraRoads, sinaiTrimRoads } from './ambient/sinairoads';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, SITE_CLEAR, detourSpans, edgesOffSites, makeRouter, nearSite, pylonFooting, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
@@ -47,12 +48,54 @@ export function buildBiomeLayout(m: GameMap): Layout {
     const pts = e.pts.filter((p) => !nearStart(p.x, p.y, baseR));
     if (pts.length === e.pts.length) roads.push({ pts, width: e.width, variant: e.variant });
   }
-  const tracks: Track[] = (deco?.tracks ?? []).map((pts, i) => {
-    const t: Track = { pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 };
-    const bed = deco?.trackBeds?.[i];
-    if (bed) t.bed = bed;
-    if (deco?.trackNoCars?.[i]) t.noCars = true;
-    return t;
+  // (the Litani's real tracks and lanes keep their OSM line, not re-routed; the paved ones are lanes, drawn as roads
+  // off the traffic's network; each cut where it would run over a base, a derrick or a tech site)
+  const real = !!deco?.trackPave;
+  const lanes: Road[] = [];
+  const tracks: Track[] = [];
+  const sites = real ? neutralSites(m) : [];
+  // (and inside a main road's ribbon - the game draws the main roads 30 - 45 m wide: a lane or track meeting one
+  // stops at its edge, one alongside it under it is not drawn twice)
+  const bins = new Map<number, { x: number; y: number; h: number }[]>();
+  if (real)
+    for (const r of roads)
+      for (const p of r.pts) {
+        const k = Math.floor(p.y) * W + Math.floor(p.x);
+        let b = bins.get(k);
+        if (!b) bins.set(k, (b = []));
+        b.push({ x: p.x, y: p.y, h: r.width / 2 });
+      }
+  const underRoad = (p: V2) => {
+    for (let ty = Math.floor(p.y) - 1; ty <= Math.floor(p.y) + 1; ty++)
+      for (let tx = Math.floor(p.x) - 1; tx <= Math.floor(p.x) + 1; tx++)
+        for (const q of bins.get(ty * W + tx) ?? []) if (Math.hypot(q.x - p.x, q.y - p.y) < q.h - 0.12) return true;
+    return false;
+  };
+  const offLimits = (p: V2) => nearStart(p.x, p.y, baseR) || sites.some((s) => p.x > s.x - 0.5 && p.y > s.y - 0.5 && p.x < s.x + s.w + 0.5 && p.y < s.y + s.h + 0.5) || underRoad(p);
+  (deco?.tracks ?? []).forEach((pts, i) => {
+    const via = pts.map((p) => v(p.x + 0.5, p.y + 0.5));
+    if (!real) {
+      const t: Track = { pts: route(via, 0.5, 0.3), width: 0.5 };
+      const bed = deco?.trackBeds?.[i];
+      if (bed) t.bed = bed;
+      if (deco?.trackNoCars?.[i]) t.noCars = true;
+      tracks.push(t);
+      return;
+    }
+    const pave = deco.trackPave![i] ?? 0;
+    let run: V2[] = [];
+    const flush = () => {
+      if (run.length > 2) {
+        if (pave > 0) lanes.push({ pts: run, width: pave, variant: 1, lane: true });
+        else tracks.push({ pts: run, width: 0.5, noCars: true });
+      }
+      run = [];
+    };
+    for (const p of smoothLine(via, via.length > 2 ? 2 : 0, 0.25)) {
+      if (offLimits(p)) flush();
+      else run.push(p);
+    }
+    flush();
   });
 
   // ---- occupancy grid
@@ -71,8 +114,11 @@ export function buildBiomeLayout(m: GameMap): Layout {
   };
   for (const r of roads) stampLine(r.pts, r.width / 2 + 0.25, OCC_ROAD);
   for (const t of tracks) stampLine(t.pts, t.width / 2 + (t.bed ?? 0) + 0.2, OCC_TRACK);
+  for (const l of lanes) stampLine(l.pts, l.width / 2 + 0.25, OCC_ROAD);
   // the civilian lane graph: turning circles / junctions kept clear, roads fitted to them (ambient/clearance.ts)
   prepareRoadNet(m, roads, tracks, occ, R);
+  // (the lanes after the traffic's network: drawn, no traffic on them)
+  roads.push(...lanes);
   const stampRect = (x0: number, y0: number, x1: number, y1: number, bit: number) => {
     for (let y = Math.floor(y0 * R); y < Math.ceil(y1 * R); y++)
       for (let x = Math.floor(x0 * R); x < Math.ceil(x1 * R); x++) if (x >= 0 && y >= 0 && x < W * R && y < H * R) occ[y * W * R + x] |= bit;

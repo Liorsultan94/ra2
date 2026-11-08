@@ -86,6 +86,11 @@ export interface MapDeco {
   trackBeds?: number[];
   /** Per entry of `tracks`: no civilian traffic on it (a footpath, a dead-end mountain track). */
   trackNoCars?: boolean[];
+  /**
+   * Per track: drawn as a paved lane this wide (tiles; 0 or unset: a dirt track). The Litani's real minor roads,
+   * service roads and slip roads (OSM), asphalt but off the traffic's network (render/biomelayout.ts).
+   */
+  trackPave?: number[];
   /** Paved plazas / squares (axis-aligned rectangles, tile space). */
   plazas: { x0: number; y0: number; x1: number; y1: number }[];
   /** Park lawns (rectangles) with hedges and paths. */

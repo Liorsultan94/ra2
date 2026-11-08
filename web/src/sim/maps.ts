@@ -2626,7 +2626,7 @@ export function createLitaniMap(): GameMap {
   // river goes over a bridge deck (the approach snapped onto the deck's axis); a road that meets the water anywhere
   // else stops at the bank.
   const wet = (x: number, y: number) => sea(x, y) > -0.2 || riv(x, y) > -0.2;
-  const prep = (pts: [number, number][]) => {
+  const prep = (pts: [number, number][], minLen = 3) => {
     // densify
     const out: Point[] = [];
     for (let k = 0; k < pts.length - 1; k++) {
@@ -2660,16 +2660,30 @@ export function createLitaniMap(): GameMap {
     // cut where it meets water and at the decks
     const runs: Point[][] = [];
     let run: Point[] = [];
+    let prev: Point | null = null;
+    const edge = (p: Point) => ({ x: Math.max(0.3, Math.min(W - 0.3, p.x)), y: Math.max(0.3, Math.min(H - 0.3, p.y)) });
     for (const p of out) {
       const inMap = p.x > 0.3 && p.y > 0.3 && p.x < W - 0.3 && p.y < H - 0.3;
+      const from = prev;
+      prev = p;
       if (Number.isNaN(p.x) || wet(p.x, p.y)) {
         if (run.length > 1) runs.push(run);
         run = [];
-      } else if (inMap || run.length) run.push({ x: Math.max(0.3, Math.min(W - 0.3, p.x)), y: Math.max(0.3, Math.min(H - 0.3, p.y)) });
+      } else if (inMap) {
+        // (on from the map's edge where it comes in from off it)
+        if (!run.length && from && !Number.isNaN(from.x) && !(from.x > 0.3 && from.y > 0.3 && from.x < W - 0.3 && from.y < H - 0.3)) run.push(edge(from));
+        run.push(p);
+      }
+      else if (run.length) {
+        // (off the map: the road ends at its edge, not run along it)
+        run.push(edge(p));
+        runs.push(run);
+        run = [];
+      }
     }
     if (run.length > 1) runs.push(run);
     const len = (l: Point[]) => l.reduce((s, p, k) => (k ? s + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
-    return runs.filter((l) => len(l) > 3).map((l) => simplifyLine(l, 0.2));
+    return runs.filter((l) => len(l) > minLen).map((l) => simplifyLine(l, 0.08));
   };
   // (one line per road: the motorway's second carriageway runs a tile beside the first)
   const major = litaniData().roads.filter((r) => r.cls <= 2);
@@ -2677,8 +2691,17 @@ export function createLitaniMap(): GameMap {
   const roadSrc = major.filter((r) => r.cls !== 0 || r === motor);
   const roadLines: { pts: Point[]; cls: number }[] = [];
   for (const r of roadSrc) for (const l of prep(r.pts)) roadLines.push({ pts: l, cls: r.cls });
+  // every other real road and track (OSM): the minor roads, the service roads and the slip roads paved (their width:
+  // trackPave), the farm tracks and paths dirt; the main roads' pieces the game takes off the traffic (below) paved too
   const trackLines: Point[][] = [];
-  for (const r of litaniData().roads.filter((q) => q.cls === 3)) for (const l of prep(r.pts)) trackLines.push(l);
+  const pave = new Map<Point[], number>();
+  for (const r of litaniData().roads.filter((q) => q.cls >= 3))
+    for (const l of prep(r.pts, 0.6)) {
+      trackLines.push(l);
+      pave.set(l, LT_LANE_W[r.cls] ?? 0);
+    }
+  // (the motorway's other carriageway runs 0.4 tiles, 15 m, beside the first: the one ribbon, 1.3 wide, spans both)
+  const majorW = (cls: number) => (cls === 0 ? 1.3 : cls === 1 ? 1.05 : 0.9);
   // the road net's joints (render/ambient: the traffic): a deck end carries one road, so a road meeting the river at
   // a bridge head it does not cross joins the crossing road a little way off the deck instead (a T junction)
   const approaches = bridges.flatMap((b) => deckEnds(b).map((e) => ({ x: e.x + (e.x - b.x) * (LT_APPROACH / (b.length / 2)), y: e.y + (e.y - b.y) * (LT_APPROACH / (b.length / 2)) })));
@@ -2739,21 +2762,12 @@ export function createLitaniMap(): GameMap {
             const head = [...A.slice(0, k), at];
             const tail = [at, ...A.slice(k)];
             const keepHead = atApproach(A[0]) || (!atApproach(A[A.length - 1]) && lenOf(head) >= lenOf(tail));
-            // (the T meets the greater road square on: its last 2.5 tiles come in along the greater road's normal)
-            const bx = big.pts[j].x - big.pts[j - 1].x;
-            const by = big.pts[j].y - big.pts[j - 1].y;
-            const bl = Math.hypot(bx, by) || 1;
+            // (the T on the real alignment, the crossing's own point: its other half goes on, paved, off the traffic)
             const kept = keepHead ? head : [...tail].reverse();
-            const from = kept[Math.max(0, kept.length - 3)];
-            let nx = -by / bl;
-            let ny = bx / bl;
-            if ((from.x - at.x) * nx + (from.y - at.y) * ny < 0) (nx = -nx), (ny = -ny);
-            // (only where it comes in at a slant: a road already square on keeps its line)
-            const cosA = Math.abs(((at.x - from.x) * bx + (at.y - from.y) * by) / (bl * (Math.hypot(at.x - from.x, at.y - from.y) || 1)));
-            const body = kept.filter((p, i) => i < kept.length - 1 && Math.hypot(p.x - at.x, p.y - at.y) > 3.2);
-            const sq = cosA < 0.7 ? kept : [...body, { x: at.x + nx * 2.5, y: at.y + ny * 2.5 }, at];
-            small.pts = keepHead ? sq : sq.reverse();
+            void j;
+            small.pts = keepHead ? kept : kept.reverse();
             trackLines.push(keepHead ? tail : head);
+            pave.set(keepHead ? tail : head, majorW(small.cls));
             changed = true;
             break outer;
           }
@@ -2824,6 +2838,7 @@ export function createLitaniMap(): GameMap {
   for (let k = roadLines.length - 1; k >= 0; k--)
     if (roadLines[k].cls >= 2 && roadLines[k].pts.some((p) => LT_STARTS.some((st) => Math.hypot(p.x - st.x - 0.5, p.y - st.y - 0.5) < 9.5))) {
       trackLines.push(roadLines[k].pts);
+      pave.set(roadLines[k].pts, majorW(roadLines[k].cls));
       roadLines.splice(k, 1);
     }
   // short pieces of road left with a dead end (cut by the river, the edge of a village): farm tracks, no cars
@@ -2832,6 +2847,7 @@ export function createLitaniMap(): GameMap {
     const l = roadLines[k].pts;
     if (lenOf(l) < 12 && (openEnd(l[0], l) || openEnd(l[l.length - 1], l))) {
       trackLines.push(l);
+      pave.set(l, majorW(roadLines[k].cls));
       roadLines.splice(k, 1);
     }
   }
@@ -2840,9 +2856,13 @@ export function createLitaniMap(): GameMap {
   for (const r of roadLines)
     for (const end of [0, 1]) {
       const l = end ? r.pts : [...r.pts].reverse();
-      if (!openEnd(l[l.length - 1], r.pts) || litaniRiver(l[l.length - 1].x, l[l.length - 1].y) < -LT_DEADEND_CLEAR) continue;
-      // (walk back along it to the first point clear of the river)
+      const e = l[l.length - 1];
+      // (a road running onto a bridge's deck is no dead end)
+      if (!openEnd(e, r.pts) || litaniRiver(e.x, e.y) < -LT_DEADEND_CLEAR || bridges.some((b) => deckEnds(b).some((d) => Math.hypot(d.x - e.x, d.y - e.y) < 4))) continue;
+      // (walk back along it to the first point clear of the river; the rest, down to the water, a dirt track as the
+      // rural roads end, OSM's way on to the old crossing)
       let cut: Point[] | null = null;
+      let rest: Point[] = [];
       for (let k = l.length - 1; k > 0 && !cut; k--) {
         const a = l[k];
         const b = l[k - 1];
@@ -2851,11 +2871,16 @@ export function createLitaniMap(): GameMap {
           const p = { x: a.x + ((b.x - a.x) * t) / (L || 1), y: a.y + ((b.y - a.y) * t) / (L || 1) };
           if (litaniRiver(p.x, p.y) < -LT_DEADEND_CLEAR) {
             cut = [...l.slice(0, k), p];
+            rest = [p, ...l.slice(k)];
             break;
           }
         }
       }
-      if (cut && cut.length >= 2) r.pts = end ? cut : cut.reverse();
+      if (cut && cut.length >= 2) {
+        r.pts = end ? cut : cut.reverse();
+        trackLines.push(rest);
+        pave.set(rest, majorW(r.cls));
+      }
     }
   // sim roads are in tile-index space
   const ti = (l: Point[]) => l.map((p) => ({ x: p.x - 0.5, y: p.y - 0.5 }));
@@ -2883,10 +2908,24 @@ export function createLitaniMap(): GameMap {
           if (d < roadD[y * W + x]) roadD[y * W + x] = d;
         }
     }
+  // ... and to the nearest track or paved lane (out to 2 tiles): no tree on them
+  const trackD = new Float32Array(W * H).fill(9);
+  for (const l0 of trackLines) {
+    const l = ti(l0);
+    for (let k = 1; k < l.length; k++) {
+      const a = l[k - 1];
+      const b = l[k];
+      for (let y = Math.max(0, Math.floor(Math.min(a.y, b.y) - 2)); y <= Math.min(H - 1, Math.ceil(Math.max(a.y, b.y) + 2)); y++)
+        for (let x = Math.max(0, Math.floor(Math.min(a.x, b.x) - 2)); x <= Math.min(W - 1, Math.ceil(Math.max(a.x, b.x) + 2)); x++) {
+          const d = distToSegment(x, y, a.x, a.y, b.x, b.y);
+          if (d < trackD[y * W + x]) trackD[y * W + x] = d;
+        }
+    }
+  }
   /** Is tile-index point (x, y) within r of a road (r <= 5; between tile centres the nearest centre's value)? */
   const roadNear = (x: number, y: number, r: number) => roadD[Math.max(0, Math.min(H - 1, Math.round(y))) * W + Math.max(0, Math.min(W - 1, Math.round(x)))] < r;
 
-  /** The junctions' and the dead ends' level discs (the roundabouts and the turning circles: no house on them). */
+  /** The junctions' level discs (no house on them). */
   const levelSpots: { x: number; y: number; r: number }[] = [];
   // ---- the exaggerated relief made playable, as the other maps do: the base pads levelled, the roads cut level across
   // (their grade along the way kept), and only the steepest real slopes left as bare limestone crags (rock)
@@ -2929,7 +2968,7 @@ export function createLitaniMap(): GameMap {
       return (H1[i] * (1 - tx) + H1[i + 1] * tx) * (1 - ty) + (H1[i + W1] * (1 - tx) + H1[i + W1 + 1] * tx) * ty;
     };
     void hAt;
-    // junctions and dead ends (where the roundabouts and turning circles go, render/ambient/roadnet.ts): level discs
+    // junctions (three roads or more, render/ambient/roadnet.ts): level discs
     const spots: { x: number; y: number; r: number; lvl: number }[] = [];
     for (const r of roadLines)
       for (const end of [0, 1]) {
@@ -2940,16 +2979,7 @@ export function createLitaniMap(): GameMap {
           spots.push({ x: p.x, y: p.y, r: LT_JUNCTION_R, lvl: 0 });
           continue;
         }
-        // (a dead end's turning circle sits a little back along the road from its end)
-        let s = 0;
-        let q = p;
-        for (let k = 1; k < l.length && s < LT_DEADEND_BACK; k++) {
-          const d = Math.hypot(l[k].x - l[k - 1].x, l[k].y - l[k - 1].y);
-          const t = Math.min(1, (LT_DEADEND_BACK - s) / (d || 1));
-          q = { x: l[k - 1].x + (l[k].x - l[k - 1].x) * t, y: l[k - 1].y + (l[k].y - l[k - 1].y) * t };
-          s += d;
-        }
-        spots.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, r: LT_DEADEND_R, lvl: 0 });
+        // (a dead end takes no disc: the road just stops there, level across as all its length is)
       }
     for (const sp of spots) levelSpots.push({ x: sp.x, y: sp.y, r: 2 });
     // ...and the derricks' pads (2 x 2 tiles), as the bases' are (the tech buildings' candidate spots were chosen on
@@ -3061,7 +3091,7 @@ export function createLitaniMap(): GameMap {
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
-      if (g.tiles[i] !== Tile.Grass || g.ore[i] || reserved(x, y) || roadNear(x, y, 2.6)) continue;
+      if (g.tiles[i] !== Tile.Grass || g.ore[i] || reserved(x, y) || roadNear(x, y, 2.6) || trackD[i] < 1.1) continue;
       const r = riv(x + 0.5, y + 0.5);
       const hsh = hash2(x, y, 4711);
       const c = cls(x, y);
@@ -3195,7 +3225,7 @@ export function createLitaniMap(): GameMap {
       }
     };
     for (const r of roadLines) addLine(r.pts, r.cls === 0 ? 0.65 : r.cls === 1 ? 0.53 : 0.45);
-    for (const l of trackLines) addLine(l, 0.3);
+    for (const l of trackLines) addLine(l, Math.max(0.3, (pave.get(l) ?? 0) / 2));
     for (const sp of levelSpots) addLine([sp, sp], sp.r);
     /** Does a street run through the rectangle (centre, half sizes, heading)? */
     const onStreet = (x: number, y: number, hl: number, hw: number, ca: number, sa: number) => {
@@ -3327,6 +3357,7 @@ export function createLitaniMap(): GameMap {
   // (the real roads run where OSM has them: drawn along their own lines, not re-routed round the hills)
   deco.roadStyles = roadLines.map((r) => (r.cls === 0 ? { width: 1.3, variant: 0 as const, straight: true } : r.cls === 1 ? { width: 1.05, variant: 0 as const, straight: true } : { width: 0.9, variant: 1 as const, straight: true }));
   deco.tracks = trackLines.map((l) => ti(l));
+  deco.trackPave = trackLines.map((l) => pave.get(l) ?? 0);
   // the farm tracks that lead nowhere (a dead end in the orchards, at the river bank): footpaths, no cars on them
   {
     const lines = [...roads, ...deco.tracks];
@@ -3447,17 +3478,18 @@ const LT_GRADE_HILL = 0.72;
 const LT_HILL_M = 12;
 /** In the hills a tile is bare rock only this steep (rise over the tile): about where the infantry stop too. */
 const LT_ROCK_HILL = 1.6;
-/** Junctions and dead ends are levelled: a disc this wide (tiles; a roundabout's 1.9, a turning circle's 1.55, plus
- * its kerb), ramped back to the ground over LT_JUNCTION_RAMP; a dead end's circle stands LT_DEADEND_BACK back. */
+/** Junctions are levelled: a disc this wide (tiles; the crossing and its mouths, a roundabout's 1.9 plus its kerb
+ * where one would stand), ramped back to the ground over LT_JUNCTION_RAMP (wider where the cut is deeper). */
 const LT_JUNCTION_R = 2.3;
-const LT_DEADEND_R = 2.6;
-const LT_DEADEND_BACK = 2.4;
 /** A road's dead end stops this far (tiles) short of the river. */
 const LT_DEADEND_CLEAR = 4;
 const LT_JUNCTION_RAMP = 2.8;
 const LT_JUNCTION_RAMP_MAX = 6;
 /** An oil derrick's levelled pad (radius, tiles, about the 2 x 2 footprint's centre). */
 const LT_PAD_R = 1.9;
+/** The real minor roads' (3: unclassified / residential), service roads' (4) and slip roads' (6) paved width; tracks and
+ * paths (5) are dirt. */
+const LT_LANE_W: Record<number, number> = { 3: 0.55, 4: 0.45, 5: 0, 6: 0.7 };
 /** A village house's footprint takes a fall of the ground up to this (its terrace and lower floors); none on steeper. */
 const LT_HOUSE_RISE = 0.5;
 /** The farm plots' steepest footing (height range over the plot's narrow width + 1 tile): fields and orchards,

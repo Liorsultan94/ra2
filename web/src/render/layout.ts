@@ -33,6 +33,8 @@ export interface Road {
   taper?: { w: number[]; v: (0 | 1)[]; from?: number; to?: number; lift?: number };
   /** A closed loop (first point follows the last). */
   closed?: boolean;
+  /** A paved lane off the traffic's network (the Litani's real minor, service and slip roads: MapDeco.trackPave). */
+  lane?: boolean;
 }
 
 export interface Track {

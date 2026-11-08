@@ -208,21 +208,28 @@ describe('Litani mouth (map frontline)', () => {
         }
   });
 
-  it('makes sense on its slopes: roundabouts level, roads no steeper than the tanks climb, pads level, houses and fields off the crags', () => {
+  it('makes sense on its slopes: rings only at real roundabouts, junctions level, roads no steeper than the tanks climb, pads level, houses and fields off the crags', () => {
     const gh = (x: number, y: number) => groundHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, y)));
-    // every roundabout and turning circle (render/ambient/roadnet.ts) on level ground
+    // a ring only where three roads or more join (OSM maps no roundabout in the window: none), never at a dead end -
+    // the road just stops; every junction on level ground
     const net = roadNetFor(m, buildLayout(m));
-    expect(net.loops.length).toBeGreaterThan(8);
     for (const lp of net.loops) {
+      expect(lp.dead, `turning circle at ${lp.x.toFixed(1)},${lp.y.toFixed(1)}`).toBe(false);
+      expect(net.nodes[lp.node].arms.length).toBeGreaterThanOrEqual(3);
+    }
+    expect(net.loops.length).toBe(0);
+    const junctions = net.nodes.filter((nd) => nd.arms.length >= 3 && !nd.arms.some((a) => net.lines[a.line].lot >= 0));
+    expect(junctions.length).toBeGreaterThan(6);
+    for (const nd of junctions) {
       let lo = Infinity;
       let hi = -Infinity;
-      for (let r = 0; r <= lp.R + 0.3; r += 0.4)
+      for (let r = 0; r <= 1.9; r += 0.4)
         for (let a = 0; a < 16; a++) {
-          const h = gh(lp.x + Math.cos((a * Math.PI) / 8) * r, lp.y + Math.sin((a * Math.PI) / 8) * r);
+          const h = gh(nd.x + Math.cos((a * Math.PI) / 8) * r, nd.y + Math.sin((a * Math.PI) / 8) * r);
           lo = Math.min(lo, h);
           hi = Math.max(hi, h);
         }
-      expect(hi - lo, `loop at ${lp.x.toFixed(1)},${lp.y.toFixed(1)}`).toBeLessThan(0.25);
+      expect(hi - lo, `junction at ${nd.x.toFixed(1)},${nd.y.toFixed(1)}`).toBeLessThan(0.25);
     }
     // no paved road (but a hairpin's inside) steeper than the tanks climb, step by step along it
     const sf = slopeField(m);
