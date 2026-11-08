@@ -53,7 +53,15 @@ const _rn = new THREE.Vector3(0, 1, 0);
  */
 export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Road[]) {
   // joined roads: one welded ribbon with the width tapering, the look switching on a shared row
-  for (const r of roads) if (r.taper && !r.painted) taperedRibbon(rb, m, r);
+  for (const r of roads)
+    if (r.taper && !r.painted) {
+      if (m.id === 'frontline' && r.variant === 0 && r.width >= 1.25) {
+        // the Litani's coastal motorway: two carriageways either side of a gravel median, in its one corridor (the
+        // real road's two ~15 m apart, OSM); its joins to the roads it meets taper as before
+        for (const sd of [-1, 1]) taperedRibbon(rb, m, r, (sd * 0.37) / 1.3, 0.56 / 1.3);
+        taperedRibbon(rb, m, r, 0, 0.2 / 1.3, () => 0.005 + 0.49 * 0.03);
+      } else taperedRibbon(rb, m, r);
+    }
   const net = netForRoads(roads);
   if (!net) return;
   for (const lp of net.loops) {
@@ -129,10 +137,10 @@ export function appendLoopRibbons(rb: GeoBuilder, m: GameMap, roads: readonly Ro
 }
 
 /** The road ribbon of scenery.ts, with a width and look per point (Road.taper). */
-function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
+function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road, offF = 0, wF = 1, uFn?: (o: number) => number) {
   const t = r.taper!;
   const n = r.pts.length;
-  const across = [-1, -0.5, 0, 0.5, 1];
+  const across = uFn ? [-1, 1] : [-1, -0.5, 0, 0.5, 1];
   // closed rings: the last point is the first again; the neighbours wrap and the texture repeats a whole number of times
   let total = 0;
   for (let i = 1; i < n; i++) total += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y);
@@ -154,12 +162,14 @@ function taperedRibbon(rb: GeoBuilder, m: GameMap, r: Road) {
     const row = (variant: number) => {
       const u0 = variant === 0 ? 0.005 : 0.505;
       return across.map((o) => {
-        const x = p.x + nx * o * (w / 2);
-        const z = p.y + ny * o * (w / 2);
+        // (a carriageway of the motorway: offF / wF of the width out / wide; uFn: a median's look)
+        const lat = w * offF + o * ((w * wF) / 2);
+        const x = p.x + nx * lat;
+        const z = p.y + ny * lat;
         const g = surfaceHeight(m, x, z);
         const h = rampHeight(m, x, z, g, 0.03 + (t.lift ?? 0));
         _rv.set(x, h, z);
-        return rb.vert(_rv, _rn, u0 + 0.49 * ((o + 1) / 2), (s / 6) * vScale, 1);
+        return rb.vert(_rv, _rn, uFn ? uFn(o) : u0 + 0.49 * ((o + 1) / 2), (s / 6) * vScale, 1);
       });
     };
     const v = t.v[i] ?? r.variant;
