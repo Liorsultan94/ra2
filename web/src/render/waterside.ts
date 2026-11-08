@@ -577,10 +577,12 @@ export class Waterside implements WatersideHandles {
   private buildReeds(layout: Layout) {
     const m = this.map;
     const R = this.river;
-    const cap = this.quality === 'low' ? 180 : this.quality === 'medium' ? 420 : 700;
+    // (the Litani: its banks walled with giant cane, Arundo - three times the clumps, the whole wet foot of the bank)
+    const lit = m.id === 'frontline';
+    const cap = (this.quality === 'low' ? 180 : this.quality === 'medium' ? 420 : 700) * (lit ? 3 : 1);
     const list: { m: THREE.Matrix4; c: THREE.Color }[] = [];
     const mt = new THREE.Matrix4();
-    const tries = cap * 14;
+    const tries = cap * (m.id === 'frontline' ? 30 : 14);
     let seed = 7;
     if (m.id === 'desert') {
       // the oasis gorge's lake and spring pools (sim/maps.ts GORGE: laid out round tile (113, 113) of the old map)
@@ -614,9 +616,9 @@ export class Waterside implements WatersideHandles {
       const y = 0.5 + hash2(seed, 2, 801) * (m.h - 1);
       const dep = R.depthAt(x, y);
       // the shallows and the wet foot of the bank
-      if (dep > 0.1 || dep < -0.14) continue;
+      if (dep > 0.1 || dep < (lit ? -0.3 : -0.14)) continue;
       const patch = hash2(Math.floor(x / 2.5), Math.floor(y / 2.5), 803);
-      if (patch < 0.45) continue;
+      if (patch < (lit ? 0.12 : 0.45)) continue;
       if (this.avoid(x, y, layout)) continue;
       const s = 0.42 + hash2(seed, 3, 801) * 0.32;
       this.q.setFromEuler(this.e.set((hash2(seed, 5, 801) - 0.5) * 0.15, hash2(seed, 4, 801) * 6.28, (hash2(seed, 6, 801) - 0.5) * 0.15));
