@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { litaniSea } from '../sim/maps';
 import { BRIDGE_HEIGHT, Tile, WATER_LEVEL, deckAxis, groundHeight, seaDist, type GameMap } from '../sim/map';
 import type { FogOfWar } from './fog';
 import { WX, WX_PARS } from './wxuniforms';
@@ -1364,6 +1365,17 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
   htex.needsUpdate = true;
   const river = new RiverInfo(m);
   const maps = buildWaterData(m, river);
+  // the Litani: its seaward distance per tile (sim/maps.ts litaniSea, -8 .. 24 tiles), for the river's own green and
+  // the sea's shelf (no bathymetry offline: the shelf deepens off the shore, shallows light by the beach)
+  const lit = m.id === 'frontline';
+  let litTex: THREE.DataTexture | null = null;
+  if (lit) {
+    const ld = new Uint8Array(m.w * m.h);
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) ld[y * m.w + x] = Math.max(0, Math.min(255, Math.round(((litaniSea(x + 0.5, y + 0.5) + 8) / 32) * 255)));
+    litTex = new THREE.DataTexture(ld, m.w, m.h, THREE.RedFormat, THREE.UnsignedByteType);
+    litTex.magFilter = litTex.minFilter = THREE.LinearFilter;
+    litTex.needsUpdate = true;
+  }
   const reflection = quality === 'high' ? new WaterReflection(WATER_LEVEL) : null;
   const Q = quality === 'high' ? 2 : quality === 'medium' ? 1 : 0;
   // biome water: clear turquoise oasis, icy river, murky canal (temperate = the original river)
@@ -1379,7 +1391,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
     transparent: true,
     depthWrite: false,
     // the desert's starry sky in the medium reflection (high reflects the sky dome itself: nightsky.ts)
-    defines: { WATER_Q: Q, ...(m.biome === 'desert' && Q > 0 ? { NIGHT_SKY: 1, NIGHT_STREAKS: 1 } : {}) },
+    defines: { WATER_Q: Q, ...(m.biome === 'desert' && Q > 0 ? { NIGHT_SKY: 1, NIGHT_STREAKS: 1 } : {}), ...(lit ? { LITANI_WATER: 1 } : {}) },
     uniforms: {
       time: RIVER.time,
       heightTex: { value: htex },
@@ -1395,6 +1407,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       waterLevel: { value: WATER_LEVEL },
       wxLight: { value: new THREE.Vector3(1, 1, 1) },
       wxSpec: { value: 1 },
+      litTex: { value: litTex },
       wTurq: { value: new THREE.Vector3(...bw.turq) },
       wDeep: { value: new THREE.Vector3(...bw.deep) },
       wBed: { value: new THREE.Vector3(...bw.bed) },
@@ -1466,6 +1479,7 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
       uniform float wxSpec;
       uniform vec3 skyTop;
       uniform vec3 skyHorizon;
+      uniform sampler2D litTex;
       uniform vec3 wTurq;
       uniform vec3 wDeep;
       uniform vec3 wBed;
@@ -1742,6 +1756,16 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         vec3 absorb = mix(mix(vec3(4.2, 2.7, 3.1), vec3(5.2, 1.9, 1.55), seaK), vec3(9.0, 8.0, 9.5), mud) * (1.0 + chop * 0.5);
         vec3 trans = exp(-absorb * dV);
         vec3 scatter = mix(turq, deepC, smoothstep(0.1, 0.5, depthW));
+        #ifdef LITANI_WATER
+          // the Litani: an olive-green river (its silt and algae), the sea a clear shelf - pale green-turquoise in the
+          // shallows by the beach, blue-green over the shelf, darker blue offshore as it deepens
+          float lsD = texture2D(litTex, p / mapSize).r * 32.0 - 8.0;
+          float lSea = smoothstep(-1.0, 2.0, lsD);
+          vec3 rivC = mix(vec3(0.05, 0.095, 0.045), vec3(0.016, 0.042, 0.022), smoothstep(0.1, 0.6, depthW));
+          float off = max(smoothstep(0.05, 1.2, depthW) * 0.5, smoothstep(1.0, 18.0, lsD));
+          vec3 seaC = mix(mix(vec3(0.05, 0.15, 0.13), vec3(0.018, 0.075, 0.085), smoothstep(0.0, 0.5, off)), vec3(0.006, 0.03, 0.06), smoothstep(0.5, 1.0, off));
+          scatter = mix(mix(rivC, seaC, lSea), vec3(0.11, 0.09, 0.045), mud);
+        #endif
         if (seaK > 0.01) {
           // the Red Sea's depth ramp: clear and light over the sand at the shore, light turquoise over the reef
           // flat and the lagoon, blue past the drop-off, deepening to the open sea's dark navy offshore (the
@@ -1789,6 +1813,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
           }
         }
         vec3 under = bed * trans + scatter * (1.0 - trans);
+        #ifdef LITANI_WATER
+          // (the river's water is turbid: its green shows over the bed even where it runs shallow)
+          under = mix(under, scatter * 1.15, (1.0 - lSea) * 0.6);
+        #endif
         // (the white lagoon floor and its turquoise stay dim under the moon)
         under *= 1.0 - 0.3 * dark * seaK;
         // ---- reflection: sky gradient, then banks / bridges / everything on high
@@ -2072,6 +2100,10 @@ export function buildWater(m: GameMap, fog: FogOfWar, quality: WaterQuality): Wa
         #endif
         // never hand NaN / Inf to the HDR chain (bloom would smear it over the frame)
         col = (col.r >= 0.0 && col.g >= 0.0 && col.b >= 0.0) ? min(col, vec3(32.0)) : vec3(0.0);
+        #ifdef LITANI_WATER
+          // (the river's olive green through the sky's reflection too: it never reads as a grey sheet)
+          col = mix(col, col * vec3(0.78, 1.0, 0.72), (1.0 - lSea) * 0.55);
+        #endif
         gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
