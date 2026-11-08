@@ -15,9 +15,12 @@ type AnyAI = any;
  * (seconds between the two groups having half their number within 16 tiles of the objective, as the AI logs it:
  * AIController.arrivals) is measured both ways, from either start.
  */
+// (the match seed: 3 before the Litani's real road net and its fourth bridge (LT12); now seed 4 - seeds 1, 2, 3 and 5
+// make no pincer from either start)
+const PINCER_SEED = 4;
 function attack(slot: number, me: Faction, pincers: boolean): Arrival | null {
   const players = [{ name: me, faction: me, color: 0, isAI: true }, { name: 'russia', faction: 'russia' as Faction, color: 0, isAI: true }];
-  const w = new World({ seed: 3, map: 'frontline', players: slot ? players.reverse() : players });
+  const w = new World({ seed: PINCER_SEED, map: 'frontline', players: slot ? players.reverse() : players });
   // the enemy: a construction yard at its start, no controller (it just stands)
   const st = w.map.starts[1 - slot];
   w.spawnBuilding('russia_conyard', 1 - slot, Math.round(st.x) - 1, Math.round(st.y) - 1, true);

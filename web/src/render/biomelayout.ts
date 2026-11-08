@@ -71,7 +71,21 @@ export function buildBiomeLayout(m: GameMap): Layout {
         for (const q of bins.get(ty * W + tx) ?? []) if (Math.hypot(q.x - p.x, q.y - p.y) < q.h - 0.12) return true;
     return false;
   };
-  const offLimits = (p: V2) => nearStart(p.x, p.y, baseR) || sites.some((s) => p.x > s.x - 0.5 && p.y > s.y - 0.5 && p.x < s.x + s.w + 0.5 && p.y < s.y + s.h + 0.5) || underRoad(p);
+  // (and the garrison houses' compounds: the game's 2 x 2 tile pieces stand on the real village, a lane through one
+  // stops at its wall)
+  const compound = (p: V2) => m.structures.some((s) => p.x > s.x - 0.35 && p.y > s.y - 0.35 && p.x < s.x + s.w + 0.35 && p.y < s.y + s.h + 0.35);
+  // (nor through an ore field: the game's fields lie over the real ground, a lane through one stops at its edge)
+  const oreAt = (p: V2) => {
+    const i = Math.floor(p.y) * W + Math.floor(p.x);
+    // (and off the bridge decks: a deck carries the road it was built for, drawn by the bridge)
+    if (i >= 0 && i < W * H && (m.ore[i] > 0 || m.oreKind[i] > 0)) return true;
+    return m.bridges.some((b) => {
+      const dx = p.x - b.x;
+      const dy = p.y - b.y;
+      return Math.abs(dx * Math.cos(b.angle) + dy * Math.sin(b.angle)) < b.length / 2 + 0.6 && Math.abs(dy * Math.cos(b.angle) - dx * Math.sin(b.angle)) < 1.4;
+    });
+  };
+  const offLimits = (p: V2) => oreAt(p) || nearStart(p.x, p.y, baseR) || sites.some((s) => p.x > s.x - 0.5 && p.y > s.y - 0.5 && p.x < s.x + s.w + 0.5 && p.y < s.y + s.h + 0.5) || underRoad(p) || compound(p);
   (deco?.tracks ?? []).forEach((pts, i) => {
     const via = pts.map((p) => v(p.x + 0.5, p.y + 0.5));
     if (!real) {
@@ -91,7 +105,8 @@ export function buildBiomeLayout(m: GameMap): Layout {
       }
       run = [];
     };
-    for (const p of smoothLine(via, via.length > 2 ? 2 : 0, 0.25)) {
+    // (three smoothing passes: the OSM line's 3 m steps rounded off, no kinks at the game's scale)
+    for (const p of smoothLine(via, via.length > 2 ? 3 : 0, 0.25)) {
       if (offLimits(p)) flush();
       else run.push(p);
     }

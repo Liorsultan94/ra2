@@ -169,7 +169,8 @@ export function buildVillage(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium
       gy = Math.min(gy, house(m, ch, h));
     });
     // (none stands there: a block of flats on the footprint, its long side to the street)
-    if (!n) gy = house(m, ch, { x: st.x + st.w / 2, y: st.y + st.h / 2, hl: st.w * 0.36, hw: st.h * 0.3, ang: st.rot % 2 ? Math.PI / 2 : 0 }, 3);
+    // (a smaller block of flats: its yard's streets keep its own houses off them)
+    if (!n) gy = house(m, ch, { x: st.x + st.w / 2, y: st.y + st.h / 2, hl: st.w * 0.26, hw: st.h * 0.22, ang: st.rot % 2 ? Math.PI / 2 : 0 }, 3);
     ch.spans.push({ st, gy, from, to: counts(ch) });
   }
   list.forEach((h, k) => {
@@ -218,6 +219,9 @@ export function isVillageStructure(m: GameMap, st: Structure) {
   return !!m.deco?.village && LT_GARRISON_KINDS.has(st.kind);
 }
 
+/** The garden walls' rendered block: whitewash, pale concrete, sand-coloured render. */
+const GARDEN_WALLS = [0xe2ddd0, 0xd4cfc4, 0xcdbf9f, 0xe8e2d4, 0xbcb6aa];
+
 /** One house: walls, its roof (slab or tiles), the clutter on it and its balconies. Returns the ground height at its foot (the lowest
  * corner: where it collapses to). */
 function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
@@ -257,6 +261,32 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
     const off = r(4);
     return face === 4 ? [0.04, 0.1] : [off + (lx * along) / (2 * BAY), ly ? H / STOREY : -sink / STOREY];
   });
+  // the garden wall along the street it fronts (MapDeco.village wall / wo): a low rendered block wall, capped, with a
+  // gate in it, standing on the ground between the house and the street (as the villages' streets are lined)
+  if (h.wall && h.wo) {
+    const alongX = h.wall >= 3;
+    const sd = h.wall === 1 || h.wall === 3 ? 1 : -1;
+    const face = (alongX ? D / 2 : L / 2) + h.wo;
+    const len = (alongX ? L : D) + 0.08;
+    const wallH = 0.055;
+    const base = -(gy - lo) - 0.03;
+    const cy = (wallH + base) / 2;
+    const hgt = wallH - base;
+    const gate = 0.07;
+    const half = (len - gate) / 2;
+    const wc = C(GARDEN_WALLS[Math.floor(r(30) * GARDEN_WALLS.length)]).multiplyScalar(0.94 + r(31) * 0.08);
+    const cap = wc.clone().multiplyScalar(1.06);
+    for (const e of [-1, 1]) {
+      const c = e * (gate / 2 + half / 2);
+      if (alongX) {
+        box(ch.detail, f, c, cy, sd * face, half, hgt, 0.014, wc);
+        box(ch.detail, f, c, wallH + 0.004, sd * face, half, 0.008, 0.02, cap);
+      } else {
+        box(ch.detail, f, sd * face, cy, c, 0.014, hgt, half, wc);
+        box(ch.detail, f, sd * face, wallH + 0.004, c, 0.02, 0.008, half, cap);
+      }
+    }
+  }
   const roof = r(5);
   const top = H;
   if (roof < 0.32) {

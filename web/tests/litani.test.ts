@@ -103,8 +103,8 @@ describe('Litani mouth (map frontline)', () => {
     for (let i = 0; i < m.w * m.h; i++) if (m.tiles[i] === Tile.Water && litaniRiver((i % m.w) + 0.5, ((i / m.w) | 0) + 0.5) > 0.3) expect(wet[i]).toBe(1);
   });
 
-  it('crosses the river by land only over its three bridges, at the real crossings', () => {
-    expect(m.bridges.length).toBe(3);
+  it('crosses the river by land only over its four bridges, at the real crossings (the small one at 70,89 too)', () => {
+    expect(m.bridges.length).toBe(4);
     const pass = (i: number) => unitPassable(m, i % m.w, (i / m.w) | 0) || m.tiles[i] === Tile.Bridge;
     const s0 = at(m.starts[0]);
     const s1 = at(m.starts[1]);
@@ -261,6 +261,40 @@ describe('Litani mouth (map frontline)', () => {
       expect(hi - lo, `house at ${h.x},${h.y}`).toBeLessThan(0.75);
     }
     expect((m.deco?.plots ?? []).length).toBeGreaterThan(600);
+  });
+
+  it('keeps every village house off every road, lane and track (its pavement too), squared to the street it fronts', () => {
+    const L = buildLayout(m);
+    const segs = new Map<number, { ax: number; ay: number; bx: number; by: number; h: number }[]>();
+    for (const l of [...L.roads.filter((r) => !r.ring).map((r) => ({ pts: r.pts, h: r.width / 2 })), ...L.tracks.filter((t) => !t.ring).map((t) => ({ pts: t.pts, h: t.width / 2 }))])
+      for (let k = 1; k < l.pts.length; k++) {
+        const key = Math.floor((l.pts[k - 1].y + l.pts[k].y) / 2) * m.w + Math.floor((l.pts[k - 1].x + l.pts[k].x) / 2);
+        if (!segs.has(key)) segs.set(key, []);
+        segs.get(key)!.push({ ax: l.pts[k - 1].x, ay: l.pts[k - 1].y, bx: l.pts[k].x, by: l.pts[k].y, h: l.h });
+      }
+    const dseg = (x: number, y: number, s: { ax: number; ay: number; bx: number; by: number }) => {
+      const dx = s.bx - s.ax;
+      const dy = s.by - s.ay;
+      const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(x - s.ax - t * dx, y - s.ay - t * dy);
+    };
+    const v = m.deco?.village ?? [];
+    let on = 0;
+    for (const h of v) {
+      const ca = Math.cos(h.ang);
+      const sa = Math.sin(h.ang);
+      let hit = false;
+      for (let u = -1; u <= 1 && !hit; u += 0.25)
+        for (let w = -1; w <= 1 && !hit; w += 0.25) {
+          const x = h.x + u * h.hl * ca - w * h.hw * sa;
+          const y = h.y + u * h.hl * sa + w * h.hw * ca;
+          for (let ty = Math.floor(y) - 2; ty <= Math.floor(y) + 2 && !hit; ty++) for (let tx = Math.floor(x) - 2; tx <= Math.floor(x) + 2 && !hit; tx++) for (const sg of segs.get(ty * m.w + tx) ?? []) if (dseg(x, y, sg) < sg.h) hit = true;
+        }
+      if (hit) on++;
+    }
+    expect(on).toBe(0);
+    // most houses by a street front it with a garden wall
+    expect(v.filter((h) => h.wall).length).toBeGreaterThan(v.length * 0.5);
   });
 
   it('gives both bases room to build, and a coast for a shipyard', () => {

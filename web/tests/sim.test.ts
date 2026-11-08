@@ -749,7 +749,8 @@ describe('collapsible bridges', () => {
 
   it('every bridge is a neutral structure with a repair hut on each bank, and the map stays connected', () => {
     const w = oneSide();
-    expect(w.bridges.length).toBe(3);
+    // (the Litani mouth's four: Jisr al Qasimiya, the old road's, the small one and the motorway's)
+    expect(w.bridges.length).toBe(4);
     for (const b of w.bridges) {
       // (the Litani is about two tiles wide at its bridges: 4 - 6 deck tiles; the old map's river took over 5)
       expect(b.tiles.length).toBeGreaterThanOrEqual(4);

@@ -102,7 +102,8 @@ export function nearForbidden(m: GameMap, x: number, y: number, extra: number): 
 export function placeLots(m: GameMap, roads: Road[], occ: Uint8Array, R: number): Lot[] {
   const city = m.biome === 'urban';
   // (the Sinai: one by each town square and the resorts' drives as well as the villages')
-  const want = city ? 5 : isSinai(m) ? 5 : 2;
+  // (the Litani: its real road net from OSM, which maps no lot by its village roads: none invented)
+  const want = m.id === 'frontline' ? 0 : city ? 5 : isSinai(m) ? 5 : 2;
   const L = city ? 4.2 : 3.4;
   const D = BAY_D * 2 + AISLE;
   const cands: { lot: Lot; score: number }[] = [];

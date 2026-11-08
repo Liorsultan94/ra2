@@ -112,7 +112,9 @@ export interface MapDeco {
    * (continuous map coordinates), half length along `ang` and half width (tiles, at game scale), heading (radians).
    * Their ground is impassable (`blocked`) bar the streets; render hints otherwise (no entities).
    */
-  village?: { x: number; y: number; hl: number; hw: number; ang: number }[];
+  /** (wall: the side fronting a street with a garden wall along it, 1 / 2 the +x / -x end, 3 / 4 the +z / -z side, local
+   * frame as render/village.ts; wo: the wall's distance out from that face, tiles) */
+  village?: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number }[];
   /**
    * The river's course downstream (continuous map coordinates), when the map knows it (the Litani's real course,
    * meanders and all): the water renderer follows it instead of guessing a straight axis (render/water.ts RiverInfo).

@@ -53,8 +53,9 @@ describe('AI2 keeps the game fair', () => {
         // grace's end, never before it, in all 24 games sampled (seeds 1-6, Russia and China, Normal and Hard); the old
         // one now and then happened to wait 10-50 s longer (russia's seeds 1-3 and 5, china's 2, 3, 5 and 6): russia
         // seed 6 and china seed 1, where it does not; with the roads graded and the junctions levelled (LT10) the old
-        // one waits 7 s longer on russia's seed 6 too, not on seed 4: russia seed 4)
-        ['russia', 4, 'frontline'],
+        // one waits 7 s longer on russia's seed 6 too, with the real road net and the fourth bridge (LT12) on seed 4
+        // and 5 as well, not on 1, 2, 3, 7 or 8: russia seed 1)
+        ['russia', 1, 'frontline'],
         ['china', 1, 'frontline'],
         ['ukraine', 3, 'desert'],
         // (SN2, the Sinai with its bases far apart: both AIs go as the grace ends in 11 of 12 desert games sampled;

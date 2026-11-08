@@ -9,7 +9,7 @@ import type { FogOfWar } from './fog';
 import { CulledInstances, type Inst, type SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, occAt, type Layout } from './layout';
-import { rockTexture } from './terraintex';
+import { limestoneTexture, rockTexture } from './terraintex';
 import { buildRelief, canyonMask, reliefEnabled, reliefField, reliefHeight } from './relief';
 import { loadRockKit, rockKitMaterial, type KitKey } from './rockkit';
 import { strataMean } from './strata';
@@ -245,8 +245,9 @@ function photoRockMaterial(pr: PhotoRocks, biome: string, fog: FogOfWar): THREE.
 }
 
 export function buildRocks(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'low' | 'medium' | 'high', lod: SceneryLod): THREE.Object3D[] {
-  const tex = rockTexture(quality === 'low' ? 128 : 256);
   const biome = m.biome;
+  // (the Litani's boulders: its pale limestone, as its gorge walls)
+  const tex = biome === 'temperate' ? limestoneTexture(quality === 'low' ? 128 : 256) : rockTexture(quality === 'low' ? 128 : 256);
   const mat = fog.apply(
     new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, bumpMap: tex, bumpScale: 2.5, roughness: 0.92, metalness: 0, flatShading: true }),
   );

@@ -148,7 +148,8 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
         const x = p.x + nx * o * (r.width / 2);
         const z = p.y + ny * o * (r.width / 2);
         const g = surfaceHeight(m, x, z);
-        const h = rampHeight(m, x, z, g, 0.03); // ramps onto the bridge decks (render/deckramp.ts)
+        // (ramps onto the bridge decks, render/deckramp.ts; a lane a hair lower than the road it meets: no flicker)
+        const h = rampHeight(m, x, z, g, r.lane ? 0.022 : 0.03);
         // (a paved lane: the country road's edges both sides, folded short of its centre line - no marking)
         const u = r.lane ? u0 + 0.49 * 0.46 * (1 - Math.abs(o)) : u0 + 0.49 * ((o + 1) / 2);
         row.push(rb.vert(V(x, h, z), V(0, 1, 0), u, s / 6, 1));

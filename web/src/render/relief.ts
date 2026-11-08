@@ -5,7 +5,7 @@ import type { FogOfWar } from './fog';
 import type { SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { assetBase, fetchBitmap } from './photoground';
-import { rockTexture } from './terraintex';
+import { limestoneTexture, rockTexture } from './terraintex';
 import { strataGlsl } from './strata';
 import { PHOTO_MATERIALS } from './terrainset';
 import { ROCK_DETAIL_GLSL, rockDetail, rockMean } from './rockdetail';
@@ -478,7 +478,9 @@ interface RockLook {
 }
 
 const LOOK: Record<Biome, RockLook> = {
-  temperate: { side: 'greyrock', top: 'mossrock', sideTint: 0x9c968c, topTint: 0xb8b4a6, sat: 0.55, strata: 0.08, snow: 0, moss: 0.55 },
+  // (the Litani: its gorge's pale limestone - light beige-grey faces in soft beds (the Blender-baked sandstone, toned
+  // down), not the grey rock scan whose lichen rims drew black scribbles at the gorge's scale)
+  temperate: { side: 'dsandst', top: 'mossrock', sideTint: 0xd6d2c8, topTint: 0xb8b4a6, sat: 0.32, strata: 0.1, snow: 0, moss: 0.55 },
   desert: { side: 'greyrock', top: 'greyrock', sideTint: 0x9a7262, topTint: 0xa88470, sat: 0.75, strata: 0.06, snow: 0, moss: 0 },
   winter: { side: 'greyrock', top: 'snowrock', sideTint: 0x8c9098, topTint: 0xd0d4dc, sat: 0.4, strata: 0.06, snow: 0.85, moss: 0 },
   urban: { side: 'greyrock', top: 'greyrock', sideTint: 0xa09c94, topTint: 0xa8a49c, sat: 0.5, strata: 0.05, snow: 0, moss: 0.2 },
@@ -532,8 +534,9 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
     return c.multiply(new THREE.Color(a[0] / b.x, a[1] / b.y, a[2] / b.z));
   };
   const u = {
-    rSideA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
-    rTopA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
+    // (the Litani's limestone at low quality too: its own pale bedded texture, not the cracked grey rock)
+    rSideA: granite ? granite.a : { value: (quality === 'low' ? (biome === 'temperate' ? limestoneTexture(128) : rockTexture(128)) : placeholder(150, 144, 136)) as THREE.Texture },
+    rTopA: granite ? granite.a : { value: (quality === 'low' ? (biome === 'temperate' ? limestoneTexture(128) : rockTexture(128)) : placeholder(150, 144, 136)) as THREE.Texture },
     rSideN: granite ? granite.n : { value: flatN as THREE.Texture },
     rTopN: granite ? granite.n : { value: flatN as THREE.Texture },
     rCanA: sand ? sand.a : { value: placeholder(150, 144, 136) as THREE.Texture },
