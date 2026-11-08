@@ -6,6 +6,9 @@ import { SEA_MIN, SHIP_YARD_REACH, navalTerrain, shipSite } from '../src/sim/nav
 import { DX, DY, Loco, slopeField } from '../src/sim/slope';
 import { neutralSites } from '../src/sim/capture';
 import { World } from '../src/sim/world';
+import { footprintRise, groundHeight } from '../src/sim/map';
+import { buildLayout } from '../src/render/layout';
+import { roadNetFor } from '../src/render/ambient/clearance';
 
 /*
  * The Litani river mouth (map id 'frontline'): real terrain baked by tools/litani-terrain.mjs. The map must come out
@@ -203,6 +206,54 @@ describe('Litani mouth (map frontline)', () => {
           const y = Math.floor(r[k - 1].y + (r[k].y - r[k - 1].y) * t + 0.5);
           if (x >= 0 && y >= 0 && x < m.w && y < m.h) expect(m.blocked[y * m.w + x], `road at ${x},${y}`).toBe(0);
         }
+  });
+
+  it('makes sense on its slopes: roundabouts level, roads no steeper than the tanks climb, pads level, houses and fields off the crags', () => {
+    const gh = (x: number, y: number) => groundHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, y)));
+    // every roundabout and turning circle (render/ambient/roadnet.ts) on level ground
+    const net = roadNetFor(m, buildLayout(m));
+    expect(net.loops.length).toBeGreaterThan(8);
+    for (const lp of net.loops) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let r = 0; r <= lp.R + 0.3; r += 0.4)
+        for (let a = 0; a < 16; a++) {
+          const h = gh(lp.x + Math.cos((a * Math.PI) / 8) * r, lp.y + Math.sin((a * Math.PI) / 8) * r);
+          lo = Math.min(lo, h);
+          hi = Math.max(hi, h);
+        }
+      expect(hi - lo, `loop at ${lp.x.toFixed(1)},${lp.y.toFixed(1)}`).toBeLessThan(0.25);
+    }
+    // no paved road (but a hairpin's inside) steeper than the tanks climb, step by step along it
+    const sf = slopeField(m);
+    const onRoad = new Uint8Array(m.w * m.h);
+    for (const l of m.roads)
+      for (let k = 1; k < l.length; k++)
+        for (let t = 0; t <= 1; t += 0.02) onRoad[Math.round(l[k - 1].y + (l[k].y - l[k - 1].y) * t) * m.w + Math.round(l[k - 1].x + (l[k].x - l[k - 1].x) * t)] = 1;
+    let steep = 0;
+    for (let i = 0; i < m.w * m.h; i++)
+      if (onRoad[i])
+        for (let k = 0; k < 4; k++) {
+          const nx = (i % m.w) + DX[k];
+          const ny = ((i / m.w) | 0) + DY[k];
+          if (nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && onRoad[ny * m.w + nx] && sf.grade[i * 8 + k] > 0.53) steep++;
+        }
+    expect(steep).toBeLessThan(8);
+    // the derricks on level pads (the tech buildings on their gentle spots), the mosques and water towers on level footings
+    for (const s of neutralSites(m)) expect(footprintRise(m, s.x, s.y, s.w, s.h), `${s.def} ${s.x},${s.y}`).toBeLessThan(s.def === 'oil' ? 0.2 : 0.45);
+    for (const st of m.structures) if (st.kind === 4 || st.kind === 7) expect(footprintRise(m, st.x, st.y, st.w, st.h), `${st.kind} ${st.x},${st.y}`).toBeLessThan(0.15);
+    // no house on a crag, no greenhouse or field on a near cliff
+    for (const h of m.deco?.village ?? []) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const [u, v] of [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const y = gh(h.x + u * h.hl * Math.cos(h.ang) - v * h.hw * Math.sin(h.ang), h.y + u * h.hl * Math.sin(h.ang) + v * h.hw * Math.cos(h.ang));
+        lo = Math.min(lo, y);
+        hi = Math.max(hi, y);
+      }
+      expect(hi - lo, `house at ${h.x},${h.y}`).toBeLessThan(0.75);
+    }
+    expect((m.deco?.plots ?? []).length).toBeGreaterThan(600);
   });
 
   it('gives both bases room to build, and a coast for a shipyard', () => {

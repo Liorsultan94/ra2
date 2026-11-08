@@ -237,6 +237,8 @@ export interface NetInput {
    * Unset: roundabouts wherever paved roads meet in the open countryside, traffic lights at the big village crossings.
    */
   round?: readonly { x: number; y: number; r: number }[];
+  /** A parking lot's drive meets its road in a plain T, never a roundabout (the Litani's; the other maps' stay). */
+  lotT?: boolean;
 }
 
 // ------------------------------------------------------------------ geometry
@@ -466,6 +468,7 @@ export function netInputFrom(m: GameMap, roads: NetInput['roads'], tracks: NetIn
     structures: m.structures,
     urban,
     round: sinaiRoundabouts(m).length ? sinaiRoundabouts(m) : undefined,
+    lotT: m.id === 'frontline',
     clip: urban ? undefined : (x, y) => m.starts.some((s) => Math.hypot(x - s.x - 0.5, y - s.y - 0.5) < 8.5),
     hard: (tx, ty) => {
       if (tx < 0 || ty < 0 || tx >= W || ty >= H) return true;
@@ -951,7 +954,9 @@ export function buildRoadNet(inp: NetInput): RoadNet {
     // (the maps with chosen roundabouts: those squares only, and no traffic lights)
     const chosen = inp.round?.some((c) => Math.hypot(c.x - n.x, c.y - n.y) < c.r) ?? false;
     // countryside: a roundabout where paved roads meet
-    if (!painted && (inp.round ? chosen : !n.village) && paved >= 3 && paved === arms.length) {
+    // (never at a parking lot's drive, where the map says so: that meets the road in a plain T)
+    const lotDrive = !!inp.lotT && arms.some((a) => lines[a.line].lot >= 0);
+    if (!painted && !lotDrive && (inp.round ? chosen : !n.village) && paved >= 3 && paved === arms.length) {
       for (const R of inp.round ? (arms.length > 3 ? [2.7, 2.4, 2.1, 1.9, 1.7, 1.55] : [2.5, 2.2, 2.0, 1.8, 1.65]) : arms.length > 4 ? [2.4, 2.1, 1.9] : [1.9, 1.7]) if (makeLoop(ni, n.x, n.y, R, true, false)) return;
     }
     // priority: the straightest pair of the best ranked arms

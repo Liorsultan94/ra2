@@ -489,10 +489,13 @@ describe('road clearance', () => {
         const ky = mouth.y - lp.y;
         for (const r of L.roads) {
           if (r.ring || r.lot !== undefined) continue;
+          // (a stub is a ribbon reaching the circle: another road passing a dead end's circle a little way off, the
+          // Litani's gorge-rim turning circle by the road up the hill, is none)
+          const reaches = r.pts.some((p) => Math.hypot(p.x - lp.x, p.y - lp.y) < lp.R + 0.3);
           for (const p of r.pts) {
             const d = Math.hypot(p.x - lp.x, p.y - lp.y);
             expect(d).toBeGreaterThan(lp.R - 0.35);
-            if (lp.dead && d < lp.R + 2) expect((p.x - lp.x) * kx + (p.y - lp.y) * ky).toBeGreaterThan(-0.3);
+            if (lp.dead && reaches && d < lp.R + 2) expect((p.x - lp.x) * kx + (p.y - lp.y) * ky).toBeGreaterThan(-0.3);
           }
         }
       }

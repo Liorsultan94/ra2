@@ -218,16 +218,24 @@ export function isVillageStructure(m: GameMap, st: Structure) {
   return !!m.deco?.village && LT_GARRISON_KINDS.has(st.kind);
 }
 
-/** One house: walls, its roof (slab or tiles), the clutter on it and its balconies. Returns its ground height. */
+/** One house: walls, its roof (slab or tiles), the clutter on it and its balconies. Returns the ground height at its foot (the lowest
+ * corner: where it collapses to). */
 function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const qx = Math.round(h.x * 16);
   const qy = Math.round(h.y * 16);
   const r = (k: number) => hash2(qx + k * 131, qy, 5101 + k);
   const ca = Math.cos(h.ang);
   const sa = Math.sin(h.ang);
-  // ground: the lowest of the footprint's corners and centre (the house steps down the slope on its terrace)
-  let gy = surfaceHeight(m, h.x, h.y);
-  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) gy = Math.min(gy, surfaceHeight(m, h.x + sx * h.hl * ca - sz * h.hw * sa, h.y + sx * h.hl * sa + sz * h.hw * ca));
+  // ground: its floor at the footprint's highest corner (terraced into the slope there, a hand's depth), the walls
+  // carried down to its lowest as the downhill side's plinth and lower floors: neither buried in the hill nor afloat
+  let lo = surfaceHeight(m, h.x, h.y);
+  let hi = lo;
+  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const y = surfaceHeight(m, h.x + sx * h.hl * ca - sz * h.hw * sa, h.y + sx * h.hl * sa + sz * h.hw * ca);
+    lo = Math.min(lo, y);
+    hi = Math.max(hi, y);
+  }
+  const gy = Math.max(lo, hi - 0.03);
   const area = 4 * h.hl * h.hw;
   // two to four storeys mostly; the small ones (sheds, a single room) one or two
   const rs = r(1);
@@ -242,7 +250,7 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const f = new THREE.Matrix4().compose(V(h.x, gy, h.y), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), -h.ang), V(1, 1, 1));
   const wallC = C(WALLS[Math.floor(r(2) * WALLS.length)]).multiplyScalar(0.94 + r(3) * 0.08);
   // walls: from below the ground (the downhill side's plinth) to the roof, the window rows from the floor up
-  const sink = 0.12;
+  const sink = gy - lo + 0.12;
   const wy = (H + sink) / 2 - sink;
   box(ch.walls, f, 0, wy, 0, L, H + sink, D, wallC, (lx, ly, face) => {
     const along = face < 2 ? L : D;
@@ -348,5 +356,5 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
         if (!solid) for (const e of [-1, 1]) box(ch.detail, f, bx + (e * bw) / 2, y + 0.042, s * (D / 2 + 0.025), 0.004, 0.052, 0.05, rail);
       }
   }
-  return gy;
+  return lo;
 }

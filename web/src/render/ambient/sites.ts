@@ -92,6 +92,8 @@ export function nearForbidden(m: GameMap, x: number, y: number, extra: number): 
   // tech / garrison sites (both halves of the map)
   for (const site of m.techSites ?? [])
     for (const [ax, ay] of site.at) for (const [px, py] of [[ax + 1.5, ay + 1.5], [m.w - ax - 1.5, m.h - ay - 1.5]]) if (Math.hypot(x - px, y - py) < 5 + extra) return true;
+  // (and, on the Litani, the other half's own candidates, not mirrored; the other maps' lots stay where they are)
+  if (m.id === 'frontline') for (const site of m.techSites ?? []) for (const [ax, ay] of site.at2 ?? []) if (Math.hypot(x - ax - 1.5, y - ay - 1.5) < 5 + extra) return true;
   if (m.deco) for (const r of [...m.deco.lots, ...m.deco.parks, ...m.deco.plazas]) if (x > r.x0 - 0.3 - extra && x < r.x1 + 0.3 + extra && y > r.y0 - 0.3 - extra && y < r.y1 + 0.3 + extra) return true;
   return false;
 }
