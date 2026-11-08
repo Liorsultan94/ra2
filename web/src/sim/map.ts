@@ -115,6 +115,8 @@ export interface MapDeco {
   /** (wall: the side fronting a street with a garden wall along it, 1 / 2 the +x / -x end, 3 / 4 the +z / -z side, local
    * frame as render/village.ts; wo: the wall's distance out from that face, tiles) */
   village?: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number }[];
+  /** The Litani's real greenhouses (OSM building=greenhouse): each footprint (centre, half length along ang, half width). */
+  greenhouses?: { x: number; y: number; hl: number; hw: number; ang: number }[];
   /**
    * The river's course downstream (continuous map coordinates), when the map knows it (the Litani's real course,
    * meanders and all): the water renderer follows it instead of guessing a straight axis (render/water.ts RiverInfo).

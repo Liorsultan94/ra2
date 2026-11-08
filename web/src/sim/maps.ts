@@ -3569,6 +3569,28 @@ export function createLitaniMap(): GameMap {
     deco.trackNoCars = deco.tracks.map(() => true);
   }
   deco.plots = litaniPlots(g, cls, built);
+  // the real greenhouses (OSM building=greenhouse) where they stand clear of the roads, lanes, houses and the game's
+  // pieces: plastic tunnel greenhouses on their own footprints (render/farm.ts)
+  deco.greenhouses = litaniData()
+    .plots.filter(([x, y, hl, hw, , k]) => {
+      if (k !== 3 || x < 1 || y < 1 || x > W - 1 || y > H - 1) return false;
+      const i = Math.floor(y) * W + Math.floor(x);
+      return !blocked[i] && !roadNear(x - 0.5, y - 0.5, hw + 0.7) && trackD[i] > hw + 0.35 && !reserved(Math.floor(x), Math.floor(y)) && hl < 3 && g.tiles[i] !== Tile.Water && g.tiles[i] !== Tile.Rock;
+    })
+    // (at the game's scale, as the houses: and at least one tunnel's width and two of its lengths)
+    .map(([x, y, hl, hw, ang]) => ({ x, y, hl: Math.max(0.35, hl * LT_HOUSE_K), hw: Math.max(0.16, hw * LT_HOUSE_K), ang }))
+    // (whole, on clear ground - no tree under it - and not over another: OSM maps some twice)
+    .filter((h, k, all) => {
+      const ca = Math.cos(h.ang);
+      const sa = Math.sin(h.ang);
+      for (let u = -1; u <= 1; u += 0.25)
+        for (let v = -1; v <= 1; v += 0.5) {
+          const tx = Math.floor(h.x + u * h.hl * ca - v * h.hw * sa);
+          const ty = Math.floor(h.y + u * h.hl * sa + v * h.hw * ca);
+          if (tx < 0 || ty < 0 || tx >= W || ty >= H || g.trees[ty * W + tx] || blocked[ty * W + tx]) return false;
+        }
+      return !all.slice(0, k).some((o) => Math.hypot(o.x - h.x, o.y - h.y) < Math.max(o.hl, h.hl) * 0.7 + Math.max(o.hw, h.hw));
+    });
   deco.village = village;
   deco.river = litaniData().course.map(([x, y]) => ({ x, y }));
   // the high-voltage line (OSM), broken where it tops a crest of the exaggerated hills: the game's wires hang ~1.5
@@ -3863,7 +3885,7 @@ function simplifyLine(pts: Point[], eps: number): Point[] {
 function litaniPlots(g: Grids, cls: (x: number, y: number) => number, built: (x: number, y: number) => number): NonNullable<MapDeco['plots']> {
   const out: NonNullable<MapDeco['plots']> = [];
   const crop = (k: number) => (k === 0 ? ('orchard' as const) : k === 1 ? ('greenhouse' as const) : undefined);
-  for (const [cx, cy, hl, hw, ang, k] of litaniData().plots) if (hl <= 7 && hw <= 5) out.push({ cx, cy, hl, hw, ang, crop: crop(k) });
+  for (const [cx, cy, hl, hw, ang, k] of litaniData().plots) if (k !== 3 && hl <= 7 && hw <= 5) out.push({ cx, cy, hl, hw, ang, crop: crop(k) });
   // the tracks' main direction (length-weighted, folded to a quarter turn)
   let sx = 0;
   let sy = 0;

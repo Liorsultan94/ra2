@@ -167,17 +167,17 @@ function ridges(b: GeoBuilder, m: GameMap, f: Field, gap: number, h: number, w: 
 }
 
 /** Plastic tunnels along the field: half-round hoops, ends closed, a door at one end. */
-function tunnels(b: GeoBuilder, m: GameMap, f: Field, seed: number) {
+function tunnels(b: GeoBuilder, m: GameMap, f: Field, seed: number, size?: { span: number; r: number; hgt: number }) {
   const P = frame(f);
   const ca = Math.cos(f.angle);
   const sa = Math.sin(f.angle);
-  const span = 0.46;
-  const r = 0.2;
-  const hgt = 0.2;
+  const span = size?.span ?? 0.46;
+  const r = size?.r ?? 0.2;
+  const hgt = size?.hgt ?? 0.2;
   const n = Math.max(1, Math.floor((f.hw * 2 - 0.1) / span));
   const b0 = -((n - 1) * span) / 2;
   const seg = 8;
-  const hl = f.hl - 0.15;
+  const hl = f.hl - (size ? 0.03 : 0.15);
   const nS = Math.max(1, Math.ceil((hl * 2) / 0.45));
   const at = (s: number) => -hl + (s / nS) * hl * 2;
   for (let t = 0; t < n; t++) {
@@ -189,7 +189,8 @@ function tunnels(b: GeoBuilder, m: GameMap, f: Field, seed: number) {
     const ok: boolean[] = [];
     for (let s = 0; s <= nS; s++) {
       const c = P(at(s), bb);
-      ok.push(plantable(m, c.x, c.z) && plantable(m, c.x - sa * r, c.z + ca * r) && plantable(m, c.x + sa * r, c.z - ca * r));
+      // (a real greenhouse's footprint is checked by the map: whole)
+      ok.push(!!size || (plantable(m, c.x, c.z) && plantable(m, c.x - sa * r, c.z + ca * r) && plantable(m, c.x + sa * r, c.z - ca * r)));
     }
     const runs: [number, number][] = [];
     let start = 0;
@@ -1128,6 +1129,13 @@ export function buildFarm(m: GameMap, layout: Layout, fog: FogOfWar, quality: 'l
     }
   });
 
+  // the Litani's real greenhouses: each OSM footprint its row of plastic tunnels side by side (spans ~0.3 tiles, 10 m)
+  (m.deco?.greenhouses ?? []).forEach((g, k) => {
+    const n = Math.max(1, Math.round((g.hw * 2) / 0.32));
+    const span = (g.hw * 2) / n + 0.02;
+    const f: Field = { cx: g.x, cy: g.y, hl: g.hl, hw: g.hw, angle: g.ang, type: FieldType.Plowed };
+    tunnels(houses(g.x, g.y), m, f, 9000 + k, { span, r: span * 0.48, hgt: Math.min(0.15, span * 0.42 + 0.03) });
+  });
   // the desert estates draw into the crop builders and the orchard trees
   const builtB = new Map<string, GeoBuilder>();
   // (the wheat ears: denser on the better tiers; low keeps a sparser set)

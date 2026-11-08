@@ -518,7 +518,8 @@ for (const n of nodes.values()) {
   places.push({ name: n.tags['name:en'] ?? n.tags.name, ar: n.tags.name, kind: n.tags.place, x: p.x, y: p.y, inside: p.x >= 0 && p.y >= 0 && p.x <= N && p.y <= N });
 }
 // the farm plots (each OSM orchard / greenhouse / farmland area inside the window): its minimum-area oriented
-// rectangle (centre, half length along `ang`, half width), what grows there (0 orchard, 1 greenhouses, 2 field)
+// rectangle (centre, half length along `ang`, half width), what grows there (0 orchard, 1 greenhouses, 2 field;
+// 3: one real greenhouse, OSM building=greenhouse, below)
 const hull = (pts) => {
   const p = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
   const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
@@ -579,7 +580,8 @@ for (const a of areas) {
 const BLD_SKIP = new Set(['greenhouse', 'roof', 'storage_tank', 'ruins', 'destroyed', 'mosque', 'construction']);
 const houses = [];
 for (const w of ways.values()) {
-  if (!w.tags.building || BLD_SKIP.has(w.tags.building) || w.nds[0] !== w.nds[w.nds.length - 1]) continue;
+  const glass = w.tags.building === 'greenhouse';
+  if (!w.tags.building || (BLD_SKIP.has(w.tags.building) && !glass) || w.nds[0] !== w.nds[w.nds.length - 1]) continue;
   const h = hull(wayPts(w));
   if (h.length < 3) continue;
   let best = null;
@@ -601,6 +603,11 @@ for (const w of ways.values()) {
   if (cx < 0 || cy < 0 || cx >= N || cy >= N) continue;
   let { hl, hw, ang } = best;
   if (hw > hl) [hl, hw, ang] = [hw, hl, ang + Math.PI / 2];
+  // (a greenhouse: a plot of its own, kind 3 - the real tunnel greenhouse's footprint, not a house)
+  if (glass) {
+    plots.push([Math.round(cx * 20) / 20, Math.round(cy * 20) / 20, Math.round(hl * 20) / 20, Math.round(hw * 20) / 20, Math.round((((ang % Math.PI) + Math.PI) % Math.PI) * 100) / 100, 3]);
+    continue;
+  }
   houses.push({ x: cx, y: cy, hl, hw, ang: ((ang % Math.PI) + Math.PI) % Math.PI });
 }
 /**
