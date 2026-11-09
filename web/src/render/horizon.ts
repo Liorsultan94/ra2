@@ -762,7 +762,8 @@ export class Horizon {
       const d = W.outside(x, y);
       if (d < HZ_MARGIN + 12 || Math.hypot(x - W.cx, y - W.cy) > HZ_RADIUS * 0.82) return false;
       if (sites.some((s) => Math.hypot(s.x - x, s.y - y) < s.r + r + 30)) return false;
-      if (W.slope(x, y, 6) > 0.18 || W.isWater(x, y)) return false;
+      // (the Litani's villages sit on the hills and their crests, as the near ones do: steeper ground takes them)
+      if (W.slope(x, y, 6) > (W.litani ? 0.38 : 0.18) || W.isWater(x, y)) return false;
       if (W.sea && W.seaV(x, y).v > -14) return false;
       return true;
     };
@@ -775,7 +776,7 @@ export class Horizon {
         sites.push({ x: a.x, y: a.y, r, n: Math.round(r * 2.4) });
       }
     });
-    for (let k = 0; k < 400 && sites.length < 16; k++) {
+    for (let k = 0; k < (W.litani ? 900 : 400) && sites.length < (W.litani ? 30 : 16); k++) {
       const ang = hash2(k, 1, 903) * Math.PI * 2;
       const rr = HZ_MARGIN + W.w / 2 + 30 + Math.pow(hash2(k, 2, 903), 1.4) * (HZ_RADIUS * 0.75 - W.w / 2 - HZ_MARGIN - 30);
       const x = W.cx + Math.cos(ang) * rr;
@@ -816,12 +817,14 @@ export class Horizon {
         const hgt = W.height(x, y);
         if (hgt < WATER_LEVEL + 0.15) continue;
         const centre = 1 - Math.hypot(gx, gy) / s.r;
-        const big = code === 3 || (code === 1 && hash2(k, si, 924) < 0.7);
+        // (the Litani: its villages' houses, as near the map - flat-roofed concrete blocks of two to four storeys,
+        // a few with a tiled roof)
+        const big = code === 3 || (code === 1 && hash2(k, si, 924) < 0.7) || (W.litani && hash2(k, si, 924) < 0.78);
         const yaw = ang + (hash2(k, si, 925) < 0.5 ? 0 : Math.PI / 2);
         q.setFromAxisAngle(UP, yaw);
         const col = C(wallCols[Math.floor(hash2(k, si, 926) * wallCols.length)], 0.92 + hash2(k, si, 927) * 0.12);
         if (big) {
-          const tall = code === 3 ? 2 + centre * 9 * hash2(k, si, 928) + hash2(k, si, 929) * 2 : 1.1 + hash2(k, si, 928) * 0.8;
+          const tall = code === 3 ? 2 + centre * 9 * hash2(k, si, 928) + hash2(k, si, 929) * 2 : W.litani ? 1.3 + Math.floor(hash2(k, si, 928) * 3) * 0.55 + centre * 0.4 : 1.1 + hash2(k, si, 928) * 0.8;
           sc.set(2.2 + hash2(k, si, 930) * 1.4, tall, 2.2 + hash2(k, si, 931) * 1.4);
           blocks.push({ m: new THREE.Matrix4().compose(v.set(x, hgt - 0.1, y), q, sc), c: col });
         } else {
