@@ -169,7 +169,8 @@ export function buildVillage(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium
       gy = Math.min(gy, house(m, ch, h));
     });
     // (none stands there: a block of flats on the footprint, its long side to the street)
-    if (!n) gy = house(m, ch, { x: st.x + st.w / 2, y: st.y + st.h / 2, hl: st.w * 0.36, hw: st.h * 0.3, ang: st.rot % 2 ? Math.PI / 2 : 0 }, 3);
+    // (a smaller block of flats: its yard's streets keep its own houses off them)
+    if (!n) gy = house(m, ch, { x: st.x + st.w / 2, y: st.y + st.h / 2, hl: st.w * 0.26, hw: st.h * 0.22, ang: st.rot % 2 ? Math.PI / 2 : 0 }, 3);
     ch.spans.push({ st, gy, from, to: counts(ch) });
   }
   list.forEach((h, k) => {
@@ -180,6 +181,8 @@ export function buildVillage(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium
     const r = Math.max(h.hl, h.hw);
     ch.spans.push({ st: { kind: StructureKind.House, x: h.x - r, y: h.y - r, w: 2 * r, h: 2 * r, rot: 0 }, gy, from, to: counts(ch) });
   });
+  // the petrol stations (MapDeco.fuel): forecourt, canopy over two pump islands, the kiosk behind - no brand
+  for (const f of m.deco?.fuel ?? []) fuelStation(m, chunkAt(f.x, f.y), f);
   const shadows = quality !== 'low';
   const wallMat = fog.apply(new THREE.MeshStandardMaterial({ map: facadeTexture(quality === 'low' ? 32 : 64), vertexColors: true, roughness: 0.92 }));
   const roofMat = fog.apply(new THREE.MeshStandardMaterial({ map: roofTex, vertexColors: true, roughness: 0.8 }));
@@ -218,16 +221,51 @@ export function isVillageStructure(m: GameMap, st: Structure) {
   return !!m.deco?.village && LT_GARRISON_KINDS.has(st.kind);
 }
 
-/** One house: walls, its roof (slab or tiles), the clutter on it and its balconies. Returns its ground height. */
+/** The shops' awnings: canvas in green, red, blue, sand, grey. */
+const AWNINGS = [0x2e6a4a, 0xa83a2c, 0x2c4f86, 0xc89a40, 0x7a7c78, 0x3a7a7a];
+
+/** A petrol station (MapDeco.fuel), local x along the road, +z away from it: a concrete forecourt, a white canopy on
+ * four posts over two pump islands, the kiosk (white, a glazed front) behind; no brand, no sign. */
+function fuelStation(m: GameMap, ch: Chunk, s: { x: number; y: number; ang: number; side: number }) {
+  const gy = surfaceHeight(m, s.x, s.y);
+  // (+z away from the road: turned half round on its other side)
+  const f = new THREE.Matrix4().compose(V(s.x, gy, s.y), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), -s.ang + (s.side < 0 ? Math.PI : 0)), V(1, 1, 1));
+  box(ch.walls, f, 0, 0.004, 0.05, 0.95, 0.03, 0.62, C(0xb4b0a8));
+  for (const [x, z] of [[-0.26, -0.08], [0.26, -0.08], [-0.26, 0.12], [0.26, 0.12]]) box(ch.walls, f, x, 0.11, z, 0.016, 0.2, 0.016, C(0xd8d8d4));
+  box(ch.walls, f, 0, 0.215, 0.02, 0.66, 0.03, 0.34, C(0xeeeeea));
+  box(ch.walls, f, 0, 0.2, 0.02, 0.67, 0.008, 0.35, C(0x8a8e92));
+  for (const x of [-0.12, 0.12]) {
+    box(ch.detail, f, x, 0.012, 0.02, 0.16, 0.014, 0.05, C(0xc8c4ba));
+    for (const dx of [-0.04, 0.04]) {
+      box(ch.detail, f, x + dx, 0.05, 0.02, 0.03, 0.065, 0.024, C(0xe2e2de));
+      box(ch.detail, f, x + dx, 0.06, 0.033, 0.022, 0.03, 0.002, C(0x30363c));
+    }
+  }
+  box(ch.walls, f, 0, 0.065, 0.29, 0.34, 0.13, 0.16, C(0xe8e6e0));
+  box(ch.detail, f, 0, 0.055, 0.209, 0.26, 0.07, 0.004, C(0x2a3036));
+}
+
+/** The garden walls' rendered block: whitewash, pale concrete, sand-coloured render. */
+const GARDEN_WALLS = [0xe2ddd0, 0xd4cfc4, 0xcdbf9f, 0xe8e2d4, 0xbcb6aa];
+
+/** One house: walls, its roof (slab or tiles), the clutter on it and its balconies. Returns the ground height at its foot (the lowest
+ * corner: where it collapses to). */
 function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const qx = Math.round(h.x * 16);
   const qy = Math.round(h.y * 16);
   const r = (k: number) => hash2(qx + k * 131, qy, 5101 + k);
   const ca = Math.cos(h.ang);
   const sa = Math.sin(h.ang);
-  // ground: the lowest of the footprint's corners and centre (the house steps down the slope on its terrace)
-  let gy = surfaceHeight(m, h.x, h.y);
-  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) gy = Math.min(gy, surfaceHeight(m, h.x + sx * h.hl * ca - sz * h.hw * sa, h.y + sx * h.hl * sa + sz * h.hw * ca));
+  // ground: its floor at the footprint's highest corner (terraced into the slope there, a hand's depth), the walls
+  // carried down to its lowest as the downhill side's plinth and lower floors: neither buried in the hill nor afloat
+  let lo = surfaceHeight(m, h.x, h.y);
+  let hi = lo;
+  for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const y = surfaceHeight(m, h.x + sx * h.hl * ca - sz * h.hw * sa, h.y + sx * h.hl * sa + sz * h.hw * ca);
+    lo = Math.min(lo, y);
+    hi = Math.max(hi, y);
+  }
+  const gy = Math.max(lo, hi - 0.03);
   const area = 4 * h.hl * h.hw;
   // two to four storeys mostly; the small ones (sheds, a single room) one or two
   const rs = r(1);
@@ -242,13 +280,57 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
   const f = new THREE.Matrix4().compose(V(h.x, gy, h.y), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), -h.ang), V(1, 1, 1));
   const wallC = C(WALLS[Math.floor(r(2) * WALLS.length)]).multiplyScalar(0.94 + r(3) * 0.08);
   // walls: from below the ground (the downhill side's plinth) to the roof, the window rows from the floor up
-  const sink = 0.12;
+  const sink = gy - lo + 0.12;
   const wy = (H + sink) / 2 - sink;
   box(ch.walls, f, 0, wy, 0, L, H + sink, D, wallC, (lx, ly, face) => {
     const along = face < 2 ? L : D;
     const off = r(4);
     return face === 4 ? [0.04, 0.1] : [off + (lx * along) / (2 * BAY), ly ? H / STOREY : -sink / STOREY];
   });
+  // the garden wall along the street it fronts (MapDeco.village wall / wo): a low rendered block wall, capped, with a
+  // gate in it, standing on the ground between the house and the street (as the villages' streets are lined)
+  if (h.wall && h.wo) {
+    const alongX = h.wall >= 3;
+    const sd = h.wall === 1 || h.wall === 3 ? 1 : -1;
+    const face = (alongX ? D / 2 : L / 2) + h.wo;
+    const len = (alongX ? L : D) + 0.08;
+    const wallH = 0.055;
+    const base = -(gy - lo) - 0.03;
+    const cy = (wallH + base) / 2;
+    const hgt = wallH - base;
+    const gate = 0.07;
+    const half = (len - gate) / 2;
+    const wc = C(GARDEN_WALLS[Math.floor(r(30) * GARDEN_WALLS.length)]).multiplyScalar(0.94 + r(31) * 0.08);
+    const cap = wc.clone().multiplyScalar(1.06);
+    for (const e of [-1, 1]) {
+      const c = e * (gate / 2 + half / 2);
+      if (alongX) {
+        box(ch.detail, f, c, cy, sd * face, half, hgt, 0.014, wc);
+        box(ch.detail, f, c, wallH + 0.004, sd * face, half, 0.008, 0.02, cap);
+      } else {
+        box(ch.detail, f, sd * face, cy, c, 0.014, hgt, half, wc);
+        box(ch.detail, f, sd * face, wallH + 0.004, c, 0.02, 0.008, half, cap);
+      }
+    }
+  }
+  // a shop on the ground floor on the main road (MapDeco.village shop): its glazed front / roller shutter and an
+  // awning over it, the colour the shopkeeper chose - no sign
+  if (h.shop) {
+    const alongX = h.shop >= 3;
+    const sd = h.shop === 1 || h.shop === 3 ? 1 : -1;
+    const face = (alongX ? D / 2 : L / 2) + 0.004;
+    const len = (alongX ? L : D) * 0.86;
+    const shut = r(32) < 0.4;
+    const front = shut ? C(0x8a8c8e).multiplyScalar(0.9 + r(33) * 0.15) : C(0x2a3036);
+    const awn = C(AWNINGS[Math.floor(r(34) * AWNINGS.length)]);
+    if (alongX) {
+      box(ch.detail, f, 0, 0.058, sd * face, len, 0.1, 0.006, front);
+      box(ch.detail, f, 0, 0.122, sd * (face + 0.028), len + 0.02, 0.006, 0.056, awn);
+    } else {
+      box(ch.detail, f, sd * face, 0.058, 0, 0.006, 0.1, len, front);
+      box(ch.detail, f, sd * (face + 0.028), 0.122, 0, 0.056, 0.006, len + 0.02, awn);
+    }
+  }
   const roof = r(5);
   const top = H;
   if (roof < 0.32) {
@@ -348,5 +430,5 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
         if (!solid) for (const e of [-1, 1]) box(ch.detail, f, bx + (e * bw) / 2, y + 0.042, s * (D / 2 + 0.025), 0.004, 0.052, 0.05, rail);
       }
   }
-  return gy;
+  return lo;
 }

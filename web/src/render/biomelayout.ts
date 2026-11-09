@@ -1,5 +1,6 @@
 import { StructureKind, Tile, groundHeight, type GameMap } from '../sim/map';
 import { hash2 } from '../sim/rng';
+import { neutralSites } from '../sim/capture';
 import { finishRoadLayout, prepareRoadNet } from './ambient/clearance';
 import { sinaiExtraRoads, sinaiTrimRoads } from './ambient/sinairoads';
 import { FieldType, OCC_BUILT, OCC_FIELD, OCC_ROAD, OCC_TRACK, SITE_CLEAR, detourSpans, edgesOffSites, makeRouter, nearSite, pylonFooting, segDist, smoothLine, type Edge, type Field, type Layout, type Road, type Track, type V2 } from './layout';
@@ -47,12 +48,69 @@ export function buildBiomeLayout(m: GameMap): Layout {
     const pts = e.pts.filter((p) => !nearStart(p.x, p.y, baseR));
     if (pts.length === e.pts.length) roads.push({ pts, width: e.width, variant: e.variant });
   }
-  const tracks: Track[] = (deco?.tracks ?? []).map((pts, i) => {
-    const t: Track = { pts: route(pts.map((p) => v(p.x + 0.5, p.y + 0.5)), 0.5, 0.3), width: 0.5 };
-    const bed = deco?.trackBeds?.[i];
-    if (bed) t.bed = bed;
-    if (deco?.trackNoCars?.[i]) t.noCars = true;
-    return t;
+  // (the Litani's real tracks and lanes keep their OSM line, not re-routed; the paved ones are lanes, drawn as roads
+  // off the traffic's network; each cut where it would run over a base, a derrick or a tech site)
+  const real = !!deco?.trackPave;
+  const lanes: Road[] = [];
+  const tracks: Track[] = [];
+  const sites = real ? neutralSites(m) : [];
+  // (and inside a main road's ribbon - the game draws the main roads 30 - 45 m wide: a lane or track meeting one
+  // stops at its edge, one alongside it under it is not drawn twice)
+  const bins = new Map<number, { x: number; y: number; h: number }[]>();
+  if (real)
+    for (const r of roads)
+      for (const p of r.pts) {
+        const k = Math.floor(p.y) * W + Math.floor(p.x);
+        let b = bins.get(k);
+        if (!b) bins.set(k, (b = []));
+        b.push({ x: p.x, y: p.y, h: r.width / 2 });
+      }
+  const underRoad = (p: V2) => {
+    for (let ty = Math.floor(p.y) - 1; ty <= Math.floor(p.y) + 1; ty++)
+      for (let tx = Math.floor(p.x) - 1; tx <= Math.floor(p.x) + 1; tx++)
+        for (const q of bins.get(ty * W + tx) ?? []) if (Math.hypot(q.x - p.x, q.y - p.y) < q.h - 0.12) return true;
+    return false;
+  };
+  // (and the garrison houses' compounds: the game's 2 x 2 tile pieces stand on the real village, a lane through one
+  // stops at its wall)
+  const compound = (p: V2) => m.structures.some((s) => p.x > s.x - 0.35 && p.y > s.y - 0.35 && p.x < s.x + s.w + 0.35 && p.y < s.y + s.h + 0.35);
+  // (nor through an ore field: the game's fields lie over the real ground, a lane through one stops at its edge)
+  const oreAt = (p: V2) => {
+    const i = Math.floor(p.y) * W + Math.floor(p.x);
+    // (and off the bridge decks: a deck carries the road it was built for, drawn by the bridge)
+    if (i >= 0 && i < W * H && (m.ore[i] > 0 || m.oreKind[i] > 0)) return true;
+    return m.bridges.some((b) => {
+      const dx = p.x - b.x;
+      const dy = p.y - b.y;
+      return Math.abs(dx * Math.cos(b.angle) + dy * Math.sin(b.angle)) < b.length / 2 + 0.6 && Math.abs(dy * Math.cos(b.angle) - dx * Math.sin(b.angle)) < 1.4;
+    });
+  };
+  const offLimits = (p: V2) => oreAt(p) || nearStart(p.x, p.y, baseR) || sites.some((s) => p.x > s.x - 0.5 && p.y > s.y - 0.5 && p.x < s.x + s.w + 0.5 && p.y < s.y + s.h + 0.5) || underRoad(p) || compound(p);
+  (deco?.tracks ?? []).forEach((pts, i) => {
+    const via = pts.map((p) => v(p.x + 0.5, p.y + 0.5));
+    if (!real) {
+      const t: Track = { pts: route(via, 0.5, 0.3), width: 0.5 };
+      const bed = deco?.trackBeds?.[i];
+      if (bed) t.bed = bed;
+      if (deco?.trackNoCars?.[i]) t.noCars = true;
+      tracks.push(t);
+      return;
+    }
+    const pave = deco.trackPave![i] ?? 0;
+    let run: V2[] = [];
+    const flush = () => {
+      if (run.length > 2) {
+        if (pave > 0) lanes.push({ pts: run, width: pave, variant: 1, lane: true });
+        else tracks.push({ pts: run, width: 0.5, noCars: true });
+      }
+      run = [];
+    };
+    // (three smoothing passes: the OSM line's 3 m steps rounded off, no kinks at the game's scale)
+    for (const p of smoothLine(via, via.length > 2 ? 3 : 0, 0.25)) {
+      if (offLimits(p)) flush();
+      else run.push(p);
+    }
+    flush();
   });
 
   // ---- occupancy grid
@@ -71,8 +129,12 @@ export function buildBiomeLayout(m: GameMap): Layout {
   };
   for (const r of roads) stampLine(r.pts, r.width / 2 + 0.25, OCC_ROAD);
   for (const t of tracks) stampLine(t.pts, t.width / 2 + (t.bed ?? 0) + 0.2, OCC_TRACK);
+  for (const l of lanes) stampLine(l.pts, l.width / 2 + 0.25, OCC_ROAD);
   // the civilian lane graph: turning circles / junctions kept clear, roads fitted to them (ambient/clearance.ts)
   prepareRoadNet(m, roads, tracks, occ, R);
+  // (the lanes after the traffic's network: their ends tidied against the roads as it left them, drawn, no traffic)
+  if (real) tidyLaneEnds(m, roads, lanes, tracks, baseR, sites);
+  roads.push(...lanes);
   const stampRect = (x0: number, y0: number, x1: number, y1: number, bit: number) => {
     for (let y = Math.floor(y0 * R); y < Math.ceil(y1 * R); y++)
       for (let x = Math.floor(x0 * R); x < Math.ceil(x1 * R); x++) if (x >= 0 && y >= 0 && x < W * R && y < H * R) occ[y * W * R + x] |= bit;
@@ -479,3 +541,87 @@ export function villagePlots(m: GameMap, fieldOk: (f: Field) => boolean, mark: (
   });
   return out;
 }
+
+/**
+ * Where does a lane / track end sensibly (the Litani's real lanes, cut at the game's pieces)? At a junction with
+ * another road, lane or track; the map's edge; a house, a garrison compound's wall or gate; an ore field's edge; a
+ * base's or a site's edge; a bridge.
+ */
+export function laneEndOk(m: GameMap, p: V2, half: number, others: { pts: V2[]; width: number }[], baseR: number, sites: { x: number; y: number; w: number; h: number }[], strict = false, slack = 0.3): boolean {
+  const W = m.w;
+  const H = m.h;
+  if (p.x < 1.2 || p.y < 1.2 || p.x > W - 1.2 || p.y > H - 1.2) return true;
+  for (const o of others)
+    for (let k = 1; k < o.pts.length; k++) if (segDist(p.x, p.y, o.pts[k - 1], o.pts[k]) < half + o.width / 2 + slack) return true;
+  if (m.structures.some((s) => p.x > s.x - 0.75 && p.y > s.y - 0.75 && p.x < s.x + s.w + 0.75 && p.y < s.y + s.h + 0.75)) return true;
+  // (strict: a short piece's ends - a house, an ore field's or a site's edge is no destination for a stub)
+  if (strict) return m.starts.some((s) => Math.hypot(p.x - s.x - 0.5, p.y - s.y - 0.5) < baseR + 1.5) || m.bridges.some((b) => Math.hypot(p.x - b.x, p.y - b.y) < b.length / 2 + 2.2);
+  for (const h of m.deco?.village ?? []) if (Math.hypot(h.x - p.x, h.y - p.y) < Math.max(h.hl, h.hw) + 0.45) return true;
+  for (let ty = Math.floor(p.y) - 1; ty <= Math.floor(p.y) + 1; ty++)
+    for (let tx = Math.floor(p.x) - 1; tx <= Math.floor(p.x) + 1; tx++) {
+      if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+      const i = ty * W + tx;
+      if (m.ore[i] > 0 || m.oreKind[i] > 0) return true;
+    }
+  if (m.starts.some((s) => Math.hypot(p.x - s.x - 0.5, p.y - s.y - 0.5) < baseR + 1.5)) return true;
+  if (sites.some((s) => p.x > s.x - 1.2 && p.y > s.y - 1.2 && p.x < s.x + s.w + 1.2 && p.y < s.y + s.h + 1.2)) return true;
+  if (m.bridges.some((b) => Math.hypot(p.x - b.x, p.y - b.y) < b.length / 2 + 2.2)) return true;
+  if (m.deco?.fuel?.some((f) => Math.hypot(f.x - p.x, f.y - p.y) < 1)) return true;
+  return false;
+}
+
+/**
+ * The Litani's lanes and tracks after their cuts: a fragment under ~2 tiles joined to nothing is dropped; a paved
+ * lane ending in the open fades into a dirt track over its last stretch (as the real ones do); a dirt track may end in
+ * the fields. Repeated until nothing changes (a dropped piece can leave another loose).
+ */
+function tidyLaneEnds(m: GameMap, roads: Road[], lanes: Road[], tracks: Track[], baseR: number, sites: { x: number; y: number; w: number; h: number }[]) {
+  const len = (l: V2[]) => l.reduce((a, p, k) => (k ? a + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
+  const all = () => [...roads, ...lanes, ...tracks] as { pts: V2[]; width: number }[];
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    for (const list of [lanes, tracks] as { pts: V2[]; width: number; fade?: boolean }[][])
+      for (let i = list.length - 1; i >= 0; i--) {
+        const l = list[i];
+        // (a short piece stays only between two real destinations - a junction, a house or gate, a base, a bridge)
+        const others = all().filter((o) => o !== l);
+        const okEnd = (p: V2) => laneEndOk(m, p, l.width / 2, others, baseR, sites, true);
+        if (len(l.pts) < LANE_ORPHAN && !(okEnd(l.pts[0]) && okEnd(l.pts[l.pts.length - 1]))) {
+          list.splice(i, 1);
+          changed = true;
+        }
+      }
+    if (!changed) break;
+  }
+  // paved lanes ending in the open: the last LANE_FADE of asphalt becomes a dirt track
+  for (let i = lanes.length - 1; i >= 0; i--) {
+    const l = lanes[i];
+    const others = all().filter((o) => o !== l);
+    for (const end of [0, 1]) {
+      const pts = l.pts;
+      const p = end ? pts[pts.length - 1] : pts[0];
+      // (a little stricter than the check: the traffic's network still trims the main roads' ends after this)
+      if (laneEndOk(m, p, l.width / 2, others, baseR, sites, false, 0.12)) continue;
+      const total = len(pts);
+      if (total < LANE_FADE + LANE_ORPHAN) {
+        // (a short one: dirt all the way)
+        lanes.splice(i, 1);
+        tracks.push({ pts, width: 0.5, noCars: true, fade: true });
+        break;
+      }
+      const seq = end ? [...pts].reverse() : pts;
+      let s = 0;
+      let k = 1;
+      for (; k < seq.length && s < LANE_FADE; k++) s += Math.hypot(seq[k].x - seq[k - 1].x, seq[k].y - seq[k - 1].y);
+      const dirt = seq.slice(0, k);
+      const rest = seq.slice(k - 1);
+      tracks.push({ pts: dirt, width: 0.5, noCars: true, fade: true });
+      l.pts = end ? rest.reverse() : rest;
+    }
+  }
+}
+
+/** A lane fragment shorter than this (tiles) joined to nothing is dropped; a lane ending in the open fades to dirt over this. */
+const LANE_ORPHAN = 2;
+const LANE_FADE = 1.2;
+

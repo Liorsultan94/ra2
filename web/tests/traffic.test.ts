@@ -204,8 +204,9 @@ describe('lane graph', () => {
           continue;
         }
         if (nd.ctl === Ctl.Turn) {
-          // no room for a circle (squeezed between quay walls): a wide road, turned on with a 3-point turn
-          expect(L.half).toBeGreaterThanOrEqual(1);
+          // no room for a circle (squeezed between quay walls): a wide road, turned on with a 3-point turn; the
+          // Litani's real dead ends have none (the road just stops, as a rural road does): any road
+          if (id !== 'frontline') expect(L.half).toBeGreaterThanOrEqual(1);
           continue;
         }
         expect(nd.ctl).toBe(Ctl.Loop);
@@ -298,7 +299,8 @@ describe('driving by the rules (headless)', () => {
       // traffic flows: most cars are moving at the end, nobody is stuck for good
       const moving = list.filter((c) => Math.abs(c.v) > 0.05 || c.waiting || c.pk === 3).length;
       expect(moving).toBeGreaterThan(list.length * 0.5);
-      expect(list.reduce((s, c) => s + c.loops, 0)).toBeGreaterThan(0);
+      // (round a ring now and then; the Litani has none: OSM maps no roundabout in its window)
+      if (n.loops.length) expect(list.reduce((s, c) => s + c.loops, 0)).toBeGreaterThan(0);
       // no gridlock: nobody stands still for half a minute (parked cars aside)
       expect(longest).toBeLessThan(30);
       // cars that pass by turn into the parking lots now and then, and park
@@ -489,10 +491,13 @@ describe('road clearance', () => {
         const ky = mouth.y - lp.y;
         for (const r of L.roads) {
           if (r.ring || r.lot !== undefined) continue;
+          // (a stub is a ribbon reaching the circle: another road passing a dead end's circle a little way off, the
+          // Litani's gorge-rim turning circle by the road up the hill, is none)
+          const reaches = r.pts.some((p) => Math.hypot(p.x - lp.x, p.y - lp.y) < lp.R + 0.3);
           for (const p of r.pts) {
             const d = Math.hypot(p.x - lp.x, p.y - lp.y);
             expect(d).toBeGreaterThan(lp.R - 0.35);
-            if (lp.dead && d < lp.R + 2) expect((p.x - lp.x) * kx + (p.y - lp.y) * ky).toBeGreaterThan(-0.3);
+            if (lp.dead && reaches && d < lp.R + 2) expect((p.x - lp.x) * kx + (p.y - lp.y) * ky).toBeGreaterThan(-0.3);
           }
         }
       }
@@ -547,7 +552,8 @@ describe('road clearance', () => {
     it(`${id}: roads joined end to end don't jump in width (joined roads taper smoothly)`, () => {
       const m = createMap(id, 1);
       const L = buildLayout(m);
-      const roads = L.roads.filter((r) => !r.painted && !r.ring && r.lot === undefined);
+      // (the Litani's paved lanes are no joined road pieces: their own real lines, off the traffic)
+      const roads = L.roads.filter((r) => !r.painted && !r.ring && r.lot === undefined && !r.lane);
       // closed ring roads: welded (last point = first)
       for (const r of roads) if (r.closed) expect(r.pts[0]).toEqual(r.pts[r.pts.length - 1]);
       const endW = (r: (typeof roads)[0], at: 0 | 1) => (r.taper ? r.taper.w[at ? r.taper.w.length - 1 : 0] : r.width);

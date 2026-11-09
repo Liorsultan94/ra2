@@ -86,6 +86,11 @@ export interface MapDeco {
   trackBeds?: number[];
   /** Per entry of `tracks`: no civilian traffic on it (a footpath, a dead-end mountain track). */
   trackNoCars?: boolean[];
+  /**
+   * Per track: drawn as a paved lane this wide (tiles; 0 or unset: a dirt track). The Litani's real minor roads,
+   * service roads and slip roads (OSM), asphalt but off the traffic's network (render/biomelayout.ts).
+   */
+  trackPave?: number[];
   /** Paved plazas / squares (axis-aligned rectangles, tile space). */
   plazas: { x0: number; y0: number; x1: number; y1: number }[];
   /** Park lawns (rectangles) with hedges and paths. */
@@ -107,7 +112,13 @@ export interface MapDeco {
    * (continuous map coordinates), half length along `ang` and half width (tiles, at game scale), heading (radians).
    * Their ground is impassable (`blocked`) bar the streets; render hints otherwise (no entities).
    */
-  village?: { x: number; y: number; hl: number; hw: number; ang: number }[];
+  /** (wall: the side fronting a street with a garden wall along it, 1 / 2 the +x / -x end, 3 / 4 the +z / -z side, local
+   * frame as render/village.ts; wo: the wall's distance out from that face, tiles) */
+  village?: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number; shop?: number }[];
+  /** The Litani's petrol stations (OSM amenity=fuel): forecourt centre, the road's heading, its side of the road (+-1). */
+  fuel?: { x: number; y: number; ang: number; side: number }[];
+  /** The Litani's real greenhouses (OSM building=greenhouse): each footprint (centre, half length along ang, half width). */
+  greenhouses?: { x: number; y: number; hl: number; hw: number; ang: number }[];
   /**
    * The river's course downstream (continuous map coordinates), when the map knows it (the Litani's real course,
    * meanders and all): the water renderer follows it instead of guessing a straight axis (render/water.ts RiverInfo).

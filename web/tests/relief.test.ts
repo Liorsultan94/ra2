@@ -19,6 +19,17 @@ describe('relief', () => {
         for (let x = 0.05; x < m.w; x += 0.17) {
           const t = m.tiles[Math.floor(y) * m.w + Math.floor(x)];
           const lift = reliefHeight(m, x, y) - groundHeight(m, x, y);
+          // (the Litani: its walls' foot follows the rock's smoothed outline, cutting the tile staircase's inner corners -
+          // off the rock only there, within a quarter tile of a rock tile and never near a tile's centre, where units
+          // stand; render/relief.ts)
+          if (t !== Tile.Rock && lift > 1e-5 && id === 'frontline') {
+            let dr = 9;
+            for (let ty = Math.floor(y) - 1; ty <= Math.floor(y) + 1; ty++)
+              for (let tx = Math.floor(x) - 1; tx <= Math.floor(x) + 1; tx++)
+                if (m.tiles[ty * m.w + tx] === Tile.Rock) dr = Math.min(dr, Math.hypot(Math.max(tx - x, 0, x - tx - 1), Math.max(ty - y, 0, y - ty - 1)));
+            const dc = Math.hypot(x - Math.floor(x) - 0.5, y - Math.floor(y) - 0.5);
+            if (dr <= 0.25 && dc >= 0.25) continue;
+          }
           if (t !== Tile.Rock) above += lift > 1e-5 ? 1 : 0;
           else if (lift > 0.3) lifted++;
         }

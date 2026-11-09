@@ -33,6 +33,8 @@ export interface Road {
   taper?: { w: number[]; v: (0 | 1)[]; from?: number; to?: number; lift?: number };
   /** A closed loop (first point follows the last). */
   closed?: boolean;
+  /** A paved lane off the traffic's network (the Litani's real minor, service and slip roads: MapDeco.trackPave). */
+  lane?: boolean;
 }
 
 export interface Track {
@@ -44,6 +46,8 @@ export interface Track {
   noCars?: boolean;
   /** Turning loop / link of a dirt track (see Road.ring). */
   ring?: boolean;
+  /** The dirt end of a paved lane that stops in the open (the Litani's): its asphalt fades into a track. */
+  fade?: boolean;
 }
 
 export const enum FieldType {

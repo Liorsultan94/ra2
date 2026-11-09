@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { litaniRiver } from '../sim/maps';
 import { Tile, WATER_LEVEL, type GameMap } from '../sim/map';
 import { fbm, hash2 } from '../sim/rng';
 import type { FogOfWar } from './fog';
@@ -278,6 +279,30 @@ export function planGroundCover(m: GameMap, layout: Layout, quality: 'low' | 'me
         bushes.push(mk(px, pz, 0.7 + hash2(x, y, 330 + k) * 0.8, 0.28, 0.3));
       }
     }
+  }
+  // the Litani's banks: a riparian thicket - oleander (pink flowering shrubs) and the bank's scrub, dense along the
+  // water, clear of the roads, tracks, bridges and the game's pieces
+  if (m.id === 'frontline') {
+    const per = quality === 'high' ? 6 : quality === 'medium' ? 4 : 2;
+    for (let y = 0; y < m.h; y++)
+      for (let x = 0; x < m.w; x++) {
+        const t = m.tiles[y * m.w + x];
+        if (t === Tile.Water || t === Tile.Bridge || t === Tile.Rock) continue;
+        const rv = litaniRiver(x + 0.5, y + 0.5);
+        if (rv < -2.2 || rv > 0) continue;
+        if (m.bridges.some((b) => Math.hypot(x + 0.5 - b.x, y + 0.5 - b.y) < b.length / 2 + 2)) continue;
+        for (let k = 0; k < per; k++) {
+          seed++;
+          const px = x + hash2(seed, 1, 361);
+          const pz = y + hash2(seed, 2, 361);
+          if (occAt(layout, m, px, pz) & (OCC_ROAD | OCC_TRACK | OCC_BUILT | OCC_FIELD) || inKeepOut(m, keep, px, pz) || m.trees[Math.floor(pz) * m.w + Math.floor(px)]) continue;
+          const b = mk(px, pz, 1.0 + hash2(seed, 3, 361) * 0.9, 0.3, 0.32);
+          // (oleander in flower: about a third pink, the rest its dark leathery green)
+          const pink = hash2(seed, 4, 361) < 0.35;
+          b.color = pink ? new THREE.Color(1.6, 0.62, 0.86) : new THREE.Color(0.66, 0.86, 0.56);
+          bushes.push(b);
+        }
+      }
   }
   // hedgerows
   for (const e of layout.edges) {

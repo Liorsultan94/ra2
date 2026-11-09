@@ -5,7 +5,7 @@ import type { FogOfWar } from './fog';
 import type { SceneryLod } from './geo';
 import { surfaceHeight } from './ground';
 import { assetBase, fetchBitmap } from './photoground';
-import { rockTexture } from './terraintex';
+import { limestoneTexture, rockTexture } from './terraintex';
 import { strataGlsl } from './strata';
 import { PHOTO_MATERIALS } from './terrainset';
 import { ROCK_DETAIL_GLSL, rockDetail, rockMean } from './rockdetail';
@@ -216,12 +216,16 @@ export function reliefField(m: GameMap): ReliefField {
   boxBlur(blur, CW, CH, Math.round(F * 0.55));
   boxBlur(blur, CW, CH, Math.round(F * 0.4));
   const cellAt = (a: Float32Array, ci: number, cj: number) => (ci < 0 || cj < 0 || ci >= CW || cj >= CH ? 0 : a[cj * CW + ci]);
+  const smoothFoot = m.id === 'frontline';
   const inside = new Uint8Array(N);
   for (let j = 0; j < NH; j++)
     for (let i = 0; i < NW; i++) {
       // strictly inside the rock: all four cells round the vertex are rock tiles
-      const strict = cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) === 4;
-      if (!strict) continue;
+      const nRock = cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j);
+      // (the Litani: the blurred outline wherever it touches a rock tile - its gorge walls' tile staircase, seen down a
+      // steep bank, read as a sawtooth of dark triangles under the face; the smooth outline cuts the staircase's inner
+      // corners, the face's foot at the ground there, rising over the rock)
+      if (nRock !== 4 && !(smoothFoot && nRock > 0)) continue;
       const sm = (cellAt(blur, i - 1, j - 1) + cellAt(blur, i, j - 1) + cellAt(blur, i - 1, j) + cellAt(blur, i, j)) / 4;
       if (sm > 0.5) inside[j * NW + i] = 1;
     }
@@ -234,7 +238,7 @@ export function reliefField(m: GameMap): ReliefField {
       d[k] = dist[k] / F;
       if (d[k] > 0) count++;
       // every corner of a rock cell needs the ground height (the meshes only cover rock tiles)
-      if (cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
+      if (smoothFoot || cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
     }
   const st = STYLE[m.biome] ?? STYLE.temperate;
   // the coloured canyons' sandstone walls: rougher, more broken faces and ragged rims
@@ -410,6 +414,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const i1 = Math.min(rf.NW - 1, i0 + SECTOR * F);
   const j1 = Math.min(rf.NH - 1, j0 + SECTOR * F);
   const remap = new Map<number, number>();
+  const lit = m.id === 'frontline';
   const pos: number[] = [];
   const col: number[] = [];
   const idx: number[] = [];
@@ -425,7 +430,10 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     // crevices and the damp cliff foot darker, sun-bleached tops
     const dk = rf.d[k];
     const tone = 0.82 + valueNoise(x * 1.7, y * 1.7, 851) * 0.3;
-    const cav = 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
+    // (the Litani: none at the foot - its walls rise within a sample or two, so the foot's dark vertices and the top's
+    // light ones met on the same long triangles, alternating along a diagonal wall: a sawtooth of dark triangles; its
+    // shading comes from the light and the rock's own maps)
+    const cav = lit ? 1 : 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
     const c = tone * cav;
     col.push(c, c, c);
     if (canyon) can.push(canyon(x, y));
@@ -478,7 +486,9 @@ interface RockLook {
 }
 
 const LOOK: Record<Biome, RockLook> = {
-  temperate: { side: 'greyrock', top: 'mossrock', sideTint: 0x9c968c, topTint: 0xb8b4a6, sat: 0.55, strata: 0.08, snow: 0, moss: 0.55 },
+  // (the Litani: its gorge's pale limestone - light beige-grey faces in soft beds (the Blender-baked sandstone, toned
+  // down), not the grey rock scan whose lichen rims drew black scribbles at the gorge's scale)
+  temperate: { side: 'dsandst', top: 'mossrock', sideTint: 0xd6d2c8, topTint: 0xb8b4a6, sat: 0.32, strata: 0.1, snow: 0, moss: 0.55 },
   desert: { side: 'greyrock', top: 'greyrock', sideTint: 0x9a7262, topTint: 0xa88470, sat: 0.75, strata: 0.06, snow: 0, moss: 0 },
   winter: { side: 'greyrock', top: 'snowrock', sideTint: 0x8c9098, topTint: 0xd0d4dc, sat: 0.4, strata: 0.06, snow: 0.85, moss: 0 },
   urban: { side: 'greyrock', top: 'greyrock', sideTint: 0xa09c94, topTint: 0xa8a49c, sat: 0.5, strata: 0.05, snow: 0, moss: 0.2 },
@@ -532,8 +542,9 @@ function cliffMaterial(biome: Biome, fog: FogOfWar, quality: 'low' | 'medium' | 
     return c.multiply(new THREE.Color(a[0] / b.x, a[1] / b.y, a[2] / b.z));
   };
   const u = {
-    rSideA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
-    rTopA: granite ? granite.a : { value: (quality === 'low' ? rockTexture(128) : placeholder(150, 144, 136)) as THREE.Texture },
+    // (the Litani's limestone at low quality too: its own pale bedded texture, not the cracked grey rock)
+    rSideA: granite ? granite.a : { value: (quality === 'low' ? (biome === 'temperate' ? limestoneTexture(128) : rockTexture(128)) : placeholder(150, 144, 136)) as THREE.Texture },
+    rTopA: granite ? granite.a : { value: (quality === 'low' ? (biome === 'temperate' ? limestoneTexture(128) : rockTexture(128)) : placeholder(150, 144, 136)) as THREE.Texture },
     rSideN: granite ? granite.n : { value: flatN as THREE.Texture },
     rTopN: granite ? granite.n : { value: flatN as THREE.Texture },
     rCanA: sand ? sand.a : { value: placeholder(150, 144, 136) as THREE.Texture },

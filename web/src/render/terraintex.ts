@@ -163,6 +163,43 @@ export function groundDetailTexture(N: number): THREE.DataTexture {
   return tex;
 }
 
+/**
+ * Limestone (the Litani's gorge, temperate): a pale beige-grey face in soft beds - bands along v (the faces' up in the
+ * cliffs' side projections), mottled, a little grain; no dark crack network (the rock above draws one, and at the
+ * gorge's scale it read as black scribbles).
+ */
+export function limestoneTexture(N: number): THREE.DataTexture {
+  const data = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const u = (x + 0.5) / N;
+      const v = (y + 0.5) / N;
+      const mott = pfbm(u, v, 4, 81, 4);
+      const warp = (pfbm(u, v, 2, 83, 3) - 0.5) * 0.08;
+      // beds: a few soft bands of slightly different tone, thin darker partings between some of them
+      const bed = Math.sin((v + warp) * Math.PI * 2 * 7);
+      const part = Math.pow(Math.max(0, Math.sin((v + warp) * Math.PI * 2 * 3.5 + 0.7)), 24);
+      const grain = hash(x, y, 85);
+      let l = 0.74 + (mott - 0.5) * 0.18 + bed * 0.035 - part * 0.09 + (grain - 0.5) * 0.06;
+      l = clamp01(l);
+      const o = (y * N + x) * 4;
+      // (a warm beige-grey; a touch of iron stain in the mottling)
+      const warm = (mott - 0.5) * 0.06;
+      data[o] = clamp01(l * (1.0 + warm)) * 255;
+      data[o + 1] = clamp01(l * 0.965) * 255;
+      data[o + 2] = clamp01(l * (0.9 - warm)) * 255;
+      data[o + 3] = 255;
+    }
+  const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /** Rock surface: grain, cracks and lichen speckle (also used as bump map). */
 export function rockTexture(N: number): THREE.DataTexture {
   const data = new Uint8Array(N * N * 4);

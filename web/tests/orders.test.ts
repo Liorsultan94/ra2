@@ -86,9 +86,10 @@ describe('stances', () => {
   });
 
   it('aggressive units chase further than guard units and stay where the fight ended', () => {
+    // (the tank on the road itself: with the Litani's roads on their real alignment, 78.5 lies on the bank beside it)
     const chase = (stance: 'aggressive' | 'guard') => {
       const w = duel();
-      const a = w.spawnUnit('usa_mbt', 0, 78.5, 74.5);
+      const a = w.spawnUnit('usa_mbt', 0, 77.5, 74.5);
       a.hp = a.maxHp = 1e6;
       const b = w.spawnUnit('russia_rifle', 1, 83.5, 74.5);
       b.hp = b.maxHp = 1e6;
@@ -97,7 +98,7 @@ describe('stances', () => {
       // the enemy runs away down the road
       w.issue(1, { type: 'move', ids: [b.id], x: 78.5, y: 90.5 });
       run(w, TPS * 25);
-      return Math.hypot(a.x - 78.5, a.y - 74.5);
+      return Math.hypot(a.x - 77.5, a.y - 74.5);
     };
     expect(chase('aggressive')).toBeGreaterThan(chase('guard') + 2);
   });

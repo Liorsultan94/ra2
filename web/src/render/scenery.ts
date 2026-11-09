@@ -128,30 +128,39 @@ export function buildScenery(m: GameMap, layout: Layout, fog: FogOfWar, quality:
   const rb = new GeoBuilder();
   for (const r of layout.roads) {
     if (r.painted || r.taper) continue; // city streets: drawn by the ground shader; joined roads: ambient/roadfurniture.ts
-    const n = r.pts.length;
-    const across = [-1, -0.5, 0, 0.5, 1];
+    // (a paved lane: three across, every other point along - narrow, unmarked, the same look for fewer triangles)
+    const pts = r.lane ? r.pts.filter((_, i) => i % 2 === 0 || i === r.pts.length - 1) : r.pts;
+    const n = pts.length;
     const u0 = r.variant === 0 ? 0.005 : 0.505;
-    let s = 0;
-    const rows: number[][] = [];
-    for (let i = 0; i < n; i++) {
-      const p = r.pts[i];
-      if (i > 0) s += Math.hypot(p.x - r.pts[i - 1].x, p.y - r.pts[i - 1].y);
-      const a = r.pts[Math.max(0, i - 1)];
-      const c = r.pts[Math.min(n - 1, i + 1)];
-      const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
-      const nx = -(c.y - a.y) / L;
-      const ny = (c.x - a.x) / L;
-      const row: number[] = [];
-      for (const o of across) {
-        const x = p.x + nx * o * (r.width / 2);
-        const z = p.y + ny * o * (r.width / 2);
-        const g = surfaceHeight(m, x, z);
-        const h = rampHeight(m, x, z, g, 0.03); // ramps onto the bridge decks (render/deckramp.ts)
-        row.push(rb.vert(V(x, h, z), V(0, 1, 0), u0 + 0.49 * ((o + 1) / 2), s / 6, 1));
+    // one strip of the ribbon: `off` from the centre line, `w` wide, its texture across by `uAt` (o -1 .. 1)
+    const strip = (off: number, w: number, across: number[], uAt: (o: number) => number) => {
+      let s = 0;
+      const rows: number[][] = [];
+      for (let i = 0; i < n; i++) {
+        const p = pts[i];
+        if (i > 0) s += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+        const a = pts[Math.max(0, i - 1)];
+        const c = pts[Math.min(n - 1, i + 1)];
+        const L = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+        const nx = -(c.y - a.y) / L;
+        const ny = (c.x - a.x) / L;
+        const row: number[] = [];
+        for (const o of across) {
+          const x = p.x + nx * (off + (o * w) / 2);
+          const z = p.y + ny * (off + (o * w) / 2);
+          const g = surfaceHeight(m, x, z);
+          // (ramps onto the bridge decks, render/deckramp.ts; a lane a hair lower than the road it meets: no flicker)
+          const h = rampHeight(m, x, z, g, r.lane ? 0.022 : 0.03);
+          row.push(rb.vert(V(x, h, z), V(0, 1, 0), uAt(o), s / 6, 1));
+        }
+        rows.push(row);
       }
-      rows.push(row);
-    }
-    for (let i = 0; i < rows.length - 1; i++) for (let k = 0; k < across.length - 1; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
+      for (let i = 0; i < rows.length - 1; i++) for (let k = 0; k < across.length - 1; k++) rb.quad(rows[i][k], rows[i + 1][k], rows[i][k + 1], rows[i + 1][k + 1]);
+    };
+    if (r.lane) {
+      // (a paved lane: the country road's edges both sides, folded short of its centre line - no marking)
+      strip(0, r.width, [-1, 0, 1], (o) => u0 + 0.49 * 0.46 * (1 - Math.abs(o)));
+    } else strip(0, r.width, [-1, -0.5, 0, 0.5, 1], (o) => u0 + 0.49 * ((o + 1) / 2));
   }
   // roundabout / turning-circle rings: road pieces in the same mesh (ambient/roadfurniture.ts)
   appendLoopRibbons(rb, m, layout.roads);

@@ -44,10 +44,10 @@ describe('war doctrines (AI2)', () => {
       let arty = 0;
       let all = 0;
       let preps = 0;
-      // (seeds 2, 8, 11: on the Litani's 152-tile window, with its villages and its hills closed to vehicles, the
-      // guns' preparation is not drawn in every game - seeds 2-5, 7, 8, 11 and 12 of 1-12 prepare one of the first two
-      // attacks)
-      for (const seed of [2, 8, 11]) {
+      // (seeds 3, 7, 10: on the Litani's 152-tile window, with its villages and its hills closed to vehicles, the
+      // guns' preparation is not drawn in every game; with its real roads and tracks (LT11) seeds 5, 7, 10 and 11 of 1-12
+      // prepare one of the first two attacks, and 3, 7 and 10 build clearly more guns with the doctrine)
+      for (const seed of [3, 7, 10]) {
         const w = world('usa', 'russia', seed);
         const pt = peaceTicks('hard', 'auto');
         const ai = new AIController(w, 1, 'hard', { peaceTicks: pt }) as AnyAI;

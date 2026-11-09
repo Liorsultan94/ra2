@@ -6,6 +6,10 @@ import { SEA_MIN, SHIP_YARD_REACH, navalTerrain, shipSite } from '../src/sim/nav
 import { DX, DY, Loco, slopeField } from '../src/sim/slope';
 import { neutralSites } from '../src/sim/capture';
 import { World } from '../src/sim/world';
+import { footprintRise, groundHeight } from '../src/sim/map';
+import { buildLayout } from '../src/render/layout';
+import { laneEndOk } from '../src/render/biomelayout';
+import { roadNetFor } from '../src/render/ambient/clearance';
 
 /*
  * The Litani river mouth (map id 'frontline'): real terrain baked by tools/litani-terrain.mjs. The map must come out
@@ -100,8 +104,8 @@ describe('Litani mouth (map frontline)', () => {
     for (let i = 0; i < m.w * m.h; i++) if (m.tiles[i] === Tile.Water && litaniRiver((i % m.w) + 0.5, ((i / m.w) | 0) + 0.5) > 0.3) expect(wet[i]).toBe(1);
   });
 
-  it('crosses the river by land only over its three bridges, at the real crossings', () => {
-    expect(m.bridges.length).toBe(3);
+  it('crosses the river by land only over its four bridges, at the real crossings (the small one at 70,89 too)', () => {
+    expect(m.bridges.length).toBe(4);
     const pass = (i: number) => unitPassable(m, i % m.w, (i / m.w) | 0) || m.tiles[i] === Tile.Bridge;
     const s0 = at(m.starts[0]);
     const s1 = at(m.starts[1]);
@@ -203,6 +207,116 @@ describe('Litani mouth (map frontline)', () => {
           const y = Math.floor(r[k - 1].y + (r[k].y - r[k - 1].y) * t + 0.5);
           if (x >= 0 && y >= 0 && x < m.w && y < m.h) expect(m.blocked[y * m.w + x], `road at ${x},${y}`).toBe(0);
         }
+  });
+
+  it('makes sense on its slopes: rings only at real roundabouts, junctions level, roads no steeper than the tanks climb, pads level, houses and fields off the crags', () => {
+    const gh = (x: number, y: number) => groundHeight(m, Math.max(0, Math.min(m.w - 0.01, x)), Math.max(0, Math.min(m.h - 0.01, y)));
+    // a ring only where three roads or more join (OSM maps no roundabout in the window: none), never at a dead end -
+    // the road just stops; every junction on level ground
+    const net = roadNetFor(m, buildLayout(m));
+    for (const lp of net.loops) {
+      expect(lp.dead, `turning circle at ${lp.x.toFixed(1)},${lp.y.toFixed(1)}`).toBe(false);
+      expect(net.nodes[lp.node].arms.length).toBeGreaterThanOrEqual(3);
+    }
+    expect(net.loops.length).toBe(0);
+    const junctions = net.nodes.filter((nd) => nd.arms.length >= 3 && !nd.arms.some((a) => net.lines[a.line].lot >= 0));
+    expect(junctions.length).toBeGreaterThan(6);
+    for (const nd of junctions) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let r = 0; r <= 1.9; r += 0.4)
+        for (let a = 0; a < 16; a++) {
+          const h = gh(nd.x + Math.cos((a * Math.PI) / 8) * r, nd.y + Math.sin((a * Math.PI) / 8) * r);
+          lo = Math.min(lo, h);
+          hi = Math.max(hi, h);
+        }
+      expect(hi - lo, `junction at ${nd.x.toFixed(1)},${nd.y.toFixed(1)}`).toBeLessThan(0.25);
+    }
+    // no paved road (but a hairpin's inside) steeper than the tanks climb, step by step along it
+    const sf = slopeField(m);
+    const onRoad = new Uint8Array(m.w * m.h);
+    for (const l of m.roads)
+      for (let k = 1; k < l.length; k++)
+        for (let t = 0; t <= 1; t += 0.02) onRoad[Math.round(l[k - 1].y + (l[k].y - l[k - 1].y) * t) * m.w + Math.round(l[k - 1].x + (l[k].x - l[k - 1].x) * t)] = 1;
+    let steep = 0;
+    for (let i = 0; i < m.w * m.h; i++)
+      if (onRoad[i])
+        for (let k = 0; k < 4; k++) {
+          const nx = (i % m.w) + DX[k];
+          const ny = ((i / m.w) | 0) + DY[k];
+          if (nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && onRoad[ny * m.w + nx] && sf.grade[i * 8 + k] > 0.53) steep++;
+        }
+    expect(steep).toBeLessThan(8);
+    // the derricks on level pads (the tech buildings on their gentle spots), the mosques and water towers on level footings
+    for (const s of neutralSites(m)) expect(footprintRise(m, s.x, s.y, s.w, s.h), `${s.def} ${s.x},${s.y}`).toBeLessThan(s.def === 'oil' ? 0.2 : 0.45);
+    for (const st of m.structures) if (st.kind === 4 || st.kind === 7) expect(footprintRise(m, st.x, st.y, st.w, st.h), `${st.kind} ${st.x},${st.y}`).toBeLessThan(0.15);
+    // no house on a crag, no greenhouse or field on a near cliff
+    for (const h of m.deco?.village ?? []) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const [u, v] of [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const y = gh(h.x + u * h.hl * Math.cos(h.ang) - v * h.hw * Math.sin(h.ang), h.y + u * h.hl * Math.sin(h.ang) + v * h.hw * Math.cos(h.ang));
+        lo = Math.min(lo, y);
+        hi = Math.max(hi, y);
+      }
+      expect(hi - lo, `house at ${h.x},${h.y}`).toBeLessThan(0.75);
+    }
+    expect((m.deco?.plots ?? []).length).toBeGreaterThan(600);
+  });
+
+  it('keeps every village house off every road, lane and track (its pavement too), squared to the street it fronts', () => {
+    const L = buildLayout(m);
+    const segs = new Map<number, { ax: number; ay: number; bx: number; by: number; h: number }[]>();
+    for (const l of [...L.roads.filter((r) => !r.ring).map((r) => ({ pts: r.pts, h: r.width / 2 })), ...L.tracks.filter((t) => !t.ring).map((t) => ({ pts: t.pts, h: t.width / 2 }))])
+      for (let k = 1; k < l.pts.length; k++) {
+        const key = Math.floor((l.pts[k - 1].y + l.pts[k].y) / 2) * m.w + Math.floor((l.pts[k - 1].x + l.pts[k].x) / 2);
+        if (!segs.has(key)) segs.set(key, []);
+        segs.get(key)!.push({ ax: l.pts[k - 1].x, ay: l.pts[k - 1].y, bx: l.pts[k].x, by: l.pts[k].y, h: l.h });
+      }
+    const dseg = (x: number, y: number, s: { ax: number; ay: number; bx: number; by: number }) => {
+      const dx = s.bx - s.ax;
+      const dy = s.by - s.ay;
+      const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / (dx * dx + dy * dy || 1)));
+      return Math.hypot(x - s.ax - t * dx, y - s.ay - t * dy);
+    };
+    const v = m.deco?.village ?? [];
+    let on = 0;
+    for (const h of v) {
+      const ca = Math.cos(h.ang);
+      const sa = Math.sin(h.ang);
+      let hit = false;
+      for (let u = -1; u <= 1 && !hit; u += 0.25)
+        for (let w = -1; w <= 1 && !hit; w += 0.25) {
+          const x = h.x + u * h.hl * ca - w * h.hw * sa;
+          const y = h.y + u * h.hl * sa + w * h.hw * ca;
+          for (let ty = Math.floor(y) - 2; ty <= Math.floor(y) + 2 && !hit; ty++) for (let tx = Math.floor(x) - 2; tx <= Math.floor(x) + 2 && !hit; tx++) for (const sg of segs.get(ty * m.w + tx) ?? []) if (dseg(x, y, sg) < sg.h) hit = true;
+        }
+      if (hit) on++;
+    }
+    expect(on).toBe(0);
+    // most houses by a street front it with a garden wall
+    expect(v.filter((h) => h.wall).length).toBeGreaterThan(v.length * 0.5);
+  });
+
+  it('ends every lane sensibly: at a junction, a house or gate, a field or base, the map edge, or fading into dirt', () => {
+    const L = buildLayout(m);
+    const sites = neutralSites(m);
+    const lanes = L.roads.filter((r) => r.lane);
+    expect(lanes.length).toBeGreaterThan(200);
+    const all = [...L.roads, ...L.tracks];
+    const fades = L.tracks.filter((t) => t.fade);
+    const bad: string[] = [];
+    for (const l of lanes)
+      for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
+        if (laneEndOk(m, p, l.width / 2, all.filter((o) => o !== l), 8.5, sites)) continue;
+        if (fades.some((t) => [t.pts[0], t.pts[t.pts.length - 1]].some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 0.05))) continue;
+        bad.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+      }
+    expect(bad).toEqual([]);
+    // no orphan fragment: a lane under 2 tiles runs between two real destinations
+    const len = (l: { x: number; y: number }[]) => l.reduce((a, p, k) => (k ? a + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
+    for (const l of [...lanes, ...L.tracks.filter((t) => !t.ring && !t.fade)])
+      if (len(l.pts) < 2) for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) expect(laneEndOk(m, p, l.width / 2, all.filter((o) => o !== l), 8.5, sites, true), `short piece end ${p.x.toFixed(1)},${p.y.toFixed(1)}`).toBe(true);
   });
 
   it('gives both bases room to build, and a coast for a shipyard', () => {
