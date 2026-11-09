@@ -579,7 +579,7 @@ export class Waterside implements WatersideHandles {
     const R = this.river;
     // (the Litani: its banks walled with giant cane, Arundo - three times the clumps, the whole wet foot of the bank)
     const lit = m.id === 'frontline';
-    const cap = (this.quality === 'low' ? 180 : this.quality === 'medium' ? 420 : 700) * (lit ? 3 : 1);
+    const cap = (this.quality === 'low' ? 180 : this.quality === 'medium' ? 420 : 700) * (lit ? (this.quality === 'high' ? 3 : 2) : 1);
     const list: { m: THREE.Matrix4; c: THREE.Color }[] = [];
     const mt = new THREE.Matrix4();
     const tries = cap * (m.id === 'frontline' ? 30 : 14);

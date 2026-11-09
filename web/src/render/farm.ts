@@ -279,7 +279,8 @@ function orchardTree(kind: TreeKind): THREE.BufferGeometry {
       const col = i === 5 ? dry : leaf.clone().multiplyScalar(0.85 + (i % 3) * 0.08);
       const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -a, -tilt, 'YXZ'));
       const c = V(Math.cos(a) * 0.075, 0.14 - tilt * 0.05, Math.sin(a) * 0.075);
-      g.add(new THREE.IcosahedronGeometry(1, 1), new THREE.Matrix4().compose(c, q, V(0.095, 0.007, 0.036)), null, (p) => col.clone().multiplyScalar(0.85 + Math.max(0, p.y - 0.12) * 4), {
+      // (a flat paddle: an octahedron squashed thin - 8 triangles a leaf, the plantations are dense)
+      g.add(new THREE.OctahedronGeometry(1, 0), new THREE.Matrix4().compose(c, q, V(0.095, 0.007, 0.036)), null, (p) => col.clone().multiplyScalar(0.85 + Math.max(0, p.y - 0.12) * 4), {
         normalFn: () => V(0, 1, 0),
         flexFn: (p) => Math.max(0, (p.y - 0.06) * 4),
       });
@@ -449,7 +450,7 @@ function vineyard(b: GeoBuilder, m: GameMap, f: Field, k: number, desert: boolea
 function orchard(m: GameMap, f: Field, k: number, kind: TreeKind, trees: Record<TreeKind, Inst[]>) {
   const P = frame(f);
   // (the Litani's: bananas planted close, a dense green canopy; citrus in tighter rows than the apples)
-  const sp = kind === 'olive' ? 0.62 : kind === 'banana' ? 0.3 : kind === 'citrus' && m.id === 'frontline' ? 0.42 : 0.52;
+  const sp = kind === 'olive' ? 0.62 : kind === 'banana' ? 0.34 : kind === 'citrus' && m.id === 'frontline' ? 0.42 : 0.52;
   const nA = Math.max(1, Math.floor((f.hl * 2 - 0.3) / sp) + 1);
   const nB = Math.max(1, Math.floor((f.hw * 2 - 0.3) / sp) + 1);
   for (let i = 0; i < nA; i++)
