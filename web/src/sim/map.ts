@@ -114,7 +114,9 @@ export interface MapDeco {
    */
   /** (wall: the side fronting a street with a garden wall along it, 1 / 2 the +x / -x end, 3 / 4 the +z / -z side, local
    * frame as render/village.ts; wo: the wall's distance out from that face, tiles) */
-  village?: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number }[];
+  village?: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number; shop?: number }[];
+  /** The Litani's petrol stations (OSM amenity=fuel): forecourt centre, the road's heading, its side of the road (+-1). */
+  fuel?: { x: number; y: number; ang: number; side: number }[];
   /** The Litani's real greenhouses (OSM building=greenhouse): each footprint (centre, half length along ang, half width). */
   greenhouses?: { x: number; y: number; hl: number; hw: number; ang: number }[];
   /**

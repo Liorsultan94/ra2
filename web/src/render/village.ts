@@ -181,6 +181,8 @@ export function buildVillage(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium
     const r = Math.max(h.hl, h.hw);
     ch.spans.push({ st: { kind: StructureKind.House, x: h.x - r, y: h.y - r, w: 2 * r, h: 2 * r, rot: 0 }, gy, from, to: counts(ch) });
   });
+  // the petrol stations (MapDeco.fuel): forecourt, canopy over two pump islands, the kiosk behind - no brand
+  for (const f of m.deco?.fuel ?? []) fuelStation(m, chunkAt(f.x, f.y), f);
   const shadows = quality !== 'low';
   const wallMat = fog.apply(new THREE.MeshStandardMaterial({ map: facadeTexture(quality === 'low' ? 32 : 64), vertexColors: true, roughness: 0.92 }));
   const roofMat = fog.apply(new THREE.MeshStandardMaterial({ map: roofTex, vertexColors: true, roughness: 0.8 }));
@@ -217,6 +219,30 @@ export function buildVillage(m: GameMap, fog: FogOfWar, quality: 'low' | 'medium
 /** A garrison house of the Litani mouth: built here from the real buildings on its footprint (scenery.ts skips it). */
 export function isVillageStructure(m: GameMap, st: Structure) {
   return !!m.deco?.village && LT_GARRISON_KINDS.has(st.kind);
+}
+
+/** The shops' awnings: canvas in green, red, blue, sand, grey. */
+const AWNINGS = [0x2e6a4a, 0xa83a2c, 0x2c4f86, 0xc89a40, 0x7a7c78, 0x3a7a7a];
+
+/** A petrol station (MapDeco.fuel), local x along the road, +z away from it: a concrete forecourt, a white canopy on
+ * four posts over two pump islands, the kiosk (white, a glazed front) behind; no brand, no sign. */
+function fuelStation(m: GameMap, ch: Chunk, s: { x: number; y: number; ang: number; side: number }) {
+  const gy = surfaceHeight(m, s.x, s.y);
+  // (+z away from the road: turned half round on its other side)
+  const f = new THREE.Matrix4().compose(V(s.x, gy, s.y), new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), -s.ang + (s.side < 0 ? Math.PI : 0)), V(1, 1, 1));
+  box(ch.walls, f, 0, 0.004, 0.05, 0.95, 0.03, 0.62, C(0xb4b0a8));
+  for (const [x, z] of [[-0.26, -0.08], [0.26, -0.08], [-0.26, 0.12], [0.26, 0.12]]) box(ch.walls, f, x, 0.11, z, 0.016, 0.2, 0.016, C(0xd8d8d4));
+  box(ch.walls, f, 0, 0.215, 0.02, 0.66, 0.03, 0.34, C(0xeeeeea));
+  box(ch.walls, f, 0, 0.2, 0.02, 0.67, 0.008, 0.35, C(0x8a8e92));
+  for (const x of [-0.12, 0.12]) {
+    box(ch.detail, f, x, 0.012, 0.02, 0.16, 0.014, 0.05, C(0xc8c4ba));
+    for (const dx of [-0.04, 0.04]) {
+      box(ch.detail, f, x + dx, 0.05, 0.02, 0.03, 0.065, 0.024, C(0xe2e2de));
+      box(ch.detail, f, x + dx, 0.06, 0.033, 0.022, 0.03, 0.002, C(0x30363c));
+    }
+  }
+  box(ch.walls, f, 0, 0.065, 0.29, 0.34, 0.13, 0.16, C(0xe8e6e0));
+  box(ch.detail, f, 0, 0.055, 0.209, 0.26, 0.07, 0.004, C(0x2a3036));
 }
 
 /** The garden walls' rendered block: whitewash, pale concrete, sand-coloured render. */
@@ -285,6 +311,24 @@ function house(m: GameMap, ch: Chunk, h: VHouse, minStoreys = 1): number {
         box(ch.detail, f, sd * face, cy, c, 0.014, hgt, half, wc);
         box(ch.detail, f, sd * face, wallH + 0.004, c, 0.02, 0.008, half, cap);
       }
+    }
+  }
+  // a shop on the ground floor on the main road (MapDeco.village shop): its glazed front / roller shutter and an
+  // awning over it, the colour the shopkeeper chose - no sign
+  if (h.shop) {
+    const alongX = h.shop >= 3;
+    const sd = h.shop === 1 || h.shop === 3 ? 1 : -1;
+    const face = (alongX ? D / 2 : L / 2) + 0.004;
+    const len = (alongX ? L : D) * 0.86;
+    const shut = r(32) < 0.4;
+    const front = shut ? C(0x8a8c8e).multiplyScalar(0.9 + r(33) * 0.15) : C(0x2a3036);
+    const awn = C(AWNINGS[Math.floor(r(34) * AWNINGS.length)]);
+    if (alongX) {
+      box(ch.detail, f, 0, 0.058, sd * face, len, 0.1, 0.006, front);
+      box(ch.detail, f, 0, 0.122, sd * (face + 0.028), len + 0.02, 0.006, 0.056, awn);
+    } else {
+      box(ch.detail, f, sd * face, 0.058, 0, 0.006, 0.1, len, front);
+      box(ch.detail, f, sd * (face + 0.028), 0.122, 0, 0.056, 0.006, len + 0.02, awn);
     }
   }
   const roof = r(5);

@@ -3350,6 +3350,7 @@ export function createLitaniMap(): GameMap {
   // (every road and track), the game's pieces and the garrison houses kept clear, and no ground cut off (a house that
   // would close the only way through is left out)
   const village: NonNullable<MapDeco['village']> = [];
+  let villageFuel: NonNullable<MapDeco['fuel']> = [];
   {
     // the streets: points every quarter tile along each road and track (with its half width), binned per tile
     const SB = new Map<number, { x: number; y: number; r: number; a: number }[]>();
@@ -3414,12 +3415,37 @@ export function createLitaniMap(): GameMap {
       const lz = -(st.x - h.x) * sa + (st.y - h.y) * ca;
       const alongX = Math.abs(lx) / h.hl > Math.abs(lz) / h.hw;
       const gap = (alongX ? Math.abs(lx) - h.hl : Math.abs(lz) - h.hw) - st.r;
-      if (gap < LT_WALL_GAP[0] || gap > LT_WALL_GAP[1]) return h;
-      return { ...h, wall: alongX ? (lx > 0 ? 1 : 2) : lz > 0 ? 3 : 4, wo: Math.round(gap * 0.55 * 1000) / 1000 };
+      const side = alongX ? (lx > 0 ? 1 : 2) : lz > 0 ? 3 : 4;
+      // (on a main road - the villages' high streets - most houses keep a shop on the ground floor: OSM maps few, the
+      // photos show them all along the main road; a shopfront and its awning, no signs)
+      const shop = st.r >= 0.44 && gap < 0.5 && hash2(Math.round(h.x * 8), Math.round(h.y * 8), 4801) < 0.65 && (alongX ? h.hw : h.hl) > 0.12 ? { shop: side } : {};
+      if (gap < LT_WALL_GAP[0] || gap > LT_WALL_GAP[1] || shop.shop) return { ...h, ...shop };
+      return { ...h, wall: side, wo: Math.round(gap * 0.55 * 1000) / 1000 };
     };
+    // the petrol stations where OSM has them (amenity=fuel), on the main road beside them: a forecourt, a canopy over
+    // two pump islands and the kiosk - no brand. Houses keep off their ground.
+    const fuel: NonNullable<MapDeco['fuel']> = [];
+    for (const q of LITANI_POIS.filter((p) => p.kind === 'fuel' && p.x > 2 && p.y > 2 && p.x < W - 2 && p.y < H - 2)) {
+      let best: { x: number; y: number; r: number; a: number } | null = null;
+      let bd = 3.5;
+      for (let ty = Math.floor(q.y) - 4; ty <= Math.floor(q.y) + 4; ty++)
+        for (let tx = Math.floor(q.x) - 4; tx <= Math.floor(q.x) + 4; tx++)
+          for (const p of SB.get(ty * W + tx) ?? []) {
+            const d = Math.hypot(p.x - q.x, p.y - q.y);
+            if (p.r >= 0.44 && d < bd) (bd = d), (best = p);
+          }
+      if (!best) continue;
+      const nx = -Math.sin(best.a);
+      const ny = Math.cos(best.a);
+      const sg = (q.x - best.x) * nx + (q.y - best.y) * ny >= 0 ? 1 : -1;
+      const off = best.r + LT_SETBACK + 0.3;
+      fuel.push({ x: Math.round((best.x + nx * sg * off) * 1000) / 1000, y: Math.round((best.y + ny * sg * off) * 1000) / 1000, ang: Math.round(best.a * 1000) / 1000, side: sg });
+    }
+    villageFuel = fuel;
     // (each tech site's first two candidate spots a side: sim/capture.ts takes the first that is free)
     const techAt = LT_TECH.flatMap((t) => [...t.at.slice(0, 2), ...(t.at2 ?? []).slice(0, 2)]);
     const keepOut = (x: number, y: number) =>
+      fuel.some((f) => Math.hypot(x - f.x, y - f.y) < 0.95) ||
       starts.some((st) => Math.hypot(x - st.x - 0.5, y - st.y - 0.5) < 11) ||
       oils.some((o) => Math.abs(x - o.x - 1) < 2.6 && Math.abs(y - o.y - 1) < 2.6) ||
       oreFields.some((f) => Math.hypot(x - f.x - 0.5, y - f.y - 0.5) < f.r + 1) ||
@@ -3592,6 +3618,7 @@ export function createLitaniMap(): GameMap {
       return !all.slice(0, k).some((o) => Math.hypot(o.x - h.x, o.y - h.y) < Math.max(o.hl, h.hl) * 0.7 + Math.max(o.hw, h.hw));
     });
   deco.village = village;
+  deco.fuel = villageFuel;
   deco.river = litaniData().course.map(([x, y]) => ({ x, y }));
   // the high-voltage line (OSM), broken where it tops a crest of the exaggerated hills: the game's wires hang ~1.5
   // units above the ground, so a span is never strung over a hilltop (render/pylonsite.ts spanClear)
@@ -3796,7 +3823,7 @@ const LT_APPROACH = 1.2;
 /** The garrison houses' kinds on the Litani mouth (their footprints made of the real buildings there: render/village.ts). */
 export const LT_GARRISON_KINDS = new Set<StructureKind>([StructureKind.House, StructureKind.Cottage, StructureKind.Townhouse, StructureKind.Shop]);
 /** A village building rounded for the map (MapDeco.village). */
-const ltRound = (h: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number }) => ({ x: Math.round(h.x * 1000) / 1000, y: Math.round(h.y * 1000) / 1000, hl: Math.round(h.hl * 1000) / 1000, hw: Math.round(h.hw * 1000) / 1000, ang: Math.round(h.ang * 1000) / 1000, ...(h.wall ? { wall: h.wall, wo: h.wo } : {}) });
+const ltRound = (h: { x: number; y: number; hl: number; hw: number; ang: number; wall?: number; wo?: number; shop?: number }) => ({ x: Math.round(h.x * 1000) / 1000, y: Math.round(h.y * 1000) / 1000, hl: Math.round(h.hl * 1000) / 1000, hw: Math.round(h.hw * 1000) / 1000, ang: Math.round(h.ang * 1000) / 1000, ...(h.wall ? { wall: h.wall, wo: h.wo } : {}), ...(h.shop ? { shop: h.shop } : {}) });
 /** The real buildings are drawn this much larger than they stand (game scale: the units and the garrison houses are too). */
 const LT_HOUSE_K = 1.3;
 /** Building coverage (sum over a 2 x 2 patch, 0..124) that makes a village house. */
