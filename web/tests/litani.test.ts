@@ -8,6 +8,7 @@ import { neutralSites } from '../src/sim/capture';
 import { World } from '../src/sim/world';
 import { footprintRise, groundHeight } from '../src/sim/map';
 import { buildLayout } from '../src/render/layout';
+import { laneEndOk } from '../src/render/biomelayout';
 import { roadNetFor } from '../src/render/ambient/clearance';
 
 /*
@@ -295,6 +296,27 @@ describe('Litani mouth (map frontline)', () => {
     expect(on).toBe(0);
     // most houses by a street front it with a garden wall
     expect(v.filter((h) => h.wall).length).toBeGreaterThan(v.length * 0.5);
+  });
+
+  it('ends every lane sensibly: at a junction, a house or gate, a field or base, the map edge, or fading into dirt', () => {
+    const L = buildLayout(m);
+    const sites = neutralSites(m);
+    const lanes = L.roads.filter((r) => r.lane);
+    expect(lanes.length).toBeGreaterThan(200);
+    const all = [...L.roads, ...L.tracks];
+    const fades = L.tracks.filter((t) => t.fade);
+    const bad: string[] = [];
+    for (const l of lanes)
+      for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
+        if (laneEndOk(m, p, l.width / 2, all.filter((o) => o !== l), 8.5, sites)) continue;
+        if (fades.some((t) => [t.pts[0], t.pts[t.pts.length - 1]].some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 0.05))) continue;
+        bad.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+      }
+    expect(bad).toEqual([]);
+    // no orphan fragment: a lane under 2 tiles runs between two real destinations
+    const len = (l: { x: number; y: number }[]) => l.reduce((a, p, k) => (k ? a + Math.hypot(p.x - l[k - 1].x, p.y - l[k - 1].y) : 0), 0);
+    for (const l of [...lanes, ...L.tracks.filter((t) => !t.ring && !t.fade)])
+      if (len(l.pts) < 2) for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) expect(laneEndOk(m, p, l.width / 2, all.filter((o) => o !== l), 8.5, sites, true), `short piece end ${p.x.toFixed(1)},${p.y.toFixed(1)}`).toBe(true);
   });
 
   it('gives both bases room to build, and a coast for a shipyard', () => {

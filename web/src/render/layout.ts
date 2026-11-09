@@ -46,6 +46,8 @@ export interface Track {
   noCars?: boolean;
   /** Turning loop / link of a dirt track (see Road.ring). */
   ring?: boolean;
+  /** The dirt end of a paved lane that stops in the open (the Litani's): its asphalt fades into a track. */
+  fade?: boolean;
 }
 
 export const enum FieldType {
