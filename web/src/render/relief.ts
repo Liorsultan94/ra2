@@ -216,12 +216,16 @@ export function reliefField(m: GameMap): ReliefField {
   boxBlur(blur, CW, CH, Math.round(F * 0.55));
   boxBlur(blur, CW, CH, Math.round(F * 0.4));
   const cellAt = (a: Float32Array, ci: number, cj: number) => (ci < 0 || cj < 0 || ci >= CW || cj >= CH ? 0 : a[cj * CW + ci]);
+  const smoothFoot = m.id === 'frontline';
   const inside = new Uint8Array(N);
   for (let j = 0; j < NH; j++)
     for (let i = 0; i < NW; i++) {
       // strictly inside the rock: all four cells round the vertex are rock tiles
-      const strict = cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) === 4;
-      if (!strict) continue;
+      const nRock = cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j);
+      // (the Litani: the blurred outline wherever it touches a rock tile - its gorge walls' tile staircase, seen down a
+      // steep bank, read as a sawtooth of dark triangles under the face; the smooth outline cuts the staircase's inner
+      // corners, the face's foot at the ground there, rising over the rock)
+      if (nRock !== 4 && !(smoothFoot && nRock > 0)) continue;
       const sm = (cellAt(blur, i - 1, j - 1) + cellAt(blur, i, j - 1) + cellAt(blur, i - 1, j) + cellAt(blur, i, j)) / 4;
       if (sm > 0.5) inside[j * NW + i] = 1;
     }
@@ -234,7 +238,7 @@ export function reliefField(m: GameMap): ReliefField {
       d[k] = dist[k] / F;
       if (d[k] > 0) count++;
       // every corner of a rock cell needs the ground height (the meshes only cover rock tiles)
-      if (cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
+      if (smoothFoot || cellAt(cell, i - 1, j - 1) + cellAt(cell, i, j - 1) + cellAt(cell, i - 1, j) + cellAt(cell, i, j) > 0) G[k] = surfaceHeight(m, i / F, j / F);
     }
   const st = STYLE[m.biome] ?? STYLE.temperate;
   // the coloured canyons' sandstone walls: rougher, more broken faces and ragged rims
@@ -410,6 +414,7 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
   const i1 = Math.min(rf.NW - 1, i0 + SECTOR * F);
   const j1 = Math.min(rf.NH - 1, j0 + SECTOR * F);
   const remap = new Map<number, number>();
+  const lit = m.id === 'frontline';
   const pos: number[] = [];
   const col: number[] = [];
   const idx: number[] = [];
@@ -425,7 +430,10 @@ function sectorGeometry(m: GameMap, rf: ReliefField, sx: number, sy: number, str
     // crevices and the damp cliff foot darker, sun-bleached tops
     const dk = rf.d[k];
     const tone = 0.82 + valueNoise(x * 1.7, y * 1.7, 851) * 0.3;
-    const cav = 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
+    // (the Litani: none at the foot - its walls rise within a sample or two, so the foot's dark vertices and the top's
+    // light ones met on the same long triangles, alternating along a diagonal wall: a sawtooth of dark triangles; its
+    // shading comes from the light and the rock's own maps)
+    const cav = lit ? 1 : 0.78 + 0.22 * smooth(0.0, 0.5, rf.p[k]) - (dk <= 0 ? 0.15 : 0);
     const c = tone * cav;
     col.push(c, c, c);
     if (canyon) can.push(canyon(x, y));
