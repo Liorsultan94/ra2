@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f19">
+<title>שלט AI ל-PS5</title>
+<style>
+  :root { --bg:#0b0f19; --card:#151b2b; --line:#26304a; --text:#e8ecf5; --muted:#8b95ad; --accent:#3d7bfd; --ok:#2fbf71; --err:#ff5c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,"Segoe UI",Arial,sans-serif; padding:16px; padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+  main { max-width:520px; margin:0 auto; display:flex; flex-direction:column; gap:14px; }
+  h1 { font-size:20px; margin:0; display:flex; justify-content:space-between; align-items:center; }
+  #status { font-size:13px; color:var(--muted); font-weight:normal; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  #log { min-height:180px; max-height:60vh; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 12px; border-radius:12px; max-width:90%; white-space:pre-wrap; }
+  .me { background:var(--accent); align-self:flex-start; }
+  .ai { background:#202942; align-self:flex-end; }
+  .acts { font-size:12px; color:var(--muted); margin-top:4px; }
+  .err { color:var(--err); }
+  form { display:flex; gap:8px; }
+  input[type=text] { flex:1; min-width:0; background:#0f1424; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:12px; font-size:16px; }
+  button { background:#232c45; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:12px 14px; font-size:16px; cursor:pointer; }
+  button:active { transform:scale(.97); }
+  button.primary { background:var(--accent); border-color:var(--accent); }
+  #mic.listening { background:var(--err); border-color:var(--err); }
+  .quick { display:flex; flex-wrap:wrap; gap:8px; }
+  .quick button { font-size:14px; padding:8px 12px; }
+  .pad { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; direction:ltr; }
+  .pad button { padding:14px 0; font-size:18px; }
+  .row { display:flex; gap:8px; direction:ltr; margin-top:8px; }
+  .row button { flex:1; font-size:14px; }
+  .hint { font-size:13px; color:var(--muted); margin:0; }
+  details summary { cursor:pointer; color:var(--muted); }
+  .shot { width:100%; border-radius:10px; margin-top:6px; display:block; }
+  .approval { background:#2a2440; border:1px solid #6b55c9; border-radius:12px; padding:10px; align-self:stretch; }
+  .approval .row { direction:rtl; }
+  .approval .yes { background:var(--ok); border-color:var(--ok); }
+  .approval .no { background:var(--err); border-color:var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎮 שלט AI ל-PS5 <span id="status">…</span></h1>
+
+  <div class="card" id="log" aria-live="polite">
+    <p class="hint">כתוב או אמור מה לעשות, למשל: "תדליק את הפלייסטיישן ותכניס אותי ל-FIFA".</p>
+  </div>
+
+  <form id="form">
+    <button type="button" id="mic" title="דבר">🎤</button>
+    <input type="text" id="text" placeholder="מה לעשות?" autocomplete="off">
+    <button class="primary" type="submit">שלח</button>
+  </form>
+  <p class="hint" id="micHint" hidden>המיקרופון בדפדפן עובד רק ב-HTTPS. אפשר ללחוץ על המיקרופון במקלדת של הטלפון.</p>
+
+  <div class="quick">
+    <button data-cmd="תדליק את הפלייסטיישן">הדלק</button>
+    <button data-cmd="מה רץ עכשיו על הפלייסטיישן?">מה פתוח?</button>
+    <button data-cmd="תחזיר אותי למסך הבית">מסך הבית</button>
+    <button data-cmd="תכבה את הפלייסטיישן">כבה</button>
+    <button data-cmd="תכניס אותי ל-NBA 2K27 ל-MyTeam">2K27 MyTeam</button>
+    <button data-cmd="תיכנס ל-Auction House ב-MyTeam של 2K27 ותגיד לי מה יש ומה המחירים ב-MT">שוק MyTeam</button>
+    <button id="reset">שיחה חדשה</button>
+  </div>
+
+  <details class="card">
+    <summary>שלט ידני (בלי AI)</summary>
+    <div style="margin-top:12px">
+      <div class="pad">
+        <span></span><button data-btn="UP">▲</button><span></span>
+        <button data-btn="LEFT">◀</button><button data-btn="CROSS">✕</button><button data-btn="RIGHT">▶</button>
+        <span></span><button data-btn="DOWN">▼</button><span></span>
+      </div>
+      <div class="row">
+        <button data-btn="CIRCLE">○</button><button data-btn="TRIANGLE">△</button><button data-btn="SQUARE">□</button>
+      </div>
+      <div class="row">
+        <button data-btn="PS">PS</button><button data-btn="OPTIONS">Options</button><button data-btn="L1">L1</button><button data-btn="R1">R1</button>
+      </div>
+    </div>
+  </details>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const log = $('#log');
+let token = '';
+try { token = localStorage.getItem('ps5token') || ''; } catch {}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token': token },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    token = prompt('סיסמה לשלט:') || '';
+    try { localStorage.setItem('ps5token', token); } catch {}
+    return api(path, body);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+function add(text, cls, extra) {
+  const hint = log.querySelector('.hint'); if (hint) hint.remove();
+  const el = document.createElement('div');
+  el.className = 'msg ' + cls;
+  el.textContent = text;
+  if (extra) { const a = document.createElement('div'); a.className = 'acts'; a.textContent = extra; el.appendChild(a); }
+  log.appendChild(el); log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function describe(actions) {
+  return (actions || []).map(a => {
+    const name = { get_status:'בדיקת מצב', wake_console:'הדלקה', standby_console:'כיבוי', look_at_screen:'הסתכלות במסך', press_buttons:'כפתורים', run_shortcut:'קיצור', wait_seconds:'המתנה', propose_action:'בקשת אישור' }[a.tool] || a.tool;
+    const detail = a.tool === 'press_buttons' ? ' ' + a.input.buttons.join(' ') : a.tool === 'run_shortcut' ? ' ' + a.input.name : '';
+    return (a.ok ? '✓ ' : '✗ ') + name + detail;
+  }).join(' · ');
+}
+
+function render(r) {
+  const el = add(r.reply, 'ai', describe(r.actions));
+  if (r.screenshot && !r.pending) {
+    const img = document.createElement('img'); img.className = 'shot'; img.alt = 'המסך';
+    img.src = 'data:image/jpeg;base64,' + r.screenshot; el.appendChild(img);
+  }
+  if (r.pending) {
+    const card = document.createElement('div'); card.className = 'approval';
+    const t = document.createElement('div'); t.textContent = '⚠️ מחכה לאישור שלך: ' + r.pending.summary; card.appendChild(t);
+    if (r.screenshot) {
+      const img = document.createElement('img'); img.className = 'shot'; img.alt = 'המסך';
+      img.src = 'data:image/jpeg;base64,' + r.screenshot; card.appendChild(img);
+    }
+    const b = document.createElement('div'); b.className = 'acts'; b.textContent = 'כפתורים: ' + r.pending.buttons.join(' '); card.appendChild(b);
+    const row = document.createElement('div'); row.className = 'row';
+    const yes = document.createElement('button'); yes.className = 'yes'; yes.textContent = 'אשר';
+    const no = document.createElement('button'); no.className = 'no'; no.textContent = 'דחה';
+    const decide = (path) => { yes.disabled = no.disabled = true; card.style.opacity = .6; run(path, { id: r.pending.id }); };
+    yes.onclick = () => decide('/api/approve'); no.onclick = () => decide('/api/reject');
+    row.append(yes, no); card.appendChild(row);
+    log.appendChild(card); log.scrollTop = log.scrollHeight;
+  }
+}
+
+async function run(path, body) {
+  const wait = add('…', 'ai');
+  try { const r = await api(path, body); wait.remove(); render(r); }
+  catch (e) { wait.remove(); add('שגיאה: ' + e.message, 'ai err'); }
+  refreshStatus();
+}
+
+async function send(text) {
+  if (!text.trim()) return;
+  add(text, 'me');
+  await run('/api/command', { text });
+}
+
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    const state = !s.reachable ? 'לא נמצא ברשת' : !s.on ? 'במצב מנוחה' : (s.running_app ? '▶ ' + s.running_app : 'דלוק');
+    $('#status').textContent = state + (s.budget_usd ? ' · $' + s.spent_usd + '/' + s.budget_usd : '');
+  } catch { $('#status').textContent = 'אין חיבור לשרת'; }
+}
+
+$('#form').addEventListener('submit', (e) => { e.preventDefault(); const t = $('#text').value; $('#text').value = ''; send(t); });
+document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => send(b.dataset.cmd)));
+document.querySelectorAll('[data-btn]').forEach(b => b.addEventListener('click', async () => {
+  try { await api('/api/press', { buttons: [b.dataset.btn] }); } catch (e) { add('שגיאה: ' + e.message, 'ai err'); }
+}));
+$('#reset').addEventListener('click', async () => { await api('/api/reset', {}); log.innerHTML = ''; add('התחלנו שיחה חדשה.', 'ai'); });
+
+// Voice input (Web Speech API). Browsers only allow it on HTTPS or localhost.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR || !window.isSecureContext) {
+  $('#mic').hidden = true; $('#micHint').hidden = false;
+} else {
+  const rec = new SR(); rec.lang = 'he-IL'; rec.interimResults = false;
+  rec.onresult = (e) => send(e.results[0][0].transcript);
+  rec.onend = () => $('#mic').classList.remove('listening');
+  rec.onerror = () => $('#mic').classList.remove('listening');
+  $('#mic').addEventListener('click', () => { $('#mic').classList.add('listening'); rec.start(); });
+}
+
+refreshStatus(); setInterval(refreshStatus, 15000);
+</script>
+</body>
+</html>

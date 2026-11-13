@@ -1,0 +1,17 @@
+# Install with:  pip install -r requirements.txt  &&  pip install --no-deps pyremoteplay==0.7.6
+# (pyremoteplay is installed without its deps because it asks for `netifaces`, which has no
+#  Windows wheels for current Python; `netifaces-plus` provides the same module.)
+anthropic>=2.6
+pyps4-2ndscreen>=1.2.1
+cryptography>=3.4.6
+protobuf>=4.21.1
+requests>=2.25.1
+pyee>=8.1.0,<9
+pyyaml>=6.0
+netifaces-plus
+async_timeout
+fastapi
+uvicorn
+# lets the AI see the screen
+av
+pillow
